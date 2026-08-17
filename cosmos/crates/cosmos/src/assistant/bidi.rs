@@ -80,6 +80,9 @@ use tonic::Status;
 use super::catalog;
 use super::engine::{ERROR_TIMEOUT, NO_ANSWER, TOO_MANY_ACTIONS};
 use super::llm::{ChatMessage, ChatModel, ChatResponse, Role, ToolCall, ToolDef};
+use super::turn::context::situation_line;
+use super::turn::frames::{action_turn, now_ts, observation_turn};
+use super::turn::text::{model_facing_observation, spoken_text};
 use crate::services::gates::{self, Entitlement};
 
 /// carry's `ai_bus.max_action_turns` feature flag defaults to 8 (same budget the
@@ -1004,71 +1007,6 @@ fn resolve_catalog(
     )
 }
 
-/// A system line describing the wearer's situation, built ONLY from fields the
-/// device actually supplied.
-///
-/// Without this the model has no idea what time it is for the wearer or where
-/// they are, so every time-relative or place-relative request ("is it too late
-/// to call London", "what's near me") is answered blind.
-///
-/// Absent fields are omitted rather than defaulted — a placeholder timezone or a
-/// (0,0) coordinate would be fabricated device state, and the model would reason
-/// from it as if it were real. Returns `None` when the device told us nothing.
-fn situation_line(req: &pb::SynapseUnderstandingRequest) -> Option<String> {
-    let situation = req
-        .device_context
-        .as_ref()
-        .and_then(|dc| dc.situation.as_ref());
-    let mut parts: Vec<String> = Vec::new();
-
-    if let Some(s) = situation {
-        if let Some(ts) = s.timestamp.as_ref() {
-            // Render the device's own wall clock; the zone id is the device's too.
-            let mut when = format!(
-                "The wearer's current time is {} (epoch seconds)",
-                ts.seconds
-            );
-            if !s.time_zone_id.is_empty() {
-                when = format!(
-                    "The wearer's current time is {} (epoch seconds) in time zone {}",
-                    ts.seconds, s.time_zone_id
-                );
-            }
-            parts.push(when);
-        } else if !s.time_zone_id.is_empty() {
-            parts.push(format!("The wearer's time zone is {}", s.time_zone_id));
-        }
-        if !s.location_string.is_empty() {
-            parts.push(format!("The wearer is near {}", s.location_string));
-        }
-    }
-
-    // A human-readable place the device already resolved beats raw coordinates.
-    if let Some(dc) = req.device_context.as_ref() {
-        if !dc.reverse_geocoded_location.is_empty() {
-            parts.push(format!(
-                "The wearer's location is {}",
-                dc.reverse_geocoded_location
-            ));
-        }
-        if dc.is_locked {
-            parts.push("The pin is locked.".to_owned());
-        }
-    }
-    if let Some(loc) = req.location.as_ref() {
-        parts.push(format!(
-            "The wearer's coordinates are {:.5}, {:.5}",
-            loc.latitude, loc.longitude
-        ));
-    }
-
-    if parts.is_empty() {
-        None
-    } else {
-        Some(parts.join(". ") + ".")
-    }
-}
-
 /// Rebuild the chat transcript from the state the device replayed in the initial
 /// request: prior turns, `previous_answers`, and this run's utterance.
 fn build_history(req: &pb::SynapseUnderstandingRequest) -> Vec<ChatMessage> {
@@ -1151,21 +1089,6 @@ fn build_history(req: &pb::SynapseUnderstandingRequest) -> Vec<ChatMessage> {
     messages
 }
 
-/// Extract the spoken text from a `Respond` action's `input` — either the real
-/// `{"Response": "…"}` JSON shape or a bare string.
-fn spoken_text(input: &str) -> Option<String> {
-    if let Ok(v) = serde_json::from_str::<serde_json::Value>(input) {
-        if let Some(s) = v.get(catalog::RESPOND_FIELD).and_then(|v| v.as_str()) {
-            return Some(s.to_owned());
-        }
-    }
-    if input.is_empty() {
-        None
-    } else {
-        Some(input.to_owned())
-    }
-}
-
 /// Fold a tool result back into the transcript, in the same shape the legacy
 /// engine uses (portable across OpenAI-compatible endpoints: no tool-call-id
 /// pairing required).
@@ -1176,47 +1099,6 @@ fn tool_result(tc: &ToolCall, observation: &str) -> ChatMessage {
         tc.arguments,
         model_facing_observation(observation)
     ))
-}
-
-/// Ceiling on the observation text fed back into the model's context.
-///
-/// The wire copy is untouched — the device and the transcript it records get
-/// exactly what the tool (or the pin) produced. This bounds only what re-enters
-/// the prompt, because that text is paid for twice: once in prompt tokens and
-/// again in the latency of every later step of the run.
-///
-/// This mirrors `engine::model_facing_observation` deliberately, including the
-/// clip size: the transcript a model reasons over must not depend on which
-/// transport the feature flag picked. It is duplicated rather than shared only
-/// because the engine's copy is private; the two belong together the next time
-/// both files move in one change.
-///
-/// On bidi the long observations are not only ours — a device observation
-/// arrives on the same path (`await_observation` → `tool_result`), and the pin's
-/// experiences produce some of the longest text in the run.
-const MAX_MODEL_FACING_OBSERVATION: usize = 1_200;
-
-/// Clip an observation for the model's transcript, on a char boundary.
-fn model_facing_observation(observation: &str) -> std::borrow::Cow<'_, str> {
-    if observation.len() <= MAX_MODEL_FACING_OBSERVATION {
-        return std::borrow::Cow::Borrowed(observation);
-    }
-    // Never slice mid-character: observations carry wearer text and tool output,
-    // and a byte-offset cut on non-ASCII panics. Prefer the last sentence break
-    // so the model is not handed a fragment.
-    let mut end = MAX_MODEL_FACING_OBSERVATION;
-    while end > 0 && !observation.is_char_boundary(end) {
-        end -= 1;
-    }
-    let clipped = &observation[..end];
-    let cut = clipped
-        .rfind(". ")
-        .map(|i| i + 1)
-        .filter(|i| *i > MAX_MODEL_FACING_OBSERVATION / 2)
-        .unwrap_or(end);
-    // Marked, so the model knows the text was cut rather than treating a
-    // truncated list as complete.
-    std::borrow::Cow::Owned(format!("{}… [truncated]", &observation[..cut].trim_end()))
 }
 
 /// Run a server tool under a hard ceiling.
@@ -1233,53 +1115,6 @@ async fn bounded_tool(
 }
 
 // --- turn constructors ----------------------------------------------------
-
-/// Wall-clock stamp for an emitted turn.
-///
-/// MUST be set, for the same reason the legacy engine sets it: an absent
-/// timestamp decodes as epoch 0 on the device, so every server-emitted node sorts
-/// FIRST in the turn priority queue and is the first evicted at the turn cap —
-/// and `EventsSnapshot.linearize`'s inter-run gap test sees a ~56-year gap and
-/// truncates the history the next hop depends on.
-///
-/// This bites harder on bidi than on the legacy transport, because here the
-/// device records EVERY event we emit (`recordAction`/`recordObservation`), not
-/// just the final action of the batch — so an unstamped run seeds the pin's
-/// history with a whole chain of epoch-0 turns.
-fn now_ts() -> Option<prost_types::Timestamp> {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()?;
-    Some(prost_types::Timestamp {
-        seconds: now.as_secs() as i64,
-        nanos: now.subsec_nanos() as i32,
-    })
-}
-
-/// An assistant action turn for a tool the SERVER resolves, parent-chained.
-fn action_turn(
-    tc: &ToolCall,
-    thought: &str,
-    parent: String,
-    id: String,
-    src: pb::SynapseSource,
-) -> pb::SynapseChatTurn {
-    pb::SynapseChatTurn {
-        user: pb::SynapseUser::Assistant as i32,
-        timestamp: now_ts(),
-        identifier: id,
-        parent_identifier: parent,
-        content: Some(pb::synapse_chat_turn::Content::Action(
-            pb::SynapseActionContent {
-                thought: thought.to_owned(),
-                action: tc.name.clone(),
-                input: tc.arguments.clone(),
-                device_payload: Vec::new(),
-                source: src as i32,
-            },
-        )),
-    }
-}
 
 /// An action turn the DEVICE resolves (`source = DEVICE`). Emitted with
 /// `requires_response=true` so `TaoEventRegistrar` dispatches rather than records
@@ -1309,36 +1144,11 @@ fn device_action_turn(
     }
 }
 
-/// A system observation turn chained to its action node. `is_final` stays false:
-/// the run's final observation is produced by the device after it executes the
-/// terminal action, not by the server.
-fn observation_turn(
-    action_name: &str,
-    observation: &str,
-    action_id: String,
-    id: String,
-    src: pb::SynapseSource,
-) -> pb::SynapseChatTurn {
-    pb::SynapseChatTurn {
-        user: pb::SynapseUser::System as i32,
-        timestamp: now_ts(),
-        identifier: id,
-        parent_identifier: action_id,
-        content: Some(pb::synapse_chat_turn::Content::Observation(
-            pb::SynapseObservationContent {
-                observation: observation.to_owned(),
-                is_final: false,
-                action_name: action_name.to_owned(),
-                source: src as i32,
-            },
-        )),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::assistant::llm::{LlmError, MockChatModel};
+    use crate::assistant::turn::text::MAX_MODEL_FACING_OBSERVATION;
     use tokio::sync::mpsc;
 
     type Inbound = mpsc::Sender<Result<pb::StreamingUnderstandRequest, Status>>;

@@ -12,6 +12,7 @@ pub mod engine;
 pub mod llm;
 pub mod prompts;
 pub mod toolsets;
+pub mod turn;
 
 use std::sync::Arc;
 
