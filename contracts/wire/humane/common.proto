@@ -1,0 +1,9 @@
+// reconstructed from ironman.apk (protobuf-lite). field numbers are wire-accurate.
+syntax = "proto3";
+
+package humane.common;
+
+message Locale {
+  string language = 1;
+  string country = 2;
+}

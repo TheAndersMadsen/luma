@@ -1,0 +1,1279 @@
+{
+  "schemaVersion": 1,
+  "packages": [
+    {
+      "name": "ironman",
+      "value": "hu.ma.ne.ironman",
+      "owner": "stock"
+    },
+    {
+      "name": "krypto",
+      "value": "hu.ma.ne.krypto",
+      "owner": "stock"
+    },
+    {
+      "name": "messages",
+      "value": "humane.experience.messages",
+      "owner": "stock"
+    },
+    {
+      "name": "music",
+      "value": "humane.experience.music",
+      "owner": "stock"
+    },
+    {
+      "name": "photography",
+      "value": "humane.experience.photography",
+      "owner": "stock"
+    },
+    {
+      "name": "dialer",
+      "value": "humane.experience.dialer",
+      "owner": "stock"
+    },
+    {
+      "name": "food",
+      "value": "humane.experience.food",
+      "owner": "stock"
+    },
+    {
+      "name": "settings",
+      "value": "humane.experience.settings",
+      "owner": "stock"
+    },
+    {
+      "name": "tickle",
+      "value": "humane.experience.tickle",
+      "owner": "stock"
+    },
+    {
+      "name": "esim_lpa",
+      "value": "humane.connectivity.esimlpa",
+      "owner": "stock"
+    },
+    {
+      "name": "system_navigation",
+      "value": "humane.experience.systemnavigation",
+      "owner": "stock"
+    },
+    {
+      "name": "voice_tts",
+      "value": "humane.voice.tts",
+      "owner": "stock"
+    },
+    {
+      "name": "memfault_usage_reporter",
+      "value": "com.memfault.usagereporter",
+      "owner": "stock"
+    },
+    {
+      "name": "onboarding",
+      "value": "humane.experience.onboarding",
+      "owner": "stock"
+    },
+    {
+      "name": "bort",
+      "value": "hu.ma.ne.bort",
+      "owner": "stock"
+    },
+    {
+      "name": "bort_ota",
+      "value": "hu.ma.ne.bort.ota",
+      "owner": "stock"
+    },
+    {
+      "name": "metric_reporter",
+      "value": "hu.ma.ne.metricreporter",
+      "owner": "stock"
+    },
+    {
+      "name": "ota",
+      "value": "humane.ota",
+      "owner": "stock"
+    }
+  ],
+  "packageSets": {
+    "hook_targets": [
+      "ironman",
+      "voice_tts",
+      "dialer",
+      "messages",
+      "onboarding",
+      "photography",
+      "krypto",
+      "system_navigation",
+      "settings",
+      "esim_lpa",
+      "music",
+      "food",
+      "tickle",
+      "memfault_usage_reporter"
+    ],
+    "center_preinstall_conflicts": [
+      "ironman",
+      "onboarding",
+      "system_navigation"
+    ],
+    "center_vendor_packages": [
+      "bort",
+      "bort_ota",
+      "memfault_usage_reporter",
+      "metric_reporter",
+      "ota"
+    ],
+    "host_query_packages": [
+      "dialer",
+      "messages",
+      "music",
+      "photography",
+      "food",
+      "krypto",
+      "ironman"
+    ]
+  },
+  "binderProtocols": [
+    {
+      "name": "ai_bus_bridge",
+      "descriptor": "humane.aibus.IAiBusBridge",
+      "owner": "stock",
+      "transactions": [
+        {
+          "name": "analyze_image",
+          "wireName": "analyzeImage",
+          "code": 1
+        },
+        {
+          "name": "synapse_understanding",
+          "wireName": "synapseUnderstanding",
+          "code": 2
+        },
+        {
+          "name": "encrypted_smart_playlist",
+          "wireName": "encryptedSmartPlaylist",
+          "code": 3
+        },
+        {
+          "name": "can_translate",
+          "wireName": "canTranslate",
+          "code": 4
+        },
+        {
+          "name": "translate_text",
+          "wireName": "translateText",
+          "code": 5
+        },
+        {
+          "name": "translate_conversation",
+          "wireName": "translateConversation",
+          "code": 6
+        },
+        {
+          "name": "stream_ai_bus",
+          "wireName": "streamAIBus",
+          "code": 7
+        },
+        {
+          "name": "fetch_home_screen_weather",
+          "wireName": "fetchHomeScreenWeather",
+          "code": 8
+        },
+        {
+          "name": "encrypted_nearby_search",
+          "wireName": "encryptedNearbySearch",
+          "code": 9
+        },
+        {
+          "name": "encrypted_geo_locate_request",
+          "wireName": "encryptedGeoLocateRequest",
+          "code": 10
+        },
+        {
+          "name": "chat_completion",
+          "wireName": "chatCompletion",
+          "code": 11
+        },
+        {
+          "name": "generate_interstitial",
+          "wireName": "generateInterstitial",
+          "code": 12
+        },
+        {
+          "name": "navigation_directions",
+          "wireName": "navigationDirections",
+          "code": 13
+        },
+        {
+          "name": "text_to_speech",
+          "wireName": "textToSpeech",
+          "code": 14
+        },
+        {
+          "name": "streaming_text_to_speech",
+          "wireName": "streamingTextToSpeech",
+          "code": 15
+        },
+        {
+          "name": "execute_function_call",
+          "wireName": "executeFunctionCall",
+          "code": 16
+        },
+        {
+          "name": "server_stateful_understand",
+          "wireName": "serverStatefulUnderstand",
+          "code": 17
+        },
+        {
+          "name": "bidirectional_streaming_understand",
+          "wireName": "bidirectionalStreamingUnderstand",
+          "code": 18
+        }
+      ]
+    },
+    {
+      "name": "stream_observer",
+      "descriptor": "humane.grpc.IStreamObserver",
+      "owner": "stock",
+      "transactions": [
+        {
+          "name": "on_next",
+          "wireName": "onNext",
+          "code": 1
+        },
+        {
+          "name": "on_error",
+          "wireName": "onError",
+          "code": 2
+        },
+        {
+          "name": "on_completed",
+          "wireName": "onCompleted",
+          "code": 3
+        }
+      ]
+    },
+    {
+      "name": "penumbra_spotify",
+      "descriptor": "com.penumbraos.server.spotify.bridge.v1",
+      "owner": "penumbra",
+      "transactions": [
+        {
+          "name": "query",
+          "wireName": "query",
+          "code": 1
+        },
+        {
+          "name": "playback",
+          "wireName": "playback",
+          "code": 2
+        },
+        {
+          "name": "save",
+          "wireName": "save",
+          "code": 3
+        }
+      ]
+    },
+    {
+      "name": "penumbra_fitness",
+      "descriptor": "com.penumbraos.server.fitness.bridge.v2",
+      "owner": "penumbra",
+      "transactions": [
+        {
+          "name": "begin_session",
+          "wireName": "beginSession",
+          "code": 1
+        },
+        {
+          "name": "finish_session",
+          "wireName": "finishSession",
+          "code": 2
+        },
+        {
+          "name": "abort_session",
+          "wireName": "abortSession",
+          "code": 3
+        }
+      ]
+    },
+    {
+      "name": "penumbra_message_status",
+      "descriptor": "com.penumbraos.server.message-status.bridge.v1",
+      "owner": "penumbra",
+      "transactions": [
+        {
+          "name": "record_delivered",
+          "wireName": "recordDelivered",
+          "code": 1
+        }
+      ]
+    },
+    {
+      "name": "penumbra_feature_flag_apply_ack",
+      "descriptor": "com.penumbraos.server.feature-flag-apply-ack.bridge.v1",
+      "owner": "penumbra",
+      "transactions": [
+        {
+          "name": "record_applied",
+          "wireName": "recordApplied",
+          "code": 1
+        }
+      ]
+    }
+  ],
+  "rpcPaths": [
+    {
+      "name": "aibus_understand",
+      "proto": "runtime/core/proto/humane/aibus/aibus.proto",
+      "service": "AIBusService",
+      "method": "Understand"
+    },
+    {
+      "name": "aibus_encrypted_loading_message",
+      "proto": "runtime/core/proto/humane/aibus/aibus.proto",
+      "service": "AIBusService",
+      "method": "EncryptedLoadingMessage"
+    },
+    {
+      "name": "aibus_encrypted_understand",
+      "proto": "runtime/core/proto/humane/aibus/aibus.proto",
+      "service": "AIBusService",
+      "method": "EncryptedUnderstand"
+    },
+    {
+      "name": "aibus_upload_file",
+      "proto": "runtime/core/proto/humane/aibus/aibus.proto",
+      "service": "AIBusService",
+      "method": "UploadFile"
+    },
+    {
+      "name": "capture_upload_file",
+      "proto": "runtime/core/proto/humane/capture/capture.proto",
+      "service": "CaptureService",
+      "method": "UploadFile"
+    }
+  ],
+  "protoKids": [
+    {
+      "name": "synapse_understanding_request",
+      "proto": "runtime/core/proto/humane/aibus/aibus.proto",
+      "message": "SynapseUnderstandingRequest"
+    },
+    {
+      "name": "synapse_understanding_response",
+      "proto": "runtime/core/proto/humane/aibus/aibus.proto",
+      "message": "SynapseUnderstandingResponse"
+    },
+    {
+      "name": "loading_message_request",
+      "proto": "runtime/core/proto/humane/aibus/aibus.proto",
+      "message": "LoadingMessageRequest"
+    },
+    {
+      "name": "loading_message_response",
+      "proto": "runtime/core/proto/humane/aibus/aibus.proto",
+      "message": "LoadingMessageResponse"
+    },
+    {
+      "name": "location_envelope",
+      "proto": "runtime/core/proto/humane/common/encryption.proto",
+      "message": "LocationEnvelope"
+    },
+    {
+      "name": "action_based_interstitial_request",
+      "proto": "runtime/core/proto/humane/aibus/aibus.proto",
+      "message": "ActionBasedInterstitialRequest"
+    },
+    {
+      "name": "action_based_interstitial_response",
+      "proto": "runtime/core/proto/humane/aibus/aibus.proto",
+      "message": "ActionBasedInterstitialResponse"
+    },
+    {
+      "name": "analyze_food_image_request",
+      "proto": "runtime/core/proto/humane/aibus/aibus.proto",
+      "message": "AnalyzeFoodImageRequest"
+    },
+    {
+      "name": "analyze_food_image_response",
+      "proto": "runtime/core/proto/humane/aibus/aibus.proto",
+      "message": "AnalyzeFoodImageResponse"
+    },
+    {
+      "name": "analyze_image_response",
+      "proto": "runtime/core/proto/humane/aibus/aibus.proto",
+      "message": "AnalyzeImageResponse"
+    },
+    {
+      "name": "can_translate_request",
+      "proto": "runtime/core/proto/humane/aibus/aibus.proto",
+      "message": "CanTranslateRequest"
+    },
+    {
+      "name": "can_translate_response",
+      "proto": "runtime/core/proto/humane/aibus/aibus.proto",
+      "message": "CanTranslateResponse"
+    },
+    {
+      "name": "chat_completion_request",
+      "proto": "runtime/core/proto/humane/aibus/aibus.proto",
+      "message": "ChatCompletionRequest"
+    },
+    {
+      "name": "chat_completion_response",
+      "proto": "runtime/core/proto/humane/aibus/aibus.proto",
+      "message": "ChatCompletionResponse"
+    },
+    {
+      "name": "completion_request",
+      "proto": "runtime/core/proto/humane/aibus/aibus.proto",
+      "message": "CompletionRequest"
+    },
+    {
+      "name": "completion_response",
+      "proto": "runtime/core/proto/humane/aibus/aibus.proto",
+      "message": "CompletionResponse"
+    },
+    {
+      "name": "function_call",
+      "proto": "runtime/core/proto/humane/aibus/aibus.proto",
+      "message": "FunctionCall"
+    },
+    {
+      "name": "function_response",
+      "proto": "runtime/core/proto/humane/aibus/aibus.proto",
+      "message": "FunctionResponse"
+    },
+    {
+      "name": "geo_locate_request",
+      "proto": "runtime/core/proto/humane/aibus/aibus.proto",
+      "message": "GeoLocateRequest"
+    },
+    {
+      "name": "geo_locate_response",
+      "proto": "runtime/core/proto/humane/aibus/aibus.proto",
+      "message": "GeoLocateResponse"
+    },
+    {
+      "name": "get_food_item_request",
+      "proto": "runtime/core/proto/humane/aibus/aibus.proto",
+      "message": "GetFoodItemRequest"
+    },
+    {
+      "name": "get_food_item_response",
+      "proto": "runtime/core/proto/humane/aibus/aibus.proto",
+      "message": "GetFoodItemResponse"
+    },
+    {
+      "name": "message_composition_request",
+      "proto": "runtime/core/proto/humane/aibus/aibus.proto",
+      "message": "MessageCompositionRequest"
+    },
+    {
+      "name": "message_composition_response",
+      "proto": "runtime/core/proto/humane/aibus/aibus.proto",
+      "message": "MessageCompositionResponse"
+    },
+    {
+      "name": "navigation_directions_request",
+      "proto": "runtime/core/proto/humane/aibus/aibus.proto",
+      "message": "NavigationDirectionsRequest"
+    },
+    {
+      "name": "navigation_directions_response",
+      "proto": "runtime/core/proto/humane/aibus/aibus.proto",
+      "message": "NavigationDirectionsResponse"
+    },
+    {
+      "name": "nearby_search_request",
+      "proto": "runtime/core/proto/humane/aibus/aibus.proto",
+      "message": "NearbySearchRequest"
+    },
+    {
+      "name": "nearby_search_response",
+      "proto": "runtime/core/proto/humane/aibus/aibus.proto",
+      "message": "NearbySearchResponse"
+    },
+    {
+      "name": "reverse_geocode_response",
+      "proto": "runtime/core/proto/humane/aibus/aibus.proto",
+      "message": "ReverseGeocodeResponse"
+    },
+    {
+      "name": "server_stateful_understand_request",
+      "proto": "runtime/core/proto/humane/aibus/aibus.proto",
+      "message": "ServerStatefulUnderstandRequest"
+    },
+    {
+      "name": "server_stateful_understand_response",
+      "proto": "runtime/core/proto/humane/aibus/aibus.proto",
+      "message": "ServerStatefulUnderstandResponse"
+    },
+    {
+      "name": "smart_playlist_request",
+      "proto": "runtime/core/proto/humane/aibus/aibus.proto",
+      "message": "SmartPlaylistRequest"
+    },
+    {
+      "name": "smart_playlist_response",
+      "proto": "runtime/core/proto/humane/aibus/aibus.proto",
+      "message": "SmartPlaylistResponse"
+    },
+    {
+      "name": "streaming_understand_request",
+      "proto": "runtime/core/proto/humane/aibus/aibus.proto",
+      "message": "StreamingUnderstandRequest"
+    },
+    {
+      "name": "streaming_understand_response",
+      "proto": "runtime/core/proto/humane/aibus/aibus.proto",
+      "message": "StreamingUnderstandResponse"
+    },
+    {
+      "name": "summarization_network_request",
+      "proto": "runtime/core/proto/humane/aibus/aibus.proto",
+      "message": "SummarizationNetworkRequest"
+    },
+    {
+      "name": "summarization_network_response",
+      "proto": "runtime/core/proto/humane/aibus/aibus.proto",
+      "message": "SummarizationNetworkResponse"
+    },
+    {
+      "name": "text_to_speech_request",
+      "proto": "runtime/core/proto/humane/aibus/aibus.proto",
+      "message": "TextToSpeechRequest"
+    },
+    {
+      "name": "text_to_speech_response",
+      "proto": "runtime/core/proto/humane/aibus/aibus.proto",
+      "message": "TextToSpeechResponse"
+    },
+    {
+      "name": "translate_conversation_request",
+      "proto": "runtime/core/proto/humane/aibus/aibus.proto",
+      "message": "TranslateConversationRequest"
+    },
+    {
+      "name": "translate_conversation_response",
+      "proto": "runtime/core/proto/humane/aibus/aibus.proto",
+      "message": "TranslateConversationResponse"
+    },
+    {
+      "name": "translate_text_request",
+      "proto": "runtime/core/proto/humane/aibus/aibus.proto",
+      "message": "TranslateTextRequest"
+    },
+    {
+      "name": "translate_text_response",
+      "proto": "runtime/core/proto/humane/aibus/aibus.proto",
+      "message": "TranslateTextResponse"
+    },
+    {
+      "name": "weather_response",
+      "proto": "runtime/core/proto/humane/aibus/aibus.proto",
+      "message": "WeatherResponse"
+    },
+    {
+      "name": "food_log_summary",
+      "proto": "runtime/core/proto/humane/common/food.proto",
+      "message": "FoodLogSummary"
+    },
+    {
+      "name": "contact",
+      "proto": "runtime/core/proto/humane/contacts/contacts.proto",
+      "message": "Contact"
+    }
+  ],
+  "externalProtoKids": [
+    {
+      "name": "ai_request",
+      "value": "humane.aibus.AIRequest",
+      "status": "external",
+      "evidence": "contracts/stock-aibus/src/main/kotlin/com/penumbraos/stockaibus/contract/StockAiBusContract.kt",
+      "reason": "Stock Binder transaction 7 uses this KID, but the recovered local proto declares only EncryptedAiRequest."
+    },
+    {
+      "name": "ai_response",
+      "value": "humane.aibus.AIResponse",
+      "status": "external",
+      "evidence": "contracts/stock-aibus/src/main/kotlin/com/penumbraos/stockaibus/contract/StockAiBusContract.kt",
+      "reason": "Stock Binder transaction 7 uses this KID, but the recovered local proto declares only EncryptedAiResponse."
+    },
+    {
+      "name": "translate_response",
+      "value": "humane.aibus.TranslateResponse",
+      "status": "unverified",
+      "evidence": "runtime/core/src/services/aibus/stubs.rs",
+      "reason": "The compatibility stub emits this legacy KID, but no matching local protobuf message declaration exists."
+    }
+  ],
+  "featureFlags": {
+    "cloud": [
+      {
+        "name": "accessory_feature_flags",
+        "value": "accessory_feature_flags"
+      },
+      {
+        "name": "feature_flag_suppress_sync_on_startup",
+        "value": "feature_flag_suppress_sync_on_startup"
+      },
+      {
+        "name": "touchcode_timeout_millis",
+        "value": "touchcode_timeout_millis"
+      },
+      {
+        "name": "laser_finding_guide",
+        "value": "laser_finding_guide"
+      },
+      {
+        "name": "server_side_transcription_save_enabled",
+        "value": "server_side_transcription_save_enabled"
+      },
+      {
+        "name": "server_side_speech_synthesis_timeout_millis",
+        "value": "server_side_speech_synthesis_timeout_millis"
+      },
+      {
+        "name": "server_side_speech_synthesis_streaming_enabled",
+        "value": "server_side_speech_synthesis_streaming_enabled"
+      },
+      {
+        "name": "server_side_speech_synthesis_voice_name",
+        "value": "server_side_speech_synthesis_voice_name"
+      },
+      {
+        "name": "cmu_ultra_enabled",
+        "value": "cmu_ultra_enabled"
+      },
+      {
+        "name": "cmu_ultra_chime_enabled",
+        "value": "cmu_ultra_chime_enabled"
+      },
+      {
+        "name": "music_interstitials_enabled",
+        "value": "music_interstitials_enabled"
+      },
+      {
+        "name": "vision_custom_gesture_enabled",
+        "value": "vision_custom_gesture_enabled"
+      },
+      {
+        "name": "quick_actions_remapping_enabled",
+        "value": "quick_actions_remapping_enabled"
+      },
+      {
+        "name": "vision_actions_enabled",
+        "value": "vision_actions_enabled"
+      },
+      {
+        "name": "fitness_tracker_enabled",
+        "value": "fitness_tracker_enabled"
+      },
+      {
+        "name": "fitness_tracker_extra_data_enabled",
+        "value": "fitness_tracker_extra_data_enabled"
+      },
+      {
+        "name": "esim_qr_scanner_enabled",
+        "value": "esim_qr_scanner_enabled"
+      },
+      {
+        "name": "tickle",
+        "value": "tickle"
+      },
+      {
+        "name": "network_reset_enabled",
+        "value": "network_reset_enabled"
+      },
+      {
+        "name": "synapse_bidirectional_streaming",
+        "value": "synapse_bidirectional_streaming"
+      }
+    ],
+    "settingsGlobal": [
+      {
+        "name": "photo_sharing_enabled",
+        "value": "humane_photo_sharing_enabled"
+      },
+      {
+        "name": "photography_jpg_enabled",
+        "value": "humane_photography_jpg_enabled"
+      },
+      {
+        "name": "food_enabled",
+        "value": "humane_food_enabled"
+      },
+      {
+        "name": "clock_enabled",
+        "value": "humane_clock_enabled"
+      },
+      {
+        "name": "health_tracker_enabled",
+        "value": "humane_health_tracker_enabled"
+      },
+      {
+        "name": "cmu_ultra_enabled",
+        "value": "humane_cmu_ultra_enabled"
+      }
+    ],
+    "penumbraSettingsGlobal": [
+      {
+        "name": "weather_celsius",
+        "value": "penumbra_weather_celsius"
+      }
+    ]
+  },
+  "wireSentinels": [
+    {
+      "name": "plaintext_envelope",
+      "value": "plaintext",
+      "owner": "penumbra",
+      "note": "This encryption-envelope selector is not a protobuf KID."
+    }
+  ],
+  "operationalMarkers": [
+    {
+      "name": "tool_executed",
+      "value": "<<< hermes tool executed",
+      "fields": [
+        "correlation",
+        "tool",
+        "ok",
+        "reason"
+      ],
+      "status": "live",
+      "emitter": "runtime/core/src/services/aibus/tools/catalog.rs",
+      "consumers": [
+        "platform/deploy/acceptance/pin/pinbox/shared/logcat.mjs",
+        "platform/deploy/acceptance/pin/tool-coverage.mjs"
+      ]
+    },
+    {
+      "name": "mutation",
+      "value": "<<< hermes mutation",
+      "fields": [
+        "tool",
+        "action"
+      ],
+      "status": "live",
+      "emitter": "runtime/core/src/services/aibus/tools/catalog.rs",
+      "consumers": [
+        "platform/deploy/acceptance/pin/pinbox/shared/logcat.mjs",
+        "platform/deploy/acceptance/pin/tool-coverage.mjs"
+      ]
+    },
+    {
+      "name": "mutation_rejected",
+      "value": "<<< hermes mutation rejected: not grounded in this turn",
+      "fields": [
+        "tool",
+        "reason"
+      ],
+      "status": "live",
+      "emitter": "runtime/core/src/services/aibus/tools/catalog.rs",
+      "consumers": [
+        "platform/deploy/acceptance/pin/pinbox/shared/logcat.mjs",
+        "platform/deploy/acceptance/pin/tool-coverage.mjs"
+      ]
+    },
+    {
+      "name": "observation_replayed",
+      "value": "<<< hermes replaying identical observation from this turn",
+      "fields": [
+        "tool"
+      ],
+      "status": "live",
+      "emitter": "runtime/core/src/synapse/chat_turn_loop.rs",
+      "consumers": [
+        "platform/deploy/acceptance/pin/pinbox/shared/logcat.mjs",
+        "platform/deploy/acceptance/pin/tool-coverage.mjs"
+      ]
+    },
+    {
+      "name": "terminal_native_action",
+      "value": "<<< hermes terminal native action",
+      "fields": [
+        "tool",
+        "action"
+      ],
+      "status": "live",
+      "emitter": "runtime/core/src/synapse/chat_turn_loop.rs",
+      "consumers": [
+        "platform/deploy/acceptance/pin/tool-coverage.mjs"
+      ]
+    },
+    {
+      "name": "deterministic_completion",
+      "value": "<<< completing device control deterministically",
+      "fields": [
+        "action"
+      ],
+      "status": "live",
+      "emitter": "runtime/core/src/services/aibus/tools/catalog.rs",
+      "consumers": [
+        "platform/deploy/acceptance/pin/tool-coverage.mjs"
+      ]
+    },
+    {
+      "name": "nlu_entry_intent",
+      "value": "<<< nlu entry intent",
+      "fields": [
+        "intent",
+        "score"
+      ],
+      "status": "live",
+      "emitter": "runtime/core/src/services/aibus/understand.rs",
+      "consumers": [
+        "platform/deploy/acceptance/pin/pinbox/shared/logcat.mjs"
+      ]
+    },
+    {
+      "name": "nlu_music_slots",
+      "value": "<<< nlu music slots",
+      "fields": [
+        "intent"
+      ],
+      "status": "live",
+      "emitter": "runtime/core/src/services/aibus/understand.rs",
+      "consumers": [
+        "platform/deploy/acceptance/pin/pinbox/shared/logcat.mjs"
+      ]
+    },
+    {
+      "name": "nlu_semantic_hit",
+      "value": "<<< nlu semantic hit",
+      "fields": [
+        "intent",
+        "score"
+      ],
+      "status": "live",
+      "emitter": "runtime/core/src/services/aibus/understand.rs",
+      "consumers": [
+        "platform/deploy/acceptance/pin/pinbox/shared/logcat.mjs"
+      ]
+    },
+    {
+      "name": "native_action_for_physical_verification",
+      "value": "Observed native action for physical verification",
+      "fields": [
+        "action"
+      ],
+      "status": "live",
+      "emitter": "hook/payload/src/main/kotlin/com/penumbraos/hook/ContextHistorySafetyHooks.kt",
+      "consumers": [
+        "platform/deploy/acceptance/pin/pinbox/shared/logcat.mjs",
+        "platform/deploy/acceptance/pin/physical-prompt-harness.mjs"
+      ]
+    },
+    {
+      "name": "backend_unavailable",
+      "value": "backend_unavailable",
+      "fields": [],
+      "status": "live",
+      "emitter": "runtime/core/src/synapse/chat_turn_loop.rs",
+      "consumers": [
+        "platform/deploy/acceptance/pin/pinbox/shared/logcat.mjs"
+      ]
+    },
+    {
+      "name": "verification_gate_rejected",
+      "value": "<<< hermes final answer rejected by verification gate",
+      "fields": [],
+      "status": "live",
+      "emitter": "runtime/core/src/synapse/chat_turn_loop.rs",
+      "consumers": [
+        "platform/deploy/acceptance/pin/model-ab-gate.mjs"
+      ]
+    },
+    {
+      "name": "step_backend_error",
+      "value": "<<< hermes step backend error",
+      "fields": [],
+      "status": "live",
+      "emitter": "runtime/core/src/synapse/chat_turn_loop.rs",
+      "consumers": [
+        "platform/deploy/acceptance/pin/model-ab-gate.mjs"
+      ]
+    },
+    {
+      "name": "decline",
+      "value": "<<< hermes decline",
+      "fields": [],
+      "status": "live",
+      "emitter": "runtime/core/src/synapse/chat_turn_loop.rs",
+      "consumers": [
+        "platform/deploy/acceptance/pin/model-ab-gate.mjs"
+      ]
+    },
+    {
+      "name": "local_weather_physical_trace",
+      "value": "<<< Deterministic local weather physical proof trace",
+      "fields": [
+        "correlation",
+        "ordinal",
+        "tool",
+        "status"
+      ],
+      "status": "live",
+      "emitter": "runtime/core/src/services/aibus/understand.rs",
+      "consumers": [
+        "platform/deploy/acceptance/pin/physical-prompt-harness.mjs"
+      ]
+    },
+    {
+      "name": "bounded_loading_message",
+      "value": "<<< Returning bounded stock loading message",
+      "fields": [
+        "emitted",
+        "source",
+        "reason",
+        "correlation"
+      ],
+      "status": "live",
+      "emitter": "runtime/core/src/services/aibus/cue/loading_message.rs",
+      "consumers": [
+        "platform/deploy/acceptance/pin/physical-prompt-harness.mjs"
+      ]
+    },
+    {
+      "name": "streaming_understand_completed",
+      "value": "<<< BidirectionalStreamingUnderstand completed after final observation",
+      "fields": [],
+      "status": "live",
+      "emitter": "runtime/core/src/services/aibus/turn/streaming.rs",
+      "consumers": [
+        "platform/deploy/acceptance/pin/session-continuity-physical-smoke.mjs",
+        "platform/deploy/acceptance/pin/speech-physical-smoke.mjs"
+      ]
+    },
+    {
+      "name": "streaming_understand_request",
+      "value": ">>> BidirectionalStreamingUnderstand (content redacted)",
+      "fields": [
+        "run_id"
+      ],
+      "status": "live",
+      "emitter": "runtime/core/src/services/aibus/turn/streaming.rs",
+      "consumers": [
+        "platform/deploy/acceptance/pin/session-continuity-physical-smoke.mjs",
+        "platform/deploy/acceptance/pin/speech-physical-smoke.mjs"
+      ]
+    },
+    {
+      "name": "categorize_notifications",
+      "value": ">>> CategorizeNotifications",
+      "fields": [
+        "notifications"
+      ],
+      "status": "live",
+      "emitter": "runtime/core/src/services/aibus/capabilities/composition.rs",
+      "consumers": [
+        "platform/deploy/acceptance/pin/android-cmu-physical-smoke.mjs"
+      ]
+    },
+    {
+      "name": "encrypted_summarize_messages",
+      "value": ">>> EncryptedSummarizeMessages",
+      "fields": [
+        "groups"
+      ],
+      "status": "live",
+      "emitter": "runtime/core/src/services/aibus/capabilities/composition.rs",
+      "consumers": [
+        "platform/deploy/acceptance/pin/android-cmu-physical-smoke.mjs"
+      ]
+    },
+    {
+      "name": "stock_run_final_observation",
+      "value": "New turn is final, allowing dispatch but ending current Run.",
+      "fields": [],
+      "status": "external",
+      "emitter": null,
+      "consumers": [
+        "platform/deploy/acceptance/pin/session-continuity-physical-smoke.mjs"
+      ],
+      "evidence": "contracts/tier-a/external-operational-marker-evidence.tsv",
+      "reason": "Stock RunManager owns this device-log marker; Penumbra only consumes the hash-pinned compatibility contract."
+    },
+    {
+      "name": "stock_run_final_message",
+      "value": "New turn is a message, so final, allowing dispatch but ending current Run.",
+      "fields": [],
+      "status": "external",
+      "emitter": null,
+      "consumers": [
+        "platform/deploy/acceptance/pin/session-continuity-physical-smoke.mjs"
+      ],
+      "evidence": "contracts/tier-a/external-operational-marker-evidence.tsv",
+      "reason": "Stock RunManager owns this device-log marker; Penumbra only consumes the hash-pinned compatibility contract."
+    },
+    {
+      "name": "hand_tracking_held_for_narration",
+      "value": "Hand tracking timeout held for narration",
+      "fields": [
+        "sessionArmed"
+      ],
+      "status": "live",
+      "emitter": "hook/payload/src/main/kotlin/com/penumbraos/hook/HandTrackingTimeoutHooks.kt",
+      "consumers": [
+        "platform/deploy/acceptance/pin/physical-prompt-harness.mjs",
+        "platform/deploy/acceptance/pin/session-continuity-physical-smoke.mjs",
+        "platform/deploy/acceptance/pin/speech-physical-smoke.mjs"
+      ]
+    },
+    {
+      "name": "narration_end_released_hold",
+      "value": "NARRATION_END released narration hold",
+      "fields": [
+        "sessionArmed"
+      ],
+      "status": "live",
+      "emitter": "hook/payload/src/main/kotlin/com/penumbraos/hook/HandTrackingTimeoutHooks.kt",
+      "consumers": [
+        "platform/deploy/acceptance/pin/physical-prompt-harness.mjs",
+        "platform/deploy/acceptance/pin/session-continuity-physical-smoke.mjs",
+        "platform/deploy/acceptance/pin/speech-physical-smoke.mjs"
+      ]
+    },
+    {
+      "name": "exact_context_reset_authorized",
+      "value": "Authorized exact context-reset action",
+      "fields": [],
+      "status": "live",
+      "emitter": "hook/payload/src/main/kotlin/com/penumbraos/hook/ContextHistorySafetyHooks.kt",
+      "consumers": [
+        "platform/deploy/acceptance/pin/session-continuity-physical-smoke.mjs"
+      ]
+    },
+    {
+      "name": "music_intent_compatibility_emitted",
+      "value": "Music intent compatibility emitted",
+      "fields": [
+        "action"
+      ],
+      "status": "live",
+      "emitter": "hook/payload/src/main/kotlin/com/penumbraos/hook/MusicIntentCompatibilityHooks.kt",
+      "consumers": [
+        "platform/deploy/acceptance/pin/physical-prompt-harness.mjs"
+      ]
+    },
+    {
+      "name": "streaming_speech_failure_released",
+      "value": "Streaming speech playback failure released",
+      "fields": [],
+      "status": "live",
+      "emitter": "hook/payload/src/main/kotlin/com/penumbraos/hook/StreamingSpeechPlaybackHooks.kt",
+      "consumers": [
+        "platform/deploy/acceptance/pin/speech-physical-smoke.mjs"
+      ]
+    },
+    {
+      "name": "narration_start_without_hand_tracking",
+      "value": "NARRATION_START ignored because no active hand tracking session",
+      "fields": [
+        "sessionArmed"
+      ],
+      "status": "unverified",
+      "emitter": null,
+      "consumers": [
+        "platform/deploy/acceptance/pin/physical-prompt-harness.mjs",
+        "platform/deploy/acceptance/pin/session-continuity-physical-smoke.mjs",
+        "platform/deploy/acceptance/pin/speech-physical-smoke.mjs"
+      ],
+      "reason": "Compatibility parsers still accept this marker, but no current Kotlin production emitter exists."
+    },
+    {
+      "name": "narration_end_without_hand_tracking",
+      "value": "NARRATION_END ignored because no active hand tracking session",
+      "fields": [
+        "sessionArmed"
+      ],
+      "status": "unverified",
+      "emitter": null,
+      "consumers": [
+        "platform/deploy/acceptance/pin/physical-prompt-harness.mjs",
+        "platform/deploy/acceptance/pin/session-continuity-physical-smoke.mjs",
+        "platform/deploy/acceptance/pin/speech-physical-smoke.mjs"
+      ],
+      "reason": "Compatibility parsers still accept this marker, but no current Kotlin production emitter exists."
+    },
+    {
+      "name": "agentic_physical_trace",
+      "value": "<<< Agentic physical proof trace",
+      "fields": [
+        "correlation",
+        "ordinal",
+        "tool",
+        "status",
+        "result_status"
+      ],
+      "status": "live",
+      "emitter": "runtime/core/src/synapse/authority/runtime.rs",
+      "consumers": [
+        "platform/deploy/acceptance/pin/physical-prompt-harness.mjs",
+        "platform/deploy/acceptance/pin/session-continuity-physical-smoke.mjs"
+      ]
+    },
+    {
+      "name": "step_completed",
+      "value": "<<< hermes step completed",
+      "fields": [
+        "provider",
+        "correlation",
+        "latency_ms",
+        "tool_calls",
+        "has_text"
+      ],
+      "status": "live",
+      "emitter": "runtime/core/src/llm/rig_backend.rs",
+      "consumers": [
+        "platform/deploy/acceptance/pin/architecture-vocabulary.test.mjs"
+      ]
+    },
+    {
+      "name": "codex_step_outbound",
+      "value": "<<< hermes codex step outbound",
+      "fields": [
+        "correlation",
+        "tool_count",
+        "tools_empty",
+        "tool_branch",
+        "base_prompt_bytes",
+        "system_bytes",
+        "tool_block_bytes",
+        "transcript_messages",
+        "messages_sent",
+        "wire_mode",
+        "tool_digest",
+        "tool_names"
+      ],
+      "status": "live",
+      "emitter": "runtime/core/src/llm/providers/codex.rs",
+      "consumers": [
+        "platform/deploy/acceptance/pin/architecture-vocabulary.test.mjs"
+      ]
+    },
+    {
+      "name": "codex_step_parsed",
+      "value": "<<< hermes codex step parsed",
+      "fields": [
+        "correlation",
+        "response_bytes",
+        "markup_present",
+        "open_tags",
+        "blocks_found",
+        "parsed_ok",
+        "json_parse",
+        "missing_name",
+        "unterminated",
+        "foreign_tag",
+        "reason",
+        "outcome",
+        "spoken_bytes"
+      ],
+      "status": "live",
+      "emitter": "runtime/core/src/llm/providers/codex.rs",
+      "consumers": [
+        "platform/deploy/acceptance/pin/architecture-vocabulary.test.mjs"
+      ]
+    },
+    {
+      "name": "time_budget_grace",
+      "value": "<<< hermes time budget nearly spent; forcing the grace answer",
+      "fields": [
+        "correlation",
+        "iteration",
+        "remaining_ms"
+      ],
+      "status": "live",
+      "emitter": "runtime/core/src/synapse/chat_turn_loop.rs",
+      "consumers": [
+        "platform/deploy/acceptance/pin/architecture-vocabulary.test.mjs"
+      ]
+    },
+    {
+      "name": "slow_model_step",
+      "value": "<<< hermes slow model step threshold reached",
+      "fields": [
+        "correlation",
+        "iteration"
+      ],
+      "status": "live",
+      "emitter": "runtime/core/src/synapse/chat_turn_loop.rs",
+      "consumers": [
+        "platform/deploy/acceptance/pin/architecture-vocabulary.test.mjs"
+      ]
+    },
+    {
+      "name": "forcing_deterministic_terminal_action",
+      "value": "<<< hermes forcing deterministic terminal action",
+      "fields": [
+        "correlation",
+        "iteration",
+        "action",
+        "nudge_used",
+        "is_grace"
+      ],
+      "status": "live",
+      "emitter": "runtime/core/src/synapse/chat_turn_loop.rs",
+      "consumers": [
+        "platform/deploy/acceptance/pin/architecture-vocabulary.test.mjs"
+      ]
+    },
+    {
+      "name": "final_answer",
+      "value": "<<< hermes final answer",
+      "fields": [
+        "correlation",
+        "iteration"
+      ],
+      "status": "live",
+      "emitter": "runtime/core/src/synapse/chat_turn_loop.rs",
+      "consumers": [
+        "platform/deploy/acceptance/pin/architecture-vocabulary.test.mjs"
+      ]
+    },
+    {
+      "name": "first_step_retry",
+      "value": "<<< hermes retrying the first model step",
+      "fields": [
+        "correlation",
+        "iteration",
+        "category"
+      ],
+      "status": "live",
+      "emitter": "runtime/core/src/synapse/chat_turn_loop.rs",
+      "consumers": [
+        "platform/deploy/acceptance/pin/architecture-vocabulary.test.mjs"
+      ]
+    },
+    {
+      "name": "artist_scoped_completion",
+      "value": "<<< hermes completing on the artist-scoped observation",
+      "fields": [
+        "correlation",
+        "iteration",
+        "action"
+      ],
+      "status": "live",
+      "emitter": "runtime/core/src/synapse/chat_turn_loop.rs",
+      "consumers": [
+        "platform/deploy/acceptance/pin/architecture-vocabulary.test.mjs"
+      ]
+    },
+    {
+      "name": "music_ranking_degraded",
+      "value": "<<< spotify artist ranking degraded to relevance search",
+      "fields": [
+        "reason",
+        "track_count",
+        "popularity_order"
+      ],
+      "status": "live",
+      "emitter": "runtime/core/src/spotify/mod.rs",
+      "consumers": [
+        "platform/deploy/acceptance/pin/pinbox/shared/logcat.mjs"
+      ]
+    }
+  ]
+}

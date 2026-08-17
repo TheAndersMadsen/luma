@@ -1,0 +1,16 @@
+[package]
+name = "cosmos-protocol"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+description = "Independently authored gRPC/protobuf wire contract for the Cosmos compatibility edge."
+
+[dependencies]
+prost.workspace = true
+prost-types = "0.13.4"
+tonic.workspace = true
+
+[build-dependencies]
+tonic-build.workspace = true
+protoc-bin-vendored = "3"

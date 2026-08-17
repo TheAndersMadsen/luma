@@ -1,0 +1,90 @@
+// reconstructed from ironman.apk (protobuf-lite). field numbers are wire-accurate.
+syntax = "proto3";
+
+package humane.krypton.grpc.key;
+
+import "humane/krypton/grpc/auth.proto";
+
+enum Algo {
+  ALGO_UNSPECIFIED = 0;
+  ALGO_AES_GCM = 1;
+  ALGO_AES_KW = 2;
+  ALGO_RSA_OAEP = 3;
+  ALGO_AES_CBC_HMAC = 4;
+  ALGO_HMAC_SHA256 = 5;
+  ALGO_SCALE_AND_PERTURB = 6;
+  ALGO_RSA_SSA = 7;
+  ALGO_AES_GCM_SIV = 8;
+}
+
+enum Level {
+  LEVEL_UNSPECIFIED = 0;
+  LEVEL_S1 = 1;
+  LEVEL_S2 = 2;
+  LEVEL_S3 = 3;
+  LEVEL_C0 = 4;
+  LEVEL_C1 = 5;
+  LEVEL_C3 = 6;
+  LEVEL_C2 = 7;
+}
+
+enum Mutation {
+  MUTATION_UNSPECIFIED = 0;
+  MUTATION_KEY_LEVEL = 1;
+  MUTATION_KEY_OPERATIONS = 2;
+  MUTATION_DELETE_KEY = 3;
+  MUTATION_UPDATE_KEY = 4;
+}
+
+enum Op {
+  OP_UNSPECIFIED = 0;
+  OP_ENCRYPT = 1;
+  OP_DECRYPT = 2;
+  OP_SIGN = 3;
+  OP_VERIFY = 4;
+  OP_WRAP = 5;
+  OP_UNWRAP = 6;
+}
+
+message ClearKey {
+  bytes kid = 1;
+  Level level = 2;
+  Algo algo = 3;
+  repeated Op ops = 4;
+  bytes jca_encoded = 5;
+  string jca_algo = 6;
+}
+
+message KeyMetadata {
+  bytes kid = 1;
+  Level level = 2;
+  Algo algo = 3;
+  repeated Op ops = 4;
+}
+
+message KeyPermissions {
+  bytes kid = 1;
+  humane.krypton.grpc.auth.Credentials creds = 2;
+  repeated Op ops = 3;
+  repeated Mutation rights = 4;
+  bool owner = 5;
+}
+
+message TagInfo {
+  humane.krypton.grpc.auth.Credentials owner = 1;
+}
+
+message TagPermissions {
+  string tag = 1;
+  humane.krypton.grpc.auth.Credentials creds = 2;
+  repeated Op ops = 3;
+  repeated Mutation rights = 4;
+}
+
+message WrappedKey {
+  bytes wrapping_kid = 1;
+  bytes metadata = 2;
+  bytes keydata = 3;
+  bytes iv = 4;
+  bytes auth_tag = 5;
+}

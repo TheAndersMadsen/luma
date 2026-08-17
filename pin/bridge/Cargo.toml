@@ -1,0 +1,24 @@
+[package]
+name = "center-iroh-bridge"
+version = "0.1.0"
+edition = "2021"
+description = "Mac helper: exposes Ai Pin Setup over iroh P2P from the Pin"
+
+[dependencies]
+iroh = "1.0"
+# The endpoint ticket type moved out of core `iroh` into `iroh-tickets` in the
+# 1.0 line; the Pin hands us a NodeId+relay ticket to dial with.
+iroh-tickets = "1.0"
+tokio = { version = "1", features = ["full"] }
+axum = "0.8"
+tower = { version = "0.5", features = ["util"] }
+hyper = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Center ships binary assets (logo.png, ai-pin.webp); the Pin base64-encodes
+# every response body so binaries survive the JSON envelope. We decode here.
+base64 = "0.22"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4"] }
+clap = { version = "4", features = ["derive"] }

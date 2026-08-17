@@ -1,0 +1,258 @@
+/* Loading, error and empty states — shared across views. */
+
+@keyframes shimmer {
+  0% { opacity: 0.45; }
+  50% { opacity: 0.8; }
+  100% { opacity: 0.45; }
+}
+
+.skeleton {
+  border-radius: var(--hu-radius-surface);
+  background: var(--hu-colors-penumbra-base);
+  box-shadow: var(--outline-shadow);
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+
+.skeletonLine {
+  height: 14px;
+  border-radius: 7px;
+  background: var(--hu-colors-lunar-grey-dark-200);
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+
+.skeletonGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(var(--cell-size), 1fr));
+  gap: var(--gap-size);
+  padding-top: 8px;
+}
+
+.skeletonTile {
+  aspect-ratio: 3 / 4;
+}
+
+.skeletonRows {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-width: 1180px;
+  margin: 0 auto;
+}
+
+.skeletonRow {
+  display: grid;
+  grid-template-columns: 44px 1fr;
+  gap: 18px;
+  padding: 22px 4px;
+  border-bottom: 1px solid var(--hu-divider);
+}
+
+.skeletonIcon {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: var(--hu-colors-penumbra-base);
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+
+.skeletonRowBody {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/*
+ * Card skeletons that match the grid they stand in for.
+ *
+ * There used to be one hardcoded 260px auto-fill grid (an inline style object,
+ * at that) standing in for three different layouts, so every page visibly
+ * re-flowed the moment data landed. These mirror memories.module.css
+ * .dashboardGrid, views.module.css .noteMasonryGrid and
+ * .myDataOverviewGridContainer respectively.
+ */
+.cardsAuto {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: var(--gap-size);
+  padding-top: 8px;
+}
+
+.cardsDashboard {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--gap-size);
+  max-width: 1400px;
+  margin: 0 auto;
+  padding-top: 8px;
+  align-items: start;
+}
+
+.cardsNotes {
+  columns: 4 260px;
+  column-gap: var(--gap-size);
+  padding-top: 8px;
+}
+
+.cardsMyData {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: var(--gap-size);
+  width: 100%;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding-top: 8px;
+}
+
+.skeletonCard {
+  min-height: 190px;
+}
+
+/* inside the masonry variant a card is a column item, not a grid cell */
+.cardsNotes .skeletonCard {
+  break-inside: avoid;
+  margin-bottom: var(--gap-size);
+}
+
+@media (max-width: 1071px) {
+  .cardsDashboard {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .cardsDashboard {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/*
+ * Settings section skeleton — the .infoRowRoot rhythm (18px/24px rows on a
+ * hairline), so Settings stops having four different loading sentences and the
+ * pane stops jumping when the rows arrive.
+ */
+.sectionSkeleton {
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--hu-radius-surface);
+  background: var(--hu-colors-penumbra-base);
+  box-shadow: var(--outline-shadow);
+  margin-bottom: var(--gap-size);
+  overflow: hidden;
+}
+
+.sectionSkeletonRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 18px 24px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.sectionSkeletonRow:last-child {
+  border-bottom: none;
+}
+
+.sectionSkeletonLabel {
+  flex: none;
+  width: 160px;
+}
+
+.sectionSkeletonValue {
+  flex: 1;
+  max-width: 280px;
+}
+
+/* error */
+.errorState {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  min-height: 52dvh;
+  text-align: center;
+  padding: 0 24px;
+}
+
+/* the same state next to the thing that failed, rather than owning the viewport */
+.errorStateInline {
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 10px;
+  min-height: 0;
+  text-align: left;
+  padding: 0;
+}
+
+.errorTitle {
+  font-size: 24px;
+  font-weight: 500;
+  color: var(--hu-colors-white);
+}
+
+.errorStateInline .errorTitle {
+  font-size: 16px;
+}
+
+.errorDetail {
+  font-size: 15px;
+  font-weight: 400;
+  color: var(--hu-colors-crater-base);
+  max-width: 460px;
+  line-height: 1.4;
+}
+
+.retryButton {
+  composes: buttonPrimary from "./controls.module.css";
+  margin-top: 6px;
+}
+
+/* empty — "live, and you have none yet", which is not a failure */
+.emptyState {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  min-height: 58dvh;
+  text-align: center;
+  color: var(--hu-colors-white);
+}
+
+/* the same shape inside a settings section or a console card */
+.emptyStateInline {
+  min-height: 0;
+  gap: 14px;
+  padding: 28px 24px;
+}
+
+.emptyIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--hu-colors-white);
+}
+
+.emptyTitle {
+  font-size: 30px;
+  font-weight: 500;
+  line-height: 1.2;
+}
+
+.emptyDetail {
+  max-width: 420px;
+  color: var(--hu-colors-crater-base);
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.45;
+  text-align: center;
+}
+
+.emptyStateInline .emptyTitle {
+  font-size: 20px;
+}
+
+.emptyAction {
+  composes: buttonSecondary from "./controls.module.css";
+}

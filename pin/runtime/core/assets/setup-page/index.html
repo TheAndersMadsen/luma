@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="robots" content="noindex" />
+    <title>Ai Pin — Setup</title>
+    <!--
+      Device-owned setup/recovery page. Served locally by the Pin runtime under
+      the /setup/ base whenever Center is not reachable. This is a plain static
+      page: no build step, no framework, and — because the runtime serves it
+      under `script-src 'self'` (see pin/runtime/core/src/api/setup.rs) — no
+      inline script. Styling and behaviour live in the two packed assets below.
+      Every /setup/ reference here MUST resolve to a packed asset; the embed
+      validator (platform/containers/pin-builder/embed-setup-assets.mjs) rejects
+      the pack otherwise.
+    -->
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Ccircle%20cx='16'%20cy='16'%20r='13'%20fill='%230f0f0f'%20stroke='%2300ffe0'%20stroke-width='2'/%3E%3Ccircle%20cx='16'%20cy='16'%20r='4'%20fill='%2300ffe0'/%3E%3C/svg%3E"
+    />
+    <link rel="stylesheet" href="/setup/assets/setup.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="masthead">
+        <span class="mark" aria-hidden="true">
+          <svg viewBox="0 0 32 32" role="img" focusable="false">
+            <circle cx="16" cy="16" r="13" class="mark-ring" />
+            <circle cx="16" cy="16" r="4" class="mark-core" />
+          </svg>
+        </span>
+        <div class="masthead-text">
+          <p class="eyebrow">Ai Pin</p>
+          <h1>Local setup</h1>
+        </div>
+        <span class="chip" aria-hidden="true">served on-device</span>
+      </header>
+
+      <section class="card" aria-labelledby="status-heading">
+        <h2 id="status-heading">Device status</h2>
+        <!--
+          Default (no-JS) state is honest on its own: the fact you can read this
+          means the device's HTTP server answered. setup.js enhances it with a
+          live /api/health check and the device's name and build.
+        -->
+        <p id="status-line" class="status" data-state="static">
+          This page is being served by your Ai Pin, so its on-device runtime is
+          answering requests.
+        </p>
+        <dl id="status-detail" class="detail" hidden>
+          <div>
+            <dt>Runtime</dt>
+            <dd id="detail-runtime">—</dd>
+          </div>
+          <div>
+            <dt>Name</dt>
+            <dd id="detail-name">—</dd>
+          </div>
+          <div>
+            <dt>Build</dt>
+            <dd id="detail-version">—</dd>
+          </div>
+          <div>
+            <dt>Address</dt>
+            <dd id="detail-address">—</dd>
+          </div>
+        </dl>
+        <div id="status-actions" class="actions" hidden>
+          <button id="recheck" type="button" class="button">Check again</button>
+          <span id="status-checked" class="checked" aria-live="polite"></span>
+        </div>
+      </section>
+
+      <section class="card" aria-labelledby="next-heading">
+        <h2 id="next-heading">What to do next</h2>
+        <ol class="steps">
+          <li>
+            <strong>Manage this Pin from Center.</strong> Everyday setup —
+            accounts, connectivity, and the device console — lives in your Center
+            dashboard, not here. Open Center on a trusted device and sign in.
+          </li>
+          <li>
+            <strong>If Center can’t reach the Pin,</strong> confirm the Pin and
+            your other device share a network, then use “Check again” above to
+            re-test the on-device runtime.
+          </li>
+          <li>
+            <strong>Still stuck?</strong> Power-cycle the Pin and reload this
+            page. This page always comes from the Pin itself, so a successful
+            reload confirms the device is up even when Center is unreachable.
+          </li>
+        </ol>
+      </section>
+
+      <footer class="footnote">
+        <p>
+          This is the Pin’s built-in recovery page. It carries no account access
+          and no device shell — those live only in Center, behind sign-in.
+        </p>
+      </footer>
+    </main>
+
+    <script src="/setup/assets/setup.js"></script>
+  </body>
+</html>

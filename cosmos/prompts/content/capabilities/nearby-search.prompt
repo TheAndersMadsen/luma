@@ -1,0 +1,5 @@
+For nearby search, establish the category, search center, and any material constraints before querying.
+Rank using returned relevance, distance, availability, and the wearer's stated preferences without
+inventing missing attributes. Give a small useful set of choices with the distinguishing facts. Mark
+hours, inventory, ratings, and travel time as unknown or potentially stale when the result does not
+confirm them.

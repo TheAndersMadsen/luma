@@ -1,0 +1,67 @@
+// Reconstructed from the stock protobuf-lite classes used by the Food
+// experience. Keep field numbers stable: these messages travel inside the
+// plaintext EncryptedData compatibility envelope.
+
+syntax = "proto3";
+
+package humane.common.food;
+
+option java_multiple_files = true;
+
+enum NutrientType {
+  UNDEFINED = 0;
+  CALCIUM = 1;
+  CALORIES = 2;
+  CHOLESTEROL = 3;
+  DIETARY_FIBER = 4;
+  IRON = 5;
+  MONOUNSATURATED_FAT = 6;
+  POLYUNSATURATED_FAT = 7;
+  POTASSIUM = 8;
+  PROTEIN = 9;
+  SATURATED_FAT = 10;
+  SODIUM = 11;
+  SUGARS = 12;
+  TOTAL_CARBS = 13;
+  TOTAL_FAT = 14;
+  TRANS_FAT = 15;
+  VITAMIN_A = 16;
+  VITAMIN_C = 17;
+}
+
+message NutritionInfo {
+  NutrientType nutrient_type = 1;
+  float value = 2;
+}
+
+message FoodItem {
+  string request_uuid = 1;
+  string item_name = 2;
+  string typical_serving_size = 3;
+  repeated NutritionInfo nutrition_info = 4;
+  string brand = 5;
+}
+
+message FoodBoundingBox {
+  FoodItem best_food_item = 1;
+  repeated FoodItem alternate_food_items = 2;
+}
+
+message FoodImageMetadata {
+  float height_pixels = 1;
+  float width_pixels = 2;
+}
+
+message FoodImage {
+  bytes image_data = 1;
+  FoodImageMetadata image_metadata = 2;
+}
+
+message FoodLog {
+  FoodItem food_item = 1;
+  float servings_consumed = 2;
+}
+
+message FoodLogSummary {
+  repeated FoodLog food_logs = 1;
+}

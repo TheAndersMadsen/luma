@@ -1,0 +1,36 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import test from "node:test";
+
+const root = new URL("../", import.meta.url);
+const source = (path) => readFile(new URL(path, root), "utf8");
+
+test("the global Shell opens one route-persistent floating assistant", async () => {
+  const [providers, shell, assistant] = await Promise.all([
+    source("src/components/Providers.tsx"),
+    source("src/components/Shell.tsx"),
+    source("src/components/FloatingAssistant.tsx"),
+  ]);
+
+  assert.match(providers, /<AssistantProvider>/);
+  assert.match(shell, /useFloatingAssistant/);
+  assert.match(shell, /aria-controls="ai-pin-assistant"/);
+  assert.doesNotMatch(shell, /href="\/talk"/);
+  assert.match(assistant, /role="dialog"/);
+  assert.match(assistant, /event\.key === "Escape"/);
+  assert.match(assistant, /openerRef\.current\?\.focus/);
+});
+
+test("assistant answers stay primary and implementation traces stay out of the UI", async () => {
+  const chat = await source("src/components/AiMicChat.tsx");
+  assert.match(chat, /t\.text \? <p className=\{styles\.say\}>/);
+  assert.doesNotMatch(chat, /<details className=\{styles\.trace\}/);
+  assert.doesNotMatch(chat, /reasoningOf|Used \{.*tool|suggestion/i);
+  assert.match(chat, /Done on your Pin\. No spoken reply\./);
+});
+
+test("legacy full-page Ai Mic links open the floating assistant", async () => {
+  const talk = await source("src/app/talk/page.tsx");
+  assert.match(talk, /redirect\("\/\?assistant=open"\)/);
+  assert.doesNotMatch(talk, /<Shell|<AiMicChat/);
+});

@@ -1,0 +1,239 @@
+.serviceHead {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--hu-divider);
+}
+
+.spotifyMark {
+  display: grid;
+  align-content: center;
+  gap: 4px;
+  width: 44px;
+  height: 44px;
+  flex: none;
+  padding: 10px 8px;
+  border-radius: 50%;
+  background: #1ed760;
+}
+
+.spotifyMark i {
+  display: block;
+  height: 2px;
+  border-radius: 100%;
+  background: var(--hu-colors-black);
+  transform: rotate(8deg);
+}
+
+.spotifyMark i:nth-child(2) { width: 85%; }
+.spotifyMark i:nth-child(3) { width: 68%; }
+
+.serviceCopy {
+  display: grid;
+  gap: 3px;
+  flex: 1;
+  min-width: 0;
+}
+
+.serviceCopy strong,
+.settingRow strong,
+.fieldRow strong,
+.pairingPanel strong {
+  color: var(--hu-colors-white);
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.serviceCopy span,
+.settingRow small,
+.fieldRow small,
+.pairingPanel p,
+.summary {
+  color: var(--hu-colors-crater-base);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.45;
+}
+
+.summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 24px;
+  border-bottom: 1px solid var(--hu-divider);
+}
+
+.account {
+  color: var(--hu-colors-white);
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+.settingsForm {
+  display: grid;
+}
+
+.settingRow,
+.fieldRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 18px 24px;
+  border-bottom: 1px solid var(--hu-divider);
+}
+
+.settingRow > span,
+.fieldRow > span {
+  display: grid;
+  gap: 3px;
+}
+
+.deviceName {
+  composes: field from "../../../../components/controls.module.css";
+  max-width: 300px;
+}
+
+.acknowledgement {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 18px 24px;
+  color: var(--hu-colors-crater-base);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.acknowledgement input {
+  width: 18px;
+  height: 18px;
+  margin: 1px 0 0;
+  accent-color: var(--hu-colors-beam-base);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 4px 24px 20px;
+}
+
+.primaryButton {
+  composes: buttonPrimary from "../../../../components/controls.module.css";
+}
+
+.secondaryButton {
+  composes: buttonSecondary from "../../../../components/controls.module.css";
+}
+
+.quietButton {
+  composes: buttonQuiet from "../../../../components/controls.module.css";
+}
+
+.dangerButton {
+  composes: buttonDanger from "../../../../components/controls.module.css";
+}
+
+.noticeArea,
+.messageArea {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 18px 24px;
+}
+
+/* The "is it really working" check: one field, one button, a short result list. */
+.searchPanel {
+  display: grid;
+  gap: 12px;
+  padding: 18px 24px;
+  border-top: 1px solid var(--hu-divider);
+}
+
+.searchIntro {
+  display: grid;
+  gap: 3px;
+}
+
+.searchControls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.searchField {
+  composes: field from "../../../../components/controls.module.css";
+  flex: 1;
+  min-width: 200px;
+  max-width: 360px;
+}
+
+.searchResults {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.searchResult {
+  display: grid;
+  gap: 2px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--hu-divider);
+}
+
+.searchResult:last-child {
+  border-bottom: none;
+}
+
+.searchResultTitle {
+  font-size: 14px;
+  color: var(--hu-colors-white);
+}
+
+.searchResultMeta {
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--hu-colors-crater-base);
+}
+
+.pairingPanel {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 18px;
+  padding: 20px 24px;
+}
+
+.pairingPanel p { margin: 4px 0 0; }
+
+.pairingTimer {
+  display: grid;
+  place-items: center;
+  width: 58px;
+  height: 58px;
+  border-radius: 50%;
+  background: var(--hu-colors-eclipse-base);
+  box-shadow: var(--outline-shadow);
+  color: var(--hu-colors-beam-base);
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 700px) {
+  .serviceHead { align-items: flex-start; flex-wrap: wrap; }
+  .serviceHead > :last-child { margin-left: 60px; }
+  .settingRow,
+  .fieldRow { align-items: flex-start; flex-direction: column; gap: 12px; }
+  .deviceName { max-width: none; }
+  .pairingPanel { grid-template-columns: auto minmax(0, 1fr); }
+  .pairingPanel > :last-child { grid-column: 1 / -1; justify-self: end; }
+  .summary { align-items: flex-start; flex-direction: column; }
+  .account { text-align: left; }
+}

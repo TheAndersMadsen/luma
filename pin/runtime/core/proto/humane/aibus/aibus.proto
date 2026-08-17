@@ -1,0 +1,1090 @@
+// Reconstructed from decompiled protobuf-lite Java classes.
+// Field numbers extracted from *_FIELD_NUMBER constants.
+// Only messages needed for AIBusService/Understand are fully defined;
+// referenced-but-unused types are stubbed as empty messages.
+
+syntax = "proto3";
+
+package humane.aibus;
+
+import "google/protobuf/timestamp.proto";
+import "humane/common/encryption.proto";
+import "humane/common/food.proto";
+
+option java_multiple_files = true;
+
+// ---- Enums ----
+
+enum SynapseUser {
+  SYSTEM    = 0;
+  USER      = 1;
+  ASSISTANT = 2;
+}
+
+enum SynapseSource {
+  DEVICE = 0;
+  SERVER = 1;
+}
+
+enum SpeechSource {
+  SOURCE_UNSPECIFIED = 0;
+  SOURCE_GOOGLE_SPEECH_SYNTHESIS = 1;
+  SOURCE_RESEMBLE_SPEECH_SYNTHESIS = 2;
+  SOURCE_MICROSOFT_SPEECH_SYNTHESIS = 3;
+}
+
+// ---- Core messages for Understand RPC ----
+
+message SynapseActionContent {
+  string thought = 1;
+  string action = 2;
+  string input = 3;
+  bytes device_payload = 4;
+  SynapseSource source = 5;
+}
+
+message SynapseEndContent {
+  // empty sentinel
+}
+
+message SynapseUserRequestContent {
+  enum VisionRequested {
+    UNSPECIFIED = 0;
+    VISION      = 1;
+    NO_VISION   = 2;
+  }
+
+  string request = 1;
+  double transcription_confidence = 2;
+  repeated string immutable_tokens = 3;
+  bool is_verbal = 4;
+  VisionRequested vision_requested = 5;
+  // Audio audio_bytes = 6;  -- omitted, not needed for PoC
+  string repaired_request = 7;
+  bytes image_data = 8;
+}
+
+message SynapseChatTurn {
+  SynapseUser user = 1;
+  oneof content {
+    SynapseUserRequestContent user_request = 2;
+    SynapseTaoContent tao = 3;
+    SynapseActionContent action = 5;
+    SynapseObservationContent observation = 6;
+    SynapseInterpretationContent interpretation = 7;
+    SynapseEndContent end = 10;
+    SynapseMessageContent message = 11;
+    SynapseSpeechContent speech = 12;
+  }
+  google.protobuf.Timestamp timestamp = 4;
+  string identifier = 8;
+  string parent_identifier = 9;
+}
+
+// ---- Request / Response ----
+
+message SynapseUnderstandingRequest {
+  string utterance = 1;
+  repeated string previous_answers = 2;
+  SynapseDeviceContext device_context = 3;
+  repeated SynapseActionDefinition action_definitions = 4;
+  repeated Session example_sessions = 5;
+  bool single_shot = 6;
+  bool send_actions_and_observations_separately = 7;
+  repeated string excluded_tools = 8;
+  ToolSetVersion tool_set_version = 9;
+  Location location = 10;
+  SpeechConfig speech_config = 11;
+}
+
+message SynapseUnderstandingResponse {
+  string response = 1;
+  bool is_final = 2;
+  oneof body {
+    SynapseAnswer answer = 3;
+    SynapseNoAnswerExplanation no_answer_explanation = 4;
+    SynapseFailure failure = 5;
+    SynapseHeartbeat heartbeat = 6;
+    SynapseInterpretation interpretation = 7;
+    SynapseChatTurn turn = 8;
+    SynapseDisambiguation disambiguation = 9;
+  }
+}
+
+// ---- Stub types (field numbers from decompiled source) ----
+
+message SynapseDeviceContext {
+  repeated SynapsePreviousAction previous_actions = 1;
+  google.protobuf.Timestamp current_timestamp = 2;
+  repeated SynapseChatTurn turns = 3;
+  SynapseUserSituation situation = 4;
+  bool is_locked = 5;
+  string reverse_geocoded_location = 6;
+}
+
+// Stock request-scoped situation context. These field numbers and types match
+// the protobuf-lite class shipped on the Pin. Keeping the complete wire shape
+// matters because some stock request paths put the current location here
+// instead of SynapseUnderstandingRequest.location.
+message SynapseUserSituation {
+  google.protobuf.Timestamp timestamp = 1;
+  string location_string = 2 [deprecated = true];
+  string time_zone_id = 3;
+  float latitude = 4 [deprecated = true];
+  float longitude = 5 [deprecated = true];
+  Location location = 6;
+  string ocr_text = 7;
+}
+message SynapsePreviousAction {}
+message SynapseActionDefinition {}
+message Session {}
+message ToolSetVersion {
+  string set_name = 1;
+  int32 version = 2;
+}
+message Location {
+  double latitude = 1;
+  double longitude = 2;
+}
+message SpeechConfig {
+  AudioFormat audio_format = 1;
+  SpeechSource speech_source = 2;
+  string voice_name = 3;
+}
+
+message SynapseAnswer {}
+message SynapseNoAnswerExplanation {}
+message SynapseFailure {}
+message SynapseHeartbeat {}
+message SynapseInterpretation {}
+message SynapseDisambiguation {}
+message SynapseTaoContent {
+  string thought = 1;
+  string action = 2;
+  string observation = 3;
+}
+
+message SynapseObservationContent {
+  string observation = 1;
+  bool is_final = 2;
+  string action_name = 3;
+  SynapseSource source = 4;
+}
+
+message SynapseInterpretationContent {
+  string thought = 1;
+  string interpretation = 2;
+}
+
+message SynapseMessageContent {
+  string content = 1;
+}
+
+message SynapseSpeechContent {
+  Audio speech = 1;
+  string speech_transcription = 2;
+  SpeechSource source = 3;
+}
+
+// ---- Speech service messages ----
+
+message TextToSpeechRequest {
+  string text = 1;
+  SpeechConfig speech_config = 2;
+}
+
+message TextToSpeechResponse {
+  Audio speech = 1;
+  string speech_transcription = 2;
+  SpeechSource source = 3;
+}
+
+message EncryptedCanTranslateRequest {
+  humane.common.encryption.EncryptedData data = 1;
+}
+
+message EncryptedCanTranslateResponse {
+  humane.common.encryption.EncryptedData data = 1;
+}
+
+message EncryptedTranslateTextRequest {
+  humane.common.encryption.EncryptedData data = 1;
+}
+
+message EncryptedTranslateTextResponse {
+  humane.common.encryption.EncryptedData data = 1;
+}
+
+message EncryptedTranslateConversationRequest {
+  humane.common.encryption.EncryptedData data = 1;
+}
+
+message EncryptedTranslateConversationResponse {
+  humane.common.encryption.EncryptedData data = 1;
+}
+
+// Inner plaintext messages carried by the encrypted translation envelopes.
+// `Locale` is `humane.common.Locale` in the stock Java descriptor; defining
+// its identical wire shape here keeps the Rust module graph compact while
+// preserving the bytes consumed by the protobuf-lite client.
+message Locale {
+  string language = 1;
+  string country = 2;
+}
+
+message CanTranslateRequest {
+  Locale from = 1;
+  Locale to = 2;
+}
+
+message CanTranslateResponse {
+  bool is_supported = 1;
+}
+
+message TranslateTextRequest {
+  string text = 1;
+  Locale from = 2;
+  Locale to = 3;
+  SpeechConfig speech_config = 4;
+  bool is_locked = 5;
+  bool has_secure_lock = 6;
+}
+
+message TranslateTextResponse {
+  string translation = 1;
+  Locale locale = 2;
+  Audio speech = 3;
+}
+
+message TranslateConversationConfig {
+  Locale device_locale = 1;
+  Locale conversation_locale = 2;
+  repeated Locale additional_conversation_locales = 3;
+  humane.common.encryption.EncryptedData location = 4;
+  SpeechConfig speech_config = 5;
+}
+
+message TranslateConversationRequest {
+  TranslateConversationConfig config = 1;
+  Audio audio = 2;
+  bool is_locked = 3;
+  bool has_secure_lock = 4;
+}
+
+message TranslateConversationResponse {
+  string transcript = 1;
+  Locale transcript_locale = 2;
+  string translation = 3;
+  Locale translation_locale = 4;
+  Audio speech = 5;
+}
+
+// ---- AnalyzeImage messages ----
+
+enum ImageHint {
+  IMAGE_HINT_UNKNOWN = 0;
+  IMAGE_HINT_FOOD    = 1;
+  IMAGE_HINT_GEMINI  = 2;
+  IMAGE_HINT_GPT4V   = 3;
+}
+
+message AnalyzeImageRequest {
+  string base64_encoded_image = 1 [deprecated = true];
+  string request = 2;              // question text ("What is this?")
+  bytes image_data = 3;            // raw JPEG bytes
+  repeated ImageHint image_hints = 4;
+  string utterance = 5;            // raw transcription
+  map<string, string> if_then = 6; // SDK action mappings (ignored)
+}
+
+message AnalyzeImageResponse {
+  string observation = 1 [deprecated = true];
+  NestedAnalyzeImageResponse nested_analyze_image_response = 2;
+}
+
+message NestedAnalyzeImageResponse {
+  oneof response_one_of {
+    GenericImageResponse generic_image_response = 1;
+    FoodImageResponse food_image_response = 2;  // deprecated on device
+  }
+}
+
+message GenericImageResponse {
+  string observation = 1;  // text description of the image
+}
+
+message FoodImageResponse {
+  repeated humane.common.food.FoodBoundingBox food_bounding_boxes = 1;
+}
+
+// ---- Weather messages ----
+
+message WeatherResponse {
+  bool has_precipitation = 1;
+  string precipitation_type = 2;
+  double temperature_fahrenheit = 3;
+  double temperature_celsius = 4;
+  string weather_text = 5;
+  int32 weather_icon = 6;
+  int32 u_v_index = 7;
+}
+
+message EncryptedWeatherRequest {
+  // Field 1 intentionally absent (matches APK definition).
+  humane.common.encryption.EncryptedData location = 2;
+}
+
+message EncryptedWeatherResponse {
+  // Field 1 intentionally absent (matches APK definition).
+  humane.common.encryption.EncryptedData response = 2;
+}
+
+// ---- NearbySearch messages ----
+
+enum NearbySearchResultStatus {
+  NEARBY_SEARCH_RESULT_STATUS_UNSPECIFIED    = 0;
+  NEARBY_SEARCH_RESULT_STATUS_SUCCESS        = 1;
+  NEARBY_SEARCH_RESULT_STATUS_INTERNAL_ERROR = 2;
+  NEARBY_SEARCH_RESULT_STATUS_BAD_REQUEST    = 3;
+}
+
+message NearbyPlace {
+  string name                 = 1;
+  string formatted_address    = 2;
+  repeated string place_types = 3;
+  string place_id             = 4;
+  string phone_number         = 5;
+  string place_description    = 6;
+  string description_language = 7;
+  string website_url          = 8;
+  float rating                = 9;
+  int32 user_ratings_total    = 10;
+  Location location           = 11;
+  bool open_now               = 12;
+}
+
+message NearbySearchRequest {
+  string text_query       = 1;
+  Location location       = 2;
+  double radius_accuracy  = 3;
+}
+
+message NearbySearchResponse {
+  repeated NearbyPlace nearby_places        = 1;
+  optional NearbySearchResultStatus status  = 2;
+}
+
+message EncryptedNearbySearchRequest {
+  humane.common.encryption.EncryptedData request = 1;
+}
+
+message EncryptedNearbySearchResponse {
+  humane.common.encryption.EncryptedData response = 1;
+}
+
+// ---- GeoLocate messages ----
+
+message CellTower {
+  int32  cell_id             = 1;
+  int32  new_radio_cell_id   = 2;
+  int32  location_area_code  = 3;
+  int32  mobile_country_code = 4;
+  int32  mobile_network_code = 5;
+  int32  age                 = 6;
+  double signal_strength     = 7;
+  double timing_advance      = 8;
+}
+
+message WifiAccessPoint {
+  string mac_address           = 1;
+  double signal_strength       = 2;
+  int32  age                   = 3;
+  int32  channel               = 4;
+  double signal_to_noise_ratio = 5;
+}
+
+message GeoLocateRequest {
+  int32  home_mobile_country_code = 1;
+  int32  home_mobile_network_code = 2;
+  string radio_type               = 3;
+  string carrier                  = 4;
+  bool   consider_ip              = 5;
+  repeated CellTower       cell_towers        = 6;
+  repeated WifiAccessPoint wifi_access_points = 7;
+}
+
+enum GeoLocateResponseStatus {
+  GEOLOCATE_RESPONSE_STATUS_UNSPECIFIED    = 0;
+  GEOLOCATE_RESPONSE_STATUS_SUCCESS        = 1;
+  GEOLOCATE_RESPONSE_STATUS_BAD_REQUEST    = 2;
+  GEOLOCATE_RESPONSE_STATUS_INTERNAL_ERROR = 3;
+  GEOLOCATE_RESPONSE_STATUS_NOT_FOUND      = 4;
+}
+
+message GeoLocateResponse {
+  Location                location        = 1;
+  double                  radius_accuracy = 2;
+  GeoLocateResponseStatus status          = 3;
+}
+
+message EncryptedGeoLocateRequest {
+  humane.common.encryption.EncryptedData request = 1;
+}
+
+message EncryptedGeoLocateResponse {
+  humane.common.encryption.EncryptedData response = 1;
+}
+
+// ---- Encrypted wrappers ----
+
+message EncryptedSynapseUnderstandingRequest {
+  humane.common.encryption.EncryptedData request = 1;
+  humane.common.encryption.EncryptedData location = 2;
+}
+
+message EncryptedSynapseUnderstandingResponse {
+  humane.common.encryption.EncryptedData response = 1;
+}
+
+message EncryptedAnalyzeImageRequest {
+  humane.common.encryption.EncryptedData request = 1;
+  humane.common.encryption.EncryptedData location = 2;
+}
+
+message EncryptedAnalyzeImageResponse {
+  humane.common.encryption.EncryptedData response = 1;
+}
+
+message EncryptedReverseGeocodeRequest {
+  humane.common.encryption.EncryptedData location = 1;
+}
+
+message EncryptedReverseGeocodeResponse {
+  humane.common.encryption.EncryptedData response = 1;
+}
+
+message EncryptedNavigationDirectionsRequest {
+  humane.common.encryption.EncryptedData location = 1;
+  humane.common.encryption.EncryptedData request = 2;
+}
+
+message EncryptedNavigationDirectionsResponse {
+  humane.common.encryption.EncryptedData response = 1;
+}
+
+message EncryptedCompletionRequest {
+  humane.common.encryption.EncryptedData request = 1;
+}
+
+message EncryptedCompletionResponse {
+  humane.common.encryption.EncryptedData response = 1;
+}
+
+message EncryptedChatCompletionRequest {
+  humane.common.encryption.EncryptedData request = 1;
+}
+
+message EncryptedChatCompletionResponse {
+  humane.common.encryption.EncryptedData response = 1;
+}
+
+message EncryptedAiRequest {
+  humane.common.encryption.EncryptedData request = 1;
+}
+
+message EncryptedAiResponse {
+  humane.common.encryption.EncryptedData response = 1;
+}
+
+message EncryptedLoadingMessageRequest {
+  humane.common.encryption.EncryptedData request = 1;
+}
+
+message EncryptedLoadingMessageResponse {
+  humane.common.encryption.EncryptedData response = 1;
+}
+
+// Stock loading-message contract. Ironman requests this before a longer
+// server turn and renders `loading_message` while speaking `verbal_message`.
+// Both strings may be empty when no notable external work needs a preamble.
+message LoadingMessageRequest {
+  string utterance = 1;
+  bool is_unlocked = 2;
+  repeated SynapseChatTurn turns = 3;
+}
+
+message LoadingMessageResponse {
+  string loading_message = 1;
+  string verbal_message = 2;
+}
+
+// ---- Stock AI-DJ smart-playlist contract ----
+//
+// Reconstructed from the protobuf-lite classes shipped in ironman. Keep the
+// proto2-style presence on optional scalar/string fields: stock callers use
+// hasMaxTrackCount()/hasProvider() and SmartPlaylist.hasError() depends on the
+// response error field's presence.
+
+message SongInfo {
+  string song = 1;
+  repeated string artist = 2;
+  optional string isrc = 3;
+}
+
+message SmartPlaylistRequest {
+  string topic = 1;
+  optional int32 max_track_count = 2;
+  repeated SongInfo playback_history = 3;
+  optional OpenAIProvider provider = 6;
+}
+
+message SmartPlaylistResponse {
+  repeated SongInfo playlist = 1;
+  optional string error = 2;
+  optional string artist = 3;
+  optional string album = 4;
+}
+
+message EncryptedSmartPlaylistRequest {
+  humane.common.encryption.EncryptedData request = 1;
+}
+
+message EncryptedSmartPlaylistResponse {
+  humane.common.encryption.EncryptedData response = 1;
+}
+
+message EncryptedFunctionCall {
+  humane.common.encryption.EncryptedData function_call = 1;
+  humane.common.encryption.EncryptedData location = 2;
+}
+
+message EncryptedFunctionResponse {
+  humane.common.encryption.EncryptedData response = 1;
+}
+
+enum BrandHint {
+  BRAND_HINT_UNKNOWN = 0;
+  BRAND_HINT_UNBRANDED = 1;
+  BRAND_HINT_BRANDED = 2;
+}
+
+message AnalyzeFoodImageRequest {
+  repeated humane.common.food.FoodImage images = 1;
+}
+
+message AnalyzeFoodImageResponse {
+  repeated humane.common.food.FoodBoundingBox food_bounding_boxes = 1;
+}
+
+message GetFoodItemRequest {
+  string text = 1;
+  BrandHint brand_hint = 2;
+}
+
+message GetFoodItemResponse {
+  humane.common.food.FoodItem best_food_item = 1;
+  repeated humane.common.food.FoodItem alternate_food_items = 2;
+}
+
+message EncryptedAnalyzeFoodImageRequest {
+  humane.common.encryption.EncryptedData request = 1;
+}
+
+message EncryptedAnalyzeFoodImageResponse {
+  humane.common.encryption.EncryptedData response = 1;
+}
+
+message EncryptedGetFoodItemRequest {
+  humane.common.encryption.EncryptedData request = 1;
+}
+
+message EncryptedGetFoodItemResponse {
+  humane.common.encryption.EncryptedData response = 1;
+}
+
+// Stock inner payloads for EncryptedActionBasedInterstitial. Ironman builds one
+// JSON object per action (the object's top-level key is the action name) and
+// can display/speak the returned short interstitial while the action completes.
+// The current Penumbra handler validates the envelope, consumes private values
+// without retaining them, and returns an empty string: the known audible stock
+// path logs cue prose and is therefore not a spoken-only delivery seam.
+message ActionBasedInterstitialRequest {
+  repeated string action_strings = 1;
+}
+
+message ActionBasedInterstitialResponse {
+  string interstitial = 1;
+}
+
+message EncryptedActionBasedInterstitialRequest {
+  humane.common.encryption.EncryptedData request = 1;
+}
+
+message EncryptedActionBasedInterstitialResponse {
+  humane.common.encryption.EncryptedData response = 1;
+}
+
+message EncryptedTranslateRequest {
+  humane.common.encryption.EncryptedData request = 1;
+}
+
+message EncryptedTranslateResponse {
+  humane.common.encryption.EncryptedData response = 1;
+}
+
+message UploadFileRequest {
+  enum UploadUseCase {
+    UNSET = 0;
+    INTENT_DEBUGGING = 1;
+    LOW_POWER_HAND_TRACKING = 2;
+  }
+
+  UploadUseCase use_case = 1;
+}
+
+message UploadFileResponse {
+  string url = 1;
+  string s3_key = 2;
+  string bucket_name = 3;
+}
+message FunctionResponse {
+  string response = 1;
+}
+message ServerStatefulUnderstandRequest {}
+message ServerStatefulUnderstandResponse {}
+
+// ---- Stock bidirectional understanding contract ----
+//
+// Reconstructed from the protobuf-lite classes shipped in ironman. The stock
+// SynapseInterpreter keeps this stream open across a device action and its
+// observation, and waits for the event whose `requires_response` bit is set.
+
+message Run {
+  repeated SynapseChatTurn events = 1;
+}
+
+message Runs {
+  repeated Run runs = 1;
+}
+
+message RunState {
+  map<string, Runs> agent_to_runs = 1;
+}
+
+message IntermediateEvent {
+  SynapseChatTurn event = 1;
+  string agent = 2;
+  bool requires_response = 3;
+}
+
+message Interstitial {
+  string interstitial = 1;
+}
+
+message StreamingUnderstandRequest {
+  oneof content {
+    RunState initial_run_state = 1;
+    SynapseChatTurn observation = 2;
+    SynapseUnderstandingRequest understanding_request = 3;
+  }
+}
+
+message StreamingUnderstandResponse {
+  oneof content {
+    IntermediateEvent intermediate_event = 1;
+    Interstitial interstitial = 2;
+  }
+}
+message ActionExecutionTestRequest {}
+message ActionExecutionTestResponse {}
+message TranscriptionRepairTestRequest {}
+message TranscriptionRepairTestResponse {}
+
+// ---- Completion messages ----
+
+message CompletionRequest {
+  string model = 1;
+  string prompt = 2;
+  int32 max_tokens = 3;
+  repeated string stop = 4;
+  string tag = 5;
+}
+
+message CompletionResponse {
+  repeated CompletionChoice choices = 1;
+  CompletionUsage usage = 2;
+  CompletionError error = 3;
+}
+
+message CompletionChoice {
+  string text = 1;
+  int32 index = 2;
+  string finish_reason = 3;
+}
+
+message CompletionUsage {
+  int32 prompt_tokens = 1;
+  int32 completion_tokens = 2;
+  int32 total_tokens = 3;
+}
+
+message CompletionError {
+  string message = 1;
+  string code = 2;
+  int32 status = 3;
+}
+
+message ChatCompletionRequest {
+  repeated ChatCompletionMessage messages = 1;
+  int32 max_tokens = 2;
+  string stop = 3;
+  string tag = 4;
+  repeated Tool tools = 5;
+  string tool_choice = 6;
+  bool stream = 7;
+  ToolSetVersion tool_set_version = 8;
+  Audio audio_bytes = 9;
+}
+
+message ChatCompletionResponse {
+  repeated Choice choices = 1;
+  ChatCompletionUsage usage = 2;
+  ChatCompletionError error = 3;
+}
+
+message ChatCompletionMessage {
+  string role = 1;
+  string content = 2;
+  repeated ToolCall tool_calls = 3;
+  string name = 4;
+  string tool_call_id = 5;
+}
+
+message Choice {
+  ChatCompletionMessage message = 1;
+  string stop_reason = 2;
+}
+
+message ChatCompletionUsage {
+  int32 prompt_tokens = 1;
+  int32 completion_tokens = 2;
+  int32 total_tokens = 3;
+}
+
+message ChatCompletionError {
+  string message = 1;
+  string code = 2;
+  int32 status = 3;
+}
+
+message Tool {
+  oneof content {
+    Function function = 1;
+    ServerFunction server_function = 2;
+  }
+}
+
+message Audio {
+  bytes audio = 1;
+  AudioFormat format = 2;
+}
+
+enum AudioFormat {
+  RIFF_16KHZ_16BIT_MONO_PCM = 0;
+  RAW_16KHZ_16BIT_MONO_PCM = 1;
+  RAW_24KHZ_16BIT_MONO_PCM = 2;
+  AUDIO_24KHZ_160KBITRATE_MONO_MP3 = 3;
+}
+
+message Function {
+  string name = 1;
+  string description = 2;
+  repeated FunctionParameter parameters = 3;
+  repeated string is_required = 4;
+}
+
+message FunctionParameter {
+  string name = 1;
+  string type = 2;
+  string description = 3;
+  repeated string enums = 4;
+}
+
+message ServerFunction {
+  string name = 1;
+  string version = 2;
+}
+
+message ToolCall {
+  string id = 1;
+  string type = 2;
+  FunctionCall function = 3;
+}
+
+message FunctionCall {
+  string name = 1;
+  string arguments = 2;
+  google.protobuf.Timestamp timestamp = 3;
+  string reverse_geocoded_location = 4;
+  string time_zone = 5;
+  string utterance = 6;
+  humane.common.encryption.LocationEnvelope location = 7;
+  bool is_locked = 8;
+}
+
+// ---- Reverse geocode messages ----
+
+message ReverseGeocodeResponse {
+  string street_number = 1;
+  string street_name = 2;
+  string municipality = 3;
+  string country_subdivision = 4;
+  string country = 5;
+  string postal_code = 6;
+}
+
+// ---- Navigation messages ----
+
+message NavigationDirectionsRequest {
+  string destination = 1;
+}
+
+message NavigationDirectionsResponse {
+  string summary = 1;
+  repeated NavigationStep steps = 2;
+  NavigationDistance total_distance = 3;
+  NavigationDuration total_duration = 4;
+}
+
+message NavigationStep {
+  string instruction = 1;
+  NavigationDistance distance = 2;
+  NavigationDuration duration = 3;
+  Location start_location = 4;
+  Location end_location = 5;
+  NavigationManeuver maneuver = 6;
+}
+
+message NavigationDistance {
+  string text = 1;
+  int32 value = 2;
+}
+
+message NavigationDuration {
+  string text = 1;
+  int32 value = 2;
+}
+
+enum NavigationManeuver {
+  NAVIGATION_ACTION_UNSPECIFIED = 0;
+  NAVIGATION_ACTION_TURN_SLIGHT_LEFT = 1;
+  NAVIGATION_ACTION_TURN_SHARP_LEFT = 2;
+  NAVIGATION_ACTION_TURN_LEFT = 3;
+  NAVIGATION_ACTION_TURN_SLIGHT_RIGHT = 4;
+  NAVIGATION_ACTION_TURN_SHARP_RIGHT = 5;
+  NAVIGATION_ACTION_KEEP_RIGHT = 6;
+  NAVIGATION_ACTION_KEEP_LEFT = 7;
+  NAVIGATION_ACTION_UTURN_LEFT = 8;
+  NAVIGATION_ACTION_UTURN_RIGHT = 9;
+  NAVIGATION_ACTION_TURN_RIGHT = 10;
+  NAVIGATION_ACTION_GO_STRAIGHT = 11;
+  NAVIGATION_ACTION_RAMP_LEFT = 12;
+  NAVIGATION_ACTION_RAMP_RIGHT = 13;
+  NAVIGATION_ACTION_MERGE = 14;
+  NAVIGATION_ACTION_FORK_LEFT = 15;
+  NAVIGATION_ACTION_FORK_RIGHT = 16;
+  NAVIGATION_ACTION_FERRY = 17;
+  NAVIGATION_ACTION_FERRY_TRAIN = 18;
+  NAVIGATION_ACTION_ROUNDABOUT_LEFT = 19;
+  NAVIGATION_ACTION_ROUNDABOUT_RIGHT = 20;
+}
+
+// ---- Composition messages ----
+
+enum MessageSourceType {
+  EMAIL = 0;
+  MESSAGE = 1;
+  TWITTER = 2;
+  SLACK = 3;
+}
+
+enum ModelType {
+  ADA = 0;
+  BABBAGE = 1;
+  CURIE = 2;
+  DAVINCI = 3;
+  CURIE_OLD = 4;
+  DAVINCI_OLD = 5;
+  DAVINCI_NEW = 6;
+}
+
+enum OpenAIProvider {
+  AZURE = 0;
+  OPENAI = 1;
+}
+
+message MessageCompositionRequest {
+  option deprecated = true;
+
+  MessageSourceType type = 1;
+  string text = 2;
+  string userID = 3;
+  string targetID = 4;
+  optional ModelType model_type = 5;
+  optional OpenAIProvider provider = 6;
+}
+
+message MessageCompositionResponse {
+  option deprecated = true;
+
+  MessageSourceType type = 1;
+  string formal = 2;
+  string casual = 3;
+}
+
+message EncryptedMessageCompositionRequest {
+  humane.common.encryption.EncryptedData request = 1;
+}
+
+message EncryptedMessageCompositionResponse {
+  humane.common.encryption.EncryptedData response = 1;
+}
+
+message NotificationForSummarization {
+  string app_name = 1;
+  string title = 2;
+  string message = 3;
+  string timestamp_seconds = 5;
+  string app_id = 6;
+  string subtitle = 7;
+  google.protobuf.Timestamp timestamp = 8;
+}
+
+message NotificationsForSummarization {
+  repeated NotificationForSummarization notifications = 1;
+}
+
+message NotificationCategories {
+  enum Category {
+    UNKNOWN = 0;
+    JUNK = 1;
+    INFORMATIONAL = 2;
+    TIME_SENSITIVE = 3;
+  }
+
+  repeated Category categories = 1;
+}
+
+message MessageForSummarization {
+  string message = 1;
+  string userID = 2;
+  string timestamp_seconds = 3;
+  bool sent_by_self = 4;
+}
+
+message ConversationSummarizationRequest {
+  repeated MessageForSummarization messages_from_users = 1;
+  bool singleSender = 2;
+  string id = 3;
+  repeated string participants = 4;
+  repeated MessageForSummarization conversation_history = 5;
+}
+
+message MissedCallForSummarization {
+  string caller = 1;
+  string timestamp_seconds = 2;
+}
+
+message MissedCallSummarizationRequest {
+  repeated MissedCallForSummarization missed_calls = 1;
+  string id = 2;
+}
+
+message NotificationSummarizationRequest {
+  repeated NotificationForSummarization notification = 1;
+  string id = 2;
+}
+
+message SummarizationNetworkRequest {
+  repeated ConversationSummarizationRequest conversation_group = 1;
+  MessageSourceType type = 2;
+  optional ModelType model_type = 5;
+  repeated MissedCallSummarizationRequest missed_call_group = 6;
+  repeated NotificationSummarizationRequest notifications_group = 7;
+}
+
+message SummarizationResponse {
+  string summary = 1;
+  bool failed = 2;
+  string id = 3;
+}
+
+message SummarizationNetworkResponse {
+  repeated SummarizationResponse summary_group = 1;
+}
+
+message EncryptedSummarizationNetworkRequest {
+  humane.common.encryption.EncryptedData request = 1;
+}
+
+message EncryptedSummarizationNetworkResponse {
+  humane.common.encryption.EncryptedData response = 1;
+}
+
+message ApplicationSummary {
+  string application = 1;
+  string summary = 2;
+}
+
+message SummarizeNotificationsRequest {
+  NotificationsForSummarization notifications = 2;
+}
+
+message SummarizeNotificationsResponse {
+  repeated ApplicationSummary summaries = 1;
+}
+
+// ---- Service ----
+
+service CompositionService {
+  rpc EncryptedComposeMessage (EncryptedMessageCompositionRequest) returns (EncryptedMessageCompositionResponse);
+  rpc EncryptedSummarizeMessages (EncryptedSummarizationNetworkRequest) returns (EncryptedSummarizationNetworkResponse);
+  rpc CategorizeNotifications (NotificationsForSummarization) returns (NotificationCategories);
+  rpc SummarizeNotifications (SummarizeNotificationsRequest) returns (SummarizeNotificationsResponse);
+}
+
+service AIBusService {
+  rpc UploadFile (UploadFileRequest) returns (UploadFileResponse);
+  rpc Understand (SynapseUnderstandingRequest) returns (stream SynapseUnderstandingResponse);
+  rpc AnalyzeImage (AnalyzeImageRequest) returns (AnalyzeImageResponse);
+  rpc FunctionExecution (FunctionCall) returns (FunctionResponse);
+  rpc ServerStatefulUnderstand (ServerStatefulUnderstandRequest) returns (ServerStatefulUnderstandResponse);
+  rpc BidirectionalStreamingUnderstand (stream StreamingUnderstandRequest) returns (stream StreamingUnderstandResponse);
+  rpc EncryptedStreamAIBus (stream EncryptedAiRequest) returns (stream EncryptedAiResponse);
+  rpc EncryptedUnderstand (EncryptedSynapseUnderstandingRequest) returns (stream EncryptedSynapseUnderstandingResponse);
+  rpc EncryptedLoadingMessage (EncryptedLoadingMessageRequest) returns (EncryptedLoadingMessageResponse);
+  rpc EncryptedNearbySearch (EncryptedNearbySearchRequest) returns (EncryptedNearbySearchResponse);
+  rpc EncryptedNavigationDirections (EncryptedNavigationDirectionsRequest) returns (EncryptedNavigationDirectionsResponse);
+  rpc EncryptedChatCompletion (EncryptedChatCompletionRequest) returns (EncryptedChatCompletionResponse);
+  rpc EncryptedCompletion (EncryptedCompletionRequest) returns (EncryptedCompletionResponse);
+  rpc EncryptedGeoLocate (EncryptedGeoLocateRequest) returns (EncryptedGeoLocateResponse);
+  rpc EncryptedSmartPlaylist (EncryptedSmartPlaylistRequest) returns (EncryptedSmartPlaylistResponse);
+  rpc EncryptedWeather (EncryptedWeatherRequest) returns (EncryptedWeatherResponse);
+  rpc EncryptedReverseGeocode (EncryptedReverseGeocodeRequest) returns (EncryptedReverseGeocodeResponse);
+  rpc EncryptedFunctionExecution (EncryptedFunctionCall) returns (EncryptedFunctionResponse);
+  rpc EncryptedAnalyzeImage (EncryptedAnalyzeImageRequest) returns (EncryptedAnalyzeImageResponse);
+  rpc EncryptedAnalyzeFoodImage (EncryptedAnalyzeFoodImageRequest) returns (EncryptedAnalyzeFoodImageResponse);
+  rpc EncryptedGetFoodItem (EncryptedGetFoodItemRequest) returns (EncryptedGetFoodItemResponse);
+  rpc EncryptedActionBasedInterstitial (EncryptedActionBasedInterstitialRequest) returns (EncryptedActionBasedInterstitialResponse);
+  rpc ActionExecutionTest (ActionExecutionTestRequest) returns (ActionExecutionTestResponse);
+  rpc TranscriptionRepairTest (TranscriptionRepairTestRequest) returns (TranscriptionRepairTestResponse);
+  rpc Translate (EncryptedTranslateRequest) returns (EncryptedTranslateResponse);
+}
+
+service SpeechService {
+  rpc TextToSpeech (TextToSpeechRequest) returns (TextToSpeechResponse);
+  rpc StreamingTextToSpeech (TextToSpeechRequest) returns (stream TextToSpeechResponse);
+  rpc CanTranslate (EncryptedCanTranslateRequest) returns (EncryptedCanTranslateResponse);
+  rpc TranslateText (EncryptedTranslateTextRequest) returns (EncryptedTranslateTextResponse);
+  rpc TranslateConversation (stream EncryptedTranslateConversationRequest) returns (stream EncryptedTranslateConversationResponse);
+}

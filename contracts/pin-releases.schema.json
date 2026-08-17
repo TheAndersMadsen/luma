@@ -1,0 +1,486 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-pin-revival.invalid/contracts/pin-releases.schema.json",
+  "title": "Ai Pin release contracts",
+  "description": "The exact Setup v1 manifest plus host-only inspection, history, installed-state, rollback, verification, and plan descriptors.",
+  "oneOf": [
+    { "$ref": "#/$defs/setupManifest" },
+    { "$ref": "#/$defs/receiptBundle" },
+    { "$ref": "#/$defs/installedState" },
+    { "$ref": "#/$defs/releaseHistory" },
+    { "$ref": "#/$defs/rollbackBundle" },
+    { "$ref": "#/$defs/verification" },
+    { "$ref": "#/$defs/installPlan" }
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])\\.[0-9]+$"
+    },
+    "versionCode": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 2147483647
+    },
+    "role": {
+      "enum": [
+        "installer",
+        "bootstrap",
+        "hook",
+        "server",
+        "hook-injector"
+      ]
+    },
+    "safeApkName": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,254}\\.apk$"
+    },
+    "safeRelativePath": {
+      "type": "string",
+      "maxLength": 1024,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,254}(?:/[A-Za-z0-9][A-Za-z0-9._-]{0,254})*$"
+    },
+    "serial": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "rolePackageBinding": {
+      "allOf": [
+        {
+          "if": { "properties": { "role": { "const": "installer" } }, "required": ["role"] },
+          "then": { "properties": { "package": { "const": "com.penumbraos.systeminjector" } } }
+        },
+        {
+          "if": { "properties": { "role": { "const": "bootstrap" } }, "required": ["role"] },
+          "then": { "properties": { "package": { "const": "com.penumbraos.systeminjector.exploit" } } }
+        },
+        {
+          "if": { "properties": { "role": { "const": "hook" } }, "required": ["role"] },
+          "then": { "properties": { "package": { "const": "com.penumbraos.hook" } } }
+        },
+        {
+          "if": { "properties": { "role": { "const": "server" } }, "required": ["role"] },
+          "then": { "properties": { "package": { "const": "com.penumbraos.server" } } }
+        },
+        {
+          "if": { "properties": { "role": { "const": "hook-injector" } }, "required": ["role"] },
+          "then": { "properties": { "package": { "const": "com.penumbraos.hook.injector" } } }
+        }
+      ]
+    },
+    "setupArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "role",
+        "url",
+        "name",
+        "package",
+        "versionCode",
+        "size",
+        "sha256"
+      ],
+      "properties": {
+        "role": { "$ref": "#/$defs/role" },
+        "url": {
+          "type": "string",
+          "pattern": "^\\./[0-9a-f]{64}/(?:installer|bootstrap|hook|server|hook-injector)\\.apk$"
+        },
+        "name": { "$ref": "#/$defs/safeApkName" },
+        "package": { "type": "string" },
+        "versionCode": { "$ref": "#/$defs/versionCode" },
+        "size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 536870912
+        },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      },
+      "allOf": [
+        { "$ref": "#/$defs/rolePackageBinding" }
+      ]
+    },
+    "setupManifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "releaseId", "version", "artifacts"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "releaseId": { "$ref": "#/$defs/sha256" },
+        "version": { "$ref": "#/$defs/version" },
+        "artifacts": {
+          "type": "array",
+          "minItems": 5,
+          "maxItems": 5,
+          "items": { "$ref": "#/$defs/setupArtifact" }
+        }
+      },
+      "x-runtime-invariants": [
+        "The five roles are unique and canonicalized in installer, bootstrap, hook, server, hook-injector order.",
+        "All versionCode values are identical.",
+        "releaseId is SHA-256 of compact JSON containing schemaVersion, version, and ordered role/name/package/versionCode/size/sha256 artifact identity; releaseId and URLs are excluded.",
+        "Each URL is exactly ./{releaseId}/{role}.apk.",
+        "Canonical bytes are compact JSON in declared field order followed by one LF."
+      ]
+    },
+    "artifactReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "role",
+        "path",
+        "name",
+        "package",
+        "versionName",
+        "versionCode",
+        "size",
+        "sha256",
+        "signerSha256"
+      ],
+      "properties": {
+        "role": { "$ref": "#/$defs/role" },
+        "path": { "$ref": "#/$defs/safeRelativePath" },
+        "name": { "$ref": "#/$defs/safeApkName" },
+        "package": { "type": "string" },
+        "versionName": { "$ref": "#/$defs/version" },
+        "versionCode": { "$ref": "#/$defs/versionCode" },
+        "size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 536870912
+        },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "signerSha256": { "$ref": "#/$defs/sha256" }
+      },
+      "allOf": [
+        { "$ref": "#/$defs/rolePackageBinding" }
+      ]
+    },
+    "receiptBundle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "artifacts"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "artifacts": {
+          "type": "array",
+          "minItems": 5,
+          "maxItems": 5,
+          "items": { "$ref": "#/$defs/artifactReceipt" }
+        }
+      },
+      "x-runtime-invariants": [
+        "All five roles and paths are unique.",
+        "Every name equals the basename of path.",
+        "All versionName and versionCode values are identical."
+      ]
+    },
+    "installedArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "role",
+        "package",
+        "versionName",
+        "versionCode",
+        "sha256",
+        "signerSha256"
+      ],
+      "properties": {
+        "role": { "$ref": "#/$defs/role" },
+        "package": { "type": "string" },
+        "versionName": { "$ref": "#/$defs/version" },
+        "versionCode": { "$ref": "#/$defs/versionCode" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "signerSha256": { "$ref": "#/$defs/sha256" }
+      },
+      "allOf": [
+        { "$ref": "#/$defs/rolePackageBinding" }
+      ]
+    },
+    "installedState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "serial", "mode", "currentRelease", "artifacts"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "serial": { "$ref": "#/$defs/serial" },
+        "mode": { "enum": ["empty", "atomic", "legacy-mixed"] },
+        "currentRelease": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/historyEntry" }
+          ]
+        },
+        "artifacts": {
+          "type": "array",
+          "maxItems": 5,
+          "items": { "$ref": "#/$defs/installedArtifact" }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "mode": { "const": "empty" } },
+            "required": ["mode"]
+          },
+          "then": {
+            "properties": {
+              "currentRelease": { "type": "null" },
+              "artifacts": { "maxItems": 0 }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "mode": { "const": "atomic" } },
+            "required": ["mode"]
+          },
+          "then": {
+            "properties": {
+              "currentRelease": { "$ref": "#/$defs/historyEntry" },
+              "artifacts": { "minItems": 4, "maxItems": 5 }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "mode": { "const": "legacy-mixed" } },
+            "required": ["mode"]
+          },
+          "then": {
+            "properties": {
+              "currentRelease": { "type": "null" },
+              "artifacts": { "minItems": 4, "maxItems": 4 }
+            }
+          }
+        }
+      ],
+      "x-runtime-invariants": [
+        "Installed roles are unique.",
+        "empty has null currentRelease and no artifacts.",
+        "atomic has all four steady roles, optional bootstrap, a non-null exact currentRelease identity, and every artifact versionName/versionCode equals that identity.",
+        "legacy-mixed has null currentRelease, exactly the four steady roles, and at least two distinct versionCode values."
+      ]
+    },
+    "historyEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["releaseId", "version", "versionCode", "manifestSha256"],
+      "properties": {
+        "releaseId": { "$ref": "#/$defs/sha256" },
+        "version": { "$ref": "#/$defs/version" },
+        "versionCode": { "$ref": "#/$defs/versionCode" },
+        "manifestSha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "releaseHistory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "releases"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "releases": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/historyEntry" }
+        }
+      },
+      "x-runtime-invariants": [
+        "releaseId values are unique.",
+        "version and versionCode both increase strictly."
+      ]
+    },
+    "atomicRollbackBundle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "kind", "serial", "manifest", "receipts"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "kind": { "const": "atomic" },
+        "serial": { "$ref": "#/$defs/serial" },
+        "manifest": { "$ref": "#/$defs/setupManifest" },
+        "receipts": { "$ref": "#/$defs/receiptBundle" }
+      }
+    },
+    "legacyRollbackBundle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "kind", "serial", "artifacts"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "kind": { "const": "legacy-mixed" },
+        "serial": { "$ref": "#/$defs/serial" },
+        "artifacts": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 4,
+          "items": { "$ref": "#/$defs/artifactReceipt" }
+        }
+      },
+      "x-runtime-invariants": [
+        "Artifacts are exactly the four unique steady roles with unique paths.",
+        "At least two distinct versionCode values are present."
+      ]
+    },
+    "rollbackBundle": {
+      "oneOf": [
+        { "$ref": "#/$defs/atomicRollbackBundle" },
+        { "$ref": "#/$defs/legacyRollbackBundle" }
+      ]
+    },
+    "verifiedArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "path", "sha256"],
+      "properties": {
+        "role": { "$ref": "#/$defs/role" },
+        "path": { "$ref": "#/$defs/safeRelativePath" },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "releaseId",
+        "version",
+        "versionCode",
+        "signerSha256",
+        "manifestSha256",
+        "artifacts",
+        "historyEntry"
+      ],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "releaseId": { "$ref": "#/$defs/sha256" },
+        "version": { "$ref": "#/$defs/version" },
+        "versionCode": { "$ref": "#/$defs/versionCode" },
+        "signerSha256": { "$ref": "#/$defs/sha256" },
+        "manifestSha256": { "$ref": "#/$defs/sha256" },
+        "artifacts": {
+          "type": "array",
+          "minItems": 5,
+          "maxItems": 5,
+          "items": { "$ref": "#/$defs/verifiedArtifact" }
+        },
+        "historyEntry": { "$ref": "#/$defs/historyEntry" }
+      }
+    },
+    "planOperation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["order", "role", "package", "path", "sha256"],
+      "properties": {
+        "order": { "type": "integer", "minimum": 1, "maximum": 5 },
+        "role": { "$ref": "#/$defs/role" },
+        "package": { "type": "string" },
+        "path": { "$ref": "#/$defs/safeRelativePath" },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      },
+      "allOf": [
+        { "$ref": "#/$defs/rolePackageBinding" }
+      ]
+    },
+    "atomicRollbackPlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "releaseId", "version", "versionCode", "artifacts"],
+      "properties": {
+        "kind": { "const": "atomic" },
+        "releaseId": { "$ref": "#/$defs/sha256" },
+        "version": { "$ref": "#/$defs/version" },
+        "versionCode": { "$ref": "#/$defs/versionCode" },
+        "artifacts": {
+          "type": "array",
+          "minItems": 5,
+          "maxItems": 5,
+          "items": { "$ref": "#/$defs/verifiedArtifact" }
+        }
+      }
+    },
+    "legacyRollbackArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "path", "versionName", "versionCode", "sha256"],
+      "properties": {
+        "role": { "$ref": "#/$defs/role" },
+        "path": { "$ref": "#/$defs/safeRelativePath" },
+        "versionName": { "$ref": "#/$defs/version" },
+        "versionCode": { "$ref": "#/$defs/versionCode" },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "legacyRollbackPlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "artifacts"],
+      "properties": {
+        "kind": { "const": "legacy-mixed" },
+        "artifacts": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 4,
+          "items": { "$ref": "#/$defs/legacyRollbackArtifact" }
+        }
+      },
+      "x-runtime-invariants": [
+        "Artifacts preserve the exact four installed legacy role identities in canonical steady-role order."
+      ]
+    },
+    "rollbackPlan": {
+      "oneOf": [
+        { "$ref": "#/$defs/atomicRollbackPlan" },
+        { "$ref": "#/$defs/legacyRollbackPlan" }
+      ]
+    },
+    "installPlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "serial",
+        "releaseId",
+        "fromVersionCode",
+        "toVersionCode",
+        "operations",
+        "rollback"
+      ],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "serial": { "$ref": "#/$defs/serial" },
+        "releaseId": { "$ref": "#/$defs/sha256" },
+        "fromVersionCode": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        "toVersionCode": { "$ref": "#/$defs/versionCode" },
+        "operations": {
+          "type": "array",
+          "minItems": 5,
+          "maxItems": 5,
+          "items": { "$ref": "#/$defs/planOperation" }
+        },
+        "rollback": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/rollbackPlan" }
+          ]
+        }
+      },
+      "x-runtime-invariants": [
+        "serial exactly matches the installed-state descriptor.",
+        "toVersionCode is greater than every installed versionCode.",
+        "Target signer matches every installed artifact signer.",
+        "Target version is newer than the installed atomic release or every legacy artifact versionName.",
+        "legacy-mixed migration requires a serial-bound, per-role, byte-and-signer-verified rollback plan.",
+        "operations are canonical role order and are descriptive only."
+      ]
+    }
+  }
+}

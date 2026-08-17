@@ -1,0 +1,4 @@
+If the wearer must wait for a capability, give a brief truthful progress message that describes the task
+without claiming completion. Do not narrate hidden reasoning, provider selection, retries, internal tool
+names, or infrastructure. Skip a loading message when the result is already available or the message
+would add more interruption than value.

@@ -1,0 +1,405 @@
+/*
+ * Operator console.
+ *
+ * OURS, NOT RECOVERED — the real .Center never provisioned devices, and this
+ * page says so in its own kicker. What it should NOT do is look like a different
+ * product: it used to draw literal 1px borders at its own radii, two off-palette
+ * hexes (#ffcf7a / #ff8f8f), font-weight 600 and a second switch geometry, all
+ * of which exist nowhere else in the app.
+ *
+ * So the panels, buttons, fields and switches now come from the shared
+ * controls/status primitives, and what stays local is only what is genuinely
+ * console-specific: the credential bundle's beam tint, the flag table, and the
+ * persistence counts.
+ */
+
+.admin {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 24px 16px 140px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.admin > * { min-width: 0; }
+
+/* ------------------------------------------------------------- header -- */
+
+.head { padding: 8px 2px 4px; }
+
+.headTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+/* The honest operator marker. Persistent — an operator surface should never be
+   mistaken for a wearer surface, and this one mints credentials. */
+.kicker {
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--hu-colors-beam-base);
+}
+
+/* A room you can leave, rather than a trapdoor. */
+.backLink {
+  composes: buttonQuietSmall from "../../components/controls.module.css";
+  text-decoration: none;
+}
+
+.head h1 {
+  margin: 6px 0 0;
+  font-size: 28px;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  color: var(--hu-colors-solar-base);
+}
+
+.head p {
+  margin: 10px 0 0;
+  max-width: 620px;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--hu-colors-crater-base);
+}
+
+.consoleNav {
+  position: sticky;
+  top: 12px;
+  z-index: 12;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: fit-content;
+  max-width: 100%;
+  margin: 0 0 6px;
+  padding: 6px;
+  overflow-x: auto;
+  border-radius: 999px;
+  background: rgba(31, 33, 33, 0.94);
+  box-shadow: var(--outline-shadow), var(--menu-drop-shadow);
+  backdrop-filter: blur(16px);
+}
+
+.consoleNav a {
+  flex: none;
+  padding: 9px 13px;
+  border-radius: 999px;
+  color: var(--hu-colors-crater-base);
+  font-size: 13px;
+  transition: color var(--transition-duration), background var(--transition-duration);
+}
+
+.consoleNav a:hover,
+.consoleNav a:focus-visible {
+  color: var(--hu-colors-white);
+  background: var(--hu-colors-button-background-dark-secondary-base);
+}
+
+/* --------------------------------------------------------- status strip -- */
+
+/* Enrollment open / provisioning ready / DUC CA loaded / N devices — the four
+   facts an operator checks first. `provisioned_devices` was typed on the
+   overview and rendered nowhere at all. */
+.statusStrip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 2px;
+}
+
+/* ------------------------------------------------------------- panels -- */
+
+.card {
+  composes: surface from "../../components/controls.module.css";
+  min-width: 0;
+  padding: 20px;
+}
+
+.card h2 {
+  margin: 0 0 12px;
+  font-size: 15px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  color: var(--hu-colors-solar-base);
+}
+
+.muted {
+  color: var(--hu-text-muted);
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 0 0 14px;
+}
+
+.row { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+@media (max-width: 720px) { .row { grid-template-columns: 1fr; } }
+
+/* ---------------------------------------------------------- facts list -- */
+
+.facts { margin: 0; display: flex; flex-direction: column; gap: 14px; }
+.facts > div { display: flex; flex-direction: column; gap: 4px; }
+.facts dt {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--hu-text-muted);
+}
+.facts dd {
+  margin: 0;
+  font-size: 14px;
+  color: var(--hu-colors-apollo-base);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.admin code {
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: 12.5px;
+  background: var(--hu-colors-penumbra-200);
+  border: 1px solid var(--hu-colors-iron-base);
+  border-radius: 5px;
+  padding: 2px 6px;
+  color: var(--hu-colors-apollo-base);
+  word-break: break-all;
+}
+.admin .uuid { color: var(--hu-text-muted); }
+
+.pin code { letter-spacing: 0.18em; font-size: 14px; }
+
+/* ------------------------------------------------------------ buttons -- */
+
+.primary {
+  composes: buttonPrimary from "../../components/controls.module.css";
+  align-self: flex-start;
+}
+
+.ghostButton { composes: buttonQuiet from "../../components/controls.module.css"; }
+.miniButton { composes: buttonQuietSmall from "../../components/controls.module.css"; }
+
+/* Destructive. "Reset all overrides" rewrites device-visible behaviour on a live
+   Pin, and it used to be one unconfirmed click styled like everything else. */
+.dangerButton { composes: buttonDanger from "../../components/controls.module.css"; }
+
+/* -------------------------------------------------------------- forms -- */
+
+.form { display: flex; flex-direction: column; gap: 14px; max-width: 460px; }
+.form label { display: flex; flex-direction: column; gap: 6px; }
+.form label > span { font-size: 12px; color: var(--hu-colors-crater-base); }
+
+.textField { composes: field from "../../components/controls.module.css"; }
+
+.withButton { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+
+/* -------------------------------------------- typed confirmation (reuse) -- */
+
+/* The privacy pane's typed-DELETE box, in the operator's vocabulary. It is the
+   app's reference pattern for "this cannot be taken back". */
+.confirmBox {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 14px;
+  border-radius: var(--hu-radius-control);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.confirmText {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--hu-colors-crater-base);
+}
+
+.confirmInputWrap { max-width: 240px; }
+.confirmInput { composes: field from "../../components/controls.module.css"; }
+.confirmActions { display: flex; gap: 10px; flex-wrap: wrap; }
+
+/* ------------------------------------------------- issued credential -- */
+
+/* The beam tint is semantic here: this block holds a private key that exists
+   nowhere else and disappears when the page does. */
+.bundle {
+  margin-top: 18px;
+  border: 1px solid rgba(0, 255, 224, 0.25);
+  border-radius: var(--hu-radius-control);
+  padding: 16px;
+  background: rgba(0, 255, 224, 0.03);
+}
+.bundleHead {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+.bundleDismiss { margin-left: auto; }
+.downloads { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0; }
+.steps { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 9px; }
+.steps li { font-size: 13px; line-height: 1.55; color: var(--hu-colors-crater-base); }
+.steps code { font-size: 12px; }
+
+/* -------------------------------------------------------------- tables -- */
+
+.tableWrap { max-width: 100%; overflow-x: auto; }
+
+.table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.table thead th {
+  text-align: left;
+  font-weight: 500;
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--hu-text-muted);
+  padding: 0 0 8px;
+  border-bottom: 1px solid var(--hu-divider);
+  white-space: nowrap;
+}
+.table td,
+.table tbody th {
+  padding: 9px 0;
+  border-bottom: 1px solid var(--hu-divider);
+  color: var(--hu-colors-apollo-base);
+}
+.table tbody th {
+  text-align: left;
+  font-weight: 400;
+  font-size: 13px;
+  letter-spacing: normal;
+  text-transform: none;
+}
+.table tr:last-child td,
+.table tr:last-child th { border-bottom: 0; }
+
+/* ---------------------------------------------------------- persistence -- */
+
+.counts { display: flex; gap: 12px; }
+.counts > div {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px;
+  border-radius: var(--hu-radius-control);
+  background: var(--hu-colors-penumbra-200);
+  text-align: center;
+}
+.counts strong { font-size: 26px; font-weight: 500; color: var(--hu-colors-solar-base); }
+.counts span {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--hu-text-muted);
+}
+
+.envList { margin: 4px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 8px; }
+.envList li { font-size: 13px; line-height: 1.5; color: var(--hu-colors-crater-base); }
+
+/* ------------------------------------------------------- feature flags -- */
+
+.flagsHead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.flagsHead > div { min-width: 0; }
+
+.flagName { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.flagOverridden code { color: var(--hu-colors-beam-base); }
+
+/* "Default here" — this deployment's coded default with runtime overrides
+   suppressed. It is NOT a capture of what live carry served, whatever the old
+   copy claimed. */
+.flagDefault {
+  color: var(--hu-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.flagInputWrap { max-width: 180px; }
+.flagInput { composes: field from "../../components/controls.module.css"; }
+
+/* A rejected write reports next to the control that produced it, never in the
+   unrelated "Provision a Pin" card two sections up. */
+.rowError { max-width: 320px; }
+.panelError { margin-top: 12px; }
+
+/* ------------------------------------------------ deployment configuration -- */
+
+/* A list rather than the flag table. A flag is one name and one value, so a
+   table row fits it; a setting carries a state, what its absence costs, and —
+   when it cannot be changed here — the sentence naming where it actually lives.
+   Squeezing that into a cell is what produces a column nobody can read. */
+
+.settingGroup { margin-top: 18px; }
+
+.settingGroupHead {
+  margin: 0 0 8px;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--hu-text-muted);
+}
+
+.settingList {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+}
+
+.settingRow {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--hu-divider);
+}
+.settingRow:last-child { border-bottom: 0; }
+
+.settingName { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+.settingImpact {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--hu-colors-crater-base);
+}
+
+/* Where the setting really lives, for everything this console will not write.
+   Deliberately as readable as the editable rows: an operator who cannot find a
+   setting edits Compose by hand, which is the change the deploy transaction
+   cannot account for. */
+.settingGuidance {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--hu-text-muted);
+}
+
+.settingControl { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+
+.settingInputRow { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.settingInput {
+  composes: field from "../../components/controls.module.css";
+  max-width: 360px;
+}
+
+.settingHint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--hu-text-muted);
+}
+
+@media (max-width: 720px) {
+  .consoleNav { width: 100%; box-sizing: border-box; }
+  .flagsHead { flex-direction: column; }
+  .settingInput { max-width: 100%; }
+}

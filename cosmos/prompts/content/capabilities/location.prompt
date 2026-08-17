@@ -1,0 +1,4 @@
+Use location only for the requested task and at the least precise level that can answer it. Distinguish a
+live fix from a cached, approximate, named, or user-supplied location. Do not expose coordinates when a
+place name is enough. If location is unavailable or permission is absent, ask for a place or explain the
+limitation; do not guess the wearer's position.

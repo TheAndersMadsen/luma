@@ -1,0 +1,213 @@
+/*
+ * humane.center design system — tokens recovered verbatim from the shipped
+ * CSS bundle (Feb 2025 snapshot). Names and values are Humane's own.
+ */
+
+@font-face {
+  font-family: "Humane";
+  src: url("/fonts/humaneweb-vf.woff2") format("woff2-variations");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  /* neutrals — the lunar-eclipse scale */
+  --hu-colors-black: #000;
+  --hu-colors-eclipse-base: #0f0f0f;
+  --hu-colors-eclipse-500: #0f0f0f7f;
+  --hu-colors-penumbra-200: #131414;
+  --hu-colors-penumbra-base: #1f2121;
+  --hu-colors-lunar-grey-dark-base: #161717;
+  --hu-colors-lunar-grey-dark-200: #3d4141;
+  --hu-colors-iron-base: #505355;
+  --hu-colors-crater-grey-base: #727679;
+  --hu-colors-crater-grey-200: #56595b;
+  --hu-colors-crater-grey-50: #a5a7a7;
+  --hu-colors-crater-base: #a9abab;
+  --hu-colors-apollo-base: #e2e2e0;
+  --hu-colors-apollo-grey-base: #dededc;
+  --hu-colors-apollo-grey-50: #eaeae9;
+  --hu-colors-lunar-base: #f5f5f5;
+  --hu-colors-lunar-grey-base: #f9f9f9;
+  --hu-colors-lunar-grey-200: #f0f0f0;
+  --hu-colors-solar-base: #fff;
+  --hu-colors-white: #fff;
+
+  /* accent — "beam", the Pin's laser cyan */
+  --hu-colors-beam-base: #00ffe0;
+  --hu-colors-beam-10: #d2fff8;
+  --hu-colors-beam-200: #005e59;
+  --hu-colors-beam-dark: #3d4141;
+  --hu-colors-laser-base: #004d43;
+  --hu-colors-marine: #008576;
+
+  /* buttons */
+  --hu-colors-button-background-dark-primary-hover: #00ddc2;
+  --hu-colors-button-background-dark-primary-active: #00a793;
+  --hu-colors-button-background-dark-primary-disabled: #4ee8d5;
+  --hu-colors-button-background-dark-secondary-base: #2e3131;
+  --hu-colors-button-background-dark-secondary-hover: #3d4141;
+  --hu-colors-button-background-light-secondary-base: #f4f6f6;
+
+  /* status */
+  --hu-colors-yellow-100: #f7ea48;
+  --hu-colors-orange-100: #eb7d23;
+  --hu-colors-red-10: #ffeaea;
+  --hu-colors-red-50: #ff8e81;
+  --hu-colors-red-100: #ff4834;
+  --hu-colors-red-150: #e70500;
+  --hu-colors-red-200: #9f0300;
+  --hu-colors-led-world-phone: #ff41f0;
+
+  /* typography */
+  --hu-fonts-humane: Humane, system-ui, sans-serif;
+  --humane-font-family: Humane, system-ui, sans-serif;
+
+  /* spacing — 8px scale */
+  --hu-spacing-base-1: 8px;
+  --hu-spacing-base-2: 16px;
+  --hu-spacing-base-3: 24px;
+  --hu-spacing-base-4: 32px;
+  --hu-spacing-base-5: 40px;
+  --hu-spacing-base-6: 48px;
+  --hu-spacing-base-7: 56px;
+  --hu-spacing-base-8: 64px;
+
+  /* effects */
+  --outline-shadow: inset 0 0 0 1px hsla(0, 0%, 100%, 0.04);
+  --focused-outline-shadow: inset 0 0 0 1px hsla(0, 0%, 100%, 0.12);
+  --menu-drop-shadow: 0 4px 32px 0 rgba(0, 0, 0, 0.4);
+  --transition-duration: 200ms;
+
+  /* layout */
+  --header-height: 80px;
+  --footer-height: 80px;
+  --toolbarHeight: 104px;
+  --main-elements-gap: 30px;
+  --header-footer-elements-gap: 20px;
+  --sys-layout-sidebar-width: 260px;
+  --cell-size: 240px;
+  --gap-size: 16px;
+  --text-secondary: #a9abab;
+  --hu-text-muted: #a5a7a7;
+  --hu-motion-fast: 150ms;
+  --hu-motion-standard: 200ms;
+}
+
+/*
+ * OURS, NOT RECOVERED.
+ *
+ * Everything above is Humane's. Everything in this block is this project's own
+ * and is named so it can never be mistaken for evidence. Each one exists to
+ * settle a value the recovered bundle left us guessing at in a dozen places:
+ *
+ *   radii   — the recovered CSS has no radius token at all, so every addition
+ *             picked its own (16 / 20 / 22 / 12 / 11 / 10 / 8). Three survive:
+ *             surface 16 (the faithful panel), raised 20 (a floating panel),
+ *             control 12 (an input or a small button). Deliberate exceptions
+ *             stay: captureDetail's 22px dialog (recovered layout tokens) and
+ *             /wifi's light-theme surfaces.
+ *   divider — three hairline values were in use (0.04 / 0.06 / penumbra-200).
+ *             They all mean "a line between two rows". One value now.
+ *   status  — mapped onto Humane's own red-100 / orange-100 so the invented
+ *             #ff8f8f and #ffcf7a in the additions can die. A failure is never
+ *             rendered in the caption colour; that is the one absolute rule.
+ */
+:root {
+  --hu-radius-surface: 16px;
+  --hu-radius-raised: 20px;
+  --hu-radius-control: 12px;
+
+  --hu-divider: rgba(255, 255, 255, 0.06);
+
+  --hu-status-danger: var(--hu-colors-red-100);
+  --hu-status-warning: var(--hu-colors-orange-100);
+  --hu-status-live: var(--hu-colors-beam-base);
+  --hu-status-off: var(--hu-colors-crater-grey-base);
+}
+
+@media (min-width: 1072px) {
+  :root {
+    --toolbarHeight: 148px;
+    --gap-size: 24px;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+::selection {
+  color: var(--hu-colors-eclipse-base);
+  background: var(--hu-colors-beam-base);
+}
+
+body {
+  background: var(--hu-colors-black);
+  color: var(--hu-colors-white);
+  font-family: var(--hu-fonts-humane);
+  font-weight: 500;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+  border: none;
+  background: none;
+  color: inherit;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto !important;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-delay: 0ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-delay: 0ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+:focus-visible {
+  outline: 2px solid var(--hu-colors-beam-base);
+  outline-offset: 3px;
+}
+
+/* Text primitive — recovered class names (Text_BaseText, Text_Size16, …) */
+.Text_BaseText { margin: 0; font-family: var(--hu-fonts-humane); }
+.Text_Size11 { font-size: 11px; }
+.Text_Size16 { font-size: 16px; }
+.Text_Size24 { font-size: 24px; }
+.Text_Size30 { font-size: 30px; }
+.Text_Size36 { font-size: 36px; }
+.Text_Weight400 { font-weight: 400; }
+.Text_Weight500 { font-weight: 500; }
+.Text_Weight700 { font-weight: 700; }
+.Text_Leading1 { line-height: 1; }
+.Text_Leading1_2 { line-height: 1.2; }
+.Text_ColorWhite { color: var(--hu-colors-white); }
+.Text_ColorGray { color: var(--hu-colors-crater-base); }
+.Text_AlignmentLeft { text-align: left; }
+.Text_TransformNone { text-transform: none; }

@@ -1,0 +1,86 @@
+{
+  "schemaVersion": 1,
+  "component": "ai-pin-revival-device-builder",
+  "source": "pin",
+  "platform": "linux/amd64",
+  "status": "implemented",
+  "toolchain": {
+    "jdk": {
+      "distribution": "Eclipse Temurin",
+      "version": "17.0.14+7",
+      "image": "eclipse-temurin:17.0.14_7-jdk-jammy",
+      "imageIndexDigest": "sha256:23f74f7840a6948f9da3870876f475c4febeb365757891a6a9ebda38a42cf53f",
+      "evidence": "derived from device README and host CI requirement for JDK 17"
+    },
+    "gradle": {
+      "version": "8.9",
+      "source": "pin/gradle/wrapper/gradle-wrapper.properties",
+      "evidence": "observed"
+    },
+    "android": {
+      "commandLineTools": {
+        "version": "15859902",
+        "sha256": "4e4c464f145a7512b57d088ac6c278c03c9eea610886b35a5e0804e74eedf583",
+        "evidence": "observed on the official Android Developers download page"
+      },
+      "platform": "34",
+      "buildTools": "35.0.0",
+      "ndk": "28.2.13676358",
+      "rustTarget": "aarch64-linux-android",
+      "evidence": "observed in copied Android modules and build operations documentation"
+    },
+    "rust": {
+      "version": "1.91.1",
+      "image": "rust:1.91.1-bookworm",
+      "imageIndexDigest": "sha256:c1e5f19e773b7878c3f7a805dd00a495e747acbdc76fb2337a4ebf0418896b33",
+      "evidence": "derived from the highest rust-version in the locked dependency graph (portmapper@0.19.1 requires rustc 1.91)"
+    },
+    "cargoNdk": {
+      "version": "4.1.2",
+      "evidence": "observed in copied build operations documentation"
+    },
+    "node": {
+      "version": "22.14.0",
+      "image": "node:22.14.0-bookworm-slim",
+      "imageIndexDigest": "sha256:1c18d9ab3af4585870b92e4dbc5cac5a0dc77dd13df1a5905cea89fc720eb05b",
+      "evidence": "derived from copied CI Node 22 and Vite Node 22.12+ constraints"
+    }
+  },
+  "runtime": {
+    "user": "builder",
+    "sourceMount": "/workspace/pin",
+    "workingState": "/workspace/state/device-build/worktree",
+    "artifactOutput": "/workspace/state/artifacts/device",
+    "externalCaches": [
+      "/cache/android",
+      "/cache/cargo",
+      "/cache/gradle",
+      "/cache/npm"
+    ],
+    "defaultCommand": "help",
+    "commands": [
+      "help",
+      "versions",
+      "doctor",
+      "build-cli",
+      "build-android",
+      "build-debug",
+      "prefetch-release",
+      "build-release",
+      "shell"
+    ]
+  },
+  "boundaries": {
+    "sourceIsReadOnly": true,
+    "debugCommandsRejectSigningInputs": true,
+    "releaseDependencyFetch": "networked dependency-only prefetch with no signing or private-asset mounts",
+    "releaseSigningInputs": "external read-only d8a64 mounts validated against fixed certificate identity",
+    "releaseSigningNetwork": "none; Gradle and Cargo run offline from the prefetch cache",
+    "releaseArtifactsInImage": false,
+    "privateNativeAssetsInImage": false,
+    "usbExposed": false,
+    "adbInstalled": false,
+    "physicalProvisioning": "host-only exact-target action",
+    "physicalInstallation": "host-only exact-target action"
+  }
+}

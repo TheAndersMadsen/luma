@@ -1,0 +1,217 @@
+// reconstructed from ironman.apk (protobuf-lite). field numbers are wire-accurate.
+syntax = "proto3";
+
+package humane.provisioning;
+
+enum CertificateEncoding {
+  UNSET_ENCODING = 0;
+  DER = 1;
+  PEM = 2;
+}
+
+enum CertificateFormat {
+  UNSET_FORMAT = 0;
+  X509 = 1;
+  PKCS_7 = 2;
+  PKCS_10 = 3;
+}
+
+enum DeleteStatusCode {
+  UNSET_DELETE_CODE = 0;
+  DELETE_OK = 1;
+  DELETE_DOES_NOT_EXIST = 2;
+  DELETE_FAILED = 3;
+}
+
+enum HmcAssociationResponseCode {
+  HMC_ASSOCIATION_RESPONSE_CODE_UNSPECIFIED = 0;
+  HMC_ASSOCIATION_RESPONSE_CODE_SUCCESS = 1;
+  HMC_ASSOCIATION_RESPONSE_CODE_FAILURE = 2;
+  HMC_ASSOCIATION_RESPONSE_CODE_MISSING_DEVICE_USER_ASSOCIATION = 3;
+  HMC_ASSOCIATION_RESPONSE_CODE_INVALID_HMC_ID = 4;
+}
+
+enum OpaqueLoginStatusCode {
+  OPAQUE_LOGIN_STATUS_UNSPECIFIED = 0;
+  OPAQUE_LOGIN_STATUS_SUCCESSFUL_REQUEST = 1;
+  OPAQUE_LOGIN_STATUS_SERVER_EXCEPTION = 2;
+  OPAQUE_LOGIN_STATUS_RATE_LIMIT_HIT = 3;
+  OPAQUE_LOGIN_STATUS_MISSING_REGISTRATION = 4;
+}
+
+enum SignatureStandard {
+  UNSET_SIG_STANDARD = 0;
+  ECDSA_SHA256 = 1;
+}
+
+// NOTE: this is `humane.provisioning.SubscriptionStatusCode`, a DISTINCT type
+// from `humane.account.SubscriptionStatusCode` — both exist in the real contract
+// and they differ. This one carries DEACTIVATED=6; the account one omits 6
+// (an intentional gap: the device's `forNumber(6)` returns null and it logs
+// "Invalid subscription status update. Not updating.") and adds NOT_CONFIGURED=7
+// / INACTIVE=8. The account enum is the one the device parses from the
+// `subscription-status` trailer. Do not "reconcile" these — the divergence is
+// faithful to the extracted contract.
+enum SubscriptionStatusCode {
+  SUBSCRIPTION_STATUS_CODE_UNSPECIFIED = 0;
+  SUBSCRIPTION_STATUS_CODE_ACTIVE = 1;
+  SUBSCRIPTION_STATUS_CODE_AVAILABLE = 2;
+  SUBSCRIPTION_STATUS_CODE_SUSPENDED = 3;
+  SUBSCRIPTION_STATUS_CODE_PAUSED = 4;
+  SUBSCRIPTION_STATUS_CODE_BLOCKED = 5;
+  SUBSCRIPTION_STATUS_CODE_DEACTIVATED = 6;
+}
+
+enum VerifyHmcByPassResponseCode {
+  VERIFY_HMC_BY_PASS_RESPONSE_CODE_UNSPECIFIED = 0;
+  VERIFY_HMC_BY_PASS_RESPONSE_CODE_ALLOWED = 1;
+  VERIFY_HMC_BY_PASS_RESPONSE_CODE_DISALLOWED = 2;
+}
+
+message Certificate {
+  CertificateFormat format = 1;
+  CertificateEncoding encoding = 2;
+  bytes certificate = 3;
+}
+
+message CertificateAndChain {
+  Certificate certificate = 1;
+  Chain ca_chain = 2;
+}
+
+message CertificateSigningRequest {
+  CertificateFormat format = 1;
+  CertificateEncoding encoding = 2;
+  bytes csr = 3;
+}
+
+message Chain {
+  repeated Certificate cert = 1;
+}
+
+message CreateLoginFinishRequest {
+  bytes login_finish_request = 1;
+  VerificationSignature device_id_verification_signature = 2;
+  string device_id = 3;
+}
+
+message CreateLoginFinishResponse {
+  string user_id = 1;
+  OpaqueLoginStatus response_code = 2;
+  string display_name = 3;
+}
+
+message CreateLoginInitRequest {
+  bytes login_request = 1;
+  VerificationSignature device_id_verification_signature = 2;
+  string device_id = 3;
+}
+
+message CreateLoginInitResponse {
+  bytes login_response = 1;
+  OpaqueLoginStatus response_code = 2;
+}
+
+message DeviceAssignment {
+  DeviceCertificate device_configuration_credential_certificate = 1;
+  bool binding_exists = 2;
+  bytes deviceid = 3;
+  string device_serial_number = 4;
+}
+
+message DeviceCertificate {
+  oneof dac {
+    CertificateAndChain certificate = 1;
+    string certificate_serial_number = 2;
+  }
+}
+
+message EncryptedCreateDeviceUserBindingRequest {
+  CertificateSigningRequest device_user_credential_csr = 1;
+  EncryptedPayload device_attestation_credential_verification_signature = 2;
+}
+
+message EncryptedCreateDeviceUserBindingResponse {
+  EncryptedPayload device_user_certificate = 1;
+  Chain ca_chain = 2;
+}
+
+message EncryptedPayload {
+  bytes payload = 1;
+  bytes iv = 2;
+}
+
+message GetAssignedUserDACRequest {
+}
+
+message GetAssignedUserResponse {
+  bytes userid = 1;
+}
+
+message GetSubscriptionStatusRequest {
+}
+
+message GetSubscriptionStatusResponse {
+  SubscriptionStatus status = 1;
+}
+
+message OpaqueLoginStatus {
+  OpaqueLoginStatusCode status_code = 1;
+  string message = 2;
+}
+
+message SubscriptionStatus {
+  SubscriptionStatusCode status_code = 1;
+  string message = 2;
+}
+
+message VerificationSignature {
+  SignatureStandard signature_standard = 1;
+  bytes signature = 2;
+}
+
+// CONFIRMED FROM THE CLIENT'S OWN CLASS, 2026-08-12. The decompiled
+// `humane.provisioning.VerifyHmcAssociationRequest` declares
+// HMC_ID_FIELD_NUMBER = 1, DEVICE_ID_VERIFICATION_SIGNATURE_FIELD_NUMBER = 2 and
+// DEVICE_ID_FIELD_NUMBER = 3, and its newMessageInfo descriptor agrees
+// independently: char 0x0208 (FieldType.STRING) at 1, char 0x09
+// (FieldType.MESSAGE) at 2, char 0x0208 at 3. This layout is the stock layout.
+//
+// It was the last open byte-changing divergence in
+// contracts/wire-divergence.json: the device-loopback copy
+// (pin/runtime/core/proto/humane/provisioning/provisioning.proto) had 1 and 2
+// swapped, decided only by the house pattern the two trees DO agree on for
+// CreateLoginInitRequest and CreateLoginFinishRequest — payload 1, signature 2,
+// device_id 3. The house pattern was right; the artifact is what settles it.
+// That copy has been corrected, and the correction is staged for a Pin release
+// because it changes what the device accepts. See
+// contracts/wire-divergence.json.
+message VerifyHmcAssociationRequest {
+  string hmc_id = 1;
+  VerificationSignature device_id_verification_signature = 2;
+  string device_id = 3;
+}
+
+message VerifyHmcAssociationResponse {
+  HmcAssociationResponseCode status = 1;
+  string name_to_display = 2;
+}
+
+message VerifyHmcByPassRequest {
+  VerificationSignature device_id_verification_signature = 1;
+  string device_id = 2;
+}
+
+message VerifyHmcByPassResponse {
+  VerifyHmcByPassResponseCode status = 1;
+}
+
+service DeviceOnboardingDACService {
+  rpc CreateDeviceUserBinding (EncryptedCreateDeviceUserBindingRequest) returns (EncryptedCreateDeviceUserBindingResponse);
+  rpc CreateLoginFinish (CreateLoginFinishRequest) returns (CreateLoginFinishResponse);
+  rpc CreateLoginInit (CreateLoginInitRequest) returns (CreateLoginInitResponse);
+  rpc GetAssignedUserDAC (GetAssignedUserDACRequest) returns (GetAssignedUserResponse);
+  rpc GetSubscriptionStatus (GetSubscriptionStatusRequest) returns (GetSubscriptionStatusResponse);
+  rpc VerifyHmcAssociation (VerifyHmcAssociationRequest) returns (VerifyHmcAssociationResponse);
+  rpc VerifyHmcByPass (VerifyHmcByPassRequest) returns (VerifyHmcByPassResponse);
+}

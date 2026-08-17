@@ -1,0 +1,513 @@
+{
+  "schemaVersion": 1,
+  "contractId": "feature-flag-sync",
+  "storagePlane": "feature_flags_service",
+  "wire": {
+    "schema": "contracts/wire/humane/featureflags.proto",
+    "service": "humane.featureflags.FeatureFlagsService",
+    "method": "GetFlags",
+    "lookupField": "flag_name",
+    "valueArms": {
+      "string": "val_str",
+      "float": "val_float",
+      "integer": "val_int",
+      "boolean": "val_bool"
+    }
+  },
+  "canonicalSources": [
+    "cosmos/crates/cosmos/src/services/feature_flags.rs",
+    "cosmos/crates/cosmos/src/http.rs",
+    "pin/runtime/core/src/feature_flags.rs"
+  ],
+  "producerProfiles": {
+    "cosmos": {
+      "source": "cosmos/crates/cosmos/src/services/feature_flags.rs",
+      "defaultPolicy": "serve_full_profile",
+      "defaultField": "cosmosServedDefault",
+      "evidence": {
+        "label": "implemented",
+        "claim": "Cosmos emits the complete 33-key profile below and applies type-preserving operator overrides per request."
+      }
+    },
+    "pinRuntime": {
+      "source": "pin/runtime/core/src/feature_flags.rs",
+      "defaultPolicy": "serve_overrides_plus_mandatory_baseline",
+      "defaultAssignments": [
+        { "key": "vision_custom_gesture_enabled", "valueType": "boolean", "value": true }
+      ],
+      "omittedKeysUseStockFirmwareDefault": true,
+      "evidence": {
+        "label": "implemented",
+        "claim": "Without operator overrides, Pin runtime emits only vision_custom_gesture_enabled=true and leaves other declared stock keys absent."
+      }
+    }
+  },
+  "allowedEvidenceLabels": [
+    "observed",
+    "derived",
+    "implemented",
+    "unknown"
+  ],
+  "valueConstraints": {
+    "integer": { "minimum": -2147483648, "maximum": 2147483647, "consumerType": "java_int" },
+    "string": { "maximumUtf8Bytes": 256 },
+    "float": { "wireSupported": true, "currentKeys": 0 }
+  },
+  "applicationModes": {
+    "server_only": "Preserved for Carry response compatibility; no installed Pin consumer was found.",
+    "inert": "The stock key exists, but no supported installed consumer or safe non-default grammar is known.",
+    "next_sync": "The stock client reads the assignment after its next successful feature sync.",
+    "next_sync_restart": "The assignment arrives on the next sync; at least one stock consumer caches state and should be restarted.",
+    "server_controlled": "The assignment is delivered, but deployment configuration remains authoritative.",
+    "settings_global_live": "The Android bridge writes the exact Settings.Global key and the installed consumer reads it without a process restart.",
+    "settings_global_restart": "The Android bridge writes the exact Settings.Global key and the installed consumer should be reconstructed or restarted.",
+    "settings_global_inert": "The Settings.Global key is retained at its safe default because no supported consumer behavior is known."
+  },
+  "semantics": [
+    {
+      "evidence": "derived",
+      "claim": "flag_name is the stock lookup key; flag_id is only the server assignment identifier."
+    },
+    {
+      "evidence": "derived",
+      "claim": "A successful response replaces the stock server-owned assignment set, and each key must retain its declared protobuf value arm."
+    },
+    {
+      "evidence": "implemented",
+      "claim": "Cosmos recomputes assignments for each GetFlags request so a valid persisted override can apply on the next sync."
+    },
+    {
+      "evidence": "unknown",
+      "claim": "A manifest entry does not prove that the corresponding behavior has passed acceptance on the currently connected physical Pin."
+    },
+    {
+      "evidence": "unknown",
+      "claim": "Cosmos's complete response profile and Pin runtime's sparse response profile are not asserted to be cache-equivalent until stock-device resolution is observed."
+    }
+  ],
+  "flags": [
+    {
+      "key": "demo_v1_enabled",
+      "valueType": "boolean",
+      "cosmosServedDefault": { "kind": "static", "value": false },
+      "scope": "compatibility_record",
+      "writable": false,
+      "application": { "mode": "server_only", "restartRecommended": false },
+      "evidence": { "label": "observed", "claim": "Carry was captured assigning false; no installed Pin consumer was found." }
+    },
+    {
+      "key": "demo_v2_enabled",
+      "valueType": "boolean",
+      "cosmosServedDefault": { "kind": "static", "value": false },
+      "scope": "compatibility_record",
+      "writable": false,
+      "application": { "mode": "server_only", "restartRecommended": false },
+      "evidence": { "label": "observed", "claim": "Carry was captured assigning false; no installed Pin consumer was found." }
+    },
+    {
+      "key": "demo_v2_experience",
+      "valueType": "boolean",
+      "cosmosServedDefault": { "kind": "static", "value": false },
+      "scope": "compatibility_record",
+      "writable": false,
+      "application": { "mode": "server_only", "restartRecommended": false },
+      "evidence": { "label": "observed", "claim": "Carry was captured assigning false; no installed Pin consumer was found." }
+    },
+    {
+      "key": "personal_voice_enabled",
+      "valueType": "boolean",
+      "cosmosServedDefault": { "kind": "static", "value": false },
+      "scope": "compatibility_record",
+      "writable": false,
+      "application": { "mode": "server_only", "restartRecommended": false },
+      "evidence": { "label": "observed", "claim": "Carry was captured assigning false; Cosmos has no compatible personal-voice experience." }
+    },
+    {
+      "key": "calendar_enabled",
+      "valueType": "boolean",
+      "cosmosServedDefault": { "kind": "static", "value": false },
+      "scope": "compatibility_record",
+      "writable": false,
+      "application": { "mode": "server_only", "restartRecommended": false },
+      "evidence": { "label": "observed", "claim": "Carry was captured assigning false; no installed Pin consumer was found." }
+    },
+    {
+      "key": "synapse_prod_logging_enabled",
+      "valueType": "boolean",
+      "cosmosServedDefault": { "kind": "static", "value": false },
+      "scope": "compatibility_record",
+      "writable": false,
+      "application": { "mode": "server_only", "restartRecommended": false },
+      "evidence": { "label": "observed", "claim": "Carry was captured assigning false; no installed Pin consumer was found." }
+    },
+    {
+      "key": "health_experience",
+      "valueType": "boolean",
+      "cosmosServedDefault": { "kind": "static", "value": false },
+      "scope": "compatibility_record",
+      "writable": false,
+      "application": { "mode": "server_only", "restartRecommended": false },
+      "evidence": { "label": "observed", "claim": "Carry was captured assigning false; this key is not the stock fitness-tracker gate." }
+    },
+    {
+      "key": "hackathon_health_experience",
+      "valueType": "boolean",
+      "cosmosServedDefault": { "kind": "static", "value": false },
+      "scope": "compatibility_record",
+      "writable": false,
+      "application": { "mode": "server_only", "restartRecommended": false },
+      "evidence": { "label": "observed", "claim": "Carry was captured assigning false; no installed Pin consumer was found." }
+    },
+    {
+      "key": "hackathon_ai_profile_user_personalization",
+      "valueType": "boolean",
+      "cosmosServedDefault": { "kind": "static", "value": false },
+      "scope": "compatibility_record",
+      "writable": false,
+      "application": { "mode": "server_only", "restartRecommended": false },
+      "evidence": { "label": "observed", "claim": "Carry was captured assigning false; no installed Pin consumer was found." }
+    },
+    {
+      "key": "flight_search_enabled",
+      "valueType": "boolean",
+      "cosmosServedDefault": { "kind": "static", "value": true },
+      "scope": "compatibility_record",
+      "writable": false,
+      "application": { "mode": "server_only", "restartRecommended": false },
+      "evidence": { "label": "observed", "claim": "Carry was captured assigning true; no installed Pin flag consumer was found." }
+    },
+    {
+      "key": "history_search_enabled",
+      "valueType": "boolean",
+      "cosmosServedDefault": { "kind": "static", "value": true },
+      "scope": "compatibility_record",
+      "writable": false,
+      "application": { "mode": "server_only", "restartRecommended": false },
+      "evidence": { "label": "observed", "claim": "Carry was captured assigning true; no installed Pin flag consumer was found." }
+    },
+    {
+      "key": "web_show_save_event_location_privacy_setting",
+      "valueType": "boolean",
+      "cosmosServedDefault": { "kind": "static", "value": true },
+      "scope": "compatibility_record",
+      "writable": false,
+      "application": { "mode": "server_only", "restartRecommended": false },
+      "evidence": { "label": "observed", "claim": "Carry was captured assigning true as a web-side privacy control; no Pin consumer was found." }
+    },
+    {
+      "key": "touchcode_enabled",
+      "valueType": "boolean",
+      "cosmosServedDefault": { "kind": "static", "value": true },
+      "scope": "device",
+      "writable": true,
+      "application": { "mode": "next_sync", "restartRecommended": false },
+      "evidence": { "label": "observed", "claim": "Carry was captured assigning true and the installed device uses it to keep Touchcode unlock available." }
+    },
+    {
+      "key": "vision_custom_gesture_enabled",
+      "valueType": "boolean",
+      "cosmosServedDefault": { "kind": "static", "value": true },
+      "firmwareDefault": { "value": false, "evidence": "observed" },
+      "scope": "device",
+      "writable": true,
+      "application": { "mode": "next_sync", "restartRecommended": false },
+      "evidence": { "label": "observed", "claim": "Carry was captured assigning true and the installed device gates its custom vision-gesture entry point on this key." }
+    },
+    {
+      "key": "quick_actions_remapping_enabled",
+      "valueType": "boolean",
+      "cosmosServedDefault": { "kind": "static", "value": true },
+      "firmwareDefault": { "value": true, "evidence": "observed" },
+      "scope": "device",
+      "writable": true,
+      "application": { "mode": "next_sync_restart", "restartRecommended": true },
+      "evidence": { "label": "observed", "claim": "Carry was captured assigning true and installed Settings and voice routes consume this key." }
+    },
+    {
+      "key": "tickle",
+      "valueType": "boolean",
+      "cosmosServedDefault": { "kind": "static", "value": true },
+      "firmwareDefault": { "value": false, "evidence": "observed" },
+      "scope": "device",
+      "writable": true,
+      "application": { "mode": "next_sync", "restartRecommended": false },
+      "evidence": { "label": "observed", "claim": "Carry was captured assigning true and the installed compatibility hook live-gates the stock Tickle parser and action." }
+    },
+    {
+      "key": "music_interstitials_enabled",
+      "valueType": "boolean",
+      "cosmosServedDefault": { "kind": "static", "value": true },
+      "firmwareDefault": { "value": false, "evidence": "observed" },
+      "scope": "device",
+      "writable": true,
+      "application": { "mode": "next_sync", "restartRecommended": false },
+      "evidence": { "label": "observed", "claim": "Carry was captured assigning true and installed music handlers read it for local narration." }
+    },
+    {
+      "key": "synapse_bidirectional_streaming",
+      "valueType": "boolean",
+      "cosmosServedDefault": { "kind": "environment", "variable": "CARRY_BIDIRECTIONAL_STREAMING", "truthy": ["1", "true"], "fallback": false, "whenTruthy": true },
+      "firmwareDefault": { "value": false, "evidence": "observed" },
+      "scope": "device",
+      "writable": true,
+      "application": { "mode": "next_sync", "restartRecommended": false },
+      "evidence": { "label": "observed", "claim": "Carry was captured assigning false; Cosmos preserves that fallback while permitting an explicit transport experiment." }
+    },
+    {
+      "key": "accessory_feature_flags",
+      "valueType": "string",
+      "cosmosServedDefault": { "kind": "static", "value": "" },
+      "firmwareDefault": { "value": "", "evidence": "observed" },
+      "scope": "device",
+      "writable": false,
+      "application": { "mode": "inert", "restartRecommended": false },
+      "evidence": { "label": "unknown", "claim": "The stock key and empty default are known, but no installed consumer or safe non-empty grammar was found." }
+    },
+    {
+      "key": "feature_flag_suppress_sync_on_startup",
+      "valueType": "boolean",
+      "cosmosServedDefault": { "kind": "static", "value": false },
+      "firmwareDefault": { "value": false, "evidence": "observed" },
+      "scope": "device",
+      "writable": false,
+      "application": { "mode": "next_sync_restart", "restartRecommended": true },
+      "evidence": { "label": "derived", "claim": "Installed code shows that true suppresses Ironman's one-time startup fetch while other sync paths remain." }
+    },
+    {
+      "key": "touchcode_timeout_millis",
+      "valueType": "integer",
+      "cosmosServedDefault": { "kind": "static", "value": 10000 },
+      "firmwareDefault": { "value": 5000, "evidence": "observed" },
+      "scope": "device",
+      "writable": true,
+      "application": { "mode": "next_sync", "restartRecommended": false, "constraints": { "minimum": 0 } },
+      "evidence": { "label": "derived", "claim": "Installed code consumes a millisecond integer; Cosmos deliberately serves a usable non-zero window." }
+    },
+    {
+      "key": "laser_finding_guide",
+      "valueType": "boolean",
+      "cosmosServedDefault": { "kind": "static", "value": true },
+      "firmwareDefault": { "value": false, "evidence": "observed" },
+      "scope": "device",
+      "writable": false,
+      "application": { "mode": "inert", "restartRecommended": false },
+      "evidence": { "label": "unknown", "claim": "The stock key is declared, but no installed runtime consumer was found." }
+    },
+    {
+      "key": "server_side_transcription_save_enabled",
+      "valueType": "boolean",
+      "cosmosServedDefault": { "kind": "static", "value": false },
+      "firmwareDefault": { "value": false, "evidence": "observed" },
+      "scope": "device",
+      "writable": true,
+      "application": { "mode": "next_sync", "restartRecommended": false },
+      "evidence": { "label": "derived", "claim": "Installed code can attach bounded recognition audio to an in-memory turn; Cosmos does not persist that unknown response field." }
+    },
+    {
+      "key": "server_side_speech_synthesis_timeout_millis",
+      "valueType": "integer",
+      "cosmosServedDefault": { "kind": "environment", "variable": "CARRY_REMOTE_TTS_ENABLED", "truthy": ["1", "true"], "fallback": 0, "whenTruthy": 15000 },
+      "firmwareDefault": { "value": 0, "evidence": "observed" },
+      "scope": "device",
+      "writable": true,
+      "application": { "mode": "next_sync", "restartRecommended": false, "constraints": { "minimum": 0 } },
+      "evidence": { "label": "implemented", "claim": "A positive timeout selects the stock remote SpeechService path; Cosmos hosts that service when Azure Speech is configured." }
+    },
+    {
+      "key": "server_side_speech_synthesis_streaming_enabled",
+      "valueType": "boolean",
+      "cosmosServedDefault": { "kind": "environment", "variable": "CARRY_REMOTE_TTS_ENABLED", "truthy": ["1", "true"], "fallback": false, "whenTruthy": true },
+      "firmwareDefault": { "value": false, "evidence": "observed" },
+      "scope": "device",
+      "writable": true,
+      "application": {
+        "mode": "next_sync",
+        "restartRecommended": false,
+        "requires": [{ "kind": "flag", "key": "server_side_speech_synthesis_timeout_millis", "predicate": "positive" }]
+      },
+      "evidence": { "label": "implemented", "claim": "Installed code selects the server-streaming speech RPC when remote speech is active." }
+    },
+    {
+      "key": "server_side_speech_synthesis_voice_name",
+      "valueType": "string",
+      "cosmosServedDefault": { "kind": "static", "value": "" },
+      "firmwareDefault": { "value": "", "evidence": "observed" },
+      "scope": "device",
+      "writable": false,
+      "application": { "mode": "server_controlled", "restartRecommended": false },
+      "evidence": { "label": "implemented", "claim": "Cosmos ignores this untrusted device selector and uses the operator-configured Azure voice." }
+    },
+    {
+      "key": "cmu_ultra_enabled",
+      "valueType": "boolean",
+      "cosmosServedDefault": { "kind": "static", "value": false },
+      "firmwareDefault": { "value": true, "evidence": "observed" },
+      "scope": "device",
+      "writable": true,
+      "application": { "mode": "next_sync_restart", "restartRecommended": true },
+      "evidence": { "label": "derived", "claim": "Installed Settings reads this live, while Ironman's Bluetooth notification parser caches it at construction." }
+    },
+    {
+      "key": "cmu_ultra_chime_enabled",
+      "valueType": "boolean",
+      "cosmosServedDefault": { "kind": "static", "value": false },
+      "firmwareDefault": { "value": false, "evidence": "observed" },
+      "scope": "device",
+      "writable": true,
+      "application": {
+        "mode": "next_sync",
+        "restartRecommended": false,
+        "requires": [{ "kind": "flag", "key": "cmu_ultra_enabled", "predicate": "true" }]
+      },
+      "evidence": { "label": "derived", "claim": "Installed notification code reads this after categorization to gate eligible sound, LED, and haptic alerts." }
+    },
+    {
+      "key": "vision_actions_enabled",
+      "valueType": "boolean",
+      "cosmosServedDefault": { "kind": "static", "value": false },
+      "firmwareDefault": { "value": false, "evidence": "observed" },
+      "scope": "device",
+      "writable": true,
+      "application": {
+        "mode": "next_sync_restart",
+        "restartRecommended": true,
+        "requires": [{ "kind": "setting", "key": "llm.vision_consent_acknowledged", "predicate": "true" }]
+      },
+      "evidence": { "label": "implemented", "claim": "Cosmos and Pin contain the bounded visual-rule planner path, with an independent camera-to-cloud consent gate." }
+    },
+    {
+      "key": "fitness_tracker_enabled",
+      "valueType": "boolean",
+      "cosmosServedDefault": { "kind": "static", "value": false },
+      "firmwareDefault": { "value": false, "evidence": "observed" },
+      "scope": "device",
+      "writable": true,
+      "application": { "mode": "next_sync_restart", "restartRecommended": true },
+      "evidence": { "label": "implemented", "claim": "The installed hook gates new stock tracker starts and bounded local session history on this key." }
+    },
+    {
+      "key": "fitness_tracker_extra_data_enabled",
+      "valueType": "boolean",
+      "cosmosServedDefault": { "kind": "static", "value": false },
+      "firmwareDefault": { "value": false, "evidence": "observed" },
+      "scope": "device",
+      "writable": true,
+      "application": {
+        "mode": "next_sync",
+        "restartRecommended": false,
+        "requires": [{ "kind": "flag", "key": "fitness_tracker_enabled", "predicate": "true" }]
+      },
+      "evidence": { "label": "derived", "claim": "Installed hook code adds optional raw sensor and location rows for the next tracking session." }
+    },
+    {
+      "key": "esim_qr_scanner_enabled",
+      "valueType": "boolean",
+      "cosmosServedDefault": { "kind": "static", "value": false },
+      "firmwareDefault": { "value": true, "evidence": "observed" },
+      "scope": "device",
+      "writable": true,
+      "application": { "mode": "next_sync", "restartRecommended": false },
+      "evidence": { "label": "derived", "claim": "Installed cellular settings use this key to show the stock eSIM QR-scanner entry." }
+    },
+    {
+      "key": "network_reset_enabled",
+      "valueType": "boolean",
+      "cosmosServedDefault": { "kind": "static", "value": true },
+      "firmwareDefault": { "value": false, "evidence": "observed" },
+      "scope": "device",
+      "writable": true,
+      "application": { "mode": "next_sync", "restartRecommended": false },
+      "evidence": { "label": "derived", "claim": "Installed About settings read this key when opened to expose, but not execute, the confirmed network-reset flow." }
+    }
+  ],
+  "settingsGlobalGates": [
+    {
+      "key": "humane_photo_sharing_enabled",
+      "storagePlane": "settings_global",
+      "valueType": "boolean",
+      "default": false,
+      "writable": false,
+      "application": { "mode": "settings_global_live", "restartRecommended": false },
+      "evidence": { "label": "derived", "claim": "Stock Recents reconstructs its share/import menu on open, but the required remote backend is not restored." }
+    },
+    {
+      "key": "humane_photography_jpg_enabled",
+      "storagePlane": "settings_global",
+      "valueType": "boolean",
+      "default": true,
+      "writable": false,
+      "application": { "mode": "settings_global_live", "restartRecommended": false },
+      "evidence": { "label": "derived", "claim": "The restored upload contract currently depends on the stock JPG photography path, so the safe value remains true." }
+    },
+    {
+      "key": "humane_food_enabled",
+      "storagePlane": "settings_global",
+      "valueType": "boolean",
+      "default": false,
+      "writable": true,
+      "application": {
+        "mode": "settings_global_restart",
+        "restartRecommended": true,
+        "requires": [
+          { "kind": "provider", "key": "open_food_facts", "predicate": "enabled" },
+          { "kind": "consent", "key": "open_food_facts_attribution", "predicate": "acknowledged" }
+        ]
+      },
+      "evidence": { "label": "implemented", "claim": "The Pin runtime validates provider and attribution dependencies before enabling stock nutrition grammar." }
+    },
+    {
+      "key": "humane_clock_enabled",
+      "storagePlane": "settings_global",
+      "valueType": "boolean",
+      "default": false,
+      "writable": false,
+      "application": { "mode": "settings_global_inert", "restartRecommended": false },
+      "evidence": { "label": "unknown", "claim": "The key is declared, but no installed Clock or Ironman runtime consumer was found." }
+    },
+    {
+      "key": "humane_health_tracker_enabled",
+      "storagePlane": "settings_global",
+      "valueType": "boolean",
+      "default": false,
+      "writable": true,
+      "application": { "mode": "settings_global_restart", "restartRecommended": true },
+      "evidence": { "label": "derived", "claim": "The confirmed installed consumer is HomeWeather UV and ambient-light behavior, not fitness history." }
+    },
+    {
+      "key": "humane_cmu_ultra_enabled",
+      "storagePlane": "settings_global",
+      "valueType": "boolean",
+      "default": false,
+      "writable": false,
+      "application": { "mode": "settings_global_inert", "restartRecommended": false },
+      "evidence": { "label": "unknown", "claim": "No installed runtime consumer was found; the separate cloud CMU flag owns the stock Bluetooth parser." }
+    }
+  ],
+  "privateSettingsGlobal": [
+    {
+      "key": "penumbra_weather_celsius",
+      "storagePlane": "private_settings_global",
+      "valueType": "boolean",
+      "default": true,
+      "writable": true,
+      "application": { "mode": "settings_global_live", "restartRecommended": false },
+      "evidence": { "label": "implemented", "claim": "The Pin compatibility layer uses this private preference to select Celsius or Fahrenheit and invalidate cached weather conversion." }
+    }
+  ],
+  "excludedAssignments": [
+    {
+      "key": "web_wifinetworks_list",
+      "status": "withheld",
+      "valueType": "boolean",
+      "observedCarryValue": true,
+      "evidence": { "label": "observed", "claim": "Carry was captured assigning true; Revival withholds it because enabling saved-network collection requires an explicit privacy opt-in." }
+    },
+    {
+      "key": "sync_wifinetworks_enabled",
+      "status": "withheld",
+      "valueType": "boolean",
+      "observedCarryValue": true,
+      "evidence": { "label": "observed", "claim": "Carry was captured assigning true; Revival withholds it because enabling saved-network synchronization requires an explicit privacy opt-in." }
+    }
+  ]
+}

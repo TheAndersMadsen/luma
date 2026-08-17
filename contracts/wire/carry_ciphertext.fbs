@@ -1,0 +1,23 @@
+// Reconstructed wire schema for the krypto ciphertext envelope (KrCiphertextEnvelope).
+// Recovered from the decompiled client (humane/krypton/crypto/CiphertextEnvelope.java):
+//   - FlatBuffer file identifier "HMCT" (load-bearing; written at bytes [4..8)).
+//   - Field ORDER = vtable slot order (kid, algo, aad, iv, authTag, ciphertext).
+//   - `algo` is the envelope-specific subset {AES_GCM=0, RSA_OAEP=2} produced by
+//     FlatBufferCryptoUtils.convertCiphertextEnvelopeAlgorithm — NOT the general
+//     key ALGO enum. AES payloads are AES-128-GCM; the GCM tag is stored in
+//     `authTag` separately from `ciphertext` (never concatenated).
+namespace carry.krypton;
+
+enum KrAlgorithm : byte { AES_GCM = 0, RSA_OAEP = 2 }
+
+table CiphertextEnvelope {
+  kid:        [ubyte];     // slot 4  — key id (matches EncryptionInformation.kid)
+  algo:       KrAlgorithm; // slot 6
+  aad:        [ubyte];     // slot 8  — additional authenticated data (may be empty)
+  iv:         [ubyte];     // slot 10 — 12 bytes (96-bit GCM nonce)
+  authTag:    [ubyte];     // slot 12 — 16 bytes (128-bit GCM tag)
+  ciphertext: [ubyte];     // slot 14 — AES-128-GCM ciphertext
+}
+
+root_type CiphertextEnvelope;
+file_identifier "HMCT";

@@ -1,0 +1,271 @@
+// Reconstructed from decompiled protobuf-lite Java classes.
+// DeviceOnboardingDACService — provisioning/onboarding RPCs.
+//
+// This service runs on the ONBOARDING gateway (onboarding.prod.humane.cloud).
+// The device uses the DAC (Device Attestation Credential) for mTLS to this gateway.
+//
+// SECOND COPY. contracts/wire/humane/provisioning.proto declares the same
+// package and the same DeviceOnboardingDACService, and Cosmos compiles that one
+// (cosmos/crates/cosmos/src/lib.rs registers it). That copy is a strict superset
+// of this one on almost every message and enum. It used to be more than that -
+// the two copies also swapped VerifyHmcAssociationRequest's first two field
+// numbers, which is the last byte-changing divergence between the trees and was
+// settled against this copy on 2026-08-12 from the client's own class. Every
+// remaining difference here is absence: values and fields the other tree
+// declares and this runtime does not serve. See contracts/wire-divergence.json;
+// the notes below mark the specific points.
+
+syntax = "proto3";
+
+package humane.provisioning;
+
+option java_multiple_files = true;
+
+// ---- Enums ----
+
+// Value 3 was INACTIVE here and SUSPENDED in
+// contracts/wire/humane/provisioning.proto, and the number is all that travels,
+// so nothing could ever have noticed. The decompiled
+// `humane.provisioning.SubscriptionStatusCode` settles it: UNSPECIFIED 0,
+// ACTIVE 1, AVAILABLE 2, SUSPENDED 3, PAUSED 4, BLOCKED 5, DEACTIVATED 6.
+// Corrected to SUSPENDED 2026-08-12.
+//
+// Free to correct, by the rule in contracts/wire-divergence.json: an enum value
+// NAME is not on the wire, and pin/runtime/core/src/services/provisioning.rs
+// emits only SubscriptionStatusCode::Active (1), so no byte this runtime sends
+// changes. 4, 5 and 6 stay absent — this tree reconstructs what its runtime
+// serves, and it serves none of them.
+//
+// NOTE that humane.provisioning and humane.account each define a DISTINCT enum
+// of this name. The account one omits 6 (the device's forNumber(6) returns null
+// and it logs "Invalid subscription status update. Not updating.") and adds
+// NOT_CONFIGURED = 7 / INACTIVE = 8. Do not reconcile them.
+enum SubscriptionStatusCode {
+  SUBSCRIPTION_STATUS_CODE_UNSPECIFIED = 0;
+  SUBSCRIPTION_STATUS_CODE_ACTIVE = 1;
+  SUBSCRIPTION_STATUS_CODE_AVAILABLE = 2;
+  SUBSCRIPTION_STATUS_CODE_SUSPENDED = 3;
+}
+
+// Value 2 was MISSING_HMC here and SERVER_EXCEPTION in the other tree. The
+// decompiled `humane.provisioning.OpaqueLoginStatusCode` — the same class
+// cosmos/crates/cosmos/src/enrollment.rs already cited for RATE_LIMIT_HIT, and a
+// Java enum class hands over every constant at once — reads UNSPECIFIED 0,
+// SUCCESSFUL_REQUEST 1, SERVER_EXCEPTION 2, RATE_LIMIT_HIT 3,
+// MISSING_REGISTRATION 4. Corrected 2026-08-12, on the same free-correction
+// ground as SubscriptionStatusCode above: names are not on the wire and this
+// runtime emits only OpaqueLoginStatusCode::OpaqueLoginStatusSuccessfulRequest.
+enum OpaqueLoginStatusCode {
+  OPAQUE_LOGIN_STATUS_UNSPECIFIED = 0;
+  OPAQUE_LOGIN_STATUS_SUCCESSFUL_REQUEST = 1;
+  OPAQUE_LOGIN_STATUS_SERVER_EXCEPTION = 2;
+  OPAQUE_LOGIN_STATUS_RATE_LIMIT_HIT = 3;
+  OPAQUE_LOGIN_STATUS_MISSING_REGISTRATION = 4;
+}
+
+enum HmcAssociationResponseCode {
+  HMC_ASSOCIATION_RESPONSE_CODE_UNSPECIFIED = 0;
+  HMC_ASSOCIATION_RESPONSE_CODE_SUCCESS = 1;
+  HMC_ASSOCIATION_RESPONSE_CODE_FAILURE = 2;
+}
+
+enum VerifyHmcByPassResponseCode {
+  VERIFY_HMC_BY_PASS_RESPONSE_CODE_UNSPECIFIED = 0;
+  VERIFY_HMC_BY_PASS_RESPONSE_CODE_ALLOWED = 1;
+  VERIFY_HMC_BY_PASS_RESPONSE_CODE_NOT_ALLOWED = 2;
+}
+
+enum SignatureStandard {
+  UNSET_SIG_STANDARD = 0;
+  ECDSA_SHA256 = 1;
+}
+
+enum CertificateFormat {
+  UNSET_FORMAT = 0;
+  X509 = 1;
+  PKCS_7 = 2;
+  PKCS_10 = 3;
+}
+
+enum CertificateEncoding {
+  UNSET_ENCODING = 0;
+  DER = 1;
+  PEM = 2;
+}
+
+// ---- Sub-messages ----
+
+message SubscriptionStatus {
+  SubscriptionStatusCode status_code = 1;
+  string message = 2;
+}
+
+message OpaqueLoginStatus {
+  OpaqueLoginStatusCode status_code = 1;
+  string message = 2;
+}
+
+message VerificationSignature {
+  SignatureStandard signature_standard = 1;
+  bytes signature = 2;
+}
+
+message EncryptedPayload {
+  bytes payload = 1;
+  bytes iv = 2;
+}
+
+message CertificateSigningRequest {
+  CertificateFormat format = 1;
+  CertificateEncoding encoding = 2;
+  bytes csr = 3;
+}
+
+message Certificate {
+  CertificateFormat format = 1;
+  CertificateEncoding encoding = 2;
+  bytes certificate = 3;
+}
+
+message Chain {
+  repeated Certificate cert = 1;
+}
+
+// ---- RPC Request/Response Messages ----
+
+// GetSubscriptionStatus
+message GetSubscriptionStatusRequest {
+  // empty
+}
+
+message GetSubscriptionStatusResponse {
+  SubscriptionStatus status = 1;
+}
+
+// GetAssignedUserDAC
+message GetAssignedUserDACRequest {
+  // empty
+}
+
+message GetAssignedUserResponse {
+  string user_id = 1;
+  string display_name = 2;
+}
+
+// VerifyHmcAssociation
+//
+// SETTLED 2026-08-12 FROM THE CLIENT'S OWN CLASS, and this copy was the wrong
+// one. Until then this message declared the signature at 1 and hmc_id at 2 —
+// the two field numbers swapped against
+// contracts/wire/humane/provisioning.proto — on the strength of a house pattern
+// and nothing else. The decompiled `humane.provisioning.
+// VerifyHmcAssociationRequest` settles it outright: it declares
+// HMC_ID_FIELD_NUMBER = 1, DEVICE_ID_VERIFICATION_SIGNATURE_FIELD_NUMBER = 2 and
+// DEVICE_ID_FIELD_NUMBER = 3, and its `newMessageInfo` descriptor gives field 1
+// the char 0x0208 (FieldType.STRING with the utf8 check), field 2 the char 0x09
+// (FieldType.MESSAGE) and field 3 the char 0x0208 — read exactly the way
+// OrientationInfo and ImageMetadata were read for the capture verdicts. The
+// contracts layout is the stock layout.
+//
+// THIS EDIT CHANGES WHAT THE DEVICE DOES, so it is staged for a Pin release and
+// not in the running build: under the old declaration a real pairing call was
+// rejected in the decode (a string decoder rejects a serialized
+// VerificationSignature as non-UTF-8; a message decoder fails to parse an hmc_id
+// string as protobuf), and the wearer saw InvalidArgument blamed on the caller.
+// Under this one it parses. The handler in
+// pin/runtime/core/src/services/provisioning.rs ignores its request either way
+// and still answers SUCCESS unconditionally, so nothing downstream reads these
+// values — only whether the call is accepted changes. See
+// contracts/wire-divergence.json `stagedForRelease`.
+//
+// device_id (3) is deliberately still absent: this runtime serves only what it
+// reads, the field arrives as an unknown field and is dropped, and adding it
+// would change nothing on the wire.
+message VerifyHmcAssociationRequest {
+  string hmc_id = 1;
+  VerificationSignature device_id_verification_signature = 2;
+}
+
+// contracts/wire/humane/provisioning.proto also carries
+// `string name_to_display = 2` here; a stock client reading that field off this
+// server gets the empty string rather than an error.
+message VerifyHmcAssociationResponse {
+  HmcAssociationResponseCode status = 1;
+}
+
+// VerifyHmcByPass
+//
+// NOT EMPTY IN THE OTHER TREE: contracts/wire/humane/provisioning.proto declares
+// `VerificationSignature device_id_verification_signature = 1; string device_id = 2;`,
+// and the decompiled `humane.provisioning.VerifyHmcByPassRequest` confirms that
+// layout exactly — DEVICE_ID_VERIFICATION_SIGNATURE_FIELD_NUMBER = 1,
+// DEVICE_ID_FIELD_NUMBER = 2. So the contracts copy is the stock shape and this
+// one is a subset; whatever arrives in those fields is dropped here as unknown
+// fields, and the handler in pin/runtime/core/src/services/provisioning.rs
+// cannot inspect a signature it never parsed — it answers ALLOWED
+// unconditionally, with no log line and no status code marking the check as
+// skipped.
+//
+// Do not overstate that as a bypass of a check the client expects to happen:
+// cosmos/crates/cosmos/src/services/provisioning.rs reads the same decompile the
+// other way round and records that `checkHMCBypass` and `checkSubscription`
+// BUILD THEIR REQUESTS EMPTY, which is why Cosmos classes this RPC's signature
+// as Attestation::MaySkip rather than AlwaysSigned. The fields exist in the
+// stock message; on the shipped client path they normally arrive unset. Adding
+// them here would therefore change no byte and reject no call that is refused
+// today — it is a shape correction, not a security fix, and it is not staged.
+message VerifyHmcByPassRequest {
+  // empty
+}
+
+message VerifyHmcByPassResponse {
+  VerifyHmcByPassResponseCode status = 1;
+}
+
+// CreateLoginInit (OPAQUE KE1 -> KE2)
+message CreateLoginInitRequest {
+  bytes login_request = 1;
+  VerificationSignature device_id_verification_signature = 2;
+  string device_id = 3;
+}
+
+message CreateLoginInitResponse {
+  bytes login_response = 1;
+  OpaqueLoginStatus response_code = 2;
+}
+
+// CreateLoginFinish (OPAQUE KE3 -> userId + displayName)
+message CreateLoginFinishRequest {
+  bytes login_finish_request = 1;
+  VerificationSignature device_id_verification_signature = 2;
+  string device_id = 3;
+}
+
+message CreateLoginFinishResponse {
+  string user_id = 1;
+  OpaqueLoginStatus response_code = 2;
+  string display_name = 3;
+}
+
+// CreateDeviceUserBinding (CSR + encrypted DAC sig -> encrypted DUC cert)
+message EncryptedCreateDeviceUserBindingRequest {
+  CertificateSigningRequest device_user_credential_csr = 1;
+  EncryptedPayload device_attestation_credential_verification_signature = 2;
+}
+
+message EncryptedCreateDeviceUserBindingResponse {
+  EncryptedPayload device_user_certificate = 1;
+  Chain ca_chain = 2;
+}
+
+// ---- Service ----
+
+service DeviceOnboardingDACService {
+  rpc GetSubscriptionStatus (GetSubscriptionStatusRequest) returns (GetSubscriptionStatusResponse);
+  rpc GetAssignedUserDAC (GetAssignedUserDACRequest) returns (GetAssignedUserResponse);
+  rpc VerifyHmcAssociation (VerifyHmcAssociationRequest) returns (VerifyHmcAssociationResponse);
+  rpc VerifyHmcByPass (VerifyHmcByPassRequest) returns (VerifyHmcByPassResponse);
+  rpc CreateLoginInit (CreateLoginInitRequest) returns (CreateLoginInitResponse);
+  rpc CreateLoginFinish (CreateLoginFinishRequest) returns (CreateLoginFinishResponse);
+  rpc CreateDeviceUserBinding (EncryptedCreateDeviceUserBindingRequest) returns (EncryptedCreateDeviceUserBindingResponse);
+}

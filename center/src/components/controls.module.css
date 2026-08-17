@@ -1,0 +1,315 @@
+/*
+ * Shared controls — classes only, no component wrapper.
+ *
+ * OURS, NOT RECOVERED. The faithful surfaces (Memories, Captures, Notes, My
+ * Data, Settings) draw a panel with an inset `--outline-shadow` at radius 16
+ * and never used a literal border; every addition (/admin, /login, /talk, the
+ * floating mic, the notes search bar) drew its own 1px border at its own
+ * radius, its own hex and font-weight 600. That is the whole reason the
+ * additions read as a different product bolted onto this one.
+ *
+ * Page modules `composes:` from here rather than importing a component, so the
+ * recovered DOM shapes and their data-testids never move:
+ *
+ *   .myButton { composes: buttonPrimary from "../../components/controls.module.css"; }
+ *
+ * Focus: ONE treatment. The resting edge is `--outline-shadow`; a mouse focus
+ * brightens it to the (previously unused) `--focused-outline-shadow`; a
+ * keyboard focus falls through to the single global `:focus-visible` beam ring
+ * in globals.css. No second ring, and none of the three invented focus colours
+ * — rgba(0,255,224,0.4) / 0.45 / 0.35 — which said nothing the beam ring
+ * doesn't already say.
+ */
+
+/* ------------------------------------------------------------- buttons -- */
+
+/* The one primary. Beam, pill, 44px tall, weight 500 (never 600). */
+.buttonPrimary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 22px;
+  border: 0;
+  border-radius: 100px;
+  background: var(--hu-colors-beam-base);
+  color: var(--hu-colors-eclipse-base);
+  font-family: var(--hu-fonts-humane);
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 1;
+  text-align: center;
+  cursor: pointer;
+  transition: background-color var(--transition-duration) ease-out;
+}
+
+.buttonPrimary:hover:not(:disabled) {
+  background: var(--hu-colors-button-background-dark-primary-hover);
+}
+
+.buttonPrimary:active:not(:disabled) {
+  background: var(--hu-colors-button-background-dark-primary-active);
+}
+
+/* The disabled beam was defined in the recovered token set and never used. */
+.buttonPrimary:disabled {
+  background: var(--hu-colors-button-background-dark-primary-disabled);
+  cursor: not-allowed;
+}
+
+/* Documented exception: /wifi's light-theme call to action is 56px by design. */
+.buttonPrimaryLarge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 56px;
+  padding: 0 28px;
+  border: 0;
+  border-radius: 100px;
+  background: var(--hu-colors-beam-base);
+  color: var(--hu-colors-eclipse-base);
+  font-family: var(--hu-fonts-humane);
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  transition: background-color var(--transition-duration) ease-out;
+}
+
+.buttonPrimaryLarge:hover:not(:disabled) {
+  background: var(--hu-colors-button-background-dark-primary-hover);
+}
+
+/* Filled secondary — the default "another thing you can do here". */
+.buttonSecondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex: none;
+  min-height: 44px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 100px;
+  background: var(--hu-colors-button-background-dark-secondary-base);
+  color: var(--hu-colors-white);
+  font-family: var(--hu-fonts-humane);
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  transition: background-color var(--transition-duration) ease-out;
+}
+
+.buttonSecondary:hover:not(:disabled) {
+  background: var(--hu-colors-button-background-dark-secondary-hover);
+}
+
+.buttonSecondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Quiet — transparent with an iron hairline. The console's many small controls. */
+.buttonQuiet {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex: none;
+  min-height: 44px;
+  padding: 0 16px;
+  border: 1px solid var(--hu-colors-iron-base);
+  border-radius: 100px;
+  background: transparent;
+  color: var(--hu-colors-crater-base);
+  font-family: var(--hu-fonts-humane);
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  transition: color var(--transition-duration) ease-out,
+    border-color var(--transition-duration) ease-out;
+}
+
+.buttonQuiet:hover:not(:disabled) {
+  color: var(--hu-colors-white);
+  border-color: var(--hu-colors-crater-grey-base);
+}
+
+.buttonQuiet:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Same quiet control at the density an operator table needs. */
+.buttonQuietSmall {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex: none;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--hu-colors-iron-base);
+  border-radius: 100px;
+  background: transparent;
+  color: var(--hu-colors-crater-base);
+  font-family: var(--hu-fonts-humane);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  transition: color var(--transition-duration) ease-out,
+    border-color var(--transition-duration) ease-out;
+}
+
+.buttonQuietSmall:hover:not(:disabled) {
+  color: var(--hu-colors-white);
+  border-color: var(--hu-colors-crater-grey-base);
+}
+
+.buttonQuietSmall:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Destructive — for a control that removes something. Red is Humane's own. */
+.buttonDanger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex: none;
+  min-height: 44px;
+  padding: 0 18px;
+  border: 1px solid var(--hu-status-danger);
+  border-radius: 100px;
+  background: transparent;
+  color: var(--hu-colors-red-50);
+  font-family: var(--hu-fonts-humane);
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  transition: background-color var(--transition-duration) ease-out,
+    color var(--transition-duration) ease-out;
+}
+
+.buttonDanger:hover:not(:disabled) {
+  color: var(--hu-colors-white);
+  background: rgba(255, 72, 52, 0.16);
+}
+
+.buttonDanger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* -------------------------------------------------------------- fields -- */
+
+/* The one text input. Radius 12, no literal border — an inset hairline. */
+.field {
+  width: 100%;
+  min-height: 44px;
+  padding: 11px 14px;
+  border: 0;
+  border-radius: var(--hu-radius-control);
+  background: var(--hu-colors-penumbra-200);
+  box-shadow: var(--outline-shadow);
+  color: var(--hu-colors-white);
+  font-family: var(--hu-fonts-humane);
+  font-size: 15px;
+  font-weight: 500;
+  outline: none;
+  transition: box-shadow var(--transition-duration) ease-out;
+}
+
+.field::placeholder {
+  color: var(--hu-text-muted);
+}
+
+/* Mouse focus brightens the resting hairline; keyboard focus gets the global ring. */
+.field:focus:not(:focus-visible) {
+  box-shadow: var(--focused-outline-shadow);
+}
+
+.field:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/*
+ * The recovered VoyagerField pill — the search metrics from views.module.css
+ * :325-359, now in one place. Works applied straight to an <input> (Settings →
+ * Contacts) or to a wrapper holding an icon plus `.fieldSearchInput` (Captures,
+ * Notes search).
+ */
+.fieldSearch {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 14px 20px;
+  border: 0;
+  border-radius: 100px;
+  background: var(--hu-colors-penumbra-base);
+  box-shadow: var(--outline-shadow);
+  color: var(--hu-colors-white);
+  font-family: var(--hu-fonts-humane);
+  font-size: 16px;
+  font-weight: 500;
+  outline: none;
+  transition: box-shadow var(--transition-duration) ease-out;
+}
+
+.fieldSearch::placeholder {
+  color: var(--hu-colors-crater-base);
+}
+
+.fieldSearch:focus:not(:focus-visible) {
+  box-shadow: var(--focused-outline-shadow);
+}
+
+/* The same pill floating over the content, as Captures and Notes search do. */
+.fieldSearchFloating {
+  composes: fieldSearch;
+  box-shadow: var(--outline-shadow), var(--menu-drop-shadow);
+}
+
+/* The bare input inside a `.fieldSearch` wrapper — the pill draws the surface. */
+.fieldSearchInput {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--hu-colors-white);
+  font-family: var(--hu-fonts-humane);
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.fieldSearchInput::placeholder {
+  color: var(--hu-colors-crater-base);
+}
+
+/* ------------------------------------------------------------ surfaces -- */
+
+/* The one panel edge: inset hairline at radius 16. No literal border anywhere. */
+.surface {
+  border: 0;
+  border-radius: var(--hu-radius-surface);
+  background: var(--hu-colors-penumbra-base);
+  box-shadow: var(--outline-shadow);
+}
+
+/* A panel that floats above the page — the login card, the mic panel, a menu. */
+.surfaceRaised {
+  border: 0;
+  border-radius: var(--hu-radius-raised);
+  background: var(--hu-colors-penumbra-base);
+  box-shadow: var(--outline-shadow), var(--menu-drop-shadow);
+}

@@ -1,0 +1,57 @@
+# Non-secret SearXNG policy for Cosmos's private web-search backend.
+# The required SEARXNG_SECRET environment variable overrides this placeholder
+# in memory; never replace it here with operator credentials.
+use_default_settings:
+  # Load only the engines this private deployment actually exercises. Merely
+  # setting an engine `disabled` still imports and initializes it; the old
+  # configuration therefore logged failures for engines no request could use.
+  engines:
+    keep_only:
+      - bing
+      - github
+      - resulthunter
+      - searchch
+      - yandex
+
+server:
+  secret_key: ultrasecretkey
+  limiter: false
+  image_proxy: false
+
+search:
+  formats:
+    - html
+    - json
+  # `all` is not neutral for every upstream. Bing maps it to an arbitrary
+  # market and returned unrelated Polish/Italian pages for English and Danish
+  # queries from the production VPS. English still returns Danish pages for a
+  # Danish query, while keeping product names and current-events searches
+  # relevant.
+  default_lang: en
+  safe_search: 1
+
+# The upstream defaults are unsuitable for this datacenter address: Brave and
+# Google CSE return 429s, DuckDuckGo and Startpage return CAPTCHAs, and Wikidata
+# fails initialization. `keep_only` above prevents an image update from quietly
+# re-enabling them. Bing is the high-quality primary. ResultHunter
+# (Brave-backed) and Yandex are measured broad-web fallbacks, and Search.ch is
+# a low-weight independent last resort. Wiby was removed after it repeatedly
+# promoted unrelated and stale pages into the first four results Cosmos gives
+# the assistant. Seznam was removed after its parser threw on ordinary result
+# pages. GitHub is loaded but remains disabled by default for the deterministic
+# deployment probe.
+engines:
+  - name: bing
+    disabled: false
+    weight: 5
+  - name: github
+    disabled: true
+  - name: resulthunter
+    disabled: false
+    weight: 2
+  - name: searchch
+    disabled: false
+    weight: 0.4
+  - name: yandex
+    disabled: false
+    weight: 1

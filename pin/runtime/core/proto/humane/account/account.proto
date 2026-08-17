@@ -1,0 +1,75 @@
+// Reconstructed from decompiled protobuf-lite Java classes.
+// WifiConfigService + UserInformationService — both in humane.account package.
+//
+// SECOND COPY. contracts/wire/humane/account.proto declares the same package
+// and the same two services, and Cosmos compiles that one; this tree is the
+// device-loopback server for the same RPC paths. This file used to be where the
+// two diverged hardest; the Wi-Fi half of that divergence is resolved — see
+// contracts/wire-divergence.json and the note below.
+
+syntax = "proto3";
+
+package humane.account;
+
+import "google/protobuf/empty.proto";
+import "humane/common/encryption.proto";
+
+option java_multiple_files = true;
+
+// ---- WifiConfig ----
+
+message ListSecureWifiConfigsRequest {
+  // empty
+}
+
+// Field 1 is the stock shape again: sealed envelopes, matching
+// `humane.account.ListSecureWifiConfigsResponse.secure_wifi_configs (1)` in
+// contracts/wire/humane/account.proto. Cross-tree citations here name the
+// symbol and field number, never a line: the two files are edited
+// independently, and a stale line number lands on some other valid field and
+// reads as evidence against the note.
+//
+// What used to be here: `repeated WifiConfig configs = 1`, where WifiConfig was
+// {ssid, psk, security_type, hidden, priority, eap_method, phase2_method,
+// ca_certificate, identity, anonymous_identity, password, domain} — the field
+// set of an Android WifiConfiguration / wpa_supplicant entry, not of a stock
+// Humane message. That is the argument that decided it, and it is a field-set
+// argument, not a backend-behaviour one: Cosmos returning EncryptedData proves
+// only which proto Cosmos was built with, since Cosmos compiles the contracts
+// tree. The invented message and the dead `AuthorizationType` that squatted the
+// stock enum name alongside it were deleted with it; both had zero field
+// references in this tree and zero references in pin/runtime/core/src.
+//
+// Nothing on the wire changed when this was corrected:
+// pin/runtime/core/src/services/wifi_config.rs returns an empty list, and an
+// empty repeated field encodes to no bytes under either declaration. That is
+// exactly why the correction could be made here rather than being deferred to a
+// device release — it cannot alter a byte this runtime emits. Had the handler
+// ever returned a row, a stock client would have parsed `string ssid` as an
+// EncryptionInformation submessage and hit a varint where it expected a
+// length-delimited field. See contracts/wire-divergence.json.
+message ListSecureWifiConfigsResponse {
+  repeated humane.common.encryption.EncryptedData secure_wifi_configs = 1;
+}
+
+// ---- UserInformation ----
+
+message AccountInfo {
+  string preferred_name = 1;
+  string pronunciation = 2;
+}
+
+message PersonalDetailsResponse {
+  AccountInfo account_info = 1;
+  humane.common.encryption.EncryptedData secure_bio_data = 2;
+}
+
+// ---- Services ----
+
+service WifiConfigService {
+  rpc ListSecureWifiConfigs (ListSecureWifiConfigsRequest) returns (ListSecureWifiConfigsResponse);
+}
+
+service UserInformationService {
+  rpc GetUserPersonalDetails (google.protobuf.Empty) returns (PersonalDetailsResponse);
+}

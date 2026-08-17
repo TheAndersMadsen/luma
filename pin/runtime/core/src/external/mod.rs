@@ -1,0 +1,10 @@
+pub mod azure_speech;
+pub mod brave_search;
+pub mod google_maps;
+pub mod open_food_facts;
+pub mod osm;
+pub mod searxng;
+pub mod serpapi;
+pub mod weather;
+pub mod web_search;
+pub mod wikipedia;

@@ -1,0 +1,200 @@
+# Source-owned public Center edge. The deployment transaction must replace the
+# five @@...@@ tokens with absolute TLS paths and decimal loopback ports, write
+# the rendered file atomically, run `nginx -t`, and retain the prior vhost for
+# rollback. No token is an Nginx runtime variable.
+#
+# THIS FILE NO LONGER BINDS THE PUBLIC :443. The Pin dials every clone gateway on
+# port 443 and authenticates to Envoy with a client certificate, so the public
+# :443 must be an SNI-routed raw passthrough — see the sibling template
+# ai-pin-revival-device-edge.stream.conf.template, which owns that port and names
+# the gateways — rather than a vhost that terminates TLS. A port can have exactly
+# one owner per address in one Nginx, so Center's TLS listener moved to the
+# loopback port bound below and the stream forwards every non-gateway SNI to it.
+# Cleartext :80 is unchanged: that is the port the Cloudflare connector delivers
+# to, and it remains the wearer's path. This vhost stays a dashboard vhost; no
+# device-facing authority is served here.
+#
+# Consequence to know before reading an access log: requests that arrive through
+# the stream are accepted from the loopback, so $remote_addr on this listener is
+# 127.0.0.1. PROXY protocol is deliberately not used, because a stream server has
+# one proxy_protocol setting for all of its branches and turning it on would also
+# prepend the header to the Envoy branch, breaking the device TLS handshake.
+
+upstream ai_pin_revival_center {
+    server 127.0.0.1:@@REVIVAL_CENTER_PORT@@;
+    keepalive 32;
+}
+
+upstream ai_pin_revival_keycloak {
+    server 127.0.0.1:@@REVIVAL_KEYCLOAK_PORT@@;
+    keepalive 16;
+}
+
+# The former dashboard hostname remains a reversible, temporary compatibility
+# entrypoint. 307 deliberately preserves method, body, path, and query string.
+server {
+    listen 80;
+    listen [::]:80;
+    server_name carry.andersmadsen.dk;
+
+    return 307 https://center.andersmadsen.dk$request_uri;
+}
+
+# `default_server` is explicit because this listener is now fed by the :443 stream,
+# which hands it every SNI that is not a clone gateway — including an absent or
+# unknown one. That used to be implicit (this was the first block to bind :443, so
+# it was the port's default); naming it keeps the same answer, a 307 to Center,
+# rather than making it depend on block order on a port shared with Center's own.
+server {
+    listen 127.0.0.1:@@REVIVAL_LOCAL_TLS_PORT@@ ssl http2 default_server;
+    server_name carry.andersmadsen.dk;
+
+    ssl_certificate @@REVIVAL_PUBLIC_TLS_CERTIFICATE@@;
+    ssl_certificate_key @@REVIVAL_PUBLIC_TLS_PRIVATE_KEY@@;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_session_tickets off;
+
+    return 307 https://center.andersmadsen.dk$request_uri;
+}
+
+server {
+    # The Cloudflare connector terminates TLS and forwards cleartext to port 80,
+    # so the canonical host is served on both the cleartext and the TLS listener
+    # from one definition. A request that did not already arrive over HTTPS is
+    # upgraded; one that did is served, because redirecting it would bounce the
+    # connector back through the tunnel forever. The TLS listener is the direct
+    # path (a client that resolves this host to the VPS rather than to Cloudflare)
+    # and reaches here through the :443 stream.
+    listen 80;
+    listen [::]:80;
+    listen 127.0.0.1:@@REVIVAL_LOCAL_TLS_PORT@@ ssl http2;
+    server_name center.andersmadsen.dk;
+
+    if ($http_x_forwarded_proto = "") {
+        set $ai_pin_revival_upgrade $scheme;
+    }
+    if ($ai_pin_revival_upgrade = http) {
+        return 308 https://center.andersmadsen.dk$request_uri;
+    }
+
+    ssl_certificate @@REVIVAL_PUBLIC_TLS_CERTIFICATE@@;
+    ssl_certificate_key @@REVIVAL_PUBLIC_TLS_PRIVATE_KEY@@;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_session_cache shared:AI_PIN_REVIVAL_CENTER_TLS:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+
+    server_tokens off;
+    client_max_body_size 40m;
+
+    # A successful sign-in is the largest header exchange this origin performs.
+    # `setTokenCookies` seals the Keycloak access, refresh, and id tokens into one
+    # JWE and splits it across `carry_tokens.0..3` (3000 bytes each, so the
+    # browser's 4096-byte per-cookie ceiling is never reached), then writes the
+    # manifest, the cleared unused slots, and `carry_session` besides. The reply
+    # therefore carries six Set-Cookie lines — ten on the OIDC callback, which
+    # also clears the four ceremony cookies — up to roughly 14 KB in total.
+    # Nginx must hold an entire upstream header block in ONE proxy buffer, and
+    # the 4k default silently turned every successful login into a 502 while
+    # rejected credentials, which set no cookies, appeared to work.
+    proxy_buffer_size 32k;
+    proxy_buffers 8 32k;
+    proxy_busy_buffers_size 64k;
+
+    # The mirror of the above: once those cookies exist the browser echoes them
+    # on every later request as a single Cookie line of up to ~12.5 KB. Widening
+    # only the response side converts the 502 into a 400, so both directions have
+    # to be raised together.
+    large_client_header_buffers 8 32k;
+
+    add_header Strict-Transport-Security "max-age=31536000" always;
+    # Center already emits X-Content-Type-Options on every response, and the
+    # device-facing Pin release contract is byte-exact about its headers, so
+    # adding a second copy here would make that header appear twice.
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header Referrer-Policy "same-origin" always;
+
+    # Keycloak's administration surface is intentionally not exposed here: only
+    # /realms/humane and /resources/ are proxied to it, so no /admin path can
+    # reach Keycloak at all. Center's OWN operator console lives at /admin and
+    # is gated by an operator session in the BFF, so it must not be blocked
+    # here — returning 404 made the console unreachable while its API stayed up.
+
+    # Only the Humane wearer realm and its public theme assets share Center's
+    # browser origin. Other realms are not routed to the identity service.
+    location = /realms/humane {
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host center.andersmadsen.dk;
+        proxy_set_header X-Forwarded-Host center.andersmadsen.dk;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Port 443;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_pass http://ai_pin_revival_keycloak;
+    }
+
+    location ^~ /realms/humane/ {
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host center.andersmadsen.dk;
+        proxy_set_header X-Forwarded-Host center.andersmadsen.dk;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Port 443;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_pass http://ai_pin_revival_keycloak;
+    }
+
+    location ^~ /realms/ { return 404; }
+
+    location ^~ /resources/ {
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host center.andersmadsen.dk;
+        proxy_set_header X-Forwarded-Host center.andersmadsen.dk;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Port 443;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_pass http://ai_pin_revival_keycloak;
+    }
+
+    # The assistant answers as a stream: each cue, tool call, and token is only
+    # useful if it reaches the browser as it is produced. Buffering here holds
+    # the whole turn back until it completes, and a 65s read timeout truncates a
+    # long one, so this route streams unbuffered with a generous read window.
+    location = /api/assistant/stream {
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host center.andersmadsen.dk;
+        proxy_set_header X-Forwarded-Host center.andersmadsen.dk;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Port 443;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_hide_header X-Powered-By;
+        proxy_buffering off;
+        proxy_cache off;
+        gzip off;
+        chunked_transfer_encoding on;
+        proxy_read_timeout 600s;
+        proxy_send_timeout 600s;
+        proxy_pass http://ai_pin_revival_center;
+    }
+
+    location / {
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host center.andersmadsen.dk;
+        proxy_set_header X-Forwarded-Host center.andersmadsen.dk;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Port 443;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_hide_header X-Powered-By;
+        proxy_read_timeout 65s;
+        proxy_send_timeout 65s;
+        proxy_pass http://ai_pin_revival_center;
+    }
+}

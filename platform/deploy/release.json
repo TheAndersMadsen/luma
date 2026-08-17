@@ -1,0 +1,114 @@
+{
+  "schemaVersion": 1,
+  "profiles": {
+    "vps": {
+      "description": "Deployable Center and Cosmos source. The browser-only Pin console is part of Center now, so no pin/ source is included at all; privileged device source never was.",
+      "include": [
+        ".dockerignore",
+        ".editorconfig",
+        ".env.example",
+        ".gitignore",
+        "README.md",
+        "compose.yaml",
+        "revival",
+        "center",
+        "contracts",
+        "cosmos",
+        "platform"
+      ],
+      "exclude": [
+        "platform/containers/pin-builder",
+        "platform/deploy/acceptance/pin"
+      ]
+    },
+    "source": {
+      "description": "Clean implementation source for Center, Cosmos, and the Pin compatibility layer. Operator research and device-derived evidence remain outside the release.",
+      "include": [
+        ".dockerignore",
+        ".editorconfig",
+        ".env.example",
+        ".gitignore",
+        "README.md",
+        "compose.yaml",
+        "revival",
+        "docs",
+        "center",
+        "contracts",
+        "cosmos",
+        "pin",
+        "platform"
+      ],
+      "exclude": [
+        "pin/contracts/tier-a/external-operational-marker-evidence.tsv"
+      ]
+    }
+  },
+  "ignoredDirectoryNames": [
+    ".git",
+    ".gradle",
+    ".next",
+    ".turbo",
+    "__pycache__",
+    "build",
+    "coverage",
+    "dist",
+    "dist-center",
+    "node_modules",
+    "target"
+  ],
+  "ignoredFileNames": [
+    ".DS_Store"
+  ],
+  "ignoredExtensions": [
+    ".pyc",
+    ".tsbuildinfo"
+  ],
+  "forbiddenRootDirectories": [
+    "artifacts",
+    "backups",
+    "private",
+    "releases",
+    "state"
+  ],
+  "forbiddenDirectoryNames": [
+    "artifacts",
+    "backups",
+    "decompile-workspace",
+    "deployments",
+    "device-identity",
+    "firmware",
+    "packet-captures",
+    "private",
+    "private-keys",
+    "production-state",
+    "raw-captures",
+    "release-assets",
+    "secrets",
+    "state",
+    "wearer-data"
+  ],
+  "forbiddenExtensions": [
+    ".aab",
+    ".apk",
+    ".apks",
+    ".bin",
+    ".dll",
+    ".dylib",
+    ".elf",
+    ".har",
+    ".img",
+    ".jks",
+    ".key",
+    ".keystore",
+    ".mbn",
+    ".onnx",
+    ".p12",
+    ".pcap",
+    ".pcapng",
+    ".pem",
+    ".pfx",
+    ".so",
+    ".tflite",
+    ".xapk"
+  ]
+}

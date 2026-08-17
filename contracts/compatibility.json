@@ -1,0 +1,158 @@
+{
+  "schemaVersion": 1,
+  "product": {
+    "name": "Ai Pin Revival",
+    "stockProductId": "00000001",
+    "contractVersion": "1.0.0",
+    "owner": "platform",
+    "evidence": {
+      "label": "observed",
+      "claim": "The stock product identifier used by the recovered client contract is 00000001."
+    }
+  },
+  "sharedBoundary": {
+    "path": "contracts",
+    "wire": "contracts/wire",
+    "features": "contracts/features.json",
+    "divergence": "contracts/wire-divergence.json",
+    "divergenceGate": "platform/deploy/acceptance/wire-equivalence.test.mjs",
+    "evidence": {
+      "label": "derived",
+      "claim": "Cosmos and Center share the contracts/wire boundary. The Pin runtime does not: pin/runtime/core/build.rs compiles a second, independently authored copy of the same stock packages, so the workspace holds two wire trees that answer the same RPC paths. contracts/wire-divergence.json is the inventory of where they disagree, and the divergenceGate above is what now holds both trees to it: it parses each one and fails when they encode a shared field number differently anywhere the inventory does not already record."
+    }
+  },
+  "components": {
+    "center": {
+      "path": "center",
+      "owner": "center",
+      "publicSurface": "wearer web application and server-side web adapter"
+    },
+    "cosmos": {
+      "path": "cosmos",
+      "owner": "cosmos",
+      "publicSurface": "stock-compatible Ai Pin APIs and persistence"
+    },
+    "pin": {
+      "path": "pin",
+      "owner": "pin",
+      "publicSurface": "Ai Pin compatibility, build, install, and provisioning tools"
+    },
+    "platform": {
+      "path": "platform",
+      "owner": "platform",
+      "publicSurface": "composition, configuration, and acceptance fixtures"
+    }
+  },
+  "contracts": [
+    {
+      "id": "stock-product-identity",
+      "version": "1.0.0",
+      "owner": "platform",
+      "producer": "platform",
+      "consumers": ["center", "cosmos", "pin"],
+      "evidence": {
+        "label": "observed",
+        "claim": "The shared stock product identity at the Center, cloud, and device boundary is 00000001."
+      }
+    },
+    {
+      "id": "device-cloud-wire",
+      "version": "1.0.0",
+      "owner": "cosmos",
+      "producer": "cosmos",
+      "consumers": ["center"],
+      "artifact": "contracts/wire",
+      "evidence": {
+        "label": "implemented",
+        "claim": "Cosmos serves, and Center's server-side adapter loads, the independently authored schemas in contracts/wire. Pin is deliberately not listed: no code under pin/ compiles this artifact."
+      }
+    },
+    {
+      "id": "device-local-wire",
+      "version": "1.0.0",
+      "owner": "pin",
+      "producer": "pin",
+      "consumers": ["pin"],
+      "artifact": "pin/runtime/core/proto",
+      "evidence": {
+        "label": "derived",
+        "claim": "The device runtime compiles its own copy of the stock packages and serves the same RPC paths over loopback. It disagrees with contracts/wire on 95 inventoried points, NONE of which change the bytes: the last two - humane.provisioning.VerifyHmcAssociationRequest fields 1 and 2 - were settled on 2026-08-12 from the stock client's own decompiled class, which declares hmc_id at 1 and the verification signature at 2, and the pin tree was corrected onto that layout. The two trees are compared by the build: platform/deploy/acceptance/wire-equivalence.test.mjs parses both, fails when the set of field numbers they encode differently is anything other than the inventoried list (today, empty), and since 2026-08-12 also fails when any inventory entry stops describing what the trees actually declare. See contracts/wire-divergence.json.",
+        "labelRationale": "Stays `derived` on 2026-08-12 after the last two byte-changing divergences were settled. `observed` would be the upgrade the settlement does NOT buy: the evidence is the client's generated class read off an artifact, not a stock client watched exercising these paths on loopback, and two of the corrections are not yet on the device at all. `implemented` would still be a DOWNGRADE in information - it would assert the runtime serves the tree, which was never in doubt, while saying nothing about the fidelity that was. `derived` is what this file uses for a typed, source-grounded statement carrying its explicit unknowns without asserting physical-device acceptance, and that is exactly what the inventory plus the equivalence gate are.",
+        "residualRisk": "Not a divergence between the trees any more - that inventory is byte-clean - but a gap between the tree and the DEVICE. Two corrections change what the Pin puts on the wire and are staged rather than installed: humane.capture.DeleteMemoryStatus, where the store-error arm of Capture.DeleteMemory moves from 3 to 4 (until then a stock client is told a failed delete was refused for authorization, while Cosmos answers 4 for the same outcome), and humane.provisioning.VerifyHmcAssociationRequest, where a stock pairing call currently fails to decode. Both are recorded under `stagedForRelease` in contracts/wire-divergence.json with what changes and what to check on install, held there by the equivalence gate, and written up in docs/operations.md. They clear when a Pin release carrying them is installed and the checks are run."
+      }
+    },
+    {
+      "id": "center-cloud-http",
+      "version": "1.0.0",
+      "owner": "center",
+      "producer": "cosmos",
+      "consumers": ["center"],
+      "evidence": {
+        "label": "implemented",
+        "claim": "Center has a server-side adapter for the cloud HTTP and gRPC surfaces used by wearer views."
+      }
+    },
+    {
+      "id": "wearer-projection",
+      "version": "1.0.0",
+      "owner": "platform",
+      "producer": "cosmos",
+      "consumers": ["center"],
+      "evidence": {
+        "label": "implemented",
+        "claim": "Purpose-scoped memory, note, and capture projection paths are present in the combined source tree."
+      }
+    },
+    {
+      "id": "feature-flag-sync",
+      "version": "1.0.0",
+      "owner": "cosmos",
+      "producer": "cosmos",
+      "consumers": ["pin", "center"],
+      "artifact": "contracts/features.json",
+      "evidence": {
+        "label": "derived",
+        "claim": "The typed shared feature manifest records the implemented Cosmos assignment surface, Pin application semantics, and explicit unknowns without asserting physical-device acceptance."
+      }
+    },
+    {
+      "id": "center-contact-management",
+      "version": "1.0.0",
+      "owner": "center",
+      "producer": "cosmos",
+      "consumers": ["center", "pin"],
+      "evidence": {
+        "label": "observed",
+        "claim": "Center create, read, update, trusted filtering, and delete completed against the deployed Contacts service; the disposable contact was removed after the canary."
+      }
+    },
+    {
+      "id": "device-provisioning",
+      "version": "1.0.0",
+      "owner": "pin",
+      "producer": "cosmos",
+      "consumers": ["pin", "platform"],
+      "evidence": {
+        "label": "unknown",
+        "claim": "Physical stock-unit provisioning is not compatible until a rollback-backed exact-target run passes."
+      }
+    },
+    {
+      "id": "speech-synthesis",
+      "version": "1.0.0",
+      "owner": "cosmos",
+      "producer": "cosmos",
+      "consumers": ["pin", "center"],
+      "evidence": {
+        "label": "unknown",
+        "claim": "Physical Pin Azure speech request, stream handling, and playback require target-specific acceptance evidence."
+      }
+    }
+  ],
+  "allowedEvidenceLabels": [
+    "observed",
+    "derived",
+    "implemented",
+    "unknown"
+  ]
+}

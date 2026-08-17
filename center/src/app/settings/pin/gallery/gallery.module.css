@@ -1,0 +1,232 @@
+/*
+ * The device gallery and one memory's detail.
+ *
+ * Deliberately NOT the /captures grid. That one is a mixed-footprint editorial
+ * feed over cloud media served by next/image; this is a fixed square grid over
+ * blobs pulled through an ADB socket one at a time. Same tokens, different
+ * shape, and the difference is the point — a wearer should be able to tell at a
+ * glance which store they are looking at without reading the header.
+ *
+ * Everything else — the section, the card, the buttons, the meta line — comes
+ * from ../_lib/panes.module.css, so this file only carries what a grid of
+ * device frames needs and nothing that already exists.
+ */
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+  gap: 12px;
+  padding: 0 24px 18px;
+}
+
+.tile {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* The whole tile is one target; the delete control is deliberately elsewhere. */
+.tileLink {
+  display: block;
+  border-radius: var(--hu-radius-control);
+  color: inherit;
+  text-decoration: none;
+}
+
+.tileLink:focus-visible {
+  outline: 2px solid var(--hu-colors-beam-base);
+  outline-offset: 2px;
+}
+
+/*
+ * A square that reserves its own space before the bytes arrive, so a gallery
+ * loading twenty frames four at a time does not reflow nineteen times.
+ */
+.frame {
+  position: relative;
+  aspect-ratio: 1 / 1;
+  overflow: hidden;
+  border-radius: var(--hu-radius-control);
+  background: var(--hu-colors-penumbra-200);
+  box-shadow: var(--outline-shadow);
+}
+
+.frameImage {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* Waiting, empty and failed are three different squares, never one grey box. */
+.frameNotice {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px;
+  text-align: center;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--hu-text-muted);
+}
+
+.frameNoticeFailed {
+  color: var(--hu-status-warning);
+}
+
+.framePulse {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    100deg,
+    var(--hu-colors-penumbra-200) 30%,
+    var(--hu-colors-lunar-grey-dark-200) 50%,
+    var(--hu-colors-penumbra-200) 70%
+  );
+  background-size: 300% 100%;
+  animation: galleryShimmer 1400ms linear infinite;
+}
+
+@keyframes galleryShimmer {
+  to {
+    background-position: -150% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .framePulse {
+    animation: none;
+  }
+}
+
+/* A short marker in the corner of a frame: VIDEO, SYNC FAILED. */
+.frameBadge {
+  position: absolute;
+  left: 8px;
+  top: 8px;
+  padding: 2px 7px;
+  border-radius: 100px;
+  background: rgba(0, 0, 0, 0.62);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.3px;
+  line-height: 1.5;
+  text-transform: uppercase;
+  color: var(--hu-colors-apollo-base);
+}
+
+.frameBadgeWarning {
+  color: var(--hu-status-warning);
+}
+
+.tileCaption {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.tileKind {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--hu-colors-apollo-base);
+}
+
+.tileTime {
+  font-size: 12px;
+  color: var(--hu-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------------------- detail -- */
+
+/*
+ * Full-size media sits on its own dark stage, capped so a 4:3 capture cannot
+ * push the facts and the delete control below the fold on a laptop.
+ */
+.stage {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 24px 18px;
+  padding: 12px;
+  border-radius: var(--hu-radius-control);
+  background: var(--hu-colors-eclipse-base);
+  box-shadow: var(--outline-shadow);
+  min-height: 220px;
+}
+
+.stageMedia {
+  max-width: 100%;
+  max-height: min(60vh, 520px);
+  border-radius: 6px;
+  display: block;
+}
+
+.stageNotice {
+  padding: 24px 12px;
+  text-align: center;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--hu-colors-crater-base);
+  max-width: 460px;
+}
+
+/* One stored file: its name, what it is, and what can be done with it. */
+.fileRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--hu-divider);
+}
+
+.fileRow:last-child {
+  border-bottom: none;
+}
+
+.fileName {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  color: var(--hu-colors-crater-base);
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+/* The band under a list: "Showing 40 of 312", plus the control that extends it. */
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 16px 24px;
+  border-top: 1px solid var(--hu-divider);
+}
+
+.pagerCount {
+  font-size: 13px;
+  color: var(--hu-text-muted);
+}
+
+@media (max-width: 700px) {
+  .grid {
+    grid-template-columns: repeat(auto-fill, minmax(128px, 1fr));
+    padding: 0 16px 16px;
+  }
+
+  .stage {
+    margin: 0 16px 16px;
+  }
+
+  .pager {
+    padding: 16px;
+  }
+}

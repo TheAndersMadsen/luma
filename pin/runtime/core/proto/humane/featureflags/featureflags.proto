@@ -1,0 +1,33 @@
+// Reconstructed from decompiled protobuf-lite Java classes.
+// FeatureFlagsService — unary GetFlags.
+
+syntax = "proto3";
+
+package humane.featureflags;
+
+option java_multiple_files = true;
+
+message DeviceFeatureFlagRequest {
+  // empty
+}
+
+message DeviceFeatureFlagResponse {
+  repeated FeatureFlagAssignment assignment = 1;
+}
+
+message FeatureFlagAssignment {
+  string flag_id = 1;
+  oneof val {
+    string val_str = 2;
+    float val_float = 3;
+    int64 val_int = 4;
+    bool val_bool = 5;
+  }
+  string flag_name = 6;
+}
+
+// ---- Service ----
+
+service FeatureFlagsService {
+  rpc GetFlags (DeviceFeatureFlagRequest) returns (DeviceFeatureFlagResponse);
+}

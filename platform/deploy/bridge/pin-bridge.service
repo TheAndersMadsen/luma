@@ -1,0 +1,50 @@
+[Unit]
+Description=Ai Pin Setup remote bridge (iroh P2P -> loopback HTTP)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=anders
+Group=anders
+
+# The Pin's EndpointTicket (PIN_TICKET) plus port/generation live here. Until
+# the Pin runs a `--features iroh` build and PIN_TICKET is filled in, do not
+# enable this unit — it would crash-loop on an empty ticket. See the runbook.
+EnvironmentFile=/etc/penumbra/center-bridge.env
+Environment=RUST_LOG=info
+
+# ${PIN_TICKET} is substituted by systemd as a single argument. The binary
+# binds 127.0.0.1 only (loopback), so nothing is exposed on the network; the
+# Mac reaches it exclusively through an `ssh -L` tunnel.
+ExecStart=/opt/penumbra-center/bin/center-iroh-bridge \
+    --ticket ${PIN_TICKET} \
+    --port ${BRIDGE_PORT} \
+    --generation ${PIN_GENERATION} \
+    --secret-key-file /var/lib/penumbra-center/bridge_secret.key
+
+Restart=on-failure
+RestartSec=10
+
+# --- Hardening -------------------------------------------------------------
+# The bridge is a stateless loopback client: no disk state, no privileges, no
+# child processes. Hardening is deliberately conservative — iroh enumerates
+# network interfaces (netlink) and uses ring/rustls, so aggressive filters
+# like RestrictAddressFamilies/MemoryDenyWriteExecute are intentionally left
+# off to avoid breaking NAT traversal or the TLS stack.
+NoNewPrivileges=true
+StateDirectory=penumbra-center
+StateDirectoryMode=0700
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+RestrictNamespaces=true
+LockPersonality=true
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target

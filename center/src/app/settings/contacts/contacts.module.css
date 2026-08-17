@@ -1,0 +1,111 @@
+.headerTools,
+.rowTools,
+.editorActions,
+.checks,
+.editorFooter {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.headerTools {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.fileInput {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.primaryButton {
+  composes: buttonPrimary from "../../../components/controls.module.css";
+}
+
+.secondaryButton {
+  composes: buttonSecondary from "../../../components/controls.module.css";
+}
+
+.quietButton {
+  composes: buttonQuietSmall from "../../../components/controls.module.css";
+}
+
+.deleteButton {
+  composes: buttonDanger from "../../../components/controls.module.css";
+  min-height: 44px;
+  padding: 0 12px;
+  font-size: 12px;
+}
+
+.trusted {
+  color: var(--hu-colors-beam-base);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.editor {
+  padding: 22px 24px;
+  border-bottom: 1px solid var(--hu-divider);
+  background: var(--hu-colors-penumbra-200);
+}
+
+.formGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.formGrid label {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  color: var(--hu-colors-crater-base);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.field {
+  composes: field from "../../../components/controls.module.css";
+}
+
+.editorFooter {
+  justify-content: space-between;
+  margin-top: 18px;
+}
+
+.checks {
+  flex-wrap: wrap;
+  color: var(--hu-colors-white);
+  font-size: 14px;
+}
+
+.checks label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+@media (max-width: 820px) {
+  .headerTools {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .formGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .editorFooter {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .rowTools {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+}

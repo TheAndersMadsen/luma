@@ -1,0 +1,372 @@
+/*
+ * The provenance vocabulary, drawn.
+ *
+ * OURS, NOT RECOVERED. Four states and one sentence stem each, so "live",
+ * "you have none yet", "this backend never had that" and "it isn't answering
+ * right now" look the same on the faithful pages, in Settings, and in the
+ * operator console. Before this file the app had twelve phrasings for absence,
+ * four status vocabularies, two switch geometries and two off-palette hexes.
+ *
+ * The one absolute rule: anything that failed is NEVER the caption colour.
+ */
+
+/* ---------------------------------------------------------- StatusChip -- */
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  max-width: 100%;
+  padding: 5px 11px;
+  border: 1px solid var(--hu-colors-iron-base);
+  border-radius: 100px;
+  background: transparent;
+  font-family: var(--hu-fonts-humane);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.35;
+  color: var(--hu-colors-crater-base);
+}
+
+.dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--hu-status-off);
+}
+
+.chipLabel {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A sentence, not a word — the loud "your backend isn't answering" case wraps
+   rather than truncating, because truncating it would hide the whole point. */
+.chipLabelWrap {
+  min-width: 0;
+  white-space: normal;
+  text-align: left;
+}
+
+/* tones — chip */
+.toneLive {
+  color: var(--hu-status-live);
+  border-color: rgba(0, 255, 224, 0.3);
+}
+
+.toneLive .dot {
+  background: var(--hu-status-live);
+  box-shadow: 0 0 8px rgba(0, 255, 224, 0.5);
+}
+
+.toneDegraded {
+  color: var(--hu-status-warning);
+  border-color: rgba(235, 125, 35, 0.35);
+}
+
+.toneDegraded .dot {
+  background: var(--hu-status-warning);
+}
+
+/* absence is hollow — it is not a failure and must never read as one */
+.toneAbsent {
+  color: var(--hu-colors-crater-base);
+  border-color: var(--hu-colors-lunar-grey-dark-200);
+}
+
+.toneAbsent .dot {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--hu-colors-crater-grey-base);
+}
+
+.toneOff {
+  color: var(--hu-status-off);
+  border-color: var(--hu-colors-lunar-grey-dark-200);
+}
+
+.toneOff .dot {
+  background: var(--hu-status-off);
+}
+
+/* variant="tag" — the inline marker idiom (hidden network, override, source) */
+.tag {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  max-width: 100%;
+  padding: 2px 8px;
+  border: 0;
+  border-radius: 100px;
+  background: rgba(255, 255, 255, 0.06);
+  font-family: var(--hu-fonts-humane);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.2px;
+  line-height: 1.4;
+  text-transform: uppercase;
+  color: var(--hu-colors-crater-base);
+}
+
+.tag.toneLive {
+  background: rgba(0, 255, 224, 0.12);
+  color: var(--hu-status-live);
+}
+
+.tag.toneDegraded {
+  background: rgba(235, 125, 35, 0.14);
+  color: var(--hu-status-warning);
+}
+
+.tag.toneAbsent {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--hu-colors-lunar-grey-dark-200);
+  color: var(--hu-colors-crater-base);
+}
+
+.tag.toneOff {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--hu-status-off);
+}
+
+/* ---------------------------------------------------------- SourceBadge -- */
+
+.sourceBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: min(520px, 100%);
+}
+
+/* The badge's chip may shrink — its sentence is the point, its width is not.
+   But it must never be crushed into a column of one-word-per-line text, which
+   is what an unbounded `min-width: 0` in a tight flex row produced on a phone. */
+.sourceBadgeChip {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+/*
+ * Two phrasings, one chosen by width. Above the toolbar's breakpoint there is
+ * room for the whole sentence; below it the chip states the fact in two words
+ * and keeps the sentence in its title. The page-level StatusMessage next to the
+ * affected content always carries the full wording, so nothing is only-in-a-tooltip.
+ */
+.badgeLabelFull {
+  display: inline;
+}
+
+.badgeLabelShort {
+  display: none;
+}
+
+@media (max-width: 1071px) {
+  .badgeLabelFull {
+    display: none;
+  }
+  .badgeLabelShort {
+    display: inline;
+    white-space: nowrap;
+  }
+}
+
+.badgeDismiss {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--hu-text-muted);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  transition: color var(--transition-duration) ease-out;
+}
+
+.badgeDismiss:hover {
+  color: var(--hu-colors-white);
+}
+
+/* --------------------------------------------------------- AbsentValue -- */
+
+/*
+ * Absence, made visually distinct from real secondary data. Settings renders
+ * both through `.muted` today, so "we hold no counterpart for this" and a real
+ * email address are typographically identical. The leading hollow marker is
+ * the tell.
+ */
+.absentValue {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  font-family: var(--hu-fonts-humane);
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 1.35;
+  color: var(--hu-text-muted);
+}
+
+.absentMark {
+  flex: none;
+  color: var(--hu-colors-iron-base);
+  user-select: none;
+}
+
+.absentWhy {
+  color: var(--hu-text-muted);
+}
+
+/* Evidence never becomes the row's primary text — it is a quiet trailing note. */
+.absentEvidence {
+  border-bottom: 1px dotted var(--hu-colors-iron-base);
+  cursor: help;
+}
+
+/*
+ * An inert control: it exists in the recovered original and has no backend
+ * here. Same reduced opacity everywhere, always with `disabled` and the
+ * "Not in this backend." title — the pattern DetailView already gets right.
+ */
+.absentControl {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* -------------------------------------------------------- StatusMessage -- */
+
+.statusMessage {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 12px 14px;
+  border-radius: var(--hu-radius-control);
+  background: rgba(255, 255, 255, 0.04);
+  font-family: var(--hu-fonts-humane);
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.45;
+  color: var(--hu-colors-apollo-base);
+}
+
+.statusMessageInline {
+  padding: 8px 0;
+  background: transparent;
+  border-radius: 0;
+}
+
+.statusMark {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin-top: 6px;
+  border-radius: 50%;
+  background: var(--hu-status-off);
+}
+
+.statusBody {
+  flex: 1;
+  min-width: 0;
+}
+
+.statusDanger {
+  color: var(--hu-status-danger);
+}
+
+.statusDanger .statusMark {
+  background: var(--hu-status-danger);
+}
+
+.statusWarning {
+  color: var(--hu-status-warning);
+}
+
+.statusWarning .statusMark {
+  background: var(--hu-status-warning);
+}
+
+.statusInfo {
+  color: var(--hu-colors-crater-base);
+}
+
+.statusInfo .statusMark {
+  background: var(--hu-colors-crater-base);
+}
+
+.statusRetry {
+  composes: buttonQuietSmall from "./controls.module.css";
+  margin-left: auto;
+}
+
+/* -------------------------------------------------------------- Switch -- */
+
+/*
+ * One geometry: the privacy pane's 46x28 track with a 22px white knob. The
+ * console's 22x13 track with a 9px black knob is gone — flipping a feature flag
+ * and flipping a privacy toggle both write a boolean the wearer's device reads,
+ * so they are the same control.
+ */
+.switchRow {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-family: var(--hu-fonts-humane);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--hu-colors-crater-base);
+  cursor: pointer;
+}
+
+.switchRow:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.switchTrack {
+  position: relative;
+  flex: none;
+  display: block;
+  width: 46px;
+  height: 28px;
+  border-radius: 100px;
+  background: var(--hu-colors-lunar-grey-dark-200);
+  transition: background-color var(--transition-duration) ease-out;
+}
+
+.switchKnob {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--hu-colors-white);
+  transition: transform var(--transition-duration) ease-out;
+}
+
+.switchOn .switchTrack {
+  background: var(--hu-colors-beam-base);
+}
+
+.switchOn .switchKnob {
+  transform: translateX(18px);
+}
+
+.switchOn.switchRow {
+  color: var(--hu-colors-white);
+}
+
+.switchLabel {
+  white-space: nowrap;
+}

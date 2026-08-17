@@ -1,0 +1,14 @@
+{
+  "name": "@ai-pin-revival/spotify-adapter",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Purpose-scoped Center adapter for the local Ai Pin Spotify API",
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "start": "node src/server.mjs",
+    "test": "node --test verify/*.test.mjs"
+  }
+}

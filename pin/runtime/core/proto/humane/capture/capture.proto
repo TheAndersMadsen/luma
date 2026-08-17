@@ -1,0 +1,520 @@
+// SECOND COPY. contracts/wire/humane/capture.proto declares the same package,
+// the same messages and the same CaptureService, and Cosmos compiles that one.
+// Both therefore answer /humane.capture.CaptureService/* — this one over device
+// loopback, that one over the network — to the same stock client, whose encoder
+// neither of them can negotiate with. The full inventory, classified by what
+// each disagreement does to the bytes, is contracts/wire-divergence.json, and
+// the build now compares the two trees against it:
+// platform/deploy/acceptance/wire-equivalence.test.mjs parses both and fails on
+// any shared field number they encode differently that the inventory does not
+// already record - today, none. The individual notes below mark the points in
+// THIS file that the inventory resolves against it.
+
+syntax = "proto3";
+
+package humane.capture;
+
+option java_multiple_files = true;
+
+import "google/protobuf/timestamp.proto";
+import "humane/common/encryption.proto";
+
+// ─── Service ────────────────────────────────────────────────────────
+
+service CaptureService {
+  rpc CreateMemory (CreateMemoryRequest) returns (CreateMemoryResponse);
+  rpc DeleteMemory (DeleteMemoryRequest) returns (DeleteMemoryResponse);
+  rpc UploadComplete (UploadCompleteRequest) returns (UploadCompleteResponse);
+  rpc UploadFile (UploadRequest) returns (UploadResponse);
+  rpc ReportPhotographyExperienceStatus (ReportPhotographyExperienceStatusRequest) returns (ReportPhotographyExperienceStatusResponse);
+  rpc GetCaptureConfig (GetCaptureConfigRequest) returns (GetCaptureConfigResponse);
+  rpc GetFoodLogSummary (GetFoodLogSummaryRequest) returns (GetFoodLogSummaryResponse);
+  rpc GetMemoryShareLink (GetShareLinkRequest) returns (GetShareLinkResponse);
+  rpc SaveSharedMemory (SaveSharedMemoryRequest) returns (SaveSharedMemoryResponse);
+  rpc GetShareLinkContents (GetShareLinkContentsRequest) returns (GetShareLinkContentsResponse);
+  rpc DeclareMemoryCreateIntent (MemoryCreateIntentRequest) returns (MemoryCreateIntentResponse);
+}
+
+// ─── CreateMemory ───────────────────────────────────────────────────
+
+message CreateMemoryRequest {
+  oneof request {
+    PhotoMemoryRequest photo_memory_request = 1;
+    VideoMemoryRequest video_memory_request = 2;
+    FoodLogMemoryRequest food_log_memory_request = 3;
+    NoteMemoryRequest note_memory_request = 4;
+  }
+}
+
+message CreateMemoryResponse {
+  CreateMemoryResultStatus status = 1;
+  Memory memory = 2;
+  oneof response {
+    PhotoMemoryResponse photo_memory_response = 3;
+    VideoMemoryResponse video_memory_response = 4;
+    FoodLogMemoryResponse food_log_memory_response = 5;
+    NoteMemoryResponse note_memory_response = 6;
+  }
+}
+
+enum CreateMemoryResultStatus {
+  CREATE_MEMORY_RESULT_STATUS_UNSPECIFIED = 0;
+  CREATE_MEMORY_RESULT_STATUS_SUCCESS = 1;
+  CREATE_MEMORY_RESULT_STATUS_FAILURE = 2;
+}
+
+message Memory {
+  string id = 1 [deprecated = true];
+  string uuid = 2;
+}
+
+// ─── Photo Memory ───────────────────────────────────────────────────
+
+message PhotoMemoryRequest {
+  int32 num_bursts = 1;
+  int32 num_pics_per_burst = 2;
+  string lut_name = 3;
+  bytes thumbnail_bytes = 4 [deprecated = true];
+  PhotoFileFormat format = 5;
+  humane.common.encryption.EncryptionInformation encryption_information = 6;
+  humane.common.encryption.EncryptedData thumbnail = 7 [deprecated = true];
+  humane.common.encryption.EncryptedData encrypted_location = 8;
+  string device_local_id = 9;
+  repeated humane.common.encryption.EncryptedData thumbnails = 10;
+  google.protobuf.Timestamp device_created_time = 11;
+  // INT32, and the unit is hours. Corrected from sint32; production settled it.
+  // contracts/wire/humane/capture.proto declares
+  // humane.capture.PhotoMemoryRequest.gmt_offset (12) int32 — cited by symbol
+  // and field number, never by line, because a line citation between two
+  // independently edited files rots into a pointer at some other valid field,
+  // and the reader who follows it concludes the divergence note is wrong. That
+  // int32 is the declaration the deployed Cosmos decodes with.
+  // The two real device captures it has stored (2026-08-07 and 2026-08-08, both
+  // inside Copenhagen's CEST = UTC+2) came out as gmt_offset 2 — exactly the
+  // int32 reading of the wire varint. sint32 zigzag-decodes the same varint to
+  // +1, i.e. winter time, which the capture dates rule out, and for the negative
+  // offsets of the Americas it is wrong by more than an hour.
+  //
+  // Safe to correct here rather than in a device release because it changes
+  // nothing this runtime does: pin/runtime/core/src/services/capture.rs reads
+  // every other field of PhotoMemoryRequest and never this one, so the value was
+  // mis-decoded and then discarded. The tag and wire type are identical either
+  // way, so no request that parses today stops parsing.
+  // See contracts/wire-divergence.json.
+  int32 gmt_offset = 12;
+  repeated ImageMetadata photo_metadatas = 13;
+}
+
+message PhotoMemoryResponse {
+  repeated CaptureBurst bursts = 1;
+}
+
+// ─── Video Memory ───────────────────────────────────────────────────
+
+message VideoMemoryRequest {
+  int32 num_videos = 1;
+  bytes thumbnail_bytes = 2;
+  int32 total_video_duration_sec = 3;
+  humane.common.encryption.EncryptionInformation encryption_information = 4;
+  humane.common.encryption.EncryptedData thumbnail = 5;
+  humane.common.encryption.EncryptedData encrypted_location = 6;
+  string device_local_id = 7;
+  google.protobuf.Timestamp device_created_time = 8;
+  // INT32, for the same reason as PhotoMemoryRequest.gmt_offset above:
+  // humane.capture.VideoMemoryRequest.gmt_offset (9) is int32 in
+  // contracts/wire/humane/capture.proto.
+  //
+  // The GROUND is weaker than the photo case and should not be quoted as if it
+  // were the same finding: production confirms the int32 reading for PHOTO
+  // memories only. No video memory has ever been stored by this deployment, so
+  // the int32 reading here is inferred from the sibling message — same field
+  // name, same unit, same encoder — rather than observed. One stored video
+  // memory settles it either way.
+  //
+  // Corrected anyway because the correction is free: this runtime never reads
+  // the field (pin/runtime/core/src/services/capture.rs uses num_videos,
+  // device_created_time, encrypted_location and device_local_id, and nothing
+  // else), so an inference that later turns out wrong costs a re-edit and not a
+  // wrong value in flight. See contracts/wire-divergence.json.
+  int32 gmt_offset = 9;
+}
+
+message VideoMemoryResponse {
+  repeated CaptureBurst bursts = 1;
+  CalibrationData calibration_data = 2;
+}
+
+// ─── Food Log Memory ────────────────────────────────────────────────
+
+message FoodLogMemoryRequest {
+  humane.common.encryption.EncryptedData food_log = 1;
+  google.protobuf.Timestamp device_created_time = 2;
+  string device_local_id = 3;
+}
+
+message FoodLogMemoryResponse {}
+
+// ─── Note Memory ────────────────────────────────────────────────────
+
+message NoteMemoryRequest {
+  humane.common.encryption.EncryptedData encrypted_note = 1;
+  humane.common.encryption.EncryptedData encrypted_location = 2;
+}
+
+message NoteMemoryResponse {}
+
+// ─── CaptureBurst / CaptureFile ─────────────────────────────────────
+
+message CaptureBurst {
+  int64 id = 1 [deprecated = true];
+  int64 index = 2;
+  repeated CaptureFile files = 3;
+  string uuid = 4;
+}
+
+message CaptureFile {
+  int64 id = 1 [deprecated = true];
+  int64 index = 2;
+  string filename = 3 [deprecated = true];
+  string metadata_filename = 4;
+  string secure_filename = 5;
+  string secure_raw_data_filename = 6;
+  string uuid = 7;
+  string imu_data_filename = 8;
+  string video_timing_data_filename = 9;
+}
+
+// ─── Image Metadata ─────────────────────────────────────────────────
+
+message ImageMetadata {
+  string photo_filename = 1 [deprecated = true];
+  string burst_id = 2;
+  string memory_id = 3 [deprecated = true];
+  google.protobuf.Timestamp rgb_timestamp = 4 [deprecated = true];
+  int32 resolution_width = 5;
+  int32 resolution_height = 6;
+  repeated int32 strides = 7 [packed = true];
+  ImageFormat format = 8;
+  ColorSpace color_space = 9;
+  OrientationInfo orientation_info = 10;
+  CameraIntrinsics color_intrinsics = 11;
+  // Field 12 intentionally skipped (not present in decompiled source)
+  ShutterSpeed shutter_speed = 13;
+  ISO iso = 14;
+  float luminance = 15;
+}
+
+message OrientationInfo {
+  // SINT32 (zigzag), and the field is the horizon angle. Was
+  // `int32 orientation = 1`, a placeholder this tree admitted it could not
+  // resolve ("exact fields unknown, treated as opaque"); the other tree cites
+  // the device's own descriptor for it — `OrientationInfo.java:164` gives field
+  // 1 the char 0x0f, FieldType.SINT32 = 15 — and a decompiled descriptor char
+  // outranks an admitted guess. cosmos/crates/protocol/src/lib.rs pins the same
+  // reading with hand-written device bytes
+  // (orientation_info_from_the_device_decodes_a_negative_angle).
+  //
+  // Plain int32 read the device's -7 as 13: every negative tilt came back as a
+  // different positive one. A wrong angle, never an error.
+  //
+  // Correcting it here changes nothing this runtime does — no line of
+  // pin/runtime/core/src reads OrientationInfo, so the mirrored angle was
+  // decoded and dropped — and the tag and wire type are unchanged, so nothing
+  // that parses today stops parsing. See contracts/wire-divergence.json.
+  sint32 horizon_angle = 1;
+}
+
+message CameraIntrinsics {
+  float focal_length = 1;
+  FloatMatrix device_transform = 2;
+  float center_x = 3;
+  float center_y = 4;
+  repeated float distortion = 5 [packed = true];
+  int32 pixels_wide = 6;
+  int32 pixels_height = 7;
+  string serial = 8;
+}
+
+message FloatMatrix {
+  int32 rows = 1;
+  int32 cols = 2;
+  repeated float data = 3 [packed = true];
+}
+
+// The two trees model the same two field numbers as different QUANTITIES, and
+// because both readings are varints the wire cannot tell them apart — there is
+// no error to observe, only wrong numbers. contracts/wire/humane/capture.proto
+// declares `int64 exposure_time = 1; int64 frame_duration = 2;` and
+// `int64 boost = 1; int64 sensitivity = 2;`, which map one-to-one onto the
+// android.hardware.camera2 CaptureResult keys this hardware reports
+// (SENSOR_EXPOSURE_TIME / SENSOR_FRAME_DURATION / SENSOR_SENSITIVITY_BOOST /
+// SENSOR_SENSITIVITY) and whose nanosecond ranges need the 64-bit width. The
+// numerator/denominator reading below is an EXIF-rational guess. Unresolved,
+// but the camera2 mapping is the stronger claim — see
+// contracts/wire-divergence.json.
+message ShutterSpeed {
+  int32 numerator = 1;
+  int32 denominator = 2;
+}
+
+message ISO {
+  int32 value = 1;
+}
+
+message CalibrationData {
+  bool device_should_upload = 1;
+  string filename = 2;
+}
+
+// ─── Enums ──────────────────────────────────────────────────────────
+
+enum MemoryType {
+  MEMORY_TYPE_UNSPECIFIED = 0;
+  MEMORY_TYPE_PHOTO = 1;
+  MEMORY_TYPE_VIDEO = 2;
+  MEMORY_TYPE_NOTE = 3;
+  MEMORY_TYPE_FOOD_LOG = 4;
+}
+
+enum MediaType {
+  MEDIA_TYPE_UNKNOWN = 0;
+  MEDIA_TYPE_PHOTO = 1;
+  MEDIA_TYPE_AUDIO = 2;
+  MEDIA_TYPE_VIDEO = 3;
+}
+
+enum ImageFormat {
+  IMAGE_FORMAT_UNKNOWN = 0;
+  IMAGE_FORMAT_JPEG = 1;
+  IMAGE_FORMAT_YUVNV21 = 2;
+}
+
+enum PhotoFileFormat {
+  UNKNOWN_FILE_FORMAT = 0;
+  YUVNV21 = 1;
+  JPEG = 2;
+  RGB = 3;
+}
+
+enum ColorSpace {
+  COLOR_SPACE_UNKNOWN = 0;
+  COLOR_SPACE_SRGB = 1;
+}
+
+enum UploadType {
+  UPLOAD_TYPE_UNSET = 0;
+  UPLOAD_TYPE_IMAGE = 1;
+  UPLOAD_TYPE_VIDEO = 2;
+  UPLOAD_TYPE_AUDIO = 3;
+  UPLOAD_TYPE_METADATA = 4;
+  UPLOAD_TYPE_BYTES = 5;
+  UPLOAD_TYPE_YUV = 6;
+  UPLOAD_TYPE_IMU_DATA = 7;
+  UPLOAD_TYPE_CALIBRATION_DATA = 8;
+  UPLOAD_TYPE_VIDEO_TIMING_DATA = 9;
+}
+
+// ─── DeleteMemory ───────────────────────────────────────────────────
+
+message DeleteMemoryRequest {
+  int64 memory_id = 1 [deprecated = true];
+  string memory_uuid = 2;
+}
+
+message DeleteMemoryResponse {
+  DeleteMemoryStatus status = 1;
+}
+
+// THE ONE ENUM-MEANING CONFLICT THAT WAS ACTUALLY SERVED, now settled from the
+// client's own class and STAGED FOR A PIN RELEASE — the running build still
+// emits the old number. Until 2026-08-12 this copy declared FAILURE = 3 and had
+// no fourth value, so pin/runtime/core/src/services/capture.rs answered a
+// store error with 3 while cosmos/crates/cosmos/src/services/capture.rs answered
+// the identical outcome with 4. The decompiled `humane.capture.DeleteMemoryStatus`
+// decides it: UNSPECIFIED 0, SUCCESS 1, NOT_FOUND 2, NOT_AUTHORIZED 3,
+// FAILURE 4, and forNumber() returns null above 4. A stock client decoding the
+// old 3 was being told a failed delete had been REFUSED FOR AUTHORIZATION.
+//
+// WHAT CHANGES WHEN A RELEASE CARRYING THIS IS INSTALLED: the store-error arm of
+// Capture.DeleteMemory emits 4 instead of 3. `DeleteMemoryStatus::Failure` in
+// that handler follows this declaration automatically, so there is no second
+// edit and no way to install one half of the change. Nothing else moves — the
+// success (1) and not-found (2) arms are untouched, and 4 is a value the stock
+// client's forNumber() already knows, so it decodes as FAILURE rather than as an
+// unrecognized status. The staging record, the verdict and the install check are
+// in contracts/wire-divergence.json (`stagedForRelease`) and
+// docs/operations.md.
+//
+// NOT_AUTHORIZED is declared but never emitted: this runtime authorizes nothing
+// on the loopback path. It is here because the NUMBER has to be right.
+enum DeleteMemoryStatus {
+  DELETE_MEMORY_STATUS_UNSPECIFIED = 0;
+  DELETE_MEMORY_STATUS_SUCCESS = 1;
+  DELETE_MEMORY_STATUS_NOT_FOUND = 2;
+  DELETE_MEMORY_STATUS_NOT_AUTHORIZED = 3;
+  DELETE_MEMORY_STATUS_FAILURE = 4;
+}
+
+// ─── UploadFile ─────────────────────────────────────────────────────
+
+message UploadRequest {
+  string filename = 1;
+  UploadType upload_type = 2;
+  string mime_encoding = 3;
+}
+
+message UploadResponse {
+  string url = 1;
+}
+
+// ─── UploadComplete ─────────────────────────────────────────────────
+
+message UploadCompleteRequest {
+  int64 memory_id = 1 [deprecated = true];
+  UploadCompletionStatus success = 2;
+  string memory_uuid = 3;
+  int32 retry_number = 4;
+  int32 max_retries = 5;
+}
+
+message UploadCompleteResponse {
+  UploadCompleteStatus status = 1;
+}
+
+enum UploadCompletionStatus {
+  UNKNOWN_UPLOAD_COMPLETION_STATUS = 0;
+  UPLOAD_SUCCESS = 1;
+  UPLOAD_FAILURE = 2;
+  UPLOAD_FAILURE_FINAL = 3;
+}
+
+enum UploadCompleteStatus {
+  UPLOAD_COMPLETE_STATUS_UNSPECIFIED = 0;
+  UPLOAD_COMPLETE_STATUS_PROCESSING_STARTED = 1;
+  UPLOAD_COMPLETE_STATUS_UPLOAD_INCOMPLETE = 2;
+  UPLOAD_COMPLETE_STATUS_MEMORY_NOT_FOUND = 3;
+  UPLOAD_COMPLETE_STATUS_INTERNAL_ERROR = 4;
+  UPLOAD_COMPLETE_STATUS_BAD_REQUEST = 5;
+  UPLOAD_COMPLETE_STATUS_ACKNOWLEDGED = 6;
+}
+
+// ─── ReportPhotographyExperienceStatus ──────────────────────────────
+
+message ReportPhotographyExperienceStatusRequest {
+  PhotographyExperienceStatus status = 1;
+  string custom_message = 2;
+}
+
+message ReportPhotographyExperienceStatusResponse {}
+
+enum PhotographyExperienceStatus {
+  PHOTOGRAPHY_EXPERIENCE_STATUS_UNSPECIFIED = 0;
+  PHOTOGRAPHY_EXPERIENCE_STATUS_CAMERA_ACQUISITION_ERROR = 1;
+  PHOTOGRAPHY_EXPERIENCE_STATUS_WRITING_TO_DISK_ERROR = 2;
+  PHOTOGRAPHY_EXPERIENCE_STATUS_CRASH = 3;
+}
+
+// ─── GetCaptureConfig ───────────────────────────────────────────────
+
+message GetCaptureConfigRequest {}
+
+message GetCaptureConfigResponse {
+  int32 num_photos_per_burst = 1;
+  CaptureRetryConfig create_memory_retry_config = 2;
+  CaptureRetryConfig asset_upload_retry_config = 3;
+  CaptureRetryConfig delete_memory_retry_config = 4;
+}
+
+message CaptureRetryConfig {
+  int32 num_retries = 1;
+  int32 retry_interval_seconds = 2;
+  CaptureRetryPolicy policy = 3;
+}
+
+enum CaptureRetryPolicy {
+  CAPTURE_RETRY_POLICY_UNSPECIFIED = 0;
+  CAPTURE_RETRY_POLICY_LINEAR = 1;
+  CAPTURE_RETRY_POLICY_EXPONENTIAL = 2;
+}
+
+// ─── GetFoodLogSummary ──────────────────────────────────────────────
+
+message GetFoodLogSummaryRequest {
+  google.protobuf.Timestamp start_time = 1;
+}
+
+message GetFoodLogSummaryResponse {
+  humane.common.encryption.EncryptedData food_log_summary = 1;
+}
+
+// ─── Share Links ────────────────────────────────────────────────────
+
+message GetShareLinkRequest {
+  string memory_uuid = 1;
+}
+
+message GetShareLinkResponse {
+  string share_link = 1;
+}
+
+message GetShareLinkContentsRequest {
+  ShareLinkData share_link_data = 1;
+}
+
+message GetShareLinkContentsResponse {
+  bytes decrypted_thumbnail_bytes = 1;
+}
+
+message SaveSharedMemoryRequest {
+  string memory_uuid = 1 [deprecated = true];
+  string signature = 2 [deprecated = true];
+  int64 expiry = 3 [deprecated = true];
+  ShareLinkData share_link_data = 4;
+}
+
+message SaveSharedMemoryResponse {
+  string created_memory_uuid = 1;
+}
+
+message ShareLinkData {
+  string memory_uuid = 1;
+  string signature = 2;
+  int64 expiry = 3;
+}
+
+// ─── DeclareMemoryCreateIntent ──────────────────────────────────────
+
+message MemoryCreateIntentRequest {
+  string device_local_id = 1;
+  MemoryType memory_type = 2;
+  DelayReason delay_reason = 3;
+}
+
+message MemoryCreateIntentResponse {}
+
+enum DelayReason {
+  DELAY_REASON_UNSPECIFIED = 0;
+  DELAY_REASON_POOR_NETWORK = 1;
+}
+
+// ─── Notes (used by TestingAutomationService, included for completeness) ─
+
+message Note {
+  int64 note_id = 1 [deprecated = true];
+  string text = 2;
+  bool deleted = 3;
+  google.protobuf.Timestamp modified_at = 4;
+  string title = 5;
+  bool completed = 6;
+  google.protobuf.Timestamp reminder_time = 7;
+  int64 device_local_id = 8;
+  string audio_file_name = 9;
+  int64 memory_id = 10 [deprecated = true];
+  string memory_uuid = 11;
+  string note_uuid = 12;
+  repeated string tags = 13;
+}
+
+message Tag {
+  string text = 1;
+}

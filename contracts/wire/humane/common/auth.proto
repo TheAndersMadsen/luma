@@ -1,0 +1,14 @@
+// reconstructed from ironman.apk (protobuf-lite). field numbers are wire-accurate.
+syntax = "proto3";
+
+package humane.common.auth;
+
+enum AuthenticationType {
+  UNKNOWN = 0;
+  UNAUTHENTICATED = 1;
+  BEARER_TOKEN = 2;
+  DEVICE_USER_CREDENTIAL = 3;
+  ISTIO_SERVICE_MESH = 4;
+  FACTORY_CERTIFICATE = 5;
+  DEVICE_ATTESTATION_CREDENTIAL = 6;
+}

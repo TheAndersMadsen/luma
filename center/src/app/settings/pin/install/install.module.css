@@ -1,0 +1,834 @@
+/*
+ * The install pane.
+ *
+ * Written only in the `--hu-*` tokens from globals.css and composed from
+ * controls.module.css, so this pane sits in the same product as
+ * /settings/account/devices. NONE of the SPA's vendored PenumbraOS theme
+ * (index.css, penumbra-theme.css, app-primitives.css — 3,201 lines of
+ * beam/eclipse/penumbra/umbra) crosses; every `install-stage__*` /
+ * `install-diagnostics__*` / `install-dialog__*` class from the retired Setup
+ * SPA's `install/components` has been re-expressed here.
+ *
+ * The row rhythm (18px/24px, a 1px --hu-divider between rows, none after the
+ * last) is settings.module.css's `.additionRow`, reused rather than reinvented
+ * so the package list and the settings rows above it line up.
+ */
+
+.pane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-size);
+}
+
+/* ------------------------------------------------------------- surfaces -- */
+
+.card {
+  composes: surface from "../../../../components/controls.module.css";
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.cardBody {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 24px;
+}
+
+.heading {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.title {
+  font-size: 24px;
+  font-weight: 500;
+  line-height: 1.15;
+  color: var(--hu-colors-white);
+}
+
+.copy {
+  font-size: 15px;
+  font-weight: 400;
+  line-height: 1.45;
+  color: var(--hu-colors-crater-base);
+  max-width: 62ch;
+}
+
+/* ------------------------------------------------------------- progress -- */
+
+.progress {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.progressMeta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--hu-colors-crater-base);
+}
+
+.progressBar {
+  appearance: none;
+  width: 100%;
+  height: 6px;
+  border: 0;
+  border-radius: 100px;
+  background: var(--hu-colors-penumbra-200);
+  overflow: hidden;
+}
+
+.progressBar::-webkit-progress-bar {
+  background: var(--hu-colors-penumbra-200);
+  border-radius: 100px;
+}
+
+.progressBar::-webkit-progress-value {
+  background: var(--hu-colors-beam-base);
+  border-radius: 100px;
+  transition: width var(--transition-duration) ease-out;
+}
+
+.progressBar::-moz-progress-bar {
+  background: var(--hu-colors-beam-base);
+  border-radius: 100px;
+}
+
+/* --------------------------------------------------------------- device -- */
+
+.device {
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--hu-radius-control);
+  background: var(--hu-colors-penumbra-200);
+  box-shadow: var(--outline-shadow);
+  overflow: hidden;
+}
+
+.deviceHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--hu-divider);
+}
+
+.deviceIdentity {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.deviceName {
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--hu-colors-white);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.deviceSerial {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--hu-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --------------------------------------------------------- package rows -- */
+
+.packages {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+}
+
+.package {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--hu-divider);
+}
+
+.package:last-child {
+  border-bottom: none;
+}
+
+.package dt {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--hu-colors-crater-base);
+  flex: none;
+}
+
+.packageValue {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 500;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.packageValueDefault {
+  color: var(--hu-colors-crater-grey-50);
+}
+
+.packageValueSuccess {
+  color: var(--hu-colors-beam-base);
+}
+
+.packageValueWarning {
+  color: var(--hu-status-warning);
+}
+
+.packagesDivider {
+  padding: 10px 18px 6px;
+  border-bottom: 1px solid var(--hu-divider);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.1px;
+  text-transform: uppercase;
+  color: var(--hu-colors-crater-base);
+}
+
+.packageConflict dt {
+  color: var(--hu-status-warning);
+}
+
+.packageBadge {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 100px;
+  background: rgba(235, 125, 35, 0.16);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.2px;
+  text-transform: uppercase;
+  color: var(--hu-status-warning);
+}
+
+/* --------------------------------------------------------------- footer -- */
+
+.footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 18px 24px;
+  border-top: 1px solid var(--hu-divider);
+}
+
+.primarySlot {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.primaryButton {
+  composes: buttonPrimary from "../../../../components/controls.module.css";
+}
+
+.primaryLink {
+  composes: buttonPrimary from "../../../../components/controls.module.css";
+  text-decoration: none;
+}
+
+.linksWrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.links {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.link {
+  composes: buttonQuiet from "../../../../components/controls.module.css";
+  text-decoration: none;
+}
+
+/* ------------------------------------------------------------- overflow -- */
+
+.overflow {
+  position: relative;
+  flex: none;
+}
+
+.overflowTrigger {
+  composes: buttonQuiet from "../../../../components/controls.module.css";
+  width: 44px;
+  padding: 0;
+}
+
+.overflowTrigger svg {
+  width: 16px;
+  height: 16px;
+}
+
+.overflowMenu {
+  composes: surfaceRaised from "../../../../components/controls.module.css";
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  min-width: 200px;
+  padding: 6px;
+}
+
+.overflowItem {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--hu-colors-crater-base);
+  font-family: var(--hu-fonts-humane);
+  font-size: 15px;
+  font-weight: 500;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background-color var(--transition-duration) ease-out,
+    color var(--transition-duration) ease-out;
+}
+
+.overflowItem:hover:not(:disabled) {
+  background: var(--hu-colors-button-background-dark-secondary-base);
+  color: var(--hu-colors-white);
+}
+
+.overflowItem:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ---------------------------------------------------------- diagnostics -- */
+
+.diagnostics {
+  composes: surface from "../../../../components/controls.module.css";
+  overflow: hidden;
+}
+
+.diagnosticsSummary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 24px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.diagnosticsSummary::-webkit-details-marker {
+  display: none;
+}
+
+.diagnosticsHeading {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.diagnosticsTitle {
+  font-size: 19px;
+  font-weight: 500;
+  color: var(--hu-colors-white);
+}
+
+.diagnosticsSubtitle {
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--hu-colors-crater-base);
+}
+
+.diagnosticsChevron {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  color: var(--hu-colors-crater-base);
+  transition: transform var(--transition-duration) ease-out;
+}
+
+.diagnostics[open] .diagnosticsChevron {
+  transform: rotate(90deg);
+}
+
+.diagnosticsBody {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--hu-divider);
+}
+
+.section {
+  padding: 18px 24px;
+  border-bottom: 1px solid var(--hu-divider);
+}
+
+.section:last-child {
+  border-bottom: none;
+}
+
+.sectionTitle {
+  margin-bottom: 12px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.1px;
+  text-transform: uppercase;
+  color: var(--hu-colors-crater-base);
+}
+
+.downloads {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.download {
+  composes: buttonQuietSmall from "../../../../components/controls.module.css";
+}
+
+.kv {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+}
+
+.kvRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.kvRow dt {
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--hu-colors-crater-base);
+  flex: none;
+}
+
+.kvRow dd {
+  margin: 0;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--hu-colors-white);
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--hu-colors-crater-grey-50);
+}
+
+.diagnosticsPackage {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--hu-divider);
+}
+
+.diagnosticsPackage:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.diagnosticsPackageHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.diagnosticsPackageName {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--hu-colors-white);
+}
+
+.diagnosticsPackageVersion {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--hu-colors-crater-base);
+  font-variant-numeric: tabular-nums;
+}
+
+.dumpToggle {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--hu-colors-beam-base);
+  cursor: pointer;
+}
+
+.dump {
+  max-height: 320px;
+  margin-top: 8px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--hu-colors-penumbra-200);
+  box-shadow: var(--outline-shadow);
+  color: var(--hu-colors-crater-grey-50);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow: auto;
+}
+
+.log {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 360px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-y: auto;
+}
+
+.logEntry {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.logPhase {
+  flex: none;
+  min-width: 74px;
+  padding: 2px 8px;
+  border-radius: 100px;
+  background: var(--hu-colors-penumbra-200);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.2px;
+  text-transform: uppercase;
+  color: var(--hu-colors-crater-base);
+  text-align: center;
+}
+
+.logMessage {
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.4;
+  color: var(--hu-colors-white);
+  overflow-wrap: anywhere;
+}
+
+.logTime {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--hu-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.empty {
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--hu-colors-crater-base);
+}
+
+/* --------------------------------------------------------------- dialog -- */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.62);
+  overflow-y: auto;
+}
+
+.dialog {
+  composes: surfaceRaised from "../../../../components/controls.module.css";
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  width: min(560px, 100%);
+  max-height: calc(100vh - 48px);
+  padding: 28px;
+  overflow-y: auto;
+}
+
+.dialogHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.dialogTitle {
+  font-size: 24px;
+  font-weight: 500;
+  line-height: 1.15;
+  color: var(--hu-colors-white);
+}
+
+.dialogCopy {
+  font-size: 15px;
+  font-weight: 400;
+  line-height: 1.5;
+  color: var(--hu-colors-crater-base);
+}
+
+.dialogClose {
+  composes: buttonQuiet from "../../../../components/controls.module.css";
+  width: 44px;
+  padding: 0;
+  font-size: 18px;
+}
+
+.requirements {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.requirement {
+  padding: 14px 16px;
+  border-radius: var(--hu-radius-control);
+  background: var(--hu-colors-penumbra-200);
+  box-shadow: var(--outline-shadow);
+}
+
+.requirementDanger {
+  box-shadow: inset 0 0 0 1px var(--hu-status-danger);
+}
+
+.requirementWarning {
+  box-shadow: inset 0 0 0 1px var(--hu-status-warning);
+}
+
+.requirementTitle {
+  margin-bottom: 6px;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--hu-colors-white);
+}
+
+.requirementDanger .requirementTitle {
+  color: var(--hu-colors-red-50);
+}
+
+.requirementWarning .requirementTitle {
+  color: var(--hu-status-warning);
+}
+
+.requirementCopy {
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.5;
+  color: var(--hu-colors-crater-base);
+  white-space: pre-wrap;
+}
+
+.dialogActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.dialogGhost {
+  composes: buttonQuiet from "../../../../components/controls.module.css";
+}
+
+.dialogPrimary {
+  composes: buttonPrimary from "../../../../components/controls.module.css";
+}
+
+.dialogSecondary {
+  composes: buttonSecondary from "../../../../components/controls.module.css";
+}
+
+.helpBody {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.orientationGuide {
+  position: relative;
+  min-height: 210px;
+  display: grid;
+  place-items: center;
+  padding: 22px 22px 44px;
+  overflow: hidden;
+  border-radius: var(--hu-radius-surface);
+  color: var(--hu-text-muted);
+  background:
+    radial-gradient(circle at 50% 42%, rgba(0, 255, 224, 0.09), transparent 44%),
+    var(--hu-colors-penumbra-200);
+  box-shadow: var(--outline-shadow);
+}
+
+.orientationPin {
+  position: relative;
+  z-index: 2;
+  width: 124px;
+  height: 150px;
+  display: grid;
+  place-items: end center;
+  padding: 16px;
+  border: 1px solid var(--hu-colors-iron-base);
+  border-radius: 46% 46% 38% 38%;
+  color: var(--hu-colors-white);
+  background: linear-gradient(160deg, #262929, #0f1010);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.38);
+}
+
+.orientationMark {
+  position: absolute;
+  top: 42px;
+  width: 34px;
+  height: 34px;
+  border: 7px solid var(--hu-colors-beam-base);
+  border-right-color: transparent;
+  border-radius: 50%;
+  transform: rotate(-38deg);
+}
+
+.orientationConnector {
+  position: absolute;
+  left: calc(50% - 48px);
+  bottom: 38px;
+  width: 96px;
+  height: 48px;
+  border: 1px solid var(--hu-colors-iron-base);
+  border-radius: 12px;
+  background: var(--hu-colors-lunar-grey-dark-200);
+}
+
+.orientationCable {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  width: 8px;
+  height: 42px;
+  background: var(--hu-colors-iron-base);
+  transform: translateX(-50%);
+}
+
+.orientationLabel {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: 12px;
+  z-index: 3;
+  font-size: 12px;
+  text-align: center;
+}
+
+.helpLinks {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.helpLinkItem {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.helpLink {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--hu-colors-beam-base);
+}
+
+.helpLinkDescription {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--hu-colors-crater-base);
+}
+
+/* -------------------------------------------------------------- loading -- */
+
+.loading {
+  padding: 24px;
+  font-size: 15px;
+  font-weight: 400;
+  color: var(--hu-colors-crater-base);
+}
+
+@media (max-width: 560px) {
+  .cardBody,
+  .footer,
+  .section,
+  .diagnosticsSummary {
+    padding-left: 18px;
+    padding-right: 18px;
+  }
+
+  .footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .primaryButton,
+  .primaryLink {
+    width: 100%;
+  }
+
+  .package {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .packageValue {
+    text-align: left;
+  }
+
+  .kvRow {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .kvRow dd {
+    text-align: left;
+  }
+}

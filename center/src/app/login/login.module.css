@@ -1,0 +1,69 @@
+/* Sign-in. An addition in style terms — .Center had no first-party login form —
+   so it draws its card, its field and its buttons with the shared controls
+   rather than its own border, radius, hex and weight-600 type. */
+
+.screen {
+  min-height: 100svh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background:
+    radial-gradient(120% 90% at 50% -10%, rgba(0, 255, 224, 0.06), transparent 60%),
+    var(--hu-colors-eclipse-base, #0f0f0f);
+}
+
+/* The one raised panel edge. */
+.card {
+  composes: surfaceRaised from "../../components/controls.module.css";
+  width: 100%;
+  max-width: 380px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 34px 30px 26px;
+}
+
+.brand { display: flex; justify-content: center; margin-bottom: 6px; color: var(--hu-colors-solar-base, #fff); }
+
+.title {
+  margin: 0;
+  text-align: center;
+  font-size: 21px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  color: var(--hu-colors-solar-base, #fff);
+}
+.sub {
+  margin: 0 0 8px;
+  text-align: center;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--hu-colors-crater-base, #a9abab);
+}
+
+.fieldRow { display: flex; flex-direction: column; gap: 6px; }
+.fieldRow > span {
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--hu-text-muted);
+}
+
+/* The one text input. One focus treatment, not a second invented ring. */
+.input { composes: field from "../../components/controls.module.css"; }
+
+/* The single sign-in action. */
+.submit {
+  composes: buttonPrimary from "../../components/controls.module.css";
+  width: 100%;
+  margin-top: 10px;
+}
+
+.foot {
+  margin: 10px 0 0;
+  text-align: center;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--hu-text-muted);
+}

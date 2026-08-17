@@ -1,0 +1,21 @@
+# Pin-only local toolchain and generated native state. Common build, editor,
+# secret, APK, and capture rules live in the workspace root.
+local.properties
+.externalNativeBuild/
+.cxx/
+.kotlin/
+*.iml
+runtime/core/data/
+runtime/core/media/
+**/jniLibs/
+**/config.local.toml
+
+# Operator evidence remains outside canonical source.
+device-dumps/
+runtime-state/
+rollback/
+captures/
+decompile-workspace/
+/test-runs/
+/.codex/
+/.claude/

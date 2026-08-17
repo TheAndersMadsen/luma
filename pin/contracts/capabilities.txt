@@ -1,0 +1,100 @@
+# Generated Capability Manifest
+
+> Auto-generated from Rust source registries by `platform/containers/pin-builder/capabilities.sh`.
+> Authoritative counts for tools, planners, and agentic loop configuration.
+>
+> Deterministic snapshot of current source; no wall-clock value is embedded.
+
+## Tool Catalog Read Tools (Advertised to Model)
+
+Count: **14** (depends on authorization/subscription/provider gates).
+
+- `knowledge_lookup`
+- `web_search`
+- `place_search`
+- `weather_at_place`
+- `current_location`
+- `current_weather`
+- `reverse_geocode`
+- `nearby_search`
+- `route`
+- `music_artist_top_tracks`
+- `music_catalog_search`
+- `current_music`
+- `memory_search`
+- `food_lookup`
+
+## Tool Catalog Mutation Tools (Native Actions via Model)
+
+Count: **22** (=21 regular + 1 conditional play_music).
+
+- `play_music`
+- `increment_volume`
+- `decrement_volume`
+- `set_volume`
+- `get_current_volume`
+- `pause_music`
+- `resume_music`
+- `next_track`
+- `previous_track`
+- `restart_track`
+- `save_current_track_to_favorites`
+- `get_music_queue`
+- `get_battery_level`
+- `get_current_time`
+- `am_i_online`
+- `play_favorite_tracks`
+- `play_featured_music`
+- `generate_music_playlist`
+- `set_timer`
+- `set_alarm`
+- `send_message`
+- `call_person`
+
+## Stock Agent Tools (Bounded Schema-Aware Routes)
+
+StockIntent variants: **17**
+Routed tool names in v1/v3/v4 function schemas: **22**
+
+## Deterministic Fast-Path Planners
+
+Count: **23** plan functions across **8** modules in `synapse/`.
+
+- `plan_call_control` in `communications.rs`
+- `plan_call_person` in `communications.rs`
+- `plan_communications_action` in `communications.rs`
+- `plan_contacts_agent` in `communications.rs`
+- `plan_message_search_continuation` in `communications.rs`
+- `plan_message_search_request` in `communications.rs`
+- `plan_read_messages` in `communications.rs`
+- `plan_message_action` in `messaging.rs`
+- `plan_ai_music_action` in `music.rs`
+- `plan_catalog_or_contextual_music_action` in `music.rs`
+- `plan_catalog_or_contextual_music_action_inner` in `music.rs`
+- `plan_generated_playlist_action` in `music.rs`
+- `plan_local_music_action` in `music.rs`
+- `plan_visual_music_action` in `music.rs`
+- `plan_visual_music_failure_response` in `music.rs`
+- `plan_feature_gated_action` in `native_device_actions.rs`
+- `plan_native_device_action` in `native_device_actions.rs`
+- `plan_native_device_action_with_features` in `native_device_actions.rs`
+- `plan_restored_stock_mutation` in `native_device_actions.rs`
+- `plan_note` in `notes.rs`
+- `plan_nutrition_action` in `nutrition.rs`
+- `plan_translation_action` in `translation.rs`
+- `plan_weather_prompt` in `weather.rs`
+
+## Agentic Loop Configuration
+
+| Parameter | Value | Source |
+|-----------|-------|--------|
+| Step budget (max_tool_turns) | 12 | config.rs default_max_tool_turns |
+| Grace reserve | 20s | chat_turn_loop.rs DEFAULT_GRACE_RESERVE |
+| Slow-step cue threshold | 7s | chat_turn_loop.rs SLOW_STEP_CUE_AFTER |
+| Inner agent budget | 75s | turn/orchestration.rs (documented) |
+| Outer stock turn deadline | 80s | stock_deadline.rs STOCK_TURN_DEADLINE |
+| HTTP provider step timeout | 20s | turn/orchestration.rs HTTP_PROVIDER_MODEL_STEP_TIMEOUT |
+
+## Native Action Catalog
+
+**105** entries in NATIVE_ACTION_CATALOG (validation table, NOT a tool-advertisement source).

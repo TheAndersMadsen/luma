@@ -1,0 +1,389 @@
+/*
+ * Capture detail — the lightbox body shared by the @capturemodal intercepting
+ * route and the /captures/[id] full-page fallback.
+ *
+ * The original .Center opened a capture as a lightbox over the grid (a dialog in
+ * the @capturemodal parallel slot). These classes cover both the modal chrome
+ * (backdrop + dialog) and the inner body (frame, toolbar, meta) so the two entry
+ * points render an identical detail.
+ */
+
+/* ---------- modal chrome (only the intercepting lightbox uses these) -------- */
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.72);
+  /* a soft blur so the grid reads as "behind", not gone */
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  animation: fade var(--transition-duration) ease-out;
+}
+
+.backdropClosing {
+  animation: fadeOut var(--transition-duration) ease-in both;
+}
+
+.dialog {
+  position: relative;
+  width: min(760px, 96vw);
+  max-height: 92dvh;
+  overflow: auto;
+  /* radii: modal 22px (per the recovered layout tokens) */
+  border-radius: 22px;
+  background: var(--hu-colors-eclipse-base);
+  box-shadow: var(--outline-shadow), var(--menu-drop-shadow);
+  padding: 14px 16px 22px;
+  animation: captureOpen var(--transition-duration) ease-out both;
+}
+
+.backdropClosing .dialog {
+  animation: captureClose var(--transition-duration) ease-in both;
+}
+
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes fadeOut {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@keyframes captureOpen {
+  from { opacity: 0; transform: translateY(8px) scale(0.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes captureClose {
+  from { opacity: 1; transform: translateY(0) scale(1); }
+  to { opacity: 0; transform: translateY(8px) scale(0.985); }
+}
+
+/* ---------- shared detail body --------------------------------------------- */
+/* In page mode the whole thing simply sits inside the Shell; the wrapper class
+   just constrains width and centres it. */
+.page {
+  max-width: 760px;
+  margin: 0 auto;
+}
+
+.header {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.frameWrap {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  max-height: 64dvh;
+  border-radius: 16px;
+  overflow: hidden;
+  background: var(--hu-colors-penumbra-base);
+  box-shadow: var(--outline-shadow);
+  display: grid;
+  place-items: center;
+}
+
+.frame {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: var(--hu-colors-black);
+}
+
+.burstPanel {
+  margin-top: 14px;
+  padding: 14px;
+  border-radius: 16px;
+  background: var(--hu-colors-penumbra-base);
+  box-shadow: var(--outline-shadow);
+}
+
+.burstHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 0 2px 12px;
+}
+
+.burstHeader > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.burstHeader strong {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--hu-colors-white);
+}
+
+.burstHeader span,
+.burstReason {
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--hu-text-muted);
+}
+
+.burstReason {
+  max-width: 48%;
+  text-align: right;
+}
+
+.filmstrip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.recheckButton {
+  display: block;
+  margin: 12px auto 0;
+  padding: 7px 12px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--hu-colors-crater-base);
+  background: var(--hu-colors-eclipse-base);
+  transition: color var(--transition-duration) ease-out;
+}
+
+.recheckButton:hover:not(:disabled) {
+  color: var(--hu-colors-white);
+}
+
+.recheckButton:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.filmstripButton {
+  position: relative;
+  min-width: 0;
+  aspect-ratio: 4 / 3;
+  overflow: hidden;
+  border: 2px solid transparent;
+  border-radius: 11px;
+  background: var(--hu-colors-eclipse-base);
+  transition: border-color var(--transition-duration) ease-out,
+    transform var(--transition-duration) ease-out;
+}
+
+.filmstripButton:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.filmstripButton[data-selected="true"] {
+  border-color: var(--hu-colors-beam-base);
+}
+
+.filmstripButton > span {
+  position: absolute;
+  right: 7px;
+  bottom: 6px;
+  padding: 3px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--hu-colors-white);
+  background: rgba(0, 0, 0, 0.68);
+  backdrop-filter: blur(5px);
+}
+
+.filmstripButton[data-selected="true"] > span {
+  color: var(--hu-colors-eclipse-base);
+  background: var(--hu-colors-beam-base);
+}
+
+.filmstripImage,
+.filmstripMissing {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.filmstripImage {
+  object-fit: cover;
+}
+
+.filmstripMissing {
+  display: grid;
+  place-items: center;
+  padding: 8px;
+  font-size: 10px;
+  color: var(--hu-text-muted);
+  background: var(--hu-colors-eclipse-base);
+}
+
+@media (max-width: 540px) {
+  .burstHeader {
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .burstReason {
+    max-width: none;
+    text-align: left;
+  }
+}
+
+/* The sealed / unavailable box — shown ONLY when the frame really 404s or the
+   bytes can't be opened, never unconditionally. */
+.sealed {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 28px;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.45;
+  color: var(--hu-text-muted);
+  background:
+    radial-gradient(130% 100% at 28% 18%, rgba(0, 255, 224, 0.06), transparent 55%),
+    linear-gradient(160deg, var(--hu-colors-penumbra-base, #1f2121), var(--hu-colors-eclipse-base, #0f0f0f));
+}
+
+.meta {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding-top: 16px;
+}
+
+.timestamp {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--hu-colors-white);
+}
+
+/* Info (i) popover — the metadata this backend actually holds for a capture. */
+.infoPanel {
+  margin-top: 14px;
+  padding: 16px 18px;
+  border-radius: 14px;
+  background: var(--hu-colors-penumbra-base);
+  box-shadow: var(--outline-shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.infoRow {
+  display: grid;
+  grid-template-columns: 118px 1fr;
+  gap: 12px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.infoLabel {
+  color: var(--hu-colors-crater-base);
+}
+
+.infoValue {
+  color: var(--hu-colors-white);
+  word-break: break-word;
+}
+
+.infoNote {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--hu-text-muted);
+}
+
+.technicalDetails {
+  padding-top: 8px;
+  border-top: 1px solid var(--hu-divider);
+}
+
+.technicalDetails summary {
+  cursor: pointer;
+  color: var(--hu-colors-crater-base);
+  font-size: 12px;
+}
+
+.technicalDetails[open] summary {
+  margin-bottom: 10px;
+  color: var(--hu-colors-white);
+}
+
+.technicalDetails .infoNote {
+  margin: 10px 0 0;
+}
+
+/* Share result — the minted link (or an honest "not available" note). */
+.shareResult {
+  margin-top: 14px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: var(--hu-colors-penumbra-base);
+  box-shadow: var(--outline-shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.shareRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.shareLink {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--hu-colors-beam-base);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shareCopy {
+  composes: buttonSecondary from "./controls.module.css";
+}
+
+.shareNote {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--hu-text-muted);
+}
+
+/*
+ * Placement for the line under the toolbar (a delete that deleted nothing, a
+ * download of a missing frame). It carries no colour of its own any more: it
+ * used to be crater-grey, exactly the caption colour, so a failure was
+ * typographically identical to a timestamp. <StatusMessage> owns the tone.
+ */
+.actionError {
+  margin-top: 10px;
+  display: flex;
+  justify-content: center;
+}

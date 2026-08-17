@@ -1,0 +1,76 @@
+[package]
+name = "cosmos"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+async-stream.workspace = true
+futures-util.workspace = true
+axum.workspace = true
+base64 = "0.22.1"
+image = { version = "0.25.5", default-features = false, features = ["jpeg", "png", "webp"] }
+cosmos-core.workspace = true
+cosmos-crypto = { path = "../crypto" }
+cosmos-protocol.workspace = true
+reqwest = { version = "0.12.9", default-features = false, features = ["json", "rustls-tls", "stream"] }
+jsonwebtoken = { workspace = true }
+serde = { version = "1.0.217", features = ["derive"] }
+serde_json = "1.0.138"
+thiserror.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+prost.workspace = true
+# Pinned to EXACTLY the versions the device's libopaque.so was built from
+# (recovered from crate panic-paths in the shipped binary): opaque-ke 2.0.0 over
+# NIST P-256 with Argon2 key stretching. Byte compatibility with a real Pin
+# depends on these matching.
+opaque-ke = { version = "2.0.0", default-features = false, features = ["argon2"] }
+# `voprf` + `hash2curve` are what make NistP256 usable as an OPRF group —
+# the same features the device's libopaque build must have enabled. `ecdsa` is
+# additive and touches nothing OPAQUE uses; it is what lets us verify the
+# device-attestation signatures (ECDSA-P256-SHA256) the Pin puts on every
+# provisioning RPC. The version stays pinned to the device's libopaque build.
+p256 = { version = "0.11", default-features = false, features = ["arithmetic", "hash2curve", "voprf", "sha256", "ecdsa"] }
+argon2 = { version = "0.4.1", default-features = false, features = ["alloc"] }
+# H4 enrollment seal (AES-256-GCM over the OPAQUE session key) — a SEPARATE
+# path from cosmos-crypto's AES-128 Krypton envelope; see enrollment.rs.
+aes-gcm = "0.10.3"
+time = { version = "0.3", default-features = false, features = ["std"] }
+# `x509-parser` is what provides CSR parsing and CA-from-PEM, both of which the
+# DeviceUser binding needs.
+rcgen = { version = "0.13", default-features = false, features = ["pem", "crypto", "ring", "x509-parser"] }
+# A direct dependency (not just rcgen's) because enrollment parses the device's
+# PKCS#10 itself: rcgen's CSR parser rejects the critical `basicConstraints`
+# extension request every real Pin sends. `verify` gives us the CSR
+# proof-of-possession check and certificate signature verification.
+x509-parser = { version = "0.16", features = ["verify"] }
+rustls-pemfile = "2"
+# Production deployments use PostgreSQL. Runtime queries
+# only — the compile-time `query!` macros would require a live database to build.
+sqlx = { version = "0.8", default-features = false, features = ["postgres", "runtime-tokio-rustls", "uuid", "chrono"] }
+rand = "0.8"
+sha2 = "0.10"
+prost-types = "0.13.4"
+tonic.workspace = true
+tonic-health.workspace = true
+tower.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+h2.workspace = true
+tower.workspace = true
+# Client-side TLS, for the live enrollment test only. The server never needs it —
+# the mesh terminates device mTLS at the edge — so it stays out of the runtime
+# dependency set rather than being enabled crate-wide.
+tonic = { version = "0.12.3", features = ["tls"] }
+rustls-pemfile = "2"
+rand = "0.8"
+rsa = "0.9.6"
+# `pkcs8` so the live test can load the attestation private key and sign the CSR
+# with it — the server verifies that signature against the attestation
+# certificate, so signing with anything else is correctly rejected.
+p256 = { version = "0.11", default-features = false, features = ["arithmetic", "ecdsa", "pkcs8"] }

@@ -1,0 +1,58 @@
+// reconstructed from ironman.apk (protobuf-lite). field numbers are wire-accurate.
+syntax = "proto3";
+
+package humane.pushrelay;
+
+import "humane/common/push.proto";
+
+message Error {
+  int32 code = 1;
+  string message = 2;
+}
+
+message PushMessageRequest {
+  repeated string app_names = 1;
+  repeated string acks = 2;
+  bool experience_names_set = 3;
+  repeated SubscribedPushExperience subscribed_experiences = 4;
+  humane.common.push.PushConnectionType conn_type = 5;
+}
+
+message PushMessageResponse {
+  repeated humane.common.push.PushMessage push_messages = 1;
+  // Repeated MESSAGE, not bytes. `PushMessageResponse.java:488-489` names
+  // `SubscribedExperienceStatus.class` for field 2 and gives it the descriptor
+  // char 0x1b (FieldType.MESSAGE_LIST = 27) — which is what the
+  // `SubscribedExperienceStatus` message declared below is for.
+  repeated SubscribedExperienceStatus subscribedexperiencestatuses = 2;
+  Error error = 3;
+}
+
+message PushToken {
+  string app_name = 1;
+  string token = 2;
+  Error error = 3;
+}
+
+message PushTokenRequest {
+  repeated string app_names = 1;
+}
+
+message PushTokenResponse {
+  repeated PushToken tokens = 1;
+}
+
+message SubscribedExperienceStatus {
+  string experience_name = 1;
+  bool rotate_token = 2;
+}
+
+message SubscribedPushExperience {
+  string experience_name = 1;
+  string token = 2;
+}
+
+service PushRelayService {
+  rpc GetPushTokens (PushTokenRequest) returns (PushTokenResponse);
+  rpc Subscribe (stream PushMessageRequest) returns (stream PushMessageResponse);
+}

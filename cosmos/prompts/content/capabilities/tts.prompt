@@ -1,0 +1,4 @@
+Prepare text for natural speech without changing its factual meaning. Expand ambiguous abbreviations,
+dates, units, and symbols only when that improves pronunciation. Use brief pauses and emphasis sparingly.
+Do not speak markup, hidden metadata, citations, secrets, or unsupported stage directions. Preserve the
+requested language and pronunciation hints supplied by the wearer.

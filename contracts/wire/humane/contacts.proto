@@ -1,0 +1,178 @@
+// reconstructed from ironman.apk (protobuf-lite). field numbers are wire-accurate.
+syntax = "proto3";
+
+package humane.contacts;
+
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+import "humane/common/encryption.proto";
+
+message Contact {
+  string id = 1;
+  int32 version = 2;
+  repeated Email emails = 3;
+  Name name = 4;
+  repeated ContactAction contact_actions = 5;
+  repeated SocialHandle social_handles = 6;
+  repeated string telephone_numbers = 7;
+  bool temporary = 8;
+  google.protobuf.Timestamp last_used_at = 9;
+  bool trusted = 10;
+  bool emergency = 11;
+  repeated PhoneNumber phone_numbers = 12;
+  ContactSource contact_source = 13;
+  Organization organization = 14;
+  google.protobuf.Timestamp modified_at = 15;
+  bool internal_favorite = 16;
+}
+
+message ContactAction {
+  string id = 1;
+  string message = 2;
+}
+
+message ContactDeltasRequest {
+  string id = 1;
+  int32 version = 2;
+}
+
+message ContactList {
+  repeated Contact contacts = 1;
+  repeated humane.common.encryption.EncryptedData encrypted_contacts = 2;
+  // PACKED int32, not a repeated wrapper message. `ContactList.java:529` gives
+  // field 3 the descriptor char '\'' (FieldType.INT32_LIST_PACKED = 39). Both
+  // framings are length-delimited, so the mismatch is silent: a wrapper encoder
+  // writes `08 <v>` per element, which the device reads back as the varint pair
+  // (8, v) — every synced contact version comes out wrong.
+  repeated int32 encrypted_contacts_versions = 3;
+}
+
+message ContactSource {
+  string name = 1;
+}
+
+message DeleteContactRequest {
+  repeated string ids = 1;
+}
+
+message Email {
+  string value = 1;
+  string type = 2;
+}
+
+message GetContactDeltasRequest {
+  repeated ContactDeltasRequest contact_requests = 1;
+  google.protobuf.Timestamp last_synced_time = 2;
+}
+
+message GetContactDeltasResponse {
+  repeated Contact contacts = 1;
+  repeated string deleted_contact_ids = 2;
+  repeated humane.common.encryption.EncryptedData encrypted_contacts = 3;
+  // Same packed int32 as `ContactList` above.
+  // `GetContactDeltasResponse.java:710` gives field 4 the char '\'' (39).
+  repeated int32 encrypted_contacts_versions = 4;
+  google.protobuf.Timestamp latest_sync_time = 5;
+}
+
+message GetContactsRequest {
+  string search_term = 1;
+}
+
+message GetContactsStreamingPageRequest {
+  GetContactsStreamingRequest streaming_request = 1;
+  int32 page_size = 2;
+}
+
+message GetContactsStreamingPageResponse {
+  repeated GetContactsStreamingResponse page_content = 1;
+  int32 page_num = 2;
+  int32 total_pages = 3;
+}
+
+message GetContactsStreamingRequest {
+  bool server_should_decrypt = 3;
+  oneof syncoption {
+    google.protobuf.Timestamp last_synced_time = 1;
+    bool full_sync = 2;
+  }
+}
+
+message GetContactsStreamingResponse {
+  google.protobuf.Timestamp modified_time = 1;
+  oneof response {
+    string deleted_contact_id = 2;
+    humane.common.encryption.EncryptedData encrypted_contact = 3;
+    Contact contact = 4;
+  }
+}
+
+message Name {
+  string first_name = 1;
+  string last_name = 2;
+  string nickname = 3;
+  string display_name = 4;
+}
+
+message NewContact {
+  Name name = 1;
+  repeated Email emails = 2;
+  repeated string telephone_numbers = 3;
+  bool trusted = 4;
+  bool emergency = 5;
+  repeated PhoneNumber phone_numbers = 6;
+  Organization organization = 7;
+}
+
+message Organization {
+  string name = 1;
+}
+
+message PhoneNumber {
+  string value = 1;
+  string type = 2;
+}
+
+message SocialHandle {
+  enum SocialProvider {
+    UNKNOWN = 0;
+    SLACK = 1;
+  }
+  SocialHandle.SocialProvider social_provider = 1;
+  repeated SocialProviderAttribute social_provider_attributes = 2;
+}
+
+message SocialProviderAttribute {
+  enum SocialProviderAttributeEnum {
+    UNKNOWN = 0;
+    WORKSPACE_ID = 1;
+    USER_ID = 2;
+  }
+  SocialProviderAttribute.SocialProviderAttributeEnum type = 1;
+  string value = 2;
+}
+
+message ThirdPartyContactData {
+  string content = 1;
+}
+
+message UpdateContact {
+  Name name = 1;
+  repeated Email emails = 2;
+  repeated SocialHandle social_handles = 3;
+  bool temporary = 4;
+  bool trusted = 5;
+  bool emergency = 6;
+  repeated PhoneNumber phone_numbers = 7;
+  Organization organization = 8;
+}
+
+service ContactsRPCService {
+  rpc CreateContacts (ContactList) returns (ContactList);
+  rpc DeleteContacts (DeleteContactRequest) returns (google.protobuf.Empty);
+  rpc GetContactDeltas (GetContactDeltasRequest) returns (GetContactDeltasResponse);
+  rpc GetContacts (GetContactsRequest) returns (ContactList);
+  rpc GetContactsPaginatedStreaming (GetContactsStreamingPageRequest) returns (stream GetContactsStreamingPageResponse);
+  rpc GetContactsStreaming (GetContactsStreamingRequest) returns (stream GetContactsStreamingResponse);
+  rpc UpdateContacts (ContactList) returns (google.protobuf.Empty);
+}

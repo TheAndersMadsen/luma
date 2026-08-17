@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "kind": "synthetic_expected",
+  "scenario_id": "tool-success",
+  "events": [
+    {
+      "event_id": "session-open",
+      "action": "session.open",
+      "status": "ok",
+      "final": false,
+      "semantics": ["acknowledges"],
+      "style": ["direct", "neutral"],
+      "timing": {"min_ms": 0, "max_ms": 100},
+      "recovery": "none"
+    },
+    {
+      "event_id": "tool-complete",
+      "action": "tool.complete",
+      "status": "ok",
+      "final": false,
+      "semantics": ["uses_tool"],
+      "style": ["brief", "no_repetition"],
+      "timing": {"min_ms": 100, "max_ms": 800},
+      "recovery": "none"
+    },
+    {
+      "event_id": "response-final",
+      "action": "response.finalize",
+      "status": "ok",
+      "final": true,
+      "semantics": ["answers"],
+      "style": ["conversational", "final"],
+      "timing": {"min_ms": 200, "max_ms": 1500},
+      "recovery": "none"
+    }
+  ]
+}

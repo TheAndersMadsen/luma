@@ -1,0 +1,63 @@
+# Operator runtime output belongs outside source. These remain ignored as a
+# compatibility guard if an override accidentally points at the workspace.
+/private/
+/state/
+/var/
+/artifacts/
+/backups/
+/releases/
+/deployments/
+
+# Secret-bearing local configuration.
+.env
+.env.*
+!.env.example
+.secrets/
+*.local
+*.secret
+*.key
+*.pem
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.token
+*.mobileprovision
+gradle-local.properties
+secrets.properties
+
+# Proprietary/device/capture artifacts are never source.
+*.apk
+*.apks
+*.aab
+*.img
+*.mbn
+*.pcap
+*.pcapng
+*.har
+
+# Generated dependencies and build output.
+node_modules/
+.next/
+target/
+build/
+.gradle/
+dist/
+dist-*/
+coverage/
+test-results/
+test-runs/
+out/
+.cache/
+*.tsbuildinfo
+*.bak
+*.bak[0-9]*
+
+# Platform and editor noise.
+.DS_Store
+.idea/
+.vscode/
+*.swp
+.gstack/
+.codex/
+.claude/

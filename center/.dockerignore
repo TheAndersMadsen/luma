@@ -1,0 +1,14 @@
+node_modules
+.next
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+.carry-channel-key.json*
+coverage
+docs
+verify
+README.md

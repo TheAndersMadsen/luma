@@ -1,0 +1,359 @@
+name: ai-pin-revival
+
+# Canonical application model. Environment-specific policy belongs in
+# platform/compose/development.yaml or platform/compose/production.yaml.
+# REVIVAL_RELEASE_ID is deliberately mandatory: Center and every Cosmos
+# workload are built, labelled, and run from one immutable release identity.
+
+x-revival-image-labels: &revival-image-labels
+  dk.andersmadsen.ai-pin-revival.product: Ai Pin Revival
+  dk.andersmadsen.ai-pin-revival.release: ${REVIVAL_RELEASE_ID:?set REVIVAL_RELEASE_ID to the immutable release id}
+  org.opencontainers.image.revision: ${REVIVAL_RELEASE_ID:?set REVIVAL_RELEASE_ID to the immutable release id}
+
+x-revival-labels: &revival-labels
+  <<: *revival-image-labels
+  dk.andersmadsen.ai-pin-revival.environment: ${REVIVAL_DEPLOYMENT_ENVIRONMENT:-production}
+
+x-cosmos-environment: &cosmos-environment
+  REVIVAL_PRODUCT: Ai Pin Revival
+  REVIVAL_RELEASE_ID: ${REVIVAL_RELEASE_ID:?set REVIVAL_RELEASE_ID to the immutable release id}
+  REVIVAL_DEPLOYMENT_ENVIRONMENT: ${REVIVAL_DEPLOYMENT_ENVIRONMENT:-production}
+  CARRY_AUTH_MODE: ${CARRY_AUTH_MODE:-edge-authenticated}
+  CARRY_ENVIRONMENT: ${REVIVAL_DEPLOYMENT_ENVIRONMENT:-production}
+  CARRY_GRPC_BIND: 127.0.0.1:50051
+  CARRY_HTTP_BIND: 127.0.0.1:8080
+  CARRY_LOG_LEVEL: ${CARRY_LOG_LEVEL:-info}
+  CARRY_MAX_DECODE_BYTES: ${CARRY_MAX_DECODE_BYTES:-4194304}
+  CARRY_MAX_ENCODE_BYTES: ${CARRY_MAX_ENCODE_BYTES:-4194304}
+  CARRY_REGION: ${CARRY_REGION:-eastus}
+  CARRY_REQUEST_TIMEOUT_MS: ${CARRY_REQUEST_TIMEOUT_MS:-15000}
+  CARRY_REVISION: ${REVIVAL_REVISION:-${REVIVAL_RELEASE_ID:?set REVIVAL_RELEASE_ID to the immutable release id}}
+  CARRY_SHUTDOWN_GRACE_MS: ${CARRY_SHUTDOWN_GRACE_MS:-5000}
+  CARRY_TRUST_DOMAIN: ${CARRY_TRUST_DOMAIN:-carry.local}
+  CARRY_STATE_DIR: /var/lib/carry
+  CARRY_OIDC_ISSUER: ${CARRY_OIDC_ISSUER:-}
+  CARRY_OIDC_JWKS_URI: ${CARRY_OIDC_JWKS_URI:-}
+  CARRY_OIDC_AUDIENCE: ${CARRY_OIDC_AUDIENCE:-}
+
+x-cosmos-service: &cosmos-service
+  build:
+    context: ./cosmos
+    dockerfile: Dockerfile
+    additional_contexts:
+      wire_contracts: ./contracts/wire
+    labels:
+      <<: *revival-image-labels
+      dk.andersmadsen.ai-pin-revival.component: cosmos
+  image: ai-pin-revival/cosmos:${REVIVAL_RELEASE_ID:?set REVIVAL_RELEASE_ID to the immutable release id}
+  entrypoint:
+    - /bin/sh
+    - -ec
+  command:
+    - |
+      /usr/local/bin/cosmos &
+      server_pid=$$!
+      socat TCP-LISTEN:15051,bind=0.0.0.0,fork,reuseaddr TCP:127.0.0.1:50051 &
+      grpc_proxy_pid=$$!
+      socat TCP-LISTEN:18080,bind=0.0.0.0,fork,reuseaddr TCP:127.0.0.1:8080 &
+      http_proxy_pid=$$!
+      stop_all() {
+        kill -TERM "$$server_pid" "$$grpc_proxy_pid" "$$http_proxy_pid" 2>/dev/null || true
+        wait "$$server_pid" "$$grpc_proxy_pid" "$$http_proxy_pid" 2>/dev/null || true
+      }
+      shutdown() {
+        stop_all
+        exit 0
+      }
+      trap shutdown INT TERM
+      while kill -0 "$$server_pid" "$$grpc_proxy_pid" "$$http_proxy_pid" 2>/dev/null; do
+        sleep 1
+      done
+      stop_all
+      exit 1
+  restart: unless-stopped
+  init: true
+  read_only: true
+  tmpfs:
+    - /tmp:size=16m,mode=1777
+  volumes:
+    - carry-state:/var/lib/carry
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  pids_limit: 128
+  mem_limit: 768m
+  stop_grace_period: 7s
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: "3"
+  healthcheck:
+    test:
+      - CMD-SHELL
+      - >-
+        curl --fail --silent --show-error --output /dev/null
+        http://127.0.0.1:18080/readyz
+        && socat -T1 - TCP:127.0.0.1:15051 </dev/null >/dev/null
+    interval: 10s
+    timeout: 3s
+    start_period: 5s
+    retries: 3
+  networks:
+    - cosmos-internal
+
+services:
+  connectivity:
+    <<: *cosmos-service
+    labels:
+      <<: *revival-labels
+      dk.andersmadsen.ai-pin-revival.component: cosmos
+      dk.andersmadsen.ai-pin-revival.workload: connectivity
+    environment:
+      <<: *cosmos-environment
+      CARRY_INSTANCE_ID: connectivity-${REVIVAL_REVISION:-${REVIVAL_RELEASE_ID}}
+      CARRY_POD_NAME: connectivity-${REVIVAL_REVISION:-${REVIVAL_RELEASE_ID}}-1
+      CARRY_WORKLOAD: connectivity
+
+  ai-bus:
+    <<: *cosmos-service
+    mem_limit: 1536m
+    labels:
+      <<: *revival-labels
+      dk.andersmadsen.ai-pin-revival.component: cosmos
+      dk.andersmadsen.ai-pin-revival.workload: ai-bus
+    environment:
+      <<: *cosmos-environment
+      CARRY_INSTANCE_ID: ai-bus-${REVIVAL_REVISION:-${REVIVAL_RELEASE_ID}}
+      CARRY_POD_NAME: ai-bus-${REVIVAL_REVISION:-${REVIVAL_RELEASE_ID}}-1
+      CARRY_WORKLOAD: ai-bus
+      CARRY_ADMIN_TOKEN: ${CARRY_ADMIN_TOKEN:-}
+      CARRY_CENTER_PROJECTION_TOKEN: ${CARRY_CENTER_PROJECTION_TOKEN:-}
+      CARRY_DEMO_ENABLED: ${CARRY_DEMO_ENABLED:-false}
+      CARRY_REMOTE_TTS_ENABLED: ${CARRY_REMOTE_TTS_ENABLED:-false}
+      CARRY_CAPTURE_SHARE_BASE_URL: ${CARRY_CAPTURE_SHARE_BASE_URL:-}
+      CARRY_SHARE_TOKEN_SECRET: ${CARRY_SHARE_TOKEN_SECRET:-}
+      CARRY_CAPTURE_UPLOAD_BASE_URL: ${CARRY_CAPTURE_UPLOAD_BASE_URL:-http://ai-bus:18080}
+      CARRY_CAPTURE_STORAGE_DIR: ${CARRY_CAPTURE_STORAGE_DIR:-/var/lib/carry/captures}
+      CARRY_CAPTURE_MAX_UPLOAD_BYTES: ${CARRY_CAPTURE_MAX_UPLOAD_BYTES:-33554432}
+      CARRY_CAPTURE_RETENTION_DAYS: ${CARRY_CAPTURE_RETENTION_DAYS:-30}
+      CARRY_UPLOAD_PRESIGN_ENDPOINT: ${CARRY_UPLOAD_PRESIGN_ENDPOINT:-}
+      CARRY_MUSICBRAINZ_BASE_URL: ${CARRY_MUSICBRAINZ_BASE_URL:-https://musicbrainz.org}
+      CARRY_SHOPPING_VISUAL_SEARCH_URL: ${CARRY_SHOPPING_VISUAL_SEARCH_URL:-}
+      CARRY_SHOPPING_ALLOWED_HOSTS: ${CARRY_SHOPPING_ALLOWED_HOSTS:-}
+      CARRY_SHOPPING_API_KEY: ${CARRY_SHOPPING_API_KEY:-}
+
+  account:
+    <<: *cosmos-service
+    labels:
+      <<: *revival-labels
+      dk.andersmadsen.ai-pin-revival.component: cosmos
+      dk.andersmadsen.ai-pin-revival.workload: account
+    environment:
+      <<: *cosmos-environment
+      CARRY_INSTANCE_ID: account-${REVIVAL_REVISION:-${REVIVAL_RELEASE_ID}}
+      CARRY_POD_NAME: account-${REVIVAL_REVISION:-${REVIVAL_RELEASE_ID}}-1
+      CARRY_WORKLOAD: account
+
+  contacts:
+    <<: *cosmos-service
+    labels:
+      <<: *revival-labels
+      dk.andersmadsen.ai-pin-revival.component: cosmos
+      dk.andersmadsen.ai-pin-revival.workload: contacts
+    environment:
+      <<: *cosmos-environment
+      CARRY_INSTANCE_ID: contacts-${REVIVAL_REVISION:-${REVIVAL_RELEASE_ID}}
+      CARRY_POD_NAME: contacts-${REVIVAL_REVISION:-${REVIVAL_RELEASE_ID}}-1
+      CARRY_WORKLOAD: contacts
+
+  feature-flags:
+    <<: *cosmos-service
+    labels:
+      <<: *revival-labels
+      dk.andersmadsen.ai-pin-revival.component: cosmos
+      dk.andersmadsen.ai-pin-revival.workload: feature-flags
+    environment:
+      <<: *cosmos-environment
+      CARRY_INSTANCE_ID: feature-flags-${REVIVAL_REVISION:-${REVIVAL_RELEASE_ID}}
+      CARRY_POD_NAME: feature-flags-${REVIVAL_REVISION:-${REVIVAL_RELEASE_ID}}-1
+      CARRY_WORKLOAD: feature-flags
+      CARRY_BIDIRECTIONAL_STREAMING: ${CARRY_BIDIRECTIONAL_STREAMING:-0}
+      CARRY_REMOTE_TTS_ENABLED: ${CARRY_REMOTE_TTS_ENABLED:-false}
+
+  notable-events:
+    <<: *cosmos-service
+    labels:
+      <<: *revival-labels
+      dk.andersmadsen.ai-pin-revival.component: cosmos
+      dk.andersmadsen.ai-pin-revival.workload: notable-events
+    environment:
+      <<: *cosmos-environment
+      CARRY_INSTANCE_ID: notable-events-${REVIVAL_REVISION:-${REVIVAL_RELEASE_ID}}
+      CARRY_POD_NAME: notable-events-${REVIVAL_REVISION:-${REVIVAL_RELEASE_ID}}-1
+      CARRY_WORKLOAD: notable-events
+
+  provisioning:
+    <<: *cosmos-service
+    labels:
+      <<: *revival-labels
+      dk.andersmadsen.ai-pin-revival.component: cosmos
+      dk.andersmadsen.ai-pin-revival.workload: provisioning
+    environment:
+      <<: *cosmos-environment
+      CARRY_INSTANCE_ID: provisioning-${REVIVAL_REVISION:-${REVIVAL_RELEASE_ID}}
+      CARRY_POD_NAME: provisioning-${REVIVAL_REVISION:-${REVIVAL_RELEASE_ID}}-1
+      CARRY_WORKLOAD: provisioning
+      CARRY_ENROLLMENT_PINCODE: ${CARRY_ENROLLMENT_PINCODE:-}
+      CARRY_ENROLLMENT_USER_ID: ${CARRY_ENROLLMENT_USER_ID:-}
+      CARRY_OPAQUE_SEED: ${CARRY_OPAQUE_SEED:-}
+
+  center:
+    build:
+      context: ./center
+      dockerfile: Dockerfile
+      additional_contexts:
+        wire_contracts: ./contracts/wire
+      args:
+        REVIVAL_RELEASE_ID: ${REVIVAL_RELEASE_ID:?set REVIVAL_RELEASE_ID to the immutable release id}
+      labels:
+        <<: *revival-image-labels
+        dk.andersmadsen.ai-pin-revival.component: center
+    image: ai-pin-revival/center:${REVIVAL_RELEASE_ID:?set REVIVAL_RELEASE_ID to the immutable release id}
+    user: "1000:1001"
+    restart: unless-stopped
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777,uid=1000,gid=1001
+      - /app/.next/cache:size=128m,mode=0750,uid=1000,gid=1001
+    environment:
+      REVIVAL_PRODUCT: Ai Pin Revival
+      REVIVAL_RELEASE_ID: ${REVIVAL_RELEASE_ID:?set REVIVAL_RELEASE_ID to the immutable release id}
+      REVIVAL_DEPLOYMENT_ENVIRONMENT: ${REVIVAL_DEPLOYMENT_ENVIRONMENT:-production}
+      # A signed-in browser sends the chunked `carry_tokens` set back on every
+      # request, so the Cookie line alone can reach ~12.5 KB. Node's default
+      # 16 KB cap covers the whole request header block, which also carries the
+      # edge's X-Forwarded-* set and Cloudflare's cf-* headers, so the default
+      # leaves too little room and answers 431 once the edge stops truncating.
+      NODE_OPTIONS: --max-http-header-size=65536
+      CARRY_ENDPOINT_AI_BUS: ai-bus:15051
+      CARRY_ENDPOINT_NOTABLE_EVENTS: notable-events:15051
+      CARRY_ENDPOINT_CONTACTS: contacts:15051
+      CARRY_ENDPOINT_ACCOUNT: account:15051
+      CARRY_GRPC_ENDPOINT: ai-bus:15051
+      CARRY_WEBAPI_BASE_URL: http://ai-bus:18080
+      CARRY_FEATURE_FLAGS_METRICS_URL: http://feature-flags:18080
+      CARRY_EDGE_TOKEN: ${CARRY_EDGE_TOKEN:-}
+      CARRY_ADMIN_TOKEN: ${CARRY_ADMIN_TOKEN:-}
+      CARRY_CENTER_PROJECTION_TOKEN: ${CARRY_CENTER_PROJECTION_TOKEN:-}
+      CARRY_SHARE_TOKEN_SECRET: ${CARRY_SHARE_TOKEN_SECRET:-}
+      CARRY_OPERATOR_EMAILS: ${CARRY_OPERATOR_EMAILS:-}
+      AUTH_SESSION_SECRET: ${AUTH_SESSION_SECRET:-}
+      KEYCLOAK_BASE_URL: ${KEYCLOAK_BASE_URL:-}
+      KEYCLOAK_REALM: ${KEYCLOAK_REALM:-humane}
+      KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID:-center}
+      KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET:-}
+      KEYCLOAK_SCOPES: ${KEYCLOAK_SCOPES:-openid email profile}
+    depends_on:
+      ai-bus:
+        condition: service_healthy
+      account:
+        condition: service_healthy
+      contacts:
+        condition: service_healthy
+      feature-flags:
+        condition: service_healthy
+      notable-events:
+        condition: service_healthy
+    volumes:
+      - center-data:/data
+    networks:
+      - cosmos-internal
+      - wearer-edge
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 1g
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    labels:
+      <<: *revival-labels
+      dk.andersmadsen.ai-pin-revival.component: center
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:4000/api/version').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0@sha256:09a381c715ab0b111835b70f2905955274843a219c6f27efb348e4d9f4086858
+    profiles:
+      - identity
+    restart: unless-stopped
+    init: true
+    environment:
+      KC_HEALTH_ENABLED: "true"
+      JAVA_OPTS_APPEND: -XX:MaxRAMPercentage=60
+    networks:
+      - cosmos-internal
+      - identity-edge
+    mem_limit: 1g
+    pids_limit: 512
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    security_opt:
+      - no-new-privileges:true
+    labels:
+      <<: *revival-labels
+      dk.andersmadsen.ai-pin-revival.component: identity
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/9000
+          && printf 'GET /health/ready HTTP/1.0\r\n\r\n' >&3
+          && grep -q '"status": "UP"' <&3
+      interval: 10s
+      timeout: 5s
+      start_period: 40s
+      retries: 5
+
+networks:
+  cosmos-internal:
+    driver: bridge
+    internal: true
+    labels:
+      <<: *revival-labels
+  wearer-edge:
+    driver: bridge
+    labels:
+      <<: *revival-labels
+  identity-edge:
+    driver: bridge
+    labels:
+      <<: *revival-labels
+
+volumes:
+  carry-state:
+    labels:
+      <<: *revival-labels
+      dk.andersmadsen.ai-pin-revival.data: cosmos-state
+  center-data:
+    labels:
+      <<: *revival-labels
+      dk.andersmadsen.ai-pin-revival.data: center

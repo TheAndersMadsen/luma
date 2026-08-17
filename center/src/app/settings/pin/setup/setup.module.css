@@ -1,0 +1,290 @@
+/*
+ * The guided setup rail.
+ *
+ * Written in the --hu-* tokens from globals.css and on settings.module.css's
+ * row rhythm (18px/24px), so a setup step reads as the same furniture as a row
+ * on /settings/account/devices rather than as a second design system. The Pin
+ * console's own pin.module.css supplies buttons, mono text and section prose;
+ * only the things that stylesheet has no word for — the numbered rail, the step
+ * state pill, and the block that carries a shell command Center cannot run —
+ * are added here.
+ *
+ * Deliberately NOT reusing <StatusChip> for step state: that component's four
+ * tones are a provenance vocabulary (live / absent / degraded / off) about
+ * where a VALUE came from. "This step is blocked behind the one above it" is a
+ * different claim, and borrowing the tone words for it would erode the one
+ * vocabulary the rest of Center depends on. StatusChip still appears on this
+ * page — for the facts that really are provenance claims.
+ */
+
+/* ------------------------------------------------------------- progress -- */
+
+.progress {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px 24px;
+  border-bottom: 1px solid var(--hu-divider);
+}
+
+.progress:last-child {
+  border-bottom: none;
+}
+
+.progressHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.progressCount {
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--hu-colors-white);
+}
+
+.progressMeta {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--hu-text-muted);
+}
+
+.progressTrack {
+  height: 4px;
+  border-radius: 100px;
+  background: var(--hu-colors-penumbra-base);
+  overflow: hidden;
+}
+
+.progressFill {
+  height: 100%;
+  border-radius: 100px;
+  background: var(--hu-status-live);
+  transition: width var(--transition-duration) ease-out;
+}
+
+/* ----------------------------------------------------------------- rail -- */
+
+.step {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 16px;
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--hu-divider);
+}
+
+.step:last-child {
+  border-bottom: none;
+}
+
+/* The step the wearer should be looking at, lifted off the surface. */
+.stepFocus {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin-top: 1px;
+  border-radius: 100px;
+  box-shadow: inset 0 0 0 1px var(--hu-colors-lunar-grey-dark-200);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--hu-colors-crater-base);
+}
+
+.badge[data-state="done"] {
+  background: var(--hu-status-live);
+  box-shadow: none;
+  color: var(--hu-colors-black);
+}
+
+.badge[data-state="attention"] {
+  box-shadow: inset 0 0 0 1px var(--hu-status-warning);
+  color: var(--hu-status-warning);
+}
+
+.badge[data-state="todo"],
+.badge[data-state="manual"] {
+  box-shadow: inset 0 0 0 1px var(--hu-colors-apollo-base);
+  color: var(--hu-colors-white);
+}
+
+.badge[data-state="unobservable"] {
+  box-shadow: inset 0 0 0 1px var(--hu-colors-crater-grey-200);
+  color: var(--hu-text-muted);
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.title {
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--hu-colors-white);
+}
+
+.stepDim .title {
+  color: var(--hu-colors-crater-base);
+}
+
+/* The state word. Same pill geometry as settings.module.css `.additionTag`. */
+.state {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 100px;
+  background: rgba(255, 255, 255, 0.06);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.2px;
+  line-height: 1.4;
+  text-transform: uppercase;
+  color: var(--hu-colors-crater-base);
+}
+
+.state[data-state="done"] {
+  color: var(--hu-status-live);
+}
+
+.state[data-state="attention"] {
+  color: var(--hu-status-warning);
+}
+
+.state[data-state="todo"],
+.state[data-state="manual"] {
+  color: var(--hu-colors-white);
+}
+
+.summary {
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.45;
+  color: var(--hu-colors-crater-base);
+  max-width: 640px;
+}
+
+.next {
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.45;
+  color: var(--hu-colors-apollo-base);
+  max-width: 640px;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding-top: 2px;
+}
+
+/* -------------------------------------------------- commands Center lacks -- */
+
+/*
+ * A step that has no console yet.
+ *
+ * The whole point of this block is that it is NOT a button: it says what has to
+ * be typed elsewhere, and the note above it says why there is nothing to click.
+ * Pretending otherwise is the failure mode this page exists to remove.
+ */
+.manual {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+  padding: 14px 16px;
+  border-radius: var(--hu-radius-control);
+  background: var(--hu-colors-penumbra-200);
+  box-shadow: var(--outline-shadow);
+}
+
+.manualNote {
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.5;
+  color: var(--hu-colors-crater-base);
+}
+
+.commands {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+}
+
+.command {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--hu-colors-apollo-base);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* --------------------------------------------------------- package table -- */
+
+.packages {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.package {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.packageName {
+  color: var(--hu-colors-apollo-base);
+}
+
+.packageValue {
+  color: var(--hu-colors-crater-base);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.packageValue[data-problem="true"] {
+  color: var(--hu-status-warning);
+}
+
+@media (max-width: 700px) {
+  .step {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+  }
+  .package {
+    flex-direction: column;
+    gap: 2px;
+  }
+  .packageValue {
+    text-align: left;
+  }
+}

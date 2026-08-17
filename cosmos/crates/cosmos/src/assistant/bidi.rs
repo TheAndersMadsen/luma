@@ -1,0 +1,2497 @@
+//! Stock-facing **bidirectional** assistant transport for
+//! `AIBusService.BidirectionalStreamingUnderstand`, built on the same turn
+//! engine as `engine.rs`.
+//!
+//! Same loop, different division of labour. On the legacy server-stream
+//! `Understand` the server runs the *whole* loop and the device dispatches only
+//! the final action of the batch (a **positional** rule). On bidi the server
+//! cannot execute device tools, so it drives the loop **cooperatively** and the
+//! rule becomes **explicit**: every emitted turn is an
+//! `IntermediateEvent{event, agent, requires_response}` and the device's
+//! `TaoEventRegistrar.onIntermediateEvent` branches on that flag —
+//! `action && requires_response` → `dispatchAction` (the pin actually runs it and
+//! owes us an observation), `action && !requires_response` → `recordAction`
+//! (history only; the server already ran it), `observation` → `recordObservation`.
+//! `SynapseBidirectionalStreamingSession$1.onNext` mirrors this on the transport
+//! side: it queues every event and completes the outstanding device future ONLY
+//! when one arrives with `requires_response == true`, then resets the queue. So
+//! `requires_response=true` is the wire-level definition of "device, execute this
+//! and hand me the result before I can continue", and each device turn is
+//! terminated by **exactly one** such event.
+//!
+//! Contract points this session machine therefore honors:
+//!   1. **A device-catalog tool PAUSES the server.** It is emitted with
+//!      `requires_response=true` and the session then *waits* on the request
+//!      stream for `StreamingUnderstandRequest{observation}`. The server never
+//!      executes it and never fabricates its observation.
+//!   2. **A server tool does not pause the server.** It is executed inline and
+//!      streamed as two `requires_response=false` informational events (the action
+//!      node, then its observation node) purely as context/latency mask, and the
+//!      loop continues immediately (state machine 4a).
+//!   3. **`Respond` is terminal, not a pause.** `Respond` *is* a device action, so
+//!      it must carry `requires_response=true` or the device would merely
+//!      `recordAction` it and never speak. But its device-side observation is
+//!      FINAL, and `LanguageUnderstanding.onObservation` short-circuits on a final
+//!      observation (ends the run without re-understanding) — so the device never
+//!      posts it back. Waiting for it would hang the session forever. The run
+//!      therefore ends the moment `Respond` is emitted (state machine 4c/6).
+//!   4. **Observation-to-action matching** is by `parent_identifier == action.identifier`
+//!      ("Key decisions" #10). An observation naming some other action is stale /
+//!      superseded work and is discarded, mirroring `RunManager.shouldDispatchCurrent`.
+//!   5. **Server-held run state.** Unlike legacy (stateless per RPC; the device
+//!      replays the whole transcript every hop), on bidi the device sends the full
+//!      `device_context` only in the initial `understanding_request` and thereafter
+//!      only observation deltas — so the transcript is accumulated here for the
+//!      life of the stream and discarded on close (§3).
+//!   6. **Loop guard.** The same action budget as legacy (`ai_bus.max_action_turns`,
+//!      default 8); exceeding it yields a `TooManyActions` observation converted
+//!      into a terminal `Respond`, mirroring `Switchboard`'s runaway guard where
+//!      `Respond` is exempt so the agent can always answer.
+//!   7. **Honest termination.** A client half-close or a stream error half-closes
+//!      the response stream (state machine 7, ABORTED) — we never invent the
+//!      observation we did not receive. Running out of wall clock does not
+//!      fabricate one either, but it is not silent: a run that exhausts
+//!      `RUN_BUDGET` (including while parked on a device action) ends in the
+//!      terminal `Respond` carrying `ERROR_TIMEOUT`, the same string the device
+//!      speaks for itself when its own deadline fires. A bare half-close here
+//!      would leave the wearer with nothing at all.
+//!
+//! Deliberately NOT emitted: `Interstitial`. This shipped client's bidi observer
+//! early-returns on any non-`intermediate_event` response, so server interstitials
+//! are received and dropped (§1, edge cases); we also host no interstitial model,
+//! and emitting filler we cannot generate honestly would be noise on the wire.
+//!
+//! Also not consumed: `StreamingUnderstandRequest.initial_run_state`. It is the
+//! explicit resume/seed hook for priming `RunState.agent_to_runs`, but the shipped
+//! device never sends it (§3) and we host no per-agent run history to rehydrate
+//! into, so we accept and skip it rather than pretend to. It now DECODES
+//! faithfully at least: `agent_to_runs` is `map<string, Runs>`, not the opaque
+//! `bytes` this deployment modelled it as, which silently kept only the last
+//! agent's entry.
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use cosmos_protocol::aibus as pb;
+use tokio::sync::mpsc::Sender;
+use tokio_stream::{Stream, StreamExt, wrappers::ReceiverStream};
+use tonic::Status;
+
+use super::catalog;
+use super::engine::{ERROR_TIMEOUT, NO_ANSWER, TOO_MANY_ACTIONS};
+use super::llm::{ChatMessage, ChatModel, ChatResponse, Role, ToolCall, ToolDef};
+use crate::services::gates::{self, Entitlement};
+
+/// carry's `ai_bus.max_action_turns` feature flag defaults to 8 (same budget the
+/// legacy engine enforces).
+const MAX_STEPS: usize = 8;
+
+/// Per-model-step ceiling, shared with the legacy engine: the device abandons the
+/// turn at its own ~25s deadline, so a step must resolve well inside that.
+const MODEL_STEP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// Total wall-clock budget for one run, the same 22s the legacy engine bounds a
+/// turn with.
+///
+/// gRPC does not impose it here — `AIBusService.bidirectionalStreamingUnderstand`
+/// sets no `withDeadlineAfter`, unlike `understand`/`encryptedUnderstand` — and
+/// that is precisely why the server has to. With no budget the loop could spend
+/// eight steps at the per-step ceiling plus unbounded tool time while
+/// `SynapseInterpreter.getNextDeviceActionResponse` sits in an UNBOUNDED
+/// `responseFuture.get()`: the wearer's turn simply never comes back. Bounding
+/// the run at the same 22s the other transports use keeps the two transports
+/// answering on the same clock, and always leaves room to speak a terminal
+/// before giving up.
+const RUN_BUDGET: Duration = Duration::from_secs(22);
+
+/// Below this there is no useful work left to start — anything begun now would
+/// overrun the budget before it could be spoken.
+const MIN_USEFUL_REMAINING: Duration = Duration::from_millis(500);
+
+/// Bounced back in place of a server tool's result when the tool does not return
+/// inside the run's remaining budget. Not spoken directly (only `TooManyActions`
+/// is respoken by the device); it tells the model the step produced nothing so it
+/// answers from what it has rather than treating the gap as a result.
+const TOOL_TIMED_OUT: &str = "The tool did not return in time.";
+
+/// The exact observation the stock device bounces back when an emitted action does
+/// not resolve in its `SchemaCatalog` (`JsonResolver.resolve` → null).
+const UNRECOGNIZED_FUNCTION: &str = "Unrecognized function name and/or arguments";
+
+/// `IntermediateEvent.agent` — the server's label for which sub-agent produced a
+/// turn, a key into its own `RunState.agent_to_runs`. The device never reads it
+/// (no callers of `getAgent()` anywhere in the client), and carry's agent-string
+/// taxonomy is server-defined and not recoverable, so this clone names its single
+/// agent itself.
+const AGENT: &str = "assistant";
+
+/// `AIMIC_TIMEOUT_MS` — the whole-turn deadline the device applies to an assistant
+/// turn. A device observation that never arrives within it means the turn is dead
+/// on the device side too, so the session aborts rather than leaking forever.
+const DEVICE_OBSERVATION_TIMEOUT: Duration = Duration::from_secs(25);
+
+/// Outbound buffer depth, matching the `Understand` handler.
+const CHANNEL_DEPTH: usize = 16;
+
+/// One open `BidirectionalStreamingUnderstand` stream: a long-lived session that
+/// may carry several request/observation exchanges (a new
+/// `SynapseBidirectionalStreamingSession` is created on the device only when the
+/// previous one has completed, so the stream outlives a single run).
+pub struct BidiSession {
+    model: Arc<dyn ChatModel>,
+    tx: Sender<Result<pb::StreamingUnderstandResponse, Status>>,
+    /// Monotonic across the whole session so server-minted ids never collide.
+    counter: usize,
+    device_timeout: Duration,
+    /// Wall clock for ONE run (see [`RUN_BUDGET`]), reset per run rather than per
+    /// session — the stream serves several turns and the wearer's patience is
+    /// per turn.
+    run_budget: Duration,
+    /// The caller's account verdict, resolved once per RPC by the handler exactly
+    /// as `Understand` and `ServerStatefulUnderstand` do. Without it this
+    /// transport served every caller as fully subscribed and authorized — a
+    /// request that reached the handler with no principal included.
+    entitlement: Entitlement,
+    /// Whose data the server-side tools operate on. Without it `recall_memory`
+    /// and every other wearer-scoped tool can only report having nothing.
+    tools: catalog::ToolContext,
+}
+
+/// How a run ended, from the session's point of view.
+/// Outcome of one bounded, preemptible model step.
+enum Step {
+    /// The model produced a turn.
+    Answer(ChatResponse),
+    /// A new understanding request arrived; abandon this run for it.
+    Superseded(Box<pb::SynapseUnderstandingRequest>),
+    /// Model error, step deadline, or the client went away.
+    Failed,
+}
+
+enum Flow {
+    /// The run reached its terminal action. The stream stays open for another
+    /// exchange (device-side session reuse).
+    Done,
+    /// A fresh `understanding_request` arrived while a device action was pending:
+    /// the new user turn supersedes the in-flight run (a turn that is its own root
+    /// starts a new run; work outside the active run is discarded).
+    Supersede(Box<pb::SynapseUnderstandingRequest>),
+    /// Client hung up, the stream errored, or the turn deadline expired: half-close.
+    Closed,
+}
+
+/// What the session got while paused on a `requires_response=true` device action.
+enum Awaited {
+    /// The device executed the action and returned its observation.
+    Observation {
+        /// The device-minted turn id, which becomes the next parent in the DAG.
+        id: String,
+        content: pb::SynapseObservationContent,
+    },
+    Supersede(Box<pb::SynapseUnderstandingRequest>),
+    Closed,
+}
+
+impl BidiSession {
+    /// Drive a real gRPC bidi stream. Returns the response stream to hand back to
+    /// tonic; the session runs on its own task and half-closes by dropping the
+    /// sender.
+    /// `entitlement` and `tools` are the same per-request state the other two
+    /// transports resolve (`AiBusMain::entitlement_for` / `AiBusMain::tool_context`)
+    /// and are required, not defaulted: a caller that could omit them would
+    /// silently reopen the ungated path this transport used to have.
+    pub fn spawn(
+        model: Arc<dyn ChatModel>,
+        entitlement: Entitlement,
+        tools: catalog::ToolContext,
+        inbound: tonic::Streaming<pb::StreamingUnderstandRequest>,
+    ) -> ReceiverStream<Result<pb::StreamingUnderstandResponse, Status>> {
+        Self::spawn_with(model, entitlement, tools, inbound)
+    }
+
+    /// Transport-agnostic entry point: `spawn` is the thin `tonic::Streaming`
+    /// wrapper over this, which lets the session machine be driven by any request
+    /// stream (and therefore tested without standing up a gRPC connection).
+    pub fn spawn_with<S>(
+        model: Arc<dyn ChatModel>,
+        entitlement: Entitlement,
+        tools: catalog::ToolContext,
+        inbound: S,
+    ) -> ReceiverStream<Result<pb::StreamingUnderstandResponse, Status>>
+    where
+        S: Stream<Item = Result<pb::StreamingUnderstandRequest, Status>> + Send + 'static,
+    {
+        Self::spawn_tuned(
+            model,
+            entitlement,
+            tools,
+            inbound,
+            RUN_BUDGET,
+            DEVICE_OBSERVATION_TIMEOUT,
+        )
+    }
+
+    /// The same session machine with its two clocks passed in, so the deadline
+    /// guards can be exercised without spending the real 22 seconds. Production
+    /// always goes through `spawn_with`, which supplies the real values.
+    fn spawn_tuned<S>(
+        model: Arc<dyn ChatModel>,
+        entitlement: Entitlement,
+        tools: catalog::ToolContext,
+        inbound: S,
+        run_budget: Duration,
+        device_timeout: Duration,
+    ) -> ReceiverStream<Result<pb::StreamingUnderstandResponse, Status>>
+    where
+        S: Stream<Item = Result<pb::StreamingUnderstandRequest, Status>> + Send + 'static,
+    {
+        let (tx, rx) = tokio::sync::mpsc::channel(CHANNEL_DEPTH);
+        let mut session = Self {
+            model,
+            tx,
+            counter: 0,
+            device_timeout,
+            run_budget,
+            entitlement,
+            tools,
+        };
+        tokio::spawn(async move {
+            let mut inbound = Box::pin(inbound);
+            session.drive(&mut inbound).await;
+        });
+        ReceiverStream::new(rx)
+    }
+
+    /// Session loop: serve runs until the request stream ends or a run reports the
+    /// client is gone. Dropping `self.tx` on return is the server's half-close.
+    async fn drive<S>(&mut self, inbound: &mut S)
+    where
+        S: Stream<Item = Result<pb::StreamingUnderstandRequest, Status>> + Unpin,
+    {
+        let Some(mut next) = next_request(inbound).await else {
+            return;
+        };
+        loop {
+            match self.run_turn(*next, inbound).await {
+                Flow::Done => match next_request(inbound).await {
+                    Some(req) => next = req,
+                    None => return,
+                },
+                Flow::Supersede(req) => next = req,
+                Flow::Closed => return,
+            }
+        }
+    }
+
+    /// One run: `understanding_request` → thought/action/observation loop →
+    /// terminal `Respond`. Every emitted turn is an `IntermediateEvent`; the flag
+    /// on it is what tells the device whether to execute or merely record.
+    /// One model step, bounded and preemptible. `step_timeout` is already clamped
+    /// to whatever is left of the run budget, so a single step can never spend
+    /// time the run does not have.
+    async fn step<S>(
+        &self,
+        messages: &[ChatMessage],
+        tools: &[ToolDef],
+        step_timeout: Duration,
+        inbound: &mut S,
+    ) -> Step
+    where
+        S: Stream<Item = Result<pb::StreamingUnderstandRequest, Status>> + Unpin,
+    {
+        let mut pending = Box::pin(tokio::time::timeout(
+            step_timeout,
+            self.model.complete(messages, tools),
+        ));
+        // Once the request side is done we stop racing it — a half-close means
+        // "the client has finished sending", not "abandon this run". The server
+        // still owes the wearer an answer on the response stream.
+        let mut inbound_open = true;
+
+        loop {
+            if !inbound_open {
+                return match pending.await {
+                    Ok(Ok(r)) => Step::Answer(r),
+                    Ok(Err(_)) | Err(_) => Step::Failed,
+                };
+            }
+            tokio::select! {
+                // Bias the inbound branch so a barge-in already queued wins over a
+                // model reply landing in the same poll.
+                biased;
+
+                incoming = inbound.next() => {
+                    match incoming {
+                        // A new utterance is its own run root: it supersedes.
+                        Some(Ok(msg)) => match msg.content {
+                            Some(pb::streaming_understand_request::Content::UnderstandingRequest(
+                                next,
+                            )) => return Step::Superseded(Box::new(next)),
+                            // Observations for a step we have not emitted yet, and
+                            // run-state seeds, are not preemptive — keep waiting.
+                            _ => continue,
+                        },
+                        // Half-close or a broken request side: stop racing, but
+                        // let the in-flight step finish and be spoken.
+                        Some(Err(_)) | None => {
+                            inbound_open = false;
+                            continue;
+                        }
+                    }
+                }
+
+                resolved = &mut pending => {
+                    return match resolved {
+                        Ok(Ok(r)) => Step::Answer(r),
+                        // Model error or step deadline: both end in a spoken apology.
+                        Ok(Err(_)) | Err(_) => Step::Failed,
+                    };
+                }
+            }
+        }
+    }
+
+    async fn run_turn<S>(&mut self, req: pb::SynapseUnderstandingRequest, inbound: &mut S) -> Flow
+    where
+        S: Stream<Item = Result<pb::StreamingUnderstandRequest, Status>> + Unpin,
+    {
+        // Server-owned catalog for this run: our tool set minus `excluded_tools`.
+        let tools = resolve_catalog(&req, &self.entitlement);
+
+        // The wearer's own words, kept for required-slot backfill (see the device
+        // branch below): the agent entry points take the request verbatim, so the
+        // utterance is the faithful fill rather than an invention.
+        let utterance = req.utterance.clone();
+
+        // Root the run on the user-request turn the device replayed; with no device
+        // context the first server turn self-roots rather than pointing at an id we
+        // never emitted.
+        let mut parent = req
+            .device_context
+            .as_ref()
+            .and_then(|dc| dc.turns.last())
+            .map(|t| t.identifier.clone())
+            .unwrap_or_default();
+
+        // Seed the transcript from `device_context.turns` (the server seeds its own
+        // RunState this way on the first request of a stream, §3) and grow it in
+        // place as the loop proceeds — on bidi the device sends only deltas after
+        // this point.
+        let mut messages = build_history(&req);
+
+        // Seed the run's action count from the transcript the device replayed,
+        // exactly as the legacy engine does. `Switchboard` counts actions over the
+        // whole RUN, and a multi-hop run arrives here with earlier hops already in
+        // `device_context.turns`. Counting only the steps taken inside this process
+        // lets the server ride past the pin's own `mActionLimit`, at which point the
+        // device cuts the run short itself — the wearer's turn dies mid-flight with
+        // no terminal from us.
+        let already_taken = req
+            .device_context
+            .as_ref()
+            .map(|dc| super::engine::actions_in_current_run(&dc.turns))
+            .unwrap_or(0);
+        let steps_left = MAX_STEPS.saturating_sub(already_taken);
+
+        // Bound the whole run on the wall clock (see RUN_BUDGET).
+        let run_deadline = tokio::time::Instant::now() + self.run_budget;
+
+        for _ in 0..steps_left {
+            // Out of wall clock: speak a terminal NOW. On this transport nothing
+            // else will — the pin is parked in an unbounded `responseFuture.get()`
+            // and a half-close would complete it with an empty queue, i.e.
+            // silence.
+            let budget_left = run_deadline.saturating_duration_since(tokio::time::Instant::now());
+            if budget_left < MIN_USEFUL_REMAINING {
+                return self.finish(parent, ERROR_TIMEOUT).await;
+            }
+
+            // Race the model step against the inbound stream. Two reasons:
+            //
+            //  * PREEMPTION — carry allows exactly one active run
+            //    (`RunManager.shouldDispatchCurrent`: a turn that is its own root
+            //    replaces `mExecutingRun` and every turn of the old run is then
+            //    blocked as an orphan). If the wearer barges in with a new
+            //    request, this run is abandoned *now* rather than grinding out a
+            //    full action budget and then speaking an answer to a question
+            //    that was superseded.
+            //  * DEADLINE — an unbounded upstream call burns the wearer's whole
+            //    turn; the device tears it down at its own ~25s AIMIC deadline and
+            //    they hear nothing. A bounded step leaves room to speak an apology.
+            //
+            // The step ceiling is the SMALLER of the per-step ceiling and what is
+            // left of the run: a 10s step started with 3s of budget left is 7s
+            // the wearer waits for a turn that can no longer be spoken.
+            let resp = match self
+                .step(
+                    &messages,
+                    &tools,
+                    // Same rule as the server-stream engine: a step gets the
+                    // budget it has (minus streaming reserve), bounded by the
+                    // anti-hang ceiling — not a fixed cap that fires with budget
+                    // to spare.
+                    budget_left
+                        .saturating_sub(Duration::from_millis(750))
+                        .min(MODEL_STEP_TIMEOUT),
+                    inbound,
+                )
+                .await
+            {
+                Step::Superseded(req) => return Flow::Supersede(req),
+                Step::Answer(r) => r,
+                Step::Failed => {
+                    // Even a degraded state is spoken through a terminal `Respond`
+                    // device action, never a bare error the device would drop.
+                    return self.finish(parent, ERROR_TIMEOUT).await;
+                }
+            };
+
+            let Some(tc) = resp.tool_call else {
+                // FINISH (state machine 4c): plain content, or nothing usable at
+                // all — either way the run terminates in a spoken `Respond`.
+                // Blank counts as nothing usable. `RespondAction.mResponse` is a
+                // present-but-empty slot, so the device resolves the action,
+                // dispatches it, narrates nothing, and its observation is final —
+                // a turn that "succeeds" in silence with no retry. The legacy
+                // engine has guarded this since the blank-content fix; bidi was
+                // missed, so the same wearer-facing silence survived on the other
+                // transport.
+                let answer = resp
+                    .content
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|answer| !answer.is_empty())
+                    .unwrap_or(NO_ANSWER);
+                return self.finish(parent, answer).await;
+            };
+
+            // Unknown tool: bounce the stock unrecognized-function observation as
+            // informational events and LOOP so the model can correct itself. The
+            // device must not run anything here, so neither event requires a
+            // response.
+            if !tools.iter().any(|t| t.name == tc.name) {
+                let action_id = self.next_id();
+                if self
+                    .emit(
+                        action_turn(
+                            &tc,
+                            &resp.thought,
+                            parent,
+                            action_id.clone(),
+                            pb::SynapseSource::Server,
+                        ),
+                        false,
+                    )
+                    .await
+                    .is_err()
+                {
+                    return Flow::Closed;
+                }
+                let obs_id = self.next_id();
+                if self
+                    .emit(
+                        observation_turn(
+                            &tc.name,
+                            UNRECOGNIZED_FUNCTION,
+                            action_id,
+                            obs_id.clone(),
+                            pb::SynapseSource::Device,
+                        ),
+                        false,
+                    )
+                    .await
+                    .is_err()
+                {
+                    return Flow::Closed;
+                }
+                messages.push(tool_result(&tc, UNRECOGNIZED_FUNCTION));
+                parent = obs_id;
+                continue;
+            }
+
+            // TERMINAL DEVICE ACTION. `Respond` is a device action and so must be
+            // flagged `requires_response=true` (otherwise the registrar only
+            // records it and the wearer hears nothing), but its device-side
+            // observation is final and is never posted back — so this ends the run
+            // instead of pausing on it.
+            if tc.name == catalog::RESPOND_ACTION {
+                let id = self.next_id();
+                // `Response` is an OPTIONAL slot on the device, so a missing or
+                // miscased key resolves to null and `RespondActionHandler` throws
+                // — total silence on the action that ends every turn. Rebuild the
+                // canonical payload rather than forwarding model arguments.
+                let input = catalog::respond_input_from_arguments(&tc.arguments)
+                    .unwrap_or_else(|| catalog::respond_input(NO_ANSWER));
+                let turn = device_action_turn(&tc.name, &input, &resp.thought, parent, id);
+                return match self.emit(turn, true).await {
+                    Ok(()) => Flow::Done,
+                    Err(()) => Flow::Closed,
+                };
+            }
+
+            // PAUSING DEVICE ACTION (state machine 4b). Emit exactly one
+            // `requires_response=true` event and wait — the wearer's pin executes
+            // it and owes us the observation on this same stream.
+            if catalog::is_device_tool(&tc.name) {
+                // Account gate, matching `Switchboard.routeAction`'s order and the
+                // legacy engine's `gated()`. The catalog filter alone cannot cover
+                // this: `Entitlement::Unauthorized` deliberately reports
+                // `is_subscribed() == true`, so a de-authorized device passes the
+                // subscription filter and was previously stopped only by the edge
+                // AuthLayer. A blocked action is replaced by the canned degraded
+                // experience — the wearer hears why instead of hitting silence.
+                if let Some(blocked) = gates::gate_action(&self.entitlement, &tc.name) {
+                    let obs_id = self.next_id();
+                    if self
+                        .emit(
+                            observation_turn(
+                                &tc.name,
+                                blocked.observation_text(),
+                                parent,
+                                obs_id.clone(),
+                                pb::SynapseSource::Device,
+                            ),
+                            false,
+                        )
+                        .await
+                        .is_err()
+                    {
+                        return Flow::Closed;
+                    }
+                    // Every degraded verdict is delivered spoken. The legacy engine
+                    // additionally reproduces the exact synthesized action name
+                    // (`Respond`/`Narrate`/…); here the terminal is always the
+                    // exempt `Respond`, which carries the same text to the wearer
+                    // and is the shape this transport already terminates on.
+                    return self.finish(obs_id, blocked.observation_text()).await;
+                }
+                // Required-slot validation before the action leaves the server.
+                // A missing slot resolves to null on the device: the agent entry
+                // points NPE in-process and the rest run an empty request, both
+                // silently. Repair what we can from the wearer's own words, and
+                // bounce the rest back to the model like an unrecognized tool so
+                // it self-corrects here rather than on a wasted device hop.
+                let input = match catalog::device_action_input(&tc.name, &tc.arguments, &utterance)
+                {
+                    Ok(input) => input,
+                    Err(observation) => {
+                        let action_id = self.next_id();
+                        if self
+                            .emit(
+                                device_action_turn(
+                                    &tc.name,
+                                    &tc.arguments,
+                                    &resp.thought,
+                                    parent,
+                                    action_id.clone(),
+                                ),
+                                false,
+                            )
+                            .await
+                            .is_err()
+                        {
+                            return Flow::Closed;
+                        }
+                        let obs_id = self.next_id();
+                        if self
+                            .emit(
+                                observation_turn(
+                                    &tc.name,
+                                    &observation,
+                                    action_id,
+                                    obs_id.clone(),
+                                    pb::SynapseSource::Device,
+                                ),
+                                false,
+                            )
+                            .await
+                            .is_err()
+                        {
+                            return Flow::Closed;
+                        }
+                        messages.push(tool_result(&tc, &observation));
+                        parent = obs_id;
+                        continue;
+                    }
+                };
+                let action_id = self.next_id();
+                if self
+                    .emit(
+                        device_action_turn(
+                            &tc.name,
+                            &input,
+                            &resp.thought,
+                            parent,
+                            action_id.clone(),
+                        ),
+                        true,
+                    )
+                    .await
+                    .is_err()
+                {
+                    return Flow::Closed;
+                }
+
+                // Park for the observation, but never past the run's own clock:
+                // the pin executing an action is time the wearer is waiting too.
+                // `AIMIC_TIMEOUT_MS` remains the ceiling on a single wait (past it
+                // the turn is dead on the device side as well); the run budget is
+                // the ceiling on the sum of them.
+                let wait_for = run_deadline
+                    .saturating_duration_since(tokio::time::Instant::now())
+                    .min(self.device_timeout);
+                let awaited =
+                    match tokio::time::timeout(wait_for, await_observation(inbound, &action_id))
+                        .await
+                    {
+                        Ok(a) => a,
+                        // Deadline blown. We still do not invent the observation we
+                        // never received — but we do speak. A half-close here only
+                        // completes the pin's pending future with an empty queue,
+                        // and the wearer, who has been standing there through a
+                        // whole action, hears nothing at all.
+                        Err(_elapsed) => return self.finish(action_id, ERROR_TIMEOUT).await,
+                    };
+                let (obs_id, obs) = match awaited {
+                    Awaited::Observation { id, content } => (id, content),
+                    Awaited::Supersede(req) => return Flow::Supersede(req),
+                    Awaited::Closed => return Flow::Closed,
+                };
+
+                messages.push(tool_result(&tc, &obs.observation));
+                if obs.is_final {
+                    // A final observation ends the run on the device
+                    // (`RunManager.endRun`), so re-prompting would answer into a
+                    // closed run. Stop here — but HALF-CLOSE, do not park.
+                    //
+                    // `Flow::Done` would send `drive` back into `next_request`,
+                    // waiting for a message the pin will never send: it is blocked
+                    // in `SynapseInterpreter.getNextDeviceActionResponse` →
+                    // `responseFuture.get()` with NO deadline
+                    // (`AIBusService.bidirectionalStreamingUnderstand` sets none,
+                    // unlike `understand`/`encryptedUnderstand` which both use
+                    // `AIMIC_TIMEOUT_MS`). Only a server half-close completes that
+                    // future: `SynapseBidirectionalStreamingSession.onCompleted`
+                    // → `close()` → `finishLatch.countDown()` + completes the
+                    // pending future. Parking here wedges the wearer's supervisor
+                    // thread for good.
+                    //
+                    // Half-closing costs nothing: `SynapseInterpreter` builds a
+                    // fresh session whenever the previous one `isCompleted()`, so
+                    // the next turn simply opens a new stream.
+                    //
+                    // Reachable via `ExperienceActionRouterImpl` →
+                    // `TaoEventRegistrar.onObservation(String, Observation)`,
+                    // whose `toContent()` carries `setIsFinal(observation.isFinal())`
+                    // through `dispatchObservation`.
+                    return Flow::Closed;
+                }
+                // Thread onto the device's own turn id where it minted one.
+                parent = if obs_id.is_empty() { action_id } else { obs_id };
+                continue;
+            }
+
+            // SERVER TOOL (state machine 4a): resolve it here, stream the action
+            // and its observation as informational context, and LOOP without
+            // pausing the device.
+            let action_id = self.next_id();
+            if self
+                .emit(
+                    action_turn(
+                        &tc,
+                        &resp.thought,
+                        parent,
+                        action_id.clone(),
+                        pb::SynapseSource::Server,
+                    ),
+                    false,
+                )
+                .await
+                .is_err()
+            {
+                return Flow::Closed;
+            }
+            // Wearer-scoped: `recall_memory` and friends need to know whose data
+            // this is, or they can only report having nothing.
+            //
+            // Bounded by what is left of the run. Every server tool is a network
+            // call to somebody else's endpoint, and an upstream that accepts the
+            // connection and then stalls would otherwise hold the whole turn open
+            // with no ceiling at all — the model step above is bounded, so this
+            // was the one remaining place a single hop could run forever.
+            let observation = bounded_tool(
+                run_deadline.saturating_duration_since(tokio::time::Instant::now()),
+                catalog::execute_tool_with(&tc.name, &tc.arguments, &self.tools),
+            )
+            .await;
+            let obs_id = self.next_id();
+            if self
+                .emit(
+                    observation_turn(
+                        &tc.name,
+                        &observation,
+                        action_id,
+                        obs_id.clone(),
+                        pb::SynapseSource::Server,
+                    ),
+                    false,
+                )
+                .await
+                .is_err()
+            {
+                return Flow::Closed;
+            }
+            messages.push(tool_result(&tc, &observation));
+            parent = obs_id;
+
+            // BATCHED SERVER TOOLS. The model may ask for several independent
+            // lookups in one step (every recovered stock tool set ships a
+            // parallel-invocation wrapper telling it to). The legacy engine
+            // executes them; this transport dropped them silently, so the same
+            // request answered from fewer facts here than there — and the model
+            // could answer as though a lookup it never got had run.
+            //
+            // Only server tools batch: a device action pauses this loop waiting
+            // for the pin's observation, so it can never be one of several.
+            let batched: Vec<ToolCall> = resp
+                .extra_tool_calls
+                .iter()
+                .filter(|extra| {
+                    !catalog::is_device_tool(&extra.name) && catalog::is_server_tool(&extra.name)
+                })
+                .cloned()
+                .collect();
+            for extra in batched {
+                let action_id = self.next_id();
+                if self
+                    .emit(
+                        action_turn(
+                            &extra,
+                            &resp.thought,
+                            parent,
+                            action_id.clone(),
+                            pb::SynapseSource::Server,
+                        ),
+                        false,
+                    )
+                    .await
+                    .is_err()
+                {
+                    return Flow::Closed;
+                }
+                let observation = bounded_tool(
+                    run_deadline.saturating_duration_since(tokio::time::Instant::now()),
+                    catalog::execute_tool_with(&extra.name, &extra.arguments, &self.tools),
+                )
+                .await;
+                let obs_id = self.next_id();
+                if self
+                    .emit(
+                        observation_turn(
+                            &extra.name,
+                            &observation,
+                            action_id,
+                            obs_id.clone(),
+                            pb::SynapseSource::Server,
+                        ),
+                        false,
+                    )
+                    .await
+                    .is_err()
+                {
+                    return Flow::Closed;
+                }
+                messages.push(tool_result(&extra, &observation));
+                parent = obs_id;
+            }
+        }
+
+        // Budget exhausted: close the run the way `Switchboard` does — a
+        // `TooManyActions` observation converted into a terminal `Respond`
+        // (`Respond` is exempt from the action limit).
+        let obs_id = self.next_id();
+        if self
+            .emit(
+                observation_turn(
+                    "TooManyActions",
+                    TOO_MANY_ACTIONS,
+                    parent,
+                    obs_id.clone(),
+                    pb::SynapseSource::Device,
+                ),
+                false,
+            )
+            .await
+            .is_err()
+        {
+            return Flow::Closed;
+        }
+        // The observation text IS the spoken text: stock's
+        // `TaoEventRegistrar.convertAndDispatchGeneratedActionIfNeeded` builds
+        // `new RespondAction(UUID.randomUUID(), observation.observation())` from
+        // the `TooManyActions` observation it just recorded. Speaking
+        // `ERROR_TIMEOUT` here both diverged from that rule and put a different
+        // sentence in the wearer's ear than the legacy engine does for the very
+        // same guard, depending only on which transport the feature flag picked.
+        self.finish(obs_id, TOO_MANY_ACTIONS).await
+    }
+
+    /// Emit the run's terminal `Respond` — the one event of the run the device
+    /// dispatches and narrates via local TTS.
+    async fn finish(&mut self, parent: String, answer: &str) -> Flow {
+        let id = self.next_id();
+        let turn = device_action_turn(
+            catalog::RESPOND_ACTION,
+            &catalog::respond_input(answer),
+            "",
+            parent,
+            id,
+        );
+        match self.emit(turn, true).await {
+            Ok(()) => Flow::Done,
+            Err(()) => Flow::Closed,
+        }
+    }
+
+    /// Stream one transcript node as an `IntermediateEvent`. `requires_response`
+    /// is the whole protocol: true ⇒ the device executes this and owes an
+    /// observation; false ⇒ record as history only.
+    async fn emit(&self, turn: pb::SynapseChatTurn, requires_response: bool) -> Result<(), ()> {
+        let msg = pb::StreamingUnderstandResponse {
+            content: Some(
+                pb::streaming_understand_response::Content::IntermediateEvent(
+                    pb::IntermediateEvent {
+                        event: Some(turn),
+                        agent: AGENT.to_owned(),
+                        requires_response,
+                    },
+                ),
+            ),
+        };
+        self.tx.send(Ok(msg)).await.map_err(|_| ())
+    }
+
+    /// Server-minted node id.
+    ///
+    /// MUST be a UUID: `LocalChatTurnService.record` enforces uniqueness via
+    /// `ArgChecker.throwIfContainsKey` and throws on a collision. A per-session
+    /// counter restarts at 1 for each new stream while the device still holds
+    /// turns from the previous one, so a sequence would eventually re-mint an id
+    /// the device already has and kill the run.
+    fn next_id(&mut self) -> String {
+        uuid::Uuid::new_v4().to_string()
+    }
+}
+
+// --- request-stream consumption -------------------------------------------
+
+/// Pull request messages until an `understanding_request` starts a run.
+///
+/// An `initial_run_state` is the resume/seed affordance the shipped device never
+/// sends and whose payload this proto models as opaque bytes — accepted and
+/// skipped. A bare observation with no run in flight has no action turn to attach
+/// to (the device drops the mirror-image case) and is likewise skipped rather than
+/// tearing the stream down.
+async fn next_request<S>(inbound: &mut S) -> Option<Box<pb::SynapseUnderstandingRequest>>
+where
+    S: Stream<Item = Result<pb::StreamingUnderstandRequest, Status>> + Unpin,
+{
+    while let Some(msg) = inbound.next().await {
+        let Ok(msg) = msg else {
+            return None; // stream error ⇒ half-close
+        };
+        match msg.content {
+            Some(pb::streaming_understand_request::Content::UnderstandingRequest(req)) => {
+                return Some(Box::new(req));
+            }
+            Some(pb::streaming_understand_request::Content::InitialRunState(_)) => {}
+            // A device observation arriving with NO run in flight is the
+            // close-out of the run we just terminated.
+            //
+            // After we emit the terminal `Respond`, the pin executes it and its
+            // handler completes with a FINAL observation. With the bidi flag on,
+            // `LanguageUnderstanding.onObservation` does not early-out on a final
+            // observation — it posts it back to us and then blocks on an
+            // UNBOUNDED `responseFuture.get()`, which only completes on an event
+            // flagged `requires_response` or when the session closes. Silently
+            // ignoring the observation therefore parks the wearer's pin for its
+            // full 25s AIMIC deadline after the answer has already been spoken.
+            //
+            // Returning `None` drops `tx`, and the half-close makes the client's
+            // `SynapseBidirectionalStreamingSession.close()` complete that future
+            // with the empty queue — the turn ends cleanly. The device opens a
+            // fresh session whenever the previous one has completed, so
+            // half-closing costs nothing.
+            Some(pb::streaming_understand_request::Content::Observation(_)) => return None,
+            None => {}
+        }
+    }
+    None
+}
+
+/// Block until the device returns the observation for `action_id`.
+///
+/// Matching is by `parent_identifier == action.identifier` ("Key decisions" #10):
+/// an observation naming a different action belongs to a superseded step and is
+/// discarded, mirroring `RunManager.shouldDispatchCurrent`. An empty parent is
+/// accepted, since a client that threads nothing can only mean the pending action.
+async fn await_observation<S>(inbound: &mut S, action_id: &str) -> Awaited
+where
+    S: Stream<Item = Result<pb::StreamingUnderstandRequest, Status>> + Unpin,
+{
+    while let Some(msg) = inbound.next().await {
+        let Ok(msg) = msg else {
+            return Awaited::Closed;
+        };
+        match msg.content {
+            Some(pb::streaming_understand_request::Content::Observation(turn)) => {
+                if !turn.parent_identifier.is_empty() && turn.parent_identifier != action_id {
+                    continue; // stale / superseded step
+                }
+                let id = turn.identifier;
+                match turn.content {
+                    Some(pb::synapse_chat_turn::Content::Observation(content)) => {
+                        return Awaited::Observation { id, content };
+                    }
+                    // A turn posted on the observation slot that carries no
+                    // observation body tells us nothing; keep waiting.
+                    _ => continue,
+                }
+            }
+            // A new user utterance mid-run supersedes the pending action.
+            Some(pb::streaming_understand_request::Content::UnderstandingRequest(req)) => {
+                return Awaited::Supersede(Box::new(req));
+            }
+            Some(pb::streaming_understand_request::Content::InitialRunState(_)) => {}
+            None => {}
+        }
+    }
+    Awaited::Closed
+}
+
+// --- transcript reconstruction --------------------------------------------
+//
+// These mirror the legacy engine's request-driven setup, which is private to
+// `engine.rs`; the tool catalog and system prompt themselves are reused from
+// `catalog` rather than restated.
+
+/// Our tool set minus the device's `excluded_tools` (the device sends an empty
+/// `action_definitions` and only a `tool_set_version` pointer, so the server is
+/// authoritative).
+///
+/// The keyguard and subscription filters are the account gate's *first* half and
+/// are applied here rather than bolted on later: `catalog::tool_catalog_for`
+/// mirrors `routeAction`'s gate order (excluded → keyguard → unsubscribed
+/// whitelist), so a locked or unsubscribed caller is never even offered a tool it
+/// would be blocked on.
+fn resolve_catalog(
+    req: &pb::SynapseUnderstandingRequest,
+    entitlement: &Entitlement,
+) -> Vec<ToolDef> {
+    // Honour the device's `tool_set_version` pointer, exactly as the legacy
+    // transport does. Today `SynapseInterpreter` only ever sends `supervisor`
+    // here, so this resolves to the same flat set — but reading the pointer means
+    // the two transports cannot silently diverge the moment the device sends
+    // anything else.
+    let set = super::engine::resolved_tool_set(req).set;
+    catalog::tool_catalog_for_set(
+        &catalog::CatalogContext {
+            is_locked: req.device_context.as_ref().is_some_and(|dc| dc.is_locked),
+            excluded: &req.excluded_tools,
+            subscribed: entitlement.is_subscribed(),
+        },
+        set,
+    )
+}
+
+/// A system line describing the wearer's situation, built ONLY from fields the
+/// device actually supplied.
+///
+/// Without this the model has no idea what time it is for the wearer or where
+/// they are, so every time-relative or place-relative request ("is it too late
+/// to call London", "what's near me") is answered blind.
+///
+/// Absent fields are omitted rather than defaulted — a placeholder timezone or a
+/// (0,0) coordinate would be fabricated device state, and the model would reason
+/// from it as if it were real. Returns `None` when the device told us nothing.
+fn situation_line(req: &pb::SynapseUnderstandingRequest) -> Option<String> {
+    let situation = req
+        .device_context
+        .as_ref()
+        .and_then(|dc| dc.situation.as_ref());
+    let mut parts: Vec<String> = Vec::new();
+
+    if let Some(s) = situation {
+        if let Some(ts) = s.timestamp.as_ref() {
+            // Render the device's own wall clock; the zone id is the device's too.
+            let mut when = format!(
+                "The wearer's current time is {} (epoch seconds)",
+                ts.seconds
+            );
+            if !s.time_zone_id.is_empty() {
+                when = format!(
+                    "The wearer's current time is {} (epoch seconds) in time zone {}",
+                    ts.seconds, s.time_zone_id
+                );
+            }
+            parts.push(when);
+        } else if !s.time_zone_id.is_empty() {
+            parts.push(format!("The wearer's time zone is {}", s.time_zone_id));
+        }
+        if !s.location_string.is_empty() {
+            parts.push(format!("The wearer is near {}", s.location_string));
+        }
+    }
+
+    // A human-readable place the device already resolved beats raw coordinates.
+    if let Some(dc) = req.device_context.as_ref() {
+        if !dc.reverse_geocoded_location.is_empty() {
+            parts.push(format!(
+                "The wearer's location is {}",
+                dc.reverse_geocoded_location
+            ));
+        }
+        if dc.is_locked {
+            parts.push("The pin is locked.".to_owned());
+        }
+    }
+    if let Some(loc) = req.location.as_ref() {
+        parts.push(format!(
+            "The wearer's coordinates are {:.5}, {:.5}",
+            loc.latitude, loc.longitude
+        ));
+    }
+
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(". ") + ".")
+    }
+}
+
+/// Rebuild the chat transcript from the state the device replayed in the initial
+/// request: prior turns, `previous_answers`, and this run's utterance.
+fn build_history(req: &pb::SynapseUnderstandingRequest) -> Vec<ChatMessage> {
+    // Same pointer, same reason as `resolve_catalog`: the resolved set carries its
+    // own spoken-style guidance, and serving its tools without its guidance would
+    // give a capability the narrow tool list but none of the narrow behaviour.
+    let mut messages = vec![ChatMessage::system(catalog::system_prompt_for(
+        super::engine::resolved_tool_set(req).set,
+    ))];
+    if let Some(situation) = situation_line(req) {
+        messages.push(ChatMessage::system(situation));
+    }
+
+    if let Some(dc) = req.device_context.as_ref() {
+        for turn in &dc.turns {
+            match turn.content.as_ref() {
+                Some(pb::synapse_chat_turn::Content::UserRequest(u)) => {
+                    let text = if u.repaired_request.is_empty() {
+                        &u.request
+                    } else {
+                        &u.repaired_request
+                    };
+                    if !text.is_empty() {
+                        messages.push(ChatMessage::user(text.clone()));
+                    }
+                }
+                Some(pb::synapse_chat_turn::Content::Action(a)) => {
+                    if a.action == catalog::RESPOND_ACTION {
+                        if let Some(text) = spoken_text(&a.input) {
+                            messages.push(ChatMessage::assistant(text));
+                        }
+                    } else if !a.action.is_empty() {
+                        messages.push(ChatMessage::user(format!(
+                            "[Previously called {}({})]",
+                            a.action, a.input
+                        )));
+                    }
+                }
+                Some(pb::synapse_chat_turn::Content::Observation(o)) => {
+                    if !o.observation.is_empty() {
+                        messages.push(ChatMessage::user(format!(
+                            "[Result of {}: {}]",
+                            o.action_name, o.observation
+                        )));
+                    }
+                }
+                Some(pb::synapse_chat_turn::Content::Message(m)) => {
+                    if !m.content.is_empty() {
+                        messages.push(ChatMessage::assistant(m.content.clone()));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    for prior in &req.previous_answers {
+        if !prior.is_empty() {
+            messages.push(ChatMessage::assistant(prior.clone()));
+        }
+    }
+
+    // The device replays the current turn's own `user_request` in
+    // `device_context.turns`, so appending `utterance` again would show the model
+    // the question twice — and on later hops of a multi-hop run it would land
+    // AFTER the observations, reading as if the wearer had just re-asked and
+    // inviting the model to restart the work it already did.
+    //
+    // Push it only when the replayed transcript does not already end in it. The
+    // device's `repaired_request` is the authoritative text where it differs, and
+    // `replay` above already preferred it.
+    let already_replayed = messages
+        .iter()
+        .rev()
+        .find(|m| m.role == Role::User)
+        .is_some_and(|m| m.content == req.utterance);
+    if !already_replayed && !req.utterance.is_empty() {
+        messages.push(ChatMessage::user(req.utterance.clone()));
+    }
+    messages
+}
+
+/// Extract the spoken text from a `Respond` action's `input` — either the real
+/// `{"Response": "…"}` JSON shape or a bare string.
+fn spoken_text(input: &str) -> Option<String> {
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(input) {
+        if let Some(s) = v.get(catalog::RESPOND_FIELD).and_then(|v| v.as_str()) {
+            return Some(s.to_owned());
+        }
+    }
+    if input.is_empty() {
+        None
+    } else {
+        Some(input.to_owned())
+    }
+}
+
+/// Fold a tool result back into the transcript, in the same shape the legacy
+/// engine uses (portable across OpenAI-compatible endpoints: no tool-call-id
+/// pairing required).
+fn tool_result(tc: &ToolCall, observation: &str) -> ChatMessage {
+    ChatMessage::user(format!(
+        "[Called {}({}). Result: {}]",
+        tc.name,
+        tc.arguments,
+        model_facing_observation(observation)
+    ))
+}
+
+/// Ceiling on the observation text fed back into the model's context.
+///
+/// The wire copy is untouched — the device and the transcript it records get
+/// exactly what the tool (or the pin) produced. This bounds only what re-enters
+/// the prompt, because that text is paid for twice: once in prompt tokens and
+/// again in the latency of every later step of the run.
+///
+/// This mirrors `engine::model_facing_observation` deliberately, including the
+/// clip size: the transcript a model reasons over must not depend on which
+/// transport the feature flag picked. It is duplicated rather than shared only
+/// because the engine's copy is private; the two belong together the next time
+/// both files move in one change.
+///
+/// On bidi the long observations are not only ours — a device observation
+/// arrives on the same path (`await_observation` → `tool_result`), and the pin's
+/// experiences produce some of the longest text in the run.
+const MAX_MODEL_FACING_OBSERVATION: usize = 1_200;
+
+/// Clip an observation for the model's transcript, on a char boundary.
+fn model_facing_observation(observation: &str) -> std::borrow::Cow<'_, str> {
+    if observation.len() <= MAX_MODEL_FACING_OBSERVATION {
+        return std::borrow::Cow::Borrowed(observation);
+    }
+    // Never slice mid-character: observations carry wearer text and tool output,
+    // and a byte-offset cut on non-ASCII panics. Prefer the last sentence break
+    // so the model is not handed a fragment.
+    let mut end = MAX_MODEL_FACING_OBSERVATION;
+    while end > 0 && !observation.is_char_boundary(end) {
+        end -= 1;
+    }
+    let clipped = &observation[..end];
+    let cut = clipped
+        .rfind(". ")
+        .map(|i| i + 1)
+        .filter(|i| *i > MAX_MODEL_FACING_OBSERVATION / 2)
+        .unwrap_or(end);
+    // Marked, so the model knows the text was cut rather than treating a
+    // truncated list as complete.
+    std::borrow::Cow::Owned(format!("{}… [truncated]", &observation[..cut].trim_end()))
+}
+
+/// Run a server tool under a hard ceiling.
+///
+/// An upstream that stalls returns an honest "no result" observation rather than
+/// holding the run open — never a fabricated result.
+async fn bounded_tool(
+    remaining: Duration,
+    work: impl std::future::Future<Output = String>,
+) -> String {
+    tokio::time::timeout(remaining, work)
+        .await
+        .unwrap_or_else(|_elapsed| TOOL_TIMED_OUT.to_owned())
+}
+
+// --- turn constructors ----------------------------------------------------
+
+/// Wall-clock stamp for an emitted turn.
+///
+/// MUST be set, for the same reason the legacy engine sets it: an absent
+/// timestamp decodes as epoch 0 on the device, so every server-emitted node sorts
+/// FIRST in the turn priority queue and is the first evicted at the turn cap —
+/// and `EventsSnapshot.linearize`'s inter-run gap test sees a ~56-year gap and
+/// truncates the history the next hop depends on.
+///
+/// This bites harder on bidi than on the legacy transport, because here the
+/// device records EVERY event we emit (`recordAction`/`recordObservation`), not
+/// just the final action of the batch — so an unstamped run seeds the pin's
+/// history with a whole chain of epoch-0 turns.
+fn now_ts() -> Option<prost_types::Timestamp> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?;
+    Some(prost_types::Timestamp {
+        seconds: now.as_secs() as i64,
+        nanos: now.subsec_nanos() as i32,
+    })
+}
+
+/// An assistant action turn for a tool the SERVER resolves, parent-chained.
+fn action_turn(
+    tc: &ToolCall,
+    thought: &str,
+    parent: String,
+    id: String,
+    src: pb::SynapseSource,
+) -> pb::SynapseChatTurn {
+    pb::SynapseChatTurn {
+        user: pb::SynapseUser::Assistant as i32,
+        timestamp: now_ts(),
+        identifier: id,
+        parent_identifier: parent,
+        content: Some(pb::synapse_chat_turn::Content::Action(
+            pb::SynapseActionContent {
+                thought: thought.to_owned(),
+                action: tc.name.clone(),
+                input: tc.arguments.clone(),
+                device_payload: Vec::new(),
+                source: src as i32,
+            },
+        )),
+    }
+}
+
+/// An action turn the DEVICE resolves (`source = DEVICE`). Emitted with
+/// `requires_response=true` so `TaoEventRegistrar` dispatches rather than records
+/// it. `source` is provenance metadata only — the execution trigger on this
+/// transport is the flag, not the enum.
+fn device_action_turn(
+    action: &str,
+    input: &str,
+    thought: &str,
+    parent: String,
+    id: String,
+) -> pb::SynapseChatTurn {
+    pb::SynapseChatTurn {
+        user: pb::SynapseUser::Assistant as i32,
+        timestamp: now_ts(),
+        identifier: id,
+        parent_identifier: parent,
+        content: Some(pb::synapse_chat_turn::Content::Action(
+            pb::SynapseActionContent {
+                thought: thought.to_owned(),
+                action: action.to_owned(),
+                input: input.to_owned(),
+                device_payload: Vec::new(),
+                source: pb::SynapseSource::Device as i32,
+            },
+        )),
+    }
+}
+
+/// A system observation turn chained to its action node. `is_final` stays false:
+/// the run's final observation is produced by the device after it executes the
+/// terminal action, not by the server.
+fn observation_turn(
+    action_name: &str,
+    observation: &str,
+    action_id: String,
+    id: String,
+    src: pb::SynapseSource,
+) -> pb::SynapseChatTurn {
+    pb::SynapseChatTurn {
+        user: pb::SynapseUser::System as i32,
+        timestamp: now_ts(),
+        identifier: id,
+        parent_identifier: action_id,
+        content: Some(pb::synapse_chat_turn::Content::Observation(
+            pb::SynapseObservationContent {
+                observation: observation.to_owned(),
+                is_final: false,
+                action_name: action_name.to_owned(),
+                source: src as i32,
+            },
+        )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::assistant::llm::{LlmError, MockChatModel};
+    use tokio::sync::mpsc;
+
+    type Inbound = mpsc::Sender<Result<pb::StreamingUnderstandRequest, Status>>;
+    type Outbound = ReceiverStream<Result<pb::StreamingUnderstandResponse, Status>>;
+
+    /// Start a session over a hand-fed request stream.
+    fn session(model: Arc<dyn ChatModel>) -> (Inbound, Outbound) {
+        let (tx, rx) = mpsc::channel(16);
+        let out = BidiSession::spawn_with(
+            model,
+            Entitlement::Active,
+            catalog::ToolContext::default(),
+            ReceiverStream::new(rx),
+        );
+        (tx, out)
+    }
+
+    /// A session whose two deadlines are shortened, so the budget guards can be
+    /// driven end to end in milliseconds. Everything else is the production path.
+    fn session_with_clocks(
+        model: Arc<dyn ChatModel>,
+        run_budget: Duration,
+        device_timeout: Duration,
+    ) -> (Inbound, Outbound) {
+        let (tx, rx) = mpsc::channel(16);
+        let out = BidiSession::spawn_tuned(
+            model,
+            Entitlement::Active,
+            catalog::ToolContext::default(),
+            ReceiverStream::new(rx),
+            run_budget,
+            device_timeout,
+        );
+        (tx, out)
+    }
+
+    fn understanding(utterance: &str) -> pb::StreamingUnderstandRequest {
+        pb::StreamingUnderstandRequest {
+            content: Some(
+                pb::streaming_understand_request::Content::UnderstandingRequest(
+                    pb::SynapseUnderstandingRequest {
+                        utterance: utterance.to_owned(),
+                        ..Default::default()
+                    },
+                ),
+            ),
+        }
+    }
+
+    /// The device's reply to a `requires_response=true` action: an observation turn
+    /// whose parent is the action's identifier.
+    fn observation(
+        parent: &str,
+        id: &str,
+        action: &str,
+        text: &str,
+    ) -> pb::StreamingUnderstandRequest {
+        observation_with_finality(parent, id, action, text, false)
+    }
+
+    fn observation_with_finality(
+        parent: &str,
+        id: &str,
+        action: &str,
+        text: &str,
+        is_final: bool,
+    ) -> pb::StreamingUnderstandRequest {
+        pb::StreamingUnderstandRequest {
+            content: Some(pb::streaming_understand_request::Content::Observation(
+                pb::SynapseChatTurn {
+                    user: pb::SynapseUser::System as i32,
+                    identifier: id.to_owned(),
+                    parent_identifier: parent.to_owned(),
+                    content: Some(pb::synapse_chat_turn::Content::Observation(
+                        pb::SynapseObservationContent {
+                            observation: text.to_owned(),
+                            is_final,
+                            action_name: action.to_owned(),
+                            source: pb::SynapseSource::Device as i32,
+                        },
+                    )),
+                    ..Default::default()
+                },
+            )),
+        }
+    }
+
+    fn event(msg: &pb::StreamingUnderstandResponse) -> &pb::IntermediateEvent {
+        match &msg.content {
+            Some(pb::streaming_understand_response::Content::IntermediateEvent(e)) => e,
+            _ => panic!("expected an intermediate_event"),
+        }
+    }
+
+    fn turn(msg: &pb::StreamingUnderstandResponse) -> &pb::SynapseChatTurn {
+        event(msg).event.as_ref().expect("event carries a turn")
+    }
+
+    fn action_of(msg: &pb::StreamingUnderstandResponse) -> Option<&pb::SynapseActionContent> {
+        match &turn(msg).content {
+            Some(pb::synapse_chat_turn::Content::Action(a)) => Some(a),
+            _ => None,
+        }
+    }
+
+    fn observation_of(
+        msg: &pb::StreamingUnderstandResponse,
+    ) -> Option<&pb::SynapseObservationContent> {
+        match &turn(msg).content {
+            Some(pb::synapse_chat_turn::Content::Observation(o)) => Some(o),
+            _ => None,
+        }
+    }
+
+    fn spoken(msg: &pb::StreamingUnderstandResponse) -> String {
+        let a = action_of(msg).expect("action");
+        assert_eq!(a.action, catalog::RESPOND_ACTION);
+        serde_json::from_str::<serde_json::Value>(&a.input).unwrap()[catalog::RESPOND_FIELD]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    }
+
+    async fn next(out: &mut Outbound) -> pb::StreamingUnderstandResponse {
+        tokio::time::timeout(Duration::from_secs(5), out.next())
+            .await
+            .expect("session produced no event in time")
+            .expect("stream ended early")
+            .expect("session error")
+    }
+
+    /// Assert the session emits nothing for a moment — i.e. it is parked awaiting
+    /// the device.
+    async fn assert_idle(out: &mut Outbound) {
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), out.next())
+                .await
+                .is_err(),
+            "session emitted an event while it should have been awaiting the device"
+        );
+    }
+
+    async fn assert_closed(out: &mut Outbound) {
+        let tail = tokio::time::timeout(Duration::from_secs(5), out.next())
+            .await
+            .expect("stream did not half-close in time");
+        assert!(tail.is_none(), "expected half-close, got another event");
+    }
+
+    // (a) A SERVER tool must not pause the loop.
+    /// PARITY: batched server tools must execute on THIS transport too.
+    ///
+    /// The engine gained parallel tool execution and bidi did not, so the same
+    /// question answered from fewer facts here — and the model could speak as
+    /// though a lookup it never received had run. This is the third time a fix
+    /// landed on one transport and left the other broken (blank content, the
+    /// run budget, now this), which is why the assertion is about equality of
+    /// behaviour rather than about bidi in isolation.
+    #[tokio::test]
+    async fn batched_server_tools_run_on_bidi_too() {
+        struct BatchThenAnswer;
+        #[tonic::async_trait]
+        impl ChatModel for BatchThenAnswer {
+            async fn complete(
+                &self,
+                messages: &[ChatMessage],
+                _t: &[ToolDef],
+            ) -> Result<ChatResponse, LlmError> {
+                if messages.iter().any(|m| m.content.starts_with("[Called ")) {
+                    return Ok(ChatResponse {
+                        content: Some("Both looked up.".to_owned()),
+                        ..Default::default()
+                    });
+                }
+                Ok(ChatResponse {
+                    tool_call: Some(ToolCall {
+                        name: "wikipedia".into(),
+                        arguments: r#"{"query":"eiffel tower"}"#.into(),
+                    }),
+                    extra_tool_calls: vec![ToolCall {
+                        name: "wolfram".into(),
+                        arguments: r#"{"query":"330 meters in feet"}"#.into(),
+                    }],
+                    ..Default::default()
+                })
+            }
+        }
+
+        let (tx, mut out) = session(Arc::new(BatchThenAnswer));
+        tx.send(Ok(understanding("how tall is the eiffel tower in feet")))
+            .await
+            .unwrap();
+        drop(tx);
+
+        let mut msgs = Vec::new();
+        while let Some(m) = out.next().await {
+            msgs.push(m.unwrap());
+        }
+        let observed: Vec<String> = msgs
+            .iter()
+            .filter_map(observation_of)
+            .map(|o| o.action_name.clone())
+            .collect();
+        assert!(
+            observed.iter().any(|n| n == "wikipedia") && observed.iter().any(|n| n == "wolfram"),
+            "both batched lookups must be executed AND observed on bidi, not just \
+             the first — a dropped call the model never sees is one it may answer \
+             as though it ran: {observed:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn server_tool_streams_informational_events_and_never_waits() {
+        let model = MockChatModel::tool_then_answer(
+            ToolCall {
+                name: "web_search".into(),
+                arguments: r#"{"query":"capital of France"}"#.into(),
+            },
+            "Paris is the capital of France.",
+        );
+        let (tx, mut out) = session(Arc::new(model));
+        tx.send(Ok(understanding("what's the capital of France")))
+            .await
+            .unwrap();
+        // Deliberately never send an observation: if the session waited for one it
+        // could not reach the answer.
+        drop(tx);
+
+        let a = next(&mut out).await;
+        assert!(!event(&a).requires_response, "server action must not block");
+        let action = action_of(&a).expect("action");
+        assert_eq!(action.action, "web_search");
+        assert_eq!(action.source, pb::SynapseSource::Server as i32);
+        assert_eq!(event(&a).agent, AGENT);
+
+        let o = next(&mut out).await;
+        assert!(
+            !event(&o).requires_response,
+            "server observation must not block"
+        );
+        let obs = observation_of(&o).expect("observation");
+        assert_eq!(obs.action_name, "web_search");
+        assert_eq!(obs.source, pb::SynapseSource::Server as i32);
+        assert!(!obs.is_final);
+
+        let r = next(&mut out).await;
+        assert!(event(&r).requires_response, "Respond must be dispatched");
+        assert_eq!(spoken(&r), "Paris is the capital of France.");
+        assert_closed(&mut out).await;
+    }
+
+    // (b) A DEVICE tool must pause the loop on exactly one flagged event, then
+    //     resume when the device's observation arrives.
+    #[tokio::test]
+    async fn device_tool_emits_one_requires_response_event_then_waits_for_the_observation() {
+        let model = MockChatModel::new(vec![
+            ChatResponse {
+                content: None,
+                thought: "the wearer wants a timer".into(),
+                tool_call: Some(ToolCall {
+                    name: "SetTimer".into(),
+                    arguments: r#"{"minuteDuration":5,"name":"pasta"}"#.into(),
+                }),
+                extra_tool_calls: Vec::new(),
+            },
+            ChatResponse {
+                content: Some("Your 5 minute pasta timer is running.".into()),
+                thought: String::new(),
+                tool_call: None,
+                extra_tool_calls: Vec::new(),
+            },
+        ]);
+        let (tx, mut out) = session(Arc::new(model));
+        tx.send(Ok(understanding("set a 5 minute pasta timer")))
+            .await
+            .unwrap();
+
+        let a = next(&mut out).await;
+        assert!(
+            event(&a).requires_response,
+            "a device tool must be flagged for device execution"
+        );
+        let action = action_of(&a).expect("action");
+        assert_eq!(action.action, "SetTimer");
+        assert_eq!(action.source, pb::SynapseSource::Device as i32);
+        assert_eq!(action.thought, "the wearer wants a timer");
+        let action_id = turn(&a).identifier.clone();
+
+        // The server must now be parked: it neither executed the tool nor invented
+        // an observation for it.
+        assert_idle(&mut out).await;
+
+        tx.send(Ok(observation(
+            &action_id,
+            "dev-1",
+            "SetTimer",
+            "Timer started.",
+        )))
+        .await
+        .unwrap();
+
+        let r = next(&mut out).await;
+        assert!(event(&r).requires_response);
+        assert_eq!(spoken(&r), "Your 5 minute pasta timer is running.");
+        // The terminal Respond threads onto the DEVICE's observation turn.
+        assert_eq!(turn(&r).parent_identifier, "dev-1");
+
+        drop(tx);
+        assert_closed(&mut out).await;
+    }
+
+    // (c) The run terminates in a Respond.
+    #[tokio::test]
+    async fn plain_answer_run_terminates_in_a_single_flagged_respond() {
+        let model = MockChatModel::new(vec![ChatResponse {
+            content: Some("Hello there.".into()),
+            thought: String::new(),
+            tool_call: None,
+            extra_tool_calls: Vec::new(),
+        }]);
+        let (tx, mut out) = session(Arc::new(model));
+        tx.send(Ok(understanding("hi"))).await.unwrap();
+        drop(tx);
+
+        let r = next(&mut out).await;
+        assert!(event(&r).requires_response);
+        let a = action_of(&r).expect("action");
+        assert_eq!(a.action, catalog::RESPOND_ACTION);
+        assert_eq!(a.source, pb::SynapseSource::Device as i32);
+        assert_eq!(spoken(&r), "Hello there.");
+        assert_closed(&mut out).await;
+    }
+
+    /// `Respond` is a device action, but waiting on it would deadlock: its device
+    /// observation is final and never posted back.
+    #[tokio::test]
+    async fn explicit_respond_tool_call_is_terminal_and_does_not_wait() {
+        let model = MockChatModel::new(vec![ChatResponse {
+            content: None,
+            thought: String::new(),
+            tool_call: Some(ToolCall {
+                name: catalog::RESPOND_ACTION.into(),
+                arguments: r#"{"Response":"All set."}"#.into(),
+            }),
+            extra_tool_calls: Vec::new(),
+        }]);
+        let (tx, mut out) = session(Arc::new(model));
+        tx.send(Ok(understanding("thanks"))).await.unwrap();
+
+        let r = next(&mut out).await;
+        assert!(event(&r).requires_response);
+        assert_eq!(spoken(&r), "All set.");
+        // The run is over without any observation from the device.
+        drop(tx);
+        assert_closed(&mut out).await;
+    }
+
+    #[tokio::test]
+    async fn unknown_tool_bounces_the_stock_observation_without_requiring_a_response() {
+        let model = MockChatModel::new(vec![
+            ChatResponse {
+                content: None,
+                thought: String::new(),
+                tool_call: Some(ToolCall {
+                    name: "TotallyNotARealTool".into(),
+                    arguments: "{}".into(),
+                }),
+                extra_tool_calls: Vec::new(),
+            },
+            ChatResponse {
+                content: Some("Recovered.".into()),
+                thought: String::new(),
+                tool_call: None,
+                extra_tool_calls: Vec::new(),
+            },
+        ]);
+        let (tx, mut out) = session(Arc::new(model));
+        tx.send(Ok(understanding("x"))).await.unwrap();
+        drop(tx);
+
+        let a = next(&mut out).await;
+        assert!(!event(&a).requires_response);
+        let o = next(&mut out).await;
+        assert!(
+            !event(&o).requires_response,
+            "the bounce must not ask the device to run anything"
+        );
+        let obs = observation_of(&o).expect("observation");
+        assert_eq!(obs.observation, UNRECOGNIZED_FUNCTION);
+        assert_eq!(obs.source, pb::SynapseSource::Device as i32);
+
+        let r = next(&mut out).await;
+        assert_eq!(spoken(&r), "Recovered.");
+        assert_closed(&mut out).await;
+    }
+
+    /// REGRESSION: the action budget is per RUN, and a multi-hop run arrives with
+    /// its earlier hops already in `device_context.turns`.
+    ///
+    /// `Switchboard` counts actions over the whole run
+    /// (`numActionsInRun(run) > mActionLimit`). Counting only the steps taken
+    /// inside this process let the server keep planning past the pin's own
+    /// ceiling, at which point the DEVICE cuts the run short — the wearer's turn
+    /// dies mid-flight with no terminal from us. The legacy engine has always
+    /// seeded from the replayed transcript; bidi did not.
+    #[tokio::test]
+    async fn a_replayed_run_consumes_the_bidi_action_budget() {
+        struct AlwaysSearch;
+        #[tonic::async_trait]
+        impl ChatModel for AlwaysSearch {
+            async fn complete(
+                &self,
+                _m: &[ChatMessage],
+                _t: &[ToolDef],
+            ) -> Result<ChatResponse, LlmError> {
+                Ok(ChatResponse {
+                    content: None,
+                    thought: String::new(),
+                    tool_call: Some(ToolCall {
+                        name: "web_search".into(),
+                        arguments: r#"{"query":"loop"}"#.into(),
+                    }),
+                    extra_tool_calls: Vec::new(),
+                })
+            }
+        }
+
+        // A replayed run in which the device already executed 6 actions: a root
+        // plus a parent-linked chain, exactly as `EventsSnapshot.linearize` sends.
+        const ALREADY: usize = 6;
+        let mut turns = vec![pb::SynapseChatTurn {
+            identifier: "root".to_owned(),
+            parent_identifier: String::new(),
+            ..Default::default()
+        }];
+        for i in 0..ALREADY {
+            let parent = turns.last().unwrap().identifier.clone();
+            turns.push(pb::SynapseChatTurn {
+                identifier: format!("a{i}"),
+                parent_identifier: parent,
+                content: Some(pb::synapse_chat_turn::Content::Action(
+                    pb::SynapseActionContent {
+                        action: "web_search".to_owned(),
+                        input: "{}".to_owned(),
+                        source: pb::SynapseSource::Server as i32,
+                        ..Default::default()
+                    },
+                )),
+                ..Default::default()
+            });
+        }
+
+        let (tx, mut out) = session(Arc::new(AlwaysSearch));
+        tx.send(Ok(pb::StreamingUnderstandRequest {
+            content: Some(
+                pb::streaming_understand_request::Content::UnderstandingRequest(
+                    pb::SynapseUnderstandingRequest {
+                        utterance: "keep going".to_owned(),
+                        device_context: Some(pb::SynapseDeviceContext {
+                            turns,
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                ),
+            ),
+        }))
+        .await
+        .unwrap();
+        drop(tx);
+
+        let mut msgs = Vec::new();
+        while let Some(m) = out.next().await {
+            msgs.push(m.unwrap());
+        }
+
+        // Only the remaining budget may be spent here: 2 server steps
+        // (action + observation each), then TooManyActions + the terminal Respond.
+        let remaining = MAX_STEPS - ALREADY;
+        assert_eq!(
+            msgs.len(),
+            remaining * 2 + 2,
+            "bidi must spend only the run's REMAINING budget; the device already \
+             executed {ALREADY} of {MAX_STEPS} actions in this run",
+        );
+        assert!(
+            msgs.iter()
+                .filter_map(observation_of)
+                .any(|o| o.observation == TOO_MANY_ACTIONS),
+            "the run must end on the runaway guard, not by exhausting the process budget",
+        );
+    }
+
+    /// REGRESSION, and a lesson about fixing one transport at a time.
+    ///
+    /// The blank-content guard landed on the legacy engine but not here, so the
+    /// wearer-facing silence it was written to prevent survived on this
+    /// transport. `RespondAction.mResponse` is a present-but-empty slot: the
+    /// device resolves and dispatches the action, narrates nothing, and the
+    /// resulting observation is final, so nothing ever retries.
+    #[tokio::test]
+    async fn blank_model_content_is_not_spoken_as_an_empty_respond_on_bidi() {
+        struct BlankAnswer;
+        #[tonic::async_trait]
+        impl ChatModel for BlankAnswer {
+            async fn complete(
+                &self,
+                _m: &[ChatMessage],
+                _t: &[ToolDef],
+            ) -> Result<ChatResponse, LlmError> {
+                Ok(ChatResponse {
+                    content: Some("   ".to_owned()),
+                    thought: String::new(),
+                    tool_call: None,
+                    extra_tool_calls: Vec::new(),
+                })
+            }
+        }
+
+        let (tx, mut out) = session(Arc::new(BlankAnswer));
+        tx.send(Ok(understanding("say nothing"))).await.unwrap();
+        drop(tx);
+
+        let mut msgs = Vec::new();
+        while let Some(m) = out.next().await {
+            msgs.push(m.unwrap());
+        }
+        let last = msgs.last().expect("a terminal turn");
+        let spoken = action_of(last)
+            .and_then(|a| crate::assistant::catalog::respond_input_from_arguments(&a.input))
+            .unwrap_or_default();
+        assert!(
+            !spoken.trim().is_empty(),
+            "a terminal Respond must carry speakable text; blank narrates nothing \
+             and its observation is final, so the run dies in silence",
+        );
+    }
+
+    #[tokio::test]
+    async fn action_budget_exhaustion_yields_too_many_actions_then_respond() {
+        // A model that only ever calls a server tool: it can never finish.
+        struct AlwaysSearch;
+        #[tonic::async_trait]
+        impl ChatModel for AlwaysSearch {
+            async fn complete(
+                &self,
+                _m: &[ChatMessage],
+                _t: &[ToolDef],
+            ) -> Result<ChatResponse, LlmError> {
+                Ok(ChatResponse {
+                    content: None,
+                    thought: String::new(),
+                    tool_call: Some(ToolCall {
+                        name: "web_search".into(),
+                        arguments: r#"{"query":"loop"}"#.into(),
+                    }),
+                    extra_tool_calls: Vec::new(),
+                })
+            }
+        }
+        let (tx, mut out) = session(Arc::new(AlwaysSearch));
+        tx.send(Ok(understanding("loop forever"))).await.unwrap();
+        drop(tx);
+
+        let mut msgs = Vec::new();
+        while let Some(m) = out.next().await {
+            msgs.push(m.unwrap());
+        }
+        // 8 server steps (action + observation each), then TooManyActions + Respond.
+        assert_eq!(msgs.len(), MAX_STEPS * 2 + 2);
+        let too_many = msgs
+            .iter()
+            .filter_map(observation_of)
+            .find(|o| o.observation == TOO_MANY_ACTIONS)
+            .expect("TooManyActions observation");
+        assert_eq!(too_many.action_name, "TooManyActions");
+        let last = msgs.last().unwrap();
+        assert!(event(last).requires_response);
+        // Both transports must put the SAME stock sentence in the wearer's ear for
+        // the same guard, and it must be the observation's own text (that is what
+        // `convertAndDispatchGeneratedActionIfNeeded` respeaks).
+        assert_eq!(spoken(last), TOO_MANY_ACTIONS);
+        assert_eq!(spoken(last), super::super::engine::TOO_MANY_ACTIONS);
+    }
+
+    /// A final device observation ends the run; the server must not re-prompt into
+    /// a closed run (the mock would error and speak an apology if it did).
+    #[tokio::test]
+    async fn final_device_observation_ends_the_run_without_another_model_call() {
+        let model = MockChatModel::new(vec![ChatResponse {
+            content: None,
+            thought: String::new(),
+            tool_call: Some(ToolCall {
+                name: "SetTimer".into(),
+                arguments: r#"{"minuteDuration":1}"#.into(),
+            }),
+            extra_tool_calls: Vec::new(),
+        }]);
+        let (tx, mut out) = session(Arc::new(model));
+        tx.send(Ok(understanding("timer"))).await.unwrap();
+        let a = next(&mut out).await;
+        let action_id = turn(&a).identifier.clone();
+        tx.send(Ok(observation_with_finality(
+            &action_id, "dev-1", "SetTimer", "Done.", true,
+        )))
+        .await
+        .unwrap();
+        // Deliberately DO NOT drop `tx`. A real pin never half-closes its request
+        // stream — it blocks in `responseFuture.get()` with no deadline. If the
+        // session answers a final observation with `Flow::Done` it parks in
+        // `next_request` and both sides wait forever; the only thing that can end
+        // this stream is the SERVER half-closing. Dropping `tx` here would supply
+        // that half-close from the test and the assertion would hold either way.
+        assert_closed(&mut out).await;
+    }
+
+    /// An observation for some other action is superseded work and must not
+    /// resume the pending step.
+    #[tokio::test]
+    async fn observation_for_a_different_action_is_discarded() {
+        let model = MockChatModel::new(vec![
+            ChatResponse {
+                content: None,
+                thought: String::new(),
+                tool_call: Some(ToolCall {
+                    name: "SetTimer".into(),
+                    arguments: r#"{"minuteDuration":5}"#.into(),
+                }),
+                extra_tool_calls: Vec::new(),
+            },
+            ChatResponse {
+                content: Some("Timer set.".into()),
+                thought: String::new(),
+                tool_call: None,
+                extra_tool_calls: Vec::new(),
+            },
+        ]);
+        let (tx, mut out) = session(Arc::new(model));
+        tx.send(Ok(understanding("set a timer"))).await.unwrap();
+        let a = next(&mut out).await;
+        let action_id = turn(&a).identifier.clone();
+
+        tx.send(Ok(observation(
+            "some-other-action",
+            "stale",
+            "SetTimer",
+            "stale result",
+        )))
+        .await
+        .unwrap();
+        assert_idle(&mut out).await;
+
+        tx.send(Ok(observation(
+            &action_id,
+            "dev-1",
+            "SearchContact",
+            "Ada Lovelace",
+        )))
+        .await
+        .unwrap();
+        let r = next(&mut out).await;
+        assert_eq!(spoken(&r), "Timer set.");
+        drop(tx);
+        assert_closed(&mut out).await;
+    }
+
+    /// Client hangs up while the server is parked: half-close, never fabricate.
+    #[tokio::test]
+    async fn hangup_while_awaiting_a_device_observation_half_closes() {
+        let model = MockChatModel::new(vec![ChatResponse {
+            content: None,
+            thought: String::new(),
+            tool_call: Some(ToolCall {
+                name: "SetTimer".into(),
+                arguments: "{}".into(),
+            }),
+            extra_tool_calls: Vec::new(),
+        }]);
+        let (tx, mut out) = session(Arc::new(model));
+        tx.send(Ok(understanding("timer"))).await.unwrap();
+        let a = next(&mut out).await;
+        assert!(event(&a).requires_response);
+        drop(tx);
+        assert_closed(&mut out).await;
+    }
+
+    /// A fresh utterance mid-run supersedes the pending device action.
+    #[tokio::test]
+    async fn a_new_understanding_request_supersedes_the_pending_device_action() {
+        let model = MockChatModel::new(vec![
+            ChatResponse {
+                content: None,
+                thought: String::new(),
+                tool_call: Some(ToolCall {
+                    name: "SetTimer".into(),
+                    arguments: "{}".into(),
+                }),
+                extra_tool_calls: Vec::new(),
+            },
+            ChatResponse {
+                content: Some("Never mind, then.".into()),
+                thought: String::new(),
+                tool_call: None,
+                extra_tool_calls: Vec::new(),
+            },
+        ]);
+        let (tx, mut out) = session(Arc::new(model));
+        tx.send(Ok(understanding("set a timer"))).await.unwrap();
+        let a = next(&mut out).await;
+        assert_eq!(action_of(&a).unwrap().action, "SetTimer");
+
+        tx.send(Ok(understanding("actually, cancel that")))
+            .await
+            .unwrap();
+        let r = next(&mut out).await;
+        assert_eq!(spoken(&r), "Never mind, then.");
+        drop(tx);
+        assert_closed(&mut out).await;
+    }
+
+    /// The stream is a session, not a single turn: it serves the next
+    /// `understanding_request` on the same connection (device-side session reuse).
+    #[tokio::test]
+    async fn the_session_serves_a_second_turn_on_the_same_stream() {
+        let model = MockChatModel::new(vec![
+            ChatResponse {
+                content: Some("First.".into()),
+                thought: String::new(),
+                tool_call: None,
+                extra_tool_calls: Vec::new(),
+            },
+            ChatResponse {
+                content: Some("Second.".into()),
+                thought: String::new(),
+                tool_call: None,
+                extra_tool_calls: Vec::new(),
+            },
+        ]);
+        let (tx, mut out) = session(Arc::new(model));
+        tx.send(Ok(understanding("one"))).await.unwrap();
+        let first = next(&mut out).await;
+        assert_eq!(spoken(&first), "First.");
+        tx.send(Ok(understanding("two"))).await.unwrap();
+        let second = next(&mut out).await;
+        assert_eq!(spoken(&second), "Second.");
+        // Ids stay unique across turns within the session. They are UUIDs, not a
+        // sequence: a counter restarts per stream and would eventually re-mint an
+        // id the device still holds, which throws in LocalChatTurnService.record.
+        assert_ne!(turn(&first).identifier, turn(&second).identifier);
+        assert!(uuid::Uuid::parse_str(&turn(&second).identifier).is_ok());
+        drop(tx);
+        assert_closed(&mut out).await;
+    }
+
+    /// REGRESSION: carry allows exactly one active run — a turn that is its own
+    /// root replaces `mExecutingRun` and the old run's turns are blocked as
+    /// orphans. A barge-in must abandon the in-flight step immediately, not let
+    /// it grind out an answer to a superseded question.
+    #[tokio::test]
+    async fn a_barge_in_preempts_an_in_flight_model_step() {
+        use std::sync::Arc;
+        use tokio::sync::Notify;
+
+        /// Stalls the FIRST step until released, so the barge-in lands
+        /// mid-flight, and answers by echoing the question it was actually given
+        /// — otherwise both runs would be indistinguishable in the output.
+        struct StalledModel {
+            released: Arc<Notify>,
+            stalled: std::sync::atomic::AtomicBool,
+        }
+        #[tonic::async_trait]
+        impl ChatModel for StalledModel {
+            async fn complete(
+                &self,
+                m: &[ChatMessage],
+                _t: &[ToolDef],
+            ) -> Result<ChatResponse, LlmError> {
+                use std::sync::atomic::Ordering;
+                if self
+                    .stalled
+                    .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                    .is_ok()
+                {
+                    self.released.notified().await;
+                }
+                let asked = m
+                    .iter()
+                    .rev()
+                    .find(|x| x.role == crate::assistant::llm::Role::User)
+                    .map(|x| x.content.clone())
+                    .unwrap_or_default();
+                Ok(ChatResponse {
+                    content: Some(format!("answer to: {asked}")),
+                    thought: String::new(),
+                    tool_call: None,
+                    extra_tool_calls: Vec::new(),
+                })
+            }
+        }
+
+        let released = Arc::new(Notify::new());
+        let (tx, mut out) = session(Arc::new(StalledModel {
+            released: released.clone(),
+            stalled: std::sync::atomic::AtomicBool::new(false),
+        }));
+
+        tx.send(Ok(understanding("first question"))).await.unwrap();
+        // Barge in while the first step is still stalled.
+        tx.send(Ok(understanding("second question"))).await.unwrap();
+        // Now let the abandoned step's model call resolve; nothing may be spoken
+        // for it.
+        released.notify_waiters();
+        released.notify_one();
+
+        // The only thing spoken must answer the SECOND question; the abandoned
+        // run's reply must never reach the wearer.
+        let first_spoken = next(&mut out).await;
+        let text = spoken(&first_spoken);
+        assert!(
+            text.contains("second question"),
+            "the surviving run must answer the barge-in, got: {text}"
+        );
+        assert!(
+            !text.contains("first question"),
+            "the superseded run must not reach the wearer, got: {text}"
+        );
+        drop(tx);
+    }
+
+    /// A run-state seed carries no request, so `initial_run_state` is accepted
+    /// and skipped rather than failing the stream. The seed here holds two
+    /// agents on purpose — see the note on the literal below.
+    #[tokio::test]
+    async fn a_run_state_seed_is_skipped_not_fatal() {
+        let model = MockChatModel::new(vec![ChatResponse {
+            content: Some("Ready.".into()),
+            thought: String::new(),
+            tool_call: None,
+            extra_tool_calls: Vec::new(),
+        }]);
+        let (tx, mut out) = session(Arc::new(model));
+        tx.send(Ok(pb::StreamingUnderstandRequest {
+            content: Some(pb::streaming_understand_request::Content::InitialRunState(
+                // A seed with SEVERAL agents in it, on purpose. `agent_to_runs`
+                // was declared `bytes` here until the two wire trees were
+                // reconciled, and a `bytes` field decodes a multi-entry map
+                // without complaint while keeping only the last entry's raw
+                // bytes — so a single-entry seed would pass under both the right
+                // declaration and the wrong one. Two entries do not.
+                pb::RunState {
+                    agent_to_runs: std::collections::HashMap::from([
+                        ("assistant".to_string(), pb::Runs { runs: Vec::new() }),
+                        ("planner".to_string(), pb::Runs { runs: Vec::new() }),
+                    ]),
+                },
+            )),
+        }))
+        .await
+        .unwrap();
+        tx.send(Ok(understanding("hello"))).await.unwrap();
+        assert_eq!(spoken(&next(&mut out).await), "Ready.");
+        drop(tx);
+        assert_closed(&mut out).await;
+    }
+
+    /// A model step that is slow but never slow enough to trip the PER-STEP
+    /// ceiling, and that never finishes the job. Only a whole-run budget can stop
+    /// it.
+    struct SlowRunawayModel(Duration);
+    #[tonic::async_trait]
+    impl ChatModel for SlowRunawayModel {
+        async fn complete(
+            &self,
+            _m: &[ChatMessage],
+            _t: &[ToolDef],
+        ) -> Result<ChatResponse, LlmError> {
+            tokio::time::sleep(self.0).await;
+            Ok(ChatResponse {
+                content: None,
+                thought: String::new(),
+                // An unrecognized tool bounces and loops without touching the
+                // network, so the run's wall clock is exactly the model's.
+                tool_call: Some(ToolCall {
+                    name: "TotallyNotARealTool".into(),
+                    arguments: "{}".into(),
+                }),
+                extra_tool_calls: Vec::new(),
+            })
+        }
+    }
+
+    /// REGRESSION: bidi bounded a single model step and a single device wait, but
+    /// nothing bounded the RUN. Eight steps just under the per-step ceiling, plus
+    /// unbounded tool time, is minutes of wall clock — and on this transport
+    /// nothing on the device side cuts it short either
+    /// (`AIBusService.bidirectionalStreamingUnderstand` sets no
+    /// `withDeadlineAfter`, and `getNextDeviceActionResponse` blocks in an
+    /// unbounded `responseFuture.get()`), so the wearer just stands there.
+    ///
+    /// The budget is scaled down (1.5s instead of 22s) so the test costs
+    /// milliseconds; the machinery under it is the production path.
+    #[tokio::test]
+    async fn a_slow_run_is_bounded_by_the_run_budget_and_still_speaks() {
+        const BUDGET: Duration = Duration::from_millis(1_500);
+        // 450ms a step: three steps fit, the fourth cannot start. Each step is
+        // well inside MODEL_STEP_TIMEOUT, so the per-step ceiling never fires and
+        // only a whole-run budget can end this.
+        let started = std::time::Instant::now();
+        let (tx, mut out) = session_with_clocks(
+            Arc::new(SlowRunawayModel(Duration::from_millis(450))),
+            BUDGET,
+            DEVICE_OBSERVATION_TIMEOUT,
+        );
+        tx.send(Ok(understanding("take as long as you like")))
+            .await
+            .unwrap();
+        drop(tx);
+
+        let mut msgs = Vec::new();
+        while let Some(m) = tokio::time::timeout(Duration::from_secs(30), out.next())
+            .await
+            .expect("the run never ended")
+        {
+            msgs.push(m.unwrap());
+        }
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed <= BUDGET + Duration::from_millis(500),
+            "the run must be bounded by the {BUDGET:?} run budget; it ran for {elapsed:?}",
+        );
+        let last = msgs.last().expect("a terminal turn");
+        assert!(
+            event(last).requires_response,
+            "a budget-exhausted run must still end in a DISPATCHED terminal, or the \
+             device merely records it and the wearer hears nothing",
+        );
+        // The same string the device speaks for itself when its own deadline
+        // fires, and the same one the legacy engine speaks for this guard.
+        assert_eq!(spoken(last), ERROR_TIMEOUT);
+    }
+
+    /// REGRESSION: the wait for a device observation used to end in a bare
+    /// half-close. That completes the pin's pending future with an empty queue —
+    /// no event, nothing dispatched, nothing narrated. The wearer has by then
+    /// stood through a whole device action and hears nothing at all.
+    #[tokio::test]
+    async fn a_device_action_that_never_comes_back_still_ends_in_a_spoken_terminal() {
+        let model = MockChatModel::new(vec![ChatResponse {
+            content: None,
+            thought: String::new(),
+            tool_call: Some(ToolCall {
+                name: "SetTimer".into(),
+                arguments: r#"{"minuteDuration":5}"#.into(),
+            }),
+            extra_tool_calls: Vec::new(),
+        }]);
+        // Budget shorter than the per-wait AIMIC ceiling, as in production
+        // (22s vs 25s): the run's own clock is what ends the park.
+        let (tx, mut out) = session_with_clocks(
+            Arc::new(model),
+            Duration::from_millis(900),
+            Duration::from_secs(25),
+        );
+        tx.send(Ok(understanding("set a timer"))).await.unwrap();
+
+        let a = tokio::time::timeout(Duration::from_secs(30), out.next())
+            .await
+            .expect("no action emitted")
+            .expect("stream ended early")
+            .expect("session error");
+        assert!(event(&a).requires_response);
+        assert_eq!(action_of(&a).unwrap().action, "SetTimer");
+
+        // The pin never answers, and never hangs up either — it is blocked in an
+        // unbounded `responseFuture.get()`, so only the server can end this.
+        let r = tokio::time::timeout(Duration::from_secs(30), out.next())
+            .await
+            .expect("the session never gave up on the device")
+            .expect("the session half-closed silently instead of speaking")
+            .expect("session error");
+        assert!(event(&r).requires_response);
+        assert_eq!(spoken(&r), ERROR_TIMEOUT);
+        drop(tx);
+    }
+
+    /// The server tool ceiling. Every server tool is a call to somebody else's
+    /// endpoint; one that accepts the connection and then stalls held the whole
+    /// run open, because this was the last unbounded await in the loop.
+    ///
+    /// NOTE: driven at the helper rather than through a run, because no server
+    /// tool in the catalog can be made to stall from a test without an injection
+    /// point in `catalog.rs` (not this agent's file). The helper has exactly one
+    /// call site, in the server-tool branch of `run_turn`.
+    #[tokio::test]
+    async fn a_stalled_server_tool_is_cut_off_at_the_remaining_budget() {
+        let observation = bounded_tool(Duration::from_millis(50), async {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            "a result that arrived far too late".to_owned()
+        })
+        .await;
+        assert_eq!(
+            observation, TOOL_TIMED_OUT,
+            "a stalled tool must yield an honest empty-handed observation, never \
+             its late result and never an unbounded wait",
+        );
+    }
+
+    /// REGRESSION: every emitted turn must carry a wall-clock stamp.
+    ///
+    /// An absent timestamp decodes as epoch 0 on the device, so the node sorts
+    /// first in the turn priority queue and is evicted first at the turn cap,
+    /// and `linearize`'s inter-run gap test sees a ~56-year gap and truncates the
+    /// history the next hop depends on. The legacy engine has stamped its turns
+    /// since that was found; bidi stamped none of them — and bidi is the
+    /// transport where the device records EVERY event, not just the last action.
+    #[tokio::test]
+    async fn every_emitted_turn_is_timestamped_on_bidi() {
+        let model = MockChatModel::new(vec![
+            ChatResponse {
+                content: None,
+                thought: String::new(),
+                tool_call: Some(ToolCall {
+                    name: "TotallyNotARealTool".into(),
+                    arguments: "{}".into(),
+                }),
+                extra_tool_calls: Vec::new(),
+            },
+            ChatResponse {
+                content: Some("Recovered.".into()),
+                thought: String::new(),
+                tool_call: None,
+                extra_tool_calls: Vec::new(),
+            },
+        ]);
+        let (tx, mut out) = session(Arc::new(model));
+        tx.send(Ok(understanding("x"))).await.unwrap();
+        drop(tx);
+
+        let mut msgs = Vec::new();
+        while let Some(m) = out.next().await {
+            msgs.push(m.unwrap());
+        }
+        assert_eq!(msgs.len(), 3, "action + observation + terminal Respond");
+        for m in &msgs {
+            let ts = turn(m)
+                .timestamp
+                .as_ref()
+                .expect("every emitted turn carries a timestamp");
+            assert!(
+                ts.seconds > 1_600_000_000,
+                "an epoch-0 stamp is what an absent one decodes to; got {}",
+                ts.seconds,
+            );
+        }
+    }
+
+    /// REGRESSION: an observation re-enters the model's context on every later
+    /// step of the run, so its length is paid for in prompt tokens and in the
+    /// latency of each remaining step. The legacy engine clips what it feeds
+    /// back; bidi fed the whole thing — and on bidi the longest observations are
+    /// the DEVICE's, which arrive on this same path.
+    ///
+    /// The wire copy is untouched; only the transcript is clipped.
+    #[tokio::test]
+    async fn a_long_device_observation_is_clipped_before_it_re_enters_the_transcript() {
+        /// Calls a device tool first, then echoes back the transcript line the
+        /// observation produced — which is the thing under test.
+        struct EchoTranscript(std::sync::atomic::AtomicUsize);
+        #[tonic::async_trait]
+        impl ChatModel for EchoTranscript {
+            async fn complete(
+                &self,
+                m: &[ChatMessage],
+                _t: &[ToolDef],
+            ) -> Result<ChatResponse, LlmError> {
+                use std::sync::atomic::Ordering;
+                if self.0.fetch_add(1, Ordering::SeqCst) == 0 {
+                    return Ok(ChatResponse {
+                        content: None,
+                        thought: String::new(),
+                        tool_call: Some(ToolCall {
+                            name: "SetTimer".into(),
+                            arguments: r#"{"minuteDuration":5,"name":"pasta"}"#.into(),
+                        }),
+                        extra_tool_calls: Vec::new(),
+                    });
+                }
+                Ok(ChatResponse {
+                    content: m.last().map(|x| x.content.clone()),
+                    thought: String::new(),
+                    tool_call: None,
+                    extra_tool_calls: Vec::new(),
+                })
+            }
+        }
+
+        let (tx, mut out) = session(Arc::new(EchoTranscript(
+            std::sync::atomic::AtomicUsize::new(0),
+        )));
+        tx.send(Ok(understanding("set a timer"))).await.unwrap();
+        let a = next(&mut out).await;
+        assert!(event(&a).requires_response, "the pin runs this one");
+        let action_id = turn(&a).identifier.clone();
+
+        // A device observation far longer than anything a spoken answer needs.
+        let long: String = std::iter::repeat_n("The timer is running. ", 400)
+            .collect::<Vec<_>>()
+            .concat();
+        assert!(long.len() > MAX_MODEL_FACING_OBSERVATION * 4);
+        tx.send(Ok(observation(&action_id, "dev-1", "SetTimer", &long)))
+            .await
+            .unwrap();
+
+        let r = next(&mut out).await;
+        let echoed = spoken(&r);
+        assert!(
+            echoed.contains("… [truncated]"),
+            "the transcript line must be marked as clipped so the model does not \
+             read a cut list as complete",
+        );
+        assert!(
+            echoed.len() < MAX_MODEL_FACING_OBSERVATION + 200,
+            "the clipped transcript line is {} bytes; the observation was {}",
+            echoed.len(),
+            long.len(),
+        );
+        drop(tx);
+    }
+
+    /// REGRESSION: an observation arriving with no run in flight is the device
+    /// closing out the run we just terminated — its `Respond` handler completed
+    /// with a FINAL observation and the pin is now blocked on an unbounded
+    /// `responseFuture.get()`. Ignoring it parks the wearer for the full 25s
+    /// AIMIC deadline AFTER the answer was already spoken. Half-closing lets the
+    /// client's `close()` complete that future immediately.
+    #[tokio::test]
+    async fn a_close_out_observation_ends_the_session_rather_than_parking_the_pin() {
+        let model = MockChatModel::new(vec![ChatResponse {
+            content: Some("Ready.".into()),
+            thought: String::new(),
+            tool_call: None,
+            extra_tool_calls: Vec::new(),
+        }]);
+        let (tx, mut out) = session(Arc::new(model));
+        tx.send(Ok(understanding("hello"))).await.unwrap();
+        assert_eq!(spoken(&next(&mut out).await), "Ready.");
+
+        // The pin executed the terminal Respond and posts its final observation.
+        tx.send(Ok(observation("", "close-out", "Respond", "done")))
+            .await
+            .unwrap();
+        // The session must half-close rather than sit waiting for more input.
+        assert_closed(&mut out).await;
+        drop(tx);
+    }
+}

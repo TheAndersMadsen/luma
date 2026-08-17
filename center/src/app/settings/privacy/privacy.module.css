@@ -1,0 +1,119 @@
+/*
+ * Settings → Privacy. Additive styles for the toggle rows and the
+ * account-deletion danger zone. Shared section/InfoRow chrome is imported
+ * read-only from settings.module.css; only the row + danger bits live here.
+ *
+ * The switch itself is gone from this file: its 46x28 track and 22px white knob
+ * ARE the app's one switch now, and they live in @/components/Status so the
+ * operator console's feature-flag toggles are the same control. Both write a
+ * boolean the wearer's device reads, so they should not have been two.
+ *
+ * The typed-DELETE confirmation below is deliberately unchanged — it is the
+ * reference pattern for every destructive control in the app.
+ */
+
+.toggleRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 18px 24px;
+  border-bottom: 1px solid var(--hu-divider);
+}
+
+.toggleRow:last-child {
+  border-bottom: none;
+}
+
+.toggleText {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.toggleLabel {
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--hu-colors-white);
+}
+
+/*
+ * `.toggleName` was here — the monospace caption that printed each toggle's raw
+ * backend key under its human label. Gone with its only call site: stock showed
+ * named toggles only, and a developer identifier on the privacy pane reads as a
+ * rendering fault rather than as information.
+ */
+
+/* Danger zone — account deletion */
+.dangerRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 18px 24px;
+}
+
+.dangerText {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.dangerTitle {
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--hu-colors-red-100);
+}
+
+.dangerDesc {
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.4;
+  color: var(--hu-colors-crater-base);
+  max-width: 520px;
+}
+
+.dangerButton {
+  flex: none;
+  padding: 10px 18px;
+  border-radius: 12px;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--hu-colors-white);
+  background: var(--hu-colors-red-150);
+  border: none;
+  cursor: pointer;
+  transition: background-color var(--transition-duration, 0.15s) ease-out;
+}
+
+.dangerButton:hover {
+  background: var(--hu-colors-red-200);
+}
+
+.dangerButton:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.confirmBox {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px 24px;
+  border-top: 1px solid var(--hu-divider);
+}
+
+.confirmInput {
+  composes: field from "../../../components/controls.module.css";
+  max-width: 320px;
+}
+
+.confirmActions {
+  display: flex;
+  gap: 12px;
+}
+
+.cancelButton {
+  composes: buttonQuiet from "../../../components/controls.module.css";
+}

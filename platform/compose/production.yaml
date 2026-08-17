@@ -1,0 +1,596 @@
+# Production policy for anders-server. Use only with the root model:
+# docker compose -f compose.yaml -f platform/compose/production.yaml ...
+#
+# All published ports bind to loopback. The public web edge is supplied by the
+# host Nginx reverse proxy; the device edge is the loopback-published Envoy.
+
+x-production-cosmos-dependencies: &production-cosmos-dependencies
+  postgres:
+    condition: service_healthy
+  keycloak:
+    condition: service_healthy
+
+services:
+  connectivity:
+    environment:
+      CARRY_AUTH_MODE: edge-authenticated
+      CARRY_ENVIRONMENT: production
+      REVIVAL_DEPLOYMENT_ENVIRONMENT: production
+    ports:
+      - 127.0.0.1:${REVIVAL_CONNECTIVITY_PORT:-18085}:18080
+    networks:
+      - loopback-publish
+
+  ai-bus:
+    environment:
+      CARRY_AUTH_MODE: edge-authenticated
+      CARRY_ENVIRONMENT: production
+      REVIVAL_DEPLOYMENT_ENVIRONMENT: production
+      CARRY_DATABASE_URL: ${CARRY_DATABASE_URL:?set CARRY_DATABASE_URL in the protected production env}
+      CARRY_EDGE_TOKEN: ${CARRY_EDGE_TOKEN:?set CARRY_EDGE_TOKEN in the protected production env}
+      CARRY_OIDC_ISSUER: ${CARRY_OIDC_ISSUER:-https://center.andersmadsen.dk/realms/humane}
+      CARRY_OIDC_JWKS_URI: ${CARRY_OIDC_JWKS_URI:-http://keycloak:8080/realms/humane/protocol/openid-connect/certs}
+      CARRY_OIDC_AUDIENCE: ${CARRY_OIDC_AUDIENCE:-}
+      CARRY_ADMIN_TOKEN: ${CARRY_ADMIN_TOKEN:?set CARRY_ADMIN_TOKEN in the protected production env}
+      CARRY_CENTER_PROJECTION_TOKEN: ${CARRY_CENTER_PROJECTION_TOKEN:?set CARRY_CENTER_PROJECTION_TOKEN in the protected production env}
+      # Historical compatibility name: this enables the authenticated Center
+      # projection/admin router backed by the real PostgreSQL store. It does
+      # not seed or serve recovered sample data.
+      CARRY_DEMO_ENABLED: ${CARRY_DEMO_ENABLED:-true}
+      CARRY_LLM_BASE_URL: ${CARRY_LLM_BASE_URL:-https://openrouter.ai/api/v1}
+      CARRY_LLM_API_KEY: ${CARRY_LLM_API_KEY:-}
+      # Deployment-scoped fallback. Keep this separate from the generic key so
+      # a local endpoint can use a harmless placeholder without that value ever
+      # being mistaken for an OpenRouter credential.
+      CARRY_OPENROUTER_API_KEY: ${CARRY_OPENROUTER_API_KEY:-}
+      CARRY_LLM_MODEL: ${CARRY_LLM_MODEL:-openai/gpt-5.6-luna}
+      CARRY_LLM_REASONING_EFFORT: ${CARRY_LLM_REASONING_EFFORT:-}
+      CARRY_LLM_MAX_TOKENS: ${CARRY_LLM_MAX_TOKENS:-512}
+      CARRY_VISION_MODEL: ${CARRY_VISION_MODEL:-}
+      # Carry used a small self-hosted model for loading blurbs while the main
+      # model reasoned. These settings preserve that split without routing the
+      # full tool catalog through the small local model.
+      CARRY_INTERSTITIAL_BASE_URL: ${CARRY_INTERSTITIAL_BASE_URL:-}
+      CARRY_INTERSTITIAL_MODEL: ${CARRY_INTERSTITIAL_MODEL:-}
+      CARRY_INTERSTITIAL_API_KEY: ${CARRY_INTERSTITIAL_API_KEY:-}
+      # Private, unmetered search path. The URL is fixed by this Compose model;
+      # only SearXNG receives its own session secret.
+      CARRY_SEARXNG_BASE_URL: http://searxng:8080
+      CARRY_SERPAPI_KEY: ${CARRY_SERPAPI_KEY:-}
+      CARRY_GOOGLE_MAPS_KEY: ${CARRY_GOOGLE_MAPS_KEY:-}
+      CARRY_PIRATE_WEATHER_KEY: ${CARRY_PIRATE_WEATHER_KEY:-}
+      CARRY_WOLFRAM_APP_ID: ${CARRY_WOLFRAM_APP_ID:-}
+      CARRY_PPLX_API_KEY: ${CARRY_PPLX_API_KEY:-}
+      CARRY_PPLX_MODEL: ${CARRY_PPLX_MODEL:-sonar}
+      # The Rust adapter accepts both the established CARRY_AZURE_SPEECH_*
+      # names and the unscoped Azure names; these values stay scoped to ai-bus.
+      # Key and region are one credential pair — a key is only valid in the
+      # region that issued it — so both resolve from the scoped names first.
+      # Preferring the unscoped region here once paired a southeastasia key
+      # with a stale eastus region and every synthesis failed with 401.
+      AZURE_SPEECH_KEY: ${CARRY_AZURE_SPEECH_KEY:-${AZURE_SPEECH_KEY:-}}
+      AZURE_SPEECH_REGION: ${CARRY_AZURE_SPEECH_REGION:-${AZURE_SPEECH_REGION:-}}
+      AZURE_SPEECH_VOICE: ${CARRY_AZURE_SPEECH_VOICE:-${AZURE_SPEECH_VOICE:-en-US-AvaMultilingualNeural}}
+      CARRY_ATTEST_CA_CERT: /etc/carry-attest/ca.crt
+      CARRY_ATTEST_CA_KEY: /etc/carry-attest/ca.key
+      CARRY_DEVICE_STATUS_CA_CERT: /etc/carry-attest/ca.crt
+      CARRY_ONBOARDING_ENDPOINT: ${CARRY_ONBOARDING_ENDPOINT:?set the public onboarding endpoint}
+      CARRY_ONBOARDING_AUTHORITY: ${CARRY_ONBOARDING_AUTHORITY:-carry-edge}
+      CARRY_CAPTURE_UPLOAD_BASE_URL: ${CARRY_CAPTURE_UPLOAD_BASE_URL:?set the public capability-upload origin}
+      CARRY_CAPTURE_SHARE_BASE_URL: ${CARRY_CAPTURE_SHARE_BASE_URL:-https://center.andersmadsen.dk}
+      CARRY_SHARE_TOKEN_SECRET: ${CARRY_SHARE_TOKEN_SECRET:?set CARRY_SHARE_TOKEN_SECRET in the protected production env}
+      CARRY_MUSICBRAINZ_BASE_URL: ${CARRY_MUSICBRAINZ_BASE_URL:-https://musicbrainz.org}
+      CARRY_SHOPPING_VISUAL_SEARCH_URL: ${CARRY_SHOPPING_VISUAL_SEARCH_URL:-}
+      CARRY_SHOPPING_ALLOWED_HOSTS: ${CARRY_SHOPPING_ALLOWED_HOSTS:-}
+      CARRY_SHOPPING_API_KEY: ${CARRY_SHOPPING_API_KEY:-}
+      CARRY_ENROLLMENT_PINCODE: ${CARRY_ENROLLMENT_PINCODE:?set the reviewed four-digit enrollment code}
+      CARRY_ENROLLMENT_USER_ID: ${CARRY_ENROLLMENT_USER_ID:?set the enrollment user id}
+    volumes:
+      - carry-state:/var/lib/carry
+      - ${REVIVAL_ATTEST_DIR:-${CARRY_ATTEST_DIR:-${REVIVAL_PRIVATE_DIR:-/home/anders/ai-pin-revival/private}/attest}}/ca.crt:/etc/carry-attest/ca.crt:ro
+      - ${REVIVAL_ATTEST_DIR:-${CARRY_ATTEST_DIR:-${REVIVAL_PRIVATE_DIR:-/home/anders/ai-pin-revival/private}/attest}}/ca.key:/etc/carry-attest/ca.key:ro
+    ports:
+      - 127.0.0.1:${REVIVAL_AI_BUS_HTTP_PORT:-18086}:18080
+    networks: !override
+      cosmos-internal: {}
+      search-service: {}
+      provider-egress:
+        gw_priority: 1
+      local-model: {}
+    depends_on:
+      <<: *production-cosmos-dependencies
+      searxng:
+        condition: service_healthy
+
+  account:
+    environment:
+      CARRY_AUTH_MODE: edge-authenticated
+      CARRY_ENVIRONMENT: production
+      REVIVAL_DEPLOYMENT_ENVIRONMENT: production
+      CARRY_DATABASE_URL: ${CARRY_DATABASE_URL:?set CARRY_DATABASE_URL in the protected production env}
+      CARRY_EDGE_TOKEN: ${CARRY_EDGE_TOKEN:?set CARRY_EDGE_TOKEN in the protected production env}
+      CARRY_OIDC_ISSUER: ${CARRY_OIDC_ISSUER:-https://center.andersmadsen.dk/realms/humane}
+      CARRY_OIDC_JWKS_URI: ${CARRY_OIDC_JWKS_URI:-http://keycloak:8080/realms/humane/protocol/openid-connect/certs}
+      CARRY_OIDC_AUDIENCE: ${CARRY_OIDC_AUDIENCE:-}
+    depends_on: *production-cosmos-dependencies
+
+  contacts:
+    environment:
+      CARRY_AUTH_MODE: edge-authenticated
+      CARRY_ENVIRONMENT: production
+      REVIVAL_DEPLOYMENT_ENVIRONMENT: production
+      CARRY_DATABASE_URL: ${CARRY_DATABASE_URL:?set CARRY_DATABASE_URL in the protected production env}
+      CARRY_EDGE_TOKEN: ${CARRY_EDGE_TOKEN:?set CARRY_EDGE_TOKEN in the protected production env}
+      CARRY_OIDC_ISSUER: ${CARRY_OIDC_ISSUER:-https://center.andersmadsen.dk/realms/humane}
+      CARRY_OIDC_JWKS_URI: ${CARRY_OIDC_JWKS_URI:-http://keycloak:8080/realms/humane/protocol/openid-connect/certs}
+      CARRY_OIDC_AUDIENCE: ${CARRY_OIDC_AUDIENCE:-}
+    depends_on: *production-cosmos-dependencies
+
+  feature-flags:
+    environment:
+      CARRY_AUTH_MODE: edge-authenticated
+      CARRY_ENVIRONMENT: production
+      REVIVAL_DEPLOYMENT_ENVIRONMENT: production
+      CARRY_DATABASE_URL: ${CARRY_DATABASE_URL:?set CARRY_DATABASE_URL in the protected production env}
+      CARRY_EDGE_TOKEN: ${CARRY_EDGE_TOKEN:?set CARRY_EDGE_TOKEN in the protected production env}
+      CARRY_OIDC_ISSUER: ${CARRY_OIDC_ISSUER:-https://center.andersmadsen.dk/realms/humane}
+      CARRY_OIDC_JWKS_URI: ${CARRY_OIDC_JWKS_URI:-http://keycloak:8080/realms/humane/protocol/openid-connect/certs}
+      CARRY_OIDC_AUDIENCE: ${CARRY_OIDC_AUDIENCE:-}
+      CARRY_REMOTE_TTS_ENABLED: ${CARRY_REMOTE_TTS_ENABLED:-false}
+    depends_on: *production-cosmos-dependencies
+
+  notable-events:
+    environment:
+      CARRY_AUTH_MODE: edge-authenticated
+      CARRY_ENVIRONMENT: production
+      REVIVAL_DEPLOYMENT_ENVIRONMENT: production
+      CARRY_DATABASE_URL: ${CARRY_DATABASE_URL:?set CARRY_DATABASE_URL in the protected production env}
+      CARRY_EDGE_TOKEN: ${CARRY_EDGE_TOKEN:?set CARRY_EDGE_TOKEN in the protected production env}
+      CARRY_OIDC_ISSUER: ${CARRY_OIDC_ISSUER:-https://center.andersmadsen.dk/realms/humane}
+      CARRY_OIDC_JWKS_URI: ${CARRY_OIDC_JWKS_URI:-http://keycloak:8080/realms/humane/protocol/openid-connect/certs}
+      CARRY_OIDC_AUDIENCE: ${CARRY_OIDC_AUDIENCE:-}
+    depends_on: *production-cosmos-dependencies
+
+  provisioning:
+    environment:
+      CARRY_AUTH_MODE: edge-authenticated
+      CARRY_ENVIRONMENT: production
+      REVIVAL_DEPLOYMENT_ENVIRONMENT: production
+      CARRY_DATABASE_URL: ${CARRY_DATABASE_URL:?set CARRY_DATABASE_URL in the protected production env}
+      CARRY_EDGE_TOKEN: ${CARRY_EDGE_TOKEN:?set CARRY_EDGE_TOKEN in the protected production env}
+      CARRY_OIDC_ISSUER: ${CARRY_OIDC_ISSUER:-https://center.andersmadsen.dk/realms/humane}
+      CARRY_OIDC_JWKS_URI: ${CARRY_OIDC_JWKS_URI:-http://keycloak:8080/realms/humane/protocol/openid-connect/certs}
+      CARRY_OIDC_AUDIENCE: ${CARRY_OIDC_AUDIENCE:-}
+      CARRY_DUC_CA_CERT: /etc/carry-duc/duc-ca.crt
+      CARRY_DUC_CA_KEY: /etc/carry-duc/duc-ca.key
+      CARRY_ALLOW_SINGLE_REPLICA_ENROLLMENT: "1"
+      CARRY_ENROLLMENT_PINCODE: ${CARRY_ENROLLMENT_PINCODE:?set the reviewed four-digit enrollment code}
+      CARRY_ENROLLMENT_USER_ID: ${CARRY_ENROLLMENT_USER_ID:?set the enrollment user id}
+      CARRY_OPAQUE_SEED: ${CARRY_OPAQUE_SEED:?set a private base64 OPAQUE seed}
+    volumes:
+      - carry-state:/var/lib/carry
+      - ${REVIVAL_DUC_DIR:-${CARRY_DUC_DIR:-${REVIVAL_PRIVATE_DIR:-/home/anders/ai-pin-revival/private}/duc}}/duc-ca.crt:/etc/carry-duc/duc-ca.crt:ro
+      - ${REVIVAL_DUC_DIR:-${CARRY_DUC_DIR:-${REVIVAL_PRIVATE_DIR:-/home/anders/ai-pin-revival/private}/duc}}/duc-ca.key:/etc/carry-duc/duc-ca.key:ro
+    depends_on: *production-cosmos-dependencies
+
+  center:
+    user: "1000:1001"
+    environment:
+      REVIVAL_DEPLOYMENT_ENVIRONMENT: production
+      CARRY_EDGE_TOKEN: ${CARRY_EDGE_TOKEN:?set CARRY_EDGE_TOKEN in the protected production env}
+      CARRY_ADMIN_TOKEN: ${CARRY_ADMIN_TOKEN:?set CARRY_ADMIN_TOKEN in the protected production env}
+      CARRY_CENTER_PROJECTION_TOKEN: ${CARRY_CENTER_PROJECTION_TOKEN:?set CARRY_CENTER_PROJECTION_TOKEN in the protected production env}
+      CARRY_SHARE_TOKEN_SECRET: ${CARRY_SHARE_TOKEN_SECRET:?set CARRY_SHARE_TOKEN_SECRET in the protected production env}
+      AUTH_SESSION_SECRET: ${AUTH_SESSION_SECRET:?set AUTH_SESSION_SECRET in the protected production env}
+      KEYCLOAK_BASE_URL: http://keycloak:8080
+      KEYCLOAK_REALM: humane
+      KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID:-center}
+      KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET:?set KEYCLOAK_CLIENT_SECRET in the protected production env}
+      KEYCLOAK_SCOPES: ${KEYCLOAK_SCOPES:-openid email profile}
+      REVIVAL_SPOTIFY_ADAPTER_URL: http://10.0.7.1:18081
+      REVIVAL_SPOTIFY_ADAPTER_TOKEN_FILE: /run/secrets/spotify_adapter_token
+      REVIVAL_PIN_BRIDGE_OWNER_SUB: ${REVIVAL_PIN_BRIDGE_OWNER_SUB:?set the exact paired Keycloak session subject}
+      REVIVAL_PIN_BRIDGE_DEVICE_ID: ${REVIVAL_PIN_BRIDGE_DEVICE_ID:?set the exact paired Ai Pin device id}
+      REVIVAL_PIN_RELEASE_DIR: /var/lib/ai-pin-revival/pin-releases
+      REVIVAL_PIN_SETUP_ORIGIN: https://center.andersmadsen.dk
+      # The address a Pin must be pointed at to reach this deployment's device
+      # edge. Declared so the setup flow can VERIFY "point the Pin at this
+      # server" instead of inferring it from a device flag that only says the
+      # Pin is pointed somewhere. Unset simply means the flow will not make the
+      # claim.
+      REVIVAL_DEVICE_EDGE_IPV4: ${REVIVAL_DEVICE_EDGE_IPV4:-}
+    ports:
+      - 127.0.0.1:${REVIVAL_CENTER_PORT:-14000}:4000
+    volumes: !override
+      - ${REVIVAL_CENTER_DATA_DIR:-${CARRY_CENTER_DATA_DIR:-/home/anders/carry-center-data}}:/data
+      - ${REVIVAL_DATA_DIR:-/home/anders/ai-pin-revival/data}/pin-releases:/var/lib/ai-pin-revival/pin-releases:ro
+    networks: !override
+      - cosmos-internal
+      - spotify-control
+      - loopback-publish
+    secrets:
+      - source: spotify_adapter_token
+        target: spotify_adapter_token
+    depends_on:
+      ai-bus:
+        condition: service_healthy
+      account:
+        condition: service_healthy
+      contacts:
+        condition: service_healthy
+      feature-flags:
+        condition: service_healthy
+      notable-events:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+
+  spotify-adapter:
+    build:
+      context: ./center/adapters/spotify
+      dockerfile: Dockerfile
+      labels:
+        dk.andersmadsen.ai-pin-revival.product: Ai Pin Revival
+        dk.andersmadsen.ai-pin-revival.release: ${REVIVAL_RELEASE_ID:?set REVIVAL_RELEASE_ID to the immutable release id}
+        dk.andersmadsen.ai-pin-revival.component: spotify-adapter
+        org.opencontainers.image.revision: ${REVIVAL_RELEASE_ID:?set REVIVAL_RELEASE_ID to the immutable release id}
+    image: ai-pin-revival/spotify-adapter:${REVIVAL_RELEASE_ID:?set REVIVAL_RELEASE_ID to the immutable release id}
+    network_mode: host
+    user: "1000:1001"
+    restart: unless-stopped
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    environment:
+      REVIVAL_SPOTIFY_ADAPTER_BIND_ADDRESS: 10.0.7.1
+      REVIVAL_SPOTIFY_ADAPTER_PORT: "18081"
+      REVIVAL_SPOTIFY_ADAPTER_TIMEOUT_MS: ${REVIVAL_SPOTIFY_ADAPTER_TIMEOUT_MS:-5000}
+      REVIVAL_SPOTIFY_ADAPTER_TOKEN_FILE: /run/secrets/spotify_adapter_token
+    secrets:
+      - source: spotify_adapter_token
+        target: spotify_adapter_token
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    mem_limit: 128m
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    labels:
+      dk.andersmadsen.ai-pin-revival.product: Ai Pin Revival
+      dk.andersmadsen.ai-pin-revival.release: ${REVIVAL_RELEASE_ID:?set REVIVAL_RELEASE_ID to the immutable release id}
+      dk.andersmadsen.ai-pin-revival.environment: production
+      dk.andersmadsen.ai-pin-revival.component: spotify-adapter
+      org.opencontainers.image.revision: ${REVIVAL_RELEASE_ID:?set REVIVAL_RELEASE_ID to the immutable release id}
+    healthcheck:
+      # Process/config liveness only. A powered-off Pin must not make Compose
+      # unhealthy; bridge and owner/device readiness belong to /readyz and the
+      # guarded post-ingress canary.
+      test:
+        - CMD
+        - node
+        - src/healthcheck.mjs
+      interval: 10s
+      timeout: 5s
+      start_period: 10s
+      retries: 5
+
+  searxng:
+    # Immutable multi-architecture digest verified to contain linux/arm64.
+    image: searxng/searxng@sha256:f4c8e59de166ed71f6380c0847c312ca51f0d41996e31d0559163b6b09ecde52
+    user: "977:977"
+    restart: unless-stopped
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777,uid=977,gid=977
+      - /var/cache/searxng:size=128m,mode=0750,uid=977,gid=977
+    environment:
+      FORCE_OWNERSHIP: "false"
+      SEARXNG_SECRET: ${SEARXNG_SECRET:?set SEARXNG_SECRET in the protected search environment}
+    volumes:
+      - ./cosmos/search/settings.yml:/etc/searxng/settings.yml:ro
+    networks:
+      search-service: {}
+      search-egress:
+        gw_priority: 1
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    mem_limit: 512m
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    labels:
+      dk.andersmadsen.ai-pin-revival.product: Ai Pin Revival
+      dk.andersmadsen.ai-pin-revival.release: ${REVIVAL_RELEASE_ID:?set REVIVAL_RELEASE_ID to the immutable release id}
+      dk.andersmadsen.ai-pin-revival.environment: production
+      dk.andersmadsen.ai-pin-revival.component: private-search
+      org.opencontainers.image.revision: ${REVIVAL_RELEASE_ID:?set REVIVAL_RELEASE_ID to the immutable release id}
+    healthcheck:
+      # Process liveness only: a real search here would continuously consume
+      # upstream-engine goodwill and turn health polling into outbound traffic.
+      test:
+        - CMD
+        - wget
+        - --quiet
+        - --tries=1
+        - --spider
+        - http://127.0.0.1:8080/healthz
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+  keycloak:
+    profiles: !reset []
+    command:
+      - start
+    environment: !override
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${CARRY_KEYCLOAK_DB_PASSWORD:?set CARRY_KEYCLOAK_DB_PASSWORD in the protected production env}
+      KC_HOSTNAME: ${REVIVAL_PUBLIC_ORIGIN:-https://center.andersmadsen.dk}
+      KC_HOSTNAME_STRICT: "true"
+      KC_HTTP_ENABLED: "true"
+      KC_HEALTH_ENABLED: "true"
+      KC_PROXY_HEADERS: xforwarded
+      JAVA_OPTS_APPEND: -XX:MaxRAMPercentage=60
+    volumes: !override
+      - ${REVIVAL_KEYCLOAK_THEME_DIR:-${CARRY_KEYCLOAK_THEME_DIR:-${REVIVAL_PRIVATE_DIR:-/home/anders/ai-pin-revival/private}/keycloak-theme}}:/opt/keycloak/themes/humane:ro
+    ports:
+      - 127.0.0.1:${REVIVAL_KEYCLOAK_PORT:-8088}:8080
+    networks: !override
+      - cosmos-internal
+      - loopback-publish
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  edge:
+    image: envoyproxy/envoy:v1.31-latest@sha256:caa5b411be1633b90023592a34a7e010c933d6e60206c758f631485e53006865
+    user: "1000:1001"
+    command:
+      - -c
+      - /etc/carry-edge/envoy.yaml
+    volumes:
+      - ${REVIVAL_EDGE_CONFIG_FILE:-${CARRY_ENVOY_CONFIG:-${REVIVAL_PRIVATE_DIR:-/home/anders/ai-pin-revival/private}/edge/envoy.yaml}}:/etc/carry-edge/envoy.yaml:ro
+      - ${REVIVAL_EDGE_CERT_DIR:-${CARRY_EDGE_CERT_DIR:-${REVIVAL_PRIVATE_DIR:-/home/anders/ai-pin-revival/private}/edge/certs}}/server.crt:/etc/carry-edge/certs/server.crt:ro
+      - ${REVIVAL_EDGE_CERT_DIR:-${CARRY_EDGE_CERT_DIR:-${REVIVAL_PRIVATE_DIR:-/home/anders/ai-pin-revival/private}/edge/certs}}/server.key:/etc/carry-edge/certs/server.key:ro
+      - ${REVIVAL_EDGE_CERT_DIR:-${CARRY_EDGE_CERT_DIR:-${REVIVAL_PRIVATE_DIR:-/home/anders/ai-pin-revival/private}/edge/certs}}/api-client-ca.crt:/etc/carry-edge/certs/api-client-ca.crt:ro
+      - ${REVIVAL_EDGE_CERT_DIR:-${CARRY_EDGE_CERT_DIR:-${REVIVAL_PRIVATE_DIR:-/home/anders/ai-pin-revival/private}/edge/certs}}/onboarding-client-ca.crt:/etc/carry-edge/certs/onboarding-client-ca.crt:ro
+    ports:
+      - 127.0.0.1:${REVIVAL_EDGE_PORT:-18443}:8443
+    networks:
+      - cosmos-internal
+      - loopback-publish
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    mem_limit: 512m
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    labels:
+      dk.andersmadsen.ai-pin-revival.product: Ai Pin Revival
+      dk.andersmadsen.ai-pin-revival.release: ${REVIVAL_RELEASE_ID:?set REVIVAL_RELEASE_ID to the immutable release id}
+      dk.andersmadsen.ai-pin-revival.environment: production
+      dk.andersmadsen.ai-pin-revival.component: device-edge
+      org.opencontainers.image.revision: ${REVIVAL_RELEASE_ID:?set REVIVAL_RELEASE_ID to the immutable release id}
+    healthcheck:
+      # The upstream Envoy image ships no curl/wget; bash with /dev/tcp is the
+      # only probe available inside it. Envoy's admin endpoint requires a
+      # HTTP/1.1 request with a Host header (a 1.0 request answers 426).
+      test:
+        - CMD
+        - bash
+        - -c
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/9901;
+          printf 'GET /ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3;
+          head -1 <&3 | grep -q ' 200 '
+      interval: 10s
+      timeout: 5s
+      start_period: 10s
+      retries: 5
+    depends_on:
+      feature-flags:
+        condition: service_healthy
+      provisioning:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+    restart: unless-stopped
+    mem_limit: 2g
+    pids_limit: 256
+    environment:
+      POSTGRES_USER: carry
+      POSTGRES_DB: carry
+      POSTGRES_PASSWORD: ${CARRY_PG_PASSWORD:?set CARRY_PG_PASSWORD in the protected production env}
+    volumes:
+      - carry-pgdata:/var/lib/postgresql/data
+    networks:
+      - cosmos-internal
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    labels:
+      dk.andersmadsen.ai-pin-revival.product: Ai Pin Revival
+      dk.andersmadsen.ai-pin-revival.release: ${REVIVAL_RELEASE_ID:?set REVIVAL_RELEASE_ID to the immutable release id}
+      dk.andersmadsen.ai-pin-revival.environment: production
+      dk.andersmadsen.ai-pin-revival.component: database
+      org.opencontainers.image.revision: ${REVIVAL_RELEASE_ID:?set REVIVAL_RELEASE_ID to the immutable release id}
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U carry -d carry
+      interval: 5s
+      timeout: 3s
+      start_period: 10s
+      retries: 30
+
+  prometheus:
+    image: prom/prometheus:v2.54.1@sha256:f6639335d34a77d9d9db382b92eeb7fc00934be8eae81dbc03b31cfe90411a94
+    user: "65534:65534"
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+      - --storage.tsdb.retention.size=2GB
+      - --web.listen-address=0.0.0.0:9090
+      - --web.enable-lifecycle
+    volumes:
+      - ./platform/containers/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    networks:
+      - cosmos-internal
+    restart: unless-stopped
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 512m
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    labels:
+      dk.andersmadsen.ai-pin-revival.product: Ai Pin Revival
+      dk.andersmadsen.ai-pin-revival.release: ${REVIVAL_RELEASE_ID:?set REVIVAL_RELEASE_ID to the immutable release id}
+      dk.andersmadsen.ai-pin-revival.environment: production
+      dk.andersmadsen.ai-pin-revival.component: metrics
+      org.opencontainers.image.revision: ${REVIVAL_RELEASE_ID:?set REVIVAL_RELEASE_ID to the immutable release id}
+    healthcheck:
+      test:
+        - CMD
+        - wget
+        - --quiet
+        - --tries=1
+        - --spider
+        - http://127.0.0.1:9090/-/healthy
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+  grafana:
+    image: grafana/grafana:11.2.0@sha256:408afb9726de5122b00a2576763a8a57a3c86d5b0eff5305bc994ceb3eb96c3f
+    ports:
+      - 127.0.0.1:${REVIVAL_GRAFANA_PORT:-13001}:3000
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in the protected production env}
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+    volumes:
+      - ./platform/containers/observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./platform/containers/observability/grafana/dashboards:/etc/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    networks:
+      - cosmos-internal
+      - loopback-publish
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 384m
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    labels:
+      dk.andersmadsen.ai-pin-revival.product: Ai Pin Revival
+      dk.andersmadsen.ai-pin-revival.release: ${REVIVAL_RELEASE_ID:?set REVIVAL_RELEASE_ID to the immutable release id}
+      dk.andersmadsen.ai-pin-revival.environment: production
+      dk.andersmadsen.ai-pin-revival.component: dashboards
+      org.opencontainers.image.revision: ${REVIVAL_RELEASE_ID:?set REVIVAL_RELEASE_ID to the immutable release id}
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - wget --quiet --tries=1 --spider http://127.0.0.1:3000/api/health
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
+    depends_on:
+      prometheus:
+        condition: service_healthy
+
+networks:
+  cosmos-internal:
+    internal: true
+  # Docker silently drops host port publication for a container attached only
+  # to internal networks. These services publish loopback-only ports, so they
+  # need one non-internal attachment; IP masquerade is disabled on it so they
+  # still cannot reach the internet.
+  loopback-publish:
+    driver: bridge
+    internal: false
+    driver_opts:
+      com.docker.network.bridge.enable_ip_masquerade: "false"
+  provider-egress:
+    driver: bridge
+    internal: false
+  search-service:
+    driver: bridge
+    internal: true
+  search-egress:
+    driver: bridge
+    internal: false
+  spotify-control:
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.0.7.0/24
+          gateway: 10.0.7.1
+  # The local Ollama service is intentionally owned by the established Carry
+  # runtime. Declaring the attachment here makes name resolution survive an
+  # ai-bus recreation instead of depending on an operator-issued
+  # `docker network connect` repair.
+  local-model:
+    external: true
+    name: ${CARRY_LOCAL_MODEL_NETWORK:-humane-carry-clone_carry-local}
+
+secrets:
+  spotify_adapter_token:
+    file: ${REVIVAL_SPOTIFY_ADAPTER_SECRET_FILE:-${REVIVAL_PRIVATE_DIR:-/home/anders/ai-pin-revival/private}/spotify-adapter/token}
+
+volumes:
+  carry-state: !override
+    external: true
+    name: humane-carry-clone_carry-state
+  carry-pgdata: !override
+    external: true
+    name: humane-carry-clone_carry-pgdata
+  prometheus-data: !override
+    external: true
+    name: humane-carry-clone_prometheus-data
+  grafana-data: !override
+    external: true
+    name: humane-carry-clone_grafana-data

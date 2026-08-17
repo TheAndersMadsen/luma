@@ -1,0 +1,1114 @@
+// Unit tests for the host doctor. No device, no network, no subprocess: every
+// test drives the pure `evaluate(probes)` decision layer with injected probe
+// results, so a "healthy host" and a "nothing installed" host are both
+// reproducible on any machine.
+//
+// The one file read is README.md, and that is deliberate: the doctor derives
+// its expected versions from that document, so a test that the document is
+// still parseable is the guard against the doctor silently degrading to
+// "cannot compare" warnings.
+//
+// Run: node --test platform/containers/pin-builder/doctor.test.mjs
+
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import test from "node:test";
+import { fileURLToPath } from "node:url";
+
+import {
+  ANDROID_RUST_TARGET,
+  CHECK_STATUS,
+  GATED_BUILD_ASSETS,
+  REQUIRED_SIGNING_KEYS,
+  STOCK_EVIDENCE_RELATIVE_PATH,
+  abbreviateHome,
+  compareVersions,
+  evaluate,
+  nextStepLine,
+  parseAdbDevices,
+  parseCliArgs,
+  parseEnvKeyNames,
+  parseGatedAssetPins,
+  parseJavaVersion,
+  parseNdkRevision,
+  parseRequirementsFromReadme,
+  parseSdkDir,
+  renderHuman,
+  renderJson,
+  resolveGatedAssets,
+  resolveSigningEnvPath,
+  usage,
+} from "./doctor.mjs";
+
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../../pin");
+
+// A value that must never survive from a probe into any rendered output.
+// Synthetic: it is not a credential and never touches disk.
+const FAKE_SECRET = "not-a-real-password-9f3c1a";
+
+// A synthetic home directory. The username inside it is what MINOR C is about:
+// it must never appear in a report the tool invites users to paste publicly.
+const FAKE_HOME_USER = "fixture-operator";
+const FAKE_HOME = `/Users/${FAKE_HOME_USER}`;
+
+// Sixty-four hex characters, unrelated to any real artifact — these fixtures
+// assert digest COMPARISON, not any particular published digest.
+const FIXTURE_DIGEST = "a".repeat(64);
+const WRONG_DIGEST = "b".repeat(64);
+
+/** A gated-asset probe entry in the state the doctor should call healthy. */
+function healthyGatedAssets(overrides = {}) {
+  return GATED_BUILD_ASSETS.map((spec) => ({
+    id: spec.id,
+    path: spec.fallbackPath,
+    pathSource: "runtime/android/build.gradle.kts:45",
+    exists: true,
+    sizeBytes: spec.observedBytes,
+    expectedSha256: FIXTURE_DIGEST,
+    expectedSha256Ref: "runtime/android/build.gradle.kts:47",
+    actualSha256: FIXTURE_DIGEST,
+    ...(overrides[spec.id] ?? {}),
+  }));
+}
+
+// All fixture version strings are synthetic placeholders chosen only so the
+// comparisons under test are unambiguous. They are not claims about any real
+// released toolchain.
+function healthyProbes(overrides = {}) {
+  return {
+    repoRoot: "/fixture/repo",
+    requirements: {
+      jdkMajor: 17,
+      androidSdkApi: 34,
+      ndkLabel: "r28c",
+      ndkMajor: 28,
+      nodeMinimum: "20.19.0",
+      sourceRef: "README.md:100",
+    },
+    node: { version: "22.0.0" },
+    containerBuilder: {
+      available: true,
+      version: "29.0.0-fixture",
+      contractFilesPresent: true,
+      suppliesHostToolchain: false,
+    },
+    java: { present: true, version: "17.0.0", major: 17 },
+    androidSdk: {
+      path: "/fixture/sdk",
+      source: "local.properties sdk.dir",
+      exists: true,
+      platforms: ["android-34"],
+      buildTools: ["35.0.0"],
+    },
+    adb: {
+      present: true,
+      path: "/fixture/sdk/platform-tools/adb",
+      version: "Android Debug Bridge version 1.0.41",
+      command: "/fixture/sdk/platform-tools/adb",
+    },
+    ndk: {
+      path: "/fixture/sdk/ndk/28.0.0",
+      source: "Android SDK ndk/ directory",
+      revision: "28.0.0",
+      candidates: ["28.0.0"],
+    },
+    rustc: { present: true, version: "rustc 0.0.0-fixture" },
+    cargo: { present: true, version: "cargo 0.0.0-fixture" },
+    rustTarget: { determined: true, installed: true, source: "rustup" },
+    cargoNdk: { present: true, version: "cargo-ndk 0.0.0-fixture" },
+    protoc: { present: true, version: "libprotoc 0.0.0-fixture" },
+    stockEvidence: { exists: true, path: STOCK_EVIDENCE_RELATIVE_PATH },
+    gatedAssets: healthyGatedAssets(),
+    signingEnv: {
+      exists: true,
+      path: "secrets/pin-signing.env",
+      keys: [...REQUIRED_SIGNING_KEYS],
+      mode: 0o600,
+    },
+    // A healthy host for a RELEASE has the four variables exported, not merely
+    // written to the file. The two facts are reported separately on purpose.
+    signingEnvironment: { exported: [...REQUIRED_SIGNING_KEYS], fileComplete: true },
+    // Baseline is the state this doctor must tolerate: no Pin attached.
+    devices: { adbAvailable: true, counts: { ready: 0, unauthorized: 0, other: 0 } },
+    ...overrides,
+  };
+}
+
+function checkById(result, id) {
+  const found = result.checks.find((check) => check.id === id);
+  assert.ok(found, `expected a check with id ${id}`);
+  return found;
+}
+
+// ---------------------------------------------------------------------------
+// Baseline
+// ---------------------------------------------------------------------------
+
+test("healthy host with no device passes every required check", () => {
+  const result = evaluate(healthyProbes());
+  assert.equal(result.ok, true);
+  assert.equal(result.counts.fail, 0);
+  assert.deepEqual(result.blocking, []);
+  for (const check of result.checks) {
+    assert.notEqual(check.status, CHECK_STATUS.FAIL, `${check.id} should not fail on a healthy host`);
+  }
+});
+
+test("evaluate reports every check rather than stopping at the first miss", () => {
+  const result = evaluate(
+    healthyProbes({
+      protoc: { present: false, version: null },
+      cargoNdk: { present: false, version: null },
+      rustc: { present: false, version: null },
+    }),
+  );
+  assert.equal(result.ok, false);
+  assert.equal(result.counts.fail, 3);
+  assert.deepEqual([...result.blocking].sort(), ["cargo_ndk", "protoc", "rustc"]);
+});
+
+test("missing stock evidence is a loud non-blocking warning", () => {
+  const result = evaluate(
+    healthyProbes({
+      stockEvidence: { exists: false, path: STOCK_EVIDENCE_RELATIVE_PATH },
+    }),
+  );
+  const check = checkById(result, "stock_decompile_evidence");
+  assert.equal(check.status, CHECK_STATUS.WARN);
+  assert.match(check.detail, /SKIP loudly/);
+  assert.match(check.fix, /tier-a-registry\.test\.mjs/);
+  assert.equal(result.ok, true);
+});
+
+// ---------------------------------------------------------------------------
+// A missing REQUIRED tool must flip ok to false — one test per tool, so a
+// regression names the tool it broke.
+// ---------------------------------------------------------------------------
+
+for (const [label, id, overrides] of [
+  ["protoc", "protoc", { protoc: { present: false, version: null } }],
+  ["cargo-ndk", "cargo_ndk", { cargoNdk: { present: false, version: null } }],
+  ["rustc", "rustc", { rustc: { present: false, version: null } }],
+  ["cargo", "cargo", { cargo: { present: false, version: null } }],
+  ["the JDK", "jdk", { java: { present: false, version: null, major: null } }],
+  [
+    "the aarch64-linux-android target",
+    "rust_target_android",
+    { rustTarget: { determined: true, installed: false, source: "rustup" } },
+  ],
+  [
+    "the Android SDK",
+    "android_sdk",
+    { androidSdk: { path: null, source: null, exists: false, platforms: [], buildTools: [] } },
+  ],
+  ["adb / platform-tools", "android_platform_tools", { adb: { present: false, path: null, version: null, command: null } }],
+  ["the NDK", "android_ndk", { ndk: { path: null, source: null, revision: null, candidates: [] } }],
+]) {
+  test(`missing ${label} is a required failure and makes ok false`, () => {
+    const result = evaluate(healthyProbes(overrides));
+    const check = checkById(result, id);
+    assert.equal(check.status, CHECK_STATUS.FAIL);
+    assert.equal(check.required, true);
+    assert.ok(check.fix.length > 0, "a failing check must carry an actionable fix");
+    assert.equal(result.ok, false);
+    assert.ok(result.blocking.includes(id));
+  });
+}
+
+test("the pinned container makes host SDK, NDK, JDK, Rust, and protoc optional", () => {
+  const result = evaluate(healthyProbes({
+    containerBuilder: {
+      available: true,
+      version: "29.0.0-fixture",
+      contractFilesPresent: true,
+      suppliesHostToolchain: true,
+    },
+    java: { present: false, version: null, major: null },
+    androidSdk: { path: null, source: null, exists: false, platforms: [], buildTools: [] },
+    adb: { present: false, path: null, version: null, command: null },
+    ndk: { path: null, source: null, revision: null, candidates: [] },
+    rustc: { present: false, version: null },
+    cargo: { present: false, version: null },
+    rustTarget: { determined: true, installed: false, source: "rustup" },
+    cargoNdk: { present: false, version: null },
+    protoc: { present: false, version: null },
+  }));
+  assert.equal(result.ok, true);
+  assert.equal(result.buildPath, "pinned-container");
+  for (const id of ["jdk", "android_sdk", "android_platform_tools", "android_ndk", "rustc", "cargo", "rust_target_android", "cargo_ndk", "protoc"]) {
+    const check = checkById(result, id);
+    assert.equal(check.status, CHECK_STATUS.WARN, id);
+    assert.equal(check.required, false, id);
+  }
+});
+
+test("a Node runtime below the documented minimum is a required failure", () => {
+  const result = evaluate(healthyProbes({ node: { version: "18.20.0" } }));
+  const check = checkById(result, "node");
+  assert.equal(check.status, CHECK_STATUS.FAIL);
+  assert.equal(result.ok, false);
+  assert.match(check.fix, /20\.19\.0/);
+});
+
+test("an Android SDK path that does not exist is a required failure", () => {
+  const result = evaluate(
+    healthyProbes({
+      androidSdk: {
+        path: "/fixture/missing-sdk",
+        source: "ANDROID_HOME",
+        exists: false,
+        platforms: [],
+        buildTools: [],
+      },
+    }),
+  );
+  assert.equal(checkById(result, "android_sdk").status, CHECK_STATUS.FAIL);
+  assert.equal(result.ok, false);
+});
+
+// ---------------------------------------------------------------------------
+// A missing device must NEVER fail — the doctor's whole premise.
+// ---------------------------------------------------------------------------
+
+test("no attached Pin does not make ok false", () => {
+  const result = evaluate(
+    healthyProbes({ devices: { adbAvailable: true, counts: { ready: 0, unauthorized: 0, other: 0 } } }),
+  );
+  const check = checkById(result, "pin_device");
+  assert.equal(check.status, CHECK_STATUS.WARN);
+  assert.equal(check.required, false);
+  assert.equal(result.ok, true);
+});
+
+test("an unavailable adb leaves the device check informational, never failing", () => {
+  const result = evaluate(
+    healthyProbes({
+      adb: { present: false, path: null, version: null, command: null },
+      devices: { adbAvailable: false, counts: { ready: 0, unauthorized: 0, other: 0 } },
+    }),
+  );
+  const device = checkById(result, "pin_device");
+  assert.equal(device.status, CHECK_STATUS.WARN);
+  assert.equal(device.required, false);
+  // adb itself is still a required host tool, so ok is false for THAT reason,
+  // never because of the device check.
+  assert.deepEqual(result.blocking, ["android_platform_tools"]);
+});
+
+test("an attached Pin is reported by count and never by serial", () => {
+  const result = evaluate(
+    healthyProbes({ devices: { adbAvailable: true, counts: { ready: 1, unauthorized: 0, other: 0 } } }),
+  );
+  const check = checkById(result, "pin_device");
+  assert.equal(check.status, CHECK_STATUS.PASS);
+  assert.equal(result.ok, true);
+  assert.match(check.detail, /1 device/);
+  assert.doesNotMatch(check.detail, /[0-9a-f]{8,}/i);
+});
+
+test("an unauthorized device is a warning, not a failure", () => {
+  const result = evaluate(
+    healthyProbes({ devices: { adbAvailable: true, counts: { ready: 0, unauthorized: 1, other: 0 } } }),
+  );
+  assert.equal(checkById(result, "pin_device").status, CHECK_STATUS.WARN);
+  assert.equal(result.ok, true);
+});
+
+// ---------------------------------------------------------------------------
+// NDK drift is a warning, not a blocker.
+// ---------------------------------------------------------------------------
+
+test("an NDK whose major differs from the documented one is a warn, not a fail", () => {
+  const result = evaluate(
+    healthyProbes({
+      ndk: {
+        path: "/fixture/sdk/ndk/26.3.11579264",
+        source: "Android SDK ndk/ directory",
+        revision: "26.3.11579264",
+        candidates: ["26.3.11579264"],
+      },
+    }),
+  );
+  const check = checkById(result, "android_ndk");
+  assert.equal(check.status, CHECK_STATUS.WARN);
+  assert.equal(check.required, false);
+  assert.equal(result.ok, true);
+  assert.match(check.detail, /26\.3\.11579264/);
+  assert.match(check.detail, /r28c/);
+  assert.match(check.fix, /not a blocker/);
+});
+
+test("a matching NDK major passes and cites the documented label", () => {
+  const check = checkById(evaluate(healthyProbes()), "android_ndk");
+  assert.equal(check.status, CHECK_STATUS.PASS);
+  assert.match(check.detail, /r28c/);
+});
+
+test("an NDK with no readable revision degrades to a warn rather than a false verdict", () => {
+  const result = evaluate(
+    healthyProbes({
+      ndk: {
+        path: "/fixture/custom-ndk",
+        source: "ANDROID_NDK_ROOT",
+        revision: null,
+        candidates: [],
+      },
+    }),
+  );
+  assert.equal(checkById(result, "android_ndk").status, CHECK_STATUS.WARN);
+  assert.equal(result.ok, true);
+});
+
+// ---------------------------------------------------------------------------
+// Unreadable requirements must degrade honestly, never invent a version.
+// ---------------------------------------------------------------------------
+
+test("unreadable README requirements degrade version comparisons to warns without failing", () => {
+  const result = evaluate(healthyProbes({ requirements: null }));
+  assert.equal(result.ok, true);
+  assert.equal(result.requirementsSource, null);
+  assert.equal(checkById(result, "node").status, CHECK_STATUS.WARN);
+  assert.equal(checkById(result, "android_ndk").status, CHECK_STATUS.WARN);
+  // Tool presence is still judged, because it needs no documented version.
+  assert.equal(checkById(result, "protoc").status, CHECK_STATUS.PASS);
+});
+
+test("missing tools still fail when the documented requirements are unreadable", () => {
+  const result = evaluate(
+    healthyProbes({ requirements: null, protoc: { present: false, version: null } }),
+  );
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.blocking, ["protoc"]);
+});
+
+// ---------------------------------------------------------------------------
+// Signing env: presence and KEY NAMES only.
+// ---------------------------------------------------------------------------
+
+test("a complete signing env file passes and lists only variable names", () => {
+  const check = checkById(evaluate(healthyProbes()), "signing_env");
+  assert.equal(check.status, CHECK_STATUS.PASS);
+  for (const name of REQUIRED_SIGNING_KEYS) assert.match(check.detail, new RegExp(name));
+});
+
+test("an absent signing env file is a warn and keeps ok true", () => {
+  const result = evaluate(
+    healthyProbes({ signingEnv: { exists: false, path: "secrets/pin-signing.env", keys: [], mode: null } }),
+  );
+  const check = checkById(result, "signing_env");
+  assert.equal(check.status, CHECK_STATUS.WARN);
+  assert.equal(check.required, false);
+  assert.equal(result.ok, true);
+});
+
+test("a partial signing env file is a required failure", () => {
+  const result = evaluate(
+    healthyProbes({
+      signingEnv: {
+        exists: true,
+        path: "secrets/pin-signing.env",
+        keys: ["PIN_SIGNING_STORE_FILE", "PIN_SIGNING_KEY_ALIAS"],
+        mode: 0o600,
+      },
+    }),
+  );
+  const check = checkById(result, "signing_env");
+  assert.equal(check.status, CHECK_STATUS.FAIL);
+  assert.equal(check.required, true);
+  assert.equal(result.ok, false);
+  assert.match(check.detail, /PARTIAL/);
+  assert.match(check.fix, /configuration time/);
+});
+
+test("a world-readable signing env file is a warn about mode, not a failure", () => {
+  const result = evaluate(
+    healthyProbes({
+      signingEnv: {
+        exists: true,
+        path: "secrets/pin-signing.env",
+        keys: [...REQUIRED_SIGNING_KEYS],
+        mode: 0o644,
+      },
+    }),
+  );
+  const check = checkById(result, "signing_env");
+  assert.equal(check.status, CHECK_STATUS.WARN);
+  assert.equal(result.ok, true);
+  assert.match(check.fix, /chmod 600/);
+});
+
+// ---------------------------------------------------------------------------
+// Signing ENVIRONMENT — distinct from the file. The file is what step 2 writes;
+// the environment is what step 3 and Gradle actually read.
+// ---------------------------------------------------------------------------
+
+test("the canonical builder needs no signing exports in the ambient shell", () => {
+  const result = evaluate(
+    healthyProbes({ signingEnvironment: { exported: [], fileComplete: true } }),
+  );
+  const file = checkById(result, "signing_env");
+  const exported = checkById(result, "signing_env_exported");
+
+  // The protected file is authoritative; the root builder mounts it itself.
+  assert.equal(file.status, CHECK_STATUS.PASS);
+  assert.equal(exported.status, CHECK_STATUS.PASS);
+  assert.equal(result.ok, true);
+  assert.match(exported.detail, /read-only signing\.env mount/);
+});
+
+test("an exported signing environment warns and lists only recognized variable names", () => {
+  const check = checkById(evaluate(healthyProbes()), "signing_env_exported");
+  assert.equal(check.status, CHECK_STATUS.WARN);
+  for (const name of REQUIRED_SIGNING_KEYS) assert.match(check.detail, new RegExp(name));
+});
+
+test("a PARTIAL ambient signing environment is non-authoritative and removable", () => {
+  const result = evaluate(
+    healthyProbes({
+      signingEnvironment: { exported: ["PIN_SIGNING_STORE_FILE"], fileComplete: true },
+    }),
+  );
+  const check = checkById(result, "signing_env_exported");
+  assert.equal(check.status, CHECK_STATUS.WARN);
+  assert.equal(check.required, false);
+  assert.equal(result.ok, true);
+  assert.ok(!result.blocking.includes("signing_env_exported"));
+  assert.match(check.fix, /unset PIN_SIGNING_STORE_FILE/);
+});
+
+test("an empty environment remains correct even when the external file is absent", () => {
+  const result = evaluate(
+    healthyProbes({
+      signingEnv: { exists: false, path: "secrets/pin-signing.env", keys: [], mode: null },
+      signingEnvironment: { exported: [], fileComplete: false },
+    }),
+  );
+  const check = checkById(result, "signing_env_exported");
+  assert.equal(check.status, CHECK_STATUS.PASS);
+  assert.equal(result.ok, true);
+  assert.match(check.detail, /No signing values are exported/);
+});
+
+test("a poisoned exported list cannot leak into rendered output", () => {
+  // Mirrors the file-side containment test: a regression that let a VALUE into
+  // the name list still cannot reach output, because the check intersects with
+  // REQUIRED_SIGNING_KEYS.
+  const result = evaluate(
+    healthyProbes({
+      signingEnvironment: {
+        exported: [...REQUIRED_SIGNING_KEYS, FAKE_SECRET],
+        fileComplete: true,
+      },
+    }),
+  );
+  assert.equal(checkById(result, "signing_env_exported").status, CHECK_STATUS.WARN);
+  assert.ok(!renderHuman(result, { verbose: true }).includes(FAKE_SECRET));
+  assert.ok(!JSON.stringify(renderJson(result)).includes(FAKE_SECRET));
+});
+
+// ---------------------------------------------------------------------------
+// Gated native build inputs — the prerequisite no script can install for you.
+// ---------------------------------------------------------------------------
+
+test("every gated asset has its own check, and all pass when present and pinned", () => {
+  const result = evaluate(healthyProbes());
+  for (const spec of GATED_BUILD_ASSETS) {
+    const check = checkById(result, spec.id);
+    assert.equal(check.status, CHECK_STATUS.PASS, `${spec.id} should pass when present`);
+    assert.match(check.detail, /SHA-256 matches/);
+  }
+  assert.equal(result.ok, true);
+});
+
+for (const spec of GATED_BUILD_ASSETS) {
+  test(`an absent ${spec.fallbackPath} is a required failure with an actionable fix`, () => {
+    const result = evaluate(
+      healthyProbes({
+        gatedAssets: healthyGatedAssets({
+          [spec.id]: { exists: false, sizeBytes: null, actualSha256: null },
+        }),
+      }),
+    );
+    const check = checkById(result, spec.id);
+    assert.equal(check.status, CHECK_STATUS.FAIL);
+    assert.equal(check.required, true);
+    assert.equal(result.ok, false);
+    assert.ok(result.blocking.includes(spec.id));
+
+    // "Actionable" is asserted, not assumed: it must say the absence is
+    // deliberate, name the file, and say what to do about it.
+    assert.match(check.detail, new RegExp(spec.fallbackPath.replace(/[/.]/g, "\\$&")));
+    assert.match(check.detail, /ABSENT/);
+    assert.match(check.detail, /expected in canonical source/);
+    assert.match(check.detail, /runtime\/android\/build\.gradle\.kts/);
+    assert.match(check.fix, /Not fetchable by any script here/);
+    assert.ok(check.fix.length > 200, "the fix must explain how to obtain the file, not just name it");
+  });
+
+  test(`a wrong ${spec.fallbackPath} fails on the digest rather than passing on presence`, () => {
+    const result = evaluate(
+      healthyProbes({
+        gatedAssets: healthyGatedAssets({
+          [spec.id]: { actualSha256: WRONG_DIGEST },
+        }),
+      }),
+    );
+    const check = checkById(result, spec.id);
+    assert.equal(check.status, CHECK_STATUS.FAIL);
+    assert.equal(check.required, true);
+    assert.match(check.detail, new RegExp(WRONG_DIGEST));
+    assert.match(check.detail, new RegExp(FIXTURE_DIGEST));
+  });
+}
+
+test("the codex fix says plainly that canonical source has no authorized download", () => {
+  const result = evaluate(
+    healthyProbes({
+      gatedAssets: healthyGatedAssets({
+        gated_asset_codex_app_server: { exists: false, sizeBytes: null, actualSha256: null },
+      }),
+    }),
+  );
+  const fix = checkById(result, "gated_asset_codex_app_server").fix;
+  assert.match(fix, /provides no authorized download/);
+  // ...and still gives the operator-controlled override and canonical pin.
+  assert.match(fix, /-PcodexAppServerBinary/);
+  assert.match(fix, /runtime\/android\/build\.gradle\.kts/);
+});
+
+test("the TFLite fix requires an external authorized asset without prescribing extraction", () => {
+  const result = evaluate(
+    healthyProbes({
+      gatedAssets: healthyGatedAssets({
+        gated_asset_tflite_runtime: { exists: false, sizeBytes: null, actualSha256: null },
+      }),
+    }),
+  );
+  const fix = checkById(result, "gated_asset_tflite_runtime").fix;
+  assert.match(fix, /REVIVAL_TFLITE_RUNTIME_BINARY/);
+  assert.match(fix, /external private-assets/);
+  assert.match(fix, /does not distribute or prescribe extraction/);
+});
+
+test("a re-pinned asset passes on its digest when its size differs from the observation", () => {
+  // The observed byte count and the Gradle digest are allowed to disagree:
+  // re-pinning the TFLite runtime to a source build changes both, and only the
+  // gradle digest gates the build. The verdict must follow the digest, and the
+  // prior observation must be surfaced rather than turned into a failure.
+  const spec = GATED_BUILD_ASSETS[1];
+  const result = evaluate(
+    healthyProbes({
+      gatedAssets: healthyGatedAssets({
+        [spec.id]: { sizeBytes: spec.observedBytes + 4096 },
+      }),
+    }),
+  );
+  const check = checkById(result, spec.id);
+  assert.equal(check.status, CHECK_STATUS.PASS);
+  assert.equal(result.ok, true);
+  assert.match(check.detail, new RegExp(spec.observedBytesRef.replace(/[/.]/g, "\\$&")));
+});
+
+test("an unreadable present asset says so rather than reporting a digest mismatch", () => {
+  const result = evaluate(
+    healthyProbes({
+      gatedAssets: healthyGatedAssets({
+        gated_asset_codex_app_server: { actualSha256: null },
+      }),
+    }),
+  );
+  const check = checkById(result, "gated_asset_codex_app_server");
+  assert.equal(check.status, CHECK_STATUS.FAIL);
+  assert.match(check.detail, /unreadable file/);
+});
+
+test("a present asset with no readable pin is a warn, not a false pass or a false fail", () => {
+  const result = evaluate(
+    healthyProbes({
+      gatedAssets: healthyGatedAssets({
+        gated_asset_codex_app_server: {
+          expectedSha256: null,
+          expectedSha256Ref: null,
+          actualSha256: null,
+        },
+      }),
+    }),
+  );
+  const check = checkById(result, "gated_asset_codex_app_server");
+  assert.equal(check.status, CHECK_STATUS.WARN);
+  assert.equal(result.ok, true);
+  assert.match(check.fix, /shasum -a 256/);
+});
+
+test("un-probed gated assets degrade to warns rather than inventing a verdict", () => {
+  const result = evaluate(healthyProbes({ gatedAssets: [] }));
+  for (const spec of GATED_BUILD_ASSETS) {
+    const check = checkById(result, spec.id);
+    assert.equal(check.status, CHECK_STATUS.WARN);
+    assert.equal(check.required, false);
+  }
+  assert.equal(result.ok, true);
+});
+
+// The probe layer, against a real filesystem. Everything else in this file
+// drives the pure decision layer, which cannot reach the one decision inside
+// the probe: WHEN to hash. A synthetic repo root is used — no temp file here is
+// a real artifact, and nothing outside the temp directory is touched.
+test("resolveGatedAssets hashes on presence, not on a prior observed size", () => {
+  const root = mkdtempSync(join(tmpdir(), "revival-pin-doctor-"));
+  try {
+    // Deliberately NOT `observedBytes` long: a re-pinned asset is a smaller
+    // or larger file whose digest is what the build actually gates on.
+    const body = Buffer.from("synthetic gated asset fixture, not a real binary\n");
+    const digest = createHash("sha256").update(body).digest("hex");
+
+    const gradle = [
+      `val codexAppServerSha256 = "${digest}"`,
+      `val tfliteRuntimeSha256 = "${digest}"`,
+    ].join("\n");
+
+    mkdirSync(join(root, "runtime", "android"), { recursive: true });
+    writeFileSync(join(root, "runtime", "android", "build.gradle.kts"), gradle);
+    for (const spec of GATED_BUILD_ASSETS) {
+      const target = join(root, spec.fallbackPath.replace(/^~\//, ""));
+      mkdirSync(dirname(target), { recursive: true });
+      writeFileSync(target, body);
+    }
+
+    const assets = resolveGatedAssets(root, root);
+    assert.equal(assets.length, GATED_BUILD_ASSETS.length);
+    for (const asset of assets) {
+      const spec = GATED_BUILD_ASSETS.find((entry) => entry.id === asset.id);
+      assert.equal(asset.exists, true);
+      assert.notEqual(asset.sizeBytes, spec.observedBytes, "fixture must not match the observed size");
+      assert.equal(asset.expectedSha256, digest);
+      assert.equal(asset.actualSha256, digest, "the digest must be computed despite the size");
+    }
+    // And the verdict that follows from it.
+    for (const check of evaluate({ gatedAssets: assets }).checks) {
+      if (check.id.startsWith("gated_asset_")) assert.equal(check.status, CHECK_STATUS.PASS);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("resolveGatedAssets reports a clean checkout as absent without throwing", () => {
+  const root = mkdtempSync(join(tmpdir(), "revival-pin-doctor-"));
+  try {
+    // A checkout with the build file but no external private assets — the
+    // fresh-source state this gate is about.
+    const gradle = readFileSync(resolve(REPO_ROOT, "runtime/android/build.gradle.kts"), "utf8");
+    mkdirSync(join(root, "runtime", "android"), { recursive: true });
+    writeFileSync(join(root, "runtime", "android", "build.gradle.kts"), gradle);
+
+    const assets = resolveGatedAssets(root, join(root, "operator-home"));
+    for (const asset of assets) {
+      assert.equal(asset.exists, false);
+      assert.equal(asset.sizeBytes, null);
+      assert.equal(asset.actualSha256, null);
+      assert.match(asset.expectedSha256, /^[0-9a-f]{64}$/, "the pin is still readable");
+    }
+    const result = evaluate({ gatedAssets: assets });
+    for (const spec of GATED_BUILD_ASSETS) {
+      assert.ok(result.blocking.includes(spec.id), `${spec.id} must block a fresh clone`);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("parseGatedAssetPins reads digests while paths remain external defaults", () => {
+  const gradle = readFileSync(resolve(REPO_ROOT, "runtime/android/build.gradle.kts"), "utf8");
+  const pins = parseGatedAssetPins(gradle);
+  for (const spec of GATED_BUILD_ASSETS) {
+    const pin = pins[spec.id];
+    assert.ok(pin, `runtime/android/build.gradle.kts no longer pins ${spec.id}`);
+    assert.equal(pin.path, null, `${spec.id} must not encode an in-tree fallback path`);
+    assert.match(pin.sha256, /^[0-9a-f]{64}$/);
+    assert.match(pin.sha256Ref, /^runtime\/android\/build\.gradle\.kts:\d+$/);
+    assert.equal(pin.pathRef, null);
+  }
+});
+
+test("parseGatedAssetPins degrades to an empty map on unparseable input", () => {
+  assert.deepEqual(parseGatedAssetPins(""), {});
+  assert.deepEqual(parseGatedAssetPins(null), {});
+  assert.deepEqual(parseGatedAssetPins("plugins { id(\"com.android.application\") }\n"), {});
+  // A comment mentioning the directory must not be mistaken for a pin.
+  assert.deepEqual(parseGatedAssetPins("// see release-assets/tflite-2.11.0-stock/\n"), {});
+});
+
+// ---------------------------------------------------------------------------
+// Host identity. The report invites pasting; it must not carry the OS username.
+// ---------------------------------------------------------------------------
+
+function probesUnderHome() {
+  return healthyProbes({
+    androidSdk: {
+      path: `${FAKE_HOME}/Library/Android/sdk`,
+      source: "local.properties sdk.dir",
+      exists: true,
+      platforms: ["android-34"],
+      buildTools: ["35.0.0"],
+    },
+    adb: {
+      present: true,
+      path: `${FAKE_HOME}/Library/Android/sdk/platform-tools/adb`,
+      version: "Android Debug Bridge version 1.0.41",
+      command: `${FAKE_HOME}/Library/Android/sdk/platform-tools/adb`,
+    },
+    ndk: {
+      path: `${FAKE_HOME}/Library/Android/sdk/ndk/28.0.0`,
+      source: "Android SDK ndk/ directory",
+      revision: "28.0.0",
+      candidates: ["28.0.0"],
+    },
+  });
+}
+
+test("renderHuman abbreviates the home directory so no OS username is printed", () => {
+  const text = renderHuman(evaluate(probesUnderHome()), { verbose: true, home: FAKE_HOME });
+  assert.ok(!text.includes(FAKE_HOME_USER), "the human report leaked the OS username");
+  assert.ok(!text.includes(FAKE_HOME), "the human report leaked the home directory");
+  // Abbreviated, not deleted: the path must still be readable.
+  assert.match(text, /~\/Library\/Android\/sdk/);
+  assert.match(text, /~\/Library\/Android\/sdk\/platform-tools\/adb/);
+});
+
+test("renderJson applies the same abbreviation as the human report", () => {
+  const json = JSON.stringify(renderJson(evaluate(probesUnderHome()), { home: FAKE_HOME }));
+  assert.ok(!json.includes(FAKE_HOME_USER), "the json report leaked the OS username");
+  assert.ok(json.includes("~/Library/Android/sdk"));
+});
+
+test("abbreviation survives a failing report, where paths appear in fix text too", () => {
+  const probes = probesUnderHome();
+  const text = renderHuman(
+    evaluate({
+      ...probes,
+      androidSdk: { ...probes.androidSdk, exists: false },
+    }),
+    { verbose: true, home: FAKE_HOME },
+  );
+  assert.ok(!text.includes(FAKE_HOME_USER));
+  assert.match(text, /~\/Library\/Android\/sdk/);
+});
+
+test("abbreviateHome respects path boundaries and refuses to rewrite a root home", () => {
+  assert.equal(abbreviateHome(`${FAKE_HOME}/sdk`, FAKE_HOME), "~/sdk");
+  assert.equal(abbreviateHome(FAKE_HOME, FAKE_HOME), "~");
+  assert.equal(abbreviateHome(`${FAKE_HOME}/a and ${FAKE_HOME}/b`, FAKE_HOME), "~/a and ~/b");
+  // A trailing separator on the home value must not defeat the match.
+  assert.equal(abbreviateHome(`${FAKE_HOME}/sdk`, `${FAKE_HOME}/`), "~/sdk");
+  // A sibling directory that merely starts with the home path is left alone.
+  assert.equal(abbreviateHome(`${FAKE_HOME}-backup/sdk`, FAKE_HOME), `${FAKE_HOME}-backup/sdk`);
+  // Degenerate homes would rewrite the whole report; they are ignored.
+  assert.equal(abbreviateHome("/opt/android/sdk", "/"), "/opt/android/sdk");
+  assert.equal(abbreviateHome("/opt/android/sdk", ""), "/opt/android/sdk");
+  assert.equal(abbreviateHome("/opt/android/sdk", null), "/opt/android/sdk");
+  // Regex metacharacters in a home path are matched literally, not as a pattern.
+  assert.equal(abbreviateHome("/home/a+b/sdk", "/home/a+b"), "~/sdk");
+  assert.equal(abbreviateHome("/home/axxb/sdk", "/home/a+b"), "/home/axxb/sdk");
+});
+
+// ---------------------------------------------------------------------------
+// Secret containment. Two independent layers are asserted: the parser never
+// captures a value, and the renderer only prints names drawn from a constant.
+// ---------------------------------------------------------------------------
+
+test("parseEnvKeyNames returns names only and captures no value", () => {
+  const text = [
+    "# comment",
+    `export PIN_SIGNING_STORE_FILE=/fixture/keys/example.keystore`,
+    `export PIN_SIGNING_STORE_PASSWORD=${FAKE_SECRET}`,
+    `export PIN_SIGNING_KEY_ALIAS=example-alias`,
+    `PIN_SIGNING_KEY_PASSWORD='${FAKE_SECRET}'`,
+    "",
+  ].join("\n");
+  const keys = parseEnvKeyNames(text);
+  assert.deepEqual(keys, [...REQUIRED_SIGNING_KEYS]);
+  assert.ok(!JSON.stringify(keys).includes(FAKE_SECRET));
+  assert.ok(!JSON.stringify(keys).includes("example.keystore"));
+});
+
+test("signing env resolution follows the external root contract, never the Pin source", () => {
+  assert.equal(
+    resolveSigningEnvPath({ REVIVAL_CONFIG_DIR: "/operator/config" }, "/home/operator"),
+    "/operator/config/secrets/pin/signing.env",
+  );
+  assert.equal(
+    resolveSigningEnvPath({ REVIVAL_SECRETS_DIR: "/operator/secrets" }, "/home/operator"),
+    "/operator/secrets/pin/signing.env",
+  );
+});
+
+test("a signing env value never reaches evaluate output or either renderer", () => {
+  const text = [
+    `export PIN_SIGNING_STORE_FILE=/fixture/keys/example.keystore`,
+    `export PIN_SIGNING_STORE_PASSWORD=${FAKE_SECRET}`,
+    `export PIN_SIGNING_KEY_ALIAS=example-alias`,
+    `export PIN_SIGNING_KEY_PASSWORD=${FAKE_SECRET}`,
+  ].join("\n");
+  const probes = healthyProbes({
+    signingEnv: {
+      exists: true,
+      path: "secrets/pin-signing.env",
+      keys: parseEnvKeyNames(text),
+      mode: 0o600,
+    },
+  });
+  const result = evaluate(probes);
+  const human = renderHuman(result, { verbose: true });
+  const json = JSON.stringify(renderJson(result));
+
+  assert.ok(!JSON.stringify(result).includes(FAKE_SECRET), "evaluate output leaked a secret value");
+  assert.ok(!human.includes(FAKE_SECRET), "human render leaked a secret value");
+  assert.ok(!json.includes(FAKE_SECRET), "json render leaked a secret value");
+  assert.ok(!human.includes("example-alias"), "human render leaked an alias value");
+  assert.ok(!human.includes("example.keystore"), "human render leaked a keystore path value");
+});
+
+test("a poisoned key list cannot leak into rendered output", () => {
+  // Simulates a parser regression that let a VALUE into the key list. The
+  // renderer intersects with REQUIRED_SIGNING_KEYS, so the value still cannot
+  // reach output.
+  const probes = healthyProbes({
+    signingEnv: {
+      exists: true,
+      path: "secrets/pin-signing.env",
+      keys: [...REQUIRED_SIGNING_KEYS, FAKE_SECRET],
+      mode: 0o600,
+    },
+  });
+  const result = evaluate(probes);
+  assert.ok(!renderHuman(result, { verbose: true }).includes(FAKE_SECRET));
+  assert.ok(!JSON.stringify(renderJson(result)).includes(FAKE_SECRET));
+  assert.ok(!JSON.stringify(result).includes(FAKE_SECRET));
+});
+
+// ---------------------------------------------------------------------------
+// Parsers
+// ---------------------------------------------------------------------------
+
+test("the real README.md prerequisite line is still parseable", () => {
+  const readme = readFileSync(resolve(REPO_ROOT, "README.md"), "utf8");
+  const requirements = parseRequirementsFromReadme(readme);
+  assert.ok(requirements, "README.md no longer contains a parseable prerequisite line");
+  assert.ok(Number.isInteger(requirements.jdkMajor) && requirements.jdkMajor > 0);
+  assert.ok(Number.isInteger(requirements.ndkMajor) && requirements.ndkMajor > 0);
+  assert.match(requirements.ndkLabel, /^r\d+[a-z]?$/);
+  assert.match(requirements.nodeMinimum, /^\d+(\.\d+){0,2}$/);
+  assert.match(requirements.sourceRef, /^README\.md:\d+$/);
+});
+
+test("parseRequirementsFromReadme returns null when the prerequisite line is absent", () => {
+  assert.equal(parseRequirementsFromReadme("# Title\n\nNo prerequisites here.\n"), null);
+  assert.equal(parseRequirementsFromReadme(""), null);
+  assert.equal(parseRequirementsFromReadme(null), null);
+});
+
+test("parseRequirementsFromReadme reads the versions the document actually states", () => {
+  const text = [
+    "# Repo",
+    "",
+    "## Build prerequisites",
+    "",
+    "JDK 21, Android SDK 35, Android NDK r30a, stable Rust with the `aarch64-linux-android` target, and Node >= 24.1.0.",
+  ].join("\n");
+  const requirements = parseRequirementsFromReadme(text);
+  assert.deepEqual(
+    { ...requirements },
+    {
+      jdkMajor: 21,
+      androidSdkApi: 35,
+      ndkLabel: "r30a",
+      ndkMajor: 30,
+      nodeMinimum: "24.1.0",
+      sourceRef: "README.md:5",
+    },
+  );
+});
+
+test("parseRequirementsFromReadme reads the restyled prerequisite line (bare NDK, Unicode ≥)", () => {
+  // The shipped README.md writes the requirements as a mid-dot list with a bare
+  // "NDK" label and a Unicode "≥" floor. The parser must read that spelling, or
+  // the doctor silently degrades every version check to a "cannot compare"
+  // warning. Pinned here as a synthetic fixture so this stays covered even if
+  // the real README.md is restyled again.
+  const text = [
+    "# Repo",
+    "",
+    "**Prerequisites** — JDK 17 · Android SDK 34 · NDK r28c · Rust (`aarch64-linux-android`) · `cargo-ndk` · `protoc` · Node ≥ 20.19",
+  ].join("\n");
+  const requirements = parseRequirementsFromReadme(text);
+  assert.deepEqual(
+    { ...requirements },
+    {
+      jdkMajor: 17,
+      androidSdkApi: 34,
+      ndkLabel: "r28c",
+      ndkMajor: 28,
+      nodeMinimum: "20.19",
+      sourceRef: "README.md:3",
+    },
+  );
+});
+
+test("parseJavaVersion handles modern and legacy banners", () => {
+  assert.deepEqual(parseJavaVersion('openjdk version "21.0.11" 2026-04-21 LTS'), {
+    version: "21.0.11",
+    major: 21,
+  });
+  assert.deepEqual(parseJavaVersion('java version "1.8.0_392"'), { version: "1.8.0_392", major: 8 });
+  assert.equal(parseJavaVersion("command not found"), null);
+  assert.equal(parseJavaVersion(null), null);
+});
+
+test("compareVersions orders dotted numeric versions", () => {
+  assert.equal(compareVersions("22.0.0", "20.19.0"), 1);
+  assert.equal(compareVersions("20.18.9", "20.19.0"), -1);
+  assert.equal(compareVersions("20.19.0", "20.19.0"), 0);
+  assert.equal(compareVersions("22", "22.0.0"), 0);
+  assert.equal(compareVersions("26.3.11579264", "28.0.0"), -1);
+});
+
+test("parseAdbDevices counts states and retains no serial", () => {
+  const output = [
+    "List of devices attached",
+    "FIXTURESERIAL1\tdevice",
+    "FIXTURESERIAL2\tunauthorized",
+    "FIXTURESERIAL3\toffline",
+    "",
+  ].join("\n");
+  const counts = parseAdbDevices(output);
+  assert.deepEqual(counts, { ready: 1, unauthorized: 1, other: 1 });
+  assert.ok(!JSON.stringify(counts).includes("FIXTURESERIAL"));
+  assert.deepEqual(parseAdbDevices("List of devices attached\n\n"), {
+    ready: 0,
+    unauthorized: 0,
+    other: 0,
+  });
+});
+
+test("parseSdkDir reads sdk.dir and undoes property escaping", () => {
+  assert.equal(parseSdkDir("sdk.dir=/opt/android/sdk\n"), "/opt/android/sdk");
+  assert.equal(parseSdkDir("# comment\nsdk.dir = /opt/sdk\n"), "/opt/sdk");
+  assert.equal(parseSdkDir("sdk.dir=C\\:\\\\Android\\\\sdk\n"), "C:\\Android\\sdk");
+  assert.equal(parseSdkDir("ndk.dir=/opt/ndk\n"), null);
+  assert.equal(parseSdkDir(null), null);
+});
+
+test("parseNdkRevision reads Pkg.Revision from source.properties", () => {
+  assert.equal(
+    parseNdkRevision("Pkg.Desc = Android NDK\nPkg.Revision = 26.3.11579264\n"),
+    "26.3.11579264",
+  );
+  assert.equal(parseNdkRevision("Pkg.Desc = Android NDK\n"), null);
+  assert.equal(parseNdkRevision(null), null);
+});
+
+// ---------------------------------------------------------------------------
+// Report shape and CLI surface
+// ---------------------------------------------------------------------------
+
+test("every check has a unique id and carries a fix whenever it is not passing", () => {
+  const result = evaluate(
+    healthyProbes({
+      protoc: { present: false, version: null },
+      signingEnv: { exists: false, path: "secrets/pin-signing.env", keys: [], mode: null },
+    }),
+  );
+  const ids = result.checks.map((check) => check.id);
+  assert.equal(new Set(ids).size, ids.length, "check ids must be unique");
+  assert.ok(ids.includes("pin_device"));
+  assert.ok(ids.includes(`rust_target_android`));
+  for (const check of result.checks) {
+    assert.ok(typeof check.title === "string" && check.title.length > 0);
+    assert.ok([CHECK_STATUS.PASS, CHECK_STATUS.WARN, CHECK_STATUS.FAIL].includes(check.status));
+    assert.equal(typeof check.required, "boolean");
+    assert.ok(typeof check.detail === "string" && check.detail.length > 0);
+    if (check.status !== CHECK_STATUS.PASS) {
+      assert.ok(check.fix.length > 0, `${check.id} must offer an actionable fix`);
+    }
+  }
+});
+
+test("the aarch64 target check names the exact rustup command", () => {
+  const result = evaluate(
+    healthyProbes({ rustTarget: { determined: true, installed: false, source: "rustup" } }),
+  );
+  assert.match(checkById(result, "rust_target_android").fix, new RegExp(`rustup target add ${ANDROID_RUST_TARGET}`));
+});
+
+test("an undeterminable rust target list is a warn, not a fail", () => {
+  const result = evaluate(
+    healthyProbes({ rustTarget: { determined: false, installed: false, source: null } }),
+  );
+  assert.equal(checkById(result, "rust_target_android").status, CHECK_STATUS.WARN);
+  assert.equal(result.ok, true);
+});
+
+test("renderHuman groups by status and ends with a next step", () => {
+  const text = renderHuman(evaluate(healthyProbes({ protoc: { present: false, version: null } })));
+  assert.match(text, /^Ai Pin Revival host doctor/);
+  assert.match(text, /\nFAIL \(1\)\n/);
+  assert.match(text, /\nPASS \(\d+\)\n/);
+  assert.match(text, /Summary: \d+ pass, \d+ warn, \d+ fail/);
+  assert.ok(text.trimEnd().split("\n").pop().startsWith("Next step:"));
+});
+
+test("nextStepLine names the blocking checks when a required check fails", () => {
+  const failing = nextStepLine(evaluate(healthyProbes({ protoc: { present: false, version: null } })));
+  assert.match(failing, /protoc/);
+  const healthy = nextStepLine(evaluate(healthyProbes()));
+  assert.match(healthy, /host prerequisites satisfied/);
+  assert.match(healthy, /platform\/containers\/pin-builder\/\*\.test\.mjs/);
+  assert.ok(!healthy.includes("fix the blocking"));
+});
+
+test("renderJson mirrors evaluate and exposes no probe internals", () => {
+  const result = evaluate(healthyProbes());
+  const json = renderJson(result);
+  assert.equal(json.tool, "revival-pin-doctor");
+  assert.equal(json.ok, true);
+  assert.equal(json.requirements_source, "README.md:100");
+  assert.equal(json.checks.length, result.checks.length);
+  assert.deepEqual(Object.keys(json.checks[0]).sort(), [
+    "detail",
+    "fix",
+    "id",
+    "required",
+    "status",
+    "title",
+  ]);
+  assert.ok(!Object.keys(json).includes("probes"));
+});
+
+test("parseCliArgs accepts the documented flags and rejects anything else", () => {
+  assert.deepEqual(parseCliArgs([]), { json: false, verbose: false, help: false });
+  assert.deepEqual(parseCliArgs(["--json", "--verbose"]), { json: true, verbose: true, help: false });
+  assert.deepEqual(parseCliArgs(["-v"]), { json: false, verbose: true, help: false });
+  assert.deepEqual(parseCliArgs(["--help"]), { json: false, verbose: false, help: true });
+  assert.throws(() => parseCliArgs(["--serial", "X"]), /unrecognized argument/);
+  assert.throws(() => parseCliArgs(["--force"]), /unrecognized argument/);
+});
+
+test("usage documents the exit-code contract", () => {
+  const text = usage();
+  assert.match(text, /--json/);
+  assert.match(text, /--verbose/);
+  assert.match(text, /Exit 0 when all required checks pass/);
+});
+
+test("evaluate tolerates an empty probe object without throwing", () => {
+  const result = evaluate({});
+  assert.equal(result.ok, false);
+  // 15 fixed builders plus one per gated asset; asserting the arithmetic rather
+  // than a literal keeps this honest when an asset is added or removed.
+  assert.equal(result.checks.length, 15 + GATED_BUILD_ASSETS.length);
+  assert.ok(result.blocking.length > 0);
+});

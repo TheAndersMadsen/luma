@@ -1,0 +1,250 @@
+/*
+ * Settings → My Ai Pin. Additive styles for the Saved Wi-Fi Networks list, the
+ * honest-absent device rows, and the marked "Pin setup" addition. Shared
+ * section/InfoRow chrome is imported read-only from settings.module.css; only
+ * the Wi-Fi- and pairing-specific bits live here.
+ *
+ * `.hiddenTag` is gone: the "Hidden" marker is now <StatusChip variant="tag">,
+ * the same idiom the console's override marker and the Ai Mic's source marker
+ * use, so three tag vocabularies became one.
+ */
+
+.wifiRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--hu-divider);
+}
+
+.wifiRow:last-child {
+  border-bottom: none;
+}
+
+.overviewGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  padding: 1px;
+  background: var(--hu-divider);
+}
+
+.overviewCard {
+  min-width: 0;
+  min-height: 132px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 20px 24px;
+  background: var(--hu-colors-penumbra-base);
+}
+
+.overviewCard[data-tone="live"] .overviewValue {
+  color: var(--hu-status-live);
+}
+
+.overviewCard[data-tone="warning"] .overviewValue {
+  color: var(--hu-status-warning);
+}
+
+.overviewLabel,
+.overviewDetail {
+  font-size: 13px;
+  line-height: 1.35;
+  color: var(--hu-text-muted);
+}
+
+.overviewValue {
+  font-size: 22px;
+  font-weight: 500;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+
+.deviceDetails {
+  border-top: 1px solid var(--hu-divider);
+}
+
+.deviceDetails summary {
+  min-height: 52px;
+  display: flex;
+  align-items: center;
+  padding: 0 24px;
+  color: var(--hu-text-muted);
+  cursor: pointer;
+}
+
+.deviceDetails[open] summary {
+  color: var(--hu-colors-white);
+  border-bottom: 1px solid var(--hu-divider);
+}
+
+.wifiMain {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.wifiIcon {
+  flex: none;
+  color: var(--hu-colors-crater-base);
+}
+
+.wifiText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.wifiSsid {
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--hu-colors-white);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wifiMeta {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--hu-colors-crater-base);
+}
+
+/*
+ * The sealed-envelope row's explanation.
+ *
+ * `.wifiMeta` carries one short token ("WPA3 Personal"); this carries two
+ * sentences saying why a real saved network has no name on screen. It must wrap
+ * rather than sit on one clipped line, or the reason disappears and the row
+ * reads as the bug it replaced.
+ */
+.wifiSealedMeta {
+  composes: wifiMeta;
+  max-width: 620px;
+  line-height: 1.45;
+  white-space: normal;
+}
+
+/* ------------------------------------------------- Pin setup (addition) -- */
+
+.pairRow {
+  display: flex;
+  flex-direction: column;
+}
+
+.pairOpenButton {
+  composes: buttonSecondary from "../../../../components/controls.module.css";
+}
+
+.pairForm {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0 24px 20px;
+}
+
+.pairLabel {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--hu-colors-crater-base);
+}
+
+.pairHelp {
+  max-width: 620px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--hu-colors-crater-base);
+}
+
+.pairControls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.pairInput {
+  composes: field from "../../../../components/controls.module.css";
+  flex: 1 1 240px;
+  min-width: 0;
+  max-width: 360px;
+}
+
+.pairSubmit {
+  composes: buttonPrimary from "../../../../components/controls.module.css";
+}
+
+.pairCancel {
+  composes: buttonQuiet from "../../../../components/controls.module.css";
+}
+
+.deviceClaimRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 24px;
+  border-top: 1px solid var(--hu-divider);
+}
+
+.deviceClaimHeading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.unpairButton,
+.unpairConfirmButton {
+  composes: buttonQuiet from "../../../../components/controls.module.css";
+}
+
+.unpairConfirm {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  max-width: 300px;
+}
+
+.unpairWarning,
+.unpairError {
+  font-size: 12px;
+  color: var(--hu-colors-crater-base);
+  text-align: right;
+}
+
+.unpairError {
+  color: var(--hu-status-danger);
+}
+
+.unpairActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+@media (max-width: 700px) {
+  .overviewGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .deviceClaimRow {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .unpairConfirm {
+    align-items: flex-start;
+  }
+
+  .unpairWarning,
+  .unpairError {
+    text-align: left;
+  }
+}

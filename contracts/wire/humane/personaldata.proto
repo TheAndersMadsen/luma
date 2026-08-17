@@ -1,0 +1,32 @@
+// reconstructed from ironman.apk (protobuf-lite). field numbers are wire-accurate.
+syntax = "proto3";
+
+package humane.personaldata;
+
+message ContactsMetadata {
+  string user_id = 1;
+  bool delta = 2;
+}
+
+message GPSLocation {
+  double latitude = 1;
+  double longitude = 2;
+  float altitude = 3;
+  float horizontal_dilution = 4;
+}
+
+message Note {
+  string title = 1;
+  string contents = 2;
+}
+
+message PersonalProtoMetadata {
+  oneof content {
+    ContactsMetadata contacts = 1;
+  }
+}
+
+message SMSMessage {
+  string uri = 1;
+  string body = 2;
+}

@@ -1,0 +1,40 @@
+# Scrapes each workload's INTERNAL HTTP listener over cosmos-internal.
+#
+# This is the collector Humane's own stack had and ours lacked: every workload
+# already emits Prometheus text at /metrics (and Micrometer JSON at
+# /manage/metrics), but nothing read it, so every restart zeroed the counters.
+# Humane ran Prometheus + Grafana + Loki alongside Datadog (observed in their SRE
+# job postings) — this is the faithful, self-hosted half of that.
+#
+# The workloads are reachable by service name on cosmos-internal at :18080 (the socat
+# HTTP proxy in compose.yaml). Prometheus joins that network and never publishes a
+# host port — Grafana is its only consumer.
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  external_labels:
+    stack: cosmos
+    deployment: vps
+
+scrape_configs:
+  - job_name: cosmos-workloads
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - connectivity:18080
+          - ai-bus:18080
+          - account:18080
+          - contacts:18080
+          - feature-flags:18080
+          - notable-events:18080
+          - provisioning:18080
+    relabel_configs:
+      # Turn "ai-bus:18080" into a clean workload label; keep instance as-is.
+      - source_labels: [__address__]
+        regex: '([^:]+):.*'
+        target_label: workload
+        replacement: '$1'
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ['localhost:9090']

@@ -1,0 +1,81 @@
+// Reconstructed from decompiled protobuf-lite Java classes.
+// PushRelayService — bidi streaming Subscribe + unary GetPushTokens.
+
+syntax = "proto3";
+
+package humane.pushrelay;
+
+import "google/protobuf/timestamp.proto";
+
+option java_multiple_files = true;
+
+// ---- Enums ----
+
+enum PushConnectionType {
+  CONNECTION_UNSPECIFIED = 0;
+  WIFI = 1;
+  CELL = 2;
+}
+
+// ---- Messages ----
+
+message PushMessageRequest {
+  repeated string app_names = 1 [deprecated = true];
+  repeated string acks = 2;
+  bool experience_names_set = 3;
+  repeated SubscribedPushExperience subscribed_experiences = 4;
+  PushConnectionType conn_type = 5;
+}
+
+message PushMessageResponse {
+  repeated PushMessage push_messages = 1;
+  repeated SubscribedExperienceStatus subscribedExperienceStatuses = 2;
+  optional Error error = 3;
+}
+
+message PushTokenRequest {
+  repeated string app_names = 1;
+}
+
+message PushTokenResponse {
+  repeated PushToken tokens = 1;
+}
+
+message PushToken {
+  string app_name = 1;
+  string token = 2;
+  optional Error error = 3;
+}
+
+message Error {
+  int32 code = 1;
+  string message = 2;
+}
+
+message SubscribedPushExperience {
+  string experience_name = 1;
+  string token = 2;
+}
+
+message SubscribedExperienceStatus {
+  string experience_name = 1;
+  bool rotate_token = 2;
+}
+
+message PushMessage {
+  string app_name = 1;
+  string message_id = 2;
+  google.protobuf.Timestamp expiration_timestamp = 3;
+  bytes data_payload = 4;
+  // NotificationPayload notification_payload = 5;  -- omitted
+}
+
+// ---- Service ----
+
+service PushRelayService {
+  // Bidi streaming: client subscribes, server pushes messages.
+  rpc Subscribe (stream PushMessageRequest) returns (stream PushMessageResponse);
+
+  // Unary: get push tokens for app names.
+  rpc GetPushTokens (PushTokenRequest) returns (PushTokenResponse);
+}

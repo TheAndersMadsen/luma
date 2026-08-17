@@ -1,0 +1,3 @@
+marker_name	source_owner	source_component	evidence_kind	value_sha256	note
+stock_run_final_message	stock	RunManager	external-contract-hash	f8dd0bcf0491755b43cd2871c63d434cd08f0c70e42518847f9348168440b3f9	SHA-256 pins the stock-owned compatibility marker without copying proprietary source.
+stock_run_final_observation	stock	RunManager	external-contract-hash	81010695c5e1c83ed106e354e5f162f15699fb3687cbfad419279141887cc683	SHA-256 pins the stock-owned compatibility marker without copying proprietary source.

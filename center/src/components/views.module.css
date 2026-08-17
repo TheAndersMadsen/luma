@@ -1,0 +1,440 @@
+/* ---------- shared page furniture ---------- */
+.pageContainer {
+  max-width: 1600px;
+  margin: 0 auto;
+  padding: 0 24px;
+}
+
+/*
+ * "You have none yet" — one shape, defined once in states.module.css and used
+ * by <EmptyState>. These two names stay so the raw call sites keep working
+ * while they move over; the geometry is no longer duplicated here.
+ */
+.emptyState {
+  composes: emptyState from "./states.module.css";
+}
+
+.emptyStateLabel {
+  composes: emptyTitle from "./states.module.css";
+}
+
+/* ---------- Notes — notes_noteMasonryGrid ---------- */
+.noteMasonryGrid {
+  columns: 4 260px;
+  column-gap: var(--gap-size);
+  padding-top: 8px;
+}
+
+.noteGrid {
+  break-inside: avoid;
+  margin-bottom: var(--gap-size);
+}
+
+.noteTileLinkWrap {
+  display: block;
+  break-inside: avoid;
+}
+
+.noteTile {
+  background: var(--hu-colors-yellow-100);
+  color: var(--hu-colors-black);
+  border-radius: 16px;
+  padding: 20px;
+  min-height: 150px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  transition: transform var(--transition-duration) ease-out;
+}
+
+.noteTile:hover {
+  transform: translateY(-2px);
+}
+
+/* a note the backend returned sealed — readable as "locked", not as blank */
+.noteTileSealed {
+  background: var(--hu-colors-penumbra-base);
+  color: var(--hu-colors-crater-base);
+  box-shadow: var(--outline-shadow);
+}
+
+.noteTileSealed .noteTitle {
+  color: var(--hu-colors-white);
+}
+
+.noteTitle {
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.noteText {
+  font-size: 15px;
+  font-weight: 400;
+  line-height: 1.35;
+  opacity: 0.78;
+}
+
+.noteDate {
+  margin-top: auto;
+  font-size: 11px;
+  font-weight: 500;
+  opacity: 0.55;
+}
+
+/* note detail / editor surface */
+.notePage {
+  max-width: 620px;
+  margin: 0 auto;
+  background: var(--hu-colors-yellow-100);
+  color: var(--hu-colors-black);
+  border-radius: 16px;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 320px;
+}
+
+.notePageTitle {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.notePageText {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 1.4;
+  opacity: 0.8;
+  white-space: pre-wrap;
+}
+
+.notePageDate {
+  margin-top: auto;
+  font-size: 11px;
+  font-weight: 500;
+  opacity: 0.55;
+}
+
+.noteInput,
+.noteTextarea {
+  border: none;
+  outline: none;
+  background: transparent;
+  font-family: var(--hu-fonts-humane);
+  color: inherit;
+  width: 100%;
+}
+
+.noteInput {
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.noteTextarea {
+  flex: 1;
+  resize: none;
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 1.4;
+}
+
+/* Capture gallery styles live with the capture route in app/captures/captures.module.css. */
+
+/* ---------- My Data overview ---------- */
+.myDataOverviewCenteringContainer {
+  display: flex;
+  justify-content: center;
+  padding-top: 8px;
+}
+
+.myDataOverviewGridContainer {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: var(--gap-size);
+  width: 100%;
+  max-width: 1180px;
+}
+
+.overviewTile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 28px;
+  min-height: 210px;
+  padding: 24px;
+  border-radius: 16px;
+  background: var(--hu-colors-penumbra-base);
+  box-shadow: var(--outline-shadow);
+  transition: background-color var(--transition-duration) ease-out;
+}
+
+.overviewTile:hover {
+  background: var(--hu-colors-lunar-grey-dark-200);
+}
+
+.overviewTileHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--hu-colors-crater-base);
+}
+
+.overviewTileName {
+  grid-area: name;
+  font-size: 24px;
+  font-weight: 500;
+  line-height: 1.15;
+  color: var(--hu-colors-white);
+  /* A long domain name wraps inside the tile rather than widening the row. */
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/*
+ * DOM order stays the recovered Today / value / NAME / Total / value; the visual
+ * order is set here. As a flex row the three sat side by side, so "Translation"
+ * at 24px pushed the Total column outside the tile's padding box and its label
+ * was clipped. Grid areas give the name its own line and keep the two stats on a
+ * shared baseline underneath, at any tile width.
+ */
+.overviewStats {
+  display: grid;
+  grid-template-columns: auto auto;
+  grid-template-areas:
+    "name  name"
+    "today total";
+  justify-content: start;
+  column-gap: 40px;
+  row-gap: 14px;
+}
+
+.overviewStatToday {
+  grid-area: today;
+}
+
+.overviewStatTotal {
+  grid-area: total;
+}
+
+.overviewStatLabel {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--hu-colors-crater-base);
+  margin-bottom: 4px;
+}
+
+.overviewStatValue {
+  font-size: 30px;
+  font-weight: 500;
+  line-height: 1;
+}
+
+/* ---------- My Data detail rows ---------- */
+.myDataRows {
+  display: flex;
+  flex-direction: column;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding-top: 4px;
+}
+
+.myDataRow {
+  display: grid;
+  grid-template-columns: 44px 1fr;
+  gap: 18px;
+  align-items: start;
+  padding: 22px 4px;
+  border-bottom: 1px solid var(--hu-divider);
+}
+
+.iconWrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: var(--hu-colors-penumbra-base);
+  color: var(--hu-colors-white);
+}
+
+.content {
+  display: flex;
+  gap: 24px;
+  min-width: 0;
+}
+
+.contentColumn {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+
+.rowRequest {
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 1.3;
+  color: var(--hu-colors-white);
+}
+
+.rowResponse {
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 1.35;
+  color: var(--hu-colors-crater-base);
+}
+
+.contentDate {
+  flex: none;
+  width: 190px;
+  text-align: right;
+  font-size: 16px;
+  font-weight: 400;
+  color: var(--hu-colors-crater-base);
+}
+
+.buttons {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 2px;
+}
+
+.forgetButton {
+  margin-left: auto;
+}
+
+.myDataRowButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: var(--hu-colors-penumbra-base);
+  color: var(--hu-colors-crater-base);
+  transition: background-color var(--transition-duration) ease-out,
+    color var(--transition-duration) ease-out;
+}
+
+.myDataRowButton:hover {
+  background: var(--hu-colors-lunar-grey-dark-200);
+  color: var(--hu-colors-white);
+}
+
+.voteGroup {
+  display: flex;
+  gap: 10px;
+}
+
+@media (max-width: 900px) {
+  .hideOnMobile {
+    display: none;
+  }
+  .content {
+    flex-direction: column;
+    gap: 8px;
+  }
+  .contentDate {
+    width: auto;
+    text-align: left;
+    font-size: 14px;
+  }
+  .myDataRow {
+    grid-template-columns: 40px 1fr;
+  }
+}
+
+/* ---------- Stock My Data covering detail view ---------- */
+.detailOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  overflow-y: auto;
+  color: var(--hu-colors-white);
+  background: var(--hu-colors-penumbra-200);
+  animation: detailOverlayIn var(--hu-motion-standard) ease-out both;
+}
+
+.detailOverlayClosing {
+  animation: detailOverlayOut 180ms ease-in both;
+  pointer-events: none;
+}
+
+.detailHeader {
+  position: sticky;
+  top: 0;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  min-height: calc(80px + env(safe-area-inset-top));
+  padding: calc(18px + env(safe-area-inset-top))
+    calc(24px + env(safe-area-inset-right)) 18px
+    calc(24px + env(safe-area-inset-left));
+  z-index: 2;
+  background: color-mix(in srgb, var(--hu-colors-penumbra-200) 94%, transparent);
+  backdrop-filter: blur(18px);
+}
+
+.detailTitle {
+  margin: 0;
+  font-size: 36px;
+  font-weight: 700;
+  line-height: 1;
+  text-align: center;
+}
+
+.detailClose {
+  justify-self: end;
+}
+
+.detailContent {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 24px calc(24px + env(safe-area-inset-right))
+    calc(64px + env(safe-area-inset-bottom))
+    calc(24px + env(safe-area-inset-left));
+}
+
+@keyframes detailOverlayIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes detailOverlayOut {
+  from { opacity: 1; transform: scale(1); }
+  to { opacity: 0; transform: scale(0.992); }
+}
+
+@media (max-width: 640px) {
+  .detailHeader {
+    grid-template-columns: 44px 1fr 44px;
+  }
+  .detailTitle {
+    font-size: 28px;
+  }
+  .detailContent {
+    padding-top: 8px;
+  }
+}
+
+.trackTitle {
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--hu-colors-white);
+}
+
+.albumArt {
+  width: 40px;
+  height: 40px;
+  border-radius: 6px;
+  object-fit: cover;
+  background: var(--hu-colors-lunar-grey-dark-200);
+}

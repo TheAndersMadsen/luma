@@ -1,0 +1,10 @@
+// reconstructed from ironman.apk (protobuf-lite). field numbers are wire-accurate.
+syntax = "proto3";
+
+package humane.location.v1;
+
+import "humane/aibus.proto";
+
+service E911GeoLocationService {
+  rpc GeoLocate (humane.aibus.GeoLocateRequest) returns (humane.aibus.GeoLocateResponse);
+}
