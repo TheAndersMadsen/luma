@@ -442,6 +442,12 @@ else
     printf '%s\t%s\t%s\n' "$label" "$(sha256sum "$path" | awk '{print $1}')" "$(stat -c '%a' "$path")" \
       >>"$work/executing-code.tsv"
   done
+  for common_lib in "$(dirname -- "$rollback_common")"/lib/*.sh; do
+    [[ -f "$common_lib" && ! -L "$common_lib" ]] || fail "common library material is missing or unsafe"
+    printf 'remote.common-lib.%s\t%s\t%s\n' "$(basename "$common_lib")" \
+      "$(sha256sum "$common_lib" | awk '{print $1}')" "$(stat -c '%a' "$common_lib")" \
+      >>"$work/executing-code.tsv"
+  done
   chmod 600 "$work/executing-code.tsv"
   snapshot_current_config "$work/current-config" || fail "could not snapshot exact current protected configuration"
   snapshot_current_nginx "$work" || fail "could not snapshot exact current Nginx state"

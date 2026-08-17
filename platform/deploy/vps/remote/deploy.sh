@@ -138,6 +138,12 @@ for spec in "remote.deploy:$driver_path" "remote.common:$common_path" "remote.do
   printf '%s\t%s\t%s\n' "$label" "$(sha256sum "$path" | awk '{print $1}')" "$(stat -c '%a' "$path")" \
     >>"$record/executing-code.tsv"
 done
+for common_lib in "$(dirname -- "$common_path")"/lib/*.sh; do
+  [[ -f "$common_lib" && ! -L "$common_lib" ]] || fail "common library material is missing or unsafe"
+  printf 'remote.common-lib.%s\t%s\t%s\n' "$(basename "$common_lib")" \
+    "$(sha256sum "$common_lib" | awk '{print $1}')" "$(stat -c '%a' "$common_lib")" \
+    >>"$record/executing-code.tsv"
+done
 chmod 600 "$record/executing-code.tsv"
 release_verifier="$release_dir/platform/deploy/vps/verify-release.py"
 [[ -f "$release_verifier" && ! -L "$release_verifier" ]] || fail "selected release verifier is missing"

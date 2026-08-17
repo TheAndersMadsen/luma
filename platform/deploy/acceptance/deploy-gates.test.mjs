@@ -48,7 +48,11 @@ const canary = read("canary.sh");
 const staging = read("staging-smoke.sh");
 const preflight = read("preflight.sh");
 const deploy = read("deploy.sh");
-const common = read("common.sh");
+const common = [
+  read("common.sh"),
+  ...fs.readdirSync(path.join(remote, "lib")).filter((name) => name.endsWith(".sh")).sort()
+    .map((name) => fs.readFileSync(path.join(remote, "lib", name), "utf8")),
+].join("\n");
 const domain = read("domain.sh");
 const searchPolicy = fs.readFileSync(path.join(root, "cosmos/search/settings.yml"), "utf8");
 
@@ -57,7 +61,8 @@ test("every remote gate script is syntactically valid bash", () => {
   // and now carries a gate of its own (the certificate/private-key digest), so a
   // parse error in it breaks preflight, deploy, rollback, backup and canary at
   // once — at source time, before any of them reaches a check.
-  for (const name of ["canary.sh", "staging-smoke.sh", "preflight.sh", "deploy.sh", "common.sh", "domain.sh"]) {
+  for (const name of ["canary.sh", "staging-smoke.sh", "preflight.sh", "deploy.sh", "common.sh", "domain.sh",
+    ...fs.readdirSync(path.join(remote, "lib")).filter((entry) => entry.endsWith(".sh")).sort().map((entry) => path.join("lib", entry))]) {
     const result = spawnSync("bash", ["-n", path.join(remote, name)], { encoding: "utf8" });
     assert.equal(result.status, 0, `${name}: ${result.stderr}`);
   }

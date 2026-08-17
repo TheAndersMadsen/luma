@@ -122,7 +122,12 @@ test("init refuses unmanaged existing roots and runtime files outside secrets", 
 });
 
 test("generated output is external and source checks clean their local residue", () => {
-  const source = fs.readFileSync(cli, "utf8");
+  // The CLI is an entry point over platform/cli modules; the redirection
+  // mechanisms live in the modules, so the scan reads all of them.
+  const source = [cli, ...fs.readdirSync(path.join(root, "platform", "cli"))
+    .filter((name) => name.endsWith(".js")).sort()
+    .map((name) => path.join(root, "platform", "cli", name))]
+    .map((file) => fs.readFileSync(file, "utf8")).join("\n");
   assert.match(source, /CARGO_TARGET_DIR:\s*path\.join\(BUILD_DIR, 'cosmos-target'\)/);
   assert.match(source, /GRADLE_USER_HOME:\s*path\.join\(BUILD_DIR, 'gradle-home'\)/);
   assert.match(source, /NPM_CONFIG_CACHE:\s*path\.join\(BUILD_DIR, 'npm-cache'\)/);

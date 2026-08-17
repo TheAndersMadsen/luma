@@ -44,7 +44,15 @@ const catalogPath = path.join(root, "center/src/server/configuration.ts");
 const productionCompose = path.join(root, "platform/compose/production.yaml");
 const baseCompose = path.join(root, "compose.yaml");
 
-const commonSource = await readFile(commonPath, "utf8");
+const commonSource = (
+  await Promise.all(
+    [commonPath, ...(await readdir(path.join(path.dirname(commonPath), "lib")))
+      .filter((name) => name.endsWith(".sh"))
+      .sort()
+      .map((name) => path.join(path.dirname(commonPath), "lib", name))]
+      .map((file) => readFile(file, "utf8")),
+  )
+).join("\n");
 const deploySource = await readFile(deployPath, "utf8");
 const catalogSource = await readFile(catalogPath, "utf8");
 

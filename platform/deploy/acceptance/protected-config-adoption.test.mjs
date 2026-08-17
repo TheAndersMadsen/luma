@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmod, copyFile, link, mkdir, mkdtemp, readFile, realpath, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, copyFile, link, mkdir, mkdtemp, readFile, realpath, stat, symlink, writeFile, readdir } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
@@ -55,11 +55,24 @@ const localWrapper = path.join(root, "platform/deploy/vps/adopt-config.sh");
 const commonPath = path.join(remote, "common.sh");
 const cli = path.join(root, "revival");
 
-const commonSource = await readFile(commonPath, "utf8");
+const commonSource = (
+  await Promise.all(
+    [commonPath, ...(await readdir(path.join(path.dirname(commonPath), "lib")))
+      .filter((name) => name.endsWith(".sh"))
+      .sort()
+      .map((name) => path.join(path.dirname(commonPath), "lib", name))]
+      .map((file) => readFile(file, "utf8")),
+  )
+).join("\n");
 const entrySource = await readFile(entryPoint, "utf8");
 const localSource = await readFile(localWrapper, "utf8");
 const driverSource = await readFile(driver, "utf8");
-const cliSource = await readFile(cli, "utf8");
+const cliModulesDir = path.join(root, "platform", "cli");
+const cliSource = [
+  await readFile(cli, "utf8"),
+  ...(await Promise.all((await readdir(cliModulesDir)).filter((name) => name.endsWith(".js")).sort()
+    .map((name) => readFile(path.join(cliModulesDir, name), "utf8")))),
+].join("\n");
 
 const REASON = "Pin regenerated its iroh node identity during boot-loop recovery; re-ticketed the bridge.";
 

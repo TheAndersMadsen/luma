@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile, readdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -40,7 +40,15 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../.
 const staging = path.join(root, "platform/deploy/vps/remote/staging-smoke.sh");
 const stagingSource = await readFile(staging, "utf8");
 const common = path.join(root, "platform/deploy/vps/remote/common.sh");
-const commonSource = await readFile(common, "utf8");
+const commonSource = (
+  await Promise.all(
+    [common, ...(await readdir(path.join(path.dirname(common), "lib")))
+      .filter((name) => name.endsWith(".sh"))
+      .sort()
+      .map((name) => path.join(path.dirname(common), "lib", name))]
+      .map((file) => readFile(file, "utf8")),
+  )
+).join("\n");
 const deploySource = await readFile(path.join(root, "platform/deploy/vps/remote/deploy.sh"), "utf8");
 const rollbackSource = await readFile(path.join(root, "platform/deploy/vps/remote/rollback.sh"), "utf8");
 

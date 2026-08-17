@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
@@ -32,7 +32,15 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const remote = path.join(root, "platform/deploy/vps/remote");
 const common = path.join(remote, "common.sh");
-const commonSource = await readFile(common, "utf8");
+const commonSource = (
+  await Promise.all(
+    [common, ...(await readdir(path.join(path.dirname(common), "lib")))
+      .filter((name) => name.endsWith(".sh"))
+      .sort()
+      .map((name) => path.join(path.dirname(common), "lib", name))]
+      .map((file) => readFile(file, "utf8")),
+  )
+).join("\n");
 const deploySource = await readFile(path.join(remote, "deploy.sh"), "utf8");
 const preflightSource = await readFile(path.join(remote, "preflight.sh"), "utf8");
 const rollbackSource = await readFile(path.join(remote, "rollback.sh"), "utf8");

@@ -94,6 +94,15 @@ BOOTSTRAP
     cat "$REMOTE_IMPL/common.sh"
     cat <<'BOOTSTRAP'
 __REVIVAL_COMMON__
+mkdir -p "$tmp_dir/lib"
+BOOTSTRAP
+    local common_lib
+    for common_lib in "$REMOTE_IMPL"/lib/*.sh; do
+      printf 'cat <<'"'"'__REVIVAL_COMMON_LIB__'"'"' > "$tmp_dir/lib/%s"\n' "$(basename "$common_lib")"
+      cat "$common_lib"
+      printf '__REVIVAL_COMMON_LIB__\nchmod 600 "$tmp_dir/lib/%s"\n' "$(basename "$common_lib")"
+    done
+    cat <<'BOOTSTRAP'
 cat <<'__REVIVAL_DOMAIN__' > "$tmp_dir/domain.sh"
 BOOTSTRAP
     cat "$REMOTE_IMPL/domain.sh"

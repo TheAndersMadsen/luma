@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, readFile, realpath, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readdir, readFile, realpath, symlink, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -33,6 +33,21 @@ async function fixture() {
 function runTransaction(arguments_, expected = 0) {
   const result = spawnSync("python3", [transaction, ...arguments_], { encoding: "utf8" });
   assert.equal(result.status, expected, `transaction exited ${result.status}: ${result.stderr}`);
+}
+
+
+/**
+ * The common library is a loader plus cohesive lib/ files; every text-level
+ * extraction reads them as one concatenation, the same order the loader
+ * sources them.
+ */
+async function commonLibrarySource() {
+  const remoteDir = remote;
+  const libDir = path.join(remoteDir, "lib");
+  const names = (await readdir(libDir)).filter((name) => name.endsWith(".sh")).sort();
+  const parts = [await readFile(path.join(remoteDir, "common.sh"), "utf8")];
+  for (const name of names) parts.push(await readFile(path.join(libDir, name), "utf8"));
+  return parts.join("\n");
 }
 
 function bashFunction(source, name) {
@@ -1209,7 +1224,7 @@ test("the reconcile trap runs recovery only once something has actually been qui
   // service rows at all, which probes nothing and answers "not disturbed" for a
   // host that is entirely down.
   assert.match(disturbed, /validate_ingress_evidence "\$evidence" \|\| return 0/u);
-  const validator = bashFunction(await readFile(path.join(remote, "common.sh"), "utf8"), "validate_ingress_evidence");
+  const validator = bashFunction(await commonLibrarySource(), "validate_ingress_evidence");
   assert.match(validator, /\[\[ -f "\$evidence" && ! -L "\$evidence" \]\] \|\| return 1/u);
 });
 
@@ -1356,7 +1371,7 @@ test("a refusal with ingress already down reopens it instead of walking away", a
 
 test("the reconcile's ingress evidence readers agree with their own validator", async () => {
   const deploy = await readFile(path.join(remote, "deploy.sh"), "utf8");
-  const common = await readFile(path.join(remote, "common.sh"), "utf8");
+  const common = await commonLibrarySource();
 
   // validate_ingress_evidence reads the file in python, which yields a final
   // line that has no trailing newline. bash's `read` returns non-zero on that
@@ -1459,7 +1474,7 @@ test("a foreign authority transaction is refused rather than silently skipped", 
 });
 
 test("nginx is never stopped unless it has been proven it can start again", async () => {
-  const common = await readFile(path.join(remote, "common.sh"), "utf8");
+  const common = await commonLibrarySource();
   const quiesce = bashFunction(common, "quiesce_ingress_services");
   const restore = bashFunction(common, "restore_ingress_services");
 
@@ -1477,7 +1492,7 @@ test("nginx is never stopped unless it has been proven it can start again", asyn
 });
 
 test("the last-resort reopen never stops what it just started", async () => {
-  const common = await readFile(path.join(remote, "common.sh"), "utf8");
+  const common = await commonLibrarySource();
   const best = bashFunction(common, "reopen_recorded_ingress_best_effort");
 
   // The all-or-none rule in restore_ingress_services is right while a restore can
@@ -1541,7 +1556,7 @@ test("the last-resort reopen never stops what it just started", async () => {
 });
 
 test("a bare CR cannot make the evidence readers disagree", async () => {
-  const common = await readFile(path.join(remote, "common.sh"), "utf8");
+  const common = await commonLibrarySource();
   // Asserted against the file, not the extracted function: the validator's body is
   // an embedded python heredoc, which bashFunction stops at.
   //
@@ -1657,7 +1672,7 @@ test("the public ingress window is never recorded as closed while it is open", a
 });
 
 test("a RETURN trap cannot delete its caller's directory", async () => {
-  const common = await readFile(path.join(remote, "common.sh"), "utf8");
+  const common = await commonLibrarySource();
 
   // A RETURN trap set inside a function is NOT removed when that function
   // returns. It stays installed and fires AGAIN when the caller returns,

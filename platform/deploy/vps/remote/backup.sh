@@ -91,6 +91,12 @@ for spec in "remote.backup:$driver_path" "remote.common:$common_path" "remote.do
   printf '%s\t%s\t%s\n' "$label" "$(sha256sum "$path" | awk '{print $1}')" "$(stat -c '%a' "$path")" \
     >>"$destination/executing-code.tsv"
 done
+for common_lib in "$(dirname -- "$common_path")"/lib/*.sh; do
+  [[ -f "$common_lib" && ! -L "$common_lib" ]] || fail "common library material is missing or unsafe"
+  printf 'remote.common-lib.%s\t%s\t%s\n' "$(basename "$common_lib")" \
+    "$(sha256sum "$common_lib" | awk '{print $1}')" "$(stat -c '%a' "$common_lib")" \
+    >>"$destination/executing-code.tsv"
+done
 chmod 600 "$destination/executing-code.tsv"
 
 quiesced=0

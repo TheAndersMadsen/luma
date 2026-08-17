@@ -58,7 +58,12 @@ function bash(script, args = []) {
 
 const store = read("cosmos/crates/cosmos/src/store_postgres.rs");
 const staging = read("platform/deploy/vps/remote/staging-smoke.sh");
-const common = read("platform/deploy/vps/remote/common.sh");
+const common = [
+  read("platform/deploy/vps/remote/common.sh"),
+  ...fs.readdirSync(path.join(root, "platform/deploy/vps/remote/lib"))
+    .filter((name) => name.endsWith(".sh")).sort()
+    .map((name) => read(path.join("platform/deploy/vps/remote/lib", name))),
+].join("\n");
 const smoke = read("platform/deploy/vps/remote/staging-smoke.sh");
 const deploy = read("platform/deploy/vps/remote/deploy.sh");
 

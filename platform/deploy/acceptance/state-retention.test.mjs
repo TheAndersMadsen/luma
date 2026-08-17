@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmod, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
+import { readdir, chmod, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -69,7 +69,12 @@ const entrySource = await readFile(entryPoint, "utf8");
 const localSource = await readFile(localWrapper, "utf8");
 const driverSource = await readFile(driver, "utf8");
 const localLibSource = await readFile(localLib, "utf8");
-const cliSource = await readFile(cli, "utf8");
+const cliModulesDir = path.join(root, "platform", "cli");
+const cliSource = [
+  await readFile(cli, "utf8"),
+  ...(await Promise.all((await readdir(cliModulesDir)).filter((name) => name.endsWith(".js")).sort()
+    .map((name) => readFile(path.join(cliModulesDir, name), "utf8")))),
+].join("\n");
 
 const ROOT = "/home/anders/ai-pin-revival";
 const HOUR = 3600;

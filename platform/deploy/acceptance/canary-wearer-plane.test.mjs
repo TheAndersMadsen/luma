@@ -49,7 +49,7 @@ const canary = fs.readFileSync(path.join(remote, "canary.sh"), "utf8");
 const deploy = fs.readFileSync(path.join(remote, "deploy.sh"), "utf8");
 const rollback = fs.readFileSync(path.join(remote, "rollback.sh"), "utf8");
 const preflight = fs.readFileSync(path.join(remote, "preflight.sh"), "utf8");
-const commonSource = fs.readFileSync(common, "utf8");
+const commonSource = [common, ...fs.readdirSync(path.join(path.dirname(common), "lib")).filter((name) => name.endsWith(".sh")).sort().map((name) => path.join(path.dirname(common), "lib", name))].map((file) => fs.readFileSync(file, "utf8")).join("\n");
 
 /*
  * A password that is a real one in every respect that matters here: long enough

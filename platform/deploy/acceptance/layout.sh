@@ -44,19 +44,31 @@ done
 # matters is that it cannot LEAVE this machine — and it cannot: platform/deploy/
 # release.json builds every payload from an explicit `include` allowlist, and no
 # profile lists it. Allowing it here is a statement about tidiness, not exposure.
+#
+# `diagrams` is local operator work product in the same never-leaves category:
+# untracked, listed in no release profile, and not a source boundary. It is
+# allowed so an unrelated working directory cannot fail the layout gate; it is
+# NOT an invitation to commit a miscellaneous root source area.
+#
+# `.github` carries the CI workflow; `CONTRIBUTING.md` is the newcomer path.
+# Both are deliberate root entries, not a relaxation of the no-miscellaneous
+# rule: everything else still fails here by name.
 allowed_root_entries='.claude
 .git
+.github
 .gstack
 .dockerignore
 .editorconfig
 .env.example
 .gitignore
+CONTRIBUTING.md
 README-INTRO.md
 README.md
 center
 compose.yaml
 contracts
 cosmos
+diagrams
 docs
 pin
 platform
@@ -71,19 +83,39 @@ do
   fi
 done
 
-# Exact, LC_ALL=C-sorted allowlist: adding a page to docs/ means adding it here
-# in the same change, and removing one fails the same way. recovery.md is the
-# bare-metal and database-restore procedure; it is separate from operations.md
-# because it is read under different circumstances and by a different person.
-expected_docs='architecture.md
-operations.md
-prompting-and-tool-reference.md
-prompting-map.md
-recovery.md
-stock-tool-parity-checklist.md'
-actual_docs=$(find "$ROOT/docs" -mindepth 1 -maxdepth 1 -type f -print |
-  sed "s#^$ROOT/docs/##" | LC_ALL=C sort)
-[ "$actual_docs" = "$expected_docs" ] || fail "docs must contain exactly: $(printf '%s' "$expected_docs" | tr '\n' ' ')"
+# The docs policy is constrained rather than enumerated: the core pages every
+# newcomer path relies on must exist, and every other page must be an ordinary
+# lowercase-hyphenated Markdown file directly in docs/. Other file types,
+# nested or generated output, and symlinked pages are rejected — a docs tree
+# that needs a build step or an escape hatch has stopped being documentation.
+# recovery.md stays separate from operations.md because it is read under
+# different circumstances and by a different person.
+for page in index.md architecture.md operations.md recovery.md
+do
+  [ -f "$ROOT/docs/$page" ] || fail "required docs page is missing: docs/$page"
+done
+
+find "$ROOT/docs" -mindepth 1 -print | while IFS= read -r entry
+do
+  name=${entry#"$ROOT"/docs/}
+  if [ -L "$entry" ]; then
+    fail "docs pages must be regular files, not links: docs/$name"
+  fi
+  if [ -d "$entry" ]; then
+    fail "docs must stay flat; nested or generated output is rejected: docs/$name"
+  fi
+  case "$name" in
+    *.md) ;;
+    *) fail "docs accepts Markdown pages only: docs/$name" ;;
+  esac
+  case "$name" in
+    [a-z0-9]*) ;;
+    *) fail "docs page names are lowercase and hyphenated: docs/$name" ;;
+  esac
+  if printf '%s' "${name%.md}" | LC_ALL=C grep -q '[^a-z0-9-]'; then
+    fail "docs page names are lowercase and hyphenated: docs/$name"
+  fi
+done
 
 generated_dirs=$(find -P "$ROOT" -type d \( \
   -name .gradle -o -name .kotlin -o -name .next -o -name __pycache__ -o \

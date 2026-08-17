@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -95,7 +95,12 @@ test("the archive inventory reads each archive once and still emits it name-orde
   // assertion is what keeps the cost linear. The sort moved to the finished items
   // and is pinned below, because the ORDER is the output contract every
   // comparison downstream depends on and the reader change must not touch it.
-  const source = await readFile(common, "utf8");
+  const libDir = path.join(path.dirname(common), "lib");
+  const libNames = (await readdir(libDir)).filter((name) => name.endsWith(".sh")).sort();
+  const source = [
+    await readFile(common, "utf8"),
+    ...(await Promise.all(libNames.map((name) => readFile(path.join(libDir, name), "utf8")))),
+  ].join("\n");
   assert.match(
     source,
     /^with tarfile\.open\(archive,"r\|gz"\) as bundle:$/m,
@@ -820,6 +825,11 @@ test("every operator runbook publishes --fetch as a runnable command", async () 
   );
   // The CLI is the surface the runbooks tell the operator to type, so it has to
   // keep naming the flag it forwards.
-  const cli = await readFile(path.join(root, "revival"), "utf8");
+  const cliDir = path.join(root, "platform", "cli");
+  const cli = [
+    await readFile(path.join(root, "revival"), "utf8"),
+    ...(await Promise.all((await readdir(cliDir)).filter((name) => name.endsWith(".js")).sort()
+      .map((name) => readFile(path.join(cliDir, name), "utf8")))),
+  ].join("\n");
   assert.match(cli, /--fetch \[--fetch-dir DIR\]/u, "`./revival help` must still name --fetch");
 });
