@@ -84,7 +84,7 @@
   background: var(--hu-colors-red-150);
   border: none;
   cursor: pointer;
-  transition: background-color var(--transition-duration, 0.15s) ease-out;
+  transition: background-color var(--transition-duration) ease-out;
 }
 
 .dangerButton:hover {

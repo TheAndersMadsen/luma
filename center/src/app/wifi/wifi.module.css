@@ -152,7 +152,7 @@
   font-size: 15px;
   transition: background-color var(--transition-duration) ease-out,
     color var(--transition-duration) ease-out,
-    transform 120ms ease-out;
+    transform var(--transition-duration) ease-out;
 }
 .primaryButton { background: var(--hu-colors-beam-base); color: var(--hu-colors-eclipse-base); }
 .primaryButton:hover { background: var(--hu-colors-button-background-dark-primary-hover); }

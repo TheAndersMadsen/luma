@@ -51,7 +51,7 @@ test("the default contracts directory exists and holds every proto Center loads"
 test("a contracts directory Center cannot read is reported as Center's problem", async () => {
   const [cosmos, source] = await Promise.all([
     readFile(new URL("src/server/cosmos.ts", CENTER), "utf8"),
-    readFile(new URL("src/server/source.ts", CENTER), "utf8"),
+    readFile(new URL("src/server/domain/provenance.ts", CENTER), "utf8"),
   ]);
 
   // Typed at the throw site and named at the description site: a missing

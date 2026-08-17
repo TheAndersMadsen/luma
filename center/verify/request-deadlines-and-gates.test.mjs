@@ -147,7 +147,11 @@ test("the wearer's identity is resolved before the deadline clock starts", async
    * out". Center blaming a healthy Cosmos for an IdP stall is exactly the
    * misattribution this codebase keeps writing prose about.
    */
-  for (const path of ["server/cosmos.ts", "server/source.ts"]) {
+  for (const path of [
+    "server/cosmos.ts",
+    "server/domain/provenance.ts",
+    "server/domain/captures.ts",
+  ]) {
     const text = await source(path);
     for (const match of text.matchAll(/signal: AbortSignal\.timeout\([^)]*\)[^]*?\}/g)) {
       assert.ok(

@@ -20,11 +20,11 @@
   /* a soft blur so the grid reads as "behind", not gone */
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
-  animation: fade var(--transition-duration) ease-out;
+  animation: fade var(--hu-motion-transition) ease-out;
 }
 
 .backdropClosing {
-  animation: fadeOut var(--transition-duration) ease-in both;
+  animation: fadeOut var(--hu-motion-transition) ease-in both;
 }
 
 .dialog {
@@ -37,11 +37,11 @@
   background: var(--hu-colors-eclipse-base);
   box-shadow: var(--outline-shadow), var(--menu-drop-shadow);
   padding: 14px 16px 22px;
-  animation: captureOpen var(--transition-duration) ease-out both;
+  animation: captureOpen var(--hu-motion-transition) ease-out both;
 }
 
 .backdropClosing .dialog {
-  animation: captureClose var(--transition-duration) ease-in both;
+  animation: captureClose var(--hu-motion-transition) ease-in both;
 }
 
 @keyframes fade {

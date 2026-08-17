@@ -360,11 +360,11 @@
   overflow-y: auto;
   color: var(--hu-colors-white);
   background: var(--hu-colors-penumbra-200);
-  animation: detailOverlayIn var(--hu-motion-standard) ease-out both;
+  animation: detailOverlayIn var(--hu-motion-transition) ease-out both;
 }
 
 .detailOverlayClosing {
-  animation: detailOverlayOut 180ms ease-in both;
+  animation: detailOverlayOut var(--hu-motion-transition) ease-in both;
   pointer-events: none;
 }
 

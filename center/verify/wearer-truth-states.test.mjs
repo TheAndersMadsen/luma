@@ -132,7 +132,7 @@ test("the devices pane reports an unreadable status as unread, not as unpaired",
 test("the dashboard names the part that failed, using the provenance it already receives", async () => {
   const [page, server] = await Promise.all([
     source("app/page.tsx"),
-    source("server/source.ts"),
+    source("server/domain/dashboard.ts"),
   ]);
 
   // The BFF computes this per part and ships it on every five-second poll.
@@ -188,7 +188,7 @@ test("a capped page is never reported as the whole of the wearer's data", async 
     source("app/notes/search/page.tsx"),
     source("app/captures/page.tsx"),
     source("app/api/capture/captures/route.ts"),
-    source("server/source.ts"),
+    source("server/domain/captures.ts"),
   ]);
 
   // Cosmos clamps every list to 200 and nothing here asks for a second page, so
@@ -206,7 +206,11 @@ test("a capped page is never reported as the whole of the wearer's data", async 
 });
 
 test("an event with no timestamp is not dated today", async () => {
-  const server = await source("server/source.ts");
+  const [provenance, events] = await Promise.all([
+    source("server/domain/provenance.ts"),
+    source("server/domain/events.ts"),
+  ]);
+  const server = `${provenance}\n${events}`;
   // Center was the only layer that invented a value here; the proto, the store
   // columns and the sort comparator all treat the absence as real.
   assert.doesNotMatch(

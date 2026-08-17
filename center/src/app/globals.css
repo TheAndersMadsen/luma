@@ -113,6 +113,14 @@
  *   status  — mapped onto Humane's own red-100 / orange-100 so the invented
  *             #ff8f8f and #ffcf7a in the additions can die. A failure is never
  *             rendered in the caption colour; that is the one absolute rule.
+ *   motion  — two tiers and no more: feedback 300ms for a control answering
+ *             the pointer (hover, focus, a toggle settling) and transition
+ *             600ms for a larger state change (a dialog or overlay arriving).
+ *             The recovered 150/200ms literals above stay as documentation of
+ *             the Feb-2025 bundle; the overrides below are what the product
+ *             uses, so every duration resolves through this one block and the
+ *             reduced-motion rule at the bottom of this file still flattens
+ *             all of it.
  */
 :root {
   --hu-radius-surface: 16px;
@@ -125,6 +133,12 @@
   --hu-status-warning: var(--hu-colors-orange-100);
   --hu-status-live: var(--hu-colors-beam-base);
   --hu-status-off: var(--hu-colors-crater-grey-base);
+
+  --hu-motion-feedback: 300ms;
+  --hu-motion-transition: 600ms;
+  --transition-duration: var(--hu-motion-feedback);
+  --hu-motion-fast: var(--hu-motion-feedback);
+  --hu-motion-standard: var(--hu-motion-feedback);
 }
 
 @media (min-width: 1072px) {

@@ -9,18 +9,28 @@ test("runtime has no recovered dashboard dataset or data-bearing fixtures", asyn
   await assert.rejects(access(new URL("data/recovered.json", root)));
   await assert.rejects(access(new URL("src/lib/fixtures.ts", root)));
 
-  const dataSource = await source("src/server/source.ts");
+  // The data seam is the domain directory plus its compatibility barrel.
+  const { readdir } = await import("node:fs/promises");
+  const domainNames = (await readdir(new URL("src/server/domain/", root))).filter((name) =>
+    name.endsWith(".ts"),
+  );
+  const domainSources = await Promise.all(
+    domainNames.map((name) => source(`src/server/domain/${name}`)),
+  );
+  const dataSource = [await source("src/server/source.ts"), ...domainSources].join("\n");
+  const captures = await source("src/server/domain/captures.ts");
+  const provenance = await source("src/server/domain/provenance.ts");
 
   assert.doesNotMatch(dataSource, /from\s+["']@\/lib\/fixtures["']/);
-  assert.match(dataSource, /unconfigured\(\[\], "empty", WEBAPI_UNSET\)/);
+  assert.match(captures, /unconfigured\(\[\], "empty", WEBAPI_UNSET\)/);
   // The capture list degrades to an EMPTY list, never to recovered sample data.
   // `failed(…, describeWebapi(error), "empty")` is now spelled `failedWebapi([],
   // error)` — the same stand-in, through the helper that also tells an expired
   // wearer session apart from a backend outage. The stand-in is what this
   // asserts, so both the value and the fallback are pinned.
-  assert.match(dataSource, /failedWebapi\(\[\], error\)/);
+  assert.match(captures, /failedWebapi\(\[\], error\)/);
   assert.match(
-    dataSource,
+    provenance,
     /function failedWebapi[\s\S]{0,200}?failed\(data, describeWebapi\(error\), "empty"\)/,
   );
   assert.doesNotMatch(
@@ -32,7 +42,14 @@ test("runtime has no recovered dashboard dataset or data-bearing fixtures", asyn
 test("test-only fixture is explicit, synthetic and outside runtime imports", async () => {
   const fixtureUrl = new URL("verify/fixtures/synthetic-center.json", root);
   const fixture = JSON.parse(await readFile(fixtureUrl, "utf8"));
-  const runtimeSources = await Promise.all([source("src/server/source.ts")]);
+  const { readdir } = await import("node:fs/promises");
+  const domainNames = (await readdir(new URL("src/server/domain/", root))).filter((name) =>
+    name.endsWith(".ts"),
+  );
+  const runtimeSources = await Promise.all([
+    source("src/server/source.ts"),
+    ...domainNames.map((name) => source(`src/server/domain/${name}`)),
+  ]);
 
   assert.equal(fixture.synthetic, true);
   assert.match(fixture.note.data.note.text, /Not wearer data/);

@@ -315,8 +315,8 @@
   background: rgba(0, 0, 0, 0.72);
   cursor: pointer;
   min-height: 44px;
-  transition: color 0.15s ease-out, border-color 0.15s ease-out,
-    background-color 0.15s ease-out, transform 0.12s ease-out;
+  transition: color var(--transition-duration) ease-out, border-color var(--transition-duration) ease-out,
+    background-color var(--transition-duration) ease-out, transform var(--transition-duration) ease-out;
 }
 .aiMicButton:hover {
   color: var(--hu-colors-beam-base, #00ffe0);

@@ -2,13 +2,15 @@ import { NextResponse } from "next/server";
 import { isSameOriginRequest } from "@/server/auth";
 import { sourceHeaders } from "@/server/headers";
 import {
+  cleanContactString,
   createContacts,
   deleteContact,
   getContacts,
+  parseContactDraft,
   updateContact,
   type ContactDraft,
-  type Sourced,
-} from "@/server/source";
+} from "@/server/domain/contacts";
+import type { Sourced } from "@/server/domain/provenance";
 
 const MAX_BATCH = 500;
 const MAX_BODY_BYTES = 1_000_000;
@@ -37,7 +39,7 @@ export async function POST(request: Request) {
   if (!Array.isArray(body?.contacts) || body.contacts.length < 1 || body.contacts.length > MAX_BATCH) {
     return NextResponse.json({ error: `Choose between 1 and ${MAX_BATCH} contacts.` }, { status: 400 });
   }
-  const contacts = body.contacts.map(parseDraft);
+  const contacts = body.contacts.map(parseContactDraft);
   if (contacts.some((contact) => contact === null)) {
     return NextResponse.json({ error: "Every contact needs a name and valid contact fields." }, { status: 400 });
   }
@@ -49,8 +51,8 @@ export async function PUT(request: Request) {
   const early = mutationPreflight(request);
   if (early) return early;
   const body = (await request.json().catch(() => null)) as { id?: unknown; contact?: unknown } | null;
-  const id = cleanString(body?.id, 160);
-  const contact = parseDraft(body?.contact);
+  const id = cleanContactString(body?.id, 160);
+  const contact = parseContactDraft(body?.contact);
   if (!id || !contact) {
     return NextResponse.json({ error: "A contact id and name are required." }, { status: 400 });
   }
@@ -61,7 +63,7 @@ export async function DELETE(request: Request) {
   const early = mutationPreflight(request);
   if (early) return early;
   const body = (await request.json().catch(() => null)) as { id?: unknown } | null;
-  const id = cleanString(body?.id, 160);
+  const id = cleanContactString(body?.id, 160);
   if (!id) return NextResponse.json({ error: "A contact id is required." }, { status: 400 });
   return mutationResult(await deleteContact(id), { deleted: true });
 }
@@ -99,32 +101,4 @@ function mutationResult<T extends Record<string, unknown>>(
     { error: result.state === "absent" ? "Connect a Pin before managing contacts." : "Contacts couldn’t be saved." },
     { status: result.state === "absent" ? 503 : 502, headers: sourceHeaders(result) },
   );
-}
-
-function parseDraft(value: unknown): ContactDraft | null {
-  if (!value || typeof value !== "object") return null;
-  const input = value as Record<string, unknown>;
-  const displayName = cleanString(input.displayName, 160);
-  if (!displayName) return null;
-  const phoneNumbers = cleanList(input.phoneNumbers, 10, 80);
-  const emails = cleanList(input.emails, 10, 254);
-  if (!phoneNumbers || !emails) return null;
-  return {
-    displayName,
-    phoneNumbers,
-    emails,
-    trusted: input.trusted === true,
-    emergency: input.emergency === true,
-    organization: cleanString(input.organization, 160) || null,
-  };
-}
-
-function cleanString(value: unknown, max: number): string {
-  return typeof value === "string" ? value.trim().slice(0, max) : "";
-}
-
-function cleanList(value: unknown, maxItems: number, maxLength: number): string[] | null {
-  if (value === undefined) return [];
-  if (!Array.isArray(value) || value.length > maxItems) return null;
-  return value.map((item) => cleanString(item, maxLength)).filter(Boolean);
 }

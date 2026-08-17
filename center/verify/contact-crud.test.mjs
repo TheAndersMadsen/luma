@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const route = await readFile(new URL("../src/app/api/contacts/route.ts", import.meta.url), "utf8");
-const source = await readFile(new URL("../src/server/source.ts", import.meta.url), "utf8");
+const source = await readFile(new URL("../src/server/domain/contacts.ts", import.meta.url), "utf8");
 const view = await readFile(new URL("../src/app/settings/contacts/ContactsView.tsx", import.meta.url), "utf8");
 
 test("contacts route exposes bounded same-origin CRUD", () => {

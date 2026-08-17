@@ -66,23 +66,31 @@ test("every caller of a bearer-carrying helper answers an expired session as one
   // The scan must actually find the callers; a regex that matches nothing would
   // pass every assertion above without checking anything.
   assert.ok(
-    reached.includes("server/source.ts") &&
-      reached.includes("app/api/settings/wifi/route.ts") &&
-      reached.includes("app/api/settings/privacy/route.ts"),
+    reached.includes("server/domain/captures.ts") &&
+      reached.includes("server/domain/settings.ts") &&
+      reached.includes("app/api/capture/memory/[uuid]/file/[index]/route.ts"),
     `the helper scan found only ${JSON.stringify(reached)}`,
   );
 });
 
-test("the module that owns the typed error never discards one", async () => {
-  const seam = await readFile(new URL("server/source.ts", ROOT), "utf8");
+test("the modules that own the typed error never discard one", async () => {
   // Every catch in the data seam binds its error. A bare `catch {}` here is
   // exactly how getCaptureFrame re-hid the failure the typed error was
-  // introduced to expose, and it leaves no log line either.
-  assert.doesNotMatch(
-    seam,
-    /\}\s*catch\s*\{/,
-    "src/server/source.ts has a bare catch; bind the error and either rethrow SessionExpiredError or log it",
+  // introduced to expose, and it leaves no log line either. The seam is the
+  // whole domain directory, enumerated so a new module is covered on the day it
+  // is written.
+  const domain = (await readdir(new URL("server/domain/", ROOT))).filter((name) =>
+    name.endsWith(".ts"),
   );
+  assert.ok(domain.length >= 7, `the domain seam has moved: ${JSON.stringify(domain)}`);
+  for (const name of domain) {
+    const seam = await readFile(new URL(`server/domain/${name}`, ROOT), "utf8");
+    assert.doesNotMatch(
+      seam,
+      /\}\s*catch\s*\{/,
+      `src/server/domain/${name} has a bare catch; bind the error and either rethrow SessionExpiredError or log it`,
+    );
+  }
 });
 
 /*
@@ -109,7 +117,8 @@ test("the module that owns the typed error never discards one", async () => {
  */
 
 /** Modules whose exports can throw the typed error at their caller. */
-const SEAM_MODULES = /^(?:@\/server\/|\.\.?\/)(?:cosmos|source|channel)$/;
+const SEAM_MODULES =
+  /^(?:@\/server\/|(?:\.\.?\/)+)(?:cosmos|source|channel|(?:domain\/)?(?:provenance|notes|captures|events|account|contacts|dashboard))$/;
 
 /** Names that reach `requestBearer()` and therefore let the expiry out. */
 const PROPAGATORS = [
@@ -129,7 +138,18 @@ const PROPAGATORS = [
 ];
 
 /** The seam modules themselves own every propagator, imported or not. */
-const SEAM_FILES = ["server/cosmos.ts", "server/source.ts", "server/channel.ts"];
+const SEAM_FILES = [
+  "server/cosmos.ts",
+  "server/source.ts",
+  "server/channel.ts",
+  "server/domain/provenance.ts",
+  "server/domain/notes.ts",
+  "server/domain/captures.ts",
+  "server/domain/events.ts",
+  "server/domain/account.ts",
+  "server/domain/contacts.ts",
+  "server/domain/dashboard.ts",
+];
 
 /**
  * Catch bodies that classify the error for the caller instead of describing it.
@@ -251,10 +271,10 @@ test("no catch on a bearer-carrying call discards an expired session", async () 
   // Anti-vacuity: the sweep must have reached the seam itself and the routes
   // that answer for it, or an import-shape change would silently empty it.
   for (const owner of [
-    "server/source.ts",
+    "server/domain/captures.ts",
+    "server/domain/provenance.ts",
+    "server/domain/settings.ts",
     "server/channel.ts",
-    "app/api/settings/wifi/route.ts",
-    "app/api/settings/privacy/route.ts",
     "app/api/assistant/stream/route.ts",
     "app/api/capture/memory/[uuid]/route.ts",
   ]) {
@@ -263,7 +283,7 @@ test("no catch on a bearer-carrying call discards an expired session", async () 
 
   // The classifiers a catch is allowed to delegate to must themselves name the
   // typed error, or delegation would be a hole rather than a handling.
-  const seam = await readFile(new URL("server/source.ts", ROOT), "utf8");
+  const seam = await readFile(new URL("server/domain/provenance.ts", ROOT), "utf8");
   for (const classifier of CLASSIFIERS) {
     const declaration = new RegExp(
       `function ${classifier}[\\s\\S]{0,240}?instanceof SessionExpiredError`,
