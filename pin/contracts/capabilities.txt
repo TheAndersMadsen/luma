@@ -58,7 +58,7 @@ Routed tool names in v1/v3/v4 function schemas: **22**
 
 ## Deterministic Fast-Path Planners
 
-Count: **23** plan functions across **8** modules in `synapse/`.
+Count: **23** plan functions across **10** modules in `synapse/`.
 
 - `plan_call_control` in `communications.rs`
 - `plan_call_person` in `communications.rs`
@@ -67,6 +67,7 @@ Count: **23** plan functions across **8** modules in `synapse/`.
 - `plan_message_search_continuation` in `communications.rs`
 - `plan_message_search_request` in `communications.rs`
 - `plan_read_messages` in `communications.rs`
+- `plan_feature_gated_action` in `feature_policy.rs`
 - `plan_message_action` in `messaging.rs`
 - `plan_ai_music_action` in `music.rs`
 - `plan_catalog_or_contextual_music_action` in `music.rs`
@@ -75,12 +76,11 @@ Count: **23** plan functions across **8** modules in `synapse/`.
 - `plan_local_music_action` in `music.rs`
 - `plan_visual_music_action` in `music.rs`
 - `plan_visual_music_failure_response` in `music.rs`
-- `plan_feature_gated_action` in `native_device_actions.rs`
 - `plan_native_device_action` in `native_device_actions.rs`
 - `plan_native_device_action_with_features` in `native_device_actions.rs`
-- `plan_restored_stock_mutation` in `native_device_actions.rs`
 - `plan_note` in `notes.rs`
 - `plan_nutrition_action` in `nutrition.rs`
+- `plan_restored_stock_mutation` in `stock_mutations.rs`
 - `plan_translation_action` in `translation.rs`
 - `plan_weather_prompt` in `weather.rs`
 

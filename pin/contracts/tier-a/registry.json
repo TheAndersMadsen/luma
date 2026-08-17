@@ -822,7 +822,7 @@
         "score"
       ],
       "status": "live",
-      "emitter": "runtime/core/src/services/aibus/understand.rs",
+      "emitter": "runtime/core/src/services/aibus/understand/agentic.rs",
       "consumers": [
         "platform/deploy/acceptance/pin/pinbox/shared/logcat.mjs"
       ]
@@ -834,7 +834,7 @@
         "intent"
       ],
       "status": "live",
-      "emitter": "runtime/core/src/services/aibus/understand.rs",
+      "emitter": "runtime/core/src/services/aibus/understand/agentic.rs",
       "consumers": [
         "platform/deploy/acceptance/pin/pinbox/shared/logcat.mjs"
       ]
@@ -847,7 +847,7 @@
         "score"
       ],
       "status": "live",
-      "emitter": "runtime/core/src/services/aibus/understand.rs",
+      "emitter": "runtime/core/src/services/aibus/understand/agentic.rs",
       "consumers": [
         "platform/deploy/acceptance/pin/pinbox/shared/logcat.mjs"
       ]
@@ -915,7 +915,7 @@
         "status"
       ],
       "status": "live",
-      "emitter": "runtime/core/src/services/aibus/understand.rs",
+      "emitter": "runtime/core/src/services/aibus/understand/resume.rs",
       "consumers": [
         "platform/deploy/acceptance/pin/physical-prompt-harness.mjs"
       ]

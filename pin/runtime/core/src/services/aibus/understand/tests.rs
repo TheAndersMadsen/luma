@@ -181,7 +181,7 @@ async fn planner_panic_is_forwarded_as_a_sanitized_error_without_a_turn() {
 
 #[test]
 fn production_agentic_path_cannot_construct_synthetic_turn_frames() {
-    let source = include_str!("../understand.rs");
+    let source = include_str!("agentic.rs");
     let orchestration_start = source
         .find("async fn run_agentic_orchestration")
         .expect("agentic orchestration must exist");
@@ -1465,21 +1465,20 @@ fn the_generated_playlist_planner_is_wired_into_the_pre_agentic_fast_path() {
     // fine), so pin the ROUTE: the fast path must plan it before any model
     // round trip. Same failure class as the earlier "cascade ran after
     // agentic so deterministic music never fired" bug.
-    let source = include_str!("../understand.rs");
-    let fast_path = source
+    let fast_path_source = include_str!("fast_path.rs");
+    let fast_path = fast_path_source
         .find("async fn run_local_text_fast_path")
         .expect("fast path must exist");
-    let cascade = source
+    include_str!("cascade.rs")
         .find("async fn run_text_cascade")
         .expect("cascade must exist");
-    let planned_in_fast_path = source[fast_path..]
+    let planned_in_fast_path = fast_path_source[fast_path..]
         .find("plan_generated_playlist_action")
         .map(|offset| fast_path + offset)
         .expect("the fast path must plan the generated playlist");
     assert!(
-        planned_in_fast_path < cascade || fast_path > cascade,
-        "plan_generated_playlist_action must be reachable from \
-             run_local_text_fast_path, not only from the post-agentic cascade"
+        planned_in_fast_path > fast_path,
+        "the generated playlist must be planned inside the fast path itself, before any model round trip"
     );
 }
 
@@ -1864,15 +1863,13 @@ async fn current_vision_request_without_image_still_returns_understand_scene() {
 
 #[test]
 fn ordinary_image_route_runs_the_local_fast_path_once_before_generic_vision() {
-    let source = include_str!("../understand.rs");
+    let source = include_str!("cascade.rs");
     let start = source
         .find("async fn understand_inner")
         .expect("Understand implementation must exist");
-    let end = source[start..]
-        .find("pub async fn understand(")
-        .map(|offset| start + offset)
-        .expect("public Understand entry point must follow the implementation");
-    let implementation = &source[start..end];
+    // `understand_inner` is the final method in cascade.rs; the module's
+    // closing brace bounds it.
+    let implementation = &source[start..];
 
     assert_eq!(
         implementation.matches(".run_local_text_fast_path(").count(),

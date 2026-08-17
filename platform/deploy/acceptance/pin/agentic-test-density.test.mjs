@@ -11,7 +11,16 @@ const LINEAGES = Object.freeze([
     name: "understand",
     source: [
       "runtime/core/src/services/aibus/understand.rs",
+      "runtime/core/src/services/aibus/understand/agentic.rs",
+      "runtime/core/src/services/aibus/understand/cascade.rs",
+      "runtime/core/src/services/aibus/understand/clock_family.rs",
+      "runtime/core/src/services/aibus/understand/fast_path.rs",
+      "runtime/core/src/services/aibus/understand/grounding.rs",
+      "runtime/core/src/services/aibus/understand/persistence.rs",
       "runtime/core/src/services/aibus/understand/predicates.rs",
+      "runtime/core/src/services/aibus/understand/request_prep.rs",
+      "runtime/core/src/services/aibus/understand/resume.rs",
+      "runtime/core/src/services/aibus/understand/streaming.rs",
     ],
     tests: ["runtime/core/src/services/aibus/understand/tests.rs"],
     discoverSourceUnder: ["runtime/core/src/services/aibus/understand"],
@@ -165,7 +174,9 @@ test("mutation fixture: an omitted extracted source makes the manifest guard red
   ];
   assert.throws(
     () => validateLineageManifest(fixture),
-    /source is omitted from the density manifest: .*understand\/predicates\.rs/,
+    // Discovery reports alphabetically, so the first extracted module is the
+    // one the guard names.
+    /source is omitted from the density manifest: .*understand\/agentic\.rs/,
   );
 });
 
