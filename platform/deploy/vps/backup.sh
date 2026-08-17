@@ -220,13 +220,23 @@ PY
 
   mkdir -p "$operator"
   chmod 700 "$operator"
-  # Copy the whole directory: signing.env names one store, but the bootstrap
-  # keystore beside it is just as unrecoverable and is referenced by nothing.
-  for name in "$signing"/*; do
+  # Copy the whole tree: signing.env names one store, but the bootstrap
+  # keystore beside it is just as unrecoverable and is referenced by nothing —
+  # and the provisioning flow now stores per-device identity material under
+  # device-identities/<device-id>/, which is exactly the credential class this
+  # bundle exists to carry. Regular files only, at any depth; a symlink or
+  # anything else stops the capture rather than half-succeeding.
+  while IFS= read -r name; do
+    relative="${name#"$signing"/}"
+    if [[ -d "$name" && ! -L "$name" ]]; then
+      mkdir -p "$operator/$relative"
+      chmod 700 "$operator/$relative"
+      continue
+    fi
     [[ -f "$name" && ! -L "$name" ]] || die "operator signing material contains a non-regular object: $name"
     [[ -s "$name" ]] || die "operator signing material is empty: $name"
-    install -m 600 "$name" "$operator/$(basename -- "$name")"
-  done
+    install -m 600 "$name" "$operator/$relative"
+  done < <(find "$signing" -mindepth 1 -print | LC_ALL=C sort)
   note "captured operator half: $operator"
 }
 
@@ -240,16 +250,22 @@ write_recovery_index() {
 import hashlib,json,os,stat,sys
 bundle,backup_id,remote,remote_root,key_material=sys.argv[1:]
 def inventory(directory):
+    # Walk recursively: the operator half now carries per-device identity
+    # material under device-identities/<device-id>/. Regular files at any
+    # depth are hashed under their relative path; anything else stops the
+    # index rather than describing a bundle it does not understand.
     items=[]
     if not os.path.isdir(directory): return items
-    for name in sorted(os.listdir(directory)):
-        path=os.path.join(directory,name)
-        metadata=os.lstat(path)
-        if not stat.S_ISREG(metadata.st_mode): raise SystemExit(f"unexpected object in {directory}: {name}")
-        value=hashlib.sha256()
-        with open(path,"rb") as stream:
-            for chunk in iter(lambda:stream.read(1024*1024),b""): value.update(chunk)
-        items.append({"path":name,"size":metadata.st_size,"sha256":value.hexdigest()})
+    for root,dirs,names in os.walk(directory):
+        dirs.sort()
+        for name in sorted(names):
+            path=os.path.join(root,name)
+            metadata=os.lstat(path)
+            if not stat.S_ISREG(metadata.st_mode): raise SystemExit(f"unexpected object in {directory}: {name}")
+            value=hashlib.sha256()
+            with open(path,"rb") as stream:
+                for chunk in iter(lambda:stream.read(1024*1024),b""): value.update(chunk)
+            items.append({"path":os.path.relpath(path,directory),"size":metadata.st_size,"sha256":value.hexdigest()})
     return items
 keys=[]
 for line in key_material.splitlines():
