@@ -15,6 +15,10 @@ backups stay outside the source tree. Verification and build internals stay
 behind the component boundary they protect; there is no root miscellaneous
 scripts or tools area.
 
+The [stock-feel architecture migration and release guide](docs/stock-feel-migration-goal.md)
+is the execution contract for the next organization, language, visual-system,
+validation, VPS deployment, and owned-Pin installation pass.
+
 ## Run locally
 
 Requirements: Docker with Compose 2.33.1+, plus the Node.js and Rust versions

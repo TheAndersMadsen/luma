@@ -1,0 +1,83 @@
+# The fast source checks: formatting, focused component suites, repository
+# layout, wire equivalence, and the release source gate. Every step is a
+# command a contributor can run locally (see CONTRIBUTING.md); nothing here
+# talks to a device, a VPS, or a provider.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  layout-and-wire:
+    name: layout, wire equivalence, contracts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: repository layout
+        run: sh platform/deploy/acceptance/layout.sh
+      - name: wire divergence inventory
+        run: node --test platform/deploy/acceptance/wire-divergence.test.mjs
+      - name: wire equivalence gate
+        run: node --test platform/deploy/acceptance/wire-equivalence.test.mjs
+
+  center:
+    name: center formatting and tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: install (external cache)
+        env:
+          NPM_CONFIG_CACHE: ${{ runner.temp }}/npm-cache
+        run: npm ci --prefix center
+      - name: focused component checks
+        run: npm --prefix center test
+      - name: clean in-tree residue
+        run: rm -rf center/node_modules
+
+  cosmos:
+    name: cosmos formatting and tests
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TARGET_DIR: ${{ runner.temp }}/cosmos-target
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: formatting
+        run: cargo fmt --all --check --manifest-path cosmos/Cargo.toml
+      - name: focused component checks
+        run: cargo test --workspace --locked --manifest-path cosmos/Cargo.toml
+
+  pin-runtime:
+    name: pin runtime formatting and tests
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TARGET_DIR: ${{ runner.temp }}/pin-target
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: formatting
+        run: cargo fmt --check --manifest-path pin/runtime/core/Cargo.toml
+      - name: focused component checks
+        run: cargo test --locked --manifest-path pin/runtime/core/Cargo.toml
+
+  source-gate:
+    name: release source gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: release check (VPS profile scope)
+        run: ./revival release check
