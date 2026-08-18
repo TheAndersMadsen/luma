@@ -12,7 +12,7 @@
     "start": "next start -p 4000",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
-    "test": "node --test verify/*.test.mjs",
+    "test": "node --experimental-strip-types --test verify/*.test.mjs",
     "test:ui": "vitest run",
     "test:all": "npm run typecheck && npm test && npm run test:ui",
     "test:share": "node --experimental-strip-types --test verify/share-token.test.mjs"
