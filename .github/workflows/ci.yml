@@ -61,7 +61,7 @@ jobs:
     name: cosmos formatting and tests
     runs-on: ubuntu-latest
     env:
-      CARGO_TARGET_DIR: ${{ runner.temp }}/cosmos-target
+      CARGO_TARGET_DIR: ${{ github.workspace }}/../cosmos-target
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.91.1
@@ -76,7 +76,7 @@ jobs:
     name: pin runtime formatting and tests
     runs-on: ubuntu-latest
     env:
-      CARGO_TARGET_DIR: ${{ runner.temp }}/pin-target
+      CARGO_TARGET_DIR: ${{ github.workspace }}/../pin-target
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.91.1
