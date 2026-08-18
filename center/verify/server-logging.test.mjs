@@ -58,7 +58,13 @@ test("a log line reaches the process's own stdout and stderr with console destro
   `;
   const child = spawnSync(
     process.execPath,
-    ["--experimental-strip-types", "--input-type=module", "-e", probe],
+    [
+      "--no-warnings",
+      "--experimental-strip-types",
+      "--input-type=module",
+      "-e",
+      probe,
+    ],
     { encoding: "utf8" },
   );
 
