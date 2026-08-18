@@ -1,8 +1,8 @@
 //! Grounded answer for "what can you do".
 //!
 //! Experience-roadmap item 9a. Capability questions are the single most common
-//! intent in the captured carry corpus — 3 of 17 distinct utterances — and the
-//! real carry cloud routed every one to its `HumaneSupport` lookup. We had no
+//! intent in the captured cosmos corpus — 3 of 17 distinct utterances — and the
+//! real cosmos cloud routed every one to its `HumaneSupport` lookup. We had no
 //! equivalent: nothing in the prompt describes this server's capabilities, so the
 //! model improvised a list.
 //!
@@ -251,14 +251,14 @@ pub fn is_unqualified_capability_question(utterance: &str) -> bool {
 mod tests {
     use super::*;
 
-    /// The three real utterances from the carry capture, and the distinction the
+    /// The three real utterances from the cosmos capture, and the distinction the
     /// matcher exists to make.
     #[test]
     fn the_captured_capability_questions_split_qualified_from_general() {
         for general in ["hello what can you do", "what else can you do"] {
             assert!(
                 is_unqualified_capability_question(general),
-                "{general:?} is a general capability question (observed in the carry capture)",
+                "{general:?} is a general capability question (observed in the cosmos capture)",
             );
         }
         assert!(
@@ -269,7 +269,7 @@ mod tests {
         );
     }
 
-    /// REGRESSION: an utterance carrying a real command must not be hijacked.
+    /// REGRESSION: an utterance containing a real command must not be hijacked.
     ///
     /// The matcher originally accepted anything ENDING with the capability phrase,
     /// so "call mom what can you do" and "take a note what can you do" were both
@@ -277,7 +277,7 @@ mod tests {
     /// capability list instead of the thing they asked for. Leading conversational
     /// filler is fine; leading content is not.
     #[test]
-    fn compound_utterances_carrying_a_command_are_not_hijacked() {
+    fn compound_utterances_containing_a_command_are_not_hijacked() {
         for compound in [
             "take a note what can you do",
             "play music and tell me what can you do",

@@ -1021,7 +1021,7 @@ mod live_tests {
         for result in &results.results {
             assert!(
                 result.source_url.starts_with("http"),
-                "every result must carry a usable URL: {result:?}"
+                "every result must contain a usable URL: {result:?}"
             );
             assert!(
                 !result.title.is_empty(),

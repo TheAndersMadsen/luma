@@ -41,7 +41,7 @@ type ConsoleStatus = "loading" | "unconfigured" | "error" | "ready";
 /**
  * One feature flag as the backend reports it.
  *
- * `observed` is NOT "what live carry was captured serving", whatever this page
+ * `observed` is NOT "what live cosmos was captured serving", whatever this page
  * used to claim in the copy right above the table. The backend returns this
  * deployment's own coded default with runtime overrides suppressed — so for
  * every flag nobody has overridden, `observed === effective`, and the deviations
@@ -62,7 +62,7 @@ function explainUpstream(status: number): string {
     return "The backend answered 404 — this deployment does not serve the operator API.";
   }
   if (status === 503) {
-    return "This dashboard has no admin token configured, so it cannot write. Set CARRY_ADMIN_TOKEN on both ends.";
+    return "This dashboard has no admin token configured, so it cannot write. Set COSMOS_ADMIN_TOKEN on both ends.";
   }
   if (status === 502) {
     return "The backend did not answer — it is down, or unreachable from this dashboard.";
@@ -356,9 +356,9 @@ export default function AdminPage() {
               the backend. It fails closed by design.
             </p>
             <ul className={styles.envList}>
-              <li><code>CARRY_ADMIN_TOKEN</code> — the same secret on the dashboard and the ai-bus workload</li>
-              <li><code>CARRY_ATTEST_CA_CERT</code> / <code>CARRY_ATTEST_CA_KEY</code> — the CA the edge trusts, to mint device credentials</li>
-              <li><code>CARRY_DUC_CA_CERT</code> / <code>CARRY_DUC_CA_KEY</code> — the DeviceUser-issuing CA</li>
+              <li><code>COSMOS_ADMIN_TOKEN</code> — the same secret on the dashboard and the ai-bus workload</li>
+              <li><code>COSMOS_ATTEST_CA_CERT</code> / <code>COSMOS_ATTEST_CA_KEY</code> — the CA the edge trusts, to mint device credentials</li>
+              <li><code>COSMOS_DUC_CA_CERT</code> / <code>COSMOS_DUC_CA_KEY</code> — the DeviceUser-issuing CA</li>
             </ul>
           </section>
         )}

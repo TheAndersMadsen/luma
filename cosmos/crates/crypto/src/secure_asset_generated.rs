@@ -3,7 +3,7 @@
 extern crate alloc;
 
 #[allow(unused_imports, dead_code)]
-pub mod carry {
+pub mod cosmos {
 
     #[allow(unused_imports, dead_code)]
     pub mod krypton {
@@ -700,4 +700,4 @@ pub mod carry {
             }
         } // pub mod secureasset
     } // pub mod krypton
-} // pub mod carry
+} // pub mod cosmos

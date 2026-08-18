@@ -593,7 +593,7 @@ impl CaptureService for CaptureServiceImpl {
         info!(">>> Capture.GetCaptureConfig");
         Ok(Response::new(GetCaptureConfigResponse {
             // `observed`: stock CCAPS requests this value before invoking the
-            // photography burst, and the shipped Carry path returns three.
+            // photography burst, and the shipped Cosmos path returns three.
             // Keep the local transport fallback wire-compatible so a remote
             // outage does not silently downgrade Best Shot to a single frame.
             num_photos_per_burst: 3,

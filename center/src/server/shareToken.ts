@@ -2,8 +2,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { EncryptJWT, jwtDecrypt } from "jose";
 
 const SHARE_TTL_SECONDS = 7 * 24 * 60 * 60;
-const SHARE_ISSUER = "humane-carry-clone:center";
-const SHARE_AUDIENCE = "humane-carry-clone:public-share";
+const SHARE_ISSUER = "humane-cosmos-clone:center";
+const SHARE_AUDIENCE = "humane-cosmos-clone:public-share";
 
 function isCanonicalCompactJwe(token: string): boolean {
   const parts = token.split(".");
@@ -20,10 +20,10 @@ function isCanonicalCompactJwe(token: string): boolean {
 }
 
 function key(): Uint8Array {
-  const secret = process.env.CARRY_SHARE_TOKEN_SECRET?.trim();
-  if (!secret) throw new Error("CARRY_SHARE_TOKEN_SECRET is required to mint share links");
+  const secret = process.env.COSMOS_SHARE_TOKEN_SECRET?.trim();
+  if (!secret) throw new Error("COSMOS_SHARE_TOKEN_SECRET is required to mint share links");
   if (Buffer.byteLength(secret, "utf8") < 32) {
-    throw new Error("CARRY_SHARE_TOKEN_SECRET must contain at least 32 bytes");
+    throw new Error("COSMOS_SHARE_TOKEN_SECRET must contain at least 32 bytes");
   }
   // A256GCM requires exactly 256 bits. Hashing also keeps arbitrary operator
   // secret lengths out of jose's key-shape decisions.
@@ -37,7 +37,7 @@ function key(): Uint8Array {
  */
 export async function mintShareToken(memoryUuid: string, userId: string): Promise<string> {
   return new EncryptJWT({ memoryUuid, userId })
-    .setProtectedHeader({ alg: "dir", enc: "A256GCM", typ: "carry-share+jwe" })
+    .setProtectedHeader({ alg: "dir", enc: "A256GCM", typ: "cosmos-share+jwe" })
     .setIssuer(SHARE_ISSUER)
     .setAudience(SHARE_AUDIENCE)
     .setJti(randomUUID())

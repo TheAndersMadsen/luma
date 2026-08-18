@@ -342,7 +342,7 @@ export function describeCodexBridge(
  * recognised provider error is evidence of nothing — it is reported as
  * `no_llm_evidence`, never as success.
  *
- * Action rows now carry the arguments they were dispatched with — e.g.
+ * Action rows now contain the arguments they were dispatched with — e.g.
  * `Action: PlayMusic {"Title":"Purple Rain","Artist":"Prince"}`, where it used
  * to be `"Action: PlayMusic"` alone. Classification here is unaffected: it
  * exact-matches known failure and refusal sentences, and everything else falls
@@ -486,7 +486,7 @@ export function summarizeProviderHealth(
   };
 
   if (configured.provider === "echo") {
-    // Recorded turns carry no provider tag, so any stored failure here may
+    // Recorded turns contain no provider tag, so any stored failure here may
     // belong to whatever was configured before echo. Judging echo by them
     // would be a fabricated verdict.
     return {

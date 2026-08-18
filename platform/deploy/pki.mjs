@@ -21,7 +21,7 @@ import { fileURLToPath } from "node:url";
 const SELF_PATH = fileURLToPath(import.meta.url);
 const SOURCE_ROOT = resolve(dirname(SELF_PATH), "../..");
 const MAX_PEM_BYTES = 64 * 1024;
-const DEVICE_USER_SUBJECT = "/O=Humane/OU=DeviceUser/CN=Carry Clone DeviceUser CA";
+const DEVICE_USER_SUBJECT = "/O=Humane/OU=DeviceUser/CN=Cosmos Clone DeviceUser CA";
 
 export class PkiToolError extends Error {
   constructor(code, message) {

@@ -132,11 +132,11 @@ test("requires implemented evidence for synthetic fixtures", (t) => {
 test("rejects the legacy transcript-fixture directory", (t) => {
   const root = makeRoot(t);
   writeBaseline(root);
-  mkdirSync(join(root, "pin", "contracts", "carry-golden"), { recursive: true });
+  mkdirSync(join(root, "pin", "contracts", "cosmos-golden"), { recursive: true });
 
   const result = runPolicy(root);
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /pin\/contracts\/carry-golden is forbidden/);
+  assert.match(result.stderr, /pin\/contracts\/cosmos-golden is forbidden/);
 });
 
 test("rejects malformed JSON fixtures", (t) => {

@@ -177,7 +177,7 @@ test("this file's own anchoring rule is enforced, not merely stated", () => {
     const flags = pattern.slice(pattern.lastIndexOf("/") + 1);
     if (!pattern.startsWith("/^") || !flags.includes("m")) unanchored.push(pattern);
   }
-  assert.ok(calls.length >= 40, `expected this file to still carry its pins; found only ${calls.length}`);
+  assert.ok(calls.length >= 40, `expected this file to still contain its pins; found only ${calls.length}`);
   assert.deepEqual(
     unanchored,
     [],
@@ -243,9 +243,9 @@ test("the canary reaches Center's own data plane, not only ai-bus directly", () 
 
 test("the wearer-plane gate is armed on the post-cutover canaries and nowhere else", () => {
   const armed = [...deploy.matchAll(/--require-wearer-plane/g)];
-  assert.equal(armed.length, 2, "exactly the two post-cutover canary invocations carry the flag");
+  assert.equal(armed.length, 2, "exactly the two post-cutover canary invocations contain the flag");
 
-  // The candidate-validation canaries must NOT carry it: at that point the
+  // The candidate-validation canaries must NOT contain it: at that point the
   // release has not been accepted and the gate would fail for reasons that are
   // not defects. The two that must are the pair that brackets the cutover — the
   // final quiesced run and the run after the public edge is activated.
@@ -261,7 +261,7 @@ test("the wearer-plane gate is armed on the post-cutover canaries and nowhere el
     /^\s*--require-owner-spotify --require-wearer-plane --cookie-file "\$owner_canary_cookie"$/m,
     "the last gate before acceptance must exercise the wearer data plane",
   );
-  // …and nothing earlier than the cutover may carry the flag with a cookie jar,
+  // …and nothing earlier than the cutover may contain the flag with a cookie jar,
   // which is what would make the "post-cutover" name a fiction.
   assert.doesNotMatch(
     deploy.slice(0, activation),
@@ -284,24 +284,24 @@ test("the canary keeps saying which wearer coverage it does not have", () => {
   assert.match(canary, /^\s*\|\| warn "the sealed-bearer wearer plane is NOT proven:/m);
   assert.match(canary, /^\s*\(\(wearer_plane_proven\)\) \\$/m);
   assert.match(canary, /^\s*warn "authenticated OIDC code exchange remains unknown:/m);
-  // Center's cookie is `carry_tokens` — TOKENS_COOKIE in center/src/server/auth.ts,
-  // chunked as `carry_tokens.0` / `carry_tokens.1`. This pin used to name
-  // `__carry_tokens`, an identifier that exists nowhere in Center: anyone
+  // Center's cookie is `cosmos_tokens` — TOKENS_COOKIE in center/src/server/auth.ts,
+  // chunked as `cosmos_tokens.0` / `cosmos_tokens.1`. This pin used to name
+  // `__cosmos_tokens`, an identifier that exists nowhere in Center: anyone
   // reconciling the gate against Center's source found nothing and had to guess
   // whether the gate was stale or the underscores were a chunk-prefix convention.
   // canary.sh's runtime refusal always used the real name, so the doc and the
   // code disagreed with only the doc pinned.
   assert.match(
     common,
-    /^# does NOT hold the separate `carry_tokens` manifest and chunk cookies that$/m,
+    /^# does NOT hold the separate `cosmos_tokens` manifest and chunk cookies that$/m,
     "write_owner_canary_cookie must state what it does not mint, in Center's own vocabulary",
   );
   assert.match(
     canary,
-    /^\s*if grep -q 'carry_tokens' "\$cookie_file"; then$/m,
+    /^\s*if grep -q 'cosmos_tokens' "\$cookie_file"; then$/m,
     "the wearer-plane gate must refuse a jar that carries wearer token material",
   );
-  assert.doesNotMatch(canary + common, /__carry_tokens/);
+  assert.doesNotMatch(canary + common, /__cosmos_tokens/);
 
   /*
    * This used to be an absolute ban on the canary claiming the wearer plane was
@@ -365,7 +365,7 @@ test("a failed status probe names the endpoint, and a refused one still fails lo
     common,
     /^\s*\|\| fail "HTTP canary expected \$expected but received \$actual: \$\{target:-unknown target\}"$/m,
   );
-  // The URL only. Header values carry the admin roster and web-projection
+  // The URL only. Header values contain the admin roster and web-projection
   // tokens on other requests through this same helper's sibling.
   assert.match(common, /^\s*http:\/\/\*\|https:\/\/\*\) target="\$argument"; break ;;$/m);
   assert.doesNotMatch(common, /fail "HTTP canary expected \$expected but received \$actual"/);
@@ -439,17 +439,17 @@ test("the owner Spotify gate reports a device error loudly instead of swallowing
 });
 
 test("staging runs its Center data plane under the production identity too", () => {
-  // Pass 1 injects CARRY_PRINCIPAL, which no production deployment sets, so its
+  // Pass 1 injects COSMOS_PRINCIPAL, which no production deployment sets, so its
   // `live` verdict was satisfied by that header alone and said nothing about the
   // wearer bearer chain. Pass 2 removes it and asserts the honest contract.
   assert.match(staging, /^\s*--env-file "\$projection_work\/center-production-identity\.env" \\$/m);
   assert.match(
     staging,
-    /^production_identity=\{key:value for key,value in center\.items\(\) if key!="CARRY_PRINCIPAL"\}$/m,
+    /^production_identity=\{key:value for key,value in center\.items\(\) if key!="COSMOS_PRINCIPAL"\}$/m,
   );
   assert.match(staging, /^\s*raise SystemExit\("the production Center projection still carries a static principal"\)$/m);
   assert.match(staging, /^center_production_identity_container="\$\{scope\}-center-production-identity"$/m);
-  assert.match(staging, /^\s*'test -z "\$\{CARRY_PRINCIPAL:-\}"' \\$/m);
+  assert.match(staging, /^\s*'test -z "\$\{COSMOS_PRINCIPAL:-\}"' \\$/m);
 
   // Same honest-failure contract as the canary, so the two gates cannot drift
   // into disagreeing about what a healthy identity-less read looks like.
@@ -458,12 +458,12 @@ test("staging runs its Center data plane under the production identity too", () 
   assert.match(staging, /^assert "authenticated edge principal required" in detail, \($/m);
   assert.match(staging, /^\s*"the notes read returned the owner's rows with no owner identity present"$/m);
 
-  // CARRY_PRINCIPAL must remain a staging-only injection: setting it in compose
+  // COSMOS_PRINCIPAL must remain a staging-only injection: setting it in compose
   // would seal every wearer's notes under one deployment-wide key.
   for (const file of ["compose.yaml", "platform/compose/production.yaml"]) {
     assert.doesNotMatch(
       fs.readFileSync(path.join(root, file), "utf8"),
-      /^\s*CARRY_PRINCIPAL:/m,
+      /^\s*COSMOS_PRINCIPAL:/m,
       `${file} must never set a deployment-wide principal`,
     );
   }
@@ -568,7 +568,7 @@ test("the deploy measures and records the public ingress outage it imposes on th
   // quiesce_ingress_services stops the cloudflared user unit, the cloudflared
   // system unit, nginx.service and penumbra-center-bridge.service. nginx is the
   // HOST's shared web server, so aipin.andersmadsen.dk,
-  // connectivity-check.carry.humane.cloud and the default vhost go down with the
+  // connectivity-check.cosmos.humane.cloud and the default vhost go down with the
   // project — and the paired Pin, reporting device status every five minutes, is
   // connection-REFUSED for the whole window. Refused, not 502'd: nginx is not
   // running to log it, so the outage leaves no server-side trace and was
@@ -702,7 +702,7 @@ test("the ingress budget is the measured cost of one quiesced operation, not a r
    *
    * Every one of those rows must observe a quiesced state to prove what it
    * proves. So the budget sat BELOW the floor of a successful deploy, which
-   * means the warn fired on correct behaviour and therefore stopped carrying
+   * means the warn fired on correct behaviour and therefore stopped containing
    * information — the failure mode this whole file exists to catch, wearing the
    * clothes of a safety margin.
    *
@@ -784,7 +784,7 @@ test("the window closes before the commit, and nothing quiesced may be moved int
    * It is not free, because it changes what a FAILURE costs. Today that
    * verification fails with the edge still down, the previous application
    * recoverable and no wearer traffic on the candidate. Down here it would fail
-   * with the candidate already carrying production, leaving two choices: commit
+   * with the candidate already containing production, leaving two choices: commit
    * against a backup whose restore proof just failed, or take a SECOND outage to
    * unwind — which is longer than the 33s the move saved, and lands exactly the
    * two-window composite the budget disclosure above exists to describe. The
@@ -824,7 +824,7 @@ test("the canary proves the device listeners actually demand a client certificat
   // `require_client_certificate` being turned off.
   assert.match(
     canary,
-    /^for authority in api\.carry\.humane\.cloud onboarding\.carry\.humane\.cloud; do$/m,
+    /^for authority in api\.cosmos\.humane\.cloud onboarding\.cosmos\.humane\.cloud; do$/m,
   );
   assert.match(canary, /^\s*fail "mTLS edge accepted a client without a certificate: \$authority"$/m);
   // The liveness precondition matters as much as the refusal: without it a

@@ -6,7 +6,7 @@ import org.junit.Test
 
 class EsimControllerTest {
     @Test
-    fun requestExtrasCarryValidatedBridgeTokenAndOmitAbsentOptions() {
+    fun requestExtrasIncludeValidatedBridgeTokenAndOmitAbsentOptions() {
         val token = "0123456789abcdef".repeat(4)
 
         val extras = EsimController.requestExtras(

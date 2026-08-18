@@ -45,23 +45,23 @@ impl Config {
     }
 
     pub fn from_map(values: &HashMap<String, String>) -> Result<Self, ConfigError> {
-        let workload = parse(values, "CARRY_WORKLOAD", "ai-bus")?;
-        let environment = parse(values, "CARRY_ENVIRONMENT", "development")?;
+        let workload = parse(values, "COSMOS_WORKLOAD", "ai-bus")?;
+        let environment = parse(values, "COSMOS_ENVIRONMENT", "development")?;
         let instance = values
-            .get("CARRY_INSTANCE_ID")
-            .or_else(|| values.get("CARRY_POD_NAME"))
+            .get("COSMOS_INSTANCE_ID")
+            .or_else(|| values.get("COSMOS_POD_NAME"))
             .cloned()
             .unwrap_or_else(|| "local-1".to_owned());
         let identity = WorkloadIdentity::new(
             workload,
             environment,
             instance,
-            get(values, "CARRY_TRUST_DOMAIN", "carry.local"),
+            get(values, "COSMOS_TRUST_DOMAIN", "cosmos.local"),
         )?;
 
-        let grpc_bind: SocketAddr = parse(values, "CARRY_GRPC_BIND", "127.0.0.1:50051")?;
-        let http_bind: SocketAddr = parse(values, "CARRY_HTTP_BIND", "127.0.0.1:8080")?;
-        let auth_mode = parse(values, "CARRY_AUTH_MODE", "edge-authenticated")?;
+        let grpc_bind: SocketAddr = parse(values, "COSMOS_GRPC_BIND", "127.0.0.1:50051")?;
+        let http_bind: SocketAddr = parse(values, "COSMOS_HTTP_BIND", "127.0.0.1:8080")?;
+        let auth_mode = parse(values, "COSMOS_AUTH_MODE", "edge-authenticated")?;
         let auth = match auth_mode {
             AuthenticationMode::EdgeAuthenticated => {
                 Authentication::EdgeAuthenticated(EdgeAuthentication {
@@ -81,10 +81,10 @@ impl Config {
                 Authentication::DevelopmentInsecure
             }
         };
-        let region = get(values, "CARRY_REGION", "eastus");
-        let revision = get(values, "CARRY_REVISION", "local");
+        let region = get(values, "COSMOS_REGION", "eastus");
+        let revision = get(values, "COSMOS_REVISION", "local");
         let service_path = service_path(
-            values.get("CARRY_POD_NAME").map(String::as_str),
+            values.get("COSMOS_POD_NAME").map(String::as_str),
             environment,
             &region,
             workload,
@@ -94,63 +94,63 @@ impl Config {
         let limits = Limits {
             max_decode_bytes: bounded_usize(
                 values,
-                "CARRY_MAX_DECODE_BYTES",
+                "COSMOS_MAX_DECODE_BYTES",
                 DEFAULT_MAX_MESSAGE_BYTES,
                 MIN_MESSAGE_BYTES,
                 MAX_MESSAGE_BYTES,
             )?,
             max_encode_bytes: bounded_usize(
                 values,
-                "CARRY_MAX_ENCODE_BYTES",
+                "COSMOS_MAX_ENCODE_BYTES",
                 DEFAULT_MAX_MESSAGE_BYTES,
                 MIN_MESSAGE_BYTES,
                 MAX_MESSAGE_BYTES,
             )?,
             request_timeout: Duration::from_millis(bounded_u64(
                 values,
-                "CARRY_REQUEST_TIMEOUT_MS",
+                "COSMOS_REQUEST_TIMEOUT_MS",
                 15_000,
                 MIN_REQUEST_TIMEOUT_MS,
                 MAX_REQUEST_TIMEOUT_MS,
             )?),
             shutdown_grace: Duration::from_millis(bounded_u64(
                 values,
-                "CARRY_SHUTDOWN_GRACE_MS",
+                "COSMOS_SHUTDOWN_GRACE_MS",
                 5_000,
                 MIN_SHUTDOWN_GRACE_MS,
                 MAX_SHUTDOWN_GRACE_MS,
             )?),
             grpc_max_concurrent_streams: bounded_u32(
                 values,
-                "CARRY_GRPC_MAX_CONCURRENT_STREAMS",
+                "COSMOS_GRPC_MAX_CONCURRENT_STREAMS",
                 DEFAULT_GRPC_MAX_CONCURRENT_STREAMS,
                 1,
                 MAX_GRPC_MAX_CONCURRENT_STREAMS,
             )?,
             http2_keepalive_interval: Duration::from_millis(bounded_u64(
                 values,
-                "CARRY_HTTP2_KEEPALIVE_INTERVAL_MS",
+                "COSMOS_HTTP2_KEEPALIVE_INTERVAL_MS",
                 DEFAULT_HTTP2_KEEPALIVE_INTERVAL_MS,
                 MIN_HTTP2_KEEPALIVE_INTERVAL_MS,
                 MAX_HTTP2_KEEPALIVE_INTERVAL_MS,
             )?),
             http2_keepalive_timeout: Duration::from_millis(bounded_u64(
                 values,
-                "CARRY_HTTP2_KEEPALIVE_TIMEOUT_MS",
+                "COSMOS_HTTP2_KEEPALIVE_TIMEOUT_MS",
                 DEFAULT_HTTP2_KEEPALIVE_TIMEOUT_MS,
                 MIN_HTTP2_KEEPALIVE_TIMEOUT_MS,
                 MAX_HTTP2_KEEPALIVE_TIMEOUT_MS,
             )?),
             http2_max_header_list_bytes: bounded_u32(
                 values,
-                "CARRY_HTTP2_MAX_HEADER_LIST_BYTES",
+                "COSMOS_HTTP2_MAX_HEADER_LIST_BYTES",
                 DEFAULT_HTTP2_MAX_HEADER_LIST_BYTES,
                 MIN_HTTP2_MAX_HEADER_LIST_BYTES,
                 MAX_HTTP2_MAX_HEADER_LIST_BYTES,
             )?,
             http2_max_pending_reset_streams: bounded_usize(
                 values,
-                "CARRY_HTTP2_MAX_PENDING_RESET_STREAMS",
+                "COSMOS_HTTP2_MAX_PENDING_RESET_STREAMS",
                 DEFAULT_HTTP2_MAX_PENDING_RESET_STREAMS,
                 1,
                 MAX_HTTP2_MAX_PENDING_RESET_STREAMS,
@@ -167,7 +167,7 @@ impl Config {
             auth,
             service_path,
             limits,
-            log_level: parse(values, "CARRY_LOG_LEVEL", "info")?,
+            log_level: parse(values, "COSMOS_LOG_LEVEL", "info")?,
         })
     }
 }
@@ -203,7 +203,7 @@ impl FromStr for AuthenticationMode {
             "edge-authenticated" => Ok(Self::EdgeAuthenticated),
             "development-insecure" => Ok(Self::DevelopmentInsecure),
             _ => Err(ConfigError::InvalidValue {
-                name: "CARRY_AUTH_MODE",
+                name: "COSMOS_AUTH_MODE",
                 value: value.to_owned(),
             }),
         }
@@ -226,7 +226,7 @@ impl EdgeAuthentication {
         &self.principal_metadata_key
     }
 
-    /// Resolves the device principal the trusted edge established via mTLS. carry
+    /// Resolves the device principal the trusted edge established via mTLS. cosmos
     /// forwards the verified client certificate as `x-forwarded-client-cert`
     /// (XFCC) and the principal is the certificate Subject CN. Missing, binary,
     /// and malformed metadata all fail closed without reflecting the supplied
@@ -245,7 +245,7 @@ impl EdgeAuthentication {
         // `socat` forwarding to 127.0.0.1, so every connection looks local. So the
         // edge presents a shared secret instead, injected as a static header the
         // client never sees (Envoy strips inbound copies of it the same way it
-        // strips XFCC). Set `CARRY_EDGE_TOKEN` on both the workload and the edge
+        // strips XFCC). Set `COSMOS_EDGE_TOKEN` on both the workload and the edge
         // to require it.
         //
         // Unset means unenforced, which keeps local runs and the test harness
@@ -268,7 +268,7 @@ impl EdgeAuthentication {
             .get(self.principal_metadata_key.as_str())
             .ok_or(EdgeAuthenticationError::Missing)?;
         let value = raw.to_str().map_err(|_| EdgeAuthenticationError::Invalid)?;
-        // Derive the principal from the XFCC Subject CN (carry's convention);
+        // Derive the principal from the XFCC Subject CN (cosmos's convention);
         // fall back to the raw value for non-XFCC dev / synthetic harnesses.
         let principal = principal_from_xfcc(value).unwrap_or(value);
         // A DeviceUser CN resolves to its *user* (`U:<user>`), the same principal
@@ -280,7 +280,7 @@ impl EdgeAuthentication {
 }
 
 /// Header the edge uses to prove a request passed through it.
-pub const EDGE_TOKEN_HEADER: &str = "x-carry-edge-token";
+pub const EDGE_TOKEN_HEADER: &str = "x-cosmos-edge-token";
 
 /// The header the edge injects the verified client certificate in, and the
 /// default this deployment reads the principal from. Named here so the HTTP
@@ -291,7 +291,7 @@ pub const EDGE_PRINCIPAL_HEADER: &str = "x-forwarded-client-cert";
 
 /// The shared edge secret this deployment enforces, if any.
 fn configured_edge_token() -> Option<String> {
-    std::env::var("CARRY_EDGE_TOKEN")
+    std::env::var("COSMOS_EDGE_TOKEN")
         .ok()
         .filter(|v| !v.trim().is_empty())
 }
@@ -342,7 +342,7 @@ pub enum EdgeAuthenticationError {
 /// XFCC header dropped anywhere in the mesh would have every Pin behind it
 /// narrate "invalid subscription" for a routing bug. Those two codes belong to
 /// `services::gates::unsubscribed_status` /
-/// `services::gates::unauthorized_device_status`, which also carry the trailer
+/// `services::gates::unauthorized_device_status`, which also contain the trailer
 /// `AccountAuthorizationInterceptor` requires before persisting the verdict.
 ///
 /// UNAVAILABLE is what the client itself emits when its side of the secure
@@ -388,7 +388,7 @@ impl FromStr for LogLevel {
             "info" => Ok(Self::Info),
             "debug" => Ok(Self::Debug),
             _ => Err(ConfigError::InvalidValue {
-                name: "CARRY_LOG_LEVEL",
+                name: "COSMOS_LOG_LEVEL",
                 value: value.to_owned(),
             }),
         }
@@ -457,7 +457,7 @@ where
 }
 
 fn edge_metadata_key(values: &HashMap<String, String>) -> Result<String, ConfigError> {
-    const NAME: &str = "CARRY_EDGE_PRINCIPAL_METADATA";
+    const NAME: &str = "COSMOS_EDGE_PRINCIPAL_METADATA";
     let value = get(values, NAME, "x-forwarded-client-cert");
     let is_valid = (1..=64).contains(&value.len())
         && value
@@ -547,7 +547,7 @@ pub enum ConfigError {
     InsecureNonLoopback,
     #[error("development-insecure authentication is not allowed in {0}")]
     InsecureEnvironment(DeploymentEnvironment),
-    #[error("CARRY_HTTP2_KEEPALIVE_TIMEOUT_MS must not exceed CARRY_HTTP2_KEEPALIVE_INTERVAL_MS")]
+    #[error("COSMOS_HTTP2_KEEPALIVE_TIMEOUT_MS must not exceed COSMOS_HTTP2_KEEPALIVE_INTERVAL_MS")]
     KeepaliveTimeoutExceedsInterval,
     #[error(transparent)]
     Identity(#[from] IdentityError),
@@ -616,8 +616,8 @@ mod tests {
 
     fn local_values() -> HashMap<String, String> {
         HashMap::from([
-            ("CARRY_AUTH_MODE".into(), "development-insecure".into()),
-            ("CARRY_ENVIRONMENT".into(), "development".into()),
+            ("COSMOS_AUTH_MODE".into(), "development-insecure".into()),
+            ("COSMOS_ENVIRONMENT".into(), "development".into()),
         ])
     }
 
@@ -633,8 +633,8 @@ mod tests {
     #[test]
     fn revision_is_applied_to_a_pod_name_without_duplicate_topology_tokens() {
         let mut values = local_values();
-        values.insert("CARRY_POD_NAME".into(), "ai-bus-abcde-12345".into());
-        values.insert("CARRY_REVISION".into(), "r42".into());
+        values.insert("COSMOS_POD_NAME".into(), "ai-bus-abcde-12345".into());
+        values.insert("COSMOS_REVISION".into(), "r42".into());
 
         let config = Config::from_map(&values).expect("valid pod config");
 
@@ -644,7 +644,7 @@ mod tests {
             "development:eastus:ai-bus-r42-abcde-12345"
         );
 
-        values.insert("CARRY_POD_NAME".into(), "ai-bus-r42-abcde".into());
+        values.insert("COSMOS_POD_NAME".into(), "ai-bus-r42-abcde".into());
         let config = Config::from_map(&values).expect("valid revision-prefixed pod config");
         assert_eq!(
             config.service_path.as_str(),
@@ -673,11 +673,11 @@ mod tests {
     fn grpc_http2_limits_accept_bounded_operator_values() {
         let mut values = local_values();
         values.extend([
-            ("CARRY_GRPC_MAX_CONCURRENT_STREAMS".into(), "32".into()),
-            ("CARRY_HTTP2_KEEPALIVE_INTERVAL_MS".into(), "45000".into()),
-            ("CARRY_HTTP2_KEEPALIVE_TIMEOUT_MS".into(), "5000".into()),
-            ("CARRY_HTTP2_MAX_HEADER_LIST_BYTES".into(), "8192".into()),
-            ("CARRY_HTTP2_MAX_PENDING_RESET_STREAMS".into(), "10".into()),
+            ("COSMOS_GRPC_MAX_CONCURRENT_STREAMS".into(), "32".into()),
+            ("COSMOS_HTTP2_KEEPALIVE_INTERVAL_MS".into(), "45000".into()),
+            ("COSMOS_HTTP2_KEEPALIVE_TIMEOUT_MS".into(), "5000".into()),
+            ("COSMOS_HTTP2_MAX_HEADER_LIST_BYTES".into(), "8192".into()),
+            ("COSMOS_HTTP2_MAX_PENDING_RESET_STREAMS".into(), "10".into()),
         ]);
 
         let config = Config::from_map(&values).expect("bounded transport config");
@@ -697,16 +697,16 @@ mod tests {
     #[test]
     fn grpc_http2_limits_reject_values_outside_their_bounds() {
         for (name, value) in [
-            ("CARRY_GRPC_MAX_CONCURRENT_STREAMS", "0"),
-            ("CARRY_GRPC_MAX_CONCURRENT_STREAMS", "1025"),
-            ("CARRY_HTTP2_KEEPALIVE_INTERVAL_MS", "9999"),
-            ("CARRY_HTTP2_KEEPALIVE_INTERVAL_MS", "300001"),
-            ("CARRY_HTTP2_KEEPALIVE_TIMEOUT_MS", "999"),
-            ("CARRY_HTTP2_KEEPALIVE_TIMEOUT_MS", "60001"),
-            ("CARRY_HTTP2_MAX_HEADER_LIST_BYTES", "1023"),
-            ("CARRY_HTTP2_MAX_HEADER_LIST_BYTES", "65537"),
-            ("CARRY_HTTP2_MAX_PENDING_RESET_STREAMS", "0"),
-            ("CARRY_HTTP2_MAX_PENDING_RESET_STREAMS", "257"),
+            ("COSMOS_GRPC_MAX_CONCURRENT_STREAMS", "0"),
+            ("COSMOS_GRPC_MAX_CONCURRENT_STREAMS", "1025"),
+            ("COSMOS_HTTP2_KEEPALIVE_INTERVAL_MS", "9999"),
+            ("COSMOS_HTTP2_KEEPALIVE_INTERVAL_MS", "300001"),
+            ("COSMOS_HTTP2_KEEPALIVE_TIMEOUT_MS", "999"),
+            ("COSMOS_HTTP2_KEEPALIVE_TIMEOUT_MS", "60001"),
+            ("COSMOS_HTTP2_MAX_HEADER_LIST_BYTES", "1023"),
+            ("COSMOS_HTTP2_MAX_HEADER_LIST_BYTES", "65537"),
+            ("COSMOS_HTTP2_MAX_PENDING_RESET_STREAMS", "0"),
+            ("COSMOS_HTTP2_MAX_PENDING_RESET_STREAMS", "257"),
         ] {
             let mut values = local_values();
             values.insert(name.into(), value.into());
@@ -723,8 +723,8 @@ mod tests {
     #[test]
     fn keepalive_timeout_cannot_exceed_the_ping_interval() {
         let mut values = local_values();
-        values.insert("CARRY_HTTP2_KEEPALIVE_INTERVAL_MS".into(), "10000".into());
-        values.insert("CARRY_HTTP2_KEEPALIVE_TIMEOUT_MS".into(), "10001".into());
+        values.insert("COSMOS_HTTP2_KEEPALIVE_INTERVAL_MS".into(), "10000".into());
+        values.insert("COSMOS_HTTP2_KEEPALIVE_TIMEOUT_MS".into(), "10001".into());
 
         assert!(matches!(
             Config::from_map(&values).err(),
@@ -745,14 +745,14 @@ mod tests {
     #[test]
     fn edge_metadata_key_is_bounded_and_lowercase() {
         let values = HashMap::from([(
-            "CARRY_EDGE_PRINCIPAL_METADATA".into(),
+            "COSMOS_EDGE_PRINCIPAL_METADATA".into(),
             "X-Unsafe-Key".into(),
         )]);
 
         assert!(matches!(
             Config::from_map(&values).err(),
             Some(ConfigError::InvalidValue {
-                name: "CARRY_EDGE_PRINCIPAL_METADATA",
+                name: "COSMOS_EDGE_PRINCIPAL_METADATA",
                 ..
             })
         ));
@@ -816,14 +816,14 @@ mod tests {
     #[test]
     fn insecure_mode_refuses_non_loopback_or_parity() {
         let mut values = local_values();
-        values.insert("CARRY_GRPC_BIND".into(), "0.0.0.0:50051".into());
+        values.insert("COSMOS_GRPC_BIND".into(), "0.0.0.0:50051".into());
         assert!(matches!(
             Config::from_map(&values).err(),
             Some(ConfigError::InsecureNonLoopback)
         ));
 
-        values.insert("CARRY_GRPC_BIND".into(), "127.0.0.1:50051".into());
-        values.insert("CARRY_ENVIRONMENT".into(), "parity".into());
+        values.insert("COSMOS_GRPC_BIND".into(), "127.0.0.1:50051".into());
+        values.insert("COSMOS_ENVIRONMENT".into(), "parity".into());
         assert!(matches!(
             Config::from_map(&values).err(),
             Some(ConfigError::InsecureEnvironment(
@@ -835,21 +835,21 @@ mod tests {
     #[test]
     fn payload_and_deadline_limits_are_bounded() {
         let mut values = local_values();
-        values.insert("CARRY_MAX_DECODE_BYTES".into(), "16777217".into());
+        values.insert("COSMOS_MAX_DECODE_BYTES".into(), "16777217".into());
         assert!(matches!(
             Config::from_map(&values).err(),
             Some(ConfigError::OutOfBounds {
-                name: "CARRY_MAX_DECODE_BYTES",
+                name: "COSMOS_MAX_DECODE_BYTES",
                 ..
             })
         ));
 
-        values.insert("CARRY_MAX_DECODE_BYTES".into(), "4096".into());
-        values.insert("CARRY_REQUEST_TIMEOUT_MS".into(), "0".into());
+        values.insert("COSMOS_MAX_DECODE_BYTES".into(), "4096".into());
+        values.insert("COSMOS_REQUEST_TIMEOUT_MS".into(), "0".into());
         assert!(matches!(
             Config::from_map(&values).err(),
             Some(ConfigError::OutOfBounds {
-                name: "CARRY_REQUEST_TIMEOUT_MS",
+                name: "COSMOS_REQUEST_TIMEOUT_MS",
                 ..
             })
         ));
@@ -858,7 +858,7 @@ mod tests {
     #[test]
     fn malformed_service_path_configuration_is_rejected() {
         let mut values = local_values();
-        values.insert("CARRY_REGION".into(), "eastus:private-content".into());
+        values.insert("COSMOS_REGION".into(), "eastus:private-content".into());
         assert!(matches!(
             Config::from_map(&values).err(),
             Some(ConfigError::ServicePath(
@@ -866,8 +866,8 @@ mod tests {
             ))
         ));
 
-        values.insert("CARRY_REGION".into(), "eastus".into());
-        values.insert("CARRY_POD_NAME".into(), "ai-bus/pod/../../secret".into());
+        values.insert("COSMOS_REGION".into(), "eastus".into());
+        values.insert("COSMOS_POD_NAME".into(), "ai-bus/pod/../../secret".into());
         assert!(matches!(
             Config::from_map(&values).err(),
             Some(ConfigError::Identity(IdentityError::InvalidCharacters {

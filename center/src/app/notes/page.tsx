@@ -98,7 +98,7 @@ export default function NotesPage() {
             </StatusMessage>
           ) : (
             /* Absent is not a failure and not retryable. This branch used to
-               stop at "live or not", so a Center with no CARRY_WEBAPI_BASE_URL
+               stop at "live or not", so a Center with no COSMOS_WEBAPI_BASE_URL
                told the wearer their backend had gone quiet and gave them a "Try
                again" that no amount of pressing could change — while
                /notes/search, one tap away and reading the very same

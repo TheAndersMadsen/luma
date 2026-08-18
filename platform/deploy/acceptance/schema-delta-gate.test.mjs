@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
  * The gate itself compares two sha256 digests over `pg_dump --schema-only`, so it
  * can prove the schema moved and cannot say how. cosmos/migrations/0004_listing.sql
  * is genuinely pending in production — `ADD COLUMN IF NOT EXISTS
- * carry_memory.thumbnail_count` plus three `CREATE INDEX IF NOT EXISTS` — so the
+ * cosmos_memory.thumbnail_count` plus three `CREATE INDEX IF NOT EXISTS` — so the
  * candidate legitimately changes the schema and the digest gate legitimately
  * refuses. classify_schema_delta is the explicit decision that unblocks exactly
  * that delta and nothing else. It lives in common.sh because three gates of the
@@ -98,7 +98,7 @@ const footer = (token) => `
 
 `;
 
-function table(name, columns, owner = "carry") {
+function table(name, columns, owner = "cosmos") {
   const body = columns.map((column) => `    ${column}`).join(",\n");
   return `--
 -- Name: ${name}; Type: TABLE; Schema: public; Owner: ${owner}
@@ -116,7 +116,7 @@ ALTER TABLE "public"."${name}" OWNER TO "${owner}";
 
 function index(name, target, definition, unique = false) {
   return `--
--- Name: ${name}; Type: INDEX; Schema: public; Owner: carry
+-- Name: ${name}; Type: INDEX; Schema: public; Owner: cosmos
 --
 
 CREATE${unique ? " UNIQUE" : ""} INDEX "${name}" ON "public"."${target}" USING "btree" (${definition});
@@ -150,30 +150,30 @@ const NOTE = [
 ];
 
 const PRIMARY_KEY = `--
--- Name: carry_memory carry_memory_pkey; Type: CONSTRAINT; Schema: public; Owner: carry
+-- Name: cosmos_memory cosmos_memory_pkey; Type: CONSTRAINT; Schema: public; Owner: cosmos
 --
 
-ALTER TABLE ONLY "public"."carry_memory"
-    ADD CONSTRAINT "carry_memory_pkey" PRIMARY KEY ("principal", "numeric_id");
+ALTER TABLE ONLY "public"."cosmos_memory"
+    ADD CONSTRAINT "cosmos_memory_pkey" PRIMARY KEY ("principal", "numeric_id");
 
 `;
 
 // The three indexes 0004_listing.sql creates, as pg_dump renders them.
 const INDEXES_0004 = [
-  index("carry_event_recent", "carry_event",
+  index("cosmos_event_recent", "cosmos_event",
     '"principal", "originator_identifier", "creation_seconds" DESC NULLS LAST, "creation_nanos" DESC'),
-  `CREATE INDEX "carry_memory_recent" ON "public"."carry_memory" USING "btree" ("principal", COALESCE("device_created_seconds", "created_seconds") DESC, "numeric_id" DESC) WHERE ("deleted_seconds" IS NULL);
+  `CREATE INDEX "cosmos_memory_recent" ON "public"."cosmos_memory" USING "btree" ("principal", COALESCE("device_created_seconds", "created_seconds") DESC, "numeric_id" DESC) WHERE ("deleted_seconds" IS NULL);
 
 `,
-  index("carry_note_recent", "carry_note", '"principal", "created_seconds" DESC, "created_nanos" DESC'),
+  index("cosmos_note_recent", "cosmos_note", '"principal", "created_seconds" DESC, "created_nanos" DESC'),
 ];
 
-function carry({ token = "9dcd1c3b", memory = MEMORY, event = EVENT, note = NOTE, indexes = [], extra = "" } = {}) {
+function cosmos({ token = "9dcd1c3b", memory = MEMORY, event = EVENT, note = NOTE, indexes = [], extra = "" } = {}) {
   return [
     header(token),
-    table("carry_event", event),
-    table("carry_memory", memory),
-    table("carry_note", note),
+    table("cosmos_event", event),
+    table("cosmos_memory", memory),
+    table("cosmos_note", note),
     PRIMARY_KEY,
     ...indexes,
     extra,
@@ -192,7 +192,7 @@ function keycloak({ token = "9dcd1c3b", columns = KEYCLOAK_COLUMNS } = {}) {
 /*
  * Runs each dump through capture_postgres_schema's own normalizer, which writes
  * the retained text sidecar and prints the digest line the gate compares. The
- * BEFORE and AFTER fixtures deliberately carry DIFFERENT \restrict tokens, so a
+ * BEFORE and AFTER fixtures deliberately use DIFFERENT \restrict tokens, so a
  * regression in the token normalization would show up as an unexplained delta
  * rather than passing silently.
  */
@@ -238,18 +238,18 @@ async function verdict(t, before, after) {
 
 test("the real 0004_listing.sql delta is accepted, and named", async (t) => {
   const { differs, result } = await verdict(t,
-    { carry: carry({ token: "1f0aa2" }), keycloak: keycloak({ token: "1f0aa2" }) },
-    { carry: carry({ token: "b73c91", memory: MEMORY_0004, indexes: INDEXES_0004 }), keycloak: keycloak({ token: "b73c91" }) });
+    { cosmos: cosmos({ token: "1f0aa2" }), keycloak: keycloak({ token: "1f0aa2" }) },
+    { cosmos: cosmos({ token: "b73c91", memory: MEMORY_0004, indexes: INDEXES_0004 }), keycloak: keycloak({ token: "b73c91" }) });
 
   assert.ok(differs, "0004 must still be a real digest delta; the allowance runs only after equality fails");
   assert.equal(result.status, 0, result.stderr);
   // The allowance is worthless if it does not say what it allowed. Every object
   // 0004 creates has to appear by name.
   assert.match(result.stdout, /additive schema delta accepted/u);
-  assert.match(result.stdout, /\+column public\.carry_memory\.thumbnail_count/u);
-  assert.match(result.stdout, /\+index carry_event_recent on public\.carry_event/u);
-  assert.match(result.stdout, /\+index carry_memory_recent on public\.carry_memory/u);
-  assert.match(result.stdout, /\+index carry_note_recent on public\.carry_note/u);
+  assert.match(result.stdout, /\+column public\.cosmos_memory\.thumbnail_count/u);
+  assert.match(result.stdout, /\+index cosmos_event_recent on public\.cosmos_event/u);
+  assert.match(result.stdout, /\+index cosmos_memory_recent on public\.cosmos_memory/u);
+  assert.match(result.stdout, /\+index cosmos_note_recent on public\.cosmos_note/u);
 });
 
 test("a table this delta creates is additive; its decoration comes with it", async (t) => {
@@ -257,48 +257,48 @@ test("a table this delta creates is additive; its decoration comes with it", asy
   // its identity column, the column default that reads from it, its ownership, its
   // primary key, and an index on it. All of it is scoped to a table that did not
   // exist before, so none of it can touch a row that did.
-  const created = table("carry_listing", ['"numeric_id" bigint NOT NULL', '"principal" "text" NOT NULL'])
-    + 'CREATE SEQUENCE "public"."carry_listing_numeric_id_seq" AS integer START WITH 1 INCREMENT BY 1 NO MINVALUE NO MAXVALUE CACHE 1;\n\n'
-    + 'ALTER SEQUENCE "public"."carry_listing_numeric_id_seq" OWNER TO "carry";\n\n'
-    + 'ALTER SEQUENCE "public"."carry_listing_numeric_id_seq" OWNED BY "public"."carry_listing"."numeric_id";\n\n'
-    + 'ALTER TABLE ONLY "public"."carry_listing" ALTER COLUMN "numeric_id" SET DEFAULT "nextval"(\'"public"."carry_listing_numeric_id_seq"\'::"regclass");\n\n'
-    + 'ALTER TABLE ONLY "public"."carry_listing"\n    ADD CONSTRAINT "carry_listing_pkey" PRIMARY KEY ("numeric_id");\n\n'
-    + index("carry_listing_recent", "carry_listing", '"principal"');
+  const created = table("cosmos_listing", ['"numeric_id" bigint NOT NULL', '"principal" "text" NOT NULL'])
+    + 'CREATE SEQUENCE "public"."cosmos_listing_numeric_id_seq" AS integer START WITH 1 INCREMENT BY 1 NO MINVALUE NO MAXVALUE CACHE 1;\n\n'
+    + 'ALTER SEQUENCE "public"."cosmos_listing_numeric_id_seq" OWNER TO "cosmos";\n\n'
+    + 'ALTER SEQUENCE "public"."cosmos_listing_numeric_id_seq" OWNED BY "public"."cosmos_listing"."numeric_id";\n\n'
+    + 'ALTER TABLE ONLY "public"."cosmos_listing" ALTER COLUMN "numeric_id" SET DEFAULT "nextval"(\'"public"."cosmos_listing_numeric_id_seq"\'::"regclass");\n\n'
+    + 'ALTER TABLE ONLY "public"."cosmos_listing"\n    ADD CONSTRAINT "cosmos_listing_pkey" PRIMARY KEY ("numeric_id");\n\n'
+    + index("cosmos_listing_recent", "cosmos_listing", '"principal"');
   const { result } = await verdict(t,
-    { carry: carry(), keycloak: keycloak() },
-    { carry: carry({ token: "aa11", extra: created }), keycloak: keycloak({ token: "aa11" }) });
+    { cosmos: cosmos(), keycloak: keycloak() },
+    { cosmos: cosmos({ token: "aa11", extra: created }), keycloak: keycloak({ token: "aa11" }) });
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /\+table public\.carry_listing/u);
-  assert.match(result.stdout, /\+ownership on new table public\.carry_listing/u);
-  assert.match(result.stdout, /\+constraint on new table public\.carry_listing/u);
-  assert.match(result.stdout, /\+column default on new table public\.carry_listing/u);
-  assert.match(result.stdout, /\+sequence public\.carry_listing_numeric_id_seq/u);
-  assert.match(result.stdout, /\+index carry_listing_recent on public\.carry_listing/u);
+  assert.match(result.stdout, /\+table public\.cosmos_listing/u);
+  assert.match(result.stdout, /\+ownership on new table public\.cosmos_listing/u);
+  assert.match(result.stdout, /\+constraint on new table public\.cosmos_listing/u);
+  assert.match(result.stdout, /\+column default on new table public\.cosmos_listing/u);
+  assert.match(result.stdout, /\+sequence public\.cosmos_listing_numeric_id_seq/u);
+  assert.match(result.stdout, /\+index cosmos_listing_recent on public\.cosmos_listing/u);
 });
 
 test("a new table may be UNLOGGED; only a pre-existing table's heading is frozen", async (t) => {
   // The heading check must not overreach into tables this delta created. A table
   // that did not exist has no rows to lose, so how it is created is its own
   // business.
-  const created = table("carry_scratch", ['"principal" "text" NOT NULL'])
-    .replace('CREATE TABLE "public"."carry_scratch"', 'CREATE UNLOGGED TABLE "public"."carry_scratch"');
+  const created = table("cosmos_scratch", ['"principal" "text" NOT NULL'])
+    .replace('CREATE TABLE "public"."cosmos_scratch"', 'CREATE UNLOGGED TABLE "public"."cosmos_scratch"');
   const { result } = await verdict(t,
-    { carry: carry(), keycloak: keycloak() },
-    { carry: carry({ token: "cd34", extra: created }), keycloak: keycloak({ token: "cd34" }) });
+    { cosmos: cosmos(), keycloak: keycloak() },
+    { cosmos: cosmos({ token: "cd34", extra: created }), keycloak: keycloak({ token: "cd34" }) });
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /\+table public\.carry_scratch/u);
+  assert.match(result.stdout, /\+table public\.cosmos_scratch/u);
 });
 
 test("the same decoration aimed at a pre-existing table is refused", async (t) => {
   // The mirror image of the test above, and the reason "new table" is defined as
   // "absent from the BEFORE dump" rather than "mentioned by an added statement".
   for (const [name, statement, expected] of [
-    ["a primary key", 'ALTER TABLE ONLY "public"."carry_memory"\n    ADD CONSTRAINT "carry_memory_second" PRIMARY KEY ("principal");\n\n', /ALTER TABLE ONLY is not a provably additive change \(constraint carry_memory_second on table public\.carry_memory\)/u],
-    ["a column default", 'ALTER TABLE ONLY "public"."carry_memory" ALTER COLUMN "created_seconds" SET DEFAULT 0;\n\n', /default of column public\.carry_memory\.created_seconds/u],
+    ["a primary key", 'ALTER TABLE ONLY "public"."cosmos_memory"\n    ADD CONSTRAINT "cosmos_memory_second" PRIMARY KEY ("principal");\n\n', /ALTER TABLE ONLY is not a provably additive change \(constraint cosmos_memory_second on table public\.cosmos_memory\)/u],
+    ["a column default", 'ALTER TABLE ONLY "public"."cosmos_memory" ALTER COLUMN "created_seconds" SET DEFAULT 0;\n\n', /default of column public\.cosmos_memory\.created_seconds/u],
   ]) {
     const { result } = await verdict(t,
-      { carry: carry(), keycloak: keycloak() },
-      { carry: carry({ token: "bb22", extra: statement }), keycloak: keycloak({ token: "bb22" }) });
+      { cosmos: cosmos(), keycloak: keycloak() },
+      { cosmos: cosmos({ token: "bb22", extra: statement }), keycloak: keycloak({ token: "bb22" }) });
     assert.notEqual(result.status, 0, `${name} on a pre-existing table was accepted: ${result.stdout}`);
     assert.match(result.stderr, expected);
   }
@@ -309,93 +309,93 @@ test("the same decoration aimed at a pre-existing table is refused", async (t) =
 const refusals = [
   {
     name: "a dropped column",
-    after: { carry: carry({ memory: MEMORY.filter((column) => !column.includes("thumbnails")) }) },
-    expect: /table public\.carry_memory lost column\(s\) thumbnails/u,
+    after: { cosmos: cosmos({ memory: MEMORY.filter((column) => !column.includes("thumbnails")) }) },
+    expect: /table public\.cosmos_memory lost column\(s\) thumbnails/u,
   },
   {
     name: "a renamed column",
     // The trap case: pg_dump rewrites the CREATE TABLE block, so a rename looks
     // exactly like a removed line plus an added line.
-    after: { carry: carry({ memory: MEMORY.map((column) => column.replace('"thumbnails"', '"thumbs"')) }) },
+    after: { cosmos: cosmos({ memory: MEMORY.map((column) => column.replace('"thumbnails"', '"thumbs"')) }) },
     expect: /column thumbnails was dropped or renamed; position 6 now holds thumbs/u,
   },
   {
     name: "a retyped column",
-    after: { carry: carry({ memory: MEMORY.map((column) => (column.includes("numeric_id") ? column.replace("bigint", "integer") : column)) }) },
+    after: { cosmos: cosmos({ memory: MEMORY.map((column) => (column.includes("numeric_id") ? column.replace("bigint", "integer") : column)) }) },
     expect: /changed the definition of pre-existing column numeric_id: before <"numeric_id" bigint NOT NULL> after <"numeric_id" integer NOT NULL>/u,
   },
   {
     name: "a column dropped while another is appended",
     // Same column COUNT before and after, so anything counting columns passes it.
-    after: { carry: carry({ memory: [...MEMORY.slice(0, -1), '"thumbnail_count" integer'] }) },
+    after: { cosmos: cosmos({ memory: [...MEMORY.slice(0, -1), '"thumbnail_count" integer'] }) },
     expect: /column thumbnails was dropped or renamed; position 6 now holds thumbnail_count/u,
   },
   {
     name: "a column inserted among the pre-existing ones",
-    after: { carry: carry({ memory: [...MEMORY.slice(0, 2), '"inserted" "text"', ...MEMORY.slice(2)] }) },
+    after: { cosmos: cosmos({ memory: [...MEMORY.slice(0, 2), '"inserted" "text"', ...MEMORY.slice(2)] }) },
     expect: /reordered its pre-existing columns; position 3 held created_seconds and now holds inserted/u,
   },
   {
     name: "a nullability change on a pre-existing column",
-    after: { carry: carry({ memory: MEMORY.map((column) => (column === '"created_seconds" bigint' ? `${column} NOT NULL` : column)) }) },
+    after: { cosmos: cosmos({ memory: MEMORY.map((column) => (column === '"created_seconds" bigint' ? `${column} NOT NULL` : column)) }) },
     expect: /changed the definition of pre-existing column created_seconds/u,
   },
   {
     name: "a default change on a pre-existing column",
-    before: { carry: carry({ extra: 'ALTER TABLE ONLY "public"."carry_memory" ALTER COLUMN "created_seconds" SET DEFAULT 0;\n\n' }) },
-    after: { carry: carry({ extra: 'ALTER TABLE ONLY "public"."carry_memory" ALTER COLUMN "created_seconds" SET DEFAULT 1;\n\n' }) },
-    expect: /default of column public\.carry_memory\.created_seconds was redefined/u,
+    before: { cosmos: cosmos({ extra: 'ALTER TABLE ONLY "public"."cosmos_memory" ALTER COLUMN "created_seconds" SET DEFAULT 0;\n\n' }) },
+    after: { cosmos: cosmos({ extra: 'ALTER TABLE ONLY "public"."cosmos_memory" ALTER COLUMN "created_seconds" SET DEFAULT 1;\n\n' }) },
+    expect: /default of column public\.cosmos_memory\.created_seconds was redefined/u,
   },
   {
     name: "a dropped index",
-    before: { carry: carry({ indexes: INDEXES_0004 }) },
-    after: { carry: carry({ indexes: INDEXES_0004.slice(0, 2) }) },
-    expect: /CREATE INDEX disappeared from the schema \(index carry_note_recent\)/u,
+    before: { cosmos: cosmos({ indexes: INDEXES_0004 }) },
+    after: { cosmos: cosmos({ indexes: INDEXES_0004.slice(0, 2) }) },
+    expect: /CREATE INDEX disappeared from the schema \(index cosmos_note_recent\)/u,
   },
   {
     name: "a redefined index",
-    before: { carry: carry({ indexes: INDEXES_0004 }) },
-    after: { carry: carry({ indexes: [...INDEXES_0004.slice(0, 2), index("carry_note_recent", "carry_note", '"principal"')] }) },
-    expect: /index carry_note_recent was redefined/u,
+    before: { cosmos: cosmos({ indexes: INDEXES_0004 }) },
+    after: { cosmos: cosmos({ indexes: [...INDEXES_0004.slice(0, 2), index("cosmos_note_recent", "cosmos_note", '"principal"')] }) },
+    expect: /index cosmos_note_recent was redefined/u,
   },
   {
     name: "a dropped table",
-    after: { carry: header("cc22") + table("carry_event", EVENT) + table("carry_memory", MEMORY) + PRIMARY_KEY + footer("cc22") },
-    expect: /table public\.carry_note was dropped or renamed/u,
+    after: { cosmos: header("cc22") + table("cosmos_event", EVENT) + table("cosmos_memory", MEMORY) + PRIMARY_KEY + footer("cc22") },
+    expect: /table public\.cosmos_note was dropped or renamed/u,
   },
   {
     name: "a dropped constraint",
-    after: { carry: carry({ extra: "" }).replace(PRIMARY_KEY, "") },
-    expect: /constraint carry_memory_pkey on table public\.carry_memory/u,
+    after: { cosmos: cosmos({ extra: "" }).replace(PRIMARY_KEY, "") },
+    expect: /constraint cosmos_memory_pkey on table public\.cosmos_memory/u,
   },
   {
     name: "an ownership change",
-    after: { carry: carry().replace('ALTER TABLE "public"."carry_note" OWNER TO "carry";', 'ALTER TABLE "public"."carry_note" OWNER TO "postgres";') },
-    expect: /ownership of table public\.carry_note was redefined/u,
+    after: { cosmos: cosmos().replace('ALTER TABLE "public"."cosmos_note" OWNER TO "cosmos";', 'ALTER TABLE "public"."cosmos_note" OWNER TO "postgres";') },
+    expect: /ownership of table public\.cosmos_note was redefined/u,
   },
   {
     name: "a new grant",
-    after: { carry: carry({ extra: 'GRANT SELECT ON TABLE "public"."carry_memory" TO "readonly";\n\n' }) },
+    after: { cosmos: cosmos({ extra: 'GRANT SELECT ON TABLE "public"."cosmos_memory" TO "readonly";\n\n' }) },
     expect: /GRANT SELECT ON TABLE is not a provably additive change/u,
   },
   {
     name: "a new trigger",
-    after: { carry: carry({ extra: 'CREATE TRIGGER "audit" AFTER INSERT ON "public"."carry_memory" FOR EACH ROW EXECUTE FUNCTION "public"."audit"();\n\n' }) },
+    after: { cosmos: cosmos({ extra: 'CREATE TRIGGER "audit" AFTER INSERT ON "public"."cosmos_memory" FOR EACH ROW EXECUTE FUNCTION "public"."audit"();\n\n' }) },
     expect: /CREATE TRIGGER is not a provably additive change/u,
   },
   {
     name: "a new function",
-    after: { carry: carry({ extra: 'CREATE FUNCTION "public"."audit"() RETURNS "trigger" LANGUAGE "plpgsql" AS $$begin return new; end;$$;\n\n' }) },
+    after: { cosmos: cosmos({ extra: 'CREATE FUNCTION "public"."audit"() RETURNS "trigger" LANGUAGE "plpgsql" AS $$begin return new; end;$$;\n\n' }) },
     expect: /CREATE FUNCTION is not a provably additive change/u,
   },
   {
     name: "a UNIQUE index over rows that already exist",
-    after: { carry: carry({ indexes: [index("carry_memory_unique", "carry_memory", '"principal"', true)] }) },
-    expect: /adds a UNIQUE constraint to pre-existing table public\.carry_memory/u,
+    after: { cosmos: cosmos({ indexes: [index("cosmos_memory_unique", "cosmos_memory", '"principal"', true)] }) },
+    expect: /adds a UNIQUE constraint to pre-existing table public\.cosmos_memory/u,
   },
   {
     name: "an inline CHECK constraint on an existing table",
-    after: { carry: carry({ memory: [...MEMORY, 'CONSTRAINT "carry_memory_positive" CHECK (("numeric_id" > 0))'] }) },
+    after: { cosmos: cosmos({ memory: [...MEMORY, 'CONSTRAINT "cosmos_memory_positive" CHECK (("numeric_id" > 0))'] }) },
     expect: /gained an inline table constraint, which can reject or reinterpret rows that already exist/u,
   },
   {
@@ -406,39 +406,39 @@ const refusals = [
     // byte-identical to the one the real 0004 delta prints. Unlogged means every
     // row that already exists is discarded on the next crash.
     name: "a pre-existing table quietly converted to UNLOGGED beneath an additive column",
-    after: { carry: carry({ memory: MEMORY_0004, indexes: INDEXES_0004 })
-      .replace('CREATE TABLE "public"."carry_memory"', 'CREATE UNLOGGED TABLE "public"."carry_memory"') },
-    expect: /table public\.carry_memory changed its CREATE TABLE heading/u,
+    after: { cosmos: cosmos({ memory: MEMORY_0004, indexes: INDEXES_0004 })
+      .replace('CREATE TABLE "public"."cosmos_memory"', 'CREATE UNLOGGED TABLE "public"."cosmos_memory"') },
+    expect: /table public\.cosmos_memory changed its CREATE TABLE heading/u,
   },
   {
     // The same hole from the other side: nothing about the heading is permitted to
     // drift, whether or not this particular keyword is destructive on its own.
     name: "a rewritten CREATE TABLE heading on a pre-existing table",
-    after: { carry: carry({ memory: MEMORY_0004 })
-      .replace('CREATE TABLE "public"."carry_memory"', 'CREATE TABLE IF NOT EXISTS "public"."carry_memory"') },
-    expect: /table public\.carry_memory changed its CREATE TABLE heading/u,
+    after: { cosmos: cosmos({ memory: MEMORY_0004 })
+      .replace('CREATE TABLE "public"."cosmos_memory"', 'CREATE TABLE IF NOT EXISTS "public"."cosmos_memory"') },
+    expect: /table public\.cosmos_memory changed its CREATE TABLE heading/u,
   },
   {
     // A shape the classifier deliberately does not model. It must fall through to
     // exact equality rather than being read as "no table changed" -- fail closed,
     // not fail open, is the whole posture.
     name: "a change to a table shape the classifier does not model",
-    before: { carry: carry({ extra: 'CREATE TABLE "public"."carry_slice_2026" PARTITION OF "public"."carry_slice" FOR VALUES FROM (\'2026-01-01\') TO (\'2027-01-01\');\n\n' }) },
-    after: { carry: carry({ extra: 'CREATE TABLE "public"."carry_slice_2026" PARTITION OF "public"."carry_slice" FOR VALUES FROM (\'2026-06-01\') TO (\'2027-01-01\');\n\n' }) },
+    before: { cosmos: cosmos({ extra: 'CREATE TABLE "public"."cosmos_slice_2026" PARTITION OF "public"."cosmos_slice" FOR VALUES FROM (\'2026-01-01\') TO (\'2027-01-01\');\n\n' }) },
+    after: { cosmos: cosmos({ extra: 'CREATE TABLE "public"."cosmos_slice_2026" PARTITION OF "public"."cosmos_slice" FOR VALUES FROM (\'2026-06-01\') TO (\'2027-01-01\');\n\n' }) },
     expect: /CREATE TABLE disappeared from the schema/u,
   },
   {
     name: "an additive column riding along with a dropped table",
-    after: { carry: header("dd33") + table("carry_event", EVENT) + table("carry_memory", MEMORY_0004) + PRIMARY_KEY + footer("dd33") },
-    expect: /table public\.carry_note was dropped or renamed/u,
+    after: { cosmos: header("dd33") + table("cosmos_event", EVENT) + table("cosmos_memory", MEMORY_0004) + PRIMARY_KEY + footer("dd33") },
+    expect: /table public\.cosmos_note was dropped or renamed/u,
   },
 ];
 
 for (const { name, before, after, expect } of refusals) {
   test(`the allowance refuses ${name}, by name`, async (t) => {
     const { differs, result } = await verdict(t,
-      { carry: carry(), keycloak: keycloak(), ...before },
-      { carry: carry(), keycloak: keycloak(), ...after });
+      { cosmos: cosmos(), keycloak: keycloak(), ...before },
+      { cosmos: cosmos(), keycloak: keycloak(), ...after });
     assert.ok(differs, `${name} must be a real digest delta for the allowance to be reached`);
     assert.notEqual(result.status, 0, `${name} was accepted: ${result.stdout}`);
     assert.match(result.stderr, /schema delta refused/u);
@@ -449,22 +449,22 @@ for (const { name, before, after, expect } of refusals) {
 
 /* ---------- keycloak is out of scope entirely ------------------------------- */
 
-test("no keycloak delta is additive, not even one that would pass in carry", async (t) => {
-  // Byte-for-byte the change the allowance permits in carry: a column appended to
+test("no keycloak delta is additive, not even one that would pass in cosmos", async (t) => {
+  // Byte-for-byte the change the allowance permits in cosmos: a column appended to
   // an existing table. The identity database is simply not in scope.
   const { result } = await verdict(t,
-    { carry: carry(), keycloak: keycloak() },
-    { carry: carry(), keycloak: keycloak({ token: "ee44", columns: [...KEYCLOAK_COLUMNS, '"nickname" "text"'] }) });
+    { cosmos: cosmos(), keycloak: keycloak() },
+    { cosmos: cosmos(), keycloak: keycloak({ token: "ee44", columns: [...KEYCLOAK_COLUMNS, '"nickname" "text"'] }) });
   assert.notEqual(result.status, 0, `keycloak delta was accepted: ${result.stdout}`);
-  assert.match(result.stderr, /keycloak: only the carry database may carry a pending migration/u);
+  assert.match(result.stderr, /keycloak: only the cosmos database may contain a pending migration/u);
   assert.match(result.stderr, /\+column public\.user_entity\.nickname/u);
 });
 
-test("a keycloak delta refuses even when carry's delta is the accepted one", async (t) => {
+test("a keycloak delta refuses even when cosmos's delta is the accepted one", async (t) => {
   const { result } = await verdict(t,
-    { carry: carry(), keycloak: keycloak() },
+    { cosmos: cosmos(), keycloak: keycloak() },
     {
-      carry: carry({ token: "ff55", memory: MEMORY_0004, indexes: INDEXES_0004 }),
+      cosmos: cosmos({ token: "ff55", memory: MEMORY_0004, indexes: INDEXES_0004 }),
       keycloak: keycloak({ token: "ff55", columns: [...KEYCLOAK_COLUMNS, '"nickname" "text"'] }),
     });
   assert.notEqual(result.status, 0, `keycloak delta was accepted: ${result.stdout}`);
@@ -477,19 +477,19 @@ test("classification is refused unless the retained text reproduces the gate's d
   const directory = await mkdtemp(path.join(os.tmpdir(), "revival-schema-tamper-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const before = await capture(directory, "postgres-schema.restored.tsv",
-    { carry: carry(), keycloak: keycloak() });
+    { cosmos: cosmos(), keycloak: keycloak() });
   const after = await capture(directory, "postgres-schema.after.tsv",
-    { carry: carry({ token: "ab12", memory: MEMORY.filter((column) => !column.includes("thumbnails")) }), keycloak: keycloak({ token: "ab12" }) });
+    { cosmos: cosmos({ token: "ab12", memory: MEMORY.filter((column) => !column.includes("thumbnails")) }), keycloak: keycloak({ token: "ab12" }) });
 
   // Substituting an innocent dump for the one that was actually hashed is the
   // obvious way to launder a destructive delta past a classifier.
-  await writeFile(`${after}.carry.sql`, await readFile(`${before}.carry.sql`, "utf8"), { mode: 0o600 });
+  await writeFile(`${after}.cosmos.sql`, await readFile(`${before}.cosmos.sql`, "utf8"), { mode: 0o600 });
   let result = classify(before, after);
   assert.notEqual(result.status, 0, "laundered dump text was accepted");
   assert.match(result.stderr, /does not reproduce the digest the gate compared/u);
 
   // And a missing sidecar is a refusal, not a silent pass.
-  await rm(`${after}.carry.sql`);
+  await rm(`${after}.cosmos.sql`);
   result = classify(before, after);
   assert.notEqual(result.status, 0, "missing retained text was accepted");
   assert.match(result.stderr, /retained pg_dump text is missing beside the manifest/u);
@@ -497,8 +497,8 @@ test("classification is refused unless the retained text reproduces the gate's d
 
 test("a digest delta with no statement-level explanation is refused, not waved through", async (t) => {
   const { differs, result } = await verdict(t,
-    { carry: carry(), keycloak: keycloak() },
-    { carry: carry().replace("-- Name: carry_note; Type: TABLE", "-- Name: carry_note; Type: TABLE "), keycloak: keycloak() });
+    { cosmos: cosmos(), keycloak: keycloak() },
+    { cosmos: cosmos().replace("-- Name: cosmos_note; Type: TABLE", "-- Name: cosmos_note; Type: TABLE "), keycloak: keycloak() });
   assert.ok(differs, "a comment-only edit must still move the digest");
   assert.notEqual(result.status, 0, `an unexplained delta was accepted: ${result.stdout}`);
   assert.match(result.stderr, /no statement-level delta explains it/u);
@@ -594,7 +594,7 @@ test("every pre-vs-post schema comparison goes through the allowance, not a bare
   // the way the schema half is. The only change is that both sides are first
   // stripped of Keycloak's two session relations, which any authentication
   // rewrites and which the deploy's own wearer canary therefore moves on every
-  // run. Everything else, including every carry relation, is still compared byte
+  // run. Everything else, including every cosmos relation, is still compared byte
   // for byte and still fails by the same name.
   assert.match(deploySource,
     /^  zero_delta_volatile_filtered "\$before\/postgres-data\.tsv" "\$volatile_work\/before\.tsv"$/mu);
@@ -627,8 +627,8 @@ test("the backup keeps the pg_dump text the classifier needs, and it is an allow
   // if the backup does not retain it there is nothing to classify against and the
   // gate can only refuse.
   assert.match(backupSource,
-    /^capture_postgres_schema "\$postgres" carry "\$destination\/postgres-schema\.tsv" retain-sql$/mu);
-  assert.match(commonSource, /^\s*postgres-schema\.tsv\.carry\.sql postgres-schema\.tsv\.keycloak\.sql$/mu);
+    /^capture_postgres_schema "\$postgres" cosmos "\$destination\/postgres-schema\.tsv" retain-sql$/mu);
+  assert.match(commonSource, /^\s*postgres-schema\.tsv\.cosmos\.sql postgres-schema\.tsv\.keycloak\.sql$/mu);
 });
 
 test("the post-candidate backup is digested over the pre-candidate backup's columns", () => {
@@ -637,7 +637,7 @@ test("the post-candidate backup is digested over the pre-candidate backup's colu
   // capture time so the comparison itself stays a plain byte comparison.
   assert.match(backupSource, /^    --data-columns-source\) \(\(\$# >= 2\)\) \|\| usage; data_columns_source="\$2"; shift 2 ;;$/mu);
   assert.match(backupSource,
-    /^capture_postgres_data "\$postgres" carry "\$destination\/postgres-data\.tsv" "\$data_columns_source"$/mu);
+    /^capture_postgres_data "\$postgres" cosmos "\$destination\/postgres-data\.tsv" "\$data_columns_source"$/mu);
   // Only another backup's own sidecar may narrow what a digest covers.
   assert.match(backupSource,
     /^  \[\[ "\$data_columns_source" == "\$\(readlink -f -- "\$BACKUP_ROOT"\)\/"\*\/postgres-data\.tsv\.columns \]\] \\$/mu);
@@ -657,9 +657,9 @@ test("the post-candidate backup is digested over the pre-candidate backup's colu
   // ...and the resume gets the same projection by capturing it ITSELF, with this
   // release's canonical producer, rather than asking an older backup.sh for it.
   assert.match(deploySource,
-    /^  capture_postgres_data "\$postgres" carry "\$work\/candidate-data\.tsv" "\$columns_source"$/mu);
+    /^  capture_postgres_data "\$postgres" cosmos "\$work\/candidate-data\.tsv" "\$columns_source"$/mu);
   assert.match(deploySource,
-    /^  capture_postgres_schema "\$postgres" carry "\$work\/candidate-schema\.tsv" retain-sql$/mu);
+    /^  capture_postgres_schema "\$postgres" cosmos "\$work\/candidate-schema\.tsv" retain-sql$/mu);
   // The sidecar it projects onto is validated before it can narrow a digest, and
   // its absence degrades exactly as precommit_projection_args does: to the live
   // column list, which then FAILS an additive delta rather than passing it.
@@ -680,7 +680,7 @@ test("the post-candidate backup is digested over the pre-candidate backup's colu
  * instant, so there is nothing additive to project away — and projecting anyway
  * makes it blind to precisely the columns the projection excludes. Measured, not
  * theorised: against a real PostgreSQL 16 cluster with 0004 applied, corrupting
- * `carry_memory.thumbnail_count` between the authoritative capture and the
+ * `cosmos_memory.thumbnail_count` between the authoritative capture and the
  * after-physical capture was compared EQUAL while the projection was in force.
  */
 
@@ -696,7 +696,7 @@ test("a projected backup keeps an unprojected manifest for its own fidelity chec
   // Written only when the authoritative manifest is projected, and enumerated as
   // an optional artifact so backups without it still verify.
   assert.match(backupSource,
-    /^if \[\[ -n "\$data_columns_source" \]\]; then\n  capture_postgres_data "\$postgres" carry "\$destination\/postgres-data\.unprojected\.tsv"\nfi$/mu);
+    /^if \[\[ -n "\$data_columns_source" \]\]; then\n  capture_postgres_data "\$postgres" cosmos "\$destination\/postgres-data\.unprojected\.tsv"\nfi$/mu);
   assert.match(backupSource,
     /^fidelity_data_manifest="\$\(backup_fidelity_data_manifest "\$destination"\)"$/mu);
   assert.match(commonSource, /^\s*postgres-data\.unprojected\.tsv postgres-data\.unprojected\.tsv\.columns \\$/mu);

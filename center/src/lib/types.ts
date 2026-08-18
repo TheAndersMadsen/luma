@@ -19,7 +19,7 @@ export interface CaptureData {
   thumbnailCount?: number;
   /** Number of frames in the stock burst (normally three for a photo). */
   frameCount?: number;
-  /** Zero-based frame selected by Carry for Center's hero image. */
+  /** Zero-based frame selected by Cosmos for Center's hero image. */
   bestFrameIndex?: number;
   /** Clone-owned selector provenance; Humane's original model is unknown. */
   bestFrameMethod?: "vision_v1" | "quality_v1" | "manual" | string;

@@ -14,7 +14,7 @@ use aes_gcm::{
     aead::{Aead, KeyInit as AeadKeyInit, Payload},
 };
 
-use crate::secure_asset_generated::carry::krypton::secureasset as wire;
+use crate::secure_asset_generated::cosmos::krypton::secureasset as wire;
 
 const AES_KW_ALGORITHM: u8 = 1;
 const WRAPPED_CEK_LEN: usize = 24;

@@ -8,14 +8,14 @@
  * browser at `install/device/adbAuth.ts`.
  *
  * Center cannot: `connect-src 'self'` in `next.config.mjs` is what keeps browser
- * JavaScript on the origin that holds the `carry_tokens` session cookie from
+ * JavaScript on the origin that holds the `cosmos_tokens` session cookie from
  * talking to third parties, and widening it to a third-party Worker to make one
  * call would weaken every page on the origin. So the call moves server-side and
  * the browser talks to `/api/pin/adb/sign`, same-origin. The CSP is untouched.
  *
  * What crosses this boundary is device auth material, so:
  *   - nothing here logs, stores or returns the token, the signature, or an
- *     upstream response body. Error messages carry a status code and nothing else;
+ *     upstream response body. Error messages contain a status code and nothing else;
  *   - the request is exactly one ADB token — 20 bytes, no more, no less — so the
  *     proxy cannot be used as a general-purpose relay to the signer;
  *   - the destination is configuration, never caller input, and is re-validated

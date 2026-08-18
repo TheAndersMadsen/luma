@@ -68,7 +68,7 @@ export function AdminProvisioning({
               {overview.onboarding.endpoint ? (
                 <code>{overview.onboarding.endpoint}</code>
               ) : (
-                <span className={styles.muted}>set CARRY_ONBOARDING_ENDPOINT to show</span>
+                <span className={styles.muted}>set COSMOS_ONBOARDING_ENDPOINT to show</span>
               )}
               {overview.onboarding.authority ? (
                 <span className={styles.muted}> · authority {overview.onboarding.authority}</span>

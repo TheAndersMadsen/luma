@@ -45,7 +45,7 @@ export function DomainView({ domain }: { domain: Domain }) {
    * A row the backend confirmed is gone.
    *
    * Drop it from the cache so it leaves the screen at once, THEN invalidate so
-   * the next read comes from carry rather than from this optimistic edit — if
+   * the next read comes from cosmos rather than from this optimistic edit — if
    * the event somehow survived, it reappears, which is the honest outcome and
    * the reason this is an invalidate and not a permanent local filter.
    *

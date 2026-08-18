@@ -68,7 +68,7 @@ import {
   verifyExplicitDevice,
 } from "./agentic-release-smoke.mjs";
 
-test("AIBus request headers carry the validated bearer token only when supplied", () => {
+test("AIBus request headers contain the validated bearer token only when supplied", () => {
   const token = "a".repeat(32);
   const anonymous = buildAibusRequestHeaders(30_000, "test-run", undefined);
   const authenticated = buildAibusRequestHeaders(30_000, "test-run", token);
@@ -1092,7 +1092,7 @@ test("Tickle requires stock-cache evidence, exact phrases, and a negative contro
 
 /// Builds the streamed interim shape the server emits for a tool batch: one
 /// parent-linked ACTION turn named after the batch's first tool, one paired
-/// OBSERVATION turn carrying that registered name and a closed status JSON,
+/// OBSERVATION turn containing that registered name and a closed status JSON,
 /// and a terminal action. Parent linkage matches the live chain contract.
 function toolCueResponses(batches, { terminal = "Respond" } = {}) {
   const messages = [];

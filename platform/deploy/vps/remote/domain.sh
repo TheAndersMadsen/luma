@@ -2,7 +2,7 @@
 # Public Center domain transaction. This library is sourced after common.sh.
 
 DOMAIN_CANONICAL_ORIGIN=https://center.andersmadsen.dk
-DOMAIN_LEGACY_ORIGIN=https://carry.andersmadsen.dk
+DOMAIN_LEGACY_ORIGIN=https://cosmos.andersmadsen.dk
 DOMAIN_HELPER="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/domain.py"
 DOMAIN_CLOUDFLARED_CONFIG=/home/anders/.cloudflared/config.yml
 DOMAIN_CLOUDFLARED_BIN=/usr/local/bin/cloudflared
@@ -123,8 +123,8 @@ domain_assert_public_tls() {
   domain_sudo openssl x509 -in "$certificate" -noout >/dev/null \
     && domain_sudo openssl x509 -checkend 604800 -in "$certificate" -noout >/dev/null \
     && domain_sudo openssl x509 -checkhost center.andersmadsen.dk -in "$certificate" -noout >/dev/null \
-    && domain_sudo openssl x509 -checkhost carry.andersmadsen.dk -in "$certificate" -noout >/dev/null \
-    || { domain_error "public TLS certificate is invalid, expires soon, or does not cover Center and Carry"; return 1; }
+    && domain_sudo openssl x509 -checkhost cosmos.andersmadsen.dk -in "$certificate" -noout >/dev/null \
+    || { domain_error "public TLS certificate is invalid, expires soon, or does not cover Center and Cosmos"; return 1; }
   san="$(domain_sudo openssl x509 -in "$certificate" -noout -ext subjectAltName)" || return 1
   grep -Eq 'DNS:[*]\.andersmadsen\.dk([,[:space:]]|$)' <<<"$san" \
     || { domain_error "public TLS certificate is not the reviewed andersmadsen.dk wildcard"; return 1; }
@@ -443,7 +443,7 @@ PY
 
 domain_keycloak_host() {
   case "$1" in
-    center.andersmadsen.dk|carry.andersmadsen.dk) printf '%s\n' "$1" ;;
+    center.andersmadsen.dk|cosmos.andersmadsen.dk) printf '%s\n' "$1" ;;
     *) domain_error "unreviewed Keycloak request host"; return 1 ;;
   esac
 }
@@ -650,7 +650,7 @@ domain_keycloak_verify_desired() {
 }
 
 domain_keycloak_verify_before() {
-  local record="$1" runtime="$2" port="$3" request_host="${4:-carry.andersmadsen.dk}"
+  local record="$1" runtime="$2" port="$3" request_host="${4:-cosmos.andersmadsen.dk}"
   domain_keycloak_verify_state "$record" "$runtime" "$port" before "$request_host" \
     && domain_sudo python3 "$DOMAIN_HELPER" client-check-marker --record "$record" --state restored
 }

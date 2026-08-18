@@ -40,7 +40,7 @@ assert_fetch_destination() {
   local directory="$1" id="$2"
   [[ "$directory" == /* ]] || die "--fetch-dir must be an absolute path: $directory"
   # Private keys must never land inside the checkout, where the next `git add`
-  # or release package would carry them.
+  # or release package would contain them.
   [[ "$directory" != "$REVIVAL_ROOT" && "$directory" != "$REVIVAL_ROOT"/* ]] \
     || die "--fetch-dir must be outside the source tree: $directory"
   [[ -z "$id" || ! -e "$directory/$id" ]] \
@@ -224,7 +224,7 @@ PY
   # keystore beside it is just as unrecoverable and is referenced by nothing —
   # and the provisioning flow now stores per-device identity material under
   # device-identities/<device-id>/, which is exactly the credential class this
-  # bundle exists to carry. Regular files only, at any depth; a symlink or
+  # bundle exists to contain. Regular files only, at any depth; a symlink or
   # anything else stops the capture rather than half-succeeding.
   while IFS= read -r name; do
     relative="${name#"$signing"/}"

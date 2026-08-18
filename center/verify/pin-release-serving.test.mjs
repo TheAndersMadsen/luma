@@ -101,7 +101,7 @@ test("current Pin release is canonical, complete, hardened, and same-origin comp
   const root = await createStore(t);
   const release = await publishRelease(root);
   const response = await serveCurrentPinRelease(
-    new Request("https://carry.example.test/api/pin/releases/current"),
+    new Request("https://cosmos.example.test/api/pin/releases/current"),
     { environment: environment(root) },
   );
 
@@ -116,7 +116,7 @@ test("current Pin release is canonical, complete, hardened, and same-origin comp
   assert.deepEqual(JSON.parse(document), release.manifest);
   for (const artifact of release.manifest.artifacts) {
     assert.equal(
-      new URL(artifact.url, "https://carry.example.test/api/pin/releases/current").pathname,
+      new URL(artifact.url, "https://cosmos.example.test/api/pin/releases/current").pathname,
       `/api/pin/releases/${release.releaseId}/${artifact.role}.apk`,
     );
   }
@@ -131,7 +131,7 @@ test("APK downloads use immutable role URLs, exact lengths, and streaming bodies
     versionCode: 102,
   });
 
-  const url = `https://carry.example.test/api/pin/releases/${first.releaseId}/installer.apk`;
+  const url = `https://cosmos.example.test/api/pin/releases/${first.releaseId}/installer.apk`;
   const response = await servePinReleaseArtifact(
     new Request(url),
     first.releaseId,
@@ -217,7 +217,7 @@ test("corrupt or symlinked release state fails closed without leaking disk paths
 
   const corruptResponse = await servePinReleaseArtifact(
     new Request(
-      `https://carry.example.test/api/pin/releases/${corrupt.releaseId}/installer.apk`,
+      `https://cosmos.example.test/api/pin/releases/${corrupt.releaseId}/installer.apk`,
     ),
     corrupt.releaseId,
     "installer.apk",
@@ -226,7 +226,7 @@ test("corrupt or symlinked release state fails closed without leaking disk paths
   assert.equal(corruptResponse.status, 503);
   assert.equal(await corruptResponse.text(), '{"error":"Pin release unavailable."}');
   assert.equal((await serveCurrentPinRelease(
-    new Request("https://carry.example.test/api/pin/releases/current"),
+    new Request("https://cosmos.example.test/api/pin/releases/current"),
     { environment: environment(corruptRoot) },
   )).status, 503);
 
@@ -240,7 +240,7 @@ test("corrupt or symlinked release state fails closed without leaking disk paths
   await symlink(outside, path.join(symlinked.releaseDirectory, linkedArtifact.name));
   const symlinkResponse = await servePinReleaseArtifact(
     new Request(
-      `https://carry.example.test/api/pin/releases/${symlinked.releaseId}/installer.apk`,
+      `https://cosmos.example.test/api/pin/releases/${symlinked.releaseId}/installer.apk`,
     ),
     symlinked.releaseId,
     "installer.apk",
@@ -255,14 +255,14 @@ test("corrupt or symlinked release state fails closed without leaking disk paths
     path.join(symlinkRoot, "current.json"),
   );
   assert.equal((await serveCurrentPinRelease(
-    new Request("https://carry.example.test/api/pin/releases/current"),
+    new Request("https://cosmos.example.test/api/pin/releases/current"),
     { environment: environment(symlinkRoot) },
   )).status, 503);
 });
 
 test("unconfigured stores and malformed immutable paths return bounded 404 responses", async (t) => {
   const absent = await serveCurrentPinRelease(
-    new Request("https://carry.example.test/api/pin/releases/current"),
+    new Request("https://cosmos.example.test/api/pin/releases/current"),
     { environment: {} },
   );
   assert.equal(absent.status, 404);
@@ -270,7 +270,7 @@ test("unconfigured stores and malformed immutable paths return bounded 404 respo
 
   const emptyRoot = await createStore(t);
   assert.equal((await serveCurrentPinRelease(
-    new Request("https://carry.example.test/api/pin/releases/current"),
+    new Request("https://cosmos.example.test/api/pin/releases/current"),
     { environment: environment(emptyRoot) },
   )).status, 404);
 
@@ -280,7 +280,7 @@ test("unconfigured stores and malformed immutable paths return bounded 404 respo
     ["a".repeat(64), "unknown.apk"],
   ]) {
     const response = await servePinReleaseArtifact(
-      new Request("https://carry.example.test/api/pin/releases/bad/unknown.apk"),
+      new Request("https://cosmos.example.test/api/pin/releases/bad/unknown.apk"),
       releaseId,
       asset,
       { environment: environment(emptyRoot) },
@@ -308,7 +308,7 @@ test("a verified release is not re-hashed on every public request", async (t) =>
   const release = await publishRelease(root, { seed: "cached" });
   const request = () =>
     serveCurrentPinRelease(
-      new Request("https://carry.example.test/api/pin/releases/current"),
+      new Request("https://cosmos.example.test/api/pin/releases/current"),
       { environment: environment(root) },
     );
 
@@ -335,7 +335,7 @@ test("a verified release is not re-hashed on every public request", async (t) =>
   // full re-hash.
   const installer = release.manifest.artifacts.find((artifact) => artifact.role === "installer");
   const download = await servePinReleaseArtifact(
-    new Request(`https://carry.example.test/api/pin/releases/${release.releaseId}/installer.apk`),
+    new Request(`https://cosmos.example.test/api/pin/releases/${release.releaseId}/installer.apk`),
     release.releaseId,
     "installer.apk",
     { environment: environment(root) },
@@ -379,11 +379,11 @@ test("one opaque sentence on the wire, one distinct reason in the log", async (t
   let corrupt;
   try {
     unconfigured = await serveCurrentPinRelease(
-      new Request("https://carry.example.test/api/pin/releases/current"),
+      new Request("https://cosmos.example.test/api/pin/releases/current"),
       { environment: {} },
     );
     corrupt = await serveCurrentPinRelease(
-      new Request("https://carry.example.test/api/pin/releases/current"),
+      new Request("https://cosmos.example.test/api/pin/releases/current"),
       { environment: environment(root) },
     );
   } finally {
@@ -414,7 +414,7 @@ test("CORS is absent by default and exact for one configured Setup origin", asyn
   const setupOrigin = "https://setup.example.test";
   const allowedEnvironment = environment(root, setupOrigin);
   const allowed = await serveCurrentPinRelease(
-    new Request("https://carry.example.test/api/pin/releases/current", {
+    new Request("https://cosmos.example.test/api/pin/releases/current", {
       headers: { origin: setupOrigin },
     }),
     { environment: allowedEnvironment },
@@ -428,15 +428,15 @@ test("CORS is absent by default and exact for one configured Setup origin", asyn
   assert.notEqual(allowed.headers.get("access-control-allow-origin"), "*");
 
   const sameOrigin = await serveCurrentPinRelease(
-    new Request("https://carry.example.test/api/pin/releases/current", {
-      headers: { origin: "https://carry.example.test" },
+    new Request("https://cosmos.example.test/api/pin/releases/current", {
+      headers: { origin: "https://cosmos.example.test" },
     }),
     { environment: allowedEnvironment },
   );
   assert.equal(sameOrigin.status, 200);
 
   const rejected = await serveCurrentPinRelease(
-    new Request("https://carry.example.test/api/pin/releases/current", {
+    new Request("https://cosmos.example.test/api/pin/releases/current", {
       headers: { origin: "https://attacker.example" },
     }),
     { environment: allowedEnvironment },
@@ -445,7 +445,7 @@ test("CORS is absent by default and exact for one configured Setup origin", asyn
   assert.equal(rejected.headers.has("access-control-allow-origin"), false);
 
   const preflight = servePinReleaseOptions(
-    new Request("https://carry.example.test/api/pin/releases/current", {
+    new Request("https://cosmos.example.test/api/pin/releases/current", {
       method: "OPTIONS",
       headers: {
         origin: setupOrigin,
@@ -461,7 +461,7 @@ test("CORS is absent by default and exact for one configured Setup origin", asyn
   assert.equal(preflight.headers.get("access-control-allow-headers"), "Accept");
 
   const mutationPreflight = servePinReleaseOptions(
-    new Request("https://carry.example.test/api/pin/releases/current", {
+    new Request("https://cosmos.example.test/api/pin/releases/current", {
       method: "OPTIONS",
       headers: {
         origin: setupOrigin,
@@ -473,7 +473,7 @@ test("CORS is absent by default and exact for one configured Setup origin", asyn
   assert.equal(mutationPreflight.status, 403);
 
   const wildcard = await serveCurrentPinRelease(
-    new Request("https://carry.example.test/api/pin/releases/current"),
+    new Request("https://cosmos.example.test/api/pin/releases/current"),
     { environment: environment(root, "*") },
   );
   assert.equal(wildcard.status, 503);

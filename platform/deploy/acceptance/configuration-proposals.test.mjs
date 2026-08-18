@@ -29,7 +29,7 @@ import { fileURLToPath } from "node:url";
  *
  *   "EDITABLE" IS NOT "DELIVERED". Three settings §4 of
  *   center/src/server/configuration.ts calls safe to edit cannot be delivered by
- *   the env plane at all: two are Compose LITERALS, and CARRY_DEADLINE_MS is
+ *   the env plane at all: two are Compose LITERALS, and COSMOS_DEADLINE_MS is
  *   absent from the Center service's explicit environment allowlist. Each says
  *   so in its descriptor. If a later Compose change plumbs one of them through,
  *   the descriptor becomes a stale refusal and an operator is told to go and
@@ -62,7 +62,7 @@ const catalogSource = await readFile(catalogPath, "utf8");
  * The TypeScript cannot be imported from here — this suite runs with no
  * `center/node_modules` and `layout.sh` fails if one exists — so each `{ name:
  * "X", … }` block is sliced out and the three facts this test needs are read
- * off it. Nothing is inferred: a descriptor that stops carrying `editable`,
+ * off it. Nothing is inferred: a descriptor that stops containing `editable`,
  * `home` or a delivery verdict fails the parse rather than defaulting.
  */
 function readCatalog(source) {
@@ -146,10 +146,10 @@ test("a setting the catalog calls undeliverable really is undeliverable", async 
   const model = `${base}\n${production}`;
 
   for (const setting of catalog.filter((entry) => entry.undeliverable)) {
-    // CARRY_REMOTE_TTS_ENABLED is undeliverable for a different reason: the
+    // COSMOS_REMOTE_TTS_ENABLED is undeliverable for a different reason: the
     // deploy writes it itself, after proposals are applied, once the speech
     // canary has proved the provider. That is checked below.
-    if (setting.name === "CARRY_REMOTE_TTS_ENABLED") continue;
+    if (setting.name === "COSMOS_REMOTE_TTS_ENABLED") continue;
     const interpolated = new RegExp(`\\$\\{${setting.name}[:}]`).test(model);
     assert.equal(
       interpolated,
@@ -173,7 +173,7 @@ test("a setting the catalog calls undeliverable really is undeliverable", async 
 test("proposals are applied to the candidate, after the values that would overwrite them", () => {
   const applyAt = deploySource.indexOf('apply_configuration_proposals "$stage_env"');
   const captureAt = deploySource.indexOf('capture_live_center_env "$stage_env/center.env"');
-  const ttsAt = deploySource.indexOf('update_env_value "$cosmos_stage" CARRY_REMOTE_TTS_ENABLED true');
+  const ttsAt = deploySource.indexOf('update_env_value "$cosmos_stage" COSMOS_REMOTE_TTS_ENABLED true');
   assert.ok(applyAt > 0, "the deploy must apply pending configuration proposals");
 
   // capture_live_center_env re-imports KEYCLOAK_SCOPES from the RUNNING Center
@@ -182,10 +182,10 @@ test("proposals are applied to the candidate, after the values that would overwr
   // and ineffective.
   assert.ok(captureAt > 0 && captureAt < applyAt, "proposals must be applied after the live Center env is captured");
 
-  // The speech canary sets CARRY_REMOTE_TTS_ENABLED itself once it has proved
+  // The speech canary sets COSMOS_REMOTE_TTS_ENABLED itself once it has proved
   // the provider returns real audio. That is why the catalog marks that setting
   // undeliverable, and this ordering is what makes the claim true.
-  assert.ok(ttsAt > applyAt, "the speech canary must remain the last writer of CARRY_REMOTE_TTS_ENABLED");
+  assert.ok(ttsAt > applyAt, "the speech canary must remain the last writer of COSMOS_REMOTE_TTS_ENABLED");
 
   // The staged candidate only. Nothing about this may touch a live protected
   // file: config-digests.tsv is what makes rollback trustworthy.
@@ -257,17 +257,17 @@ test("a valid proposal reaches every staged file that decides the effective valu
   // so writing only the home would let a stale value in a later file quietly
   // win — saved, deployed, ineffective, with nothing said.
   const work = await scratch({
-    CARRY_LLM_MODEL: { value: "openai/gpt-4o-mini", proposedAt: "2026-08-12T10:00:00.000Z" },
+    COSMOS_LLM_MODEL: { value: "openai/gpt-4o-mini", proposedAt: "2026-08-12T10:00:00.000Z" },
     KEYCLOAK_SCOPES: { value: "openid email profile", proposedAt: "2026-08-12T10:00:00.000Z" },
   });
-  await writeFile(path.join(work, "stage", "runtime.env"), "CARRY_LLM_MODEL=stale/model\n");
+  await writeFile(path.join(work, "stage", "runtime.env"), "COSMOS_LLM_MODEL=stale/model\n");
 
   const result = applyInScratch(work);
   assert.equal(result.status, 0, result.stderr);
 
   const read = async (file) => readFile(path.join(work, "stage", file), "utf8");
-  assert.match(await read("providers.env"), /^CARRY_LLM_MODEL=openai\/gpt-4o-mini$/m);
-  assert.match(await read("runtime.env"), /^CARRY_LLM_MODEL=openai\/gpt-4o-mini$/m);
+  assert.match(await read("providers.env"), /^COSMOS_LLM_MODEL=openai\/gpt-4o-mini$/m);
+  assert.match(await read("runtime.env"), /^COSMOS_LLM_MODEL=openai\/gpt-4o-mini$/m);
   assert.doesNotMatch(await read("runtime.env"), /stale\/model/);
   assert.match(await read("center.env"), /^KEYCLOAK_SCOPES=openid email profile$/m);
   // A name nothing already carried is not scattered into files that never had it.
@@ -276,7 +276,7 @@ test("a valid proposal reaches every staged file that decides the effective valu
   // The value is not echoed. These are not secrets, but the deploy's output is
   // shared and the store is the record that carries values.
   assert.doesNotMatch(result.stdout, /gpt-4o-mini/);
-  assert.match(result.stdout, /applied dashboard configuration proposal: CARRY_LLM_MODEL/);
+  assert.match(result.stdout, /applied dashboard configuration proposal: COSMOS_LLM_MODEL/);
 });
 
 test("the deploy refuses the whole store rather than applying the part it likes", async () => {
@@ -286,24 +286,24 @@ test("the deploy refuses the whole store rather than applying the part it likes"
       /AUTH_SESSION_SECRET is not a setting the dashboard may propose/,
     ],
     [
-      { CARRY_PG_PASSWORD: { value: "x", proposedAt: "" } },
-      /CARRY_PG_PASSWORD is not a setting the dashboard may propose/,
+      { COSMOS_PG_PASSWORD: { value: "x", proposedAt: "" } },
+      /COSMOS_PG_PASSWORD is not a setting the dashboard may propose/,
     ],
     // The name IS proposable in the catalog and is NOT deliverable, so the
     // deploy must not write it either — the two lists agreeing is the point.
     [
-      { CARRY_DEADLINE_MS: { value: "9000", proposedAt: "" } },
-      /CARRY_DEADLINE_MS is not a setting the dashboard may propose/,
+      { COSMOS_DEADLINE_MS: { value: "9000", proposedAt: "" } },
+      /COSMOS_DEADLINE_MS is not a setting the dashboard may propose/,
     ],
     [
       { KEYCLOAK_SCOPES: { value: "email profile", proposedAt: "" } },
       /must include openid/,
     ],
     [
-      { CARRY_LLM_MODEL: { value: "a b", proposedAt: "" } },
+      { COSMOS_LLM_MODEL: { value: "a b", proposedAt: "" } },
       /not a usable provider model identifier/,
     ],
-    [{ CARRY_LLM_MODEL: { value: " ok/model", proposedAt: "" } }, /whitespace/],
+    [{ COSMOS_LLM_MODEL: { value: " ok/model", proposedAt: "" } }, /whitespace/],
     // The SHARED guard, which every kind is checked against before its own
     // grammar. Reached here through the one setting whose grammar does not
     // bound its own length: a scope list is any number of well-formed tokens, so
@@ -322,7 +322,7 @@ test("the deploy refuses the whole store rather than applying the part it likes"
     // A second, valid entry alongside the bad one: if the applier applied what
     // it liked and skipped the rest, this file would come back changed.
     if (typeof settings !== "string") {
-      settings.CARRY_VISION_MODEL = { value: "openai/gpt-4o-mini", proposedAt: "" };
+      settings.COSMOS_VISION_MODEL = { value: "openai/gpt-4o-mini", proposedAt: "" };
       await writeFile(
         path.join(work, "center-data", "configuration-proposals.json"),
         JSON.stringify({ schemaVersion: 1, settings }),

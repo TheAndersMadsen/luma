@@ -212,7 +212,7 @@ for (const [label, id, overrides] of [
     const check = checkById(result, id);
     assert.equal(check.status, CHECK_STATUS.FAIL);
     assert.equal(check.required, true);
-    assert.ok(check.fix.length > 0, "a failing check must carry an actionable fix");
+    assert.ok(check.fix.length > 0, "a failing check must contain an actionable fix");
     assert.equal(result.ok, false);
     assert.ok(result.blocking.includes(id));
   });
@@ -743,7 +743,7 @@ test("parseGatedAssetPins degrades to an empty map on unparseable input", () => 
 });
 
 // ---------------------------------------------------------------------------
-// Host identity. The report invites pasting; it must not carry the OS username.
+// Host identity. The report invites pasting; it must not contain the OS username.
 // ---------------------------------------------------------------------------
 
 function probesUnderHome() {

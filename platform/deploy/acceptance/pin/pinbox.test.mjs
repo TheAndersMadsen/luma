@@ -406,7 +406,7 @@ test("parseChatTurnSignals: null-safe and empty-safe", () => {
 
 // The played track is always rank one, so nothing downstream distinguishes
 // "Spotify ranked this first" from "our relevance fallback ranked this first".
-// This line is the whole difference — and it must carry a bounded shape only,
+// This line is the whole difference — and it must contain a bounded shape only,
 // never the artist the user asked for.
 test("parseMusicRankingDegraded reads the degraded-ranking marker", () => {
   const marker = OPERATIONAL_MARKERS.music_ranking_degraded.value;

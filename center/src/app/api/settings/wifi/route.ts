@@ -13,7 +13,7 @@ import { getSealedWifiSummary } from "@/server/domain/settings";
  * that doesn't host WifiConfigService, UNAVAILABLE, deadline) collapses to an
  * empty list rather than a 500 — but to a DISTINGUISHABLE empty list. Three
  * states, three answers: `live` (here is your list, possibly empty, possibly
- * sealed), `absent` (no carry backend is configured), `degraded` (it is
+ * sealed), `absent` (no cosmos backend is configured), `degraded` (it is
  * configured and did not answer). The fourth outcome — the wearer's own expired
  * grant (a `SessionExpiredError` inside the domain read) — answers 401 +
  * `reauthenticate`, because only they can fix it.
@@ -75,6 +75,6 @@ export async function GET() {
     : undefined;
   return NextResponse.json(
     { networks: [] as WifiNetwork[], sealedCount, state: "live", degraded },
-    { headers: sourceHeaders({ source: "carry", state: "live", degraded }) },
+    { headers: sourceHeaders({ source: "cosmos", state: "live", degraded }) },
   );
 }

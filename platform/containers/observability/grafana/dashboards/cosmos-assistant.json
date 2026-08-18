@@ -1,7 +1,7 @@
 {
-  "uid": "carry-assistant",
-  "title": "Carry — Assistant & Workloads",
-  "tags": ["carry"],
+  "uid": "cosmos-assistant",
+  "title": "Cosmos — Assistant & Workloads",
+  "tags": ["cosmos"],
   "timezone": "browser",
   "schemaVersion": 39,
   "version": 1,
@@ -15,12 +15,12 @@
       "type": "timeseries",
       "title": "Assistant turns by outcome (per 5m)",
       "description": "The wearer-answer signal. 'answered' and 'device_action' are successes; 'deadline', 'no_answer', 'too_many_actions' are turns the wearer felt as failure.",
-      "datasource": { "type": "prometheus", "uid": "carry-prometheus" },
+      "datasource": { "type": "prometheus", "uid": "cosmos-prometheus" },
       "gridPos": { "h": 9, "w": 16, "x": 0, "y": 0 },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (outcome) (increase(carry_assistant_turns_total[5m]))",
+          "expr": "sum by (outcome) (increase(cosmos_assistant_turns_total[5m]))",
           "legendFormat": "{{outcome}}"
         }
       ],
@@ -38,12 +38,12 @@
       "type": "stat",
       "title": "Answered share (1h)",
       "description": "Fraction of turns that ended in a spoken answer or a device action, over the last hour.",
-      "datasource": { "type": "prometheus", "uid": "carry-prometheus" },
+      "datasource": { "type": "prometheus", "uid": "cosmos-prometheus" },
       "gridPos": { "h": 9, "w": 8, "x": 16, "y": 0 },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(increase(carry_assistant_turns_total{outcome=~\"answered|device_action\"}[1h])) / clamp_min(sum(increase(carry_assistant_turns_total[1h])), 1)"
+          "expr": "sum(increase(cosmos_assistant_turns_total{outcome=~\"answered|device_action\"}[1h])) / clamp_min(sum(increase(cosmos_assistant_turns_total[1h])), 1)"
         }
       ],
       "fieldConfig": {
@@ -61,11 +61,11 @@
       "type": "timeseries",
       "title": "Model round-trip latency (p50 / p95)",
       "description": "Model steps dominate turn time; this is where a slow turn comes from.",
-      "datasource": { "type": "prometheus", "uid": "carry-prometheus" },
+      "datasource": { "type": "prometheus", "uid": "cosmos-prometheus" },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 9 },
       "targets": [
-        { "refId": "A", "expr": "histogram_quantile(0.5, sum by (le) (rate(carry_model_latency_seconds_bucket[10m])))", "legendFormat": "p50" },
-        { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le) (rate(carry_model_latency_seconds_bucket[10m])))", "legendFormat": "p95" }
+        { "refId": "A", "expr": "histogram_quantile(0.5, sum by (le) (rate(cosmos_model_latency_seconds_bucket[10m])))", "legendFormat": "p50" },
+        { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le) (rate(cosmos_model_latency_seconds_bucket[10m])))", "legendFormat": "p95" }
       ],
       "fieldConfig": { "defaults": { "unit": "s", "custom": { "drawStyle": "line", "fillOpacity": 10 } }, "overrides": [] }
     },
@@ -73,10 +73,10 @@
       "id": 4,
       "type": "timeseries",
       "title": "gRPC handler latency p95 by method",
-      "datasource": { "type": "prometheus", "uid": "carry-prometheus" },
+      "datasource": { "type": "prometheus", "uid": "cosmos-prometheus" },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 9 },
       "targets": [
-        { "refId": "A", "expr": "histogram_quantile(0.95, sum by (le, method) (rate(carry_rpc_duration_seconds_bucket[10m])))", "legendFormat": "{{method}}" }
+        { "refId": "A", "expr": "histogram_quantile(0.95, sum by (le, method) (rate(cosmos_rpc_duration_seconds_bucket[10m])))", "legendFormat": "{{method}}" }
       ],
       "fieldConfig": { "defaults": { "unit": "s", "custom": { "drawStyle": "line", "fillOpacity": 10 } }, "overrides": [] }
     },
@@ -84,10 +84,10 @@
       "id": 5,
       "type": "timeseries",
       "title": "Server tool calls by tool (per 5m)",
-      "datasource": { "type": "prometheus", "uid": "carry-prometheus" },
+      "datasource": { "type": "prometheus", "uid": "cosmos-prometheus" },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 17 },
       "targets": [
-        { "refId": "A", "expr": "sum by (tool) (increase(carry_assistant_tool_calls_total[5m]))", "legendFormat": "{{tool}}" }
+        { "refId": "A", "expr": "sum by (tool) (increase(cosmos_assistant_tool_calls_total[5m]))", "legendFormat": "{{tool}}" }
       ],
       "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "bars", "fillOpacity": 60 } }, "overrides": [] }
     },
@@ -95,10 +95,10 @@
       "id": 6,
       "type": "timeseries",
       "title": "Errors by kind (per 5m)",
-      "datasource": { "type": "prometheus", "uid": "carry-prometheus" },
+      "datasource": { "type": "prometheus", "uid": "cosmos-prometheus" },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 17 },
       "targets": [
-        { "refId": "A", "expr": "sum by (kind) (increase(carry_errors_total[5m]))", "legendFormat": "{{kind}}" }
+        { "refId": "A", "expr": "sum by (kind) (increase(cosmos_errors_total[5m]))", "legendFormat": "{{kind}}" }
       ],
       "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "bars", "fillOpacity": 60 } }, "overrides": [] }
     }

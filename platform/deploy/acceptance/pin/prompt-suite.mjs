@@ -278,7 +278,7 @@ execution is a misreading of the one-operation contract (Ghidra deep dive S6).",
   // The model answers directly, so any tool `expect` here would be invalid the
   // same way `current_time`/`TakePhoto` were. Their 2026-07-28 FAILs were
   // harness bug #1 alone (the answer was read from keys that do not exist) and
-  // carry NO assistant-behaviour signal — do not read that baseline as a
+  // contain NO assistant-behaviour signal — do not read that baseline as a
   // regression, and do not "fix" these by adding an expect.
   {
     id: "answer-arithmetic",
@@ -438,10 +438,10 @@ const isPlainObject = (value) =>
  *
  * Each guard excludes a shape that really occurs and would otherwise be scored
  * as the assistant's answer:
- *  - `kind !== "action"` drops observation frames (they carry `actionName`, not
+ *  - `kind !== "action"` drops observation frames (they contain `actionName`, not
  *    `action`) and the legacy `other` frame.
  *  - dropping non-NATIVE_ACTIONS.RESPOND frames loses device actions that
- *    carry PROSE: NATIVE_ACTIONS.PLAY_MUSIC holds Track/Artist/Album,
+ *    contain PROSE: NATIVE_ACTIONS.PLAY_MUSIC holds Track/Artist/Album,
  *    NATIVE_ACTIONS.COMPOSE_MESSAGE holds the outgoing body, and
  *    NATIVE_ACTIONS.UNDERSTAND_SCENE holds the user's own question — an
  *    extractor that scanned every input would score the user's words as the

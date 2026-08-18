@@ -167,7 +167,7 @@ Pin-specific native action and injection contracts remain in `pin/contracts`;
 the cross-component registry is `contracts/compatibility.json`.
 
 `derived`: Android package names, stock service identifiers, certificate
-identities, `CARRY_*` variables, and some durable storage names cannot be
+identities, `COSMOS_*` variables, and some durable storage names cannot be
 renamed safely without coordinated compatibility fixtures and state migration.
 They are boundary details, not product architecture.
 

@@ -4,13 +4,13 @@
 //! ## What the device does, and what we must answer
 //!
 //! A stock Pin never *registers* — its `libopaque.so` JNI surface is login-only.
-//! Registration happened once, server-side, during carry's account signup, a flow
+//! Registration happened once, server-side, during cosmos's account signup, a flow
 //! this clone does not have. So the ceremony here is:
 //!
 //! 1. We **fabricate** an OPAQUE password file (a `ServerRegistration` record) for
 //!    a pincode of our choosing, entirely offline. This is the clone's chosen
-//!    credential, not Humane's — the wearer's real carry pincode is unknown and
-//!    unknowable, so we mint our own (`CARRY_ENROLLMENT_PINCODE`, default
+//!    credential, not Humane's — the wearer's real cosmos pincode is unknown and
+//!    unknowable, so we mint our own (`COSMOS_ENROLLMENT_PINCODE`, default
 //!    `"0000"`).
 //! 2. The device runs `ClientLogin` against that record: `CreateLoginInit` carries
 //!    its KE1, we answer with KE2 ([`Enrollment::login_init`]); `CreateLoginFinish`
@@ -27,7 +27,7 @@
 //! The cipher suite is pinned by what the device's `libopaque.so` was built from:
 //! **opaque-ke 2.0.0 over NIST P-256 with Argon2 key stretching** (no
 //! `curve25519-dalek`, no ristretto anywhere in the binary; SHA-256 is the
-//! standard P-256 OPRF hash → a 32-byte session key). See [`CarrySuite`].
+//! standard P-256 OPRF hash → a 32-byte session key). See [`CosmosSuite`].
 //!
 //! The Argon2 key-stretching function is `argon2::Argon2::default()`, which
 //! opaque-ke constructs via the `Ksf: Default` bound: Argon2id, version 0x13,
@@ -76,13 +76,13 @@
 //! asking, and every KE2 this server answers is exactly one offline test of one
 //! guess against a **four-digit code with a deployment-wide default**. The ceiling
 //! in [`MAX_LOGIN_ATTEMPTS`] is therefore part of the protocol's security
-//! argument rather than a nicety bolted on top — and carry's own server metered
+//! argument rather than a nicety bolted on top — and cosmos's own server metered
 //! it too, which is why `OPAQUE_LOGIN_STATUS_RATE_LIMIT_HIT` and the device's
 //! `LockOutNode` exist. It is charged in [`Enrollment::login_init`], because that
 //! is the RPC that hands out the guess: a wrong pincode is detected inside the
 //! device's own `clientLoginFinish` and never sends a KE3 at all.
 //!
-//! ## `CARRY_ENROLLMENT_OPEN` gates the ceremony, not just a screen
+//! ## `COSMOS_ENROLLMENT_OPEN` gates the ceremony, not just a screen
 //!
 //! [`enrollment_open`] is consulted by all three ceremony entry points
 //! ([`Enrollment::login_init`], [`Enrollment::login_finish`] and
@@ -98,7 +98,7 @@
 //! authenticates the device on its next connection — trust its issuer. A CA minted
 //! at startup is trusted by exactly one pod for exactly one process lifetime, so
 //! every restart silently invalidates every certificate it ever issued. The CA is
-//! therefore loaded from `CARRY_DUC_CA_CERT`/`CARRY_DUC_CA_KEY` and enrollment is
+//! therefore loaded from `COSMOS_DUC_CA_CERT`/`COSMOS_DUC_CA_KEY` and enrollment is
 //! honestly [`unimplemented`](tonic::Code::Unimplemented) without it. **Operators
 //! must mount the same CA key/cert in every provisioning replica** and in the
 //! edge's DeviceUser trust bundle.
@@ -118,19 +118,19 @@ use p256::ecdsa::signature::Verifier as _;
 use rand::{RngCore, SeedableRng, rngs::OsRng, rngs::StdRng};
 use tonic::Status;
 
-/// carry's OPAQUE cipher suite, as recovered from the device's `libopaque.so`.
+/// cosmos's OPAQUE cipher suite, as recovered from the device's `libopaque.so`.
 ///
 /// P-256's VOPRF hashes with SHA-256, so `session_key` is 32 bytes.
-pub struct CarrySuite;
+pub struct CosmosSuite;
 
-impl CipherSuite for CarrySuite {
+impl CipherSuite for CosmosSuite {
     type OprfCs = p256::NistP256;
     type KeGroup = p256::NistP256;
     type KeyExchange = opaque_ke::key_exchange::tripledh::TripleDh;
     type Ksf = Argon2<'static>;
 }
 
-/// The clone's chosen enrollment pincode when `CARRY_ENROLLMENT_PINCODE` is unset.
+/// The clone's chosen enrollment pincode when `COSMOS_ENROLLMENT_PINCODE` is unset.
 ///
 /// This is the clone's own credential, documented as such — it is emphatically not
 /// a recovered Humane secret. Setting the variable to the empty string means "this
@@ -138,15 +138,15 @@ impl CipherSuite for CarrySuite {
 const DEFAULT_PINCODE: &str = "0000";
 
 /// Display name returned by `CreateLoginFinish` when unconfigured.
-const DEFAULT_DISPLAY_NAME: &str = "Carry User";
+const DEFAULT_DISPLAY_NAME: &str = "Cosmos User";
 
 /// Fixed 32-byte seed used to *propose* the OPAQUE `ServerSetup` when
-/// `CARRY_OPAQUE_SEED` is unset or malformed.
+/// `COSMOS_OPAQUE_SEED` is unset or malformed.
 ///
 /// The proposal only matters the first time: whichever setup reaches the store
 /// first wins forever after (see [`EnrollmentStore::server_setup_or_install`]),
 /// because a changed setup silently invalidates every password file it created.
-const DEFAULT_OPAQUE_SEED: [u8; 32] = *b"carry-clone-opaque-setup-seed-01";
+const DEFAULT_OPAQUE_SEED: [u8; 32] = *b"cosmos-clone-opaque-setup-seed-1";
 
 /// The clone's single enrolled user id — a stable, deterministic UUID.
 ///
@@ -160,9 +160,9 @@ const ENROLLMENT_USER_UUID: uuid::Uuid = uuid::Uuid::from_bytes([
 ]);
 
 /// PEM path of the DeviceUser-issuing CA certificate.
-pub const DUC_CA_CERT_ENV: &str = "CARRY_DUC_CA_CERT";
+pub const DUC_CA_CERT_ENV: &str = "COSMOS_DUC_CA_CERT";
 /// PEM (PKCS#8) path of the DeviceUser-issuing CA private key.
-pub const DUC_CA_KEY_ENV: &str = "CARRY_DUC_CA_KEY";
+pub const DUC_CA_KEY_ENV: &str = "COSMOS_DUC_CA_KEY";
 
 /// The gRPC health service name under which the provisioning workload publishes
 /// whether a DeviceUser binding can complete here.
@@ -175,9 +175,9 @@ pub const DUC_CA_KEY_ENV: &str = "CARRY_DUC_CA_KEY";
 /// sub-service on it lets the workload that HOLDS the CA answer the question,
 /// with no new route, no new RPC and no shared admin token.
 ///
-/// Namespaced under `carry.` rather than a real package: this is a clone-owned
+/// Namespaced under `cosmos.` rather than a real package: this is a clone-owned
 /// readiness signal, not a service anything can call.
-pub const DUC_CA_HEALTH_SERVICE: &str = "carry.enrollment.DeviceUserCa";
+pub const DUC_CA_HEALTH_SERVICE: &str = "cosmos.enrollment.DeviceUserCa";
 
 /// Whether this process can issue a DeviceUser certificate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -761,7 +761,7 @@ impl EnrollmentStore for PostgresEnrollmentStore {
         // Insert-if-absent then read back, so two replicas racing on a fresh
         // database converge on one setup instead of overwriting each other.
         sqlx::query(
-            "INSERT INTO carry_opaque_setup (id, setup) VALUES ($1, $2) \
+            "INSERT INTO cosmos_opaque_setup (id, setup) VALUES ($1, $2) \
              ON CONFLICT (id) DO NOTHING",
         )
         .bind(SERVER_SETUP_ROW)
@@ -773,7 +773,7 @@ impl EnrollmentStore for PostgresEnrollmentStore {
             EnrollmentStoreError
         })?;
 
-        let row: (Vec<u8>,) = sqlx::query_as("SELECT setup FROM carry_opaque_setup WHERE id = $1")
+        let row: (Vec<u8>,) = sqlx::query_as("SELECT setup FROM cosmos_opaque_setup WHERE id = $1")
             .bind(SERVER_SETUP_ROW)
             .fetch_one(&self.pool)
             .await
@@ -791,7 +791,7 @@ impl EnrollmentStore for PostgresEnrollmentStore {
     ) -> Stored<Vec<u8>> {
         self.ready().await?;
         sqlx::query(
-            "INSERT INTO carry_opaque_password_file (credential_id, record) VALUES ($1, $2) \
+            "INSERT INTO cosmos_opaque_password_file (credential_id, record) VALUES ($1, $2) \
              ON CONFLICT (credential_id) DO NOTHING",
         )
         .bind(credential_id)
@@ -804,7 +804,7 @@ impl EnrollmentStore for PostgresEnrollmentStore {
         })?;
 
         let row: (Vec<u8>,) = sqlx::query_as(
-            "SELECT record FROM carry_opaque_password_file WHERE credential_id = $1",
+            "SELECT record FROM cosmos_opaque_password_file WHERE credential_id = $1",
         )
         .bind(credential_id)
         .fetch_one(&self.pool)
@@ -819,7 +819,7 @@ impl EnrollmentStore for PostgresEnrollmentStore {
     async fn put_login(&self, principal: &str, state: &[u8]) -> Stored<()> {
         self.ready().await?;
         sqlx::query(
-            "INSERT INTO carry_opaque_login (principal, state, written_epoch) VALUES ($1, $2, $3) \
+            "INSERT INTO cosmos_opaque_login (principal, state, written_epoch) VALUES ($1, $2, $3) \
              ON CONFLICT (principal) DO UPDATE SET state = EXCLUDED.state, \
              written_epoch = EXCLUDED.written_epoch",
         )
@@ -840,7 +840,7 @@ impl EnrollmentStore for PostgresEnrollmentStore {
         // DELETE ... RETURNING is the atomic pop: two concurrent finishes cannot
         // both come away with the state, so a KE3 cannot be replayed.
         let row: Option<(Vec<u8>, i64)> = sqlx::query_as(
-            "DELETE FROM carry_opaque_login WHERE principal = $1 RETURNING state, written_epoch",
+            "DELETE FROM cosmos_opaque_login WHERE principal = $1 RETURNING state, written_epoch",
         )
         .bind(principal)
         .fetch_optional(&self.pool)
@@ -852,7 +852,7 @@ impl EnrollmentStore for PostgresEnrollmentStore {
 
         // Opportunistic pruning: abandoned ceremonies would otherwise accumulate
         // forever, and an expired row is not a live login anyway.
-        let _ = sqlx::query("DELETE FROM carry_opaque_login WHERE written_epoch < $1")
+        let _ = sqlx::query("DELETE FROM cosmos_opaque_login WHERE written_epoch < $1")
             .bind(now_epoch_seconds() - LOGIN_STATE_TTL_SECONDS)
             .execute(&self.pool)
             .await;
@@ -865,7 +865,7 @@ impl EnrollmentStore for PostgresEnrollmentStore {
     async fn put_session(&self, principal: &str, session_key: &[u8; 32]) -> Stored<()> {
         self.ready().await?;
         sqlx::query(
-            "INSERT INTO carry_opaque_session (principal, session_key, written_epoch) \
+            "INSERT INTO cosmos_opaque_session (principal, session_key, written_epoch) \
              VALUES ($1, $2, $3) ON CONFLICT (principal) DO UPDATE SET \
              session_key = EXCLUDED.session_key, written_epoch = EXCLUDED.written_epoch",
         )
@@ -883,13 +883,13 @@ impl EnrollmentStore for PostgresEnrollmentStore {
 
     async fn session(&self, principal: &str) -> Stored<Option<[u8; 32]>> {
         self.ready().await?;
-        let _ = sqlx::query("DELETE FROM carry_opaque_session WHERE written_epoch < $1")
+        let _ = sqlx::query("DELETE FROM cosmos_opaque_session WHERE written_epoch < $1")
             .bind(now_epoch_seconds() - SESSION_TTL_SECONDS)
             .execute(&self.pool)
             .await;
 
         let row: Option<(Vec<u8>, i64)> = sqlx::query_as(
-            "SELECT session_key, written_epoch FROM carry_opaque_session WHERE principal = $1",
+            "SELECT session_key, written_epoch FROM cosmos_opaque_session WHERE principal = $1",
         )
         .bind(principal)
         .fetch_optional(&self.pool)
@@ -924,13 +924,13 @@ impl EnrollmentStore for PostgresEnrollmentStore {
         // below the ceiling: the upsert serializes on the primary key and each
         // caller is RETURNED its own post-increment value.
         let row: (i32,) = sqlx::query_as(
-            "INSERT INTO carry_opaque_login_attempt (principal, attempts, window_start_epoch) \
+            "INSERT INTO cosmos_opaque_login_attempt (principal, attempts, window_start_epoch) \
              VALUES ($1, 1, $2) \
              ON CONFLICT (principal) DO UPDATE SET \
-             attempts = CASE WHEN carry_opaque_login_attempt.window_start_epoch < $3 \
-                             THEN 1 ELSE carry_opaque_login_attempt.attempts + 1 END, \
-             window_start_epoch = CASE WHEN carry_opaque_login_attempt.window_start_epoch < $3 \
-                             THEN $2 ELSE carry_opaque_login_attempt.window_start_epoch END \
+             attempts = CASE WHEN cosmos_opaque_login_attempt.window_start_epoch < $3 \
+                             THEN 1 ELSE cosmos_opaque_login_attempt.attempts + 1 END, \
+             window_start_epoch = CASE WHEN cosmos_opaque_login_attempt.window_start_epoch < $3 \
+                             THEN $2 ELSE cosmos_opaque_login_attempt.window_start_epoch END \
              RETURNING attempts",
         )
         .bind(principal)
@@ -947,17 +947,18 @@ impl EnrollmentStore for PostgresEnrollmentStore {
 
         // Opportunistic pruning of windows that have fully elapsed, exactly like
         // `take_login`. An expired row is not a live lockout.
-        let _ = sqlx::query("DELETE FROM carry_opaque_login_attempt WHERE window_start_epoch < $1")
-            .bind(window_opened_after)
-            .execute(&self.pool)
-            .await;
+        let _ =
+            sqlx::query("DELETE FROM cosmos_opaque_login_attempt WHERE window_start_epoch < $1")
+                .bind(window_opened_after)
+                .execute(&self.pool)
+                .await;
 
         Ok(row.0.max(0) as u32)
     }
 
     async fn clear_login_attempts(&self, principal: &str) -> Stored<()> {
         self.ready().await?;
-        sqlx::query("DELETE FROM carry_opaque_login_attempt WHERE principal = $1")
+        sqlx::query("DELETE FROM cosmos_opaque_login_attempt WHERE principal = $1")
             .bind(principal)
             .execute(&self.pool)
             .await
@@ -971,7 +972,7 @@ impl EnrollmentStore for PostgresEnrollmentStore {
     async fn put_device_account(&self, device_id: &str, account_sub: &str) -> Stored<()> {
         self.ready().await?;
         sqlx::query(
-            "INSERT INTO carry_device_account (device_id, account_sub, paired_at_epoch) \
+            "INSERT INTO cosmos_device_account (device_id, account_sub, paired_at_epoch) \
              VALUES ($1, $2, $3) ON CONFLICT (device_id) DO UPDATE SET \
              account_sub = EXCLUDED.account_sub, paired_at_epoch = EXCLUDED.paired_at_epoch",
         )
@@ -990,7 +991,7 @@ impl EnrollmentStore for PostgresEnrollmentStore {
     async fn device_account(&self, device_id: &str) -> Stored<Option<String>> {
         self.ready().await?;
         let row: Option<(String,)> =
-            sqlx::query_as("SELECT account_sub FROM carry_device_account WHERE device_id = $1")
+            sqlx::query_as("SELECT account_sub FROM cosmos_device_account WHERE device_id = $1")
                 .bind(device_id)
                 .fetch_optional(&self.pool)
                 .await
@@ -1008,7 +1009,7 @@ impl EnrollmentStore for PostgresEnrollmentStore {
     ) -> Stored<bool> {
         self.ready().await?;
         let result = sqlx::query(
-            "DELETE FROM carry_device_account WHERE device_id = $1 AND account_sub = $2",
+            "DELETE FROM cosmos_device_account WHERE device_id = $1 AND account_sub = $2",
         )
         .bind(device_id)
         .bind(expected_account_sub)
@@ -1024,7 +1025,7 @@ impl EnrollmentStore for PostgresEnrollmentStore {
     async fn device_accounts(&self) -> Stored<Vec<DeviceAccountPairing>> {
         self.ready().await?;
         let rows: Vec<(String, String, i64)> = sqlx::query_as(
-            "SELECT device_id, account_sub, paired_at_epoch FROM carry_device_account \
+            "SELECT device_id, account_sub, paired_at_epoch FROM cosmos_device_account \
              ORDER BY paired_at_epoch, device_id",
         )
         .fetch_all(&self.pool)
@@ -1058,7 +1059,7 @@ static ENROLLMENT_STORE: std::sync::OnceLock<SharedEnrollmentStore> = std::sync:
 
 /// Build the enrollment store this deployment is configured for.
 ///
-/// Shares `CARRY_DATABASE_URL` with [`crate::store::configured`] — one database
+/// Shares `COSMOS_DATABASE_URL` with [`crate::store::configured`] — one database
 /// per deployment — but keeps its own pool and tables. Unset keeps the
 /// process-lifetime store, which is correct only for a single replica.
 pub fn configured_store() -> SharedEnrollmentStore {
@@ -1111,7 +1112,7 @@ fn build_configured_store() -> SharedEnrollmentStore {
                 Arc::new(store)
             }
             Err(error) => panic!(
-                "CARRY_DATABASE_URL is set but unusable for enrollment state: {error}. \
+                "COSMOS_DATABASE_URL is set but unusable for enrollment state: {error}. \
                  Refusing to start on process-local OPAQUE state, which cannot complete \
                  an enrollment across replicas."
             ),
@@ -1130,17 +1131,17 @@ fn build_configured_store() -> SharedEnrollmentStore {
             // not be the one part that fails open.
             if !single_replica_enrollment_allowed() {
                 panic!(
-                    "enrollment has no shared state: CARRY_DATABASE_URL is unset. \
+                    "enrollment has no shared state: COSMOS_DATABASE_URL is unset. \
                      OPAQUE login state would be process-local, so CreateLoginInit and \
                      CreateLoginFinish landing on different replicas can never complete \
-                     an enrollment. Set CARRY_DATABASE_URL, or set \
-                     CARRY_ALLOW_SINGLE_REPLICA_ENROLLMENT=1 if this deployment really \
+                     an enrollment. Set COSMOS_DATABASE_URL, or set \
+                     COSMOS_ALLOW_SINGLE_REPLICA_ENROLLMENT=1 if this deployment really \
                      runs exactly one provisioning replica."
                 );
             }
             tracing::warn!(
                 "enrollment state: in-memory — valid ONLY for a single provisioning \
-                 replica (CARRY_ALLOW_SINGLE_REPLICA_ENROLLMENT is set)"
+                 replica (COSMOS_ALLOW_SINGLE_REPLICA_ENROLLMENT is set)"
             );
             MemoryEnrollmentStore::shared()
         }
@@ -1149,12 +1150,12 @@ fn build_configured_store() -> SharedEnrollmentStore {
 
 /// The enrollment pincode this deployment hands a Pin, for the operator console.
 ///
-/// Mirrors the value the OPAQUE record is fabricated under: `CARRY_ENROLLMENT_PINCODE`
+/// Mirrors the value the OPAQUE record is fabricated under: `COSMOS_ENROLLMENT_PINCODE`
 /// when set (the empty string means "this deployment holds no credential"), else
 /// [`DEFAULT_PINCODE`]. This is the clone's own chosen credential — safe to surface
 /// on an admin-gated surface, never a recovered Humane secret.
 pub fn configured_pincode() -> String {
-    std::env::var("CARRY_ENROLLMENT_PINCODE").unwrap_or_else(|_| DEFAULT_PINCODE.to_owned())
+    std::env::var("COSMOS_ENROLLMENT_PINCODE").unwrap_or_else(|_| DEFAULT_PINCODE.to_owned())
 }
 
 /// The production onboarding UI constructs an exact 4-to-4 digit entry control.
@@ -1163,10 +1164,10 @@ fn is_stock_pincode_compatible(pincode: &str) -> bool {
     pincode.is_empty() || (pincode.len() == 4 && pincode.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
-/// The display name a finished login reports (`CARRY_ENROLLMENT_DISPLAY_NAME`),
+/// The display name a finished login reports (`COSMOS_ENROLLMENT_DISPLAY_NAME`),
 /// for the operator console.
 pub fn configured_display_name() -> String {
-    std::env::var("CARRY_ENROLLMENT_DISPLAY_NAME")
+    std::env::var("COSMOS_ENROLLMENT_DISPLAY_NAME")
         .ok()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| DEFAULT_DISPLAY_NAME.to_owned())
@@ -1175,7 +1176,7 @@ pub fn configured_display_name() -> String {
 /// This deployment's single enrolled user id, rendered as the device sees it.
 ///
 /// A single-tenant deployment can bind its one enrolled user to a real account
-/// — e.g. the Keycloak `sub` — via `CARRY_ENROLLMENT_USER_ID`, so a Pin that
+/// — e.g. the Keycloak `sub` — via `COSMOS_ENROLLMENT_USER_ID`, so a Pin that
 /// onboards here and the account that logs into Center converge on the same
 /// `U:<id>` partition (the faithful device↔account identity, without needing the
 /// durable multi-tenant pairing store). Falls back to the built-in constant, and
@@ -1183,7 +1184,7 @@ pub fn configured_display_name() -> String {
 /// gates the id must later pass — a bad override degrades to the default rather
 /// than minting signed-but-unusable certificates.
 pub fn enrolled_user_id() -> String {
-    std::env::var("CARRY_ENROLLMENT_USER_ID")
+    std::env::var("COSMOS_ENROLLMENT_USER_ID")
         .ok()
         .map(|value| value.trim().to_owned())
         .filter(|value| {
@@ -1239,7 +1240,7 @@ pub fn bound_devices() -> Vec<BoundDevice> {
 
 /// Whether this deployment is admitting new devices.
 ///
-/// `CARRY_ENROLLMENT_OPEN` defaults to open — a self-hosted clone exists to let a
+/// `COSMOS_ENROLLMENT_OPEN` defaults to open — a self-hosted clone exists to let a
 /// Pin bind — and a falsey value (`0`/`false`/`no`/`off`) closes it.
 ///
 /// **Closed means closed.** The flag used to reach only `VerifyHmcByPass`, whose
@@ -1252,7 +1253,7 @@ pub fn bound_devices() -> Vec<BoundDevice> {
 /// [`Enrollment::session_key`], which is what gates `CreateDeviceUserBinding`)
 /// now consult it as well.
 pub fn enrollment_open() -> bool {
-    match std::env::var("CARRY_ENROLLMENT_OPEN") {
+    match std::env::var("COSMOS_ENROLLMENT_OPEN") {
         Ok(value) => !matches!(
             value.trim().to_ascii_lowercase().as_str(),
             "0" | "false" | "no" | "off"
@@ -1264,7 +1265,7 @@ pub fn enrollment_open() -> bool {
 /// Whether the operator has declared this deployment single-replica, which is the
 /// only configuration where process-local OPAQUE state can complete an enrollment.
 fn single_replica_enrollment_allowed() -> bool {
-    std::env::var("CARRY_ALLOW_SINGLE_REPLICA_ENROLLMENT")
+    std::env::var("COSMOS_ALLOW_SINGLE_REPLICA_ENROLLMENT")
         .map(|v| {
             let v = v.trim().to_ascii_lowercase();
             v == "1" || v == "true" || v == "yes"
@@ -1416,10 +1417,10 @@ fn canonical_device_id_from_subject(common_name: &str) -> Option<String> {
 /// No `Debug`: `server_setup` carries the OPRF seed and the server's static
 /// private key.
 struct Credential {
-    server_setup: ServerSetup<CarrySuite>,
+    server_setup: ServerSetup<CosmosSuite>,
     /// `None` when this deployment holds no credential at all — logins then get
     /// the anti-enumeration dummy record, never a distinguishable refusal.
-    password_file: Option<ServerRegistration<CarrySuite>>,
+    password_file: Option<ServerRegistration<CosmosSuite>>,
 }
 
 /// The server half of the enrollment ceremony.
@@ -1468,8 +1469,8 @@ impl Enrollment {
     /// restarted or the request landed on another replica. The provisioning
     /// service turns it into `UNIMPLEMENTED`.
     ///
-    /// Reads `CARRY_ENROLLMENT_PINCODE`, `CARRY_ENROLLMENT_DISPLAY_NAME`,
-    /// `CARRY_OPAQUE_SEED`, `CARRY_DUC_CA_CERT`, `CARRY_DUC_CA_KEY`.
+    /// Reads `COSMOS_ENROLLMENT_PINCODE`, `COSMOS_ENROLLMENT_DISPLAY_NAME`,
+    /// `COSMOS_OPAQUE_SEED`, `COSMOS_DUC_CA_CERT`, `COSMOS_DUC_CA_KEY`.
     pub fn from_env() -> Option<Arc<Self>> {
         let ca = match DucCa::from_env() {
             Ok(Some(ca)) => ca,
@@ -1513,21 +1514,21 @@ impl Enrollment {
             );
         }
 
-        let pincode = std::env::var("CARRY_ENROLLMENT_PINCODE")
+        let pincode = std::env::var("COSMOS_ENROLLMENT_PINCODE")
             .unwrap_or_else(|_| DEFAULT_PINCODE.to_owned());
         if !is_stock_pincode_compatible(&pincode) {
             tracing::error!(
-                "device enrollment is disabled: CARRY_ENROLLMENT_PINCODE must be exactly four ASCII digits (or empty to disable the credential)"
+                "device enrollment is disabled: COSMOS_ENROLLMENT_PINCODE must be exactly four ASCII digits (or empty to disable the credential)"
             );
             return None;
         }
-        let display_name = std::env::var("CARRY_ENROLLMENT_DISPLAY_NAME")
+        let display_name = std::env::var("COSMOS_ENROLLMENT_DISPLAY_NAME")
             .unwrap_or_else(|_| DEFAULT_DISPLAY_NAME.to_owned());
 
         let open = enrollment_open();
         if !open {
             tracing::warn!(
-                "CARRY_ENROLLMENT_OPEN is set falsey: the OPAQUE ceremony and DeviceUser \
+                "COSMOS_ENROLLMENT_OPEN is set falsey: the OPAQUE ceremony and DeviceUser \
                  issuance are closed, so no new device can bind until it is cleared"
             );
         }
@@ -1666,7 +1667,7 @@ impl Enrollment {
     /// so the first replica fixes it and every later one reads the same bytes. Only
     /// the credential id, and therefore the fabricated password file, varies per
     /// account. Both the setup and each account's record are install-if-absent in
-    /// the store, so rotating a pincode means deleting the `carry_opaque_password_file`
+    /// the store, so rotating a pincode means deleting the `cosmos_opaque_password_file`
     /// row, not editing the environment; the stored record wins, because silently
     /// replacing it would invalidate the credential a wearer already enrolled with.
     async fn credential(&self, account: &str) -> Stored<Arc<Credential>> {
@@ -1691,14 +1692,14 @@ impl Enrollment {
     async fn build_credential(&self, account: &str) -> Stored<Credential> {
         let candidate = {
             let mut rng = StdRng::from_seed(load_opaque_seed());
-            ServerSetup::<CarrySuite>::new(&mut rng)
+            ServerSetup::<CosmosSuite>::new(&mut rng)
         };
         let setup_bytes = self
             .store
             .server_setup_or_install(&candidate.serialize())
             .await?;
         let server_setup =
-            ServerSetup::<CarrySuite>::deserialize(&setup_bytes).map_err(|error| {
+            ServerSetup::<CosmosSuite>::deserialize(&setup_bytes).map_err(|error| {
                 tracing::error!(%error, "the stored OPAQUE server setup is corrupt");
                 EnrollmentStoreError
             })?;
@@ -1727,7 +1728,7 @@ impl Enrollment {
             .password_file_or_install(&credential_id, &fabricated)
             .await?;
         let password_file =
-            ServerRegistration::<CarrySuite>::deserialize(&record_bytes).map_err(|error| {
+            ServerRegistration::<CosmosSuite>::deserialize(&record_bytes).map_err(|error| {
                 tracing::error!(%error, "the stored OPAQUE password file is corrupt");
                 EnrollmentStoreError
             })?;
@@ -1762,7 +1763,7 @@ impl Enrollment {
     /// belongs here, and it is charged **before** the KE2 leaves.
     ///
     /// A locked-out principal gets `RESOURCE_EXHAUSTED`. The stock shape is `OK`
-    /// carrying `OPAQUE_LOGIN_STATUS_RATE_LIMIT_HIT`, which is what
+    /// containing `OPAQUE_LOGIN_STATUS_RATE_LIMIT_HIT`, which is what
     /// `UserBindingManager.checkForRateLimitHit:144` reads to drive the wearer's
     /// `LockOutNode`; mapping the status onto that response code belongs in the
     /// provisioning handler that builds the response, and until it is there the
@@ -1776,7 +1777,7 @@ impl Enrollment {
     ) -> Result<Vec<u8>, Status> {
         self.ceremony_open()?;
         let mut rng = OsRng;
-        let request = CredentialRequest::<CarrySuite>::deserialize(ke1)
+        let request = CredentialRequest::<CosmosSuite>::deserialize(ke1)
             .map_err(|_| Status::invalid_argument("malformed OPAQUE KE1"))?;
         // Metered after the KE1 parses (a malformed one yields no KE2, so it is
         // no guess) and before anything that could answer with one. Keyed on
@@ -1842,10 +1843,10 @@ impl Enrollment {
             .take_login(principal)
             .await?
             .ok_or_else(|| Status::unavailable("no OPAQUE login is in progress"))?;
-        let state = ServerLogin::<CarrySuite>::deserialize(&state_bytes)
+        let state = ServerLogin::<CosmosSuite>::deserialize(&state_bytes)
             .map_err(|_| Status::unavailable("the in-flight OPAQUE login is unusable"))?;
 
-        let finalization = CredentialFinalization::<CarrySuite>::deserialize(ke3)
+        let finalization = CredentialFinalization::<CosmosSuite>::deserialize(ke3)
             .map_err(|_| Status::invalid_argument("malformed OPAQUE KE3"))?;
         let result = state
             .finish(finalization)
@@ -2067,12 +2068,12 @@ pub fn verify_attestation_signature(
         .map_err(|_| EnrollmentError::Attestation)
 }
 
-/// The OPAQUE `ServerSetup` seed: base64 in `CARRY_OPAQUE_SEED` (exactly 32 bytes
+/// The OPAQUE `ServerSetup` seed: base64 in `COSMOS_OPAQUE_SEED` (exactly 32 bytes
 /// decoded) or the fixed default. A malformed value falls back to the default
 /// rather than minting a random one, so a fresh deployment still proposes the same
 /// setup from every replica.
 fn load_opaque_seed() -> [u8; 32] {
-    if let Ok(encoded) = std::env::var("CARRY_OPAQUE_SEED")
+    if let Ok(encoded) = std::env::var("COSMOS_OPAQUE_SEED")
         && let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(encoded.trim())
         && let Ok(seed) = <[u8; 32]>::try_from(bytes.as_slice())
     {
@@ -2085,15 +2086,15 @@ fn load_opaque_seed() -> [u8; 32] {
 /// precisely because the server never learns the password: the stored record is
 /// not password-equivalent.
 fn fabricate_record(
-    setup: &ServerSetup<CarrySuite>,
+    setup: &ServerSetup<CosmosSuite>,
     credential_id: &[u8],
     pincode: &str,
 ) -> Result<Vec<u8>, String> {
     let mut rng = OsRng;
-    let client_start = ClientRegistration::<CarrySuite>::start(&mut rng, pincode.as_bytes())
+    let client_start = ClientRegistration::<CosmosSuite>::start(&mut rng, pincode.as_bytes())
         .map_err(|error| error.to_string())?;
     let server_start =
-        ServerRegistration::<CarrySuite>::start(setup, client_start.message, credential_id)
+        ServerRegistration::<CosmosSuite>::start(setup, client_start.message, credential_id)
             .map_err(|error| error.to_string())?;
     let client_finish = client_start
         .state
@@ -2104,7 +2105,7 @@ fn fabricate_record(
             ClientRegistrationFinishParameters::default(),
         )
         .map_err(|error| error.to_string())?;
-    let record = ServerRegistration::<CarrySuite>::finish(client_finish.message);
+    let record = ServerRegistration::<CosmosSuite>::finish(client_finish.message);
     Ok(record.serialize().to_vec())
 }
 
@@ -2115,7 +2116,7 @@ pub(crate) mod tests {
 
     /// A real PKCS#10 CSR **as a Pin builds it**: EC P-256, ECDSA-SHA256, the
     /// `CN=V:01:D:<device>:U:<uuid>, O=Humane, OU=DeviceUser` subject, and a
-    /// `pkcs-9-at-extensionRequest` carrying **critical `basicConstraints`
+    /// `pkcs-9-at-extensionRequest` containing **critical `basicConstraints`
     /// (CA:FALSE)** plus critical `keyUsage` (digitalSignature | keyAgreement) —
     /// exactly what `HumaneCertificate.generateCSR()` emits.
     ///
@@ -2230,7 +2231,7 @@ pub(crate) mod tests {
         ];
         let mut distinguished_name = rcgen::DistinguishedName::new();
         // Retained fixture subject: changing certificate bytes is outside the Cosmos naming migration.
-        distinguished_name.push(rcgen::DnType::CommonName, "Carry Clone DeviceUser CA");
+        distinguished_name.push(rcgen::DnType::CommonName, "Cosmos Clone DeviceUser CA");
         distinguished_name.push(rcgen::DnType::OrganizationName, "Humane");
         distinguished_name.push(rcgen::DnType::OrganizationalUnitName, "DeviceUser");
         params.distinguished_name = distinguished_name;
@@ -2266,7 +2267,7 @@ pub(crate) mod tests {
         pincode: &str,
     ) -> (Result<Vec<u8>, ()>, Vec<u8>) {
         let mut rng = OsRng;
-        let start = ClientLogin::<CarrySuite>::start(&mut rng, pincode.as_bytes()).expect("KE1");
+        let start = ClientLogin::<CosmosSuite>::start(&mut rng, pincode.as_bytes()).expect("KE1");
         let ke2 = enrollment
             .login_init(principal, None, &start.message.serialize())
             .await
@@ -2293,7 +2294,7 @@ pub(crate) mod tests {
         pincode: &str,
     ) -> (Result<Vec<u8>, ()>, Vec<u8>) {
         let mut rng = OsRng;
-        let start = ClientLogin::<CarrySuite>::start(&mut rng, pincode.as_bytes()).expect("KE1");
+        let start = ClientLogin::<CosmosSuite>::start(&mut rng, pincode.as_bytes()).expect("KE1");
         let ke2 = enrollment
             .login_init(principal, Some(device_id), &start.message.serialize())
             .await
@@ -2314,7 +2315,7 @@ pub(crate) mod tests {
     /// A fresh serialized KE1 for the given pincode.
     fn ke1_for(pincode: &[u8]) -> Vec<u8> {
         let mut rng = OsRng;
-        ClientLogin::<CarrySuite>::start(&mut rng, pincode)
+        ClientLogin::<CosmosSuite>::start(&mut rng, pincode)
             .expect("KE1")
             .message
             .serialize()
@@ -2585,7 +2586,7 @@ pub(crate) mod tests {
         let unregistered = enrollment_with_pincode("");
 
         let mut rng = OsRng;
-        let start = ClientLogin::<CarrySuite>::start(&mut rng, b"1234").expect("KE1");
+        let start = ClientLogin::<CosmosSuite>::start(&mut rng, b"1234").expect("KE1");
         let ke1 = start.message.serialize();
 
         let real_ke2 = enrolled
@@ -2603,7 +2604,7 @@ pub(crate) mod tests {
             "the fake KE2 must be indistinguishable by size"
         );
         assert!(
-            CredentialResponse::<CarrySuite>::deserialize(&fake_ke2).is_ok(),
+            CredentialResponse::<CosmosSuite>::deserialize(&fake_ke2).is_ok(),
             "the fake KE2 must parse as a real one"
         );
         // And it must not authenticate: no credential means no session key.
@@ -2654,7 +2655,7 @@ pub(crate) mod tests {
         let csr_der = pin_shaped_csr();
         assert!(
             rcgen::CertificateSigningRequestParams::from_der(&csr_der.as_slice().into()).is_err(),
-            "the fixture must carry an extension request rcgen rejects, or it is not Pin-shaped"
+            "the fixture must contain an extension request rcgen rejects, or it is not Pin-shaped"
         );
 
         // ... and it is specifically a *critical* basicConstraints request.
@@ -2706,7 +2707,7 @@ pub(crate) mod tests {
         assert_eq!(
             ca_der,
             enrollment.ca_certificate_der(),
-            "the chain must carry the configured CA, not a re-signed copy"
+            "the chain must contain the configured CA, not a re-signed copy"
         );
     }
 
@@ -2774,7 +2775,7 @@ pub(crate) mod tests {
         let pod_c = Enrollment::with("1234", DEFAULT_DISPLAY_NAME, test_ca(), store);
 
         let mut rng = OsRng;
-        let start = ClientLogin::<CarrySuite>::start(&mut rng, b"1234").expect("KE1");
+        let start = ClientLogin::<CosmosSuite>::start(&mut rng, b"1234").expect("KE1");
         let ke2 = pod_a
             .login_init(TEST_PRINCIPAL, None, &start.message.serialize())
             .await
@@ -2823,7 +2824,7 @@ pub(crate) mod tests {
         // bytes, or the record the first replica minted stops opening.
         let other_setup = {
             let mut rng = StdRng::from_seed([0x11u8; 32]);
-            ServerSetup::<CarrySuite>::new(&mut rng)
+            ServerSetup::<CosmosSuite>::new(&mut rng)
         };
         let winner = store
             .server_setup_or_install(&other_setup.serialize())
@@ -2856,7 +2857,7 @@ pub(crate) mod tests {
         params.key_usages = vec![rcgen::KeyUsagePurpose::KeyCertSign];
         let mut distinguished_name = rcgen::DistinguishedName::new();
         // Retained fixture subject: changing certificate bytes is outside the Cosmos naming migration.
-        distinguished_name.push(rcgen::DnType::CommonName, "Carry Clone DeviceUser CA");
+        distinguished_name.push(rcgen::DnType::CommonName, "Cosmos Clone DeviceUser CA");
         params.distinguished_name = distinguished_name;
         let certificate = params.self_signed(&key).expect("self-signed");
         let cert_pem = certificate.pem();
@@ -2917,7 +2918,7 @@ pub(crate) mod tests {
         // A pool pointed at a closed port: building it succeeds lazily, using it
         // does not.
         let Ok(store) = PostgresEnrollmentStore::lazy_with(
-            "postgres://carry@127.0.0.1:1/none",
+            "postgres://cosmos@127.0.0.1:1/none",
             std::time::Duration::from_millis(250),
         ) else {
             // Refusing to build is also a loud failure; the property holds.
@@ -2947,7 +2948,7 @@ pub(crate) mod tests {
     }
 
     /// The durable store, against a real database. SKIPS without
-    /// `CARRY_TEST_DATABASE_URL`, following `store_postgres.rs`.
+    /// `COSMOS_TEST_DATABASE_URL`, following `store_postgres.rs`.
     #[tokio::test]
     async fn the_durable_store_installs_once_pops_once_and_isolates_principals() {
         // Exactly ONE skip condition: the database was not offered. Once a URL
@@ -2955,20 +2956,20 @@ pub(crate) mod tests {
         // `return` is indistinguishable from a pass in cargo's output, and this
         // test used to have three silent exits, so a broken URL or a broken
         // migration reported green having asserted nothing.
-        let Ok(url) = std::env::var("CARRY_TEST_DATABASE_URL") else {
+        let Ok(url) = std::env::var("COSMOS_TEST_DATABASE_URL") else {
             // Announce the skip in the same words `store_postgres.rs` uses. CI
             // greps for this exact string to fail a run where the database was
             // meant to be up but every backend test quietly stood down; a bare
             // `return` here was invisible to that guard.
-            eprintln!("SKIPPED: set CARRY_TEST_DATABASE_URL to exercise the Postgres path");
+            eprintln!("SKIPPED: set COSMOS_TEST_DATABASE_URL to exercise the Postgres path");
             return;
         };
         let store = PostgresEnrollmentStore::lazy(&url)
-            .expect("CARRY_TEST_DATABASE_URL is set but the pool could not be built");
+            .expect("COSMOS_TEST_DATABASE_URL is set but the pool could not be built");
         store
             .ready()
             .await
-            .expect("CARRY_TEST_DATABASE_URL is set but the schema migration failed");
+            .expect("COSMOS_TEST_DATABASE_URL is set but the schema migration failed");
 
         // Install-if-absent: whoever gets there first wins, forever.
         let first = store
@@ -3098,7 +3099,7 @@ pub(crate) mod tests {
         let store = MemoryEnrollmentStore::shared();
         let enrollment = Arc::new(Enrollment::with(
             "1234",
-            "Carry User",
+            "Cosmos User",
             test_ca(),
             store.clone(),
         ));
@@ -3106,7 +3107,7 @@ pub(crate) mod tests {
 
         // The device's clientLoginStart.
         let mut rng = OsRng;
-        let start = ClientLogin::<CarrySuite>::start(&mut rng, b"1234").expect("KE1");
+        let start = ClientLogin::<CosmosSuite>::start(&mut rng, b"1234").expect("KE1");
 
         // CreateLoginInit → KE2.
         let init = service
@@ -3155,7 +3156,7 @@ pub(crate) mod tests {
             Some(pb::OpaqueLoginStatusCode::OpaqueLoginStatusSuccessfulRequest as i32)
         );
         assert_eq!(finished.user_id, enrollment.user_id());
-        assert_eq!(finished.display_name, "Carry User");
+        assert_eq!(finished.display_name, "Cosmos User");
 
         // The device seals its attestation over the CSR under the session key.
         let csr_der = pin_shaped_csr();
@@ -3212,7 +3213,7 @@ pub(crate) mod tests {
     /// one per pincode entry.
     fn fresh_ke1() -> Vec<u8> {
         let mut rng = OsRng;
-        ClientLogin::<CarrySuite>::start(&mut rng, b"1234")
+        ClientLogin::<CosmosSuite>::start(&mut rng, b"1234")
             .expect("KE1")
             .message
             .serialize()
@@ -3362,10 +3363,10 @@ pub(crate) mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // CARRY_ENROLLMENT_OPEN
+    // COSMOS_ENROLLMENT_OPEN
     // -----------------------------------------------------------------------
 
-    /// The gap this closes: `CARRY_ENROLLMENT_OPEN=false` used to reach only
+    /// The gap this closes: `COSMOS_ENROLLMENT_OPEN=false` used to reach only
     /// `VerifyHmcByPass`, whose answer is advisory — the three RPCs that actually
     /// enroll a device never consulted it, so an operator who closed enrollment
     /// still had an open OPAQUE ceremony and an open DeviceUser CA.

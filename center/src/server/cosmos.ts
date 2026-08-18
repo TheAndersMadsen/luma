@@ -6,9 +6,9 @@
  * module is the translation seam: our /api routes serve .Center's REST contract
  * and call Cosmos's gRPC services underneath.
  *
- * Auth: with CARRY_AUTH_MODE=development-insecure the server synthesises a
+ * Auth: with COSMOS_AUTH_MODE=development-insecure the server synthesises a
  * principal and no metadata is required. Under edge-authenticated, Istio injects
- * the principal — set CARRY_PRINCIPAL to forward one in local testing.
+ * the principal — set COSMOS_PRINCIPAL to forward one in local testing.
  */
 
 import path from "node:path";
@@ -33,7 +33,7 @@ import { logWarn } from "@/server/log";
  * tree, so the default resolved to a missing directory and `loadSync` threw
  * ENOENT deep inside the first gRPC call. Every pane that reads a workload —
  * contacts, account details, my-data, note creation, memory delete — then
- * rendered "carry error: …", i.e. the wording reserved for a backend outage,
+ * rendered "cosmos error: …", i.e. the wording reserved for a backend outage,
  * for what was a stale path inside Center. Only the container ever set the
  * override (`COSMOS_CONTRACTS_DIR=/app/contracts`), so the documented
  * `npm run dev` flow was the one that broke.
@@ -47,7 +47,7 @@ const PROTO_ROOT = path.resolve(
  * Cosmos is a service topology: each workload registers a different set
  * of gRPC services, and in production Istio routes by service name. Locally you
  * run one process per workload, so every service resolves its own endpoint —
- * CARRY_ENDPOINT_<WORKLOAD> if set, else CARRY_GRPC_ENDPOINT.
+ * COSMOS_ENDPOINT_<WORKLOAD> if set, else COSMOS_GRPC_ENDPOINT.
  */
 export const WORKLOADS = {
   aiBus: "AI_BUS",
@@ -58,10 +58,10 @@ export const WORKLOADS = {
 
 type WorkloadKey = (typeof WORKLOADS)[keyof typeof WORKLOADS];
 
-const DEFAULT_ENDPOINT = process.env.CARRY_GRPC_ENDPOINT ?? "";
+const DEFAULT_ENDPOINT = process.env.COSMOS_GRPC_ENDPOINT ?? "";
 
 function endpointFor(workload: WorkloadKey): string {
-  return process.env[`CARRY_ENDPOINT_${workload}`] ?? DEFAULT_ENDPOINT;
+  return process.env[`COSMOS_ENDPOINT_${workload}`] ?? DEFAULT_ENDPOINT;
 }
 
 /**
@@ -74,8 +74,8 @@ function endpointFor(workload: WorkloadKey): string {
  * copies. So captures and notes are read over REST, exactly as .Center did, and
  * only the device-shaped calls go over gRPC.
  */
-export const CARRY_WEBAPI = (process.env.CARRY_WEBAPI_BASE_URL ?? "").replace(/\/$/, "");
-export const CARRY_WEBAPI_ENABLED = CARRY_WEBAPI.length > 0;
+export const COSMOS_WEBAPI = (process.env.COSMOS_WEBAPI_BASE_URL ?? "").replace(/\/$/, "");
+export const COSMOS_WEBAPI_ENABLED = COSMOS_WEBAPI.length > 0;
 
 /**
  * Operator token for Cosmos's admin surface (`/demo-api/admin/*`, `/demo-api/flags`).
@@ -85,13 +85,13 @@ export const CARRY_WEBAPI_ENABLED = CARRY_WEBAPI.length > 0;
  * the same secret on both ends. Held server-side and injected by the BFF; it must
  * never reach the browser.
  */
-export const CARRY_ADMIN_TOKEN = process.env.CARRY_ADMIN_TOKEN ?? "";
-export const CARRY_ADMIN_ENABLED = CARRY_WEBAPI_ENABLED && CARRY_ADMIN_TOKEN.length > 0;
-const CARRY_CENTER_PROJECTION_TOKEN = process.env.CARRY_CENTER_PROJECTION_TOKEN?.trim() ?? "";
+export const COSMOS_ADMIN_TOKEN = process.env.COSMOS_ADMIN_TOKEN ?? "";
+export const COSMOS_ADMIN_ENABLED = COSMOS_WEBAPI_ENABLED && COSMOS_ADMIN_TOKEN.length > 0;
+const COSMOS_CENTER_PROJECTION_TOKEN = process.env.COSMOS_CENTER_PROJECTION_TOKEN?.trim() ?? "";
 
 /** Authorization header for the admin surface, empty when no token is configured. */
 export function adminAuthHeaders(): Record<string, string> {
-  return CARRY_ADMIN_TOKEN ? { authorization: `Bearer ${CARRY_ADMIN_TOKEN}` } : {};
+  return COSMOS_ADMIN_TOKEN ? { authorization: `Bearer ${COSMOS_ADMIN_TOKEN}` } : {};
 }
 
 /** Spring Data `Page<T>` — the envelope .Center's Spring Boot backend returned. */
@@ -126,7 +126,7 @@ export async function webapiHeaders(): Promise<Record<string, string>> {
 }
 
 /**
- * The deadline every call to Cosmos is meant to carry.
+ * The deadline every call to Cosmos is meant to contain.
  *
  * `webapiGet`/`webapiPost`/`webapiDelete`/`getCaptureOriginal` each spelled this
  * out inline, and the route handlers that talk to `/demo-api` directly — device
@@ -140,20 +140,20 @@ export async function webapiHeaders(): Promise<Record<string, string>> {
  *
  * One helper so a new route has an obvious right way to do this.
  */
-export function carryDeadlineSignal(fallbackMs = 8000): AbortSignal {
-  return AbortSignal.timeout(Number(process.env.CARRY_DEADLINE_MS ?? fallbackMs));
+export function cosmosDeadlineSignal(fallbackMs = 8000): AbortSignal {
+  return AbortSignal.timeout(Number(process.env.COSMOS_DEADLINE_MS ?? fallbackMs));
 }
 
 export async function webapiGet<T>(path: string): Promise<T> {
   // Headers FIRST, deadline second. Object-literal properties evaluate in order,
   // so with `signal:` written above `headers: await webapiHeaders()` the 8s clock
   // started before the auth hop — and a Keycloak refresh slower than that handed
-  // `fetch` a signal that had already fired. The failure then arrived as "carry
+  // `fetch` a signal that had already fired. The failure then arrived as "cosmos
   // webapi timed out", which sends the wearer and whoever is on call to a Cosmos
   // that was answering perfectly the whole time.
   const headers = await webapiHeaders();
-  const res = await fetch(`${CARRY_WEBAPI}${path}`, {
-    signal: AbortSignal.timeout(Number(process.env.CARRY_DEADLINE_MS ?? 8000)),
+  const res = await fetch(`${COSMOS_WEBAPI}${path}`, {
+    signal: AbortSignal.timeout(Number(process.env.COSMOS_DEADLINE_MS ?? 8000)),
     cache: "no-store",
     headers,
   });
@@ -164,9 +164,9 @@ export async function webapiGet<T>(path: string): Promise<T> {
 /** Authenticated web-plane mutation; credentials remain inside the BFF. */
 export async function webapiPost<T>(path: string, body?: unknown): Promise<T> {
   const headers = await webapiHeaders();
-  const res = await fetch(`${CARRY_WEBAPI}${path}`, {
+  const res = await fetch(`${COSMOS_WEBAPI}${path}`, {
     method: "POST",
-    signal: AbortSignal.timeout(Number(process.env.CARRY_DEADLINE_MS ?? 20000)),
+    signal: AbortSignal.timeout(Number(process.env.COSMOS_DEADLINE_MS ?? 20000)),
     cache: "no-store",
     headers: body === undefined ? headers : { ...headers, "content-type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -177,25 +177,25 @@ export async function webapiPost<T>(path: string, body?: unknown): Promise<T> {
 
 /** Server-to-server read for an already verified, signed public capability. */
 export async function webapiGetForUser(path: string, userId: string): Promise<Response> {
-  if (!CARRY_CENTER_PROJECTION_TOKEN) {
-    throw new Error("CARRY_CENTER_PROJECTION_TOKEN is required for public shares");
+  if (!COSMOS_CENTER_PROJECTION_TOKEN) {
+    throw new Error("COSMOS_CENTER_PROJECTION_TOKEN is required for public shares");
   }
-  return fetch(`${CARRY_WEBAPI}${path}`, {
-    signal: AbortSignal.timeout(Number(process.env.CARRY_DEADLINE_MS ?? 8000)),
+  return fetch(`${COSMOS_WEBAPI}${path}`, {
+    signal: AbortSignal.timeout(Number(process.env.COSMOS_DEADLINE_MS ?? 8000)),
     cache: "no-store",
     // This header is generated inside the BFF from a signed capability. It is
     // never copied from the public request.
     headers: {
       "x-forwarded-client-cert": `U:${userId}`,
-      "x-carry-web-projection-token": CARRY_CENTER_PROJECTION_TOKEN,
+      "x-cosmos-web-projection-token": COSMOS_CENTER_PROJECTION_TOKEN,
     },
   });
 }
 
-export const CARRY_ENDPOINT = DEFAULT_ENDPOINT;
-export const CARRY_ENABLED =
+export const COSMOS_ENDPOINT = DEFAULT_ENDPOINT;
+export const COSMOS_ENABLED =
   DEFAULT_ENDPOINT.length > 0 ||
-  Object.values(WORKLOADS).some((w) => (process.env[`CARRY_ENDPOINT_${w}`] ?? "").length > 0);
+  Object.values(WORKLOADS).some((w) => (process.env[`COSMOS_ENDPOINT_${w}`] ?? "").length > 0);
 
 /** Which workload serves each service in the Cosmos runtime. */
 const SERVICE_WORKLOAD: Record<string, WorkloadKey> = {
@@ -210,16 +210,16 @@ const SERVICE_WORKLOAD: Record<string, WorkloadKey> = {
 };
 
 // Must match the backend's own default (`config.rs` EDGE_PRINCIPAL_HEADER).
-// It did not: this said `x-carry-authenticated-principal` while the workloads
+// It did not: this said `x-cosmos-authenticated-principal` while the workloads
 // read `x-forwarded-client-cert`, so under edge-authenticated the principal we
 // send is simply not seen — the call is rejected for having NO principal, which
 // looks identical to a failed auth and hides the real cause. Harmless against a
 // development-insecure backend (which synthesises a principal regardless), which
 // is exactly why it survived unnoticed.
 const PRINCIPAL_HEADER =
-  process.env.CARRY_PRINCIPAL_METADATA ?? "x-forwarded-client-cert";
-const PRINCIPAL = process.env.CARRY_PRINCIPAL ?? "";
-const DEADLINE_MS = Number(process.env.CARRY_DEADLINE_MS ?? 8000);
+  process.env.COSMOS_PRINCIPAL_METADATA ?? "x-forwarded-client-cert";
+const PRINCIPAL = process.env.COSMOS_PRINCIPAL ?? "";
+const DEADLINE_MS = Number(process.env.COSMOS_DEADLINE_MS ?? 8000);
 
 /**
  * The wearer still holds a Center session cookie, but the Keycloak grant behind
@@ -244,7 +244,7 @@ export class SessionExpiredError extends Error {
  *
  * A Center misconfiguration, not a Cosmos outage — and the two must never share
  * a sentence. Untyped, this surfaced as a bare ENOENT that `describe()` rendered
- * as "carry error: …", pointing every reader at a healthy backend. The resolved
+ * as "cosmos error: …", pointing every reader at a healthy backend. The resolved
  * path is carried so the message can name what to fix.
  */
 export class ContractsUnavailableError extends Error {
@@ -312,11 +312,11 @@ function getClient(fqName: string): AnyClient {
   const address = workload ? endpointFor(workload) : DEFAULT_ENDPOINT;
   if (!address) {
     throw new Error(
-      `cosmos: no endpoint for ${fqName} — set CARRY_ENDPOINT_${workload ?? "…"} or CARRY_GRPC_ENDPOINT`,
+      `cosmos: no endpoint for ${fqName} — set COSMOS_ENDPOINT_${workload ?? "…"} or COSMOS_GRPC_ENDPOINT`,
     );
   }
 
-  const credentials = process.env.CARRY_GRPC_TLS === "1"
+  const credentials = process.env.COSMOS_GRPC_TLS === "1"
     ? grpc.credentials.createSsl()
     : grpc.credentials.createInsecure();
 
@@ -348,15 +348,15 @@ export async function requestMetadata(): Promise<grpc.Metadata> {
     logWarn("cosmos: outbound gRPC carries no wearer identity");
   }
   // Proof this request traversed a trusted front door. Cosmos workloads gate
-  // EVERY gRPC call behind this shared secret (CARRY_EDGE_TOKEN): the Envoy edge
+  // EVERY gRPC call behind this shared secret (COSMOS_EDGE_TOKEN): the Envoy edge
   // injects it for a Pin, and the Center — a co-located trusted BFF that reaches
   // the workloads directly on the internal network — must present it the same
   // way. Without it every call is rejected ("authenticated edge principal
   // required") and the UI silently falls back to fixtures. Unset (local
   // development-insecure) ⇒ omitted, unchanged.
-  const edgeToken = process.env.CARRY_EDGE_TOKEN?.trim();
+  const edgeToken = process.env.COSMOS_EDGE_TOKEN?.trim();
   if (edgeToken) {
-    md.set(process.env.CARRY_EDGE_TOKEN_HEADER?.trim() || "x-carry-edge-token", edgeToken);
+    md.set(process.env.COSMOS_EDGE_TOKEN_HEADER?.trim() || "x-cosmos-edge-token", edgeToken);
   }
   return md;
 }

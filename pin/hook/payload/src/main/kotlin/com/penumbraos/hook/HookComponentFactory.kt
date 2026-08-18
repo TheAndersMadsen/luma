@@ -185,7 +185,7 @@ class HookComponentFactory : AppComponentFactory() {
                 TierASymbols.Packages.ONBOARDING,
                 "humane.experience.onboarding.OnboardingExperience",
                 HookClassification.REQUIRED_TRANSPORT,
-                CarryOnboardingTransportHooks::install,
+                CosmosOnboardingTransportHooks::install,
             ),
             module(
                 "photography-compatibility",

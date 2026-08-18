@@ -75,7 +75,7 @@ postgres_segment_batch() {
 # value the caller asked for: `digest` for a COPY (sha256 of the exact bytes,
 # identical to the old `docker exec … | sha256sum` per statement) and `text` for
 # a scalar select. `3<&0` hands the piped stream to python on fd 3 so stdin can
-# still carry the program, the way every other inline python here is written.
+# still contain the program, the way every other inline python here is written.
 split_postgres_segments() {
   python3 - "$1" "$2" 3<&0 <<'PY'
 import hashlib,os,sys
@@ -163,7 +163,7 @@ capture_postgres_data() {
   [[ "$marker" =~ ^#[0-9a-f]{32}#$ ]] || fail "segment marker nonce is unavailable"
   : >"$output"
   : >"$output.columns"
-  for database in carry keycloak; do
+  for database in cosmos keycloak; do
     relations="$(docker exec "$container" psql -X -qAt -F $'\t' -v ON_ERROR_STOP=1 \
       -U "$database_user" -d "$database" -c \
       "select n.nspname,c.relname,c.relkind from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname !~ '^pg_' and n.nspname <> 'information_schema' and c.relkind in ('r','p','m','S') order by n.nspname,c.relname,c.relkind")"
@@ -334,7 +334,7 @@ select jsonb_build_object(
   'acl',coalesce((select jsonb_agg(x::text order by x::text) from unnest(d.datacl) x),'[]'::jsonb)
 )::text
 from pg_database d left join pg_tablespace t on t.oid=d.dattablespace
-where datname in ('carry','keycloak') order by datname;
+where datname in ('cosmos','keycloak') order by datname;
 select jsonb_build_object(
   'kind','tablespace','name',spcname,'owner',pg_get_userbyid(spcowner),
   'options',coalesce(to_jsonb(spcoptions),'[]'::jsonb),
@@ -348,10 +348,10 @@ select jsonb_build_object(
 from pg_db_role_setting s
 left join pg_database d on d.oid=s.setdatabase
 left join pg_roles r on r.oid=s.setrole
-where d.datname in ('carry','keycloak') or s.setdatabase=0
+where d.datname in ('cosmos','keycloak') or s.setdatabase=0
 order by 1;
 SQL
-  for database in carry keycloak; do
+  for database in cosmos keycloak; do
     docker exec -i "$container" psql -X -qAt -v ON_ERROR_STOP=1 -U "$database_user" -d "$database" \
       >"$work/$database.jsonl" <<'SQL'
 select jsonb_build_object(
@@ -440,7 +440,7 @@ document={
     "roles":roles,
     "memberships":read("memberships.jsonl"),
     "globals":read("globals.jsonl"),
-    "databases":{"carry":read("carry.jsonl"),"keycloak":read("keycloak.jsonl")},
+    "databases":{"cosmos":read("cosmos.jsonl"),"keycloak":read("keycloak.jsonl")},
 }
 with open(output,"w",encoding="utf-8") as target:
     json.dump(document,target,sort_keys=True,separators=(",",":"))
@@ -481,7 +481,7 @@ capture_postgres_schema() {
   [[ -z "$retain_sql" || "$retain_sql" == retain-sql ]] \
     || fail "unknown capture_postgres_schema retention mode: $retain_sql"
   : >"$output"
-  for database in carry keycloak; do
+  for database in cosmos keycloak; do
     canonical_path=""
     [[ "$retain_sql" != retain-sql ]] || canonical_path="$output.$database.sql"
     record="$(docker exec -e 'PGOPTIONS=-c statement_timeout=120000 -c lock_timeout=5000' \
@@ -529,7 +529,7 @@ print(f"{database}\t{len(canonical)}\t{len(lines)}\t{hashlib.sha256(canonical).h
 # A gate compares two sha256 digests over pg_dump --schema-only, so it can prove
 # the schema moved and cannot say how. A pending additive migration — today
 # cosmos/migrations/0004_listing.sql, `ADD COLUMN IF NOT EXISTS
-# carry_memory.thumbnail_count` plus three `CREATE INDEX IF NOT EXISTS` — moves it
+# cosmos_memory.thumbnail_count` plus three `CREATE INDEX IF NOT EXISTS` — moves it
 # legitimately, and thirteen deploys have stopped there.
 #
 # This is NOT a loosened comparison. The digest equality check stays exactly where
@@ -912,8 +912,8 @@ try:
         notes=classify(database,
                        read_dump(before_manifest,database,before_rows[database]),
                        read_dump(after_manifest,database,after_rows[database]))
-        if database!="carry":
-            refuse(f"{database}: only the carry database may carry a pending migration; the "
+        if database!="cosmos":
+            refuse(f"{database}: only the cosmos database may contain a pending migration; the "
                    f"{database} schema must not change at all, additively or otherwise"
                    + (f"; observed {'; '.join(notes)}" if notes else
                       "; the change is not even a classifiable statement delta"))

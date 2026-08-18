@@ -5,14 +5,14 @@
  */
 
 import {
-  CARRY_ADMIN_ENABLED,
-  CARRY_ENABLED,
-  CARRY_WEBAPI,
+  COSMOS_ADMIN_ENABLED,
+  COSMOS_ENABLED,
+  COSMOS_WEBAPI,
   Services,
   SessionExpiredError,
   adminAuthHeaders,
   call,
-  carryDeadlineSignal,
+  cosmosDeadlineSignal,
 } from "../cosmos";
 
 /*
@@ -52,7 +52,7 @@ export type SettingsRead<T> =
   | { kind: "live"; value: T };
 
 export async function getPrivacySettings(): Promise<SettingsRead<PrivacySetting[]>> {
-  if (!CARRY_ENABLED) return { kind: "absent" };
+  if (!COSMOS_ENABLED) return { kind: "absent" };
   try {
     const res = await call<{ names: string[] }, GetSettingsResponse>(
       Services.privacy,
@@ -99,7 +99,7 @@ export async function updatePrivacySetting(
   name: string,
   value: string,
 ): Promise<SettingsRead<{ ok: boolean; status: string | null }>> {
-  if (!CARRY_ENABLED) return { kind: "absent" };
+  if (!COSMOS_ENABLED) return { kind: "absent" };
   try {
     const res = await call<
       { settings: Array<{ name: string; value: string }> },
@@ -149,7 +149,7 @@ interface ListSecureWifiConfigsResponse {
 }
 
 export async function getSealedWifiSummary(): Promise<SettingsRead<{ sealedCount: number }>> {
-  if (!CARRY_ENABLED) return { kind: "absent" };
+  if (!COSMOS_ENABLED) return { kind: "absent" };
   try {
     const res = await call<Record<string, never>, ListSecureWifiConfigsResponse>(
       Services.wifi,
@@ -198,15 +198,15 @@ export const WEARER_FEATURES = new Set([
   "network_reset_enabled",
 ]);
 
-export const WEARER_FEATURES_AVAILABLE = () => Boolean(CARRY_ADMIN_ENABLED && CARRY_WEBAPI);
+export const WEARER_FEATURES_AVAILABLE = () => Boolean(COSMOS_ADMIN_ENABLED && COSMOS_WEBAPI);
 
 /** The wearer-visible slice of the flag catalog, or null when it did not answer. */
 export async function readWearerFeatures(): Promise<Array<{ name?: string }> | null> {
   if (!WEARER_FEATURES_AVAILABLE()) return null;
-  const response = await fetch(`${CARRY_WEBAPI}/demo-api/flags`, {
+  const response = await fetch(`${COSMOS_WEBAPI}/demo-api/flags`, {
     headers: adminAuthHeaders(),
     cache: "no-store",
-    signal: carryDeadlineSignal(),
+    signal: cosmosDeadlineSignal(),
   }).catch(() => null);
   if (!response?.ok) return null;
   const body = (await response.json().catch(() => [])) as Array<{ name?: string }>;
@@ -224,12 +224,12 @@ export async function writeWearerFeature(
   | { ok: false; unconfigured?: false; status?: number }
 > {
   if (!WEARER_FEATURES_AVAILABLE()) return { ok: false, unconfigured: true };
-  const response = await fetch(`${CARRY_WEBAPI}/demo-api/flags/${encodeURIComponent(name)}`, {
+  const response = await fetch(`${COSMOS_WEBAPI}/demo-api/flags/${encodeURIComponent(name)}`, {
     method,
     headers: { ...adminAuthHeaders(), "content-type": "application/json" },
     body: method === "PUT" ? JSON.stringify({ value }) : undefined,
     cache: "no-store",
-    signal: carryDeadlineSignal(),
+    signal: cosmosDeadlineSignal(),
   }).catch(() => null);
   if (!response?.ok) return { ok: false, status: response?.status };
   const result = (await response.json().catch(() => ({}))) as Record<string, unknown>;
@@ -242,8 +242,8 @@ export async function writeWearerFeature(
  * it up on its next scheduled sync.
  */
 export async function queueFeatureSync(accountSub: string): Promise<"push_queued" | "next_sync"> {
-  if (!CARRY_WEBAPI) return "next_sync";
-  const response = await fetch(`${CARRY_WEBAPI}/demo-api/admin/push`, {
+  if (!COSMOS_WEBAPI) return "next_sync";
+  const response = await fetch(`${COSMOS_WEBAPI}/demo-api/admin/push`, {
     method: "POST",
     headers: { ...adminAuthHeaders(), "content-type": "application/json" },
     body: JSON.stringify({
@@ -253,7 +253,7 @@ export async function queueFeatureSync(accountSub: string): Promise<"push_queued
       expiration_seconds: 86_400,
     }),
     cache: "no-store",
-    signal: carryDeadlineSignal(),
+    signal: cosmosDeadlineSignal(),
   }).catch(() => null);
   return response?.ok ? "push_queued" : "next_sync";
 }

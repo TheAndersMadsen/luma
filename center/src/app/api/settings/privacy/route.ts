@@ -17,7 +17,7 @@ import {
  *
  * WHAT THE FAILURE PATH USED TO SAY. It tagged an empty error result as
  * `x-data-source: fixtures` — the same value a route serving recovered Feb-2025
- * sample data uses — so "carry did not answer" and "here is someone else's
+ * sample data uses — so "cosmos did not answer" and "here is someone else's
  * data" were indistinguishable on the wire, and the pane rendered both as
  * "Privacy settings are unavailable from this backend". Now: an unconfigured
  * backend is `absent`, a backend that did not answer is `degraded`, and
@@ -72,7 +72,7 @@ export async function GET() {
   }
   return NextResponse.json(
     { settings: read.value, state: "live" },
-    { headers: sourceHeaders({ source: "carry", state: "live" }) },
+    { headers: sourceHeaders({ source: "cosmos", state: "live" }) },
   );
 }
 

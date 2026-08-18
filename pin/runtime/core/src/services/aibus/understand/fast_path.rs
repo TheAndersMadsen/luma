@@ -33,8 +33,8 @@ impl UnderstandHandler {
 
         // "What can you do" — answered from the catalog, not improvised.
         //
-        // Roadmap item 9a: this is the most common intent in the captured carry
-        // corpus (3 of 17 distinct utterances) and carry routed every one to its
+        // Roadmap item 9a: this is the most common intent in the captured cosmos
+        // corpus (3 of 17 distinct utterances) and Cosmos routed every one to its
         // own capability lookup. Left to the model, the answer is wrong by
         // construction — it does not know which native actions this server
         // exposes, so it can promise the wearer something the Pin will refuse.

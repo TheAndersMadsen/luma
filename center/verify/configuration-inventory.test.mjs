@@ -104,46 +104,46 @@ test("state distinguishes configured, defaulted, missing and unreadable", async 
   const find = (inventory, name) =>
     inventory.settings.find((setting) => setting.name === name);
 
-  // KEYCLOAK_SCOPES has a coded fallback; CARRY_WEBAPI_BASE_URL has none. So an
+  // KEYCLOAK_SCOPES has a coded fallback; COSMOS_WEBAPI_BASE_URL has none. So an
   // absent scope list is "default" (nothing is wrong) while an absent backend
   // URL is "missing" (a pane is unavailable). Collapsing those two into one
   // "not set" is what sends an operator to SSH.
   const absent = await withEnvironment(
-    { KEYCLOAK_SCOPES: undefined, CARRY_WEBAPI_BASE_URL: undefined },
+    { KEYCLOAK_SCOPES: undefined, COSMOS_WEBAPI_BASE_URL: undefined },
     () => configurationInventory(),
   );
   assert.equal(find(absent, "KEYCLOAK_SCOPES").state, "default");
-  assert.equal(find(absent, "CARRY_WEBAPI_BASE_URL").state, "missing");
+  assert.equal(find(absent, "COSMOS_WEBAPI_BASE_URL").state, "missing");
 
   const present = await withEnvironment(
-    { KEYCLOAK_SCOPES: "openid email", CARRY_WEBAPI_BASE_URL: "http://ai-bus:18080" },
+    { KEYCLOAK_SCOPES: "openid email", COSMOS_WEBAPI_BASE_URL: "http://ai-bus:18080" },
     () => configurationInventory(),
   );
   assert.equal(find(present, "KEYCLOAK_SCOPES").state, "configured");
-  assert.equal(find(present, "CARRY_WEBAPI_BASE_URL").state, "configured");
+  assert.equal(find(present, "COSMOS_WEBAPI_BASE_URL").state, "configured");
 
   // Whitespace is not configuration. A variable set to spaces used to read as
   // present and then fail at the first call that used it.
-  const blank = await withEnvironment({ CARRY_WEBAPI_BASE_URL: "   " }, () =>
+  const blank = await withEnvironment({ COSMOS_WEBAPI_BASE_URL: "   " }, () =>
     configurationInventory(),
   );
-  assert.equal(find(blank, "CARRY_WEBAPI_BASE_URL").state, "missing");
+  assert.equal(find(blank, "COSMOS_WEBAPI_BASE_URL").state, "missing");
 
   // A path that is set but unreadable is the failure this pane exists for: it
   // looks configured from every other angle while the feature is dead.
   const readable = await withEnvironment(
     // `fileURLToPath`, not `URL.pathname`: this repository's own directory name
     // contains a space, and the percent-encoded form is not a path that exists.
-    { CARRY_CHANNEL_KEY_FILE: fileURLToPath(import.meta.url) },
+    { COSMOS_CHANNEL_KEY_FILE: fileURLToPath(import.meta.url) },
     () => configurationInventory(),
   );
-  assert.equal(find(readable, "CARRY_CHANNEL_KEY_FILE").state, "configured");
+  assert.equal(find(readable, "COSMOS_CHANNEL_KEY_FILE").state, "configured");
 
   const unreadable = await withEnvironment(
-    { CARRY_CHANNEL_KEY_FILE: "/nonexistent/channel-key.json" },
+    { COSMOS_CHANNEL_KEY_FILE: "/nonexistent/channel-key.json" },
     () => configurationInventory(),
   );
-  assert.equal(find(unreadable, "CARRY_CHANNEL_KEY_FILE").state, "unreadable");
+  assert.equal(find(unreadable, "COSMOS_CHANNEL_KEY_FILE").state, "unreadable");
 });
 
 test("settings owned by another container are reported as unobservable, never as missing", async () => {
@@ -161,11 +161,11 @@ test("settings owned by another container are reported as unobservable, never as
   }
   // Setting one in THIS process must not change the answer: the value would be
   // this container's, not the container that actually reads it.
-  const spoofed = await withEnvironment({ CARRY_AZURE_SPEECH_KEY: "not-ours" }, () =>
+  const spoofed = await withEnvironment({ COSMOS_AZURE_SPEECH_KEY: "not-ours" }, () =>
     configurationInventory(),
   );
   assert.equal(
-    spoofed.settings.find((setting) => setting.name === "CARRY_AZURE_SPEECH_KEY").state,
+    spoofed.settings.find((setting) => setting.name === "COSMOS_AZURE_SPEECH_KEY").state,
     "unobservable",
   );
 });
@@ -201,7 +201,7 @@ test("a secret never carries a documented default value", () => {
   //
   // The one exception is precise rather than convenient: a `path` setting's
   // VALUE is a filesystem location, and the credential lives in the file it
-  // names, not in the variable. `CARRY_CHANNEL_KEY_FILE` defaults to a path, and
+  // names, not in the variable. `COSMOS_CHANNEL_KEY_FILE` defaults to a path, and
   // showing that path is how an operator learns the key landed off the
   // persistent volume. So a path secret may publish a fallback, and it still may
   // not publish anything that could be mistaken for material.

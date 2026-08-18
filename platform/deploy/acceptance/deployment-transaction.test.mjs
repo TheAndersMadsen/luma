@@ -401,9 +401,9 @@ test("mount-derived quiescence includes connectivity, excludes only exact Postgr
   const directory = await mkdtemp(path.join(os.tmpdir(), "revival-mounts-"));
   const mounts = path.join(directory, "mounts.json");
   await writeFile(mounts, JSON.stringify([
-    { Id: "pgid", Name: "/postgres", Mounts: [{ Type: "volume", Name: "humane-carry-clone_carry-pgdata", Source: "/vol/pg", RW: true }] },
-    { Id: "connid", Name: "/connectivity", Mounts: [{ Type: "volume", Name: "humane-carry-clone_carry-state", Source: "/vol/state", RW: true }] },
-    { Id: "outsideid", Name: "/outside", Mounts: [{ Type: "bind", Name: "", Source: "/home/anders/carry-center-data/subdir", RW: true }] },
+    { Id: "pgid", Name: "/postgres", Mounts: [{ Type: "volume", Name: "humane-cosmos-clone_cosmos-pgdata", Source: "/vol/pg", RW: true }] },
+    { Id: "connid", Name: "/connectivity", Mounts: [{ Type: "volume", Name: "humane-cosmos-clone_cosmos-state", Source: "/vol/state", RW: true }] },
+    { Id: "outsideid", Name: "/outside", Mounts: [{ Type: "bind", Name: "", Source: "/home/anders/cosmos-center-data/subdir", RW: true }] },
   ]));
   const script = String.raw`
 source "$1"
@@ -433,11 +433,11 @@ test("active attestation roots are bound to matching read-only production mounts
   const mixed = path.join(directory, "mixed.json");
   const writable = path.join(directory, "writable.json");
   const mounts = (keySource, rw = false) => JSON.stringify([{ Mounts: [
-    { Destination: "/etc/carry-attest/ca.crt", Type: "bind", RW: false, Source: "/home/anders/ai-pin-revival/private/attest/ca.crt" },
-    { Destination: "/etc/carry-attest/ca.key", Type: "bind", RW: rw, Source: keySource },
+    { Destination: "/etc/cosmos-attest/ca.crt", Type: "bind", RW: false, Source: "/home/anders/ai-pin-revival/private/attest/ca.crt" },
+    { Destination: "/etc/cosmos-attest/ca.key", Type: "bind", RW: rw, Source: keySource },
   ] }]);
   await writeFile(good, mounts("/home/anders/ai-pin-revival/private/attest/ca.key"));
-  await writeFile(mixed, mounts("/home/anders/carry-attest/ca.key"));
+  await writeFile(mixed, mounts("/home/anders/cosmos-attest/ca.key"));
   await writeFile(writable, mounts("/home/anders/ai-pin-revival/private/attest/ca.key", true));
   const script = String.raw`
 source "$1"
@@ -513,7 +513,7 @@ http_status() {
 }
 curl() { printf '%s' '{"assistant":true,"speech":true,"mesh":{"reachable":7,"total":7,"services":22,"methods":98}}'; }
 write_quiesced_semantic_evidence "$3"
-! grep -q 'https://carry.andersmadsen.dk' "$trace"
+! grep -q 'https://cosmos.andersmadsen.dk' "$trace"
 ! grep -q 'http://127.0.0.1/$' "$trace"
 grep -q '127.0.0.1:18085' "$trace"
 grep -q '127.0.0.1:14000/login' "$trace"
@@ -1708,8 +1708,8 @@ test("the zero-delta gate ignores Keycloak session churn and nothing else", asyn
   // Nothing else may join them without this test being changed deliberately.
   const relations = [...filter.matchAll(/\$3 == "([a-z_]+)"/gu)].map((m) => m[1]);
   assert.deepEqual(relations.sort(), ["offline_client_session", "offline_user_session"]);
-  // carry is never filtered: that is the wearer's data.
-  assert.doesNotMatch(filter, /"carry"/u);
+  // cosmos is never filtered: that is the wearer's data.
+  assert.doesNotMatch(filter, /"cosmos"/u);
 
   // The gate still compares, and still fails by the same name.
   const compare = bashFunction(deploy, "compare_precommit_compatibility_state");

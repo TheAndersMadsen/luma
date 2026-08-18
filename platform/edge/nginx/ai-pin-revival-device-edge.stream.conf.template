@@ -15,7 +15,7 @@
 # ALPN negotiation and the whole handshake stay end to end between Pin and Envoy.
 #
 # WHY THIS OWNS THE PUBLIC :443
-# CarryRemoteTransport redirects every clone gateway to <host>:443, so the device
+# CosmosRemoteTransport redirects every clone gateway to <host>:443, so the device
 # dials 443 and nothing else. One address:port can have exactly one owner inside
 # one nginx, so the public bind lives here and Center's TLS listener was moved to
 # a loopback port that this file feeds for every other SNI.
@@ -57,13 +57,13 @@ map $ssl_preread_server_name $ai_pin_revival_443_backend {
 
     default                          ai_pin_revival_local_tls;
 
-    api.carry.humane.cloud           ai_pin_revival_device_edge;
+    api.cosmos.humane.cloud           ai_pin_revival_device_edge;
     api.clone.invalid                ai_pin_revival_device_edge;
-    eastus.carry.humane.cloud        ai_pin_revival_device_edge;
-    eastus-1.carry.humane.cloud      ai_pin_revival_device_edge;
-    onboarding.carry.humane.cloud    ai_pin_revival_device_edge;
+    eastus.cosmos.humane.cloud        ai_pin_revival_device_edge;
+    eastus-1.cosmos.humane.cloud      ai_pin_revival_device_edge;
+    onboarding.cosmos.humane.cloud    ai_pin_revival_device_edge;
     onboarding.clone.invalid         ai_pin_revival_device_edge;
-    carry-edge                       ai_pin_revival_device_edge;
+    cosmos-edge                       ai_pin_revival_device_edge;
 }
 
 # `max_fails=0` on both single-server groups: passive health checking has nothing
@@ -88,7 +88,7 @@ server {
     proxy_connect_timeout 10s;
     # proxy_timeout is an IDLE timeout, and idleness is the normal state of the
     # push plane: humane.pushrelay.PushRelayService/Subscribe is a server stream
-    # Envoy routes with `timeout: 0s` precisely because it may carry nothing for a
+    # Envoy routes with `timeout: 0s` precisely because it may contain nothing for a
     # long time. The 180s used by the internal :8443 passthrough would tear that
     # subscription down every three minutes and the device would read it as a
     # transport fault, so this listener holds a session open for an hour.

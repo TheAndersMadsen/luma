@@ -4,7 +4,7 @@ import test from "node:test";
 process.env.KEYCLOAK_BASE_URL = "https://keycloak.test";
 process.env.KEYCLOAK_CLIENT_ID = "center-test";
 process.env.AUTH_SESSION_SECRET = "0123456789abcdef0123456789abcdef";
-process.env.CARRY_OPERATOR_EMAILS = "bootstrap@example.com, second@example.com";
+process.env.COSMOS_OPERATOR_EMAILS = "bootstrap@example.com, second@example.com";
 
 const {
   isOperatorPath,
@@ -20,12 +20,12 @@ function jwtPayload(token) {
 
 test("realm role, client role, and exact bootstrap email resolve to one operator bit", () => {
   assert.equal(
-    operatorClaimFromKeycloakClaims({ realm_access: { roles: ["carry-operator"] } }, "wearer@example.com"),
+    operatorClaimFromKeycloakClaims({ realm_access: { roles: ["cosmos-operator"] } }, "wearer@example.com"),
     true,
   );
   assert.equal(
     operatorClaimFromKeycloakClaims(
-      { resource_access: { "center-test": { roles: ["carry-operator"] } } },
+      { resource_access: { "center-test": { roles: ["cosmos-operator"] } } },
       "wearer@example.com",
     ),
     true,
@@ -33,7 +33,7 @@ test("realm role, client role, and exact bootstrap email resolve to one operator
   assert.equal(operatorClaimFromKeycloakClaims({}, "BOOTSTRAP@example.com"), true);
   assert.equal(operatorClaimFromKeycloakClaims({}, "bootstrap@example.com.evil"), false);
   assert.equal(
-    operatorClaimFromKeycloakClaims({ resource_access: { other: { roles: ["carry-operator"] } } }, "wearer@example.com"),
+    operatorClaimFromKeycloakClaims({ resource_access: { other: { roles: ["cosmos-operator"] } } }, "wearer@example.com"),
     false,
   );
 });
@@ -91,20 +91,20 @@ test("admin mutation origin validation honors the public forwarded origin and fa
   const sameOrigin = new Request("http://center:4000/api/admin/provision", {
     method: "POST",
     headers: {
-      origin: "https://carry.example.test",
-      "x-forwarded-host": "carry.example.test",
+      origin: "https://cosmos.example.test",
+      "x-forwarded-host": "cosmos.example.test",
       "x-forwarded-proto": "https",
     },
   });
   assert.equal(isSameOriginRequest(sameOrigin), true);
 
-  const crossOrigin = new Request("https://carry.example.test/api/admin/provision", {
+  const crossOrigin = new Request("https://cosmos.example.test/api/admin/provision", {
     method: "POST",
     headers: { origin: "https://attacker.example" },
   });
   assert.equal(isSameOriginRequest(crossOrigin), false);
   assert.equal(
-    isSameOriginRequest(new Request("https://carry.example.test/api/admin/provision", { method: "POST" })),
+    isSameOriginRequest(new Request("https://cosmos.example.test/api/admin/provision", { method: "POST" })),
     false,
   );
 });

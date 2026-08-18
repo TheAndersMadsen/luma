@@ -195,7 +195,7 @@ function readDocument(): StoreDocument {
 /**
  * Replace the store atomically.
  *
- * A sibling carrying this process's pid, then a rename: rename within a
+ * A sibling containing this process's pid, then a rename: rename within a
  * directory is atomic, so a reader sees either the whole old document or the
  * whole new one, and a crash between the two cannot leave a truncated file
  * where the pending changes were. `fsync` before the rename because the rename

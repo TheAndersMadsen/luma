@@ -150,7 +150,7 @@ test("the dashboard names the part that failed, using the provenance it already 
 test("capture search says so when it is not searching, and recovers when the backend does", async () => {
   const page = await source("app/captures/page.tsx");
 
-  // src/server/headers.ts: `x-data-state` is the one to branch on. `carry` is
+  // src/server/headers.ts: `x-data-state` is the one to branch on. `cosmos` is
   // only accidentally equivalent to `live`.
   assert.match(page, /x-data-state/);
   assert.doesNotMatch(
@@ -160,7 +160,7 @@ test("capture search says so when it is not searching, and recovers when the bac
   );
 
   // The sticky flag had no path back to false, so one blip disabled the server
-  // search for the life of the page — including long after carry recovered.
+  // search for the life of the page — including long after cosmos recovered.
   assert.doesNotMatch(
     page,
     /setSearchUnavailable/,

@@ -89,7 +89,7 @@ python3 - "$backup/protected-presence.tsv" "$backup/protected.paths" "$attest" "
 import sys
 presence_path,paths_path,attest,duc=sys.argv[1:]
 required={attest,duc,"/etc/nginx/nginx.conf","/etc/nginx/sites-available","/etc/nginx/sites-enabled","/etc/systemd/system/penumbra-center-bridge.service","/etc/penumbra","/var/lib/penumbra-center"}
-optional={"/home/anders/humane-carry-clone/.env","/home/anders/carry-backends.env","/home/anders/carry-center.env","/home/anders/carry-edge","/home/anders/keycloak-themes/humane","/home/anders/ai-pin-revival/private","/etc/nginx/conf.d","/etc/cloudflared","/home/anders/.cloudflared"}
+optional={"/home/anders/humane-cosmos-clone/.env","/home/anders/cosmos-backends.env","/home/anders/cosmos-center.env","/home/anders/cosmos-edge","/home/anders/keycloak-themes/humane","/home/anders/ai-pin-revival/private","/etc/nginx/conf.d","/etc/cloudflared","/home/anders/.cloudflared"}
 present=required|{"/home/anders/ai-pin-revival/private"}
 with open(presence_path,"w",encoding="utf-8") as output:
     for value in sorted(required): output.write(f"required\tpresent\t{value}\n")
@@ -313,7 +313,7 @@ test("protected-root declarations are closed and bind both trust-root identities
     const fixture = await makeBackup(directory, { id: `backup-protected-${name}` });
     if (name === "security-duplicate") {
       const target = path.join(fixture.backup, "active-security-roots.tsv");
-      await writeFile(target, `${await readFile(target, "utf8")}attestation\t/home/anders/carry-attest\n`, { mode: 0o600 });
+      await writeFile(target, `${await readFile(target, "utf8")}attestation\t/home/anders/cosmos-attest\n`, { mode: 0o600 });
     } else {
       const target = path.join(fixture.backup, "protected-presence.tsv");
       const body = await readFile(target, "utf8");

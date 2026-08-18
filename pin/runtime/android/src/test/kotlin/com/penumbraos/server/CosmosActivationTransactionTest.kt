@@ -194,8 +194,8 @@ class CosmosActivationTransactionTest {
     @Test
     fun endpointsAndAttestationSubjectAreExactContracts() {
         val plan = CosmosActivationContract.plan(
-            "HTTPS://api.carry.humane.cloud:443/",
-            "https://onboarding.carry.humane.cloud/",
+            "HTTPS://api.cosmos.humane.cloud:443/",
+            "https://onboarding.cosmos.humane.cloud/",
             "203.0.113.9",
         )
         assertEquals(CosmosActivationContract.API_ENDPOINT, plan.apiEndpoint)
@@ -208,7 +208,7 @@ class CosmosActivationTransactionTest {
         assertTrue(
             runCatching {
                 CosmosActivationContract.plan(
-                    "https://carry.andersmadsen.dk",
+                    "https://cosmos.andersmadsen.dk",
                     CosmosActivationContract.ONBOARDING_ENDPOINT,
                     "203.0.113.9",
                 )

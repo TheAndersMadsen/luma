@@ -1,4 +1,4 @@
-//! Generated gRPC bindings for the Carry-compatible wire contract.
+//! Generated gRPC bindings for the Cosmos-compatible wire contract.
 //!
 //! The `.proto` sources under `contracts/wire/` are independently authored interface
 //! reconstructions — the service, method, message, and field-number contracts

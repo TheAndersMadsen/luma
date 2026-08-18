@@ -143,7 +143,7 @@ export const config = {
    * handler coerces its last segment with `Number(index) || 0` and silently
    * swallowed the extension. Wearer PAGE paths went the same way: `/captures/x.png`
    * rendered the signed-in app shell to an anonymous caller. Nothing was
-   * disclosed — Carry returns the sealed envelope to a non-Web caller and the
+   * disclosed — Cosmos returns the sealed envelope to a non-Web caller and the
    * channel key refuses to resolve without a wearer identity, so the bytes were
    * never producible — but the authentication gate genuinely did not run, and
    * "safe because of what happens two layers down" is not a gate.

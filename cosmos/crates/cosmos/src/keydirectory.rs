@@ -8,7 +8,7 @@
 //! process and is invisible to every other. Contacts — a separate workload — can
 //! therefore never open a sealed contact, no matter what the device uploaded.
 //!
-//! Real carry did not have this problem: its services asked the privacy service
+//! Real cosmos did not have this problem: its services asked the privacy service
 //! for keys (`ISynchronousPrivacyKeyClient` is the device-side half of exactly
 //! that shape). This module is the clone's equivalent — one directory, written by
 //! whoever imports a key, readable by whoever needs to open something sealed
@@ -26,7 +26,7 @@
 //!
 //! # Storage
 //!
-//! Postgres when `CARRY_DATABASE_URL` is set, memory otherwise. The memory case
+//! Postgres when `COSMOS_DATABASE_URL` is set, memory otherwise. The memory case
 //! is not a degraded mode to be papered over: it is correct for a single-workload
 //! deployment and for tests, and it is *not* correct across workloads — which is
 //! why [`KeyDirectory::is_shared`] exists and why callers say so in their logs
@@ -106,7 +106,7 @@ impl KeyDirectory {
     pub async fn put(&self, kid: &str, key: [u8; AES_KEY_LEN]) {
         if let Some(pool) = &self.pool {
             let stored = sqlx::query(
-                "INSERT INTO carry_channel_key (kid, key) VALUES ($1, $2)
+                "INSERT INTO cosmos_channel_key (kid, key) VALUES ($1, $2)
                  ON CONFLICT (kid) DO UPDATE SET key = EXCLUDED.key",
             )
             .bind(kid)
@@ -139,7 +139,7 @@ impl KeyDirectory {
         }
         let pool = self.pool.as_ref()?;
         let row =
-            sqlx::query_as::<_, (Vec<u8>,)>("SELECT key FROM carry_channel_key WHERE kid = $1")
+            sqlx::query_as::<_, (Vec<u8>,)>("SELECT key FROM cosmos_channel_key WHERE kid = $1")
                 .bind(kid)
                 .fetch_optional(pool)
                 .await
@@ -223,8 +223,8 @@ mod tests {
     /// in for two workloads.
     #[tokio::test]
     async fn a_second_workload_reads_a_key_the_first_imported() {
-        let Ok(url) = std::env::var("CARRY_TEST_DATABASE_URL") else {
-            eprintln!("SKIPPED: set CARRY_TEST_DATABASE_URL to exercise the shared key directory");
+        let Ok(url) = std::env::var("COSMOS_TEST_DATABASE_URL") else {
+            eprintln!("SKIPPED: set COSMOS_TEST_DATABASE_URL to exercise the shared key directory");
             return;
         };
         let importer = KeyDirectory::connect(&url).await.expect("connect");

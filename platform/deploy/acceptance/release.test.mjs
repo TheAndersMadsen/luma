@@ -82,7 +82,7 @@ test("release packaging is clean, deterministic, and independently verifiable", 
       );
       assert.ok(manifest.entries.some((entry) => entry.path.startsWith("center/")));
       assert.ok(manifest.entries.some((entry) => entry.path.startsWith("cosmos/")));
-      // No `pin/` source at all. The VPS release used to carry `pin/setup`,
+      // No `pin/` source at all. The VPS release used to contain `pin/setup`,
       // the browser-only Setup SPA, because that was the one part of `pin/`
       // a server could legitimately serve. The console is part of Center now
       // (`center/src/app/settings/pin`, `center/src/lib/pin-install`), so the

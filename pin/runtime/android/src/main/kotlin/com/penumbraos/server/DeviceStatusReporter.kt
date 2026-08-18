@@ -31,7 +31,7 @@ internal class DeviceStatusReporter(private val context: Context) {
     companion object {
         private const val TAG = "DeviceStatusReporter"
         private const val DEFAULT_URL =
-            "https://carry-api.andersmadsen.dk/device-status/v1/report"
+            "https://cosmos-api.andersmadsen.dk/device-status/v1/report"
         private const val SUCCESS_INTERVAL_MS = 5 * 60 * 1000L
         private const val RETRY_INTERVAL_MS = 60 * 1000L
         private const val CONNECT_TIMEOUT_MS = 10_000
@@ -77,8 +77,8 @@ internal class DeviceStatusReporter(private val context: Context) {
 
     private fun reportOnce(): Boolean {
         val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-        val key = store.getKey(CarryIdentityProvider.KEY_ALIAS, null) ?: return false
-        val certificate = store.getCertificate(CarryIdentityProvider.KEY_ALIAS) as? X509Certificate
+        val key = store.getKey(CosmosIdentityProvider.KEY_ALIAS, null) ?: return false
+        val certificate = store.getCertificate(CosmosIdentityProvider.KEY_ALIAS) as? X509Certificate
             ?: return false
         val payload = buildPayload().toString()
         val signature = Signature.getInstance("SHA256withECDSA").run {

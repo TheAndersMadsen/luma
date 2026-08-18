@@ -74,7 +74,7 @@ export const STOCK_EVIDENCE_RELATIVE_PATH = "decompile-workspace/decompiled";
 // minutes into a build, with no hint that the cause is a missing file.
 //
 // The PATH and DIGEST of each are parsed from runtime/android/build.gradle.kts (below),
-// never restated here: that file is what enforces the gate. These entries carry
+// never restated here: that file is what enforces the gate. These entries contain
 // only what the build file cannot state — what the artifact is, and what this
 // repository does or does not document about obtaining it.
 export const GATED_BUILD_ASSETS = Object.freeze([

@@ -57,7 +57,7 @@
 //! * If it does not, the field is **deliberately accepted unverified** — the same
 //!   DeviceAttestation key already authenticated the mTLS connection the edge
 //!   terminated, so the signature adds no evidence we do not already have. Set
-//!   `CARRY_REQUIRE_DEVICE_ATTESTATION` to refuse instead of accepting.
+//!   `COSMOS_REQUIRE_DEVICE_ATTESTATION` to refuse instead of accepting.
 
 use std::sync::Arc;
 
@@ -81,7 +81,7 @@ const XFCC_HEADER: &str = "x-forwarded-client-cert";
 
 /// Refuse a request whose attestation signature cannot be verified, instead of
 /// deliberately accepting it.
-const REQUIRE_ATTESTATION_ENV: &str = "CARRY_REQUIRE_DEVICE_ATTESTATION";
+const REQUIRE_ATTESTATION_ENV: &str = "COSMOS_REQUIRE_DEVICE_ATTESTATION";
 
 #[derive(Clone)]
 pub struct Provisioning {
@@ -97,7 +97,7 @@ pub struct Provisioning {
     /// provisioning workload reads subscription changes written by AI-bus
     /// through the same PostgreSQL store.
     account_store: crate::store::SharedStore,
-    /// Whether an always-signed RPC must carry a verifiable attestation
+    /// Whether an always-signed RPC must contain a verifiable attestation
     /// signature. Resolved ONCE at construction rather than read per call:
     /// reading a process-global env var inside a handler makes concurrent tests
     /// race on it, and a security decision should not depend on when it is
@@ -206,11 +206,11 @@ fn caller_principal<T>(request: &Request<T>) -> String {
         .unwrap_or_else(|| FALLBACK_PRINCIPAL.to_owned())
 }
 
-/// Whether enrollment is open. `CARRY_ENROLLMENT_OPEN` defaults to open — this is
+/// Whether enrollment is open. `COSMOS_ENROLLMENT_OPEN` defaults to open — this is
 /// the self-hosted clone deliberately admitting devices; set it to a falsey value
 /// (`0`/`false`/`no`/`off`) to close the HMC bypass gate.
 fn enrollment_open() -> bool {
-    match std::env::var("CARRY_ENROLLMENT_OPEN") {
+    match std::env::var("COSMOS_ENROLLMENT_OPEN") {
         Ok(value) => !matches!(
             value.trim().to_ascii_lowercase().as_str(),
             "0" | "false" | "no" | "off"
@@ -361,7 +361,7 @@ fn check_attestation<T>(
         if presence == Attestation::AlwaysSigned && require_attestation {
             return Err(Status::unauthenticated(
                 "this RPC is always signed by a real device and \
-                 CARRY_REQUIRE_DEVICE_ATTESTATION is set, but no \
+                 COSMOS_REQUIRE_DEVICE_ATTESTATION is set, but no \
                  device_id_verification_signature was supplied",
             ));
         }
@@ -496,7 +496,7 @@ impl DeviceOnboardingDacService for Provisioning {
     }
 
     /// The HMC bypass gate: `Allowed` by default so a self-hosted clone admits a
-    /// device, `Disallowed` when `CARRY_ENROLLMENT_OPEN` is set falsey — or when
+    /// device, `Disallowed` when `COSMOS_ENROLLMENT_OPEN` is set falsey — or when
     /// this deployment has no DeviceUser CA, because inviting a Pin into a
     /// ceremony we cannot finish just strands it mid-onboarding.
     async fn verify_hmc_by_pass(
@@ -557,10 +557,10 @@ impl DeviceOnboardingDacService for Provisioning {
         let (status, name_to_display) = match account {
             Some(account) if account == body.hmc_id => (
                 pb::HmcAssociationResponseCode::Success,
-                std::env::var("CARRY_ENROLLMENT_DISPLAY_NAME")
+                std::env::var("COSMOS_ENROLLMENT_DISPLAY_NAME")
                     .ok()
                     .filter(|value| !value.trim().is_empty())
-                    .unwrap_or_else(|| "Carry User".to_owned()),
+                    .unwrap_or_else(|| "Cosmos User".to_owned()),
             ),
             Some(_) => (pb::HmcAssociationResponseCode::Failure, String::new()),
             None => (
@@ -803,7 +803,7 @@ mod tests {
     /// `check_attestation` branch could be reverted to `Ok(())` without a single
     /// red test. This drives it through a REAL RPC instead.
     ///
-    /// `CARRY_REQUIRE_DEVICE_ATTESTATION` must refuse an always-signed RPC that
+    /// `COSMOS_REQUIRE_DEVICE_ATTESTATION` must refuse an always-signed RPC that
     /// arrives with no signature — the bypass-by-omission case, which is what an
     /// attacker would actually send.
     #[tokio::test]
@@ -859,7 +859,7 @@ mod tests {
 
     /// REGRESSION (falsifiability, the other half): the "signature present, but
     /// the edge forwarded no `Cert=` element to check it against" refusal read
-    /// `CARRY_REQUIRE_DEVICE_ATTESTATION` out of the process environment instead
+    /// `COSMOS_REQUIRE_DEVICE_ATTESTATION` out of the process environment instead
     /// of the flag the constructor resolved. A service built as REQUIRED did not
     /// enforce it, and — worse — the branch was unreachable from the injection
     /// seam, so deleting or inverting it broke no test. This drives it through a

@@ -10,7 +10,7 @@
  * session cookie does, which `middleware.ts` verifies on every request.
  *
  * Auth is enabled exactly when a Keycloak base URL is configured. Local `next dev`
- * with no Keycloak stays open, the same convention the carry BFF uses for its own
+ * with no Keycloak stays open, the same convention the cosmos BFF uses for its own
  * backend — production always sets KEYCLOAK_BASE_URL, so production is always
  * gated.
  */
@@ -22,19 +22,19 @@ const CLIENT_ID = process.env.KEYCLOAK_CLIENT_ID ?? "center";
 const CLIENT_SECRET = process.env.KEYCLOAK_CLIENT_SECRET ?? "";
 const KEYCLOAK_BASE_URL = (process.env.KEYCLOAK_BASE_URL ?? "").replace(/\/$/, "");
 const SESSION_SECRET = process.env.AUTH_SESSION_SECRET ?? "";
-const OPERATOR_ROLE = "carry-operator";
+const OPERATOR_ROLE = "cosmos-operator";
 const OPERATOR_EMAILS = new Set(
-  (process.env.CARRY_OPERATOR_EMAILS ?? "")
+  (process.env.COSMOS_OPERATOR_EMAILS ?? "")
     .split(",")
     .map((email) => email.trim().toLowerCase())
     .filter(Boolean),
 );
 
-export const SESSION_COOKIE = "carry_session";
+export const SESSION_COOKIE = "cosmos_session";
 export const SESSION_TTL_SECONDS = 60 * 60 * 12;
 export const AUTH_ENABLED = KEYCLOAK_BASE_URL.length > 0;
 
-const DEV_FALLBACK_SECRET = "carry-center-dev-session-secret-change-me";
+const DEV_FALLBACK_SECRET = "cosmos-center-dev-session-secret-change-me";
 
 function secretKey(): Uint8Array {
   if (SESSION_SECRET) return new TextEncoder().encode(SESSION_SECRET);
@@ -246,15 +246,15 @@ function decodeJwtClaims(jwt: string | undefined): Record<string, unknown> {
 
 // ── Keycloak token retention (the Bearer plane) ──────────────────────────────
 //
-// The session cookie above gates the browser; these carry the actual Keycloak
-// tokens the BFF forwards to carry as `Authorization: Bearer`, so the backend
+// The session cookie above gates the browser; these contain the actual Keycloak
+// tokens the BFF forwards to contain as `Authorization: Bearer`, so the backend
 // verifies the wearer's identity by Keycloak's OWN signature
-// (carry-server/src/web_auth.rs) rather than trusting a principal header we
+// (cosmos-server/src/web_auth.rs) rather than trusting a principal header we
 // chose. Kept in a SEPARATE, ENCRYPTED cookie the edge middleware never opens —
 // only the Node BFF does — so a live access token never rides in a
 // merely-signed payload.
 
-export const TOKENS_COOKIE = "carry_tokens";
+export const TOKENS_COOKIE = "cosmos_tokens";
 
 // Chromium rejects a Set-Cookie header once the name, encrypted value, and
 // attributes cross the per-cookie limit (roughly 4 KiB).  A Keycloak
@@ -336,7 +336,7 @@ export function clearTokenCookies(jar: CookieWriter, options: TokenCookieOptions
   }
 }
 
-export type CarryTokens = {
+export type CosmosTokens = {
   accessToken: string;
   refreshToken: string;
   /** Unix seconds at which the access token expires. */
@@ -358,7 +358,7 @@ async function tokenKey(): Promise<Uint8Array> {
   return new Uint8Array(digest);
 }
 
-export async function sealTokens(tokens: CarryTokens): Promise<string> {
+export async function sealTokens(tokens: CosmosTokens): Promise<string> {
   return await new EncryptJWT({
     at: tokens.accessToken,
     rt: tokens.refreshToken,
@@ -373,7 +373,7 @@ export async function sealTokens(tokens: CarryTokens): Promise<string> {
 
 export async function openTokens(
   cookieValue: string | undefined,
-): Promise<CarryTokens | null> {
+): Promise<CosmosTokens | null> {
   if (!cookieValue) return null;
   try {
     const { payload } = await jwtDecrypt(cookieValue, await tokenKey());
@@ -391,7 +391,7 @@ export async function openTokens(
 function tokensFromResponse(
   tok: { access_token?: string; refresh_token?: string; expires_in?: number; id_token?: string },
   fallbackRefresh?: string,
-): CarryTokens | null {
+): CosmosTokens | null {
   if (!tok.access_token) return null;
   return {
     accessToken: tok.access_token,
@@ -422,12 +422,12 @@ function tokensFromResponse(
 const REFRESH_REUSE_WINDOW_MS = 5_000;
 const refreshFlights = new Map<
   string,
-  { promise: Promise<CarryTokens | null>; expiresAt: number }
+  { promise: Promise<CosmosTokens | null>; expiresAt: number }
 >();
 
 export async function refreshTokens(
   refreshToken: string,
-): Promise<CarryTokens | null> {
+): Promise<CosmosTokens | null> {
   if (!AUTH_ENABLED || !refreshToken) return null;
 
   const now = Date.now();
@@ -454,7 +454,7 @@ export async function refreshTokens(
  * signal, so undici's 300s default was its only bound. It is also UPSTREAM of
  * every deadline Center owns: `call()` awaits `requestMetadata()` before it
  * computes `Date.now() + DEADLINE_MS`, so the gRPC deadline is rebased after the
- * hang and CARRY_DEADLINE_MS bounds nothing across it.
+ * hang and COSMOS_DEADLINE_MS bounds nothing across it.
  *
  * The wearer-visible half of that is a Memories page that skeletons for two
  * minutes and then says "Couldn't load your memories" — an outage sentence for a
@@ -462,17 +462,17 @@ export async function refreshTokens(
  * at all: `webapiGet` used to construct its 8s AbortSignal BEFORE awaiting the
  * headers, so a merely SLOW Keycloak spent the whole capture deadline on the
  * auth hop and the request arrived already aborted, at which point
- * `describeWebapi` reported "carry webapi timed out" — Center blaming a
+ * `describeWebapi` reported "cosmos webapi timed out" — Center blaming a
  * perfectly healthy Cosmos for an IdP stall, and sending whoever is on call to
  * the wrong service. (That ordering is fixed too, in cosmos.ts and in
  * webapiDelete.)
  *
- * Well under CARRY_DEADLINE_MS, because everything downstream of it still needs
+ * Well under COSMOS_DEADLINE_MS, because everything downstream of it still needs
  * time to answer inside the same request.
  */
 const KEYCLOAK_DEADLINE_MS = Number(process.env.KEYCLOAK_DEADLINE_MS ?? 5000);
 
-async function exchangeRefreshToken(refreshToken: string): Promise<CarryTokens | null> {
+async function exchangeRefreshToken(refreshToken: string): Promise<CosmosTokens | null> {
   const body = new URLSearchParams({
     grant_type: "refresh_token",
     client_id: CLIENT_ID,
@@ -505,7 +505,7 @@ async function exchangeRefreshToken(refreshToken: string): Promise<CarryTokens |
  */
 export async function keycloakLogin(
   credentials: Credentials,
-): Promise<{ session: Session; tokens: CarryTokens } | null> {
+): Promise<{ session: Session; tokens: CosmosTokens } | null> {
   if (!AUTH_ENABLED) return null;
   const body = new URLSearchParams({
     grant_type: "password",
@@ -556,12 +556,12 @@ export async function keycloakLogin(
 // browser to Keycloak's hosted login (Authorization Code + PKCE) and received
 // the user back at /api/auth/callback/humane. This restores that flow.
 //
-// To keep the backend Bearer plane working unchanged (carry-server trusts
+// To keep the backend Bearer plane working unchanged (cosmos-server trusts
 // Keycloak's INTERNAL issuer), the flow is SPLIT: the BROWSER visits Keycloak at
 // the app's own public origin — nginx proxies /realms and /resources to Keycloak
 // on the same host — while the BFF exchanges the code and verifies the id_token
 // against the INTERNAL issuer (KEYCLOAK_BASE_URL). So the id_token/access_token
-// we retain still carry the internal `iss` the backend already accepts: no
+// we retain still contain the internal `iss` the backend already accepts: no
 // backend change, no Keycloak hostname change, fully reversible.
 
 const OIDC_PATH = `/realms/${REALM}/protocol/openid-connect`;
@@ -682,7 +682,7 @@ function realmJwks() {
  * `acceptIssuerOrigin` widens the accepted issuer to that public origin too:
  * Keycloak resolves the token's `iss` from the request's frontend URL, so a code
  * minted at the browser's public origin but exchanged at the internal one can
- * legitimately carry either issuer. The JWKS (realm keys) verifies the signature
+ * legitimately accept either issuer. The JWKS (realm keys) verifies the signature
  * regardless, so accepting both is safe.
  */
 export async function verifyIdToken(
@@ -716,7 +716,7 @@ export async function verifyIdToken(
 
 /**
  * Exchange the authorization code for tokens at the INTERNAL Keycloak token
- * endpoint (so the tokens carry the internal `iss`), then verify the id_token
+ * endpoint (so the tokens contain the internal `iss`), then verify the id_token
  * and its nonce. Returns the verified session plus the retained tokens, or null.
  */
 export async function exchangeCode(args: {
@@ -726,7 +726,7 @@ export async function exchangeCode(args: {
   expectedNonce: string;
   /** Public origin the browser used, whose issuer is also accepted (see verifyIdToken). */
   acceptIssuerOrigin?: string;
-}): Promise<{ session: Session; tokens: CarryTokens } | null> {
+}): Promise<{ session: Session; tokens: CosmosTokens } | null> {
   if (!AUTH_ENABLED) return null;
   const body = new URLSearchParams({
     grant_type: "authorization_code",

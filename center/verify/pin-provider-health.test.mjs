@@ -461,6 +461,6 @@ test("never leaks arbitrary model output into the settings panel", () => {
   assert.equal(summary.evidenceText, null);
   assert.ok(
     !JSON.stringify(summary).includes("12345"),
-    "no part of the summary may carry the model's own words",
+    "no part of the summary may contain the model's own words",
   );
 });

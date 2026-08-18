@@ -17,7 +17,7 @@ import type {
  *
  * SELF-CONTAINED, unlike the flags and provisioning panels whose state is
  * lifted into `page.tsx`. Those two depend on the console's overview — they are
- * unusable without CARRY_ADMIN_TOKEN and a reachable backend, so they share its
+ * unusable without COSMOS_ADMIN_TOKEN and a reachable backend, so they share its
  * loading and unconfigured states. This panel reads Center's OWN environment
  * and Center's own data volume, so it is exactly as available as the page
  * itself: when the backend is down, this is the pane that still answers, and

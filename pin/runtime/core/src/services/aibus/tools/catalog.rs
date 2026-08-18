@@ -1799,7 +1799,7 @@ impl ToolCatalog for AibusToolCatalog<'_> {
         match self.broker.execute(request).await {
             Ok(AgenticToolOutput::Result(result)) => {
                 // `not_found` is a valid EMPTY result (e.g. current_music when
-                // nothing is playing), not a failure: it must not carry the
+                // nothing is playing), not a failure: it must not contain the
                 // [TOOL_ERROR] stamp, and it counts as live evidence gathered
                 // this run so the freshness gate does not order a redundant
                 // re-lookup of a definitively-empty read.

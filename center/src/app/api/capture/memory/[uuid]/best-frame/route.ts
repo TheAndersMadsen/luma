@@ -17,7 +17,7 @@ export async function POST(
     });
   } catch (error) {
     // Same seam, same answer as best-photo: a wearer's override that failed
-    // because their session died must offer the sign-in, not a 502 about carry.
+    // because their session died must offer the sign-in, not a 502 about cosmos.
     if (error instanceof SessionExpiredError) {
       return NextResponse.json(
         { error: "Your session expired — sign in again.", reauthenticate: true },

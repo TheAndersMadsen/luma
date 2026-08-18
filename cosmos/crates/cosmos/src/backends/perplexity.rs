@@ -1,21 +1,21 @@
-//! Web-grounded answer engine — Perplexity (`MODE_PPLX_API` in carry's backend
+//! Web-grounded answer engine — Perplexity (`MODE_PPLX_API` in cosmos's backend
 //! enumeration).
 //!
 //! Distinct from `web_search` (SerpApi): that returns raw result snippets for the
 //! model to read; this returns a *synthesized, cited* answer from a web-connected
-//! model. carry carried both as separate backends, so they are separate tools —
+//! model. cosmos carried both as separate backends, so they are separate tools —
 //! the assistant picks raw retrieval vs a ready answer per question.
 //!
 //! Perplexity's API is OpenAI-chat-shaped, so the request/response mirror the
-//! `OpenAiChatModel` wire types. `CARRY_PPLX_MODEL` overrides the model
+//! `OpenAiChatModel` wire types. `COSMOS_PPLX_MODEL` overrides the model
 //! (default `sonar`, their small online model).
 
 use serde::{Deserialize, Serialize};
 
 use super::{BackendError, http, key};
 
-const KEY_VAR: &str = "CARRY_PPLX_API_KEY";
-const MODEL_VAR: &str = "CARRY_PPLX_MODEL";
+const KEY_VAR: &str = "COSMOS_PPLX_API_KEY";
+const MODEL_VAR: &str = "COSMOS_PPLX_MODEL";
 const DEFAULT_MODEL: &str = "sonar";
 const MAX_CHARS: usize = 1200;
 

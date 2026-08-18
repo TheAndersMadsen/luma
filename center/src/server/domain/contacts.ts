@@ -7,7 +7,7 @@
  * suggests the dashboard read that arm.
  */
 
-import { CARRY_ENABLED, Services, call } from "../cosmos";
+import { COSMOS_ENABLED, Services, call } from "../cosmos";
 import { failedGrpc, live, unconfigured, type Sourced } from "./provenance";
 
 export interface ContactRecord {
@@ -29,7 +29,7 @@ export interface ContactDraft {
   organization?: string | null;
 }
 
-interface CarryContact {
+interface CosmosContact {
   id?: string;
   name?: { firstName?: string; lastName?: string; nickname?: string; displayName?: string };
   phoneNumbers?: Array<{ value?: string; type?: string }>;
@@ -44,9 +44,9 @@ export async function getContacts(search = ""): Promise<Sourced<ContactRecord[]>
   // No contact fixtures exist, so this is an empty list — not sample data.
   // Tagging it "fixtures" was exactly the overloading that made a failed call
   // and a genuinely empty backend indistinguishable.
-  if (!CARRY_ENABLED) return unconfigured([], "empty");
+  if (!COSMOS_ENABLED) return unconfigured([], "empty");
   try {
-    const res = await call<{ searchTerm: string }, { contacts?: CarryContact[] }>(
+    const res = await call<{ searchTerm: string }, { contacts?: CosmosContact[] }>(
       Services.contacts,
       "GetContacts",
       { searchTerm: search },
@@ -78,7 +78,7 @@ export async function getContacts(search = ""): Promise<Sourced<ContactRecord[]>
   }
 }
 
-function carryContact(input: ContactDraft, id = ""): CarryContact {
+function cosmosContact(input: ContactDraft, id = ""): CosmosContact {
   const displayName = input.displayName.trim();
   return {
     id,
@@ -91,14 +91,14 @@ function carryContact(input: ContactDraft, id = ""): CarryContact {
   };
 }
 
-/** Create one or more wearer-owned contacts and let Carry assign stable ids. */
+/** Create one or more wearer-owned contacts and let Cosmos assign stable ids. */
 export async function createContacts(inputs: ContactDraft[]): Promise<Sourced<number>> {
-  if (!CARRY_ENABLED) return unconfigured(0, "empty");
+  if (!COSMOS_ENABLED) return unconfigured(0, "empty");
   try {
-    const response = await call<{ contacts: CarryContact[] }, { contacts?: CarryContact[] }>(
+    const response = await call<{ contacts: CosmosContact[] }, { contacts?: CosmosContact[] }>(
       Services.contacts,
       "CreateContacts",
-      { contacts: inputs.map((input) => carryContact(input)) },
+      { contacts: inputs.map((input) => cosmosContact(input)) },
     );
     return live(response.contacts?.length ?? inputs.length);
   } catch (error) {
@@ -108,9 +108,9 @@ export async function createContacts(inputs: ContactDraft[]): Promise<Sourced<nu
 
 /** Update exactly one contact. The service upserts by its stable contact id. */
 export async function updateContact(id: string, input: ContactDraft): Promise<Sourced<null>> {
-  if (!CARRY_ENABLED) return unconfigured(null, "empty");
+  if (!COSMOS_ENABLED) return unconfigured(null, "empty");
   try {
-    await call(Services.contacts, "UpdateContacts", { contacts: [carryContact(input, id)] });
+    await call(Services.contacts, "UpdateContacts", { contacts: [cosmosContact(input, id)] });
     return live(null);
   } catch (error) {
     return failedGrpc(null, error);
@@ -119,7 +119,7 @@ export async function updateContact(id: string, input: ContactDraft): Promise<So
 
 /** Delete a wearer-owned contact and emit the tombstone the Pin sync consumes. */
 export async function deleteContact(id: string): Promise<Sourced<null>> {
-  if (!CARRY_ENABLED) return unconfigured(null, "empty");
+  if (!COSMOS_ENABLED) return unconfigured(null, "empty");
   try {
     await call(Services.contacts, "DeleteContacts", { ids: [id] });
     return live(null);

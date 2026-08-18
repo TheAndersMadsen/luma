@@ -86,7 +86,7 @@ test("a log line reaches the process's own stdout and stderr with console destro
   assert.match(out[0], TIMESTAMPED);
   assert.match(out[0], /\binfo probe-info$/);
 
-  // One event, one line — including the one carrying a multi-line stack. A
+  // One event, one line — including the one containing a multi-line stack. A
   // stack that arrives as forty json-file records is a stack `grep` cannot
   // reassemble, which is most of why `console.warn(msg, error)` was unusable.
   assert.equal(

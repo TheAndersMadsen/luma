@@ -30,7 +30,7 @@ pub(crate) fn model_facing_observation(observation: &str) -> std::borrow::Cow<'_
     if observation.len() <= MAX_MODEL_FACING_OBSERVATION {
         return std::borrow::Cow::Borrowed(observation);
     }
-    // Never slice mid-character: observations carry wearer text and tool output,
+    // Never slice mid-character: observations contain wearer text and tool output,
     // and a byte-offset cut on non-ASCII panics. Prefer the last sentence break
     // so the model is not handed a fragment.
     let mut end = MAX_MODEL_FACING_OBSERVATION;

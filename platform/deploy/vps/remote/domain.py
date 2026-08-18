@@ -18,7 +18,7 @@ from pathlib import Path, PurePosixPath
 
 SCHEMA = 1
 CANONICAL_ORIGIN = "https://center.andersmadsen.dk"
-LEGACY_ORIGIN = "https://carry.andersmadsen.dk"
+LEGACY_ORIGIN = "https://cosmos.andersmadsen.dk"
 AVAILABLE = "/etc/nginx/sites-available/ai-pin-revival-center"
 ENABLED = "/etc/nginx/sites-enabled/ai-pin-revival-center"
 # The public :443 owner. It lives in Nginx's `stream` context, not `http`: the
@@ -273,16 +273,16 @@ def discover_nginx(args: argparse.Namespace) -> None:
             for directive in re.findall(r"(?m)^\s*server_name\s+([^;]+);", body)
             for token in directive.split()
         ]
-        if "carry.andersmadsen.dk" not in names:
+        if "cosmos.andersmadsen.dk" not in names:
             continue
         certificates = set(re.findall(r"(?m)^\s*ssl_certificate\s+([^;\s]+)\s*;", body))
         private_keys = set(re.findall(r"(?m)^\s*ssl_certificate_key\s+([^;\s]+)\s*;", body))
         if len(certificates) != 1 or len(private_keys) != 1:
-            die(f"Carry TLS vhost does not expose one certificate pair: {filename}")
+            die(f"Cosmos TLS vhost does not expose one certificate pair: {filename}")
         candidates.append((filename, certificates.pop(), private_keys.pop()))
     unique = sorted(set(candidates))
     if len(unique) != 1:
-        die(f"expected one enabled Carry TLS vhost, found {len(unique)}")
+        die(f"expected one enabled Cosmos TLS vhost, found {len(unique)}")
     enabled, certificate, private_key = unique[0]
     document = {
         "schemaVersion": SCHEMA,
@@ -512,7 +512,7 @@ def nginx_render(args: argparse.Namespace) -> None:
         },
         "Center Nginx",
     )
-    if "carry.andersmadsen.dk" not in rendered or CANONICAL_ORIGIN not in rendered:
+    if "cosmos.andersmadsen.dk" not in rendered or CANONICAL_ORIGIN not in rendered:
         die("Center Nginx template lost its canonical or legacy origin")
     # Checked here as well as against the expanded configuration later, because
     # this is the one moment the two halves are rendered together: a vhost that

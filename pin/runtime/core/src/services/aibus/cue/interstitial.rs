@@ -140,7 +140,7 @@ fn cue_phrase_for_read_tool(name: &str) -> Option<&'static str> {
 /// silent instead.
 ///
 /// Each phrase names only a generic category of external work. No phrase may
-/// carry a query, a place, a name, a result, or the word "your" — the closed
+/// contain a query, a place, a name, a result, or the word "your" — the closed
 /// vocabulary below enforces that, and a test pins every entry against it.
 const CUE_PHRASES: &[(&str, &str)] = &[
     ("knowledge_lookup", "Looking up facts"),
@@ -165,7 +165,7 @@ const CUE_PHRASES: &[(&str, &str)] = &[
 // aloud in whatever room the user is in, so the vocabulary is a closed list of
 // generic work verbs and generic category nouns. "Checking location" is legal;
 // "Checking your location" is not, because "your" is in none of the three
-// lists. Anything that could carry user or result data (names, numbers,
+// lists. Anything that could contain user or result data (names, numbers,
 // addresses, coordinates, accounts, summaries) must stay out.
 
 // The closed set of one-word opening verbs. Every entry is a generic "work in
@@ -614,7 +614,7 @@ mod tests {
             assert!(phrase.len() <= MAX_PROGRESS_CUE_BYTES);
         }
         // The gate is real, not a rubber stamp: the historic privacy defect is
-        // still rejected, and so is anything carrying user or result content.
+        // still rejected, and so is anything containing user or result content.
         for illegal in [
             "Checking your location",
             "Checking location in Paris",
@@ -641,7 +641,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn retries_are_idempotent_and_carry_no_prior_action_state() {
+    async fn retries_are_idempotent_and_retain_no_prior_action_state() {
         let handler = ActionInterstitialHandler::new();
         let request = || ActionBasedInterstitialRequest {
             action_strings: vec![

@@ -204,11 +204,11 @@ if ((pending_activation)); then
 fi
 
 # Legacy rollback compatibility only. Canonical Center and Keycloak are not
-# attached to carry-net; after a valid canonical current release exists, the
+# attached to contain-net; after a valid canonical current release exists, the
 # next rollback target is canonical and this historical network is irrelevant.
 if legacy_rollback_network_required; then
-  docker network inspect carry-net >/dev/null 2>&1 \
-    || fail "legacy rollback network carry-net is missing before first canonical cutover"
+  docker network inspect cosmos-net >/dev/null 2>&1 \
+    || fail "legacy rollback network cosmos-net is missing before first canonical cutover"
 fi
 
 stale_smoke_containers="$(docker ps -aq --filter 'label=dk.andersmadsen.ai-pin-revival.temporary=staging-smoke' | head -n 1)"
@@ -235,7 +235,7 @@ cleanup_preflight() {
 }
 trap cleanup_preflight EXIT
 domain_discover_public_edge "$domain_discovery" \
-  || fail "the active Carry dashboard edge cannot seed the Center cutover"
+  || fail "the active Cosmos dashboard edge cannot seed the Center cutover"
 domain_assert_public_tls "$domain_discovery" \
   || fail "the active wildcard TLS pair cannot serve center.andersmadsen.dk"
 domain_assert_dns_ready center.andersmadsen.dk \
@@ -292,20 +292,20 @@ required_kb=$((min_free_gb * 1024 * 1024 + (archive_bytes * 6 / 1024)))
 assert_durable_inputs
 assert_active_durable_mounts
 if [[ ! -f "$RUNTIME_ENV" ]]; then
-  [[ -f /home/anders/humane-carry-clone/.env ]] || fail "neither canonical nor legacy runtime configuration exists"
+  [[ -f /home/anders/humane-cosmos-clone/.env ]] || fail "neither canonical nor legacy runtime configuration exists"
 fi
-runtime_source="$RUNTIME_ENV"; [[ -f "$runtime_source" ]] || runtime_source=/home/anders/humane-carry-clone/.env
+runtime_source="$RUNTIME_ENV"; [[ -f "$runtime_source" ]] || runtime_source=/home/anders/humane-cosmos-clone/.env
 domain_env_value "$runtime_source" KEYCLOAK_ADMIN >/dev/null \
   && domain_env_value "$runtime_source" KEYCLOAK_ADMIN_PASSWORD >/dev/null \
   || fail "protected Keycloak administrator credentials are required for the reversible Center client migration"
-if [[ ! -f "$PRIVATE_DIR/imported/carry-backends.env" ]]; then
-  [[ -f /home/anders/carry-backends.env ]] || fail "legacy provider configuration is unavailable for first cutover"
+if [[ ! -f "$PRIVATE_DIR/imported/cosmos-backends.env" ]]; then
+  [[ -f /home/anders/cosmos-backends.env ]] || fail "legacy provider configuration is unavailable for first cutover"
 fi
 if [[ ! -f "$CENTER_ENV" ]]; then
-  [[ -f /home/anders/carry-center.env ]] || fail "legacy Center configuration is unavailable for first cutover"
+  [[ -f /home/anders/cosmos-center.env ]] || fail "legacy Center configuration is unavailable for first cutover"
 fi
 
-edge_dir="$PRIVATE_DIR/edge"; [[ -d "$edge_dir" ]] || edge_dir=/home/anders/carry-edge
+edge_dir="$PRIVATE_DIR/edge"; [[ -d "$edge_dir" ]] || edge_dir=/home/anders/cosmos-edge
 attest_dir="$(active_attestation_root)"
 duc_dir="$(active_device_user_root)"
 theme_dir="$PRIVATE_DIR/keycloak-theme"; [[ -d "$theme_dir" ]] || theme_dir=/home/anders/keycloak-themes/humane
@@ -336,7 +336,7 @@ done
 # open a connection at all: platform/edge/envoy/envoy.yaml.tpl points
 # `require_client_certificate` at onboarding-client-ca.crt and
 # api-client-ca.crt, while the certificates those anchors have to accept are
-# minted elsewhere — attestation leaves from $attest_dir (CARRY_ATTEST_CA_*, via
+# minted elsewhere — attestation leaves from $attest_dir (COSMOS_ATTEST_CA_*, via
 # provision::mint) and DeviceUser leaves from $duc_dir (the enrollment ceremony).
 # A rotated or mis-mounted anchor makes Envoy reject the Pin's client
 # certificate during the TLS handshake: the request never reaches a workload,
@@ -391,11 +391,11 @@ anchor_accepts_issuer "$duc_dir/duc-ca.crt" "$edge_certs/api-client-ca.crt" \
   || fail "the edge API anchor ($edge_certs/api-client-ca.crt) is not the DeviceUser CA that mints device client certificates ($duc_dir/duc-ca.crt); every enrolled Pin will be rejected at the edge"
 # The remaining half of this relationship — that the edge SERVER certificate
 # chains to the root the device pins in
-# pin/hook/payload/src/main/kotlin/com/penumbraos/hook/CarryRemoteTransport.kt —
+# pin/hook/payload/src/main/kotlin/com/penumbraos/hook/CosmosRemoteTransport.kt —
 # cannot be checked from here: the "vps" release profile deliberately excludes
 # pin/, so the pinned PEM literal is not on this host. It stays unproven rather
 # than silently assumed.
-warn "the edge server certificate is not checked against the root the Pin hook pins; that literal lives in pin/ source this deployment profile does not carry"
+warn "the edge server certificate is not checked against the root the Pin hook pins; that literal lives in pin/ source this deployment profile does not contain"
 
 # The edge server pair. A mismatch here means Envoy presents a certificate it
 # cannot prove it owns and every device TLS handshake dies before a request line

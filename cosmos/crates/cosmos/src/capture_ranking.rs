@@ -50,19 +50,19 @@ fn json_object(text: &str) -> Option<&str> {
 }
 
 async fn vision_choice(frames: &[Vec<u8>]) -> Option<BestFrameSelection> {
-    let base_url = std::env::var("CARRY_LLM_BASE_URL")
+    let base_url = std::env::var("COSMOS_LLM_BASE_URL")
         .ok()
         .filter(|value| !value.trim().is_empty())?;
     let api_key = crate::assistant::llm::configured_api_key()?;
     // Compose intentionally renders an unset optional variable as `""`.
     // Treat that as absent before falling back to the assistant's multimodal
     // model; Result::or_else alone only handles a missing variable and made an
-    // explicitly empty CARRY_VISION_MODEL disable AI ranking altogether.
-    let model = std::env::var("CARRY_VISION_MODEL")
+    // explicitly empty COSMOS_VISION_MODEL disable AI ranking altogether.
+    let model = std::env::var("COSMOS_VISION_MODEL")
         .ok()
         .filter(|value| !value.trim().is_empty())
         .or_else(|| {
-            std::env::var("CARRY_LLM_MODEL")
+            std::env::var("COSMOS_LLM_MODEL")
                 .ok()
                 .filter(|value| !value.trim().is_empty())
         })?;

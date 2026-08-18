@@ -451,7 +451,7 @@ function resolveType(reference, scope, tree) {
 const PACKABLE = new Set(["varint", "zigzag", "i32", "i64"]);
 
 /**
- * The four things the bytes carry for a field: how many of it there are, which
+ * The four things the bytes encode for a field: how many of it there are, which
  * of the six encodings it uses, whether a repeated run of it is packed, and —
  * for a submessage — what it points at.
  */
@@ -516,7 +516,7 @@ function byteChanging(contractsField, contractsScope, pinField, pinScope, trees,
   const b = shapeOf(pinField, pinScope, trees.pin);
   if (a.cardinality !== b.cardinality) return true;
   if (a.group !== b.group) return true;
-  // A packed run and an unpacked one carry the same values in different bytes.
+  // A packed run and an unpacked one contain the same values in different bytes.
   if (a.packed !== null && b.packed !== null && a.packed !== b.packed) return true;
   if (a.group !== "len-message") return false;
 

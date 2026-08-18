@@ -87,7 +87,7 @@ export async function getDashboardContent(
   /*
    * The aggregate is the WEAKEST part, captures included.
    *
-   * It used to derive `anyCarry` from the four gRPC parts only and treat
+   * It used to derive `anyCosmos` from the four gRPC parts only and treat
    * anything short of "degraded" as healthy, which produced two lies at once:
    * an unconfigured webapi rode inside a "live" aggregate — and a "live"
    * aggregate then dropped `fallback`, so /api/capture/memories asserted live
@@ -95,7 +95,7 @@ export async function getDashboardContent(
    * though the safe fallback is now always empty.
    */
   const state = worstState(parts.map((p) => p.part.state));
-  const anyCarry = parts.some((p) => p.part.source === "carry");
+  const anyCosmos = parts.some((p) => p.part.source === "cosmos");
 
   // Runtime data is never replaced with fixtures. Any non-live part is empty.
   const fallback: DataFallback | undefined =
@@ -119,7 +119,7 @@ export async function getDashboardContent(
 
   return {
     data,
-    source: anyCarry ? "carry" : "fixtures",
+    source: anyCosmos ? "cosmos" : "fixtures",
     state,
     fallback,
     degraded: summarizeParts(parts),
@@ -129,14 +129,14 @@ export async function getDashboardContent(
 /**
  * One sentence naming WHICH parts are not the wearer's own data.
  *
- * Failures name the first broken plane. Absent parts carry an explanation too,
+ * Failures name the first broken plane. Absent parts contain an explanation too,
  * so an empty result never means "none" when Center cannot reach its source.
  */
 function summarizeParts(parts: Array<{ label: string; part: Sourced<unknown> }>): string | undefined {
   const broken = parts.filter((p) => p.part.state === "degraded");
   if (broken.length > 0) {
     const others = broken.length > 1 ? ` (and ${broken.length - 1} more)` : "";
-    return `${broken[0].label}: ${broken[0].part.degraded ?? "carry did not answer"}${others}`;
+    return `${broken[0].label}: ${broken[0].part.degraded ?? "cosmos did not answer"}${others}`;
   }
 
   // A live part can still have something to say — a sealed note, for instance.

@@ -294,7 +294,7 @@ export default function PinEsimPane() {
                   }
                 } catch {
                   // A truncated line is not worth a user-visible error, and its
-                  // CONTENT must not be logged — an eSIM event can carry an ICCID.
+                  // CONTENT must not be logged — an eSIM event can contain an ICCID.
                   logWarn(SCOPE, "Failed to parse eSIM event", {
                     lineLength: line.length,
                   });

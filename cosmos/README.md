@@ -35,7 +35,7 @@ Compose.
 - `unknown`: complete stock parity and physical-Pin speech playback until an
   authorized target run observes them.
 
-`CARRY_*`, `/var/lib/carry`, and some durable resource names remain compatibility
+`COSMOS_*`, `/var/lib/cosmos`, and some durable resource names remain compatibility
 identifiers. They are not product names and require a verified migration before
 renaming.
 

@@ -1,5 +1,5 @@
 //! Web search — private SearXNG first, with the existing SerpApi adapter as a
-//! protected availability fallback (`MODE_SERP_API` in carry's backend
+//! protected availability fallback (`MODE_SERP_API` in cosmos's backend
 //! enumeration).
 //!
 //! This backs the assistant's `web_search` tool. The result is folded into the
@@ -18,8 +18,8 @@ use serde::{Deserialize, de::DeserializeOwned};
 
 use super::{BackendError, http, key};
 
-pub(crate) const SEARXNG_BASE_URL_VAR: &str = "CARRY_SEARXNG_BASE_URL";
-const SERPAPI_KEY_VAR: &str = "CARRY_SERPAPI_KEY";
+pub(crate) const SEARXNG_BASE_URL_VAR: &str = "COSMOS_SEARXNG_BASE_URL";
+const SERPAPI_KEY_VAR: &str = "COSMOS_SERPAPI_KEY";
 const SERPAPI_BASE_URL: &str = "https://serpapi.com/search.json";
 const PRIMARY_SEARXNG_ENGINE: &str = "bing";
 

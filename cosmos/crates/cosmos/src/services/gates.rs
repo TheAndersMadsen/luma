@@ -1,6 +1,6 @@
-//! Subscription + device-authorization signalling — carry's account gates.
+//! Subscription + device-authorization signalling — cosmos's account gates.
 //!
-//! carry never ships a bespoke "you are not subscribed" error body. It overloads
+//! cosmos never ships a bespoke "you are not subscribed" error body. It overloads
 //! two ordinary gRPC status codes with a custom **trailing** metadata key, and the
 //! device's channel-wide `AccountAuthorizationInterceptor` reads the trailer in
 //! `onClose` (SERVERSIDE-LOGIC §4.1, RUNTIME-CONTRACTS §2):
@@ -31,7 +31,7 @@
 //! **This deployment holds no subscription, billing, or lost-device datastore.**
 //! The entitlement resolver below therefore returns [`Entitlement::Active`] for
 //! every principal. That is a deliberate parity choice, not a stub pretending to
-//! be a store: carry's own grant predicate treats "no signal" as subscribed, and
+//! be a store: cosmos's own grant predicate treats "no signal" as subscribed, and
 //! the entitlement decision itself is explicitly server-only and not derivable
 //! (SERVERSIDE-LOGIC §4, "genuinely server-only"). We will not invent an expired
 //! subscription, a lost-device record, or any user row. When a real datastore
@@ -53,20 +53,20 @@ use cosmos_core::{AuthenticatedPrincipal, ServicePath, ServicePathError, Workloa
 use cosmos_protocol::account::{SubscriptionStatusCode, UnauthorizedStatusCode};
 use tonic::{Code, Status, metadata::MetadataMap};
 
-/// Trailing metadata key carrying a `SubscriptionStatusCode`, only ever on
+/// Trailing metadata key containing a `SubscriptionStatusCode`, only ever on
 /// UNAUTHENTICATED (`SUBSCRIPTION_HEADER_KEY`, RUNTIME-CONTRACTS §2).
 pub const SUBSCRIPTION_STATUS_METADATA: &str = "subscription-status";
 
-/// Trailing metadata key carrying the comma-separated `UnauthorizedStatusCode`
+/// Trailing metadata key containing the comma-separated `UnauthorizedStatusCode`
 /// set, only ever on PERMISSION_DENIED (`UNAUTHORIZED_HEADER_KEY`).
 pub const UNAUTHORIZED_DEVICE_METADATA: &str = "unauthorized-device";
 
-/// Topology header carry attaches to every response
-/// (`carry:eastus:account-7d59c6df47-hnx6b`). The device does **not** read it
+/// Topology header cosmos attaches to every response
+/// (`cosmos:eastus:account-7d59c6df47-hnx6b`). The device does **not** read it
 /// (RUNTIME-CONTRACTS §2), so it is observability, not a parity requirement.
 pub const SERVICE_PATH_HEADER: &str = "x-humane-service-path";
 
-/// carry's grant predicate: full behavior in exactly
+/// cosmos's grant predicate: full behavior in exactly
 /// `{UNSPECIFIED, ACTIVE, AVAILABLE}`, degraded in
 /// `{SUSPENDED, PAUSED, BLOCKED, NOT_CONFIGURED, INACTIVE}` (`isSubscribed()`,
 /// SERVERSIDE-LOGIC §4.3). UNSPECIFIED granting service is the fail-open rule.
@@ -106,7 +106,7 @@ impl Default for Entitlement {
 }
 
 impl Entitlement {
-    /// Maps a raw subscription code to a verdict. Codes carrying a grant
+    /// Maps a raw subscription code to a verdict. Codes containing a grant
     /// (`UNSPECIFIED`/`ACTIVE`/`AVAILABLE`) collapse to [`Entitlement::Active`],
     /// so a granting code can never be emitted in a degrading trailer.
     pub fn from_subscription(code: SubscriptionStatusCode) -> Self {
@@ -161,7 +161,7 @@ impl Entitlement {
     }
 }
 
-/// Where entitlement decisions come from. carry resolves this against its own
+/// Where entitlement decisions come from. cosmos resolves this against its own
 /// billing/entitlement and lost-device registries — server-only state that is
 /// explicitly not derivable from the client. A real store implements this trait;
 /// nothing else in this module changes.
@@ -172,7 +172,7 @@ pub trait EntitlementDirectory: Send + Sync + 'static {
 /// The resolver this deployment actually runs: **no datastore exists**, so every
 /// authenticated principal is [`Entitlement::Active`].
 ///
-/// This is honest fail-open parity, not a placeholder that fakes a lookup. carry
+/// This is honest fail-open parity, not a placeholder that fakes a lookup. cosmos
 /// itself grants on UNSPECIFIED and only *pushes* degradation when its own
 /// entitlement backend says so; with no such backend here there is no fact to
 /// report, and the faithful behavior is to serve. It never fabricates a
@@ -350,13 +350,13 @@ pub fn gate_action(entitlement: &Entitlement, action: &str) -> Option<BlockingOb
 ///
 /// Shape follows the observed `environment:region:workload-revision-pod`
 /// response header. Every token is *our* configured value — the environment token
-/// is this deployment's own (`development`/`production`/…), not a literal `carry`,
+/// is this deployment's own (`development`/`production`/…), not a literal `cosmos`,
 /// so the header never claims to be Humane's infrastructure. `cosmos_core`
 /// validates each token, and nothing caller-controlled or identity-bearing can
 /// enter it.
 ///
 /// The pod component is derived from real process state — the workload identity's
-/// instance, i.e. `CARRY_POD_NAME`/`CARRY_INSTANCE_ID` from the downward API, or
+/// instance, i.e. `COSMOS_POD_NAME`/`COSMOS_INSTANCE_ID` from the downward API, or
 /// the deterministic `local-1` off-cluster. No replicaset hash is ever
 /// synthesized. When the instance is already a Deployment pod name
 /// (`<workload>-<replicaset>-<suffix>`), the duplicated workload and revision
@@ -397,7 +397,7 @@ mod tests {
             Workload::AiBus,
             DeploymentEnvironment::Development,
             instance,
-            "carry.local",
+            "cosmos.local",
         )
         .expect("valid workload identity")
     }

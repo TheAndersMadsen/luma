@@ -51,7 +51,7 @@ use super::turn::frames::{action_turn, now_ts, observation_turn};
 use super::turn::text::{model_facing_observation, spoken_text};
 use crate::services::gates::{self, BlockingObservation, Entitlement};
 
-/// carry's runaway guard (`Switchboard.mActionLimit`, stock `intent.actionLimit`).
+/// cosmos's runaway guard (`Switchboard.mActionLimit`, stock `intent.actionLimit`).
 /// The ceiling is over the whole RUN, not one RPC: a multi-hop run issues a fresh
 /// `Understand` per hop, so a per-call budget would never bind.
 const ACTION_LIMIT: usize = 8;
@@ -61,7 +61,7 @@ const ACTION_LIMIT: usize = 8;
 /// server mirrors it so the model can retry with corrected arguments.
 const UNRECOGNIZED_FUNCTION: &str = "Unrecognized function name and/or arguments";
 
-/// Spoken when the runaway guard trips. carry's `TooManyActionsObservation`
+/// Spoken when the runaway guard trips. cosmos's `TooManyActionsObservation`
 /// carries `ErrorStrings.ERROR_TOO_MANY_ACTIONS` and the device speaks it verbatim
 /// (`convertAndDispatchGeneratedActionIfNeeded` → `RespondAction`), so this exact
 /// string is what the wearer hears.
@@ -72,7 +72,7 @@ pub(super) const TOO_MANY_ACTIONS: &str = "something went wrong. can you rephras
 /// `DEADLINE_EXCEEDED`).
 pub(super) const ERROR_TIMEOUT: &str = "Something went wrong. Try again.";
 
-/// Spoken when the model returns a turn carrying no usable content — distinct
+/// Spoken when the model returns a turn containing no usable content — distinct
 /// from an internal error (nothing failed) and from the runaway guard (the model
 /// never got that far). Stock has no dedicated string for this because its
 /// serverside never surfaces an empty completion to the wearer; the closest
@@ -86,7 +86,7 @@ pub(super) const NO_ANSWER: &str = "No answer came back. Try asking again.";
 /// and no apology/regret constructions. Every string here is spoken to the wearer
 /// on a path where something already went wrong, which is exactly where an
 /// apologetic "sorry, I ..." would otherwise creep in — so these are the strings
-/// most worth pinning. See `wearer_facing_strings_carry_no_persona`.
+/// most worth pinning. See `wearer_facing_strings_have_no_persona`.
 #[cfg(test)]
 pub(super) const WEARER_FACING_FAILURE_STRINGS: &[&str] =
     &[TOO_MANY_ACTIONS, ERROR_TIMEOUT, NO_ANSWER];
@@ -187,7 +187,7 @@ const MIN_TOOL_WINDOW: std::time::Duration = std::time::Duration::from_secs(3);
 ///
 /// Deliberately not an apology and not first-person: whatever comes back is
 /// spoken to the wearer, so it is bound by the same no-persona contract as every
-/// other wearer-facing string here (`wearer_facing_strings_carry_no_persona`).
+/// other wearer-facing string here (`wearer_facing_strings_have_no_persona`).
 const FINAL_ANSWER_DIRECTIVE: &str = concat!(
     "Time for this turn is up. No further tools will run. ",
     "Answer now using only what the observations above already established. ",
@@ -239,7 +239,7 @@ where
         .unwrap_or_else(|_| TOOL_TIMED_OUT.to_owned())
 }
 
-/// carry's replayed-context ceiling.
+/// cosmos's replayed-context ceiling.
 ///
 /// `resources/assets/config_generated.json` ships `tao.contextCapacity = 100`,
 /// and `AiBrainService` hands it to `LocalChatTurnService`, which evicts past it
@@ -299,10 +299,10 @@ pub struct Engine {
     /// request context; a wearer-scoped tool then says it has nothing rather
     /// than reaching into another account.
     tools: catalog::ToolContext,
-    /// The caller's account verdict. carry gates every dispatched action on this
+    /// The caller's account verdict. cosmos gates every dispatched action on this
     /// and *rewrites* the ReAct chain when it blocks (see [`Self::gated`]). With
     /// no entitlement datastore this deployment resolves to
-    /// [`Entitlement::Active`] — carry's own fail-open behavior.
+    /// [`Entitlement::Active`] — cosmos's own fail-open behavior.
     entitlement: Entitlement,
 }
 
@@ -330,7 +330,7 @@ impl Engine {
     /// The wearer's saved facts as a system line, or `None` when there are none.
     ///
     /// Bounded on purpose. A wearer's own notes are few and every one of them is
-    /// about the person being spoken to, so the whole set is worth carrying — but
+    /// about the person being spoken to, so the whole set is worth containing — but
     /// "few" has to be enforced, not assumed: an unbounded block would grow with
     /// the account until it crowded out the conversation and slowed every turn.
     /// Newest first, so what survives the cap is what they most recently chose to
@@ -445,7 +445,7 @@ impl Engine {
         })
     }
 
-    /// carry's degraded-state rewrite: when the account gate blocks an action, the
+    /// cosmos's degraded-state rewrite: when the account gate blocks an action, the
     /// device records a NON-final blocking observation and then dispatches a
     /// *self-generated* device action that runs a canned local experience
     /// (`convertAndDispatchGeneratedActionIfNeeded`). The server models the same
@@ -502,7 +502,7 @@ impl Engine {
             .unwrap_or_default();
 
         // Reconstruct the conversation the model reasons over from the state the
-        // device replayed (carry's legacy path is stateless per call).
+        // device replayed (cosmos's legacy path is stateless per call).
         let mut messages = build_history(&req);
         // The vision gesture reaches the model as a policy line rather than as
         // pixels: `build_history` used to read only the text fields and drop
@@ -528,7 +528,7 @@ impl Engine {
         // assistant is talking to. Putting them in front of the model removes both
         // failure modes at once: no tool decision, no term overlap, no round trip.
         // `recall_memory` stays for dated and archive-shaped questions ("what did
-        // I note last Tuesday"), where scanning beats carrying everything.
+        // I note last Tuesday"), where scanning beats containing everything.
         if let Some(facts) = self.wearer_facts().await {
             messages.push(ChatMessage::system(facts));
         }
@@ -567,7 +567,7 @@ impl Engine {
             // Never past the remaining budget, and never so short that the last
             // step of a turn is cut off with budget still unspent.
             let step_timeout = step_timeout_for(remaining);
-            // Every arm below speaks the same sentence — carry converts degraded
+            // Every arm below speaks the same sentence — cosmos converts degraded
             // states into device actions that narrate, never a bare `Failure`
             // body the device would drop — but they are NOT the same event, and
             // folding them together is what made an expired provider key raise
@@ -599,7 +599,7 @@ impl Engine {
 
             if let Some(tc) = resp.tool_call {
                 // Unknown tool: bounce the stock unrecognized-function observation
-                // and LOOP so the model can correct itself (carry's device does
+                // and LOOP so the model can correct itself (cosmos's device does
                 // exactly this, tagged source=DEVICE).
                 if !tools.iter().any(|t| t.name == tc.name) {
                     let action_id = new_id();
@@ -704,7 +704,7 @@ impl Engine {
                             // The device parses `input` unconditionally, so an
                             // empty string throws — `Errors.deviceBlocked()` and
                             // `unsubscribed()` both send "{}". `Respond`-shaped
-                            // verdicts carry their spoken text instead.
+                            // verdicts contain their spoken text instead.
                             match blocked.synthesized_action() {
                                 catalog::RESPOND_ACTION => terminal_device_action(
                                     catalog::RESPOND_ACTION,
@@ -1084,7 +1084,7 @@ pub(super) fn resolved_tool_set(
 
 /// Resolve the server-owned catalog for a request: the tool set the device's
 /// `tool_set_version` pointer selected, minus the device's `excluded_tools`.
-/// carry keys the catalog by that pointer (the device sends `action_definitions`
+/// cosmos keys the catalog by that pointer (the device sends `action_definitions`
 /// empty, so the server is authoritative over the whole set).
 fn resolve_catalog(req: &pb::SynapseUnderstandingRequest, subscribed: bool) -> Vec<ToolDef> {
     let context = catalog::CatalogContext {
@@ -1169,14 +1169,14 @@ fn vision_line(req: &pb::SynapseUnderstandingRequest, tools: &[ToolDef]) -> Opti
 /// The device action that looks at the wearer's camera view.
 const VISION_ACTION: &str = "UnderstandScene";
 
-/// turn's utterance. carry's legacy server is stateless per call and reconstructs
+/// turn's utterance. cosmos's legacy server is stateless per call and reconstructs
 /// conversation state exactly this way.
 /// Rebuild the chat transcript the model reasons over from the state the device
 /// replayed: prior turns (`device_context.turns`), `previous_answers`, and this
-/// turn's utterance. carry's legacy server is stateless per call and
+/// turn's utterance. cosmos's legacy server is stateless per call and
 /// reconstructs conversation state exactly this way.
 fn build_history(req: &pb::SynapseUnderstandingRequest) -> Vec<ChatMessage> {
-    // The same pointer that selects the tool subset selects the prompt: carry's
+    // The same pointer that selects the tool subset selects the prompt: cosmos's
     // server resolved `tool_set_version` to BOTH. Giving a capability child the
     // narrow tool list without its narrow guidance is half the topology.
     let mut messages = vec![ChatMessage::system(catalog::system_prompt_for(
@@ -1187,7 +1187,7 @@ fn build_history(req: &pb::SynapseUnderstandingRequest) -> Vec<ChatMessage> {
     }
 
     if let Some(dc) = req.device_context.as_ref() {
-        // Enforce carry's own `tao.contextCapacity`, keeping the MOST RECENT
+        // Enforce cosmos's own `tao.contextCapacity`, keeping the MOST RECENT
         // turns: the device evicts the oldest at exactly this ceiling, and the
         // newest turns are the ones this run is threaded onto.
         let replayed = &dc.turns[dc.turns.len().saturating_sub(CONTEXT_CAPACITY)..];
@@ -1269,7 +1269,7 @@ async fn send(
     tx.send(Ok(msg)).await.map_err(|_| ())
 }
 
-/// Send the terminal action, then carry's explicit turn-complete marker
+/// Send the terminal action, then cosmos's explicit turn-complete marker
 /// (`SynapseEndContent`, `SynapseChatTurn` oneof field 10). The legacy device
 /// consumer keeps only action/observation turns, so it dispatches the terminal
 /// action and ignores the end marker; richer clients get the explicit close.
@@ -1311,7 +1311,7 @@ async fn finish_as(
 ///
 /// Never the error's message: `LlmError::Transport` carries a reqwest string
 /// that can contain the configured URL, and a metric label is not the place for
-/// it. The kinds line up with the `carry_errors_total{kind=…}` values the model
+/// it. The kinds line up with the `cosmos_errors_total{kind=…}` values the model
 /// client emits, so one incident reads the same in both families.
 fn model_failure_outcome(error: &super::llm::LlmError) -> &'static str {
     use super::llm::LlmError;
@@ -1424,7 +1424,7 @@ fn current_run_contains_action(turns: &[pb::SynapseChatTurn], action_name: &str)
 
 /// Server-minted node id.
 ///
-/// MUST be a UUID, not a per-call sequence. carry's `LocalChatTurnService.record`
+/// MUST be a UUID, not a per-call sequence. cosmos's `LocalChatTurnService.record`
 /// enforces uniqueness via `ArgChecker.throwIfContainsKey` and *throws* on a
 /// collision. A multi-hop run issues a FRESH `Understand` RPC per hop while
 /// replaying every prior turn in `device_context.turns`, so any per-call counter
@@ -1489,19 +1489,21 @@ fn end_marker() -> pb::SynapseUnderstandingResponse {
 ///   * `Respond` is `SERVER`, because the answer was produced server-side and the
 ///     device narrates it rather than executing anything.
 ///
-/// The second half is measured, not reasoned: in a capture of the real carry
+/// The second half is measured, not reasoned: in a capture of the real cosmos
 /// cloud, all 65 observed `Respond` actions carried `source: SERVER` (see
-/// `tools/carry-action-ground-truth.mjs` in the PenumbraOS repo). This code
+/// `tools/cosmos-action-ground-truth.mjs` in the PenumbraOS repo). This code
 /// previously sent `DEVICE` for everything, which told a Pin to execute
 /// `Respond` itself — a divergence from every real turn we have on record.
 ///
-/// `CARRY_RESPOND_SOURCE_DEVICE=1` restores the old behaviour, because this sits
+/// `COSMOS_RESPOND_SOURCE_DEVICE=1` restores the old behaviour, because this sits
 /// on the one path that decides whether a wearer hears anything at all and no
 /// real Pin has confirmed the change yet.
 fn terminal_source(action: &str) -> pb::SynapseSource {
     if action == catalog::RESPOND_ACTION
         && !matches!(
-            std::env::var("CARRY_RESPOND_SOURCE_DEVICE").ok().as_deref(),
+            std::env::var("COSMOS_RESPOND_SOURCE_DEVICE")
+                .ok()
+                .as_deref(),
             Some("1") | Some("true")
         )
     {
@@ -1594,7 +1596,7 @@ mod tests {
     /// wearer hits precisely when something has already gone wrong, so they are
     /// the ones worth pinning in code.
     #[test]
-    fn wearer_facing_strings_carry_no_persona() {
+    fn wearer_facing_strings_have_no_persona() {
         // Whole words, so "I" does not match inside "Internal" and "my" does not
         // match inside "myself"-free prose like "something".
         const FIRST_PERSON: &[&str] = &["i", "i'm", "i've", "i'll", "me", "my", "mine", "myself"];
@@ -1795,7 +1797,7 @@ mod tests {
 
     /// WIRING REGRESSION — the largest remaining topology gap.
     ///
-    /// carry's device ships an EMPTY `action_definitions` and only a
+    /// cosmos's device ships an EMPTY `action_definitions` and only a
     /// `tool_set_version` pointer; the server resolves that pointer to a
     /// capability's tool subset AND its own guidance. This engine ignored the
     /// field entirely and served one flat set to every caller, so a `timer@1`
@@ -2250,7 +2252,7 @@ mod tests {
         let spoken = spoken_text(&action.input).unwrap_or_default();
         assert!(
             !spoken.trim().is_empty(),
-            "a terminal Respond must carry speakable text, got {spoken:?}"
+            "a terminal Respond must contain speakable text, got {spoken:?}"
         );
     }
 
@@ -2545,7 +2547,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_blocked_device_action_is_rewritten_into_the_degraded_experience() {
-        // An unauthorized device blocks every action; carry does not go silent —
+        // An unauthorized device blocks every action; cosmos does not go silent —
         // it records a NON-final blocking observation and dispatches a
         // self-generated device action that runs the canned local experience.
         use crate::services::gates::Entitlement;
@@ -2679,7 +2681,7 @@ mod tests {
         );
     }
 
-    /// Every emitted turn must carry a wall-clock stamp: an absent timestamp
+    /// Every emitted turn must contain a wall-clock stamp: an absent timestamp
     /// decodes as epoch 0, sorting server nodes first in the device's turn queue
     /// (so they evict first) and making the inter-run gap test see ~56 years.
     #[tokio::test]
@@ -2902,7 +2904,7 @@ mod tests {
     /// the wearer was told they had saved nothing about a note they had just
     /// saved. No prompt wording fixes a matcher that cannot bridge a synonym.
     ///
-    /// Carrying the facts removes both failure modes: the model needs no tool
+    /// Containing the facts removes both failure modes: the model needs no tool
     /// decision and no term overlap. This asserts the note text reaches the
     /// model's system context for a question that shares NO words with it.
     #[tokio::test]
@@ -3080,7 +3082,7 @@ mod tests {
         assert_eq!(a.source, pb::SynapseSource::Server as i32);
     }
 
-    /// A user-request turn as the device replays it, optionally carrying the
+    /// A user-request turn as the device replays it, optionally containing the
     /// vision gesture and the frame it prefetched.
     fn vision_request(
         vision: pb::synapse_user_request_content::VisionRequested,
@@ -3424,7 +3426,7 @@ mod tests {
 
     /// EVERY TERMINAL MUST CLASSIFY ITSELF, AND NEVER AS WEARER TEXT.
     ///
-    /// `record_turn` shipped with zero callers, so `carry_turns_total` was
+    /// `record_turn` shipped with zero callers, so `cosmos_turns_total` was
     /// permanently zero — the one metric that says whether wearers are getting
     /// answers read the same during a live regression as on a perfect day.
     /// Wiring it is only useful if the classification is right, and the failure
@@ -3498,7 +3500,7 @@ mod tests {
     /// Every one of these is SPOKEN as the device's own timeout sentence, on
     /// purpose — the wearer hears stock wording on a path where something already
     /// went wrong. Deriving the metric from that sentence therefore filed an
-    /// expired `CARRY_LLM_API_KEY`, a provider outage and a malformed body all
+    /// expired `COSMOS_LLM_API_KEY`, a provider outage and a malformed body all
     /// as `deadline`, which points the operator at latency and budget. The
     /// spoken string stays; the label has to say what actually happened.
     #[test]
@@ -3539,7 +3541,7 @@ mod tests {
             );
         }
 
-        // The spoken sentence is unchanged, which is why the label has to carry
+        // The spoken sentence is unchanged, which is why the label has to contain
         // the difference at all.
         assert_eq!(
             turn_outcome(&respond(ERROR_TIMEOUT, "parent".to_owned(), "id".into())),
@@ -3691,11 +3693,11 @@ mod tests {
 mod terminal_source_tests {
     use super::*;
 
-    /// Measured against the real carry cloud: every one of 65 observed `Respond`
+    /// Measured against the real cosmos cloud: every one of 65 observed `Respond`
     /// actions carried `source: SERVER`. Sending `DEVICE` told the Pin to execute
-    /// `Respond` itself, which no real carry turn ever asked for.
+    /// `Respond` itself, which no real cosmos turn ever asked for.
     #[test]
-    fn respond_matches_the_source_carry_was_observed_to_send() {
+    fn respond_matches_the_source_cosmos_was_observed_to_send() {
         assert_eq!(
             terminal_source(catalog::RESPOND_ACTION),
             pb::SynapseSource::Server

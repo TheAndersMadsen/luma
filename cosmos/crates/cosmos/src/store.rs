@@ -101,9 +101,9 @@ impl SyncTime {
     /// Read a client-supplied cursor, normalising out-of-range `nanos` so the
     /// derived ordering stays sound for values this server did not mint.
     pub fn from_proto(timestamp: &Timestamp) -> Self {
-        let carry = i64::from(timestamp.nanos.div_euclid(NANOS_PER_SECOND));
+        let seconds_adjustment = i64::from(timestamp.nanos.div_euclid(NANOS_PER_SECOND));
         Self {
-            seconds: timestamp.seconds.saturating_add(carry),
+            seconds: timestamp.seconds.saturating_add(seconds_adjustment),
             nanos: timestamp.nanos.rem_euclid(NANOS_PER_SECOND),
         }
     }
@@ -346,7 +346,7 @@ pub struct MemoryRecord {
     pub created: SyncTime,
 }
 
-/// A capture's INDEX, carrying no sealed bytes at all.
+/// A capture's INDEX, containing no sealed bytes at all.
 ///
 /// The listing endpoints render counts and timestamps and nothing else (see
 /// `capture_api::MemoryDto`), while a capture's megabytes all live in
@@ -543,7 +543,7 @@ pub struct NotableEventRecord {
 
 /// Which `humane.account` payload a stored blob is.
 ///
-/// The account services carry sealed, service-scoped `EncryptedData` (and one
+/// The account services contain sealed, service-scoped `EncryptedData` (and one
 /// plaintext goals message) that this deployment holds no key for and never
 /// needs to read. They are therefore stored as opaque bytes under
 /// `(principal, kind)` — the kind is the namespace, so food restrictions and
@@ -667,7 +667,7 @@ pub trait Store: Send + Sync + 'static {
     /// which the evidence pins down:
     ///
     /// * A contact with an empty `id` is new and receives a fresh UUIDv4.
-    /// * A contact carrying an `id` is an upsert against that id **within this
+    /// * A contact containing an `id` is an upsert against that id **within this
     ///   principal's book only**. Honouring a device-chosen id makes a retried
     ///   write idempotent and cannot reach another principal's data.
     /// * `version` is server-owned: `1` on first write, previous + 1 on each
@@ -787,7 +787,7 @@ pub trait Store: Send + Sync + 'static {
     ) -> Written<Option<EncryptedData>>;
 
     /// Tombstone a capture. `Ok(false)` means the principal holds no such
-    /// capture; `Err` means the store could not carry the delete out.
+    /// capture; `Err` means the store could not complete the delete.
     ///
     /// The distinction is load-bearing and used to be collapsed into a bare
     /// `bool`. `DeleteUploadWorkerImpl.handleDeleteMemoryResponse` deletes its
@@ -862,7 +862,7 @@ pub trait Store: Send + Sync + 'static {
     async fn delete_all_notes(&self, principal: &str) -> Written<usize>;
 
     /// Delete ONE note. `Ok(true)` means a note was removed, `Ok(false)` that
-    /// this principal holds no such note, `Err` that the store could not carry
+    /// this principal holds no such note, `Err` that the store could not contain
     /// the delete out.
     ///
     /// **Clone-authored, not a stock RPC** — the same standing as
@@ -957,7 +957,7 @@ pub trait Store: Send + Sync + 'static {
 
     /// Delete ONE event by its `event_identifier`. `Ok(true)` means a row was
     /// removed, `Ok(false)` that this principal holds no such event, `Err` that
-    /// the store could not carry the delete out.
+    /// the store could not complete the delete.
     ///
     /// **Clone-authored over the WEB boundary**, like [`Store::delete_note`]:
     /// `events.proto` carries only `QueryEvents`/`Ingest`/`IngestBatch` and the
@@ -1033,7 +1033,7 @@ pub trait Store: Send + Sync + 'static {
 
 /// Build the store this deployment is configured for.
 ///
-/// `CARRY_DATABASE_URL` selects PostgreSQL — the documented target, and the only
+/// `COSMOS_DATABASE_URL` selects PostgreSQL — the documented target, and the only
 /// backend the three stateful workloads can share. Unset keeps the in-memory
 /// store with its per-workload snapshots.
 ///
@@ -1049,14 +1049,14 @@ pub async fn configured() -> SharedStore {
                     Arc::new(store)
                 }
                 Err(error) => panic!(
-                    "CARRY_DATABASE_URL is set but the database is unreachable: {error}. \
+                    "COSMOS_DATABASE_URL is set but the database is unreachable: {error}. \
                      Refusing to start on an in-memory store, which would serve every \
                      wearer an empty account."
                 ),
             }
         }
         _ => {
-            tracing::info!("store backend: in-memory (set CARRY_DATABASE_URL for postgres)");
+            tracing::info!("store backend: in-memory (set COSMOS_DATABASE_URL for postgres)");
             MemoryStore::shared()
         }
     }
@@ -1109,7 +1109,7 @@ impl MemoryStore {
     /// A ready-to-share handle, for wiring at service-registration time.
     /// Build the store, restoring any snapshot this workload previously wrote.
     ///
-    /// Durability is configured by `CARRY_STATE_DIR`; unset means memory-only.
+    /// Durability is configured by `COSMOS_STATE_DIR`; unset means memory-only.
     /// The process's one in-memory store.
     ///
     /// **Genuinely a singleton**, which the name previously only implied: this
@@ -1223,7 +1223,7 @@ pub(crate) fn collapse_ingest_batch(
 /// namespaced upload paths regardless of where it is stored. `numeric_id` is the
 /// backend's monotonic allocation; burst and file ids derive from it so two
 /// captures can never collide.
-/// Words too common to carry meaning in a recall query.
+/// Words too common to contain meaning in a recall query.
 ///
 /// A model asked "what do I like?" writes a query like *"what the wearer likes
 /// preferences favorites interests"*. Without this, "the" and "what" match almost
@@ -1372,7 +1372,7 @@ pub fn build_memory(new: NewMemory, numeric_id: i64) -> MemoryRecord {
         gmt_offset,
         thumbnails,
         encrypted_location,
-        // Notes and food logs carry no frames to upload.
+        // Notes and food logs contain no frames to upload.
         bursts: match kind {
             MemoryKind::Photo | MemoryKind::Video => burst_records,
             MemoryKind::FoodLog | MemoryKind::Note => Vec::new(),
@@ -1580,7 +1580,7 @@ impl Store for MemoryStore {
             gmt_offset,
             thumbnails,
             encrypted_location,
-            // Notes and food logs carry no frames to upload.
+            // Notes and food logs contain no frames to upload.
             bursts: match kind {
                 MemoryKind::Photo | MemoryKind::Video => burst_records,
                 MemoryKind::FoodLog | MemoryKind::Note => Vec::new(),
@@ -2112,7 +2112,7 @@ mod tests {
     /// history simply vanished. A snapshot must survive a fresh process.
     #[tokio::test]
     async fn state_survives_a_restart() {
-        let dir = std::env::temp_dir().join(format!("carry-state-{}", Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("cosmos-state-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&dir).expect("temp state dir");
         let path = dir.join("state.json");
 
@@ -2170,7 +2170,7 @@ mod tests {
     /// `CreateMemory`'s idempotency key.
     #[tokio::test]
     async fn capture_state_survives_a_restart() {
-        let dir = std::env::temp_dir().join(format!("carry-capture-{}", Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("cosmos-capture-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&dir).expect("temp state dir");
         let path = dir.join("state.json");
 
@@ -2242,12 +2242,12 @@ mod tests {
     }
 
     /// REGRESSION: the account payloads were never stored at all — the handlers
-    /// echoed the wearer's blob back and dropped it. The snapshot has to carry
+    /// echoed the wearer's blob back and dropped it. The snapshot has to contain
     /// them too, or a restart loses the wearer's allergies just as thoroughly as
     /// discarding them did.
     #[tokio::test]
     async fn account_payloads_survive_a_restart() {
-        let dir = std::env::temp_dir().join(format!("carry-account-{}", Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("cosmos-account-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&dir).expect("temp state dir");
         let path = dir.join("state.json");
 
@@ -2325,7 +2325,7 @@ mod tests {
         const WRITERS: usize = 8;
         const ROUNDS: usize = 32;
 
-        let dir = std::env::temp_dir().join(format!("carry-snapshot-{}", Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("cosmos-snapshot-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&dir).expect("temp state dir");
         let path = dir.join("state.json");
 
@@ -2458,7 +2458,7 @@ mod tests {
     /// so the loss becomes mutual and unrecoverable.
     #[tokio::test]
     async fn an_unparseable_snapshot_stops_the_workload_rather_than_discarding_data() {
-        let dir = std::env::temp_dir().join(format!("carry-corrupt-{}", Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("cosmos-corrupt-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&dir).expect("temp state dir");
         let path = dir.join("state.json");
         std::fs::write(&path, b"{ not json").expect("write a corrupt snapshot");
@@ -2892,7 +2892,7 @@ mod tests {
     /// this go green.
     #[tokio::test]
     async fn a_deleted_note_and_event_stay_deleted_across_a_restart() {
-        let dir = std::env::temp_dir().join(format!("carry-delete-{}", Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("cosmos-delete-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&dir).expect("temp state dir");
         let path = dir.join("state.json");
 
@@ -3125,7 +3125,7 @@ mod tests {
 
 /// Directory the workload snapshots its state into. Unset means memory-only,
 /// which is the right default for tests and local runs.
-const STATE_DIR_ENV: &str = "CARRY_STATE_DIR";
+const STATE_DIR_ENV: &str = "COSMOS_STATE_DIR";
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 struct Snapshot {
@@ -3247,7 +3247,7 @@ impl MemoryStore {
         std::fs::create_dir_all(&dir).ok()?;
         // One file per workload: these are separate processes and must not
         // interleave writes into a single file.
-        let workload = std::env::var("CARRY_WORKLOAD").unwrap_or_else(|_| "workload".to_owned());
+        let workload = std::env::var("COSMOS_WORKLOAD").unwrap_or_else(|_| "workload".to_owned());
         Some(dir.join(format!("{workload}-state.json")))
     }
 

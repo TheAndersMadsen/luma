@@ -274,7 +274,7 @@ test("parsePinReleaseManifest rejects bad release IDs and non-monotonic version 
 
 test("parsePinReleaseManifest rejects package substitutions, bad sizes, and bad hashes", () => {
   // Package substitution is the whole game: the installer grants each role's
-  // package specific privileges on the Pin, so a role must carry its own package.
+  // package specific privileges on the Pin, so a role must contain its own package.
   const packageSwap = createManifest();
   packageSwap.artifacts[0].package = PACKAGES.server;
   assert.throws(() => parsePinReleaseManifest(packageSwap, MANIFEST_URL), PinReleaseError);
@@ -480,7 +480,7 @@ test("fetchPinReleaseManifest rejects releaseId equivocation and version or vers
     code: "release-manifest-equivocation",
   });
 
-  // Rollback: a new releaseId carrying an older version and versionCode is the
+  // Rollback: a new releaseId containing an older version and versionCode is the
   // server re-offering a build that a fix has already superseded.
   payload = createManifest({
     releaseId: NEXT_RELEASE_ID,

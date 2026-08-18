@@ -1,4 +1,4 @@
-import { CARRY_WEBAPI, CARRY_WEBAPI_ENABLED, carryDeadlineSignal } from "@/server/cosmos";
+import { COSMOS_WEBAPI, COSMOS_WEBAPI_ENABLED, cosmosDeadlineSignal } from "@/server/cosmos";
 import { sourceHeaders } from "@/server/headers";
 
 /**
@@ -13,7 +13,7 @@ import { sourceHeaders } from "@/server/headers";
  * vocabulary the client did not share.
  */
 export async function GET() {
-  if (!CARRY_WEBAPI_ENABLED) {
+  if (!COSMOS_WEBAPI_ENABLED) {
     return Response.json(
       { assistant: false, speech: false, model: "not configured" },
       {
@@ -27,9 +27,9 @@ export async function GET() {
     );
   }
   try {
-    const res = await fetch(`${CARRY_WEBAPI}/demo-api/status`, {
+    const res = await fetch(`${COSMOS_WEBAPI}/demo-api/status`, {
       cache: "no-store",
-      signal: carryDeadlineSignal(),
+      signal: cosmosDeadlineSignal(),
     });
     // An upstream error is "it isn't answering", not "there is no assistant" —
     // passing the error body straight through made a 500 look like a
@@ -52,7 +52,7 @@ export async function GET() {
       status: res.status,
       headers: {
         "content-type": "application/json",
-        ...sourceHeaders({ source: "carry", state: "live" }),
+        ...sourceHeaders({ source: "cosmos", state: "live" }),
       },
     });
   } catch {

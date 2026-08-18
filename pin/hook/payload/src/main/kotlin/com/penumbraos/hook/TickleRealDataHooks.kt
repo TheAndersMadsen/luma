@@ -230,7 +230,7 @@ object TickleRealDataHooks {
      *
      * Non-Tickle experience processes (food/contacts/music/settings/etc.) share
      * the `ExperienceApplication` base class, so this callback fires in every
-     * experience pid — not just Tickle. Those processes don't carry the Tickle
+     * experience pid — not just Tickle. Those processes don't contain the Tickle
      * UI dex, so a one-shot probe for `HomeInteractor` gates the retry loop:
      * when the probe misses we return immediately with a single debug log
      * instead of burning 60 retries × 250 ms and logging a misleading error.

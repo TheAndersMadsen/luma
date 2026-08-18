@@ -56,7 +56,7 @@
 //                `covered`.
 //   planned      The capability's NATIVE ACTION came back in the decoded
 //                frames (or the model's mutation-tool call terminated). The
-//                device did NOT carry it out: mutations are handed to stock for
+//                device did NOT complete it: mutations are handed to stock for
 //                dispatch, which this harness refuses to do. `covered`.
 //                Proving a mutation end-to-end needs a real spoken turn.
 //   failed       The tool ran and returned ok=false. Real signal.
@@ -87,7 +87,7 @@
 // `is_locked = 0` explicitly and a trusted user turn
 // (platform/deploy/acceptance/pin/agentic-release-smoke-lib.mjs:545-560), so the eight unlock-required
 // reads and the trusted-user mutations are satisfied by construction. Rows that
-// carry `unlockRequired` record that fact for the reader; marking them `gated`
+// contain `unlockRequired` and record that fact for the reader; marking them `gated`
 // would MASK real coverage gaps, so it is deliberately not done.
 //
 // EVIDENCE NOTE — this file re-parses the per-prompt logcat window pinbox
@@ -159,7 +159,7 @@ export const KNOWN_ABSENT_NAMES = {
 export const KNOWN_UNEMITTABLE_ACTION_NAMES = {
   [NATIVE_ACTIONS.DEVICE_STATUS]:
     `${NATIVE_ACTIONS.SETTINGS} (native_device_actions.rs:225-236 emits ` +
-    `${NATIVE_ACTIONS.SETTINGS} carrying a nested ` +
+    `${NATIVE_ACTIONS.SETTINGS} containing a nested ` +
     `${NATIVE_ACTIONS.DEVICE_STATUS} Request)`,
   [NATIVE_ACTIONS.CANCEL_ALARM]:
     `${NATIVE_ACTIONS.ALARM} (the entry action; ` +
@@ -195,7 +195,7 @@ export const KNOWN_UNEMITTABLE_ACTION_NAMES = {
     `${NATIVE_ACTIONS.CONTACTS} (the entry action; ` +
     `${NATIVE_ACTIONS.GET_QUICK_MESSAGING_PARTICIPANTS} is nested)`,
   // catalog.rs:1921 exists, but no emitter anywhere in runtime/core: a
-  // language selection is emitted as NATIVE_ACTIONS.TRANSLATE carrying Target
+  // language selection is emitted as NATIVE_ACTIONS.TRANSLATE containing Target
   // (synapse/capabilities/translation.rs:66-72).
   [NATIVE_ACTIONS.SET_DEFAULT_TRANSLATE_LANGUAGE]:
     `${NATIVE_ACTIONS.TRANSLATE} (catalog.rs:2026)`,
@@ -624,7 +624,7 @@ export const COVERAGE_CASES = [
     successSignal: "action-planned",
     unlockRequired: true,
     prompt: "give me a device status report",
-    note: `MISSING from the old sweep. NO hermes tool; the returned action is ${NATIVE_ACTIONS.SETTINGS} carrying a nested ${NATIVE_ACTIONS.DEVICE_STATUS} Request (native_device_actions.rs:225-236) — expecting ${NATIVE_ACTIONS.DEVICE_STATUS} would be a name that can never match`,
+    note: `MISSING from the old sweep. NO hermes tool; the returned action is ${NATIVE_ACTIONS.SETTINGS} containing a nested ${NATIVE_ACTIONS.DEVICE_STATUS} Request (native_device_actions.rs:225-236) — expecting ${NATIVE_ACTIONS.DEVICE_STATUS} would be a name that can never match`,
   },
   {
     id: NATIVE_ACTIONS.TRANSLATE,

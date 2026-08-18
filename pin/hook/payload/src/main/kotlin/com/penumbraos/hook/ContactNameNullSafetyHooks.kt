@@ -22,7 +22,7 @@ import java.util.concurrent.atomic.AtomicLong
  *
  * `humane.system.contacts.Name` backs `getFirstName()`, `getLastName()` and
  * `getNickname()` with raw fields that are **null** (not "") whenever the source
- * contact row/parcel had a null column — e.g. a carry-synced contact with a null
+ * contact row/parcel had a null column — e.g. a cosmos-synced contact with a null
  * lastName/nickname. The unguarded `String.isEmpty()` then throws NPE. Because
  * this is stock code *before* the AI-bus call and runs on EVERY transcript, a
  * single such contact silently takes the whole assistant down on every turn

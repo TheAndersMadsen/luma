@@ -1,7 +1,7 @@
-//! Encyclopedia lookup — Wikipedia (`MODE_WIKIPEDIA` in carry's backend
+//! Encyclopedia lookup — Wikipedia (`MODE_WIKIPEDIA` in cosmos's backend
 //! enumeration).
 //!
-//! carry treated retrieval (SerpApi), computation (Wolfram), and encyclopedia
+//! cosmos treated retrieval (SerpApi), computation (Wolfram), and encyclopedia
 //! (Wikipedia) as *separate* tool backends, so this is its own tool rather than a
 //! fold into `web_search`. It needs **no credential** — the MediaWiki API is
 //! public — so it is the one search-ensemble backend that is always available.

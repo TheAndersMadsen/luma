@@ -13,7 +13,7 @@ export default function ContactsPage() {
         Which address book this is.
 
         Center now has two contacts panes over two unrelated stores: this one
-        reads `humane.contacts.ContactsRPCService` at CARRY_ENDPOINT_CONTACTS —
+        reads `humane.contacts.ContactsRPCService` at COSMOS_ENDPOINT_CONTACTS —
         the `contacts` service in the deployment — and /settings/pin/contacts
         reads the Pin's own SQLite table through Center's active Pin connection.
         The Pin runtime implements

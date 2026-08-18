@@ -64,7 +64,7 @@ def value(path,key):
         name,sep,candidate=line.rstrip("\n").partition("=")
         if sep and name.strip()==key: result=candidate.strip().strip('"')
     return result
-tokens=[value(path,"CARRY_EDGE_TOKEN") for path in sys.argv[1:5]]
+tokens=[value(path,"COSMOS_EDGE_TOKEN") for path in sys.argv[1:5]]
 assert tokens[0] and len(set(tokens))==1
 rendered=open(sys.argv[5],encoding="utf-8").read()
 assert rendered.count(tokens[0])==2 and "@@EDGE_TOKEN@@" not in rendered

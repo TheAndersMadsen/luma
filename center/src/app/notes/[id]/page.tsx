@@ -17,7 +17,7 @@ import { formatTimestamp } from "@/lib/format";
 /**
  * Note detail.
  *
- * Humane's docs describe a "…" menu carrying Delete. The menu is gone and its
+ * Humane's docs describe a "…" menu containing Delete. The menu is gone and its
  * one implementable item is here as a control of its own: Edit has no backend
  * (there is no note-update RPC in the recovered protos and no webapi route for
  * one), so a "…" would have opened onto a single entry — and until the clone's
@@ -36,7 +36,7 @@ export default function NoteDetailPage({ params }: { params: Promise<{ id: strin
   /** Set only when the note is STILL THERE, and says why. */
   const [notice, setNotice] = useState<string | null>(null);
   /**
-   * Set the moment carry confirms the delete. The note leaves the cache before
+   * Set the moment cosmos confirms the delete. The note leaves the cache before
    * this page unmounts, and without this the "Note not found" branch below would
    * fire on the way out — an error screen shown to a wearer whose delete just
    * worked.
@@ -83,14 +83,14 @@ export default function NoteDetailPage({ params }: { params: Promise<{ id: strin
 
       // A five-second notes poll may already be in flight. Cancel it before the
       // cache edit, or its stale pre-delete response can put this row straight
-      // back after Carry has confirmed the delete.
+      // back after Cosmos has confirmed the delete.
       await Promise.all([
         queryClient.cancelQueries({ queryKey: ["notes"] }),
         queryClient.cancelQueries({ queryKey: ["memories-dashboard"] }),
       ]);
       setDeleted(true);
       // Drop it from the grid's cache so /notes does not paint the note we just
-      // deleted, then invalidate: the next read comes from carry, so a note that
+      // deleted, then invalidate: the next read comes from cosmos, so a note that
       // somehow survived comes back rather than being hidden by this edit. The
       // Memories dashboard carries its own copy of the notes list.
       queryClient.setQueryData<{ data: Array<{ uuid: string }> }>(["notes"], (prev) =>

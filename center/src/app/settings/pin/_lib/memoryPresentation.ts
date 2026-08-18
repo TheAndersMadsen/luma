@@ -94,8 +94,8 @@ export function classifyMemoryFile(filename: string): MemoryFileKind {
  *
  * `PinClient.filePath` interpolates the name without encoding it, and the USB
  * transport writes the result straight into an HTTP request line
- * (`GET <path> HTTP/1.1`). A name carrying a space would therefore produce a
- * malformed request, and one carrying `/` or `?` would address something other
+ * (`GET <path> HTTP/1.1`). A name containing a space would therefore produce a
+ * malformed request, and one containing `/` or `?` would address something other
  * than the file. The Pin's own generator only ever emits
  * `<uuid>_<burst>_<index>.<ext>` and its media store rejects separators on the
  * way in, so this should never fire — but the value still arrives from a

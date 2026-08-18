@@ -277,7 +277,7 @@ async fn broker_rejections_surface_their_reason_for_model_self_repair() {
     };
     assert!(!ok);
     // The old wording told the model the tool was broken; the body must
-    // now carry the actionable rejection reason instead.
+    // now contain the actionable rejection reason instead.
     assert!(!content.contains("unavailable right now"), "{content}");
     assert!(content.contains("knowledge_lookup"), "{content}");
     assert!(content.contains("not grounded"), "{content}");
@@ -1473,7 +1473,7 @@ async fn current_track_radio_stays_on_the_deterministic_pre_chat_turn_path() {
             .collect();
         assert!(
             !names.contains(&"play_current_track_radio"),
-            "the chat-turn loop advertised a mutation whose stock current-track state it does not carry: {utterance}"
+            "the chat-turn loop advertised a mutation whose stock current-track state it does not contain: {utterance}"
         );
         let outcome = tools
             .execute(&call("play_current_track_radio", json!({})))
@@ -2157,7 +2157,7 @@ fn every_native_action_is_either_exposed_or_deliberately_withheld() {
 /// It fails silently, which is the whole problem. `mutation_advertised`
 /// resolves `native_action_spec(mutation.action)` and simply returns false
 /// when the name is absent, so a mutation naming an action the catalog does
-/// not carry is advertised to nobody and rejected by nothing — it reads
+/// not contained is advertised to nobody and rejected by nothing — it reads
 /// on-device as SILENCE, the same shape that kept GenerateMusicPlaylist
 /// unreachable. Two live ways to land one: a typo, or a tool whose side
 /// effect is not a stock native action at all (a server-side write), which

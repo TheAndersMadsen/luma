@@ -1,10 +1,10 @@
 import { cookies } from "next/headers";
 import { AUTH_ENABLED, SESSION_COOKIE, verifySession } from "@/server/auth";
 import {
-  CARRY_ADMIN_ENABLED,
-  CARRY_WEBAPI,
+  COSMOS_ADMIN_ENABLED,
+  COSMOS_WEBAPI,
   adminAuthHeaders,
-  carryDeadlineSignal,
+  cosmosDeadlineSignal,
 } from "@/server/cosmos";
 
 type Pairing = {
@@ -22,16 +22,16 @@ export async function GET() {
     const jar = await cookies();
     const session = await verifySession(jar.get(SESSION_COOKIE)?.value);
     if (!session) return Response.json({ error: "Not authenticated." }, { status: 401 });
-    if (!CARRY_ADMIN_ENABLED) {
+    if (!COSMOS_ADMIN_ENABLED) {
       return Response.json(
         { error: "Device pairing is not configured on this deployment." },
         { status: 503 },
       );
     }
 
-    const res = await fetch(`${CARRY_WEBAPI}/demo-api/admin/devices`, {
+    const res = await fetch(`${COSMOS_WEBAPI}/demo-api/admin/devices`, {
       cache: "no-store",
-      signal: carryDeadlineSignal(),
+      signal: cosmosDeadlineSignal(),
       headers: adminAuthHeaders(),
     }).catch(() => null);
     if (!res) return Response.json({ error: "Pin services are unavailable." }, { status: 503 });
@@ -85,7 +85,7 @@ export async function POST(request: Request) {
       return Response.json({ error: "Not authenticated." }, { status: 401 });
     }
 
-    if (!CARRY_ADMIN_ENABLED) {
+    if (!COSMOS_ADMIN_ENABLED) {
       return Response.json(
         { error: "Device pairing is not configured on this deployment." },
         { status: 503 },
@@ -104,10 +104,10 @@ export async function POST(request: Request) {
       return Response.json({ error: "A device_id is required." }, { status: 400 });
     }
 
-    const res = await fetch(`${CARRY_WEBAPI}/demo-api/admin/pair`, {
+    const res = await fetch(`${COSMOS_WEBAPI}/demo-api/admin/pair`, {
       method: "POST",
       cache: "no-store",
-      signal: carryDeadlineSignal(),
+      signal: cosmosDeadlineSignal(),
       headers: { "content-type": "application/json", ...adminAuthHeaders() },
       // account_sub is the caller's OWN sub, injected server-side — never the body.
       body: JSON.stringify({ device_id: deviceId, account_sub: session.sub }),
@@ -135,7 +135,7 @@ export async function POST(request: Request) {
 /** DELETE — release one of the logged-in wearer's own durable device claims. */
 export async function DELETE(request: Request) {
   try {
-    if (!AUTH_ENABLED || !CARRY_ADMIN_ENABLED) {
+    if (!AUTH_ENABLED || !COSMOS_ADMIN_ENABLED) {
       return Response.json({ error: "Device pairing is not configured." }, { status: 503 });
     }
     const jar = await cookies();
@@ -147,10 +147,10 @@ export async function DELETE(request: Request) {
     if (!deviceId) {
       return Response.json({ error: "A device_id is required." }, { status: 400 });
     }
-    const response = await fetch(`${CARRY_WEBAPI}/demo-api/admin/pair`, {
+    const response = await fetch(`${COSMOS_WEBAPI}/demo-api/admin/pair`, {
       method: "DELETE",
       cache: "no-store",
-      signal: carryDeadlineSignal(),
+      signal: cosmosDeadlineSignal(),
       headers: { "content-type": "application/json", ...adminAuthHeaders() },
       // The expected owner is session-derived. The browser cannot release a
       // claim belonging to another account, even with a guessed device id.

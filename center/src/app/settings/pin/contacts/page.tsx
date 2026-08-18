@@ -31,7 +31,7 @@ import {
  *
  * This is the second contacts pane in Center and it is a DIFFERENT store from
  * the first. /settings/contacts talks to `humane.contacts.ContactsRPCService`
- * at CARRY_ENDPOINT_CONTACTS — the `contacts` container in the compose stack,
+ * at COSMOS_ENDPOINT_CONTACTS — the `contacts` container in the compose stack,
  * Cosmos's own principal-keyed database. This pane talks to `/api/contacts` on
  * the device over USB, which is the Pin runtime's SQLite table. The Pin runtime
  * serves the same gRPC service from that table to the stock contacts client on

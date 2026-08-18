@@ -8,7 +8,7 @@ import { verifyShareToken } from "@/server/shareToken";
  * Shared by the BFF route (`/api/share/[token]`) and the public page
  * (`/share/[token]`) so neither makes an internal HTTP hop. The signed,
  * expiring capability names one wearer and memory; the BFF presents its internal
- * projection token to Carry, which authenticates and opens that thumbnail.
+ * projection token to Cosmos, which authenticates and opens that thumbnail.
  *
  * Two entry points: `resolveSharedThumbnail` says WHY it failed (the page needs
  * that), `getSharedThumbnail` is the bytes-or-null form the binary route wants.

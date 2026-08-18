@@ -119,7 +119,7 @@ fn radio_grounding_rejects_bare_deictics_but_accepts_explicit_commands() {
         assert_eq!(
             classify_fieldless_music_grounding(radio, utterance),
             Some(FieldlessMusicGrounding::AuthoritativeDirectCommand),
-            "explicit radio command {utterance:?} should carry current-turn authority",
+            "explicit radio command {utterance:?} should contain current-turn authority",
         );
         assert!(
             enforce_mutation_grounding(radio, &arguments, utterance).is_ok(),

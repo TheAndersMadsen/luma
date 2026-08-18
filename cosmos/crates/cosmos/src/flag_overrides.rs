@@ -1,7 +1,7 @@
 //! Operator overrides for the feature-flag response.
 //!
-//! The values in `services::feature_flags` are not preferences — most carry a
-//! `carry-raw.log` citation, because they are what the REAL carry cloud served to
+//! The values in `services::feature_flags` are not preferences — most contain a
+//! `cosmos-raw.log` citation, because they are what the REAL cosmos cloud served to
 //! a stock Pin. That makes them evidence, and evidence should not be edited in
 //! place to change a device's behaviour.
 //!
@@ -11,7 +11,7 @@
 //!
 //!   1. The observed value is never lost. It can always be read back, and
 //!      clearing an override restores it exactly.
-//!   2. An override is visibly a deviation from what carry did, not a silent
+//!   2. An override is visibly a deviation from what cosmos did, not a silent
 //!      redefinition of it.
 //!   3. Changes apply to the next flag sync with no rebuild and no restart.
 
@@ -49,7 +49,7 @@ struct OverrideFile {
 }
 
 fn path() -> Option<PathBuf> {
-    let dir = std::env::var("CARRY_STATE_DIR").ok()?;
+    let dir = std::env::var("COSMOS_STATE_DIR").ok()?;
     Some(PathBuf::from(dir).join("flag-overrides.json"))
 }
 
@@ -68,7 +68,7 @@ fn cache() -> &'static Mutex<Cached> {
 /// Read the overrides, reloading if the file changed underneath us.
 ///
 /// The reload is the whole point and was missing at first. Every workload mounts
-/// the SAME `carry-state` volume, so an override written by one process lands in
+/// the SAME `cosmos-state` volume, so an override written by one process lands in
 /// a file the others can see — but a load-once cache never looked again. The
 /// admin API returned 200, the file on disk was correct, and the device kept
 /// receiving the old value, because the process serving flags had cached an empty
@@ -125,7 +125,7 @@ thread_local! {
 ///
 /// Every flag in a response used to reach [`get`] independently, and each of
 /// those `read_through`s is two `std::env::var` lookups, a `stat` of
-/// `$CARRY_STATE_DIR/flag-overrides.json` and a global mutex — for a set of 33
+/// `$COSMOS_STATE_DIR/flag-overrides.json` and a global mutex — for a set of 33
 /// flags, 33 of each per `GetFlags`, and 166 per `/demo-api/flags` because the
 /// admin view rebuilds the whole set again for every overridden key.
 ///
@@ -199,7 +199,7 @@ pub fn clear(key: &str) -> Option<FlagValue> {
     previous
 }
 
-/// Clear every override at once — the "put it back the way carry had it" button.
+/// Clear every override at once — the "put it back the way cosmos had it" button.
 pub fn clear_all() -> usize {
     let mut cached = read_through();
     let count = cached.map.len();

@@ -13,7 +13,7 @@ import { BackIcon } from "@/icons";
 /**
  * /notes/new — create a note.
  * Posts to /api/capture/note/create, which mirrors the original's
- * POST /capture/note/create { text, title } and reaches carry's CreateNote.
+ * POST /capture/note/create { text, title } and reaches cosmos's CreateNote.
  */
 export default function NewNotePage() {
   const router = useRouter();

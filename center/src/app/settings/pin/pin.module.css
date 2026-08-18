@@ -83,7 +83,7 @@
   overflow-wrap: anywhere;
 }
 
-/* Explanatory prose under a section, never carrying data. */
+/* Explanatory prose under a section, never containing data. */
 .note {
   font-size: 14px;
   font-weight: 400;

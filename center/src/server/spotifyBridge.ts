@@ -444,8 +444,8 @@ export async function requireOwnedPairedPin(
     throw new SpotifyBridgeError("wrong_owner", 403, "This Spotify bridge is not assigned to your account.");
   }
 
-  const rosterBase = normalizedBaseUrl(process.env.CARRY_WEBAPI_BASE_URL, "The Pin roster");
-  const rosterToken = process.env.CARRY_ADMIN_TOKEN?.trim() ?? "";
+  const rosterBase = normalizedBaseUrl(process.env.COSMOS_WEBAPI_BASE_URL, "The Pin roster");
+  const rosterToken = process.env.COSMOS_ADMIN_TOKEN?.trim() ?? "";
   if (!rosterToken) {
     throw new SpotifyBridgeError("bridge_not_configured", 503, "Spotify setup is unavailable.");
   }

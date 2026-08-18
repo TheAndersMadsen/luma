@@ -34,14 +34,14 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import org.json.JSONObject
 
-internal const val CARRY_IDENTITY_ROOT_UID = 0
-internal const val CARRY_IDENTITY_SYSTEM_UID = 1000
-internal const val CARRY_IDENTITY_SHELL_UID = 2000
+internal const val COSMOS_IDENTITY_ROOT_UID = 0
+internal const val COSMOS_IDENTITY_SYSTEM_UID = 1000
+internal const val COSMOS_IDENTITY_SHELL_UID = 2000
 
-internal fun isTrustedCarryIdentityUid(uid: Int): Boolean =
-    uid == CARRY_IDENTITY_ROOT_UID ||
-        uid == CARRY_IDENTITY_SYSTEM_UID ||
-        uid == CARRY_IDENTITY_SHELL_UID
+internal fun isTrustedCosmosIdentityUid(uid: Int): Boolean =
+    uid == COSMOS_IDENTITY_ROOT_UID ||
+        uid == COSMOS_IDENTITY_SYSTEM_UID ||
+        uid == COSMOS_IDENTITY_SHELL_UID
 
 /**
  * Privileged-maintenance import of one clone DeviceAttestation credential.
@@ -50,9 +50,9 @@ internal fun isTrustedCarryIdentityUid(uid: Int): Boolean =
  * exact Pin hardware id and the pinned clone root, imported into AndroidKeyStore,
  * and then deleted from staging. No method exports key bytes.
  */
-class CarryIdentityProvider : ContentProvider() {
+class CosmosIdentityProvider : ContentProvider() {
     companion object {
-        const val AUTHORITY = "com.penumbraos.server.carryidentity"
+        const val AUTHORITY = "com.penumbraos.server.cosmosidentity"
         const val STAGING_NAME = "attestation.json"
         const val METHOD_IMPORT = "IMPORT"
         const val METHOD_STATUS = "STATUS"
@@ -68,7 +68,7 @@ class CarryIdentityProvider : ContentProvider() {
         /** Shared by UID 1000; consumed by the injected clone key manager. */
         const val KEY_ALIAS = CosmosActivationContract.ATTESTATION_KEY_ALIAS
 
-        private const val TAG = "CarryIdentity"
+        private const val TAG = "CosmosIdentity"
         private const val MAX_BUNDLE_BYTES = 64 * 1024L
         private const val WRITE_TIMEOUT_SECONDS = 15L
         private const val ACTIVATION_RECORD_NAME = "cosmos-activation-v1.json"
@@ -91,18 +91,18 @@ class CarryIdentityProvider : ContentProvider() {
     override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor {
         enforceCaller()
         if (uri.authority != AUTHORITY || uri.pathSegments != listOf(STAGING_NAME)) {
-            throw FileNotFoundException("Only the fixed Carry identity staging path is writable")
+            throw FileNotFoundException("Only the fixed Cosmos identity staging path is writable")
         }
         if (!mode.contains('w')) {
-            throw FileNotFoundException("Carry identity staging is write-only")
+            throw FileNotFoundException("Cosmos identity staging is write-only")
         }
 
         val completion = synchronized(writeLock) {
             if (operationInProgress) {
-                throw IllegalStateException("Carry identity maintenance is already in progress")
+                throw IllegalStateException("Cosmos identity maintenance is already in progress")
             }
             if (activeWrite?.count == 1L) {
-                throw IllegalStateException("A Carry identity write is already in progress")
+                throw IllegalStateException("A Cosmos identity write is already in progress")
             }
             CountDownLatch(1).also {
                 activeWrite = it
@@ -136,16 +136,16 @@ class CarryIdentityProvider : ContentProvider() {
                     writeFailure = error.javaClass.simpleName
                 }
                 runCatching {
-                    readEnd.closeWithError("Carry identity staging failed")
+                    readEnd.closeWithError("Cosmos identity staging failed")
                     closeWithError = true
                 }
-                Log.e(TAG, "Carry identity staging failed (${error.javaClass.simpleName})")
+                Log.e(TAG, "Cosmos identity staging failed (${error.javaClass.simpleName})")
             } finally {
                 temporary.delete()
                 if (!closeWithError) runCatching { readEnd.close() }
                 completion.countDown()
             }
-        }, "carry-identity-stage").start()
+        }, "cosmos-identity-stage").start()
         return writeEnd
     }
 
@@ -206,7 +206,7 @@ class CarryIdentityProvider : ContentProvider() {
 
         val callingIdentity = Binder.clearCallingIdentity()
         return try {
-            val bundle = CarryAttestationBundle.parse(staged.readText(Charsets.UTF_8))
+            val bundle = CosmosAttestationBundle.parse(staged.readText(Charsets.UTF_8))
             val hardwareId = readSystemProperty("ro.boot.deviceid")
             check(hardwareId.isNotBlank()) { "Pin hardware id is unavailable" }
             check(bundle.deviceId.equals(hardwareId, ignoreCase = true)) {
@@ -216,7 +216,7 @@ class CarryIdentityProvider : ContentProvider() {
             bundle.importIntoAndroidKeyStore(KEY_ALIAS)
             identityStatus()
         } catch (error: Throwable) {
-            Log.e(TAG, "Carry identity import rejected (${error.javaClass.simpleName})")
+            Log.e(TAG, "Cosmos identity import rejected (${error.javaClass.simpleName})")
             result(false, "Identity import was rejected")
         } finally {
             staged.delete()
@@ -244,7 +244,7 @@ class CarryIdentityProvider : ContentProvider() {
             val bytes = staged.readBytes()
             try {
                 check(bytes.size.toLong() in 1..MAX_BUNDLE_BYTES)
-                val envelope = CarryActivationEnvelope.parse(String(bytes, Charsets.UTF_8))
+                val envelope = CosmosActivationEnvelope.parse(String(bytes, Charsets.UTF_8))
                 val hardwareId = readSystemProperty("ro.boot.deviceid")
                 check(hardwareId.isNotBlank()) { "Pin hardware id is unavailable" }
                 check(envelope.identity.deviceId.equals(hardwareId, ignoreCase = true)) {
@@ -263,7 +263,7 @@ class CarryIdentityProvider : ContentProvider() {
                         apiEndpoint = envelope.apiEndpoint,
                         onboardingEndpoint = envelope.onboardingEndpoint,
                         edgeIpv4 = envelope.edgeIpv4,
-                        identity = AndroidCarryIdentityPort(envelope.identity),
+                        identity = AndroidCosmosIdentityPort(envelope.identity),
                     ),
                 )
             } finally {
@@ -294,7 +294,7 @@ class CarryIdentityProvider : ContentProvider() {
                 records = FileCosmosActivationRecordPort(activationRecordFile()),
             )
             activationResultBundle(
-                transaction.deactivate(AndroidCarryIdentityPort(candidateBundle = null)),
+                transaction.deactivate(AndroidCosmosIdentityPort(candidateBundle = null)),
             )
         } catch (error: Throwable) {
             Log.e(TAG, "Cosmos deactivation failed (${error.javaClass.simpleName})")
@@ -318,7 +318,7 @@ class CarryIdentityProvider : ContentProvider() {
             val resolver = requireNotNull(context).contentResolver
             val settings = AndroidCosmosSettingsPort(resolver)
             val record = FileCosmosActivationRecordPort(activationRecordFile()).load()
-            val identity = AndroidCarryIdentityPort(candidateBundle = null).current()
+            val identity = AndroidCosmosIdentityPort(candidateBundle = null).current()
             Bundle().apply {
                 putBoolean(RESULT_OK, true)
                 putString(
@@ -364,7 +364,7 @@ class CarryIdentityProvider : ContentProvider() {
     private fun identityStatus(): Bundle {
         val callingIdentity = Binder.clearCallingIdentity()
         return try {
-            val identity = AndroidCarryIdentityPort(candidateBundle = null).current()
+            val identity = AndroidCosmosIdentityPort(candidateBundle = null).current()
             if (identity == null) {
                 Bundle().apply {
                     putBoolean(RESULT_OK, true)
@@ -380,7 +380,7 @@ class CarryIdentityProvider : ContentProvider() {
                 }
             }
         } catch (error: Throwable) {
-            Log.e(TAG, "Carry identity status failed (${error.javaClass.simpleName})")
+            Log.e(TAG, "Cosmos identity status failed (${error.javaClass.simpleName})")
             result(false, "Identity status is unavailable")
         } finally {
             Binder.restoreCallingIdentity(callingIdentity)
@@ -410,7 +410,7 @@ class CarryIdentityProvider : ContentProvider() {
                 putBoolean(RESULT_PRESENT, false)
             }
         } catch (error: Throwable) {
-            Log.e(TAG, "Carry identity clear failed (${error.javaClass.simpleName})")
+            Log.e(TAG, "Cosmos identity clear failed (${error.javaClass.simpleName})")
             result(false, "Identity clear failed")
         } finally {
             Binder.restoreCallingIdentity(callingIdentity)
@@ -418,13 +418,13 @@ class CarryIdentityProvider : ContentProvider() {
     }
 
     private fun enforceCaller() {
-        val providerContext = context ?: throw SecurityException("Carry identity provider unavailable")
+        val providerContext = context ?: throw SecurityException("Cosmos identity provider unavailable")
         providerContext.enforceCallingPermission(
             Manifest.permission.DUMP,
-            "Carry identity import requires privileged maintenance permission",
+            "Cosmos identity import requires privileged maintenance permission",
         )
-        if (!isTrustedCarryIdentityUid(Binder.getCallingUid())) {
-            throw SecurityException("Caller is not authorized for Carry identity maintenance")
+        if (!isTrustedCosmosIdentityUid(Binder.getCallingUid())) {
+            throw SecurityException("Caller is not authorized for Cosmos identity maintenance")
         }
     }
 
@@ -449,10 +449,10 @@ class CarryIdentityProvider : ContentProvider() {
             val read = input.read(buffer)
             if (read < 0) break
             total += read
-            check(total <= maximum) { "Carry identity bundle exceeds the size limit" }
+            check(total <= maximum) { "Cosmos identity bundle exceeds the size limit" }
             output.write(buffer, 0, read)
         }
-        check(total > 0) { "Carry identity bundle is empty" }
+        check(total > 0) { "Cosmos identity bundle is empty" }
     }
 
     override fun getType(uri: Uri): String = "application/json"
@@ -474,7 +474,7 @@ class CarryIdentityProvider : ContentProvider() {
     ): Int = throw UnsupportedOperationException()
 }
 
-internal data class CarryAttestationBundle(
+internal data class CosmosAttestationBundle(
     val deviceId: String,
     val privateKey: java.security.PrivateKey,
     val leaf: X509Certificate,
@@ -548,7 +548,7 @@ internal data class CarryAttestationBundle(
         check(subjectCommonName(leaf).equals(expectedCn, ignoreCase = true)) {
             "Clone device certificate subject does not match the bundle"
         }
-        val challenge = "penumbra-carry-identity-check".toByteArray(Charsets.US_ASCII)
+        val challenge = "penumbra-cosmos-identity-check".toByteArray(Charsets.US_ASCII)
         val signature = Signature.getInstance("SHA256withECDSA").run {
             initSign(privateKey)
             update(challenge)
@@ -562,7 +562,7 @@ internal data class CarryAttestationBundle(
     }
 
     companion object {
-        fun parse(json: String): CarryAttestationBundle {
+        fun parse(json: String): CosmosAttestationBundle {
             val objectValue = JSONObject(json)
             val deviceId = objectValue.getString("device_id").trim().lowercase(Locale.US)
             val keyBytes = parsePem(objectValue.getString("private_key_pem"), "PRIVATE KEY")
@@ -571,7 +571,7 @@ internal data class CarryAttestationBundle(
             } finally {
                 keyBytes.fill(0)
             }
-            return CarryAttestationBundle(
+            return CosmosAttestationBundle(
                 deviceId = deviceId,
                 privateKey = privateKey,
                 leaf = parseCertificate(objectValue.getString("certificate_pem")),
@@ -581,20 +581,20 @@ internal data class CarryAttestationBundle(
     }
 }
 
-private data class CarryActivationEnvelope(
+private data class CosmosActivationEnvelope(
     val apiEndpoint: String,
     val onboardingEndpoint: String,
     val edgeIpv4: String,
-    val identity: CarryAttestationBundle,
+    val identity: CosmosAttestationBundle,
 ) {
     companion object {
-        fun parse(json: String): CarryActivationEnvelope {
+        fun parse(json: String): CosmosActivationEnvelope {
             val value = JSONObject(json)
-            return CarryActivationEnvelope(
+            return CosmosActivationEnvelope(
                 apiEndpoint = value.getString("api_endpoint"),
                 onboardingEndpoint = value.getString("onboarding_endpoint"),
                 edgeIpv4 = value.getString("edge_ipv4"),
-                identity = CarryAttestationBundle.parse(json),
+                identity = CosmosAttestationBundle.parse(json),
             )
         }
     }
@@ -615,8 +615,8 @@ private class AndroidCosmosSettingsPort(
     }
 }
 
-private class AndroidCarryIdentityPort(
-    private val candidateBundle: CarryAttestationBundle?,
+private class AndroidCosmosIdentityPort(
+    private val candidateBundle: CosmosAttestationBundle?,
 ) : CosmosIdentityPort {
     override fun candidate(): CosmosIdentityDescriptor =
         candidateBundle?.descriptor ?: error("No candidate identity was supplied")
@@ -659,7 +659,7 @@ private fun androidKeyStoreIdentity(
             ?: error("Cosmos identity certificate chain is missing")
         check(chain.size >= 2) { "Cosmos identity certificate chain is incomplete" }
         val issuer = chain[1]
-        validateStoredCarryIdentity(key, leaf, issuer)
+        validateStoredCosmosIdentity(key, leaf, issuer)
     }.isSuccess
     return CosmosIdentityDescriptor(
         fingerprintSha256 = fingerprint,
@@ -668,7 +668,7 @@ private fun androidKeyStoreIdentity(
     )
 }
 
-private fun validateStoredCarryIdentity(
+private fun validateStoredCosmosIdentity(
     privateKey: java.security.PrivateKey,
     leaf: X509Certificate,
     issuer: X509Certificate,

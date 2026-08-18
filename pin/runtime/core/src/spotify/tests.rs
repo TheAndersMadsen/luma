@@ -104,7 +104,7 @@ fn popularity_order_describes_the_list_without_reordering_it() {
 
 #[test]
 fn track_popularity_is_parsed_and_stays_absent_when_unscored() {
-    // Spotify track objects carry a documented 0-100 `popularity`, the same
+    // Spotify track objects contain a documented 0-100 `popularity`, the same
     // field `select_artist_id` already reads for artists. Parsing it gives the
     // ordering check a second, independent input.
     let scored = serde_json::json!({

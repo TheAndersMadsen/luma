@@ -43,7 +43,7 @@ pub(crate) fn action_turn(
 }
 
 /// A system observation turn, chained to its action node (`parent = action id`).
-/// `is_final` stays false: in carry the run's *final* observation is produced by
+/// `is_final` stays false: in contain the run's *final* observation is produced by
 /// the device after it executes the terminal action, not by the server.
 pub(crate) fn observation_turn(
     action_name: &str,

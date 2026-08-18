@@ -1,4 +1,4 @@
-//! Compiles the independently authored Carry-compatible wire contract with tonic.
+//! Compiles the independently authored Cosmos-compatible wire contract with tonic.
 
 use std::path::PathBuf;
 

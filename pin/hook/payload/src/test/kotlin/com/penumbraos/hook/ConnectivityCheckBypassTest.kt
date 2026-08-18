@@ -12,7 +12,7 @@ class ConnectivityCheckBypassTest {
             "src/main/kotlin/com/penumbraos/hook/ConnectivityCheckBypass.kt",
         ).readText()
         val remoteModeDelegation = Regex(
-            """if\s*\(\s*CarryRemoteTransport\.isEnabled\(\)\s*\)\s*""" +
+            """if\s*\(\s*CosmosRemoteTransport\.isEnabled\(\)\s*\)\s*""" +
                 """return@hookMethod(?:Before|After)""",
         )
 

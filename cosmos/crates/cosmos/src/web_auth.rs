@@ -33,7 +33,7 @@ use serde::Deserialize;
 /// Bearer token is ever trusted.
 #[derive(Clone, Debug)]
 pub struct OidcConfig {
-    /// The `iss` every token must carry, e.g. `https://auth.humane.center/realms/humane`.
+    /// The `iss` every token must contain, e.g. `https://auth.humane.center/realms/humane`.
     pub issuer: String,
     /// The `aud` a token must include (a Keycloak client id). Empty ⇒ audience
     /// is not checked, which Keycloak access tokens sometimes require.
@@ -45,12 +45,12 @@ pub struct OidcConfig {
 
 impl OidcConfig {
     /// Read the web-plane config from the environment. Returns `None` when
-    /// `CARRY_OIDC_ISSUER` is unset — the plane stays off and fails closed.
+    /// `COSMOS_OIDC_ISSUER` is unset — the plane stays off and fails closed.
     pub fn from_env() -> Option<Self> {
-        let issuer = std::env::var("CARRY_OIDC_ISSUER")
+        let issuer = std::env::var("COSMOS_OIDC_ISSUER")
             .ok()
             .filter(|value| !value.trim().is_empty())?;
-        let jwks_uri = std::env::var("CARRY_OIDC_JWKS_URI")
+        let jwks_uri = std::env::var("COSMOS_OIDC_JWKS_URI")
             .ok()
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| {
@@ -59,7 +59,7 @@ impl OidcConfig {
                     issuer.trim_end_matches('/')
                 )
             });
-        let audience = std::env::var("CARRY_OIDC_AUDIENCE")
+        let audience = std::env::var("COSMOS_OIDC_AUDIENCE")
             .ok()
             .filter(|value| !value.trim().is_empty());
         Some(Self {
@@ -363,7 +363,7 @@ mod tests {
 
         let verifier = JwtVerifier::connect(OidcConfig {
             issuer,
-            audience: None, // Keycloak access tokens carry aud: account, not the client.
+            audience: None, // Keycloak access tokens use aud: account, not the client.
             jwks_uri,
         })
         .await

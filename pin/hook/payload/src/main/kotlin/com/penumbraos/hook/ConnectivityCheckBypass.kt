@@ -34,7 +34,7 @@ object ConnectivityCheckBypass {
         // Keep the exact-host resolver as a fallback for firmware where the
         // NetworkUtils hook seam is absent. Once this bypass is installed,
         // Android's validated network state owns the verdict in every mode.
-        CarryRemoteTransport.installNetworkDnsResolver()
+        CosmosRemoteTransport.installNetworkDnsResolver()
         val networkUtilsClassName = "humaneinternal.system.network.NetworkUtils"
         val networkUtilsClass = try {
             cl.loadClass(networkUtilsClassName)

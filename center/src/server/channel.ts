@@ -72,15 +72,15 @@ function kidFor(principal: string): string {
  * The key seals THIS wearer's content, so it may never be shared. One
  * process-global key would seal every wearer's notes under one kid, and the
  * first wearer to establish it would own everybody else's — which is why the
- * fix for the old `CARRY_PRINCIPAL` gate is emphatically NOT to set
- * `CARRY_PRINCIPAL` in a deployment that serves more than one person.
+ * fix for the old `COSMOS_PRINCIPAL` gate is emphatically NOT to set
+ * `COSMOS_PRINCIPAL` in a deployment that serves more than one person.
  *
  * The identity is the same one `requestMetadata()` forwards to the workloads:
  *
  *   1. the signed session's `sub`, namespaced `U:<sub>` — the exact partition
  *      `AuthenticatedPrincipal::for_user` resolves a Keycloak bearer to, and the
  *      same one this wearer's Pin writes under;
- *   2. `CARRY_PRINCIPAL`, the static identity local development and the staging
+ *   2. `COSMOS_PRINCIPAL`, the static identity local development and the staging
  *      smoke run under. A FALLBACK, never a gate: gating on it is what made note
  *      creation answer "no channel key" on every production deployment, because
  *      nothing sets it there and nothing should.
@@ -96,7 +96,7 @@ async function channelPrincipal(): Promise<string | null> {
     // Not a request scope — `cookies()` throws there. The static identity below
     // is the only one that exists outside one anyway.
   }
-  const configured = process.env.CARRY_PRINCIPAL?.trim() ?? "";
+  const configured = process.env.COSMOS_PRINCIPAL?.trim() ?? "";
   return configured.length > 0 ? configured : null;
 }
 
@@ -118,7 +118,7 @@ export async function channelKey(): Promise<ChannelKey> {
   const principal = await channelPrincipal();
   if (!principal) {
     throw new ChannelKeyUnavailableError(
-      "this request carries no wearer identity, so there is no key to seal under - sign in again, or set CARRY_PRINCIPAL for a single-identity local deployment",
+      "this request carries no wearer identity, so there is no key to seal under - sign in again, or set COSMOS_PRINCIPAL for a single-identity local deployment",
     );
   }
 
@@ -166,7 +166,7 @@ async function establish(principal: string): Promise<ChannelKey> {
   const der = toBuffer(wrapping.clearKey?.jcaEncoded);
   if (!der || der.length === 0) {
     throw new ChannelKeyUnavailableError(
-      "carry published no wrapping key, so a channel key cannot be established",
+      "cosmos published no wrapping key, so a channel key cannot be established",
     );
   }
 
@@ -185,7 +185,7 @@ async function establish(principal: string): Promise<ChannelKey> {
       {
         kid: Buffer.from(kid, "utf8"),
         wrappedKey: {
-          wrappingKid: Buffer.from("carry-clone/wrapping/rsa-oaep", "utf8"),
+          wrappingKid: Buffer.from("cosmos-clone/wrapping/rsa-oaep", "utf8"),
           keydata: wrapChannelKey(der, key),
         },
       },
@@ -196,7 +196,7 @@ async function establish(principal: string): Promise<ChannelKey> {
   // KEY_IMPORTED is the only outcome that means the server can open what we seal.
   if (status !== "KEY_IMPORTED" && status !== 1) {
     throw new ChannelKeyUnavailableError(
-      `carry answered ${String(status)} to ImportKeys, so nothing it stores could be read back`,
+      `cosmos answered ${String(status)} to ImportKeys, so nothing it stores could be read back`,
     );
   }
 

@@ -116,7 +116,7 @@ pub fn demo_router(
 ///
 /// A pairing must be written to the very enrollment store the OPAQUE ceremony
 /// reads during `CreateLoginInit`. That store is process-local and in-memory
-/// unless `CARRY_DATABASE_URL` is set, so the write has to happen inside the
+/// unless `COSMOS_DATABASE_URL` is set, so the write has to happen inside the
 /// provisioning process itself. The operator console lives in `ai-bus` — a
 /// different process — where [`crate::enrollment::pairing_store`] finds no
 /// ceremony store and, absent a shared database, honestly refuses with 503.
@@ -378,10 +378,10 @@ struct MeshStatus {
     /// `onboardingtk`, `partner-services`, `push`, `webapi`, `webhook` — each
     /// published at BOTH a regional host and a region-less global alias:
     ///
-    ///   <family>.<region>.<env>.humane.cloud   (api.eastus.carry.humane.cloud)
-    ///   <family>.<env>.humane.cloud            (api.carry.humane.cloud)
+    ///   <family>.<region>.<env>.humane.cloud   (api.eastus.cosmos.humane.cloud)
+    ///   <family>.<env>.humane.cloud            (api.cosmos.humane.cloud)
     ///
-    /// across regions `eastus` / `westus2` and environments `dev` / `carry` /
+    /// across regions `eastus` / `westus2` and environments `dev` / `cosmos` /
     /// `prod`, on AKS (`pip.aks-cluster-pd-ue-01.fw.humane.cloud` — prod, us-east,
     /// behind a firewall) with per-region cluster ingresses `eastus-1.<env>` and
     /// `westus2-1.<env>`.
@@ -481,7 +481,7 @@ fn workload_for_service(service: &str) -> Option<cosmos_core::Workload> {
 /// Probe every workload over gRPC health, concurrently.
 ///
 /// Deliberately gRPC rather than HTTP. Each workload binds its HTTP admin
-/// surface to `127.0.0.1:8080` (`CARRY_HTTP_BIND`), so it is unreachable from
+/// surface to `127.0.0.1:8080` (`COSMOS_HTTP_BIND`), so it is unreachable from
 /// another container by design — an HTTP probe reported 6 of 7 workloads down
 /// while all 7 were healthy. Port 50051 is the surface that is actually exposed
 /// on the mesh network, and `grpc.health.v1.Health/Check` is what Istio and
@@ -491,7 +491,7 @@ fn workload_for_service(service: &str) -> Option<cosmos_core::Workload> {
 /// says should exist — an inventory that cannot go red is not a status.
 async fn mesh_status(state: &HttpState) -> MeshStatus {
     let _ = state;
-    let me = std::env::var("CARRY_WORKLOAD").ok();
+    let me = std::env::var("COSMOS_WORKLOAD").ok();
     let probes = cosmos_core::Workload::ALL.map(|workload| {
         let me = me.clone();
         async move {
@@ -509,11 +509,11 @@ async fn mesh_status(state: &HttpState) -> MeshStatus {
                 .map(|service| service.methods.len())
                 .sum();
 
-            // Every workload binds gRPC to `127.0.0.1:50051` (`CARRY_GRPC_BIND`)
+            // Every workload binds gRPC to `127.0.0.1:50051` (`COSMOS_GRPC_BIND`)
             // and a socat sidecar bridges `0.0.0.0:15051` to it, so 15051 is the
             // only gRPC port reachable from another container. Probing 50051
             // reported 6 of 7 down while all 7 were serving.
-            let peer_port: u16 = std::env::var("CARRY_PEER_GRPC_PORT")
+            let peer_port: u16 = std::env::var("COSMOS_PEER_GRPC_PORT")
                 .ok()
                 .and_then(|value| value.parse().ok())
                 .unwrap_or(15051);
@@ -561,10 +561,10 @@ async fn mesh_status(state: &HttpState) -> MeshStatus {
     let workloads: Vec<MeshWorkload> = futures_util::future::join_all(probes).await;
     let reachable = workloads.iter().filter(|w| w.reachable).count();
     let total = workloads.len();
-    let environment = std::env::var("CARRY_ENVIRONMENT").unwrap_or_else(|_| "carry".to_owned());
-    let region = std::env::var("CARRY_REGION").unwrap_or_else(|_| "eastus".to_owned());
+    let environment = std::env::var("COSMOS_ENVIRONMENT").unwrap_or_else(|_| "cosmos".to_owned());
+    let region = std::env::var("COSMOS_REGION").unwrap_or_else(|_| "eastus".to_owned());
     // Same shape Humane used: <family>.<region>.<env>.<zone>.
-    let zone = std::env::var("CARRY_DNS_ZONE").unwrap_or_else(|_| "carry.local".to_owned());
+    let zone = std::env::var("COSMOS_DNS_ZONE").unwrap_or_else(|_| "cosmos.local".to_owned());
     let stands_in_for = match me.as_deref() {
         Some("ai-bus") => vec!["api", "location", "partner-services", "push"],
         Some("connectivity") => vec!["connectivity-check"],
@@ -572,7 +572,7 @@ async fn mesh_status(state: &HttpState) -> MeshStatus {
         _ => vec!["api"],
     };
     MeshStatus {
-        endpoint: std::env::var("CARRY_PUBLIC_ENDPOINT")
+        endpoint: std::env::var("COSMOS_PUBLIC_ENDPOINT")
             .unwrap_or_else(|_| format!("api.{region}.{environment}.{zone}")),
         connectivity_endpoint: format!("connectivity-check.{region}.{environment}.{zone}"),
         environment,
@@ -584,7 +584,7 @@ async fn mesh_status(state: &HttpState) -> MeshStatus {
             .map(|s| s.methods.len())
             .sum(),
         rpc_manifest: rpc_manifest(),
-        auth_mode: std::env::var("CARRY_AUTH_MODE")
+        auth_mode: std::env::var("COSMOS_AUTH_MODE")
             .unwrap_or_else(|_| "development-insecure".to_owned()),
         workloads,
         reachable,
@@ -602,28 +602,28 @@ fn tool_status() -> Vec<ToolStatus> {
         (
             "web_search",
             crate::backends::search::configured(),
-            "CARRY_SEARXNG_BASE_URL or CARRY_SERPAPI_KEY",
+            "COSMOS_SEARXNG_BASE_URL or COSMOS_SERPAPI_KEY",
         ),
         (
             "ask_online",
-            set("CARRY_PPLX_API_KEY"),
-            "CARRY_PPLX_API_KEY",
+            set("COSMOS_PPLX_API_KEY"),
+            "COSMOS_PPLX_API_KEY",
         ),
         ("wikipedia", true, ""),
         (
             "wolfram",
-            set("CARRY_WOLFRAM_APP_ID"),
-            "CARRY_WOLFRAM_APP_ID",
+            set("COSMOS_WOLFRAM_APP_ID"),
+            "COSMOS_WOLFRAM_APP_ID",
         ),
         (
             "weather",
-            set("CARRY_PIRATE_WEATHER_KEY"),
-            "CARRY_PIRATE_WEATHER_KEY",
+            set("COSMOS_PIRATE_WEATHER_KEY"),
+            "COSMOS_PIRATE_WEATHER_KEY",
         ),
         (
             "nearby",
-            set("CARRY_GOOGLE_MAPS_KEY"),
-            "CARRY_GOOGLE_MAPS_KEY",
+            set("COSMOS_GOOGLE_MAPS_KEY"),
+            "COSMOS_GOOGLE_MAPS_KEY",
         ),
         ("food_lookup", true, ""),
         ("remember", true, ""),
@@ -634,7 +634,7 @@ fn tool_status() -> Vec<ToolStatus> {
     .collect()
 }
 
-/// One flag, with BOTH what carry served and what this deployment serves.
+/// One flag, with BOTH what cosmos served and what this deployment serves.
 ///
 /// Showing them side by side is the whole point: an operator needs to see that a
 /// value is a deliberate deviation, not discover months later that the "observed"
@@ -692,15 +692,15 @@ fn flag_metadata(name: &str) -> FlagMetadata {
     match name {
         "demo_v1_enabled" => server_only(
             "Demo v1",
-            "Captured in Carry's assignment response; no installed Pin consumer was found.",
+            "Captured in Cosmos's assignment response; no installed Pin consumer was found.",
         ),
         "demo_v2_enabled" => server_only(
             "Demo v2",
-            "Captured in Carry's assignment response; no installed Pin consumer was found.",
+            "Captured in Cosmos's assignment response; no installed Pin consumer was found.",
         ),
         "demo_v2_experience" => server_only(
             "Demo v2 experience",
-            "Captured in Carry's assignment response; no installed Pin consumer was found.",
+            "Captured in Cosmos's assignment response; no installed Pin consumer was found.",
         ),
         "personal_voice_enabled" => server_only(
             "Personal voice",
@@ -728,15 +728,15 @@ fn flag_metadata(name: &str) -> FlagMetadata {
         ),
         "flight_search_enabled" => server_only(
             "Flight search",
-            "Captured as enabled by Carry, but no installed Pin flag consumer was found.",
+            "Captured as enabled by Cosmos, but no installed Pin flag consumer was found.",
         ),
         "history_search_enabled" => server_only(
             "History search",
-            "Captured as enabled by Carry, but no installed Pin flag consumer was found.",
+            "Captured as enabled by Cosmos, but no installed Pin flag consumer was found.",
         ),
         "web_show_save_event_location_privacy_setting" => server_only(
             "Event-location privacy control",
-            "A web-side Carry assignment; the Pin does not consume it.",
+            "A web-side Cosmos assignment; the Pin does not consume it.",
         ),
         "touchcode_enabled" => device(
             "Touchcode unlock",
@@ -788,7 +788,7 @@ fn flag_metadata(name: &str) -> FlagMetadata {
             "Experiments",
             "observed",
             "next_sync",
-            Some("Experimental. Keep off for normal use; the stock Carry capture served false."),
+            Some("Experimental. Keep off for normal use; the stock Cosmos capture served false."),
         ),
         "accessory_feature_flags" => FlagMetadata {
             label: "Accessory feature flags",
@@ -837,7 +837,7 @@ fn flag_metadata(name: &str) -> FlagMetadata {
         ),
         "server_side_speech_synthesis_timeout_millis" => device(
             "Remote speech timeout",
-            "A positive millisecond budget lets stock call Carry SpeechService; zero keeps local Android speech.",
+            "A positive millisecond budget lets stock call Cosmos SpeechService; zero keeps local Android speech.",
             "Voice & assistant",
             "implemented",
             "next_sync",
@@ -1012,22 +1012,22 @@ struct SetFlagRequest {
 ///
 /// These three handlers CHANGE what a device receives on its next flag sync, so
 /// they are exactly the "management endpoint reachable without a purpose-scoped
-/// credential" that a real HackerOne report against carry called out
+/// credential" that a real HackerOne report against cosmos called out
 /// (`webapi.prod.humane.cloud/*/manage/*` served operational data to any
 /// authenticated session). The read-only listing and status stay open; anything
-/// that mutates requires `CARRY_ADMIN_TOKEN`.
+/// that mutates requires `COSMOS_ADMIN_TOKEN`.
 ///
 /// Fails CLOSED: if no token is configured, mutation is refused entirely rather
 /// than left open. A management surface with no credential is the vulnerability,
 /// so "not configured" must mean "locked", never "unguarded".
 fn require_admin(headers: &HeaderMap) -> Result<(), DemoError> {
-    let Some(expected) = std::env::var("CARRY_ADMIN_TOKEN")
+    let Some(expected) = std::env::var("COSMOS_ADMIN_TOKEN")
         .ok()
         .filter(|token| !token.trim().is_empty())
     else {
         return Err(demo_error(
             StatusCode::SERVICE_UNAVAILABLE,
-            "Flag administration is disabled: no CARRY_ADMIN_TOKEN is configured.",
+            "Flag administration is disabled: no COSMOS_ADMIN_TOKEN is configured.",
         ));
     };
 
@@ -1188,7 +1188,7 @@ async fn clear_flag(
     Ok(Json(serde_json::json!({ "name": name, "cleared": had })))
 }
 
-/// Restore every observed value — "put it back the way carry had it".
+/// Restore every observed value — "put it back the way cosmos had it".
 async fn reset_flags(headers: HeaderMap) -> Result<Json<serde_json::Value>, DemoError> {
     require_admin(&headers)?;
     let cleared = crate::flag_overrides::clear_all();
@@ -1221,7 +1221,7 @@ struct AdminEnrollment {
     /// Where that verdict came from, in one short constant.
     ///
     /// The flag alone was a lie in every shipped environment: it read THIS
-    /// process's `CARRY_DUC_CA_*`, and the CA lives on the provisioning
+    /// process's `COSMOS_DUC_CA_*`, and the CA lives on the provisioning
     /// workload, so the console reported "No DeviceUser CA" while enrollment was
     /// perfectly configured — and could never have warned when it genuinely was
     /// not. This names which of the two answers you are looking at.
@@ -1250,15 +1250,15 @@ struct AdminOnboarding {
 
 fn onboarding_hint() -> AdminOnboarding {
     AdminOnboarding {
-        endpoint: std::env::var("CARRY_ONBOARDING_ENDPOINT").unwrap_or_default(),
-        authority: std::env::var("CARRY_ONBOARDING_AUTHORITY").unwrap_or_default(),
+        endpoint: std::env::var("COSMOS_ONBOARDING_ENDPOINT").unwrap_or_default(),
+        authority: std::env::var("COSMOS_ONBOARDING_AUTHORITY").unwrap_or_default(),
     }
 }
 
 /// Can a DeviceUser binding actually complete on this deployment?
 ///
 /// This process is the wrong one to ask by inspection. `admin_overview` is
-/// mounted only on the AI-bus workload, `CARRY_DUC_CA_CERT`/`_KEY` are set only
+/// mounted only on the AI-bus workload, `COSMOS_DUC_CA_CERT`/`_KEY` are set only
 /// on the provisioning workload, and the previous implementation read its own
 /// environment — so the operator console reported "No DeviceUser CA" in every
 /// shipped environment, pointing enrollment debugging at a prerequisite that was
@@ -1289,7 +1289,7 @@ async fn duc_ca_status() -> (bool, &'static str) {
 
 async fn probe_peer_duc_ca() -> (bool, &'static str) {
     let workload = cosmos_core::Workload::Provisioning.as_str();
-    let peer_port: u16 = std::env::var("CARRY_PEER_GRPC_PORT")
+    let peer_port: u16 = std::env::var("COSMOS_PEER_GRPC_PORT")
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(15051);
@@ -1944,7 +1944,7 @@ async fn admin_pair(
             StatusCode::SERVICE_UNAVAILABLE,
             "Pairing is unavailable: this deployment has no shared enrollment database, so a \
              pairing recorded here could never be read by the provisioning workload that runs \
-             the ceremony. Set CARRY_DATABASE_URL on both.",
+             the ceremony. Set COSMOS_DATABASE_URL on both.",
         ));
     };
     // Device ids are hex; normalise case exactly like `admin_provision` so one
@@ -2104,7 +2104,7 @@ fn device_status_storage_owner(principal: &AuthenticatedPrincipal, device_id: &s
 }
 
 fn device_status_ca_der() -> Result<Vec<u8>, DemoError> {
-    let path = std::env::var("CARRY_DEVICE_STATUS_CA_CERT").map_err(|_| {
+    let path = std::env::var("COSMOS_DEVICE_STATUS_CA_CERT").map_err(|_| {
         demo_error(
             StatusCode::SERVICE_UNAVAILABLE,
             "Device status trust is not configured.",
@@ -2309,13 +2309,14 @@ async fn admin_device_status(
 }
 
 async fn demo_status(State(state): State<HttpState>) -> Json<DemoStatus> {
-    let assistant = std::env::var("CARRY_LLM_BASE_URL").is_ok_and(|value| !value.trim().is_empty())
+    let assistant = std::env::var("COSMOS_LLM_BASE_URL")
+        .is_ok_and(|value| !value.trim().is_empty())
         && crate::assistant::llm::configured_api_key().is_some();
     let speech = state
         .demo
         .as_ref()
         .is_some_and(|demo| demo.speech.is_some());
-    let model = std::env::var("CARRY_LLM_MODEL")
+    let model = std::env::var("COSMOS_LLM_MODEL")
         .unwrap_or_else(|_| crate::assistant::llm::DEFAULT_LLM_MODEL.to_owned());
     Json(DemoStatus {
         assistant,
@@ -2390,7 +2391,7 @@ fn turn_principal(headers: &HeaderMap) -> Result<AuthenticatedPrincipal, DemoErr
         None => {
             if verifier.is_some() {
                 // The web plane is configured, so a wearer turn was expected to
-                // carry a Bearer and did not — the caller in front of us is not
+                // contain a Bearer and did not — the caller in front of us is not
                 // forwarding it. Worth a line every time: the turn still runs,
                 // but it runs somewhere the wearer cannot read.
                 tracing::warn!(
@@ -2431,7 +2432,7 @@ async fn demo_chat(
     let demo = state.demo.ok_or_else(|| {
         demo_error(
             StatusCode::SERVICE_UNAVAILABLE,
-            "The Carry demo is unavailable.",
+            "The Cosmos demo is unavailable.",
         )
     })?;
     let mut request = Request::new(ServerStatefulUnderstandRequest {
@@ -2525,7 +2526,7 @@ async fn demo_trace(
     let demo = state.demo.ok_or_else(|| {
         demo_error(
             StatusCode::SERVICE_UNAVAILABLE,
-            "The Carry demo is unavailable.",
+            "The Cosmos demo is unavailable.",
         )
     })?;
 
@@ -2685,7 +2686,7 @@ async fn demo_trace_stream(
     let demo = state.demo.ok_or_else(|| {
         demo_error(
             StatusCode::SERVICE_UNAVAILABLE,
-            "The Carry demo is unavailable.",
+            "The Cosmos demo is unavailable.",
         )
     })?;
 
@@ -3057,7 +3058,7 @@ mod tests {
         );
         assert!(
             !payload["reply"].as_str().unwrap_or_default().is_empty(),
-            "trace should carry a spoken reply"
+            "trace should contain a spoken reply"
         );
     }
 
@@ -3095,7 +3096,7 @@ mod tests {
         let device_cn = "V:01:D:pin1:U:alice";
         headers.insert(
             crate::config::EDGE_PRINCIPAL_HEADER,
-            format!("By=spiffe://carry.local/edge;Subject=\"CN={device_cn}\"")
+            format!("By=spiffe://cosmos.local/edge;Subject=\"CN={device_cn}\"")
                 .parse()
                 .unwrap(),
         );
@@ -3572,18 +3573,18 @@ mod admin_gate_tests {
     }
 
     /// The whole point: mutation is refused when no token is configured, not left
-    /// open. This is the failure mode the carry metrics disclosure demonstrated.
+    /// open. This is the failure mode the cosmos metrics disclosure demonstrated.
     #[test]
     fn mutation_fails_closed_when_no_token_is_configured() {
         // SAFETY: single-threaded test; the var is removed immediately after.
-        unsafe { std::env::remove_var("CARRY_ADMIN_TOKEN") };
+        unsafe { std::env::remove_var("COSMOS_ADMIN_TOKEN") };
         let (status, _) = require_admin(&bearer("anything")).unwrap_err();
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     }
 
     #[test]
     fn a_wrong_or_missing_token_is_rejected_and_the_right_one_passes() {
-        unsafe { std::env::set_var("CARRY_ADMIN_TOKEN", "s3cret-operator-token") };
+        unsafe { std::env::set_var("COSMOS_ADMIN_TOKEN", "s3cret-operator-token") };
         assert_eq!(
             require_admin(&bearer("wrong")).unwrap_err().0,
             StatusCode::UNAUTHORIZED,
@@ -3594,12 +3595,12 @@ mod admin_gate_tests {
             "no header at all must be rejected, not defaulted through",
         );
         assert!(require_admin(&bearer("s3cret-operator-token")).is_ok());
-        unsafe { std::env::remove_var("CARRY_ADMIN_TOKEN") };
+        unsafe { std::env::remove_var("COSMOS_ADMIN_TOKEN") };
     }
 
     #[tokio::test]
     async fn sealed_account_ingestion_populates_only_the_named_account_partition() {
-        unsafe { std::env::set_var("CARRY_ADMIN_TOKEN", "s3cret-operator-token") };
+        unsafe { std::env::set_var("COSMOS_ADMIN_TOKEN", "s3cret-operator-token") };
         let store = fresh_store();
         let demo = DemoBackend::new(store.clone());
         let state = HttpState {
@@ -3649,7 +3650,7 @@ mod admin_gate_tests {
             partner.is_ok(),
             "encrypted partner-token write must succeed"
         );
-        unsafe { std::env::remove_var("CARRY_ADMIN_TOKEN") };
+        unsafe { std::env::remove_var("COSMOS_ADMIN_TOKEN") };
 
         let payload = store
             .get_account_blob(

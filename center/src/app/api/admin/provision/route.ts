@@ -1,9 +1,9 @@
 import { cookies } from "next/headers";
 import {
-  CARRY_ADMIN_ENABLED,
-  CARRY_WEBAPI,
+  COSMOS_ADMIN_ENABLED,
+  COSMOS_WEBAPI,
   adminAuthHeaders,
-  carryDeadlineSignal,
+  cosmosDeadlineSignal,
 } from "@/server/cosmos";
 import { sourceHeaders } from "@/server/headers";
 import { isSameOriginRequest, SESSION_COOKIE, verifySession } from "@/server/auth";
@@ -42,9 +42,9 @@ export async function POST(request: Request) {
       { status: 403, headers: NO_STORE },
     );
   }
-  if (!CARRY_ADMIN_ENABLED) {
+  if (!COSMOS_ADMIN_ENABLED) {
     return Response.json(
-      { error: "The operator console is not configured (no CARRY_ADMIN_TOKEN)." },
+      { error: "The operator console is not configured (no COSMOS_ADMIN_TOKEN)." },
       {
         status: 503,
         headers: {
@@ -80,10 +80,10 @@ export async function POST(request: Request) {
   }
 
   try {
-    const res = await fetch(`${CARRY_WEBAPI}/demo-api/admin/provision`, {
+    const res = await fetch(`${COSMOS_WEBAPI}/demo-api/admin/provision`, {
       method: "POST",
       cache: "no-store",
-      signal: carryDeadlineSignal(),
+      signal: cosmosDeadlineSignal(),
       headers: { "content-type": "application/json", ...adminAuthHeaders() },
       body: JSON.stringify({ device_id: deviceId, product: STOCK_PRODUCT }),
     });
@@ -94,9 +94,9 @@ export async function POST(request: Request) {
         ...NO_STORE,
         ...sourceHeaders(
           res.ok
-            ? { source: "carry", state: "live" }
+            ? { source: "cosmos", state: "live" }
             : {
-                source: "carry",
+                source: "cosmos",
                 state: "degraded",
                 fallback: "empty",
                 degraded: `The backend answered ${res.status}.`,

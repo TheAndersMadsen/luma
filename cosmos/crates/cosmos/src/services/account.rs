@@ -294,7 +294,7 @@ mod tests {
     /// synthetic principal and so could not prove isolation.
     fn services() -> (FoodPreferences, UserInformation, WifiConfigs, String) {
         let values = EnvMap::from([(
-            "CARRY_AUTH_MODE".to_owned(),
+            "COSMOS_AUTH_MODE".to_owned(),
             "edge-authenticated".to_owned(),
         )]);
         let config = Config::from_map(&values).expect("edge-authenticated test config");

@@ -10,7 +10,7 @@ write_application_semantic_evidence() {
   case "$mode" in
     public)
       connectivity_url=http://127.0.0.1/
-      center_url=https://carry.andersmadsen.dk/login
+      center_url=https://cosmos.andersmadsen.dk/login
       ;;
     quiesced)
       connectivity_url=http://127.0.0.1:18085/
@@ -21,10 +21,10 @@ write_application_semantic_evidence() {
   {
     printf 'connectivity.ready\t%s\n' "$(http_status http://127.0.0.1:18085/readyz 2>/dev/null || true)"
     printf 'aibus.ready\t%s\n' "$(http_status http://127.0.0.1:18086/readyz 2>/dev/null || true)"
-    printf 'connectivity.authority\t%s\n' "$(http_status -H 'Host: connectivity-check.carry.humane.cloud' "$connectivity_url" 2>/dev/null || true)"
+    printf 'connectivity.authority\t%s\n' "$(http_status -H 'Host: connectivity-check.cosmos.humane.cloud' "$connectivity_url" 2>/dev/null || true)"
     printf 'oidc.discovery\t%s\n' "$(http_status http://127.0.0.1:8088/realms/humane/.well-known/openid-configuration 2>/dev/null || true)"
     if [[ "$mode" == quiesced ]]; then
-      login_status="$(http_status -H 'Host: carry.andersmadsen.dk' "$center_url" 2>/dev/null || true)"
+      login_status="$(http_status -H 'Host: cosmos.andersmadsen.dk' "$center_url" 2>/dev/null || true)"
     else
       login_status="$(http_status "$center_url" 2>/dev/null || true)"
     fi
@@ -68,7 +68,7 @@ write_quiesced_semantic_evidence() { write_application_semantic_evidence "$1" qu
 
 # First-cutover rollback has no canonical release from which to run a canary.
 # Compare only the exact healthy surfaces captured before cutover; legacy did
-# not expose the later n.carry, Center version, or Spotify-adapter contracts.
+# not expose the later n.cosmos, Center version, or Spotify-adapter contracts.
 verify_legacy_application() {
   local snapshot="$1" baseline="${2:-}" current
   verify_recorded_application_identity "$snapshot" || return 1
@@ -99,13 +99,13 @@ verify_quiesced_application() {
 
 # A deployment-minted Center SESSION for the paired owner — and nothing else.
 #
-# Read what this does and does not carry before treating a canary that consumes
+# Read what this does and does not contain before treating a canary that consumes
 # it as proof of the wearer data plane. The jar holds exactly one cookie name,
-# `carry_session`: the HS256 session Center signs with AUTH_SESSION_SECRET. It
-# does NOT hold the separate `carry_tokens` manifest and chunk cookies that
+# `cosmos_session`: the HS256 session Center signs with AUTH_SESSION_SECRET. It
+# does NOT hold the separate `cosmos_tokens` manifest and chunk cookies that
 # Center reassembles into the wearer's Keycloak bearer (TOKENS_COOKIE and its
-# `carry_tokens.N` chunks, center/src/server/auth.ts), so `requestBearer()`
-# returns null for every request made with it, and with CARRY_PRINCIPAL unset
+# `cosmos_tokens.N` chunks, center/src/server/auth.ts), so `requestBearer()`
+# returns null for every request made with it, and with COSMOS_PRINCIPAL unset
 # (which is every production deployment, deliberately) every outbound gRPC call
 # carries no wearer identity and the workload refuses it. Center logs
 # "cosmos: outbound gRPC carries no wearer identity" on each one.
@@ -147,9 +147,9 @@ const token = `${unsigned}.${signature}`;
 const expiry = now + 3600;
 process.stdout.write(
   `# Netscape HTTP Cookie File\n` +
-    `127.0.0.1\tFALSE\t/\tFALSE\t${expiry}\tcarry_session\t${token}\n` +
-    `#HttpOnly_center.andersmadsen.dk\tFALSE\t/\tFALSE\t${expiry}\tcarry_session\t${token}\n` +
-    `#HttpOnly_carry.andersmadsen.dk\tFALSE\t/\tFALSE\t${expiry}\tcarry_session\t${token}\n`,
+    `127.0.0.1\tFALSE\t/\tFALSE\t${expiry}\tcosmos_session\t${token}\n` +
+    `#HttpOnly_center.andersmadsen.dk\tFALSE\t/\tFALSE\t${expiry}\tcosmos_session\t${token}\n` +
+    `#HttpOnly_cosmos.andersmadsen.dk\tFALSE\t/\tFALSE\t${expiry}\tcosmos_session\t${token}\n`,
 );
 NODE
   unset owner_sub
@@ -161,9 +161,9 @@ assert os.stat(sys.argv[1]).st_mode & 0o777 == 0o600
 assert len(data) <= 4096
 assert re.fullmatch(
     r"# Netscape HTTP Cookie File\n"
-    r"127\.0\.0\.1\tFALSE\t/\tFALSE\t[0-9]+\tcarry_session\t(?P<token>[A-Za-z0-9_.-]+)\n"
-    r"#HttpOnly_center\.andersmadsen\.dk\tFALSE\t/\tFALSE\t[0-9]+\tcarry_session\t(?P=token)\n"
-    r"#HttpOnly_carry\.andersmadsen\.dk\tFALSE\t/\tFALSE\t[0-9]+\tcarry_session\t(?P=token)\n",
+    r"127\.0\.0\.1\tFALSE\t/\tFALSE\t[0-9]+\tcosmos_session\t(?P<token>[A-Za-z0-9_.-]+)\n"
+    r"#HttpOnly_center\.andersmadsen\.dk\tFALSE\t/\tFALSE\t[0-9]+\tcosmos_session\t(?P=token)\n"
+    r"#HttpOnly_cosmos\.andersmadsen\.dk\tFALSE\t/\tFALSE\t[0-9]+\tcosmos_session\t(?P=token)\n",
     data,
 )
 PY
@@ -322,7 +322,7 @@ PY
 # The refusal is the gate: Center answers a successful login with 200 and a
 # session cookie whether or not sealTokens produced anything usable, so "the
 # login worked" is not evidence that the bearer plane exists. A jar with a
-# session and no `carry_tokens` manifest is exactly the credential-free jar
+# session and no `cosmos_tokens` manifest is exactly the credential-free jar
 # write_owner_canary_cookie mints, and accepting it here would silently
 # reinstate the blind spot this whole path exists to close.
 #
@@ -352,8 +352,8 @@ for line in open(raw,encoding="utf-8"):
         raise SystemExit("Center's login returned two different values for one cookie")
     cookies[name]=value
 
-session=cookies.get("carry_session")
-manifest=cookies.get("carry_tokens")
+session=cookies.get("cosmos_session")
+manifest=cookies.get("cosmos_tokens")
 if not session:
     raise SystemExit("Center's login set no session cookie")
 if not manifest:
@@ -365,9 +365,9 @@ if not manifest:
 found=re.fullmatch(r"v1:([1-4])",urllib.parse.unquote(manifest))
 if not found:
     raise SystemExit("the sealed token manifest is not the chunk format Center writes")
-ordered=[("carry_session",session),("carry_tokens",manifest)]
+ordered=[("cosmos_session",session),("cosmos_tokens",manifest)]
 for index in range(int(found.group(1))):
-    name=f"carry_tokens.{index}"
+    name=f"cosmos_tokens.{index}"
     value=cookies.get(name)
     if not value:
         raise SystemExit("the sealed token set is missing a chunk its own manifest declares")
@@ -383,7 +383,7 @@ for name,value in ordered:
 
 expiry=int(time.time())+3600
 lines=["# Netscape HTTP Cookie File\n"]
-for host in ("127.0.0.1","#HttpOnly_center.andersmadsen.dk","#HttpOnly_carry.andersmadsen.dk"):
+for host in ("127.0.0.1","#HttpOnly_center.andersmadsen.dk","#HttpOnly_cosmos.andersmadsen.dk"):
     for name,value in ordered:
         lines.append(f"{host}\tFALSE\t/\tFALSE\t{expiry}\t{name}\t{value}\n")
 data="".join(lines)
@@ -449,7 +449,7 @@ import base64,json,re,sys
 value=None
 for line in open(sys.argv[1],encoding="ascii"):
     fields=line.rstrip("\n").split("\t")
-    if len(fields)==7 and fields[5]=="carry_session": value=fields[6]; break
+    if len(fields)==7 and fields[5]=="cosmos_session": value=fields[6]; break
 if not value: raise SystemExit("the canary jar has no session cookie")
 parts=value.split(".")
 if len(parts)!=3: raise SystemExit("the canary session cookie is not a compact JWT")

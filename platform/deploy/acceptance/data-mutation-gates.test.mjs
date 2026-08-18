@@ -16,9 +16,9 @@ import { at } from "./source-offsets.mjs";
  *
  *   1. The RUNTIME half, in cosmos/crates/cosmos/src/store_postgres.rs. Starting
  *      a candidate runs migrations, and the one reviewed data removal in that
- *      history (`DELETE FROM carry_account_blob …`) plus the thumbnail backfill
- *      (`UPDATE carry_memory …`) both rewrite existing rows. Both are now held
- *      back unless CARRY_ALLOW_DATA_REMOVALS is set, so shipping a release
+ *      history (`DELETE FROM cosmos_account_blob …`) plus the thumbnail backfill
+ *      (`UPDATE cosmos_memory …`) both rewrite existing rows. Both are now held
+ *      back unless COSMOS_ALLOW_DATA_REMOVALS is set, so shipping a release
  *      cannot delete or rewrite a wearer's data as a side effect.
  *
  *   2. The DEPLOY half, in remote/staging-smoke.sh + common.sh. The smoke
@@ -78,12 +78,12 @@ test("data removals are off unless the operator asked for them, by exact value",
     store.includes([
       "fn data_removals_enabled() -> bool {",
       "    matches!(",
-      '        std::env::var("CARRY_ALLOW_DATA_REMOVALS").as_deref(),',
+      '        std::env::var("COSMOS_ALLOW_DATA_REMOVALS").as_deref(),',
       '        Ok("1") | Ok("true")',
       "    )",
       "}",
     ].join("\n")),
-    "data_removals_enabled must stay an exact-value match on CARRY_ALLOW_DATA_REMOVALS",
+    "data_removals_enabled must stay an exact-value match on COSMOS_ALLOW_DATA_REMOVALS",
   );
 
   // Two gates, two call sites: the migration loop and the thumbnail backfill.
@@ -115,7 +115,7 @@ test("a migration that removes data is held back, and the release still starts",
   assert.match(store, /^                    continue;$/m);
   // The log line is the only thing that tells an operator a statement did not
   // run and how to run it, so the variable name in it is part of the contract.
-  assert.match(store, /^                         set CARRY_ALLOW_DATA_REMOVALS=1 to run it deliberately"$/m);
+  assert.match(store, /^                         set COSMOS_ALLOW_DATA_REMOVALS=1 to run it deliberately"$/m);
 
   // Order inside migrate(): the guard must precede the execute it guards.
   const guard = at(store, "if !removals_allowed && statement_removes_data(statement) {");
@@ -125,7 +125,7 @@ test("a migration that removes data is held back, and the release still starts",
 
 test("the thumbnail backfill is gated too, because it REWRITES rows the smoke fingerprints", () => {
   /*
-   * backfill_thumbnail_counts is an `UPDATE carry_memory …` — a data repair, not
+   * backfill_thumbnail_counts is an `UPDATE cosmos_memory …` — a data repair, not
    * a migration, precisely so the migration suite's ban on UPDATE stays intact.
    * That makes it invisible to every existing gate: it is not migration text, so
    * every_migration_statement_is_restart_safe_and_non_destructive never sees it,
@@ -422,7 +422,7 @@ test("the stream splitter cannot be fooled by data, and a miscount is fatal", ()
    *
    * Every schema and relation name is interpolated into SQL. That was already
    * true per-statement, but those strings now land in a SCRIPT FILE that psql
-   * reads with -f, so a name carrying a newline could introduce statements of
+   * reads with -f, so a name containing a newline could introduce statements of
    * its own AND desynchronise the marker/plan correspondence at the same time.
    * The guard runs before any name reaches the generated SQL; without it the
    * whole suite still passes.
@@ -476,7 +476,7 @@ test("the stream splitter cannot be fooled by data, and a miscount is fatal", ()
  * The first of those is the dangerous one. It is SILENT: every digest changes,
  * the manifest is still 105 well-formed lines, every count still matches
  * `^[0-9]+$`, every digest still matches `^[0-9a-f]{64}$`, and the whole
- * acceptance suite stayed green. A release carrying it would produce a manifest
+ * acceptance suite stayed green. A release containing it would produce a manifest
  * that disagrees with every other release's about an unchanged cluster — which
  * is precisely the property the batching was allowed to land on.
  *
@@ -661,8 +661,8 @@ SQL
 test("the manifest is still assembled in catalog order and sorted, and the sidecar still tracks it", () => {
   /*
    * The batch collects results into an array and replays them onto relations by
-   * index, which is the one place an off-by-one would put carry_memory's digest
-   * on carry_note's line — a defect that looks exactly like data movement and
+   * index, which is the one place an off-by-one would put cosmos_memory's digest
+   * on cosmos_note's line — a defect that looks exactly like data movement and
    * would fail a deploy for no reason, or worse, pass one.
    *
    * Two structural facts keep that honest: the digest loop walks the SAME array
@@ -716,13 +716,13 @@ test("the manifest is still assembled in catalog order and sorted, and the sidec
 
 test("the row-digest evidence names WHICH rows moved, and carries no wearer values", () => {
   /*
-   * A failed fingerprint comparison says "something in carry_memory changed",
+   * A failed fingerprint comparison says "something in cosmos_memory changed",
    * which costs a whole deploy cycle to turn into "these four rows changed". The
    * per-relation row digests are what close that, and they are digests rather
    * than values ON PURPOSE: this lands in a deployment record on the host, and a
    * wearer's note text must not.
    *
-   * Restricted to the `carry` database for the same reason — Keycloak's tables
+   * Restricted to the `cosmos` database for the same reason — Keycloak's tables
    * hold credential material.
    */
   // The capture lives in the WEARER-table pass, not the full relation sweep:
@@ -850,7 +850,7 @@ test("the staging smoke refuses a candidate that moved a row, and keeps the proo
  *      fourth argument its own call sites already passed was silently
  *      discarded. The AFTER capture was therefore NOT projected onto the BEFORE
  *      columns, so cosmos/migrations/0004_listing.sql adding
- *      `carry_memory.thumbnail_count` (`ADD COLUMN IF NOT EXISTS` — additive,
+ *      `cosmos_memory.thumbnail_count` (`ADD COLUMN IF NOT EXISTS` — additive,
  *      and explicitly permitted by this project's migration policy) changed
  *      every row's `to_jsonb` and failed the deploy with "candidate startup
  *      changed PostgreSQL relation data" without a wearer byte moving. That

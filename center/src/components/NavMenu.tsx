@@ -9,14 +9,14 @@ import { AccountAvatar, ChevronLeft } from "@/icons";
 /**
  * Is the operator console actually configured on this deployment?
  *
- * `/api/admin/overview` answers **503 and only 503** for "no CARRY_ADMIN_TOKEN on
+ * `/api/admin/overview` answers **503 and only 503** for "no COSMOS_ADMIN_TOKEN on
  * this dashboard" — a build-time fact. A backend that is down comes back 502, a
  * shared secret that disagrees comes back as a proxied 401, and both of those
  * mean the token IS set and something downstream broke. `/admin` has always
  * branched on exactly that split (admin/page.tsx `explainUpstream`); this hook
  * used to collapse every non-ok answer into "not configured", so a momentary
  * outage deleted the Console entry from the nav and made /settings/about state
- * "No CARRY_ADMIN_TOKEN is set" — a false claim about the deployment's own
+ * "No COSMOS_ADMIN_TOKEN is set" — a false claim about the deployment's own
  * configuration, made at the exact moment an operator is diagnosing the outage.
  *
  * Three answers, because there are three things we can know:
@@ -187,7 +187,7 @@ export function NavMenu() {
             </Link>
           </div>
 
-          {/* Hidden only when this deployment has no CARRY_ADMIN_TOKEN (the link
+          {/* Hidden only when this deployment has no COSMOS_ADMIN_TOKEN (the link
               would land on a "not configured" card) or while the answer is
               unknown. A configured console whose backend is failing KEEPS its
               entry — that page is where the failure gets explained. */}

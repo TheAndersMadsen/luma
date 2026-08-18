@@ -1,4 +1,4 @@
-//! Clean-room implementation of the Carry service-scoped encrypted envelope.
+//! Clean-room implementation of the Cosmos service-scoped encrypted envelope.
 //!
 //! Independently authored from a behavioral specification of the client crypto
 //! contracts (algorithms, sizes, field layout) — not copied from any private
@@ -12,10 +12,10 @@
 
 #![allow(clippy::all, dead_code, unused_imports)]
 #[allow(non_snake_case, non_camel_case_types, unused_imports, clippy::all)]
-mod carry_ciphertext_generated;
+mod cosmos_ciphertext_generated;
 pub mod secure_asset;
 mod secure_asset_generated;
-use carry_ciphertext_generated::carry::krypton::{
+use cosmos_ciphertext_generated::cosmos::krypton::{
     CiphertextEnvelope, CiphertextEnvelopeArgs, KrAlgorithm,
 };
 
@@ -160,7 +160,7 @@ fn encode_envelope(kid: &[u8], aad: &[u8], iv: &[u8], tag: &[u8], ct: &[u8]) -> 
     );
     // Finish WITH the "HMCT" file identifier (written at bytes [4..8)) to match
     // the client's KrCiphertextEnvelope buffers byte-for-byte.
-    carry_ciphertext_generated::carry::krypton::finish_ciphertext_envelope_buffer(&mut fbb, env);
+    cosmos_ciphertext_generated::cosmos::krypton::finish_ciphertext_envelope_buffer(&mut fbb, env);
     fbb.finished_data().to_vec()
 }
 
@@ -195,7 +195,7 @@ pub struct WrappingKeypair {
 }
 
 impl WrappingKeypair {
-    /// Generate a fresh RSA-OAEP wrapping keypair (4096-bit, matching carry).
+    /// Generate a fresh RSA-OAEP wrapping keypair (4096-bit, matching cosmos).
     pub fn generate() -> Result<Self, CryptoError> {
         use rsa::pkcs8::EncodePublicKey;
         let mut rng = rand::thread_rng();

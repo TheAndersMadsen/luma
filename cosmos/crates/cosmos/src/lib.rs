@@ -116,7 +116,7 @@ where
 
     let readiness = Readiness::default();
     let demo_enabled = config.identity.workload() == cosmos_core::Workload::AiBus
-        && std::env::var("CARRY_DEMO_ENABLED").is_ok_and(|value| {
+        && std::env::var("COSMOS_DEMO_ENABLED").is_ok_and(|value| {
             matches!(
                 value.trim().to_ascii_lowercase().as_str(),
                 "1" | "true" | "yes"
@@ -676,12 +676,12 @@ mod tests {
         let http_address = unused_loopback_address().await;
         let values = HashMap::from([
             (
-                "CARRY_AUTH_MODE".to_owned(),
+                "COSMOS_AUTH_MODE".to_owned(),
                 "development-insecure".to_owned(),
             ),
-            ("CARRY_GRPC_BIND".to_owned(), grpc_address.to_string()),
-            ("CARRY_HTTP_BIND".to_owned(), http_address.to_string()),
-            ("CARRY_SHUTDOWN_GRACE_MS".to_owned(), "2000".to_owned()),
+            ("COSMOS_GRPC_BIND".to_owned(), grpc_address.to_string()),
+            ("COSMOS_HTTP_BIND".to_owned(), http_address.to_string()),
+            ("COSMOS_SHUTDOWN_GRACE_MS".to_owned(), "2000".to_owned()),
         ]);
         let config = Config::from_map(&values).expect("local test config");
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();

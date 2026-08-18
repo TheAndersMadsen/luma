@@ -339,7 +339,7 @@ sudo -n nginx -t >/dev/null
 if ((nginx_stopped == 0)); then sudo -n systemctl reload nginx; fi
 
 if ((nginx_stopped == 0)); then
-  for host in connectivity-check.carry.humane.cloud n.carry.humane.cloud; do
+  for host in connectivity-check.cosmos.humane.cloud n.cosmos.humane.cloud; do
     [[ "$(curl --silent --show-error --max-time 5 -o /dev/null -w '%{http_code}' -H "Host: $host" http://127.0.0.1/)" == 204 ]]
     [[ "$(curl --silent --show-error --max-time 5 -I -o /dev/null -w '%{http_code}' -H "Host: $host" http://127.0.0.1/)" == 204 ]]
     [[ "$(curl --silent --show-error --max-time 5 -X POST -o /dev/null -w '%{http_code}' -H "Host: $host" http://127.0.0.1/)" == 405 ]]

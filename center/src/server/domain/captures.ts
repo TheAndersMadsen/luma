@@ -12,9 +12,9 @@
 import { channelKeyForSealed } from "../channel";
 import { open as openEnvelope } from "../envelope";
 import {
-  CARRY_ENABLED,
-  CARRY_WEBAPI,
-  CARRY_WEBAPI_ENABLED,
+  COSMOS_ENABLED,
+  COSMOS_WEBAPI,
+  COSMOS_WEBAPI_ENABLED,
   Services,
   SessionExpiredError,
   call,
@@ -45,20 +45,20 @@ export async function getCaptureFrame(
   uuid: string,
   index: number,
 ): Promise<{ bytes: Buffer; contentType: string } | null> {
-  if (!CARRY_WEBAPI_ENABLED) return null;
+  if (!COSMOS_WEBAPI_ENABLED) return null;
   try {
     // Same wearer identity as every other webapi read, or the frame resolves in
     // the demo account rather than the caller's and 404s. Resolved BEFORE the
     // deadline is started, so the clock covers the backend call rather than
     // being spent on a slow token refresh.
     const headers = await webapiHeaders();
-    const res = await fetch(`${CARRY_WEBAPI}/capture/memory/${encodeURIComponent(uuid)}/thumbnail/${index}`, {
+    const res = await fetch(`${COSMOS_WEBAPI}/capture/memory/${encodeURIComponent(uuid)}/thumbnail/${index}`, {
       cache: "no-store",
       headers,
       /*
        * The only webapi call in this seam that had no deadline. Every sibling —
        * webapiGet, webapiPost, webapiDelete, getCaptureOriginal twenty lines
-       * down — bounds the same host at CARRY_DEADLINE_MS; nothing says this one
+       * down — bounds the same host at COSMOS_DEADLINE_MS; nothing says this one
        * is meant to be different (the prose that calls it "deliberately
        * different" is about buffering, not timeouts).
        *
@@ -71,14 +71,14 @@ export async function getCaptureFrame(
        * null — the route's 404 and the tile's honest "Media unavailable", which
        * is what should have happened in the first place.
        */
-      signal: AbortSignal.timeout(Number(process.env.CARRY_DEADLINE_MS ?? 8000)),
+      signal: AbortSignal.timeout(Number(process.env.COSMOS_DEADLINE_MS ?? 8000)),
     });
     if (!res.ok) return null;
     const payload = Buffer.from(await res.arrayBuffer());
-    const projection = res.headers.get("x-carry-projection");
+    const projection = res.headers.get("x-cosmos-projection");
     const servedType = res.headers.get("content-type")?.split(";", 1)[0]?.trim() ?? "";
 
-    // Carry releases plaintext only after verifying the web Bearer and
+    // Cosmos releases plaintext only after verifying the web Bearer and
     // authenticating the stock Capture/Thumbnail HMSA binding. Do not run that
     // JPEG through Center's unrelated HMCT channel key.
     if (projection === "opened" && servedType.startsWith("image/")) {
@@ -141,7 +141,7 @@ export function responseBytes(bytes: Buffer): Uint8Array<ArrayBuffer> {
  * Open the full-resolution file the stock photography worker uploaded.
  *
  * Returned as a STREAM. Every check this makes reads response headers — the
- * `x-carry-projection` verdict and the content type — and none of them reads the
+ * `x-cosmos-projection` verdict and the content type — and none of them reads the
  * body, so there is no reason to hold a full-resolution original in the BFF's
  * heap before handing it on. `getCaptureFrame` above is deliberately different:
  * its legacy HMCT branch opens an envelope over the whole buffer and must
@@ -151,13 +151,13 @@ export async function getCaptureOriginal(
   uuid: string,
   file: number,
 ): Promise<CaptureStream | null> {
-  if (!CARRY_WEBAPI_ENABLED) return null;
+  if (!COSMOS_WEBAPI_ENABLED) return null;
   // Headers first, then the deadline — see webapiGet.
   const headers = await webapiHeaders();
   const res = await fetch(
-    `${CARRY_WEBAPI}/capture/memory/${encodeURIComponent(uuid)}/file/${file}`,
+    `${COSMOS_WEBAPI}/capture/memory/${encodeURIComponent(uuid)}/file/${file}`,
     {
-      signal: AbortSignal.timeout(Number(process.env.CARRY_DEADLINE_MS ?? 8000)),
+      signal: AbortSignal.timeout(Number(process.env.COSMOS_DEADLINE_MS ?? 8000)),
       cache: "no-store",
       headers,
     },
@@ -182,7 +182,7 @@ export async function getSharedCaptureFrame(
   index: number,
   userId: string,
 ): Promise<{ bytes: Buffer; contentType: string } | null> {
-  if (!CARRY_WEBAPI_ENABLED) return null;
+  if (!COSMOS_WEBAPI_ENABLED) return null;
   const res = await webapiGetForUser(
     `/capture/memory/${encodeURIComponent(uuid)}/thumbnail/${index}`,
     userId,
@@ -203,7 +203,7 @@ export async function getSharedCaptureFrame(
  */
 function assertOpenedImage(res: Response, what: string): string {
   const contentType = res.headers.get("content-type")?.split(";", 1)[0]?.trim() ?? "";
-  if (res.headers.get("x-carry-projection") !== "opened" || !contentType.startsWith("image/")) {
+  if (res.headers.get("x-cosmos-projection") !== "opened" || !contentType.startsWith("image/")) {
     void res.body?.cancel().catch(() => undefined);
     throw new Error(`${what} projection returned sealed or non-image data`);
   }
@@ -252,7 +252,7 @@ interface MemoryDto {
  * an explanation so an empty result does not imply the wearer has no captures.
  */
 const WEBAPI_UNSET =
-  "CARRY_WEBAPI_BASE_URL is unset - this Center cannot read the wearer's captures";
+  "COSMOS_WEBAPI_BASE_URL is unset - this Center cannot read the wearer's captures";
 
 function memoryDtoToCapture(m: MemoryDto): CaptureRecord {
   return {
@@ -281,7 +281,7 @@ function memoryDtoToCapture(m: MemoryDto): CaptureRecord {
 export async function getCaptures(
   size: number = STOCK_PAGE_SIZE,
 ): Promise<Sourced<CaptureRecord[]>> {
-  if (!CARRY_WEBAPI_ENABLED) return unconfigured([], "empty", WEBAPI_UNSET);
+  if (!COSMOS_WEBAPI_ENABLED) return unconfigured([], "empty", WEBAPI_UNSET);
   try {
     const page = await webapiGet<SpringPage<MemoryDto>>(
       `/capture/captures?size=${boundedPageSize(size)}`,
@@ -298,7 +298,7 @@ export async function getCaptures(
 }
 
 export async function getCapture(uuid: string): Promise<CaptureRecord | null> {
-  if (!CARRY_WEBAPI_ENABLED) return null;
+  if (!COSMOS_WEBAPI_ENABLED) return null;
   const memory = await webapiGet<MemoryDto>(`/capture/memory/${encodeURIComponent(uuid)}`);
   return memoryDtoToCapture(memory);
 }
@@ -309,9 +309,9 @@ export interface BestFrameResult {
   reason: string;
 }
 
-/** Ask Carry to rank an already-uploaded burst; it caches the answer. */
+/** Ask Cosmos to rank an already-uploaded burst; it caches the answer. */
 export async function rankCapture(uuid: string, force = false): Promise<BestFrameResult> {
-  if (!CARRY_WEBAPI_ENABLED) throw new Error(WEBAPI_UNSET);
+  if (!COSMOS_WEBAPI_ENABLED) throw new Error(WEBAPI_UNSET);
   return webapiPost<BestFrameResult>(
     `/capture/memory/${encodeURIComponent(uuid)}/best_photo${force ? "?force=true" : ""}`,
   );
@@ -322,7 +322,7 @@ export async function setCaptureBestFrame(
   uuid: string,
   frame: number,
 ): Promise<BestFrameResult> {
-  if (!CARRY_WEBAPI_ENABLED) throw new Error(WEBAPI_UNSET);
+  if (!COSMOS_WEBAPI_ENABLED) throw new Error(WEBAPI_UNSET);
   return webapiPost<BestFrameResult>(
     `/capture/memory/${encodeURIComponent(uuid)}/bestFrame?frame=${frame}`,
   );
@@ -334,7 +334,7 @@ export async function setCaptureBestFrame(
  *
  * This exists because /api/health used to probe the gRPC plane alone. The two
  * are separate processes on separate ports with different credentials
- * (`webapiHeaders` sends no CARRY_EDGE_TOKEN), so a healthy gRPC side says
+ * (`webapiHeaders` sends no COSMOS_EDGE_TOKEN), so a healthy gRPC side says
  * nothing about whether captures are the wearer's own. With the REST side down,
  * the capture surface stays empty and reports its degraded state.
  *
@@ -355,7 +355,7 @@ export async function setCaptureBestFrame(
  * Carries no data — the answer is the state, not the page.
  */
 export async function getWebapiHealth(): Promise<Sourced<null>> {
-  if (!CARRY_WEBAPI_ENABLED) return unconfigured(null, "empty", WEBAPI_UNSET);
+  if (!COSMOS_WEBAPI_ENABLED) return unconfigured(null, "empty", WEBAPI_UNSET);
   try {
     await webapiGet<SpringPage<MemoryDto>>("/capture/captures?size=1");
     return live(null);
@@ -376,7 +376,7 @@ export async function getWebapiHealth(): Promise<Sourced<null>> {
  */
 const DELETE_DONE = new Set(["DELETE_MEMORY_STATUS_SUCCESS", "DELETE_MEMORY_STATUS_NOT_FOUND"]);
 
-/** Read after the word "carry", so each reads as a sentence about the backend. */
+/** Read after the word "cosmos", so each reads as a sentence about the backend. */
 const DELETE_REFUSED: Record<string, string> = {
   DELETE_MEMORY_STATUS_FAILURE: "answered FAILURE: it deleted nothing",
   DELETE_MEMORY_STATUS_NOT_AUTHORIZED:
@@ -385,8 +385,8 @@ const DELETE_REFUSED: Record<string, string> = {
 };
 
 export async function deleteMemory(uuid: string): Promise<Sourced<null>> {
-  if (!CARRY_ENABLED) {
-    return unconfigured(null, "empty", "carry not configured; nothing deleted");
+  if (!COSMOS_ENABLED) {
+    return unconfigured(null, "empty", "cosmos not configured; nothing deleted");
   }
   try {
     // proto-loader is configured with enums:"String" and defaults:true, so this
@@ -398,7 +398,7 @@ export async function deleteMemory(uuid: string): Promise<Sourced<null>> {
     );
     const status = res?.status ?? "DELETE_MEMORY_STATUS_UNSPECIFIED";
     if (DELETE_DONE.has(status)) return live(null);
-    return failed(null, `carry ${DELETE_REFUSED[status] ?? `answered ${status}`}`, "empty");
+    return failed(null, `cosmos ${DELETE_REFUSED[status] ?? `answered ${status}`}`, "empty");
   } catch (error) {
     return failedGrpc(null, error);
   }

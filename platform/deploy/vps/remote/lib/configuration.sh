@@ -9,21 +9,21 @@ prepare_private_copies() {
   mkdir -p -- "$PRIVATE_DIR/imported"
   chmod 700 "$PRIVATE_DIR/imported"
 
-  copy_file_once /home/anders/humane-carry-clone/.env "$RUNTIME_ENV" || true
-  copy_file_once /home/anders/carry-center.env "$CENTER_ENV" || true
-  copy_file_once /home/anders/carry-backends.env "$PRIVATE_DIR/imported/carry-backends.env" || true
+  copy_file_once /home/anders/humane-cosmos-clone/.env "$RUNTIME_ENV" || true
+  copy_file_once /home/anders/cosmos-center.env "$CENTER_ENV" || true
+  copy_file_once /home/anders/cosmos-backends.env "$PRIVATE_DIR/imported/cosmos-backends.env" || true
 
   # Provider credentials are intentionally scoped to ai-bus. Preserve the old
   # file byte-for-byte in imported/, then derive two canonical files without
   # ever sourcing or displaying their contents.
-  local source="$PRIVATE_DIR/imported/carry-backends.env"
+  local source="$PRIVATE_DIR/imported/cosmos-backends.env"
   if [[ ! -f "$PROVIDER_ENV" && -f "$source" ]]; then
       awk '
         /^[[:space:]]*#/ { print; next }
         /^[[:space:]]*$/ { print; next }
         {
           name=$0; sub(/=.*/, "", name); gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
-          if (name ~ /^(AZURE_|CARRY_AZURE_|CARRY_LLM_|CARRY_OPENROUTER_API_KEY$|CARRY_INTERSTITIAL_|CARRY_SERPAPI_KEY$|CARRY_GOOGLE_MAPS_KEY$|CARRY_PIRATE_WEATHER_KEY$|CARRY_WOLFRAM_APP_ID$|CARRY_PPLX_|CARRY_MUSICBRAINZ_|CARRY_SHOPPING_|OPENAI_|OPENROUTER_)/) print
+          if (name ~ /^(AZURE_|COSMOS_AZURE_|COSMOS_LLM_|COSMOS_OPENROUTER_API_KEY$|COSMOS_INTERSTITIAL_|COSMOS_SERPAPI_KEY$|COSMOS_GOOGLE_MAPS_KEY$|COSMOS_PIRATE_WEATHER_KEY$|COSMOS_WOLFRAM_APP_ID$|COSMOS_PPLX_|COSMOS_MUSICBRAINZ_|COSMOS_SHOPPING_|OPENAI_|OPENROUTER_)/) print
         }
       ' "$source" >"$PROVIDER_ENV"
       chmod 600 "$PROVIDER_ENV"
@@ -34,7 +34,7 @@ prepare_private_copies() {
         /^[[:space:]]*$/ { print; next }
         {
           name=$0; sub(/=.*/, "", name); gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
-          if (name !~ /^(AZURE_|CARRY_AZURE_|CARRY_LLM_|CARRY_OPENROUTER_API_KEY$|CARRY_INTERSTITIAL_|CARRY_SERPAPI_KEY$|CARRY_GOOGLE_MAPS_KEY$|CARRY_PIRATE_WEATHER_KEY$|CARRY_WOLFRAM_APP_ID$|CARRY_PPLX_|CARRY_MUSICBRAINZ_|CARRY_SHOPPING_|OPENAI_|OPENROUTER_)/) print
+          if (name !~ /^(AZURE_|COSMOS_AZURE_|COSMOS_LLM_|COSMOS_OPENROUTER_API_KEY$|COSMOS_INTERSTITIAL_|COSMOS_SERPAPI_KEY$|COSMOS_GOOGLE_MAPS_KEY$|COSMOS_PIRATE_WEATHER_KEY$|COSMOS_WOLFRAM_APP_ID$|COSMOS_PPLX_|COSMOS_MUSICBRAINZ_|COSMOS_SHOPPING_|OPENAI_|OPENROUTER_)/) print
         }
       ' "$source" >"$COSMOS_ENV"
       chmod 600 "$COSMOS_ENV"
@@ -45,9 +45,9 @@ prepare_private_copies() {
     chmod 600 "$file"
   done
 
-  copy_tree_once /home/anders/carry-edge "$PRIVATE_DIR/edge" || true
-  copy_tree_once /home/anders/carry-attest "$PRIVATE_DIR/attest" || true
-  copy_tree_once /home/anders/carry-duc "$PRIVATE_DIR/duc" || true
+  copy_tree_once /home/anders/cosmos-edge "$PRIVATE_DIR/edge" || true
+  copy_tree_once /home/anders/cosmos-attest "$PRIVATE_DIR/attest" || true
+  copy_tree_once /home/anders/cosmos-duc "$PRIVATE_DIR/duc" || true
   copy_tree_once /home/anders/keycloak-themes/humane "$PRIVATE_DIR/keycloak-theme" || true
 }
 
@@ -62,25 +62,25 @@ stage_private_configuration() {
   chmod 700 "$destination"
 
   source="$RUNTIME_ENV"
-  [[ -f "$source" ]] || source=/home/anders/humane-carry-clone/.env
+  [[ -f "$source" ]] || source=/home/anders/humane-cosmos-clone/.env
   [[ -f "$source" ]] && install -m 600 "$source" "$destination/runtime.env" || install -m 600 /dev/null "$destination/runtime.env"
 
   source="$CENTER_ENV"
-  [[ -f "$source" ]] || source=/home/anders/carry-center.env
+  [[ -f "$source" ]] || source=/home/anders/cosmos-center.env
   [[ -f "$source" ]] && install -m 600 "$source" "$destination/center.env" || install -m 600 /dev/null "$destination/center.env"
 
   if [[ -f "$PROVIDER_ENV" ]]; then
     install -m 600 "$PROVIDER_ENV" "$destination/providers.env"
   else
-    source="$PRIVATE_DIR/imported/carry-backends.env"
-    [[ -f "$source" ]] || source=/home/anders/carry-backends.env
+    source="$PRIVATE_DIR/imported/cosmos-backends.env"
+    [[ -f "$source" ]] || source=/home/anders/cosmos-backends.env
     [[ -f "$source" ]] || fail "provider configuration source is missing"
     awk '
       /^[[:space:]]*#/ { print; next }
       /^[[:space:]]*$/ { print; next }
       {
         name=$0; sub(/=.*/, "", name); gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
-        if (name ~ /^(AZURE_|CARRY_AZURE_|CARRY_LLM_|CARRY_OPENROUTER_API_KEY$|CARRY_INTERSTITIAL_|CARRY_SERPAPI_KEY$|CARRY_GOOGLE_MAPS_KEY$|CARRY_PIRATE_WEATHER_KEY$|CARRY_WOLFRAM_APP_ID$|CARRY_PPLX_|CARRY_MUSICBRAINZ_|CARRY_SHOPPING_|OPENAI_|OPENROUTER_)/) print
+        if (name ~ /^(AZURE_|COSMOS_AZURE_|COSMOS_LLM_|COSMOS_OPENROUTER_API_KEY$|COSMOS_INTERSTITIAL_|COSMOS_SERPAPI_KEY$|COSMOS_GOOGLE_MAPS_KEY$|COSMOS_PIRATE_WEATHER_KEY$|COSMOS_WOLFRAM_APP_ID$|COSMOS_PPLX_|COSMOS_MUSICBRAINZ_|COSMOS_SHOPPING_|OPENAI_|OPENROUTER_)/) print
       }
     ' "$source" >"$destination/providers.env"
   fi
@@ -88,15 +88,15 @@ stage_private_configuration() {
   if [[ -f "$COSMOS_ENV" ]]; then
     install -m 600 "$COSMOS_ENV" "$destination/cosmos.env"
   else
-    source="$PRIVATE_DIR/imported/carry-backends.env"
-    [[ -f "$source" ]] || source=/home/anders/carry-backends.env
+    source="$PRIVATE_DIR/imported/cosmos-backends.env"
+    [[ -f "$source" ]] || source=/home/anders/cosmos-backends.env
     [[ -f "$source" ]] || fail "Cosmos configuration source is missing"
     awk '
       /^[[:space:]]*#/ { print; next }
       /^[[:space:]]*$/ { print; next }
       {
         name=$0; sub(/=.*/, "", name); gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
-        if (name !~ /^(AZURE_|CARRY_AZURE_|CARRY_LLM_|CARRY_OPENROUTER_API_KEY$|CARRY_INTERSTITIAL_|CARRY_SERPAPI_KEY$|CARRY_GOOGLE_MAPS_KEY$|CARRY_PIRATE_WEATHER_KEY$|CARRY_WOLFRAM_APP_ID$|CARRY_PPLX_|CARRY_MUSICBRAINZ_|CARRY_SHOPPING_|OPENAI_|OPENROUTER_)/) print
+        if (name !~ /^(AZURE_|COSMOS_AZURE_|COSMOS_LLM_|COSMOS_OPENROUTER_API_KEY$|COSMOS_INTERSTITIAL_|COSMOS_SERPAPI_KEY$|COSMOS_GOOGLE_MAPS_KEY$|COSMOS_PIRATE_WEATHER_KEY$|COSMOS_WOLFRAM_APP_ID$|COSMOS_PPLX_|COSMOS_MUSICBRAINZ_|COSMOS_SHOPPING_|OPENAI_|OPENROUTER_)/) print
       }
     ' "$source" >"$destination/cosmos.env"
   fi
@@ -151,9 +151,9 @@ import json, re, sys
 ALLOWED = {
     "KEYCLOAK_SCOPES": ("center.env", "scopes"),
     "REVIVAL_SPOTIFY_ADAPTER_TIMEOUT_MS": ("runtime.env", "timeout"),
-    "CARRY_AZURE_SPEECH_VOICE": ("providers.env", "voice"),
-    "CARRY_LLM_MODEL": ("providers.env", "model"),
-    "CARRY_VISION_MODEL": ("runtime.env", "model"),
+    "COSMOS_AZURE_SPEECH_VOICE": ("providers.env", "voice"),
+    "COSMOS_LLM_MODEL": ("providers.env", "model"),
+    "COSMOS_VISION_MODEL": ("runtime.env", "model"),
 }
 MODEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*(?::[A-Za-z0-9][A-Za-z0-9._-]*)?$")
 VOICE = re.compile(r"^[a-z]{2}-[A-Z]{2}-[A-Za-z0-9]+$")
@@ -242,21 +242,21 @@ normalize_compatibility_aliases() {
 import os,sys,tempfile
 path=sys.argv[1]
 mapping={
-  "REVIVAL_AUTH_MODE":"CARRY_AUTH_MODE",
-  "REVIVAL_EDGE_TOKEN":"CARRY_EDGE_TOKEN",
-  "REVIVAL_SHARE_TOKEN_SECRET":"CARRY_SHARE_TOKEN_SECRET",
-  "REVIVAL_CENTER_PROJECTION_TOKEN":"CARRY_CENTER_PROJECTION_TOKEN",
-  "REVIVAL_ADMIN_TOKEN":"CARRY_ADMIN_TOKEN",
-  "REVIVAL_OPAQUE_SEED":"CARRY_OPAQUE_SEED",
-  "REVIVAL_REMOTE_TTS_ENABLED":"CARRY_REMOTE_TTS_ENABLED",
-  "AZURE_SPEECH_KEY":"CARRY_AZURE_SPEECH_KEY",
-  "AZURE_SPEECH_REGION":"CARRY_AZURE_SPEECH_REGION",
-  "AZURE_SPEECH_VOICE":"CARRY_AZURE_SPEECH_VOICE",
-  "REVIVAL_ENROLLMENT_PINCODE":"CARRY_ENROLLMENT_PINCODE",
-  "REVIVAL_ENROLLMENT_USER_ID":"CARRY_ENROLLMENT_USER_ID",
-  "REVIVAL_DUC_CA_CERT":"CARRY_DUC_CA_CERT",
-  "REVIVAL_DUC_CA_KEY":"CARRY_DUC_CA_KEY",
-  "REVIVAL_OPERATOR_EMAILS":"CARRY_OPERATOR_EMAILS",
+  "REVIVAL_AUTH_MODE":"COSMOS_AUTH_MODE",
+  "REVIVAL_EDGE_TOKEN":"COSMOS_EDGE_TOKEN",
+  "REVIVAL_SHARE_TOKEN_SECRET":"COSMOS_SHARE_TOKEN_SECRET",
+  "REVIVAL_CENTER_PROJECTION_TOKEN":"COSMOS_CENTER_PROJECTION_TOKEN",
+  "REVIVAL_ADMIN_TOKEN":"COSMOS_ADMIN_TOKEN",
+  "REVIVAL_OPAQUE_SEED":"COSMOS_OPAQUE_SEED",
+  "REVIVAL_REMOTE_TTS_ENABLED":"COSMOS_REMOTE_TTS_ENABLED",
+  "AZURE_SPEECH_KEY":"COSMOS_AZURE_SPEECH_KEY",
+  "AZURE_SPEECH_REGION":"COSMOS_AZURE_SPEECH_REGION",
+  "AZURE_SPEECH_VOICE":"COSMOS_AZURE_SPEECH_VOICE",
+  "REVIVAL_ENROLLMENT_PINCODE":"COSMOS_ENROLLMENT_PINCODE",
+  "REVIVAL_ENROLLMENT_USER_ID":"COSMOS_ENROLLMENT_USER_ID",
+  "REVIVAL_DUC_CA_CERT":"COSMOS_DUC_CA_CERT",
+  "REVIVAL_DUC_CA_KEY":"COSMOS_DUC_CA_KEY",
+  "REVIVAL_OPERATOR_EMAILS":"COSMOS_OPERATOR_EMAILS",
 }
 lines=open(path,encoding="utf-8").readlines() if os.path.exists(path) else []
 values={}
@@ -288,7 +288,7 @@ merge_scoped_provider_values() {
   python3 - "$source" "$destination" <<'PY'
 import os,re,sys,tempfile
 source,destination=sys.argv[1:]
-allowed=re.compile(r"^(?:AZURE_|CARRY_AZURE_|CARRY_LLM_|CARRY_OPENROUTER_API_KEY$|CARRY_INTERSTITIAL_|CARRY_SERPAPI_KEY$|CARRY_GOOGLE_MAPS_KEY$|CARRY_PIRATE_WEATHER_KEY$|CARRY_WOLFRAM_APP_ID$|CARRY_PPLX_|CARRY_MUSICBRAINZ_|CARRY_SHOPPING_|OPENAI_|OPENROUTER_)")
+allowed=re.compile(r"^(?:AZURE_|COSMOS_AZURE_|COSMOS_LLM_|COSMOS_OPENROUTER_API_KEY$|COSMOS_INTERSTITIAL_|COSMOS_SERPAPI_KEY$|COSMOS_GOOGLE_MAPS_KEY$|COSMOS_PIRATE_WEATHER_KEY$|COSMOS_WOLFRAM_APP_ID$|COSMOS_PPLX_|COSMOS_MUSICBRAINZ_|COSMOS_SHOPPING_|OPENAI_|OPENROUTER_)")
 def parse(path):
     values={}
     if os.path.exists(path):
@@ -335,11 +335,11 @@ capture_live_center_env() {
 import json, os, sys, tempfile
 destination,inspection=sys.argv[1:]
 allowed={
-    "AUTH_SESSION_SECRET", "KEYCLOAK_CLIENT_SECRET", "CARRY_ADMIN_TOKEN",
-    "CARRY_CENTER_PROJECTION_TOKEN", "CARRY_SHARE_TOKEN_SECRET",
-    "CARRY_OPERATOR_EMAILS", "KEYCLOAK_BASE_URL", "KEYCLOAK_REALM",
-    "KEYCLOAK_CLIENT_ID", "KEYCLOAK_SCOPES", "CARRY_OIDC_ISSUER",
-    "CARRY_OIDC_JWKS_URI", "CARRY_OIDC_AUDIENCE",
+    "AUTH_SESSION_SECRET", "KEYCLOAK_CLIENT_SECRET", "COSMOS_ADMIN_TOKEN",
+    "COSMOS_CENTER_PROJECTION_TOKEN", "COSMOS_SHARE_TOKEN_SECRET",
+    "COSMOS_OPERATOR_EMAILS", "KEYCLOAK_BASE_URL", "KEYCLOAK_REALM",
+    "KEYCLOAK_CLIENT_ID", "KEYCLOAK_SCOPES", "COSMOS_OIDC_ISSUER",
+    "COSMOS_OIDC_JWKS_URI", "COSMOS_OIDC_AUDIENCE",
 }
 raw=open(inspection,encoding="utf-8").read()
 values={}
@@ -373,8 +373,8 @@ PY
 
 derive_paired_identity() {
   local postgres="$1" rows device_id account_sub keycloak_count
-  rows="$(docker exec "$postgres" psql -v ON_ERROR_STOP=1 -U carry -d carry -AtF $'\t' -c \
-    'select device_id, account_sub from carry_device_account order by paired_at_epoch, device_id')"
+  rows="$(docker exec "$postgres" psql -v ON_ERROR_STOP=1 -U cosmos -d cosmos -AtF $'\t' -c \
+    'select device_id, account_sub from cosmos_device_account order by paired_at_epoch, device_id')"
   [[ -n "$rows" && "$(printf '%s\n' "$rows" | sed '/^$/d' | wc -l | tr -d '[:space:]')" == 1 ]] \
     || fail "expected exactly one durable Pin pairing"
   IFS=$'\t' read -r device_id account_sub <<<"$rows"
@@ -382,7 +382,7 @@ derive_paired_identity() {
     || fail "durable Pin pairing is malformed"
   local account_sub_sql
   account_sub_sql="${account_sub//\'/''}"
-  keycloak_count="$(docker exec "$postgres" psql -v ON_ERROR_STOP=1 -U carry -d keycloak -Atc \
+  keycloak_count="$(docker exec "$postgres" psql -v ON_ERROR_STOP=1 -U cosmos -d keycloak -Atc \
     "select count(*) from user_entity where id = '${account_sub_sql}'" | tr -d '[:space:]')"
   [[ "$keycloak_count" == 1 ]] || fail "paired Pin subject is not an exact Keycloak user id"
   printf '%s\t%s\n' "$device_id" "$account_sub"

@@ -2,7 +2,7 @@
 """Score synthetic clone traces against a content-free expected contract.
 
 This module only reads local JSON files. Its deliberately closed schema has no
-field capable of carrying an utterance, response body, prompt, or raw payload.
+field capable of containing an utterance, response body, prompt, or raw payload.
 """
 
 from __future__ import annotations

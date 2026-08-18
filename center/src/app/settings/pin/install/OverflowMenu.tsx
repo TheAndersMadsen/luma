@@ -4,7 +4,7 @@
  * The "more tools" menu on the primary card — ported from the retired Setup
  * SPA's `install/components/OverflowMenu.tsx`.
  *
- * One addition: an action carrying an `href` renders as a link rather than a
+ * One addition: an action containing an `href` renders as a link rather than a
  * button, so the operator-only device shell at /admin/pin/terminal can live in
  * this menu without the menu having to know what a route is.
  */

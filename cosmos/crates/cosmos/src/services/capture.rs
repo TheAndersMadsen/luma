@@ -2,7 +2,7 @@
 //! — memory capture (photos/videos/notes/food logs), asset upload orchestration,
 //! share links, and the test-automation note surface.
 //!
-//! Stock-faithful degradation: a real carry account with no stored memories
+//! Stock-faithful degradation: a real cosmos account with no stored memories
 //! returns *well-formed empty* for reads, so a device's capture and note flows
 //! advance instead of erroring out.
 //!
@@ -42,7 +42,7 @@
 //!   device delete its own copy. See [`AssetArrival`].
 //!
 //! `GetCaptureConfig` is *server* configuration (not per-device data): a real
-//! carry always returns real numbers, so we serve a small functional default set
+//! cosmos always returns real numbers, so we serve a small functional default set
 //! (as `featureflags` does) instead of zeros that would tell the camera to shoot
 //! zero photos per burst.
 
@@ -65,25 +65,25 @@ use reqwest::Url;
 use sha2::{Digest as _, Sha256};
 use tonic::{Request, Response, Status};
 
-const SHARE_BASE_URL_ENV: &str = "CARRY_CAPTURE_SHARE_BASE_URL";
-const SHARE_TOKEN_SECRET_ENV: &str = "CARRY_SHARE_TOKEN_SECRET";
-pub(crate) const UPLOAD_BASE_URL_ENV: &str = "CARRY_CAPTURE_UPLOAD_BASE_URL";
+const SHARE_BASE_URL_ENV: &str = "COSMOS_CAPTURE_SHARE_BASE_URL";
+const SHARE_TOKEN_SECRET_ENV: &str = "COSMOS_SHARE_TOKEN_SECRET";
+pub(crate) const UPLOAD_BASE_URL_ENV: &str = "COSMOS_CAPTURE_UPLOAD_BASE_URL";
 
 /// Explicit object-storage root. Unset falls back to the durable state dir.
-const STORAGE_DIR_ENV: &str = "CARRY_CAPTURE_STORAGE_DIR";
+const STORAGE_DIR_ENV: &str = "COSMOS_CAPTURE_STORAGE_DIR";
 /// The durability switch every workload already honours; a named docker volume
 /// is mounted there. Captures land in a subdirectory of it.
-const STATE_DIR_ENV: &str = "CARRY_STATE_DIR";
+const STATE_DIR_ENV: &str = "COSMOS_STATE_DIR";
 /// Largest single asset body accepted, in bytes.
-const MAX_UPLOAD_BYTES_ENV: &str = "CARRY_CAPTURE_MAX_UPLOAD_BYTES";
+const MAX_UPLOAD_BYTES_ENV: &str = "COSMOS_CAPTURE_MAX_UPLOAD_BYTES";
 /// Which workload hosts `CaptureService`. Only that one serves capture objects,
 /// so the other six never expose a write endpoint at all.
-const WORKLOAD_ENV: &str = "CARRY_WORKLOAD";
+const WORKLOAD_ENV: &str = "COSMOS_WORKLOAD";
 /// How long an interrupted upload fragment may sit in staging, in seconds.
-const INCOMING_TTL_ENV: &str = "CARRY_CAPTURE_INCOMING_TTL_SECS";
+const INCOMING_TTL_ENV: &str = "COSMOS_CAPTURE_INCOMING_TTL_SECS";
 /// Opt-in age bound on the wearer's STORED FRAMES, in days. Unset keeps them
 /// forever — see [`Retention`].
-const OBJECT_RETENTION_DAYS_ENV: &str = "CARRY_CAPTURE_RETENTION_DAYS";
+const OBJECT_RETENTION_DAYS_ENV: &str = "COSMOS_CAPTURE_RETENTION_DAYS";
 
 /// A generous ceiling for one encrypted frame or short video, small enough that
 /// an authenticated device cannot fill the volume with one request.
@@ -177,7 +177,7 @@ impl Retention {
     /// Read the policy from configured strings.
     ///
     /// An absent or unparseable value falls back to the conservative default in
-    /// both fields; in particular a garbled `CARRY_CAPTURE_RETENTION_DAYS` means
+    /// both fields; in particular a garbled `COSMOS_CAPTURE_RETENTION_DAYS` means
     /// "keep the frames", never "expire them on some guessed schedule".
     fn resolve(
         incoming_ttl_seconds: Option<String>,
@@ -596,7 +596,7 @@ impl CaptureObjectStore {
     ///
     /// `implemented`: this is the clean-room server-side replacement for the
     /// recovered `best_photo` behavior. It deliberately operates on thumbnails
-    /// already uploaded to Carry, never removes an original, and rechecks the
+    /// already uploaded to Cosmos, never removes an original, and rechecks the
     /// sidecar after the model returns so a concurrent wearer selection wins.
     pub(crate) async fn rank_photo_best_frame(
         &self,
@@ -1012,7 +1012,7 @@ fn entry_age(metadata: &std::fs::Metadata) -> Option<Duration> {
 /// A private temporary storage root for one test.
 #[cfg(test)]
 fn temporary_root() -> PathBuf {
-    let root = std::env::temp_dir().join(format!("carry-capture-test-{}", uuid::Uuid::new_v4()));
+    let root = std::env::temp_dir().join(format!("cosmos-capture-test-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&root).expect("test storage root");
     root
 }
@@ -1047,7 +1047,7 @@ async fn restrict_file(_path: &Path) {}
 
 /// One filesystem-safe, injective directory name per authenticated principal.
 ///
-/// Principals carry `:` separators and device/user identifiers, so they are not
+/// Principals contain `:` separators and device/user identifiers, so they are not
 /// usable as path segments directly. base64url is reversible and collision-free
 /// — two wearers sharing a directory would be a cross-wearer data leak, which a
 /// lossy "sanitize the string" mapping could produce.
@@ -1918,7 +1918,7 @@ impl CaptureService for Capture {
         // into work on our side, so they are the one thing bounded here.
         // `store::build_memory` allocates a record per burst and per file and
         // mints four uuids and six paths for each; nothing between the wire and
-        // that loop looked at the magnitude. A `CreateMemoryRequest` carrying
+        // that loop looked at the magnitude. A `CreateMemoryRequest` containing
         // `num_bursts: i32::MAX, num_pics_per_burst: i32::MAX` is about ten bytes
         // on the wire, so `max_decode_bytes` never sees it, and it asked the
         // process for hundreds of gigabytes: an allocator refusal here is
@@ -2461,7 +2461,7 @@ impl Capture {
     /// null, so demanding them would strand every such capture.
     ///
     /// A capture with no allocated bursts cannot be confirmed at all. That is
-    /// deliberate: notes and food logs carry no frames and no worker sends
+    /// deliberate: notes and food logs contain no frames and no worker sends
     /// `UploadComplete` for them.
     async fn upload_bytes_landed(
         &self,
@@ -2581,7 +2581,7 @@ fn safe_slot_segment(segment: &str) -> Option<&str> {
 
 /// Which capture the device means.
 ///
-/// `DeleteMemoryRequest` and `UploadCompleteRequest` both carry a uuid *and* a
+/// `DeleteMemoryRequest` and `UploadCompleteRequest` both contain a uuid *and* a
 /// numeric id, and different callers populate different ones: the shipping
 /// workers send the uuid (`DeleteUploadWorkerImpl.deleteRecentFromWeb` and
 /// `AssetUploadWorkerImpl.sendUploadComplete` both call `setMemoryUuid`), while
@@ -2607,7 +2607,7 @@ fn memory_identity(memory_uuid: &str, memory_id: i64) -> Option<String> {
 ///
 /// * `SUCCESS` and `NOT_FOUND` both let the device drop its local row, which is
 ///   right in both cases — either we deleted it or we never had it.
-/// * `FAILURE` is the only retryable arm, so a store that could not carry the
+/// * `FAILURE` is the only retryable arm, so a store that could not contain the
 ///   delete out must return exactly that. Reporting `SUCCESS` instead makes the
 ///   device forget a capture the cloud still holds.
 ///
@@ -3392,7 +3392,7 @@ mod tests {
         );
     }
 
-    /// Notes and food logs carry no frames, so they get identity but no slots.
+    /// Notes and food logs contain no frames, so they get identity but no slots.
     #[tokio::test]
     async fn a_note_gets_identity_but_no_upload_slots() {
         let svc = Capture::default();
@@ -3617,7 +3617,7 @@ mod tests {
             .expect("the note was indexed");
         assert!(
             !indexed.chars().any(|c| c.is_control()),
-            "indexed text must not carry protobuf framing: {indexed:?}",
+            "indexed text must not contain protobuf framing: {indexed:?}",
         );
         assert_eq!(
             indexed.trim(),
@@ -4609,7 +4609,7 @@ mod tests {
     /// somewhere to put a wearer's photograph.
     #[test]
     fn storage_configuration_defaults_to_the_state_dir_and_fails_honestly() {
-        let state_dir = std::env::temp_dir().join(format!("carry-state-{}", uuid::Uuid::new_v4()));
+        let state_dir = std::env::temp_dir().join(format!("cosmos-state-{}", uuid::Uuid::new_v4()));
         let state = state_dir.to_string_lossy().into_owned();
 
         let configured = resolve_object_store(None, None, Some(state.clone()), None, None, None)
@@ -4654,7 +4654,7 @@ mod tests {
 
         // The ceiling is configurable, and clamped so it can be neither absurd
         // nor small enough to reject a real frame.
-        let explicit = std::env::temp_dir().join(format!("carry-cap-{}", uuid::Uuid::new_v4()));
+        let explicit = std::env::temp_dir().join(format!("cosmos-cap-{}", uuid::Uuid::new_v4()));
         let explicit = explicit.to_string_lossy().into_owned();
         let clamped = resolve_object_store(
             None,

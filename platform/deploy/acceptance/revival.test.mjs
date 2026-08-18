@@ -74,7 +74,7 @@ test("init creates a protected, wearer-free local identity realm tied to runtime
     assert.equal(client.attributes["pkce.code.challenge.method"], "S256");
     assert.equal(client.redirectUris.some((uri) => uri.includes("*")), false);
     assert.deepEqual(realm.users, []);
-    assert.ok(realm.roles.realm.some((role) => role.name === "carry-operator"));
+    assert.ok(realm.roles.realm.some((role) => role.name === "cosmos-operator"));
     assert.equal(fs.statSync(runtimeFile).mode & 0o777, 0o600);
     assert.equal(fs.statSync(realmFile).mode & 0o777, 0o600);
   } finally {
@@ -222,13 +222,13 @@ test("canonical and compatibility values cannot disagree", () => {
     assert.equal(initialized.status, 0, initialized.stderr);
     const runtimeFile = path.join(env.REVIVAL_SECRETS_DIR, "runtime.env");
     let contents = fs.readFileSync(runtimeFile, "utf8");
-    contents = setValue(contents, "CARRY_ADMIN_TOKEN", "incompatible-admin-token-value-00000000");
+    contents = setValue(contents, "COSMOS_ADMIN_TOKEN", "incompatible-admin-token-value-00000000");
     fs.writeFileSync(runtimeFile, contents, { mode: 0o600 });
     const result = invoke(env, "doctor");
     assert.notEqual(result.status, 0);
     assert.match(
       `${result.stdout}\n${result.stderr}`,
-      /REVIVAL_ADMIN_TOKEN and compatibility alias CARRY_ADMIN_TOKEN must not disagree/,
+      /REVIVAL_ADMIN_TOKEN and compatibility alias COSMOS_ADMIN_TOKEN must not disagree/,
     );
   } finally {
     fs.rmSync(temporary, { recursive: true, force: true });
@@ -345,25 +345,25 @@ test("production Compose binds one release identity and keeps web services priva
       env: {
         ...process.env,
         REVIVAL_RELEASE_ID: releaseId,
-        CARRY_DATABASE_URL: "postgresql://carry:placeholder@postgres/carry",
-        CARRY_EDGE_TOKEN: "placeholder-edge",
-        CARRY_ADMIN_TOKEN: "placeholder-admin",
-        CARRY_CENTER_PROJECTION_TOKEN: "placeholder-projection",
-        CARRY_CAPTURE_UPLOAD_BASE_URL: "https://uploads.example.test",
-        CARRY_ONBOARDING_ENDPOINT: "https://onboarding.example.test",
-        CARRY_ENROLLMENT_PINCODE: "0000",
-        CARRY_ENROLLMENT_USER_ID: "U:compose-contract-test",
-        CARRY_OPAQUE_SEED: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        COSMOS_DATABASE_URL: "postgresql://cosmos:placeholder@postgres/cosmos",
+        COSMOS_EDGE_TOKEN: "placeholder-edge",
+        COSMOS_ADMIN_TOKEN: "placeholder-admin",
+        COSMOS_CENTER_PROJECTION_TOKEN: "placeholder-projection",
+        COSMOS_CAPTURE_UPLOAD_BASE_URL: "https://uploads.example.test",
+        COSMOS_ONBOARDING_ENDPOINT: "https://onboarding.example.test",
+        COSMOS_ENROLLMENT_PINCODE: "0000",
+        COSMOS_ENROLLMENT_USER_ID: "U:compose-contract-test",
+        COSMOS_OPAQUE_SEED: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
         AUTH_SESSION_SECRET: "placeholder-session",
-        CARRY_SHARE_TOKEN_SECRET: "placeholder-share",
+        COSMOS_SHARE_TOKEN_SECRET: "placeholder-share",
         KEYCLOAK_CLIENT_SECRET: "placeholder-keycloak",
-        CARRY_KEYCLOAK_DB_PASSWORD: "placeholder-keycloak-db",
-        CARRY_PG_PASSWORD: "placeholder-postgres",
+        COSMOS_KEYCLOAK_DB_PASSWORD: "placeholder-keycloak-db",
+        COSMOS_PG_PASSWORD: "placeholder-postgres",
         GRAFANA_ADMIN_PASSWORD: "placeholder-grafana",
         SEARXNG_SECRET: "placeholder-search-secret",
-        CARRY_OPENROUTER_API_KEY: "placeholder-openrouter-key",
-        CARRY_INTERSTITIAL_BASE_URL: "http://carry-ollama:11434/v1",
-        CARRY_INTERSTITIAL_MODEL: "qwen2.5:3b-instruct",
+        COSMOS_OPENROUTER_API_KEY: "placeholder-openrouter-key",
+        COSMOS_INTERSTITIAL_BASE_URL: "http://cosmos-ollama:11434/v1",
+        COSMOS_INTERSTITIAL_MODEL: "qwen2.5:3b-instruct",
         REVIVAL_PIN_BRIDGE_OWNER_SUB: "owner-compose-contract-test",
         REVIVAL_PIN_BRIDGE_DEVICE_ID: "device-compose-contract-test",
       },
@@ -447,7 +447,7 @@ test("production Compose binds one release identity and keeps web services priva
     ["ai-bus"],
   );
   assert.equal(rendered.networks["local-model"].external, true);
-  assert.equal(rendered.networks["local-model"].name, "humane-carry-clone_carry-local");
+  assert.equal(rendered.networks["local-model"].name, "humane-cosmos-clone_cosmos-local");
   assert.deepEqual(
     Object.entries(rendered.services)
       .filter(([, service]) => service.networks?.["search-service"])
@@ -461,7 +461,7 @@ test("production Compose binds one release identity and keeps web services priva
       .map(([name]) => name),
     ["searxng"],
   );
-  const providerKey = /^(?:AZURE_|CARRY_AZURE_|CARRY_LLM_|CARRY_OPENROUTER_API_KEY$|CARRY_INTERSTITIAL_|CARRY_SERPAPI_KEY$|CARRY_GOOGLE_MAPS_KEY$|CARRY_PIRATE_WEATHER_KEY$|CARRY_WOLFRAM_APP_ID$|CARRY_PPLX_)/;
+  const providerKey = /^(?:AZURE_|COSMOS_AZURE_|COSMOS_LLM_|COSMOS_OPENROUTER_API_KEY$|COSMOS_INTERSTITIAL_|COSMOS_SERPAPI_KEY$|COSMOS_GOOGLE_MAPS_KEY$|COSMOS_PIRATE_WEATHER_KEY$|COSMOS_WOLFRAM_APP_ID$|COSMOS_PPLX_)/;
   assert.deepEqual(
     Object.entries(rendered.services)
       .filter(([, service]) => Object.keys(service.environment ?? {}).some((key) => providerKey.test(key)))
@@ -470,21 +470,21 @@ test("production Compose binds one release identity and keeps web services priva
   );
   assert.deepEqual(
     Object.entries(rendered.services)
-      .filter(([, service]) => Object.hasOwn(service.environment ?? {}, "CARRY_SEARXNG_BASE_URL"))
+      .filter(([, service]) => Object.hasOwn(service.environment ?? {}, "COSMOS_SEARXNG_BASE_URL"))
       .map(([name]) => name),
     ["ai-bus"],
   );
-  assert.equal(rendered.services["ai-bus"].environment.CARRY_SEARXNG_BASE_URL, "http://searxng:8080");
+  assert.equal(rendered.services["ai-bus"].environment.COSMOS_SEARXNG_BASE_URL, "http://searxng:8080");
   assert.equal(
-    rendered.services["ai-bus"].environment.CARRY_OPENROUTER_API_KEY,
+    rendered.services["ai-bus"].environment.COSMOS_OPENROUTER_API_KEY,
     "placeholder-openrouter-key",
   );
   assert.equal(
-    rendered.services["ai-bus"].environment.CARRY_INTERSTITIAL_BASE_URL,
-    "http://carry-ollama:11434/v1",
+    rendered.services["ai-bus"].environment.COSMOS_INTERSTITIAL_BASE_URL,
+    "http://cosmos-ollama:11434/v1",
   );
   assert.equal(
-    rendered.services["ai-bus"].environment.CARRY_INTERSTITIAL_MODEL,
+    rendered.services["ai-bus"].environment.COSMOS_INTERSTITIAL_MODEL,
     "qwen2.5:3b-instruct",
   );
   assert.deepEqual(rendered.services["ai-bus"].depends_on.searxng, {
@@ -550,10 +550,10 @@ test("production Compose binds one release identity and keeps web services priva
       name: volume.name,
     }])),
     {
-      "carry-pgdata": { external: true, name: "humane-carry-clone_carry-pgdata" },
-      "carry-state": { external: true, name: "humane-carry-clone_carry-state" },
-      "grafana-data": { external: true, name: "humane-carry-clone_grafana-data" },
-      "prometheus-data": { external: true, name: "humane-carry-clone_prometheus-data" },
+      "cosmos-pgdata": { external: true, name: "humane-cosmos-clone_cosmos-pgdata" },
+      "cosmos-state": { external: true, name: "humane-cosmos-clone_cosmos-state" },
+      "grafana-data": { external: true, name: "humane-cosmos-clone_grafana-data" },
+      "prometheus-data": { external: true, name: "humane-cosmos-clone_prometheus-data" },
     },
   );
   assert.ok(
@@ -563,7 +563,7 @@ test("production Compose binds one release identity and keeps web services priva
   );
 });
 
-test("legacy carry-net guard applies only before the first canonical release", () => {
+test("legacy cosmos-net guard applies only before the first canonical release", () => {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "ai-pin-revival-network-policy-"));
   try {
     const remoteRootPath = path.join(temporary, "ai-pin-revival");
@@ -673,8 +673,8 @@ test("development identity profile controls Keycloak and OIDC wiring", (context)
     "provisioning",
   ];
   for (const workload of oidcWorkloads) {
-    assert.equal(enabled.services[workload].environment.CARRY_OIDC_ISSUER, issuer, workload);
-    assert.equal(enabled.services[workload].environment.CARRY_OIDC_JWKS_URI, jwks, workload);
+    assert.equal(enabled.services[workload].environment.COSMOS_OIDC_ISSUER, issuer, workload);
+    assert.equal(enabled.services[workload].environment.COSMOS_OIDC_JWKS_URI, jwks, workload);
   }
   for (const workload of [...oidcWorkloads, "center"]) {
     assert.deepEqual(enabled.services[workload].depends_on.keycloak, {

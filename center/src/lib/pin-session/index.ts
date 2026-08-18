@@ -7,7 +7,7 @@
  * opened one session for the installer and another for the settings panes would
  * simply fail on the second `requestDevice()`. The retired Setup SPA never hit
  * that because the installer was a separate page from the console; Center puts
- * them side by side under `/settings/pin/*`, so ONE session has to carry both.
+ * them side by side under `/settings/pin/*`, so ONE session has to contain both.
  *
  * This module is that one session, held at module scope rather than in React
  * state. Module scope is what makes it survive App Router navigations between

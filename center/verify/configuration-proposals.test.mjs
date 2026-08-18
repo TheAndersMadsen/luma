@@ -105,8 +105,8 @@ test("the catalog is self-consistent about what may be written", () => {
         `${setting.name} is not delivered by the env plane and must say what to edit instead`,
       );
     } else {
-      assert.equal(setting.constraint, null, `${setting.name} is not proposable and must carry no constraint`);
-      assert.equal(setting.delivery, null, `${setting.name} is not proposable and must carry no delivery claim`);
+      assert.equal(setting.constraint, null, `${setting.name} is not proposable and must contain no constraint`);
+      assert.equal(setting.delivery, null, `${setting.name} is not proposable and must contain no delivery claim`);
     }
   }
 
@@ -137,20 +137,20 @@ test("nothing outside the writable set can be proposed, and every refusal says w
   // that accidentally drops one of them.
   for (const name of [
     "AUTH_SESSION_SECRET",
-    "CARRY_SHARE_TOKEN_SECRET",
-    "CARRY_EDGE_TOKEN",
-    "CARRY_ADMIN_TOKEN",
+    "COSMOS_SHARE_TOKEN_SECRET",
+    "COSMOS_EDGE_TOKEN",
+    "COSMOS_ADMIN_TOKEN",
     "KEYCLOAK_CLIENT_SECRET",
-    "CARRY_DUC_CA_KEY",
-    "CARRY_ENROLLMENT_PINCODE",
-    "CARRY_OPERATOR_EMAILS",
-    "CARRY_DATABASE_URL",
+    "COSMOS_DUC_CA_KEY",
+    "COSMOS_ENROLLMENT_PINCODE",
+    "COSMOS_OPERATOR_EMAILS",
+    "COSMOS_DATABASE_URL",
   ]) {
     assert.equal(validateProposedValue(name, "x").ok, false, name);
   }
 
   // An unknown name is refused as an unknown name, not accepted as a new one.
-  for (const name of ["PATH", "NOT_A_SETTING", "carry_llm_model", ""]) {
+  for (const name of ["PATH", "NOT_A_SETTING", "cosmos_llm_model", ""]) {
     assert.equal(validateProposedValue(name, "x").ok, false, name);
   }
 });
@@ -161,20 +161,20 @@ test("a value that cannot survive an env file is refused before it reaches one",
   // of no return. A CR does the same; a tab and a non-ASCII byte are refused
   // for the same reason a log line is flattened — one record, one meaning.
   for (const hostile of [
-    "openai/x\nCARRY_PG_PASSWORD=pwned",
-    "openai/x\rCARRY_PG_PASSWORD=pwned",
+    "openai/x\nCOSMOS_PG_PASSWORD=pwned",
+    "openai/x\rCOSMOS_PG_PASSWORD=pwned",
     "openai/x\ty",
     "openai/ünicode",
     "",
     "   ",
   ]) {
-    const outcome = validateProposedValue("CARRY_LLM_MODEL", hostile);
+    const outcome = validateProposedValue("COSMOS_LLM_MODEL", hostile);
     assert.equal(outcome.ok, false, JSON.stringify(hostile));
-    assert.match(outcome.reason, /CARRY_LLM_MODEL/);
+    assert.match(outcome.reason, /COSMOS_LLM_MODEL/);
   }
-  assert.equal(validateProposedValue("CARRY_LLM_MODEL", 8000).ok, false);
-  assert.equal(validateProposedValue("CARRY_LLM_MODEL", null).ok, false);
-  assert.equal(validateProposedValue("CARRY_LLM_MODEL", "a".repeat(600)).ok, false);
+  assert.equal(validateProposedValue("COSMOS_LLM_MODEL", 8000).ok, false);
+  assert.equal(validateProposedValue("COSMOS_LLM_MODEL", null).ok, false);
+  assert.equal(validateProposedValue("COSMOS_LLM_MODEL", "a".repeat(600)).ok, false);
 
   // The SHARED length cap, reached through the one setting whose own grammar
   // does not bound its length: a scope list is any number of well-formed
@@ -202,15 +202,15 @@ test("each constraint accepts what it documents and refuses the rest, in words",
 
   // Whitespace is trimmed, not rejected: an operator pasting a value picks up a
   // trailing space and that is not a mistake worth a red message.
-  assert.equal(accepted("CARRY_LLM_MODEL", "  openai/gpt-4o-mini  "), "openai/gpt-4o-mini");
-  accepted("CARRY_LLM_MODEL", "anthropic/claude-sonnet-4.5");
-  accepted("CARRY_LLM_MODEL", "llama3.1:70b");
-  refused("CARRY_LLM_MODEL", "openai/gpt 4o", /provider model id/);
-  refused("CARRY_LLM_MODEL", "$(rm -rf /)", /provider model id/);
+  assert.equal(accepted("COSMOS_LLM_MODEL", "  openai/gpt-4o-mini  "), "openai/gpt-4o-mini");
+  accepted("COSMOS_LLM_MODEL", "anthropic/claude-sonnet-4.5");
+  accepted("COSMOS_LLM_MODEL", "llama3.1:70b");
+  refused("COSMOS_LLM_MODEL", "openai/gpt 4o", /provider model id/);
+  refused("COSMOS_LLM_MODEL", "$(rm -rf /)", /provider model id/);
 
-  accepted("CARRY_AZURE_SPEECH_VOICE", "en-US-AvaMultilingualNeural");
-  accepted("CARRY_AZURE_SPEECH_VOICE", "da-DK-ChristelNeural");
-  refused("CARRY_AZURE_SPEECH_VOICE", "Ava", /locale and voice name/);
+  accepted("COSMOS_AZURE_SPEECH_VOICE", "en-US-AvaMultilingualNeural");
+  accepted("COSMOS_AZURE_SPEECH_VOICE", "da-DK-ChristelNeural");
+  refused("COSMOS_AZURE_SPEECH_VOICE", "Ava", /locale and voice name/);
 
   accepted("REVIVAL_SPOTIFY_ADAPTER_TIMEOUT_MS", "5000");
   // The bounds are in the message, because "out of range" without them is a
@@ -233,7 +233,7 @@ test("the store round-trips one change, atomically and at mode 600", () => {
   withStore((file) => {
     assert.deepEqual(pendingProposals(), []);
 
-    const outcome = proposeValue("CARRY_LLM_MODEL", "openai/gpt-4o-mini", OPERATOR);
+    const outcome = proposeValue("COSMOS_LLM_MODEL", "openai/gpt-4o-mini", OPERATOR);
     assert.equal(outcome.ok, true);
     assert.equal(outcome.proposal.value, "openai/gpt-4o-mini");
     assert.equal(outcome.proposal.target, "providers.env");
@@ -249,12 +249,12 @@ test("the store round-trips one change, atomically and at mode 600", () => {
 
     const stored = JSON.parse(fs.readFileSync(file, "utf8"));
     assert.equal(stored.schemaVersion, 1);
-    assert.equal(stored.settings.CARRY_LLM_MODEL.value, "openai/gpt-4o-mini");
-    assert.equal(stored.settings.CARRY_LLM_MODEL.proposedBy, OPERATOR.sub);
-    assert.match(stored.settings.CARRY_LLM_MODEL.proposedAt, /^\d{4}-\d{2}-\d{2}T/);
+    assert.equal(stored.settings.COSMOS_LLM_MODEL.value, "openai/gpt-4o-mini");
+    assert.equal(stored.settings.COSMOS_LLM_MODEL.proposedBy, OPERATOR.sub);
+    assert.match(stored.settings.COSMOS_LLM_MODEL.proposedAt, /^\d{4}-\d{2}-\d{2}T/);
 
     const [pending] = pendingProposals();
-    assert.equal(pending.name, "CARRY_LLM_MODEL");
+    assert.equal(pending.name, "COSMOS_LLM_MODEL");
     assert.equal(pending.proposedByEmail, OPERATOR.email);
   });
 });
@@ -275,31 +275,31 @@ test("a write is audited by name, and the value stays in the file that holds it"
   withStore(() => {
     logLines.length = 0;
     const value = "eastus-improbable-voice-name";
-    assert.equal(proposeValue("CARRY_AZURE_SPEECH_VOICE", "en-US-JennyNeural", OPERATOR).ok, true);
-    assert.equal(proposeValue("CARRY_LLM_MODEL", "openai/gpt-4o-mini", OPERATOR).ok, true);
-    assert.equal(withdrawProposal("CARRY_LLM_MODEL", OPERATOR), true);
+    assert.equal(proposeValue("COSMOS_AZURE_SPEECH_VOICE", "en-US-JennyNeural", OPERATOR).ok, true);
+    assert.equal(proposeValue("COSMOS_LLM_MODEL", "openai/gpt-4o-mini", OPERATOR).ok, true);
+    assert.equal(withdrawProposal("COSMOS_LLM_MODEL", OPERATOR), true);
 
     assert.equal(logLines.length, 3, "every write must leave exactly one audit line");
     const stream = logLines.join("\n");
     for (const proposed of ["en-US-JennyNeural", "openai/gpt-4o-mini", value]) {
       assert.ok(!stream.includes(proposed), `a proposed value reached the shared log: ${proposed}`);
     }
-    // What it must carry instead, so the line is still worth having.
+    // What it must contain instead, so the line is still worth having.
     for (const line of logLines) {
       assert.ok(line.includes(OPERATOR.sub), "an audit line does not name the operator who made the change");
     }
-    assert.ok(stream.includes("CARRY_AZURE_SPEECH_VOICE"));
-    assert.ok(stream.includes("CARRY_LLM_MODEL"));
+    assert.ok(stream.includes("COSMOS_AZURE_SPEECH_VOICE"));
+    assert.ok(stream.includes("COSMOS_LLM_MODEL"));
   });
 });
 
 test("a second change is merged, never written over the first", () => {
   withStore(() => {
-    assert.equal(proposeValue("CARRY_LLM_MODEL", "openai/gpt-4o-mini", OPERATOR).ok, true);
+    assert.equal(proposeValue("COSMOS_LLM_MODEL", "openai/gpt-4o-mini", OPERATOR).ok, true);
     assert.equal(proposeValue("KEYCLOAK_SCOPES", "openid email", OPERATOR).ok, true);
     assert.deepEqual(
       pendingProposals().map((proposal) => proposal.name).sort(),
-      ["CARRY_LLM_MODEL", "KEYCLOAK_SCOPES"],
+      ["COSMOS_LLM_MODEL", "KEYCLOAK_SCOPES"],
     );
 
     // Re-proposing replaces that one entry and leaves the other alone.
@@ -310,16 +310,16 @@ test("a second change is merged, never written over the first", () => {
 
     assert.equal(withdrawProposal("KEYCLOAK_SCOPES", OPERATOR), true);
     assert.equal(withdrawProposal("KEYCLOAK_SCOPES", OPERATOR), false);
-    assert.deepEqual(pendingProposals().map((proposal) => proposal.name), ["CARRY_LLM_MODEL"]);
+    assert.deepEqual(pendingProposals().map((proposal) => proposal.name), ["COSMOS_LLM_MODEL"]);
   });
 });
 
 test("a refused value never reaches the store", () => {
   withStore((file) => {
     assert.equal(proposeValue("AUTH_SESSION_SECRET", "0".repeat(32), OPERATOR).ok, false);
-    assert.equal(proposeValue("CARRY_DUC_CA_KEY", "----BEGIN", OPERATOR).ok, false);
+    assert.equal(proposeValue("COSMOS_DUC_CA_KEY", "----BEGIN", OPERATOR).ok, false);
     assert.equal(proposeValue("REVIVAL_PIN_SETUP_ORIGIN", "https://elsewhere.test", OPERATOR).ok, false);
-    assert.equal(proposeValue("CARRY_DEADLINE_MS", "9000", OPERATOR).ok, false);
+    assert.equal(proposeValue("COSMOS_DEADLINE_MS", "9000", OPERATOR).ok, false);
     assert.equal(proposeValue("KEYCLOAK_SCOPES", "email", OPERATOR).ok, false);
     // Not "the file has no such key" — the file must not exist at all, because
     // a refused write that still created a store would be a write.
@@ -334,7 +334,7 @@ test("an unreadable or corrupt store is never reported as empty", () => {
     // than the container has.
     fs.mkdirSync(file);
     assert.throws(() => pendingProposals(), ConfigurationProposalsUnavailableError);
-    assert.throws(() => proposeValue("CARRY_LLM_MODEL", "openai/gpt-4o-mini", OPERATOR), {
+    assert.throws(() => proposeValue("COSMOS_LLM_MODEL", "openai/gpt-4o-mini", OPERATOR), {
       name: "ConfigurationProposalsUnavailableError",
     });
     fs.rmdirSync(file);
@@ -371,11 +371,11 @@ test("delivery says whether a value has landed, and admits when it cannot tell",
   });
 
   withStore(() => {
-    // CARRY_LLM_MODEL lives in the backend's environment. Reporting it as
+    // COSMOS_LLM_MODEL lives in the backend's environment. Reporting it as
     // "pending" from a value this container does not have would be the same lie
     // as rendering a backend outage as "you have no captures".
-    proposeValue("CARRY_LLM_MODEL", "openai/gpt-4o-mini", OPERATOR);
-    withEnvironment({ CARRY_LLM_MODEL: "openai/gpt-4o-mini" }, () => {
+    proposeValue("COSMOS_LLM_MODEL", "openai/gpt-4o-mini", OPERATOR);
+    withEnvironment({ COSMOS_LLM_MODEL: "openai/gpt-4o-mini" }, () => {
       assert.equal(pendingProposals()[0].delivery, "unconfirmable");
     });
   });
@@ -392,7 +392,7 @@ test("an entry this build would no longer accept is surfaced, not silently dropp
         schemaVersion: 1,
         settings: {
           AUTH_SESSION_SECRET: { value: "smuggled", proposedAt: "2026-01-01T00:00:00.000Z" },
-          CARRY_LLM_MODEL: { value: "not a model", proposedAt: "2026-01-02T00:00:00.000Z" },
+          COSMOS_LLM_MODEL: { value: "not a model", proposedAt: "2026-01-02T00:00:00.000Z" },
           MALFORMED: { proposedAt: "2026-01-03T00:00:00.000Z" },
         },
       }),
@@ -403,7 +403,7 @@ test("an entry this build would no longer accept is surfaced, not silently dropp
         .sort(),
       [
         ["AUTH_SESSION_SECRET", "refused"],
-        ["CARRY_LLM_MODEL", "refused"],
+        ["COSMOS_LLM_MODEL", "refused"],
         ["MALFORMED", "refused"],
       ],
     );

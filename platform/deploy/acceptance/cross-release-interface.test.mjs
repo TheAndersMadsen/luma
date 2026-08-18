@@ -188,7 +188,7 @@ test("every cross-release invocation carries the comment that says why it is one
   const marked = [...deploySource.matchAll(/CROSS-RELEASE INVOCATION/gu)].length;
   const wrapped = [...deploySource.matchAll(/^\s*run_cross_release_script "\$pending_release"/gmu)].length;
   assert.ok(wrapped >= 7, `expected every reconcile-path script invocation to be wrapped, found ${wrapped}`);
-  assert.ok(marked >= wrapped, "each cross-release invocation must carry its comment");
+  assert.ok(marked >= wrapped, "each cross-release invocation must contain its comment");
   assert.match(preflightSource, /CROSS-RELEASE INVOCATION/u);
   assert.match(rollbackSource, /CROSS-RELEASE INVOCATION/u);
   assert.match(commonSource, /^# CROSS-RELEASE INVOCATION: running a script that belongs to a DIFFERENT release$/mu);

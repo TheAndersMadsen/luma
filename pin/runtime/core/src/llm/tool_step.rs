@@ -1,6 +1,6 @@
 //! Shared types for one provider-agnostic native tool-calling step.
 //!
-//! One step = one completion request carrying the full run transcript plus a
+//! One step = one completion request containing the full run transcript plus a
 //! JSON-schema tool catalog; the model answers with either assistant text
 //! (the final answer) or one batch of tool calls. The loop that drives steps
 //! lives in `crate::synapse::chat_turn_loop`; each backend adapts the step to its

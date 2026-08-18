@@ -1,4 +1,4 @@
-//! Computational knowledge — Wolfram|Alpha (`MODE_WOLFRAM` in carry's backend
+//! Computational knowledge — Wolfram|Alpha (`MODE_WOLFRAM` in cosmos's backend
 //! enumeration).
 //!
 //! This backs the assistant's `wolfram` tool: facts, unit conversions, math, and
@@ -12,7 +12,7 @@
 
 use super::{BackendError, http, key};
 
-const APP_ID_VAR: &str = "CARRY_WOLFRAM_APP_ID";
+const APP_ID_VAR: &str = "COSMOS_WOLFRAM_APP_ID";
 
 /// Cap the observation: the LLM API can return long comparison sections, and the
 /// transcript rides in the model's context on every subsequent step.

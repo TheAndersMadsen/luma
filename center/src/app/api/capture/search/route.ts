@@ -13,7 +13,7 @@ import type { CaptureRecord } from "@/lib/types";
  * On any failure (no webapi configured, endpoint errors, backend has no search)
  * this returns an empty list tagged `x-data-source: fixtures` so the client falls
  * back to its local client-side filter instead of showing an error. A successful
- * empty result is tagged `carry`, so "no matches" and "search unavailable" stay
+ * empty result is tagged `cosmos`, so "no matches" and "search unavailable" stay
  * distinguishable.
  */
 export async function GET(request: Request) {
@@ -24,7 +24,7 @@ export async function GET(request: Request) {
 
   if (!query) {
     return NextResponse.json([], {
-      headers: sourceHeaders({ source: "carry", state: "live" }),
+      headers: sourceHeaders({ source: "cosmos", state: "live" }),
     });
   }
 

@@ -266,7 +266,7 @@ impl TurnTraceLogger {
 /// Strip every free-text field from a record, leaving the shapes and counts.
 ///
 /// The match is deliberately exhaustive rather than `_ => {}`: a new event
-/// variant carrying text must fail to compile here instead of silently becoming
+/// variant containing text must fail to compile here instead of silently becoming
 /// content that no policy gates.
 fn redact_content(record: &mut TurnTraceRecord) {
     record.utterance = None;

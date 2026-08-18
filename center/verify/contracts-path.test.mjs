@@ -11,7 +11,7 @@ import test from "node:test";
  * override, so the documented developer flow (`npm ci && npm run dev`) loaded
  * nothing, `protoLoader.loadSync` threw ENOENT inside the first gRPC call, and
  * every pane that reads a workload — contacts, account details, my-data, note
- * creation, memory delete — reported "carry error: …", the wording reserved for
+ * creation, memory delete — reported "cosmos error: …", the wording reserved for
  * a backend outage. A stale path inside Center rendered as an outage in Cosmos.
  *
  * Nothing caught it because nothing ever asked whether the path resolved. This
@@ -55,7 +55,7 @@ test("a contracts directory Center cannot read is reported as Center's problem",
   ]);
 
   // Typed at the throw site and named at the description site: a missing
-  // contracts directory must never reach a wearer as "carry error", which sends
+  // contracts directory must never reach a wearer as "cosmos error", which sends
   // every reader to look at a backend that is fine.
   assert.match(cosmos, /class ContractsUnavailableError extends Error/);
   assert.match(cosmos, /throw new ContractsUnavailableError\(PROTO_ROOT, error\)/);

@@ -16,7 +16,7 @@
 //! into the OPAQUE ceremony.
 //!
 //! This is emphatically an **operator** capability, gated behind
-//! `CARRY_ADMIN_TOKEN` at the HTTP layer: whoever can mint an attestation
+//! `COSMOS_ADMIN_TOKEN` at the HTTP layer: whoever can mint an attestation
 //! certificate can enroll a device.
 
 use std::sync::Mutex;
@@ -26,9 +26,9 @@ use serde::Serialize;
 
 /// PEM path of the CA the onboarding edge trusts for client mTLS. Device
 /// attestation certificates are signed by this so the edge accepts them.
-pub const ATTEST_CA_CERT_ENV: &str = "CARRY_ATTEST_CA_CERT";
+pub const ATTEST_CA_CERT_ENV: &str = "COSMOS_ATTEST_CA_CERT";
 /// PEM (PKCS#8) path of that CA's private key.
-pub const ATTEST_CA_KEY_ENV: &str = "CARRY_ATTEST_CA_KEY";
+pub const ATTEST_CA_KEY_ENV: &str = "COSMOS_ATTEST_CA_KEY";
 
 /// A device the operator has issued an attestation credential for.
 ///
@@ -169,7 +169,7 @@ impl AttestCa {
             .map_err(|error| format!("{ATTEST_CA_KEY_ENV} is not a usable PKCS#8 key: {error}"))?;
 
         // The pair must actually be a pair, and only this comparison shows it.
-        // `params.self_signed(&key)` below CANNOT: rcgen params carry the DN,
+        // `params.self_signed(&key)` below CANNOT: rcgen params contain the DN,
         // extensions and validity re-expressed from the certificate and never a
         // public key, so it signs with whatever key it is handed and succeeds on
         // a mismatched pair — the error message it used to be labelled with was a
@@ -291,7 +291,7 @@ pub fn mint(device_id: &str, product: &str) -> Result<AttestationBundle, Provisi
 mod tests {
     use super::*;
 
-    /// A minted certificate must carry exactly the subject the edge parses back
+    /// A minted certificate must contain exactly the subject the edge parses back
     /// into a device id, and chain to the configured CA.
     #[test]
     fn a_minted_credential_binds_the_requested_device() {
@@ -301,7 +301,7 @@ mod tests {
         ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
         let ca_cert = ca_params.self_signed(&ca_key).unwrap();
 
-        let dir = std::env::temp_dir().join(format!("carry-attest-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("cosmos-attest-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let cert_path = dir.join("ca.crt");
         let key_path = dir.join("ca.key");
@@ -357,7 +357,7 @@ mod tests {
     /// The failure this loader used to pass: a certificate and a key that are
     /// each individually valid but are not a pair.
     ///
-    /// `params.self_signed(&key)` cannot notice — rcgen params carry no public
+    /// `params.self_signed(&key)` cannot notice — rcgen params contain no public
     /// key — so the loader succeeded and minted attestation certificates signed
     /// by a key unrelated to the CA the edge trusts. Nothing downstream reports
     /// it either: the leaf dies in the Envoy TLS handshake, which produces no
@@ -375,7 +375,7 @@ mod tests {
         let stranger = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
 
         let dir =
-            std::env::temp_dir().join(format!("carry-attest-mismatch-{}", std::process::id()));
+            std::env::temp_dir().join(format!("cosmos-attest-mismatch-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let cert_path = dir.join("ca.crt");
         let key_path = dir.join("ca.key");

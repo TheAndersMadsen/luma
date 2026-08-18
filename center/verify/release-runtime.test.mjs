@@ -27,7 +27,7 @@ test("Center builds a minimal non-root standalone image with runtime assets", as
   assert.match(dockerfile, /rm -rf \/app\/node_modules\/typescript/);
   assert.match(dockerfile, /--chown=1000:1001/);
   assert.match(dockerfile, /USER 1000:1001/);
-  assert.match(dockerfile, /CARRY_CHANNEL_KEY_FILE=\/data\/channel-key\.json/);
+  assert.match(dockerfile, /COSMOS_CHANNEL_KEY_FILE=\/data\/channel-key\.json/);
   assert.match(dockerfile, /chown 1000:1001 \/data/);
   assert.match(dockerfile, /CMD \["node", "server\.js"\]/);
 });
@@ -104,7 +104,7 @@ test("public version endpoint exposes only product and immutable release identit
   ]);
 
   assert.match(route, /REVIVAL_RELEASE_ID/);
-  assert.match(route, /CARRY_REVISION/);
+  assert.match(route, /COSMOS_REVISION/);
   assert.match(route, /product: "Ai Pin Revival Center", release: RELEASE_ID/);
   assert.match(route, /"cache-control": "no-store"/);
   assert.doesNotMatch(route, /hostname|provider|region|endpoint|secret/i);

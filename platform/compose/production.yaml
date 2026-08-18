@@ -13,8 +13,8 @@ x-production-cosmos-dependencies: &production-cosmos-dependencies
 services:
   connectivity:
     environment:
-      CARRY_AUTH_MODE: edge-authenticated
-      CARRY_ENVIRONMENT: production
+      COSMOS_AUTH_MODE: edge-authenticated
+      COSMOS_ENVIRONMENT: production
       REVIVAL_DEPLOYMENT_ENVIRONMENT: production
     ports:
       - 127.0.0.1:${REVIVAL_CONNECTIVITY_PORT:-18085}:18080
@@ -23,72 +23,72 @@ services:
 
   ai-bus:
     environment:
-      CARRY_AUTH_MODE: edge-authenticated
-      CARRY_ENVIRONMENT: production
+      COSMOS_AUTH_MODE: edge-authenticated
+      COSMOS_ENVIRONMENT: production
       REVIVAL_DEPLOYMENT_ENVIRONMENT: production
-      CARRY_DATABASE_URL: ${CARRY_DATABASE_URL:?set CARRY_DATABASE_URL in the protected production env}
-      CARRY_EDGE_TOKEN: ${CARRY_EDGE_TOKEN:?set CARRY_EDGE_TOKEN in the protected production env}
-      CARRY_OIDC_ISSUER: ${CARRY_OIDC_ISSUER:-https://center.andersmadsen.dk/realms/humane}
-      CARRY_OIDC_JWKS_URI: ${CARRY_OIDC_JWKS_URI:-http://keycloak:8080/realms/humane/protocol/openid-connect/certs}
-      CARRY_OIDC_AUDIENCE: ${CARRY_OIDC_AUDIENCE:-}
-      CARRY_ADMIN_TOKEN: ${CARRY_ADMIN_TOKEN:?set CARRY_ADMIN_TOKEN in the protected production env}
-      CARRY_CENTER_PROJECTION_TOKEN: ${CARRY_CENTER_PROJECTION_TOKEN:?set CARRY_CENTER_PROJECTION_TOKEN in the protected production env}
+      COSMOS_DATABASE_URL: ${COSMOS_DATABASE_URL:?set COSMOS_DATABASE_URL in the protected production env}
+      COSMOS_EDGE_TOKEN: ${COSMOS_EDGE_TOKEN:?set COSMOS_EDGE_TOKEN in the protected production env}
+      COSMOS_OIDC_ISSUER: ${COSMOS_OIDC_ISSUER:-https://center.andersmadsen.dk/realms/humane}
+      COSMOS_OIDC_JWKS_URI: ${COSMOS_OIDC_JWKS_URI:-http://keycloak:8080/realms/humane/protocol/openid-connect/certs}
+      COSMOS_OIDC_AUDIENCE: ${COSMOS_OIDC_AUDIENCE:-}
+      COSMOS_ADMIN_TOKEN: ${COSMOS_ADMIN_TOKEN:?set COSMOS_ADMIN_TOKEN in the protected production env}
+      COSMOS_CENTER_PROJECTION_TOKEN: ${COSMOS_CENTER_PROJECTION_TOKEN:?set COSMOS_CENTER_PROJECTION_TOKEN in the protected production env}
       # Historical compatibility name: this enables the authenticated Center
       # projection/admin router backed by the real PostgreSQL store. It does
       # not seed or serve recovered sample data.
-      CARRY_DEMO_ENABLED: ${CARRY_DEMO_ENABLED:-true}
-      CARRY_LLM_BASE_URL: ${CARRY_LLM_BASE_URL:-https://openrouter.ai/api/v1}
-      CARRY_LLM_API_KEY: ${CARRY_LLM_API_KEY:-}
+      COSMOS_DEMO_ENABLED: ${COSMOS_DEMO_ENABLED:-true}
+      COSMOS_LLM_BASE_URL: ${COSMOS_LLM_BASE_URL:-https://openrouter.ai/api/v1}
+      COSMOS_LLM_API_KEY: ${COSMOS_LLM_API_KEY:-}
       # Deployment-scoped fallback. Keep this separate from the generic key so
       # a local endpoint can use a harmless placeholder without that value ever
       # being mistaken for an OpenRouter credential.
-      CARRY_OPENROUTER_API_KEY: ${CARRY_OPENROUTER_API_KEY:-}
-      CARRY_LLM_MODEL: ${CARRY_LLM_MODEL:-openai/gpt-5.6-luna}
-      CARRY_LLM_REASONING_EFFORT: ${CARRY_LLM_REASONING_EFFORT:-}
-      CARRY_LLM_MAX_TOKENS: ${CARRY_LLM_MAX_TOKENS:-512}
-      CARRY_VISION_MODEL: ${CARRY_VISION_MODEL:-}
-      # Carry used a small self-hosted model for loading blurbs while the main
+      COSMOS_OPENROUTER_API_KEY: ${COSMOS_OPENROUTER_API_KEY:-}
+      COSMOS_LLM_MODEL: ${COSMOS_LLM_MODEL:-openai/gpt-5.6-luna}
+      COSMOS_LLM_REASONING_EFFORT: ${COSMOS_LLM_REASONING_EFFORT:-}
+      COSMOS_LLM_MAX_TOKENS: ${COSMOS_LLM_MAX_TOKENS:-512}
+      COSMOS_VISION_MODEL: ${COSMOS_VISION_MODEL:-}
+      # Cosmos used a small self-hosted model for loading blurbs while the main
       # model reasoned. These settings preserve that split without routing the
       # full tool catalog through the small local model.
-      CARRY_INTERSTITIAL_BASE_URL: ${CARRY_INTERSTITIAL_BASE_URL:-}
-      CARRY_INTERSTITIAL_MODEL: ${CARRY_INTERSTITIAL_MODEL:-}
-      CARRY_INTERSTITIAL_API_KEY: ${CARRY_INTERSTITIAL_API_KEY:-}
+      COSMOS_INTERSTITIAL_BASE_URL: ${COSMOS_INTERSTITIAL_BASE_URL:-}
+      COSMOS_INTERSTITIAL_MODEL: ${COSMOS_INTERSTITIAL_MODEL:-}
+      COSMOS_INTERSTITIAL_API_KEY: ${COSMOS_INTERSTITIAL_API_KEY:-}
       # Private, unmetered search path. The URL is fixed by this Compose model;
       # only SearXNG receives its own session secret.
-      CARRY_SEARXNG_BASE_URL: http://searxng:8080
-      CARRY_SERPAPI_KEY: ${CARRY_SERPAPI_KEY:-}
-      CARRY_GOOGLE_MAPS_KEY: ${CARRY_GOOGLE_MAPS_KEY:-}
-      CARRY_PIRATE_WEATHER_KEY: ${CARRY_PIRATE_WEATHER_KEY:-}
-      CARRY_WOLFRAM_APP_ID: ${CARRY_WOLFRAM_APP_ID:-}
-      CARRY_PPLX_API_KEY: ${CARRY_PPLX_API_KEY:-}
-      CARRY_PPLX_MODEL: ${CARRY_PPLX_MODEL:-sonar}
-      # The Rust adapter accepts both the established CARRY_AZURE_SPEECH_*
+      COSMOS_SEARXNG_BASE_URL: http://searxng:8080
+      COSMOS_SERPAPI_KEY: ${COSMOS_SERPAPI_KEY:-}
+      COSMOS_GOOGLE_MAPS_KEY: ${COSMOS_GOOGLE_MAPS_KEY:-}
+      COSMOS_PIRATE_WEATHER_KEY: ${COSMOS_PIRATE_WEATHER_KEY:-}
+      COSMOS_WOLFRAM_APP_ID: ${COSMOS_WOLFRAM_APP_ID:-}
+      COSMOS_PPLX_API_KEY: ${COSMOS_PPLX_API_KEY:-}
+      COSMOS_PPLX_MODEL: ${COSMOS_PPLX_MODEL:-sonar}
+      # The Rust adapter accepts both the established COSMOS_AZURE_SPEECH_*
       # names and the unscoped Azure names; these values stay scoped to ai-bus.
       # Key and region are one credential pair — a key is only valid in the
       # region that issued it — so both resolve from the scoped names first.
       # Preferring the unscoped region here once paired a southeastasia key
       # with a stale eastus region and every synthesis failed with 401.
-      AZURE_SPEECH_KEY: ${CARRY_AZURE_SPEECH_KEY:-${AZURE_SPEECH_KEY:-}}
-      AZURE_SPEECH_REGION: ${CARRY_AZURE_SPEECH_REGION:-${AZURE_SPEECH_REGION:-}}
-      AZURE_SPEECH_VOICE: ${CARRY_AZURE_SPEECH_VOICE:-${AZURE_SPEECH_VOICE:-en-US-AvaMultilingualNeural}}
-      CARRY_ATTEST_CA_CERT: /etc/carry-attest/ca.crt
-      CARRY_ATTEST_CA_KEY: /etc/carry-attest/ca.key
-      CARRY_DEVICE_STATUS_CA_CERT: /etc/carry-attest/ca.crt
-      CARRY_ONBOARDING_ENDPOINT: ${CARRY_ONBOARDING_ENDPOINT:?set the public onboarding endpoint}
-      CARRY_ONBOARDING_AUTHORITY: ${CARRY_ONBOARDING_AUTHORITY:-carry-edge}
-      CARRY_CAPTURE_UPLOAD_BASE_URL: ${CARRY_CAPTURE_UPLOAD_BASE_URL:?set the public capability-upload origin}
-      CARRY_CAPTURE_SHARE_BASE_URL: ${CARRY_CAPTURE_SHARE_BASE_URL:-https://center.andersmadsen.dk}
-      CARRY_SHARE_TOKEN_SECRET: ${CARRY_SHARE_TOKEN_SECRET:?set CARRY_SHARE_TOKEN_SECRET in the protected production env}
-      CARRY_MUSICBRAINZ_BASE_URL: ${CARRY_MUSICBRAINZ_BASE_URL:-https://musicbrainz.org}
-      CARRY_SHOPPING_VISUAL_SEARCH_URL: ${CARRY_SHOPPING_VISUAL_SEARCH_URL:-}
-      CARRY_SHOPPING_ALLOWED_HOSTS: ${CARRY_SHOPPING_ALLOWED_HOSTS:-}
-      CARRY_SHOPPING_API_KEY: ${CARRY_SHOPPING_API_KEY:-}
-      CARRY_ENROLLMENT_PINCODE: ${CARRY_ENROLLMENT_PINCODE:?set the reviewed four-digit enrollment code}
-      CARRY_ENROLLMENT_USER_ID: ${CARRY_ENROLLMENT_USER_ID:?set the enrollment user id}
+      AZURE_SPEECH_KEY: ${COSMOS_AZURE_SPEECH_KEY:-${AZURE_SPEECH_KEY:-}}
+      AZURE_SPEECH_REGION: ${COSMOS_AZURE_SPEECH_REGION:-${AZURE_SPEECH_REGION:-}}
+      AZURE_SPEECH_VOICE: ${COSMOS_AZURE_SPEECH_VOICE:-${AZURE_SPEECH_VOICE:-en-US-AvaMultilingualNeural}}
+      COSMOS_ATTEST_CA_CERT: /etc/cosmos-attest/ca.crt
+      COSMOS_ATTEST_CA_KEY: /etc/cosmos-attest/ca.key
+      COSMOS_DEVICE_STATUS_CA_CERT: /etc/cosmos-attest/ca.crt
+      COSMOS_ONBOARDING_ENDPOINT: ${COSMOS_ONBOARDING_ENDPOINT:?set the public onboarding endpoint}
+      COSMOS_ONBOARDING_AUTHORITY: ${COSMOS_ONBOARDING_AUTHORITY:-cosmos-edge}
+      COSMOS_CAPTURE_UPLOAD_BASE_URL: ${COSMOS_CAPTURE_UPLOAD_BASE_URL:?set the public capability-upload origin}
+      COSMOS_CAPTURE_SHARE_BASE_URL: ${COSMOS_CAPTURE_SHARE_BASE_URL:-https://center.andersmadsen.dk}
+      COSMOS_SHARE_TOKEN_SECRET: ${COSMOS_SHARE_TOKEN_SECRET:?set COSMOS_SHARE_TOKEN_SECRET in the protected production env}
+      COSMOS_MUSICBRAINZ_BASE_URL: ${COSMOS_MUSICBRAINZ_BASE_URL:-https://musicbrainz.org}
+      COSMOS_SHOPPING_VISUAL_SEARCH_URL: ${COSMOS_SHOPPING_VISUAL_SEARCH_URL:-}
+      COSMOS_SHOPPING_ALLOWED_HOSTS: ${COSMOS_SHOPPING_ALLOWED_HOSTS:-}
+      COSMOS_SHOPPING_API_KEY: ${COSMOS_SHOPPING_API_KEY:-}
+      COSMOS_ENROLLMENT_PINCODE: ${COSMOS_ENROLLMENT_PINCODE:?set the reviewed four-digit enrollment code}
+      COSMOS_ENROLLMENT_USER_ID: ${COSMOS_ENROLLMENT_USER_ID:?set the enrollment user id}
     volumes:
-      - carry-state:/var/lib/carry
-      - ${REVIVAL_ATTEST_DIR:-${CARRY_ATTEST_DIR:-${REVIVAL_PRIVATE_DIR:-/home/anders/ai-pin-revival/private}/attest}}/ca.crt:/etc/carry-attest/ca.crt:ro
-      - ${REVIVAL_ATTEST_DIR:-${CARRY_ATTEST_DIR:-${REVIVAL_PRIVATE_DIR:-/home/anders/ai-pin-revival/private}/attest}}/ca.key:/etc/carry-attest/ca.key:ro
+      - cosmos-state:/var/lib/cosmos
+      - ${REVIVAL_ATTEST_DIR:-${COSMOS_ATTEST_DIR:-${REVIVAL_PRIVATE_DIR:-/home/anders/ai-pin-revival/private}/attest}}/ca.crt:/etc/cosmos-attest/ca.crt:ro
+      - ${REVIVAL_ATTEST_DIR:-${COSMOS_ATTEST_DIR:-${REVIVAL_PRIVATE_DIR:-/home/anders/ai-pin-revival/private}/attest}}/ca.key:/etc/cosmos-attest/ca.key:ro
     ports:
       - 127.0.0.1:${REVIVAL_AI_BUS_HTTP_PORT:-18086}:18080
     networks: !override
@@ -104,83 +104,83 @@ services:
 
   account:
     environment:
-      CARRY_AUTH_MODE: edge-authenticated
-      CARRY_ENVIRONMENT: production
+      COSMOS_AUTH_MODE: edge-authenticated
+      COSMOS_ENVIRONMENT: production
       REVIVAL_DEPLOYMENT_ENVIRONMENT: production
-      CARRY_DATABASE_URL: ${CARRY_DATABASE_URL:?set CARRY_DATABASE_URL in the protected production env}
-      CARRY_EDGE_TOKEN: ${CARRY_EDGE_TOKEN:?set CARRY_EDGE_TOKEN in the protected production env}
-      CARRY_OIDC_ISSUER: ${CARRY_OIDC_ISSUER:-https://center.andersmadsen.dk/realms/humane}
-      CARRY_OIDC_JWKS_URI: ${CARRY_OIDC_JWKS_URI:-http://keycloak:8080/realms/humane/protocol/openid-connect/certs}
-      CARRY_OIDC_AUDIENCE: ${CARRY_OIDC_AUDIENCE:-}
+      COSMOS_DATABASE_URL: ${COSMOS_DATABASE_URL:?set COSMOS_DATABASE_URL in the protected production env}
+      COSMOS_EDGE_TOKEN: ${COSMOS_EDGE_TOKEN:?set COSMOS_EDGE_TOKEN in the protected production env}
+      COSMOS_OIDC_ISSUER: ${COSMOS_OIDC_ISSUER:-https://center.andersmadsen.dk/realms/humane}
+      COSMOS_OIDC_JWKS_URI: ${COSMOS_OIDC_JWKS_URI:-http://keycloak:8080/realms/humane/protocol/openid-connect/certs}
+      COSMOS_OIDC_AUDIENCE: ${COSMOS_OIDC_AUDIENCE:-}
     depends_on: *production-cosmos-dependencies
 
   contacts:
     environment:
-      CARRY_AUTH_MODE: edge-authenticated
-      CARRY_ENVIRONMENT: production
+      COSMOS_AUTH_MODE: edge-authenticated
+      COSMOS_ENVIRONMENT: production
       REVIVAL_DEPLOYMENT_ENVIRONMENT: production
-      CARRY_DATABASE_URL: ${CARRY_DATABASE_URL:?set CARRY_DATABASE_URL in the protected production env}
-      CARRY_EDGE_TOKEN: ${CARRY_EDGE_TOKEN:?set CARRY_EDGE_TOKEN in the protected production env}
-      CARRY_OIDC_ISSUER: ${CARRY_OIDC_ISSUER:-https://center.andersmadsen.dk/realms/humane}
-      CARRY_OIDC_JWKS_URI: ${CARRY_OIDC_JWKS_URI:-http://keycloak:8080/realms/humane/protocol/openid-connect/certs}
-      CARRY_OIDC_AUDIENCE: ${CARRY_OIDC_AUDIENCE:-}
+      COSMOS_DATABASE_URL: ${COSMOS_DATABASE_URL:?set COSMOS_DATABASE_URL in the protected production env}
+      COSMOS_EDGE_TOKEN: ${COSMOS_EDGE_TOKEN:?set COSMOS_EDGE_TOKEN in the protected production env}
+      COSMOS_OIDC_ISSUER: ${COSMOS_OIDC_ISSUER:-https://center.andersmadsen.dk/realms/humane}
+      COSMOS_OIDC_JWKS_URI: ${COSMOS_OIDC_JWKS_URI:-http://keycloak:8080/realms/humane/protocol/openid-connect/certs}
+      COSMOS_OIDC_AUDIENCE: ${COSMOS_OIDC_AUDIENCE:-}
     depends_on: *production-cosmos-dependencies
 
   feature-flags:
     environment:
-      CARRY_AUTH_MODE: edge-authenticated
-      CARRY_ENVIRONMENT: production
+      COSMOS_AUTH_MODE: edge-authenticated
+      COSMOS_ENVIRONMENT: production
       REVIVAL_DEPLOYMENT_ENVIRONMENT: production
-      CARRY_DATABASE_URL: ${CARRY_DATABASE_URL:?set CARRY_DATABASE_URL in the protected production env}
-      CARRY_EDGE_TOKEN: ${CARRY_EDGE_TOKEN:?set CARRY_EDGE_TOKEN in the protected production env}
-      CARRY_OIDC_ISSUER: ${CARRY_OIDC_ISSUER:-https://center.andersmadsen.dk/realms/humane}
-      CARRY_OIDC_JWKS_URI: ${CARRY_OIDC_JWKS_URI:-http://keycloak:8080/realms/humane/protocol/openid-connect/certs}
-      CARRY_OIDC_AUDIENCE: ${CARRY_OIDC_AUDIENCE:-}
-      CARRY_REMOTE_TTS_ENABLED: ${CARRY_REMOTE_TTS_ENABLED:-false}
+      COSMOS_DATABASE_URL: ${COSMOS_DATABASE_URL:?set COSMOS_DATABASE_URL in the protected production env}
+      COSMOS_EDGE_TOKEN: ${COSMOS_EDGE_TOKEN:?set COSMOS_EDGE_TOKEN in the protected production env}
+      COSMOS_OIDC_ISSUER: ${COSMOS_OIDC_ISSUER:-https://center.andersmadsen.dk/realms/humane}
+      COSMOS_OIDC_JWKS_URI: ${COSMOS_OIDC_JWKS_URI:-http://keycloak:8080/realms/humane/protocol/openid-connect/certs}
+      COSMOS_OIDC_AUDIENCE: ${COSMOS_OIDC_AUDIENCE:-}
+      COSMOS_REMOTE_TTS_ENABLED: ${COSMOS_REMOTE_TTS_ENABLED:-false}
     depends_on: *production-cosmos-dependencies
 
   notable-events:
     environment:
-      CARRY_AUTH_MODE: edge-authenticated
-      CARRY_ENVIRONMENT: production
+      COSMOS_AUTH_MODE: edge-authenticated
+      COSMOS_ENVIRONMENT: production
       REVIVAL_DEPLOYMENT_ENVIRONMENT: production
-      CARRY_DATABASE_URL: ${CARRY_DATABASE_URL:?set CARRY_DATABASE_URL in the protected production env}
-      CARRY_EDGE_TOKEN: ${CARRY_EDGE_TOKEN:?set CARRY_EDGE_TOKEN in the protected production env}
-      CARRY_OIDC_ISSUER: ${CARRY_OIDC_ISSUER:-https://center.andersmadsen.dk/realms/humane}
-      CARRY_OIDC_JWKS_URI: ${CARRY_OIDC_JWKS_URI:-http://keycloak:8080/realms/humane/protocol/openid-connect/certs}
-      CARRY_OIDC_AUDIENCE: ${CARRY_OIDC_AUDIENCE:-}
+      COSMOS_DATABASE_URL: ${COSMOS_DATABASE_URL:?set COSMOS_DATABASE_URL in the protected production env}
+      COSMOS_EDGE_TOKEN: ${COSMOS_EDGE_TOKEN:?set COSMOS_EDGE_TOKEN in the protected production env}
+      COSMOS_OIDC_ISSUER: ${COSMOS_OIDC_ISSUER:-https://center.andersmadsen.dk/realms/humane}
+      COSMOS_OIDC_JWKS_URI: ${COSMOS_OIDC_JWKS_URI:-http://keycloak:8080/realms/humane/protocol/openid-connect/certs}
+      COSMOS_OIDC_AUDIENCE: ${COSMOS_OIDC_AUDIENCE:-}
     depends_on: *production-cosmos-dependencies
 
   provisioning:
     environment:
-      CARRY_AUTH_MODE: edge-authenticated
-      CARRY_ENVIRONMENT: production
+      COSMOS_AUTH_MODE: edge-authenticated
+      COSMOS_ENVIRONMENT: production
       REVIVAL_DEPLOYMENT_ENVIRONMENT: production
-      CARRY_DATABASE_URL: ${CARRY_DATABASE_URL:?set CARRY_DATABASE_URL in the protected production env}
-      CARRY_EDGE_TOKEN: ${CARRY_EDGE_TOKEN:?set CARRY_EDGE_TOKEN in the protected production env}
-      CARRY_OIDC_ISSUER: ${CARRY_OIDC_ISSUER:-https://center.andersmadsen.dk/realms/humane}
-      CARRY_OIDC_JWKS_URI: ${CARRY_OIDC_JWKS_URI:-http://keycloak:8080/realms/humane/protocol/openid-connect/certs}
-      CARRY_OIDC_AUDIENCE: ${CARRY_OIDC_AUDIENCE:-}
-      CARRY_DUC_CA_CERT: /etc/carry-duc/duc-ca.crt
-      CARRY_DUC_CA_KEY: /etc/carry-duc/duc-ca.key
-      CARRY_ALLOW_SINGLE_REPLICA_ENROLLMENT: "1"
-      CARRY_ENROLLMENT_PINCODE: ${CARRY_ENROLLMENT_PINCODE:?set the reviewed four-digit enrollment code}
-      CARRY_ENROLLMENT_USER_ID: ${CARRY_ENROLLMENT_USER_ID:?set the enrollment user id}
-      CARRY_OPAQUE_SEED: ${CARRY_OPAQUE_SEED:?set a private base64 OPAQUE seed}
+      COSMOS_DATABASE_URL: ${COSMOS_DATABASE_URL:?set COSMOS_DATABASE_URL in the protected production env}
+      COSMOS_EDGE_TOKEN: ${COSMOS_EDGE_TOKEN:?set COSMOS_EDGE_TOKEN in the protected production env}
+      COSMOS_OIDC_ISSUER: ${COSMOS_OIDC_ISSUER:-https://center.andersmadsen.dk/realms/humane}
+      COSMOS_OIDC_JWKS_URI: ${COSMOS_OIDC_JWKS_URI:-http://keycloak:8080/realms/humane/protocol/openid-connect/certs}
+      COSMOS_OIDC_AUDIENCE: ${COSMOS_OIDC_AUDIENCE:-}
+      COSMOS_DUC_CA_CERT: /etc/cosmos-duc/duc-ca.crt
+      COSMOS_DUC_CA_KEY: /etc/cosmos-duc/duc-ca.key
+      COSMOS_ALLOW_SINGLE_REPLICA_ENROLLMENT: "1"
+      COSMOS_ENROLLMENT_PINCODE: ${COSMOS_ENROLLMENT_PINCODE:?set the reviewed four-digit enrollment code}
+      COSMOS_ENROLLMENT_USER_ID: ${COSMOS_ENROLLMENT_USER_ID:?set the enrollment user id}
+      COSMOS_OPAQUE_SEED: ${COSMOS_OPAQUE_SEED:?set a private base64 OPAQUE seed}
     volumes:
-      - carry-state:/var/lib/carry
-      - ${REVIVAL_DUC_DIR:-${CARRY_DUC_DIR:-${REVIVAL_PRIVATE_DIR:-/home/anders/ai-pin-revival/private}/duc}}/duc-ca.crt:/etc/carry-duc/duc-ca.crt:ro
-      - ${REVIVAL_DUC_DIR:-${CARRY_DUC_DIR:-${REVIVAL_PRIVATE_DIR:-/home/anders/ai-pin-revival/private}/duc}}/duc-ca.key:/etc/carry-duc/duc-ca.key:ro
+      - cosmos-state:/var/lib/cosmos
+      - ${REVIVAL_DUC_DIR:-${COSMOS_DUC_DIR:-${REVIVAL_PRIVATE_DIR:-/home/anders/ai-pin-revival/private}/duc}}/duc-ca.crt:/etc/cosmos-duc/duc-ca.crt:ro
+      - ${REVIVAL_DUC_DIR:-${COSMOS_DUC_DIR:-${REVIVAL_PRIVATE_DIR:-/home/anders/ai-pin-revival/private}/duc}}/duc-ca.key:/etc/cosmos-duc/duc-ca.key:ro
     depends_on: *production-cosmos-dependencies
 
   center:
     user: "1000:1001"
     environment:
       REVIVAL_DEPLOYMENT_ENVIRONMENT: production
-      CARRY_EDGE_TOKEN: ${CARRY_EDGE_TOKEN:?set CARRY_EDGE_TOKEN in the protected production env}
-      CARRY_ADMIN_TOKEN: ${CARRY_ADMIN_TOKEN:?set CARRY_ADMIN_TOKEN in the protected production env}
-      CARRY_CENTER_PROJECTION_TOKEN: ${CARRY_CENTER_PROJECTION_TOKEN:?set CARRY_CENTER_PROJECTION_TOKEN in the protected production env}
-      CARRY_SHARE_TOKEN_SECRET: ${CARRY_SHARE_TOKEN_SECRET:?set CARRY_SHARE_TOKEN_SECRET in the protected production env}
+      COSMOS_EDGE_TOKEN: ${COSMOS_EDGE_TOKEN:?set COSMOS_EDGE_TOKEN in the protected production env}
+      COSMOS_ADMIN_TOKEN: ${COSMOS_ADMIN_TOKEN:?set COSMOS_ADMIN_TOKEN in the protected production env}
+      COSMOS_CENTER_PROJECTION_TOKEN: ${COSMOS_CENTER_PROJECTION_TOKEN:?set COSMOS_CENTER_PROJECTION_TOKEN in the protected production env}
+      COSMOS_SHARE_TOKEN_SECRET: ${COSMOS_SHARE_TOKEN_SECRET:?set COSMOS_SHARE_TOKEN_SECRET in the protected production env}
       AUTH_SESSION_SECRET: ${AUTH_SESSION_SECRET:?set AUTH_SESSION_SECRET in the protected production env}
       KEYCLOAK_BASE_URL: http://keycloak:8080
       KEYCLOAK_REALM: humane
@@ -202,7 +202,7 @@ services:
     ports:
       - 127.0.0.1:${REVIVAL_CENTER_PORT:-14000}:4000
     volumes: !override
-      - ${REVIVAL_CENTER_DATA_DIR:-${CARRY_CENTER_DATA_DIR:-/home/anders/carry-center-data}}:/data
+      - ${REVIVAL_CENTER_DATA_DIR:-${COSMOS_CENTER_DATA_DIR:-/home/anders/cosmos-center-data}}:/data
       - ${REVIVAL_DATA_DIR:-/home/anders/ai-pin-revival/data}/pin-releases:/var/lib/ai-pin-revival/pin-releases:ro
     networks: !override
       - cosmos-internal
@@ -339,7 +339,7 @@ services:
       KC_DB: postgres
       KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
       KC_DB_USERNAME: keycloak
-      KC_DB_PASSWORD: ${CARRY_KEYCLOAK_DB_PASSWORD:?set CARRY_KEYCLOAK_DB_PASSWORD in the protected production env}
+      KC_DB_PASSWORD: ${COSMOS_KEYCLOAK_DB_PASSWORD:?set COSMOS_KEYCLOAK_DB_PASSWORD in the protected production env}
       KC_HOSTNAME: ${REVIVAL_PUBLIC_ORIGIN:-https://center.andersmadsen.dk}
       KC_HOSTNAME_STRICT: "true"
       KC_HTTP_ENABLED: "true"
@@ -347,7 +347,7 @@ services:
       KC_PROXY_HEADERS: xforwarded
       JAVA_OPTS_APPEND: -XX:MaxRAMPercentage=60
     volumes: !override
-      - ${REVIVAL_KEYCLOAK_THEME_DIR:-${CARRY_KEYCLOAK_THEME_DIR:-${REVIVAL_PRIVATE_DIR:-/home/anders/ai-pin-revival/private}/keycloak-theme}}:/opt/keycloak/themes/humane:ro
+      - ${REVIVAL_KEYCLOAK_THEME_DIR:-${COSMOS_KEYCLOAK_THEME_DIR:-${REVIVAL_PRIVATE_DIR:-/home/anders/ai-pin-revival/private}/keycloak-theme}}:/opt/keycloak/themes/humane:ro
     ports:
       - 127.0.0.1:${REVIVAL_KEYCLOAK_PORT:-8088}:8080
     networks: !override
@@ -362,13 +362,13 @@ services:
     user: "1000:1001"
     command:
       - -c
-      - /etc/carry-edge/envoy.yaml
+      - /etc/cosmos-edge/envoy.yaml
     volumes:
-      - ${REVIVAL_EDGE_CONFIG_FILE:-${CARRY_ENVOY_CONFIG:-${REVIVAL_PRIVATE_DIR:-/home/anders/ai-pin-revival/private}/edge/envoy.yaml}}:/etc/carry-edge/envoy.yaml:ro
-      - ${REVIVAL_EDGE_CERT_DIR:-${CARRY_EDGE_CERT_DIR:-${REVIVAL_PRIVATE_DIR:-/home/anders/ai-pin-revival/private}/edge/certs}}/server.crt:/etc/carry-edge/certs/server.crt:ro
-      - ${REVIVAL_EDGE_CERT_DIR:-${CARRY_EDGE_CERT_DIR:-${REVIVAL_PRIVATE_DIR:-/home/anders/ai-pin-revival/private}/edge/certs}}/server.key:/etc/carry-edge/certs/server.key:ro
-      - ${REVIVAL_EDGE_CERT_DIR:-${CARRY_EDGE_CERT_DIR:-${REVIVAL_PRIVATE_DIR:-/home/anders/ai-pin-revival/private}/edge/certs}}/api-client-ca.crt:/etc/carry-edge/certs/api-client-ca.crt:ro
-      - ${REVIVAL_EDGE_CERT_DIR:-${CARRY_EDGE_CERT_DIR:-${REVIVAL_PRIVATE_DIR:-/home/anders/ai-pin-revival/private}/edge/certs}}/onboarding-client-ca.crt:/etc/carry-edge/certs/onboarding-client-ca.crt:ro
+      - ${REVIVAL_EDGE_CONFIG_FILE:-${COSMOS_ENVOY_CONFIG:-${REVIVAL_PRIVATE_DIR:-/home/anders/ai-pin-revival/private}/edge/envoy.yaml}}:/etc/cosmos-edge/envoy.yaml:ro
+      - ${REVIVAL_EDGE_CERT_DIR:-${COSMOS_EDGE_CERT_DIR:-${REVIVAL_PRIVATE_DIR:-/home/anders/ai-pin-revival/private}/edge/certs}}/server.crt:/etc/cosmos-edge/certs/server.crt:ro
+      - ${REVIVAL_EDGE_CERT_DIR:-${COSMOS_EDGE_CERT_DIR:-${REVIVAL_PRIVATE_DIR:-/home/anders/ai-pin-revival/private}/edge/certs}}/server.key:/etc/cosmos-edge/certs/server.key:ro
+      - ${REVIVAL_EDGE_CERT_DIR:-${COSMOS_EDGE_CERT_DIR:-${REVIVAL_PRIVATE_DIR:-/home/anders/ai-pin-revival/private}/edge/certs}}/api-client-ca.crt:/etc/cosmos-edge/certs/api-client-ca.crt:ro
+      - ${REVIVAL_EDGE_CERT_DIR:-${COSMOS_EDGE_CERT_DIR:-${REVIVAL_PRIVATE_DIR:-/home/anders/ai-pin-revival/private}/edge/certs}}/onboarding-client-ca.crt:/etc/cosmos-edge/certs/onboarding-client-ca.crt:ro
     ports:
       - 127.0.0.1:${REVIVAL_EDGE_PORT:-18443}:8443
     networks:
@@ -421,11 +421,11 @@ services:
     mem_limit: 2g
     pids_limit: 256
     environment:
-      POSTGRES_USER: carry
-      POSTGRES_DB: carry
-      POSTGRES_PASSWORD: ${CARRY_PG_PASSWORD:?set CARRY_PG_PASSWORD in the protected production env}
+      POSTGRES_USER: cosmos
+      POSTGRES_DB: cosmos
+      POSTGRES_PASSWORD: ${COSMOS_PG_PASSWORD:?set COSMOS_PG_PASSWORD in the protected production env}
     volumes:
-      - carry-pgdata:/var/lib/postgresql/data
+      - cosmos-pgdata:/var/lib/postgresql/data
     networks:
       - cosmos-internal
     logging:
@@ -442,7 +442,7 @@ services:
     healthcheck:
       test:
         - CMD-SHELL
-        - pg_isready -U carry -d carry
+        - pg_isready -U cosmos -d cosmos
       interval: 5s
       timeout: 3s
       start_period: 10s
@@ -569,28 +569,28 @@ networks:
       config:
         - subnet: 10.0.7.0/24
           gateway: 10.0.7.1
-  # The local Ollama service is intentionally owned by the established Carry
+  # The local Ollama service is intentionally owned by the established Cosmos
   # runtime. Declaring the attachment here makes name resolution survive an
   # ai-bus recreation instead of depending on an operator-issued
   # `docker network connect` repair.
   local-model:
     external: true
-    name: ${CARRY_LOCAL_MODEL_NETWORK:-humane-carry-clone_carry-local}
+    name: ${COSMOS_LOCAL_MODEL_NETWORK:-humane-cosmos-clone_cosmos-local}
 
 secrets:
   spotify_adapter_token:
     file: ${REVIVAL_SPOTIFY_ADAPTER_SECRET_FILE:-${REVIVAL_PRIVATE_DIR:-/home/anders/ai-pin-revival/private}/spotify-adapter/token}
 
 volumes:
-  carry-state: !override
+  cosmos-state: !override
     external: true
-    name: humane-carry-clone_carry-state
-  carry-pgdata: !override
+    name: humane-cosmos-clone_cosmos-state
+  cosmos-pgdata: !override
     external: true
-    name: humane-carry-clone_carry-pgdata
+    name: humane-cosmos-clone_cosmos-pgdata
   prometheus-data: !override
     external: true
-    name: humane-carry-clone_prometheus-data
+    name: humane-cosmos-clone_prometheus-data
   grafana-data: !override
     external: true
-    name: humane-carry-clone_grafana-data
+    name: humane-cosmos-clone_grafana-data

@@ -791,7 +791,7 @@ test("deployments and manifests are never removed", async () => {
   assert.doesNotMatch(entrySource, /rm -rf[^\n]*DEPLOYMENTS_DIR|rm -rf[^\n]*MANIFESTS_DIR/u);
   const document = await planned(productionShape());
   assert.ok(!("deployments" in document) || !Array.isArray(document.deployments),
-    "the plan must not carry a removal list for deployment records");
+    "the plan must not contain a removal list for deployment records");
   assert.deepEqual(Object.keys(document).filter((key) => ["backups", "releases"].includes(key)).sort(),
     ["backups", "releases"]);
   const stores = /case "\$kind" in\n\s+backup\)[\s\S]*?esac/u.exec(entrySource);

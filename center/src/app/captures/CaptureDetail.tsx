@@ -87,8 +87,8 @@ export function CaptureDetailBody({
     );
   }
 
-  // The stock Pin uploads the full burst. Ask Carry once to choose a hero when
-  // an older or just-arrived capture has no selection yet; Carry caches it.
+  // The stock Pin uploads the full burst. Ask Cosmos once to choose a hero when
+  // an older or just-arrived capture has no selection yet; Cosmos caches it.
   useEffect(() => {
     if (
       !record ||
@@ -195,7 +195,7 @@ export function CaptureDetailBody({
    * Forget → confirm, then DELETE the memory for real.
    *
    * The BFF answers 200 with a `degraded` clause when it accepted the request
-   * and deleted NOTHING (carry unconfigured, or the RPC failed). This used to
+   * and deleted NOTHING (cosmos unconfigured, or the RPC failed). This used to
    * close the lightbox on any 200, so the capture reappeared on the next
    * refetch and the wearer had been told it was gone. Now: `degraded` present
    * means the capture is still there, it stays on screen, and the message says

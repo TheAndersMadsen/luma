@@ -24,7 +24,7 @@ import {
  * plus its `pages/fitnessPresentation.ts`. The Notes, Prompts and Music tabs of
  * that page were dropped here on the grounds that "Center owns /notes,
  * /my-data/ai-mic and /my-data/music" while fitness had no counterpart. Half of
- * that was wrong: those three Center surfaces are CARRY CLOUD views, and the
+ * that was wrong: those three Center surfaces are COSMOS CLOUD views, and the
  * SPA's tabs read three tables on the device. Center now presents assistant
  * history through Ai Mic instead of exposing a second activity surface.
  *

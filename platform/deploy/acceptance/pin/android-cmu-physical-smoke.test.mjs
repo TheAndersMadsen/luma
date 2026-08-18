@@ -789,7 +789,7 @@ test("role preflight assertion enforces exact role expectations", () => {
   );
   assert.throws(
     () => assertRolePreflight(ROLE_PREFLIGHT.pin, true),
-    /pin role must not carry/,
+    /pin role must not contain/,
   );
 });
 

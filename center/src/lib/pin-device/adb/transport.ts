@@ -135,7 +135,7 @@ export interface AdbSessionTransport {
 }
 
 /**
- * A session that really does carry the device shell.
+ * A session that really does contain the device shell.
  *
  * Handed out by exactly one accessor (`getPinAdbSession()` in
  * `@/lib/pin-session`) and consumed by exactly one component
@@ -272,7 +272,7 @@ export function createTimedAdbSessionTransport(
   // `UsbAdbHttpTransport.request()` fails closed when the transport it is given
   // cannot open a bridge socket, and the HTTP-over-ADB tunnel is how every Pin
   // settings/eSIM/flags/logs call reaches the device. Forwarding it here is
-  // what lets one shared, timed session carry both the installer and the
+  // what lets one shared, timed session support both the installer and the
   // configuration panes. Deliberately NOT wrapped in the step timeout —
   // `openPty` and `startCommandStream` are untimed for the same reason: the
   // socket outlives the call that opens it, and a late rejection would leak it.

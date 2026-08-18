@@ -231,7 +231,7 @@ async fn proxy_request(
         generation: state.generation,
         method: method.to_string(),
         path,
-        // Only non-idempotent methods carry a key; the Pin's ledger uses it to
+        // Only non-idempotent methods contain a key; the Pin's ledger uses it to
         // collapse retries. GET/HEAD are naturally idempotent.
         idempotency_key: if method != Method::GET && method != Method::HEAD {
             Some(request_id.clone())

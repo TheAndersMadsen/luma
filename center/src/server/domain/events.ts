@@ -5,8 +5,8 @@
  */
 
 import {
-  CARRY_ENABLED,
-  CARRY_WEBAPI_ENABLED,
+  COSMOS_ENABLED,
+  COSMOS_WEBAPI_ENABLED,
   ORIGINATORS,
   Services,
   call,
@@ -27,7 +27,7 @@ import {
   type Sourced,
 } from "./provenance";
 
-interface CarryEvent {
+interface CosmosEvent {
   eventIdentifier?: { value?: string };
   originatorIdentifier?: string;
   creationTime?: { seconds?: string | number; nanos?: number };
@@ -36,8 +36,8 @@ interface CarryEvent {
   eventType?: string;
 }
 
-/** Maps a carry NotableEvent onto .Center's `{uuid, userCreatedAt, data:{eventData}}`. */
-function toCenterEvent(e: CarryEvent) {
+/** Maps a cosmos NotableEvent onto .Center's `{uuid, userCreatedAt, data:{eventData}}`. */
+function toCenterEvent(e: CosmosEvent) {
   return {
     uuid: e.eventIdentifier?.value ?? crypto.randomUUID(),
     userCreatedAt: tsToIso(e.creationTime),
@@ -51,30 +51,30 @@ function toCenterEvent(e: CarryEvent) {
  * row, so order it here once for every consumer: newest first, then UUID as a
  * stable tie-breaker for events created in the same clock tick.
  */
-function compareEventsNewestFirst(a: CarryEvent, b: CarryEvent): number {
+function compareEventsNewestFirst(a: CosmosEvent, b: CosmosEvent): number {
   const aMs = timestampMs(a.creationTime);
   const bMs = timestampMs(b.creationTime);
   if (aMs !== bMs) return bMs - aMs;
   return (b.eventIdentifier?.value ?? "").localeCompare(a.eventIdentifier?.value ?? "");
 }
 
-function timestampMs(ts: CarryEvent["creationTime"]): number {
+function timestampMs(ts: CosmosEvent["creationTime"]): number {
   const seconds = Number(ts?.seconds ?? 0);
   if (!Number.isFinite(seconds)) return 0;
   return seconds * 1000 + Math.floor((ts?.nanos ?? 0) / 1e6);
 }
 
 const NOTABLE_EVENTS_UNSET =
-  "Carry gRPC is unset - this Center cannot read the wearer's notable events";
+  "Cosmos gRPC is unset - this Center cannot read the wearer's notable events";
 
 export async function getEvents(domain: DomainKey, max = 200): Promise<Sourced<unknown[]>> {
   // Never substitute recovered wearer data on an authenticated My Data route.
   // Empty + provenance is both safe and loud in the UI.
-  if (!CARRY_ENABLED) return unconfigured([], "empty", NOTABLE_EVENTS_UNSET);
+  if (!COSMOS_ENABLED) return unconfigured([], "empty", NOTABLE_EVENTS_UNSET);
   try {
     const res = await call<
       { filters: { eventOriginatorId: string }; maxResults: number },
-      { events?: CarryEvent[] }
+      { events?: CosmosEvent[] }
     >(Services.events, "QueryEvents", {
       filters: { eventOriginatorId: ORIGINATORS[domain] },
       maxResults: max,
@@ -100,7 +100,7 @@ export async function getEvents(domain: DomainKey, max = 200): Promise<Sourced<u
  * collapses both to one `U:<user>` partition.
  */
 export async function deleteEvent(eventIdentifier: string): Promise<Sourced<Deleted>> {
-  if (!CARRY_WEBAPI_ENABLED) {
+  if (!COSMOS_WEBAPI_ENABLED) {
     return unconfigured({ deleted: false }, "empty", WEBAPI_UNSET_FOR_DELETE);
   }
   try {
@@ -132,7 +132,7 @@ const OVERVIEW_META: Array<{ key: DomainKey; label: string; href: string }> = [
 const OVERVIEW_MAX_RESULTS = 1000;
 
 export async function getMyDataOverview(): Promise<Sourced<MyDataOverviewEntry[]>> {
-  if (!CARRY_ENABLED) return unconfigured([], "empty", NOTABLE_EVENTS_UNSET);
+  if (!COSMOS_ENABLED) return unconfigured([], "empty", NOTABLE_EVENTS_UNSET);
   try {
     const startOfDay = new Date();
     startOfDay.setHours(0, 0, 0, 0);
@@ -141,7 +141,7 @@ export async function getMyDataOverview(): Promise<Sourced<MyDataOverviewEntry[]
       OVERVIEW_META.map(async (meta) => {
         const res = await call<
           { filters: { eventOriginatorId: string }; maxResults: number },
-          { events?: CarryEvent[] }
+          { events?: CosmosEvent[] }
         >(Services.events, "QueryEvents", {
           filters: { eventOriginatorId: ORIGINATORS[meta.key] },
           maxResults: OVERVIEW_MAX_RESULTS,
@@ -180,7 +180,7 @@ export async function getMyDataOverview(): Promise<Sourced<MyDataOverviewEntry[]
  * QueryEvents at a thousand results each, every one of them decrypted server
  * side — from the SourceBadge in the chrome of every page, every 60 seconds,
  * to decide a single boolean. That made the honesty endpoint the heaviest call
- * in the system and put it first in line to blow CARRY_DEADLINE_MS, at which
+ * in the system and put it first in line to blow COSMOS_DEADLINE_MS, at which
  * point the badge reports a healthy backend as unreachable.
  *
  * One originator, one result, and a one-hour window so the store's WHERE clause
@@ -189,7 +189,7 @@ export async function getMyDataOverview(): Promise<Sourced<MyDataOverviewEntry[]
  * it fails exactly when they do. Carries no data — the answer is the state.
  */
 export async function getGrpcHealth(): Promise<Sourced<null>> {
-  if (!CARRY_ENABLED) return unconfigured(null, "empty", NOTABLE_EVENTS_UNSET);
+  if (!COSMOS_ENABLED) return unconfigured(null, "empty", NOTABLE_EVENTS_UNSET);
   const since = Math.floor(Date.now() / 1000) - 3600;
   try {
     await call<
@@ -197,7 +197,7 @@ export async function getGrpcHealth(): Promise<Sourced<null>> {
         filters: { eventOriginatorId: string; eventStartTime: { seconds: string; nanos: number } };
         maxResults: number;
       },
-      { events?: CarryEvent[] }
+      { events?: CosmosEvent[] }
     >(Services.events, "QueryEvents", {
       filters: {
         eventOriginatorId: ORIGINATORS.AI_MIC,

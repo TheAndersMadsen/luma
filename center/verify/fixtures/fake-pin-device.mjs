@@ -102,7 +102,7 @@ export function packageDump(packageName, version, signer = DEVICE_SIGNER_IDENTIT
   );
 }
 
-/** A healthy Pin carrying exactly the fixture target's version of everything. */
+/** A healthy Pin containing exactly the fixture target's version of everything. */
 export function deviceShell(overrides = {}) {
   const dump = (version, packageName) => packageDump(packageName, version);
 
@@ -198,7 +198,7 @@ export function fakeDevice(handlers) {
  * for these routes the query IS the request — a `before` cursor the client
  * dropped would otherwise look identical to one it sent. A handler is either a
  * body (JSON-encoded, 200) or `{ status, body }` for a failure — so a 200 body
- * may not carry a top-level `status` field. None of the Pin's envelopes do;
+ * may not contain a top-level `status` field. None of the Pin's envelopes do;
  * `status` on a music row is inside `items`, where this never looks.
  *
  * Only what `PinClient.request` touches is implemented: `ok`, `status`, and

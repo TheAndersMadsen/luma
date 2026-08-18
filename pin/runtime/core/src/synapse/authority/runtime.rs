@@ -74,7 +74,7 @@ impl AgenticTraceResult {
     /// Classify an observation without inspecting or logging its content.
     ///
     /// `ok=false` deliberately means only "no usable observation". The current
-    /// loop outcome does not carry a typed distinction between a provider
+    /// loop outcome does not contain a typed distinction between a provider
     /// outage and invalid arguments, so guessing from an error string would make
     /// the proof less truthful. An unadvertised name is the one structurally
     /// proven invalid case.
@@ -657,7 +657,7 @@ fn unique_rank_one_track(result: &Value) -> Option<&Value> {
 
 /// A broker rejection reason. The message is `&'static str` by design: it is
 /// logged verbatim into the content-free tool trace and forwarded to the model
-/// observation, so it must never carry user content. A `&'static str` cannot
+/// observation, so it must never contain user content. A `&'static str` cannot
 /// embed a runtime query or coordinate, enforcing that at compile time.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AgenticToolError {

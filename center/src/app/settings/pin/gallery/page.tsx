@@ -26,7 +26,7 @@ import { GalleryFrame } from "./DeviceMedia";
 /*
  * Everything the Pin has captured and is still holding on its own disk.
  *
- * This is NOT /captures. That page reads the wearer's account through the Carry
+ * This is NOT /captures. That page reads the wearer's account through the Cosmos
  * cloud and shows what was successfully uploaded; this one reads
  * `GET /api/memories` over the USB session and shows what is on the device
  * right now — including the captures that never made it up, which is exactly

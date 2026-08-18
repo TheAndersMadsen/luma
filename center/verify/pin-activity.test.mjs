@@ -134,7 +134,7 @@ test("a single-row delete confirmation names the row and the store", () => {
 
 test("each tab names the distinct cloud-backed Center surface it is not", () => {
   // The whole reason this pane exists is that Center already ships /notes,
-  // /my-data/ai-mic and /my-data/music from Carry. If a tab pointed at the
+  // /my-data/ai-mic and /my-data/music from Cosmos. If a tab pointed at the
   // wrong one — or two tabs pointed at the same one — the disambiguation would
   // be worse than none.
   assert.deepEqual(
@@ -151,7 +151,7 @@ test("each tab names the distinct cloud-backed Center surface it is not", () => 
     assert.match(tab.title, /this Pin/, `${tab.kind} heading must name the device`);
     assert.match(
       tab.cloudNote,
-      /account|Carry/,
+      /account|Cosmos/,
       `${tab.kind} must say the other store is the account's`,
     );
   }
@@ -236,7 +236,7 @@ test("a note's location prefers the most human form the device resolved", () => 
   assert.equal(at({ latitude: 1, longitude: 2, full_address: "Nyhavn 1, 1051" }), "Nyhavn 1, 1051");
   // Whitespace is not a place name; fall through rather than render a blank.
   assert.equal(at({ latitude: 1, longitude: 2, human_readable: "   " }), "1.00000, 2.00000");
-  // Coordinates are shown rather than dropped: a note carrying a location the
+  // Coordinates are shown rather than dropped: a note containing a location the
   // wearer cannot see is worse than one showing numbers.
   assert.equal(at({ latitude: 55.6761, longitude: 12.5683 }), "55.67610, 12.56830");
 });

@@ -40,7 +40,7 @@
 //!
 //! Both answer `200 {"deleted": <bool>}` — `true` when a row was removed,
 //! `false` when this caller had no such row — and reserve a failure status for a
-//! store that could not carry the delete out. "Not found" is deliberately NOT an
+//! store that could not complete the delete. "Not found" is deliberately NOT an
 //! error: it is an ordinary, truthful answer, and the caller learns nothing
 //! about whether the identifier exists under some *other* account.
 
@@ -141,10 +141,10 @@ pub(crate) fn principal_for(
     Ok(None)
 }
 
-const WEB_PROJECTION_TOKEN_HEADER: &str = "x-carry-web-projection-token";
+const WEB_PROJECTION_TOKEN_HEADER: &str = "x-cosmos-web-projection-token";
 
 fn valid_projection_token(headers: &axum::http::HeaderMap) -> bool {
-    let Some(expected) = std::env::var("CARRY_CENTER_PROJECTION_TOKEN")
+    let Some(expected) = std::env::var("COSMOS_CENTER_PROJECTION_TOKEN")
         .ok()
         .filter(|token| !token.trim().is_empty())
     else {
@@ -474,7 +474,7 @@ struct NoteDto {
     created_at: i64,
     has_location: bool,
     /// True unless this exact request was authenticated on the web plane and
-    /// Carry could project plaintext it had already authenticated.
+    /// Cosmos could project plaintext it had already authenticated.
     sealed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     modified_at: Option<i64>,
@@ -593,7 +593,7 @@ async fn project_note_for_web(n: &NoteRecord, keys: &SharedKeyDirectory) -> Note
 /// somebody records that it happened. Five call sites here and in the services
 /// used to return "not found" / `sealed: true` / `continue` with no trace at
 /// all, so an ImportKeys that never ran, a directory that is process-local
-/// because `CARRY_DATABASE_URL` is unset, and a corrupt envelope were one silent
+/// because `COSMOS_DATABASE_URL` is unset, and a corrupt envelope were one silent
 /// answer.
 ///
 /// `shared` is the field that separates those: false means this process's
@@ -932,7 +932,7 @@ async fn get_thumbnail(
         [
             ("content-type", "image/jpeg"),
             ("cache-control", "private, no-store"),
-            ("x-carry-projection", "opened"),
+            ("x-cosmos-projection", "opened"),
         ],
         jpeg,
     )
@@ -1020,7 +1020,7 @@ async fn get_file(
         [
             ("content-type", "image/jpeg"),
             ("cache-control", "private, no-store"),
-            ("x-carry-projection", "opened"),
+            ("x-cosmos-projection", "opened"),
         ],
         jpeg,
     )
@@ -1062,7 +1062,7 @@ async fn list_notes(
     }
 }
 
-/// A delete the store could not carry out.
+/// A delete the store could not complete.
 ///
 /// **Never** `200 {"deleted": false}`. That body says "you had no such row", so
 /// answering an outage with it closes the wearer's page on an erasure that never
@@ -1157,7 +1157,7 @@ mod tests {
 
     #[test]
     fn internal_projection_token_upgrades_only_the_trusted_bff_to_web_plane() {
-        unsafe { std::env::set_var("CARRY_CENTER_PROJECTION_TOKEN", "projection-test-token") };
+        unsafe { std::env::set_var("COSMOS_CENTER_PROJECTION_TOKEN", "projection-test-token") };
         let mut headers = axum::http::HeaderMap::new();
         headers.insert(
             crate::config::EDGE_PRINCIPAL_HEADER,
@@ -1178,7 +1178,7 @@ mod tests {
         let web = principal_for(&headers, None).unwrap().unwrap();
         assert_eq!(web.account, "U:wearer-42");
         assert_eq!(web.plane, RequestPlane::Web);
-        unsafe { std::env::remove_var("CARRY_CENTER_PROJECTION_TOKEN") };
+        unsafe { std::env::remove_var("COSMOS_CENTER_PROJECTION_TOKEN") };
     }
 
     const TEST_KID: &str = "capture-api-test-key";
@@ -1243,7 +1243,7 @@ mod tests {
         (status, json)
     }
 
-    /// A GET carrying an edge-injected principal, the way Envoy presents one.
+    /// A GET containing an edge-injected principal, the way Envoy presents one.
     async fn get_as(app: &Router, uri: &str, device_cn: &str) -> (StatusCode, serde_json::Value) {
         let response = app
             .clone()
@@ -1252,7 +1252,7 @@ mod tests {
                     .uri(uri)
                     .header(
                         crate::config::EDGE_PRINCIPAL_HEADER,
-                        format!("By=spiffe://carry.local/edge;Subject=\"CN={device_cn}\""),
+                        format!("By=spiffe://cosmos.local/edge;Subject=\"CN={device_cn}\""),
                     )
                     .body(Body::empty())
                     .unwrap(),
@@ -1274,7 +1274,7 @@ mod tests {
     /// another. Nothing errored — the wearer's captures were simply invisible,
     /// and an empty dashboard is indistinguishable from a new account.
     ///
-    /// Both CNs below carry the SAME device id and differ only in the `U:`
+    /// Both CNs below contain the SAME device id and differ only in the `U:`
     /// segment, which is the segment minted server-side at binding — so this is
     /// exactly the discrimination the identity bridge depends on.
     #[tokio::test]
@@ -1392,7 +1392,7 @@ mod tests {
         ] {
             assert!(
                 note.get(forbidden).is_none(),
-                "a note DTO must not carry `{forbidden}`: {note}"
+                "a note DTO must not contain `{forbidden}`: {note}"
             );
         }
     }
@@ -1621,7 +1621,7 @@ mod tests {
     /// wearer's data, indistinguishable from a genuinely absent capture, over a
     /// row that is intact and that the listing still counts. The recoverable
     /// causes (ImportKeys never ran; the directory is process-local because
-    /// `CARRY_DATABASE_URL` is unset; a corrupt envelope) all landed there, with
+    /// `COSMOS_DATABASE_URL` is unset; a corrupt envelope) all landed there, with
     /// no log line at any of them.
     #[tokio::test]
     async fn an_unopenable_thumbnail_is_degraded_rather_than_a_missing_frame() {
@@ -1680,7 +1680,7 @@ mod tests {
                     .uri(format!("/capture/memory/{}/thumbnail/0", record.uuid))
                     .header(
                         crate::config::EDGE_PRINCIPAL_HEADER,
-                        format!("By=spiffe://carry.local/edge;Subject=\"CN={device_cn}\""),
+                        format!("By=spiffe://cosmos.local/edge;Subject=\"CN={device_cn}\""),
                     )
                     .body(Body::empty())
                     .unwrap(),
@@ -1795,7 +1795,7 @@ mod tests {
 
     // ── the deletes ─────────────────────────────────────────────────────────
 
-    /// A DELETE carrying an edge-injected principal, the way Envoy presents one.
+    /// A DELETE containing an edge-injected principal, the way Envoy presents one.
     async fn delete_as(
         app: &Router,
         uri: &str,
@@ -1809,7 +1809,7 @@ mod tests {
                     .uri(uri)
                     .header(
                         crate::config::EDGE_PRINCIPAL_HEADER,
-                        format!("By=spiffe://carry.local/edge;Subject=\"CN={device_cn}\""),
+                        format!("By=spiffe://cosmos.local/edge;Subject=\"CN={device_cn}\""),
                     )
                     .body(Body::empty())
                     .unwrap(),

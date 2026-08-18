@@ -47,7 +47,7 @@ const PROPAGATING_HELPERS = [
   /\bServices\.wifi\b/,
 ];
 
-test("every caller of a bearer-carrying helper answers an expired session as one", async () => {
+test("every caller of a bearer-containing helper answers an expired session as one", async () => {
   const files = await sourceFiles(ROOT, readdir);
   const reached = [];
 
@@ -103,7 +103,7 @@ test("the modules that own the typed error never discard one", async () => {
  * that is very close to what actually shipped.
  *
  * This one is statement-level. For every file, it works out which
- * bearer-carrying helpers that file can actually call (from its own imports, so
+ * bearer-containing helpers that file can actually call (from its own imports, so
  * a local `const call = fetch` in adb-signer.ts is not mistaken for the gRPC
  * `call`), then looks at each `try`/`catch` whose TRY BLOCK reaches one, and at
  * each seam call that is followed by a promise-style `.catch(…)`.
@@ -253,7 +253,7 @@ function swallows(source, relative) {
   return problems;
 }
 
-test("no catch on a bearer-carrying call discards an expired session", async () => {
+test("no catch on a bearer-containing call discards an expired session", async () => {
   const files = await sourceFiles(ROOT, readdir);
   const problems = [];
   const inspected = [];
@@ -316,7 +316,7 @@ test("every route that recognises the expiry answers it the same way", async () 
       `${relative} recognises an expired session but never tells the client it can be fixed by signing in`,
     );
 
-    // 401 is the answer api/settings/wifi established. A 200 or a 502 carrying
+    // 401 is the answer api/settings/wifi established. A 200 or a 502 containing
     // the flag would leave two panes disagreeing about one condition again.
     let index = source.indexOf("reauthenticate: true");
     while (index !== -1) {
@@ -391,7 +391,7 @@ test("the sweep fails the shapes it exists to catch", () => {
       `import { call, SessionExpiredError } from "@/server/cosmos";
        try { await call("x", "y", {}); } catch (error) {
          if (error instanceof SessionExpiredError) return reauthenticate();
-         return NextResponse.json({ error: "carry did not answer" }, { status: 502 });
+         return NextResponse.json({ error: "cosmos did not answer" }, { status: 502 });
        }`,
       "app/api/example/route.ts",
     ),

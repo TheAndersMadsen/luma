@@ -82,7 +82,7 @@ all about whether an off-host copy exists.
 stops the wearer's Pin bridge and every application writer for minutes. Its
 destination is therefore checked twice — once before the host is touched at all,
 and again at the copy — and it must be an absolute path, outside the source tree
-(private keys must never land where the next release package would carry them),
+(private keys must never land where the next release package would contain them),
 and free of an existing bundle for that id
 (`platform/deploy/vps/backup.sh:39-48`, `:280-295`). An unusable `--fetch-dir`
 costs nothing rather than wasting the whole quiesced window. What the bundle
@@ -129,7 +129,7 @@ exercises the same sealed-bearer path a wearer does.
 **What to create, in Keycloak (`https://center.andersmadsen.dk`, realm
 `humane`).** One ordinary realm user, and it must be *ordinary*:
 
-- **not** in `CARRY_OPERATOR_EMAILS` and holding no `carry-operator` role, on
+- **not** in `COSMOS_OPERATOR_EMAILS` and holding no `cosmos-operator` role, on
   the realm or on the `center` client;
 - **not** the paired Pin owner (`REVIVAL_PIN_BRIDGE_OWNER_SUB`);
 - paired to no device, so it has its own empty `U:<sub>` partition.
@@ -163,10 +163,10 @@ rewriting this one file, in either order, with no deploy involved.
 never reaches nginx, Cloudflare or any access log — and keeps the resulting
 cookie jar for the length of the run. That jar carries a real sealed Keycloak
 bearer, which is the only thing that exercises `openTokens`, the JWKS
-verification at the workload, and `CARRY_EDGE_TOKEN`. It then requires
+verification at the workload, and `COSMOS_EDGE_TOKEN`. It then requires
 `/api/health`, `/api/capture/notes`, `/api/capture/memories`,
 `/api/settings/wifi` and `/api/settings/features` to answer **live** with a body
-of the right shape — a 200 carrying an error or an unavailable read fails the
+of the right shape — a 200 containing an error or an unavailable read fails the
 deploy. The password appears in no argument list, no environment variable, no log
 line and no evidence file; the jar is mode `0600` and is deleted when the canary
 exits.
@@ -218,8 +218,8 @@ Two things the pane will tell you and are worth knowing in advance:
   do the values `drift.sh` requires to agree across files, nor the identity and
   release-identity settings. Set those in the named file on the VPS and deploy.
 - **"Editable" is not "deliverable", and three settings differ.**
-  `REVIVAL_PIN_SETUP_ORIGIN` and `CARRY_FEATURE_FLAGS_METRICS_URL` are Compose
-  *literals*, and `CARRY_DEADLINE_MS` is absent from the Center service's
+  `REVIVAL_PIN_SETUP_ORIGIN` and `COSMOS_FEATURE_FLAGS_METRICS_URL` are Compose
+  *literals*, and `COSMOS_DEADLINE_MS` is absent from the Center service's
   explicit environment allowlist, so no env file reaches it. Each says so in its
   own row rather than accepting a value that would deploy and do nothing.
 
@@ -290,10 +290,10 @@ ordinary deploy, and both are behind the same switch:
 
 | Held back | What it is | Where |
 | --- | --- | --- |
-| Reviewed data removals | Any migration statement whose normalized text contains `DELETE`, `TRUNCATE` or `DROP`. Today that is exactly one, pinned verbatim: the `carry_account_blob` device-status cleanup in `0005_device_status_namespacing.sql`. | `cosmos/crates/cosmos/src/store_postgres.rs:118-122`, `:225-236` |
-| Thumbnail backfill | `UPDATE carry_memory SET thumbnail_count = …` for captures written before the column existed. | `cosmos/crates/cosmos/src/store_postgres.rs:166-171`, `:256-262` |
+| Reviewed data removals | Any migration statement whose normalized text contains `DELETE`, `TRUNCATE` or `DROP`. Today that is exactly one, pinned verbatim: the `cosmos_account_blob` device-status cleanup in `0005_device_status_namespacing.sql`. | `cosmos/crates/cosmos/src/store_postgres.rs:118-122`, `:225-236` |
+| Thumbnail backfill | `UPDATE cosmos_memory SET thumbnail_count = …` for captures written before the column existed. | `cosmos/crates/cosmos/src/store_postgres.rs:166-171`, `:256-262` |
 
-`CARRY_ALLOW_DATA_REMOVALS=1` (or `true`) in a Cosmos workload's environment is
+`COSMOS_ALLOW_DATA_REMOVALS=1` (or `true`) in a Cosmos workload's environment is
 how you ask for them, and nothing else turns them on
 (`store_postgres.rs:128-133`). Unset, the migration logs at `info` which
 statement it skipped and names the variable, so a held-back removal is visible in
@@ -316,7 +316,7 @@ web change. So the removal is legitimate and reviewed; it just has to be
 something an operator does on purpose.
 
 **no command yet** — no `revival` subcommand sets it, and no Compose file in
-this repository passes `CARRY_ALLOW_DATA_REMOVALS` into a container, so putting
+this repository passes `COSMOS_ALLOW_DATA_REMOVALS` into a container, so putting
 it in the protected production env file does nothing. Running it means starting
 a Cosmos workload with the variable in its own environment, once, deliberately,
 after a `./revival backup --fetch`. Read
@@ -396,7 +396,7 @@ difference is refused rather than passed over — otherwise a table converted to
 `UNLOGGED`, which discards every existing row on the next crash, would produce
 no note of its own and ride along under the legitimate `+column` note beside it.
 This is what lets
-`cosmos/migrations/0004_listing.sql` — `carry_memory.thumbnail_count` plus three
+`cosmos/migrations/0004_listing.sql` — `cosmos_memory.thumbnail_count` plus three
 indexes — reach production, and what stops a dropped or renamed column from
 riding in beside it. Evidence survives a refusal the same way the relation-data
 gate's does: `postgres-schema.before.tsv`, `postgres-schema.after.tsv` and the
@@ -449,7 +449,7 @@ the evidence and failure boundaries behind each step.
 | Two pinned native build inputs, matched by exact SHA-256 | `${REVIVAL_CONFIG_DIR}/pin-assets/` | `platform/deploy/pin/build.mjs:78-87` |
 | A browser with WebUSB, on HTTPS or `localhost` | operator workstation | `center/src/lib/pin-device/adb/browserSupport.ts:10-30` |
 | DeviceUser CA certificate and PKCS#8 key | `${REVIVAL_SECRETS_DIR}/pki/duc-ca.crt`, `duc-ca.key` | `./revival doctor`, `cosmos/crates/cosmos/src/enrollment.rs:163-165` |
-| Attestation CA certificate and PKCS#8 key | Cosmos `CARRY_ATTEST_CA_CERT` / `CARRY_ATTEST_CA_KEY` | `cosmos/crates/cosmos/src/provision.rs:27-31` |
+| Attestation CA certificate and PKCS#8 key | Cosmos `COSMOS_ATTEST_CA_CERT` / `COSMOS_ATTEST_CA_KEY` | `cosmos/crates/cosmos/src/provision.rs:27-31` |
 
 The attestation CA is **operator-supplied configuration and is never generated
 by `revival`**. The DeviceUser CA may be imported, or created once with
@@ -461,9 +461,9 @@ every provisioning replica and in the edge's trust bundles.
 
 The attestation CA is additionally constrained by the device: the Pin verifies
 that the bundle's issuer chains to a root pinned *inside the shipped APKs*
-(`pin/runtime/android/.../CarryIdentityProvider.kt:534-540`, byte-identical to
-`pin/hook/payload/.../CarryRemoteTransport.kt:75`) —
-`O=humane-carry-clone, CN=Carry Clone Root EC 1`. An attestation CA that does
+(`pin/runtime/android/.../CosmosIdentityProvider.kt:534-540`, byte-identical to
+`pin/hook/payload/.../CosmosRemoteTransport.kt:75`) —
+`O=humane-cosmos-clone, CN=Cosmos Clone Root EC 1`. An attestation CA that does
 not chain to that exact root is rejected on the device, no matter how correct it
 looks on the server. Changing the root means rebuilding and reinstalling the Pin
 release.
@@ -625,7 +625,7 @@ Two corrections to the device's copy of the stock protocol are **in the source
 and not on the device**. They are the ones that could not be made silently:
 every other correction in `contracts/wire-divergence.json` provably could not
 change a byte the runtime emits, and these two change what the Pin puts on the
-loopback wire the moment a release carrying them is installed. The record, with
+loopback wire the moment a release containing them is installed. The record, with
 the evidence behind each, is `stagedForRelease` in that file;
 `platform/deploy/acceptance/wire-equivalence.test.mjs` holds it to the tree and
 to this section, so neither can drift from the other.
@@ -679,30 +679,30 @@ If provisioning reports it is unavailable, the deployment has no attestation CA
 ### 7. Point the Pin at your server
 
 The injector does not rewrite hostnames and does not need root or a reflash.
-Stock keeps calling `api.carry.humane.cloud` and
-`onboarding.carry.humane.cloud`; the hook pins those exact names to your edge's
+Stock keeps calling `api.cosmos.humane.cloud` and
+`onboarding.cosmos.humane.cloud`; the hook pins those exact names to your edge's
 IPv4 address, read from `Settings.Global` at
-`penumbra_carry_edge_ipv4`, by overriding gRPC's DNS resolver
-(`pin/hook/payload/.../CarryRemoteTransport.kt:151-172`, `:263-271`) and
+`penumbra_cosmos_edge_ipv4`, by overriding gRPC's DNS resolver
+(`pin/hook/payload/.../CosmosRemoteTransport.kt:151-172`, `:263-271`) and
 `Network.getAllByName` for the two cleartext connectivity hosts
 (`:175-196`). TLS trust is replaced with the pinned clone root and fails closed —
 it never falls back to Humane trust (`:237-272`).
 
-Three `Settings.Global` keys carry the whole repoint
+Three `Settings.Global` keys contain the whole repoint
 (`pin/runtime/android/.../CosmosActivationTransaction.kt:15-17`):
 
 | Key | Meaning |
 | --- | --- |
-| `penumbra_carry_remote_mode` | `1` enables clone mode; every hook is inert otherwise |
-| `penumbra_carry_edge_ipv4` | the IPv4 the pinned stock hostnames resolve to |
-| `penumbra_carry_attestation_bundle_b64` | one-shot staging slot, read and cleared by the hook in the provisioning process (`CarryRemoteTransport.kt:412-421`) |
+| `penumbra_cosmos_remote_mode` | `1` enables clone mode; every hook is inert otherwise |
+| `penumbra_cosmos_edge_ipv4` | the IPv4 the pinned stock hostnames resolve to |
+| `penumbra_cosmos_attestation_bundle_b64` | one-shot staging slot, read and cleared by the hook in the provisioning process (`CosmosRemoteTransport.kt:412-421`) |
 
 Do not write them by hand. Activation is one journalled transaction inside the
 Pin's own runtime. It validates trust, subject, key/certificate match, and
 validity before the journal or `Settings.Global` is touched
-(`pin/runtime/android/.../CarryIdentityProvider.kt:227-285`), then imports the
-identity into AndroidKeyStore, writes `penumbra_carry_edge_ipv4`, clears the
-staging slot, and writes `penumbra_carry_remote_mode=1` **last**, as the commit
+(`pin/runtime/android/.../CosmosIdentityProvider.kt:227-285`), then imports the
+identity into AndroidKeyStore, writes `penumbra_cosmos_edge_ipv4`, clears the
+staging slot, and writes `penumbra_cosmos_remote_mode=1` **last**, as the commit
 gate — so stock traffic can never be redirected to a half-configured edge
 (`CosmosActivationTransaction.kt:292-301`). Any failure rolls back
 (`:312-319`). It also refuses to run while the staging slot is non-empty
@@ -727,13 +727,13 @@ argument and no temporary file is pushed. `./revival pin activate status
 --serial SERIAL` is the read-only status path.
 
 The provider is reachable from an ADB shell because the shell uid is trusted and
-holds `DUMP`, so no root is involved (`CarryIdentityProvider.kt:37-43`,
+holds `DUMP`, so no root is involved (`CosmosIdentityProvider.kt:37-43`,
 `:420-429`). Do not bypass the guarded command with hand-written `content`
 calls.
 
 The protected credential file is the minted bundle without endpoint fields. The
 host command supplies the fixed endpoints and edge IPv4 after validation
-(`CarryIdentityProvider.kt:584-601`, `:563-580`):
+(`CosmosIdentityProvider.kt:584-601`, `:563-580`):
 
 ```json
 {
@@ -748,7 +748,7 @@ The two endpoints are fixed: the transaction rejects any host that is not the
 allowlisted stock name, any scheme but HTTPS, any port but 443, and any path,
 query, or credentials (`CosmosActivationTransaction.kt:42-77`). The bundle must
 name *this* Pin — it is checked against `ro.boot.deviceid`
-(`CarryIdentityProvider.kt:247-252`). `ACTIVATION_STATUS` reports the result and
+(`CosmosIdentityProvider.kt:247-252`). `ACTIVATION_STATUS` reports the result and
 `DEACTIVATE` reverses it.
 
 ### 8. Get the Pin onto a network, and finish enrollment
@@ -856,7 +856,7 @@ tooling is in this repo; the sequencing below is traced from the source.
    unreachable and this section stops here. Establish this before planning
    anything else.
 3. **Onboarding.** Follow [Onboarding a Pin](#onboarding-a-pin) from step 0. Note
-   that `CarryOnboardingAutomation` — the hook that enters the clone-owned
+   that `CosmosOnboardingAutomation` — the hook that enters the clone-owned
    pincode — lives in the *hook payload*, so it cannot help until the packages
    are installed. On a bare device the stock onboarding UI is what you are
    driving.

@@ -12,7 +12,7 @@ import type { ActivityKind, ActivityMusic, ActivityNote } from "@/lib/pin-device
  * refuses to state an exact total it does not have.
  *
  * Every kind also names its CLOUD counterpart. Center already renders /notes,
- * /my-data/ai-mic and /my-data/music from Carry over @/server/source; those are
+ * /my-data/ai-mic and /my-data/music from Cosmos over @/server/source; those are
  * DIFFERENT stores holding different rows, and neither delete reaches the
  * other. A wearer who cannot tell which one is on screen will eventually delete
  * from the wrong one, so the pane says it on every tab instead of once in a
@@ -62,7 +62,7 @@ export const ACTIVITY_TABS: readonly ActivityTab[] = [
     cloudHref: "/notes",
     cloudLinkLabel: "Open Notes",
     cloudNote:
-      "Notes in your account are a separate store, held by Carry and reachable from any browser.",
+      "Notes in your account are a separate store, held by Cosmos and reachable from any browser.",
   },
   {
     kind: "prompts",
@@ -77,7 +77,7 @@ export const ACTIVITY_TABS: readonly ActivityTab[] = [
     cloudHref: "/my-data/ai-mic",
     cloudLinkLabel: "Open Ai Mic",
     cloudNote:
-      "Ai Mic under My Data is your account's cloud copy, held by Carry — a different store with different rows.",
+      "Ai Mic under My Data is your account's cloud copy, held by Cosmos — a different store with different rows.",
   },
   {
     kind: "music",
@@ -92,7 +92,7 @@ export const ACTIVITY_TABS: readonly ActivityTab[] = [
     cloudHref: "/my-data/music",
     cloudLinkLabel: "Open Music",
     cloudNote:
-      "Music under My Data is your account's cloud copy, held by Carry — a different store with different rows.",
+      "Music under My Data is your account's cloud copy, held by Cosmos — a different store with different rows.",
   },
 ];
 
@@ -201,7 +201,7 @@ export function withActivityItemRestored<T extends ActivityItemLike>(
  * The Pin sends whichever of these it managed to resolve, so the order is a
  * preference and not a fallback chain over one field: a reverse-geocoded place
  * name beats a street address beats raw coordinates. Coordinates are still
- * shown rather than dropped — a note carrying a location the wearer cannot see
+ * shown rather than dropped — a note containing a location the wearer cannot see
  * is worse than one showing numbers.
  */
 export function activityNoteLocation(note: ActivityNote): string | null {

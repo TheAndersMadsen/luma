@@ -1,6 +1,6 @@
 //! Pluggable chat-model abstraction for the assistant engine.
 //!
-//! carry's serverside drives an OpenAI-shaped LLM whose exact model + prompts are
+//! cosmos's serverside drives an OpenAI-shaped LLM whose exact model + prompts are
 //! Humane's (server-only, not reproduced here). This layer lets the clone's ReAct
 //! engine drive **our own** model with **our own** prompts: a [`ChatModel`] trait,
 //! a deterministic [`MockChatModel`] (so the engine is fully testable + runnable
@@ -15,22 +15,22 @@ use serde::{Deserialize, Serialize};
 pub const DEFAULT_LLM_MODEL: &str = "openai/gpt-5.6-luna";
 
 /// Resolve the model credential without requiring the VPS secret file to use
-/// the generic provider name. `CARRY_OPENROUTER_API_KEY` is the
+/// the generic provider name. `COSMOS_OPENROUTER_API_KEY` is the
 /// deployment-scoped fallback; Compose injects both names and this resolver
 /// ignores blank values, so an empty generic key cannot shadow the fallback.
 /// The dedicated interstitial/blurb model, when a deployment configures one.
 ///
-/// Carry ran the "little blurbs while the pin was doing stuff" on a small,
+/// Cosmos ran the "little blurbs while the pin was doing stuff" on a small,
 /// self-hosted model (OpenChat 3.5 0106 on `hai`), separate from the GPT-4o that
-/// did the reasoning. `CARRY_INTERSTITIAL_BASE_URL` + `CARRY_INTERSTITIAL_MODEL`
+/// did the reasoning. `COSMOS_INTERSTITIAL_BASE_URL` + `COSMOS_INTERSTITIAL_MODEL`
 /// point at it; a local endpoint needs no credential, so a missing key is filled
 /// with a placeholder the endpoint ignores rather than disabling the model.
 pub fn blurb_model() -> Option<std::sync::Arc<dyn ChatModel>> {
-    let base_url = std::env::var("CARRY_INTERSTITIAL_BASE_URL")
+    let base_url = std::env::var("COSMOS_INTERSTITIAL_BASE_URL")
         .ok()
         .filter(|value| !value.trim().is_empty())?;
-    let model = std::env::var("CARRY_INTERSTITIAL_MODEL").ok()?;
-    let api_key = std::env::var("CARRY_INTERSTITIAL_API_KEY")
+    let model = std::env::var("COSMOS_INTERSTITIAL_MODEL").ok()?;
+    let api_key = std::env::var("COSMOS_INTERSTITIAL_API_KEY")
         .ok()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| "local".to_owned());
@@ -40,7 +40,7 @@ pub fn blurb_model() -> Option<std::sync::Arc<dyn ChatModel>> {
 }
 
 pub fn configured_api_key() -> Option<String> {
-    ["CARRY_LLM_API_KEY", "CARRY_OPENROUTER_API_KEY"]
+    ["COSMOS_LLM_API_KEY", "COSMOS_OPENROUTER_API_KEY"]
         .into_iter()
         .find_map(|name| {
             std::env::var(name)
@@ -54,7 +54,7 @@ pub enum LlmError {
     #[error("llm transport: {0}")]
     Transport(String),
     /// The provider answered, and refused. `429` is a rate limit, `401`/`403` an
-    /// expired or wrong `CARRY_LLM_API_KEY`, `5xx` the provider itself.
+    /// expired or wrong `COSMOS_LLM_API_KEY`, `5xx` the provider itself.
     ///
     /// Distinct from [`LlmError::Transport`] because the engine spoke the
     /// device's timeout string for all of these and `record_turn` then labelled
@@ -145,7 +145,7 @@ pub struct ToolDef {
 }
 
 /// One model turn: either a tool call (loop) or final content (finish) — mirrors
-/// carry's loop-vs-finish decision (tool_call present => another action node).
+/// cosmos's loop-vs-finish decision (tool_call present => another action node).
 #[derive(Clone, Debug, Default)]
 pub struct ChatResponse {
     pub content: Option<String>,
@@ -356,7 +356,7 @@ pub struct OpenAiChatModel {
     /// a verbose model spend the wearer's whole 25s turn deadline generating
     /// prose that will be cut off mid-sentence when spoken — model steps are the
     /// dominant cost in a turn, so this is a latency control as much as a style
-    /// one. Configurable via `CARRY_LLM_MAX_TOKENS`; `0` disables the bound.
+    /// one. Configurable via `COSMOS_LLM_MAX_TOKENS`; `0` disables the bound.
     max_tokens: Option<u32>,
     /// How hard the model should think per step, for backends that expose it.
     ///
@@ -366,7 +366,7 @@ pub struct OpenAiChatModel {
     /// about which lookup to make.
     ///
     /// Unset by default, so the backend's own default stands and this changes
-    /// nothing until an operator opts in with `CARRY_LLM_REASONING_EFFORT`. It is
+    /// nothing until an operator opts in with `COSMOS_LLM_REASONING_EFFORT`. It is
     /// a latency knob with a correctness cost — a model that thinks less picks
     /// the wrong tool more often — so it must be measured on BOTH axes before
     /// being turned on anywhere a wearer is listening.
@@ -398,7 +398,7 @@ impl OpenAiChatModel {
 /// Resolve the per-step reasoning effort. Unset (or blank) sends nothing at all,
 /// which is what every deployment does until someone deliberately opts in.
 fn configured_reasoning_effort() -> Option<String> {
-    parse_reasoning_effort(std::env::var("CARRY_LLM_REASONING_EFFORT").ok().as_deref())
+    parse_reasoning_effort(std::env::var("COSMOS_LLM_REASONING_EFFORT").ok().as_deref())
 }
 
 /// Split out from the environment read so the policy is testable without mutating
@@ -413,11 +413,11 @@ fn parse_reasoning_effort(raw: Option<&str>) -> Option<String> {
     ALLOWED.contains(&value.as_str()).then_some(value)
 }
 
-/// Resolve the per-step ceiling. `CARRY_LLM_MAX_TOKENS=0` disables it entirely
+/// Resolve the per-step ceiling. `COSMOS_LLM_MAX_TOKENS=0` disables it entirely
 /// (for a model whose provider rejects the field); anything unparseable falls back
 /// to the default rather than silently sending no bound.
 fn configured_max_tokens() -> Option<u32> {
-    parse_max_tokens(std::env::var("CARRY_LLM_MAX_TOKENS").ok().as_deref())
+    parse_max_tokens(std::env::var("COSMOS_LLM_MAX_TOKENS").ok().as_deref())
 }
 
 /// Split out from the environment read so the policy is testable without mutating
@@ -551,7 +551,7 @@ impl ChatModel for OpenAiChatModel {
         let started = std::time::Instant::now();
         // Every arm of this chain is counted and named. Only `.send()` used to
         // be, which made `llm_transport` the ONLY producer of
-        // `carry_errors_total` in the codebase and left the two failures an
+        // `cosmos_errors_total` in the codebase and left the two failures an
         // operator actually hits — a refused request and a body that will not
         // parse — with no counter and no log at all.
         let resp = self
@@ -692,7 +692,7 @@ mod tests {
         assert_eq!(preserved.tool_call, existing.tool_call);
     }
 
-    /// Every model step must carry a generation ceiling.
+    /// Every model step must contain a generation ceiling.
     ///
     /// Stock bounds each step at 200 tokens (`TaoAgentV2.java:195`). Sending no
     /// bound lets a verbose model spend the wearer's whole 25s turn deadline
