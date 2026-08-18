@@ -16,13 +16,27 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 22.14.0
       - name: repository layout
         run: sh platform/deploy/acceptance/layout.sh
       - name: wire divergence inventory
         run: node --test platform/deploy/acceptance/wire-divergence.test.mjs
       - name: wire equivalence gate
         run: node --test platform/deploy/acceptance/wire-equivalence.test.mjs
+      - name: operator setup contract and Center projection
+        run: |
+          node --test platform/deploy/acceptance/operator-setup-contract.test.mjs
+          node --test platform/deploy/acceptance/setup-projection.test.mjs
+      - name: CLI help, setup, configuration, and support contracts
+        run: |
+          node --test platform/deploy/acceptance/cli-help.test.mjs
+          node --test platform/deploy/acceptance/cli-setup.test.mjs
+          node --test platform/deploy/acceptance/cli-config.test.mjs
+          node --test platform/deploy/acceptance/support-bundle.test.mjs
+      - name: distribution contract
+        run: node --test platform/deploy/acceptance/distribution.test.mjs
+      - name: clean isolated-XDG install
+        run: node --test platform/deploy/acceptance/fresh-install.test.mjs
 
   center:
     name: center formatting and tests
@@ -31,11 +45,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 22.14.0
       - name: install (external cache)
         env:
           NPM_CONFIG_CACHE: ${{ runner.temp }}/npm-cache
         run: npm ci --prefix center
+      - name: typecheck
+        run: npm --prefix center run typecheck
       - name: focused component checks
         run: npm --prefix center test
       - name: clean in-tree residue
@@ -48,7 +64,7 @@ jobs:
       CARGO_TARGET_DIR: ${{ runner.temp }}/cosmos-target
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.91.1
         with:
           components: rustfmt
       - name: formatting
@@ -63,7 +79,7 @@ jobs:
       CARGO_TARGET_DIR: ${{ runner.temp }}/pin-target
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.91.1
         with:
           components: rustfmt
       - name: formatting
@@ -78,6 +94,6 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 22.14.0
       - name: release check (VPS profile scope)
         run: ./revival release check

@@ -4,10 +4,39 @@
 // The stable operator entry point. Command implementations live in
 // platform/cli/ — context (configuration and runtime validation), toolchain,
 // stack, gates, releases, production, and pin — and this file only parses the
-// command line and dispatches. Help text, exit codes, environment variables,
-// and plan/confirm behavior are unchanged.
+// command line and dispatches. Help is generated from the operator contract;
+// effectful plan/confirm behavior remains delegated to the owning tools.
 
-const { PRODUCT, fail, info, initialize } = require('./platform/cli/context');
+// Help and version resolve before command implementations are loaded. This is
+// an effect boundary: even `init --help` and deeply nested aliases can neither
+// initialize state nor probe Docker, ADB, or a remote host.
+const { requestedHelp, renderHelp, versionInfo } = require('./platform/cli/command-spec');
+const rawArgs = process.argv.slice(2);
+const helpRequest = requestedHelp(rawArgs);
+if (helpRequest.requested || rawArgs.length === 0) {
+  process.stdout.write(`${renderHelp(helpRequest.tokens)}\n`);
+  process.exit(0);
+}
+if (rawArgs[0] === '--version' || rawArgs[0] === 'version') {
+  const options = rawArgs.slice(1);
+  if ((rawArgs[0] === '--version' && options.length > 0) ||
+      options.length > 1 || (options.length === 1 && options[0] !== '--json')) {
+    process.stderr.write('error: usage: ./revival version [--json] | ./revival --version\n');
+    process.exit(64);
+  }
+  try {
+    const descriptor = versionInfo();
+    process.stdout.write(options[0] === '--json'
+      ? `${JSON.stringify(descriptor)}\n`
+      : `${descriptor.product} ${descriptor.version} (operator contract ${descriptor.contractVersion})\n`);
+    process.exit(0);
+  } catch (error) {
+    process.stderr.write(`error: ${error.message}\n`);
+    process.exit(1);
+  }
+}
+
+const { PRODUCT, PKI_TOOL, fail, info, initialize, run } = require('./platform/cli/context');
 const { localDoctor, stack } = require('./platform/cli/stack');
 const { buildRelease, verifyRelease } = require('./platform/cli/releases');
 const { releaseCheck } = require('./platform/cli/gates');
@@ -20,6 +49,9 @@ const {
   rollbackProduction,
 } = require('./platform/cli/production');
 const { pinCommand } = require('./platform/cli/pin');
+const { setupCommand } = require('./platform/cli/setup');
+const { configCommand } = require('./platform/cli/config');
+const { supportBundleCommand } = require('./platform/cli/support-bundle');
 
 function help() {
   info(`${PRODUCT}\n\n` +
@@ -82,12 +114,13 @@ function help() {
     'Stock Pin to provisioned device, in order: docs/operations.md#onboarding-a-pin');
 }
 
-const args = process.argv.slice(2);
+const args = [...rawArgs];
 const command = args.shift();
 
 if (!command || ['help', '--help', '-h'].includes(command)) {
   help();
 } else if (command === 'init') {
+  if (args.length !== 0) fail('usage: ./revival init', 64);
   try {
     initialize();
   } catch (error) {
@@ -98,12 +131,15 @@ if (!command || ['help', '--help', '-h'].includes(command)) {
     args.shift();
     productionDoctor(args);
   } else {
-    localDoctor();
+    localDoctor(args);
   }
 } else if (command === 'stack') {
   stack(args.shift(), args);
-} else if (['build', 'up', 'down', 'status', 'logs', 'config'].includes(command)) {
+} else if (['build', 'up', 'down', 'status', 'logs'].includes(command)) {
   stack(command, args);
+} else if (command === 'config') {
+  if (['path', 'get', 'set', 'check', 'list', 'template'].includes(args[0])) configCommand(args);
+  else stack('config', args);
 } else if (command === 'release') {
   const subcommand = args.shift();
   if (subcommand === 'build') buildRelease(args);
@@ -129,6 +165,12 @@ if (!command || ['help', '--help', '-h'].includes(command)) {
   rollbackProduction(args);
 } else if (command === 'pin') {
   pinCommand(args);
+} else if (command === 'pki') {
+  run('node', [PKI_TOOL, ...args]);
+} else if (command === 'setup') {
+  setupCommand(args);
+} else if (command === 'support-bundle') {
+  supportBundleCommand(args);
 } else if (command === 'test') {
   if (args.length > 1 || (args.length === 1 && args[0] !== '--source')) {
     fail('usage: ./revival test [--source]', 64);

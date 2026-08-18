@@ -1,0 +1,33 @@
+{
+  "name": "Ai Pin Revival",
+  "image": "mcr.microsoft.com/devcontainers/base:bookworm",
+  "features": {
+    "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {
+      "version": "latest",
+      "moby": false,
+      "dockerDashComposeVersion": "v2"
+    },
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "22.14.0"
+    },
+    "ghcr.io/devcontainers/features/rust:1": {
+      "version": "1.91.1",
+      "profile": "minimal"
+    }
+  },
+  "mounts": [
+    "source=ai-pin-revival-workspace-state,target=/workspace-state,type=volume"
+  ],
+  "containerEnv": {
+    "CARGO_HOME": "/workspace-state/cargo",
+    "CARGO_TARGET_DIR": "/workspace-state/cargo-target",
+    "GRADLE_USER_HOME": "/workspace-state/gradle",
+    "NPM_CONFIG_CACHE": "/workspace-state/npm",
+    "REVIVAL_CONFIG_DIR": "/workspace-state/revival/config",
+    "REVIVAL_SECRETS_DIR": "/workspace-state/revival/secrets",
+    "REVIVAL_DATA_DIR": "/workspace-state/revival/data",
+    "REVIVAL_BACKUP_DIR": "/workspace-state/revival/backups"
+  },
+  "postCreateCommand": "sudo chown -R vscode:vscode /workspace-state && mkdir -p /workspace-state/cargo /workspace-state/cargo-target /workspace-state/gradle /workspace-state/npm /workspace-state/revival",
+  "remoteUser": "vscode"
+}

@@ -92,7 +92,7 @@ Center reads it exclusively from an operator-mounted directory
 (`REVIVAL_PIN_RELEASE_DIR`); it never discovers APKs in the source tree and
 never synthesises a manifest. Publishing a built release into that directory is
 a separate, still-manual step — see
-[operations](operations.md#4-publish-the-release-to-the-server--no-command-yet).
+[operations](operations.md#4-ship-the-release-to-the-server).
 
 `implemented`: Azure Speech belongs to Cosmos AI Bus. Private search belongs to
 Cosmos but gets a separate egress boundary. Spotify credentials remain on the

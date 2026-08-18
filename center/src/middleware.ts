@@ -133,7 +133,7 @@ export async function middleware(request: NextRequest) {
 
 export const config = {
   /*
-   * Everything except Next internals and the four files in `public/`.
+   * Everything except Next internals and the six named files in `public/`.
    *
    * NAMED, NOT SNIFFED. This used to end in `|.*\.(?:png|jpg|…|woff2?)$`, a
    * suffix test against the WHOLE pathname rather than against a static-asset
@@ -148,11 +148,12 @@ export const config = {
    * never producible — but the authentication gate genuinely did not run, and
    * "safe because of what happens two layers down" is not a gate.
    *
-   * `public/` holds exactly favicon.ico, apple-touch-icon.png, manifest.json and
-   * fonts/. Listing them cannot grow to cover a route, which is the property the
-   * extension test lacked. A new public asset must be added here on purpose.
+   * `public/` holds exactly favicon.ico, apple-touch-icon.png, the two PWA icons,
+   * manifest.json and fonts/. Listing them cannot grow to cover a route, which
+   * is the property the extension test lacked. A new public asset must be added
+   * here on purpose.
    */
   matcher: [
-    "/((?!_next/static|_next/image|favicon\\.ico|apple-touch-icon\\.png|manifest\\.json|fonts/).*)",
+    "/((?!_next/static|_next/image|favicon\\.ico|apple-touch-icon\\.png|icon-192\\.png|icon-512\\.png|manifest\\.json|fonts/).*)",
   ],
 };

@@ -24,6 +24,9 @@ const PIN_RELEASE_BUILD_TOOL = path.join(ROOT, 'platform', 'deploy', 'pin', 'bui
 const PIN_RELEASE_SHIP_TOOL = path.join(ROOT, 'platform', 'deploy', 'pin', 'ship.mjs');
 const PIN_INSTALL_TOOL = path.join(ROOT, 'platform', 'deploy', 'pin', 'install.mjs');
 const PIN_DOCTOR_TOOL = path.join(ROOT, 'platform', 'containers', 'pin-builder', 'doctor.mjs');
+const PKI_TOOL = path.join(ROOT, 'platform', 'deploy', 'pki.mjs');
+const PIN_ACTIVATION_TOOL = path.join(ROOT, 'platform', 'deploy', 'pin', 'activate.mjs');
+const PIN_NETWORK_TOOL = path.join(ROOT, 'platform', 'deploy', 'pin', 'network.mjs');
 const DEPLOY_DIR = path.join(ROOT, 'platform', 'deploy', 'vps');
 const TOOLCHAIN_CONFIG = path.join(ROOT, 'platform', 'containers', 'pin-builder', 'toolchain.json');
 const MINIMUM_COMPOSE_VERSION = Object.freeze([2, 33, 1]);
@@ -452,8 +455,9 @@ function initialize() {
     process.stderr.write(
       'warning: the DeviceUser CA is an empty placeholder, so device enrollment is UNAVAILABLE.\n' +
       emptyDeviceUserCaFiles.map((file) => `  empty: ${file}\n`).join('') +
-      '  You must supply this material yourself; `revival` has no CA generator, and a\n' +
-      '  CA minted per process would invalidate every certificate it ever issued.\n' +
+      '  Create a persistent DeviceUser CA with `revival pki init device-user`, or\n' +
+      '  validate and import an existing pair with `revival pki import device-user`.\n' +
+      '  Neither command creates or changes the separate attestation CA.\n' +
       `  ${certificate} must contain the CA certificate (PEM).\n` +
       `  ${key} must contain its private key (PKCS#8 PEM).\n` +
       '  Mount the same material in every provisioning replica and in the edge\n' +
@@ -823,5 +827,5 @@ function pinBuildEnvironment() {
 }
 
 module.exports = {
-  ROOT, PRODUCT, PROJECT, ENV_EXAMPLE, COMPOSE_BASE, COMPOSE_DEVELOPMENT, PACKAGE_TOOL, PIN_RELEASE_TOOL, PIN_RELEASE_BUILD_TOOL, PIN_RELEASE_SHIP_TOOL, PIN_INSTALL_TOOL, PIN_DOCTOR_TOOL, DEPLOY_DIR, TOOLCHAIN_CONFIG, MINIMUM_COMPOSE_VERSION, MANAGED_DIRECTORY_MARKER, DEFAULT_CONFIG_DIR, DEFAULT_SECRETS_DIR, DEFAULT_DATA_DIR, DEFAULT_BACKUP_DIR, CONFIG_DIR, SECRETS_DIR, DATA_DIR, BACKUP_DIR, ENV_FILE, RELEASE_DIR, BUILD_DIR, PIN_SECRET_DIR, PIN_SIGNING_ENV_FILE, PIN_PRIVATE_ASSETS_DIR, COMPATIBILITY_ALIASES, externalPath, canonicalCandidate, isInsideDirectory, isInsideSource, requireExternalDirectory, fail, info, exists, run, hasManagedMarker, isDefaultOperatorDirectory, ensureManagedRoot, secureDirectory, atomicWrite, fillBlankGeneratedSecrets, fillBlankInitializerDefaults, localIdentityRealm, ensureLocalIdentityRealm, initialize, parseEnvFile, parseExportEnvFile, valueOf, isExactBase64Bytes, rejectCompatibilityConflicts, requireValue, isProtectedRegularFile, validateLocalIdentityRealm, validateRuntime, operatorEnvironment, pinBuildEnvironment,
+  ROOT, PRODUCT, PROJECT, ENV_EXAMPLE, COMPOSE_BASE, COMPOSE_DEVELOPMENT, PACKAGE_TOOL, PIN_RELEASE_TOOL, PIN_RELEASE_BUILD_TOOL, PIN_RELEASE_SHIP_TOOL, PIN_INSTALL_TOOL, PIN_DOCTOR_TOOL, PKI_TOOL, PIN_ACTIVATION_TOOL, PIN_NETWORK_TOOL, DEPLOY_DIR, TOOLCHAIN_CONFIG, MINIMUM_COMPOSE_VERSION, MANAGED_DIRECTORY_MARKER, DEFAULT_CONFIG_DIR, DEFAULT_SECRETS_DIR, DEFAULT_DATA_DIR, DEFAULT_BACKUP_DIR, CONFIG_DIR, SECRETS_DIR, DATA_DIR, BACKUP_DIR, ENV_FILE, RELEASE_DIR, BUILD_DIR, PIN_SECRET_DIR, PIN_SIGNING_ENV_FILE, PIN_PRIVATE_ASSETS_DIR, COMPATIBILITY_ALIASES, externalPath, canonicalCandidate, isInsideDirectory, isInsideSource, requireExternalDirectory, fail, info, exists, run, hasManagedMarker, isDefaultOperatorDirectory, ensureManagedRoot, secureDirectory, atomicWrite, fillBlankGeneratedSecrets, fillBlankInitializerDefaults, localIdentityRealm, ensureLocalIdentityRealm, initialize, parseEnvFile, parseExportEnvFile, valueOf, isExactBase64Bytes, rejectCompatibilityConflicts, requireValue, isProtectedRegularFile, validateLocalIdentityRealm, validateRuntime, operatorEnvironment, pinBuildEnvironment,
 };

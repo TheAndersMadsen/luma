@@ -34,7 +34,7 @@ function compose(args, options = {}) {
   });
 }
 
-function probeRunningLocalIdentity(values) {
+function probeRunningLocalIdentity(values, { emit = true } = {}) {
   const running = run('docker', composeArgs(values, [
     'ps', '--status', 'running', '--services', 'keycloak'
   ]), {
@@ -43,7 +43,7 @@ function probeRunningLocalIdentity(values) {
     env: operatorEnvironment(values)
   });
   if (running.status !== 0 || !running.stdout.split(/\r?\n/).includes('keycloak')) {
-    info('[unknown] local identity is configured but not running; revival up will start and wait for it.');
+    if (emit) info('[unknown] local identity is configured but not running; revival up will start and wait for it.');
     return true;
   }
 
@@ -72,71 +72,109 @@ function probeRunningLocalIdentity(values) {
     env: operatorEnvironment(values)
   });
   if (probe.status !== 0) {
-    info('[unknown] running local identity failed its issuer/discovery/JWKS probe.');
+    if (emit) info('[unknown] running local identity failed its issuer/discovery/JWKS probe.');
     return false;
   }
-  info('[observed] running local identity serves the expected issuer and an RSA JWKS.');
-  info('[unknown] public discovery cannot prove the imported client secret matches the external realm file; reconcile it in the admin console after any persisted-realm change.');
+  if (emit) {
+    info('[observed] running local identity serves the expected issuer and an RSA JWKS.');
+    info('[unknown] public discovery cannot prove the imported client secret matches the external realm file; reconcile it in the admin console after any persisted-realm change.');
+  }
   return true;
 }
 
-function localDoctor() {
-  let failed = false;
+function localDoctorReport() {
+  const checks = [];
+  const add = (id, status, message, fix) => checks.push({
+    id, status, message, ...(fix ? { fix } : {}),
+  });
+
   for (const directory of [CONFIG_DIR, SECRETS_DIR, DATA_DIR, BACKUP_DIR]) {
     if (isInsideSource(directory)) {
-      info(`[unknown] ${directory} is inside the source tree; use the corresponding REVIVAL_*_DIR override.`);
-      failed = true;
+      add('external-paths', 'FAIL', `${directory} is inside the source tree.`,
+        'Set the corresponding REVIVAL_*_DIR override to an owner-only external directory.');
     }
+  }
+  if (!checks.some((check) => check.id === 'external-paths')) {
+    add('external-paths', 'PASS', 'Configuration, secrets, data, and backups resolve outside the source tree.');
   }
 
   try {
-    validateHostToolchains({ includeRust: false, report: true });
+    validateHostToolchains({ includeRust: false, report: false });
+    add('node', 'PASS', 'Node.js satisfies the pinned host contract.');
   } catch (error) {
-    info(`[unknown] ${error.message}`);
-    failed = true;
+    add('node', 'FAIL', error.message, 'Install the Node.js major line named in platform/containers/pin-builder/toolchain.json.');
   }
 
+  let dockerReady = false;
   if (!exists('docker')) {
-    info('[unknown] Docker is unavailable.');
-    failed = true;
+    add('docker', 'FAIL', 'Docker is unavailable.', 'Install and start Docker Desktop or a compatible Docker Engine.');
   } else {
+    add('docker', 'PASS', 'Docker is available.');
     const result = run('docker', ['compose', 'version', '--short'], { capture: true, allowFailure: true });
     const composeVersion = result.status === 0 ? parseVersion(result.stdout) : null;
     if (composeVersion && versionAtLeast(composeVersion, MINIMUM_COMPOSE_VERSION)) {
-      info(`[observed] Docker Compose ${composeVersion.join('.')} satisfies the 2.33.1 minimum.`);
+      add('compose', 'PASS', `Docker Compose ${composeVersion.join('.')} satisfies the 2.33.1 minimum.`);
+      dockerReady = true;
     } else {
-      info('[unknown] Docker Compose 2.33.1 or newer is required.');
-      failed = true;
+      add('compose', 'FAIL', 'Docker Compose 2.33.1 or newer is required.',
+        'Upgrade Docker Compose, then rerun ./revival doctor.');
     }
   }
 
   let values;
   try {
     values = validateRuntime();
-    info(`[observed] ${ENV_FILE} is mode 0600 and internally coherent.`);
-    info(`[implemented] Azure speech selection is ${valueOf(values, 'REVIVAL_REMOTE_TTS_ENABLED', 'CARRY_REMOTE_TTS_ENABLED') === 'true' ? 'enabled' : 'disabled'} by configuration.`);
-    info(`[implemented] Pin-native Spotify adapter configuration is ${values.REVIVAL_SPOTIFY_ADAPTER_URL ? 'present' : 'not configured'}; token-file contents were not read or printed.`);
+    add('configuration', 'PASS', `${ENV_FILE} is mode 0600 and internally coherent.`);
+    add('remote-tts', valueOf(values, 'REVIVAL_REMOTE_TTS_ENABLED', 'CARRY_REMOTE_TTS_ENABLED') === 'true' ? 'PASS' : 'WARN',
+      `Remote TTS is ${valueOf(values, 'REVIVAL_REMOTE_TTS_ENABLED', 'CARRY_REMOTE_TTS_ENABLED') === 'true' ? 'enabled' : 'disabled'} by configuration.`);
+    add('spotify', values.REVIVAL_SPOTIFY_ADAPTER_URL ? 'PASS' : 'WARN',
+      `Pin-native Spotify adapter configuration is ${values.REVIVAL_SPOTIFY_ADAPTER_URL ? 'present' : 'not configured'}; no token contents were read.`);
   } catch (error) {
-    info(`[unknown] ${error.message}`);
-    failed = true;
+    add('configuration', 'FAIL', error.message, './revival init, then update only the settings named by the failure.');
   }
 
-  if (!failed && exists('docker')) {
+  if (values && dockerReady) {
     const result = run('docker', composeArgs(values, ['config', '--quiet']), {
       capture: true,
       allowFailure: true,
       env: operatorEnvironment(values)
     });
-    if (result.status === 0) info('[observed] Docker Compose accepted the development model.');
+    if (result.status === 0) add('compose-model', 'PASS', 'Docker Compose accepted the development model.');
     else {
-      info('[unknown] Docker Compose rejected the development model; run the component-specific check for details.');
-      failed = true;
+      add('compose-model', 'FAIL', 'Docker Compose rejected the development model.',
+        './revival stack config');
     }
-    if (!failed && values.REVIVAL_IDENTITY_ENABLED === 'true' && !probeRunningLocalIdentity(values)) {
-      failed = true;
+    if (result.status === 0 && values.REVIVAL_IDENTITY_ENABLED === 'true') {
+      if (probeRunningLocalIdentity(values, { emit: false })) {
+        add('identity', 'PASS', 'Running local identity serves the expected issuer and RSA JWKS.');
+      } else {
+        add('identity', 'FAIL', 'Local identity is not running or failed issuer/discovery/JWKS validation.',
+          './revival up');
+      }
     }
   }
-  if (failed) process.exit(1);
+  const failed = checks.some((check) => check.status === 'FAIL');
+  const next = checks.find((check) => check.status === 'FAIL')?.fix || './revival up';
+  return Object.freeze({ schemaVersion: 1, ok: !failed, checks, next });
+}
+
+function localDoctor(args = []) {
+  let json = false;
+  for (const argument of args) {
+    if (argument === '--json' && !json) json = true;
+    else fail('usage: ./revival doctor [--json]', 64);
+  }
+  const report = localDoctorReport();
+  if (json) info(JSON.stringify(report));
+  else {
+    for (const check of report.checks) {
+      info(`${check.status} ${check.message}`);
+      if (check.fix) info(`     fix: ${check.fix}`);
+    }
+    info(`NEXT ${report.next}`);
+  }
+  if (!report.ok) process.exitCode = 1;
+  return report;
 }
 
 function stack(subcommand, args) {
@@ -177,4 +215,4 @@ function stack(subcommand, args) {
   }
 }
 
-module.exports = { composeArgs, compose, probeRunningLocalIdentity, localDoctor, stack };
+module.exports = { composeArgs, compose, probeRunningLocalIdentity, localDoctorReport, localDoctor, stack };

@@ -1,0 +1,1512 @@
+{
+  "schemaVersion": 1,
+  "contractId": "operator-setup",
+  "contractVersion": "1.0.0",
+  "mutationPolicies": {
+    "read-only": {
+      "confirmationRequired": false,
+      "exactSerialRequired": false
+    },
+    "local-mutation": {
+      "confirmationRequired": false,
+      "exactSerialRequired": false
+    },
+    "remote-mutation": {
+      "confirmationRequired": true,
+      "exactSerialRequired": false
+    },
+    "device-mutation": {
+      "confirmationRequired": true,
+      "exactSerialRequired": true
+    }
+  },
+  "commands": [
+    {
+      "id": "init",
+      "tokens": [
+        "init"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Initialize external configuration, secrets, and state directories.",
+      "usage": "revival init [options]",
+      "documentationAnchor": "README.md#run-locally"
+    },
+    {
+      "id": "doctor.local",
+      "tokens": [
+        "doctor"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "read-only",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Check local prerequisites and report the next action.",
+      "usage": "revival doctor [options]",
+      "documentationAnchor": "README.md#run-locally"
+    },
+    {
+      "id": "doctor.production",
+      "tokens": [
+        "doctor",
+        "production"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "read-only",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Check production prerequisites without changing the server.",
+      "usage": "revival doctor production [options]",
+      "documentationAnchor": "docs/operations.md#production"
+    },
+    {
+      "id": "stack.build",
+      "tokens": [
+        "stack",
+        "build"
+      ],
+      "aliases": [
+        [
+          "build"
+        ]
+      ],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Build the local container stack.",
+      "usage": "revival stack build [options]",
+      "documentationAnchor": "README.md#run-locally"
+    },
+    {
+      "id": "stack.up",
+      "tokens": [
+        "stack",
+        "up"
+      ],
+      "aliases": [
+        [
+          "up"
+        ]
+      ],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Start the local product stack.",
+      "usage": "revival stack up [options]",
+      "documentationAnchor": "README.md#run-locally"
+    },
+    {
+      "id": "stack.down",
+      "tokens": [
+        "stack",
+        "down"
+      ],
+      "aliases": [
+        [
+          "down"
+        ]
+      ],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Stop the local product stack without deleting volumes.",
+      "usage": "revival stack down [options]",
+      "documentationAnchor": "README.md#run-locally"
+    },
+    {
+      "id": "stack.status",
+      "tokens": [
+        "stack",
+        "status"
+      ],
+      "aliases": [
+        [
+          "status"
+        ]
+      ],
+      "lifecycle": "current",
+      "effect": "read-only",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Show local stack service status.",
+      "usage": "revival stack status [options]",
+      "documentationAnchor": "README.md#run-locally"
+    },
+    {
+      "id": "stack.logs",
+      "tokens": [
+        "stack",
+        "logs"
+      ],
+      "aliases": [
+        [
+          "logs"
+        ]
+      ],
+      "lifecycle": "current",
+      "effect": "read-only",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Show recent local stack logs.",
+      "usage": "revival stack logs [options]",
+      "documentationAnchor": "README.md#run-locally"
+    },
+    {
+      "id": "stack.config",
+      "tokens": [
+        "stack",
+        "config"
+      ],
+      "aliases": [
+        [
+          "config"
+        ]
+      ],
+      "lifecycle": "current",
+      "effect": "read-only",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Render the resolved Compose model without secret interpolation.",
+      "usage": "revival stack config [options]",
+      "documentationAnchor": "README.md#run-locally"
+    },
+    {
+      "id": "test",
+      "tokens": [
+        "test"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "read-only",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Run the repository release gate.",
+      "usage": "revival test [options]",
+      "documentationAnchor": "CONTRIBUTING.md#run-and-test"
+    },
+    {
+      "id": "release.check",
+      "tokens": [
+        "release",
+        "check"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "read-only",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Run the immutable release checks.",
+      "usage": "revival release check [options]",
+      "documentationAnchor": "CONTRIBUTING.md#run-and-test"
+    },
+    {
+      "id": "release.build",
+      "tokens": [
+        "release",
+        "build"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Build an immutable release archive.",
+      "usage": "revival release build [options]",
+      "documentationAnchor": "CONTRIBUTING.md#run-and-test"
+    },
+    {
+      "id": "release.verify",
+      "tokens": [
+        "release",
+        "verify"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "read-only",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Verify a release archive and manifest.",
+      "usage": "revival release verify [options]",
+      "documentationAnchor": "CONTRIBUTING.md#run-and-test"
+    },
+    {
+      "id": "pin.doctor",
+      "tokens": [
+        "pin",
+        "doctor"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "read-only",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Check Pin host, signing, assets, and device prerequisites.",
+      "usage": "revival pin doctor [options]",
+      "documentationAnchor": "docs/operations.md#onboarding-a-pin"
+    },
+    {
+      "id": "pin.check",
+      "tokens": [
+        "pin",
+        "check"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "read-only",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Run Pin source checks.",
+      "usage": "revival pin check [options]",
+      "documentationAnchor": "docs/operations.md#onboarding-a-pin"
+    },
+    {
+      "id": "pin.release.build",
+      "tokens": [
+        "pin",
+        "release",
+        "build"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Build and publish a signed release to the local store.",
+      "usage": "revival pin release build [options]",
+      "documentationAnchor": "docs/operations.md#onboarding-a-pin"
+    },
+    {
+      "id": "pin.release.inspect",
+      "tokens": [
+        "pin",
+        "release",
+        "inspect"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "read-only",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Inspect signed Pin release metadata.",
+      "usage": "revival pin release inspect [options]",
+      "documentationAnchor": "docs/operations.md#onboarding-a-pin"
+    },
+    {
+      "id": "pin.release.verify",
+      "tokens": [
+        "pin",
+        "release",
+        "verify"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "read-only",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Verify a signed Pin release bundle.",
+      "usage": "revival pin release verify [options]",
+      "documentationAnchor": "docs/operations.md#onboarding-a-pin"
+    },
+    {
+      "id": "pin.release.plan",
+      "tokens": [
+        "pin",
+        "release",
+        "plan"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "read-only",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Plan a Pin release transition without changing a device.",
+      "usage": "revival pin release plan [options]",
+      "documentationAnchor": "docs/operations.md#onboarding-a-pin"
+    },
+    {
+      "id": "pin.release.ship",
+      "tokens": [
+        "pin",
+        "release",
+        "ship"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "remote-mutation",
+      "confirmationRequired": true,
+      "exactSerialRequired": false,
+      "summary": "Publish a signed Pin release to the remote Center store.",
+      "usage": "revival pin release ship [options]",
+      "documentationAnchor": "docs/operations.md#onboarding-a-pin"
+    },
+    {
+      "id": "pin.install",
+      "tokens": [
+        "pin",
+        "install"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "device-mutation",
+      "confirmationRequired": true,
+      "exactSerialRequired": true,
+      "summary": "Install a verified release on one exact Pin.",
+      "usage": "revival pin install [options]",
+      "documentationAnchor": "docs/operations.md#onboarding-a-pin"
+    },
+    {
+      "id": "deploy.production",
+      "tokens": [
+        "deploy",
+        "production"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "remote-mutation",
+      "confirmationRequired": true,
+      "exactSerialRequired": false,
+      "summary": "Deploy an immutable release to production.",
+      "usage": "revival deploy production [options]",
+      "documentationAnchor": "docs/operations.md#production"
+    },
+    {
+      "id": "backup",
+      "tokens": [
+        "backup"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "remote-mutation",
+      "confirmationRequired": true,
+      "exactSerialRequired": false,
+      "summary": "Create and optionally fetch a production backup.",
+      "usage": "revival backup [options]",
+      "documentationAnchor": "docs/operations.md#production"
+    },
+    {
+      "id": "canary",
+      "tokens": [
+        "canary"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "remote-mutation",
+      "confirmationRequired": true,
+      "exactSerialRequired": false,
+      "summary": "Run production semantic canaries.",
+      "usage": "revival canary [options]",
+      "documentationAnchor": "docs/operations.md#production"
+    },
+    {
+      "id": "drift",
+      "tokens": [
+        "drift"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "read-only",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Compare protected production state with its recorded contract.",
+      "usage": "revival drift [options]",
+      "documentationAnchor": "docs/operations.md#production"
+    },
+    {
+      "id": "adopt-config",
+      "tokens": [
+        "adopt-config"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "remote-mutation",
+      "confirmationRequired": true,
+      "exactSerialRequired": false,
+      "summary": "Plan or confirm a protected configuration adoption.",
+      "usage": "revival adopt-config [options]",
+      "documentationAnchor": "docs/operations.md#production"
+    },
+    {
+      "id": "prune-state",
+      "tokens": [
+        "prune-state"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "remote-mutation",
+      "confirmationRequired": true,
+      "exactSerialRequired": false,
+      "summary": "Plan or confirm safe release and backup retention.",
+      "usage": "revival prune-state [options]",
+      "documentationAnchor": "docs/operations.md#production"
+    },
+    {
+      "id": "rollback",
+      "tokens": [
+        "rollback"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "remote-mutation",
+      "confirmationRequired": true,
+      "exactSerialRequired": false,
+      "summary": "Move production to an exact earlier deployment.",
+      "usage": "revival rollback [options]",
+      "documentationAnchor": "docs/operations.md#production"
+    },
+    {
+      "id": "setup.local",
+      "tokens": [
+        "setup",
+        "local"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Guide setup of the local product.",
+      "usage": "revival setup local [options]",
+      "documentationAnchor": "README.md#run-locally"
+    },
+    {
+      "id": "setup.contributor",
+      "tokens": [
+        "setup",
+        "contributor"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Guide setup of a contributor workspace.",
+      "usage": "revival setup contributor [options]",
+      "documentationAnchor": "README.md#run-locally"
+    },
+    {
+      "id": "setup.production",
+      "tokens": [
+        "setup",
+        "production"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Guide setup of a production operator workspace.",
+      "usage": "revival setup production [options]",
+      "documentationAnchor": "docs/operations.md#production"
+    },
+    {
+      "id": "setup.pin",
+      "tokens": [
+        "setup",
+        "pin"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Guide setup for one exact Pin.",
+      "usage": "revival setup pin [options]",
+      "documentationAnchor": "docs/operations.md#onboarding-a-pin"
+    },
+    {
+      "id": "setup.resume",
+      "tokens": [
+        "setup",
+        "--resume"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "read-only",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Resume the active setup journey at its next action.",
+      "usage": "revival setup --resume [options]",
+      "documentationAnchor": "README.md#run-locally"
+    },
+    {
+      "id": "setup.status",
+      "tokens": [
+        "setup",
+        "status"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "read-only",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Show completed, blocked, and next setup steps.",
+      "usage": "revival setup status [options]",
+      "documentationAnchor": "README.md#run-locally"
+    },
+    {
+      "id": "config.get",
+      "tokens": [
+        "config",
+        "get"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "read-only",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Read one non-secret configuration setting.",
+      "usage": "revival config get [options]",
+      "documentationAnchor": "docs/operations.md#changing-a-setting-from-the-dashboard"
+    },
+    {
+      "id": "config.set",
+      "tokens": [
+        "config",
+        "set"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Set one supported configuration setting outside the repository.",
+      "usage": "revival config set [options]",
+      "documentationAnchor": "docs/operations.md#changing-a-setting-from-the-dashboard"
+    },
+    {
+      "id": "config.check",
+      "tokens": [
+        "config",
+        "check"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "read-only",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Validate configuration names, scopes, and dependencies.",
+      "usage": "revival config check [options]",
+      "documentationAnchor": "docs/operations.md#changing-a-setting-from-the-dashboard"
+    },
+    {
+      "id": "pki.init",
+      "tokens": [
+        "pki",
+        "init"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": true,
+      "exactSerialRequired": false,
+      "summary": "Plan or confirm creation of new device identity PKI.",
+      "usage": "revival pki init [options]",
+      "documentationAnchor": "docs/operations.md#onboarding-a-pin"
+    },
+    {
+      "id": "pki.import",
+      "tokens": [
+        "pki",
+        "import"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": true,
+      "exactSerialRequired": false,
+      "summary": "Plan or confirm import of existing device identity PKI.",
+      "usage": "revival pki import [options]",
+      "documentationAnchor": "docs/operations.md#onboarding-a-pin"
+    },
+    {
+      "id": "support-bundle",
+      "tokens": [
+        "support-bundle"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Create a locally redacted diagnostic bundle.",
+      "usage": "revival support-bundle [options]",
+      "documentationAnchor": null
+    },
+    {
+      "id": "version",
+      "tokens": [
+        "version"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "read-only",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Show CLI and contract version information.",
+      "usage": "revival version [options]",
+      "documentationAnchor": "README.md#run-locally"
+    },
+    {
+      "id": "pin.activate",
+      "tokens": [
+        "pin",
+        "activate"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "device-mutation",
+      "confirmationRequired": true,
+      "exactSerialRequired": true,
+      "summary": "Activate one exact Pin against the configured backend.",
+      "usage": "revival pin activate [options]",
+      "documentationAnchor": "docs/operations.md#onboarding-a-pin"
+    },
+    {
+      "id": "pin.activate.status",
+      "tokens": [
+        "pin",
+        "activate",
+        "status"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "read-only",
+      "confirmationRequired": false,
+      "exactSerialRequired": true,
+      "summary": "Inspect activation state for one exact Pin.",
+      "usage": "revival pin activate status [options]",
+      "documentationAnchor": "docs/operations.md#onboarding-a-pin"
+    },
+    {
+      "id": "pin.network",
+      "tokens": [
+        "pin",
+        "network"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "read-only",
+      "confirmationRequired": false,
+      "exactSerialRequired": true,
+      "summary": "Inspect network readiness for one exact Pin.",
+      "usage": "revival pin network [options]",
+      "documentationAnchor": "docs/operations.md#onboarding-a-pin"
+    },
+    {
+      "id": "pin.network.qr",
+      "tokens": [
+        "pin",
+        "network",
+        "qr"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Prepare network onboarding from a Wi-Fi QR code.",
+      "usage": "revival pin network qr [options]",
+      "documentationAnchor": "docs/operations.md#onboarding-a-pin"
+    },
+    {
+      "id": "config.path",
+      "tokens": [
+        "config",
+        "path"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "read-only",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Print the active external configuration path.",
+      "usage": "revival config path [options]",
+      "documentationAnchor": "docs/operations.md#changing-a-setting-from-the-dashboard"
+    },
+    {
+      "id": "config.list",
+      "tokens": [
+        "config",
+        "list"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "read-only",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "List settings without revealing their values.",
+      "usage": "revival config list [options]",
+      "documentationAnchor": "docs/operations.md#changing-a-setting-from-the-dashboard"
+    },
+    {
+      "id": "config.template",
+      "tokens": [
+        "config",
+        "template"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "read-only",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Print a scoped, secret-free configuration template.",
+      "usage": "revival config template [options]",
+      "documentationAnchor": "docs/operations.md#changing-a-setting-from-the-dashboard"
+    }
+  ],
+  "journeys": [
+    {
+      "id": "local",
+      "label": "Try the local product",
+      "commandIds": [
+        "setup.local",
+        "init",
+        "doctor.local",
+        "stack.up",
+        "stack.status",
+        "setup.status"
+      ],
+      "steps": [
+        {
+          "id": "choose",
+          "title": "Choose the local journey",
+          "commandId": "setup.local",
+          "centerRoute": null,
+          "surface": "cli",
+          "verification": "cli",
+          "documentationAnchor": "README.md#run-locally"
+        },
+        {
+          "id": "initialize",
+          "title": "Initialize external state",
+          "commandId": "init",
+          "centerRoute": null,
+          "surface": "cli",
+          "verification": "cli",
+          "documentationAnchor": "README.md#run-locally"
+        },
+        {
+          "id": "check",
+          "title": "Check prerequisites",
+          "commandId": "doctor.local",
+          "centerRoute": null,
+          "surface": "cli",
+          "verification": "cli",
+          "documentationAnchor": "README.md#run-locally"
+        },
+        {
+          "id": "start",
+          "title": "Start the stack",
+          "commandId": "stack.up",
+          "centerRoute": null,
+          "surface": "cli",
+          "verification": "cli",
+          "documentationAnchor": "README.md#run-locally"
+        },
+        {
+          "id": "verify",
+          "title": "Verify service health",
+          "commandId": "stack.status",
+          "centerRoute": null,
+          "surface": "cli",
+          "verification": "cli",
+          "documentationAnchor": "README.md#run-locally"
+        }
+      ]
+    },
+    {
+      "id": "contributor",
+      "label": "Prepare a contributor workspace",
+      "commandIds": [
+        "setup.contributor",
+        "doctor.local",
+        "test",
+        "release.check",
+        "pin.check",
+        "support-bundle",
+        "version"
+      ],
+      "steps": [
+        {
+          "id": "prepare",
+          "title": "Prepare the contributor workspace",
+          "commandId": "setup.contributor",
+          "centerRoute": null,
+          "surface": "cli",
+          "verification": "cli",
+          "documentationAnchor": "README.md#run-locally"
+        },
+        {
+          "id": "check",
+          "title": "Check host prerequisites",
+          "commandId": "doctor.local",
+          "centerRoute": null,
+          "surface": "cli",
+          "verification": "cli",
+          "documentationAnchor": "README.md#run-locally"
+        },
+        {
+          "id": "test",
+          "title": "Run repository gates",
+          "commandId": "test",
+          "centerRoute": null,
+          "surface": "cli",
+          "verification": "cli",
+          "documentationAnchor": "CONTRIBUTING.md#run-and-test"
+        },
+        {
+          "id": "source",
+          "title": "Run Pin source gates",
+          "commandId": "pin.check",
+          "centerRoute": null,
+          "surface": "cli",
+          "verification": "cli",
+          "documentationAnchor": "docs/operations.md#onboarding-a-pin"
+        },
+        {
+          "id": "verify",
+          "title": "Record tool versions",
+          "commandId": "version",
+          "centerRoute": null,
+          "surface": "cli",
+          "verification": "cli",
+          "documentationAnchor": "README.md#run-locally"
+        }
+      ]
+    },
+    {
+      "id": "production",
+      "label": "Operate an immutable production deployment",
+      "commandIds": [
+        "setup.production",
+        "config.check",
+        "doctor.production",
+        "release.build",
+        "release.verify",
+        "deploy.production",
+        "backup",
+        "canary",
+        "drift",
+        "adopt-config",
+        "prune-state",
+        "rollback"
+      ],
+      "steps": [
+        {
+          "id": "prepare",
+          "title": "Prepare production operations",
+          "commandId": "setup.production",
+          "centerRoute": null,
+          "surface": "cli",
+          "verification": "cli",
+          "documentationAnchor": "docs/operations.md#production"
+        },
+        {
+          "id": "configure",
+          "title": "Validate protected configuration",
+          "commandId": "config.check",
+          "centerRoute": null,
+          "surface": "cli",
+          "verification": "cli",
+          "documentationAnchor": "docs/operations.md#changing-a-setting-from-the-dashboard"
+        },
+        {
+          "id": "preflight",
+          "title": "Run production preflight",
+          "commandId": "doctor.production",
+          "centerRoute": null,
+          "surface": "cli",
+          "verification": "cli",
+          "documentationAnchor": "docs/operations.md#production"
+        },
+        {
+          "id": "release",
+          "title": "Build and verify a release",
+          "commandId": "release.build",
+          "centerRoute": null,
+          "surface": "cli",
+          "verification": "cli",
+          "documentationAnchor": "CONTRIBUTING.md#run-and-test"
+        },
+        {
+          "id": "backup",
+          "title": "Create an off-host recovery copy",
+          "commandId": "backup",
+          "centerRoute": null,
+          "surface": "cli",
+          "verification": "cli",
+          "documentationAnchor": "docs/operations.md#production"
+        },
+        {
+          "id": "deploy",
+          "title": "Confirm the immutable deployment",
+          "commandId": "deploy.production",
+          "centerRoute": null,
+          "surface": "cli",
+          "verification": "cli",
+          "documentationAnchor": "docs/operations.md#production"
+        },
+        {
+          "id": "verify",
+          "title": "Run canary and drift verification",
+          "commandId": "canary",
+          "centerRoute": null,
+          "surface": "cli",
+          "verification": "cli",
+          "documentationAnchor": "docs/operations.md#production"
+        }
+      ]
+    },
+    {
+      "id": "pin",
+      "label": "Bring an exact Pin online",
+      "commandIds": [
+        "setup.pin",
+        "pki.import",
+        "pki.init",
+        "pin.doctor",
+        "pin.release.inspect",
+        "pin.release.build",
+        "pin.release.ship",
+        "pin.install",
+        "config.check",
+        "pin.activate.status",
+        "pin.activate",
+        "pin.network",
+        "pin.network.qr",
+        "support-bundle"
+      ],
+      "steps": [
+        {
+          "id": "connect",
+          "title": "Connect and resolve the exact Pin",
+          "commandId": "pin.doctor",
+          "centerRoute": "/settings/pin/install",
+          "surface": "cli",
+          "verification": "cli",
+          "documentationAnchor": "docs/operations.md#onboarding-a-pin"
+        },
+        {
+          "id": "inspect",
+          "title": "Inspect device and release state",
+          "commandId": "pin.release.inspect",
+          "centerRoute": "/settings/pin/install",
+          "surface": "cli",
+          "verification": "cli",
+          "documentationAnchor": "docs/operations.md#onboarding-a-pin"
+        },
+        {
+          "id": "release",
+          "title": "Build the signed release",
+          "commandId": "pin.release.build",
+          "centerRoute": "/settings/pin/install",
+          "surface": "cli",
+          "verification": "cli",
+          "documentationAnchor": "docs/operations.md#onboarding-a-pin"
+        },
+        {
+          "id": "ship",
+          "title": "Confirm publication to Center",
+          "commandId": "pin.release.ship",
+          "centerRoute": "/settings/pin/install",
+          "surface": "cli",
+          "verification": "cli",
+          "documentationAnchor": "docs/operations.md#onboarding-a-pin"
+        },
+        {
+          "id": "install",
+          "title": "Confirm installation on the exact Pin",
+          "commandId": "pin.install",
+          "centerRoute": "/settings/pin/install",
+          "surface": "cli",
+          "verification": "physical",
+          "documentationAnchor": "docs/operations.md#onboarding-a-pin"
+        },
+        {
+          "id": "configure",
+          "title": "Validate Pin configuration",
+          "commandId": "config.check",
+          "centerRoute": "/settings/pin",
+          "surface": "cli",
+          "verification": "cli",
+          "documentationAnchor": "docs/operations.md#changing-a-setting-from-the-dashboard"
+        },
+        {
+          "id": "identity",
+          "title": "Import or create device identity PKI",
+          "commandId": "pki.import",
+          "centerRoute": "/settings/pin",
+          "surface": "cli",
+          "verification": "cli",
+          "documentationAnchor": "docs/operations.md#onboarding-a-pin"
+        },
+        {
+          "id": "activate",
+          "title": "Confirm activation on the exact Pin",
+          "commandId": "pin.activate",
+          "centerRoute": "/settings/pin",
+          "surface": "cli",
+          "verification": "physical",
+          "documentationAnchor": "docs/operations.md#onboarding-a-pin"
+        },
+        {
+          "id": "network",
+          "title": "Prepare and verify network access",
+          "commandId": "pin.network.qr",
+          "centerRoute": "/wifi",
+          "surface": "cli",
+          "verification": "physical",
+          "documentationAnchor": "docs/operations.md#onboarding-a-pin"
+        },
+        {
+          "id": "confirm",
+          "title": "Confirm physical acceptance",
+          "commandId": "pin.activate.status",
+          "centerRoute": "/settings/pin",
+          "surface": "cli",
+          "verification": "physical",
+          "documentationAnchor": "docs/operations.md#onboarding-a-pin"
+        }
+      ]
+    }
+  ],
+  "settings": [
+    {
+      "name": "REVIVAL_CONFIG_VERSION",
+      "aliases": [],
+      "group": "local",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
+      "name": "REVIVAL_RELEASE_ID",
+      "aliases": [],
+      "group": "local",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
+      "name": "REVIVAL_CENTER_PORT",
+      "aliases": [],
+      "group": "local",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
+      "name": "REVIVAL_PUBLIC_ORIGIN",
+      "aliases": [],
+      "group": "production",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
+      "name": "CARRY_OIDC_ISSUER",
+      "aliases": [],
+      "group": "production",
+      "sensitivity": "identity",
+      "home": "center.env"
+    },
+    {
+      "name": "CARRY_CAPTURE_SHARE_BASE_URL",
+      "aliases": [],
+      "group": "production",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
+      "name": "CARRY_MUSICBRAINZ_BASE_URL",
+      "aliases": [],
+      "group": "provider",
+      "sensitivity": "operational",
+      "home": "providers.env"
+    },
+    {
+      "name": "CARRY_SHOPPING_VISUAL_SEARCH_URL",
+      "aliases": [],
+      "group": "provider",
+      "sensitivity": "operational",
+      "home": "providers.env"
+    },
+    {
+      "name": "CARRY_SHOPPING_ALLOWED_HOSTS",
+      "aliases": [],
+      "group": "provider",
+      "sensitivity": "operational",
+      "home": "providers.env"
+    },
+    {
+      "name": "CARRY_SHOPPING_API_KEY",
+      "aliases": [],
+      "group": "provider",
+      "sensitivity": "secret",
+      "home": "providers.env"
+    },
+    {
+      "name": "REVIVAL_AUTH_MODE",
+      "aliases": [
+        "CARRY_AUTH_MODE"
+      ],
+      "group": "local",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
+      "name": "REVIVAL_EDGE_TOKEN",
+      "aliases": [
+        "CARRY_EDGE_TOKEN"
+      ],
+      "group": "production",
+      "sensitivity": "secret",
+      "home": "runtime.env"
+    },
+    {
+      "name": "AUTH_SESSION_SECRET",
+      "aliases": [],
+      "group": "production",
+      "sensitivity": "secret",
+      "home": "center.env"
+    },
+    {
+      "name": "REVIVAL_SHARE_TOKEN_SECRET",
+      "aliases": [
+        "CARRY_SHARE_TOKEN_SECRET"
+      ],
+      "group": "production",
+      "sensitivity": "secret",
+      "home": "runtime.env"
+    },
+    {
+      "name": "REVIVAL_CENTER_PROJECTION_TOKEN",
+      "aliases": [
+        "CARRY_CENTER_PROJECTION_TOKEN"
+      ],
+      "group": "production",
+      "sensitivity": "secret",
+      "home": "runtime.env"
+    },
+    {
+      "name": "REVIVAL_ADMIN_TOKEN",
+      "aliases": [
+        "CARRY_ADMIN_TOKEN"
+      ],
+      "group": "production",
+      "sensitivity": "secret",
+      "home": "runtime.env"
+    },
+    {
+      "name": "REVIVAL_REMOTE_TTS_ENABLED",
+      "aliases": [
+        "CARRY_REMOTE_TTS_ENABLED"
+      ],
+      "group": "provider",
+      "sensitivity": "operational",
+      "home": "cosmos.env"
+    },
+    {
+      "name": "AZURE_SPEECH_KEY",
+      "aliases": [
+        "CARRY_AZURE_SPEECH_KEY"
+      ],
+      "group": "provider",
+      "sensitivity": "secret",
+      "home": "providers.env"
+    },
+    {
+      "name": "AZURE_SPEECH_REGION",
+      "aliases": [
+        "CARRY_AZURE_SPEECH_REGION"
+      ],
+      "group": "provider",
+      "sensitivity": "operational",
+      "home": "providers.env"
+    },
+    {
+      "name": "AZURE_SPEECH_VOICE",
+      "aliases": [
+        "CARRY_AZURE_SPEECH_VOICE"
+      ],
+      "group": "provider",
+      "sensitivity": "operational",
+      "home": "providers.env"
+    },
+    {
+      "name": "REVIVAL_SPOTIFY_ADAPTER_URL",
+      "aliases": [],
+      "group": "pin",
+      "sensitivity": "operational",
+      "home": "pin.env"
+    },
+    {
+      "name": "REVIVAL_SPOTIFY_ADAPTER_TOKEN_FILE",
+      "aliases": [],
+      "group": "pin",
+      "sensitivity": "secret",
+      "home": "pin.env"
+    },
+    {
+      "name": "REVIVAL_PIN_BRIDGE_OWNER_SUB",
+      "aliases": [],
+      "group": "pin",
+      "sensitivity": "identity",
+      "home": "pin.env"
+    },
+    {
+      "name": "REVIVAL_PIN_BRIDGE_DEVICE_ID",
+      "aliases": [],
+      "group": "pin",
+      "sensitivity": "identity",
+      "home": "pin.env"
+    },
+    {
+      "name": "REVIVAL_IDENTITY_ENABLED",
+      "aliases": [],
+      "group": "local",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
+      "name": "KEYCLOAK_BASE_URL",
+      "aliases": [],
+      "group": "production",
+      "sensitivity": "identity",
+      "home": "center.env"
+    },
+    {
+      "name": "KEYCLOAK_REALM",
+      "aliases": [],
+      "group": "production",
+      "sensitivity": "identity",
+      "home": "center.env"
+    },
+    {
+      "name": "KEYCLOAK_CLIENT_ID",
+      "aliases": [],
+      "group": "production",
+      "sensitivity": "identity",
+      "home": "center.env"
+    },
+    {
+      "name": "KEYCLOAK_CLIENT_SECRET",
+      "aliases": [],
+      "group": "production",
+      "sensitivity": "secret",
+      "home": "center.env"
+    },
+    {
+      "name": "KEYCLOAK_SCOPES",
+      "aliases": [],
+      "group": "production",
+      "sensitivity": "operational",
+      "home": "center.env"
+    },
+    {
+      "name": "KEYCLOAK_ADMIN",
+      "aliases": [],
+      "group": "production",
+      "sensitivity": "identity",
+      "home": "center.env"
+    },
+    {
+      "name": "KEYCLOAK_ADMIN_PASSWORD",
+      "aliases": [],
+      "group": "production",
+      "sensitivity": "secret",
+      "home": "center.env"
+    },
+    {
+      "name": "REVIVAL_ENROLLMENT_PINCODE",
+      "aliases": [
+        "CARRY_ENROLLMENT_PINCODE"
+      ],
+      "group": "pin",
+      "sensitivity": "secret",
+      "home": "pin.env"
+    },
+    {
+      "name": "REVIVAL_ENROLLMENT_USER_ID",
+      "aliases": [
+        "CARRY_ENROLLMENT_USER_ID"
+      ],
+      "group": "pin",
+      "sensitivity": "identity",
+      "home": "pin.env"
+    },
+    {
+      "name": "REVIVAL_OPAQUE_SEED",
+      "aliases": [
+        "CARRY_OPAQUE_SEED"
+      ],
+      "group": "pin",
+      "sensitivity": "secret",
+      "home": "pin.env"
+    },
+    {
+      "name": "REVIVAL_DUC_CA_CERT",
+      "aliases": [
+        "CARRY_DUC_CA_CERT"
+      ],
+      "group": "pin",
+      "sensitivity": "operational",
+      "home": "pin.env"
+    },
+    {
+      "name": "REVIVAL_DUC_CA_KEY",
+      "aliases": [
+        "CARRY_DUC_CA_KEY"
+      ],
+      "group": "pin",
+      "sensitivity": "secret",
+      "home": "pin.env"
+    },
+    {
+      "name": "REVIVAL_OPERATOR_EMAILS",
+      "aliases": [
+        "CARRY_OPERATOR_EMAILS"
+      ],
+      "group": "production",
+      "sensitivity": "identity",
+      "home": "center.env"
+    },
+    {
+      "name": "CARRY_KID_SCOPE",
+      "aliases": [],
+      "group": "production",
+      "sensitivity": "identity",
+      "home": "cosmos.env"
+    },
+    {
+      "name": "SEARXNG_SECRET",
+      "aliases": [],
+      "group": "production",
+      "sensitivity": "secret",
+      "home": "providers.env"
+    },
+    {
+      "name": "CARRY_LLM_BASE_URL",
+      "aliases": [],
+      "group": "provider",
+      "sensitivity": "operational",
+      "home": "providers.env"
+    },
+    {
+      "name": "CARRY_LLM_API_KEY",
+      "aliases": [],
+      "group": "provider",
+      "sensitivity": "secret",
+      "home": "providers.env"
+    },
+    {
+      "name": "CARRY_OPENROUTER_API_KEY",
+      "aliases": [],
+      "group": "provider",
+      "sensitivity": "secret",
+      "home": "providers.env"
+    },
+    {
+      "name": "CARRY_LLM_MODEL",
+      "aliases": [],
+      "group": "provider",
+      "sensitivity": "operational",
+      "home": "providers.env"
+    },
+    {
+      "name": "CARRY_LLM_REASONING_EFFORT",
+      "aliases": [],
+      "group": "provider",
+      "sensitivity": "operational",
+      "home": "providers.env"
+    },
+    {
+      "name": "CARRY_LLM_MAX_TOKENS",
+      "aliases": [],
+      "group": "provider",
+      "sensitivity": "operational",
+      "home": "providers.env"
+    },
+    {
+      "name": "CARRY_VISION_MODEL",
+      "aliases": [],
+      "group": "provider",
+      "sensitivity": "operational",
+      "home": "providers.env"
+    },
+    {
+      "name": "CARRY_INTERSTITIAL_BASE_URL",
+      "aliases": [],
+      "group": "provider",
+      "sensitivity": "operational",
+      "home": "providers.env"
+    },
+    {
+      "name": "CARRY_INTERSTITIAL_MODEL",
+      "aliases": [],
+      "group": "provider",
+      "sensitivity": "operational",
+      "home": "providers.env"
+    },
+    {
+      "name": "CARRY_INTERSTITIAL_API_KEY",
+      "aliases": [],
+      "group": "provider",
+      "sensitivity": "secret",
+      "home": "providers.env"
+    },
+    {
+      "name": "CARRY_LOCAL_MODEL_NETWORK",
+      "aliases": [],
+      "group": "local",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
+      "name": "CARRY_SERPAPI_KEY",
+      "aliases": [],
+      "group": "provider",
+      "sensitivity": "secret",
+      "home": "providers.env"
+    },
+    {
+      "name": "CARRY_GOOGLE_MAPS_KEY",
+      "aliases": [],
+      "group": "provider",
+      "sensitivity": "secret",
+      "home": "providers.env"
+    },
+    {
+      "name": "CARRY_PIRATE_WEATHER_KEY",
+      "aliases": [],
+      "group": "provider",
+      "sensitivity": "secret",
+      "home": "providers.env"
+    },
+    {
+      "name": "CARRY_WOLFRAM_APP_ID",
+      "aliases": [],
+      "group": "provider",
+      "sensitivity": "secret",
+      "home": "providers.env"
+    },
+    {
+      "name": "CARRY_PPLX_API_KEY",
+      "aliases": [],
+      "group": "provider",
+      "sensitivity": "secret",
+      "home": "providers.env"
+    },
+    {
+      "name": "CARRY_PPLX_MODEL",
+      "aliases": [],
+      "group": "provider",
+      "sensitivity": "operational",
+      "home": "providers.env"
+    }
+  ]
+}
