@@ -82,13 +82,22 @@ test("production Center serves only the canonical external Pin release tree", (c
     );
     const mounts = center.volumes.filter((mount) => mount.target === releaseTarget);
     assert.equal(mounts.length, 1);
-    assert.deepEqual(mounts[0], {
+    const { bind = {}, ...mount } = mounts[0];
+    assert.deepEqual(mount, {
       type: "bind",
       source: path.join(dataDirectory, "pin-releases"),
       target: releaseTarget,
       read_only: true,
-      bind: {},
     });
+    assert.ok(
+      bind.create_host_path === undefined || bind.create_host_path === true,
+      "the read-only source bind must retain Compose's create-host-path default",
+    );
+    assert.deepEqual(
+      Object.keys(bind).filter((key) => key !== "create_host_path"),
+      [],
+      "the source bind has no additional behavior",
+    );
   } finally {
     rmSync(dataDirectory, { recursive: true, force: true });
   }
