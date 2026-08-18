@@ -1,11 +1,11 @@
-import { CARRY_WEBAPI, CARRY_WEBAPI_ENABLED } from "@/server/cosmos";
+import { COSMOS_WEBAPI, COSMOS_WEBAPI_ENABLED } from "@/server/cosmos";
 
 /** POST /api/assistant/speech — synthesize the spoken answer (Azure neural voice
  *  when configured), proxied from `/demo-api/speech`. Returns audio bytes. */
 export async function POST(request: Request) {
-  if (!CARRY_WEBAPI_ENABLED) return new Response("speech unavailable", { status: 503 });
+  if (!COSMOS_WEBAPI_ENABLED) return new Response("speech unavailable", { status: 503 });
   const body = await request.text();
-  const upstream = await fetch(`${CARRY_WEBAPI}/demo-api/speech`, {
+  const upstream = await fetch(`${COSMOS_WEBAPI}/demo-api/speech`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body,

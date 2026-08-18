@@ -1,8 +1,8 @@
 /*
  * The provenance wire vocabulary.
  *
- * `x-data-source` used to carry FIVE values from two incompatible families —
- * `carry|fixtures` from the list routes and `unconfigured|carry|unreachable`
+ * `x-data-source` used to contain FIVE values from two incompatible families —
+ * `cosmos|fixtures` from the list routes and `unconfigured|cosmos|unreachable`
  * from the admin/assistant routes — while the client knew only two of them and
  * blind-cast the rest. Worse, `fixtures` meant both "recovered demo data" and
  * "nothing at all, the call failed", so a route serving an EMPTY error result
@@ -18,7 +18,7 @@
  * reads it breaks mid-migration. `x-data-state` is the one to branch on.
  */
 
-/** live: from carry, current. absent: no counterpart here. degraded: it didn't answer. */
+/** live: from cosmos, current. absent: no counterpart here. degraded: it didn't answer. */
 export type DataState = "live" | "absent" | "degraded";
 
 /** What the wearer is looking at instead — recovered sample data, or nothing. */
@@ -48,7 +48,7 @@ export interface SourceResult {
  */
 function stateOf(result: SourceResult): DataState {
   if (result.state) return result.state;
-  if (result.source === "carry") return "live";
+  if (result.source === "cosmos") return "live";
   if (result.source === "unreachable") return "degraded";
   // Everything else is "fixtures"/"unconfigured": a failure only if it says so.
   return result.degraded ? "degraded" : "absent";

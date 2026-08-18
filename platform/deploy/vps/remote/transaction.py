@@ -662,7 +662,7 @@ def load_channel_journal(record: Path) -> dict[str, object]:
         die("channel-key backup contract changed after migration preparation")
     transaction_root = record.parent.parent
     if transaction_root == Path("/home/anders/ai-pin-revival"):
-        expected_key = Path("/home/anders/carry-center-data/channel-key.json")
+        expected_key = Path("/home/anders/cosmos-center-data/channel-key.json")
         expected_contract = transaction_root / "backups" / record.name / "invariants.tsv"
         if key_path != expected_key or contract_path != expected_contract:
             die("production channel-key journal is outside its exact guarded paths")

@@ -47,7 +47,7 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
     window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
   }, [pathname]);
 
-  // Never carry a wearer assistant onto a public or unauthenticated surface.
+  // Never contain a wearer assistant onto a public or unauthenticated surface.
   useEffect(() => {
     if (pathname === "/login" || pathname === "/wifi" || pathname.startsWith("/share/")) {
       setOpen(false);

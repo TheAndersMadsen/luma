@@ -43,7 +43,7 @@ pub async fn search(query: &str, limit: usize) -> Result<Vec<Track>, BackendErro
     if query.is_empty() || limit == 0 {
         return Err(BackendError::NoResult);
     }
-    let base = std::env::var("CARRY_MUSICBRAINZ_BASE_URL")
+    let base = std::env::var("COSMOS_MUSICBRAINZ_BASE_URL")
         .ok()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| "https://musicbrainz.org".to_owned());

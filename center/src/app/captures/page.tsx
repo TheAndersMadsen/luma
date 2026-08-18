@@ -37,7 +37,7 @@ export default function CapturesPage() {
 
   // New stock photo memories arrive as a three-frame burst. Rank unselected
   // uploads in small batches so Center naturally settles on the best frame even
-  // if the wearer never opens the detail view. Carry caches each answer.
+  // if the wearer never opens the detail view. Cosmos caches each answer.
   useEffect(() => {
     if (data?.state !== "live") return;
     const pending = data.data
@@ -93,7 +93,7 @@ export default function CapturesPage() {
    * state and said out loud beside the grid.
    *
    * Branching on `x-data-state`, not the `x-data-source` alias — src/server/
-   * headers.ts is explicit that state is the one to branch on, and `carry` is
+   * headers.ts is explicit that state is the one to branch on, and `cosmos` is
    * only accidentally equivalent to `live` today.
    *
    * `dataUpdatedAt` is a dependency because these results are a SEPARATE list
@@ -276,7 +276,7 @@ export default function CapturesPage() {
 
   /* Report the capture plane's own provenance. Missing data stays empty. */
   // When the server search answered, the tiles on screen came from THAT call
-  // (and only when it reported `x-data-source: carry`), so the dashboard
+  // (and only when it reported `x-data-source: cosmos`), so the dashboard
   // payload's provenance is not theirs to report.
   const showingServerSearch = Boolean(query.trim() && serverResults);
 

@@ -16,8 +16,8 @@
 //!
 //! `Understand` drives the clone's own ReAct engine (`assistant::engine`)
 //! over our own model, prompts, and tool catalog, and streams the transcript
-//! nodes plus a terminal `Respond` DEVICE action (the wire shape carry's legacy
-//! consumer actually dispatches and speaks) in carry's server-stream shape. With
+//! nodes plus a terminal `Respond` DEVICE action (the wire shape cosmos's legacy
+//! consumer actually dispatches and speaks) in cosmos's server-stream shape. With
 //! no model configured it still completes a well-formed turn with a brief retry
 //! response, rather than inventing facts or exposing deployment internals.
 //! Completion/chat streams, vision, places/weather, translation, playlists, and
@@ -59,7 +59,7 @@ const ENVELOPE_OPEN_FAILED: &str = "could not open the request envelope";
 /// The plaintext response could not be sealed back under the channel key.
 const ENVELOPE_SEAL_FAILED: &str = "could not seal the response envelope";
 
-/// Short wearer-facing fallbacks. These deliberately carry no assistant persona,
+/// Short wearer-facing fallbacks. These deliberately contain no assistant persona,
 /// provider name, model jargon, or deployment detail.
 const NO_COMPLETION: &str = "No answer came back. Try again.";
 const VISION_UNAVAILABLE: &str = "Image analysis is unavailable. Try again.";
@@ -99,7 +99,7 @@ impl Default for AiBusMain {
 /// builds `FunctionCall.newBuilder().setName("CreateMemory").setUtterance(transcript)`
 /// — it sets `utterance` and **never sets `arguments`** — and sends it over
 /// `AIBusService.FunctionExecution`. That is the only on-device caller of this
-/// RPC anywhere in the decompile, so the RPC exists on stock carry essentially to
+/// RPC anywhere in the decompile, so the RPC exists on stock cosmos essentially to
 /// serve this feature, and the note is created SERVER-side.
 ///
 /// Passing `arguments` (empty) to the tool dispatcher meant the call fell through
@@ -275,7 +275,7 @@ impl AiBusMain {
 
     async fn run_model_completion(&self, prompt: String) -> Result<String, Status> {
         // Interstitials and loading-message blurbs use a SEPARATE, smaller model
-        // from the main assistant — faithful to how carry ran it. A former Humane
+        // from the main assistant — faithful to how Cosmos ran it. A former Humane
         // engineer confirmed the `hai` OpenChat 3.5 0106 generated "the little
         // blurbs while pin was doing stuff", while GPT-4o did the reasoning. This
         // is a plain, tool-free completion, which is exactly what a 7B like
@@ -301,7 +301,7 @@ impl AiBusMain {
 
     /// Drive one `ChatCompletion` turn — the DEVICE-hosted sub-agent's model call.
     ///
-    /// This is the second tier of carry's topology. `TaoAgentV2` runs its own
+    /// This is the second tier of cosmos's topology. `TaoAgentV2` runs its own
     /// ReAct loop on the pin for the capability experiences (Settings, Timer,
     /// Alarm, Contacts, ManageNutrition) and asks the server for each model step
     /// over this RPC, naming the tool set it wants via `tool_set_version` — the
@@ -435,7 +435,7 @@ impl AiBusMain {
     /// The principal is the one `AuthLayer` resolved from the mesh edge; a request
     /// that somehow reached a handler without one is treated as unauthorized
     /// rather than anonymous. With no entitlement datastore the directory resolves
-    /// every real principal to `Active` — carry's own fail-open behavior.
+    /// every real principal to `Active` — cosmos's own fail-open behavior.
     fn entitlement_for<T>(&self, request: &Request<T>) -> crate::services::gates::Entitlement {
         use crate::services::gates::EntitlementDirectory;
         use cosmos_protocol::account::UnauthorizedStatusCode;
@@ -458,12 +458,12 @@ impl AiBusMain {
 
     /// Build an OpenAI-compatible chat model when explicitly configured.
     fn configured_model() -> Option<Arc<dyn ChatModel>> {
-        let base_url = std::env::var("CARRY_LLM_BASE_URL").ok()?;
+        let base_url = std::env::var("COSMOS_LLM_BASE_URL").ok()?;
         let api_key = crate::assistant::llm::configured_api_key()?;
         if base_url.trim().is_empty() {
             return None;
         }
-        let model = std::env::var("CARRY_LLM_MODEL")
+        let model = std::env::var("COSMOS_LLM_MODEL")
             .unwrap_or_else(|_| crate::assistant::llm::DEFAULT_LLM_MODEL.to_owned());
         Some(Arc::new(OpenAiChatModel::new(base_url, api_key, model)))
     }
@@ -472,7 +472,7 @@ impl AiBusMain {
     ///
     /// Kept separate from [`Self::configured_model`] so a deployment can run a
     /// small self-hosted blurb model (e.g. `openchat:7b-v3.5-0106` on ollama)
-    /// alongside a strong reasoning model — the split carry actually ran. A local
+    /// alongside a strong reasoning model — the split Cosmos actually ran. A local
     /// endpoint needs no credential, so a missing key is filled with a placeholder
     /// the endpoint ignores rather than disabling the model.
     fn configured_blurb_model() -> Option<Arc<dyn ChatModel>> {
@@ -549,7 +549,7 @@ impl AiBusMain {
         if image_urls.is_empty() {
             return Err(Status::invalid_argument("vision request has no images"));
         }
-        let base_url = std::env::var("CARRY_LLM_BASE_URL")
+        let base_url = std::env::var("COSMOS_LLM_BASE_URL")
             .map_err(|_| Status::failed_precondition("vision endpoint is not configured"))?;
         let api_key = crate::assistant::llm::configured_api_key()
             .ok_or_else(|| Status::failed_precondition("vision endpoint is not configured"))?;
@@ -558,8 +558,8 @@ impl AiBusMain {
                 "vision endpoint is not configured",
             ));
         }
-        let configured_vision_model = std::env::var("CARRY_VISION_MODEL").ok();
-        let configured_llm_model = std::env::var("CARRY_LLM_MODEL").ok();
+        let configured_vision_model = std::env::var("COSMOS_VISION_MODEL").ok();
+        let configured_llm_model = std::env::var("COSMOS_LLM_MODEL").ok();
         let model = Self::vision_model_name(
             configured_vision_model.as_deref(),
             configured_llm_model.as_deref(),
@@ -713,7 +713,7 @@ impl AiBusMain {
         if use_case == pb::upload_file_request::UploadUseCase::Unset {
             return Err(Status::invalid_argument("upload use case is required"));
         }
-        let endpoint = std::env::var("CARRY_UPLOAD_PRESIGN_ENDPOINT").map_err(|_| {
+        let endpoint = std::env::var("COSMOS_UPLOAD_PRESIGN_ENDPOINT").map_err(|_| {
             Status::failed_precondition("object-storage presign endpoint is not configured")
         })?;
         if endpoint.trim().is_empty() {
@@ -980,7 +980,7 @@ impl AiBusMain {
             }
             let backend = crate::backends::azure_speech::configured_backend().ok_or_else(|| {
                 Status::unimplemented(
-                    "speech synthesis requires a configured backend (set CARRY_AZURE_SPEECH_KEY)",
+                    "speech synthesis requires a configured backend (set COSMOS_AZURE_SPEECH_KEY)",
                 )
             })?;
             let audio = backend
@@ -1013,7 +1013,7 @@ impl AiBusMain {
                 .ok_or_else(|| {
                     Status::unimplemented(
                         "audio transcription requires a configured speech-to-text backend \
-                         (set CARRY_AZURE_SPEECH_KEY)",
+                         (set COSMOS_AZURE_SPEECH_KEY)",
                     )
                 })?;
             let text = backend
@@ -1165,12 +1165,12 @@ impl AiBusService for AiBusMain {
         &self,
         request: Request<pb::SynapseUnderstandingRequest>,
     ) -> Result<Response<Self::UnderstandStream>, Status> {
-        // Resolve the caller's account verdict before the turn: carry gates every
+        // Resolve the caller's account verdict before the turn: Cosmos gates every
         // dispatched action on it, and a degraded account rewrites the ReAct chain
         // into a canned local experience rather than going silent.
         let entitlement = self.entitlement_for(&request);
         let mut tools = self.tool_context(&request);
-        // Drive the ReAct engine (recreated from carry's serverside logic) and
+        // Drive the ReAct engine (recreated from cosmos's serverside logic) and
         // stream the transcript + final answer as it is produced.
         let req = request.into_inner();
         // The wearer's own position, when the device sent one, so the
@@ -1187,7 +1187,7 @@ impl AiBusService for AiBusMain {
     type EncryptedUnderstandStream = BoxStream<pb::EncryptedSynapseUnderstandingResponse>;
 
     /// The envelope-encrypted assistant turn — the RPC a **stock** Pin actually
-    /// uses. carry wraps the very same `Understand` exchange in the per-capability
+    /// uses. Cosmos wraps the very same `Understand` exchange in the per-capability
     /// ephemeral channel: the device seals a `SynapseUnderstandingRequest` under a
     /// channel key it established via `PublicPrivacyService`, and every streamed
     /// `SynapseUnderstandingResponse` comes back sealed under the same kid.
@@ -1406,7 +1406,7 @@ impl AiBusService for AiBusMain {
             utterance,
             // This RPC can return only text/audio, not a device action. Keep
             // `Respond` available, but do not offer actions the adapter cannot
-            // carry back to its caller. Streaming Understand retains the full
+            // return to its caller. Streaming Understand retains the full
             // Pin action catalog and observation loop.
             excluded_tools: catalog::stateful_excluded_device_tools(),
             ..Default::default()
@@ -1618,7 +1618,7 @@ impl AiBusService for AiBusMain {
         }))
     }
 
-    /// Reverse geocode the device's position. carry's response fields are Azure
+    /// Reverse geocode the device's position. cosmos's response fields are Azure
     /// Maps vocabulary (`municipality`, `country_subdivision`); `backends::places`
     /// translates Google's `address_components` into them.
     async fn encrypted_reverse_geocode(
@@ -1661,7 +1661,7 @@ impl AiBusService for AiBusMain {
         }))
     }
 
-    /// Places search around the wearer, in carry's `NearbyPlace` shape — which is
+    /// Places search around the wearer, in cosmos's `NearbyPlace` shape — which is
     /// field-for-field Google Places, so this adapter is close to a rename.
     async fn encrypted_nearby_search(
         &self,
@@ -1687,7 +1687,7 @@ impl AiBusService for AiBusMain {
         }))
     }
 
-    /// Current conditions for the device's location, in carry's AccuWeather-shaped
+    /// Current conditions for the device's location, in cosmos's AccuWeather-shaped
     /// `WeatherResponse`. Served by Pirate Weather when configured; see
     /// `backends::weather` for the one field (the numeric icon) that is a
     /// documented approximation between the two vendors.
@@ -1718,7 +1718,7 @@ impl AiBusService for AiBusMain {
             return Err(Status::invalid_argument("GetFoodItem requires text"));
         }
         // Real nutrition from Open Food Facts (a free, keyless substitute for
-        // carry's Nutritionix backend). A no-match returns the query with empty
+        // cosmos's Nutritionix backend). A no-match returns the query with empty
         // nutrition — the device narrates "couldn't get that info" — rather than a
         // fabricated figure; an unreachable provider is an honest gRPC error.
         let best = match crate::backends::food::lookup(&text).await {
@@ -2331,7 +2331,7 @@ mod tests {
     /// a crypto or transport fault that borrows either code is narrated to the
     /// wearer as a billing or lost-device verdict. Both stay reserved for
     /// `gates::unsubscribed_status` / `gates::unauthorized_device_status`, which
-    /// additionally carry the trailer the device's
+    /// additionally contain the trailer the device's
     /// `AccountAuthorizationInterceptor` requires before it persists the verdict.
     #[tokio::test]
     async fn account_status_codes_are_reserved_for_entitlement_verdicts() {
@@ -2434,7 +2434,7 @@ mod tests {
                 tonic::Code::Unavailable,
                 "{what}: channel faults report as UNAVAILABLE, like the client's own"
             );
-            // Nothing here may carry an account trailer either.
+            // Nothing here may contain an account trailer either.
             assert!(
                 status
                     .metadata()
@@ -2828,11 +2828,11 @@ mod tests {
         let chat_response = pb::ChatCompletionResponse::decode(chat_payload.as_slice())
             .expect("chat response is valid protobuf");
         assert_eq!(chat_response.choices.len(), 1);
-        // The turn must carry something the sub-agent can act on: spoken text OR
+        // The turn must contain something the sub-agent can act on: spoken text OR
         // a tool call. Requiring non-empty CONTENT was right only while this RPC
         // served no tools — now that it resolves a tool set, a pure tool-call step
         // legitimately has empty content, exactly as an OpenAI-shaped endpoint
-        // returns it. What must never happen is a response carrying neither.
+        // returns it. What must never happen is a response containing neither.
         let message = chat_response.choices[0]
             .message
             .as_ref()

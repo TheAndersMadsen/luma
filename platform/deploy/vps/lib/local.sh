@@ -145,7 +145,7 @@ BOOTSTRAP
     # number mattered. Measured on the host on 2026-08-12: the leaked directories
     # hold common.sh + domain.sh + domain.py + the entry point at 216 KiB each,
     # and ALL of /tmp/tmp.* together came to 900 KiB. /tmp is its own 4 GiB
-    # tmpfs; the 2.8 GiB sitting in it is /tmp/carry-enroll-target (2.4 GiB) and
+    # tmpfs; the 2.8 GiB sitting in it is /tmp/cosmos-enroll-target (2.4 GiB) and
     # some unpacked tarballs, none of it written by this function. And it cannot
     # reach preflight's free-space refusal at all: preflight.sh:288 measures
     # `df -Pk /home/anders`, which is /dev/sda1, not this tmpfs.

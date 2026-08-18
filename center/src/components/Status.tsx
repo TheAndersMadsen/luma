@@ -12,7 +12,7 @@
  *
  * Four words, everywhere:
  *
- *   live       this came from the configured carry backend and is current
+ *   live       this came from the configured cosmos backend and is current
  *   absent     no counterpart exists here — a fact about the evidence, not a
  *              runtime outcome, so it never offers a retry and never looks red
  *   degraded   a call failed, so affected wearer data is unavailable — always

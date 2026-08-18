@@ -434,7 +434,7 @@ test("LOAD-BEARING guard: KNOWN_ABSENT_NAMES is not stale — none of them exist
 
 test("LOAD-BEARING guard: an action that exists but can never be EMITTED is rejected", () => {
   // DeviceStatus is in NATIVE_ACTION_CATALOG, so a membership check passes —
-  // yet Understand returns Settings carrying a nested DeviceStatus Request
+  // yet Understand returns Settings containing a nested DeviceStatus Request
   // (native_device_actions.rs:225-236). Expecting DeviceStatus is a name that
   // can never match, the same defect wearing a different hat.
   const problems = validateCaseNames(

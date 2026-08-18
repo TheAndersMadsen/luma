@@ -36,7 +36,7 @@ impl fmt::Debug for GrpcAuthInterceptor {
 impl GrpcAuthInterceptor {
     /// Create a new interceptor with the expected bearer token.
     ///
-    /// When `token` is `Some`, every request must carry one matching bearer token.
+    /// When `token` is `Some`, every request must contain one matching bearer token.
     /// `None` is reserved for host-only development; Android startup forbids it.
     pub fn new(token: Option<String>) -> Self {
         Self {

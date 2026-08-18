@@ -84,7 +84,7 @@ export function DataRow({
   timestamp: string;
   votable?: boolean;
   /**
-   * Called ONLY after carry confirms the row is gone, so the list can drop it.
+   * Called ONLY after cosmos confirms the row is gone, so the list can drop it.
    * Required, not optional: a Forget that deletes server-side and leaves the row
    * on screen is the same lie in the other direction.
    */
@@ -98,7 +98,7 @@ export function DataRow({
    * Forget → confirm, then DELETE the event for real.
    *
    * The BFF answers with a `degraded` clause whenever it accepted the request
-   * and deleted NOTHING — carry unconfigured, carry silent, or carry truthfully
+   * and deleted NOTHING — cosmos unconfigured, cosmos silent, or cosmos truthfully
    * reporting that no such event is this account's (which is exactly what
    * pressing this on recovered sample data looks like). In every one of those
    * cases the row stays and the sentence below says so. Same contract, same

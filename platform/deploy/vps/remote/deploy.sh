@@ -164,7 +164,7 @@ record_keycloak_post_migration_evidence() {
     temporary="$(mktemp "$target_record/.keycloak-post-migration-data.XXXXXX")"
     postgres="$("${COMPOSE[@]}" ps -q postgres)"
     [[ -n "$postgres" ]] || { rm -f -- "$temporary"; return 1; }
-    capture_postgres_data "$postgres" carry "$temporary" \
+    capture_postgres_data "$postgres" cosmos "$temporary" \
       || { rm -f -- "$temporary"; return 1; }
     chmod 600 "$temporary"
     mv "$temporary" "$data"
@@ -187,7 +187,7 @@ record_keycloak_post_migration_evidence() {
 #
 # WHY THE TWO MOVING MANIFESTS ARE PASSED AS PATHS rather than read out of the two
 # backup directories. In the normal cutover both backups are taken by THIS
-# release's backup.sh, so both sides carry this release's projected data manifest
+# release's backup.sh, so both sides contain this release's projected data manifest
 # and its retained-text schema manifest, and the paths are simply the two
 # backups'. In the precommit-resume path the post-candidate backup is taken by the
 # PENDING release's backup.sh — it has to be, because its other artifacts are
@@ -240,7 +240,7 @@ record_keycloak_post_migration_evidence() {
 # canary is necessarily post-candidate.
 #
 # So comparing these two relations measures the deploy's own instrument and fails
-# every resume for it. They are excluded HERE AND NOWHERE ELSE: every carry
+# every resume for it. They are excluded HERE AND NOWHERE ELSE: every cosmos
 # relation and every other keycloak relation is still compared byte-for-byte, and
 # the schema comparison beside this one is untouched. The cost is that a candidate
 # which corrupted session rows would not be caught by this gate; sessions are
@@ -323,8 +323,8 @@ capture_resume_candidate_evidence() {
     columns_source="$baseline/postgres-data.tsv.columns"
   fi
   postgres="$(find_postgres_container)"
-  capture_postgres_data "$postgres" carry "$work/candidate-data.tsv" "$columns_source"
-  capture_postgres_schema "$postgres" carry "$work/candidate-schema.tsv" retain-sql
+  capture_postgres_data "$postgres" cosmos "$work/candidate-data.tsv" "$columns_source"
+  capture_postgres_schema "$postgres" cosmos "$work/candidate-schema.tsv" retain-sql
 }
 
 # The pre-candidate schema manifest the resume classifies against, WITH the
@@ -355,7 +355,7 @@ resume_baseline_schema_manifest() {
   [[ -f "$baseline/postgres-schema.tsv" && ! -L "$baseline/postgres-schema.tsv" ]] || return 1
   install -m 600 "$baseline/postgres-schema.tsv" "$manifest" || return 1
   cmp -s "$baseline/postgres-schema.tsv" "$manifest" || return 1
-  for database in carry keycloak; do
+  for database in cosmos keycloak; do
     source=""
     if [[ -f "$baseline/postgres-schema.tsv.$database.sql" \
       && ! -L "$baseline/postgres-schema.tsv.$database.sql" ]]; then
@@ -376,9 +376,9 @@ resume_baseline_schema_manifest() {
 # quiesce_ingress_services stops the cloudflared user unit, the cloudflared
 # system unit, nginx.service and penumbra-center-bridge.service. nginx is the
 # HOST's shared web server, so this takes down aipin.andersmadsen.dk,
-# connectivity-check.carry.humane.cloud and the default vhost along with this
+# connectivity-check.cosmos.humane.cloud and the default vhost along with this
 # project — and the paired Pin, which POSTs a device-status report every five
-# minutes to carry-api.andersmadsen.dk, is connection-REFUSED for the entire
+# minutes to contain-api.andersmadsen.dk, is connection-REFUSED for the entire
 # window. Refused, not 502'd: nginx is not running to log it, so the outage
 # leaves no server-side trace at all and is reconstructible only by diffing
 # access-log timestamps afterwards. The journal on this host shows real windows
@@ -1148,7 +1148,7 @@ PY
     # Serving again and proven to match the recorded pre-cutover state, so the
     # resume's window is a fact. Closed HERE rather than after the public canary
     # below, for the same reason the cutover path closes it here: the edge is
-    # already carrying the wearer's traffic, and charging the canary's duration to
+    # already containing the wearer's traffic, and charging the canary's duration to
     # the outage would overstate it. This row goes into the CURRENT deployment's
     # record, not the pending one: this invocation is what took the edge down and
     # what the operator is reading a budget line for, and a deploy that resumes a
@@ -1647,7 +1647,7 @@ assert_managed_cloudflared_topology \
   || fail "Cloudflare is not running as the exact allowlisted system and user connectors"
 domain_cloudflared_prepare "$record" \
   || fail "Cloudflare Center-route transaction could not capture its exact preimage"
-keycloak_before_host=carry.andersmadsen.dk
+keycloak_before_host=cosmos.andersmadsen.dk
 if [[ -n "$old_current_deployment" \
     && -f "$old_current_deployment/domain-cutover/keycloak/APPLIED.json" ]]; then
   keycloak_before_host=center.andersmadsen.dk
@@ -1682,7 +1682,7 @@ capture_live_center_env "$stage_env/center.env"
 postgres_before="$(find_postgres_container)"
 stage_paired_identity "$postgres_before" "$stage_env/center.env"
 
-edge_source="$PRIVATE_DIR/edge"; [[ -d "$edge_source" ]] || edge_source=/home/anders/carry-edge
+edge_source="$PRIVATE_DIR/edge"; [[ -d "$edge_source" ]] || edge_source=/home/anders/cosmos-edge
 attest_source="$(active_attestation_root)"
 duc_source="$(active_device_user_root)"
 theme_source="$PRIVATE_DIR/keycloak-theme"; [[ -d "$theme_source" ]] || theme_source=/home/anders/keycloak-themes/humane
@@ -1713,7 +1713,7 @@ update_env_value "$runtime_stage" REVIVAL_IMAGE_TAG "$release_id"
 # Cosmos rejects service-path revisions longer than 63 characters, so the
 # container revision uses a short prefix while release identity stays full.
 update_env_value "$runtime_stage" REVIVAL_REVISION "${release_id:0:16}"
-update_env_value "$runtime_stage" CARRY_REVISION "${release_id:0:16}"
+update_env_value "$runtime_stage" COSMOS_REVISION "${release_id:0:16}"
 update_env_value "$runtime_stage" REVIVAL_DEPLOYMENT_ENVIRONMENT production
 update_env_value "$runtime_stage" REVIVAL_PRIVATE_DIR "$PRIVATE_DIR"
 update_env_value "$runtime_stage" REVIVAL_DATA_DIR "$DATA_DIR"
@@ -1733,7 +1733,7 @@ update_env_value "$runtime_stage" REVIVAL_AI_BUS_HTTP_PORT 18086
 update_env_value "$runtime_stage" REVIVAL_KEYCLOAK_PORT 8088
 update_env_value "$runtime_stage" REVIVAL_EDGE_PORT 18443
 update_env_value "$runtime_stage" REVIVAL_GRAFANA_PORT 13001
-update_env_value "$runtime_stage" CARRY_DEMO_ENABLED true
+update_env_value "$runtime_stage" COSMOS_DEMO_ENABLED true
 
 # The operator's pending configuration changes, applied to the CANDIDATE only.
 #
@@ -1742,38 +1742,38 @@ update_env_value "$runtime_stage" CARRY_DEMO_ENABLED true
 # KEYCLOAK_SCOPES from the running Center container, so a proposal applied
 # earlier would be overwritten by the value it was meant to replace. Everything
 # below this line that writes an env value writes a name no proposal may name --
-# CARRY_REMOTE_TTS_ENABLED is set by the speech canary a few lines down, which
+# COSMOS_REMOTE_TTS_ENABLED is set by the speech canary a few lines down, which
 # is exactly why the catalog marks it undeliverable from the dashboard.
 apply_configuration_proposals "$stage_env"
 
-upload_base_url="$(read_env_value "$cosmos_stage" CARRY_CAPTURE_UPLOAD_BASE_URL 2>/dev/null || true)"
+upload_base_url="$(read_env_value "$cosmos_stage" COSMOS_CAPTURE_UPLOAD_BASE_URL 2>/dev/null || true)"
 if [[ -z "$upload_base_url" ]]; then
-  upload_base_url="$(read_env_value "$cosmos_stage" CARRY_CAPTURE_SHARE_BASE_URL 2>/dev/null || true)"
+  upload_base_url="$(read_env_value "$cosmos_stage" COSMOS_CAPTURE_SHARE_BASE_URL 2>/dev/null || true)"
   if [[ -z "$upload_base_url" ]]; then
-    upload_base_url="$(read_env_value "$runtime_stage" CARRY_CAPTURE_SHARE_BASE_URL 2>/dev/null || true)"
+    upload_base_url="$(read_env_value "$runtime_stage" COSMOS_CAPTURE_SHARE_BASE_URL 2>/dev/null || true)"
   fi
 fi
 if [[ -z "$upload_base_url" ]]; then
-  if [[ -n "${CARRY_CAPTURE_UPLOAD_BASE_URL-}" ]]; then
-    upload_base_url="$CARRY_CAPTURE_UPLOAD_BASE_URL"
+  if [[ -n "${COSMOS_CAPTURE_UPLOAD_BASE_URL-}" ]]; then
+    upload_base_url="$COSMOS_CAPTURE_UPLOAD_BASE_URL"
   elif [[ -n "${REVIVAL_PUBLIC_ORIGIN-}" ]]; then
     upload_base_url="$REVIVAL_PUBLIC_ORIGIN"
   fi
 fi
 if [[ -z "$upload_base_url" ]]; then
   upload_base_url="https://center.andersmadsen.dk"
-  warn "defaulting CARRY_CAPTURE_UPLOAD_BASE_URL to ${upload_base_url}; set it explicitly before deployment"
+  warn "defaulting COSMOS_CAPTURE_UPLOAD_BASE_URL to ${upload_base_url}; set it explicitly before deployment"
 fi
 if [[ -n "$upload_base_url" ]]; then
-  update_env_value "$cosmos_stage" CARRY_CAPTURE_UPLOAD_BASE_URL "$upload_base_url"
+  update_env_value "$cosmos_stage" COSMOS_CAPTURE_UPLOAD_BASE_URL "$upload_base_url"
 else
-  fail "CARRY_CAPTURE_UPLOAD_BASE_URL is required for production compose interpolation"
+  fail "COSMOS_CAPTURE_UPLOAD_BASE_URL is required for production compose interpolation"
 fi
 
-onboarding_endpoint="$(read_env_value "$cosmos_stage" CARRY_ONBOARDING_ENDPOINT 2>/dev/null || true)"
+onboarding_endpoint="$(read_env_value "$cosmos_stage" COSMOS_ONBOARDING_ENDPOINT 2>/dev/null || true)"
 if [[ -z "$onboarding_endpoint" ]]; then
-  if [[ -n "${CARRY_ONBOARDING_ENDPOINT-}" ]]; then
-    onboarding_endpoint="$CARRY_ONBOARDING_ENDPOINT"
+  if [[ -n "${COSMOS_ONBOARDING_ENDPOINT-}" ]]; then
+    onboarding_endpoint="$COSMOS_ONBOARDING_ENDPOINT"
   elif [[ -n "${REVIVAL_PUBLIC_ORIGIN-}" ]]; then
     onboarding_endpoint="$REVIVAL_PUBLIC_ORIGIN"
   else
@@ -1782,9 +1782,9 @@ if [[ -z "$onboarding_endpoint" ]]; then
 fi
 if [[ -z "$onboarding_endpoint" ]]; then
   onboarding_endpoint="https://center.andersmadsen.dk"
-  warn "defaulting CARRY_ONBOARDING_ENDPOINT to ${onboarding_endpoint}; set it explicitly before deployment"
+  warn "defaulting COSMOS_ONBOARDING_ENDPOINT to ${onboarding_endpoint}; set it explicitly before deployment"
 fi
-update_env_value "$cosmos_stage" CARRY_ONBOARDING_ENDPOINT "$onboarding_endpoint"
+update_env_value "$cosmos_stage" COSMOS_ONBOARDING_ENDPOINT "$onboarding_endpoint"
 
 searxng_secret="$(read_env_value "$cosmos_stage" SEARXNG_SECRET 2>/dev/null || true)"
 if [[ -z "$searxng_secret" ]]; then
@@ -1792,7 +1792,7 @@ if [[ -z "$searxng_secret" ]]; then
   update_env_value "$cosmos_stage" SEARXNG_SECRET "$searxng_secret"
 fi
 (( ${#searxng_secret} >= 32 )) || fail "SearXNG secret is too short"
-remove_env_value "$cosmos_stage" CARRY_SEARXNG_BASE_URL
+remove_env_value "$cosmos_stage" COSMOS_SEARXNG_BASE_URL
 unset searxng_secret
 
 # Prove the legacy provider produces a real MP3 before enabling the device-facing
@@ -1813,7 +1813,7 @@ open(sys.argv[3],"w",encoding="utf-8").write(f"bytes\t{len(audio)}\nsha256\t{has
 PY
 rm -rf -- "$tts_tmp"
 chmod 600 "$record/precutover-tts.tsv"
-update_env_value "$cosmos_stage" CARRY_REMOTE_TTS_ENABLED true
+update_env_value "$cosmos_stage" COSMOS_REMOTE_TTS_ENABLED true
 
 spotify_live="$PRIVATE_DIR/spotify-adapter/token"
 spotify_stage="$stage/spotify-token"
@@ -1831,11 +1831,11 @@ spotify_bytes="$(tr -d '\r\n' <"$spotify_stage" | wc -c | tr -d '[:space:]')"
 
 edge_token="$(openssl rand -base64 48 | tr '+/' '-_' | tr -d '=')"
 [[ "$edge_token" != "$(tr -d '\r\n' <"$spotify_stage")" ]] || fail "edge and Spotify tokens must be distinct"
-for file in "$runtime_stage" "$cosmos_stage" "$provider_stage" "$center_stage"; do update_env_value "$file" CARRY_EDGE_TOKEN "$edge_token"; done
+for file in "$runtime_stage" "$cosmos_stage" "$provider_stage" "$center_stage"; do update_env_value "$file" COSMOS_EDGE_TOKEN "$edge_token"; done
 unset edge_token
 python3 "$release_dir/platform/edge/render-envoy.py" \
   --env "$runtime_stage" --template "$release_dir/platform/edge/envoy/envoy.yaml.tpl" \
-  --output "$stage_assets/edge/envoy.yaml" --cert-dir /etc/carry-edge/certs >/dev/null
+  --output "$stage_assets/edge/envoy.yaml" --cert-dir /etc/cosmos-edge/certs >/dev/null
 chmod 600 "$stage_assets/edge/envoy.yaml"
 
 load_compose_command_with_env "$release_dir" "$runtime_stage" "$cosmos_stage" "$provider_stage" "$center_stage"
@@ -2179,7 +2179,7 @@ recover_previous_application() {
       recovery_canary=(--release-id "$old_release_id" --image-evidence "$old_current_deployment/running-images.tsv" \
         --require-remote-tts --require-owner-spotify --quiesced-loopback --expect-bridge-ready \
         --cookie-file "$recovery_cookie")
-      [[ "$keycloak_before_host" != carry.andersmadsen.dk ]] || recovery_canary+=(--legacy-dashboard-origin)
+      [[ "$keycloak_before_host" != cosmos.andersmadsen.dk ]] || recovery_canary+=(--legacy-dashboard-origin)
       if [[ -f "$backup_path/SHA256SUMS" && -f "$backup_path/invariants.tsv" ]]; then
         recovery_canary+=(--baseline "$backup_path")
       fi
@@ -2192,7 +2192,7 @@ recover_previous_application() {
         public_recovery_canary=(--release-id "$old_release_id" \
           --image-evidence "$old_current_deployment/running-images.tsv" --require-remote-tts \
           --require-owner-spotify --cookie-file "$recovery_cookie")
-        [[ "$keycloak_before_host" != carry.andersmadsen.dk ]] || public_recovery_canary+=(--legacy-dashboard-origin)
+        [[ "$keycloak_before_host" != cosmos.andersmadsen.dk ]] || public_recovery_canary+=(--legacy-dashboard-origin)
         [[ ! -f "$backup_path/invariants.tsv" ]] || public_recovery_canary+=(--baseline "$backup_path")
         bash "$release_dir/platform/deploy/vps/remote/canary.sh" "${public_recovery_canary[@]}" >/dev/null || recovery_ok=0
       fi
@@ -2540,7 +2540,7 @@ if ! "${COMPOSE[@]}" up -d --pull never --no-build --remove-orphans; then
       name="$(docker inspect --format '{{.Name}}' "$cid" 2>/dev/null | sed 's#^/##')"
       echo "--- inspect $name ---"
       docker inspect --format '{{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} exit={{.State.ExitCode}}' "$cid" 2>/dev/null || true
-      docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$cid" 2>/dev/null | grep -E 'CARRY_INSTANCE_ID|CARRY_POD_NAME|CARRY_REVISION|CARRY_WORKLOAD' || true
+      docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$cid" 2>/dev/null | grep -E 'COSMOS_INSTANCE_ID|COSMOS_POD_NAME|COSMOS_REVISION|COSMOS_WORKLOAD' || true
       echo "--- logs $name (tail 25) ---"
       docker logs --tail 25 "$cid" 2>&1 | tail -25 || true
     done
@@ -2584,7 +2584,7 @@ ingress_quiesced=1
 (cd "$postcandidate_backup" && sha256sum -c SHA256SUMS >/dev/null)
 verify_backup_artifact_manifest "$postcandidate_backup"
 # SAME-RELEASE: both backups were taken by this release's backup.sh, so both
-# already carry this release's projected data manifest and its retained-text
+# already contain this release's projected data manifest and its retained-text
 # schema manifest. The paths are simply the two backups' own.
 compare_precommit_compatibility_state "$backup_path" "$postcandidate_backup" \
   "candidate changed compatibility state before commit" \

@@ -1,5 +1,5 @@
 //! `humane.privacy.grpc.pub.PublicPrivacyService` — the ephemeral-key lifecycle
-//! and privacy-settings sync (the last of the carry gRPC services).
+//! and privacy-settings sync (the last of the cosmos gRPC services).
 //!
 //! **Key agreement is now real** (wired to `cosmos-crypto`): the server holds an
 //! RSA-OAEP wrapping keypair; `EstablishWrappingKeys` publishes its public key,
@@ -285,11 +285,11 @@ impl ReestablishQueue {
 //
 // Making the comparison fire is necessary but not sufficient, because on this
 // deployment the WEARER'S OWN keys do not all name the wearer's current user id.
-// Read-only off the live `carry_channel_key` table on 2026-08-10: 377 rows — 21
+// Read-only off the live `cosmos_channel_key` table on 2026-08-10: 377 rows — 21
 // krypton kids under the user id the clone's DeviceUser certificate names
 // (minted 2026-08-07/08), 3 with an empty `u=`, 1 Center kid, and 352 minted
 // between 2024-04 and 2025-02 under a RETIRED user id from the Humane-cloud era
-// that this server has no record of anywhere else (`carry_device_account` knows
+// that this server has no record of anywhere else (`cosmos_device_account` knows
 // only the current one). A pure caller-vs-kid comparison classifies those 352 as
 // foreign, and `refuse_foreign_kids` is whole-RPC: one legacy kid in a batch
 // refuses the batch. On `ImportKeys` that strands the key the device just
@@ -302,8 +302,8 @@ impl ReestablishQueue {
 // Refusing the wearer's own history is not a security win, and it would fail
 // exactly the way everything else in this system has failed: invisibly, blaming
 // the wrong layer. So the comparison always RUNS and every foreign kid is always
-// REPORTED — a warn line naming the RPC plus a `carry_kid_scope_foreign_total`
-// counter — and `CARRY_KID_SCOPE` decides whether it also refuses:
+// REPORTED — a warn line naming the RPC plus a `cosmos_kid_scope_foreign_total`
+// counter — and `COSMOS_KID_SCOPE` decides whether it also refuses:
 //
 //   * `audit` (default) — permit and report. The control is live and observable;
 //     an operator can see whether enforcing would break anything BEFORE it does.
@@ -335,7 +335,7 @@ impl KidScope {
 }
 
 /// Environment variable selecting the [`KidScope`].
-const KID_SCOPE_ENV: &str = "CARRY_KID_SCOPE";
+const KID_SCOPE_ENV: &str = "COSMOS_KID_SCOPE";
 
 /// The configured scope mode, resolved once and announced when it is resolved.
 ///
@@ -370,7 +370,7 @@ fn configured_kid_scope() -> KidScope {
                 variable = KID_SCOPE_ENV,
                 mode = scope.label(),
                 "kid scoping is REPORTING ONLY: a key operation naming another \
-                 wearer is logged and permitted. Set CARRY_KID_SCOPE=enforce to \
+                 wearer is logged and permitted. Set COSMOS_KID_SCOPE=enforce to \
                  refuse it — see the Principal scoping notes in public_privacy.rs \
                  for the retired-identity reconciliation this deployment needs first"
             ),
@@ -498,7 +498,7 @@ fn kid_is_actionable(caller: Option<&str>, kid: &str) -> bool {
 /// whether enforcing is safe.
 fn report_foreign_kid(scope: KidScope, rpc: &'static str) -> bool {
     crate::metrics::increment(
-        "carry_kid_scope_foreign_total",
+        "cosmos_kid_scope_foreign_total",
         &[("rpc", rpc), ("mode", scope.label())],
     );
     match scope {
@@ -513,7 +513,7 @@ fn report_foreign_kid(scope: KidScope, rpc: &'static str) -> bool {
             tracing::warn!(
                 rpc,
                 "PERMITTING a key operation on a kid that names another wearer: \
-                 kid scoping is in audit mode (CARRY_KID_SCOPE=enforce refuses it)"
+                 kid scoping is in audit mode (COSMOS_KID_SCOPE=enforce refuses it)"
             );
             false
         }
@@ -760,7 +760,7 @@ impl PublicPrivacyService for PublicPrivacy {
         // Publish the server's RSA-OAEP wrapping public key (SPKI DER) so the
         // device can wrap its ephemeral AES-128 channel keys to it.
         let clear_key = keypb::ClearKey {
-            kid: b"carry-clone/wrapping/rsa-oaep".to_vec(),
+            kid: b"cosmos-clone/wrapping/rsa-oaep".to_vec(),
             level: keypb::Level::Unspecified as i32,
             algo: keypb::Algo::RsaOaep as i32,
             ops: vec![keypb::Op::Wrap as i32, keypb::Op::Encrypt as i32],
@@ -774,7 +774,7 @@ impl PublicPrivacyService for PublicPrivacy {
 
     /// Import the device's ephemeral channel keys.
     ///
-    /// **Scoped to the caller** — refused under `CARRY_KID_SCOPE=enforce`, and
+    /// **Scoped to the caller** — refused under `COSMOS_KID_SCOPE=enforce`, and
     /// reported but permitted under the `audit` default (see the Principal
     /// scoping section for why the default is `audit` on this deployment).
     ///
@@ -903,7 +903,7 @@ impl PublicPrivacyService for PublicPrivacy {
     /// NOT cleared its cached kid (`krypto_key_id_cache` is never written by
     /// anything but `getKeyId`; there is no `remove` anywhere in the client). So
     /// on the next process start `generateKey` asks the KMS, misses, and falls
-    /// through to `downloadKey` → this RPC, carrying that same kid.
+    /// through to `downloadKey` → this RPC, containing that same kid.
     ///
     /// **Answering with an empty list wedges the device.** An empty `keys` is not
     /// read as "not found": `SynchronousPrivacyKeyManager.downloadKey` finds no
@@ -1001,7 +1001,7 @@ impl PublicPrivacyService for PublicPrivacy {
     /// `exported_keys` stays empty: we have no server-originated key to push, and
     /// inventing one would be fabricating key material on the wire.
     ///
-    /// **Scoped to the caller** under `CARRY_KID_SCOPE=enforce`; reported and
+    /// **Scoped to the caller** under `COSMOS_KID_SCOPE=enforce`; reported and
     /// still served under the `audit` default. The queue is process-global — one
     /// set shared by every workload, because the `Encrypted*` handlers and this
     /// service are built separately — and it used to be handed whole to whoever
@@ -1039,7 +1039,7 @@ impl PublicPrivacyService for PublicPrivacy {
     /// Forget the named channel keys.
     ///
     /// Answer PER KID, never with an empty list. The device pairs each result to
-    /// the kid it asked about; a response carrying no result for a kid is not read
+    /// the kid it asked about; a response containing no result for a kid is not read
     /// as "nothing happened" — it is the same shape that wedged `RequestKeys`,
     /// where an empty list made the client raise rather than take a recovery
     /// branch. Reporting the outcome of each kid is both truthful and the only
@@ -1266,7 +1266,7 @@ mod tests {
     // -----------------------------------------------------------------------
 
     /// The user id a real Pin's DeviceUser certificate names, and the one its
-    /// kids carry in `u=`.
+    /// kids encode in `u=`.
     const WEARER: &str = "ca221c10-de71-4ce0-8b1d-000000000001";
     const OTHER_WEARER: &str = "ca221c10-de71-4ce0-8b1d-000000000002";
 
@@ -1704,13 +1704,13 @@ mod tests {
         );
     }
 
-    /// Sum of every `carry_kid_scope_foreign_total` series in the process-wide
+    /// Sum of every `cosmos_kid_scope_foreign_total` series in the process-wide
     /// registry. Read out of the exposition text because that is the surface an
     /// operator actually sees; a count that never reaches it is not a report.
     fn foreign_kid_metric_total() -> u64 {
         crate::metrics::render()
             .lines()
-            .filter(|line| line.starts_with("carry_kid_scope_foreign_total"))
+            .filter(|line| line.starts_with("cosmos_kid_scope_foreign_total"))
             .filter_map(|line| line.rsplit(' ').next()?.parse::<f64>().ok())
             .map(|value| value as u64)
             .sum()
@@ -2143,7 +2143,7 @@ mod tests {
     #[tokio::test]
     async fn a_restarted_server_still_speaks_the_channel_the_device_established() {
         let scratch = std::env::temp_dir().join(format!(
-            "carry-privacy-restart-{}-{:?}",
+            "cosmos-privacy-restart-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
         ));
@@ -2244,7 +2244,7 @@ mod tests {
     #[tokio::test]
     async fn an_unreadable_snapshot_is_reported_as_a_precondition_not_a_generation_failure() {
         let scratch = std::env::temp_dir().join(format!(
-            "carry-privacy-unreadable-{}-{:?}",
+            "cosmos-privacy-unreadable-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
         ));

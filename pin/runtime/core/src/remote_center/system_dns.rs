@@ -37,7 +37,7 @@
 //! therefore a loud error rather than a silent empty answer. If the Pin ever
 //! needs to dial by `EndpointId`, the system-correct replacement is
 //! `android_res_nquery` from `libandroid_net.so`, which submits raw queries
-//! through the same system resolver and can carry TXT.
+//! through the same system resolver and can contain TXT.
 
 use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};

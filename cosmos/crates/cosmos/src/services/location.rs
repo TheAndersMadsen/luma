@@ -36,7 +36,7 @@ fn backend_status(error: BackendError) -> Status {
     match error {
         BackendError::NotConfigured => Status::unimplemented(
             "E911 GeoLocate requires an external Wi-Fi/cell positioning provider \
-             (Google Geolocation / Google Maps); set CARRY_GOOGLE_MAPS_KEY",
+             (Google Geolocation / Google Maps); set COSMOS_GOOGLE_MAPS_KEY",
         ),
         BackendError::NoResult => {
             Status::not_found("E911 GeoLocate could not resolve the radio observations")
@@ -50,7 +50,7 @@ fn backend_status(error: BackendError) -> Status {
 #[tonic::async_trait]
 impl E911GeoLocationService for Location {
     /// Resolve radio observations into coordinates using the backend geolocation
-    /// adapter (`Google Geolocation API`, when `CARRY_GOOGLE_MAPS_KEY` is set).
+    /// adapter (`Google Geolocation API`, when `COSMOS_GOOGLE_MAPS_KEY` is set).
     /// The service is intentionally no longer blanket-`UNIMPLEMENTED`: when
     /// credentials are present, it returns a real location response; when missing,
     /// it returns a clear gRPC capability error instead of fabricating coordinates.
@@ -74,7 +74,7 @@ mod tests {
     fn missing_provider_is_a_capability_error() {
         let status = backend_status(BackendError::NotConfigured);
         assert_eq!(status.code(), tonic::Code::Unimplemented);
-        assert!(status.message().contains("CARRY_GOOGLE_MAPS_KEY"));
+        assert!(status.message().contains("COSMOS_GOOGLE_MAPS_KEY"));
     }
 
     #[test]

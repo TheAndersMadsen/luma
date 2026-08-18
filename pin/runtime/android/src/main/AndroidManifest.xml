@@ -17,7 +17,7 @@
 
       This APK installs to /data/app and shares android.uid.system, so it already
       HOLDS the system UID's permissions at runtime — Settings.Global writes in
-      CarryIdentityProvider and SettingsGlobalBridgeServer work without any
+      CosmosIdentityProvider and SettingsGlobalBridgeServer work without any
       declaration. Naming one here adds nothing and is fatal: this firmware
       enforces the privapp allowlist, and PermissionManagerService.systemReady()
       throws on a privileged permission held by a package that is not in the
@@ -30,7 +30,7 @@
       (/data/app/com.penumbraos.server-injected): WRITE_SECURE_SETTINGS}`.
       Recovery needed racing `cmd package uninstall` against the crash loop,
       because adbd cannot run as root on a production build. The sibling hook
-      modules carry the same warning for READ_PRIVILEGED_PHONE_STATE and REBOOT.
+      modules contain the same warning for READ_PRIVILEGED_PHONE_STATE and REBOOT.
 
       platform/deploy/acceptance/device-manifest-permissions.test.mjs fails if a
       signature|privileged permission reappears in ANY manifest under pin/.
@@ -122,8 +122,8 @@
             UID-1000 namespace, and deleted; no read/export API exists.
         -->
         <provider
-            android:name=".CarryIdentityProvider"
-            android:authorities="com.penumbraos.server.carryidentity"
+            android:name=".CosmosIdentityProvider"
+            android:authorities="com.penumbraos.server.cosmosidentity"
             android:directBootAware="false"
             android:enabled="true"
             android:exported="true"

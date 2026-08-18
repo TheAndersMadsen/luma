@@ -1056,7 +1056,7 @@ struct ChatResponse {
 
 /// The distinct faults behind an undelivered chat answer. All of them return
 /// the same 503 to the device, so the host log is the only place they stay
-/// separable. Variants carry byte counts and error discriminants only, never
+/// separable. Variants contain byte counts and error discriminants only, never
 /// prompt or response text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ChatFailure {
@@ -2165,7 +2165,7 @@ mod tests {
     }
 
     #[test]
-    fn chat_failure_reasons_are_distinct_and_carry_no_response_text() {
+    fn chat_failure_reasons_are_distinct_and_contain_no_response_text() {
         let failures = [
             ChatFailure::AppServer(AppServerError::Protocol),
             ChatFailure::ResponseTooLarge {

@@ -48,13 +48,13 @@ print(mounts[0].get("Source", ""))
 }
 
 active_attestation_root() {
-  active_read_only_security_root ai-bus /etc/carry-attest/ca.crt /etc/carry-attest/ca.key \
-    ca.crt ca.key "$PRIVATE_DIR/attest" /home/anders/carry-attest attestation
+  active_read_only_security_root ai-bus /etc/cosmos-attest/ca.crt /etc/cosmos-attest/ca.key \
+    ca.crt ca.key "$PRIVATE_DIR/attest" /home/anders/cosmos-attest attestation
 }
 
 active_device_user_root() {
-  active_read_only_security_root provisioning /etc/carry-duc/duc-ca.crt /etc/carry-duc/duc-ca.key \
-    duc-ca.crt duc-ca.key "$PRIVATE_DIR/duc" /home/anders/carry-duc DeviceUser
+  active_read_only_security_root provisioning /etc/cosmos-duc/duc-ca.crt /etc/cosmos-duc/duc-ca.key \
+    duc-ca.crt duc-ca.key "$PRIVATE_DIR/duc" /home/anders/cosmos-duc DeviceUser
 }
 
 assert_active_durable_mounts() {
@@ -65,13 +65,13 @@ assert_active_durable_mounts() {
     [[ "$actual" == "$expected" ]] || fail "active $service mount at $destination is not the reviewed durable source"
   done <<EOF
 postgres	/var/lib/postgresql/data	$PG_VOLUME	volume
-connectivity	/var/lib/carry	$STATE_VOLUME	volume
-ai-bus	/var/lib/carry	$STATE_VOLUME	volume
-account	/var/lib/carry	$STATE_VOLUME	volume
-contacts	/var/lib/carry	$STATE_VOLUME	volume
-feature-flags	/var/lib/carry	$STATE_VOLUME	volume
-notable-events	/var/lib/carry	$STATE_VOLUME	volume
-provisioning	/var/lib/carry	$STATE_VOLUME	volume
+connectivity	/var/lib/cosmos	$STATE_VOLUME	volume
+ai-bus	/var/lib/cosmos	$STATE_VOLUME	volume
+account	/var/lib/cosmos	$STATE_VOLUME	volume
+contacts	/var/lib/cosmos	$STATE_VOLUME	volume
+feature-flags	/var/lib/cosmos	$STATE_VOLUME	volume
+notable-events	/var/lib/cosmos	$STATE_VOLUME	volume
+provisioning	/var/lib/cosmos	$STATE_VOLUME	volume
 prometheus	/prometheus	$PROMETHEUS_VOLUME	volume
 grafana	/var/lib/grafana	$GRAFANA_VOLUME	volume
 center	/data	$CENTER_DATA_DIR	bind
@@ -261,7 +261,7 @@ key_material_paths() {
 }
 
 # Prove that an archive of the protected roots actually carries the irreplaceable
-# key material, byte for byte, rather than merely carrying the directories that
+# key material, byte for byte, rather than merely containing the directories that
 # ought to contain it. Archiving `$attest_dir` succeeds against an empty or
 # partially readable directory, and every inventory round-trip downstream
 # compares the archive with itself, so without this the backup reports success
@@ -292,7 +292,7 @@ assert_key_material_captured() {
       || { rm -f -- "$expected"; fail "irreplaceable key material is empty or undigestible: $role ($path)"; }
     printf '%s\t%s\t%s\n' "$role" "${path#/}" "$digest" >>"$expected"
   done <<<"$roles"
-  python3 - "$inventory" "$archive" "$expected" <<'PY' || { rm -f -- "$expected"; fail "backup does not carry the irreplaceable key material"; }
+  python3 - "$inventory" "$archive" "$expected" <<'PY' || { rm -f -- "$expected"; fail "backup does not contain the irreplaceable key material"; }
 import hashlib,json,sys,tarfile
 inventory,archive,expected_path=sys.argv[1:]
 def normalize(name):
@@ -424,9 +424,9 @@ database_count() {
   local container="$1" database="$2" table="$3"
   [[ "$table" =~ ^[a-z_]+$ ]] || fail "invalid invariant table"
   local exists
-  exists="$(docker exec "$container" psql -v ON_ERROR_STOP=1 -U carry -d "$database" -Atc "select to_regclass('public.$table') is not null" | tr -d '[:space:]')"
+  exists="$(docker exec "$container" psql -v ON_ERROR_STOP=1 -U cosmos -d "$database" -Atc "select to_regclass('public.$table') is not null" | tr -d '[:space:]')"
   if [[ "$exists" == t ]]; then
-    docker exec "$container" psql -v ON_ERROR_STOP=1 -U carry -d "$database" -Atc "select count(*) from $table" | tr -d '[:space:]'
+    docker exec "$container" psql -v ON_ERROR_STOP=1 -U cosmos -d "$database" -Atc "select count(*) from $table" | tr -d '[:space:]'
   else
     printf '%s\n' -1
   fi
@@ -437,9 +437,9 @@ write_invariants() {
   : >"$output"
   printf 'contract.schema\t%s\n' "$BACKUP_INVARIANT_KIND" >>"$output"
   printf 'contract.version\t%s\n' "$BACKUP_INVARIANT_VERSION" >>"$output"
-  for table in carry_channel_key carry_contact carry_contact_encrypted carry_contact_tombstone \
-    carry_memory carry_note carry_event carry_device_account; do
-    count="$(database_count "$container" carry "$table")"
+  for table in cosmos_channel_key cosmos_contact cosmos_contact_encrypted cosmos_contact_tombstone \
+    cosmos_memory cosmos_note cosmos_event cosmos_device_account; do
+    count="$(database_count "$container" cosmos "$table")"
     printf 'db.%s\t%s\n' "$table" "$count" >>"$output"
   done
   printf 'state.files\t%s\n' "$(state_file_count)" >>"$output"
@@ -541,9 +541,9 @@ import re,sys
 path,kind,version=sys.argv[1:]
 expected={
     "contract.schema","contract.version",
-    "db.carry_channel_key","db.carry_contact","db.carry_contact_encrypted",
-    "db.carry_contact_tombstone","db.carry_memory","db.carry_note",
-    "db.carry_event","db.carry_device_account","state.files","state.bytes",
+    "db.cosmos_channel_key","db.cosmos_contact","db.cosmos_contact_encrypted",
+    "db.cosmos_contact_tombstone","db.cosmos_memory","db.cosmos_note",
+    "db.cosmos_event","db.cosmos_device_account","state.files","state.bytes",
     "center.channel_key.presence","center.channel_key.sha256",
     "center.channel_key.mode","center.channel_key.owner",
 }
@@ -724,7 +724,7 @@ backup_optional_artifacts() {
     postgres-data.tsv.columns postgres-data.after-physical.tsv.columns \
     postgres-data.physical-restored.tsv.columns postgres-data.restored.tsv.columns \
     postgres-data.unprojected.tsv postgres-data.unprojected.tsv.columns \
-    postgres-schema.tsv.carry.sql postgres-schema.tsv.keycloak.sql
+    postgres-schema.tsv.cosmos.sql postgres-schema.tsv.keycloak.sql
 }
 
 write_backup_artifact_manifest() {
@@ -929,7 +929,7 @@ PY
 # the restore, the round trip?". Both sides of that comparison are the same schema
 # at the same instant, so there is nothing additive to project away, and projecting
 # anyway makes the check BLIND to every column the projection excludes — a
-# corrupted `carry_memory.thumbnail_count` would round-trip unnoticed.
+# corrupted `cosmos_memory.thumbnail_count` would round-trip unnoticed.
 #
 # So a backup whose authoritative manifest is projected keeps an unprojected one
 # beside it, and every fidelity comparison resolves through here. For an

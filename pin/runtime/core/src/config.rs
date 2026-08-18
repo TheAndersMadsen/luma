@@ -234,7 +234,7 @@ pub struct LlmConfig {
     /// utterance, tool arguments and results, and the spoken answer.
     ///
     /// Independent of `turn_trace` and also OFF by default. Shapes diagnose
-    /// most faults and carry nothing about the wearer; text diagnoses the rest
+    /// most faults and reveal nothing about the wearer; text diagnoses the rest
     /// and carries everything. Turning this off again stops serving text that
     /// was captured while it was on, so a capture window can be closed.
     #[serde(default = "default_turn_trace_content")]
@@ -265,7 +265,7 @@ pub struct LlmConfig {
     pub progress_cue_model: Option<String>,
 
     /// Vision-capable model used for camera-image analysis. Image requests on
-    /// the OpenAI-compatible chat wire carry a real multimodal image part, so
+    /// the OpenAI-compatible chat wire contain a real multimodal image part, so
     /// this must name a model that accepts images (for DashScope:
     /// `qwen-vl-max` / `qwen3-vl-plus`; the DashScope `/responses` wire is
     /// text-only and cannot serve vision). When `None`, image requests keep

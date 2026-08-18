@@ -50,7 +50,7 @@ export function revivalBuildId(environment = process.env) {
 
 /** @type {import("next").NextConfig} */
 const nextConfig = {
-  // The container copies this traced server instead of carrying source,
+  // The container copies this traced server instead of containing source,
   // compilers, or the full dependency tree into production.
   output: "standalone",
   // The dev overlay badge sits bottom-left, exactly where the Humane logo belongs.

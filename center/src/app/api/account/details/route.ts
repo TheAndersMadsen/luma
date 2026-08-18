@@ -17,7 +17,7 @@ export const runtime = "nodejs";
  *
  * `state` rides in the BODY as well as the headers, because the pane reads the
  * body. Preferred name, pronunciation and the sealed-bio flag are the only
- * fields the carry RPC serves; when it does not answer this route still returns
+ * fields the cosmos RPC serves; when it does not answer this route still returns
  * 200 with nulls in their place, so without the state the pane could not tell a
  * failed call from an account that genuinely holds no values, and rendered a
  * dead account workload as "not set".
@@ -86,7 +86,7 @@ export async function GET() {
     username: email,
     state: account.state,
     degraded: account.degraded,
-    // The pane renders nulls for every carry-served field when the call fails.
+    // The pane renders nulls for every cosmos-served field when the call fails.
     // "Not set" and "your session expired" look identical there, and only one of
     // them is something the wearer can do anything about.
     reauthenticate: account.reauthenticate,

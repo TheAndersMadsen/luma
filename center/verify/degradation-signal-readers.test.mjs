@@ -78,7 +78,7 @@ test("the expired session the BFF flags is what the wearer is actually told", as
     `only ${flagging.length} routes flag an expired session; the emitter half is missing`,
   );
 
-  // 1. The data layer has to carry it, from BOTH transports: a header for the
+  // 1. The data layer has to contain it, from BOTH transports: a header for the
   //    routes that answer with a bare array and have nowhere in the body to put
   //    it, and the body field /api/health computes for the chrome badge.
   const queries = await readFile(new URL("lib/queries.ts", SRC), "utf8");

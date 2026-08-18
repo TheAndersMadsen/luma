@@ -106,8 +106,8 @@ for label,value in security_rows:
     security[label]=value
 if set(security)!={"attestation","device-user"}: raise SystemExit("active security-root schema differs")
 allowed={
-    "attestation":{private+"/attest","/home/anders/carry-attest"},
-    "device-user":{private+"/duc","/home/anders/carry-duc"},
+    "attestation":{private+"/attest","/home/anders/cosmos-attest"},
+    "device-user":{private+"/duc","/home/anders/cosmos-duc"},
 }
 for label,value in security.items():
     if value not in allowed[label]: raise SystemExit(f"unsupported active security root: {label}")
@@ -118,8 +118,8 @@ required={
     "/etc/systemd/system/penumbra-center-bridge.service","/etc/penumbra","/var/lib/penumbra-center",
 }
 optional={
-    "/home/anders/humane-carry-clone/.env","/home/anders/carry-backends.env",
-    "/home/anders/carry-center.env","/home/anders/carry-edge",
+    "/home/anders/humane-cosmos-clone/.env","/home/anders/cosmos-backends.env",
+    "/home/anders/cosmos-center.env","/home/anders/cosmos-edge",
     "/home/anders/keycloak-themes/humane",private,"/etc/nginx/conf.d",
     "/etc/cloudflared","/home/anders/.cloudflared",
 }
@@ -378,7 +378,7 @@ feature_flags_container="${scope}-feature-flags"
 notable_events_container="${scope}-notable-events"
 center_container="${scope}-center"
 # The same Center image and the same restored state, started a second time with
-# the exact environment production runs — CARRY_PRINCIPAL absent. See the
+# the exact environment production runs — COSMOS_PRINCIPAL absent. See the
 # two-pass block near the end of this script.
 center_production_identity_container="${scope}-center-production-identity"
 spotify_stub_container="${scope}-spotify-stub"
@@ -614,7 +614,7 @@ wait_healthy "$postgres_container" 60
 #     silently discarded the `columns_source` fourth argument that the call
 #     sites below already pass. `to_jsonb(t)` encodes the SCHEMA as well as the
 #     data, so cosmos/migrations/0004_listing.sql adding
-#     `carry_memory.thumbnail_count` (`ADD COLUMN IF NOT EXISTS` — additive, and
+#     `cosmos_memory.thumbnail_count` (`ADD COLUMN IF NOT EXISTS` — additive, and
 #     explicitly permitted by this project's migration policy) rewrote every
 #     row's JSON and failed the deploy with "candidate startup changed
 #     PostgreSQL relation data" while every wearer byte stood still.
@@ -675,7 +675,7 @@ cmp -s "$backup_dir/postgres-schema.tsv" "$projection_work/postgres-schema.resto
 
 smoke_db_count() {
   local database="$1" table="$2" exists
-  [[ "$database" == carry || "$database" == keycloak ]] || fail "invalid smoke database"
+  [[ "$database" == cosmos || "$database" == keycloak ]] || fail "invalid smoke database"
   [[ "$table" =~ ^[a-z_]+$ ]] || fail "invalid smoke invariant table"
   exists="$(docker exec "$postgres_container" psql -X -v ON_ERROR_STOP=1 -U revival_restore_bootstrap -d "$database" -Atc \
     "select to_regclass('public.$table') is not null" | tr -d '[:space:]')"
@@ -721,7 +721,7 @@ compare_backup_invariants() {
       contract.version) actual="$BACKUP_INVARIANT_VERSION" ;;
       db.*)
         table="${key#db.}"
-        actual="$(smoke_db_count carry "$table")"
+        actual="$(smoke_db_count cosmos "$table")"
         ;;
       state.files) actual="$state_files" ;;
       state.bytes) actual="$state_bytes" ;;
@@ -741,7 +741,7 @@ compare_backup_invariants() {
   done <"$backup_dir/invariants.tsv"
 }
 
-cosmos_tables="$(docker exec "$postgres_container" psql -X -v ON_ERROR_STOP=1 -U revival_restore_bootstrap -d carry -Atc \
+cosmos_tables="$(docker exec "$postgres_container" psql -X -v ON_ERROR_STOP=1 -U revival_restore_bootstrap -d cosmos -Atc \
   "select count(*) from pg_tables where schemaname='public'" | tr -d '[:space:]')"
 keycloak_tables="$(docker exec "$postgres_container" psql -X -v ON_ERROR_STOP=1 -U revival_restore_bootstrap -d keycloak -Atc \
   "select count(*) from pg_tables where schemaname='public'" | tr -d '[:space:]')"
@@ -789,7 +789,7 @@ capture_wearer_fingerprints() {
       [[ -n "$columns" ]] || fail "no recorded column set for wearer table $table"
     else
       columns="$(docker exec "$postgres_container" psql -X -qAt -v ON_ERROR_STOP=1 \
-        -U revival_restore_bootstrap -d carry \
+        -U revival_restore_bootstrap -d cosmos \
         -c "select string_agg(quote_ident(attname), ',' order by attnum)
               from pg_attribute
              where attrelid = '$table'::regclass and attnum > 0 and not attisdropped")"
@@ -797,12 +797,12 @@ capture_wearer_fingerprints() {
     [[ "$columns" =~ ^[A-Za-z0-9_\",]+$ ]] || fail "unsafe wearer column list for $table"
     printf '%s\t%s\n' "$table" "$columns" >>"$output.columns"
     digest="$(docker exec "$postgres_container" psql -X -qAt -v ON_ERROR_STOP=1 \
-      -U revival_restore_bootstrap -d carry \
+      -U revival_restore_bootstrap -d cosmos \
       -c "set statement_timeout='10s'; select to_jsonb(x)::text from (select $columns from $table) x order by 1" \
       | sha256sum | awk '{print $1}')"
     [[ "$digest" =~ ^[0-9a-f]{64}$ ]] || fail "wearer table fingerprint failed"
     # One digest PER ROW beside the whole-table one. When the table digest moves,
-    # this is what turns "something in carry_memory changed" into "one row was
+    # this is what turns "something in cosmos_memory changed" into "one row was
     # rewritten" or "a row vanished" — the difference between a diagnosis and
     # another deploy cycle spent guessing. Digests only, never values: this is
     # copied into a deployment record, and a wearer's rows do not belong there.
@@ -812,7 +812,7 @@ capture_wearer_fingerprints() {
     if [[ -n "${WEARER_ROW_EVIDENCE:-}" ]]; then
       mkdir -p "$WEARER_ROW_EVIDENCE"
       docker exec "$postgres_container" psql -X -qAt -v ON_ERROR_STOP=1 \
-        -U revival_restore_bootstrap -d carry \
+        -U revival_restore_bootstrap -d cosmos \
         -c "set statement_timeout='30s'; select md5(to_jsonb(x)::text) from (select $columns from $table) x" \
         | LC_ALL=C sort >"$WEARER_ROW_EVIDENCE/$table.rows" \
         || fail "wearer row evidence failed for $table"
@@ -825,8 +825,8 @@ mkdir -p "$projection_work/rows-before" "$projection_work/rows-after"
 WEARER_ROW_EVIDENCE="$projection_work/rows-before" \
   capture_wearer_fingerprints "$projection_work/wearer-fingerprints.before.tsv"
 
-smoke_identity="$(docker exec "$postgres_container" psql -X -v ON_ERROR_STOP=1 -U revival_restore_bootstrap -d carry -AtF $'\t' -c \
-  'select device_id, account_sub from carry_device_account order by paired_at_epoch, device_id')"
+smoke_identity="$(docker exec "$postgres_container" psql -X -v ON_ERROR_STOP=1 -U revival_restore_bootstrap -d cosmos -AtF $'\t' -c \
+  'select device_id, account_sub from cosmos_device_account order by paired_at_epoch, device_id')"
 [[ -n "$smoke_identity" && "$(printf '%s\n' "$smoke_identity" | sed '/^$/d' | wc -l | tr -d '[:space:]')" == 1 ]] \
   || fail "isolated restore has an ambiguous Pin roster"
 IFS=$'\t' read -r smoke_device smoke_owner <<<"$smoke_identity"
@@ -880,18 +880,18 @@ if not environments["searxng"].get("SEARXNG_SECRET"):
     raise SystemExit("resolved SearXNG secret is missing")
 if any(environments[name].get("SEARXNG_SECRET") for name in selected if name!="searxng"):
     raise SystemExit("SearXNG secret escaped its service scope")
-if environments["ai-bus"].get("CARRY_SEARXNG_BASE_URL")!="http://searxng:8080":
+if environments["ai-bus"].get("COSMOS_SEARXNG_BASE_URL")!="http://searxng:8080":
     raise SystemExit("ai-bus does not use the private SearXNG alias")
 edge_services=["ai-bus","account","contacts","feature-flags","notable-events","provisioning","center"]
-edge_values={environments[name].get("CARRY_EDGE_TOKEN","") for name in edge_services}
+edge_values={environments[name].get("COSMOS_EDGE_TOKEN","") for name in edge_services}
 if len(edge_values)!=1 or "" in edge_values:
     raise SystemExit("Center and Cosmos do not share one resolved edge token")
-provider=re.compile(r"^(?:AZURE_|CARRY_AZURE_|CARRY_LLM_|CARRY_SERPAPI_KEY$|CARRY_GOOGLE_MAPS_KEY$|CARRY_PIRATE_WEATHER_KEY$|CARRY_WOLFRAM_APP_ID$|CARRY_PPLX_|CARRY_MUSICBRAINZ_|CARRY_SHOPPING_|OPENAI_|OPENROUTER_)")
+provider=re.compile(r"^(?:AZURE_|COSMOS_AZURE_|COSMOS_LLM_|COSMOS_SERPAPI_KEY$|COSMOS_GOOGLE_MAPS_KEY$|COSMOS_PIRATE_WEATHER_KEY$|COSMOS_WOLFRAM_APP_ID$|COSMOS_PPLX_|COSMOS_MUSICBRAINZ_|COSMOS_SHOPPING_|OPENAI_|OPENROUTER_)")
 for name in selected:
     if name!="ai-bus" and any(provider.match(key) and value for key,value in environments[name].items()):
         raise SystemExit("provider credentials escaped ai-bus scope")
 provisioning=environments["provisioning"]
-if provisioning.get("CARRY_ALLOW_SINGLE_REPLICA_ENROLLMENT")!="1" or not provisioning.get("CARRY_OPAQUE_SEED"):
+if provisioning.get("COSMOS_ALLOW_SINGLE_REPLICA_ENROLLMENT")!="1" or not provisioning.get("COSMOS_OPAQUE_SEED"):
     raise SystemExit("resolved provisioning environment is not production-ready")
 center=environments["center"]
 if center.get("REVIVAL_PIN_BRIDGE_OWNER_SUB")!=owner or center.get("REVIVAL_PIN_BRIDGE_DEVICE_ID")!=device:
@@ -911,7 +911,7 @@ if (pin_mount.get("type")!="bind"
     raise SystemExit("resolved Center Pin release bind differs from the canonical read-only contract")
 center["REVIVAL_SPOTIFY_ADAPTER_URL"]="http://spotify-adapter:18081"
 center["REVIVAL_SPOTIFY_ADAPTER_TOKEN_FILE"]="/run/secrets/spotify_adapter_token"
-# CARRY_PRINCIPAL is a STAGING-ONLY injection and the second Center below runs
+# COSMOS_PRINCIPAL is a STAGING-ONLY injection and the second Center below runs
 # without it. Center's requestMetadata() is a three-way branch — verified bearer,
 # else this static principal, else anonymous — and no production deployment sets
 # this variable (neither compose.yaml nor platform/compose/production.yaml does).
@@ -919,8 +919,8 @@ center["REVIVAL_SPOTIFY_ADAPTER_TOKEN_FILE"]="/run/secrets/spotify_adapter_token
 # so a completely dead wearer bearer chain satisfied every `x-data-state == live`
 # assertion here. Both projections are written so the difference between the two
 # configurations becomes an asserted fact instead of an invisible one.
-production_identity={key:value for key,value in center.items() if key!="CARRY_PRINCIPAL"}
-center["CARRY_PRINCIPAL"]="U:"+owner
+production_identity={key:value for key,value in center.items() if key!="COSMOS_PRINCIPAL"}
+center["COSMOS_PRINCIPAL"]="U:"+owner
 for name,env in environments.items():
     path=os.path.join(output,name+".env")
     with open(path,"w",encoding="utf-8") as target:
@@ -930,7 +930,7 @@ production_identity_path=os.path.join(output,"center-production-identity.env")
 with open(production_identity_path,"w",encoding="utf-8") as target:
     for key in sorted(production_identity): target.write(f"{key}={production_identity[key]}\n")
 os.chmod(production_identity_path,0o600)
-if "CARRY_PRINCIPAL" in production_identity:
+if "COSMOS_PRINCIPAL" in production_identity:
     raise SystemExit("the production Center projection still carries a static principal")
 PY
 rm -f -- "$resolved_compose"
@@ -1033,8 +1033,8 @@ common_cosmos_run=(
   # Cosmos service-path revision is a DNS-label-style token capped at 63
   # characters; the full 64-hex release id does not fit. Use the same short
   # prefix the deploy stages as REVIVAL_REVISION.
-  --env "CARRY_REVISION=${release_id:0:16}"
-  --volume "$state_volume:/var/lib/carry"
+  --env "COSMOS_REVISION=${release_id:0:16}"
+  --volume "$state_volume:/var/lib/cosmos"
   --health-cmd 'curl --fail --silent --show-error --output /dev/null http://127.0.0.1:18080/readyz && socat -T1 - TCP:127.0.0.1:15051 </dev/null >/dev/null'
   --health-interval 3s --health-timeout 3s --health-start-period 5s --health-retries 30
   --entrypoint /bin/sh
@@ -1046,12 +1046,12 @@ docker run --detach \
   "${common_cosmos_run[@]}" \
   --memory 1536m \
   --env-file "$projection_work/ai-bus.env" \
-  --env "CARRY_INSTANCE_ID=ai-bus-smoke-${release_id:0:12}" \
-  --env "CARRY_POD_NAME=ai-bus-smoke-${release_id:0:12}" \
-  --env CARRY_WORKLOAD=ai-bus \
-  --env CARRY_ATTEST_CA_CERT=/etc/carry-attest/ca.crt \
-  --env CARRY_ATTEST_CA_KEY=/etc/carry-attest/ca.key \
-  --volume "$attest_volume:/etc/carry-attest:ro" \
+  --env "COSMOS_INSTANCE_ID=ai-bus-smoke-${release_id:0:12}" \
+  --env "COSMOS_POD_NAME=ai-bus-smoke-${release_id:0:12}" \
+  --env COSMOS_WORKLOAD=ai-bus \
+  --env COSMOS_ATTEST_CA_CERT=/etc/cosmos-attest/ca.crt \
+  --env COSMOS_ATTEST_CA_KEY=/etc/cosmos-attest/ca.key \
+  --volume "$attest_volume:/etc/cosmos-attest:ro" \
   "$cosmos_image" -ec "$cosmos_command" >/dev/null
 
 created_containers+=("$provisioning_container")
@@ -1059,12 +1059,12 @@ docker run --detach \
   --name "$provisioning_container" --network-alias provisioning \
   "${common_cosmos_run[@]}" \
   --env-file "$projection_work/provisioning.env" \
-  --env "CARRY_INSTANCE_ID=provisioning-smoke-${release_id:0:12}" \
-  --env "CARRY_POD_NAME=provisioning-smoke-${release_id:0:12}" \
-  --env CARRY_WORKLOAD=provisioning \
-  --env CARRY_DUC_CA_CERT=/etc/carry-duc/duc-ca.crt \
-  --env CARRY_DUC_CA_KEY=/etc/carry-duc/duc-ca.key \
-  --volume "$duc_volume:/etc/carry-duc:ro" \
+  --env "COSMOS_INSTANCE_ID=provisioning-smoke-${release_id:0:12}" \
+  --env "COSMOS_POD_NAME=provisioning-smoke-${release_id:0:12}" \
+  --env COSMOS_WORKLOAD=provisioning \
+  --env COSMOS_DUC_CA_CERT=/etc/cosmos-duc/duc-ca.crt \
+  --env COSMOS_DUC_CA_KEY=/etc/cosmos-duc/duc-ca.key \
+  --volume "$duc_volume:/etc/cosmos-duc:ro" \
   "$cosmos_image" -ec "$cosmos_command" >/dev/null
 
 wait_healthy "$ai_bus_container" 75
@@ -1073,9 +1073,9 @@ ai_bus_user="$(docker inspect --format '{{.Config.User}}' "$ai_bus_container")"
 provisioning_user="$(docker inspect --format '{{.Config.User}}' "$provisioning_container")"
 [[ -n "$ai_bus_user" && -n "$provisioning_user" ]] || fail "candidate Cosmos image must declare a non-root runtime user"
 docker exec --user "$ai_bus_user" "$ai_bus_container" sh -euc \
-  'test -r /etc/carry-attest/ca.crt && test -r /etc/carry-attest/ca.key'
+  'test -r /etc/cosmos-attest/ca.crt && test -r /etc/cosmos-attest/ca.key'
 docker exec --user "$provisioning_user" "$provisioning_container" sh -euc \
-  'test -r /etc/carry-duc/duc-ca.crt && test -r /etc/carry-duc/duc-ca.key'
+  'test -r /etc/cosmos-duc/duc-ca.crt && test -r /etc/cosmos-duc/duc-ca.key'
 
 start_plain_cosmos_workload() {
   local container="$1" alias="$2" workload="$3"
@@ -1084,9 +1084,9 @@ start_plain_cosmos_workload() {
     --name "$container" --network-alias "$alias" \
     "${common_cosmos_run[@]}" \
     --env-file "$projection_work/$workload.env" \
-    --env "CARRY_INSTANCE_ID=${workload}-smoke-${release_id:0:12}" \
-    --env "CARRY_POD_NAME=${workload}-smoke-${release_id:0:12}" \
-    --env "CARRY_WORKLOAD=$workload" \
+    --env "COSMOS_INSTANCE_ID=${workload}-smoke-${release_id:0:12}" \
+    --env "COSMOS_POD_NAME=${workload}-smoke-${release_id:0:12}" \
+    --env "COSMOS_WORKLOAD=$workload" \
     "$cosmos_image" -ec "$cosmos_command" >/dev/null
   wait_healthy "$container" 75
 }
@@ -1162,7 +1162,7 @@ docker run --detach \
   "${object_labels[@]}" \
   "${env_files_for_center[@]}" \
   --env "REVIVAL_RELEASE_ID=$release_id" \
-  --env CARRY_CHANNEL_KEY_FILE=/data/channel-key.json \
+  --env COSMOS_CHANNEL_KEY_FILE=/data/channel-key.json \
   --volume "$center_volume:/data" \
   --volume "$pin_release_volume:/var/lib/ai-pin-revival/pin-releases:ro" \
   --volume "$spotify_secret_volume:/run/secrets:ro" \
@@ -1322,14 +1322,14 @@ docker exec "$ai_bus_container" curl --fail --silent --show-error --output /dev/
 docker exec "$provisioning_container" curl --fail --silent --show-error --output /dev/null \
   http://127.0.0.1:8080/readyz
 docker exec "$provisioning_container" sh -euc '
-  test "$CARRY_ALLOW_SINGLE_REPLICA_ENROLLMENT" = 1
-  test -n "$CARRY_DATABASE_URL" -a -n "$CARRY_ENROLLMENT_PINCODE" -a -n "$CARRY_ENROLLMENT_USER_ID"
-  decoded=$(printf %s "$CARRY_OPAQUE_SEED" | base64 -d 2>/dev/null | wc -c)
+  test "$COSMOS_ALLOW_SINGLE_REPLICA_ENROLLMENT" = 1
+  test -n "$COSMOS_DATABASE_URL" -a -n "$COSMOS_ENROLLMENT_PINCODE" -a -n "$COSMOS_ENROLLMENT_USER_ID"
+  decoded=$(printf %s "$COSMOS_OPAQUE_SEED" | base64 -d 2>/dev/null | wc -c)
   test "$decoded" = 32
 '
 opaque_schema_count="$(docker exec "$postgres_container" psql -X -qAt -v ON_ERROR_STOP=1 \
-  -U revival_restore_bootstrap -d carry -c \
-  "select count(*) from (values (to_regclass('public.carry_opaque_setup')),(to_regclass('public.carry_opaque_password_file')),(to_regclass('public.carry_opaque_login')),(to_regclass('public.carry_opaque_session'))) t(v) where v is not null" \
+  -U revival_restore_bootstrap -d cosmos -c \
+  "select count(*) from (values (to_regclass('public.cosmos_opaque_setup')),(to_regclass('public.cosmos_opaque_password_file')),(to_regclass('public.cosmos_opaque_login')),(to_regclass('public.cosmos_opaque_session'))) t(v) where v is not null" \
   | tr -d '[:space:]')"
 [[ "$opaque_schema_count" == 4 ]] || fail "provisioning did not initialize its durable OPAQUE schema"
 for container in "$connectivity_container" "$account_container" "$contacts_container" "$feature_flags_container" "$notable_events_container"; do
@@ -1341,7 +1341,7 @@ docker exec "$center_container" node -e \
   "(async()=>{const url='http://127.0.0.1:4000/api/pin/releases/current';for(const method of ['HEAD','GET']){const response=await fetch(url,{method,signal:AbortSignal.timeout(10000)});const bytes=Buffer.from(await response.arrayBuffer());if(response.status!==404||response.headers.get('cache-control')!=='no-store, max-age=0'||response.headers.get('x-content-type-options')!=='nosniff'||bytes.length>1024)throw Error('pin release boundary');if(method==='HEAD'&&bytes.length!==0)throw Error('pin release HEAD body');if(method==='GET'&&JSON.parse(bytes.toString()).error!=='Pin release not found.')throw Error('pin release empty-store response')}})().catch(()=>process.exit(1))"
 if [[ "$(awk -F $'\t' '$1=="center.channel_key.presence" {print $2}' "$backup_dir/invariants.tsv")" == present ]]; then
   docker exec "$center_container" node -e \
-    "const fs=require('node:fs');const body=JSON.parse(fs.readFileSync(process.env.CARRY_CHANNEL_KEY_FILE,'utf8'));if(typeof body.kid!=='string'||!body.kid||typeof body.key!=='string'||Buffer.from(body.key,'base64').length!==16)process.exit(1)"
+    "const fs=require('node:fs');const body=JSON.parse(fs.readFileSync(process.env.COSMOS_CHANNEL_KEY_FILE,'utf8'));if(typeof body.kid!=='string'||!body.kid||typeof body.key!=='string'||Buffer.from(body.key,'base64').length!==16)process.exit(1)"
 fi
 
 # Mint a short-lived local Center session for the exact restored owner without
@@ -1370,7 +1370,7 @@ docker exec -i "$center_container" sh -euc 'umask 077; cat > /tmp/session.jwt' <
 docker exec -i "$center_container" node >/dev/null <<'NODE'
 const fs=require('node:fs');
 const token=fs.readFileSync('/tmp/session.jwt','utf8').trim();
-const cookie='carry_session='+token;
+const cookie='cosmos_session='+token;
 const endpoints={health:'/api/health',notes:'/api/capture/notes',memories:'/api/capture/memories',features:'/api/settings/features',spotify:'/api/settings/services/spotify'};
 (async()=>{
   for(const [name,path] of Object.entries(endpoints)){
@@ -1386,8 +1386,8 @@ for name in health notes memories features spotify; do
   docker exec "$center_container" sh -euc "cat /tmp/smoke-$name.json" >"$projection_work/$name.json"
   chmod 600 "$projection_work/$name.json"
 done
-expected_notes="$(awk -F $'\t' '$1=="db.carry_note"{print $2}' "$backup_dir/invariants.tsv")"
-expected_memories="$(awk -F $'\t' '$1=="db.carry_memory"{print $2}' "$backup_dir/invariants.tsv")"
+expected_notes="$(awk -F $'\t' '$1=="db.cosmos_note"{print $2}' "$backup_dir/invariants.tsv")"
+expected_memories="$(awk -F $'\t' '$1=="db.cosmos_memory"{print $2}' "$backup_dir/invariants.tsv")"
 python3 - "$projection_work" "$expected_notes" "$expected_memories" <<'PY'
 import json,sys
 root,expected_notes,expected_memories=sys.argv[1:]
@@ -1405,7 +1405,7 @@ if int(expected_memories) > 0: assert sum(len(memories[key]) for key in ("photos
 for note in notes["content"]:
     # Sealed rows are a legitimate durable state (content encrypted under a key
     # this deployment does not hold) and deliberately omit title and text; an
-    # opened row must carry its decrypted text.
+    # opened row must contain its decrypted text.
     assert note.get("sealed") in (True, False)
     if note.get("sealed") is False:
         assert isinstance(note.get("text"),str)
@@ -1422,7 +1422,7 @@ docker exec "$center_container" sh -euc 'rm -f /tmp/session.jwt /tmp/smoke-*.jso
 # environment production runs.
 #
 # Pass 1 above is the only `x-data-state == live` gate this deployment has, and
-# it runs with CARRY_PRINCIPAL injected into Center's environment — an identity
+# it runs with COSMOS_PRINCIPAL injected into Center's environment — an identity
 # no production deployment has. requestMetadata() is a three-way branch (verified
 # bearer, else that static principal, else anonymous), so pass 1 exercises branch
 # 2 while production takes branch 1 or 3: the wearer bearer chain could be 100%
@@ -1437,7 +1437,7 @@ docker exec "$center_container" sh -euc 'rm -f /tmp/session.jwt /tmp/smoke-*.jso
 #
 #   * The REST (webapi) plane must stay LIVE: capture_api::principal_for falls
 #     back to the demo account when nobody identified themselves, so a healthy
-#     REST plane answers 200. A wrong CARRY_WEBAPI_BASE_URL, a dead ai-bus HTTP
+#     REST plane answers 200. A wrong COSMOS_WEBAPI_BASE_URL, a dead ai-bus HTTP
 #     surface, or Center bearer plumbing that throws all flip it to degraded.
 #   * The gRPC plane must be DEGRADED for the one specific reason "authenticated
 #     edge principal required" — the workload correctly refusing an
@@ -1448,7 +1448,7 @@ docker exec "$center_container" sh -euc 'rm -f /tmp/session.jwt /tmp/smoke-*.jso
 # The Center volume is mounted read-only here so this second reader cannot
 # perturb the zero-delta inventory comparisons below. It cannot want to write
 # anyway: channelKey() returns null before touching the key file when
-# CARRY_PRINCIPAL is unset, which is the production behaviour being reproduced.
+# COSMOS_PRINCIPAL is unset, which is the production behaviour being reproduced.
 created_containers+=("$center_production_identity_container")
 docker run --detach \
   --name "$center_production_identity_container" \
@@ -1463,7 +1463,7 @@ docker run --detach \
   "${object_labels[@]}" \
   --env-file "$projection_work/center-production-identity.env" \
   --env "REVIVAL_RELEASE_ID=$release_id" \
-  --env CARRY_CHANNEL_KEY_FILE=/data/channel-key.json \
+  --env COSMOS_CHANNEL_KEY_FILE=/data/channel-key.json \
   --volume "$center_volume:/data:ro" \
   --volume "$pin_release_volume:/var/lib/ai-pin-revival/pin-releases:ro" \
   --volume "$spotify_secret_volume:/run/secrets:ro" \
@@ -1474,7 +1474,7 @@ wait_healthy "$center_production_identity_container" 75
 assert_isolated_container "$center_production_identity_container" \
   "$center_volume" "$pin_release_volume" "$spotify_secret_volume"
 docker exec "$center_production_identity_container" sh -euc \
-  'test -z "${CARRY_PRINCIPAL:-}"' \
+  'test -z "${COSMOS_PRINCIPAL:-}"' \
   || fail "the production-identity Center still has a static principal"
 # Minted fresh rather than reused: the pass-1 session is deliberately short-lived
 # (10 minutes) and starting a second container can consume a good part of that.
@@ -1503,7 +1503,7 @@ docker exec -i "$center_production_identity_container" sh -euc 'umask 077; cat >
 docker exec -i "$center_production_identity_container" node >/dev/null <<'NODE'
 const fs=require('node:fs');
 const token=fs.readFileSync('/tmp/session.jwt','utf8').trim();
-const cookie='carry_session='+token;
+const cookie='cosmos_session='+token;
 const endpoints={health:'/api/health',notes:'/api/capture/notes',memories:'/api/capture/memories',features:'/api/settings/features',wifi:'/api/settings/wifi'};
 (async()=>{
   for(const [name,path] of Object.entries(endpoints)){
@@ -1534,7 +1534,7 @@ health,notes,memories,features,wifi=map(load,("health","notes","memories","featu
 planes=health["body"].get("planes") or {}
 grpc=planes.get("grpc") or {}
 webapi=planes.get("webapi") or {}
-assert health["body"].get("carryConfigured") is True
+assert health["body"].get("cosmosConfigured") is True
 assert set(planes)=={"grpc","webapi"}
 assert webapi.get("configured") is True and webapi.get("state")=="live", (
     f"the REST plane is not live without a static principal: {webapi.get('detail')}"
@@ -1645,7 +1645,7 @@ cmp -s "$backup_dir/postgres-security.json" "$projection_work/postgres-security.
 # Projected onto the columns the RESTORED capture was taken over, so an additive
 # migration is not mistaken for the candidate rewriting wearer rows: `to_jsonb`
 # encodes the schema too, and 0004_listing.sql's `ADD COLUMN IF NOT EXISTS
-# carry_memory.thumbnail_count` would otherwise rewrite every row's JSON without a
+# cosmos_memory.thumbnail_count` would otherwise rewrite every row's JSON without a
 # wearer byte moving. A changed value, a vanished row, and a DROPPED column all
 # still fail — the projection only hides columns that did not exist before.
 capture_postgres_data "$postgres_container" revival_restore_bootstrap \
@@ -1731,7 +1731,7 @@ if ! cmp -s "$projection_work/postgres-schema.restored.tsv" "$projection_work/po
       "$REVIVAL_STAGING_SMOKE_EVIDENCE/postgres-schema.before.tsv" 2>/dev/null || true
     cp -f "$projection_work/postgres-schema.after.tsv" \
       "$REVIVAL_STAGING_SMOKE_EVIDENCE/postgres-schema.after.tsv" 2>/dev/null || true
-    for schema_database in carry keycloak; do
+    for schema_database in cosmos keycloak; do
       cp -f "$projection_work/postgres-schema.restored.tsv.$schema_database.sql" \
         "$REVIVAL_STAGING_SMOKE_EVIDENCE/postgres-schema.before.tsv.$schema_database.sql" 2>/dev/null || true
       cp -f "$projection_work/postgres-schema.after.tsv.$schema_database.sql" \

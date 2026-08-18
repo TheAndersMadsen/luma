@@ -815,7 +815,7 @@ enum InputAction {
     /// An observation arrived on a session that never carried an understanding
     /// request. In the live flow this is only the terminal narration-completed
     /// signal re-entering the ladder (flag-on): stock opens a fresh bidi session
-    /// carrying just the observation and blocks on an untimed `responseFuture`.
+    /// containing just the observation and blocks on an untimed `responseFuture`.
     /// `run_session` must resolve that future at once — never `Wait` — or the
     /// turn hangs to the stock AI_MIC_THINKING ceiling (the streaming-timeout
     /// poison). The boxed turn is carried so a later staged-resume claim can be

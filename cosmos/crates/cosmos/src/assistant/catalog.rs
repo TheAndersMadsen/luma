@@ -1,5 +1,5 @@
 //! The clone's **own** assistant system prompt + tool set + server-side tool
-//! executor — the analogue of carry's server-owned catalog keyed by
+//! executor — the analogue of cosmos's server-owned catalog keyed by
 //! `tool_set_version`.
 //!
 //! ## Where the two halves come from
@@ -19,14 +19,14 @@
 //!
 //! ## Why a curated tool set rather than all 138 actions
 //!
-//! carry's device sends an empty `action_definitions` and only a
+//! cosmos's device sends an empty `action_definitions` and only a
 //! `tool_set_version` pointer, leaving the server authoritative over *which*
 //! subset of the catalog a given turn may use. This deployment's set is
 //! [`TOOL_SET_NAME`] v[`TOOL_SET_VERSION`]. Selecting a subset is therefore
 //! faithful to the architecture, not a shortcut.
 //!
 //! Two classes are deliberately withheld, and this is **our safety choice, not a
-//! fidelity claim** about what carry exposed:
+//! fidelity claim** about what cosmos exposed:
 //!   * irreversible or safety-critical device control — factory reset, reboot,
 //!     power off, emergency-call confirmation, emergency/AMBER alert toggles;
 //!   * device→server callbacks and internal diagnostics that are not model-
@@ -43,11 +43,11 @@ use super::catalog_generated::{self, DeviceAction, DeviceField, FieldType};
 use super::llm::ToolDef;
 use super::toolsets::{self, ToolSet};
 
-/// Cosmos's tool-set version (the analogue of Carry's `tool_set_version`).
+/// Cosmos's tool-set version (the analogue of Cosmos's `tool_set_version`).
 pub const TOOL_SET_NAME: &str = "cosmos";
 pub const TOOL_SET_VERSION: i32 = 1;
 
-/// carry's terminal speak action (`RespondAction`, `nameForModel="Respond"`); its
+/// cosmos's terminal speak action (`RespondAction`, `nameForModel="Respond"`); its
 /// model-facing parameter is `Response` (a STRING), per the recovered schema.
 pub const RESPOND_ACTION: &str = "Respond";
 /// The model-facing field name `RespondAction` resolves the spoken text from.
@@ -115,7 +115,7 @@ pub fn system_prompt() -> &'static str {
 /// The system prompt for one resolved tool set: the base prompt above plus that
 /// set's own short spoken-style guidance.
 ///
-/// carry's server resolved `tool_set_version` to a prompt *and* a tool subset;
+/// cosmos's server resolved `tool_set_version` to a prompt *and* a tool subset;
 /// serving the subset without the guidance would offer a capability child the
 /// narrow tool list but none of the narrow behaviour. The default
 /// (`supervisor@7`) carries no addendum, so its prompt is byte-identical to
@@ -891,7 +891,7 @@ struct CatalogTool {
     keyguard: bool,
 }
 
-/// The per-request filter carry applies before exposing the set to the model:
+/// The per-request filter cosmos applies before exposing the set to the model:
 /// `excluded_tools` subtraction, then the keyguard restriction, then the
 /// unsubscribed whitelist (mirroring `routeAction`'s gate order).
 #[derive(Clone, Copy, Debug, Default)]
@@ -1036,7 +1036,7 @@ pub fn respond_input(answer: &str) -> String {
 /// asterisks or stumbles over them. The wearer hears punctuation noise in the
 /// middle of an otherwise correct answer.
 ///
-/// Deliberately conservative. It removes the markers that carry no meaning aloud
+/// Deliberately conservative. It removes the markers that contain no meaning aloud
 /// and leaves the words alone — it is not a markdown parser, and anything it does
 /// not recognise passes through untouched rather than being mangled.
 pub fn speakable(answer: &str) -> String {
@@ -1361,9 +1361,9 @@ pub fn device_action_input(
 /// Execute a **server-side** tool -> the observation text fed back to the model.
 ///
 /// Device actions never reach here (the pin runs them). `web_search` resolves
-/// through the deployment's private SearXNG when `CARRY_SEARXNG_BASE_URL` is
+/// through the deployment's private SearXNG when `COSMOS_SEARXNG_BASE_URL` is
 /// configured, then falls back to the existing SerpApi adapter only when that
-/// private search is unavailable or empty. Both implement carry's observed
+/// private search is unavailable or empty. Both implement cosmos's observed
 /// `MODE_SERP_API` surface. With no backend wired, every arm reports the
 /// capability as absent rather than inventing a result.
 /// Per-request context for server-side tools.
@@ -2558,7 +2558,7 @@ mod tests {
         assert_eq!(
             schema["required"],
             json!([]),
-            "requiring a coordinate the turn does not carry is what forced the \
+            "requiring a coordinate the turn does not contain is what forced the \
              model to make one up"
         );
         assert!(nearby_schema()["properties"].get("place").is_some());
@@ -2596,7 +2596,7 @@ mod tests {
         );
         assert!(
             !spoken.chars().any(|c| c.is_ascii_digit()),
-            "a location-less weather observation must carry no coordinates or \
+            "a location-less weather observation must contain no coordinates or \
              conditions to hallucinate from: {spoken}"
         );
         assert!(

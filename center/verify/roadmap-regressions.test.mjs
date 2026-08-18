@@ -45,7 +45,7 @@ test("wearer-facing copy stays concise and free of deployment jargon", async () 
     "src/app/my-data/DomainView.tsx",
     "src/app/settings/account/details/DetailsView.tsx",
   ];
-  const bannedJargon = /\.Center|\bbackend\b|\bgRPC\b|\bIroh\b|\bADB\b|CARRY_/i;
+  const bannedJargon = /\.Center|\bbackend\b|\bgRPC\b|\bIroh\b|\bADB\b|COSMOS_/i;
   const filler = /\b(?:AI-powered|seamlessly|unlock|delve|leverage|revolutionary|game-changing|as an AI|language model)\b/i;
 
   for (const path of paths) {

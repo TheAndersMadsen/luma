@@ -35,8 +35,8 @@ function json(body, status = 200) {
 function configureBridge() {
   process.env.REVIVAL_PIN_BRIDGE_OWNER_SUB = session.sub;
   process.env.REVIVAL_PIN_BRIDGE_DEVICE_ID = "owned-pin";
-  process.env.CARRY_WEBAPI_BASE_URL = "http://cosmos.test:8081";
-  process.env.CARRY_ADMIN_TOKEN = "c".repeat(40);
+  process.env.COSMOS_WEBAPI_BASE_URL = "http://cosmos.test:8081";
+  process.env.COSMOS_ADMIN_TOKEN = "c".repeat(40);
   process.env.REVIVAL_SPOTIFY_ADAPTER_URL = "http://10.0.7.1:18081";
   process.env.REVIVAL_SPOTIFY_ADAPTER_TOKEN = "s".repeat(40);
   delete process.env.REVIVAL_SPOTIFY_ADAPTER_TOKEN_FILE;

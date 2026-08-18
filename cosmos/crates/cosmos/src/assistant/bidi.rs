@@ -29,7 +29,7 @@
 //!      node, then its observation node) purely as context/latency mask, and the
 //!      loop continues immediately (state machine 4a).
 //!   3. **`Respond` is terminal, not a pause.** `Respond` *is* a device action, so
-//!      it must carry `requires_response=true` or the device would merely
+//!      it must contain `requires_response=true` or the device would merely
 //!      `recordAction` it and never speak. But its device-side observation is
 //!      FINAL, and `LanguageUnderstanding.onObservation` short-circuits on a final
 //!      observation (ends the run without re-understanding) — so the device never
@@ -52,7 +52,7 @@
 //!      observation we did not receive. Running out of wall clock does not
 //!      fabricate one either, but it is not silent: a run that exhausts
 //!      `RUN_BUDGET` (including while parked on a device action) ends in the
-//!      terminal `Respond` carrying `ERROR_TIMEOUT`, the same string the device
+//!      terminal `Respond` containing `ERROR_TIMEOUT`, the same string the device
 //!      speaks for itself when its own deadline fires. A bare half-close here
 //!      would leave the wearer with nothing at all.
 //!
@@ -85,7 +85,7 @@ use super::turn::frames::{action_turn, now_ts, observation_turn};
 use super::turn::text::{model_facing_observation, spoken_text};
 use crate::services::gates::{self, Entitlement};
 
-/// carry's `ai_bus.max_action_turns` feature flag defaults to 8 (same budget the
+/// cosmos's `ai_bus.max_action_turns` feature flag defaults to 8 (same budget the
 /// legacy engine enforces).
 const MAX_STEPS: usize = 8;
 
@@ -123,7 +123,7 @@ const UNRECOGNIZED_FUNCTION: &str = "Unrecognized function name and/or arguments
 
 /// `IntermediateEvent.agent` — the server's label for which sub-agent produced a
 /// turn, a key into its own `RunState.agent_to_runs`. The device never reads it
-/// (no callers of `getAgent()` anywhere in the client), and carry's agent-string
+/// (no callers of `getAgent()` anywhere in the client), and cosmos's agent-string
 /// taxonomy is server-defined and not recoverable, so this clone names its single
 /// agent itself.
 const AGENT: &str = "assistant";
@@ -137,7 +137,7 @@ const DEVICE_OBSERVATION_TIMEOUT: Duration = Duration::from_secs(25);
 const CHANNEL_DEPTH: usize = 16;
 
 /// One open `BidirectionalStreamingUnderstand` stream: a long-lived session that
-/// may carry several request/observation exchanges (a new
+/// may contain several request/observation exchanges (a new
 /// `SynapseBidirectionalStreamingSession` is created on the device only when the
 /// previous one has completed, so the stream outlives a single run).
 pub struct BidiSession {
@@ -411,7 +411,7 @@ impl BidiSession {
 
             // Race the model step against the inbound stream. Two reasons:
             //
-            //  * PREEMPTION — carry allows exactly one active run
+            //  * PREEMPTION — cosmos allows exactly one active run
             //    (`RunManager.shouldDispatchCurrent`: a turn that is its own root
             //    replaces `mExecutingRun` and every turn of the old run is then
             //    blocked as an orphan). If the wearer barges in with a new
@@ -1682,7 +1682,7 @@ mod tests {
             .unwrap_or_default();
         assert!(
             !spoken.trim().is_empty(),
-            "a terminal Respond must carry speakable text; blank narrates nothing \
+            "a terminal Respond must contain speakable text; blank narrates nothing \
              and its observation is final, so the run dies in silence",
         );
     }
@@ -1903,7 +1903,7 @@ mod tests {
         assert_closed(&mut out).await;
     }
 
-    /// REGRESSION: carry allows exactly one active run — a turn that is its own
+    /// REGRESSION: cosmos allows exactly one active run — a turn that is its own
     /// root replaces `mExecutingRun` and the old run's turns are blocked as
     /// orphans. A barge-in must abandon the in-flight step immediately, not let
     /// it grind out an answer to a superseded question.
@@ -2156,7 +2156,7 @@ mod tests {
         );
     }
 
-    /// REGRESSION: every emitted turn must carry a wall-clock stamp.
+    /// REGRESSION: every emitted turn must contain a wall-clock stamp.
     ///
     /// An absent timestamp decodes as epoch 0 on the device, so the node sorts
     /// first in the turn priority queue and is evicted first at the turn cap,

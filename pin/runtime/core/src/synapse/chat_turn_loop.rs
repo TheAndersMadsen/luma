@@ -3,7 +3,7 @@
 //!
 //! This is the orchestration core described in the external-agent architecture
 //! comparison. It follows the reference agent's control flow: one model
-//! step per iteration carrying the full transcript and a native tool catalog;
+//! step per iteration containing the full transcript and a native tool catalog;
 //! the model answers with assistant text (final) or proposed tool calls. For
 //! a step that contains only independent, explicitly batch-safe reads executes
 //! those reads concurrently and appends every real observation before the
@@ -339,7 +339,7 @@ impl ChatTurnLoopConfig {
     }
 }
 
-/// A run interrupted by a required device observation (`Preflight`), carrying
+/// A run interrupted by a required device observation (`Preflight`), containing
 /// the exact live transcript and the interrupted tool call so a validated
 /// continuation can resume mid-plan instead of re-planning from scratch.
 ///
@@ -1185,7 +1185,7 @@ impl ChatTurnLoop<'_> {
                                             )
                                         }
                                         Some((ToolExecutionOutcome::Preflight { .. }, latency)) => {
-                                            // Preflights carry one resumable
+                                            // Preflights contain one resumable
                                             // stock action and therefore run
                                             // only on the serial path.
                                             tracing::error!(

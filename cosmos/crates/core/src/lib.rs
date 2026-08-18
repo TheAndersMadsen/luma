@@ -1,4 +1,4 @@
-//! Independently authored shared types for the Carry-compatible workloads.
+//! Independently authored shared types for the Cosmos-compatible workloads.
 //!
 //! These types describe this project's implementation choices. They are not
 //! copied from, or claims about, Humane's private server implementation.
@@ -249,7 +249,7 @@ impl AuthenticatedPrincipal {
     /// Accept the principal the trusted edge established from the client
     /// certificate's Subject CN.
     ///
-    /// carry's DeviceUser CNs are structured and **colon-delimited** —
+    /// cosmos's DeviceUser CNs are structured and **colon-delimited** —
     /// `V:01:D:<device>:U:<user>` — so a principal charset without `:` rejects
     /// every real Pin, on every RPC, with UNAUTHENTICATED. `:` is therefore
     /// permitted here and *only* here; the workload `instance` identifier stays
@@ -427,7 +427,7 @@ const fn is_identity_byte(byte: u8) -> bool {
 }
 
 /// Charset for an edge-established principal: the strict identity set plus `:`,
-/// the delimiter in carry's structured DeviceUser CN (`V:01:D:<dev>:U:<user>`).
+/// the delimiter in cosmos's structured DeviceUser CN (`V:01:D:<dev>:U:<user>`).
 const fn is_principal_byte(byte: u8) -> bool {
     is_identity_byte(byte) || byte == b':'
 }
@@ -469,7 +469,7 @@ pub enum IdentityError {
 
 #[cfg(test)]
 mod tests {
-    /// REGRESSION: carry's DeviceUser CN is colon-delimited. A principal charset
+    /// REGRESSION: cosmos's DeviceUser CN is colon-delimited. A principal charset
     /// without `:` rejects every real Pin on every RPC with UNAUTHENTICATED.
     #[test]
     fn a_real_device_user_cn_is_accepted() {
@@ -534,7 +534,7 @@ mod tests {
         }
     }
 
-    /// A malformed `U:` field (empty, or carrying extra structure) must not
+    /// A malformed `U:` field (empty, or containing extra structure) must not
     /// resolve to a forged user — it falls back to the whole subject, still
     /// fail-closed on the charset gate.
     #[test]
@@ -578,7 +578,7 @@ mod tests {
                 Workload::AiBus,
                 DeploymentEnvironment::Development,
                 "pod:evil",
-                "carry.local",
+                "cosmos.local",
             )
             .is_err(),
             "instance must stay strict"
@@ -603,21 +603,21 @@ mod tests {
             Workload::FeatureFlags,
             DeploymentEnvironment::Parity,
             "flags-01",
-            "Carry.Local",
+            "Cosmos.Local",
         )
         .expect("valid identity");
 
-        assert_eq!(identity.trust_domain(), "carry.local");
+        assert_eq!(identity.trust_domain(), "cosmos.local");
         assert_eq!(
             identity.uri(),
-            "spiffe://carry.local/env/parity/workload/feature-flags/instance/flags-01"
+            "spiffe://cosmos.local/env/parity/workload/feature-flags/instance/flags-01"
         );
         assert!(
             WorkloadIdentity::new(
                 Workload::AiBus,
                 DeploymentEnvironment::Development,
                 "contains/a/slash",
-                "carry.local"
+                "cosmos.local"
             )
             .is_err()
         );

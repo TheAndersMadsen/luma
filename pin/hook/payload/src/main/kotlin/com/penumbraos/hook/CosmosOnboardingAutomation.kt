@@ -16,8 +16,8 @@ import java.util.concurrent.atomic.AtomicBoolean
  * that existing UI flow; it neither replaces OPAQUE nor fabricates a DeviceUser
  * credential. The setting is deleted before the stock login attempt starts.
  */
-internal object CarryOnboardingAutomation {
-    internal const val PINCODE_SETTING = "penumbra_carry_onboarding_pincode"
+internal object CosmosOnboardingAutomation {
+    internal const val PINCODE_SETTING = "penumbra_cosmos_onboarding_pincode"
     private const val TAG = "PenumbraHook"
     private const val PROMPT_ADVANCE_DELAY_MS = 300L
     private const val DUC_PROVISIONED_SETTING = "humane.settings.global.DUC_PROVISIONED"
@@ -35,40 +35,40 @@ internal object CarryOnboardingAutomation {
         installSubscriptionBindRetry(classLoader)
 
         HookUtils.hookMethodAfter(promptNode, "willBecomeActive", emptyArray()) { param ->
-            if (!CarryRemoteTransport.isEnabled() || pendingPincode() == null) {
+            if (!CosmosRemoteTransport.isEnabled() || pendingPincode() == null) {
                 return@hookMethodAfter
             }
             val node = param.thisObject
             Handler(Looper.getMainLooper()).postDelayed({
-                if (!CarryRemoteTransport.isEnabled() || pendingPincode() == null) {
+                if (!CosmosRemoteTransport.isEnabled() || pendingPincode() == null) {
                     return@postDelayed
                 }
                 runCatching {
                     node.javaClass.getMethod("next").invoke(node)
                 }.onSuccess {
-                    Log.w(TAG, "  Remote Carry onboarding advanced to stock pincode entry")
+                    Log.w(TAG, "  Remote Cosmos onboarding advanced to stock pincode entry")
                 }.onFailure { error ->
                     Log.e(
                         TAG,
-                        "  Remote Carry onboarding could not advance (${error.javaClass.simpleName})",
+                        "  Remote Cosmos onboarding could not advance (${error.javaClass.simpleName})",
                     )
                 }
             }, PROMPT_ADVANCE_DELAY_MS)
         }
 
         HookUtils.hookMethodBefore(pincodeNode, "didBecomeActive", emptyArray()) { param ->
-            if (!CarryRemoteTransport.isEnabled()) return@hookMethodBefore
+            if (!CosmosRemoteTransport.isEnabled()) return@hookMethodBefore
             val pincode = claimPendingPincode() ?: return@hookMethodBefore
             try {
                 param.thisObject.javaClass.getDeclaredField("mAdbPincode").apply {
                     isAccessible = true
                     set(param.thisObject, pincode)
                 }
-                Log.w(TAG, "  Remote Carry pincode handed to the stock OPAQUE login")
+                Log.w(TAG, "  Remote Cosmos pincode handed to the stock OPAQUE login")
             } catch (error: Throwable) {
                 Log.e(
                     TAG,
-                    "  Remote Carry pincode handoff failed (${error.javaClass.simpleName})",
+                    "  Remote Cosmos pincode handoff failed (${error.javaClass.simpleName})",
                 )
             }
         }
@@ -91,7 +91,7 @@ internal object CarryOnboardingAutomation {
             arrayOf(Boolean::class.javaPrimitiveType!!),
         ) { param ->
             val requestedEnabled = param.args.getOrNull(0) as? Boolean ?: return@hookMethodBefore
-            val application = CarryRemoteTransport.currentApplication() ?: return@hookMethodBefore
+            val application = CosmosRemoteTransport.currentApplication() ?: return@hookMethodBefore
             val ducProvisioned = Settings.Global.getInt(
                 application.contentResolver,
                 DUC_PROVISIONED_SETTING,
@@ -99,7 +99,7 @@ internal object CarryOnboardingAutomation {
             ) == 1
             if (
                 shouldPreserveInitialWifi(
-                    CarryRemoteTransport.isEnabled(),
+                    CosmosRemoteTransport.isEnabled(),
                     ducProvisioned,
                     requestedEnabled,
                     initialWifiDisableHandled.get(),
@@ -109,7 +109,7 @@ internal object CarryOnboardingAutomation {
                 // original cellular-first flow. A recovered Wi-Fi-only Pin
                 // must remain online long enough to reach clone provisioning.
                 param.result = true
-                Log.w(TAG, "  Remote Carry preserved Wi-Fi for clone onboarding")
+                Log.w(TAG, "  Remote Cosmos preserved Wi-Fi for clone onboarding")
             }
         }
     }
@@ -137,7 +137,7 @@ internal object CarryOnboardingAutomation {
         )
 
         HookUtils.hookMethodAfter(introNode, "didBecomeActive", emptyArray()) { param ->
-            if (CarryRemoteTransport.isEnabled()) {
+            if (CosmosRemoteTransport.isEnabled()) {
                 activeIntroNode = WeakReference(param.thisObject)
             }
         }
@@ -151,16 +151,16 @@ internal object CarryOnboardingAutomation {
             "setProvisioningService",
             arrayOf(provisioningService),
         ) { param ->
-            if (!CarryRemoteTransport.isEnabled()) return@hookMethodAfter
+            if (!CosmosRemoteTransport.isEnabled()) return@hookMethodAfter
             val node = activeIntroNode?.get() ?: return@hookMethodAfter
             runCatching {
                 checkSubscription.invoke(sharedInstance.invoke(null), node)
             }.onSuccess {
-                Log.w(TAG, "  Remote Carry retried subscription after service bind")
+                Log.w(TAG, "  Remote Cosmos retried subscription after service bind")
             }.onFailure { error ->
                 Log.e(
                     TAG,
-                    "  Remote Carry subscription bind retry failed " +
+                    "  Remote Cosmos subscription bind retry failed " +
                         "(${error.javaClass.simpleName})",
                 )
             }
@@ -168,19 +168,19 @@ internal object CarryOnboardingAutomation {
     }
 
     private fun pendingPincode(): String? {
-        val application = CarryRemoteTransport.currentApplication() ?: return null
+        val application = CosmosRemoteTransport.currentApplication() ?: return null
         return Settings.Global.getString(application.contentResolver, PINCODE_SETTING)
             ?.takeIf(::isCompatiblePincode)
     }
 
     private fun claimPendingPincode(): String? {
-        val application = CarryRemoteTransport.currentApplication() ?: return null
+        val application = CosmosRemoteTransport.currentApplication() ?: return null
         val resolver = application.contentResolver
         val pincode = Settings.Global.getString(resolver, PINCODE_SETTING)
             ?.takeIf(::isCompatiblePincode)
             ?: return null
         if (!Settings.Global.putString(resolver, PINCODE_SETTING, null)) {
-            Log.e(TAG, "  Remote Carry pincode could not be removed; refusing automatic entry")
+            Log.e(TAG, "  Remote Cosmos pincode could not be removed; refusing automatic entry")
             return null
         }
         return pincode

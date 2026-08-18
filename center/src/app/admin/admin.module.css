@@ -314,7 +314,7 @@
 .flagOverridden code { color: var(--hu-colors-beam-base); }
 
 /* "Default here" — this deployment's coded default with runtime overrides
-   suppressed. It is NOT a capture of what live carry served, whatever the old
+   suppressed. It is NOT a capture of what live cosmos served, whatever the old
    copy claimed. */
 .flagDefault {
   color: var(--hu-text-muted);

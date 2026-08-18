@@ -41,7 +41,7 @@ object IronmanHooks {
         ContextHistorySafetyHooks.install(cl)
 
         // Coerce null contact name getters to "" so stock NameEntityCorrector's
-        // unguarded String.isEmpty() cannot NPE on a malformed (e.g. carry-synced)
+        // unguarded String.isEmpty() cannot NPE on a malformed (e.g. cosmos-synced)
         // contact and silently kill NER on every transcript.
         ContactNameNullSafetyHooks.install(cl)
 
@@ -183,13 +183,13 @@ object IronmanHooks {
                 override fun beforeHookedMethod(param: MethodHookParam) {
                     if (!shouldBridgeDirectAttestation(param)) return
                     try {
-                        param.result = CarryRemoteTransport
+                        param.result = CosmosRemoteTransport
                             .directAttestationKeyManager()
                             .getCertificateChain(null)
                         Log.w(TAG, "  Bridged direct provisioning attestation certificate chain")
                     } catch (error: Throwable) {
                         param.throwable = SecurityException(
-                            "Remote Carry provisioning attestation chain is unavailable",
+                            "Remote Cosmos provisioning attestation chain is unavailable",
                             error,
                         )
                     }
@@ -221,13 +221,13 @@ object IronmanHooks {
                 override fun beforeHookedMethod(param: MethodHookParam) {
                     if (!shouldBridgeDirectAttestation(param)) return
                     try {
-                        param.result = CarryRemoteTransport
+                        param.result = CosmosRemoteTransport
                             .directAttestationKeyManager()
                             .getPrivateKey(null)
                         Log.w(TAG, "  Bridged direct provisioning attestation private key")
                     } catch (error: Throwable) {
                         param.throwable = SecurityException(
-                            "Remote Carry provisioning attestation key is unavailable",
+                            "Remote Cosmos provisioning attestation key is unavailable",
                             error,
                         )
                     }
@@ -248,10 +248,10 @@ object IronmanHooks {
     }
 
     private fun shouldBridgeDirectAttestation(param: XC_MethodHook.MethodHookParam): Boolean =
-        CarryRemoteTransport.shouldBridgeDirectAttestation(
+        CosmosRemoteTransport.shouldBridgeDirectAttestation(
             className = param.thisObject?.javaClass?.name,
             processName = runCatching { Application.getProcessName() }.getOrNull(),
-            cloneEnabled = CarryRemoteTransport.isEnabled(),
+            cloneEnabled = CosmosRemoteTransport.isEnabled(),
         )
 
     /**
@@ -514,7 +514,7 @@ object IronmanHooks {
             XposedBridge.hookMethod(method, object : XC_MethodHook() {
                 override fun afterHookedMethod(param: MethodHookParam) {
                     if (param.throwable != null) {
-                        if (CarryRemoteTransport.isEnabled()) return
+                        if (CosmosRemoteTransport.isEnabled()) return
                         val originalThrowable = param.throwable
                         // DAC private key missing — return a dummy ECDSA-like signature
                         param.throwable = null

@@ -31,7 +31,7 @@ pub(super) fn respond_action_input(utterance: &str, response: &str) -> String {
     serde_json::json!({"Request": utterance, "Response": response}).to_string()
 }
 
-/// A one-frame stream carrying the fixed timeout fallback, for the rare case
+/// A one-frame stream containing the fixed timeout fallback, for the rare case
 /// where planner setup itself overruns the whole-turn deadline.
 pub(super) fn single_timeout_fallback_stream(
     request: &SynapseUnderstandingRequest,

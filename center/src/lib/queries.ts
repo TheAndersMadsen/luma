@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { mapCarryNote, type CarryNoteDto } from "./noteMapping";
+import { mapCosmosNote, type CosmosNoteDto } from "./noteMapping";
 import type {
   AiMicRecord,
   CaptureRecord,
@@ -23,11 +23,11 @@ export type DataState = "live" | "absent" | "degraded";
 export type DataFallback = "fixtures" | "empty";
 
 export interface SourceInfo {
-  source: "carry" | "fixtures" | "unconfigured" | "unreachable";
+  source: "cosmos" | "fixtures" | "unconfigured" | "unreachable";
   /**
    * live     — the wearer's own current data
    * absent   — no counterpart in this backend; a retry cannot help
-   * degraded — carry is configured and did not answer
+   * degraded — cosmos is configured and did not answer
    */
   state: DataState;
   /** What is on screen instead: recovered sample data, or nothing. */
@@ -48,7 +48,7 @@ export interface SourceInfo {
 
 function readSource(value: string | null): SourceInfo["source"] {
   switch (value) {
-    case "carry":
+    case "cosmos":
     case "fixtures":
     case "unconfigured":
     case "unreachable":
@@ -66,7 +66,7 @@ function readState(value: string | null, source: SourceInfo["source"]): DataStat
     case "degraded":
       return value;
     default:
-      return source === "carry" ? "live" : source === "unreachable" ? "degraded" : "absent";
+      return source === "cosmos" ? "live" : source === "unreachable" ? "degraded" : "absent";
   }
 }
 
@@ -176,7 +176,7 @@ export function useNotes() {
     // NoteRecord view is derived client-side from the raw rows while keeping
     // the provenance envelope intact.
     queryFn: async () => {
-      const page = await fetchJson<Page<CarryNoteDto>>("/api/capture/notes");
+      const page = await fetchJson<Page<CosmosNoteDto>>("/api/capture/notes");
       // `data` is overwritten with the mapped rows, which destroys the Spring
       // envelope it came in — including `totalElements`, the only number that
       // knows the wearer has more notes than this capped page holds. Keeping it
@@ -185,7 +185,7 @@ export function useNotes() {
       // it only looked at those 200 before it claims nothing matched.
       return {
         ...page,
-        data: page.data.content.map(mapCarryNote),
+        data: page.data.content.map(mapCosmosNote),
         total: page.data.totalElements,
       };
     },
@@ -299,11 +299,11 @@ export interface PlaneHealth {
 }
 
 export interface HealthInfo {
-  carryConfigured: boolean;
+  cosmosConfigured: boolean;
   reachable: boolean;
   endpoint?: string;
   /** Legacy alias. Branch on `state`. */
-  source: "carry" | "fixtures";
+  source: "cosmos" | "fixtures";
   /** The WORSE of the two planes: half-live is not live. */
   state: DataState;
   fallback?: DataFallback;
@@ -325,7 +325,7 @@ function readPlane(value: unknown): PlaneHealth | null {
   if (typeof p.detail !== "string") return null;
   return {
     configured: Boolean(p.configured),
-    state: readState(p.state ?? null, p.configured ? "carry" : "fixtures"),
+    state: readState(p.state ?? null, p.configured ? "cosmos" : "fixtures"),
     endpoint: typeof p.endpoint === "string" ? p.endpoint : undefined,
     detail: p.detail,
     reauthenticate: p.reauthenticate === true ? true : undefined,
@@ -353,7 +353,7 @@ function readPlanes(value: unknown): HealthInfo["planes"] {
 function unknownHealth(detail: string, reauthenticate?: true): HealthInfo {
   return {
     // Unknown, not false. Nothing branches on these two; `state` is the signal.
-    carryConfigured: false,
+    cosmosConfigured: false,
     reachable: false,
     source: "fixtures",
     state: "degraded",
@@ -412,9 +412,9 @@ export function useBackendHealth() {
         return unknownHealth("Your Pin returned an unreadable status.");
       }
 
-      const source = body.source === "carry" ? "carry" : "fixtures";
+      const source = body.source === "cosmos" ? "cosmos" : "fixtures";
       return {
-        carryConfigured: Boolean(body.carryConfigured),
+        cosmosConfigured: Boolean(body.cosmosConfigured),
         reachable: Boolean(body.reachable),
         endpoint: body.endpoint,
         source,

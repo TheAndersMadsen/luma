@@ -115,7 +115,7 @@ internal object ConfigSecurity {
 
     /**
      * Shared storage was caller-writable before the private-config migration.
-     * Do not carry any legacy value across that trust boundary: provider URLs,
+     * Do not propagate any legacy value across that trust boundary: provider URLs,
      * credentials, prompts, paths, gates, and feature flags can all redirect
      * data or change privileged behavior. Create a minimal private replacement
      * whose remaining fields are filled from current safe defaults.

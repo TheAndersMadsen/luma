@@ -1,9 +1,9 @@
 import { cookies } from "next/headers";
 import {
-  CARRY_ADMIN_ENABLED,
-  CARRY_WEBAPI,
+  COSMOS_ADMIN_ENABLED,
+  COSMOS_WEBAPI,
   adminAuthHeaders,
-  carryDeadlineSignal,
+  cosmosDeadlineSignal,
 } from "@/server/cosmos";
 import { sourceHeaders } from "@/server/headers";
 import { getCaptures, getContacts, getNotes } from "@/server/source";
@@ -33,9 +33,9 @@ export async function GET() {
   if (!session.operator) {
     return Response.json({ error: "Operator access required." }, { status: 403 });
   }
-  if (!CARRY_ADMIN_ENABLED) {
+  if (!COSMOS_ADMIN_ENABLED) {
     return Response.json(
-      { error: "The operator console is not configured (no CARRY_ADMIN_TOKEN)." },
+      { error: "The operator console is not configured (no COSMOS_ADMIN_TOKEN)." },
       {
         status: 503,
         headers: sourceHeaders({ source: "unconfigured", state: "absent", fallback: "empty" }),
@@ -43,9 +43,9 @@ export async function GET() {
     );
   }
   try {
-    const res = await fetch(`${CARRY_WEBAPI}/demo-api/admin/overview`, {
+    const res = await fetch(`${COSMOS_WEBAPI}/demo-api/admin/overview`, {
       cache: "no-store",
-      signal: carryDeadlineSignal(),
+      signal: cosmosDeadlineSignal(),
       headers: adminAuthHeaders(),
     });
     if (!res.ok) {
@@ -54,7 +54,7 @@ export async function GET() {
         headers: {
           "content-type": "application/json",
           ...sourceHeaders({
-            source: "carry",
+            source: "cosmos",
             state: "degraded",
             fallback: "empty",
             degraded: `The backend answered ${res.status}.`,
@@ -96,7 +96,7 @@ export async function GET() {
       status: res.status,
       headers: {
         ...sourceHeaders({
-          source: "carry",
+          source: "cosmos",
           state: degraded ? "degraded" : "live",
           fallback: degraded ? "empty" : undefined,
           degraded,

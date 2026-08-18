@@ -87,7 +87,7 @@ export function classifyWifiStatus(output) {
 
 export function inspectPinNetwork(serial, runtime = defaultRuntime()) {
   const selected = ensureExactPin(runtime, serial);
-  // `cmd wifi status` may carry an SSID or BSSID. It is classified in memory
+  // `cmd wifi status` may contain an SSID or BSSID. It is classified in memory
   // and deliberately never echoed, logged, or returned to callers.
   const status = classifyWifiStatus(adb(runtime, selected, ["shell", "cmd", "wifi", "status"]));
   return Object.freeze({ serial: selected, enabled: status.enabled, connected: status.connected });

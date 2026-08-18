@@ -1,12 +1,12 @@
 import type { NoteRecord } from "@/lib/types";
 
 /**
- * One raw note row from Carry's authenticated web projection
+ * One raw note row from Cosmos's authenticated web projection
  * (`GET /capture/notes`), exactly as the stock page envelope carries it.
  * `/api/capture/notes` mirrors this shape verbatim; the dashboard maps it to
- * its own `NoteRecord` view with `mapCarryNote`.
+ * its own `NoteRecord` view with `mapCosmosNote`.
  */
-export interface CarryNoteDto {
+export interface CosmosNoteDto {
   uuid: string;
   /** Epoch seconds from the durable note row. */
   createdAt: number;
@@ -14,7 +14,7 @@ export interface CarryNoteDto {
   modifiedAt?: number;
   hasLocation: boolean;
   /**
-   * `false` only after Carry authenticated the wearer and cryptographically
+   * `false` only after Cosmos authenticated the wearer and cryptographically
    * opened the device envelope. Sealed rows deliberately omit title and text.
    */
   sealed: boolean;
@@ -30,8 +30,8 @@ export function epochSecondsToIso(seconds: number): string {
     : new Date(0).toISOString();
 }
 
-/** Map one raw Carry note row to the dashboard's `NoteRecord` view. */
-export function mapCarryNote(note: CarryNoteDto): NoteRecord {
+/** Map one raw Cosmos note row to the dashboard's `NoteRecord` view. */
+export function mapCosmosNote(note: CosmosNoteDto): NoteRecord {
   const sealed = note.sealed !== false;
   const createdAt = epochSecondsToIso(note.createdAt);
   const modifiedAt = epochSecondsToIso(note.modifiedAt ?? note.createdAt);

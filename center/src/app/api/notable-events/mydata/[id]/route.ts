@@ -7,7 +7,7 @@ const SIGN_IN_AGAIN = "Your session expired — sign in again.";
 
 /**
  * The wearer-fixable failure, answered the way api/settings/wifi answers it —
- * and carrying this route's own contract while it does: **`degraded` present
+ * and containing this route's own contract while it does: **`degraded` present
  * means nothing was deleted**, which the UI reads before it removes anything
  * from the screen. A 401 with no `degraded` would have been rendered as "the
  * backend answered 401" instead of the one thing the wearer can act on.
@@ -56,7 +56,7 @@ export async function DELETE(
 
     // The fourth outcome, and the only one the wearer can act on: their Keycloak
     // grant died behind a still-valid Center cookie. It used to arrive as the
-    // third one — "carry did not answer" — with a Forget button that would never
+    // third one — "cosmos did not answer" — with a Forget button that would never
     // work no matter how often it was pressed.
     if (result.reauthenticate) return reauthenticate();
 
@@ -70,7 +70,7 @@ export async function DELETE(
 
     const note = result.degraded ?? "nothing was deleted";
 
-    // `degraded` state means carry is configured and did not answer — a
+    // `degraded` state means cosmos is configured and did not answer — a
     // transport failure, and pressing Forget again may well work. Everything
     // else here (absent, or a live "nothing matched") is a true 200 that is
     // nonetheless NOT a success: the event is still where it was.

@@ -14,7 +14,7 @@
  *   is the server up       the provider's own health probe over that session
  *   is it configured       `GET /api/settings` on the device, through the
  *                          SHARED `useDeviceSettings` cache the panes use
- *   is it pointed at us    `Settings.Global penumbra_carry_remote_mode`, read
+ *   is it pointed at us    `Settings.Global penumbra_cosmos_remote_mode`, read
  *                          over ADB and never written from here
  *   is it reporting        `/api/devices/pair` + `/api/devices/status`, the same
  *                          two endpoints /settings/account/devices reads
@@ -79,8 +79,8 @@ export const PIN_REPORT_FRESHNESS_MS = 10 * 60 * 1000;
 const SETUP_QUERY_KEY = "pin-setup";
 
 /** `Settings.Global` keys written by the on-device activation transaction. */
-const REMOTE_MODE_SETTING = "penumbra_carry_remote_mode";
-const EDGE_IPV4_SETTING = "penumbra_carry_edge_ipv4";
+const REMOTE_MODE_SETTING = "penumbra_cosmos_remote_mode";
+const EDGE_IPV4_SETTING = "penumbra_cosmos_edge_ipv4";
 
 interface PairedPinsResponse {
   devices: Array<{ deviceId: string; pairedAt: number | null }>;
@@ -190,7 +190,7 @@ export function usePinSetupFacts(options: { operator: boolean }): PinSetupReadin
   /*
    * Clone mode, read straight off the device.
    *
-   * `penumbra_carry_remote_mode` is written LAST by the on-device activation
+   * `penumbra_cosmos_remote_mode` is written LAST by the on-device activation
    * transaction, as its commit gate, so reading it is the honest answer to
    * "is this Pin talking to our stack" — and a read is all this page ever does.
    * Writing these keys by hand is exactly what the runtime's journalled

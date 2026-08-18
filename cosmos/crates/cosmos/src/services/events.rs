@@ -199,7 +199,7 @@ pub const SEARCHABLE_EVENT_TYPES: &[&str] = &[
 /// Properties worth indexing, per the recovered wire shapes.
 ///
 /// `humane.respond` carries `request`/`response` (RespondNotableEvent); the music
-/// types carry `trackTitle`/`artistName`/`albumName` (TrackNotableEvent). Both are
+/// types include `trackTitle`/`artistName`/`albumName` (TrackNotableEvent). Both are
 /// corroborated by the .Center dashboard's own `eventData` mappers.
 const INDEXED_PROPERTIES: &[&str] = &[
     "request",
@@ -752,7 +752,7 @@ mod tests {
         assert_eq!(stored, vec!["e1".to_owned()]);
     }
 
-    /// A batch far larger than one statement can carry still lands whole. The
+    /// A batch far larger than one statement can contain still lands whole. The
     /// device's history is unbounded (`SyncEngine.performSync` selects
     /// `WHERE needs_sync = 1` with no LIMIT); chunking bounds the statement, and
     /// must not bound the wearer's data.

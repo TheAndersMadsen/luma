@@ -207,9 +207,9 @@ test("the keytool args never embed a plaintext password", () => {
   // The whole point of the dry-run being printable is that this argv is not
   // sensitive. argv is world-readable through `ps` while keytool runs, so a
   // password here would leak to every process on the host, printed or not.
-  ok(!args.includes("-storepass"), "argv must not carry -storepass");
-  ok(!args.includes("-keypass"), "argv must not carry -keypass");
-  ok(!args.includes("-signerkeypass"), "argv must not carry -signerkeypass");
+  ok(!args.includes("-storepass"), "argv must not contain -storepass");
+  ok(!args.includes("-keypass"), "argv must not contain -keypass");
+  ok(!args.includes("-signerkeypass"), "argv must not contain -signerkeypass");
   for (const argument of args) {
     ok(!argument.includes(FIXTURE_PASSWORD), `argv leaked a password: ${argument}`);
     ok(!/pass/i.test(argument), `suspicious password-ish argv entry: ${argument}`);
@@ -793,7 +793,7 @@ test(
         `the keytool failure must name ${name}; got:\n${result.stderr}`,
       );
     }
-    match(result.stderr, /mv '/, "the message must carry a restore command, not just a path");
+    match(result.stderr, /mv '/, "the message must contain a restore command, not just a path");
 
     // Still no password, on either stream, in any encoding.
     const output = `${result.stdout}${result.stderr}`;

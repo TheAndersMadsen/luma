@@ -4,7 +4,7 @@ import { rankCapture } from "@/server/source";
 
 /**
  * Observed Center compatibility route backed by the clone-owned selector.
- * Humane's private model is unknown; Carry records which replacement selected
+ * Humane's private model is unknown; Cosmos records which replacement selected
  * the frame and never deletes the two alternatives.
  */
 export async function POST(

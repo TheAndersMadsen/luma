@@ -1,10 +1,10 @@
-//! Real external backends — the vendors carry's serverside actually called.
+//! Real external backends — the vendors cosmos's serverside actually called.
 //!
 //! Clean-room compatibility evidence identifies which third-party API sat
 //! behind each surface. This module implements the
 //! adapters for the ones we hold credentials for, mapping each vendor response
 //! onto the **exact** proto the device expects — so a Pin cannot tell our
-//! `EncryptedWeather` or `EncryptedNearbySearch` from carry's.
+//! `EncryptedWeather` or `EncryptedNearbySearch` from cosmos's.
 //!
 //! ## Configuration
 //!
@@ -16,12 +16,12 @@
 //! | Env var | Backend | Surfaces |
 //! |---|---|---|
 //! | `AZURE_SPEECH_KEY` + `AZURE_SPEECH_REGION` | Azure AI Speech | unary/streaming TTS, translated speech |
-//! | `CARRY_GOOGLE_MAPS_KEY` | Google Maps Platform | nearby search, reverse geocode, directions |
-//! | `CARRY_SEARXNG_BASE_URL` | Private SearXNG (preferred when configured) | `web_search` (`MODE_SERP_API`) |
-//! | `CARRY_SERPAPI_KEY` | SerpApi (fallback when SearXNG is absent, unavailable, or empty) | `web_search` (`MODE_SERP_API`) |
-//! | `CARRY_PIRATE_WEATHER_KEY` | Pirate Weather | weather (`MODE_WEATHER`) |
-//! | `CARRY_WOLFRAM_APP_ID` | Wolfram|Alpha LLM API | `wolfram` (`MODE_WOLFRAM`) |
-//! | `CARRY_PPLX_API_KEY` | Perplexity | `ask_online` (`MODE_PPLX_API`) |
+//! | `COSMOS_GOOGLE_MAPS_KEY` | Google Maps Platform | nearby search, reverse geocode, directions |
+//! | `COSMOS_SEARXNG_BASE_URL` | Private SearXNG (preferred when configured) | `web_search` (`MODE_SERP_API`) |
+//! | `COSMOS_SERPAPI_KEY` | SerpApi (fallback when SearXNG is absent, unavailable, or empty) | `web_search` (`MODE_SERP_API`) |
+//! | `COSMOS_PIRATE_WEATHER_KEY` | Pirate Weather | weather (`MODE_WEATHER`) |
+//! | `COSMOS_WOLFRAM_APP_ID` | Wolfram|Alpha LLM API | `wolfram` (`MODE_WOLFRAM`) |
+//! | `COSMOS_PPLX_API_KEY` | Perplexity | `ask_online` (`MODE_PPLX_API`) |
 //! | _(none)_ | Wikipedia | `wikipedia` (`MODE_WIKIPEDIA`) |
 //!
 //! **Implemented, not observed:** private SearXNG is an Ai Pin Revival
@@ -29,12 +29,12 @@
 //! boundary; it is not a claim about Humane's internal search infrastructure.
 //!
 //! Azure Speech additionally accepts `AZURE_SPEECH_VOICE` (default:
-//! `en-US-AvaMultilingualNeural`). Scoped `CARRY_AZURE_SPEECH_*` names take
+//! `en-US-AvaMultilingualNeural`). Scoped `COSMOS_AZURE_SPEECH_*` names take
 //! precedence when both forms are present.
 //!
 //! ## Fidelity note on weather
 //!
-//! carry's `WeatherResponse` is an **AccuWeather** payload (a numeric
+//! cosmos's `WeatherResponse` is an **AccuWeather** payload (a numeric
 //! `weather_icon`, 1–44). Pirate Weather is **Dark Sky**-shaped and reports a
 //! *string* icon from a 10-value set. Every other field maps exactly; the icon
 //! is translated through a documented table in [`weather`], and that translation
@@ -112,13 +112,13 @@ mod tests {
     fn a_blank_key_is_treated_as_absent_not_as_a_credential() {
         // SAFETY: single-threaded test scope; no other thread reads this var.
         unsafe {
-            std::env::set_var("CARRY_TEST_BLANK_KEY", "   ");
+            std::env::set_var("COSMOS_TEST_BLANK_KEY", "   ");
         }
-        assert!(key("CARRY_TEST_BLANK_KEY").is_none());
+        assert!(key("COSMOS_TEST_BLANK_KEY").is_none());
         unsafe {
-            std::env::remove_var("CARRY_TEST_BLANK_KEY");
+            std::env::remove_var("COSMOS_TEST_BLANK_KEY");
         }
-        assert!(key("CARRY_TEST_ABSENT_KEY").is_none());
+        assert!(key("COSMOS_TEST_ABSENT_KEY").is_none());
     }
 
     #[test]

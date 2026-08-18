@@ -3,7 +3,7 @@
  *
  * This is the format the Pin actually speaks, so producing and reading it is what
  * lets the dashboard show real note text and real capture frames instead of
- * "sealed". Specified by `contracts/wire/carry_ciphertext.fbs` and confirmed
+ * "sealed". Specified by `contracts/wire/cosmos_ciphertext.fbs` and confirmed
  * against the decompiled client:
  *
  *   payload AEAD  AES-128-GCM, 12-byte random IV, 16-byte tag kept SEPARATE

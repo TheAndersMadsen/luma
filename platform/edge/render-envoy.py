@@ -57,7 +57,7 @@ def assert_edge_reachable(template: str, envoy_template_path: Path) -> None:
     The device dials every clone gateway at <host>:443 and nothing on the server
     answers for a name that has no route: the ClientHello dies before a request
     line exists, so neither Nginx nor Envoy nor Cosmos writes a single line about
-    it.  That is precisely how api.carry.humane.cloud went unserved indefinitely.
+    it.  That is precisely how api.cosmos.humane.cloud went unserved indefinitely.
     The two lists are edited in different files by different concerns, so bind
     them here, at the one moment both are on disk and neither is live yet.
     """
@@ -92,11 +92,11 @@ def main() -> int:
     parser.add_argument("--template", type=Path, default=Path(__file__).with_name("envoy") / "envoy.yaml.tpl")
     parser.add_argument("--env", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--cert-dir", default="/etc/carry-edge/certs")
+    parser.add_argument("--cert-dir", default="/etc/cosmos-edge/certs")
     args = parser.parse_args()
     if not args.cert_dir.startswith("/") or any(char in args.cert_dir for char in "\n\r\t\"'"):
         raise SystemExit("certificate directory must be a safe absolute container path")
-    token = env_value(args.env, "CARRY_EDGE_TOKEN")
+    token = env_value(args.env, "COSMOS_EDGE_TOKEN")
     template = args.template.read_text(encoding="utf-8")
     if template.count("@@EDGE_TOKEN@@") != 2 or "@@CERT_DIR@@" not in template:
         raise SystemExit("unexpected Envoy template placeholders")

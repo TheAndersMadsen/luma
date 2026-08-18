@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import {
-  CARRY_ADMIN_ENABLED,
-  CARRY_WEBAPI,
+  COSMOS_ADMIN_ENABLED,
+  COSMOS_WEBAPI,
   adminAuthHeaders,
-  carryDeadlineSignal,
+  cosmosDeadlineSignal,
 } from "@/server/cosmos";
 import { sourceHeaders } from "@/server/headers";
 import { isSameOriginRequest, SESSION_COOKIE, verifySession, type Session } from "@/server/auth";
@@ -19,7 +19,7 @@ import { isSameOriginRequest, SESSION_COOKIE, verifySession, type Session } from
  * DELETE — `{ name }` clear one override, or no body to reset them all.
  *
  * On the wire the backend calls the fields `observed` and `effective`. `observed`
- * is NOT a capture of what live carry served: it is this deployment's own coded
+ * is NOT a capture of what live cosmos served: it is this deployment's own coded
  * default with runtime overrides suppressed, which is why the console renders it
  * as "Default here" rather than repeating a claim the data cannot support.
  *
@@ -29,13 +29,13 @@ import { isSameOriginRequest, SESSION_COOKIE, verifySession, type Session } from
  */
 const noBackend = () =>
   NextResponse.json(
-    { error: "No data service is configured (no CARRY_WEBAPI_BASE_URL)." },
+    { error: "No data service is configured (no COSMOS_WEBAPI_BASE_URL)." },
     { status: 503, headers: sourceHeaders({ source: "unconfigured", state: "absent", fallback: "empty" }) },
   );
 
 const noAdminToken = () =>
   NextResponse.json(
-    { error: "The operator console is not configured (no CARRY_ADMIN_TOKEN)." },
+    { error: "The operator console is not configured (no COSMOS_ADMIN_TOKEN)." },
     { status: 503, headers: sourceHeaders({ source: "unconfigured", state: "absent", fallback: "empty" }) },
   );
 
@@ -53,14 +53,14 @@ const unreachable = () =>
     },
   );
 
-const FEATURE_FLAG_METRICS = (process.env.CARRY_FEATURE_FLAGS_METRICS_URL ?? "").replace(/\/$/, "");
+const FEATURE_FLAG_METRICS = (process.env.COSMOS_FEATURE_FLAGS_METRICS_URL ?? "").replace(/\/$/, "");
 
 type FlagDelivery = "device_fetched" | "push_queued" | "next_sync";
 
 async function successfulGetFlagsCount(): Promise<number | null> {
   if (!FEATURE_FLAG_METRICS) return null;
   const response = await fetch(
-    `${FEATURE_FLAG_METRICS}/manage/metrics/carry_rpc_requests_total`,
+    `${FEATURE_FLAG_METRICS}/manage/metrics/cosmos_rpc_requests_total`,
     { cache: "no-store" },
   ).catch(() => null);
   if (!response?.ok) return null;
@@ -82,7 +82,7 @@ async function waitForFreshGetFlags(previous: number): Promise<boolean> {
 
 async function deliverFlagChange(accountSub: string): Promise<FlagDelivery> {
   // Sample after the write and immediately before the push. A later increment
-  // proves that Carry served a successful GetFlags call after this save; it
+  // proves that Cosmos served a successful GetFlags call after this save; it
   // does not overclaim that every long-lived stock consumer rebuilt its map.
   const before = await successfulGetFlagsCount();
   const pushed = await queueFlagSync(accountSub);
@@ -106,8 +106,8 @@ async function currentOperator(): Promise<Session | Response> {
 }
 
 async function queueFlagSync(accountSub: string): Promise<boolean> {
-  if (!CARRY_WEBAPI) return false;
-  const response = await fetch(`${CARRY_WEBAPI}/demo-api/admin/push`, {
+  if (!COSMOS_WEBAPI) return false;
+  const response = await fetch(`${COSMOS_WEBAPI}/demo-api/admin/push`, {
     method: "POST",
     headers: { ...adminAuthHeaders(), "content-type": "application/json" },
     body: JSON.stringify({
@@ -117,7 +117,7 @@ async function queueFlagSync(accountSub: string): Promise<boolean> {
       expiration_seconds: 86_400,
     }),
     cache: "no-store",
-    signal: carryDeadlineSignal(),
+    signal: cosmosDeadlineSignal(),
   }).catch(() => null);
   return response?.ok === true;
 }
@@ -125,21 +125,21 @@ async function queueFlagSync(accountSub: string): Promise<boolean> {
 export async function GET() {
   const operator = await currentOperator();
   if (operator instanceof Response) return operator;
-  if (!CARRY_ADMIN_ENABLED) return noAdminToken();
-  if (!CARRY_WEBAPI) return noBackend();
+  if (!COSMOS_ADMIN_ENABLED) return noAdminToken();
+  if (!COSMOS_WEBAPI) return noBackend();
   try {
-    const res = await fetch(`${CARRY_WEBAPI}/demo-api/flags`, {
+    const res = await fetch(`${COSMOS_WEBAPI}/demo-api/flags`, {
       headers: adminAuthHeaders(),
       cache: "no-store",
-      signal: carryDeadlineSignal(),
+      signal: cosmosDeadlineSignal(),
     });
     return NextResponse.json(await res.json().catch(() => []), {
       status: res.status,
       headers: sourceHeaders(
         res.ok
-          ? { source: "carry", state: "live" }
+          ? { source: "cosmos", state: "live" }
           : {
-              source: "carry",
+              source: "cosmos",
               state: "degraded",
               fallback: "empty",
               degraded: `The backend answered ${res.status}.`,
@@ -157,7 +157,7 @@ export async function PUT(request: Request) {
   if (!isSameOriginRequest(request)) {
     return NextResponse.json({ error: "A same-origin request is required." }, { status: 403 });
   }
-  if (!CARRY_ADMIN_ENABLED) return noAdminToken();
+  if (!COSMOS_ADMIN_ENABLED) return noAdminToken();
   let body: { name?: string; value?: unknown };
   try {
     body = await request.json();
@@ -167,11 +167,11 @@ export async function PUT(request: Request) {
   const name = (body.name ?? "").trim();
   if (!name) return NextResponse.json({ error: "A flag name is required." }, { status: 400 });
   try {
-    const res = await fetch(`${CARRY_WEBAPI}/demo-api/flags/${encodeURIComponent(name)}`, {
+    const res = await fetch(`${COSMOS_WEBAPI}/demo-api/flags/${encodeURIComponent(name)}`, {
       method: "PUT",
       headers: { ...adminAuthHeaders(), "content-type": "application/json" },
       body: JSON.stringify({ value: body.value }),
-      signal: carryDeadlineSignal(),
+      signal: cosmosDeadlineSignal(),
     });
     const responseBody = (await res.json().catch(() => ({}))) as Record<string, unknown>;
     if (!res.ok) return NextResponse.json(responseBody, { status: res.status });
@@ -188,7 +188,7 @@ export async function DELETE(request: Request) {
   if (!isSameOriginRequest(request)) {
     return NextResponse.json({ error: "A same-origin request is required." }, { status: 403 });
   }
-  if (!CARRY_ADMIN_ENABLED) return noAdminToken();
+  if (!COSMOS_ADMIN_ENABLED) return noAdminToken();
   let name = "";
   try {
     const body = await request.json();
@@ -199,10 +199,10 @@ export async function DELETE(request: Request) {
   }
   const path = name ? `/demo-api/flags/${encodeURIComponent(name)}` : "/demo-api/flags";
   try {
-    const res = await fetch(`${CARRY_WEBAPI}${path}`, {
+    const res = await fetch(`${COSMOS_WEBAPI}${path}`, {
       method: "DELETE",
       headers: adminAuthHeaders(),
-      signal: carryDeadlineSignal(),
+      signal: cosmosDeadlineSignal(),
     });
     const responseBody = (await res.json().catch(() => ({}))) as Record<string, unknown>;
     if (!res.ok) return NextResponse.json(responseBody, { status: res.status });

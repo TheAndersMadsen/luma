@@ -47,7 +47,7 @@ ENV NODE_ENV=production \
     HOSTNAME=0.0.0.0 \
     PORT=4000 \
     COSMOS_CONTRACTS_DIR=/app/contracts \
-    CARRY_CHANNEL_KEY_FILE=/data/channel-key.json
+    COSMOS_CHANNEL_KEY_FILE=/data/channel-key.json
 
 RUN groupadd --system --gid 1001 center \
     && usermod --gid center --home /app node \

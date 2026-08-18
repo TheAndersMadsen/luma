@@ -6,7 +6,7 @@ plugins {
 // Pin every Android module to the exact build-tools the release container
 // installs. Without this, AGP's lintVital task falls back to its own default
 // build-tools revision (34.0.0) which the pinned single-toolchain image does
-// not carry, and the release build fails to find it. The image exports the
+// not include, and the release build fails to find it. The image exports the
 // installed version as AI_PIN_ANDROID_BUILD_TOOLS_VERSION.
 subprojects {
     val pinnedBuildTools = System.getenv("AI_PIN_ANDROID_BUILD_TOOLS_VERSION")?.trim()

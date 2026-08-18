@@ -1,6 +1,6 @@
 //! Food nutrition lookup — **Open Food Facts** (openfoodfacts.org).
 //!
-//! carry's food stack was Google Vision / Calorie Mama for *image* recognition
+//! cosmos's food stack was Google Vision / Calorie Mama for *image* recognition
 //! and **Nutritionix** for the *nutrition database* (branded foods, barcodes, the
 //! `nf_*` fields). We don't hold a Nutritionix key, but Open Food Facts is a free,
 //! **keyless**, openly-licensed database with the same shape — branded products,
@@ -8,7 +8,7 @@
 //! substitute for the *nutrition* half. Image recognition still needs a vision
 //! vendor and stays honest-UNIMPLEMENTED.
 //!
-//! The returned values are mapped onto carry's `NutrientType` enum in carry's
+//! The returned values are mapped onto cosmos's `NutrientType` enum in cosmos's
 //! unit convention (Nutritionix's `nf_*`): calories in kcal, macros in grams,
 //! minerals + vitamin C in milligrams, vitamin A in micrograms. Open Food Facts
 //! reports everything in grams, so mineral/vitamin values are scaled up. Nothing
@@ -43,7 +43,7 @@ struct OffProduct {
     nutriments: HashMap<String, serde_json::Value>,
 }
 
-/// (`NutrientType`, Open Food Facts base key, grams→carry-unit multiplier).
+/// (`NutrientType`, Open Food Facts base key, grams→cosmos-unit multiplier).
 /// Calories (kcal) and macros (g) need no conversion; minerals + vitamin C go
 /// grams→mg (×1000); vitamin A goes grams→mcg (×1e6).
 const MAP: &[(i32, &str, f64)] = &[
@@ -86,8 +86,8 @@ const MAP: &[(i32, &str, f64)] = &[
     ),
 ];
 
-/// A resolved food record, in the fields carry's `FoodIdentifyResponse` /
-/// `FoodItem` carry.
+/// A resolved food record, in the fields cosmos's `FoodIdentifyResponse` /
+/// `FoodItem` cosmos.
 pub struct FoodLookup {
     pub item_name: String,
     pub brand: String,
@@ -127,7 +127,7 @@ pub async fn lookup(query: &str) -> Result<FoodLookup, BackendError> {
     Ok(to_lookup(product))
 }
 
-/// Map an Open Food Facts product onto carry's food record + nutrient units.
+/// Map an Open Food Facts product onto cosmos's food record + nutrient units.
 fn to_lookup(product: OffProduct) -> FoodLookup {
     // Prefer per-serving values when the product declares a serving; otherwise
     // per-100g, and label the serving as such.
@@ -200,7 +200,7 @@ mod tests {
     }
 
     #[test]
-    fn maps_100g_nutriments_into_carry_units() {
+    fn maps_100g_nutriments_into_cosmos_units() {
         let p = product(&[
             ("energy-kcal_100g", 89.0),
             ("fat_100g", 0.3),

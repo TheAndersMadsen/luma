@@ -450,7 +450,7 @@ enum StockIntent {
 /// A stock-compatible top-level clock entry selected from one saved ordinary
 /// utterance.
 ///
-/// Timer and Alarm deliberately carry the original request instead of a
+/// Timer and Alarm deliberately contain the original request instead of a
 /// materialized nested tool call. The device's stock agent handler will submit
 /// that request against `timer/1` or `alarm/1`, where [`plan_tool_call`] applies
 /// the same bounded parser and schema checks used for ordinary nested turns.

@@ -1,4 +1,4 @@
-//! gRPC service handlers for the Carry-compatible workloads.
+//! gRPC service handlers for the Cosmos-compatible workloads.
 //!
 //! Each workload deployment exposes only its own services; `cosmos::run`
 //! selects them by `Workload`. Handlers share the [`RequestAuthenticator`]

@@ -21,7 +21,7 @@ test("the two motion tiers are defined once, at the sanctioned values", () => {
   assert.match(globals, /--hu-motion-feedback: 300ms;/);
   assert.match(globals, /--hu-motion-transition: 600ms;/);
   // The recovered aliases resolve through the feedback tier rather than
-  // carrying live literals of their own.
+  // containing live literals of their own.
   assert.match(globals, /--transition-duration: var\(--hu-motion-feedback\);/);
   assert.match(globals, /--hu-motion-fast: var\(--hu-motion-feedback\);/);
   assert.match(globals, /--hu-motion-standard: var\(--hu-motion-feedback\);/);

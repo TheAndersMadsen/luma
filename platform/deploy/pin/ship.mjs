@@ -977,7 +977,7 @@ export async function inspectRemotePinReleaseStore({ transport, remoteRoot, rele
 }
 
 /**
- * Plan, and — only with `confirm` — carry it out.
+ * Plan, and — only with `confirm` — complete it.
  *
  * Without `confirm` this reads both stores and stops. That is deliberate and
  * matches `./revival pin install`: the command that can change something states

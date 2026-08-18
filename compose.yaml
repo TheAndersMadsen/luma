@@ -18,22 +18,22 @@ x-cosmos-environment: &cosmos-environment
   REVIVAL_PRODUCT: Ai Pin Revival
   REVIVAL_RELEASE_ID: ${REVIVAL_RELEASE_ID:?set REVIVAL_RELEASE_ID to the immutable release id}
   REVIVAL_DEPLOYMENT_ENVIRONMENT: ${REVIVAL_DEPLOYMENT_ENVIRONMENT:-production}
-  CARRY_AUTH_MODE: ${CARRY_AUTH_MODE:-edge-authenticated}
-  CARRY_ENVIRONMENT: ${REVIVAL_DEPLOYMENT_ENVIRONMENT:-production}
-  CARRY_GRPC_BIND: 127.0.0.1:50051
-  CARRY_HTTP_BIND: 127.0.0.1:8080
-  CARRY_LOG_LEVEL: ${CARRY_LOG_LEVEL:-info}
-  CARRY_MAX_DECODE_BYTES: ${CARRY_MAX_DECODE_BYTES:-4194304}
-  CARRY_MAX_ENCODE_BYTES: ${CARRY_MAX_ENCODE_BYTES:-4194304}
-  CARRY_REGION: ${CARRY_REGION:-eastus}
-  CARRY_REQUEST_TIMEOUT_MS: ${CARRY_REQUEST_TIMEOUT_MS:-15000}
-  CARRY_REVISION: ${REVIVAL_REVISION:-${REVIVAL_RELEASE_ID:?set REVIVAL_RELEASE_ID to the immutable release id}}
-  CARRY_SHUTDOWN_GRACE_MS: ${CARRY_SHUTDOWN_GRACE_MS:-5000}
-  CARRY_TRUST_DOMAIN: ${CARRY_TRUST_DOMAIN:-carry.local}
-  CARRY_STATE_DIR: /var/lib/carry
-  CARRY_OIDC_ISSUER: ${CARRY_OIDC_ISSUER:-}
-  CARRY_OIDC_JWKS_URI: ${CARRY_OIDC_JWKS_URI:-}
-  CARRY_OIDC_AUDIENCE: ${CARRY_OIDC_AUDIENCE:-}
+  COSMOS_AUTH_MODE: ${COSMOS_AUTH_MODE:-edge-authenticated}
+  COSMOS_ENVIRONMENT: ${REVIVAL_DEPLOYMENT_ENVIRONMENT:-production}
+  COSMOS_GRPC_BIND: 127.0.0.1:50051
+  COSMOS_HTTP_BIND: 127.0.0.1:8080
+  COSMOS_LOG_LEVEL: ${COSMOS_LOG_LEVEL:-info}
+  COSMOS_MAX_DECODE_BYTES: ${COSMOS_MAX_DECODE_BYTES:-4194304}
+  COSMOS_MAX_ENCODE_BYTES: ${COSMOS_MAX_ENCODE_BYTES:-4194304}
+  COSMOS_REGION: ${COSMOS_REGION:-eastus}
+  COSMOS_REQUEST_TIMEOUT_MS: ${COSMOS_REQUEST_TIMEOUT_MS:-15000}
+  COSMOS_REVISION: ${REVIVAL_REVISION:-${REVIVAL_RELEASE_ID:?set REVIVAL_RELEASE_ID to the immutable release id}}
+  COSMOS_SHUTDOWN_GRACE_MS: ${COSMOS_SHUTDOWN_GRACE_MS:-5000}
+  COSMOS_TRUST_DOMAIN: ${COSMOS_TRUST_DOMAIN:-cosmos.local}
+  COSMOS_STATE_DIR: /var/lib/cosmos
+  COSMOS_OIDC_ISSUER: ${COSMOS_OIDC_ISSUER:-}
+  COSMOS_OIDC_JWKS_URI: ${COSMOS_OIDC_JWKS_URI:-}
+  COSMOS_OIDC_AUDIENCE: ${COSMOS_OIDC_AUDIENCE:-}
 
 x-cosmos-service: &cosmos-service
   build:
@@ -76,7 +76,7 @@ x-cosmos-service: &cosmos-service
   tmpfs:
     - /tmp:size=16m,mode=1777
   volumes:
-    - carry-state:/var/lib/carry
+    - cosmos-state:/var/lib/cosmos
   cap_drop:
     - ALL
   security_opt:
@@ -112,9 +112,9 @@ services:
       dk.andersmadsen.ai-pin-revival.workload: connectivity
     environment:
       <<: *cosmos-environment
-      CARRY_INSTANCE_ID: connectivity-${REVIVAL_REVISION:-${REVIVAL_RELEASE_ID}}
-      CARRY_POD_NAME: connectivity-${REVIVAL_REVISION:-${REVIVAL_RELEASE_ID}}-1
-      CARRY_WORKLOAD: connectivity
+      COSMOS_INSTANCE_ID: connectivity-${REVIVAL_REVISION:-${REVIVAL_RELEASE_ID}}
+      COSMOS_POD_NAME: connectivity-${REVIVAL_REVISION:-${REVIVAL_RELEASE_ID}}-1
+      COSMOS_WORKLOAD: connectivity
 
   ai-bus:
     <<: *cosmos-service
@@ -125,24 +125,24 @@ services:
       dk.andersmadsen.ai-pin-revival.workload: ai-bus
     environment:
       <<: *cosmos-environment
-      CARRY_INSTANCE_ID: ai-bus-${REVIVAL_REVISION:-${REVIVAL_RELEASE_ID}}
-      CARRY_POD_NAME: ai-bus-${REVIVAL_REVISION:-${REVIVAL_RELEASE_ID}}-1
-      CARRY_WORKLOAD: ai-bus
-      CARRY_ADMIN_TOKEN: ${CARRY_ADMIN_TOKEN:-}
-      CARRY_CENTER_PROJECTION_TOKEN: ${CARRY_CENTER_PROJECTION_TOKEN:-}
-      CARRY_DEMO_ENABLED: ${CARRY_DEMO_ENABLED:-false}
-      CARRY_REMOTE_TTS_ENABLED: ${CARRY_REMOTE_TTS_ENABLED:-false}
-      CARRY_CAPTURE_SHARE_BASE_URL: ${CARRY_CAPTURE_SHARE_BASE_URL:-}
-      CARRY_SHARE_TOKEN_SECRET: ${CARRY_SHARE_TOKEN_SECRET:-}
-      CARRY_CAPTURE_UPLOAD_BASE_URL: ${CARRY_CAPTURE_UPLOAD_BASE_URL:-http://ai-bus:18080}
-      CARRY_CAPTURE_STORAGE_DIR: ${CARRY_CAPTURE_STORAGE_DIR:-/var/lib/carry/captures}
-      CARRY_CAPTURE_MAX_UPLOAD_BYTES: ${CARRY_CAPTURE_MAX_UPLOAD_BYTES:-33554432}
-      CARRY_CAPTURE_RETENTION_DAYS: ${CARRY_CAPTURE_RETENTION_DAYS:-30}
-      CARRY_UPLOAD_PRESIGN_ENDPOINT: ${CARRY_UPLOAD_PRESIGN_ENDPOINT:-}
-      CARRY_MUSICBRAINZ_BASE_URL: ${CARRY_MUSICBRAINZ_BASE_URL:-https://musicbrainz.org}
-      CARRY_SHOPPING_VISUAL_SEARCH_URL: ${CARRY_SHOPPING_VISUAL_SEARCH_URL:-}
-      CARRY_SHOPPING_ALLOWED_HOSTS: ${CARRY_SHOPPING_ALLOWED_HOSTS:-}
-      CARRY_SHOPPING_API_KEY: ${CARRY_SHOPPING_API_KEY:-}
+      COSMOS_INSTANCE_ID: ai-bus-${REVIVAL_REVISION:-${REVIVAL_RELEASE_ID}}
+      COSMOS_POD_NAME: ai-bus-${REVIVAL_REVISION:-${REVIVAL_RELEASE_ID}}-1
+      COSMOS_WORKLOAD: ai-bus
+      COSMOS_ADMIN_TOKEN: ${COSMOS_ADMIN_TOKEN:-}
+      COSMOS_CENTER_PROJECTION_TOKEN: ${COSMOS_CENTER_PROJECTION_TOKEN:-}
+      COSMOS_DEMO_ENABLED: ${COSMOS_DEMO_ENABLED:-false}
+      COSMOS_REMOTE_TTS_ENABLED: ${COSMOS_REMOTE_TTS_ENABLED:-false}
+      COSMOS_CAPTURE_SHARE_BASE_URL: ${COSMOS_CAPTURE_SHARE_BASE_URL:-}
+      COSMOS_SHARE_TOKEN_SECRET: ${COSMOS_SHARE_TOKEN_SECRET:-}
+      COSMOS_CAPTURE_UPLOAD_BASE_URL: ${COSMOS_CAPTURE_UPLOAD_BASE_URL:-http://ai-bus:18080}
+      COSMOS_CAPTURE_STORAGE_DIR: ${COSMOS_CAPTURE_STORAGE_DIR:-/var/lib/cosmos/captures}
+      COSMOS_CAPTURE_MAX_UPLOAD_BYTES: ${COSMOS_CAPTURE_MAX_UPLOAD_BYTES:-33554432}
+      COSMOS_CAPTURE_RETENTION_DAYS: ${COSMOS_CAPTURE_RETENTION_DAYS:-30}
+      COSMOS_UPLOAD_PRESIGN_ENDPOINT: ${COSMOS_UPLOAD_PRESIGN_ENDPOINT:-}
+      COSMOS_MUSICBRAINZ_BASE_URL: ${COSMOS_MUSICBRAINZ_BASE_URL:-https://musicbrainz.org}
+      COSMOS_SHOPPING_VISUAL_SEARCH_URL: ${COSMOS_SHOPPING_VISUAL_SEARCH_URL:-}
+      COSMOS_SHOPPING_ALLOWED_HOSTS: ${COSMOS_SHOPPING_ALLOWED_HOSTS:-}
+      COSMOS_SHOPPING_API_KEY: ${COSMOS_SHOPPING_API_KEY:-}
 
   account:
     <<: *cosmos-service
@@ -152,9 +152,9 @@ services:
       dk.andersmadsen.ai-pin-revival.workload: account
     environment:
       <<: *cosmos-environment
-      CARRY_INSTANCE_ID: account-${REVIVAL_REVISION:-${REVIVAL_RELEASE_ID}}
-      CARRY_POD_NAME: account-${REVIVAL_REVISION:-${REVIVAL_RELEASE_ID}}-1
-      CARRY_WORKLOAD: account
+      COSMOS_INSTANCE_ID: account-${REVIVAL_REVISION:-${REVIVAL_RELEASE_ID}}
+      COSMOS_POD_NAME: account-${REVIVAL_REVISION:-${REVIVAL_RELEASE_ID}}-1
+      COSMOS_WORKLOAD: account
 
   contacts:
     <<: *cosmos-service
@@ -164,9 +164,9 @@ services:
       dk.andersmadsen.ai-pin-revival.workload: contacts
     environment:
       <<: *cosmos-environment
-      CARRY_INSTANCE_ID: contacts-${REVIVAL_REVISION:-${REVIVAL_RELEASE_ID}}
-      CARRY_POD_NAME: contacts-${REVIVAL_REVISION:-${REVIVAL_RELEASE_ID}}-1
-      CARRY_WORKLOAD: contacts
+      COSMOS_INSTANCE_ID: contacts-${REVIVAL_REVISION:-${REVIVAL_RELEASE_ID}}
+      COSMOS_POD_NAME: contacts-${REVIVAL_REVISION:-${REVIVAL_RELEASE_ID}}-1
+      COSMOS_WORKLOAD: contacts
 
   feature-flags:
     <<: *cosmos-service
@@ -176,11 +176,11 @@ services:
       dk.andersmadsen.ai-pin-revival.workload: feature-flags
     environment:
       <<: *cosmos-environment
-      CARRY_INSTANCE_ID: feature-flags-${REVIVAL_REVISION:-${REVIVAL_RELEASE_ID}}
-      CARRY_POD_NAME: feature-flags-${REVIVAL_REVISION:-${REVIVAL_RELEASE_ID}}-1
-      CARRY_WORKLOAD: feature-flags
-      CARRY_BIDIRECTIONAL_STREAMING: ${CARRY_BIDIRECTIONAL_STREAMING:-0}
-      CARRY_REMOTE_TTS_ENABLED: ${CARRY_REMOTE_TTS_ENABLED:-false}
+      COSMOS_INSTANCE_ID: feature-flags-${REVIVAL_REVISION:-${REVIVAL_RELEASE_ID}}
+      COSMOS_POD_NAME: feature-flags-${REVIVAL_REVISION:-${REVIVAL_RELEASE_ID}}-1
+      COSMOS_WORKLOAD: feature-flags
+      COSMOS_BIDIRECTIONAL_STREAMING: ${COSMOS_BIDIRECTIONAL_STREAMING:-0}
+      COSMOS_REMOTE_TTS_ENABLED: ${COSMOS_REMOTE_TTS_ENABLED:-false}
 
   notable-events:
     <<: *cosmos-service
@@ -190,9 +190,9 @@ services:
       dk.andersmadsen.ai-pin-revival.workload: notable-events
     environment:
       <<: *cosmos-environment
-      CARRY_INSTANCE_ID: notable-events-${REVIVAL_REVISION:-${REVIVAL_RELEASE_ID}}
-      CARRY_POD_NAME: notable-events-${REVIVAL_REVISION:-${REVIVAL_RELEASE_ID}}-1
-      CARRY_WORKLOAD: notable-events
+      COSMOS_INSTANCE_ID: notable-events-${REVIVAL_REVISION:-${REVIVAL_RELEASE_ID}}
+      COSMOS_POD_NAME: notable-events-${REVIVAL_REVISION:-${REVIVAL_RELEASE_ID}}-1
+      COSMOS_WORKLOAD: notable-events
 
   provisioning:
     <<: *cosmos-service
@@ -202,12 +202,12 @@ services:
       dk.andersmadsen.ai-pin-revival.workload: provisioning
     environment:
       <<: *cosmos-environment
-      CARRY_INSTANCE_ID: provisioning-${REVIVAL_REVISION:-${REVIVAL_RELEASE_ID}}
-      CARRY_POD_NAME: provisioning-${REVIVAL_REVISION:-${REVIVAL_RELEASE_ID}}-1
-      CARRY_WORKLOAD: provisioning
-      CARRY_ENROLLMENT_PINCODE: ${CARRY_ENROLLMENT_PINCODE:-}
-      CARRY_ENROLLMENT_USER_ID: ${CARRY_ENROLLMENT_USER_ID:-}
-      CARRY_OPAQUE_SEED: ${CARRY_OPAQUE_SEED:-}
+      COSMOS_INSTANCE_ID: provisioning-${REVIVAL_REVISION:-${REVIVAL_RELEASE_ID}}
+      COSMOS_POD_NAME: provisioning-${REVIVAL_REVISION:-${REVIVAL_RELEASE_ID}}-1
+      COSMOS_WORKLOAD: provisioning
+      COSMOS_ENROLLMENT_PINCODE: ${COSMOS_ENROLLMENT_PINCODE:-}
+      COSMOS_ENROLLMENT_USER_ID: ${COSMOS_ENROLLMENT_USER_ID:-}
+      COSMOS_OPAQUE_SEED: ${COSMOS_OPAQUE_SEED:-}
 
   center:
     build:
@@ -232,24 +232,24 @@ services:
       REVIVAL_PRODUCT: Ai Pin Revival
       REVIVAL_RELEASE_ID: ${REVIVAL_RELEASE_ID:?set REVIVAL_RELEASE_ID to the immutable release id}
       REVIVAL_DEPLOYMENT_ENVIRONMENT: ${REVIVAL_DEPLOYMENT_ENVIRONMENT:-production}
-      # A signed-in browser sends the chunked `carry_tokens` set back on every
+      # A signed-in browser sends the chunked `cosmos_tokens` set back on every
       # request, so the Cookie line alone can reach ~12.5 KB. Node's default
       # 16 KB cap covers the whole request header block, which also carries the
       # edge's X-Forwarded-* set and Cloudflare's cf-* headers, so the default
       # leaves too little room and answers 431 once the edge stops truncating.
       NODE_OPTIONS: --max-http-header-size=65536
-      CARRY_ENDPOINT_AI_BUS: ai-bus:15051
-      CARRY_ENDPOINT_NOTABLE_EVENTS: notable-events:15051
-      CARRY_ENDPOINT_CONTACTS: contacts:15051
-      CARRY_ENDPOINT_ACCOUNT: account:15051
-      CARRY_GRPC_ENDPOINT: ai-bus:15051
-      CARRY_WEBAPI_BASE_URL: http://ai-bus:18080
-      CARRY_FEATURE_FLAGS_METRICS_URL: http://feature-flags:18080
-      CARRY_EDGE_TOKEN: ${CARRY_EDGE_TOKEN:-}
-      CARRY_ADMIN_TOKEN: ${CARRY_ADMIN_TOKEN:-}
-      CARRY_CENTER_PROJECTION_TOKEN: ${CARRY_CENTER_PROJECTION_TOKEN:-}
-      CARRY_SHARE_TOKEN_SECRET: ${CARRY_SHARE_TOKEN_SECRET:-}
-      CARRY_OPERATOR_EMAILS: ${CARRY_OPERATOR_EMAILS:-}
+      COSMOS_ENDPOINT_AI_BUS: ai-bus:15051
+      COSMOS_ENDPOINT_NOTABLE_EVENTS: notable-events:15051
+      COSMOS_ENDPOINT_CONTACTS: contacts:15051
+      COSMOS_ENDPOINT_ACCOUNT: account:15051
+      COSMOS_GRPC_ENDPOINT: ai-bus:15051
+      COSMOS_WEBAPI_BASE_URL: http://ai-bus:18080
+      COSMOS_FEATURE_FLAGS_METRICS_URL: http://feature-flags:18080
+      COSMOS_EDGE_TOKEN: ${COSMOS_EDGE_TOKEN:-}
+      COSMOS_ADMIN_TOKEN: ${COSMOS_ADMIN_TOKEN:-}
+      COSMOS_CENTER_PROJECTION_TOKEN: ${COSMOS_CENTER_PROJECTION_TOKEN:-}
+      COSMOS_SHARE_TOKEN_SECRET: ${COSMOS_SHARE_TOKEN_SECRET:-}
+      COSMOS_OPERATOR_EMAILS: ${COSMOS_OPERATOR_EMAILS:-}
       AUTH_SESSION_SECRET: ${AUTH_SESSION_SECRET:-}
       KEYCLOAK_BASE_URL: ${KEYCLOAK_BASE_URL:-}
       KEYCLOAK_REALM: ${KEYCLOAK_REALM:-humane}
@@ -349,7 +349,7 @@ networks:
       <<: *revival-labels
 
 volumes:
-  carry-state:
+  cosmos-state:
     labels:
       <<: *revival-labels
       dk.andersmadsen.ai-pin-revival.data: cosmos-state

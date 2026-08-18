@@ -35,7 +35,7 @@ upstream ai_pin_revival_keycloak {
 server {
     listen 80;
     listen [::]:80;
-    server_name carry.andersmadsen.dk;
+    server_name cosmos.andersmadsen.dk;
 
     return 307 https://center.andersmadsen.dk$request_uri;
 }
@@ -47,7 +47,7 @@ server {
 # rather than making it depend on block order on a port shared with Center's own.
 server {
     listen 127.0.0.1:@@REVIVAL_LOCAL_TLS_PORT@@ ssl http2 default_server;
-    server_name carry.andersmadsen.dk;
+    server_name cosmos.andersmadsen.dk;
 
     ssl_certificate @@REVIVAL_PUBLIC_TLS_CERTIFICATE@@;
     ssl_certificate_key @@REVIVAL_PUBLIC_TLS_PRIVATE_KEY@@;
@@ -89,9 +89,9 @@ server {
 
     # A successful sign-in is the largest header exchange this origin performs.
     # `setTokenCookies` seals the Keycloak access, refresh, and id tokens into one
-    # JWE and splits it across `carry_tokens.0..3` (3000 bytes each, so the
+    # JWE and splits it across `cosmos_tokens.0..3` (3000 bytes each, so the
     # browser's 4096-byte per-cookie ceiling is never reached), then writes the
-    # manifest, the cleared unused slots, and `carry_session` besides. The reply
+    # manifest, the cleared unused slots, and `cosmos_session` besides. The reply
     # therefore carries six Set-Cookie lines — ten on the OIDC callback, which
     # also clears the four ceremony cookies — up to roughly 14 KB in total.
     # Nginx must hold an entire upstream header block in ONE proxy buffer, and

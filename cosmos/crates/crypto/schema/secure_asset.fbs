@@ -1,6 +1,6 @@
 // Independently authored from scrubbed wire observations of an operator-owned
 // device. Field order and scalar widths are protocol facts; names are clone-owned.
-namespace carry.krypton.secureasset;
+namespace cosmos.krypton.secureasset;
 
 table Header {
   kid:[ubyte];

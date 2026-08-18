@@ -236,7 +236,7 @@ impl LlmBackend for CodexBackend {
             let (outcome, spoken_bytes) = step_outcome(&step);
             // Instrumentation. `reason` is a closed set; every other field is a
             // count, a boolean or a byte length. The reply is user-facing prose
-            // and the block bodies carry tool arguments, so neither is ever
+            // and the block bodies contain tool arguments, so neither is ever
             // logged — not even a slice.
             tracing::info!(
                 correlation = %request.correlation,
@@ -603,7 +603,7 @@ fn tool_name_digest(names: &str) -> String {
 /// How the reply's tool-call markup was recognised — or lost.
 ///
 /// Instrumentation only: counts and booleans, no text of any kind. The block
-/// bodies carry tool arguments (which the repo treats as private user data) and
+/// bodies contain tool arguments (which the repo treats as private user data) and
 /// the surrounding prose is the spoken answer, so neither may be retained.
 /// `inbound_scan_never_carries_reply_text` pins that.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -622,7 +622,7 @@ struct ToolCallScan {
     unterminated: usize,
     /// Tag-family occurrences that are NOT the exact `<tool_call>` open tag:
     /// `<tool_call_result>`, `<tool_call id="1">`, and friends. These are
-    /// invisible to the parser even when they carry a well-formed call.
+    /// invisible to the parser even when they contain a well-formed call.
     foreign_tag: usize,
 }
 
@@ -1502,7 +1502,7 @@ mod tests {
 
     // ---- instrumentation: outbound tool surface -------------------------
 
-    /// A secret-shaped string no log line may ever carry. Used by both privacy
+    /// A secret-shaped string no log line may ever contain. Used by both privacy
     /// tests below.
     const PRIVATE_MARKER: &str = "sk-live-PRIVATE-USER-SECRET-9f3a";
 
@@ -1850,7 +1850,7 @@ mod tests {
         let system = build_tool_step_system_text(base, &tools);
         assert!(
             system.contains(PRIVATE_MARKER),
-            "fixture must actually carry the secret into the assembled prompt"
+            "fixture must actually contain the secret into the assembled prompt"
         );
 
         let summary = ToolSurfaceSummary::measure(&tools, base.len(), &system);
@@ -1937,7 +1937,7 @@ mod tests {
 
         // Several DIFFERENT failures and no success: `reason` is a triage
         // token, so its precedence is pinned here (the per-failure counters in
-        // the log line always carry the full picture). Without these two rows
+        // the log line always contain the full picture). Without these two rows
         // the precedence chain could be reordered silently.
         let (_, scan) = parse_tool_step_text_scanned(
             "<tool_call>{\"x\":1}</tool_call><tool_call>nope</tool_call>",
@@ -2065,7 +2065,7 @@ mod tests {
         // BEHAVIOUR PIN. The instrumentation must not move a single
         // accept/reject line, or the operator's before/after comparison
         // silently changes meaning. Each row asserts the parse OUTCOME the
-        // loop receives next to the reason code the log will carry, so a
+        // loop receives next to the reason code the log will contain, so a
         // counter can never drift away from the decision it describes.
         struct Case {
             text: &'static str,

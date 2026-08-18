@@ -324,7 +324,7 @@ impl AgenticReadToolBroker {
 }
 
 /// Words allowed in a search query without appearing in the user's own words.
-/// Deliberately tiny and closed: these carry no entity, so admitting them lets
+/// Deliberately tiny and closed: these contain no entity, so admitting them lets
 /// the model phrase a query naturally without widening what it can search for.
 const QUERY_STOPWORDS: &[&str] = &[
     "a", "an", "and", "are", "as", "at", "be", "by", "did", "do", "does", "for", "from", "how",
@@ -892,7 +892,7 @@ impl AgenticToolExecutor for AgenticReadToolBroker {
 
 fn unavailable(tool: &str, reason: &str) -> Value {
     let mut result = json!({"status": "unavailable", "tool": tool, "reason": reason});
-    // When an external capability could not be reached, carry the exact spoken
+    // When an external capability could not be reached, contain the exact spoken
     // sentence the wearer should hear. Without it the model sees only
     // `tool: web_search, reason: provider_unavailable` — internal jargon it turns
     // into a generic "something went wrong", the failure the roadmap recorded
@@ -2107,7 +2107,7 @@ mod tests {
         ] {
             assert!(
                 unavailable(tool, "timeout")["message"].is_string(),
-                "{tool} failure must carry a spoken message"
+                "{tool} failure must contain a spoken message"
             );
         }
 
@@ -2736,7 +2736,7 @@ mod tests {
             .with_test_nominatim_search_endpoint(format!("http://{address}/search"));
 
         // When context equals selected ("Sudan", Some("Sudan")), the result
-        // must still carry country proof. A provider returning country
+        // must still contain country proof. A provider returning country
         // "South Sudan" must be rejected, and no fallback is attempted because
         // the query already matched the selected span.
         let place = resolve_selected_place(&osm, "Sudan", Some("Sudan"))
@@ -2813,7 +2813,7 @@ mod tests {
     /// `SpotifyService`, so there is no seam to call them from a test. Pin them
     /// against the source instead — and prove the scan found something first,
     /// so a renamed anchor fails loudly rather than passing on an empty set.
-    /// The anchors carry escaped quotes here, so this test cannot match its own
+    /// The anchors contain escaped quotes here, so this test cannot match its own
     /// source and pass vacuously.
     #[test]
     fn music_tool_payload_gained_only_the_ranking_string() {
@@ -2844,7 +2844,7 @@ mod tests {
         ];
 
         // `music_artist_top_tracks` and `music_catalog_search` — both reach the
-        // same provider branch, so both must carry the provenance.
+        // same provider branch, so both must contain the provenance.
         let mut blocks = Vec::new();
         let mut rest = SOURCE;
         while let Some(start) = rest.find(TRACK_LIST) {
@@ -2861,7 +2861,7 @@ mod tests {
         assert_eq!(
             SOURCE.matches(RANKING_FIELD).count(),
             2,
-            "both music payloads must carry ranking provenance into the turn trace",
+            "both music payloads must contain ranking provenance into the turn trace",
         );
 
         for block in &blocks {

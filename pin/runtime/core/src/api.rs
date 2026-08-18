@@ -3069,7 +3069,7 @@ mod tests {
             serde_json::from_str(r#"{"llm":{"spoken_progress_cues":true}}"#).unwrap();
         assert_eq!(update.llm.unwrap().spoken_progress_cues, Some(true));
 
-        // Any llm write takes the rebuild path, which is the branch carrying
+        // Any llm write takes the rebuild path, which is the branch containing
         // the hot-apply of this setting.
         let body: UpdateSettingsRequest =
             serde_json::from_str(r#"{"llm":{"spoken_progress_cues":true}}"#).unwrap();
@@ -3095,7 +3095,7 @@ mod tests {
             serde_json::from_str(r#"{"llm":{"first_step_retry":true}}"#).unwrap();
         assert_eq!(update.llm.unwrap().first_step_retry, Some(true));
 
-        // Any llm write takes the rebuild path, which is the branch carrying
+        // Any llm write takes the rebuild path, which is the branch containing
         // the hot-apply of this setting.
         let body: UpdateSettingsRequest =
             serde_json::from_str(r#"{"llm":{"first_step_retry":true}}"#).unwrap();
@@ -3130,7 +3130,7 @@ mod tests {
         assert_eq!(update.turn_trace, Some(true));
         assert_eq!(update.turn_trace_content, Some(true));
 
-        // Any llm write takes the rebuild path, which is the branch carrying
+        // Any llm write takes the rebuild path, which is the branch containing
         // the hot-apply of these settings.
         let body: UpdateSettingsRequest =
             serde_json::from_str(r#"{"llm":{"turn_trace":true}}"#).unwrap();

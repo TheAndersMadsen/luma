@@ -41,12 +41,12 @@ RUN apt-get update \
 
 COPY --from=build /cosmos /usr/local/bin/cosmos
 
-# Durable-state mountpoint (`CARRY_STATE_DIR`). It must exist in the image AND be
+# Durable-state mountpoint (`COSMOS_STATE_DIR`). It must exist in the image AND be
 # owned by the runtime uid: Docker seeds a fresh named volume from the image
 # directory's ownership, so without this the volume would be created root-owned
 # and the nonroot process could not write its channel-key snapshot — the fix
 # would be inert at runtime while every test still passed.
-RUN install -d -o 65532 -g 65532 -m 0700 /var/lib/carry
+RUN install -d -o 65532 -g 65532 -m 0700 /var/lib/cosmos
 
 USER 65532:65532
 WORKDIR /app

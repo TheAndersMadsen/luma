@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { CARRY_ENABLED, CARRY_ENDPOINT, CARRY_WEBAPI, CARRY_WEBAPI_ENABLED } from "@/server/cosmos";
+import { COSMOS_ENABLED, COSMOS_ENDPOINT, COSMOS_WEBAPI, COSMOS_WEBAPI_ENABLED } from "@/server/cosmos";
 import { sourceHeaders, type DataFallback, type DataState } from "@/server/headers";
 import { getGrpcHealth, getWebapiHealth } from "@/server/source";
 
@@ -23,11 +23,11 @@ export interface PlaneHealth {
 }
 
 export interface HealthPayload {
-  carryConfigured: boolean;
+  cosmosConfigured: boolean;
   reachable: boolean;
   endpoint?: string;
   /** Legacy alias. Branch on `state`. */
-  source: "carry" | "fixtures";
+  source: "cosmos" | "fixtures";
   state: DataState;
   fallback?: DataFallback;
   detail: string;
@@ -38,7 +38,7 @@ export interface HealthPayload {
 }
 
 /**
- * GET /api/health — is the carry backend configured, and is it actually
+ * GET /api/health — is the cosmos backend configured, and is it actually
  * answering? The SourceBadge in the chrome of every page reads this.
  *
  * The case this exists for: Cosmos IS configured and does NOT answer. Collection
@@ -49,7 +49,7 @@ export interface HealthPayload {
  * `getMyDataOverview()`, a gRPC DeviceEventsHistoryService call — while every
  * capture and the Memories photo card come from the REST webapi: a different
  * process, a different port, different credentials (`webapiHeaders` sends no
- * CARRY_EDGE_TOKEN). With gRPC up and the webapi down the badge said "Live"
+ * COSMOS_EDGE_TOKEN). With gRPC up and the webapi down the badge said "Live"
  * while the capture plane was unavailable, which is the exact partial failure
  * the badge exists to report.
  *
@@ -69,15 +69,15 @@ export async function GET() {
     const troubled = [grpc, webapi].filter((p) => p.state !== "live");
 
     return json({
-      carryConfigured: grpc.configured || webapi.configured,
+      cosmosConfigured: grpc.configured || webapi.configured,
       // Only when EVERY configured half answered. Anything less and part of the
       // screen is a stand-in.
       reachable: state === "live",
       endpoint: grpc.endpoint ?? webapi.endpoint,
-      source: state === "live" ? "carry" : "fixtures",
+      source: state === "live" ? "cosmos" : "fixtures",
       state,
       fallback: state === "live" ? undefined : "empty",
-      detail: troubled.length === 0 ? "carry answering" : troubled.map((p) => p.detail).join("; "),
+      detail: troubled.length === 0 ? "cosmos answering" : troubled.map((p) => p.detail).join("; "),
       // Only when EVERY unhappy half is unhappy for that one reason: a real
       // outage next to an expired session is still an outage.
       reauthenticate:
@@ -89,12 +89,12 @@ export async function GET() {
     // unexpected threw. Say so rather than 500-ing the one endpoint whose whole
     // job is reporting honestly — a health probe that throws is read by the
     // badge as "nothing to report", which is the one thing it must never say.
-    const detail = error instanceof Error ? error.message : "carry unreachable";
+    const detail = error instanceof Error ? error.message : "cosmos unreachable";
     const unknown: PlaneHealth = { configured: false, state: "degraded", detail };
     return json({
-      carryConfigured: CARRY_ENABLED || CARRY_WEBAPI_ENABLED,
+      cosmosConfigured: COSMOS_ENABLED || COSMOS_WEBAPI_ENABLED,
       reachable: false,
-      endpoint: CARRY_ENDPOINT || CARRY_WEBAPI || undefined,
+      endpoint: COSMOS_ENDPOINT || COSMOS_WEBAPI || undefined,
       source: "fixtures",
       state: "degraded",
       fallback: "empty",
@@ -111,15 +111,15 @@ export async function GET() {
  * `getMyDataOverview()` — four QueryEvents at a thousand results each, every one
  * of them decrypted server side — which made the endpoint whose entire job is
  * honesty the heaviest call in the system, run from the chrome of every page
- * once a minute, and put it first in line to exceed CARRY_DEADLINE_MS and report
+ * once a minute, and put it first in line to exceed COSMOS_DEADLINE_MS and report
  * a healthy backend as unreachable.
  */
 async function probeGrpc(): Promise<PlaneHealth> {
-  if (!CARRY_ENABLED) {
+  if (!COSMOS_ENABLED) {
     return {
       configured: false,
       state: "absent",
-      detail: "CARRY_GRPC_ENDPOINT is unset - my-data is unavailable",
+      detail: "COSMOS_GRPC_ENDPOINT is unset - my-data is unavailable",
     };
   }
   try {
@@ -127,19 +127,19 @@ async function probeGrpc(): Promise<PlaneHealth> {
     return {
       configured: true,
       state: probe.state,
-      endpoint: CARRY_ENDPOINT || undefined,
+      endpoint: COSMOS_ENDPOINT || undefined,
       reauthenticate: probe.reauthenticate,
       detail:
         probe.state === "live"
-          ? "carry answering"
-          : `my-data: ${probe.degraded ?? "carry did not answer"}`,
+          ? "cosmos answering"
+          : `my-data: ${probe.degraded ?? "cosmos did not answer"}`,
     };
   } catch (error) {
     return {
       configured: true,
       state: "degraded",
-      endpoint: CARRY_ENDPOINT || undefined,
-      detail: `my-data: ${error instanceof Error ? error.message : "carry unreachable"}`,
+      endpoint: COSMOS_ENDPOINT || undefined,
+      detail: `my-data: ${error instanceof Error ? error.message : "cosmos unreachable"}`,
     };
   }
 }
@@ -149,13 +149,13 @@ async function probeWebapi(): Promise<PlaneHealth> {
   try {
     const probe = await getWebapiHealth();
     return {
-      configured: CARRY_WEBAPI_ENABLED,
+      configured: COSMOS_WEBAPI_ENABLED,
       state: probe.state,
-      endpoint: CARRY_WEBAPI || undefined,
+      endpoint: COSMOS_WEBAPI || undefined,
       reauthenticate: probe.reauthenticate,
       detail:
         probe.state === "live"
-          ? "carry webapi answering"
+          ? "cosmos webapi answering"
           : // Unconfigured already says so in its own words (WEBAPI_UNSET);
             // a failure needs naming, or "captures" is nowhere in the sentence.
             probe.state === "absent"
@@ -164,9 +164,9 @@ async function probeWebapi(): Promise<PlaneHealth> {
     };
   } catch (error) {
     return {
-      configured: CARRY_WEBAPI_ENABLED,
+      configured: COSMOS_WEBAPI_ENABLED,
       state: "degraded",
-      endpoint: CARRY_WEBAPI || undefined,
+      endpoint: COSMOS_WEBAPI || undefined,
       detail: `notes, captures and the Memories photo card: ${
         error instanceof Error ? error.message : "the webapi is unreachable"
       }`,

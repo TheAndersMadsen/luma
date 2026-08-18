@@ -144,7 +144,7 @@ internal object StockAiBusBridgeRuntime {
         }
         val packages = packageManager.getPackagesForUid(callingUid).orEmpty().toSet()
         // Confirm ironman is genuinely stock-signed by comparing it against the
-        // platform — both carry Humane's platform key. The previous check compared
+        // platform — both contain Humane's platform key. The previous check compared
         // ironman against the SERVER (`checkSignatures(ironman, serverPackage)`),
         // which can never match: our server is signed with our own key, not
         // Humane's. That rejected the real ironman on every transaction, so the

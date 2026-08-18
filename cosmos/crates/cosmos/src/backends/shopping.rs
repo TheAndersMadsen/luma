@@ -10,9 +10,9 @@ use serde::{Deserialize, Serialize};
 
 use super::{BackendError, http, key};
 
-const ENDPOINT_ENV: &str = "CARRY_SHOPPING_VISUAL_SEARCH_URL";
-const API_KEY_ENV: &str = "CARRY_SHOPPING_API_KEY";
-const ALLOWED_HOSTS_ENV: &str = "CARRY_SHOPPING_ALLOWED_HOSTS";
+const ENDPOINT_ENV: &str = "COSMOS_SHOPPING_VISUAL_SEARCH_URL";
+const API_KEY_ENV: &str = "COSMOS_SHOPPING_API_KEY";
+const ALLOWED_HOSTS_ENV: &str = "COSMOS_SHOPPING_ALLOWED_HOSTS";
 
 #[derive(Serialize)]
 struct SearchRequest {

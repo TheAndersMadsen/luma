@@ -1,4 +1,4 @@
-//! Azure AI Speech adapter for Carry's stock `SpeechService` wire contract.
+//! Azure AI Speech adapter for Cosmos's stock `SpeechService` wire contract.
 //!
 //! Azure is an optional, operator-configured provider. Credentials and utterance
 //! text are never logged. The adapter fixes the endpoint to Azure's regional TTS
@@ -14,11 +14,11 @@ use tokio::sync::mpsc;
 use tokio_stream::{Stream, wrappers::ReceiverStream};
 
 const KEY_ENV: &str = "AZURE_SPEECH_KEY";
-const SCOPED_KEY_ENV: &str = "CARRY_AZURE_SPEECH_KEY";
+const SCOPED_KEY_ENV: &str = "COSMOS_AZURE_SPEECH_KEY";
 const REGION_ENV: &str = "AZURE_SPEECH_REGION";
-const SCOPED_REGION_ENV: &str = "CARRY_AZURE_SPEECH_REGION";
+const SCOPED_REGION_ENV: &str = "COSMOS_AZURE_SPEECH_REGION";
 const VOICE_ENV: &str = "AZURE_SPEECH_VOICE";
-const SCOPED_VOICE_ENV: &str = "CARRY_AZURE_SPEECH_VOICE";
+const SCOPED_VOICE_ENV: &str = "COSMOS_AZURE_SPEECH_VOICE";
 const DEFAULT_VOICE: &str = "en-US-AvaMultilingualNeural";
 const MAX_TEXT_BYTES: usize = 8 * 1024;
 const MAX_UNARY_AUDIO_BYTES: usize = 4 * 1024 * 1024 - 128;
@@ -490,7 +490,7 @@ mod tests {
             .expect("Azure Speech environment variables");
         let audio = client
             .synthesize(
-                "Carry speech synthesis test.",
+                "Cosmos speech synthesis test.",
                 SpeechAudioFormat::Raw24Khz16BitMonoPcm,
             )
             .await

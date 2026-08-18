@@ -377,7 +377,7 @@ async fn response_event_budget_rejects_only_the_65th_frame() {
 async fn a_full_multi_tool_run_forwards_every_cue_and_exactly_one_terminal() {
     // The realistic multi-tool frame sequence a two-batch run produces:
     // action, observation, action, observation, then the terminal Respond.
-    // Every cue turn must forward as interim; exactly the terminal may carry
+    // Every cue turn must forward as interim; exactly the terminal may contain
     // requires_response, or stock would dispatch a progress cue as the answer.
     let mut state = StreamingSessionState::default();
     let (tx, mut rx) = mpsc::channel(16);

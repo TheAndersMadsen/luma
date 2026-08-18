@@ -59,7 +59,7 @@ import {
 /** The ADB session itself — is a device attached and authorized? */
 export type PinDeviceStatus = "disconnected" | "connecting" | "connected";
 
-/** The path currently carrying ordinary Pin API requests. */
+/** The path currently containing ordinary Pin API requests. */
 export type PinConnectionMode = "usb" | "remote" | null;
 
 /**
@@ -162,7 +162,7 @@ export function healthMonitorDecision(
  * would release the USB device on every navigation. `connect()` is already
  * idempotent on a live session, so only `disconnect()` needs neutralising.
  *
- * What it does NOT do any more is carry the device-shell decision. `session` is
+ * What it does NOT do any more is contain the device-shell decision. `session` is
  * the wearer session from `@/lib/pin-session`, which has no `openPty` and no
  * free-form ADB service on it at all, so the refusal below is a tripwire rather
  * than the boundary: anything that casts its way past the type still gets an
@@ -512,7 +512,7 @@ export function PinDeviceProvider({ children }: { children: React.ReactNode }) {
   }, [client, serviceStatus, queryClient]);
 
   /*
-   * Iroh's compatibility bridge buffers responses, so it cannot carry the
+   * Iroh's compatibility bridge buffers responses, so it cannot contain the
    * never-ending /api/events stream. Poll health instead and periodically
    * invalidate Pin queries. That also lets a sleeping Pin recover by itself.
    */
@@ -601,7 +601,7 @@ export function PinDeviceProvider({ children }: { children: React.ReactNode }) {
        * `streamHung` branch below could never fire, and the monitor was
        * retired for good while `serviceStatus` stayed "online" for a Pin that
        * answered nothing. A probe still outstanding a whole interval later is
-       * a failure; abandon it and carry on.
+       * a failure; abandon it and continue.
        */
       if (probing) {
         if (Date.now() - probeStartedAt <= HEALTH_CHECK_INTERVAL_MS) return;

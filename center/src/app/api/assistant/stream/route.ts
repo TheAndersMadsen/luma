@@ -1,6 +1,6 @@
 import {
-  CARRY_WEBAPI,
-  CARRY_WEBAPI_ENABLED,
+  COSMOS_WEBAPI,
+  COSMOS_WEBAPI_ENABLED,
   SessionExpiredError,
   ingestAnswerEvent,
   requestMetadata,
@@ -20,7 +20,7 @@ import { logError, logWarn } from "@/server/log";
  * blocks or fails the streamed turn the wearer is already hearing.
  */
 export async function POST(request: Request) {
-  if (!CARRY_WEBAPI_ENABLED) {
+  if (!COSMOS_WEBAPI_ENABLED) {
     return Response.json({ error: "The assistant is not configured." }, { status: 503 });
   }
   const body = await request.text();
@@ -67,7 +67,7 @@ export async function POST(request: Request) {
   // already uses the real wearer, so omitting it here also split one turn across
   // two identities.
   const authorization = md?.get("authorization")?.[0];
-  const upstream = await fetch(`${CARRY_WEBAPI}/demo-api/trace/stream`, {
+  const upstream = await fetch(`${COSMOS_WEBAPI}/demo-api/trace/stream`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -135,7 +135,7 @@ export async function POST(request: Request) {
       // whole turn back until it ends. nginx and its derivatives honour this
       // header to disable that per response.
       "x-accel-buffering": "no",
-      "x-data-source": "carry",
+      "x-data-source": "cosmos",
     },
   });
 }

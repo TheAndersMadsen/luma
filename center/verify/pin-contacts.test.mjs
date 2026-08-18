@@ -13,7 +13,7 @@
  *
  * The second is WHICH STORE. Center now has two contacts panes over two
  * unrelated databases: /settings/contacts reads Cosmos's principal-keyed store
- * through CARRY_ENDPOINT_CONTACTS, and /settings/pin/contacts reads the Pin's
+ * through COSMOS_ENDPOINT_CONTACTS, and /settings/pin/contacts reads the Pin's
  * own SQLite over USB. Nothing syncs between them, and a wearer who edits the
  * wrong one sees a save succeed and no change on the device. Both panes must
  * therefore name their store and point at the other one; the source assertions
@@ -236,7 +236,7 @@ test("both contacts panes name their store and point at the other one", async ()
   // Registered in the information architecture, and distinguishable there: the
   // device pane sits under the "On this Pin" group and the account pane under
   // "Ai Pin", so two rows both reading "Contacts" are never ambiguous. The nav
-  // label used to carry the store itself; the group header carries it now, and
+  // label used to contain the store itself; the group header carries it now, and
   // the assertions above already require each PANE to name its own store and
   // link to the other, which is where a wearer is when they delete.
   assert.match(registry, /href: "\/settings\/pin\/contacts"/);

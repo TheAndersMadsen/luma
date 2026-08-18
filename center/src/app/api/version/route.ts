@@ -4,7 +4,7 @@ export const dynamic = "force-dynamic";
 
 const RELEASE_ID =
   process.env.REVIVAL_RELEASE_ID?.trim() ||
-  process.env.CARRY_REVISION?.trim() ||
+  process.env.COSMOS_REVISION?.trim() ||
   "development";
 
 /** Public deployment identity for canaries; deliberately excludes infrastructure details. */

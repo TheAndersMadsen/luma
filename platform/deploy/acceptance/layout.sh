@@ -142,7 +142,7 @@ fi
 
 for legacy in src apps services integration manifest components device private state \
   ops config tools tests \
-  humane-carry-clone PenumbraOS PenumbraOS-Revival-Fork
+  humane-cosmos-clone PenumbraOS PenumbraOS-Revival-Fork
 do
   if [ -e "$ROOT/$legacy" ] || [ -L "$ROOT/$legacy" ]; then
     fail "legacy top-level source boundary is forbidden: $legacy"

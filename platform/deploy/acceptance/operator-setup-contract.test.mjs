@@ -120,7 +120,7 @@ test("the checked-in setup contract loads as one immutable versioned model", asy
 
   assert.equal(operatorCommand(contract, "pin.install")?.effect, "device-mutation");
   assert.equal(operatorJourney(contract, "pin")?.steps.at(-1)?.id, "confirm");
-  assert.equal(operatorSetting(contract, "CARRY_ADMIN_TOKEN")?.name, "REVIVAL_ADMIN_TOKEN");
+  assert.equal(operatorSetting(contract, "COSMOS_ADMIN_TOKEN")?.name, "REVIVAL_ADMIN_TOKEN");
   assert.equal(operatorCommand(contract, "does.not.exist"), null);
 
   const schema = JSON.parse(await readFile(schemaPath, "utf8"));
@@ -261,7 +261,7 @@ test("command help metadata is concise and points at real documentation", async 
   );
 });
 
-test("the settings catalog covers .env.example without carrying values", async () => {
+test("the settings catalog covers .env.example without containing values", async () => {
   const [contract, envSource] = await Promise.all([
     loadOperatorSetupContract(),
     readFile(envExamplePath, "utf8"),

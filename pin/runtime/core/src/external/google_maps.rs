@@ -1078,7 +1078,7 @@ fn optional_u32(
     Ok(Some(value))
 }
 
-/// MNC `00` is valid. Proto3 scalar fields do not carry presence, so a zero
+/// MNC `00` is valid. Proto3 scalar fields do not contain presence, so a zero
 /// network code is treated as present when the corresponding MCC is present.
 fn optional_mobile_network_code(
     value: i32,

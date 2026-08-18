@@ -1,4 +1,4 @@
-// Feature-flag distribution for the Carry-compatible edge.
+// Feature-flag distribution for the Cosmos-compatible edge.
 //
 // Independently authored interface reconstruction. Field numbers match the
 // observed wire contract so a stock device deserializes the response; the

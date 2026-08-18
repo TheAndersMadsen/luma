@@ -127,7 +127,7 @@ them.
 
 ## Compatibility aliases
 
-`CARRY_*` compatibility names remain accepted where the contract declares an
+`COSMOS_*` compatibility names remain accepted where the contract declares an
 alias. New installations should use the matching canonical `REVIVAL_*` or
 provider name. `config check` fails when a nonblank canonical value and its
 alias disagree.

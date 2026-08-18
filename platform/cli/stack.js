@@ -125,8 +125,8 @@ function localDoctorReport() {
   try {
     values = validateRuntime();
     add('configuration', 'PASS', `${ENV_FILE} is mode 0600 and internally coherent.`);
-    add('remote-tts', valueOf(values, 'REVIVAL_REMOTE_TTS_ENABLED', 'CARRY_REMOTE_TTS_ENABLED') === 'true' ? 'PASS' : 'WARN',
-      `Remote TTS is ${valueOf(values, 'REVIVAL_REMOTE_TTS_ENABLED', 'CARRY_REMOTE_TTS_ENABLED') === 'true' ? 'enabled' : 'disabled'} by configuration.`);
+    add('remote-tts', valueOf(values, 'REVIVAL_REMOTE_TTS_ENABLED', 'COSMOS_REMOTE_TTS_ENABLED') === 'true' ? 'PASS' : 'WARN',
+      `Remote TTS is ${valueOf(values, 'REVIVAL_REMOTE_TTS_ENABLED', 'COSMOS_REMOTE_TTS_ENABLED') === 'true' ? 'enabled' : 'disabled'} by configuration.`);
     add('spotify', values.REVIVAL_SPOTIFY_ADAPTER_URL ? 'PASS' : 'WARN',
       `Pin-native Spotify adapter configuration is ${values.REVIVAL_SPOTIFY_ADAPTER_URL ? 'present' : 'not configured'}; no token contents were read.`);
   } catch (error) {

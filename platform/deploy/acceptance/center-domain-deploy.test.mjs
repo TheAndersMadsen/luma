@@ -19,7 +19,7 @@ const streamTemplate = path.join(
 );
 const deviceStream = "/etc/nginx/streams-enabled/ai-pin-revival-device-edge.conf";
 const canonicalOrigin = "https://center.andersmadsen.dk";
-const legacyOrigin = "https://carry.andersmadsen.dk";
+const legacyOrigin = "https://cosmos.andersmadsen.dk";
 const canonicalAvailable = "/etc/nginx/sites-available/ai-pin-revival-center";
 const canonicalEnabled = "/etc/nginx/sites-enabled/ai-pin-revival-center";
 
@@ -82,14 +82,14 @@ function expandedNginxSection(filename, certificate, privateKey) {
   return `# configuration file ${filename}:
 server {
     listen 443 ssl http2;
-    server_name carry.andersmadsen.dk;
+    server_name cosmos.andersmadsen.dk;
     ssl_certificate ${certificate};
     ssl_certificate_key ${privateKey};
 }
 `;
 }
 
-function discoveryFixture(filename, legacyEnabledPath = "/etc/nginx/sites-enabled/carry") {
+function discoveryFixture(filename, legacyEnabledPath = "/etc/nginx/sites-enabled/cosmos") {
   writeJson(filename, {
     schemaVersion: 1,
     kind: "center-public-edge",
@@ -120,13 +120,13 @@ function preparedNginxFixture(context, name) {
   const discovery = path.join(work, "discovery.json");
   const legacyAvailable = rooted(
     filesystemRoot,
-    "/etc/nginx/sites-available/legacy-carry",
+    "/etc/nginx/sites-available/legacy-cosmos",
   );
-  const legacyEnabled = rooted(filesystemRoot, "/etc/nginx/sites-enabled/carry");
+  const legacyEnabled = rooted(filesystemRoot, "/etc/nginx/sites-enabled/cosmos");
   fs.mkdirSync(path.dirname(legacyAvailable), { recursive: true });
   fs.mkdirSync(path.dirname(legacyEnabled), { recursive: true });
-  fs.writeFileSync(legacyAvailable, "# prior Carry vhost\n", { mode: 0o640 });
-  fs.symlinkSync("../sites-available/legacy-carry", legacyEnabled);
+  fs.writeFileSync(legacyAvailable, "# prior Cosmos vhost\n", { mode: 0o640 });
+  fs.symlinkSync("../sites-available/legacy-cosmos", legacyEnabled);
   discoveryFixture(discovery);
   runHelper([
     "nginx-snapshot",
@@ -186,7 +186,7 @@ function legacyRecordFrom(newRecord, work) {
   fs.writeFileSync(
     path.join(directory, "rendered.conf"),
     "server {\n    listen 443 ssl http2;\n    listen [::]:443 ssl http2;\n"
-      + "    server_name center.andersmadsen.dk carry.andersmadsen.dk;\n}\n",
+      + "    server_name center.andersmadsen.dk cosmos.andersmadsen.dk;\n}\n",
     { mode: 0o600 },
   );
   const desired = readJson(path.join(source, "DESIRED.json"));
@@ -199,7 +199,7 @@ function legacyRecordFrom(newRecord, work) {
 
 function cloudflaredConfig({ center = null, catchalls = 1, catchallFirst = false } = {}) {
   const rules = [
-    ["carry.andersmadsen.dk", "http://localhost:80"],
+    ["cosmos.andersmadsen.dk", "http://localhost:80"],
     ["aipin.andersmadsen.dk", "http://localhost:18080"],
     ...Array.from({ length: 9 }, (_, index) => [
       `service-${index + 2}.andersmadsen.dk`,
@@ -251,7 +251,7 @@ function preparedCloudflaredFixture(context, name, config = cloudflaredConfig())
 // implemented: this fixture proves the fail-closed discovery behavior of the
 // independently authored deployment helper; it is not a claim about Humane's
 // private infrastructure.
-test("[implemented] discovery accepts exactly one enabled legacy Carry TLS vhost", (context) => {
+test("[implemented] discovery accepts exactly one enabled legacy Cosmos TLS vhost", (context) => {
   const work = temporaryDirectory(context, "center-domain-discovery");
   const input = path.join(work, "nginx-expanded.conf");
   const output = path.join(work, "discovery.json");
@@ -259,7 +259,7 @@ test("[implemented] discovery accepts exactly one enabled legacy Carry TLS vhost
     input,
     [
       expandedNginxSection(
-        "/etc/nginx/sites-enabled/carry",
+        "/etc/nginx/sites-enabled/cosmos",
         "/etc/letsencrypt/live/andersmadsen.dk/fullchain.pem",
         "/etc/letsencrypt/live/andersmadsen.dk/privkey.pem",
       ),
@@ -272,14 +272,14 @@ test("[implemented] discovery accepts exactly one enabled legacy Carry TLS vhost
   assert.deepEqual(readJson(output), {
     schemaVersion: 1,
     kind: "center-public-edge",
-    legacyEnabledPath: "/etc/nginx/sites-enabled/carry",
+    legacyEnabledPath: "/etc/nginx/sites-enabled/cosmos",
     certificatePath: "/etc/letsencrypt/live/andersmadsen.dk/fullchain.pem",
     privateKeyPath: "/etc/letsencrypt/live/andersmadsen.dk/privkey.pem",
   });
   assert.equal(fs.statSync(output).mode & 0o777, 0o600);
 });
 
-test("[implemented] discovery rejects ambiguous legacy Carry TLS ownership", (context) => {
+test("[implemented] discovery rejects ambiguous legacy Cosmos TLS ownership", (context) => {
   const work = temporaryDirectory(context, "center-domain-ambiguous");
   const input = path.join(work, "nginx-expanded.conf");
   const output = path.join(work, "discovery.json");
@@ -287,12 +287,12 @@ test("[implemented] discovery rejects ambiguous legacy Carry TLS ownership", (co
     input,
     [
       expandedNginxSection(
-        "/etc/nginx/sites-enabled/carry-a",
+        "/etc/nginx/sites-enabled/cosmos-a",
         "/etc/letsencrypt/live/a/fullchain.pem",
         "/etc/letsencrypt/live/a/privkey.pem",
       ),
       expandedNginxSection(
-        "/etc/nginx/sites-enabled/carry-b",
+        "/etc/nginx/sites-enabled/cosmos-b",
         "/etc/letsencrypt/live/b/fullchain.pem",
         "/etc/letsencrypt/live/b/privkey.pem",
       ),
@@ -303,7 +303,7 @@ test("[implemented] discovery rejects ambiguous legacy Carry TLS ownership", (co
     ["discover-nginx", "--input", input, "--output", output],
     { fails: true },
   );
-  assert.match(result.stderr, /expected one enabled Carry TLS vhost, found 2/);
+  assert.match(result.stderr, /expected one enabled Cosmos TLS vhost, found 2/);
   assert.equal(fs.existsSync(output), false);
 });
 
@@ -314,13 +314,13 @@ test("[implemented] strict render and Nginx file transaction resume and restore 
   const discovery = path.join(work, "discovery.json");
   const legacyAvailable = rooted(
     filesystemRoot,
-    "/etc/nginx/sites-available/legacy-carry",
+    "/etc/nginx/sites-available/legacy-cosmos",
   );
-  const legacyEnabled = rooted(filesystemRoot, "/etc/nginx/sites-enabled/carry");
+  const legacyEnabled = rooted(filesystemRoot, "/etc/nginx/sites-enabled/cosmos");
   fs.mkdirSync(path.dirname(legacyAvailable), { recursive: true });
   fs.mkdirSync(path.dirname(legacyEnabled), { recursive: true });
-  fs.writeFileSync(legacyAvailable, "# prior Carry vhost\n", { mode: 0o640 });
-  fs.symlinkSync("../sites-available/legacy-carry", legacyEnabled);
+  fs.writeFileSync(legacyAvailable, "# prior Cosmos vhost\n", { mode: 0o640 });
+  fs.symlinkSync("../sites-available/legacy-cosmos", legacyEnabled);
   discoveryFixture(discovery);
 
   runHelper([
@@ -337,7 +337,7 @@ test("[implemented] strict render and Nginx file transaction resume and restore 
   assert.equal(snapshot.objects.legacyEnabled.type, "symlink");
   assert.equal(
     snapshot.objects.legacyEnabled.target,
-    "../sites-available/legacy-carry",
+    "../sites-available/legacy-cosmos",
   );
 
   const tamperedTemplate = path.join(work, "tampered.conf.template");
@@ -472,8 +472,8 @@ test("[implemented] strict render and Nginx file transaction resume and restore 
   assert.equal(pathObjectExists(rooted(filesystemRoot, canonicalAvailable)), false);
   assert.equal(pathObjectExists(rooted(filesystemRoot, canonicalEnabled)), false);
   assert.equal(fs.lstatSync(legacyEnabled).isSymbolicLink(), true);
-  assert.equal(fs.readlinkSync(legacyEnabled), "../sites-available/legacy-carry");
-  assert.equal(fs.readFileSync(legacyAvailable, "utf8"), "# prior Carry vhost\n");
+  assert.equal(fs.readlinkSync(legacyEnabled), "../sites-available/legacy-cosmos");
+  assert.equal(fs.readFileSync(legacyAvailable, "utf8"), "# prior Cosmos vhost\n");
   assert.equal(fs.statSync(legacyAvailable).mode & 0o777, 0o640);
 });
 
@@ -547,7 +547,7 @@ test("[implemented] Nginx restore resumes an exact reverse partial state", (cont
   assert.equal(pathObjectExists(fixture.canonicalEnabled), false);
   assert.equal(
     fs.readlinkSync(fixture.legacyEnabled),
-    "../sites-available/legacy-carry",
+    "../sites-available/legacy-cosmos",
   );
 });
 
@@ -1019,7 +1019,7 @@ test("[implemented] Keycloak client migration is exact, secret-free, and backup-
     webOrigins: desired.webOrigins,
     logout: desired.attributes["post.logout.redirect.uris"],
   });
-  assert.doesNotMatch(browserSurface, /\*|"\+"|carry\.andersmadsen\.dk/);
+  assert.doesNotMatch(browserSurface, /\*|"\+"|cosmos\.andersmadsen\.dk/);
   assert.equal(journal.backupManifest, fs.realpathSync(backupManifest));
   assert.equal(journal.backupManifestSha256, sha256(backupManifest));
   assert.equal(journal.beforeSha256, sha256(path.join(directory, "before.json")));
@@ -1212,7 +1212,7 @@ test("[implemented] deployment entrypoints bind the Center domain transaction", 
   }
 
   assertSource(scripts.canary, /center_base=https:\/\/center\.andersmadsen\.dk/, "public canary must use Center");
-  assertSource(scripts.canary, /https:\/\/carry\.andersmadsen\.dk/, "public canary must retain Carry redirect coverage");
+  assertSource(scripts.canary, /https:\/\/cosmos\.andersmadsen\.dk/, "public canary must retain Cosmos redirect coverage");
   assertSource(scripts.canary, /307/, "legacy redirect must preserve the request method");
   assertSource(scripts.canary, /[Ll]ocation/, "legacy redirect must verify Location");
 });

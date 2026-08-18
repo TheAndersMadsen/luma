@@ -21,7 +21,7 @@ mod llm;
 mod nearby;
 // Staged S1/S2 decision layers (stock-NLU assists). The tflitec encoder
 // runtime and the chat-turn injection seams are the consumers and land behind
-// the `local-nlu` feature next; until then the pure decision layers carry
+// the `local-nlu` feature next; until then the pure decision layers include
 // their golden tests but no production caller. Remove this allow with S1.
 #[allow(dead_code)]
 mod nlu;
@@ -34,7 +34,7 @@ mod synapse;
 mod tier_a;
 // The turn-trace capture seam (the chat-turn loop and the AIBus tool executor)
 // lands separately. Until it does, the recorder and the write half of its
-// persistence sink carry their own tests but no production caller; the read
+// persistence sink contain their own tests but no production caller; the read
 // half, the retention, and the configuration are live. Remove these allows
 // with the capture seam.
 #[allow(dead_code)]

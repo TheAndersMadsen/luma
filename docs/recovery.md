@@ -17,13 +17,13 @@ as exactly one copy anywhere.
 | Attestation CA private key | server `<attestation root>/ca.key` (+ `ca.crt`) | Its public root is pinned inside the APKs already installed on the Pin. Lose the key and no device-attestation credential the installed Pin accepts can ever be minted again. | `protected.tar.gz` |
 | DeviceUser CA private key | server `<DeviceUser root>/duc-ca.key` (+ `duc-ca.crt`) | Signs the client certificates the mTLS edge checks. Lose it and no new device certificate verifies. | `protected.tar.gz` |
 | Pin signing keystores | operator machine `~/.config/ai-pin-revival/secrets/pin/*.keystore` + `signing.env` | Android refuses an update signed by a different key. Lose these and no signed upgrade can ever be installed on the Pin already in the wearer's hand. | **no server backup** — only a `--fetch` bundle |
-| Center channel key | server `/home/anders/carry-center-data/channel-key.json` | The AES key Center seals wearer content with. Lose it and everything already sealed stays sealed. | `center-data.tar.gz` |
-| Cosmos key material | server volume `humane-carry-clone_carry-state` | Holds the device channel keys. The Pin mints its key id once and never re-establishes it. | `cosmos-state.tar.gz` |
+| Center channel key | server `/home/anders/cosmos-center-data/channel-key.json` | The AES key Center seals wearer content with. Lose it and everything already sealed stays sealed. | `center-data.tar.gz` |
+| Cosmos key material | server volume `humane-cosmos-clone_cosmos-state` | Holds the device channel keys. The Pin mints its key id once and never re-establishes it. | `cosmos-state.tar.gz` |
 
 **Do not assume where the two CA roots live.** The backup does not: it reads the
 active root off the running container's read-only bind and accepts either the
 canonical `~/ai-pin-revival/private/{attest,duc}` or the legacy
-`/home/anders/carry-{attest,duc}`, refusing anything else
+`/home/anders/cosmos-{attest,duc}`, refusing anything else
 (`platform/deploy/vps/remote/common.sh:1256-1297`). Whichever it found is written
 into `active-security-roots.tsv` in every backup, and the fetch-side key-material
 proof follows that file rather than a constant. Both pairs of directories existed
@@ -137,7 +137,7 @@ read — not this page — because it is generated from the host that was backed
 roots, `/etc/nginx/{nginx.conf,sites-available,sites-enabled}`,
 `/etc/systemd/system/penumbra-center-bridge.service`, `/etc/penumbra` and
 `/var/lib/penumbra-center`; and, when they existed on the source host,
-`~/ai-pin-revival/private`, `/home/anders/carry-edge`, the three private env
+`~/ai-pin-revival/private`, `/home/anders/cosmos-edge`, the three private env
 files, the Keycloak theme, `/etc/nginx/conf.d`, `/etc/cloudflared` and
 `~/.cloudflared`. `protected-presence.tsv` records which optional paths were
 present, so an absence is visible rather than assumed.
@@ -158,18 +158,18 @@ step 7.
 (`external: true` in `platform/compose/production.yaml`):
 
 ```sh
-for volume in carry-state carry-pgdata prometheus-data grafana-data; do
-  docker volume create "humane-carry-clone_$volume"
+for volume in cosmos-state cosmos-pgdata prometheus-data grafana-data; do
+  docker volume create "humane-cosmos-clone_$volume"
 done
 ```
 
-then, for each archive/volume pair — `cosmos-state.tar.gz` → `carry-state`,
-`postgres-data.tar.gz` → `carry-pgdata`, `prometheus-data.tar.gz` →
+then, for each archive/volume pair — `cosmos-state.tar.gz` → `cosmos-state`,
+`postgres-data.tar.gz` → `cosmos-pgdata`, `prometheus-data.tar.gz` →
 `prometheus-data`, `grafana-data.tar.gz` → `grafana-data`:
 
 ```sh
 docker run --rm --network none \
-  -v "humane-carry-clone_<volume>:/restore" \
+  -v "humane-cosmos-clone_<volume>:/restore" \
   -v "$PWD/<archive>.tar.gz:/backup/data.tar.gz:ro" \
   <helper-image> sh -euc 'tar -xzpf /backup/data.tar.gz -C /restore'
 ```
@@ -180,9 +180,9 @@ Use the digest-pinned helper image named in `platform/deploy/vps/remote/common.s
 **4. Restore Center's bind directory.**
 
 ```sh
-sudo mkdir -p /home/anders/carry-center-data
+sudo mkdir -p /home/anders/cosmos-center-data
 sudo tar --numeric-owner --acls --xattrs --xattrs-include='*' \
-  -xzpf center-data.tar.gz -C /home/anders/carry-center-data
+  -xzpf center-data.tar.gz -C /home/anders/cosmos-center-data
 ```
 
 This is where `channel-key.json` comes back. Its mode and owner are recorded in
@@ -191,7 +191,7 @@ store as "first run" and would mint a new identity over it.
 
 **5. Restore PostgreSQL.** `postgres-data.tar.gz` (step 3) is a physical
 snapshot of a cleanly stopped cluster and is the fastest path — start the
-Postgres container against the restored `carry-pgdata` volume, using the image
+Postgres container against the restored `cosmos-pgdata` volume, using the image
 recorded in `postgres-restore-image-id.txt`.
 
 If you instead rebuild logically into a blank cluster, restore in this order and
@@ -213,7 +213,7 @@ lifetimes, theme binding, and the wearer's account. There is no realm export in
 this repository for production; `keycloak.sql.gz` is it.
 
 **6. Prove the restore.** `invariants.tsv` carries the expected row count for the
-eight `carry_*` relations the system cares about, the Cosmos state volume's file
+eight `cosmos_*` relations the system cares about, the Cosmos state volume's file
 and byte counts, and the channel key's digest, mode and owner
 (`platform/deploy/vps/remote/common.sh:1673-1703`). `postgres-data.tsv` carries
 one line per relation in *both* databases with its kind, its row count and a
@@ -232,8 +232,8 @@ the sidecar existed have none; the capture then falls back to the live column
 list, which is the older, stricter behaviour.
 
 Expect one legitimate difference: the reviewed data-removal statement in
-`0005_device_status_namespacing.sql` and the `carry_memory.thumbnail_count`
-backfill are both held back unless `CARRY_ALLOW_DATA_REMOVALS=1` is set on the
+`0005_device_status_namespacing.sql` and the `cosmos_memory.thumbnail_count`
+backfill are both held back unless `COSMOS_ALLOW_DATA_REMOVALS=1` is set on the
 Cosmos workload, so a restored stack reproduces the backup's counts rather than a
 post-cleanup shape. That is the intended result here — see
 [operations](operations.md#what-a-deploy-will-not-do-to-the-wearers-rows).
@@ -243,7 +243,7 @@ post-cleanup shape. That is the intended result here — see
 `desired.yml`, the journal, and which state was active). Bring the tunnel up
 against the restored `~/.cloudflared` credentials before opening nginx.
 
-Then put the device edge back. As step 2 said, `protected.tar.gz` does not carry
+Then put the device edge back. As step 2 said, `protected.tar.gz` does not contain
 `/etc/nginx/streams-enabled/`, and the restored Center vhost listens only on its
 loopback TLS port — so until a deploy renders and installs the stream file,
 nothing binds the public `:443`. Two things have to be true before that deploy

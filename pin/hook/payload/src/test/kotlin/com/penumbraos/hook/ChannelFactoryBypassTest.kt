@@ -13,27 +13,27 @@ class ChannelFactoryBypassTest {
     @Test
     fun cloneAttestationAliasMatchesTheHostImportContract() {
         assertEquals(
-            "penumbra_carry_device_attestation_v1",
-            CarryRemoteTransport.ATTESTATION_KEY_ALIAS,
+            "penumbra_cosmos_device_attestation_v1",
+            CosmosRemoteTransport.ATTESTATION_KEY_ALIAS,
         )
     }
 
     @Test
     fun cloneAttestationSubjectMatchesTheStockDacPattern() {
         assertTrue(
-            CarryRemoteTransport.isCompatibleAttestationSubject(
+            CosmosRemoteTransport.isCompatibleAttestationSubject(
                 "2c2a0001104000ff",
                 "V:01:D:2C2A0001104000FF:P:00000001",
             ),
         )
         assertFalse(
-            CarryRemoteTransport.isCompatibleAttestationSubject(
+            CosmosRemoteTransport.isCompatibleAttestationSubject(
                 "2c2a0001104000ff",
                 "V:01:D:2c2a0001104000ff:P:pin",
             ),
         )
         assertFalse(
-            CarryRemoteTransport.isCompatibleAttestationSubject(
+            CosmosRemoteTransport.isCompatibleAttestationSubject(
                 "2c2a0001104000ff",
                 "V:01:D:2c2a0001104000fe:P:00000001",
             ),
@@ -42,19 +42,19 @@ class ChannelFactoryBypassTest {
 
     @Test
     fun onboardingAutomationAcceptsOnlyTheStockFourDigitShape() {
-        assertTrue(CarryOnboardingAutomation.isCompatiblePincode("1234"))
-        assertTrue(CarryOnboardingAutomation.isCompatiblePincode("0000"))
-        assertFalse(CarryOnboardingAutomation.isCompatiblePincode(null))
-        assertFalse(CarryOnboardingAutomation.isCompatiblePincode("123"))
-        assertFalse(CarryOnboardingAutomation.isCompatiblePincode("12345"))
-        assertFalse(CarryOnboardingAutomation.isCompatiblePincode("12a4"))
-        assertFalse(CarryOnboardingAutomation.isCompatiblePincode("１２３４"))
+        assertTrue(CosmosOnboardingAutomation.isCompatiblePincode("1234"))
+        assertTrue(CosmosOnboardingAutomation.isCompatiblePincode("0000"))
+        assertFalse(CosmosOnboardingAutomation.isCompatiblePincode(null))
+        assertFalse(CosmosOnboardingAutomation.isCompatiblePincode("123"))
+        assertFalse(CosmosOnboardingAutomation.isCompatiblePincode("12345"))
+        assertFalse(CosmosOnboardingAutomation.isCompatiblePincode("12a4"))
+        assertFalse(CosmosOnboardingAutomation.isCompatiblePincode("１２３４"))
     }
 
     @Test
     fun onboardingPreservesOnlyTheFirstPreDucWifiDisable() {
         assertTrue(
-            CarryOnboardingAutomation.shouldPreserveInitialWifi(
+            CosmosOnboardingAutomation.shouldPreserveInitialWifi(
                 cloneEnabled = true,
                 ducProvisioned = false,
                 requestedEnabled = false,
@@ -62,7 +62,7 @@ class ChannelFactoryBypassTest {
             ),
         )
         assertFalse(
-            CarryOnboardingAutomation.shouldPreserveInitialWifi(
+            CosmosOnboardingAutomation.shouldPreserveInitialWifi(
                 cloneEnabled = true,
                 ducProvisioned = false,
                 requestedEnabled = false,
@@ -70,7 +70,7 @@ class ChannelFactoryBypassTest {
             ),
         )
         assertFalse(
-            CarryOnboardingAutomation.shouldPreserveInitialWifi(
+            CosmosOnboardingAutomation.shouldPreserveInitialWifi(
                 cloneEnabled = false,
                 ducProvisioned = false,
                 requestedEnabled = false,
@@ -78,7 +78,7 @@ class ChannelFactoryBypassTest {
             ),
         )
         assertFalse(
-            CarryOnboardingAutomation.shouldPreserveInitialWifi(
+            CosmosOnboardingAutomation.shouldPreserveInitialWifi(
                 cloneEnabled = true,
                 ducProvisioned = true,
                 requestedEnabled = false,
@@ -89,53 +89,53 @@ class ChannelFactoryBypassTest {
 
     @Test
     fun provisioningIdentityBootstrapAcceptsOnlyHexDeviceIds() {
-        assertTrue(CarryRemoteTransport.isCompatibleAttestationDeviceId("2c2a0001104000ff"))
-        assertTrue(CarryRemoteTransport.isCompatibleAttestationDeviceId("A0"))
-        assertFalse(CarryRemoteTransport.isCompatibleAttestationDeviceId(null))
-        assertFalse(CarryRemoteTransport.isCompatibleAttestationDeviceId(""))
-        assertFalse(CarryRemoteTransport.isCompatibleAttestationDeviceId("2c2a:001"))
-        assertFalse(CarryRemoteTransport.isCompatibleAttestationDeviceId("2c2a 001"))
+        assertTrue(CosmosRemoteTransport.isCompatibleAttestationDeviceId("2c2a0001104000ff"))
+        assertTrue(CosmosRemoteTransport.isCompatibleAttestationDeviceId("A0"))
+        assertFalse(CosmosRemoteTransport.isCompatibleAttestationDeviceId(null))
+        assertFalse(CosmosRemoteTransport.isCompatibleAttestationDeviceId(""))
+        assertFalse(CosmosRemoteTransport.isCompatibleAttestationDeviceId("2c2a:001"))
+        assertFalse(CosmosRemoteTransport.isCompatibleAttestationDeviceId("2c2a 001"))
     }
 
     @Test
     fun connectivityChecksUseOnlyExactCloneHosts() {
         for (host in listOf(
-            "connectivity-check.carry.humane.cloud",
-            "n.carry.humane.cloud",
+            "connectivity-check.cosmos.humane.cloud",
+            "n.cosmos.humane.cloud",
         )) {
-            assertTrue(CarryRemoteTransport.isAllowedNetworkHost(host))
-            assertTrue(CarryRemoteTransport.isAllowedNetworkHost("  ${host.uppercase()}  "))
+            assertTrue(CosmosRemoteTransport.isAllowedNetworkHost(host))
+            assertTrue(CosmosRemoteTransport.isAllowedNetworkHost("  ${host.uppercase()}  "))
         }
 
         for (host in listOf(
             "connectivity-check.prod.humane.cloud",
             "n.prod.humane.cloud",
-            "connectivity-check.carry.humane.cloud.evil.example",
-            "n.carry.humane.cloud.evil.example",
-            "evil-connectivity-check.carry.humane.cloud",
+            "connectivity-check.cosmos.humane.cloud.evil.example",
+            "n.cosmos.humane.cloud.evil.example",
+            "evil-connectivity-check.cosmos.humane.cloud",
             "evil.example",
             "",
         )) {
-            assertFalse(CarryRemoteTransport.isAllowedNetworkHost(host))
+            assertFalse(CosmosRemoteTransport.isAllowedNetworkHost(host))
         }
-        assertFalse(CarryRemoteTransport.isAllowedNetworkHost(null))
+        assertFalse(CosmosRemoteTransport.isAllowedNetworkHost(null))
     }
 
     @Test
     fun exactConnectivityHostsResolveToTheConfiguredOperatorAddress() {
         val configured = byteArrayOf(203.toByte(), 0, 113, 42)
         for (host in listOf(
-            "connectivity-check.carry.humane.cloud",
-            "n.carry.humane.cloud",
+            "connectivity-check.cosmos.humane.cloud",
+            "n.cosmos.humane.cloud",
         )) {
-            val resolved = CarryRemoteTransport.resolvedNetworkAddress(host, configured)
+            val resolved = CosmosRemoteTransport.resolvedNetworkAddress(host, configured)
             assertEquals("203.0.113.42", resolved?.hostAddress)
             assertEquals(host, resolved?.hostName)
         }
 
         assertNull(
-            CarryRemoteTransport.resolvedNetworkAddress(
-                "n.carry.humane.cloud.evil.example",
+            CosmosRemoteTransport.resolvedNetworkAddress(
+                "n.cosmos.humane.cloud.evil.example",
                 configured,
             ),
         )
@@ -172,51 +172,51 @@ class ChannelFactoryBypassTest {
     }
 
     @Test
-    fun remoteCarryGatewaysAreExactAndTlsOnly() {
-        assertTrue(CarryRemoteTransport.isAllowedGateway("api.carry.humane.cloud:443"))
-        assertTrue(CarryRemoteTransport.isAllowedGateway("onboarding.carry.humane.cloud"))
-        assertFalse(CarryRemoteTransport.isAllowedGateway("api.prod.humane.cloud:443"))
-        assertFalse(CarryRemoteTransport.isAllowedGateway("location.carry.humane.cloud:443"))
-        assertFalse(CarryRemoteTransport.isAllowedGateway("api.carry.humane.cloud:80"))
-        assertFalse(CarryRemoteTransport.isAllowedGateway("api.carry.humane.cloud.evil:443"))
-        assertFalse(CarryRemoteTransport.isAllowedGateway("https://api.carry.humane.cloud/path"))
+    fun remoteCosmosGatewaysAreExactAndTlsOnly() {
+        assertTrue(CosmosRemoteTransport.isAllowedGateway("api.cosmos.humane.cloud:443"))
+        assertTrue(CosmosRemoteTransport.isAllowedGateway("onboarding.cosmos.humane.cloud"))
+        assertFalse(CosmosRemoteTransport.isAllowedGateway("api.prod.humane.cloud:443"))
+        assertFalse(CosmosRemoteTransport.isAllowedGateway("location.cosmos.humane.cloud:443"))
+        assertFalse(CosmosRemoteTransport.isAllowedGateway("api.cosmos.humane.cloud:80"))
+        assertFalse(CosmosRemoteTransport.isAllowedGateway("api.cosmos.humane.cloud.evil:443"))
+        assertFalse(CosmosRemoteTransport.isAllowedGateway("https://api.cosmos.humane.cloud/path"))
     }
 
     @Test
-    fun remoteCarryMapsOnlyTheStockApiAndOnboardingAuthorities() {
+    fun remoteCosmosMapsOnlyTheStockApiAndOnboardingAuthorities() {
         assertEquals(
-            "api.carry.humane.cloud:443",
-            CarryRemoteTransport.redirectedGateway("api.prod.humane.cloud"),
+            "api.cosmos.humane.cloud:443",
+            CosmosRemoteTransport.redirectedGateway("api.prod.humane.cloud"),
         )
         assertEquals(
-            "onboarding.carry.humane.cloud:443",
-            CarryRemoteTransport.redirectedGateway("onboarding.prod.humane.cloud:443"),
+            "onboarding.cosmos.humane.cloud:443",
+            CosmosRemoteTransport.redirectedGateway("onboarding.prod.humane.cloud:443"),
         )
-        assertNull(CarryRemoteTransport.redirectedGateway("location.prod.humane.cloud"))
-        assertNull(CarryRemoteTransport.redirectedGateway("api.prod.humane.cloud.evil"))
-        assertNull(CarryRemoteTransport.redirectedGateway("api.prod.humane.cloud:80"))
+        assertNull(CosmosRemoteTransport.redirectedGateway("location.prod.humane.cloud"))
+        assertNull(CosmosRemoteTransport.redirectedGateway("api.prod.humane.cloud.evil"))
+        assertNull(CosmosRemoteTransport.redirectedGateway("api.prod.humane.cloud:80"))
     }
 
     @Test
     fun provisioningProcessUsesTheAttestationOnlyOnboardingPlane() {
         assertEquals(
-            "onboarding.carry.humane.cloud:443",
-            CarryRemoteTransport.redirectedGatewayForProcess(
+            "onboarding.cosmos.humane.cloud:443",
+            CosmosRemoteTransport.redirectedGatewayForProcess(
                 "api.prod.humane.cloud",
-                CarryRemoteTransport.PROVISIONING_PROCESS,
+                CosmosRemoteTransport.PROVISIONING_PROCESS,
             ),
         )
         assertEquals(
-            "api.carry.humane.cloud:443",
-            CarryRemoteTransport.redirectedGatewayForProcess(
+            "api.cosmos.humane.cloud:443",
+            CosmosRemoteTransport.redirectedGatewayForProcess(
                 "api.prod.humane.cloud",
                 "hu.ma.ne.ironman",
             ),
         )
         assertNull(
-            CarryRemoteTransport.redirectedGatewayForProcess(
+            CosmosRemoteTransport.redirectedGatewayForProcess(
                 "untrusted.example",
-                CarryRemoteTransport.PROVISIONING_PROCESS,
+                CosmosRemoteTransport.PROVISIONING_PROCESS,
             ),
         )
     }
@@ -227,30 +227,30 @@ class ChannelFactoryBypassTest {
             "humaneinternal.system.credentials.DeviceAttestationCredentialKeyManager"
 
         assertTrue(
-            CarryRemoteTransport.shouldBridgeDirectAttestation(
+            CosmosRemoteTransport.shouldBridgeDirectAttestation(
                 directManager,
-                CarryRemoteTransport.PROVISIONING_PROCESS,
+                CosmosRemoteTransport.PROVISIONING_PROCESS,
                 cloneEnabled = true,
             ),
         )
         assertFalse(
-            CarryRemoteTransport.shouldBridgeDirectAttestation(
+            CosmosRemoteTransport.shouldBridgeDirectAttestation(
                 directManager,
                 "hu.ma.ne.ironman",
                 cloneEnabled = true,
             ),
         )
         assertFalse(
-            CarryRemoteTransport.shouldBridgeDirectAttestation(
+            CosmosRemoteTransport.shouldBridgeDirectAttestation(
                 directManager,
-                CarryRemoteTransport.PROVISIONING_PROCESS,
+                CosmosRemoteTransport.PROVISIONING_PROCESS,
                 cloneEnabled = false,
             ),
         )
         assertFalse(
-            CarryRemoteTransport.shouldBridgeDirectAttestation(
+            CosmosRemoteTransport.shouldBridgeDirectAttestation(
                 "humaneinternal.system.credentials.DeviceUserCredentialKeyManager",
-                CarryRemoteTransport.PROVISIONING_PROCESS,
+                CosmosRemoteTransport.PROVISIONING_PROCESS,
                 cloneEnabled = true,
             ),
         )
@@ -260,11 +260,11 @@ class ChannelFactoryBypassTest {
     fun remoteEdgeAddressRequiresOneCanonicalIpv4() {
         assertArrayEquals(
             byteArrayOf(198.toByte(), 51, 100, 42),
-            CarryRemoteTransport.parseIpv4("198.51.100.42"),
+            CosmosRemoteTransport.parseIpv4("198.51.100.42"),
         )
-        assertNull(CarryRemoteTransport.parseIpv4("198.51.100"))
-        assertNull(CarryRemoteTransport.parseIpv4("198.51.100.256"))
-        assertNull(CarryRemoteTransport.parseIpv4("198.51.100.42.example"))
+        assertNull(CosmosRemoteTransport.parseIpv4("198.51.100"))
+        assertNull(CosmosRemoteTransport.parseIpv4("198.51.100.256"))
+        assertNull(CosmosRemoteTransport.parseIpv4("198.51.100.42.example"))
     }
 
     /**
@@ -280,28 +280,28 @@ class ChannelFactoryBypassTest {
     fun cloneRedirectIsRefusedOnlyWhenCloneModeIsOnAndTrustIsMissing() {
         assertTrue(
             "clone mode with no clone trust must be refused, not dialed",
-            CarryRemoteTransport.cloneRedirectRefusedForMissingTrust(
+            CosmosRemoteTransport.cloneRedirectRefusedForMissingTrust(
                 cloneEnabled = true,
                 cloneTrustInstalled = false,
             ),
         )
         assertFalse(
             "clone mode with clone trust installed is the working path",
-            CarryRemoteTransport.cloneRedirectRefusedForMissingTrust(
+            CosmosRemoteTransport.cloneRedirectRefusedForMissingTrust(
                 cloneEnabled = true,
                 cloneTrustInstalled = true,
             ),
         )
         assertFalse(
             "clone mode off: this gate must not fire (local/plaintext path owns it)",
-            CarryRemoteTransport.cloneRedirectRefusedForMissingTrust(
+            CosmosRemoteTransport.cloneRedirectRefusedForMissingTrust(
                 cloneEnabled = false,
                 cloneTrustInstalled = false,
             ),
         )
         assertFalse(
             "clone mode off with trust present is still not this gate's concern",
-            CarryRemoteTransport.cloneRedirectRefusedForMissingTrust(
+            CosmosRemoteTransport.cloneRedirectRefusedForMissingTrust(
                 cloneEnabled = false,
                 cloneTrustInstalled = true,
             ),
@@ -310,8 +310,8 @@ class ChannelFactoryBypassTest {
 
     /**
      * Pins the WIRING, not just the decision: the redirect must consult
-     * [CarryRemoteTransport.cloneRedirectRefusedForMissingTrust] with the value
-     * [CarryRemoteTransport.installCloneTrust] returned for the SAME factory.
+     * [CosmosRemoteTransport.cloneRedirectRefusedForMissingTrust] with the value
+     * [CosmosRemoteTransport.installCloneTrust] returned for the SAME factory.
      * Deleting the gate (so the redirect proceeds regardless of trust) leaves the
      * pure-function test above green, so a source-level check is what catches it.
      */
@@ -324,7 +324,7 @@ class ChannelFactoryBypassTest {
         // installCloneTrust's result is captured (not discarded) and fed to the gate.
         assertTrue(
             "the redirect must capture installCloneTrust's result",
-            bypass.contains("CarryRemoteTransport.installCloneTrust(clazz)") &&
+            bypass.contains("CosmosRemoteTransport.installCloneTrust(clazz)") &&
                 bypass.contains("val cloneTrustInstalled ="),
         )
         assertTrue(

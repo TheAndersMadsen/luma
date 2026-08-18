@@ -692,7 +692,7 @@ pub(super) fn mutation_arguments_have_declared_shape(
     }
 }
 
-/// Does the command carry any of these action-specific terms?
+/// Does the command contain any of these action-specific terms?
 pub(super) fn mentions_any(command: &str, terms: &[&str]) -> bool {
     terms.iter().any(|term| command.contains(term))
 }
@@ -1428,7 +1428,7 @@ pub(super) const MUSIC_TARGET_QUALIFIERS: &[&str] = &[
 ];
 
 /// Connective words that may sit between a leading qualifier phrase and a
-/// TRAILING entity span. They carry no entity of their own, so admitting them
+/// TRAILING entity span. They contain no entity of their own, so admitting them
 /// cannot let a foreign token through — every word still comes from the
 /// request.
 pub(super) const MUSIC_TARGET_CONNECTIVES: &[&str] = &["the", "by", "a", "an", "from", "of"];

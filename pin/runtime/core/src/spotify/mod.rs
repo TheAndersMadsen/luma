@@ -1060,7 +1060,7 @@ impl SpotifyService {
                 Err(_) => {
                     warn!("Spotify playback worker panicked");
                     // A detached task must never guess which runtime it owns.
-                    // Normal failures carry an exact PlaybackLease and clean up
+                    // Normal failures contain an exact PlaybackLease and clean up
                     // conditionally; a panic returns unavailable without
                     // overwriting a concurrent disable/disconnect generation.
                     Err(SpotifyError::Unavailable)
@@ -1538,7 +1538,7 @@ impl SpotifyService {
         };
 
         // The normalisation block lives in the custom header of the Ogg
-        // variants; MP3 files carry no such header (which is exactly why MP3
+        // variants; MP3 files contain no such header (which is exactly why MP3
         // passthrough would forfeit levelling).
         let source = [
             AudioFileFormat::OGG_VORBIS_320,

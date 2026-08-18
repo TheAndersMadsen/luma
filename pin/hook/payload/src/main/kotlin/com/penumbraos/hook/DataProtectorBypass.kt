@@ -500,7 +500,7 @@ object DataProtectorBypass {
         // ByteBuffer overloads are explicit payload overloads.
         args.firstOrNull { it is ByteBuffer }?.let { return it }
 
-        // Proto overloads carry identity/user/metadata String-ish args; pick the
+        // Proto overloads include identity/user/metadata String-ish args; pick the
         // first object that can actually serialize itself as protobuf bytes.
         return args.firstOrNull { arg ->
             arg != null && arg !is String && protoToBytes(arg) != null

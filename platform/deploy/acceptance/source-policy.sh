@@ -69,7 +69,7 @@ const path = require("node:path");
 
 const root = process.argv[2];
 const contractsRoot = path.join(root, "pin", "contracts");
-const legacyRoot = path.join(contractsRoot, "carry-golden");
+const legacyRoot = path.join(contractsRoot, "cosmos-golden");
 const fixturesRoot = path.join(contractsRoot, "fixtures");
 const allowedProvenance = new Set(["synthetic", "clean-room-interface"]);
 const allowedEvidence = new Set(["observed", "derived", "implemented", "unknown"]);
@@ -164,7 +164,7 @@ function visit(directory, state) {
 
 try {
   if (fs.existsSync(legacyRoot)) {
-    fail("pin/contracts/carry-golden is forbidden; keep raw evidence outside the repository");
+    fail("pin/contracts/cosmos-golden is forbidden; keep raw evidence outside the repository");
   }
   if (!fs.existsSync(fixturesRoot) || !fs.lstatSync(fixturesRoot).isDirectory()) {
     fail("pin/contracts/fixtures is missing");

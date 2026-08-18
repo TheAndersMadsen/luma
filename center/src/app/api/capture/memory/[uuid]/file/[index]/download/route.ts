@@ -5,7 +5,7 @@ import { getCaptureOriginal } from "@/server/source";
  * GET /api/capture/memory/{uuid}/file/{index}/download
  *
  * The .Center download shape — `/capture/memory/{id}/file/{fileId}/download`.
- * Downloads the full-resolution encrypted upload after Carry authenticates and
+ * Downloads the full-resolution encrypted upload after Cosmos authenticates and
  * opens its stock capture binding. The detail page continues to use the smaller
  * thumbnail for display.
  *

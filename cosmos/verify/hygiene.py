@@ -21,7 +21,7 @@ FORBIDDEN_SUFFIXES = {
     ".pcap",
     ".pcapng",
 }
-FORBIDDEN_NAMES = {"carry-raw.log", "carry-traffic.jsonl", "captured_flow.jsonl"}
+FORBIDDEN_NAMES = {"cosmos-raw.log", "cosmos-traffic.jsonl", "captured_flow.jsonl"}
 SENSITIVE_PATTERNS = {
     "private key": re.compile(r"-----BEGIN (?:EC |RSA )?PRIVATE KEY-----"),
     "device-user subject": re.compile(r"CN=V:[0-9]+:D:[^\s,:]+:U:[^\s,]+"),

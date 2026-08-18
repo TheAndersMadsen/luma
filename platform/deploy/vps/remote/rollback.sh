@@ -563,14 +563,14 @@ verify_target_domain_state() {
   else
     domain_nginx_verify_before "$record" || return 1
     domain_cloudflared_verify_before "$record" || return 1
-    domain_keycloak_verify_before "$record" "$runtime" 8088 carry.andersmadsen.dk
+    domain_keycloak_verify_before "$record" "$runtime" 8088 cosmos.andersmadsen.dk
   fi
 }
 
 restore_target_keycloak_state() {
   local runtime request_host
   runtime="$(target_keycloak_runtime)" || return 1
-  request_host=carry.andersmadsen.dk
+  request_host=cosmos.andersmadsen.dk
   ((target_center_domain == 0)) || request_host=center.andersmadsen.dk
   domain_keycloak_wait 8088 "$request_host" || return 1
   domain_keycloak_restore "$record" "$runtime" 8088 "$request_host" || return 1
@@ -1091,7 +1091,7 @@ PY
 else
   start_recorded_containers "$record/before/running-containers.txt"
   restore_target_keycloak_state \
-    || fail "legacy Carry domain and Keycloak state could not be restored"
+    || fail "legacy Cosmos domain and Keycloak state could not be restored"
   legacy_postgres="$(find_postgres_container)"
   # A legacy rollback restores containers and configuration; it does NOT restore
   # the PostgreSQL volume, so the cluster still carries whatever the canonical
@@ -1103,7 +1103,7 @@ else
   # row and a dropped column all still fail; if that backup predates the sidecar
   # the capture falls back to the live columns and refuses, which is the safe
   # direction.
-  capture_postgres_data "$legacy_postgres" carry "$work/legacy-restored-postgres-data.tsv" \
+  capture_postgres_data "$legacy_postgres" cosmos "$work/legacy-restored-postgres-data.tsv" \
     "$original_backup/postgres-data.tsv.columns"
   cmp -s "$original_backup/postgres-data.tsv" "$work/legacy-restored-postgres-data.tsv" \
     || fail "legacy rollback refused because the exact pre-cutover database state was not restored"

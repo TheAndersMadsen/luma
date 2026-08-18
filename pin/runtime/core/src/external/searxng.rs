@@ -51,7 +51,7 @@ pub struct SearxngClient {
     base_url: Option<String>,
 }
 
-/// Redacted by hand: a self-hosted base URL may carry `user:password@` for an
+/// Redacted by hand: a self-hosted base URL may contain `user:password@` for an
 /// instance behind basic auth, and the derived form would print it.
 impl std::fmt::Debug for SearxngClient {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -122,7 +122,7 @@ impl SearxngClient {
         // The production HTTP client disables redirects. Kept here as a defense
         // for independently constructed clients and tests: results that came
         // from a host the operator did not configure are not this instance's
-        // answers, and the base URL may carry basic-auth credentials that a
+        // answers, and the base URL may contain basic-auth credentials that a
         // redirect would replay elsewhere.
         if response.url() != &requested_url {
             return Err(WebSearchError::ProviderUnavailable);
@@ -201,7 +201,7 @@ fn normalize_base_url(base_url: Option<String>) -> Option<String> {
             Some(url.to_string().trim_end_matches('/').to_owned())
         }
         // Logged without the value: this is precisely the path where a base URL
-        // carrying basic-auth credentials would be malformed.
+        // containing basic-auth credentials would be malformed.
         _ => {
             tracing::warn!(
                 "the configured SearXNG base URL is not an http(s) URL; \

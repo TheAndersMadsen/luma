@@ -703,7 +703,7 @@ export function parseGrpcFrames(value, options) {
   return frames;
 }
 
-/// Interim observation turns carry the registered name of the tool batch plus
+/// Interim observation turns contain the registered name of the tool batch plus
 /// a closed status JSON by contract, so the tool the planner actually selected
 /// is observable in-band without reading device logs. Only the registered name
 /// and closed status/reason tokens are retained: the raw observation text is
@@ -1037,7 +1037,7 @@ const MUTATION_TOOL_CUE_NAMES = new Set([
 ///
 /// Evidence source: the decoded Understand response stream only. The server
 /// streams one interim ACTION turn named after the first tool of each batch
-/// and one paired OBSERVATION turn carrying that tool's registered name plus a
+/// and one paired OBSERVATION turn containing that tool's registered name plus a
 /// closed status JSON. A `pending` observation marks a PREDICTED or
 /// parity cue (no tool ran yet); `ok`/`unavailable` marks a real execution.
 export function evaluateWebSearch(responses, readiness) {

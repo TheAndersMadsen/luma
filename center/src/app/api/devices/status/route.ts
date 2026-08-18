@@ -1,10 +1,10 @@
 import { cookies } from "next/headers";
 import { AUTH_ENABLED, SESSION_COOKIE, verifySession } from "@/server/auth";
 import {
-  CARRY_ADMIN_ENABLED,
-  CARRY_WEBAPI,
+  COSMOS_ADMIN_ENABLED,
+  COSMOS_WEBAPI,
   adminAuthHeaders,
-  carryDeadlineSignal,
+  cosmosDeadlineSignal,
 } from "@/server/cosmos";
 import { logWarn } from "@/server/log";
 
@@ -34,16 +34,16 @@ type Pairing = {
  */
 export async function GET() {
   try {
-    if (!AUTH_ENABLED || !CARRY_ADMIN_ENABLED) {
+    if (!AUTH_ENABLED || !COSMOS_ADMIN_ENABLED) {
       return Response.json({ devices: [], state: "absent" }, { status: 200 });
     }
     const jar = await cookies();
     const session = await verifySession(jar.get(SESSION_COOKIE)?.value);
     if (!session) return Response.json({ error: "Not authenticated." }, { status: 401 });
 
-    const rosterResponse = await fetch(`${CARRY_WEBAPI}/demo-api/admin/devices`, {
+    const rosterResponse = await fetch(`${COSMOS_WEBAPI}/demo-api/admin/devices`, {
       cache: "no-store",
-      signal: carryDeadlineSignal(),
+      signal: cosmosDeadlineSignal(),
       headers: adminAuthHeaders(),
     }).catch((error: unknown) => {
       logWarn("devices/status: the paired-device roster could not be requested", error);
@@ -72,11 +72,11 @@ export async function GET() {
           // an identifier, not a secret, and without it a log line cannot say
           // WHICH Pin went quiet on a wearer who has two.
           const response = await fetch(
-            `${CARRY_WEBAPI}/demo-api/admin/device-status/${encodeURIComponent(deviceId)}`,
+            `${COSMOS_WEBAPI}/demo-api/admin/device-status/${encodeURIComponent(deviceId)}`,
             // Per DEVICE, so one Pin that never answers cannot hold the whole
             // roster past the deadline and turn "1 of your 2 Pins could not be
             // read" into a page that simply never loads.
-            { cache: "no-store", headers: adminAuthHeaders(), signal: carryDeadlineSignal() },
+            { cache: "no-store", headers: adminAuthHeaders(), signal: cosmosDeadlineSignal() },
           ).catch((error: unknown) => {
             logWarn(`devices/status: ${deviceId} status request failed`, error);
             return null;

@@ -55,7 +55,7 @@ import {
  * pages/featureFlagsState.ts.
  *
  * Center's account Features pane is a cloud allowlist: thirteen named
- * capabilities read from CARRY_WEBAPI's /demo-api/flags for the signed-in
+ * capabilities read from COSMOS_WEBAPI's /demo-api/flags for the signed-in
  * wearer. This pane is the DEVICE's own authority and has three concepts the
  * cloud one has no counterpart for:
  *

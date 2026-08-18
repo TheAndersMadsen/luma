@@ -2813,7 +2813,7 @@ mod tests {
                 .child_environment()
                 .get(std::ffi::OsStr::new("DASHSCOPE_API_KEY")),
             Some(&std::ffi::OsString::from("vault-resolved-key")),
-            "child environment must carry the resolved provider key"
+            "child environment must contain the resolved provider key"
         );
 
         // The ready gate accepts the configured provider with no login mode at

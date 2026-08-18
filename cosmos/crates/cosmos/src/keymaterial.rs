@@ -1,7 +1,7 @@
-//! Shared ephemeral-key material — the server side of carry's per-capability
+//! Shared ephemeral-key material — the server side of cosmos's per-capability
 //! encrypted channel.
 //!
-//! carry's shipped assistant path is envelope-encrypted end to end: the device
+//! cosmos's shipped assistant path is envelope-encrypted end to end: the device
 //! establishes an ephemeral channel key per capability, wraps it to the server's
 //! public wrapping key, and uploads it via
 //! `PublicPrivacyService.EstablishWrappingKeys` / `ImportKeys`. Every subsequent
@@ -42,7 +42,7 @@
 //! Key material is never logged, never returned by an RPC, and never put on the
 //! wire; only the wrapping *public* key leaves the process, via
 //! `EstablishWrappingKeys`. The snapshot is a `0600` file under
-//! `CARRY_STATE_DIR`, the same durability switch [`crate::store::MemoryStore`]
+//! `COSMOS_STATE_DIR`, the same durability switch [`crate::store::MemoryStore`]
 //! uses, in its own file so long-lived key material never shares a blob with
 //! wearer data.
 //!
@@ -51,7 +51,7 @@
 //! protection without being any: the file's confidentiality rests entirely on
 //! filesystem permissions and on the volume being as trusted as the process. That
 //! is the same trust boundary the DeviceUser-issuing CA private key already sits
-//! on (`CARRY_DUC_CA_KEY`, an unencrypted PEM read by `enrollment.rs`). If that
+//! on (`COSMOS_DUC_CA_KEY`, an unencrypted PEM read by `enrollment.rs`). If that
 //! boundary ever stops holding, this file needs a KMS, not a passphrase.
 
 use std::collections::BTreeMap;
@@ -65,7 +65,7 @@ use serde::{Deserialize, Serialize};
 
 /// Durability switch, shared with `store.rs`: unset means memory-only, which is
 /// right for tests and local runs and wrong for anything a device talks to twice.
-const STATE_DIR_ENV: &str = "CARRY_STATE_DIR";
+const STATE_DIR_ENV: &str = "COSMOS_STATE_DIR";
 
 /// The server's ephemeral-key state: one RSA-OAEP wrapping keypair plus the
 /// `{kid -> AES-128 channel key}` map the device populated.
@@ -239,7 +239,7 @@ impl KeyMaterial {
         }
         let dir = PathBuf::from(dir);
         std::fs::create_dir_all(&dir).ok()?;
-        let workload = std::env::var("CARRY_WORKLOAD").unwrap_or_else(|_| "workload".to_owned());
+        let workload = std::env::var("COSMOS_WORKLOAD").unwrap_or_else(|_| "workload".to_owned());
         Some(dir.join(format!("{workload}-keymaterial.json")))
     }
 
@@ -295,7 +295,7 @@ impl KeyMaterial {
     ///
     /// The two failures are told apart deliberately. `NotFound` is a genuine
     /// first run. Anything else — a mode or ownership change on the shared
-    /// carry-state volume, an I/O error, a bad mount — means the file is there
+    /// cosmos-state volume, an I/O error, a bad mount — means the file is there
     /// and this process cannot see it, which is exactly the case where writing
     /// is destructive. That distinction was previously absent: a single
     /// `let Ok(bytes) = ... else { return }` treated EACCES like ENOENT and
@@ -418,7 +418,7 @@ mod tests {
     impl TempPath {
         fn new(name: &str) -> Self {
             let dir = std::env::temp_dir().join(format!(
-                "carry-keymaterial-{name}-{}-{:?}",
+                "cosmos-keymaterial-{name}-{}-{:?}",
                 std::process::id(),
                 std::thread::current().id()
             ));
@@ -606,7 +606,7 @@ mod tests {
 
     /// The realistic version of the same failure: not a corrupt file, but a
     /// readable-by-nobody one. An ownership or mode change on the shared
-    /// carry-state volume is not hypothetical — the deploy already performs an
+    /// cosmos-state volume is not hypothetical — the deploy already performs an
     /// ownership migration for Center's channel key — and `std::fs::read`
     /// reports it with a different `ErrorKind`, not with absence.
     #[cfg(unix)]

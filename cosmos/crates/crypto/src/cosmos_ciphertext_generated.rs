@@ -3,7 +3,7 @@
 extern crate alloc;
 
 #[allow(unused_imports, dead_code)]
-pub mod carry {
+pub mod cosmos {
 
     #[allow(unused_imports, dead_code)]
     pub mod krypton {
@@ -478,4 +478,4 @@ pub mod carry {
             fbb.finish_size_prefixed(root, Some(CIPHERTEXT_ENVELOPE_IDENTIFIER));
         }
     } // pub mod krypton
-} // pub mod carry
+} // pub mod cosmos

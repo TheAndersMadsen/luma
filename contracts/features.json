@@ -54,7 +54,7 @@
     "float": { "wireSupported": true, "currentKeys": 0 }
   },
   "applicationModes": {
-    "server_only": "Preserved for Carry response compatibility; no installed Pin consumer was found.",
+    "server_only": "Preserved for Cosmos response compatibility; no installed Pin consumer was found.",
     "inert": "The stock key exists, but no supported installed consumer or safe non-default grammar is known.",
     "next_sync": "The stock client reads the assignment after its next successful feature sync.",
     "next_sync_restart": "The assignment arrives on the next sync; at least one stock consumer caches state and should be restarted.",
@@ -93,7 +93,7 @@
       "scope": "compatibility_record",
       "writable": false,
       "application": { "mode": "server_only", "restartRecommended": false },
-      "evidence": { "label": "observed", "claim": "Carry was captured assigning false; no installed Pin consumer was found." }
+      "evidence": { "label": "observed", "claim": "Cosmos was captured assigning false; no installed Pin consumer was found." }
     },
     {
       "key": "demo_v2_enabled",
@@ -102,7 +102,7 @@
       "scope": "compatibility_record",
       "writable": false,
       "application": { "mode": "server_only", "restartRecommended": false },
-      "evidence": { "label": "observed", "claim": "Carry was captured assigning false; no installed Pin consumer was found." }
+      "evidence": { "label": "observed", "claim": "Cosmos was captured assigning false; no installed Pin consumer was found." }
     },
     {
       "key": "demo_v2_experience",
@@ -111,7 +111,7 @@
       "scope": "compatibility_record",
       "writable": false,
       "application": { "mode": "server_only", "restartRecommended": false },
-      "evidence": { "label": "observed", "claim": "Carry was captured assigning false; no installed Pin consumer was found." }
+      "evidence": { "label": "observed", "claim": "Cosmos was captured assigning false; no installed Pin consumer was found." }
     },
     {
       "key": "personal_voice_enabled",
@@ -120,7 +120,7 @@
       "scope": "compatibility_record",
       "writable": false,
       "application": { "mode": "server_only", "restartRecommended": false },
-      "evidence": { "label": "observed", "claim": "Carry was captured assigning false; Cosmos has no compatible personal-voice experience." }
+      "evidence": { "label": "observed", "claim": "Cosmos was captured assigning false; Cosmos has no compatible personal-voice experience." }
     },
     {
       "key": "calendar_enabled",
@@ -129,7 +129,7 @@
       "scope": "compatibility_record",
       "writable": false,
       "application": { "mode": "server_only", "restartRecommended": false },
-      "evidence": { "label": "observed", "claim": "Carry was captured assigning false; no installed Pin consumer was found." }
+      "evidence": { "label": "observed", "claim": "Cosmos was captured assigning false; no installed Pin consumer was found." }
     },
     {
       "key": "synapse_prod_logging_enabled",
@@ -138,7 +138,7 @@
       "scope": "compatibility_record",
       "writable": false,
       "application": { "mode": "server_only", "restartRecommended": false },
-      "evidence": { "label": "observed", "claim": "Carry was captured assigning false; no installed Pin consumer was found." }
+      "evidence": { "label": "observed", "claim": "Cosmos was captured assigning false; no installed Pin consumer was found." }
     },
     {
       "key": "health_experience",
@@ -147,7 +147,7 @@
       "scope": "compatibility_record",
       "writable": false,
       "application": { "mode": "server_only", "restartRecommended": false },
-      "evidence": { "label": "observed", "claim": "Carry was captured assigning false; this key is not the stock fitness-tracker gate." }
+      "evidence": { "label": "observed", "claim": "Cosmos was captured assigning false; this key is not the stock fitness-tracker gate." }
     },
     {
       "key": "hackathon_health_experience",
@@ -156,7 +156,7 @@
       "scope": "compatibility_record",
       "writable": false,
       "application": { "mode": "server_only", "restartRecommended": false },
-      "evidence": { "label": "observed", "claim": "Carry was captured assigning false; no installed Pin consumer was found." }
+      "evidence": { "label": "observed", "claim": "Cosmos was captured assigning false; no installed Pin consumer was found." }
     },
     {
       "key": "hackathon_ai_profile_user_personalization",
@@ -165,7 +165,7 @@
       "scope": "compatibility_record",
       "writable": false,
       "application": { "mode": "server_only", "restartRecommended": false },
-      "evidence": { "label": "observed", "claim": "Carry was captured assigning false; no installed Pin consumer was found." }
+      "evidence": { "label": "observed", "claim": "Cosmos was captured assigning false; no installed Pin consumer was found." }
     },
     {
       "key": "flight_search_enabled",
@@ -174,7 +174,7 @@
       "scope": "compatibility_record",
       "writable": false,
       "application": { "mode": "server_only", "restartRecommended": false },
-      "evidence": { "label": "observed", "claim": "Carry was captured assigning true; no installed Pin flag consumer was found." }
+      "evidence": { "label": "observed", "claim": "Cosmos was captured assigning true; no installed Pin flag consumer was found." }
     },
     {
       "key": "history_search_enabled",
@@ -183,7 +183,7 @@
       "scope": "compatibility_record",
       "writable": false,
       "application": { "mode": "server_only", "restartRecommended": false },
-      "evidence": { "label": "observed", "claim": "Carry was captured assigning true; no installed Pin flag consumer was found." }
+      "evidence": { "label": "observed", "claim": "Cosmos was captured assigning true; no installed Pin flag consumer was found." }
     },
     {
       "key": "web_show_save_event_location_privacy_setting",
@@ -192,7 +192,7 @@
       "scope": "compatibility_record",
       "writable": false,
       "application": { "mode": "server_only", "restartRecommended": false },
-      "evidence": { "label": "observed", "claim": "Carry was captured assigning true as a web-side privacy control; no Pin consumer was found." }
+      "evidence": { "label": "observed", "claim": "Cosmos was captured assigning true as a web-side privacy control; no Pin consumer was found." }
     },
     {
       "key": "touchcode_enabled",
@@ -201,7 +201,7 @@
       "scope": "device",
       "writable": true,
       "application": { "mode": "next_sync", "restartRecommended": false },
-      "evidence": { "label": "observed", "claim": "Carry was captured assigning true and the installed device uses it to keep Touchcode unlock available." }
+      "evidence": { "label": "observed", "claim": "Cosmos was captured assigning true and the installed device uses it to keep Touchcode unlock available." }
     },
     {
       "key": "vision_custom_gesture_enabled",
@@ -211,7 +211,7 @@
       "scope": "device",
       "writable": true,
       "application": { "mode": "next_sync", "restartRecommended": false },
-      "evidence": { "label": "observed", "claim": "Carry was captured assigning true and the installed device gates its custom vision-gesture entry point on this key." }
+      "evidence": { "label": "observed", "claim": "Cosmos was captured assigning true and the installed device gates its custom vision-gesture entry point on this key." }
     },
     {
       "key": "quick_actions_remapping_enabled",
@@ -221,7 +221,7 @@
       "scope": "device",
       "writable": true,
       "application": { "mode": "next_sync_restart", "restartRecommended": true },
-      "evidence": { "label": "observed", "claim": "Carry was captured assigning true and installed Settings and voice routes consume this key." }
+      "evidence": { "label": "observed", "claim": "Cosmos was captured assigning true and installed Settings and voice routes consume this key." }
     },
     {
       "key": "tickle",
@@ -231,7 +231,7 @@
       "scope": "device",
       "writable": true,
       "application": { "mode": "next_sync", "restartRecommended": false },
-      "evidence": { "label": "observed", "claim": "Carry was captured assigning true and the installed compatibility hook live-gates the stock Tickle parser and action." }
+      "evidence": { "label": "observed", "claim": "Cosmos was captured assigning true and the installed compatibility hook live-gates the stock Tickle parser and action." }
     },
     {
       "key": "music_interstitials_enabled",
@@ -241,17 +241,17 @@
       "scope": "device",
       "writable": true,
       "application": { "mode": "next_sync", "restartRecommended": false },
-      "evidence": { "label": "observed", "claim": "Carry was captured assigning true and installed music handlers read it for local narration." }
+      "evidence": { "label": "observed", "claim": "Cosmos was captured assigning true and installed music handlers read it for local narration." }
     },
     {
       "key": "synapse_bidirectional_streaming",
       "valueType": "boolean",
-      "cosmosServedDefault": { "kind": "environment", "variable": "CARRY_BIDIRECTIONAL_STREAMING", "truthy": ["1", "true"], "fallback": false, "whenTruthy": true },
+      "cosmosServedDefault": { "kind": "environment", "variable": "COSMOS_BIDIRECTIONAL_STREAMING", "truthy": ["1", "true"], "fallback": false, "whenTruthy": true },
       "firmwareDefault": { "value": false, "evidence": "observed" },
       "scope": "device",
       "writable": true,
       "application": { "mode": "next_sync", "restartRecommended": false },
-      "evidence": { "label": "observed", "claim": "Carry was captured assigning false; Cosmos preserves that fallback while permitting an explicit transport experiment." }
+      "evidence": { "label": "observed", "claim": "Cosmos was captured assigning false; Cosmos preserves that fallback while permitting an explicit transport experiment." }
     },
     {
       "key": "accessory_feature_flags",
@@ -306,7 +306,7 @@
     {
       "key": "server_side_speech_synthesis_timeout_millis",
       "valueType": "integer",
-      "cosmosServedDefault": { "kind": "environment", "variable": "CARRY_REMOTE_TTS_ENABLED", "truthy": ["1", "true"], "fallback": 0, "whenTruthy": 15000 },
+      "cosmosServedDefault": { "kind": "environment", "variable": "COSMOS_REMOTE_TTS_ENABLED", "truthy": ["1", "true"], "fallback": 0, "whenTruthy": 15000 },
       "firmwareDefault": { "value": 0, "evidence": "observed" },
       "scope": "device",
       "writable": true,
@@ -316,7 +316,7 @@
     {
       "key": "server_side_speech_synthesis_streaming_enabled",
       "valueType": "boolean",
-      "cosmosServedDefault": { "kind": "environment", "variable": "CARRY_REMOTE_TTS_ENABLED", "truthy": ["1", "true"], "fallback": false, "whenTruthy": true },
+      "cosmosServedDefault": { "kind": "environment", "variable": "COSMOS_REMOTE_TTS_ENABLED", "truthy": ["1", "true"], "fallback": false, "whenTruthy": true },
       "firmwareDefault": { "value": false, "evidence": "observed" },
       "scope": "device",
       "writable": true,
@@ -499,15 +499,15 @@
       "key": "web_wifinetworks_list",
       "status": "withheld",
       "valueType": "boolean",
-      "observedCarryValue": true,
-      "evidence": { "label": "observed", "claim": "Carry was captured assigning true; Revival withholds it because enabling saved-network collection requires an explicit privacy opt-in." }
+      "observedCosmosValue": true,
+      "evidence": { "label": "observed", "claim": "Cosmos was captured assigning true; Revival withholds it because enabling saved-network collection requires an explicit privacy opt-in." }
     },
     {
       "key": "sync_wifinetworks_enabled",
       "status": "withheld",
       "valueType": "boolean",
-      "observedCarryValue": true,
-      "evidence": { "label": "observed", "claim": "Carry was captured assigning true; Revival withholds it because enabling saved-network synchronization requires an explicit privacy opt-in." }
+      "observedCosmosValue": true,
+      "evidence": { "label": "observed", "claim": "Cosmos was captured assigning true; Revival withholds it because enabling saved-network synchronization requires an explicit privacy opt-in." }
     }
   ]
 }

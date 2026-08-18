@@ -24,7 +24,7 @@ commands above work as written. Production builds receive the same files through
 the `wire_contracts` context and the image overrides `COSMOS_CONTRACTS_DIR` to
 `/app/contracts`; set that variable yourself only if you keep the contracts
 elsewhere. The default used to point at `cosmos/contracts`, a directory that has
-never existed, and the resulting load failure surfaced as "carry error: …" on
+never existed, and the resulting load failure surfaced as "cosmos error: …" on
 every gRPC pane — Center's own misconfiguration, wearing Cosmos's name.
 
 The Pin console is part of Center. It used to be a standalone SPA served at

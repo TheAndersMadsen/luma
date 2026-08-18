@@ -209,7 +209,7 @@ one fixed synthetic notification, verifies content-free ANCS/composition markers
 and cancels the sentinel in a finally block. The shell source remaining absent
 from the allowlist is what proves broad admission.
 
-Two distinct physical devices are required: one Pixel (phone role) carrying the
+Two distinct physical devices are required: one Pixel (phone role) containing the
 companion and one AI Pin (pin role) without it. The harness rejects identical
 serials for both roles.
 
@@ -223,7 +223,7 @@ lifecycle covers add, update, removal, dedup, and ordering with explicit
 incomplete states for any unverified phase.
 
 Physical lifecycle acceptance currently fails closed before posting the
-sentinel because production CMU audit markers do not carry a run-scoped
+sentinel because production CMU audit markers do not contain a run-scoped
 sentinel identity. A time boundary alone cannot prove that add, update, dedup,
 or removal events belong to this run.
 
@@ -365,7 +365,7 @@ export function assertRolePreflight(role, packagePresent) {
     throw new Error(`${role.role} role requires companion package to be present`);
   }
   if (!role.companionRequired && packagePresent) {
-    throw new Error(`${role.role} role must not carry the companion package`);
+    throw new Error(`${role.role} role must not contain the companion package`);
   }
 }
 

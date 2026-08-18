@@ -63,7 +63,7 @@ step "Keycloak administrator sign-in"
 # password is seen by nobody and typed nowhere.
 #
 # It is read with `sudo -n` — the same non-interactive privilege this script
-# already uses for CARRY_OPERATOR_EMAILS — straight into a mode-600 file, and is
+# already uses for COSMOS_OPERATOR_EMAILS — straight into a mode-600 file, and is
 # shredded a few lines below. --admin-prompt is kept for a host where that read
 # is not permitted.
 umask 077
@@ -131,7 +131,7 @@ step "Choosing the canary identity"
 # The canary asserts this again at runtime (it requires 403 from /api/admin/overview),
 # so a lazily provisioned identity fails the deploy rather than quietly handing a
 # gate the operator's own account.
-OPERATORS="$(sudo -n grep -h '^CARRY_OPERATOR_EMAILS=' "$PRIVATE_DIR"/*.env 2>/dev/null | cut -d= -f2- | tr ',' '\n' | tr -d ' ' | grep -v '^$' | sort -u || true)"
+OPERATORS="$(sudo -n grep -h '^COSMOS_OPERATOR_EMAILS=' "$PRIVATE_DIR"/*.env 2>/dev/null | cut -d= -f2- | tr ',' '\n' | tr -d ' ' | grep -v '^$' | sort -u || true)"
 PIN_OWNER_SUB="$(sudo -n grep -h '^REVIVAL_PIN_BRIDGE_OWNER_SUB=' "$PRIVATE_DIR"/*.env 2>/dev/null | cut -d= -f2- | tr -d ' ' | head -1 || true)"
 
 echo "  This account is CREATED by this script; it does not need to exist yet."
@@ -141,7 +141,7 @@ CANARY_USER="${CANARY_USER:-canary@andersmadsen.dk}"
 printf '%s' "$CANARY_USER" >"$WORK/canary-user-name"
 
 if [[ -n "$OPERATORS" ]] && grep -Fxq -- "$CANARY_USER" <<<"$OPERATORS"; then
-  die "$CANARY_USER is an operator (CARRY_OPERATOR_EMAILS). The canary must be an ordinary wearer; pick another name."
+  die "$CANARY_USER is an operator (COSMOS_OPERATOR_EMAILS). The canary must be an ordinary wearer; pick another name."
 fi
 
 # ---------------------------------------------------------------------------
@@ -183,7 +183,7 @@ CREATE
   echo "  created $CANARY_USER"
 else
   echo "  reusing existing $CANARY_USER"
-  # A pre-existing user may carry a pending action that would block the password
+  # A pre-existing user may contain a pending action that would block the password
   # grant; clear those two and nothing else.
   # Same repair on the reuse path: a user created before this fix has no
   # firstName/lastName and cannot complete a password grant until it does.
@@ -234,7 +234,7 @@ step "Proving the credential works before writing it"
 # direct grant needs KEYCLOAK_CLIENT_SECRET too. Rather than teach this script to
 # handle that secret, it now exercises the real path — POST /api/auth/login on
 # Center's loopback port, which supplies the client secret itself, seals the
-# tokens and sets the chunked carry_tokens cookies. That proves the thing the
+# tokens and sets the chunked cosmos_tokens cookies. That proves the thing the
 # canary actually depends on, not an adjacent thing that happens to share a
 # password. Loopback only, so the credential never reaches nginx or Cloudflare.
 CENTER_ORIGIN="http://127.0.0.1:${REVIVAL_CENTER_PORT:-14000}"

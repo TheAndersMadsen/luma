@@ -39,13 +39,13 @@ const canary = fs.readFileSync(
 
 const canonicalOrigin = "https://center.andersmadsen.dk";
 const canonicalIssuer = `${canonicalOrigin}/realms/humane`;
-const legacyOrigin = "https://carry.andersmadsen.dk";
+const legacyOrigin = "https://cosmos.andersmadsen.dk";
 const deviceAuthorities = [
-  "api.carry.humane.cloud",
-  "onboarding.carry.humane.cloud",
-  "connectivity-check.carry.humane.cloud",
-  "n.carry.humane.cloud",
-  "carry-api.andersmadsen.dk",
+  "api.cosmos.humane.cloud",
+  "onboarding.cosmos.humane.cloud",
+  "connectivity-check.cosmos.humane.cloud",
+  "n.cosmos.humane.cloud",
+  "cosmos-api.andersmadsen.dk",
   "aipin.andersmadsen.dk",
 ];
 
@@ -53,20 +53,20 @@ function composeEnvironment() {
   const env = {
     ...process.env,
     REVIVAL_RELEASE_ID: "center-domain-contract",
-    CARRY_DATABASE_URL: "postgresql://carry:placeholder@postgres/carry",
-    CARRY_EDGE_TOKEN: "placeholder-edge",
-    CARRY_ADMIN_TOKEN: "placeholder-admin",
-    CARRY_CENTER_PROJECTION_TOKEN: "placeholder-projection",
-    CARRY_CAPTURE_UPLOAD_BASE_URL: "https://uploads.example.test",
-    CARRY_ONBOARDING_ENDPOINT: "https://onboarding.example.test",
-    CARRY_ENROLLMENT_PINCODE: "0000",
-    CARRY_ENROLLMENT_USER_ID: "U:center-domain-contract",
-    CARRY_OPAQUE_SEED: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+    COSMOS_DATABASE_URL: "postgresql://cosmos:placeholder@postgres/cosmos",
+    COSMOS_EDGE_TOKEN: "placeholder-edge",
+    COSMOS_ADMIN_TOKEN: "placeholder-admin",
+    COSMOS_CENTER_PROJECTION_TOKEN: "placeholder-projection",
+    COSMOS_CAPTURE_UPLOAD_BASE_URL: "https://uploads.example.test",
+    COSMOS_ONBOARDING_ENDPOINT: "https://onboarding.example.test",
+    COSMOS_ENROLLMENT_PINCODE: "0000",
+    COSMOS_ENROLLMENT_USER_ID: "U:center-domain-contract",
+    COSMOS_OPAQUE_SEED: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
     AUTH_SESSION_SECRET: "placeholder-session",
-    CARRY_SHARE_TOKEN_SECRET: "placeholder-share",
+    COSMOS_SHARE_TOKEN_SECRET: "placeholder-share",
     KEYCLOAK_CLIENT_SECRET: "placeholder-keycloak",
-    CARRY_KEYCLOAK_DB_PASSWORD: "placeholder-keycloak-db",
-    CARRY_PG_PASSWORD: "placeholder-postgres",
+    COSMOS_KEYCLOAK_DB_PASSWORD: "placeholder-keycloak-db",
+    COSMOS_PG_PASSWORD: "placeholder-postgres",
     GRAFANA_ADMIN_PASSWORD: "placeholder-grafana",
     SEARXNG_SECRET: "placeholder-search-secret",
     REVIVAL_PIN_BRIDGE_OWNER_SUB: "owner-center-domain-contract",
@@ -74,8 +74,8 @@ function composeEnvironment() {
   };
   for (const name of [
     "REVIVAL_PUBLIC_ORIGIN",
-    "CARRY_OIDC_ISSUER",
-    "CARRY_CAPTURE_SHARE_BASE_URL",
+    "COSMOS_OIDC_ISSUER",
+    "COSMOS_CAPTURE_SHARE_BASE_URL",
   ]) {
     delete env[name];
   }
@@ -118,19 +118,19 @@ test("production defaults make Center the single dashboard and identity origin",
     "notable-events",
     "provisioning",
   ]) {
-    assert.equal(model.services[workload].environment.CARRY_OIDC_ISSUER, canonicalIssuer);
+    assert.equal(model.services[workload].environment.COSMOS_OIDC_ISSUER, canonicalIssuer);
   }
   assert.equal(
-    model.services["ai-bus"].environment.CARRY_CAPTURE_SHARE_BASE_URL,
+    model.services["ai-bus"].environment.COSMOS_CAPTURE_SHARE_BASE_URL,
     canonicalOrigin,
   );
   assert.equal(model.services.keycloak.environment.KC_HOSTNAME, canonicalOrigin);
   assert.doesNotMatch(JSON.stringify(model), new RegExp(legacyOrigin.replaceAll(".", "\\.")));
 });
 
-test("legacy Carry is only a method-preserving temporary redirect", () => {
+test("legacy Cosmos is only a method-preserving temporary redirect", () => {
   const legacyServers = [...edge.matchAll(
-    /server\s*\{(?:(?!\n\}).)*?server_name\s+carry\.andersmadsen\.dk;(?:(?!\n\}).)*?\n\}/gs,
+    /server\s*\{(?:(?!\n\}).)*?server_name\s+cosmos\.andersmadsen\.dk;(?:(?!\n\}).)*?\n\}/gs,
   )].map((match) => match[0]);
   assert.equal(legacyServers.length, 2, "HTTP and HTTPS legacy vhosts are required");
   for (const block of legacyServers) {
@@ -279,7 +279,7 @@ test("edge header buffers cover the sealed-token cookie budget in both direction
     return { count: found[1] ? Number(found[1]) : 1, bytes: size(found[2]) };
   };
 
-  // Set-Cookie: manifest + every chunk + the cleared slots + carry_session, plus
+  // Set-Cookie: manifest + every chunk + the cleared slots + cosmos_session, plus
   // the security and cache headers Center attaches to the same reply. Nginx must
   // fit that entire block in ONE buffer.
   const responseBudget = maxChunks * (chunkBytes + 123) + 1900;

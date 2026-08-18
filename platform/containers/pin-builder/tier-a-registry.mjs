@@ -854,10 +854,10 @@ export function resolveTierARegistry(
         );
       }
       if ("reason" in marker) {
-        fail(`live operational marker ${marker.name} must not carry an unverified reason`);
+        fail(`live operational marker ${marker.name} must not contain an unverified reason`);
       }
       if ("evidence" in marker) {
-        fail(`live operational marker ${marker.name} must not carry external evidence`);
+        fail(`live operational marker ${marker.name} must not contain external evidence`);
       }
     } else if (marker.status === "external") {
       if (marker.emitter !== null) {
@@ -895,7 +895,7 @@ export function resolveTierARegistry(
       }
       requireString(marker.reason, `unverified operational marker ${marker.name} reason`);
       if ("evidence" in marker) {
-        fail(`unverified operational marker ${marker.name} must not carry external evidence`);
+        fail(`unverified operational marker ${marker.name} must not contain external evidence`);
       }
     }
   }

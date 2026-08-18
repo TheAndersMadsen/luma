@@ -9,7 +9,7 @@ use super::*;
 /// Keys are sorted recursively so `{"artist":"X","limit":5}` and
 /// `{"limit":5,"artist":"X"}` produce one key: they are the same request and
 /// must not cost two network round-trips. Sorting is recursive because nested
-/// objects carry arguments too.
+/// objects contain arguments too.
 pub(super) fn canonical_arguments(arguments: &serde_json::Value) -> String {
     fn canonicalize(value: &serde_json::Value) -> serde_json::Value {
         match value {

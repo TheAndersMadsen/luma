@@ -193,7 +193,7 @@ test("the verifier reads the LAST Respond frame, not the longest one", () => {
   assert.equal(shared.answer, "Paris.", "the shared helper now sees the terminal answer");
   assert.equal(shared.answerStatus, "ok");
   assert.equal(shared.unavailableAnswer, false);
-  // Longest-wins is gone too. A frame carrying only a legacy `.answer` key is
+  // Longest-wins is gone too. A frame containing only a legacy `.answer` key is
   // not a decoded Respond frame at all, so it yields no answer and says why —
   // which is the honest outcome, and is what stops a verbose interim from ever
   // being judged as the terminal answer.

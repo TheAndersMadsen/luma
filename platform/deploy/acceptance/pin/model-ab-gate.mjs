@@ -16,7 +16,7 @@
 ///   remote host. Device gate runs remain `platform/deploy/acceptance/pin/agentic-prompt-matrix.mjs`.
 /// - Returned native actions are classified and never dispatched; volume
 ///   mutations stay excluded (`GLOBAL_EXCLUDED_TOOLS`); concurrency is 1.
-/// - No prompt, response, or token text is printed. Reports carry case ids,
+/// - No prompt, response, or token text is printed. Reports include case ids,
 ///   route classes, counts, and latencies only, passed through
 ///   `redactSensitive` with the admin token as a known secret.
 /// - The run temporarily rewrites `llm.model` (or `llm.codex_model`) through

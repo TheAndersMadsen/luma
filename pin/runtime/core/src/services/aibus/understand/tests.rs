@@ -5112,7 +5112,7 @@ fn clock_family_entry_rejects_compounds_and_unsupported_requests() {
     }
 }
 
-/// The durable activity row must carry what the action actually did, not just
+/// The durable activity row must contain what the action actually did, not just
 /// its name — otherwise a follow-up like "play that one again" has nothing to
 /// resolve against (experience-roadmap item 5).
 #[test]

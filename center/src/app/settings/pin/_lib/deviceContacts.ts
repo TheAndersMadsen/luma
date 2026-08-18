@@ -4,7 +4,7 @@ import type { ContactRecord } from "@/lib/pin-device";
  * The device's own address book, turned into something a form can edit.
  *
  * This is NOT the same book as /settings/contacts. That pane reads
- * `humane.contacts.ContactsRPCService` at CARRY_ENDPOINT_CONTACTS, which
+ * `humane.contacts.ContactsRPCService` at COSMOS_ENDPOINT_CONTACTS, which
  * production points at the `contacts` container in the compose stack — Cosmos's
  * principal-keyed store on the server. The Pin runtime implements the *same*
  * gRPC service independently (pin/runtime/core/src/services/contacts.rs) over

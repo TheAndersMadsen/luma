@@ -63,8 +63,8 @@ fi
 dashboard_host=center.andersmadsen.dk
 dashboard_origin=https://center.andersmadsen.dk
 if ((legacy_dashboard_origin)); then
-  dashboard_host=carry.andersmadsen.dk
-  dashboard_origin=https://carry.andersmadsen.dk
+  dashboard_host=cosmos.andersmadsen.dk
+  dashboard_origin=https://cosmos.andersmadsen.dk
 fi
 if ((legacy_dashboard_origin)); then
   [[ "$dashboard_origin" == "$DOMAIN_LEGACY_ORIGIN" ]] || fail "legacy dashboard origin differs from the domain transaction"
@@ -159,7 +159,7 @@ assert_active_durable_mounts
 postgres="$("${COMPOSE[@]}" ps -q postgres)"
 ai_bus="$("${COMPOSE[@]}" ps -q ai-bus)"
 provisioning="$("${COMPOSE[@]}" ps -q provisioning)"
-for pair in "$postgres:$PG_VOLUME:/var/lib/postgresql/data" "$ai_bus:$STATE_VOLUME:/var/lib/carry" "$provisioning:$STATE_VOLUME:/var/lib/carry"; do
+for pair in "$postgres:$PG_VOLUME:/var/lib/postgresql/data" "$ai_bus:$STATE_VOLUME:/var/lib/cosmos" "$provisioning:$STATE_VOLUME:/var/lib/cosmos"; do
   IFS=: read -r container expected_volume destination <<<"$pair"
   actual="$(docker inspect --format "{{range .Mounts}}{{if eq .Destination \"$destination\"}}{{.Name}}{{end}}{{end}}" "$container")"
   [[ "$actual" == "$expected_volume" ]] || fail "durable mount identity changed at $destination"
@@ -188,7 +188,7 @@ if [[ -n "$baseline" ]]; then
 fi
 
 # Both device connectivity authorities are intentionally cleartext and never redirect.
-for host in connectivity-check.carry.humane.cloud n.carry.humane.cloud; do
+for host in connectivity-check.cosmos.humane.cloud n.cosmos.humane.cloud; do
   if ((quiesced_loopback)); then
     expect_status 204 -H "Host: $host" http://127.0.0.1:18085/
     expect_status 204 -I -H "Host: $host" http://127.0.0.1:18085/
@@ -278,7 +278,7 @@ def env(container):
     return dict(item.split("=",1) for item in body["Config"].get("Env",[]) if "=" in item)
 search_env=env(searxng); bus_env=env(ai_bus)
 assert len(search_env.get("SEARXNG_SECRET","")) >= 32
-assert bus_env.get("CARRY_SEARXNG_BASE_URL") == "http://searxng:8080"
+assert bus_env.get("COSMOS_SEARXNG_BASE_URL") == "http://searxng:8080"
 assert "SEARXNG_SECRET" not in bus_env
 def networks(container):
     body=json.loads(subprocess.check_output(["docker","inspect",container],text=True))[0]
@@ -326,7 +326,7 @@ rm -f -- "$work/search.json" "$work/search-fallback.json"
 
 # Provider credentials must stay in ai-bus, and the credential selected by the
 # model adapter must match the endpoint it is about to call. In particular, a
-# harmless local-Ollama placeholder in CARRY_LLM_API_KEY must never shadow the
+# harmless local-Ollama placeholder in COSMOS_LLM_API_KEY must never shadow the
 # deployment-scoped OpenRouter key when the main endpoint is OpenRouter.
 python3 - "$ai_bus" <<'PY'
 import json,subprocess,sys,urllib.parse
@@ -338,20 +338,20 @@ def env(container):
     return dict(item.split("=",1) for item in inspect(container)["Config"].get("Env",[]) if "=" in item)
 
 body=inspect(ai_bus); bus=env(ai_bus)
-base=bus.get("CARRY_LLM_BASE_URL","").strip()
-model=bus.get("CARRY_LLM_MODEL","").strip()
-generic=bus.get("CARRY_LLM_API_KEY","").strip()
-openrouter=bus.get("CARRY_OPENROUTER_API_KEY","").strip()
+base=bus.get("COSMOS_LLM_BASE_URL","").strip()
+model=bus.get("COSMOS_LLM_MODEL","").strip()
+generic=bus.get("COSMOS_LLM_API_KEY","").strip()
+openrouter=bus.get("COSMOS_OPENROUTER_API_KEY","").strip()
 assert base and model and (generic or openrouter)
 host=urllib.parse.urlsplit(base).hostname
 if host == "openrouter.ai":
     assert openrouter and not generic
 
 provider_secrets={
-    "CARRY_LLM_API_KEY","CARRY_OPENROUTER_API_KEY","CARRY_SERPAPI_KEY",
-    "CARRY_GOOGLE_MAPS_KEY","CARRY_PIRATE_WEATHER_KEY","CARRY_WOLFRAM_APP_ID",
-    "CARRY_PPLX_API_KEY","AZURE_SPEECH_KEY","CARRY_AZURE_SPEECH_KEY",
-    "CARRY_INTERSTITIAL_API_KEY","CARRY_SHOPPING_API_KEY",
+    "COSMOS_LLM_API_KEY","COSMOS_OPENROUTER_API_KEY","COSMOS_SERPAPI_KEY",
+    "COSMOS_GOOGLE_MAPS_KEY","COSMOS_PIRATE_WEATHER_KEY","COSMOS_WOLFRAM_APP_ID",
+    "COSMOS_PPLX_API_KEY","AZURE_SPEECH_KEY","COSMOS_AZURE_SPEECH_KEY",
+    "COSMOS_INTERSTITIAL_API_KEY","COSMOS_SHOPPING_API_KEY",
 }
 ids=subprocess.check_output([
     "docker","ps","-q","--filter","label=com.docker.compose.project=ai-pin-revival"
@@ -366,16 +366,16 @@ for container in ids:
     candidate_env=env(container)
     assert not any(candidate_env.get(name,"").strip() for name in provider_secrets)
 
-interstitial_base=bus.get("CARRY_INTERSTITIAL_BASE_URL","").strip()
+interstitial_base=bus.get("COSMOS_INTERSTITIAL_BASE_URL","").strip()
 if interstitial_base:
-    assert bus.get("CARRY_INTERSTITIAL_MODEL","").strip()
+    assert bus.get("COSMOS_INTERSTITIAL_MODEL","").strip()
     interstitial_host=urllib.parse.urlsplit(interstitial_base).hostname
     assert interstitial_host
     networks=set((body.get("NetworkSettings",{}).get("Networks") or {}).keys())
-    if interstitial_host == "carry-ollama":
-        assert "humane-carry-clone_carry-local" in networks
+    if interstitial_host == "cosmos-ollama":
+        assert "humane-cosmos-clone_cosmos-local" in networks
         subprocess.check_call(
-            ["docker","exec",ai_bus,"getent","hosts","carry-ollama"],
+            ["docker","exec",ai_bus,"getent","hosts","cosmos-ollama"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
@@ -405,11 +405,11 @@ resolved_env_value() {
   done
   return 1
 }
-admin_token="$(resolved_env_value CARRY_ADMIN_TOKEN)"
+admin_token="$(resolved_env_value COSMOS_ADMIN_TOKEN)"
 [[ -n "$admin_token" ]] || fail "admin roster token is unavailable"
 printf 'authorization: Bearer %s\n' "$admin_token" >"$work/admin.headers"
-printf 'x-forwarded-client-cert: U:%s\nx-carry-web-projection-token: %s\n' \
-  "$paired_owner" "$(resolved_env_value CARRY_CENTER_PROJECTION_TOKEN)" \
+printf 'x-forwarded-client-cert: U:%s\nx-cosmos-web-projection-token: %s\n' \
+  "$paired_owner" "$(resolved_env_value COSMOS_CENTER_PROJECTION_TOKEN)" \
   >"$work/projection.headers"
 chmod 600 "$work/admin.headers" "$work/projection.headers"
 curl --silent --show-error --fail --max-time 20 -H @"$work/admin.headers" \
@@ -429,7 +429,7 @@ if ((quiesced_loopback)); then
   oidc_url=http://127.0.0.1:8088/realms/humane/.well-known/openid-configuration
 else
   center_base=https://center.andersmadsen.dk
-  ((legacy_dashboard_origin == 0)) || center_base=https://carry.andersmadsen.dk
+  ((legacy_dashboard_origin == 0)) || center_base=https://cosmos.andersmadsen.dk
   [[ "$center_base" == "$dashboard_origin" ]] || fail "dashboard canary origin selection drift"
   oidc_url="$dashboard_origin/realms/humane/.well-known/openid-configuration"
 fi
@@ -579,7 +579,7 @@ assert location.path=="/realms/humane/protocol/openid-connect/logout"
 query=urllib.parse.parse_qs(location.query,keep_blank_values=True,strict_parsing=True)
 assert query=={"client_id":["center"],"post_logout_redirect_uri":[f"{sys.argv[2]}/login"]}
 cookies=[line.split(":",1)[1].strip().lower() for line in lines if line.lower().startswith("set-cookie:")]
-assert any(value.startswith("carry_session=") and "max-age=0" in value for value in cookies)
+assert any(value.startswith("cosmos_session=") and "max-age=0" in value for value in cookies)
 PY
   if ((quiesced_loopback == 0)); then
     # The trailing clause used to read "this read-only canary has no wearer
@@ -632,17 +632,17 @@ def constant(name):
 chunk_bytes=constant("TOKEN_COOKIE_CHUNK_BYTES")
 max_chunks=constant("TOKEN_COOKIE_MAX_CHUNKS")
 # The same arithmetic the file-level regression test uses: every chunk plus its
-# "carry_tokens_N=" name and "; " separator, plus room for the manifest and
+# "cosmos_tokens_N=" name and "; " separator, plus room for the manifest and
 # session cookies.
 budget=max_chunks*(chunk_bytes+16)+600
-pairs=[f"carry_tokens_{index}=" + "A"*chunk_bytes for index in range(max_chunks)]
-pairs.append("carry_tokens=" + "A"*64)
-pairs.append("carry_session=" + "A"*128)
+pairs=[f"cosmos_tokens_{index}=" + "A"*chunk_bytes for index in range(max_chunks)]
+pairs.append("cosmos_tokens=" + "A"*64)
+pairs.append("cosmos_session=" + "A"*128)
 line="cookie: " + "; ".join(pairs)
 # Pad to the full budget so the probe measures the contract, not today's
 # incidental sizes, and never silently shrinks below it.
 if len(line) < budget + 8:
-    line += "; carry_canary_padding=" + "A"*(budget + 8 - len(line) - len("; carry_canary_padding="))
+    line += "; cosmos_canary_padding=" + "A"*(budget + 8 - len(line) - len("; cosmos_canary_padding="))
 assert len(line) >= budget
 with open(output_path,"w",encoding="ascii") as target:
     target.write(line + "\n")
@@ -668,7 +668,7 @@ fi
 # /manifest.json are excluded from the middleware matcher entirely. Accepting
 # 302/307 here made the canary tolerate precisely the regression that would
 # break all three: an always-open path falling out of the allow-list and
-# redirecting to /login. A soft redirect carrying a 200 status cannot slip past
+# redirecting to /login. A soft redirect containing a 200 status cannot slip past
 # either, hence the location check.
 #
 # The legacy compatibility origin is exempt because a 307 to the canonical
@@ -709,23 +709,23 @@ while IFS= read -r asset; do
   expect_status 200 -H "Host: $dashboard_host" -H 'X-Forwarded-Proto: https' "$center_base$asset"
 done <"$work/assets.txt"
 
-# Carry is now a compatibility entry point only. The redirect must preserve the
+# Cosmos is now a compatibility entry point only. The redirect must preserve the
 # exact path and query and must never become a second serving authority.
 if ((quiesced_loopback == 0 && legacy_dashboard_origin == 0)); then
-  legacy_origin=https://carry.andersmadsen.dk
+  legacy_origin=https://cosmos.andersmadsen.dk
   [[ "$legacy_origin" == "$DOMAIN_LEGACY_ORIGIN" ]] \
-    || fail "legacy Carry canary origin differs from the domain transaction"
+    || fail "legacy Cosmos canary origin differs from the domain transaction"
   legacy_request_path='/login?legacy-canary=1&next=%2Fwifi'
   legacy_status="$(curl --silent --show-error --max-time 20 --max-redirs 0 \
     -D "$work/legacy-redirect.headers" -o /dev/null -w '%{http_code}' \
     "$legacy_origin$legacy_request_path")"
-  [[ "$legacy_status" == 307 ]] || fail "legacy Carry origin did not return HTTP 307"
+  [[ "$legacy_status" == 307 ]] || fail "legacy Cosmos origin did not return HTTP 307"
   python3 - "$work/legacy-redirect.headers" "$DOMAIN_CANONICAL_ORIGIN$legacy_request_path" <<'PY'
 import sys
 
 lines = open(sys.argv[1], encoding="latin1").read().splitlines()
 locations = [line.split(":", 1)[1].strip() for line in lines if line.lower().startswith("location:")]
-assert locations == [sys.argv[2]], "legacy Carry redirect did not preserve the exact path and query"
+assert locations == [sys.argv[2]], "legacy Cosmos redirect did not preserve the exact path and query"
 PY
 fi
 
@@ -880,7 +880,7 @@ if [[ -s "$work/projection-target.tsv" ]]; then
     python3 - "$work/media.headers" "$work/media.image" <<'PY'
 import sys
 headers=open(sys.argv[1],encoding="latin1").read().lower(); data=open(sys.argv[2],"rb").read()
-assert "x-carry-projection: opened" in headers
+assert "x-cosmos-projection: opened" in headers
 assert "content-type: image/" in headers and len(data)>100
 PY
     curl --silent --show-error --fail --max-time 20 \
@@ -889,7 +889,7 @@ PY
     python3 - "$work/media.headers" "$work/media.image" <<'PY'
 import sys
 headers=open(sys.argv[1],encoding="latin1").read().lower(); data=open(sys.argv[2],"rb").read()
-assert "x-carry-projection: opened" in headers
+assert "x-cosmos-projection: opened" in headers
 assert "content-type: image/" in headers and len(data)>100
 PY
   done <"$work/projection-target.tsv"
@@ -897,7 +897,7 @@ fi
 
 # A reachable TLS listener that returns no HTTP without a client certificate is
 # the negative mTLS boundary. A refused TCP connection is not accepted as proof.
-for authority in api.carry.humane.cloud onboarding.carry.humane.cloud; do
+for authority in api.cosmos.humane.cloud onboarding.cosmos.humane.cloud; do
   timeout 3 bash -c '</dev/tcp/127.0.0.1/18443' 2>/dev/null || fail "mTLS edge is not listening"
   if curl --insecure --silent --show-error --connect-timeout 3 --max-time 8 \
       --resolve "$authority:18443:127.0.0.1" -o /dev/null "https://$authority:18443/"; then
@@ -920,7 +920,7 @@ done
 # identity in through POST /api/auth/login — the same route the browser posts to
 # — so the jar it returns exercises sealTokens on the way in and
 # readTokenCookie -> openTokens -> requestBearer -> Keycloak JWKS ->
-# CARRY_EDGE_TOKEN on the way back out. Break any link in that chain and the
+# COSMOS_EDGE_TOKEN on the way back out. Break any link in that chain and the
 # assertions below fail, which is exactly what did not happen twice.
 #
 # IT RUNS BY DEFAULT, ON EVERY INVOCATION, INCLUDING ROLLBACK. The previous
@@ -963,7 +963,7 @@ for line in open(jar_path,encoding="ascii"):
     name,value=fields[5],fields[6]
     if name in seen: continue
     seen.add(name); pairs.append(f"{name}={value}")
-assert "carry_session" in seen and "carry_tokens" in seen
+assert "cosmos_session" in seen and "cosmos_tokens" in seen
 with open(output_path,"w",encoding="ascii") as target:
     target.write("cookie: " + "; ".join(pairs) + "\n")
 PY
@@ -988,13 +988,13 @@ PY
     || fail "the canary wearer is not a least-privilege wearer: /api/admin/overview answered $wearer_admin_status (403 is the only correct answer)"
 
   # `live` below must be earned by the bearer and by nothing else.
-  # CARRY_PRINCIPAL is cosmos.ts's identity fallback for the device-only demo;
+  # COSMOS_PRINCIPAL is cosmos.ts's identity fallback for the device-only demo;
   # a deployment that set it would make every gRPC call resolve without any
   # wearer identity at all, and this whole block would pass while proving
   # nothing. Production must never set it — one key and one partition per wearer.
   docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$center_container" \
-    | awk -F= '$1=="CARRY_PRINCIPAL" && length($2)>0 {found=1} END{exit found?1:0}' \
-    || fail "Center injects CARRY_PRINCIPAL, so a live wearer plane would prove nothing about the bearer chain"
+    | awk -F= '$1=="COSMOS_PRINCIPAL" && length($2)>0 {found=1} END{exit found?1:0}' \
+    || fail "Center injects COSMOS_PRINCIPAL, so a live wearer plane would prove nothing about the bearer chain"
 
   for surface in health:/api/health notes:/api/capture/notes \
     memories:/api/capture/memories features:/api/settings/features wifi:/api/settings/wifi; do
@@ -1036,7 +1036,7 @@ for name in ("health","notes","memories","features","wifi"):
         )
 
 health=body("health")
-assert health.get("carryConfigured") is True, "Center reports no carry backend at all"
+assert health.get("cosmosConfigured") is True, "Center reports no cosmos backend at all"
 planes=health.get("planes") or {}
 assert set(planes)=={"grpc","webapi"}, "Center health lost one half of the data plane"
 for half in ("grpc","webapi"):
@@ -1049,7 +1049,7 @@ for half in ("grpc","webapi"):
 assert health.get("state")=="live" and health.get("reachable") is True, (
     f"Center's merged data-plane state is not live: {health.get('detail')}"
 )
-assert health.get("source")=="carry", "Center is serving this wearer from fixtures"
+assert health.get("source")=="cosmos", "Center is serving this wearer from fixtures"
 
 # Collection routes must agree with the badge. A route that claims live in the
 # body while its header says otherwise is the same lie in the other direction.
@@ -1109,7 +1109,7 @@ PY
 else
   ((wearer_plane_optional)) \
     || fail "the canary wearer credential is absent ($WEARER_CANARY_SECRET) and the sealed-bearer wearer plane cannot be proven; provision it (docs/operations.md, 'The canary wearer credential') or pass --wearer-plane-optional to accept a deploy that cannot see a 100%-degraded wearer plane"
-  warn "RUNNING WITHOUT WEARER-PLANE COVERAGE by explicit request: no canary wearer credential is provisioned, so a broken openTokens/refreshTokens/JWKS/CARRY_EDGE_TOKEN path is invisible to this run and a 100%-degraded wearer plane would pass it"
+  warn "RUNNING WITHOUT WEARER-PLANE COVERAGE by explicit request: no canary wearer credential is provisioned, so a broken openTokens/refreshTokens/JWKS/COSMOS_EDGE_TOKEN path is invisible to this run and a 100%-degraded wearer plane would pass it"
 fi
 
 # When an owner-scoped protected cookie jar is available, exercise the complete
@@ -1121,9 +1121,9 @@ if [[ -f "$cookie_file" ]]; then
   [[ "$cookie_mode" == 400 || "$cookie_mode" == 600 ]] || fail "Center canary cookie jar has an unsafe mode"
   # The jar names one owner session for every host a canary dials (loopback
   # plus both dashboard origins), so several rows are expected — but they must
-  # all carry the exact same session value.
+  # all contain the exact same session value.
   cookie_value="$(awk -F '\t' '
-    $6=="carry_session" { count += 1; values[$7] = 1; value = $7 }
+    $6=="cosmos_session" { count += 1; values[$7] = 1; value = $7 }
     END {
       if (count < 1) exit 1
       distinct = 0
@@ -1134,7 +1134,7 @@ if [[ -f "$cookie_file" ]]; then
   ' "$cookie_file")" || fail "Center canary cookie jar does not contain one owner session"
   [[ "$cookie_value" =~ ^[A-Za-z0-9_.-]+$ && ${#cookie_value} -le 4096 ]] \
     || fail "Center canary cookie jar has an invalid owner session"
-  printf 'cookie: carry_session=%s\n' "$cookie_value" >"$work/owner-cookie.headers"
+  printf 'cookie: cosmos_session=%s\n' "$cookie_value" >"$work/owner-cookie.headers"
   chmod 600 "$work/owner-cookie.headers"
   curl --silent --show-error --fail --max-time 20 -H "Host: $dashboard_host" \
     -H 'X-Forwarded-Proto: https' -H @"$work/owner-cookie.headers" \
@@ -1185,20 +1185,20 @@ PY
   # directly on 127.0.0.1:18086 with a synthesized x-forwarded-client-cert, and
   # the one owner-cookie request above goes to /api/settings/services/spotify —
   # a route whose module imports node:fs/promises and nothing from
-  # center/src/server/cosmos.ts. So breaking CARRY_GRPC_ENDPOINT,
-  # CARRY_WEBAPI_BASE_URL, or Center's contracts directory left every wearer
+  # center/src/server/cosmos.ts. So breaking COSMOS_GRPC_ENDPOINT,
+  # COSMOS_WEBAPI_BASE_URL, or Center's contracts directory left every wearer
   # surface degraded-with-empty-data while every canary invocation exited 0.
   # That is the shape of the already-fixed session-expiry bug with the gate
   # still blind to it.
   #
   # What this jar can and cannot prove, stated plainly because reading more into
   # it is exactly how those outages shipped green: write_owner_canary_cookie
-  # mints a `carry_session` only. Center reassembles the wearer bearer from the
-  # SEPARATE `carry_tokens` cookie set — the `carry_tokens` manifest plus its
-  # `carry_tokens.0`/`carry_tokens.1` chunks (center/src/server/auth.ts) — which
-  # the jar deliberately does not carry (a canary must not hold a wearer
+  # mints a `cosmos_session` only. Center reassembles the wearer bearer from the
+  # SEPARATE `cosmos_tokens` cookie set — the `cosmos_tokens` manifest plus its
+  # `cosmos_tokens.0`/`cosmos_tokens.1` chunks (center/src/server/auth.ts) — which
+  # the jar deliberately does not contain (a canary must not hold a wearer
   # credential); that is also the exact name the grep below refuses. So requestBearer()
-  # returns null and, with CARRY_PRINCIPAL unset in production, every gRPC call
+  # returns null and, with COSMOS_PRINCIPAL unset in production, every gRPC call
   # goes out with no wearer identity and the workload refuses it.
   #
   # That makes the honest contract, not "live", the thing to assert — and it is
@@ -1206,7 +1206,7 @@ PY
   #
   #   * webapi (REST): capture_api::principal_for falls back to the demo
   #     account when nobody identified themselves, so a HEALTHY REST plane
-  #     answers 200 and Center reports `live`. If CARRY_WEBAPI_BASE_URL is
+  #     answers 200 and Center reports `live`. If COSMOS_WEBAPI_BASE_URL is
   #     wrong, ai-bus's HTTP surface is down, or Center's bearer plumbing throws,
   #     this flips to `degraded`. That is the 100%-degraded symptom, caught with
   #     no credential at all.
@@ -1215,11 +1215,11 @@ PY
   #     dead endpoint, an unloadable contracts directory or an unregistered
   #     service produce a different detail, which is what is asserted.
   #
-  # The one regression this cannot see is a revoked CARRY_EDGE_TOKEN: config.rs
+  # The one regression this cannot see is a revoked COSMOS_EDGE_TOKEN: config.rs
   # answers a bad token with the same EdgeAuthenticationError::Missing as a
   # missing principal. Named here rather than implied away.
   if ((require_wearer_plane)); then
-    if grep -q 'carry_tokens' "$cookie_file"; then
+    if grep -q 'cosmos_tokens' "$cookie_file"; then
       fail "the canary cookie jar carries wearer token material; this gate is built for a credential-free session"
     fi
     for surface in health:/api/health notes:/api/capture/notes \
@@ -1244,23 +1244,23 @@ def state(name):
     return None
 
 health=body("health")
-assert health.get("carryConfigured") is True, "Center reports no carry backend at all"
+assert health.get("cosmosConfigured") is True, "Center reports no cosmos backend at all"
 planes=health.get("planes") or {}
 grpc=planes.get("grpc") or {}
 webapi=planes.get("webapi") or {}
 assert set(planes)=={"grpc","webapi"}, "Center health lost one half of the data plane"
 
 # REST: reachable without a wearer bearer, so this must be live.
-assert webapi.get("configured") is True, "Center has no CARRY_WEBAPI_BASE_URL"
+assert webapi.get("configured") is True, "Center has no COSMOS_WEBAPI_BASE_URL"
 assert webapi.get("state")=="live", f"Center REST data plane is not live: {webapi.get('detail')}"
 
 # gRPC: configured, reachable, and correctly refusing an identity-less call.
-assert grpc.get("configured") is True, "Center has no CARRY_GRPC_ENDPOINT"
+assert grpc.get("configured") is True, "Center has no COSMOS_GRPC_ENDPOINT"
 detail=str(grpc.get("detail") or "")
 assert grpc.get("state")=="degraded", (
     "the gRPC plane answered "
     f"{grpc.get('state')} for a session that carries no wearer bearer; either the "
-    "jar gained token material or this deployment injects CARRY_PRINCIPAL, which "
+    "jar gained token material or this deployment injects COSMOS_PRINCIPAL, which "
     "production must never do (one key and one partition for every wearer)"
 )
 assert "authenticated edge principal required" in detail, (
@@ -1314,7 +1314,7 @@ PY
     # invocation and refuses the deploy when it cannot. Only when that block was
     # explicitly waived does this warning still describe the whole run.
     ((wearer_plane_proven)) \
-      || warn "the sealed-bearer wearer plane is NOT proven: this canary holds no wearer credential, so a broken openTokens/refreshTokens/JWKS/CARRY_EDGE_TOKEN path is still invisible to it"
+      || warn "the sealed-bearer wearer plane is NOT proven: this canary holds no wearer credential, so a broken openTokens/refreshTokens/JWKS/COSMOS_EDGE_TOKEN path is still invisible to it"
   else
     # Without the flag, this run does not touch Center's data plane AT ALL, and
     # that has to be said rather than left to silence — silence is what a reader

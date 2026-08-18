@@ -30,7 +30,7 @@ pub struct AuthenticatedRequest {
 pub struct RequestAuthenticator {
     authentication: Authentication,
     /// The web plane, when a deployment configures Keycloak/OIDC. A request
-    /// carrying a Bearer token is resolved here; everything else falls through to
+    /// containing a Bearer token is resolved here; everything else falls through to
     /// the device plane. `None` ⇒ no Bearer token is ever trusted.
     web: Option<std::sync::Arc<crate::web_auth::JwtVerifier>>,
 }
@@ -212,7 +212,7 @@ mod tests {
         assert!(principal(&request).is_some());
     }
 
-    /// End-to-end: a request carrying a REAL Keycloak `Authorization: Bearer`
+    /// End-to-end: a request containing a REAL Keycloak `Authorization: Bearer`
     /// token authenticates to `U:<sub>` — the exact partition the Center forwards
     /// a wearer into, and the same one their device reaches. The device base is
     /// `DevelopmentInsecure`, so if the web plane did NOT take precedence this

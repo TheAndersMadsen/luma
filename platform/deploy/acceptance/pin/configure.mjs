@@ -200,7 +200,7 @@ export const SECRET_FIELD_NAMES = Object.freeze([
   "admin_token",
 ]);
 
-// Fields whose value is a URL. A URL is not itself a secret, but it can CARRY
+// Fields whose value is a URL. A URL is not itself a secret, but it can COSMOS
 // one in its userinfo, so these are rendered through `redactUrlUserinfo`
 // instead of verbatim.
 export const URL_FIELD_NAMES = Object.freeze(["base_url", "codex_provider_base_url"]);
@@ -367,7 +367,7 @@ const EXTRACTION_FAILURES = Object.freeze({
   }),
   "malformed-respond": Object.freeze({
     verdict: "malformed",
-    reason: "the Respond frame's input was not parseable JSON carrying a string Response",
+    reason: "the Respond frame's input was not parseable JSON containing a string Response",
   }),
   "legacy-text-dropped": Object.freeze({
     verdict: "malformed",

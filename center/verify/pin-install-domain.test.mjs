@@ -220,7 +220,7 @@ test("deriveInstallActionState offers Reinstall with a warning when packages are
 });
 
 /*
- * The mixed set is the one that matters. A device carrying one package behind
+ * The mixed set is the one that matters. A device containing one package behind
  * the target and another ahead of it needs the behind one moved forward, so
  * the verb is Update — Reinstall would describe the newer package accurately
  * and quietly leave the older one where it is. The newer package still raises
@@ -525,7 +525,7 @@ test("decideInstallMigration recognizes the exact observed legacy profile and re
   assert.deepEqual(result.rolesToInstall, IN_PLACE_ROLES);
   assert.deepEqual(result.retainedInstaller, {
     packageName: MANAGED_PACKAGES.installer,
-    versionName: "carry-2026.08.07",
+    versionName: "cosmos-2026.08.07",
     signerIdentity: "dd07f452",
   });
 });

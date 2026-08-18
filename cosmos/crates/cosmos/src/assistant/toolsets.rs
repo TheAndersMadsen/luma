@@ -2,7 +2,7 @@
 //!
 //! ## The shape this mirrors
 //!
-//! carry's device does **not** ship the catalog. It sends an empty
+//! cosmos's device does **not** ship the catalog. It sends an empty
 //! `action_definitions` plus a two-field pointer — `ToolSetVersion { set_name,
 //! version }` — and the server resolves that pointer to a concrete system prompt
 //! and a concrete tool subset. Stock ran a **two-tier** topology on top of that:
@@ -19,7 +19,7 @@
 //! | `ManageNutrition`| `food@4`      |
 //!
 //! All five share the inherited `Request` + `Terminal` fields. `ManageMemory` is
-//! **not** a sixth set — it is a separate Supervisor action carrying `Task`.
+//! **not** a sixth set — it is a separate Supervisor action containing `Task`.
 //! `music@1` was observed live as a server-only set with no shipped client
 //! wrapper. The supporting evidence remains in the operator-controlled archive.
 //!
@@ -325,7 +325,7 @@ mod tests {
         }
     }
 
-    /// `ManageMemory` is a Supervisor action carrying `Task`, not a sixth tool
+    /// `ManageMemory` is a Supervisor action containing `Task`, not a sixth tool
     /// set — and stock's live negative matrix returned INVALID_ARGUMENT for
     /// `answers@1`, `messages@1`, `photography@1`, `translation@1`, and
     /// `systemnavigation@1`. None of those may become a set here.

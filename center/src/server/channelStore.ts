@@ -47,7 +47,7 @@ export interface ChannelKey {
  * it. The old null was reported as `unconfigured`/`absent` — the word that means
  * "no backend is deployed here" — which /api/health and SourceBadge both read as
  * healthy, so every note write failed silently for the life of the deployment.
- * Carry IS configured when this is raised; something else is missing, and the
+ * Cosmos IS configured when this is raised; something else is missing, and the
  * message names it.
  */
 export class ChannelKeyUnavailableError extends Error {
@@ -66,12 +66,12 @@ export class ChannelKeyUnavailableError extends Error {
  * everything the first sealed unreadable.
  *
  * ONE file, holding a map from kid to key — not one file per wearer. The path is
- * the only one the deployment declares (`CARRY_CHANNEL_KEY_FILE`), the only one
+ * the only one the deployment declares (`COSMOS_CHANNEL_KEY_FILE`), the only one
  * the restore/backup contract knows, and the only one `.gitignore` and
  * `.dockerignore` name; inventing sibling filenames would put wearer key
  * material somewhere neither of those covers. (`writeStore` does use one
  * transient sibling, `<file>.<pid>.tmp`, so the replacement can be atomic —
- * which is why both ignore lists now cover `.carry-channel-key.json*` rather
+ * which is why both ignore lists now cover `.cosmos-channel-key.json*` rather
  * than the exact name.)
  *
  * Read per call rather than captured at import: a deployment sets it before the
@@ -79,8 +79,8 @@ export class ChannelKeyUnavailableError extends Error {
  * scratch file without loading a second copy of the module.
  */
 export function channelKeyFile(): string {
-  return process.env.CARRY_CHANNEL_KEY_FILE
-    ?? path.join(process.cwd(), ".carry-channel-key.json");
+  return process.env.COSMOS_CHANNEL_KEY_FILE
+    ?? path.join(process.cwd(), ".cosmos-channel-key.json");
 }
 
 interface KeyStore {
@@ -146,7 +146,7 @@ function readStore(): KeyStore {
  * The kid is derived from whatever identity a request carries, and that identity
  * has already changed shape once. The file this deployment wrote holds
  *
- *   V:01:D:web-demo:U:<sub>/center/ephemeral      (the CARRY_PRINCIPAL shape)
+ *   V:01:D:web-demo:U:<sub>/center/ephemeral      (the COSMOS_PRINCIPAL shape)
  *
  * while the session path now derives
  *

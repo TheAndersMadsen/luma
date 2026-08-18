@@ -59,12 +59,12 @@ const MAX_STORED_MESSAGES: usize = 10_000;
 const MAX_CALENDAR_EVENTS: usize = 2_000;
 
 fn configured_model() -> Option<Arc<dyn ChatModel>> {
-    let base_url = std::env::var("CARRY_LLM_BASE_URL").ok()?;
+    let base_url = std::env::var("COSMOS_LLM_BASE_URL").ok()?;
     let api_key = configured_api_key()?;
     if base_url.trim().is_empty() {
         return None;
     }
-    let model = std::env::var("CARRY_LLM_MODEL").unwrap_or_else(|_| DEFAULT_LLM_MODEL.to_owned());
+    let model = std::env::var("COSMOS_LLM_MODEL").unwrap_or_else(|_| DEFAULT_LLM_MODEL.to_owned());
     Some(Arc::new(OpenAiChatModel::new(base_url, api_key, model)))
 }
 
@@ -406,7 +406,7 @@ impl CompositionService for Composition {
         }
         let model = self.model.as_ref().ok_or_else(|| {
             Status::failed_precondition(
-                "message composition requires CARRY_LLM_BASE_URL and CARRY_LLM_API_KEY",
+                "message composition requires COSMOS_LLM_BASE_URL and COSMOS_LLM_API_KEY",
             )
         })?;
         let source = match req.r#type {
@@ -835,7 +835,7 @@ impl FoodService for Food {
             ));
         }
         // Text -> real nutrition via Open Food Facts (the keyless substitute for
-        // carry's Nutritionix backend). A no-match echoes the text with empty
+        // cosmos's Nutritionix backend). A no-match echoes the text with empty
         // nutrition (the device narrates "couldn't get that info"); an unreachable
         // provider is an honest error. Nothing is fabricated.
         let (item_name, barcode, serving_size, nutrient, ingredients, brand) =
@@ -1243,7 +1243,7 @@ impl SpeechService for Speech {
         } else {
             let model = self.model.as_ref().ok_or_else(|| {
                 Status::failed_precondition(
-                    "text translation requires CARRY_LLM_BASE_URL and CARRY_LLM_API_KEY",
+                    "text translation requires COSMOS_LLM_BASE_URL and COSMOS_LLM_API_KEY",
                 )
             })?;
             model_text(
@@ -1656,7 +1656,7 @@ impl WebSearchService for WebSearch {
     ///
     /// Despite the service name this is **not** web search: it answers with
     /// `SearchMemoryItem{uuid}` — memory identifiers, never content — which is
-    /// carry's `MODE_SEMANTIC_SEARCH` surface. The device resolves the uuids
+    /// cosmos's `MODE_SEMANTIC_SEARCH` surface. The device resolves the uuids
     /// against its local store, so the wearer's note bodies never ride back over
     /// the wire.
     ///
@@ -1912,7 +1912,7 @@ mod tests {
         let service = Speech::with_speech_backend(Arc::new(MockSpeechBackend));
         let unary = service
             .text_to_speech(Request::new(pb::TextToSpeechRequest {
-                text: "Hello from Carry".to_owned(),
+                text: "Hello from Cosmos".to_owned(),
                 speech_config: Some(pb::SpeechConfig {
                     audio_format: pb::AudioFormat::Raw24khz16bitMonoPcm as i32,
                     ..Default::default()
@@ -1925,7 +1925,7 @@ mod tests {
             unary.source,
             pb::SpeechSource::SourceMicrosoftSpeechSynthesis as i32
         );
-        assert_eq!(unary.speech_transcription, "Hello from Carry");
+        assert_eq!(unary.speech_transcription, "Hello from Cosmos");
         let unary_audio = unary.speech.expect("unary audio");
         assert_eq!(
             unary_audio.format,

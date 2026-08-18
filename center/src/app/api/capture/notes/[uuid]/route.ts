@@ -7,7 +7,7 @@ const SIGN_IN_AGAIN = "Your session expired — sign in again.";
 
 /**
  * The wearer-fixable failure, answered the way api/settings/wifi answers it —
- * and carrying this route's own contract while it does: **`degraded` present
+ * and containing this route's own contract while it does: **`degraded` present
  * means nothing was deleted**, which the UI reads before it removes anything
  * from the screen. A 401 with no `degraded` would have been rendered as "the
  * backend answered 401" instead of the one thing the wearer can act on.
@@ -60,7 +60,7 @@ export async function DELETE(
 
     const note = result.degraded ?? "nothing was deleted";
 
-    // 502 only when carry is configured and did not answer, because that is the
+    // 502 only when cosmos is configured and did not answer, because that is the
     // only one of these a retry can fix. The rest are honest 200s that are
     // nonetheless not a success: the note is still there.
     return NextResponse.json(

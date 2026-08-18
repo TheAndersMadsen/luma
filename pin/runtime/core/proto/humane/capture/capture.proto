@@ -335,7 +335,7 @@ message DeleteMemoryResponse {
 // FAILURE 4, and forNumber() returns null above 4. A stock client decoding the
 // old 3 was being told a failed delete had been REFUSED FOR AUTHORIZATION.
 //
-// WHAT CHANGES WHEN A RELEASE CARRYING THIS IS INSTALLED: the store-error arm of
+// WHAT CHANGES WHEN A RELEASE CONTAINING THIS IS INSTALLED: the store-error arm of
 // Capture.DeleteMemory emits 4 instead of 3. `DeleteMemoryStatus::Failure` in
 // that handler follows this declaration automatically, so there is no second
 // edit and no way to install one half of the change. Nothing else moves — the

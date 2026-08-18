@@ -80,7 +80,7 @@ export default function MyDataPage() {
    * staying `live` — the read succeeded, the number is just a lower bound. This
    * page discarded that sentence and printed the sum as a fact, so a wearer past
    * the cap watched their totals freeze with no explanation, which looks exactly
-   * like a stalled backend. Qualify the headline and carry the reason verbatim.
+   * like a stalled backend. Qualify the headline and contain the reason verbatim.
    */
   const cappedNote = data.state === "live" ? data.degraded : undefined;
   const sum = data.data.reduce((total, entry) => total + entry.total, 0);

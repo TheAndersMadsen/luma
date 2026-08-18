@@ -1,6 +1,6 @@
-//! Weather — Pirate Weather, mapped onto carry's AccuWeather-shaped response.
+//! Weather — Pirate Weather, mapped onto cosmos's AccuWeather-shaped response.
 //!
-//! carry's `WeatherResponse` is field-for-field an AccuWeather *Current
+//! cosmos's `WeatherResponse` is field-for-field an AccuWeather *Current
 //! Conditions* payload. We hold a
 //! Pirate Weather key instead; Pirate is a **Dark Sky**-compatible API. Every
 //! field maps exactly except the icon, which is translated by [`accuweather_icon`].
@@ -10,7 +10,7 @@ use serde::Deserialize;
 
 use super::{BackendError, http, key};
 
-const KEY_VAR: &str = "CARRY_PIRATE_WEATHER_KEY";
+const KEY_VAR: &str = "COSMOS_PIRATE_WEATHER_KEY";
 
 #[derive(Deserialize)]
 struct Forecast {
@@ -74,7 +74,7 @@ fn accuweather_icon(pirate: &str) -> i32 {
     }
 }
 
-/// Current conditions at a point, in carry's wire shape.
+/// Current conditions at a point, in cosmos's wire shape.
 pub async fn current(latitude: f64, longitude: f64) -> Result<pb::WeatherResponse, BackendError> {
     let api_key = key(KEY_VAR).ok_or(BackendError::NotConfigured)?;
     let url = format!(
@@ -97,7 +97,7 @@ pub async fn current(latitude: f64, longitude: f64) -> Result<pb::WeatherRespons
 }
 
 fn to_wire(now: &Currently) -> pb::WeatherResponse {
-    // Pirate reports "none" when dry; carry's field carries a type only when
+    // Pirate reports "none" when dry; cosmos's field carries a type only when
     // there is precipitation, so an absent type stays empty rather than "none".
     let precipitating = now.precip_intensity > 0.0 && now.precip_type != "none";
     pb::WeatherResponse {
@@ -145,7 +145,7 @@ mod tests {
     }
 
     #[test]
-    fn wet_readings_carry_the_precipitation_type() {
+    fn wet_readings_preserve_the_precipitation_type() {
         let w = to_wire(&sample("rain", 0.12, "rain"));
         assert!(w.has_precipitation);
         assert_eq!(w.precipitation_type, "rain");

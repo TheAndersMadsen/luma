@@ -66,7 +66,7 @@
 //!   key and fails the whole operation unless `keyInfo.isUploaded()`. A device
 //!   will not protect data under a key the server does not have. That escrow is
 //!   `PublicPrivacyService.ImportKeys`, and it is what made
-//!   `server_should_decrypt` a coherent request for real carry.
+//!   `server_should_decrypt` a coherent request for real cosmos.
 //!
 //!   `ImportKeys` is served by the AI-bus workload, so the imported key reaches
 //!   this one through [`crate::keydirectory`] rather than a process-local store.
@@ -91,14 +91,14 @@
 //!   `ContactList` is exactly `{contacts, encrypted_contacts,
 //!   encrypted_contacts_versions}`, and `ContactsManager$3.onNext`
 //!   (ContactsManager.java:286-296) reads *only* `getEncryptedContactsList()` — a
-//!   plaintext contact minted alongside would be dropped unread. Real carry
+//!   plaintext contact minted alongside would be dropped unread. Real cosmos
 //!   evidently resolved this by decrypting server-side (hence
 //!   `server_should_decrypt`) and re-issuing the contact with a server id on the
 //!   plaintext delta-sync path, the only case `handleDeltaSyncResponse` saves
 //!   (ContactsManager.java:230-247). Holding no user-data key we can do neither,
 //!   so the blob is relayed byte-for-byte and no identity is invented.
 //!
-//!   The two fields that look like they could carry an identity alongside the
+//!   The two fields that look like they could contain an identity alongside the
 //!   blob cannot:
 //!
 //!   * **`kid` is user-scoped, not per-contact.** Both seal paths derive it from
@@ -229,7 +229,7 @@ impl ContactsRpcService for Contacts {
 
         // The response is the canonical persisted form: plaintext contacts as
         // the store stamped them, and the encrypted blobs echoed back exactly as
-        // sent — they are stored opaquely and carry no server-owned fields.
+        // sent — they are stored opaquely and contain no server-owned fields.
         //
         // The verbatim echo is forced, not lazy: a sealed contact's id lives
         // inside the ciphertext the device decrypts on this very response
@@ -429,7 +429,7 @@ impl ContactsRpcService for Contacts {
     ) -> Result<Response<()>, Status> {
         let principal = self.authenticator.authenticate(&request)?;
         let list = request.into_inner();
-        // `UpdateContacts` shares `CreateContacts`' upsert: both carry a whole
+        // `UpdateContacts` shares `CreateContacts`' upsert: both contain a whole
         // `ContactList` and the store is what decides new-versus-existing by id.
         // The `Empty` response leaves no shape in which to report a per-contact
         // outcome, so the ack covers the batch.
@@ -667,7 +667,7 @@ mod tests {
 
     fn service() -> (Contacts, String) {
         let values = EnvMap::from([(
-            "CARRY_AUTH_MODE".to_owned(),
+            "COSMOS_AUTH_MODE".to_owned(),
             "edge-authenticated".to_owned(),
         )]);
         let config = Config::from_map(&values).expect("edge-authenticated test config");
@@ -692,7 +692,7 @@ mod tests {
     /// error, so an assertion on the edge error proves storage was not reached.
     fn service_over_a_dead_store() -> Contacts {
         let values = EnvMap::from([(
-            "CARRY_AUTH_MODE".to_owned(),
+            "COSMOS_AUTH_MODE".to_owned(),
             "edge-authenticated".to_owned(),
         )]);
         let config = Config::from_map(&values).expect("edge-authenticated test config");
@@ -799,7 +799,7 @@ mod tests {
     /// Fail closed, and fail closed FIRST.
     ///
     /// The store here fails on every statement, so if `get_contacts` read
-    /// storage before authenticating, the refusal we observe would carry the
+    /// storage before authenticating, the refusal we observe would contain the
     /// store's message. Asserting the edge's own message is what makes the
     /// "before any storage access" half of this test's name true rather than
     /// merely asserted in the title.
@@ -1159,7 +1159,7 @@ mod tests {
             .expect("first write");
 
         // Full sync: no cursor supplied, so everything comes back with a cursor
-        // the client can carry forward.
+        // the client can continue.
         let full = svc
             .get_contact_deltas(as_principal(
                 &key,

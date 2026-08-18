@@ -18,7 +18,7 @@ use crate::tier_a::proto_kids;
 pub struct CompletionHandler {
     agent: Arc<LlmAgent>,
     config: Arc<ResolvedConfig>,
-    // CompletionRequest and ChatCompletionRequest do not carry an
+    // CompletionRequest and ChatCompletionRequest do not contain an
     // authenticated device lock state. Retain the constructor dependency for
     // API compatibility, but never attach personal memory to these Unknown-
     // state RPCs.

@@ -70,13 +70,13 @@ object ChannelFactoryBypass {
             }
         }
 
-        // Remote Carry mode keeps the stock authority and real enrollment
+        // Remote Cosmos mode keeps the stock authority and real enrollment
         // ceremony. It overrides resolution only for an exact allowlist and
         // selects only clone trust/identity material. Clearing the setting
         // restores the existing local behavior.
-        CarryRemoteTransport.installDnsResolver(cl)
-        CarryRemoteTransport.installNetworkDnsResolver()
-        CarryRemoteTransport.installCloneAttestationIdentity(cl)
+        CosmosRemoteTransport.installDnsResolver(cl)
+        CosmosRemoteTransport.installNetworkDnsResolver()
+        CosmosRemoteTransport.installCloneAttestationIdentity(cl)
 
         var hooked = 0
         for (className in CHANNEL_FACTORY_CLASSES) {
@@ -97,13 +97,13 @@ object ChannelFactoryBypass {
             // the redirect below can refuse to send it to the clone :443 without
             // clone trust. Per-class (not a process-wide flag): a second
             // ChannelFactory succeeding must not vouch for one that failed.
-            val cloneTrustInstalled = CarryRemoteTransport.installCloneTrust(clazz)
+            val cloneTrustInstalled = CosmosRemoteTransport.installCloneTrust(clazz)
 
             HookUtils.hookMethodAfter(clazz, "getGatewayUri", emptyArray()) { param ->
                 if (param.throwable == null) {
-                    val cloneEnabled = CarryRemoteTransport.isEnabled()
+                    val cloneEnabled = CosmosRemoteTransport.isEnabled()
                     if (
-                        CarryRemoteTransport.cloneRedirectRefusedForMissingTrust(
+                        CosmosRemoteTransport.cloneRedirectRefusedForMissingTrust(
                             cloneEnabled,
                             cloneTrustInstalled,
                         )
@@ -113,21 +113,21 @@ object ChannelFactoryBypass {
                         // against the private CA. Refuse loudly instead of
                         // dialing into a silent, retrying handshake failure.
                         param.throwable = SecurityException(
-                            "Remote Carry mode refused to redirect ${clazz.name} to the clone " +
+                            "Remote Cosmos mode refused to redirect ${clazz.name} to the clone " +
                                 "gateway: clone trust is not installed, so the handshake against " +
                                 "the clone's private CA would fail",
                         )
                     } else if (cloneEnabled) {
-                        val redirected = CarryRemoteTransport.redirectedGatewayForCurrentProcess(
+                        val redirected = CosmosRemoteTransport.redirectedGatewayForCurrentProcess(
                             param.result as? String,
                         )
                         if (redirected == null) {
                             param.throwable = SecurityException(
-                                "Remote Carry mode refused a non-allowlisted gateway",
+                                "Remote Cosmos mode refused a non-allowlisted gateway",
                             )
                         } else {
                             param.result = redirected
-                            Log.w(TAG, "  ChannelFactory remote Carry transport selected")
+                            Log.w(TAG, "  ChannelFactory remote Cosmos transport selected")
                         }
                     } else if (localTransport) {
                         param.result = MOCK_SERVER_URI

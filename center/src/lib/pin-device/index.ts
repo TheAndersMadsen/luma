@@ -1,6 +1,6 @@
 /**
  * The Pin device substrate: a typed client for the Pin's REST API plus the
- * transports that carry it.
+ * transports that implement it.
  *
  * Ported from the retired standalone Setup SPA (`src/api/**` and
  * `src/install/device/**`). Every module here is framework-free and safe for

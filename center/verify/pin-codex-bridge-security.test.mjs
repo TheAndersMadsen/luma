@@ -79,7 +79,7 @@ test("Codex bridge URL policy refuses each authority field on its own", () => {
   // Beyond the SPA's set. The case above pastes a `user:secret@` pair and a
   // query, which leaves three of the guard's four fields unpinned: dropping
   // `url.username`, `url.password`, or `url.hash` from it individually changes
-  // nothing that suite can see, because a URL carrying both halves of a
+  // nothing that suite can see, because a URL containing both halves of a
   // credential pair still trips whichever half is left. The fields are
   // independently reachable — `https://:secret@host` parses with an empty
   // username and a password — so each one is asserted on its own here.

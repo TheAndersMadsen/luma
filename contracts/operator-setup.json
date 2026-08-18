@@ -1108,42 +1108,42 @@
       "home": "runtime.env"
     },
     {
-      "name": "CARRY_OIDC_ISSUER",
+      "name": "COSMOS_OIDC_ISSUER",
       "aliases": [],
       "group": "production",
       "sensitivity": "identity",
       "home": "center.env"
     },
     {
-      "name": "CARRY_CAPTURE_SHARE_BASE_URL",
+      "name": "COSMOS_CAPTURE_SHARE_BASE_URL",
       "aliases": [],
       "group": "production",
       "sensitivity": "operational",
       "home": "runtime.env"
     },
     {
-      "name": "CARRY_MUSICBRAINZ_BASE_URL",
+      "name": "COSMOS_MUSICBRAINZ_BASE_URL",
       "aliases": [],
       "group": "provider",
       "sensitivity": "operational",
       "home": "providers.env"
     },
     {
-      "name": "CARRY_SHOPPING_VISUAL_SEARCH_URL",
+      "name": "COSMOS_SHOPPING_VISUAL_SEARCH_URL",
       "aliases": [],
       "group": "provider",
       "sensitivity": "operational",
       "home": "providers.env"
     },
     {
-      "name": "CARRY_SHOPPING_ALLOWED_HOSTS",
+      "name": "COSMOS_SHOPPING_ALLOWED_HOSTS",
       "aliases": [],
       "group": "provider",
       "sensitivity": "operational",
       "home": "providers.env"
     },
     {
-      "name": "CARRY_SHOPPING_API_KEY",
+      "name": "COSMOS_SHOPPING_API_KEY",
       "aliases": [],
       "group": "provider",
       "sensitivity": "secret",
@@ -1152,7 +1152,7 @@
     {
       "name": "REVIVAL_AUTH_MODE",
       "aliases": [
-        "CARRY_AUTH_MODE"
+        "COSMOS_AUTH_MODE"
       ],
       "group": "local",
       "sensitivity": "operational",
@@ -1161,7 +1161,7 @@
     {
       "name": "REVIVAL_EDGE_TOKEN",
       "aliases": [
-        "CARRY_EDGE_TOKEN"
+        "COSMOS_EDGE_TOKEN"
       ],
       "group": "production",
       "sensitivity": "secret",
@@ -1177,7 +1177,7 @@
     {
       "name": "REVIVAL_SHARE_TOKEN_SECRET",
       "aliases": [
-        "CARRY_SHARE_TOKEN_SECRET"
+        "COSMOS_SHARE_TOKEN_SECRET"
       ],
       "group": "production",
       "sensitivity": "secret",
@@ -1186,7 +1186,7 @@
     {
       "name": "REVIVAL_CENTER_PROJECTION_TOKEN",
       "aliases": [
-        "CARRY_CENTER_PROJECTION_TOKEN"
+        "COSMOS_CENTER_PROJECTION_TOKEN"
       ],
       "group": "production",
       "sensitivity": "secret",
@@ -1195,7 +1195,7 @@
     {
       "name": "REVIVAL_ADMIN_TOKEN",
       "aliases": [
-        "CARRY_ADMIN_TOKEN"
+        "COSMOS_ADMIN_TOKEN"
       ],
       "group": "production",
       "sensitivity": "secret",
@@ -1204,7 +1204,7 @@
     {
       "name": "REVIVAL_REMOTE_TTS_ENABLED",
       "aliases": [
-        "CARRY_REMOTE_TTS_ENABLED"
+        "COSMOS_REMOTE_TTS_ENABLED"
       ],
       "group": "provider",
       "sensitivity": "operational",
@@ -1213,7 +1213,7 @@
     {
       "name": "AZURE_SPEECH_KEY",
       "aliases": [
-        "CARRY_AZURE_SPEECH_KEY"
+        "COSMOS_AZURE_SPEECH_KEY"
       ],
       "group": "provider",
       "sensitivity": "secret",
@@ -1222,7 +1222,7 @@
     {
       "name": "AZURE_SPEECH_REGION",
       "aliases": [
-        "CARRY_AZURE_SPEECH_REGION"
+        "COSMOS_AZURE_SPEECH_REGION"
       ],
       "group": "provider",
       "sensitivity": "operational",
@@ -1231,7 +1231,7 @@
     {
       "name": "AZURE_SPEECH_VOICE",
       "aliases": [
-        "CARRY_AZURE_SPEECH_VOICE"
+        "COSMOS_AZURE_SPEECH_VOICE"
       ],
       "group": "provider",
       "sensitivity": "operational",
@@ -1324,7 +1324,7 @@
     {
       "name": "REVIVAL_ENROLLMENT_PINCODE",
       "aliases": [
-        "CARRY_ENROLLMENT_PINCODE"
+        "COSMOS_ENROLLMENT_PINCODE"
       ],
       "group": "pin",
       "sensitivity": "secret",
@@ -1333,7 +1333,7 @@
     {
       "name": "REVIVAL_ENROLLMENT_USER_ID",
       "aliases": [
-        "CARRY_ENROLLMENT_USER_ID"
+        "COSMOS_ENROLLMENT_USER_ID"
       ],
       "group": "pin",
       "sensitivity": "identity",
@@ -1342,7 +1342,7 @@
     {
       "name": "REVIVAL_OPAQUE_SEED",
       "aliases": [
-        "CARRY_OPAQUE_SEED"
+        "COSMOS_OPAQUE_SEED"
       ],
       "group": "pin",
       "sensitivity": "secret",
@@ -1351,7 +1351,7 @@
     {
       "name": "REVIVAL_DUC_CA_CERT",
       "aliases": [
-        "CARRY_DUC_CA_CERT"
+        "COSMOS_DUC_CA_CERT"
       ],
       "group": "pin",
       "sensitivity": "operational",
@@ -1360,7 +1360,7 @@
     {
       "name": "REVIVAL_DUC_CA_KEY",
       "aliases": [
-        "CARRY_DUC_CA_KEY"
+        "COSMOS_DUC_CA_KEY"
       ],
       "group": "pin",
       "sensitivity": "secret",
@@ -1369,14 +1369,14 @@
     {
       "name": "REVIVAL_OPERATOR_EMAILS",
       "aliases": [
-        "CARRY_OPERATOR_EMAILS"
+        "COSMOS_OPERATOR_EMAILS"
       ],
       "group": "production",
       "sensitivity": "identity",
       "home": "center.env"
     },
     {
-      "name": "CARRY_KID_SCOPE",
+      "name": "COSMOS_KID_SCOPE",
       "aliases": [],
       "group": "production",
       "sensitivity": "identity",
@@ -1390,119 +1390,119 @@
       "home": "providers.env"
     },
     {
-      "name": "CARRY_LLM_BASE_URL",
+      "name": "COSMOS_LLM_BASE_URL",
       "aliases": [],
       "group": "provider",
       "sensitivity": "operational",
       "home": "providers.env"
     },
     {
-      "name": "CARRY_LLM_API_KEY",
+      "name": "COSMOS_LLM_API_KEY",
       "aliases": [],
       "group": "provider",
       "sensitivity": "secret",
       "home": "providers.env"
     },
     {
-      "name": "CARRY_OPENROUTER_API_KEY",
+      "name": "COSMOS_OPENROUTER_API_KEY",
       "aliases": [],
       "group": "provider",
       "sensitivity": "secret",
       "home": "providers.env"
     },
     {
-      "name": "CARRY_LLM_MODEL",
+      "name": "COSMOS_LLM_MODEL",
       "aliases": [],
       "group": "provider",
       "sensitivity": "operational",
       "home": "providers.env"
     },
     {
-      "name": "CARRY_LLM_REASONING_EFFORT",
+      "name": "COSMOS_LLM_REASONING_EFFORT",
       "aliases": [],
       "group": "provider",
       "sensitivity": "operational",
       "home": "providers.env"
     },
     {
-      "name": "CARRY_LLM_MAX_TOKENS",
+      "name": "COSMOS_LLM_MAX_TOKENS",
       "aliases": [],
       "group": "provider",
       "sensitivity": "operational",
       "home": "providers.env"
     },
     {
-      "name": "CARRY_VISION_MODEL",
+      "name": "COSMOS_VISION_MODEL",
       "aliases": [],
       "group": "provider",
       "sensitivity": "operational",
       "home": "providers.env"
     },
     {
-      "name": "CARRY_INTERSTITIAL_BASE_URL",
+      "name": "COSMOS_INTERSTITIAL_BASE_URL",
       "aliases": [],
       "group": "provider",
       "sensitivity": "operational",
       "home": "providers.env"
     },
     {
-      "name": "CARRY_INTERSTITIAL_MODEL",
+      "name": "COSMOS_INTERSTITIAL_MODEL",
       "aliases": [],
       "group": "provider",
       "sensitivity": "operational",
       "home": "providers.env"
     },
     {
-      "name": "CARRY_INTERSTITIAL_API_KEY",
+      "name": "COSMOS_INTERSTITIAL_API_KEY",
       "aliases": [],
       "group": "provider",
       "sensitivity": "secret",
       "home": "providers.env"
     },
     {
-      "name": "CARRY_LOCAL_MODEL_NETWORK",
+      "name": "COSMOS_LOCAL_MODEL_NETWORK",
       "aliases": [],
       "group": "local",
       "sensitivity": "operational",
       "home": "runtime.env"
     },
     {
-      "name": "CARRY_SERPAPI_KEY",
+      "name": "COSMOS_SERPAPI_KEY",
       "aliases": [],
       "group": "provider",
       "sensitivity": "secret",
       "home": "providers.env"
     },
     {
-      "name": "CARRY_GOOGLE_MAPS_KEY",
+      "name": "COSMOS_GOOGLE_MAPS_KEY",
       "aliases": [],
       "group": "provider",
       "sensitivity": "secret",
       "home": "providers.env"
     },
     {
-      "name": "CARRY_PIRATE_WEATHER_KEY",
+      "name": "COSMOS_PIRATE_WEATHER_KEY",
       "aliases": [],
       "group": "provider",
       "sensitivity": "secret",
       "home": "providers.env"
     },
     {
-      "name": "CARRY_WOLFRAM_APP_ID",
+      "name": "COSMOS_WOLFRAM_APP_ID",
       "aliases": [],
       "group": "provider",
       "sensitivity": "secret",
       "home": "providers.env"
     },
     {
-      "name": "CARRY_PPLX_API_KEY",
+      "name": "COSMOS_PPLX_API_KEY",
       "aliases": [],
       "group": "provider",
       "sensitivity": "secret",
       "home": "providers.env"
     },
     {
-      "name": "CARRY_PPLX_MODEL",
+      "name": "COSMOS_PPLX_MODEL",
       "aliases": [],
       "group": "provider",
       "sensitivity": "operational",

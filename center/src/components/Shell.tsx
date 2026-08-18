@@ -141,7 +141,7 @@ function ExperienceNav() {
  *
  * The original rendered TWO headers: the "system" one pinned to the BOTTOM of the
  * viewport (Humane logo bottom-left, account menu bottom-right — Humane's own docs
- * say "select your profile in the bottom right"), and the "top nav" one carrying the
+ * say "select your profile in the bottom right"), and the "top nav" one containing the
  * pill navigation and any page action.
  */
 export function Shell({

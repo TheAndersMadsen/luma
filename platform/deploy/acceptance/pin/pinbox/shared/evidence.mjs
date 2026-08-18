@@ -25,7 +25,7 @@ export const STOCK_ACTION_DISPATCHABLE = new Set([
 ]);
 
 /**
- * Shape only — never full response prose, which can carry private content. The
+ * Shape only — never full response prose, which can contain private content. The
  * full decoded frames stay in the local bundle (gitignored); the summary keeps
  * a bounded preview so it remains shareable.
  *
@@ -43,7 +43,7 @@ export const STOCK_ACTION_DISPATCHABLE = new Set([
  * pinned against the whole on-disk corpus, so this delegates rather than
  * growing a third extractor that can drift.
  *
- * `answerStatus` and `unavailableAnswer` are closed-set/boolean and carry no
+ * `answerStatus` and `unavailableAnswer` are closed-set/boolean and contain no
  * prose, so they stay safe for the shareable summary; `answerPreview` is
  * bounded by MAX_ANSWER_CHARS_STDOUT.
  */

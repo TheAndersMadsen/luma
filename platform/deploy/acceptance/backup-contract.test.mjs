@@ -588,7 +588,7 @@ verify_fetched_backup "$work/fetched" backup-fixture-0001 "$work/key-material.ts
 # a "verified" run that produced no rows would leave a bundle whose index claims
 # four keys it never saw.
 [[ "$(wc -l <"$work/key-material.tsv" | tr -d '[:space:]')" == 4 ]] \
-  || { echo "key material evidence does not carry four roles" >&2; exit 1; }
+  || { echo "key material evidence does not contain four roles" >&2; exit 1; }
 grep -q $'^attestation-ca-key\t' "$work/key-material.tsv"
 grep -q $'^device-user-ca-key\t' "$work/key-material.tsv"
 

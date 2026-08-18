@@ -10,7 +10,7 @@ const SIGN_IN_AGAIN = "Your session expired — sign in again.";
  *
  * Same status, same body and same words as api/settings/wifi and the capture
  * file/download routes. `getCapture` reaches `webapiHeaders()`, so this route
- * really can receive it: it used to arrive here as a 502 carrying
+ * really can receive it: it used to arrive here as a 502 containing
  * "The Keycloak grant behind this session expired…", i.e. Center telling the
  * wearer that the BACKEND had failed while quoting a sentence about their own
  * session.
@@ -49,7 +49,7 @@ export async function GET(
     const capture = await getCapture(uuid);
     if (!capture) return NextResponse.json({ error: "not found" }, { status: 404 });
     return NextResponse.json(capture, {
-      headers: sourceHeaders({ source: "carry", state: "live" }),
+      headers: sourceHeaders({ source: "cosmos", state: "live" }),
     });
   } catch (error) {
     if (error instanceof SessionExpiredError) return reauthenticate();
@@ -98,7 +98,7 @@ export async function DELETE(
     // plainly that the capture is still there.
     if (result.state === "absent") {
       return NextResponse.json(
-        { ok: true, degraded: result.degraded ?? "carry not configured; nothing was deleted" },
+        { ok: true, degraded: result.degraded ?? "cosmos not configured; nothing was deleted" },
         { status: 200, headers: sourceHeaders(result) },
       );
     }

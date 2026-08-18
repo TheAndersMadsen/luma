@@ -45,11 +45,11 @@ const OTHER_KEY = Buffer.alloc(16, 0x33).toString("base64");
 async function withStore(context, contents) {
   const directory = await mkdtemp(path.join(tmpdir(), "revival-channel-key-"));
   const file = path.join(directory, "channel-key.json");
-  const previous = process.env.CARRY_CHANNEL_KEY_FILE;
-  process.env.CARRY_CHANNEL_KEY_FILE = file;
+  const previous = process.env.COSMOS_CHANNEL_KEY_FILE;
+  process.env.COSMOS_CHANNEL_KEY_FILE = file;
   context.after(async () => {
-    if (previous === undefined) delete process.env.CARRY_CHANNEL_KEY_FILE;
-    else process.env.CARRY_CHANNEL_KEY_FILE = previous;
+    if (previous === undefined) delete process.env.COSMOS_CHANNEL_KEY_FILE;
+    else process.env.COSMOS_CHANNEL_KEY_FILE = previous;
     await rm(directory, { recursive: true, force: true });
   });
   if (contents !== undefined) {
@@ -63,13 +63,13 @@ async function withStore(context, contents) {
 const read = async (file) => JSON.parse(await readFile(file, "utf8"));
 
 test("a wearer keeps their key when the kid we derive for them changes shape", async (t) => {
-  // Exactly what /home/anders/carry-center-data/channel-key.json holds today:
-  // the pre-fix CARRY_PRINCIPAL kid, no map.
+  // Exactly what /home/anders/cosmos-center-data/channel-key.json holds today:
+  // the pre-fix COSMOS_PRINCIPAL kid, no map.
   await withStore(t, { kid: LEGACY_KID, key: LEGACY_KEY });
 
   const found = storedKeysFor(DERIVED_KID);
   assert.equal(found.length, 1, "the established key was abandoned by the new derivation");
-  // Returned under its OWN kid, because that is the name its envelopes carry.
+  // Returned under its OWN kid, because that is the name its envelopes use.
   assert.equal(found[0].kid, LEGACY_KID);
   assert.equal(found[0].key.toString("base64"), LEGACY_KEY);
 });
@@ -189,11 +189,11 @@ test("an unreadable store is reported, never mistaken for a first run", async (t
   // that matters (EACCES on /data for uid 1000) without needing to drop
   // privileges: readFileSync fails with something that is not ENOENT.
   const directory = await mkdtemp(path.join(tmpdir(), "revival-channel-key-"));
-  const previous = process.env.CARRY_CHANNEL_KEY_FILE;
-  process.env.CARRY_CHANNEL_KEY_FILE = directory;
+  const previous = process.env.COSMOS_CHANNEL_KEY_FILE;
+  process.env.COSMOS_CHANNEL_KEY_FILE = directory;
   t.after(async () => {
-    if (previous === undefined) delete process.env.CARRY_CHANNEL_KEY_FILE;
-    else process.env.CARRY_CHANNEL_KEY_FILE = previous;
+    if (previous === undefined) delete process.env.COSMOS_CHANNEL_KEY_FILE;
+    else process.env.COSMOS_CHANNEL_KEY_FILE = previous;
     await rm(directory, { recursive: true, force: true });
   });
 

@@ -28,19 +28,19 @@ import javax.net.ssl.X509KeyManager
 import org.json.JSONObject
 
 /** Exact-host, exact-root transport for the operator-owned Cosmos service. */
-internal object CarryRemoteTransport {
+internal object CosmosRemoteTransport {
     private const val TAG = "PenumbraHook"
 
-    internal const val ENABLED_SETTING = "penumbra_carry_remote_mode"
-    internal const val EDGE_IPV4_SETTING = "penumbra_carry_edge_ipv4"
-    internal const val ATTESTATION_KEY_ALIAS = "penumbra_carry_device_attestation_v1"
-    internal const val ATTESTATION_BUNDLE_SETTING = "penumbra_carry_attestation_bundle_b64"
+    internal const val ENABLED_SETTING = "penumbra_cosmos_remote_mode"
+    internal const val EDGE_IPV4_SETTING = "penumbra_cosmos_edge_ipv4"
+    internal const val ATTESTATION_KEY_ALIAS = "penumbra_cosmos_device_attestation_v1"
+    internal const val ATTESTATION_BUNDLE_SETTING = "penumbra_cosmos_attestation_bundle_b64"
     internal const val ATTESTATION_PRODUCT_ID = "00000001"
 
     internal const val PROVISIONING_PROCESS = "hu.ma.ne.ironman:provisioning"
     private const val DIRECT_ATTESTATION_KEY_MANAGER =
         "humaneinternal.system.credentials.DeviceAttestationCredentialKeyManager"
-    private const val ONBOARDING_GATEWAY = "onboarding.carry.humane.cloud:443"
+    private const val ONBOARDING_GATEWAY = "onboarding.cosmos.humane.cloud:443"
     private const val MAX_ATTESTATION_BUNDLE_BYTES = 64 * 1024
 
     private val credentialFactoryClasses = listOf(
@@ -49,23 +49,23 @@ internal object CarryRemoteTransport {
     )
 
     private val allowedHosts = setOf(
-        "api.carry.humane.cloud",
-        "onboarding.carry.humane.cloud",
+        "api.cosmos.humane.cloud",
+        "onboarding.cosmos.humane.cloud",
     )
 
     /** Exact cleartext connectivity authorities retained across stock firmware shapes. */
     private val connectivityHosts = setOf(
-        "connectivity-check.carry.humane.cloud",
-        "n.carry.humane.cloud",
+        "connectivity-check.cosmos.humane.cloud",
+        "n.cosmos.humane.cloud",
     )
 
     private val allowedNetworkHosts = allowedHosts + connectivityHosts
 
     private val remoteGateways = mapOf(
-        "api.prod.humane.cloud" to "api.carry.humane.cloud:443",
-        "api.carry.humane.cloud" to "api.carry.humane.cloud:443",
-        "onboarding.prod.humane.cloud" to "onboarding.carry.humane.cloud:443",
-        "onboarding.carry.humane.cloud" to "onboarding.carry.humane.cloud:443",
+        "api.prod.humane.cloud" to "api.cosmos.humane.cloud:443",
+        "api.cosmos.humane.cloud" to "api.cosmos.humane.cloud:443",
+        "onboarding.prod.humane.cloud" to "onboarding.cosmos.humane.cloud:443",
+        "onboarding.cosmos.humane.cloud" to "onboarding.cosmos.humane.cloud:443",
     )
 
     private val networkDnsInstalled = AtomicBoolean(false)
@@ -152,7 +152,7 @@ AiEArCIbto59wRwtioqqBalsCroF8W5OjMCzqE3jlvN4w18=
         val resolver = try {
             cl.loadClass("io.grpc.internal.DnsNameResolver\$JdkAddressResolver")
         } catch (_: ClassNotFoundException) {
-            Log.w(TAG, "  gRPC DNS resolver unavailable; remote Carry transport not installed")
+            Log.w(TAG, "  gRPC DNS resolver unavailable; remote Cosmos transport not installed")
             return
         }
         HookUtils.hookMethodBefore(
@@ -167,7 +167,7 @@ AiEArCIbto59wRwtioqqBalsCroF8W5OjMCzqE3jlvN4w18=
             param.result = Collections.unmodifiableList(
                 listOf(InetAddress.getByAddress(host, configuredAddress())),
             )
-            Log.w(TAG, "  Remote Carry DNS override applied for an allowlisted host")
+            Log.w(TAG, "  Remote Cosmos DNS override applied for an allowlisted host")
         }
     }
 
@@ -188,7 +188,7 @@ AiEArCIbto59wRwtioqqBalsCroF8W5OjMCzqE3jlvN4w18=
                 param.result = arrayOf(address)
                 Log.w(
                     TAG,
-                    "  Remote Carry per-network DNS override applied for an allowlisted host",
+                    "  Remote Cosmos per-network DNS override applied for an allowlisted host",
                 )
             }
         } catch (error: Throwable) {
@@ -250,7 +250,7 @@ AiEArCIbto59wRwtioqqBalsCroF8W5OjMCzqE3jlvN4w18=
             if (!isEnabled()) return@hookMethodBefore
             val keyManager = param.args.getOrNull(0) as? X509KeyManager
             if (keyManager == null) {
-                param.throwable = SecurityException("Remote Carry client identity is unavailable")
+                param.throwable = SecurityException("Remote Cosmos client identity is unavailable")
                 return@hookMethodBefore
             }
             try {
@@ -289,13 +289,13 @@ AiEArCIbto59wRwtioqqBalsCroF8W5OjMCzqE3jlvN4w18=
 
     private fun configuredAddress(): ByteArray {
         val application = currentApplication()
-            ?: throw SecurityException("Remote Carry application context is unavailable")
+            ?: throw SecurityException("Remote Cosmos application context is unavailable")
         val configured = Settings.Global.getString(
             application.contentResolver,
             EDGE_IPV4_SETTING,
         )
         return parseIpv4(configured)
-            ?: throw SecurityException("Remote Carry edge IPv4 is missing or invalid")
+            ?: throw SecurityException("Remote Cosmos edge IPv4 is missing or invalid")
     }
 
     private fun cloneSslContext(keyManager: X509KeyManager): SSLContext {
@@ -304,7 +304,7 @@ AiEArCIbto59wRwtioqqBalsCroF8W5OjMCzqE3jlvN4w18=
         )
         val store = KeyStore.getInstance(KeyStore.getDefaultType())
         store.load(null, null)
-        store.setCertificateEntry("carry_clone_root_ec_1", certificate)
+        store.setCertificateEntry("cosmos_clone_root_ec_1", certificate)
         val trust = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm())
         trust.init(store)
         return SSLContext.getInstance("TLS").apply {
@@ -354,7 +354,7 @@ AiEArCIbto59wRwtioqqBalsCroF8W5OjMCzqE3jlvN4w18=
                     certificate.subjectX500Principal == issuer
                 }
                 if (index < 0) {
-                    throw SecurityException("Remote Carry client certificate chain is not linkable")
+                    throw SecurityException("Remote Cosmos client certificate chain is not linkable")
                 }
                 ordered += remaining.removeAt(index)
             }
@@ -438,7 +438,7 @@ AiEArCIbto59wRwtioqqBalsCroF8W5OjMCzqE3jlvN4w18=
 
     private fun importPendingAttestation(store: KeyStore) {
         val application = currentApplication()
-            ?: throw SecurityException("Remote Carry application context is unavailable")
+            ?: throw SecurityException("Remote Cosmos application context is unavailable")
         val resolver = application.contentResolver
         val encoded = Settings.Global.getString(resolver, ATTESTATION_BUNDLE_SETTING)
             ?: return
@@ -516,7 +516,7 @@ AiEArCIbto59wRwtioqqBalsCroF8W5OjMCzqE3jlvN4w18=
         check(leaf.basicConstraints < 0)
         check(leaf.keyUsage?.getOrNull(0) != false)
         check(isCompatibleAttestationSubject(deviceId, subjectCommonName(leaf)))
-        val challenge = "penumbra-carry-identity-check".toByteArray(Charsets.US_ASCII)
+        val challenge = "penumbra-cosmos-identity-check".toByteArray(Charsets.US_ASCII)
         val signature = Signature.getInstance("SHA256withECDSA").run {
             initSign(privateKey)
             update(challenge)

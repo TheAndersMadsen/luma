@@ -44,7 +44,7 @@ export async function requireOperatorSession(returnTo?: string): Promise<Session
   if (outcome === "unauthenticated" && AUTH_ENABLED) {
     redirect(returnTo ? `/login?next=${encodeURIComponent(returnTo)}` : "/login");
   }
-  // No Keycloak (local `next dev`) means no session can ever carry the operator
+  // No Keycloak (local `next dev`) means no session can ever contain the operator
   // claim — `verifySession` pins it to `AUTH_ENABLED && payload.operator` — so
   // this path is also how a local deployment refuses the operator plane.
   redirect("/");

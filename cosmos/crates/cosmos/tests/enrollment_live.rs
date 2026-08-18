@@ -12,14 +12,14 @@
 //!
 //! This test therefore speaks the wire protocol as a device would.
 //!
-//! It **skips** unless `CARRY_LIVE_ENROLLMENT_ENDPOINT` is set, and says so — a
+//! It **skips** unless `COSMOS_LIVE_ENROLLMENT_ENDPOINT` is set, and says so — a
 //! bare `return` is indistinguishable from a pass. Required environment:
 //!
-//! * `CARRY_LIVE_ENROLLMENT_ENDPOINT` — e.g. `https://127.0.0.1:32452`
-//! * `CARRY_LIVE_ENROLLMENT_AUTHORITY` — SNI/authority, e.g. `onboarding.clone.invalid`
-//! * `CARRY_LIVE_CA_CERT` / `CARRY_LIVE_CA_KEY` — the clone CA (PEM; key PKCS#8),
+//! * `COSMOS_LIVE_ENROLLMENT_ENDPOINT` — e.g. `https://127.0.0.1:32452`
+//! * `COSMOS_LIVE_ENROLLMENT_AUTHORITY` — SNI/authority, e.g. `onboarding.clone.invalid`
+//! * `COSMOS_LIVE_CA_CERT` / `COSMOS_LIVE_CA_KEY` — the clone CA (PEM; key PKCS#8),
 //!   used to mint a device-attestation client certificate for the mTLS handshake
-//! * `CARRY_LIVE_ENROLLMENT_PINCODE` — defaults to the server's own default
+//! * `COSMOS_LIVE_ENROLLMENT_PINCODE` — defaults to the server's own default
 //!
 //! # Why this re-derives the cipher suite instead of importing it
 //!
@@ -204,53 +204,55 @@ fn open_h4(session_key: &[u8; 32], iv: &[u8], sealed: &[u8]) -> Result<Vec<u8>, 
 
 #[tokio::test]
 async fn the_full_ceremony_completes_against_a_running_deployment() {
-    let Some(endpoint) = var("CARRY_LIVE_ENROLLMENT_ENDPOINT") else {
+    let Some(endpoint) = var("COSMOS_LIVE_ENROLLMENT_ENDPOINT") else {
         eprintln!(
-            "SKIPPED: set CARRY_LIVE_ENROLLMENT_ENDPOINT (plus _AUTHORITY, \
-             CARRY_LIVE_ATTEST_CA_CERT, CARRY_LIVE_ATTEST_CA_KEY and \
-             CARRY_LIVE_SERVER_CA_CERT) to run the ceremony against a \
+            "SKIPPED: set COSMOS_LIVE_ENROLLMENT_ENDPOINT (plus _AUTHORITY, \
+             COSMOS_LIVE_ATTEST_CA_CERT, COSMOS_LIVE_ATTEST_CA_KEY and \
+             COSMOS_LIVE_SERVER_CA_CERT) to run the ceremony against a \
              live deployment"
         );
         return;
     };
     let authority =
-        var("CARRY_LIVE_ENROLLMENT_AUTHORITY").expect("CARRY_LIVE_ENROLLMENT_AUTHORITY");
-    let attest_ca_path = var("CARRY_LIVE_ATTEST_CA_CERT")
-        .or_else(|| var("CARRY_LIVE_CA_CERT"))
-        .expect("CARRY_LIVE_ATTEST_CA_CERT");
+        var("COSMOS_LIVE_ENROLLMENT_AUTHORITY").expect("COSMOS_LIVE_ENROLLMENT_AUTHORITY");
+    let attest_ca_path = var("COSMOS_LIVE_ATTEST_CA_CERT")
+        .or_else(|| var("COSMOS_LIVE_CA_CERT"))
+        .expect("COSMOS_LIVE_ATTEST_CA_CERT");
     let attest_ca_cert_pem =
         std::fs::read_to_string(attest_ca_path).expect("read attestation CA certificate");
-    let server_ca_path = var("CARRY_LIVE_SERVER_CA_CERT")
-        .or_else(|| var("CARRY_LIVE_CA_CERT"))
-        .expect("CARRY_LIVE_SERVER_CA_CERT");
+    let server_ca_path = var("COSMOS_LIVE_SERVER_CA_CERT")
+        .or_else(|| var("COSMOS_LIVE_CA_CERT"))
+        .expect("COSMOS_LIVE_SERVER_CA_CERT");
     let server_ca_cert_pem =
         std::fs::read_to_string(server_ca_path).expect("read server trust anchor");
-    let pincode = var("CARRY_LIVE_ENROLLMENT_PINCODE").unwrap_or_else(|| "0000".to_owned());
-    let device_id = var("CARRY_LIVE_DEVICE_ID").unwrap_or_else(|| "0011223344556677".to_owned());
+    let pincode = var("COSMOS_LIVE_ENROLLMENT_PINCODE").unwrap_or_else(|| "0000".to_owned());
+    let device_id = var("COSMOS_LIVE_DEVICE_ID").unwrap_or_else(|| "0011223344556677".to_owned());
 
     // Prefer an attestation certificate minted where the CA key already lives.
     // The CA private key is the one secret that must not be copied around just to
     // run a test, so supplying a ready-made throwaway device identity is the
     // documented path; minting one here is the convenience fallback for a
     // deployment whose CA is local anyway.
-    let (device_cert_pem, device_key_pem) =
-        match (var("CARRY_LIVE_CLIENT_CERT"), var("CARRY_LIVE_CLIENT_KEY")) {
-            (Some(cert), Some(key)) => (
-                std::fs::read_to_string(cert).expect("read client certificate"),
-                std::fs::read_to_string(key).expect("read client key"),
-            ),
-            _ => {
-                let ca_key_pem = std::fs::read_to_string(
-                var("CARRY_LIVE_ATTEST_CA_KEY")
-                    .or_else(|| var("CARRY_LIVE_CA_KEY"))
+    let (device_cert_pem, device_key_pem) = match (
+        var("COSMOS_LIVE_CLIENT_CERT"),
+        var("COSMOS_LIVE_CLIENT_KEY"),
+    ) {
+        (Some(cert), Some(key)) => (
+            std::fs::read_to_string(cert).expect("read client certificate"),
+            std::fs::read_to_string(key).expect("read client key"),
+        ),
+        _ => {
+            let ca_key_pem = std::fs::read_to_string(
+                var("COSMOS_LIVE_ATTEST_CA_KEY")
+                    .or_else(|| var("COSMOS_LIVE_CA_KEY"))
                     .expect(
-                        "CARRY_LIVE_ATTEST_CA_KEY (or supply CARRY_LIVE_CLIENT_CERT/_KEY instead)",
+                        "COSMOS_LIVE_ATTEST_CA_KEY (or supply COSMOS_LIVE_CLIENT_CERT/_KEY instead)",
                     ),
             )
             .expect("read CA key");
-                device_attestation_certificate(&attest_ca_cert_pem, &ca_key_pem, &device_id)
-            }
-        };
+            device_attestation_certificate(&attest_ca_cert_pem, &ca_key_pem, &device_id)
+        }
+    };
 
     // mTLS exactly as the onboarding gateway demands: the stable server root is
     // the trust anchor, while the independently issued attestation leaf is the
@@ -407,7 +409,7 @@ async fn the_full_ceremony_completes_against_a_running_deployment() {
     );
 
     // The certificate must chain to the CA the gateway verifies against, and must
-    // carry the SERVER's chosen identity — not the one the CSR asked for.
+    // contain the SERVER's chosen identity — not the one the CSR asked for.
     let (_, parsed) = x509_parser::parse_x509_certificate(&certificate_der)
         .expect("the issued DeviceUser certificate parses");
     let subject = parsed.subject().to_string();
@@ -425,10 +427,10 @@ async fn the_full_ceremony_completes_against_a_running_deployment() {
     // CA that verifies the mTLS client certificate. The single-CA deployments this
     // test was first written against happened to use one CA for both; a three-CA
     // deployment (edge CA for mTLS, a separate DUC CA for issuance) does not. So
-    // the final chain check verifies against `CARRY_LIVE_DUC_CA_CERT` when the
+    // the final chain check verifies against `COSMOS_LIVE_DUC_CA_CERT` when the
     // operator supplies it, falling back to the mTLS CA otherwise.
-    let chain_ca_pem = match var("CARRY_LIVE_DUC_CA_CERT") {
-        Some(path) => std::fs::read_to_string(path).expect("read CARRY_LIVE_DUC_CA_CERT"),
+    let chain_ca_pem = match var("COSMOS_LIVE_DUC_CA_CERT") {
+        Some(path) => std::fs::read_to_string(path).expect("read COSMOS_LIVE_DUC_CA_CERT"),
         None => attest_ca_cert_pem.clone(),
     };
     let ca_der = rustls_pemfile::certs(&mut chain_ca_pem.as_bytes())
@@ -444,7 +446,7 @@ async fn the_full_ceremony_completes_against_a_running_deployment() {
     // enroll but cannot call normal APIs; the newly issued DeviceUser key can
     // call APIs but cannot return to onboarding.
     let api_authority =
-        var("CARRY_LIVE_API_AUTHORITY").unwrap_or_else(|| "api.carry.humane.cloud".to_owned());
+        var("COSMOS_LIVE_API_AUTHORITY").unwrap_or_else(|| "api.cosmos.humane.cloud".to_owned());
     let attestation_on_api = mtls_endpoint(
         &endpoint,
         &api_authority,

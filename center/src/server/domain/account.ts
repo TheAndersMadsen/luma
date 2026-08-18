@@ -2,7 +2,7 @@
  * Account details — Settings -> Details, over the stock gRPC account service.
  */
 
-import { CARRY_ENABLED, Services, call } from "../cosmos";
+import { COSMOS_ENABLED, Services, call } from "../cosmos";
 import { failedGrpc, live, unconfigured, type Sourced } from "./provenance";
 
 export interface AccountDetails {
@@ -23,7 +23,7 @@ export interface AccountDetails {
  * page says so rather than inventing a name.
  */
 export async function getAccountDetails(): Promise<Sourced<AccountDetails | null>> {
-  if (!CARRY_ENABLED) return unconfigured(null, "empty", "carry not configured");
+  if (!COSMOS_ENABLED) return unconfigured(null, "empty", "cosmos not configured");
   try {
     const res = await call<
       Record<string, never>,

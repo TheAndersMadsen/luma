@@ -31,7 +31,7 @@
  *
  * `stage_private_configuration` (platform/deploy/vps/remote/common.sh) copies
  * all four into the deployment's staging directory at deploy time, normalizes
- * the REVIVAL_*→CARRY_* aliases, and merges the scoped provider values into
+ * the REVIVAL_*→COSMOS_* aliases, and merges the scoped provider values into
  * runtime.env. Compose then renders production.yaml against them, and the
  * services start with whatever that produced.
  *
@@ -69,7 +69,7 @@
  * plane at all. There are three, and picking the right one is the design:
  *
  *   FLAG PLANE      Runtime feature flags. Already live, already operator-only,
- *                   already reaching the device: /api/admin/flags → carry's
+ *                   already reaching the device: /api/admin/flags → cosmos's
  *                   flags API → the Pin's next flag sync. NOT in the digest
  *                   table, so changing one does not disturb rollback. Anything
  *                   that needs to change while the system is up belongs here.
@@ -100,29 +100,29 @@
  * Non-secret, single-file, no cross-service invariant, no authorization or
  * identity meaning, and wrong values degrade rather than expose:
  *
- *   CARRY_DEADLINE_MS, KEYCLOAK_SCOPES, REVIVAL_SPOTIFY_ADAPTER_TIMEOUT_MS,
- *   CARRY_AZURE_SPEECH_VOICE, CARRY_LLM_MODEL, CARRY_VISION_MODEL,
- *   CARRY_PPLX_MODEL, CARRY_LLM_REASONING_EFFORT, CARRY_REMOTE_TTS_ENABLED,
+ *   COSMOS_DEADLINE_MS, KEYCLOAK_SCOPES, REVIVAL_SPOTIFY_ADAPTER_TIMEOUT_MS,
+ *   COSMOS_AZURE_SPEECH_VOICE, COSMOS_LLM_MODEL, COSMOS_VISION_MODEL,
+ *   COSMOS_PPLX_MODEL, COSMOS_LLM_REASONING_EFFORT, COSMOS_REMOTE_TTS_ENABLED,
  *   REVIVAL_PIN_SETUP_ORIGIN
  *
  * Each descriptor below carries `editable`, so this list is data rather than
- * prose, and the writer refuses anything not marked for it. `CARRY_PPLX_MODEL`
- * and `CARRY_LLM_REASONING_EFFORT` appear in the sentence above but not in the
+ * prose, and the writer refuses anything not marked for it. `COSMOS_PPLX_MODEL`
+ * and `COSMOS_LLM_REASONING_EFFORT` appear in the sentence above but not in the
  * catalog; Center does not read either, so it has no state to report for them
  * and the writer has nothing to validate against. The catalog is the authority
  * — the writer's allowlist is derived from `editable`, never from this prose.
  *
  * A proposable descriptor additionally carries `constraint`, because "safe to
- * edit" is not "any string is fine": CARRY_DEADLINE_MS is a millisecond budget
+ * edit" is not "any string is fine": COSMOS_DEADLINE_MS is a millisecond budget
  * and KEYCLOAK_SCOPES stops every sign-in working the moment it loses `openid`.
  * The constraint is the server-side check AND the sentence the operator reads
  * when a value is refused, so the two cannot drift apart.
  *
  * And it carries `delivery`, which is where this list turned out to be
  * optimistic. Four of the names above are safe to edit and CANNOT be delivered
- * by the env plane as this deployment is wired — CARRY_DEADLINE_MS,
- * REVIVAL_PIN_SETUP_ORIGIN, CARRY_FEATURE_FLAGS_METRICS_URL and
- * CARRY_REMOTE_TTS_ENABLED. See `ConfigurationDelivery` below for what stops
+ * by the env plane as this deployment is wired — COSMOS_DEADLINE_MS,
+ * REVIVAL_PIN_SETUP_ORIGIN, COSMOS_FEATURE_FLAGS_METRICS_URL and
+ * COSMOS_REMOTE_TTS_ENABLED. See `ConfigurationDelivery` below for what stops
  * each one. They stay in the catalog with the reason attached rather than being
  * quietly dropped: an operator who is told "not editable" with no explanation
  * goes to the VPS and edits a file that was never going to help.
@@ -130,29 +130,29 @@
  * ───────────────────────────────────────────────────────────────────────────
  * 5. MUST NEVER BE EDITABLE FROM THE DASHBOARD — AND WHY
  *
- * a. SECRETS AND KEY MATERIAL. AUTH_SESSION_SECRET, CARRY_SHARE_TOKEN_SECRET,
- *    CARRY_EDGE_TOKEN, CARRY_ADMIN_TOKEN, CARRY_CENTER_PROJECTION_TOKEN,
- *    KEYCLOAK_CLIENT_SECRET, CARRY_OPAQUE_SEED, CARRY_PG_PASSWORD,
- *    CARRY_KEYCLOAK_DB_PASSWORD, KEYCLOAK_ADMIN_PASSWORD,
- *    GRAFANA_ADMIN_PASSWORD, SEARXNG_SECRET, CARRY_DUC_CA_KEY, and every
+ * a. SECRETS AND KEY MATERIAL. AUTH_SESSION_SECRET, COSMOS_SHARE_TOKEN_SECRET,
+ *    COSMOS_EDGE_TOKEN, COSMOS_ADMIN_TOKEN, COSMOS_CENTER_PROJECTION_TOKEN,
+ *    KEYCLOAK_CLIENT_SECRET, COSMOS_OPAQUE_SEED, COSMOS_PG_PASSWORD,
+ *    COSMOS_KEYCLOAK_DB_PASSWORD, KEYCLOAK_ADMIN_PASSWORD,
+ *    GRAFANA_ADMIN_PASSWORD, SEARXNG_SECRET, COSMOS_DUC_CA_KEY, and every
  *    provider API key.
  *
  *    Center is the surface an attacker reaches first — it is the public web
  *    app. Putting the writer for the credentials that PROTECT Center inside
  *    Center means one stolen operator cookie, or one server-side request
  *    forgery in a route handler, is total compromise rather than a session
- *    compromise. CARRY_DUC_CA_KEY is the device-user CA: it mints device
+ *    compromise. COSMOS_DUC_CA_KEY is the device-user CA: it mints device
  *    identities. That writer must not be reachable from a browser at all.
  *
- * b. CROSS-SERVICE INVARIANTS. drift.sh asserts that CARRY_EDGE_TOKEN is
+ * b. CROSS-SERVICE INVARIANTS. drift.sh asserts that COSMOS_EDGE_TOKEN is
  *    byte-identical across all four env files and appears exactly twice in the
  *    rendered edge/envoy.yaml, and that the Spotify adapter token is at least
- *    32 bytes and different from it. CARRY_ENROLLMENT_PINCODE and
- *    CARRY_ENROLLMENT_USER_ID must agree across runtime, cosmos and center. A
+ *    32 bytes and different from it. COSMOS_ENROLLMENT_PINCODE and
+ *    COSMOS_ENROLLMENT_USER_ID must agree across runtime, cosmos and center. A
  *    single-file editor cannot maintain those, and the failure surfaces later,
  *    as a drift check on a deploy the operator did not connect to the edit.
  *
- * c. IDENTITY AND AUTHORIZATION. CARRY_OPERATOR_EMAILS is the bootstrap
+ * c. IDENTITY AND AUTHORIZATION. COSMOS_OPERATOR_EMAILS is the bootstrap
  *    operator allowlist: an editor for it lets one operator session mint
  *    permanent operator access for any address, including an attacker's, which
  *    converts a session compromise into persistence. REVIVAL_PIN_BRIDGE_OWNER_SUB
@@ -220,7 +220,7 @@
  * backend outage must not render as "you have no captures".
  *
  * A later, honest upgrade: the backend already exposes an operator surface that
- * Center proxies with CARRY_ADMIN_TOKEN (see api/admin/overview). Teaching it
+ * Center proxies with COSMOS_ADMIN_TOKEN (see api/admin/overview). Teaching it
  * to report its own configuration STATES would turn `unobservable` into real
  * answers without any value ever crossing a network boundary. Not built today.
  *
@@ -308,7 +308,7 @@ export type ConfigurationEditability =
  * operator in the same breath.
  *
  * "Operational" (§4) means a wrong value degrades rather than exposes — it does
- * NOT mean any string is acceptable. `CARRY_DEADLINE_MS` set to "soon" makes
+ * NOT mean any string is acceptable. `COSMOS_DEADLINE_MS` set to "soon" makes
  * every gRPC call fail at parse time; `KEYCLOAK_SCOPES` without `openid` makes
  * the authorization request fail for everyone including the operator who typed
  * it. Both of those are a deploy away from being noticed, which is exactly the
@@ -343,13 +343,13 @@ export type ConfigurationConstraint =
  *
  *   REVIVAL_PIN_SETUP_ORIGIN         production.yaml assigns it a LITERAL, so no
  *                                    env file can override it.
- *   CARRY_FEATURE_FLAGS_METRICS_URL  the same, from the base compose.yaml that
+ *   COSMOS_FEATURE_FLAGS_METRICS_URL  the same, from the base compose.yaml that
  *                                    production.yaml merges with.
- *   CARRY_DEADLINE_MS                the Center service declares an explicit
+ *   COSMOS_DEADLINE_MS                the Center service declares an explicit
  *                                    environment allowlist and this name is not
  *                                    on it, so a value in center.env is never
  *                                    handed to the container that reads it.
- *   CARRY_REMOTE_TTS_ENABLED         the deploy proves the speech provider with
+ *   COSMOS_REMOTE_TTS_ENABLED         the deploy proves the speech provider with
  *                                    a live canary and then writes it itself,
  *                                    after proposals are applied.
  *
@@ -367,11 +367,11 @@ export type ConfigurationDelivery =
   /** It would not, for the reason given — which names the file to edit instead. */
   | { via: "blocked"; reason: string };
 
-/** Whether THIS deployment can actually carry a change to this setting. */
+/** Whether THIS deployment can actually contain a change to this setting. */
 export type ConfigurationWritability =
   /** Editable, and a value written into its home would reach the reader. */
   | "proposable"
-  /** Editable in principle; this deployment's Compose model does not carry it. */
+  /** Editable in principle; this deployment's Compose model does not contain it. */
   | "not-delivered"
   /** Not editable from a browser. `restriction` says why. */
   | "never";
@@ -408,7 +408,7 @@ export interface ConfigurationSetting {
    *
    * Only ever a value that is already committed to this repository — a coded
    * default in `.env.example` or `compose.yaml`. A `secret` setting must never
-   * carry one UNLESS it is a `path` setting, whose value is a filesystem
+   * contain one UNLESS it is a `path` setting, whose value is a filesystem
    * location rather than the material the file holds; the verify test enforces
    * exactly that split rather than trusting the descriptors to be right.
    */
@@ -521,7 +521,7 @@ const CATALOG: ConfigurationSetting[] = [
     path: false,
     fallback: null,
     impact:
-      "Unset means this deployment has NO authentication: middleware opens every wearer route and no session can carry the operator claim.",
+      "Unset means this deployment has NO authentication: middleware opens every wearer route and no session can contain the operator claim.",
     ...never("Names the identity provider itself; changing it re-points every sign-in."),
   },
   {
@@ -592,7 +592,7 @@ const CATALOG: ConfigurationSetting[] = [
     }),
   },
   {
-    name: "CARRY_OPERATOR_EMAILS",
+    name: "COSMOS_OPERATOR_EMAILS",
     group: "Authentication",
     sensitivity: "identity",
     home: "center.env",
@@ -600,13 +600,13 @@ const CATALOG: ConfigurationSetting[] = [
     path: false,
     fallback: null,
     impact:
-      "The self-hosted bootstrap allowlist. Empty is normal and correct once the carry-operator realm role is granted.",
+      "The self-hosted bootstrap allowlist. Empty is normal and correct once the cosmos-operator realm role is granted.",
     ...never("An editor here converts one operator session into permanent operator access for any address."),
   },
 
   // ── Backend ───────────────────────────────────────────────────────────────
   {
-    name: "CARRY_WEBAPI_BASE_URL",
+    name: "COSMOS_WEBAPI_BASE_URL",
     group: "Backend",
     sensitivity: "operational",
     home: "center.env",
@@ -617,18 +617,18 @@ const CATALOG: ConfigurationSetting[] = [
     ...never("Points Center at its backend; the Compose network topology owns it."),
   },
   {
-    name: "CARRY_GRPC_ENDPOINT",
+    name: "COSMOS_GRPC_ENDPOINT",
     group: "Backend",
     sensitivity: "operational",
     home: "center.env",
     observable: true,
     path: false,
     fallback: null,
-    impact: "The fallback endpoint for any workload without its own CARRY_ENDPOINT_*.",
+    impact: "The fallback endpoint for any workload without its own COSMOS_ENDPOINT_*.",
     ...never("Service topology, rendered from Compose service names."),
   },
   {
-    name: "CARRY_ADMIN_TOKEN",
+    name: "COSMOS_ADMIN_TOKEN",
     group: "Backend",
     sensitivity: "secret",
     home: "center.env",
@@ -640,7 +640,7 @@ const CATALOG: ConfigurationSetting[] = [
     ...never("Backend admin credential, and one of the values drift.sh requires to be identical across all four env files."),
   },
   {
-    name: "CARRY_EDGE_TOKEN",
+    name: "COSMOS_EDGE_TOKEN",
     group: "Backend",
     sensitivity: "secret",
     home: "center.env",
@@ -651,7 +651,7 @@ const CATALOG: ConfigurationSetting[] = [
     ...never("drift.sh requires this to be byte-identical in all four env files AND to appear exactly twice in the rendered edge/envoy.yaml."),
   },
   {
-    name: "CARRY_CENTER_PROJECTION_TOKEN",
+    name: "COSMOS_CENTER_PROJECTION_TOKEN",
     group: "Backend",
     sensitivity: "secret",
     home: "center.env",
@@ -662,7 +662,7 @@ const CATALOG: ConfigurationSetting[] = [
     ...never("Purpose-scoped credential shared with the backend; both sides must change together."),
   },
   {
-    name: "CARRY_SHARE_TOKEN_SECRET",
+    name: "COSMOS_SHARE_TOKEN_SECRET",
     group: "Backend",
     sensitivity: "secret",
     home: "center.env",
@@ -673,7 +673,7 @@ const CATALOG: ConfigurationSetting[] = [
     ...never("Rotating it invalidates every share link already handed out."),
   },
   {
-    name: "CARRY_DEADLINE_MS",
+    name: "COSMOS_DEADLINE_MS",
     group: "Backend",
     sensitivity: "operational",
     home: "center.env",
@@ -684,12 +684,12 @@ const CATALOG: ConfigurationSetting[] = [
     ...proposable(
       timeoutMs(1_000, 120_000),
       undeliverable(
-        "The Center service declares an explicit environment allowlist in platform/compose/production.yaml and CARRY_DEADLINE_MS is not on it, so a value in center.env is never handed to the container that reads it — this deployment always runs the coded defaults. Adding it to that allowlist is a Compose change, and not a free one: server/cosmos.ts falls back to 20000 for the upload call and 8000 elsewhere, so a single value would also shorten the upload deadline.",
+        "The Center service declares an explicit environment allowlist in platform/compose/production.yaml and COSMOS_DEADLINE_MS is not on it, so a value in center.env is never handed to the container that reads it — this deployment always runs the coded defaults. Adding it to that allowlist is a Compose change, and not a free one: server/cosmos.ts falls back to 20000 for the upload call and 8000 elsewhere, so a single value would also shorten the upload deadline.",
       ),
     ),
   },
   {
-    name: "CARRY_FEATURE_FLAGS_METRICS_URL",
+    name: "COSMOS_FEATURE_FLAGS_METRICS_URL",
     group: "Backend",
     sensitivity: "operational",
     home: "compose",
@@ -718,13 +718,13 @@ const CATALOG: ConfigurationSetting[] = [
     ...never("Set by the container image to match where the build stage copied the contracts."),
   },
   {
-    name: "CARRY_CHANNEL_KEY_FILE",
+    name: "COSMOS_CHANNEL_KEY_FILE",
     group: "Backend",
     sensitivity: "secret",
     home: "center.env",
     observable: true,
     path: true,
-    fallback: ".carry-channel-key.json in the working directory",
+    fallback: ".cosmos-channel-key.json in the working directory",
     impact:
       "Must be on the persistent volume and readable by 1000:1001, or established channel keys are lost on restart.",
     ...never("Points at wearer key material; the deploy owns the volume it must live on."),
@@ -773,7 +773,7 @@ const CATALOG: ConfigurationSetting[] = [
     path: true,
     fallback: null,
     impact:
-      "Mounted as a Compose secret. drift.sh requires it to be at least 32 bytes, owned 1000:1001, mode 400 or 440, and different from CARRY_EDGE_TOKEN.",
+      "Mounted as a Compose secret. drift.sh requires it to be at least 32 bytes, owned 1000:1001, mode 400 or 440, and different from COSMOS_EDGE_TOKEN.",
     ...never("Purpose-scoped adapter credential with mode and owner asserted by drift.sh."),
   },
   {
@@ -867,7 +867,7 @@ const CATALOG: ConfigurationSetting[] = [
 
   // ── Providers (another container's environment) ───────────────────────────
   {
-    name: "CARRY_AZURE_SPEECH_KEY",
+    name: "COSMOS_AZURE_SPEECH_KEY",
     group: "Providers",
     sensitivity: "secret",
     home: "providers.env",
@@ -878,7 +878,7 @@ const CATALOG: ConfigurationSetting[] = [
     ...never("Third-party credential held by the backend. It never enters this container."),
   },
   {
-    name: "CARRY_AZURE_SPEECH_REGION",
+    name: "COSMOS_AZURE_SPEECH_REGION",
     group: "Providers",
     sensitivity: "operational",
     home: "providers.env",
@@ -889,7 +889,7 @@ const CATALOG: ConfigurationSetting[] = [
     ...never("Paired with the speech key; both belong to the backend's environment."),
   },
   {
-    name: "CARRY_AZURE_SPEECH_VOICE",
+    name: "COSMOS_AZURE_SPEECH_VOICE",
     group: "Providers",
     sensitivity: "operational",
     home: "providers.env",
@@ -909,7 +909,7 @@ const CATALOG: ConfigurationSetting[] = [
     }),
   },
   {
-    name: "CARRY_MUSICBRAINZ_BASE_URL",
+    name: "COSMOS_MUSICBRAINZ_BASE_URL",
     group: "Providers",
     sensitivity: "operational",
     home: "providers.env",
@@ -920,7 +920,7 @@ const CATALOG: ConfigurationSetting[] = [
     ...never("Backend egress destination; it never enters this container."),
   },
   {
-    name: "CARRY_SHOPPING_VISUAL_SEARCH_URL",
+    name: "COSMOS_SHOPPING_VISUAL_SEARCH_URL",
     group: "Providers",
     sensitivity: "operational",
     home: "providers.env",
@@ -931,7 +931,7 @@ const CATALOG: ConfigurationSetting[] = [
     ...never("Backend egress destination; it never enters this container."),
   },
   {
-    name: "CARRY_SHOPPING_ALLOWED_HOSTS",
+    name: "COSMOS_SHOPPING_ALLOWED_HOSTS",
     group: "Providers",
     sensitivity: "operational",
     home: "providers.env",
@@ -942,7 +942,7 @@ const CATALOG: ConfigurationSetting[] = [
     ...never("Must be reviewed with the backend endpoint."),
   },
   {
-    name: "CARRY_SHOPPING_API_KEY",
+    name: "COSMOS_SHOPPING_API_KEY",
     group: "Providers",
     sensitivity: "secret",
     home: "providers.env",
@@ -953,7 +953,7 @@ const CATALOG: ConfigurationSetting[] = [
     ...never("Third-party credential held by the backend."),
   },
   {
-    name: "CARRY_LLM_API_KEY",
+    name: "COSMOS_LLM_API_KEY",
     group: "Providers",
     sensitivity: "secret",
     home: "providers.env",
@@ -964,7 +964,7 @@ const CATALOG: ConfigurationSetting[] = [
     ...never("Third-party credential held by the backend."),
   },
   {
-    name: "CARRY_LLM_BASE_URL",
+    name: "COSMOS_LLM_BASE_URL",
     group: "Providers",
     sensitivity: "operational",
     home: "providers.env",
@@ -975,7 +975,7 @@ const CATALOG: ConfigurationSetting[] = [
     ...never("Changing the endpoint changes where wearer prompts are sent."),
   },
   {
-    name: "CARRY_LLM_MODEL",
+    name: "COSMOS_LLM_MODEL",
     group: "Providers",
     sensitivity: "operational",
     home: "providers.env",
@@ -986,7 +986,7 @@ const CATALOG: ConfigurationSetting[] = [
     ...proposable(modelIdentifier("a provider model id, like openai/gpt-4o-mini")),
   },
   {
-    name: "CARRY_VISION_MODEL",
+    name: "COSMOS_VISION_MODEL",
     group: "Providers",
     sensitivity: "operational",
     home: "runtime.env",
@@ -999,7 +999,7 @@ const CATALOG: ConfigurationSetting[] = [
 
   // ── Backend workloads (another container's environment) ───────────────────
   {
-    name: "CARRY_REMOTE_TTS_ENABLED",
+    name: "COSMOS_REMOTE_TTS_ENABLED",
     group: "Backend workloads",
     sensitivity: "operational",
     home: "cosmos.env",
@@ -1011,12 +1011,12 @@ const CATALOG: ConfigurationSetting[] = [
     ...proposable(
       { kind: "boolean" },
       undeliverable(
-        "deploy.sh proves the speech provider returns real audio and then sets CARRY_REMOTE_TTS_ENABLED=true in the staged cosmos.env itself, after any proposal is applied — so a value set here would be overwritten by the deploy that was supposed to carry it. Turning remote speech off is a change to that step, not to an env file.",
+        "deploy.sh proves the speech provider returns real audio and then sets COSMOS_REMOTE_TTS_ENABLED=true in the staged cosmos.env itself, after any proposal is applied — so a value set here would be overwritten by the deploy that was supposed to contain it. Turning remote speech off is a change to that step, not to an env file.",
       ),
     ),
   },
   {
-    name: "CARRY_ENROLLMENT_PINCODE",
+    name: "COSMOS_ENROLLMENT_PINCODE",
     group: "Backend workloads",
     sensitivity: "secret",
     home: "cosmos.env",
@@ -1027,7 +1027,7 @@ const CATALOG: ConfigurationSetting[] = [
     ...never("Low entropy and required to agree across runtime, cosmos and center — even its LENGTH is a partial secret."),
   },
   {
-    name: "CARRY_DATABASE_URL",
+    name: "COSMOS_DATABASE_URL",
     group: "Backend workloads",
     sensitivity: "secret",
     home: "cosmos.env",
@@ -1038,7 +1038,7 @@ const CATALOG: ConfigurationSetting[] = [
     ...never("Carries the database password, and the deploy transaction restores against this exact database."),
   },
   {
-    name: "CARRY_REQUIRE_DEVICE_ATTESTATION",
+    name: "COSMOS_REQUIRE_DEVICE_ATTESTATION",
     group: "Backend workloads",
     sensitivity: "identity",
     home: "cosmos.env",
@@ -1049,7 +1049,7 @@ const CATALOG: ConfigurationSetting[] = [
     ...never("A device authorization boundary. Weakening it from a browser is exactly the move to prevent."),
   },
   {
-    name: "CARRY_DUC_CA_KEY",
+    name: "COSMOS_DUC_CA_KEY",
     group: "Backend workloads",
     sensitivity: "secret",
     home: "runtime.env",

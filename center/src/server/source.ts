@@ -10,11 +10,11 @@
  *
  * Humane ran TWO APIs and so does the clone, so the seam talks to both:
  *
- *   REST  (CARRY_WEBAPI_BASE_URL)  — what .Center itself called
+ *   REST  (COSMOS_WEBAPI_BASE_URL)  — what .Center itself called
  *     captures  -> GET /capture/captures     Spring Data Page<MemoryDto>
  *     notes     -> GET /notes                Spring Data Page<NoteDto>
  *
- *   gRPC  (CARRY_ENDPOINT_<WORKLOAD>)       — what the Pin calls
+ *   gRPC  (COSMOS_ENDPOINT_<WORKLOAD>)       — what the Pin calls
  *     my-data events    -> DeviceEventsHistoryService.QueryEvents
  *     my-data overview  -> derived from QueryEvents counts
  *     memory delete     -> CaptureService.DeleteMemory

@@ -25,14 +25,14 @@ EXPECTED_HOST="anders-server"
 EXPECTED_USER="anders"
 EXPECTED_ARCH="aarch64"
 PROJECT="ai-pin-revival"
-LEGACY_PROJECT="humane-carry-clone"
+LEGACY_PROJECT="humane-cosmos-clone"
 HELPER_IMAGE="node:22.18.0-alpine3.22@sha256:1b2479dd35a99687d6638f5976fd235e26c5b37e8122f786fcd5fe231d63de5b"
 
-STATE_VOLUME="humane-carry-clone_carry-state"
-PG_VOLUME="humane-carry-clone_carry-pgdata"
-PROMETHEUS_VOLUME="humane-carry-clone_prometheus-data"
-GRAFANA_VOLUME="humane-carry-clone_grafana-data"
-CENTER_DATA_DIR="/home/anders/carry-center-data"
+STATE_VOLUME="humane-cosmos-clone_cosmos-state"
+PG_VOLUME="humane-cosmos-clone_cosmos-pgdata"
+PROMETHEUS_VOLUME="humane-cosmos-clone_prometheus-data"
+GRAFANA_VOLUME="humane-cosmos-clone_grafana-data"
+CENTER_DATA_DIR="/home/anders/cosmos-center-data"
 
 RUNTIME_ENV="$PRIVATE_DIR/runtime.env"
 COSMOS_ENV="$PRIVATE_DIR/cosmos.env"
@@ -54,13 +54,13 @@ MANAGED_CLOUDFLARED_USER_UNIT="cloudflared-hermes.service"
 # write_owner_canary_cookie above mints a SESSION and deliberately no bearer, and
 # says so at length. What follows is the other half: a real sealed Keycloak
 # bearer for a DEDICATED canary identity, which is the only thing that can prove
-# openTokens/refreshTokens/JWKS/CARRY_EDGE_TOKEN are intact on a live deployment.
+# openTokens/refreshTokens/JWKS/COSMOS_EDGE_TOKEN are intact on a live deployment.
 # Two 100%-degraded wearer planes shipped green because nothing did.
 #
 # WHY A SEPARATE REALM USER AND NOT A SERVICE ACCOUNT. Center mints the wearer
 # bearer in exactly one place — POST /api/auth/login, which calls keycloakLogin
 # (Resource Owner Password against client `center`), seals the result with
-# sealTokens and writes it as the chunked `carry_tokens` cookie set. A
+# sealTokens and writes it as the chunked `cosmos_tokens` cookie set. A
 # client-credentials service account would return a token this deployment's own
 # login path never produces, and it returns no refresh token at all, so the gate
 # would be exercising a code path production does not have. The canary therefore
@@ -68,7 +68,7 @@ MANAGED_CLOUDFLARED_USER_UNIT="cloudflared-hermes.service"
 # gets back is byte-for-byte the jar a browser gets.
 #
 # WHAT THE OPERATOR PROVISIONS. One Keycloak realm user in `humane` that is:
-#   * NOT in the operator allowlist and holds no `carry-operator` role, so the
+#   * NOT in the operator allowlist and holds no `cosmos-operator` role, so the
 #     admin plane refuses it — canary.sh proves this at runtime rather than
 #     trusting the provisioning;
 #   * NOT the paired Pin owner, so it addresses its own empty `U:<sub>`

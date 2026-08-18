@@ -797,7 +797,7 @@ fn physical_trace_preserves_the_next_ordinal_across_preflight_resume() {
 
     let ((initial, resumed, next_suspension), events) = capture_physical_trace(|| {
         let (initial, suspension) = block_on(loop_.run_suspendable("find somewhere nearby"));
-        let suspension = suspension.expect("preflight must carry its transcript");
+        let suspension = suspension.expect("preflight must contain its transcript");
         assert_eq!(
             suspension.next_trace_ordinal, 2,
             "the pending preflight has not completed and must not consume an ordinal"
@@ -1145,7 +1145,7 @@ fn a_refused_final_answer_records_the_verification_gate_with_its_reason() {
             ("iteration".to_string(), 0),
             ("answer_chars".to_string(), 19),
         ],
-        "a refusal must carry the shape it judged, not just the verdict"
+        "a refusal must contain the shape it judged, not just the verdict"
     );
     assert!(
         record
@@ -1848,7 +1848,7 @@ fn cue_prose_never_enters_provider_messages_or_tool_history() {
             "knowledge_lookup".to_string(),
             EPHEMERAL_CUE.to_string(),
         )],
-        "the cue side channel must carry its run and selected operation"
+        "the cue side channel must contain its run and selected operation"
     );
     for provider_step in backend.seen_messages.lock().unwrap().iter() {
         assert!(
@@ -2481,7 +2481,7 @@ fn a_device_round_trip_mid_run_resumes_into_further_tool_batches() {
         matches!(outcome, ChatTurnOutcome::Preflight { ref action, .. } if action == native_actions::GET_CURRENT_LOCATION),
         "the device action must interrupt the run"
     );
-    let suspension = suspension.expect("a preflight must carry its suspension");
+    let suspension = suspension.expect("a preflight must contain its suspension");
     // The completed first batch streamed its pair; the interrupted batch
     // announced itself but has no observation yet (it is still pending).
     assert_eq!(
@@ -2574,7 +2574,7 @@ fn preflight_suspension_resumes_in_session_and_answers() {
     assert!(
         matches!(outcome, ChatTurnOutcome::Preflight { ref action, .. } if action == native_actions::GET_CURRENT_LOCATION)
     );
-    let suspension = suspension.expect("a preflight must carry its suspension");
+    let suspension = suspension.expect("a preflight must contain its suspension");
 
     // Continuation turn: a fresh loop instance (new tools now grounded
     // with the validated device observation) resumes the transcript.

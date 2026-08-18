@@ -455,7 +455,7 @@ fn osm_element_to_place(el: &serde_json::Value) -> Option<NearbyPlace> {
     let tags = el.get("tags")?;
     let name = bounded_string(tags.get("name")?.as_str()?, MAX_PLACE_NAME_CHARS)?;
 
-    // Nodes carry lat/lon directly; ways carry center.lat / center.lon
+    // Nodes contain lat/lon directly; ways contain center.lat / center.lon
     // (from the `out center` directive).
     let (place_lat, place_lon) = resolve_coordinates(el)?;
 

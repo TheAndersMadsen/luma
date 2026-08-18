@@ -4,10 +4,10 @@
 //! pair are field-for-field Google Places / Directions objects, so these adapters are close to a
 //! rename.
 //!
-//! Reverse geocode is the exception: carry's `ReverseGeocodeResponse` uses
+//! Reverse geocode is the exception: cosmos's `ReverseGeocodeResponse` uses
 //! `municipality` / `country_subdivision`, which is Azure Maps / TomTom
 //! vocabulary — Google emits `locality` / `administrative_area_level_1` and
-//! never those names. carry therefore used a *different* vendor for that one
+//! never those names. Cosmos therefore used a *different* vendor for that one
 //! surface. We adapt Google into the Azure-shaped fields; see
 //! [`reverse_geocode`].
 
@@ -18,7 +18,7 @@ use serde_json::{self, json};
 
 use super::{BackendError, http, key};
 
-const KEY_VAR: &str = "CARRY_GOOGLE_MAPS_KEY";
+const KEY_VAR: &str = "COSMOS_GOOGLE_MAPS_KEY";
 const DEFAULT_NEARBY_RADIUS_M: f64 = 1_000.0;
 
 // --- places ---------------------------------------------------------------
@@ -74,7 +74,7 @@ struct LatLng {
     lng: f64,
 }
 
-/// Nearby/text place search, in carry's wire shape.
+/// Nearby/text place search, in cosmos's wire shape.
 pub async fn nearby(
     text_query: &str,
     near: Option<(f64, f64)>,
@@ -194,12 +194,12 @@ struct AddressComponent {
     types: Vec<String>,
 }
 
-/// Reverse geocode a point into carry's address shape.
+/// Reverse geocode a point into cosmos's address shape.
 ///
-/// carry's field names are Azure Maps / TomTom vocabulary, so this translates
+/// cosmos's field names are Azure Maps / TomTom vocabulary, so this translates
 /// Google's `address_components` into them:
 ///
-/// | carry field | Google component |
+/// | Cosmos field | Google component |
 /// |---|---|
 /// | `street_number` | `street_number` |
 /// | `street_name` | `route` |
@@ -556,7 +556,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn google_components_map_onto_carrys_azure_shaped_address() {
+    fn google_components_map_onto_cosmos_azure_shaped_address() {
         let components = vec![
             AddressComponent {
                 long_name: "422".into(),

@@ -53,7 +53,7 @@ internal object PackageReplacementGuard {
     /**
      * Before the CLI removes any live package, prove the entire staged batch is coherent.
      * Expected live packages must still be system-shared packages; every already-retained sibling
-     * must independently carry its exact staged-artifact approval.
+     * must independently contain its exact staged-artifact approval.
      */
     fun validateBeforeUninstall(
         packageNames: Set<String>,

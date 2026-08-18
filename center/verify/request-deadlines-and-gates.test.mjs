@@ -13,7 +13,7 @@ import { sourceFiles } from "./sourceScan.mjs";
  * reached its handler with no session, because that handler reads its last
  * segment as `Number(index) || 0` and swallowed the suffix; `/captures/x.png`
  * rendered the signed-in app shell to an anonymous caller. Nothing was disclosed
- * — Carry hands a non-Web caller the sealed envelope and the channel key refuses
+ * — Cosmos hands a non-Web caller the sealed envelope and the channel key refuses
  * to resolve without a wearer identity — but the gate genuinely did not run, and
  * the next route with a suffix-tolerant segment would not have been so lucky.
  *
@@ -23,7 +23,7 @@ import { sourceFiles } from "./sourceScan.mjs";
  * the wearer waits, the route's honest `state: "degraded"` never gets to run,
  * and the handler keeps its socket long after nginx has already given up on the
  * browser. The refresh-token exchange was the worst of them — it is upstream of
- * every deadline Center owns, so CARRY_DEADLINE_MS bounded nothing across it.
+ * every deadline Center owns, so COSMOS_DEADLINE_MS bounded nothing across it.
  */
 
 const SRC = new URL("../src/", import.meta.url);
@@ -121,7 +121,7 @@ test("every call to Cosmos or Keycloak is bounded by a deadline", async () => {
           }
         }
         const args = text.slice(open, close + 1);
-        if (!/CARRY_WEBAPI|KEYCLOAK_BASE_URL/.test(args)) continue;
+        if (!/COSMOS_WEBAPI|KEYCLOAK_BASE_URL/.test(args)) continue;
         scanned += 1;
         if (!/signal:/.test(args)) {
           unbounded.push(`${relative}:${text.slice(0, open).split("\n").length}`);
@@ -143,7 +143,7 @@ test("the wearer's identity is resolved before the deadline clock starts", async
    * Object-literal properties evaluate in order. With `signal:` written above
    * `headers: await webapiHeaders()`, the 8s clock started BEFORE the token
    * refresh, so a Keycloak slower than that handed `fetch` a signal that had
-   * already fired — and `describeWebapi` reported it as "carry webapi timed
+   * already fired — and `describeWebapi` reported it as "cosmos webapi timed
    * out". Center blaming a healthy Cosmos for an IdP stall is exactly the
    * misattribution this codebase keeps writing prose about.
    */
