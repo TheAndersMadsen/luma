@@ -983,7 +983,7 @@ mod spoken_register {
                 "inline spoken string is canned filler: {spoken}"
             );
         }
-}
+    }
 
     #[test]
     fn every_spoken_constant_in_this_file_is_registered() {

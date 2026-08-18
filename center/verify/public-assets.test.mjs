@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import test from "node:test";
 
 const middleware = await readFile(new URL("../src/middleware.ts", import.meta.url), "utf8");
@@ -12,6 +12,22 @@ const releaseClient = await readFile(
   new URL("../src/lib/pin-install/releases/manifest.ts", import.meta.url),
   "utf8",
 );
+const providers = await readFile(new URL("../src/components/Providers.tsx", import.meta.url), "utf8");
+
+async function pngDimensions(path) {
+  const bytes = await readFile(new URL(path, import.meta.url));
+  assert.equal(bytes.subarray(1, 4).toString("ascii"), "PNG");
+  return [bytes.readUInt32BE(16), bytes.readUInt32BE(20)];
+}
+
+async function sourceFiles(directory, found = []) {
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const child = new URL(`${entry.name}${entry.isDirectory() ? "/" : ""}`, directory);
+    if (entry.isDirectory()) await sourceFiles(child, found);
+    else if (/\.[cm]?[jt]sx?$/.test(entry.name)) found.push(child);
+  }
+  return found;
+}
 
 function withoutComments(text, marker) {
   return text
@@ -20,11 +36,35 @@ function withoutComments(text, marker) {
     .join("\n");
 }
 
-test("Center icons and manifest remain public before sign in", () => {
+test("Center's installable PWA assets remain public before sign in", async () => {
   assert.match(middleware, /favicon\.ico/);
   assert.match(middleware, /manifest\.json/);
+  assert.ok(middleware.includes("icon-192\\\\.png"));
+  assert.ok(middleware.includes("icon-512\\\\.png"));
+  assert.equal(manifest.id, "/");
+  assert.equal(manifest.start_url, "/");
+  assert.equal(manifest.scope, "/");
+  assert.equal(manifest.display, "standalone");
   assert.equal(manifest.theme_color, "#000000");
-  assert.equal(manifest.icons.length, 2);
+  assert.deepEqual(
+    manifest.icons.map(({ src, sizes, type }) => ({ src, sizes, type })),
+    [
+      { src: "/icon-192.png", sizes: "192x192", type: "image/png" },
+      { src: "/icon-512.png", sizes: "512x512", type: "image/png" },
+    ],
+  );
+  assert.deepEqual(await pngDimensions("../public/icon-192.png"), [192, 192]);
+  assert.deepEqual(await pngDimensions("../public/icon-512.png"), [512, 512]);
+});
+
+test("the PWA stays an online shell and does not cache setup facts offline", async () => {
+  assert.ok(!existsSync(new URL("../public/sw.js", import.meta.url)));
+  assert.ok(!existsSync(new URL("../public/service-worker.js", import.meta.url)));
+  assert.doesNotMatch(providers, /serviceWorker|workbox|CacheStorage|caches\.open/);
+  for (const file of await sourceFiles(new URL("../src/", import.meta.url))) {
+    const source = await readFile(file, "utf8");
+    assert.doesNotMatch(source, /serviceWorker\.register|caches\.open|workbox/i, file.pathname);
+  }
 });
 
 test("the Pin release manifest is served from Center's own origin", () => {

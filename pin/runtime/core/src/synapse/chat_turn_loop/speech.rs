@@ -287,7 +287,10 @@ pub const INTERNAL_VOCABULARY: &[(&str, &str)] = &[
 /// search result is never rewritten or rejected for containing them.
 #[cfg(test)]
 pub(crate) const CANNED_FILLER: &[(&str, &str)] = &[
-    ("i can help with that", "performs helpfulness; the help is the answer"),
+    (
+        "i can help with that",
+        "performs helpfulness; the help is the answer",
+    ),
     ("let me", "narrates intent instead of acting on it"),
     ("i would be happy to", "same performance, longer"),
     ("as requested", "restates the request back at the wearer"),

@@ -8,8 +8,13 @@ this index plus the three core pages.
 
 | Page | Read it when |
 | --- | --- |
+| [getting-started.md](getting-started.md) | You want a clean local Center/Cosmos stack and a first visible result. |
+| [installation.md](installation.md) | You need the source, Dev Container, PWA, or prepared release-distribution path. |
+| [configuration.md](configuration.md) | You need to find, inspect, validate, or change external runtime settings. |
+| [cli-reference.md](cli-reference.md) | You need every current `revival` command, effect boundary, or exact new command form. |
+| [pin-onboarding.md](pin-onboarding.md) | You are bringing one exact Pin online and want the short guarded sequence. |
 | [architecture.md](architecture.md) | You need the component boundaries, the runtime flow, the two protobuf trees, or the compatibility labels. |
-| [operations.md](operations.md) | You are running, validating, releasing, deploying, or onboarding a Pin. |
+| [operations.md](operations.md) | You need the advanced validation, production, deployment, or Pin evidence reference. |
 | [recovery.md](recovery.md) | The server is gone, or a database has to be put back. |
 
 ## Reference pages
@@ -25,7 +30,7 @@ this index plus the three core pages.
 
 - Component internals live beside the component: `center/README.md`,
   `cosmos/README.md`, `pin/README.md`.
-- Contributing, setup, and the fast source checks: [`CONTRIBUTING.md`](../CONTRIBUTING.md).
+- Contributor setup and focused source checks: [`CONTRIBUTING.md`](../CONTRIBUTING.md).
 - Cross-component wire compatibility is data, not prose:
   `contracts/compatibility.json`, `contracts/features.json`,
   `contracts/wire-divergence.json`.

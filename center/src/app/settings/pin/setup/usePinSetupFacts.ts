@@ -91,6 +91,31 @@ interface DeviceStatusResponse {
   state: "live" | "absent" | "degraded";
 }
 
+type ExpectedEdgeRead =
+  | { readonly state: "available"; readonly edgeIpv4: string }
+  | { readonly state: "absent" | "invalid" | "unreadable"; readonly edgeIpv4: null };
+
+function parseExpectedEdgeResponse(payload: unknown, responseOk: boolean): ExpectedEdgeRead {
+  if (!payload || typeof payload !== "object") {
+    return { state: "unreadable", edgeIpv4: null };
+  }
+  const value = payload as { state?: unknown; edgeIpv4?: unknown };
+  if (responseOk && value.state === "absent" && value.edgeIpv4 === null) {
+    return { state: "absent", edgeIpv4: null };
+  }
+  if (
+    responseOk &&
+    value.state === "available" &&
+    typeof value.edgeIpv4 === "string"
+  ) {
+    return { state: "available", edgeIpv4: value.edgeIpv4 };
+  }
+  if (!responseOk && value.state === "invalid" && value.edgeIpv4 === null) {
+    return { state: "invalid", edgeIpv4: null };
+  }
+  return { state: "unreadable", edgeIpv4: null };
+}
+
 /** `settings get` prints the literal string "null" for an unset key. */
 function readSettingsValue(stdout: string): string | null {
   const value = stdout.trim();
@@ -181,10 +206,10 @@ export function usePinSetupFacts(options: { operator: boolean }): PinSetupReadin
     staleTime: 300_000,
     retry: 1,
     refetchOnWindowFocus: false,
-    queryFn: async (): Promise<{ edgeIpv4: string | null }> => {
+    queryFn: async (): Promise<ExpectedEdgeRead> => {
       const response = await fetch("/api/pin/edge", { cache: "no-store" });
-      if (!response.ok) return { edgeIpv4: null };
-      return (await response.json()) as { edgeIpv4: string | null };
+      const payload: unknown = await response.json().catch(() => null);
+      return parseExpectedEdgeResponse(payload, response.ok);
     },
   });
 
@@ -319,22 +344,68 @@ export function usePinSetupFacts(options: { operator: boolean }): PinSetupReadin
   }, [deviceSettings.settings, serviceStatus]);
 
   const activation = useMemo<PinSetupActivationFacts>(() => {
-    if (!connected) return { state: "unknown", edgeIpv4: null, expectedEdgeIpv4: null, detail: null };
+    const expected = expectedEdgeQuery.data;
+    const expectedEdgeState: PinSetupActivationFacts["expectedEdgeState"] = expected
+      ? expected.state
+      : expectedEdgeQuery.isFetching
+        ? "checking"
+        : expectedEdgeQuery.isError
+          ? "unreadable"
+          : "unknown";
+    if (!connected) {
+      return {
+        state: "unknown",
+        edgeIpv4: null,
+        expectedEdgeState,
+        expectedEdgeIpv4: expected?.edgeIpv4 ?? null,
+        detail: null,
+      };
+    }
     const data = activationQuery.data;
     if (!data) {
-      if (activationQuery.isFetching) return { state: "checking", edgeIpv4: null, expectedEdgeIpv4: null, detail: null };
-      if (activationQuery.isError) {
-        return { state: "unreadable", edgeIpv4: null, expectedEdgeIpv4: null, detail: toMessage(activationQuery.error) };
+      if (activationQuery.isFetching) {
+        return {
+          state: "checking",
+          edgeIpv4: null,
+          expectedEdgeState,
+          expectedEdgeIpv4: expected?.edgeIpv4 ?? null,
+          detail: null,
+        };
       }
-      return { state: "unknown", edgeIpv4: null, expectedEdgeIpv4: null, detail: null };
+      if (activationQuery.isError) {
+        return {
+          state: "unreadable",
+          edgeIpv4: null,
+          expectedEdgeState,
+          expectedEdgeIpv4: expected?.edgeIpv4 ?? null,
+          detail: toMessage(activationQuery.error),
+        };
+      }
+      return {
+        state: "unknown",
+        edgeIpv4: null,
+        expectedEdgeState,
+        expectedEdgeIpv4: expected?.edgeIpv4 ?? null,
+        detail: null,
+      };
     }
     return {
       state: data.remoteMode === "1" ? "active" : "inactive",
       edgeIpv4: data.edgeIpv4,
-      expectedEdgeIpv4: expectedEdgeQuery.data?.edgeIpv4 ?? null,
+      expectedEdgeState,
+      expectedEdgeIpv4: expected?.edgeIpv4 ?? null,
       detail: null,
     };
-  }, [activationQuery.data, activationQuery.error, activationQuery.isError, activationQuery.isFetching, connected, expectedEdgeQuery.data]);
+  }, [
+    activationQuery.data,
+    activationQuery.error,
+    activationQuery.isError,
+    activationQuery.isFetching,
+    connected,
+    expectedEdgeQuery.data,
+    expectedEdgeQuery.isError,
+    expectedEdgeQuery.isFetching,
+  ]);
 
   const { cloud, lastReportAtEpoch } = useMemo(() => {
     const now = Date.now();

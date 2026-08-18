@@ -193,6 +193,28 @@ test("Pin commands expose host-only build/publish and read-only planning without
   }
 });
 
+test("root CLI wires PKI, activation, and credential-free network tools", () => {
+  const { temporary, env } = isolatedOperator();
+  try {
+    const initialized = invoke(env, "init");
+    assert.equal(initialized.status, 0, initialized.stderr);
+
+    const pki = invoke(env, "pki", "status", "--json");
+    assert.equal(pki.status, 0, pki.stderr);
+    assert.equal(JSON.parse(pki.stdout).valid, false);
+
+    const activation = invoke(env, "pin", "activate");
+    assert.equal(activation.status, 64);
+    assert.match(activation.stderr, /--serial SERIAL/);
+
+    const network = invoke(env, "pin", "network", "qr");
+    assert.equal(network.status, 0, network.stderr);
+    assert.match(network.stdout, /browser builds the QR locally/i);
+  } finally {
+    fs.rmSync(temporary, { recursive: true, force: true });
+  }
+});
+
 test("canonical and compatibility values cannot disagree", () => {
   const { temporary, env } = isolatedOperator();
   try {

@@ -82,6 +82,7 @@
 /* The step the wearer should be looking at, lifted off the surface. */
 .stepFocus {
   background: rgba(255, 255, 255, 0.02);
+  box-shadow: inset 2px 0 0 var(--hu-colors-apollo-base);
 }
 
 .badge {

@@ -237,9 +237,9 @@ mod trace;
 mod transcript;
 
 #[cfg(test)]
-pub use speech::internal_vocabulary_hit;
-#[cfg(test)]
 pub(crate) use speech::canned_filler_hit as speech_canned_filler_hit;
+#[cfg(test)]
+pub use speech::internal_vocabulary_hit;
 #[cfg(test)]
 pub(crate) use speech::is_apology_loop as speech_is_apology_loop;
 use speech::*;

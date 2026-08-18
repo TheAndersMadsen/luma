@@ -6,36 +6,58 @@ name: ci
 
 on:
   push:
+    branches:
+      - main
   pull_request:
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   layout-and-wire:
     name: layout, wire equivalence, contracts
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version: 22.14.0
       - name: repository layout
         run: sh platform/deploy/acceptance/layout.sh
       - name: wire divergence inventory
         run: node --test platform/deploy/acceptance/wire-divergence.test.mjs
       - name: wire equivalence gate
         run: node --test platform/deploy/acceptance/wire-equivalence.test.mjs
+      - name: operator setup contract and Center projection
+        run: |
+          node --test platform/deploy/acceptance/operator-setup-contract.test.mjs
+          node --test platform/deploy/acceptance/setup-projection.test.mjs
+      - name: CLI help, setup, configuration, and support contracts
+        run: |
+          node --test platform/deploy/acceptance/cli-help.test.mjs
+          node --test platform/deploy/acceptance/cli-setup.test.mjs
+          node --test platform/deploy/acceptance/cli-config.test.mjs
+          node --test platform/deploy/acceptance/support-bundle.test.mjs
+      - name: distribution contract
+        run: node --test platform/deploy/acceptance/distribution.test.mjs
+      - name: clean isolated-XDG install
+        run: node --test platform/deploy/acceptance/fresh-install.test.mjs
 
   center:
     name: center formatting and tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version: 22.14.0
       - name: install (external cache)
         env:
           NPM_CONFIG_CACHE: ${{ runner.temp }}/npm-cache
         run: npm ci --prefix center
+      - name: typecheck
+        run: npm --prefix center run typecheck
       - name: focused component checks
         run: npm --prefix center test
       - name: clean in-tree residue
@@ -45,10 +67,10 @@ jobs:
     name: cosmos formatting and tests
     runs-on: ubuntu-latest
     env:
-      CARGO_TARGET_DIR: ${{ runner.temp }}/cosmos-target
+      CARGO_TARGET_DIR: ${{ github.workspace }}/../cosmos-target
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@1.91.1
         with:
           components: rustfmt
       - name: formatting
@@ -60,12 +82,16 @@ jobs:
     name: pin runtime formatting and tests
     runs-on: ubuntu-latest
     env:
-      CARGO_TARGET_DIR: ${{ runner.temp }}/pin-target
+      CARGO_TARGET_DIR: ${{ github.workspace }}/../pin-target
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@1.91.1
         with:
           components: rustfmt
+      - name: install protobuf compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends libprotobuf-dev protobuf-compiler
       - name: formatting
         run: cargo fmt --check --manifest-path pin/runtime/core/Cargo.toml
       - name: focused component checks
@@ -75,9 +101,16 @@ jobs:
     name: release source gate
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version: 22.14.0
+      - uses: dtolnay/rust-toolchain@1.91.1
+        with:
+          components: clippy, rustfmt
+      - name: install protobuf compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends libprotobuf-dev protobuf-compiler
       - name: release check (VPS profile scope)
         run: ./revival release check

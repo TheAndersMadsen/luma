@@ -1,6 +1,29 @@
 {
   "schemaVersion": 1,
   "profiles": {
+    "distribution": {
+      "description": "Complete immutable product payload for supported package-manager distribution. It installs the launcher, product source, documentation, device builder, and release tooling together; Node is supplied by the package manager and Docker remains an external runtime prerequisite.",
+      "include": [
+        ".dockerignore",
+        ".editorconfig",
+        ".env.example",
+        ".gitignore",
+        "CONTRIBUTING.md",
+        "README-INTRO.md",
+        "README.md",
+        "compose.yaml",
+        "revival",
+        "docs",
+        "center",
+        "contracts",
+        "cosmos",
+        "pin",
+        "platform"
+      ],
+      "exclude": [
+        "pin/contracts/tier-a/external-operational-marker-evidence.tsv"
+      ]
+    },
     "vps": {
       "description": "Deployable Center and Cosmos source. The browser-only Pin console is part of Center now, so no pin/ source is included at all; privileged device source never was.",
       "include": [
@@ -54,6 +77,7 @@
     "dist",
     "dist-center",
     "node_modules",
+    "test-runs",
     "target"
   ],
   "ignoredFileNames": [

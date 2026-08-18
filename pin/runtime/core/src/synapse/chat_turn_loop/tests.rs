@@ -2823,11 +2823,19 @@ fn the_language_guards_catch_the_canonical_leaks_and_filler() {
             "canned filler guard missed: {filler}"
         );
     }
-    assert!(speech::is_apology_loop("Sorry — I apologize for the trouble."));
-    assert!(!speech::is_apology_loop("Sorry, that didn't work. Try again."));
+    assert!(speech::is_apology_loop(
+        "Sorry — I apologize for the trouble."
+    ));
+    assert!(!speech::is_apology_loop(
+        "Sorry, that didn't work. Try again."
+    ));
     // Ordinary answers pass: the guard protects speech, it does not ban words
     // a wearer might hear in an honest sentence about their own request.
-    for fine in ["It's 12 degrees and clear.", "Saved.", "Your timer is set for ten minutes."] {
+    for fine in [
+        "It's 12 degrees and clear.",
+        "Saved.",
+        "Your timer is set for ten minutes.",
+    ] {
         assert!(internal_vocabulary_hit(fine).is_none());
         assert!(speech::canned_filler_hit(fine).is_none());
     }
@@ -2852,7 +2860,13 @@ fn every_fixed_decline_passes_all_three_language_guards() {
             speech::canned_filler_hit(spoken).is_none(),
             "fixed decline is canned filler: {spoken}"
         );
-        assert!(!speech::is_apology_loop(spoken), "fixed decline apologises in a loop: {spoken}");
-        assert!(!spoken.is_empty() && spoken.len() < 200, "decline is unbounded: {spoken}");
+        assert!(
+            !speech::is_apology_loop(spoken),
+            "fixed decline apologises in a loop: {spoken}"
+        );
+        assert!(
+            !spoken.is_empty() && spoken.len() < 200,
+            "decline is unbounded: {spoken}"
+        );
     }
 }

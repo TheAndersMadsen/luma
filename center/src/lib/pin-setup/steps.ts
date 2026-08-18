@@ -16,24 +16,20 @@
  * console this sits on top of already has a checklist's worth of panes; what it
  * did not have was an honest answer to "where am I, and what is next".
  *
- * The ceremony itself is the one written down in `docs/operations.md`
- * ("Onboarding a Pin"), including which of its steps have no console yet. Where
- * a step cannot be performed from a browser, `commands` carries the exact shell
- * commands and `manualNote` says why — the UI must not imply a button exists.
+ * Static titles, command paths, routes, and verification modes come from the
+ * generated projection of `contracts/operator-setup.json`. Center owns only the
+ * fact-based derivation below.
  */
 
-export const PIN_SETUP_STEP_IDS = [
-  "connect",
-  "inspect",
-  "release",
-  "install",
-  "configure",
-  "identity",
-  "activate",
-  "confirm",
-] as const;
+import {
+  PIN_SETUP_JOURNEY,
+  type GeneratedPinSetupStep,
+} from "./generated/journey";
 
-export type PinSetupStepId = (typeof PIN_SETUP_STEP_IDS)[number];
+export type PinSetupStepId = GeneratedPinSetupStep["id"];
+export const PIN_SETUP_STEP_IDS = PIN_SETUP_JOURNEY.steps.map(
+  (step) => step.id,
+) as readonly PinSetupStepId[];
 
 /**
  * Where a step stands.
@@ -114,6 +110,14 @@ export interface PinSetupActivationFacts {
   readonly state: "unknown" | "checking" | "active" | "inactive" | "unreadable";
   /** Where the Pin is pointed, read off the device. */
   readonly edgeIpv4: string | null;
+  /** Whether this Center has a usable, absent, or malformed edge declaration. */
+  readonly expectedEdgeState:
+    | "unknown"
+    | "checking"
+    | "available"
+    | "absent"
+    | "invalid"
+    | "unreadable";
   /**
    * Where it SHOULD be pointed for this deployment, from /api/pin/edge.
    * `null` means the deployment has not declared one, so no claim can be made —
@@ -121,6 +125,35 @@ export interface PinSetupActivationFacts {
    */
   readonly expectedEdgeIpv4: string | null;
   readonly detail: string | null;
+}
+
+export type DeviceEdgeDeclaration =
+  | { readonly state: "available"; readonly edgeIpv4: string }
+  | { readonly state: "absent"; readonly edgeIpv4: null }
+  | { readonly state: "invalid"; readonly edgeIpv4: null; readonly detail: string };
+
+/** Parse one canonical dotted-decimal IPv4 address, with no octal-like padding. */
+export function parseDeviceEdgeDeclaration(value: string | undefined): DeviceEdgeDeclaration {
+  const declared = value?.trim() ?? "";
+  if (declared === "") return { state: "absent", edgeIpv4: null };
+
+  const octets = declared.split(".");
+  const canonical =
+    octets.length === 4 &&
+    octets.every(
+      (octet) =>
+        /^(?:0|[1-9][0-9]{0,2})$/.test(octet) &&
+        Number(octet) >= 0 &&
+        Number(octet) <= 255,
+    );
+  if (!canonical) {
+    return {
+      state: "invalid",
+      edgeIpv4: null,
+      detail: "REVIVAL_DEVICE_EDGE_IPV4 must be one canonical dotted-decimal IPv4 address.",
+    };
+  }
+  return { state: "available", edgeIpv4: declared };
 }
 
 /** What this Center's backend knows about the wearer's Pins. */
@@ -149,6 +182,10 @@ export interface PinSetupStep {
   /** 1-based position, for the numbered rail. */
   readonly ordinal: number;
   readonly title: string;
+  readonly commandId: GeneratedPinSetupStep["commandId"];
+  readonly command: string;
+  readonly centerRoute: string | null;
+  readonly verification: GeneratedPinSetupStep["verification"];
   readonly status: PinSetupStepStatus;
   /** What is true right now, in one sentence. Never a prediction. */
   readonly summary: string;
@@ -169,37 +206,6 @@ export interface PinSetupPlan {
   readonly observableCount: number;
   readonly total: number;
 }
-
-const STEP_TITLES: Readonly<Record<PinSetupStepId, string>> = Object.freeze({
-  connect: "Connect the Pin to this computer",
-  inspect: "See what is on the Pin",
-  release: "Publish a release this Center can serve",
-  install: "Install the Revival software",
-  configure: "Configure the Pin",
-  identity: "Mint a device credential",
-  activate: "Point the Pin at this server",
-  confirm: "Bring it online and confirm",
-});
-
-/**
- * `pin release build` publishes to the store on the operator's own machine;
- * nothing in `revival` copies it to the server. Named here so the UI can say so
- * instead of showing an installer with nothing to install.
- */
-const RELEASE_BUILD_COMMAND =
-  "./revival pin release build --version YYYY-MM-DD.N --version-code INTEGER";
-const RELEASE_PUBLISH_COMMAND =
-  "# then copy the whole store to $REMOTE_ROOT/data/pin-releases on the server (atomic rename)";
-
-/**
- * Activation is one journalled transaction inside the Pin's own runtime, so the
- * keys are never written by hand. These two commands hand it `activation.json`
- * and ask it to commit.
- */
-const ACTIVATE_WRITE_COMMAND =
-  "adb shell content write --uri content://com.penumbraos.server.carryidentity/attestation.json < activation.json";
-const ACTIVATE_CALL_COMMAND =
-  "adb shell content call --uri content://com.penumbraos.server.carryidentity --method ACTIVATE";
 
 interface DraftStep {
   readonly status: PinSetupStepStatus;
@@ -305,20 +311,65 @@ function deriveRelease(release: PinSetupReleaseFacts): DraftStep {
       return {
         status: "done",
         summary: release.version
+          ? `Release ${release.version} was built and signed; Center verified its published manifest.`
+          : "A signed release exists; Center verified its published manifest.",
+        next: null,
+      };
+    case "checking":
+      return {
+        status: "todo",
+        summary: "Checking whether a built release reached this Center…",
+        next: null,
+      };
+    case "not-published":
+      return {
+        status: "manual",
+        summary:
+          "Center has no published release, so it cannot tell whether a signed release was built on an operator host.",
+        next: "Build a signed, immutable release on the operator host, or inspect the existing local release before continuing.",
+        manualNote:
+          "A browser cannot inspect the operator host's release store. The command below is the canonical build entry point and will explain its required version inputs.",
+      };
+    case "unreadable":
+      return {
+        status: "attention",
+        summary: release.detail
+          ? `Center could not use the published release as build evidence: ${release.detail}`
+          : "Center could not verify the published release as evidence of a completed build.",
+        next: "Inspect the release on the operator host. A manifest that does not verify is never installation evidence.",
+      };
+    default:
+      return {
+        status: "todo",
+        summary: "Whether a signed release exists has not been established yet.",
+        next: null,
+      };
+  }
+}
+
+function deriveShip(release: PinSetupReleaseFacts): DraftStep {
+  switch (release.availability) {
+    case "published":
+      return {
+        status: "done",
+        summary: release.version
           ? `Release ${release.version} is published here, and its manifest verified.`
           : "A verified release is published on this Center.",
         next: null,
       };
     case "checking":
-      return { status: "todo", summary: "Asking this Center which release it serves…", next: null };
+      return {
+        status: "todo",
+        summary: "Asking this Center which release it serves…",
+        next: null,
+      };
     case "not-published":
       return {
         status: "manual",
         summary: "This Center is serving no Pin release, so the installer has nothing to install.",
-        next: "Build a release, then copy the store onto the server Center reads.",
-        commands: [RELEASE_BUILD_COMMAND, RELEASE_PUBLISH_COMMAND],
+        next: "Ship the built release to Center with the canonical publication command.",
         manualNote:
-          "`pin release build` publishes to the store on your own machine. Nothing in `revival` copies it to the server's /var/lib/ai-pin-revival/pin-releases, so that copy is done by hand today.",
+          "Publication is an explicit remote mutation. The CLI plans it first and requires confirmation instead of asking you to copy the release store by hand.",
       };
     case "unreadable":
       return {
@@ -326,10 +377,14 @@ function deriveRelease(release: PinSetupReleaseFacts): DraftStep {
         summary: release.detail
           ? `The published release was refused: ${release.detail}`
           : "The published release could not be verified.",
-        next: "A manifest that does not verify is never installed. Fix the store on the server rather than retrying here.",
+        next: "Fix or re-ship the store on the server. Retrying an unverifiable manifest cannot make it safe to install.",
       };
     default:
-      return { status: "todo", summary: "The published release has not been checked yet.", next: null };
+      return {
+        status: "todo",
+        summary: "Publication has not been checked yet.",
+        next: null,
+      };
   }
 }
 
@@ -565,7 +620,28 @@ function deriveActivate(facts: PinSetupFacts): DraftStep {
     // does not say it is pointed at this one. Reporting done on that alone told
     // a newcomer the step was finished while their captures went to an address
     // they may not control — the worst thing a setup flow can get wrong.
-    if (activation.expectedEdgeIpv4 === null) {
+    if (activation.expectedEdgeState === "checking" || activation.expectedEdgeState === "unknown") {
+      return {
+        status: "todo",
+        summary: `Clone mode is on and the Pin resolves stock Humane hostnames to ${activation.edgeIpv4}; Center is still checking its own declared edge address.`,
+        next: null,
+      };
+    }
+    if (activation.expectedEdgeState === "invalid") {
+      return {
+        status: "attention",
+        summary: `Clone mode is on and the Pin resolves stock Humane hostnames to ${activation.edgeIpv4}, but this deployment's REVIVAL_DEVICE_EDGE_IPV4 value is invalid.`,
+        next: "Set REVIVAL_DEVICE_EDGE_IPV4 to one canonical IPv4 address. Center will not treat malformed configuration as an absent declaration.",
+      };
+    }
+    if (activation.expectedEdgeState === "unreadable") {
+      return {
+        status: "attention",
+        summary: `Clone mode is on and the Pin resolves stock Humane hostnames to ${activation.edgeIpv4}, but Center could not read its expected edge declaration.`,
+        next: "Check Center's setup endpoint, then read this step again. The Pin's address cannot be accepted without an independent deployment value.",
+      };
+    }
+    if (activation.expectedEdgeState === "absent" || activation.expectedEdgeIpv4 === null) {
       return {
         status: "attention",
         summary: `Clone mode is on: the Pin resolves the stock Humane hostnames to ${activation.edgeIpv4}. This deployment has not declared its own edge address, so the dashboard cannot confirm that is this server.`,
@@ -589,57 +665,52 @@ function deriveActivate(facts: PinSetupFacts): DraftStep {
   return {
     status: "manual",
     summary: "Clone mode is off: this Pin is still talking to the original Humane cloud.",
-    next: "Write the minted bundle plus your edge IPv4 into activation.json, hand it to the Pin's own runtime, and ask it to activate.",
-    commands: [ACTIVATE_WRITE_COMMAND, ACTIVATE_CALL_COMMAND],
+    next: "Run the canonical activation command with the exact Pin serial, credential bundle, and edge IPv4.",
     manualNote:
-      "There is no console for this yet, and the three Settings.Global keys must never be written by hand: activation is one journalled transaction that validates trust, subject, and key/certificate match before anything is committed, and rolls back on any failure.",
+      "Activation is a confirmed, exact-device mutation. The CLI uses the Pin's journalled transaction; never write the three Settings.Global keys by hand.",
+  };
+}
+
+function deriveNetwork(cloud: PinSetupCloudFacts): DraftStep {
+  if (cloud.state === "unknown") {
+    return {
+      status: "todo",
+      summary: "Checking account-wide reports for supporting network context…",
+      next: null,
+    };
+  }
+
+  let context: string;
+  if (cloud.state === "degraded") {
+    context = "Center could not read the account-wide reporting context.";
+  } else if (cloud.state === "absent") {
+    context = "This deployment has no reporting service to provide account-wide context.";
+  } else if (cloud.reportingCount > 0) {
+    context = `${cloud.reportingCount} paired Pin${cloud.reportingCount === 1 ? " is" : "s are"} reporting somewhere on this account, but those reports do not identify the exact Pin attached here.`;
+  } else {
+    context = `${cloud.pairedCount ?? 0} Pin${cloud.pairedCount === 1 ? " is" : "s are"} paired, and none is currently reporting.`;
+  }
+
+  return {
+    status: "manual",
+    summary: `${context} The connected Pin's network path remains unverified.`,
+    next: "Create the Wi-Fi QR code in this browser, scan it with the Pin, then run the exact-device network check.",
+    manualNote:
+      "The /wifi page creates the QR payload entirely in this browser. Center never receives or stores the network name or password, and account-wide reports are never accepted as exact-device proof.",
   };
 }
 
 function deriveConfirm(cloud: PinSetupCloudFacts): DraftStep {
-  if (cloud.state === "absent") {
-    return {
-      status: "unobservable",
-      summary:
-        "This Center is not connected to Pin services yet.",
-      next: null,
-    };
-  }
-
-  if (cloud.state === "degraded") {
-    return {
-      status: "attention",
-      summary: "Center could not check whether your Pin is reporting.",
-      next: "Your Pin may still be online. Try again shortly.",
-    };
-  }
-
-  if (cloud.state === "unknown") {
-    return { status: "todo", summary: "Checking your Pins…", next: null };
-  }
-
-  if (cloud.reportingCount > 0) {
-    return {
-      status: "done",
-      summary: `${cloud.reportingCount} Pin${cloud.reportingCount === 1 ? "" : "s"} paired with this account ${
-        cloud.reportingCount === 1 ? "is" : "are"
-      } reporting to this Center.`,
-      next: null,
-    };
-  }
-
-  if ((cloud.pairedCount ?? 0) === 0) {
-    return {
-      status: "todo",
-      summary: "No Pin is paired with this account yet.",
-      next: "Pair the Pin with the device id from provisioning, get it onto Wi-Fi with the QR page, and finish the on-device onboarding.",
-    };
-  }
-
+  const onlineEvidence =
+    cloud.state === "live" && cloud.reportingCount > 0
+      ? `${cloud.reportingCount} paired Pin${cloud.reportingCount === 1 ? " is" : "s are"} reporting, so the software path is online.`
+      : "Center does not currently have a live report proving the full software path is online.";
   return {
-    status: "todo",
-    summary: `${cloud.pairedCount} Pin${cloud.pairedCount === 1 ? " is" : "s are"} paired, and none has reported in.`,
-    next: "Get the Pin onto Wi-Fi with the QR page. With clone mode active, the stock onboarding flow runs the enrolment ceremony against your pincode.",
+    status: "manual",
+    summary: `${onlineEvidence} Physical gesture, microphone, speaker, and wearer-response acceptance are separate and are not recorded by this page.`,
+    next: "On the physical Pin, trigger a known prompt and confirm the gesture, audible response, and expected action yourself.",
+    manualNote:
+      "Center never turns service health into a physical-pass claim and never saves a checkbox as substitute evidence. Re-run the CLI status check for software facts; perform physical acceptance on the device.",
   };
 }
 
@@ -649,30 +720,44 @@ const DERIVATIONS: Readonly<
   connect: (facts) => deriveConnect(facts.usb),
   inspect: deriveInspect,
   release: (facts) => deriveRelease(facts.release),
+  ship: (facts) => deriveShip(facts.release),
   install: deriveInstall,
   configure: deriveConfigure,
   identity: deriveIdentity,
   activate: deriveActivate,
+  network: (facts) => deriveNetwork(facts.cloud),
   confirm: (facts) => deriveConfirm(facts.cloud),
 });
 
 export function derivePinSetupPlan(facts: PinSetupFacts): PinSetupPlan {
-  const steps = PIN_SETUP_STEP_IDS.map((id, index): PinSetupStep => {
+  const steps = PIN_SETUP_JOURNEY.steps.map((definition, index): PinSetupStep => {
+    const id = definition.id;
     const draft = DERIVATIONS[id](facts);
+    const canonicalCommand =
+      (draft.status === "manual" || draft.manualNote) && draft.commands === undefined
+        ? [definition.command]
+        : (draft.commands ?? []);
     return {
       id,
       ordinal: index + 1,
-      title: STEP_TITLES[id],
+      title: definition.title,
+      commandId: definition.commandId,
+      command: definition.command,
+      centerRoute: definition.centerRoute,
+      verification: definition.verification,
       status: draft.status,
       summary: draft.summary,
       next: draft.next ?? null,
-      commands: draft.commands ?? [],
+      commands: canonicalCommand,
       manualNote: draft.manualNote ?? null,
     };
   });
 
   const focus = steps.find(
-    (step) => step.status !== "done" && step.status !== "unobservable",
+    (step) =>
+      step.status !== "done" &&
+      step.status !== "blocked" &&
+      step.status !== "unobservable",
   );
 
   return {

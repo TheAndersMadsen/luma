@@ -33,7 +33,7 @@ function policyTests() {
       info('[implemented] skipped the complete-source package fixture in the Pin-free VPS profile.');
       continue;
     }
-    run('node', ['--test', path.join(acceptance, name)]);
+    run('node', ['--no-warnings', '--experimental-strip-types', '--test', path.join(acceptance, name)]);
   }
 }
 

@@ -1,0 +1,135 @@
+# A distribution is the complete immutable product payload, not a compiled
+# standalone executable. Manual runs build and verify it by default. Publishing
+# is an additional opt-in that is accepted only when this workflow is dispatched
+# from the matching, existing version tag.
+name: distribution release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to stamp into the immutable payload
+        required: true
+        default: 0.1.0-dev
+        type: string
+      publish_release:
+        description: Publish only when dispatched from the matching vVERSION tag
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build and verify full payload
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22.14.0
+      - name: Validate distribution contract
+        run: |
+          sh platform/deploy/acceptance/layout.sh
+          node --test platform/deploy/acceptance/distribution.test.mjs
+      - name: Validate opt-in publication coordinates
+        if: ${{ inputs.publish_release == true }}
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          set -euo pipefail
+          if [[ "$REF_TYPE" != tag || "$REF_NAME" != "v$RELEASE_VERSION" ]]; then
+            echo "Publishing requires dispatching from the existing v$RELEASE_VERSION tag." >&2
+            exit 64
+          fi
+      - name: Build immutable distribution
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          output="$RUNNER_TEMP/ai-pin-revival-distribution"
+          node platform/distribution/build.mjs \
+            --version "$RELEASE_VERSION" \
+            --output "$output" \
+            --json > "$RUNNER_TEMP/distribution-result.json"
+          cp "$RUNNER_TEMP/distribution-result.json" "$output/build-result.json"
+      - name: Verify mandatory checksums
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/ai-pin-revival-distribution"
+          sha256sum --check SHA256SUMS
+      - name: Upload build-only artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-pin-revival-${{ inputs.version }}
+          path: ${{ runner.temp }}/ai-pin-revival-distribution/
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: publish explicitly tagged release
+    needs: build
+    if: >-
+      ${{ inputs.publish_release == true &&
+          github.ref_type == 'tag' &&
+          github.ref_name == format('v{0}', inputs.version) }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22.14.0
+      - uses: actions/download-artifact@v4
+        with:
+          name: ai-pin-revival-${{ inputs.version }}
+          path: ${{ runner.temp }}/ai-pin-revival-distribution
+      - name: Reverify downloaded payload
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/ai-pin-revival-distribution"
+          sha256sum --check SHA256SUMS
+      - name: Render release-bound Homebrew formula
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
+          SERVER_URL: ${{ github.server_url }}
+        run: |
+          set -euo pipefail
+          output="$RUNNER_TEMP/ai-pin-revival-distribution"
+          descriptor="$output/ai-pin-revival-$RELEASE_VERSION.distribution.json"
+          archive="ai-pin-revival-$RELEASE_VERSION.tar.gz"
+          sha256="$(node -e 'const d=require(process.argv[1]); process.stdout.write(d.payload.archiveSha256)' "$descriptor")"
+          node platform/distribution/render-homebrew-formula.mjs \
+            --template platform/distribution/homebrew/ai-pin-revival.rb.template \
+            --output "$output/ai-pin-revival.rb" \
+            --homepage "$SERVER_URL/$REPOSITORY" \
+            --url "$SERVER_URL/$REPOSITORY/releases/download/$RELEASE_TAG/$archive" \
+            --version "$RELEASE_VERSION" \
+            --sha256 "$sha256"
+          sha256sum "$output/ai-pin-revival.rb" >> "$output/SHA256SUMS"
+          sort -o "$output/SHA256SUMS" "$output/SHA256SUMS"
+          (cd "$output" && sha256sum --check SHA256SUMS)
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          output="$RUNNER_TEMP/ai-pin-revival-distribution"
+          gh release create "$RELEASE_TAG" \
+            --verify-tag \
+            --title "Ai Pin Revival $RELEASE_VERSION" \
+            --generate-notes \
+            "$output/ai-pin-revival-$RELEASE_VERSION.tar.gz" \
+            "$output/ai-pin-revival-$RELEASE_VERSION.manifest.json" \
+            "$output/ai-pin-revival-$RELEASE_VERSION.distribution.json" \
+            "$output/SHA256SUMS" \
+            "$output/ai-pin-revival.rb"

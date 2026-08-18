@@ -1,4 +1,5 @@
 import { requireWearerRequest } from "@/server/operator";
+import { parseDeviceEdgeDeclaration } from "@/lib/pin-setup";
 
 /**
  * GET /api/pin/edge — the address a Pin must be pointed at to reach THIS server.
@@ -9,22 +10,22 @@ import { requireWearerRequest } from "@/server/operator";
  * Pin pointed at somebody else's server entirely — a newcomer would be told the
  * step was finished while their captures went somewhere they do not control.
  *
- * Unset is a legitimate answer, not an error: a deployment that has not declared
- * its device edge simply cannot make the claim, and the flow says so rather than
- * guessing. That is the whole point of returning `null` here instead of falling
- * back to the request host, which is Cloudflare's address, not the edge's.
+ * Unset is a legitimate `absent` answer: a deployment that has not declared its
+ * device edge simply cannot make the claim. Malformed is `invalid` and an error,
+ * never collapsed into absence. Neither case falls back to the request host,
+ * which is commonly a reverse proxy address rather than the device edge.
  */
 export async function GET() {
   const gate = await requireWearerRequest();
   if (gate instanceof Response) return gate;
 
-  const declared = process.env.REVIVAL_DEVICE_EDGE_IPV4?.trim() ?? "";
-  // Shape-check only: this is an operator-declared value, and a malformed one
-  // should read as "not declared" rather than as a mismatch the wearer cannot act on.
-  const edgeIpv4 = /^(\d{1,3}\.){3}\d{1,3}$/.test(declared) ? declared : null;
+  const declaration = parseDeviceEdgeDeclaration(process.env.REVIVAL_DEVICE_EDGE_IPV4);
 
   return Response.json(
-    { edgeIpv4 },
-    { headers: { "cache-control": "private, no-store" } },
+    declaration,
+    {
+      status: declaration.state === "invalid" ? 500 : 200,
+      headers: { "cache-control": "private, no-store" },
+    },
   );
 }

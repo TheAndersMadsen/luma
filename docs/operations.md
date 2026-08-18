@@ -7,6 +7,7 @@ safety boundaries.
 ## Local stack
 
 ```sh
+./revival setup local
 ./revival init
 ./revival doctor
 ./revival build
@@ -16,6 +17,10 @@ safety boundaries.
 
 Center opens at <http://127.0.0.1:4000>. Use `./revival logs` to inspect the
 stack and `./revival down` to stop it without deleting volumes.
+
+This is the advanced operator reference. A first-time local user should follow
+[Run Ai Pin Revival locally](getting-started.md); installation and contributor
+requirements are separated in [installation](installation.md).
 
 `init` creates protected external directories and a runtime file from
 `.env.example`. Add provider credentials only to that protected runtime file.
@@ -412,8 +417,13 @@ do not mutate a device.
 
 ## Physical Pin
 
-The root CLI contains no ADB, reset, flash, install, Wi-Fi, or provisioning
-command. Before any device write, verify the exact serial, hardware and firmware
+The CLI exposes guarded installation and activation commands. Both bind an
+exact serial, read current state, and print a plan before `--confirm` can change
+the device. Network status is read-only; Wi-Fi credentials are accepted only by
+Center's browser-local QR page, never by CLI flags. The CLI has no general reset,
+flash, radio, or arbitrary provisioning fallback.
+
+Before any device write, verify the exact serial, hardware and firmware
 compatibility, signer, battery and transport state, current installed state,
 immutable bundle, and a tested recovery path. Authorization is required at the
 write step, even when host checks pass.
@@ -425,28 +435,27 @@ failed installation or deployment into an improvised recovery attempt.
 
 Going from a stock Ai Pin to a device that talks to your own stack is a fixed
 ceremony, written here in order so it does not have to be reconstructed from
-memory. Every claim below cites the code that enforces it.
-
-Steps marked **no command yet** have no `revival` subcommand and no console.
-They are done by hand today. They are marked so a newcomer knows the gap is real
-rather than something they failed to find; the boundary in
-[Physical Pin](#physical-pin) still applies to every one of them.
+memory. Every claim below cites the code that enforces it. Use the shorter
+[Pin onboarding guide](pin-onboarding.md) at the terminal; this section explains
+the evidence and failure boundaries behind each step.
 
 ### 0. What you need before you start
 
 | Need | Where it lives | Enforced by |
 | --- | --- | --- |
-| Docker Compose 2.33.1+, Node 22.14.0+, Rust 1.91.1+ | host | `./revival doctor`, against `platform/containers/pin-builder/toolchain.json` |
-| JDK 17, Android SDK 34, NDK r28c | host, for Pin builds only | `./revival pin doctor` |
+| Docker Compose 2.33.1+, Node 22.14.0+ on the Node 22 line | host | `./revival doctor`, against `platform/containers/pin-builder/toolchain.json` |
+| JDK 17, Android SDK 34, NDK r28c, Rust 1.91.1 | contributor source gate only | `./revival test --source`; the pinned container supplies them for canonical Pin release builds |
 | Pin signing keystore and its four `PIN_SIGNING_*` values | `${REVIVAL_SECRETS_DIR}/pin/signing.env` | `platform/deploy/pin/build.mjs:43-46` |
 | Two pinned native build inputs, matched by exact SHA-256 | `${REVIVAL_CONFIG_DIR}/pin-assets/` | `platform/deploy/pin/build.mjs:78-87` |
 | A browser with WebUSB, on HTTPS or `localhost` | operator workstation | `center/src/lib/pin-device/adb/browserSupport.ts:10-30` |
 | DeviceUser CA certificate and PKCS#8 key | `${REVIVAL_SECRETS_DIR}/pki/duc-ca.crt`, `duc-ca.key` | `./revival doctor`, `cosmos/crates/cosmos/src/enrollment.rs:163-165` |
 | Attestation CA certificate and PKCS#8 key | Cosmos `CARRY_ATTEST_CA_CERT` / `CARRY_ATTEST_CA_KEY` | `cosmos/crates/cosmos/src/provision.rs:27-31` |
 
-Both CAs are **operator-supplied configuration and are never generated**. A CA
-minted at startup is trusted by one process for one lifetime, so every restart
-silently invalidates every certificate it ever issued
+The attestation CA is **operator-supplied configuration and is never generated
+by `revival`**. The DeviceUser CA may be imported, or created once with
+`./revival pki init device-user --confirm`; neither path runs at service
+startup. A CA minted at startup would be trusted by one process for one
+lifetime, so every restart would silently invalidate every certificate it issued
 (`cosmos/crates/cosmos/src/enrollment.rs:95-104`). Mount the same material in
 every provisioning replica and in the edge's trust bundles.
 
@@ -474,8 +483,10 @@ release.
 `init` leaves for you:
 
 - `${REVIVAL_SECRETS_DIR}/pki/duc-ca.crt` and `duc-ca.key`, created as **empty**
-  0600 placeholders (`revival:476-490`). **no command yet** — there is no
-  `revival pki init`; supply the CA yourself.
+  0600 placeholders (`platform/cli/context.js`). Import an existing DeviceUser
+  pair with `./revival pki import device-user --cert FILE --key FILE`, or plan a
+  new one with `./revival pki init device-user`. Both require `--confirm` before
+  replacing the empty placeholders and refuse to overwrite a nonempty CA.
 - `REVIVAL_ENROLLMENT_PINCODE` (exactly four digits) and
   `REVIVAL_ENROLLMENT_USER_ID`, which must be set together, plus the
   `REVIVAL_OPAQUE_SEED` that `init` already generated.
@@ -665,7 +676,7 @@ credential material: it is the device's identity.
 If provisioning reports it is unavailable, the deployment has no attestation CA
 (`ProvisionError::NotConfigured` → 503).
 
-### 7. Point the Pin at your server — **no command yet**
+### 7. Point the Pin at your server
 
 The injector does not rewrite hostnames and does not need root or a reflash.
 Stock keeps calling `api.carry.humane.cloud` and
@@ -698,26 +709,34 @@ gate — so stock traffic can never be redirected to a half-configured edge
 (`PENDING_ATTESTATION_CONFLICT`, `:234-244`) or while an existing active
 configuration disagrees with the one you asked for.
 
-Reach it through its content provider from an ADB shell. The shell uid is
-trusted and holds `DUMP`, so no root is involved
-(`CarryIdentityProvider.kt:37-43`, `:420-429`):
+The supported host command validates a protected credential document, fixes the
+two stock endpoints, binds the exact serial and hardware device id, and prints a
+plan:
 
 ```sh
-adb shell content write \
-  --uri content://com.penumbraos.server.carryidentity/attestation.json \
-  < activation.json
-adb shell content call \
-  --uri content://com.penumbraos.server.carryidentity --method ACTIVATE
+./revival pin activate \
+  --serial SERIAL \
+  --credential-file /protected/activation.json \
+  --edge-ipv4 A.B.C.D
 ```
 
-`activation.json` is the minted bundle plus three endpoint fields
+Repeat with `--confirm` only after reviewing the plan. The confirmed path streams
+the envelope to the content provider over standard input, invokes `ACTIVATE`,
+and verifies the active postconditions. Private material appears in no ADB
+argument and no temporary file is pushed. `./revival pin activate status
+--serial SERIAL` is the read-only status path.
+
+The provider is reachable from an ADB shell because the shell uid is trusted and
+holds `DUMP`, so no root is involved (`CarryIdentityProvider.kt:37-43`,
+`:420-429`). Do not bypass the guarded command with hand-written `content`
+calls.
+
+The protected credential file is the minted bundle without endpoint fields. The
+host command supplies the fixed endpoints and edge IPv4 after validation
 (`CarryIdentityProvider.kt:584-601`, `:563-580`):
 
 ```json
 {
-  "api_endpoint": "https://api.carry.humane.cloud",
-  "onboarding_endpoint": "https://onboarding.carry.humane.cloud",
-  "edge_ipv4": "<your edge IPv4>",
   "device_id": "<from /admin>",
   "certificate_pem": "<from /admin>",
   "private_key_pem": "<from /admin>",
@@ -739,11 +758,22 @@ builds the QR payload entirely in the browser, reading no account data and never
 calling the BFF — because a Pin that is off the network is exactly the moment
 its owner may be unable to sign in (`center/src/middleware.ts:92-108`).
 
+Open it without putting credentials in shell history:
+
+```sh
+./revival pin network qr --open
+./revival pin network --serial SERIAL
+```
+
+The first command accepts no network name, password, or PSK. The second reads
+only enabled/connected state for the exact serial and does not print SSID or
+BSSID data. Neither command changes a radio or stores a network.
+
 Saved network configurations are stored as already-encrypted envelopes and can
 be ingested by an admin `POST /demo-api/admin/wifi`
-(`cosmos/.../http.rs:206`, handler `:1530-1590`). **no command yet** — there is
-no console for that route, and it accepts envelopes only, never plaintext
-credentials.
+(`cosmos/.../http.rs:206`, handler `:1530-1590`). There is still no CLI for that
+server-side encrypted-envelope ingestion route; the QR path is deliberately
+separate and accepts plaintext only inside the browser.
 
 With the device on the network and clone mode active, the stock onboarding flow
 runs the OPAQUE ceremony against your enrollment pincode and receives a

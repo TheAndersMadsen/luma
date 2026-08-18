@@ -9,3 +9,7 @@
  */
 
 export * from "./steps";
+export {
+  PIN_SETUP_JOURNEY,
+  type GeneratedPinSetupStep,
+} from "./generated/journey";

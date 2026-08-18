@@ -13,7 +13,7 @@ for path in \
   center/adapters/spotify cosmos/search \
   pin/injector pin/hook pin/runtime pin/bridge pin/contracts \
   contracts/wire \
-  platform platform/compose platform/containers platform/deploy \
+  platform platform/compose platform/containers platform/deploy platform/distribution \
   platform/deploy/acceptance platform/edge \
   docs
 do
@@ -28,6 +28,9 @@ for path in \
   cosmos/search/settings.yml \
   contracts/wire/humane/aibus.proto \
   platform/deploy/release.json platform/deploy/release.mjs \
+  platform/distribution/version.json platform/distribution/build.mjs \
+  platform/distribution/render-homebrew-formula.mjs \
+  platform/distribution/homebrew/ai-pin-revival.rb.template \
   platform/containers/pin-builder/toolchain.json \
   platform/compose/development.yaml platform/compose/production.yaml
 do
@@ -50,10 +53,12 @@ done
 # allowed so an unrelated working directory cannot fail the layout gate; it is
 # NOT an invitation to commit a miscellaneous root source area.
 #
-# `.github` carries the CI workflow; `CONTRIBUTING.md` is the newcomer path.
-# Both are deliberate root entries, not a relaxation of the no-miscellaneous
-# rule: everything else still fails here by name.
+# `.github` carries the CI workflows, `.devcontainer` is the reproducible
+# contributor environment, and `CONTRIBUTING.md` is the newcomer path. All are
+# deliberate root entries, not a relaxation of the no-miscellaneous rule:
+# everything else still fails here by name.
 allowed_root_entries='.claude
+.devcontainer
 .git
 .github
 .gstack

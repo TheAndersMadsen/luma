@@ -56,9 +56,17 @@ test("a log line reaches the process's own stdout and stderr with console destro
     log.logWarn("probe-warn");
     log.logError("probe-error", new Error("probe-detail"));
   `;
-  const child = spawnSync(process.execPath, ["--input-type=module", "-e", probe], {
-    encoding: "utf8",
-  });
+  const child = spawnSync(
+    process.execPath,
+    [
+      "--no-warnings",
+      "--experimental-strip-types",
+      "--input-type=module",
+      "-e",
+      probe,
+    ],
+    { encoding: "utf8" },
+  );
 
   assert.equal(
     child.status,

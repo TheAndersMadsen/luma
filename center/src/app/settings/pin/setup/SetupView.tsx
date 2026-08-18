@@ -17,9 +17,8 @@
  *  1. Every state on this page was READ. Nothing is marked done because the
  *     step above it is; `usePinSetupFacts` names the authority for each one.
  *  2. Where a step cannot be finished in a browser today, it says so and prints
- *     the command. Four of the eight steps in `docs/operations.md` have no
- *     console yet, and a checklist that quietly implies otherwise sends a
- *     newcomer hunting for a button that was never built.
+ *     the command projected from the canonical setup contract. Physical
+ *     acceptance remains a separate wearer-observed gate.
  */
 
 import Link from "next/link";
@@ -35,7 +34,12 @@ import {
   getManagedPackageStatusText,
   hasProblematicManagedPackageState,
 } from "@/lib/pin-install";
-import { derivePinSetupPlan, type PinSetupStep, type PinSetupStepStatus } from "@/lib/pin-setup";
+import {
+  derivePinSetupPlan,
+  type PinSetupFacts,
+  type PinSetupStep,
+  type PinSetupStepStatus,
+} from "@/lib/pin-setup";
 import { usePinDevice } from "../PinDeviceProvider";
 import { usePinSetupFacts, type PinSetupReadings } from "./usePinSetupFacts";
 
@@ -51,6 +55,37 @@ const STATE_LABELS: Record<PinSetupStepStatus, string> = {
   unobservable: "Not visible here",
 };
 
+type EvidenceTone = "live" | "absent" | "degraded" | "off";
+
+function activationEvidence(activation: PinSetupFacts["activation"]): {
+  tone: EvidenceTone;
+  chip: string;
+} {
+  if (activation.expectedEdgeState === "invalid") {
+    return { tone: "degraded", chip: "Edge config invalid" };
+  }
+  if (activation.expectedEdgeState === "unreadable") {
+    return { tone: "degraded", chip: "Edge config unreadable" };
+  }
+  if (activation.state === "unreadable") {
+    return { tone: "degraded", chip: "Unreadable" };
+  }
+  if (activation.state === "inactive") {
+    return { tone: "off", chip: "Clone mode off" };
+  }
+  if (
+    activation.state === "active" &&
+    activation.expectedEdgeState === "available" &&
+    activation.edgeIpv4 === activation.expectedEdgeIpv4
+  ) {
+    return { tone: "live", chip: "Verified for this Center" };
+  }
+  if (activation.state === "active") {
+    return { tone: "off", chip: "Clone mode on · unverified target" };
+  }
+  return { tone: "off", chip: "Unknown" };
+}
+
 export default function SetupView({
   operator,
   adminHref,
@@ -63,6 +98,7 @@ export default function SetupView({
   const { connect, clearError, error, support } = usePinDevice();
   const readings = usePinSetupFacts({ operator });
   const plan = derivePinSetupPlan(readings.facts);
+  const activation = activationEvidence(readings.facts.activation);
   const [connecting, setConnecting] = useState(false);
 
   async function onConnect() {
@@ -124,8 +160,10 @@ export default function SetupView({
 
         <div className={pin.noteRow}>
           <p className={pin.note}>
-            Use these checks to finish setting up your Pin. Steps marked{" "}
-            <em>Outside this browser</em> need a terminal or an operator.
+            Use these checks to finish setting up your Pin. The {plan.total} steps
+            come from the current setup contract; only the highlighted one is the
+            current action. <em>Outside this browser</em> means a terminal, operator,
+            or physical Pin is required.
           </p>
         </div>
 
@@ -238,25 +276,9 @@ export default function SetupView({
         />
         <EvidenceRow
           label="Pointed at this server"
-          tone={
-            readings.facts.activation.state === "active"
-              ? "live"
-              : readings.facts.activation.state === "inactive"
-                ? "off"
-                : readings.facts.activation.state === "unreadable"
-                  ? "degraded"
-                  : "off"
-          }
-          chip={
-            readings.facts.activation.state === "active"
-              ? "Clone mode on"
-              : readings.facts.activation.state === "inactive"
-                ? "Clone mode off"
-                : readings.facts.activation.state === "unreadable"
-                  ? "Unreadable"
-                  : "Unknown"
-          }
-          detail="Settings.Global penumbra_carry_remote_mode, read over ADB. This page never writes it."
+          tone={activation.tone}
+          chip={activation.chip}
+          detail="Clone mode and its edge are read over ADB, then compared with this deployment's independently declared edge."
         />
         <EvidenceRow
           label="Reporting to this Center"
@@ -300,9 +322,9 @@ function StepRow({
   actions: React.ReactNode;
   detail: React.ReactNode;
 }) {
-  // A finished step collapses to its one sentence; anything unfinished keeps
-  // its instructions on screen. The focused step is the one to act on now.
-  const expanded = step.status !== "done";
+  // Exactly one step exposes instructions and controls. Other steps still show
+  // their current fact, without competing calls to action.
+  const expanded = focused;
   const dim = step.status === "blocked" || step.status === "unobservable";
 
   return (
@@ -310,6 +332,7 @@ function StepRow({
       className={`${styles.step} ${focused ? styles.stepFocus : ""} ${dim ? styles.stepDim : ""}`}
       data-testid={`pin-setup-step-${step.id}`}
       data-state={step.status}
+      aria-current={focused ? "step" : undefined}
     >
       <span className={styles.badge} data-state={step.status} aria-hidden="true">
         {step.status === "done" ? "✓" : step.ordinal}
@@ -340,7 +363,7 @@ function StepRow({
             ) : null}
           </div>
         ) : null}
-        {actions ? <div className={styles.actions}>{actions}</div> : null}
+        {expanded && actions ? <div className={styles.actions}>{actions}</div> : null}
       </div>
     </div>
   );
@@ -386,11 +409,11 @@ function renderStepActions({
        * page's, so that is where the link goes.
        */
       if (step.status !== "todo") {
-        return (
-          <Link className={settings.additionLink} href="/settings/pin">
+        return step.centerRoute ? (
+          <Link className={settings.additionLink} href={step.centerRoute}>
             Connection details
           </Link>
-        );
+        ) : null;
       }
       return (
         <button
@@ -419,34 +442,26 @@ function renderStepActions({
       );
 
     case "release":
-      // Nothing to click, deliberately. Publishing a release happens on the
-      // server; the commands above are the only honest affordance, and a link
-      // to some adjacent pane would only look like one.
+    case "ship":
+      // These are operator-host mutations. The generated CLI command is the
+      // action; an adjacent Center link would falsely imply the browser can do it.
       return null;
 
     case "install":
       if (step.status === "blocked") return null;
-      return (
-        <Link className={settings.additionLink} href="/settings/pin/install">
+      return step.centerRoute ? (
+        <Link className={settings.additionLink} href={step.centerRoute}>
           Open the installer
         </Link>
-      );
+      ) : null;
 
     case "configure":
       if (step.status === "blocked") return null;
-      return (
-        <>
-          <Link className={settings.additionLink} href="/settings/pin/llm">
-            Assistant &amp; providers
-          </Link>
-          <Link className={settings.additionLink} href="/settings/pin/server">
-            Pin server
-          </Link>
-          <Link className={settings.additionLink} href="/settings/pin/services">
-            Service keys
-          </Link>
-        </>
-      );
+      return step.centerRoute ? (
+        <Link className={settings.additionLink} href={step.centerRoute}>
+          Open Pin settings
+        </Link>
+      ) : null;
 
     case "identity":
       // No link at all without the operator claim: an entry point that only
@@ -459,21 +474,22 @@ function renderStepActions({
       );
 
     case "activate":
-      // Intentionally no control. The commands above are the whole story until
-      // this step has a console.
+      // The generated exact-device command is the only mutation affordance.
       return null;
 
+    case "network":
+      return step.centerRoute ? (
+        <Link className={settings.additionLink} href={step.centerRoute}>
+          Create Wi-Fi QR code
+        </Link>
+      ) : null;
+
     case "confirm":
-      return (
-        <>
-          <Link className={settings.additionLink} href="/wifi">
-            Wi-Fi QR code
-          </Link>
-          <Link className={settings.additionLink} href="/settings/account/devices">
-            Pair a Pin
-          </Link>
-        </>
-      );
+      return step.centerRoute ? (
+        <Link className={settings.additionLink} href={step.centerRoute}>
+          Open Pin status
+        </Link>
+      ) : null;
 
     default:
       return null;
@@ -513,7 +529,7 @@ function EvidenceRow({
 }: {
   label: string;
   chip: string;
-  tone: "live" | "absent" | "degraded" | "off";
+  tone: EvidenceTone;
   detail: string;
 }) {
   return (

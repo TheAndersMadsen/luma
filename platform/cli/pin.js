@@ -3,8 +3,11 @@
 // Split out of the root `revival` entry point; behavior, messages, and exit
 // codes are unchanged.
 
+const fs = require('node:fs');
+
 const {
-  PIN_RELEASE_TOOL, PIN_RELEASE_BUILD_TOOL, PIN_RELEASE_SHIP_TOOL, PIN_INSTALL_TOOL, PIN_DOCTOR_TOOL, fail, run,
+  PIN_RELEASE_TOOL, PIN_RELEASE_BUILD_TOOL, PIN_RELEASE_SHIP_TOOL, PIN_INSTALL_TOOL, PIN_DOCTOR_TOOL,
+  PIN_ACTIVATION_TOOL, PIN_NETWORK_TOOL, ENV_FILE, fail, operatorEnvironment, parseEnvFile, run,
 } = require('./context');
 const { pinSourceCheck } = require('./gates');
 
@@ -39,9 +42,23 @@ function pinCommand(args) {
     run('node', [PIN_INSTALL_TOOL, ...args]);
     return;
   }
+  if (subcommand === 'activate') {
+    run('node', [PIN_ACTIVATION_TOOL, ...args]);
+    return;
+  }
+  if (subcommand === 'network') {
+    let values;
+    try {
+      values = fs.existsSync(ENV_FILE) ? parseEnvFile(ENV_FILE) : undefined;
+    } catch (error) {
+      fail(error.message);
+    }
+    run('node', [PIN_NETWORK_TOOL, ...args], { env: operatorEnvironment(values) });
+    return;
+  }
   fail(
     'usage: ./revival pin doctor | check | release build|inspect|verify|plan|ship ... |\n' +
-    '              install [--confirm] [--serial SERIAL]\n' +
+    '              install [--confirm] [--serial SERIAL] | activate ... | network ...\n' +
     '       `install` without --confirm only plans and leaves the device untouched;\n' +
     '       `install --confirm` modifies the connected Pin. See `./revival pin install --help`.',
     64
