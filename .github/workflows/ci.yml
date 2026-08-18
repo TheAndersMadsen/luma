@@ -101,5 +101,8 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22.14.0
+      - uses: dtolnay/rust-toolchain@1.91.1
+        with:
+          components: clippy, rustfmt
       - name: release check (VPS profile scope)
         run: ./revival release check
