@@ -88,6 +88,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.91.1
         with:
           components: rustfmt
+      - name: install protobuf compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends libprotobuf-dev protobuf-compiler
       - name: formatting
         run: cargo fmt --check --manifest-path pin/runtime/core/Cargo.toml
       - name: focused component checks
@@ -104,5 +108,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.91.1
         with:
           components: clippy, rustfmt
+      - name: install protobuf compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends libprotobuf-dev protobuf-compiler
       - name: release check (VPS profile scope)
         run: ./revival release check
