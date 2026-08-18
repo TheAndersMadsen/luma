@@ -195,7 +195,51 @@ if command -v rg >/dev/null 2>&1; then
     exit 1
   fi
 else
-  echo "warning: rg unavailable; high-confidence content scan skipped" >&2
+  if ! node - "$ROOT" <<'NODE'
+const fs = require("node:fs");
+const path = require("node:path");
+
+const root = process.argv[2];
+const excludedDirectoryNames = new Set([
+  ".git",
+  ".gradle",
+  ".next",
+  "build",
+  "node_modules",
+  "target",
+]);
+const excludedRootDirectories = new Set(["private", "state"]);
+const sourcePolicy = path.join(root, "platform", "deploy", "acceptance", "source-policy.sh");
+const credentialPattern = /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|AKIA[0-9A-Z]{16}|sk-[A-Za-z0-9_-]{32,}/;
+
+function containsCredential(directory) {
+  for (const name of fs.readdirSync(directory)) {
+    const entry = path.join(directory, name);
+    const metadata = fs.lstatSync(entry);
+    if (metadata.isSymbolicLink()) continue;
+    if (metadata.isDirectory()) {
+      const relative = path.relative(root, entry);
+      if (
+        excludedDirectoryNames.has(name) ||
+        (!relative.includes(path.sep) && excludedRootDirectories.has(relative))
+      ) {
+        continue;
+      }
+      if (containsCredential(entry)) return true;
+      continue;
+    }
+    if (!metadata.isFile() || entry === sourcePolicy) continue;
+    if (credentialPattern.test(fs.readFileSync(entry, "utf8"))) return true;
+  }
+  return false;
+}
+
+if (containsCredential(root)) process.exit(1);
+NODE
+  then
+    echo "high-confidence credential material detected" >&2
+    exit 1
+  fi
 fi
 
 echo "source policy: ok"
