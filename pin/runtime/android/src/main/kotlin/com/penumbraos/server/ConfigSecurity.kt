@@ -21,6 +21,7 @@ internal object ConfigSecurity {
         "google_maps.api_key",
         "brave_search.api_key",
         "azure_speech.subscription_key",
+        "music.gateway_token",
     )
     private val writeOnlyLeafKeys = writeOnlyPaths.mapTo(mutableSetOf()) { it.substringAfterLast('.') }
     private val managedRootTables = setOf(
@@ -35,6 +36,8 @@ internal object ConfigSecurity {
         "azure_speech",
         "openstreetmap",
         "contacts",
+        "music",
+        "spotify",
         "dev",
         "feature_flags",
     )

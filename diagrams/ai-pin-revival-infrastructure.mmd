@@ -1,0 +1,38 @@
+graph LR
+  subgraph Device["DEVICE PLANE"]
+    Stock["Stock Android experiences<br/>projector · narration · audio<br/>camera · playback · native actions"]
+    Runtime["Pin hook/runtime<br/>127.0.0.1:9090"]
+    Stock <-->|"actions + results"| Runtime
+  end
+
+  subgraph Edge["PUBLIC EDGE"]
+    Nginx["Public :443<br/>Nginx SNI stream"]
+    Envoy["Envoy<br/>device mTLS + gRPC"]
+  end
+
+  subgraph Platform["COSMOS PLATFORM"]
+    Cosmos["Cosmos services<br/>AI Bus · Account · Contacts<br/>Feature Flags · Notable Events<br/>Provisioning · Connectivity"]
+    Center["Center<br/>wearer + operator console"]
+    Data["Keycloak + PostgreSQL"]
+    Providers["SearXNG + external providers<br/>Spotify adapter"]
+    Observe["Prometheus + Grafana"]
+  end
+
+  Runtime -->|"authenticated device connection"| Nginx
+  Nginx -->|"device gateway SNI"| Envoy
+  Envoy --> Cosmos
+  Nginx -->|"dashboard SNI"| Center
+
+  Wearer["Wearer / operator browser"] --> Center
+  Center -->|"typed service calls"| Cosmos
+  Center -.->|"local WebUSB / ADB<br/>install + console"| Runtime
+  Center --> Data
+  Cosmos --> Data
+  Cosmos --> Providers
+  Observe -.->|"metrics"| Envoy
+  Observe -.->|"metrics"| Cosmos
+  Observe -.->|"metrics"| Center
+
+  Tooling["Platform tooling<br/>build · deploy · backup · canary<br/>drift · rollback"] -.->|"operates"| Nginx
+  Tooling -.->|"operates"| Center
+  Tooling -.->|"operates"| Cosmos

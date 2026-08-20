@@ -2,6 +2,7 @@ package com.penumbraos.hook
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -52,6 +53,20 @@ class EsimBridgeAuthenticationTest {
                 token.dropLast(1) + "g",
             ),
         )
+    }
+
+    @Test
+    fun operationBridgeAuthenticationRunsOffCallerThread() {
+        val caller = Thread.currentThread()
+        var worker: Thread? = null
+
+        assertTrue(
+            EsimEventEmitter.runBoundedOperationAuthentication {
+                worker = Thread.currentThread()
+                true
+            },
+        )
+        assertNotSame(caller, worker)
     }
 
     @Test

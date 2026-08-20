@@ -14,7 +14,63 @@ import java.lang.reflect.InvocationTargetException
 import java.lang.reflect.Method
 import java.lang.reflect.Proxy
 import java.util.ArrayList
-import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
+
+internal class EsimCarrierProfileAcceptanceState {
+    companion object {
+        internal const val HUMANE_PROFILE_NAME_HEX = "48756D616E65"
+        private const val DOWNLOAD_VERIFY_ENABLE_ACTION =
+            "humane.connectivity.esimlpa.downloadVerifyAndEnableProfile"
+        private val REQUEST_ID_PATTERN = Regex("^req_[0-9a-f]{32}$")
+        private val OPERATION_TOKEN_PATTERN = Regex("^op_[0-9a-f]{32}$")
+        private val BRIDGE_TOKEN_PATTERN = Regex("^[0-9a-f]{64}$")
+    }
+
+    private val activeOperationToken = AtomicReference<String?>(null)
+
+    fun isEligible(operation: EsimOperationSnapshot?): Boolean =
+        operation != null &&
+            operation.source == "rust" &&
+            operation.action == DOWNLOAD_VERIFY_ENABLE_ACTION &&
+            operation.activationCodeProvided &&
+            REQUEST_ID_PATTERN.matches(operation.requestId) &&
+            OPERATION_TOKEN_PATTERN.matches(operation.operationToken) &&
+            BRIDGE_TOKEN_PATTERN.matches(operation.bridgeAuthToken)
+
+    fun authorize(
+        operation: EsimOperationSnapshot?,
+        bridgeAuthenticated: Boolean,
+    ): Boolean {
+        val operationToken = operation
+            ?.takeIf(::isEligible)
+            ?.takeIf { bridgeAuthenticated }
+            ?.operationToken
+        activeOperationToken.set(operationToken)
+        return operationToken != null
+    }
+
+    fun profileNameHex(
+        originalHex: String?,
+        operation: EsimOperationSnapshot?,
+        profileIccid: String?,
+    ): String? {
+        if (!isActiveFor(operation)) return originalHex
+        val downloadedIccid = operation?.downloadIccid?.takeIf(String::isNotBlank)
+            ?: return originalHex
+        if (!downloadedIccid.equals(profileIccid, ignoreCase = true)) return originalHex
+        return HUMANE_PROFILE_NAME_HEX
+    }
+
+    fun clear(): Boolean = activeOperationToken.getAndSet(null) != null
+
+    fun clearIfActiveFor(operation: EsimOperationSnapshot?): Boolean {
+        val operationToken = operation?.operationToken ?: return false
+        return activeOperationToken.compareAndSet(operationToken, null)
+    }
+
+    private fun isActiveFor(operation: EsimOperationSnapshot?): Boolean =
+        isEligible(operation) && activeOperationToken.get() == operation?.operationToken
+}
 
 /**
  * Hooks for the eSIM LPA process (package: humane.connectivity.esimlpa).
@@ -36,17 +92,7 @@ object EsimLpaHooks {
     private const val BRIDGE_AUTH_TOKEN_EXTRA = "penumbra_bridge_auth_token"
     private const val OPERATION_TOKEN_EXTRA = "penumbra_operation_token"
     private val LONG_IDENTIFIER_PATTERN = Regex("\\d{10,}")
-
-    // DISABLED per R-006: carrier-lock bypass disabled
-    // private const val HUMANE_HEX = "48756D616E65"
-
-    /**
-     * Scoping flag for the carrier lock bypass. getProfileName() hook patch
-     * only applies when this is flag is true. Set to true at the
-     * start of downloadVerifyAndEnableProfileAPI, cleared at the start of
-     * every onStartCommand (every new intent).
-     */
-    private val bypassActive = AtomicBoolean(false)
+    private val carrierProfileAcceptance = EsimCarrierProfileAcceptanceState()
 
     // -- Cached reflection handles (resolved once in install()) --
 
@@ -100,8 +146,7 @@ object EsimLpaHooks {
             hookProfileMutationCapture(cl)
             hookDownloadCapture(cl)
             hookDeleteProtection(cl)
-            // DISABLED per R-006: carrier-lock bypass is a trust decision substitution
-            // hookCarrierLock(cl)
+            hookCarrierProfileAcceptance(cl)
             hookBF25Parser(cl)
             Log.w(TAG, "eSIM LPA hooks installed")
         } catch (t: Throwable) {
@@ -211,6 +256,9 @@ object EsimLpaHooks {
             "onStartCommand",
             arrayOf(Intent::class.java, Int::class.javaPrimitiveType!!, Int::class.javaPrimitiveType!!)
         ) { param ->
+            if (carrierProfileAcceptance.clear()) {
+                Log.w(TAG, "  Carrier profile acceptance: cleared stale operation on new intent")
+            }
             val intent = param.args[0] as? Intent
             if (intent == null) {
                 // Stock returns START_STICKY but dereferences a null restart
@@ -218,7 +266,6 @@ object EsimLpaHooks {
                 // There is no operation to resume and no request-scoped bridge
                 // credential on this callback, so end the empty restart cleanly.
                 EsimOperationContext.clear()
-                bypassActive.set(false)
                 param.result = android.app.Service.START_NOT_STICKY
                 Log.w(TAG, "Ignored empty sticky restart for eSIM LPA service")
                 return@hookMethodBefore
@@ -299,36 +346,51 @@ object EsimLpaHooks {
                     ?: return@wrapListener
                 val message = args?.getOrNull(0) as? String
                 when (methodName) {
-                    "onEnable" -> EsimEventEmitter.emitProfileMutationResult(
-                        operation,
-                        "enable",
-                        classifyMutationResult(message),
-                        message,
-                    )
-                    "onDisable" -> EsimEventEmitter.emitProfileMutationResult(
-                        operation,
-                        "disable",
-                        classifyMutationResult(message),
-                        message,
-                    )
-                    "onDelete" -> EsimEventEmitter.emitProfileMutationResult(
-                        operation,
-                        "delete",
-                        classifyMutationResult(message),
-                        message,
-                    )
-                    "onsetNickName" -> EsimEventEmitter.emitProfileMutationResult(
-                        operation,
-                        "set_nickname",
-                        classifyMutationResult(message),
-                        message,
-                    )
-                    "onError" -> EsimEventEmitter.emitProfileMutationResult(
-                        operation,
-                        currentMutationOperation(operation),
-                        "error",
-                        message,
-                    )
+                    "onEnable" -> {
+                        EsimEventEmitter.emitProfileMutationResult(
+                            operation,
+                            "enable",
+                            classifyMutationResult(message),
+                            message,
+                        )
+                        clearCarrierProfileAcceptance(operation, "profile enable result")
+                    }
+                    "onDisable" -> {
+                        EsimEventEmitter.emitProfileMutationResult(
+                            operation,
+                            "disable",
+                            classifyMutationResult(message),
+                            message,
+                        )
+                        clearCarrierProfileAcceptance(operation, "profile disable result")
+                    }
+                    "onDelete" -> {
+                        EsimEventEmitter.emitProfileMutationResult(
+                            operation,
+                            "delete",
+                            classifyMutationResult(message),
+                            message,
+                        )
+                        clearCarrierProfileAcceptance(operation, "profile delete result")
+                    }
+                    "onsetNickName" -> {
+                        EsimEventEmitter.emitProfileMutationResult(
+                            operation,
+                            "set_nickname",
+                            classifyMutationResult(message),
+                            message,
+                        )
+                        clearCarrierProfileAcceptance(operation, "profile nickname result")
+                    }
+                    "onError" -> {
+                        EsimEventEmitter.emitProfileMutationResult(
+                            operation,
+                            currentMutationOperation(operation),
+                            "error",
+                            message,
+                        )
+                        clearCarrierProfileAcceptance(operation, "profile mutation error")
+                    }
                 }
             }
         }
@@ -410,6 +472,9 @@ object EsimLpaHooks {
                         if (!isDownloadVerifyEnableAction(operation)) {
                             EsimEventEmitter.emitDownloadResult(operation, "success", message)
                         }
+                        // wrapListener invokes this after stock's onFinished body.
+                        // The Humane-only profile-name check has completed by now.
+                        clearCarrierProfileAcceptance(operation, "download verification finished")
                     }
                     "onError" -> {
                         val message = args?.getOrNull(0) as? String
@@ -418,6 +483,7 @@ object EsimLpaHooks {
                             classifyDownloadResult(message),
                             message,
                         )
+                        clearCarrierProfileAcceptance(operation, "download error")
                     }
                 }
             }
@@ -442,6 +508,7 @@ object EsimLpaHooks {
                     "onError" -> {
                         val message = args?.getOrNull(0) as? String
                         EsimEventEmitter.emitDownloadResult(operation, "error", message)
+                        clearCarrierProfileAcceptance(operation, "communication error")
                     }
                 }
             }
@@ -687,53 +754,76 @@ object EsimLpaHooks {
         return normalized.startsWith(PROTECTED_T_MOBILE_NAME) || normalized.startsWith(PROTECTED_GSMA_TEST_PREFIX)
     }
 
-    // DISABLED per R-006: carrier-lock bypass is a trust decision substitution.
-    // Rewriting getProfileName() to "Humane" subverts the carrier lock check in
-    // factoryService line 839 so the delete branch becomes unreachable for any
-    // profile. This replaces a platform trust decision with a hook-side override,
-    // which is the exact class of defect R-006 flags.
-    /*
-    private fun hookCarrierLock(cl: ClassLoader) {
+    /**
+     * Allow a user-requested non-Humane profile through stock's hard-coded
+     * post-download name check. The override is fail-closed and limited to the
+     * exact downloaded ICCID of one mutually-authenticated Penumbra operation.
+     * A replacement HexString is returned so the real profile metadata is never
+     * mutated, and the authorization window closes after stock's onFinished body.
+     */
+    private fun hookCarrierProfileAcceptance(cl: ClassLoader) {
         val factoryServiceClass = cl.loadClass(StockSymbols.EsimLpa.FACTORY_SERVICE_CLASS)
         val profileInfoClass = cl.loadClass("es.com.valid.lib_lpa.dataClasses.ProfileInfo")
         val hexStringClass = cl.loadClass("es.com.valid.lib_lpa.dataClasses.HexString")
+        val iccidClass = cl.loadClass("es.com.valid.lib_lpa.dataClasses.Iccid")
+        val hexStringConstructor = hexStringClass.getDeclaredConstructor().apply { isAccessible = true }
+        val getValueMethod = hexStringClass.getMethod("getValue")
         val setValueMethod = hexStringClass.getMethod("setValue", String::class.java)
+        val getIccidMethod = profileInfoClass.getMethod("getIccid")
+        val getValueRotatedMethod = iccidClass.getMethod("getValueRotated")
 
-        // Clear the bypass flag at the start of every new intent
-        HookUtils.hookMethodBefore(
-            factoryServiceClass,
-            "onStartCommand",
-            arrayOf(Intent::class.java, Int::class.javaPrimitiveType!!, Int::class.javaPrimitiveType!!)
-        ) { _ ->
-            if (bypassActive.getAndSet(false)) {
-                Log.w(TAG, "  Carrier lock bypass: cleared stale flag on new intent")
-            }
-        }
-
-        // Set the bypass flag when the download-verify-enable flow starts
         HookUtils.hookMethodBefore(
             factoryServiceClass,
             "downloadVerifyAndEnableProfileAPI",
             arrayOf(String::class.java)
         ) { _ ->
-            bypassActive.set(true)
-            Log.w(TAG, "  Carrier lock bypass: activated for downloadVerifyAndEnableProfile")
-        }
-
-        // Patch getProfileName() only when bypass is active
-        HookUtils.hookMethodAfter(profileInfoClass, "getProfileName", emptyArray()) { param ->
-            if (bypassActive.get()) {
-                val hexString = param.result
-                if (hexString != null) {
-                    setValueMethod.invoke(hexString, HUMANE_HEX)
-                    Log.w(TAG, "  Carrier lock bypass: getProfileName() -> \"Humane\"")
-                }
+            val operation = EsimOperationContext.snapshot()
+            if (!carrierProfileAcceptance.isEligible(operation)) {
+                carrierProfileAcceptance.clear()
+                Log.w(TAG, "  Carrier profile acceptance denied: operation is not a bound Penumbra download")
+                return@hookMethodBefore
+            }
+            val bridgeAuthenticated = EsimEventEmitter.authenticateOperationBridge(
+                checkNotNull(operation).bridgeAuthToken,
+            )
+            if (carrierProfileAcceptance.authorize(operation, bridgeAuthenticated)) {
+                Log.w(TAG, "  Carrier profile acceptance authorized for bound download operation")
+            } else {
+                Log.w(TAG, "  Carrier profile acceptance denied: bridge authentication failed")
             }
         }
 
-        Log.w(TAG, "  Carrier lock bypass installed")
+        // Return a temporary value only for the profile downloaded by this operation.
+        HookUtils.hookMethodAfter(profileInfoClass, "getProfileName", emptyArray()) { param ->
+            val original = param.result ?: return@hookMethodAfter
+            val originalHex = getValueMethod.invoke(original) as? String ?: return@hookMethodAfter
+            val profileIccidObject = getIccidMethod.invoke(param.thisObject) ?: return@hookMethodAfter
+            val profileIccid = getValueRotatedMethod.invoke(profileIccidObject) as? String
+                ?: return@hookMethodAfter
+            val acceptedHex = carrierProfileAcceptance.profileNameHex(
+                originalHex = originalHex,
+                operation = EsimOperationContext.snapshot(),
+                profileIccid = profileIccid,
+            )
+            if (acceptedHex == originalHex) return@hookMethodAfter
+
+            val replacement = hexStringConstructor.newInstance()
+            setValueMethod.invoke(replacement, acceptedHex)
+            param.result = replacement
+            Log.w(TAG, "  Carrier profile acceptance supplied temporary Humane name")
+        }
+
+        Log.w(TAG, "  Carrier profile acceptance hook installed")
     }
-    */
+
+    private fun clearCarrierProfileAcceptance(
+        operation: EsimOperationSnapshot,
+        reason: String,
+    ) {
+        if (carrierProfileAcceptance.clearIfActiveFor(operation)) {
+            Log.w(TAG, "  Carrier profile acceptance cleared after $reason")
+        }
+    }
 
     /**
      * Replace FillerEngine.fillStoreMetadataRequest(String, int) with a version

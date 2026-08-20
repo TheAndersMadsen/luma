@@ -30,7 +30,8 @@
     "next": "^15.5.23",
     "qrcode.react": "^4.2.0",
     "react": "19.1.1",
-    "react-dom": "19.1.1"
+    "react-dom": "19.1.1",
+    "youtubei.js": "18.0.0"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^7.0.1",

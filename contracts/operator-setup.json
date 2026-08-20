@@ -1175,6 +1175,55 @@
       "home": "center.env"
     },
     {
+      "name": "REVIVAL_MUSIC_GATEWAY_ORIGIN",
+      "aliases": [],
+      "group": "production",
+      "sensitivity": "operational",
+      "home": "center.env"
+    },
+    {
+      "name": "REVIVAL_MUSIC_SESSION_SECRET",
+      "aliases": [],
+      "group": "production",
+      "sensitivity": "secret",
+      "home": "center.env"
+    },
+    {
+      "name": "TIDAL_CLIENT_ID",
+      "aliases": [],
+      "group": "provider",
+      "sensitivity": "identity",
+      "home": "center.env"
+    },
+    {
+      "name": "TIDAL_CLIENT_SECRET",
+      "aliases": [],
+      "group": "provider",
+      "sensitivity": "secret",
+      "home": "center.env"
+    },
+    {
+      "name": "TIDAL_SCOPES",
+      "aliases": [],
+      "group": "provider",
+      "sensitivity": "operational",
+      "home": "center.env"
+    },
+    {
+      "name": "TIDAL_COUNTRY_CODE",
+      "aliases": [],
+      "group": "provider",
+      "sensitivity": "operational",
+      "home": "center.env"
+    },
+    {
+      "name": "APPLE_MUSIC_DEVELOPER_TOKEN",
+      "aliases": [],
+      "group": "provider",
+      "sensitivity": "secret",
+      "home": "center.env"
+    },
+    {
       "name": "REVIVAL_SHARE_TOKEN_SECRET",
       "aliases": [
         "COSMOS_SHARE_TOKEN_SECRET"

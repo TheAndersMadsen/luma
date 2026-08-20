@@ -447,6 +447,24 @@ stages a device preflight. Verify that path with a real spoken turn.
   off; enabling it still requires a working food provider.
 - Music search, playback, favourites, queue, and playlist actions require the
   wearer’s linked provider account.
+- Center's Music selector supports `spotify`, `youtube_music`, `apple_music`,
+  and `tidal`. Spotify uses Penumbra's embedded librespot runtime. The other
+  providers stay in separate Android apps and are controlled through their
+  exported media session: [Metrolist](https://github.com/MetrolistGroup/Metrolist)
+  (`com.metrolist.music`) for ad-free YouTube Music, Apple Music
+  (`com.apple.android.music`), and TIDAL
+  (`com.aspiro.tidal`). Selecting one does not install it or copy its login;
+  install the app on the Pin and sign in inside the app first.
+- External-provider catalog grounding uses MusicBrainz, while the selected app
+  resolves and plays the actual media. Standard play, pause, resume, next,
+  previous, restart, generated-playlist, and queue prompts share the native
+  Humane action/observation boundary. Save/like and current-track radio fail
+  closed if that app's active media session exposes no matching custom action.
+- The humane-system-hook TIDAL localhost shim from
+  [commit `6ac83120`](https://github.com/PenumbraOS/humane-system-hook/commit/6ac83120c8e75cda03048884751541842deae82e)
+  is a useful stock-client proof of concept, but it bypasses auth with a stub
+  token and serves a generated test tone. It is not used as real TIDAL account
+  support.
 - Current weather, Nearby, routing, and reverse geocoding depend on a usable
   current location and live place/weather providers.
 - Shopping has a registered `VisualSearch` gRPC handler, but real shopping is

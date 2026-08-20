@@ -25,6 +25,7 @@ internal object SpotifyMusicContract {
     // truncate every collection to the Search limit.
     const val MAX_SEARCH_ITEMS = 10
     const val MAX_QUERY_ITEMS = 100
+    const val MAX_NAMED_TRACK_ITEMS = 1
     const val MAX_GENERATED_ITEMS = 10
     const val MAX_ARTISTS_PER_TRACK = 16
 
@@ -90,7 +91,7 @@ internal object SpotifyMusicContract {
                 put(
                     "ids",
                     JSONArray().apply {
-                        values.forEach { put(requireSpotifyId(it)) }
+                        values.forEach { put(requireMusicId(it)) }
                     },
                 )
             }
@@ -103,13 +104,13 @@ internal object SpotifyMusicContract {
             "Spotify playback duration is invalid"
         }
         return JSONObject()
-            .put("id", requireSpotifyId(id))
+            .put("id", requireMusicId(id))
             .put("duration_ms", durationMs)
             .toString()
     }
 
     fun encodeSaveRequest(id: String): String =
-        JSONObject().put("id", requireSpotifyId(id)).toString()
+        JSONObject().put("id", requireMusicId(id)).toString()
 
     fun parseQueryResponse(payload: String): QueryResponse {
         val root = parseRoot(payload)
@@ -164,7 +165,7 @@ internal object SpotifyMusicContract {
         require(discNumber >= 0) { "Spotify item $index has a negative disc number" }
 
         return Track(
-            id = requireSpotifyId(item.requiredString("id")),
+            id = requireMusicId(item.requiredString("id")),
             title = boundedText("title", item.requiredString("title")),
             artists = artists,
             album = boundedText(
@@ -196,11 +197,14 @@ internal object SpotifyMusicContract {
         } catch (error: Exception) {
             throw IllegalArgumentException("Spotify playback URL is invalid", error)
         }
-        require(uri.scheme == "http") { "Spotify playback URL must use loopback HTTP" }
         require(uri.userInfo == null) { "Spotify playback URL cannot contain user info" }
-        require(uri.port in 1..65_535) { "Spotify playback URL must include a valid port" }
-        require(uri.host == "127.0.0.1" || uri.host == "::1" || uri.host == "[::1]") {
-            "Spotify playback URL must remain on loopback"
+        val loopback = uri.scheme == "http" && uri.port in 1..65_535 &&
+            (uri.host == "127.0.0.1" || uri.host == "::1" || uri.host == "[::1]")
+        val gateway = uri.scheme == "https" && uri.host?.isNotBlank() == true && uri.port == -1 &&
+            uri.rawQuery == null && uri.rawFragment == null &&
+            Regex("^/api/music-gateway/stream/[A-Za-z0-9_-]{43}$").matches(uri.rawPath.orEmpty())
+        require(loopback || gateway) {
+            "Music playback URL must be loopback or an opaque Center stream"
         }
     }
 
@@ -221,14 +225,15 @@ internal object SpotifyMusicContract {
         return value
     }
 
-    private fun requireSpotifyId(value: String): String {
-        require(
-            value.length == 22 && value.all {
-                it in '0'..'9' || it in 'A'..'Z' || it in 'a'..'z'
-            },
-        ) {
-            "Spotify track id is invalid"
-        }
+    private fun requireMusicId(value: String): String {
+        val spotify = value.length == 22 && value.all(Char::isLetterOrDigit)
+        val separator = value.indexOf(':')
+        val provider = if (separator > 0) value.substring(0, separator) else ""
+        val opaque = separator > 0 && value.length <= 320 &&
+            provider in setOf("youtube_music", "tidal", "apple_music") &&
+            value.substring(separator + 1).isNotEmpty() &&
+            value.substring(separator + 1).all { it.isLetterOrDigit() || it == '-' || it == '_' }
+        require(spotify || opaque) { "Music track id is invalid" }
         return value
     }
 

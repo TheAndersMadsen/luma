@@ -234,8 +234,12 @@ cleanup_preflight() {
   if [[ -n "$tts_work" && -d "$tts_work" ]]; then rm -rf -- "$tts_work"; fi
 }
 trap cleanup_preflight EXIT
-domain_discover_public_edge "$domain_discovery" \
-  || fail "the active Cosmos dashboard edge cannot seed the Center cutover"
+previous_domain_discovery=""
+if [[ -n "${canonical_record:-}" ]]; then
+  previous_domain_discovery="$canonical_record/public-edge-discovery.json"
+fi
+domain_select_public_edge "$domain_discovery" "$previous_domain_discovery" \
+  || fail "the active or recorded dashboard edge cannot seed the Center deployment"
 domain_assert_public_tls "$domain_discovery" \
   || fail "the active wildcard TLS pair cannot serve center.andersmadsen.dk"
 domain_assert_dns_ready center.andersmadsen.dk \

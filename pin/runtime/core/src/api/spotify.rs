@@ -7,7 +7,7 @@ use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 
 use super::{persist_config_durably, ApiState};
-use crate::config::SpotifyConfig;
+use crate::config::{MusicConfig, MusicProvider, SpotifyConfig};
 use crate::spotify::{diagnostic_search, UpdateSpotifySettings};
 
 pub fn router() -> Router<ApiState> {
@@ -51,6 +51,9 @@ async fn update_settings(
     if let Err(error) = candidate_settings.validate() {
         return (StatusCode::BAD_REQUEST, error).into_response();
     }
+    let requested_provider = body.active_provider;
+    let requested_gateway_url = body.music_gateway_url;
+    let requested_gateway_token = body.music_gateway_token;
 
     // Persist/apply/publish is one detached transaction. If the browser
     // navigates away or the network drops, the durable file, shared config,
@@ -61,7 +64,15 @@ async fn update_settings(
     let update_guard = state.config_update_lock.clone().lock_owned().await;
     let (completed, completion) = tokio::sync::oneshot::channel();
     tokio::spawn(async move {
-        let outcome = update_settings_transaction(state, candidate_settings, update_guard).await;
+        let outcome = update_settings_transaction(
+            state,
+            requested_provider,
+            requested_gateway_url,
+            requested_gateway_token,
+            candidate_settings,
+            update_guard,
+        )
+        .await;
         let _ = completed.send(outcome);
     });
     match completion.await {
@@ -77,11 +88,23 @@ async fn update_settings(
 
 async fn update_settings_transaction(
     state: ApiState,
+    requested_provider: Option<MusicProvider>,
+    requested_gateway_url: Option<String>,
+    requested_gateway_token: Option<String>,
     candidate_settings: SpotifyConfig,
     _update_guard: tokio::sync::OwnedMutexGuard<()>,
 ) -> Result<crate::spotify::SpotifyStatus, (StatusCode, &'static str)> {
     let previous = state.shared_config.read().await.clone();
+    let candidate_music = MusicConfig {
+        active_provider: requested_provider.unwrap_or(previous.music.active_provider),
+        gateway_url: requested_gateway_url.or_else(|| previous.music.gateway_url.clone()),
+        gateway_token: requested_gateway_token.or_else(|| previous.music.gateway_token.clone()),
+    };
+    if candidate_music.validate().is_err() {
+        return Err((StatusCode::BAD_REQUEST, "Unsupported music provider"));
+    }
     let mut candidate = previous.clone();
+    candidate.music = candidate_music.clone();
     candidate.spotify = candidate_settings.clone();
     if let Err(error) = persist_config_durably(
         &state.config_path,
@@ -102,6 +125,13 @@ async fn update_settings_transaction(
     // network-bound runtime restore; this task owns the transaction even when
     // the originating request has been canceled.
     *state.shared_config.write().await = candidate;
+    if let Err(error) = state.spotify.apply_music_settings(candidate_music).await {
+        tracing::warn!(
+            error = error.safe_message(),
+            "music provider setting could not be applied"
+        );
+        return Err((error.status_code(), error.safe_message()));
+    }
     if let Err(error) = state.spotify.apply_settings(candidate_settings).await {
         tracing::warn!("Spotify settings applied but session restore failed");
         return Err((error.status_code(), error.safe_message()));

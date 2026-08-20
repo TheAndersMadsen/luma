@@ -307,6 +307,23 @@ test("[implemented] discovery rejects ambiguous legacy Cosmos TLS ownership", (c
   assert.equal(fs.existsSync(output), false);
 });
 
+test("[implemented] later deployments reuse the authoritative edge discovery", (context) => {
+  const work = temporaryDirectory(context, "center-domain-reuse");
+  const previous = path.join(work, "previous.json");
+  const output = path.join(work, "selected.json");
+  discoveryFixture(previous, canonicalEnabled);
+
+  const result = runDomainShell(String.raw`
+set -euo pipefail
+source "$1"
+domain_select_public_edge "$OUTPUT" "$PREVIOUS"
+`, { PREVIOUS: previous, OUTPUT: output });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(readJson(output), readJson(previous));
+  assert.equal(fs.statSync(output).mode & 0o777, 0o600);
+});
+
 test("[implemented] strict render and Nginx file transaction resume and restore exactly", (context) => {
   const work = temporaryDirectory(context, "center-domain-nginx-transaction");
   const filesystemRoot = path.join(work, "root");
@@ -1176,7 +1193,7 @@ test("[implemented] deployment entrypoints bind the Center domain transaction", 
     assertSource(source, /\/domain\.sh"/, `${name} must load the domain transaction`);
   }
 
-  assertSource(scripts.preflight, /domain_discover_public_edge\b/, "preflight must discover the live edge");
+  assertSource(scripts.preflight, /domain_select_public_edge\b/, "preflight must select the live or recorded edge");
   assertSource(scripts.preflight, /domain_assert_public_tls\b/, "preflight must validate public TLS");
   assertSource(
     scripts.preflight,
@@ -1185,7 +1202,7 @@ test("[implemented] deployment entrypoints bind the Center domain transaction", 
   );
 
   for (const call of [
-    "domain_discover_public_edge",
+    "domain_select_public_edge",
     "domain_assert_public_tls",
     "domain_nginx_install",
     "domain_nginx_verify_desired",

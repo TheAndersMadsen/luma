@@ -29,6 +29,19 @@
 .spotifyMark i:nth-child(2) { width: 85%; }
 .spotifyMark i:nth-child(3) { width: 68%; }
 
+.musicMark {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--hu-colors-beam-base);
+  color: var(--hu-colors-black);
+  font-size: 24px;
+  line-height: 1;
+}
+
 .serviceCopy {
   display: grid;
   gap: 3px;
@@ -94,6 +107,40 @@
 .deviceName {
   composes: field from "../../../../components/controls.module.css";
   max-width: 300px;
+}
+
+.providerSelect {
+  composes: field from "../../../../components/controls.module.css";
+  width: min(100%, 300px);
+  color-scheme: dark;
+}
+
+.providerNote {
+  display: grid;
+  gap: 10px;
+  padding: 18px 24px;
+  border-bottom: 1px solid var(--hu-divider);
+  color: var(--hu-colors-crater-base);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.providerNote strong { color: var(--hu-colors-white); font-weight: 500; }
+.providerNote span { display: block; }
+.providerNote a { color: var(--hu-colors-beam-base); }
+
+.providerActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.deviceCode {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 0;
 }
 
 .acknowledgement {
@@ -231,7 +278,8 @@
   .serviceHead > :last-child { margin-left: 60px; }
   .settingRow,
   .fieldRow { align-items: flex-start; flex-direction: column; gap: 12px; }
-  .deviceName { max-width: none; }
+  .deviceName,
+  .providerSelect { max-width: none; width: 100%; }
   .pairingPanel { grid-template-columns: auto minmax(0, 1fr); }
   .pairingPanel > :last-child { grid-column: 1 / -1; justify-self: end; }
   .summary { align-items: flex-start; flex-direction: column; }

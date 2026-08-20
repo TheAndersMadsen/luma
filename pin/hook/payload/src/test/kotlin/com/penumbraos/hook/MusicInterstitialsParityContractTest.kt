@@ -6,19 +6,19 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** Guards the installed music app's live interstitial behavior at Spotify's boundary. */
+/** Guards the installed music app's live interstitial behavior at the provider boundary. */
 class MusicInterstitialsParityContractTest {
     @Test
-    fun `obsolete provider fallbacks identify the active music provider`() {
+    fun `obsolete provider fallbacks become provider neutral`() {
         assertEquals(
-            "featured playlist on spotify, up next.",
-            rewriteSpotifyMusicInterstitialNarration(
+            "featured playlist, up next.",
+            rewriteMusicInterstitialNarration(
                 "featured playlist on tidal, up next.",
             ),
         )
         assertEquals(
-            "your collection on spotify, up next.",
-            rewriteSpotifyMusicInterstitialNarration(
+            "your collection, up next.",
+            rewriteMusicInterstitialNarration(
                 "your collection on tidal, up next.",
             ),
         )
@@ -33,7 +33,7 @@ class MusicInterstitialsParityContractTest {
             "Featured playlist on Tidal, up next.",
             "",
         ).forEach { narration ->
-            assertEquals(narration, rewriteSpotifyMusicInterstitialNarration(narration))
+            assertEquals(narration, rewriteMusicInterstitialNarration(narration))
         }
     }
 
@@ -43,8 +43,8 @@ class MusicInterstitialsParityContractTest {
             "hook/payload/src/main/kotlin/com/penumbraos/hook/MusicHooks.kt",
         ).readText()
 
-        assertTrue(musicHook.contains("installSpotifyInterstitialNarrationHook()"))
-        assertTrue(musicHook.contains("rewriteSpotifyMusicInterstitialNarration(original)"))
+        assertTrue(musicHook.contains("installMusicInterstitialNarrationHook()"))
+        assertTrue(musicHook.contains("rewriteMusicInterstitialNarration(original)"))
         assertFalse(musicHook.contains("MUSIC_INTERSTITIALS_ENABLED"))
         assertFalse(musicHook.contains("music_interstitials_enabled"))
     }

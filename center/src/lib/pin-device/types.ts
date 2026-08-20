@@ -409,8 +409,11 @@ export type SpotifyStatusState =
   | "ready"
   | "error";
 
+export type MusicProvider = "spotify" | "youtube_music" | "apple_music" | "tidal";
+
 /** Safe, credential-free Spotify runtime status returned by the Pin. */
 export interface SpotifyStatusResponse {
+  active_provider: MusicProvider;
   enabled: boolean;
   experimental_acknowledged: boolean;
   state: SpotifyStatusState;
@@ -423,6 +426,7 @@ export interface SpotifyStatusResponse {
 
 /** Spotify pairing settings. Passwords, client secrets, and tokens are never accepted. */
 export interface SpotifySettingsRequest {
+  active_provider?: MusicProvider;
   enabled: boolean;
   experimental_acknowledged: boolean;
   device_name: string;

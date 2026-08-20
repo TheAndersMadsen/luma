@@ -2194,6 +2194,32 @@ fn persist_config_inner(
             toml_edit::value(config.openstreetmap.location_consent_acknowledged);
     }
 
+    // --- [music] ---
+    // Provider credentials stay in Center. This bearer is write-only and is
+    // removed from migration backups below.
+    {
+        let table = ensure_table(&mut doc, "music");
+        table["active_provider"] = toml_edit::value(config.music.active_provider.as_str());
+        match config.music.gateway_url.as_deref() {
+            Some(value) => table["gateway_url"] = toml_edit::value(value),
+            None => {
+                table
+                    .as_table_mut()
+                    .expect("music table")
+                    .remove("gateway_url");
+            }
+        }
+        match config.music.gateway_token.as_deref() {
+            Some(value) => table["gateway_token"] = toml_edit::value(value),
+            None => {
+                table
+                    .as_table_mut()
+                    .expect("music table")
+                    .remove("gateway_token");
+            }
+        }
+    }
+
     // --- [spotify] ---
     // Authentication remains a separate app-private artifact. Only the
     // operator-controlled feature gates and advertised device name belong in
@@ -2291,6 +2317,7 @@ fn persist_config_inner(
             ("brave_search", &["api_key"][..]),
             ("azure_speech", &["subscription_key"][..]),
             ("server", &["admin_token", "grpc_auth_token"][..]),
+            ("music", &["gateway_token"][..]),
         ] {
             if let Some(table) = backup_doc
                 .get_mut(section)
@@ -3374,22 +3401,39 @@ http_bind_addr = "127.0.0.1:8080"
     }
 
     #[test]
-    fn spotify_settings_round_trip_and_disabling_persists() {
+    fn music_provider_and_spotify_settings_round_trip_and_disabling_persists() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
         let mut config = Config::load(&dir.path().join("missing.toml")).unwrap();
+        config.music.active_provider = crate::config::MusicProvider::Tidal;
+        config.music.gateway_url = Some("https://center.example.test".into());
+        config.music.gateway_token = Some("gateway-token-for-runtime-test-only".into());
         config.spotify.enabled = true;
         config.spotify.experimental_acknowledged = true;
         config.spotify.device_name = "Kitchen Ai Pin".into();
 
         persist_config(&path, &config).unwrap();
-        assert_eq!(Config::load(&path).unwrap().spotify, config.spotify);
+        let loaded = Config::load(&path).unwrap();
+        assert_eq!(loaded.music, config.music);
+        assert_eq!(loaded.spotify, config.spotify);
 
+        let update: crate::spotify::UpdateSpotifySettings = serde_json::from_str(
+            r#"{"active_provider":"tidal","enabled":false,"experimental_acknowledged":false,"device_name":"Ai Pin"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            update.active_provider,
+            Some(crate::config::MusicProvider::Tidal)
+        );
+
+        config.music.active_provider = crate::config::MusicProvider::YoutubeMusic;
         config.spotify.enabled = false;
         config.spotify.experimental_acknowledged = false;
         config.spotify.device_name = "Travel Ai Pin".into();
         persist_config(&path, &config).unwrap();
-        assert_eq!(Config::load(&path).unwrap().spotify, config.spotify);
+        let reloaded = Config::load(&path).unwrap();
+        assert_eq!(reloaded.music, config.music);
+        assert_eq!(reloaded.spotify, config.spotify);
     }
 
     #[test]

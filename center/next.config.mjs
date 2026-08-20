@@ -1,16 +1,17 @@
 const contentSecurityPolicy = [
   "default-src 'self'",
   "base-uri 'self'",
-  "connect-src 'self'",
+  "connect-src 'self' https://api.music.apple.com https://amp-api.music.apple.com https://authorize.music.apple.com https://play.itunes.apple.com https://play-edge.itunes.apple.com",
   "font-src 'self'",
   "form-action 'self'",
   "frame-ancestors 'none'",
+  "frame-src https://music.apple.com https://*.music.apple.com https://authorize.music.apple.com https://idmsa.apple.com",
   "img-src 'self' data: blob: https://*.humane.cloud https://resources.tidal.com",
   "manifest-src 'self'",
   "media-src 'self' blob:",
   "object-src 'none'",
   // Next emits small inline bootstrap scripts in production standalone output.
-  "script-src 'self' 'unsafe-inline'",
+  "script-src 'self' 'unsafe-inline' https://js-cdn.music.apple.com",
   "style-src 'self' 'unsafe-inline'",
   "worker-src 'self' blob:",
 ].join("; ");

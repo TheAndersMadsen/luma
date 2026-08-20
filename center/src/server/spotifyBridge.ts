@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { createHmac } from "node:crypto";
 
 import type { Session } from "./auth";
 
@@ -46,6 +47,10 @@ const DEFAULT_TIMEOUT_MS = 5_000;
 const MIN_TIMEOUT_MS = 500;
 const MAX_TIMEOUT_MS = 10_000;
 const DEFAULT_DEVICE_NAME = "Ai Pin";
+const MUSIC_PROVIDERS = new Set(["spotify", "youtube_music", "apple_music", "tidal"]);
+const MUSIC_GATEWAY_TOKEN_CONTEXT = "ai-pin-revival/music-gateway/v1";
+
+export type MusicProvider = "spotify" | "youtube_music" | "apple_music" | "tidal";
 
 export type SpotifyPinState = "disabled" | "not_configured" | "pairing" | "ready" | "error";
 export type SpotifyCenterState = SpotifyPinState | "unavailable";
@@ -56,6 +61,8 @@ export type SpotifyUnavailableReason =
   | "pin_update_required";
 
 export type SpotifyStatus = {
+  active_provider: MusicProvider;
+  providers?: Awaited<ReturnType<typeof import("./musicGateway").musicProviderStatus>>;
   enabled: boolean;
   experimental_acknowledged: boolean;
   state: SpotifyCenterState;
@@ -68,6 +75,7 @@ export type SpotifyStatus = {
 };
 
 export type SpotifySettingsDto = {
+  active_provider: MusicProvider;
   enabled: boolean;
   experimental_acknowledged: boolean;
   device_name: string;
@@ -215,7 +223,12 @@ export function parseSpotifySettingsDto(input: unknown): SpotifySettingsDto {
   if (!body) {
     throw new SpotifyBridgeError("invalid_response", 400, "Expected Spotify settings.");
   }
-  const allowed = new Set(["enabled", "experimental_acknowledged", "device_name"]);
+  const allowed = new Set([
+    "active_provider",
+    "enabled",
+    "experimental_acknowledged",
+    "device_name",
+  ]);
   if (Object.keys(body).some((key) => !allowed.has(key))) {
     throw new SpotifyBridgeError("invalid_response", 400, "Spotify settings contain an unknown field.");
   }
@@ -230,6 +243,10 @@ export function parseSpotifySettingsDto(input: unknown): SpotifySettingsDto {
       "The Spotify device name must be 1 to 48 characters.",
     );
   }
+  const providerValue = body.active_provider ?? "spotify";
+  if (typeof providerValue !== "string" || !MUSIC_PROVIDERS.has(providerValue)) {
+    throw new SpotifyBridgeError("invalid_response", 400, "Choose a supported music provider.");
+  }
   if (body.enabled && !body.experimental_acknowledged) {
     throw new SpotifyBridgeError(
       "invalid_response",
@@ -238,6 +255,7 @@ export function parseSpotifySettingsDto(input: unknown): SpotifySettingsDto {
     );
   }
   return {
+    active_provider: providerValue as MusicProvider,
     enabled: body.enabled,
     experimental_acknowledged: body.experimental_acknowledged,
     device_name: deviceName,
@@ -267,7 +285,12 @@ export function normalizeSpotifyStatus(input: unknown): SpotifyStatus {
   const pairingExpiresAt =
     typeof expires === "number" && Number.isSafeInteger(expires) && expires > 0 ? expires : undefined;
 
+  const providerValue = body.active_provider ?? "spotify";
+  if (typeof providerValue !== "string" || !MUSIC_PROVIDERS.has(providerValue)) {
+    throw new SpotifyBridgeError("invalid_response", 502, "The Pin returned an invalid response.");
+  }
   return {
+    active_provider: providerValue as MusicProvider,
     enabled: body.enabled,
     experimental_acknowledged: body.experimental_acknowledged,
     state: body.state as SpotifyPinState,
@@ -398,6 +421,7 @@ export async function runSpotifySearch(
 
 export function unavailableSpotifyStatus(reason: SpotifyUnavailableReason): SpotifyStatus {
   return {
+    active_provider: "spotify",
     enabled: false,
     experimental_acknowledged: false,
     state: "unavailable",
@@ -422,6 +446,29 @@ export async function adapterToken(): Promise<string> {
     throw new SpotifyBridgeError("bridge_not_configured", 503, "Spotify setup is unavailable.");
   }
   return token;
+}
+
+export function musicGatewayOrigin(): string {
+  const raw = process.env.REVIVAL_MUSIC_GATEWAY_ORIGIN?.trim() ?? "";
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== "https:" || url.username || url.password || url.pathname !== "/" || url.search || url.hash) {
+      throw new Error("invalid origin");
+    }
+    return url.origin;
+  } catch {
+    throw new SpotifyBridgeError("bridge_not_configured", 503, "Music gateway is unavailable.");
+  }
+}
+
+export async function deviceMusicGatewayToken(): Promise<string> {
+  const deviceId = process.env.REVIVAL_PIN_BRIDGE_DEVICE_ID?.trim() ?? "";
+  if (!deviceId || deviceId.length > 128 || /\p{Cc}/u.test(deviceId)) {
+    throw new SpotifyBridgeError("bridge_not_configured", 503, "Music gateway is unavailable.");
+  }
+  return createHmac("sha256", await adapterToken())
+    .update(`${MUSIC_GATEWAY_TOKEN_CONTEXT}\0${deviceId}`, "utf8")
+    .digest("base64url");
 }
 
 /**
@@ -492,13 +539,21 @@ async function callAdapter(
   const target = PIN_SPOTIFY_PATHS[action];
   const baseUrl = normalizedBaseUrl(process.env.REVIVAL_SPOTIFY_ADAPTER_URL, "The Spotify adapter");
   const token = await adapterToken();
+  let adapterSettings: Record<string, unknown> | undefined = settings;
+  if (settings && settings.active_provider !== "spotify") {
+    adapterSettings = {
+      ...settings,
+      music_gateway_url: musicGatewayOrigin(),
+      music_gateway_token: await deviceMusicGatewayToken(),
+    };
+  }
   const response = await fetchImpl(`${baseUrl}${target.path}`, {
     method: target.method,
     headers: {
       authorization: `Bearer ${token}`,
       ...(settings ? { "content-type": "application/json" } : {}),
     },
-    body: settings ? JSON.stringify(settings) : undefined,
+    body: adapterSettings ? JSON.stringify(adapterSettings) : undefined,
     cache: "no-store",
     redirect: "error",
     signal: AbortSignal.timeout(timeoutMs()),

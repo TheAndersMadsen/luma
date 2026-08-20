@@ -18,6 +18,11 @@ const PRIVATE_HEADERS = { "cache-control": "private, no-store" } as const;
 const MAX_SETTINGS_BODY_BYTES = 2 * 1024;
 const SETTINGS_BODY_TIMEOUT_MS = 3_000;
 
+type BoundedJsonBodyOptions = {
+  maxBytes?: number;
+  tooLargeMessage?: string;
+};
+
 export async function requireSpotifySession(): Promise<Session | NextResponse> {
   if (!AUTH_ENABLED) {
     return NextResponse.json(
@@ -45,14 +50,22 @@ export function requireSameOrigin(request: Request): NextResponse | null {
       );
 }
 
-export async function boundedJsonBody(request: Request): Promise<unknown> {
+export async function boundedJsonBody(
+  request: Request,
+  options: BoundedJsonBodyOptions = {},
+): Promise<unknown> {
+  const maxBytes = options.maxBytes ?? MAX_SETTINGS_BODY_BYTES;
+  const tooLargeMessage = options.tooLargeMessage ?? "Spotify settings are too large.";
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 64 * 1024) {
+    throw new SpotifyBridgeError("invalid_response", 500, "The request limit is invalid.");
+  }
   const contentType = request.headers.get("content-type")?.toLowerCase() ?? "";
   if (!/^application\/json(?:\s*;|$)/u.test(contentType)) {
     throw new SpotifyBridgeError("invalid_response", 415, "Expected a JSON body.");
   }
   const declared = Number(request.headers.get("content-length") ?? "0");
-  if (Number.isFinite(declared) && declared > MAX_SETTINGS_BODY_BYTES) {
-    throw new SpotifyBridgeError("invalid_response", 413, "Spotify settings are too large.");
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    throw new SpotifyBridgeError("invalid_response", 413, tooLargeMessage);
   }
   if (!request.body) {
     throw new SpotifyBridgeError("invalid_response", 400, "Expected a JSON body.");
@@ -77,9 +90,9 @@ export async function boundedJsonBody(request: Request): Promise<unknown> {
       const { done, value } = await reader.read();
       if (done) break;
       total += value.byteLength;
-      if (total > MAX_SETTINGS_BODY_BYTES) {
+      if (total > maxBytes) {
         await reader.cancel().catch(() => undefined);
-        throw new SpotifyBridgeError("invalid_response", 413, "Spotify settings are too large.");
+        throw new SpotifyBridgeError("invalid_response", 413, tooLargeMessage);
       }
       chunks.push(value);
     }

@@ -101,6 +101,27 @@ domain_discover_public_edge() {
   chmod 600 "$output"
 }
 
+# A first cutover discovers the certificate pair from the active legacy Cosmos
+# vhost. Later releases cannot repeat that discovery because the successful
+# cutover deliberately removed the legacy vhost. Reuse the descriptor from the
+# authoritative current deployment record instead, then let
+# domain_assert_public_tls re-read and validate the live certificate and key.
+domain_select_public_edge() {
+  local output="$1" previous="${2:-}"
+  domain_require_helper || return 1
+  [[ -n "$output" && ! -e "$output" && ! -L "$output" ]] \
+    || { domain_error "public edge selection output already exists"; return 1; }
+  if [[ -z "$previous" ]]; then
+    domain_discover_public_edge "$output"
+    return
+  fi
+  [[ -f "$previous" && ! -L "$previous" ]] \
+    || { domain_error "current deployment public edge discovery is missing or unsafe"; return 1; }
+  python3 "$DOMAIN_HELPER" check-discovery --input "$previous" || return 1
+  install -m 600 -- "$previous" "$output" || return 1
+  python3 "$DOMAIN_HELPER" check-discovery --input "$output" || return 1
+}
+
 domain_discovery_value() {
   local discovery="$1" key="$2"
   python3 - "$discovery" "$key" <<'PY'

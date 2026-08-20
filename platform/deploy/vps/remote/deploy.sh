@@ -1637,8 +1637,12 @@ if [[ -z "$old_current" ]]; then
     || fail "legacy application does not satisfy the first-cutover recovery baseline"
 fi
 domain_discovery="$record/public-edge-discovery.json"
-domain_discover_public_edge "$domain_discovery" \
-  || fail "active dashboard edge discovery failed under the deployment lock"
+previous_domain_discovery=""
+if [[ -n "$old_current_deployment" ]]; then
+  previous_domain_discovery="$old_current_deployment/public-edge-discovery.json"
+fi
+domain_select_public_edge "$domain_discovery" "$previous_domain_discovery" \
+  || fail "active or recorded dashboard edge selection failed under the deployment lock"
 domain_assert_public_tls "$domain_discovery" \
   || fail "reviewed wildcard TLS pair cannot serve the canonical Center domain"
 domain_cloudflared_assert_ready \

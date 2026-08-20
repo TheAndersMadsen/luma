@@ -1,0 +1,35 @@
+import {
+  disconnectYoutube,
+  musicGatewayError,
+  startYoutubeConnection,
+} from "@/server/musicGateway";
+import {
+  requireSameOrigin,
+  requireSpotifySession,
+  spotifyJson,
+} from "../../spotify/routeSupport";
+
+export async function POST(request: Request) {
+  const session = await requireSpotifySession();
+  if (session instanceof Response) return session;
+  const originError = requireSameOrigin(request);
+  if (originError) return originError;
+  try {
+    return spotifyJson(await startYoutubeConnection(session.sub));
+  } catch (error) {
+    return musicGatewayError(error);
+  }
+}
+
+export async function DELETE(request: Request) {
+  const session = await requireSpotifySession();
+  if (session instanceof Response) return session;
+  const originError = requireSameOrigin(request);
+  if (originError) return originError;
+  try {
+    await disconnectYoutube(session.sub);
+    return spotifyJson({ ok: true });
+  } catch (error) {
+    return musicGatewayError(error);
+  }
+}

@@ -43,6 +43,8 @@ pub struct Config {
     #[serde(default)]
     pub contacts: ContactsConfig,
     #[serde(default)]
+    pub music: MusicConfig,
+    #[serde(default)]
     pub spotify: SpotifyConfig,
     #[serde(default)]
     pub logging: LoggingConfig,
@@ -878,6 +880,95 @@ impl From<GoogleMapsTravelMode> for RoutesTravelMode {
     }
 }
 
+/// The provider that receives native music intents.
+///
+/// Spotify keeps using the embedded librespot bridge. Every other provider
+/// uses Center's wearer-scoped gateway while the stock music experience keeps
+/// ownership of prompts, queueing, playback controls and ExoPlayer.
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum MusicProvider {
+    #[default]
+    Spotify,
+    YoutubeMusic,
+    AppleMusic,
+    Tidal,
+}
+
+impl MusicProvider {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Spotify => "spotify",
+            Self::YoutubeMusic => "youtube_music",
+            Self::AppleMusic => "apple_music",
+            Self::Tidal => "tidal",
+        }
+    }
+}
+
+/// Provider credentials stay encrypted in Center. The Pin stores only this
+/// purpose-scoped bearer and the HTTPS gateway origin.
+#[derive(Deserialize, Serialize, Clone, PartialEq, Eq, Default)]
+pub struct MusicConfig {
+    #[serde(default)]
+    pub active_provider: MusicProvider,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gateway_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gateway_token: Option<String>,
+}
+
+impl std::fmt::Debug for MusicConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("MusicConfig")
+            .field("active_provider", &self.active_provider)
+            .field("gateway_url", &self.gateway_url)
+            .field("gateway_token_configured", &self.gateway_token.is_some())
+            .finish()
+    }
+}
+
+impl MusicConfig {
+    pub fn validate(&self) -> Result<(), String> {
+        // Exhaustive match keeps newly added providers from silently becoming
+        // selectable without an explicit runtime strategy.
+        match self.active_provider {
+            MusicProvider::Spotify
+            | MusicProvider::YoutubeMusic
+            | MusicProvider::AppleMusic
+            | MusicProvider::Tidal => {}
+        }
+        if let Some(value) = self.gateway_url.as_deref() {
+            let url = reqwest::Url::parse(value).map_err(|_| "music.gateway_url is invalid")?;
+            if url.scheme() != "https"
+                || !url.has_host()
+                || !url.username().is_empty()
+                || url.password().is_some()
+                || url.path() != "/"
+                || url.query().is_some()
+                || url.fragment().is_some()
+            {
+                return Err("music.gateway_url must be an HTTPS origin".into());
+            }
+        }
+        if let Some(token) = self.gateway_token.as_deref() {
+            if token.len() < 32
+                || token.len() > 512
+                || !token.bytes().all(|byte| (0x21..=0x7e).contains(&byte))
+            {
+                return Err("music.gateway_token must be 32-512 visible ASCII characters".into());
+            }
+        }
+        if self.active_provider != MusicProvider::Spotify
+            && (self.gateway_url.is_none() || self.gateway_token.is_none())
+        {
+            return Err("selected music provider requires the Center gateway".into());
+        }
+        Ok(())
+    }
+}
+
 /// Experimental, personal-use Spotify playback. Authentication credentials
 /// are deliberately stored in a separate app-private artifact, never here or
 /// on shared storage.
@@ -1423,6 +1514,7 @@ impl Config {
         config.open_food_facts.validate()?;
         config.azure_speech.normalize_and_validate()?;
         config.openstreetmap.validate()?;
+        config.music.validate()?;
         config.spotify.validate()?;
         config.dev.validate()?;
         validate_feature_flags(&config.feature_flags)
