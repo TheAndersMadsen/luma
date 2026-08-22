@@ -27,16 +27,6 @@ jobs:
       id-token: write
       attestations: write
       artifact-metadata: write
-    env:
-      REVIVAL_PIN_HOSTED_RUN_ROOT: ${{ runner.temp }}/pin-release-run
-      REVIVAL_PIN_RELEASE_OUTPUT_DIR: ${{ runner.temp }}/published-pin-releases
-      # External protected-input provisioning is operator-owned.  A trusted
-      # environment integration must populate these fixed paths only after the
-      # pre-sign attestation step.  In its absence the sign command fails closed
-      # before a keystore/private asset can be opened.
-      REVIVAL_CONFIG_DIR: ${{ runner.temp }}/operator-inputs/config
-      REVIVAL_SECRETS_DIR: ${{ runner.temp }}/operator-inputs/secrets
-      REVIVAL_PIN_PRIVATE_ASSETS_DIR: ${{ runner.temp }}/operator-inputs/config/pin-assets
     steps:
       - name: Check out the attested source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -44,13 +34,26 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Require the fixed hosted identity
+      - name: Require the fixed hosted identity and bind runner paths
         shell: /usr/bin/bash --noprofile --norc -euo pipefail {0}
         run: |
           export PATH=/usr/bin:/bin
           test "${GITHUB_REPOSITORY}" = "TheAndersMadsen/ai-pin-revival"
           test "${GITHUB_REF}" = "refs/heads/main"
           test "${RUNNER_ARCH}" = "X64"
+          runner_temp="$(/usr/bin/realpath -e -- "${RUNNER_TEMP}")"
+          test "${runner_temp}" = "${RUNNER_TEMP}"
+          test -f "${GITHUB_ENV}" && test ! -L "${GITHUB_ENV}"
+          # External protected-input provisioning is operator-owned. A trusted
+          # environment integration may populate these fixed paths only after
+          # the pre-sign attestation; absent inputs keep signing fail-closed.
+          /usr/bin/printf '%s\n' \
+            "REVIVAL_PIN_HOSTED_RUN_ROOT=${runner_temp}/pin-release-run" \
+            "REVIVAL_PIN_RELEASE_OUTPUT_DIR=${runner_temp}/published-pin-releases" \
+            "REVIVAL_CONFIG_DIR=${runner_temp}/operator-inputs/config" \
+            "REVIVAL_SECRETS_DIR=${runner_temp}/operator-inputs/secrets" \
+            "REVIVAL_PIN_PRIVATE_ASSETS_DIR=${runner_temp}/operator-inputs/config/pin-assets" \
+            >> "${GITHUB_ENV}"
 
       - name: Prepare clean source, toolchain, and immutable builder request
         shell: /usr/bin/bash --noprofile --norc -euo pipefail {0}

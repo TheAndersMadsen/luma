@@ -39,9 +39,15 @@ jobs:
   center:
     name: center formatting and tests
     runs-on: ubuntu-24.04
-    env:
-      NPM_CONFIG_CACHE: ${{ runner.temp }}/center-npm-cache
     steps:
+      - name: Bind the Center cache to runner temp
+        shell: /usr/bin/bash --noprofile --norc -euo pipefail {0}
+        run: |
+          runner_temp="$(/usr/bin/realpath -e -- "${RUNNER_TEMP}")"
+          test "${runner_temp}" = "${RUNNER_TEMP}"
+          test -f "${GITHUB_ENV}" && test ! -L "${GITHUB_ENV}"
+          /usr/bin/printf 'NPM_CONFIG_CACHE=%s\n' \
+            "${runner_temp}/center-npm-cache" >> "${GITHUB_ENV}"
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
@@ -53,7 +59,7 @@ jobs:
         id: center-npm-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
-          path: ${{ env.NPM_CONFIG_CACHE }}/_cacache
+          path: ${{ runner.temp }}/center-npm-cache/_cacache
           key: center-npm-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('center/package-lock.json', 'center/adapters/spotify/package-lock.json') }}
           restore-keys: |
             center-npm-v1-${{ runner.os }}-${{ runner.arch }}-
@@ -82,7 +88,7 @@ jobs:
         if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.center-npm-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
-          path: ${{ env.NPM_CONFIG_CACHE }}/_cacache
+          path: ${{ runner.temp }}/center-npm-cache/_cacache
           key: center-npm-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('center/package-lock.json', 'center/adapters/spotify/package-lock.json') }}
 
   cosmos:
@@ -102,10 +108,16 @@ jobs:
           --health-interval 2s
           --health-timeout 5s
           --health-retries 20
-    env:
-      CARGO_HOME: ${{ runner.temp }}/cosmos-cargo-home
-      CARGO_TARGET_DIR: ${{ runner.temp }}/cosmos-cargo-target
     steps:
+      - name: Bind Cosmos Cargo state to runner temp
+        shell: /usr/bin/bash --noprofile --norc -euo pipefail {0}
+        run: |
+          runner_temp="$(/usr/bin/realpath -e -- "${RUNNER_TEMP}")"
+          test "${runner_temp}" = "${RUNNER_TEMP}"
+          test -f "${GITHUB_ENV}" && test ! -L "${GITHUB_ENV}"
+          /usr/bin/printf 'CARGO_HOME=%s\nCARGO_TARGET_DIR=%s\n' \
+            "${runner_temp}/cosmos-cargo-home" \
+            "${runner_temp}/cosmos-cargo-target" >> "${GITHUB_ENV}"
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
@@ -117,9 +129,9 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
-            ${{ env.CARGO_HOME }}/registry
-            ${{ env.CARGO_HOME }}/git
-            ${{ env.CARGO_TARGET_DIR }}
+            ${{ runner.temp }}/cosmos-cargo-home/registry
+            ${{ runner.temp }}/cosmos-cargo-home/git
+            ${{ runner.temp }}/cosmos-cargo-target
           key: cosmos-rust-v2-${{ runner.os }}-${{ runner.arch }}-1.91.1-${{ hashFiles('cosmos/Cargo.lock', 'rust-toolchain.toml') }}-${{ github.sha }}
           restore-keys: |
             cosmos-rust-v2-${{ runner.os }}-${{ runner.arch }}-1.91.1-${{ hashFiles('cosmos/Cargo.lock', 'rust-toolchain.toml') }}-
@@ -149,18 +161,24 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
-            ${{ env.CARGO_HOME }}/registry
-            ${{ env.CARGO_HOME }}/git
-            ${{ env.CARGO_TARGET_DIR }}
+            ${{ runner.temp }}/cosmos-cargo-home/registry
+            ${{ runner.temp }}/cosmos-cargo-home/git
+            ${{ runner.temp }}/cosmos-cargo-target
           key: cosmos-rust-v2-${{ runner.os }}-${{ runner.arch }}-1.91.1-${{ hashFiles('cosmos/Cargo.lock', 'rust-toolchain.toml') }}-${{ github.sha }}
 
   pin-runtime:
     name: pin runtime formatting and tests
     runs-on: ubuntu-24.04
-    env:
-      CARGO_HOME: ${{ runner.temp }}/pin-runtime-cargo-home
-      CARGO_TARGET_DIR: ${{ runner.temp }}/pin-runtime-cargo-target
     steps:
+      - name: Bind Pin runtime Cargo state to runner temp
+        shell: /usr/bin/bash --noprofile --norc -euo pipefail {0}
+        run: |
+          runner_temp="$(/usr/bin/realpath -e -- "${RUNNER_TEMP}")"
+          test "${runner_temp}" = "${RUNNER_TEMP}"
+          test -f "${GITHUB_ENV}" && test ! -L "${GITHUB_ENV}"
+          /usr/bin/printf 'CARGO_HOME=%s\nCARGO_TARGET_DIR=%s\n' \
+            "${runner_temp}/pin-runtime-cargo-home" \
+            "${runner_temp}/pin-runtime-cargo-target" >> "${GITHUB_ENV}"
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
@@ -172,9 +190,9 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
-            ${{ env.CARGO_HOME }}/registry
-            ${{ env.CARGO_HOME }}/git
-            ${{ env.CARGO_TARGET_DIR }}
+            ${{ runner.temp }}/pin-runtime-cargo-home/registry
+            ${{ runner.temp }}/pin-runtime-cargo-home/git
+            ${{ runner.temp }}/pin-runtime-cargo-target
           key: pin-runtime-rust-v2-${{ runner.os }}-${{ runner.arch }}-1.91.1-${{ hashFiles('pin/runtime/core/Cargo.lock', 'rust-toolchain.toml') }}-${{ github.sha }}
           restore-keys: |
             pin-runtime-rust-v2-${{ runner.os }}-${{ runner.arch }}-1.91.1-${{ hashFiles('pin/runtime/core/Cargo.lock', 'rust-toolchain.toml') }}-
@@ -192,9 +210,9 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
-            ${{ env.CARGO_HOME }}/registry
-            ${{ env.CARGO_HOME }}/git
-            ${{ env.CARGO_TARGET_DIR }}
+            ${{ runner.temp }}/pin-runtime-cargo-home/registry
+            ${{ runner.temp }}/pin-runtime-cargo-home/git
+            ${{ runner.temp }}/pin-runtime-cargo-target
           key: pin-runtime-rust-v2-${{ runner.os }}-${{ runner.arch }}-1.91.1-${{ hashFiles('pin/runtime/core/Cargo.lock', 'rust-toolchain.toml') }}-${{ github.sha }}
 
   pin-builder-linux-amd64:

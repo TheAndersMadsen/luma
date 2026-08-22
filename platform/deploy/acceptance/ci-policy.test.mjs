@@ -6,6 +6,8 @@ import test from "node:test";
 const ROOT = path.resolve(import.meta.dirname, "../../..");
 const CI_PATH = path.join(ROOT, ".github", "workflows", "ci.yml");
 const RELEASE_PATH = path.join(ROOT, ".github", "workflows", "release-cli.yml");
+const PIN_RELEASE_PATH = path.join(ROOT, ".github", "workflows", "pin-release.yml");
+const VPS_CANDIDATE_PATH = path.join(ROOT, ".github", "workflows", "vps-candidate.yml");
 const DARWIN_TEST_PATH = path.join(
   ROOT,
   "platform",
@@ -44,6 +46,17 @@ const ACTIONS = Object.freeze({
     version: "v6",
   }),
 });
+
+// Deliberately narrower than GitHub's complete permission vocabulary: these
+// are the only token capabilities used by the checked-in workflows. GitHub's
+// current artifact-attestation contract requires artifact-metadata: write for
+// linked artifact metadata in addition to attestations/id-token.
+const WORKFLOW_PERMISSION_KEYS = new Set([
+  "artifact-metadata",
+  "attestations",
+  "contents",
+  "id-token",
+]);
 
 function invariant(condition, message) {
   if (!condition) throw new Error(message);
@@ -253,6 +266,92 @@ function parseWorkflow(text, label) {
   };
 }
 
+function validateContextAndPermissionSurface(workflow) {
+  const permissionMaps = [
+    ["workflow", workflow.permissions],
+    ...[...workflow.jobs].map(([name, job]) => [`job ${name}`, job.permissions]),
+  ];
+  for (const [owner, permissions] of permissionMaps) {
+    for (const [key, value] of permissions) {
+      invariant(
+        WORKFLOW_PERMISSION_KEYS.has(key),
+        `${workflow.label} ${owner} uses an unreviewed or invalid permission: ${key}`,
+      );
+      invariant(
+        value === "read" || value === "write" || value === "none",
+        `${workflow.label} ${owner} permission ${key} has an invalid access level`,
+      );
+    }
+  }
+  for (const [name, job] of workflow.jobs) {
+    for (const [key, value] of job.env) {
+      invariant(
+        !/\$\{\{\s*runner\./u.test(value),
+        `${workflow.label} job ${name} env.${key} cannot use the unavailable runner context`,
+      );
+    }
+  }
+}
+
+function assertExactPermissions(actual, expected, label) {
+  assert.deepEqual(
+    Object.fromEntries([...actual].sort(([left], [right]) => left.localeCompare(right))),
+    Object.fromEntries(Object.entries(expected).sort(([left], [right]) => left.localeCompare(right))),
+    `${label} token permissions changed`,
+  );
+}
+
+const FIXED_RUNNER_BINDING_SHELL = "/usr/bin/bash --noprofile --norc -euo pipefail {0}";
+
+function assertRunnerTempBinding(job, label, fragments) {
+  invariant(job !== undefined, `${label} job is missing`);
+  const matches = job.steps.filter((step) =>
+    (step.properties.get("run") ?? "").includes(
+      'runner_temp="$(/usr/bin/realpath -e -- "${RUNNER_TEMP}")"',
+    ));
+  invariant(matches.length === 1, `${label} must derive its paths from runner temp exactly once`);
+  const step = matches[0];
+  invariant(
+    step.properties.get("shell") === FIXED_RUNNER_BINDING_SHELL,
+    `${label} runner-temp binding must use the fixed clean Bash shell`,
+  );
+  const command = step.properties.get("run");
+  for (const fragment of [
+    'test "${runner_temp}" = "${RUNNER_TEMP}"',
+    'test -f "${GITHUB_ENV}" && test ! -L "${GITHUB_ENV}"',
+    '>> "${GITHUB_ENV}"',
+    ...fragments,
+  ]) invariant(command.includes(fragment), `${label} runner-temp binding lost ${fragment}`);
+}
+
+function validateRunnerTempBindings(ci, pinRelease, vpsCandidate) {
+  assertRunnerTempBinding(ci.jobs.get("center"), "Center cache", [
+    "NPM_CONFIG_CACHE=%s\\n",
+    "${runner_temp}/center-npm-cache",
+  ]);
+  assertRunnerTempBinding(ci.jobs.get("cosmos"), "Cosmos Cargo state", [
+    "CARGO_HOME=%s\\nCARGO_TARGET_DIR=%s\\n",
+    "${runner_temp}/cosmos-cargo-home",
+    "${runner_temp}/cosmos-cargo-target",
+  ]);
+  assertRunnerTempBinding(ci.jobs.get("pin-runtime"), "Pin runtime Cargo state", [
+    "CARGO_HOME=%s\\nCARGO_TARGET_DIR=%s\\n",
+    "${runner_temp}/pin-runtime-cargo-home",
+    "${runner_temp}/pin-runtime-cargo-target",
+  ]);
+  assertRunnerTempBinding(pinRelease.jobs.get("build-attest-publish"), "Pin release", [
+    "REVIVAL_PIN_HOSTED_RUN_ROOT=${runner_temp}/pin-release-run",
+    "REVIVAL_PIN_RELEASE_OUTPUT_DIR=${runner_temp}/published-pin-releases",
+    "REVIVAL_CONFIG_DIR=${runner_temp}/operator-inputs/config",
+    "REVIVAL_SECRETS_DIR=${runner_temp}/operator-inputs/secrets",
+    "REVIVAL_PIN_PRIVATE_ASSETS_DIR=${runner_temp}/operator-inputs/config/pin-assets",
+  ]);
+  assertRunnerTempBinding(vpsCandidate.jobs.get("build-attest-handoff"), "VPS candidate", [
+    "REVIVAL_VPS_HANDOFF_ROOT=%s\\n",
+    "${runner_temp}/vps-candidate-handoff",
+  ]);
+}
+
 function actionIdentity(step) {
   const value = step.properties.get("uses");
   if (!value) return null;
@@ -292,7 +391,7 @@ function validateActionPins(workflow) {
   }
 }
 
-function validatePermissions(ci, release) {
+function validatePermissions(ci, release, pinRelease, vpsCandidate) {
   for (const workflow of [ci, release]) {
     invariant(
       workflow.permissions.size === 1 && workflow.permissions.get("contents") === "read",
@@ -312,6 +411,28 @@ function validatePermissions(ci, release) {
       invariant(job.permissions.size === 0, `release job ${name} must inherit read-only permissions`);
     }
   }
+  assertExactPermissions(pinRelease.permissions, {}, "Pin release workflow default");
+  assertExactPermissions(
+    pinRelease.jobs.get("build-attest-publish")?.permissions ?? new Map(),
+    {
+      "artifact-metadata": "write",
+      attestations: "write",
+      contents: "read",
+      "id-token": "write",
+    },
+    "Pin release job",
+  );
+  assertExactPermissions(vpsCandidate.permissions, { contents: "read" }, "VPS candidate workflow default");
+  assertExactPermissions(
+    vpsCandidate.jobs.get("build-attest-handoff")?.permissions ?? new Map(),
+    {
+      "artifact-metadata": "write",
+      attestations: "write",
+      contents: "read",
+      "id-token": "write",
+    },
+    "VPS candidate job",
+  );
 }
 
 function validateRunners(workflow) {
@@ -388,11 +509,11 @@ function validateCaches(ci, release) {
   const builder = ci.jobs.get("pin-builder-linux-amd64");
   invariant(center && cosmos && pin && builder, "CI cache-owning jobs are missing");
 
-  invariant(center.env.get("NPM_CONFIG_CACHE") === "${{ runner.temp }}/center-npm-cache", "Center npm cache must stay external");
+  invariant(center.env.size === 0, "Center job-level env must not depend on an unavailable runner context");
   validateCacheJob(center, {
     restoreId: "center-npm-cache",
     keyPrefix: "center-npm-v1-",
-    paths: ["${{ env.NPM_CONFIG_CACHE }}/_cacache"],
+    paths: ["${{ runner.temp }}/center-npm-cache/_cacache"],
   });
   for (const step of [...stepsUsing(center, "actions/cache/restore"), ...stepsUsing(center, "actions/cache/save")]) {
     invariant(
@@ -405,9 +526,9 @@ function validateCaches(ci, release) {
     keyPrefix: "cosmos-rust-v2-",
     sourceFresh: true,
     paths: [
-      "${{ env.CARGO_HOME }}/registry",
-      "${{ env.CARGO_HOME }}/git",
-      "${{ env.CARGO_TARGET_DIR }}",
+      "${{ runner.temp }}/cosmos-cargo-home/registry",
+      "${{ runner.temp }}/cosmos-cargo-home/git",
+      "${{ runner.temp }}/cosmos-cargo-target",
     ],
   });
   validateCacheJob(pin, {
@@ -415,9 +536,9 @@ function validateCaches(ci, release) {
     keyPrefix: "pin-runtime-rust-v2-",
     sourceFresh: true,
     paths: [
-      "${{ env.CARGO_HOME }}/registry",
-      "${{ env.CARGO_HOME }}/git",
-      "${{ env.CARGO_TARGET_DIR }}",
+      "${{ runner.temp }}/pin-runtime-cargo-home/registry",
+      "${{ runner.temp }}/pin-runtime-cargo-home/git",
+      "${{ runner.temp }}/pin-runtime-cargo-target",
     ],
   });
   validateCacheJob(builder, {
@@ -432,16 +553,8 @@ function validateCaches(ci, release) {
     ],
   });
 
-  assert.deepEqual(
-    [cosmos.env.get("CARGO_HOME"), cosmos.env.get("CARGO_TARGET_DIR")],
-    ["${{ runner.temp }}/cosmos-cargo-home", "${{ runner.temp }}/cosmos-cargo-target"],
-  );
-  assert.deepEqual(
-    [pin.env.get("CARGO_HOME"), pin.env.get("CARGO_TARGET_DIR")],
-    ["${{ runner.temp }}/pin-runtime-cargo-home", "${{ runner.temp }}/pin-runtime-cargo-target"],
-  );
-  invariant(cosmos.env.get("CARGO_HOME") !== pin.env.get("CARGO_HOME"), "Cargo home namespaces collide");
-  invariant(cosmos.env.get("CARGO_TARGET_DIR") !== pin.env.get("CARGO_TARGET_DIR"), "Cargo target namespaces collide");
+  invariant(cosmos.env.size === 0, "Cosmos job-level env must not depend on an unavailable runner context");
+  invariant(pin.env.size === 0, "Pin runtime job-level env must not depend on an unavailable runner context");
 
   const cacheNamespaces = [...ci.jobs.values()].flatMap((job) =>
     stepsUsing(job, "actions/cache/restore").map((step) =>
@@ -586,14 +699,28 @@ function validateDarwinJob(ci, darwinTestSource) {
   invariant(darwinTestSource.includes("hard-linked files are forbidden"), "Darwin test lacks hardlink refusal");
 }
 
-function validateWorkflowSources({ ciText, releaseText, darwinTestSource }) {
+function validateWorkflowSources({
+  ciText,
+  releaseText,
+  pinReleaseText,
+  vpsCandidateText,
+  darwinTestSource,
+}) {
   const ci = parseWorkflow(ciText, "ci.yml");
   const release = parseWorkflow(releaseText, "release-cli.yml");
+  const pinRelease = parseWorkflow(pinReleaseText, "pin-release.yml");
+  const vpsCandidate = parseWorkflow(vpsCandidateText, "vps-candidate.yml");
+  for (const workflow of [ci, release, pinRelease, vpsCandidate]) {
+    validateContextAndPermissionSurface(workflow);
+  }
   validateActionPins(ci);
   validateActionPins(release);
-  validatePermissions(ci, release);
+  validatePermissions(ci, release, pinRelease, vpsCandidate);
   validateRunners(ci);
   validateRunners(release);
+  validateRunners(pinRelease);
+  validateRunners(vpsCandidate);
+  validateRunnerTempBindings(ci, pinRelease, vpsCandidate);
   validateCaches(ci, release);
   validateNativeBuilder(ci);
   validateDarwinJob(ci, darwinTestSource);
@@ -607,13 +734,15 @@ function validateWorkflowSources({ ciText, releaseText, darwinTestSource }) {
     /node --test platform\/deploy\/acceptance\/ci-policy\.test\.mjs/u,
     "release CI policy self-check",
   );
-  return { ci, release };
+  return { ci, release, pinRelease, vpsCandidate };
 }
 
 function fixture() {
   return {
     ciText: fs.readFileSync(CI_PATH, "utf8"),
     releaseText: fs.readFileSync(RELEASE_PATH, "utf8"),
+    pinReleaseText: fs.readFileSync(PIN_RELEASE_PATH, "utf8"),
+    vpsCandidateText: fs.readFileSync(VPS_CANDIDATE_PATH, "utf8"),
     darwinTestSource: fs.readFileSync(DARWIN_TEST_PATH, "utf8"),
   };
 }
@@ -679,6 +808,61 @@ test("mutation: top-level read-only permissions cannot disappear", () => {
     return value;
   }, /default to contents: read/u);
 });
+
+for (const [label, property] of [
+  ["CI", "ciText"],
+  ["release", "releaseText"],
+  ["Pin release", "pinReleaseText"],
+  ["VPS candidate", "vpsCandidateText"],
+]) {
+  test(`mutation: ${label} job env cannot use the unavailable runner context`, () => {
+    expectRejected((value) => {
+      value[property] = changed(
+        value[property],
+        value[property].replace(
+          "    steps:\n",
+          "    env:\n      INVALID_RUNNER_PATH: ${{ runner.temp }}/invalid\n    steps:\n",
+        ),
+        `${label} job-level runner context`,
+      );
+      return value;
+    }, /job .* env\.INVALID_RUNNER_PATH cannot use the unavailable runner context/u);
+  });
+}
+
+for (const [label, property, original] of [
+  ["CI", "ciText", "  contents: read"],
+  ["release", "releaseText", "  contents: read"],
+  ["Pin release", "pinReleaseText", "      artifact-metadata: write"],
+  ["VPS candidate", "vpsCandidateText", "      artifact-metadata: write"],
+]) {
+  test(`mutation: ${label} cannot introduce an unknown token permission`, () => {
+    expectRejected((value) => {
+      value[property] = changed(
+        value[property],
+        value[property].replace(original, original.replace(/[^ ]+(?=:)/u, "artifact-metadata-typo")),
+        `${label} unknown permission`,
+      );
+      return value;
+    }, /unreviewed or invalid permission: artifact-metadata-typo/u);
+  });
+}
+
+for (const [label, property] of [
+  ["Pin release", "pinReleaseText"],
+  ["VPS candidate", "vpsCandidateText"],
+]) {
+  test(`mutation: ${label} cannot lose linked artifact metadata authority`, () => {
+    expectRejected((value) => {
+      value[property] = changed(
+        value[property],
+        value[property].replace("      artifact-metadata: write\n", ""),
+        `${label} artifact-metadata permission`,
+      );
+      return value;
+    }, /token permissions changed/u);
+  });
+}
 
 test("mutation: setup-node automatic package-manager caching cannot be enabled", () => {
   expectRejected((value) => {

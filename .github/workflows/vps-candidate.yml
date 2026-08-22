@@ -20,8 +20,6 @@ jobs:
       id-token: write
       attestations: write
       artifact-metadata: write
-    env:
-      REVIVAL_VPS_HANDOFF_ROOT: ${{ runner.temp }}/vps-candidate-handoff
     steps:
       - name: Check out the exact attested source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -68,6 +66,11 @@ jobs:
           test "${RUNNER_OS}" = "Linux"
           test "${RUNNER_ARCH}" = "X64"
           test "$(/usr/bin/uname -m)" = "x86_64"
+          runner_temp="$(/usr/bin/realpath -e -- "${RUNNER_TEMP}")"
+          test "${runner_temp}" = "${RUNNER_TEMP}"
+          test -f "${GITHUB_ENV}" && test ! -L "${GITHUB_ENV}"
+          /usr/bin/printf 'REVIVAL_VPS_HANDOFF_ROOT=%s\n' \
+            "${runner_temp}/vps-candidate-handoff" >> "${GITHUB_ENV}"
 
       - name: Build the immutable candidate from the exact commit
         id: candidate
