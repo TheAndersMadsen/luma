@@ -63,8 +63,8 @@ fi
 dashboard_host=center.andersmadsen.dk
 dashboard_origin=https://center.andersmadsen.dk
 if ((legacy_dashboard_origin)); then
-  dashboard_host=cosmos.andersmadsen.dk
-  dashboard_origin=https://cosmos.andersmadsen.dk
+  dashboard_host=carry.andersmadsen.dk
+  dashboard_origin=https://carry.andersmadsen.dk
 fi
 if ((legacy_dashboard_origin)); then
   [[ "$dashboard_origin" == "$DOMAIN_LEGACY_ORIGIN" ]] || fail "legacy dashboard origin differs from the domain transaction"
@@ -159,7 +159,7 @@ assert_active_durable_mounts
 postgres="$("${COMPOSE[@]}" ps -q postgres)"
 ai_bus="$("${COMPOSE[@]}" ps -q ai-bus)"
 provisioning="$("${COMPOSE[@]}" ps -q provisioning)"
-for pair in "$postgres:$PG_VOLUME:/var/lib/postgresql/data" "$ai_bus:$STATE_VOLUME:/var/lib/cosmos" "$provisioning:$STATE_VOLUME:/var/lib/cosmos"; do
+for pair in "$postgres:$PG_VOLUME:/var/lib/postgresql/data" "$ai_bus:$STATE_VOLUME:/var/lib/carry" "$provisioning:$STATE_VOLUME:/var/lib/carry"; do
   IFS=: read -r container expected_volume destination <<<"$pair"
   actual="$(docker inspect --format "{{range .Mounts}}{{if eq .Destination \"$destination\"}}{{.Name}}{{end}}{{end}}" "$container")"
   [[ "$actual" == "$expected_volume" ]] || fail "durable mount identity changed at $destination"
@@ -191,7 +191,7 @@ if [[ -n "$baseline" ]]; then
 fi
 
 # Both device connectivity authorities are intentionally cleartext and never redirect.
-for host in connectivity-check.cosmos.humane.cloud n.cosmos.humane.cloud; do
+for host in connectivity-check.carry.humane.cloud n.carry.humane.cloud; do
   if ((quiesced_loopback)); then
     expect_status 204 -H "Host: $host" http://127.0.0.1:18085/
     expect_status 204 -I -H "Host: $host" http://127.0.0.1:18085/
@@ -384,7 +384,7 @@ if interstitial_base:
     assert interstitial_host
     networks=set((body.get("NetworkSettings",{}).get("Networks") or {}).keys())
     if interstitial_host == "cosmos-ollama":
-        assert "humane-cosmos-clone_cosmos-local" in networks
+        assert "humane-carry-clone_carry-local" in networks
         subprocess.check_call(
             ["/usr/bin/docker","exec",ai_bus,"getent","hosts","cosmos-ollama"],
             stdout=subprocess.DEVNULL,
@@ -420,7 +420,7 @@ resolved_env_value() {
 admin_token="$(resolved_env_value COSMOS_ADMIN_TOKEN)"
 [[ -n "$admin_token" ]] || fail "admin roster token is unavailable"
 printf 'authorization: Bearer %s\n' "$admin_token" >"$work/admin.headers"
-printf 'x-forwarded-client-cert: U:%s\nx-cosmos-web-projection-token: %s\n' \
+printf 'x-forwarded-client-cert: U:%s\nx-carry-web-projection-token: %s\n' \
   "$paired_owner" "$(resolved_env_value COSMOS_CENTER_PROJECTION_TOKEN)" \
   >"$work/projection.headers"
 chmod 600 "$work/admin.headers" "$work/projection.headers"
@@ -441,7 +441,7 @@ if ((quiesced_loopback)); then
   oidc_url=http://127.0.0.1:8088/realms/humane/.well-known/openid-configuration
 else
   center_base=https://center.andersmadsen.dk
-  ((legacy_dashboard_origin == 0)) || center_base=https://cosmos.andersmadsen.dk
+  ((legacy_dashboard_origin == 0)) || center_base=https://carry.andersmadsen.dk
   [[ "$center_base" == "$dashboard_origin" ]] || fail "dashboard canary origin selection drift"
   oidc_url="$dashboard_origin/realms/humane/.well-known/openid-configuration"
 fi
@@ -591,7 +591,7 @@ assert location.path=="/realms/humane/protocol/openid-connect/logout"
 query=urllib.parse.parse_qs(location.query,keep_blank_values=True,strict_parsing=True)
 assert query=={"client_id":["center"],"post_logout_redirect_uri":[f"{sys.argv[2]}/login"]}
 cookies=[line.split(":",1)[1].strip().lower() for line in lines if line.lower().startswith("set-cookie:")]
-assert any(value.startswith("cosmos_session=") and "max-age=0" in value for value in cookies)
+assert any(value.startswith("carry_session=") and "max-age=0" in value for value in cookies)
 PY
   if ((quiesced_loopback == 0)); then
     # The trailing clause used to read "this read-only canary has no wearer
@@ -644,12 +644,12 @@ def constant(name):
 chunk_bytes=constant("TOKEN_COOKIE_CHUNK_BYTES")
 max_chunks=constant("TOKEN_COOKIE_MAX_CHUNKS")
 # The same arithmetic the file-level regression test uses: every chunk plus its
-# "cosmos_tokens_N=" name and "; " separator, plus room for the manifest and
+# "carry_tokens_N=" name and "; " separator, plus room for the manifest and
 # session cookies.
 budget=max_chunks*(chunk_bytes+16)+600
-pairs=[f"cosmos_tokens_{index}=" + "A"*chunk_bytes for index in range(max_chunks)]
-pairs.append("cosmos_tokens=" + "A"*64)
-pairs.append("cosmos_session=" + "A"*128)
+pairs=[f"carry_tokens_{index}=" + "A"*chunk_bytes for index in range(max_chunks)]
+pairs.append("carry_tokens=" + "A"*64)
+pairs.append("carry_session=" + "A"*128)
 line="cookie: " + "; ".join(pairs)
 # Pad to the full budget so the probe measures the contract, not today's
 # incidental sizes, and never silently shrinks below it.
@@ -724,7 +724,7 @@ done <"$work/assets.txt"
 # Cosmos is now a compatibility entry point only. The redirect must preserve the
 # exact path and query and must never become a second serving authority.
 if ((quiesced_loopback == 0 && legacy_dashboard_origin == 0)); then
-  legacy_origin=https://cosmos.andersmadsen.dk
+  legacy_origin=https://carry.andersmadsen.dk
   [[ "$legacy_origin" == "$DOMAIN_LEGACY_ORIGIN" ]] \
     || fail "legacy Cosmos canary origin differs from the domain transaction"
   legacy_request_path='/login?legacy-canary=1&next=%2Fwifi'
@@ -892,7 +892,7 @@ if [[ -s "$work/projection-target.tsv" ]]; then
     python3 - "$work/media.headers" "$work/media.image" <<'PY'
 import sys
 headers=open(sys.argv[1],encoding="latin1").read().lower(); data=open(sys.argv[2],"rb").read()
-assert "x-cosmos-projection: opened" in headers
+assert "x-carry-projection: opened" in headers
 assert "content-type: image/" in headers and len(data)>100
 PY
     curl --silent --show-error --fail --max-time 20 \
@@ -901,7 +901,7 @@ PY
     python3 - "$work/media.headers" "$work/media.image" <<'PY'
 import sys
 headers=open(sys.argv[1],encoding="latin1").read().lower(); data=open(sys.argv[2],"rb").read()
-assert "x-cosmos-projection: opened" in headers
+assert "x-carry-projection: opened" in headers
 assert "content-type: image/" in headers and len(data)>100
 PY
   done <"$work/projection-target.tsv"
@@ -909,7 +909,7 @@ fi
 
 # A reachable TLS listener that returns no HTTP without a client certificate is
 # the negative mTLS boundary. A refused TCP connection is not accepted as proof.
-for authority in api.cosmos.humane.cloud onboarding.cosmos.humane.cloud; do
+for authority in api.carry.humane.cloud onboarding.carry.humane.cloud; do
   timeout 3 bash -c '</dev/tcp/127.0.0.1/18443' 2>/dev/null || fail "mTLS edge is not listening"
   if curl --insecure --silent --show-error --connect-timeout 3 --max-time 8 \
       --resolve "$authority:18443:127.0.0.1" -o /dev/null "https://$authority:18443/"; then
@@ -975,7 +975,7 @@ for line in open(jar_path,encoding="ascii"):
     name,value=fields[5],fields[6]
     if name in seen: continue
     seen.add(name); pairs.append(f"{name}={value}")
-assert "cosmos_session" in seen and "cosmos_tokens" in seen
+assert "carry_session" in seen and "carry_tokens" in seen
 with open(output_path,"w",encoding="ascii") as target:
     target.write("cookie: " + "; ".join(pairs) + "\n")
 PY
@@ -1135,7 +1135,7 @@ if [[ -f "$cookie_file" ]]; then
   # plus both dashboard origins), so several rows are expected — but they must
   # all contain the exact same session value.
   cookie_value="$(awk -F '\t' '
-    $6=="cosmos_session" { count += 1; values[$7] = 1; value = $7 }
+    $6=="carry_session" { count += 1; values[$7] = 1; value = $7 }
     END {
       if (count < 1) exit 1
       distinct = 0
@@ -1146,7 +1146,7 @@ if [[ -f "$cookie_file" ]]; then
   ' "$cookie_file")" || fail "Center canary cookie jar does not contain one owner session"
   [[ "$cookie_value" =~ ^[A-Za-z0-9_.-]+$ && ${#cookie_value} -le 4096 ]] \
     || fail "Center canary cookie jar has an invalid owner session"
-  printf 'cookie: cosmos_session=%s\n' "$cookie_value" >"$work/owner-cookie.headers"
+  printf 'cookie: carry_session=%s\n' "$cookie_value" >"$work/owner-cookie.headers"
   chmod 600 "$work/owner-cookie.headers"
   curl --silent --show-error --fail --max-time 20 -H "Host: $dashboard_host" \
     -H 'X-Forwarded-Proto: https' -H @"$work/owner-cookie.headers" \
@@ -1205,9 +1205,9 @@ PY
   #
   # What this jar can and cannot prove, stated plainly because reading more into
   # it is exactly how those outages shipped green: write_owner_canary_cookie
-  # mints a `cosmos_session` only. Center reassembles the wearer bearer from the
-  # SEPARATE `cosmos_tokens` cookie set — the `cosmos_tokens` manifest plus its
-  # `cosmos_tokens.0`/`cosmos_tokens.1` chunks (center/src/server/auth.ts) — which
+  # mints a `carry_session` only. Center reassembles the wearer bearer from the
+  # SEPARATE `carry_tokens` cookie set — the `carry_tokens` manifest plus its
+  # `carry_tokens.0`/`carry_tokens.1` chunks (center/src/server/auth.ts) — which
   # the jar deliberately does not contain (a canary must not hold a wearer
   # credential); that is also the exact name the grep below refuses. So requestBearer()
   # returns null and, with COSMOS_PRINCIPAL unset in production, every gRPC call
@@ -1231,7 +1231,7 @@ PY
   # answers a bad token with the same EdgeAuthenticationError::Missing as a
   # missing principal. Named here rather than implied away.
   if ((require_wearer_plane)); then
-    if grep -q 'cosmos_tokens' "$cookie_file"; then
+    if grep -q 'carry_tokens' "$cookie_file"; then
       fail "the canary cookie jar carries wearer token material; this gate is built for a credential-free session"
     fi
     for surface in health:/api/health notes:/api/capture/notes \

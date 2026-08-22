@@ -310,6 +310,7 @@ test("local deploy driver uses only the selected release for cutover", async () 
     assert.doesNotMatch(deploySource, /node platform\/deploy\/release\.mjs build/);
     assert.match(deploySource, /node platform\/deploy\/release\.mjs verify/);
     assert.match(deploySource, /assertLegacyProductionCompatible/);
+    assert.match(deploySource, /productionStateForSnapshot\(process\.cwd\(\)\)/);
     assert.match(deploySource, /--candidate-id/);
     assert.match(librarySource, /--partial --append-verify --protect-args/);
     assert.doesNotMatch(deploySource, /platform\/release\/package\.mjs/);
@@ -320,8 +321,11 @@ test("local deploy driver uses only the selected release for cutover", async () 
     assert.match(deploySource, /materialize_release_member[^\n]*RELEASE_VERIFIER_PATH/);
     assert.match(deploySource, /run_verified_release_deploy/);
     const dryRunBoundary = deploySource.indexOf("if ((dry_run))");
-    const localPreflight = deploySource.indexOf("local_preflight", dryRunBoundary);
+    const localPreflight = deploySource.indexOf("\nlocal_preflight\n", dryRunBoundary);
     assert.ok(dryRunBoundary >= 0 && localPreflight > dryRunBoundary);
+    const sourceAuthority = deploySource.indexOf("productionStateForSnapshot(process.cwd())");
+    assert.ok(sourceAuthority >= 0 && sourceAuthority < localPreflight,
+      "fresh source authority must be proved before preflight can reach SSH or Docker");
     assert.doesNotMatch(deploySource.slice(0, localPreflight), /run_ssh|remote_preupload_gate/);
     assert.match(deploySource, /--cleanup-project-images is unavailable with --dry-run/);
     assert.match(librarySource, /cat "\$REMOTE_IMPL\/bootstrap-release\.py"/u);

@@ -60,6 +60,28 @@ function deployProduction(args) {
     : null;
 }
 
+function registerCarryBaseline(args) {
+  if (args.includes('--release-json')) {
+    fail('Carry baseline registration requires one verified immutable hosted candidate; --release-json and implicit builds are retired', 64);
+  }
+  const candidateIndexes = args.flatMap((value, index) => value === '--candidate' ? [index] : []);
+  const idIndexes = args.flatMap((value, index) => value === '--candidate-id' ? [index] : []);
+  const candidateIndex = candidateIndexes[0] ?? -1;
+  const idIndex = idIndexes[0] ?? -1;
+  const candidate = candidateIndex >= 0 ? args[candidateIndex + 1] : '';
+  const candidateId = idIndex >= 0 ? args[idIndex + 1] : '';
+  if (candidateIndexes.length + idIndexes.length !== 1 || Boolean(candidate) === Boolean(candidateId) ||
+      candidate?.startsWith('-') || candidateId?.startsWith('-') ||
+      (candidateId && !/^[0-9a-f]{64}$/.test(candidateId))) {
+    fail('deploy carry-baseline requires exactly one of --candidate PATH or --candidate-id SHA256', 64);
+  }
+  const confirmed = requireConfirmedMutation(args, 'deploy carry-baseline', { allowDryRun: true });
+  const result = deploymentScript('register-carry-baseline.sh', args);
+  return confirmed
+    ? authoritativeCompletion('deploy.carry-baseline', 'carry-baseline-registered', result)
+    : null;
+}
+
 function releaseCandidate(args) {
   const subcommand = args[0];
   if (!['prepare', 'verify', 'inspect'].includes(subcommand)) {
@@ -151,6 +173,7 @@ module.exports = {
   deploymentScript,
   productionDoctor,
   deployProduction,
+  registerCarryBaseline,
   releaseCandidate,
   backupProduction,
   canaryProduction,

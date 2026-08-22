@@ -12,6 +12,7 @@ import {
   CANDIDATE_BASENAME,
   EXPECTED_CANDIDATE_FILES,
   FIRST_PARTY_IMAGES,
+  FORBIDDEN_RENAMED_PRODUCTION_RESOURCES,
   HOSTED_CANDIDATE_AUTHORITY,
   LEGACY_PRODUCTION_STATE,
   LOCAL_CANDIDATE_AUTHORITY,
@@ -1278,14 +1279,30 @@ test("live Carry compatibility accepts only the exact legacy production contract
     assert.match(error.message, /before upload or Docker\/runtime mutation/u);
     return true;
   });
+  for (const poison of [
+    (value) => { value.projectFamily = "humane-cosmos-clone"; },
+    (value) => { value.storageFamily = "humane-cosmos-clone"; },
+    (value) => { value.volumes[0] = "humane-cosmos-clone_cosmos-pgdata"; value.volumes.sort(); },
+    (value) => { value.externalNetworks = ["humane-cosmos-clone_cosmos-local"]; },
+    (value) => { value.centerDataPath = FORBIDDEN_RENAMED_PRODUCTION_RESOURCES.centerDataPaths[0]; },
+  ]) {
+    const poisoned = structuredClone(LEGACY_PRODUCTION_STATE);
+    poison(poisoned);
+    assert.throws(() => assertLegacyProductionCompatible(poisoned), /before upload or Docker\/runtime mutation/u);
+  }
 });
 
 test("production-state gate binds exact reviewed Compose/common bytes and validates the effective long-form model", (t) => {
   const current = productionStateForSnapshot(ROOT);
   const trustedComposeModel = createProductionComposeModel({ releaseId: "a".repeat(64) });
-  assert.equal(current.projectFamily, "humane-cosmos-clone");
-  assert.throws(() => assertLegacyProductionCompatible(current), /incompatible/u);
-  assert.throws(() => assertOfflineProductionAuthority({ entries: [] }, LEGACY_PRODUCTION_STATE, trustedComposeModel),
+  assert.deepEqual(current, LEGACY_PRODUCTION_STATE);
+  assert.equal(current.projectFamily, "humane-carry-clone");
+  assert.equal(assertLegacyProductionCompatible(current), true);
+  const renamedState = {
+    ...LEGACY_PRODUCTION_STATE,
+    centerDataPath: FORBIDDEN_RENAMED_PRODUCTION_RESOURCES.centerDataPaths[0],
+  };
+  assert.throws(() => assertOfflineProductionAuthority({ entries: [] }, renamedState, trustedComposeModel),
     /reviewed effective Compose authority/u);
   assert.throws(() => assertOfflineProductionAuthority({ entries: [] }, current, trustedComposeModel),
     /protocol file set differs/u);
@@ -1315,6 +1332,8 @@ test("production-state gate binds exact reviewed Compose/common bytes and valida
   }
 
   const authority = JSON.parse(fs.readFileSync(path.join(ROOT, "platform/deploy/production-compose-authority.json"), "utf8"));
+  assert.equal(authority.schemaVersion, 3);
+  assert.deepEqual(authority.forbiddenRenamedResources, FORBIDDEN_RENAMED_PRODUCTION_RESOURCES);
   const model = {
     name: authority.effective.projectName,
     networks: Object.fromEntries(Object.entries(authority.effective.resources.networks).map(([name, external]) => [name, external === null ? {} : { external: true, name: external }])),
@@ -1335,6 +1354,21 @@ test("production-state gate binds exact reviewed Compose/common bytes and valida
     type: "bind", source: authority.effective.centerData.source, target: "/data", read_only: false,
   });
   assert.equal(validateEffectiveComposeConfig(model, authority), true);
+  for (const poison of [
+    (value) => { value.name = "humane-cosmos-clone"; },
+    (value) => {
+      value.services.center.volumes.find((entry) => entry.target === "/data").source =
+        FORBIDDEN_RENAMED_PRODUCTION_RESOURCES.centerDataPaths[0];
+    },
+    (value) => { value.volumes["cosmos-state"].name = "humane-cosmos-clone_cosmos-state"; },
+    (value) => { value.networks["local-model"].name = "humane-cosmos-clone_cosmos-local"; },
+    (value) => { value.services[authority.effective.protectedVolumes["cosmos-state"].grants[0].service].volumes[0].target = "/var/lib/cosmos"; },
+  ]) {
+    const poisoned = structuredClone(model);
+    poison(poisoned);
+    assert.throws(() => validateEffectiveComposeConfig(poisoned, authority),
+      /hosted Compose|protected|Center|forbidden/u);
+  }
   const mutations = [
     (value) => { value.services.center.volumes.find((entry) => entry.target === "/data").source = "/wrong"; },
     (value) => { value.services.center.volumes.find((entry) => entry.target === "/data").type = "volume"; },
@@ -1357,7 +1391,7 @@ test("production-state gate binds exact reviewed Compose/common bytes and valida
   t.after(() => fs.rmSync(synthetic, { recursive: true, force: true }));
   const sealed = sealCandidateFromBuffers({ dataDir: synthetic, ...fixture() });
   assert.throws(() => verifyFixtureCandidate(sealed.root, { enforceTrustedProtocol: true }),
-    /reviewed effective Compose authority|protocol file set differs/u);
+    /exact image role\/reference|reviewed effective Compose authority|protocol file set differs/u);
 });
 
 test("a structurally valid renamed-state candidate seals but remains intentionally non-promotable", (t) => {
@@ -2592,7 +2626,7 @@ files={
 }
 for name in ("deploy.sh","rollback.sh","prune-state.sh"):
     files["platform/deploy/vps/remote/"+name]=(action,0o755)
-for name in ("paths","ingress","release_transactions","configuration","compose","backup","database","canary","drift"):
+for name in ("paths","ingress","release_transactions","configuration","compose","backup","database","canary","carry-baseline","drift"):
     relative="platform/deploy/vps/remote/lib/"+name+".sh"
     files[relative]=(open(os.path.join(common_lib,name+".sh"),"rb").read(),0o644)
 entries=[]
@@ -2720,7 +2754,7 @@ test("actual sealed production candidate validates a full fixture through nested
     ...fixtureSourceFiles(),
     { path: "platform/deploy/release-candidate.mjs", data: fs.readFileSync(path.join(ROOT, "platform/deploy/release-candidate.mjs")), mode: 0o644 },
     { path: "platform/deploy/vps/remote/common.sh", data: fs.readFileSync(path.join(ROOT, "platform/deploy/vps/remote/common.sh")), mode: 0o644 },
-    ...["paths", "ingress", "release_transactions", "configuration", "compose", "backup", "database", "canary", "drift"].map((name) => ({
+    ...["paths", "ingress", "release_transactions", "configuration", "compose", "backup", "database", "canary", "carry-baseline", "drift"].map((name) => ({
       path: `platform/deploy/vps/remote/lib/${name}.sh`,
       data: fs.readFileSync(path.join(ROOT, `platform/deploy/vps/remote/lib/${name}.sh`)),
       mode: 0o644,
@@ -2945,7 +2979,7 @@ test("production consumes one candidate with resumable ACKed transport and has n
   assert.match(cli, /requires exactly one of --candidate PATH or --candidate-id SHA256/u);
   assert.match(cli, /no longer accepts --release-json or builds implicitly/u);
   assert.doesNotMatch(cli, /packageForDeployment|releaseCheck\(/u);
-  assert.match(local, /assertLegacyProductionCompatible\(verified\.productionState\)[\s\S]*local_preflight/u);
+  assert.match(local, /productionStateForSnapshot\(process\.cwd\(\)\)[\s\S]*assertLegacyProductionCompatible\(reviewedProductionState\)[\s\S]*candidate production-state differs from the freshly rederived reviewed source authority[\s\S]*assertLegacyProductionCompatible\(verified\.productionState\)[\s\S]*local_preflight/u);
   assert.match(local, /assertReleaseProtocolManifestMatchesTrusted\(verified\.manifest\)/u);
   assert.match(local, /authorize-deploy[\s\S]*--candidate-id[\s\S]*--candidate[\s\S]*--json/u);
   assert.match(local, /HOSTED_CANDIDATE_AUTHORITY[\s\S]*local candidate is candidate\/debug-only and cannot be deployed/u);
@@ -2953,7 +2987,7 @@ test("production consumes one candidate with resumable ACKed transport and has n
   assert.match(bootstrap, /deployment-authority\.json[\s\S]*point-of-use-reverified[\s\S]*--deployment-authority-sha256/u);
   assert.match(remote, /deployment-authority-sha256[\s\S]*hosted-vps-authority\.json[\s\S]*hosted-vps-authority\.sha256/u);
   assert.match(remote, /verify_hosted_rollback_baseline "\$old_current" "\$old_current_deployment"/u);
-  assert.match(remote, /attest\/import the current immutable Carry baseline before deployment/u);
+  assert.match(remote, /first cutover requires the dedicated deploy carry-baseline command with this exact hosted candidate/u);
   const rollbackBaselineGate = remote.indexOf('verify_hosted_rollback_baseline "$old_current" "$old_current_deployment"');
   const firstTopologyDocker = remote.indexOf('docker ps -q --filter "label=com.docker.compose.project=$LEGACY_PROJECT"', rollbackBaselineGate);
   const predecessorActivation = remote.indexOf('activate_record_candidate_if_present "$old_current" "$old_current_deployment"', rollbackBaselineGate);
@@ -3025,7 +3059,7 @@ test("production consumes one candidate with resumable ACKed transport and has n
   assert.match(candidateTool, /sealCandidateFromFiles/u);
 });
 
-test("first hosted cutover rejects an unattested Carry rollback baseline before Docker", (t) => {
+test("routine canonical rollback predecessors still require hosted candidate authority before Docker", (t) => {
   const directory = tempData();
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const remote = fs.readFileSync(path.join(ROOT, "platform/deploy/vps/remote/deploy.sh"), "utf8");
@@ -3040,7 +3074,7 @@ test("first hosted cutover rejects an unattested Carry rollback baseline before 
   const deployments = path.join(directory, "deployments");
   const candidates = path.join(directory, "release-candidates");
   const selectedRelease = path.join(releases, releaseId);
-  const selectedRecord = path.join(deployments, "carry-baseline");
+  const selectedRecord = path.join(deployments, "canonical-predecessor");
   const selectedCandidate = path.join(candidates, candidateId);
   for (const current of [releases, deployments, candidates, selectedRelease, selectedRecord, selectedCandidate]) {
     fs.mkdirSync(current, { mode: 0o700 });

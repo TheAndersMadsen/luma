@@ -148,15 +148,19 @@ test("restart open confirms store durability before returning a key named by an 
   assert.equal(attempts, 2, "the next first use did not retry parent-directory fsync");
 });
 
-test("accepted current and legacy principals persist in the exact grammar a restart reads", async (t) => {
+test("accepted principals keep the legacy wrapping kid and persist in the exact grammar a restart reads", async (t) => {
   const directory = await mkdtemp(path.join(tmpdir(), "revival-channel-identities-"));
   const previousFile = process.env.COSMOS_CHANNEL_KEY_FILE;
   const previousPrincipal = process.env.COSMOS_PRINCIPAL;
   const { publicKey } = generateKeyPairSync("rsa", { modulusLength: 1024 });
   const publicDer = publicKey.export({ type: "spki", format: "der" });
-  setChannelRpcCallForTests(async (_service, method) => {
+  const wrappingKids = [];
+  setChannelRpcCallForTests(async (_service, method, request) => {
     if (method === "EstablishWrappingKeys") return { clearKey: { jcaEncoded: publicDer } };
-    if (method === "ImportKeys") return { results: [{ status: "KEY_IMPORTED" }] };
+    if (method === "ImportKeys") {
+      wrappingKids.push(Buffer.from(request.keys[0].wrappedKey.wrappingKid).toString("utf8"));
+      return { results: [{ status: "KEY_IMPORTED" }] };
+    }
     throw new Error(`unexpected channel RPC ${method}`);
   });
   t.after(async () => {
@@ -184,6 +188,10 @@ test("accepted current and legacy principals persist in the exact grammar a rest
     assert.deepEqual(restarted.key, first.key);
     assert.deepEqual(await readFile(process.env.COSMOS_CHANNEL_KEY_FILE), bytes);
   }
+  // Each principal is imported once before and once after the simulated
+  // restart; all four issuances must stay readable by a rollback backend.
+  assert.equal(wrappingKids.length, 4);
+  assert.deepEqual([...new Set(wrappingKids)], ["carry-clone/wrapping/rsa-oaep"]);
 });
 
 test("invalid current or legacy principals perform no RPC and create no store", async (t) => {

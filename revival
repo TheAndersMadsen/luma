@@ -33,6 +33,7 @@ const BOOTSTRAP_RECEIPT_ACTIONS = new Set([
   'doctor.production',
   'backup',
   'deploy.production',
+  'deploy.carry-baseline',
   'canary',
   'pin.doctor',
   'pin.release.inspect',
@@ -756,6 +757,7 @@ const {
   backupProduction,
   canaryProduction,
   deployProduction,
+  registerCarryBaseline,
   deploymentScript,
   productionDoctor,
   pruneState,
@@ -824,8 +826,10 @@ runTimedBoundary(() => {
     }
     else fail('usage: ./revival release check [--source] | build ... | verify ... | candidate prepare|verify|inspect ...');
   } else if (command === 'deploy') {
-    if (args.shift() !== 'production') fail('usage: ./revival deploy production [--confirm] [--dry-run]');
-    completion = deployProduction(args);
+    const target = args.shift();
+    if (target === 'production') completion = deployProduction(args);
+    else if (target === 'carry-baseline') completion = registerCarryBaseline(args);
+    else fail('usage: ./revival deploy production|carry-baseline [--confirm] [--dry-run]');
   } else if (command === 'backup') {
     completion = backupProduction(args);
   } else if (command === 'canary') {

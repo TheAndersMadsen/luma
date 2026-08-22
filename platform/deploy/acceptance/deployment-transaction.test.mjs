@@ -401,9 +401,9 @@ test("mount-derived quiescence includes connectivity, excludes only exact Postgr
   const directory = await mkdtemp(path.join(os.tmpdir(), "revival-mounts-"));
   const mounts = path.join(directory, "mounts.json");
   await writeFile(mounts, JSON.stringify([
-    { Id: "pgid", Name: "/postgres", Mounts: [{ Type: "volume", Name: "humane-cosmos-clone_cosmos-pgdata", Source: "/vol/pg", RW: true }] },
-    { Id: "connid", Name: "/connectivity", Mounts: [{ Type: "volume", Name: "humane-cosmos-clone_cosmos-state", Source: "/vol/state", RW: true }] },
-    { Id: "outsideid", Name: "/outside", Mounts: [{ Type: "bind", Name: "", Source: "/home/anders/cosmos-center-data/subdir", RW: true }] },
+    { Id: "pgid", Name: "/postgres", Mounts: [{ Type: "volume", Name: "humane-carry-clone_carry-pgdata", Source: "/vol/pg", RW: true }] },
+    { Id: "connid", Name: "/connectivity", Mounts: [{ Type: "volume", Name: "humane-carry-clone_carry-state", Source: "/vol/state", RW: true }] },
+    { Id: "outsideid", Name: "/outside", Mounts: [{ Type: "bind", Name: "", Source: "/home/anders/carry-center-data/subdir", RW: true }] },
   ]));
   const script = String.raw`
 source "$1"
@@ -433,24 +433,74 @@ test("active attestation roots are bound to matching read-only production mounts
   const mixed = path.join(directory, "mixed.json");
   const writable = path.join(directory, "writable.json");
   const mounts = (keySource, rw = false) => JSON.stringify([{ Mounts: [
-    { Destination: "/etc/cosmos-attest/ca.crt", Type: "bind", RW: false, Source: "/home/anders/ai-pin-revival/private/attest/ca.crt" },
+    { Destination: "/etc/cosmos-attest/ca.crt", Type: "bind", RW: false, Source: "/home/anders/carry-attest/ca.crt" },
     { Destination: "/etc/cosmos-attest/ca.key", Type: "bind", RW: rw, Source: keySource },
-  ] }]);
-  await writeFile(good, mounts("/home/anders/ai-pin-revival/private/attest/ca.key"));
-  await writeFile(mixed, mounts("/home/anders/cosmos-attest/ca.key"));
-  await writeFile(writable, mounts("/home/anders/ai-pin-revival/private/attest/ca.key", true));
+  ], Config: { Labels: { "com.docker.compose.project": "ai-pin-revival" } } }]);
+  await writeFile(good, mounts("/home/anders/carry-attest/ca.key"));
+  await writeFile(mixed, mounts("/home/anders/carry-duc/duc-ca.key"));
+  await writeFile(writable, mounts("/home/anders/carry-attest/ca.key", true));
   const script = String.raw`
 source "$1"
 active_service_container() { printf 'ai-bus\n'; }
 fixture="$2"
-docker() { [[ "$1" == inspect ]] && cat "$fixture"; }
+docker() {
+  [[ "$1" == inspect ]] || return 1
+  if [[ "$2" == --format ]]; then printf '%s\n' "$PROJECT"; else cat "$fixture"; fi
+}
 sudo() { [[ "$1" != -n ]] || shift; [[ "$1" == test ]] || return 1; [[ "$2" == -L ]] && return 1; return 0; }
-[[ "$(active_attestation_root)" == /home/anders/ai-pin-revival/private/attest ]]
+[[ "$(active_attestation_root)" == /home/anders/carry-attest ]]
 fixture="$3"; ! (active_attestation_root >/dev/null)
 fixture="$4"; ! (active_attestation_root >/dev/null)
 `;
   const result = spawnSync("bash", ["-c", script, "fixture", common, good, mixed, writable], { encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr);
+});
+
+test("every container is refused an alternate writer or mount target for Carry security paths", async () => {
+  const backupLibrary = await readFile(path.join(remote, "lib/backup.sh"), "utf8");
+  const guardStart = backupLibrary.indexOf("assert_no_alternate_security_writers() {");
+  const guardEnd = backupLibrary.indexOf("\nrunning_durable_writer_names() {", guardStart);
+  assert.ok(guardStart >= 0 && guardEnd > guardStart, "security writer guard is not a complete function");
+  const guard = backupLibrary.slice(guardStart, guardEnd);
+  const directory = await realpath(await mkdtemp(path.join(os.tmpdir(), "revival-security-writers-")));
+  const fixturePath = path.join(directory, "mounts.json");
+  const container = (mount) => [{
+    Config: { Labels: {
+      "com.docker.compose.project": "humane-carry-clone",
+      "com.docker.compose.service": "ai-bus",
+    } },
+    Mounts: [mount],
+  }];
+  const exact = {
+    Type: "bind", Source: "/home/anders/carry-attest/ca.key",
+    Destination: "/etc/carry-attest/ca.key", RW: false,
+  };
+  const cases = [
+    ["writable", { ...exact, RW: true }],
+    ["parent", { ...exact, Source: "/home/anders" }],
+    ["wrong-target", { ...exact, Destination: "/etc/unreviewed/ca.key" }],
+  ];
+  const script = String.raw`
+set -euo pipefail
+${guard}
+PROJECT=ai-pin-revival; LEGACY_PROJECT=humane-carry-clone; fixture="$1"
+fail() { printf '%s\n' "$*" >&2; return 1; }
+docker() {
+  if [[ "$1" == ps ]]; then printf '%064d\n' 1
+  elif [[ "$1" == inspect ]]; then cat "$fixture"
+  else return 97
+  fi
+}
+assert_no_alternate_security_writers
+`;
+  await writeFile(fixturePath, JSON.stringify(container(exact)));
+  let result = spawnSync("bash", ["-c", script, "fixture", fixturePath], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  for (const [name, mount] of cases) {
+    await writeFile(fixturePath, JSON.stringify(container(mount)));
+    result = spawnSync("bash", ["-c", script, name, fixturePath], { encoding: "utf8" });
+    assert.notEqual(result.status, 0, `${name} alternate security access unexpectedly passed`);
+  }
 });
 
 test("archive inventory and channel-key contract retain root and child metadata", async () => {
@@ -513,7 +563,7 @@ http_status() {
 }
 curl() { printf '%s' '{"assistant":true,"speech":true,"mesh":{"reachable":7,"total":7,"services":22,"methods":98}}'; }
 write_quiesced_semantic_evidence "$3"
-! grep -q 'https://cosmos.andersmadsen.dk' "$trace"
+! grep -q 'https://carry.andersmadsen.dk' "$trace"
 ! grep -q 'http://127.0.0.1/$' "$trace"
 grep -q '127.0.0.1:18085' "$trace"
 grep -q '127.0.0.1:14000/login' "$trace"
@@ -791,15 +841,15 @@ recover_previous_application
   await assert.rejects(readFile(path.join(record, "RECOVERY_FAILED")));
 });
 
-test("TERM-state between pointer preparation and trust evidence preserves staged roots", async () => {
+test("TERM-state between pointer preparation and trust evidence preserves rehearsal material", async () => {
   const deploy = await readFile(path.join(remote, "deploy.sh"), "utf8");
   const cleanup = bashFunction(deploy, "cleanup_staged_material");
   const finish = bashFunction(deploy, "finish_deploy");
   const directory = await realpath(await mkdtemp(path.join(os.tmpdir(), "revival-term-stage-")));
   const record = path.join(directory, "deployments", "pending-record");
   const stage = path.join(record, "staged");
-  await mkdir(path.join(stage, "assets/attest"), { recursive: true });
-  await writeFile(path.join(stage, "assets/attest/ca.key"), "staged-key\n", { mode: 0o600 });
+  await mkdir(path.join(stage, "assets/keycloak-theme"), { recursive: true });
+  await writeFile(path.join(stage, "assets/keycloak-theme/member"), "staged-theme\n", { mode: 0o600 });
   await writeFile(path.join(record, "POINTER_TRANSACTION_PREPARED"), "prepared\n", { mode: 0o600 });
   await writeFile(path.join(record, "OPERATION_TRANSACTION_PREPARED"), "prepared\n", { mode: 0o600 });
   const script = String.raw`
@@ -815,7 +865,7 @@ finish_deploy
 `;
   const result = spawnSync("bash", ["-c", script, "fixture", record, stage, path.join(directory, "deployments"), path.join(directory, "incoming")], { encoding: "utf8" });
   assert.notEqual(result.status, 0);
-  assert.equal(await readFile(path.join(stage, "assets/attest/ca.key"), "utf8"), "staged-key\n");
+  assert.equal(await readFile(path.join(stage, "assets/keycloak-theme/member"), "utf8"), "staged-theme\n");
   assert.match(await readFile(path.join(record, "CANDIDATE_ACTIVATION_PENDING"), "utf8"), /\S/u);
   await assert.rejects(readFile(path.join(record, "OPERATION_TRANSACTION_ABORTED")));
 });
@@ -926,8 +976,7 @@ async function rollbackRecoveryFixture(name) {
   const targetRelease = path.join(directory, "releases", releaseB);
   const targetRecord = path.join(directory, "deployments", "target-record");
   await mkdir(path.join(work, "current-config"), { recursive: true });
-  await mkdir(path.join(work, "target-stage/assets/attest"), { recursive: true });
-  await mkdir(path.join(work, "target-stage/assets/duc"), { recursive: true });
+  await mkdir(path.join(work, "target-stage/assets/keycloak-theme"), { recursive: true });
   await mkdir(path.join(currentRelease, "platform/deploy/vps/remote"), { recursive: true });
   await mkdir(targetRelease, { recursive: true });
   await mkdir(targetRecord, { recursive: true });
@@ -938,11 +987,9 @@ async function rollbackRecoveryFixture(name) {
   await writeFile(path.join(record, "candidate-id"), `${candidateId}\n`);
   await writeFile(path.join(record, "candidate-path"), `${candidatePath}\n`);
   await writeFile(path.join(work, "current-config/runtime.env"), "fixture=true\n");
-  // The two files backup.sh calls the only content of a backup that cannot be
-  // regenerated from anything. They are here because the resume reads this tree,
-  // and because losing them to a cleanup is the second defect these tests cover.
-  await writeFile(path.join(work, "target-stage/assets/attest/ca.key"), "attest-ca\n", { mode: 0o600 });
-  await writeFile(path.join(work, "target-stage/assets/duc/duc-ca.key"), "duc-ca\n", { mode: 0o600 });
+  // Rollback rehearses only disposable configuration/theme/token material.
+  // Deployed Carry security roots are never copied into this private work tree.
+  await writeFile(path.join(work, "target-stage/assets/keycloak-theme/member"), "theme\n", { mode: 0o600 });
   await writeFile(path.join(currentRelease, "platform/deploy/vps/remote/canary.sh"), [
     "#!/usr/bin/env bash", "printf 'canary:%s\\n' \"$*\" >>\"$TRACE\"", "",
   ].join("\n"));
@@ -1049,9 +1096,9 @@ test("recovery after a publicly accepted rollback leaves no unresumable authorit
   // this answered [{rollback, record}] with no command able to clear it.
   assert.deepEqual(activeAuthority(directory), []);
   assert.match(await readFile(path.join(record, "ROLLBACK_POINTER_TRANSACTION_ABORTED"), "utf8"), /\S/u);
-  // Terminal, so the real cleanup_work_secrets may run — and it must actually
-  // remove the staged CA keys rather than trace over them.
-  await assert.rejects(readFile(path.join(work, "target-stage/assets/attest/ca.key")));
+  // Terminal, so the real cleanup_work_secrets may remove the disposable
+  // rehearsal material. There are no staged copies of the Carry roots.
+  await assert.rejects(readFile(path.join(work, "target-stage/assets/keycloak-theme/member")));
   await assert.rejects(readFile(path.join(work, "current-config/runtime.env")));
 });
 
@@ -1076,9 +1123,9 @@ test("recovery that cannot abort a committed rollback keeps the material its res
     events.findIndex((value) => value.startsWith("canary:")), events.join(", "));
   await assert.rejects(readFile(path.join(record, "ROLLBACK_POINTER_TRANSACTION_ABORTED")));
   assert.deepEqual(activeAuthority(directory), [{ namespace: "rollback", record }]);
-  // rollback.sh:411 and :880 refuse a resume without exactly these two.
+  // A pending resume retains its exact configuration and rehearsal material.
   assert.match(await readFile(path.join(work, "current-config/runtime.env"), "utf8"), /\S/u);
-  assert.match(await readFile(path.join(work, "target-stage/assets/attest/ca.key"), "utf8"), /\S/u);
+  assert.match(await readFile(path.join(work, "target-stage/assets/keycloak-theme/member"), "utf8"), /\S/u);
   assert.ok(events.some((value) => value.startsWith("warn:preserving rollback staging")), events.join(", "));
 });
 
@@ -1097,7 +1144,7 @@ test("rollback recovery refuses before Compose when retained candidate activatio
     `failed candidate authority reached a Compose consumer: ${events.join(", ")}`);
   await assert.rejects(readFile(path.join(record, "ROLLBACK_POINTER_TRANSACTION_ABORTED")));
   assert.match(await readFile(path.join(work, "current-config/runtime.env"), "utf8"), /fixture/u);
-  assert.match(await readFile(path.join(work, "target-stage/assets/attest/ca.key"), "utf8"), /attest-ca/u);
+  assert.match(await readFile(path.join(work, "target-stage/assets/keycloak-theme/member"), "utf8"), /theme/u);
   assert.deepEqual(activeAuthority(directory), [{ namespace: "rollback", record }]);
 });
 
@@ -1116,7 +1163,7 @@ test("a durably aborted rollback is refused before anything can be torn down", a
   assert.ok(refusal < lastAt(rollback, "prepare_target_commit\n"));
 });
 
-test("a resumed accepted rollback removes the staged trust-root private keys", async () => {
+test("a resumed accepted rollback removes disposable rehearsal material", async () => {
   const rollback = await readFile(path.join(remote, "rollback.sh"), "utf8");
   // The resumed-accepted block calls cleanup_work_secrets before either of the
   // two lines that assign target_stage, so on that path the variable is still its
@@ -1127,22 +1174,22 @@ test("a resumed accepted rollback removes the staged trust-root private keys", a
   assert.ok(lastAt(rollback, 'target_stage=""') < resumeCleanup);
   const directory = await realpath(await mkdtemp(path.join(os.tmpdir(), "revival-rollback-resume-cleanup-")));
   const work = path.join(directory, "deployments", "current-record", "manual-rollback-fixture");
-  await mkdir(path.join(work, "target-stage/assets/attest"), { recursive: true });
+  await mkdir(path.join(work, "target-stage/assets/keycloak-theme"), { recursive: true });
   await mkdir(path.join(work, "current-config"), { recursive: true });
-  await writeFile(path.join(work, "target-stage/assets/attest/ca.key"), "attest-ca\n", { mode: 0o600 });
+  await writeFile(path.join(work, "target-stage/assets/keycloak-theme/member"), "theme\n", { mode: 0o600 });
   await writeFile(path.join(work, "current-config/runtime.env"), "fixture=true\n");
   const script = String.raw`
 set -euo pipefail
 ${bashFunction(rollback, "cleanup_work_secrets")}
 work="$1"; owner_canary_cookie="$work/owner.cookies"
-# Exactly the resumed-accepted path's state, and the reason the keys leaked.
+# Exactly the resumed-accepted path's state.
 target_stage=""
 sudo() { [[ "$1" != -n ]] || shift; "$@"; }
 cleanup_work_secrets
 `;
   const result = spawnSync("bash", ["-c", script, "fixture", work], { encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr);
-  await assert.rejects(readFile(path.join(work, "target-stage/assets/attest/ca.key")));
+  await assert.rejects(readFile(path.join(work, "target-stage/assets/keycloak-theme/member")));
   await assert.rejects(readFile(path.join(work, "current-config/runtime.env")));
 });
 
@@ -1179,7 +1226,10 @@ test("an EXIT trap brackets the reconcile before anything in it can quiesce ingr
   const call = at(deploy, "\nreconcile_pending_deployment_transaction\n");
   const firstTrap = at(deploy, "\ntrap ");
   assert.ok(install < call, "the reconcile's EXIT trap must be installed before the reconcile runs");
-  assert.equal(install, firstTrap, "no earlier trap may be the first one in the file");
+  assert.ok(firstTrap < install, "the pre-record Carry identity workspace should already have cleanup coverage");
+  assert.match(deploy.slice(firstTrap, install),
+    /trap 'rm -rf -- "\$carry_security_work"' EXIT[\s\S]*carry_security_work=""[\s\S]*trap - EXIT/u,
+    "the only earlier trap must be the cleared read-only Carry identity workspace cleanup");
 
   // Every quiesce the reconcile can reach lives inside a function body, and the
   // only one this path enters is the bracketed call. What must never appear above

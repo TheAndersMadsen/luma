@@ -234,7 +234,7 @@ step "Proving the credential works before writing it"
 # direct grant needs KEYCLOAK_CLIENT_SECRET too. Rather than teach this script to
 # handle that secret, it now exercises the real path — POST /api/auth/login on
 # Center's loopback port, which supplies the client secret itself, seals the
-# tokens and sets the chunked cosmos_tokens cookies. That proves the thing the
+# tokens and sets the chunked carry_tokens cookies. That proves the thing the
 # canary actually depends on, not an adjacent thing that happens to share a
 # password. Loopback only, so the credential never reaches nginx or Cloudflare.
 CENTER_ORIGIN="http://127.0.0.1:${REVIVAL_CENTER_PORT:-14000}"

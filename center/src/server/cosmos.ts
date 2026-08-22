@@ -187,7 +187,7 @@ export async function webapiGetForUser(path: string, userId: string): Promise<Re
     // never copied from the public request.
     headers: {
       "x-forwarded-client-cert": `U:${userId}`,
-      "x-cosmos-web-projection-token": COSMOS_CENTER_PROJECTION_TOKEN,
+      "x-carry-web-projection-token": COSMOS_CENTER_PROJECTION_TOKEN,
     },
   });
 }
@@ -210,7 +210,7 @@ const SERVICE_WORKLOAD: Record<string, WorkloadKey> = {
 };
 
 // Must match the backend's own default (`config.rs` EDGE_PRINCIPAL_HEADER).
-// It did not: this said `x-cosmos-authenticated-principal` while the workloads
+// It did not: this said `x-carry-authenticated-principal` while the workloads
 // read `x-forwarded-client-cert`, so under edge-authenticated the principal we
 // send is simply not seen — the call is rejected for having NO principal, which
 // looks identical to a failed auth and hides the real cause. Harmless against a
@@ -356,7 +356,10 @@ export async function requestMetadata(): Promise<grpc.Metadata> {
   // development-insecure) ⇒ omitted, unchanged.
   const edgeToken = process.env.COSMOS_EDGE_TOKEN?.trim();
   if (edgeToken) {
-    md.set(process.env.COSMOS_EDGE_TOKEN_HEADER?.trim() || "x-cosmos-edge-token", edgeToken);
+    // Header names are an external wire ABI shared with both the upgraded and
+    // rollback backend. The environment variable is logically Cosmos; its
+    // stable default remains the deployed Carry spelling.
+    md.set(process.env.COSMOS_EDGE_TOKEN_HEADER?.trim() || "x-carry-edge-token", edgeToken);
   }
   return md;
 }

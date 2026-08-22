@@ -16,8 +16,8 @@ import { at } from "./source-offsets.mjs";
  *
  *   1. The RUNTIME half, in cosmos/crates/cosmos/src/store_postgres.rs. Starting
  *      a candidate runs migrations, and the one reviewed data removal in that
- *      history (`DELETE FROM cosmos_account_blob …`) plus the thumbnail backfill
- *      (`UPDATE cosmos_memory …`) both rewrite existing rows. Both are now held
+ *      history (`DELETE FROM carry_account_blob …`) plus the thumbnail backfill
+ *      (`UPDATE carry_memory …`) both rewrite existing rows. Both are now held
  *      back unless COSMOS_ALLOW_DATA_REMOVALS is set, so shipping a release
  *      cannot delete or rewrite a wearer's data as a side effect.
  *
@@ -125,7 +125,7 @@ test("a migration that removes data is held back, and the release still starts",
 
 test("the thumbnail backfill is gated too, because it REWRITES rows the smoke fingerprints", () => {
   /*
-   * backfill_thumbnail_counts is an `UPDATE cosmos_memory …` — a data repair, not
+   * backfill_thumbnail_counts is an `UPDATE carry_memory …` — a data repair, not
    * a migration, precisely so the migration suite's ban on UPDATE stays intact.
    * That makes it invisible to every existing gate: it is not migration text, so
    * every_migration_statement_is_restart_safe_and_non_destructive never sees it,
@@ -661,8 +661,8 @@ SQL
 test("the manifest is still assembled in catalog order and sorted, and the sidecar still tracks it", () => {
   /*
    * The batch collects results into an array and replays them onto relations by
-   * index, which is the one place an off-by-one would put cosmos_memory's digest
-   * on cosmos_note's line — a defect that looks exactly like data movement and
+   * index, which is the one place an off-by-one would put carry_memory's digest
+   * on carry_note's line — a defect that looks exactly like data movement and
    * would fail a deploy for no reason, or worse, pass one.
    *
    * Two structural facts keep that honest: the digest loop walks the SAME array
@@ -716,7 +716,7 @@ test("the manifest is still assembled in catalog order and sorted, and the sidec
 
 test("the row-digest evidence names WHICH rows moved, and carries no wearer values", () => {
   /*
-   * A failed fingerprint comparison says "something in cosmos_memory changed",
+   * A failed fingerprint comparison says "something in carry_memory changed",
    * which costs a whole deploy cycle to turn into "these four rows changed". The
    * per-relation row digests are what close that, and they are digests rather
    * than values ON PURPOSE: this lands in a deployment record on the host, and a
@@ -858,7 +858,7 @@ test("the staging smoke refuses a candidate that moved a row, and keeps the proo
  *      fourth argument its own call sites already passed was silently
  *      discarded. The AFTER capture was therefore NOT projected onto the BEFORE
  *      columns, so cosmos/migrations/0004_listing.sql adding
- *      `cosmos_memory.thumbnail_count` (`ADD COLUMN IF NOT EXISTS` — additive,
+ *      `carry_memory.thumbnail_count` (`ADD COLUMN IF NOT EXISTS` — additive,
  *      and explicitly permitted by this project's migration policy) changed
  *      every row's `to_jsonb` and failed the deploy with "candidate startup
  *      changed PostgreSQL relation data" without a wearer byte moving. That

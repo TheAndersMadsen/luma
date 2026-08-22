@@ -10,6 +10,7 @@ import test from "node:test";
 const {
   CHANNEL_KEY_STORE_DEGRADED,
   ChannelKeyUnavailableError,
+  channelKeyFile,
   namesSameWearer,
   parseCenterKid,
   parseCenterPrincipal,
@@ -53,10 +54,14 @@ async function withStore(context, contents) {
   const directory = await mkdtemp(path.join(tmpdir(), "revival-channel-key-"));
   const file = path.join(directory, "channel-key.json");
   const previous = process.env.COSMOS_CHANNEL_KEY_FILE;
+  const previousCarry = process.env.CARRY_CHANNEL_KEY_FILE;
+  delete process.env.CARRY_CHANNEL_KEY_FILE;
   process.env.COSMOS_CHANNEL_KEY_FILE = file;
   context.after(async () => {
     if (previous === undefined) delete process.env.COSMOS_CHANNEL_KEY_FILE;
     else process.env.COSMOS_CHANNEL_KEY_FILE = previous;
+    if (previousCarry === undefined) delete process.env.CARRY_CHANNEL_KEY_FILE;
+    else process.env.CARRY_CHANNEL_KEY_FILE = previousCarry;
     await rm(directory, { recursive: true, force: true });
   });
   if (contents !== undefined) {
@@ -69,8 +74,57 @@ async function withStore(context, contents) {
 
 const read = async (file) => JSON.parse(await readFile(file, "utf8"));
 
+function preserveChannelFileEnvironment(context) {
+  const cosmos = process.env.COSMOS_CHANNEL_KEY_FILE;
+  const carry = process.env.CARRY_CHANNEL_KEY_FILE;
+  context.after(() => {
+    if (cosmos === undefined) delete process.env.COSMOS_CHANNEL_KEY_FILE;
+    else process.env.COSMOS_CHANNEL_KEY_FILE = cosmos;
+    if (carry === undefined) delete process.env.CARRY_CHANNEL_KEY_FILE;
+    else process.env.CARRY_CHANNEL_KEY_FILE = carry;
+  });
+}
+
+test("a direct upgrade reads the pre-rename channel-key path without a Cosmos variable", async (t) => {
+  preserveChannelFileEnvironment(t);
+  const directory = await mkdtemp(path.join(tmpdir(), "revival-carry-channel-key-"));
+  const file = path.join(directory, "channel-key.json");
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await writeFile(file, JSON.stringify({ kid: LEGACY_KID, key: LEGACY_KEY }), { mode: 0o600 });
+
+  delete process.env.COSMOS_CHANNEL_KEY_FILE;
+  process.env.CARRY_CHANNEL_KEY_FILE = file;
+
+  assert.equal(channelKeyFile(), file);
+  assert.equal(storedKeysFor(DERIVED_KID)[0]?.key.toString("base64"), LEGACY_KEY);
+});
+
+test("matching Carry and Cosmos channel-key aliases retain the production path", (t) => {
+  preserveChannelFileEnvironment(t);
+  process.env.CARRY_CHANNEL_KEY_FILE = "/data/channel-key.json";
+  process.env.COSMOS_CHANNEL_KEY_FILE = "/data/channel-key.json";
+  assert.equal(channelKeyFile(), "/data/channel-key.json");
+});
+
+test("conflicting channel-key aliases fail closed before reading either store", (t) => {
+  preserveChannelFileEnvironment(t);
+  process.env.CARRY_CHANNEL_KEY_FILE = "/data/legacy-channel-key.json";
+  process.env.COSMOS_CHANNEL_KEY_FILE = "/data/new-channel-key.json";
+  assert.throws(
+    () => channelKeyFile(),
+    /CARRY_CHANNEL_KEY_FILE disagree/u,
+  );
+});
+
+test("the unconfigured local default remains the pre-rename physical filename", (t) => {
+  preserveChannelFileEnvironment(t);
+  delete process.env.CARRY_CHANNEL_KEY_FILE;
+  delete process.env.COSMOS_CHANNEL_KEY_FILE;
+  assert.equal(channelKeyFile(), path.join(process.cwd(), ".carry-channel-key.json"));
+});
+
 test("a wearer keeps their key when the kid we derive for them changes shape", async (t) => {
-  // Exactly what /home/anders/cosmos-center-data/channel-key.json holds today:
+  // Exactly what /home/anders/carry-center-data/channel-key.json holds today:
   // the pre-fix COSMOS_PRINCIPAL kid, no map.
   await withStore(t, { kid: LEGACY_KID, key: LEGACY_KEY });
 

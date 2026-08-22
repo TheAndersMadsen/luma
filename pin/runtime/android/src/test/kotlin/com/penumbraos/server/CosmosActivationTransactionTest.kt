@@ -194,8 +194,8 @@ class CosmosActivationTransactionTest {
     @Test
     fun endpointsAndAttestationSubjectAreExactContracts() {
         val plan = CosmosActivationContract.plan(
-            "HTTPS://api.cosmos.humane.cloud:443/",
-            "https://onboarding.cosmos.humane.cloud/",
+            "HTTPS://api.carry.humane.cloud:443/",
+            "https://onboarding.carry.humane.cloud/",
             "203.0.113.9",
         )
         assertEquals(CosmosActivationContract.API_ENDPOINT, plan.apiEndpoint)
@@ -223,6 +223,50 @@ class CosmosActivationTransactionTest {
                 )
             }.isFailure,
         )
+    }
+
+    @Test
+    fun keepDataReplacementReadsPreRenameStateAndDoesNotReimportIdentity() {
+        assertEquals("penumbra_carry_remote_mode", CosmosActivationContract.REMOTE_MODE_SETTING)
+        assertEquals("penumbra_carry_edge_ipv4", CosmosActivationContract.EDGE_IPV4_SETTING)
+        assertEquals(
+            "penumbra_carry_attestation_bundle_b64",
+            CosmosActivationContract.ATTESTATION_BUNDLE_SETTING,
+        )
+        assertEquals(
+            "penumbra_carry_device_attestation_v1",
+            CosmosActivationContract.ATTESTATION_KEY_ALIAS,
+        )
+
+        // This map is the Settings.Global state already present before the
+        // logical rename. A keep-data APK replacement must observe it directly.
+        val settings = FakeSettings(
+            "penumbra_carry_remote_mode" to "1",
+            "penumbra_carry_edge_ipv4" to "203.0.113.9",
+        )
+        val records = FakeRecords().apply {
+            value = CosmosActivationRecord(
+                phase = CosmosActivationPhase.ACTIVE,
+                previousRemoteMode = "0",
+                previousEdgeIpv4 = null,
+                identityWasPresent = false,
+                targetFingerprintSha256 = candidate.fingerprintSha256,
+                apiEndpoint = CosmosActivationContract.API_ENDPOINT,
+                onboardingEndpoint = CosmosActivationContract.ONBOARDING_ENDPOINT,
+                targetEdgeIpv4 = "203.0.113.9",
+            )
+        }
+        val identity = FakeIdentity(candidate, installed = candidate)
+
+        val result = transaction(settings, records).activateValid(identity)
+
+        assertTrue(result.ok)
+        assertEquals(CosmosActivationCode.ALREADY_ACTIVE, result.code)
+        assertEquals(0, identity.installCalls)
+        assertEquals(0, identity.removalCalls)
+        assertTrue(settings.successfulWrites.isEmpty())
+        assertNull(settings["penumbra_cosmos_remote_mode"])
+        assertNull(settings["penumbra_cosmos_edge_ipv4"])
     }
 
     private fun transaction(

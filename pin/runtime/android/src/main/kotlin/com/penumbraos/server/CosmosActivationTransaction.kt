@@ -6,19 +6,19 @@ import java.util.Locale
 /**
  * Wire names consumed by the injected Pin transport.
  *
- * Implemented: these values intentionally remain the existing `penumbra_cosmos_*`
+ * Implemented: these values intentionally remain the existing `penumbra_carry_*`
  * keys because changing them would break already-built Hook APKs. "Cosmos" is
  * the product name; the stored keys are a compatibility contract.
  */
 internal object CosmosActivationContract {
-    const val REMOTE_MODE_SETTING = "penumbra_cosmos_remote_mode"
-    const val EDGE_IPV4_SETTING = "penumbra_cosmos_edge_ipv4"
-    const val ATTESTATION_BUNDLE_SETTING = "penumbra_cosmos_attestation_bundle_b64"
-    const val ATTESTATION_KEY_ALIAS = "penumbra_cosmos_device_attestation_v1"
+    const val REMOTE_MODE_SETTING = "penumbra_carry_remote_mode"
+    const val EDGE_IPV4_SETTING = "penumbra_carry_edge_ipv4"
+    const val ATTESTATION_BUNDLE_SETTING = "penumbra_carry_attestation_bundle_b64"
+    const val ATTESTATION_KEY_ALIAS = "penumbra_carry_device_attestation_v1"
     const val ATTESTATION_PRODUCT_ID = "00000001"
 
-    const val API_HOST = "api.cosmos.humane.cloud"
-    const val ONBOARDING_HOST = "onboarding.cosmos.humane.cloud"
+    const val API_HOST = "api.carry.humane.cloud"
+    const val ONBOARDING_HOST = "onboarding.carry.humane.cloud"
     const val API_ENDPOINT = "https://$API_HOST"
     const val ONBOARDING_ENDPOINT = "https://$ONBOARDING_HOST"
 

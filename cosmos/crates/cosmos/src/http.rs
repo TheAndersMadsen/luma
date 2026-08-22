@@ -378,8 +378,8 @@ struct MeshStatus {
     /// `onboardingtk`, `partner-services`, `push`, `webapi`, `webhook` — each
     /// published at BOTH a regional host and a region-less global alias:
     ///
-    ///   <family>.<region>.<env>.humane.cloud   (api.eastus.cosmos.humane.cloud)
-    ///   <family>.<env>.humane.cloud            (api.cosmos.humane.cloud)
+    ///   <family>.<region>.<env>.humane.cloud   (api.eastus.carry.humane.cloud)
+    ///   <family>.<env>.humane.cloud            (api.carry.humane.cloud)
     ///
     /// across regions `eastus` / `westus2` and environments `dev` / `cosmos` /
     /// `prod`, on AKS (`pip.aks-cluster-pd-ue-01.fw.humane.cloud` — prod, us-east,
@@ -564,7 +564,7 @@ async fn mesh_status(state: &HttpState) -> MeshStatus {
     let environment = std::env::var("COSMOS_ENVIRONMENT").unwrap_or_else(|_| "cosmos".to_owned());
     let region = std::env::var("COSMOS_REGION").unwrap_or_else(|_| "eastus".to_owned());
     // Same shape Humane used: <family>.<region>.<env>.<zone>.
-    let zone = std::env::var("COSMOS_DNS_ZONE").unwrap_or_else(|_| "cosmos.local".to_owned());
+    let zone = std::env::var("COSMOS_DNS_ZONE").unwrap_or_else(|_| "carry.local".to_owned());
     let stands_in_for = match me.as_deref() {
         Some("ai-bus") => vec!["api", "location", "partner-services", "push"],
         Some("connectivity") => vec!["connectivity-check"],
@@ -3096,7 +3096,7 @@ mod tests {
         let device_cn = "V:01:D:pin1:U:alice";
         headers.insert(
             crate::config::EDGE_PRINCIPAL_HEADER,
-            format!("By=spiffe://cosmos.local/edge;Subject=\"CN={device_cn}\"")
+            format!("By=spiffe://carry.local/edge;Subject=\"CN={device_cn}\"")
                 .parse()
                 .unwrap(),
         );

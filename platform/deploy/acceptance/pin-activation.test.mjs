@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash, X509Certificate } from "node:crypto";
 import {
   chmodSync,
   mkdtempSync,
@@ -72,7 +73,7 @@ function providerStatus(state = "inactive") {
   if (state === "inactive") {
     return "Result: Bundle[{ok=true, state=inactive, managed=false, present=false, identity_usable=false}]\n";
   }
-  return `Result: Bundle[{ok=true, state=active, managed=true, edge_ipv4=203.0.113.9, present=true, identity_usable=true, fingerprint_sha256=${FINGERPRINT}, api_endpoint=https://api.cosmos.humane.cloud, onboarding_endpoint=https://onboarding.cosmos.humane.cloud}]\n`;
+  return `Result: Bundle[{ok=true, state=active, managed=true, edge_ipv4=203.0.113.9, present=true, identity_usable=true, fingerprint_sha256=${FINGERPRINT}, api_endpoint=https://api.carry.humane.cloud, onboarding_endpoint=https://onboarding.carry.humane.cloud}]\n`;
 }
 
 function fakeRuntime({ reportedSerial = SERIAL } = {}) {
@@ -163,6 +164,22 @@ test("host activation pins the same clone root as both installed device paths", 
     assert.ok(match, "device path must keep an explicit pinned root");
     assert.equal(match[1], CLONE_ROOT_PEM);
   }
+
+  const certificate = new X509Certificate(CLONE_ROOT_PEM);
+  assert.equal(Buffer.byteLength(CLONE_ROOT_PEM), 687);
+  assert.equal(
+    createHash("sha256").update(CLONE_ROOT_PEM).digest("hex"),
+    "e1fe74c7c960f070264933deed138cadc1c0d1cd3d833297422119599353b2b9",
+  );
+  assert.equal(
+    createHash("sha256").update(`${CLONE_ROOT_PEM}\n`).digest("hex"),
+    "1b947b4e4dae58dc5f8aac1863723eb0eaa313da993e2b8ec7abed38727e22ed",
+  );
+  assert.equal(
+    certificate.fingerprint256.replaceAll(":", "").toLowerCase(),
+    "7f82fbf94a370379ed238fb0c9d2e2d13316d67197faba2948c0e3d92ac3458b",
+  );
+  assert.equal(certificate.subject, "O=humane-carry-clone\nCN=Carry Clone Root EC 1");
 });
 
 function awaitImportX509() {
@@ -239,8 +256,8 @@ test("confirmed activation streams the envelope on stdin and verifies postcondit
   assert.equal(write.args.some((value) => value.endsWith(".json") && !value.startsWith("content://")), false);
   const envelope = JSON.parse(write.input);
   assert.equal(envelope.private_key_pem, SECRET_MARKER);
-  assert.equal(envelope.api_endpoint, "https://api.cosmos.humane.cloud");
-  assert.equal(envelope.onboarding_endpoint, "https://onboarding.cosmos.humane.cloud");
+  assert.equal(envelope.api_endpoint, "https://api.carry.humane.cloud");
+  assert.equal(envelope.onboarding_endpoint, "https://onboarding.carry.humane.cloud");
   assert.equal(envelope.edge_ipv4, "203.0.113.9");
   assert.equal(fake.calls.some((call) => call.args.includes("push")), false);
   assert.doesNotMatch(fake.text(), new RegExp(SECRET_MARKER, "u"));
@@ -270,6 +287,6 @@ test("activation envelope rejects noncanonical IPv4 and fixes both endpoints", (
   };
   assert.throws(() => buildActivationEnvelope(credential, "203.000.113.9"), /canonical edge IPv4/);
   const envelope = buildActivationEnvelope(credential, "203.0.113.9");
-  assert.equal(envelope.api_endpoint, "https://api.cosmos.humane.cloud");
-  assert.equal(envelope.onboarding_endpoint, "https://onboarding.cosmos.humane.cloud");
+  assert.equal(envelope.api_endpoint, "https://api.carry.humane.cloud");
+  assert.equal(envelope.onboarding_endpoint, "https://onboarding.carry.humane.cloud");
 });

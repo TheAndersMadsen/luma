@@ -526,9 +526,29 @@ test("decideInstallMigration recognizes the exact observed legacy profile and re
   assert.deepEqual(result.rolesToInstall, IN_PLACE_ROLES);
   assert.deepEqual(result.retainedInstaller, {
     packageName: MANAGED_PACKAGES.installer,
-    versionName: "cosmos-2026.08.07",
+    versionName: "carry-2026.08.07",
     signerIdentity: "dd07f452",
   });
+});
+
+test("a mechanically renamed Cosmos profile cannot replace the deployed Carry identity", () => {
+  const target = createResolvedInstallTargetFixture();
+  const result = decideInstallMigration({
+    target,
+    inspection: inspection({
+      target,
+      packageOverrides: {
+        installer: { versionName: "cosmos-2026.08.07" },
+        hook: { versionName: "cosmos-2026.08.07" },
+        server: { versionName: "cosmos-2026.08.08.2" },
+        injector: { versionName: "cosmos-2026.08.07" },
+      },
+    }),
+  });
+
+  assert.equal(result.kind, "blocked");
+  assert.deepEqual(result.rolesToInstall, []);
+  assert.equal(result.retainedInstaller, null);
 });
 
 test("decideInstallMigration resumes only the bounded legacy roles that are not canonical yet", () => {

@@ -278,6 +278,23 @@ export const LEGACY_PRODUCTION_STATE = deepFreeze({
   protectedRoot: PROTECTED_PRODUCTION_ROOT,
 });
 
+// These are the tempting resources emitted by the undeployed Carry→Cosmos
+// rename.  Naming them explicitly in the closed production authority makes the
+// negative half of the bridge reviewable: a generated candidate cannot merely
+// omit the known-good Carry names and let Compose auto-create empty replacements.
+export const FORBIDDEN_RENAMED_PRODUCTION_RESOURCES = deepFreeze({
+  centerDataPaths: ["/home/anders/cosmos-center-data"],
+  networks: ["humane-cosmos-clone_cosmos-local"],
+  projects: ["humane-cosmos-clone"],
+  stateTargets: ["/var/lib/cosmos"],
+  volumes: [
+    "humane-cosmos-clone_cosmos-pgdata",
+    "humane-cosmos-clone_cosmos-state",
+    "humane-cosmos-clone_grafana-data",
+    "humane-cosmos-clone_prometheus-data",
+  ],
+});
+
 const REQUIRED_TOOLCHAINS = Object.freeze([
   "cargo",
   "docker",
@@ -2320,8 +2337,8 @@ function readAuthorityFile(root, relative, maximum = MAX_JSON_RECEIPT_BYTES) {
 }
 
 function validateComposeAuthority(authority) {
-  assertExactKeys(authority, ["composeFiles", "effective", "productionState", "releaseConfig", "remoteCommon", "schema", "schemaVersion"], "production Compose authority");
-  if (authority.schema !== "revival.production-compose-authority" || authority.schemaVersion !== 2) {
+  assertExactKeys(authority, ["composeFiles", "effective", "forbiddenRenamedResources", "productionState", "releaseConfig", "remoteCommon", "schema", "schemaVersion"], "production Compose authority");
+  if (authority.schema !== "revival.production-compose-authority" || authority.schemaVersion !== 3) {
     fail("production Compose authority schema is unsupported", "PRODUCTION_STATE_INCOMPATIBLE");
   }
   assertExactKeys(authority.composeFiles, COMPOSE_AUTHORITY_INPUTS, "production Compose authority files");
@@ -2334,6 +2351,18 @@ function validateComposeAuthority(authority) {
     if (!SHA256.test(value.sha256)) fail(`production authority ${label} digest is invalid`, "PRODUCTION_STATE_INCOMPATIBLE");
   }
   validateProductionState(authority.productionState);
+  if (canonicalStringify(authority.productionState) !== canonicalStringify(LEGACY_PRODUCTION_STATE)) {
+    fail("production Compose authority differs from the exact live Carry resource contract",
+      "PRODUCTION_STATE_INCOMPATIBLE");
+  }
+  assertExactKeys(authority.forbiddenRenamedResources,
+    ["centerDataPaths", "networks", "projects", "stateTargets", "volumes"],
+    "forbidden renamed production resources");
+  if (canonicalStringify(authority.forbiddenRenamedResources) !==
+      canonicalStringify(FORBIDDEN_RENAMED_PRODUCTION_RESOURCES)) {
+    fail("production Compose authority lost the closed renamed-resource refusal set",
+      "PRODUCTION_STATE_INCOMPATIBLE");
+  }
   const effective = authority.effective;
   assertExactKeys(effective, ["activeServices", "centerData", "projectName", "protectedNetworks", "protectedVolumes", "resources", "serviceImages"], "effective production Compose authority");
   assertString(effective.projectName, /^[a-z0-9][a-z0-9._-]+$/u, "effective Compose project name", 128);
@@ -2390,6 +2419,16 @@ function validateComposeAuthority(authority) {
       canonicalStringify(volumes) !== canonicalStringify(authority.productionState.volumes) ||
       canonicalStringify(networks) !== canonicalStringify(authority.productionState.externalNetworks)) {
     fail("effective Compose model and production-state contract disagree", "PRODUCTION_STATE_INCOMPATIBLE");
+  }
+  const stateTargets = Object.values(effective.protectedVolumes)
+    .flatMap((entry) => entry.grants.map((grant) => grant.target));
+  if (authority.forbiddenRenamedResources.projects.includes(effective.projectName) ||
+      authority.forbiddenRenamedResources.centerDataPaths.includes(effective.centerData.source) ||
+      volumes.some((entry) => authority.forbiddenRenamedResources.volumes.includes(entry)) ||
+      networks.some((entry) => authority.forbiddenRenamedResources.networks.includes(entry)) ||
+      stateTargets.some((entry) => authority.forbiddenRenamedResources.stateTargets.includes(entry))) {
+    fail("effective Compose model selects a forbidden undeployed Cosmos resource",
+      "PRODUCTION_STATE_INCOMPATIBLE");
   }
   return authority;
 }

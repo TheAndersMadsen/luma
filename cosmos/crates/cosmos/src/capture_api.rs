@@ -141,7 +141,7 @@ pub(crate) fn principal_for(
     Ok(None)
 }
 
-const WEB_PROJECTION_TOKEN_HEADER: &str = "x-cosmos-web-projection-token";
+const WEB_PROJECTION_TOKEN_HEADER: &str = "x-carry-web-projection-token";
 
 fn valid_projection_token(headers: &axum::http::HeaderMap) -> bool {
     let Some(expected) = std::env::var("COSMOS_CENTER_PROJECTION_TOKEN")
@@ -940,7 +940,7 @@ async fn get_thumbnail(
         [
             ("content-type", "image/jpeg"),
             ("cache-control", "private, no-store"),
-            ("x-cosmos-projection", "opened"),
+            ("x-carry-projection", "opened"),
         ],
         jpeg,
     )
@@ -1032,7 +1032,7 @@ async fn get_file(
         [
             ("content-type", "image/jpeg"),
             ("cache-control", "private, no-store"),
-            ("x-cosmos-projection", "opened"),
+            ("x-carry-projection", "opened"),
         ],
         jpeg,
     )
@@ -1269,7 +1269,7 @@ mod tests {
                     .uri(uri)
                     .header(
                         crate::config::EDGE_PRINCIPAL_HEADER,
-                        format!("By=spiffe://cosmos.local/edge;Subject=\"CN={device_cn}\""),
+                        format!("By=spiffe://carry.local/edge;Subject=\"CN={device_cn}\""),
                     )
                     .body(Body::empty())
                     .unwrap(),
@@ -1697,7 +1697,7 @@ mod tests {
                     .uri(format!("/capture/memory/{}/thumbnail/0", record.uuid))
                     .header(
                         crate::config::EDGE_PRINCIPAL_HEADER,
-                        format!("By=spiffe://cosmos.local/edge;Subject=\"CN={device_cn}\""),
+                        format!("By=spiffe://carry.local/edge;Subject=\"CN={device_cn}\""),
                     )
                     .body(Body::empty())
                     .unwrap(),
@@ -1826,7 +1826,7 @@ mod tests {
                     .uri(uri)
                     .header(
                         crate::config::EDGE_PRINCIPAL_HEADER,
-                        format!("By=spiffe://cosmos.local/edge;Subject=\"CN={device_cn}\""),
+                        format!("By=spiffe://carry.local/edge;Subject=\"CN={device_cn}\""),
                     )
                     .body(Body::empty())
                     .unwrap(),

@@ -4,6 +4,16 @@ case "${BASH_SOURCE[0]}" in /*) SCRIPT_PATH="${BASH_SOURCE[0]}" ;; *) SCRIPT_PAT
 SCRIPT_DIR="${SCRIPT_PATH%/*}"
 builtin source "$SCRIPT_DIR/lib/local.sh"
 
+# The one-time Carry registrar is a separate operator command and entry point,
+# not an override flag accepted by `deploy production`.  It sources this shared
+# candidate transport so provider verification, snapshotting, resumable upload,
+# and the held-release bootstrap remain byte-identical.
+deploy_operation=deploy
+if ((${#BASH_SOURCE[@]} >= 2)) \
+  && [[ "${BASH_SOURCE[1]}" == "$SCRIPT_DIR/register-carry-baseline.sh" ]]; then
+  deploy_operation=register-carry-baseline
+fi
+
 dry_run=0 cleanup=0 confirm=0 json=0 min_free_gb=8 skip_smoke=0
 candidate_path="" candidate_id_arg=""
 usage() {
@@ -35,6 +45,10 @@ if ((dry_run)); then
   ((confirm == 0)) || usage_error "--dry-run cannot be combined with --confirm"
 else
   ((confirm == 1)) || usage_error "production deployment requires one literal --confirm"
+fi
+if [[ "$deploy_operation" == register-carry-baseline ]]; then
+  ((cleanup == 0 && skip_smoke == 0)) \
+    || usage_error "Carry baseline registration does not accept deployment cleanup or smoke overrides"
 fi
 
 # Candidate verification and the protected Carry-state comparison intentionally
@@ -142,6 +156,7 @@ import {
   EXPECTED_CANDIDATE_FILES,
   HOSTED_CANDIDATE_AUTHORITY,
   canonicalStringify,
+  productionStateForSnapshot,
   verifyCandidate,
 } from './platform/deploy/release-candidate.mjs';
 const [source, destination, requestedId] = process.argv.slice(2);
@@ -149,6 +164,11 @@ const verified = verifyCandidate(source, {expectedId: requestedId, enforceTruste
 if (path.basename(verified.root) !== verified.candidateId) throw new Error('candidate directory name does not match its internal candidate ID');
 if (canonicalStringify(verified.authority) !== canonicalStringify(HOSTED_CANDIDATE_AUTHORITY)) {
   throw new Error('local candidate is candidate/debug-only and cannot be deployed');
+}
+const reviewedProductionState = productionStateForSnapshot(process.cwd());
+assertLegacyProductionCompatible(reviewedProductionState);
+if (canonicalStringify(verified.productionState) !== canonicalStringify(reviewedProductionState)) {
+  throw new Error('candidate production-state differs from the freshly rederived reviewed source authority');
 }
 assertLegacyProductionCompatible(verified.productionState);
 assertReleaseProtocolManifestMatchesTrusted(verified.manifest);
@@ -215,12 +235,13 @@ total_bytes=$((archive_bytes + image_bytes))
 if ((dry_run)); then
   ((cleanup == 0)) || usage_error "--cleanup-project-images is unavailable with --dry-run"
   if ((json)); then
-    run_local_node - "$candidate_id" "$release_id" <<'NODE'
-const [candidateId,releaseId]=process.argv.slice(2);
-console.log(JSON.stringify({ok:true,dryRun:true,candidateId,releaseId,remoteContacted:false}));
+    run_local_node - "$candidate_id" "$release_id" "$deploy_operation" <<'NODE'
+const [candidateId,releaseId,operation]=process.argv.slice(2);
+console.log(JSON.stringify({ok:true,dryRun:true,candidateId,releaseId,operation,remoteContacted:false}));
 NODE
   else
-    printf 'dry-run passed locally: candidate=%s release=%s (remote not contacted)\n' "$candidate_id" "$release_id"
+    printf 'dry-run passed locally: operation=%s candidate=%s release=%s (remote not contacted)\n' \
+      "$deploy_operation" "$candidate_id" "$release_id"
   fi
   exit 0
 fi
@@ -267,6 +288,7 @@ deployment_status=0
 run_verified_release_deploy \
   "$release_id" "$incoming" "$final/release.tar.gz" "$final/release.manifest.json" \
   "$final/verify-release.py" "$deployment_id" "$min_free_gb" "$total_bytes" "$cleanup" "$json" \
-  "$skip_smoke" "$candidate_id" "$final" "$deployment_authority_sha256" || deployment_status=$?
+  "$skip_smoke" "$candidate_id" "$final" "$deployment_authority_sha256" \
+  "$deploy_operation" || deployment_status=$?
 stop_remote_upload_lease || deployment_status=1
 exit "$deployment_status"

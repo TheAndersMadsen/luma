@@ -7,6 +7,7 @@ node_modules
 !.env.example
 *.log
 .DS_Store
+.carry-channel-key.json*
 .cosmos-channel-key.json*
 coverage
 docs

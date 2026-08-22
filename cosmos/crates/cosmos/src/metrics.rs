@@ -52,18 +52,18 @@ use tower::{Layer, Service};
 const TEXT_FORMAT: &str = "text/plain; version=0.0.4; charset=utf-8";
 
 /// gRPC calls served, labelled `service`, `method`, `outcome`.
-const RPC_REQUESTS: &str = "cosmos_rpc_requests_total";
+const RPC_REQUESTS: &str = "carry_rpc_requests_total";
 /// End-to-end handler latency for the same calls.
-const RPC_DURATION: &str = "cosmos_rpc_duration_seconds";
+const RPC_DURATION: &str = "carry_rpc_duration_seconds";
 /// Assistant turns, labelled `outcome`. Fed by the engine; see the module note.
-const TURNS: &str = "cosmos_assistant_turns_total";
+const TURNS: &str = "carry_assistant_turns_total";
 /// Tool invocations the engine made, labelled `tool` and `outcome`.
-const TOOL_CALLS: &str = "cosmos_assistant_tool_calls_total";
+const TOOL_CALLS: &str = "carry_assistant_tool_calls_total";
 /// Language-model round trips, labelled `model`.
-const MODEL_LATENCY: &str = "cosmos_model_latency_seconds";
+const MODEL_LATENCY: &str = "carry_model_latency_seconds";
 /// Failures the server chose to report, labelled `kind` — the same `kind` the
 /// matching `tracing` event carries. See [`record_error`].
-const ERRORS: &str = "cosmos_errors_total";
+const ERRORS: &str = "carry_errors_total";
 
 const HELP: &[(&str, &str)] = &[
     (
@@ -551,10 +551,10 @@ pub fn render() -> String {
             out.push('\n');
         }
     }
-    out.push_str("# HELP cosmos_metrics_series_dropped_total Series refused by the per-family cardinality cap.\n");
-    out.push_str("# TYPE cosmos_metrics_series_dropped_total counter\n");
+    out.push_str("# HELP carry_metrics_series_dropped_total Series refused by the per-family cardinality cap.\n");
+    out.push_str("# TYPE carry_metrics_series_dropped_total counter\n");
     out.push_str(&format!(
-        "cosmos_metrics_series_dropped_total {}\n",
+        "carry_metrics_series_dropped_total {}\n",
         registry.dropped.load(Ordering::Relaxed)
     ));
     out
@@ -780,7 +780,7 @@ mod tests {
         let before = render();
         let served = series(
             &before,
-            "cosmos_rpc_requests_total{service=\"humane.featureflags.FeatureFlagsService\",\
+            "carry_rpc_requests_total{service=\"humane.featureflags.FeatureFlagsService\",\
              method=\"GetFlags\",outcome=\"ok\"}",
         )
         .unwrap_or(0);
@@ -814,7 +814,7 @@ mod tests {
 
         let after = series(
             &scrape,
-            "cosmos_rpc_requests_total{service=\"humane.featureflags.FeatureFlagsService\",\
+            "carry_rpc_requests_total{service=\"humane.featureflags.FeatureFlagsService\",\
              method=\"GetFlags\",outcome=\"ok\"}",
         );
         assert_eq!(
@@ -824,20 +824,20 @@ mod tests {
         );
         assert!(
             scrape.contains(
-                "cosmos_rpc_requests_total{service=\"humane.account.UserInformationService\",\
+                "carry_rpc_requests_total{service=\"humane.account.UserInformationService\",\
                  method=\"GetUserPersonalDetails\",outcome=\"unimplemented\"}"
             ),
             "a rejected call must be counted under its gRPC status, not as ok; got:\n{scrape}"
         );
         assert!(
             scrape.contains(
-                "cosmos_rpc_duration_seconds_count{service=\"humane.featureflags.\
+                "carry_rpc_duration_seconds_count{service=\"humane.featureflags.\
                  FeatureFlagsService\",method=\"GetFlags\"}"
             ),
             "handler latency must be recorded; got:\n{scrape}"
         );
         assert!(
-            scrape.contains("# TYPE cosmos_rpc_duration_seconds histogram"),
+            scrape.contains("# TYPE carry_rpc_duration_seconds histogram"),
             "the histogram family must declare its type; got:\n{scrape}"
         );
 
@@ -856,12 +856,12 @@ mod tests {
                 .as_array()
                 .expect("names is an array")
                 .iter()
-                .any(|n| n == "cosmos_rpc_duration_seconds"),
+                .any(|n| n == "carry_rpc_duration_seconds"),
             "the served family must be listed at /manage/metrics; got {list}"
         );
 
         let metric: serde_json::Value = reqwest::get(format!(
-            "http://{http_address}/manage/metrics/cosmos_rpc_duration_seconds"
+            "http://{http_address}/manage/metrics/carry_rpc_duration_seconds"
         ))
         .await
         .expect("read one metric")
@@ -927,7 +927,7 @@ mod tests {
         record_error("metrics_test_observed_kind");
         let scrape = render();
         assert!(
-            scrape.contains("cosmos_errors_total{kind=\"metrics_test_observed_kind\"}"),
+            scrape.contains("carry_errors_total{kind=\"metrics_test_observed_kind\"}"),
             "an observed error kind must appear; got:\n{scrape}"
         );
         assert!(
@@ -940,14 +940,14 @@ mod tests {
     /// let a peer write whole metric lines into an operator's monitoring.
     #[tokio::test]
     async fn a_label_value_cannot_forge_a_metric_line() {
-        record_error("hostile\"} cosmos_rpc_requests_total{forged=\"yes");
+        record_error("hostile\"} carry_rpc_requests_total{forged=\"yes");
         let scrape = render();
         assert!(
             !scrape.contains("forged=\"yes\"}"),
             "an escaped label must not close its own label list; got:\n{scrape}"
         );
         assert!(
-            scrape.contains("cosmos_errors_total{kind=\"hostile\\\"} "),
+            scrape.contains("carry_errors_total{kind=\"hostile\\\"} "),
             "the quote must be escaped, not dropped, so the value stays readable; \
              got:\n{scrape}"
         );
@@ -967,7 +967,7 @@ mod tests {
         let before = registry().dropped.load(Ordering::Relaxed);
         for index in 0..(MAX_SERIES_PER_FAMILY + 8) {
             increment(
-                "cosmos_metrics_test_cap_total",
+                "carry_metrics_test_cap_total",
                 &[("n", &index.to_string())],
             );
         }
@@ -980,7 +980,7 @@ mod tests {
             .counters
             .read()
             .expect("registry")
-            .get("cosmos_metrics_test_cap_total")
+            .get("carry_metrics_test_cap_total")
             .map(HashMap::len)
             .unwrap_or(0);
         assert_eq!(
@@ -989,7 +989,7 @@ mod tests {
              becomes a memory leak"
         );
         assert!(
-            render().contains("cosmos_metrics_series_dropped_total "),
+            render().contains("carry_metrics_series_dropped_total "),
             "the drop counter must always be published, including as a zero — it \
              has a producer, so zero is a measurement"
         );

@@ -24,6 +24,6 @@
 -- wearer's current privacy settings and push state.
 --
 -- Idempotent by construction: a second run matches nothing.
-DELETE FROM cosmos_account_blob
+DELETE FROM carry_account_blob
 WHERE kind = 'device_status'
   AND strpos(principal, '#device:') = 0;

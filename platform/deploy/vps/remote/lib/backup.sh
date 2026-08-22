@@ -6,19 +6,33 @@
 # the constants and siblings the loader defines before any of them runs.
 
 assert_durable_inputs() {
-  local volume
+  local volume network_name
   for volume in "$STATE_VOLUME" "$PG_VOLUME" "$PROMETHEUS_VOLUME" "$GRAFANA_VOLUME"; do
     volume_exists "$volume" || fail "required durable volume is missing: $volume"
   done
+  network_name="$(docker network inspect --format '{{.Name}}' "$LOCAL_MODEL_NETWORK" 2>/dev/null)" \
+    || fail "required local-model network is missing: $LOCAL_MODEL_NETWORK"
+  [[ "$network_name" == "$LOCAL_MODEL_NETWORK" ]] \
+    || fail "local-model network identity differs from the reviewed Carry resource"
   [[ -d "$CENTER_DATA_DIR" && ! -L "$CENTER_DATA_DIR" ]] \
     || fail "Center data directory is missing or unsafe"
 }
 
 active_read_only_security_root() {
   local service="$1" first_destination="$2" second_destination="$3"
-  local first_name="$4" second_name="$5" canonical_root="$6" legacy_root="$7" label="$8"
-  local container first_source second_source root
+  local legacy_first_destination="$4" legacy_second_destination="$5"
+  local first_name="$6" second_name="$7" canonical_root="$8" legacy_root="$9" label="${10}"
+  local container project first_source second_source root
   container="$(active_service_container "$service")"
+  project="$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' "$container")"
+  case "$project" in
+    "$PROJECT") ;;
+    "$LEGACY_PROJECT")
+      first_destination="$legacy_first_destination"
+      second_destination="$legacy_second_destination"
+      ;;
+    *) fail "active $label container is outside the reviewed production projects" ;;
+  esac
   first_source="$(docker inspect "$container" | python3 -c '
 import json,sys
 destination=sys.argv[1]; body=json.load(sys.stdin)
@@ -38,8 +52,8 @@ print(mounts[0].get("Source", ""))
     && "$(dirname -- "$first_source")" == "$(dirname -- "$second_source")" ]] \
     || fail "active $label mounts do not share the reviewed root"
   root="$(dirname -- "$first_source")"
-  [[ "$root" == "$canonical_root" || "$root" == "$legacy_root" ]] \
-    || fail "active $label root is outside the reviewed canonical and legacy locations"
+  [[ "$canonical_root" == "$legacy_root" && "$root" == "$canonical_root" ]] \
+    || fail "active $label root is not the exact deployed Carry location"
   sudo -n test -d "$root" && ! sudo -n test -L "$root" \
     && sudo -n test -f "$first_source" && ! sudo -n test -L "$first_source" \
     && sudo -n test -f "$second_source" && ! sudo -n test -L "$second_source" \
@@ -49,35 +63,137 @@ print(mounts[0].get("Source", ""))
 
 active_attestation_root() {
   active_read_only_security_root ai-bus /etc/cosmos-attest/ca.crt /etc/cosmos-attest/ca.key \
-    ca.crt ca.key "$PRIVATE_DIR/attest" /home/anders/cosmos-attest attestation
+    /etc/carry-attest/ca.crt /etc/carry-attest/ca.key \
+    ca.crt ca.key "$PRODUCTION_ATTEST_DIR" "$LEGACY_ATTEST_DIR" attestation
 }
 
 active_device_user_root() {
   active_read_only_security_root provisioning /etc/cosmos-duc/duc-ca.crt /etc/cosmos-duc/duc-ca.key \
-    duc-ca.crt duc-ca.key "$PRIVATE_DIR/duc" /home/anders/cosmos-duc DeviceUser
+    /etc/carry-duc/duc-ca.crt /etc/carry-duc/duc-ca.key \
+    duc-ca.crt duc-ca.key "$PRODUCTION_DUC_DIR" "$LEGACY_DUC_DIR" DeviceUser
+}
+
+active_edge_security_root() {
+  local container project destination source expected
+  container="$(active_service_container edge)"
+  project="$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' "$container")"
+  case "$project" in "$PROJECT"|"$LEGACY_PROJECT") ;; *)
+    fail "active edge container is outside the reviewed production projects" ;;
+  esac
+  while IFS=$'\t' read -r destination expected; do
+    source="$(docker inspect "$container" | python3 -c '
+import json,sys
+destination=sys.argv[1]; body=json.load(sys.stdin)
+mounts=[item for item in body[0].get("Mounts",[]) if item.get("Destination")==destination]
+assert len(mounts)==1 and mounts[0].get("Type")=="bind" and mounts[0].get("RW") is False
+print(mounts[0].get("Source", ""))
+' "$destination")" || fail "active edge certificate mount is not one reviewed read-only bind"
+    [[ "$source" == "$expected" ]] \
+      || fail "active edge certificate mount does not use the exact deployed Carry inode path"
+  done <<EOF
+$(if [[ "$project" == "$LEGACY_PROJECT" ]]; then
+    printf '/etc/carry-edge/certs/server.crt\t%s/server.crt\n' "$PRODUCTION_EDGE_CERT_DIR"
+    printf '/etc/carry-edge/certs/server.key\t%s/server.key\n' "$PRODUCTION_EDGE_CERT_DIR"
+    printf '/etc/carry-edge/certs/api-client-ca.crt\t%s/api-client-ca.crt\n' "$PRODUCTION_EDGE_CERT_DIR"
+    printf '/etc/carry-edge/certs/onboarding-client-ca.crt\t%s/onboarding-client-ca.crt\n' "$PRODUCTION_EDGE_CERT_DIR"
+  else
+    printf '/etc/cosmos-edge/certs/server.crt\t%s/server.crt\n' "$PRODUCTION_EDGE_CERT_DIR"
+    printf '/etc/cosmos-edge/certs/server.key\t%s/server.key\n' "$PRODUCTION_EDGE_CERT_DIR"
+    printf '/etc/cosmos-edge/certs/api-client-ca.crt\t%s/api-client-ca.crt\n' "$PRODUCTION_EDGE_CERT_DIR"
+    printf '/etc/cosmos-edge/certs/onboarding-client-ca.crt\t%s/onboarding-client-ca.crt\n' "$PRODUCTION_EDGE_CERT_DIR"
+  fi)
+EOF
+  printf '%s\n' "$LEGACY_EDGE_DIR"
 }
 
 assert_active_durable_mounts() {
-  local service destination expected container actual type
+  local service destination expected container type project ai_bus network_attached
   while IFS=$'\t' read -r service destination expected type; do
     container="$(active_service_container "$service")"
-    actual="$(docker inspect --format "{{range .Mounts}}{{if eq .Destination \"$destination\"}}{{if eq \"$type\" \"volume\"}}{{.Name}}{{else}}{{.Source}}{{end}}{{end}}{{end}}" "$container")"
-    [[ "$actual" == "$expected" ]] || fail "active $service mount at $destination is not the reviewed durable source"
+    project="$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' "$container")"
+    [[ "$project" == "$PROJECT" || "$project" == "$LEGACY_PROJECT" ]] \
+      || fail "active $service container is outside the reviewed production projects"
+    [[ "$destination" != '@state@' ]] || destination=/var/lib/carry
+    docker inspect "$container" | python3 -c '
+import json,sys
+destination,kind,expected=sys.argv[1:]
+body=json.load(sys.stdin)
+assert isinstance(body,list) and len(body)==1
+matches=[item for item in body[0].get("Mounts",[]) if item.get("Destination")==destination]
+assert len(matches)==1
+mount=matches[0]
+assert mount.get("Type")==kind and mount.get("RW") is True
+assert mount.get("Name" if kind=="volume" else "Source")==expected
+' "$destination" "$type" "$expected" \
+      || fail "active $service mount at $destination is not the one exact writable Carry source"
   done <<EOF
 postgres	/var/lib/postgresql/data	$PG_VOLUME	volume
-connectivity	/var/lib/cosmos	$STATE_VOLUME	volume
-ai-bus	/var/lib/cosmos	$STATE_VOLUME	volume
-account	/var/lib/cosmos	$STATE_VOLUME	volume
-contacts	/var/lib/cosmos	$STATE_VOLUME	volume
-feature-flags	/var/lib/cosmos	$STATE_VOLUME	volume
-notable-events	/var/lib/cosmos	$STATE_VOLUME	volume
-provisioning	/var/lib/cosmos	$STATE_VOLUME	volume
+connectivity	@state@	$STATE_VOLUME	volume
+ai-bus	@state@	$STATE_VOLUME	volume
+account	@state@	$STATE_VOLUME	volume
+contacts	@state@	$STATE_VOLUME	volume
+feature-flags	@state@	$STATE_VOLUME	volume
+notable-events	@state@	$STATE_VOLUME	volume
+provisioning	@state@	$STATE_VOLUME	volume
 prometheus	/prometheus	$PROMETHEUS_VOLUME	volume
 grafana	/var/lib/grafana	$GRAFANA_VOLUME	volume
 center	/data	$CENTER_DATA_DIR	bind
 EOF
+  ai_bus="$(active_service_container ai-bus)"
+  network_attached="$(docker inspect --format "{{if index .NetworkSettings.Networks \"$LOCAL_MODEL_NETWORK\"}}$LOCAL_MODEL_NETWORK{{end}}" "$ai_bus")"
+  [[ "$network_attached" == "$LOCAL_MODEL_NETWORK" ]] \
+    || fail "active ai-bus is not attached to the reviewed Carry local-model network"
   active_attestation_root >/dev/null
   active_device_user_root >/dev/null
+  active_edge_security_root >/dev/null
+  assert_no_alternate_security_writers
+}
+
+assert_no_alternate_security_writers() {
+  local -a containers=()
+  mapfile -t containers < <(docker ps -aq --no-trunc)
+  ((${#containers[@]} > 0)) || fail "production container inventory is empty"
+  docker inspect "${containers[@]}" | python3 -c '
+import json,os,sys
+canonical,legacy=sys.argv[1:]
+body=json.load(sys.stdin)
+assert isinstance(body,list) and body
+roots=("/home/anders/carry-edge/certs","/home/anders/carry-attest","/home/anders/carry-duc")
+files={
+    "edge":("server.crt","server.key","api-client-ca.crt","onboarding-client-ca.crt"),
+    "ai-bus":("ca.crt","ca.key"),
+    "provisioning":("duc-ca.crt","duc-ca.key"),
+}
+root_for={"edge":roots[0],"ai-bus":roots[1],"provisioning":roots[2]}
+target_root={
+    (canonical,"edge"):"/etc/cosmos-edge/certs", (legacy,"edge"):"/etc/carry-edge/certs",
+    (canonical,"ai-bus"):"/etc/cosmos-attest", (legacy,"ai-bus"):"/etc/carry-attest",
+    (canonical,"provisioning"):"/etc/cosmos-duc", (legacy,"provisioning"):"/etc/carry-duc",
+}
+allowed=set()
+for (project,service),destination_root in target_root.items():
+    for name in files[service]:
+        allowed.add((project,service,root_for[service]+"/"+name,destination_root+"/"+name))
+
+def overlaps(source,root):
+    try: common=os.path.commonpath((source,root))
+    except ValueError: return False
+    return common in (source,root)
+
+for container in body:
+    labels=(container.get("Config") or {}).get("Labels") or {}
+    project=labels.get("com.docker.compose.project")
+    service=labels.get("com.docker.compose.service")
+    for mount in container.get("Mounts") or []:
+        if mount.get("Type")!="bind": continue
+        source=mount.get("Source")
+        if not isinstance(source,str) or not source.startswith("/"): continue
+        if not any(overlaps(source,root) for root in roots): continue
+        candidate=(project,service,source,mount.get("Destination"))
+        assert candidate in allowed
+        assert mount.get("RW") is False
+' "$PROJECT" "$LEGACY_PROJECT" \
+    || fail "a container has an unreviewed or writable path to deployed Carry security material"
 }
 
 running_durable_writer_names() {
@@ -424,9 +540,9 @@ database_count() {
   local container="$1" database="$2" table="$3"
   [[ "$table" =~ ^[a-z_]+$ ]] || fail "invalid invariant table"
   local exists
-  exists="$(docker exec "$container" psql -v ON_ERROR_STOP=1 -U cosmos -d "$database" -Atc "select to_regclass('public.$table') is not null" | tr -d '[:space:]')"
+  exists="$(docker exec "$container" psql -v ON_ERROR_STOP=1 -U "$LEGACY_DATABASE_USER" -d "$database" -Atc "select to_regclass('public.$table') is not null" | tr -d '[:space:]')"
   if [[ "$exists" == t ]]; then
-    docker exec "$container" psql -v ON_ERROR_STOP=1 -U cosmos -d "$database" -Atc "select count(*) from $table" | tr -d '[:space:]'
+    docker exec "$container" psql -v ON_ERROR_STOP=1 -U "$LEGACY_DATABASE_USER" -d "$database" -Atc "select count(*) from $table" | tr -d '[:space:]'
   else
     printf '%s\n' -1
   fi
@@ -437,9 +553,9 @@ write_invariants() {
   : >"$output"
   printf 'contract.schema\t%s\n' "$BACKUP_INVARIANT_KIND" >>"$output"
   printf 'contract.version\t%s\n' "$BACKUP_INVARIANT_VERSION" >>"$output"
-  for table in cosmos_channel_key cosmos_contact cosmos_contact_encrypted cosmos_contact_tombstone \
-    cosmos_memory cosmos_note cosmos_event cosmos_device_account; do
-    count="$(database_count "$container" cosmos "$table")"
+  for table in carry_channel_key carry_contact carry_contact_encrypted carry_contact_tombstone \
+    carry_memory carry_note carry_event carry_device_account; do
+    count="$(database_count "$container" "$LEGACY_DATABASE_NAME" "$table")"
     printf 'db.%s\t%s\n' "$table" "$count" >>"$output"
   done
   printf 'state.files\t%s\n' "$(state_file_count)" >>"$output"
@@ -549,9 +665,9 @@ import re,sys
 path,kind,version=sys.argv[1:]
 expected={
     "contract.schema","contract.version",
-    "db.cosmos_channel_key","db.cosmos_contact","db.cosmos_contact_encrypted",
-    "db.cosmos_contact_tombstone","db.cosmos_memory","db.cosmos_note",
-    "db.cosmos_event","db.cosmos_device_account","state.files","state.bytes",
+    "db.carry_channel_key","db.carry_contact","db.carry_contact_encrypted",
+    "db.carry_contact_tombstone","db.carry_memory","db.carry_note",
+    "db.carry_event","db.carry_device_account","state.files","state.bytes",
     "center.channel_key.presence","center.channel_key.sha256",
     "center.channel_key.mode","center.channel_key.owner",
 }
@@ -740,7 +856,7 @@ backup_optional_artifacts() {
     postgres-data.tsv.columns postgres-data.after-physical.tsv.columns \
     postgres-data.physical-restored.tsv.columns postgres-data.restored.tsv.columns \
     postgres-data.unprojected.tsv postgres-data.unprojected.tsv.columns \
-    postgres-schema.tsv.cosmos.sql postgres-schema.tsv.keycloak.sql
+    postgres-schema.tsv.carry.sql postgres-schema.tsv.keycloak.sql
 }
 
 write_backup_artifact_manifest() {
@@ -945,7 +1061,7 @@ PY
 # the restore, the round trip?". Both sides of that comparison are the same schema
 # at the same instant, so there is nothing additive to project away, and projecting
 # anyway makes the check BLIND to every column the projection excludes — a
-# corrupted `cosmos_memory.thumbnail_count` would round-trip unnoticed.
+# corrupted `carry_memory.thumbnail_count` would round-trip unnoticed.
 #
 # So a backup whose authoritative manifest is projected keeps an unprojected one
 # beside it, and every fidelity comparison resolves through here. For an

@@ -125,7 +125,7 @@ fn assignment(key: &str, val: Val) -> FeatureFlagAssignment {
     FeatureFlagAssignment {
         // Stable, opaque, server-side; derived from the key so it is
         // deterministic across restarts without inventing external state.
-        flag_id: format!("cosmos-clone/{key}"),
+        flag_id: format!("carry-clone/{key}"),
         flag_name: key.to_owned(),
         val: Some(val),
     }

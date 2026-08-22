@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const PYTHON_HELPER = path.join(__dirname, 'rooted-source-helper.py');
-const ROOTED_SOURCE_HELPER_SHA256 = 'b3e1e1d69cb502dc4346f4a9ef1ab8c35bd8f31bac705ef4410fe9169fc1346c';
+const ROOTED_SOURCE_HELPER_SHA256 = 'b7e00634dba4d847122c2442a76355495373c7b07781950b9affaab83708a41e';
 const MAX_ROOTED_SOURCE_HELPER_BYTES = 64 * 1024;
 
 function statReceipt(stat) {
@@ -651,6 +651,14 @@ function readStableRootedEntries(root, relativePaths, label, {
   let rootReceipt = expectedRoot;
   const visit = (relativePath) => {
     if (seen.has(relativePath)) return;
+    // A pruned boundary is outside the captured model, including the boundary
+    // directory itself. Recording its inode/ctime while omitting its children
+    // made `.git` metadata an accidental source-policy input.
+    if (relativePath !== '.' && [...pruned].some((boundary) =>
+      relativePath === boundary || relativePath.startsWith(`${boundary}/`))) {
+      seen.add(relativePath);
+      return;
+    }
     const entry = readStableRootedEntry(root, relativePath, label, rootReceipt);
     if (!rootReceipt) {
       const { path: _rootPath, ...capturedRoot } = entry.receipt.ancestry[0];
@@ -658,7 +666,7 @@ function readStableRootedEntries(root, relativePaths, label, {
     }
     seen.add(relativePath);
     entries.push(entry);
-    if (walk && !pruned.has(relativePath) && entry.kind === 'directory') {
+    if (walk && entry.kind === 'directory') {
       for (const name of entry.names) {
         visit(relativePath === '.' ? name : `${relativePath}/${name}`);
       }
@@ -667,6 +675,13 @@ function readStableRootedEntries(root, relativePaths, label, {
   for (const relativePath of [...new Set(relativePaths)].sort((left, right) =>
     left.localeCompare(right, 'en'))) {
     visit(relativePath);
+  }
+  if (entries.length === 0) {
+    // Match the sealed helper: an all-pruned request returns no entries but
+    // still proves which canonical root was consulted.
+    const rootAuthority = readStableRootedEntry(root, '.', label, expectedRoot);
+    const { path: _rootPath, ...capturedRoot } = rootAuthority.receipt.ancestry[0];
+    rootReceipt = capturedRoot;
   }
   return { rootReceipt, entries };
 }

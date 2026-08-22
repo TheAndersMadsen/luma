@@ -60,7 +60,7 @@ type FlagDelivery = "device_fetched" | "push_queued" | "next_sync";
 async function successfulGetFlagsCount(): Promise<number | null> {
   if (!FEATURE_FLAG_METRICS) return null;
   const response = await fetch(
-    `${FEATURE_FLAG_METRICS}/manage/metrics/cosmos_rpc_requests_total`,
+    `${FEATURE_FLAG_METRICS}/manage/metrics/carry_rpc_requests_total`,
     { cache: "no-store" },
   ).catch(() => null);
   if (!response?.ok) return null;

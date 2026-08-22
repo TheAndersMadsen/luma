@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
  * finding lives: the device dials every clone gateway at <host>:443, and a name
  * the :443 stream does not route to the mTLS edge is not a 404 — the ClientHello
  * dies before a request line exists, so nginx, Envoy and Cosmos all write
- * nothing. That is how api.cosmos.humane.cloud went unserved indefinitely. The
+ * nothing. That is how api.carry.humane.cloud went unserved indefinitely. The
  * runtime probe for it was explicitly NOT implemented; assert_edge_reachable is
  * its stated substitute ("the strongest source-level substitute available").
  *
@@ -68,7 +68,7 @@ function envoyTemplate(serverNameGroups) {
       "          - name: envoy.access_loggers.stdout",
       "          route_config:",
       "            request_headers_to_add:",
-      "            - header: { key: x-cosmos-edge-proof, value: @@EDGE_TOKEN@@ }",
+      "            - header: { key: x-carry-edge-proof, value: @@EDGE_TOKEN@@ }",
     ].join("\n"))
     .join("\n");
   return [
@@ -128,8 +128,8 @@ function render({ template, environment, output }) {
 }
 
 test("[implemented] the renderer accepts an Envoy edge the public :443 stream fully routes", (context) => {
-  const served = [["onboarding.cosmos.humane.cloud", "cosmos-edge"], ["api.cosmos.humane.cloud"]];
-  const routed = ["onboarding.cosmos.humane.cloud", "cosmos-edge", "api.cosmos.humane.cloud"];
+  const served = [["onboarding.carry.humane.cloud", "carry-edge"], ["api.carry.humane.cloud"]];
+  const routed = ["onboarding.carry.humane.cloud", "carry-edge", "api.carry.humane.cloud"];
   const prepared = fixture(context, "edge-render-agree", { served, routed });
   const result = render(prepared);
   assert.equal(result.status, 0, `renderer refused an agreeing pair: ${result.stderr}`);
@@ -152,12 +152,12 @@ test("[implemented] the renderer refuses an SNI Envoy serves that :443 does not 
    * request, because no request is ever framed.
    */
   const prepared = fixture(context, "edge-render-unrouted", {
-    served: [["onboarding.cosmos.humane.cloud"], ["api.cosmos.humane.cloud", "eastus.cosmos.humane.cloud"]],
-    routed: ["onboarding.cosmos.humane.cloud", "api.cosmos.humane.cloud"],
+    served: [["onboarding.carry.humane.cloud"], ["api.carry.humane.cloud", "eastus.carry.humane.cloud"]],
+    routed: ["onboarding.carry.humane.cloud", "api.carry.humane.cloud"],
   });
   const result = render(prepared);
   assert.notEqual(result.status, 0, "an unrouted filter chain must not render");
-  assert.match(result.stderr, /Envoy serves but :443 does not route: eastus\.cosmos\.humane\.cloud/u);
+  assert.match(result.stderr, /Envoy serves but :443 does not route: eastus\.carry\.humane\.cloud/u);
   assert.equal(fs.existsSync(prepared.output), false, "a refused render must not leave a configuration behind");
 });
 
@@ -166,12 +166,12 @@ test("[implemented] the renderer refuses an SNI :443 routes that Envoy does not 
   // Envoy has no filter chain, so the device reaches Envoy and is dropped during
   // the handshake — the same zero-evidence symptom, one hop later.
   const prepared = fixture(context, "edge-render-unserved", {
-    served: [["onboarding.cosmos.humane.cloud"], ["api.cosmos.humane.cloud"]],
-    routed: ["onboarding.cosmos.humane.cloud", "api.cosmos.humane.cloud", "eastus-1.cosmos.humane.cloud"],
+    served: [["onboarding.carry.humane.cloud"], ["api.carry.humane.cloud"]],
+    routed: ["onboarding.carry.humane.cloud", "api.carry.humane.cloud", "eastus-1.carry.humane.cloud"],
   });
   const result = render(prepared);
   assert.notEqual(result.status, 0, "an unserved routed name must not render");
-  assert.match(result.stderr, /:443 routes but Envoy does not serve: eastus-1\.cosmos\.humane\.cloud/u);
+  assert.match(result.stderr, /:443 routes but Envoy does not serve: eastus-1\.carry\.humane\.cloud/u);
   assert.equal(fs.existsSync(prepared.output), false);
 });
 
@@ -187,7 +187,7 @@ test("[implemented] an SNI mapped to the local backend does not count as routed 
   fs.mkdirSync(path.join(work, "edge/envoy"), { recursive: true });
   fs.mkdirSync(path.join(work, "edge/nginx"), { recursive: true });
   const template = path.join(work, "edge/envoy/envoy.yaml.tpl");
-  fs.writeFileSync(template, envoyTemplate([["onboarding.cosmos.humane.cloud"], ["api.cosmos.humane.cloud"]]));
+  fs.writeFileSync(template, envoyTemplate([["onboarding.carry.humane.cloud"], ["api.carry.humane.cloud"]]));
   fs.writeFileSync(
     path.join(work, "edge/nginx", streamTemplateName),
     [
@@ -196,8 +196,8 @@ test("[implemented] an SNI mapped to the local backend does not count as routed 
       "",
       "    default                          ai_pin_revival_local_tls;",
       "",
-      "    onboarding.cosmos.humane.cloud    ai_pin_revival_device_edge;",
-      "    api.cosmos.humane.cloud           ai_pin_revival_local_tls;",
+      "    onboarding.carry.humane.cloud    ai_pin_revival_device_edge;",
+      "    api.carry.humane.cloud           ai_pin_revival_local_tls;",
       "}",
     ].join("\n"),
   );
@@ -205,7 +205,7 @@ test("[implemented] an SNI mapped to the local backend does not count as routed 
   fs.writeFileSync(environment, `COSMOS_EDGE_TOKEN=${token}\n`, { mode: 0o600 });
   const result = render({ template, environment, output: path.join(work, "rendered/envoy.yaml") });
   assert.notEqual(result.status, 0, "a gateway parked on the local TLS backend is not routed to the edge");
-  assert.match(result.stderr, /Envoy serves but :443 does not route: api\.cosmos\.humane\.cloud/u);
+  assert.match(result.stderr, /Envoy serves but :443 does not route: api\.carry\.humane\.cloud/u);
 });
 
 test("[implemented] the renderer refuses when the stream template is absent or has no SNI map", (context) => {
@@ -214,7 +214,7 @@ test("[implemented] the renderer refuses when the stream template is absent or h
   // set, which compares unequal and happens to fail — or, if the comparison were
   // ever relaxed, compares as "nothing to check" and passes.
   const missing = fixture(context, "edge-render-missing", {
-    served: [["onboarding.cosmos.humane.cloud"], ["api.cosmos.humane.cloud"]],
+    served: [["onboarding.carry.humane.cloud"], ["api.carry.humane.cloud"]],
     routed: [],
     writeStream: false,
   });
@@ -223,7 +223,7 @@ test("[implemented] the renderer refuses when the stream template is absent or h
   assert.match(absent.stderr, /device edge stream template is missing or unsafe/u);
 
   const unmapped = fixture(context, "edge-render-unmapped", {
-    served: [["onboarding.cosmos.humane.cloud"], ["api.cosmos.humane.cloud"]],
+    served: [["onboarding.carry.humane.cloud"], ["api.carry.humane.cloud"]],
     routed: [],
     includeMap: false,
   });

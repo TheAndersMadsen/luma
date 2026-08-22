@@ -9,9 +9,9 @@ prepare_private_copies() {
   mkdir -p -- "$PRIVATE_DIR/imported"
   chmod 700 "$PRIVATE_DIR/imported"
 
-  copy_file_once /home/anders/humane-cosmos-clone/.env "$RUNTIME_ENV" || true
-  copy_file_once /home/anders/cosmos-center.env "$CENTER_ENV" || true
-  copy_file_once /home/anders/cosmos-backends.env "$PRIVATE_DIR/imported/cosmos-backends.env" || true
+  copy_file_once "$LEGACY_RUNTIME_ENV" "$RUNTIME_ENV" || true
+  copy_file_once "$LEGACY_CENTER_ENV" "$CENTER_ENV" || true
+  copy_file_once "$LEGACY_BACKENDS_ENV" "$PRIVATE_DIR/imported/cosmos-backends.env" || true
 
   # Provider credentials are intentionally scoped to ai-bus. Preserve the old
   # file byte-for-byte in imported/, then derive two canonical files without
@@ -23,7 +23,7 @@ prepare_private_copies() {
         /^[[:space:]]*$/ { print; next }
         {
           name=$0; sub(/=.*/, "", name); gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
-          if (name ~ /^(AZURE_|COSMOS_AZURE_|COSMOS_LLM_|COSMOS_OPENROUTER_API_KEY$|COSMOS_INTERSTITIAL_|COSMOS_SERPAPI_KEY$|COSMOS_GOOGLE_MAPS_KEY$|COSMOS_PIRATE_WEATHER_KEY$|COSMOS_WOLFRAM_APP_ID$|COSMOS_PPLX_|COSMOS_MUSICBRAINZ_|COSMOS_SHOPPING_|OPENAI_|OPENROUTER_)/) print
+          if (name ~ /^(AZURE_|(CARRY|COSMOS)_AZURE_|(CARRY|COSMOS)_LLM_|(CARRY|COSMOS)_OPENROUTER_API_KEY$|(CARRY|COSMOS)_INTERSTITIAL_|(CARRY|COSMOS)_SERPAPI_KEY$|(CARRY|COSMOS)_GOOGLE_MAPS_KEY$|(CARRY|COSMOS)_PIRATE_WEATHER_KEY$|(CARRY|COSMOS)_WOLFRAM_APP_ID$|(CARRY|COSMOS)_PPLX_|(CARRY|COSMOS)_MUSICBRAINZ_|(CARRY|COSMOS)_SHOPPING_|OPENAI_|OPENROUTER_)/) print
         }
       ' "$source" >"$PROVIDER_ENV"
       chmod 600 "$PROVIDER_ENV"
@@ -34,7 +34,7 @@ prepare_private_copies() {
         /^[[:space:]]*$/ { print; next }
         {
           name=$0; sub(/=.*/, "", name); gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
-          if (name !~ /^(AZURE_|COSMOS_AZURE_|COSMOS_LLM_|COSMOS_OPENROUTER_API_KEY$|COSMOS_INTERSTITIAL_|COSMOS_SERPAPI_KEY$|COSMOS_GOOGLE_MAPS_KEY$|COSMOS_PIRATE_WEATHER_KEY$|COSMOS_WOLFRAM_APP_ID$|COSMOS_PPLX_|COSMOS_MUSICBRAINZ_|COSMOS_SHOPPING_|OPENAI_|OPENROUTER_)/) print
+          if (name !~ /^(AZURE_|(CARRY|COSMOS)_AZURE_|(CARRY|COSMOS)_LLM_|(CARRY|COSMOS)_OPENROUTER_API_KEY$|(CARRY|COSMOS)_INTERSTITIAL_|(CARRY|COSMOS)_SERPAPI_KEY$|(CARRY|COSMOS)_GOOGLE_MAPS_KEY$|(CARRY|COSMOS)_PIRATE_WEATHER_KEY$|(CARRY|COSMOS)_WOLFRAM_APP_ID$|(CARRY|COSMOS)_PPLX_|(CARRY|COSMOS)_MUSICBRAINZ_|(CARRY|COSMOS)_SHOPPING_|OPENAI_|OPENROUTER_)/) print
         }
       ' "$source" >"$COSMOS_ENV"
       chmod 600 "$COSMOS_ENV"
@@ -45,10 +45,9 @@ prepare_private_copies() {
     chmod 600 "$file"
   done
 
-  copy_tree_once /home/anders/cosmos-edge "$PRIVATE_DIR/edge" || true
-  copy_tree_once /home/anders/cosmos-attest "$PRIVATE_DIR/attest" || true
-  copy_tree_once /home/anders/cosmos-duc "$PRIVATE_DIR/duc" || true
-  copy_tree_once /home/anders/keycloak-themes/humane "$PRIVATE_DIR/keycloak-theme" || true
+  # PKI/certificate/theme trees are deployed physical identities.  They are
+  # consumed directly and read-only from their Carry paths; this bootstrap may
+  # import env files, but must never manufacture alternate security roots.
 }
 
 # Assemble a candidate private configuration without changing any file used by
@@ -62,25 +61,25 @@ stage_private_configuration() {
   chmod 700 "$destination"
 
   source="$RUNTIME_ENV"
-  [[ -f "$source" ]] || source=/home/anders/humane-cosmos-clone/.env
+  [[ -f "$source" ]] || source="$LEGACY_RUNTIME_ENV"
   [[ -f "$source" ]] && install -m 600 "$source" "$destination/runtime.env" || install -m 600 /dev/null "$destination/runtime.env"
 
   source="$CENTER_ENV"
-  [[ -f "$source" ]] || source=/home/anders/cosmos-center.env
+  [[ -f "$source" ]] || source="$LEGACY_CENTER_ENV"
   [[ -f "$source" ]] && install -m 600 "$source" "$destination/center.env" || install -m 600 /dev/null "$destination/center.env"
 
   if [[ -f "$PROVIDER_ENV" ]]; then
     install -m 600 "$PROVIDER_ENV" "$destination/providers.env"
   else
     source="$PRIVATE_DIR/imported/cosmos-backends.env"
-    [[ -f "$source" ]] || source=/home/anders/cosmos-backends.env
+    [[ -f "$source" ]] || source="$LEGACY_BACKENDS_ENV"
     [[ -f "$source" ]] || fail "provider configuration source is missing"
     awk '
       /^[[:space:]]*#/ { print; next }
       /^[[:space:]]*$/ { print; next }
       {
         name=$0; sub(/=.*/, "", name); gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
-        if (name ~ /^(AZURE_|COSMOS_AZURE_|COSMOS_LLM_|COSMOS_OPENROUTER_API_KEY$|COSMOS_INTERSTITIAL_|COSMOS_SERPAPI_KEY$|COSMOS_GOOGLE_MAPS_KEY$|COSMOS_PIRATE_WEATHER_KEY$|COSMOS_WOLFRAM_APP_ID$|COSMOS_PPLX_|COSMOS_MUSICBRAINZ_|COSMOS_SHOPPING_|OPENAI_|OPENROUTER_)/) print
+        if (name ~ /^(AZURE_|(CARRY|COSMOS)_AZURE_|(CARRY|COSMOS)_LLM_|(CARRY|COSMOS)_OPENROUTER_API_KEY$|(CARRY|COSMOS)_INTERSTITIAL_|(CARRY|COSMOS)_SERPAPI_KEY$|(CARRY|COSMOS)_GOOGLE_MAPS_KEY$|(CARRY|COSMOS)_PIRATE_WEATHER_KEY$|(CARRY|COSMOS)_WOLFRAM_APP_ID$|(CARRY|COSMOS)_PPLX_|(CARRY|COSMOS)_MUSICBRAINZ_|(CARRY|COSMOS)_SHOPPING_|OPENAI_|OPENROUTER_)/) print
       }
     ' "$source" >"$destination/providers.env"
   fi
@@ -89,19 +88,22 @@ stage_private_configuration() {
     install -m 600 "$COSMOS_ENV" "$destination/cosmos.env"
   else
     source="$PRIVATE_DIR/imported/cosmos-backends.env"
-    [[ -f "$source" ]] || source=/home/anders/cosmos-backends.env
+    [[ -f "$source" ]] || source="$LEGACY_BACKENDS_ENV"
     [[ -f "$source" ]] || fail "Cosmos configuration source is missing"
     awk '
       /^[[:space:]]*#/ { print; next }
       /^[[:space:]]*$/ { print; next }
       {
         name=$0; sub(/=.*/, "", name); gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
-        if (name !~ /^(AZURE_|COSMOS_AZURE_|COSMOS_LLM_|COSMOS_OPENROUTER_API_KEY$|COSMOS_INTERSTITIAL_|COSMOS_SERPAPI_KEY$|COSMOS_GOOGLE_MAPS_KEY$|COSMOS_PIRATE_WEATHER_KEY$|COSMOS_WOLFRAM_APP_ID$|COSMOS_PPLX_|COSMOS_MUSICBRAINZ_|COSMOS_SHOPPING_|OPENAI_|OPENROUTER_)/) print
+        if (name !~ /^(AZURE_|(CARRY|COSMOS)_AZURE_|(CARRY|COSMOS)_LLM_|(CARRY|COSMOS)_OPENROUTER_API_KEY$|(CARRY|COSMOS)_INTERSTITIAL_|(CARRY|COSMOS)_SERPAPI_KEY$|(CARRY|COSMOS)_GOOGLE_MAPS_KEY$|(CARRY|COSMOS)_PIRATE_WEATHER_KEY$|(CARRY|COSMOS)_WOLFRAM_APP_ID$|(CARRY|COSMOS)_PPLX_|(CARRY|COSMOS)_MUSICBRAINZ_|(CARRY|COSMOS)_SHOPPING_|OPENAI_|OPENROUTER_)/) print
       }
     ' "$source" >"$destination/cosmos.env"
   fi
   chmod 600 "$destination"/*.env
-  normalize_compatibility_aliases "$destination/runtime.env"
+  normalize_compatibility_aliases "$destination/runtime.env" "$destination/cosmos.env" \
+    "$destination/providers.env" "$destination/center.env"
+  assert_carry_database_configuration "$destination/runtime.env" "$destination/cosmos.env" \
+    "$destination/providers.env" "$destination/center.env"
   merge_scoped_provider_values "$destination/runtime.env" "$destination/providers.env"
 }
 
@@ -214,18 +216,24 @@ PY
 
   [[ -n "$plan" ]] || return 0
 
-  local name target value file touched
+  local name target value file touched legacy_name
   while IFS=$'\t' read -r name target value; do
     [[ -n "$name" ]] || continue
     touched=""
+    legacy_name=""
+    [[ "$name" != COSMOS_* ]] || legacy_name="CARRY_${name#COSMOS_}"
     # The name's home, plus every other staged file that already defines it.
     # All four are Compose --env-file arguments and the LAST one wins, so
     # writing only the home would let a stale value in a later file quietly win
     # -- the operator would see the change saved, deployed, and ineffective,
     # which is the one outcome this whole mechanism exists to avoid.
     for file in runtime.env cosmos.env providers.env center.env; do
-      if [[ "$file" == "$target" ]] || read_env_value "$stage_env/$file" "$name" >/dev/null 2>&1; then
+      if [[ "$file" == "$target" ]] \
+        || read_env_value "$stage_env/$file" "$name" >/dev/null 2>&1 \
+        || { [[ -n "$legacy_name" ]] \
+          && read_env_value "$stage_env/$file" "$legacy_name" >/dev/null 2>&1; }; then
         update_env_value "$stage_env/$file" "$name" "$value"
+        [[ -z "$legacy_name" ]] || update_env_value "$stage_env/$file" "$legacy_name" "$value"
         touched="$touched $file"
       fi
     done
@@ -233,14 +241,14 @@ PY
     # output is shared and the store is the record that carries values anyway.
     log "applied dashboard configuration proposal: $name ->$touched"
   done <<<"$plan"
-  unset name target value file touched
+  unset name target value file touched legacy_name
 }
 
 normalize_compatibility_aliases() {
-  local file="$1"
-  python3 - "$file" <<'PY'
+  (($# == 4)) || fail "compatibility alias normalization needs the exact staged env set"
+  python3 - "$@" <<'PY'
 import os,sys,tempfile
-path=sys.argv[1]
+paths=sys.argv[1:]
 mapping={
   "REVIVAL_AUTH_MODE":"COSMOS_AUTH_MODE",
   "REVIVAL_EDGE_TOKEN":"COSMOS_EDGE_TOKEN",
@@ -258,29 +266,139 @@ mapping={
   "REVIVAL_DUC_CA_KEY":"COSMOS_DUC_CA_KEY",
   "REVIVAL_OPERATOR_EMAILS":"COSMOS_OPERATOR_EMAILS",
 }
-lines=open(path,encoding="utf-8").readlines() if os.path.exists(path) else []
-values={}
-for line in lines:
-    key,separator,value=line.rstrip("\n").partition("=")
-    if separator: values[key.strip()]=value
-replacements={alias:values[source] for source,alias in mapping.items() if values.get(source,"") and not values.get(alias,"")}
-seen=set(); output=[]
-for line in lines:
-    key,separator,_=line.rstrip("\n").partition("="); key=key.strip()
-    if separator and key in replacements:
-        output.append(f"{key}={replacements[key]}\n"); seen.add(key)
-    else: output.append(line)
-for key in sorted(replacements):
-    if key not in seen: output.append(f"{key}={replacements[key]}\n")
-fd,temporary=tempfile.mkstemp(prefix=".aliases.",dir=os.path.dirname(path),text=True)
+for suffix in (
+  "ADMIN_ENABLED","ADMIN_TOKEN","ALLOW_DATA_REMOVALS","ALLOW_SINGLE_REPLICA_ENROLLMENT",
+  "ATTEST_CA_CERT","ATTEST_CA_KEY",
+  "ATTEST_DIR","AUTH_MODE","AZURE_SPEECH_KEY","AZURE_SPEECH_REGION","AZURE_SPEECH_VOICE",
+  "BIDIRECTIONAL_STREAMING","CAPTURE_INCOMING_TTL_SECS","CAPTURE_MAX_UPLOAD_BYTES","CAPTURE_RETENTION_DAYS",
+  "CAPTURE_SHARE_BASE_URL","CAPTURE_STORAGE_DIR","CAPTURE_UPLOAD_BASE_URL",
+  "CENTER_DATA_DIR","CENTER_PROJECTION_TOKEN","CHANNEL_KEY_FILE","DATABASE_URL",
+  "DEADLINE_MS","DEMO_ENABLED","DEVICE_STATUS_CA_CERT","DUC_CA_CERT","DUC_CA_KEY",
+  "DUC_DIR","EDGE_CERT_DIR","EDGE_PRINCIPAL_METADATA","EDGE_TOKEN","EDGE_TOKEN_HEADER",
+  "ENDPOINT","ENDPOINT_ACCOUNT","ENDPOINT_AI_BUS","ENDPOINT_CONTACTS","ENDPOINT_NOTABLE_EVENTS",
+  "ENROLLMENT_DISPLAY_NAME","ENROLLMENT_OPEN","ENROLLMENT_PINCODE","ENROLLMENT_USER_ID",
+  "ENVIRONMENT","ENVOY_CONFIG","FEATURE_FLAGS_METRICS_URL","GOOGLE_MAPS_KEY","GRPC_BIND",
+  "GRPC_ENDPOINT","GRPC_MAX_CONCURRENT_STREAMS","GRPC_TLS","HTTP2_KEEPALIVE_INTERVAL_MS",
+  "HTTP2_KEEPALIVE_TIMEOUT_MS","HTTP2_MAX_HEADER_LIST_BYTES","HTTP2_MAX_PENDING_RESET_STREAMS",
+  "HTTP_BIND","IDENTITY_ROOT_UID","IDENTITY_SHELL_UID","IDENTITY_SYSTEM_UID","INSTANCE_ID",
+  "INTERSTITIAL_API_KEY","INTERSTITIAL_BASE_URL","INTERSTITIAL_MODEL",
+  "KEYCLOAK_DB_PASSWORD","KEYCLOAK_THEME_DIR","KID_SCOPE","LLM_API_KEY","LLM_BASE_URL",
+  "LLM_MAX_TOKENS","LLM_MODEL","LLM_REASONING_EFFORT","LOCAL_MODEL_NETWORK","LOG_LEVEL",
+  "LIVE_API_AUTHORITY","LIVE_ATTEST_CA_CERT","LIVE_ATTEST_CA_KEY","LIVE_CA_CERT","LIVE_CA_KEY",
+  "LIVE_CLIENT_CERT","LIVE_CLIENT_KEY","LIVE_DEVICE_ID","LIVE_DUC_CA_CERT",
+  "LIVE_ENROLLMENT_AUTHORITY","LIVE_ENROLLMENT_ENDPOINT","LIVE_ENROLLMENT_PINCODE",
+  "LIVE_SERVER_CA_CERT","MAX_DECODE_BYTES","MAX_ENCODE_BYTES","MUSICBRAINZ_BASE_URL","OIDC_AUDIENCE",
+  "OIDC_ISSUER","OIDC_JWKS_URI","ONBOARDING_AUTHORITY","ONBOARDING_ENDPOINT",
+  "OPAQUE_SEED","OPENROUTER_API_KEY","OPERATOR_EMAILS","PEER_GRPC_PORT","PG_PASSWORD",
+  "PIRATE_WEATHER_KEY","POD_NAME","PPLX_API_KEY","PPLX_MODEL","PRINCIPAL",
+  "PRINCIPAL_METADATA","PUBLIC_ENDPOINT","REGION","REMOTE_TTS","REMOTE_TTS_ENABLED","REQUEST_TIMEOUT_MS",
+  "REQUIRE_DEVICE_ATTESTATION","REVISION","SEARXNG_BASE_URL","SERPAPI_KEY",
+  "SHARE_TOKEN_SECRET","SHOPPING_ALLOWED_HOSTS","SHOPPING_API_KEY",
+  "SHOPPING_VISUAL_SEARCH_URL","SHUTDOWN_GRACE_MS","STATE_DIR","SYNC_CURSOR","TEST_DATABASE_URL",
+  "TRUST_DOMAIN","UPLOAD_PRESIGN_ENDPOINT","VISION_MODEL","WEBAPI","WEBAPI_BASE_URL",
+  "WEBAPI_ENABLED","WOLFRAM_APP_ID","WORKLOAD","RESPOND_SOURCE_DEVICE",
+):
+    mapping["CARRY_"+suffix]="COSMOS_"+suffix
+
+# Parse the complete Compose env-file set before writing any byte. Duplicate
+# assignments within one file are never meaningful authority (Compose would
+# silently select the last one), even when the two values happen to match.
+documents=[]
+occurrences={}
+for path in paths:
+    lines=open(path,encoding="utf-8").readlines() if os.path.exists(path) else []
+    values={}
+    for number,line in enumerate(lines,1):
+        stripped=line.rstrip("\n")
+        if not stripped or stripped.lstrip().startswith("#"): continue
+        key,separator,value=stripped.partition("=")
+        if not separator:
+            raise SystemExit(f"malformed staged environment row at {path}:{number}")
+        key=key.strip()
+        if key in values:
+            raise SystemExit(f"duplicate staged environment key {key} at {path}:{number}")
+        values[key]=value
+        occurrences.setdefault(key,[]).append((path,value))
+    documents.append((path,lines,values))
+
+# Every historical/current alias is one authority group. Refuse divergent
+# values anywhere in the four files before Compose can apply last-file-wins.
+groups={}
+for source,canonical in mapping.items():
+    groups.setdefault(canonical,{canonical}).add(source)
+for canonical,names in groups.items():
+    selected={(path,key,value) for key in names for path,value in occurrences.get(key,[]) if value}
+    values={value for _,_,value in selected}
+    if len(values)>1:
+        locations=", ".join(sorted(f"{os.path.basename(path)}:{key}" for path,key,_ in selected))
+        raise SystemExit(f"conflicting staged compatibility aliases for {canonical}: {locations}")
+
+# Retain the Carry rows as rollback evidence and add/update only the logical
+# Cosmos name in the SAME file. In particular, a Carry provider value stays in
+# providers.env rather than being leaked into cosmos.env.
+rendered=[]
+for path,lines,values in documents:
+    replacements={}
+    for source,canonical in mapping.items():
+        value=values.get(source,"")
+        if value and not values.get(canonical,""):
+            replacements[canonical]=value
+        if source.startswith("CARRY_") and values.get(canonical,"") and not value:
+            replacements[source]=values[canonical]
+    seen=set(); output=[]
+    for line in lines:
+        key,separator,_=line.rstrip("\n").partition("="); key=key.strip()
+        if separator and key in replacements:
+            output.append(f"{key}={replacements[key]}\n"); seen.add(key)
+        else:
+            output.append(line)
+    for key in sorted(replacements):
+        if key not in seen: output.append(f"{key}={replacements[key]}\n")
+    rendered.append((path,output))
+
+temporaries=[]
 try:
-    os.fchmod(fd,0o600)
-    with os.fdopen(fd,"w",encoding="utf-8") as handle: handle.writelines(output)
-    os.replace(temporary,path)
+    for path,output in rendered:
+        fd,temporary=tempfile.mkstemp(prefix=".aliases.",dir=os.path.dirname(path),text=True)
+        os.fchmod(fd,0o600)
+        with os.fdopen(fd,"w",encoding="utf-8") as handle: handle.writelines(output)
+        temporaries.append((temporary,path))
+    for temporary,path in temporaries:
+        os.replace(temporary,path)
 finally:
-    if os.path.exists(temporary): os.unlink(temporary)
+    for temporary,_ in temporaries:
+        if os.path.exists(temporary): os.unlink(temporary)
 PY
-  chmod 600 "$file"
+  chmod 600 "$@"
+}
+
+assert_carry_database_configuration() {
+  (($# == 4)) || fail "Carry database configuration gate needs the exact staged env set"
+  python3 - "$@" "$LEGACY_DATABASE_USER" "$LEGACY_DATABASE_NAME" <<'PY'
+import sys,urllib.parse
+paths=sys.argv[1:5]; expected_user,expected_database=sys.argv[5:7]
+values={}
+for path in paths:
+    for number,raw in enumerate(open(path,encoding="utf-8"),1):
+        line=raw.rstrip("\n")
+        if not line or line.lstrip().startswith("#"): continue
+        key,separator,value=line.partition("=")
+        if not separator: raise SystemExit(f"malformed staged environment row at {path}:{number}")
+        key=key.strip()
+        if key in {"COSMOS_DATABASE_URL","COSMOS_PG_PASSWORD"} and value:
+            values.setdefault(key,set()).add(value)
+for key in ("COSMOS_DATABASE_URL","COSMOS_PG_PASSWORD"):
+    if len(values.get(key,set()))!=1:
+        raise SystemExit(f"staged {key} is missing or conflicts across the Carry compatibility inputs")
+url=next(iter(values["COSMOS_DATABASE_URL"])); password=next(iter(values["COSMOS_PG_PASSWORD"]))
+parsed=urllib.parse.urlsplit(url)
+if (parsed.scheme not in {"postgres","postgresql"}
+        or urllib.parse.unquote(parsed.username or "")!=expected_user
+        or parsed.hostname!="postgres" or parsed.port not in {None,5432}
+        or parsed.path!="/"+expected_database or parsed.query or parsed.fragment
+        or urllib.parse.unquote(parsed.password or "")!=password):
+    raise SystemExit("staged COSMOS_DATABASE_URL does not preserve the exact Carry role/database/password authority")
+PY
 }
 
 merge_scoped_provider_values() {
@@ -373,8 +491,8 @@ PY
 
 derive_paired_identity() {
   local postgres="$1" rows device_id account_sub keycloak_count
-  rows="$(docker exec "$postgres" psql -v ON_ERROR_STOP=1 -U cosmos -d cosmos -AtF $'\t' -c \
-    'select device_id, account_sub from cosmos_device_account order by paired_at_epoch, device_id')"
+  rows="$(docker exec "$postgres" psql -v ON_ERROR_STOP=1 -U "$LEGACY_DATABASE_USER" -d "$LEGACY_DATABASE_NAME" -AtF $'\t' -c \
+    'select device_id, account_sub from carry_device_account order by paired_at_epoch, device_id')"
   [[ -n "$rows" && "$(printf '%s\n' "$rows" | sed '/^$/d' | wc -l | tr -d '[:space:]')" == 1 ]] \
     || fail "expected exactly one durable Pin pairing"
   IFS=$'\t' read -r device_id account_sub <<<"$rows"
@@ -382,7 +500,7 @@ derive_paired_identity() {
     || fail "durable Pin pairing is malformed"
   local account_sub_sql
   account_sub_sql="${account_sub//\'/''}"
-  keycloak_count="$(docker exec "$postgres" psql -v ON_ERROR_STOP=1 -U cosmos -d keycloak -Atc \
+  keycloak_count="$(docker exec "$postgres" psql -v ON_ERROR_STOP=1 -U "$LEGACY_DATABASE_USER" -d keycloak -Atc \
     "select count(*) from user_entity where id = '${account_sub_sql}'" | tr -d '[:space:]')"
   [[ "$keycloak_count" == 1 ]] || fail "paired Pin subject is not an exact Keycloak user id"
   printf '%s\t%s\n' "$device_id" "$account_sub"
@@ -529,7 +647,7 @@ runtime.env	$runtime
 cosmos.env	$cosmos
 providers.env	$provider
 center.env	$center
-edge.envoy	$PRIVATE_DIR/edge/envoy.yaml
+edge.envoy	$PRODUCTION_EDGE_CONFIG
 spotify.token	$PRIVATE_DIR/spotify-adapter/token
 nginx.connectivity	/etc/nginx/sites-available/ai-pin-revival-connectivity
 EOF
@@ -558,10 +676,10 @@ EOF
     digest="$(protected_path_digest "$path")"
     printf 'protected\t%s\t%s\t-\t-\n' "$label" "$digest" >>"$temporary"
   done <<EOF
-edge.security	$PRIVATE_DIR/edge
-attestation.security	$PRIVATE_DIR/attest
-device-user.security	$PRIVATE_DIR/duc
-keycloak.theme	$PRIVATE_DIR/keycloak-theme
+edge.security	$LEGACY_EDGE_DIR
+attestation.security	$PRODUCTION_ATTEST_DIR
+device-user.security	$PRODUCTION_DUC_DIR
+keycloak.theme	$PRODUCTION_KEYCLOAK_THEME_DIR
 bridge.config	/etc/penumbra
 bridge.state	/var/lib/penumbra-center
 bridge.unit	/etc/systemd/system/penumbra-center-bridge.service

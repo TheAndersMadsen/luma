@@ -129,10 +129,10 @@ chmod 700 "$work"
 # per-file explanation for exactly the row an operator is staring at.
 protected_configuration_paths() {
   cat <<EOF
-edge.security	$PRIVATE_DIR/edge
-attestation.security	$PRIVATE_DIR/attest
-device-user.security	$PRIVATE_DIR/duc
-keycloak.theme	$PRIVATE_DIR/keycloak-theme
+edge.security	$LEGACY_EDGE_DIR
+attestation.security	$PRODUCTION_ATTEST_DIR
+device-user.security	$PRODUCTION_DUC_DIR
+keycloak.theme	$PRODUCTION_KEYCLOAK_THEME_DIR
 bridge.config	/etc/penumbra
 bridge.state	/var/lib/penumbra-center
 bridge.unit	/etc/systemd/system/penumbra-center-bridge.service

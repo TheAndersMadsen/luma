@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -18,10 +17,6 @@ function bash(script, args = [], options = {}) {
     input: options.input,
     maxBuffer: 20 * 1024 * 1024,
   });
-}
-
-function sha256(value) {
-  return createHash("sha256").update(value).digest("hex");
 }
 
 const portableStat = String.raw`
@@ -65,10 +60,12 @@ for stem in cosmos-state center-data prometheus-data grafana-data postgres-data;
   archive_inventory "$backup/$stem.tar.gz" "$backup/$stem.inventory.json"
 done
 
-attest=/home/anders/ai-pin-revival/private/attest
-duc=/home/anders/ai-pin-revival/private/duc
+attest=/home/anders/carry-attest
+duc=/home/anders/carry-duc
+private=/home/anders/ai-pin-revival/private
 mkdir -p \
   "$protected_source$attest" "$protected_source$duc" \
+  "$protected_source$private" \
   "$protected_source/etc/nginx/sites-available" "$protected_source/etc/nginx/sites-enabled" \
   "$protected_source/etc/systemd/system" "$protected_source/etc/penumbra" \
   "$protected_source/var/lib/penumbra-center"
@@ -89,7 +86,7 @@ python3 - "$backup/protected-presence.tsv" "$backup/protected.paths" "$attest" "
 import sys
 presence_path,paths_path,attest,duc=sys.argv[1:]
 required={attest,duc,"/etc/nginx/nginx.conf","/etc/nginx/sites-available","/etc/nginx/sites-enabled","/etc/systemd/system/penumbra-center-bridge.service","/etc/penumbra","/var/lib/penumbra-center"}
-optional={"/home/anders/humane-cosmos-clone/.env","/home/anders/cosmos-backends.env","/home/anders/cosmos-center.env","/home/anders/cosmos-edge","/home/anders/keycloak-themes/humane","/home/anders/ai-pin-revival/private","/etc/nginx/conf.d","/etc/cloudflared","/home/anders/.cloudflared"}
+optional={"/home/anders/humane-carry-clone/.env","/home/anders/carry-backends.env","/home/anders/carry-center.env","/home/anders/carry-edge","/home/anders/keycloak-themes/humane","/home/anders/ai-pin-revival/private","/etc/nginx/conf.d","/etc/cloudflared","/home/anders/.cloudflared"}
 present=required|{"/home/anders/ai-pin-revival/private"}
 with open(presence_path,"w",encoding="utf-8") as output:
     for value in sorted(required): output.write(f"required\tpresent\t{value}\n")
@@ -309,11 +306,16 @@ test("staging rejects malformed channel JSON and every non-16-byte decoded key",
 test("protected-root declarations are closed and bind both trust-root identities", async (t) => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "revival-staging-protected-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
-  for (const name of ["missing", "duplicate", "unknown", "security-duplicate"]) {
+  for (const name of ["missing", "duplicate", "unknown", "security-duplicate", "security-private-copy"]) {
     const fixture = await makeBackup(directory, { id: `backup-protected-${name}` });
     if (name === "security-duplicate") {
       const target = path.join(fixture.backup, "active-security-roots.tsv");
-      await writeFile(target, `${await readFile(target, "utf8")}attestation\t/home/anders/cosmos-attest\n`, { mode: 0o600 });
+      await writeFile(target, `${await readFile(target, "utf8")}attestation\t/home/anders/carry-attest\n`, { mode: 0o600 });
+    } else if (name === "security-private-copy") {
+      const target = path.join(fixture.backup, "active-security-roots.tsv");
+      await writeFile(target,
+        "attestation\t/home/anders/ai-pin-revival/private/attest\n" +
+        "device-user\t/home/anders/ai-pin-revival/private/duc\n", { mode: 0o600 });
     } else {
       const target = path.join(fixture.backup, "protected-presence.tsv");
       const body = await readFile(target, "utf8");
@@ -329,39 +331,38 @@ test("protected-root declarations are closed and bind both trust-root identities
   }
 });
 
-test("projected security inventory detects content and root-metadata drift", async (t) => {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "revival-staging-security-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  const fixture = await makeBackup(directory, { id: "backup-security-identity" });
-  for (const [label, relative] of [
-    ["attest", "home/anders/ai-pin-revival/private/attest"],
-    ["duc", "home/anders/ai-pin-revival/private/duc"],
-  ]) {
-    const projected = path.join(directory, `${label}-projected.json`);
-    const actual = path.join(directory, `${label}-actual.json`);
-    const drift = path.join(directory, `${label}-drift.json`);
-    let result = bash(String.raw`
-export REVIVAL_STAGING_CONTRACT_LIBRARY_ONLY=1
-source "$1"
-export COPYFILE_DISABLE=1
-staging_project_protected_root_inventory "$2/protected-inventory.json" \
-  "/$7" "$3"
-tar -czpf "$5" -C "$4/$7" .
-archive_inventory "$5" "$6"
-`, [staging, fixture.backup, projected, fixture.protectedSource, path.join(directory, `${label}-actual.tar.gz`), actual, relative]);
-    assert.equal(result.status, 0, result.stderr);
-    assert.deepEqual(JSON.parse(await readFile(actual, "utf8")), JSON.parse(await readFile(projected, "utf8")));
-    const body = JSON.parse(await readFile(actual, "utf8"));
-    body.find((item) => item.path === ".").mode = "0o755";
-    await writeFile(drift, JSON.stringify(body), { mode: 0o600 });
-    result = bash(String.raw`
-export REVIVAL_STAGING_CONTRACT_LIBRARY_ONLY=1
-source "$1"
-compare_archive_inventories "$2" "$3"
-`, [staging, projected, drift]);
-    assert.notEqual(result.status, 0, `${label} root metadata drift unexpectedly passed`);
+test("staging uses exact read-only Carry security roots without projecting copies", async () => {
+  const stagingScript = await readFile(staging, "utf8");
+  const rollback = await readFile(path.join(root, "platform/deploy/vps/remote/rollback.sh"), "utf8");
+  const deploy = await readFile(path.join(root, "platform/deploy/vps/remote/deploy.sh"), "utf8");
+  const compose = await readFile(path.join(root, "platform/compose/production.yaml"), "utf8");
+
+  assert.match(stagingScript, /\[\[ "\$attest_dir" == "\$PRODUCTION_ATTEST_DIR" && "\$duc_dir" == "\$PRODUCTION_DUC_DIR"/u);
+  assert.match(stagingScript, /--mount "type=bind,src=\$attest_dir,dst=\/etc\/cosmos-attest,readonly"/u);
+  assert.match(stagingScript, /--mount "type=bind,src=\$duc_dir,dst=\/etc\/cosmos-duc,readonly"/u);
+  assert.ok((stagingScript.match(/verify_exact_carry_security_identity "\$security_identity"/gu) ?? []).length >= 4);
+  assert.match(deploy, /--security-identity "\$record\/carry-security-identity\.json"/u);
+  assert.match(rollback, /--attest-dir "\$PRODUCTION_ATTEST_DIR" --duc-dir "\$PRODUCTION_DUC_DIR"/u);
+  assert.match(rollback, /--security-identity "\$target_record\/carry-security-identity\.json"/u);
+
+  for (const source of ["/home/anders/carry-attest", "/home/anders/carry-duc"]) {
+    const escaped = source.replaceAll("/", "\\/");
+    assert.match(compose, new RegExp(`source: ${escaped}`, "u"));
   }
-  assert.equal(sha256(await readFile(path.join(fixture.protectedSource, "home/anders/ai-pin-revival/private/attest/ca.crt"))), sha256("fixture attest cert\n"));
+  assert.ok((compose.match(/create_host_path: false/gu) ?? []).length >= 8);
+
+  const forbidden = [
+    /staging_project_protected_root_inventory/u,
+    /assets\/(?:attest|duc)/u,
+    /(?:attest|duc)_volume/u,
+    /copy-(?:attest|duc)/u,
+    /private\/(?:attest|duc)/u,
+    /private\+"\/(?:attest|duc)/u,
+  ];
+  for (const pattern of forbidden) {
+    assert.doesNotMatch(stagingScript, pattern);
+    assert.doesNotMatch(rollback, pattern);
+  }
 });
 
 test("runtime Center inventory changes only the declared disposable owner", async (t) => {

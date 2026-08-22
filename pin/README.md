@@ -58,6 +58,24 @@ operator-supplied signing material for release builds.
 - Generated APKs, Cargo/Gradle/npm output, signer material, device snapshots,
   and recovery evidence live under the external Revival config/data roots.
 
+### Persistent Carry compatibility
+
+Cosmos is the logical product name, but an APK keep-data replacement must keep
+the identifiers already stored on the Pin. The physical contract remains:
+
+- Settings.Global keys use the `penumbra_carry_*` namespace.
+- AndroidKeyStore uses `penumbra_carry_device_attestation_v1`.
+- the identity provider authority is `com.penumbraos.server.carryidentity`.
+- API, onboarding, and connectivity wire authorities remain under
+  `*.carry.humane.cloud`.
+- the pinned public root has subject and issuer
+  `O=humane-carry-clone, CN=Carry Clone Root EC 1`; its DER SHA-256 fingerprint
+  is `7F:82:FB:F9:4A:37:03:79:ED:23:8F:B0:C9:D2:E2:D1:33:16:D6:71:97:FA:BA:29:48:C0:E3:D9:2A:C3:45:8B`.
+
+Those spellings are compatibility ABI, not stale implementation names. An
+upgrade reads the existing setting rows and non-exportable key in place; it does
+not import a second identity or reset the Pin.
+
 - `implemented`: System Injector, hooks, Android/Rust runtime, bridge, and
   compatibility contracts are present in this tree.
 - `derived`: exact package names and wire identifiers remain stable where the

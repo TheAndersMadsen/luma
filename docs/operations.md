@@ -50,24 +50,50 @@ extraction. Runtime state and secrets are not release contents.
 Production commands target an existing reviewed installation; they are not a
 clean-server bootstrap workflow.
 
-### Hosted-only cutover prerequisite
+### One-time Carry baseline registration
 
-Before the first production deployment through this hosted-only path, capture
-the **currently running production release** as an immutable rollback baseline
-using the pinned GitHub-hosted workflow, import the complete handoff, and pass
-the fresh provider-attestation status check below. Record and retain that exact
-candidate ID before attempting the forward deployment. If the live release
-cannot be reproduced and provider-attested by the accepted workflow and policy,
-stop: the migration phase must establish that baseline first.
+The already-running pre-workflow Carry build cannot honestly be reconstructed
+and relabeled as provider-built. Do not mint a candidate receipt for those old
+images. For the first Carry-to-Cosmos cutover only, use held registrar code from
+the **same freshly provider-verified forward candidate** to record the live
+runtime as the exceptional `adopted-live-carry-v1` predecessor:
 
-Candidate descriptor schemas 2 and 3 predate the explicit authority origin.
-They are intentionally ineligible, as are schema-4 candidates marked
-`local-operator` / `candidate-only`. There is no legacy adoption, local
-promotion, or rollback-baseline bypass: both the baseline and the forward
-candidate must be imported from a GitHub-hosted handoff and cryptographically
-reverified at point of use. In particular, the Carry→Cosmos migration must
-first attest and import the current immutable Carry production baseline; it may
-not silently adopt a pre-hosted candidate.
+```sh
+REVIVAL_DATA_DIR=/external/revival-data ./revival deploy carry-baseline --candidate-id CANDIDATE_SHA256 --dry-run
+REVIVAL_DATA_DIR=/external/revival-data ./revival deploy carry-baseline --candidate-id CANDIDATE_SHA256 --confirm
+```
+
+Under the deployment lock, the registrar requires no pending transaction or
+canonical project and observes the exact Carry service/container/image IDs,
+health, mounts, networks, configuration/PKI inode and content identities, and
+durable resource identities twice. It then writes one deterministic,
+content-addressed private record. It does not stop, restart, create, remove,
+copy, rename, or otherwise change the running workload. Repeating the command
+with identical runtime and candidate bytes returns the same baseline ID;
+different bytes or a different candidate refuse rather than replacing it.
+
+Deploy the same candidate immediately afterward. The forward deploy reproves
+the complete live observation before cleanup and again at the quiescence
+boundary, binds the baseline ID into its deployment record, and stops—but never
+removes—the old Carry containers and images. Only that successful first-cutover
+record may consume the observation as its immediate rollback predecessor. A
+rollback reproves the exact stopped container/image/configuration/resource
+identity before any mutation and immediately before restarting Carry. The
+observation cannot become `current`, `previous`, a normal candidate, or a
+routine predecessor. Every later canonical predecessor remains a normally
+provider-verified retained candidate. Descriptor schemas 2 and 3 and every
+local-origin candidate remain ineligible as canonical candidates.
+
+The cutover keeps the exact
+Carry volumes, Carry local-model network, Carry Center data directory,
+`/var/lib/carry` container target, physical `carry` PostgreSQL
+role/database/schema, and Carry PKI/configuration paths in place; it does not
+create, copy, rename, migrate, or delete those resources. In particular,
+`humane-cosmos-clone_cosmos-*`,
+`humane-cosmos-clone_{prometheus,grafana}-data`,
+`humane-cosmos-clone_cosmos-local`, and the `cosmos-center-data` directory name
+beneath the deployment home are undeployed rename artifacts and are forbidden
+production authority.
 
 This guide uses the deployed host's reviewed canonical paths below. These are
 operational server contracts, not paths derived from the workstation running a
@@ -277,7 +303,7 @@ exercises the same sealed-bearer path a wearer does.
 **What to create, in Keycloak (`https://center.andersmadsen.dk`, realm
 `humane`).** One ordinary realm user, and it must be *ordinary*:
 
-- **not** in `COSMOS_OPERATOR_EMAILS` and holding no `cosmos-operator` role, on
+- **not** in `COSMOS_OPERATOR_EMAILS` and holding no `carry-operator` role, on
   the realm or on the `center` client;
 - **not** the paired Pin owner (`REVIVAL_PIN_BRIDGE_OWNER_SUB`);
 - paired to no device, so it has its own empty `U:<sub>` partition.
@@ -611,7 +637,7 @@ The attestation CA is additionally constrained by the device: the Pin verifies
 that the bundle's issuer chains to a root pinned *inside the shipped APKs*
 (`pin/runtime/android/.../CosmosIdentityProvider.kt:534-540`, byte-identical to
 `pin/hook/payload/.../CosmosRemoteTransport.kt:75`) —
-`O=humane-cosmos-clone, CN=Cosmos Clone Root EC 1`. An attestation CA that does
+`O=humane-carry-clone, CN=Carry Clone Root EC 1`. An attestation CA that does
 not chain to that exact root is rejected on the device, no matter how correct it
 looks on the server. Changing the root means rebuilding and reinstalling the Pin
 release.
@@ -1008,10 +1034,10 @@ If provisioning reports it is unavailable, the deployment has no attestation CA
 ### 7. Point the Pin at your server
 
 The injector does not rewrite hostnames and does not need root or a reflash.
-Stock keeps calling `api.cosmos.humane.cloud` and
-`onboarding.cosmos.humane.cloud`; the hook pins those exact names to your edge's
+Stock keeps calling `api.carry.humane.cloud` and
+`onboarding.carry.humane.cloud`; the hook pins those exact names to your edge's
 IPv4 address, read from `Settings.Global` at
-`penumbra_cosmos_edge_ipv4`, by overriding gRPC's DNS resolver
+`penumbra_carry_edge_ipv4`, by overriding gRPC's DNS resolver
 (`pin/hook/payload/.../CosmosRemoteTransport.kt:151-172`, `:263-271`) and
 `Network.getAllByName` for the two cleartext connectivity hosts
 (`:175-196`). TLS trust is replaced with the pinned clone root and fails closed —
@@ -1022,16 +1048,16 @@ Three `Settings.Global` keys contain the whole repoint
 
 | Key | Meaning |
 | --- | --- |
-| `penumbra_cosmos_remote_mode` | `1` enables clone mode; every hook is inert otherwise |
-| `penumbra_cosmos_edge_ipv4` | the IPv4 the pinned stock hostnames resolve to |
-| `penumbra_cosmos_attestation_bundle_b64` | one-shot staging slot, read and cleared by the hook in the provisioning process (`CosmosRemoteTransport.kt:412-421`) |
+| `penumbra_carry_remote_mode` | `1` enables clone mode; every hook is inert otherwise |
+| `penumbra_carry_edge_ipv4` | the IPv4 the pinned stock hostnames resolve to |
+| `penumbra_carry_attestation_bundle_b64` | one-shot staging slot, read and cleared by the hook in the provisioning process (`CosmosRemoteTransport.kt:412-421`) |
 
 Do not write them by hand. Activation is one journalled transaction inside the
 Pin's own runtime. It validates trust, subject, key/certificate match, and
 validity before the journal or `Settings.Global` is touched
 (`pin/runtime/android/.../CosmosIdentityProvider.kt:227-285`), then imports the
-identity into AndroidKeyStore, writes `penumbra_cosmos_edge_ipv4`, clears the
-staging slot, and writes `penumbra_cosmos_remote_mode=1` **last**, as the commit
+identity into AndroidKeyStore, writes `penumbra_carry_edge_ipv4`, clears the
+staging slot, and writes `penumbra_carry_remote_mode=1` **last**, as the commit
 gate — so stock traffic can never be redirected to a half-configured edge
 (`CosmosActivationTransaction.kt:292-301`). Any failure rolls back
 (`:312-319`). It also refuses to run while the staging slot is non-empty

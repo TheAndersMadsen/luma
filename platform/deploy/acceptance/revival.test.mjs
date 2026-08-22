@@ -74,7 +74,7 @@ test("init creates a protected, wearer-free local identity realm tied to runtime
     assert.equal(client.attributes["pkce.code.challenge.method"], "S256");
     assert.equal(client.redirectUris.some((uri) => uri.includes("*")), false);
     assert.deepEqual(realm.users, []);
-    assert.ok(realm.roles.realm.some((role) => role.name === "cosmos-operator"));
+    assert.ok(realm.roles.realm.some((role) => role.name === "carry-operator"));
     assert.equal(fs.statSync(runtimeFile).mode & 0o777, 0o600);
     assert.equal(fs.statSync(realmFile).mode & 0o777, 0o600);
   } finally {
@@ -359,7 +359,7 @@ test("production Compose binds one release identity and keeps web services priva
         ...process.env,
         REVIVAL_RELEASE_ID: releaseId,
         COSMOS_KID_SCOPE: "audit",
-        COSMOS_DATABASE_URL: "postgresql://cosmos:placeholder@postgres/cosmos",
+        COSMOS_DATABASE_URL: "postgresql://carry:placeholder@postgres/carry",
         COSMOS_EDGE_TOKEN: "placeholder-edge",
         COSMOS_ADMIN_TOKEN: "placeholder-admin",
         COSMOS_CENTER_PROJECTION_TOKEN: "placeholder-projection",
@@ -461,7 +461,7 @@ test("production Compose binds one release identity and keeps web services priva
     ["ai-bus"],
   );
   assert.equal(rendered.networks["local-model"].external, true);
-  assert.equal(rendered.networks["local-model"].name, "humane-cosmos-clone_cosmos-local");
+  assert.equal(rendered.networks["local-model"].name, "humane-carry-clone_carry-local");
   assert.deepEqual(
     Object.entries(rendered.services)
       .filter(([, service]) => service.networks?.["search-service"])
@@ -564,12 +564,19 @@ test("production Compose binds one release identity and keeps web services priva
       name: volume.name,
     }])),
     {
-      "cosmos-pgdata": { external: true, name: "humane-cosmos-clone_cosmos-pgdata" },
-      "cosmos-state": { external: true, name: "humane-cosmos-clone_cosmos-state" },
-      "grafana-data": { external: true, name: "humane-cosmos-clone_grafana-data" },
-      "prometheus-data": { external: true, name: "humane-cosmos-clone_prometheus-data" },
+      "cosmos-pgdata": { external: true, name: "humane-carry-clone_carry-pgdata" },
+      "cosmos-state": { external: true, name: "humane-carry-clone_carry-state" },
+      "grafana-data": { external: true, name: "humane-carry-clone_grafana-data" },
+      "prometheus-data": { external: true, name: "humane-carry-clone_prometheus-data" },
     },
   );
+  const centerData = rendered.services.center.volumes.filter((volume) => volume.target === "/data");
+  assert.deepEqual(centerData, [{
+    type: "bind",
+    source: "/home/anders/carry-center-data",
+    target: "/data",
+    bind: { create_host_path: false },
+  }]);
   assert.ok(
     Object.values(rendered.services)
       .flatMap((service) => service.ports ?? [])
@@ -577,7 +584,7 @@ test("production Compose binds one release identity and keeps web services priva
   );
 });
 
-test("legacy cosmos-net guard applies only before the first canonical release", () => {
+test("legacy carry-net guard applies only before the first canonical release", () => {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "ai-pin-revival-network-policy-"));
   try {
     const remoteRootPath = path.join(temporary, "ai-pin-revival");

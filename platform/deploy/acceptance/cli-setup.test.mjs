@@ -225,6 +225,12 @@ test("setup receipts require exact action results and reject plan, dry-run, stat
       "values.deployDuplicate = record(['deploy', 'production', '--candidate-id', '1'.repeat(64), '--confirm', '--confirm'], 'deploy.production', 'production-deployment-applied');",
       "values.deployWeak = record(['deploy', 'production', '--candidate-id', '1'.repeat(64), '--confirm', '--skip-staging-smoke'], 'deploy.production', 'production-deployment-applied');",
       "values.deployApplied = record(['deploy', 'production', '--candidate-id', '1'.repeat(64), '--confirm'], 'deploy.production', 'production-deployment-applied');",
+      "values.baselinePlan = record(['deploy', 'carry-baseline', '--candidate-id', '1'.repeat(64)], 'deploy.carry-baseline', 'carry-baseline-registered');",
+      "values.baselineDry = record(['deploy', 'carry-baseline', '--candidate-id', '1'.repeat(64), '--dry-run'], 'deploy.carry-baseline', 'carry-baseline-registered');",
+      "values.baselineDuplicate = record(['deploy', 'carry-baseline', '--candidate-id', '1'.repeat(64), '--confirm', '--confirm'], 'deploy.carry-baseline', 'carry-baseline-registered');",
+      "values.baselineWeak = record(['deploy', 'carry-baseline', '--candidate-id', '1'.repeat(64), '--confirm', '--cleanup-project-images'], 'deploy.carry-baseline', 'carry-baseline-registered');",
+      "values.baselineConflict = record(['deploy', 'carry-baseline', '--candidate', '/tmp/candidate', '--candidate-id', '1'.repeat(64), '--confirm'], 'deploy.carry-baseline', 'carry-baseline-registered');",
+      "values.baselineApplied = record(['deploy', 'carry-baseline', '--candidate-id', '1'.repeat(64), '--confirm'], 'deploy.carry-baseline', 'carry-baseline-registered');",
       "values.shipPlan = record(['pin', 'release', 'ship'], 'pin.release.ship', 'pin-release-published');",
       "values.shipLocal = record(['pin', 'release', 'ship', '--confirm', '--local'], 'pin.release.ship', 'pin-release-published');",
       "values.shipRemote = record(['pin', 'release', 'ship', '--confirm', '--remote', 'vps'], 'pin.release.ship', 'pin-release-published');",
@@ -249,10 +255,11 @@ test("setup receipts require exact action results and reject plan, dry-run, stat
     assert.equal(result.status, 0, result.stderr);
     const values = JSON.parse(result.stdout);
     for (const key of [
-      "upAlias", "stackStatus", "deployApplied", "shipRemote", "pkiImported", "backupDone", "canaryDone",
+      "upAlias", "stackStatus", "deployApplied", "baselineApplied", "shipRemote", "pkiImported", "backupDone", "canaryDone",
     ]) assert.equal(values[key].outcome, "success", key);
     for (const key of [
-      "help", "deployPlan", "deployDry", "deployDuplicate", "deployWeak", "shipPlan", "shipLocal", "pkiStatus",
+      "help", "deployPlan", "deployDry", "deployDuplicate", "deployWeak", "baselinePlan", "baselineDry",
+      "baselineDuplicate", "baselineWeak", "baselineConflict", "shipPlan", "shipLocal", "pkiStatus",
       "pkiMissing", "backupPlan", "canaryWeak", "wrongResult", "failedResult", "physical",
     ]) assert.equal(values[key], null, key);
     assert.match(values.importWithoutEvidence, /evidence/u);

@@ -59,14 +59,21 @@ acceptance is never made sticky. Hosted artifact imports additionally persist
 and revalidate their provider evidence, and `setup artifacts vps|pin` repeats
 that check explicitly.
 
-Production setup has one additional cutover prerequisite: before the first
-hosted-only deployment, the currently running production release (the
-immutable Carry release) must be produced by the accepted GitHub-hosted
-workflow, imported, and freshly
-provider-verified as the retained rollback baseline. Descriptor schemas 2/3
-and local-origin candidates are intentionally ineligible; the Carry→Cosmos
-migration has no legacy auto-adoption or promotion bypass. If that exact
-baseline cannot be attested, stop before deploying the forward candidate.
+Production setup has one exceptional first-cutover prerequisite. The
+already-running pre-workflow Carry release cannot be reproduced by the hosted
+workflow without inventing provenance. Use the same freshly provider-verified
+forward candidate, whose held registrar captures the live runtime twice as an
+`adopted-live-carry-v1` predecessor, then deploy that candidate immediately.
+The observation does not relabel the old images as provider-built, changes no
+runtime resource, and can serve only as that first cutover's immediate rollback
+predecessor. Every later rollback baseline is a normally provider-verified
+retained candidate. Descriptor schemas 2/3 and local-origin candidates remain
+ineligible as canonical candidates; this one-time registrar is not a legacy
+candidate-adoption or promotion bypass. The cutover reuses the exact Carry
+volumes, network, Center data directory, and security paths in place and
+performs no automatic create, copy, rename, migration, deletion, permission
+change, or relabeling. If the exact live observation cannot be sealed, stop
+before deploying the forward candidate.
 
 ## Use the Dev Container
 

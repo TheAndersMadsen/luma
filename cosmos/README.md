@@ -35,9 +35,12 @@ Compose.
 - `unknown`: complete stock parity and physical-Pin speech playback until an
   authorized target run observes them.
 
-`COSMOS_*`, `/var/lib/cosmos`, and some durable resource names remain compatibility
-identifiers. They are not product names and require a verified migration before
-renaming.
+`COSMOS_*` remains the logical source/configuration namespace. The development
+Compose model may use `/var/lib/cosmos`, but production deliberately overrides
+the physical state target to `/var/lib/carry` and reuses the exact deployed
+Carry volumes, network, database identities, and Center directory. Those are
+persistent ABI, not product names; changing them requires a separately reviewed,
+reversible migration and is not part of the rename.
 
 Workspace boundaries are in [architecture](../docs/architecture.md); runtime
 commands are in [operations](../docs/operations.md).

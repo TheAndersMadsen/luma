@@ -88,6 +88,7 @@ loop](../CONTRIBUTING.md#fast-local-loop).
 | `revival release candidate prepare [--commit COMMIT]` | local | Build a sealed local diagnostic candidate from an exact detached commit; it is candidate-only and cannot deploy. |
 | `revival release candidate verify (--candidate PATH | --id SHA256)` | read | Recompute every candidate identity and digest without Git, Docker, a shell, or candidate-controlled code. |
 | `revival release candidate inspect (--candidate PATH | --id SHA256)` | read | Report provenance, image identities, and protected Carry compatibility. |
+| `revival deploy carry-baseline (--candidate PATH | --candidate-id SHA256) [--dry-run\|--confirm]` | remote | One-time only: observe and seal the already-running Carry predecessor using held registrar code from the exact hosted forward candidate, without changing the runtime. |
 | `revival deploy production (--candidate PATH | --candidate-id SHA256) --confirm` | remote | Freshly provider-verify, transfer, and deploy one imported GitHub-hosted immutable candidate; never build or pull on the host. |
 | `revival backup --confirm` | remote | Create a verified server backup; `--fetch` adds the off-host copy. |
 | `revival canary --confirm` | remote | Run semantic production canaries. |
@@ -113,14 +114,18 @@ The sealed candidate identity also commits the complete 15-service
 that held mapping rather than reconstructing authority from mutable tags or
 paths.
 
-Before the hosted-only production cutover, import and freshly provider-verify
-an immutable candidate representing the currently running production release;
-retain its candidate ID as the rollback baseline. The Carry→Cosmos migration
-therefore starts by attesting and importing the current immutable Carry
-baseline. If that exact baseline cannot be produced by the accepted
-GitHub-hosted workflow, stop and complete the migration preparation first.
-Descriptor schemas 2/3 and every local-origin candidate are deliberately
-ineligible—there is no legacy auto-adoption or promotion bypass.
+The already-running pre-workflow Carry release cannot honestly be reproduced
+and relabeled as provider-built. For the first Carry-to-Cosmos cutover only,
+`deploy carry-baseline` uses held registrar code from the same freshly
+provider-verified forward candidate to capture it twice as the exceptional
+`adopted-live-carry-v1` predecessor. The record explicitly does not claim the
+observed Carry images were provider-built, changes no runtime resource, is
+bound to that one forward candidate, and is eligible only as that candidate's
+immediate rollback predecessor. Deploy the same candidate immediately after
+registration; every later canonical predecessor must be a normally
+provider-verified retained candidate. Descriptor schemas 2/3 and every
+local-origin candidate remain ineligible as canonical candidates; the
+registrar is not a legacy candidate-adoption or promotion bypass.
 
 State retirement is non-destructive and receipt-based. Its linearization point
 is the final complete filesystem-watch drain after the exact held inventory has
@@ -136,8 +141,9 @@ The live storage authority remains `/home/anders/carry-center-data` with
 `humane-carry-clone_carry-state`, `humane-carry-clone_carry-pgdata`,
 `humane-carry-clone_prometheus-data`, and
 `humane-carry-clone_grafana-data`. Candidate preparation intentionally refuses
-a source snapshot whose effective Compose/common values rename those paths; it
-never rewrites or “adopts” the protected live values.
+a source snapshot whose effective Compose/common values rename those paths.
+Logical Cosmos keys attach directly to the existing Carry resources; no
+automatic create, copy, rename, migration, deletion, or “adoption” exists.
 
 ## Pin host, PKI, release, and device commands
 

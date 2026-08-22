@@ -3010,6 +3010,90 @@ def _read_native_evidence(path: str, maximum: int = 1024 * 1024) -> str:
     return value.decode("utf-8", "replace")
 
 
+_AARCH64_BINFMT_INTERPRETER = "/usr/libexec/qemu-binfmt/aarch64-binfmt-P"
+_CANONICAL_AARCH64_BINFMT_RECORD = "\n".join((
+    "qemu-aarch64",
+    "enabled",
+    f"interpreter {_AARCH64_BINFMT_INTERPRETER}",
+    "flags: POF",
+    "offset 0",
+    "magic 7f454c460201010000000000000000000200b700",
+    "mask ffffffffffffff00fffffffffffffffffeffffff",
+    "",
+))
+
+
+def _cpu_info_is_consistent_native_x86(cpu: str) -> bool:
+    if not isinstance(cpu, str) or not cpu.strip():
+        return False
+    expected_vendor = None
+    for block in re.split(r"\n\s*\n", cpu.strip()):
+        values: dict[str, str] = {}
+        for line in block.splitlines():
+            if not line.strip():
+                continue
+            match = re.fullmatch(r"([^:\n]+?)\s*:\s*(.*?)\s*", line)
+            if match is None:
+                return False
+            key = match.group(1).lower()
+            if match.group(1) != "vendor_id" and key == "vendor_id":
+                return False
+            if ("vendor" in key and key != "vendor_id") or key in (
+                "cpu implementer", "cpu architecture", "cpu variant", "cpu part",
+                "cpu revision", "architecture"
+            ) or key in values:
+                return False
+            values[key] = match.group(2)
+        vendor = values.get("vendor_id")
+        if vendor not in ("GenuineIntel", "AuthenticAMD"):
+            return False
+        if expected_vendor is not None and vendor != expected_vendor:
+            return False
+        expected_vendor = vendor
+        if "processor" in values and not values["processor"].isdigit():
+            return False
+    return expected_vendor is not None
+
+
+def _fixed_aarch64_interpreter_is_trusted() -> bool:
+    try:
+        if os.path.realpath(_AARCH64_BINFMT_INTERPRETER) != _AARCH64_BINFMT_INTERPRETER:
+            return False
+        cursor = os.path.sep
+        for part in _AARCH64_BINFMT_INTERPRETER.split(os.path.sep)[1:]:
+            cursor = os.path.join(cursor, part)
+            metadata = os.lstat(cursor)
+            if stat.S_ISLNK(metadata.st_mode) or metadata.st_uid != 0 or metadata.st_mode & 0o022:
+                return False
+            if cursor == _AARCH64_BINFMT_INTERPRETER:
+                if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1 or not metadata.st_mode & 0o111:
+                    return False
+            elif not stat.S_ISDIR(metadata.st_mode):
+                return False
+        return True
+    except OSError:
+        return False
+
+
+def native_linux_amd64_evidence_safe(
+    machine: str,
+    cpu: str,
+    process_evidence: str,
+    registrations: list[str],
+    interpreter_trusted: bool,
+) -> bool:
+    if machine != "x86_64" or not _cpu_info_is_consistent_native_x86(cpu):
+        return False
+    evidence = "\n".join((cpu, process_evidence)).lower()
+    if any(token in evidence for token in (
+        "qemu", "tcg", "rosetta", "emulat", "translated", "box64", "fex-emu"
+    )):
+        return False
+    if not registrations:
+        return True
+    return registrations == [_CANONICAL_AARCH64_BINFMT_RECORD] and interpreter_trusted
+
+
 def require_native_linux_amd64() -> None:
     if not sys.platform.startswith("linux") or os.uname().machine != "x86_64":
         fail(
@@ -3027,27 +3111,37 @@ def require_native_linux_amd64() -> None:
             "/sys/class/dmi/id/board_vendor",
         )
     )
+    if not status or not maps:
+        fail("native-host process evidence is unreadable")
     registrations: list[str] = []
     try:
         names = sorted(os.listdir("/proc/sys/fs/binfmt_misc"))
-    except (FileNotFoundError, PermissionError, OSError):
+    except FileNotFoundError:
         names = []
+    except OSError:
+        fail("native-host binfmt enumeration is unreadable")
     for name in names:
         if name in ("register", "status"):
             continue
-        registrations.append(name + "\n" + _read_native_evidence(
-            f"/proc/sys/fs/binfmt_misc/{name}", 64 * 1024
-        ))
-    combined = "\n".join((cpu, status, maps, product, *registrations)).lower()
-    emulation_tokens = ("qemu", "tcg", "rosetta", "emulat", "box64", "fex-emu")
-    vendor_native = re.search(
-        r"^vendor_id\s*:\s*(?:genuineintel|authenticamd)\s*$",
+        registration_path = f"/proc/sys/fs/binfmt_misc/{name}"
+        try:
+            with open(registration_path, "rb", buffering=0) as stream:
+                raw = stream.read(64 * 1024 + 1)
+        except OSError:
+            fail("native-host binfmt registration is unreadable")
+        if len(raw) > 64 * 1024:
+            fail("native-host binfmt registration exceeds its bound")
+        registrations.append(name + "\n" + raw.decode("utf-8", "replace"))
+    interpreter_trusted = (
+        registrations == [_CANONICAL_AARCH64_BINFMT_RECORD]
+        and _fixed_aarch64_interpreter_is_trusted()
+    )
+    if not native_linux_amd64_evidence_safe(
+        os.uname().machine,
         cpu,
-        flags=re.IGNORECASE | re.MULTILINE,
-    ) is not None
-    if (
-        not cpu or not vendor_native or registrations or
-        any(token in combined for token in emulation_tokens)
+        "\n".join((status, maps, product)),
+        registrations,
+        interpreter_trusted,
     ):
         fail(
             "credential-free Pin lanes require clean native Linux x86_64 CPU/kernel evidence; "

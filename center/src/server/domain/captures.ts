@@ -75,7 +75,7 @@ export async function getCaptureFrame(
     });
     if (!res.ok) return null;
     const payload = Buffer.from(await res.arrayBuffer());
-    const projection = res.headers.get("x-cosmos-projection");
+    const projection = res.headers.get("x-carry-projection");
     const servedType = res.headers.get("content-type")?.split(";", 1)[0]?.trim() ?? "";
 
     // Cosmos releases plaintext only after verifying the web Bearer and
@@ -141,7 +141,7 @@ export function responseBytes(bytes: Buffer): Uint8Array<ArrayBuffer> {
  * Open the full-resolution file the stock photography worker uploaded.
  *
  * Returned as a STREAM. Every check this makes reads response headers — the
- * `x-cosmos-projection` verdict and the content type — and none of them reads the
+ * `x-carry-projection` verdict and the content type — and none of them reads the
  * body, so there is no reason to hold a full-resolution original in the BFF's
  * heap before handing it on. `getCaptureFrame` above is deliberately different:
  * its legacy HMCT branch opens an envelope over the whole buffer and must
@@ -203,7 +203,7 @@ export async function getSharedCaptureFrame(
  */
 function assertOpenedImage(res: Response, what: string): string {
   const contentType = res.headers.get("content-type")?.split(";", 1)[0]?.trim() ?? "";
-  if (res.headers.get("x-cosmos-projection") !== "opened" || !contentType.startsWith("image/")) {
+  if (res.headers.get("x-carry-projection") !== "opened" || !contentType.startsWith("image/")) {
     void res.body?.cancel().catch(() => undefined);
     throw new Error(`${what} projection returned sealed or non-image data`);
   }

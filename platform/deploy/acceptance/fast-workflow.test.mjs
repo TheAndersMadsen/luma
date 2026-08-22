@@ -232,7 +232,7 @@ test("kid scoping is explicit on ai-bus and production cannot render without a p
   }
   Object.assign(environment, {
     REVIVAL_RELEASE_ID: "0".repeat(64),
-    COSMOS_DATABASE_URL: "postgresql://fixture:fixture@postgres/cosmos",
+    COSMOS_DATABASE_URL: "postgresql://carry:fixture@postgres/carry",
     COSMOS_CAPTURE_UPLOAD_BASE_URL: "https://upload.invalid",
     COSMOS_ONBOARDING_ENDPOINT: "https://onboarding.invalid",
     COSMOS_OPAQUE_SEED: Buffer.alloc(32, 1).toString("base64"),

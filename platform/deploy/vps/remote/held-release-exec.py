@@ -42,6 +42,7 @@ HELD_ENV_BINDINGS = {
     "platform/deploy/vps/remote/domain.sh": "REVIVAL_HELD_DOMAIN",
     "platform/deploy/vps/remote/domain.py": "REVIVAL_HELD_DOMAIN_PY",
     "platform/deploy/vps/remote/transaction.py": "REVIVAL_HELD_TRANSACTION",
+    "platform/deploy/vps/remote/carry-baseline.py": "REVIVAL_HELD_CARRY_BASELINE",
     "platform/deploy/vps/remote/candidate-runtime.py": "REVIVAL_HELD_CANDIDATE_RUNTIME",
     "platform/deploy/vps/remote/candidate-authority-exec.py": "REVIVAL_HELD_CANDIDATE_AUTHORITY_EXEC",
     "platform/deploy/vps/remote/release-store.py": "REVIVAL_HELD_RELEASE_STORE",
@@ -49,6 +50,10 @@ HELD_ENV_BINDINGS = {
     "platform/deploy/vps/remote/held-compose.py": "REVIVAL_HELD_COMPOSE",
     "platform/deploy/candidate-store.py": "REVIVAL_HELD_CANDIDATE_STORE",
     "platform/deploy/release-candidate.mjs": "REVIVAL_HELD_CANDIDATE_VERIFIER",
+    # Preflight must prove the live edge certificate against the exact trust
+    # root embedded in this reviewed release.  Expose the already-open sealed
+    # object; a logical release pathname is not certificate authority.
+    "platform/deploy/pin/activate.mjs": "REVIVAL_HELD_PIN_ACTIVATE",
     "platform/deploy/vps/verify-release.py": "REVIVAL_HELD_RELEASE_VERIFIER",
 }
 REQUIRED_MEMFD_SEALS = (

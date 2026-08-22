@@ -52,7 +52,9 @@ internal fun isTrustedCosmosIdentityUid(uid: Int): Boolean =
  */
 class CosmosIdentityProvider : ContentProvider() {
     companion object {
-        const val AUTHORITY = "com.penumbraos.server.cosmosidentity"
+        // Content URIs survive APK replacement in maintenance tooling. Keep
+        // the deployed authority even though the implementation is Cosmos.
+        const val AUTHORITY = "com.penumbraos.server.carryidentity"
         const val STAGING_NAME = "attestation.json"
         const val METHOD_IMPORT = "IMPORT"
         const val METHOD_STATUS = "STATUS"

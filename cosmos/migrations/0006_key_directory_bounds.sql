@@ -7,11 +7,11 @@ BEGIN
     IF NOT EXISTS (
         SELECT 1
         FROM pg_constraint
-        WHERE conname = 'cosmos_channel_key_shape'
-          AND conrelid = 'cosmos_channel_key'::regclass
+        WHERE conname = 'carry_channel_key_shape'
+          AND conrelid = 'carry_channel_key'::regclass
     ) THEN
-        ALTER TABLE cosmos_channel_key
-            ADD CONSTRAINT cosmos_channel_key_shape
+        ALTER TABLE carry_channel_key
+            ADD CONSTRAINT carry_channel_key_shape
             CHECK (
                 octet_length(kid) BETWEEN 1 AND 1024
                 AND octet_length(key) = 16

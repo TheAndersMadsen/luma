@@ -19,8 +19,8 @@ const canary = fs.readFileSync(
 );
 
 const exactHosts = [
-  "connectivity-check.cosmos.humane.cloud",
-  "n.cosmos.humane.cloud",
+  "connectivity-check.carry.humane.cloud",
+  "n.carry.humane.cloud",
 ];
 
 test("connectivity edge is scoped to the two exact stock authorities", () => {

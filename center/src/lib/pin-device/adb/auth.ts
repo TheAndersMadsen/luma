@@ -15,7 +15,7 @@ import { logError, logInfo } from "../logging";
  * Cloudflare Worker (https://adb.penumbraos.workers.dev). Center proxies that
  * call server-side instead, for two reasons: `connect-src 'self'` in
  * center/next.config.mjs stays untouched, and browser JS running on the origin
- * that holds the `cosmos_tokens` session cookie never talks to a third party
+ * that holds the `carry_tokens` session cookie never talks to a third party
  * that sees device auth material.
  *
  * The wire shape is unchanged: raw token bytes in, `{token, public_key}` out.

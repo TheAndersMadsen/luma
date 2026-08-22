@@ -16,7 +16,7 @@ import { requireWearerRequest } from "@/server/operator";
  * of that needs the network — answering the device's ADB AUTH challenge, which
  * only PenumbraOS's signer can do. The Setup SPA called that third-party
  * Cloudflare Worker straight from page JavaScript. Center will not: it would
- * mean widening `connect-src 'self'` on the origin that holds the `cosmos_tokens`
+ * mean widening `connect-src 'self'` on the origin that holds the `carry_tokens`
  * session cookie so that any script on it could reach a third party. The call
  * happens here instead, and the CSP in `next.config.mjs` stays as it is.
  *

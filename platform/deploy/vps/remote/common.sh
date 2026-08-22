@@ -94,7 +94,7 @@ EXPECTED_HOST="anders-server"
 EXPECTED_USER="anders"
 EXPECTED_ARCH="aarch64"
 PROJECT="ai-pin-revival"
-LEGACY_PROJECT="humane-cosmos-clone"
+LEGACY_PROJECT="humane-carry-clone"
 CANDIDATE_HELPER_REFERENCE="node:22.18.0-alpine3.22@sha256:1b2479dd35a99687d6638f5976fd235e26c5b37e8122f786fcd5fe231d63de5b"
 HELPER_IMAGE="${HELPER_IMAGE:-$CANDIDATE_HELPER_REFERENCE}"
 [[ "$HELPER_IMAGE" == "$CANDIDATE_HELPER_REFERENCE" || "$HELPER_IMAGE" =~ ^sha256:[0-9a-f]{64}$ ]] \
@@ -158,11 +158,31 @@ docker() {
     "$REVIVAL_HOST_DOCKER" "$@"
 }
 
-STATE_VOLUME="humane-cosmos-clone_cosmos-state"
-PG_VOLUME="humane-cosmos-clone_cosmos-pgdata"
-PROMETHEUS_VOLUME="humane-cosmos-clone_prometheus-data"
-GRAFANA_VOLUME="humane-cosmos-clone_grafana-data"
-CENTER_DATA_DIR="/home/anders/cosmos-center-data"
+STATE_VOLUME="humane-carry-clone_carry-state"
+PG_VOLUME="humane-carry-clone_carry-pgdata"
+PROMETHEUS_VOLUME="humane-carry-clone_prometheus-data"
+GRAFANA_VOLUME="humane-carry-clone_grafana-data"
+CENTER_DATA_DIR="/home/anders/carry-center-data"
+LOCAL_MODEL_NETWORK="humane-carry-clone_carry-local"
+LEGACY_RUNTIME_ENV="/home/anders/humane-carry-clone/.env"
+LEGACY_BACKENDS_ENV="/home/anders/carry-backends.env"
+LEGACY_CENTER_ENV="/home/anders/carry-center.env"
+LEGACY_EDGE_DIR="/home/anders/carry-edge"
+LEGACY_ATTEST_DIR="/home/anders/carry-attest"
+LEGACY_DUC_DIR="/home/anders/carry-duc"
+LEGACY_DATABASE_USER="carry"
+LEGACY_DATABASE_NAME="carry"
+
+# These are deployed physical identities, not migration inputs.  The canonical
+# Cosmos-named workloads deliberately continue to consume the exact Carry
+# certificate/key inodes for the whole rollback window.  No deployment path is
+# allowed to copy, rename, chown, chmod, relabel, create, or otherwise replace
+# them.  Only the generated Envoy configuration is release-private.
+PRODUCTION_EDGE_CONFIG="$PRIVATE_DIR/edge/envoy.yaml"
+PRODUCTION_EDGE_CERT_DIR="$LEGACY_EDGE_DIR/certs"
+PRODUCTION_ATTEST_DIR="$LEGACY_ATTEST_DIR"
+PRODUCTION_DUC_DIR="$LEGACY_DUC_DIR"
+PRODUCTION_KEYCLOAK_THEME_DIR="/home/anders/keycloak-themes/humane"
 
 RUNTIME_ENV="$PRIVATE_DIR/runtime.env"
 COSMOS_ENV="$PRIVATE_DIR/cosmos.env"
@@ -237,7 +257,7 @@ MANAGED_CLOUDFLARED_USER_UNIT="cloudflared-hermes.service"
 # WHY A SEPARATE REALM USER AND NOT A SERVICE ACCOUNT. Center mints the wearer
 # bearer in exactly one place — POST /api/auth/login, which calls keycloakLogin
 # (Resource Owner Password against client `center`), seals the result with
-# sealTokens and writes it as the chunked `cosmos_tokens` cookie set. A
+# sealTokens and writes it as the chunked `carry_tokens` cookie set. A
 # client-credentials service account would return a token this deployment's own
 # login path never produces, and it returns no refresh token at all, so the gate
 # would be exercising a code path production does not have. The canary therefore
@@ -245,7 +265,7 @@ MANAGED_CLOUDFLARED_USER_UNIT="cloudflared-hermes.service"
 # gets back is byte-for-byte the jar a browser gets.
 #
 # WHAT THE OPERATOR PROVISIONS. One Keycloak realm user in `humane` that is:
-#   * NOT in the operator allowlist and holds no `cosmos-operator` role, so the
+#   * NOT in the operator allowlist and holds no `carry-operator` role, so the
 #     admin plane refuses it — canary.sh proves this at runtime rather than
 #     trusting the provisioning;
 #   * NOT the paired Pin owner, so it addresses its own empty `U:<sub>`
@@ -281,7 +301,7 @@ MANAGED_CLOUDFLARED_USER_UNIT="cloudflared-hermes.service"
 # into the same staging directory before the entry point runs.
 _revival_common_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 for _revival_common_lib in \
-  paths ingress release_transactions configuration compose backup database canary drift; do
+  paths ingress release_transactions configuration compose backup database canary carry-baseline drift; do
   _revival_common_key="REVIVAL_HELD_COMMON_LIB_${_revival_common_lib^^}"
   _revival_common_key="${_revival_common_key//-/_}"
   _revival_common_path="${!_revival_common_key:-$_revival_common_dir/lib/$_revival_common_lib.sh}"

@@ -20,6 +20,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { validateSourceTreePolicy } from "../release.mjs";
+import rootedSource from "../../cli/rooted-source.js";
+
+const { readStableRootedEntries } = rootedSource;
 
 const ROOT = dirname(dirname(dirname(dirname(fileURLToPath(import.meta.url)))));
 const POLICY = join(ROOT, "platform", "deploy", "acceptance", "source-policy.sh");
@@ -475,6 +478,96 @@ test("source policy rejects a concurrent included-directory ancestor swap", asyn
     /symbolic links are forbidden|source manifest changed/u,
   );
   assert.equal(readFileSync(join(external, "inside.txt"), "utf8"), "outside\n");
+});
+
+test("source policy excludes Git metadata drift but still binds source bytes", async (t) => {
+  const root = makeRoot(t);
+  writeBaseline(root);
+  mkdirSync(join(root, ".git"), { recursive: true });
+  writeFileSync(join(root, ".git", "index"), "initial index metadata\n");
+  await validateSourceTreePolicy({
+    root,
+    beforeSourceStabilityCheck: async () => {
+      const index = join(root, ".git", "index");
+      const replacement = join(root, ".git", "index.replacement");
+      writeFileSync(replacement, "refreshed index metadata\n");
+      renameSync(replacement, index);
+      writeFileSync(join(root, ".git", "index.lock"), "transient lock\n");
+      rmSync(join(root, ".git", "index.lock"));
+    },
+  });
+  await assert.rejects(
+    validateSourceTreePolicy({
+      root,
+      beforeSourceStabilityCheck: async () => {
+        writeFileSync(join(root, "pin", "contracts", "fixtures", "interface.json"), "{}\n");
+      },
+    }),
+    /source manifest changed/u,
+  );
+});
+
+test("Linux and forced-Darwin rooted walks omit the complete pruned Git boundary", (t) => {
+  const root = makeRoot(t);
+  writeBaseline(root);
+  mkdirSync(join(root, ".git", "objects"), { recursive: true });
+  writeFileSync(join(root, ".git", "index"), "index metadata\n");
+  const collect = (platform) => readStableRootedEntries(
+    root,
+    ["."],
+    `${platform} prune parity`,
+    { walk: true, prune: [".git"], platform, pythonExecutable: "/usr/bin/python3" },
+  ).entries.map((entry) => entry.receipt.path);
+  const linux = collect("linux");
+  const darwin = collect("darwin");
+  assert.deepEqual(darwin, linux);
+  assert.equal(linux.some((entry) => entry === ".git" || entry.startsWith(".git/")), false);
+  for (const requested of [[], [".git"], [".git/index"]]) {
+    const results = ["linux", "darwin"].map((platform) => readStableRootedEntries(
+      root,
+      requested,
+      `${platform} all-pruned parity`,
+      { walk: true, prune: [".git"], platform, pythonExecutable: "/usr/bin/python3" },
+    ));
+    assert.deepEqual(results[0].entries, []);
+    assert.deepEqual(results[1].entries, []);
+    assert.deepEqual(results[1].rootReceipt, results[0].rootReceipt);
+    const staleRoot = results[0].rootReceipt;
+    writeFileSync(join(root, "root-membership-churn"), "churn\n");
+    for (const platform of ["linux", "darwin"]) {
+      assert.throws(() => readStableRootedEntries(
+        root,
+        requested,
+        `${platform} stale all-pruned root`,
+        {
+          walk: true,
+          prune: [".git"],
+          platform,
+          pythonExecutable: "/usr/bin/python3",
+          expectedRoot: staleRoot,
+        },
+      ), /root changed|source root changed/u);
+    }
+    rmSync(join(root, "root-membership-churn"));
+  }
+  const missing = join(root, "missing-root");
+  for (const platform of ["linux", "darwin"]) {
+    assert.throws(() => readStableRootedEntries(
+      missing,
+      [".git/index"],
+      `${platform} missing all-pruned root`,
+      { walk: true, prune: [".git"], platform, pythonExecutable: "/usr/bin/python3" },
+    ));
+  }
+
+  const oldIndex = join(root, ".git", "index.old");
+  renameSync(join(root, ".git", "index"), oldIndex);
+  writeFileSync(join(root, ".git", "index"), "replacement metadata\n");
+  rmSync(oldIndex);
+  mkdirSync(join(root, ".git", "refs"));
+  rmSync(join(root, ".git", "refs"), { recursive: true });
+  assert.deepEqual(collect("linux"), linux);
+  assert.deepEqual(collect("darwin"), darwin);
 });
 
 test("cheap source policy uses the structural encrypted-PKCS#8 detector", (t) => {

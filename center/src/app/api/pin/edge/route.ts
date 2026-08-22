@@ -4,7 +4,7 @@ import { parseDeviceEdgeDeclaration } from "@/lib/pin-setup";
 /**
  * GET /api/pin/edge — the address a Pin must be pointed at to reach THIS server.
  *
- * The setup flow reads `penumbra_cosmos_edge_ipv4` off the device, but the device
+ * The setup flow reads `penumbra_carry_edge_ipv4` off the device, but the device
  * only says where it is pointed, not whether that is us. Without something to
  * compare against, the flow marked "Point the Pin at this server" as done for a
  * Pin pointed at somebody else's server entirely — a newcomer would be told the

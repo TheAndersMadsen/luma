@@ -77,7 +77,7 @@ done
 
 assert_target
 assert_remote_root
-for command in docker flock node python3 sha256sum systemctl curl readlink openssl pgrep cmp; do need "$command"; done
+for command in docker flock node python3 sha256sum systemctl curl readlink openssl pgrep cmp stat find; do need "$command"; done
 ensure_layout
 pin_local_docker_daemon
 exec 9>"$LOCK_FILE"
@@ -197,13 +197,36 @@ if ((resuming_pointer_transaction == 0)); then
   domain_sudo python3 "$DOMAIN_HELPER" client-check-marker --record "$record" --state applied \
     || fail "current deployment lacks its applied Center Keycloak marker"
 fi
+verify_exact_carry_security_identity "$record/carry-security-identity.json"
 
 target_release="$(tr -d '\r\n' <"$record/old-current")"
 target_record="$(tr -d '\r\n' <"$record/old-current-deployment")"
 target_kind=canonical
 target_release_id=""
+carry_baseline_id=""
 if [[ -z "$target_release" && -z "$target_record" ]]; then
-  fail "rollback to a legacy cache-only target is forbidden; no retained candidate bundle exists"
+  [[ -f "$record/carry-baseline-id" && ! -L "$record/carry-baseline-id" \
+    && "$(stat -c '%a:%u:%g:%h' "$record/carry-baseline-id")" == "600:$(id -u):$(id -g):1" ]] \
+    || fail "legacy rollback lacks its one-time adopted-live-carry-v1 binding"
+  carry_baseline_id="$(tr -d '\r\n' <"$record/carry-baseline-id")"
+  [[ "$carry_baseline_id" =~ ^[0-9a-f]{64}$ ]] \
+    || fail "legacy rollback baseline identity is invalid"
+  current_authority_sha256="$(tr -d '\r\n' <"$record/hosted-vps-authority.sha256")"
+  [[ "$current_authority_sha256" =~ ^[0-9a-f]{64}$ ]] \
+    || fail "first-cutover deployment authority digest is invalid"
+  # This authority is an observation, not a release candidate. It is admitted
+  # only when it is bound to the exact current first-cutover candidate and its
+  # retained containers are stopped with byte-identical image/config/resource
+  # identity. It can never enter the normal canonical target branch below.
+  verify_adopted_live_carry "$carry_baseline_id" stopped \
+    "$current_candidate_id" "$current_release_id" "$current_authority_sha256" \
+    || fail "retained Carry predecessor differs from its sealed first-cutover authority"
+  [[ -f "$record/before/running-containers.txt" \
+    && -f "$record/before/running-identities.tsv" \
+    && -f "$record/before/mounts.tsv" \
+    && -f "$record/before/semantic-baseline.tsv" ]] \
+    || fail "legacy rollback lacks its exact first-cutover application evidence"
+  target_kind=legacy
 elif [[ -z "$target_release" || -z "$target_record" ]]; then
   fail "recorded rollback lineage is internally inconsistent"
 else
@@ -240,6 +263,9 @@ else
     || fail "target candidate does not bind the requested rollback release and Carry contract"
   verify_candidate_release_authority "$current_release_store" "$target_record" \
     "$target_candidate_id" "$target_release_id"
+  verify_exact_carry_security_identity "$target_record/carry-security-identity.json"
+  cmp -s "$record/carry-security-identity.json" "$target_record/carry-security-identity.json" \
+    || fail "canonical rollback records disagree about the immutable Carry security identity"
 fi
 target_center_domain=0
 if [[ "$target_kind" == canonical \
@@ -565,20 +591,10 @@ if ((resuming_pointer_transaction)); then
 fi
 owner_canary_cookie="$work/owner-canary.cookies"
 cleanup_work_secrets() {
-  # Both paths are derived from $work, never from the $target_stage variable.
-  # $target_stage is assigned in exactly two places, both of them BELOW the
-  # resumed-accepted-transaction block, and that block calls this function before
-  # it exits — so on a resumed rollback the variable was still its empty
-  # initialiser, the `-n` guard skipped the removal silently, and the staged tree
-  # survived. That tree is not scratch: it holds the sudo cp -a copies of
-  # $PRIVATE_DIR/attest and $PRIVATE_DIR/duc, whose ca.key and duc-ca.key
-  # backup.sh calls the only content of a backup that cannot be regenerated from
-  # anything. Nothing else ever removes them — the state-retention command
-  # excludes deployments/ by design — so they stayed root-owned inside the
-  # deployment record forever, outside preflight's key-permission gates, and were
-  # re-read under sudo by every later retention scan. Both assignments set exactly
-  # "$work/target-stage", so binding to the path is equivalent everywhere the
-  # variable was set and correct where it was not.
+  # Both paths are derived from $work, never from the late-bound $target_stage
+  # variable, so every resume disposition reaches the same cleanup.  Security
+  # roots never enter this tree: only copied environment/theme/token rehearsal
+  # material may be present.
   [[ ! -e "$work/current-config" ]] || rm -rf -- "$work/current-config"
   if [[ -e "$work/target-stage" ]]; then sudo -n rm -rf -- "$work/target-stage"; fi
   rm -f -- "$owner_canary_cookie"
@@ -649,14 +665,14 @@ verify_target_domain_state() {
   else
     domain_nginx_verify_before "$record" || return 1
     domain_cloudflared_verify_before "$record" || return 1
-    domain_keycloak_verify_before "$record" "$runtime" 8088 cosmos.andersmadsen.dk
+    domain_keycloak_verify_before "$record" "$runtime" 8088 carry.andersmadsen.dk
   fi
 }
 
 restore_target_keycloak_state() {
   local runtime request_host
   runtime="$(target_keycloak_runtime)" || return 1
-  request_host=cosmos.andersmadsen.dk
+  request_host=carry.andersmadsen.dk
   ((target_center_domain == 0)) || request_host=center.andersmadsen.dk
   domain_keycloak_wait 8088 "$request_host" || return 1
   domain_keycloak_restore "$record" "$runtime" 8088 "$request_host" || return 1
@@ -996,10 +1012,10 @@ if ((resuming_pointer_transaction)); then
   ingress_quiesced=1
   if [[ "$target_kind" == canonical ]]; then
     target_stage="$work/target-stage"
-    [[ -d "$target_stage/env" && -d "$target_stage/assets/attest" \
-      && -d "$target_stage/assets/duc" && -d "$target_stage/assets/keycloak-theme" \
+    [[ -d "$target_stage/env" && -d "$target_stage/assets/keycloak-theme" \
       && -f "$target_stage/spotify-token" ]] \
       || fail "rollback resume lost its isolated target rehearsal material"
+    verify_exact_carry_security_identity "$target_record/carry-security-identity.json"
   fi
 else
   rollback_backup_id="rollback-${deployment_id:0:54}-$(date -u +%Y%m%dT%H%M%SZ)"
@@ -1047,17 +1063,18 @@ if [[ "$target_kind" == canonical ]]; then
       == "$(sha256sum "$target_config/$name" | awk '{print $1}')" ]] \
       || fail "target staging environment copy changed: $name"
   done
-  for name in attest duc keycloak-theme; do
-    sudo -n test -d "$PRIVATE_DIR/$name" && ! sudo -n test -L "$PRIVATE_DIR/$name" \
-      || fail "target staging asset is missing: $name"
-    sudo -n cp -a -- "$PRIVATE_DIR/$name" "$target_stage/assets/$name"
-  done
+  verify_exact_carry_security_identity "$target_record/carry-security-identity.json"
+  sudo -n test -d "$PRODUCTION_KEYCLOAK_THEME_DIR" \
+    && ! sudo -n test -L "$PRODUCTION_KEYCLOAK_THEME_DIR" \
+    || fail "target staging Keycloak theme is missing or unsafe"
+  sudo -n cp -a -- "$PRODUCTION_KEYCLOAK_THEME_DIR" "$target_stage/assets/keycloak-theme"
   [[ -f "$target_config/spotify-token" && ! -L "$target_config/spotify-token" ]] \
     || fail "target staging Spotify token is missing"
   install -m 600 "$target_config/spotify-token" "$target_stage/spotify-token"
   run_held_release_program "$current_release" platform/deploy/vps/remote/staging-smoke.sh bash 0 \
     --release-id "$target_release_id" --backup "$fresh_backup" --env-dir "$target_stage/env" \
-    --attest-dir "$target_stage/assets/attest" --duc-dir "$target_stage/assets/duc" \
+    --attest-dir "$PRODUCTION_ATTEST_DIR" --duc-dir "$PRODUCTION_DUC_DIR" \
+    --security-identity "$target_record/carry-security-identity.json" \
     --keycloak-theme-dir "$target_stage/assets/keycloak-theme" \
     --spotify-token-file "$target_stage/spotify-token"
 else
@@ -1160,8 +1177,10 @@ sudo -n python3 "$transaction_driver" --root "$REMOTE_ROOT" --record "$record" \
   --channel-key-action verify-old
 if [[ "$target_kind" == canonical ]]; then
   sudo -n python3 "$transaction_driver" --root "$REMOTE_ROOT" --record "$record" \
-    --trust-root-action record --staged-attest "$target_stage/assets/attest" \
-    --staged-duc "$target_stage/assets/duc" --live-attest "$PRIVATE_DIR/attest" --live-duc "$PRIVATE_DIR/duc"
+    --trust-root-action record --staged-attest "$PRODUCTION_ATTEST_DIR" \
+    --staged-duc "$PRODUCTION_DUC_DIR" --live-attest "$PRODUCTION_ATTEST_DIR" \
+    --live-duc "$PRODUCTION_DUC_DIR"
+  verify_exact_carry_security_identity "$target_record/carry-security-identity.json"
   activate_retained_candidate_authority "$target_release" "$target_record" "$record" \
     rollback-activate-target
   load_compose_command "$target_release"
@@ -1187,6 +1206,10 @@ PY
     --require-remote-tts --quiesced-loopback "${target_origin_args[@]}"
   assert_ingress_quiesced || fail "managed ingress reopened during rollback canary"
 else
+  verify_exact_carry_security_identity "$record/carry-security-identity.json"
+  verify_adopted_live_carry "$carry_baseline_id" stopped \
+    "$current_candidate_id" "$current_release_id" "$current_authority_sha256" absent \
+    || fail "Carry predecessor identity changed at the legacy activation boundary"
   start_recorded_containers "$record/before/running-containers.txt"
   restore_target_keycloak_state \
     || fail "legacy Cosmos domain and Keycloak state could not be restored"
@@ -1201,7 +1224,7 @@ else
   # row and a dropped column all still fail; if that backup predates the sidecar
   # the capture falls back to the live columns and refuses, which is the safe
   # direction.
-  capture_postgres_data "$legacy_postgres" cosmos "$work/legacy-restored-postgres-data.tsv" \
+  capture_postgres_data "$legacy_postgres" "$LEGACY_DATABASE_USER" "$work/legacy-restored-postgres-data.tsv" \
     "$original_backup/postgres-data.tsv.columns"
   cmp -s "$original_backup/postgres-data.tsv" "$work/legacy-restored-postgres-data.tsv" \
     || fail "legacy rollback refused because the exact pre-cutover database state was not restored"

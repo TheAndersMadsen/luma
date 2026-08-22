@@ -611,11 +611,244 @@ remote_preupload_gate() {
   run_ssh "$REMOTE_CLEAN_BASH -s -- $args" <<'REMOTE'
 set -euo pipefail
 host="$1"; user="$2"; arch="$3"; root="$4"; release_id="$5"; min_gb="$6"; archive_bytes="$7"; incoming="$8"
+project=ai-pin-revival
+legacy_project=humane-carry-clone
+state_volume=humane-carry-clone_carry-state
+pg_volume=humane-carry-clone_carry-pgdata
+prometheus_volume=humane-carry-clone_prometheus-data
+grafana_volume=humane-carry-clone_grafana-data
+local_model_network=humane-carry-clone_carry-local
+center_data=/home/anders/carry-center-data
+docker=(/usr/bin/docker --host unix:///var/run/docker.sock --config /nonexistent)
 [[ "$(hostname -s)" == "$host" && "$(id -un)" == "$user" ]] || { echo 'pre-upload target identity mismatch' >&2; exit 1; }
 case "$arch:$(uname -m)" in aarch64:aarch64|aarch64:arm64) ;; *) echo 'pre-upload architecture mismatch' >&2; exit 1;; esac
 [[ "$root" == /home/anders/ai-pin-revival && "$incoming" == "$root/incoming/$release_id" ]] || exit 1
 if [[ -e "$root" || -L "$root" ]]; then [[ -d "$root" && ! -L "$root" ]] || exit 1; fi
 [[ ! -e "$incoming" && ! -L "$incoming" ]] || { echo 'incoming release path already exists' >&2; exit 1; }
+
+carry_security_digest() {
+  /usr/bin/sudo -n /usr/bin/env -i HOME=/nonexistent LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+    PATH=/usr/bin:/usr/sbin TZ=UTC /usr/bin/python3 -I -B - <<'PY'
+import hashlib,os,stat
+roots={
+ "edge":("/home/anders/carry-edge",1000,1001,{"envoy.yaml","certs/server.crt","certs/server.key","certs/api-client-ca.crt","certs/onboarding-client-ca.crt"}),
+ "attest":("/home/anders/carry-attest",65532,65532,{"ca.crt","ca.key"}),
+ "duc":("/home/anders/carry-duc",65532,65532,{"duc-ca.crt","duc-ca.key"}),
+}
+overall=hashlib.sha256(); members=0; total=0
+def ident(value): return (value.st_dev,value.st_ino,stat.S_IFMT(value.st_mode),stat.S_IMODE(value.st_mode),value.st_uid,value.st_gid,value.st_nlink,value.st_size,value.st_mtime_ns,value.st_ctime_ns)
+def add(value):
+ data=str(value).encode(); overall.update(len(data).to_bytes(8,"big")); overall.update(data)
+def open_root(path):
+ descriptor=os.open("/",os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW); walked=""
+ try:
+  for component in path.split("/")[1:]:
+   before=os.stat(component,dir_fd=descriptor,follow_symlinks=False)
+   assert stat.S_ISDIR(before.st_mode) and not stat.S_ISLNK(before.st_mode)
+   child=os.open(component,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=descriptor)
+   opened=os.fstat(child); assert ident(before)==ident(opened)
+   os.close(descriptor); descriptor=child; walked+="/"+component
+   if walked=="/home": assert (opened.st_uid,opened.st_gid)==(0,0) and not (stat.S_IMODE(opened.st_mode)&0o022)
+   if walked=="/home/anders": assert opened.st_uid==1000 and not (stat.S_IMODE(opened.st_mode)&0o022)
+  assert os.path.realpath(path)==path
+  return descriptor
+ except BaseException:
+  os.close(descriptor); raise
+def inspect(label,path,uid,gid,required):
+ global members,total
+ root=os.lstat(path); descriptor=open_root(path); opened=os.fstat(descriptor)
+ assert ident(root)==ident(opened) and stat.S_ISDIR(opened.st_mode)
+ seen=set()
+ def walk(parent,relative,metadata):
+  global members,total
+  assert (metadata.st_uid,metadata.st_gid)==(uid,gid) and not (stat.S_IMODE(metadata.st_mode)&0o022)
+  add((label,relative,ident(metadata))); members+=1; assert members<=10000
+  names=sorted(os.listdir(parent))
+  for name in names:
+   assert name not in {"",".",".."} and "/" not in name
+   before=os.stat(name,dir_fd=parent,follow_symlinks=False); child_path=name if relative=="." else relative+"/"+name
+   assert (before.st_uid,before.st_gid)==(uid,gid) and not (stat.S_IMODE(before.st_mode)&0o022)
+   if stat.S_ISDIR(before.st_mode):
+    child=os.open(name,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=parent)
+    try:
+     child_meta=os.fstat(child); assert ident(child_meta)==ident(before); walk(child,child_path,child_meta)
+     assert ident(os.fstat(child))==ident(child_meta) and ident(os.stat(name,dir_fd=parent,follow_symlinks=False))==ident(before)
+    finally: os.close(child)
+   else:
+    assert stat.S_ISREG(before.st_mode) and before.st_nlink==1
+    child=os.open(name,os.O_RDONLY|os.O_NOFOLLOW,dir_fd=parent)
+    try:
+     child_meta=os.fstat(child); assert ident(child_meta)==ident(before)
+     digest=hashlib.sha256(); offset=0; total+=child_meta.st_size; assert total<=256*1024*1024
+     while offset<child_meta.st_size:
+      block=os.pread(child,min(1024*1024,child_meta.st_size-offset),offset); assert block; digest.update(block); offset+=len(block)
+     assert ident(os.fstat(child))==ident(child_meta) and ident(os.stat(name,dir_fd=parent,follow_symlinks=False))==ident(before)
+     add(digest.hexdigest()); seen.add(child_path)
+    finally: os.close(child)
+  assert sorted(os.listdir(parent))==names and ident(os.fstat(parent))==ident(metadata)
+ try:
+  walk(descriptor,".",opened); assert required<=seen
+  assert ident(os.fstat(descriptor))==ident(opened) and ident(os.lstat(path))==ident(root)
+ finally: os.close(descriptor)
+for label,(path,uid,gid,required) in sorted(roots.items()): inspect(label,path,uid,gid,required)
+print(overall.hexdigest())
+PY
+}
+security_before="$(carry_security_digest)" \
+  || { echo 'pre-upload deployed Carry PKI/certificate identity is unsafe' >&2; exit 1; }
+[[ "$security_before" =~ ^[0-9a-f]{64}$ ]] || exit 1
+
+# This is deliberately duplicated from the signed production authority rather
+# than inferred from candidate receipts or remote environment. It is the last
+# read-only boundary before any incoming directory can be created or one byte
+# uploaded, and therefore proves that the cutover will retain the deployed Carry
+# resources rather than allowing Compose to create empty Cosmos replacements.
+for volume in "$state_volume" "$pg_volume" "$prometheus_volume" "$grafana_volume"; do
+  [[ "$("${docker[@]}" volume inspect --format '{{.Name}}' "$volume" 2>/dev/null)" == "$volume" ]] \
+    || { echo "pre-upload required Carry volume is missing: $volume" >&2; exit 1; }
+done
+[[ "$("${docker[@]}" network inspect --format '{{.Name}}' "$local_model_network" 2>/dev/null)" == "$local_model_network" ]] \
+  || { echo 'pre-upload required Carry local-model network is missing' >&2; exit 1; }
+/usr/bin/python3 -I -B - "$center_data" <<'PY' \
+  || { echo 'pre-upload Carry Center data directory is missing or unsafe' >&2; exit 1; }
+import os,stat,sys
+target=sys.argv[1]
+assert target=="/home/anders/carry-center-data"
+for path in ("/home","/home/anders",target):
+    value=os.lstat(path)
+    assert stat.S_ISDIR(value.st_mode) and not stat.S_ISLNK(value.st_mode)
+value=os.lstat(target)
+assert value.st_uid==os.getuid() and not (stat.S_IMODE(value.st_mode)&0o002)
+assert os.path.realpath(target)==target
+PY
+
+canonical_ids="$("${docker[@]}" ps -q --filter "label=com.docker.compose.project=$project")"
+legacy_ids="$("${docker[@]}" ps -q --filter "label=com.docker.compose.project=$legacy_project")"
+[[ -z "$canonical_ids" || -z "$legacy_ids" ]] \
+  || { echo 'pre-upload legacy and canonical projects are simultaneous writers' >&2; exit 1; }
+if [[ -n "$canonical_ids" ]]; then
+  active_project="$project"
+  [[ -L "$root/current" && -L "$root/current-deployment" ]] \
+    || { echo 'pre-upload canonical writers lack authoritative pointers' >&2; exit 1; }
+else
+  active_project="$legacy_project"
+  [[ -n "$legacy_ids" && ! -e "$root/current" && ! -L "$root/current" \
+    && ! -e "$root/current-deployment" && ! -L "$root/current-deployment" ]] \
+    || { echo 'pre-upload first cutover lacks one authoritative Carry project' >&2; exit 1; }
+  [[ "$("${docker[@]}" network inspect --format '{{.Name}}' carry-net 2>/dev/null)" == carry-net ]] \
+    || { echo 'pre-upload Carry rollback network is missing' >&2; exit 1; }
+fi
+containers=()
+for service in postgres connectivity ai-bus account contacts edge feature-flags notable-events provisioning prometheus grafana center; do
+  mapfile -t matches < <("${docker[@]}" ps -q \
+    --filter "label=com.docker.compose.project=$active_project" \
+    --filter "label=com.docker.compose.service=$service")
+  [[ "${#matches[@]}" == 1 ]] \
+    || { echo "pre-upload active production service is ambiguous or missing: $service" >&2; exit 1; }
+  containers+=("${matches[0]}")
+done
+all_containers=()
+mapfile -t all_containers < <("${docker[@]}" ps -aq --no-trunc)
+((${#all_containers[@]} > 0)) \
+  || { echo 'pre-upload production container inventory is empty' >&2; exit 1; }
+3< <("${docker[@]}" inspect "${containers[@]}") \
+4< <("${docker[@]}" inspect "${all_containers[@]}") /usr/bin/python3 -I -B - \
+  "$active_project" "$project" "$legacy_project" "$state_volume" "$pg_volume" \
+  "$prometheus_volume" "$grafana_volume" "$local_model_network" "$center_data" <<'PY' \
+  || { echo 'pre-upload active production mounts differ from the exact Carry contract' >&2; exit 1; }
+import json,os,sys
+active,canonical,legacy,state,pg,prometheus,grafana,network,center=sys.argv[1:]
+body=json.load(os.fdopen(3))
+expected_services={"postgres","connectivity","ai-bus","account","contacts","edge","feature-flags",
+                   "notable-events","provisioning","prometheus","grafana","center"}
+containers={}
+for item in body:
+    labels=item.get("Config",{}).get("Labels") or {}
+    assert labels.get("com.docker.compose.project")==active
+    service=labels.get("com.docker.compose.service")
+    assert service in expected_services and service not in containers
+    assert item.get("State",{}).get("Running") is True
+    containers[service]=item
+assert set(containers)==expected_services
+state_target="/var/lib/carry"
+assert active in {canonical,legacy}
+expected={
+    "postgres":("/var/lib/postgresql/data","volume",pg),
+    "prometheus":("/prometheus","volume",prometheus),
+    "grafana":("/var/lib/grafana","volume",grafana),
+    "center":("/data","bind",center),
+}
+for service in expected_services-expected.keys()-{"edge"}: expected[service]=(state_target,"volume",state)
+for service,(destination,kind,source) in expected.items():
+    mounts=[mount for mount in containers[service].get("Mounts",[]) if mount.get("Destination")==destination]
+    assert len(mounts)==1 and mounts[0].get("Type")==kind and mounts[0].get("RW") is True
+    assert mounts[0].get("Name" if kind=="volume" else "Source")==source
+networks=containers["ai-bus"].get("NetworkSettings",{}).get("Networks") or {}
+assert network in networks
+security=(
+    ("ai-bus","/etc/carry-attest/ca.crt" if active==legacy else "/etc/cosmos-attest/ca.crt",
+     "/home/anders/carry-attest/ca.crt"),
+    ("ai-bus","/etc/carry-attest/ca.key" if active==legacy else "/etc/cosmos-attest/ca.key",
+     "/home/anders/carry-attest/ca.key"),
+    ("provisioning","/etc/carry-duc/duc-ca.crt" if active==legacy else "/etc/cosmos-duc/duc-ca.crt",
+     "/home/anders/carry-duc/duc-ca.crt"),
+    ("provisioning","/etc/carry-duc/duc-ca.key" if active==legacy else "/etc/cosmos-duc/duc-ca.key",
+     "/home/anders/carry-duc/duc-ca.key"),
+    ("edge","/etc/carry-edge/certs/server.crt" if active==legacy else "/etc/cosmos-edge/certs/server.crt",
+     "/home/anders/carry-edge/certs/server.crt"),
+    ("edge","/etc/carry-edge/certs/server.key" if active==legacy else "/etc/cosmos-edge/certs/server.key",
+     "/home/anders/carry-edge/certs/server.key"),
+    ("edge","/etc/carry-edge/certs/api-client-ca.crt" if active==legacy else "/etc/cosmos-edge/certs/api-client-ca.crt",
+     "/home/anders/carry-edge/certs/api-client-ca.crt"),
+    ("edge","/etc/carry-edge/certs/onboarding-client-ca.crt" if active==legacy else "/etc/cosmos-edge/certs/onboarding-client-ca.crt",
+     "/home/anders/carry-edge/certs/onboarding-client-ca.crt"),
+)
+for service,destination,source in security:
+    mounts=[mount for mount in containers[service].get("Mounts",[]) if mount.get("Destination")==destination]
+    assert len(mounts)==1 and mounts[0].get("Type")=="bind" and mounts[0].get("RW") is False
+    assert mounts[0].get("Source")==source
+
+# A correct active consumer is not enough if any retained or unrelated
+# container has a second write path (or a broad parent bind) to the same keys.
+# Accept only the exact reviewed file-level, read-only mounts in the two known
+# production projects. This also refuses unreviewed read-only key consumers.
+all_body=json.load(os.fdopen(4))
+roots=("/home/anders/carry-edge/certs","/home/anders/carry-attest","/home/anders/carry-duc")
+files={
+    "edge":("server.crt","server.key","api-client-ca.crt","onboarding-client-ca.crt"),
+    "ai-bus":("ca.crt","ca.key"),
+    "provisioning":("duc-ca.crt","duc-ca.key"),
+}
+root_for={"edge":roots[0],"ai-bus":roots[1],"provisioning":roots[2]}
+target_root={
+    (canonical,"edge"):"/etc/cosmos-edge/certs", (legacy,"edge"):"/etc/carry-edge/certs",
+    (canonical,"ai-bus"):"/etc/cosmos-attest", (legacy,"ai-bus"):"/etc/carry-attest",
+    (canonical,"provisioning"):"/etc/cosmos-duc", (legacy,"provisioning"):"/etc/carry-duc",
+}
+allowed=set()
+for (allowed_project,service),destination_root in target_root.items():
+    for name in files[service]:
+        allowed.add((allowed_project,service,root_for[service]+"/"+name,destination_root+"/"+name))
+def overlaps(source,root):
+    try: common=os.path.commonpath((source,root))
+    except ValueError: return False
+    return common in (source,root)
+for item in all_body:
+    labels=(item.get("Config") or {}).get("Labels") or {}
+    item_project=labels.get("com.docker.compose.project")
+    item_service=labels.get("com.docker.compose.service")
+    for mount in item.get("Mounts") or []:
+        if mount.get("Type")!="bind": continue
+        source=mount.get("Source")
+        if not isinstance(source,str) or not source.startswith("/"): continue
+        if not any(overlaps(source,root) for root in roots): continue
+        assert (item_project,item_service,source,mount.get("Destination")) in allowed
+        assert mount.get("RW") is False
+PY
+security_after="$(carry_security_digest)" \
+  || { echo 'pre-upload deployed Carry PKI/certificate identity changed during inspection' >&2; exit 1; }
+[[ "$security_after" == "$security_before" ]] \
+  || { echo 'pre-upload deployed Carry PKI/certificate identity changed during inspection' >&2; exit 1; }
 available_kb="$(df -Pk /home/anders | awk 'NR==2 {print $4}')"
 required_kb=$((min_gb * 1024 * 1024 + archive_bytes * 6 / 1024))
 ((available_kb >= required_kb)) || { echo 'insufficient remote build capacity' >&2; exit 1; }
@@ -634,19 +867,21 @@ run_verified_release_deploy() {
   local release_id="$1" incoming="$2" archive="$3" manifest="$4" verifier="$5" deployment_id="$6"
   local min_free_gb="$7" archive_bytes="$8" cleanup="$9" json="${10}" skip_smoke="${11:-0}"
   local candidate_id="${12:-}" candidate_root="${13:-}" deployment_authority_sha256="${14:-}"
+  local operation="${15:-deploy}"
   validate_release_id "$release_id"
   validate_remote_root "$REMOTE_ROOT"
   [[ "$min_free_gb" =~ ^[0-9]+$ && "$archive_bytes" =~ ^[0-9]+$ && "$cleanup" =~ ^[01]$ \
      && "$json" =~ ^[01]$ && "$skip_smoke" =~ ^[01]$ && "$candidate_id" =~ ^[0-9a-f]{64}$ \
      && "$candidate_root" == "$incoming/.candidate-$candidate_id.partial/$candidate_id" \
-     && "$deployment_authority_sha256" =~ ^[0-9a-f]{64}$ ]] \
+     && "$deployment_authority_sha256" =~ ^[0-9a-f]{64}$ \
+     && ( "$operation" == deploy || "$operation" == register-carry-baseline ) ]] \
     || usage_error "invalid selected-release deployment arguments"
   local args
   args="$(remote_quote \
     "$release_id" "$REMOTE_ROOT" "$incoming" "$archive" "$manifest" "$verifier" \
     "$deployment_id" "$min_free_gb" "$archive_bytes" "$cleanup" "$json" \
     "$EXPECTED_HOST" "$EXPECTED_USER" "$EXPECTED_ARCH" "$skip_smoke" "$candidate_id" "$candidate_root" \
-    "$deployment_authority_sha256")"
+    "$deployment_authority_sha256" "$operation")"
   {
     cat <<'BOOTSTRAP'
 set -euo pipefail
@@ -655,6 +890,7 @@ release_id="$1"; remote_root="$2"; incoming="$3"; archive="$4"; manifest="$5"; v
 deployment_id="$7"; min_free_gb="$8"; archive_bytes="$9"; cleanup="${10}"; emit_json="${11}"
 expected_host="${12}"; expected_user="${13}"; expected_arch="${14}"; skip_smoke="${15:-0}"
 candidate_id="${16}"; candidate_root="${17}"; deployment_authority_sha256="${18}"
+operation="${19}"
 [[ "$release_id" =~ ^[0-9a-f]{64}$ ]] || { echo 'release bootstrap failed: invalid release id' >&2; exit 1; }
 [[ "$incoming" == "$remote_root/incoming/$release_id" ]] || { echo 'release bootstrap failed: invalid incoming directory' >&2; exit 1; }
 [[ "$candidate_id" =~ ^[0-9a-f]{64}$ \
@@ -662,6 +898,8 @@ candidate_id="${16}"; candidate_root="${17}"; deployment_authority_sha256="${18}
    && "$deployment_authority_sha256" =~ ^[0-9a-f]{64}$ \
    && -d "$candidate_root" && ! -L "$candidate_root" ]] \
   || { echo 'release bootstrap failed: invalid immutable candidate root' >&2; exit 1; }
+[[ "$operation" == deploy || "$operation" == register-carry-baseline ]] \
+  || { echo 'release bootstrap failed: invalid selected operation' >&2; exit 1; }
 transport_root="$(dirname -- "$candidate_root")"
 transport="$transport_root/transport.sha256"
 deployment_authority="$transport_root/deployment-authority.json"
@@ -770,10 +1008,12 @@ common="$driver_root/platform/deploy/vps/remote/common.sh"
 preflight="$driver_root/platform/deploy/vps/remote/preflight.sh"
 candidate_verifier="$driver_root/platform/deploy/release-candidate.mjs"
 held_release_exec="$driver_root/platform/deploy/vps/remote/held-release-exec.py"
+carry_registrar="$driver_root/platform/deploy/vps/remote/register-carry-baseline.sh"
 [[ -f "$driver" && ! -L "$driver" && -f "$common" && ! -L "$common" && \
    -f "$preflight" && ! -L "$preflight" \
    && -f "$candidate_verifier" && ! -L "$candidate_verifier" \
-   && -f "$held_release_exec" && ! -L "$held_release_exec" ]] \
+   && -f "$held_release_exec" && ! -L "$held_release_exec" \
+   && -f "$carry_registrar" && ! -L "$carry_registrar" ]] \
   || { echo 'release bootstrap failed: verified driver is incomplete' >&2; exit 1; }
 run_held_bootstrap_entry() {
   local entry="$1" interpreter="$2"
@@ -873,23 +1113,40 @@ export REVIVAL_REMOTE_ROOT="$remote_root"
 export REVIVAL_EXPECTED_HOST="$expected_host"
 export REVIVAL_EXPECTED_USER="$expected_user"
 export REVIVAL_EXPECTED_ARCH="$expected_arch"
-preflight_args=(--min-free-gb "$min_free_gb" --archive-bytes "$archive_bytes")
-[[ "$cleanup" == 0 ]] || preflight_args+=(--cleanup-project-images)
-run_held_bootstrap_entry platform/deploy/vps/remote/preflight.sh bash "${preflight_args[@]}"
-deploy_args=(
-  --release-id "$release_id"
-  --archive "$archive"
-  --manifest "$manifest"
-  --verifier "$verifier"
-  --deployment-id "$deployment_id"
-  --candidate-id "$candidate_id"
-  --candidate-root "$candidate_root"
-  --deployment-authority-sha256 "$deployment_authority_sha256"
-)
-[[ "$emit_json" == 0 ]] || deploy_args+=(--json)
-[[ "$skip_smoke" == 0 ]] || deploy_args+=(--skip-staging-smoke)
 status=0
-run_held_bootstrap_entry platform/deploy/vps/remote/deploy.sh bash "${deploy_args[@]}" || status=$?
+if [[ "$operation" == deploy ]]; then
+  preflight_args=(--min-free-gb "$min_free_gb" --archive-bytes "$archive_bytes" \
+    --candidate-id "$candidate_id" --candidate-release-id "$release_id" \
+    --deployment-authority-sha256 "$deployment_authority_sha256")
+  [[ "$cleanup" == 0 ]] || preflight_args+=(--cleanup-project-images)
+  run_held_bootstrap_entry platform/deploy/vps/remote/preflight.sh bash "${preflight_args[@]}"
+  deploy_args=(
+    --release-id "$release_id"
+    --archive "$archive"
+    --manifest "$manifest"
+    --verifier "$verifier"
+    --deployment-id "$deployment_id"
+    --candidate-id "$candidate_id"
+    --candidate-root "$candidate_root"
+    --deployment-authority-sha256 "$deployment_authority_sha256"
+  )
+  [[ "$emit_json" == 0 ]] || deploy_args+=(--json)
+  [[ "$skip_smoke" == 0 ]] || deploy_args+=(--skip-staging-smoke)
+  run_held_bootstrap_entry platform/deploy/vps/remote/deploy.sh bash "${deploy_args[@]}" || status=$?
+else
+  [[ "$cleanup" == 0 && "$skip_smoke" == 0 ]] \
+    || { echo 'release bootstrap failed: registrar received deployment-only options' >&2; exit 64; }
+  registrar_args=(
+    --candidate-id "$candidate_id"
+    --candidate-root "$candidate_root"
+    --release-id "$release_id"
+    --deployment-authority "$deployment_authority"
+    --deployment-authority-sha256 "$deployment_authority_sha256"
+  )
+  [[ "$emit_json" == 0 ]] || registrar_args+=(--json)
+  run_held_bootstrap_entry platform/deploy/vps/remote/register-carry-baseline.sh bash \
+    "${registrar_args[@]}" || status=$?
+fi
 # The selected driver cannot move the workspace containing its own logical
 # release root while it is still running.  After it exits, stream the exact
 # trusted candidate-store helper into an isolated interpreter and use its

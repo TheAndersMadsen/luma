@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, readdir, readFile, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -39,6 +39,8 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const commonPath = path.join(root, "platform/deploy/vps/remote/common.sh");
+const pathsLibraryPath = path.join(root, "platform/deploy/vps/remote/lib/paths.sh");
+const configurationLibraryPath = path.join(root, "platform/deploy/vps/remote/lib/configuration.sh");
 const deployPath = path.join(root, "platform/deploy/vps/remote/deploy.sh");
 const catalogPath = path.join(root, "center/src/server/configuration.ts");
 const productionCompose = path.join(root, "platform/compose/production.yaml");
@@ -219,7 +221,8 @@ function applyInScratch(work, store) {
     [
       "-c",
       `set -euo pipefail
-source ${JSON.stringify(commonPath)}
+source ${JSON.stringify(pathsLibraryPath)}
+source ${JSON.stringify(configurationLibraryPath)}
 CENTER_DATA_DIR=${JSON.stringify(path.join(work, "center-data"))}
 apply_configuration_proposals ${JSON.stringify(path.join(work, "stage"))}`,
     ],
@@ -242,6 +245,182 @@ async function scratch(settings) {
   }
   return work;
 }
+
+async function aliasScratch(contents = {}) {
+  const work = await mkdtemp(path.join(os.tmpdir(), "carry-compatibility-aliases-"));
+  for (const file of ["runtime.env", "cosmos.env", "providers.env", "center.env"]) {
+    await writeFile(path.join(work, file), contents[file] ?? "");
+  }
+  return work;
+}
+
+function normalizeAliases(work, mergeProviders = false) {
+  const files = ["runtime.env", "cosmos.env", "providers.env", "center.env"]
+    .map((file) => path.join(work, file));
+  return spawnSync(
+    "bash",
+    [
+      "-c",
+      `set -euo pipefail
+source ${JSON.stringify(pathsLibraryPath)}
+source ${JSON.stringify(configurationLibraryPath)}
+normalize_compatibility_aliases "$@"
+${mergeProviders ? 'merge_scoped_provider_values "$1" "$3"' : ":"}`,
+      "carry-alias-test",
+      ...files,
+    ],
+    { encoding: "utf8", env: { ...process.env, PATH: process.env.PATH } },
+  );
+}
+
+function assertCarryDatabase(work) {
+  const files = ["runtime.env", "cosmos.env", "providers.env", "center.env"]
+    .map((file) => path.join(work, file));
+  return spawnSync(
+    "bash",
+    [
+      "-c",
+      `set -euo pipefail
+source ${JSON.stringify(pathsLibraryPath)}
+source ${JSON.stringify(configurationLibraryPath)}
+LEGACY_DATABASE_USER=carry
+LEGACY_DATABASE_NAME=carry
+assert_carry_database_configuration "$@"`,
+      "carry-database-test",
+      ...files,
+    ],
+    { encoding: "utf8", env: { ...process.env, PATH: process.env.PATH } },
+  );
+}
+
+test("Carry aliases are normalized in place and provider-only values stay provider-scoped", async () => {
+  const work = await aliasScratch({
+    "providers.env": "CARRY_LLM_MODEL=openai/legacy-model\n",
+  });
+  try {
+    const result = normalizeAliases(work, true);
+    assert.equal(result.status, 0, result.stderr);
+    const [runtime, cosmos, providers, center] = await Promise.all(
+      ["runtime.env", "cosmos.env", "providers.env", "center.env"]
+        .map((file) => readFile(path.join(work, file), "utf8")),
+    );
+    assert.equal(runtime, "");
+    assert.equal(cosmos, "");
+    assert.equal(center, "");
+    assert.match(providers, /^CARRY_LLM_MODEL=openai\/legacy-model$/m);
+    assert.match(providers, /^COSMOS_LLM_MODEL=openai\/legacy-model$/m);
+  } finally {
+    await rm(work, { recursive: true, force: true });
+  }
+});
+
+test("the closed alias map covers every concrete Carry key recognized by the pre-rename production config", () => {
+  const result = spawnSync(
+    "/usr/bin/git",
+    [
+      "grep", "-h", "-o", "CARRY_[A-Z0-9_]*", "82aa2d7^", "--",
+      ".env.example", "center/.env.example", "cosmos/.env.example", "compose.yaml",
+      "platform/compose/production.yaml", "platform/deploy/vps",
+    ],
+    { cwd: root, encoding: "utf8" },
+  );
+  assert.equal(result.status, 0, result.stderr);
+  const historical = [...new Set(result.stdout.trim().split("\n"))]
+    .map((name) => name.replace(/^CARRY_/, ""))
+    // These are regex prefixes in the old splitters, never concrete env keys.
+    .filter((suffix) => suffix && !suffix.endsWith("_"));
+  const block = /for suffix in \(([\s\S]*?)\n\):/.exec(commonSource);
+  assert.ok(block, "the closed Carry compatibility suffix map must exist");
+  const mapped = new Set([...block[1].matchAll(/"([A-Z0-9_]+)"/g)].map((match) => match[1]));
+  assert.deepEqual(historical.filter((suffix) => !mapped.has(suffix)).sort(), []);
+  for (const securityKey of ["KID_SCOPE", "OPAQUE_SEED", "TRUST_DOMAIN", "EDGE_TOKEN_HEADER"]) {
+    assert.ok(mapped.has(securityKey), `${securityKey} must not silently fall through to a renamed default`);
+  }
+});
+
+test("Cosmos-only staged values are reverse-projected for a Carry rollback", async () => {
+  const work = await aliasScratch({
+    "center.env": "COSMOS_OPERATOR_EMAILS=operator@example.test\nCOSMOS_KID_SCOPE=enforce\n",
+  });
+  try {
+    const result = normalizeAliases(work);
+    assert.equal(result.status, 0, result.stderr);
+    const center = await readFile(path.join(work, "center.env"), "utf8");
+    assert.match(center, /^COSMOS_OPERATOR_EMAILS=operator@example\.test$/m);
+    assert.match(center, /^CARRY_OPERATOR_EMAILS=operator@example\.test$/m);
+    assert.match(center, /^CARRY_KID_SCOPE=enforce$/m);
+    assert.equal(await readFile(path.join(work, "cosmos.env"), "utf8"), "");
+  } finally {
+    await rm(work, { recursive: true, force: true });
+  }
+});
+
+test("Carry compatibility aliases refuse duplicate and conflicting authority before any rewrite", async () => {
+  const cases = [
+    {
+      contents: { "runtime.env": "CARRY_EDGE_TOKEN=same\nCARRY_EDGE_TOKEN=same\n" },
+      error: /duplicate staged environment key CARRY_EDGE_TOKEN/,
+    },
+    {
+      contents: { "runtime.env": "CARRY_EDGE_TOKEN=carry\nCOSMOS_EDGE_TOKEN=cosmos\n" },
+      error: /conflicting staged compatibility aliases for COSMOS_EDGE_TOKEN/,
+    },
+    {
+      contents: {
+        "runtime.env": "CARRY_DATABASE_URL=postgresql:\/\/carry:a@postgres\/carry\n",
+        "center.env": "COSMOS_DATABASE_URL=postgresql:\/\/carry:b@postgres\/carry\n",
+      },
+      error: /conflicting staged compatibility aliases for COSMOS_DATABASE_URL/,
+    },
+    {
+      contents: {
+        "cosmos.env": "CARRY_KID_SCOPE=enforce\n",
+        "runtime.env": "COSMOS_KID_SCOPE=audit\n",
+      },
+      error: /conflicting staged compatibility aliases for COSMOS_KID_SCOPE/,
+    },
+  ];
+  for (const { contents, error } of cases) {
+    const work = await aliasScratch(contents);
+    try {
+      const before = await Promise.all(
+        ["runtime.env", "cosmos.env", "providers.env", "center.env"]
+          .map((file) => readFile(path.join(work, file), "utf8")),
+      );
+      const result = normalizeAliases(work);
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, error);
+      const after = await Promise.all(
+        ["runtime.env", "cosmos.env", "providers.env", "center.env"]
+          .map((file) => readFile(path.join(work, file), "utf8")),
+      );
+      assert.deepEqual(after, before, "refused alias input must not partially rewrite the staged set");
+    } finally {
+      await rm(work, { recursive: true, force: true });
+    }
+  }
+});
+
+test("the staged database gate accepts only the physical Carry role and database", async () => {
+  for (const [url, expectedStatus] of [
+    ["postgresql://carry:secret@postgres/carry", 0],
+    ["postgresql://cosmos:secret@postgres/cosmos", 1],
+    ["postgresql://carry:secret@postgres/cosmos", 1],
+    ["postgresql://cosmos:secret@postgres/carry", 1],
+  ]) {
+    const work = await aliasScratch({
+      "cosmos.env": `COSMOS_DATABASE_URL=${url}\nCOSMOS_PG_PASSWORD=secret\n`,
+    });
+    try {
+      const before = await readFile(path.join(work, "cosmos.env"), "utf8");
+      const result = assertCarryDatabase(work);
+      assert.equal(result.status === 0 ? 0 : 1, expectedStatus, result.stderr);
+      assert.equal(await readFile(path.join(work, "cosmos.env"), "utf8"), before);
+    } finally {
+      await rm(work, { recursive: true, force: true });
+    }
+  }
+});
 
 test("an absent store is the normal state and changes nothing", async () => {
   const work = await scratch(null);
@@ -267,7 +446,9 @@ test("a valid proposal reaches every staged file that decides the effective valu
 
   const read = async (file) => readFile(path.join(work, "stage", file), "utf8");
   assert.match(await read("providers.env"), /^COSMOS_LLM_MODEL=openai\/gpt-4o-mini$/m);
+  assert.match(await read("providers.env"), /^CARRY_LLM_MODEL=openai\/gpt-4o-mini$/m);
   assert.match(await read("runtime.env"), /^COSMOS_LLM_MODEL=openai\/gpt-4o-mini$/m);
+  assert.match(await read("runtime.env"), /^CARRY_LLM_MODEL=openai\/gpt-4o-mini$/m);
   assert.doesNotMatch(await read("runtime.env"), /stale\/model/);
   assert.match(await read("center.env"), /^KEYCLOAK_SCOPES=openid email profile$/m);
   // A name nothing already carried is not scattered into files that never had it.

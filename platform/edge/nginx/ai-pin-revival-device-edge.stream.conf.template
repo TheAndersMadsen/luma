@@ -57,13 +57,13 @@ map $ssl_preread_server_name $ai_pin_revival_443_backend {
 
     default                          ai_pin_revival_local_tls;
 
-    api.cosmos.humane.cloud           ai_pin_revival_device_edge;
+    api.carry.humane.cloud           ai_pin_revival_device_edge;
     api.clone.invalid                ai_pin_revival_device_edge;
-    eastus.cosmos.humane.cloud        ai_pin_revival_device_edge;
-    eastus-1.cosmos.humane.cloud      ai_pin_revival_device_edge;
-    onboarding.cosmos.humane.cloud    ai_pin_revival_device_edge;
+    eastus.carry.humane.cloud        ai_pin_revival_device_edge;
+    eastus-1.carry.humane.cloud      ai_pin_revival_device_edge;
+    onboarding.carry.humane.cloud    ai_pin_revival_device_edge;
     onboarding.clone.invalid         ai_pin_revival_device_edge;
-    cosmos-edge                       ai_pin_revival_device_edge;
+    carry-edge                        ai_pin_revival_device_edge;
 }
 
 # `max_fails=0` on both single-server groups: passive health checking has nothing

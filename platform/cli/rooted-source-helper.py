@@ -232,10 +232,18 @@ def main():
     def visit(source_path):
         if source_path in seen:
             return
+        # Pruned metadata is outside the source model, including the boundary
+        # directory itself. This mirrors the Linux descriptor reader exactly.
+        if source_path != "." and any(
+            source_path == boundary or source_path.startswith(f"{boundary}/")
+            for boundary in pruned
+        ):
+            seen.add(source_path)
+            return
         entry = reader.read_entry(source_path)
         seen.add(source_path)
         entries.append(entry)
-        if walk and source_path not in pruned and entry["kind"] == "directory":
+        if walk and entry["kind"] == "directory":
             for name in entry["names"]:
                 visit(name if source_path == "." else f"{source_path}/{name}")
 

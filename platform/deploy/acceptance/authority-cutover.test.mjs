@@ -298,32 +298,36 @@ test("channel-key metadata migration is backup-bound, byte-preserving, and exact
   assert.match(await readFile(path.join(record, "CHANNEL_KEY_METADATA_RESTORED"), "utf8"), /restore/u);
 });
 
-test("trust-root evidence binds staged and live bytes, modes, owners, and extended metadata", async () => {
+test("trust-root evidence binds the exact live inodes, bytes, modes, owners, and extended metadata", async () => {
   const root = await fixture();
   const record = path.join(root, "deployments", "deploy-b");
   const paths = {};
-  for (const side of ["staged", "live"]) for (const kind of ["attest", "duc"]) {
-    const directory = path.join(root, side, kind);
+  for (const kind of ["attest", "duc"]) {
+    const directory = path.join(root, "live", kind);
     await mkdir(directory, { recursive: true });
+    await chmod(directory, 0o700);
     await writeFile(path.join(directory, kind === "attest" ? "ca.key" : "duc-ca.key"), `${kind}\n`, { mode: 0o600 });
-    paths[`${side}_${kind}`] = directory;
+    paths[`live_${kind}`] = directory;
   }
   execute([
     "--root", root, "--record", record, "--trust-root-action", "record",
-    "--staged-attest", paths.staged_attest, "--staged-duc", paths.staged_duc,
+    "--staged-attest", paths.live_attest, "--staged-duc", paths.live_duc,
     "--live-attest", paths.live_attest, "--live-duc", paths.live_duc,
   ]);
   execute([
     "--root", root, "--record", record, "--trust-root-action", "verify",
     "--live-attest", paths.live_attest, "--live-duc", paths.live_duc,
   ]);
-  await chmod(path.join(paths.live_attest, "ca.key"), 0o640);
-  const drift = spawnSync("python3", [
+  const original = path.join(paths.live_attest, "ca.key");
+  const displaced = `${original}.old`;
+  await rename(original, displaced);
+  await writeFile(original, "attest\n", { mode: 0o600 });
+  const swapped = spawnSync("python3", [
     transaction, "--root", root, "--record", record, "--trust-root-action", "verify",
     "--live-attest", paths.live_attest, "--live-duc", paths.live_duc,
   ], { encoding: "utf8" });
-  assert.notEqual(drift.status, 0);
-  assert.match(drift.stderr, /drifted from the staged zero-delta evidence/u);
+  assert.notEqual(swapped.status, 0);
+  assert.match(swapped.stderr, /drifted from the staged zero-delta evidence/u);
 });
 
 test("deploy and rollback wire global inventory, trust proof, and reversible key ownership before starts", async () => {

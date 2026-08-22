@@ -466,17 +466,17 @@ archive_directory "$CENTER_DATA_DIR" center-data.tar.gz
 archive_volume "$PROMETHEUS_VOLUME" prometheus-data.tar.gz
 archive_volume "$GRAFANA_VOLUME" grafana-data.tar.gz
 
-docker exec "$postgres" pg_dumpall --globals-only -U cosmos | gzip -9 >"$destination/postgres-globals.sql.gz.tmp"
+docker exec "$postgres" pg_dumpall --globals-only -U "$LEGACY_DATABASE_USER" | gzip -9 >"$destination/postgres-globals.sql.gz.tmp"
 gzip -t "$destination/postgres-globals.sql.gz.tmp"
 mv "$destination/postgres-globals.sql.gz.tmp" "$destination/postgres-globals.sql.gz"
-docker exec "$postgres" pg_dump --clean --if-exists --create -U cosmos -d cosmos | gzip -9 >"$destination/cosmos.sql.gz.tmp"
+docker exec "$postgres" pg_dump --clean --if-exists --create -U "$LEGACY_DATABASE_USER" -d "$LEGACY_DATABASE_NAME" | gzip -9 >"$destination/cosmos.sql.gz.tmp"
 gzip -t "$destination/cosmos.sql.gz.tmp"
 mv "$destination/cosmos.sql.gz.tmp" "$destination/cosmos.sql.gz"
-docker exec "$postgres" pg_dump --clean --if-exists --create -U cosmos -d keycloak | gzip -9 >"$destination/keycloak.sql.gz.tmp"
+docker exec "$postgres" pg_dump --clean --if-exists --create -U "$LEGACY_DATABASE_USER" -d keycloak | gzip -9 >"$destination/keycloak.sql.gz.tmp"
 gzip -t "$destination/keycloak.sql.gz.tmp"
 mv "$destination/keycloak.sql.gz.tmp" "$destination/keycloak.sql.gz"
-capture_postgres_security "$postgres" cosmos "$destination/postgres-security.json"
-capture_postgres_data "$postgres" cosmos "$destination/postgres-data.tsv" "$data_columns_source"
+capture_postgres_security "$postgres" "$LEGACY_DATABASE_USER" "$destination/postgres-security.json"
+capture_postgres_data "$postgres" "$LEGACY_DATABASE_USER" "$destination/postgres-data.tsv" "$data_columns_source"
 # When the authoritative manifest above is PROJECTED, keep an unprojected one
 # beside it. The projection exists only for deploy.sh's pre-vs-post gate, where a
 # column that did not exist at the pre-candidate boundary must not move a digest;
@@ -488,7 +488,7 @@ capture_postgres_data "$postgres" cosmos "$destination/postgres-data.tsv" "$data
 # backup_fidelity_data_manifest resolves which one each of them uses; with no
 # --data-columns-source there is only one manifest and nothing changes.
 if [[ -n "$data_columns_source" ]]; then
-  capture_postgres_data "$postgres" cosmos "$destination/postgres-data.unprojected.tsv"
+  capture_postgres_data "$postgres" "$LEGACY_DATABASE_USER" "$destination/postgres-data.unprojected.tsv"
 fi
 fidelity_data_manifest="$(backup_fidelity_data_manifest "$destination")"
 # retain-sql keeps the canonical pg_dump text beside each digest line. It is not
@@ -497,8 +497,8 @@ fidelity_data_manifest="$(backup_fidelity_data_manifest "$destination")"
 # post-candidate backup's, and only the two dumps can tell an additive migration
 # from a destructive one. The pre-candidate dump cannot be re-taken once the
 # candidate has migrated, so it is kept here or it does not exist.
-capture_postgres_schema "$postgres" cosmos "$destination/postgres-schema.tsv" retain-sql
-keycloak_live="$(docker exec "$postgres" psql -v ON_ERROR_STOP=1 -U cosmos -d keycloak -Atc "select count(*) from user_entity" | tr -d '[:space:]')"
+capture_postgres_schema "$postgres" "$LEGACY_DATABASE_USER" "$destination/postgres-schema.tsv" retain-sql
+keycloak_live="$(docker exec "$postgres" psql -v ON_ERROR_STOP=1 -U "$LEGACY_DATABASE_USER" -d keycloak -Atc "select count(*) from user_entity" | tr -d '[:space:]')"
 postgres_image_id="$(docker inspect --format '{{.Image}}' "$postgres")"
 [[ "$postgres_image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || fail "active Postgres image is not content-addressed"
 printf '%s\n' "$postgres_image_id" >"$destination/postgres-restore-image-id.txt"
@@ -516,7 +516,7 @@ if tar -tzf "$destination/postgres-data.tar.gz" | sed 's#^\./##' | grep -qx post
   fail "clean PostgreSQL archive unexpectedly contains postmaster.pid"
 fi
 restart_postgres_strict || fail "PostgreSQL did not recover after its exact volume snapshot"
-capture_postgres_security "$postgres" cosmos "$destination/postgres-security.after-physical.json"
+capture_postgres_security "$postgres" "$LEGACY_DATABASE_USER" "$destination/postgres-security.after-physical.json"
 # Every self-verification capture below is projected onto the columns of the
 # FIDELITY manifest — the unprojected one when this backup has both — and not onto
 # the live column list. The two sides must be digested over the same columns or
@@ -525,9 +525,9 @@ capture_postgres_security "$postgres" cosmos "$destination/postgres-security.aft
 # pre-vs-post projection kept. A column that VANISHED breaks the projection and
 # fails the capture outright, and the schema manifests beside them are compared
 # unprojected and byte-exactly.
-capture_postgres_data "$postgres" cosmos "$destination/postgres-data.after-physical.tsv" \
+capture_postgres_data "$postgres" "$LEGACY_DATABASE_USER" "$destination/postgres-data.after-physical.tsv" \
   "$fidelity_data_manifest.columns"
-capture_postgres_schema "$postgres" cosmos "$destination/postgres-schema.after-physical.tsv"
+capture_postgres_schema "$postgres" "$LEGACY_DATABASE_USER" "$destination/postgres-schema.after-physical.tsv"
 cmp -s "$destination/postgres-security.json" "$destination/postgres-security.after-physical.json" \
   || fail "PostgreSQL security state changed across the clean physical snapshot"
 cmp -s "$fidelity_data_manifest" "$destination/postgres-data.after-physical.tsv" \
@@ -555,10 +555,10 @@ required_protected_paths=(
   /var/lib/penumbra-center
 )
 optional_protected_paths=(
-  /home/anders/humane-cosmos-clone/.env
-  /home/anders/cosmos-backends.env
-  /home/anders/cosmos-center.env
-  /home/anders/cosmos-edge
+  "$LEGACY_RUNTIME_ENV"
+  "$LEGACY_BACKENDS_ENV"
+  "$LEGACY_CENTER_ENV"
+  "$LEGACY_EDGE_DIR"
   /home/anders/keycloak-themes/humane
   "$PRIVATE_DIR"
   /etc/nginx/conf.d
@@ -708,19 +708,19 @@ physical_password="$(openssl rand -hex 32)"
 docker run --pull=never --detach --name "$verify_physical_postgres_container" --network none --restart no \
   --memory 1g --pids-limit 256 --cpus 2 --log-driver json-file --log-opt max-size=2m --log-opt max-file=1 \
   --label "dk.andersmadsen.ai-pin-revival.backup-verify=$verify_scope" \
-  --env POSTGRES_USER=cosmos --env "POSTGRES_PASSWORD=$physical_password" \
+  --env "POSTGRES_USER=$LEGACY_DATABASE_USER" --env "POSTGRES_PASSWORD=$physical_password" \
   --volume "$verify_physical_postgres_volume:/var/lib/postgresql/data" \
-  --health-cmd 'pg_isready -U cosmos -d postgres' \
+  --health-cmd "pg_isready -U $LEGACY_DATABASE_USER -d postgres" \
   --health-interval 2s --health-timeout 3s --health-start-period 3s --health-retries 45 \
   "$postgres_image_id" >/dev/null
 unset physical_password
 wait_container_healthy "$verify_physical_postgres_container" \
   || fail "physical PostgreSQL restore did not become healthy"
-capture_postgres_security "$verify_physical_postgres_container" cosmos \
+capture_postgres_security "$verify_physical_postgres_container" "$LEGACY_DATABASE_USER" \
   "$destination/postgres-security.physical-restored.json"
-capture_postgres_data "$verify_physical_postgres_container" cosmos \
+capture_postgres_data "$verify_physical_postgres_container" "$LEGACY_DATABASE_USER" \
   "$destination/postgres-data.physical-restored.tsv" "$fidelity_data_manifest.columns"
-capture_postgres_schema "$verify_physical_postgres_container" cosmos \
+capture_postgres_schema "$verify_physical_postgres_container" "$LEGACY_DATABASE_USER" \
   "$destination/postgres-schema.physical-restored.tsv"
 cmp -s "$destination/postgres-security.json" "$destination/postgres-security.physical-restored.json" \
   || fail "physical PostgreSQL restore security state differs from the source"
@@ -775,11 +775,11 @@ while IFS=$'\t' read -r key expected; do
   [[ "$key" == db.* ]] || continue
   table="${key#db.}"
   exists="$(docker exec "$verify_postgres_container" psql -X -v ON_ERROR_STOP=1 \
-    -U revival_restore_bootstrap -d cosmos -Atc "select to_regclass('public.$table') is not null" | tr -d '[:space:]')"
+    -U revival_restore_bootstrap -d "$LEGACY_DATABASE_NAME" -Atc "select to_regclass('public.$table') is not null" | tr -d '[:space:]')"
   if [[ "$expected" == -1 ]]; then [[ "$exists" == f ]] || fail "restored database unexpectedly contains $table"; continue; fi
   [[ "$exists" == t ]] || fail "restored database is missing $table"
   actual="$(docker exec "$verify_postgres_container" psql -X -v ON_ERROR_STOP=1 \
-    -U revival_restore_bootstrap -d cosmos -Atc "select count(*) from $table" | tr -d '[:space:]')"
+    -U revival_restore_bootstrap -d "$LEGACY_DATABASE_NAME" -Atc "select count(*) from $table" | tr -d '[:space:]')"
   [[ "$actual" == "$expected" ]] || fail "restored row count differs for $table"
 done <"$destination/invariants.tsv"
 keycloak_restored="$(docker exec "$verify_postgres_container" psql -X -v ON_ERROR_STOP=1 \

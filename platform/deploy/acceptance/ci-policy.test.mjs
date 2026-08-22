@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -6,6 +7,13 @@ import path from "node:path";
 import test from "node:test";
 
 const ROOT = path.resolve(import.meta.dirname, "../../..");
+const require = createRequire(import.meta.url);
+const {
+  CANONICAL_AARCH64_BINFMT_RECORD,
+  diagnosePinAmd64Runtime,
+  probePinAmd64Runtime,
+} = require("../../cli/toolchain.js");
+const DEBUG_STORE_PATH = path.join(ROOT, "platform", "containers", "pin-builder", "debug-store.py");
 const CI_PATH = path.join(ROOT, ".github", "workflows", "ci.yml");
 const RELEASE_PATH = path.join(ROOT, ".github", "workflows", "release-cli.yml");
 const PIN_RELEASE_PATH = path.join(ROOT, ".github", "workflows", "pin-release.yml");
@@ -18,6 +26,199 @@ const DARWIN_TEST_PATH = path.join(
   "darwin-rooted-reader.test.mjs",
 );
 const PIN_INSTALL_PATH = path.join(ROOT, "platform", "deploy", "pin", "install.mjs");
+
+test("native hosted amd64 evidence normalizes labels and rejects inconsistent layers", () => {
+  const base = {
+    platform: "linux",
+    architecture: "x64",
+    kernelArchitecture: "x86_64",
+    runnerArchitecture: "X64",
+    runnerOs: "Linux",
+    cpuInfo: "vendor_id : GenuineIntel\nmodel name : hosted fixture\n",
+    emulationEvidence: "",
+  };
+  assert.deepEqual(diagnosePinAmd64Runtime(base), {
+    safe: true,
+    detail: "native linux/amd64 runtime",
+  });
+  for (const mutation of [
+    { architecture: "arm64" },
+    { kernelArchitecture: "aarch64" },
+    { runnerArchitecture: "ARM64" },
+    { runnerOs: "macOS" },
+    { binfmtRegistered: true },
+    { emulationEvidence: "TCG translated process" },
+    { runnerArchitecture: {} },
+    { runnerArchitecture: [] },
+    { runnerArchitecture: "" },
+    { runnerArchitecture: " X64 " },
+    { runnerArchitecture: "x64" },
+    { runnerArchitecture: null },
+    { runnerOs: null },
+    { runnerOs: "linux" },
+  ]) assert.equal(diagnosePinAmd64Runtime({ ...base, ...mutation }).safe, false);
+
+  assert.equal(probePinAmd64Runtime({
+    architecture: "x64",
+    platform: "linux",
+    kernelArchitecture: "x86_64",
+    runnerArchitecture: "X64",
+    runnerOs: "Linux",
+    readBinfmtRegistrations: () => CANONICAL_AARCH64_BINFMT_RECORD,
+    verifyAarch64Interpreter: () => true,
+    readCpuInfo: () => base.cpuInfo,
+    readEvidence: () => "",
+  }).safe, true);
+  assert.equal(probePinAmd64Runtime({
+    architecture: "x64",
+    platform: "linux",
+    kernelArchitecture: "x86_64",
+    runnerArchitecture: "X64",
+    runnerOs: "Linux",
+    readBinfmtRegistrations: () => "qemu-x86_64\nenabled\ninterpreter /usr/lib/qemu-x86_64-static\n",
+    readCpuInfo: () => base.cpuInfo,
+    readEvidence: () => "",
+  }).safe, false);
+  for (const registration of [
+    "rosetta\nenabled\ninterpreter /run/rosetta/rosetta\nflags: POCF\noffset 0\nmagic 7f454c4602010100000000000000000002003e00\nmask ffffffffffffff00fffffffffffffffffeffffff",
+    "opaque-handler\nenabled\ninterpreter /usr/lib/opaque\n",
+    "qemu-x86_64-suffix\nenabled\ninterpreter /usr/lib/qemu-x86_64-static\n",
+    "qemu-aarch64\nenabled\ninterpreter /usr/lib/qemu-aarch64-static\nflags: POCF\noffset 0\nmagic 7f454c4602010100000000000000000002003e00\nmask ffffffffffffff00fffffffffffffffffeffffff",
+    "qemu-aarch64\nenabled\ninterpreter /usr/lib/qemu-aarch64-static\n",
+    `${CANONICAL_AARCH64_BINFMT_RECORD}\n${CANONICAL_AARCH64_BINFMT_RECORD}`,
+    CANONICAL_AARCH64_BINFMT_RECORD.replace("enabled\ninterpreter", "interpreter /tmp/qemu-aarch64\nenabled\ninterpreter"),
+    CANONICAL_AARCH64_BINFMT_RECORD.replace("flags: POF", "flags:  POF"),
+    `${CANONICAL_AARCH64_BINFMT_RECORD}trailing`,
+  ]) assert.equal(probePinAmd64Runtime({
+    architecture: "x64",
+    platform: "linux",
+    kernelArchitecture: "x86_64",
+    runnerArchitecture: "X64",
+    runnerOs: "Linux",
+    readBinfmtRegistrations: () => registration,
+    verifyAarch64Interpreter: () => true,
+    readCpuInfo: () => base.cpuInfo,
+    readEvidence: () => "",
+  }).safe, false);
+  assert.equal(probePinAmd64Runtime({
+    architecture: "x64",
+    platform: "linux",
+    kernelArchitecture: "x86_64",
+    runnerArchitecture: "X64",
+    runnerOs: "Linux",
+    readBinfmtRegistrations: () => CANONICAL_AARCH64_BINFMT_RECORD,
+    verifyAarch64Interpreter: () => false,
+    readCpuInfo: () => base.cpuInfo,
+    readEvidence: () => "",
+  }).safe, false);
+
+  for (const cpuInfo of [
+    "arm_vendor_id : GenuineIntel",
+    "vendor_id : GenuineIntel\nCPU implementer : 0x41",
+    "vendor_id : GenuineIntel\narchitecture : 8",
+    "vendor_id : GenuineIntel\n\nvendor_id : AuthenticAMD",
+    "vendor_id : GenuineIntel\nvendor_id : GenuineIntel",
+    "vendor_id : genuineintel",
+    "not_vendor_id : GenuineIntel",
+  ]) assert.equal(diagnosePinAmd64Runtime({ ...base, cpuInfo }).safe, false);
+  assert.equal(diagnosePinAmd64Runtime({
+    ...base,
+    emulationEvidence: "State:\tR translated process",
+  }).safe, false);
+
+  const parityFixtures = [
+    { cpu: base.cpuInfo, evidence: "", registrations: [], interpreterTrusted: false },
+    {
+      cpu: base.cpuInfo,
+      evidence: "",
+      registrations: [CANONICAL_AARCH64_BINFMT_RECORD],
+      interpreterTrusted: true,
+    },
+    { cpu: base.cpuInfo, evidence: "translated process", registrations: [], interpreterTrusted: false },
+    {
+      cpu: "vendor_id : GenuineIntel\n\nvendor_id : AuthenticAMD",
+      evidence: "",
+      registrations: [],
+      interpreterTrusted: false,
+    },
+    {
+      cpu: "arm_vendor_id : GenuineIntel",
+      evidence: "",
+      registrations: [],
+      interpreterTrusted: false,
+    },
+    {
+      cpu: base.cpuInfo,
+      evidence: "",
+      registrations: [CANONICAL_AARCH64_BINFMT_RECORD, CANONICAL_AARCH64_BINFMT_RECORD],
+      interpreterTrusted: true,
+    },
+    {
+      cpu: base.cpuInfo,
+      evidence: "",
+      registrations: [CANONICAL_AARCH64_BINFMT_RECORD.replace("flags: POF", "flags:  POF")],
+      interpreterTrusted: true,
+    },
+    {
+      cpu: base.cpuInfo,
+      evidence: "",
+      registrations: [CANONICAL_AARCH64_BINFMT_RECORD],
+      interpreterTrusted: false,
+    },
+    ...[
+      "rosetta\nenabled\ninterpreter /run/rosetta/rosetta\nflags: POF\noffset 0\nmagic 7f454c4602010100000000000000000002003e00\nmask ffffffffffffff00fffffffffffffffffeffffff\n",
+      "opaque-handler\nenabled\ninterpreter /tmp/opaque\n",
+      CANONICAL_AARCH64_BINFMT_RECORD.replace(
+        "/usr/libexec/qemu-binfmt/aarch64-binfmt-P",
+        "/tmp/qemu-aarch64",
+      ),
+      CANONICAL_AARCH64_BINFMT_RECORD.replace("enabled\ninterpreter", "interpreter /tmp/extra\nenabled\ninterpreter"),
+      `${CANONICAL_AARCH64_BINFMT_RECORD}trailing`,
+    ].map((registration) => ({
+      cpu: base.cpuInfo,
+      evidence: "",
+      registrations: [registration],
+      interpreterTrusted: true,
+    })),
+  ];
+  const python = spawnSync("/usr/bin/python3", [
+    "-I", "-B", "-c", [
+      "import importlib.util,json,sys",
+      "spec=importlib.util.spec_from_file_location('debug_store',sys.argv[1])",
+      "module=importlib.util.module_from_spec(spec);sys.modules[spec.name]=module;spec.loader.exec_module(module)",
+      "fixtures=json.loads(sys.stdin.read())",
+      "print(json.dumps([module.native_linux_amd64_evidence_safe('x86_64',f['cpu'],f['evidence'],f['registrations'],f['interpreterTrusted']) for f in fixtures]))",
+    ].join(";"),
+    DEBUG_STORE_PATH,
+  ], { input: JSON.stringify(parityFixtures), encoding: "utf8", env: { LANG: "C", LC_ALL: "C" } });
+  assert.equal(python.status, 0, python.stderr);
+  const pythonVerdicts = JSON.parse(python.stdout);
+  const nodeVerdicts = parityFixtures.map((fixture) => probePinAmd64Runtime({
+    architecture: "x64",
+    platform: "linux",
+    kernelArchitecture: "x86_64",
+    runnerArchitecture: "X64",
+    runnerOs: "Linux",
+    readBinfmtRegistrations: () => fixture.registrations.join("\n\n"),
+    verifyAarch64Interpreter: () => fixture.interpreterTrusted,
+    readCpuInfo: () => fixture.cpu,
+    readEvidence: () => fixture.evidence,
+  }).safe);
+  assert.deepEqual(pythonVerdicts, nodeVerdicts);
+  for (const unreadable of [
+    () => { throw Object.assign(new Error("denied"), { code: "EACCES" }); },
+    () => null,
+  ]) assert.equal(probePinAmd64Runtime({
+    architecture: "x64",
+    platform: "linux",
+    kernelArchitecture: "x86_64",
+    runnerArchitecture: "X64",
+    runnerOs: "Linux",
+    readBinfmtRegistrations: unreadable,
+    readCpuInfo: () => base.cpuInfo,
+    readEvidence: () => "",
+  }).safe, false);
+});
 
 const ACTIONS = Object.freeze({
   "actions/checkout": Object.freeze({

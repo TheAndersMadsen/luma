@@ -1311,7 +1311,7 @@ async fn finish_as(
 ///
 /// Never the error's message: `LlmError::Transport` carries a reqwest string
 /// that can contain the configured URL, and a metric label is not the place for
-/// it. The kinds line up with the `cosmos_errors_total{kind=…}` values the model
+/// it. The kinds line up with the `carry_errors_total{kind=…}` values the model
 /// client emits, so one incident reads the same in both families.
 fn model_failure_outcome(error: &super::llm::LlmError) -> &'static str {
     use super::llm::LlmError;
@@ -3426,7 +3426,7 @@ mod tests {
 
     /// EVERY TERMINAL MUST CLASSIFY ITSELF, AND NEVER AS WEARER TEXT.
     ///
-    /// `record_turn` shipped with zero callers, so `cosmos_turns_total` was
+    /// `record_turn` shipped with zero callers, so `carry_assistant_turns_total` was
     /// permanently zero — the one metric that says whether wearers are getting
     /// answers read the same during a live regression as on a perfect day.
     /// Wiring it is only useful if the classification is right, and the failure

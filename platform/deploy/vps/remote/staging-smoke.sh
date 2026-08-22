@@ -105,12 +105,12 @@ for label,value in security_rows:
     if label in security or not safe_absolute(value): raise SystemExit("invalid or duplicate active security root")
     security[label]=value
 if set(security)!={"attestation","device-user"}: raise SystemExit("active security-root schema differs")
-allowed={
-    "attestation":{private+"/attest","/home/anders/cosmos-attest"},
-    "device-user":{private+"/duc","/home/anders/cosmos-duc"},
+required_security={
+    "attestation":"/home/anders/carry-attest",
+    "device-user":"/home/anders/carry-duc",
 }
-for label,value in security.items():
-    if value not in allowed[label]: raise SystemExit(f"unsupported active security root: {label}")
+if security!=required_security:
+    raise SystemExit("active security roots are not the exact deployed Carry paths")
 if len(set(security.values()))!=2: raise SystemExit("active security roots overlap")
 required={
     security["attestation"],security["device-user"],
@@ -118,8 +118,8 @@ required={
     "/etc/systemd/system/penumbra-center-bridge.service","/etc/penumbra","/var/lib/penumbra-center",
 }
 optional={
-    "/home/anders/humane-cosmos-clone/.env","/home/anders/cosmos-backends.env",
-    "/home/anders/cosmos-center.env","/home/anders/cosmos-edge",
+    "/home/anders/humane-carry-clone/.env","/home/anders/carry-backends.env",
+    "/home/anders/carry-center.env","/home/anders/carry-edge",
     "/home/anders/keycloak-themes/humane",private,"/etc/nginx/conf.d",
     "/etc/cloudflared","/home/anders/.cloudflared",
 }
@@ -167,31 +167,6 @@ staging_security_root_path() {
   local root="$1" label="$2"
   [[ "$label" == attestation || "$label" == device-user ]] || fail "unknown staging security-root label"
   awk -F $'\t' -v wanted="$label" '$1==wanted {print $2}' "$root/active-security-roots.tsv"
-}
-
-staging_project_protected_root_inventory() {
-  local inventory="$1" protected_root="$2" output="$3"
-  validate_archive_inventory "$inventory"
-  python3 - "$inventory" "$protected_root" "$output" <<'PY'
-import json,posixpath,sys
-source,root,output=sys.argv[1:]
-if (not root.startswith("/") or root=="/" or "\\" in root or ".." in root.split("/")
-        or posixpath.normpath(root)!=root): raise SystemExit("unsafe protected projection root")
-prefix=root.removeprefix("/"); projected=[]
-for item in json.load(open(source,encoding="utf-8")):
-    path=item["path"]
-    if path!=prefix and not path.startswith(prefix+"/"): continue
-    copy=dict(item); copy["path"]="." if path==prefix else path.removeprefix(prefix+"/")
-    projected.append(copy)
-if sum(item["path"]=="." for item in projected)!=1:
-    raise SystemExit("protected projection root is missing or duplicated")
-root_item=next(item for item in projected if item["path"]==".")
-if root_item.get("type")!="5": raise SystemExit("protected projection root is not a directory")
-projected.sort(key=lambda item:item["path"])
-open(output,"w",encoding="utf-8").write(json.dumps(projected,sort_keys=True,separators=(",",":")))
-PY
-  chmod 600 "$output"
-  validate_archive_inventory "$output"
 }
 
 staging_write_runtime_center_inventory() {
@@ -243,11 +218,12 @@ backup_arg=""
 env_dir=""
 attest_dir=""
 duc_dir=""
+security_identity=""
 keycloak_theme_dir=""
 spotify_token_file=""
 
 usage() {
-  echo "usage: staging-smoke --release-id SHA256 --backup BACKUP_ID_OR_PATH --env-dir DIR --attest-dir DIR --duc-dir DIR --keycloak-theme-dir DIR --spotify-token-file FILE" >&2
+  echo "usage: staging-smoke --release-id SHA256 --backup BACKUP_ID_OR_PATH --env-dir DIR --attest-dir DIR --duc-dir DIR --security-identity FILE --keycloak-theme-dir DIR --spotify-token-file FILE" >&2
   exit 64
 }
 
@@ -258,6 +234,7 @@ while (($#)); do
     --env-dir) (($# >= 2)) || usage; env_dir="$2"; shift 2 ;;
     --attest-dir) (($# >= 2)) || usage; attest_dir="$2"; shift 2 ;;
     --duc-dir) (($# >= 2)) || usage; duc_dir="$2"; shift 2 ;;
+    --security-identity) (($# >= 2)) || usage; security_identity="$2"; shift 2 ;;
     --keycloak-theme-dir) (($# >= 2)) || usage; keycloak_theme_dir="$2"; shift 2 ;;
     --spotify-token-file) (($# >= 2)) || usage; spotify_token_file="$2"; shift 2 ;;
     *) usage ;;
@@ -265,7 +242,8 @@ while (($#)); do
 done
 
 [[ -n "$release_id" && -n "$backup_arg" && -n "$env_dir" && -n "$attest_dir" \
-  && -n "$duc_dir" && -n "$keycloak_theme_dir" && -n "$spotify_token_file" ]] || usage
+  && -n "$duc_dir" && -n "$security_identity" && -n "$keycloak_theme_dir" \
+  && -n "$spotify_token_file" ]] || usage
 validate_release_id "$release_id"
 
 assert_target
@@ -304,12 +282,18 @@ for file in "$smoke_runtime_env" "$smoke_cosmos_env" "$smoke_provider_env" "$smo
 done
 attest_dir="$(sudo -n readlink -f -- "$attest_dir")"
 duc_dir="$(sudo -n readlink -f -- "$duc_dir")"
+security_identity="$(readlink -f -- "$security_identity")"
 keycloak_theme_dir="$(sudo -n readlink -f -- "$keycloak_theme_dir")"
 spotify_token_file="$(readlink -f -- "$spotify_token_file")"
-[[ "$attest_dir" == "$stage_root/assets/attest" && "$duc_dir" == "$stage_root/assets/duc" \
+[[ "$attest_dir" == "$PRODUCTION_ATTEST_DIR" && "$duc_dir" == "$PRODUCTION_DUC_DIR" \
+  && "$security_identity" == "$DEPLOYMENTS_DIR/"*/carry-security-identity.json \
   && "$keycloak_theme_dir" == "$stage_root/assets/keycloak-theme" \
   && "$spotify_token_file" == "$stage_root/spotify-token" ]] \
-  || fail "staging assets must be the exact passed candidate stage assets"
+  || fail "staging security roots or isolated mutable assets are outside their exact guarded paths"
+[[ "$backup_attest_root" == "$PRODUCTION_ATTEST_DIR" \
+  && "$backup_duc_root" == "$PRODUCTION_DUC_DIR" ]] \
+  || fail "staging backup was not captured from the exact deployed Carry security roots"
+verify_exact_carry_security_identity "$security_identity"
 sudo -n test -f "$attest_dir/ca.crt" && sudo -n test -f "$attest_dir/ca.key" \
   || fail "staging attestation CA is unavailable"
 sudo -n test -f "$duc_dir/duc-ca.crt" && sudo -n test -f "$duc_dir/duc-ca.key" \
@@ -365,8 +349,6 @@ state_volume="${scope}-cosmos-state"
 center_volume="${scope}-center-data"
 pin_release_volume="${scope}-pin-releases"
 postgres_volume="${scope}-postgres"
-attest_volume="${scope}-attest"
-duc_volume="${scope}-duc"
 theme_volume="${scope}-keycloak-theme"
 spotify_secret_volume="${scope}-spotify-secret"
 postgres_container="${scope}-postgres"
@@ -451,7 +433,7 @@ created_networks+=("$network")
 docker network create --internal "${object_labels[@]}" "$network" >/dev/null
 created_networks+=("$searxng_egress_network")
 docker network create "${object_labels[@]}" "$searxng_egress_network" >/dev/null
-for volume in "$state_volume" "$center_volume" "$pin_release_volume" "$postgres_volume" "$attest_volume" "$duc_volume" "$theme_volume" "$spotify_secret_volume"; do
+for volume in "$state_volume" "$center_volume" "$pin_release_volume" "$postgres_volume" "$theme_volume" "$spotify_secret_volume"; do
   created_volumes+=("$volume")
   docker volume create "${object_labels[@]}" "$volume" >/dev/null
 done
@@ -496,34 +478,14 @@ volume_inventory() {
   rm -f -- "$archive"
 }
 
-directory_inventory() {
-  local purpose="$1" directory="$2" output="$3"
-  local archive="$projection_work/${purpose}.tar.gz"
-  sudo -n tar --numeric-owner --acls --xattrs --xattrs-include='*' \
-    -czpf "$archive" -C "$directory" .
-  sudo -n chown "$(id -u):$(id -g)" "$archive"
-  chmod 600 "$archive"
-  archive_inventory "$archive" "$output"
-  rm -f -- "$archive"
-}
-
 projection_work="$(mktemp -d)"
 chmod 700 "$projection_work"
 
-# The stage was copied before quiescence from the same active roots named by
-# the backup. Prove full content and metadata identity against the protected
-# archive, rather than treating the presence of four familiar filenames as a
-# trust-root proof.
-staging_project_protected_root_inventory "$backup_dir/protected-inventory.json" \
-  "$backup_attest_root" "$projection_work/attest-backup.inventory.json"
-staging_project_protected_root_inventory "$backup_dir/protected-inventory.json" \
-  "$backup_duc_root" "$projection_work/duc-backup.inventory.json"
-directory_inventory attest-staged "$attest_dir" "$projection_work/attest-staged.inventory.json"
-directory_inventory duc-staged "$duc_dir" "$projection_work/duc-staged.inventory.json"
-compare_archive_inventories "$projection_work/attest-backup.inventory.json" \
-  "$projection_work/attest-staged.inventory.json"
-compare_archive_inventories "$projection_work/duc-backup.inventory.json" \
-  "$projection_work/duc-staged.inventory.json"
+# The security roots are deployed inode identities, not rehearsal inputs.  The
+# verified backup declares those exact absolute roots and carries their recovery
+# archive; the smoke consumes the live roots directly and read-only.  The
+# inode/owner/mode/content closure above is rechecked again at each container
+# use, so no private copy of either CA key is ever created here.
 
 # Restore archives without attaching either live durable volume. Numeric owners
 # are retained exactly as recorded by backup.sh.
@@ -538,12 +500,6 @@ run_helper restore-center \
   "$helper_image" sh -euc \
   'tar -xzpf /backup/archive.tar.gz -C /restore'
 
-run_helper copy-attest \
-  -v "$attest_dir:/source:ro" -v "$attest_volume:/restore" \
-  "$helper_image" sh -euc 'cp -a /source/. /restore/'
-run_helper copy-duc \
-  -v "$duc_dir:/source:ro" -v "$duc_volume:/restore" \
-  "$helper_image" sh -euc 'cp -a /source/. /restore/'
 run_helper copy-theme \
   -v "$keycloak_theme_dir:/source:ro" -v "$theme_volume:/restore" \
   "$helper_image" sh -euc 'cp -a /source/. /restore/'
@@ -553,16 +509,10 @@ run_helper copy-spotify-secret \
 
 volume_inventory state-restored "$state_volume" "$projection_work/state-restored.inventory.json"
 volume_inventory center-restored "$center_volume" "$projection_work/center-restored.inventory.json"
-volume_inventory attest-restored "$attest_volume" "$projection_work/attest-restored.inventory.json"
-volume_inventory duc-restored "$duc_volume" "$projection_work/duc-restored.inventory.json"
 compare_archive_inventories "$backup_dir/cosmos-state.inventory.json" \
   "$projection_work/state-restored.inventory.json"
 compare_archive_inventories "$backup_dir/center-data.inventory.json" \
   "$projection_work/center-restored.inventory.json"
-compare_archive_inventories "$projection_work/attest-backup.inventory.json" \
-  "$projection_work/attest-restored.inventory.json"
-compare_archive_inventories "$projection_work/duc-backup.inventory.json" \
-  "$projection_work/duc-restored.inventory.json"
 
 created_containers+=("$postgres_container")
 docker run --pull=never --detach \
@@ -616,7 +566,7 @@ wait_healthy "$postgres_container" 60
 #     silently discarded the `columns_source` fourth argument that the call
 #     sites below already pass. `to_jsonb(t)` encodes the SCHEMA as well as the
 #     data, so cosmos/migrations/0004_listing.sql adding
-#     `cosmos_memory.thumbnail_count` (`ADD COLUMN IF NOT EXISTS` — additive, and
+#     `carry_memory.thumbnail_count` (`ADD COLUMN IF NOT EXISTS` — additive, and
 #     explicitly permitted by this project's migration policy) rewrote every
 #     row's JSON and failed the deploy with "candidate startup changed
 #     PostgreSQL relation data" while every wearer byte stood still.
@@ -677,7 +627,7 @@ cmp -s "$backup_dir/postgres-schema.tsv" "$projection_work/postgres-schema.resto
 
 smoke_db_count() {
   local database="$1" table="$2" exists
-  [[ "$database" == cosmos || "$database" == keycloak ]] || fail "invalid smoke database"
+  [[ "$database" == "$LEGACY_DATABASE_NAME" || "$database" == keycloak ]] || fail "invalid smoke database"
   [[ "$table" =~ ^[a-z_]+$ ]] || fail "invalid smoke invariant table"
   exists="$(docker exec "$postgres_container" psql -X -v ON_ERROR_STOP=1 -U revival_restore_bootstrap -d "$database" -Atc \
     "select to_regclass('public.$table') is not null" | tr -d '[:space:]')"
@@ -723,7 +673,7 @@ compare_backup_invariants() {
       contract.version) actual="$BACKUP_INVARIANT_VERSION" ;;
       db.*)
         table="${key#db.}"
-        actual="$(smoke_db_count cosmos "$table")"
+        actual="$(smoke_db_count "$LEGACY_DATABASE_NAME" "$table")"
         ;;
       state.files) actual="$state_files" ;;
       state.bytes) actual="$state_bytes" ;;
@@ -743,11 +693,11 @@ compare_backup_invariants() {
   done <"$backup_dir/invariants.tsv"
 }
 
-cosmos_tables="$(docker exec "$postgres_container" psql -X -v ON_ERROR_STOP=1 -U revival_restore_bootstrap -d cosmos -Atc \
+carry_tables="$(docker exec "$postgres_container" psql -X -v ON_ERROR_STOP=1 -U revival_restore_bootstrap -d "$LEGACY_DATABASE_NAME" -Atc \
   "select count(*) from pg_tables where schemaname='public'" | tr -d '[:space:]')"
 keycloak_tables="$(docker exec "$postgres_container" psql -X -v ON_ERROR_STOP=1 -U revival_restore_bootstrap -d keycloak -Atc \
   "select count(*) from pg_tables where schemaname='public'" | tr -d '[:space:]')"
-((cosmos_tables >= 10)) || fail "restored Cosmos database has too few tables"
+((carry_tables >= 10)) || fail "restored Carry database has too few tables"
 ((keycloak_tables >= 50)) || fail "restored Keycloak database has too few tables"
 
 keycloak_realms_before="$(smoke_db_count keycloak realm)"
@@ -791,7 +741,7 @@ capture_wearer_fingerprints() {
       [[ -n "$columns" ]] || fail "no recorded column set for wearer table $table"
     else
       columns="$(docker exec "$postgres_container" psql -X -qAt -v ON_ERROR_STOP=1 \
-        -U revival_restore_bootstrap -d cosmos \
+        -U revival_restore_bootstrap -d "$LEGACY_DATABASE_NAME" \
         -c "select string_agg(quote_ident(attname), ',' order by attnum)
               from pg_attribute
              where attrelid = '$table'::regclass and attnum > 0 and not attisdropped")"
@@ -799,12 +749,12 @@ capture_wearer_fingerprints() {
     [[ "$columns" =~ ^[A-Za-z0-9_\",]+$ ]] || fail "unsafe wearer column list for $table"
     printf '%s\t%s\n' "$table" "$columns" >>"$output.columns"
     digest="$(docker exec "$postgres_container" psql -X -qAt -v ON_ERROR_STOP=1 \
-      -U revival_restore_bootstrap -d cosmos \
+      -U revival_restore_bootstrap -d "$LEGACY_DATABASE_NAME" \
       -c "set statement_timeout='10s'; select to_jsonb(x)::text from (select $columns from $table) x order by 1" \
       | sha256sum | awk '{print $1}')"
     [[ "$digest" =~ ^[0-9a-f]{64}$ ]] || fail "wearer table fingerprint failed"
     # One digest PER ROW beside the whole-table one. When the table digest moves,
-    # this is what turns "something in cosmos_memory changed" into "one row was
+    # this is what turns "something in carry_memory changed" into "one row was
     # rewritten" or "a row vanished" — the difference between a diagnosis and
     # another deploy cycle spent guessing. Digests only, never values: this is
     # copied into a deployment record, and a wearer's rows do not belong there.
@@ -814,7 +764,7 @@ capture_wearer_fingerprints() {
     if [[ -n "${WEARER_ROW_EVIDENCE:-}" ]]; then
       mkdir -p "$WEARER_ROW_EVIDENCE"
       docker exec "$postgres_container" psql -X -qAt -v ON_ERROR_STOP=1 \
-        -U revival_restore_bootstrap -d cosmos \
+        -U revival_restore_bootstrap -d "$LEGACY_DATABASE_NAME" \
         -c "set statement_timeout='30s'; select md5(to_jsonb(x)::text) from (select $columns from $table) x" \
         | LC_ALL=C sort >"$WEARER_ROW_EVIDENCE/$table.rows" \
         || fail "wearer row evidence failed for $table"
@@ -827,8 +777,8 @@ mkdir -p "$projection_work/rows-before" "$projection_work/rows-after"
 WEARER_ROW_EVIDENCE="$projection_work/rows-before" \
   capture_wearer_fingerprints "$projection_work/wearer-fingerprints.before.tsv"
 
-smoke_identity="$(docker exec "$postgres_container" psql -X -v ON_ERROR_STOP=1 -U revival_restore_bootstrap -d cosmos -AtF $'\t' -c \
-  'select device_id, account_sub from cosmos_device_account order by paired_at_epoch, device_id')"
+smoke_identity="$(docker exec "$postgres_container" psql -X -v ON_ERROR_STOP=1 -U revival_restore_bootstrap -d "$LEGACY_DATABASE_NAME" -AtF $'\t' -c \
+  'select device_id, account_sub from carry_device_account order by paired_at_epoch, device_id')"
 [[ -n "$smoke_identity" && "$(printf '%s\n' "$smoke_identity" | sed '/^$/d' | wc -l | tr -d '[:space:]')" == 1 ]] \
   || fail "isolated restore has an ambiguous Pin roster"
 IFS=$'\t' read -r smoke_device smoke_owner <<<"$smoke_identity"
@@ -1036,13 +986,14 @@ common_cosmos_run=(
   # characters; the full 64-hex release id does not fit. Use the same short
   # prefix the deploy stages as REVIVAL_REVISION.
   --env "COSMOS_REVISION=${release_id:0:16}"
-  --volume "$state_volume:/var/lib/cosmos"
+  --volume "$state_volume:/var/lib/carry"
   --health-cmd 'curl --fail --silent --show-error --output /dev/null http://127.0.0.1:18080/readyz && socat -T1 - TCP:127.0.0.1:15051 </dev/null >/dev/null'
   --health-interval 3s --health-timeout 3s --health-start-period 5s --health-retries 30
   --entrypoint /bin/sh
 )
 
 created_containers+=("$ai_bus_container")
+verify_exact_carry_security_identity "$security_identity"
 docker run --pull=never --detach \
   --name "$ai_bus_container" --network-alias ai-bus \
   "${common_cosmos_run[@]}" \
@@ -1053,10 +1004,11 @@ docker run --pull=never --detach \
   --env COSMOS_WORKLOAD=ai-bus \
   --env COSMOS_ATTEST_CA_CERT=/etc/cosmos-attest/ca.crt \
   --env COSMOS_ATTEST_CA_KEY=/etc/cosmos-attest/ca.key \
-  --volume "$attest_volume:/etc/cosmos-attest:ro" \
+  --mount "type=bind,src=$attest_dir,dst=/etc/cosmos-attest,readonly" \
   "$cosmos_image" -ec "$cosmos_command" >/dev/null
 
 created_containers+=("$provisioning_container")
+verify_exact_carry_security_identity "$security_identity"
 docker run --pull=never --detach \
   --name "$provisioning_container" --network-alias provisioning \
   "${common_cosmos_run[@]}" \
@@ -1066,11 +1018,12 @@ docker run --pull=never --detach \
   --env COSMOS_WORKLOAD=provisioning \
   --env COSMOS_DUC_CA_CERT=/etc/cosmos-duc/duc-ca.crt \
   --env COSMOS_DUC_CA_KEY=/etc/cosmos-duc/duc-ca.key \
-  --volume "$duc_volume:/etc/cosmos-duc:ro" \
+  --mount "type=bind,src=$duc_dir,dst=/etc/cosmos-duc,readonly" \
   "$cosmos_image" -ec "$cosmos_command" >/dev/null
 
 wait_healthy "$ai_bus_container" 75
 wait_healthy "$provisioning_container" 75
+verify_exact_carry_security_identity "$security_identity"
 ai_bus_user="$(docker inspect --format '{{.Config.User}}' "$ai_bus_container")"
 provisioning_user="$(docker inspect --format '{{.Config.User}}' "$provisioning_container")"
 [[ -n "$ai_bus_user" && -n "$provisioning_user" ]] || fail "candidate Cosmos image must declare a non-root runtime user"
@@ -1179,7 +1132,17 @@ assert_isolated_container() {
   docker inspect "$container" | python3 -c '
 import json, sys
 
-expected_network, scope, *allowed_volumes = sys.argv[1:]
+expected_network, scope, *arguments = sys.argv[1:]
+if "--bind" in arguments:
+    marker=arguments.index("--bind")
+    allowed_volumes=arguments[:marker]
+    bind_specs=arguments[marker+1:]
+else:
+    allowed_volumes=arguments
+    bind_specs=[]
+allowed_binds={tuple(spec.split("\t",1)) for spec in bind_specs}
+if len(allowed_binds)!=len(bind_specs) or any(len(item)!=2 for item in allowed_binds):
+    raise SystemExit("temporary workload bind allowlist is malformed")
 body = json.load(sys.stdin)[0]
 name = body.get("Name", "").lstrip("/")
 if not name.startswith(scope + "-"):
@@ -1201,11 +1164,19 @@ networks = set((body.get("NetworkSettings", {}).get("Networks") or {}).keys())
 if networks != {expected_network}:
     raise SystemExit("temporary container joined a non-smoke network")
 allowed = set(allowed_volumes)
+seen_binds=set()
 for mount in body.get("Mounts") or []:
     if mount.get("Type") == "tmpfs":
         continue
-    if mount.get("Type") != "volume" or mount.get("Name") not in allowed:
-        raise SystemExit("temporary workload uses a bind or non-smoke volume")
+    if mount.get("Type") == "volume" and mount.get("Name") in allowed:
+        continue
+    observed=(str(mount.get("Source") or ""),str(mount.get("Destination") or ""))
+    if mount.get("Type") == "bind" and mount.get("RW") is False and observed in allowed_binds:
+        if observed in seen_binds: raise SystemExit("temporary workload repeats a security bind")
+        seen_binds.add(observed); continue
+    raise SystemExit("temporary workload uses a non-smoke or unreviewed mount")
+if seen_binds!=allowed_binds:
+    raise SystemExit("temporary workload is missing an exact read-only security bind")
 ' "$network" "$scope" "$@"
 }
 
@@ -1307,8 +1278,10 @@ for mount in body.get("Mounts") or []:
 assert_isolated_container "$postgres_container" "$postgres_volume"
 assert_isolated_container "$keycloak_container" "$theme_volume"
 assert_searxng_container
-assert_isolated_container "$ai_bus_container" "$state_volume" "$attest_volume"
-assert_isolated_container "$provisioning_container" "$state_volume" "$duc_volume"
+assert_isolated_container "$ai_bus_container" "$state_volume" --bind \
+  "$attest_dir"$'\t'/etc/cosmos-attest
+assert_isolated_container "$provisioning_container" "$state_volume" --bind \
+  "$duc_dir"$'\t'/etc/cosmos-duc
 assert_isolated_container "$connectivity_container" "$state_volume"
 assert_isolated_container "$account_container" "$state_volume"
 assert_isolated_container "$contacts_container" "$state_volume"
@@ -1330,8 +1303,8 @@ docker exec "$provisioning_container" sh -euc '
   test "$decoded" = 32
 '
 opaque_schema_count="$(docker exec "$postgres_container" psql -X -qAt -v ON_ERROR_STOP=1 \
-  -U revival_restore_bootstrap -d cosmos -c \
-  "select count(*) from (values (to_regclass('public.cosmos_opaque_setup')),(to_regclass('public.cosmos_opaque_password_file')),(to_regclass('public.cosmos_opaque_login')),(to_regclass('public.cosmos_opaque_session'))) t(v) where v is not null" \
+  -U revival_restore_bootstrap -d "$LEGACY_DATABASE_NAME" -c \
+  "select count(*) from (values (to_regclass('public.carry_opaque_setup')),(to_regclass('public.carry_opaque_password_file')),(to_regclass('public.carry_opaque_login')),(to_regclass('public.carry_opaque_session'))) t(v) where v is not null" \
   | tr -d '[:space:]')"
 [[ "$opaque_schema_count" == 4 ]] || fail "provisioning did not initialize its durable OPAQUE schema"
 for container in "$connectivity_container" "$account_container" "$contacts_container" "$feature_flags_container" "$notable_events_container"; do
@@ -1372,7 +1345,7 @@ docker exec -i "$center_container" sh -euc 'umask 077; cat > /tmp/session.jwt' <
 docker exec -i "$center_container" node >/dev/null <<'NODE'
 const fs=require('node:fs');
 const token=fs.readFileSync('/tmp/session.jwt','utf8').trim();
-const cookie='cosmos_session='+token;
+const cookie='carry_session='+token;
 const endpoints={health:'/api/health',notes:'/api/capture/notes',memories:'/api/capture/memories',features:'/api/settings/features',spotify:'/api/settings/services/spotify'};
 (async()=>{
   for(const [name,path] of Object.entries(endpoints)){
@@ -1388,8 +1361,8 @@ for name in health notes memories features spotify; do
   docker exec "$center_container" sh -euc "cat /tmp/smoke-$name.json" >"$projection_work/$name.json"
   chmod 600 "$projection_work/$name.json"
 done
-expected_notes="$(awk -F $'\t' '$1=="db.cosmos_note"{print $2}' "$backup_dir/invariants.tsv")"
-expected_memories="$(awk -F $'\t' '$1=="db.cosmos_memory"{print $2}' "$backup_dir/invariants.tsv")"
+expected_notes="$(awk -F $'\t' '$1=="db.carry_note"{print $2}' "$backup_dir/invariants.tsv")"
+expected_memories="$(awk -F $'\t' '$1=="db.carry_memory"{print $2}' "$backup_dir/invariants.tsv")"
 python3 - "$projection_work" "$expected_notes" "$expected_memories" <<'PY'
 import json,sys
 root,expected_notes,expected_memories=sys.argv[1:]
@@ -1505,7 +1478,7 @@ docker exec -i "$center_production_identity_container" sh -euc 'umask 077; cat >
 docker exec -i "$center_production_identity_container" node >/dev/null <<'NODE'
 const fs=require('node:fs');
 const token=fs.readFileSync('/tmp/session.jwt','utf8').trim();
-const cookie='cosmos_session='+token;
+const cookie='carry_session='+token;
 const endpoints={health:'/api/health',notes:'/api/capture/notes',memories:'/api/capture/memories',features:'/api/settings/features',wifi:'/api/settings/wifi'};
 (async()=>{
   for(const [name,path] of Object.entries(endpoints)){
@@ -1647,7 +1620,7 @@ cmp -s "$backup_dir/postgres-security.json" "$projection_work/postgres-security.
 # Projected onto the columns the RESTORED capture was taken over, so an additive
 # migration is not mistaken for the candidate rewriting wearer rows: `to_jsonb`
 # encodes the schema too, and 0004_listing.sql's `ADD COLUMN IF NOT EXISTS
-# cosmos_memory.thumbnail_count` would otherwise rewrite every row's JSON without a
+# carry_memory.thumbnail_count` would otherwise rewrite every row's JSON without a
 # wearer byte moving. A changed value, a vanished row, and a DROPPED column all
 # still fail — the projection only hides columns that did not exist before.
 capture_postgres_data "$postgres_container" revival_restore_bootstrap \
@@ -1733,7 +1706,7 @@ if ! cmp -s "$projection_work/postgres-schema.restored.tsv" "$projection_work/po
       "$REVIVAL_STAGING_SMOKE_EVIDENCE/postgres-schema.before.tsv" 2>/dev/null || true
     cp -f "$projection_work/postgres-schema.after.tsv" \
       "$REVIVAL_STAGING_SMOKE_EVIDENCE/postgres-schema.after.tsv" 2>/dev/null || true
-    for schema_database in cosmos keycloak; do
+    for schema_database in "$LEGACY_DATABASE_NAME" keycloak; do
       cp -f "$projection_work/postgres-schema.restored.tsv.$schema_database.sql" \
         "$REVIVAL_STAGING_SMOKE_EVIDENCE/postgres-schema.before.tsv.$schema_database.sql" 2>/dev/null || true
       cp -f "$projection_work/postgres-schema.after.tsv.$schema_database.sql" \

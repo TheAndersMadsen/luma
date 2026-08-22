@@ -39,13 +39,13 @@ const canary = fs.readFileSync(
 
 const canonicalOrigin = "https://center.andersmadsen.dk";
 const canonicalIssuer = `${canonicalOrigin}/realms/humane`;
-const legacyOrigin = "https://cosmos.andersmadsen.dk";
+const legacyOrigin = "https://carry.andersmadsen.dk";
 const deviceAuthorities = [
-  "api.cosmos.humane.cloud",
-  "onboarding.cosmos.humane.cloud",
-  "connectivity-check.cosmos.humane.cloud",
-  "n.cosmos.humane.cloud",
-  "cosmos-api.andersmadsen.dk",
+  "api.carry.humane.cloud",
+  "onboarding.carry.humane.cloud",
+  "connectivity-check.carry.humane.cloud",
+  "n.carry.humane.cloud",
+  "carry-api.andersmadsen.dk",
   "aipin.andersmadsen.dk",
 ];
 
@@ -54,7 +54,7 @@ function composeEnvironment() {
     ...process.env,
     REVIVAL_RELEASE_ID: "center-domain-contract",
     COSMOS_KID_SCOPE: "audit",
-    COSMOS_DATABASE_URL: "postgresql://cosmos:placeholder@postgres/cosmos",
+    COSMOS_DATABASE_URL: "postgresql://carry:placeholder@postgres/carry",
     COSMOS_EDGE_TOKEN: "placeholder-edge",
     COSMOS_ADMIN_TOKEN: "placeholder-admin",
     COSMOS_CENTER_PROJECTION_TOKEN: "placeholder-projection",
@@ -129,9 +129,9 @@ test("production defaults make Center the single dashboard and identity origin",
   assert.doesNotMatch(JSON.stringify(model), new RegExp(legacyOrigin.replaceAll(".", "\\.")));
 });
 
-test("legacy Cosmos is only a method-preserving temporary redirect", () => {
+test("legacy Carry is only a method-preserving temporary redirect", () => {
   const legacyServers = [...edge.matchAll(
-    /server\s*\{(?:(?!\n\}).)*?server_name\s+cosmos\.andersmadsen\.dk;(?:(?!\n\}).)*?\n\}/gs,
+    /server\s*\{(?:(?!\n\}).)*?server_name\s+carry\.andersmadsen\.dk;(?:(?!\n\}).)*?\n\}/gs,
   )].map((match) => match[0]);
   assert.equal(legacyServers.length, 2, "HTTP and HTTPS legacy vhosts are required");
   for (const block of legacyServers) {
@@ -280,7 +280,7 @@ test("edge header buffers cover the sealed-token cookie budget in both direction
     return { count: found[1] ? Number(found[1]) : 1, bytes: size(found[2]) };
   };
 
-  // Set-Cookie: manifest + every chunk + the cleared slots + cosmos_session, plus
+  // Set-Cookie: manifest + every chunk + the cleared slots + carry_session, plus
   // the security and cache headers Center attaches to the same reply. Nginx must
   // fit that entire block in ONE buffer.
   const responseBudget = maxChunks * (chunkBytes + 123) + 1900;

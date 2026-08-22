@@ -31,16 +31,16 @@ import org.json.JSONObject
 internal object CosmosRemoteTransport {
     private const val TAG = "PenumbraHook"
 
-    internal const val ENABLED_SETTING = "penumbra_cosmos_remote_mode"
-    internal const val EDGE_IPV4_SETTING = "penumbra_cosmos_edge_ipv4"
-    internal const val ATTESTATION_KEY_ALIAS = "penumbra_cosmos_device_attestation_v1"
-    internal const val ATTESTATION_BUNDLE_SETTING = "penumbra_cosmos_attestation_bundle_b64"
+    internal const val ENABLED_SETTING = "penumbra_carry_remote_mode"
+    internal const val EDGE_IPV4_SETTING = "penumbra_carry_edge_ipv4"
+    internal const val ATTESTATION_KEY_ALIAS = "penumbra_carry_device_attestation_v1"
+    internal const val ATTESTATION_BUNDLE_SETTING = "penumbra_carry_attestation_bundle_b64"
     internal const val ATTESTATION_PRODUCT_ID = "00000001"
 
     internal const val PROVISIONING_PROCESS = "hu.ma.ne.ironman:provisioning"
     private const val DIRECT_ATTESTATION_KEY_MANAGER =
         "humaneinternal.system.credentials.DeviceAttestationCredentialKeyManager"
-    private const val ONBOARDING_GATEWAY = "onboarding.cosmos.humane.cloud:443"
+    private const val ONBOARDING_GATEWAY = "onboarding.carry.humane.cloud:443"
     private const val MAX_ATTESTATION_BUNDLE_BYTES = 64 * 1024
 
     private val credentialFactoryClasses = listOf(
@@ -49,23 +49,23 @@ internal object CosmosRemoteTransport {
     )
 
     private val allowedHosts = setOf(
-        "api.cosmos.humane.cloud",
-        "onboarding.cosmos.humane.cloud",
+        "api.carry.humane.cloud",
+        "onboarding.carry.humane.cloud",
     )
 
     /** Exact cleartext connectivity authorities retained across stock firmware shapes. */
     private val connectivityHosts = setOf(
-        "connectivity-check.cosmos.humane.cloud",
-        "n.cosmos.humane.cloud",
+        "connectivity-check.carry.humane.cloud",
+        "n.carry.humane.cloud",
     )
 
     private val allowedNetworkHosts = allowedHosts + connectivityHosts
 
     private val remoteGateways = mapOf(
-        "api.prod.humane.cloud" to "api.cosmos.humane.cloud:443",
-        "api.cosmos.humane.cloud" to "api.cosmos.humane.cloud:443",
-        "onboarding.prod.humane.cloud" to "onboarding.cosmos.humane.cloud:443",
-        "onboarding.cosmos.humane.cloud" to "onboarding.cosmos.humane.cloud:443",
+        "api.prod.humane.cloud" to "api.carry.humane.cloud:443",
+        "api.carry.humane.cloud" to "api.carry.humane.cloud:443",
+        "onboarding.prod.humane.cloud" to "onboarding.carry.humane.cloud:443",
+        "onboarding.carry.humane.cloud" to "onboarding.carry.humane.cloud:443",
     )
 
     private val networkDnsInstalled = AtomicBoolean(false)

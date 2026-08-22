@@ -16,7 +16,6 @@ import json
 import os
 import re
 import stat
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -662,7 +661,7 @@ def load_channel_journal(record: Path) -> dict[str, object]:
         die("channel-key backup contract changed after migration preparation")
     transaction_root = record.parent.parent
     if transaction_root == Path("/home/anders/ai-pin-revival"):
-        expected_key = Path("/home/anders/cosmos-center-data/channel-key.json")
+        expected_key = Path("/home/anders/carry-center-data/channel-key.json")
         expected_contract = transaction_root / "backups" / record.name / "invariants.tsv"
         if key_path != expected_key or contract_path != expected_contract:
             die("production channel-key journal is outside its exact guarded paths")
@@ -785,62 +784,124 @@ def channel_key_action(args: argparse.Namespace) -> None:
         die(f"Center channel-key metadata is not in the expected {args.channel_key_action.removeprefix('verify-')} state")
 
 
-def security_tree_identity(path: Path) -> str:
-    if not path.is_absolute():
-        die("trust-root path must be absolute")
+def security_tree_identity(path: Path, expected_owner: tuple[int, int] | None = None) -> str:
+    """Hash one stable, non-symlink security tree including inode identity.
+
+    Production calls this under sudo because its mode-0600 keys belong to the
+    container uid.  Traversal is descriptor-relative and O_NOFOLLOW throughout:
+    a pathname swap, owner/mode change, relabel, hard link, truncation, or content
+    rewrite therefore refuses instead of becoming the next accepted baseline.
+    """
+    raw = str(path)
+    if (not path.is_absolute() or os.path.normpath(raw) != raw or
+            os.path.realpath(raw) != raw):
+        die("trust-root path must be one exact absolute non-symlink path")
     digest = hashlib.sha256()
+    members = 0
+    total_bytes = 0
+
+    def identity(value: os.stat_result) -> tuple[int, ...]:
+        return (value.st_dev, value.st_ino, stat.S_IFMT(value.st_mode),
+                stat.S_IMODE(value.st_mode), value.st_uid, value.st_gid,
+                value.st_nlink, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
 
     def add(value: str | bytes | int) -> None:
         data = value if isinstance(value, bytes) else str(value).encode()
         digest.update(len(data).to_bytes(8, "big"))
         digest.update(data)
 
-    def visit(current: Path, relative: str) -> None:
-        metadata = current.lstat()
-        mode = metadata.st_mode
-        add(relative)
-        add(stat.S_IFMT(mode))
-        add(stat.S_IMODE(mode))
-        add(metadata.st_uid)
-        add(metadata.st_gid)
-        if hasattr(os, "listxattr") and hasattr(os, "getxattr"):
-            try:
-                names = sorted(os.listxattr(current, follow_symlinks=False))
-            except OSError:
-                names = []
+    def check(metadata: os.stat_result, relative: str) -> None:
+        nonlocal members
+        if (expected_owner is not None and
+                (metadata.st_uid, metadata.st_gid) != expected_owner):
+            die(f"trust-root object has the wrong deployed owner: {relative}")
+        if stat.S_IMODE(metadata.st_mode) & 0o022:
+            die(f"trust-root object is group/world writable: {relative}")
+        if stat.S_ISREG(metadata.st_mode) and metadata.st_nlink != 1:
+            die(f"trust-root file has an alternate hard-link writer: {relative}")
+        if not (stat.S_ISDIR(metadata.st_mode) or stat.S_ISREG(metadata.st_mode)):
+            die(f"unsupported or aliased trust-root object: {relative}")
+        members += 1
+        if members > 10_000:
+            die("trust-root member bound exceeded")
+
+    def add_xattrs(descriptor: int, relative: str) -> None:
+        if not (hasattr(os, "listxattr") and hasattr(os, "getxattr")):
+            # The production runtime is Linux and always provides descriptor
+            # xattr APIs. Test platforms without them bind that absence rather
+            # than invoking a path-based helper that could follow a swap.
+            add("xattrs-unavailable")
+            return
+        try:
+            names = sorted(os.listxattr(descriptor))
             for name in names:
                 add(name)
-                add(os.getxattr(current, name, follow_symlinks=False))
-        else:
-            # Some macOS Python builds omit the xattr APIs. Keep the fixture and
-            # operator proof metadata-complete by binding the platform xattr
-            # tool's no-follow representation instead of silently omitting it.
-            result = subprocess.run(
-                ["/usr/bin/xattr", "-l", "-s", str(current)],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                check=False,
-                env={"HOME": "/nonexistent", "LANG": "C.UTF-8",
-                     "LC_ALL": "C.UTF-8", "PATH": "/usr/bin:/usr/sbin",
-                     "TZ": "UTC"},
-            )
-            if result.returncode not in (0, 1):
-                die(f"could not inspect trust-root extended metadata: {relative}")
-            add(result.stdout)
-        if stat.S_ISREG(mode):
-            add(metadata.st_size)
-            with current.open("rb") as stream:
-                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                    digest.update(chunk)
-        elif stat.S_ISLNK(mode):
-            add(os.readlink(current))
-        elif stat.S_ISDIR(mode):
-            for name in sorted(os.listdir(current)):
-                visit(current / name, os.path.join(relative, name))
-        else:
-            die(f"unsupported trust-root object: {relative}")
+                add(os.getxattr(descriptor, name))
+        except OSError as error:
+            die(f"could not inspect trust-root extended metadata: {relative}: {error}")
 
-    visit(path, ".")
+    def visit(parent: int, name: str, relative: str) -> None:
+        nonlocal total_bytes
+        before = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        check(before, relative)
+        flags = os.O_RDONLY | os.O_NOFOLLOW
+        if stat.S_ISDIR(before.st_mode):
+            flags |= os.O_DIRECTORY
+        descriptor = os.open(name, flags, dir_fd=parent)
+        try:
+            opened = os.fstat(descriptor)
+            if identity(opened) != identity(before):
+                die(f"trust-root object moved before open: {relative}")
+            add(relative)
+            for field in identity(opened):
+                add(field)
+            add_xattrs(descriptor, relative)
+            if stat.S_ISREG(opened.st_mode):
+                total_bytes += opened.st_size
+                if total_bytes > 256 * 1024 * 1024:
+                    die("trust-root byte bound exceeded")
+                offset = 0
+                while offset < opened.st_size:
+                    block = os.pread(descriptor, min(1024 * 1024, opened.st_size - offset), offset)
+                    if not block:
+                        die(f"trust-root file truncated while read: {relative}")
+                    digest.update(block)
+                    offset += len(block)
+            else:
+                names = sorted(os.listdir(descriptor))
+                for child in names:
+                    if child in ("", ".", "..") or "/" in child:
+                        die("trust-root directory returned an unsafe member")
+                    child_relative = child if relative == "." else os.path.join(relative, child)
+                    visit(descriptor, child, child_relative)
+                if sorted(os.listdir(descriptor)) != names:
+                    die(f"trust-root directory changed while read: {relative}")
+            if (identity(os.fstat(descriptor)) != identity(opened) or
+                    identity(os.stat(name, dir_fd=parent, follow_symlinks=False)) != identity(before)):
+                die(f"trust-root object changed while read: {relative}")
+        finally:
+            os.close(descriptor)
+
+    parent = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    descriptors = [parent]
+    try:
+        components = raw.split("/")[1:]
+        for component in components[:-1]:
+            before = os.stat(component, dir_fd=parent, follow_symlinks=False)
+            if not stat.S_ISDIR(before.st_mode) or stat.S_ISLNK(before.st_mode):
+                die("trust-root parent path is aliased")
+            child = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                            dir_fd=parent)
+            opened = os.fstat(child)
+            if identity(opened) != identity(before):
+                os.close(child)
+                die("trust-root parent path moved during traversal")
+            descriptors.append(child)
+            parent = child
+        visit(parent, components[-1], ".")
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
     return digest.hexdigest()
 
 
@@ -861,15 +922,17 @@ def trust_root_action(args: argparse.Namespace) -> None:
         if not value.is_absolute():
             die(f"{label} path must be absolute")
         metadata = value.lstat()
-        if not stat.S_ISDIR(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+        if (not stat.S_ISDIR(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode) or
+                os.path.normpath(str(value)) != str(value) or os.path.realpath(value) != str(value)):
             die(f"{label} must be a non-symlink directory")
         return value
 
     live_attest = require_directory(live_attest, "live attestation trust root")
     live_duc = require_directory(live_duc, "live device-user trust root")
+    production_attest = Path("/home/anders/carry-attest")
+    production_duc = Path("/home/anders/carry-duc")
     if root == Path("/home/anders/ai-pin-revival") and (
-        live_attest != root / "private" / "attest"
-        or live_duc != root / "private" / "duc"
+        live_attest != production_attest or live_duc != production_duc
     ):
         die("production live trust roots are outside their exact guarded paths")
     if args.trust_root_action == "record":
@@ -877,22 +940,22 @@ def trust_root_action(args: argparse.Namespace) -> None:
             die("trust-root recording requires both staged roots")
         staged_attest = require_directory(staged_attest, "staged attestation trust root")
         staged_duc = require_directory(staged_duc, "staged device-user trust root")
-        if root == Path("/home/anders/ai-pin-revival"):
-            for staged in (staged_attest, staged_duc):
-                try:
-                    staged.resolve().relative_to(record.resolve())
-                except ValueError:
-                    die("production staged trust roots must remain inside the deployment record")
+        if root == Path("/home/anders/ai-pin-revival") and (
+            staged_attest != production_attest or staged_duc != production_duc
+        ):
+            die("production trust roots must be observed directly at the immutable Carry paths")
+    production = root == Path("/home/anders/ai-pin-revival")
+    expected_owner = (65532, 65532) if production else None
     live = {
-        "attestation": security_tree_identity(live_attest),
-        "device-user": security_tree_identity(live_duc),
+        "attestation": security_tree_identity(live_attest, expected_owner),
+        "device-user": security_tree_identity(live_duc, expected_owner),
     }
     evidence = record / "trust-root-zero-delta.tsv"
     if args.trust_root_action == "record":
         assert staged_attest is not None and staged_duc is not None
         staged = {
-            "attestation": security_tree_identity(staged_attest),
-            "device-user": security_tree_identity(staged_duc),
+            "attestation": security_tree_identity(staged_attest, expected_owner),
+            "device-user": security_tree_identity(staged_duc, expected_owner),
         }
         if staged != live:
             die("staged and live trust roots differ in bytes or metadata")

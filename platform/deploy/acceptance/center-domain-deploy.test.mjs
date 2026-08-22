@@ -20,7 +20,7 @@ const streamTemplate = path.join(
 );
 const deviceStream = "/etc/nginx/streams-enabled/ai-pin-revival-device-edge.conf";
 const canonicalOrigin = "https://center.andersmadsen.dk";
-const legacyOrigin = "https://cosmos.andersmadsen.dk";
+const legacyOrigin = "https://carry.andersmadsen.dk";
 const canonicalAvailable = "/etc/nginx/sites-available/ai-pin-revival-center";
 const canonicalEnabled = "/etc/nginx/sites-enabled/ai-pin-revival-center";
 
@@ -83,7 +83,7 @@ function expandedNginxSection(filename, certificate, privateKey) {
   return `# configuration file ${filename}:
 server {
     listen 443 ssl http2;
-    server_name cosmos.andersmadsen.dk;
+    server_name carry.andersmadsen.dk;
     ssl_certificate ${certificate};
     ssl_certificate_key ${privateKey};
 }
@@ -187,7 +187,7 @@ function legacyRecordFrom(newRecord, work) {
   fs.writeFileSync(
     path.join(directory, "rendered.conf"),
     "server {\n    listen 443 ssl http2;\n    listen [::]:443 ssl http2;\n"
-      + "    server_name center.andersmadsen.dk cosmos.andersmadsen.dk;\n}\n",
+      + "    server_name center.andersmadsen.dk carry.andersmadsen.dk;\n}\n",
     { mode: 0o600 },
   );
   const desired = readJson(path.join(source, "DESIRED.json"));
@@ -200,7 +200,7 @@ function legacyRecordFrom(newRecord, work) {
 
 function cloudflaredConfig({ center = null, catchalls = 1, catchallFirst = false } = {}) {
   const rules = [
-    ["cosmos.andersmadsen.dk", "http://localhost:80"],
+    ["carry.andersmadsen.dk", "http://localhost:80"],
     ["aipin.andersmadsen.dk", "http://localhost:18080"],
     ...Array.from({ length: 9 }, (_, index) => [
       `service-${index + 2}.andersmadsen.dk`,
@@ -1243,7 +1243,7 @@ test("[implemented] deployment entrypoints bind the Center domain transaction", 
   }
 
   assertSource(scripts.canary, /center_base=https:\/\/center\.andersmadsen\.dk/, "public canary must use Center");
-  assertSource(scripts.canary, /https:\/\/cosmos\.andersmadsen\.dk/, "public canary must retain Cosmos redirect coverage");
+  assertSource(scripts.canary, /https:\/\/carry\.andersmadsen\.dk/, "public canary must retain Carry redirect coverage");
   assertSource(scripts.canary, /307/, "legacy redirect must preserve the request method");
   assertSource(scripts.canary, /[Ll]ocation/, "legacy redirect must verify Location");
 });

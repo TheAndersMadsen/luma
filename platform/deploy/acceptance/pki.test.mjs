@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   lstatSync,
@@ -87,11 +88,28 @@ test("DeviceUser init plans without mutation, then creates a validated protected
     { requireSelfSigned: true },
   );
   assert.equal(metadata.fingerprintSha256, result.metadata.fingerprintSha256);
+  assert.match(metadata.subject, /CN=Carry Clone DeviceUser CA/u);
   assert.equal(pkiStatus(captured.runtime).state, "ready");
+  const retained = [paths.certificate, paths.key].map((path) => {
+    const metadata = lstatSync(path, { bigint: true });
+    return {
+      ino: metadata.ino,
+      size: metadata.size,
+      digest: createHash("sha256").update(readFileSync(path)).digest("hex"),
+    };
+  });
   assert.throws(
     () => main(["init", "device-user", "--confirm"], captured.runtime),
     (error) => error instanceof PkiToolError && error.code === "refuse-overwrite",
   );
+  assert.deepEqual([paths.certificate, paths.key].map((path) => {
+    const metadata = lstatSync(path, { bigint: true });
+    return {
+      ino: metadata.ino,
+      size: metadata.size,
+      digest: createHash("sha256").update(readFileSync(path)).digest("hex"),
+    };
+  }), retained, "refused reinitialization must preserve the exact existing Carry CA files");
 });
 
 test("import validates first, stays plan-only by default and refuses overwrite", () => {
@@ -114,7 +132,23 @@ test("import validates first, stays plan-only by default and refuses overwrite",
 
   assert.equal(main([...args, "--confirm"], captured.runtime).changed, true);
   assert.equal(pkiStatus(captured.runtime).valid, true);
+  const retained = [targetPaths.certificate, targetPaths.key].map((path) => {
+    const metadata = lstatSync(path, { bigint: true });
+    return {
+      ino: metadata.ino,
+      size: metadata.size,
+      digest: createHash("sha256").update(readFileSync(path)).digest("hex"),
+    };
+  });
   assert.throws(() => main([...args, "--confirm"], captured.runtime), /refusing to overwrite/);
+  assert.deepEqual([targetPaths.certificate, targetPaths.key].map((path) => {
+    const metadata = lstatSync(path, { bigint: true });
+    return {
+      ino: metadata.ino,
+      size: metadata.size,
+      digest: createHash("sha256").update(readFileSync(path)).digest("hex"),
+    };
+  }), retained, "refused reimport must preserve the exact existing Carry CA files");
 });
 
 test("protected import inputs reject permissive files and links", () => {

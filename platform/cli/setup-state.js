@@ -57,6 +57,7 @@ const ACTION_SUCCESS_OUTCOMES = Object.freeze({
   'doctor.production': 'production-preflight-passed',
   'backup': 'production-backup-created',
   'deploy.production': 'production-deployment-applied',
+  'deploy.carry-baseline': 'carry-baseline-registered',
   'canary': 'production-canary-passed',
   'pin.doctor': 'pin-prerequisites-verified',
   'pin.release.inspect': 'pin-release-inspected',
@@ -847,6 +848,15 @@ function actionInvocationIsAuthoritative(actionId, values, command) {
     if (values.includes('--skip-staging-smoke')) return false;
     const optionsValid = parseExactOptions(values, {
       flags: ['--confirm', '--cleanup-project-images', '--json'],
+      valueOptions: ['--remote', '--candidate', '--candidate-id', '--min-free-gb'],
+      requiredFlags: ['--confirm'],
+      forbidden,
+    });
+    return optionsValid && Number(values.includes('--candidate')) + Number(values.includes('--candidate-id')) === 1;
+  }
+  if (actionId === 'deploy.carry-baseline') {
+    const optionsValid = parseExactOptions(values, {
+      flags: ['--confirm', '--json'],
       valueOptions: ['--remote', '--candidate', '--candidate-id', '--min-free-gb'],
       requiredFlags: ['--confirm'],
       forbidden,

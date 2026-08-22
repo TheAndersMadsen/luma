@@ -48,6 +48,7 @@ const CURRENT_COMMAND_IDS = Object.freeze([
   "pin.release.ship",
   "pin.install",
   "deploy.production",
+  "deploy.carry-baseline",
   "backup",
   "canary",
   "drift",

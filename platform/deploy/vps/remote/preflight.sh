@@ -7,6 +7,10 @@ min_free_gb=8
 cleanup=0
 json=0
 archive_bytes=0
+candidate_id=""
+candidate_release_id=""
+deployment_authority_sha256=""
+first_cutover=0
 usage() {
   echo "usage: preflight --min-free-gb N [--archive-bytes N] [--cleanup-project-images] [--json]" >&2
   exit 64
@@ -15,12 +19,19 @@ while (($#)); do
   case "$1" in
     --min-free-gb) (($# >= 2)) || usage; min_free_gb="$2"; shift 2 ;;
     --archive-bytes) (($# >= 2)) || usage; archive_bytes="$2"; shift 2 ;;
+    --candidate-id) (($# >= 2)) || usage; candidate_id="$2"; shift 2 ;;
+    --candidate-release-id) (($# >= 2)) || usage; candidate_release_id="$2"; shift 2 ;;
+    --deployment-authority-sha256) (($# >= 2)) || usage; deployment_authority_sha256="$2"; shift 2 ;;
     --cleanup-project-images) cleanup=1; shift ;;
     --json) json=1; shift ;;
     *) usage ;;
   esac
 done
 [[ "$min_free_gb" =~ ^[0-9]+$ && "$archive_bytes" =~ ^[0-9]+$ ]] || usage
+if [[ -n "$candidate_id$candidate_release_id$deployment_authority_sha256" ]]; then
+  [[ "$candidate_id" =~ ^[0-9a-f]{64}$ && "$candidate_release_id" =~ ^[0-9a-f]{64}$ \
+    && "$deployment_authority_sha256" =~ ^[0-9a-f]{64}$ ]] || usage
+fi
 
 assert_target
 assert_remote_root
@@ -48,6 +59,7 @@ if [[ ! -e "$REMOTE_ROOT" ]]; then
 elif [[ -L "$REMOTE_ROOT" || ! -d "$REMOTE_ROOT" ]]; then
   fail "canonical deployment root is unsafe"
 else
+  first_cutover=1
   inventory_json="$(python3 "$transaction_driver" --root "$REMOTE_ROOT" --inventory)" \
     || fail "global authority transaction inventory is invalid"
   mapfile -t global_pending < <(python3 - "$inventory_json" <<'PY'
@@ -169,6 +181,7 @@ else
 # record and may not run alongside legacy. A first cutover/retry may not retain
 # any stopped or running canonical candidate containers.
 if canonical_current="$(safe_release_pointer "$REMOTE_ROOT/current" 2>/dev/null)"; then
+  first_cutover=0
   canonical_record="$(safe_deployment_pointer "$REMOTE_ROOT/current-deployment" 2>/dev/null)" \
     || fail "canonical current release lacks authoritative deployment lineage"
   [[ -f "$canonical_record/SUCCEEDED" && -f "$canonical_record/INGRESS_ACTIVATED" \
@@ -185,6 +198,7 @@ if canonical_current="$(safe_release_pointer "$REMOTE_ROOT/current" 2>/dev/null)
   domain_cloudflared_verify_desired "$canonical_record" \
     || fail "canonical deployment Cloudflare route or configuration drifted"
 else
+  first_cutover=1
   [[ ! -e "$REMOTE_ROOT/current" && ! -L "$REMOTE_ROOT/current" ]] \
     || fail "canonical current pointer exists but is unsafe"
   [[ ! -e "$REMOTE_ROOT/current-deployment" && ! -L "$REMOTE_ROOT/current-deployment" ]] \
@@ -204,12 +218,39 @@ if ((pending_activation)); then
   exit 0
 fi
 
+# Exact durable-resource and active-mount authority is proved before the first
+# cleanup or other remote mutation. A missing/wrong Carry volume, network,
+# Center directory, or project-specific mount therefore cannot be papered over
+# by Docker auto-creation or leave even an image-removal side effect.
+assert_durable_inputs
+assert_active_durable_mounts
+if [[ -n "${canonical_record:-}" ]]; then
+  verify_exact_carry_security_identity "$canonical_record/carry-security-identity.json"
+else
+  # The adopted baseline below binds this same complete identity to the hosted
+  # registrar.  This first pass is intentionally before cleanup/capacity work.
+  write_exact_carry_security_identity >/dev/null \
+    || fail "deployed Carry PKI/certificate paths are unsafe"
+fi
+
+# A pre-workflow Carry runtime is not a hosted release and is never described
+# as one.  Its sole first-cutover authority is the deterministic observation
+# registered by held code from this exact candidate.  Reprove it before any
+# cleanup, image removal, staging write, or writer quiesce.
+if ((first_cutover)); then
+  carry_baseline_id="$(active_adopted_live_carry_id)" \
+    || fail "first cutover requires the one-time adopted-live-carry-v1 registration"
+  verify_adopted_live_carry "$carry_baseline_id" active \
+    "$candidate_id" "$candidate_release_id" "$deployment_authority_sha256" \
+    || fail "live Carry predecessor differs from its sealed one-time baseline"
+fi
+
 # Legacy rollback compatibility only. Canonical Center and Keycloak are not
-# attached to contain-net; after a valid canonical current release exists, the
+# attached to carry-net; after a valid canonical current release exists, the
 # next rollback target is canonical and this historical network is irrelevant.
 if legacy_rollback_network_required; then
-  docker network inspect cosmos-net >/dev/null 2>&1 \
-    || fail "legacy rollback network cosmos-net is missing before first canonical cutover"
+  docker network inspect carry-net >/dev/null 2>&1 \
+    || fail "legacy rollback network carry-net is missing before first canonical cutover"
 fi
 
 stale_smoke_containers="$(docker ps -aq --filter 'label=dk.andersmadsen.ai-pin-revival.temporary=staging-smoke' | head -n 1)"
@@ -282,45 +323,35 @@ for route in routes:
     raise SystemExit(f"Spotify control subnet overlaps host route {value} on {dev or 'unknown'}")
 PY
 
-if ((cleanup)); then
-  [[ -f "$LOCK_FILE" && ! -L "$LOCK_FILE" ]] || fail "canonical deployment lock is unavailable for image cleanup"
-  exec 8>>"$LOCK_FILE"
-  flock -n 8 || fail "another Ai Pin Revival operation holds the deployment lock"
-  cleanup_project_images
-  flock -u 8
-fi
-
 available_kb="$(df -Pk /home/anders | awk 'NR==2 {print $4}')"
 required_kb=$((min_free_gb * 1024 * 1024 + (archive_bytes * 6 / 1024)))
 ((available_kb >= required_kb)) || fail "insufficient project build capacity: need ${required_kb} KiB, have ${available_kb} KiB"
 
-assert_durable_inputs
-assert_active_durable_mounts
 if [[ ! -f "$RUNTIME_ENV" ]]; then
-  [[ -f /home/anders/humane-cosmos-clone/.env ]] || fail "neither canonical nor legacy runtime configuration exists"
+  [[ -f "$LEGACY_RUNTIME_ENV" ]] || fail "neither canonical nor legacy runtime configuration exists"
 fi
-runtime_source="$RUNTIME_ENV"; [[ -f "$runtime_source" ]] || runtime_source=/home/anders/humane-cosmos-clone/.env
+runtime_source="$RUNTIME_ENV"; [[ -f "$runtime_source" ]] || runtime_source="$LEGACY_RUNTIME_ENV"
 domain_env_value "$runtime_source" KEYCLOAK_ADMIN >/dev/null \
   && domain_env_value "$runtime_source" KEYCLOAK_ADMIN_PASSWORD >/dev/null \
   || fail "protected Keycloak administrator credentials are required for the reversible Center client migration"
 if [[ ! -f "$PRIVATE_DIR/imported/cosmos-backends.env" ]]; then
-  [[ -f /home/anders/cosmos-backends.env ]] || fail "legacy provider configuration is unavailable for first cutover"
+  [[ -f "$LEGACY_BACKENDS_ENV" ]] || fail "legacy provider configuration is unavailable for first cutover"
 fi
 if [[ ! -f "$CENTER_ENV" ]]; then
-  [[ -f /home/anders/cosmos-center.env ]] || fail "legacy Center configuration is unavailable for first cutover"
+  [[ -f "$LEGACY_CENTER_ENV" ]] || fail "legacy Center configuration is unavailable for first cutover"
 fi
 
-edge_dir="$PRIVATE_DIR/edge"; [[ -d "$edge_dir" ]] || edge_dir=/home/anders/cosmos-edge
+edge_dir="$LEGACY_EDGE_DIR"
 attest_dir="$(active_attestation_root)"
 duc_dir="$(active_device_user_root)"
-theme_dir="$PRIVATE_DIR/keycloak-theme"; [[ -d "$theme_dir" ]] || theme_dir=/home/anders/keycloak-themes/humane
+theme_dir="$PRODUCTION_KEYCLOAK_THEME_DIR"
 [[ -d "$edge_dir" ]] || fail "edge PKI/configuration is missing"
 [[ -d "$attest_dir" ]] || fail "attestation PKI is missing"
 [[ -d "$duc_dir" ]] || fail "DeviceUser PKI is missing"
 [[ -d "$theme_dir" && -n "$(find "$theme_dir" -type f -print -quit)" ]] || fail "Keycloak theme is missing or empty"
 
-edge_config="$edge_dir/envoy.yaml"
-edge_certs="$edge_dir/certs"
+if [[ -n "${canonical_current:-}" ]]; then edge_config="$PRODUCTION_EDGE_CONFIG"; else edge_config="$LEGACY_EDGE_DIR/envoy.yaml"; fi
+edge_certs="$PRODUCTION_EDGE_CERT_DIR"
 for file in "$edge_config" "$edge_certs/server.crt" "$edge_certs/server.key" \
   "$edge_certs/api-client-ca.crt" "$edge_certs/onboarding-client-ca.crt" \
   "$attest_dir/ca.crt" "$attest_dir/ca.key" "$duc_dir/duc-ca.crt" "$duc_dir/duc-ca.key" \
@@ -394,13 +425,71 @@ anchor_accepts_issuer "$attest_dir/ca.crt" "$edge_certs/onboarding-client-ca.crt
   || fail "the edge onboarding anchor ($edge_certs/onboarding-client-ca.crt) is not the attestation CA that mints onboarding client certificates ($attest_dir/ca.crt); every Pin onboarding handshake will be rejected at the edge"
 anchor_accepts_issuer "$duc_dir/duc-ca.crt" "$edge_certs/api-client-ca.crt" \
   || fail "the edge API anchor ($edge_certs/api-client-ca.crt) is not the DeviceUser CA that mints device client certificates ($duc_dir/duc-ca.crt); every enrolled Pin will be rejected at the edge"
-# The remaining half of this relationship — that the edge SERVER certificate
-# chains to the root the device pins in
-# pin/hook/payload/src/main/kotlin/com/penumbraos/hook/CosmosRemoteTransport.kt —
-# cannot be checked from here: the "vps" release profile deliberately excludes
-# pin/, so the pinned PEM literal is not on this host. It stays unproven rather
-# than silently assumed.
-warn "the edge server certificate is not checked against the root the Pin hook pins; that literal lives in pin/ source this deployment profile does not contain"
+
+# Complete the other half of the device TLS contract before quiescing one
+# writer.  activate.mjs is in the VPS release and pins the same immutable Carry
+# root as both installed device paths.  held-release-exec exposes that exact
+# reviewed file as a sealed descriptor: reopening a mutable release pathname
+# here would let a swapped root bless the wrong live certificate.
+verify_pinned_carry_edge_certificate() (
+  set -euo pipefail
+  local activate_source="${REVIVAL_HELD_PIN_ACTIVATE:-}" work root_file source_sha subject fingerprint authority
+  [[ "$activate_source" =~ ^/proc/self/fd/[1-9][0-9]*$ ]] || return 1
+  release_material_file_is_safe "$activate_source" || return 1
+  work="$(mktemp -d)" || return 1
+  chmod 700 "$work"
+  trap 'rm -rf -- "$work"' EXIT
+  root_file="$work/carry-clone-root.pem"
+  "$REVIVAL_HOST_PYTHON" -I -B - "$activate_source" "$root_file" <<'PY'
+import os,re,stat,sys
+source_path,destination=sys.argv[1:]
+descriptor=os.open(source_path,os.O_RDONLY)
+try:
+    metadata=os.fstat(descriptor)
+    assert stat.S_ISREG(metadata.st_mode) and 0<metadata.st_size<=1024*1024
+    source=b""
+    while len(source)<metadata.st_size:
+        block=os.read(descriptor,min(1024*1024,metadata.st_size-len(source)))
+        assert block
+        source+=block
+    assert os.fstat(descriptor)==metadata
+finally:
+    os.close(descriptor)
+text=source.decode("utf-8")
+pattern=re.compile(r"export const CLONE_ROOT_PEM = `(-----BEGIN CERTIFICATE-----\n"
+                   r"(?:[A-Za-z0-9+/=]+\n)+-----END CERTIFICATE-----)`;")
+matches=pattern.findall(text)
+assert len(matches)==1 and text.count("CLONE_ROOT_PEM = `")==1
+pem=matches[0].encode("ascii")
+assert len(pem)==687 and not pem.endswith(b"\n")
+output=os.open(destination,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+try:
+    os.write(output,pem+b"\n")
+    os.fchmod(output,0o600)
+    os.fsync(output)
+finally:
+    os.close(output)
+PY
+  source_sha="$(sha256sum "$root_file" | awk '{print $1}')"
+  [[ "$source_sha" == 1b947b4e4dae58dc5f8aac1863723eb0eaa313da993e2b8ec7abed38727e22ed ]] \
+    || return 1
+  subject="$(openssl x509 -in "$root_file" -noout -subject -nameopt RFC2253)" || return 1
+  [[ "$subject" == "subject=CN=Carry Clone Root EC 1,O=humane-carry-clone" ]] || return 1
+  fingerprint="$(openssl x509 -in "$root_file" -noout -fingerprint -sha256 \
+    | tr '[:upper:]' '[:lower:]' | tr -d ':')" || return 1
+  [[ "$fingerprint" == "sha256 fingerprint=7f82fbf94a370379ed238fb0c9d2e2d13316d67197faba2948c0e3d92ac3458b" ]] \
+    || return 1
+  sudo -n openssl verify -purpose sslserver -CAfile "$root_file" "$edge_certs/server.crt" >/dev/null \
+    || return 1
+  for authority in \
+    onboarding.carry.humane.cloud onboarding.clone.invalid carry-edge \
+    api.carry.humane.cloud api.clone.invalid eastus.carry.humane.cloud eastus-1.carry.humane.cloud; do
+    sudo -n openssl x509 -in "$edge_certs/server.crt" -noout -checkhost "$authority" >/dev/null \
+      || return 1
+  done
+)
+verify_pinned_carry_edge_certificate \
+  || fail "edge server certificate does not chain to the exact pinned Carry root or cover every device SNI authority"
 
 # The edge server pair. A mismatch here means Envoy presents a certificate it
 # cannot prove it owns and every device TLS handshake dies before a request line
@@ -432,6 +521,23 @@ for path in "$attest_dir/ca.crt" "$attest_dir/ca.key" "$duc_dir/duc-ca.crt" "$du
 done
 [[ "$(sudo -n stat -c '%a' "$attest_dir/ca.key")" == 600 ]] || fail "attestation key must be mode 0600"
 [[ "$(sudo -n stat -c '%a' "$duc_dir/duc-ca.key")" == 600 ]] || fail "DeviceUser key must be mode 0600"
+if [[ -n "${canonical_record:-}" ]]; then
+  verify_exact_carry_security_identity "$canonical_record/carry-security-identity.json"
+else
+  write_exact_carry_security_identity >/dev/null \
+    || fail "deployed Carry PKI/certificate identity changed during preflight"
+fi
+
+# This is the first allowed mutation in preflight. Every fixed Carry volume,
+# network, mount, source path, owner, link topology, inode and certificate
+# relationship has been re-proved above.
+if ((cleanup)); then
+  [[ -f "$LOCK_FILE" && ! -L "$LOCK_FILE" ]] || fail "canonical deployment lock is unavailable for image cleanup"
+  exec 8>>"$LOCK_FILE"
+  flock -n 8 || fail "another Ai Pin Revival operation holds the deployment lock"
+  cleanup_project_images
+  flock -u 8
+fi
 # Do not emulate container access through the host path: /home/anders is not
 # traversable by the unregistered container uid, while Docker resolves the
 # bind mount before entering that user context. The isolated staging run starts

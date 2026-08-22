@@ -314,7 +314,7 @@ function localIdentityRealm(values) {
     accessTokenLifespan: 900,
     attributes: { aiPinRevivalManaged: 'true' },
     roles: {
-      realm: [{ name: 'cosmos-operator', description: 'Ai Pin Revival operator access' }]
+      realm: [{ name: 'carry-operator', description: 'Ai Pin Revival operator access' }]
     },
     clients: [{
       clientId,
@@ -637,8 +637,8 @@ function validateLocalIdentityRealm(values, problems) {
     problems.push(`${realmFile} redirect origins do not match REVIVAL_CENTER_PORT=${centerPort}; regenerate the local realm intentionally`);
   }
   const roles = Array.isArray(realm.roles?.realm) ? realm.roles.realm : [];
-  if (!roles.some((role) => role?.name === 'cosmos-operator')) {
-    problems.push(`${realmFile} must define the optional cosmos-operator realm role`);
+  if (!roles.some((role) => role?.name === 'carry-operator')) {
+    problems.push(`${realmFile} must define the optional carry-operator realm role`);
   }
 }
 

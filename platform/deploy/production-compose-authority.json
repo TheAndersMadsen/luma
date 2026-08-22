@@ -1,13 +1,33 @@
 {
   "schema": "revival.production-compose-authority",
-  "schemaVersion": 2,
+  "schemaVersion": 3,
+  "forbiddenRenamedResources": {
+    "centerDataPaths": [
+      "/home/anders/cosmos-center-data"
+    ],
+    "networks": [
+      "humane-cosmos-clone_cosmos-local"
+    ],
+    "projects": [
+      "humane-cosmos-clone"
+    ],
+    "stateTargets": [
+      "/var/lib/cosmos"
+    ],
+    "volumes": [
+      "humane-cosmos-clone_cosmos-pgdata",
+      "humane-cosmos-clone_cosmos-state",
+      "humane-cosmos-clone_grafana-data",
+      "humane-cosmos-clone_prometheus-data"
+    ]
+  },
   "composeFiles": {
-    "compose.yaml": "bc612ba60b1b962830854cb4eb2cf20f77499b85f572a3d9d6bdf9b18ff64648",
-    "platform/compose/production.yaml": "46da4e8240e833145468fa982baa6b47b864e72aa0e6806be508fd042e9efeba"
+    "compose.yaml": "bcfe542c5b21c96fb61545b2d147e6ea90f1e17d49c41dfaa7e0ab0c2120909a",
+    "platform/compose/production.yaml": "21c30a0110bf7c5db44847313e12d6b3b81416332c0fef00a0c288e231dd5a1a"
   },
   "remoteCommon": {
     "path": "platform/deploy/vps/remote/common.sh",
-    "sha256": "ee9776b190729d66e411fc8c8b2626a1a8e14cf03f33dba4eddd45ac982c7ed9"
+    "sha256": "3749602897577f23a80424a3a2863c3119fe23724c03146b88bb28e10f1c0579"
   },
   "releaseConfig": {
     "path": "platform/deploy/release.json",
@@ -98,7 +118,7 @@
       "networks": {
         "cosmos-internal": null,
         "identity-edge": null,
-        "local-model": "humane-cosmos-clone_cosmos-local",
+        "local-model": "humane-carry-clone_carry-local",
         "loopback-publish": null,
         "provider-egress": null,
         "search-egress": null,
@@ -108,15 +128,15 @@
       },
       "volumes": {
         "center-data": null,
-        "cosmos-pgdata": "humane-cosmos-clone_cosmos-pgdata",
-        "cosmos-state": "humane-cosmos-clone_cosmos-state",
-        "grafana-data": "humane-cosmos-clone_grafana-data",
-        "prometheus-data": "humane-cosmos-clone_prometheus-data"
+        "cosmos-pgdata": "humane-carry-clone_carry-pgdata",
+        "cosmos-state": "humane-carry-clone_carry-state",
+        "grafana-data": "humane-carry-clone_grafana-data",
+        "prometheus-data": "humane-carry-clone_prometheus-data"
       }
     },
     "protectedVolumes": {
       "cosmos-pgdata": {
-        "externalName": "humane-cosmos-clone_cosmos-pgdata",
+        "externalName": "humane-carry-clone_carry-pgdata",
         "grants": [
           {
             "readOnly": false,
@@ -126,47 +146,47 @@
         ]
       },
       "cosmos-state": {
-        "externalName": "humane-cosmos-clone_cosmos-state",
+        "externalName": "humane-carry-clone_carry-state",
         "grants": [
           {
             "readOnly": false,
             "service": "account",
-            "target": "/var/lib/cosmos"
+            "target": "/var/lib/carry"
           },
           {
             "readOnly": false,
             "service": "ai-bus",
-            "target": "/var/lib/cosmos"
+            "target": "/var/lib/carry"
           },
           {
             "readOnly": false,
             "service": "connectivity",
-            "target": "/var/lib/cosmos"
+            "target": "/var/lib/carry"
           },
           {
             "readOnly": false,
             "service": "contacts",
-            "target": "/var/lib/cosmos"
+            "target": "/var/lib/carry"
           },
           {
             "readOnly": false,
             "service": "feature-flags",
-            "target": "/var/lib/cosmos"
+            "target": "/var/lib/carry"
           },
           {
             "readOnly": false,
             "service": "notable-events",
-            "target": "/var/lib/cosmos"
+            "target": "/var/lib/carry"
           },
           {
             "readOnly": false,
             "service": "provisioning",
-            "target": "/var/lib/cosmos"
+            "target": "/var/lib/carry"
           }
         ]
       },
       "grafana-data": {
-        "externalName": "humane-cosmos-clone_grafana-data",
+        "externalName": "humane-carry-clone_grafana-data",
         "grants": [
           {
             "readOnly": false,
@@ -176,7 +196,7 @@
         ]
       },
       "prometheus-data": {
-        "externalName": "humane-cosmos-clone_prometheus-data",
+        "externalName": "humane-carry-clone_prometheus-data",
         "grants": [
           {
             "readOnly": false,
@@ -188,7 +208,7 @@
     },
     "protectedNetworks": {
       "local-model": {
-        "externalName": "humane-cosmos-clone_cosmos-local",
+        "externalName": "humane-carry-clone_carry-local",
         "services": [
           "ai-bus"
         ]
@@ -197,27 +217,27 @@
     "centerData": {
       "readOnly": false,
       "service": "center",
-      "source": "/home/anders/cosmos-center-data",
+      "source": "/home/anders/carry-center-data",
       "target": "/data",
       "type": "bind"
     }
   },
   "productionState": {
-    "centerDataPath": "/home/anders/cosmos-center-data",
+    "centerDataPath": "/home/anders/carry-center-data",
     "externalNetworks": [
-      "humane-cosmos-clone_cosmos-local"
+      "humane-carry-clone_carry-local"
     ],
-    "projectFamily": "humane-cosmos-clone",
+    "projectFamily": "humane-carry-clone",
     "protectedRoot": "/home/anders/ai-pin-revival",
     "runtimeProject": "ai-pin-revival",
     "schema": "revival.production-state-contract",
     "schemaVersion": 2,
-    "storageFamily": "humane-cosmos-clone",
+    "storageFamily": "humane-carry-clone",
     "volumes": [
-      "humane-cosmos-clone_cosmos-pgdata",
-      "humane-cosmos-clone_cosmos-state",
-      "humane-cosmos-clone_grafana-data",
-      "humane-cosmos-clone_prometheus-data"
+      "humane-carry-clone_carry-pgdata",
+      "humane-carry-clone_carry-state",
+      "humane-carry-clone_grafana-data",
+      "humane-carry-clone_prometheus-data"
     ]
   }
 }

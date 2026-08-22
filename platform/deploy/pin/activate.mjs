@@ -13,10 +13,10 @@ import { validateDeviceSerial } from "../acceptance/pin/device-target-guard.mjs"
 
 const SELF_PATH = fileURLToPath(import.meta.url);
 const MAX_CREDENTIAL_BYTES = 64 * 1024;
-const PROVIDER_URI = "content://com.penumbraos.server.cosmosidentity";
+const PROVIDER_URI = "content://com.penumbraos.server.carryidentity";
 const STAGING_URI = `${PROVIDER_URI}/attestation.json`;
-const API_ENDPOINT = "https://api.cosmos.humane.cloud";
-const ONBOARDING_ENDPOINT = "https://onboarding.cosmos.humane.cloud";
+const API_ENDPOINT = "https://api.carry.humane.cloud";
+const ONBOARDING_ENDPOINT = "https://onboarding.carry.humane.cloud";
 const DEVICE_ID_RE = /^[0-9a-f]+$/u;
 
 // Exact certificate pinned by the installed runtime and hook. Host activation
@@ -228,8 +228,8 @@ export function parseProviderBundle(output) {
     rollbackComplete: read("rollback_complete", "true|false") === "true",
     edgeIpv4: read("edge_ipv4", "[0-9.]+"),
     fingerprintSha256: read("fingerprint_sha256", "[0-9a-fA-F]{64}")?.toLowerCase() ?? null,
-    apiEndpoint: read("api_endpoint", "https://api\\.cosmos\\.humane\\.cloud"),
-    onboardingEndpoint: read("onboarding_endpoint", "https://onboarding\\.cosmos\\.humane\\.cloud"),
+    apiEndpoint: read("api_endpoint", "https://api\\.carry\\.humane\\.cloud"),
+    onboardingEndpoint: read("onboarding_endpoint", "https://onboarding\\.carry\\.humane\\.cloud"),
     identityPresent: read("present", "true|false") === "true",
     identityUsable: read("identity_usable", "true|false") === "true",
   });

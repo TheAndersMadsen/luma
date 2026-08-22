@@ -17,7 +17,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  * credential. The setting is deleted before the stock login attempt starts.
  */
 internal object CosmosOnboardingAutomation {
-    internal const val PINCODE_SETTING = "penumbra_cosmos_onboarding_pincode"
+    internal const val PINCODE_SETTING = "penumbra_carry_onboarding_pincode"
     private const val TAG = "PenumbraHook"
     private const val PROMPT_ADVANCE_DELAY_MS = 300L
     private const val DUC_PROVISIONED_SETTING = "humane.settings.global.DUC_PROVISIONED"

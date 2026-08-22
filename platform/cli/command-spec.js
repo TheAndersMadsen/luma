@@ -99,6 +99,7 @@ const DETAILS = Object.freeze({
   'release.candidate.verify': 'Filesystem-only verification. It never invokes Git, Docker, a shell, or candidate-controlled code.',
   'release.candidate.inspect': 'Read-only. Reports exact identities and whether the candidate matches the protected live Carry storage contract.',
   'deploy.production': 'Requires --confirm and exactly one freshly provider-reverified hosted candidate. --dry-run is local-only and cannot be combined with confirmation; local prepared candidates are never deployable.',
+  'deploy.carry-baseline': 'One-time only: uses held code from the exact hosted forward candidate to observe and seal the already-running Carry predecessor. It never claims the old images were provider-built and does not stop or change the runtime.',
   backup: 'Requires --confirm before creating the production backup or fetching its verified off-host copy.',
   canary: 'Requires --confirm before running production semantic canaries.',
   rollback: 'Requires --confirm and an exact prior deployment ID. It changes application release state but never restores a database.',

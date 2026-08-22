@@ -70,21 +70,30 @@ export class ChannelKeyUnavailableError extends Error {
  * everything the first sealed unreadable.
  *
  * ONE file, holding a map from kid to key — not one file per wearer. The path is
- * the only one the deployment declares (`COSMOS_CHANNEL_KEY_FILE`), the only one
+ * the only one the deployment declares (`COSMOS_CHANNEL_KEY_FILE`, with the
+ * pre-rename `CARRY_CHANNEL_KEY_FILE` accepted as an exact alias), the only one
  * the restore/backup contract knows, and the only one `.gitignore` and
  * `.dockerignore` name; inventing sibling filenames would put wearer key
  * material somewhere neither of those covers. (`writeStore` does use one
- * transient sibling, `<file>.<pid>.tmp`, so the replacement can be atomic —
- * which is why both ignore lists now cover `.cosmos-channel-key.json*` rather
- * than the exact name.)
+ * transient sibling, `<file>.<pid>.tmp`, so the replacement can be atomic.)
  *
  * Read per call rather than captured at import: a deployment sets it before the
  * process starts, so nothing changes there, and a test can point one case at a
  * scratch file without loading a second copy of the module.
  */
 export function channelKeyFile(): string {
-  return process.env.COSMOS_CHANNEL_KEY_FILE
-    ?? path.join(process.cwd(), ".cosmos-channel-key.json");
+  const cosmos = nonBlankEnvironmentPath(process.env.COSMOS_CHANNEL_KEY_FILE);
+  const carry = nonBlankEnvironmentPath(process.env.CARRY_CHANNEL_KEY_FILE);
+  if (cosmos && carry && cosmos !== carry) {
+    throw new ChannelKeyUnavailableError(
+      "COSMOS_CHANNEL_KEY_FILE and CARRY_CHANNEL_KEY_FILE disagree; refusing to choose a channel-key store.",
+    );
+  }
+  return cosmos ?? carry ?? path.join(process.cwd(), ".carry-channel-key.json");
+}
+
+function nonBlankEnvironmentPath(value: string | undefined): string | null {
+  return value !== undefined && value.trim().length > 0 ? value : null;
 }
 
 interface KeyStore {

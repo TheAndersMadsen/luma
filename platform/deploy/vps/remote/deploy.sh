@@ -234,6 +234,15 @@ flock -n 9 || fail "another deployment or backup holds the lock"
 assert_durable_inputs
 assert_active_durable_mounts
 
+# Capture the exact immutable Carry PKI/certificate closure before creating a
+# deployment record.  The pre-upload gate already made the same proof before
+# any release byte arrived; this second, held-code proof closes the transport
+# window and gives the forward/rollback transaction an inode-level baseline.
+carry_security_work="$(mktemp -d)" || fail "could not allocate Carry security evidence workspace"
+chmod 700 "$carry_security_work"
+trap 'rm -rf -- "$carry_security_work"' EXIT
+record_exact_carry_security_identity "$carry_security_work/identity.json"
+
 bootstrap_transaction_driver="${REVIVAL_HELD_TRANSACTION:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/transaction.py}"
 release_material_file_is_safe "$bootstrap_transaction_driver" \
   || fail "global authority transaction helper is missing or unsafe"
@@ -256,6 +265,11 @@ chmod 700 "$record"
 printf '%s\n' "$release_id" >"$record/release-id"
 printf '%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$record/started-at"
 chmod 600 "$record/release-id" "$record/started-at"
+install -m 600 "$carry_security_work/identity.json" "$record/carry-security-identity.json"
+verify_exact_carry_security_identity "$record/carry-security-identity.json"
+rm -rf -- "$carry_security_work"
+carry_security_work=""
+trap - EXIT
 printf '%s\n' "$candidate_id" >"$record/candidate-id"
 chmod 600 "$record/candidate-id"
 python3 -I -B - "$deployment_authority" "$record/hosted-vps-authority.json" "$deployment_authority_sha256" <<'PY' \
@@ -423,7 +437,7 @@ record_keycloak_post_migration_evidence() {
     temporary="$(mktemp "$target_record/.keycloak-post-migration-data.XXXXXX")"
     postgres="$("${COMPOSE[@]}" ps -q postgres)"
     [[ -n "$postgres" ]] || { rm -f -- "$temporary"; return 1; }
-    capture_postgres_data "$postgres" cosmos "$temporary" \
+    capture_postgres_data "$postgres" "$LEGACY_DATABASE_USER" "$temporary" \
       || { rm -f -- "$temporary"; return 1; }
     chmod 600 "$temporary"
     mv "$temporary" "$data"
@@ -582,8 +596,8 @@ capture_resume_candidate_evidence() {
     columns_source="$baseline/postgres-data.tsv.columns"
   fi
   postgres="$(find_postgres_container)"
-  capture_postgres_data "$postgres" cosmos "$work/candidate-data.tsv" "$columns_source"
-  capture_postgres_schema "$postgres" cosmos "$work/candidate-schema.tsv" retain-sql
+  capture_postgres_data "$postgres" "$LEGACY_DATABASE_USER" "$work/candidate-data.tsv" "$columns_source"
+  capture_postgres_schema "$postgres" "$LEGACY_DATABASE_USER" "$work/candidate-schema.tsv" retain-sql
 }
 
 # The pre-candidate schema manifest the resume classifies against, WITH the
@@ -614,7 +628,7 @@ resume_baseline_schema_manifest() {
   [[ -f "$baseline/postgres-schema.tsv" && ! -L "$baseline/postgres-schema.tsv" ]] || return 1
   install -m 600 "$baseline/postgres-schema.tsv" "$manifest" || return 1
   cmp -s "$baseline/postgres-schema.tsv" "$manifest" || return 1
-  for database in cosmos keycloak; do
+  for database in "$LEGACY_DATABASE_NAME" keycloak; do
     source=""
     if [[ -f "$baseline/postgres-schema.tsv.$database.sql" \
       && ! -L "$baseline/postgres-schema.tsv.$database.sql" ]]; then
@@ -635,7 +649,7 @@ resume_baseline_schema_manifest() {
 # quiesce_ingress_services stops the cloudflared user unit, the cloudflared
 # system unit, nginx.service and penumbra-center-bridge.service. nginx is the
 # HOST's shared web server, so this takes down aipin.andersmadsen.dk,
-# connectivity-check.cosmos.humane.cloud and the default vhost along with this
+# connectivity-check.carry.humane.cloud and the default vhost along with this
 # project — and the paired Pin, which POSTs a device-status report every five
 # minutes to contain-api.andersmadsen.dk, is connection-REFUSED for the entire
 # window. Refused, not 502'd: nginx is not running to log it, so the outage
@@ -856,9 +870,6 @@ restore_pending_asset_presence() {
   while IFS=$'\t' read -r state name path; do
     case "$name" in
       edge) expected="$PRIVATE_DIR/edge" ;;
-      attest) expected="$PRIVATE_DIR/attest" ;;
-      duc) expected="$PRIVATE_DIR/duc" ;;
-      keycloak-theme) expected="$PRIVATE_DIR/keycloak-theme" ;;
       *) return 1 ;;
     esac
     [[ "$path" == "$expected" ]] || return 1
@@ -868,7 +879,7 @@ restore_pending_asset_presence() {
       *) return 1 ;;
     esac
   done <"$manifest"
-  [[ "$(wc -l <"$manifest" | tr -d '[:space:]')" == 4 ]]
+  [[ "$(wc -l <"$manifest" | tr -d '[:space:]')" == 1 ]]
 }
 
 restore_pending_live_mutation() {
@@ -1178,14 +1189,14 @@ PY
     --channel-key-action apply
   if [[ -f "$pending_record/trust-root-zero-delta.tsv" ]]; then
     run_pending_transaction_privileged "$pending_transaction_driver" --root "$REMOTE_ROOT" --record "$pending_record" \
-      --trust-root-action verify --live-attest "$PRIVATE_DIR/attest" --live-duc "$PRIVATE_DIR/duc"
+      --trust-root-action verify --live-attest "$PRODUCTION_ATTEST_DIR" --live-duc "$PRODUCTION_DUC_DIR"
   else
     [[ ! -f "$pending_record/INGRESS_ACTIVATED" ]] \
       || fail "pending accepted activation lacks trust-root zero-delta evidence"
     run_pending_transaction_privileged "$pending_transaction_driver" --root "$REMOTE_ROOT" --record "$pending_record" \
       --trust-root-action record \
-      --staged-attest "$pending_record/staged/assets/attest" --staged-duc "$pending_record/staged/assets/duc" \
-      --live-attest "$PRIVATE_DIR/attest" --live-duc "$PRIVATE_DIR/duc"
+      --staged-attest "$PRODUCTION_ATTEST_DIR" --staged-duc "$PRODUCTION_DUC_DIR" \
+      --live-attest "$PRODUCTION_ATTEST_DIR" --live-duc "$PRODUCTION_DUC_DIR"
   fi
   cookie="$pending_record/.reconcile-owner.cookies"
   if [[ -f "$pending_record/INGRESS_ACTIVATED" ]]; then
@@ -1237,7 +1248,7 @@ PY
     run_pending_transaction_privileged "$pending_transaction_driver" --root "$REMOTE_ROOT" --record "$pending_record" \
       --channel-key-action verify-desired
     run_pending_transaction_privileged "$pending_transaction_driver" --root "$REMOTE_ROOT" --record "$pending_record" \
-      --trust-root-action verify --live-attest "$PRIVATE_DIR/attest" --live-duc "$PRIVATE_DIR/duc"
+      --trust-root-action verify --live-attest "$PRODUCTION_ATTEST_DIR" --live-duc "$PRODUCTION_DUC_DIR"
     pending_name="$(basename "$pending_record")"
     # THE RESUME'S ZERO-DELTA REFERENCE IS TAKEN HERE, NOT INHERITED.
     #
@@ -1386,7 +1397,7 @@ PY
     run_pending_transaction_privileged "$pending_transaction_driver" --root "$REMOTE_ROOT" --record "$pending_record" \
       --channel-key-action verify-desired
     run_pending_transaction_privileged "$pending_transaction_driver" --root "$REMOTE_ROOT" --record "$pending_record" \
-      --trust-root-action verify --live-attest "$PRIVATE_DIR/attest" --live-duc "$PRIVATE_DIR/duc"
+      --trust-root-action verify --live-attest "$PRODUCTION_ATTEST_DIR" --live-duc "$PRODUCTION_DUC_DIR"
     "${COMPOSE[@]}" up -d --pull never --no-build --remove-orphans
     wait_for_services "$pending_release"
     domain_keycloak_apply "$pending_record" "$RUNTIME_ENV" 8088 center.andersmadsen.dk \
@@ -1860,6 +1871,7 @@ PY
 old_current=""
 old_previous=""
 old_current_deployment=""
+carry_baseline_id=""
 if old_current="$(safe_release_pointer "$REMOTE_ROOT/current" 2>/dev/null)"; then printf '%s\n' "$old_current" >"$record/old-current"; else : >"$record/old-current"; fi
 if old_previous="$(safe_release_pointer "$REMOTE_ROOT/previous" 2>/dev/null)"; then printf '%s\n' "$old_previous" >"$record/old-previous"; else : >"$record/old-previous"; fi
 if old_current_deployment="$(safe_deployment_pointer "$REMOTE_ROOT/current-deployment" 2>/dev/null)"; then
@@ -1877,13 +1889,10 @@ if [[ -n "$old_current" ]]; then
     || fail "canonical current release lacks an exact successful deployment record pointer"
   [[ "$(tr -d '\r\n' <"$old_current_deployment/release-id")" == "$(basename "$old_current")" ]] \
     || fail "current release and deployment record disagree"
-  # A cutover is not recoverable merely because an old tree and image list
-  # exist. The predecessor must itself have been imported from the hosted
-  # workflow and provider-reverified at its point of deployment. This makes the
-  # first hosted cutover an explicit migration step: attest/import the current
-  # immutable Carry baseline before attempting the later Carry -> Cosmos move.
+  # Routine canonical predecessors remain hosted/provider-verified releases.
+  # The exceptional observed Carry authority below is never accepted here.
   verify_hosted_rollback_baseline "$old_current" "$old_current_deployment" \
-    || fail "first hosted cutover is blocked: attest/import the current immutable Carry baseline before deployment"
+    || fail "canonical predecessor lacks its retained hosted/provider-verified rollback authority"
   [[ -z "$(docker ps -q --filter "label=com.docker.compose.project=$LEGACY_PROJECT")" \
     && -n "$(docker ps -q --filter "label=com.docker.compose.project=$PROJECT")" ]] \
     || fail "canonical deployment topology is ambiguous under the deployment lock"
@@ -1898,6 +1907,7 @@ if [[ -n "$old_current" ]]; then
     --expect-release-id "$old_release_id" --json >/dev/null
   verify_image_evidence "$old_current_deployment/running-images.tsv" "$old_current"
   verify_configuration_evidence "$old_current_deployment/config-digests.tsv" "$old_current"
+  verify_exact_carry_security_identity "$old_current_deployment/carry-security-identity.json"
   # Recovery must be independently restartable before this deploy may quiesce
   # one writer.  Reload the predecessor's exact bundle now, under the selected
   # release's held runtime, and retain the generated content-ID override in the
@@ -1907,13 +1917,25 @@ if [[ -n "$old_current" ]]; then
     || fail "current deployment lacks a retained offline recovery candidate"
   clear_candidate_compose_authority
 else
-  fail "first hosted cutover is blocked: attest/import the current immutable Carry baseline before deployment"
+  [[ -z "$old_current_deployment" && -z "$old_previous" ]] \
+    || fail "first cutover has stale canonical deployment lineage"
+  carry_baseline_id="$(active_adopted_live_carry_id)" \
+    || fail "first cutover requires the dedicated deploy carry-baseline command with this exact hosted candidate"
+  verify_adopted_live_carry "$carry_baseline_id" active \
+    "$candidate_id" "$release_id" "$deployment_authority_sha256" \
+    || fail "first-cutover Carry runtime differs from its sealed adopted-live-carry-v1 authority"
 fi
+verify_exact_carry_security_identity "$record/carry-security-identity.json"
 chmod 600 "$record/old-current" "$record/old-previous" "$record/old-current-deployment"
 record_project_state "$record/before"
 if [[ -z "$old_current" ]]; then
+  printf '%s\n' "$carry_baseline_id" >"$record/carry-baseline-id"
+  chmod 600 "$record/carry-baseline-id"
   write_legacy_semantic_evidence "$record/before/semantic-baseline.tsv" \
     || fail "legacy application does not satisfy the first-cutover recovery baseline"
+  verify_adopted_live_carry "$carry_baseline_id" active \
+    "$candidate_id" "$release_id" "$deployment_authority_sha256" \
+    || fail "Carry predecessor changed while the first-cutover record was prepared"
 fi
 domain_discovery="$record/public-edge-discovery.json"
 previous_domain_discovery=""
@@ -1930,7 +1952,7 @@ assert_managed_cloudflared_topology \
   || fail "Cloudflare is not running as the exact allowlisted system and user connectors"
 domain_cloudflared_prepare "$record" \
   || fail "Cloudflare Center-route transaction could not capture its exact preimage"
-keycloak_before_host=cosmos.andersmadsen.dk
+keycloak_before_host=carry.andersmadsen.dk
 if [[ -n "$old_current_deployment" \
     && -f "$old_current_deployment/domain-cutover/keycloak/APPLIED.json" ]]; then
   keycloak_before_host=center.andersmadsen.dk
@@ -1957,25 +1979,24 @@ trap 'exit 143' TERM
 stage="$record/staged"
 stage_env="$stage/env"
 stage_assets="$stage/assets"
-mkdir -p "$stage_env" "$stage_assets"
-chmod 700 "$stage" "$stage_env" "$stage_assets"
+mkdir -p "$stage_env" "$stage_assets/edge"
+chmod 700 "$stage" "$stage_env" "$stage_assets" "$stage_assets/edge"
 stage_private_configuration "$stage_env"
 capture_live_center_env "$stage_env/center.env"
 
 postgres_before="$(find_postgres_container)"
 stage_paired_identity "$postgres_before" "$stage_env/center.env"
 
-edge_source="$PRIVATE_DIR/edge"; [[ -d "$edge_source" ]] || edge_source=/home/anders/cosmos-edge
-attest_source="$(active_attestation_root)"
-duc_source="$(active_device_user_root)"
-theme_source="$PRIVATE_DIR/keycloak-theme"; [[ -d "$theme_source" ]] || theme_source=/home/anders/keycloak-themes/humane
-for source in "$edge_source" "$attest_source" "$duc_source" "$theme_source"; do
-  sudo -n test -d "$source" || fail "required protected asset tree is missing"
-done
-sudo -n cp -a "$edge_source" "$stage_assets/edge"
-sudo -n cp -a "$attest_source" "$stage_assets/attest"
-sudo -n cp -a "$duc_source" "$stage_assets/duc"
-sudo -n cp -a "$theme_source" "$stage_assets/keycloak-theme"
+# Security material is never staged or copied.  The isolated rehearsal and the
+# live stack both mount the exact deployed Carry roots read-only; only the
+# candidate-rendered Envoy YAML is written below.
+[[ "$(active_attestation_root)" == "$PRODUCTION_ATTEST_DIR" \
+  && "$(active_device_user_root)" == "$PRODUCTION_DUC_DIR" \
+  && "$(active_edge_security_root)" == "$LEGACY_EDGE_DIR" ]] \
+  || fail "active security mounts are not the immutable Carry roots"
+verify_exact_carry_security_identity "$record/carry-security-identity.json"
+sudo -n test -d "$PRODUCTION_KEYCLOAK_THEME_DIR" \
+  || fail "required Keycloak theme tree is missing"
 
 runtime_stage="$stage_env/runtime.env"
 cosmos_stage="$stage_env/cosmos.env"
@@ -2004,11 +2025,11 @@ update_env_value "$runtime_stage" REVIVAL_COSMOS_ENV_FILE "$COSMOS_ENV"
 update_env_value "$runtime_stage" REVIVAL_PROVIDER_ENV_FILE "$PROVIDER_ENV"
 update_env_value "$runtime_stage" REVIVAL_CENTER_ENV_FILE "$CENTER_ENV"
 update_env_value "$runtime_stage" REVIVAL_CENTER_DATA_DIR "$CENTER_DATA_DIR"
-update_env_value "$runtime_stage" REVIVAL_EDGE_CONFIG_FILE "$PRIVATE_DIR/edge/envoy.yaml"
-update_env_value "$runtime_stage" REVIVAL_EDGE_CERT_DIR "$PRIVATE_DIR/edge/certs"
-update_env_value "$runtime_stage" REVIVAL_ATTEST_DIR "$PRIVATE_DIR/attest"
-update_env_value "$runtime_stage" REVIVAL_DUC_DIR "$PRIVATE_DIR/duc"
-update_env_value "$runtime_stage" REVIVAL_KEYCLOAK_THEME_DIR "$PRIVATE_DIR/keycloak-theme"
+update_env_value "$runtime_stage" REVIVAL_EDGE_CONFIG_FILE "$PRODUCTION_EDGE_CONFIG"
+update_env_value "$runtime_stage" REVIVAL_EDGE_CERT_DIR "$PRODUCTION_EDGE_CERT_DIR"
+update_env_value "$runtime_stage" REVIVAL_ATTEST_DIR "$PRODUCTION_ATTEST_DIR"
+update_env_value "$runtime_stage" REVIVAL_DUC_DIR "$PRODUCTION_DUC_DIR"
+update_env_value "$runtime_stage" REVIVAL_KEYCLOAK_THEME_DIR "$PRODUCTION_KEYCLOAK_THEME_DIR"
 update_env_value "$runtime_stage" REVIVAL_SPOTIFY_ADAPTER_SECRET_FILE "$PRIVATE_DIR/spotify-adapter/token"
 update_env_value "$runtime_stage" REVIVAL_CENTER_PORT 14000
 update_env_value "$runtime_stage" REVIVAL_CONNECTIVITY_PORT 18085
@@ -2257,7 +2278,7 @@ managed_snapshot="$record/config-before"
 mkdir -p "$managed_snapshot"
 chmod 700 "$managed_snapshot"
 managed_names=(runtime.env cosmos.env providers.env center.env edge-envoy.yaml spotify-token)
-managed_paths=("$RUNTIME_ENV" "$COSMOS_ENV" "$PROVIDER_ENV" "$CENTER_ENV" "$PRIVATE_DIR/edge/envoy.yaml" "$spotify_live")
+managed_paths=("$RUNTIME_ENV" "$COSMOS_ENV" "$PROVIDER_ENV" "$CENTER_ENV" "$PRODUCTION_EDGE_CONFIG" "$spotify_live")
 : >"$managed_snapshot/presence.tsv"
 for index in "${!managed_names[@]}"; do
   name="${managed_names[$index]}"; path="${managed_paths[$index]}"
@@ -2272,8 +2293,7 @@ for index in "${!managed_names[@]}"; do
 done
 chmod 600 "$managed_snapshot/presence.tsv"
 : >"$managed_snapshot/assets-presence.tsv"
-for spec in "edge:$PRIVATE_DIR/edge" "attest:$PRIVATE_DIR/attest" "duc:$PRIVATE_DIR/duc" \
-  "keycloak-theme:$PRIVATE_DIR/keycloak-theme"; do
+for spec in "edge:$PRIVATE_DIR/edge"; do
   name="${spec%%:*}"; path="${spec#*:}"
   if [[ -d "$path" && ! -L "$path" ]]; then
     printf 'present\t%s\t%s\n' "$name" "$path" >>"$managed_snapshot/assets-presence.tsv"
@@ -2317,9 +2337,6 @@ restore_managed_asset_presence() {
   while IFS=$'\t' read -r state name path; do
     case "$name" in
       edge) expected="$PRIVATE_DIR/edge" ;;
-      attest) expected="$PRIVATE_DIR/attest" ;;
-      duc) expected="$PRIVATE_DIR/duc" ;;
-      keycloak-theme) expected="$PRIVATE_DIR/keycloak-theme" ;;
       *) return 1 ;;
     esac
     [[ "$path" == "$expected" ]] || return 1
@@ -2329,7 +2346,7 @@ restore_managed_asset_presence() {
       *) return 1 ;;
     esac
   done <"$managed_snapshot/assets-presence.tsv"
-  [[ "$(wc -l <"$managed_snapshot/assets-presence.tsv" | tr -d '[:space:]')" == 4 ]]
+  [[ "$(wc -l <"$managed_snapshot/assets-presence.tsv" | tr -d '[:space:]')" == 1 ]]
 }
 
 restore_connectivity_nginx() {
@@ -2422,7 +2439,8 @@ reprove_candidate_acceptance() {
   sudo -n python3 "$transaction_driver" --root "$REMOTE_ROOT" --record "$record" \
     --channel-key-action verify-desired || return 1
   sudo -n python3 "$transaction_driver" --root "$REMOTE_ROOT" --record "$record" \
-    --trust-root-action verify --live-attest "$PRIVATE_DIR/attest" --live-duc "$PRIVATE_DIR/duc" || return 1
+    --trust-root-action verify --live-attest "$PRODUCTION_ATTEST_DIR" --live-duc "$PRODUCTION_DUC_DIR" || return 1
+  verify_exact_carry_security_identity "$record/carry-security-identity.json" || return 1
   write_owner_canary_cookie "$release_dir" "$cookie" || return 1
   canary_args=(--release-id "$release_id" --image-evidence "$record/running-images.tsv" \
     --require-remote-tts --require-owner-spotify --cookie-file "$cookie")
@@ -2526,7 +2544,7 @@ recover_previous_application() {
         recovery_canary=(--release-id "$old_release_id" --image-evidence "$old_current_deployment/running-images.tsv" \
           --require-remote-tts --require-owner-spotify --quiesced-loopback --expect-bridge-ready \
           --cookie-file "$recovery_cookie")
-        [[ "$keycloak_before_host" != cosmos.andersmadsen.dk ]] || recovery_canary+=(--legacy-dashboard-origin)
+        [[ "$keycloak_before_host" != carry.andersmadsen.dk ]] || recovery_canary+=(--legacy-dashboard-origin)
         if [[ -f "$backup_path/SHA256SUMS" && -f "$backup_path/invariants.tsv" ]]; then
           recovery_canary+=(--baseline "$backup_path")
         fi
@@ -2539,7 +2557,7 @@ recover_previous_application() {
           public_recovery_canary=(--release-id "$old_release_id" \
             --image-evidence "$old_current_deployment/running-images.tsv" --require-remote-tts \
             --require-owner-spotify --cookie-file "$recovery_cookie")
-          [[ "$keycloak_before_host" != cosmos.andersmadsen.dk ]] || public_recovery_canary+=(--legacy-dashboard-origin)
+          [[ "$keycloak_before_host" != carry.andersmadsen.dk ]] || public_recovery_canary+=(--legacy-dashboard-origin)
           [[ ! -f "$backup_path/invariants.tsv" ]] || public_recovery_canary+=(--baseline "$backup_path")
           run_held_release_program "$release_dir" platform/deploy/vps/remote/canary.sh bash 0 "${public_recovery_canary[@]}" >/dev/null || recovery_ok=0
         fi
@@ -2726,6 +2744,12 @@ trap 'exit 143' TERM
 python3 "$release_verifier" --tree "$release_dir" \
   --manifest "$MANIFESTS_DIR/$release_id.json" --json >/dev/null
 
+if [[ -n "$carry_baseline_id" ]]; then
+  verify_adopted_live_carry "$carry_baseline_id" active \
+    "$candidate_id" "$release_id" "$deployment_authority_sha256" \
+    || fail "Carry predecessor changed before first-cutover quiescence"
+fi
+
 # Snapshot the exact existing Center client before the baseline backup. Admin
 # authentication may touch Keycloak session/audit tables, so the subsequent
 # backup deliberately captures that bounded read-side effect as part of the
@@ -2747,6 +2771,11 @@ python3 "$transaction_driver" --root "$REMOTE_ROOT" --record "$record" \
 prepare_candidate_commit
 python3 "$transaction_driver" --root "$REMOTE_ROOT" --record "$record" \
   --namespace deploy --operation-action quiescing
+if [[ -n "$carry_baseline_id" ]]; then
+  verify_adopted_live_carry "$carry_baseline_id" active \
+    "$candidate_id" "$release_id" "$deployment_authority_sha256" \
+    || fail "Carry predecessor changed at the first-cutover quiescence boundary"
+fi
 # The wearer's outage starts HERE, not at quiesce_ingress_services below: the
 # backup on the next line runs with --leave-quiesced, so it is the step that
 # actually stops the writers and the ingress units. Marking the later call would
@@ -2805,8 +2834,9 @@ elif ! REVIVAL_STAGING_SMOKE_TRACE="${REVIVAL_STAGING_SMOKE_TRACE:-0}" \
   REVIVAL_STAGING_SMOKE_EVIDENCE="$record/staging-smoke-evidence" \
   run_held_release_program "$release_dir" platform/deploy/vps/remote/staging-smoke.sh bash 0 \
   --release-id "$release_id" --backup "$backup_path" --env-dir "$stage_env" \
-  --attest-dir "$stage_assets/attest" --duc-dir "$stage_assets/duc" \
-  --keycloak-theme-dir "$stage_assets/keycloak-theme" --spotify-token-file "$spotify_stage" \
+  --attest-dir "$PRODUCTION_ATTEST_DIR" --duc-dir "$PRODUCTION_DUC_DIR" \
+  --security-identity "$record/carry-security-identity.json" \
+  --keycloak-theme-dir "$PRODUCTION_KEYCLOAK_THEME_DIR" --spotify-token-file "$spotify_stage" \
   2> >(tee -a "$staging_smoke_log" >&2) > >(tee -a "$staging_smoke_log"); then
   warn "staging smoke failed; transcript preserved at $staging_smoke_log"
   tail -n 40 "$staging_smoke_log" >&2 || true
@@ -2825,15 +2855,9 @@ stop_project_containers "$LEGACY_PROJECT"
 # First live configuration write: the old containers are stopped and a full,
 # restore-tested backup plus isolated candidate rehearsal both exist.
 config_installed=1
-mkdir -p "$PRIVATE_DIR" "$PRIVATE_DIR/spotify-adapter"
-chmod 700 "$PRIVATE_DIR" "$PRIVATE_DIR/spotify-adapter"
-for asset in edge attest duc keycloak-theme; do
-  if [[ ! -d "$PRIVATE_DIR/$asset" ]]; then
-    sudo -n cp -a "$stage_assets/$asset" "$PRIVATE_DIR/$asset"
-    [[ "$(protected_path_digest "$PRIVATE_DIR/$asset")" == "$(protected_path_digest "$stage_assets/$asset")" ]] \
-      || fail "protected asset changed during installation: $asset"
-  fi
-done
+mkdir -p "$PRIVATE_DIR" "$PRIVATE_DIR/edge" "$PRIVATE_DIR/spotify-adapter"
+chmod 700 "$PRIVATE_DIR" "$PRIVATE_DIR/edge" "$PRIVATE_DIR/spotify-adapter"
+verify_exact_carry_security_identity "$record/carry-security-identity.json"
 for spec in "$runtime_stage:$RUNTIME_ENV" "$cosmos_stage:$COSMOS_ENV" "$provider_stage:$PROVIDER_ENV" "$center_stage:$CENTER_ENV"; do
   source_file="${spec%%:*}"; destination_file="${spec#*:}"
   temporary="$(mktemp "${destination_file}.tmp.XXXXXX")"
@@ -2878,8 +2902,9 @@ sync -f "$record/CANDIDATE_ACTIVATION_ARMED"
 recovery_forbidden=1
 apply_channel_key_metadata "$transaction_driver" "$record"
 sudo -n python3 "$transaction_driver" --root "$REMOTE_ROOT" --record "$record" \
-  --trust-root-action record --staged-attest "$stage_assets/attest" --staged-duc "$stage_assets/duc" \
-  --live-attest "$PRIVATE_DIR/attest" --live-duc "$PRIVATE_DIR/duc"
+  --trust-root-action record --staged-attest "$PRODUCTION_ATTEST_DIR" --staged-duc "$PRODUCTION_DUC_DIR" \
+  --live-attest "$PRODUCTION_ATTEST_DIR" --live-duc "$PRODUCTION_DUC_DIR"
+verify_exact_carry_security_identity "$record/carry-security-identity.json"
 if ! "${COMPOSE[@]}" up -d --pull never --no-build --remove-orphans; then
   # The candidate is torn down by recovery, taking its container logs with it.
   # Preserve the failing containers' state and logs in the record first so a
@@ -2957,7 +2982,8 @@ recovery_forbidden=1
 load_candidate_compose_command "$release_dir"
 sudo -n python3 "$transaction_driver" --root "$REMOTE_ROOT" --record "$record" --channel-key-action verify-desired
 sudo -n python3 "$transaction_driver" --root "$REMOTE_ROOT" --record "$record" \
-  --trust-root-action verify --live-attest "$PRIVATE_DIR/attest" --live-duc "$PRIVATE_DIR/duc"
+  --trust-root-action verify --live-attest "$PRODUCTION_ATTEST_DIR" --live-duc "$PRODUCTION_DUC_DIR"
+verify_exact_carry_security_identity "$record/carry-security-identity.json"
 "${COMPOSE[@]}" up -d --pull never --no-build --remove-orphans
 wait_for_services "$release_dir"
 domain_keycloak_apply "$record" "$RUNTIME_ENV" 8088 center.andersmadsen.dk \

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -23,6 +23,30 @@ function bash(script, args = []) {
     encoding: "utf8",
     maxBuffer: 20 * 1024 * 1024,
   });
+}
+
+async function materializeRemoteLibraries(revision, destination) {
+  const listed = spawnSync(
+    "/usr/bin/git",
+    ["ls-tree", "-r", "--name-only", revision, "platform/deploy/vps/remote"],
+    { cwd: root, encoding: "utf8" },
+  );
+  assert.equal(listed.status, 0, listed.stderr);
+  const paths = listed.stdout.trim().split("\n").filter((relative) =>
+    relative.endsWith("/common.sh") || relative.includes("/remote/lib/") && relative.endsWith(".sh"));
+  assert.ok(paths.length >= 10, "parent remote common/library closure was not found");
+  for (const relative of paths) {
+    const shown = spawnSync("/usr/bin/git", ["show", `${revision}:${relative}`], {
+      cwd: root,
+      encoding: "utf8",
+      maxBuffer: 20 * 1024 * 1024,
+    });
+    assert.equal(shown.status, 0, shown.stderr);
+    const target = path.join(destination, relative);
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeFile(target, shown.stdout, { mode: 0o600 });
+  }
+  return path.join(destination, "platform/deploy/vps/remote/common.sh");
 }
 
 const portableStat = String.raw`
@@ -347,6 +371,10 @@ while IFS= read -r artifact; do
 done < <(backup_required_artifacts)
 find "$backup" -type d -exec chmod 700 {} +
 find "$backup" -type f -exec chmod 600 {} +
+# The exact pre-rename optional schema sidecar. Candidate issuance must retain
+# this filename because the parent verifier has never heard of the Cosmos suffix.
+printf 'parent Carry schema fixture\n' >"$backup/postgres-schema.tsv.carry.sql"
+chmod 600 "$backup/postgres-schema.tsv.carry.sql"
 write_backup_artifact_manifest "$backup" backup-fixture-0001
 verify_backup_artifact_manifest "$backup"
 python3 - "$backup/BACKUP_MANIFEST.json" <<'PY'
@@ -369,6 +397,18 @@ verify_backup_artifact_manifest "$backup"
 `;
   const result = bash(script, [directory]);
   assert.equal(result.status, 0, result.stderr);
+
+  // Verify a backup emitted by the candidate with the exact parent release's
+  // verifier too. This is the rollback-window direction that matters: an old
+  // Carry release must be able to consume every candidate-issued artifact.
+  const parentRoot = path.join(directory, "parent-release");
+  const parentCommon = await materializeRemoteLibraries("82aa2d7^", parentRoot);
+  const parentResult = spawnSync(
+    "bash",
+    ["-c", 'source "$1"; verify_backup_artifact_manifest "$2"', "parent-verifier", parentCommon, path.join(directory, "backup")],
+    { cwd: root, encoding: "utf8", maxBuffer: 20 * 1024 * 1024 },
+  );
+  assert.equal(parentResult.status, 0, parentResult.stderr);
 });
 
 test("inherited lock proof rejects closed and unrelated descriptor 9", async (t) => {

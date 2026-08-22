@@ -15,16 +15,23 @@ services:
     environment:
       COSMOS_AUTH_MODE: edge-authenticated
       COSMOS_ENVIRONMENT: production
+      # `/var/lib/carry` is a deployed on-disk ABI, not a product-name label.
+      # Keep it for zero-copy cutover and byte-for-byte rollback compatibility.
+      COSMOS_STATE_DIR: /var/lib/carry
       REVIVAL_DEPLOYMENT_ENVIRONMENT: production
     ports:
       - 127.0.0.1:${REVIVAL_CONNECTIVITY_PORT:-18085}:18080
     networks:
       - loopback-publish
+    volumes: !override
+      - cosmos-state:/var/lib/carry
 
   ai-bus:
     environment:
       COSMOS_AUTH_MODE: edge-authenticated
       COSMOS_ENVIRONMENT: production
+      COSMOS_STATE_DIR: /var/lib/carry
+      COSMOS_CAPTURE_STORAGE_DIR: ${COSMOS_CAPTURE_STORAGE_DIR:-/var/lib/carry/captures}
       REVIVAL_DEPLOYMENT_ENVIRONMENT: production
       COSMOS_KID_SCOPE: ${COSMOS_KID_SCOPE:?set COSMOS_KID_SCOPE to audit or enforce in the protected production env}
       COSMOS_DATABASE_URL: ${COSMOS_DATABASE_URL:?set COSMOS_DATABASE_URL in the protected production env}
@@ -76,7 +83,7 @@ services:
       COSMOS_ATTEST_CA_KEY: /etc/cosmos-attest/ca.key
       COSMOS_DEVICE_STATUS_CA_CERT: /etc/cosmos-attest/ca.crt
       COSMOS_ONBOARDING_ENDPOINT: ${COSMOS_ONBOARDING_ENDPOINT:?set the public onboarding endpoint}
-      COSMOS_ONBOARDING_AUTHORITY: ${COSMOS_ONBOARDING_AUTHORITY:-cosmos-edge}
+      COSMOS_ONBOARDING_AUTHORITY: ${COSMOS_ONBOARDING_AUTHORITY:-carry-edge}
       COSMOS_CAPTURE_UPLOAD_BASE_URL: ${COSMOS_CAPTURE_UPLOAD_BASE_URL:?set the public capability-upload origin}
       COSMOS_CAPTURE_SHARE_BASE_URL: ${COSMOS_CAPTURE_SHARE_BASE_URL:-https://center.andersmadsen.dk}
       COSMOS_SHARE_TOKEN_SECRET: ${COSMOS_SHARE_TOKEN_SECRET:?set COSMOS_SHARE_TOKEN_SECRET in the protected production env}
@@ -86,10 +93,21 @@ services:
       COSMOS_SHOPPING_API_KEY: ${COSMOS_SHOPPING_API_KEY:-}
       COSMOS_ENROLLMENT_PINCODE: ${COSMOS_ENROLLMENT_PINCODE:?set the reviewed four-digit enrollment code}
       COSMOS_ENROLLMENT_USER_ID: ${COSMOS_ENROLLMENT_USER_ID:?set the enrollment user id}
-    volumes:
-      - cosmos-state:/var/lib/cosmos
-      - ${REVIVAL_ATTEST_DIR:-${COSMOS_ATTEST_DIR:-${REVIVAL_PRIVATE_DIR:-/home/anders/ai-pin-revival/private}/attest}}/ca.crt:/etc/cosmos-attest/ca.crt:ro
-      - ${REVIVAL_ATTEST_DIR:-${COSMOS_ATTEST_DIR:-${REVIVAL_PRIVATE_DIR:-/home/anders/ai-pin-revival/private}/attest}}/ca.key:/etc/cosmos-attest/ca.key:ro
+    volumes: !override
+      - cosmos-state:/var/lib/carry
+      # Carry PKI is a deployed inode-level ABI. Never copy or auto-create it.
+      - type: bind
+        source: /home/anders/carry-attest/ca.crt
+        target: /etc/cosmos-attest/ca.crt
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /home/anders/carry-attest/ca.key
+        target: /etc/cosmos-attest/ca.key
+        read_only: true
+        bind:
+          create_host_path: false
     ports:
       - 127.0.0.1:${REVIVAL_AI_BUS_HTTP_PORT:-18086}:18080
     networks: !override
@@ -107,6 +125,7 @@ services:
     environment:
       COSMOS_AUTH_MODE: edge-authenticated
       COSMOS_ENVIRONMENT: production
+      COSMOS_STATE_DIR: /var/lib/carry
       REVIVAL_DEPLOYMENT_ENVIRONMENT: production
       COSMOS_DATABASE_URL: ${COSMOS_DATABASE_URL:?set COSMOS_DATABASE_URL in the protected production env}
       COSMOS_EDGE_TOKEN: ${COSMOS_EDGE_TOKEN:?set COSMOS_EDGE_TOKEN in the protected production env}
@@ -114,11 +133,14 @@ services:
       COSMOS_OIDC_JWKS_URI: ${COSMOS_OIDC_JWKS_URI:-http://keycloak:8080/realms/humane/protocol/openid-connect/certs}
       COSMOS_OIDC_AUDIENCE: ${COSMOS_OIDC_AUDIENCE:-}
     depends_on: *production-cosmos-dependencies
+    volumes: !override
+      - cosmos-state:/var/lib/carry
 
   contacts:
     environment:
       COSMOS_AUTH_MODE: edge-authenticated
       COSMOS_ENVIRONMENT: production
+      COSMOS_STATE_DIR: /var/lib/carry
       REVIVAL_DEPLOYMENT_ENVIRONMENT: production
       COSMOS_DATABASE_URL: ${COSMOS_DATABASE_URL:?set COSMOS_DATABASE_URL in the protected production env}
       COSMOS_EDGE_TOKEN: ${COSMOS_EDGE_TOKEN:?set COSMOS_EDGE_TOKEN in the protected production env}
@@ -126,11 +148,14 @@ services:
       COSMOS_OIDC_JWKS_URI: ${COSMOS_OIDC_JWKS_URI:-http://keycloak:8080/realms/humane/protocol/openid-connect/certs}
       COSMOS_OIDC_AUDIENCE: ${COSMOS_OIDC_AUDIENCE:-}
     depends_on: *production-cosmos-dependencies
+    volumes: !override
+      - cosmos-state:/var/lib/carry
 
   feature-flags:
     environment:
       COSMOS_AUTH_MODE: edge-authenticated
       COSMOS_ENVIRONMENT: production
+      COSMOS_STATE_DIR: /var/lib/carry
       REVIVAL_DEPLOYMENT_ENVIRONMENT: production
       COSMOS_DATABASE_URL: ${COSMOS_DATABASE_URL:?set COSMOS_DATABASE_URL in the protected production env}
       COSMOS_EDGE_TOKEN: ${COSMOS_EDGE_TOKEN:?set COSMOS_EDGE_TOKEN in the protected production env}
@@ -139,11 +164,14 @@ services:
       COSMOS_OIDC_AUDIENCE: ${COSMOS_OIDC_AUDIENCE:-}
       COSMOS_REMOTE_TTS_ENABLED: ${COSMOS_REMOTE_TTS_ENABLED:-false}
     depends_on: *production-cosmos-dependencies
+    volumes: !override
+      - cosmos-state:/var/lib/carry
 
   notable-events:
     environment:
       COSMOS_AUTH_MODE: edge-authenticated
       COSMOS_ENVIRONMENT: production
+      COSMOS_STATE_DIR: /var/lib/carry
       REVIVAL_DEPLOYMENT_ENVIRONMENT: production
       COSMOS_DATABASE_URL: ${COSMOS_DATABASE_URL:?set COSMOS_DATABASE_URL in the protected production env}
       COSMOS_EDGE_TOKEN: ${COSMOS_EDGE_TOKEN:?set COSMOS_EDGE_TOKEN in the protected production env}
@@ -151,11 +179,14 @@ services:
       COSMOS_OIDC_JWKS_URI: ${COSMOS_OIDC_JWKS_URI:-http://keycloak:8080/realms/humane/protocol/openid-connect/certs}
       COSMOS_OIDC_AUDIENCE: ${COSMOS_OIDC_AUDIENCE:-}
     depends_on: *production-cosmos-dependencies
+    volumes: !override
+      - cosmos-state:/var/lib/carry
 
   provisioning:
     environment:
       COSMOS_AUTH_MODE: edge-authenticated
       COSMOS_ENVIRONMENT: production
+      COSMOS_STATE_DIR: /var/lib/carry
       REVIVAL_DEPLOYMENT_ENVIRONMENT: production
       COSMOS_DATABASE_URL: ${COSMOS_DATABASE_URL:?set COSMOS_DATABASE_URL in the protected production env}
       COSMOS_EDGE_TOKEN: ${COSMOS_EDGE_TOKEN:?set COSMOS_EDGE_TOKEN in the protected production env}
@@ -168,10 +199,20 @@ services:
       COSMOS_ENROLLMENT_PINCODE: ${COSMOS_ENROLLMENT_PINCODE:?set the reviewed four-digit enrollment code}
       COSMOS_ENROLLMENT_USER_ID: ${COSMOS_ENROLLMENT_USER_ID:?set the enrollment user id}
       COSMOS_OPAQUE_SEED: ${COSMOS_OPAQUE_SEED:?set a private base64 OPAQUE seed}
-    volumes:
-      - cosmos-state:/var/lib/cosmos
-      - ${REVIVAL_DUC_DIR:-${COSMOS_DUC_DIR:-${REVIVAL_PRIVATE_DIR:-/home/anders/ai-pin-revival/private}/duc}}/duc-ca.crt:/etc/cosmos-duc/duc-ca.crt:ro
-      - ${REVIVAL_DUC_DIR:-${COSMOS_DUC_DIR:-${REVIVAL_PRIVATE_DIR:-/home/anders/ai-pin-revival/private}/duc}}/duc-ca.key:/etc/cosmos-duc/duc-ca.key:ro
+    volumes: !override
+      - cosmos-state:/var/lib/carry
+      - type: bind
+        source: /home/anders/carry-duc/duc-ca.crt
+        target: /etc/cosmos-duc/duc-ca.crt
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /home/anders/carry-duc/duc-ca.key
+        target: /etc/cosmos-duc/duc-ca.key
+        read_only: true
+        bind:
+          create_host_path: false
     depends_on: *production-cosmos-dependencies
 
   center:
@@ -203,7 +244,11 @@ services:
     ports:
       - 127.0.0.1:${REVIVAL_CENTER_PORT:-14000}:4000
     volumes: !override
-      - ${REVIVAL_CENTER_DATA_DIR:-${COSMOS_CENTER_DATA_DIR:-/home/anders/cosmos-center-data}}:/data
+      - type: bind
+        source: /home/anders/carry-center-data
+        target: /data
+        bind:
+          create_host_path: false
       - ${REVIVAL_DATA_DIR:-/home/anders/ai-pin-revival/data}/pin-releases:/var/lib/ai-pin-revival/pin-releases:ro
     networks: !override
       - cosmos-internal
@@ -348,7 +393,12 @@ services:
       KC_PROXY_HEADERS: xforwarded
       JAVA_OPTS_APPEND: -XX:MaxRAMPercentage=60
     volumes: !override
-      - ${REVIVAL_KEYCLOAK_THEME_DIR:-${COSMOS_KEYCLOAK_THEME_DIR:-${REVIVAL_PRIVATE_DIR:-/home/anders/ai-pin-revival/private}/keycloak-theme}}:/opt/keycloak/themes/humane:ro
+      - type: bind
+        source: /home/anders/keycloak-themes/humane
+        target: /opt/keycloak/themes/humane
+        read_only: true
+        bind:
+          create_host_path: false
     ports:
       - 127.0.0.1:${REVIVAL_KEYCLOAK_PORT:-8088}:8080
     networks: !override
@@ -364,12 +414,37 @@ services:
     command:
       - -c
       - /etc/cosmos-edge/envoy.yaml
-    volumes:
-      - ${REVIVAL_EDGE_CONFIG_FILE:-${COSMOS_ENVOY_CONFIG:-${REVIVAL_PRIVATE_DIR:-/home/anders/ai-pin-revival/private}/edge/envoy.yaml}}:/etc/cosmos-edge/envoy.yaml:ro
-      - ${REVIVAL_EDGE_CERT_DIR:-${COSMOS_EDGE_CERT_DIR:-${REVIVAL_PRIVATE_DIR:-/home/anders/ai-pin-revival/private}/edge/certs}}/server.crt:/etc/cosmos-edge/certs/server.crt:ro
-      - ${REVIVAL_EDGE_CERT_DIR:-${COSMOS_EDGE_CERT_DIR:-${REVIVAL_PRIVATE_DIR:-/home/anders/ai-pin-revival/private}/edge/certs}}/server.key:/etc/cosmos-edge/certs/server.key:ro
-      - ${REVIVAL_EDGE_CERT_DIR:-${COSMOS_EDGE_CERT_DIR:-${REVIVAL_PRIVATE_DIR:-/home/anders/ai-pin-revival/private}/edge/certs}}/api-client-ca.crt:/etc/cosmos-edge/certs/api-client-ca.crt:ro
-      - ${REVIVAL_EDGE_CERT_DIR:-${COSMOS_EDGE_CERT_DIR:-${REVIVAL_PRIVATE_DIR:-/home/anders/ai-pin-revival/private}/edge/certs}}/onboarding-client-ca.crt:/etc/cosmos-edge/certs/onboarding-client-ca.crt:ro
+    volumes: !override
+      - type: bind
+        source: /home/anders/ai-pin-revival/private/edge/envoy.yaml
+        target: /etc/cosmos-edge/envoy.yaml
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /home/anders/carry-edge/certs/server.crt
+        target: /etc/cosmos-edge/certs/server.crt
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /home/anders/carry-edge/certs/server.key
+        target: /etc/cosmos-edge/certs/server.key
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /home/anders/carry-edge/certs/api-client-ca.crt
+        target: /etc/cosmos-edge/certs/api-client-ca.crt
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /home/anders/carry-edge/certs/onboarding-client-ca.crt
+        target: /etc/cosmos-edge/certs/onboarding-client-ca.crt
+        read_only: true
+        bind:
+          create_host_path: false
     ports:
       - 127.0.0.1:${REVIVAL_EDGE_PORT:-18443}:8443
     networks:
@@ -422,8 +497,8 @@ services:
     mem_limit: 2g
     pids_limit: 256
     environment:
-      POSTGRES_USER: cosmos
-      POSTGRES_DB: cosmos
+      POSTGRES_USER: carry
+      POSTGRES_DB: carry
       POSTGRES_PASSWORD: ${COSMOS_PG_PASSWORD:?set COSMOS_PG_PASSWORD in the protected production env}
     volumes:
       - cosmos-pgdata:/var/lib/postgresql/data
@@ -443,7 +518,7 @@ services:
     healthcheck:
       test:
         - CMD-SHELL
-        - pg_isready -U cosmos -d cosmos
+        - pg_isready -U carry -d carry
       interval: 5s
       timeout: 3s
       start_period: 10s
@@ -570,13 +645,13 @@ networks:
       config:
         - subnet: 10.0.7.0/24
           gateway: 10.0.7.1
-  # The local Ollama service is intentionally owned by the established Cosmos
+  # The local Ollama service is intentionally owned by the established Carry
   # runtime. Declaring the attachment here makes name resolution survive an
   # ai-bus recreation instead of depending on an operator-issued
   # `docker network connect` repair.
   local-model:
     external: true
-    name: ${COSMOS_LOCAL_MODEL_NETWORK:-humane-cosmos-clone_cosmos-local}
+    name: humane-carry-clone_carry-local
 
 secrets:
   spotify_adapter_token:
@@ -585,13 +660,13 @@ secrets:
 volumes:
   cosmos-state: !override
     external: true
-    name: humane-cosmos-clone_cosmos-state
+    name: humane-carry-clone_carry-state
   cosmos-pgdata: !override
     external: true
-    name: humane-cosmos-clone_cosmos-pgdata
+    name: humane-carry-clone_carry-pgdata
   prometheus-data: !override
     external: true
-    name: humane-cosmos-clone_prometheus-data
+    name: humane-carry-clone_prometheus-data
   grafana-data: !override
     external: true
-    name: humane-cosmos-clone_grafana-data
+    name: humane-carry-clone_grafana-data

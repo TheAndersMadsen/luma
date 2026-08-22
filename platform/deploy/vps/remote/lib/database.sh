@@ -163,7 +163,7 @@ capture_postgres_data() {
   [[ "$marker" =~ ^#[0-9a-f]{32}#$ ]] || fail "segment marker nonce is unavailable"
   : >"$output"
   : >"$output.columns"
-  for database in cosmos keycloak; do
+  for database in "$LEGACY_DATABASE_NAME" keycloak; do
     relations="$(docker exec "$container" psql -X -qAt -F $'\t' -v ON_ERROR_STOP=1 \
       -U "$database_user" -d "$database" -c \
       "select n.nspname,c.relname,c.relkind from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname !~ '^pg_' and n.nspname <> 'information_schema' and c.relkind in ('r','p','m','S') order by n.nspname,c.relname,c.relkind")"
@@ -325,6 +325,7 @@ where pg_get_userbyid(roleid) !~ '^pg_' or pg_get_userbyid(member) !~ '^pg_'
 order by 1;
 SQL
   docker exec -i "$container" psql -X -qAt -v ON_ERROR_STOP=1 -U "$database_user" -d postgres \
+    -v "legacy_database=$LEGACY_DATABASE_NAME" \
     >"$work/globals.jsonl" <<'SQL'
 select jsonb_build_object(
   'kind','database','name',datname,'owner',pg_get_userbyid(datdba),
@@ -334,7 +335,7 @@ select jsonb_build_object(
   'acl',coalesce((select jsonb_agg(x::text order by x::text) from unnest(d.datacl) x),'[]'::jsonb)
 )::text
 from pg_database d left join pg_tablespace t on t.oid=d.dattablespace
-where datname in ('cosmos','keycloak') order by datname;
+where datname in (:'legacy_database','keycloak') order by datname;
 select jsonb_build_object(
   'kind','tablespace','name',spcname,'owner',pg_get_userbyid(spcowner),
   'options',coalesce(to_jsonb(spcoptions),'[]'::jsonb),
@@ -348,10 +349,10 @@ select jsonb_build_object(
 from pg_db_role_setting s
 left join pg_database d on d.oid=s.setdatabase
 left join pg_roles r on r.oid=s.setrole
-where d.datname in ('cosmos','keycloak') or s.setdatabase=0
+where d.datname in (:'legacy_database','keycloak') or s.setdatabase=0
 order by 1;
 SQL
-  for database in cosmos keycloak; do
+  for database in "$LEGACY_DATABASE_NAME" keycloak; do
     docker exec -i "$container" psql -X -qAt -v ON_ERROR_STOP=1 -U "$database_user" -d "$database" \
       >"$work/$database.jsonl" <<'SQL'
 select jsonb_build_object(
@@ -426,9 +427,9 @@ select jsonb_build_object(
 from pg_largeobject_metadata m order by m.oid;
 SQL
   done
-  python3 - "$work" "$output" <<'PY'
+  python3 - "$work" "$output" "$LEGACY_DATABASE_NAME" <<'PY'
 import hashlib,json,os,sys
-work,output=sys.argv[1:]
+work,output,legacy_database=sys.argv[1:]
 def read(name):
     path=os.path.join(work,name)
     return [json.loads(line) for line in open(path,encoding="utf-8") if line.strip()]
@@ -440,7 +441,7 @@ document={
     "roles":roles,
     "memberships":read("memberships.jsonl"),
     "globals":read("globals.jsonl"),
-    "databases":{"cosmos":read("cosmos.jsonl"),"keycloak":read("keycloak.jsonl")},
+    "databases":{legacy_database:read(legacy_database+".jsonl"),"keycloak":read("keycloak.jsonl")},
 }
 with open(output,"w",encoding="utf-8") as target:
     json.dump(document,target,sort_keys=True,separators=(",",":"))
@@ -481,7 +482,7 @@ capture_postgres_schema() {
   [[ -z "$retain_sql" || "$retain_sql" == retain-sql ]] \
     || fail "unknown capture_postgres_schema retention mode: $retain_sql"
   : >"$output"
-  for database in cosmos keycloak; do
+  for database in "$LEGACY_DATABASE_NAME" keycloak; do
     canonical_path=""
     [[ "$retain_sql" != retain-sql ]] || canonical_path="$output.$database.sql"
     record="$(docker exec -e 'PGOPTIONS=-c statement_timeout=120000 -c lock_timeout=5000' \
@@ -529,7 +530,7 @@ print(f"{database}\t{len(canonical)}\t{len(lines)}\t{hashlib.sha256(canonical).h
 # A gate compares two sha256 digests over pg_dump --schema-only, so it can prove
 # the schema moved and cannot say how. A pending additive migration — today
 # cosmos/migrations/0004_listing.sql, `ADD COLUMN IF NOT EXISTS
-# cosmos_memory.thumbnail_count` plus three `CREATE INDEX IF NOT EXISTS` — moves it
+# carry_memory.thumbnail_count` plus three `CREATE INDEX IF NOT EXISTS` — moves it
 # legitimately, and thirteen deploys have stopped there.
 #
 # This is NOT a loosened comparison. The digest equality check stays exactly where
@@ -578,9 +579,9 @@ classify_schema_delta() {
   local before="$1" after="$2"
   [[ -f "$before" && ! -L "$before" && -f "$after" && ! -L "$after" ]] \
     || fail "schema delta classifier needs both schema manifests"
-  python3 - "$before" "$after" <<'PY'
+  python3 - "$before" "$after" "$LEGACY_DATABASE_NAME" <<'PY'
 import collections,hashlib,os,re,sys
-before_manifest,after_manifest=sys.argv[1:3]
+before_manifest,after_manifest,legacy_database=sys.argv[1:4]
 class Refusal(Exception): pass
 def refuse(message): raise Refusal(message)
 QUOTED=r'"(?:[^"]|"")*"'
@@ -912,8 +913,8 @@ try:
         notes=classify(database,
                        read_dump(before_manifest,database,before_rows[database]),
                        read_dump(after_manifest,database,after_rows[database]))
-        if database!="cosmos":
-            refuse(f"{database}: only the cosmos database may contain a pending migration; the "
+        if database!=legacy_database:
+            refuse(f"{database}: only the deployed Carry database may contain a pending migration; the "
                    f"{database} schema must not change at all, additively or otherwise"
                    + (f"; observed {'; '.join(notes)}" if notes else
                       "; the change is not even a classifiable statement delta"))

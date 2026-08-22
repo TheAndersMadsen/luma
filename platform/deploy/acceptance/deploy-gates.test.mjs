@@ -54,6 +54,7 @@ const common = [
     .map((name) => fs.readFileSync(path.join(remote, "lib", name), "utf8")),
 ].join("\n");
 const domain = read("domain.sh");
+const heldReleaseExec = read("held-release-exec.py");
 const searchPolicy = fs.readFileSync(path.join(root, "cosmos/search/settings.yml"), "utf8");
 
 test("every remote gate script is syntactically valid bash", () => {
@@ -284,24 +285,24 @@ test("the canary keeps saying which wearer coverage it does not have", () => {
   assert.match(canary, /^\s*\|\| warn "the sealed-bearer wearer plane is NOT proven:/m);
   assert.match(canary, /^\s*\(\(wearer_plane_proven\)\) \\$/m);
   assert.match(canary, /^\s*warn "authenticated OIDC code exchange remains unknown:/m);
-  // Center's cookie is `cosmos_tokens` — TOKENS_COOKIE in center/src/server/auth.ts,
-  // chunked as `cosmos_tokens.0` / `cosmos_tokens.1`. This pin used to name
-  // `__cosmos_tokens`, an identifier that exists nowhere in Center: anyone
+  // Center's cookie is `carry_tokens` — TOKENS_COOKIE in center/src/server/auth.ts,
+  // chunked as `carry_tokens.0` / `carry_tokens.1`. This pin used to name
+  // `__carry_tokens`, an identifier that exists nowhere in Center: anyone
   // reconciling the gate against Center's source found nothing and had to guess
   // whether the gate was stale or the underscores were a chunk-prefix convention.
   // canary.sh's runtime refusal always used the real name, so the doc and the
   // code disagreed with only the doc pinned.
   assert.match(
     common,
-    /^# does NOT hold the separate `cosmos_tokens` manifest and chunk cookies that$/m,
+    /^# does NOT hold the separate `carry_tokens` manifest and chunk cookies that$/m,
     "write_owner_canary_cookie must state what it does not mint, in Center's own vocabulary",
   );
   assert.match(
     canary,
-    /^\s*if grep -q 'cosmos_tokens' "\$cookie_file"; then$/m,
+    /^\s*if grep -q 'carry_tokens' "\$cookie_file"; then$/m,
     "the wearer-plane gate must refuse a jar that carries wearer token material",
   );
-  assert.doesNotMatch(canary + common, /__cosmos_tokens/);
+  assert.doesNotMatch(canary + common, /__carry_tokens/);
 
   /*
    * This used to be an absolute ban on the canary claiming the wearer plane was
@@ -495,8 +496,32 @@ test("preflight proves the edge trusts the CAs that actually issue device certif
   // A bundle is a legitimate anchor shape, so every certificate in the file is
   // enumerated rather than only the first.
   assert.match(preflight, /^\s*\/-----BEGIN CERTIFICATE-----\/ \{ count \+= 1 \}$/m);
-  // And the half that cannot be checked from this host stays named.
-  assert.match(preflight, /^warn "the edge server certificate is not checked against the root the Pin hook pins;/m);
+  // The server half is bound to the exact release-held activation source, not a
+  // mutable tree pathname, then checked against the immutable Carry root and
+  // every SNI value accepted by either device listener.
+  assert.match(
+    heldReleaseExec,
+    /^    "platform\/deploy\/pin\/activate\.mjs": "REVIVAL_HELD_PIN_ACTIVATE",$/m,
+  );
+  assert.match(preflight, /^verify_pinned_carry_edge_certificate\(\) \($/m);
+  assert.match(preflight, /^  release_material_file_is_safe "\$activate_source" \|\| return 1$/m);
+  assert.match(
+    preflight,
+    /^  \[\[ "\$source_sha" == 1b947b4e4dae58dc5f8aac1863723eb0eaa313da993e2b8ec7abed38727e22ed \]\] \\$/m,
+  );
+  assert.match(
+    preflight,
+    /^  \[\[ "\$subject" == "subject=CN=Carry Clone Root EC 1,O=humane-carry-clone" \]\] \|\| return 1$/m,
+  );
+  assert.match(
+    preflight,
+    /^  sudo -n openssl verify -purpose sslserver -CAfile "\$root_file" "\$edge_certs\/server\.crt" >\/dev\/null \\$/m,
+  );
+  assert.match(
+    preflight,
+    /^  for authority in \\\n    onboarding\.carry\.humane\.cloud onboarding\.clone\.invalid carry-edge \\\n    api\.carry\.humane\.cloud api\.clone\.invalid eastus\.carry\.humane\.cloud eastus-1\.carry\.humane\.cloud; do$/m,
+  );
+  assert.doesNotMatch(preflight, /edge server certificate is not checked against the root/u);
 });
 
 test("no PKI gate can pass by hashing an openssl failure", () => {
@@ -568,7 +593,7 @@ test("the deploy measures and records the public ingress outage it imposes on th
   // quiesce_ingress_services stops the cloudflared user unit, the cloudflared
   // system unit, nginx.service and penumbra-center-bridge.service. nginx is the
   // HOST's shared web server, so aipin.andersmadsen.dk,
-  // connectivity-check.cosmos.humane.cloud and the default vhost go down with the
+  // connectivity-check.carry.humane.cloud and the default vhost go down with the
   // project — and the paired Pin, reporting device status every five minutes, is
   // connection-REFUSED for the whole window. Refused, not 502'd: nginx is not
   // running to log it, so the outage leaves no server-side trace and was
@@ -824,7 +849,7 @@ test("the canary proves the device listeners actually demand a client certificat
   // `require_client_certificate` being turned off.
   assert.match(
     canary,
-    /^for authority in api\.cosmos\.humane\.cloud onboarding\.cosmos\.humane\.cloud; do$/m,
+    /^for authority in api\.carry\.humane\.cloud onboarding\.carry\.humane\.cloud; do$/m,
   );
   assert.match(canary, /^\s*fail "mTLS edge accepted a client without a certificate: \$authority"$/m);
   // The liveness precondition matters as much as the refusal: without it a
