@@ -7,32 +7,78 @@ const path = require('node:path');
 // codes are unchanged.
 
 const {
-  DEPLOY_DIR, fail, exists, run,
+  DEPLOY_DIR, authoritativeCompletion, fail, localProductionEnvironment, resolveTool, run,
 } = require('./context');
-const { releaseCheck } = require('./gates');
-const { packageForDeployment } = require('./releases');
+const CANDIDATE_TOOL = path.join(DEPLOY_DIR, '..', 'release-candidate.mjs');
 
 function deploymentScript(name, args) {
   const script = path.join(DEPLOY_DIR, name);
   if (!fs.existsSync(script)) fail(`deployment command is unavailable: ${script}`);
-  return run('bash', [script, ...args]);
+  return run(resolveTool('bash'), [script, ...args], { env: localProductionEnvironment() });
 }
 
 function productionDoctor(args) {
-  deploymentScript('preflight.sh', args);
+  const result = deploymentScript('preflight.sh', args);
+  return authoritativeCompletion('doctor.production', 'production-preflight-passed', result);
+}
+
+function confirmationCount(args) {
+  return args.filter((argument) => argument === '--confirm').length;
+}
+
+function requireConfirmedMutation(args, label, { allowDryRun = false } = {}) {
+  const confirmations = confirmationCount(args);
+  if (confirmations > 1) fail(`${label} accepts exactly one literal --confirm`, 64);
+  if (args.includes('--dry-run')) {
+    if (!allowDryRun) fail(`${label} does not support --dry-run`, 64);
+    if (confirmations !== 0) fail(`${label} --dry-run cannot be combined with --confirm`, 64);
+    return false;
+  }
+  if (confirmations !== 1) fail(`${label} changes production and requires one literal --confirm`, 64);
+  return true;
 }
 
 function deployProduction(args) {
-  const releaseJsonIndex = args.indexOf('--release-json');
-  let finalArgs = [...args];
-  if (releaseJsonIndex === -1) {
-    releaseCheck();
-    const descriptorPath = packageForDeployment();
-    finalArgs.push('--release-json', descriptorPath);
-  } else if (!args[releaseJsonIndex + 1]) {
-    fail('--release-json requires a file');
+  if (args.includes('--release-json')) {
+    fail('production deploy no longer accepts --release-json or builds implicitly; select a verified immutable candidate with --candidate PATH or --candidate-id SHA256', 64);
   }
-  deploymentScript('deploy.sh', finalArgs);
+  const candidateIndexes = args.flatMap((value, index) => value === '--candidate' ? [index] : []);
+  const idIndexes = args.flatMap((value, index) => value === '--candidate-id' ? [index] : []);
+  const candidateIndex = candidateIndexes[0] ?? -1;
+  const idIndex = idIndexes[0] ?? -1;
+  const candidate = candidateIndex >= 0 ? args[candidateIndex + 1] : '';
+  const candidateId = idIndex >= 0 ? args[idIndex + 1] : '';
+  if (candidateIndexes.length + idIndexes.length !== 1 || Boolean(candidate) === Boolean(candidateId) ||
+      candidate?.startsWith('-') || candidateId?.startsWith('-') ||
+      (candidateId && !/^[0-9a-f]{64}$/.test(candidateId))) {
+    fail('deploy production requires exactly one of --candidate PATH or --candidate-id SHA256; it never builds a release', 64);
+  }
+  const confirmed = requireConfirmedMutation(args, 'deploy production', { allowDryRun: true });
+  const result = deploymentScript('deploy.sh', args);
+  return confirmed
+    ? authoritativeCompletion('deploy.production', 'production-deployment-applied', result)
+    : null;
+}
+
+function releaseCandidate(args) {
+  const subcommand = args[0];
+  if (!['prepare', 'verify', 'inspect'].includes(subcommand)) {
+    fail('usage: ./revival release candidate prepare|verify|inspect [options]', 64);
+  }
+  run(resolveTool('node'), [CANDIDATE_TOOL, ...args]);
+  return null;
+}
+
+function backupProduction(args) {
+  requireConfirmedMutation(args, 'backup');
+  const result = deploymentScript('backup.sh', args);
+  return authoritativeCompletion('backup', 'production-backup-created', result);
+}
+
+function canaryProduction(args) {
+  requireConfirmedMutation(args, 'canary');
+  const result = deploymentScript('canary.sh', args);
+  return authoritativeCompletion('canary', 'production-canary-passed', result);
 }
 
 function rollbackProduction(args) {
@@ -56,7 +102,9 @@ function rollbackProduction(args) {
       64
     );
   }
+  requireConfirmedMutation(args, 'rollback');
   deploymentScript('rollback.sh', args);
+  return null;
 }
 
 // The supported way to change a protected configuration input. It is deliberately
@@ -76,6 +124,7 @@ function adoptProtectedConfiguration(args) {
     );
   }
   deploymentScript('adopt-config.sh', args);
+  return null;
 }
 
 // Retention for backups/ and releases/. Its own top-level command and never a
@@ -95,6 +144,17 @@ function pruneState(args) {
     );
   }
   deploymentScript('prune-state.sh', args);
+  return null;
 }
 
-module.exports = { deploymentScript, productionDoctor, deployProduction, rollbackProduction, adoptProtectedConfiguration, pruneState };
+module.exports = {
+  deploymentScript,
+  productionDoctor,
+  deployProduction,
+  releaseCandidate,
+  backupProduction,
+  canaryProduction,
+  rollbackProduction,
+  adoptProtectedConfiguration,
+  pruneState,
+};

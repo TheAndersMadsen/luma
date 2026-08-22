@@ -7,7 +7,7 @@ const path = require('node:path');
 // codes are unchanged.
 
 const {
-  PACKAGE_TOOL, CONFIG_DIR, SECRETS_DIR, DATA_DIR, RELEASE_DIR, isInsideDirectory, requireExternalDirectory, fail, info, run, ensureManagedRoot, secureDirectory, atomicWrite,
+  PACKAGE_TOOL, CONFIG_DIR, SECRETS_DIR, DATA_DIR, RELEASE_DIR, isInsideDirectory, requireExternalDirectory, fail, info, resolveTool, run, ensureManagedRoot, secureDirectory, atomicWrite,
 } = require('./context');
 
 function buildRelease(args, { capture = false } = {}) {
@@ -37,12 +37,12 @@ function buildRelease(args, { capture = false } = {}) {
   } catch (error) {
     fail(error.message, 64);
   }
-  return run('node', [PACKAGE_TOOL, ...finalArgs], { capture });
+  return run(resolveTool('node'), [PACKAGE_TOOL, ...finalArgs], { capture });
 }
 
 function verifyRelease(args, { capture = false } = {}) {
   if (!fs.existsSync(PACKAGE_TOOL)) fail(`release packager is unavailable: ${PACKAGE_TOOL}`);
-  return run('node', [PACKAGE_TOOL, 'verify', ...args], { capture });
+  return run(resolveTool('node'), [PACKAGE_TOOL, 'verify', ...args], { capture });
 }
 
 function packageForDeployment() {

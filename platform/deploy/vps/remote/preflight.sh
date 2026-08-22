@@ -1,7 +1,7 @@
-#!/usr/bin/env bash
+#!/usr/bin/bash
 set -euo pipefail
-source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/common.sh"
-source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/domain.sh"
+source "${REVIVAL_HELD_COMMON:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/common.sh}"
+source "${REVIVAL_HELD_DOMAIN:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/domain.sh}"
 
 min_free_gb=8
 cleanup=0
@@ -39,8 +39,8 @@ domain_cloudflared_assert_ready \
 assert_managed_cloudflared_topology \
   || fail "the active Cloudflare tunnel processes are not the exact allowlisted system and user units"
 
-transaction_driver="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/transaction.py"
-[[ -f "$transaction_driver" && ! -L "$transaction_driver" ]] \
+transaction_driver="${REVIVAL_HELD_TRANSACTION:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/transaction.py}"
+release_material_file_is_safe "$transaction_driver" \
   || fail "global authority transaction helper is missing or unsafe"
 
 if [[ ! -e "$REMOTE_ROOT" ]]; then
@@ -95,7 +95,8 @@ if ((${#pending_transactions[@]} == 1)); then
   # options from the frozen release-boundary baseline may be passed. See
   # cross_release_baseline_options in common.sh.
   assert_cross_release_options verify-release.py --tree --manifest --expect-release-id --json
-  python3 "$pending_verifier" --tree "$pending_release" --manifest "$pending_manifest" \
+  run_held_release_program "$pending_release" platform/deploy/vps/verify-release.py python 0 \
+    --tree "$pending_release" --manifest "$pending_manifest" \
     --expect-release-id "$pending_release_id" --json >/dev/null
   pending_operation=0
   if [[ -f "$pending_record/OPERATION_TRANSACTION_PREPARED" \
@@ -104,8 +105,8 @@ if ((${#pending_transactions[@]} == 1)); then
     # CROSS-RELEASE INVOCATION: transaction.py out of $pending_release. Baseline
     # options only; see cross_release_baseline_options in common.sh.
     assert_cross_release_options transaction.py --root --record --namespace --operation-action
-    python3 "$pending_transaction_driver" --root "$REMOTE_ROOT" --record "$pending_record" \
-      --namespace deploy --operation-action verify
+    run_held_release_program "$pending_release" platform/deploy/vps/remote/transaction.py python 0 \
+      --root "$REMOTE_ROOT" --record "$pending_record" --namespace deploy --operation-action verify
     pending_operation=1
   fi
   if ((pending_operation)) && [[ ! -f "$pending_record/CANDIDATE_ACTIVATION_ARMED" ]]; then
@@ -119,8 +120,8 @@ if ((${#pending_transactions[@]} == 1)); then
         || fail "prepared pre-activation pointer transaction lacks its journal"
       # CROSS-RELEASE INVOCATION: transaction.py out of $pending_release.
       assert_cross_release_options transaction.py --root --record --namespace --reconcile --prepare-only
-      python3 "$pending_transaction_driver" --root "$REMOTE_ROOT" --record "$pending_record" \
-        --namespace deploy --reconcile --prepare-only
+      run_held_release_program "$pending_release" platform/deploy/vps/remote/transaction.py python 0 \
+        --root "$REMOTE_ROOT" --record "$pending_record" --namespace deploy --reconcile --prepare-only
     fi
     pending_activation=1
   else
@@ -234,8 +235,12 @@ cleanup_preflight() {
   if [[ -n "$tts_work" && -d "$tts_work" ]]; then rm -rf -- "$tts_work"; fi
 }
 trap cleanup_preflight EXIT
-domain_discover_public_edge "$domain_discovery" \
-  || fail "the active Cosmos dashboard edge cannot seed the Center cutover"
+previous_domain_discovery=""
+if [[ -n "${canonical_record:-}" ]]; then
+  previous_domain_discovery="$canonical_record/public-edge-discovery.json"
+fi
+domain_select_public_edge "$domain_discovery" "$previous_domain_discovery" \
+  || fail "the active or recorded dashboard edge cannot seed the Center deployment"
 domain_assert_public_tls "$domain_discovery" \
   || fail "the active wildcard TLS pair cannot serve center.andersmadsen.dk"
 domain_assert_dns_ready center.andersmadsen.dk \

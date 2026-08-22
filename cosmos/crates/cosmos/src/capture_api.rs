@@ -541,7 +541,10 @@ impl NoteDto {
 /// casing and `modified_at`. `indexed_text` is a safe fallback for rows already
 /// opened during ingestion before this projection existed; it is private
 /// backend-derived data and is never used for device/anonymous responses.
-async fn project_note_for_web(n: &NoteRecord, keys: &SharedKeyDirectory) -> NoteDto {
+async fn project_note_for_web(
+    n: &NoteRecord,
+    keys: &SharedKeyDirectory,
+) -> Result<NoteDto, crate::keydirectory::KeyDirectoryError> {
     if let Some(encrypted) = &n.encrypted_note {
         if let Some(kid) = encrypted
             .encryption_information
@@ -549,7 +552,7 @@ async fn project_note_for_web(n: &NoteRecord, keys: &SharedKeyDirectory) -> Note
             .map(|information| information.kid.as_str())
         {
             match keys.get(kid).await {
-                Some(key) => {
+                Ok(Some(key)) => {
                     match cosmos_crypto::secure_asset::open_secure_asset(
                         &key,
                         kid,
@@ -558,7 +561,7 @@ async fn project_note_for_web(n: &NoteRecord, keys: &SharedKeyDirectory) -> Note
                     ) {
                         Ok(plaintext) => {
                             match cosmos_protocol::capture::Note::decode(plaintext.as_slice()) {
-                                Ok(note) => return NoteDto::opened(n, note),
+                                Ok(note) => return Ok(NoteDto::opened(n, note)),
                                 // We held the key and opened the envelope, so
                                 // this is a stored note that is not a `Note`.
                                 Err(_) => key_directory_miss(
@@ -575,14 +578,15 @@ async fn project_note_for_web(n: &NoteRecord, keys: &SharedKeyDirectory) -> Note
                         ),
                     }
                 }
-                None => key_directory_miss(keys, &n.uuid, "no channel key for this note"),
+                Ok(None) => key_directory_miss(keys, &n.uuid, "no channel key for this note"),
+                Err(error) => return Err(error),
             }
         }
     }
 
     match &n.indexed_text {
-        Some(text) => NoteDto::indexed(n, text.clone()),
-        None => NoteDto::sealed(n),
+        Some(text) => Ok(NoteDto::indexed(n, text.clone())),
+        None => Ok(NoteDto::sealed(n)),
     }
 }
 
@@ -910,9 +914,13 @@ async fn get_thumbnail(
     // data and is indistinguishable from a genuinely missing capture on both
     // sides. 503 is the same answer the store-outage branch above gives, and
     // Center renders it as degraded rather than "frame unavailable".
-    let Some(key) = state.keys.get(kid).await else {
-        key_directory_miss(&state.keys, &uuid, "no channel key for this capture");
-        return unavailable();
+    let key = match state.keys.get(kid).await {
+        Ok(Some(key)) => key,
+        Err(_) => return unavailable(),
+        Ok(None) => {
+            key_directory_miss(&state.keys, &uuid, "no channel key for this capture");
+            return unavailable();
+        }
     };
     let Ok(jpeg) = cosmos_crypto::secure_asset::open_secure_asset(
         &key,
@@ -998,9 +1006,13 @@ async fn get_file(
     // Same split as `get_thumbnail`: the object is stored and readable, so a
     // missing key or a refused open is an outage to report, not a file that
     // does not exist.
-    let Some(key) = state.keys.get(kid).await else {
-        key_directory_miss(&state.keys, &uuid, "no channel key for this capture's file");
-        return unavailable();
+    let key = match state.keys.get(kid).await {
+        Ok(Some(key)) => key,
+        Err(_) => return unavailable(),
+        Ok(None) => {
+            key_directory_miss(&state.keys, &uuid, "no channel key for this capture's file");
+            return unavailable();
+        }
     };
     let Ok(jpeg) = cosmos_crypto::secure_asset::open_secure_asset(
         &key,
@@ -1045,14 +1057,19 @@ async fn list_notes(
                 // across the page and ORDERED (see `memory_dtos`). Serially, and
                 // over every note the wearer had ever written, this ran twelve
                 // times a minute for as long as a dashboard tab stayed open.
-                futures_util::stream::iter(rows.records)
-                    .map(|record| {
-                        let keys = state.keys.clone();
-                        async move { project_note_for_web(&record, &keys).await }
-                    })
-                    .buffered(PAGE_SIDE_READ_CONCURRENCY)
-                    .collect()
-                    .await
+                let projected: Vec<Result<NoteDto, crate::keydirectory::KeyDirectoryError>> =
+                    futures_util::stream::iter(rows.records)
+                        .map(|record| {
+                            let keys = state.keys.clone();
+                            async move { project_note_for_web(&record, &keys).await }
+                        })
+                        .buffered(PAGE_SIDE_READ_CONCURRENCY)
+                        .collect()
+                        .await;
+                let Ok(projected) = projected.into_iter().collect::<Result<Vec<_>, _>>() else {
+                    return unavailable();
+                };
+                projected
             } else {
                 rows.records.iter().map(NoteDto::sealed).collect()
             };

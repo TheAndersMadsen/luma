@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "contractId": "operator-setup",
-  "contractVersion": "1.0.0",
+  "contractVersion": "1.2.0",
   "mutationPolicies": {
     "read-only": {
       "confirmationRequired": false,
@@ -179,13 +179,103 @@
       "documentationAnchor": "README.md#run-locally"
     },
     {
+      "id": "dev.center",
+      "tokens": [
+        "dev",
+        "center"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Run Center with Turbopack hot reload and Compose Watch.",
+      "usage": "revival dev center",
+      "documentationAnchor": "CONTRIBUTING.md#fast-local-loop"
+    },
+    {
+      "id": "dev.down",
+      "tokens": [
+        "dev",
+        "down"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Stop the isolated development stack without deleting volumes.",
+      "usage": "revival dev down",
+      "documentationAnchor": "CONTRIBUTING.md#fast-local-loop"
+    },
+    {
+      "id": "check.center",
+      "tokens": [
+        "check",
+        "center"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Run Center type, server, UI, and Spotify adapter checks from external build state.",
+      "usage": "revival check center",
+      "documentationAnchor": "CONTRIBUTING.md#fast-local-loop"
+    },
+    {
+      "id": "check.cosmos",
+      "tokens": [
+        "check",
+        "cosmos"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Run Cosmos checks, optionally selecting one test filter.",
+      "usage": "revival check cosmos [TEST_FILTER]",
+      "documentationAnchor": "CONTRIBUTING.md#fast-local-loop"
+    },
+    {
+      "id": "check.platform",
+      "tokens": [
+        "check",
+        "platform"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Run platform source-policy and acceptance checks.",
+      "usage": "revival check platform",
+      "documentationAnchor": "CONTRIBUTING.md#fast-local-loop"
+    },
+    {
+      "id": "check.changed",
+      "tokens": [
+        "check",
+        "changed"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Select the smallest safe checks for committed and working-tree changes.",
+      "usage": "revival check changed [--base REF]",
+      "documentationAnchor": "CONTRIBUTING.md#fast-local-loop"
+    },
+    {
       "id": "test",
       "tokens": [
         "test"
       ],
       "aliases": [],
       "lifecycle": "current",
-      "effect": "read-only",
+      "effect": "local-mutation",
       "confirmationRequired": false,
       "exactSerialRequired": false,
       "summary": "Run the repository release gate.",
@@ -200,7 +290,7 @@
       ],
       "aliases": [],
       "lifecycle": "current",
-      "effect": "read-only",
+      "effect": "local-mutation",
       "confirmationRequired": false,
       "exactSerialRequired": false,
       "summary": "Run the immutable release checks.",
@@ -238,6 +328,42 @@
       "documentationAnchor": "CONTRIBUTING.md#run-and-test"
     },
     {
+      "id": "release.candidate.prepare",
+      "tokens": ["release", "candidate", "prepare"],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Build and seal a local candidate-only diagnostic from an exact commit; it cannot be deployed.",
+      "usage": "revival release candidate prepare [--commit COMMIT] [--data-dir DIR] [--json]",
+      "documentationAnchor": "docs/operations.md#production"
+    },
+    {
+      "id": "release.candidate.verify",
+      "tokens": ["release", "candidate", "verify"],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "read-only",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Purely verify every byte and receipt in an immutable candidate.",
+      "usage": "revival release candidate verify (--candidate PATH) or (--id SHA256) [--data-dir DIR] [--json]",
+      "documentationAnchor": "docs/operations.md#production"
+    },
+    {
+      "id": "release.candidate.inspect",
+      "tokens": ["release", "candidate", "inspect"],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "read-only",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Inspect candidate identity, provenance, images, and production compatibility.",
+      "usage": "revival release candidate inspect (--candidate PATH) or (--id SHA256) [--data-dir DIR] [--json]",
+      "documentationAnchor": "docs/operations.md#production"
+    },
+    {
       "id": "pin.doctor",
       "tokens": [
         "pin",
@@ -260,12 +386,24 @@
       ],
       "aliases": [],
       "lifecycle": "current",
-      "effect": "read-only",
+      "effect": "local-mutation",
       "confirmationRequired": false,
       "exactSerialRequired": false,
       "summary": "Run Pin source checks.",
       "usage": "revival pin check [options]",
       "documentationAnchor": "docs/operations.md#onboarding-a-pin"
+    },
+    {
+      "id": "pin.build-debug",
+      "tokens": ["pin", "build-debug"],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Compile selected non-installable debug APK roles.",
+      "usage": "revival pin build-debug (--role ROLE...) or (--changed [--base REF])",
+      "documentationAnchor": "docs/operations.md#fast-pin-debug-compiles"
     },
     {
       "id": "pin.release.build",
@@ -276,10 +414,10 @@
       ],
       "aliases": [],
       "lifecycle": "current",
-      "effect": "local-mutation",
+      "effect": "read-only",
       "confirmationRequired": false,
       "exactSerialRequired": false,
-      "summary": "Build and publish a signed release to the local store.",
+      "summary": "Refuse local signing and direct operators to the attested hosted release workflow.",
       "usage": "revival pin release build [options]",
       "documentationAnchor": "docs/operations.md#onboarding-a-pin"
     },
@@ -344,7 +482,7 @@
       "confirmationRequired": true,
       "exactSerialRequired": false,
       "summary": "Publish a signed Pin release to the remote Center store.",
-      "usage": "revival pin release ship [options]",
+      "usage": "revival pin release ship --release-root PATH [--confirm] [options]",
       "documentationAnchor": "docs/operations.md#onboarding-a-pin"
     },
     {
@@ -373,8 +511,8 @@
       "effect": "remote-mutation",
       "confirmationRequired": true,
       "exactSerialRequired": false,
-      "summary": "Deploy an immutable release to production.",
-      "usage": "revival deploy production [options]",
+      "summary": "Deploy one imported GitHub-hosted, freshly provider-verified immutable release.",
+      "usage": "revival deploy production [--candidate PATH] [--candidate-id SHA256] [--confirm] [--dry-run] [options]",
       "documentationAnchor": "docs/operations.md#production"
     },
     {
@@ -388,7 +526,7 @@
       "confirmationRequired": true,
       "exactSerialRequired": false,
       "summary": "Create and optionally fetch a production backup.",
-      "usage": "revival backup [options]",
+      "usage": "revival backup --confirm [--remote vps] [--backup-id ID] [--leave-quiesced] [--fetch [--fetch-dir DIR]] [--json]",
       "documentationAnchor": "docs/operations.md#production"
     },
     {
@@ -402,7 +540,7 @@
       "confirmationRequired": true,
       "exactSerialRequired": false,
       "summary": "Run production semantic canaries.",
-      "usage": "revival canary [options]",
+      "usage": "revival canary --confirm [options]",
       "documentationAnchor": "docs/operations.md#production"
     },
     {
@@ -458,7 +596,7 @@
       "confirmationRequired": true,
       "exactSerialRequired": false,
       "summary": "Move production to an exact earlier deployment.",
-      "usage": "revival rollback [options]",
+      "usage": "revival rollback --deployment ID --confirm [options]",
       "documentationAnchor": "docs/operations.md#production"
     },
     {
@@ -552,6 +690,54 @@
       "documentationAnchor": "README.md#run-locally"
     },
     {
+      "id": "setup.import.vps-candidate",
+      "tokens": ["setup", "import", "vps-candidate"],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Verify and import a GitHub-hosted immutable VPS candidate handoff.",
+      "usage": "revival setup import vps-candidate --handoff-root DIR [--data-dir DIR] [--json]",
+      "documentationAnchor": "docs/operations.md#production"
+    },
+    {
+      "id": "setup.import.pin-release",
+      "tokens": ["setup", "import", "pin-release"],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Verify and register a downloaded Attested Pin release store.",
+      "usage": "revival setup import pin-release --release-root DIR [--data-dir DIR] [--json]",
+      "documentationAnchor": "docs/operations.md#onboarding-a-pin"
+    },
+    {
+      "id": "setup.artifacts.vps",
+      "tokens": ["setup", "artifacts", "vps"],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Freshly provider-verify and report the currently imported hosted VPS candidate.",
+      "usage": "revival setup artifacts vps [--data-dir DIR] [--verifier-cache-root DIR] [--json]",
+      "documentationAnchor": "docs/operations.md#production"
+    },
+    {
+      "id": "setup.artifacts.pin",
+      "tokens": ["setup", "artifacts", "pin"],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Rehash and report the currently registered hosted Pin release.",
+      "usage": "revival setup artifacts pin [--data-dir DIR] [--json]",
+      "documentationAnchor": "docs/operations.md#onboarding-a-pin"
+    },
+    {
       "id": "config.get",
       "tokens": [
         "config",
@@ -608,7 +794,7 @@
       "confirmationRequired": true,
       "exactSerialRequired": false,
       "summary": "Plan or confirm creation of new device identity PKI.",
-      "usage": "revival pki init [options]",
+      "usage": "revival pki init device-user [--confirm]",
       "documentationAnchor": "docs/operations.md#onboarding-a-pin"
     },
     {
@@ -623,7 +809,7 @@
       "confirmationRequired": true,
       "exactSerialRequired": false,
       "summary": "Plan or confirm import of existing device identity PKI.",
-      "usage": "revival pki import [options]",
+      "usage": "revival pki import device-user --cert FILE --key FILE [--confirm]",
       "documentationAnchor": "docs/operations.md#onboarding-a-pin"
     },
     {
@@ -770,6 +956,8 @@
         "setup.local",
         "init",
         "doctor.local",
+        "dev.center",
+        "dev.down",
         "stack.up",
         "stack.status",
         "setup.status"
@@ -828,6 +1016,10 @@
       "commandIds": [
         "setup.contributor",
         "doctor.local",
+        "check.center",
+        "check.cosmos",
+        "check.platform",
+        "check.changed",
         "test",
         "release.check",
         "pin.check",
@@ -889,8 +1081,11 @@
         "setup.production",
         "config.check",
         "doctor.production",
-        "release.build",
-        "release.verify",
+        "setup.import.vps-candidate",
+        "setup.artifacts.vps",
+        "release.candidate.prepare",
+        "release.candidate.verify",
+        "release.candidate.inspect",
         "deploy.production",
         "backup",
         "canary",
@@ -929,12 +1124,12 @@
         },
         {
           "id": "release",
-          "title": "Build and verify a release",
-          "commandId": "release.build",
+          "title": "Import the attested hosted immutable candidate",
+          "commandId": "setup.import.vps-candidate",
           "centerRoute": null,
           "surface": "cli",
           "verification": "cli",
-          "documentationAnchor": "CONTRIBUTING.md#run-and-test"
+          "documentationAnchor": "docs/operations.md#production"
         },
         {
           "id": "backup",
@@ -974,6 +1169,8 @@
         "pki.init",
         "pin.doctor",
         "pin.release.inspect",
+        "setup.import.pin-release",
+        "setup.artifacts.pin",
         "pin.release.build",
         "pin.release.ship",
         "pin.install",
@@ -1005,8 +1202,8 @@
         },
         {
           "id": "release",
-          "title": "Build the signed release",
-          "commandId": "pin.release.build",
+          "title": "Import the attested hosted signed release",
+          "commandId": "setup.import.pin-release",
           "centerRoute": "/settings/pin/install",
           "surface": "cli",
           "verification": "cli",
@@ -1171,6 +1368,55 @@
       "name": "AUTH_SESSION_SECRET",
       "aliases": [],
       "group": "production",
+      "sensitivity": "secret",
+      "home": "center.env"
+    },
+    {
+      "name": "REVIVAL_MUSIC_GATEWAY_ORIGIN",
+      "aliases": [],
+      "group": "production",
+      "sensitivity": "operational",
+      "home": "center.env"
+    },
+    {
+      "name": "REVIVAL_MUSIC_SESSION_SECRET",
+      "aliases": [],
+      "group": "production",
+      "sensitivity": "secret",
+      "home": "center.env"
+    },
+    {
+      "name": "TIDAL_CLIENT_ID",
+      "aliases": [],
+      "group": "provider",
+      "sensitivity": "identity",
+      "home": "center.env"
+    },
+    {
+      "name": "TIDAL_CLIENT_SECRET",
+      "aliases": [],
+      "group": "provider",
+      "sensitivity": "secret",
+      "home": "center.env"
+    },
+    {
+      "name": "TIDAL_SCOPES",
+      "aliases": [],
+      "group": "provider",
+      "sensitivity": "operational",
+      "home": "center.env"
+    },
+    {
+      "name": "TIDAL_COUNTRY_CODE",
+      "aliases": [],
+      "group": "provider",
+      "sensitivity": "operational",
+      "home": "center.env"
+    },
+    {
+      "name": "APPLE_MUSIC_DEVELOPER_TOKEN",
+      "aliases": [],
+      "group": "provider",
       "sensitivity": "secret",
       "home": "center.env"
     },

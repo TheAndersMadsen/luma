@@ -38,10 +38,13 @@ const FILE_IDENTIFIER = "HMCT";
  * the layout stays visible next to the schema it implements.
  */
 class Table {
-  constructor(
-    private readonly buf: Buffer,
-    private readonly pos: number,
-  ) {}
+  private readonly buf: Buffer;
+  private readonly pos: number;
+
+  constructor(buf: Buffer, pos: number) {
+    this.buf = buf;
+    this.pos = pos;
+  }
 
   static root(buf: Buffer): Table {
     return new Table(buf, buf.readUInt32LE(0));

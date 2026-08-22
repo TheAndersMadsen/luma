@@ -112,7 +112,7 @@ impl DeviceEventsHistoryService for DeviceEventsHistory {
         if authenticated.plane == crate::auth::AuthenticationPlane::Web {
             let mut backfill = Vec::new();
             for event in &mut found {
-                if let Some(indexed) = project_event_for_web(&self.keys, event).await {
+                if let Some(indexed) = project_event_for_web(&self.keys, event).await? {
                     backfill.push(indexed);
                 }
             }
@@ -140,11 +140,13 @@ impl DeviceEventsHistoryService for DeviceEventsHistory {
 async fn project_event_for_web(
     keys: &crate::keydirectory::SharedKeyDirectory,
     record: &mut crate::store::NotableEventRecord,
-) -> Option<crate::store::NotableEventRecord> {
+) -> Result<Option<crate::store::NotableEventRecord>, Status> {
     if record.event_data.is_some() {
-        return None;
+        return Ok(None);
     }
-    let opened = open_event_struct(keys, record.encrypted_event_data.as_ref()).await?;
+    let Some(opened) = open_event_struct(keys, record.encrypted_event_data.as_ref()).await? else {
+        return Ok(None);
+    };
     let should_backfill = record.indexed_text.is_none();
     if should_backfill {
         record.indexed_text =
@@ -155,9 +157,9 @@ async fn project_event_for_web(
     if should_backfill && record.indexed_text.is_some() {
         let mut sealed = record.clone();
         sealed.event_data = None;
-        Some(sealed)
+        Ok(Some(sealed))
     } else {
-        None
+        Ok(None)
     }
 }
 
@@ -284,34 +286,41 @@ pub struct EventsIngest {
 async fn indexed(
     keys: &crate::keydirectory::SharedKeyDirectory,
     mut record: crate::store::NotableEventRecord,
-) -> crate::store::NotableEventRecord {
+) -> Result<crate::store::NotableEventRecord, Status> {
     if record.indexed_text.is_none() {
         record.indexed_text = sealed_event_text(
             keys,
             &record.event_type,
             record.encrypted_event_data.as_ref(),
         )
-        .await;
+        .await?;
     }
-    record
+    Ok(record)
 }
 
 async fn sealed_event_text(
     keys: &crate::keydirectory::SharedKeyDirectory,
     event_type: &str,
     sealed: Option<&cosmos_protocol::common::encryption::EncryptedData>,
-) -> Option<String> {
-    let data = open_event_struct(keys, sealed).await?;
-    event_search_text(event_type, Some(&data)).map(|t| t.to_lowercase())
+) -> Result<Option<String>, Status> {
+    let Some(data) = open_event_struct(keys, sealed).await? else {
+        return Ok(None);
+    };
+    Ok(event_search_text(event_type, Some(&data)).map(|t| t.to_lowercase()))
 }
 
 async fn open_event_struct(
     keys: &crate::keydirectory::SharedKeyDirectory,
     sealed: Option<&cosmos_protocol::common::encryption::EncryptedData>,
-) -> Option<prost_types::Struct> {
+) -> Result<Option<prost_types::Struct>, Status> {
     use prost::Message as _;
-    let plaintext = open_event_payload(keys, sealed?).await?;
-    prost_types::Struct::decode(plaintext.as_slice()).ok()
+    let Some(sealed) = sealed else {
+        return Ok(None);
+    };
+    let plaintext = open_event_payload(keys, sealed).await?;
+    let decoded = prost_types::Struct::decode(plaintext.as_slice())
+        .map_err(|_| Status::failed_precondition("opened notable-event data is malformed"))?;
+    Ok(Some(decoded))
 }
 
 /// Open the envelope carried by `encrypted_event_data`.
@@ -320,29 +329,34 @@ async fn open_event_struct(
 /// SecureAsset decoder are distinct responsibilities. The directory currently
 /// opens the service-channel envelope used by the clone; a stock C1 SecureAsset
 /// must be decoded by the typed HMSA path before this can claim stock indexing
-/// compatibility. Until then an unrecognised envelope stays stored but
-/// unindexed—never guessed at and never returned as plaintext to the device.
+/// compatibility. An unrecognised envelope fails before ingest storage/ack so
+/// the device retains its unsynced row and can retry after key repair.
 async fn open_event_payload(
     keys: &crate::keydirectory::SharedKeyDirectory,
     sealed: &cosmos_protocol::common::encryption::EncryptedData,
-) -> Option<Vec<u8>> {
+) -> Result<Vec<u8>, Status> {
     let kid = sealed
         .encryption_information
         .as_ref()
         .map(|i| i.kid.clone())
         .unwrap_or_default();
     if sealed.data.get(4..8) == Some(b"HMSA") {
-        let Some(key) = keys.get(&kid).await else {
-            // An event we cannot open is stored but unindexed, so a later
-            // `recall_history` tells the wearer nothing happened. That has to
-            // leave a trace: `shared` is what distinguishes "ImportKeys never
-            // ran" from "the key lives in the AI-bus process and this directory
-            // is memory-only". Still no key id — it is wearer-identifying.
+        let Some(key) = keys
+            .get(&kid)
+            .await
+            .map_err(|error| crate::keydirectory::grpc_status(&error))?
+        else {
+            // An event we cannot open must fail before storage/ack, otherwise a
+            // later `recall_history` says nothing happened after the device has
+            // cleared its unsynced row. Still log no key id — it identifies the
+            // wearer.
             tracing::warn!(
                 shared = keys.is_shared(),
-                "no channel key for this notable event; it is stored sealed and unsearchable"
+                "no authoritative channel key for this notable event; refusing ingest before storage/ack"
             );
-            return None;
+            return Err(Status::failed_precondition(
+                "no authoritative channel key for this notable event",
+            ));
         };
         return match cosmos_crypto::secure_asset::open_secure_asset(
             &key,
@@ -350,7 +364,7 @@ async fn open_event_payload(
             &sealed.data,
             cosmos_crypto::secure_asset::NOTABLE_EVENT_DATA,
         ) {
-            Ok(plaintext) => Some(plaintext),
+            Ok(plaintext) => Ok(plaintext),
             Err(error) => {
                 // The key id is wearer-identifying; report only the decoder
                 // class, never the id or payload.
@@ -359,7 +373,9 @@ async fn open_event_payload(
                     shared = keys.is_shared(),
                     "notable-event HMSA payload could not be opened"
                 );
-                None
+                Err(Status::failed_precondition(
+                    "the notable-event secure asset could not be opened",
+                ))
             }
         };
     }
@@ -368,6 +384,10 @@ async fn open_event_payload(
         kid,
     })
     .await
+    .map_err(|error| crate::keydirectory::grpc_status(&error))?
+    .ok_or_else(|| {
+        Status::failed_precondition("no authoritative channel key for this notable event")
+    })
 }
 
 /// Reject an empty device batch before constructing an outbound acknowledgement.
@@ -445,7 +465,7 @@ impl EventsIngestService for EventsIngest {
                         require_events(&batch)?;
                         let mut records = Vec::with_capacity(batch.events.len());
                         for event in batch.events {
-                            records.push(indexed(&keys, to_record(event)).await);
+                            records.push(indexed(&keys, to_record(event)).await?);
                         }
                         let stored = store.ingest_events(&owner, &records).await?;
                         Ok(pb::IngestBatchResponse {
@@ -483,7 +503,7 @@ impl EventsIngestService for EventsIngest {
             async move {
                 match item {
                     Ok(event) => {
-                        let record = indexed(&keys, to_record(event)).await;
+                        let record = indexed(&keys, to_record(event)).await?;
                         let stored = store
                             .ingest_events(&owner, std::slice::from_ref(&record))
                             .await?;
@@ -518,7 +538,7 @@ mod tests {
 
         let keys = std::sync::Arc::new(crate::keydirectory::KeyDirectory::in_memory());
         let key = [8u8; cosmos_crypto::AES_KEY_LEN];
-        keys.put("wearer-kid", key).await;
+        keys.put("wearer-kid", key).await.expect("put key");
 
         // Observed plaintext shape after protection is removed: request +
         // response as a Struct.
@@ -554,7 +574,7 @@ mod tests {
             data: sealed.data.clone(),
         });
 
-        let enriched = indexed(&keys, rec).await;
+        let enriched = indexed(&keys, rec).await.expect("index event");
         let text = enriched
             .indexed_text
             .expect("a sealed Ai Mic event must be indexed on ingest");
@@ -562,6 +582,49 @@ mod tests {
             text.contains("eiffel") && text.contains("330"),
             "both the wearer's question and the answer must be searchable: {text:?}",
         );
+    }
+
+    #[tokio::test]
+    async fn ingest_indexing_distinguishes_authority_outage_from_missing_key_before_ack() {
+        use prost::Message as _;
+
+        let kid = "event-authority-key";
+        let key = [0x68; cosmos_crypto::AES_KEY_LEN];
+        let directory = std::sync::Arc::new(crate::keydirectory::KeyDirectory::in_memory());
+        directory.put(kid, key).await.expect("seed authority");
+        let payload = prost_types::Struct::default().encode_to_vec();
+        let sealed = cosmos_crypto::seal(kid, &key, &payload, b"").expect("seal event");
+        let candidate = || {
+            let mut event = record("evt-authority", "humane.respond", "ai-bus");
+            event.event_data = None;
+            event.encrypted_event_data = Some(cosmos_protocol::common::encryption::EncryptedData {
+                encryption_information: Some(
+                    cosmos_protocol::common::encryption::EncryptionInformation {
+                        kid: kid.to_owned(),
+                    },
+                ),
+                data: sealed.data.clone(),
+            });
+            event
+        };
+
+        directory.fail_next(crate::keydirectory::DirectoryFault::Get);
+        let unavailable = indexed(&directory, candidate())
+            .await
+            .err()
+            .expect("lookup failure happens before store/ack");
+        assert_eq!(unavailable.code(), tonic::Code::Unavailable);
+
+        let missing = std::sync::Arc::new(crate::keydirectory::KeyDirectory::in_memory());
+        let precondition = indexed(&missing, candidate())
+            .await
+            .err()
+            .expect("a proven missing key is a failed precondition");
+        assert_eq!(precondition.code(), tonic::Code::FailedPrecondition);
+
+        indexed(&directory, candidate())
+            .await
+            .expect("unchanged event is retryable once authority recovers");
     }
 
     /// A web read may expose plaintext to the authenticated wearer, but the
@@ -572,7 +635,7 @@ mod tests {
 
         let keys = std::sync::Arc::new(crate::keydirectory::KeyDirectory::in_memory());
         let key = [7u8; cosmos_crypto::AES_KEY_LEN];
-        keys.put("web-projection-kid", key).await;
+        keys.put("web-projection-kid", key).await.expect("put key");
 
         let mut fields = std::collections::BTreeMap::new();
         fields.insert(
@@ -597,6 +660,7 @@ mod tests {
 
         let backfill = project_event_for_web(&keys, &mut rec)
             .await
+            .expect("project event")
             .expect("a newly opened event should produce an index backfill");
         assert!(
             rec.event_data.is_some(),

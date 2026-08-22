@@ -1,14 +1,21 @@
 // The store module imports its own extensionless sibling (`./log`).
 import "./tsResolve.mjs";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, stat, readdir, writeFile } from "node:fs/promises";
+import fs from "node:fs";
+import { chmod, mkdtemp, readFile, rm, stat, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-const { ChannelKeyUnavailableError, namesSameWearer, saveKey, storedKeysFor } = await import(
-  "../src/server/channelStore.ts"
-);
+const {
+  CHANNEL_KEY_STORE_DEGRADED,
+  ChannelKeyUnavailableError,
+  namesSameWearer,
+  parseCenterKid,
+  parseCenterPrincipal,
+  saveKey,
+  storedKeysFor,
+} = await import("../src/server/channelStore.ts");
 const { setLogSinkForTests } = await import("../src/server/log.ts");
 
 /*
@@ -78,12 +85,32 @@ test("a key stored under another wearer's kid is never returned", async (t) => {
   await withStore(t, { kid: OTHER_KID, key: OTHER_KEY, keys: { [OTHER_KID]: OTHER_KEY } });
   assert.deepEqual(storedKeysFor(DERIVED_KID), []);
 
-  // The suffix rule matches on segment boundaries only, in both directions.
+  // Both supported kid forms are parsed to one exact wearer subject.
   assert.equal(namesSameWearer(LEGACY_KID, DERIVED_KID), true);
   assert.equal(namesSameWearer(DERIVED_KID, LEGACY_KID), true);
   assert.equal(namesSameWearer(OTHER_KID, DERIVED_KID), false);
-  // `U:ab` must not be read as the tail of `U:cab`.
+  // No suffix, path, or delimiter trick may manufacture the same subject.
   assert.equal(namesSameWearer("U:cab/center/ephemeral", "U:ab/center/ephemeral"), false);
+  for (const forged of [
+    `prefix:${DERIVED_KID}`,
+    `${DERIVED_KID}/copy`,
+    `U:${SUB}:other/center/ephemeral`,
+    `U:${SUB}/center/ephemeral/../ephemeral`,
+    `V:01:D:web-demo:U:other:U:${SUB}/center/ephemeral`,
+    `V:1:D:web-demo:U:${SUB}/center/ephemeral`,
+    `V:01:D:web/demo:U:${SUB}/center/ephemeral`,
+    `U:${SUB}:extra/center/ephemeral`,
+    `U:${SUB}\u0085/center/ephemeral`,
+  ]) {
+    assert.equal(namesSameWearer(forged, DERIVED_KID), false, forged);
+    assert.equal(namesSameWearer(DERIVED_KID, forged), false, forged);
+  }
+  assert.deepEqual(parseCenterPrincipal(`U:${SUB}`), { principal: `U:${SUB}`, subject: SUB });
+  assert.deepEqual(parseCenterKid(LEGACY_KID), {
+    principal: `V:01:D:web-demo:U:${SUB}`,
+    subject: SUB,
+    kid: LEGACY_KID,
+  });
 });
 
 test("the exact kid is offered before an inherited one", async (t) => {
@@ -198,29 +225,212 @@ test("an unreadable store is reported, never mistaken for a first run", async (t
   });
 
   assert.throws(() => storedKeysFor(DERIVED_KID), ChannelKeyUnavailableError);
-  assert.throws(() => storedKeysFor(DERIVED_KID), /could not be read/);
+  assert.throws(() => storedKeysFor(DERIVED_KID), new RegExp(CHANNEL_KEY_STORE_DEGRADED));
 
   // And the writer refuses rather than replacing what it could not read — the
   // bytes underneath may be the only copy of somebody's key — but says so.
   const warnings = [];
   setLogSinkForTests((level, line) => warnings.push(`${level} ${line.trimEnd()}`));
   try {
-    saveKey({ kid: DERIVED_KID, key: FRESH_KEY });
+    assert.throws(
+      () => saveKey({ kid: DERIVED_KID, key: FRESH_KEY }),
+      ChannelKeyUnavailableError,
+    );
   } finally {
     setLogSinkForTests(null);
   }
   assert.equal(warnings.length, 1, warnings.join("\n"));
   assert.match(warnings[0], /^warn /);
-  assert.match(warnings[0], /could not be read before writing/);
+  assert.match(warnings[0], /refusing unsafe channel-key store/);
   // The key itself is never in the sentence.
   assert.doesNotMatch(warnings[0], new RegExp(FRESH_KEY.toString("base64")));
   assert.deepEqual(await readdir(directory), [], "an unreadable store must not be written over");
 });
 
+test("a parent-directory fsync failure is propagated and a retry completes durability", async (t) => {
+  const { file } = await withStore(t, { kid: LEGACY_KID, key: LEGACY_KEY });
+  const originalFsync = fs.fsyncSync;
+  let calls = 0;
+  fs.fsyncSync = (descriptor) => {
+    calls += 1;
+    // Existing-store confirmation, temporary-file sync, then replacement-dir
+    // sync. Fail only that final durability boundary, after rename is visible.
+    if (calls === 3) {
+      const error = new Error("injected directory fsync failure");
+      error.code = "EIO";
+      throw error;
+    }
+    return originalFsync(descriptor);
+  };
+  t.after(() => {
+    fs.fsyncSync = originalFsync;
+    setLogSinkForTests(null);
+  });
+
+  const warnings = [];
+  setLogSinkForTests((level, line) => warnings.push(`${level} ${line.trimEnd()}`));
+  assert.throws(
+    () => saveKey({ kid: DERIVED_KID, key: FRESH_KEY }),
+    new RegExp(CHANNEL_KEY_STORE_DEGRADED),
+    "a renamed-but-unsynced key must not be acknowledged",
+  );
+  assert.equal(warnings.length, 1);
+
+  // The rename may already be visible even though it was not safe to
+  // acknowledge. Repeating the idempotent save rewrites and syncs both the file
+  // and its directory before returning success.
+  saveKey({ kid: DERIVED_KID, key: FRESH_KEY });
+  assert.equal((await read(file)).keys[DERIVED_KID], FRESH_KEY.toString("base64"));
+  assert.deepEqual(await readdir(path.dirname(file)), ["channel-key.json"]);
+});
+
+test("an existing store must be exactly 0600 and remains byte-identical when refused", async (t) => {
+  const { file } = await withStore(t, { kid: DERIVED_KID, key: LEGACY_KEY });
+  for (const mode of [0o640, 0o400, 0o666]) {
+    await chmod(file, mode);
+    const before = await readFile(file);
+    assert.throws(() => storedKeysFor(DERIVED_KID), new RegExp(CHANNEL_KEY_STORE_DEGRADED));
+    assert.throws(
+      () => saveKey({ kid: DERIVED_KID, key: FRESH_KEY }),
+      new RegExp(CHANNEL_KEY_STORE_DEGRADED),
+    );
+    assert.deepEqual(await readFile(file), before, `mode ${mode.toString(8)} was rewritten`);
+  }
+});
+
+test("the store is opened no-follow and read from that same bounded descriptor", async (t) => {
+  const { file } = await withStore(t, { kid: DERIVED_KID, key: LEGACY_KEY });
+  const originalOpen = fs.openSync;
+  const originalRead = fs.readSync;
+  let openedDescriptor = null;
+  let readDescriptor = null;
+  fs.openSync = (candidate, flags, ...rest) => {
+    const descriptor = originalOpen(candidate, flags, ...rest);
+    if (candidate === file) {
+      assert.notEqual(flags & fs.constants.O_NOFOLLOW, 0, "store open omitted O_NOFOLLOW");
+      openedDescriptor = descriptor;
+    }
+    return descriptor;
+  };
+  fs.readSync = (descriptor, ...args) => {
+    readDescriptor ??= descriptor;
+    return originalRead(descriptor, ...args);
+  };
+  t.after(() => {
+    fs.openSync = originalOpen;
+    fs.readSync = originalRead;
+  });
+
+  assert.equal(storedKeysFor(DERIVED_KID).length, 1);
+  assert.equal(readDescriptor, openedDescriptor, "path was reopened instead of reading the observed fd");
+});
+
+test("a post-open read failure is never reclassified as an absent first run", async (t) => {
+  const { file } = await withStore(t, { kid: DERIVED_KID, key: LEGACY_KEY });
+  const before = await readFile(file);
+  const originalRead = fs.readSync;
+  fs.readSync = () => {
+    const error = new Error("injected disappearance after open");
+    error.code = "ENOENT";
+    throw error;
+  };
+  t.after(() => {
+    fs.readSync = originalRead;
+  });
+
+  assert.throws(() => storedKeysFor(DERIVED_KID), ChannelKeyUnavailableError);
+  assert.throws(
+    () => saveKey({ kid: DERIVED_KID, key: FRESH_KEY }),
+    ChannelKeyUnavailableError,
+  );
+  assert.deepEqual(await readFile(file), before);
+});
+
+test("a path replacement after descriptor observation fails closed", async (t) => {
+  const { file } = await withStore(t, { kid: DERIVED_KID, key: LEGACY_KEY });
+  const originalLstat = fs.lstatSync;
+  const originalPath = `${file}.observed`;
+  let swapped = false;
+  fs.lstatSync = (candidate, ...args) => {
+    if (candidate === file && !swapped) {
+      swapped = true;
+      fs.renameSync(file, originalPath);
+      fs.symlinkSync(originalPath, file);
+    }
+    return originalLstat(candidate, ...args);
+  };
+  t.after(() => {
+    fs.lstatSync = originalLstat;
+  });
+
+  assert.throws(() => storedKeysFor(DERIVED_KID), new RegExp(CHANNEL_KEY_STORE_DEGRADED));
+  assert.deepEqual(
+    await readFile(originalPath),
+    Buffer.from(JSON.stringify({ kid: DERIVED_KID, key: LEGACY_KEY })),
+  );
+});
+
 test("a corrupt store is reported, never mistaken for a first run", async (t) => {
   await withStore(t, "{ this is not json");
   assert.throws(() => storedKeysFor(DERIVED_KID), ChannelKeyUnavailableError);
-  assert.throws(() => storedKeysFor(DERIVED_KID), /not valid JSON/);
+  assert.throws(() => storedKeysFor(DERIVED_KID), new RegExp(CHANNEL_KEY_STORE_DEGRADED));
+});
+
+test("every malformed runtime schema is refused byte-identically before use or rewrite", async (t) => {
+  const { file } = await withStore(t);
+  const key = Buffer.alloc(16, 0x44).toString("base64");
+  const tooMany = Object.fromEntries(
+    Array.from({ length: 257 }, (_, index) => [`U:wearer-${index}/center/ephemeral`, key]),
+  );
+  const cases = new Map([
+    ["non-object", "[]"],
+    ["missing kid", JSON.stringify({ key })],
+    ["partial pair", JSON.stringify({ kid: DERIVED_KID })],
+    ["unknown field", JSON.stringify({ kid: DERIVED_KID, key, algorithm: "AES" })],
+    ["duplicate field", `{"kid":"${DERIVED_KID}","kid":"again","key":"${key}"}`],
+    ["empty kid", JSON.stringify({ kid: "", key })],
+    ["control kid", JSON.stringify({ kid: "bad\u0001kid", key })],
+    ["unpaired surrogate kid", `{"kid":"\\ud800","key":"${key}"}`],
+    ["oversized kid", JSON.stringify({ kid: "x".repeat(1025), key })],
+    ["short key", JSON.stringify({ kid: DERIVED_KID, key: Buffer.alloc(15).toString("base64") })],
+    ["noncanonical key", JSON.stringify({ kid: DERIVED_KID, key: `${key}\n` })],
+    ["null map", JSON.stringify({ kid: DERIVED_KID, key, keys: null })],
+    ["array map", JSON.stringify({ kid: DERIVED_KID, key, keys: [] })],
+    ["oversized map", JSON.stringify({ kid: DERIVED_KID, key, keys: tooMany })],
+    ["empty mapped kid", JSON.stringify({ kid: DERIVED_KID, key, keys: { "": key } })],
+    [
+      "bad mapped key",
+      JSON.stringify({ kid: DERIVED_KID, key, keys: { [OTHER_KID]: "AA==" } }),
+    ],
+    [
+      "duplicate mapped kid",
+      `{"kid":"${DERIVED_KID}","key":"${key}","keys":{"${OTHER_KID}":"${key}","${OTHER_KID}":"${key}"}}`,
+    ],
+  ]);
+
+  const warnings = [];
+  setLogSinkForTests((level, line) => warnings.push(`${level} ${line.trimEnd()}`));
+  t.after(() => setLogSinkForTests(null));
+  for (const [name, body] of cases) {
+    await writeFile(file, body, { mode: 0o600 });
+    const before = await readFile(file);
+    assert.throws(
+      () => storedKeysFor(DERIVED_KID),
+      ChannelKeyUnavailableError,
+      `${name} was usable`,
+    );
+    assert.throws(
+      () => saveKey({ kid: DERIVED_KID, key: FRESH_KEY }),
+      ChannelKeyUnavailableError,
+      `${name} was rewritten`,
+    );
+    assert.deepEqual(await readFile(file), before, `${name} changed on disk`);
+  }
+  assert.equal(
+    warnings.length,
+    cases.size * 2,
+    "each refused read and refused rewrite should leave one operator-only diagnostic",
+  );
 });
 
 test("an absent store is the first run, and is not an error", async (t) => {
@@ -233,4 +443,41 @@ test("an absent store is the first run, and is not an error", async (t) => {
   assert.equal(document.kid, DERIVED_KID);
   assert.equal(document.key, FRESH_KEY.toString("base64"));
   assert.deepEqual(document.keys, { [DERIVED_KID]: FRESH_KEY.toString("base64") });
+});
+
+function exactBoundaryStore() {
+  const key = Buffer.alloc(16, 0x66).toString("base64");
+  const suffix = "/center/ephemeral";
+  const subjects = Array.from({ length: 240 }, (_, index) => `wearer-${index}`);
+  const make = () => ({
+    kid: `U:boundary${suffix}`,
+    key,
+    keys: Object.fromEntries(subjects.map((subject) => [`U:${subject}${suffix}`, key])),
+  });
+  let remaining = 16_384 - Buffer.byteLength(JSON.stringify(make()), "utf8");
+  for (let index = 0; remaining > 0 && index < subjects.length; index += 1) {
+    const room = 126 - subjects[index].length;
+    const add = Math.min(room, remaining);
+    subjects[index] += "x".repeat(add);
+    remaining -= add;
+  }
+  assert.equal(remaining, 0, "fixture could not reach the exact byte boundary");
+  const body = JSON.stringify(make());
+  assert.equal(Buffer.byteLength(body, "utf8"), 16_384);
+  return body;
+}
+
+test("an exact 16384-byte store remains readable and the next insert preserves its bytes", async (t) => {
+  const body = exactBoundaryStore();
+  const { file, directory } = await withStore(t, body);
+  const before = await readFile(file);
+  assert.equal(storedKeysFor("U:boundary/center/ephemeral").length, 1);
+
+  assert.throws(
+    () => saveKey({ kid: "U:next/center/ephemeral", key: Buffer.alloc(16, 0x77) }),
+    new RegExp(CHANNEL_KEY_STORE_DEGRADED),
+  );
+  assert.deepEqual(await readFile(file), before, "oversize insertion replaced the readable store");
+  assert.deepEqual(await readdir(directory), ["channel-key.json"], "a temp file was created");
+  assert.equal(storedKeysFor("U:boundary/center/ephemeral").length, 1);
 });

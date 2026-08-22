@@ -262,7 +262,7 @@ Use the current help output and `docs/operations.md`; do not invent flags.
    prerequisites are satisfied and record its location without exposing secrets.
 3. Run the deployment dry run and review the release/config plan.
 4. Deploy the immutable release through the supported transactional command.
-5. Run `./revival canary --remote vps --json` and require the real wearer plane,
+5. Run `./revival canary --confirm --remote vps --json` and require the real wearer plane,
    then run `./revival drift --remote vps --json`.
 6. Verify the public Center and device edge semantically. A process restart or
    HTTP 200 alone is not acceptance.
@@ -274,7 +274,10 @@ for the exact deployment. Never treat rollback as a database restore.
 
 1. Run `./revival pin doctor` and `./revival pin check`.
 2. Inspect Pin release history and choose the next monotonic version and version
-   code. Build the signed five-role release with `./revival pin release build`.
+   code. Dispatch the commit-pinned Attested Pin release workflow; its external
+   protected-input provisioner must stage signing inputs only after the
+   provider-signed pre-input gate. Download and verify/register the complete
+   file artifact with `./revival setup import pin-release --release-root DIR`.
 3. Inspect and verify its manifest, signer, artifact sizes, SHA-256 values,
    history, and release identity. Ship it to the Center-served store with the
    plan-first `pin release ship` flow if the VPS needs it.

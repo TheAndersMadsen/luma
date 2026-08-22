@@ -1386,6 +1386,11 @@ pub struct ToolContext {
     /// `None` unless the device actually supplied one.
     pub location: Option<(f64, f64)>,
     pub store: Option<crate::store::SharedStore>,
+    /// Production's authoritative channel-key directory. When present, tools
+    /// must never consult the retired process-local channel map: another
+    /// workload may have replaced or revoked the row since this process began.
+    pub key_directory: Option<crate::keydirectory::SharedKeyDirectory>,
+    /// Test-only/legacy memory topology used when no directory is configured.
     pub keys: Option<crate::keymaterial::SharedKeyMaterial>,
 }
 
@@ -1631,12 +1636,47 @@ async fn remember(text: &str, context: &ToolContext) -> String {
     // Stored as plaintext-indexed content this server owns. A device-sealed note
     // arrives through `CreateMemory`; this one originates here, so there is no
     // envelope to preserve and nothing is fabricated.
-    match store.create_note(principal, None, None).await {
-        Ok(record) => {
-            store.index_note(principal, &record.uuid, text).await;
-            format!("Saved: {text}")
-        }
+    match store
+        .create_indexed_note(principal, None, None, Some(text))
+        .await
+    {
+        Ok(_) => format!("Saved: {text}"),
         Err(_) => "The memory store could not be reached, so that was not saved.".to_string(),
+    }
+}
+
+/// Open a wearer envelope through the one configured authority.
+///
+/// `Err` is intentionally distinct from `Ok(None)`: an authoritative lookup
+/// failure must not be rendered as "nothing was saved". The local branch is
+/// retained solely for unit tests that do not construct a database directory.
+async fn open_tool_envelope(
+    context: &ToolContext,
+    data: &cosmos_crypto::EncryptedData,
+) -> Result<Option<Vec<u8>>, ()> {
+    if let Some(directory) = context.key_directory.as_ref() {
+        return directory.open(data).await.map_err(|error| {
+            tracing::warn!(
+                %error,
+                "authoritative channel-key lookup failed while reading wearer memory"
+            );
+        });
+    }
+    let Some(keys) = context.keys.as_ref() else {
+        return Ok(None);
+    };
+    match keys.open(data) {
+        Ok(plaintext) => Ok(Some(plaintext)),
+        Err(cosmos_crypto::CryptoError::UnknownKid(_))
+        | Err(cosmos_crypto::CryptoError::Aead)
+        | Err(cosmos_crypto::CryptoError::Envelope(_)) => Ok(None),
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                "local channel-key state failed while reading wearer memory"
+            );
+            Err(())
+        }
     }
 }
 
@@ -1827,9 +1867,12 @@ async fn recall_memory(
         return "No wearer is associated with this request, so nothing can be recalled."
             .to_string();
     };
-    let (Some(store), Some(keys)) = (context.store.as_ref(), context.keys.as_ref()) else {
+    let Some(store) = context.store.as_ref() else {
         return "No memory store is connected in this deployment.".to_string();
     };
+    if context.key_directory.is_none() && context.keys.is_none() {
+        return "No channel-key directory is connected in this deployment.".to_string();
+    }
     let window_requested = window.0.is_some() || window.1.is_some();
     if query.trim().is_empty() && !window_requested {
         return "No search terms were supplied.".to_string();
@@ -1863,16 +1906,23 @@ async fn recall_memory(
                             .as_ref()
                             .map(|i| i.kid.clone())
                             .unwrap_or_default();
-                        match keys
-                            .open(&cosmos_crypto::EncryptedData {
+                        match open_tool_envelope(
+                            context,
+                            &cosmos_crypto::EncryptedData {
                                 data: sealed.data.clone(),
                                 kid,
-                            })
-                            .ok()
-                            .and_then(|plain| String::from_utf8(plain).ok())
+                            },
+                        )
+                        .await
                         {
-                            Some(text) => text,
-                            None => continue,
+                            Ok(Some(plain)) => match String::from_utf8(plain) {
+                                Ok(text) => text,
+                                Err(_) => continue,
+                            },
+                            Ok(None) => continue,
+                            Err(()) => {
+                                return "The channel-key directory could not be reached, so saved notes could not be searched. Retry after the directory recovers.".to_string();
+                            }
                         }
                     }
                     None => continue,
@@ -1966,16 +2016,23 @@ async fn recall_memory(
             .as_ref()
             .map(|i| i.kid.clone())
             .unwrap_or_default();
-        match keys
-            .open(&cosmos_crypto::EncryptedData {
+        match open_tool_envelope(
+            context,
+            &cosmos_crypto::EncryptedData {
                 data: sealed.data.clone(),
                 kid,
-            })
-            .ok()
-            .and_then(|plaintext| String::from_utf8(plaintext).ok())
+            },
+        )
+        .await
         {
-            Some(text) => lines.push(format!("- {}", text.trim())),
-            None => unreadable += 1,
+            Ok(Some(plaintext)) => match String::from_utf8(plaintext) {
+                Ok(text) => lines.push(format!("- {}", text.trim())),
+                Err(_) => unreadable += 1,
+            },
+            Ok(None) => unreadable += 1,
+            Err(()) => {
+                return "The channel-key directory could not be reached, so saved notes could not be recalled. Retry after the directory recovers.".to_string();
+            }
         }
     }
     if lines.is_empty() {
@@ -2067,6 +2124,7 @@ mod tests {
         let context = ToolContext {
             principal: Some("V:01:D:test-pin:U:wearer".to_owned()),
             store: Some(crate::store::MemoryStore::shared()),
+            key_directory: None,
             keys: Some(Default::default()),
             ..Default::default()
         };
@@ -2089,6 +2147,56 @@ mod tests {
             "a date with no query must return what was saved in that range — the \
              schema promises it and the handler used to refuse it: {found:?}",
         );
+    }
+
+    #[tokio::test]
+    async fn recall_reports_authority_outage_instead_of_nothing_saved_and_retries() {
+        let principal = "wearer-directory-recall";
+        let kid = "directory-recall-key";
+        let key = [0x57; cosmos_crypto::AES_KEY_LEN];
+        let store: crate::store::SharedStore =
+            std::sync::Arc::new(crate::store::MemoryStore::default());
+        let directory = std::sync::Arc::new(crate::keydirectory::KeyDirectory::in_memory());
+        directory.put(kid, key).await.expect("seed authority");
+        let sealed =
+            cosmos_crypto::seal(kid, &key, b"the blue key is upstairs", b"").expect("seal note");
+        store
+            .create_note(
+                principal,
+                Some(cosmos_protocol::common::encryption::EncryptedData {
+                    encryption_information: Some(
+                        cosmos_protocol::common::encryption::EncryptionInformation {
+                            kid: kid.to_owned(),
+                        },
+                    ),
+                    data: sealed.data,
+                }),
+                None,
+            )
+            .await
+            .expect("store sealed note");
+        let context = ToolContext {
+            principal: Some(principal.to_owned()),
+            store: Some(store),
+            key_directory: Some(directory.clone()),
+            keys: None,
+            location: None,
+        };
+        let request = json!({ "on_or_after": "2020-01-01" }).to_string();
+
+        directory.fail_next(crate::keydirectory::DirectoryFault::Get);
+        let unavailable = execute_tool_with("recall_memory", &request, &context).await;
+        assert!(
+            unavailable.contains("could not be reached"),
+            "{unavailable}"
+        );
+        assert!(
+            !unavailable.contains("saved nothing") && !unavailable.contains("Nothing the wearer"),
+            "an authority outage must never be narrated as absence: {unavailable}"
+        );
+
+        let retried = execute_tool_with("recall_memory", &request, &context).await;
+        assert!(retried.contains("blue key"), "{retried}");
     }
 
     /// The civil-date arithmetic must be right, or a date search silently
@@ -2193,6 +2301,7 @@ mod tests {
         let context = ToolContext {
             principal: Some("V:01:D:test-pin:U:wearer".to_owned()),
             store: Some(crate::store::MemoryStore::shared()),
+            key_directory: None,
             keys: Some(Default::default()),
             location: None,
         };
@@ -2644,7 +2753,8 @@ mod tests {
     async fn recall_returns_the_wearers_own_saved_notes() {
         let store = crate::store::MemoryStore::shared();
         let keys: crate::keymaterial::SharedKeyMaterial = Default::default();
-        keys.insert("k".to_owned(), [4u8; cosmos_crypto::AES_KEY_LEN]);
+        keys.insert("k".to_owned(), [4u8; cosmos_crypto::AES_KEY_LEN])
+            .expect("insert test channel key");
 
         // The wearer saved a note; the server indexed what it could open.
         let sealed = keys
@@ -2672,6 +2782,7 @@ mod tests {
         let context = ToolContext {
             principal: Some("wearer-a".to_owned()),
             store: Some(store.clone()),
+            key_directory: None,
             keys: Some(keys.clone()),
             location: None,
         };
@@ -2711,6 +2822,7 @@ mod tests {
         let context = ToolContext {
             principal: Some(principal.to_owned()),
             store: Some(store.clone()),
+            key_directory: None,
             keys: Some(Default::default()),
             location: None,
         };
@@ -2789,6 +2901,7 @@ mod tests {
         let context = ToolContext {
             principal: Some(principal.to_owned()),
             store: Some(store),
+            key_directory: None,
             keys: Some(keys),
             location: None,
         };

@@ -26,40 +26,94 @@
  * to what the inspection observed. No second, weaker parser exists remotely.
  *
  * Size discipline: the server APK is over 200 MiB. No artifact is ever read
- * into memory on either side — local hashing streams, transfer is `scp`, and
- * the remote helper hashes in 1 MiB chunks. Artifact bytes never enter the
- * ssh payload, and nothing here is reachable from a Docker build context.
+ * into memory on either side — local hashing streams, transfer is a bounded
+ * resumable `rsync`, and the remote helper hashes in 1 MiB chunks. A dropped
+ * connection gets three attempts against the SAME path inside the transaction's
+ * hidden incoming directory, so useful already-landed blocks are retained and
+ * repaired between attempts. Artifact bytes never enter the ssh payload, and
+ * nothing here is reachable from a Docker build context.
+ *
+ * Security boundary: the deployment account is the trusted writer for this
+ * store. Nondumpable helpers keep transient keys and unnamed plaintext fds out
+ * of argv/env and ordinary peer procfs access, while no-follow dirfds, statx
+ * generations, content hashes, and atomic publication defeat hostile namespace
+ * races outside that account. Linux offers an unprivileged process no exclusive
+ * directory-name/ACK transaction against a continuously malicious process with
+ * the same UID and write authority; such a peer is therefore inside the trusted
+ * boundary and requires a dedicated deployment UID if it must be isolated.
  */
 
 import { spawn } from "node:child_process";
-import { createReadStream, createWriteStream } from "node:fs";
-import { lstat, mkdir, readFile, readdir, rm } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { lstat, mkdtemp, readFile, readdir, rmdir, unlink } from "node:fs/promises";
 import { createHash, randomBytes } from "node:crypto";
 import { isAbsolute, join, resolve } from "node:path";
-import { pipeline } from "node:stream/promises";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
-import { defaultOperatorPaths } from "./build.mjs";
+import { defaultOperatorPaths, reverifyPersistedHostedRelease } from "./build.mjs";
 import {
   canonicalPinReleaseManifestJson,
   parseCanonicalPinReleaseManifestDocument,
   parsePinReleaseHistory,
   parsePinReleaseJson,
 } from "./release.mjs";
+import {
+  OWN_CHILD_PROCESS_GROUP,
+  terminateTrackedProcess,
+  trackChildProcess,
+  withTrackedDeadline,
+} from "./bounded-process.mjs";
 
 const SELF_PATH = fileURLToPath(import.meta.url);
+const FIXED_BASH = "/usr/bin/bash";
+const FIXED_PYTHON = "/usr/bin/python3";
+const FIXED_SSH = "/usr/bin/ssh";
+const FIXED_RSYNC = "/usr/bin/rsync";
+
+function positiveToolEnvironment() {
+  const environment = {
+    HOME: isAbsolute(process.env.HOME ?? "") ? process.env.HOME : "/nonexistent",
+    PATH: "/usr/bin:/bin",
+    LANG: "C.UTF-8",
+    LC_ALL: "C.UTF-8",
+  };
+  for (const name of ["USER", "LOGNAME", "SSH_AUTH_SOCK"]) {
+    if (typeof process.env[name] === "string" && !process.env[name].includes("\0")) {
+      environment[name] = process.env[name];
+    }
+  }
+  return environment;
+}
 
 export const PIN_RELEASE_STORE_SCHEMA_VERSION = 1;
 export const MAX_STORE_DOCUMENT_BYTES = 1024 * 1024;
 export const MAX_REMOTE_REPORT_BYTES = 8 * 1024 * 1024;
+const MAX_FRAMED_DOCUMENT_BYTES = 8 * 1024 * 1024;
+const READY_TIMEOUT_MILLISECONDS = 30_000;
+const PROCESS_TIMEOUT_MILLISECONDS = 10 * 60_000;
+const PROTECTED_OPERATION_TIMEOUT_MILLISECONDS = 45 * 60_000;
+const RSYNC_TIMEOUT_MILLISECONDS = 45 * 60_000;
 /** Matches the production bind-mount source in platform/compose/production.yaml. */
 export const DEFAULT_REMOTE_RELEASE_ROOT = "/home/anders/ai-pin-revival/data/pin-releases";
 export const PAYLOAD_DELIMITER = "__REVIVAL_PIN_SHIP_PAYLOAD__";
+export const RSYNC_UPLOAD_ATTEMPTS = 3;
+export const RSYNC_UPLOAD_OPTIONS = Object.freeze([
+  "--quiet",
+  "--checksum",
+  "--partial",
+  "--no-whole-file",
+  "-s",
+  "--no-perms",
+  "--no-owner",
+  "--no-group",
+]);
 
 const RELEASE_ID_RE = /^[0-9a-f]{64}$/u;
 const SHA256_RE = /^[0-9a-f]{64}$/u;
-const REMOTE_NAME_RE = /^[A-Za-z0-9._@:-]+$/u;
+const REMOTE_NAME_RE = /^(?:[A-Za-z0-9._-]+@)?[A-Za-z0-9._-]+$/u;
 const STORE_DOCUMENTS = Object.freeze(["history.json", "current.json"]);
+const STAGING_COMPONENT_RE = /^[A-Za-z0-9._-]+$/u;
 
 export class PinReleaseShipError extends Error {
   constructor(code, message) {
@@ -182,6 +236,12 @@ function verifyStoreDocuments({
   }
 
   const manifest = parseCanonicalPinReleaseManifestDocument(currentSource);
+  if (manifest.schemaVersion !== 2 || manifest.authority === undefined) {
+    fail(
+      "hosted-attestation-required",
+      `${label} current release is an evidence-free candidate and cannot enter the authoritative ship path`,
+    );
+  }
   const canonical = canonicalPinReleaseManifestJson(manifest);
   if (canonical !== currentSource) {
     fail("current-noncanonical", `${label} current.json is not the canonical manifest document`);
@@ -233,10 +293,11 @@ function verifyStoreDocuments({
   });
 }
 
-/** Exactly `manifest.json` plus the five APKs, each pinned to its digest and size. */
+/** Exactly `manifest.json`, hosted evidence, and five APKs, all digest-pinned. */
 function verifyReleaseEntries({ manifest, canonical, entries, label }) {
   const expected = new Map([
     ["manifest.json", { size: Buffer.byteLength(canonical), sha256: sha256(canonical) }],
+    [manifest.authority.name, { size: manifest.authority.size, sha256: manifest.authority.sha256 }],
     ...manifest.artifacts.map((artifact) => [
       artifact.name,
       { size: artifact.size, sha256: artifact.sha256 },
@@ -284,6 +345,39 @@ function parseEntryDigests(value, label) {
     entries.set(name, Object.freeze({ size: descriptor.size, sha256: descriptor.sha256 }));
   }
   return entries;
+}
+
+function parseFilesystemAuthority(value, label) {
+  if (
+    !isRecord(value) ||
+    Object.keys(value).sort().join(",") !== "btime,dev,gid,ino,mntId,mode,uid" ||
+    typeof value.dev !== "string" ||
+    !/^(?:0|[1-9][0-9]*)$/u.test(value.dev) ||
+    typeof value.ino !== "string" ||
+    !/^(?:0|[1-9][0-9]*)$/u.test(value.ino) ||
+    typeof value.mntId !== "string" ||
+    !/^(?:0|[1-9][0-9]*)$/u.test(value.mntId) ||
+    typeof value.btime !== "string" ||
+    !/^(?:0|[1-9][0-9]*)\.[0-9]{9}$/u.test(value.btime) ||
+    !Number.isSafeInteger(value.uid) ||
+    value.uid < 0 ||
+    !Number.isSafeInteger(value.gid) ||
+    value.gid < 0 ||
+    !Number.isSafeInteger(value.mode) ||
+    value.mode < 0 ||
+    value.mode > 0o7777
+  ) {
+    fail("report-invalid", `${label} filesystem authority is malformed`);
+  }
+  return Object.freeze({
+    dev: value.dev,
+    ino: value.ino,
+    mntId: value.mntId,
+    btime: value.btime,
+    uid: value.uid,
+    gid: value.gid,
+    mode: value.mode,
+  });
 }
 
 /**
@@ -351,6 +445,16 @@ export function parseRemotePinReleaseStore(report, { label = "remote Pin release
   if (report.rootIsDirectory !== true) {
     fail("store-invalid", `${label} root is not a real directory`);
   }
+  const rootAuthority = parseFilesystemAuthority(report.rootAuthority, `${label} root`);
+  let releasesAuthority = null;
+  if (report.releasesState === "directory") {
+    releasesAuthority = parseFilesystemAuthority(
+      report.releasesAuthority,
+      `${label} immutable releases directory`,
+    );
+  } else if (report.releasesState !== "missing" || report.releasesAuthority !== null) {
+    fail("store-invalid", `${label} immutable releases path is not a real directory`);
+  }
 
   const documents = {};
   for (const name of STORE_DOCUMENTS) {
@@ -376,6 +480,7 @@ export function parseRemotePinReleaseStore(report, { label = "remote Pin release
 
   if (!isRecord(report.releases)) fail("report-invalid", `${label} release map is not an object`);
   const entriesByRelease = new Map();
+  const releaseAuthorities = new Map();
   for (const [releaseId, value] of Object.entries(report.releases)) {
     if (!RELEASE_ID_RE.test(releaseId)) {
       fail("report-invalid", `${label} reported a release identifier that is not a digest`);
@@ -384,6 +489,10 @@ export function parseRemotePinReleaseStore(report, { label = "remote Pin release
     if (!isRecord(value) || value.isDirectory !== true) {
       fail("store-invalid", `${label} release ${releaseId} is not a real directory`);
     }
+    releaseAuthorities.set(
+      releaseId,
+      parseFilesystemAuthority(value.authority, `${label} release ${releaseId}`),
+    );
     entriesByRelease.set(releaseId, parseEntryDigests(value.entries, `${label} release ${releaseId}`));
   }
 
@@ -397,6 +506,8 @@ export function parseRemotePinReleaseStore(report, { label = "remote Pin release
   return Object.freeze({
     root: typeof report.root === "string" ? report.root : "",
     entriesByRelease: Object.freeze(entriesByRelease),
+    releaseAuthorities: Object.freeze(releaseAuthorities),
+    authority: Object.freeze({ root: rootAuthority, releases: releasesAuthority }),
     ...verified,
   });
 }
@@ -481,8 +592,24 @@ export function createPinReleaseShipPlan({ local, remote }) {
               source: join(local.releaseDirectory, artifact.name),
             }),
           ),
+          Object.freeze({
+            name: local.current.manifest.authority.name,
+            size: local.current.manifest.authority.size,
+            sha256: local.current.manifest.authority.sha256,
+            source: join(local.releaseDirectory, local.current.manifest.authority.name),
+          }),
         ])
       : Object.freeze([]);
+  const entries = Object.freeze(
+    [...local.entries.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([name, descriptor]) => Object.freeze({ name, ...descriptor })),
+  );
+  const authority = Object.freeze({
+    root: remote.authority.root,
+    releases: remote.authority.releases,
+    retainedRelease: remote.releaseAuthorities.get(target.releaseId) ?? null,
+  });
 
   return Object.freeze({
     schemaVersion: 1,
@@ -490,9 +617,11 @@ export function createPinReleaseShipPlan({ local, remote }) {
     version: target.version,
     versionCode: target.versionCode,
     manifestSha256: target.manifestSha256,
-    /** True when the server already serves exactly this release; apply is a no-op. */
+    /** True when the server already serves it; confirmation only replays pointer durability. */
     alreadyCurrent,
     uploads,
+    entries,
+    authority,
     uploadBytes: uploads.reduce((total, upload) => total + upload.size, 0),
     expectedHistorySha256: remote.historyDocument === null ? null : sha256(remote.historyDocument),
     expectedCurrentSha256: remote.current === null ? null : remote.current.sha256,
@@ -501,18 +630,13 @@ export function createPinReleaseShipPlan({ local, remote }) {
   });
 }
 
-export function createApplyPayload(plan, incomingName) {
+export function createApplyPayload(plan, incomingName, authority = plan.authority) {
   return `${JSON.stringify({
     schemaVersion: 1,
     releaseId: plan.releaseId,
     incoming: plan.uploads.length === 0 ? null : incomingName,
-    entries: plan.uploads.length === 0
-      ? null
-      : plan.uploads.map((upload) => ({
-          name: upload.name,
-          size: upload.size,
-          sha256: upload.sha256,
-        })),
+    entries: plan.entries,
+    authority,
     expectedHistorySha256: plan.expectedHistorySha256,
     expectedCurrentSha256: plan.expectedCurrentSha256,
     historyBase64: Buffer.from(plan.historyDocument, "utf8").toString("base64"),
@@ -524,12 +648,1610 @@ export function createApplyPayload(plan, incomingName) {
 
 const REMOTE_PRELUDE = `set -euo pipefail
 umask 077
+PATH=/usr/bin:/bin
+export PATH
 `;
+
+/**
+ * The staging boundary used before rsync and by cleanup.
+ *
+ * Every absolute directory component is opened relative to the previously
+ * verified directory descriptor with O_DIRECTORY|O_NOFOLLOW. Creation and
+ * recursive removal then use only dir-fd-relative operations. In particular,
+ * cleanup never sends a pathname to a recursive shell remover: if the store
+ * root or `releases` is replaced by a symlink, this helper refuses it rather
+ * than traversing into the link target.
+ */
+export const REMOTE_STAGING_SCRIPT = `${REMOTE_PRELUDE}/usr/bin/python3 -I -B - "$@" <<'__REVIVAL_PIN_STAGING__'
+import base64, ctypes, hashlib, hmac, json, os, re, stat, sys
+
+COMPONENT = re.compile(r"^[A-Za-z0-9._-]+$")
+os.umask(0o077)
+
+
+def refuse(message):
+    sys.stderr.write("pin-release-ship: " + message + "\\n")
+    raise SystemExit(70)
+
+
+try:
+    _libc = ctypes.CDLL(None, use_errno=True)
+    _prctl = _libc.prctl
+    _prctl.restype = ctypes.c_int
+except (AttributeError, OSError):
+    refuse("host lacks required process nondumpability support")
+
+
+def require_nondumpable():
+    if _prctl(3, 0, 0, 0, 0) != 0:
+        refuse("process lost its nondumpable plaintext boundary")
+
+
+def read_framed_document(maximum, label):
+    require_nondumpable()
+    sys.stdout.write("READY\\n")
+    sys.stdout.flush()
+    length_line = sys.stdin.buffer.readline(33)
+    if (
+        not length_line.endswith(b"\\n")
+        or len(length_line) <= 1
+        or not length_line[:-1].isdigit()
+        or (len(length_line) > 2 and length_line.startswith(b"0"))
+    ):
+        refuse(label + " length is malformed")
+    length = int(length_line[:-1])
+    if length > maximum:
+        refuse(label + " exceeds its size bound")
+    document = sys.stdin.buffer.read(length)
+    if len(document) != length or sys.stdin.buffer.read(1) != b"":
+        refuse(label + " framing is incomplete")
+    require_nondumpable()
+    return document
+
+
+if _prctl(4, 0, 0, 0, 0) != 0:
+    refuse("process cannot establish its nondumpable plaintext boundary")
+require_nondumpable()
+
+
+if (
+    not hasattr(os, "O_DIRECTORY")
+    or not hasattr(os, "O_NOFOLLOW")
+    or not hasattr(os, "O_TMPFILE")
+    or not os.path.isdir("/proc/self/fd")
+):
+    refuse("host lacks required unnamed-file or no-follow descriptor support")
+
+
+DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+if hasattr(os, "O_CLOEXEC"):
+    DIRECTORY_FLAGS |= os.O_CLOEXEC
+
+
+def safe_component(value, label):
+    if (
+        not isinstance(value, str)
+        or value in ("", ".", "..")
+        or len(os.fsencode(value)) > 255
+        or COMPONENT.fullmatch(value) is None
+    ):
+        refuse(label + " is not a safe path component")
+    return value
+
+
+def open_absolute_directory(path, label):
+    if not isinstance(path, str) or not path.startswith("/") or os.path.normpath(path) != path:
+        refuse(label + " is not a canonical absolute path")
+    try:
+        descriptor = os.open("/", DIRECTORY_FLAGS)
+    except OSError:
+        refuse("filesystem root cannot be opened without following links")
+    try:
+        for component in path.split("/")[1:]:
+            try:
+                child = os.open(component, DIRECTORY_FLAGS, dir_fd=descriptor)
+            except OSError:
+                refuse(label + " cannot be opened without following links")
+            os.close(descriptor)
+            descriptor = child
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def linked_info(parent, name):
+    try:
+        return os.stat(name, dir_fd=parent, follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+
+
+def same_inode(left, right):
+    return (left.st_dev, left.st_ino) == (right.st_dev, right.st_ino)
+
+
+class StatxTimestamp(ctypes.Structure):
+    _fields_ = [
+        ("seconds", ctypes.c_longlong),
+        ("nanoseconds", ctypes.c_uint),
+        ("reserved", ctypes.c_int),
+    ]
+
+
+class Statx(ctypes.Structure):
+    _fields_ = [
+        ("mask", ctypes.c_uint), ("block_size", ctypes.c_uint),
+        ("attributes", ctypes.c_ulonglong), ("nlink", ctypes.c_uint),
+        ("uid", ctypes.c_uint), ("gid", ctypes.c_uint),
+        ("mode", ctypes.c_ushort), ("spare0", ctypes.c_ushort),
+        ("ino", ctypes.c_ulonglong), ("size", ctypes.c_ulonglong),
+        ("blocks", ctypes.c_ulonglong), ("attributes_mask", ctypes.c_ulonglong),
+        ("atime", StatxTimestamp), ("btime", StatxTimestamp),
+        ("ctime", StatxTimestamp), ("mtime", StatxTimestamp),
+        ("rdev_major", ctypes.c_uint), ("rdev_minor", ctypes.c_uint),
+        ("dev_major", ctypes.c_uint), ("dev_minor", ctypes.c_uint),
+        ("mnt_id", ctypes.c_ulonglong), ("spare2", ctypes.c_ulonglong * 13),
+    ]
+
+
+try:
+    _statx = _libc.statx
+    _statx.argtypes = [
+        ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_uint, ctypes.POINTER(Statx)
+    ]
+    _statx.restype = ctypes.c_int
+except AttributeError:
+    refuse("host lacks required statx generation support")
+
+
+def identity(metadata, descriptor):
+    generation = Statx()
+    required = 0x800 | 0x1000
+    if _statx(descriptor, b"", 0x1000 | 0x800, 0x7ff | required, ctypes.byref(generation)) != 0:
+        refuse("filesystem authority generation cannot be read")
+    if (
+        generation.mask & required != required
+        or generation.mnt_id == 0
+        or (generation.btime.seconds == 0 and generation.btime.nanoseconds == 0)
+        or generation.btime.nanoseconds >= 1000000000
+        or generation.ino != metadata.st_ino
+        or generation.uid != metadata.st_uid
+        or generation.gid != metadata.st_gid
+        or generation.mode != metadata.st_mode
+        or generation.dev_major != os.major(metadata.st_dev)
+        or generation.dev_minor != os.minor(metadata.st_dev)
+    ):
+        refuse("filesystem authority generation is unavailable or inconsistent")
+    return {
+        "dev": str(metadata.st_dev),
+        "ino": str(metadata.st_ino),
+        "mntId": str(generation.mnt_id),
+        "btime": str(generation.btime.seconds) + "." + str(generation.btime.nanoseconds).zfill(9),
+        "uid": metadata.st_uid,
+        "gid": metadata.st_gid,
+        "mode": stat.S_IMODE(metadata.st_mode),
+    }
+
+
+def require_identity(metadata, expected, label, descriptor):
+    if not isinstance(expected, dict) or identity(metadata, descriptor) != expected:
+        refuse(label + " differs from the inspected filesystem authority")
+
+
+def open_named_directory(parent, name, label):
+    linked = linked_info(parent, name)
+    if linked is None or stat.S_ISLNK(linked.st_mode) or not stat.S_ISDIR(linked.st_mode):
+        refuse(label + " is not a real directory")
+    try:
+        descriptor = os.open(name, DIRECTORY_FLAGS, dir_fd=parent)
+    except OSError:
+        refuse(label + " cannot be opened without following links")
+    opened = os.fstat(descriptor)
+    if not stat.S_ISDIR(opened.st_mode) or not same_inode(linked, opened):
+        os.close(descriptor)
+        refuse(label + " changed while it was opened")
+    return descriptor
+
+
+def open_releases_directory(path, create, expected):
+    parent_path, name = os.path.split(path)
+    if name != "releases" or parent_path in ("", "/"):
+        refuse("immutable releases directory has an unexpected path")
+    parent = open_absolute_directory(parent_path, "release store root")
+    try:
+        require_identity(os.fstat(parent), expected.get("root"), "release store root", parent)
+        existing = linked_info(parent, name)
+        expected_releases = expected.get("releases")
+        if existing is None:
+            if not create:
+                refuse("immutable releases directory is missing")
+            if expected_releases is not None:
+                refuse("immutable releases directory disappeared after inspection")
+            try:
+                os.mkdir(name, 0o700, dir_fd=parent)
+            except OSError:
+                refuse("immutable releases directory cannot be created safely")
+            os.fsync(parent)
+        elif expected_releases is None:
+            refuse("immutable releases directory appeared after inspection")
+        descriptor = open_named_directory(parent, name, "immutable releases directory")
+        if expected_releases is not None:
+            require_identity(
+                os.fstat(descriptor), expected_releases, "immutable releases directory", descriptor
+            )
+        return descriptor, identity(os.fstat(parent), parent)
+    finally:
+        os.close(parent)
+
+
+def require_mode(metadata, expected, label):
+    if stat.S_IMODE(metadata.st_mode) != expected:
+        refuse(label + " has unsafe permissions")
+
+
+def validate_upload_target(releases, incoming_name, filename, expected_target):
+    incoming = open_named_directory(releases, incoming_name, "incoming release directory")
+    try:
+        require_mode(os.fstat(incoming), 0o700, "incoming release directory")
+        # Re-prove the name after open so a concurrent rename cannot make this
+        # check bless a descriptor different from the pathname rsync will use.
+        linked = linked_info(releases, incoming_name)
+        if linked is None or not same_inode(linked, os.fstat(incoming)):
+            refuse("incoming release directory changed before upload")
+
+        target = linked_info(incoming, filename)
+        if expected_target is None:
+            if target is not None:
+                refuse("upload target appeared before atomic publication")
+            return
+        if target is None:
+            refuse("retained upload target is missing")
+        if stat.S_ISLNK(target.st_mode) or not stat.S_ISREG(target.st_mode) or target.st_nlink != 1:
+            refuse("retained upload target is not one regular file")
+        flags = os.O_RDONLY | os.O_NOFOLLOW
+        if hasattr(os, "O_CLOEXEC"):
+            flags |= os.O_CLOEXEC
+        try:
+            target_fd = os.open(filename, flags, dir_fd=incoming)
+        except OSError:
+            refuse("retained upload target cannot be opened without following links")
+        try:
+            opened = os.fstat(target_fd)
+            if not same_inode(target, opened):
+                refuse("retained upload target changed while it was opened")
+            require_mode(opened, 0o600, "retained upload target")
+            require_identity(opened, expected_target, "retained upload target", target_fd)
+        finally:
+            os.close(target_fd)
+    finally:
+        os.close(incoming)
+
+
+def claim_upload_target(
+    releases,
+    incoming_name,
+    filename,
+    sealed_name,
+    expected_size,
+    expected_sha256,
+    resume_key,
+):
+    incoming = open_named_directory(releases, incoming_name, "incoming release directory")
+    try:
+        target = linked_info(incoming, filename)
+        if target is None:
+            if (
+                not hasattr(os, "O_TMPFILE")
+                or not os.path.isdir("/proc/self/fd")
+            ):
+                refuse("host lacks required unnamed-file publication support")
+            sealed = linked_info(incoming, sealed_name)
+            if (
+                sealed is None
+                or stat.S_ISLNK(sealed.st_mode)
+                or not stat.S_ISREG(sealed.st_mode)
+                or sealed.st_nlink != 1
+                or stat.S_IMODE(sealed.st_mode) != 0o600
+            ):
+                refuse("encrypted rsync result is not one mode-0600 file")
+            read_flags = os.O_RDONLY | os.O_NOFOLLOW
+            work_flags = os.O_RDWR | os.O_TMPFILE
+            if hasattr(os, "O_CLOEXEC"):
+                read_flags |= os.O_CLOEXEC
+                work_flags |= os.O_CLOEXEC
+            checkpoint = os.open(sealed_name, read_flags, dir_fd=incoming)
+            require_nondumpable()
+            work = os.open(".", work_flags, 0o600, dir_fd=incoming)
+            try:
+                opened_sealed = os.fstat(checkpoint)
+                opened_work = os.fstat(work)
+                if (
+                    opened_sealed.st_nlink != 1
+                    or not same_inode(sealed, opened_sealed)
+                    or not stat.S_ISREG(opened_work.st_mode)
+                    or opened_work.st_nlink != 0
+                ):
+                    refuse("encrypted rsync result changed while it was opened")
+                magic = b"PINRESUME1\\x00"
+                header_size = len(magic) + 16 + 8
+                header = os.pread(checkpoint, header_size, 0)
+                if (
+                    len(header) != header_size
+                    or not hmac.compare_digest(header[:len(magic)], magic)
+                    or int.from_bytes(header[-8:], "big") != expected_size
+                    or opened_sealed.st_size != header_size + expected_size + 32
+                ):
+                    refuse("encrypted rsync result is incomplete")
+                nonce = header[len(magic):len(magic) + 16]
+                verifier = hmac.new(resume_key, header, hashlib.sha256)
+                digest = hashlib.sha256()
+                position = 0
+                index = 0
+                while position < expected_size:
+                    cipher = os.pread(
+                        checkpoint,
+                        min(1024 * 1024, expected_size - position),
+                        header_size + position,
+                    )
+                    if not cipher:
+                        refuse("encrypted rsync result became short")
+                    verifier.update(cipher)
+                    mask = hashlib.shake_256(
+                        b"revival-pin-resume-stream\\x00"
+                        + resume_key
+                        + nonce
+                        + index.to_bytes(8, "big")
+                    ).digest(len(cipher))
+                    plain = (
+                        int.from_bytes(cipher, "little") ^ int.from_bytes(mask, "little")
+                    ).to_bytes(len(cipher), "little")
+                    digest.update(plain)
+                    written = 0
+                    while written < len(plain):
+                        require_nondumpable()
+                        count = os.pwrite(work, plain[written:], position + written)
+                        if not isinstance(count, int) or count <= 0:
+                            raise OSError("unnamed upload write made no progress")
+                        written += count
+                    position += len(cipher)
+                    index += 1
+                tag = os.pread(checkpoint, 32, header_size + expected_size)
+                if (
+                    not hmac.compare_digest(verifier.digest(), tag)
+                    or digest.hexdigest() != expected_sha256
+                ):
+                    refuse("encrypted rsync result fails its pinned digest")
+                linked_sealed = linked_info(incoming, sealed_name)
+                if (
+                    linked_sealed is None
+                    or linked_sealed.st_nlink != 1
+                    or os.fstat(checkpoint).st_nlink != 1
+                    or not same_inode(linked_sealed, opened_sealed)
+                ):
+                    refuse("encrypted rsync result changed during authentication")
+                os.ftruncate(work, expected_size)
+                os.fchmod(work, 0o600)
+                os.fsync(work)
+                if os.fstat(work).st_nlink != 0 or linked_info(incoming, filename) is not None:
+                    refuse("upload target appeared before no-overwrite publication")
+                require_nondumpable()
+                try:
+                    os.link(
+                        "/proc/self/fd/" + str(work),
+                        filename,
+                        dst_dir_fd=incoming,
+                        follow_symlinks=True,
+                    )
+                except OSError:
+                    refuse("upload target cannot be linked atomically without replacement")
+                published = linked_info(incoming, filename)
+                if (
+                    published is None
+                    or published.st_nlink != 1
+                    or os.fstat(work).st_nlink != 1
+                    or not same_inode(published, os.fstat(work))
+                ):
+                    refuse("upload target changed during atomic linking")
+                os.fsync(incoming)
+            finally:
+                os.close(work)
+                os.close(checkpoint)
+
+        target = linked_info(incoming, filename)
+        if (
+            target is None
+            or stat.S_ISLNK(target.st_mode)
+            or not stat.S_ISREG(target.st_mode)
+            or target.st_nlink != 1
+            or stat.S_IMODE(target.st_mode) != 0o600
+        ):
+            refuse("published upload target is not one mode-0600 file")
+        flags = os.O_RDONLY | os.O_NOFOLLOW
+        if hasattr(os, "O_CLOEXEC"):
+            flags |= os.O_CLOEXEC
+        descriptor = os.open(filename, flags, dir_fd=incoming)
+        try:
+            opened = os.fstat(descriptor)
+            if opened.st_nlink != 1 or not same_inode(target, opened):
+                refuse("published upload target changed while it was opened")
+            digest = hashlib.sha256()
+            size = 0
+            while True:
+                chunk = os.read(descriptor, 1024 * 1024)
+                if not chunk:
+                    break
+                size += len(chunk)
+                digest.update(chunk)
+            linked = linked_info(incoming, filename)
+            if linked is None or linked.st_nlink != 1 or not same_inode(linked, opened):
+                refuse("published upload target changed while it was claimed")
+            if size != expected_size or digest.hexdigest() != expected_sha256:
+                refuse("published upload target differs from its content authority")
+            sealed = linked_info(incoming, sealed_name)
+            if sealed is not None:
+                if stat.S_ISLNK(sealed.st_mode) or not stat.S_ISREG(sealed.st_mode):
+                    refuse("encrypted rsync checkpoint changed before cleanup")
+                os.unlink(sealed_name, dir_fd=incoming)
+                os.fsync(incoming)
+            sys.stdout.write(json.dumps(identity(opened, descriptor), sort_keys=True, separators=(",", ":")) + "\\n")
+        finally:
+            os.close(descriptor)
+    finally:
+        os.close(incoming)
+
+
+def remove_contents(directory):
+    for name in os.listdir(directory):
+        metadata = linked_info(directory, name)
+        if metadata is None:
+            continue
+        if stat.S_ISDIR(metadata.st_mode) and not stat.S_ISLNK(metadata.st_mode):
+            child = open_named_directory(directory, name, "staged child directory")
+            opened = os.fstat(child)
+            try:
+                remove_contents(child)
+                os.fsync(child)
+            finally:
+                os.close(child)
+            linked = linked_info(directory, name)
+            if linked is None:
+                continue
+            if not same_inode(linked, opened):
+                refuse("staged child directory changed during cleanup")
+            os.rmdir(name, dir_fd=directory)
+        else:
+            # unlinkat relative to the held directory does not follow a leaf
+            # symlink, so even an unexpected rsync temporary stays confined.
+            try:
+                os.unlink(name, dir_fd=directory)
+            except FileNotFoundError:
+                pass
+
+
+if len(sys.argv) != 5:
+    refuse("staging helper arguments are incomplete")
+action = sys.argv[1]
+releases_path = sys.argv[2]
+incoming_name = safe_component(sys.argv[3], "incoming directory name")
+if not incoming_name.startswith(".incoming-"):
+    refuse("incoming directory name is outside the transaction namespace")
+try:
+    expected = json.loads(base64.b64decode(sys.argv[4], validate=True).decode("utf-8"))
+except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
+    refuse("staging filesystem authority is malformed")
+if not isinstance(expected, dict):
+    refuse("staging filesystem authority has an unexpected shape")
+
+releases, root_identity = open_releases_directory(releases_path, action == "create", expected)
+try:
+    if action == "create":
+        if linked_info(releases, incoming_name) is not None:
+            refuse("incoming release directory already exists")
+        try:
+            os.mkdir(incoming_name, 0o700, dir_fd=releases)
+        except OSError:
+            refuse("incoming release directory cannot be created safely")
+        incoming = open_named_directory(releases, incoming_name, "incoming release directory")
+        targets = {}
+        incoming_identity = None
+        try:
+            os.fchmod(incoming, 0o700)
+            filenames = expected.get("filenames")
+            if (
+                not isinstance(filenames, list)
+                or len(filenames) == 0
+                or len(set(filenames)) != len(filenames)
+            ):
+                refuse("incoming target inventory is malformed")
+            for filename in filenames:
+                filename = safe_component(filename, "upload filename")
+                targets[filename] = None
+            os.fsync(incoming)
+            incoming_identity = identity(os.fstat(incoming), incoming)
+        finally:
+            os.close(incoming)
+        os.fsync(releases)
+        sys.stdout.write(json.dumps({
+            "root": root_identity,
+            "releases": identity(os.fstat(releases), releases),
+            "incoming": incoming_identity,
+            "targets": targets,
+        }, sort_keys=True, separators=(",", ":")) + "\\n")
+    elif action == "validate":
+        filename = safe_component(expected.get("filename"), "upload filename")
+        require_identity(os.fstat(releases), expected.get("releases"), "immutable releases directory", releases)
+        incoming = open_named_directory(releases, incoming_name, "incoming release directory")
+        try:
+            require_identity(os.fstat(incoming), expected.get("incoming"), "incoming release directory", incoming)
+        finally:
+            os.close(incoming)
+        targets = expected.get("targets")
+        if not isinstance(targets, dict) or filename not in targets:
+            refuse("upload target authority is missing")
+        validate_upload_target(releases, incoming_name, filename, targets[filename])
+    elif action == "claim":
+        filename = safe_component(expected.get("filename"), "upload filename")
+        sealed_name = safe_component(expected.get("sealedName"), "encrypted rsync filename")
+        expected_size = expected.get("size")
+        expected_sha256 = expected.get("sha256")
+        try:
+            resume_key = bytes.fromhex(
+                read_framed_document(64, "upload resume authority").decode("ascii")
+            )
+        except (UnicodeDecodeError, ValueError):
+            refuse("upload resume authority is malformed")
+        process_metadata = (
+            open("/proc/self/cmdline", "rb").read()
+            + b"\\x00".join(
+                os.fsencode(key) + b"=" + os.fsencode(value)
+                for key, value in os.environ.items()
+            )
+        )
+        if resume_key.hex().encode("ascii") in process_metadata:
+            refuse("upload resume authority escaped into process metadata")
+        canonical_sealed = (
+            ".sealed-" + hashlib.sha256(filename.encode("utf-8")).hexdigest()[:16] + ".resume"
+        )
+        if (
+            not isinstance(expected_size, int)
+            or isinstance(expected_size, bool)
+            or expected_size < 0
+            or not isinstance(expected_sha256, str)
+            or re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None
+            or len(resume_key) != 32
+            or sealed_name != canonical_sealed
+        ):
+            refuse("upload content authority is malformed")
+        require_identity(os.fstat(releases), expected.get("releases"), "immutable releases directory", releases)
+        incoming = open_named_directory(releases, incoming_name, "incoming release directory")
+        try:
+            require_identity(os.fstat(incoming), expected.get("incoming"), "incoming release directory", incoming)
+        finally:
+            os.close(incoming)
+        targets = expected.get("targets")
+        if not isinstance(targets, dict) or targets.get(filename, False) is not None:
+            refuse("upload target is not authorized for one no-overwrite publication")
+        claim_upload_target(
+            releases,
+            incoming_name,
+            filename,
+            sealed_name,
+            expected_size,
+            expected_sha256,
+            resume_key,
+        )
+    elif action == "remove":
+        require_identity(os.fstat(releases), expected.get("releases"), "immutable releases directory", releases)
+        metadata = linked_info(releases, incoming_name)
+        if metadata is not None:
+            incoming = open_named_directory(releases, incoming_name, "incoming release directory")
+            require_identity(os.fstat(incoming), expected.get("incoming"), "incoming release directory", incoming)
+            opened = os.fstat(incoming)
+            try:
+                remove_contents(incoming)
+                os.fsync(incoming)
+            finally:
+                os.close(incoming)
+            linked = linked_info(releases, incoming_name)
+            if linked is None:
+                pass
+            elif not same_inode(linked, opened):
+                refuse("incoming release directory changed during cleanup")
+            else:
+                os.rmdir(incoming_name, dir_fd=releases)
+                os.fsync(releases)
+    else:
+        refuse("unknown staging helper action")
+finally:
+    os.close(releases)
+__REVIVAL_PIN_STAGING__
+`;
+
+/** The `--local` equivalent of the remote receiver: one held-fd operation. */
+export const LOCAL_UPLOAD_SCRIPT = `${REMOTE_PRELUDE}/usr/bin/python3 -I -B - "$@" <<'__REVIVAL_PIN_LOCAL_UPLOAD__'
+import base64, ctypes, hashlib, hmac, json, os, re, secrets, stat, sys
+
+CHUNK = 1024 * 1024
+MAGIC = b"PINRESUME1\\x00"
+os.umask(0o077)
+COMPONENT = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def refuse(message):
+    sys.stderr.write("pin-release-ship: " + message + "\\n")
+    raise SystemExit(70)
+
+
+try:
+    _libc = ctypes.CDLL(None, use_errno=True)
+    _prctl = _libc.prctl
+    _prctl.restype = ctypes.c_int
+except (AttributeError, OSError):
+    refuse("host lacks required process nondumpability support")
+
+
+def require_nondumpable():
+    if _prctl(3, 0, 0, 0, 0) != 0:
+        refuse("process lost its nondumpable plaintext boundary")
+
+
+def read_framed_document(maximum, label):
+    require_nondumpable()
+    sys.stdout.write("READY\\n")
+    sys.stdout.flush()
+    length_line = sys.stdin.buffer.readline(33)
+    if (
+        not length_line.endswith(b"\\n")
+        or len(length_line) <= 1
+        or not length_line[:-1].isdigit()
+        or (len(length_line) > 2 and length_line.startswith(b"0"))
+    ):
+        refuse(label + " length is malformed")
+    length = int(length_line[:-1])
+    if length > maximum:
+        refuse(label + " exceeds its size bound")
+    document = sys.stdin.buffer.read(length)
+    if len(document) != length or sys.stdin.buffer.read(1) != b"":
+        refuse(label + " framing is incomplete")
+    require_nondumpable()
+    return document
+
+
+if _prctl(4, 0, 0, 0, 0) != 0:
+    refuse("process cannot establish its nondumpable plaintext boundary")
+require_nondumpable()
+
+
+if (
+    not hasattr(os, "O_DIRECTORY")
+    or not hasattr(os, "O_NOFOLLOW")
+    or not hasattr(os, "O_TMPFILE")
+    or not os.path.isdir("/proc/self/fd")
+):
+    refuse("host lacks required unnamed-file or no-follow descriptor support")
+
+
+DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+if hasattr(os, "O_CLOEXEC"):
+    DIRECTORY_FLAGS |= os.O_CLOEXEC
+
+
+def safe_component(value, label):
+    if (
+        not isinstance(value, str)
+        or value in ("", ".", "..")
+        or len(os.fsencode(value)) > 255
+        or COMPONENT.fullmatch(value) is None
+    ):
+        refuse(label + " is not a safe path component")
+    return value
+
+
+def same_inode(left, right):
+    return (left.st_dev, left.st_ino) == (right.st_dev, right.st_ino)
+
+
+class StatxTimestamp(ctypes.Structure):
+    _fields_ = [
+        ("seconds", ctypes.c_longlong),
+        ("nanoseconds", ctypes.c_uint),
+        ("reserved", ctypes.c_int),
+    ]
+
+
+class Statx(ctypes.Structure):
+    _fields_ = [
+        ("mask", ctypes.c_uint), ("block_size", ctypes.c_uint),
+        ("attributes", ctypes.c_ulonglong), ("nlink", ctypes.c_uint),
+        ("uid", ctypes.c_uint), ("gid", ctypes.c_uint),
+        ("mode", ctypes.c_ushort), ("spare0", ctypes.c_ushort),
+        ("ino", ctypes.c_ulonglong), ("size", ctypes.c_ulonglong),
+        ("blocks", ctypes.c_ulonglong), ("attributes_mask", ctypes.c_ulonglong),
+        ("atime", StatxTimestamp), ("btime", StatxTimestamp),
+        ("ctime", StatxTimestamp), ("mtime", StatxTimestamp),
+        ("rdev_major", ctypes.c_uint), ("rdev_minor", ctypes.c_uint),
+        ("dev_major", ctypes.c_uint), ("dev_minor", ctypes.c_uint),
+        ("mnt_id", ctypes.c_ulonglong), ("spare2", ctypes.c_ulonglong * 13),
+    ]
+
+
+try:
+    _statx = _libc.statx
+    _statx.argtypes = [
+        ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_uint, ctypes.POINTER(Statx)
+    ]
+    _statx.restype = ctypes.c_int
+except AttributeError:
+    refuse("host lacks required statx generation support")
+
+
+def identity(metadata, descriptor):
+    generation = Statx()
+    required = 0x800 | 0x1000
+    if _statx(descriptor, b"", 0x1000 | 0x800, 0x7ff | required, ctypes.byref(generation)) != 0:
+        refuse("filesystem authority generation cannot be read")
+    if (
+        generation.mask & required != required
+        or generation.mnt_id == 0
+        or (generation.btime.seconds == 0 and generation.btime.nanoseconds == 0)
+        or generation.btime.nanoseconds >= 1000000000
+        or generation.ino != metadata.st_ino
+        or generation.uid != metadata.st_uid
+        or generation.gid != metadata.st_gid
+        or generation.mode != metadata.st_mode
+        or generation.dev_major != os.major(metadata.st_dev)
+        or generation.dev_minor != os.minor(metadata.st_dev)
+    ):
+        refuse("filesystem authority generation is unavailable or inconsistent")
+    return {
+        "dev": str(metadata.st_dev),
+        "ino": str(metadata.st_ino),
+        "mntId": str(generation.mnt_id),
+        "btime": str(generation.btime.seconds) + "." + str(generation.btime.nanoseconds).zfill(9),
+        "uid": metadata.st_uid,
+        "gid": metadata.st_gid,
+        "mode": stat.S_IMODE(metadata.st_mode),
+    }
+
+
+def require_identity(metadata, expected, label, descriptor):
+    if not isinstance(expected, dict) or identity(metadata, descriptor) != expected:
+        refuse(label + " differs from the staged filesystem authority")
+
+
+def linked_info(parent, name):
+    try:
+        return os.stat(name, dir_fd=parent, follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+
+
+def open_absolute_directory(path, label):
+    if not isinstance(path, str) or not path.startswith("/") or os.path.normpath(path) != path:
+        refuse(label + " is not a canonical absolute path")
+    descriptor = os.open("/", DIRECTORY_FLAGS)
+    try:
+        for component in path.split("/")[1:]:
+            try:
+                child = os.open(component, DIRECTORY_FLAGS, dir_fd=descriptor)
+            except OSError:
+                refuse(label + " cannot be opened without following links")
+            os.close(descriptor)
+            descriptor = child
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def open_named_directory(parent, name, label):
+    linked = linked_info(parent, name)
+    if linked is None or stat.S_ISLNK(linked.st_mode) or not stat.S_ISDIR(linked.st_mode):
+        refuse(label + " is not a real directory")
+    descriptor = os.open(name, DIRECTORY_FLAGS, dir_fd=parent)
+    opened = os.fstat(descriptor)
+    if not same_inode(linked, opened):
+        os.close(descriptor)
+        refuse(label + " changed while it was opened")
+    return descriptor
+
+
+def write_at(descriptor, data, offset):
+    view = memoryview(data)
+    written = 0
+    while written < len(view):
+        require_nondumpable()
+        count = os.pwrite(descriptor, view[written:], offset + written)
+        if not isinstance(count, int) or count <= 0:
+            raise OSError("local upload write made no progress")
+        written += count
+
+
+def open_tmpfile(directory, label):
+    require_nondumpable()
+    flags = os.O_RDWR | os.O_TMPFILE
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    try:
+        descriptor = os.open(".", flags, 0o600, dir_fd=directory)
+    except OSError:
+        refuse(label + " cannot create an unnamed staging inode")
+    opened = os.fstat(descriptor)
+    if not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 0:
+        os.close(descriptor)
+        refuse(label + " did not create one unnamed regular inode")
+    return descriptor
+
+
+def link_tmpfile(descriptor, directory, name, label):
+    require_nondumpable()
+    if os.fstat(descriptor).st_nlink != 0 or linked_info(directory, name) is not None:
+        refuse(label + " is no longer an unlinked no-overwrite publication")
+    try:
+        os.link(
+            "/proc/self/fd/" + str(descriptor),
+            name,
+            dst_dir_fd=directory,
+            follow_symlinks=True,
+        )
+    except OSError:
+        refuse(label + " cannot be linked atomically without replacement")
+    linked = linked_info(directory, name)
+    opened = os.fstat(descriptor)
+    if linked is None or linked.st_nlink != 1 or opened.st_nlink != 1 or not same_inode(linked, opened):
+        refuse(label + " changed during atomic linking")
+
+
+def xor_chunk(data, key, nonce, index):
+    mask = hashlib.shake_256(
+        b"revival-pin-resume-stream\\x00" + key + nonce + index.to_bytes(8, "big")
+    ).digest(len(data))
+    return (
+        int.from_bytes(data, "little") ^ int.from_bytes(mask, "little")
+    ).to_bytes(len(data), "little")
+
+
+def load_checkpoint(directory, name, key, target):
+    metadata = linked_info(directory, name)
+    if (
+        metadata is None
+        or stat.S_ISLNK(metadata.st_mode)
+        or not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_nlink != 1
+        or stat.S_IMODE(metadata.st_mode) != 0o600
+    ):
+        return 0
+    flags = os.O_RDONLY | os.O_NOFOLLOW
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    try:
+        checkpoint = os.open(name, flags, dir_fd=directory)
+    except OSError:
+        return 0
+    try:
+        opened = os.fstat(checkpoint)
+        if opened.st_nlink != 1 or not same_inode(metadata, opened):
+            return 0
+        header_size = len(MAGIC) + 16 + 8
+        header = os.pread(checkpoint, header_size, 0)
+        if len(header) != header_size or not hmac.compare_digest(header[:len(MAGIC)], MAGIC):
+            return 0
+        nonce = header[len(MAGIC):len(MAGIC) + 16]
+        size = int.from_bytes(header[-8:], "big")
+        if size > expected_size or os.fstat(checkpoint).st_size != header_size + size + 32:
+            return 0
+        verifier = hmac.new(key, header, hashlib.sha256)
+        position = 0
+        index = 0
+        while position < size:
+            cipher = os.pread(checkpoint, min(CHUNK, size - position), header_size + position)
+            if not cipher:
+                os.ftruncate(target, 0)
+                return 0
+            verifier.update(cipher)
+            write_at(target, xor_chunk(cipher, key, nonce, index), position)
+            position += len(cipher)
+            index += 1
+        tag = os.pread(checkpoint, 32, header_size + size)
+        if not hmac.compare_digest(verifier.digest(), tag):
+            os.ftruncate(target, 0)
+            return 0
+        linked = linked_info(directory, name)
+        if linked is None or linked.st_nlink != 1 or not same_inode(linked, opened):
+            os.ftruncate(target, 0)
+            return 0
+        os.ftruncate(target, size)
+        return size
+    finally:
+        os.close(checkpoint)
+
+
+def seal_checkpoint(directory, name, key, source):
+    source_info = os.fstat(source)
+    if source_info.st_nlink != 0 or source_info.st_size <= 0 or source_info.st_size > expected_size:
+        return
+    checkpoint = open_tmpfile(directory, "encrypted resume checkpoint")
+    temporary = "." + name + "." + secrets.token_hex(8) + ".tmp"
+    try:
+        nonce = secrets.token_bytes(16)
+        header = MAGIC + nonce + source_info.st_size.to_bytes(8, "big")
+        verifier = hmac.new(key, header, hashlib.sha256)
+        write_at(checkpoint, header, 0)
+        position = 0
+        index = 0
+        while position < source_info.st_size:
+            plain = os.pread(source, min(CHUNK, source_info.st_size - position), position)
+            if not plain:
+                raise OSError("resume source became short")
+            cipher = xor_chunk(plain, key, nonce, index)
+            verifier.update(cipher)
+            write_at(checkpoint, cipher, len(header) + position)
+            position += len(plain)
+            index += 1
+        write_at(checkpoint, verifier.digest(), len(header) + source_info.st_size)
+        os.ftruncate(checkpoint, len(header) + source_info.st_size + 32)
+        os.fchmod(checkpoint, 0o600)
+        os.fsync(checkpoint)
+        link_tmpfile(checkpoint, directory, temporary, "encrypted resume checkpoint")
+        os.replace(temporary, name, src_dir_fd=directory, dst_dir_fd=directory)
+        temporary = None
+        os.fsync(directory)
+    finally:
+        if temporary is not None:
+            try:
+                os.unlink(temporary, dir_fd=directory)
+            except FileNotFoundError:
+                pass
+        os.close(checkpoint)
+
+
+def digest_fd(descriptor):
+    digest = hashlib.sha256()
+    size = os.fstat(descriptor).st_size
+    position = 0
+    while position < size:
+        chunk = os.pread(descriptor, min(CHUNK, size - position), position)
+        if not chunk:
+            refuse("upload inode became short")
+        digest.update(chunk)
+        position += len(chunk)
+    return size, digest.hexdigest()
+
+
+def claim_existing_target(directory):
+    linked = linked_info(directory, filename)
+    if linked is None:
+        return None
+    if stat.S_ISLNK(linked.st_mode) or not stat.S_ISREG(linked.st_mode) or linked.st_nlink != 1:
+        refuse("published upload target is not one regular file")
+    flags = os.O_RDONLY | os.O_NOFOLLOW
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    target = os.open(filename, flags, dir_fd=directory)
+    try:
+        opened = os.fstat(target)
+        if (
+            not same_inode(linked, opened)
+            or opened.st_nlink != 1
+            or stat.S_IMODE(opened.st_mode) != 0o600
+            or digest_fd(target) != (expected_size, expected_sha256)
+        ):
+            refuse("published upload target differs from its content authority")
+        linked = linked_info(directory, filename)
+        if linked is None or linked.st_nlink != 1 or not same_inode(linked, opened):
+            refuse("published upload target changed while it was claimed")
+        return identity(opened, target)
+    finally:
+        os.close(target)
+
+
+if len(sys.argv) != 8:
+    refuse("local upload arguments are incomplete")
+source_path, releases_path = sys.argv[1:3]
+incoming_name = safe_component(sys.argv[3], "incoming directory name")
+filename = safe_component(sys.argv[4], "upload filename")
+try:
+    expected_size = int(sys.argv[5])
+except ValueError:
+    refuse("local upload size is malformed")
+expected_sha256 = sys.argv[6]
+try:
+    filesystem_authority = json.loads(
+        base64.b64decode(sys.argv[7], validate=True).decode("utf-8")
+    )
+    resume_key = bytes.fromhex(
+        read_framed_document(64, "local upload resume authority").decode("ascii")
+    )
+except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
+    refuse("local upload authority is malformed")
+process_metadata = (
+    open("/proc/self/cmdline", "rb").read()
+    + b"\\x00".join(
+        os.fsencode(name) + b"=" + os.fsencode(value)
+        for name, value in os.environ.items()
+    )
+)
+if resume_key.hex().encode("ascii") in process_metadata:
+    refuse("local upload resume authority escaped into process metadata")
+if (
+    expected_size < 0
+    or re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None
+    or len(resume_key) != 32
+):
+    refuse("local upload content authority is malformed")
+sealed_name = ".sealed-" + hashlib.sha256(filename.encode("utf-8")).hexdigest()[:16] + ".resume"
+
+source_flags = os.O_RDONLY | os.O_NOFOLLOW
+if hasattr(os, "O_CLOEXEC"):
+    source_flags |= os.O_CLOEXEC
+source = os.open(source_path, source_flags)
+try:
+    source_info = os.fstat(source)
+    if not stat.S_ISREG(source_info.st_mode) or source_info.st_size != expected_size:
+        refuse("local upload source differs from its size authority")
+
+    parent_path, releases_name = os.path.split(releases_path)
+    if releases_name != "releases":
+        refuse("immutable releases directory has an unexpected path")
+    root = open_absolute_directory(parent_path, "release store root")
+    try:
+        require_identity(os.fstat(root), filesystem_authority.get("root"), "release store root", root)
+        releases = open_named_directory(root, releases_name, "immutable releases directory")
+    except BaseException:
+        os.close(root)
+        raise
+    try:
+        require_identity(
+            os.fstat(releases), filesystem_authority.get("releases"), "immutable releases directory", releases
+        )
+        incoming = open_named_directory(releases, incoming_name, "incoming release directory")
+    except BaseException:
+        os.close(releases)
+        os.close(root)
+        raise
+    try:
+        require_identity(os.fstat(incoming), filesystem_authority.get("incoming"), "incoming release directory", incoming)
+        target_authorities = filesystem_authority.get("targets")
+        if not isinstance(target_authorities, dict) or target_authorities.get(filename, False) is not None:
+            refuse("local upload target is not authorized for one no-overwrite publication")
+        existing = claim_existing_target(incoming)
+        if existing is not None:
+            try:
+                os.unlink(sealed_name, dir_fd=incoming)
+                os.fsync(incoming)
+            except FileNotFoundError:
+                pass
+            sys.stdout.write(json.dumps(existing, sort_keys=True, separators=(",", ":")) + "\\n")
+        else:
+            work = open_tmpfile(incoming, "local upload")
+            try:
+                offset = load_checkpoint(incoming, sealed_name, resume_key, work)
+                position = 0
+                while position < offset:
+                    count = min(CHUNK, offset - position)
+                    if os.pread(source, count, position) != os.pread(work, count, position):
+                        offset = 0
+                        os.ftruncate(work, 0)
+                        break
+                    position += count
+                try:
+                    position = offset
+                    while position < expected_size:
+                        chunk = os.pread(source, min(CHUNK, expected_size - position), position)
+                        if not chunk:
+                            refuse("local upload source became short")
+                        write_at(work, chunk, position)
+                        position += len(chunk)
+                    os.ftruncate(work, expected_size)
+                    os.fchmod(work, 0o600)
+                    os.fsync(work)
+                    if digest_fd(work) != (expected_size, expected_sha256):
+                        refuse("local upload differs from its content authority")
+                    if os.fstat(work).st_nlink != 0:
+                        refuse("local upload inode became externally linked during mutation")
+                    link_tmpfile(work, incoming, filename, "local upload target")
+                    os.fsync(incoming)
+                except BaseException:
+                    try:
+                        seal_checkpoint(incoming, sealed_name, resume_key, work)
+                    except BaseException:
+                        pass
+                    raise
+                try:
+                    os.unlink(sealed_name, dir_fd=incoming)
+                    os.fsync(incoming)
+                except FileNotFoundError:
+                    pass
+                published = claim_existing_target(incoming)
+                if published is None:
+                    refuse("local upload target disappeared after publication")
+                sys.stdout.write(json.dumps(published, sort_keys=True, separators=(",", ":")) + "\\n")
+            finally:
+                os.close(work)
+    finally:
+        os.close(incoming)
+        os.close(releases)
+        os.close(root)
+finally:
+    os.close(source)
+__REVIVAL_PIN_LOCAL_UPLOAD__
+`;
+
+/*
+ * rsync's resumable pathname is deliberately ciphertext.  A peer that can
+ * add hardlinks in the incoming directory can therefore observe or export a
+ * receiver inode while rsync is mutating it without exporting any APK bytes.
+ * The far-side claim helper authenticates this envelope and decrypts only into
+ * an unnamed O_TMPFILE before the final no-overwrite link.
+ */
+const LOCAL_SEAL_UPLOAD_SCRIPT = `${REMOTE_PRELUDE}/usr/bin/python3 -I -B - "$@" <<'__REVIVAL_PIN_SEAL_UPLOAD__'
+import ctypes, hashlib, hmac, os, re, secrets, stat, sys
+
+CHUNK = 1024 * 1024
+MAGIC = b"PINRESUME1\\x00"
+os.umask(0o077)
+
+
+def refuse(message):
+    sys.stderr.write("pin-release-ship: " + message + "\\n")
+    raise SystemExit(70)
+
+
+try:
+    _libc = ctypes.CDLL(None, use_errno=True)
+    _prctl = _libc.prctl
+    _prctl.restype = ctypes.c_int
+except (AttributeError, OSError):
+    refuse("host lacks required process nondumpability support")
+
+
+def require_nondumpable():
+    if _prctl(3, 0, 0, 0, 0) != 0:
+        refuse("process lost its nondumpable secret boundary")
+
+
+def read_framed_document(maximum, label):
+    require_nondumpable()
+    sys.stdout.write("READY\\n")
+    sys.stdout.flush()
+    length_line = sys.stdin.buffer.readline(33)
+    if (
+        not length_line.endswith(b"\\n")
+        or len(length_line) <= 1
+        or not length_line[:-1].isdigit()
+        or (len(length_line) > 2 and length_line.startswith(b"0"))
+    ):
+        refuse(label + " length is malformed")
+    length = int(length_line[:-1])
+    if length > maximum:
+        refuse(label + " exceeds its size bound")
+    document = sys.stdin.buffer.read(length)
+    if len(document) != length or sys.stdin.buffer.read(1) != b"":
+        refuse(label + " framing is incomplete")
+    require_nondumpable()
+    return document
+
+
+if _prctl(4, 0, 0, 0, 0) != 0:
+    refuse("process cannot establish its nondumpable secret boundary")
+require_nondumpable()
+
+
+def write_all(descriptor, data):
+    view = memoryview(data)
+    offset = 0
+    while offset < len(view):
+        count = os.write(descriptor, view[offset:])
+        if not isinstance(count, int) or count <= 0:
+            raise OSError("encrypted upload write made no progress")
+        offset += count
+
+
+def xor_chunk(data, key, nonce, index):
+    mask = hashlib.shake_256(
+        b"revival-pin-resume-stream\\x00" + key + nonce + index.to_bytes(8, "big")
+    ).digest(len(data))
+    return (
+        int.from_bytes(data, "little") ^ int.from_bytes(mask, "little")
+    ).to_bytes(len(data), "little")
+
+
+if len(sys.argv) != 5:
+    refuse("encrypted upload arguments are incomplete")
+source_path, destination_path, expected_size_text, expected_sha256 = sys.argv[1:]
+try:
+    expected_size = int(expected_size_text)
+    key = bytes.fromhex(
+        read_framed_document(64, "encrypted upload authority").decode("ascii")
+    )
+except (UnicodeDecodeError, ValueError):
+    refuse("encrypted upload authority is malformed")
+process_metadata = (
+    open("/proc/self/cmdline", "rb").read()
+    + b"\\x00".join(
+        os.fsencode(name) + b"=" + os.fsencode(value)
+        for name, value in os.environ.items()
+    )
+)
+if key.hex().encode("ascii") in process_metadata:
+    refuse("encrypted upload authority escaped into process metadata")
+if (
+    expected_size < 0
+    or re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None
+    or len(key) != 32
+):
+    refuse("encrypted upload authority is malformed")
+
+source_flags = os.O_RDONLY | os.O_NOFOLLOW
+destination_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+if hasattr(os, "O_CLOEXEC"):
+    source_flags |= os.O_CLOEXEC
+    destination_flags |= os.O_CLOEXEC
+source = os.open(source_path, source_flags)
+destination = None
+try:
+    source_info = os.fstat(source)
+    if not stat.S_ISREG(source_info.st_mode) or source_info.st_nlink != 1:
+        refuse("upload source is not one regular file")
+    if source_info.st_size != expected_size:
+        refuse("upload source size changed before encryption")
+    destination = os.open(destination_path, destination_flags, 0o600)
+    nonce = secrets.token_bytes(16)
+    header = MAGIC + nonce + expected_size.to_bytes(8, "big")
+    verifier = hmac.new(key, header, hashlib.sha256)
+    digest = hashlib.sha256()
+    write_all(destination, header)
+    position = 0
+    index = 0
+    while position < expected_size:
+        plain = os.pread(source, min(CHUNK, expected_size - position), position)
+        if not plain:
+            refuse("upload source became short during encryption")
+        digest.update(plain)
+        cipher = xor_chunk(plain, key, nonce, index)
+        verifier.update(cipher)
+        write_all(destination, cipher)
+        position += len(plain)
+        index += 1
+    if os.fstat(source).st_size != expected_size or digest.hexdigest() != expected_sha256:
+        refuse("upload source changed during encryption")
+    write_all(destination, verifier.digest())
+    os.fchmod(destination, 0o600)
+    os.fsync(destination)
+finally:
+    if destination is not None:
+        os.close(destination)
+    os.close(source)
+__REVIVAL_PIN_SEAL_UPLOAD__
+`;
+
+/**
+ * Remote half of each rsync attempt.
+ *
+ * rsync normally asks ssh to start `rsync --server ... /absolute/path`, which
+ * would resolve the mutable store path after a separate safety check. This
+ * launcher instead opens root/releases/incoming component-by-component with
+ * O_NOFOLLOW and changes cwd to the held incoming-directory descriptor. rsync
+ * receives only an authenticated encrypted envelope, so even a hardlink to its
+ * named resumable partial cannot export APK bytes. This launcher is deliberately
+ * keyless: it only anchors and fsyncs ciphertext. A separate nondumpable claim
+ * process receives the resume key over framed stdin, authenticates the envelope,
+ * and performs the one-time plaintext publication.
+ */
+export const REMOTE_RSYNC_LAUNCHER_SOURCE = `import base64, ctypes, json, os, re, stat, subprocess, sys
+
+COMPONENT = re.compile(r"^[A-Za-z0-9._-]+$")
+AUTHORITY_PREFIX = "REVIVAL_PIN_RSYNC_AUTHORITY="
+MAGIC = b"PINRESUME1\\x00"
+os.umask(0o077)
+
+
+def refuse(message):
+    sys.stderr.write("pin-release-ship: " + message + "\\n")
+    raise SystemExit(70)
+
+
+try:
+    _libc = ctypes.CDLL(None, use_errno=True)
+    _prctl = _libc.prctl
+    _prctl.restype = ctypes.c_int
+except (AttributeError, OSError):
+    refuse("host lacks required process nondumpability support")
+
+
+def require_nondumpable():
+    if _prctl(3, 0, 0, 0, 0) != 0:
+        refuse("process lost its nondumpable plaintext boundary")
+
+
+if _prctl(4, 0, 0, 0, 0) != 0:
+    refuse("process cannot establish its nondumpable plaintext boundary")
+require_nondumpable()
+
+
+if (
+    not hasattr(os, "O_DIRECTORY")
+    or not hasattr(os, "O_NOFOLLOW")
+    or not os.path.isdir("/proc/self/fd")
+):
+    refuse("host lacks required no-follow descriptor support")
+
+
+DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+if hasattr(os, "O_CLOEXEC"):
+    DIRECTORY_FLAGS |= os.O_CLOEXEC
+
+
+def safe_component(value, label):
+    if (
+        not isinstance(value, str)
+        or value in ("", ".", "..")
+        or len(os.fsencode(value)) > 255
+        or COMPONENT.fullmatch(value) is None
+    ):
+        refuse(label + " is not a safe path component")
+    return value
+
+
+def same_inode(left, right):
+    return (left.st_dev, left.st_ino) == (right.st_dev, right.st_ino)
+
+
+class StatxTimestamp(ctypes.Structure):
+    _fields_ = [
+        ("seconds", ctypes.c_longlong),
+        ("nanoseconds", ctypes.c_uint),
+        ("reserved", ctypes.c_int),
+    ]
+
+
+class Statx(ctypes.Structure):
+    _fields_ = [
+        ("mask", ctypes.c_uint), ("block_size", ctypes.c_uint),
+        ("attributes", ctypes.c_ulonglong), ("nlink", ctypes.c_uint),
+        ("uid", ctypes.c_uint), ("gid", ctypes.c_uint),
+        ("mode", ctypes.c_ushort), ("spare0", ctypes.c_ushort),
+        ("ino", ctypes.c_ulonglong), ("size", ctypes.c_ulonglong),
+        ("blocks", ctypes.c_ulonglong), ("attributes_mask", ctypes.c_ulonglong),
+        ("atime", StatxTimestamp), ("btime", StatxTimestamp),
+        ("ctime", StatxTimestamp), ("mtime", StatxTimestamp),
+        ("rdev_major", ctypes.c_uint), ("rdev_minor", ctypes.c_uint),
+        ("dev_major", ctypes.c_uint), ("dev_minor", ctypes.c_uint),
+        ("mnt_id", ctypes.c_ulonglong), ("spare2", ctypes.c_ulonglong * 13),
+    ]
+
+
+try:
+    _statx = _libc.statx
+    _statx.argtypes = [
+        ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_uint, ctypes.POINTER(Statx)
+    ]
+    _statx.restype = ctypes.c_int
+except AttributeError:
+    refuse("host lacks required statx generation support")
+
+
+def identity(metadata, descriptor):
+    generation = Statx()
+    required = 0x800 | 0x1000
+    if _statx(descriptor, b"", 0x1000 | 0x800, 0x7ff | required, ctypes.byref(generation)) != 0:
+        refuse("filesystem authority generation cannot be read")
+    if (
+        generation.mask & required != required
+        or generation.mnt_id == 0
+        or (generation.btime.seconds == 0 and generation.btime.nanoseconds == 0)
+        or generation.btime.nanoseconds >= 1000000000
+        or generation.ino != metadata.st_ino
+        or generation.uid != metadata.st_uid
+        or generation.gid != metadata.st_gid
+        or generation.mode != metadata.st_mode
+        or generation.dev_major != os.major(metadata.st_dev)
+        or generation.dev_minor != os.minor(metadata.st_dev)
+    ):
+        refuse("filesystem authority generation is unavailable or inconsistent")
+    return {
+        "dev": str(metadata.st_dev),
+        "ino": str(metadata.st_ino),
+        "mntId": str(generation.mnt_id),
+        "btime": str(generation.btime.seconds) + "." + str(generation.btime.nanoseconds).zfill(9),
+        "uid": metadata.st_uid,
+        "gid": metadata.st_gid,
+        "mode": stat.S_IMODE(metadata.st_mode),
+    }
+
+
+def require_identity(metadata, expected, label, descriptor):
+    if not isinstance(expected, dict) or identity(metadata, descriptor) != expected:
+        refuse(label + " differs from the staged filesystem authority")
+
+
+def linked_info(parent, name):
+    try:
+        return os.stat(name, dir_fd=parent, follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+
+
+def open_absolute_directory(path, label):
+    if not isinstance(path, str) or not path.startswith("/") or os.path.normpath(path) != path:
+        refuse(label + " is not a canonical absolute path")
+    descriptor = os.open("/", DIRECTORY_FLAGS)
+    try:
+        for component in path.split("/")[1:]:
+            try:
+                child = os.open(component, DIRECTORY_FLAGS, dir_fd=descriptor)
+            except OSError:
+                refuse(label + " cannot be opened without following links")
+            os.close(descriptor)
+            descriptor = child
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def open_named_directory(parent, name, label):
+    linked = linked_info(parent, name)
+    if linked is None or stat.S_ISLNK(linked.st_mode) or not stat.S_ISDIR(linked.st_mode):
+        refuse(label + " is not a real directory")
+    try:
+        descriptor = os.open(name, DIRECTORY_FLAGS, dir_fd=parent)
+    except OSError:
+        refuse(label + " cannot be opened without following links")
+    opened = os.fstat(descriptor)
+    if not stat.S_ISDIR(opened.st_mode) or not same_inode(linked, opened):
+        os.close(descriptor)
+        refuse(label + " changed while it was opened")
+    return descriptor
+
+
+if len(sys.argv) < 3 or not sys.argv[1].startswith(AUTHORITY_PREFIX):
+    refuse("rsync authority is missing")
+try:
+    authority_bytes = base64.b64decode(
+        sys.argv[1][len(AUTHORITY_PREFIX):], validate=True
+    )
+    authority = json.loads(authority_bytes.decode("utf-8"))
+except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
+    refuse("rsync authority is malformed")
+if not isinstance(authority, dict) or set(authority) != {
+    "releasesRoot", "incoming", "filename", "sealedName", "size", "sha256",
+    "filesystemAuthority"
+}:
+    refuse("rsync authority has an unexpected shape")
+
+releases_path = authority["releasesRoot"]
+incoming_name = safe_component(authority["incoming"], "incoming directory name")
+filename = safe_component(authority["filename"], "upload filename")
+sealed_name = safe_component(authority["sealedName"], "encrypted rsync filename")
+expected_size = authority["size"]
+expected_sha256 = authority["sha256"]
+filesystem_authority = authority["filesystemAuthority"]
+if (
+    not isinstance(expected_size, int)
+    or isinstance(expected_size, bool)
+    or expected_size < 0
+    or not isinstance(expected_sha256, str)
+    or re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None
+):
+    refuse("rsync content authority is malformed")
+if not incoming_name.startswith(".incoming-") or not sealed_name.startswith(".sealed-"):
+    refuse("incoming directory name is outside the transaction namespace")
+
+server_arguments = sys.argv[2:]
+if (
+    len(server_arguments) < 2
+    or server_arguments[0] != "--server"
+    or "--sender" in server_arguments
+):
+    refuse("rsync server arguments are not in receiver mode")
+
+parent_path, releases_name = os.path.split(releases_path)
+if releases_name != "releases" or parent_path in ("", "/"):
+    refuse("immutable releases directory has an unexpected path")
+root = open_absolute_directory(parent_path, "release store root")
+try:
+    require_identity(os.fstat(root), filesystem_authority.get("root"), "release store root", root)
+    releases = open_named_directory(root, releases_name, "immutable releases directory")
+except BaseException:
+    os.close(root)
+    raise
+try:
+    require_identity(
+        os.fstat(releases), filesystem_authority.get("releases"), "immutable releases directory", releases
+    )
+    incoming = open_named_directory(releases, incoming_name, "incoming release directory")
+except BaseException:
+    os.close(releases)
+    os.close(root)
+    raise
+
+try:
+    require_identity(os.fstat(incoming), filesystem_authority.get("incoming"), "incoming release directory", incoming)
+    if stat.S_IMODE(os.fstat(incoming).st_mode) != 0o700:
+        refuse("incoming release directory has unsafe permissions")
+    target_authorities = filesystem_authority.get("targets")
+    if not isinstance(target_authorities, dict) or target_authorities.get(filename, False) is not None:
+        refuse("upload target is not authorized for one no-overwrite publication")
+    if linked_info(incoming, filename) is not None:
+        refuse("upload target appeared before atomic publication")
+    existing_sealed = linked_info(incoming, sealed_name)
+    if existing_sealed is not None and (
+        stat.S_ISLNK(existing_sealed.st_mode)
+        or not stat.S_ISREG(existing_sealed.st_mode)
+        or existing_sealed.st_nlink != 1
+    ):
+        refuse("encrypted rsync checkpoint is not one regular file")
+    os.fchdir(incoming)
+    result = subprocess.run(["/usr/bin/rsync", *server_arguments], check=False)
+    if result.returncode != 0:
+        raise SystemExit(result.returncode)
+    sealed = linked_info(incoming, sealed_name)
+    if (
+        sealed is None
+        or stat.S_ISLNK(sealed.st_mode)
+        or not stat.S_ISREG(sealed.st_mode)
+        or sealed.st_nlink != 1
+        or stat.S_IMODE(sealed.st_mode) != 0o600
+        or sealed.st_size != len(MAGIC) + 16 + 8 + expected_size + 32
+    ):
+        refuse("encrypted rsync result is incomplete")
+    flags = os.O_RDONLY | os.O_NOFOLLOW
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    checkpoint = os.open(sealed_name, flags, dir_fd=incoming)
+    try:
+        opened = os.fstat(checkpoint)
+        os.fsync(checkpoint)
+        linked = linked_info(incoming, sealed_name)
+        if linked is None or linked.st_nlink != 1 or not same_inode(linked, opened):
+            refuse("encrypted rsync result changed after receipt")
+        os.fsync(incoming)
+    finally:
+        os.close(checkpoint)
+finally:
+    os.close(incoming)
+    os.close(releases)
+    os.close(root)
+`;
+
+function createRemoteRsyncPath({
+  releasesRoot,
+  incoming,
+  filename,
+  size,
+  sha256: digest,
+  filesystemAuthority,
+  sealedName,
+  launcherSource,
+}) {
+  const launcherBase64 = Buffer.from(launcherSource, "utf8").toString("base64");
+  const authority = Buffer.from(JSON.stringify({
+    releasesRoot,
+    incoming,
+    filename,
+    sealedName,
+    size,
+    sha256: digest,
+    filesystemAuthority,
+  }), "utf8")
+    .toString("base64");
+  return (
+    `/usr/bin/python3 -I -B -c 'import base64;exec(compile(base64.b64decode("${launcherBase64}"),` +
+    `"<revival-pin-rsync>","exec"))' ` +
+    shellQuote(`REVIVAL_PIN_RSYNC_AUTHORITY=${authority}`)
+  );
+}
+
+function encryptedResumeName(filename) {
+  return `.sealed-${sha256(filename).slice(0, 16)}.resume`;
+}
 
 export const REMOTE_INSPECT_SCRIPT = `${REMOTE_PRELUDE}root="$1"
 shift
-python3 - "$root" "$@" <<'__REVIVAL_PIN_INSPECT__'
-import base64, hashlib, json, os, stat, sys
+/usr/bin/python3 -I -B - "$root" "$@" <<'__REVIVAL_PIN_INSPECT__'
+import base64, ctypes, hashlib, json, os, stat, sys
 
 MAX_DOCUMENT_BYTES = ${MAX_STORE_DOCUMENT_BYTES}
 CHUNK = 1024 * 1024
@@ -548,6 +2270,89 @@ def info(path):
         return os.lstat(path)
     except FileNotFoundError:
         return None
+
+
+class StatxTimestamp(ctypes.Structure):
+    _fields_ = [
+        ("seconds", ctypes.c_longlong),
+        ("nanoseconds", ctypes.c_uint),
+        ("reserved", ctypes.c_int),
+    ]
+
+
+class Statx(ctypes.Structure):
+    _fields_ = [
+        ("mask", ctypes.c_uint), ("block_size", ctypes.c_uint),
+        ("attributes", ctypes.c_ulonglong), ("nlink", ctypes.c_uint),
+        ("uid", ctypes.c_uint), ("gid", ctypes.c_uint),
+        ("mode", ctypes.c_ushort), ("spare0", ctypes.c_ushort),
+        ("ino", ctypes.c_ulonglong), ("size", ctypes.c_ulonglong),
+        ("blocks", ctypes.c_ulonglong), ("attributes_mask", ctypes.c_ulonglong),
+        ("atime", StatxTimestamp), ("btime", StatxTimestamp),
+        ("ctime", StatxTimestamp), ("mtime", StatxTimestamp),
+        ("rdev_major", ctypes.c_uint), ("rdev_minor", ctypes.c_uint),
+        ("dev_major", ctypes.c_uint), ("dev_minor", ctypes.c_uint),
+        ("mnt_id", ctypes.c_ulonglong), ("spare2", ctypes.c_ulonglong * 13),
+    ]
+
+
+try:
+    _libc = ctypes.CDLL(None, use_errno=True)
+    _statx = _libc.statx
+    _statx.argtypes = [
+        ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_uint, ctypes.POINTER(Statx)
+    ]
+    _statx.restype = ctypes.c_int
+except (AttributeError, OSError):
+    refuse("host lacks required statx generation support")
+
+
+def identity(metadata, descriptor):
+    generation = Statx()
+    required = 0x800 | 0x1000
+    if _statx(descriptor, b"", 0x1000 | 0x800, 0x7ff | required, ctypes.byref(generation)) != 0:
+        refuse("filesystem authority generation cannot be read")
+    if (
+        generation.mask & required != required
+        or generation.mnt_id == 0
+        or (generation.btime.seconds == 0 and generation.btime.nanoseconds == 0)
+        or generation.btime.nanoseconds >= 1000000000
+        or generation.ino != metadata.st_ino
+        or generation.uid != metadata.st_uid
+        or generation.gid != metadata.st_gid
+        or generation.mode != metadata.st_mode
+        or generation.dev_major != os.major(metadata.st_dev)
+        or generation.dev_minor != os.minor(metadata.st_dev)
+    ):
+        refuse("filesystem authority generation is unavailable or inconsistent")
+    return {
+        "dev": str(metadata.st_dev),
+        "ino": str(metadata.st_ino),
+        "mntId": str(generation.mnt_id),
+        "btime": str(generation.btime.seconds) + "." + str(generation.btime.nanoseconds).zfill(9),
+        "uid": metadata.st_uid,
+        "gid": metadata.st_gid,
+        "mode": stat.S_IMODE(metadata.st_mode),
+    }
+
+
+DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+if hasattr(os, "O_CLOEXEC"):
+    DIRECTORY_FLAGS |= os.O_CLOEXEC
+
+
+def directory_identity(path, metadata, label):
+    try:
+        descriptor = os.open(path, DIRECTORY_FLAGS)
+    except OSError:
+        refuse(label + " cannot be opened without following links")
+    try:
+        opened = os.fstat(descriptor)
+        if (opened.st_dev, opened.st_ino) != (metadata.st_dev, metadata.st_ino):
+            refuse(label + " changed while it was inspected")
+        return identity(opened, descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def digest_file(path):
@@ -587,6 +2392,9 @@ report = {
     "root": root,
     "rootExists": False,
     "rootIsDirectory": False,
+    "rootAuthority": None,
+    "releasesState": "missing",
+    "releasesAuthority": None,
     "history": None,
     "current": None,
     "releases": {},
@@ -598,8 +2406,20 @@ if root_metadata is not None:
     report["rootIsDirectory"] = bool(
         stat.S_ISDIR(root_metadata.st_mode) and not stat.S_ISLNK(root_metadata.st_mode)
     )
+    if report["rootIsDirectory"]:
+        report["rootAuthority"] = directory_identity(root, root_metadata, "release store root")
 
 if report["rootIsDirectory"]:
+    releases_path = os.path.join(root, "releases")
+    releases_metadata = info(releases_path)
+    if releases_metadata is not None:
+        if stat.S_ISLNK(releases_metadata.st_mode) or not stat.S_ISDIR(releases_metadata.st_mode):
+            report["releasesState"] = "invalid"
+        else:
+            report["releasesState"] = "directory"
+            report["releasesAuthority"] = directory_identity(
+                releases_path, releases_metadata, "immutable releases directory"
+            )
     report["history"] = read_document(os.path.join(root, "history.json"), "history.json")
     report["current"] = read_document(os.path.join(root, "current.json"), "current.json")
     # Whatever the store already serves is always inspected too, so the caller
@@ -618,13 +2438,16 @@ if report["rootIsDirectory"]:
             ):
                 wanted = list(wanted) + [served_id]
     for release_id in sorted(set(wanted)):
+        if report["releasesState"] != "directory":
+            report["releases"][release_id] = None
+            continue
         directory = os.path.join(root, "releases", release_id)
         metadata = info(directory)
         if metadata is None:
             report["releases"][release_id] = None
             continue
         if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
-            report["releases"][release_id] = {"isDirectory": False, "entries": {}}
+            report["releases"][release_id] = {"isDirectory": False, "authority": None, "entries": {}}
             continue
         entries = {}
         for name in sorted(os.listdir(directory)):
@@ -637,21 +2460,24 @@ if report["rootIsDirectory"]:
                 continue
             size, sha256 = digest_file(child)
             entries[name] = {"kind": "file", "size": size, "sha256": sha256}
-        report["releases"][release_id] = {"isDirectory": True, "entries": entries}
+        report["releases"][release_id] = {
+            "isDirectory": True,
+            "authority": directory_identity(directory, metadata, "immutable release " + release_id),
+            "entries": entries,
+        }
 
 sys.stdout.write(json.dumps(report, sort_keys=True, separators=(",", ":")) + "\\n")
 __REVIVAL_PIN_INSPECT__
 `;
 
 export const REMOTE_APPLY_SCRIPT = `${REMOTE_PRELUDE}root="$1"
-python3 - "$root" <<'__REVIVAL_PIN_APPLY__'
-import base64, hashlib, json, os, stat, sys, tempfile
+/usr/bin/python3 -I -B - "$root" <<'__REVIVAL_PIN_APPLY__'
+import base64, ctypes, errno, fcntl, hashlib, json, os, re, secrets, stat, sys
 
 CHUNK = 1024 * 1024
+COMPONENT = re.compile(r"^[A-Za-z0-9._-]+$")
 root = sys.argv[1]
-
-with open(os.environ["REVIVAL_PIN_PAYLOAD"], "rb") as handle:
-    payload = json.loads(handle.read().decode("utf-8"))
+os.umask(0o077)
 
 
 def refuse(message):
@@ -659,119 +2485,813 @@ def refuse(message):
     raise SystemExit(70)
 
 
-def info(path):
+try:
+    _process_libc = ctypes.CDLL(None, use_errno=True)
+    _prctl = _process_libc.prctl
+    _prctl.restype = ctypes.c_int
+except (AttributeError, OSError):
+    refuse("host lacks required process nondumpability support")
+
+
+def require_nondumpable():
+    if _prctl(3, 0, 0, 0, 0) != 0:
+        refuse("process lost its nondumpable plaintext boundary")
+
+
+def read_framed_document(maximum, label):
+    require_nondumpable()
+    sys.stdout.write("READY\\n")
+    sys.stdout.flush()
+    length_line = sys.stdin.buffer.readline(33)
+    if (
+        not length_line.endswith(b"\\n")
+        or len(length_line) <= 1
+        or not length_line[:-1].isdigit()
+        or (len(length_line) > 2 and length_line.startswith(b"0"))
+    ):
+        refuse(label + " length is malformed")
+    length = int(length_line[:-1])
+    if length > maximum:
+        refuse(label + " exceeds its size bound")
+    document = sys.stdin.buffer.read(length)
+    if len(document) != length or sys.stdin.buffer.read(1) != b"":
+        refuse(label + " framing is incomplete")
+    require_nondumpable()
+    return document
+
+
+if _prctl(4, 0, 0, 0, 0) != 0:
+    refuse("process cannot establish its nondumpable plaintext boundary")
+require_nondumpable()
+
+try:
+    payload_document = read_framed_document(${MAX_FRAMED_DOCUMENT_BYTES}, "apply payload")
+    process_metadata = (
+        open("/proc/self/cmdline", "rb").read()
+        + b"\\x00".join(
+            os.fsencode(name) + b"=" + os.fsencode(value)
+            for name, value in os.environ.items()
+        )
+    )
+    if payload_document in process_metadata:
+        refuse("apply payload escaped into process metadata")
+    payload = json.loads(payload_document.decode("utf-8"))
+except (UnicodeDecodeError, json.JSONDecodeError):
+    refuse("apply payload is malformed")
+
+
+if (
+    not hasattr(os, "O_DIRECTORY")
+    or not hasattr(os, "O_NOFOLLOW")
+    or not hasattr(os, "O_TMPFILE")
+    or not os.path.isdir("/proc/self/fd")
+):
+    refuse("host lacks required unnamed-file or no-follow descriptor support")
+
+
+DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+if hasattr(os, "O_CLOEXEC"):
+    DIRECTORY_FLAGS |= os.O_CLOEXEC
+
+
+def safe_component(value, label):
+    if (
+        not isinstance(value, str)
+        or value in ("", ".", "..")
+        or len(os.fsencode(value)) > 255
+        or COMPONENT.fullmatch(value) is None
+    ):
+        refuse(label + " is not a safe path component")
+    return value
+
+
+def linked_info(parent, name):
     try:
-        return os.lstat(path)
+        return os.stat(name, dir_fd=parent, follow_symlinks=False)
     except FileNotFoundError:
         return None
 
 
-def digest_file(path):
+def same_inode(left, right):
+    return (left.st_dev, left.st_ino) == (right.st_dev, right.st_ino)
+
+
+class StatxTimestamp(ctypes.Structure):
+    _fields_ = [
+        ("seconds", ctypes.c_longlong),
+        ("nanoseconds", ctypes.c_uint),
+        ("reserved", ctypes.c_int),
+    ]
+
+
+class Statx(ctypes.Structure):
+    _fields_ = [
+        ("mask", ctypes.c_uint), ("block_size", ctypes.c_uint),
+        ("attributes", ctypes.c_ulonglong), ("nlink", ctypes.c_uint),
+        ("uid", ctypes.c_uint), ("gid", ctypes.c_uint),
+        ("mode", ctypes.c_ushort), ("spare0", ctypes.c_ushort),
+        ("ino", ctypes.c_ulonglong), ("size", ctypes.c_ulonglong),
+        ("blocks", ctypes.c_ulonglong), ("attributes_mask", ctypes.c_ulonglong),
+        ("atime", StatxTimestamp), ("btime", StatxTimestamp),
+        ("ctime", StatxTimestamp), ("mtime", StatxTimestamp),
+        ("rdev_major", ctypes.c_uint), ("rdev_minor", ctypes.c_uint),
+        ("dev_major", ctypes.c_uint), ("dev_minor", ctypes.c_uint),
+        ("mnt_id", ctypes.c_ulonglong), ("spare2", ctypes.c_ulonglong * 13),
+    ]
+
+
+try:
+    _statx = _process_libc.statx
+    _statx.argtypes = [
+        ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_uint, ctypes.POINTER(Statx)
+    ]
+    _statx.restype = ctypes.c_int
+except AttributeError:
+    refuse("host lacks required statx generation support")
+
+
+def identity(metadata, descriptor):
+    generation = Statx()
+    required = 0x800 | 0x1000
+    if _statx(descriptor, b"", 0x1000 | 0x800, 0x7ff | required, ctypes.byref(generation)) != 0:
+        refuse("filesystem authority generation cannot be read")
+    if (
+        generation.mask & required != required
+        or generation.mnt_id == 0
+        or (generation.btime.seconds == 0 and generation.btime.nanoseconds == 0)
+        or generation.btime.nanoseconds >= 1000000000
+        or generation.ino != metadata.st_ino
+        or generation.uid != metadata.st_uid
+        or generation.gid != metadata.st_gid
+        or generation.mode != metadata.st_mode
+        or generation.dev_major != os.major(metadata.st_dev)
+        or generation.dev_minor != os.minor(metadata.st_dev)
+    ):
+        refuse("filesystem authority generation is unavailable or inconsistent")
+    return {
+        "dev": str(metadata.st_dev),
+        "ino": str(metadata.st_ino),
+        "mntId": str(generation.mnt_id),
+        "btime": str(generation.btime.seconds) + "." + str(generation.btime.nanoseconds).zfill(9),
+        "uid": metadata.st_uid,
+        "gid": metadata.st_gid,
+        "mode": stat.S_IMODE(metadata.st_mode),
+    }
+
+
+def require_identity(metadata, expected, label, descriptor):
+    if not isinstance(expected, dict) or identity(metadata, descriptor) != expected:
+        refuse(label + " differs from the publication filesystem authority")
+
+
+def open_absolute_directory(path, label):
+    if not isinstance(path, str) or not path.startswith("/") or os.path.normpath(path) != path:
+        refuse(label + " is not a canonical absolute path")
+    descriptor = os.open("/", DIRECTORY_FLAGS)
+    try:
+        for component in path.split("/")[1:]:
+            try:
+                child = os.open(component, DIRECTORY_FLAGS, dir_fd=descriptor)
+            except OSError:
+                refuse(label + " cannot be opened without following links")
+            os.close(descriptor)
+            descriptor = child
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def open_named_directory(parent, name, label):
+    linked = linked_info(parent, name)
+    if linked is None or stat.S_ISLNK(linked.st_mode) or not stat.S_ISDIR(linked.st_mode):
+        refuse(label + " is not a real directory")
+    try:
+        descriptor = os.open(name, DIRECTORY_FLAGS, dir_fd=parent)
+    except OSError:
+        refuse(label + " cannot be opened without following links")
+    opened = os.fstat(descriptor)
+    if not stat.S_ISDIR(opened.st_mode) or not same_inode(linked, opened):
+        os.close(descriptor)
+        refuse(label + " changed while it was opened")
+    return descriptor
+
+
+def open_regular(parent, name, label, missing_ok=False):
+    linked = linked_info(parent, name)
+    if linked is None:
+        if missing_ok:
+            return None
+        refuse(label + " is missing")
+    if stat.S_ISLNK(linked.st_mode) or not stat.S_ISREG(linked.st_mode) or linked.st_nlink != 1:
+        refuse(label + " is not one regular file")
+    flags = os.O_RDONLY | os.O_NOFOLLOW
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    try:
+        descriptor = os.open(name, flags, dir_fd=parent)
+    except OSError:
+        refuse(label + " cannot be opened without following links")
+    opened = os.fstat(descriptor)
+    if not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1 or not same_inode(linked, opened):
+        os.close(descriptor)
+        refuse(label + " changed while it was opened")
+    return descriptor
+
+
+def reprove_link(parent, name, descriptor, label):
+    linked = linked_info(parent, name)
+    opened = os.fstat(descriptor)
+    if (
+        linked is None
+        or stat.S_ISLNK(linked.st_mode)
+        or opened.st_nlink != 1
+        or linked.st_nlink != 1
+        or not same_inode(linked, opened)
+    ):
+        refuse(label + " changed after it was opened")
+
+
+def digest_fd(descriptor):
     size = 0
     digest = hashlib.sha256()
-    with open(path, "rb", buffering=0) as handle:
-        while True:
-            chunk = handle.read(CHUNK)
-            if not chunk:
-                break
-            size += len(chunk)
-            digest.update(chunk)
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    while True:
+        chunk = os.read(descriptor, CHUNK)
+        if not chunk:
+            break
+        size += len(chunk)
+        digest.update(chunk)
+    os.lseek(descriptor, 0, os.SEEK_SET)
     return size, digest.hexdigest()
 
 
-def require_directory(path, label):
-    metadata = info(path)
-    if metadata is None:
-        refuse(label + " is missing")
-    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
-        refuse(label + " is not a real directory")
+def sync_directory_fd(descriptor, label):
+    os.fsync(descriptor)
 
 
-def sync_directory(path):
-    fd = os.open(path, os.O_RDONLY)
-    try:
-        os.fsync(fd)
-    except OSError:
-        pass
-    finally:
-        os.close(fd)
+try:
+    _libc = ctypes.CDLL(None, use_errno=True)
+    _renameat2 = _libc.renameat2
+    _renameat2.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    ]
+    _renameat2.restype = ctypes.c_int
+except (AttributeError, OSError):
+    refuse("host lacks required atomic no-replace rename support")
 
 
-def document_digest(path):
-    metadata = info(path)
-    if metadata is None:
+def rename_noreplace(parent, source, target, label):
+    if _renameat2(parent, os.fsencode(source), parent, os.fsencode(target), 1) != 0:
+        failure = ctypes.get_errno()
+        if failure in (errno.EEXIST, errno.ENOTEMPTY):
+            refuse(label + " already exists; it must never be rewritten")
+        refuse(label + " cannot be renamed atomically without replacement")
+
+
+def quarantine_entry(parent, name, label):
+    before = linked_info(parent, name)
+    if before is None:
         return None
-    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
-        refuse(os.path.basename(path) + " is not a regular file")
-    return digest_file(path)[1]
+    quarantine = ".rejected-" + name[:16] + "-" + secrets.token_hex(8)
+    rename_noreplace(parent, name, quarantine, label + " quarantine")
+    moved = linked_info(parent, quarantine)
+    if (
+        moved is None
+        or not same_inode(before, moved)
+        or linked_info(parent, name) is not None
+    ):
+        refuse(label + " could not be quarantined safely")
+    sync_directory_fd(parent, "immutable releases directory")
+    return quarantine
 
 
-def atomic_write(path, data):
-    handle, temporary = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".", suffix=".tmp")
+def document_observation(root_descriptor, name):
+    descriptor = open_regular(root_descriptor, name, name, missing_ok=True)
+    if descriptor is None:
+        return {"descriptor": None, "sha256": None}
+    return {"descriptor": descriptor, "sha256": digest_fd(descriptor)[1]}
+
+
+def reprove_document(root_descriptor, name, observation):
+    descriptor = observation["descriptor"]
+    if descriptor is None:
+        if linked_info(root_descriptor, name) is not None:
+            refuse(name + " appeared after compare-and-swap inspection")
+    else:
+        reprove_link(root_descriptor, name, descriptor, name)
+        if digest_fd(descriptor)[1] != observation["sha256"]:
+            refuse(name + " changed in place after compare-and-swap inspection")
+
+
+def verify_published_document(root_descriptor, name, observation):
+    descriptor = observation.get("descriptor")
+    if descriptor is None:
+        refuse(name + " publication descriptor is missing")
+    opened = os.fstat(descriptor)
+    if (
+        not stat.S_ISREG(opened.st_mode)
+        or stat.S_IMODE(opened.st_mode) != 0o600
+        or opened.st_nlink != 1
+        or digest_fd(descriptor) != (observation["size"], observation["sha256"])
+    ):
+        refuse(name + " changed after publication")
+    reprove_link(root_descriptor, name, descriptor, name)
+    reopened = open_regular(root_descriptor, name, name)
+    actual = None
     try:
-        os.write(handle, data)
-        os.fsync(handle)
+        reopened_info = os.fstat(reopened)
+        if identity(reopened_info, reopened) != identity(opened, descriptor):
+            refuse(name + " changed while it was reopened for verification")
+        actual = digest_fd(reopened)
+        if actual != (observation["size"], observation["sha256"]):
+            refuse(name + " bytes changed while it was reopened for verification")
+        reprove_link(root_descriptor, name, reopened, name)
+    finally:
+        os.close(reopened)
+    return actual[1]
+
+
+def write_all(handle, data):
+    view = memoryview(data)
+    offset = 0
+    while offset < len(view):
+        require_nondumpable()
+        written = os.write(handle, view[offset:])
+        if not isinstance(written, int) or written <= 0 or written > len(view) - offset:
+            raise OSError(errno.EIO, "atomic document write made no safe progress")
+        offset += written
+    if offset != len(view) or os.fstat(handle).st_size != len(view):
+        raise OSError(errno.EIO, "atomic document write remained short")
+
+
+def atomic_write(root_descriptor, name, data):
+    temporary = "." + name + "." + str(os.getpid()) + "." + secrets.token_hex(8) + ".tmp"
+    flags = os.O_RDWR | os.O_TMPFILE
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    require_nondumpable()
+    handle = os.open(".", flags, 0o600, dir_fd=root_descriptor)
+    published_descriptor = None
+    try:
+        opened = os.fstat(handle)
+        if not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 0:
+            refuse("atomic document did not create one unnamed regular inode")
+        write_all(handle, data)
         os.fchmod(handle, 0o600)
+        os.fsync(handle)
+        opened = os.fstat(handle)
+        expected_digest = hashlib.sha256(data).hexdigest()
+        if (
+            opened.st_nlink != 0
+            or stat.S_IMODE(opened.st_mode) != 0o600
+            or digest_fd(handle) != (len(data), expected_digest)
+        ):
+            refuse("atomic document changed before publication")
+        if linked_info(root_descriptor, temporary) is not None:
+            refuse("atomic document publication name already exists")
+        require_nondumpable()
+        try:
+            os.link(
+                "/proc/self/fd/" + str(handle),
+                temporary,
+                dst_dir_fd=root_descriptor,
+                follow_symlinks=True,
+            )
+        except OSError:
+            refuse("atomic document cannot be linked without replacement")
+        temporary_info = linked_info(root_descriptor, temporary)
+        opened = os.fstat(handle)
+        if (
+            temporary_info is None
+            or not stat.S_ISREG(temporary_info.st_mode)
+            or temporary_info.st_nlink != 1
+            or opened.st_nlink != 1
+            or not same_inode(temporary_info, opened)
+        ):
+            refuse("atomic document changed during temporary linking")
+        os.replace(temporary, name, src_dir_fd=root_descriptor, dst_dir_fd=root_descriptor)
+        temporary = None
+        published = linked_info(root_descriptor, name)
+        if (
+            published is None
+            or published.st_nlink != 1
+            or stat.S_IMODE(published.st_mode) != 0o600
+            or not same_inode(published, opened)
+        ):
+            refuse("atomic document target changed during replacement")
+        sync_directory_fd(root_descriptor, "release store root")
+        published_descriptor = open_regular(root_descriptor, name, name)
+        if not same_inode(os.fstat(published_descriptor), opened):
+            refuse("atomic document target changed while reopening read-only")
+        observation = {
+            "descriptor": published_descriptor,
+            "sha256": expected_digest,
+            "size": len(data),
+        }
+        reprove_document(root_descriptor, name, observation)
+        return observation
+    except BaseException:
+        if temporary is not None:
+            linked = linked_info(root_descriptor, temporary)
+            if linked is not None and same_inode(linked, os.fstat(handle)):
+                try:
+                    os.unlink(temporary, dir_fd=root_descriptor)
+                except FileNotFoundError:
+                    pass
+        if published_descriptor is not None:
+            os.close(published_descriptor)
+        raise
     finally:
         os.close(handle)
-    os.replace(temporary, path)
-    sync_directory(os.path.dirname(path))
 
 
-require_directory(root, "release store root")
-releases_root = os.path.join(root, "releases")
-if info(releases_root) is None:
-    os.mkdir(releases_root, 0o700)
-require_directory(releases_root, "immutable releases directory")
-
-# Compare-and-swap. The two mutable documents must still be exactly what the
-# inspection saw, or another publisher moved underneath this one and the plan's
-# anti-rollback reasoning no longer describes reality.
-for name, expected in (
-    ("history.json", payload["expectedHistorySha256"]),
-    ("current.json", payload["expectedCurrentSha256"]),
-):
-    observed = document_digest(os.path.join(root, name))
-    if observed != expected:
-        refuse(name + " changed since the store was inspected")
-
-final = os.path.join(releases_root, payload["releaseId"])
-if payload["incoming"] is None:
-    require_directory(final, "immutable release " + payload["releaseId"])
-else:
-    incoming = os.path.join(releases_root, payload["incoming"])
-    require_directory(incoming, "incoming release directory")
-    expected_entries = {entry["name"]: entry for entry in payload["entries"]}
-    actual_entries = sorted(os.listdir(incoming))
-    if actual_entries != sorted(expected_entries):
-        refuse("incoming release directory does not hold exactly the planned files")
-    for name in actual_entries:
-        child = os.path.join(incoming, name)
-        metadata = info(child)
-        if metadata is None or stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
-            refuse("incoming entry is not a regular file: " + name)
-        size, sha256 = digest_file(child)
-        if size != expected_entries[name]["size"] or sha256 != expected_entries[name]["sha256"]:
-            refuse("incoming entry does not match its pinned digest: " + name)
-        os.chmod(child, 0o600)
-        fd = os.open(child, os.O_RDONLY)
+def acquire_store_lock(root_descriptor):
+    # Open relative to a no-follow directory descriptor, and validate the opened
+    # inode rather than trusting a pathname check before open. The lock is a
+    # persistent store control file: kernel ownership is released on every exit,
+    # including a crash between the two document writes, so the existing
+    # interrupted-swap repair path cannot be wedged by a stale owner.
+    lock_fd = None
+    try:
+        lock_flags = os.O_RDWR | os.O_CREAT
+        if hasattr(os, "O_CLOEXEC"):
+            lock_flags |= os.O_CLOEXEC
+        if hasattr(os, "O_NOFOLLOW"):
+            lock_flags |= os.O_NOFOLLOW
         try:
-            os.fsync(fd)
-        finally:
-            os.close(fd)
-    os.chmod(incoming, 0o700)
-    sync_directory(incoming)
-    if info(final) is not None:
-        refuse("immutable release already exists; it must never be rewritten")
-    os.rename(incoming, final)
-    sync_directory(releases_root)
+            lock_fd = os.open(".publish.lock", lock_flags, 0o600, dir_fd=root_descriptor)
+        except OSError:
+            refuse("publication lock is not a no-follow regular file")
+        def prove_lock_inode():
+            try:
+                linked = os.stat(".publish.lock", dir_fd=root_descriptor, follow_symlinks=False)
+                opened = os.fstat(lock_fd)
+            except OSError:
+                refuse("publication lock cannot be inspected safely")
+            if (
+                not stat.S_ISREG(opened.st_mode)
+                or stat.S_IMODE(opened.st_mode) != 0o600
+                or opened.st_nlink != 1
+                or (opened.st_dev, opened.st_ino) != (linked.st_dev, linked.st_ino)
+            ):
+                refuse("publication lock must be one regular mode-0600 file")
 
-atomic_write(os.path.join(root, "history.json"), base64.b64decode(payload["historyBase64"]))
-atomic_write(os.path.join(root, "current.json"), base64.b64decode(payload["currentBase64"]))
+        prove_lock_inode()
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            refuse("another Pin release publication holds the store lock")
+        except OSError:
+            refuse("publication lock cannot be acquired safely")
+        # Re-prove the pathname after acquiring authority. A replacement would
+        # otherwise let two publishers lock two different inodes under one name.
+        prove_lock_inode()
+        os.fsync(lock_fd)
+        sync_directory_fd(root_descriptor, "release store root")
+        return lock_fd
+    except BaseException:
+        if lock_fd is not None:
+            os.close(lock_fd)
+        raise
+
+
+def apply_publication(root_descriptor, releases_descriptor):
+    # Compare-and-swap. The two mutable documents must still be exactly what the
+    # inspection saw, or another publisher moved underneath this one and the
+    # plan's anti-rollback reasoning no longer describes reality. The store lock
+    # stays held from this first observation through both durable document writes.
+    observations = {}
+    for name, expected in (
+        ("history.json", payload["expectedHistorySha256"]),
+        ("current.json", payload["expectedCurrentSha256"]),
+    ):
+        observation = document_observation(root_descriptor, name)
+        observations[name] = observation
+        if observation["sha256"] != expected:
+            refuse(name + " changed since the store was inspected")
+
+    release_id = safe_component(payload["releaseId"], "release identifier")
+    filesystem_authority = payload["authority"]
+    expected_entries = {entry["name"]: entry for entry in payload["entries"]}
+    if len(expected_entries) != len(payload["entries"]):
+        refuse("release plan contains duplicate file names")
+    for name in expected_entries:
+        safe_component(name, "release entry name")
+    retained_descriptors = {}
+    retained_directory = None
+    if payload["incoming"] is None:
+        final_descriptor = open_named_directory(
+            releases_descriptor, release_id, "immutable release " + release_id
+        )
+        require_identity(
+            os.fstat(final_descriptor),
+            filesystem_authority.get("retainedRelease"),
+            "retained immutable release",
+            final_descriptor,
+        )
+        retained_directory = final_descriptor
+        actual_entries = sorted(os.listdir(final_descriptor))
+        if actual_entries != sorted(expected_entries):
+            refuse("retained immutable release does not hold exactly the planned files")
+        for name in actual_entries:
+            descriptor = open_regular(final_descriptor, name, "retained release entry " + name)
+            retained_descriptors[name] = descriptor
+            size, sha256 = digest_fd(descriptor)
+            if size != expected_entries[name]["size"] or sha256 != expected_entries[name]["sha256"]:
+                refuse("retained release entry does not match its pinned digest: " + name)
+            reprove_link(final_descriptor, name, descriptor, "retained release entry " + name)
+    else:
+        incoming_name = safe_component(payload["incoming"], "incoming directory name")
+        if not incoming_name.startswith(".incoming-"):
+            refuse("incoming directory name is outside the transaction namespace")
+        incoming_descriptor = open_named_directory(
+            releases_descriptor, incoming_name, "incoming release directory"
+        )
+        require_identity(
+            os.fstat(incoming_descriptor),
+            filesystem_authority.get("incoming"),
+            "incoming release directory",
+            incoming_descriptor,
+        )
+        actual_entries = sorted(os.listdir(incoming_descriptor))
+        if actual_entries != sorted(expected_entries):
+            refuse("incoming release directory does not hold exactly the planned files")
+        entry_descriptors = {}
+        try:
+            for name in actual_entries:
+                descriptor = open_regular(
+                    incoming_descriptor, name, "incoming entry " + name
+                )
+                entry_descriptors[name] = descriptor
+                target_authorities = filesystem_authority.get("targets")
+                if not isinstance(target_authorities, dict) or name not in target_authorities:
+                    refuse("incoming entry filesystem authority is missing: " + name)
+                require_identity(
+                    os.fstat(descriptor),
+                    target_authorities[name],
+                    "incoming entry " + name,
+                    descriptor,
+                )
+                size, sha256 = digest_fd(descriptor)
+                if size != expected_entries[name]["size"] or sha256 != expected_entries[name]["sha256"]:
+                    refuse("incoming entry does not match its pinned digest: " + name)
+                # A deterministic test barrier replaces the linked name here,
+                # after the genuine digest. All following mutations stay on the
+                # held descriptor and the name must still prove the same inode.
+                reprove_link(incoming_descriptor, name, descriptor, "incoming entry " + name)
+                os.fchmod(descriptor, 0o600)
+                os.fsync(descriptor)
+                reprove_link(incoming_descriptor, name, descriptor, "incoming entry " + name)
+
+            if sorted(os.listdir(incoming_descriptor)) != actual_entries:
+                refuse("incoming release directory changed after verification")
+            for name, descriptor in entry_descriptors.items():
+                reprove_link(incoming_descriptor, name, descriptor, "incoming entry " + name)
+
+            os.fchmod(incoming_descriptor, 0o700)
+            sync_directory_fd(incoming_descriptor, "incoming release directory")
+            linked_incoming = linked_info(releases_descriptor, incoming_name)
+            if linked_incoming is None or not same_inode(linked_incoming, os.fstat(incoming_descriptor)):
+                refuse("incoming release directory changed before publication")
+            if linked_info(releases_descriptor, release_id) is not None:
+                refuse("immutable release already exists; it must never be rewritten")
+
+            for name, observation in observations.items():
+                reprove_document(root_descriptor, name, observation)
+
+            rename_noreplace(
+                releases_descriptor,
+                incoming_name,
+                release_id,
+                "immutable release",
+            )
+            try:
+                final_info = linked_info(releases_descriptor, release_id)
+                if final_info is None or not same_inode(final_info, os.fstat(incoming_descriptor)):
+                    refuse("incoming release directory changed during publication rename")
+                if sorted(os.listdir(incoming_descriptor)) != actual_entries:
+                    refuse("incoming release directory changed during publication rename")
+                for name, descriptor in entry_descriptors.items():
+                    reprove_link(
+                        incoming_descriptor,
+                        name,
+                        descriptor,
+                        "incoming entry " + name,
+                    )
+            except BaseException:
+                # If a name was exchanged in the narrow reproof-to-rename
+                # window, restore the exact directory we just moved to its
+                # hidden transaction name before refusing. No pointer can name
+                # the candidate until all held file descriptors reprove here.
+                final_info = linked_info(releases_descriptor, release_id)
+                if (
+                    linked_info(releases_descriptor, incoming_name) is None
+                    and final_info is not None
+                    and same_inode(final_info, os.fstat(incoming_descriptor))
+                ):
+                    rename_noreplace(
+                        releases_descriptor,
+                        release_id,
+                        incoming_name,
+                        "incoming release directory",
+                    )
+                    sync_directory_fd(releases_descriptor, "immutable releases directory")
+                elif final_info is not None:
+                    quarantine_entry(
+                        releases_descriptor,
+                        release_id,
+                        "mismatched immutable release",
+                    )
+                raise
+            sync_directory_fd(releases_descriptor, "immutable releases directory")
+            # Keep every descriptor that proved the release alive through both
+            # pointer replacements. The final release name is re-proved around
+            # each write, so a post-rename directory or entry exchange is
+            # refused before this process acknowledges publication.
+            retained_directory = incoming_descriptor
+            incoming_descriptor = None
+            retained_descriptors = entry_descriptors
+            entry_descriptors = {}
+        finally:
+            for descriptor in entry_descriptors.values():
+                os.close(descriptor)
+            if incoming_descriptor is not None:
+                os.close(incoming_descriptor)
+
+    def reprove_published_release():
+        if retained_directory is None:
+            refuse("published release descriptor is missing")
+        named_root = open_absolute_directory(root, "release store root")
+        try:
+            require_identity(
+                os.fstat(named_root),
+                filesystem_authority.get("root"),
+                "release store root",
+                named_root,
+            )
+            if not same_inode(os.fstat(named_root), os.fstat(root_descriptor)):
+                refuse("release store root changed after it was opened")
+        finally:
+            os.close(named_root)
+        linked_releases = linked_info(root_descriptor, "releases")
+        opened_releases = os.fstat(releases_descriptor)
+        if (
+            linked_releases is None
+            or stat.S_ISLNK(linked_releases.st_mode)
+            or not stat.S_ISDIR(linked_releases.st_mode)
+            or not same_inode(linked_releases, opened_releases)
+        ):
+            refuse("immutable releases directory changed after it was opened")
+        require_identity(
+            opened_releases,
+            filesystem_authority.get("releases"),
+            "immutable releases directory",
+            releases_descriptor,
+        )
+        linked_release = linked_info(releases_descriptor, release_id)
+        opened_release = os.fstat(retained_directory)
+        if (
+            linked_release is None
+            or stat.S_ISLNK(linked_release.st_mode)
+            or not stat.S_ISDIR(linked_release.st_mode)
+            or not same_inode(linked_release, opened_release)
+        ):
+            if linked_release is not None and not same_inode(linked_release, opened_release):
+                quarantine_entry(
+                    releases_descriptor,
+                    release_id,
+                    "mismatched immutable release",
+                )
+            refuse("published immutable release changed after verification")
+        if sorted(os.listdir(retained_directory)) != sorted(expected_entries):
+            refuse("published immutable release changed after verification")
+        actual_hashes = {}
+        for name, descriptor in retained_descriptors.items():
+            reprove_link(retained_directory, name, descriptor, "published release entry " + name)
+            size, digest = digest_fd(descriptor)
+            expected = expected_entries[name]
+            if size != expected["size"] or digest != expected["sha256"]:
+                refuse("published release entry changed in place: " + name)
+            reprove_link(retained_directory, name, descriptor, "published release entry " + name)
+            actual_hashes[name] = {"size": size, "sha256": digest}
+        return actual_hashes
+
+    published_documents = {}
+    try:
+        for name, observation in observations.items():
+            reprove_document(root_descriptor, name, observation)
+        reprove_published_release()
+        published_documents["history.json"] = atomic_write(
+            root_descriptor,
+            "history.json",
+            base64.b64decode(payload["historyBase64"]),
+        )
+        verify_published_document(
+            root_descriptor,
+            "history.json",
+            published_documents["history.json"],
+        )
+        reprove_published_release()
+        reprove_document(root_descriptor, "current.json", observations["current.json"])
+        verify_published_document(
+            root_descriptor,
+            "history.json",
+            published_documents["history.json"],
+        )
+        published_documents["current.json"] = atomic_write(
+            root_descriptor,
+            "current.json",
+            base64.b64decode(payload["currentBase64"]),
+        )
+        verify_published_document(
+            root_descriptor,
+            "history.json",
+            published_documents["history.json"],
+        )
+        verify_published_document(
+            root_descriptor,
+            "current.json",
+            published_documents["current.json"],
+        )
+        reprove_published_release()
+        # Final commit proof: both canonical pointer byte strings are reopened
+        # no-follow after every publication and once more immediately before
+        # success is emitted.
+        final_pointer_hashes = {}
+        for name in ("history.json", "current.json"):
+            final_pointer_hashes[name] = verify_published_document(
+                root_descriptor, name, published_documents[name]
+            )
+        final_release_hashes = reprove_published_release()
+        for name in ("history.json", "current.json"):
+            final_pointer_hashes[name] = verify_published_document(
+                root_descriptor, name, published_documents[name]
+            )
+        return {
+            "historySha256": final_pointer_hashes["history.json"],
+            "currentSha256": final_pointer_hashes["current.json"],
+            "releaseEntries": final_release_hashes,
+        }
+    finally:
+        for observation in observations.values():
+            descriptor = observation["descriptor"]
+            if descriptor is not None:
+                os.close(descriptor)
+        for descriptor in retained_descriptors.values():
+            os.close(descriptor)
+        if retained_directory is not None:
+            os.close(retained_directory)
+        for observation in published_documents.values():
+            os.close(observation["descriptor"])
+
+
+root_descriptor = open_absolute_directory(root, "release store root")
+releases_descriptor = None
+lock_fd = None
+try:
+    filesystem_authority = payload["authority"]
+    require_identity(
+        os.fstat(root_descriptor), filesystem_authority.get("root"), "release store root", root_descriptor
+    )
+    releases_info = linked_info(root_descriptor, "releases")
+    if releases_info is None:
+        refuse("immutable releases directory is missing")
+    releases_descriptor = open_named_directory(
+        root_descriptor, "releases", "immutable releases directory"
+    )
+    require_identity(
+        os.fstat(releases_descriptor),
+        filesystem_authority.get("releases"),
+        "immutable releases directory",
+        releases_descriptor,
+    )
+    lock_fd = acquire_store_lock(root_descriptor)
+    try:
+        publication_ack = apply_publication(root_descriptor, releases_descriptor)
+    finally:
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        os.close(lock_fd)
+        lock_fd = None
+finally:
+    if lock_fd is not None:
+        os.close(lock_fd)
+    if releases_descriptor is not None:
+        os.close(releases_descriptor)
+    os.close(root_descriptor)
 
 sys.stdout.write(
     json.dumps(
-        {"schemaVersion": 1, "applied": True, "releaseId": payload["releaseId"]},
+        {
+            "schemaVersion": 1,
+            "applied": True,
+            "releaseId": payload["releaseId"],
+            **publication_ack,
+        },
         sort_keys=True,
         separators=(",", ":"),
     )
@@ -791,22 +3311,29 @@ export function composeRemoteInvocation({ script, document }) {
     fail("invalid-invocation", "a remote helper script is required");
   }
   if (document === undefined || document === null) {
-    return `${REMOTE_PRELUDE}REVIVAL_PIN_PAYLOAD=""\nexport REVIVAL_PIN_PAYLOAD\n${script}`;
+    return `${REMOTE_PRELUDE}${script}`;
   }
-  if (typeof document !== "string" || document.includes(PAYLOAD_DELIMITER)) {
-    fail("invalid-invocation", "the remote payload cannot contain the payload delimiter");
-  }
-  return (
-    `${REMOTE_PRELUDE}` +
-    `payload_file="$(mktemp)"\n` +
-    `cleanup_payload() { rm -f -- "$payload_file"; }\n` +
-    `trap cleanup_payload EXIT\n` +
-    `cat <<'${PAYLOAD_DELIMITER}' > "$payload_file"\n` +
-    `${document.endsWith("\n") ? document : `${document}\n`}` +
-    `${PAYLOAD_DELIMITER}\n` +
-    `REVIVAL_PIN_PAYLOAD="$payload_file"\nexport REVIVAL_PIN_PAYLOAD\n` +
-    script
+  fail(
+    "invalid-invocation",
+    "sensitive remote documents require the nondumpable framed-stdin transport",
   );
+}
+
+function extractPythonHeredoc(script, label) {
+  if (typeof script !== "string" || script.length === 0) {
+    fail("invalid-invocation", `${label} helper script is required`);
+  }
+  const match = script.match(/<<'([A-Za-z0-9_]+)'\n/u);
+  if (match === null || match.index === undefined) {
+    fail("invalid-invocation", `${label} helper lacks its Python heredoc`);
+  }
+  const start = match.index + match[0].length;
+  const terminator = `\n${match[1]}\n`;
+  const end = script.indexOf(terminator, start);
+  if (end < 0 || script.indexOf(terminator, end + terminator.length) >= 0) {
+    fail("invalid-invocation", `${label} helper has an ambiguous Python heredoc`);
+  }
+  return script.slice(start, end);
 }
 
 export function shellQuote(value) {
@@ -832,52 +3359,257 @@ export function validateRemoteRoot(candidate) {
   return candidate;
 }
 
-function runProcess(executable, args, { input, label, maximumOutputBytes = MAX_REMOTE_REPORT_BYTES }) {
-  return new Promise((resolvePromise, rejectPromise) => {
-    const child = spawn(executable, args, { stdio: ["pipe", "pipe", "pipe"] });
-    let stdout = "";
-    let stderr = "";
-    let settled = false;
-    const finish = (callback) => {
-      if (settled) return;
-      settled = true;
-      callback();
-    };
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString("utf8");
-      if (stdout.length > maximumOutputBytes) {
-        child.kill("SIGKILL");
-        finish(() => rejectPromise(new PinReleaseShipError("remote-failed", `${label} exceeded its output bound`)));
-      }
-    });
-    child.stderr.on("data", (chunk) => {
-      if (stderr.length <= 64 * 1024) stderr += chunk.toString("utf8");
-    });
-    child.once("error", (error) => {
-      finish(() => rejectPromise(new PinReleaseShipError("remote-failed", `${label} could not start: ${error.message}`)));
-    });
-    child.once("close", (code, signal) => {
-      finish(() => {
-        if (code === 0 && signal === null) resolvePromise(stdout);
-        else {
-          rejectPromise(new PinReleaseShipError(
-            "remote-failed",
-            `${label} failed${stderr.trim() ? `: ${stderr.trim()}` : ""}`,
-          ));
-        }
-      });
-    });
-    if (input !== undefined) child.stdin.end(input);
-    else child.stdin.end();
+function validateStagingComponent(candidate, label) {
+  if (
+    typeof candidate !== "string" ||
+    candidate.length === 0 ||
+    candidate === "." ||
+    candidate === ".." ||
+    Buffer.byteLength(candidate) > 255 ||
+    !STAGING_COMPONENT_RE.test(candidate)
+  ) {
+    fail("invalid-upload", `${label} is not a safe path component: ${String(candidate)}`);
+  }
+  return candidate;
+}
+
+function encodeFilesystemAuthority(authority) {
+  return Buffer.from(JSON.stringify(authority), "utf8").toString("base64");
+}
+
+function parseStagingAuthority(stdout) {
+  const value = parseReport(stdout, "incoming directory creation");
+  if (
+    !isRecord(value) ||
+    Object.keys(value).sort().join(",") !== "incoming,releases,root,targets" ||
+    !isRecord(value.targets)
+  ) {
+    fail("report-invalid", "incoming directory creation returned malformed authority");
+  }
+  const targets = Object.freeze(Object.fromEntries(
+    Object.entries(value.targets).map(([name, authority]) => [
+      validateStagingComponent(name, "staged upload filename"),
+      authority === null
+        ? null
+        : parseFilesystemAuthority(authority, `staged upload target ${name}`),
+    ]),
+  ));
+  return Object.freeze({
+    root: parseFilesystemAuthority(value.root, "staged release root"),
+    releases: parseFilesystemAuthority(value.releases, "staged releases directory"),
+    incoming: parseFilesystemAuthority(value.incoming, "staged incoming directory"),
+    targets,
   });
 }
 
-/**
- * Ship over ssh/scp. `scp` is what carries the APKs: it streams, so a 200 MiB
- * server package never becomes a buffer in this process or in the ssh payload.
+async function runProcess(executable, args, {
+  input,
+  label,
+  maximumOutputBytes = MAX_REMOTE_REPORT_BYTES,
+  timeoutMilliseconds = PROCESS_TIMEOUT_MILLISECONDS,
+}) {
+  const child = spawn(executable, args, {
+    detached: OWN_CHILD_PROCESS_GROUP,
+    stdio: ["pipe", "pipe", "pipe"],
+    env: positiveToolEnvironment(),
+  });
+  const tracked = trackChildProcess(child, { ownsProcessGroup: OWN_CHILD_PROCESS_GROUP });
+  let stdout = "";
+  let stderr = "";
+  let processError = null;
+  let forcedTermination = null;
+  const terminateForFailure = () => {
+    if (forcedTermination === null) {
+      forcedTermination = terminateTrackedProcess(tracked, { graceMilliseconds: 1 });
+      void forcedTermination.catch(() => undefined);
+    }
+  };
+  child.stdout.on("data", (chunk) => {
+    if (processError !== null) return;
+    stdout += chunk.toString("utf8");
+    if (stdout.length > maximumOutputBytes) {
+      processError = new PinReleaseShipError("remote-failed", `${label} exceeded its output bound`);
+      terminateForFailure();
+    }
+  });
+  child.stderr.on("data", (chunk) => {
+    if (stderr.length <= 64 * 1024) stderr += chunk.toString("utf8");
+  });
+  child.stdin.on("error", (error) => {
+    if (error?.code !== "EPIPE" && processError === null) {
+      processError = new PinReleaseShipError("remote-failed", `${label} input failed: ${error.message}`);
+      terminateForFailure();
+    }
+  });
+  if (input !== undefined) child.stdin.end(input);
+  else child.stdin.end();
+  const outcome = await withTrackedDeadline(tracked, tracked.close, {
+    milliseconds: timeoutMilliseconds,
+    timeoutError: () => new PinReleaseShipError(
+      "remote-timeout",
+      `${label} exceeded its fixed wall-clock deadline`,
+    ),
+  });
+  if (forcedTermination !== null) await forcedTermination;
+  if (processError !== null) throw processError;
+  if (outcome.error !== null) {
+    throw new PinReleaseShipError("remote-failed", `${label} could not start: ${outcome.error.message}`);
+  }
+  if (outcome.code !== 0 || outcome.signal !== null) {
+    throw new PinReleaseShipError(
+      "remote-failed",
+      `${label} failed${stderr.trim() ? `: ${stderr.trim()}` : ""}`,
+    );
+  }
+  return stdout;
+}
+
+/*
+ * Sensitive helper input is never placed in argv, the environment, or a named
+ * temporary.  The child first establishes PR_SET_DUMPABLE=0 and only then
+ * emits the exact READY line.  Until that proof crosses this pipe, the parent
+ * withholds the length-prefixed document entirely.
  */
-export function createSshTransport({ remote, sshExecutable = "ssh", scpExecutable = "scp" }) {
-  if (typeof remote !== "string" || !REMOTE_NAME_RE.test(remote)) {
+async function runReadyProcess(
+  executable,
+  args,
+  {
+    document,
+    label,
+    maximumOutputBytes = MAX_REMOTE_REPORT_BYTES,
+    timeoutMilliseconds = PROTECTED_OPERATION_TIMEOUT_MILLISECONDS,
+  },
+) {
+  if (typeof document !== "string" || Buffer.byteLength(document) > MAX_FRAMED_DOCUMENT_BYTES) {
+    fail("invalid-invocation", `${label} framed document is outside its size bound`);
+  }
+  const child = spawn(executable, args, {
+    detached: OWN_CHILD_PROCESS_GROUP,
+    stdio: ["pipe", "pipe", "pipe"],
+    env: positiveToolEnvironment(),
+  });
+  const tracked = trackChildProcess(child, { ownsProcessGroup: OWN_CHILD_PROCESS_GROUP });
+  let stdout = "";
+  let stderr = "";
+  let readyBuffer = "";
+  let ready = false;
+  let processError = null;
+  let forcedTermination = null;
+  const terminateForFailure = () => {
+    if (forcedTermination === null) {
+      forcedTermination = terminateTrackedProcess(tracked, { graceMilliseconds: 1 });
+      void forcedTermination.catch(() => undefined);
+    }
+  };
+  let resolveReady;
+  const readyOperation = new Promise((resolvePromise) => { resolveReady = resolvePromise; });
+  child.stdout.on("data", (chunk) => {
+    if (processError !== null) return;
+    const text = chunk.toString("utf8");
+    if (!ready) {
+      readyBuffer += text;
+      if (!"READY\n".startsWith(readyBuffer) && !readyBuffer.startsWith("READY\n")) {
+        processError = new PinReleaseShipError(
+          "remote-failed",
+          `${label} returned output before its protected input boundary`,
+        );
+        terminateForFailure();
+        resolveReady();
+        return;
+      }
+      if (readyBuffer.startsWith("READY\n")) {
+        ready = true;
+        stdout += readyBuffer.slice("READY\n".length);
+        readyBuffer = "";
+        resolveReady();
+        const bytes = Buffer.from(document, "utf8");
+        child.stdin.cork();
+        child.stdin.write(`${bytes.length}\n`, "ascii");
+        child.stdin.end(bytes);
+        child.stdin.uncork();
+      }
+    } else {
+      stdout += text;
+    }
+    if (stdout.length > maximumOutputBytes) {
+      processError = new PinReleaseShipError("remote-failed", `${label} exceeded its output bound`);
+      terminateForFailure();
+      resolveReady();
+    }
+  });
+  child.stderr.on("data", (chunk) => {
+    if (stderr.length <= 64 * 1024) stderr += chunk.toString("utf8");
+  });
+  child.stdin.on("error", (error) => {
+    if (error?.code === "EPIPE" || processError !== null) return;
+    processError = new PinReleaseShipError(
+      "remote-failed",
+      `${label} protected input failed: ${error.message}`,
+    );
+    terminateForFailure();
+    resolveReady();
+  });
+  void tracked.exit.then(() => resolveReady());
+  await withTrackedDeadline(tracked, readyOperation, {
+    milliseconds: READY_TIMEOUT_MILLISECONDS,
+    timeoutError: () => new PinReleaseShipError(
+      "remote-timeout",
+      `${label} did not establish its protected input boundary`,
+    ),
+  });
+  if (processError !== null) {
+    await (forcedTermination ?? terminateTrackedProcess(tracked, { graceMilliseconds: 1 }));
+    throw processError;
+  }
+  if (!ready) {
+    const early = await tracked.exit;
+    if (early.error !== null) {
+      throw new PinReleaseShipError("remote-failed", `${label} could not start: ${early.error.message}`);
+    }
+    throw new PinReleaseShipError(
+      "remote-failed",
+      `${label} exited before its protected input boundary${stderr.trim() ? `: ${stderr.trim()}` : ""}`,
+    );
+  }
+  const outcome = await withTrackedDeadline(tracked, tracked.close, {
+    milliseconds: timeoutMilliseconds,
+    timeoutError: () => new PinReleaseShipError(
+      "remote-timeout",
+      `${label} exceeded its fixed post-READY wall-clock deadline`,
+    ),
+  });
+  if (forcedTermination !== null) await forcedTermination;
+  if (processError !== null) throw processError;
+  if (outcome.error !== null) {
+    throw new PinReleaseShipError("remote-failed", `${label} could not start: ${outcome.error.message}`);
+  }
+  if (outcome.code !== 0 || outcome.signal !== null) {
+    throw new PinReleaseShipError(
+      "remote-failed",
+      `${label} failed${stderr.trim() ? `: ${stderr.trim()}` : ""}`,
+    );
+  }
+  return stdout;
+}
+
+/**
+ * Ship over ssh/rsync. The transfer is quiet and each file receives a strict
+ * three-attempt budget. The checksum/delta algorithm repairs any existing
+ * ciphertext shape (short, corrupt, equal-size corrupt, or too long), while
+ * `--partial` keeps useful encrypted blocks in the hidden transaction directory
+ * after a transient disconnect. A keyless receiver anchors and fsyncs those
+ * bytes; a separate protected claim authenticates and decrypts into an unnamed
+ * inode. The apply helper streams and verifies the final size and SHA-256 before
+ * the incoming directory can be renamed into the immutable store.
+ */
+export function createSshTransport({
+  remote,
+  sshExecutable = FIXED_SSH,
+  rsyncExecutable = FIXED_RSYNC,
+  rsyncLauncherSource = REMOTE_RSYNC_LAUNCHER_SOURCE,
+  stagingScript = REMOTE_STAGING_SCRIPT,
+} = {}) {
+  if (typeof remote !== "string" || !REMOTE_NAME_RE.test(remote) || remote.startsWith("-")) {
     fail("invalid-remote", `unsafe ssh target: ${String(remote)}`);
   }
   const sshOptions = [
@@ -886,38 +3618,201 @@ export function createSshTransport({ remote, sshExecutable = "ssh", scpExecutabl
     "-o", "ServerAliveInterval=15",
     "-o", "ServerAliveCountMax=2",
   ];
+  // rsync accepts its remote shell as one option value and tokenizes that value
+  // itself. Keep the customizable executable deliberately narrower than a shell
+  // command: no whitespace, quotes, substitutions, or user-controlled options
+  // can enter that tokenization boundary. Host identity and known-host behavior
+  // remain ssh's defaults; the same batch/connect/keepalive options used by the
+  // helper invocations are carried into every rsync attempt.
+  if (
+    typeof sshExecutable !== "string" ||
+    !/^[A-Za-z0-9_./-]+$/u.test(sshExecutable) ||
+    sshExecutable.startsWith("-")
+  ) {
+    fail("invalid-transport", `unsafe ssh executable for rsync: ${String(sshExecutable)}`);
+  }
+  if (typeof rsyncLauncherSource !== "string" || rsyncLauncherSource.length === 0) {
+    fail("invalid-transport", "a remote rsync launcher source is required");
+  }
+  const rsyncRemoteShell = [sshExecutable, ...sshOptions].join(" ");
+  const runRemote = async ({
+    script,
+    args = [],
+    document,
+    label,
+    maximumOutputBytes = MAX_REMOTE_REPORT_BYTES,
+  }) => {
+    if (document !== undefined && document !== null) {
+      const source = extractPythonHeredoc(script, label);
+      const sourceBase64 = Buffer.from(source, "utf8").toString("base64");
+      const bootstrap = "import base64,sys;exec(compile(base64.b64decode(sys.argv.pop(1)),\"<revival-pin-protected>\",\"exec\"))";
+      const command = [FIXED_PYTHON, "-I", "-B", "-c", bootstrap, sourceBase64, ...args]
+        .map((value) => shellQuote(value))
+        .join(" ");
+      return await runReadyProcess(
+        sshExecutable,
+        [...sshOptions, remote, command],
+        { document, label, maximumOutputBytes },
+      );
+    }
+    const command = `${FIXED_BASH} -s -- ${args.map((value) => shellQuote(value)).join(" ")}`;
+    return await runProcess(sshExecutable, [...sshOptions, remote, command], {
+      input: composeRemoteInvocation({ script, document }),
+      label,
+      maximumOutputBytes,
+    });
+  };
   return Object.freeze({
     describe: () => `ssh:${remote}`,
     async run({ script, args = [], document, label }) {
-      const command = `bash -s -- ${args.map((value) => shellQuote(value)).join(" ")}`;
-      return await runProcess(sshExecutable, [...sshOptions, remote, command], {
-        input: composeRemoteInvocation({ script, document }),
-        label,
+      return await runRemote({ script, args, document, label });
+    },
+    async upload({
+      source,
+      destination,
+      releasesRoot,
+      incoming,
+      filename,
+      size,
+      sha256: digest,
+      authority,
+      label,
+    }) {
+      if (typeof source !== "string" || !isAbsolute(source) || source.includes("\0")) {
+        fail("invalid-upload", `unsafe local upload source: ${String(source)}`);
+      }
+      // `destination` is an audit assertion, not rsync's authority: the actual
+      // endpoint is one protected relative component, and the remote launcher
+      // anchors that component to its held incoming-directory descriptor.
+      validateRemoteRoot(destination);
+      validateRemoteRoot(releasesRoot);
+      validateStagingComponent(incoming, "incoming directory name");
+      validateStagingComponent(filename, "upload filename");
+      if (!Number.isSafeInteger(size) || size < 0 || typeof digest !== "string" || !SHA256_RE.test(digest)) {
+        fail("invalid-upload", "upload content authority is malformed");
+      }
+      if (destination !== `${releasesRoot}/${incoming}/${filename}`) {
+        fail("invalid-upload", "upload destination differs from its directory authority");
+      }
+      if (typeof label !== "string" || label.length === 0 || label.includes("\0")) {
+        fail("invalid-upload", "an upload label must be NUL-free text");
+      }
+
+      const resumeKey = randomBytes(32).toString("hex");
+      const sealedName = encryptedResumeName(filename);
+      const envelopeDirectory = await mkdtemp(join(tmpdir(), "revival-pin-rsync-"));
+      const sealedSource = join(envelopeDirectory, "payload.sealed");
+      const claim = async () => {
+        const stdout = await runRemote({
+          script: stagingScript,
+          args: ["claim", releasesRoot, incoming, encodeFilesystemAuthority({
+            ...authority,
+            filename,
+            sealedName,
+            size,
+            sha256: digest,
+          })],
+          document: resumeKey,
+          label: `${label} claim`,
+          maximumOutputBytes: 64 * 1024,
+        });
+        return parseFilesystemAuthority(
+          parseReport(stdout, `${label} claim`),
+          `${label} target`,
+        );
+      };
+      try {
+        await runReadyProcess(FIXED_PYTHON, [
+          "-I", "-B", "-c",
+          extractPythonHeredoc(LOCAL_SEAL_UPLOAD_SCRIPT, `${label} local encryption`),
+          source,
+          sealedSource,
+          String(size),
+          digest,
+        ], {
+          document: resumeKey,
+          label: `${label} local encryption`,
+          maximumOutputBytes: 64 * 1024,
+        });
+        const rsyncPath = createRemoteRsyncPath({
+          releasesRoot,
+          incoming,
+          filename,
+          sealedName,
+          size,
+          sha256: digest,
+          filesystemAuthority: authority,
+          launcherSource: rsyncLauncherSource,
+        });
+        const argumentsList = [
+          ...RSYNC_UPLOAD_OPTIONS,
+          `--rsh=${rsyncRemoteShell}`,
+          `--rsync-path=${rsyncPath}`,
+          "--",
+          sealedSource,
+          `${remote}:${sealedName}`,
+        ];
+        let lastError;
+        for (let attempt = 1; attempt <= RSYNC_UPLOAD_ATTEMPTS; attempt += 1) {
+          try {
+            await runProcess(rsyncExecutable, argumentsList, {
+              input: "",
+              label: `${label} (rsync attempt ${attempt}/${RSYNC_UPLOAD_ATTEMPTS})`,
+              maximumOutputBytes: 64 * 1024,
+              timeoutMilliseconds: RSYNC_TIMEOUT_MILLISECONDS,
+            });
+            return await claim();
+          } catch (error) {
+            lastError = error;
+            try {
+              return await claim();
+            } catch {
+              // A failed receiver may retain ciphertext for the next rsync
+              // attempt, but never a named plaintext partial.
+            }
+          }
+        }
+        const detail = lastError instanceof Error && lastError.message.length > 0
+          ? `: ${lastError.message}`
+          : "";
+        throw new PinReleaseShipError(
+          "remote-failed",
+          `${label} failed after ${RSYNC_UPLOAD_ATTEMPTS} resumable rsync attempts${detail}`,
+        );
+      } finally {
+        await unlink(sealedSource).catch((error) => {
+          if (error?.code !== "ENOENT") throw error;
+        });
+        await rmdir(envelopeDirectory);
+      }
+    },
+    async makeIncomingDirectory({ releasesRoot, name, authority, filenames }) {
+      validateRemoteRoot(releasesRoot);
+      validateStagingComponent(name, "incoming directory name");
+      if (!name.startsWith(".incoming-")) {
+        fail("invalid-upload", "incoming directory name is outside the transaction namespace");
+      }
+      const path = `${releasesRoot}/${name}`;
+      const stdout = await runRemote({
+        script: stagingScript,
+        args: ["create", releasesRoot, name, encodeFilesystemAuthority({
+          ...authority,
+          filenames,
+        })],
+        label: "incoming directory creation",
+        maximumOutputBytes: 64 * 1024,
       });
+      return Object.freeze({ path, authority: parseStagingAuthority(stdout) });
     },
-    async upload({ source, destination, label }) {
-      await runProcess(
-        scpExecutable,
-        [...sshOptions, "-q", "--", source, `${remote}:${destination}`],
-        { input: "", label, maximumOutputBytes: 64 * 1024 },
-      );
-    },
-    async makeIncomingDirectory({ releasesRoot, name }) {
-      const path = `${releasesRoot}/${name}`;
-      await runProcess(
-        sshExecutable,
-        [...sshOptions, remote, `umask 077; test ! -e ${shellQuote(path)} && install -d -m 700 ${shellQuote(path)}`],
-        { input: "", label: "incoming directory creation", maximumOutputBytes: 64 * 1024 },
-      );
-      return path;
-    },
-    async removeIncomingDirectory({ releasesRoot, name }) {
-      const path = `${releasesRoot}/${name}`;
-      await runProcess(
-        sshExecutable,
-        [...sshOptions, remote, `rm -rf -- ${shellQuote(path)}`],
-        { input: "", label: "incoming directory cleanup", maximumOutputBytes: 64 * 1024 },
-      ).catch(() => undefined);
+    async removeIncomingDirectory({ releasesRoot, name, authority }) {
+      validateRemoteRoot(releasesRoot);
+      validateStagingComponent(name, "incoming directory name");
+      await runRemote({
+        script: stagingScript,
+        args: ["remove", releasesRoot, name, encodeFilesystemAuthority(authority)],
+        label: "incoming directory cleanup",
+        maximumOutputBytes: 64 * 1024,
+      }).catch(() => undefined);
     },
   });
 }
@@ -927,26 +3822,107 @@ export function createSshTransport({ remote, sshExecutable = "ssh", scpExecutabl
  * local shell. Real when the store is a locally mounted volume, and it is what
  * lets the acceptance suite execute the actual remote helpers without a server.
  */
-export function createLocalTransport({ shellExecutable = "bash" } = {}) {
+export function createLocalTransport({
+  shellExecutable = FIXED_BASH,
+  localUploadScript = LOCAL_UPLOAD_SCRIPT,
+} = {}) {
+  const runLocal = async ({ script, args = [], document, label }) => {
+    if (document !== undefined && document !== null) {
+      return await runReadyProcess(
+        FIXED_PYTHON,
+        ["-I", "-B", "-c", extractPythonHeredoc(script, label), ...args],
+        { document, label },
+      );
+    }
+    return await runProcess(shellExecutable, ["-s", "--", ...args], {
+      input: composeRemoteInvocation({ script, document }),
+      label,
+    });
+  };
   return Object.freeze({
     describe: () => "file",
     async run({ script, args = [], document, label }) {
-      return await runProcess(shellExecutable, ["-s", "--", ...args], {
-        input: composeRemoteInvocation({ script, document }),
-        label,
-      });
+      return await runLocal({ script, args, document, label });
     },
-    async upload({ source, destination }) {
-      await pipeline(createReadStream(source), createWriteStream(destination, { mode: 0o600 }));
+    async upload({
+      source,
+      destination,
+      releasesRoot,
+      incoming,
+      filename,
+      size,
+      sha256: digest,
+      authority,
+      label,
+    }) {
+      if (
+        typeof source !== "string" ||
+        !isAbsolute(source) ||
+        source.includes("\0") ||
+        destination !== `${releasesRoot}/${incoming}/${filename}` ||
+        !Number.isSafeInteger(size) ||
+        size < 0 ||
+        typeof digest !== "string" ||
+        !SHA256_RE.test(digest)
+      ) {
+        fail("invalid-upload", "local upload authority is malformed");
+      }
+      const resumeKey = randomBytes(32).toString("hex");
+      let lastError;
+      for (let attempt = 1; attempt <= RSYNC_UPLOAD_ATTEMPTS; attempt += 1) {
+        try {
+          const stdout = await runLocal({
+            script: localUploadScript,
+            args: [
+              source,
+              releasesRoot,
+              incoming,
+              filename,
+              String(size),
+              digest,
+              encodeFilesystemAuthority(authority),
+            ],
+            document: resumeKey,
+            label: `${label} (local attempt ${attempt}/${RSYNC_UPLOAD_ATTEMPTS})`,
+          });
+          return parseFilesystemAuthority(
+            parseReport(stdout, `${label} local upload`),
+            `${label} target`,
+          );
+        } catch (error) {
+          lastError = error;
+        }
+      }
+      const detail = lastError instanceof Error && lastError.message.length > 0
+        ? `: ${lastError.message}`
+        : "";
+      throw new PinReleaseShipError(
+        "remote-failed",
+        `${label} failed after ${RSYNC_UPLOAD_ATTEMPTS} resumable local attempts${detail}`,
+      );
     },
-    async makeIncomingDirectory({ releasesRoot, name }) {
-      await mkdir(releasesRoot, { recursive: true, mode: 0o700 });
+    async makeIncomingDirectory({ releasesRoot, name, authority, filenames }) {
+      validateRemoteRoot(releasesRoot);
+      validateStagingComponent(name, "incoming directory name");
       const path = join(releasesRoot, name);
-      await mkdir(path, { mode: 0o700 });
-      return path;
+      const stdout = await runLocal({
+        script: REMOTE_STAGING_SCRIPT,
+        args: ["create", releasesRoot, name, encodeFilesystemAuthority({
+          ...authority,
+          filenames,
+        })],
+        label: "incoming directory creation",
+      });
+      return Object.freeze({ path, authority: parseStagingAuthority(stdout) });
     },
-    async removeIncomingDirectory({ releasesRoot, name }) {
-      await rm(join(releasesRoot, name), { recursive: true, force: true }).catch(() => undefined);
+    async removeIncomingDirectory({ releasesRoot, name, authority }) {
+      validateRemoteRoot(releasesRoot);
+      validateStagingComponent(name, "incoming directory name");
+      await runLocal({
+        script: REMOTE_STAGING_SCRIPT,
+        args: ["remove", releasesRoot, name, encodeFilesystemAuthority(authority)],
+        label: "incoming directory cleanup",
+      }).catch(() => undefined);
     },
   });
 }
@@ -983,12 +3959,12 @@ export async function inspectRemotePinReleaseStore({ transport, remoteRoot, rele
  * matches `./revival pin install`: the command that can change something states
  * what it would change and does nothing until it is told twice.
  */
-export async function shipPinRelease({
+async function shipPinReleaseCore({
   releaseRoot,
   remoteRoot = DEFAULT_REMOTE_RELEASE_ROOT,
   transport,
   confirm = false,
-}) {
+}, { testFixture = false } = {}) {
   validateRemoteRoot(remoteRoot);
   const local = await readLocalPinReleaseStore({ root: releaseRoot });
   if (local.tail === null) fail("nothing-to-ship", "the local Pin release store has no published release");
@@ -999,6 +3975,13 @@ export async function shipPinRelease({
     releaseIds: [local.tail.releaseId],
   });
   const plan = createPinReleaseShipPlan({ local, remote });
+
+  if (confirm && !testFixture) {
+    await reverifyPersistedHostedRelease({
+      releaseDirectory: local.releaseDirectory,
+      manifest: local.current.manifest,
+    });
+  }
 
   const summary = {
     schemaVersion: 1,
@@ -1013,40 +3996,129 @@ export async function shipPinRelease({
     applied: false,
   };
   if (!confirm) return Object.freeze(summary);
-  if (plan.alreadyCurrent && plan.uploads.length === 0) {
-    return Object.freeze({ ...summary, applied: true, unchanged: true });
-  }
+  // Even an already-current confirmation reaches the helper. A preceding
+  // directory-fsync error can leave complete new bytes visible but not yet
+  // durably acknowledged; replaying the locked CAS and pointer fsyncs is what
+  // makes an operator retry close that uncertainty safely.
+  const unchanged = plan.alreadyCurrent && plan.uploads.length === 0;
 
   const releasesRoot = `${remoteRoot}/releases`;
   const incomingName = `.incoming-${plan.releaseId.slice(0, 12)}-${randomBytes(6).toString("hex")}`;
   let created = false;
+  let transactionAuthority = plan.authority;
   try {
     if (plan.uploads.length > 0) {
-      const directory = await transport.makeIncomingDirectory({ releasesRoot, name: incomingName });
+      const staged = await transport.makeIncomingDirectory({
+        releasesRoot,
+        name: incomingName,
+        authority: plan.authority,
+        filenames: plan.uploads.map((upload) => upload.name),
+      });
+      const directory = staged.path;
+      transactionAuthority = staged.authority;
       created = true;
       for (const upload of plan.uploads) {
-        await transport.upload({
+        // The staging directory was safe when it was created, but root or
+        // `releases` could have been exchanged before this individual rsync.
+        // This separate check is useful early feedback, but grants no authority:
+        // every individual rsync attempt re-opens and then HOLDS the complete
+        // no-follow parent chain in its own remote server process.
+        await transport.run({
+          script: REMOTE_STAGING_SCRIPT,
+          args: ["validate", releasesRoot, incomingName, encodeFilesystemAuthority({
+            ...transactionAuthority,
+            filename: upload.name,
+          })],
+          label: `validate upload ${upload.name}`,
+        });
+        const targetAuthority = await transport.upload({
           source: upload.source,
           destination: `${directory}/${upload.name}`,
+          releasesRoot,
+          incoming: incomingName,
+          filename: upload.name,
+          size: upload.size,
+          sha256: upload.sha256,
+          authority: transactionAuthority,
           label: `upload ${upload.name}`,
+        });
+        transactionAuthority = Object.freeze({
+          ...transactionAuthority,
+          targets: Object.freeze({
+            ...transactionAuthority.targets,
+            [upload.name]: parseFilesystemAuthority(
+              targetAuthority,
+              `uploaded target ${upload.name}`,
+            ),
+          }),
         });
       }
     }
     const stdout = await transport.run({
       script: REMOTE_APPLY_SCRIPT,
       args: [remoteRoot],
-      document: createApplyPayload(plan, incomingName),
+      document: createApplyPayload(plan, incomingName, transactionAuthority),
       label: "remote release publication",
     });
     const result = parseReport(stdout, "remote release publication");
-    if (result?.applied !== true || result.releaseId !== plan.releaseId) {
+    const expectedReleaseEntries = Object.fromEntries(
+      plan.entries.map((entry) => [entry.name, { size: entry.size, sha256: entry.sha256 }]),
+    );
+    const acknowledgedEntries = isRecord(result?.releaseEntries) ? result.releaseEntries : null;
+    const entriesMatch = acknowledgedEntries !== null &&
+      Object.keys(acknowledgedEntries).sort().join("\0") ===
+        Object.keys(expectedReleaseEntries).sort().join("\0") &&
+      Object.entries(expectedReleaseEntries).every(([name, expected]) => {
+        const actual = acknowledgedEntries[name];
+        return isRecord(actual) && actual.size === expected.size && actual.sha256 === expected.sha256;
+      });
+    if (
+      result?.applied !== true ||
+      result.releaseId !== plan.releaseId ||
+      result.historySha256 !== sha256(plan.historyDocument) ||
+      result.currentSha256 !== sha256(plan.currentDocument) ||
+      !entriesMatch
+    ) {
       fail("apply-failed", "the remote helper did not confirm the published release");
     }
     created = false;
-    return Object.freeze({ ...summary, applied: true, unchanged: false });
+    return Object.freeze({ ...summary, applied: true, unchanged });
   } finally {
-    if (created) await transport.removeIncomingDirectory({ releasesRoot, name: incomingName });
+    if (created) {
+      await transport.removeIncomingDirectory({
+        releasesRoot,
+        name: incomingName,
+        authority: transactionAuthority,
+      });
+    }
   }
+}
+
+export async function shipPinRelease(options) {
+  if (process.env.REVIVAL_PIN_ENABLE_TEST_FIXTURES === "1") {
+    fail("test-mode", "authoritative ship rejects explicit synthetic fixture mode");
+  }
+  return await shipPinReleaseCore(options);
+}
+
+/**
+ * Transaction fixture for local and loopback/fake-SSH transport coverage. Both
+ * roots must remain beneath the OS temporary directory; authoritative
+ * CLI/module entrypoints reject the enabling mode and always run cryptographic
+ * reverify, so this cannot select a production store even when a test exercises
+ * the real SSH framing code.
+ */
+export async function shipPinReleaseFixture(options) {
+  const temporary = resolve(tmpdir());
+  const withinTemporary = (candidate) => {
+    const selected = resolve(candidate);
+    return selected !== temporary && selected.startsWith(`${temporary}/`);
+  };
+  if (
+    process.env.REVIVAL_PIN_ENABLE_TEST_FIXTURES !== "1" ||
+    !withinTemporary(options.releaseRoot) || !withinTemporary(options.remoteRoot ?? "")
+  ) fail("test-fixture-disabled", "ship fixture is restricted to explicit temporary-root test mode");
+  return await shipPinReleaseCore(options, { testFixture: true });
 }
 
 /* ------------------------------------------------------------------- CLI --- */
@@ -1055,10 +4127,11 @@ function help() {
   process.stdout.write(
     "Usage: ./revival pin release ship [--remote NAME | --local] [--remote-root PATH]\n" +
     "                                  [--release-root DIR] [--confirm] [--json]\n" +
-    "\nCopies the release `pin release build` already published locally into the store\n" +
+    "\nCopies the release the attested hosted workflow published locally into the store\n" +
     "Center serves from, so the in-browser installer can reach it. Without --confirm it\n" +
     "reads both stores, prints the plan, and changes nothing. It never runs a deploy and\n" +
-    "never touches a device.\n",
+    "never touches a device. A confirmed ship re-verifies the manifest-bound hosted\n" +
+    "pre/post Sigstore bundles and exact five APKs before any remote mutation.\n",
   );
 }
 

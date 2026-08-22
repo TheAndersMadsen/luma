@@ -7,8 +7,25 @@ system.
 
 Read [What cannot be regenerated](#what-cannot-be-regenerated) before anything
 else. Every item in it survives on exactly one machine until you run
-`./revival backup --fetch`, and one of them — the Pin signing keystores — exists
+`./revival backup --confirm --fetch`, and one of them — the Pin signing keystores — exists
 as exactly one copy anywhere.
+
+Path placeholders in this guide are host-specific. On the reviewed production
+host they resolve to `DEPLOYMENT_HOME=/home/anders`,
+`REMOTE_ROOT=/home/anders/ai-pin-revival`, and
+`CENTER_DATA_DIR=/home/anders/carry-center-data`. A rebuilt host must take the
+values from its verified deployment and backup evidence rather than assuming a
+different account layout is interchangeable.
+
+The names above are the protected live Carry contract. In particular, do not
+substitute the repository's current Cosmos-renamed defaults for
+`/home/anders/carry-center-data` or the `humane-carry-clone_carry-*` volumes.
+Those volumes are exactly `humane-carry-clone_carry-state`,
+`humane-carry-clone_carry-pgdata`, `humane-carry-clone_prometheus-data`, and
+`humane-carry-clone_grafana-data`.
+An immutable production candidate must pass that contract before it can contact
+Docker or the host; a checkout that proposes different durable names is a source
+for development work, not a recovery input.
 
 ## What cannot be regenerated
 
@@ -17,13 +34,14 @@ as exactly one copy anywhere.
 | Attestation CA private key | server `<attestation root>/ca.key` (+ `ca.crt`) | Its public root is pinned inside the APKs already installed on the Pin. Lose the key and no device-attestation credential the installed Pin accepts can ever be minted again. | `protected.tar.gz` |
 | DeviceUser CA private key | server `<DeviceUser root>/duc-ca.key` (+ `duc-ca.crt`) | Signs the client certificates the mTLS edge checks. Lose it and no new device certificate verifies. | `protected.tar.gz` |
 | Pin signing keystores | operator machine `~/.config/ai-pin-revival/secrets/pin/*.keystore` + `signing.env` | Android refuses an update signed by a different key. Lose these and no signed upgrade can ever be installed on the Pin already in the wearer's hand. | **no server backup** — only a `--fetch` bundle |
-| Center channel key | server `/home/anders/cosmos-center-data/channel-key.json` | The AES key Center seals wearer content with. Lose it and everything already sealed stays sealed. | `center-data.tar.gz` |
-| Cosmos key material | server volume `humane-cosmos-clone_cosmos-state` | Holds the device channel keys. The Pin mints its key id once and never re-establishes it. | `cosmos-state.tar.gz` |
+| Center channel key | server `$CENTER_DATA_DIR/channel-key.json` | The AES key Center seals wearer content with. Lose it and everything already sealed stays sealed. | `center-data.tar.gz` |
+| Cosmos wrapping key | server volume `humane-carry-clone_carry-state`, `ai-bus-keymaterial.json` | Holds the RSA private key matching the public wrapping key already given to the Pin. A replacement cannot unwrap a later upload to the old key. | `cosmos-state.tar.gz` |
+| Cosmos channel-key directory | `cosmos_channel_key` in the Cosmos PostgreSQL database | Sole authority for device channel keys across workloads. Loss makes existing sealed contacts, notes, captures, and events unreadable even if their rows survive. | `postgres-data.tar.gz` and `cosmos.sql.gz` |
 
 **Do not assume where the two CA roots live.** The backup does not: it reads the
 active root off the running container's read-only bind and accepts either the
 canonical `~/ai-pin-revival/private/{attest,duc}` or the legacy
-`/home/anders/cosmos-{attest,duc}`, refusing anything else
+`$DEPLOYMENT_HOME/cosmos-{attest,duc}`, refusing anything else
 (`platform/deploy/vps/remote/common.sh:1256-1297`). Whichever it found is written
 into `active-security-roots.tsv` in every backup, and the fetch-side key-material
 proof follows that file rather than a constant. Both pairs of directories existed
@@ -35,23 +53,23 @@ restoring from is the only statement of which one was live; read it before you
 set `REVIVAL_ATTEST_DIR`, `REVIVAL_DUC_DIR` or `REVIVAL_PRIVATE_DIR`, which are
 what `platform/compose/production.yaml:74-75` and `:155-156` bind from.
 
-Four of the five are captured by the backup — and every backup the server has
+Five of the six are captured by the backup — and every backup the server has
 ever written lives on the same filesystem as the thing it protects: checked on
 2026-08-11, 59 backups, 2.6 GB, on the same `/dev/sda1` as `private/`. Redundant
 copies of a file on the disk that would be lost are not redundancy. Losing that
 disk loses the attestation CA *and* all 59 backups that would have rescued it, in
-one event. The fifth — the Pin signing keystores — is on one laptop and appears
-in no server backup at all.
+one event. The one exception — the Pin signing keystores — is on one laptop and
+appears in no server backup at all.
 
-`./revival backup --fetch` is the command that makes that untrue. Nothing else
+`./revival backup --confirm --fetch` is the command that makes that untrue. Nothing else
 in this project produces a copy of either half that is not on the machine that
 would lose it.
 
 ## Making an off-host copy
 
 ```sh
-./revival backup --fetch                      # bundle lands in $REVIVAL_BACKUP_DIR
-./revival backup --fetch --fetch-dir /Volumes/…/revival   # or straight to removable media
+./revival backup --confirm --fetch                      # bundle lands in $REVIVAL_BACKUP_DIR
+./revival backup --confirm --fetch --fetch-dir /Volumes/…/revival   # or straight to removable media
 ```
 
 This runs the ordinary verified backup on the server, then:
@@ -137,7 +155,7 @@ read — not this page — because it is generated from the host that was backed
 roots, `/etc/nginx/{nginx.conf,sites-available,sites-enabled}`,
 `/etc/systemd/system/penumbra-center-bridge.service`, `/etc/penumbra` and
 `/var/lib/penumbra-center`; and, when they existed on the source host,
-`~/ai-pin-revival/private`, `/home/anders/cosmos-edge`, the three private env
+`~/ai-pin-revival/private`, `$DEPLOYMENT_HOME/cosmos-edge`, the three private env
 files, the Keycloak theme, `/etc/nginx/conf.d`, `/etc/cloudflared` and
 `~/.cloudflared`. `protected-presence.tsv` records which optional paths were
 present, so an absence is visible rather than assumed.
@@ -158,18 +176,18 @@ step 7.
 (`external: true` in `platform/compose/production.yaml`):
 
 ```sh
-for volume in cosmos-state cosmos-pgdata prometheus-data grafana-data; do
-  docker volume create "humane-cosmos-clone_$volume"
+for volume in carry-state carry-pgdata prometheus-data grafana-data; do
+  docker volume create "humane-carry-clone_$volume"
 done
 ```
 
-then, for each archive/volume pair — `cosmos-state.tar.gz` → `cosmos-state`,
-`postgres-data.tar.gz` → `cosmos-pgdata`, `prometheus-data.tar.gz` →
+then, for each archive/volume pair — `cosmos-state.tar.gz` → `carry-state`,
+`postgres-data.tar.gz` → `carry-pgdata`, `prometheus-data.tar.gz` →
 `prometheus-data`, `grafana-data.tar.gz` → `grafana-data`:
 
 ```sh
-docker run --rm --network none \
-  -v "humane-cosmos-clone_<volume>:/restore" \
+docker run --pull=never --rm --network none \
+  -v "humane-carry-clone_<volume>:/restore" \
   -v "$PWD/<archive>.tar.gz:/backup/data.tar.gz:ro" \
   <helper-image> sh -euc 'tar -xzpf /backup/data.tar.gz -C /restore'
 ```
@@ -179,19 +197,28 @@ Use the digest-pinned helper image named in `platform/deploy/vps/remote/common.s
 
 **4. Restore Center's bind directory.**
 
+Set `CENTER_DATA_DIR` to the absolute Center data directory recorded by the
+backup metadata and the deployment's `common.sh`; do not infer it from a
+different host's username.
+
 ```sh
-sudo mkdir -p /home/anders/cosmos-center-data
+test -n "$CENTER_DATA_DIR"
+sudo mkdir -p "$CENTER_DATA_DIR"
 sudo tar --numeric-owner --acls --xattrs --xattrs-include='*' \
-  -xzpf center-data.tar.gz -C /home/anders/cosmos-center-data
+  -xzpf center-data.tar.gz -C "$CENTER_DATA_DIR"
 ```
 
 This is where `channel-key.json` comes back. Its mode and owner are recorded in
-`invariants.tsv`; check them afterwards, because Center reads an unreadable key
-store as "first run" and would mint a new identity over it.
+`invariants.tsv`; check them afterwards. Center now fails closed on an unreadable,
+malformed, replaced, non-regular, symlinked, or non-`0600` store and will not
+mint or acknowledge a replacement. Restore the original bytes and permissions
+before restarting Center; do not move the bad file aside and treat it as a first
+run unless loss of all content sealed to that key is the deliberate recovery
+decision.
 
 **5. Restore PostgreSQL.** `postgres-data.tar.gz` (step 3) is a physical
 snapshot of a cleanly stopped cluster and is the fastest path — start the
-Postgres container against the restored `cosmos-pgdata` volume, using the image
+Postgres container against the restored `carry-pgdata` volume, using the image
 recorded in `postgres-restore-image-id.txt`.
 
 If you instead rebuild logically into a blank cluster, restore in this order and
@@ -211,6 +238,17 @@ so each of them drops and recreates its own database and is safe to re-run.
 The `keycloak` database is the only place the realm exists — clients, session
 lifetimes, theme binding, and the wearer's account. There is no realm export in
 this repository for production; `keycloak.sql.gz` is it.
+
+Restore the Cosmos state volume and PostgreSQL as one recovery unit before
+starting AI-bus. On startup, an old snapshot may still contain the former local
+copy of channel keys. AI-bus strips those rows only when each byte-for-byte key
+already exists in the restored `cosmos_channel_key` table; a missing or
+mismatched row is a deliberate fail-closed recovery stop, not permission to
+overwrite PostgreSQL. Preserve the snapshot bytes, compare the backup evidence,
+and repair from the same backup generation. Parity/production key-consuming
+workloads also refuse to bind when their database URL is blank, and AI-bus
+refuses when its durable state directory is blank, so a memory-only fallback
+cannot turn a partial restore into a healthy service.
 
 **6. Prove the restore.** `invariants.tsv` carries the expected row count for the
 eight `cosmos_*` relations the system cares about, the Cosmos state volume's file
@@ -273,7 +311,9 @@ anywhere on the directory (`platform/deploy/pin/build.mjs:133-169`) — so resto
 them as `0700` directory, `0600` files or the first build fails on permissions.
 `signing.env` refers to the keystore by absolute path, and that path is resolved
 and re-checked (`build.mjs:285-291`) — fix it if the new machine's home directory
-differs, or `./revival pin release build` will refuse.
+differs before the operator-owned protected-input provisioner stages it for the
+attested hosted workflow. The local `pin release build` alias always refuses;
+restoring these bytes does not turn a checkout into release authority.
 
 What no backup contains, and what you therefore rebuild rather than restore:
 container images (repackage the release), the release archives themselves, and
@@ -283,7 +323,7 @@ anything on the Pin.
 
 **There is no command for this, and rollback is not one.**
 
-`./revival rollback --deployment ID` moves the release pointer back. It takes a
+`./revival rollback --deployment ID --confirm` moves the release pointer back. It takes a
 fresh verified backup first, returns the previous release's containers, and
 prints `databases were not restored` when it succeeds. Writes made after the
 cutover — notes, captures, memories, device status — are still there when it
@@ -301,7 +341,7 @@ parses it, and this page is the procedure that flag would have to implement.
 
 To actually restore a database, do it deliberately:
 
-1. **Take a backup first.** `./revival backup --fetch`. You are about to discard
+1. **Take a backup first.** `./revival backup --confirm --fetch`. You are about to discard
    data; the current state must be recoverable before you start.
 2. **Pick the source.** Every backup directory on the server
    (`~/ai-pin-revival/backups/<id>`) holds `postgres-globals.sql.gz`,
@@ -322,7 +362,7 @@ To actually restore a database, do it deliberately:
    restores roles, memberships and tablespaces.
 6. **Verify before reopening.** Re-run the comparison from step 3 and confirm
    the restored counts match the backup's, then start the writers and run
-   `./revival canary`.
+   `./revival canary --confirm`.
 
 If the restore is part of undoing a bad deploy, do the app rollback first and
 decide about the database separately. They are different decisions with

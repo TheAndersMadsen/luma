@@ -16,6 +16,7 @@ const {
   runSpotifyBridgeAction,
   runSpotifySearch,
   unavailableSpotifyStatus,
+  deviceMusicGatewayToken,
 } = await import("../src/server/spotifyBridge.ts?spotify-service-tests");
 
 const session = {
@@ -39,6 +40,7 @@ function configureBridge() {
   process.env.COSMOS_ADMIN_TOKEN = "c".repeat(40);
   process.env.REVIVAL_SPOTIFY_ADAPTER_URL = "http://10.0.7.1:18081";
   process.env.REVIVAL_SPOTIFY_ADAPTER_TOKEN = "s".repeat(40);
+  process.env.REVIVAL_MUSIC_GATEWAY_ORIGIN = "https://center.example.test";
   delete process.env.REVIVAL_SPOTIFY_ADAPTER_TOKEN_FILE;
 }
 
@@ -50,14 +52,31 @@ test("settings DTO accepts only safe Pin-native settings", () => {
       device_name: "  Anders’ Ai Pin  ",
     }),
     {
+      active_provider: "spotify",
       enabled: true,
       experimental_acknowledged: true,
       device_name: "Anders’ Ai Pin",
     },
   );
 
+  assert.deepEqual(
+    parseSpotifySettingsDto({
+      active_provider: "tidal",
+      enabled: false,
+      experimental_acknowledged: false,
+      device_name: "Ai Pin",
+    }),
+    {
+      active_provider: "tidal",
+      enabled: false,
+      experimental_acknowledged: false,
+      device_name: "Ai Pin",
+    },
+  );
+
   for (const invalid of [
     { enabled: true, experimental_acknowledged: false, device_name: "Ai Pin" },
+    { active_provider: "tidal", enabled: true, experimental_acknowledged: false, device_name: "Ai Pin" },
     { enabled: true, experimental_acknowledged: true, device_name: "" },
     {
       enabled: true,
@@ -83,6 +102,7 @@ test("status normalization drops secrets and unexpected fields", () => {
     access_token: "must-not-leave-the-pin",
   });
   assert.deepEqual(normalized, {
+    active_provider: "spotify",
     enabled: true,
     experimental_acknowledged: true,
     state: "ready",
@@ -96,6 +116,7 @@ test("status normalization drops secrets and unexpected fields", () => {
 
 test("unavailable status exposes only bounded recovery guidance", () => {
   assert.deepEqual(unavailableSpotifyStatus("pairing_unconfirmed"), {
+    active_provider: "spotify",
     enabled: false,
     experimental_acknowledged: false,
     state: "unavailable",
@@ -192,7 +213,7 @@ test("Pin request rejection remains distinct from adapter unavailability", async
   assert.equal(calls, 2);
 });
 
-test("mounted adapter token file takes precedence and mutation body remains credential-free", async (t) => {
+test("mounted adapter token derives a distinct server-only music gateway bearer", async (t) => {
   configureBridge();
   const directory = await mkdtemp(path.join(tmpdir(), "revival-spotify-center-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -217,6 +238,7 @@ test("mounted adapter token file takes precedence and mutation body remains cred
     });
   };
   const settings = parseSpotifySettingsDto({
+    active_provider: "youtube_music",
     enabled: true,
     experimental_acknowledged: true,
     device_name: "Living Room Pin",
@@ -227,8 +249,14 @@ test("mounted adapter token file takes precedence and mutation body remains cred
   assert.equal(adapter.url, "http://10.0.7.1:18081/api/spotify/settings");
   assert.equal(adapter.init.method, "PUT");
   assert.equal(new Headers(adapter.init.headers).get("authorization"), `Bearer ${token}`);
-  assert.deepEqual(JSON.parse(String(adapter.init.body)), settings);
-  assert.doesNotMatch(String(adapter.init.body), /token|secret|account|device_id/i);
+  const forwarded = JSON.parse(String(adapter.init.body));
+  assert.deepEqual(forwarded, {
+    ...settings,
+    music_gateway_url: "https://center.example.test",
+    music_gateway_token: await deviceMusicGatewayToken(),
+  });
+  assert.notEqual(forwarded.music_gateway_token, token);
+  assert.doesNotMatch(String(adapter.init.body), /secret|account|device_id/i);
 });
 
 test("Center routes require session, owner roster and same-origin mutations", async () => {
@@ -292,7 +320,13 @@ test("Services renders every Pin-native state, polling and settings fallback", a
   assert.doesNotMatch(view, /aipin\.andersmadsen\.dk/);
   assert.match(view, /fallback_setup/);
   assert.match(view, /window\.confirm\("Disconnect Spotify from this Ai Pin\?"\)/);
-  assert.doesNotMatch(`${page}\n${view}`, /TIDAL|client secret|developer OAuth/i);
+  for (const provider of ["Spotify", "YouTube Music", "Apple Music", "TIDAL"]) {
+    assert.match(view, new RegExp(provider));
+  }
+  assert.match(view, /active_provider/);
+  assert.doesNotMatch(view, /Metrolist|install the app on the Pin|provider app owns its login/i);
+  assert.match(view, /Pear.*ad fields|ad\/tracker hosts/);
+  assert.doesNotMatch(`${page}\n${view}`, /client secret|developer OAuth/i);
 });
 
 /*

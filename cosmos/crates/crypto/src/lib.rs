@@ -50,6 +50,11 @@ pub enum CryptoError {
     /// replacement would strand the device for good.
     #[error("key material snapshot is unreadable; refusing to replace it")]
     SnapshotUnreadable,
+    /// A key mutation could not be installed atomically in the durable
+    /// key-material snapshot. Callers must not acknowledge the mutation: the
+    /// in-memory store is left at its previous, retryable state.
+    #[error("key material could not be persisted atomically")]
+    KeyMaterialPersistence,
 }
 
 /// The gRPC-level wrapper (`humane.common.encryption.EncryptedData`).
@@ -234,7 +239,7 @@ impl WrappingKeypair {
     /// Rebuild a keypair from [`WrappingKeypair::private_pkcs8_der`]. The public
     /// DER is recomputed rather than stored, so a restored keypair can never
     /// publish a public half that does not match its private one.
-    pub fn from_private_pkcs8_der(der: &[u8]) -> Result<Self, CryptoError> {
+    fn from_private_pkcs8_der(der: &[u8]) -> Result<Self, CryptoError> {
         use rsa::pkcs8::{DecodePrivateKey, EncodePublicKey};
         let priv_key = RsaPrivateKey::from_pkcs8_der(der).map_err(|_| CryptoError::RsaUnwrap)?;
         let public_der = rsa::RsaPublicKey::from(&priv_key)
@@ -245,6 +250,22 @@ impl WrappingKeypair {
             priv_key,
             public_der,
         })
+    }
+
+    /// Restore production wrapping material, refusing any modulus that does not
+    /// match the 4096-bit generation contract. Test-only smaller keys must never
+    /// become production-loadable snapshots.
+    pub fn from_production_private_pkcs8_der(der: &[u8]) -> Result<Self, CryptoError> {
+        let keypair = Self::from_private_pkcs8_der(der)?;
+        if keypair.modulus_bits() != 4096 {
+            return Err(CryptoError::RsaUnwrap);
+        }
+        Ok(keypair)
+    }
+
+    pub fn modulus_bits(&self) -> usize {
+        use rsa::traits::PublicKeyParts as _;
+        self.priv_key.n().bits()
     }
 
     /// RSA-OAEP-unwrap an uploaded, wrapped ephemeral key -> the raw AES key bytes.
@@ -266,7 +287,7 @@ pub fn wrap_channel_key(public_der: &[u8], key: &[u8]) -> Result<Vec<u8>, Crypto
 }
 
 /// The server's per-device store of unwrapped ephemeral channel keys (kid -> AES key).
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct ChannelKeyStore {
     keys: HashMap<String, [u8; AES_KEY_LEN]>,
 }
@@ -401,9 +422,12 @@ mod tests {
 
     #[test]
     fn rsa_oaep_unwraps_an_uploaded_key() {
-        // model the device: wrap a fresh AES key to the server's RSA public key.
+        // This unit proves the OAEP<Sha1> helper contract; the production
+        // modulus size is independently enforced by the release-only test below.
+        // A small ephemeral modulus keeps an ordinary debug test focused and
+        // avoids paying for another production-sized key.
         let mut rng = rand::thread_rng();
-        let priv_key = RsaPrivateKey::new(&mut rng, 2048).unwrap();
+        let priv_key = RsaPrivateKey::new(&mut rng, 1024).unwrap();
         let pub_key = RsaPublicKey::from(&priv_key);
         let aes_key = key();
         let wrapped = pub_key
@@ -411,5 +435,53 @@ mod tests {
             .unwrap();
         let unwrapped = unwrap_channel_key(&priv_key, &wrapped).unwrap();
         assert_eq!(unwrapped, aes_key);
+    }
+
+    /// The high-level Cosmos tests use one process-local 2048-bit key because
+    /// they are proving persistence and RPC behavior, not measuring keygen.
+    /// Keep one explicit test on the real constructor so a key-size or padding
+    /// regression cannot hide behind that faster test-only injection path.
+    #[test]
+    #[ignore = "4096-bit key generation is release-only; the release gate runs this test explicitly"]
+    fn production_wrapping_key_is_4096_bit_and_accepts_explicit_sha1_oaep() {
+        use rsa::pkcs8::DecodePublicKey as _;
+        use rsa::traits::PublicKeyParts as _;
+
+        let generated = WrappingKeypair::generate().expect("generate production wrapping key");
+        let persisted = generated
+            .private_pkcs8_der()
+            .expect("encode production wrapping key");
+        // Exercise the exact serialization/checked-restore boundary entirely in
+        // memory. Release verification must never leave production private DER
+        // in a general-purpose temporary directory, even briefly.
+        let restored = WrappingKeypair::from_production_private_pkcs8_der(&persisted)
+            .expect("production restore accepts exact 4096-bit key");
+
+        assert_eq!(
+            restored.public_der(),
+            generated.public_der(),
+            "persisted production restore must reconstruct the same public key"
+        );
+        let keypair = restored;
+        let public = RsaPublicKey::from_public_key_der(keypair.public_der())
+            .expect("parse generated wrapping public key");
+        assert_eq!(public.n().bits(), 4096, "production key size changed");
+
+        let channel_key = key();
+        // Exercise the device-facing side independently of
+        // `wrap_channel_key`: Java names this OAEPWithSHA1AndMGF1Padding.
+        let wrapped = public
+            .encrypt(
+                &mut rand::thread_rng(),
+                Oaep::new::<sha1::Sha1>(),
+                &channel_key,
+            )
+            .expect("explicit SHA-1 OAEP encrypts to production key");
+        assert_eq!(
+            keypair
+                .unwrap(&wrapped)
+                .expect("production server unwraps explicit SHA-1 OAEP"),
+            channel_key
+        );
     }
 }

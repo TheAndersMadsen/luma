@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/bash
 # Retention for the release and backup stores: the privileged half.
 #
 # WHAT IT IS FOR. Nothing in this tree has ever removed a release tree or a
@@ -23,7 +23,7 @@
 # WITHOUT --confirm IT REMOVES NOTHING. It prints the full plan, every retained
 # item with the named reason it is retained, and a plan token.
 set -euo pipefail
-remote_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+remote_dir="$(cd -- "$(/usr/bin/dirname -- "${BASH_SOURCE[0]}")" && /usr/bin/pwd -P)"
 source "$remote_dir/common.sh"
 
 confirm=0
@@ -37,9 +37,9 @@ usage() {
 usage: prune-state [--min-age-hours N] [--show-all] [--json]
                    [--include-incomplete] [--confirm [--expect-plan TOKEN]]
 
-Without --confirm this only PLANS: it proves which backups and release trees no
-recovery path can still reach, prints what it would remove and why, and changes
-nothing.
+Without --confirm this only PLANS: it proves which backups, release trees,
+immutable candidates, and stale incoming workspaces no recovery path can still
+reach, prints what it would remove and why, and changes nothing.
 EOF
   exit 64
 }
@@ -92,15 +92,19 @@ assert_not_inside_deployment_driver() {
 
 assert_target
 assert_remote_root
-for command in python3 sudo flock stat find du readlink sha256sum ps; do need "$command"; done
+for command in node python3 sudo flock stat find du readlink sha256sum ps; do need "$command"; done
 assert_not_inside_deployment_driver
 
 driver="$remote_dir/prune-state.py"
 [[ -f "$driver" && ! -L "$driver" ]] || fail "state retention driver is missing or unsafe"
+retention_store="$remote_dir/retention-store.py"
+[[ -f "$retention_store" && ! -L "$retention_store" ]] || fail "descriptor-held retention store helper is missing or unsafe"
 transaction_driver="$remote_dir/transaction.py"
 [[ -f "$transaction_driver" && ! -L "$transaction_driver" ]] || fail "authority transaction helper is missing or unsafe"
 
 [[ -d "$REMOTE_ROOT" && ! -L "$REMOTE_ROOT" ]] || fail "canonical deployment root is unsafe"
+candidate_store_root="$REMOTE_ROOT/release-candidates"
+incoming_store_root="$REMOTE_ROOT/incoming"
 for guarded in "$BACKUP_ROOT" "$RELEASES_DIR" "$DEPLOYMENTS_DIR"; do
   [[ -d "$guarded" && ! -L "$guarded" && "$(readlink -f -- "$guarded")" == "$guarded" ]] \
     || fail "guarded store is missing or unsafe: $guarded"
@@ -113,9 +117,179 @@ done
 exec 9>"$LOCK_FILE"
 flock -n 9 || fail "a deployment, backup, rollback or adoption holds the deployment lock; state retention never runs alongside one"
 
+# prune-state is intentionally streamed and therefore has no inherited release
+# descriptors of its own.  Its recovery post-condition still must use the exact
+# verifier belonging to `current`.  Bootstrap the current release's held
+# executor from its content-addressed manifest, seal that helper, and let the
+# helper seal/execute release-candidate.mjs with its root and manifest FDs.  At
+# no point is the candidate verifier executed from a mutable release pathname.
+run_manifest_held_candidate_verifier() {
+  local release="$1" release_id="$2" candidate="$3" candidate_id="$4"
+  local manifest="$MANIFESTS_DIR/$release_id.json"
+  "$REVIVAL_HOST_PYTHON" -I -B - "$release" "$manifest" "$release_id" "$candidate" "$candidate_id" <<'PY'
+import fcntl,hashlib,json,os,stat,subprocess,sys
+tree,manifest_path,release_id,candidate,candidate_id=sys.argv[1:]
+remote_root="/home/anders/ai-pin-revival"
+assert tree==f"{remote_root}/releases/{release_id}"
+assert manifest_path==f"{remote_root}/manifests/{release_id}.json"
+assert len(release_id)==len(candidate_id)==64
+assert all(character in "0123456789abcdef" for value in (release_id,candidate_id) for character in value)
+
+def identity(value):
+    return (value.st_dev,value.st_ino,value.st_size,value.st_mtime_ns,value.st_ctime_ns,
+            value.st_nlink,value.st_uid,value.st_gid,stat.S_IMODE(value.st_mode))
+
+def open_directory(path):
+    assert os.path.isabs(path) and os.path.normpath(path)==path
+    descriptor=os.open("/",os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+    try:
+        for component in path.split("/")[1:]:
+            assert component and component not in (".","..")
+            child=os.open(component,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=descriptor)
+            os.close(descriptor); descriptor=child
+        metadata=os.fstat(descriptor)
+        assert stat.S_ISDIR(metadata.st_mode)
+        assert (metadata.st_uid,metadata.st_gid)==(os.getuid(),os.getgid())
+        assert stat.S_IMODE(metadata.st_mode) in (0o700,0o755)
+        return descriptor,metadata
+    except BaseException:
+        os.close(descriptor); raise
+
+def open_file(path,mode):
+    parent,_=open_directory(os.path.dirname(path))
+    try:
+        name=os.path.basename(path); before=os.stat(name,dir_fd=parent,follow_symlinks=False)
+        assert stat.S_ISREG(before.st_mode) and before.st_nlink==1
+        assert (before.st_uid,before.st_gid,stat.S_IMODE(before.st_mode))==(os.getuid(),os.getgid(),mode)
+        descriptor=os.open(name,os.O_RDONLY|os.O_NOFOLLOW,dir_fd=parent)
+        opened=os.fstat(descriptor); assert identity(opened)==identity(before)
+        return parent,name,descriptor,opened
+    except BaseException:
+        os.close(parent); raise
+
+def read_all(descriptor,metadata,maximum=16*1024*1024):
+    assert metadata.st_size<=maximum
+    output=bytearray(); offset=0
+    while offset<metadata.st_size:
+        block=os.pread(descriptor,min(1024*1024,metadata.st_size-offset),offset); assert block
+        output.extend(block); offset+=len(block)
+    assert identity(os.fstat(descriptor))==identity(metadata)
+    return bytes(output)
+
+def open_relative(root,relative,mode,size):
+    components=relative.split("/"); parent=os.dup(root)
+    try:
+        for component in components[:-1]:
+            child=os.open(component,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=parent)
+            os.close(parent); parent=child
+        name=components[-1]; before=os.stat(name,dir_fd=parent,follow_symlinks=False)
+        assert stat.S_ISREG(before.st_mode) and before.st_nlink==1
+        assert (before.st_uid,before.st_gid,stat.S_IMODE(before.st_mode),before.st_size)==(
+            os.getuid(),os.getgid(),mode,size)
+        descriptor=os.open(name,os.O_RDONLY|os.O_NOFOLLOW,dir_fd=parent)
+        opened=os.fstat(descriptor); assert identity(opened)==identity(before)
+        return parent,name,descriptor,opened
+    except BaseException:
+        os.close(parent); raise
+
+def seal(payload,mode):
+    required=(fcntl.F_SEAL_SEAL|fcntl.F_SEAL_SHRINK|fcntl.F_SEAL_GROW|fcntl.F_SEAL_WRITE)
+    descriptor=os.memfd_create("revival-held-exec",os.MFD_CLOEXEC|os.MFD_ALLOW_SEALING)
+    try:
+        offset=0
+        while offset<len(payload): offset+=os.write(descriptor,payload[offset:])
+        os.fchmod(descriptor,mode); fcntl.fcntl(descriptor,fcntl.F_ADD_SEALS,required)
+        assert fcntl.fcntl(descriptor,fcntl.F_GET_SEALS)&required==required
+        return descriptor
+    except BaseException:
+        os.close(descriptor); raise
+
+manifest_parent=manifest_fd=root_fd=helper_parent=helper_fd=sealed_fd=None
+try:
+    manifest_parent,manifest_name,manifest_fd,manifest_meta=open_file(manifest_path,0o600)
+    payload=read_all(manifest_fd,manifest_meta)
+    document=json.loads(payload)
+    assert set(document)=={"schemaVersion","profile","releaseId","entries"}
+    body={"schemaVersion":document.get("schemaVersion"),"profile":document.get("profile"),
+          "entries":document.get("entries")}
+    assert document.get("schemaVersion")==1 and document.get("profile")=="vps"
+    assert document.get("releaseId")==release_id
+    assert hashlib.sha256(json.dumps(body,separators=(",",":"),ensure_ascii=False).encode()).hexdigest()==release_id
+    root_fd,root_meta=open_directory(tree)
+    relative="platform/deploy/vps/remote/held-release-exec.py"
+    matches=[entry for entry in document["entries"] if isinstance(entry,dict) and entry.get("path")==relative]
+    assert len(matches)==1 and set(matches[0])=={"path","sha256","size","mode"}
+    entry=matches[0]; assert entry["mode"] in ("0644","0755") and isinstance(entry["size"],int)
+    helper_parent,helper_name,helper_fd,helper_meta=open_relative(
+        root_fd,relative,int(entry["mode"],8),entry["size"])
+    helper_bytes=read_all(helper_fd,helper_meta)
+    assert hashlib.sha256(helper_bytes).hexdigest()==entry["sha256"]
+    sealed_fd=seal(helper_bytes,int(entry["mode"],8))
+    command=["/usr/bin/python3","-I","-B",f"/proc/self/fd/{sealed_fd}","--tree",tree,
+             "--manifest",manifest_path,"--expect-release-id",release_id,
+             "--entry","platform/deploy/release-candidate.mjs","--interpreter","node","--",
+             "verify","--candidate",candidate,"--expect-id",candidate_id,"--json"]
+    environment={"DOCKER_CONFIG":f"{remote_root}/private/docker-cli-empty",
+                 "DOCKER_HOST":"unix:///var/run/docker.sock","HOME":"/nonexistent",
+                 "LANG":"C.UTF-8","LC_ALL":"C.UTF-8","PATH":"/usr/bin:/usr/sbin",
+                 "TZ":"UTC"}
+    result=subprocess.run(command,check=False,pass_fds=(sealed_fd,helper_fd,manifest_fd,root_fd),
+                          stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=environment)
+    if result.returncode:
+        sys.stderr.buffer.write(result.stderr); raise SystemExit(result.returncode)
+    sys.stdout.buffer.write(result.stdout)
+    assert identity(os.fstat(manifest_fd))==identity(manifest_meta)
+    assert identity(os.stat(manifest_name,dir_fd=manifest_parent,follow_symlinks=False))==identity(manifest_meta)
+    assert identity(os.fstat(root_fd))==identity(root_meta)
+    assert identity(os.fstat(helper_fd))==identity(helper_meta)
+    assert identity(os.stat(helper_name,dir_fd=helper_parent,follow_symlinks=False))==identity(helper_meta)
+finally:
+    for descriptor in (sealed_fd,helper_fd,helper_parent,root_fd,manifest_fd,manifest_parent):
+        if isinstance(descriptor,int):
+            try: os.close(descriptor)
+            except OSError: pass
+PY
+}
+
 work="$(mktemp -d)"
-trap 'rm -rf -- "$work"' EXIT
 chmod 700 "$work"
+prune_upload_lease_code='import fcntl,os,stat,sys
+root=sys.argv[1]
+descriptor=os.open("/",os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+try:
+    for component in root.split("/")[1:]:
+        assert component and component not in (".","..")
+        child=os.open(component,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=descriptor)
+        os.close(descriptor); descriptor=child
+    lock=os.open("upload.lock",os.O_RDWR|os.O_CREAT|os.O_NOFOLLOW,0o600,dir_fd=descriptor)
+    metadata=os.fstat(lock)
+    assert stat.S_ISREG(metadata.st_mode) and metadata.st_nlink==1
+    assert (metadata.st_uid,metadata.st_gid,stat.S_IMODE(metadata.st_mode))==(os.getuid(),os.getgid(),0o600)
+    fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+    print("READY",flush=True)
+    sys.stdin.buffer.read()
+finally:
+    try: os.close(lock)
+    except (NameError,OSError): pass
+    os.close(descriptor)'
+coproc REVIVAL_PRUNE_UPLOAD_LEASE { python3 -I -c "$prune_upload_lease_code" "$REMOTE_ROOT"; }
+prune_upload_lease_pid="$REVIVAL_PRUNE_UPLOAD_LEASE_PID"
+prune_upload_lease_read_fd="${REVIVAL_PRUNE_UPLOAD_LEASE[0]}"
+prune_upload_lease_write_fd="${REVIVAL_PRUNE_UPLOAD_LEASE[1]}"
+prune_ready=""
+cleanup_prune_state() {
+  local status=$?
+  trap - EXIT
+  if [[ "$prune_upload_lease_write_fd" =~ ^[0-9]+$ ]]; then exec {prune_upload_lease_write_fd}>&- || status=1; fi
+  if [[ "$prune_upload_lease_read_fd" =~ ^[0-9]+$ ]]; then exec {prune_upload_lease_read_fd}<&- || status=1; fi
+  wait "$prune_upload_lease_pid" || status=1
+  [[ ! -e "$work" ]] || rm -rf -- "$work" || status=1
+  exit "$status"
+}
+trap cleanup_prune_state EXIT
+if ! IFS= read -r -t 5 prune_ready <&"$prune_upload_lease_read_fd" || [[ "$prune_ready" != READY ]]; then
+  fail "an active candidate upload holds the upload lease; state retention never prunes transfer staging"
+fi
 
 # ── the authority inventory ────────────────────────────────────────────────
 # Captured into a variable first, deliberately, exactly as adopt-config.sh does:
@@ -215,24 +389,23 @@ for record in sorted(os.listdir(deployments)):
 PY
 
 # ── the stores themselves ──────────────────────────────────────────────────
-store_facts() {
-  local store="$1" output="$2" name path
-  : >"$output"
-  while IFS= read -r path; do
-    [[ -n "$path" ]] || continue
-    name="$(basename -- "$path")"
-    # A symlink or a non-directory in either store is not something this command
-    # will classify, let alone remove. Report it and move on.
-    if [[ -L "$path" || ! -d "$path" ]]; then
-      warn "ignoring a non-directory entry under $store: $name"
-      continue
-    fi
-    printf '%s\t%s\t%s\t%s\n' "$name" "$(du -sk -- "$path" | awk '{print $1}')" \
-      "$(stat -c '%Y' "$path")" "$path" >>"$output"
-  done < <(find "$store" -mindepth 1 -maxdepth 1 -print | LC_ALL=C sort)
-}
-store_facts "$BACKUP_ROOT" "$work/backups.tsv"
-store_facts "$RELEASES_DIR" "$work/releases.tsv"
+python3 -I "$retention_store" facts --store "$BACKUP_ROOT" --kind backup >"$work/backups.jsonl" \
+  || fail "backup store inventory is unsafe or changed"
+python3 -I "$retention_store" facts --store "$RELEASES_DIR" --kind release >"$work/releases.jsonl" \
+  || fail "release store inventory is unsafe or changed"
+for optional_store in "$candidate_store_root" "$incoming_store_root"; do
+  [[ ! -e "$optional_store" && ! -L "$optional_store" ]] || \
+    [[ -d "$optional_store" && ! -L "$optional_store" && "$(readlink -f -- "$optional_store")" == "$optional_store" ]] \
+    || fail "optional candidate/staging store is unsafe: $optional_store"
+done
+if [[ -d "$candidate_store_root" ]]; then
+  python3 -I "$retention_store" facts --store "$candidate_store_root" --kind candidate >"$work/candidates.jsonl" \
+    || fail "candidate store inventory is unsafe or changed"
+else : >"$work/candidates.jsonl"; fi
+if [[ -d "$incoming_store_root" ]]; then
+  python3 -I "$retention_store" facts --store "$incoming_store_root" --kind incoming >"$work/incoming.jsonl" \
+    || fail "incoming store inventory is unsafe or changed"
+else : >"$work/incoming.jsonl"; fi
 
 # drift.sh:110's exact selection, reproduced rather than approximated: the
 # directory holding the most recently modified SHA256SUMS anywhere two levels
@@ -305,6 +478,7 @@ with open(os.path.join(work, "deployments.txt"), encoding="utf-8") as handle:
             "name": name,
             "path": directory,
             "releaseId": text(os.path.join(directory, "release-id")),
+            "candidateId": text(os.path.join(directory, "candidate-id")),
             "oldCurrent": text(os.path.join(directory, "old-current")),
             "oldCurrentDeployment": text(os.path.join(directory, "old-current-deployment")),
             "markers": [marker for marker in MARKERS
@@ -320,11 +494,10 @@ def store(filename, complete_check):
             line = line.rstrip("\n")
             if not line:
                 continue
-            name, kilobytes, mtime, path = line.split("\t")
-            entry = {"name": name, "path": path, "bytes": int(kilobytes) * 1024, "mtime": int(mtime)}
+            entry = json.loads(line)
             if complete_check:
                 entry["complete"] = all(
-                    os.path.isfile(os.path.join(path, required))
+                    os.path.isfile(os.path.join(entry["path"], required))
                     for required in ("SHA256SUMS", "BACKUP_MANIFEST.json")
                 )
             entries.append(entry)
@@ -345,8 +518,10 @@ request = {
     "activeTransactions": json.load(open(os.path.join(work, "active.json"), encoding="utf-8")),
     "newestVerifiedBackup": newest or None,
     "deployments": deployments,
-    "backups": store("backups.tsv", True),
-    "releases": store("releases.tsv", False),
+    "backups": store("backups.jsonl", True),
+    "releases": store("releases.jsonl", False),
+    "candidates": store("candidates.jsonl", False),
+    "incoming": store("incoming.jsonl", False),
 }
 json.dump(request, sys.stdout, sort_keys=True, separators=(",", ":"))
 PY
@@ -372,20 +547,22 @@ fi
 # skipping it quietly.
 removed_backups=0
 removed_releases=0
+removed_candidates=0
+removed_incoming=0
 removed_bytes=0
-while IFS=$'\t' read -r kind path bytes; do
+while IFS=$'\t' read -r kind path bytes authority_token; do
   [[ -n "$kind" ]] || continue
   case "$kind" in
     backup) store_root="$BACKUP_ROOT" ;;
     release) store_root="$RELEASES_DIR" ;;
+    candidate) store_root="$candidate_store_root" ;;
+    incoming) store_root="$incoming_store_root" ;;
     *) fail "removal plan named an unknown store: $kind" ;;
   esac
   [[ "$path" == "$store_root/"* ]] || fail "removal plan named a path outside its store: $path"
   name="${path#"$store_root/"}"
   [[ "$name" != */* && "$name" != "." && "$name" != ".." ]] \
     || fail "removal plan named a nested path: $path"
-  [[ -d "$path" && ! -L "$path" && "$(readlink -f -- "$path")" == "$path" ]] \
-    || fail "refusing to remove a path that is not a plain directory: $path"
   # Never remove anything a live pointer still resolves to, whatever the plan
   # says. This can only ever be redundant; it is here because the cost of it
   # being needed once is the production the pointer describes.
@@ -393,12 +570,18 @@ while IFS=$'\t' read -r kind path bytes; do
     [[ "$(readlink -f -- "$REMOTE_ROOT/$pointer" 2>/dev/null || true)" != "$path" ]] \
       || fail "refusing to remove a path an authority pointer still names: $pointer -> $path"
   done
-  rm -rf -- "$path"
+  retirement_receipt="$(python3 -I "$retention_store" remove --store "$store_root" --kind "$kind" \
+    --name "$name" --authority-token "$authority_token")" \
+    || fail "descriptor-held exact-object removal refused $kind path: $path"
+  [[ "$retirement_receipt" =~ ^\.prune-retired-[0-9a-f]{32}$ ]] \
+    || fail "descriptor-held retirement returned an invalid inventory receipt for $kind path: $path"
   [[ ! -e "$path" && ! -L "$path" ]] || fail "removal did not take effect: $path"
   removed_bytes=$((removed_bytes + bytes))
   case "$kind" in
     backup) removed_backups=$((removed_backups + 1)) ;;
     release) removed_releases=$((removed_releases + 1)) ;;
+    candidate) removed_candidates=$((removed_candidates + 1)) ;;
+    incoming) removed_incoming=$((removed_incoming + 1)) ;;
   esac
 done <"$work/removals.tsv"
 
@@ -448,6 +631,17 @@ if [[ -n "$current_deployment" ]]; then
     [[ -z "$target_release" || -d "$target_release" ]] \
       || { warn "the rollback target release tree is missing: $target_release"; recovery_ok=0; }
   fi
+  current_candidate_id="$(tr -d '\r\n' <"$current_deployment/candidate-id" 2>/dev/null || true)"
+  if [[ -n "$current_candidate_id" ]]; then
+    current_candidate="$candidate_store_root/$current_candidate_id"
+    [[ "$current_candidate_id" =~ ^[0-9a-f]{64}$ && -d "$current_candidate" && ! -L "$current_candidate" \
+      && "$current_release" == "$RELEASES_DIR/"* && -d "$current_release" && ! -L "$current_release" ]] \
+      || { warn "the current deployment's immutable candidate is missing or unsafe"; recovery_ok=0; }
+    current_release_id="${current_release##*/}"
+    ((recovery_ok == 0)) || run_manifest_held_candidate_verifier "$current_release" "$current_release_id" \
+      "$current_candidate" "$current_candidate_id" >/dev/null \
+      || { warn "the current deployment's immutable candidate no longer verifies"; recovery_ok=0; }
+  fi
 fi
 current_newest="$(find "$BACKUP_ROOT" -mindepth 2 -maxdepth 2 -type f -name SHA256SUMS \
   -printf '%T@\t%h\n' | LC_ALL=C sort -n | tail -n 1 | cut -f2-)"
@@ -456,15 +650,16 @@ current_newest="$(find "$BACKUP_ROOT" -mindepth 2 -maxdepth 2 -type f -name SHA2
 
 available_kb="$(df -Pk /home/anders | awk 'NR==2 {print $4}')"
 if ((json)); then
-  python3 - "$removed_backups" "$removed_releases" "$removed_bytes" "$available_kb" "$recovery_ok" <<'PY'
+  python3 - "$removed_backups" "$removed_releases" "$removed_candidates" "$removed_incoming" "$removed_bytes" "$available_kb" "$recovery_ok" <<'PY'
 import json, sys
-backups, releases, freed, available, ok = sys.argv[1:]
+backups, releases, candidates, incoming, freed, available, ok = sys.argv[1:]
 print(json.dumps({
     "ok": ok == "1", "removedBackups": int(backups), "removedReleases": int(releases),
+    "removedCandidates": int(candidates), "removedIncoming": int(incoming),
     "freedBytes": int(freed), "availableKiB": int(available),
 }, sort_keys=True, separators=(",", ":")))
 PY
 else
-  log "removed $removed_backups backup(s) and $removed_releases release tree(s); $((removed_bytes / 1024 / 1024)) MiB reclaimed, ${available_kb} KiB now free on /home/anders"
+  log "removed $removed_backups backup(s), $removed_releases release tree(s), $removed_candidates candidate(s), and $removed_incoming incoming workspace(s); $((removed_bytes / 1024 / 1024)) MiB reclaimed, ${available_kb} KiB now free on /home/anders"
 fi
 ((recovery_ok)) || fail "state retention completed its removals but a recovery-path post-condition FAILED; treat production as un-rollbackable until the warnings above are resolved"

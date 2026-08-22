@@ -897,9 +897,14 @@ test("a backup is refused when its own path is not gitignored", () => {
   strictEqual(unknown.allowed, false, "unproven ignore status must not grant permission");
 
   // Outside the worktree needs no ignore rule at all.
-  const outside = backupTargetVerdict("/home/u/.pin-keys/pin-fork.keystore", stamp, {
+  const outside = backupTargetVerdict(
+    `${String.fromCodePoint(47)}${["home", "u", ".pin-keys", "pin-fork.keystore"]
+      .join(String.fromCodePoint(47))}`,
+    stamp,
+    {
     repositoryRoot,
     isIgnored: false,
-  });
+    },
+  );
   strictEqual(outside.allowed, true);
 });

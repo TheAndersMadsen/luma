@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/bash
 # Semantic evidence and the canary wearer credential machinery.
 #
 # Sourced by remote/common.sh; not an entry point. Functions here rely on

@@ -833,7 +833,15 @@ test("the staging smoke refuses a candidate that moved a row, and keeps the proo
     "the deploy must give the staging smoke somewhere durable to leave its evidence",
   );
   const evidenceDirectory = at(deploy, 'REVIVAL_STAGING_SMOKE_EVIDENCE="$record/staging-smoke-evidence"');
-  const smokeRun = at(deploy, 'bash "$release_dir/platform/deploy/vps/remote/staging-smoke.sh"');
+  const smokeRun = at(
+    deploy,
+    'run_held_release_program "$release_dir" platform/deploy/vps/remote/staging-smoke.sh bash 0',
+  );
+  assert.doesNotMatch(
+    deploy,
+    /^[^\n]*\bbash "\$release_dir\/platform\/deploy\/vps\/remote\/staging-smoke\.sh"/m,
+    "the staging smoke must not fall back to a direct, unheld Bash invocation",
+  );
   assert.ok(evidenceDirectory < smokeRun, "the evidence directory must be in the smoke's environment, not set after it");
 });
 

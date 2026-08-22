@@ -1,11 +1,101 @@
-#!/usr/bin/env bash
+#!/usr/bin/env -S /bin/bash -p
 # Shared local-side helpers for the guarded anders-server deployment drivers.
 # This file must never read or print production environment files.
 set -euo pipefail
 
-VPS_LIB_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-VPS_DIR="$(cd -- "$VPS_LIB_DIR/.." && pwd -P)"
-REVIVAL_ROOT="$(cd -- "$VPS_DIR/../../.." && pwd -P)"
+# Public VPS drivers source this library before doing any work.  If one was
+# invoked directly, normalize it through the same fixed, positive environment
+# used by ./revival.  Library-only unit fixtures source local.sh from `bash -c`;
+# they are not public entry points and deliberately keep their injected test
+# functions.
+_revival_local_caller="${BASH_SOURCE[1]:-}"
+case "${_revival_local_caller##*/}" in
+  deploy.sh|backup.sh|canary.sh|drift.sh|adopt-config.sh|prune-state.sh|rollback.sh|preflight.sh)
+    _revival_local_driver=1 ;;
+  *) _revival_local_driver=0 ;;
+esac
+
+_revival_select_fixed() {
+  local candidate
+  for candidate in "$@"; do
+    if [[ -x "$candidate" && ! -d "$candidate" ]]; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+_revival_home="${HOME:-/nonexistent}"
+[[ "$_revival_home" == /* ]] || _revival_home=/nonexistent
+_revival_bash="$(_revival_select_fixed /opt/homebrew/bin/bash /usr/local/bin/bash /bin/bash /usr/bin/bash)" || exit 126
+_revival_node="$(_revival_select_fixed /usr/bin/node /opt/homebrew/opt/node@22/bin/node /usr/local/opt/node@22/bin/node /opt/homebrew/bin/node /usr/local/bin/node)" || exit 126
+_revival_python="$(_revival_select_fixed /usr/bin/python3 /opt/homebrew/bin/python3 /usr/local/bin/python3)" || exit 126
+_revival_git="$(_revival_select_fixed /usr/bin/git /opt/homebrew/bin/git /usr/local/bin/git)" || exit 126
+_revival_ssh="$(_revival_select_fixed /usr/bin/ssh)" || exit 126
+_revival_rsync="$(_revival_select_fixed /usr/bin/rsync /opt/homebrew/bin/rsync /usr/local/bin/rsync)" || exit 126
+_revival_awk="$(_revival_select_fixed /usr/bin/awk)" || exit 126
+_revival_tar="$(_revival_select_fixed /usr/bin/tar /bin/tar)" || exit 126
+_revival_sha256sum="$(_revival_select_fixed /usr/bin/sha256sum /bin/sha256sum /opt/homebrew/bin/sha256sum /usr/local/bin/sha256sum || true)"
+_revival_shasum="$(_revival_select_fixed /usr/bin/shasum || true)"
+[[ -n "$_revival_sha256sum" || -n "$_revival_shasum" ]] || exit 126
+_revival_path="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:/opt/homebrew/opt/node@22/bin:/usr/local/opt/node@22/bin:$_revival_home/.cargo/bin:$_revival_home/Android/Sdk/platform-tools:$_revival_home/Library/Android/sdk/platform-tools"
+
+# REVIVAL_LOCAL_AUTHORITY is intentionally not a capability: an environment
+# variable can be forged.  It is only a loop marker, and is accepted when the
+# complete positive command/environment authority exactly matches what this
+# process would construct itself.  A forged marker with a hostile PATH must
+# therefore take the sanitizing re-exec path before deploy.sh can run mktemp or
+# any other external utility.
+_revival_positive_authority=0
+if ((_revival_local_driver)) \
+  && [[ "${REVIVAL_LOCAL_AUTHORITY:-}" == v1 \
+    && "${HOME:-}" == "$_revival_home" && "${PATH:-}" == "$_revival_path" \
+    && "${LANG:-}" == C && "${LC_ALL:-}" == C && "${TZ:-}" == UTC \
+    && "${REVIVAL_LOCAL_BASH:-}" == "$_revival_bash" \
+    && "${REVIVAL_LOCAL_NODE:-}" == "$_revival_node" \
+    && "${REVIVAL_LOCAL_PYTHON:-}" == "$_revival_python" \
+    && "${REVIVAL_LOCAL_GIT:-}" == "$_revival_git" \
+    && "${REVIVAL_LOCAL_SSH:-}" == "$_revival_ssh" \
+    && "${REVIVAL_LOCAL_RSYNC:-}" == "$_revival_rsync" \
+    && "${REVIVAL_LOCAL_AWK:-}" == "$_revival_awk" \
+    && "${REVIVAL_LOCAL_TAR:-}" == "$_revival_tar" \
+    && "${REVIVAL_LOCAL_SHA256SUM:-}" == "$_revival_sha256sum" \
+    && "${REVIVAL_LOCAL_SHASUM:-}" == "$_revival_shasum" \
+    && "${REVIVAL_SSH_IDENTITY_FILE:-}" == /* \
+    && "${REVIVAL_SSH_KNOWN_HOSTS_FILE:-}" == /* ]]; then
+  _revival_positive_authority=1
+  for _revival_forbidden in BASH_ENV ENV LD_PRELOAD LD_LIBRARY_PATH DYLD_INSERT_LIBRARIES NODE_OPTIONS NODE_PATH PYTHONPATH PYTHONHOME PYTHONSTARTUP DOCKER_HOST DOCKER_CONTEXT DOCKER_CONFIG GIT_DIR GIT_WORK_TREE GIT_CONFIG_PARAMETERS GIT_CONFIG_COUNT GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM GIT_SSH_COMMAND SSH_AUTH_SOCK RSYNC_RSH; do
+    [[ -z "${!_revival_forbidden+x}" ]] || _revival_positive_authority=0
+  done
+fi
+
+if ((_revival_local_driver)) && ((!_revival_positive_authority)); then
+  _revival_identity="${REVIVAL_SSH_IDENTITY_FILE:-$_revival_home/.ssh/id_ed25519}"
+  _revival_known_hosts="${REVIVAL_SSH_KNOWN_HOSTS_FILE:-$_revival_home/.ssh/known_hosts}"
+  builtin exec /usr/bin/env -i HOME="$_revival_home" PATH="$_revival_path" LANG=C LC_ALL=C TZ=UTC \
+    REVIVAL_LOCAL_AUTHORITY=v1 REVIVAL_LOCAL_BASH="$_revival_bash" REVIVAL_LOCAL_NODE="$_revival_node" \
+    REVIVAL_LOCAL_PYTHON="$_revival_python" REVIVAL_LOCAL_GIT="$_revival_git" REVIVAL_LOCAL_SSH="$_revival_ssh" \
+    REVIVAL_LOCAL_RSYNC="$_revival_rsync" REVIVAL_LOCAL_AWK="$_revival_awk" REVIVAL_LOCAL_TAR="$_revival_tar" \
+    REVIVAL_LOCAL_SHA256SUM="$_revival_sha256sum" REVIVAL_LOCAL_SHASUM="$_revival_shasum" \
+    REVIVAL_SSH_IDENTITY_FILE="$_revival_identity" REVIVAL_SSH_KNOWN_HOSTS_FILE="$_revival_known_hosts" \
+    REVIVAL_CONFIG_DIR="${REVIVAL_CONFIG_DIR:-}" REVIVAL_SECRETS_DIR="${REVIVAL_SECRETS_DIR:-}" \
+    REVIVAL_DATA_DIR="${REVIVAL_DATA_DIR:-}" REVIVAL_BACKUP_DIR="${REVIVAL_BACKUP_DIR:-}" \
+    REVIVAL_ENV_FILE="${REVIVAL_ENV_FILE:-}" REVIVAL_PRIVATE_DIR="${REVIVAL_PRIVATE_DIR:-}" \
+    REVIVAL_BUILD_DIR="${REVIVAL_BUILD_DIR:-}" REVIVAL_DEPLOY_REMOTE="${REVIVAL_DEPLOY_REMOTE:-}" \
+    "$_revival_bash" --noprofile --norc "$0" "$@"
+fi
+
+if ((_revival_local_driver)); then
+  [[ "${REVIVAL_LOCAL_AUTHORITY:-}" == v1 && "$_revival_positive_authority" == 1 ]] || { builtin printf 'error: unsupported unsanitized VPS driver invocation\n' >&2; exit 126; }
+  for _revival_forbidden in BASH_ENV ENV LD_PRELOAD LD_LIBRARY_PATH DYLD_INSERT_LIBRARIES NODE_OPTIONS NODE_PATH PYTHONPATH PYTHONHOME PYTHONSTARTUP DOCKER_HOST DOCKER_CONTEXT DOCKER_CONFIG GIT_DIR GIT_WORK_TREE GIT_CONFIG_PARAMETERS GIT_CONFIG_COUNT GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM GIT_SSH_COMMAND SSH_AUTH_SOCK RSYNC_RSH; do
+    [[ -z "${!_revival_forbidden+x}" ]] || { builtin printf 'error: forbidden local startup environment: %s\n' "$_revival_forbidden" >&2; exit 126; }
+  done
+fi
+
+VPS_LIB_DIR="$(builtin cd -- "${BASH_SOURCE[0]%/*}" && builtin pwd -P)"
+VPS_DIR="$(builtin cd -- "$VPS_LIB_DIR/.." && builtin pwd -P)"
+REVIVAL_ROOT="$(builtin cd -- "$VPS_DIR/../../.." && builtin pwd -P)"
 REMOTE_IMPL="$VPS_DIR/remote"
 
 DEPLOY_REMOTE="${REVIVAL_DEPLOY_REMOTE:-vps}"
@@ -13,6 +103,9 @@ REMOTE_ROOT="/home/anders/ai-pin-revival"
 EXPECTED_HOST="anders-server"
 EXPECTED_USER="anders"
 EXPECTED_ARCH="aarch64"
+REMOTE_POSITIVE_ENV="/usr/bin/env -i HOME=/nonexistent LANG=C.UTF-8 LC_ALL=C.UTF-8 PATH=/usr/bin:/usr/sbin TZ=UTC"
+REMOTE_CLEAN_BASH="$REMOTE_POSITIVE_ENV /usr/bin/bash --noprofile --norc"
+REMOTE_CLEAN_PYTHON="$REMOTE_POSITIVE_ENV /usr/bin/python3 -I -B"
 
 RELEASE_VERIFIER_PATH="platform/deploy/vps/verify-release.py"
 RELEASE_DEPLOY_DRIVER_PATH="platform/deploy/vps/remote/deploy.sh"
@@ -30,7 +123,33 @@ usage_error() {
 }
 
 need_local() {
-  command -v "$1" >/dev/null 2>&1 || die "required local command is unavailable: $1"
+  local candidate=""
+  case "$1" in
+    bash) candidate="${REVIVAL_LOCAL_BASH:-}" ;;
+    node) candidate="${REVIVAL_LOCAL_NODE:-}" ;;
+    python3) candidate="${REVIVAL_LOCAL_PYTHON:-}" ;;
+    git) candidate="${REVIVAL_LOCAL_GIT:-}" ;;
+    ssh) candidate="${REVIVAL_LOCAL_SSH:-}" ;;
+    rsync) candidate="${REVIVAL_LOCAL_RSYNC:-}" ;;
+    sha256sum) candidate="${REVIVAL_LOCAL_SHA256SUM:-}" ;;
+    shasum) candidate="${REVIVAL_LOCAL_SHASUM:-}" ;;
+    awk) candidate="${REVIVAL_LOCAL_AWK:-}" ;;
+    tar) candidate="${REVIVAL_LOCAL_TAR:-}" ;;
+    *) die "unsupported local command authority request: $1" ;;
+  esac
+  case "$1:$candidate" in
+    bash:/bin/bash|bash:/usr/bin/bash|bash:/opt/homebrew/bin/bash|bash:/usr/local/bin/bash|\
+    node:/usr/bin/node|node:/usr/local/bin/node|node:/opt/homebrew/opt/node@22/bin/node|node:/usr/local/opt/node@22/bin/node|node:/opt/homebrew/bin/node|\
+    python3:/usr/bin/python3|python3:/usr/local/bin/python3|python3:/opt/homebrew/bin/python3|\
+    git:/usr/bin/git|git:/usr/local/bin/git|git:/opt/homebrew/bin/git|\
+    ssh:/usr/bin/ssh|\
+    rsync:/usr/bin/rsync|rsync:/usr/local/bin/rsync|rsync:/opt/homebrew/bin/rsync|\
+    sha256sum:/usr/bin/sha256sum|sha256sum:/bin/sha256sum|sha256sum:/usr/local/bin/sha256sum|sha256sum:/opt/homebrew/bin/sha256sum|\
+    shasum:/usr/bin/shasum|awk:/usr/bin/awk|tar:/usr/bin/tar|tar:/bin/tar) ;;
+    *) die "local command is outside the supported fixed-path authority: $1" ;;
+  esac
+  [[ "$candidate" == /* && -x "$candidate" && ! -d "$candidate" ]] \
+    || die "required local command is unavailable at its fixed path: $1"
 }
 
 require_safe_remote_name() {
@@ -39,12 +158,135 @@ require_safe_remote_name() {
 
 run_ssh() {
   require_safe_remote_name
-  ssh \
+  require_ssh_authority
+  "${REVIVAL_LOCAL_SSH:?}" \
+    -F /dev/null \
     -o BatchMode=yes \
     -o ConnectTimeout=10 \
     -o ServerAliveInterval=15 \
     -o ServerAliveCountMax=2 \
+    -o GlobalKnownHostsFile=/dev/null \
+    -o "UserKnownHostsFile=$REVIVAL_SSH_KNOWN_HOSTS_FILE" \
+    -o StrictHostKeyChecking=yes \
+    -o CheckHostIP=yes \
+    -o IdentitiesOnly=yes \
+    -o IdentityAgent=none \
+    -o "IdentityFile=$REVIVAL_SSH_IDENTITY_FILE" \
     "$DEPLOY_REMOTE" "$@"
+}
+
+run_local_node() {
+  if ((_revival_local_driver)); then "${REVIVAL_LOCAL_NODE:?}" "$@"; else node "$@"; fi
+}
+
+run_local_python() {
+  if ((_revival_local_driver)); then "${REVIVAL_LOCAL_PYTHON:?}" "$@"; else python3 "$@"; fi
+}
+
+run_local_rsync() {
+  if ((_revival_local_driver)); then "${REVIVAL_LOCAL_RSYNC:?}" "$@"; else rsync "$@"; fi
+}
+
+require_ssh_authority() {
+  need_local ssh
+  [[ "$REVIVAL_SSH_IDENTITY_FILE" == /* && "$REVIVAL_SSH_KNOWN_HOSTS_FILE" == /* ]] \
+    || die "SSH identity and known-host authority must be absolute paths"
+  "${REVIVAL_LOCAL_PYTHON:?}" -I -B - "$REVIVAL_SSH_IDENTITY_FILE" "$REVIVAL_SSH_KNOWN_HOSTS_FILE" <<'PY' \
+    || die "SSH identity or known-host authority is unsafe"
+import os,stat,sys
+for index,name in enumerate(sys.argv[1:]):
+    value=os.lstat(name)
+    assert stat.S_ISREG(value.st_mode) and value.st_uid==os.getuid() and value.st_nlink==1
+    assert stat.S_IMODE(value.st_mode) in ((0o600,) if index==0 else (0o600,0o644))
+PY
+}
+
+rsync_remote_shell() {
+  if ((!_revival_local_driver)); then
+    printf '%s' /usr/bin/ssh
+    return 0
+  fi
+  require_ssh_authority
+  local pieces=(
+    "$REVIVAL_LOCAL_SSH" -F /dev/null
+    -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=2
+    -o GlobalKnownHostsFile=/dev/null -o "UserKnownHostsFile=$REVIVAL_SSH_KNOWN_HOSTS_FILE"
+    -o StrictHostKeyChecking=yes -o CheckHostIP=yes -o IdentitiesOnly=yes -o IdentityAgent=none
+    -o "IdentityFile=$REVIVAL_SSH_IDENTITY_FILE"
+  ) item rendered=""
+  for item in "${pieces[@]}"; do
+    printf -v item '%q' "$item"
+    rendered+="${rendered:+ }$item"
+  done
+  printf '%s' "$rendered"
+}
+
+UPLOAD_LEASE_PID=""
+UPLOAD_LEASE_READ_FD=""
+UPLOAD_LEASE_WRITE_FD=""
+
+start_remote_upload_lease() {
+  [[ -z "$UPLOAD_LEASE_PID" ]] || die "remote upload lease is already active"
+  require_safe_remote_name
+  local lease_code lease_args ready
+  lease_code='import fcntl,os,stat,sys
+root=sys.argv[1]
+assert root=="/home/anders/ai-pin-revival"
+def open_absolute(path):
+    descriptor=os.open("/",os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+    try:
+        for component in path.split("/")[1:]:
+            assert component and component not in (".","..")
+            child=os.open(component,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=descriptor)
+            os.close(descriptor); descriptor=child
+        return descriptor
+    except BaseException:
+        os.close(descriptor); raise
+root_fd=open_absolute(root)
+try:
+    lock=os.open("upload.lock",os.O_RDWR|os.O_CREAT|os.O_NOFOLLOW,0o600,dir_fd=root_fd)
+    metadata=os.fstat(lock)
+    assert stat.S_ISREG(metadata.st_mode) and metadata.st_nlink==1
+    assert (metadata.st_uid,metadata.st_gid,stat.S_IMODE(metadata.st_mode))==(os.getuid(),os.getgid(),0o600)
+    fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+    os.fsync(lock); os.fsync(root_fd)
+    print("READY",flush=True)
+    sys.stdin.buffer.read()
+finally:
+    try: os.close(lock)
+    except (NameError,OSError): pass
+    os.close(root_fd)'
+  lease_args="$(remote_quote "$lease_code" "$REMOTE_ROOT")"
+  coproc REVIVAL_UPLOAD_LEASE_PROCESS { run_ssh "$REMOTE_CLEAN_PYTHON -c $lease_args"; }
+  UPLOAD_LEASE_PID="$REVIVAL_UPLOAD_LEASE_PROCESS_PID"
+  UPLOAD_LEASE_READ_FD="${REVIVAL_UPLOAD_LEASE_PROCESS[0]}"
+  UPLOAD_LEASE_WRITE_FD="${REVIVAL_UPLOAD_LEASE_PROCESS[1]}"
+  if ! IFS= read -r -t 15 ready <&"$UPLOAD_LEASE_READ_FD" || [[ "$ready" != READY ]]; then
+    stop_remote_upload_lease 1 || true
+    die "remote upload lease could not be acquired"
+  fi
+}
+
+assert_remote_upload_lease() {
+  [[ "$UPLOAD_LEASE_PID" =~ ^[0-9]+$ && "$UPLOAD_LEASE_WRITE_FD" =~ ^[0-9]+$ ]] \
+    || die "remote upload lease is not active"
+  kill -0 "$UPLOAD_LEASE_PID" 2>/dev/null \
+    || die "remote upload lease was lost before deployment handoff"
+}
+
+stop_remote_upload_lease() {
+  local tolerate_failure="${1:-0}" status=0
+  if [[ "$UPLOAD_LEASE_WRITE_FD" =~ ^[0-9]+$ ]]; then
+    exec {UPLOAD_LEASE_WRITE_FD}>&- || status=1
+  fi
+  if [[ "$UPLOAD_LEASE_READ_FD" =~ ^[0-9]+$ ]]; then
+    exec {UPLOAD_LEASE_READ_FD}<&- || status=1
+  fi
+  if [[ "$UPLOAD_LEASE_PID" =~ ^[0-9]+$ ]]; then
+    wait "$UPLOAD_LEASE_PID" || status=1
+  fi
+  UPLOAD_LEASE_PID=""; UPLOAD_LEASE_READ_FD=""; UPLOAD_LEASE_WRITE_FD=""
+  ((status == 0 || tolerate_failure != 0))
 }
 
 remote_quote() {
@@ -128,13 +370,18 @@ BOOTSTRAP
     cat "$REMOTE_IMPL/prune-state.py"
     cat <<'BOOTSTRAP'
 __REVIVAL_PRUNE_STATE__
+cat <<'__REVIVAL_RETENTION_STORE__' > "$tmp_dir/retention-store.py"
+BOOTSTRAP
+    cat "$REMOTE_IMPL/retention-store.py"
+    cat <<'BOOTSTRAP'
+__REVIVAL_RETENTION_STORE__
 BOOTSTRAP
     printf 'cat <<'"'"'__REVIVAL_ENTRYPOINT__'"'"' > "$tmp_dir/%s"\n' "$implementation"
     cat "$REMOTE_IMPL/$implementation"
     cat <<'BOOTSTRAP'
 __REVIVAL_ENTRYPOINT__
 chmod 600 "$tmp_dir/common.sh" "$tmp_dir/domain.sh" "$tmp_dir/domain.py" "$tmp_dir/transaction.py" \
-  "$tmp_dir/adopt-config.py" "$tmp_dir/prune-state.py"
+  "$tmp_dir/adopt-config.py" "$tmp_dir/prune-state.py" "$tmp_dir/retention-store.py"
 BOOTSTRAP
     printf 'chmod 700 "$tmp_dir/%s"\n' "$implementation"
     printf '%s\n' "$REMOTE_IMPL_GUARD"
@@ -165,9 +412,9 @@ BOOTSTRAP
     # the caller sees exactly what the implementation returned. `set -e` must not
     # abort before the trap can clean up, hence the `|| status=$?`.
     printf 'status=0\n'
-    printf 'bash "$tmp_dir/%s" "$@" || status=$?\n' "$implementation"
+    printf '/usr/bin/bash --noprofile --norc "$tmp_dir/%s" "$@" || status=$?\n' "$implementation"
     printf 'exit "$status"\n'
-  } | run_ssh "bash -s -- $args"
+  } | run_ssh "$REMOTE_CLEAN_BASH -s -- $args"
 }
 
 # ---------------------------------------------------------------------------
@@ -222,7 +469,7 @@ flock -n 9 || { echo "stateful operation lock is held" >&2; exit 1; }
 # tree atomically extracted by that release's own verifier.
 assert_release_bootstrap_contract() {
   local manifest="$1" expected_release_id="$2"
-  node - "$manifest" "$expected_release_id" \
+  run_local_node - "$manifest" "$expected_release_id" \
     "$RELEASE_VERIFIER_PATH" "$RELEASE_DEPLOY_DRIVER_PATH" "$RELEASE_DEPLOY_COMMON_PATH" \
     "$RELEASE_PREFLIGHT_PATH" <<'NODE'
 const fs = require('node:fs');
@@ -264,7 +511,7 @@ materialize_release_member() {
       ;;
     *) usage_error "materialize_release_member expects archive, manifest, optional release id, member, and destination" ;;
   esac
-  node - "$archive" "$manifest" "$expected_release_id" "$member" "$destination" <<'NODE'
+  run_local_node - "$archive" "$manifest" "$expected_release_id" "$member" "$destination" <<'NODE'
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const zlib = require('node:zlib');
@@ -336,7 +583,7 @@ NODE
 
 snapshot_regular_file() {
   local source="$1" destination="$2"
-  node - "$source" "$destination" <<'NODE'
+  run_local_node - "$source" "$destination" <<'NODE'
 const fs=require('node:fs');
 const [source,destination]=process.argv.slice(2);
 const before=fs.lstatSync(source,{bigint:true});
@@ -361,7 +608,7 @@ remote_preupload_gate() {
   [[ "$min_free_gb" =~ ^[0-9]+$ && "$archive_bytes" =~ ^[0-9]+$ ]] || usage_error "invalid capacity gate"
   args="$(remote_quote "$EXPECTED_HOST" "$EXPECTED_USER" "$EXPECTED_ARCH" "$REMOTE_ROOT" \
     "$release_id" "$min_free_gb" "$archive_bytes" "$incoming")"
-  run_ssh "bash -s -- $args" <<'REMOTE'
+  run_ssh "$REMOTE_CLEAN_BASH -s -- $args" <<'REMOTE'
 set -euo pipefail
 host="$1"; user="$2"; arch="$3"; root="$4"; release_id="$5"; min_gb="$6"; archive_bytes="$7"; incoming="$8"
 [[ "$(hostname -s)" == "$host" && "$(id -un)" == "$user" ]] || { echo 'pre-upload target identity mismatch' >&2; exit 1; }
@@ -386,16 +633,20 @@ REMOTE
 run_verified_release_deploy() {
   local release_id="$1" incoming="$2" archive="$3" manifest="$4" verifier="$5" deployment_id="$6"
   local min_free_gb="$7" archive_bytes="$8" cleanup="$9" json="${10}" skip_smoke="${11:-0}"
+  local candidate_id="${12:-}" candidate_root="${13:-}" deployment_authority_sha256="${14:-}"
   validate_release_id "$release_id"
   validate_remote_root "$REMOTE_ROOT"
   [[ "$min_free_gb" =~ ^[0-9]+$ && "$archive_bytes" =~ ^[0-9]+$ && "$cleanup" =~ ^[01]$ \
-     && "$json" =~ ^[01]$ && "$skip_smoke" =~ ^[01]$ ]] \
+     && "$json" =~ ^[01]$ && "$skip_smoke" =~ ^[01]$ && "$candidate_id" =~ ^[0-9a-f]{64}$ \
+     && "$candidate_root" == "$incoming/.candidate-$candidate_id.partial/$candidate_id" \
+     && "$deployment_authority_sha256" =~ ^[0-9a-f]{64}$ ]] \
     || usage_error "invalid selected-release deployment arguments"
   local args
   args="$(remote_quote \
     "$release_id" "$REMOTE_ROOT" "$incoming" "$archive" "$manifest" "$verifier" \
     "$deployment_id" "$min_free_gb" "$archive_bytes" "$cleanup" "$json" \
-    "$EXPECTED_HOST" "$EXPECTED_USER" "$EXPECTED_ARCH" "$skip_smoke")"
+    "$EXPECTED_HOST" "$EXPECTED_USER" "$EXPECTED_ARCH" "$skip_smoke" "$candidate_id" "$candidate_root" \
+    "$deployment_authority_sha256")"
   {
     cat <<'BOOTSTRAP'
 set -euo pipefail
@@ -403,50 +654,269 @@ umask 077
 release_id="$1"; remote_root="$2"; incoming="$3"; archive="$4"; manifest="$5"; verifier="$6"
 deployment_id="$7"; min_free_gb="$8"; archive_bytes="$9"; cleanup="${10}"; emit_json="${11}"
 expected_host="${12}"; expected_user="${13}"; expected_arch="${14}"; skip_smoke="${15:-0}"
+candidate_id="${16}"; candidate_root="${17}"; deployment_authority_sha256="${18}"
 [[ "$release_id" =~ ^[0-9a-f]{64}$ ]] || { echo 'release bootstrap failed: invalid release id' >&2; exit 1; }
 [[ "$incoming" == "$remote_root/incoming/$release_id" ]] || { echo 'release bootstrap failed: invalid incoming directory' >&2; exit 1; }
+[[ "$candidate_id" =~ ^[0-9a-f]{64}$ \
+   && "$candidate_root" == "$incoming/.candidate-$candidate_id.partial/$candidate_id" \
+   && "$deployment_authority_sha256" =~ ^[0-9a-f]{64}$ \
+   && -d "$candidate_root" && ! -L "$candidate_root" ]] \
+  || { echo 'release bootstrap failed: invalid immutable candidate root' >&2; exit 1; }
+transport_root="$(dirname -- "$candidate_root")"
+transport="$transport_root/transport.sha256"
+deployment_authority="$transport_root/deployment-authority.json"
+[[ -f "$transport" && ! -L "$transport" \
+   && "$(stat -c '%a:%u:%g:%h' "$transport")" == "600:$(id -u):$(id -g):1" \
+   && "$(sha256sum "$transport" | awk '{print $1}')" =~ ^[0-9a-f]{64}$ ]] \
+  || { echo 'release bootstrap failed: invalid candidate transport receipt' >&2; exit 1; }
+[[ -f "$deployment_authority" && ! -L "$deployment_authority" \
+   && "$(stat -c '%a:%u:%g:%h' "$deployment_authority")" == "600:$(id -u):$(id -g):1" \
+   && "$(sha256sum "$deployment_authority" | awk '{print $1}')" == "$deployment_authority_sha256" ]] \
+  || { echo 'release bootstrap failed: hosted deployment authority changed' >&2; exit 1; }
+(cd "$transport_root" && sha256sum -c transport.sha256 >/dev/null) \
+  || { echo 'release bootstrap failed: candidate hash ACK failed' >&2; exit 1; }
+/usr/bin/python3 -I -B - "$remote_root" "$incoming" "$transport_root" "$candidate_root" "$release_id" "$candidate_id" \
+  "$deployment_authority_sha256" <<'PY' \
+  || { echo 'release bootstrap failed: candidate ancestry or metadata is unsafe' >&2; exit 1; }
+import ctypes,hashlib,json,os,re,secrets,stat,sys
+root,incoming,transport,candidate,release_id,candidate_id,authority_sha256=sys.argv[1:]
+uid=os.getuid(); gid=os.getgid()
+assert os.path.isabs(root) and os.path.normpath(root)==root
+assert incoming==f"{root}/incoming/{release_id}"
+assert transport==f"{incoming}/.candidate-{candidate_id}.partial"
+assert candidate==f"{transport}/{candidate_id}"
+expected={"candidate.json","compose-model.json","image-receipt.json","images.tar","production-state.json","release.json",
+          "release.manifest.json","release.tar.gz","source-commit.txt","source-receipt.json",
+          "source-snapshot.tar","toolchain-receipt.json","verify-release.py"}
+def open_absolute(path):
+    descriptor=os.open("/",os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+    try:
+        for component in path.split("/")[1:]:
+            assert component and component not in (".","..")
+            child=os.open(component,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=descriptor)
+            os.close(descriptor); descriptor=child
+        return descriptor
+    except BaseException:
+        os.close(descriptor); raise
+def open_child(parent,name):
+    before=os.stat(name,dir_fd=parent,follow_symlinks=False)
+    descriptor=os.open(name,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=parent)
+    opened=os.fstat(descriptor)
+    assert stat.S_ISDIR(opened.st_mode)
+    assert (opened.st_dev,opened.st_ino)==(before.st_dev,before.st_ino)
+    assert (opened.st_uid,opened.st_gid,stat.S_IMODE(opened.st_mode))==(uid,gid,0o700)
+    return descriptor
+root_fd=open_absolute(root)
+descriptors=[root_fd]
+try:
+    root_meta=os.fstat(root_fd)
+    assert (root_meta.st_uid,root_meta.st_gid,stat.S_IMODE(root_meta.st_mode))==(uid,gid,0o700)
+    incoming_parent=open_child(root_fd,"incoming"); descriptors.append(incoming_parent)
+    incoming_fd=open_child(incoming_parent,release_id); descriptors.append(incoming_fd)
+    transport_fd=open_child(incoming_fd,f".candidate-{candidate_id}.partial"); descriptors.append(transport_fd)
+    candidate_fd=open_child(transport_fd,candidate_id); descriptors.append(candidate_fd)
+    assert set(os.listdir(transport_fd))=={candidate_id,"deployment-authority.json","transport.sha256"}
+    assert set(os.listdir(candidate_fd))==expected
+    for directory,names in ((transport_fd,{"deployment-authority.json","transport.sha256"}),(candidate_fd,expected)):
+        for name in names:
+            metadata=os.stat(name,dir_fd=directory,follow_symlinks=False)
+            assert stat.S_ISREG(metadata.st_mode) and not stat.S_ISLNK(metadata.st_mode)
+            assert (metadata.st_uid,metadata.st_gid,stat.S_IMODE(metadata.st_mode),metadata.st_nlink)==(uid,gid,0o600,1)
+            file_descriptor=os.open(name,os.O_RDONLY|os.O_NOFOLLOW,dir_fd=directory)
+            opened=os.fstat(file_descriptor); os.close(file_descriptor)
+            assert (opened.st_dev,opened.st_ino,opened.st_size)==(metadata.st_dev,metadata.st_ino,metadata.st_size)
+    authority_fd=os.open("deployment-authority.json",os.O_RDONLY|os.O_NOFOLLOW,dir_fd=transport_fd)
+    try:
+        authority_meta=os.fstat(authority_fd)
+        authority=os.read(authority_fd,1024*1024+1)
+        assert 0<len(authority)<=1024*1024 and hashlib.sha256(authority).hexdigest()==authority_sha256
+        value=json.loads(authority)
+        canonical=json.dumps(value,sort_keys=True,separators=(",",":"),ensure_ascii=False).encode()+b"\n"
+        fields={"schema","version","ok","candidateId","releaseId","sourceDigest","sourceTree","sourceArchiveSha256",
+                "repository","sourceRef","runnerInvocationUri","candidateRoot","evidenceRoot","inventorySha256",
+                "receiptSha256","providerBundleSha256","verificationSha256","evidenceSha256","manifestSha256","providerEvidence"}
+        sha=re.compile(r"[0-9a-f]{64}"); git=re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
+        assert authority==canonical and set(value)==fields
+        assert value["schema"]=="revival.hosted-vps-candidate-authority" and value["version"]==1 and value["ok"] is True
+        assert value["candidateId"]==candidate_id and value["releaseId"]==release_id
+        assert git.fullmatch(value["sourceDigest"]) and git.fullmatch(value["sourceTree"])
+        for name in ("sourceArchiveSha256","inventorySha256","receiptSha256","providerBundleSha256",
+                     "verificationSha256","evidenceSha256","manifestSha256"):
+            assert sha.fullmatch(value[name])
+        assert value["repository"]=="TheAndersMadsen/ai-pin-revival" and value["sourceRef"]=="refs/heads/main"
+        assert re.fullmatch(r"https://github\.com/TheAndersMadsen/ai-pin-revival/actions/runs/[1-9][0-9]*/attempts/[1-9][0-9]*",value["runnerInvocationUri"])
+        assert value["providerEvidence"]=="point-of-use-reverified"
+        assert os.path.isabs(value["candidateRoot"]) and os.path.isabs(value["evidenceRoot"])
+        assert os.fstat(authority_fd)==authority_meta
+    finally:
+        os.close(authority_fd)
+finally:
+    for descriptor in reversed(descriptors): os.close(descriptor)
+PY
 for path in "$archive" "$manifest" "$verifier"; do
-  [[ "$path" == "$incoming/"* && -f "$path" && ! -L "$path" ]] \
+  [[ "$path" == "$candidate_root/"* && -f "$path" && ! -L "$path" ]] \
     || { echo 'release bootstrap failed: invalid input path' >&2; exit 1; }
 done
 driver_root="$incoming/verified-driver"
 verification="$incoming/bootstrap-verification.json"
-if [[ -e "$driver_root" || -L "$driver_root" ]]; then
-  [[ -d "$driver_root" && ! -L "$driver_root" ]] \
-    || { echo 'release bootstrap failed: invalid existing driver target' >&2; exit 1; }
-  python3 "$verifier" --tree "$driver_root" --manifest "$manifest" \
-    --expect-release-id "$release_id" --json >"$verification"
-else
-  python3 "$verifier" --archive "$archive" --manifest "$manifest" \
-    --extract "$driver_root" --expect-release-id "$release_id" --json >"$verification"
-fi
-python3 "$verifier" --tree "$driver_root" --manifest "$manifest" \
-  --expect-release-id "$release_id" --json >>"$verification"
+/usr/bin/python3 -I -B - --candidate "$candidate_root" --candidate-id "$candidate_id" \
+  --release-id "$release_id" --driver-root "$driver_root" >"$verification" <<'__REVIVAL_BOOTSTRAP_RELEASE__'
+BOOTSTRAP
+    cat "$REMOTE_IMPL/bootstrap-release.py"
+    cat <<'BOOTSTRAP'
+__REVIVAL_BOOTSTRAP_RELEASE__
 driver="$driver_root/platform/deploy/vps/remote/deploy.sh"
 common="$driver_root/platform/deploy/vps/remote/common.sh"
 preflight="$driver_root/platform/deploy/vps/remote/preflight.sh"
+candidate_verifier="$driver_root/platform/deploy/release-candidate.mjs"
+held_release_exec="$driver_root/platform/deploy/vps/remote/held-release-exec.py"
 [[ -f "$driver" && ! -L "$driver" && -f "$common" && ! -L "$common" && \
-   -f "$preflight" && ! -L "$preflight" ]] \
+   -f "$preflight" && ! -L "$preflight" \
+   && -f "$candidate_verifier" && ! -L "$candidate_verifier" \
+   && -f "$held_release_exec" && ! -L "$held_release_exec" ]] \
   || { echo 'release bootstrap failed: verified driver is incomplete' >&2; exit 1; }
+run_held_bootstrap_entry() {
+  local entry="$1" interpreter="$2"
+  shift 2
+  /usr/bin/python3 -I -B - "$held_release_exec" "$driver_root" "$manifest" "$release_id" "$entry" "$interpreter" "$@" <<'PY'
+import fcntl,hashlib,json,os,stat,subprocess,sys
+helper_path,tree,manifest,release_id,entry,interpreter,*arguments=sys.argv[1:]
+def identity(value):
+    return (value.st_dev,value.st_ino,value.st_size,value.st_mtime_ns,value.st_ctime_ns,
+            value.st_nlink,value.st_uid,value.st_gid,stat.S_IMODE(value.st_mode))
+def open_file(path,mode):
+    parent=os.open("/",os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+    try:
+        components=path.split("/")[1:]
+        for component in components[:-1]:
+            assert component and component not in (".","..")
+            child=os.open(component,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=parent)
+            os.close(parent); parent=child
+        name=components[-1]; before=os.stat(name,dir_fd=parent,follow_symlinks=False)
+        assert stat.S_ISREG(before.st_mode) and before.st_nlink==1
+        assert (before.st_uid,before.st_gid,stat.S_IMODE(before.st_mode))==(os.getuid(),os.getgid(),mode)
+        descriptor=os.open(name,os.O_RDONLY|os.O_NOFOLLOW,dir_fd=parent)
+        opened=os.fstat(descriptor); assert identity(opened)==identity(before)
+        return parent,name,descriptor,opened
+    except BaseException:
+        os.close(parent); raise
+def read_all(descriptor,metadata):
+    result=bytearray(); offset=0
+    while offset<metadata.st_size:
+        block=os.pread(descriptor,min(1024*1024,metadata.st_size-offset),offset); assert block
+        result.extend(block); offset+=len(block)
+    assert identity(os.fstat(descriptor))==identity(metadata)
+    return bytes(result)
+def seal(payload,mode):
+    required=(fcntl.F_SEAL_SEAL|fcntl.F_SEAL_SHRINK|fcntl.F_SEAL_GROW|fcntl.F_SEAL_WRITE)
+    descriptor=os.memfd_create("revival-held-exec",os.MFD_CLOEXEC|os.MFD_ALLOW_SEALING)
+    try:
+        offset=0
+        while offset<len(payload): offset+=os.write(descriptor,payload[offset:])
+        os.fchmod(descriptor,mode); fcntl.fcntl(descriptor,fcntl.F_ADD_SEALS,required)
+        assert fcntl.fcntl(descriptor,fcntl.F_GET_SEALS)&required==required
+        return descriptor
+    except BaseException:
+        os.close(descriptor); raise
+manifest_parent,manifest_name,manifest_fd,manifest_meta=open_file(manifest,0o600)
+helper_parent=helper=sealed=None
+try:
+    body=json.loads(read_all(manifest_fd,manifest_meta)); assert body.get("releaseId")==release_id
+    matches=[item for item in body.get("entries",[]) if item.get("path")=="platform/deploy/vps/remote/held-release-exec.py"]
+    assert len(matches)==1 and matches[0].get("mode") in ("0644","0755")
+    expected=matches[0]
+    helper_parent,helper_name,helper,opened=open_file(helper_path,int(expected["mode"],8))
+    payload=read_all(helper,opened)
+    assert len(payload)==expected["size"] and hashlib.sha256(payload).hexdigest()==expected["sha256"]
+    sealed=seal(payload,int(expected["mode"],8))
+    result=subprocess.run(["/usr/bin/python3","-I","-B",f"/proc/self/fd/{sealed}","--tree",tree,
+                           "--manifest",manifest,"--expect-release-id",release_id,
+                           "--entry",entry,"--interpreter",interpreter,"--",*arguments],
+                          check=False,pass_fds=(sealed,helper,manifest_fd))
+    assert identity(os.fstat(helper))==identity(opened)
+    assert identity(os.stat(helper_name,dir_fd=helper_parent,follow_symlinks=False))==identity(opened)
+    assert identity(os.fstat(manifest_fd))==identity(manifest_meta)
+    assert identity(os.stat(manifest_name,dir_fd=manifest_parent,follow_symlinks=False))==identity(manifest_meta)
+    raise SystemExit(result.returncode)
+finally:
+    for value in (sealed,helper,helper_parent,manifest_fd,manifest_parent):
+        if isinstance(value,int):
+            try: os.close(value)
+            except OSError: pass
+PY
+}
+candidate_verification="$(run_held_bootstrap_entry platform/deploy/release-candidate.mjs node \
+  verify --candidate "$candidate_root" --expect-id "$candidate_id" --json)" \
+  || { echo 'release bootstrap failed: candidate verification refused before Docker' >&2; exit 1; }
+/usr/bin/node -e 'const value=JSON.parse(process.argv[1]);if(value.ok!==true||value.candidateId!==process.argv[2]||value.releaseId!==process.argv[3]||value.productionCompatible!==true||value.authority?.origin!=="github-hosted-actions"||value.authority?.productionUse!=="requires-point-of-use-provider-evidence")process.exit(1)' \
+  "$candidate_verification" "$candidate_id" "$release_id" \
+  || { echo 'release bootstrap failed: candidate is not the requested Carry-compatible release' >&2; exit 1; }
+# Refuse SSH-forwarded daemon/context/config state, then pin every preflight and
+# deploy Docker/Compose call to the production host's local Unix socket.
+inherited_docker=("${!DOCKER_@}")
+((${#inherited_docker[@]} == 0)) \
+  || { echo 'release bootstrap failed: ambient DOCKER_* selection is forbidden' >&2; exit 1; }
+docker_config="$remote_root/private/docker-cli-empty"
+if [[ ! -e "$remote_root/private" && ! -L "$remote_root/private" ]]; then mkdir -m 700 -- "$remote_root/private"; fi
+[[ -d "$remote_root/private" && ! -L "$remote_root/private" \
+  && "$(readlink -f -- "$remote_root/private")" == "$remote_root/private" \
+  && "$(stat -c '%a:%u:%g' "$remote_root/private")" == "700:$(id -u):$(id -g)" ]] \
+  || { echo 'release bootstrap failed: private Docker anchor parent is unsafe' >&2; exit 1; }
+if [[ ! -e "$docker_config" && ! -L "$docker_config" ]]; then mkdir -m 700 -- "$docker_config"; fi
+[[ -d "$docker_config" && ! -L "$docker_config" \
+  && "$(readlink -f -- "$docker_config")" == "$docker_config" \
+  && "$(stat -c '%a:%u:%g' "$docker_config")" == "700:$(id -u):$(id -g)" \
+  && -z "$(find "$docker_config" -mindepth 1 -maxdepth 1 -print -quit)" ]] \
+  || { echo 'release bootstrap failed: Docker config anchor is unsafe' >&2; exit 1; }
+export DOCKER_HOST=unix:///var/run/docker.sock DOCKER_CONFIG="$docker_config"
 export REVIVAL_REMOTE_ROOT="$remote_root"
 export REVIVAL_EXPECTED_HOST="$expected_host"
 export REVIVAL_EXPECTED_USER="$expected_user"
 export REVIVAL_EXPECTED_ARCH="$expected_arch"
 preflight_args=(--min-free-gb "$min_free_gb" --archive-bytes "$archive_bytes")
 [[ "$cleanup" == 0 ]] || preflight_args+=(--cleanup-project-images)
-bash "$preflight" "${preflight_args[@]}"
+run_held_bootstrap_entry platform/deploy/vps/remote/preflight.sh bash "${preflight_args[@]}"
 deploy_args=(
   --release-id "$release_id"
   --archive "$archive"
   --manifest "$manifest"
   --verifier "$verifier"
   --deployment-id "$deployment_id"
+  --candidate-id "$candidate_id"
+  --candidate-root "$candidate_root"
+  --deployment-authority-sha256 "$deployment_authority_sha256"
 )
 [[ "$emit_json" == 0 ]] || deploy_args+=(--json)
 [[ "$skip_smoke" == 0 ]] || deploy_args+=(--skip-staging-smoke)
-exec bash "$driver" "${deploy_args[@]}"
+status=0
+run_held_bootstrap_entry platform/deploy/vps/remote/deploy.sh bash "${deploy_args[@]}" || status=$?
+# The selected driver cannot move the workspace containing its own logical
+# release root while it is still running.  After it exits, stream the exact
+# trusted candidate-store helper into an isolated interpreter and use its
+# descriptor-held, watcher-linearized, non-destructive receipt protocol.  The
+# child status remains authoritative; a cleanup refusal only replaces a zero
+# child status, while a failed child keeps its original code for diagnosis.
+cleanup_status=0
+cleanup_receipt=""
+if [[ -e "$incoming" || -L "$incoming" ]]; then
+  cleanup_receipt="$(
+    /usr/bin/python3 -I -B - retire-path --parent "$remote_root/incoming" --name "$release_id" <<'__REVIVAL_CANDIDATE_STORE__'
 BOOTSTRAP
-  } | run_ssh "bash -s -- $args"
+    cat "$REVIVAL_ROOT/platform/deploy/candidate-store.py"
+    cat <<'BOOTSTRAP'
+__REVIVAL_CANDIDATE_STORE__
+  )" || cleanup_status=$?
+  if ((cleanup_status == 0)) && [[ ! "$cleanup_receipt" =~ ^\.candidate-retired-[0-9a-f]{32}$ ]]; then
+    cleanup_status=1
+  fi
+fi
+if ((cleanup_status != 0)); then
+  printf 'release bootstrap warning: incoming workspace retirement refused\n' >&2
+  ((status != 0)) || status=$cleanup_status
+fi
+exit "$status"
+BOOTSTRAP
+  } | run_ssh "$REMOTE_CLEAN_BASH -s -- $args"
 }
 
 run_current_release_operation() {
@@ -457,7 +927,7 @@ run_current_release_operation() {
   esac
   local args
   args="$(remote_quote "$operation" "$@")"
-  run_ssh "bash -s -- $args" <<'BOOTSTRAP'
+  run_ssh "$REMOTE_CLEAN_BASH -s -- $args" <<'BOOTSTRAP'
 set -euo pipefail
 umask 077
 operation="$1"; shift
@@ -504,51 +974,94 @@ release_id="$(basename "$release")"; [[ "$release_id" =~ ^[0-9a-f]{64}$ ]] || ex
 [[ -f "$record/SUCCEEDED" && -f "$record/INGRESS_ACTIVATED" \
   && -f "$record/POINTER_TRANSACTION_COMMITTED" && ! -f "$record/MANUAL_ROLLBACK" \
   && "$(tr -d '\r\n' <"$record/release-id")" == "$release_id" ]] || exit 1
-manifest="$root/manifests/$release_id.json"; verifier="$release/platform/deploy/vps/verify-release.py"
-[[ -f "$manifest" && -f "$verifier" && ! -L "$verifier" ]] || exit 1
-# The release verifier cannot authenticate itself. Bind the authoritative
-# manifest and the verifier bytes independently before allowing it to verify
-# and dispatch the rest of the release tree.
-python3 - "$manifest" "$verifier" "$release_id" <<'PY'
-import hashlib,json,os,stat,sys
-manifest_path,verifier_path,expected=sys.argv[1:]
-for path in (manifest_path,verifier_path):
-    metadata=os.lstat(path)
-    if not stat.S_ISREG(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
-        raise SystemExit("stateful bootstrap input is not a regular file")
-with open(manifest_path,"r",encoding="utf-8") as stream:
-    manifest=json.load(stream)
-if set(manifest) != {"schemaVersion","profile","releaseId","entries"}:
-    raise SystemExit("stateful bootstrap manifest schema mismatch")
-payload={"schemaVersion":manifest.get("schemaVersion"),"profile":manifest.get("profile"),"entries":manifest.get("entries")}
-calculated=hashlib.sha256(json.dumps(payload,separators=(",",":"),ensure_ascii=False).encode()).hexdigest()
-if manifest.get("schemaVersion") != 1 or manifest.get("profile") != "vps" or manifest.get("releaseId") != expected or calculated != expected:
-    raise SystemExit("stateful bootstrap manifest identity mismatch")
-entries=[entry for entry in manifest.get("entries",[]) if isinstance(entry,dict) and entry.get("path")=="platform/deploy/vps/verify-release.py"]
-if len(entries) != 1 or set(entries[0]) != {"path","sha256","size","mode"}:
-    raise SystemExit("stateful bootstrap verifier entry mismatch")
-entry=entries[0]; metadata=os.lstat(verifier_path)
-if entry.get("mode") not in {"0644","0755"} or entry.get("size") != metadata.st_size or entry.get("mode") != f"{stat.S_IMODE(metadata.st_mode):04o}":
-    raise SystemExit("stateful bootstrap verifier metadata mismatch")
-descriptor=os.open(verifier_path,os.O_RDONLY|os.O_NOFOLLOW)
+manifest="$root/manifests/$release_id.json"
+held_exec="$release/platform/deploy/vps/remote/held-release-exec.py"
+held_arguments=()
+if [[ "$operation" == canary.sh || "$operation" == drift.sh ]]; then
+  entry="platform/deploy/vps/remote/current-operation.sh"
+  held_arguments+=(--operation "$operation" --record "$record" --)
+else
+  entry="platform/deploy/vps/remote/$operation"
+  [[ "$operation" != backup.sh ]] || held_arguments+=(--already-locked)
+fi
+exec /usr/bin/python3 -I -B - "$manifest" "$held_exec" "$release" "$release_id" "$entry" \
+  "${held_arguments[@]}" "$@" <<'PY'
+import fcntl,hashlib,json,os,stat,subprocess,sys
+manifest_path,helper_path,tree,expected,entry,*arguments=sys.argv[1:]
+def identity(value):
+    return (value.st_dev,value.st_ino,value.st_size,value.st_mtime_ns,value.st_ctime_ns,
+            value.st_nlink,value.st_uid,value.st_gid,stat.S_IMODE(value.st_mode))
+def open_file(path,mode):
+    assert os.path.isabs(path) and os.path.normpath(path)==path
+    parent=os.open("/",os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+    try:
+        components=path.split("/")[1:]
+        for component in components[:-1]:
+            assert component and component not in (".","..")
+            child=os.open(component,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=parent)
+            os.close(parent); parent=child
+        name=components[-1]
+        before=os.stat(name,dir_fd=parent,follow_symlinks=False)
+        assert stat.S_ISREG(before.st_mode) and before.st_nlink==1
+        assert (before.st_uid,before.st_gid,stat.S_IMODE(before.st_mode))==(os.getuid(),os.getgid(),mode)
+        descriptor=os.open(name,os.O_RDONLY|os.O_NOFOLLOW,dir_fd=parent)
+        opened=os.fstat(descriptor)
+        assert identity(opened)==identity(before)
+        return parent,name,descriptor,opened
+    except BaseException:
+        os.close(parent); raise
+def read_all(descriptor,metadata):
+    result=bytearray(); offset=0
+    while offset < metadata.st_size:
+        block=os.pread(descriptor,min(1024*1024,metadata.st_size-offset),offset)
+        assert block
+        result.extend(block); offset+=len(block)
+    assert identity(os.fstat(descriptor))==identity(metadata)
+    return bytes(result)
+def seal(payload,mode):
+    required=(fcntl.F_SEAL_SEAL|fcntl.F_SEAL_SHRINK|fcntl.F_SEAL_GROW|fcntl.F_SEAL_WRITE)
+    descriptor=os.memfd_create("revival-held-exec",os.MFD_CLOEXEC|os.MFD_ALLOW_SEALING)
+    try:
+        offset=0
+        while offset<len(payload): offset+=os.write(descriptor,payload[offset:])
+        os.fchmod(descriptor,mode); fcntl.fcntl(descriptor,fcntl.F_ADD_SEALS,required)
+        assert fcntl.fcntl(descriptor,fcntl.F_GET_SEALS)&required==required
+        return descriptor
+    except BaseException:
+        os.close(descriptor); raise
+assert len(expected)==64 and all(value in "0123456789abcdef" for value in expected)
+manifest_parent,manifest_name,manifest_fd,manifest_meta=open_file(manifest_path,0o600)
+helper_parent=helper_fd=sealed_fd=None
 try:
-    opened=os.fstat(descriptor)
-    if (opened.st_dev,opened.st_ino,opened.st_size) != (metadata.st_dev,metadata.st_ino,metadata.st_size):
-        raise SystemExit("stateful bootstrap verifier changed before open")
-    digest=hashlib.file_digest(os.fdopen(descriptor,"rb",closefd=False),"sha256").hexdigest()
+    body=json.loads(read_all(manifest_fd,manifest_meta))
+    assert set(body)=={"schemaVersion","profile","releaseId","entries"}
+    canonical={"schemaVersion":body.get("schemaVersion"),"profile":body.get("profile"),"entries":body.get("entries")}
+    assert body.get("schemaVersion")==1 and body.get("profile")=="vps" and body.get("releaseId")==expected
+    assert hashlib.sha256(json.dumps(canonical,separators=(",",":"),ensure_ascii=False).encode()).hexdigest()==expected
+    matching=[value for value in body["entries"] if isinstance(value,dict) and value.get("path")=="platform/deploy/vps/remote/held-release-exec.py"]
+    assert len(matching)==1 and set(matching[0])=={"path","sha256","size","mode"}
+    helper_entry=matching[0]
+    assert helper_entry["mode"] in ("0644","0755")
+    helper_parent,helper_name,helper_fd,helper_meta=open_file(helper_path,int(helper_entry["mode"],8))
+    helper_bytes=read_all(helper_fd,helper_meta)
+    assert len(helper_bytes)==helper_entry["size"]
+    assert hashlib.sha256(helper_bytes).hexdigest()==helper_entry["sha256"]
+    sealed_fd=seal(helper_bytes,int(helper_entry["mode"],8))
+    command=["/usr/bin/python3","-I","-B",f"/proc/self/fd/{sealed_fd}","--tree",tree,
+             "--manifest",manifest_path,"--expect-release-id",expected,"--entry",entry,
+             "--interpreter","bash","--",*arguments]
+    result=subprocess.run(command,check=False,pass_fds=(sealed_fd,helper_fd,manifest_fd))
+    assert identity(os.fstat(manifest_fd))==identity(manifest_meta)
+    assert identity(os.stat(manifest_name,dir_fd=manifest_parent,follow_symlinks=False))==identity(manifest_meta)
+    assert identity(os.fstat(helper_fd))==identity(helper_meta)
+    assert identity(os.stat(helper_name,dir_fd=helper_parent,follow_symlinks=False))==identity(helper_meta)
+    raise SystemExit(result.returncode)
 finally:
-    os.close(descriptor)
-after=os.lstat(verifier_path)
-if (after.st_dev,after.st_ino,after.st_size,after.st_mtime_ns,after.st_ctime_ns) != (metadata.st_dev,metadata.st_ino,metadata.st_size,metadata.st_mtime_ns,metadata.st_ctime_ns):
-    raise SystemExit("stateful bootstrap verifier changed while hashing")
-if not isinstance(entry.get("sha256"),str) or digest != entry["sha256"]:
-    raise SystemExit("stateful bootstrap verifier digest mismatch")
+    for value in (sealed_fd,helper_fd,helper_parent,manifest_fd,manifest_parent):
+        if isinstance(value,int):
+            try: os.close(value)
+            except OSError: pass
 PY
-python3 "$verifier" --tree "$release" --manifest "$manifest" --expect-release-id "$release_id" --json >/dev/null
-entry="$release/platform/deploy/vps/remote/$operation"; common="$release/platform/deploy/vps/remote/common.sh"
-[[ -f "$entry" && ! -L "$entry" && -f "$common" && ! -L "$common" ]] || exit 1
-if [[ "$operation" == backup.sh ]]; then exec bash "$entry" --already-locked "$@"; fi
-exec bash "$entry" "$@"
 BOOTSTRAP
 }
 
@@ -560,7 +1073,7 @@ assert_local_workspace() {
 
 json_field() {
   local json_file="$1" field="$2"
-  node - "$json_file" "$field" <<'NODE'
+  run_local_node - "$json_file" "$field" <<'NODE'
 const fs = require('node:fs');
 const [path, field] = process.argv.slice(2);
 const payload = fs.readFileSync(path, 'utf8');
@@ -587,9 +1100,54 @@ local_preflight() {
   need_local ssh
   need_local node
   need_local python3
-  need_local scp
-  command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1 \
-    || die "required local command is unavailable: sha256sum or shasum"
+  need_local rsync
+  if [[ -n "${REVIVAL_LOCAL_SHA256SUM:-}" ]]; then need_local sha256sum; else need_local shasum; fi
+  need_local awk
   assert_local_workspace
   validate_remote_root "$REMOTE_ROOT"
+}
+
+local_sha256_file() {
+  local file="$1"
+  [[ -f "$file" && ! -L "$file" ]] || die "checksum input is not one regular file: $file"
+  if [[ -n "${REVIVAL_LOCAL_SHA256SUM:-}" ]]; then
+    "${REVIVAL_LOCAL_SHA256SUM:?}" -- "$file" | "${REVIVAL_LOCAL_AWK:?}" '{print $1}'
+  elif [[ -n "${REVIVAL_LOCAL_SHASUM:-}" ]]; then
+    "${REVIVAL_LOCAL_SHASUM:?}" -a 256 -- "$file" | "${REVIVAL_LOCAL_AWK:?}" '{print $1}'
+  else
+    die "required local command is unavailable: sha256sum or shasum"
+  fi
+}
+
+# Transfer one already-snapshotted candidate. The partial directory is retained
+# between attempts so a dropped connection resumes the same bytes. Success is
+# not rsync's exit status alone: the remote must hash every listed file and ACK
+# the exact local transport-manifest digest.
+transfer_candidate_resumably() {
+  local source="$1" remote_partial="$2" expected_ack="$3"
+  local attempt remote_ack remote_args remote_shell
+  [[ -d "$source" && "$remote_partial" == "$REMOTE_ROOT/incoming/"*/.candidate-*.partial \
+    && "$expected_ack" =~ ^[0-9a-f]{64}$ ]] || usage_error "invalid candidate transfer arguments"
+  for attempt in 1 2 3; do
+    [[ -z "$UPLOAD_LEASE_PID" ]] || assert_remote_upload_lease
+    remote_shell="$(rsync_remote_shell)"
+    if run_local_rsync --rsh "$remote_shell" --archive --chmod=Du=rwx,Dgo=,Fu=rw,Fgo= --partial --append-verify --protect-args \
+        -- "$source/" "$DEPLOY_REMOTE:$remote_partial/"; then
+      remote_ack=""
+      remote_args="$(remote_quote "$remote_partial")"
+      if remote_ack="$(run_ssh "$REMOTE_CLEAN_BASH -s -- $remote_args" <<'REMOTE_ACK'
+set -euo pipefail
+cd -- "$1"
+/usr/bin/sha256sum -c transport.sha256 >/dev/null
+/usr/bin/sha256sum transport.sha256 | /usr/bin/awk '{print $1}'
+REMOTE_ACK
+)"; then
+        if [[ "$remote_ack" == "$expected_ack" ]]; then
+          [[ -z "$UPLOAD_LEASE_PID" ]] || assert_remote_upload_lease
+          return 0
+        fi
+      fi
+    fi
+  done
+  die "candidate transfer failed after exactly 3 resumable attempts"
 }

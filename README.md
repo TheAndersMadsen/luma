@@ -36,8 +36,9 @@ CLI needs Node.js 22.14.0 or newer on the Node 22 line; Docker supplies the
 product services. See [installation](docs/installation.md) for clean-checkout,
 Dev Container, and Center PWA instructions.
 
-The pinned source contributor line is **JDK 17, Android SDK 34, NDK r28c, Node >= 22.14.0, and Rust 1.91.1**.
-The exact machine-readable toolchain lives in
+The pinned source contributor line is **JDK 17, Android SDK 34, NDK r28c, Node >= 22.14.0, and Rust 1.91.1 exactly**.
+The root `rust-toolchain.toml` selects Rust for source work; the complete
+machine-readable builder contract lives in
 `platform/containers/pin-builder/toolchain.json`.
 
 ## Bring a Pin online
@@ -100,6 +101,6 @@ labels used here. A green build, healthy container, successful server canary,
 or completed ADB transaction is not physical proof. Pin playback, projection,
 sync, and wearer interaction remain unknown until observed on the exact device.
 
-Run `./revival backup --fetch` after PKI changes and on a regular schedule. It
+Run `./revival backup --confirm --fetch` after PKI changes and on a regular schedule. It
 is the supported off-host copy of irreplaceable server key material plus the
 Pin signing keystores. See [recovery](docs/recovery.md).

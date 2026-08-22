@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/env -S /bin/bash -p
 # Local side of the supported release/backup retention command.
 #
 # Streamed with run_remote_impl rather than dispatched through
@@ -13,8 +13,9 @@
 # The argument list is closed. There is no pass-through, so no future caller can
 # hand the remote entry point an option this file has not been read to allow.
 set -euo pipefail
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-source "$SCRIPT_DIR/lib/local.sh"
+case "${BASH_SOURCE[0]}" in /*) SCRIPT_PATH="${BASH_SOURCE[0]}" ;; *) SCRIPT_PATH="$PWD/${BASH_SOURCE[0]}" ;; esac
+SCRIPT_DIR="${SCRIPT_PATH%/*}"
+builtin source "$SCRIPT_DIR/lib/local.sh"
 
 confirm=0
 json=0

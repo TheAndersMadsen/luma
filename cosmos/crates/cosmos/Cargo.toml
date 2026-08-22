@@ -16,6 +16,7 @@ cosmos-crypto = { path = "../crypto" }
 cosmos-protocol.workspace = true
 reqwest = { version = "0.12.9", default-features = false, features = ["json", "rustls-tls", "stream"] }
 jsonwebtoken = { workspace = true }
+libc = "0.2"
 serde = { version = "1.0.217", features = ["derive"] }
 serde_json = "1.0.138"
 thiserror.workspace = true
@@ -70,6 +71,7 @@ tonic = { version = "0.12.3", features = ["tls"] }
 rustls-pemfile = "2"
 rand = "0.8"
 rsa = "0.9.6"
+sha1 = "0.10.6"
 # `pkcs8` so the live test can load the attestation private key and sign the CSR
 # with it — the server verifies that signature against the attestation
 # certificate, so signing with anything else is correctly rejected.

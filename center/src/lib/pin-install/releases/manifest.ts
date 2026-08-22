@@ -2,7 +2,7 @@ import { compareInstallVersions, parseInstallVersion } from "../domain/versions"
 import { MANAGED_PACKAGES } from "../domain/managedPackages";
 
 export const DEFAULT_PIN_RELEASE_MANIFEST_URL = "/api/pin/releases/current";
-export const PIN_RELEASE_MANIFEST_SCHEMA_VERSION = 1;
+export const PIN_RELEASE_MANIFEST_SCHEMA_VERSION = 2;
 export const MAX_PIN_ARTIFACT_SIZE_BYTES = 512 * 1024 * 1024;
 
 export const PIN_RELEASE_ARTIFACT_ROLES = [
@@ -37,10 +37,38 @@ export interface PinReleaseArtifact {
 }
 
 export interface PinReleaseManifest {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly releaseId: string;
   readonly version: string;
   readonly artifacts: readonly PinReleaseArtifact[];
+  readonly authority: PinReleaseAuthority;
+}
+
+export interface PinReleaseAuthority {
+  readonly kind: "github-hosted-native-x64";
+  readonly name: "hosted-attestation.json";
+  readonly size: number;
+  readonly sha256: string;
+  readonly provider: "github-actions-sigstore";
+  readonly policySha256: string;
+  readonly requestSha256: string;
+  readonly predicateSha256: string;
+  readonly trustedRootSha256: string;
+  readonly preSignBundleSha256: string;
+  readonly releaseBundleSha256: string;
+  readonly preSignVerificationSha256: string;
+  readonly releaseVerificationSha256: string;
+  readonly runnerEnvironment: "github-hosted";
+  readonly runnerLabel: "ubuntu-24.04";
+  readonly runnerArchitecture: "x64";
+  readonly runnerInvocationUri: string;
+  readonly repository: "TheAndersMadsen/ai-pin-revival";
+  readonly sourceRef: "refs/heads/main";
+  readonly sourceDigest: string;
+  readonly sourceGenerationSha256: string;
+  readonly sourceTarSha256: string;
+  readonly toolchainSha256: string;
+  readonly builderImageId: string;
 }
 
 export interface AcceptedPinRelease {
@@ -117,7 +145,15 @@ export function isPinReleaseError(error: unknown): error is PinReleaseError {
 const RELEASE_ID_RE = /^[0-9a-f]{64}$/;
 const SHA256_RE = /^[0-9a-f]{64}$/;
 const APK_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,254}\.apk$/;
-const ROOT_FIELDS = ["schemaVersion", "releaseId", "version", "artifacts"];
+const ROOT_FIELDS = ["schemaVersion", "releaseId", "version", "artifacts", "authority"];
+const AUTHORITY_FIELDS = [
+  "kind", "name", "size", "sha256", "provider", "policySha256", "requestSha256",
+  "predicateSha256", "trustedRootSha256", "preSignBundleSha256", "releaseBundleSha256",
+  "preSignVerificationSha256", "releaseVerificationSha256", "runnerEnvironment",
+  "runnerLabel", "runnerArchitecture", "runnerInvocationUri", "repository", "sourceRef",
+  "sourceDigest", "sourceGenerationSha256", "sourceTarSha256", "toolchainSha256",
+  "builderImageId",
+];
 const ARTIFACT_FIELDS = [
   "role",
   "url",
@@ -340,6 +376,58 @@ function parseArtifact(
   });
 }
 
+function parseAuthority(value: unknown): PinReleaseAuthority {
+  if (!isRecord(value)) invalidManifest("authority must be an object.");
+  assertExactFields(value, AUTHORITY_FIELDS, "authority");
+  if (value.kind !== "github-hosted-native-x64" || value.name !== "hosted-attestation.json") {
+    invalidManifest("authority must name the canonical GitHub-hosted evidence sidecar.");
+  }
+  const digest = (field: string): string => {
+    const result = requiredTrimmedString(value[field], `authority.${field}`);
+    if (!SHA256_RE.test(result)) invalidManifest(`authority.${field} must be a lowercase SHA-256 digest.`);
+    return result;
+  };
+  if (
+    value.provider !== "github-actions-sigstore" || value.runnerEnvironment !== "github-hosted" ||
+    value.runnerLabel !== "ubuntu-24.04" || value.runnerArchitecture !== "x64" ||
+    value.repository !== "TheAndersMadsen/ai-pin-revival" || value.sourceRef !== "refs/heads/main"
+  ) invalidManifest("authority does not match the pinned hosted release policy.");
+  const runnerInvocationUri = requiredTrimmedString(value.runnerInvocationUri, "authority.runnerInvocationUri");
+  if (!/^https:\/\/github\.com\/TheAndersMadsen\/ai-pin-revival\/actions\/runs\/[1-9][0-9]*\/attempts\/[1-9][0-9]*$/u.test(runnerInvocationUri)) {
+    invalidManifest("authority.runnerInvocationUri is invalid.");
+  }
+  const sourceDigest = requiredTrimmedString(value.sourceDigest, "authority.sourceDigest");
+  if (!/^[0-9a-f]{40}$/u.test(sourceDigest)) invalidManifest("authority.sourceDigest is invalid.");
+  const builderImageId = requiredTrimmedString(value.builderImageId, "authority.builderImageId");
+  if (!/^sha256:[0-9a-f]{64}$/u.test(builderImageId)) invalidManifest("authority.builderImageId is invalid.");
+  return Object.freeze({
+    kind: "github-hosted-native-x64",
+    name: "hosted-attestation.json",
+    size: requiredPositiveInteger(value.size, "authority.size", 64 * 1024 * 1024),
+    sha256: digest("sha256"),
+    provider: "github-actions-sigstore",
+    policySha256: digest("policySha256"),
+    requestSha256: digest("requestSha256"),
+    predicateSha256: digest("predicateSha256"),
+    trustedRootSha256: digest("trustedRootSha256"),
+    preSignBundleSha256: digest("preSignBundleSha256"),
+    releaseBundleSha256: digest("releaseBundleSha256"),
+    preSignVerificationSha256: digest("preSignVerificationSha256"),
+    releaseVerificationSha256: digest("releaseVerificationSha256"),
+    runnerEnvironment: "github-hosted",
+    runnerLabel: "ubuntu-24.04",
+    runnerArchitecture: "x64",
+    runnerInvocationUri,
+    repository: "TheAndersMadsen/ai-pin-revival",
+    sourceRef: "refs/heads/main",
+    sourceDigest,
+    sourceGenerationSha256: digest("sourceGenerationSha256"),
+    sourceTarSha256: digest("sourceTarSha256"),
+    toolchainSha256: digest("toolchainSha256"),
+    builderImageId,
+  });
+}
+
 function canonicalizeManifest(manifest: PinReleaseManifest): string {
   return JSON.stringify({
     schemaVersion: manifest.schemaVersion,
@@ -348,6 +436,7 @@ function canonicalizeManifest(manifest: PinReleaseManifest): string {
     artifacts: PIN_RELEASE_ARTIFACT_ROLES.map((role) =>
       manifest.artifacts.find((artifact) => artifact.role === role),
     ),
+    authority: manifest.authority,
   });
 }
 
@@ -361,7 +450,7 @@ export function parsePinReleaseManifest(
   assertExactFields(payload, ROOT_FIELDS, "release manifest");
 
   if (payload.schemaVersion !== PIN_RELEASE_MANIFEST_SCHEMA_VERSION) {
-    invalidManifest("The Pin release manifest schemaVersion must be 1.", {
+    invalidManifest("The Pin release manifest schemaVersion must be 2 with hosted authority.", {
       manifestUrl,
     });
   }
@@ -416,9 +505,10 @@ export function parsePinReleaseManifest(
       releaseId,
     });
   }
+  const authority = parseAuthority(payload.authority);
 
   return Object.freeze({
-    schemaVersion: 1 as const,
+    schemaVersion: 2 as const,
     releaseId,
     version,
     artifacts: Object.freeze(
@@ -426,6 +516,7 @@ export function parsePinReleaseManifest(
         (role) => artifacts.find((artifact) => artifact.role === role)!,
       ),
     ),
+    authority,
   });
 }
 

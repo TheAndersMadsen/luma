@@ -816,10 +816,13 @@ def security_tree_identity(path: Path) -> str:
             # operator proof metadata-complete by binding the platform xattr
             # tool's no-follow representation instead of silently omitting it.
             result = subprocess.run(
-                ["xattr", "-l", "-s", str(current)],
+                ["/usr/bin/xattr", "-l", "-s", str(current)],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
                 check=False,
+                env={"HOME": "/nonexistent", "LANG": "C.UTF-8",
+                     "LC_ALL": "C.UTF-8", "PATH": "/usr/bin:/usr/sbin",
+                     "TZ": "UTC"},
             )
             if result.returncode not in (0, 1):
                 die(f"could not inspect trust-root extended metadata: {relative}")

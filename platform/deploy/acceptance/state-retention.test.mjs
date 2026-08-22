@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readdir, chmod, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -60,6 +61,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../.
 const remote = path.join(root, "platform/deploy/vps/remote");
 const driver = path.join(remote, "prune-state.py");
 const entryPoint = path.join(remote, "prune-state.sh");
+const retentionStore = path.join(remote, "retention-store.py");
 const localWrapper = path.join(root, "platform/deploy/vps/prune-state.sh");
 const commonPath = path.join(remote, "common.sh");
 const localLib = path.join(root, "platform/deploy/vps/lib/local.sh");
@@ -100,11 +102,12 @@ function rid(label) {
   return `20260810T0000${label}Z-fixture`;
 }
 
-function record(name, { release, oldCurrent = "", oldRecord = "", markers = SUCCEEDED, references = [] }) {
+function record(name, { release, candidate = "", oldCurrent = "", oldRecord = "", markers = SUCCEEDED, references = [] }) {
   return {
     name,
     path: `${ROOT}/deployments/${name}`,
     releaseId: release,
+    candidateId: candidate,
     oldCurrent: oldCurrent ? `${ROOT}/releases/${oldCurrent}` : "",
     oldCurrentDeployment: oldRecord ? `${ROOT}/deployments/${oldRecord}` : "",
     markers: [...markers],
@@ -116,12 +119,44 @@ function record(name, { release, oldCurrent = "", oldRecord = "", markers = SUCC
   };
 }
 
+function authority(name, mtime) {
+  const selected = {
+    dev: 1,
+    ino: Number.parseInt(createHash("sha256").update(name).digest("hex").slice(0, 10), 16),
+    mode: 0o700,
+    uid: 1000,
+    gid: 1000,
+    nlink: 2,
+    size: 4096,
+    mtimeNs: mtime,
+    ctimeNs: mtime + 1,
+    inventorySha256: createHash("sha256").update(`inventory:${name}`).digest("hex"),
+  };
+  const canonical = JSON.stringify(selected, Object.keys(selected).sort());
+  return {
+    ...selected,
+    authorityToken: createHash("sha256").update(canonical).digest("hex"),
+  };
+}
+
 function backup(name, { bytes = 50 * 1024 * 1024, ageHours = 72, complete = true } = {}) {
-  return { name, path: `${ROOT}/backups/${name}`, bytes, mtime: NOW - ageHours * HOUR, complete };
+  const mtime = NOW - ageHours * HOUR;
+  return { name, path: `${ROOT}/backups/${name}`, bytes, mtime, complete, ...authority(name, mtime) };
 }
 
 function release(name, { bytes = 8 * 1024 * 1024, ageHours = 72 } = {}) {
-  return { name, path: `${ROOT}/releases/${name}`, bytes, mtime: NOW - ageHours * HOUR };
+  const mtime = NOW - ageHours * HOUR;
+  return { name, path: `${ROOT}/releases/${name}`, bytes, mtime, ...authority(name, mtime) };
+}
+
+function candidate(name, { bytes = 3 * 1024 * 1024 * 1024, ageHours = 72 } = {}) {
+  const mtime = NOW - ageHours * HOUR;
+  return { name, path: `${ROOT}/release-candidates/${name}`, bytes, mtime, ...authority(name, mtime) };
+}
+
+function incoming(name, { bytes = 3 * 1024 * 1024 * 1024, ageHours = 72 } = {}) {
+  const mtime = NOW - ageHours * HOUR;
+  return { name, path: `${ROOT}/incoming/${name}`, bytes, mtime, ...authority(name, mtime) };
 }
 
 /*
@@ -179,6 +214,8 @@ function productionShape(overrides = {}) {
     deployments,
     backups,
     releases,
+    candidates: [],
+    incoming: [],
     ...overrides,
   };
 }
@@ -336,6 +373,25 @@ test("the newest verified backup is retained whatever else is true of it", async
   const entry = action(document, "backups", "20260812T170000Z-deadbeef");
   assert.equal(entry.action, "keep");
   assert.deepEqual(entry.reasons, ["newest-verified-backup-drift-gate"]);
+});
+
+test("retained candidates survive while unreferenced candidates and stale incoming staging are bounded", async () => {
+  const request = productionShape();
+  const currentCandidate = releaseId("c");
+  const abandonedCandidate = releaseId("d");
+  request.deployments = request.deployments.map((entry) => entry.name === rid("D5")
+    ? { ...entry, candidateId: currentCandidate }
+    : entry);
+  request.candidates = [candidate(currentCandidate), candidate(abandonedCandidate)];
+  request.incoming = [incoming(releaseId("e")), incoming(releaseId("f"), { ageHours: 1 })];
+  const document = await planned(request);
+  assert.equal(action(document, "candidates", currentCandidate).action, "keep");
+  assert.match(action(document, "candidates", currentCandidate).reasons.join(" "), /candidate-of-retained-record/u);
+  assert.equal(action(document, "candidates", abandonedCandidate).action, "remove");
+  assert.equal(action(document, "incoming", releaseId("e")).action, "remove");
+  assert.equal(action(document, "incoming", releaseId("f")).action, "ineligible");
+  assert.ok(document.totals.candidateBytesRemoved >= 3 * 1024 * 1024 * 1024);
+  assert.ok(document.totals.incomingBytesRemoved >= 3 * 1024 * 1024 * 1024);
 });
 
 test("a pending or armed transaction retains its record, its release and its recovery target", async () => {
@@ -536,14 +592,14 @@ test("an unreadable authority pointer refuses; it never becomes an empty retaine
 
 /* ---------- the plan token ------------------------------------------------- */
 
-test("the plan token gates --confirm and moves only when a decision moves", async () => {
+test("the plan token gates --confirm and binds exact measurements and authority", async () => {
   const base = await planned(productionShape());
 
-  // Same decisions, different measurements: the token must not churn between a
-  // dry run and the --confirm that follows it seconds later.
+  // A same-name object with changed measurements is a different deletion
+  // authority even when the high-level keep/remove decision is unchanged.
   const resized = productionShape();
   resized.backups = resized.backups.map((entry) => ({ ...entry, bytes: entry.bytes + 4096 }));
-  assert.equal((await planned(resized)).planToken, base.planToken);
+  assert.notEqual((await planned(resized)).planToken, base.planToken);
 
   // A changed decision must invalidate it.
   const moved = productionShape();
@@ -695,18 +751,187 @@ test("the entry point re-proves the recovery path after it removes anything", as
   );
 });
 
-test("every removal is re-validated against the filesystem immediately before the rm", async () => {
+test("every removal is exact-object logical retirement, never path rm", async () => {
   const removalLoop = entrySource.slice(entrySource.indexOf('while IFS=$\'\\t\' read -r kind path bytes'));
   assert.match(removalLoop, /\[\[ "\$path" == "\$store_root\/"\* \]\]/u, "the path must still be inside its store");
   assert.match(removalLoop, /"\$name" != \*\/\*/u, "a nested path is refused");
-  assert.match(removalLoop, /! -L "\$path" && "\$\(readlink -f -- "\$path"\)" == "\$path"/u,
-    "a symlinked component is refused");
+  assert.match(removalLoop, /retention_store" remove[\s\S]*--authority-token/u,
+    "the planned object token must reach descriptor-held retirement");
+  assert.match(removalLoop, /retirement_receipt="\$\(python3 -I "\$retention_store" remove[\s\S]*\^\\\.prune-retired-\[0-9a-f\]\{32\}\$/u,
+    "the caller must capture and validate the content-addressed retirement receipt");
+  assert.doesNotMatch(removalLoop, /rm -rf -- "\$path"/u);
   assert.match(removalLoop, /for pointer in current previous current-deployment/u,
     "a path a live authority pointer still names is refused whatever the plan said");
+  const descriptorRemoval = removalLoop.indexOf('python3 -I "$retention_store" remove');
+  assert.ok(descriptorRemoval >= 0, "retention removal no longer uses the descriptor-safe helper");
   assert.ok(
-    removalLoop.indexOf("readlink -f -- \"$REMOTE_ROOT/$pointer\"") < removalLoop.indexOf("rm -rf --"),
-    "the pointer check runs before the removal, not after it",
+    removalLoop.indexOf("readlink -f -- \"$REMOTE_ROOT/$pointer\"") < descriptorRemoval,
+    "the pointer check runs before descriptor-safe removal, not after it",
   );
+});
+
+test("retention retirement rejects post-plan swaps, links, and writable authority", async () => {
+  const directory = await realpath(await mkdtemp(path.join(os.tmpdir(), "revival-retention-store-")));
+  await chmod(directory, 0o700);
+  const script = String.raw`
+import ctypes,importlib.util,os,stat,sys
+root,helper_path=sys.argv[1:]
+spec=importlib.util.spec_from_file_location("retention_store",helper_path)
+store=importlib.util.module_from_spec(spec); spec.loader.exec_module(store)
+store.REMOTE_ROOT=root
+def exchange(source_parent,source,destination_parent,destination):
+    function=getattr(ctypes.CDLL(None,use_errno=True),"renameat2",None)
+    assert function is not None
+    assert function(source_parent,os.fsencode(source),destination_parent,os.fsencode(destination),2)==0
+name="a"*64
+item=os.path.join(root,name); os.mkdir(item,0o700)
+fd=os.open(os.path.join(item,"payload"),os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+os.write(fd,b"planned bytes\n"); os.fchmod(fd,0o600); os.close(fd)
+parent=os.open(root,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+try:
+    # A real retained backup/release is nested. Retirement is intentionally
+    # logical: the public name disappears, while a content-addressed quarantine
+    # retains every byte so a later authority failure remains recoverable.
+    success_name="f"*64
+    os.mkdir(success_name,0o700,dir_fd=parent)
+    success=os.open(success_name,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=parent)
+    os.mkdir("branch",0o700,dir_fd=success)
+    branch=os.open("branch",os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=success)
+    payload=os.open("payload",os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600,dir_fd=branch)
+    os.write(payload,b"nested retained bytes\n"); os.fchmod(payload,0o600); os.close(payload)
+    os.close(branch); os.close(success)
+    success_plan=store.capture(parent,success_name,"release")
+    store.remove(parent,success_name,"release",success_plan["authorityToken"])
+    assert not os.path.lexists(os.path.join(root,success_name))
+    successful_retired=[entry for entry in os.listdir(parent) if entry.startswith(".prune-retired-")]
+    assert len(successful_retired)==1
+    retired=os.open(successful_retired[0],os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=parent)
+    retired_authority=store.RetirementAuthority(retired)
+    try:
+        assert successful_retired[0]==".prune-retired-"+retired_authority.digest[:32]
+        branch=os.open("branch",os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=retired)
+        payload=os.open("payload",os.O_RDONLY|os.O_NOFOLLOW,dir_fd=branch)
+        assert os.read(payload,64)==b"nested retained bytes\n"
+        os.close(payload); os.close(branch)
+    finally: retired_authority.close(); os.close(retired)
+
+    plan=store.capture(parent,name,"release")
+    os.mkdir("outside-substitute",0o700,dir_fd=parent)
+    outside_dir=os.open("outside-substitute",os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=parent)
+    outside_file=os.open("substitute",os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600,dir_fd=outside_dir)
+    os.write(outside_file,b"substitute survives\n"); os.fchmod(outside_file,0o600); os.close(outside_file); os.close(outside_dir)
+    original_rename=store.rename_no_replace
+    def race(source_parent,source,destination_parent,destination):
+        exchange(source_parent,source,source_parent,"outside-substitute")
+        original_rename(source_parent,source,destination_parent,destination)
+    store.rename_no_replace=race
+    try: store.remove(parent,name,"release",plan["authorityToken"])
+    except SystemExit: pass
+    else: raise AssertionError("post-plan same-name replacement was deleted")
+    planned_original=os.open("outside-substitute",os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=parent)
+    planned_payload=os.open("payload",os.O_RDONLY|os.O_NOFOLLOW,dir_fd=planned_original)
+    assert os.read(planned_payload,64)==b"planned bytes\n"; os.close(planned_payload); os.close(planned_original)
+    quarantines=[entry for entry in os.listdir(parent) if entry.startswith(".prune-retired-")]
+    preserved=[]
+    for quarantine_name in quarantines:
+        quarantine=os.open(quarantine_name,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=parent)
+        try:
+            try: substitute=os.open("substitute",os.O_RDONLY|os.O_NOFOLLOW,dir_fd=quarantine)
+            except FileNotFoundError: continue
+            assert os.read(substitute,64)==b"substitute survives\n"; os.close(substitute)
+            preserved.append(quarantine_name)
+        finally: os.close(quarantine)
+    assert len(preserved)==1
+    store.rename_no_replace=original_rename
+
+    # A child replaced after its held descriptor is opened must be preserved,
+    # even though the root still matches the approved plan token.
+    nested_name="e"*64
+    os.mkdir(nested_name,0o700,dir_fd=parent)
+    nested=os.open(nested_name,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=parent)
+    payload=os.open("payload",os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600,dir_fd=nested)
+    os.write(payload,b"planned nested bytes\n"); os.fchmod(payload,0o600); os.close(payload); os.close(nested)
+    nested_plan=store.capture(parent,nested_name,"release")
+    outside_file=os.open("outside-file",os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600,dir_fd=parent)
+    os.write(outside_file,b"nested substitute survives\n"); os.fchmod(outside_file,0o600); os.close(outside_file)
+    original_checkpoint=store.retirement_checkpoint; fired=False
+    def racing_checkpoint(label,source_parent,root_fd):
+        global fired
+        if label=="after-quarantine" and not fired:
+            retired_name=next(entry for entry in os.listdir(parent)
+                              if entry.startswith(".prune-retired-") and
+                              "payload" in os.listdir(os.path.join(root,entry)))
+            retired=os.open(retired_name,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=parent)
+            fired=True; exchange(retired,"payload",parent,"outside-file"); os.close(retired)
+        original_checkpoint(label,source_parent,root_fd)
+    store.retirement_checkpoint=racing_checkpoint
+    try:
+        try: store.remove(parent,nested_name,"release",nested_plan["authorityToken"])
+        except SystemExit: pass
+        else: raise AssertionError("nested same-name replacement was deleted")
+    finally:
+        store.retirement_checkpoint=original_checkpoint
+    assert fired
+    original_payload=os.open("outside-file",os.O_RDONLY|os.O_NOFOLLOW,dir_fd=parent)
+    assert os.read(original_payload,64)==b"planned nested bytes\n"; os.close(original_payload)
+    nested_quarantines=[]
+    for entry in os.listdir(parent):
+        if not entry.startswith(".prune-retired-"): continue
+        descriptor=os.open(entry,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=parent)
+        try:
+            for member in os.listdir(descriptor):
+                if not stat.S_ISREG(os.stat(member,dir_fd=descriptor,follow_symlinks=False).st_mode): continue
+                try: substitute=os.open(member,os.O_RDONLY|os.O_NOFOLLOW,dir_fd=descriptor)
+                except OSError: continue
+                try:
+                    if os.read(substitute,64)==b"nested substitute survives\n":
+                        nested_quarantines.append(entry)
+                finally: os.close(substitute)
+        finally: os.close(descriptor)
+    assert len(nested_quarantines)==1
+
+    victim=os.path.join(root,"victim"); os.mkdir(victim,0o700)
+    os.symlink(victim,os.path.join(root,"b"*64))
+    try: store.capture(parent,"b"*64,"release")
+    except SystemExit: pass
+    else: raise AssertionError("retention accepted a symlink root")
+
+    os.mkdir("c"*64,0o700,dir_fd=parent)
+    hard=os.open("c"*64,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=parent)
+    payload=os.open("payload",os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600,dir_fd=hard)
+    os.write(payload,b"linked\n"); os.fchmod(payload,0o600); os.close(payload)
+    os.link("payload","external-hardlink",src_dir_fd=hard,dst_dir_fd=parent,follow_symlinks=False)
+    try: store.capture(parent,"c"*64,"release")
+    except SystemExit: pass
+    else: raise AssertionError("retention accepted a hardlinked member")
+    os.close(hard)
+
+    os.mkdir("d"*64,0o700,dir_fd=parent); os.chmod(os.path.join(root,"d"*64),0o777)
+    try: store.capture(parent,"d"*64,"release")
+    except SystemExit: pass
+    else: raise AssertionError("retention accepted a writable root")
+finally: os.close(parent)
+`;
+  const result = spawnSync("python3", ["-I", "-B", "-c", script, directory, retentionStore], {
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test("the upload lease spans preflight, all retries, and deployment handoff", async () => {
+  const deploy = await readFile(path.join(root, "platform/deploy/vps/deploy.sh"), "utf8");
+  const start = deploy.indexOf("start_remote_upload_lease");
+  const preflight = deploy.indexOf("remote_preupload_gate", start);
+  const transfer = deploy.indexOf("transfer_candidate_resumably", preflight);
+  const handoff = deploy.indexOf("run_verified_release_deploy", transfer);
+  const stop = deploy.indexOf("stop_remote_upload_lease", handoff);
+  assert.ok(start >= 0 && start < preflight && preflight < transfer && transfer < handoff && handoff < stop,
+    "one remote lease must cover staging creation, resumable transfer, and handoff");
+  assert.match(localLibSource, /fcntl\.flock\(lock,fcntl\.LOCK_EX\|fcntl\.LOCK_NB\)[\s\S]*sys\.stdin\.buffer\.read\(\)/u);
+  const deployLock = entrySource.indexOf('flock -n 9');
+  const uploadLock = entrySource.indexOf('fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)');
+  assert.ok(deployLock >= 0 && uploadLock > deployLock,
+    "retention must nonblocking-prove both the deployment lock and active-upload lease");
 });
 
 /* ---------- the wrappers ---------------------------------------------------- */
@@ -770,17 +995,19 @@ test("there is no option anywhere that forces, skips or overrides the retention 
   }
 });
 
-test("prune-state.py is streamed to the host alongside the other reviewed helpers", async () => {
+test("retention planner and descriptor store are streamed together", async () => {
   // The command has to work when the disk is too full for a deploy, so it cannot
   // depend on a release having shipped it. run_remote_impl streams the reviewed
   // files over stdin; the driver has to be one of them or the entry point finds
   // nothing to run.
   assert.match(localLibSource, /prune-state\.py/u);
+  assert.match(localLibSource, /retention-store\.py/u);
   assert.match(localSource, /run_remote_impl prune-state\.sh/u);
   const chmodAt = localLibSource.indexOf('chmod 600 "$tmp_dir/common.sh"');
   assert.ok(chmodAt >= 0, "the streamed helper chmod line is gone");
   const chmodStatement = localLibSource.slice(chmodAt, localLibSource.indexOf("\nBOOTSTRAP", chmodAt));
   assert.match(chmodStatement, /prune-state\.py/u, "the streamed driver must be mode 600 like its peers");
+  assert.match(chmodStatement, /retention-store\.py/u, "the descriptor retirement helper must be streamed read-only");
 });
 
 test("deployments and manifests are never removed", async () => {

@@ -1,7 +1,7 @@
-#!/usr/bin/env bash
+#!/usr/bin/bash
 set -euo pipefail
-source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/common.sh"
-source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/domain.sh"
+source "${REVIVAL_HELD_COMMON:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/common.sh}"
+source "${REVIVAL_HELD_DOMAIN:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/domain.sh}"
 
 leave_quiesced=0
 already_locked=0
@@ -77,24 +77,27 @@ destination="$BACKUP_ROOT/$backup_id"
 mkdir -p "$destination"
 chmod 700 "$destination"
 
-driver_path="$(readlink -f -- "${BASH_SOURCE[0]}")"
-common_path="$(readlink -f -- "$(dirname -- "${BASH_SOURCE[0]}")/common.sh")"
-domain_path="$(readlink -f -- "$(dirname -- "${BASH_SOURCE[0]}")/domain.sh")"
-domain_helper_path="$(readlink -f -- "$(dirname -- "${BASH_SOURCE[0]}")/domain.py")"
-release_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../../.." && pwd -P)"
-release_verifier="$release_root/platform/deploy/vps/verify-release.py"
+release_root="${REVIVAL_HELD_RELEASE_LOGICAL_ROOT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../../.." && pwd -P)}"
+driver_path="${BASH_SOURCE[0]}"
+common_path="${REVIVAL_HELD_COMMON:-$release_root/platform/deploy/vps/remote/common.sh}"
+domain_path="${REVIVAL_HELD_DOMAIN:-$release_root/platform/deploy/vps/remote/domain.sh}"
+domain_helper_path="${REVIVAL_HELD_DOMAIN_PY:-$release_root/platform/deploy/vps/remote/domain.py}"
+release_verifier="${REVIVAL_HELD_RELEASE_VERIFIER:-$release_root/platform/deploy/vps/verify-release.py}"
 : >"$destination/executing-code.tsv"
 for spec in "remote.backup:$driver_path" "remote.common:$common_path" "remote.domain:$domain_path" \
   "remote.domain-helper:$domain_helper_path" "release.verifier:$release_verifier"; do
   label="${spec%%:*}"; path="${spec#*:}"
-  [[ -f "$path" && ! -L "$path" ]] || fail "backup execution material is missing or unsafe"
-  printf '%s\t%s\t%s\n' "$label" "$(sha256sum "$path" | awk '{print $1}')" "$(stat -c '%a' "$path")" \
+  release_material_file_is_safe "$path" || fail "backup execution material is missing or unsafe"
+  printf '%s\t%s\t%s\n' "$label" "$(sha256sum "$path" | awk '{print $1}')" "$(stat -Lc '%a' "$path")" \
     >>"$destination/executing-code.tsv"
 done
-for common_lib in "$(dirname -- "$common_path")"/lib/*.sh; do
-  [[ -f "$common_lib" && ! -L "$common_lib" ]] || fail "common library material is missing or unsafe"
-  printf 'remote.common-lib.%s\t%s\t%s\n' "$(basename "$common_lib")" \
-    "$(sha256sum "$common_lib" | awk '{print $1}')" "$(stat -c '%a' "$common_lib")" \
+for common_name in paths ingress release_transactions configuration compose backup database canary drift; do
+  common_key="REVIVAL_HELD_COMMON_LIB_${common_name^^}"
+  common_key="${common_key//-/_}"
+  common_lib="${!common_key:-$release_root/platform/deploy/vps/remote/lib/$common_name.sh}"
+  release_material_file_is_safe "$common_lib" || fail "common library material is missing or unsafe"
+  printf 'remote.common-lib.%s.sh\t%s\t%s\n' "$common_name" \
+    "$(sha256sum "$common_lib" | awk '{print $1}')" "$(stat -Lc '%a' "$common_lib")" \
     >>"$destination/executing-code.tsv"
 done
 chmod 600 "$destination/executing-code.tsv"
@@ -395,7 +398,7 @@ write_backup_invariants "$destination/invariants.tsv" "$postgres"
 
 archive_volume() {
   local volume="$1" output="$2" helper_name="${verify_scope}-archive-${2//[^A-Za-z0-9]/-}"
-  docker run --rm --name "$helper_name" --network none --log-driver none --memory 512m --pids-limit 128 --cpus 1 \
+  docker run --pull=never --rm --name "$helper_name" --network none --log-driver none --memory 512m --pids-limit 128 --cpus 1 \
     --label "dk.andersmadsen.ai-pin-revival.backup-verify=$verify_scope" \
     -v "$volume:/source:ro" -v "$destination:/backup" "$HELPER_IMAGE" sh -euc \
     "tar -czpf '/backup/${output}.tmp' -C /source . && test -s '/backup/${output}.tmp' && chown 1000:1000 '/backup/${output}.tmp' && chmod 600 '/backup/${output}.tmp'"
@@ -654,12 +657,12 @@ archives=(cosmos-state prometheus-data grafana-data)
 for index in 0 1 2; do
   archive="${archives[$index]}"
   volume="${verify_volumes[$index]}"
-  docker run --rm --name "${verify_scope}-restore-$index" --network none --log-driver none \
+  docker run --pull=never --rm --name "${verify_scope}-restore-$index" --network none --log-driver none \
     --memory 256m --pids-limit 128 --cpus 1 \
     --label "dk.andersmadsen.ai-pin-revival.backup-verify=$verify_scope" \
     -v "$volume:/restore" -v "$destination/$archive.tar.gz:/backup/data.tar.gz:ro" \
     "$HELPER_IMAGE" sh -euc 'tar -xzpf /backup/data.tar.gz -C /restore'
-  docker run --rm --name "${verify_scope}-inventory-$index" --network none --log-driver none \
+  docker run --pull=never --rm --name "${verify_scope}-inventory-$index" --network none --log-driver none \
     --memory 256m --pids-limit 128 --cpus 1 \
     --label "dk.andersmadsen.ai-pin-revival.backup-verify=$verify_scope" \
     -v "$volume:/source:ro" -v "$destination:/backup" "$HELPER_IMAGE" sh -euc \
@@ -685,13 +688,13 @@ rm -f "$destination/center-data.restored.tar.gz" "$destination/center-data.resto
 
 docker volume create --label "dk.andersmadsen.ai-pin-revival.backup-verify=$verify_scope" \
   "$verify_physical_postgres_volume" >/dev/null
-docker run --rm --name "${verify_scope}-restore-physical-postgres" --network none --log-driver none \
+docker run --pull=never --rm --name "${verify_scope}-restore-physical-postgres" --network none --log-driver none \
   --memory 512m --pids-limit 128 --cpus 1 \
   --label "dk.andersmadsen.ai-pin-revival.backup-verify=$verify_scope" \
   -v "$verify_physical_postgres_volume:/restore" \
   -v "$destination/postgres-data.tar.gz:/backup/data.tar.gz:ro" \
   "$HELPER_IMAGE" sh -euc 'tar -xzpf /backup/data.tar.gz -C /restore'
-docker run --rm --name "${verify_scope}-inventory-physical-postgres" --network none --log-driver none \
+docker run --pull=never --rm --name "${verify_scope}-inventory-physical-postgres" --network none --log-driver none \
   --memory 512m --pids-limit 128 --cpus 1 \
   --label "dk.andersmadsen.ai-pin-revival.backup-verify=$verify_scope" \
   -v "$verify_physical_postgres_volume:/source:ro" -v "$destination:/backup" "$HELPER_IMAGE" sh -euc \
@@ -702,7 +705,7 @@ compare_archive_inventories "$destination/postgres-data.inventory.json" \
 rm -f "$destination/postgres-data.restored.tar.gz" "$destination/postgres-data.restored.inventory.json"
 
 physical_password="$(openssl rand -hex 32)"
-docker run --detach --name "$verify_physical_postgres_container" --network none --restart no \
+docker run --pull=never --detach --name "$verify_physical_postgres_container" --network none --restart no \
   --memory 1g --pids-limit 256 --cpus 2 --log-driver json-file --log-opt max-size=2m --log-opt max-file=1 \
   --label "dk.andersmadsen.ai-pin-revival.backup-verify=$verify_scope" \
   --env POSTGRES_USER=cosmos --env "POSTGRES_PASSWORD=$physical_password" \
@@ -732,7 +735,7 @@ docker rm --force "$verify_physical_postgres_container" >/dev/null
 docker volume create --label "dk.andersmadsen.ai-pin-revival.backup-verify=$verify_scope" \
   "$verify_postgres_volume" >/dev/null
 verify_password="$(openssl rand -hex 32)"
-docker run --detach --name "$verify_postgres_container" --network none --restart no \
+docker run --pull=never --detach --name "$verify_postgres_container" --network none --restart no \
   --memory 1g --pids-limit 256 --cpus 2 --log-driver json-file --log-opt max-size=2m --log-opt max-file=1 \
   --label "dk.andersmadsen.ai-pin-revival.backup-verify=$verify_scope" \
   --env POSTGRES_USER=revival_restore_bootstrap --env POSTGRES_DB=postgres \

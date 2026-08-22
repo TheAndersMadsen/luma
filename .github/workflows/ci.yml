@@ -1,7 +1,9 @@
 # The fast source checks: formatting, focused component suites, repository
-# layout, wire equivalence, and the release source gate. Every step is a
-# command a contributor can run locally (see CONTRIBUTING.md); nothing here
-# talks to a device, a VPS, or a provider.
+# layout, wire equivalence, and release-equivalent checks distributed across
+# parallel component jobs. Every step is a command a contributor can run
+# locally; nothing here talks to a device, a VPS,
+# or a provider. Dependency and builder caches are restore-only for pull
+# requests and are written only after a successful trusted push to main.
 name: ci
 
 on:
@@ -10,84 +12,173 @@ on:
       - main
   pull_request:
 
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
   layout-and-wire:
-    name: layout, wire equivalence, contracts
-    runs-on: ubuntu-latest
+    name: complete platform and release-policy suite
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 22.14.0
-      - name: repository layout
-        run: sh platform/deploy/acceptance/layout.sh
-      - name: wire divergence inventory
-        run: node --test platform/deploy/acceptance/wire-divergence.test.mjs
-      - name: wire equivalence gate
-        run: node --test platform/deploy/acceptance/wire-equivalence.test.mjs
-      - name: operator setup contract and Center projection
-        run: |
-          node --test platform/deploy/acceptance/operator-setup-contract.test.mjs
-          node --test platform/deploy/acceptance/setup-projection.test.mjs
-      - name: CLI help, setup, configuration, and support contracts
-        run: |
-          node --test platform/deploy/acceptance/cli-help.test.mjs
-          node --test platform/deploy/acceptance/cli-setup.test.mjs
-          node --test platform/deploy/acceptance/cli-config.test.mjs
-          node --test platform/deploy/acceptance/support-bundle.test.mjs
-      - name: distribution contract
-        run: node --test platform/deploy/acceptance/distribution.test.mjs
-      - name: clean isolated-XDG install
-        run: node --test platform/deploy/acceptance/fresh-install.test.mjs
+          package-manager-cache: false
+      - name: CI workflow policy
+        run: node --test platform/deploy/acceptance/ci-policy.test.mjs
+      - name: complete platform policy and acceptance checks
+        run: ./revival check platform
 
   center:
     name: center formatting and tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    env:
+      NPM_CONFIG_CACHE: ${{ runner.temp }}/center-npm-cache
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 22.14.0
-      - name: install (external cache)
-        env:
-          NPM_CONFIG_CACHE: ${{ runner.temp }}/npm-cache
+          package-manager-cache: false
+      - name: restore Center npm download cache
+        id: center-npm-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ${{ env.NPM_CONFIG_CACHE }}/_cacache
+          key: center-npm-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('center/package-lock.json', 'center/adapters/spotify/package-lock.json') }}
+          restore-keys: |
+            center-npm-v1-${{ runner.os }}-${{ runner.arch }}-
+      - name: install from lockfile
         run: npm ci --prefix center
       - name: typecheck
         run: npm --prefix center run typecheck
       - name: focused component checks
         run: npm --prefix center test
+      - name: UI component checks
+        run: npm --prefix center run test:ui
+      - name: production build
+        env:
+          REVIVAL_RELEASE_ID: source-check
+        run: npm --prefix center run build
+      - name: install and test Spotify adapter from its lockfile
+        run: |
+          npm ci --prefix center/adapters/spotify
+          npm test --prefix center/adapters/spotify
       - name: clean in-tree residue
-        run: rm -rf center/node_modules
+        if: ${{ always() }}
+        run: |
+          rm -rf center/node_modules center/.next center/adapters/spotify/node_modules
+          rm -f center/tsconfig.tsbuildinfo center/next-env.d.ts
+      - name: save Center npm download cache
+        if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.center-npm-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ${{ env.NPM_CONFIG_CACHE }}/_cacache
+          key: center-npm-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('center/package-lock.json', 'center/adapters/spotify/package-lock.json') }}
 
   cosmos:
     name: cosmos formatting and tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+        env:
+          POSTGRES_USER: cosmos_test
+          POSTGRES_PASSWORD: cosmos_test_ci_only
+          POSTGRES_DB: cosmos_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U cosmos_test -d cosmos_test"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 20
     env:
-      CARGO_TARGET_DIR: ${{ github.workspace }}/../cosmos-target
+      CARGO_HOME: ${{ runner.temp }}/cosmos-cargo-home
+      CARGO_TARGET_DIR: ${{ runner.temp }}/cosmos-cargo-target
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@1.91.1
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          components: rustfmt
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@38ae5351029910ad7674ccfad89c37cbd636f3c4 # 1.91.1
+        with:
+          components: clippy, rustfmt
+      - name: restore Cosmos Cargo downloads and target state
+        id: cosmos-rust-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            ${{ env.CARGO_HOME }}/registry
+            ${{ env.CARGO_HOME }}/git
+            ${{ env.CARGO_TARGET_DIR }}
+          key: cosmos-rust-v2-${{ runner.os }}-${{ runner.arch }}-1.91.1-${{ hashFiles('cosmos/Cargo.lock', 'rust-toolchain.toml') }}-${{ github.sha }}
+          restore-keys: |
+            cosmos-rust-v2-${{ runner.os }}-${{ runner.arch }}-1.91.1-${{ hashFiles('cosmos/Cargo.lock', 'rust-toolchain.toml') }}-
+            cosmos-rust-v2-${{ runner.os }}-${{ runner.arch }}-1.91.1-
       - name: formatting
         run: cargo fmt --all --check --manifest-path cosmos/Cargo.toml
+      - name: warnings-as-errors lint
+        run: cargo clippy --workspace --all-targets --locked --manifest-path cosmos/Cargo.toml -- -D warnings
       - name: focused component checks
         run: cargo test --workspace --locked --manifest-path cosmos/Cargo.toml
+      - name: release-only 4096-bit RSA compatibility
+        working-directory: cosmos
+        run: |
+          set -euo pipefail
+          test "$(cargo test -p cosmos-crypto --locked tests::production_wrapping_key_is_4096_bit_and_accepts_explicit_sha1_oaep -- --ignored --exact --list | grep -Fxc 'tests::production_wrapping_key_is_4096_bit_and_accepts_explicit_sha1_oaep: test')" -eq 1
+          cargo test -p cosmos-crypto --locked tests::production_wrapping_key_is_4096_bit_and_accepts_explicit_sha1_oaep -- --ignored --exact --test-threads=1
+      - name: real Postgres lifecycle and atomic migration contention
+        working-directory: cosmos
+        env:
+          COSMOS_TEST_DATABASE_URL: postgresql://cosmos_test:cosmos_test_ci_only@127.0.0.1:5432/cosmos_test
+        run: |
+          node -e "require('../platform/cli/context').validateDisposablePostgresTestUrl(process.env.COSMOS_TEST_DATABASE_URL)"
+          env -u COSMOS_STATE_DIR -u COSMOS_WORKLOAD COSMOS_TEST_DATABASE_URL="$COSMOS_TEST_DATABASE_URL" cargo test -p cosmos keydirectory::tests::a_second_workload_observes_import_replacement_revocation_and_reimport -- --exact --nocapture
+          env -u COSMOS_STATE_DIR -u COSMOS_WORKLOAD COSMOS_TEST_DATABASE_URL="$COSMOS_TEST_DATABASE_URL" cargo test -p cosmos store_postgres::tests::many_concurrent_key_directories_migrate_one_fresh_postgres_schema_atomically -- --exact --nocapture
+      - name: save Cosmos Cargo downloads and target state
+        if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.cosmos-rust-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            ${{ env.CARGO_HOME }}/registry
+            ${{ env.CARGO_HOME }}/git
+            ${{ env.CARGO_TARGET_DIR }}
+          key: cosmos-rust-v2-${{ runner.os }}-${{ runner.arch }}-1.91.1-${{ hashFiles('cosmos/Cargo.lock', 'rust-toolchain.toml') }}-${{ github.sha }}
 
   pin-runtime:
     name: pin runtime formatting and tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
-      CARGO_TARGET_DIR: ${{ github.workspace }}/../pin-target
+      CARGO_HOME: ${{ runner.temp }}/pin-runtime-cargo-home
+      CARGO_TARGET_DIR: ${{ runner.temp }}/pin-runtime-cargo-target
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@1.91.1
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@38ae5351029910ad7674ccfad89c37cbd636f3c4 # 1.91.1
         with:
           components: rustfmt
+      - name: restore Pin runtime Cargo downloads and target state
+        id: pin-runtime-rust-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            ${{ env.CARGO_HOME }}/registry
+            ${{ env.CARGO_HOME }}/git
+            ${{ env.CARGO_TARGET_DIR }}
+          key: pin-runtime-rust-v2-${{ runner.os }}-${{ runner.arch }}-1.91.1-${{ hashFiles('pin/runtime/core/Cargo.lock', 'rust-toolchain.toml') }}-${{ github.sha }}
+          restore-keys: |
+            pin-runtime-rust-v2-${{ runner.os }}-${{ runner.arch }}-1.91.1-${{ hashFiles('pin/runtime/core/Cargo.lock', 'rust-toolchain.toml') }}-
+            pin-runtime-rust-v2-${{ runner.os }}-${{ runner.arch }}-1.91.1-
       - name: install protobuf compiler
         run: |
           sudo apt-get update
@@ -96,21 +187,95 @@ jobs:
         run: cargo fmt --check --manifest-path pin/runtime/core/Cargo.toml
       - name: focused component checks
         run: cargo test --locked --manifest-path pin/runtime/core/Cargo.toml
+      - name: save Pin runtime Cargo downloads and target state
+        if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.pin-runtime-rust-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            ${{ env.CARGO_HOME }}/registry
+            ${{ env.CARGO_HOME }}/git
+            ${{ env.CARGO_TARGET_DIR }}
+          key: pin-runtime-rust-v2-${{ runner.os }}-${{ runner.arch }}-1.91.1-${{ hashFiles('pin/runtime/core/Cargo.lock', 'rust-toolchain.toml') }}-${{ github.sha }}
 
-  source-gate:
-    name: release source gate
-    runs-on: ubuntu-latest
+  pin-builder-linux-amd64:
+    name: canonical Pin unit and debug artifact checks (Linux/x64 candidate)
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: reject detectable non-Linux/x64 execution (not hardware attestation)
+        run: |
+          test "$RUNNER_OS" = Linux
+          test "$RUNNER_ARCH" = X64
+          test "$(uname -m)" = x86_64
+      - name: restore exactly five external Pin cache-data leaves
+        id: pin-builder-deps
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            ${{ runner.temp }}/pin-builder-data/build/pin-builder-cache-data/cargo-registry
+            ${{ runner.temp }}/pin-builder-data/build/pin-builder-cache-data/cargo-git
+            ${{ runner.temp }}/pin-builder-data/build/pin-builder-cache-data/gradle-caches
+            ${{ runner.temp }}/pin-builder-data/build/pin-builder-cache-data/gradle-wrapper
+            ${{ runner.temp }}/pin-builder-data/build/pin-builder-cache-data/npm-cacache
+          key: pin-builder-dependencies-v3-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('platform/containers/pin-builder/Dockerfile', 'platform/containers/pin-builder/debug-store.py', 'platform/containers/pin-builder/entrypoint.sh', 'platform/containers/pin-builder/toolchain.json', 'pin/gradle/wrapper/gradle-wrapper.properties', 'pin/injector/gradle/wrapper/gradle-wrapper.properties', 'pin/**/*.gradle', 'pin/**/*.gradle.kts', 'pin/**/Cargo.lock') }}
+          restore-keys: |
+            pin-builder-dependencies-v3-${{ runner.os }}-${{ runner.arch }}-
+      - name: run the continuous credential-free Pin check session
+        run: |
+          set -euo pipefail
+          data="$RUNNER_TEMP/pin-builder-data"
+          build="$data/build"
+          REVIVAL_DATA_DIR="$data" REVIVAL_BUILD_DIR="$build" \
+            /usr/bin/node ./revival pin check
+      - name: run the continuous all-five debug publication session
+        run: |
+          set -euo pipefail
+          data="$RUNNER_TEMP/pin-builder-data"
+          build="$data/build"
+          REVIVAL_DATA_DIR="$data" REVIVAL_BUILD_DIR="$build" \
+            /usr/bin/node ./revival pin build-debug \
+              --role installer --role bootstrap --role hook --role server --role hook-injector
+      - name: verify the append-only all-five debug selection
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/pin-builder-data/build/pin-debug-builder-state/artifacts/device-debug"
+          selection="$(/usr/bin/python3 -B platform/containers/pin-builder/debug-store.py \
+            select-latest "$root" --json)"
+          /usr/bin/python3 -B - "$selection" <<'PY'
+          import json
+          import sys
+
+          selected = json.loads(sys.argv[1])
+          assert selected["schema"] == "revival.pin-debug-selected-set"
+          assert selected["roles"] == [
+              "installer", "bootstrap", "hook", "server", "hook-injector"
+          ]
+          assert len(selected["setId"]) == 64
+          PY
+      - name: save external Pin builder dependency cache
+        if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.pin-builder-deps.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            ${{ runner.temp }}/pin-builder-data/build/pin-builder-cache-data/cargo-registry
+            ${{ runner.temp }}/pin-builder-data/build/pin-builder-cache-data/cargo-git
+            ${{ runner.temp }}/pin-builder-data/build/pin-builder-cache-data/gradle-caches
+            ${{ runner.temp }}/pin-builder-data/build/pin-builder-cache-data/gradle-wrapper
+            ${{ runner.temp }}/pin-builder-data/build/pin-builder-cache-data/npm-cacache
+          key: pin-builder-dependencies-v3-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('platform/containers/pin-builder/Dockerfile', 'platform/containers/pin-builder/debug-store.py', 'platform/containers/pin-builder/entrypoint.sh', 'platform/containers/pin-builder/toolchain.json', 'pin/gradle/wrapper/gradle-wrapper.properties', 'pin/injector/gradle/wrapper/gradle-wrapper.properties', 'pin/**/*.gradle', 'pin/**/*.gradle.kts', 'pin/**/Cargo.lock') }}
+
+  darwin-rooted-reader:
+    name: real macOS descriptor-rooted reader
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 22.14.0
-      - uses: dtolnay/rust-toolchain@1.91.1
-        with:
-          components: clippy, rustfmt
-      - name: install protobuf compiler
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends libprotobuf-dev protobuf-compiler
-      - name: release check (VPS profile scope)
-        run: ./revival release check
+          package-manager-cache: false
+      - name: exercise the actual Darwin rooted-reader helper
+        run: node --test platform/deploy/acceptance/darwin-rooted-reader.test.mjs

@@ -11,6 +11,11 @@ import java.math.BigInteger
 
 class SpotifyMusicContractTest {
     @Test
+    fun `named track resolution requests only the rank one candidate`() {
+        assertEquals(1, SpotifyMusicContract.MAX_NAMED_TRACK_ITEMS)
+    }
+
+    @Test
     fun `loopback endpoint paths match the on-device service contract`() {
         assertEquals(
             "http://127.0.0.1:8080/internal/spotify/query",

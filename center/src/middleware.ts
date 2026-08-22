@@ -32,6 +32,21 @@ export function isPublicPinReleaseRequest(pathname: string, method: string): boo
   );
 }
 
+/** The Pin authenticates these exact POSTs with a derived device bearer. */
+export function isDeviceMusicGatewayRequest(pathname: string, method: string): boolean {
+  return method.toUpperCase() === "POST" && new Set([
+    "/api/music-gateway/query",
+    "/api/music-gateway/playback",
+    "/api/music-gateway/save",
+  ]).has(pathname);
+}
+
+/** Opaque, expiring stream tickets are the only public gateway surface. */
+export function isPublicMusicStreamRequest(pathname: string, method: string): boolean {
+  return (method.toUpperCase() === "GET" || method.toUpperCase() === "HEAD") &&
+    /^\/api\/music-gateway\/stream\/[A-Za-z0-9_-]{43}$/u.test(pathname);
+}
+
 /**
  * Gate every route behind the session cookie when auth is configured.
  *
@@ -86,6 +101,13 @@ export async function middleware(request: NextRequest) {
   // through untouched rather than applying the private-response rewrite, which
   // would clobber those headers into `private, …, must-revalidate`.
   if (isPublicPinReleaseRequest(pathname, request.method)) {
+    return NextResponse.next();
+  }
+
+  if (
+    isDeviceMusicGatewayRequest(pathname, request.method) ||
+    isPublicMusicStreamRequest(pathname, request.method)
+  ) {
     return NextResponse.next();
   }
 

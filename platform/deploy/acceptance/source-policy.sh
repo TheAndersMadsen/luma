@@ -1,53 +1,79 @@
 #!/bin/sh
 set -eu
 
-ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd -P)
+# Never resolve an executable through contributor PATH. Pin callers pass the
+# already-audited source root and root-owned Node path; direct/test callers use
+# the same fixed Node candidate and derive the root with shell parameter
+# expansion plus the POSIX `pwd` builtin (no ambient dirname/readlink process).
+PATH=/usr/bin:/bin
+export PATH
+case "$#" in
+  0)
+    script=$0
+    case "$script" in
+      /*) ;;
+      *) script=$PWD/$script ;;
+    esac
+    script_directory=${script%/*}
+    ROOT=$(CDPATH= cd -- "$script_directory/../../.." && pwd -P)
+    NODE=/usr/bin/node
+    ;;
+  2)
+    ROOT=$1
+    NODE=$2
+    ;;
+  *)
+    echo "source policy: expected no arguments or trusted ROOT NODE" >&2
+    exit 1
+    ;;
+esac
+case "$ROOT" in
+  /*) ;;
+  *) echo "source policy: root must be absolute" >&2; exit 1 ;;
+esac
+case "$ROOT" in
+  /proc/self/fd/[0-9]*|/proc/[0-9]*/fd/[0-9]*)
+    # The lane broker passes the already-held source descriptor and remains
+    # alive through this scan and every Docker child. Canonicalizing it with
+    # pwd -P would throw away that authority and reopen the mutable pathname.
+    [ -d "$ROOT" ] || {
+      echo "source policy: held source descriptor is unavailable" >&2
+      exit 1
+    }
+    ;;
+  *)
+    ROOT=$(CDPATH= cd -- "$ROOT" && pwd -P)
+    ;;
+esac
+case "$NODE" in
+  /usr/bin/node|/proc/self/fd/[0-9]*|/proc/[0-9]*/fd/[0-9]*) ;;
+  *) echo "source policy: trusted Node must be a held broker fd or /usr/bin/node" >&2; exit 1 ;;
+esac
+if [ ! -f "$NODE" ] || [ -L "$NODE" ] || [ ! -x "$NODE" ]; then
+  echo "source policy: trusted Node is unavailable" >&2
+  exit 1
+fi
 cd "$ROOT"
 
-# `find -P` does not traverse the machine-local source symlinks.
-bad_paths=$(find -P "$ROOT" \
-  \( -path "$ROOT/private" -o -path "$ROOT/state" -o \
-     -name node_modules -o -name .next -o -name target -o -name build -o -name .gradle \) -prune -o \
-  -type f \( \
-  -iname '*.apk' -o -iname '*.apks' -o -iname '*.aab' -o -iname '*.xapk' -o \
-  -iname '*.img' -o -iname '*.mbn' -o -iname '*.elf' -o \
-  -iname '*.jks' -o -iname '*.keystore' -o -iname '*.p12' -o -iname '*.pfx' -o \
-  -iname '*.pem' -o -iname '*.key' -o -iname '*.pcap' -o -iname '*.pcapng' -o \
-  -iname '*.har' \
-\) -print)
+# Packaging and the cheap changed-source gate deliberately share the exact
+# filename, directory, symlink, secret, private-key, and machine-path detector.
+# Generated directories are rejected rather than pruned so dist-center,
+# test-runs, or a nested cache can never become a policy hiding place.
+"$NODE" --input-type=module - "$ROOT" <<'NODE'
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 
-secret_files=$(find -P "$ROOT" \
-  \( -path "$ROOT/private" -o -path "$ROOT/state" -o \
-     -name node_modules -o -name .next -o -name target -o -name build -o -name .gradle \) -prune -o \
-  -type f \( -name '.env' -o -name '.env.*' -o -name '.npmrc' \) \
-  ! -name '.env.example' -print)
-
-if [ -n "$bad_paths" ]; then
-  echo "forbidden binary, key, firmware, or capture artifact:" >&2
-  echo "$bad_paths" >&2
-  exit 1
-fi
-
-if [ -n "$secret_files" ]; then
-  echo "forbidden environment or credential file:" >&2
-  echo "$secret_files" >&2
-  exit 1
-fi
-
-bad_dirs=$(find -P "$ROOT" \
-  \( -path "$ROOT/private" -o -path "$ROOT/state" -o \
-     -name node_modules -o -name .next -o -name target -o -name build -o -name .gradle \) -prune -o \
-  -type d \( \
-  -name firmware -o -name decompile-workspace -o -name raw-captures -o \
-  -name packet-captures -o -name private-keys -o -name device-identity -o \
-  -name wearer-data -o -name production-state \
-\) -print)
-
-if [ -n "$bad_dirs" ]; then
-  echo "forbidden private/proprietary directory:" >&2
-  echo "$bad_dirs" >&2
-  exit 1
-fi
+const root = process.argv[2];
+const policy = await import(pathToFileURL(
+  path.join(root, "platform", "deploy", "release.mjs"),
+));
+try {
+  await policy.validateSourceTreePolicy({ root });
+} catch (error) {
+  console.error(`release source policy: ${error.message}`);
+  process.exit(1);
+}
+NODE
 
 # Captured/model-derived NLU fixtures belong only in the immutable external
 # evidence baseline. Canonical tests generate their synthetic contract values
@@ -58,19 +84,16 @@ if [ -e "$nlu_testdata_root" ] || [ -L "$nlu_testdata_root" ]; then
   exit 1
 fi
 
-if ! command -v node >/dev/null 2>&1; then
-  echo "fixture provenance policy: node is required" >&2
-  exit 1
-fi
-
-node - "$ROOT" <<'NODE'
-const fs = require("node:fs");
+"$NODE" - "$ROOT" <<'NODE'
 const path = require("node:path");
 
 const root = process.argv[2];
-const contractsRoot = path.join(root, "pin", "contracts");
-const legacyRoot = path.join(contractsRoot, "cosmos-golden");
-const fixturesRoot = path.join(contractsRoot, "fixtures");
+const {
+  readStableRootedEntries,
+} = require(path.join(root, "platform", "cli", "rooted-source.js"));
+const contractsRoot = "pin/contracts";
+const legacyName = "cosmos-golden";
+const fixturesRoot = `${contractsRoot}/fixtures`;
 const allowedProvenance = new Set(["synthetic", "clean-room-interface"]);
 const allowedEvidence = new Set(["observed", "derived", "implemented", "unknown"]);
 const textBearingKeys = new Set([
@@ -90,7 +113,7 @@ function fail(message) {
 }
 
 function displayName(file) {
-  return path.relative(root, file) || ".";
+  return file || ".";
 }
 
 function inspectValue(value, file, state) {
@@ -109,14 +132,14 @@ function inspectValue(value, file, state) {
   }
 }
 
-function validateFixture(file) {
+function validateFixture(file, data) {
   if (path.extname(file) !== ".json") {
     fail(`${displayName(file)} must be a JSON fixture`);
   }
 
   let fixture;
   try {
-    fixture = JSON.parse(fs.readFileSync(file, "utf8"));
+    fixture = JSON.parse(data.toString("utf8"));
   } catch {
     fail(`${displayName(file)} is not valid JSON`);
   }
@@ -144,102 +167,50 @@ function validateFixture(file) {
   }
 }
 
-function visit(directory, state) {
-  for (const name of fs.readdirSync(directory).sort()) {
-    const entry = path.join(directory, name);
-    const metadata = fs.lstatSync(entry);
-    if (metadata.isSymbolicLink()) {
-      fail(`${displayName(entry)} must not be a symbolic link`);
-    }
-    if (metadata.isDirectory()) {
-      visit(entry, state);
-    } else if (metadata.isFile()) {
-      validateFixture(entry);
-      state.fixtureCount += 1;
-    } else {
-      fail(`${displayName(entry)} must be a regular file or directory`);
-    }
-  }
-}
-
 try {
-  if (fs.existsSync(legacyRoot)) {
-    fail("pin/contracts/cosmos-golden is forbidden; keep raw evidence outside the repository");
-  }
-  if (!fs.existsSync(fixturesRoot) || !fs.lstatSync(fixturesRoot).isDirectory()) {
-    fail("pin/contracts/fixtures is missing");
-  }
-  const state = { fixtureCount: 0 };
-  visit(fixturesRoot, state);
+  const collect = (inspect, expectedRoot = null) => {
+    const batch = readStableRootedEntries(
+      root,
+      [contractsRoot],
+      "fixture provenance policy",
+      { walk: true, expectedRoot },
+    );
+    const contracts = batch.entries.find((entry) => entry.receipt.path === contractsRoot);
+    if (!contracts || contracts.kind !== "directory") {
+      fail("pin/contracts is missing");
+    }
+    if (contracts.names.includes(legacyName)) {
+      fail("pin/contracts/cosmos-golden is forbidden; keep raw evidence outside the repository");
+    }
+    if (!contracts.names.includes("fixtures")) {
+      fail("pin/contracts/fixtures is missing");
+    }
+    const fixtures = batch.entries.find((entry) => entry.receipt.path === fixturesRoot);
+    if (!fixtures || fixtures.kind !== "directory") fail("pin/contracts/fixtures is missing");
+    const state = { fixtureCount: 0 };
+    for (const entry of batch.entries) {
+      const sourcePath = entry.receipt.path;
+      if (entry.kind === "file" && sourcePath.startsWith(`${fixturesRoot}/`)) {
+        if (inspect) validateFixture(sourcePath, entry.data);
+        state.fixtureCount += 1;
+      }
+    }
+    return {
+      receipts: batch.entries.map((entry) => entry.receipt),
+      fixtureCount: state.fixtureCount,
+      rootReceipt: batch.rootReceipt,
+    };
+  };
+  const state = collect(true);
   if (state.fixtureCount === 0) fail("pin/contracts/fixtures must not be empty");
+  const stable = collect(false, state.rootReceipt);
+  if (JSON.stringify(state.receipts) !== JSON.stringify(stable.receipts)) {
+    fail("fixture source manifest changed while applying provenance policy");
+  }
 } catch (error) {
   console.error(`fixture provenance policy: ${error.message}`);
   process.exit(1);
 }
 NODE
-
-if command -v rg >/dev/null 2>&1; then
-  # Ripgrep does not follow symlinks unless --follow is supplied.
-  if rg -l --hidden \
-    --glob '!private/**' \
-    --glob '!state/**' \
-    --glob '!**/node_modules/**' \
-    --glob '!**/.next/**' \
-    --glob '!**/target/**' \
-    --glob '!**/build/**' \
-    --glob '!**/.gradle/**' \
-    --glob '!platform/deploy/acceptance/source-policy.sh' \
-    --glob '!.git/**' \
-    -- '-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----|AKIA[0-9A-Z]{16}|sk-[A-Za-z0-9_-]{32,}' . >/dev/null; then
-    echo "high-confidence credential material detected" >&2
-    exit 1
-  fi
-else
-  if ! node - "$ROOT" <<'NODE'
-const fs = require("node:fs");
-const path = require("node:path");
-
-const root = process.argv[2];
-const excludedDirectoryNames = new Set([
-  ".git",
-  ".gradle",
-  ".next",
-  "build",
-  "node_modules",
-  "target",
-]);
-const excludedRootDirectories = new Set(["private", "state"]);
-const sourcePolicy = path.join(root, "platform", "deploy", "acceptance", "source-policy.sh");
-const credentialPattern = /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|AKIA[0-9A-Z]{16}|sk-[A-Za-z0-9_-]{32,}/;
-
-function containsCredential(directory) {
-  for (const name of fs.readdirSync(directory)) {
-    const entry = path.join(directory, name);
-    const metadata = fs.lstatSync(entry);
-    if (metadata.isSymbolicLink()) continue;
-    if (metadata.isDirectory()) {
-      const relative = path.relative(root, entry);
-      if (
-        excludedDirectoryNames.has(name) ||
-        (!relative.includes(path.sep) && excludedRootDirectories.has(relative))
-      ) {
-        continue;
-      }
-      if (containsCredential(entry)) return true;
-      continue;
-    }
-    if (!metadata.isFile() || entry === sourcePolicy) continue;
-    if (credentialPattern.test(fs.readFileSync(entry, "utf8"))) return true;
-  }
-  return false;
-}
-
-if (containsCredential(root)) process.exit(1);
-NODE
-  then
-    echo "high-confidence credential material detected" >&2
-    exit 1
-  fi
-fi
 
 echo "source policy: ok"

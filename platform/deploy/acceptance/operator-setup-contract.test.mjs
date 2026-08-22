@@ -29,6 +29,12 @@ const CURRENT_COMMAND_IDS = Object.freeze([
   "stack.status",
   "stack.logs",
   "stack.config",
+  "dev.center",
+  "dev.down",
+  "check.center",
+  "check.cosmos",
+  "check.platform",
+  "check.changed",
   "test",
   "release.check",
   "release.build",
@@ -57,6 +63,10 @@ const NEW_COMMAND_IDS = Object.freeze([
   "setup.pin",
   "setup.resume",
   "setup.status",
+  "setup.import.vps-candidate",
+  "setup.import.pin-release",
+  "setup.artifacts.vps",
+  "setup.artifacts.pin",
   "config.get",
   "config.set",
   "config.check",
@@ -198,6 +208,13 @@ test("mutation classes fail closed at the remote and physical boundaries", async
     "read-only",
     "resume must only recompute evidence for the selected track",
   );
+  for (const id of ["test", "release.check", "pin.check", "setup.artifacts.vps", "setup.artifacts.pin"]) {
+    assert.equal(
+      operatorCommand(contract, id).effect,
+      "local-mutation",
+      `${id} may write external build/cache state and must not claim read-only`,
+    );
+  }
 
   const unsafeRemote = mutable(contract);
   operatorCommand(unsafeRemote, "pin.release.ship").confirmationRequired = false;

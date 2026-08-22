@@ -12,6 +12,24 @@ FROM base AS dependencies
 COPY package.json package-lock.json ./
 RUN npm ci
 
+# The supported inner loop uses this target through the development Compose
+# override. Source is present for the initial start and then updated in place by
+# Compose Watch. Dependencies stay in the image and Next output is mounted on a
+# named volume, so neither is ever written into the source checkout.
+FROM base AS development
+ENV NODE_ENV=development \
+    HOSTNAME=0.0.0.0 \
+    PORT=4000 \
+    COSMOS_CONTRACTS_DIR=/app/contracts
+COPY --from=dependencies --chown=node:node /app/node_modules ./node_modules
+COPY --chown=node:node . .
+COPY --from=wire_contracts --chown=node:node . ./contracts
+RUN mkdir -p /app/.next /data \
+    && chown node:node /app /app/.next /data
+USER node
+EXPOSE 4000
+CMD ["npm", "run", "dev"]
+
 # No second Pin console is built into this image, and none may be.
 #
 # One used to be: a standalone Vite SPA was compiled here and copied to

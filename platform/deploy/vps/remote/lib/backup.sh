@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/bash
 # Backup capture and verification: durable inputs, inventories, key
 # material, invariants, and the artifact manifest.
 #
@@ -160,7 +160,7 @@ with tarfile.open(archive,"r|gz") as bundle:
     for member in bundle:
         path="." if member.name in (".","./") else member.name.removeprefix("./")
         if (not path or path.startswith("/") or "\\" in path
-                or any(ord(char)<32 or ord(char)==127 for char in path)
+                or any(ord(char)<32 or 127<=ord(char)<=159 for char in path)
                 or ".." in path.split("/") or posixpath.normpath(path)!=path):
             raise SystemExit(f"archive inventory contains an unsafe path: {path!r}")
         if path in seen: raise SystemExit(f"archive inventory contains a duplicate path: {path}")
@@ -209,7 +209,7 @@ for item in body:
     if not base<=keys or not keys<=allowed: raise SystemExit("archive inventory entry schema mismatch")
     name=item["path"]
     if not isinstance(name,str) or not name or name in seen: raise SystemExit("archive inventory path is missing or duplicated")
-    if (name.startswith("/") or "\\" in name or any(ord(char)<32 or ord(char)==127 for char in name)
+    if (name.startswith("/") or "\\" in name or any(ord(char)<32 or 127<=ord(char)<=159 for char in name)
             or ".." in name.split("/") or posixpath.normpath(name)!=name):
         raise SystemExit("archive inventory path is unsafe")
     seen.add(name)
@@ -411,12 +411,12 @@ verify_recorded_application_identity() {
 }
 
 state_file_count() {
-  docker run --rm -v "$STATE_VOLUME:/source:ro" "$HELPER_IMAGE" \
+  docker run --pull=never --rm -v "$STATE_VOLUME:/source:ro" "$HELPER_IMAGE" \
     sh -euc 'find /source -type f | wc -l' | tr -d '[:space:]'
 }
 
 state_byte_count() {
-  docker run --rm -v "$STATE_VOLUME:/source:ro" "$HELPER_IMAGE" \
+  docker run --pull=never --rm -v "$STATE_VOLUME:/source:ro" "$HELPER_IMAGE" \
     sh -euc 'find /source -type f -exec stat -c %s {} + | awk "{s+=\$1} END{print s+0}"' | tr -d '[:space:]'
 }
 
@@ -471,7 +471,7 @@ validate_center_channel_key_json() {
   local -a channel_key_python=(python3)
   [[ -r "$1" ]] || channel_key_python=(sudo -n python3)
   "${channel_key_python[@]}" - "$1" <<'PY'
-import base64,binascii,json,os,stat,sys
+import base64,binascii,json,os,re,stat,sys
 path=sys.argv[1]
 try:
     before=os.lstat(path)
@@ -516,8 +516,16 @@ if not isinstance(document,dict) or set(document)-{"keys"}!={"kid","key"}:
     raise SystemExit("Center channel key JSON must contain kid and key, and may contain keys")
 def check_kid(kid,label):
     if (not isinstance(kid,str) or not kid or len(kid.encode("utf-8"))>1024
-            or any(ord(char)<32 or ord(char)==127 for char in kid)):
+            or any(ord(char)<32 or 127<=ord(char)<=159 for char in kid)):
         raise SystemExit(f"{label} kid is invalid")
+    suffix="/center/ephemeral"
+    if not kid.endswith(suffix): raise SystemExit(f"{label} kid is not a complete Center kid")
+    principal=kid[:-len(suffix)]
+    if len(principal.encode("utf-8"))>128: raise SystemExit(f"{label} principal is oversized")
+    component=r"[A-Za-z0-9._-]+"
+    if (re.fullmatch(rf"U:{component}",principal) is None
+            and re.fullmatch(rf"V:[0-9A-Fa-f]{{2}}:D:{component}:U:{component}",principal) is None):
+        raise SystemExit(f"{label} kid has an unsupported principal")
 def check_key(encoded,label):
     if not isinstance(encoded,str): raise SystemExit(f"{label} value is not base64 text")
     try: key=base64.b64decode(encoded,validate=True)
@@ -528,7 +536,7 @@ check_kid(document["kid"],"Center channel key")
 check_key(document["key"],"Center channel key")
 mapped=document.get("keys",{})
 if not isinstance(mapped,dict): raise SystemExit("Center channel key map must be an object")
-if len(mapped)>4096: raise SystemExit("Center channel key map is implausibly large")
+if len(mapped)>256: raise SystemExit("Center channel key map is implausibly large")
 for mapped_kid,mapped_key in mapped.items():
     check_kid(mapped_kid,"Center channel key map entry")
     check_key(mapped_key,"Center channel key map entry")
@@ -595,7 +603,7 @@ validate_center_channel_backup_contract() {
   validate_backup_invariants "$invariants"
   validate_archive_inventory "$inventory"
   python3 - "$invariants" "$inventory" "$archive" <<'PY'
-import base64,binascii,hashlib,json,sys,tarfile
+import base64,binascii,hashlib,json,re,sys,tarfile
 invariants_path,inventory_path,archive_path=sys.argv[1:]
 rows={line.split("\t",1)[0]:line.split("\t",1)[1] for line in open(invariants_path,encoding="utf-8").read().splitlines()}
 inventory=json.load(open(inventory_path,encoding="utf-8"))
@@ -636,8 +644,16 @@ if not isinstance(document,dict) or set(document)-{"keys"}!={"kid","key"}:
     raise SystemExit("archived Center channel key fields differ")
 def check_archived(kid,encoded,label):
     if (not isinstance(kid,str) or not kid or len(kid.encode("utf-8"))>1024
-            or any(ord(char)<32 or ord(char)==127 for char in kid) or not isinstance(encoded,str)):
+            or any(ord(char)<32 or 127<=ord(char)<=159 for char in kid) or not isinstance(encoded,str)):
         raise SystemExit(f"{label} values are invalid")
+    suffix="/center/ephemeral"
+    if not kid.endswith(suffix): raise SystemExit(f"{label} kid is not a complete Center kid")
+    principal=kid[:-len(suffix)]
+    if len(principal.encode("utf-8"))>128: raise SystemExit(f"{label} principal is oversized")
+    component=r"[A-Za-z0-9._-]+"
+    if (re.fullmatch(rf"U:{component}",principal) is None
+            and re.fullmatch(rf"V:[0-9A-Fa-f]{{2}}:D:{component}:U:{component}",principal) is None):
+        raise SystemExit(f"{label} kid has an unsupported principal")
     try: key=base64.b64decode(encoded,validate=True)
     except (binascii.Error,ValueError) as error: raise SystemExit(f"{label} is not base64: {error}")
     if len(key)!=16 or base64.b64encode(key).decode("ascii")!=encoded:
@@ -645,7 +661,7 @@ def check_archived(kid,encoded,label):
 check_archived(document["kid"],document["key"],"archived Center channel key")
 mapped=document.get("keys",{})
 if not isinstance(mapped,dict): raise SystemExit("archived Center channel key map must be an object")
-if len(mapped)>4096: raise SystemExit("archived Center channel key map is implausibly large")
+if len(mapped)>256: raise SystemExit("archived Center channel key map is implausibly large")
 for mapped_kid,mapped_key in mapped.items():
     check_archived(mapped_kid,mapped_key,"archived Center channel key map entry")
 PY
@@ -768,7 +784,7 @@ for directory,dirs,files in os.walk(root,followlinks=False):
         path=os.path.join(directory,name); relative=os.path.relpath(path,root)
         if relative in {"BACKUP_MANIFEST.json","SHA256SUMS"}: continue
         if (relative.startswith("/") or "\\" in relative
-                or any(ord(char)<32 or ord(char)==127 for char in relative)
+                or any(ord(char)<32 or 127<=ord(char)<=159 for char in relative)
                 or ".." in relative.split(os.sep)):
             raise SystemExit("backup artifact path is unsafe")
         metadata=os.lstat(path)

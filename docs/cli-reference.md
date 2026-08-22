@@ -24,6 +24,10 @@ Effects mean:
 | `revival setup pin` | local | Select the Pin journey without reading a device. |
 | `revival setup --resume` | read | Resume the selected journey at its current next action. |
 | `revival setup status` | read | Show complete, next, and blocked steps. |
+| `revival setup import vps-candidate --handoff-root DIR` | local | Provider-verify and import a downloaded hosted VPS candidate handoff. |
+| `revival setup artifacts vps` | local | Freshly provider-verify the imported VPS candidate and persisted evidence. |
+| `revival setup import pin-release --release-root DIR` | local | Provider-verify and register a downloaded hosted exact-five Pin release store. |
+| `revival setup artifacts pin` | local | Reverify the registered Pin release and provider bundles at point of use. |
 | `revival init` | local | Initialize external protected directories and defaults. |
 | `revival doctor` | read | Check local requirements and print one next action. |
 | `revival config path` | read | Print the active external runtime configuration path. |
@@ -50,40 +54,100 @@ configuration, logs, serials, and wearer data.
 | `revival stack status` | read | Show service state. |
 | `revival stack logs` | read | Show recent service logs. |
 | `revival stack config` | read | Render the Compose model without secret interpolation. |
-| `revival test` | read | Run the repository release gate. |
-| `revival release check` | read | Run immutable release checks. |
+| `revival dev center` | local | Run Center with Turbopack and Compose source watch. |
+| `revival dev down` | local | Stop only the isolated development stack and retain its caches. |
+| `revival check center` | local | Run Center type, server, UI, and Spotify adapter checks from external build state. |
+| `revival check cosmos [TEST_FILTER]` | local | Run full Cosmos checks or a nonempty, verified Cargo test filter. |
+| `revival check platform` | local | Run source policy and platform acceptance tests. |
+| `revival check changed [--base REF]` | local | Select conservative checks from Git changes. |
+| `revival test` | local | Run the repository release gate; writes only external build/cache state. |
+| `revival release check` | local | Run immutable release checks; writes only external build/cache state. |
 | `revival release build` | local | Build an immutable release archive. |
 | `revival release verify` | read | Verify an archive and manifest. |
 
 Short aliases `build`, `up`, `down`, `status`, `logs`, and bare `config` retain
 their stack behavior.
 
+The `dev` and component `check` commands are the supported inner loop. They
+keep generated dependencies, compiler targets, and Next output below external
+build state or in container volumes. Center checks include the purpose-scoped
+Spotify adapter. Filtered Cosmos checks use Cargo/libtest discovery and fail if
+the filter selects no tests. `check changed` prefers the remote default branch,
+falls back only to conventional `main`/`master` refs, checks the full tracked
+tree when no trustworthy default exists, and includes both sides of renames.
+Contributor-safe Pin checks explicitly remove signing/private build variables.
+`test` and `release check` remain the full release boundary;
+the fast commands do not weaken or replace them. See the [fast local
+loop](../CONTRIBUTING.md#fast-local-loop).
+
 ## Production
 
 | Command | Effect | Purpose |
 | --- | --- | --- |
 | `revival doctor production` | read | Check production prerequisites. |
-| `revival deploy production` | remote | Deploy an immutable release. |
-| `revival backup` | remote | Create a verified server backup; `--fetch` adds the off-host copy. |
-| `revival canary` | remote | Run semantic production canaries. |
+| `revival release candidate prepare [--commit COMMIT]` | local | Build a sealed local diagnostic candidate from an exact detached commit; it is candidate-only and cannot deploy. |
+| `revival release candidate verify (--candidate PATH | --id SHA256)` | read | Recompute every candidate identity and digest without Git, Docker, a shell, or candidate-controlled code. |
+| `revival release candidate inspect (--candidate PATH | --id SHA256)` | read | Report provenance, image identities, and protected Carry compatibility. |
+| `revival deploy production (--candidate PATH | --candidate-id SHA256) --confirm` | remote | Freshly provider-verify, transfer, and deploy one imported GitHub-hosted immutable candidate; never build or pull on the host. |
+| `revival backup --confirm` | remote | Create a verified server backup; `--fetch` adds the off-host copy. |
+| `revival canary --confirm` | remote | Run semantic production canaries. |
 | `revival drift` | read | Compare protected state with its recorded contract. |
 | `revival adopt-config` | remote | Plan or confirm a protected configuration adoption. |
 | `revival prune-state` | remote | Plan or confirm safe release/backup retention. |
-| `revival rollback` | remote | Move the release pointer to an exact deployment. |
+| `revival rollback --deployment ID --confirm` | remote | Move the release pointer to an exact deployment. |
 
 Production commands target an existing reviewed installation. Rollback does not
 restore a database. See [operations](operations.md#production) and
 [recovery](recovery.md).
+
+Dispatch the pinned hosted workflow from the production-safe commit, then
+provider-verify and import its handoff before selecting it for deploy. Local
+`release candidate prepare` output is useful for diagnostics but is structurally
+candidate-only. Candidate IDs are the canonical
+SHA-256 of their internal descriptor; a directory name, `--candidate-id`, and
+that internal ID must all agree. Interrupted transfers resume for at most three
+attempts, while retained candidates and stale incoming workspaces are reported
+by `prune-state` and removed only by its dry-run/confirm contract.
+The sealed candidate identity also commits the complete 15-service
+`{role, reference, imageId}` Compose mapping; production and recovery paths use
+that held mapping rather than reconstructing authority from mutable tags or
+paths.
+
+Before the hosted-only production cutover, import and freshly provider-verify
+an immutable candidate representing the currently running production release;
+retain its candidate ID as the rollback baseline. The Carry→Cosmos migration
+therefore starts by attesting and importing the current immutable Carry
+baseline. If that exact baseline cannot be produced by the accepted
+GitHub-hosted workflow, stop and complete the migration preparation first.
+Descriptor schemas 2/3 and every local-origin candidate are deliberately
+ineligible—there is no legacy auto-adoption or promotion bypass.
+
+State retirement is non-destructive and receipt-based. Its linearization point
+is the final complete filesystem-watch drain after the exact held inventory has
+been revalidated. Success returns a name such as
+`.candidate-retired-<32 lowercase hex>` whose suffix commits to that inventory;
+it does not promise that a same-user-writable pathname stays immutable after
+the command returns. Every later consumer or retention scan reopens the name
+without following links and recomputes the receipt. A post-commit exchange
+therefore does not alter the historical receipt, but the next scan refuses the
+current path and leaves both trees recoverable for inspection.
+
+The live storage authority remains `/home/anders/carry-center-data` with
+`humane-carry-clone_carry-state`, `humane-carry-clone_carry-pgdata`,
+`humane-carry-clone_prometheus-data`, and
+`humane-carry-clone_grafana-data`. Candidate preparation intentionally refuses
+a source snapshot whose effective Compose/common values rename those paths; it
+never rewrites or “adopts” the protected live values.
 
 ## Pin host, PKI, release, and device commands
 
 | Command | Effect | Purpose |
 | --- | --- | --- |
 | `revival pin doctor` | read | Check host, signing, assets, and connected-device prerequisites. |
-| `revival pin check` | read | Run Pin source checks. |
+| `revival pin check` | local | Run Pin source checks in isolated external build/cache state. |
 | `revival pki init device-user` | local | Plan or confirm creation of the DeviceUser CA only. |
 | `revival pki import device-user` | local | Plan or confirm import of a DeviceUser CA pair. |
-| `revival pin release build` | local | Build and publish a signed bundle to the local store. |
+| `revival pin release build` | read | Refuse the retired local signed-build alias and point to the attested hosted workflow. |
 | `revival pin release inspect` | read | Inspect signed release metadata. |
 | `revival pin release verify` | read | Verify a signed release bundle. |
 | `revival pin release plan` | read | Plan the transition for one exact Pin. |

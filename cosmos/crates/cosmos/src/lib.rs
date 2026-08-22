@@ -43,8 +43,9 @@ pub async fn serve_until<F>(config: Config, shutdown: F) -> Result<(), ServerErr
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    let grpc_listener = tokio::net::TcpListener::bind(config.grpc_bind).await?;
-    let http_listener = tokio::net::TcpListener::bind(config.http_bind).await?;
+    let ai_bus_kid_scope =
+        startup_kid_scope(config.identity.workload(), config.kid_scope.as_deref())?;
+    validate_durable_key_configuration(&config)?;
 
     // The web (Keycloak/OIDC) authentication plane, when configured. Built once
     // and shared into every authenticator. Absent ⇒ device-only, exactly as
@@ -135,11 +136,38 @@ where
     // PublicPrivacy imports the owned Pin's C1 key and the authenticated Center
     // REST projection reads that same handle. PostgreSQL makes it cross-workload;
     // sharing the handle here also keeps the single-process/test shape correct.
-    let ai_bus_keys = if config.identity.workload() == cosmos_core::Workload::AiBus {
-        Some(crate::keydirectory::KeyDirectory::configured().await)
+    let channel_authority = if workload_consumes_channel_keys(config.identity.workload()) {
+        Some(
+            crate::keydirectory::KeyDirectory::configured_from(config.database_url.as_deref())
+                .await?,
+        )
     } else {
         None
     };
+    let ai_bus_keys = if config.identity.workload() == cosmos_core::Workload::AiBus {
+        channel_authority.clone()
+    } else {
+        None
+    };
+    let ai_bus_key_material: Option<crate::keymaterial::SharedKeyMaterial> =
+        if config.identity.workload() == cosmos_core::Workload::AiBus {
+            Some(std::sync::Arc::new(
+                crate::keymaterial::KeyMaterial::configured_for_workload(
+                    config.state_dir.as_deref(),
+                    config.identity.workload(),
+                )?,
+            ))
+        } else {
+            None
+        };
+    // Reconcile the former dual-written snapshot before either the HTTP or gRPC
+    // plane is started. Every legacy row must already match PostgreSQL; then
+    // only the redundant local channel map is durably stripped. A local-only or
+    // mismatched row fails startup rather than being resurrected into the one
+    // authority. The wrapping key remains in the snapshot.
+    if let (Some(directory), Some(material)) = (&ai_bus_keys, &ai_bus_key_material) {
+        directory.reconcile_legacy_key_material(material).await?;
+    }
     let http_app = if demo_enabled {
         http::demo_router(
             readiness.clone(),
@@ -168,15 +196,6 @@ where
     // never the gRPC edge, which is precisely the placement their exposure
     // report found missing.
     .merge(metrics::management_router());
-    let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let http_shutdown = wait_for_shutdown(shutdown_rx.clone());
-    let grpc_shutdown = wait_for_shutdown(shutdown_rx);
-
-    let mut http_task = tokio::spawn(async move {
-        axum::serve(http_listener, http_app)
-            .with_graceful_shutdown(http_shutdown)
-            .await
-    });
     let mut grpc_router = grpc_builder.add_service(health_service);
     if config.identity.workload() == cosmos_core::Workload::FeatureFlags {
         let authenticator = attach_web(auth::RequestAuthenticator::new(config.auth.clone()));
@@ -244,7 +263,11 @@ where
                     // Keys the device escrowed via `ImportKeys` land in the
                     // AI-bus workload; this is how contacts — a different
                     // process — can honour `server_should_decrypt`.
-                    .with_key_directory(crate::keydirectory::KeyDirectory::configured().await),
+                    .with_key_directory(
+                        channel_authority
+                            .clone()
+                            .expect("contacts workload configures one shared key directory"),
+                    ),
             )
             .max_decoding_message_size(d)
             .max_encoding_message_size(e),
@@ -263,7 +286,9 @@ where
                 DeviceEventsHistoryServiceServer::new(services::events::DeviceEventsHistory::new(
                     attach_web(auth::RequestAuthenticator::new(config.auth.clone())),
                     events_store.clone(),
-                    crate::keydirectory::KeyDirectory::configured().await,
+                    channel_authority
+                        .clone()
+                        .expect("notable-events workload configures one shared key directory"),
                 ))
                 .max_decoding_message_size(d)
                 .max_encoding_message_size(e),
@@ -279,18 +304,24 @@ where
                     // reachable only through the shared KeyDirectory. Resolve
                     // that directory here so this workload can open the exact
                     // C1 key imported by PublicPrivacy in the AI-bus workload.
-                    crate::keydirectory::KeyDirectory::configured().await,
+                    channel_authority
+                        .clone()
+                        .expect("notable-events workload configures one shared key directory"),
                 ))
                 .max_decoding_message_size(d)
                 .max_encoding_message_size(e),
             );
     }
     if config.identity.workload() == cosmos_core::Workload::AiBus {
-        // The privacy service (key exchange) and the AI-bus `Encrypted*` handlers
-        // are two halves of one ephemeral-channel lifecycle and run in the SAME
-        // workload, so they share one in-memory key store: the device establishes
-        // a channel key via PublicPrivacyService, then uses it everywhere else.
-        let key_material: crate::keymaterial::SharedKeyMaterial = Default::default();
+        // Local key material retains only the RSA wrapping key after the
+        // one-time migration above. PostgreSQL is the sole channel-key
+        // authority read by every encrypted handler and by PublicPrivacy.
+        let key_material = ai_bus_key_material
+            .clone()
+            .expect("AI-bus workload configures its wrapping key material");
+        let channel_authority = ai_bus_keys
+            .clone()
+            .expect("AI-bus workload configures its shared key directory");
         // Captures and notable events are per-wearer; one store serves the
         // workload's stateful surfaces.
         let capture_store = ai_bus_store.expect("AI-bus workload configures its shared store");
@@ -321,11 +352,14 @@ where
                 .max_encoding_message_size(e),
             )
             .add_service(
-                TestingAutomationServiceServer::new(services::capture::TestingAutomation::new(
-                    attach_web(auth::RequestAuthenticator::new(config.auth.clone())),
-                    capture_store.clone(),
-                    key_material.clone(),
-                ))
+                TestingAutomationServiceServer::new(
+                    services::capture::TestingAutomation::new(
+                        attach_web(auth::RequestAuthenticator::new(config.auth.clone())),
+                        capture_store.clone(),
+                        key_material.clone(),
+                    )
+                    .with_key_directory(channel_authority.clone()),
+                )
                 .max_decoding_message_size(d)
                 .max_encoding_message_size(e),
             )
@@ -357,6 +391,7 @@ where
             .add_service(
                 AiBusServiceServer::new(
                     services::aibus_main::AiBusMain::with_key_material(key_material.clone())
+                        .with_key_directory(channel_authority.clone())
                         .with_store(capture_store.clone()),
                 )
                 .max_decoding_message_size(d)
@@ -369,7 +404,8 @@ where
             )
             .add_service(
                 CompositionServiceServer::new(
-                    services::aibus_extra::Composition::with_key_material(key_material.clone()),
+                    services::aibus_extra::Composition::with_key_material(key_material.clone())
+                        .with_key_directory(channel_authority.clone()),
                 )
                 .max_decoding_message_size(d)
                 .max_encoding_message_size(e),
@@ -383,16 +419,18 @@ where
                 .max_encoding_message_size(e),
             )
             .add_service(
-                FoodServiceServer::new(services::aibus_extra::Food::with_key_material(
-                    key_material.clone(),
-                ))
+                FoodServiceServer::new(
+                    services::aibus_extra::Food::with_key_material(key_material.clone())
+                        .with_key_directory(channel_authority.clone()),
+                )
                 .max_decoding_message_size(d)
                 .max_encoding_message_size(e),
             )
             .add_service(
-                SpeechServiceServer::new(services::aibus_extra::Speech::with_key_material(
-                    key_material.clone(),
-                ))
+                SpeechServiceServer::new(
+                    services::aibus_extra::Speech::with_key_material(key_material.clone())
+                        .with_key_directory(channel_authority.clone()),
+                )
                 .max_decoding_message_size(d)
                 .max_encoding_message_size(e),
             )
@@ -420,18 +458,30 @@ where
         use cosmos_protocol::privacy::grpc::r#pub::public_privacy_service_server::PublicPrivacyServiceServer;
         grpc_router = grpc_router.add_service(
             PublicPrivacyServiceServer::new(
-                services::public_privacy::PublicPrivacy::with_key_material(key_material)
-                    .with_store(capture_store.clone())
-                    .with_key_directory(
-                        ai_bus_keys
-                            .clone()
-                            .expect("AI-bus workload configures its shared key directory"),
-                    ),
+                services::public_privacy::PublicPrivacy::with_key_material_and_scope(
+                    key_material,
+                    ai_bus_kid_scope.expect("AI-bus startup validates its kid scope"),
+                )
+                .with_store(capture_store.clone())
+                .with_key_directory(channel_authority),
             )
             .max_decoding_message_size(d)
             .max_encoding_message_size(e),
         );
     }
+    // Bind only after every durable dependency has connected, migrated, and
+    // reconciled. A workload must never become network-reachable and then
+    // discover that its channel-key authority or wrapping snapshot is absent.
+    let grpc_listener = tokio::net::TcpListener::bind(config.grpc_bind).await?;
+    let http_listener = tokio::net::TcpListener::bind(config.http_bind).await?;
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let http_shutdown = wait_for_shutdown(shutdown_rx.clone());
+    let grpc_shutdown = wait_for_shutdown(shutdown_rx);
+    let mut http_task = tokio::spawn(async move {
+        axum::serve(http_listener, http_app)
+            .with_graceful_shutdown(http_shutdown)
+            .await
+    });
     let mut grpc_task = tokio::spawn(async move {
         grpc_router
             .serve_with_incoming_shutdown(TcpListenerStream::new(grpc_listener), grpc_shutdown)
@@ -523,6 +573,66 @@ where
     secondary_result?;
     tracing::info!(workload = %config.identity.workload(), "workload stopped");
     Ok(())
+}
+
+fn startup_kid_scope(
+    workload: cosmos_core::Workload,
+    raw: Option<&str>,
+) -> Result<Option<services::public_privacy::ConfiguredKidScope>, ServerError> {
+    if workload == cosmos_core::Workload::AiBus {
+        return services::public_privacy::configured_kid_scope(raw)
+            .map(Some)
+            .map_err(ServerError::KidScopeConfiguration);
+    }
+    Ok(None)
+}
+
+const fn workload_consumes_channel_keys(workload: cosmos_core::Workload) -> bool {
+    matches!(
+        workload,
+        cosmos_core::Workload::AiBus
+            | cosmos_core::Workload::Contacts
+            | cosmos_core::Workload::NotableEvents
+    )
+}
+
+fn validate_durable_key_configuration(config: &Config) -> Result<(), ServerError> {
+    let durable_environment = matches!(
+        config.identity.environment(),
+        cosmos_core::DeploymentEnvironment::Parity | cosmos_core::DeploymentEnvironment::Production
+    );
+    if !durable_environment || !workload_consumes_channel_keys(config.identity.workload()) {
+        return Ok(());
+    }
+
+    if config
+        .database_url
+        .as_deref()
+        .map(str::trim)
+        .is_none_or(str::is_empty)
+    {
+        return Err(
+            DurableKeyConfigurationError::MissingDatabase(config.identity.workload()).into(),
+        );
+    }
+    if config.identity.workload() == cosmos_core::Workload::AiBus
+        && config
+            .state_dir
+            .as_deref()
+            .map(str::trim)
+            .is_none_or(str::is_empty)
+    {
+        return Err(DurableKeyConfigurationError::MissingStateDirectory.into());
+    }
+    Ok(())
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum DurableKeyConfigurationError {
+    #[error("{0} requires nonblank COSMOS_DATABASE_URL in parity/production")]
+    MissingDatabase(cosmos_core::Workload),
+    #[error("ai-bus requires nonblank COSMOS_STATE_DIR in parity/production")]
+    MissingStateDirectory,
 }
 
 #[cfg(unix)]
@@ -642,6 +752,14 @@ pub enum ServerError {
     ShutdownTimeout(std::time::Duration),
     #[error("web authentication plane unavailable: {0}")]
     WebAuth(String),
+    #[error("shared key directory unavailable: {0}")]
+    KeyDirectory(#[from] crate::keydirectory::KeyDirectoryError),
+    #[error("wrapping-key material unavailable: {0}")]
+    KeyMaterial(#[from] cosmos_crypto::CryptoError),
+    #[error("durable key configuration invalid: {0}")]
+    DurableKeyConfiguration(#[from] DurableKeyConfigurationError),
+    #[error("kid-scope configuration invalid: {0}")]
+    KidScopeConfiguration(#[from] crate::services::public_privacy::KidScopeConfigurationError),
 }
 
 #[cfg(test)]
@@ -670,6 +788,125 @@ mod tests {
         listener.local_addr().expect("temporary local address")
     }
 
+    fn topology_config(
+        workload: &str,
+        environment: &str,
+        grpc_address: SocketAddr,
+        http_address: SocketAddr,
+    ) -> Config {
+        let values = HashMap::from([
+            ("COSMOS_WORKLOAD".to_owned(), workload.to_owned()),
+            ("COSMOS_ENVIRONMENT".to_owned(), environment.to_owned()),
+            (
+                "COSMOS_AUTH_MODE".to_owned(),
+                "edge-authenticated".to_owned(),
+            ),
+            ("COSMOS_GRPC_BIND".to_owned(), grpc_address.to_string()),
+            ("COSMOS_HTTP_BIND".to_owned(), http_address.to_string()),
+            ("COSMOS_KID_SCOPE".to_owned(), "enforce".to_owned()),
+        ]);
+        Config::from_map(&values).expect("valid topology config")
+    }
+
+    #[test]
+    fn ai_bus_startup_rejects_missing_or_invalid_kid_scope_before_binding() {
+        for rejected in [
+            None,
+            Some(""),
+            Some("Audit"),
+            Some("enforce "),
+            Some("warn"),
+        ] {
+            assert!(matches!(
+                startup_kid_scope(cosmos_core::Workload::AiBus, rejected),
+                Err(ServerError::KidScopeConfiguration(_))
+            ));
+        }
+        assert!(startup_kid_scope(cosmos_core::Workload::AiBus, Some("audit")).is_ok());
+        assert!(startup_kid_scope(cosmos_core::Workload::AiBus, Some("enforce")).is_ok());
+    }
+
+    #[tokio::test]
+    async fn durable_channel_key_workloads_reject_missing_configuration_before_listener_bind() {
+        for workload in ["contacts", "ai-bus"] {
+            let grpc_address = unused_loopback_address().await;
+            let http_address = unused_loopback_address().await;
+            let mut config = topology_config(workload, "production", grpc_address, http_address);
+            if workload == "ai-bus" {
+                config.database_url = Some("postgresql://authority.invalid/cosmos".to_owned());
+            }
+
+            let error = serve_until(config, std::future::pending())
+                .await
+                .expect_err("incomplete production durability config must fail startup");
+            match workload {
+                "contacts" => assert!(matches!(
+                    error,
+                    ServerError::DurableKeyConfiguration(
+                        DurableKeyConfigurationError::MissingDatabase(
+                            cosmos_core::Workload::Contacts
+                        )
+                    )
+                )),
+                "ai-bus" => assert!(matches!(
+                    error,
+                    ServerError::DurableKeyConfiguration(
+                        DurableKeyConfigurationError::MissingStateDirectory
+                    )
+                )),
+                _ => unreachable!(),
+            }
+            let grpc = tokio::net::TcpListener::bind(grpc_address)
+                .await
+                .expect("gRPC address was never bound");
+            let http = tokio::net::TcpListener::bind(http_address)
+                .await
+                .expect("HTTP address was never bound");
+            drop((grpc, http));
+        }
+    }
+
+    #[tokio::test]
+    async fn durable_configuration_matrix_is_explicit_and_non_consumers_stay_compatible() {
+        let address: SocketAddr = "127.0.0.1:1".parse().expect("static address");
+        for workload in ["ai-bus", "contacts", "notable-events"] {
+            let mut config = topology_config(workload, "parity", address, address);
+            assert!(matches!(
+                validate_durable_key_configuration(&config),
+                Err(ServerError::DurableKeyConfiguration(
+                    DurableKeyConfigurationError::MissingDatabase(_)
+                ))
+            ));
+            config.database_url = Some("   ".to_owned());
+            assert!(validate_durable_key_configuration(&config).is_err());
+            config.database_url = Some("postgresql://authority.invalid/cosmos".to_owned());
+            if workload == "ai-bus" {
+                assert!(matches!(
+                    validate_durable_key_configuration(&config),
+                    Err(ServerError::DurableKeyConfiguration(
+                        DurableKeyConfigurationError::MissingStateDirectory
+                    ))
+                ));
+                config.state_dir = Some("  ".to_owned());
+                assert!(validate_durable_key_configuration(&config).is_err());
+                config.state_dir = Some("/durable/cosmos-state".to_owned());
+            }
+            validate_durable_key_configuration(&config)
+                .expect("complete durable configuration is accepted");
+        }
+
+        for workload in ["connectivity", "account", "feature-flags", "provisioning"] {
+            let config = topology_config(workload, "production", address, address);
+            validate_durable_key_configuration(&config)
+                .expect("a workload that never consumes channel keys needs no key authority");
+        }
+        for environment in ["development", "test"] {
+            let config = topology_config("ai-bus", environment, address, address);
+            validate_durable_key_configuration(&config)
+                .expect("local/test memory-only topology remains explicit");
+        }
+    }
+
     #[tokio::test]
     async fn serves_standard_grpc_health_over_http2() {
         let grpc_address = unused_loopback_address().await;
@@ -681,6 +918,7 @@ mod tests {
             ),
             ("COSMOS_GRPC_BIND".to_owned(), grpc_address.to_string()),
             ("COSMOS_HTTP_BIND".to_owned(), http_address.to_string()),
+            ("COSMOS_KID_SCOPE".to_owned(), "audit".to_owned()),
             ("COSMOS_SHUTDOWN_GRACE_MS".to_owned(), "2000".to_owned()),
         ]);
         let config = Config::from_map(&values).expect("local test config");

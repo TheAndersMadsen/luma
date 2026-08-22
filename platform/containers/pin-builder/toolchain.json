@@ -26,6 +26,15 @@
       "platform": "34",
       "buildTools": "35.0.0",
       "ndk": "28.2.13676358",
+      "ndkArchive": {
+        "url": "https://dl.google.com/android/repository/android-ndk-r28c-linux.zip",
+        "size": 722261334,
+        "sha1": "a7b54a5de87fecd125a17d54f73c446199e72a64",
+        "sha256": "dfb20d396df28ca02a8c708314b814a4d961dc9074f9a161932746f815aa552f",
+        "sourceRoot": "android-ndk-r28c",
+        "destination": "/opt/android-sdk/ndk/28.2.13676358",
+        "evidence": "official Android NDK unsupported-download archive metadata plus an independently computed SHA-256"
+      },
       "rustTarget": "aarch64-linux-android",
       "evidence": "observed in copied Android modules and build operations documentation"
     },
@@ -37,6 +46,14 @@
     },
     "cargoNdk": {
       "version": "4.1.2",
+      "archive": {
+        "url": "https://github.com/bbqsrc/cargo-ndk/releases/download/v4.1.2/cargo-ndk-x86_64-unknown-linux-gnu-v4.1.2.tgz",
+        "size": 2504202,
+        "sha256": "9451622c4567e8abb2c8005001855e32901c0b716ccdd3a173a4375fd03426e1",
+        "sourceRoot": "cargo-ndk-x86_64-unknown-linux-gnu-v4.1.2",
+        "target": "x86_64-unknown-linux-gnu",
+        "evidence": "upstream v4.1.2 release asset metadata and an independently computed SHA-256"
+      },
       "evidence": "observed in copied build operations documentation"
     },
     "node": {
@@ -49,14 +66,24 @@
   "runtime": {
     "user": "builder",
     "sourceMount": "/workspace/pin",
-    "workingState": "/workspace/state/device-build/worktree",
-    "artifactOutput": "/workspace/state/artifacts/device",
+    "workingState": "/state/device-build/worktree",
+    "artifactOutput": "/state/artifacts/device",
+    "debugArtifactOutput": "/state/artifacts/device-debug",
+    "debugStoreHelper": "platform/containers/pin-builder/debug-store.py",
     "externalCaches": [
       "/cache/android",
       "/cache/cargo",
       "/cache/gradle",
       "/cache/npm"
     ],
+    "credentialFreeCacheData": [
+      "/cache-data/cargo-registry",
+      "/cache-data/cargo-git",
+      "/cache-data/gradle-caches",
+      "/cache-data/gradle-wrapper",
+      "/cache-data/npm-cacache"
+    ],
+    "credentialFreeToolHome": "/tmp/revival-pin-credential-free",
     "defaultCommand": "help",
     "commands": [
       "help",
@@ -65,6 +92,8 @@
       "build-cli",
       "build-android",
       "build-debug",
+      "build-debug-role",
+      "check-unit",
       "prefetch-release",
       "build-release",
       "shell"
@@ -72,7 +101,21 @@
   },
   "boundaries": {
     "sourceIsReadOnly": true,
+    "credentialFreeHostPlatform": "detectable-emulation-negative Linux x86_64 candidate only; ARM, QEMU/binfmt, and macOS are refused before Docker, but guest-visible evidence cannot prove physical native execution",
+    "authoritativeNativeReleaseAttestation": "fail closed: authoritative native release acceptance requires a trusted hosted/provider cryptographic hardware attestation bound to the sealed source-generation digest and captured sha256 Docker image ID; no supported verifier is configured and CI/guest strings never satisfy this contract",
+    "continuousLaneAuthority": "one long-lived non-dumpable Python broker performs the native preflight, installs parent/name watches before each nofollow open or safe staged creation from the filesystem root, seals one exact source generation, and retains every DATA/BUILD/state/cache/tool/config descriptor and watch plus the sealed source descriptors through source policy, changed selection, Docker build, Docker run, publication, and final revalidation; JavaScript performs no host preparation",
+    "sealedSourceGeneration": "a recursive mutation-watched capture rejects links, special/private/generated entries and unstable metadata, emits a deterministic content/mode/path manifest plus tar into write/grow/shrink/seal-protected memfds, and supplies that same generation to source policy, changed selection, Docker build stdin, and container extraction; live source is never a Docker bind mount",
+    "descriptorStableDockerSources": "the sealed source tar/manifest, lane state, exactly five cache-data leaves, and the empty Docker config are passed to Docker through /proc/<broker-pid>/fd/<n> while the broker retains the matching descriptors and watches through child exit",
+    "hostPreparationMutationEvidence": "the shared watch-before-target primitive rejects unexpected name, identity, owner, mode, link-count, timestamp, content, and metadata events; fixed missing directories are configured under a unique held token and installed with RENAME_NOREPLACE, while failed random allocations are never path-deleted",
+    "changedSelectionBoundary": "native Linux x86_64 preflight and continuous lane acquisition precede selection; the broker resolves held loose/packed refs itself and runs only config-free cat-file/ls-tree plumbing against a broker-owned empty Git directory and the held object database, then compares that base tree to the sealed source manifest without a worktree, index, attributes, filters, hooks, fsmonitor, submodules, or repo config",
+    "compilerSourceIsolation": "each invocation extracts the held sealed tar into a fresh container-private tmpfs compiler tree; no compiler worktree is host-mounted or persisted, while only build outputs and exactly five dependency cache leaves remain warm",
+    "trustedSourcePolicy": "fixed /usr/bin/node under fixed /usr/bin:/bin PATH; no ambient node, dirname, readlink, shell config, or PATH command resolution",
     "debugCommandsRejectSigningInputs": true,
+    "credentialFreeToolHomes": "fresh container-private HOME/XDG/Gradle/Cargo/npm/Android roots; only five cache-data leaves persist",
+    "hostDockerBoundary": "held root-owned Docker executable, positive environment allowlist, fresh watched descriptor-held empty DOCKER_CONFIG, literal unix:///var/run/docker.sock, and no ambient context/TLS/config redirect; failed random config tokens are not path-deleted",
+    "roleScopedDebugIsCompileOnly": true,
+    "serverDebugCompilesRuntimeCore": "cargo check --locked --all-targets --features local-nlu,iroh",
+    "debugStorePublication": "compiler bytes are copied to held O_TMPFILE destinations, fsynced and destination-hashed before linkat; readers watch before inventory and retain an exact single-link VerifiedSet; selections and retirements share a flock-serialized segmented variable-length logical-sequence/predecessor-digest journal with three reconciled immutable local fact sets, no wall-clock ordering or fixed record cap, and publication never overwrites, renames over, unlinks, or removes a pathname; same-UID offline deletion of all local facts is not cryptographically rollback-resistant and cannot be authoritative release evidence without an external trusted high-water attestation",
     "releaseDependencyFetch": "networked dependency-only prefetch with no signing or private-asset mounts",
     "releaseSigningInputs": "external read-only d8a64 mounts validated against fixed certificate identity",
     "releaseSigningNetwork": "none; Gradle and Cargo run offline from the prefetch cache",

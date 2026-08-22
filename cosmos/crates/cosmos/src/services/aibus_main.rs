@@ -74,6 +74,9 @@ pub struct AiBusMain {
     /// Shared ephemeral channel keys, populated by `PublicPrivacyService`. The
     /// `Encrypted*` assistant path opens requests and seals responses with these.
     keys: crate::keymaterial::SharedKeyMaterial,
+    /// Production channel-key authority. `None` is retained only for focused
+    /// unit tests that exercise the legacy in-memory KeyMaterial seam.
+    directory: Option<crate::keydirectory::SharedKeyDirectory>,
     /// The wearer's saved data, for tools like `recall_memory`.
     store: crate::store::SharedStore,
     /// Resolves each caller's account verdict. Fail-open by default (no store).
@@ -85,6 +88,7 @@ impl Default for AiBusMain {
         Self {
             engine: crate::assistant::build_engine(),
             keys: Default::default(),
+            directory: None,
             store: crate::store::MemoryStore::shared(),
             entitlements: Default::default(),
         }
@@ -144,52 +148,78 @@ impl AiBusMain {
         }
     }
 
-    /// Open an `EncryptedData` request payload into its plaintext protobuf.
+    /// Open one channel envelope through the configured authority.
     ///
-    /// Shared by every `Encrypted*` tool RPC. Both failure modes here are
-    /// **channel** failures, so both report as [`Self::channel_failure`] — see
-    /// that helper for why neither may borrow an account status code.
-    fn open_request<T: prost::Message + Default>(
+    /// Production always has a `KeyDirectory`; the local `KeyMaterial` branch
+    /// exists only for focused unit tests. Keeping the lookup here prevents a
+    /// bespoke encrypted RPC from accidentally consulting the retired local
+    /// channel map and reporting an authoritative database row as absent.
+    async fn open_envelope(
         &self,
-        enc: Option<cosmos_protocol::common::encryption::EncryptedData>,
-    ) -> Result<(T, String), Status> {
-        let enc = enc.ok_or_else(|| Status::invalid_argument("missing encrypted request"))?;
-        if self.keys.is_empty() {
+        envelope: cosmos_crypto::EncryptedData,
+    ) -> Result<Vec<u8>, Status> {
+        let kid = envelope.kid.clone();
+        if let Some(directory) = &self.directory {
+            return match directory
+                .open(&envelope)
+                .await
+                .map_err(|error| crate::keydirectory::grpc_status(&error))?
+            {
+                Some(plaintext) => Ok(plaintext),
+                None => {
+                    crate::services::public_privacy::note_unknown_kid(&kid);
+                    Err(Status::failed_precondition(format!(
+                        "no channel key for kid {kid}; queued for re-establishment via PublicPrivacyService SyncKeys",
+                    )))
+                }
+            };
+        }
+
+        if self.keys.is_empty().map_err(|error| {
+            crate::services::public_privacy::key_material_availability_status(&error)
+                .unwrap_or_else(|| Status::internal("could not inspect channel-key state"))
+        })? {
             return Err(Self::channel_failure(NO_CHANNEL_KEY));
         }
-        let kid = enc
-            .encryption_information
-            .as_ref()
-            .map(|i| i.kid.clone())
-            .unwrap_or_default();
-        let plaintext = self
-            .keys
-            .open(&cosmos_crypto::EncryptedData {
-                data: enc.data,
-                kid: kid.clone(),
-            })
-            .map_err(|error| match error {
-                // A kid we have never held — typically a channel established
-                // before key material was persisted. These are the AI-bus
-                // transports, including `EncryptedUnderstand`, which is the
-                // assistant path a stranded Pin actually hits; arming the repair
-                // only on the speech RPCs would leave the wearer's assistant dead
-                // while the recovery machinery sat unused. Recording it makes the
-                // next `SyncKeys` return this kid in `delete_kids` — the one
-                // server-driven way to make the device drop and re-upload a key
-                // it otherwise caches forever.
+        self.keys.open(&envelope).map_err(|error| {
+            if let Some(status) =
+                crate::services::public_privacy::key_material_availability_status(&error)
+            {
+                return status;
+            }
+            match error {
                 cosmos_crypto::CryptoError::UnknownKid(_) => {
                     crate::services::public_privacy::note_unknown_kid(&kid);
                     Status::failed_precondition(format!(
                         "no channel key for kid {kid}; queued for re-establishment via PublicPrivacyService SyncKeys",
                     ))
                 }
-                // A key we DO hold that failed to open: bad tag, bad AAD,
-                // truncated payload. Nothing to re-establish, and this kid must
-                // never reach the deletion queue — dropping a working key would
-                // strand a healthy channel.
                 _ => Self::channel_failure(ENVELOPE_OPEN_FAILED),
-            })?;
+            }
+        })
+    }
+
+    /// Open an `EncryptedData` request payload into its plaintext protobuf.
+    ///
+    /// Shared by every `Encrypted*` tool RPC. Both failure modes here are
+    /// **channel** failures, so both report as [`Self::channel_failure`] — see
+    /// that helper for why neither may borrow an account status code.
+    async fn open_request<T: prost::Message + Default>(
+        &self,
+        enc: Option<cosmos_protocol::common::encryption::EncryptedData>,
+    ) -> Result<(T, String), Status> {
+        let enc = enc.ok_or_else(|| Status::invalid_argument("missing encrypted request"))?;
+        let kid = enc
+            .encryption_information
+            .as_ref()
+            .map(|i| i.kid.clone())
+            .unwrap_or_default();
+        let plaintext = self
+            .open_envelope(cosmos_crypto::EncryptedData {
+                data: enc.data,
+                kid: kid.clone(),
+            })
+            .await?;
         let decoded = T::decode(plaintext.as_slice()).map_err(|_| {
             Status::invalid_argument("envelope did not contain the expected request")
         })?;
@@ -204,16 +234,27 @@ impl AiBusMain {
     /// `Class.forName("")` fails, so an empty-AAD envelope cannot be opened at
     /// all. And because AAD is authenticated, binding it to the message type
     /// stops a sealed envelope from being replayed into a different RPC.
-    fn seal_response<T: prost::Message>(
+    async fn seal_response<T: prost::Message>(
         &self,
         kid: &str,
         message: &T,
         type_name: &str,
     ) -> Result<cosmos_protocol::common::encryption::EncryptedData, Status> {
-        let sealed = self
-            .keys
-            .seal(kid, &message.encode_to_vec(), type_name.as_bytes())
-            .map_err(|_| Self::channel_failure(ENVELOPE_SEAL_FAILED))?;
+        let encoded = message.encode_to_vec();
+        let sealed = if let Some(directory) = &self.directory {
+            directory
+                .seal(kid, &encoded, type_name.as_bytes())
+                .await
+                .map_err(|error| crate::keydirectory::grpc_status(&error))?
+                .ok_or_else(|| Status::failed_precondition("the response channel key is absent"))?
+        } else {
+            self.keys
+                .seal(kid, &encoded, type_name.as_bytes())
+                .map_err(|error| {
+                    crate::services::public_privacy::key_material_availability_status(&error)
+                        .unwrap_or_else(|| Self::channel_failure(ENVELOPE_SEAL_FAILED))
+                })?
+        };
         Ok(cosmos_protocol::common::encryption::EncryptedData {
             encryption_information: Some(
                 cosmos_protocol::common::encryption::EncryptionInformation { kid: sealed.kid },
@@ -423,6 +464,7 @@ impl AiBusMain {
                 .map(|p| p.expose_for_authorization().to_owned()),
             store: Some(self.store.clone()),
             keys: Some(self.keys.clone()),
+            key_directory: self.directory.clone(),
             // Generic over the request body, so it cannot see
             // `SynapseUnderstandingRequest.location`. The Understand handlers
             // attach it once they have the typed request.
@@ -454,6 +496,14 @@ impl AiBusMain {
             keys,
             ..Default::default()
         }
+    }
+
+    pub fn with_key_directory(
+        mut self,
+        directory: crate::keydirectory::SharedKeyDirectory,
+    ) -> Self {
+        self.directory = Some(directory);
+        self
     }
 
     /// Build an OpenAI-compatible chat model when explicitly configured.
@@ -1214,41 +1264,12 @@ impl AiBusService for AiBusMain {
             .map(|i| i.kid.clone())
             .unwrap_or_default();
 
-        // No channel key => the device never completed the key exchange. Say so
-        // precisely rather than failing as though the envelope were corrupt — but
-        // still as a channel failure, so the wearer hears something.
-        if self.keys.is_empty() {
-            return Err(Self::channel_failure(NO_CHANNEL_KEY));
-        }
-
         let plaintext = self
-            .keys
-            .open(&cosmos_crypto::EncryptedData {
+            .open_envelope(cosmos_crypto::EncryptedData {
                 data: enc.data,
                 kid: kid.clone(),
             })
-            .map_err(|error| match error {
-                // A kid we have never held — typically a channel established
-                // before key material was persisted. These are the AI-bus
-                // transports, including `EncryptedUnderstand`, which is the
-                // assistant path a stranded Pin actually hits; arming the repair
-                // only on the speech RPCs would leave the wearer's assistant dead
-                // while the recovery machinery sat unused. Recording it makes the
-                // next `SyncKeys` return this kid in `delete_kids` — the one
-                // server-driven way to make the device drop and re-upload a key
-                // it otherwise caches forever.
-                cosmos_crypto::CryptoError::UnknownKid(_) => {
-                    crate::services::public_privacy::note_unknown_kid(&kid);
-                    Status::failed_precondition(format!(
-                        "no channel key for kid {kid}; queued for re-establishment via PublicPrivacyService SyncKeys",
-                    ))
-                }
-                // A key we DO hold that failed to open: bad tag, bad AAD,
-                // truncated payload. Nothing to re-establish, and this kid must
-                // never reach the deletion queue — dropping a working key would
-                // strand a healthy channel.
-                _ => Self::channel_failure(ENVELOPE_OPEN_FAILED),
-            })?;
+            .await?;
         let inner =
             pb::SynapseUnderstandingRequest::decode(plaintext.as_slice()).map_err(|_| {
                 Status::invalid_argument("envelope did not contain an understanding request")
@@ -1261,14 +1282,19 @@ impl AiBusService for AiBusMain {
         // plaintext transport has it. Merge it into the decrypted request.
         let mut inner = inner;
         if let Some(sealed_location) = location_envelope {
-            if let Ok(plaintext) = self.keys.open(&cosmos_crypto::EncryptedData {
-                data: sealed_location.data,
-                kid: sealed_location
-                    .encryption_information
-                    .as_ref()
-                    .map(|i| i.kid.clone())
-                    .unwrap_or_default(),
-            }) {
+            let location_kid = sealed_location
+                .encryption_information
+                .as_ref()
+                .map(|i| i.kid.clone())
+                .unwrap_or_default();
+            let plaintext = Some(
+                self.open_envelope(cosmos_crypto::EncryptedData {
+                    data: sealed_location.data,
+                    kid: location_kid,
+                })
+                .await?,
+            );
+            if let Some(plaintext) = plaintext {
                 // Log the failure rather than swallowing it. A decode error here
                 // means our schema and the device's disagree, and the only
                 // symptom is the wearer's location quietly vanishing from the
@@ -1306,19 +1332,41 @@ impl AiBusService for AiBusMain {
         tools.location = inner.location.as_ref().map(|l| (l.latitude, l.longitude));
         let engine = self.engine.for_request(entitlement, tools);
         let keys = self.keys.clone();
+        let directory = self.directory.clone();
         let (plain_tx, mut plain_rx) = tokio::sync::mpsc::channel(16);
         let (tx, rx) = tokio::sync::mpsc::channel(16);
         tokio::spawn(async move { engine.run(inner, plain_tx).await });
         tokio::spawn(async move {
             while let Some(msg) = plain_rx.recv().await {
                 let sealed = match msg {
-                    Ok(m) => keys
-                        .seal(
-                            &kid,
-                            &m.encode_to_vec(),
-                            b"humane.aibus.SynapseUnderstandingResponse",
-                        )
-                        .map(|e| pb::EncryptedSynapseUnderstandingResponse {
+                    Ok(m) => {
+                        let encoded = m.encode_to_vec();
+                        let result = if let Some(directory) = &directory {
+                            directory
+                                .seal(&kid, &encoded, b"humane.aibus.SynapseUnderstandingResponse")
+                                .await
+                                .map_err(|error| crate::keydirectory::grpc_status(&error))
+                                .and_then(|sealed| {
+                                    sealed.ok_or_else(|| {
+                                        Status::failed_precondition(
+                                            "the response channel key is absent",
+                                        )
+                                    })
+                                })
+                        } else {
+                            keys.seal(
+                                &kid,
+                                &encoded,
+                                b"humane.aibus.SynapseUnderstandingResponse",
+                            )
+                            .map_err(|error| {
+                                crate::services::public_privacy::key_material_availability_status(
+                                    &error,
+                                )
+                                .unwrap_or_else(|| Self::channel_failure(ENVELOPE_SEAL_FAILED))
+                            })
+                        };
+                        result.map(|e| pb::EncryptedSynapseUnderstandingResponse {
                             response: Some(cosmos_protocol::common::encryption::EncryptedData {
                                 encryption_information: Some(
                                     cosmos_protocol::common::encryption::EncryptionInformation {
@@ -1327,7 +1375,8 @@ impl AiBusService for AiBusMain {
                                 ),
                                 data: e.data,
                             }),
-                        }),
+                        })
+                    }
                     Err(status) => {
                         let _ = tx.send(Err(status)).await;
                         return;
@@ -1339,10 +1388,8 @@ impl AiBusService for AiBusMain {
                             return; // client hung up
                         }
                     }
-                    Err(_) => {
-                        let _ = tx
-                            .send(Err(Self::channel_failure(ENVELOPE_SEAL_FAILED)))
-                            .await;
+                    Err(status) => {
+                        let _ = tx.send(Err(status)).await;
                         return;
                     }
                 }
@@ -1428,7 +1475,8 @@ impl AiBusService for AiBusMain {
         request: Request<pb::EncryptedCompletionRequest>,
     ) -> Result<Response<pb::EncryptedCompletionResponse>, Status> {
         let request = request.into_inner();
-        let (completion, kid): (pb::CompletionRequest, _) = self.open_request(request.request)?;
+        let (completion, kid): (pb::CompletionRequest, _) =
+            self.open_request(request.request).await?;
         if completion.prompt.trim().is_empty() {
             return Err(Status::invalid_argument(
                 "completion request missing prompt",
@@ -1449,11 +1497,10 @@ impl AiBusService for AiBusMain {
             error: None,
         };
         Ok(Response::new(pb::EncryptedCompletionResponse {
-            response: Some(self.seal_response(
-                &kid,
-                &response,
-                "humane.aibus.CompletionResponse",
-            )?),
+            response: Some(
+                self.seal_response(&kid, &response, "humane.aibus.CompletionResponse")
+                    .await?,
+            ),
         }))
     }
 
@@ -1462,7 +1509,8 @@ impl AiBusService for AiBusMain {
         request: Request<pb::EncryptedChatCompletionRequest>,
     ) -> Result<Response<pb::EncryptedChatCompletionResponse>, Status> {
         let request = request.into_inner();
-        let (chat, kid): (pb::ChatCompletionRequest, _) = self.open_request(request.request)?;
+        let (chat, kid): (pb::ChatCompletionRequest, _) =
+            self.open_request(request.request).await?;
         let response_message = self.run_model_chat(&chat).await?;
         let response = pb::ChatCompletionResponse {
             choices: vec![pb::Choice {
@@ -1477,11 +1525,10 @@ impl AiBusService for AiBusMain {
             error: None,
         };
         Ok(Response::new(pb::EncryptedChatCompletionResponse {
-            response: Some(self.seal_response(
-                &kid,
-                &response,
-                "humane.aibus.ChatCompletionResponse",
-            )?),
+            response: Some(
+                self.seal_response(&kid, &response, "humane.aibus.ChatCompletionResponse")
+                    .await?,
+            ),
         }))
     }
 
@@ -1501,14 +1548,13 @@ impl AiBusService for AiBusMain {
         request: Request<pb::EncryptedAnalyzeImageRequest>,
     ) -> Result<Response<pb::EncryptedAnalyzeImageResponse>, Status> {
         let (request, kid): (pb::AnalyzeImageRequest, _) =
-            self.open_request(request.into_inner().request)?;
+            self.open_request(request.into_inner().request).await?;
         let response = Self::analyze_image_inner(request).await?;
         Ok(Response::new(pb::EncryptedAnalyzeImageResponse {
-            response: Some(self.seal_response(
-                &kid,
-                &response,
-                "humane.aibus.AnalyzeImageResponse",
-            )?),
+            response: Some(
+                self.seal_response(&kid, &response, "humane.aibus.AnalyzeImageResponse")
+                    .await?,
+            ),
         }))
     }
 
@@ -1517,14 +1563,13 @@ impl AiBusService for AiBusMain {
         request: Request<pb::EncryptedAnalyzeFoodImageRequest>,
     ) -> Result<Response<pb::EncryptedAnalyzeFoodImageResponse>, Status> {
         let (request, kid): (pb::AnalyzeFoodImageRequest, _) =
-            self.open_request(request.into_inner().request)?;
+            self.open_request(request.into_inner().request).await?;
         let response = Self::analyze_food_image_inner(request).await?;
         Ok(Response::new(pb::EncryptedAnalyzeFoodImageResponse {
-            response: Some(self.seal_response(
-                &kid,
-                &response,
-                "humane.aibus.AnalyzeFoodImageResponse",
-            )?),
+            response: Some(
+                self.seal_response(&kid, &response, "humane.aibus.AnalyzeFoodImageResponse")
+                    .await?,
+            ),
         }))
     }
 
@@ -1536,16 +1581,19 @@ impl AiBusService for AiBusMain {
     ) -> Result<Response<pb::EncryptedActionBasedInterstitialResponse>, Status> {
         let request = request.into_inner();
         let (_req, kid): (pb::ActionBasedInterstitialRequest, _) =
-            self.open_request(request.request)?;
+            self.open_request(request.request).await?;
         let response = pb::ActionBasedInterstitialResponse {
             interstitial: ACTION_INTERSTITIAL.to_owned(),
         };
         let response = pb::EncryptedActionBasedInterstitialResponse {
-            response: Some(self.seal_response(
-                &kid,
-                &response,
-                "humane.aibus.ActionBasedInterstitialResponse",
-            )?),
+            response: Some(
+                self.seal_response(
+                    &kid,
+                    &response,
+                    "humane.aibus.ActionBasedInterstitialResponse",
+                )
+                .await?,
+            ),
         };
         Ok(Response::new(response))
     }
@@ -1555,17 +1603,17 @@ impl AiBusService for AiBusMain {
         request: Request<pb::EncryptedLoadingMessageRequest>,
     ) -> Result<Response<pb::EncryptedLoadingMessageResponse>, Status> {
         let request = request.into_inner();
-        let (_req, kid): (pb::LoadingMessageRequest, _) = self.open_request(request.request)?;
+        let (_req, kid): (pb::LoadingMessageRequest, _) =
+            self.open_request(request.request).await?;
         let response = pb::LoadingMessageResponse {
             loading_message: LOADING_MESSAGE.to_owned(),
             verbal_message: LOADING_MESSAGE.to_owned(),
         };
         let response = pb::EncryptedLoadingMessageResponse {
-            response: Some(self.seal_response(
-                &kid,
-                &response,
-                "humane.aibus.LoadingMessageResponse",
-            )?),
+            response: Some(
+                self.seal_response(&kid, &response, "humane.aibus.LoadingMessageResponse")
+                    .await?,
+            ),
         };
         Ok(Response::new(response))
     }
@@ -1589,12 +1637,16 @@ impl AiBusService for AiBusMain {
     ) -> Result<Response<pb::EncryptedFunctionResponse>, Status> {
         // Server tools run against the wearer's own data, so resolve them first.
         let tools = self.tool_context(&request);
-        let (call, kid): (pb::FunctionCall, String) =
-            self.open_request::<pb::FunctionCall>(request.into_inner().function_call)?;
+        let (call, kid): (pb::FunctionCall, String) = self
+            .open_request::<pb::FunctionCall>(request.into_inner().function_call)
+            .await?;
         let response = run_device_function(&call, &tools).await;
         let response = pb::FunctionResponse { response };
         Ok(Response::new(pb::EncryptedFunctionResponse {
-            response: Some(self.seal_response(&kid, &response, "humane.aibus.FunctionResponse")?),
+            response: Some(
+                self.seal_response(&kid, &response, "humane.aibus.FunctionResponse")
+                    .await?,
+            ),
         }))
     }
 
@@ -1605,16 +1657,15 @@ impl AiBusService for AiBusMain {
         request: Request<pb::EncryptedGeoLocateRequest>,
     ) -> Result<Response<pb::EncryptedGeoLocateResponse>, Status> {
         let request = request.into_inner();
-        let (req, kid): (pb::GeoLocateRequest, _) = self.open_request(request.request)?;
+        let (req, kid): (pb::GeoLocateRequest, _) = self.open_request(request.request).await?;
         let location = crate::backends::places::geolocate(&req)
             .await
             .map_err(|e| Self::backend_status(e, "geolocation"))?;
         Ok(Response::new(pb::EncryptedGeoLocateResponse {
-            response: Some(self.seal_response(
-                &kid,
-                &location,
-                "humane.aibus.GeoLocateResponse",
-            )?),
+            response: Some(
+                self.seal_response(&kid, &location, "humane.aibus.GeoLocateResponse")
+                    .await?,
+            ),
         }))
     }
 
@@ -1626,17 +1677,16 @@ impl AiBusService for AiBusMain {
         request: Request<pb::EncryptedReverseGeocodeRequest>,
     ) -> Result<Response<pb::EncryptedReverseGeocodeResponse>, Status> {
         let (location, kid): (pb::Location, _) =
-            self.open_request(request.into_inner().location)?;
+            self.open_request(request.into_inner().location).await?;
         let address =
             crate::backends::places::reverse_geocode(location.latitude, location.longitude)
                 .await
                 .map_err(|e| Self::backend_status(e, "reverse-geocoding"))?;
         Ok(Response::new(pb::EncryptedReverseGeocodeResponse {
-            response: Some(self.seal_response(
-                &kid,
-                &address,
-                "humane.aibus.ReverseGeocodeResponse",
-            )?),
+            response: Some(
+                self.seal_response(&kid, &address, "humane.aibus.ReverseGeocodeResponse")
+                    .await?,
+            ),
         }))
     }
 
@@ -1645,19 +1695,22 @@ impl AiBusService for AiBusMain {
         request: Request<pb::EncryptedNavigationDirectionsRequest>,
     ) -> Result<Response<pb::EncryptedNavigationDirectionsResponse>, Status> {
         let request = request.into_inner();
-        let (origin, _): (pb::Location, _) = self.open_request(request.location)?;
+        let (origin, _): (pb::Location, _) = self.open_request(request.location).await?;
         let (nav, kid): (pb::NavigationDirectionsRequest, _) =
-            self.open_request(request.request)?;
+            self.open_request(request.request).await?;
         let directions =
             crate::backends::places::directions(origin.latitude, origin.longitude, nav.destination)
                 .await
                 .map_err(|e| Self::backend_status(e, "directions"))?;
         Ok(Response::new(pb::EncryptedNavigationDirectionsResponse {
-            response: Some(self.seal_response(
-                &kid,
-                &directions,
-                "humane.aibus.NavigationDirectionsResponse",
-            )?),
+            response: Some(
+                self.seal_response(
+                    &kid,
+                    &directions,
+                    "humane.aibus.NavigationDirectionsResponse",
+                )
+                .await?,
+            ),
         }))
     }
 
@@ -1668,7 +1721,7 @@ impl AiBusService for AiBusMain {
         request: Request<pb::EncryptedNearbySearchRequest>,
     ) -> Result<Response<pb::EncryptedNearbySearchResponse>, Status> {
         let (search, kid): (pb::NearbySearchRequest, _) =
-            self.open_request(request.into_inner().request)?;
+            self.open_request(request.into_inner().request).await?;
         let near = search.location.as_ref().map(|l| (l.latitude, l.longitude));
         let places =
             crate::backends::places::nearby(&search.text_query, near, search.radius_accuracy)
@@ -1679,11 +1732,10 @@ impl AiBusService for AiBusMain {
             status: pb::NearbySearchResultStatus::Success as i32,
         };
         Ok(Response::new(pb::EncryptedNearbySearchResponse {
-            response: Some(self.seal_response(
-                &kid,
-                &reply,
-                "humane.aibus.NearbySearchResponse",
-            )?),
+            response: Some(
+                self.seal_response(&kid, &reply, "humane.aibus.NearbySearchResponse")
+                    .await?,
+            ),
         }))
     }
 
@@ -1696,12 +1748,15 @@ impl AiBusService for AiBusMain {
         request: Request<pb::EncryptedWeatherRequest>,
     ) -> Result<Response<pb::EncryptedWeatherResponse>, Status> {
         let (location, kid): (pb::Location, _) =
-            self.open_request(request.into_inner().location)?;
+            self.open_request(request.into_inner().location).await?;
         let weather = crate::backends::weather::current(location.latitude, location.longitude)
             .await
             .map_err(|e| Self::backend_status(e, "weather"))?;
         Ok(Response::new(pb::EncryptedWeatherResponse {
-            response: Some(self.seal_response(&kid, &weather, "humane.aibus.WeatherResponse")?),
+            response: Some(
+                self.seal_response(&kid, &weather, "humane.aibus.WeatherResponse")
+                    .await?,
+            ),
         }))
     }
 
@@ -1712,7 +1767,7 @@ impl AiBusService for AiBusMain {
         request: Request<pb::EncryptedGetFoodItemRequest>,
     ) -> Result<Response<pb::EncryptedGetFoodItemResponse>, Status> {
         let request = request.into_inner();
-        let (req, kid): (pb::GetFoodItemRequest, _) = self.open_request(request.request)?;
+        let (req, kid): (pb::GetFoodItemRequest, _) = self.open_request(request.request).await?;
         let text = req.text.trim().to_owned();
         if text.is_empty() {
             return Err(Status::invalid_argument("GetFoodItem requires text"));
@@ -1747,11 +1802,10 @@ impl AiBusService for AiBusMain {
             alternate_food_items: Vec::new(),
         };
         Ok(Response::new(pb::EncryptedGetFoodItemResponse {
-            response: Some(self.seal_response(
-                &kid,
-                &response,
-                "humane.aibus.GetFoodItemResponse",
-            )?),
+            response: Some(
+                self.seal_response(&kid, &response, "humane.aibus.GetFoodItemResponse")
+                    .await?,
+            ),
         }))
     }
 
@@ -1762,7 +1816,7 @@ impl AiBusService for AiBusMain {
         request: Request<pb::EncryptedSmartPlaylistRequest>,
     ) -> Result<Response<pb::EncryptedSmartPlaylistResponse>, Status> {
         let request = request.into_inner();
-        let (req, kid): (pb::SmartPlaylistRequest, _) = self.open_request(request.request)?;
+        let (req, kid): (pb::SmartPlaylistRequest, _) = self.open_request(request.request).await?;
 
         if req.topic.trim().is_empty() {
             return Err(Status::invalid_argument("playlist topic is empty"));
@@ -1781,11 +1835,10 @@ impl AiBusService for AiBusMain {
             album: String::new(),
         };
         let response = pb::EncryptedSmartPlaylistResponse {
-            response: Some(self.seal_response(
-                &kid,
-                &response,
-                "humane.aibus.SmartPlaylistResponse",
-            )?),
+            response: Some(
+                self.seal_response(&kid, &response, "humane.aibus.SmartPlaylistResponse")
+                    .await?,
+            ),
         };
         Ok(Response::new(response))
     }
@@ -1797,7 +1850,7 @@ impl AiBusService for AiBusMain {
         request: Request<pb::EncryptedTranslateRequest>,
     ) -> Result<Response<pb::EncryptedTranslateResponse>, Status> {
         let request = request.into_inner();
-        let (req, kid): (pb::TranslateRequest, _) = self.open_request(request.request)?;
+        let (req, kid): (pb::TranslateRequest, _) = self.open_request(request.request).await?;
         let from = Self::locale_to_bcp47(req.from.as_ref());
         let to = Self::locale_to_bcp47(req.to.as_ref());
         let include_audio = req.include_audio;
@@ -1814,11 +1867,10 @@ impl AiBusService for AiBusMain {
             response.audio = Vec::new();
         }
         let response = pb::EncryptedTranslateResponse {
-            response: Some(self.seal_response(
-                &kid,
-                &response,
-                "humane.aibus.TranslateResponse",
-            )?),
+            response: Some(
+                self.seal_response(&kid, &response, "humane.aibus.TranslateResponse")
+                    .await?,
+            ),
         };
         Ok(Response::new(response))
     }
@@ -1846,18 +1898,18 @@ impl AiBusService for AiBusMain {
                 };
                 let result = async {
                     let (request, kid): (pb::AiRequest, _) =
-                        service.open_request(encrypted.request)?;
+                        service.open_request(encrypted.request).await?;
                     let response = service.process_ai_request(request).await?;
                     Ok(pb::EncryptedAiResponse {
                         // AAD MUST be the exact FQ Java class name: the device runs
                         // `Class.forName(aad)` to pick the parser, so a lowercase "i"
                         // (AiResponse) throws ClassNotFoundException and the whole
                         // response is silently dropped. The real class is `AIResponse`.
-                        response: Some(service.seal_response(
-                            &kid,
-                            &response,
-                            "humane.aibus.AIResponse",
-                        )?),
+                        response: Some(
+                            service
+                                .seal_response(&kid, &response, "humane.aibus.AIResponse")
+                                .await?,
+                        ),
                     })
                 }
                 .await;
@@ -1886,6 +1938,133 @@ impl AiBusService for AiBusMain {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct TestKeyPath(std::path::PathBuf);
+
+    impl TestKeyPath {
+        fn new(tag: &str) -> Self {
+            let directory = std::env::temp_dir().join(format!(
+                "cosmos-aibus-{tag}-{}-{:?}",
+                std::process::id(),
+                std::thread::current().id()
+            ));
+            std::fs::create_dir_all(&directory).expect("create key scratch directory");
+            Self(directory.join("keymaterial.json"))
+        }
+    }
+
+    impl Drop for TestKeyPath {
+        fn drop(&mut self) {
+            if let Some(directory) = self.0.parent() {
+                let _ = std::fs::remove_dir_all(directory);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn encrypted_rpc_maps_unreadable_and_pending_key_state_before_envelope_errors() {
+        use crate::keymaterial::{KeyMaterial, PersistenceFault};
+        use prost::Message as _;
+
+        let corrupt = TestKeyPath::new("corrupt-key-state");
+        {
+            let material = KeyMaterial::at_path(corrupt.0.clone());
+            material
+                .insert("held".to_owned(), [1u8; cosmos_crypto::AES_KEY_LEN])
+                .expect("create protected snapshot");
+        }
+        // Truncating the existing file preserves the writer's exact 0600 mode,
+        // so this reaches schema refusal rather than only the mode guard.
+        std::fs::write(&corrupt.0, b"{ not json").expect("corrupt snapshot");
+        let service =
+            AiBusMain::with_key_material(Arc::new(KeyMaterial::at_path(corrupt.0.clone())));
+        let error = service
+            .open_request::<pb::CompletionRequest>(Some(
+                cosmos_protocol::common::encryption::EncryptedData {
+                    encryption_information: Some(
+                        cosmos_protocol::common::encryption::EncryptionInformation {
+                            kid: "held".to_owned(),
+                        },
+                    ),
+                    data: Vec::new(),
+                },
+            ))
+            .await
+            .expect_err("unreadable state must fail before envelope classification");
+        assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+
+        let pending = TestKeyPath::new("pending-key-state");
+        let kid = "pending";
+        let sealed = {
+            let material = KeyMaterial::at_path(pending.0.clone());
+            material
+                .insert(kid.to_owned(), [2u8; cosmos_crypto::AES_KEY_LEN])
+                .expect("seed key");
+            material
+                .seal(kid, &pb::CompletionRequest::default().encode_to_vec(), b"")
+                .expect("seal request")
+        };
+        let material = Arc::new(KeyMaterial::at_path_with_initial_fault(
+            pending.0.clone(),
+            PersistenceFault::DirectorySync,
+        ));
+        material.fail_next_persistence_at(PersistenceFault::DirectorySync);
+        let service = AiBusMain::with_key_material(material);
+        let request = || cosmos_protocol::common::encryption::EncryptedData {
+            encryption_information: Some(
+                cosmos_protocol::common::encryption::EncryptionInformation {
+                    kid: kid.to_owned(),
+                },
+            ),
+            data: sealed.data.clone(),
+        };
+        let error = service
+            .open_request::<pb::CompletionRequest>(Some(request()))
+            .await
+            .expect_err("pending parent sync must be unavailable");
+        assert_eq!(error.code(), tonic::Code::Unavailable);
+        service
+            .open_request::<pb::CompletionRequest>(Some(request()))
+            .await
+            .expect("retry confirms durability before opening");
+    }
+
+    #[tokio::test]
+    async fn encrypted_rpc_maps_pending_seal_durability_to_unavailable() {
+        use crate::keymaterial::{KeyMaterial, PersistenceFault};
+
+        let pending = TestKeyPath::new("pending-seal-state");
+        let kid = "pending-seal";
+        {
+            let material = KeyMaterial::at_path(pending.0.clone());
+            material
+                .insert(kid.to_owned(), [3u8; cosmos_crypto::AES_KEY_LEN])
+                .expect("seed key");
+        }
+        let material = Arc::new(KeyMaterial::at_path_with_initial_fault(
+            pending.0.clone(),
+            PersistenceFault::DirectorySync,
+        ));
+        material.fail_next_persistence_at(PersistenceFault::DirectorySync);
+        let service = AiBusMain::with_key_material(material);
+        let error = service
+            .seal_response(
+                kid,
+                &pb::CompletionResponse::default(),
+                "humane.aibus.CompletionResponse",
+            )
+            .await
+            .expect_err("pending seal must not be called envelope corruption");
+        assert_eq!(error.code(), tonic::Code::Unavailable);
+        service
+            .seal_response(
+                kid,
+                &pb::CompletionResponse::default(),
+                "humane.aibus.CompletionResponse",
+            )
+            .await
+            .expect("retry confirms durability before sealing");
+    }
 
     #[test]
     fn wearer_facing_fallbacks_have_no_model_or_assistant_persona() {
@@ -1959,6 +2138,7 @@ mod tests {
                 crate::assistant::llm::DemoChatModel,
             ))),
             keys: Default::default(),
+            directory: None,
             store: store.clone(),
             entitlements: Default::default(),
         };
@@ -2016,13 +2196,15 @@ mod tests {
         use prost::Message as _;
 
         let keys: crate::keymaterial::SharedKeyMaterial = Default::default();
-        keys.insert("kid-test".to_owned(), [7u8; cosmos_crypto::AES_KEY_LEN]);
+        keys.insert("kid-test".to_owned(), [7u8; cosmos_crypto::AES_KEY_LEN])
+            .expect("insert test channel key");
         let model = Arc::new(CapturingModel {
             seen: std::sync::Mutex::new(None),
         });
         let svc = AiBusMain {
             engine: Arc::new(crate::assistant::engine::Engine::new(model.clone())),
             keys: keys.clone(),
+            directory: None,
             store: crate::store::MemoryStore::shared(),
             entitlements: Default::default(),
         };
@@ -2143,6 +2325,7 @@ mod tests {
         let svc = AiBusMain {
             engine: Arc::new(Engine::new(model)),
             keys: Default::default(),
+            directory: None,
             store: crate::store::MemoryStore::shared(),
             entitlements: Default::default(),
         };
@@ -2178,7 +2361,8 @@ mod tests {
         use tokio_stream::StreamExt;
 
         let keys: crate::keymaterial::SharedKeyMaterial = Default::default();
-        keys.insert("kid-test".to_owned(), [3u8; cosmos_crypto::AES_KEY_LEN]);
+        keys.insert("kid-test".to_owned(), [3u8; cosmos_crypto::AES_KEY_LEN])
+            .expect("insert test channel key");
         let svc = AiBusMain::with_key_material(keys.clone());
 
         // Device side: seal a real request under the channel key.
@@ -2236,6 +2420,91 @@ mod tests {
         assert!(saw_respond, "encrypted turn ends in a terminal Respond");
     }
 
+    #[tokio::test]
+    async fn encrypted_understand_uses_the_authoritative_directory_with_no_local_key() {
+        use prost::Message as _;
+        use tokio_stream::StreamExt as _;
+
+        let kid = "directory-only-understand";
+        let key = [0x36; cosmos_crypto::AES_KEY_LEN];
+        let directory = Arc::new(crate::keydirectory::KeyDirectory::in_memory());
+        directory.put(kid, key).await.expect("seed authority");
+        let local: crate::keymaterial::SharedKeyMaterial = Default::default();
+        let svc = AiBusMain::with_key_material(local.clone()).with_key_directory(directory);
+        let inner = pb::SynapseUnderstandingRequest {
+            utterance: "hello".to_owned(),
+            ..Default::default()
+        };
+        let sealed = cosmos_crypto::seal(kid, &key, &inner.encode_to_vec(), b"")
+            .expect("seal directory-only request");
+
+        let messages = svc
+            .encrypted_understand(Request::new(pb::EncryptedSynapseUnderstandingRequest {
+                request: Some(cosmos_protocol::common::encryption::EncryptedData {
+                    encryption_information: Some(
+                        cosmos_protocol::common::encryption::EncryptionInformation {
+                            kid: kid.to_owned(),
+                        },
+                    ),
+                    data: sealed.data,
+                }),
+                location: None,
+            }))
+            .await
+            .expect("directory row opens request")
+            .into_inner()
+            .collect::<Vec<_>>()
+            .await;
+        assert!(!messages.is_empty());
+        for message in messages {
+            let envelope = message
+                .expect("stream item")
+                .response
+                .expect("sealed response");
+            let opened = cosmos_crypto::open(
+                &key,
+                &cosmos_crypto::EncryptedData {
+                    data: envelope.data,
+                    kid: envelope
+                        .encryption_information
+                        .map(|information| information.kid)
+                        .unwrap_or_default(),
+                },
+            )
+            .expect("directory key seals every response");
+            pb::SynapseUnderstandingResponse::decode(opened.as_slice())
+                .expect("well-formed response");
+        }
+        assert!(local.is_empty().expect("inspect local state"));
+    }
+
+    #[tokio::test]
+    async fn encrypted_understand_maps_authority_lookup_failure_to_unavailable() {
+        use crate::keydirectory::DirectoryFault;
+
+        let directory = Arc::new(crate::keydirectory::KeyDirectory::in_memory());
+        directory.fail_next(DirectoryFault::Get);
+        let svc = AiBusMain::default().with_key_directory(directory);
+        let result = svc
+            .encrypted_understand(Request::new(pb::EncryptedSynapseUnderstandingRequest {
+                request: Some(cosmos_protocol::common::encryption::EncryptedData {
+                    encryption_information: Some(
+                        cosmos_protocol::common::encryption::EncryptionInformation {
+                            kid: "unavailable-directory".to_owned(),
+                        },
+                    ),
+                    data: Vec::new(),
+                }),
+                location: None,
+            }))
+            .await;
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => panic!("an unavailable authority must not start a response stream"),
+        };
+        assert_eq!(error.code(), tonic::Code::Unavailable);
+    }
+
     /// A real Pin's `decryptProto` resolves the payload class from the envelope's
     /// AAD, so an empty AAD cannot be opened at all — and because AAD is
     /// authenticated, binding it to the response type also stops an envelope from
@@ -2246,7 +2515,8 @@ mod tests {
         use tokio_stream::StreamExt;
 
         let keys: crate::keymaterial::SharedKeyMaterial = Default::default();
-        keys.insert("kid-test".to_owned(), [5u8; cosmos_crypto::AES_KEY_LEN]);
+        keys.insert("kid-test".to_owned(), [5u8; cosmos_crypto::AES_KEY_LEN])
+            .expect("insert test channel key");
         let svc = AiBusMain::with_key_material(keys.clone());
 
         let inner = pb::SynapseUnderstandingRequest {
@@ -2338,7 +2608,8 @@ mod tests {
         use prost::Message as _;
 
         let keys: crate::keymaterial::SharedKeyMaterial = Default::default();
-        keys.insert("kid-test".to_owned(), [7u8; cosmos_crypto::AES_KEY_LEN]);
+        keys.insert("kid-test".to_owned(), [7u8; cosmos_crypto::AES_KEY_LEN])
+            .expect("insert test channel key");
         let svc = AiBusMain::with_key_material(keys.clone());
 
         // Every envelope/channel fault on this service, plus its no-key case.
@@ -2376,7 +2647,9 @@ mod tests {
 
         // An envelope sealed under a key this deployment does not hold.
         let stranger: crate::keymaterial::SharedKeyMaterial = Default::default();
-        stranger.insert("kid-test".to_owned(), [9u8; cosmos_crypto::AES_KEY_LEN]);
+        stranger
+            .insert("kid-test".to_owned(), [9u8; cosmos_crypto::AES_KEY_LEN])
+            .expect("insert stranger test channel key");
         let foreign = stranger
             .seal(
                 "kid-test",
@@ -2623,6 +2896,7 @@ mod tests {
             catalog::ToolContext {
                 principal: Some("device-test-pin-01".to_owned()),
                 store: Some(store),
+                key_directory: None,
                 keys: Some(Default::default()),
                 location: None,
             },
@@ -2745,7 +3019,8 @@ mod tests {
     async fn completion_like_rpcs_return_model_backed_results_without_external_setup() {
         use prost::Message as _;
         let keys: crate::keymaterial::SharedKeyMaterial = Default::default();
-        keys.insert("kid-test".to_owned(), [3u8; cosmos_crypto::AES_KEY_LEN]);
+        keys.insert("kid-test".to_owned(), [3u8; cosmos_crypto::AES_KEY_LEN])
+            .expect("insert test channel key");
         let svc = AiBusMain::with_key_material(keys.clone());
 
         let completion = pb::CompletionRequest {
@@ -2886,7 +3161,8 @@ mod tests {
         use prost::Message as _;
 
         let keys: crate::keymaterial::SharedKeyMaterial = Default::default();
-        keys.insert("kid-test".to_owned(), [3u8; cosmos_crypto::AES_KEY_LEN]);
+        keys.insert("kid-test".to_owned(), [3u8; cosmos_crypto::AES_KEY_LEN])
+            .expect("insert test channel key");
         let svc = AiBusMain::with_key_material(keys.clone());
 
         let call = pb::FunctionCall {

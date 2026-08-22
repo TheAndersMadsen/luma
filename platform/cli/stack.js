@@ -4,14 +4,14 @@
 // codes are unchanged.
 
 const {
-  PROJECT, COMPOSE_BASE, COMPOSE_DEVELOPMENT, MINIMUM_COMPOSE_VERSION, CONFIG_DIR, SECRETS_DIR, DATA_DIR, BACKUP_DIR, ENV_FILE, isInsideSource, fail, info, exists, run, valueOf, validateRuntime, operatorEnvironment,
+  PROJECT, COMPOSE_BASE, COMPOSE_DEVELOPMENT, MINIMUM_COMPOSE_VERSION, CONFIG_DIR, SECRETS_DIR, DATA_DIR, BACKUP_DIR, ENV_FILE, authoritativeCompletion, isInsideSource, fail, info, exists, run, valueOf, validateRuntime, operatorEnvironment,
 } = require('./context');
 const { parseVersion, validateHostToolchains, versionAtLeast } = require('./toolchain');
 
-function composeArgs(values, args) {
+function composeArgs(values, args, { project = PROJECT } = {}) {
   const result = [
     'compose',
-    '--project-name', PROJECT,
+    '--project-name', project,
     '--env-file', ENV_FILE,
     '--file', COMPOSE_BASE,
     '--file', COMPOSE_DEVELOPMENT
@@ -28,8 +28,9 @@ function compose(args, options = {}) {
   } catch (error) {
     fail(error.message);
   }
-  return run('docker', composeArgs(values, args), {
-    ...options,
+  const { project = PROJECT, ...runOptions } = options;
+  return run('docker', composeArgs(values, args, { project }), {
+    ...runOptions,
     env: operatorEnvironment(values)
   });
 }
@@ -174,7 +175,9 @@ function localDoctor(args = []) {
     info(`NEXT ${report.next}`);
   }
   if (!report.ok) process.exitCode = 1;
-  return report;
+  return report.ok
+    ? authoritativeCompletion('doctor.local', 'local-prerequisites-verified')
+    : null;
 }
 
 function stack(subcommand, args) {
@@ -191,8 +194,11 @@ function stack(subcommand, args) {
       } catch (error) {
         fail(error.message);
       }
-      compose(['up', '--detach', '--remove-orphans', ...args]);
-      break;
+      return authoritativeCompletion(
+        'stack.up',
+        'local-stack-started',
+        compose(['up', '--detach', '--remove-orphans', ...args]),
+      );
     case 'down':
       if (args.some((argument) =>
         argument === '-v' || argument.startsWith('-v=') ||
@@ -202,8 +208,10 @@ function stack(subcommand, args) {
       compose(['down', ...args]);
       break;
     case 'status':
+      // `docker compose ps` exits zero for an empty project, so it cannot by
+      // itself prove the setup outcome `local-stack-running`.
       compose(['ps', ...args]);
-      break;
+      return null;
     case 'logs':
       compose(['logs', '--tail', '200', ...args]);
       break;
@@ -213,6 +221,31 @@ function stack(subcommand, args) {
     default:
       fail('usage: ./revival stack build|up|down|status|logs|config');
   }
+  return null;
 }
 
-module.exports = { composeArgs, compose, probeRunningLocalIdentity, localDoctorReport, localDoctor, stack };
+function developmentCommand(args) {
+  const [component, ...rest] = args;
+  if (component === 'down' && rest.length === 0) {
+    info(`[implemented] stopping the isolated ${PROJECT}-dev Compose project without deleting volumes.`);
+    compose(['down'], { project: `${PROJECT}-dev` });
+    return;
+  }
+  if (component !== 'center' || rest.length !== 0) {
+    fail('usage: ./revival dev center | down', 64);
+  }
+  info('[implemented] starting Center with Next.js Turbopack and Compose source watch.');
+  info('[implemented] dependencies and .next output remain in the development image/volume, outside the source checkout.');
+  info(`[implemented] isolated Compose project: ${PROJECT}-dev.`);
+  compose(['watch', 'center'], { project: `${PROJECT}-dev` });
+}
+
+module.exports = {
+  composeArgs,
+  compose,
+  developmentCommand,
+  probeRunningLocalIdentity,
+  localDoctorReport,
+  localDoctor,
+  stack,
+};

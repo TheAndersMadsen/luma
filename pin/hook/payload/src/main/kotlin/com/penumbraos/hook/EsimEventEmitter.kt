@@ -10,7 +10,9 @@ import org.json.JSONObject
 import java.io.OutputStreamWriter
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.util.concurrent.FutureTask
 import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
 object EsimEventEmitter {
@@ -21,6 +23,9 @@ object EsimEventEmitter {
     private const val SOURCE_PROCESS = StockSymbols.EsimLpa.PACKAGE
     private const val CONNECT_TIMEOUT_MS = 3_000
     private const val AUTH_TIMEOUT_MS = 5_000
+    private const val OPERATION_AUTH_CONNECT_TIMEOUT_MS = 1_000
+    private const val OPERATION_AUTH_TIMEOUT_MS = 1_500
+    private const val OPERATION_AUTH_CALL_TIMEOUT_MS = 3_000L
     private const val MAX_PENDING_EVENTS = 256
     private const val DROP_WARNING_INTERVAL_NANOS = 5_000_000_000L
 
@@ -51,6 +56,72 @@ object EsimEventEmitter {
 
     fun setContext(context: Context) {
         appContext = context.applicationContext
+    }
+
+    /**
+     * Prove that a delivered request token belongs to the live local Penumbra
+     * bridge before a trust-sensitive LPA compatibility window is opened.
+     * This sends no event or profile data and fails closed on any error.
+     *
+     * Stock calls the hooked download method on its main thread. Android
+     * rejects socket I/O there with NetworkOnMainThreadException, so keep the
+     * decision synchronous while doing the bounded handshake on a worker.
+     */
+    fun authenticateOperationBridge(token: String): Boolean =
+        runBoundedOperationAuthentication {
+            authenticateOperationBridgeOnWorker(token)
+        }
+
+    internal fun runBoundedOperationAuthentication(authenticate: () -> Boolean): Boolean {
+        val result = FutureTask(authenticate)
+        Thread(result, "penumbra-esim-operation-auth").apply {
+            isDaemon = true
+            start()
+        }
+        return try {
+            result.get(OPERATION_AUTH_CALL_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        } catch (_: InterruptedException) {
+            result.cancel(true)
+            Thread.currentThread().interrupt()
+            false
+        } catch (_: Throwable) {
+            result.cancel(true)
+            false
+        }
+    }
+
+    private fun authenticateOperationBridgeOnWorker(token: String): Boolean {
+        var socket: Socket? = null
+        var reader: BufferedReader? = null
+        var writer: OutputStreamWriter? = null
+        return try {
+            socket = Socket().apply {
+                connect(
+                    InetSocketAddress(TCP_HOST, TCP_PORT),
+                    OPERATION_AUTH_CONNECT_TIMEOUT_MS,
+                )
+                soTimeout = OPERATION_AUTH_TIMEOUT_MS
+            }
+            reader = BufferedReader(InputStreamReader(socket.getInputStream(), Charsets.UTF_8))
+            writer = OutputStreamWriter(socket.getOutputStream(), Charsets.UTF_8)
+            EsimBridgeAuthentication.authenticateServer(reader, writer, token)
+        } catch (t: Throwable) {
+            Log.w(TAG, "eSIM operation bridge authentication failed (${t.javaClass.simpleName})")
+            false
+        } finally {
+            try {
+                reader?.close()
+            } catch (_: Throwable) {
+            }
+            try {
+                writer?.close()
+            } catch (_: Throwable) {
+            }
+            try {
+                socket?.close()
+            } catch (_: Throwable) {
+            }
+        }
     }
 
     fun emitActionStarted(operation: EsimOperationSnapshot) {

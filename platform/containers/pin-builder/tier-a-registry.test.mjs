@@ -79,6 +79,13 @@ test("registry resolves every canonical input and generated bindings are current
   const first = generateTierAOutputs(resolved);
   const second = generateTierAOutputs(loadAndResolveTierARegistry());
   assert.deepEqual(second, first, "generation must be byte-for-byte deterministic");
+  for (const [relativePath, contents] of Object.entries(first)) {
+    assert.ok(contents.endsWith("\n"), `${relativePath} must end with a newline`);
+    assert.ok(
+      !contents.endsWith("\n\n"),
+      `${relativePath} must not end with a redundant blank line`,
+    );
+  }
   assert.equal(checkTierAOutputs(first), true);
 });
 

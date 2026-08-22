@@ -62,6 +62,9 @@ val configuredVersionCode = providers.gradleProperty("versionCode").orNull
 val configuredVersionName = providers.gradleProperty("versionName").orNull
     ?.trim()
     ?.takeIf(String::isNotEmpty)
+val revivalCompileOnlyDebug = providers.gradleProperty("revivalCompileOnlyDebug")
+    .map { it == "true" }
+    .getOrElse(false)
 val generatedBootstrapAssets = layout.buildDirectory.dir("generated/bootstrapAssets")
 val stageBootstrapAsset by tasks.registering {
     // The installer uses this identity for every APK it patches after the
@@ -161,7 +164,9 @@ android {
 }
 
 tasks.named("preBuild") {
-    dependsOn(stageBootstrapAsset)
+    if (!revivalCompileOnlyDebug) {
+        dependsOn(stageBootstrapAsset)
+    }
 }
 
 val pinReleasePackagingTasks = setOf(
@@ -176,6 +181,9 @@ gradle.taskGraph.whenReady {
         task.project == project && task.name in pinReleasePackagingTasks
     }
     if (packagesPinRelease) {
+        check(!revivalCompileOnlyDebug) {
+            "Compile-only debug mode can never enter Pin release packaging."
+        }
         check(hasCompletePinSigning) {
             "Refusing to package a Pin release without all four external PIN_SIGNING_* values."
         }

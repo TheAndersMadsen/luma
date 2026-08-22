@@ -8,6 +8,7 @@ import test from "node:test";
 
 const root = path.resolve(import.meta.dirname, "../../..");
 const helper = path.join(root, "platform/deploy/vps/remote/domain.py");
+const commonLibrary = path.join(root, "platform/deploy/vps/remote/common.sh");
 const domainLibrary = path.join(root, "platform/deploy/vps/remote/domain.sh");
 const template = path.join(
   root,
@@ -65,7 +66,7 @@ function runHelper(arguments_, { fails = false } = {}) {
 }
 
 function runDomainShell(source, environment = {}) {
-  const result = spawnSync("bash", ["-c", source, "domain-fixture", domainLibrary], {
+  const result = spawnSync("bash", ["-c", source, "domain-fixture", domainLibrary, commonLibrary], {
     cwd: root,
     encoding: "utf8",
     env: { ...process.env, ...environment },
@@ -305,6 +306,24 @@ test("[implemented] discovery rejects ambiguous legacy Cosmos TLS ownership", (c
   );
   assert.match(result.stderr, /expected one enabled Cosmos TLS vhost, found 2/);
   assert.equal(fs.existsSync(output), false);
+});
+
+test("[implemented] later deployments reuse the authoritative edge discovery", (context) => {
+  const work = temporaryDirectory(context, "center-domain-reuse");
+  const previous = path.join(work, "previous.json");
+  const output = path.join(work, "selected.json");
+  discoveryFixture(previous, canonicalEnabled);
+
+  const result = runDomainShell(String.raw`
+set -euo pipefail
+source "$2"
+source "$1"
+domain_select_public_edge "$OUTPUT" "$PREVIOUS"
+`, { PREVIOUS: previous, OUTPUT: output });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(readJson(output), readJson(previous));
+  assert.equal(fs.statSync(output).mode & 0o777, 0o600);
 });
 
 test("[implemented] strict render and Nginx file transaction resume and restore exactly", (context) => {
@@ -1173,10 +1192,22 @@ test("[implemented] deployment entrypoints bind the Center domain transaction", 
     ]),
   );
   for (const [name, source] of Object.entries(scripts)) {
-    assertSource(source, /\/domain\.sh"/, `${name} must load the domain transaction`);
+    const commonLoad = /^source "\$\{REVIVAL_HELD_COMMON:-.*\/common\.sh\}"$/m;
+    const domainLoad = /^source "\$\{REVIVAL_HELD_DOMAIN:-.*\/domain\.sh\}"$/m;
+    assertSource(source, commonLoad, `${name} must load held common helpers`);
+    assertSource(source, domainLoad, `${name} must load the held domain transaction`);
+    assert.ok(
+      source.search(commonLoad) < source.search(domainLoad),
+      `${name} must load common.sh before domain.sh`,
+    );
+    assert.equal(
+      [...source.matchAll(/^\s*source .*$/gm)].length,
+      2,
+      `${name} must not add a direct or unheld common/domain fallback`,
+    );
   }
 
-  assertSource(scripts.preflight, /domain_discover_public_edge\b/, "preflight must discover the live edge");
+  assertSource(scripts.preflight, /domain_select_public_edge\b/, "preflight must select the live or recorded edge");
   assertSource(scripts.preflight, /domain_assert_public_tls\b/, "preflight must validate public TLS");
   assertSource(
     scripts.preflight,
@@ -1185,7 +1216,7 @@ test("[implemented] deployment entrypoints bind the Center domain transaction", 
   );
 
   for (const call of [
-    "domain_discover_public_edge",
+    "domain_select_public_edge",
     "domain_assert_public_tls",
     "domain_nginx_install",
     "domain_nginx_verify_desired",

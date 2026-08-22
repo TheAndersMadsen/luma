@@ -1,7 +1,8 @@
 # A distribution is the complete immutable product payload, not a compiled
 # standalone executable. Manual runs build and verify it by default. Publishing
 # is an additional opt-in that is accepted only when this workflow is dispatched
-# from the matching, existing version tag.
+# from the matching, existing version tag. Release builds deliberately do not
+# consume mutable CI dependency or build caches.
 name: distribution release
 
 on:
@@ -24,15 +25,19 @@ permissions:
 jobs:
   build:
     name: build and verify full payload
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 22.14.0
+          package-manager-cache: false
       - name: Validate distribution contract
         run: |
           sh platform/deploy/acceptance/layout.sh
+          node --test platform/deploy/acceptance/ci-policy.test.mjs
           node --test platform/deploy/acceptance/distribution.test.mjs
       - name: Validate opt-in publication coordinates
         if: ${{ inputs.publish_release == true }}
@@ -63,7 +68,7 @@ jobs:
           cd "$RUNNER_TEMP/ai-pin-revival-distribution"
           sha256sum --check SHA256SUMS
       - name: Upload build-only artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: ai-pin-revival-${{ inputs.version }}
           path: ${{ runner.temp }}/ai-pin-revival-distribution/
@@ -77,15 +82,18 @@ jobs:
       ${{ inputs.publish_release == true &&
           github.ref_type == 'tag' &&
           github.ref_name == format('v{0}', inputs.version) }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 22.14.0
-      - uses: actions/download-artifact@v4
+          package-manager-cache: false
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
         with:
           name: ai-pin-revival-${{ inputs.version }}
           path: ${{ runner.temp }}/ai-pin-revival-distribution

@@ -3,6 +3,7 @@ import type {
   SpotifySearchTrack,
   SpotifyStatusResponse,
   SpotifyStatusState,
+  MusicProvider,
 } from "../types";
 
 export const DEFAULT_SPOTIFY_DEVICE_NAME = "Ai Pin";
@@ -13,6 +14,12 @@ const SPOTIFY_STATUS_STATES: readonly SpotifyStatusState[] = [
   "pairing",
   "ready",
   "error",
+];
+const MUSIC_PROVIDERS: readonly MusicProvider[] = [
+  "spotify",
+  "youtube_music",
+  "apple_music",
+  "tidal",
 ];
 
 export class InvalidSpotifyResponseError extends Error {
@@ -98,8 +105,13 @@ export function normalizeSpotifyStatusResponse(
   const username = optionalString(root, "username")?.trim();
   const lastError = optionalString(root, "last_error")?.trim();
   const pairingExpiresAt = optionalTimestamp(root, "pairing_expires_at");
+  const providerValue = optionalString(root, "active_provider") ?? "spotify";
+  if (!MUSIC_PROVIDERS.includes(providerValue as MusicProvider)) {
+    throw new InvalidSpotifyResponseError("active_provider", "a supported music provider");
+  }
 
   return {
+    active_provider: providerValue as MusicProvider,
     enabled,
     experimental_acknowledged:
       optionalBoolean(root, "experimental_acknowledged") ?? false,

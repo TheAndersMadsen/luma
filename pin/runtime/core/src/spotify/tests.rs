@@ -45,6 +45,13 @@ fn pin_speaker_profile_levels_and_limits_playback() {
 }
 
 #[test]
+fn music_gateway_requests_disable_intermediary_compression() {
+    const SOURCE: &str = include_str!("mod.rs");
+    assert!(SOURCE.contains("reqwest::header::ACCEPT_ENCODING"));
+    assert!(SOURCE.contains("MUSIC_GATEWAY_ACCEPT_ENCODING"));
+}
+
+#[test]
 fn artist_top_tracks_backoff_window_is_time_bounded() {
     let now = Instant::now();
     assert!(!artist_top_tracks_backoff_is_active(None, now));

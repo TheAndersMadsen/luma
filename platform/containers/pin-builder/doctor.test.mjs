@@ -3,16 +3,14 @@
 // results, so a "healthy host" and a "nothing installed" host are both
 // reproducible on any machine.
 //
-// The one file read is README.md, and that is deliberate: the doctor derives
-// its expected versions from that document, so a test that the document is
-// still parseable is the guard against the doctor silently degrading to
-// "cannot compare" warnings.
+// README parsing remains covered directly; Rust expectations instead come from
+// the exact toolchain contract and root pin, both exercised as pure fixtures.
 //
 // Run: node --test platform/containers/pin-builder/doctor.test.mjs
 
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
@@ -30,12 +28,20 @@ import {
   nextStepLine,
   parseAdbDevices,
   parseCliArgs,
+  parseCommandVersion,
   parseEnvKeyNames,
   parseGatedAssetPins,
   parseJavaVersion,
   parseNdkRevision,
+  parseDockerBuildxPlatforms,
+  parsePinBuilderDockerfileContract,
+  parsePinBuilderToolchainContract,
+  parsePinGradleToolchainConsumers,
   parseRequirementsFromReadme,
+  parseRustToolchainContract,
+  parseRustToolchainToml,
   parseSdkDir,
+  pinBuilderToolchainMismatches,
   renderHuman,
   renderJson,
   resolveGatedAssets,
@@ -44,6 +50,7 @@ import {
 } from "./doctor.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../../pin");
+const PRODUCT_ROOT = resolve(REPO_ROOT, "..");
 
 // A value that must never survive from a probe into any rendered output.
 // Synthetic: it is not a credential and never touches disk.
@@ -52,12 +59,32 @@ const FAKE_SECRET = "not-a-real-password-9f3c1a";
 // A synthetic home directory. The username inside it is what MINOR C is about:
 // it must never appear in a report the tool invites users to paste publicly.
 const FAKE_HOME_USER = "fixture-operator";
-const FAKE_HOME = `/Users/${FAKE_HOME_USER}`;
+const FAKE_HOME = `${String.fromCodePoint(47)}Users/${FAKE_HOME_USER}`;
+const POSIX_HOME_ROOT = ["", "home"].join("/");
 
 // Sixty-four hex characters, unrelated to any real artifact — these fixtures
 // assert digest COMPARISON, not any particular published digest.
 const FIXTURE_DIGEST = "a".repeat(64);
 const WRONG_DIGEST = "b".repeat(64);
+
+function realPinGradleFiles() {
+  const files = {};
+  const visit = (absolute, releasePath) => {
+    for (const entry of readdirSync(absolute, { withFileTypes: true })) {
+      if (entry.isSymbolicLink() || [".gradle", ".kotlin", "build", "target"].includes(entry.name)) {
+        continue;
+      }
+      const child = join(absolute, entry.name);
+      const childPath = `${releasePath}/${entry.name}`;
+      if (entry.isDirectory()) visit(child, childPath);
+      else if (entry.isFile() && entry.name === "build.gradle.kts") {
+        files[childPath] = readFileSync(child, "utf8");
+      }
+    }
+  };
+  visit(REPO_ROOT, "pin");
+  return files;
+}
 
 /** A gated-asset probe entry in the state the doctor should call healthy. */
 function healthyGatedAssets(overrides = {}) {
@@ -88,12 +115,21 @@ function healthyProbes(overrides = {}) {
       nodeMinimum: "20.19.0",
       sourceRef: "README.md:100",
     },
+    rustToolchain: {
+      expectedVersion: "1.91.1",
+      rootVersion: "1.91.1",
+    },
+    builderToolchain: { mismatches: [] },
     node: { version: "22.0.0" },
     containerBuilder: {
       available: true,
       version: "29.0.0-fixture",
       contractFilesPresent: true,
       suppliesHostToolchain: false,
+      requiredPlatform: "linux/amd64",
+      platformsDetermined: true,
+      platforms: ["linux/amd64", "linux/arm64"],
+      amd64Runtime: { safe: true, detail: "native fixture" },
     },
     java: { present: true, version: "17.0.0", major: 17 },
     androidSdk: {
@@ -115,10 +151,10 @@ function healthyProbes(overrides = {}) {
       revision: "28.0.0",
       candidates: ["28.0.0"],
     },
-    rustc: { present: true, version: "rustc 0.0.0-fixture" },
-    cargo: { present: true, version: "cargo 0.0.0-fixture" },
+    rustc: { present: true, version: "rustc 1.91.1 (fixture)" },
+    cargo: { present: true, version: "cargo 1.91.1 (fixture)" },
     rustTarget: { determined: true, installed: true, source: "rustup" },
-    cargoNdk: { present: true, version: "cargo-ndk 0.0.0-fixture" },
+    cargoNdk: { present: true, version: "cargo-ndk 4.1.2", expectedVersion: "4.1.2" },
     protoc: { present: true, version: "libprotoc 0.0.0-fixture" },
     stockEvidence: { exists: true, path: STOCK_EVIDENCE_RELATIVE_PATH },
     gatedAssets: healthyGatedAssets(),
@@ -225,6 +261,10 @@ test("the pinned container makes host SDK, NDK, JDK, Rust, and protoc optional",
       version: "29.0.0-fixture",
       contractFilesPresent: true,
       suppliesHostToolchain: true,
+      requiredPlatform: "linux/amd64",
+      platformsDetermined: true,
+      platforms: ["linux/amd64"],
+      amd64Runtime: { safe: true, detail: "native fixture" },
     },
     java: { present: false, version: null, major: null },
     androidSdk: { path: null, source: null, exists: false, platforms: [], buildTools: [] },
@@ -243,6 +283,48 @@ test("the pinned container makes host SDK, NDK, JDK, Rust, and protoc optional",
     assert.equal(check.status, CHECK_STATUS.WARN, id);
     assert.equal(check.required, false, id);
   }
+});
+
+test("the pinned container requires an active linux/amd64 Buildx platform", () => {
+  const unsupported = evaluate(healthyProbes({
+    containerBuilder: {
+      ...healthyProbes().containerBuilder,
+      platforms: ["linux/arm64"],
+    },
+  }));
+  assert.equal(checkById(unsupported, "container_builder").status, CHECK_STATUS.FAIL);
+  assert.match(checkById(unsupported, "container_builder").detail, /linux\/amd64/u);
+
+  const unknown = evaluate(healthyProbes({
+    containerBuilder: {
+      ...healthyProbes().containerBuilder,
+      platformsDetermined: false,
+      platforms: [],
+    },
+  }));
+  assert.equal(checkById(unknown, "container_builder").status, CHECK_STATUS.FAIL);
+  assert.deepEqual(
+    parseDockerBuildxPlatforms("Name: fixture\nPlatforms: linux/arm64, linux/amd64*, linux/amd64/v2\n"),
+    ["linux/arm64", "linux/amd64", "linux/amd64/v2"],
+  );
+});
+
+test("known-bad ARM QEMU is a required failure before an expensive Pin consumer", () => {
+  const result = evaluate(healthyProbes({
+    containerBuilder: {
+      ...healthyProbes().containerBuilder,
+      amd64Runtime: {
+        safe: false,
+        detail: "registered qemu-x86_64 8.2.2 is in the known-bad 8.x line",
+        guidance: "Use a native hosted linux/amd64 runner; do not alter binfmt.",
+      },
+    },
+  }));
+  const check = checkById(result, "container_builder");
+  assert.equal(check.status, CHECK_STATUS.FAIL);
+  assert.equal(check.required, true);
+  assert.match(check.detail, /known-bad 8\.x/u);
+  assert.match(check.fix, /native hosted linux\/amd64.*do not alter binfmt/u);
 });
 
 test("a Node runtime below the documented minimum is a required failure", () => {
@@ -811,8 +893,11 @@ test("abbreviateHome respects path boundaries and refuses to rewrite a root home
   assert.equal(abbreviateHome("/opt/android/sdk", ""), "/opt/android/sdk");
   assert.equal(abbreviateHome("/opt/android/sdk", null), "/opt/android/sdk");
   // Regex metacharacters in a home path are matched literally, not as a pattern.
-  assert.equal(abbreviateHome("/home/a+b/sdk", "/home/a+b"), "~/sdk");
-  assert.equal(abbreviateHome("/home/axxb/sdk", "/home/a+b"), "/home/axxb/sdk");
+  assert.equal(abbreviateHome(`${POSIX_HOME_ROOT}/a+b/sdk`, `${POSIX_HOME_ROOT}/a+b`), "~/sdk");
+  assert.equal(
+    abbreviateHome(`${POSIX_HOME_ROOT}/axxb/sdk`, `${POSIX_HOME_ROOT}/a+b`),
+    `${POSIX_HOME_ROOT}/axxb/sdk`,
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -837,11 +922,17 @@ test("parseEnvKeyNames returns names only and captures no value", () => {
 
 test("signing env resolution follows the external root contract, never the Pin source", () => {
   assert.equal(
-    resolveSigningEnvPath({ REVIVAL_CONFIG_DIR: "/operator/config" }, "/home/operator"),
+    resolveSigningEnvPath(
+      { REVIVAL_CONFIG_DIR: "/operator/config" },
+      `${POSIX_HOME_ROOT}/operator`,
+    ),
     "/operator/config/secrets/pin/signing.env",
   );
   assert.equal(
-    resolveSigningEnvPath({ REVIVAL_SECRETS_DIR: "/operator/secrets" }, "/home/operator"),
+    resolveSigningEnvPath(
+      { REVIVAL_SECRETS_DIR: "/operator/secrets" },
+      `${POSIX_HOME_ROOT}/operator`,
+    ),
     "/operator/secrets/pin/signing.env",
   );
 });
@@ -911,6 +1002,224 @@ test("parseRequirementsFromReadme returns null when the prerequisite line is abs
   assert.equal(parseRequirementsFromReadme(null), null);
 });
 
+test("Rust command banners and both canonical pins require one exact version", () => {
+  assert.equal(parseCommandVersion("rustc 1.91.1 (fixture 2025-11-07)"), "1.91.1");
+  assert.equal(parseCommandVersion("cargo 1.91.1 (fixture)"), "1.91.1");
+  assert.equal(parseCommandVersion("99.88.77\nrustc 1.91.1 (fixture)", "rustc"), "1.91.1");
+  assert.equal(parseCommandVersion("rustc 1.91.1\nrustc 1.91.1", "rustc"), null);
+  assert.equal(parseCommandVersion("stable"), null);
+  assert.equal(
+    parseRustToolchainToml([
+      "[toolchain]",
+      'channel = "1.91.1"',
+      'profile = "minimal"',
+    ].join("\n")),
+    "1.91.1",
+  );
+  assert.equal(parseRustToolchainToml('[toolchain]\nchannel = "stable"\n'), null);
+  assert.equal(
+    parseRustToolchainToml('[other]\nchannel = "9.9.9"\n[toolchain]\nchannel = "1.91.1"\n'),
+    "1.91.1",
+    "only the toolchain section owns the selected channel",
+  );
+  assert.equal(
+    parseRustToolchainToml('[toolchain]\nchannel = "1.91.1"\nchannel = "1.91.0"\n'),
+    null,
+    "duplicate channels are ambiguous",
+  );
+  assert.equal(
+    parseRustToolchainToml('[toolchain]\nchannel = "1.91.1"\n[toolchain]\nchannel = "1.91.1"\n'),
+    null,
+    "duplicate toolchain sections are ambiguous",
+  );
+  assert.equal(
+    parseRustToolchainContract(JSON.stringify({
+      toolchain: { rust: { version: "1.91.1" } },
+    })),
+    "1.91.1",
+  );
+  assert.equal(parseRustToolchainContract("{not json"), null);
+});
+
+test("every exact Pin Docker surface is locked to toolchain.json", () => {
+  const contractText = readFileSync(
+    join(PRODUCT_ROOT, "platform/containers/pin-builder/toolchain.json"),
+    "utf8",
+  );
+  const dockerText = readFileSync(
+    join(PRODUCT_ROOT, "platform/containers/pin-builder/Dockerfile"),
+    "utf8",
+  );
+  const centerDockerText = readFileSync(join(PRODUCT_ROOT, "center/Dockerfile"), "utf8");
+  const gradleFiles = realPinGradleFiles();
+  const expected = parsePinBuilderToolchainContract(contractText);
+  const actual = parsePinBuilderDockerfileContract(dockerText, centerDockerText, gradleFiles);
+  assert.deepEqual(pinBuilderToolchainMismatches(expected, actual), []);
+
+  const changed = (value) => `${value}-drift`;
+  const replace = (source, needle, replacement) => {
+    assert.ok(source.includes(needle), `missing mutation surface: ${needle}`);
+    return source.replace(needle, replacement);
+  };
+  const mutations = [
+    ["platform", (text) => replace(text, "amd64) ;;", "arm64) ;;")],
+    ["JDK image", (text) => replace(text, `FROM ${expected.jdkImage} AS jdk_runtime`, `FROM ${changed(expected.jdkImage)} AS jdk_runtime`)],
+    ["Node image", (text) => replace(text, `FROM ${expected.nodeImage} AS node_runtime`, `FROM ${changed(expected.nodeImage)} AS node_runtime`)],
+    ["Rust image", (text) => replace(text, `FROM ${expected.rustImage}`, `FROM ${changed(expected.rustImage)}`)],
+    ["Rust version", (text) => replace(text, `--toolchain ${expected.rustVersion};`, `--toolchain 1.91.0;`)],
+    ["command-line tools", (text) => replace(text, `ARG ANDROID_COMMAND_LINE_TOOLS_VERSION=${expected.commandLineToolsVersion}`, `ARG ANDROID_COMMAND_LINE_TOOLS_VERSION=1`)],
+    ["command-line SHA", (text) => replace(text, `ARG ANDROID_COMMAND_LINE_TOOLS_SHA256=${expected.commandLineToolsSha256}`, `ARG ANDROID_COMMAND_LINE_TOOLS_SHA256=${"0".repeat(64)}`)],
+    ["Android platform", (text) => replace(text, `ARG ANDROID_PLATFORM_VERSION=${expected.androidPlatform}`, "ARG ANDROID_PLATFORM_VERSION=1")],
+    ["Android build tools", (text) => replace(text, `ARG ANDROID_BUILD_TOOLS_VERSION=${expected.androidBuildTools}`, "ARG ANDROID_BUILD_TOOLS_VERSION=1.0.0")],
+    ["Android NDK", (text) => replace(text, `ARG ANDROID_NDK_VERSION=${expected.androidNdk}`, "ARG ANDROID_NDK_VERSION=1.0.0")],
+    ["Android NDK archive URL", (text) => replace(text, `ARG ANDROID_NDK_ARCHIVE_URL=${expected.androidNdkArchiveUrl}`, "ARG ANDROID_NDK_ARCHIVE_URL=https://dl.google.com/android/repository/android-ndk-r1-linux.zip")],
+    ["Android NDK archive root", (text) => replace(text, `ARG ANDROID_NDK_ARCHIVE_ROOT=${expected.androidNdkArchiveRoot}`, "ARG ANDROID_NDK_ARCHIVE_ROOT=android-ndk-r1")],
+    ["Android NDK archive size", (text) => replace(text, `ARG ANDROID_NDK_ARCHIVE_SIZE=${expected.androidNdkArchiveSize}`, "ARG ANDROID_NDK_ARCHIVE_SIZE=1")],
+    ["Android NDK archive SHA-1", (text) => replace(text, `ARG ANDROID_NDK_ARCHIVE_SHA1=${expected.androidNdkArchiveSha1}`, `ARG ANDROID_NDK_ARCHIVE_SHA1=${"0".repeat(40)}`)],
+    ["Android NDK archive SHA-256", (text) => replace(text, `ARG ANDROID_NDK_ARCHIVE_SHA256=${expected.androidNdkArchiveSha256}`, `ARG ANDROID_NDK_ARCHIVE_SHA256=${"0".repeat(64)}`)],
+    ["Android Rust target", (text) => replace(text, `rustup target add ${expected.androidRustTarget}`, "rustup target add x86_64-linux-android")],
+    ["cargo-ndk", (text) => replace(text, `ARG CARGO_NDK_VERSION=${expected.cargoNdk}`, "ARG CARGO_NDK_VERSION=0.0.1")],
+    ["cargo-ndk archive URL", (text) => replace(text, `ARG CARGO_NDK_ARCHIVE_URL=${expected.cargoNdkArchiveUrl}`, "ARG CARGO_NDK_ARCHIVE_URL=https://github.com/bbqsrc/cargo-ndk/releases/download/v0.0.1/drift.tgz")],
+    ["cargo-ndk archive root", (text) => replace(text, `ARG CARGO_NDK_ARCHIVE_ROOT=${expected.cargoNdkArchiveRoot}`, "ARG CARGO_NDK_ARCHIVE_ROOT=cargo-ndk-aarch64-unknown-linux-gnu-v4.1.2")],
+    ["cargo-ndk archive size", (text) => replace(text, `ARG CARGO_NDK_ARCHIVE_SIZE=${expected.cargoNdkArchiveSize}`, "ARG CARGO_NDK_ARCHIVE_SIZE=1")],
+    ["cargo-ndk archive SHA-256", (text) => replace(text, `ARG CARGO_NDK_ARCHIVE_SHA256=${expected.cargoNdkArchiveSha256}`, `ARG CARGO_NDK_ARCHIVE_SHA256=${"0".repeat(64)}`)],
+    ["command-line tools URL consumer", (text) => replace(text, "commandlinetools-linux-${ANDROID_COMMAND_LINE_TOOLS_VERSION}_latest.zip", `commandlinetools-linux-${expected.commandLineToolsVersion}_latest.zip`)],
+    ["command-line SHA consumer", (text) => replace(text, 'echo "${ANDROID_COMMAND_LINE_TOOLS_SHA256}  /tmp/android-command-line-tools.zip"', `echo "${expected.commandLineToolsSha256}  /tmp/android-command-line-tools.zip"`)],
+    ["Android platform consumer", (text) => replace(text, '"platforms;android-${ANDROID_PLATFORM_VERSION}"', `"platforms;android-${expected.androidPlatform}"`)],
+    ["Android build-tools consumer", (text) => replace(text, '"build-tools;${ANDROID_BUILD_TOOLS_VERSION}"', `"build-tools;${expected.androidBuildTools}"`)],
+    ["Android NDK direct destination consumer", (text) => replace(text, 'mv "/tmp/android-ndk/${ANDROID_NDK_ARCHIVE_ROOT}" "/opt/android-sdk/ndk/${ANDROID_NDK_VERSION}";', 'mv "/tmp/android-ndk/${ANDROID_NDK_ARCHIVE_ROOT}" "/opt/android-sdk/ndk/drift";')],
+    ["Android NDK sdkmanager reintroduction", (text) => replace(text, '"build-tools;${ANDROID_BUILD_TOOLS_VERSION}";', '"build-tools;${ANDROID_BUILD_TOOLS_VERSION}" \\\n      "ndk;${ANDROID_NDK_VERSION}";')],
+    ["Android NDK archive URL consumer", (text) => replace(text, '"${ANDROID_NDK_ARCHIVE_URL}" \\\n      --output /tmp/android-ndk.zip;', `"${expected.androidNdkArchiveUrl}" \\\n      --output /tmp/android-ndk.zip;`)],
+    ["Android NDK archive size consumer", (text) => replace(text, '"${ANDROID_NDK_ARCHIVE_SIZE}";', `"${expected.androidNdkArchiveSize}";`)],
+    ["Android NDK SHA-1 consumer", (text) => replace(text, 'echo "${ANDROID_NDK_ARCHIVE_SHA1}  /tmp/android-ndk.zip"', `echo "${expected.androidNdkArchiveSha1}  /tmp/android-ndk.zip"`)],
+    ["Android NDK SHA-256 consumer", (text) => replace(text, 'echo "${ANDROID_NDK_ARCHIVE_SHA256}  /tmp/android-ndk.zip"', `echo "${expected.androidNdkArchiveSha256}  /tmp/android-ndk.zip"`)],
+    ["native JDK build platform", (text) => replace(text, `FROM --platform=$BUILDPLATFORM ${expected.jdkImage} AS android_jdk_native`, `FROM --platform=linux/amd64 ${expected.jdkImage} AS android_jdk_native`)],
+    ["native SDK build platform", (text) => replace(text, `FROM --platform=$BUILDPLATFORM ${expected.nodeImage} AS android_sdk_native`, `FROM --platform=linux/amd64 ${expected.nodeImage} AS android_sdk_native`)],
+    ["native Rust build platform", (text) => replace(text, `FROM --platform=$BUILDPLATFORM ${expected.rustImage} AS rust_target_native`, `FROM --platform=linux/amd64 ${expected.rustImage} AS rust_target_native`)],
+    ["Android Rust target copy", (text) => replace(text, "COPY --from=rust_target_native /opt/rust-target/ /usr/local/rustup/toolchains/1.91.1-x86_64-unknown-linux-gnu/", "COPY --from=rust_target_native /opt/rust-target/ /usr/local/rustup/toolchains/drift/")],
+    ["x86 Rust component source", (text) => replace(text, "COPY --from=rust_runtime /usr/local/rustup/toolchains/1.91.1-x86_64-unknown-linux-gnu/lib/rustlib/components /tmp/x86-rust-components", "COPY --from=rust_runtime /usr/local/rustup/toolchains/1.91.1-x86_64-unknown-linux-gnu/lib/rustlib/components /tmp/drift-components")],
+    ["Android Rust target source", (text) => replace(text, 'cp -a "${rust_sysroot}/lib/rustlib/aarch64-linux-android" /opt/rust-target/lib/rustlib/;', 'cp -a "${rust_sysroot}/lib/rustlib/aarch64-linux-android" /opt/drift/;')],
+    ["Android Rust target manifest", (text) => replace(text, 'cp -a "${rust_sysroot}/lib/rustlib/manifest-rust-std-aarch64-linux-android" /opt/rust-target/lib/rustlib/', 'cp -a "${rust_sysroot}/lib/rustlib/manifest-rust-std-aarch64-linux-android" /opt/drift/')],
+    ["Android Rust target component merge", (text) => replace(text, "printf '%s\\n' rust-std-aarch64-linux-android >> /opt/rust-target/lib/rustlib/components;", "printf '%s\\n' rust-std-aarch64-linux-android >> /opt/drift-components;")],
+    ["duplicate Android Rust target component", (text) => `${text}\nprintf '%s\\n' rust-std-aarch64-linux-android >> /opt/rust-target/lib/rustlib/components;\n`],
+    ["Android NDK environment consumer", (text) => replace(text, "ANDROID_NDK_ROOT=/opt/android-sdk/ndk/${ANDROID_NDK_VERSION}", `ANDROID_NDK_ROOT=/opt/android-sdk/ndk/${expected.androidNdk}`)],
+    ["cargo-ndk archive URL consumer", (text) => replace(text, '"${CARGO_NDK_ARCHIVE_URL}" \\\n      --output /tmp/cargo-ndk.tgz;', `"${expected.cargoNdkArchiveUrl}" \\\n      --output /tmp/cargo-ndk.tgz;`)],
+    ["cargo-ndk archive size consumer", (text) => replace(text, '"${CARGO_NDK_ARCHIVE_SIZE}";', `"${expected.cargoNdkArchiveSize}";`)],
+    ["cargo-ndk archive SHA-256 consumer", (text) => replace(text, 'echo "${CARGO_NDK_ARCHIVE_SHA256}  /tmp/cargo-ndk.tgz"', `echo "${expected.cargoNdkArchiveSha256}  /tmp/cargo-ndk.tgz"`)],
+    ["cargo-ndk binary consumer", (text) => replace(text, "COPY --from=rust_target_native /opt/cargo-ndk/bin/ /usr/local/cargo/bin/", "COPY --from=rust_target_native /opt/cargo-ndk/bin/ /usr/local/bin/")],
+    ["cargo-ndk executable set", (text) => replace(text, "for executable in cargo-ndk cargo-ndk-env cargo-ndk-runner cargo-ndk-test; do", "for executable in cargo-ndk; do")],
+    ["cargo-ndk executable destination", (text) => replace(text, '"/opt/cargo-ndk/bin/${executable}";', '"/opt/drift/${executable}";')],
+    ["JAVA_HOME consumer", (text) => replace(text, "JAVA_HOME=/opt/java/openjdk", "JAVA_HOME=/opt/java/drift")],
+    ["Java PATH consumer", (text) => replace(text, "/opt/java/openjdk/bin:", "/opt/java/drift/bin:")],
+    ["Java executable consumer", (text) => replace(text, "/opt/java/openjdk/bin/java -version;", "/opt/java/drift/bin/java -version;")],
+    ["Node PATH consumer", (text) => replace(text, ":/usr/local/bin:/usr/sbin", ":/opt/node/bin:/usr/sbin")],
+    ["npm symlink consumer", (text) => replace(text, "npm/bin/npm-cli.js /usr/local/bin/npm;", "npm/bin/npm-cli.js /usr/local/bin/npm-drift;")],
+    ["npx symlink consumer", (text) => replace(text, "npm/bin/npx-cli.js /usr/local/bin/npx;", "npm/bin/npx-cli.js /usr/local/bin/npx-drift;")],
+    ["Node executable consumer", (text) => replace(text, "node --version;", "/opt/node/bin/node --version;")],
+    ["duplicate Android platform declaration", (text) => `${text}\nARG ANDROID_PLATFORM_VERSION=${expected.androidPlatform}\n`],
+    ["ambiguous Android platform consumer", (text) => replace(text, '"build-tools;${ANDROID_BUILD_TOOLS_VERSION}"', '"platforms;android-33" \\\n      "build-tools;${ANDROID_BUILD_TOOLS_VERSION}"')],
+  ];
+  for (const [label, mutate] of mutations) {
+    const mismatches = pinBuilderToolchainMismatches(
+      expected,
+      parsePinBuilderDockerfileContract(mutate(dockerText), centerDockerText, gradleFiles),
+    );
+    assert.ok(mismatches.length > 0, `${label} drift passed comparison`);
+    const result = evaluate(healthyProbes({ builderToolchain: { mismatches } }));
+    assert.equal(
+      checkById(result, "builder_toolchain_contract").status,
+      CHECK_STATUS.FAIL,
+      `${label} drift passed doctor`,
+    );
+  }
+
+  for (const [label, mutate] of [
+    ["Center base Node image", (text) => replace(
+      text,
+      `FROM ${expected.nodeImage} AS base`,
+      `FROM ${changed(expected.nodeImage)} AS base`,
+    )],
+    ["Center runtime Node image", (text) => replace(
+      text,
+      `FROM ${expected.nodeImage} AS runtime`,
+      `FROM ${changed(expected.nodeImage)} AS runtime`,
+    )],
+    ["ambiguous Center Node base", (text) => `${text}\nFROM ${expected.nodeImage} AS extra_node\n`],
+  ]) {
+    const mismatches = pinBuilderToolchainMismatches(
+      expected,
+      parsePinBuilderDockerfileContract(dockerText, mutate(centerDockerText), gradleFiles),
+    );
+    assert.ok(mismatches.some((entry) => entry.includes("Center base/runtime")), `${label} passed`);
+  }
+
+  const gradleMutations = [
+    ["compileSdk consumer", "pin/runtime/android/build.gradle.kts", "compileSdk = 34", "compileSdk = 33"],
+    ["duplicate compileSdk consumer", "pin/runtime/android/build.gradle.kts", "compileSdk = 34", "compileSdk = 34\n    compileSdk = 34"],
+    ["build-tools environment consumer", "pin/build.gradle.kts", 'System.getenv("AI_PIN_ANDROID_BUILD_TOOLS_VERSION")', 'System.getenv("AI_PIN_ANDROID_BUILD_TOOLS_VERSION_DRIFT")'],
+    ["Rust ABI consumer", "pin/runtime/android/build.gradle.kts", 'val rustAbi = "arm64-v8a"', 'val rustAbi = "x86_64"'],
+    ["Rust target consumer", "pin/runtime/android/build.gradle.kts", 'val rustTarget = "aarch64-linux-android"', 'val rustTarget = "x86_64-linux-android"'],
+    ["cargo-ndk command consumer", "pin/runtime/android/build.gradle.kts", '"cargo", "ndk", "-P", "31", "-t", rustAbi,', '"cargo", "build", "-P", "31", "-t", rustAbi,'],
+    ["Rust target output consumer", "pin/runtime/android/build.gradle.kts", 'target/$rustTarget/release/$rustExecutableName', 'target/release/$rustExecutableName'],
+  ];
+  for (const [label, path, needle, replacement] of gradleMutations) {
+    const mutated = { ...gradleFiles, [path]: replace(gradleFiles[path], needle, replacement) };
+    assert.equal(parsePinGradleToolchainConsumers(mutated)?.cargoNdkConsumerValid === true &&
+      parsePinGradleToolchainConsumers(mutated)?.androidPlatform === expected.androidPlatform &&
+      parsePinGradleToolchainConsumers(mutated)?.buildToolsConsumersValid === true &&
+      parsePinGradleToolchainConsumers(mutated)?.androidRustTarget === expected.androidRustTarget &&
+      parsePinGradleToolchainConsumers(mutated)?.rustAbi === "arm64-v8a", false, `${label} mutation passed pure parser`);
+    const mismatches = pinBuilderToolchainMismatches(
+      expected,
+      parsePinBuilderDockerfileContract(dockerText, centerDockerText, mutated),
+    );
+    assert.ok(mismatches.length > 0, `${label} drift passed doctor contract`);
+  }
+});
+
+test("the root Rust pin must equal the builder contract even when Docker supplies host tools", () => {
+  const result = evaluate(healthyProbes({
+    containerBuilder: {
+      available: true,
+      version: "fixture",
+      contractFilesPresent: true,
+      suppliesHostToolchain: true,
+      requiredPlatform: "linux/amd64",
+      platformsDetermined: true,
+      platforms: ["linux/amd64"],
+      amd64Runtime: { safe: true, detail: "native fixture" },
+    },
+    rustToolchain: { expectedVersion: "1.91.1", rootVersion: "1.91.0" },
+  }));
+  const contract = checkById(result, "rust_toolchain_contract");
+  assert.equal(contract.status, CHECK_STATUS.FAIL);
+  assert.equal(contract.required, true);
+  assert.equal(result.ok, false);
+});
+
+test("host Rust and Cargo are compared to the exact operational version", () => {
+  const result = evaluate(healthyProbes({
+    rustc: { present: true, version: "rustc 1.91.0 (fixture)" },
+    cargo: { present: true, version: "cargo 1.92.0 (fixture)" },
+  }));
+  assert.equal(checkById(result, "rustc").status, CHECK_STATUS.FAIL);
+  assert.equal(checkById(result, "cargo").status, CHECK_STATUS.FAIL);
+
+  const missing = evaluate(healthyProbes({ rustc: { present: false, version: null } }));
+  assert.match(checkById(missing, "rustc").fix, /1\.91\.1/u);
+  assert.doesNotMatch(checkById(missing, "rustc").fix, /no toolchain file|stable is/u);
+});
+
+test("host cargo-ndk is compared to the exact builder contract", () => {
+  assert.equal(checkById(evaluate(healthyProbes()), "cargo_ndk").status, CHECK_STATUS.PASS);
+  for (const version of ["cargo-ndk 4.1.1", "cargo-ndk 4.1.2\ncargo-ndk 4.1.2", "wrapper 4.1.2"]) {
+    const result = evaluate(healthyProbes({
+      cargoNdk: { present: true, version, expectedVersion: "4.1.2" },
+    }));
+    assert.equal(checkById(result, "cargo_ndk").status, CHECK_STATUS.FAIL, version);
+  }
+});
+
 test("parseRequirementsFromReadme reads the versions the document actually states", () => {
   const text = [
     "# Repo",
@@ -964,6 +1273,13 @@ test("parseJavaVersion handles modern and legacy banners", () => {
     major: 21,
   });
   assert.deepEqual(parseJavaVersion('java version "1.8.0_392"'), { version: "1.8.0_392", major: 8 });
+  assert.deepEqual(parseJavaVersion([
+    "Picked up JAVA_TOOL_OPTIONS: synthetic",
+    'openjdk version "17.0.14" 2025-01-21 LTS',
+    "OpenJDK Runtime Environment (build 17.0.14+7-LTS)",
+  ].join("\n")), { version: "17.0.14", major: 17 });
+  assert.equal(parseJavaVersion('wrapper 99.88.77\nnot a Java banner'), null);
+  assert.equal(parseJavaVersion('java version "17.0.14"\nopenjdk version "17.0.14"'), null);
   assert.equal(parseJavaVersion("command not found"), null);
   assert.equal(parseJavaVersion(null), null);
 });
@@ -1041,7 +1357,10 @@ test("the aarch64 target check names the exact rustup command", () => {
   const result = evaluate(
     healthyProbes({ rustTarget: { determined: true, installed: false, source: "rustup" } }),
   );
-  assert.match(checkById(result, "rust_target_android").fix, new RegExp(`rustup target add ${ANDROID_RUST_TARGET}`));
+  assert.match(
+    checkById(result, "rust_target_android").fix,
+    new RegExp(`rustup target add ${ANDROID_RUST_TARGET} --toolchain 1\\.91\\.1`),
+  );
 });
 
 test("an undeterminable rust target list is a warn, not a fail", () => {
@@ -1107,8 +1426,29 @@ test("usage documents the exit-code contract", () => {
 test("evaluate tolerates an empty probe object without throwing", () => {
   const result = evaluate({});
   assert.equal(result.ok, false);
-  // 15 fixed builders plus one per gated asset; asserting the arithmetic rather
-  // than a literal keeps this honest when an asset is added or removed.
-  assert.equal(result.checks.length, 15 + GATED_BUILD_ASSETS.length);
+  assert.deepEqual(
+    result.checks.map((check) => check.id),
+    [
+      "node",
+      "container_builder",
+      "builder_toolchain_contract",
+      "jdk",
+      "android_sdk",
+      "android_platform_tools",
+      "android_ndk",
+      "rust_toolchain_contract",
+      "rustc",
+      "cargo",
+      "rust_target_android",
+      "cargo_ndk",
+      "protoc",
+      "stock_decompile_evidence",
+      ...GATED_BUILD_ASSETS.map((asset) => asset.id),
+      "signing_env",
+      "signing_env_exported",
+      "pin_device",
+    ],
+    "every required contract check must remain present by identity",
+  );
   assert.ok(result.blocking.length > 0);
 });

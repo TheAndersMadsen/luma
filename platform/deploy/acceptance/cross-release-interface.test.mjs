@@ -11,7 +11,9 @@ import { fileURLToPath } from "node:url";
  * deploy.sh reconciles a transaction that a PREVIOUS release armed, and the
  * scripts that finish or unwind it must be that release's — the partial effects
  * on disk are its. So those invocations cross a release boundary, and the invoked
- * script's interface is whatever it was when that release was cut.
+ * script's interface is whatever it was when that release was cut. The script
+ * bytes are now executed only through the current trusted held-release runner;
+ * the frozen argv baseline remains the compatibility boundary.
  *
  * Deploy 14 assumed otherwise: the new deploy.sh passed --data-columns-source to
  * the pending release's backup.sh, which exited 64 on its own usage line. The
@@ -23,8 +25,8 @@ import { fileURLToPath } from "node:url";
  *
  * These tests pin the class rather than the instance:
  *   1. the guard exists and actually refuses a newer-than-baseline option;
- *   2. EVERY invocation of another release's tree goes through it, statically —
- *      including the ones that are python helpers and cannot use the wrapper;
+ *   2. EVERY invocation of another release's tree goes through both the argv
+ *      guard and held-release execution, statically;
  *   3. the specific option that caused the deadlock is not passed across the
  *      boundary, and the evidence it produced is produced by the new code instead.
  */
@@ -118,10 +120,11 @@ function readFileSyncish(file) {
 /*
  * The enumeration this class needs: every place a script or helper is executed
  * out of a release tree that is not the running code's own. Those trees are named
- * by exactly three variables -- $pending_release (deploy.sh, preflight.sh) and
- * $target_release (rollback.sh) -- plus the two helper paths derived from them.
+ * by exactly three variables -- $pending_release (deploy.sh, preflight.sh),
+ * $pending_release_root (the held transaction wrappers), and $target_release
+ * (deploy reconciliation).
  */
-const CROSS_RELEASE_TREE = /\$(?:pending_release|target_release)\b|\$(?:pending_verifier|pending_transaction_driver|target_verifier)\b/u;
+const CROSS_RELEASE_TREE = /\$(?:pending_release|pending_release_root|target_release)\b|\$(?:pending_verifier|pending_transaction_driver)\b/u;
 
 function invocations(source) {
   // Logical lines: a trailing backslash continues an invocation.
@@ -138,11 +141,6 @@ function invocations(source) {
   return out;
 }
 
-const PROGRAM_OF = [
-  [/^(?:sudo -n )?python3 "\$(?:pending_verifier|target_verifier)"/u, "verify-release.py"],
-  [/^(?:sudo -n )?python3 "\$pending_transaction_driver"/u, "transaction.py"],
-];
-
 test("nothing executes another release's tree except through the guarded entry points", () => {
   let checked = 0;
   for (const [label, source] of Object.entries({ deploySource, preflightSource, rollbackSource })) {
@@ -154,32 +152,39 @@ test("nothing executes another release's tree except through the guarded entry p
       // resolves the entry and asserts the argv for itself.
       assert.doesNotMatch(statement, /^(?:sudo -n )?bash "\$(?:pending_release|target_release)\//u,
         `${label} runs another release's script directly instead of run_cross_release_script: ${statement}`);
+      assert.doesNotMatch(statement, /^(?:sudo -n )?python3 "\$(?:pending_verifier|pending_transaction_driver)"/u,
+        `${label} reopens another release's Python helper by mutable path: ${statement}`);
 
-      // A python helper cannot use the wrapper (sudo, and the verifier's output is
-      // redirected), so the assertion must stand immediately before the call and
-      // must name the same program.
-      const program = PROGRAM_OF.find(([pattern]) => pattern.test(statement))?.[1];
-      if (!program) continue;
-      const previous = statements.slice(0, index).reverse()
-        .find((value) => value.length > 0 && !value.startsWith("#"));
-      assert.match(previous ?? "", new RegExp(String.raw`^assert_cross_release_options ${program.replace(".", "\\.")}\b`, "u"),
-        `${label} runs another release's ${program} without an immediately preceding cross-release assertion: ${statement}`);
+      if (/^run_cross_release_script "\$(?:pending_release|target_release)"/u.test(statement)) {
+        checked += 1;
+        continue;
+      }
+      const held = statement.match(/^run_held_release_program "\$(?:pending_release|pending_release_root)" (\S+) (?:bash|python) [01]\b/u);
+      if (!held) continue;
+      const program = path.basename(held[1]);
+      const preceding = statements.slice(Math.max(0, index - 5), index).join("\n");
+      assert.match(preceding, new RegExp(String.raw`assert_cross_release_options ${program.replace(".", "\\.")}\b`, "u"),
+        `${label} runs another release's held ${program} without a nearby cross-release assertion: ${statement}`);
       checked += 1;
     }
   }
-  assert.ok(checked >= 4, `expected every cross-release helper call to be examined, saw ${checked}`);
+  assert.ok(checked >= 16, `expected every cross-release helper call to be examined, saw ${checked}`);
 });
 
-test("every remaining cross-release helper call is preceded by an explicit assertion", () => {
-  // The three python invocations that cannot use the wrapper. Each is immediately
-  // preceded by assert_cross_release_options naming the same program.
+test("every direct held cross-release helper call is preceded by an explicit assertion", () => {
+  // Verifier and transaction helpers need redirected/privileged execution, so
+  // they use the held runner directly. Each site still freezes argv first.
   const sites = [
-    [deploySource, /assert_cross_release_options verify-release\.py [^\n]*\n\s*python3 "\$pending_verifier"/u],
-    [preflightSource, /assert_cross_release_options verify-release\.py [^\n]*\n\s*python3 "\$pending_verifier"/u],
-    [preflightSource, /assert_cross_release_options transaction\.py [^\n]*\n\s*python3 "\$pending_transaction_driver"/u],
-    [rollbackSource, /assert_cross_release_options verify-release\.py [^\n]*\n\s*python3 "\$target_verifier"/u],
+    [deploySource, /assert_cross_release_options verify-release\.py [^\n]*\n\s*run_held_release_program "\$pending_release" platform\/deploy\/vps\/verify-release\.py python 0/u],
+    [deploySource, /assert_cross_release_options transaction\.py "\$@"[\s\S]{0,280}run_held_release_program "\$pending_release_root" platform\/deploy\/vps\/remote\/transaction\.py python 0/u],
+    [deploySource, /assert_cross_release_options transaction\.py "\$@"[\s\S]{0,280}run_held_release_program "\$pending_release_root" platform\/deploy\/vps\/remote\/transaction\.py python 1/u],
+    [preflightSource, /assert_cross_release_options verify-release\.py [^\n]*\n\s*run_held_release_program "\$pending_release" platform\/deploy\/vps\/verify-release\.py python 0/u],
   ];
   for (const [source, pattern] of sites) assert.match(source, pattern);
+  assert.equal(
+    [...preflightSource.matchAll(/assert_cross_release_options transaction\.py [^\n]*\n\s*run_held_release_program "\$pending_release" platform\/deploy\/vps\/remote\/transaction\.py python 0/gu)].length,
+    2,
+  );
 });
 
 test("every cross-release invocation carries the comment that says why it is one", () => {
@@ -190,7 +195,9 @@ test("every cross-release invocation carries the comment that says why it is one
   assert.ok(wrapped >= 7, `expected every reconcile-path script invocation to be wrapped, found ${wrapped}`);
   assert.ok(marked >= wrapped, "each cross-release invocation must contain its comment");
   assert.match(preflightSource, /CROSS-RELEASE INVOCATION/u);
-  assert.match(rollbackSource, /CROSS-RELEASE INVOCATION/u);
+  assert.doesNotMatch(rollbackSource,
+    /(?:bash|python3) "\$target_release\/|run_(?:cross_release_script|held_release_program) "\$target_release"/u,
+    "rollback must not execute a mutable target-release script path");
   assert.match(commonSource, /^# CROSS-RELEASE INVOCATION: running a script that belongs to a DIFFERENT release$/mu);
 });
 

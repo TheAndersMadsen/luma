@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/bash
 # The supported path for a legitimate protected-configuration change.
 #
 # `verify_configuration_evidence` refuses a deploy when any protected input

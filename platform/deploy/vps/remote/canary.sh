@@ -1,8 +1,8 @@
-#!/usr/bin/env bash
+#!/usr/bin/bash
 set -euo pipefail
 remote_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-source "$remote_dir/common.sh"
-source "$remote_dir/domain.sh"
+source "${REVIVAL_HELD_COMMON:-$remote_dir/common.sh}"
+source "${REVIVAL_HELD_DOMAIN:-$remote_dir/domain.sh}"
 
 release_id=""
 baseline=""
@@ -170,7 +170,10 @@ if ((legacy_dashboard_origin == 0)); then
   python3 - "$center_container" "$PIN_RELEASE_DIR" <<'PY'
 import json,subprocess,sys
 container,expected_source=sys.argv[1:]
-body=json.loads(subprocess.check_output(["docker","inspect",container],text=True))[0]
+docker_env={"DOCKER_CONFIG":"/home/anders/ai-pin-revival/private/docker-cli-empty",
+            "DOCKER_HOST":"unix:///var/run/docker.sock","HOME":"/nonexistent",
+            "LANG":"C.UTF-8","LC_ALL":"C.UTF-8","PATH":"/usr/bin:/usr/sbin","TZ":"UTC"}
+body=json.loads(subprocess.check_output(["/usr/bin/docker","inspect",container],text=True,env=docker_env))[0]
 environment=dict(item.split("=",1) for item in body["Config"].get("Env",[]) if "=" in item)
 assert environment.get("REVIVAL_PIN_RELEASE_DIR")=="/var/lib/ai-pin-revival/pin-releases"
 assert environment.get("REVIVAL_PIN_SETUP_ORIGIN")=="https://center.andersmadsen.dk"
@@ -273,21 +276,25 @@ searxng_container="$("${COMPOSE[@]}" ps -q searxng)"
 python3 - "$searxng_container" "$ai_bus" <<'PY'
 import json,subprocess,sys
 searxng,ai_bus=sys.argv[1:]
+docker_env={"DOCKER_CONFIG":"/home/anders/ai-pin-revival/private/docker-cli-empty",
+            "DOCKER_HOST":"unix:///var/run/docker.sock","HOME":"/nonexistent",
+            "LANG":"C.UTF-8","LC_ALL":"C.UTF-8","PATH":"/usr/bin:/usr/sbin","TZ":"UTC"}
 def env(container):
-    body=json.loads(subprocess.check_output(["docker","inspect",container],text=True))[0]
+    body=json.loads(subprocess.check_output(["/usr/bin/docker","inspect",container],text=True,env=docker_env))[0]
     return dict(item.split("=",1) for item in body["Config"].get("Env",[]) if "=" in item)
 search_env=env(searxng); bus_env=env(ai_bus)
 assert len(search_env.get("SEARXNG_SECRET","")) >= 32
 assert bus_env.get("COSMOS_SEARXNG_BASE_URL") == "http://searxng:8080"
 assert "SEARXNG_SECRET" not in bus_env
 def networks(container):
-    body=json.loads(subprocess.check_output(["docker","inspect",container],text=True))[0]
+    body=json.loads(subprocess.check_output(["/usr/bin/docker","inspect",container],text=True,env=docker_env))[0]
     return set((body.get("NetworkSettings",{}).get("Networks") or {}).keys())
 search_service="ai-pin-revival_search-service"; search_egress="ai-pin-revival_search-egress"
 bus_networks=networks(ai_bus); search_networks=networks(searxng)
 assert search_service in bus_networks and search_egress not in bus_networks
 assert search_networks == {search_service,search_egress}
-egress=json.loads(subprocess.check_output(["docker","network","inspect",search_egress],text=True))[0]
+egress=json.loads(subprocess.check_output(
+    ["/usr/bin/docker","network","inspect",search_egress],text=True,env=docker_env))[0]
 members=set((egress.get("Containers") or {}).keys())
 assert members == {searxng}
 PY
@@ -332,8 +339,12 @@ python3 - "$ai_bus" <<'PY'
 import json,subprocess,sys,urllib.parse
 
 ai_bus=sys.argv[1]
+docker_env={"DOCKER_CONFIG":"/home/anders/ai-pin-revival/private/docker-cli-empty",
+            "DOCKER_HOST":"unix:///var/run/docker.sock","HOME":"/nonexistent",
+            "LANG":"C.UTF-8","LC_ALL":"C.UTF-8","PATH":"/usr/bin:/usr/sbin","TZ":"UTC"}
 def inspect(container):
-    return json.loads(subprocess.check_output(["docker","inspect",container],text=True))[0]
+    return json.loads(subprocess.check_output(
+        ["/usr/bin/docker","inspect",container],text=True,env=docker_env))[0]
 def env(container):
     return dict(item.split("=",1) for item in inspect(container)["Config"].get("Env",[]) if "=" in item)
 
@@ -354,8 +365,8 @@ provider_secrets={
     "COSMOS_INTERSTITIAL_API_KEY","COSMOS_SHOPPING_API_KEY",
 }
 ids=subprocess.check_output([
-    "docker","ps","-q","--filter","label=com.docker.compose.project=ai-pin-revival"
-],text=True).split()
+    "/usr/bin/docker","ps","-q","--filter","label=com.docker.compose.project=ai-pin-revival"
+],text=True,env=docker_env).split()
 for container in ids:
     candidate=inspect(container)
     service=(candidate.get("Config",{}).get("Labels",{}) or {}).get(
@@ -375,9 +386,10 @@ if interstitial_base:
     if interstitial_host == "cosmos-ollama":
         assert "humane-cosmos-clone_cosmos-local" in networks
         subprocess.check_call(
-            ["docker","exec",ai_bus,"getent","hosts","cosmos-ollama"],
+            ["/usr/bin/docker","exec",ai_bus,"getent","hosts","cosmos-ollama"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            env=docker_env,
         )
 PY
 

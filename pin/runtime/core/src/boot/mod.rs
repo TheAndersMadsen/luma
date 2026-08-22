@@ -272,6 +272,7 @@ pub(crate) async fn run(
     // constructing AIBus so both surfaces use the same paired session/cache.
     let esim_bridge = esim::EsimBridge::start();
     let spotify_service = spotify::SpotifyService::new(
+        config.music.clone(),
         config.spotify.clone(),
         &config_path,
         http_bind_addr,

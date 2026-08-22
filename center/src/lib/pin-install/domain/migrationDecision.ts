@@ -194,7 +194,8 @@ function roleIsKnownForRecovery(
  * the packages it was handed, so a package that is absent, or present but not
  * being installed, is never examined. This is also why the bootstrap-recovery
  * path is exempt — it uninstalls the managed packages first, and a package that
- * is gone is installed fresh rather than updated in place.
+ * is gone is installed fresh rather than updated in place. That exemption must
+ * never be selected as a fallback for a refusal while the installer is healthy.
  */
 function findKeepDataUpdateRefusal(
   inspection: InstallInspectionResult,
@@ -214,10 +215,12 @@ function findKeepDataUpdateRefusal(
       versionName: pkg.versionName,
       targetVersion: target.version,
     });
-    // "may-continue" is a randomized path the provider's failed-update
-    // continuity hatch may still admit on evidence only it holds. Refusing it
-    // here would close a door the device deliberately left open.
-    if (verdict === "eligible" || verdict === "may-continue") {
+    // A randomized /data/app/~~... path is not installer-owned. Even if the
+    // provider labels its shape "may-continue", the host cannot prove the
+    // provider-only continuity evidence, so it stops before transferring APKs.
+    // Do not turn this refusal into bootstrap recovery: that would uninstall
+    // managed packages and risk FBE-scoped identity and app data.
+    if (verdict === "eligible") {
       continue;
     }
 

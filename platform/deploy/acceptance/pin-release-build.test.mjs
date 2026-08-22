@@ -13,13 +13,18 @@ import {
   createDockerRunInvocation,
   parseBuilderMetadata,
   parseLiteralSigningEnvironment,
-  publishPinRelease,
+  publishPinReleaseFixture as publishPinRelease,
   validatePinReleaseVersion,
 } from "../pin/build.mjs";
 import {
   PIN_RELEASE_ARTIFACT_ROLES,
   PIN_RELEASE_PACKAGE_BY_ROLE,
 } from "../pin/release.mjs";
+
+// The schema-1 publisher is a candidate-store fixture only. Authoritative
+// entrypoints explicitly reject this mode, and ship/Center never accept its
+// evidence-free output.
+process.env.REVIVAL_PIN_ENABLE_TEST_FIXTURES = "1";
 
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), "revival-pin-build-"));
@@ -119,6 +124,8 @@ test("networked prefetch has no signing input and offline release binds only d8a
     compatibilitySigningStore: "/secrets/compat.keystore",
     embeddedPatchSigningStore: "/secrets/compat.keystore",
     privateAssets: "/private-assets",
+    hostedRequest: "/attestation/request.json",
+    preSignBundle: "/attestation/pre-sign.sigstore.json",
     image: "builder:test",
     version: "2026-08-09.1",
     versionCode: 202_608_091,
@@ -128,6 +135,8 @@ test("networked prefetch has no signing input and offline release binds only d8a
   const command = invocation.args.join("\n");
   assert.match(command, /embedded-patch\.keystore,readonly/u);
   assert.match(command, /signing\.env,readonly/u);
+  assert.match(command, /hosted-release\/request\.json,readonly/u);
+  assert.match(command, /hosted-release\/pre-sign\.sigstore\.json,readonly/u);
   assert.doesNotMatch(command, /bootstrap-package|legacy.*debug/u);
   assert.doesNotMatch(command, /STORE_PASSWORD|KEY_PASSWORD|store-secret|key-secret/u);
   assert.ok(invocation.args.includes("--read-only"));

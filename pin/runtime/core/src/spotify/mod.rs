@@ -31,6 +31,7 @@ use librespot_playback::mixer::NoOpVolume;
 use librespot_playback::player::{Player, PlayerEvent, PlayerEventChannel};
 use rand::TryRng as _;
 use reqwest::{Client, RequestBuilder, Response as ReqwestResponse};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use subtle::ConstantTimeEq as _;
@@ -43,11 +44,11 @@ use self::playback::{
     PLAYBACK_PREROLL_PCM_BYTES,
 };
 pub use self::types::{
-    SpotifyPlaybackRequest, SpotifyPlaybackResponse, SpotifyQueryRequest, SpotifyQueryResponse,
-    SpotifyRankingProvenance, SpotifySaveRequest, SpotifySaveResponse, SpotifyState, SpotifyStatus,
-    SpotifyTrack, UpdateSpotifySettings,
+    MusicProviderStatus, SpotifyPlaybackRequest, SpotifyPlaybackResponse, SpotifyQueryRequest,
+    SpotifyQueryResponse, SpotifyRankingProvenance, SpotifySaveRequest, SpotifySaveResponse,
+    SpotifyState, SpotifyStatus, SpotifyTrack, UpdateSpotifySettings,
 };
-use crate::config::SpotifyConfig;
+use crate::config::{MusicConfig, MusicProvider, SpotifyConfig};
 use crate::db::Database;
 use crate::esim::EsimBridge;
 use crate::tier_a::operational_markers;
@@ -75,6 +76,9 @@ const MAX_RATE_LIMIT_RETRY_AFTER: Duration = Duration::from_secs(5);
 const BRIDGE_TOKEN_ENV: &str = "PENUMBRA_SPOTIFY_BRIDGE_TOKEN";
 const BRIDGE_TOKEN_HEADER: &str = "x-penumbra-spotify-bridge-token";
 const BRIDGE_TOKEN_CHARS: usize = 64;
+const MUSIC_GATEWAY_ACCEPT_ENCODING: &str = "identity";
+const MUSIC_GATEWAY_RESPONSE_BYTES: u64 = 2 * 1024 * 1024;
+const MUSIC_GATEWAY_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[derive(Clone)]
 pub struct SpotifyService {
@@ -82,6 +86,7 @@ pub struct SpotifyService {
 }
 
 struct SpotifyInner {
+    music_settings: RwLock<MusicConfig>,
     settings: RwLock<SpotifyConfig>,
     runtime: Mutex<Runtime>,
     playback_gate: Mutex<()>,
@@ -732,6 +737,7 @@ where
 
 impl SpotifyService {
     pub async fn new(
+        music_settings: MusicConfig,
         settings: SpotifyConfig,
         config_path: &Path,
         http_bind_addr: SocketAddr,
@@ -764,6 +770,7 @@ impl SpotifyService {
         let stream_origin = format!("http://127.0.0.1:{}", http_bind_addr.port());
         let service = Self {
             inner: Arc::new(SpotifyInner {
+                music_settings: RwLock::new(music_settings),
                 settings: RwLock::new(settings.clone()),
                 runtime: Mutex::new(Runtime {
                     state: RuntimeState::SignedOut,
@@ -824,6 +831,7 @@ impl SpotifyService {
     }
 
     pub async fn status(&self) -> SpotifyStatus {
+        let active_provider = self.inner.music_settings.read().await.active_provider;
         let settings = self.inner.settings.read().await.clone();
         let runtime = self.inner.runtime.lock().await;
         let (state, username, engine_ready, pairing_expires_at, last_error) = if !settings.enabled
@@ -856,6 +864,7 @@ impl SpotifyService {
             }
         };
         SpotifyStatus {
+            active_provider,
             enabled: settings.enabled,
             experimental_acknowledged: settings.experimental_acknowledged,
             state,
@@ -865,6 +874,19 @@ impl SpotifyService {
             pairing_expires_at,
             last_error,
         }
+    }
+
+    pub async fn provider_status(&self) -> MusicProviderStatus {
+        let active_provider = self.inner.music_settings.read().await.active_provider;
+        MusicProviderStatus { active_provider }
+    }
+
+    pub async fn apply_music_settings(&self, settings: MusicConfig) -> Result<(), SpotifyError> {
+        settings
+            .validate()
+            .map_err(|_| SpotifyError::InvalidRequest("invalid music settings"))?;
+        *self.inner.music_settings.write().await = settings;
+        Ok(())
     }
 
     pub async fn apply_settings(&self, settings: SpotifyConfig) -> Result<(), SpotifyError> {
@@ -922,6 +944,9 @@ impl SpotifyService {
         request: SpotifyQueryRequest,
     ) -> Result<SpotifyQueryResponse, SpotifyError> {
         request.validate().map_err(SpotifyError::InvalidRequest)?;
+        if self.inner.music_settings.read().await.active_provider != MusicProvider::Spotify {
+            return self.provider_neutral_query(request).await;
+        }
         self.require_enabled().await?;
 
         // Ranking provenance is recorded AT the branch that chooses, never
@@ -1038,11 +1063,44 @@ impl SpotifyService {
         })
     }
 
+    async fn provider_neutral_query(
+        &self,
+        request: SpotifyQueryRequest,
+    ) -> Result<SpotifyQueryResponse, SpotifyError> {
+        let (provider, _, _) = self.music_gateway_context().await?;
+        let value = serde_json::to_value(&request).map_err(|_| SpotifyError::Unavailable)?;
+        let mut body = value
+            .as_object()
+            .cloned()
+            .ok_or(SpotifyError::Unavailable)?;
+        body.insert("provider".into(), Value::String(provider.as_str().into()));
+        let response: SpotifyQueryResponse = self
+            .music_gateway_post("query", Value::Object(body))
+            .await?;
+        self.cache_tracks(&response.items).await;
+        Ok(response)
+    }
+
     pub async fn playback(
         &self,
         request: SpotifyPlaybackRequest,
     ) -> Result<SpotifyPlaybackResponse, SpotifyError> {
         request.validate().map_err(SpotifyError::InvalidRequest)?;
+        if self.inner.music_settings.read().await.active_provider != MusicProvider::Spotify {
+            let (provider, gateway_url, _) = self.music_gateway_context().await?;
+            let response: SpotifyPlaybackResponse = self
+                .music_gateway_post(
+                    "playback",
+                    serde_json::json!({
+                        "provider": provider.as_str(),
+                        "id": request.id,
+                        "duration_ms": request.duration_ms,
+                    }),
+                )
+                .await?;
+            validate_gateway_stream_url(&gateway_url, &response.url)?;
+            return Ok(response);
+        }
         self.require_enabled().await?;
 
         // The stock HTTP/Binder caller can disappear while a track is loading.
@@ -1442,6 +1500,15 @@ impl SpotifyService {
         request: SpotifySaveRequest,
     ) -> Result<SpotifySaveResponse, SpotifyError> {
         request.validate().map_err(SpotifyError::InvalidRequest)?;
+        if self.inner.music_settings.read().await.active_provider != MusicProvider::Spotify {
+            let (provider, _, _) = self.music_gateway_context().await?;
+            return self
+                .music_gateway_post(
+                    "save",
+                    serde_json::json!({ "provider": provider.as_str(), "id": request.id }),
+                )
+                .await;
+        }
         self.require_enabled().await?;
         let session = self.session().await?;
         let token = session
@@ -1482,6 +1549,78 @@ impl SpotifyService {
             return None;
         }
         Some(buffer)
+    }
+
+    async fn music_gateway_context(&self) -> Result<(MusicProvider, String, String), SpotifyError> {
+        let settings = self.inner.music_settings.read().await;
+        settings
+            .validate()
+            .map_err(|_| SpotifyError::InvalidRequest("music gateway is not configured"))?;
+        Ok((
+            settings.active_provider,
+            settings
+                .gateway_url
+                .clone()
+                .ok_or(SpotifyError::Unavailable)?,
+            settings
+                .gateway_token
+                .clone()
+                .ok_or(SpotifyError::Unavailable)?,
+        ))
+    }
+
+    async fn music_gateway_post<T: DeserializeOwned>(
+        &self,
+        operation: &str,
+        body: Value,
+    ) -> Result<T, SpotifyError> {
+        let (_, gateway_url, token) = self.music_gateway_context().await?;
+        let response = self
+            .inner
+            .http
+            .post(format!(
+                "{}/api/music-gateway/{operation}",
+                gateway_url.trim_end_matches('/')
+            ))
+            // The Android build excludes reqwest's compression decoders.
+            // Refuse intermediary compression so JSON never reaches serde as
+            // Brotli bytes that look like an upstream provider failure.
+            .header(
+                reqwest::header::ACCEPT_ENCODING,
+                MUSIC_GATEWAY_ACCEPT_ENCODING,
+            )
+            .bearer_auth(token)
+            .timeout(MUSIC_GATEWAY_TIMEOUT)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|_| SpotifyError::Unavailable)?;
+        if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            return Err(SpotifyError::RateLimited);
+        }
+        if !response.status().is_success()
+            || response
+                .content_length()
+                .is_some_and(|size| size > MUSIC_GATEWAY_RESPONSE_BYTES)
+        {
+            return Err(SpotifyError::Unavailable);
+        }
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|_| SpotifyError::Unavailable)?;
+        if bytes.len() as u64 > MUSIC_GATEWAY_RESPONSE_BYTES {
+            return Err(SpotifyError::Unavailable);
+        }
+        serde_json::from_slice(&bytes).map_err(|error| {
+            warn!(
+                operation,
+                response_bytes = bytes.len(),
+                error = %error,
+                "music gateway response was not valid provider JSON"
+            );
+            SpotifyError::Unavailable
+        })
     }
 
     /// Audio-path diagnostics for one track, **without playing it**.
@@ -3003,6 +3142,30 @@ fn artist_top_tracks_fallback_query(artist_name: &str) -> String {
     format!("artist:{}", artist_name.trim())
 }
 
+fn validate_gateway_stream_url(gateway_origin: &str, value: &str) -> Result<(), SpotifyError> {
+    let origin = reqwest::Url::parse(gateway_origin).map_err(|_| SpotifyError::Unavailable)?;
+    let url = reqwest::Url::parse(value).map_err(|_| SpotifyError::Unavailable)?;
+    if url.scheme() != "https"
+        || url.origin() != origin.origin()
+        || url.username() != ""
+        || url.password().is_some()
+        || !url.path().starts_with("/api/music-gateway/stream/")
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(SpotifyError::Unavailable);
+    }
+    let ticket = url.path().trim_start_matches("/api/music-gateway/stream/");
+    if ticket.len() != 43
+        || !ticket
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err(SpotifyError::Unavailable);
+    }
+    Ok(())
+}
+
 /// Whether a result list is ordered by descending popularity.
 ///
 /// A genuine `/artists/{id}/top-tracks` page is; a relevance-ordered search is
@@ -3347,12 +3510,25 @@ pub fn internal_router(service: SpotifyService) -> Router {
         .route("/internal/spotify/query", post(internal_query))
         .route("/internal/spotify/playback", post(internal_playback))
         .route("/internal/spotify/save", post(internal_save))
+        .route("/internal/spotify/provider", post(internal_provider))
         .route(
             "/internal/spotify/stream/{ticket}",
             get(internal_stream).head(internal_stream),
         )
         .layer(DefaultBodyLimit::max(32 * 1024))
         .with_state(service)
+}
+
+async fn internal_provider(
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    State(service): State<SpotifyService>,
+    headers: HeaderMap,
+    Json(_request): Json<Value>,
+) -> Response {
+    if !internal_control_authorized(&peer, &headers, service.inner.bridge_token.as_deref()) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    Json(service.provider_status().await).into_response()
 }
 
 async fn internal_query(

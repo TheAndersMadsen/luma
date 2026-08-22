@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::config::MusicProvider;
+
 /// The current Spotify Search endpoint accepts at most ten results per HTTP
 /// request. This is deliberately separate from the stock music collection
 /// size: albums, playlists and libraries may return a much larger queue.
@@ -9,6 +11,7 @@ pub const MAX_QUERY_BYTES: usize = 256;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct SpotifyStatus {
+    pub active_provider: MusicProvider,
     pub enabled: bool,
     pub experimental_acknowledged: bool,
     pub state: SpotifyState,
@@ -32,23 +35,34 @@ pub enum SpotifyState {
     Error,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct UpdateSpotifySettings {
+    #[serde(default)]
+    pub active_provider: Option<MusicProvider>,
     pub enabled: bool,
     pub experimental_acknowledged: bool,
     pub device_name: String,
+    #[serde(default)]
+    pub music_gateway_url: Option<String>,
+    #[serde(default)]
+    pub music_gateway_token: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct MusicProviderStatus {
+    pub active_provider: MusicProvider,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SpotifyQueryRequest {
     pub kind: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub primary: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secondary: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ids: Vec<String>,
     #[serde(default = "default_query_limit")]
     pub limit: usize,
@@ -111,7 +125,7 @@ pub struct SpotifyPlaybackRequest {
 
 impl SpotifyPlaybackRequest {
     pub fn validate(&self) -> Result<(), &'static str> {
-        if !valid_spotify_id(&self.id) {
+        if !valid_music_track_id(&self.id) {
             return Err("invalid track identifier");
         }
         // Stock music searches only tracks. A generous ceiling still prevents
@@ -131,7 +145,7 @@ pub struct SpotifySaveRequest {
 
 impl SpotifySaveRequest {
     pub fn validate(&self) -> Result<(), &'static str> {
-        if valid_spotify_id(&self.id) {
+        if valid_music_track_id(&self.id) {
             Ok(())
         } else {
             Err("invalid track identifier")
@@ -141,6 +155,18 @@ impl SpotifySaveRequest {
 
 pub fn valid_spotify_id(value: &str) -> bool {
     value.len() == 22 && value.bytes().all(|byte| byte.is_ascii_alphanumeric())
+}
+
+pub fn valid_music_track_id(value: &str) -> bool {
+    valid_spotify_id(value)
+        || (value.len() <= 320
+            && value.split_once(':').is_some_and(|(provider, id)| {
+                matches!(provider, "youtube_music" | "tidal" | "apple_music")
+                    && !id.is_empty()
+                    && id
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+            }))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -171,7 +197,7 @@ pub struct SpotifyTrack {
 /// records the branch that produced the list, at the branch, so the question
 /// is answerable from one trace line instead of a log line that has already
 /// rotated away.
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SpotifyRankingProvenance {
     /// `/artists/{id}/top-tracks` — the provider's own popularity ordering.
@@ -205,7 +231,7 @@ impl SpotifyRankingProvenance {
     }
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SpotifyQueryResponse {
     pub items: Vec<SpotifyTrack>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -215,12 +241,12 @@ pub struct SpotifyQueryResponse {
     pub ranking_provenance: SpotifyRankingProvenance,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SpotifyPlaybackResponse {
     pub url: String,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SpotifySaveResponse {
     pub ok: bool,
 }
@@ -338,5 +364,24 @@ mod tests {
             duration_ms: 31 * 60 * 1_000,
         };
         assert!(request.validate().is_err());
+    }
+
+    #[test]
+    fn gateway_query_omits_absent_optional_operands() {
+        let request = SpotifyQueryRequest {
+            kind: "track".into(),
+            primary: Some("One Dance".into()),
+            secondary: None,
+            ids: Vec::new(),
+            limit: 1,
+        };
+        assert_eq!(
+            serde_json::to_value(request).expect("query request serializes"),
+            serde_json::json!({
+                "kind": "track",
+                "primary": "One Dance",
+                "limit": 1,
+            }),
+        );
     }
 }

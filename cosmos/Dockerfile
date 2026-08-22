@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
 
-FROM rust:1.90.0-bookworm@sha256:3914072ca0c3b8aad871db9169a651ccfce30cf58303e5d6f2db16d1d8a7e58f AS build
+FROM rust:1.91.1-bookworm@sha256:c1e5f19e773b7878c3f7a805dd00a495e747acbdc76fb2337a4ebf0418896b33 AS build
 
 WORKDIR /workspace/cosmos
 
@@ -29,10 +29,27 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 FROM debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241 AS runtime
 
-# Match the immutable 2026-08-03 base-image snapshot. A digest-pinned base with
-# the mutable deb.debian.org suites would still resolve different package bytes
-# on later builds.
-RUN apt-get update \
+# Match the immutable 2026-08-03 base-image snapshot. Both dated archives expose
+# signed Release files at this timestamp; HTTP avoids needing CA roots before
+# the image installs ca-certificates, while apt still verifies Debian signatures.
+# A digest-pinned base with mutable suites would resolve different package bytes.
+RUN rm -f /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources \
+    && printf '%s\n' \
+        'Types: deb' \
+        'URIs: http://snapshot.debian.org/archive/debian/20260803T000000Z' \
+        'Suites: bookworm bookworm-updates' \
+        'Components: main' \
+        'Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg' \
+        'Check-Valid-Until: no' \
+        '' \
+        'Types: deb' \
+        'URIs: http://snapshot.debian.org/archive/debian-security/20260803T000000Z' \
+        'Suites: bookworm-security' \
+        'Components: main' \
+        'Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg' \
+        'Check-Valid-Until: no' \
+        > /etc/apt/sources.list.d/debian.sources \
+    && apt-get update \
     && apt-get install --no-install-recommends --yes \
         ca-certificates \
         curl \

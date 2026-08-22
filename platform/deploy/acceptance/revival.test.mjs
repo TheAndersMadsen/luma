@@ -121,7 +121,7 @@ test("init refuses unmanaged existing roots and runtime files outside secrets", 
   }
 });
 
-test("generated output is external and source checks clean their local residue", () => {
+test("generated output is external and source checks leave no local residue", () => {
   // The CLI is an entry point over platform/cli modules; the redirection
   // mechanisms live in the modules, so the scan reads all of them.
   const source = [cli, ...fs.readdirSync(path.join(root, "platform", "cli"))
@@ -131,7 +131,20 @@ test("generated output is external and source checks clean their local residue",
   assert.match(source, /CARGO_TARGET_DIR:\s*path\.join\(BUILD_DIR, 'cosmos-target'\)/);
   assert.match(source, /GRADLE_USER_HOME:\s*path\.join\(BUILD_DIR, 'gradle-home'\)/);
   assert.match(source, /NPM_CONFIG_CACHE:\s*path\.join\(BUILD_DIR, 'npm-cache'\)/);
-  assert.match(source, /--project-cache-dir', path\.join\(BUILD_DIR, 'gradle-pin-cache'\)/);
+  // Fast checks keep disposable workspaces, content-addressed cache entries,
+  // atomic publication staging, and concurrency leases under the external
+  // build root. None of those names may fall back into the source checkout.
+  assert.match(source, /fast-check-workspaces/u);
+  assert.match(source, /fast-check-cache/u);
+  assert.match(source, /\.publish-/u);
+  assert.match(source, /fast-check-leases/u);
+  assert.doesNotMatch(source, /generatedCleanupGuard/u);
+  const pinBuilder = fs.readFileSync(
+    path.join(root, "platform", "containers", "pin-builder", "entrypoint.sh"),
+    "utf8",
+  );
+  assert.match(pinBuilder, /--project-cache-dir "\$\{REVIVAL_HELD_GRADLE_CONTRACTS:\?missing held contracts Gradle cache\}"/u);
+  assert.match(pinBuilder, /--project-cache-dir "\$\{REVIVAL_HELD_GRADLE_INJECTOR:\?missing held injector Gradle cache\}"/u);
   // Every other redirection above is pinned by the mechanism that performs it;
   // Python's was pinned only by the __pycache__ symptom scan below, which is an
   // accident of ordering — it catches residue only when some earlier test in
@@ -157,7 +170,7 @@ test("Cosmos convenience targets delegate to the root Revival CLI", () => {
   assert.match(makefile, /render:\n\tcd \.\. && \.\/revival doctor/);
   assert.match(
     makefile,
-    /render-production:\n\tcd \.\. && \.\/revival deploy production --dry-run/,
+    /render-production:[\s\S]*\.\/revival deploy production --candidate-id "\$\(CANDIDATE_ID\)" --dry-run/,
   );
   assert.doesNotMatch(makefile, /cd \.\.\/\.\. && \.\/revival/);
 });
@@ -345,6 +358,7 @@ test("production Compose binds one release identity and keeps web services priva
       env: {
         ...process.env,
         REVIVAL_RELEASE_ID: releaseId,
+        COSMOS_KID_SCOPE: "audit",
         COSMOS_DATABASE_URL: "postgresql://cosmos:placeholder@postgres/cosmos",
         COSMOS_EDGE_TOKEN: "placeholder-edge",
         COSMOS_ADMIN_TOKEN: "placeholder-admin",
@@ -648,6 +662,10 @@ test("development identity profile controls Keycloak and OIDC wiring", (context)
   assert.equal(Object.keys(disabled.services).length, 8);
   assert.equal(disabled.services.keycloak, undefined);
   assert.equal(disabled.services.center.environment.KEYCLOAK_BASE_URL, "");
+  assert.equal(
+    disabled.services.center.image,
+    "ai-pin-revival/center-development:identity-contract-test",
+  );
 
   const issuer = "http://localhost:8088/realms/humane";
   const jwks = "http://keycloak:8080/realms/humane/protocol/openid-connect/certs";

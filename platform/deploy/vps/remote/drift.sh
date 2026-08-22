@@ -1,8 +1,8 @@
-#!/usr/bin/env bash
+#!/usr/bin/bash
 set -euo pipefail
 remote_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-source "$remote_dir/common.sh"
-source "$remote_dir/domain.sh"
+source "${REVIVAL_HELD_COMMON:-$remote_dir/common.sh}"
+source "${REVIVAL_HELD_DOMAIN:-$remote_dir/domain.sh}"
 
 json=0
 usage() { echo "usage: drift [--json]" >&2; exit 64; }
@@ -20,8 +20,10 @@ current="$(safe_release_pointer "$REMOTE_ROOT/current")" || fail "canonical curr
 release_id="$(basename "$current")"
 validate_release_id "$release_id"
 manifest="$MANIFESTS_DIR/$release_id.json"
-release_verifier="$current/platform/deploy/vps/verify-release.py"
-[[ -f "$release_verifier" && ! -L "$release_verifier" && -f "$manifest" ]] || fail "release verifier or manifest is missing"
+release_verifier="${REVIVAL_HELD_RELEASE_VERIFIER:-$current/platform/deploy/vps/verify-release.py}"
+[[ "${REVIVAL_HELD_RELEASE_LOGICAL_ROOT:-$current}" == "$current" && -f "$manifest" && ! -L "$manifest" ]] \
+  && release_material_file_is_safe "$release_verifier" \
+  || fail "release verifier or manifest is missing or outside held current authority"
 verification="$(python3 "$release_verifier" --tree "$current" --manifest "$manifest" --json)"
 python3 - "$verification" "$release_id" <<'PY'
 import json,sys
@@ -103,7 +105,9 @@ domain_nginx_verify_desired "$accepted_record" \
   || fail "authoritative deployment has public Center Nginx drift"
 verify_image_evidence "$accepted_record/running-images.tsv" "$current"
 verify_configuration_evidence "$accepted_record/config-digests.tsv" "$current"
-bash "$current/platform/deploy/vps/remote/canary.sh" --release-id "$release_id" --image-evidence "$accepted_record/running-images.tsv" --require-remote-tts >/dev/null
+run_held_release_program "$current" platform/deploy/vps/remote/canary.sh bash 0 \
+  --release-id "$release_id" --image-evidence "$accepted_record/running-images.tsv" \
+  --require-remote-tts >/dev/null
 domain_keycloak_verify_desired "$accepted_record" "$RUNTIME_ENV" 8088 \
   || fail "authoritative deployment has Center Keycloak client drift"
 

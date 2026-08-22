@@ -27,24 +27,24 @@ import com.penumbraos.ipc.contract.PenumbraIpcContract
 import com.penumbraos.stockaibus.contract.TierASymbols
 
 /**
- * Correct only the two provider-labelled fallbacks reached because Spotify
+ * Correct only the two retired-provider-labelled fallbacks reached because the
  * collection queries implement Humane's interface through a proxy rather than
  * extending the retired Tidal query classes.
  */
-internal fun rewriteSpotifyMusicInterstitialNarration(text: String): String = when (text) {
-    "featured playlist on tidal, up next." -> "featured playlist on spotify, up next."
-    "your collection on tidal, up next." -> "your collection on spotify, up next."
+internal fun rewriteMusicInterstitialNarration(text: String): String = when (text) {
+    "featured playlist on tidal, up next." -> "featured playlist, up next."
+    "your collection on tidal, up next." -> "your collection, up next."
     else -> text
 }
 
 /**
- * Spotify implementation at the stock music provider boundary.
+ * Provider-neutral implementation at the stock music provider boundary.
  *
  * The rest of the Humane music experience remains untouched: native intent
  * routing still selects a [MediaCollectionQuery], MediaManager still owns the
  * queue, and the stock ExoPlayer still consumes [MediaItem.PlaybackInfo]. Only
  * the retired Tidal provider is replaced. Network/auth work is delegated to the
- * Penumbra loopback service so Spotify credentials never enter this APK.
+ * Penumbra loopback service so provider credentials never enter this APK.
  *
  * There are deliberately no compile-time references to Humane or RxJava types.
  * This hook APK is loaded into several processes which do not contain them; all
@@ -64,9 +64,9 @@ object MusicHooks {
     private const val TRANSACTION_SAVE = PenumbraIpcContract.Spotify.TRANSACTION_SAVE
 
     private const val AUTH_MESSAGE =
-        "Spotify is not connected. Sign in from Ai Pin Setup."
+        "Music is not connected. Connect your music service in Center."
     private const val UNAVAILABLE_MESSAGE =
-        "Spotify music is unavailable. Check Spotify in Ai Pin Setup."
+        "Music is unavailable. Check your music service in Center."
 
     @Volatile
     private var installed = false
@@ -109,16 +109,15 @@ object MusicHooks {
         try {
             PlayerLocalDuckingHooks.installMusic(cl)
             resolveTargetTypes()
-
             val provider = cl.loadClass("humane.experience.music.provider.tidal.TidalProvider")
             installLoopbackCleartextPolicy()
             installTidalFailClosed()
             installProviderHooks(provider)
             installStockModelHooks()
-            installSpotifyInterstitialNarrationHook()
+            installMusicInterstitialNarrationHook()
 
             installed = true
-            Log.w(TAG, "MusicHooks installed (stock music pipeline, Spotify loopback provider)")
+            Log.w(TAG, "MusicHooks installed (stock music pipeline, Center provider gateway)")
         } catch (error: Throwable) {
             Log.e(TAG, "MusicHooks install failed: ${error.javaClass.simpleName}: ${error.message}", error)
         }
@@ -251,7 +250,12 @@ object MusicHooks {
         hookStringQuery(provider, "queryWithArtistName", "artist")
         hookStringQuery(provider, "queryWithGenreName", "genre")
         hookStringQuery(provider, "queryWithPlaylistName", "playlist")
-        hookStringQuery(provider, "queryWithTrackName", "track", limit = 1)
+        hookStringQuery(
+            provider,
+            "queryWithTrackName",
+            "track",
+            limit = SpotifyMusicContract.MAX_NAMED_TRACK_ITEMS,
+        )
 
         hookQuery(provider, "queryWithTrackIds", arrayOf(List::class.java)) { args ->
             @Suppress("UNCHECKED_CAST")
@@ -549,9 +553,7 @@ object MusicHooks {
                 emptyArray(),
             ) { param ->
                 val state = spotifyItems[param.thisObject] ?: return@hookMethodBefore
-                val spotifyId = state.id.substringAfterLast(':')
-                val encoded = URLEncoder.encode(spotifyId, "UTF-8").replace("+", "%20")
-                param.result = "https://open.spotify.com/track/$encoded"
+                param.result = providerShareUrl(state.id)
             }.also {
                 if (!it) Log.w(TAG, "  Track.shareableURL hook unavailable")
             }
@@ -586,7 +588,7 @@ object MusicHooks {
      * §19.2 Music hardening: pin to the exact single-String speak overload and
      * a known literal rewrite rather than hookAllMethods on NarratorAccess.speak.
      */
-    private fun installSpotifyInterstitialNarrationHook() {
+    private fun installMusicInterstitialNarrationHook() {
         runCatching {
             val narratorAccess = cl.loadClass("humane.system.NarratorAccess")
             val ok = HookUtils.hookMethodBefore(
@@ -595,15 +597,15 @@ object MusicHooks {
                 arrayOf(String::class.java),
             ) { param ->
                 val original = param.args.getOrNull(0) as? String ?: return@hookMethodBefore
-                val corrected = rewriteSpotifyMusicInterstitialNarration(original)
+                val corrected = rewriteMusicInterstitialNarration(original)
                 if (corrected != original) param.args[0] = corrected
             }
             check(ok) { "NarratorAccess.speak(String) was not found" }
-            Log.w(TAG, "  Corrected stock music interstitial provider labels for Spotify")
+            Log.w(TAG, "  Removed obsolete provider labels from stock music interstitials")
         }.onFailure {
             Log.w(
                 TAG,
-                "  Spotify interstitial narration hook unavailable: ${it.javaClass.simpleName}",
+                "  Music interstitial narration hook unavailable: ${it.javaClass.simpleName}",
             )
         }
     }
@@ -646,7 +648,7 @@ object MusicHooks {
                         null
                     }
                     "emitNotableEvent" -> null
-                    "shareableURL" -> spotifyShareUrl(track.id)
+                    "shareableURL" -> providerShareUrl(track.id)
                     "hashCode" -> System.identityHashCode(self)
                     "equals" -> self === args?.getOrNull(0)
                     "toString" -> "SpotifyMediaItem(${track.title})"
@@ -686,7 +688,7 @@ object MusicHooks {
                 .put("audioQuality", "HIGH")
                 .put("allowStreaming", true)
                 .put("streamReady", true)
-                .put("url", spotifyShareUrl(track.id))
+                .put("url", providerShareUrl(track.id))
                 .put("isrc", "")
                 .put("artist", albumArtist)
                 .put("artists", artists)
@@ -730,7 +732,7 @@ object MusicHooks {
                 "playbackUri" -> url
                 "hashCode" -> System.identityHashCode(proxy)
                 "equals" -> proxy === args?.getOrNull(0)
-                "toString" -> "SpotifyPlaybackInfo(loopback)"
+                "toString" -> "MusicPlaybackInfo(loopback)"
                 else -> defaultValue(method.returnType)
             }
         },
@@ -750,10 +752,20 @@ object MusicHooks {
             ((durationMs + 999L) / 1_000L).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
         }
 
-    private fun spotifyShareUrl(id: String): String {
-        val spotifyId = normalizeSpotifyId(id)
-        val encoded = URLEncoder.encode(spotifyId, "UTF-8").replace("+", "%20")
-        return "https://open.spotify.com/track/$encoded"
+    private fun providerShareUrl(id: String): String {
+        val normalized = normalizeSpotifyId(id)
+        val separator = normalized.indexOf(':')
+        val candidate = if (separator > 0) normalized.substring(0, separator) else ""
+        val provider = candidate.takeIf { it in setOf("youtube_music", "tidal", "apple_music") }
+            ?: "spotify"
+        val providerId = if (provider == "spotify") normalized else normalized.substring(separator + 1)
+        val encoded = URLEncoder.encode(providerId, "UTF-8").replace("+", "%20")
+        return when (provider) {
+            "youtube_music" -> "https://music.youtube.com/watch?v=$encoded"
+            "tidal" -> "https://listen.tidal.com/track/$encoded"
+            "apple_music" -> "https://music.apple.com/song/$encoded"
+            else -> "https://open.spotify.com/track/$encoded"
+        }
     }
 
     private fun normalizeSpotifyId(value: String): String {
@@ -863,7 +875,7 @@ object MusicHooks {
     private fun translateBackendFailure(operation: String, original: Throwable): Throwable {
         val error = unwrap(original)
         if (isStockMusicException(error)) return error
-        Log.w(TAG, "  Spotify $operation failed: ${error.javaClass.simpleName}")
+        Log.w(TAG, "  Music $operation failed: ${error.javaClass.simpleName}")
         return if (error is BackendStatusException && error.status in setOf(401, 403)) {
             spotifyAuthRequired()
         } else {

@@ -1,6 +1,9 @@
 'use strict';
 
 const fs = require('node:fs');
+const crypto = require('node:crypto');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 
 const {
   ENV_FILE,
@@ -8,7 +11,17 @@ const {
   info,
 } = require('./context');
 const { operatorContract } = require('./command-spec');
-const { readSetupState, selectSetupTrack } = require('./setup-state');
+const {
+  readSetupActionReceipt,
+  readSetupState,
+  selectSetupTrack,
+  validateSetupInvocationBinding,
+} = require('./setup-state');
+
+const ROOT = path.resolve(__dirname, '..', '..');
+const HOSTED_VPS_CANDIDATE_TOOL = path.join(ROOT, 'platform', 'deploy', 'hosted-vps-candidate.mjs');
+const HOSTED_PIN_ARTIFACT_TOOL = path.join(ROOT, 'platform', 'deploy', 'hosted-pin-artifact.mjs');
+const ARTIFACT_TOOL_TIMEOUT_MILLISECONDS = 100 * 60 * 1000;
 
 function protectedFile(file, requireContent = true) {
   if (!fs.existsSync(file)) return false;
@@ -18,11 +31,18 @@ function protectedFile(file, requireContent = true) {
 }
 
 function commandEvidence(commandId, selectedTrack) {
-  if (commandId.startsWith('setup.')) {
+  if (['setup.local', 'setup.contributor', 'setup.production', 'setup.pin'].includes(commandId)) {
     return { complete: commandId === `setup.${selectedTrack}`, evidence: 'journey selection' };
   }
   if (commandId === 'init') {
     return { complete: protectedFile(ENV_FILE), evidence: 'external runtime configuration' };
+  }
+  const receipt = readSetupActionReceipt(commandId);
+  if (receipt) {
+    return {
+      complete: true,
+      evidence: `source/action-bound success receipt valid until ${receipt.expiresAt}`,
+    };
   }
   if (commandId === 'doctor.local') {
     return {
@@ -51,9 +71,148 @@ function commandEvidence(commandId, selectedTrack) {
   if (commandId === 'version') {
     return { complete: true, evidence: 'stamped release descriptor' };
   }
-  // Remote, device, physical, and test actions deliberately have no sticky
-  // completion bit. Their authoritative tools must be rerun and accepted.
+  // Any remaining action has no accepted action-specific result receipt.
+  // Physical acceptance is always nonsticky; mutable live state must still be
+  // rechecked at the point of use even when a bounded command receipt exists.
   return { complete: false, evidence: 'authoritative command must be run' };
+}
+
+function artifactToolEnvironment() {
+  const environment = {
+    HOME: path.isAbsolute(process.env.HOME || '') ? process.env.HOME : '/nonexistent',
+    PATH: '/usr/bin:/bin',
+    LANG: 'C.UTF-8',
+    LC_ALL: 'C.UTF-8',
+    TZ: 'UTC',
+  };
+  for (const name of [
+    'XDG_CACHE_HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME',
+    'REVIVAL_CONFIG_DIR', 'REVIVAL_SECRETS_DIR', 'REVIVAL_DATA_DIR', 'REVIVAL_BACKUP_DIR',
+    'REVIVAL_BUILD_DIR', 'REVIVAL_STATE_DIR', 'REVIVAL_PIN_RELEASE_OUTPUT_DIR',
+  ]) {
+    if (typeof process.env[name] === 'string' && !process.env[name].includes('\0')) {
+      environment[name] = process.env[name];
+    }
+  }
+  return environment;
+}
+
+function canonical(value) {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map((item) => canonical(item)).join(',')}]`;
+  return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`).join(',')}}`;
+}
+
+function runArtifactTool(tool, command, args) {
+  const jsonCount = args.filter((argument) => argument === '--json').length;
+  if (jsonCount > 1) throw new Error('hosted artifact operation accepts --json at most once');
+  const toolArgs = args.filter((argument) => argument !== '--json');
+  const result = spawnSync(process.execPath, [tool, command, ...toolArgs, '--json'], {
+    cwd: ROOT,
+    env: artifactToolEnvironment(),
+    encoding: 'utf8',
+    maxBuffer: 16 * 1024 * 1024,
+    timeout: ARTIFACT_TOOL_TIMEOUT_MILLISECONDS,
+    killSignal: 'SIGKILL',
+  });
+  if (result.error) throw new Error(`hosted artifact operation could not run: ${result.error.message}`);
+  if (result.status !== 0 || result.signal !== null) {
+    throw new Error((result.stderr || 'hosted artifact operation failed').trim());
+  }
+  let parsed;
+  try { parsed = JSON.parse(result.stdout); } catch { throw new Error('hosted artifact operation returned invalid JSON'); }
+  if (result.stdout !== `${canonical(parsed)}\n` || parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('hosted artifact operation returned ambiguous non-canonical evidence');
+  }
+  return Object.freeze({ parsed: Object.freeze(parsed), stdout: result.stdout, json: jsonCount === 1 });
+}
+
+function exactFields(value, fields) {
+  return Object.keys(value).sort().join(',') === [...fields].sort().join(',');
+}
+
+function validateVpsImportResult(result) {
+  if (
+    !exactFields(result, [
+      'ok', 'candidateId', 'releaseId', 'candidateRoot', 'evidenceRoot',
+      'runnerInvocationUri', 'sourceDigest',
+    ]) || result.ok !== true || !/^[0-9a-f]{64}$/u.test(result.candidateId) ||
+    !/^[0-9a-f]{64}$/u.test(result.releaseId) || !/^[0-9a-f]{40}$/u.test(result.sourceDigest) ||
+    !path.isAbsolute(result.candidateRoot || '') || !path.isAbsolute(result.evidenceRoot || '') ||
+    !/^https:\/\/github\.com\/TheAndersMadsen\/ai-pin-revival\/actions\/runs\/[1-9][0-9]*\/attempts\/[1-9][0-9]*$/u.test(result.runnerInvocationUri || '')
+  ) throw new Error('hosted VPS import returned an unsupported success record');
+}
+
+function validatePinImportResult(result) {
+  if (
+    !exactFields(result, [
+      'ok', 'schema', 'version', 'releaseRoot', 'releaseId', 'versionName', 'versionCode',
+      'manifestSha256', 'requestSha256', 'releaseBundleSha256', 'runnerInvocationUri',
+    ]) || result.ok !== true || result.schema !== 'revival.hosted-pin-release-import' || result.version !== 1 ||
+    !path.isAbsolute(result.releaseRoot || '') || !/^[0-9a-f]{64}$/u.test(result.releaseId) ||
+    !Number.isSafeInteger(result.versionCode) || result.versionCode <= 0 ||
+    typeof result.versionName !== 'string' || result.versionName.length === 0 ||
+    !/^[0-9a-f]{64}$/u.test(result.manifestSha256) || !/^[0-9a-f]{64}$/u.test(result.requestSha256) ||
+    !/^[0-9a-f]{64}$/u.test(result.releaseBundleSha256) ||
+    !/^https:\/\/github\.com\/TheAndersMadsen\/ai-pin-revival\/actions\/runs\/[1-9][0-9]*\/attempts\/[1-9][0-9]*$/u.test(result.runnerInvocationUri || '')
+  ) throw new Error('hosted Pin import returned an unsupported success record');
+}
+
+function artifactCompletion(actionId, outcome) {
+  return Object.freeze({ schemaVersion: 1, actionId, outcome, status: 0, signal: null });
+}
+
+function printArtifactResult(operation, kind, execution) {
+  if (execution.json) {
+    process.stdout.write(execution.stdout);
+    return;
+  }
+  const result = execution.parsed;
+  if (kind === 'vps-candidate' || kind === 'vps') {
+    info(`${operation} passed: candidate=${result.candidateId} release=${result.releaseId}`);
+  } else {
+    info(`${operation} passed: ${result.versionName} ${result.releaseId}`);
+  }
+}
+
+function setupArtifactCommand(operation, args, invocationBinding) {
+  const kind = args.shift();
+  if (operation === 'import' && kind === 'vps-candidate') {
+    validateSetupInvocationBinding(invocationBinding, { actionId: 'setup.import.vps-candidate' });
+    const execution = runArtifactTool(HOSTED_VPS_CANDIDATE_TOOL, 'import', args);
+    validateVpsImportResult(execution.parsed);
+    printArtifactResult(operation, kind, execution);
+    return Object.freeze({
+      completion: artifactCompletion('setup.import.vps-candidate', 'hosted-vps-candidate-imported'),
+      evidenceSha256: crypto.createHash('sha256').update(execution.stdout).digest('hex'),
+    });
+  }
+  if (operation === 'import' && kind === 'pin-release') {
+    validateSetupInvocationBinding(invocationBinding, { actionId: 'setup.import.pin-release' });
+    const execution = runArtifactTool(HOSTED_PIN_ARTIFACT_TOOL, 'import', args);
+    validatePinImportResult(execution.parsed);
+    printArtifactResult(operation, kind, execution);
+    return Object.freeze({
+      completion: artifactCompletion('setup.import.pin-release', 'hosted-pin-release-imported'),
+      evidenceSha256: crypto.createHash('sha256').update(execution.stdout).digest('hex'),
+    });
+  }
+  if (operation === 'artifacts' && kind === 'vps') {
+    const execution = runArtifactTool(HOSTED_VPS_CANDIDATE_TOOL, 'status', args);
+    printArtifactResult(operation, kind, execution);
+    return null;
+  }
+  if (operation === 'artifacts' && kind === 'pin') {
+    const execution = runArtifactTool(HOSTED_PIN_ARTIFACT_TOOL, 'status', args);
+    printArtifactResult(operation, kind, execution);
+    return null;
+  }
+  fail(
+    'usage: ./revival setup import vps-candidate --handoff-root DIR [--data-dir DIR] [--json] |\n' +
+    '       ./revival setup import pin-release --release-root DIR [--data-dir DIR] [--json] |\n' +
+    '       ./revival setup artifacts vps|pin [--data-dir DIR] [--json]',
+    64,
+  );
 }
 
 function normalizeCommand(command) {
@@ -126,23 +285,26 @@ function printSetupReport(report, json) {
   if (!report.next) info('All recomputable setup evidence is complete. Re-run physical and live acceptance where documented.');
 }
 
-function setupCommand(args) {
+function setupCommand(args, { invocationBinding = null } = {}) {
   const operation = args.shift();
   try {
     if (['local', 'contributor', 'production', 'pin'].includes(operation)) {
       const json = parseJsonOnly(args, `./revival setup ${operation} [--json]`);
       selectSetupTrack(operation);
       printSetupReport(setupReport(operation), json);
-      return;
+      return null;
     }
     if (operation === 'status' || operation === '--resume') {
       const json = parseJsonOnly(args, `./revival setup ${operation} [--json]`);
       const state = readSetupState();
       if (!state) fail('no setup journey is selected; run ./revival setup local|contributor|production|pin', 64);
       printSetupReport(setupReport(state.selectedTrack), json);
-      return;
+      return null;
     }
-    fail('usage: ./revival setup local|contributor|production|pin [--json] | status [--json] | --resume [--json]', 64);
+    if (operation === 'import' || operation === 'artifacts') {
+      return setupArtifactCommand(operation, args, invocationBinding);
+    }
+    fail('usage: ./revival setup local|contributor|production|pin [--json] | status [--json] | --resume [--json] | import ... | artifacts ...', 64);
   } catch (error) {
     fail(error.message);
   }
