@@ -257,6 +257,7 @@ function coldArtifactRequest(
   const child = spawnSync(
     process.execPath,
     [
+      "--experimental-strip-types",
       "--import",
       TS_RESOLVE_PATH,
       "--input-type=module",

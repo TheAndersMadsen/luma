@@ -32,7 +32,7 @@ import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
 import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
-import { registerHooks } from "node:module";
+import { register } from "node:module";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { Readable } from "node:stream";
@@ -57,14 +57,13 @@ const CENTER_SRC_URL = pathToFileURL(join(SOURCE_ROOT, "center", "src", "/")).hr
  *
  * Center is a Next codebase: it writes extensionless relative imports and the
  * `@/` alias, and Node's ESM resolver does neither. `center/verify/` solves the
- * same problem for its own tests with an out-of-thread `register()` hook; this
- * uses the synchronous `registerHooks()` form so the whole tool stays one file.
+ * same problem for its own tests with an out-of-thread `register()` hook. The
+ * hook below uses that Node 22.14-compatible API and is carried as immutable
+ * data from this already-loaded file, so it adds no mutable loader pathname.
  * The empty candidate is tried FIRST, so every specifier Node already resolves
  * — builtins, ./release.mjs, the stubs below — resolves exactly as it would
  * without the hook, and a genuinely missing module still fails as missing.
  */
-const BUNDLER_EXTENSION_CANDIDATES = ["", ".ts", ".tsx", "/index.ts", "/index.tsx"];
-
 /*
  * Stand-ins for the three packages only `WebUsbAdbSessionTransport` and its
  * authenticator need, used ONLY when they are not installed.
@@ -123,30 +122,94 @@ const WEB_USB_TRANSPORT_PACKAGES = new Map([
   ],
 ]);
 
-registerHooks({
-  resolve(specifier, context, nextResolve) {
-    const target = specifier.startsWith("@/")
-      ? new URL(specifier.slice(2), CENTER_SRC_URL).href
-      : specifier;
-    let firstFailure;
-    for (const candidate of BUNDLER_EXTENSION_CANDIDATES) {
-      try {
-        return nextResolve(`${target}${candidate}`, context);
-      } catch (error) {
-        firstFailure ??= error;
-      }
-    }
+const INSTALL_LOADER_SOURCE = String.raw`
+import { readFile } from "node:fs/promises";
+import { stripTypeScriptTypes } from "node:module";
 
-    const replacement = WEB_USB_TRANSPORT_PACKAGES.get(specifier);
-    if (replacement) {
-      return {
-        url: `data:text/javascript,${encodeURIComponent(replacement)}`,
-        shortCircuit: true,
-      };
+const CANDIDATES = ["", ".ts", ".tsx", "/index.ts", "/index.tsx"];
+const EXPECTED_REPLACEMENTS = [
+  "@yume-chan/adb",
+  "@yume-chan/adb-daemon-webusb",
+  "@yume-chan/stream-extra",
+];
+let centerSourceUrl;
+let replacements;
+
+export function initialize(data) {
+  if (!data || typeof data !== "object" || Array.isArray(data) ||
+      Object.keys(data).sort().join(",") !== "centerSourceUrl,replacementEntries") {
+    throw new Error("invalid headless Pin installer loader data");
+  }
+  const root = new URL(data.centerSourceUrl);
+  if (root.protocol !== "file:" || root.search || root.hash || !root.pathname.endsWith("/")) {
+    throw new Error("invalid headless Pin installer source root");
+  }
+  if (!Array.isArray(data.replacementEntries) ||
+      data.replacementEntries.some((entry) => !Array.isArray(entry) || entry.length !== 2 ||
+        typeof entry[0] !== "string" || typeof entry[1] !== "string")) {
+    throw new Error("invalid headless Pin installer replacement set");
+  }
+  replacements = new Map(data.replacementEntries);
+  if (replacements.size !== EXPECTED_REPLACEMENTS.length ||
+      [...replacements.keys()].sort().join(",") !== [...EXPECTED_REPLACEMENTS].sort().join(",")) {
+    throw new Error("incomplete headless Pin installer replacement set");
+  }
+  centerSourceUrl = root.href;
+}
+
+export async function resolve(specifier, context, nextResolve) {
+  const target = specifier.startsWith("@/")
+    ? new URL(specifier.slice(2), centerSourceUrl).href
+    : specifier;
+  let firstFailure;
+  for (const candidate of CANDIDATES) {
+    try {
+      return await nextResolve(target + candidate, context);
+    } catch (error) {
+      firstFailure ??= error;
     }
-    throw firstFailure;
+  }
+  const replacement = replacements.get(specifier);
+  if (replacement !== undefined) {
+    return {
+      url: "data:text/javascript," + encodeURIComponent(replacement),
+      shortCircuit: true,
+    };
+  }
+  throw firstFailure;
+}
+
+export async function load(url, context, nextLoad) {
+  const parsed = new URL(url);
+  if (parsed.protocol === "file:" && !parsed.search && !parsed.hash &&
+      parsed.href.startsWith(centerSourceUrl) && /\.tsx?$/.test(parsed.pathname)) {
+    if (parsed.pathname.endsWith(".tsx")) {
+      throw new Error("the headless Pin installer cannot execute TSX modules");
+    }
+    const source = await readFile(parsed, "utf8");
+    return {
+      format: "module",
+      shortCircuit: true,
+      source: stripTypeScriptTypes(source, {
+        mode: "transform",
+        sourceUrl: parsed.href,
+      }),
+    };
+  }
+  return nextLoad(url, context);
+}
+`;
+
+register(
+  `data:text/javascript;base64,${Buffer.from(INSTALL_LOADER_SOURCE).toString("base64")}`,
+  {
+    parentURL: import.meta.url,
+    data: {
+      centerSourceUrl: CENTER_SRC_URL,
+      replacementEntries: [...WEB_USB_TRANSPORT_PACKAGES],
+    },
   },
-});
+);
 
 const {
   INSTALL_OPERATION_PHASES,

@@ -31,6 +31,33 @@ jobs:
         with:
           node-version: 22.14.0
           package-manager-cache: false
+      - name: bind Node 22.14.0 to the fixed trusted path
+        shell: /usr/bin/bash --noprofile --norc -euo pipefail {0}
+        run: |
+          export LANG=C LC_ALL=C PATH=/usr/bin:/bin
+          node_source=/opt/hostedtoolcache/node/22.14.0/x64/bin/node
+          node_destination=/usr/bin/node
+          expected_node_sha256=1abce2374a485bddae3c27b17a3e3143e2780232026e627c4fe74ddde3f380a1
+          test "$(/usr/bin/realpath -e -- "${node_source}")" = "${node_source}"
+          test -f "${node_source}" && test ! -L "${node_source}" && test -x "${node_source}"
+          test "$("${node_source}" --version)" = v22.14.0
+          source_digest="$(/usr/bin/sha256sum -- "${node_source}")"
+          source_digest="${source_digest%% *}"
+          [[ "${source_digest}" =~ ^[0-9a-f]{64}$ ]]
+          test "${source_digest}" = "${expected_node_sha256}"
+          /usr/bin/sudo /usr/bin/install -T -o root -g root -m 0555 -- \
+            "${node_source}" "${node_destination}"
+          test "$(/usr/bin/realpath -e -- "${node_destination}")" = "${node_destination}"
+          test -f "${node_destination}" && test ! -L "${node_destination}" && test -x "${node_destination}"
+          test "$(/usr/bin/stat -c '%u:%g:%a:%F:%h' -- "${node_destination}")" = \
+            '0:0:555:regular file:1'
+          test "$("${node_destination}" --version)" = v22.14.0
+          destination_digest="$(/usr/bin/sha256sum -- "${node_destination}")"
+          destination_digest="${destination_digest%% *}"
+          source_digest_after="$(/usr/bin/sha256sum -- "${node_source}")"
+          source_digest_after="${source_digest_after%% *}"
+          test "${destination_digest}" = "${source_digest}"
+          test "${source_digest_after}" = "${source_digest}"
       - name: CI workflow policy
         run: node --test platform/deploy/acceptance/ci-policy.test.mjs
       - name: complete platform policy and acceptance checks
@@ -227,6 +254,37 @@ jobs:
           test "$RUNNER_OS" = Linux
           test "$RUNNER_ARCH" = X64
           test "$(uname -m)" = x86_64
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22.14.0
+          package-manager-cache: false
+      - name: bind Node 22.14.0 to the fixed trusted path
+        shell: /usr/bin/bash --noprofile --norc -euo pipefail {0}
+        run: |
+          export LANG=C LC_ALL=C PATH=/usr/bin:/bin
+          node_source=/opt/hostedtoolcache/node/22.14.0/x64/bin/node
+          node_destination=/usr/bin/node
+          expected_node_sha256=1abce2374a485bddae3c27b17a3e3143e2780232026e627c4fe74ddde3f380a1
+          test "$(/usr/bin/realpath -e -- "${node_source}")" = "${node_source}"
+          test -f "${node_source}" && test ! -L "${node_source}" && test -x "${node_source}"
+          test "$("${node_source}" --version)" = v22.14.0
+          source_digest="$(/usr/bin/sha256sum -- "${node_source}")"
+          source_digest="${source_digest%% *}"
+          [[ "${source_digest}" =~ ^[0-9a-f]{64}$ ]]
+          test "${source_digest}" = "${expected_node_sha256}"
+          /usr/bin/sudo /usr/bin/install -T -o root -g root -m 0555 -- \
+            "${node_source}" "${node_destination}"
+          test "$(/usr/bin/realpath -e -- "${node_destination}")" = "${node_destination}"
+          test -f "${node_destination}" && test ! -L "${node_destination}" && test -x "${node_destination}"
+          test "$(/usr/bin/stat -c '%u:%g:%a:%F:%h' -- "${node_destination}")" = \
+            '0:0:555:regular file:1'
+          test "$("${node_destination}" --version)" = v22.14.0
+          destination_digest="$(/usr/bin/sha256sum -- "${node_destination}")"
+          destination_digest="${destination_digest%% *}"
+          source_digest_after="$(/usr/bin/sha256sum -- "${node_source}")"
+          source_digest_after="${source_digest_after%% *}"
+          test "${destination_digest}" = "${source_digest}"
+          test "${source_digest_after}" = "${source_digest}"
       - name: restore exactly five external Pin cache-data leaves
         id: pin-builder-deps
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6

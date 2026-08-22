@@ -1,23 +1,13 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
-import { registerHooks } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-registerHooks({
-  resolve(specifier, context, nextResolve) {
-    if (
-      context.parentURL?.includes("/center/src/server/") &&
-      (specifier.startsWith("./") || specifier.startsWith("../")) &&
-      !/\.[A-Za-z0-9]+(?:\?|$)/u.test(specifier)
-    ) {
-      return nextResolve(`${specifier}.ts`, context);
-    }
-    return nextResolve(specifier, context);
-  },
-});
+// Node 22.14 supports the out-of-thread register() hook used by every other
+// Center source test, but not the newer synchronous registerHooks() API.
+import "./tsResolve.mjs";
 
 const root = new URL("../", import.meta.url);
 const source = async (file) => readFile(new URL(file, root), "utf8");

@@ -367,15 +367,29 @@ function pythonStat(receipt, kind) {
   };
 }
 
-function trustedPythonCandidates() {
+function trustedPythonCandidates({ pathLaunch = process.platform === 'darwin' } = {}) {
   const filesystemRoot = path.parse(process.execPath).root;
+  const rootOwnedSystemCandidates = [
+    path.join(filesystemRoot, 'usr', 'bin', 'python3'),
+    path.join(filesystemRoot, 'Library', 'Developer', 'CommandLineTools', 'usr', 'bin', 'python3'),
+  ];
+  if (pathLaunch) return rootOwnedSystemCandidates;
   return [
     path.join(path.dirname(process.execPath), 'python3'),
     path.join(filesystemRoot, 'opt', 'homebrew', 'bin', 'python3'),
     path.join(filesystemRoot, 'usr', 'local', 'bin', 'python3'),
-    path.join(filesystemRoot, 'Library', 'Developer', 'CommandLineTools', 'usr', 'bin', 'python3'),
-    path.join(filesystemRoot, 'usr', 'bin', 'python3'),
+    ...rootOwnedSystemCandidates,
   ];
+}
+
+function securePythonAncestor(stat, allowedOwners) {
+  return !stat.isSymbolicLink() && stat.isDirectory() &&
+    allowedOwners.has(Number(stat.uid)) && (stat.mode & 0o022n) === 0n;
+}
+
+function samePythonAncestor(receipt, stat) {
+  const current = statReceipt(stat);
+  return ['dev', 'ino', 'mode', 'uid', 'gid'].every((field) => receipt[field] === current[field]);
 }
 
 function resolveTrustedPython3({
@@ -383,12 +397,18 @@ function resolveTrustedPython3({
   realpathSync = fs.realpathSync.native,
   lstatSync = fs.lstatSync,
   accessSync = fs.accessSync,
+  requireRootOwned = process.platform === 'darwin',
+  requireCanonicalPath = process.platform === 'darwin',
 } = {}) {
   const allowedOwners = new Set([0]);
-  if (typeof process.getuid === 'function') allowedOwners.add(process.getuid());
+  if (!requireRootOwned && typeof process.getuid === 'function') allowedOwners.add(process.getuid());
   for (const candidate of [...new Set(candidates)]) {
     try {
+      if (!path.isAbsolute(candidate)) continue;
+      const candidateMetadata = lstatSync(candidate, { bigint: true });
+      if (candidateMetadata.isSymbolicLink() && requireCanonicalPath) continue;
       const canonical = realpathSync(candidate);
+      if (requireCanonicalPath && canonical !== candidate) continue;
       const metadata = lstatSync(canonical, { bigint: true });
       if (metadata.isSymbolicLink() || !metadata.isFile() ||
           !allowedOwners.has(Number(metadata.uid)) || (metadata.mode & 0o022n) !== 0n ||
@@ -398,23 +418,62 @@ function resolveTrustedPython3({
       const filesystemRoot = path.parse(canonical).root;
       let cursor = filesystemRoot;
       let secure = true;
+      const ancestry = [];
+      const rootMetadata = lstatSync(filesystemRoot, { bigint: true });
+      if (!securePythonAncestor(rootMetadata, allowedOwners)) continue;
+      ancestry.push({ path: filesystemRoot, receipt: statReceipt(rootMetadata) });
       for (const part of canonical.slice(filesystemRoot.length).split(path.sep).filter(Boolean).slice(0, -1)) {
         cursor = path.join(cursor, part);
         const ancestor = lstatSync(cursor, { bigint: true });
-        if (ancestor.isSymbolicLink() || !ancestor.isDirectory() ||
-            !allowedOwners.has(Number(ancestor.uid)) || (ancestor.mode & 0o022n) !== 0n) {
+        if (!securePythonAncestor(ancestor, allowedOwners)) {
           secure = false;
           break;
         }
+        ancestry.push({ path: cursor, receipt: statReceipt(ancestor) });
       }
       if (!secure) continue;
       accessSync(canonical, fs.constants.X_OK);
-      return { path: canonical, receipt: statReceipt(metadata) };
+      return { path: canonical, receipt: statReceipt(metadata), ancestry };
     } catch {
       // Try the next fixed, audited installation location.
     }
   }
   throw new Error('no secure Python 3 exists at an audited installation location');
+}
+
+function verifyTrustedPythonPath(python, label) {
+  let canonical;
+  try {
+    canonical = fs.realpathSync.native(python.path);
+  } catch {
+    throw new Error(`${label} Python 3 changed during the batched descriptor read`);
+  }
+  if (canonical !== python.path) {
+    throw new Error(`${label} Python 3 path became symbolic during the batched descriptor read`);
+  }
+  for (const ancestor of python.ancestry) {
+    let metadata;
+    try {
+      metadata = fs.lstatSync(ancestor.path, { bigint: true });
+    } catch {
+      throw new Error(`${label} Python 3 ancestry changed during the batched descriptor read`);
+    }
+    if (!securePythonAncestor(metadata, new Set([0])) ||
+        !samePythonAncestor(ancestor.receipt, metadata)) {
+      throw new Error(`${label} Python 3 ancestry changed during the batched descriptor read`);
+    }
+  }
+  let metadata;
+  try {
+    metadata = fs.lstatSync(python.path, { bigint: true });
+  } catch {
+    throw new Error(`${label} Python 3 changed during the batched descriptor read`);
+  }
+  if (metadata.isSymbolicLink() || !metadata.isFile() || Number(metadata.uid) !== 0 ||
+      (metadata.mode & 0o022n) !== 0n || (metadata.mode & 0o111n) === 0n ||
+      JSON.stringify(statReceipt(metadata)) !== JSON.stringify(python.receipt)) {
+    throw new Error(`${label} Python 3 changed during the batched descriptor read`);
+  }
 }
 
 function pythonRootedEntries(root, relativePaths, label, {
@@ -460,8 +519,16 @@ function pythonRootedEntries(root, relativePaths, label, {
     prune,
     expectedRoot,
   });
+  const darwinPathLaunch = process.platform === 'darwin';
+  if (darwinPathLaunch && pythonExecutable !== undefined) {
+    throw new Error(`${label} cannot override the fixed Darwin Python 3 authority`);
+  }
   const python = resolveTrustedPython3({
-    candidates: pythonExecutable ? [pythonExecutable] : trustedPythonCandidates(),
+    candidates: darwinPathLaunch
+      ? trustedPythonCandidates({ pathLaunch: true })
+      : pythonExecutable ? [pythonExecutable] : trustedPythonCandidates({ pathLaunch: false }),
+    requireRootOwned: darwinPathLaunch,
+    requireCanonicalPath: darwinPathLaunch,
   });
   let pythonDescriptor;
   let result;
@@ -474,11 +541,15 @@ function pythonRootedEntries(root, relativePaths, label, {
     if (JSON.stringify(statReceipt(openedPython)) !== JSON.stringify(python.receipt)) {
       throw new Error(`${label} Python 3 changed before descriptor-authorized launch`);
     }
-    // The executable and helper authorities are both held descriptors. XNU
-    // fdesc and Linux procfs expose the inherited descriptor as /dev/fd/3;
-    // Node duplicates the supplied fd into slot 3 for the child before exec.
-    // The helper itself is hash-pinned `-c` bytes, never a mutable pathname.
-    result = spawnSync('/dev/fd/3', ['-I', '-B', '-c', helperSource], {
+    if (darwinPathLaunch) verifyTrustedPythonPath(python, label);
+    // Linux executes the held Python descriptor. XNU exposes fdesc entries for
+    // I/O but does not make them executable, so Darwin executes one link-free,
+    // root-owned system pathname while retaining the open descriptor and
+    // revalidating the exact file plus its ancestry before and after launch.
+    // The helper itself remains hash-pinned `-c` bytes, never a pathname.
+    result = spawnSync(
+      darwinPathLaunch ? python.path : '/dev/fd/3',
+      ['-I', '-B', '-c', helperSource], {
       input: request,
       encoding: 'utf8',
       maxBuffer: 256 * 1024 * 1024,
@@ -488,11 +559,14 @@ function pythonRootedEntries(root, relativePaths, label, {
         PYTHONDONTWRITEBYTECODE: '1',
         PYTHONNOUSERSITE: '1',
       },
-      stdio: ['pipe', 'pipe', 'pipe', pythonDescriptor],
+      stdio: darwinPathLaunch
+        ? ['pipe', 'pipe', 'pipe']
+        : ['pipe', 'pipe', 'pipe', pythonDescriptor],
     });
   } finally {
     if (pythonDescriptor !== undefined) fs.closeSync(pythonDescriptor);
   }
+  if (darwinPathLaunch) verifyTrustedPythonPath(python, label);
   let pythonAfter;
   try {
     pythonAfter = fs.lstatSync(python.path, { bigint: true });

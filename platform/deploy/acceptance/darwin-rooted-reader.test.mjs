@@ -18,6 +18,76 @@ const darwinOnly = process.platform === "darwin"
   ? false
   : "requires a real Darwin kernel and macOS openat implementation";
 
+function mockStat(kind, { mode, uid = 0n, symbolic = false } = {}) {
+  return {
+    dev: 1n,
+    ino: kind === "file" ? 2n : 1n,
+    mode: mode ?? (kind === "file" ? 0o100755n : 0o040755n),
+    nlink: 1n,
+    uid,
+    gid: 0n,
+    size: 1n,
+    mtimeNs: 1n,
+    ctimeNs: 1n,
+    isSymbolicLink: () => symbolic,
+    isFile: () => kind === "file",
+    isDirectory: () => kind === "directory",
+  };
+}
+
+test("Darwin pathname authority accepts only a canonical root-owned executable and ancestry", () => {
+  const candidate = "/usr/bin/python3";
+  const lstatSync = (entry) => mockStat(entry === candidate ? "file" : "directory");
+  assert.equal(resolveTrustedPython3({
+    candidates: [candidate],
+    realpathSync: (entry) => entry,
+    lstatSync,
+    accessSync: () => {},
+    requireRootOwned: true,
+    requireCanonicalPath: true,
+  }).path, candidate);
+
+  assert.throws(
+    () => resolveTrustedPython3({
+      candidates: [candidate],
+      realpathSync: (entry) => entry,
+      lstatSync: (entry) => mockStat(entry === candidate ? "file" : "directory", {
+        uid: entry === candidate ? 501n : 0n,
+      }),
+      accessSync: () => {},
+      requireRootOwned: true,
+      requireCanonicalPath: true,
+    }),
+    /no secure Python 3/u,
+  );
+  assert.throws(
+    () => resolveTrustedPython3({
+      candidates: [candidate],
+      realpathSync: () => "/System/Library/python3",
+      lstatSync: (entry) => mockStat(entry === candidate ? "file" : "directory", {
+        symbolic: entry === candidate,
+      }),
+      accessSync: () => {},
+      requireRootOwned: true,
+      requireCanonicalPath: true,
+    }),
+    /no secure Python 3/u,
+  );
+  assert.throws(
+    () => resolveTrustedPython3({
+      candidates: [candidate],
+      realpathSync: (entry) => entry,
+      lstatSync: (entry) => mockStat(entry === candidate ? "file" : "directory", {
+        mode: entry === "/usr" ? 0o040775n : undefined,
+      }),
+      accessSync: () => {},
+      requireRootOwned: true,
+      requireCanonicalPath: true,
+    }),
+    /no secure Python 3/u,
+  );
+});
+
 test("the real Darwin rooted reader uses a trusted helper and refuses every link/root substitution", {
   skip: darwinOnly,
 }, () => {
@@ -45,8 +115,20 @@ test("the real Darwin rooted reader uses a trusted helper and refuses every link
 
     const invocation = invocations[0];
     const trustedPython = resolveTrustedPython3();
-    assert.equal(invocation.command, "/dev/fd/3");
+    assert.equal(invocation.command, trustedPython.path);
+    assert.ok([
+      "/usr/bin/python3",
+      "/Library/Developer/CommandLineTools/usr/bin/python3",
+    ].includes(trustedPython.path));
     assert.equal(fs.realpathSync.native(trustedPython.path), trustedPython.path);
+    assert.equal(trustedPython.receipt.uid, "0");
+    for (const ancestor of trustedPython.ancestry) {
+      const metadata = fs.lstatSync(ancestor.path);
+      assert.equal(metadata.isSymbolicLink(), false);
+      assert.equal(metadata.isDirectory(), true);
+      assert.equal(metadata.uid, 0);
+      assert.equal(metadata.mode & 0o022, 0);
+    }
     assert.deepEqual(invocation.args.slice(0, 3), ["-I", "-B", "-c"]);
     assert.equal(
       createHash("sha256").update(invocation.args[3]).digest("hex"),
@@ -66,8 +148,7 @@ test("the real Darwin rooted reader uses a trusted helper and refuses every link
       PYTHONDONTWRITEBYTECODE: "1",
       PYTHONNOUSERSITE: "1",
     });
-    assert.deepEqual(invocation.options.stdio.slice(0, 3), ["pipe", "pipe", "pipe"]);
-    assert.equal(Number.isInteger(invocation.options.stdio[3]), true);
+    assert.deepEqual(invocation.options.stdio, ["pipe", "pipe", "pipe"]);
     assert.equal(invocation.options.encoding, "utf8");
 
     const outside = path.join(fixture, "outside.txt");

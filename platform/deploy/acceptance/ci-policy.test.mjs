@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
@@ -15,6 +17,7 @@ const DARWIN_TEST_PATH = path.join(
   "acceptance",
   "darwin-rooted-reader.test.mjs",
 );
+const PIN_INSTALL_PATH = path.join(ROOT, "platform", "deploy", "pin", "install.mjs");
 
 const ACTIONS = Object.freeze({
   "actions/checkout": Object.freeze({
@@ -302,6 +305,53 @@ function assertExactPermissions(actual, expected, label) {
 }
 
 const FIXED_RUNNER_BINDING_SHELL = "/usr/bin/bash --noprofile --norc -euo pipefail {0}";
+const FIXED_NODE_SOURCE = "/opt/hostedtoolcache/node/22.14.0/x64/bin/node";
+const FIXED_NODE_DESTINATION = "/usr/bin/node";
+const FIXED_NODE_SHA256 = "1abce2374a485bddae3c27b17a3e3143e2780232026e627c4fe74ddde3f380a1";
+
+function assertFixedNodeBinding(job, label) {
+  invariant(job !== undefined, `${label} job is missing`);
+  const setup = stepsUsing(job, "actions/setup-node");
+  invariant(setup.length === 1, `${label} must install exactly one pinned Node toolchain`);
+  invariant(setup[0].with.get("node-version") === "22.14.0", `${label} Node version changed`);
+  const matches = job.steps.filter((step) =>
+    (step.properties.get("run") ?? "").includes(`node_source=${FIXED_NODE_SOURCE}`));
+  invariant(matches.length === 1, `${label} must bind the setup-node binary exactly once`);
+  const binding = matches[0];
+  invariant(!binding.properties.has("if"), `${label} fixed Node binding may not be conditional`);
+  invariant(
+    binding.properties.get("shell") === FIXED_RUNNER_BINDING_SHELL,
+    `${label} fixed Node binding must use the fixed clean Bash shell`,
+  );
+  const command = binding.properties.get("run");
+  for (const fragment of [
+    "export LANG=C LC_ALL=C PATH=/usr/bin:/bin",
+    `node_source=${FIXED_NODE_SOURCE}`,
+    `node_destination=${FIXED_NODE_DESTINATION}`,
+    `expected_node_sha256=${FIXED_NODE_SHA256}`,
+    'test "$(/usr/bin/realpath -e -- "${node_source}")" = "${node_source}"',
+    'test -f "${node_source}" && test ! -L "${node_source}" && test -x "${node_source}"',
+    'test "$("${node_source}" --version)" = v22.14.0',
+    'source_digest="$(/usr/bin/sha256sum -- "${node_source}")"',
+    '[[ "${source_digest}" =~ ^[0-9a-f]{64}$ ]]',
+    'test "${source_digest}" = "${expected_node_sha256}"',
+    "/usr/bin/sudo /usr/bin/install -T -o root -g root -m 0555 --",
+    'test "$(/usr/bin/realpath -e -- "${node_destination}")" = "${node_destination}"',
+    'test -f "${node_destination}" && test ! -L "${node_destination}" && test -x "${node_destination}"',
+    "'0:0:555:regular file:1'",
+    'test "$("${node_destination}" --version)" = v22.14.0',
+    'destination_digest="$(/usr/bin/sha256sum -- "${node_destination}")"',
+    'source_digest_after="$(/usr/bin/sha256sum -- "${node_source}")"',
+    'test "${destination_digest}" = "${source_digest}"',
+    'test "${source_digest_after}" = "${source_digest}"',
+  ]) invariant(command.includes(fragment), `${label} fixed Node binding lost ${fragment}`);
+  invariant(
+    !/(?:command\s+-v|type\s+-P|\bwhich\b|\$PATH|\$\{PATH\}|\/usr\/local\/bin\/node)/u.test(command),
+    `${label} fixed Node binding selects executable authority dynamically`,
+  );
+  invariant(setup[0].start < binding.start, `${label} fixed Node binding must follow setup-node`);
+  return binding;
+}
 
 function assertRunnerTempBinding(job, label, fragments) {
   invariant(job !== undefined, `${label} job is missing`);
@@ -641,6 +691,8 @@ function validateNativeBuilder(ci) {
   invariant(debug.length === 1, "native builder must execute exactly one continuous debug publication session");
   invariant(verify.length === 1, "native builder must verify exactly one append-only debug selection");
   invariant(check[0].start < debug[0].start && debug[0].start < verify[0].start, "native Pin session and verification order changed");
+  const nodeBinding = assertFixedNodeBinding(job, "native Pin builder");
+  invariant(nodeBinding.start < check[0].start, "native Pin builder must bind fixed Node before broker sessions");
 
   for (const [label, step] of [["check", check[0]], ["debug", debug[0]]]) {
     const command = step.properties.get("run");
@@ -695,6 +747,15 @@ function validateDarwinJob(ci, darwinTestSource) {
   invariant(!/platform\s*:\s*["']darwin["']/u.test(darwinTestSource), "Darwin test forces a mocked platform");
   invariant(darwinTestSource.includes("readStableRootedEntries"), "Darwin test does not exercise the production reader");
   invariant(darwinTestSource.includes("resolveTrustedPython3"), "Darwin test does not prove trusted Python resolution");
+  invariant(
+    darwinTestSource.includes('assert.equal(invocation.command, trustedPython.path)'),
+    "Darwin test does not prove fixed-path Python execution",
+  );
+  invariant(darwinTestSource.includes('trustedPython.receipt.uid, "0"'), "Darwin test does not prove root ownership");
+  invariant(
+    darwinTestSource.includes('assert.deepEqual(invocation.options.stdio, ["pipe", "pipe", "pipe"])'),
+    "Darwin test still permits an inherited executable fd",
+  );
   invariant(darwinTestSource.includes("source root ancestors must not be symbolic links"), "Darwin test lacks root-ancestor refusal");
   invariant(darwinTestSource.includes("hard-linked files are forbidden"), "Darwin test lacks hardlink refusal");
 }
@@ -718,6 +779,16 @@ function validateWorkflowSources({
   validatePermissions(ci, release, pinRelease, vpsCandidate);
   validateRunners(ci);
   validateRunners(release);
+  const platformNodeBinding = assertFixedNodeBinding(
+    ci.jobs.get("layout-and-wire"),
+    "complete platform suite",
+  );
+  const platformSuite = ci.jobs.get("layout-and-wire")?.steps.find((step) =>
+    (step.properties.get("run") ?? "").includes("./revival check platform"));
+  invariant(
+    platformSuite && platformNodeBinding.start < platformSuite.start,
+    "complete platform suite must bind fixed Node before invoking revival",
+  );
   validateRunners(pinRelease);
   validateRunners(vpsCandidate);
   validateRunnerTempBindings(ci, pinRelease, vpsCandidate);
@@ -873,6 +944,109 @@ test("mutation: setup-node automatic package-manager caching cannot be enabled",
     );
     return value;
   }, /automatic package-manager caching/u);
+});
+
+for (const [label, before, after, expected] of [
+  [
+    "ambient Node lookup",
+    `node_source=${FIXED_NODE_SOURCE}`,
+    'node_source="$(command -v node)"',
+    /must bind the setup-node binary exactly once|selects executable authority dynamically/u,
+  ],
+  [
+    "alternate destination",
+    `node_destination=${FIXED_NODE_DESTINATION}`,
+    "node_destination=/usr/local/bin/node",
+    /fixed Node binding lost node_destination/u,
+  ],
+  [
+    "unprivileged install command",
+    "/usr/bin/sudo /usr/bin/install -T -o root -g root -m 0555 --",
+    "sudo install -T -o root -g root -m 0555 --",
+    /fixed Node binding lost \/usr\/bin\/sudo/u,
+  ],
+  [
+    "missing source revalidation",
+    '          test "${source_digest_after}" = "${source_digest}"\n',
+    "",
+    /fixed Node binding lost test .*source_digest_after/u,
+  ],
+  [
+    "unreviewed Node binary digest",
+    `expected_node_sha256=${FIXED_NODE_SHA256}`,
+    "expected_node_sha256=" + "0".repeat(64),
+    /fixed Node binding lost expected_node_sha256/u,
+  ],
+]) {
+  test(`mutation: fixed Node binding rejects ${label}`, () => {
+    expectRejected((value) => {
+      value.ciText = changed(
+        value.ciText,
+        value.ciText.replaceAll(before, after),
+        `fixed Node ${label}`,
+      );
+      return value;
+    }, expected);
+  });
+}
+
+test("the headless Pin installer loads on the Node 22.14 contract before any device I/O", () => {
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "pin-install-node-contract-"));
+  try {
+    const result = spawnSync(process.execPath, [PIN_INSTALL_PATH, "--help"], {
+      cwd: ROOT,
+      encoding: "utf8",
+      maxBuffer: 4 * 1024 * 1024,
+      env: {
+        HOME: temporary,
+        LANG: "C",
+        LC_ALL: "C",
+        PATH: temporary,
+        TZ: "UTC",
+      },
+    });
+    assert.equal(result.signal, null);
+    assert.equal(result.status, 0, `installer help failed\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+    assert.match(result.stdout, /WITHOUT --confirm this only PLANS\./u);
+    assert.match(result.stdout, /WITH --confirm it MODIFIES THE DEVICE/u);
+    assert.match(
+      result.stderr,
+      /^(?:\(node:\d+\) ExperimentalWarning: stripTypeScriptTypes is an experimental feature and might change at any time\n(?:\(Use `node --trace-warnings \.\.\.` to show where the warning was created\)\n)?)?$/u,
+    );
+
+    const source = fs.readFileSync(PIN_INSTALL_PATH, "utf8");
+    assert.doesNotMatch(source, /\bregisterHooks\b/u);
+    assert.match(source, /import \{ register \} from "node:module";/u);
+    assert.match(source, /stripTypeScriptTypes\(source/u);
+    assert.match(source, /mode: "transform"/u);
+    assert.match(source, /the headless Pin installer cannot execute TSX modules/u);
+    assert.ok(
+      source.indexOf("if (!values.confirm)") < source.indexOf("await runInstallOperation({"),
+      "the dry-run return must remain before the mutating install pipeline",
+    );
+    for (const args of [
+      ["--store", path.join(temporary, "missing-store")],
+      ["--confirm", "--store", path.join(temporary, "missing-store")],
+    ]) {
+      const refused = spawnSync(process.execPath, [PIN_INSTALL_PATH, ...args], {
+        cwd: ROOT,
+        encoding: "utf8",
+        maxBuffer: 4 * 1024 * 1024,
+        env: {
+          HOME: temporary,
+          LANG: "C",
+          LC_ALL: "C",
+          PATH: temporary,
+          TZ: "UTC",
+        },
+      });
+      assert.equal(refused.status, 1);
+      assert.match(refused.stderr, /cannot read current release pointer/u);
+      assert.doesNotMatch(refused.stdout + refused.stderr, /adb|device|Modifying/u);
+    }
+  } finally {
+    fs.rmSync(temporary, { recursive: true, force: true });
+  }
 });
 
 test("mutation: cache saves cannot run for pull requests", () => {
