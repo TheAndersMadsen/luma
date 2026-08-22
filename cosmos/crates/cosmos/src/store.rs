@@ -810,9 +810,10 @@ pub trait Store: Send + Sync + 'static {
 
     /// Store a note and return its server-minted uuid.
     ///
-    /// A note's body is an opaque `EncryptedData` blob the device sealed — the
-    /// server holds no key for it and stores it verbatim. That is the whole
-    /// design: the wearer's notes are readable only on their pin.
+    /// A note's body is an opaque `EncryptedData` blob the device sealed and is
+    /// stored verbatim. Device RPCs that acknowledge a note derive its search
+    /// index through the authoritative channel-key directory first and use
+    /// [`Store::create_indexed_note`] for one durable write.
     ///
     /// `Written` because the handler acks `CREATE_SUCCESS` with the returned
     /// uuid: a write that silently failed would tell the wearer their note was
@@ -823,6 +824,17 @@ pub trait Store: Send + Sync + 'static {
         principal: &str,
         encrypted_note: Option<EncryptedData>,
         encrypted_location: Option<EncryptedData>,
+    ) -> Written<NoteRecord>;
+
+    /// Store a note and its already-derived search text in the same durable
+    /// write. A device note must never receive CREATE_SUCCESS between inserting
+    /// the sealed row and publishing the index that makes it retrievable.
+    async fn create_indexed_note(
+        &self,
+        principal: &str,
+        encrypted_note: Option<EncryptedData>,
+        encrypted_location: Option<EncryptedData>,
+        indexed_text: Option<&str>,
     ) -> Written<NoteRecord>;
 
     /// The wearer's notes, newest first, bounded by `max_items` (non-positive is
@@ -891,10 +903,10 @@ pub trait Store: Send + Sync + 'static {
 
     /// Record a plaintext index entry for a note the server was able to open.
     ///
-    /// Note bodies are sealed by the device and stored verbatim; the server can
-    /// only index one when it holds the channel key. Indexing is therefore
-    /// best-effort by design — a note we cannot open is simply not searchable,
-    /// which is the honest outcome rather than a silently empty result set.
+    /// Note bodies are sealed by the device and stored verbatim. This legacy
+    /// update is used only for explicitly best-effort backfill of an already
+    /// acknowledged row; new device writes publish their index atomically via
+    /// [`Store::create_indexed_note`].
     async fn index_note(&self, principal: &str, uuid: &str, plaintext: &str);
 
     /// Note uuids matching `query`, most recent first.
@@ -1738,6 +1750,28 @@ impl Store for MemoryStore {
         let record = NoteRecord {
             uuid: uuid::Uuid::new_v4().to_string(),
             indexed_text: None,
+            encrypted_note,
+            encrypted_location,
+            created: SyncTime::now(),
+        };
+        book.notes.push(record.clone());
+        drop(guard);
+        self.persist();
+        Ok(record)
+    }
+
+    async fn create_indexed_note(
+        &self,
+        principal: &str,
+        encrypted_note: Option<EncryptedData>,
+        encrypted_location: Option<EncryptedData>,
+        indexed_text: Option<&str>,
+    ) -> Written<NoteRecord> {
+        let mut guard = self.captures.lock().expect("capture store poisoned");
+        let book = guard.entry(principal.to_owned()).or_default();
+        let record = NoteRecord {
+            uuid: uuid::Uuid::new_v4().to_string(),
+            indexed_text: indexed_text.map(str::to_lowercase),
             encrypted_note,
             encrypted_location,
             created: SyncTime::now(),

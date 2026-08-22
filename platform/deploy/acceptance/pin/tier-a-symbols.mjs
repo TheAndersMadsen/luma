@@ -263,10 +263,6 @@ export const TIER_A_SYMBOLS = deepFreeze({
         "save": {
           "code": 3,
           "wireName": "save"
-        },
-        "provider": {
-          "code": 4,
-          "wireName": "provider"
         }
       }
     },

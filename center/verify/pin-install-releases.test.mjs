@@ -93,10 +93,39 @@ const PACKAGES = {
 };
 const ROLES = ["installer", "bootstrap", "hook", "server", "hook-injector"];
 
+function authorityFixture(digest = "d".repeat(64)) {
+  return {
+    kind: "github-hosted-native-x64",
+    name: "hosted-attestation.json",
+    size: 1234,
+    sha256: digest,
+    provider: "github-actions-sigstore",
+    policySha256: "1".repeat(64),
+    requestSha256: "2".repeat(64),
+    predicateSha256: "3".repeat(64),
+    trustedRootSha256: "4".repeat(64),
+    preSignBundleSha256: "5".repeat(64),
+    releaseBundleSha256: "6".repeat(64),
+    preSignVerificationSha256: "7".repeat(64),
+    releaseVerificationSha256: "8".repeat(64),
+    runnerEnvironment: "github-hosted",
+    runnerLabel: "ubuntu-24.04",
+    runnerArchitecture: "x64",
+    runnerInvocationUri: "https://github.com/TheAndersMadsen/ai-pin-revival/actions/runs/1/attempts/1",
+    repository: "TheAndersMadsen/ai-pin-revival",
+    sourceRef: "refs/heads/main",
+    sourceDigest: "9".repeat(40),
+    sourceGenerationSha256: "a".repeat(64),
+    sourceTarSha256: "b".repeat(64),
+    toolchainSha256: "c".repeat(64),
+    builderImageId: `sha256:${"d".repeat(64)}`,
+  };
+}
+
 /** A manifest that must be accepted, so every rejection below is a one-field delta. */
 function createManifest({ releaseId = RELEASE_ID, version = "2026-08-09.0", versionCode = 202_608_090 } = {}) {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     releaseId,
     version,
     artifacts: ROLES.map((role, index) => ({
@@ -108,6 +137,7 @@ function createManifest({ releaseId = RELEASE_ID, version = "2026-08-09.0", vers
       size: index + 1,
       sha256: SHA256,
     })),
+    authority: authorityFixture(),
   };
 }
 
@@ -252,9 +282,18 @@ test("parsePinReleaseManifest rejects unknown fields and unsupported schema vers
   );
   // A newer schema is a manifest this client cannot claim to have understood.
   assert.throws(
-    () => parsePinReleaseManifest({ ...createManifest(), schemaVersion: 2 }, MANIFEST_URL),
+    () => parsePinReleaseManifest({ ...createManifest(), schemaVersion: 1 }, MANIFEST_URL),
     PinReleaseError,
   );
+  const missingAuthorityBinding = createManifest();
+  delete missingAuthorityBinding.authority.requestSha256;
+  assert.throws(
+    () => parsePinReleaseManifest(missingAuthorityBinding, MANIFEST_URL),
+    PinReleaseError,
+  );
+  const selfHosted = createManifest();
+  selfHosted.authority.runnerEnvironment = "self-hosted";
+  assert.throws(() => parsePinReleaseManifest(selfHosted, MANIFEST_URL), PinReleaseError);
 });
 
 test("parsePinReleaseManifest rejects bad release IDs and non-monotonic version syntax", () => {
@@ -593,7 +632,7 @@ const ASSET_RELEASE_ID = "d".repeat(64);
 /** A manifest whose declared size and digest match APK_BYTES exactly. */
 function assetManifest() {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     releaseId: ASSET_RELEASE_ID,
     version: "2026-08-09.0",
     artifacts: ROLES.map((role) => ({
@@ -605,6 +644,7 @@ function assetManifest() {
       size: APK_BYTES.byteLength,
       sha256: APK_SHA256,
     })),
+    authority: authorityFixture("e".repeat(64)),
   };
 }
 

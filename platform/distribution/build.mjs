@@ -1,24 +1,27 @@
 #!/usr/bin/env node
 
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
-  cp,
+  chmod,
+  link,
   lstat,
   mkdir,
   mkdtemp,
+  open,
   readFile,
-  rename,
+  rename as fsRename,
   rm,
+  unlink,
   writeFile,
 } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildRelease, loadReleaseConfig } from "../deploy/release.mjs";
+import { buildRelease, readStableReleaseProfile } from "../deploy/release.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const DEFAULT_ROOT = resolve(dirname(SCRIPT_PATH), "../..");
 const DISTRIBUTION_PROFILE = "distribution";
+const VERSION_RECORD = "platform/distribution/version.json";
 const VERSION_PATTERN = /^[0-9A-Za-z](?:[0-9A-Za-z.-]{0,62}[0-9A-Za-z])?$/;
 
 function fail(message) {
@@ -52,27 +55,126 @@ async function assertAbsent(path) {
   fail(`refusing to replace existing distribution output: ${path}`);
 }
 
-async function copyProfileInputs({ root, stageRoot, config }) {
-  const profile = config.profiles[DISTRIBUTION_PROFILE];
-  if (!profile) fail(`release config has no ${DISTRIBUTION_PROFILE} profile`);
+function inodeReceipt(stat) {
+  return { dev: stat.dev.toString(), ino: stat.ino.toString() };
+}
 
-  for (const relativePath of profile.include) {
-    const source = join(root, relativePath);
-    const target = join(stageRoot, relativePath);
-    let stat;
-    try {
-      stat = await lstat(source);
-    } catch (error) {
-      if (error?.code === "ENOENT") fail(`distribution input is missing: ${relativePath}`);
-      throw error;
-    }
-    await mkdir(dirname(target), { recursive: true });
-    if (stat.isDirectory()) {
-      await cp(source, target, { recursive: true, verbatimSymlinks: true });
-    } else {
-      await cp(source, target, { verbatimSymlinks: true });
-    }
+export async function cleanupOwnedOutput(path, receipt, testHooks = {}) {
+  let current;
+  try {
+    current = await lstat(path, { bigint: true });
+  } catch (error) {
+    if (error?.code === "ENOENT") return false;
+    throw error;
   }
+  if (!current.isFile() || current.isSymbolicLink() ||
+      current.dev.toString() !== receipt.dev || current.ino.toString() !== receipt.ino) {
+    return false;
+  }
+  if (typeof testHooks.afterOwnershipCheck === "function") {
+    await testHooks.afterOwnershipCheck();
+  }
+  const quarantine = `${path}.cleanup-${process.pid}-${randomUUID()}`;
+  await fsRename(path, quarantine);
+  const moved = await lstat(quarantine, { bigint: true });
+  if (moved.dev.toString() !== receipt.dev || moved.ino.toString() !== receipt.ino) {
+    if (typeof testHooks.beforeForeignRestore === "function") {
+      await testHooks.beforeForeignRestore({ quarantine });
+    }
+    try {
+      await link(quarantine, path);
+      await unlink(quarantine);
+    } catch (error) {
+      if (error?.code !== "EEXIST") {
+        // A foreign directory or unsupported node cannot be restored with a
+        // no-replace hard link. Preserve it under quarantine for recovery.
+      }
+    }
+    return false;
+  }
+  await unlink(quarantine);
+  return true;
+}
+
+async function publishLinkedNoReplace(source, target) {
+  const sourceStat = await lstat(source, { bigint: true });
+  if (sourceStat.isSymbolicLink() || !sourceStat.isFile() || sourceStat.nlink !== 1n) {
+    fail(`distribution staging artifact is not one owned regular file: ${source}`);
+  }
+  await link(source, target);
+  const receipt = inodeReceipt(sourceStat);
+  try {
+    const installed = await lstat(target, { bigint: true });
+    if (!installed.isFile() || installed.isSymbolicLink() ||
+        installed.dev !== sourceStat.dev || installed.ino !== sourceStat.ino) {
+      fail(`distribution output changed during no-replace publication: ${target}`);
+    }
+    await unlink(source);
+    const finalized = await lstat(target, { bigint: true });
+    if (finalized.dev !== sourceStat.dev || finalized.ino !== sourceStat.ino ||
+        finalized.nlink !== 1n) {
+      fail(`distribution output changed while finalizing publication: ${target}`);
+    }
+    return receipt;
+  } catch (error) {
+    await cleanupOwnedOutput(target, receipt).catch(() => false);
+    throw error;
+  }
+}
+
+async function writeExclusive(path, data, mode = 0o644) {
+  let handle;
+  let receipt;
+  try {
+    handle = await open(path, "wx", mode);
+    await handle.writeFile(data);
+    await handle.sync();
+    const opened = await handle.stat({ bigint: true });
+    const installed = await lstat(path, { bigint: true });
+    if (!opened.isFile() || opened.nlink !== 1n || !installed.isFile() ||
+        installed.isSymbolicLink() || opened.dev !== installed.dev || opened.ino !== installed.ino) {
+      fail(`distribution output changed during exclusive publication: ${path}`);
+    }
+    receipt = inodeReceipt(opened);
+    return receipt;
+  } catch (error) {
+    if (handle && !receipt) {
+      try {
+        receipt = inodeReceipt(await handle.stat({ bigint: true }));
+      } catch {
+        // Without an inode receipt, preserving the path is safer than guessing ownership.
+      }
+    }
+    if (handle) {
+      await handle.close().catch(() => {});
+      handle = null;
+    }
+    if (receipt) await cleanupOwnedOutput(path, receipt).catch(() => false);
+    throw error;
+  } finally {
+    if (handle) await handle.close().catch(() => {});
+  }
+}
+
+async function copyProfileInputs({ root, stageRoot, releaseVersion, beforeSourceStabilityCheck }) {
+  const snapshot = await readStableReleaseProfile({
+    profile: DISTRIBUTION_PROFILE,
+    root,
+    beforeSourceStabilityCheck,
+  });
+  let stampedVersion = false;
+  for (const record of snapshot.records) {
+    const target = join(stageRoot, ...record.path.split("/"));
+    await mkdir(dirname(target), { recursive: true });
+    const mode = Number.parseInt(record.mode, 8);
+    const data = record.path === VERSION_RECORD
+      ? `${JSON.stringify({ schemaVersion: 1, version: releaseVersion }, null, 2)}\n`
+      : record.data;
+    if (record.path === VERSION_RECORD) stampedVersion = true;
+    await writeFile(target, data, { flag: "wx", mode });
+    await chmod(target, mode);
+  }
+  if (!stampedVersion) fail(`distribution input is missing: ${VERSION_RECORD}`);
 }
 
 async function writeChecksums(outputDirectory, names) {
@@ -82,11 +184,16 @@ async function writeChecksums(outputDirectory, names) {
     rows.push(`${sha256(data)}  ${name}`);
   }
   const path = join(outputDirectory, "SHA256SUMS");
-  await writeFile(path, `${rows.join("\n")}\n`, { flag: "wx" });
-  return path;
+  const receipt = await writeExclusive(path, `${rows.join("\n")}\n`);
+  return { path, receipt };
 }
 
-export async function buildDistribution({ version, outputDirectory, root = DEFAULT_ROOT }) {
+export async function buildDistribution({
+  version,
+  outputDirectory,
+  root = DEFAULT_ROOT,
+  beforeSourceStabilityCheck,
+}) {
   const releaseVersion = validateVersion(version);
   if (typeof outputDirectory !== "string" || outputDirectory.length === 0) {
     fail("build requires --output");
@@ -95,35 +202,46 @@ export async function buildDistribution({ version, outputDirectory, root = DEFAU
   const sourceRoot = resolve(root);
   const outputRoot = resolve(outputDirectory);
   if (pathIsWithin(sourceRoot, outputRoot)) fail("--output must be outside the source root");
-  const temporaryRoot = await mkdtemp(join(tmpdir(), "ai-pin-revival-distribution-"));
+  await mkdir(outputRoot, { recursive: true });
+  const outputStat = await lstat(outputRoot);
+  if (outputStat.isSymbolicLink() || !outputStat.isDirectory()) {
+    fail(`distribution output must be a real directory: ${outputRoot}`);
+  }
+  const temporaryRoot = await mkdtemp(join(outputRoot, ".ai-pin-revival-build-"));
   const stageRoot = join(temporaryRoot, "source");
   const buildRoot = join(temporaryRoot, "build");
+  const publications = [];
 
   try {
     await mkdir(stageRoot, { recursive: true });
-    const configPath = join(sourceRoot, "platform", "deploy", "release.json");
-    const config = await loadReleaseConfig(configPath);
-    await copyProfileInputs({ root: sourceRoot, stageRoot, config });
-    await writeFile(
-      join(stageRoot, "platform", "distribution", "version.json"),
-      `${JSON.stringify({ schemaVersion: 1, version: releaseVersion }, null, 2)}\n`,
-    );
+    await copyProfileInputs({
+      root: sourceRoot,
+      stageRoot,
+      releaseVersion,
+      beforeSourceStabilityCheck,
+    });
 
     const built = await buildRelease({
       profile: DISTRIBUTION_PROFILE,
       outputDirectory: buildRoot,
       root: stageRoot,
     });
-    await mkdir(outputRoot, { recursive: true });
-
     const archiveName = `ai-pin-revival-${releaseVersion}.tar.gz`;
     const manifestName = `ai-pin-revival-${releaseVersion}.manifest.json`;
     const descriptorName = `ai-pin-revival-${releaseVersion}.distribution.json`;
     for (const name of [archiveName, manifestName, descriptorName, "SHA256SUMS"]) {
       await assertAbsent(join(outputRoot, name));
     }
-    await rename(built.archivePath, join(outputRoot, archiveName));
-    await rename(built.manifestPath, join(outputRoot, manifestName));
+    const archivePath = join(outputRoot, archiveName);
+    const manifestPath = join(outputRoot, manifestName);
+    publications.push({
+      path: archivePath,
+      receipt: await publishLinkedNoReplace(built.archivePath, archivePath),
+    });
+    publications.push({
+      path: manifestPath,
+      receipt: await publishLinkedNoReplace(built.manifestPath, manifestPath),
+    });
 
     const descriptor = {
       schemaVersion: 1,
@@ -139,23 +257,29 @@ export async function buildDistribution({ version, outputDirectory, root = DEFAU
         manifestSha256: sha256(await readFile(join(outputRoot, manifestName))),
       },
     };
-    await writeFile(
-      join(outputRoot, descriptorName),
-      `${JSON.stringify(descriptor, null, 2)}\n`,
-      { flag: "wx" },
-    );
-    const checksumPath = await writeChecksums(outputRoot, [
+    const descriptorPath = join(outputRoot, descriptorName);
+    publications.push({
+      path: descriptorPath,
+      receipt: await writeExclusive(descriptorPath, `${JSON.stringify(descriptor, null, 2)}\n`),
+    });
+    const checksum = await writeChecksums(outputRoot, [
       archiveName,
       manifestName,
       descriptorName,
     ]);
+    publications.push(checksum);
 
     return {
       ...descriptor,
       outputDirectory: outputRoot,
       descriptor: descriptorName,
-      checksums: basename(checksumPath),
+      checksums: basename(checksum.path),
     };
+  } catch (error) {
+    for (const publication of publications.reverse()) {
+      await cleanupOwnedOutput(publication.path, publication.receipt).catch(() => false);
+    }
+    throw error;
   } finally {
     await rm(temporaryRoot, { recursive: true, force: true });
   }

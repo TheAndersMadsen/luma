@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
 import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -14,6 +15,8 @@ import { at } from "./source-offsets.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const common = path.join(root, "platform/deploy/vps/remote/common.sh");
+const require = createRequire(import.meta.url);
+const { operatorContract, renderHelp } = require("../../cli/command-spec.js");
 
 function bash(script, args = []) {
   return spawnSync("bash", ["-c", script, "fixture", common, ...args], {
@@ -206,15 +209,23 @@ test("channel-key JSON accepts only exact canonical AES-128 material", async (t)
   const directory = await mkdtemp(path.join(os.tmpdir(), "revival-channel-json-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const valid = JSON.stringify({ kid: "U:wearer/center/ephemeral", key: Buffer.alloc(16, 7).toString("base64") });
+  const legacy = JSON.stringify({ kid: "V:01:D:web-demo:U:wearer/center/ephemeral", key: Buffer.alloc(16, 7).toString("base64") });
   const invalid = {
     missing: JSON.stringify({ key: Buffer.alloc(16).toString("base64") }),
     duplicate: `{"kid":"first","kid":"second","key":"${Buffer.alloc(16).toString("base64")}"}`,
     unknown: JSON.stringify({ kid: "wearer", key: Buffer.alloc(16).toString("base64"), algorithm: "AES-128-GCM" }),
     wrongLength: JSON.stringify({ kid: "wearer", key: Buffer.alloc(32).toString("base64") }),
+    extraPrincipalField: JSON.stringify({ kid: "U:wearer:extra/center/ephemeral", key: Buffer.alloc(16).toString("base64") }),
+    malformedLegacy: JSON.stringify({ kid: "V:1:D:web-demo:U:wearer/center/ephemeral", key: Buffer.alloc(16).toString("base64") }),
+    c1Control: JSON.stringify({ kid: "U:wearer\u0085/center/ephemeral", key: Buffer.alloc(16).toString("base64") }),
   };
   const validPath = path.join(directory, "valid.json");
   await writeFile(validPath, valid, { mode: 0o600 });
   let result = bash('source "$1"; validate_center_channel_key_json "$2"', [validPath]);
+  assert.equal(result.status, 0, result.stderr);
+  const legacyPath = path.join(directory, "legacy.json");
+  await writeFile(legacyPath, legacy, { mode: 0o600 });
+  result = bash('source "$1"; validate_center_channel_key_json "$2"', [legacyPath]);
   assert.equal(result.status, 0, result.stderr);
   for (const [name, body] of Object.entries(invalid)) {
     const target = path.join(directory, `${name}.json`);
@@ -285,6 +296,16 @@ write_backup_invariants "$work/invariants.tsv" ignored
 tar -czpf "$work/center.tar.gz" -C "$CENTER_DATA_DIR" .
 archive_inventory "$work/center.tar.gz" "$work/center.inventory.json"
 validate_center_channel_backup_contract "$work/invariants.tsv" "$work/center.inventory.json" "$work/center.tar.gz"
+python3 - "$CENTER_DATA_DIR/channel-key.json" <<'PY'
+import json,sys
+path=sys.argv[1]
+open(path,"w",encoding="utf-8").write(json.dumps({"kid":"U:wearer\u0085/center/ephemeral","key":"BwcHBwcHBwcHBwcHBwcHBw=="})+"\n")
+PY
+chmod 0600 "$CENTER_DATA_DIR/channel-key.json"
+write_invariants "$work/c1-invariants.tsv" ignored
+tar -czpf "$work/c1-center.tar.gz" -C "$CENTER_DATA_DIR" .
+archive_inventory "$work/c1-center.tar.gz" "$work/c1-center.inventory.json"
+! (validate_center_channel_backup_contract "$work/c1-invariants.tsv" "$work/c1-center.inventory.json" "$work/c1-center.tar.gz") >/dev/null 2>&1
 cp "$work/invariants.tsv" "$work/drift.tsv"
 python3 - "$work/drift.tsv" <<'PY'
 import pathlib,sys
@@ -727,7 +748,7 @@ test("every key-material assertion is still WIRED, on both the backup and the re
   assert.ok(compared < reasserted, "the restore rehearsal must compare inventories before re-hashing the keys");
   assert.ok(reasserted < cleaned, "the rebuilt archive must be proven before it is deleted");
 
-  // --- The operator side: `./revival backup --fetch`. ----------------------
+  // --- The operator side: `./revival backup --confirm --fetch`. ------------
   assert.match(
     localBackup,
     /^  verify_fetched_backup "\$staging\/\$id" "\$id" "\$evidence"$/m,
@@ -778,11 +799,11 @@ test("every operator runbook publishes --fetch as a runnable command", async () 
     assert.ok(
       // `(?![-\w])`, not `\b`: `--fetch` is a prefix of `--fetch-dir`, and `\b`
       // matches between `h` and `-`, so `\b` here was satisfied by a block that
-      // offered ONLY `./revival backup --fetch-dir /Volumes/…`. That is a
+      // offered ONLY `./revival backup --confirm --fetch-dir /Volumes/…`. That is a
       // different command — it demands a path the operator may not have — and it
       // would have let the plain form disappear from both runbooks silently.
-      fenced.some((block) => /^\.\/revival backup --fetch(?![-\w])/mu.test(block)),
-      `${name} does not offer \`./revival backup --fetch\` in a copyable command block`,
+      fenced.some((block) => /^\.\/revival backup --confirm --fetch(?![-\w])/mu.test(block)),
+      `${name} does not offer \`./revival backup --confirm --fetch\` in a copyable command block`,
     );
   }
 
@@ -792,7 +813,7 @@ test("every operator runbook publishes --fetch as a runnable command", async () 
   const readme = await readFile(path.join(root, "README.md"), "utf8");
   assert.match(
     readme,
-    /`\.\/revival backup --fetch`/u,
+    /`\.\/revival backup --confirm --fetch`/u,
     "README.md must name the command that creates the only off-host copy of the key material",
   );
 
@@ -823,13 +844,10 @@ test("every operator runbook publishes --fetch as a runnable command", async () 
     /^    --fetch-dir\) \(\(\$# >= 2\)\) \|\| usage; fetch_dir="\$2"; fetch=1; shift 2 ;;$/mu,
     "`--fetch-dir` must still be parsed, and must imply --fetch — a destination with no fetch is a no-op",
   );
-  // The CLI is the surface the runbooks tell the operator to type, so it has to
-  // keep naming the flag it forwards.
-  const cliDir = path.join(root, "platform", "cli");
-  const cli = [
-    await readFile(path.join(root, "revival"), "utf8"),
-    ...(await Promise.all((await readdir(cliDir)).filter((name) => name.endsWith(".js")).sort()
-      .map((name) => readFile(path.join(cliDir, name), "utf8")))),
-  ].join("\n");
-  assert.match(cli, /--fetch \[--fetch-dir DIR\]/u, "`./revival help` must still name --fetch");
+  // The contract is the only CLI help source. Pin the data and both rendered
+  // surfaces so deleting an old hand-written help block cannot create drift.
+  const backupCommand = operatorContract().commands.find((command) => command.id === "backup");
+  assert.match(backupCommand.usage, /--fetch \[--fetch-dir DIR\]/u);
+  assert.match(renderHelp([]), /revival backup .*--fetch \[--fetch-dir DIR\]/u);
+  assert.match(renderHelp(["backup"]), /Usage: revival backup .*--fetch \[--fetch-dir DIR\]/u);
 });

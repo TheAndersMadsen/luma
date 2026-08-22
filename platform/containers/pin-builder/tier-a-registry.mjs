@@ -1675,7 +1675,7 @@ function renderKotlin(registry) {
   for (const action of registry.nativeActions) {
     lines.push(`            ${action.name},`);
   }
-  lines.push("        )", "    }", "}", "");
+  lines.push("        )", "    }", "}");
   return `${lines.join("\n")}\n`;
 }
 

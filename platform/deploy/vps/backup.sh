@@ -1,11 +1,13 @@
-#!/usr/bin/env bash
+#!/usr/bin/env -S /bin/bash -p
 set -euo pipefail
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-source "$SCRIPT_DIR/lib/local.sh"
+case "${BASH_SOURCE[0]}" in /*) SCRIPT_PATH="${BASH_SOURCE[0]}" ;; *) SCRIPT_PATH="$PWD/${BASH_SOURCE[0]}" ;; esac
+SCRIPT_DIR="${SCRIPT_PATH%/*}"
+builtin source "$SCRIPT_DIR/lib/local.sh"
 
 leave=0
 json=0
 fetch=0
+confirm=0
 backup_id=""
 # Mirrors revival's BACKUP_DIR/SECRETS_DIR resolution so the wrapper behaves the
 # same whether it is invoked through `./revival backup` (which exports both) or
@@ -13,7 +15,7 @@ backup_id=""
 fetch_dir="${REVIVAL_BACKUP_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/ai-pin-revival/backups}"
 secrets_dir="${REVIVAL_SECRETS_DIR:-${REVIVAL_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/ai-pin-revival}/secrets}"
 usage() {
-  echo "usage: $0 [--remote vps] [--backup-id ID] [--leave-quiesced] [--fetch [--fetch-dir DIR]] [--json]" >&2
+  echo "usage: $0 --confirm [--remote vps] [--backup-id ID] [--leave-quiesced] [--fetch [--fetch-dir DIR]] [--json]" >&2
   exit 64
 }
 while (($#)); do
@@ -24,10 +26,12 @@ while (($#)); do
     --fetch) fetch=1; shift ;;
     --fetch-dir) (($# >= 2)) || usage; fetch_dir="$2"; fetch=1; shift 2 ;;
     --json) json=1; shift ;;
+    --confirm) ((confirm == 0)) || usage; confirm=1; shift ;;
     *) usage ;;
   esac
 done
 [[ -z "$backup_id" || "$backup_id" =~ ^[A-Za-z0-9._-]{8,96}$ ]] || usage
+((confirm == 1)) || usage_error "backup changes production and requires one literal --confirm"
 need_local ssh
 
 note() { printf '[ai-pin-revival] %s\n' "$*"; }
@@ -71,7 +75,8 @@ fetch_backup() {
   # one stream so a truncated transfer cannot look like a complete directory,
   # and tar exists on every operator machine while rsync does not.
   note "fetching backup $id from $DEPLOY_REMOTE"
-  run_ssh "$(remote_quote tar -C "$REMOTE_ROOT/backups" -cf - -- "$id")" | tar -C "$staging" -xpf -
+  run_ssh "$REMOTE_POSITIVE_ENV /usr/bin/tar $(remote_quote -C "$REMOTE_ROOT/backups" -cf - -- "$id")" \
+    | "${REVIVAL_LOCAL_TAR:?}" -C "$staging" -xpf -
   [[ -d "$staging/$id" && ! -L "$staging/$id" ]] || die "fetched backup is not the expected directory: $id"
 
   evidence="$staging/key-material.tsv"
@@ -104,7 +109,7 @@ fetch_backup() {
 verify_fetched_backup() {
   local root="$1" id="$2" evidence="$3"
   need_local python3
-  python3 - "$root" "$id" "$evidence" <<'PY' || die "fetched backup failed local verification"
+  "${REVIVAL_LOCAL_PYTHON:-python3}" -I -B - "$root" "$id" "$evidence" <<'PY' || die "fetched backup failed local verification"
 import hashlib,json,os,stat,sys,tarfile
 root,expected_id,evidence=sys.argv[1:]
 
@@ -201,7 +206,7 @@ capture_operator_key_material() {
   fi
   [[ -f "$signing/signing.env" && ! -L "$signing/signing.env" ]] \
     || die "Pin signing environment is missing or unsafe: $signing/signing.env"
-  store="$(python3 - "$signing/signing.env" <<'PY'
+  store="$("${REVIVAL_LOCAL_PYTHON:-python3}" -I -B - "$signing/signing.env" <<'PY'
 import re,sys
 for line in open(sys.argv[1],encoding="utf-8"):
     match=re.fullmatch(r"export PIN_SIGNING_STORE_FILE=(.*)",line.rstrip("\n"))
@@ -245,7 +250,7 @@ PY
 # without it has half a backup and must be able to tell.
 write_recovery_index() {
   local bundle="$1" id="$2" key_material="$3"
-  python3 - "$bundle" "$id" "$DEPLOY_REMOTE" "$REMOTE_ROOT" "$key_material" <<'PY' \
+  "${REVIVAL_LOCAL_PYTHON:-python3}" -I -B - "$bundle" "$id" "$DEPLOY_REMOTE" "$REMOTE_ROOT" "$key_material" <<'PY' \
     || die "recovery index could not be written"
 import hashlib,json,os,stat,sys
 bundle,backup_id,remote,remote_root,key_material=sys.argv[1:]

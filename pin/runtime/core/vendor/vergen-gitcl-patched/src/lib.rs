@@ -130,8 +130,8 @@
 //! cargo:rustc-env=VERGEN_SYSINFO_CPU_NAME=cpu0,cpu1,cpu2,cpu3,cpu4,cpu5,cpu6,cpu7
 //! cargo:rustc-env=VERGEN_SYSINFO_CPU_BRAND=AMD Ryzen Threadripper 1900X 8-Core Processor
 //! cargo:rustc-env=VERGEN_SYSINFO_CPU_FREQUENCY=3792
-//! cargo:rerun-if-changed=/home/jozias/projects/rust-lang/vergen-cl/.git/HEAD
-//! cargo:rerun-if-changed=/home/jozias/projects/rust-lang/vergen-cl/.git/refs/heads/master
+//! cargo:rerun-if-changed=workspace/vergen-cl/.git/HEAD
+//! cargo:rerun-if-changed=workspace/vergen-cl/.git/refs/heads/master
 //! cargo:rerun-if-changed=build.rs
 //! cargo:rerun-if-env-changed=VERGEN_IDEMPOTENT
 //! cargo:rerun-if-env-changed=SOURCE_DATE_EPOCH
@@ -194,8 +194,8 @@ let build = BuildBuilder::default().build_timestamp(true).build()?;"
 //! cargo:rustc-env=VERGEN_GIT_COMMIT_TIMESTAMP=2024-01-30T21:43:43.000000000Z
 //! cargo:rustc-env=VERGEN_RUSTC_SEMVER=1.77.0-nightly
 //! cargo:rustc-env=VERGEN_SYSINFO_CPU_CORE_COUNT=8
-//! cargo:rerun-if-changed=/home/jozias/projects/rust-lang/vergen-cl/.git/HEAD
-//! cargo:rerun-if-changed=/home/jozias/projects/rust-lang/vergen-cl/.git/refs/heads/master
+//! cargo:rerun-if-changed=workspace/vergen-cl/.git/HEAD
+//! cargo:rerun-if-changed=workspace/vergen-cl/.git/refs/heads/master
 //! cargo:rerun-if-changed=build.rs
 //! cargo:rerun-if-env-changed=VERGEN_IDEMPOTENT
 //! cargo:rerun-if-env-changed=SOURCE_DATE_EPOCH

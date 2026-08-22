@@ -36,6 +36,7 @@ services:
       COSMOS_AUTH_MODE: ${COSMOS_AUTH_MODE:-development-insecure}
       COSMOS_ENVIRONMENT: development
       REVIVAL_DEPLOYMENT_ENVIRONMENT: development
+      COSMOS_KID_SCOPE: ${COSMOS_KID_SCOPE:-audit}
       COSMOS_OIDC_ISSUER: ${REVIVAL_LOCAL_OIDC_ISSUER:-}
       COSMOS_OIDC_JWKS_URI: ${REVIVAL_LOCAL_OIDC_JWKS_URI:-}
       COSMOS_LLM_BASE_URL: ${COSMOS_LLM_BASE_URL:-}
@@ -141,14 +142,53 @@ services:
       - 127.0.0.1:${REVIVAL_PROVISIONING_GRPC_PORT:-15056}:15051
 
   center:
+    image: ai-pin-revival/center-development:${REVIVAL_RELEASE_ID:?set REVIVAL_RELEASE_ID to the development source id}
+    build:
+      target: development
+    command:
+      - npm
+      - run
+      - dev
     depends_on: *development-identity-dependency
     labels:
       <<: *development-labels
     restart: "no"
+    read_only: false
+    user: "1000:1000"
     environment:
+      NODE_ENV: development
       REVIVAL_DEPLOYMENT_ENVIRONMENT: development
     ports:
       - 127.0.0.1:${REVIVAL_CENTER_PORT:-4000}:4000
+    tmpfs: !override
+      - /tmp:size=64m,mode=1777,uid=1000,gid=1000
+    volumes:
+      - center-development-next:/app/.next
+    develop:
+      watch:
+        - action: sync
+          path: ./center
+          target: /app
+          initial_sync: true
+          ignore:
+            - .next/
+            - node_modules/
+            - package.json
+            - package-lock.json
+            - Dockerfile
+            - .dockerignore
+        - action: rebuild
+          path: ./center/package.json
+        - action: rebuild
+          path: ./center/package-lock.json
+        - action: rebuild
+          path: ./center/Dockerfile
+        - action: rebuild
+          path: ./center/.dockerignore
+        - action: sync+restart
+          path: ./contracts/wire
+          target: /app/contracts
+          initial_sync: true
 
   keycloak:
     labels:
@@ -215,6 +255,7 @@ secrets:
 
 volumes:
   keycloak-data:
+  center-development-next:
   device-android-cache:
   device-cargo-cache:
   device-gradle-cache:

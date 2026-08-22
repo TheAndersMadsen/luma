@@ -45,7 +45,7 @@ pub const DATABASE_URL_ENV: &str = "COSMOS_DATABASE_URL";
 /// Advisory-lock key serializing schema creation across replicas. Arbitrary but
 /// fixed; the enrollment schema uses a different one so the two never block each
 /// other. See [`PostgresStore::migrate`].
-const SCHEMA_LOCK_KEY: i64 = 0x0CA2_2451_0000_0001;
+pub(crate) const SCHEMA_LOCK_KEY: i64 = 0x0CA2_2451_0000_0001;
 
 /// An explicit separator keeps execution deterministic without pretending a
 /// naive semicolon split is a SQL parser. Each migration remains valid SQL when
@@ -1004,6 +1004,39 @@ impl Store for PostgresStore {
         Ok(record)
     }
 
+    async fn create_indexed_note(
+        &self,
+        principal: &str,
+        encrypted_note: Option<EncryptedData>,
+        encrypted_location: Option<EncryptedData>,
+        indexed_text: Option<&str>,
+    ) -> Written<NoteRecord> {
+        let record = NoteRecord {
+            uuid: uuid::Uuid::new_v4().to_string(),
+            indexed_text: indexed_text.map(str::to_lowercase),
+            encrypted_note,
+            encrypted_location,
+            created: SyncTime::now(),
+        };
+        sqlx::query(
+            "INSERT INTO cosmos_note
+                (principal, uuid, indexed_text, encrypted_note, encrypted_location,
+                 created_seconds, created_nanos)
+             VALUES ($1,$2,$3,$4,$5,$6,$7)",
+        )
+        .bind(principal)
+        .bind(&record.uuid)
+        .bind(record.indexed_text.as_deref())
+        .bind(record.encrypted_note.as_ref().map(encode))
+        .bind(record.encrypted_location.as_ref().map(encode))
+        .bind(record.created.seconds())
+        .bind(record.created.nanos())
+        .execute(&self.pool)
+        .await
+        .map_err(|_| StoreError::Unavailable)?;
+        Ok(record)
+    }
+
     async fn recent_notes(
         &self,
         principal: &str,
@@ -1498,6 +1531,16 @@ mod tests {
             .to_ascii_uppercase()
     }
 
+    const GUARDED_KEY_DIRECTORY_BOUNDS: &str = concat!(
+        "DO $$ BEGIN IF NOT EXISTS ( SELECT 1 FROM PG_CONSTRAINT ",
+        "WHERE CONNAME = 'COSMOS_CHANNEL_KEY_SHAPE' ",
+        "AND CONRELID = 'COSMOS_CHANNEL_KEY'::REGCLASS ) THEN ",
+        "ALTER TABLE COSMOS_CHANNEL_KEY ",
+        "ADD CONSTRAINT COSMOS_CHANNEL_KEY_SHAPE CHECK ( ",
+        "OCTET_LENGTH(KID) BETWEEN 1 AND 1024 ",
+        "AND OCTET_LENGTH(KEY) = 16 ); END IF; END $$;"
+    );
+
     #[test]
     fn migrations_are_globally_numbered_and_append_only() {
         let migrations = all_migrations();
@@ -1513,6 +1556,7 @@ mod tests {
                 (5, "0005_device_status_namespacing.sql"),
                 (2, "0002_enrollment.sql"),
                 (3, "0003_key_directory.sql"),
+                (6, "0006_key_directory_bounds.sql"),
             ],
             "migration history is append-only; add a higher version rather than reordering it"
         );
@@ -1539,6 +1583,18 @@ mod tests {
             SCHEMA_LOCK_KEY,
             crate::enrollment::ENROLLMENT_SCHEMA_LOCK_KEY
         );
+        assert_eq!(
+            crate::keydirectory::KEY_DIRECTORY_SCHEMA_LOCK_KEY,
+            0x0CA2_2451_0000_0003
+        );
+        assert_ne!(
+            SCHEMA_LOCK_KEY,
+            crate::keydirectory::KEY_DIRECTORY_SCHEMA_LOCK_KEY
+        );
+        assert_ne!(
+            crate::enrollment::ENROLLMENT_SCHEMA_LOCK_KEY,
+            crate::keydirectory::KEY_DIRECTORY_SCHEMA_LOCK_KEY
+        );
     }
 
     #[test]
@@ -1549,6 +1605,7 @@ mod tests {
             ("0003_key_directory.sql", 1),
             ("0004_listing.sql", 4),
             ("0005_device_status_namespacing.sql", 1),
+            ("0006_key_directory_bounds.sql", 1),
         ];
         for migration in all_migrations() {
             let statements = migration.statements().collect::<Vec<_>>();
@@ -1632,7 +1689,13 @@ mod tests {
                     || (sql.starts_with("ALTER TABLE IF EXISTS ")
                         && sql.contains(" ADD COLUMN IF NOT EXISTS "))
                     || (sql.starts_with("INSERT INTO COSMOS_SYNC_CURSOR ")
-                        && sql.ends_with("ON CONFLICT (PRINCIPAL) DO NOTHING;"));
+                        && sql.ends_with("ON CONFLICT (PRINCIPAL) DO NOTHING;"))
+                    // PostgreSQL 16 has no `ADD CONSTRAINT IF NOT EXISTS`.
+                    // Accept only this frozen catalog-guarded statement, not a
+                    // general DO block or a filename exemption; any DDL change
+                    // returns to review automatically.
+                    || (migration.filename == "0006_key_directory_bounds.sql"
+                        && sql == GUARDED_KEY_DIRECTORY_BOUNDS);
                 assert!(
                     idempotent,
                     "{} has no explicit restart-safe form: {sql}",

@@ -68,6 +68,7 @@ const { isRecognizedAiPin } = await import(
 );
 const {
   classifyKeepDataUpdate,
+  describeKeepDataUpdateRefusal,
   isEligibleForKeepDataUpdate,
   isSafeRandomizedBaseApkPath,
   parseInstalledAppIdFromDumpsys,
@@ -741,6 +742,8 @@ const INJECTED_SERVER_PATH = `/data/app/${MANAGED_PACKAGES.server}-injected/base
 /* The shape Android gives a package it installed itself, as seen on the Pin. */
 const RANDOMIZED_SERVER_PATH =
   `/data/app/~~VjYu5htQ0k7cJ2rF1xAbcw==/${MANAGED_PACKAGES.server}-7WySQfMv3nR0pLzKdE9xTA==/base.apk`;
+const RANDOMIZED_HOOK_PATH =
+  `/data/app/~~Jg2tKp9vQm7dNx4sLw8aFA==/${MANAGED_PACKAGES.hook}-Rz6cVu1yHe3bMi5oXq9nDA==/base.apk`;
 
 test("inspectInstallState reads the running APK path and app id out of the package dump", async () => {
   const target = createResolvedInstallTargetFixture();
@@ -1143,15 +1146,11 @@ test("decideInstallMigration checks the APK path only for packages it is about t
 });
 
 /*
- * The provider keeps one door open for a randomized path: an interrupted but
- * already-approved update, where the artifact still on disk is byte-identical
- * to the one being staged (FailedUpdateContinuityPolicy, StagingSafety.kt:41-101).
- * Three of its conditions live in the provider's own storage and cannot be read
- * over ADB, so this decision cannot say yes to it — but it must not say no,
- * either. A safe-shaped randomized path on a package already reporting the
- * target version is the only client-visible form that state can take.
+ * Provider-only continuity evidence cannot be proved from the host. A healthy
+ * installer plus randomized path therefore stops before transfer and may not
+ * be promoted to bootstrap recovery.
  */
-test("decideInstallMigration leaves the provider's failed-update continuity door open", () => {
+test("decideInstallMigration hard-stops a healthy randomized Hook without recovery", () => {
   const target = createResolvedInstallTargetFixture();
   const packageOverrides = Object.fromEntries(
     MANAGED_ROLES.map((role) => [
@@ -1159,20 +1158,25 @@ test("decideInstallMigration leaves the provider's failed-update continuity door
       { versionName: target.version, versionComparison: "equal" },
     ]),
   );
-  packageOverrides.server = {
-    ...packageOverrides.server,
-    baseApkPath: RANDOMIZED_SERVER_PATH,
+  packageOverrides.hook = {
+    ...packageOverrides.hook,
+    baseApkPath: RANDOMIZED_HOOK_PATH,
     keepDataUpdateVerdict: "may-continue",
   };
 
   const result = decideInstallMigration({
     target,
-    // Reinstall, so the server is in the batch rather than filtered out of it.
+    // Reinstall, so the Hook is in the batch rather than filtered out of it.
     inspection: inspection({ target, action: "Reinstall", packageOverrides }),
   });
 
-  assert.equal(result.kind, "routine-in-place");
-  assert.deepEqual(result.rolesToInstall, IN_PLACE_ROLES);
+  assert.equal(result.kind, "blocked");
+  assert.deepEqual(result.rolesToInstall, []);
+  assert.match(result.reason, /STOP here/);
+  assert.match(result.reason, /host cannot prove/i);
+  assert.match(result.reason, /stops before transferring any APK/i);
+  assert.match(result.reason, /com\.penumbraos\.hook/i);
+  assert.doesNotMatch(result.reason, /installer refuses a keep-data update/i);
 });
 
 /*
@@ -1252,6 +1256,28 @@ test("a package the installer cannot update in place never reads as up to date",
   });
   assert.equal(getManagedPackageStatusText(unreadable), "APK Path Unreadable");
   assert.equal(hasProblematicManagedPackageState(unreadable), true);
+
+  const continuityUnverified = snapshot("server", target, {
+    versionName: target.version,
+    versionComparison: "equal",
+    baseApkPath: RANDOMIZED_SERVER_PATH,
+    keepDataUpdateVerdict: "may-continue",
+  });
+  assert.equal(
+    getManagedPackageStatusText(continuityUnverified),
+    "Continuity Unverified",
+  );
+  assert.equal(hasProblematicManagedPackageState(continuityUnverified), true);
+  assert.equal(getManagedPackageStatusTone(continuityUnverified), "warning");
+  const continuityReason = describeKeepDataUpdateRefusal({
+    packageName: MANAGED_PACKAGES.server,
+    verdict: "may-continue",
+    appId: 1000,
+    baseApkPath: RANDOMIZED_SERVER_PATH,
+  });
+  assert.match(continuityReason, /provider holds the prior approval/i);
+  assert.match(continuityReason, /host cannot prove/i);
+  assert.match(continuityReason, /STOP here/);
 
   // And the owned package is still allowed to say it is fine.
   const owned = snapshot("server", target, {

@@ -50,12 +50,50 @@ extraction. Runtime state and secrets are not release contents.
 Production commands target an existing reviewed installation; they are not a
 clean-server bootstrap workflow.
 
+### Hosted-only cutover prerequisite
+
+Before the first production deployment through this hosted-only path, capture
+the **currently running production release** as an immutable rollback baseline
+using the pinned GitHub-hosted workflow, import the complete handoff, and pass
+the fresh provider-attestation status check below. Record and retain that exact
+candidate ID before attempting the forward deployment. If the live release
+cannot be reproduced and provider-attested by the accepted workflow and policy,
+stop: the migration phase must establish that baseline first.
+
+Candidate descriptor schemas 2 and 3 predate the explicit authority origin.
+They are intentionally ineligible, as are schema-4 candidates marked
+`local-operator` / `candidate-only`. There is no legacy adoption, local
+promotion, or rollback-baseline bypass: both the baseline and the forward
+candidate must be imported from a GitHub-hosted handoff and cryptographically
+reverified at point of use. In particular, the Carry→Cosmos migration must
+first attest and import the current immutable Carry production baseline; it may
+not silently adopt a pre-hosted candidate.
+
+This guide uses the deployed host's reviewed canonical paths below. These are
+operational server contracts, not paths derived from the workstation running a
+build:
+
+```sh
+DEPLOYMENT_HOME=/home/anders
+REMOTE_ROOT=/home/anders/ai-pin-revival
+CENTER_DATA_DIR=/home/anders/carry-center-data
+```
+
+`REMOTE_ROOT` therefore means the immutable-release, private-configuration,
+backup, and data root on the server. Override-capable commands still print and
+validate their resolved remote target before making a change.
+
 ```sh
 ./revival doctor production
-./revival deploy production --dry-run
-./revival backup
-./revival backup --fetch          # the only copy that is not on the server
-./revival canary
+./revival setup import vps-candidate \
+  --handoff-root /external/downloaded-vps-candidate \
+  --data-dir /external/revival-data
+./revival setup artifacts vps --data-dir /external/revival-data
+REVIVAL_DATA_DIR=/external/revival-data ./revival deploy production --candidate-id CANDIDATE_SHA256 --dry-run
+REVIVAL_DATA_DIR=/external/revival-data ./revival deploy production --candidate-id CANDIDATE_SHA256 --confirm
+./revival backup --confirm
+./revival backup --confirm --fetch          # the only copy that is not on the server
+./revival canary --confirm
 ./revival drift
 ./revival adopt-config            # plans only; changes nothing without --confirm
 ```
@@ -63,7 +101,117 @@ clean-server bootstrap workflow.
 `implemented`: the command surface verifies target identity, preserves explicit
 state mappings, and packages one Center/Cosmos release.
 
-`./revival backup` writes to the server. Every backup this project has ever
+The routine candidate producer is the SHA-pinned **Attested VPS candidate**
+workflow in `.github/workflows/vps-candidate.yml`, dispatched on `main`. It runs
+on GitHub's `ubuntu-24.04` x64 label with a wall-clock job timeout and has no
+secret, signing, SSH, or deployment authority. From the exact `GITHUB_SHA` it
+builds the VPS archive and Linux/arm64 image bundle once and emits only files: a
+canonical receipt, provider Sigstore bundle, descriptor, and the exact twelve
+candidate payload roles. The receipt binds repository/ref/workflow/run,
+Git commit/tree/source archive, toolchain, builder/image receipts, release ID,
+and every role/name/size/SHA-256. This establishes GitHub-hosted
+trusted-workflow provenance; it does not establish bare-metal execution or the
+absence of a hypervisor.
+
+Download the workflow artifact into an owner-controlled external directory;
+do not copy individual payloads out of it. `setup import vps-candidate` first
+recomputes the semantic candidate, verifies the provider bundle with the fixed
+broker below, and only then publishes the candidate and canonical evidence into
+the external data store. `setup artifacts vps` reruns that fixed cryptographic
+provider verification against all 13 candidate subjects and byte-compares its
+canonical result with the imported evidence before reporting the ID. Local
+`release candidate prepare` remains a useful diagnostic producer, but its
+descriptor is permanently `candidate-only`: it cannot be imported, authorized,
+or deployed. Its platform/architecture checks are guest-visible negative
+filters, not proof that translation or a hypervisor is absent. Deployment
+accepts no source tree, `release.json`, implicit build, or registry recipe: it
+resumably transfers the sealed candidate, checks a remote hash ACK, loads the
+recorded image objects, and uses Compose with `--pull never --no-build`.
+The candidate's source-bound Compose model records all 15 active services as an
+exact `{role, reference, imageId}` mapping. Runtime, rollback, recovery, canary,
+and drift consumers reprove that mapping from held candidate descriptors before
+and after each Compose use; a restored pathname, exchanged record, or permuted
+image ID refuses before Docker can consume it.
+Both runtime consumers also require ten distinct receipt content IDs: the 15
+services collapse to exactly nine distinct model-bound images, and the fixed
+backup-helper reference contributes one separate tenth ID. Missing, extra,
+aliased, or caller-selected helper inventory refuses before daemon access.
+
+The live installation still owns the historical Carry volume, network, and
+Center-data identities. Candidate preparation refuses a snapshot whose
+production model does not declare that exact contract before Docker is called;
+deployment repeats the refusal before SSH/upload. In particular, the current
+Cosmos-renamed defaults are deliberately non-promotable until a reviewed source
+commit restores those durable production identities. Do not bypass this gate.
+
+### Candidate and incoming retention
+
+One sealed release candidate contains the complete release and ten-image
+offline bundle, so retained candidates can consume multiple gigabytes each.
+Interrupted transfers and verified-driver staging live under the protected
+`incoming` store. Deployment never silently deletes recovery authority or
+prunes either store.
+
+Run retention as a separate operator action while no deploy, rollback, backup,
+or recovery driver is active. The first command is always a dry run and prints
+the exact keep/remove reasons plus a plan token:
+
+```sh
+./revival prune-state --show-all
+./revival prune-state --confirm --expect-plan PLAN_TOKEN
+```
+
+The default 24-hour age floor applies to candidates and incoming workspaces as
+well as releases and backups. A candidate named by any retained deployment
+record remains protected. Incoming workspaces are removable only after the age
+floor while the deployment lock proves there is no active writer. The confirm
+pass recomputes the plan, requires the same token, refuses links, hardlinks,
+foreign ownership, unsafe modes, special files, or replacement races, and then
+rechecks the surviving rollback authorities.
+
+### One durable-state writer per service identity
+
+The supported production topology has exactly one Center process and exactly
+one process for each Cosmos workload identity. Center's channel-key file and a
+Cosmos workload's key-material snapshot are single-writer stores: PID-qualified
+temporary files prevent a stale temporary-name collision, but they are not a
+multi-process consistency protocol. Do not scale or replicate either writer,
+and do not run a second Compose project against the same state paths.
+
+The release transaction enforces that topology rather than relying on timing.
+`deploy.sh` holds the global non-blocking `deploy.lock`, the production Compose
+model declares one `center` service with no `deploy.replicas`, and live cutover
+stops both the current and legacy projects before the candidate starts. A
+topology change must first move these stores to a database-backed coordination
+design; adding replicas to the current files is not supported.
+
+The AI-bus Compose service also sets `COSMOS_KID_SCOPE` explicitly. Root and
+development Compose default it to `audit` so a legacy kid whose wearer identity
+has not yet been reconciled remains compatible while every foreign operation is
+reported. Production Compose has no implicit mode: the protected environment
+must choose `audit` or `enforce`. Use `audit` only for the measured migration
+window; after the reported legacy identities are reconciled, set `enforce` so a
+key operation naming another wearer is refused. An unset value must never be
+treated as an operator decision in production.
+
+PostgreSQL is the sole channel-key authority in parity and production. The
+AI-bus, contacts, and notable-events workloads refuse startup before binding a
+listener when `COSMOS_DATABASE_URL` is absent or blank; AI-bus additionally
+requires `COSMOS_STATE_DIR` for its RSA wrapping-key snapshot. Each process
+opens one `KeyDirectory` and shares that handle across all of its handlers, so a
+revocation or re-import is observed from PostgreSQL by every workload rather
+than hidden behind a process cache. Development and test may use the explicit
+memory-only shape; production never falls back to it after a connection or
+migration failure.
+
+On the first upgrade from the former dual-writer layout, AI-bus compares every
+legacy local channel key with PostgreSQL. Only an entirely identical map is
+durably stripped from the local snapshot, preserving its exact wrapping key.
+A local-only or mismatched row fails startup and leaves the snapshot untouched;
+do not resolve that refusal by copying local state back into PostgreSQL, because
+that could resurrect a key that another workload already revoked.
+
+`./revival backup --confirm` writes to the server. Every backup this project has ever
 taken therefore lives on the same disk as the thing it protects, and two of the
 things it protects — the attestation and DeviceUser CA private keys — cannot be
 regenerated once that disk is gone, because the attestation root is pinned
@@ -78,7 +226,7 @@ choose: `./revival drift` fails when the newest *server-side* backup is older
 than 36 hours (`platform/deploy/vps/remote/drift.sh:115`) and says nothing at
 all about whether an off-host copy exists.
 
-`--fetch` quiesces the host exactly as a plain `./revival backup` does, so it
+`--fetch` quiesces the host exactly as a plain `./revival backup --confirm` does, so it
 stops the wearer's Pin bridge and every application writer for minutes. Its
 destination is therefore checked twice — once before the host is touched at all,
 and again at the copy — and it must be an absolute path, outside the source tree
@@ -96,7 +244,7 @@ or HTTP 200 does not authorize `./revival deploy production`.
 Rollback moves the release pointer back. It never touches a database:
 
 ```sh
-./revival rollback --deployment <deployment-id>
+./revival rollback --deployment <deployment-id> --confirm
 ```
 
 **There is no database-restore command, and rollback has no flag that adds
@@ -141,8 +289,8 @@ password manager. Email verification and a first-login password reset must be
 off, or the password grant will not complete.
 
 **Where the secret goes, on the server.** One file,
-`/home/anders/ai-pin-revival/private/canary-wearer.secret`, mode `0600`, owned by
-`anders`, in the `0700` private directory beside `center.env`. Exactly two keys
+`$REMOTE_ROOT/private/canary-wearer.secret`, mode `0600`, owned by the deployment
+account, in the `0700` private directory beside `center.env`. Exactly two keys
 and nothing else:
 
 ```
@@ -179,17 +327,17 @@ The canary warns about it on every run.
 **If it is missing.** `./revival preflight` fails before anything is touched,
 which is the cheap place to find out. A canary that reaches the credential check
 with nothing provisioned refuses too. The one override is
-`./revival canary --wearer-plane-optional`, which exists for an operator at a
+`./revival canary --confirm --wearer-plane-optional`, which exists for an operator at a
 terminal during an incident and is passed by no deploy or rollback path; a run
 that uses it prints `RUNNING WITHOUT WEARER-PLANE COVERAGE` and reports
 `"wearerPlane":"unproven"` in `--json`. Do not wire it into the deploy path —
 that is the warn-and-pass default this replaced, wearing a longer name.
 
-**After you change `canary.sh`, run it before a deploy does.** `./revival canary`
+**After you change `canary.sh`, run it before a deploy does.** `./revival canary --confirm`
 runs the DEPLOYED release's copy of the canary, so an edited gate does not
 execute until a deploy is already underway with public ingress quiesced — where a
 mistake in it lengthens an outage instead of failing a check. `./revival canary
---from-tree` streams the working tree's `canary.sh` to the host and runs it
+--confirm --from-tree` streams the working tree's `canary.sh` to the host and runs it
 there, read-only, holding `deploy.lock` for the whole run so it cannot race a
 deploy. It skips release verification, because there is no release yet: that is
 the point, and it is why no deploy or rollback path may ever pass it. A passing
@@ -319,7 +467,7 @@ something an operator does on purpose.
 this repository passes `COSMOS_ALLOW_DATA_REMOVALS` into a container, so putting
 it in the protected production env file does nothing. Running it means starting
 a Cosmos workload with the variable in its own environment, once, deliberately,
-after a `./revival backup --fetch`. Read
+after a `./revival backup --confirm --fetch`. Read
 [docs/recovery.md](recovery.md#restoring-a-database) first: this discards rows,
 and the backup you take before it is the only way back.
 
@@ -444,7 +592,7 @@ the evidence and failure boundaries behind each step.
 | Need | Where it lives | Enforced by |
 | --- | --- | --- |
 | Docker Compose 2.33.1+, Node 22.14.0+ on the Node 22 line | host | `./revival doctor`, against `platform/containers/pin-builder/toolchain.json` |
-| JDK 17, Android SDK 34, NDK r28c, Rust 1.91.1 | contributor source gate only | `./revival test --source`; the pinned container supplies them for canonical Pin release builds |
+| JDK 17, Android SDK 34, NDK r28c, Rust 1.91.1 exactly | contributor source gate only | `./revival test --source`; `rust-toolchain.toml` pins host Rust and the pinned container supplies the canonical Pin build tools |
 | Pin signing keystore and its four `PIN_SIGNING_*` values | `${REVIVAL_SECRETS_DIR}/pin/signing.env` | `platform/deploy/pin/build.mjs:43-46` |
 | Two pinned native build inputs, matched by exact SHA-256 | `${REVIVAL_CONFIG_DIR}/pin-assets/` | `platform/deploy/pin/build.mjs:78-87` |
 | A browser with WebUSB, on HTTPS or `localhost` | operator workstation | `center/src/lib/pin-device/adb/browserSupport.ts:10-30` |
@@ -525,29 +673,180 @@ Enrollment turns on only when the pincode and user id are both set;
 reviewed `/run/secrets/duc_ca_cert` and `/run/secrets/duc_ca_key` paths
 (`revival:794-809`).
 
+### Fast Pin debug compiles
+
+For an ordinary edit loop, compile only the affected fixed APK roles:
+
+```sh
+./revival pin build-debug --role hook --role server
+./revival pin build-debug --changed --base origin/main
+```
+
+The only roles are `installer`, `bootstrap`, `hook`, `server`, and
+`hook-injector`. Unknown or shared changed paths select all five. This lane runs
+only in the canonical `linux/amd64` builder, captures one deterministic sealed
+source tar/manifest generation, and keeps
+its compiler input in a fresh container-private tmpfs extraction. Check-unit
+and debug use separate owner-only state roots; they share only Cargo
+`registry`/`git`, Gradle `caches`/`wrapper`, and npm `_cacache` data directories.
+Every run creates fresh container-private HOME, XDG, Gradle, Cargo, npm, and
+Android homes, with distinct protected empty npm config files. Gradle init and
+properties files, Cargo config/credentials, npmrc, shell/Git/XDG settings,
+Docker contexts/credentials, and Android signing/config state are therefore not
+persistent inputs. No compiler worktree is host-mounted or persisted; build
+outputs and the five cache-data leaves alone survive. The lane rejects release signing inputs and has no ADB, USB, device,
+VPS, or release-store surface. Outputs under the external build state are
+explicitly debug, non-release, and non-installable. A `server` selection also runs a real,
+credential-free `runtime/core` Cargo check with the `local-nlu` and `iroh`
+feature surfaces; the intentionally incomplete APK never substitutes for that
+Rust compile. Docker runs with a positive environment allowlist and a synthetic
+host HOME/XDG tree, an anonymous descriptor-held empty Docker config, and the
+literal local Unix socket, so ambient contexts, remote daemons, TLS settings,
+and Docker credentials cannot redirect the build. Debug sets are published through a
+single-link, nofollow, descriptor-held store outside the checkout.
+The hosted Linux/x64 CI job runs the same all-five-role candidate path and
+independently checks the selected checksum-bound non-release set. The local
+preflight requires Linux x86_64 guest-visible kernel/userspace and Intel/AMD CPU
+evidence and refuses when it observes binfmt, QEMU/TCG, Rosetta, or another
+translation marker. Those checks cannot prove that translation or a hypervisor
+is absent. ARM, detected translation, and every macOS host stop before Docker
+and point to that hosted Linux/x64 candidate job. These local checks remain
+candidate-only negative filters and never grant signing or publication
+authority. The authoritative
+lane is `.github/workflows/pin-release.yml`: GitHub's provider-signed Sigstore
+certificate must bind the pinned repository, main ref, workflow, source and
+workflow digest, GitHub-hosted runner environment, and run identity. Its custom
+predicate additionally binds the sealed source generation/tar, toolchain,
+immutable builder image, version, and exact five roles. A second attestation
+binds the exact five signed APK names, sizes, and SHA-256 digests. This proves a
+GitHub-hosted trusted-workflow provenance statement; it does **not** prove bare
+metal or the absence of a hypervisor. On
+accepted candidate hosts, one long-lived Python broker
+performs the preflight and a single watched, nofollow traversal from `/`. It
+recursively watches the checkout while building a deterministic path/mode/hash
+manifest and tar, then seals both memfds against write, growth, shrink, and
+further seal changes. Source policy runs from a verified private extraction;
+`--changed` resolves held loose/packed refs itself and uses only config-free
+`cat-file`/`ls-tree` object plumbing, never repository config, hooks, filters,
+attributes, fsmonitor, index, or worktree Git. Docker receives the sealed tar as
+build stdin, captures its exact `sha256:` content ID through a held iidfile, and
+runs only that immutable ID; the tag is diagnostic. It mounts only its held tar/manifest fds for the container's own
+verified extraction. The live checkout is never a Docker bind source, so an edit
+after capture can affect only the next invocation. The broker retains the exact
+data, build, lane-state, five cache, fresh-tool, empty Docker-config, and sealed
+source descriptors through Docker and final revalidation. Fixed missing directories are configured beneath
+unique tokens and installed with no-replace semantics; failed random tokens are
+not deleted by pathname.
+
+Debug publication is append-only. Compiler artifacts are copied into unnamed
+held destination inodes, fsynced, and hashed from the destination bytes before
+the exact inode is linked. Each random set contains only owner-owned 0600,
+single-link APK/receipt/manifest/checksum files. Readers install the set-directory
+watch before inventory, hold every file descriptor, reject links and special
+files, hash exact bytes, and return a held `VerifiedSet`. Selection and retirement
+share a locked, segmented journal with strictly increasing logical sequences,
+predecessor digests, variable-length canonical numeric names, and three
+reconciled immutable local fact sets; it uses neither wall-clock ordering nor a
+fixed record ceiling. Deleting any strict subset of the local journal mirrors,
+any mirrored tail, or a retirement fact while another corresponding local fact
+survives fails closed and cannot resurrect an older suffix. A retired
+checksum-bound set remains ineligible for republish, including under a fresh
+directory token, only while at least one independently reconciled local journal,
+high-water, or retirement fact recording that retirement survives. Because all
+of those facts are owner-writable, the same UID can delete every local journal
+mirror, high-water record, and retirement fact; doing so can resurrect an older
+state and is outside any cryptographic rollback guarantee. The GitHub-hosted
+release attestations described above bind the build request and exact signed
+release artifacts. They do not attest, checkpoint, or provide a high-water mark
+for this debug journal. There is no mutable `latest.json`, overwrite,
+rename-over-existing, unlink, or recursive cleanup path that can target a
+substituted victim; the newest valid non-retired chain selection is reverified
+through its held set before use.
+The real-tree source policy uses fixed trusted shell and Node paths under a fixed
+system `PATH`, so contributor overrides of `node`, `dirname`, or shell
+configuration cannot bypass the scan.
+
+This does not change the release rule below: every signed/published Pin release
+always builds, verifies, and publishes all five roles atomically.
+
 ### 3. Build a Pin release
+
+The old local all-in-one command is intentionally a fail-closed alias:
 
 ```sh
 ./revival pin release build --version YYYY-MM-DD.N --version-code INTEGER
+# refuses before reading any signing key or private build asset
 ```
 
-This builds and compatibility-signs the five APK roles in the pinned container
-and publishes them atomically to the **local** release store —
-`REVIVAL_PIN_RELEASE_OUTPUT_DIR`, default `${REVIVAL_DATA_DIR}/pin-releases`
-(`platform/deploy/pin/build.mjs:268`). It never runs ADB and never touches a
-device. The store's layout is:
+Run the commit-pinned `Attested Pin release` workflow on `refs/heads/main`
+instead. Its phases are prepare → provider pre-attestation → sign → provider
+exact-five attestation → reverify/publish. Protected signing material must be
+provisioned by the operator's trusted GitHub environment integration only after
+the pre-attestation step; the checked-in workflow deliberately fails closed
+when that external integration is absent. No phase runs ADB or touches a
+device. GitHub currently requires Enterprise Cloud for artifact attestations in
+private repositories; an ineligible repository plan also fails closed.
+
+The authority verifier is separate from the request-selected release builder.
+Local import, status, and confirmed ship use a deliberately narrow broker
+contract: a native Linux x64 operator host, executable `/usr/bin/python3` and
+`/usr/bin/docker`, the local `unix:///var/run/docker.sock`, and the exact pinned
+linux/amd64 verifier image. macOS, Windows, Linux ARM, ambient Docker contexts,
+and alternate tool paths are unsupported and fail closed. The first use may
+pull that image by digest and download the fixed GitHub CLI archive from the
+official GitHub release origin. The archive is stored outside the checkout in
+`${XDG_CACHE_HOME:-~/.cache}/ai-pin-revival/hosted-verifier-v1/` under its
+policy SHA-256, with a held lock and a complete rehash on every reuse. It is
+never read from a shared compiler cache, repo state, or caller-selected command.
+After those exact inputs exist, each verifier container runs with networking
+disabled.
+
+Its checked-in runtime policy pins the exact official Node linux/amd64 image
+content ID. Before parsing an evidence claim, a broker verifies the checked-in
+verifier/policy/private-root bytes and the official GitHub CLI 2.98.0 archive,
+validates the one raw x86-64 `gh` ELF member, and copies all four inputs into
+fully write-sealed memfds. Docker mounts those descriptors at fixed paths and
+runs only the pinned runtime content ID, offline, with
+`--deny-self-hosted-runners` and exact repo/ref/signer/source-digest policy.
+These choices follow GitHub's
+[offline attestation verification guide](https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/verify-attestations-offline),
+the [`gh attestation verify` contract](https://cli.github.com/manual/gh_attestation_verify),
+and the [`actions/attest` custom/checksum-subject contract](https://github.com/actions/attest).
+
+Successful hosted publication emits an evidence-bound **local** release store
+under `REVIVAL_PIN_RELEASE_OUTPUT_DIR`. Preserve the complete store; a later
+`ship --confirm` reconstructs the separately pinned verifier runtime if needed,
+re-runs both bundle verifications, and otherwise refuses. The historical
+builder image ID remains provider-signed build data and never selects ship-time
+code. The store's layout is:
 
 ```text
 pin-releases/
   current.json
   history.json
   releases/<releaseId>/manifest.json
+  releases/<releaseId>/hosted-attestation.json
   releases/<releaseId>/{installer,bootstrap,hook,server,hook-injector}.apk
 ```
 
+After downloading the workflow artifact, point at the directory that directly
+contains `current.json`, `history.json`, and `releases/`:
+
+```sh
+./revival setup import pin-release \
+  --release-root /external/downloaded-pin-release \
+  --data-dir /external/revival-data
+./revival setup artifacts pin --data-dir /external/revival-data
+```
+
+Import and status both perform point-of-use provider verification; they do not
+turn the setup receipt into signing or publication authority. The import record
+also does not silently redirect `pin release ship`: pass the same exact
+`--release-root`, or set `REVIVAL_PIN_RELEASE_OUTPUT_DIR` explicitly.
+
 ### 4. Ship the release to the server
 
-`pin release build` publishes to the store on *your machine*. Production Center
+The hosted release job publishes to a store artifact. Production Center
 reads a different filesystem: `REVIVAL_PIN_RELEASE_DIR` is
 `/var/lib/ai-pin-revival/pin-releases` (`platform/compose/production.yaml:177`),
 a read-only bind of `$REMOTE_ROOT/data/pin-releases` on the VPS
@@ -556,23 +855,30 @@ directory (`common.sh:492-498`); it never puts a release in it. This step does,
 and it is deliberately **not** part of a deploy:
 
 ```sh
-./revival pin release ship                 # reads both stores, prints the plan
-./revival pin release ship --confirm       # uploads and publishes
+./revival pin release ship --release-root /external/downloaded-pin-release
+./revival pin release ship --release-root /external/downloaded-pin-release --confirm
 ```
 
 Without `--confirm` it inspects the far side, verifies it, prints what it would
 upload, and changes nothing — the same shape as `pin install`. Options:
 `--remote NAME` (default `$REVIVAL_DEPLOY_REMOTE`, else `vps`), `--remote-root
-PATH` (default `/home/anders/ai-pin-revival/data/pin-releases`), `--release-root
-DIR`, `--local` when the served store is mounted on this machine, and `--json`.
+PATH` (default `$REMOTE_ROOT/data/pin-releases`), `--release-root DIR`, `--local`
+when the served store is mounted on this machine, and `--json`.
 
 What it guarantees (`platform/deploy/pin/ship.mjs`):
 
 - **One verifier.** Both stores — yours and the server's — go through the same
-  `platform/deploy/pin/release.mjs` parsers `pin release build` publishes with:
+  `platform/deploy/pin/release.mjs` parsers the hosted publisher uses:
   canonical manifest bytes, the release-identity digest, per-artifact size and
   SHA-256, a strictly monotonic `history.json`, and each history entry's
   `manifestSha256` against the manifest it names.
+- **Point-of-use hosted authority.** Before any confirmed upload, ship hashes
+  the manifest-bound evidence sidecar, requires exact equality for its canonical
+  pre/post request, workflow/run, source/toolchain/builder and five-subject
+  identities, then re-runs both Sigstore bundle verifications using the
+  independently pinned runtime and sealed raw verifier/tool/root bytes. The
+  historical builder ID is checked only as signed data. Missing, stale,
+  replayed, downgraded, or tampered evidence grants no publication authority.
 - **No rollback and no fork.** Every release the server already accepted must
   appear, entry for entry, at the front of your history, or the ship refuses.
 - **An immutable release is never rewritten.** A `releases/<releaseId>/` that
@@ -581,8 +887,24 @@ What it guarantees (`platform/deploy/pin/ship.mjs`):
   on the far side against the plan, and are `rename(2)`d into place;
   `history.json` and `current.json` are then replaced only if their current
   bytes still hash to what the inspection saw.
-- **Nothing is buffered.** Hashing streams on both ends and the transfer is
-  `scp`, so the >200 MiB `server.apk` never becomes a buffer anywhere.
+- **One publisher at a time.** A persistent, no-follow regular mode-`0600`
+  `.publish.lock` is held nonblocking from that compare-and-swap through incoming
+  verification, rename, and both durable document writes. A crashed publisher
+  loses the kernel lock automatically, so the existing interrupted-swap repair
+  remains available.
+- **Resumable, bounded transfer.** Hashing streams on both ends and remote mode
+  uses quiet `rsync` with protected arguments (`-s` / `--protect-args`) and one
+  stable path inside the hidden incoming transaction. Its checksum/delta
+  in-place transfer retains useful landed blocks and repairs
+  short, corrupt, equal-size corrupt, or overlong partial targets. A disconnect
+  gets an exact three-attempt budget; the final remote size and SHA-256 must
+  still match before publication. Silence while a large APK transfers is
+  expected. Directory-fsync failures are fatal and never acknowledge a rename
+  or pointer replacement; a confirmed retry replays the locked durability
+  boundary even when the complete new pointers are already visible. This
+  requires rsync 3.x on both the operator machine and the server
+  (the current host has 3.2.7); it never buffers the >200 MiB APK in this process
+  or an SSH command payload.
 
 If it is ever done by hand instead, copy the store whole, not artifact by
 artifact. `current.json` must byte-match `releases/<releaseId>/manifest.json` or
@@ -604,13 +926,19 @@ when `current.json` is absent (`center/src/server/pin-releases.ts:540`, the
 and the staging smoke accept that 404, by design — they prove the route is
 bounded and same-origin, not that a release exists.
 
-### 5. Install the five roles
+### 5. Install the four steady roles
 
 Open `/settings/pin/install` in Center, connect the Pin over WebUSB, and run the
 pipeline: connect → inspect → resolve and lock a release target →
-download/verify → remove conflicts → bootstrap → install the five roles →
-configure → verify readiness
-(`center/src/app/settings/pin/install/useInstallController.ts:6-9`). The pane
+download/verify → retain and prove the healthy installer → install only the
+needed steady roles → configure → verify readiness. The exact-five published
+set is `installer`, `bootstrap`, `hook`, `server`, and `hook-injector`, but the
+steady installed profile is the four non-bootstrap roles. `bootstrap` is a
+separately confirmed recovery helper for a genuinely missing or unhealthy
+installer; it is never executed during a routine healthy-installer update. In
+particular, a healthy installer discovered at Android's randomized
+`/data/app/~~.../base.apk` path is a hard refusal, not permission to fall back
+to recovery. The pane
 resolves its target from `/api/pin/releases/current`
 (`center/src/lib/pin-install/releases/manifest.ts:4`) and verifies package,
 version, size, and SHA-256 before any device mutation.
@@ -657,8 +985,9 @@ opposite sign. The answer itself does not move: the handler ignores its request
 and returns SUCCESS unconditionally, before and after.
 
 Neither check is a canary or a deploy gate, and neither can be run from the
-server: they are things to look at on the device once the five roles are
-installed. Until they have been, the honest reading of the wire inventory is
+server: they are things to look at on the device once the four steady roles
+from the exact-five release are installed. Until they have been, the honest
+reading of the wire inventory is
 that the trees agree and the device is one release behind them.
 
 ### 6. Mint a device-attestation credential
@@ -783,7 +1112,7 @@ DeviceUser certificate signed by your DeviceUser CA
 ### 9. Confirm, and know what a pass does not mean
 
 ```sh
-./revival canary
+./revival canary --confirm
 ```
 
 A green canary, a healthy container, or an HTTP 200 is not physical-Pin proof.
@@ -860,22 +1189,21 @@ tooling is in this repo; the sequencing below is traced from the source.
    pincode — lives in the *hook payload*, so it cannot help until the packages
    are installed. On a bare device the stock onboarding UI is what you are
    driving.
-4. **Install the managed packages.** **READ:** `decideInstallMigration` returns
-   `bootstrap-recovery` rather than `blocked` for a bare device —
-   `roleIsKnownForRecovery` treats `!pkg.installed` as known
-   (`center/src/lib/pin-install/domain/migrationDecision.ts:165-177`), so all
-   three absent roles pass and the missing installer selects that path
-   (`:292-313`). It needs `--confirm-bootstrap-recovery`, refused by default
-   because it removes managed packages before reinstalling them. The release
-   ships a `bootstrap` artifact for exactly this case: a device with no working
-   installer.
+4. **Install only through the migration decision.** A genuinely missing or
+   unhealthy installer whose surrounding package profile matches the bounded
+   recovery baseline still requires the separate bootstrap-recovery confirmation.
+   This is distinct from an in-place refusal: when a healthy installer finds an
+   existing Hook or runtime package at Android's randomized
+   `/data/app/~~.../base.apk` path, **STOP**. Never use bootstrap recovery as a
+   fallback for that refusal; it uninstalls managed packages and can destroy
+   FBE-scoped app data and identity.
 5. **Re-pair the bridge.** A reset regenerates the Pin's iroh identity, so the
    bridge ticket changes. That edits `/etc/penumbra`, which is a protected
    configuration input, and the next deploy will refuse on drift — the old ticket
    fails the canary and the new one fails the gate. Clear it with
    `./revival adopt-config` (plan first; `--confirm --reason` to act). This
    deadlock is the reason that command exists.
-6. **Re-verify.** `./revival canary --remote vps` must pass with the wearer plane
+6. **Re-verify.** `./revival canary --confirm --remote vps` must pass with the wearer plane
    proven, and `./revival drift` must be clean.
 
 ### Avoiding a repeat

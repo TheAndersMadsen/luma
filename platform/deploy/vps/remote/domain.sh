@@ -1,9 +1,9 @@
-#!/usr/bin/env bash
+#!/usr/bin/bash
 # Public Center domain transaction. This library is sourced after common.sh.
 
 DOMAIN_CANONICAL_ORIGIN=https://center.andersmadsen.dk
 DOMAIN_LEGACY_ORIGIN=https://cosmos.andersmadsen.dk
-DOMAIN_HELPER="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/domain.py"
+DOMAIN_HELPER="${REVIVAL_HELD_DOMAIN_PY:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/domain.py}"
 DOMAIN_CLOUDFLARED_CONFIG=/home/anders/.cloudflared/config.yml
 DOMAIN_CLOUDFLARED_BIN=/usr/local/bin/cloudflared
 
@@ -68,7 +68,7 @@ public_key_digest() {
 }
 
 domain_require_helper() {
-  [[ -f "$DOMAIN_HELPER" && ! -L "$DOMAIN_HELPER" ]] \
+  release_material_file_is_safe "$DOMAIN_HELPER" \
     || domain_error "domain transaction helper is missing or unsafe"
 }
 

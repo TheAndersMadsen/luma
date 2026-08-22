@@ -31,11 +31,11 @@
  * byte-identical to the one being staged. Three of its five conditions —
  * `tracked`, `priorApprovalMatches`, and the installed-APK digest — live in the
  * provider's own device-protected state and are not observable over ADB, so
- * this module cannot decide that hatch. It deliberately does not try to: it
- * only refuses to CLOSE it, by treating a randomized path of the exact shape
- * the hatch admits, on a package already reporting the target version (the only
- * way its installed bytes can equal the staged bytes), as "the provider may
- * still admit this" rather than as a refusal. See `classifyKeepDataUpdate`.
+ * this module cannot decide that hatch. It deliberately preserves that
+ * distinction as `may-continue` instead of misreporting a definite provider
+ * refusal. The host migration gate still fails closed on it before transfer:
+ * "the provider might admit this" is not evidence that it will. See
+ * `classifyKeepDataUpdate` and `findKeepDataUpdateRefusal`.
  *
  * Nothing on the device layer captures the APK path: `InstalledPackageMetadata`
  * (src/lib/pin-device/adb/packageManager.ts:23-29) carries versionName, signer,
@@ -123,8 +123,8 @@ export function isSafeRandomizedBaseApkPath(
  *   may-continue   — a randomized path of the exact shape the failed-update
  *                    continuity hatch admits, on a package already reporting
  *                    the target version. Not decidable from here (see the
- *                    module header); reported so the decision does not forbid
- *                    the one state that hatch exists to admit.
+ *                    module header); the host reports this uncertainty and
+ *                    blocks because it cannot prove the provider-only state.
  *   foreign-artifact — some other UID or path. The provider will answer
  *                    UPDATE_NOT_ELIGIBLE and fail the whole batch.
  *   unreadable     — the package dump did not say where the APK is or which
@@ -168,7 +168,7 @@ export function classifyKeepDataUpdate(options: {
  */
 export function describeKeepDataUpdateRefusal(options: {
   readonly packageName: string;
-  readonly verdict: Extract<KeepDataUpdateVerdict, "foreign-artifact" | "unreadable">;
+  readonly verdict: Extract<KeepDataUpdateVerdict, "foreign-artifact" | "unreadable" | "may-continue">;
   readonly appId: number | null;
   readonly baseApkPath: string | null;
 }): string {
@@ -183,12 +183,24 @@ export function describeKeepDataUpdateRefusal(options: {
     );
   }
 
+  if (options.verdict === "may-continue") {
+    return (
+      `${options.packageName} cannot be approved for an in-place update: it is installed at ` +
+      `${options.baseApkPath ?? "an unreported path"} (app id ${options.appId ?? "unreported"}). ` +
+      `That randomized path has the shape of the provider's failed-update continuity case, ` +
+      `but only the provider holds the prior approval and installed-APK digest needed to admit it. ` +
+      `The host cannot prove those conditions, so it stops before transferring any APK. STOP here; ` +
+      `do not use bootstrap recovery as a fallback, because it removes managed packages and can erase FBE-scoped identity.`
+    );
+  }
+
   return (
     `${options.packageName} cannot be updated in place: it is installed at ` +
     `${options.baseApkPath ?? "an unreported path"} (app id ${options.appId ?? "unreported"}), ` +
     `not the installer's own ${expected}. The installer refuses a keep-data update for any ` +
     `package it does not own, and the install batch is all-or-nothing, so this one package ` +
-    `would fail the whole install after every APK had been pushed to the device.`
+    `would fail the whole install after every APK had been pushed to the device. STOP here; ` +
+    `do not use bootstrap recovery as a fallback, because it removes managed packages and can erase FBE-scoped identity.`
   );
 }
 

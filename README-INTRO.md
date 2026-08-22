@@ -101,7 +101,7 @@ You do not need a physical Pin to run the local product and explore Center.
 | --- | --- |
 | Docker with Compose | 2.33.1 or newer |
 | Node.js | 22.14.0 or newer |
-| Rust | 1.91.1 or newer |
+| Rust | 1.91.1 exactly |
 
 The live version source is
 [`platform/containers/pin-builder/toolchain.json`](platform/containers/pin-builder/toolchain.json).
@@ -186,24 +186,35 @@ not invent temporary roots that would invalidate the device after a restart.
    authorities described in
    [Onboarding a Pin](docs/operations.md#onboarding-a-pin).
 
-3. Build the five signed roles into an immutable local release.
+3. Dispatch the commit-pinned **Attested Pin release** workflow from `main`.
+   It prepares and provider-attests the credential-free input before the
+   operator-owned protected-input integration may expose signing material. If
+   that external integration is not installed, the workflow stops closed.
+   Download its complete `pin-release-<version>` file artifact, then verify and
+   register the directory that contains `current.json`, `history.json`, and
+   `releases/`:
 
    ```sh
-   ./revival pin release build \
-     --version YYYY-MM-DD.N \
-     --version-code INTEGER
+   ./revival setup import pin-release \
+     --release-root /external/downloaded-pin-release \
+     --data-dir /external/revival-data
+   ./revival setup artifacts pin --data-dir /external/revival-data
    ```
+
+   The old local `pin release build` alias intentionally refuses before it can
+   open a signing key.
 
 4. Inspect the server publish plan, then publish when the target is correct.
 
    ```sh
-   ./revival pin release ship
-   ./revival pin release ship --confirm
+   ./revival pin release ship --release-root /external/downloaded-pin-release
+   ./revival pin release ship --release-root /external/downloaded-pin-release --confirm
    ```
 
 5. Open `/settings/pin/install` in Center. Connect the Pin over WebUSB. Center
-   verifies the manifest, package names, versions, sizes, and hashes before the
-   installation begins.
+   verifies the exact-five release manifest, then maintains the four steady
+   installed roles. The bootstrap APK is recovery-only and is never part of a
+   routine healthy-installer update.
 
 6. Provision the device identity, activate the clone endpoint, connect Wi-Fi,
    and complete enrollment. Activation is a journalled device transaction, but
@@ -212,7 +223,7 @@ not invent temporary roots that would invalidate the device after a restart.
 7. Run the canary, then verify the actual Pin experience.
 
    ```sh
-   ./revival canary
+   ./revival canary --confirm
    ```
 
 A green canary proves the deployed service checks it performs. It does not, by
@@ -226,9 +237,13 @@ clean-VPS bootstrap wizard.
 
 ```sh
 ./revival doctor production
-./revival deploy production --dry-run
-./revival backup --fetch
-./revival canary
+./revival setup import vps-candidate \
+  --handoff-root /external/downloaded-vps-candidate \
+  --data-dir /external/revival-data
+./revival setup artifacts vps --data-dir /external/revival-data
+REVIVAL_DATA_DIR=/external/revival-data ./revival deploy production --candidate-id CANDIDATE_SHA256 --dry-run
+./revival backup --confirm --fetch
+./revival canary --confirm
 ./revival drift
 ```
 
@@ -237,8 +252,17 @@ review all agree, the deployment command publishes one immutable Center and
 Cosmos release.
 
 ```sh
-./revival deploy production
+REVIVAL_DATA_DIR=/external/revival-data \
+  ./revival deploy production --candidate-id CANDIDATE_SHA256 --confirm
 ```
+
+Create the downloaded handoff by dispatching the SHA-pinned **Attested VPS
+candidate** workflow on `main`; it has no secret, signing, SSH, or deployment
+authority. Its provider attestation binds the exact Git source, toolchain,
+builder/image receipts, run identity, and candidate file set. This proves
+GitHub-hosted trusted-workflow provenance, not bare metal or absence of a
+hypervisor. Local ARM/macOS candidate preparation remains an intentional
+pre-Docker refusal.
 
 The operational model is built around proof:
 
@@ -264,7 +288,7 @@ Do not commit APKs, firmware, private keys, device identities, wearer data,
 captures, packet traces, or production logs.
 
 One warning matters more than the rest: a backup that exists only on the server
-is not an off-host backup. Use `./revival backup --fetch` to bring home a
+is not an off-host backup. Use `./revival backup --confirm --fetch` to bring home a
 verified bundle that also includes the Pin signing material stored only on your
 operator machine.
 

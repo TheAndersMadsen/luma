@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/bash
 # Database checks: postgres data/schema/security capture, the additive
 # schema allowance, and relation column projections.
 #

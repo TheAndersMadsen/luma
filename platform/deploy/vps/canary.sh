@@ -1,7 +1,8 @@
-#!/usr/bin/env bash
+#!/usr/bin/env -S /bin/bash -p
 set -euo pipefail
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-source "$SCRIPT_DIR/lib/local.sh"
+case "${BASH_SOURCE[0]}" in /*) SCRIPT_PATH="${BASH_SOURCE[0]}" ;; *) SCRIPT_PATH="$PWD/${BASH_SOURCE[0]}" ;; esac
+SCRIPT_DIR="${SCRIPT_PATH%/*}"
+builtin source "$SCRIPT_DIR/lib/local.sh"
 
 release_id=""
 baseline=""
@@ -10,8 +11,9 @@ require_remote_tts=0
 wearer_plane_optional=0
 from_tree=0
 json=0
+confirm=0
 usage() {
-  echo "usage: $0 [--remote vps] [--release-id SHA256] [--baseline DIR] [--require-remote-tts] [--wearer-plane-optional] [--from-tree] [--cookie-file REMOTE_PATH] [--json]" >&2
+  echo "usage: $0 --confirm [--remote vps] [--release-id SHA256] [--baseline DIR] [--require-remote-tts] [--wearer-plane-optional] [--from-tree] [--cookie-file REMOTE_PATH] [--json]" >&2
   exit 64
 }
 while (($#)); do
@@ -34,9 +36,11 @@ while (($#)); do
     --from-tree) from_tree=1; shift ;;
     --cookie-file) (($# >= 2)) || usage; cookie_file="$2"; shift 2 ;;
     --json) json=1; shift ;;
+    --confirm) ((confirm == 0)) || usage; confirm=1; shift ;;
     *) usage ;;
   esac
 done
+((confirm == 1)) || usage_error "canary changes production and requires one literal --confirm"
 need_local ssh
 args=()
 [[ -n "$release_id" ]] && args+=(--release-id "$release_id")

@@ -669,6 +669,9 @@ test("pre-activation recovery callback restores live mutation and canaries befor
   await mkdir(path.join(pendingRelease, "platform/deploy/vps/remote"), { recursive: true });
   await mkdir(oldRelease, { recursive: true });
   await mkdir(oldRecord, { recursive: true });
+  const candidateId = "c".repeat(64);
+  const candidatePath = path.join(directory, "release-candidates", candidateId);
+  await mkdir(candidatePath, { recursive: true });
   await writeFile(path.join(pendingRecord, "old-current"), `${oldRelease}\n`);
   await writeFile(path.join(pendingRecord, "old-current-deployment"), `${oldRecord}\n`);
   await writeFile(path.join(pendingRecord, "ingress-active.tsv"), "nginx.service\tactive\n");
@@ -676,6 +679,8 @@ test("pre-activation recovery callback restores live mutation and canaries befor
   await writeFile(path.join(pendingRecord, "LIVE_MUTATION_STARTED"), "started\n");
   await writeFile(path.join(oldRecord, "running-images.tsv"), "fixture\n");
   await writeFile(path.join(oldRecord, "config-digests.tsv"), "fixture\n");
+  await writeFile(path.join(oldRecord, "candidate-id"), `${candidateId}\n`);
+  await writeFile(path.join(oldRecord, "candidate-path"), `${candidatePath}\n`);
   await writeFile(path.join(pendingRelease, "platform/deploy/vps/remote/canary.sh"), [
     "#!/usr/bin/env bash", "printf 'canary:%s\\n' \"$*\" >>\"$TRACE\"", "",
   ].join("\n"));
@@ -686,14 +691,17 @@ ${callback}
 TRACE="$1"; export TRACE
 RELEASES_DIR="$2"; DEPLOYMENTS_DIR="$3"; PROJECT=fixture
 trace() { printf '%s\n' "$1" >>"$TRACE"; }
-# Faithful stand-in for common.sh's cross-release entry point: same resolution of
-# the invoked script inside the OTHER release's tree, same argv. The option
-# baseline it enforces is exercised directly in cross-release-interface.test.mjs.
+# Faithful stand-in for the held cross-release dispatcher. It records the same
+# argv without reopening or executing a mutable release-tree pathname.
 assert_cross_release_options() { :; }
 run_cross_release_script() {
   local release="$1" script="$2"
   shift 2
-  bash "$release/platform/deploy/vps/remote/$script" "$@"
+  trace "canary:$*"
+}
+activate_record_candidate_if_present() {
+  [[ -f "$2/candidate-id" && -f "$2/candidate-path" ]] || return 1
+  trace "activate-candidate:$4"
 }
 open_public_ingress_window() { trace open-window; }
 quiesce_ingress_services() { trace quiesce; }
@@ -718,6 +726,7 @@ recover_pending_pre_activation_application "$4" "$5"
   assert.equal(result.status, 0, result.stderr);
   const events = (await readFile(trace, "utf8")).trim().split("\n");
   const firstCanary = events.findIndex((value) => value.startsWith("canary:"));
+  const activation = eventAt(events, "activate-candidate:preactivation-predecessor");
   const restorePublic = eventAt(events, "restore-public-ingress");
   const secondCanary = events.findLastIndex((value) => value.startsWith("canary:"));
   assert.ok(firstCanary >= 0 && secondCanary > firstCanary, `recovery ran ${events.length} steps and fewer than two canaries: ${events.join(", ")}`);
@@ -727,6 +736,7 @@ recover_pending_pre_activation_application "$4" "$5"
   // start_recorded_ingress_service or assert_ingress_matches_recorded from
   // deploy.sh's recovery path left all of them green.
   assert.ok(eventAt(events, "restore-live-mutation") < eventAt(events, "compose-up"));
+  assert.ok(activation < eventAt(events, "load-compose") && activation < firstCanary);
   assert.ok(eventAt(events, "bridge-start") < firstCanary);
   assert.ok(firstCanary < restorePublic && restorePublic < secondCanary);
   assert.ok(eventAt(events, "assert-ingress") < secondCanary);
@@ -739,6 +749,46 @@ recover_pending_pre_activation_application "$4" "$5"
     eventAt(events, "open-window") < eventAt(events, "quiesce"),
     `recovery must measure its own ingress outage: ${events.join(", ")}`,
   );
+});
+
+test("failed-cutover recovery refuses retained candidate authority before every Compose consumer", async () => {
+  const deploy = await readFile(path.join(remote, "deploy.sh"), "utf8");
+  const recovery = bashFunction(deploy, "recover_previous_application");
+  const directory = await realpath(await mkdtemp(path.join(os.tmpdir(), "revival-deploy-recovery-authority-")));
+  const record = path.join(directory, "deployments", "failed-record");
+  const stage = path.join(record, "staged", "assets", "attest");
+  const oldRelease = path.join(directory, "releases", releaseA);
+  const oldRecord = path.join(directory, "deployments", "old-record");
+  await mkdir(stage, { recursive: true });
+  await mkdir(oldRelease, { recursive: true });
+  await mkdir(oldRecord, { recursive: true });
+  await writeFile(path.join(stage, "ca.key"), "recoverable staged key\n", { mode: 0o600 });
+  await writeFile(path.join(record, "OPERATION_TRANSACTION_PREPARED"), "prepared\n", { mode: 0o600 });
+  const trace = path.join(directory, "trace");
+  const script = String.raw`
+set +e
+${recovery}
+TRACE="$1"; record="$2"; old_current="$3"; old_current_deployment="$4"
+trace() { printf '%s\n' "$1" >>"$TRACE"; }
+warn() { :; }
+activate_record_candidate_if_present() { trace activation-refused; return 1; }
+# None of these may be reached after authority refusal.
+open_public_ingress_window() { trace open-window; }
+quiesce_ingress_services() { trace quiesce; }
+load_candidate_compose_command_with_env() { trace candidate-compose-env; }
+load_candidate_compose_command() { trace candidate-compose; }
+load_compose_command() { trace load-compose; }
+run_held_release_program() { trace canary; }
+verify_configuration_evidence() { trace verify-config; }
+verify_image_evidence() { trace verify-images; }
+recover_previous_application
+`;
+  const result = spawnSync("bash", ["-c", script, "fixture", trace, record, oldRelease, oldRecord], { encoding: "utf8" });
+  assert.notEqual(result.status, 0);
+  assert.deepEqual((await readFile(trace, "utf8")).trim().split("\n"), ["activation-refused"]);
+  assert.equal(await readFile(path.join(stage, "ca.key"), "utf8"), "recoverable staged key\n");
+  assert.match(await readFile(path.join(record, "OPERATION_TRANSACTION_PREPARED"), "utf8"), /prepared/u);
+  await assert.rejects(readFile(path.join(record, "RECOVERY_FAILED")));
 });
 
 test("TERM-state between pointer preparation and trust evidence preserves staged roots", async () => {
@@ -779,9 +829,14 @@ test("rollback pre-activation recovery canaries current authority before abort",
   const currentRelease = path.join(directory, "releases", releaseA);
   await mkdir(path.join(work, "current-config"), { recursive: true });
   await mkdir(path.join(currentRelease, "platform/deploy/vps/remote"), { recursive: true });
+  const candidateId = "c".repeat(64);
+  const candidatePath = path.join(directory, "release-candidates", candidateId);
+  await mkdir(candidatePath, { recursive: true });
   await writeFile(path.join(record, "ROLLBACK_POINTER_TRANSACTION_PREPARED"), "prepared\n");
   await writeFile(path.join(record, "ROLLBACK_OPERATION_TRANSACTION_PREPARED"), "prepared\n");
   await writeFile(path.join(record, "running-images.tsv"), "fixture\n");
+  await writeFile(path.join(record, "candidate-id"), `${candidateId}\n`);
+  await writeFile(path.join(record, "candidate-path"), `${candidatePath}\n`);
   await writeFile(path.join(work, "current-config/runtime.env"), "fixture=true\n");
   await writeFile(path.join(currentRelease, "platform/deploy/vps/remote/canary.sh"), [
     "#!/usr/bin/env bash", "printf 'canary:%s\\n' \"$*\" >>\"$TRACE\"", "",
@@ -815,6 +870,11 @@ domain_keycloak_verify_desired() { trace keycloak-verify; }
 verify_keycloak_post_migration_evidence() { trace keycloak-evidence; }
 verify_configuration_evidence() { trace verify-config; }
 verify_image_evidence() { trace verify-images; }
+activate_retained_candidate_authority() {
+  [[ -f "$2/candidate-id" && -f "$2/candidate-path" ]] || return 1
+  trace "activate-candidate:$4"
+}
+run_held_release_program() { trace "canary:$*"; }
 start_recorded_ingress_service() { trace bridge-start; }
 domain_cloudflared_install() { trace cloudflared-install; }
 domain_cloudflared_verify_desired() { trace cloudflared-verify-desired; }
@@ -830,11 +890,13 @@ finish_rollback
   const events = (await readFile(trace, "utf8")).trim().split("\n");
   const canaries = events.map((value, index) => value.startsWith("canary:") ? index : -1).filter((index) => index >= 0);
   const operationAbort = events.findIndex((value) => value.includes("--operation-action abort"));
+  const activation = eventAt(events, "activate-candidate:rollback-recovery-current");
   assert.equal(canaries.length, 2);
   // `canaries[0] < indexOf(x)` already fails for an absent x (-1), but
   // `indexOf("bridge-start") < canaries[0]` did not: the rollback recovery path
   // could stop starting the recorded ingress service entirely and stay green.
   assert.ok(eventAt(events, "bridge-start") < canaries[0]);
+  assert.ok(activation < eventAt(events, "load-compose") && activation < canaries[0]);
   assert.ok(canaries[0] < eventAt(events, "restore-public-ingress"));
   assert.ok(eventAt(events, "restore-public-ingress") < canaries[1]);
   assert.ok(canaries[1] < operationAbort);
@@ -869,7 +931,12 @@ async function rollbackRecoveryFixture(name) {
   await mkdir(path.join(currentRelease, "platform/deploy/vps/remote"), { recursive: true });
   await mkdir(targetRelease, { recursive: true });
   await mkdir(targetRecord, { recursive: true });
+  const candidateId = "c".repeat(64);
+  const candidatePath = path.join(directory, "release-candidates", candidateId);
+  await mkdir(candidatePath, { recursive: true });
   await writeFile(path.join(record, "running-images.tsv"), "fixture\n");
+  await writeFile(path.join(record, "candidate-id"), `${candidateId}\n`);
+  await writeFile(path.join(record, "candidate-path"), `${candidatePath}\n`);
   await writeFile(path.join(work, "current-config/runtime.env"), "fixture=true\n");
   // The two files backup.sh calls the only content of a backup that cannot be
   // regenerated from anything. They are here because the resume reads this tree,
@@ -934,6 +1001,11 @@ domain_keycloak_verify_desired() { trace keycloak-verify; }
 verify_keycloak_post_migration_evidence() { trace keycloak-evidence; }
 verify_configuration_evidence() { trace verify-config; }
 verify_image_evidence() { trace verify-images; }
+activate_retained_candidate_authority() {
+  [[ -f "$2/candidate-id" && -f "$2/candidate-path" ]] || return 1
+  trace "activate-candidate:$4"
+}
+run_held_release_program() { trace "canary:$*"; }
 start_recorded_ingress_service() { trace bridge-start; }
 domain_cloudflared_install() { trace cloudflared-install; }
 domain_cloudflared_verify_desired() { trace cloudflared-verify-desired; }
@@ -969,6 +1041,8 @@ test("recovery after a publicly accepted rollback leaves no unresumable authorit
   const events = (await readFile(trace, "utf8")).trim().split("\n");
   const canaries = events.filter((value) => value.startsWith("canary:"));
   assert.equal(canaries.length, 2, `recovery ran ${events.join(", ")}`);
+  assert.ok(eventAt(events, "activate-candidate:rollback-recovery-current") <
+    events.findIndex((value) => value.startsWith("canary:")), events.join(", "));
   assert.match(await readFile(path.join(work, "CURRENT_RECOVERED"), "utf8"), /\S/u);
   // The whole point: nothing is pending any more, so `./revival deploy`,
   // `adopt-config` and a fresh rollback are all admissible again. Before the fix
@@ -998,12 +1072,33 @@ test("recovery that cannot abort a committed rollback keeps the material its res
   assert.notEqual(result.status, 0);
   const events = (await readFile(trace, "utf8")).trim().split("\n");
   assert.ok(events.includes("commit-failed"), `recovery ran ${events.join(", ")}`);
+  assert.ok(eventAt(events, "activate-candidate:rollback-recovery-current") <
+    events.findIndex((value) => value.startsWith("canary:")), events.join(", "));
   await assert.rejects(readFile(path.join(record, "ROLLBACK_POINTER_TRANSACTION_ABORTED")));
   assert.deepEqual(activeAuthority(directory), [{ namespace: "rollback", record }]);
   // rollback.sh:411 and :880 refuse a resume without exactly these two.
   assert.match(await readFile(path.join(work, "current-config/runtime.env"), "utf8"), /\S/u);
   assert.match(await readFile(path.join(work, "target-stage/assets/attest/ca.key"), "utf8"), /\S/u);
   assert.ok(events.some((value) => value.startsWith("warn:preserving rollback staging")), events.join(", "));
+});
+
+test("rollback recovery refuses before Compose when retained candidate activation fails and preserves staging", async () => {
+  const rollback = await readFile(path.join(remote, "rollback.sh"), "utf8");
+  const { directory, record, work, currentRelease, trace } = await rollbackRecoveryFixture("rollback-candidate-authority-refusal");
+  const script = rollbackRecoveryScript(rollback, [
+    "reprove_target_acceptance() { trace reprove; return 1; }",
+    "activate_retained_candidate_authority() { trace activation-refused; return 1; }",
+  ].join("\n"));
+  const result = spawnSync("bash", ["-c", script, "fixture", trace, record, work, currentRelease, releaseA, directory], { encoding: "utf8" });
+  assert.notEqual(result.status, 0);
+  const events = (await readFile(trace, "utf8")).trim().split("\n");
+  assert.ok(events.includes("activation-refused"), events.join(", "));
+  assert.equal(events.some((value) => value === "load-compose" || value === "compose-up" || value.startsWith("canary:")), false,
+    `failed candidate authority reached a Compose consumer: ${events.join(", ")}`);
+  await assert.rejects(readFile(path.join(record, "ROLLBACK_POINTER_TRANSACTION_ABORTED")));
+  assert.match(await readFile(path.join(work, "current-config/runtime.env"), "utf8"), /fixture/u);
+  assert.match(await readFile(path.join(work, "target-stage/assets/attest/ca.key"), "utf8"), /attest-ca/u);
+  assert.deepEqual(activeAuthority(directory), [{ namespace: "rollback", record }]);
 });
 
 test("a durably aborted rollback is refused before anything can be torn down", async () => {

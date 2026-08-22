@@ -101,6 +101,9 @@ RELEASE_ID = re.compile(r"^[0-9a-f]{64}$")
 # backup.sh:39's own id regex. A directory under backups/ whose name this does
 # not match was not written by backup.sh, so nothing here knows what it is.
 BACKUP_ID = re.compile(r"^[A-Za-z0-9._-]{8,96}$")
+SHA256 = re.compile(r"^[0-9a-f]{64}$")
+AUTHORITY_FIELDS = ("dev", "ino", "mode", "uid", "gid", "nlink", "size",
+                    "mtimeNs", "ctimeNs", "inventorySha256")
 
 
 def die(message: str) -> "NoReturn":
@@ -114,6 +117,26 @@ def canonical(value: object) -> str:
 def require(condition: bool, message: str) -> None:
     if not condition:
         die(message)
+
+
+def planned_entry(raw: dict, name: str, path: str) -> dict:
+    require(isinstance(raw, dict), "retained store fact is not an object")
+    entry = {"name": name, "path": path, "bytes": int(raw["bytes"]),
+             "mtime": int(raw["mtime"])}
+    for field in AUTHORITY_FIELDS:
+        require(field in raw, f"retained store fact is missing authority field {field}")
+        entry[field] = raw[field]
+    for field in AUTHORITY_FIELDS[:-1]:
+        require(isinstance(entry[field], int) and not isinstance(entry[field], bool) and entry[field] >= 0,
+                f"retained store authority field is invalid: {field}")
+    require(SHA256.fullmatch(str(entry["inventorySha256"])) is not None,
+            "retained store inventory digest is invalid")
+    selected = {field: entry[field] for field in AUTHORITY_FIELDS}
+    expected = hashlib.sha256(canonical(selected).encode()).hexdigest()
+    require(raw.get("authorityToken") == expected,
+            "retained store authority token does not reproduce its exact metadata/inventory")
+    entry["authorityToken"] = expected
+    return entry
 
 
 def load_request(path: str) -> dict:
@@ -142,6 +165,7 @@ class Record:
         require(self.path == os.path.join(root, "deployments", self.name),
                 f"deployment record path is outside the guarded directory: {self.path}")
         self.release_id = str(raw.get("releaseId") or "")
+        self.candidate_id = str(raw.get("candidateId") or "")
         self.old_current = str(raw.get("oldCurrent") or "")
         self.old_current_deployment = str(raw.get("oldCurrentDeployment") or "")
         self.markers = set(raw.get("markers") or [])
@@ -345,7 +369,7 @@ def collect(request: dict) -> dict:
         path = str(raw["path"])
         require(path == os.path.join(root, "backups", name),
                 f"backup path is outside the guarded directory: {path}")
-        entry = {"name": name, "path": path, "bytes": int(raw["bytes"]), "mtime": int(raw["mtime"])}
+        entry = planned_entry(raw, name, path)
         reasons = list(keep_backups.get(name, []))
         ineligible: list[str] = []
         if not BACKUP_ID.fullmatch(name):
@@ -412,7 +436,7 @@ def collect(request: dict) -> dict:
         path = str(raw["path"])
         require(path == os.path.join(root, "releases", name),
                 f"release path is outside the guarded directory: {path}")
-        entry = {"name": name, "path": path, "bytes": int(raw["bytes"]), "mtime": int(raw["mtime"])}
+        entry = planned_entry(raw, name, path)
         reasons = list(keep_releases.get(name, []))
         ineligible = []
         if not RELEASE_ID.fullmatch(name):
@@ -435,6 +459,58 @@ def collect(request: dict) -> dict:
         releases.append(entry)
     releases.sort(key=lambda item: item["name"])
 
+    # ---- immutable release candidates ------------------------------------
+    # Candidate bundles are multi-gigabyte rollback authority. Keep exactly
+    # those reachable from a retained deployment record; a mutable transport
+    # checksum or path string is deliberately not an authority input.
+    keep_candidates: dict[str, list[str]] = {}
+    for name in sorted(keep_records):
+        candidate_id = records[name].candidate_id
+        if candidate_id:
+            require(RELEASE_ID.fullmatch(candidate_id) is not None,
+                    f"retained record has an invalid candidate ID: {name}")
+            add_reason(keep_candidates, candidate_id, f"candidate-of-retained-record:{name}")
+
+    candidates = []
+    for raw in request.get("candidates", []):
+        name = str(raw["name"]); path = str(raw["path"])
+        require(path == os.path.join(root, "release-candidates", name),
+                f"candidate path is outside the guarded directory: {path}")
+        entry = planned_entry(raw, name, path)
+        reasons = list(keep_candidates.get(name, [])); ineligible = []
+        if not RELEASE_ID.fullmatch(name): ineligible.append("name-is-not-a-candidate-id")
+        if now - entry["mtime"] < floor: ineligible.append(f"newer-than-age-floor-{floor}s")
+        if reasons:
+            entry["action"] = "keep"; entry["reasons"] = reasons
+        elif ineligible:
+            entry["action"] = "ineligible"; entry["reasons"] = ineligible
+        else:
+            entry["action"] = "remove"
+            entry["reasons"] = ["not-the-candidate-of-any-retained-deployment-record", f"older-than-age-floor-{floor}s"]
+        candidates.append(entry)
+    candidates.sort(key=lambda item: item["name"])
+
+    # `incoming/<release-id>` is transport/verified-driver staging only. No
+    # recovery path reads it, and the deploy lock proves no writer is active.
+    incoming = []
+    for raw in request.get("incoming", []):
+        name = str(raw["name"]); path = str(raw["path"])
+        require(path == os.path.join(root, "incoming", name),
+                f"incoming path is outside the guarded directory: {path}")
+        entry = planned_entry(raw, name, path)
+        ineligible = []
+        if not RELEASE_ID.fullmatch(name): ineligible.append("name-is-not-a-release-id")
+        if now - entry["mtime"] < floor: ineligible.append(f"newer-than-age-floor-{floor}s")
+        if ineligible:
+            entry["action"] = "ineligible"; entry["reasons"] = ineligible
+        else:
+            entry["action"] = "remove"
+            entry["reasons"] = ["incoming-is-not-recovery-authority",
+                                "deployment-lock-and-upload-lease-prove-no-active-writer",
+                                f"older-than-age-floor-{floor}s"]
+        incoming.append(entry)
+    incoming.sort(key=lambda item: item["name"])
+
     # Every retained name must actually be on disk. A retained backup that is
     # already gone is not this command's doing, but it IS a broken recovery path
     # and the operator has to hear about it here rather than during a rollback.
@@ -446,6 +522,10 @@ def collect(request: dict) -> dict:
     for name, reasons in sorted(keep_releases.items()):
         if name not in present_releases:
             warnings.append(f"a retained release is already missing from disk: {name} ({'; '.join(reasons)})")
+    present_candidates = {entry["name"] for entry in candidates}
+    for name, reasons in sorted(keep_candidates.items()):
+        if name not in present_candidates:
+            warnings.append(f"a retained candidate is already missing from disk: {name} ({'; '.join(reasons)})")
 
     plan = {
         "schemaVersion": SCHEMA,
@@ -455,6 +535,8 @@ def collect(request: dict) -> dict:
         "retainedRecords": {name: sorted(reasons) for name, reasons in sorted(keep_records.items())},
         "backups": backups,
         "releases": releases,
+        "candidates": candidates,
+        "incoming": incoming,
         "warnings": warnings,
     }
     plan["totals"] = {
@@ -467,23 +549,24 @@ def collect(request: dict) -> dict:
         "releasesIneligible": sum(1 for item in releases if item["action"] == "ineligible"),
         "releasesRemoved": sum(1 for item in releases if item["action"] == "remove"),
         "releaseBytesRemoved": sum(item["bytes"] for item in releases if item["action"] == "remove"),
+        "candidatesKept": sum(1 for item in candidates if item["action"] == "keep"),
+        "candidatesIneligible": sum(1 for item in candidates if item["action"] == "ineligible"),
+        "candidatesRemoved": sum(1 for item in candidates if item["action"] == "remove"),
+        "candidateBytesRemoved": sum(item["bytes"] for item in candidates if item["action"] == "remove"),
+        "incomingIneligible": sum(1 for item in incoming if item["action"] == "ineligible"),
+        "incomingRemoved": sum(1 for item in incoming if item["action"] == "remove"),
+        "incomingBytesRemoved": sum(item["bytes"] for item in incoming if item["action"] == "remove"),
     }
     plan["planToken"] = plan_token(plan)
     return plan
 
 
 def plan_token(plan: dict) -> str:
-    """A digest of the DECISIONS, not of the measurements.
-
-    Sizes and mtimes are deliberately excluded so that a token stays valid across
-    the seconds between a dry run and its --confirm; an item whose ACTION or
-    reason changed in that window invalidates it, which is the case worth
-    catching.
-    """
+    """Bind every decision to exact inode metadata and recursive inventory."""
     rows = []
-    for kind in ("backups", "releases"):
+    for kind in ("backups", "releases", "candidates", "incoming"):
         for item in plan[kind]:
-            rows.append(f"{kind}\t{item['name']}\t{item['action']}\t{','.join(item['reasons'])}")
+            rows.append(canonical({"kind": kind, **item}))
     rows.sort()
     digest = hashlib.sha256()
     digest.update(f"{plan['minAgeSeconds']}\t{int(plan['includeIncomplete'])}\n".encode())
@@ -514,7 +597,8 @@ def report(plan: dict, show_all: bool, stream) -> None:
             print(f"      because {reason}", file=stream)
     print("", file=stream)
 
-    for kind, heading in (("backups", "BACKUPS"), ("releases", "RELEASES")):
+    for kind, heading in (("backups", "BACKUPS"), ("releases", "RELEASES"),
+                          ("candidates", "RELEASE CANDIDATES"), ("incoming", "INCOMING STAGING")):
         removing = [item for item in plan[kind] if item["action"] == "remove"]
         ineligible = [item for item in plan[kind] if item["action"] == "ineligible"]
         keeping = [item for item in plan[kind] if item["action"] == "keep"]
@@ -541,9 +625,13 @@ def report(plan: dict, show_all: bool, stream) -> None:
             print(f"  ! {warning}", file=stream)
         print("", file=stream)
 
+    total_removed = (totals['backupBytesRemoved'] + totals['releaseBytesRemoved'] +
+                     totals['candidateBytesRemoved'] + totals['incomingBytesRemoved'])
     print(f"would free: {human_bytes(totals['backupBytesRemoved'])} of backups + "
-          f"{human_bytes(totals['releaseBytesRemoved'])} of releases = "
-          f"{human_bytes(totals['backupBytesRemoved'] + totals['releaseBytesRemoved'])}", file=stream)
+          f"{human_bytes(totals['releaseBytesRemoved'])} of releases + "
+          f"{human_bytes(totals['candidateBytesRemoved'])} of candidates + "
+          f"{human_bytes(totals['incomingBytesRemoved'])} of incoming staging = "
+          f"{human_bytes(total_removed)}", file=stream)
     if totals["backupBytesIneligible"]:
         print(f"held back as not eligible: {human_bytes(totals['backupBytesIneligible'])} of backups",
               file=stream)
@@ -575,10 +663,11 @@ def main() -> None:
 
     if arguments.emit_removals:
         rows = []
-        for kind in ("backups", "releases"):
+        singular = {"backups": "backup", "releases": "release", "candidates": "candidate", "incoming": "incoming"}
+        for kind in ("backups", "releases", "candidates", "incoming"):
             for item in plan[kind]:
                 if item["action"] == "remove":
-                    rows.append(f"{kind[:-1]}\t{item['path']}\t{item['bytes']}\n")
+                    rows.append(f"{singular[kind]}\t{item['path']}\t{item['bytes']}\t{item['authorityToken']}\n")
         payload = "".join(rows)
         if arguments.emit_removals == "-":
             sys.stdout.write(payload)

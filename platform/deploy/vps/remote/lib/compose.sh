@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/bash
 # Compose invocation, container/volume lookup, service waits, and HTTP
 # probes.
 #
@@ -23,14 +23,147 @@ compose_command() {
 
 load_compose_command() {
   local release_dir="$1"
+  revival_compose_release="$release_dir"
   COMPOSE=()
   while IFS= read -r -d '' part; do COMPOSE+=("$part"); done < <(compose_command "$release_dir")
+  wrap_compose_with_candidate_authority
 }
 
 load_compose_command_with_env() {
   local release_dir="$1" runtime="$2" cosmos="$3" provider="$4" center="$5"
+  revival_compose_release="$release_dir"
   COMPOSE=()
   while IFS= read -r -d '' part; do COMPOSE+=("$part"); done < <(compose_command_with_env "$release_dir" "$runtime" "$cosmos" "$provider" "$center")
+  wrap_compose_with_candidate_authority
+}
+
+wrap_compose_with_candidate_authority() {
+  local override="${revival_candidate_override_path:-}" digest="${revival_candidate_override_sha256:-}"
+  if [[ -z "$override$digest" ]]; then
+    [[ "${revival_candidate_authority_required:-0}" == 0 ]] \
+      || fail "candidate-era Compose use has no retained bundle authority"
+    return 0
+  fi
+  [[ -n "$override" && "$override" == "$DEPLOYMENTS_DIR/"* \
+    && "$digest" =~ ^[0-9a-f]{64}$ \
+    && "${revival_candidate_id:-}" =~ ^[0-9a-f]{64}$ \
+    && "${revival_candidate_path:-}" == "$REMOTE_ROOT/release-candidates/${revival_candidate_id:-}" \
+    && "${revival_candidate_authority_record:-}" == "$DEPLOYMENTS_DIR/"* \
+    && "${revival_candidate_authority_receipt_name:-}" =~ ^[A-Za-z0-9._-]+-compose-authority\.json$ \
+    && "${revival_candidate_authority_receipt_sha256:-}" =~ ^[0-9a-f]{64}$ \
+    && "${revival_candidate_compose_model_sha256:-}" =~ ^[0-9a-f]{64}$ \
+    && "${revival_candidate_authority_release:-}" == "${revival_compose_release:-}" \
+    && "${REVIVAL_HELD_COMPOSE:-}" =~ ^/proc/self/fd/[1-9][0-9]*$ \
+    && "${REVIVAL_HELD_CANDIDATE_AUTHORITY_EXEC:-}" =~ ^/proc/self/fd/[1-9][0-9]*$ ]] \
+    || fail "held candidate Compose authority is incomplete"
+  local release_id manifest
+  release_id="$(basename -- "$revival_compose_release")"
+  validate_release_id "$release_id"
+  [[ "$revival_compose_release" == "$RELEASES_DIR/$release_id" ]] \
+    || fail "candidate Compose release is outside the immutable release store"
+  manifest="$MANIFESTS_DIR/$release_id.json"
+  local -a base=("${COMPOSE[@]}")
+  COMPOSE=("$REVIVAL_HOST_PYTHON" -I -B "$REVIVAL_HELD_CANDIDATE_AUTHORITY_EXEC" \
+    --candidate "$revival_candidate_path" --candidate-id "$revival_candidate_id" \
+    --release-id "$release_id" --record "$revival_candidate_authority_record" \
+    --receipt-name "$revival_candidate_authority_receipt_name" \
+    --expect-receipt-sha256 "$revival_candidate_authority_receipt_sha256" \
+    --program "$REVIVAL_HELD_COMPOSE" -- \
+    --candidate-id "$revival_candidate_id" --override-name "${override##*/}" --sha256 "$digest" \
+    --release "$revival_compose_release" --manifest "$manifest" --release-id "$release_id" \
+    -- "${base[@]}")
+}
+
+clear_candidate_compose_authority() {
+  unset revival_candidate_override_path revival_candidate_override_sha256
+  unset revival_candidate_authority_release
+  unset revival_candidate_id revival_candidate_path revival_candidate_authority_record
+  unset revival_candidate_authority_receipt_name revival_candidate_authority_receipt_sha256
+  unset revival_candidate_compose_model_sha256
+  revival_candidate_authority_required=0
+  HELPER_IMAGE="$CANDIDATE_HELPER_REFERENCE"
+  export revival_candidate_authority_required HELPER_IMAGE
+}
+
+activate_retained_candidate_authority() {
+  local selected_release="$1" source_record="$2" authority_record="$3" prefix="$4"
+  shift 4
+  local selected_release_id candidate_id candidate_path id_file path_file
+  local runtime_json runtime_fields evidence_digest override_digest model_digest authority_digest
+  selected_release_id="$(basename -- "$selected_release")"
+  validate_release_id "$selected_release_id"
+  [[ "$selected_release" == "$RELEASES_DIR/$selected_release_id" \
+    && "$source_record" == "$DEPLOYMENTS_DIR/"* && -d "$source_record" && ! -L "$source_record" \
+    && "$authority_record" == "$DEPLOYMENTS_DIR/"* && -d "$authority_record" && ! -L "$authority_record" \
+    && "$prefix" =~ ^[A-Za-z0-9._-]{1,64}$ ]] \
+    || fail "retained candidate authority request is outside protected stores"
+  id_file="$source_record/candidate-id"; path_file="$source_record/candidate-path"
+  if [[ ! -e "$id_file" && ! -L "$id_file" && ! -e "$path_file" && ! -L "$path_file" ]]; then
+    fail "retained candidate authority is mandatory for offline Compose use"
+  fi
+  for evidence in "$id_file" "$path_file"; do
+    [[ -f "$evidence" && ! -L "$evidence" \
+      && "$(stat -c '%a:%u:%g:%h' "$evidence")" == "600:$(id -u):$(id -g):1" ]] \
+      || fail "retained candidate identity evidence is unsafe"
+  done
+  candidate_id="$(tr -d '\r\n' <"$id_file")"
+  candidate_path="$(tr -d '\r\n' <"$path_file")"
+  [[ "$candidate_id" =~ ^[0-9a-f]{64}$ \
+    && "$candidate_path" == "$REMOTE_ROOT/release-candidates/$candidate_id" ]] \
+    || fail "retained candidate identity evidence is inconsistent"
+  [[ "${REVIVAL_HELD_CANDIDATE_VERIFIER:-}" =~ ^/proc/self/fd/[1-9][0-9]*$ \
+    && "${REVIVAL_HELD_CANDIDATE_RUNTIME:-}" =~ ^/proc/self/fd/[1-9][0-9]*$ \
+    && "${REVIVAL_HELD_CANDIDATE_AUTHORITY_EXEC:-}" =~ ^/proc/self/fd/[1-9][0-9]*$ ]] \
+    || fail "current trusted candidate runtime authority is unavailable"
+  local verification
+  verification="$(run_held_candidate_verifier verify --candidate "$candidate_path" \
+    --expect-id "$candidate_id" --json)" \
+    || fail "retained candidate failed filesystem-only verification"
+  "$REVIVAL_HOST_NODE" -e 'const v=JSON.parse(process.argv[1]);if(v.ok!==true||v.candidateId!==process.argv[2]||v.releaseId!==process.argv[3]||v.productionCompatible!==true)process.exit(1)' \
+    "$verification" "$candidate_id" "$selected_release_id" \
+    || fail "retained candidate does not bind the requested release"
+
+  clear_candidate_compose_authority
+  if (($# != 0 && $# != 4)); then
+    fail "retained candidate authority received an invalid env-file set"
+  fi
+  runtime_json="$("$REVIVAL_HOST_PYTHON" -I -B "$REVIVAL_HELD_CANDIDATE_AUTHORITY_EXEC" \
+    --candidate "$candidate_path" --candidate-id "$candidate_id" --release-id "$selected_release_id" \
+    --record "$authority_record" --receipt-name "$prefix-compose-authority.json" \
+    --program "$REVIVAL_HELD_CANDIDATE_RUNTIME" -- \
+    --candidate-id "$candidate_id" --release-id "$selected_release_id" \
+    --evidence-name "$prefix-images.tsv" --override-name "$prefix-images.override.json" \
+    --helper-reference "$CANDIDATE_HELPER_REFERENCE")" \
+    || fail "retained candidate image transaction failed"
+  runtime_fields="$("$REVIVAL_HOST_NODE" -e '
+const value=JSON.parse(process.argv[1]);
+if(value.ok!==true||!/^sha256:[0-9a-f]{64}$/.test(value.helperReference)||!/^[0-9a-f]{64}$/.test(value.evidenceSha256)||!/^[0-9a-f]{64}$/.test(value.overrideSha256)||!/^[0-9a-f]{64}$/.test(value.composeModelSha256)||!/^[0-9a-f]{64}$/.test(value.authorityReceiptSha256))process.exit(1);
+process.stdout.write(`${value.helperReference}\t${value.evidenceSha256}\t${value.overrideSha256}\t${value.composeModelSha256}\t${value.authorityReceiptSha256}`);
+' "$runtime_json")" || fail "retained candidate runtime returned invalid evidence"
+  IFS=$'\t' read -r HELPER_IMAGE evidence_digest override_digest model_digest authority_digest <<<"$runtime_fields"
+  revival_candidate_override_path="$authority_record/$prefix-images.override.json"
+  revival_candidate_override_sha256="$override_digest"
+  revival_candidate_id="$candidate_id"
+  revival_candidate_path="$candidate_path"
+  revival_candidate_authority_record="$authority_record"
+  revival_candidate_authority_receipt_name="$prefix-compose-authority.json"
+  revival_candidate_authority_receipt_sha256="$authority_digest"
+  revival_candidate_compose_model_sha256="$model_digest"
+  revival_candidate_authority_release="$selected_release"
+  revival_candidate_authority_required=1
+  export HELPER_IMAGE revival_candidate_override_path revival_candidate_override_sha256
+  export revival_candidate_id revival_candidate_path revival_candidate_authority_record
+  export revival_candidate_authority_receipt_name revival_candidate_authority_receipt_sha256
+  export revival_candidate_compose_model_sha256
+  export revival_candidate_authority_release revival_candidate_authority_required
+  if (($# == 0)); then
+    load_compose_command "$selected_release"
+  else
+    load_compose_command_with_env "$selected_release" "$1" "$2" "$3" "$4"
+  fi
+  "${COMPOSE[@]}" config --quiet
+  [[ "$(docker image inspect --format '{{.Id}}' "$HELPER_IMAGE")" == "$HELPER_IMAGE" ]] \
+    || fail "retained backup helper content ID is unavailable"
 }
 
 find_project_container() {

@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/bash
 # Deployment and release pointers read by the drift and rollback gates.
 #
 # Sourced by remote/common.sh; not an entry point. Functions here rely on

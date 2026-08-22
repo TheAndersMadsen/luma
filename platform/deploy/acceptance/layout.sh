@@ -21,7 +21,7 @@ do
 done
 
 for path in \
-  revival compose.yaml README.md \
+  revival compose.yaml README.md rust-toolchain.toml \
   docs/architecture.md docs/operations.md \
   contracts/compatibility.json \
   center/package.json cosmos/Cargo.toml pin/settings.gradle.kts \
@@ -77,7 +77,8 @@ diagrams
 docs
 pin
 platform
-revival'
+revival
+rust-toolchain.toml'
 
 for entry in "$ROOT"/* "$ROOT"/.[!.]* "$ROOT"/..?*
 do
@@ -123,9 +124,9 @@ do
 done
 
 generated_dirs=$(find -P "$ROOT" -type d \( \
-  -name .gradle -o -name .kotlin -o -name .next -o -name __pycache__ -o \
-  -name build -o -name coverage -o -name dist -o \
-  -name node_modules -o -name target \
+  -name .gradle -o -name .kotlin -o -name .next -o -name .turbo -o -name __pycache__ -o \
+  -name build -o -name coverage -o -name dist -o -name dist-center -o \
+  -name node_modules -o -name target -o -name test-runs \
 \) -prune -print)
 if [ -n "$generated_dirs" ]; then
   echo "repo layout: generated directories belong outside the source tree:" >&2

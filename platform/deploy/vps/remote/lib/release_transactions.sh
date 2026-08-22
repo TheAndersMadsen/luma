@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/bash
 # Release identity, cross-release invocation rules, the deploy lock, and
 # the nginx transaction snapshot.
 #
@@ -75,6 +75,24 @@ assert_cross_release_options() {
   done
 }
 
+run_held_release_program() {
+  local release="$1" entry="$2" interpreter="$3" privileged="${4:-0}" release_id manifest
+  shift 4
+  release_id="$(basename -- "$release")"
+  validate_release_id "$release_id"
+  [[ "$release" == "$RELEASES_DIR/$release_id" \
+    && "$entry" != /* && "$entry" != *..* \
+    && "${REVIVAL_HELD_EXEC:-}" =~ ^/proc/self/fd/[1-9][0-9]*$ ]] \
+    || fail "held release execution authority is unavailable or unsafe"
+  manifest="$MANIFESTS_DIR/$release_id.json"
+  local -a command=("$REVIVAL_HOST_PYTHON" -I -B "$REVIVAL_HELD_EXEC" \
+    --tree "$release" --manifest "$manifest" --expect-release-id "$release_id" \
+    --entry "$entry" --interpreter "$interpreter" --helper-image "$HELPER_IMAGE")
+  [[ "$privileged" == 0 ]] || command+=(--privileged)
+  command+=(-- "$@")
+  "${command[@]}"
+}
+
 # The one way deploy.sh runs a shell script out of another release's tree.
 run_cross_release_script() {
   local release="$1" script="$2" entry
@@ -82,7 +100,14 @@ run_cross_release_script() {
   entry="$release/platform/deploy/vps/remote/$script"
   [[ -f "$entry" && ! -L "$entry" ]] || fail "cross-release script is missing or unsafe: $script"
   assert_cross_release_options "$script" "$@"
-  bash "$entry" "$@"
+  run_held_release_program "$release" "platform/deploy/vps/remote/$script" bash 0 "$@"
+}
+
+run_cross_release_python() {
+  local release="$1" script="$2" privileged="$3"
+  shift 3
+  assert_cross_release_options "$script" "$@"
+  run_held_release_program "$release" "platform/deploy/vps/remote/$script" python "$privileged" "$@"
 }
 
 # Authenticate the verifier entry without executing that verifier. This breaks

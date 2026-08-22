@@ -13,16 +13,15 @@
 //     signing ENVIRONMENT: names are tested for presence, values are not read.
 //   * No host identity. Both renderers abbreviate the home directory to `~`.
 //     This report is meant to be pasteable into an issue, and an absolute
-//     `/Users/<name>/…` path leaks the OS username as surely as a serial does.
+//     A rendered macOS home path leaks the OS username as surely as a serial.
 //     Probes and the `evaluate` result keep full paths; only rendering rewrites.
 //   * No builds. Version probes only (`--version` style), each bounded and
 //     timed out. Nothing here compiles anything. The one bulk read is the
 //     SHA-256 of the two pinned native build inputs (~220 MB when present).
 //
-// Expected versions are PARSED from README.md's prerequisite line rather than
-// restated here so this preflight remains aligned with the canonical toolchain.
-// If that line ever moves or changes, this tool reports what the doc actually
-// says today, and cites the line it read.
+// Android/JDK/Node expectations are parsed from README.md. Rust is stricter:
+// the exact operational version comes from toolchain.json and must equal the
+// root rust-toolchain.toml, so the doctor cannot silently follow moving stable.
 // The pinned-asset paths and digests are parsed from `runtime/android/build.gradle.kts`
 // for exactly the same reason — that file is what enforces the gate.
 //
@@ -33,8 +32,12 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
 import { homedir } from "node:os";
+import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+
+const require = createRequire(import.meta.url);
+const { probePinAmd64Runtime } = require("../../cli/toolchain.js");
 
 export const CHECK_STATUS = Object.freeze({
   PASS: "pass",
@@ -228,7 +231,7 @@ export function parseGatedAssetPins(text) {
  * rather than two. Probe data and `evaluate` output keep full paths, so no path
  * check is affected.
  *
- * The lookahead stops `/home/ann` from mangling `/home/annex`: the match must
+ * The lookahead stops `/operator/ann` from mangling `/operator/annex`: the match must
  * be followed by a separator or by something that is not a path character.
  */
 export function abbreviateHome(text, home) {
@@ -251,9 +254,12 @@ export function parseNdkRevision(text) {
 /** `openjdk version "21.0.11" ...` (or legacy `"1.8.0_392"`) → version + major. */
 export function parseJavaVersion(text) {
   if (typeof text !== "string") return null;
-  const match = /version\s+"([^"]+)"/.exec(text);
-  if (!match) return null;
-  const version = match[1];
+  const matches = [...text.matchAll(
+    /^(?:openjdk|java)[ \t]+version[ \t]+"([^"]+)"(?:[ \t].*)?$/gmu,
+  )];
+  if (matches.length !== 1) return null;
+  const version = matches[0][1];
+  if (!/^\d+(?:[._+-]\d+)*(?:-[A-Za-z0-9._+-]+)?$/u.test(version)) return null;
   const parts = version.split(/[._-]/).filter((part) => /^\d+$/.test(part));
   if (parts.length === 0) return null;
   const major = parts[0] === "1" && parts.length > 1 ? Number(parts[1]) : Number(parts[0]);
@@ -278,6 +284,428 @@ export function compareVersions(left, right) {
     if (x > y) return 1;
   }
   return 0;
+}
+
+/** First complete semantic version in a command banner. */
+export function parseCommandVersion(text, command = null) {
+  if (typeof text !== "string") return null;
+  if (!command) return /^(?:[A-Za-z][A-Za-z0-9-]*)[ \t]+(\d+\.\d+\.\d+)(?:[-+ \t].*)?$/u
+    .exec(text.trim())?.[1] ?? null;
+  if (!/^[A-Za-z][A-Za-z0-9-]*$/u.test(command)) return null;
+  const escaped = command.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  const matches = [...text.matchAll(
+    new RegExp(`^${escaped}[ \\t]+(\\d+\\.\\d+\\.\\d+)(?:[-+ \\t].*)?$`, "gmu"),
+  )];
+  return matches.length === 1 ? matches[0][1] : null;
+}
+
+/** Exact Rust channel selected by a minimal rust-toolchain.toml. */
+export function parseRustToolchainToml(text) {
+  if (typeof text !== "string") return null;
+  const lines = text.split(/\r?\n/u);
+  const sections = lines
+    .map((line, index) => (/^\s*\[([^\]]+)\]\s*(?:#.*)?$/u.exec(line)?.[1] === "toolchain" ? index : -1))
+    .filter((index) => index !== -1);
+  if (sections.length !== 1) return null;
+  const start = sections[0] + 1;
+  let end = lines.length;
+  for (let index = start; index < lines.length; index += 1) {
+    if (/^\s*\[[^\]]+\]\s*(?:#.*)?$/u.test(lines[index])) {
+      end = index;
+      break;
+    }
+  }
+  const channels = lines.slice(start, end)
+    .map((line) => /^\s*channel\s*=\s*"(\d+\.\d+\.\d+)"\s*(?:#.*)?$/u.exec(line)?.[1] ?? null)
+    .filter(Boolean);
+  return channels.length === 1 ? channels[0] : null;
+}
+
+/** Exact Rust version declared by the canonical machine-readable contract. */
+export function parseRustToolchainContract(text) {
+  if (typeof text !== "string") return null;
+  try {
+    const parsed = JSON.parse(text);
+    const version = parsed?.toolchain?.rust?.version;
+    return typeof version === "string" && /^\d+\.\d+\.\d+$/u.test(version)
+      ? version
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Every exact Pin-builder value controlled by the machine-readable contract. */
+export function parsePinBuilderToolchainContract(text) {
+  if (typeof text !== "string") return null;
+  try {
+    const parsed = JSON.parse(text);
+    const toolchain = parsed?.toolchain;
+    const image = (entry) =>
+      typeof entry?.image === "string" &&
+      typeof entry?.imageIndexDigest === "string"
+        ? `${entry.image}@${entry.imageIndexDigest}`
+        : null;
+    const nodeImage = image(toolchain?.node);
+    return {
+      platform: typeof parsed?.platform === "string" ? parsed.platform : null,
+      jdkImage: image(toolchain?.jdk),
+      nodeImage,
+      centerNodeImages: nodeImage ? `${nodeImage}\n${nodeImage}` : null,
+      rustImage: image(toolchain?.rust),
+      rustVersion: toolchain?.rust?.version ?? null,
+      commandLineToolsVersion: toolchain?.android?.commandLineTools?.version ?? null,
+      commandLineToolsSha256: toolchain?.android?.commandLineTools?.sha256 ?? null,
+      androidPlatform: toolchain?.android?.platform ?? null,
+      androidBuildTools: toolchain?.android?.buildTools ?? null,
+      androidNdk: toolchain?.android?.ndk ?? null,
+      androidNdkArchiveUrl: toolchain?.android?.ndkArchive?.url ?? null,
+      androidNdkArchiveRoot: toolchain?.android?.ndkArchive?.sourceRoot ?? null,
+      androidNdkArchiveSize: Number.isSafeInteger(toolchain?.android?.ndkArchive?.size)
+        ? String(toolchain.android.ndkArchive.size)
+        : null,
+      androidNdkArchiveSha1: toolchain?.android?.ndkArchive?.sha1 ?? null,
+      androidNdkArchiveSha256: toolchain?.android?.ndkArchive?.sha256 ?? null,
+      androidNdkDestination: toolchain?.android?.ndkArchive?.destination ?? null,
+      androidRustTarget: toolchain?.android?.rustTarget ?? null,
+      cargoNdk: toolchain?.cargoNdk?.version ?? null,
+      cargoNdkArchiveUrl: toolchain?.cargoNdk?.archive?.url ?? null,
+      cargoNdkArchiveRoot: toolchain?.cargoNdk?.archive?.sourceRoot ?? null,
+      cargoNdkArchiveSize: Number.isSafeInteger(toolchain?.cargoNdk?.archive?.size)
+        ? String(toolchain.cargoNdk.archive.size)
+        : null,
+      cargoNdkArchiveSha256: toolchain?.cargoNdk?.archive?.sha256 ?? null,
+      cargoNdkArchiveTarget: toolchain?.cargoNdk?.archive?.target ?? null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function exactlyOneMatch(text, pattern, group = 1) {
+  const matches = [...text.matchAll(pattern)];
+  return matches.length === 1 ? matches[0][group] ?? null : null;
+}
+
+function exactlyOneLiteral(text, literal) {
+  return text.split(literal).length === 2;
+}
+
+function literalCount(text, literal) {
+  return text.split(literal).length - 1;
+}
+
+/** Both direct Node base images implemented by Center (base and runtime). */
+export function parseCenterDockerfileNodeImages(text) {
+  if (typeof text !== "string") return null;
+  const directNodeImages = [...text.matchAll(/^FROM\s+(node:\S+)\s+AS\s+(\S+)\s*$/gimu)];
+  if (directNodeImages.length !== 2) return null;
+  const byAlias = new Map();
+  for (const match of directNodeImages) {
+    const alias = match[2].toLowerCase();
+    if (byAlias.has(alias)) return null;
+    byAlias.set(alias, match[1]);
+  }
+  const base = byAlias.get("base");
+  const runtime = byAlias.get("runtime");
+  return base && runtime ? `${base}\n${runtime}` : null;
+}
+
+const PIN_COMPILE_SDK_FILES = Object.freeze([
+  "pin/contracts/penumbra-ipc/build.gradle.kts",
+  "pin/contracts/stock-aibus/build.gradle.kts",
+  "pin/hook/loader/build.gradle.kts",
+  "pin/hook/payload/build.gradle.kts",
+  "pin/injector/common/build.gradle.kts",
+  "pin/injector/exploit/build.gradle.kts",
+  "pin/injector/installer/build.gradle.kts",
+  "pin/runtime/android/build.gradle.kts",
+]);
+
+/** Android/NDK values as consumed by Gradle rather than merely declared in Docker. */
+export function parsePinGradleToolchainConsumers(files) {
+  if (!files || typeof files !== "object") return null;
+  const entries = Object.entries(files).filter(([, text]) => typeof text === "string");
+  const compileSdk = [];
+  for (const [path, text] of entries) {
+    for (const match of text.matchAll(/^\s*compileSdk\s*=\s*(\d+)\s*$/gmu)) {
+      compileSdk.push({ path, value: match[1] });
+    }
+  }
+  const compilePaths = compileSdk.map((entry) => entry.path).sort();
+  const expectedPaths = [...PIN_COMPILE_SDK_FILES].sort();
+  const oneCompileSdkPerCanonicalModule =
+    compilePaths.length === expectedPaths.length &&
+    compilePaths.every((path, index) => path === expectedPaths[index]);
+  const compileValues = new Set(compileSdk.map((entry) => entry.value));
+
+  const buildToolsFiles = ["pin/build.gradle.kts", "pin/injector/build.gradle.kts"];
+  const buildToolsConsumersValid = buildToolsFiles.every((path) => {
+    const text = files[path];
+    if (typeof text !== "string") return false;
+    const environment = [...text.matchAll(/System\.getenv\("AI_PIN_ANDROID_BUILD_TOOLS_VERSION"\)/gu)];
+    const assignments = [...text.matchAll(/^\s*buildToolsVersion\s*=\s*pinnedBuildTools\s*$/gmu)];
+    return environment.length === 1 && assignments.length === 2;
+  });
+
+  const runtime = files["pin/runtime/android/build.gradle.kts"];
+  if (typeof runtime !== "string") return null;
+  const rustAbi = exactlyOneMatch(runtime, /^val\s+rustAbi\s*=\s*"([^"]+)"\s*$/gmu);
+  const rustTarget = exactlyOneMatch(runtime, /^val\s+rustTarget\s*=\s*"([^"]+)"\s*$/gmu);
+  const targetOutputConsumers = [...runtime.matchAll(/target\/\$rustTarget\/release\/\$rustExecutableName/gu)];
+  const cargoNdkCommands = [...runtime.matchAll(
+    /commandLine\(\s*"cargo"\s*,\s*"ndk"\s*,\s*"-P"\s*,\s*"31"\s*,\s*"-t"\s*,\s*rustAbi\s*,/gu,
+  )];
+  const abiPackagingConsumers = [...runtime.matchAll(/^\s*into\(rustAbi\)\s*$/gmu)];
+  return {
+    androidPlatform: oneCompileSdkPerCanonicalModule && compileValues.size === 1
+      ? [...compileValues][0]
+      : null,
+    buildToolsConsumersValid,
+    rustAbi: rustAbi === "arm64-v8a" ? rustAbi : null,
+    androidRustTarget: rustTarget,
+    cargoNdkConsumerValid: cargoNdkCommands.length === 1 &&
+      targetOutputConsumers.length === 1 && abiPackagingConsumers.length === 3,
+  };
+}
+
+/** The declared values and their actual consumers in the canonical builders. */
+export function parsePinBuilderDockerfileContract(
+  text,
+  centerDockerfileText = null,
+  gradleFiles = null,
+) {
+  if (typeof text !== "string") return null;
+  const gradle = parsePinGradleToolchainConsumers(gradleFiles);
+  const from = [...text.matchAll(
+    /^FROM\s+(?:--platform=(\S+)\s+)?(\S+)(?:\s+AS\s+(\S+))?\s*$/gimu,
+  )].map((match) => ({ platform: match[1] ?? null, image: match[2], alias: match[3] ?? null }));
+  const aliasedImage = (alias) => {
+    const matches = from.filter((entry) => entry.alias?.toLowerCase() === alias);
+    return matches.length === 1 ? matches[0].image : null;
+  };
+  const aliasedPlatform = (alias) => {
+    const matches = from.filter((entry) => entry.alias?.toLowerCase() === alias);
+    return matches.length === 1 ? matches[0].platform : null;
+  };
+  const rustImages = from.filter((entry) => entry.image.startsWith("rust:") && entry.platform === null);
+  const rustImage = rustImages.length === 1 ? rustImages[0].image : null;
+  const argument = (name) => {
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return exactlyOneMatch(text, new RegExp(`^ARG\\s+${escaped}=([^\\s]+)\\s*$`, "gmu"));
+  };
+  const rustupMatches = [...text.matchAll(
+    /rustup\s+target\s+add\s+(\S+)\s+--toolchain\s+(\d+\.\d+\.\d+)\s*;/gu,
+  )];
+  const rustup = rustupMatches.length === 1 ? rustupMatches[0] : null;
+  const amd64Guard = /case\s+"\$\{TARGETARCH:-amd64\}"\s+in[\s\S]*?amd64\)\s*;;[\s\S]*?\*\)[\s\S]*?exit\s+1\s*;;[\s\S]*?esac;/u.test(text);
+  const commandLineToolsVersion = argument("ANDROID_COMMAND_LINE_TOOLS_VERSION");
+  const commandLineToolsSha256 = argument("ANDROID_COMMAND_LINE_TOOLS_SHA256");
+  const androidPlatform = argument("ANDROID_PLATFORM_VERSION");
+  const androidBuildTools = argument("ANDROID_BUILD_TOOLS_VERSION");
+  const androidNdk = argument("ANDROID_NDK_VERSION");
+  const androidNdkArchiveUrl = argument("ANDROID_NDK_ARCHIVE_URL");
+  const androidNdkArchiveRoot = argument("ANDROID_NDK_ARCHIVE_ROOT");
+  const androidNdkArchiveSize = argument("ANDROID_NDK_ARCHIVE_SIZE");
+  const androidNdkArchiveSha1 = argument("ANDROID_NDK_ARCHIVE_SHA1");
+  const androidNdkArchiveSha256 = argument("ANDROID_NDK_ARCHIVE_SHA256");
+  const cargoNdk = argument("CARGO_NDK_VERSION");
+  const cargoNdkArchiveUrl = argument("CARGO_NDK_ARCHIVE_URL");
+  const cargoNdkArchiveRoot = argument("CARGO_NDK_ARCHIVE_ROOT");
+  const cargoNdkArchiveSize = argument("CARGO_NDK_ARCHIVE_SIZE");
+  const cargoNdkArchiveSha256 = argument("CARGO_NDK_ARCHIVE_SHA256");
+  const commandLineUrl = exactlyOneMatch(
+    text,
+    /"(https:\/\/dl\.google\.com\/android\/repository\/commandlinetools-linux-[^"\s]+_latest\.zip)"/gu,
+  );
+  const sdkPackages = [...text.matchAll(/"((?:platforms;android-|build-tools;|ndk;)[^"\s]+)"/gu)]
+    .map((match) => match[1]);
+  const jdkImage = aliasedImage("jdk_runtime");
+  const nodeImage = aliasedImage("node_runtime");
+  const nativeJdkImage = aliasedImage("android_jdk_native");
+  const nativeNodeImage = aliasedImage("android_sdk_native");
+  const nativeRustImage = aliasedImage("rust_target_native");
+  const pathValue = exactlyOneMatch(text, /^\s*PATH=([^\s]+)\s*$/gmu);
+
+  const validCommandLineTools = commandLineToolsVersion !== null &&
+    commandLineUrl === "https://dl.google.com/android/repository/commandlinetools-linux-${ANDROID_COMMAND_LINE_TOOLS_VERSION}_latest.zip" &&
+    exactlyOneLiteral(text, 'mv /tmp/android-command-line-tools/cmdline-tools "/opt/android-sdk/cmdline-tools/${ANDROID_COMMAND_LINE_TOOLS_VERSION}"') &&
+    literalCount(text, "/opt/android-sdk/cmdline-tools/${ANDROID_COMMAND_LINE_TOOLS_VERSION}/bin") === 4;
+  const validCommandLineSha = commandLineToolsSha256 !== null && exactlyOneLiteral(
+    text,
+    'echo "${ANDROID_COMMAND_LINE_TOOLS_SHA256}  /tmp/android-command-line-tools.zip" | sha256sum --check --strict',
+  );
+  const validPlatform = androidPlatform !== null &&
+    sdkPackages.filter((value) => value.startsWith("platforms;android-")).length === 1 &&
+    sdkPackages.includes("platforms;android-${ANDROID_PLATFORM_VERSION}") &&
+    exactlyOneLiteral(text, "AI_PIN_ANDROID_PLATFORM_VERSION=${ANDROID_PLATFORM_VERSION}") &&
+    gradle?.androidPlatform === androidPlatform;
+  const validBuildTools = androidBuildTools !== null &&
+    sdkPackages.filter((value) => value.startsWith("build-tools;")).length === 1 &&
+    sdkPackages.includes("build-tools;${ANDROID_BUILD_TOOLS_VERSION}") &&
+    exactlyOneLiteral(text, "AI_PIN_ANDROID_BUILD_TOOLS_VERSION=${ANDROID_BUILD_TOOLS_VERSION}") &&
+    literalCount(text, "/opt/android-sdk/build-tools/${ANDROID_BUILD_TOOLS_VERSION}") === 2 &&
+    gradle?.buildToolsConsumersValid === true;
+  const validNdk = androidNdk !== null &&
+    sdkPackages.filter((value) => value.startsWith("ndk;")).length === 0 &&
+    exactlyOneLiteral(text, "ANDROID_NDK_HOME=/opt/android-sdk/ndk/${ANDROID_NDK_VERSION}") &&
+    exactlyOneLiteral(text, "ANDROID_NDK_ROOT=/opt/android-sdk/ndk/${ANDROID_NDK_VERSION}") &&
+    exactlyOneLiteral(text, "AI_PIN_ANDROID_NDK_VERSION=${ANDROID_NDK_VERSION}") &&
+    exactlyOneLiteral(text, 'COPY --from=android_sdk_native /opt/android-sdk /opt/android-sdk') &&
+    exactlyOneLiteral(text, 'grep -Fx "Pkg.Revision = ${ANDROID_NDK_VERSION}" "/tmp/android-ndk/${ANDROID_NDK_ARCHIVE_ROOT}/source.properties";') &&
+    exactlyOneLiteral(text, 'test -f "/opt/android-sdk/ndk/${ANDROID_NDK_VERSION}/source.properties";') &&
+    gradle?.cargoNdkConsumerValid === true;
+  const validNdkArchiveUrl = androidNdkArchiveUrl !== null &&
+    /^https:\/\/dl\.google\.com\/android\/repository\/android-ndk-r\d+[a-z]-linux\.zip$/u
+      .test(androidNdkArchiveUrl) &&
+    exactlyOneLiteral(text, '"${ANDROID_NDK_ARCHIVE_URL}" \\\n      --output /tmp/android-ndk.zip;');
+  const validNdkArchiveRoot = androidNdkArchiveRoot !== null &&
+    /^android-ndk-r\d+[a-z]$/u.test(androidNdkArchiveRoot) &&
+    exactlyOneLiteral(text, 'test "$(find /tmp/android-ndk -mindepth 1 -maxdepth 1 -type d -printf \'%f\\n\')" = "${ANDROID_NDK_ARCHIVE_ROOT}";') &&
+    exactlyOneLiteral(text, 'mv "/tmp/android-ndk/${ANDROID_NDK_ARCHIVE_ROOT}" "/opt/android-sdk/ndk/${ANDROID_NDK_VERSION}";');
+  const validNdkArchiveSize = /^\d+$/u.test(androidNdkArchiveSize ?? "") &&
+    exactlyOneLiteral(text, 'test "$(stat --format=\'%s\' /tmp/android-ndk.zip)" = "${ANDROID_NDK_ARCHIVE_SIZE}";');
+  const validNdkArchiveSha1 = /^[0-9a-f]{40}$/u.test(androidNdkArchiveSha1 ?? "") &&
+    exactlyOneLiteral(text, 'echo "${ANDROID_NDK_ARCHIVE_SHA1}  /tmp/android-ndk.zip" | sha1sum --check --strict;');
+  const validNdkArchiveSha256 = /^[0-9a-f]{64}$/u.test(androidNdkArchiveSha256 ?? "") &&
+    exactlyOneLiteral(text, 'echo "${ANDROID_NDK_ARCHIVE_SHA256}  /tmp/android-ndk.zip" | sha256sum --check --strict;');
+  const androidNdkDestination = validNdk && validNdkArchiveRoot
+    ? `/opt/android-sdk/ndk/${androidNdk}`
+    : null;
+  const validRustTargetCopy = exactlyOneLiteral(
+    text,
+    "COPY --from=rust_target_native /opt/rust-target/ /usr/local/rustup/toolchains/1.91.1-x86_64-unknown-linux-gnu/",
+  ) && exactlyOneLiteral(
+    text,
+    "COPY --from=rust_runtime /usr/local/rustup/toolchains/1.91.1-x86_64-unknown-linux-gnu/lib/rustlib/components /tmp/x86-rust-components",
+  ) && exactlyOneLiteral(
+    text,
+    'grep -Fx rust-std-aarch64-linux-android "${rust_sysroot}/lib/rustlib/components";',
+  ) && exactlyOneLiteral(
+    text,
+    'test -f "${rust_sysroot}/lib/rustlib/manifest-rust-std-aarch64-linux-android";',
+  ) && exactlyOneLiteral(
+    text,
+    'cp -a "${rust_sysroot}/lib/rustlib/aarch64-linux-android" /opt/rust-target/lib/rustlib/;',
+  ) && exactlyOneLiteral(
+    text,
+    'cp -a "${rust_sysroot}/lib/rustlib/manifest-rust-std-aarch64-linux-android" /opt/rust-target/lib/rustlib/',
+  ) && exactlyOneLiteral(
+    text,
+    "cp /tmp/x86-rust-components /opt/rust-target/lib/rustlib/components;",
+  ) && exactlyOneLiteral(
+    text,
+    "test \"$(grep -Fxc rust-std-aarch64-linux-android /opt/rust-target/lib/rustlib/components)\" = 0;",
+  ) && exactlyOneLiteral(
+    text,
+    "printf '%s\\n' rust-std-aarch64-linux-android >> /opt/rust-target/lib/rustlib/components;",
+  ) && exactlyOneLiteral(
+    text,
+    "test \"$(grep -Fxc rust-std-aarch64-linux-android /opt/rust-target/lib/rustlib/components)\" = 1",
+  );
+  const validCargoNdk = cargoNdk !== null &&
+    exactlyOneLiteral(text, "COPY --from=rust_target_native /opt/cargo-ndk/bin/ /usr/local/cargo/bin/") &&
+    exactlyOneLiteral(text, "for executable in cargo-ndk cargo-ndk-env cargo-ndk-runner cargo-ndk-test; do") &&
+    exactlyOneLiteral(text, 'install -m 0755 "/tmp/cargo-ndk/${CARGO_NDK_ARCHIVE_ROOT}/${executable}" "/opt/cargo-ndk/bin/${executable}";') &&
+    gradle?.cargoNdkConsumerValid === true;
+  const validCargoNdkArchiveUrl = cargoNdkArchiveUrl !== null && cargoNdk !== null &&
+    cargoNdkArchiveUrl === `https://github.com/bbqsrc/cargo-ndk/releases/download/v${cargoNdk}/cargo-ndk-x86_64-unknown-linux-gnu-v${cargoNdk}.tgz` &&
+    exactlyOneLiteral(text, '"${CARGO_NDK_ARCHIVE_URL}" \\\n      --output /tmp/cargo-ndk.tgz;');
+  const validCargoNdkArchiveRoot = cargoNdkArchiveRoot !== null && cargoNdk !== null &&
+    cargoNdkArchiveRoot === `cargo-ndk-x86_64-unknown-linux-gnu-v${cargoNdk}` &&
+    exactlyOneLiteral(text, 'test "$(find /tmp/cargo-ndk -mindepth 1 -maxdepth 1 -type d -printf \'%f\\n\')" = "${CARGO_NDK_ARCHIVE_ROOT}";');
+  const validCargoNdkArchiveSize = /^\d+$/u.test(cargoNdkArchiveSize ?? "") &&
+    exactlyOneLiteral(text, 'test "$(stat --format=\'%s\' /tmp/cargo-ndk.tgz)" = "${CARGO_NDK_ARCHIVE_SIZE}";');
+  const validCargoNdkArchiveSha256 = /^[0-9a-f]{64}$/u.test(cargoNdkArchiveSha256 ?? "") &&
+    exactlyOneLiteral(text, 'echo "${CARGO_NDK_ARCHIVE_SHA256}  /tmp/cargo-ndk.tgz" | sha256sum --check --strict;');
+  const validJdk = jdkImage !== null && nativeJdkImage === jdkImage &&
+    aliasedPlatform("android_jdk_native") === "$BUILDPLATFORM" &&
+    exactlyOneLiteral(text, "COPY --from=jdk_runtime /opt/java/openjdk /opt/java/openjdk") &&
+    literalCount(text, "JAVA_HOME=/opt/java/openjdk") === 2 &&
+    pathValue?.split(":").includes("/opt/java/openjdk/bin") &&
+    [...text.matchAll(/^\s*\/opt\/java\/openjdk\/bin\/java -version;\s*\\\s*$/gmu)].length === 1;
+  const validNode = nodeImage !== null && nativeNodeImage === nodeImage &&
+    aliasedPlatform("android_sdk_native") === "$BUILDPLATFORM" &&
+    exactlyOneLiteral(text, "COPY --from=node_runtime /usr/local/bin/node /usr/local/bin/node") &&
+    exactlyOneLiteral(text, "COPY --from=node_runtime /usr/local/lib/node_modules /usr/local/lib/node_modules") &&
+    pathValue?.split(":").includes("/usr/local/bin") &&
+    exactlyOneLiteral(text, "ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm;") &&
+    exactlyOneLiteral(text, "ln -s /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx;") &&
+    [...text.matchAll(/^\s*node --version;\s*\\\s*$/gmu)].length === 1;
+  return {
+    platform: amd64Guard ? "linux/amd64" : null,
+    jdkImage: validJdk ? jdkImage : null,
+    nodeImage: validNode ? nodeImage : null,
+    centerNodeImages: parseCenterDockerfileNodeImages(centerDockerfileText),
+    rustImage: nativeRustImage === rustImage && aliasedPlatform("rust_target_native") === "$BUILDPLATFORM"
+      ? rustImage
+      : null,
+    rustVersion: validRustTargetCopy ? rustup?.[2] ?? null : null,
+    commandLineToolsVersion: validCommandLineTools ? commandLineToolsVersion : null,
+    commandLineToolsSha256: validCommandLineSha ? commandLineToolsSha256 : null,
+    androidPlatform: validPlatform ? androidPlatform : null,
+    androidBuildTools: validBuildTools ? androidBuildTools : null,
+    androidNdk: validNdk ? androidNdk : null,
+    androidNdkArchiveUrl: validNdkArchiveUrl ? androidNdkArchiveUrl : null,
+    androidNdkArchiveRoot: validNdkArchiveRoot ? androidNdkArchiveRoot : null,
+    androidNdkArchiveSize: validNdkArchiveSize ? androidNdkArchiveSize : null,
+    androidNdkArchiveSha1: validNdkArchiveSha1 ? androidNdkArchiveSha1 : null,
+    androidNdkArchiveSha256: validNdkArchiveSha256 ? androidNdkArchiveSha256 : null,
+    androidNdkDestination,
+    androidRustTarget: validRustTargetCopy && rustup?.[1] === gradle?.androidRustTarget && gradle?.rustAbi === "arm64-v8a"
+      ? rustup[1]
+      : null,
+    cargoNdk: validCargoNdk ? cargoNdk : null,
+    cargoNdkArchiveUrl: validCargoNdkArchiveUrl ? cargoNdkArchiveUrl : null,
+    cargoNdkArchiveRoot: validCargoNdkArchiveRoot ? cargoNdkArchiveRoot : null,
+    cargoNdkArchiveSize: validCargoNdkArchiveSize ? cargoNdkArchiveSize : null,
+    cargoNdkArchiveSha256: validCargoNdkArchiveSha256 ? cargoNdkArchiveSha256 : null,
+    cargoNdkArchiveTarget: validCargoNdkArchiveRoot ? "x86_64-unknown-linux-gnu" : null,
+  };
+}
+
+const PIN_BUILDER_CONTRACT_LABELS = Object.freeze({
+  platform: "platform",
+  jdkImage: "JDK image/digest",
+  nodeImage: "Node image/digest",
+  centerNodeImages: "Center base/runtime Node images/digests",
+  rustImage: "Rust image/digest",
+  rustVersion: "Rust version",
+  commandLineToolsVersion: "Android command-line tools",
+  commandLineToolsSha256: "Android command-line tools SHA-256",
+  androidPlatform: "Android platform",
+  androidBuildTools: "Android build tools",
+  androidNdk: "Android NDK",
+  androidNdkArchiveUrl: "Android NDK archive URL",
+  androidNdkArchiveRoot: "Android NDK archive root",
+  androidNdkArchiveSize: "Android NDK archive size",
+  androidNdkArchiveSha1: "Android NDK archive SHA-1",
+  androidNdkArchiveSha256: "Android NDK archive SHA-256",
+  androidNdkDestination: "Android NDK destination",
+  androidRustTarget: "Android Rust target",
+  cargoNdk: "cargo-ndk",
+  cargoNdkArchiveUrl: "cargo-ndk archive URL",
+  cargoNdkArchiveRoot: "cargo-ndk archive root",
+  cargoNdkArchiveSize: "cargo-ndk archive size",
+  cargoNdkArchiveSha256: "cargo-ndk archive SHA-256",
+  cargoNdkArchiveTarget: "cargo-ndk archive target",
+});
+
+export function pinBuilderToolchainMismatches(expected, actual) {
+  if (!expected || !actual) return ["unreadable builder contract or Dockerfile"];
+  return Object.entries(PIN_BUILDER_CONTRACT_LABELS)
+    .filter(([field]) => expected[field] === null || expected[field] === undefined ||
+      actual[field] !== expected[field])
+    .map(([field, label]) => `${label}: expected ${expected[field] ?? "<missing>"}, found ${actual[field] ?? "<missing>"}`);
+}
+
+export function parseDockerBuildxPlatforms(text) {
+  if (typeof text !== "string") return [];
+  const line = /^Platforms:\s*(.+)$/imu.exec(text)?.[1] ?? "";
+  return line
+    .split(",")
+    .map((value) => value.trim().replace(/\*$/u, ""))
+    .filter(Boolean);
 }
 
 /**
@@ -342,9 +770,47 @@ function checkContainerBuilder(probes) {
       fix: "Restore platform/containers/pin-builder from the canonical workspace before building a Pin release.",
     });
   }
+  const requiredPlatform = builder.requiredPlatform ?? "linux/amd64";
+  if (builder.platformsDetermined !== true ||
+      !Array.isArray(builder.platforms) ||
+      !builder.platforms.includes(requiredPlatform)) {
+    return makeCheck("container_builder", "Pinned container builder", CHECK_STATUS.FAIL, {
+      required: true,
+      detail: builder.platformsDetermined === true
+        ? `Docker Buildx does not advertise the required ${requiredPlatform} platform (found ${list(builder.platforms)}).`
+        : `Docker Buildx platforms could not be determined; ${requiredPlatform} support is required.`,
+      fix: `Select or create a Buildx builder with ${requiredPlatform} support (install binfmt/QEMU on an ARM host), then rerun \`docker buildx inspect\` and this doctor.`,
+    });
+  }
+  if (builder.amd64Runtime?.safe !== true) {
+    return makeCheck("container_builder", "Pinned container builder", CHECK_STATUS.FAIL, {
+      required: true,
+      detail: builder.amd64Runtime?.detail ?? "The linux/amd64 runtime safety probe did not produce a verdict.",
+      fix: builder.amd64Runtime?.guidance ??
+        "Run the canonical Pin Android consumer on a native hosted linux/amd64 runner; do not mutate this host's binfmt registration.",
+    });
+  }
   return makeCheck("container_builder", "Pinned container builder", CHECK_STATUS.PASS, {
     required: true,
     detail: `ready${builder.version ? ` (Docker ${builder.version})` : ""}; JDK 17, Android SDK/NDK, Rust, cargo-ndk, and protoc are supplied inside the pinned linux/amd64 image.`,
+  });
+}
+
+function checkBuilderToolchainContract(probes) {
+  const contract = probes.builderToolchain ?? null;
+  const mismatches = contract?.mismatches;
+  if (!Array.isArray(mismatches) || mismatches.length > 0) {
+    return makeCheck("builder_toolchain_contract", "Builder toolchain contract", CHECK_STATUS.FAIL, {
+      required: true,
+      detail: !Array.isArray(mismatches)
+        ? "toolchain.json, the Pin-builder Dockerfile, or Center Dockerfile could not be parsed."
+        : `Dockerfile consumers drifted from toolchain.json: ${mismatches.join("; ")}.`,
+      fix: "Reconcile every pinned image digest, Center Node base, Android/Rust target, SDK/NDK consumer, and cargo-ndk version with platform/containers/pin-builder/toolchain.json.",
+    });
+  }
+  return makeCheck("builder_toolchain_contract", "Builder toolchain contract", CHECK_STATUS.PASS, {
+    required: true,
+    detail: "Pin and Center images/digests plus actual Android SDK/NDK, Rust, cargo-ndk, and linux/amd64 consumers match toolchain.json exactly.",
   });
 }
 
@@ -543,25 +1009,66 @@ function checkNdk(probes) {
   });
 }
 
+function checkRustToolchainContract(probes) {
+  const contract = probes.rustToolchain ?? null;
+  if (!contract?.expectedVersion) {
+    return makeCheck("rust_toolchain_contract", "Rust toolchain contract", CHECK_STATUS.FAIL, {
+      required: true,
+      detail: "The exact Rust version could not be read from platform/containers/pin-builder/toolchain.json.",
+      fix: "Restore the canonical toolchain.json before running a Pin build.",
+    });
+  }
+  if (!contract.rootVersion) {
+    return makeCheck("rust_toolchain_contract", "Rust toolchain contract", CHECK_STATUS.FAIL, {
+      required: true,
+      detail: "The root rust-toolchain.toml is missing or does not pin a complete Rust version.",
+      fix: `Restore rust-toolchain.toml with channel ${contract.expectedVersion} from the canonical workspace.`,
+    });
+  }
+  if (contract.rootVersion !== contract.expectedVersion) {
+    return makeCheck("rust_toolchain_contract", "Rust toolchain contract", CHECK_STATUS.FAIL, {
+      required: true,
+      detail: `rust-toolchain.toml selects ${contract.rootVersion}; toolchain.json requires ${contract.expectedVersion}.`,
+      fix: "Reconcile the root pin and canonical builder contract before building.",
+    });
+  }
+  return makeCheck("rust_toolchain_contract", "Rust toolchain contract", CHECK_STATUS.PASS, {
+    required: true,
+    detail: `Rust ${contract.expectedVersion} exactly, shared by rust-toolchain.toml and toolchain.json.`,
+  });
+}
+
 function checkRustc(probes) {
   const rustc = probes.rustc ?? null;
+  const expected = probes.rustToolchain?.expectedVersion ?? null;
   if (!rustc?.present) {
     return makeCheck("rustc", "Rust compiler", CHECK_STATUS.FAIL, {
       required: true,
       detail: "`rustc` not found on PATH.",
       fix:
-        "Install the stable Rust toolchain via rustup: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`. " +
-        "The repo pins no toolchain file, so `stable` is what is expected.",
+        `Install rustup, then run \`rustup toolchain install ${expected ?? "the version in rust-toolchain.toml"} --profile minimal --component rustfmt --component clippy\`. ` +
+        "The repository root selects that exact toolchain automatically.",
+    });
+  }
+  const actual = parseCommandVersion(rustc.version, "rustc");
+  if (!expected || !actual || actual !== expected) {
+    return makeCheck("rustc", "Rust compiler", CHECK_STATUS.FAIL, {
+      required: true,
+      detail: `Found ${rustc.version ?? "an unparseable rustc"}; expected Rust ${expected ?? "from toolchain.json"} exactly.`,
+      fix: expected
+        ? `Run \`rustup toolchain install ${expected} --profile minimal --component rustfmt --component clippy\`, then invoke the doctor from this repository.`
+        : "Restore toolchain.json and rust-toolchain.toml before selecting Rust.",
     });
   }
   return makeCheck("rustc", "Rust compiler", CHECK_STATUS.PASS, {
     required: true,
-    detail: rustc.version ?? "present",
+    detail: `${rustc.version} (exact contract ${expected}).`,
   });
 }
 
 function checkCargo(probes) {
   const cargo = probes.cargo ?? null;
+  const expected = probes.rustToolchain?.expectedVersion ?? null;
   if (!cargo?.present) {
     return makeCheck("cargo", "Cargo", CHECK_STATUS.FAIL, {
       required: true,
@@ -569,26 +1076,38 @@ function checkCargo(probes) {
       fix: "Install Rust via rustup (cargo ships with it) and ensure `~/.cargo/bin` is on PATH.",
     });
   }
+  const actual = parseCommandVersion(cargo.version, "cargo");
+  if (!expected || !actual || actual !== expected) {
+    return makeCheck("cargo", "Cargo", CHECK_STATUS.FAIL, {
+      required: true,
+      detail: `Found ${cargo.version ?? "an unparseable Cargo"}; expected Cargo ${expected ?? "from toolchain.json"} exactly.`,
+      fix: expected
+        ? `Install/select Rust ${expected} through the root rust-toolchain.toml; its matching Cargo ships with rustup.`
+        : "Restore toolchain.json and rust-toolchain.toml before selecting Cargo.",
+    });
+  }
   return makeCheck("cargo", "Cargo", CHECK_STATUS.PASS, {
     required: true,
-    detail: cargo.version ?? "present",
+    detail: `${cargo.version} (exact contract ${expected}).`,
   });
 }
 
 function checkRustTarget(probes) {
   const target = probes.rustTarget ?? null;
+  const expected = probes.rustToolchain?.expectedVersion ?? null;
   const title = `Rust target ${ANDROID_RUST_TARGET}`;
+  const install = `rustup target add ${ANDROID_RUST_TARGET}${expected ? ` --toolchain ${expected}` : ""}`;
   if (!target || target.determined !== true) {
     return makeCheck("rust_target_android", title, CHECK_STATUS.WARN, {
       detail: "Could not determine the installed Rust targets (rustup not found?).",
-      fix: `Verify by hand with \`rustup target list --installed\`; add it with \`rustup target add ${ANDROID_RUST_TARGET}\` (platform/containers/pin-builder/Dockerfile:83).`,
+      fix: `Verify by hand with \`rustup target list --installed${expected ? ` --toolchain ${expected}` : ""}\`; add it with \`${install}\` (platform/containers/pin-builder/Dockerfile).`,
     });
   }
   if (!target.installed) {
     return makeCheck("rust_target_android", title, CHECK_STATUS.FAIL, {
       required: true,
       detail: `The ${ANDROID_RUST_TARGET} target is not installed.`,
-      fix: `Run \`rustup target add ${ANDROID_RUST_TARGET}\` (platform/containers/pin-builder/Dockerfile:83).`,
+      fix: `Run \`${install}\` (platform/containers/pin-builder/Dockerfile).`,
     });
   }
   return makeCheck("rust_target_android", title, CHECK_STATUS.PASS, {
@@ -599,6 +1118,7 @@ function checkRustTarget(probes) {
 
 function checkCargoNdk(probes) {
   const cargoNdk = probes.cargoNdk ?? null;
+  const expected = cargoNdk?.expectedVersion ?? probes.builderToolchain?.expected?.cargoNdk ?? null;
   if (!cargoNdk?.present) {
     return makeCheck("cargo_ndk", "cargo-ndk", CHECK_STATUS.FAIL, {
       required: true,
@@ -609,9 +1129,19 @@ function checkCargoNdk(probes) {
         "(runtime/android/build.gradle.kts:71-77).",
     });
   }
+  const actual = parseCommandVersion(cargoNdk.version, "cargo-ndk");
+  if (!expected || actual !== expected) {
+    return makeCheck("cargo_ndk", "cargo-ndk", CHECK_STATUS.FAIL, {
+      required: true,
+      detail: `Found ${cargoNdk.version ?? "an unparseable cargo-ndk"}; expected cargo-ndk ${expected ?? "from toolchain.json"} exactly.`,
+      fix: expected
+        ? `Install the exact host helper with \`cargo install cargo-ndk --version ${expected} --locked\`; the pinned builder uses the same version.`
+        : "Restore platform/containers/pin-builder/toolchain.json before selecting cargo-ndk.",
+    });
+  }
   return makeCheck("cargo_ndk", "cargo-ndk", CHECK_STATUS.PASS, {
     required: true,
-    detail: cargoNdk.version ?? "present",
+    detail: `${cargoNdk.version} (exact contract ${expected}).`,
   });
 }
 
@@ -862,10 +1392,12 @@ function checkPinDevice(probes) {
 const CHECK_BUILDERS = Object.freeze([
   checkNode,
   checkContainerBuilder,
+  checkBuilderToolchainContract,
   checkJdk,
   checkAndroidSdk,
   checkPlatformTools,
   checkNdk,
+  checkRustToolchainContract,
   checkRustc,
   checkCargo,
   checkRustTarget,
@@ -1054,6 +1586,32 @@ function listDirectory(path) {
   }
 }
 
+export function collectPinGradleFiles(productRoot) {
+  const files = {};
+  const skipped = new Set([".git", ".gradle", ".kotlin", "build", "node_modules", "target"]);
+  const visit = (absolute, releasePath) => {
+    let entries;
+    try {
+      entries = readdirSync(absolute, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.isSymbolicLink()) continue;
+      const child = join(absolute, entry.name);
+      const childPath = `${releasePath}/${entry.name}`;
+      if (entry.isDirectory()) {
+        if (!skipped.has(entry.name)) visit(child, childPath);
+      } else if (entry.isFile() && entry.name === "build.gradle.kts") {
+        const text = readTextOrNull(child);
+        if (text !== null) files[childPath] = text;
+      }
+    }
+  };
+  visit(join(productRoot, "pin"), "pin");
+  return files;
+}
+
 function resolveAndroidSdk(repoRoot, environment) {
   const localProperties = readTextOrNull(join(repoRoot, "local.properties"));
   const fromLocal = parseSdkDir(localProperties);
@@ -1117,8 +1675,10 @@ function resolveAdb(sdkPath, environment) {
   return { present: false, path: null, version: null, command: null };
 }
 
-function resolveRustTarget(environment) {
-  const rustup = runCapture("rustup", ["target", "list", "--installed"], environment);
+function resolveRustTarget(environment, toolchainVersion = null) {
+  const args = ["target", "list", "--installed"];
+  if (toolchainVersion) args.push("--toolchain", toolchainVersion);
+  const rustup = runCapture("rustup", args, environment);
   if (rustup.ok) {
     const installed = rustup.stdout
       .split("\n")
@@ -1258,6 +1818,33 @@ export function collectProbes({ repoRoot, env = process.env } = {}) {
   const root = repoRoot ?? resolve(dirname(fileURLToPath(import.meta.url)), "../../../pin");
   const productRoot = resolve(root, "..");
   const requirements = parseRequirementsFromReadme(readTextOrNull(join(root, "README.md")));
+  const rustContractPath = join(
+    productRoot,
+    "platform",
+    "containers",
+    "pin-builder",
+    "toolchain.json",
+  );
+  const rustContractText = readTextOrNull(rustContractPath);
+  const pinBuilderDockerfileText = readTextOrNull(join(
+    productRoot,
+    "platform",
+    "containers",
+    "pin-builder",
+    "Dockerfile",
+  ));
+  const centerDockerfileText = readTextOrNull(join(productRoot, "center", "Dockerfile"));
+  const expectedBuilderToolchain = parsePinBuilderToolchainContract(rustContractText);
+  const actualBuilderToolchain = parsePinBuilderDockerfileContract(
+    pinBuilderDockerfileText,
+    centerDockerfileText,
+    collectPinGradleFiles(productRoot),
+  );
+  const rootRustToolchainPath = join(productRoot, "rust-toolchain.toml");
+  const rustToolchain = {
+    expectedVersion: parseRustToolchainContract(rustContractText),
+    rootVersion: parseRustToolchainToml(readTextOrNull(rootRustToolchainPath)),
+  };
 
   const androidSdk = resolveAndroidSdk(root, env);
   const ndk = resolveNdk(androidSdk.exists ? androidSdk.path : null, env);
@@ -1280,7 +1867,17 @@ export function collectProbes({ repoRoot, env = process.env } = {}) {
   const dockerProbe = insidePinnedBuilder
     ? { ok: true, stdout: "pinned-image", stderr: "" }
     : runCapture("docker", ["version", "--format", "{{.Client.Version}}"], env);
+  const buildxProbe = insidePinnedBuilder
+    ? { ok: true, stdout: "Platforms: linux/amd64", stderr: "" }
+    : dockerProbe.ok
+      ? runCapture("docker", ["buildx", "inspect"], env)
+      : { ok: false, stdout: "", stderr: "" };
+  const buildxPlatforms = parseDockerBuildxPlatforms(buildxProbe.stdout);
+  const amd64Runtime = insidePinnedBuilder
+    ? { safe: true, detail: "inside the pinned linux/amd64 builder" }
+    : probePinAmd64Runtime();
   const containerContractFiles = [
+    "center/Dockerfile",
     "platform/containers/pin-builder/Dockerfile",
     "platform/containers/pin-builder/entrypoint.sh",
     "platform/containers/pin-builder/toolchain.json",
@@ -1295,12 +1892,25 @@ export function collectProbes({ repoRoot, env = process.env } = {}) {
   return {
     repoRoot: root,
     requirements,
+    rustToolchain,
+    builderToolchain: {
+      expected: expectedBuilderToolchain,
+      actual: actualBuilderToolchain,
+      mismatches: pinBuilderToolchainMismatches(
+        expectedBuilderToolchain,
+        actualBuilderToolchain,
+      ),
+    },
     node: { version: process.versions.node },
     containerBuilder: {
       available: dockerProbe.ok,
       version: firstLine(dockerProbe.stdout),
       contractFilesPresent: containerContractFiles.every((file) => existsSync(join(productRoot, file))),
       suppliesHostToolchain: true,
+      requiredPlatform: expectedBuilderToolchain?.platform ?? "linux/amd64",
+      platformsDetermined: buildxProbe.ok && buildxPlatforms.length > 0,
+      platforms: buildxPlatforms,
+      amd64Runtime,
     },
     java: {
       present: javaVersion !== null || javaProbe.ok,
@@ -1312,8 +1922,12 @@ export function collectProbes({ repoRoot, env = process.env } = {}) {
     ndk,
     rustc: { present: rustcProbe.ok, version: firstLine(rustcProbe.stdout) },
     cargo: { present: cargoProbe.ok, version: firstLine(cargoProbe.stdout) },
-    rustTarget: resolveRustTarget(env),
-    cargoNdk: { present: cargoNdkProbe.ok, version: firstLine(cargoNdkProbe.stdout) },
+    rustTarget: resolveRustTarget(env, rustToolchain.expectedVersion),
+    cargoNdk: {
+      present: cargoNdkProbe.ok,
+      version: firstLine(cargoNdkProbe.stdout),
+      expectedVersion: expectedBuilderToolchain?.cargoNdk ?? null,
+    },
     protoc: { present: protocProbe.ok, version: firstLine(protocProbe.stdout) },
     stockEvidence: {
       exists: existsSync(join(root, STOCK_EVIDENCE_RELATIVE_PATH)),

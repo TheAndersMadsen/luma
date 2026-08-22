@@ -126,6 +126,9 @@ val configuredVersionName = providers.gradleProperty("versionName").orNull
     ?.trim()
     ?.takeIf(String::isNotEmpty)
 val androidVersionName = configuredVersionName ?: "1.0"
+val revivalCompileOnlyDebug = providers.gradleProperty("revivalCompileOnlyDebug")
+    .map { it == "true" }
+    .getOrElse(false)
 
 val buildRustServerAndroid by tasks.registering(Exec::class) {
     group = "build"
@@ -334,6 +337,9 @@ gradle.taskGraph.whenReady {
         task.project == project && task.name in pinReleasePackagingTasks
     }
     if (packagesPinRelease) {
+        check(!revivalCompileOnlyDebug) {
+            "Compile-only debug mode can never enter Pin release packaging."
+        }
         check(hasCompletePinSigning) {
             "Refusing to package a Pin release without all four external signing inputs."
         }
@@ -347,7 +353,9 @@ gradle.taskGraph.whenReady {
 }
 
 tasks.named("preBuild") {
-    dependsOn(stageRustServerJniLibs)
+    if (!revivalCompileOnlyDebug) {
+        dependsOn(stageRustServerJniLibs)
+    }
 }
 
 dependencies {

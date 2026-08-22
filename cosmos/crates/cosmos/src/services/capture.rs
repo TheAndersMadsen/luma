@@ -631,7 +631,11 @@ impl CaptureObjectStore {
                 .as_ref()
                 .map(|information| information.kid.as_str())
                 .unwrap_or_default();
-            let Some(key) = keys.get(kid).await else {
+            let Some(key) = keys
+                .get(kid)
+                .await
+                .map_err(|error| std::io::Error::other(error.to_string()))?
+            else {
                 unopenable += 1;
                 tracing::warn!(
                     memory = %record.uuid,
@@ -1158,9 +1162,9 @@ pub struct Capture {
     /// search, and both skip anything with no `indexed_text`. Storing without
     /// indexing therefore leaves the wearer's note permanently unfindable —
     /// saved, acknowledged, and unreachable by voice.
-    keys: crate::keymaterial::SharedKeyMaterial,
     /// Durable C1 channel keys used by stock HMSA capture thumbnails. This is
-    /// distinct from `keys`, which protects HMCT service-channel envelopes.
+    /// The same authority protects service-channel envelopes and stock HMSA
+    /// capture assets; format decoding is separate, key ownership is not.
     capture_keys: crate::keydirectory::SharedKeyDirectory,
     asset_arrival: AssetArrival,
 }
@@ -1314,14 +1318,14 @@ fn request_share_data(request: pb::SaveSharedMemoryRequest) -> Result<pb::ShareL
 async fn opened_thumbnail(
     keys: &crate::keydirectory::SharedKeyDirectory,
     record: &crate::store::MemoryRecord,
-) -> Option<Vec<u8>> {
+) -> Result<Option<Vec<u8>>, crate::keydirectory::KeyDirectoryError> {
     for sealed in &record.thumbnails {
         let kid = sealed
             .encryption_information
             .as_ref()
             .map(|information| information.kid.as_str())
             .unwrap_or_default();
-        let Some(key) = keys.get(kid).await else {
+        let Some(key) = keys.get(kid).await? else {
             continue;
         };
         if let Ok(bytes) = cosmos_crypto::secure_asset::open_secure_asset(
@@ -1330,10 +1334,10 @@ async fn opened_thumbnail(
             &sealed.data,
             cosmos_crypto::secure_asset::CAPTURE_THUMBNAIL,
         ) {
-            return Some(bytes);
+            return Ok(Some(bytes));
         }
     }
-    None
+    Ok(None)
 }
 
 async fn save_food_log(
@@ -1394,27 +1398,45 @@ async fn save_food_log(
 /// notes that could never be found again. A note whose envelope this server
 /// cannot open is left unindexed rather than indexed as garbage — unfindable is
 /// bad, wrong search results are worse.
-async fn index_sealed_note(
-    store: &crate::store::SharedStore,
-    keys: &crate::keymaterial::SharedKeyMaterial,
-    principal: &str,
-    uuid: &str,
+async fn opened_note_text(
+    keys: &crate::keydirectory::SharedKeyDirectory,
     sealed: Option<&cosmos_protocol::common::encryption::EncryptedData>,
-) {
-    let Some(sealed) = sealed else { return };
+) -> Result<Option<String>, Status> {
+    let Some(sealed) = sealed else {
+        return Ok(None);
+    };
     let kid = sealed
         .encryption_information
         .as_ref()
         .map(|i| i.kid.clone())
         .unwrap_or_default();
-    if let Ok(plaintext) = keys.open(&cosmos_crypto::EncryptedData {
-        data: sealed.data.clone(),
-        kid,
-    }) {
-        if let Some(text) = note_search_text(&plaintext) {
-            store.index_note(principal, uuid, &text).await;
-        }
-    }
+    let plaintext = if sealed.data.get(4..8) == Some(b"HMSA") {
+        let Some(key) = keys
+            .get(&kid)
+            .await
+            .map_err(|error| crate::keydirectory::grpc_status(&error))?
+        else {
+            return Err(Status::failed_precondition(
+                "the note channel key is not established",
+            ));
+        };
+        cosmos_crypto::secure_asset::open_secure_asset(
+            &key,
+            &kid,
+            &sealed.data,
+            cosmos_crypto::secure_asset::NOTE_DATA,
+        )
+        .map_err(|_| Status::failed_precondition("the sealed note could not be opened"))?
+    } else {
+        keys.open(&cosmos_crypto::EncryptedData {
+            data: sealed.data.clone(),
+            kid,
+        })
+        .await
+        .map_err(|error| crate::keydirectory::grpc_status(&error))?
+        .ok_or_else(|| Status::failed_precondition("the note channel key is not established"))?
+    };
+    Ok(note_search_text(&plaintext))
 }
 
 /// The searchable text inside an opened note.
@@ -1548,13 +1570,18 @@ impl Capture {
     pub fn new(
         authenticator: crate::auth::RequestAuthenticator,
         store: crate::store::SharedStore,
-        keys: crate::keymaterial::SharedKeyMaterial,
+        _keys: crate::keymaterial::SharedKeyMaterial,
     ) -> Self {
+        #[cfg(test)]
+        let capture_keys = Arc::new(crate::keydirectory::KeyDirectory::from_test_key_material(
+            &_keys,
+        ));
+        #[cfg(not(test))]
+        let capture_keys = Arc::new(crate::keydirectory::KeyDirectory::in_memory());
         Self {
             authenticator,
             store,
-            keys,
-            capture_keys: Arc::new(crate::keydirectory::KeyDirectory::in_memory()),
+            capture_keys,
             share_endpoint: Endpoint::from_environment(SHARE_BASE_URL_ENV),
             share_secret: non_empty_env(SHARE_TOKEN_SECRET_ENV),
             upload_endpoint: Endpoint::from_environment(UPLOAD_BASE_URL_ENV),
@@ -1577,7 +1604,6 @@ impl Default for Capture {
                 crate::config::Authentication::DevelopmentInsecure,
             ),
             store: crate::store::MemoryStore::shared(),
-            keys: Default::default(),
             capture_keys: Arc::new(crate::keydirectory::KeyDirectory::in_memory()),
             share_endpoint: Endpoint::from_environment(SHARE_BASE_URL_ENV),
             share_secret: non_empty_env(SHARE_TOKEN_SECRET_ENV),
@@ -1720,7 +1746,7 @@ pub struct TestingAutomation {
     /// Channel keys, so a note can be indexed for retrieval when the wearer's
     /// key is established. Without it the note is still stored — just not
     /// searchable.
-    keys: crate::keymaterial::SharedKeyMaterial,
+    keys: crate::keydirectory::SharedKeyDirectory,
     /// The same object store `Capture` deletes through. `H4Device` reaches
     /// captures through this surface, so a delete arriving here has to remove
     /// the wearer's frames too — the test-automation service must not be the
@@ -1735,8 +1761,14 @@ impl TestingAutomation {
     pub fn new(
         authenticator: crate::auth::RequestAuthenticator,
         store: crate::store::SharedStore,
-        keys: crate::keymaterial::SharedKeyMaterial,
+        _keys: crate::keymaterial::SharedKeyMaterial,
     ) -> Self {
+        #[cfg(test)]
+        let keys = Arc::new(crate::keydirectory::KeyDirectory::from_test_key_material(
+            &_keys,
+        ));
+        #[cfg(not(test))]
+        let keys = Arc::new(crate::keydirectory::KeyDirectory::in_memory());
         Self {
             authenticator,
             store,
@@ -1745,6 +1777,11 @@ impl TestingAutomation {
             // objects `UploadFile` filed.
             objects: configured_object_store(),
         }
+    }
+
+    pub fn with_key_directory(mut self, keys: crate::keydirectory::SharedKeyDirectory) -> Self {
+        self.keys = keys;
+        self
     }
 
     fn principal<T>(
@@ -1762,7 +1799,7 @@ impl Default for TestingAutomation {
                 crate::config::Authentication::DevelopmentInsecure,
             ),
             store: crate::store::MemoryStore::shared(),
-            keys: Default::default(),
+            keys: Arc::new(crate::keydirectory::KeyDirectory::in_memory()),
             // Spelled out rather than resolved from the environment: a test
             // fixture must not reach the deployment's real storage root.
             objects: None,
@@ -1825,26 +1862,17 @@ impl CaptureService for Capture {
         // actually persists it, and `TestingAutomationService.CreateNote` has
         // been using it correctly all along.
         if let Req::NoteMemoryRequest(n) = &body {
+            let indexed_text =
+                opened_note_text(&self.capture_keys, n.encrypted_note.as_ref()).await?;
             let record = self
                 .store
-                .create_note(
+                .create_indexed_note(
                     principal.expose_for_authorization(),
                     n.encrypted_note.clone(),
                     n.encrypted_location.clone(),
+                    indexed_text.as_deref(),
                 )
                 .await?;
-            // Index it, or the wearer can never find it again: both search
-            // paths require `indexed_text`. Storing a note without indexing is
-            // the same false negative the recall code works hard to avoid,
-            // reached one layer earlier.
-            index_sealed_note(
-                &self.store,
-                &self.keys,
-                principal.expose_for_authorization(),
-                &record.uuid,
-                n.encrypted_note.as_ref(),
-            )
-            .await;
             return Ok(Response::new(pb::CreateMemoryResponse {
                 status: pb::CreateMemoryResultStatus::CreateSuccess as i32,
                 memory: Some(pb::Memory {
@@ -2099,12 +2127,17 @@ impl CaptureService for Capture {
                 .as_ref()
                 .map(|information| information.kid.clone())
                 .unwrap_or_default();
-            let Ok(opened) = self.keys.open(&cosmos_crypto::EncryptedData {
-                kid: kid.clone(),
-                data: sealed.data,
-            }) else {
-                continue;
-            };
+            let opened = self
+                .capture_keys
+                .open(&cosmos_crypto::EncryptedData {
+                    kid: kid.clone(),
+                    data: sealed.data,
+                })
+                .await
+                .map_err(|error| crate::keydirectory::grpc_status(&error))?
+                .ok_or_else(|| {
+                    Status::failed_precondition("the food-log channel key is not established")
+                })?;
             total_bytes = total_bytes.saturating_add(opened.len());
             if total_bytes > MAX_FOOD_LOG_TOTAL_BYTES {
                 return Err(Status::resource_exhausted("food log summary is too large"));
@@ -2124,9 +2157,13 @@ impl CaptureService for Capture {
             return Err(Status::resource_exhausted("food log summary is too large"));
         }
         let sealed = self
-            .keys
+            .capture_keys
             .seal(&kid, &summary, b"")
-            .map_err(|_| Status::unavailable("food log summary could not be sealed"))?;
+            .await
+            .map_err(|error| crate::keydirectory::grpc_status(&error))?
+            .ok_or_else(|| {
+                Status::failed_precondition("the food-log channel key is not established")
+            })?;
         Ok(Response::new(pb::GetFoodLogSummaryResponse {
             food_log_summary: Some(cosmos_protocol::common::encryption::EncryptedData {
                 encryption_information: Some(
@@ -2200,6 +2237,7 @@ impl CaptureService for Capture {
             .ok_or_else(|| Status::not_found("shared memory was not found"))?;
         let bytes = opened_thumbnail(&self.capture_keys, &record)
             .await
+            .map_err(|error| crate::keydirectory::grpc_status(&error))?
             .ok_or_else(|| Status::failed_precondition("shared thumbnail is unavailable"))?;
         Ok(Response::new(pb::GetShareLinkContentsResponse {
             decrypted_thumbnail_bytes: bytes,
@@ -2701,33 +2739,16 @@ impl TestingAutomationService for TestingAutomation {
     ) -> Result<Response<pb::DeviceCreateNoteResponse>, Status> {
         let principal = self.principal(&request)?;
         let note = request.into_inner();
+        let indexed_text = opened_note_text(&self.keys, note.encrypted_note.as_ref()).await?;
         let record = self
             .store
-            .create_note(
+            .create_indexed_note(
                 principal.expose_for_authorization(),
                 note.encrypted_note,
                 note.encrypted_location,
+                indexed_text.as_deref(),
             )
             .await?;
-        // Index for retrieval when we hold the wearer's channel key. The stored
-        // body stays sealed either way; this only makes the note findable.
-        if let Some(sealed) = record.encrypted_note.as_ref() {
-            let kid = sealed
-                .encryption_information
-                .as_ref()
-                .map(|i| i.kid.clone())
-                .unwrap_or_default();
-            if let Ok(plaintext) = self.keys.open(&cosmos_crypto::EncryptedData {
-                data: sealed.data.clone(),
-                kid,
-            }) {
-                if let Ok(text) = String::from_utf8(plaintext) {
-                    self.store
-                        .index_note(principal.expose_for_authorization(), &record.uuid, &text)
-                        .await;
-                }
-            }
-        }
 
         Ok(Response::new(pb::DeviceCreateNoteResponse {
             status: pb::CreateMemoryResultStatus::CreateSuccess as i32,
@@ -3415,18 +3436,37 @@ mod tests {
     use super::*;
 
     /// REGRESSION: notes were acked with an EMPTY uuid and dropped, so every
-    /// note a wearer took was lost. The body stays an opaque sealed blob — the
-    /// server holds no key for it.
+    /// note a wearer took was lost. The body remains sealed at rest, while the
+    /// established channel key is required to derive its atomic search index.
     #[tokio::test]
     async fn a_note_is_stored_and_reads_back() {
-        let automation = isolated_automation();
+        use prost::Message as _;
+
+        let store = fresh_store();
+        let keys: crate::keymaterial::SharedKeyMaterial = Default::default();
+        keys.insert("wearer-kid".to_owned(), [0x29; cosmos_crypto::AES_KEY_LEN])
+            .expect("seed test channel key");
+        let automation = TestingAutomation::new(
+            crate::auth::RequestAuthenticator::new(
+                crate::config::Authentication::DevelopmentInsecure,
+            ),
+            store,
+            keys.clone(),
+        );
+        let note = cosmos_protocol::capture::Note {
+            text: "sealed note body".to_owned(),
+            ..Default::default()
+        };
+        let encrypted = keys
+            .seal("wearer-kid", &note.encode_to_vec(), b"")
+            .expect("seal note");
         let sealed = cosmos_protocol::common::encryption::EncryptedData {
             encryption_information: Some(
                 cosmos_protocol::common::encryption::EncryptionInformation {
                     kid: "wearer-kid".to_owned(),
                 },
             ),
-            data: b"sealed note body".to_vec(),
+            data: encrypted.data,
         };
 
         let created = automation
@@ -3458,10 +3498,11 @@ mod tests {
         assert_eq!(notes.note_responses.len(), 1);
         let read = &notes.note_responses[0];
         assert_eq!(read.memory_uuid, created.memory_uuid);
-        // Stored verbatim: the server never opened it.
+        // Stored verbatim even though the server opened it only long enough to
+        // derive the search index.
         assert_eq!(
             read.encrypted_note.as_ref().map(|e| e.data.as_slice()),
-            Some(b"sealed note body".as_slice())
+            Some(sealed.data.as_slice())
         );
 
         // Clearing must actually clear — otherwise the wearer's notes come back.
@@ -3492,7 +3533,8 @@ mod tests {
         let store: crate::store::SharedStore =
             std::sync::Arc::new(crate::store::MemoryStore::default());
         let keys: crate::keymaterial::SharedKeyMaterial = Default::default();
-        keys.insert("wearer-kid".to_owned(), [9u8; cosmos_crypto::AES_KEY_LEN]);
+        keys.insert("wearer-kid".to_owned(), [9u8; cosmos_crypto::AES_KEY_LEN])
+            .expect("insert test channel key");
         let auth = crate::auth::RequestAuthenticator::new(
             crate::config::Authentication::DevelopmentInsecure,
         );
@@ -3555,7 +3597,8 @@ mod tests {
         let store: crate::store::SharedStore =
             std::sync::Arc::new(crate::store::MemoryStore::default());
         let keys: crate::keymaterial::SharedKeyMaterial = Default::default();
-        keys.insert("wearer-kid".to_owned(), [6u8; cosmos_crypto::AES_KEY_LEN]);
+        keys.insert("wearer-kid".to_owned(), [6u8; cosmos_crypto::AES_KEY_LEN])
+            .expect("insert test channel key");
         let auth = crate::auth::RequestAuthenticator::new(
             crate::config::Authentication::DevelopmentInsecure,
         );
@@ -3640,7 +3683,8 @@ mod tests {
         let store: crate::store::SharedStore =
             std::sync::Arc::new(crate::store::MemoryStore::default());
         let keys: crate::keymaterial::SharedKeyMaterial = Default::default();
-        keys.insert("wearer-kid".to_owned(), [5u8; cosmos_crypto::AES_KEY_LEN]);
+        keys.insert("wearer-kid".to_owned(), [5u8; cosmos_crypto::AES_KEY_LEN])
+            .expect("insert test channel key");
         let auth = crate::auth::RequestAuthenticator::new(
             crate::config::Authentication::DevelopmentInsecure,
         );
@@ -3692,19 +3736,25 @@ mod tests {
     async fn a_note_memory_actually_persists_its_body() {
         let store: crate::store::SharedStore =
             std::sync::Arc::new(crate::store::MemoryStore::default());
+        let keys: crate::keymaterial::SharedKeyMaterial = Default::default();
+        keys.insert("wearer-kid".to_owned(), [0x39; cosmos_crypto::AES_KEY_LEN])
+            .expect("seed test channel key");
         let auth = crate::auth::RequestAuthenticator::new(
             crate::config::Authentication::DevelopmentInsecure,
         );
-        let capture = Capture::new(auth.clone(), store.clone(), Default::default());
+        let capture = Capture::new(auth.clone(), store.clone(), keys.clone());
         let automation = TestingAutomation::new(auth, store.clone(), Default::default());
 
+        let sealed = keys
+            .seal("wearer-kid", b"sealed note body", b"")
+            .expect("seal note body");
         let body = cosmos_protocol::common::encryption::EncryptedData {
             encryption_information: Some(
                 cosmos_protocol::common::encryption::EncryptionInformation {
                     kid: "wearer-kid".to_owned(),
                 },
             ),
-            data: b"sealed note body".to_vec(),
+            data: sealed.data,
         };
         let created = capture
             .create_memory(Request::new(pb::CreateMemoryRequest {
@@ -3750,6 +3800,118 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn capture_note_does_not_store_or_ack_when_authoritative_lookup_fails() {
+        let store = fresh_store();
+        let kid = "capture-note-authority";
+        let key = [0x47; cosmos_crypto::AES_KEY_LEN];
+        let directory = Arc::new(crate::keydirectory::KeyDirectory::in_memory());
+        directory.put(kid, key).await.expect("seed authority");
+        let capture = Capture::new(
+            crate::auth::RequestAuthenticator::new(
+                crate::config::Authentication::DevelopmentInsecure,
+            ),
+            store.clone(),
+            Default::default(),
+        )
+        .with_capture_key_directory(directory.clone());
+        let encrypted = cosmos_crypto::seal(kid, &key, b"retryable note", b"").expect("seal note");
+        let request = || {
+            Request::new(pb::CreateMemoryRequest {
+                request: Some(pb::create_memory_request::Request::NoteMemoryRequest(
+                    pb::NoteMemoryRequest {
+                        encrypted_note: Some(cosmos_protocol::common::encryption::EncryptedData {
+                            encryption_information: Some(
+                                cosmos_protocol::common::encryption::EncryptionInformation {
+                                    kid: kid.to_owned(),
+                                },
+                            ),
+                            data: encrypted.data.clone(),
+                        }),
+                        encrypted_location: None,
+                    },
+                )),
+            })
+        };
+
+        directory.fail_next(crate::keydirectory::DirectoryFault::Get);
+        let error = capture
+            .create_memory(request())
+            .await
+            .expect_err("directory outage must fail before note persistence");
+        assert_eq!(error.code(), tonic::Code::Unavailable);
+        assert!(
+            store
+                .recent_notes(DEV_PRINCIPAL, 0, None, None)
+                .await
+                .expect("inspect store")
+                .is_empty()
+        );
+
+        capture
+            .create_memory(request())
+            .await
+            .expect("unchanged request is retryable");
+        assert_eq!(
+            store
+                .recent_notes(DEV_PRINCIPAL, 0, None, None)
+                .await
+                .expect("inspect store")
+                .len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn testing_note_does_not_store_or_ack_when_authoritative_lookup_fails() {
+        let store = fresh_store();
+        let kid = "testing-note-authority";
+        let key = [0x48; cosmos_crypto::AES_KEY_LEN];
+        let directory = Arc::new(crate::keydirectory::KeyDirectory::in_memory());
+        directory.put(kid, key).await.expect("seed authority");
+        let service = TestingAutomation::new(
+            crate::auth::RequestAuthenticator::new(
+                crate::config::Authentication::DevelopmentInsecure,
+            ),
+            store.clone(),
+            Default::default(),
+        )
+        .with_key_directory(directory.clone());
+        let encrypted =
+            cosmos_crypto::seal(kid, &key, b"retryable automation note", b"").expect("seal note");
+        let request = || {
+            Request::new(pb::DeviceCreateNoteRequest {
+                encrypted_note: Some(cosmos_protocol::common::encryption::EncryptedData {
+                    encryption_information: Some(
+                        cosmos_protocol::common::encryption::EncryptionInformation {
+                            kid: kid.to_owned(),
+                        },
+                    ),
+                    data: encrypted.data.clone(),
+                }),
+                encrypted_location: None,
+            })
+        };
+
+        directory.fail_next(crate::keydirectory::DirectoryFault::Get);
+        let error = service
+            .create_note(request())
+            .await
+            .expect_err("directory outage must fail before note persistence");
+        assert_eq!(error.code(), tonic::Code::Unavailable);
+        assert!(
+            store
+                .recent_notes(DEV_PRINCIPAL, 0, None, None)
+                .await
+                .expect("inspect store")
+                .is_empty()
+        );
+        service
+            .create_note(request())
+            .await
+            .expect("unchanged request is retryable");
+    }
+
+    #[tokio::test]
     async fn read_rpcs_return_well_formed_empty() {
         // A device with no stored notes gets an empty list, not an error.
         let automation = isolated_automation();
@@ -3785,14 +3947,21 @@ mod tests {
 
         let store = fresh_store();
         let keys: crate::keymaterial::SharedKeyMaterial = Default::default();
-        keys.insert("food-kid".to_owned(), [4u8; cosmos_crypto::AES_KEY_LEN]);
+        keys.insert("food-kid".to_owned(), [4u8; cosmos_crypto::AES_KEY_LEN])
+            .expect("insert test channel key");
+        let directory = Arc::new(crate::keydirectory::KeyDirectory::in_memory());
+        directory
+            .put("food-kid", [4u8; cosmos_crypto::AES_KEY_LEN])
+            .await
+            .expect("seed authoritative key");
         let capture = Capture::new(
             crate::auth::RequestAuthenticator::new(
                 crate::config::Authentication::DevelopmentInsecure,
             ),
             store,
             keys.clone(),
-        );
+        )
+        .with_capture_key_directory(directory.clone());
         let log = FoodLog {
             food_item: Some(FoodItem {
                 request_uuid: "food-request-1".to_owned(),
@@ -3831,6 +4000,18 @@ mod tests {
             }))
             .await
             .expect("food log memory stores");
+
+        directory.fail_next(crate::keydirectory::DirectoryFault::Get);
+        let unavailable = capture
+            .get_food_log_summary(Request::new(pb::GetFoodLogSummaryRequest {
+                start_time: Some(prost_types::Timestamp {
+                    seconds: 150,
+                    nanos: 0,
+                }),
+            }))
+            .await
+            .expect_err("authority outage is not an empty food-log summary");
+        assert_eq!(unavailable.code(), tonic::Code::Unavailable);
 
         let summary = capture
             .get_food_log_summary(Request::new(pb::GetFoodLogSummaryRequest {

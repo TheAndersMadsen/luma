@@ -113,28 +113,52 @@ fn same_locale(
                 || from.country.eq_ignore_ascii_case(&to.country)))
 }
 
-fn open_request<T: Message + Default>(
+async fn open_request<T: Message + Default>(
     keys: &crate::keymaterial::SharedKeyMaterial,
+    directory: Option<&crate::keydirectory::SharedKeyDirectory>,
     data: Option<EncryptedData>,
     capability: &str,
 ) -> Result<(T, String), Status> {
     let data = data.ok_or_else(|| Status::invalid_argument("missing encrypted request"))?;
-    if keys.is_empty() {
-        return Err(Status::failed_precondition(format!(
-            "no ephemeral channel key established for {capability}; call PublicPrivacyService EstablishWrappingKeys/ImportKeys first",
-        )));
-    }
     let kid = data
         .encryption_information
         .as_ref()
         .map(|i| i.kid.clone())
         .unwrap_or_default();
-    let plaintext = keys
-        .open(&cosmos_crypto::EncryptedData {
-            data: data.data,
-            kid: kid.clone(),
-        })
-        .map_err(|e| match e {
+    let envelope = cosmos_crypto::EncryptedData {
+        data: data.data,
+        kid: kid.clone(),
+    };
+    let plaintext = if let Some(directory) = directory {
+        match directory
+            .open(&envelope)
+            .await
+            .map_err(|error| crate::keydirectory::grpc_status(&error))?
+        {
+            Some(plaintext) => plaintext,
+            None => {
+                crate::services::public_privacy::note_unknown_kid(&kid);
+                return Err(Status::failed_precondition(format!(
+                    "no channel key for kid {kid} on {capability}; queued for re-establishment via PublicPrivacyService SyncKeys",
+                )));
+            }
+        }
+    } else {
+        if keys.is_empty().map_err(|error| {
+            crate::services::public_privacy::key_material_availability_status(&error)
+                .unwrap_or_else(|| Status::internal("could not inspect channel-key state"))
+        })? {
+            return Err(Status::failed_precondition(format!(
+                "no ephemeral channel key established for {capability}; call PublicPrivacyService EstablishWrappingKeys/ImportKeys first",
+            )));
+        }
+        keys.open(&envelope).map_err(|e| {
+            if let Some(status) =
+                crate::services::public_privacy::key_material_availability_status(&e)
+            {
+                return status;
+            }
+            match e {
             // The device is sealing under a kid this server has no key for —
             // typically a channel established before key material was persisted.
             // That is a precondition failure, not an authorization one, and
@@ -156,7 +180,9 @@ fn open_request<T: Message + Default>(
             _ => Status::permission_denied(format!(
                 "could not open encrypted request for {capability}"
             )),
-        })?;
+            }
+        })?
+    };
     let parsed = T::decode(plaintext.as_slice()).map_err(|_| {
         Status::invalid_argument(format!("malformed encrypted request for {capability}"))
     })?;
@@ -181,16 +207,30 @@ fn open_request<T: Message + Default>(
 /// FQ name coincides with the protobuf FQ name (e.g.
 /// `sources/humane/aibus/CanTranslateResponse.java:1` declares
 /// `package humane.aibus;`). `AiBusMain::seal_response` does the same thing.
-fn seal_response<T: Message>(
+async fn seal_response<T: Message>(
     keys: &crate::keymaterial::SharedKeyMaterial,
+    directory: Option<&crate::keydirectory::SharedKeyDirectory>,
     kid: &str,
     response: &T,
     capability: &str,
     type_name: &str,
 ) -> Result<EncryptedData, Status> {
-    let sealed = keys
-        .seal(kid, &response.encode_to_vec(), type_name.as_bytes())
-        .map_err(|_| Status::internal(format!("failed to seal response for {capability}")))?;
+    let encoded = response.encode_to_vec();
+    let sealed = if let Some(directory) = directory {
+        directory
+            .seal(kid, &encoded, type_name.as_bytes())
+            .await
+            .map_err(|error| crate::keydirectory::grpc_status(&error))?
+            .ok_or_else(|| Status::failed_precondition("the response channel key is absent"))?
+    } else {
+        keys.seal(kid, &encoded, type_name.as_bytes())
+            .map_err(|error| {
+                crate::services::public_privacy::key_material_availability_status(&error)
+                    .unwrap_or_else(|| {
+                        Status::internal(format!("failed to seal response for {capability}"))
+                    })
+            })?
+    };
     Ok(EncryptedData {
         encryption_information: Some(cosmos_protocol::common::encryption::EncryptionInformation {
             kid: sealed.kid,
@@ -318,6 +358,7 @@ impl AmazonShoppingService for AmazonShopping {
 #[derive(Clone)]
 pub struct Composition {
     keys: crate::keymaterial::SharedKeyMaterial,
+    directory: Option<crate::keydirectory::SharedKeyDirectory>,
     model: Option<Arc<dyn ChatModel>>,
 }
 
@@ -325,6 +366,7 @@ impl Default for Composition {
     fn default() -> Self {
         Self {
             keys: Default::default(),
+            directory: None,
             model: configured_model(),
         }
     }
@@ -334,8 +376,17 @@ impl Composition {
     pub fn with_key_material(keys: crate::keymaterial::SharedKeyMaterial) -> Self {
         Self {
             keys,
+            directory: None,
             model: configured_model(),
         }
+    }
+
+    pub fn with_key_directory(
+        mut self,
+        directory: crate::keydirectory::SharedKeyDirectory,
+    ) -> Self {
+        self.directory = Some(directory);
+        self
     }
 
     #[cfg(test)]
@@ -345,6 +396,7 @@ impl Composition {
     ) -> Self {
         Self {
             keys,
+            directory: None,
             model: Some(model),
         }
     }
@@ -397,8 +449,13 @@ impl CompositionService for Composition {
         _request: Request<pb::EncryptedMessageCompositionRequest>,
     ) -> Result<Response<pb::EncryptedMessageCompositionResponse>, Status> {
         let request = _request.into_inner();
-        let (req, kid): (pb::MessageCompositionRequest, _) =
-            open_request(&self.keys, request.request, "ComposeMessage")?;
+        let (req, kid): (pb::MessageCompositionRequest, _) = open_request(
+            &self.keys,
+            self.directory.as_ref(),
+            request.request,
+            "ComposeMessage",
+        )
+        .await?;
         if req.text.trim().is_empty() {
             return Err(Status::invalid_argument(
                 "message composition requires source text",
@@ -437,13 +494,17 @@ impl CompositionService for Composition {
             casual: casual?,
         };
         let response = pb::EncryptedMessageCompositionResponse {
-            response: Some(seal_response(
-                &self.keys,
-                &kid,
-                &response,
-                "ComposeMessage",
-                MESSAGE_COMPOSITION_RESPONSE,
-            )?),
+            response: Some(
+                seal_response(
+                    &self.keys,
+                    self.directory.as_ref(),
+                    &kid,
+                    &response,
+                    "ComposeMessage",
+                    MESSAGE_COMPOSITION_RESPONSE,
+                )
+                .await?,
+            ),
         };
         Ok(Response::new(response))
     }
@@ -453,8 +514,13 @@ impl CompositionService for Composition {
         _request: Request<pb::EncryptedSummarizationNetworkRequest>,
     ) -> Result<Response<pb::EncryptedSummarizationNetworkResponse>, Status> {
         let request = _request.into_inner();
-        let (req, kid): (pb::SummarizationNetworkRequest, _) =
-            open_request(&self.keys, request.request, "Summarization")?;
+        let (req, kid): (pb::SummarizationNetworkRequest, _) = open_request(
+            &self.keys,
+            self.directory.as_ref(),
+            request.request,
+            "Summarization",
+        )
+        .await?;
 
         let mut summaries = Vec::new();
 
@@ -565,13 +631,17 @@ impl CompositionService for Composition {
             summary_group: summaries,
         };
         let response = pb::EncryptedSummarizationNetworkResponse {
-            response: Some(seal_response(
-                &self.keys,
-                &kid,
-                &response,
-                "Summarization",
-                SUMMARIZATION_NETWORK_RESPONSE,
-            )?),
+            response: Some(
+                seal_response(
+                    &self.keys,
+                    self.directory.as_ref(),
+                    &kid,
+                    &response,
+                    "Summarization",
+                    SUMMARIZATION_NETWORK_RESPONSE,
+                )
+                .await?,
+            ),
         };
         Ok(Response::new(response))
     }
@@ -806,11 +876,23 @@ impl DeviceMessagesService for DeviceMessages {
 #[derive(Clone, Default)]
 pub struct Food {
     keys: crate::keymaterial::SharedKeyMaterial,
+    directory: Option<crate::keydirectory::SharedKeyDirectory>,
 }
 
 impl Food {
     pub fn with_key_material(keys: crate::keymaterial::SharedKeyMaterial) -> Self {
-        Self { keys }
+        Self {
+            keys,
+            directory: None,
+        }
+    }
+
+    pub fn with_key_directory(
+        mut self,
+        directory: crate::keydirectory::SharedKeyDirectory,
+    ) -> Self {
+        self.directory = Some(directory);
+        self
     }
 }
 
@@ -821,8 +903,13 @@ impl FoodService for Food {
         _request: Request<pb::EncryptedFoodIdentifyRequest>,
     ) -> Result<Response<pb::EncryptedFoodIdentifyResponse>, Status> {
         let request = _request.into_inner();
-        let (req, kid): (pb::FoodIdentifyRequest, _) =
-            open_request(&self.keys, request.request, "FoodIdentify")?;
+        let (req, kid): (pb::FoodIdentifyRequest, _) = open_request(
+            &self.keys,
+            self.directory.as_ref(),
+            request.request,
+            "FoodIdentify",
+        )
+        .await?;
 
         if req.text.trim().is_empty() {
             if req.image_data.is_empty() {
@@ -885,13 +972,17 @@ impl FoodService for Food {
             debug_image_blob_store_location: String::new(),
         };
         let response = pb::EncryptedFoodIdentifyResponse {
-            best_response: Some(seal_response(
-                &self.keys,
-                &kid,
-                &response,
-                "FoodIdentify",
-                FOOD_IDENTIFY_RESPONSE,
-            )?),
+            best_response: Some(
+                seal_response(
+                    &self.keys,
+                    self.directory.as_ref(),
+                    &kid,
+                    &response,
+                    "FoodIdentify",
+                    FOOD_IDENTIFY_RESPONSE,
+                )
+                .await?,
+            ),
             alternate_responses: Vec::new(),
         };
         Ok(Response::new(response))
@@ -913,6 +1004,7 @@ impl FoodService for Food {
 #[derive(Clone)]
 pub struct Speech {
     keys: crate::keymaterial::SharedKeyMaterial,
+    directory: Option<crate::keydirectory::SharedKeyDirectory>,
     model: Option<Arc<dyn ChatModel>>,
     speech: Option<Arc<dyn SpeechSynthesisBackend>>,
     recognition: Option<Arc<dyn SpeechRecognitionBackend>>,
@@ -922,6 +1014,7 @@ impl Default for Speech {
     fn default() -> Self {
         Self {
             keys: Default::default(),
+            directory: None,
             model: configured_model(),
             speech: configured_backend(),
             recognition: configured_recognition_backend(),
@@ -933,10 +1026,19 @@ impl Speech {
     pub fn with_key_material(keys: crate::keymaterial::SharedKeyMaterial) -> Self {
         Self {
             keys,
+            directory: None,
             model: configured_model(),
             speech: configured_backend(),
             recognition: configured_recognition_backend(),
         }
+    }
+
+    pub fn with_key_directory(
+        mut self,
+        directory: crate::keydirectory::SharedKeyDirectory,
+    ) -> Self {
+        self.directory = Some(directory);
+        self
     }
 
     #[cfg(test)]
@@ -946,6 +1048,7 @@ impl Speech {
     ) -> Self {
         Self {
             keys,
+            directory: None,
             model: Some(model),
             speech: None,
             recognition: None,
@@ -956,6 +1059,7 @@ impl Speech {
     fn with_speech_backend(backend: Arc<dyn SpeechSynthesisBackend>) -> Self {
         Self {
             keys: Default::default(),
+            directory: None,
             model: None,
             speech: Some(backend),
             recognition: None,
@@ -1037,8 +1141,13 @@ impl SpeechService for Speech {
         _request: Request<pb::EncryptedCanTranslateRequest>,
     ) -> Result<Response<pb::EncryptedCanTranslateResponse>, Status> {
         let request = _request.into_inner();
-        let (req, kid): (pb::CanTranslateRequest, _) =
-            open_request(&self.keys, request.data, "CanTranslate")?;
+        let (req, kid): (pb::CanTranslateRequest, _) = open_request(
+            &self.keys,
+            self.directory.as_ref(),
+            request.data,
+            "CanTranslate",
+        )
+        .await?;
         let supported = match (&req.from, &req.to) {
             (_, Some(to)) if !to.language.trim().is_empty() => {
                 same_locale(req.from.as_ref(), req.to.as_ref()) || self.model.is_some()
@@ -1049,13 +1158,17 @@ impl SpeechService for Speech {
             is_supported: supported,
         };
         let response = pb::EncryptedCanTranslateResponse {
-            data: Some(seal_response(
-                &self.keys,
-                &kid,
-                &response,
-                "CanTranslate",
-                CAN_TRANSLATE_RESPONSE,
-            )?),
+            data: Some(
+                seal_response(
+                    &self.keys,
+                    self.directory.as_ref(),
+                    &kid,
+                    &response,
+                    "CanTranslate",
+                    CAN_TRANSLATE_RESPONSE,
+                )
+                .await?,
+            ),
         };
         Ok(Response::new(response))
     }
@@ -1140,12 +1253,19 @@ impl SpeechService for Speech {
         let model = self.model.clone();
         let speech = self.speech.clone();
         let keys = self.keys.clone();
+        let directory = self.directory.clone();
         let mut inbound = request.into_inner();
         let responses = async_stream::try_stream! {
             while let Some(message) = inbound.next().await {
                 let message = message.map_err(|_| Status::invalid_argument("invalid translate-conversation stream"))?;
                 let (req, kid): (pb::TranslateConversationRequest, _) =
-                    open_request(&keys, message.data, "TranslateConversation")?;
+                    open_request(
+                        &keys,
+                        directory.as_ref(),
+                        message.data,
+                        "TranslateConversation",
+                    )
+                    .await?;
                 let audio = req.audio.as_ref().ok_or_else(|| {
                     Status::invalid_argument("translate conversation requires audio bytes")
                 })?;
@@ -1208,11 +1328,12 @@ impl SpeechService for Speech {
                 yield pb::EncryptedTranslateConversationResponse {
                     data: Some(seal_response(
                         &keys,
+                        directory.as_ref(),
                         &kid,
                         &response,
                         "TranslateConversation",
                         TRANSLATE_CONVERSATION_RESPONSE,
-                    )?),
+                    ).await?),
                 };
             }
         };
@@ -1224,8 +1345,13 @@ impl SpeechService for Speech {
         _request: Request<pb::EncryptedTranslateTextRequest>,
     ) -> Result<Response<pb::EncryptedTranslateTextResponse>, Status> {
         let request = _request.into_inner();
-        let (req, kid): (pb::TranslateTextRequest, _) =
-            open_request(&self.keys, request.data, "TranslateText")?;
+        let (req, kid): (pb::TranslateTextRequest, _) = open_request(
+            &self.keys,
+            self.directory.as_ref(),
+            request.data,
+            "TranslateText",
+        )
+        .await?;
         if req.text.trim().is_empty() {
             return Err(Status::invalid_argument("translate text requires text"));
         }
@@ -1280,13 +1406,17 @@ impl SpeechService for Speech {
             speech,
         };
         let response = pb::EncryptedTranslateTextResponse {
-            data: Some(seal_response(
-                &self.keys,
-                &kid,
-                &response,
-                "TranslateText",
-                TRANSLATE_TEXT_RESPONSE,
-            )?),
+            data: Some(
+                seal_response(
+                    &self.keys,
+                    self.directory.as_ref(),
+                    &kid,
+                    &response,
+                    "TranslateText",
+                    TRANSLATE_TEXT_RESPONSE,
+                )
+                .await?,
+            ),
         };
         Ok(Response::new(response))
     }
@@ -1696,7 +1826,8 @@ mod tests {
 
     fn shared_keys() -> crate::keymaterial::SharedKeyMaterial {
         let keys: crate::keymaterial::SharedKeyMaterial = Default::default();
-        keys.insert(TEST_KID.to_owned(), [17u8; cosmos_crypto::AES_KEY_LEN]);
+        keys.insert(TEST_KID.to_owned(), [17u8; cosmos_crypto::AES_KEY_LEN])
+            .expect("insert test channel key");
         keys
     }
 
@@ -1849,6 +1980,7 @@ mod tests {
         // passes over the exact message type it seals.
         let identified = seal_response(
             &keys,
+            None,
             TEST_KID,
             &pb::FoodIdentifyResponse {
                 item_name: "oat milk".to_owned(),
@@ -1857,6 +1989,7 @@ mod tests {
             "FoodIdentify",
             FOOD_IDENTIFY_RESPONSE,
         )
+        .await
         .expect("seal food response");
         assert_eq!(aad(&identified), "humane.aibus.FoodIdentifyResponse");
 
@@ -2026,6 +2159,7 @@ mod tests {
         };
         let unavailable = Speech {
             keys: keys.clone(),
+            directory: None,
             model: None,
             speech: None,
             recognition: None,
@@ -2073,6 +2207,7 @@ mod tests {
         let keys = shared_keys();
         let service = Speech {
             keys: keys.clone(),
+            directory: None,
             model: Some(Arc::new(MockChatModel::new(vec![text_response(
                 "Velkommen tilbage.",
             )]))),

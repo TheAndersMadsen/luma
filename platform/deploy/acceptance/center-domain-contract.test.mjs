@@ -53,6 +53,7 @@ function composeEnvironment() {
   const env = {
     ...process.env,
     REVIVAL_RELEASE_ID: "center-domain-contract",
+    COSMOS_KID_SCOPE: "audit",
     COSMOS_DATABASE_URL: "postgresql://cosmos:placeholder@postgres/cosmos",
     COSMOS_EDGE_TOKEN: "placeholder-edge",
     COSMOS_ADMIN_TOKEN: "placeholder-admin",

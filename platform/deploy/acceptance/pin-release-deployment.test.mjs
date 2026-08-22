@@ -25,6 +25,7 @@ function composeEnvironment(dataDirectory) {
     ...process.env,
     REVIVAL_RELEASE_ID: "pin-release-deployment-contract",
     REVIVAL_DATA_DIR: dataDirectory,
+    COSMOS_KID_SCOPE: "audit",
     COSMOS_DATABASE_URL: "postgresql://cosmos:placeholder@postgres/cosmos",
     COSMOS_EDGE_TOKEN: "placeholder-edge",
     COSMOS_ADMIN_TOKEN: "placeholder-admin",

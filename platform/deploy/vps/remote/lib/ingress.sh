@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/bash
 # Managed ingress: cloudflared topology, ingress evidence, quiesce and
 # restore.
 #

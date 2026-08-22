@@ -29,6 +29,10 @@ const RECOVERABLE = new Set(["ERR_MODULE_NOT_FOUND", "ERR_UNSUPPORTED_DIR_IMPORT
 const SOURCE_ROOT = new URL("../src/", import.meta.url).href;
 
 function rewrite(specifier) {
+  // Next's package exposes this runtime module as headers.js. The bundler
+  // accepts the documented extensionless spelling used by application source;
+  // plain `node --test` needs the concrete package file.
+  if (specifier === "next/headers") return "next/headers.js";
   return specifier.startsWith("@/") ? `${SOURCE_ROOT}${specifier.slice(2)}` : specifier;
 }
 

@@ -62,20 +62,41 @@ This creates only a self-signed DeviceUser CA. It refuses to overwrite nonempty
 destinations. Back up the result off-host before enrolling a Pin:
 
 ```sh
-./revival backup --fetch
+./revival backup --confirm --fetch
 ```
 
-## 3. Build and publish a signed Pin release
+## 3. Run the attested hosted Pin release
 
 Choose a version name and strictly increasing Android version code:
 
+Dispatch `.github/workflows/pin-release.yml` from `refs/heads/main` with the
+version and version code. The workflow must receive its protected signing inputs
+from the operator-owned GitHub environment integration after its provider-signed
+pre-input attestation. Without that integration it fails closed. The retired
+local `./revival pin release build ...` alias refuses before opening signing
+inputs; it cannot create an authoritative release.
+
+Download the resulting `pin-release-<version>` store artifact while preserving
+its `current.json`, `history.json`, immutable release directory, five APKs, and
+`hosted-attestation.json`. Confirmed ship reconstructs the separately pinned
+verifier runtime if it is absent and treats the evidence-bound historical
+builder image ID only as signed build data. Neither hosted publication nor the
+local refusal runs ADB.
+
+On the supported Linux x64 verifier host, register and point-of-use verify the
+downloaded directory before shipping it:
+
 ```sh
-./revival pin release build \
-  --version YYYY-MM-DD.N \
-  --version-code INTEGER
+./revival setup import pin-release \
+  --release-root /external/downloaded-pin-release \
+  --data-dir /external/revival-data
+./revival setup artifacts pin --data-dir /external/revival-data
 ```
 
-Build publishes atomically to the local Pin release store and never runs ADB.
+The exact-five release contains the four steady installed roles plus the
+bootstrap recovery helper. A routine update retains/proves a healthy installer
+and never runs bootstrap; bootstrap recovery requires a separate confirmation
+only for a genuinely missing or unhealthy installer.
 The lower-level `pin release inspect`, `verify`, and `plan` tools accept explicit
 artifact, manifest, receipt, history, signer, installed-state, and serial inputs;
 use their `--help` when auditing a non-default bundle rather than copying an
@@ -84,8 +105,8 @@ incomplete command.
 For a production Center, ship the exact verified release:
 
 ```sh
-./revival pin release ship
-./revival pin release ship --confirm
+./revival pin release ship --release-root /external/downloaded-pin-release
+./revival pin release ship --release-root /external/downloaded-pin-release --confirm
 ```
 
 The first command prints the local and remote identities and transfer plan. The
@@ -102,7 +123,12 @@ The CLI plans first:
 ```
 
 Read the plan, current package state, release identity, signer, and recovery
-requirements. Only then use the confirmation form shown by
+requirements. A managed package at Android's randomized
+`/data/app/~~.../base.apk` path while the installer is healthy is a hard stop:
+do not use bootstrap recovery as a fallback, because it uninstalls managed
+packages and risks FBE data and device identity. A genuinely missing/unhealthy
+installer remains a distinct, separately confirmed bounded recovery decision.
+Only then use the confirmation form shown by
 `./revival pin install --help`.
 
 Center and the CLI verify package, version, size, and SHA-256 before mutation.
@@ -178,7 +204,7 @@ identifiers.
 ## 8. Verify the live and physical result
 
 ```sh
-./revival canary
+./revival canary --confirm
 ./revival drift
 ./revival setup status
 ```

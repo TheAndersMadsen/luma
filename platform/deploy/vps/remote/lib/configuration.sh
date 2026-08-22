@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/bash
 # Protected configuration: staging, proposals, evidence recording and
 # verification.
 #

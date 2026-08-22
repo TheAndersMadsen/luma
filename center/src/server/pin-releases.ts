@@ -1,8 +1,15 @@
 import { createHash } from "node:crypto";
 import { constants as fsConstants, type Stats } from "node:fs";
-import { lstat, open, realpath, type FileHandle } from "node:fs/promises";
+import {
+  lstat,
+  mkdtemp,
+  open,
+  realpath,
+  rmdir,
+  unlink,
+  type FileHandle,
+} from "node:fs/promises";
 import path from "node:path";
-import { Readable } from "node:stream";
 import { logInfo, logWarn } from "./log";
 
 /**
@@ -10,7 +17,7 @@ import { logInfo, logWarn } from "./log";
  * operator-mounted directory. It never discovers APKs in the source tree and
  * never synthesizes a fallback manifest.
  */
-export const PIN_RELEASE_SCHEMA_VERSION = 1;
+export const PIN_RELEASE_SCHEMA_VERSION = 2;
 export const PIN_RELEASE_CURRENT_MANIFEST = "current.json";
 export const PIN_RELEASE_IMMUTABLE_MANIFEST = "manifest.json";
 export const MAX_PIN_RELEASE_MANIFEST_BYTES = 64 * 1024;
@@ -49,16 +56,45 @@ export interface PinReleaseArtifact extends PinReleaseArtifactIdentity {
 }
 
 export interface PinReleaseManifest {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly releaseId: string;
   readonly version: string;
   readonly artifacts: readonly PinReleaseArtifact[];
+  readonly authority: PinReleaseAuthority;
 }
 
 export interface PinReleaseIdentityInput {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly version: string;
   readonly artifacts: readonly PinReleaseArtifactIdentity[];
+  readonly authority: PinReleaseAuthority;
+}
+
+export interface PinReleaseAuthority {
+  readonly kind: "github-hosted-native-x64";
+  readonly name: "hosted-attestation.json";
+  readonly size: number;
+  readonly sha256: string;
+  readonly provider: "github-actions-sigstore";
+  readonly policySha256: string;
+  readonly requestSha256: string;
+  readonly predicateSha256: string;
+  readonly trustedRootSha256: string;
+  readonly preSignBundleSha256: string;
+  readonly releaseBundleSha256: string;
+  readonly preSignVerificationSha256: string;
+  readonly releaseVerificationSha256: string;
+  readonly runnerEnvironment: "github-hosted";
+  readonly runnerLabel: "ubuntu-24.04";
+  readonly runnerArchitecture: "x64";
+  readonly runnerInvocationUri: string;
+  readonly repository: "TheAndersMadsen/ai-pin-revival";
+  readonly sourceRef: "refs/heads/main";
+  readonly sourceDigest: string;
+  readonly sourceGenerationSha256: string;
+  readonly sourceTarSha256: string;
+  readonly toolchainSha256: string;
+  readonly builderImageId: string;
 }
 
 export interface PinReleaseEnvironment {
@@ -81,6 +117,28 @@ interface VerifiedArtifact {
   readonly handle: FileHandle;
   /** The (dev, ino, size, mtime, ctime) tuple this verification covered. */
   readonly identity: string;
+}
+
+interface ArtifactSnapshotBacking {
+  readonly approvalKey: string;
+  readonly handle: FileHandle;
+  readonly size: number;
+  readonly reservationBytes: number;
+  references: number;
+  closing: boolean;
+  closed: boolean;
+  closePromise: Promise<void> | null;
+}
+
+interface ArtifactSnapshotLease {
+  readonly backing: ArtifactSnapshotBacking;
+  released: boolean;
+}
+
+interface ArtifactByteRange {
+  readonly start: number;
+  readonly end: number;
+  readonly partial: boolean;
 }
 
 type MissingPathPolicy = "not-found" | "unavailable";
@@ -129,6 +187,7 @@ type PinReleaseFailureReason =
   | "manifest_release_id_unexpected"
   | "manifest_version_shape"
   | "manifest_artifacts_not_array"
+  | "manifest_authority_invalid"
   | "manifest_not_canonical"
   | "manifest_pair_mismatch"
   | "manifest_serialize_missing_role"
@@ -150,6 +209,18 @@ type PinReleaseFailureReason =
   | "artifact_short_read"
   | "artifact_size_drift"
   | "artifact_changed_during_read"
+  | "authority_sha256_mismatch"
+  | "authority_size_mismatch"
+  | "authority_invalid"
+  | "authority_changed_during_read"
+  | "release_changed_during_verification"
+  | "artifact_range_invalid"
+  | "snapshot_capacity_exhausted"
+  | "snapshot_create_failed"
+  | "snapshot_copy_failed"
+  | "snapshot_source_changed"
+  | "snapshot_size_mismatch"
+  | "snapshot_sha256_mismatch"
   | "artifact_absent_from_manifest"
   | "artifact_route_unknown"
   | "artifact_stream_failed"
@@ -179,7 +250,15 @@ const RELEASE_ID_RE = /^[0-9a-f]{64}$/;
 const SHA256_RE = /^[0-9a-f]{64}$/;
 const APK_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,254}\.apk$/;
 const INSTALL_VERSION_RE = /^(\d{4})-(\d{2})-(\d{2})\.(\d+)$/;
-const ROOT_FIELDS = ["schemaVersion", "releaseId", "version", "artifacts"];
+const ROOT_FIELDS = ["schemaVersion", "releaseId", "version", "artifacts", "authority"];
+const AUTHORITY_FIELDS = [
+  "kind", "name", "size", "sha256", "provider", "policySha256", "requestSha256",
+  "predicateSha256", "trustedRootSha256", "preSignBundleSha256", "releaseBundleSha256",
+  "preSignVerificationSha256", "releaseVerificationSha256", "runnerEnvironment",
+  "runnerLabel", "runnerArchitecture", "runnerInvocationUri", "repository", "sourceRef",
+  "sourceDigest", "sourceGenerationSha256", "sourceTarSha256", "toolchainSha256",
+  "builderImageId",
+];
 const ARTIFACT_FIELDS = [
   "role",
   "url",
@@ -189,7 +268,32 @@ const ARTIFACT_FIELDS = [
   "size",
   "sha256",
 ];
+const EVIDENCE_FIELDS = [
+  "schema", "version", "provider", "policySha256", "requestSha256", "predicateSha256",
+  "trustedRootSha256", "preSignBundleSha256", "releaseBundleSha256",
+  "preSignVerificationSha256", "releaseVerificationSha256", "runnerEnvironment",
+  "runnerLabel", "runnerArchitecture", "runnerInvocationUri", "repository", "sourceRef",
+  "sourceDigest", "sourceGenerationSha256", "sourceTarSha256", "toolchainSha256",
+  "builderImageId", "artifacts", "payloads",
+];
+const EVIDENCE_PAYLOAD_FIELDS = [
+  "policyBase64", "requestBase64", "predicateBase64", "trustedRootBase64",
+  "preSignBundleBase64", "releaseBundleBase64", "preSignVerificationBase64",
+  "releaseVerificationBase64",
+];
 const HASH_CHUNK_BYTES = 1024 * 1024;
+const SNAPSHOT_CHUNK_BYTES = 1024 * 1024;
+const SNAPSHOT_DIRECTORY_PREFIX = "/tmp/revival-pin-release-snapshot-";
+const MAX_ACTIVE_SNAPSHOT_FILES = 2;
+const MAX_ACTIVE_SNAPSHOT_BYTES = MAX_PIN_RELEASE_ARTIFACT_BYTES;
+const MIN_SNAPSHOT_RESERVATION_BYTES = MAX_ACTIVE_SNAPSHOT_BYTES / MAX_ACTIVE_SNAPSHOT_FILES;
+export const PIN_RELEASE_SNAPSHOT_MAX_LEASES = 8;
+// A continuously progressing 211 MiB download may take hours on a very slow
+// connection, while an abandoned body must not pin one of the two anonymous
+// descriptors forever. Progress renews the five-minute idle deadline, but no
+// unauthenticated response may retain a snapshot beyond four hours in total.
+export const PIN_RELEASE_SNAPSHOT_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
+export const PIN_RELEASE_SNAPSHOT_MAX_LIFETIME_MS = 4 * 60 * 60 * 1000;
 
 function runtimeEnvironment(): PinReleaseEnvironment {
   return {
@@ -304,6 +408,58 @@ function orderedIdentityArtifacts(
   });
 }
 
+function parseReleaseAuthority(value: unknown): PinReleaseAuthority {
+  if (!isRecord(value)) throw unavailable("manifest_authority_invalid");
+  exactFields(value, AUTHORITY_FIELDS, "manifest_authority_invalid");
+  if (value.kind !== "github-hosted-native-x64" || value.name !== "hosted-attestation.json") {
+    throw unavailable("manifest_authority_invalid");
+  }
+  const digest = (field: string): string => {
+    const result = requiredString(value[field], 64, "manifest_authority_invalid");
+    if (!SHA256_RE.test(result)) throw unavailable("manifest_authority_invalid");
+    return result;
+  };
+  if (
+    value.provider !== "github-actions-sigstore" || value.runnerEnvironment !== "github-hosted" ||
+    value.runnerLabel !== "ubuntu-24.04" || value.runnerArchitecture !== "x64" ||
+    value.repository !== "TheAndersMadsen/ai-pin-revival" || value.sourceRef !== "refs/heads/main"
+  ) throw unavailable("manifest_authority_invalid");
+  const runnerInvocationUri = requiredString(value.runnerInvocationUri, 256, "manifest_authority_invalid");
+  if (!/^https:\/\/github\.com\/TheAndersMadsen\/ai-pin-revival\/actions\/runs\/[1-9][0-9]*\/attempts\/[1-9][0-9]*$/u.test(runnerInvocationUri)) {
+    throw unavailable("manifest_authority_invalid");
+  }
+  const sourceDigest = requiredString(value.sourceDigest, 40, "manifest_authority_invalid");
+  if (!/^[0-9a-f]{40}$/u.test(sourceDigest)) throw unavailable("manifest_authority_invalid");
+  const builderImageId = requiredString(value.builderImageId, 71, "manifest_authority_invalid");
+  if (!/^sha256:[0-9a-f]{64}$/u.test(builderImageId)) throw unavailable("manifest_authority_invalid");
+  return Object.freeze({
+    kind: "github-hosted-native-x64",
+    name: "hosted-attestation.json",
+    size: positiveInteger(value.size, 64 * 1024 * 1024, "manifest_authority_invalid"),
+    sha256: digest("sha256"),
+    provider: "github-actions-sigstore",
+    policySha256: digest("policySha256"),
+    requestSha256: digest("requestSha256"),
+    predicateSha256: digest("predicateSha256"),
+    trustedRootSha256: digest("trustedRootSha256"),
+    preSignBundleSha256: digest("preSignBundleSha256"),
+    releaseBundleSha256: digest("releaseBundleSha256"),
+    preSignVerificationSha256: digest("preSignVerificationSha256"),
+    releaseVerificationSha256: digest("releaseVerificationSha256"),
+    runnerEnvironment: "github-hosted",
+    runnerLabel: "ubuntu-24.04",
+    runnerArchitecture: "x64",
+    runnerInvocationUri,
+    repository: "TheAndersMadsen/ai-pin-revival",
+    sourceRef: "refs/heads/main",
+    sourceDigest,
+    sourceGenerationSha256: digest("sourceGenerationSha256"),
+    sourceTarSha256: digest("sourceTarSha256"),
+    toolchainSha256: digest("toolchainSha256"),
+    builderImageId,
+  });
+}
+
 /**
  * Implemented identity contract shared with the host-side publisher. URLs and
  * releaseId are excluded so the digest has no circular input; all APK hashes,
@@ -321,6 +477,7 @@ export function canonicalPinReleaseIdentity(input: PinReleaseIdentityInput): str
       size: artifact.size,
       sha256: artifact.sha256,
     })),
+    authority: input.authority,
   });
 }
 
@@ -346,6 +503,7 @@ export function serializePinReleaseManifest(manifest: PinReleaseManifest): strin
         sha256: artifact.sha256,
       };
     }),
+    authority: manifest.authority,
   })}\n`;
 }
 
@@ -407,19 +565,22 @@ export function parsePinReleaseManifest(payload: unknown): PinReleaseManifest {
   const artifacts = orderedIdentityArtifacts(parsed) as readonly PinReleaseArtifact[];
   const versionCodes = new Set(artifacts.map((artifact) => artifact.versionCode));
   if (versionCodes.size !== 1) throw unavailable("artifact_version_code_mismatch");
+  const authority = parseReleaseAuthority(payload.authority);
 
   const computedReleaseId = computePinReleaseId({
-    schemaVersion: 1,
+    schemaVersion: 2,
     version,
     artifacts,
+    authority,
   });
   if (computedReleaseId !== releaseId) throw unavailable("manifest_release_id_mismatch");
 
   return Object.freeze({
-    schemaVersion: 1,
+    schemaVersion: 2,
     releaseId,
     version,
     artifacts: Object.freeze([...artifacts]),
+    authority,
   });
 }
 
@@ -685,6 +846,43 @@ interface VerifiedRelease {
 
 let verifiedRelease: VerifiedRelease | null = null;
 
+interface ReleaseVerificationFlight {
+  readonly key: string;
+  readonly promise: Promise<VerifiedRelease>;
+}
+
+// One bounded, process-local flight prevents concurrent cold artifact requests
+// from each performing the same five-APK sweep. A different release waits for
+// the active flight instead of growing an attacker-controlled map of release
+// IDs. Only a complete VerifiedRelease is ever published through this slot.
+let releaseVerificationFlight: ReleaseVerificationFlight | null = null;
+
+interface ArtifactSnapshotFlight {
+  readonly key: string;
+  readonly promise: Promise<ArtifactSnapshotBacking>;
+}
+
+// Snapshot construction is intentionally a single bounded lane. Requests for
+// the same immutable artifact share its copy; a different artifact is refused
+// while that copy is in flight instead of forming an unauthenticated disk-I/O
+// queue.
+let artifactSnapshotFlight: ArtifactSnapshotFlight | null = null;
+
+// This map is only a discoverability index for descriptor backings already held
+// by response leases. It owns no reference of its own, is bounded by the two-fd
+// reservation gate, and loses an entry synchronously before the last lease
+// starts closing its descriptor.
+const completedArtifactSnapshots = new Map<string, ArtifactSnapshotBacking>();
+
+let activeSnapshotFiles = 0;
+let activeSnapshotLeases = 0;
+let activeSnapshotBytes = 0;
+let buildingSnapshots = 0;
+let createdSnapshots = 0;
+let rejectedSnapshots = 0;
+let expiredSnapshotLeases = 0;
+let snapshotCopiedBytes = 0;
+
 let releaseVerifications = 0;
 let releaseHashedBytes = 0;
 
@@ -702,6 +900,29 @@ export function pinReleaseVerificationStats(): {
   readonly hashedBytes: number;
 } {
   return { verifications: releaseVerifications, hashedBytes: releaseHashedBytes };
+}
+
+/** Bounded snapshot state, exported for operability and lifecycle regression. */
+export function pinReleaseSnapshotStats(): {
+  readonly activeFiles: number;
+  readonly activeLeases: number;
+  readonly reservedBytes: number;
+  readonly building: number;
+  readonly created: number;
+  readonly rejected: number;
+  readonly expiredLeases: number;
+  readonly copiedBytes: number;
+} {
+  return {
+    activeFiles: activeSnapshotFiles,
+    activeLeases: activeSnapshotLeases,
+    reservedBytes: activeSnapshotBytes,
+    building: buildingSnapshots,
+    created: createdSnapshots,
+    rejected: rejectedSnapshots,
+    expiredLeases: expiredSnapshotLeases,
+    copiedBytes: snapshotCopiedBytes,
+  };
 }
 
 function cachedReleaseFor(store: ReleaseStore, releaseId: string): VerifiedRelease | null {
@@ -744,6 +965,13 @@ async function releaseUnchanged(
     );
     if (identity !== cached.artifactIdentities.get(artifact.name)) return false;
   }
+  const authority = cached.loaded.manifest.authority;
+  const authorityIdentity = await pathIdentity(
+    store,
+    ["releases", releaseId, authority.name],
+    "unavailable",
+  );
+  if (authorityIdentity !== cached.artifactIdentities.get(authority.name)) return false;
   return true;
 }
 
@@ -794,6 +1022,560 @@ async function openVerifiedArtifact(
   }
 }
 
+function reserveArtifactSnapshot(size: number): number {
+  const reservationBytes = Math.max(size, MIN_SNAPSHOT_RESERVATION_BYTES);
+  if (
+    activeSnapshotLeases >= PIN_RELEASE_SNAPSHOT_MAX_LEASES ||
+    activeSnapshotFiles >= MAX_ACTIVE_SNAPSHOT_FILES ||
+    reservationBytes > MAX_ACTIVE_SNAPSHOT_BYTES - activeSnapshotBytes
+  ) {
+    rejectedSnapshots += 1;
+    throw unavailable("snapshot_capacity_exhausted");
+  }
+  activeSnapshotFiles += 1;
+  activeSnapshotBytes += reservationBytes;
+  buildingSnapshots += 1;
+  return reservationBytes;
+}
+
+function releaseArtifactSnapshotReservation(reservationBytes: number): void {
+  activeSnapshotFiles -= 1;
+  activeSnapshotBytes -= reservationBytes;
+  if (activeSnapshotFiles < 0 || activeSnapshotBytes < 0) {
+    // An accounting underflow would make the public quota porous. Pin it shut
+    // and leave an operator-visible diagnostic instead of silently widening it.
+    activeSnapshotFiles = MAX_ACTIVE_SNAPSHOT_FILES;
+    activeSnapshotBytes = MAX_ACTIVE_SNAPSHOT_BYTES;
+    logWarn("pin release snapshot accounting failed closed");
+  }
+}
+
+async function createAnonymousSnapshotHandle(): Promise<FileHandle> {
+  let directory: string | undefined;
+  let filename: string | undefined;
+  let handle: FileHandle | undefined;
+  try {
+    if (typeof process.geteuid !== "function") throw unavailable("snapshot_create_failed");
+    const ownerUid = process.geteuid();
+    directory = await mkdtemp(SNAPSHOT_DIRECTORY_PREFIX);
+    const directoryStat = await lstat(directory);
+    if (
+      !directoryStat.isDirectory() || directoryStat.uid !== ownerUid ||
+      (directoryStat.mode & 0o777) !== 0o700
+    ) {
+      throw unavailable("snapshot_create_failed");
+    }
+
+    filename = path.join(directory, "artifact.snapshot");
+    if (typeof fsConstants.O_NOFOLLOW !== "number") throw unavailable("snapshot_create_failed");
+    handle = await open(
+      filename,
+      fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_RDWR | fsConstants.O_NOFOLLOW,
+      0o600,
+    );
+    const linked = await handle.stat();
+    if (
+      !linked.isFile() || linked.uid !== ownerUid || linked.nlink !== 1 || linked.size !== 0 ||
+      (linked.mode & 0o777) !== 0o600
+    ) throw unavailable("snapshot_create_failed");
+
+    // Remove both names before a source byte is copied. From here onward the
+    // snapshot is reachable only through this held descriptor: no path exists
+    // for another request or process to replace, reopen, or retain.
+    await unlink(filename);
+    filename = undefined;
+    await rmdir(directory);
+    directory = undefined;
+    if ((await handle.stat()).nlink !== 0) throw unavailable("snapshot_create_failed");
+
+    const result = handle;
+    handle = undefined;
+    return result;
+  } catch (error) {
+    await handle?.close().catch(() => undefined);
+    if (filename !== undefined) await unlink(filename).catch(() => undefined);
+    if (directory !== undefined) await rmdir(directory).catch(() => undefined);
+    throw error instanceof PinReleaseServingError ? error : unavailable("snapshot_create_failed");
+  }
+}
+
+async function writeSnapshotChunk(
+  handle: FileHandle,
+  buffer: Buffer,
+  length: number,
+  position: number,
+): Promise<void> {
+  let written = 0;
+  while (written < length) {
+    const result = await handle.write(buffer, written, length - written, position + written);
+    if (result.bytesWritten <= 0) throw unavailable("snapshot_copy_failed");
+    written += result.bytesWritten;
+  }
+}
+
+async function closeSnapshotBacking(backing: ArtifactSnapshotBacking): Promise<void> {
+  if (backing.closePromise !== null) return backing.closePromise;
+  if (completedArtifactSnapshots.get(backing.approvalKey) === backing) {
+    completedArtifactSnapshots.delete(backing.approvalKey);
+  }
+  backing.closing = true;
+  backing.closePromise = backing.handle.close().then(() => {
+    backing.closed = true;
+    releaseArtifactSnapshotReservation(backing.reservationBytes);
+  }).catch((error: unknown) => {
+    // Keep the reservation charged when close fails: claiming the descriptor
+    // was gone would permit unbounded anonymous files after an I/O failure.
+    logWarn("pin release snapshot close failed", error);
+    throw error;
+  });
+  return backing.closePromise;
+}
+
+function retainSnapshot(backing: ArtifactSnapshotBacking): ArtifactSnapshotLease {
+  if (
+    backing.closing || backing.closed ||
+    activeSnapshotLeases >= PIN_RELEASE_SNAPSHOT_MAX_LEASES
+  ) {
+    rejectedSnapshots += 1;
+    throw unavailable("snapshot_capacity_exhausted");
+  }
+  backing.references += 1;
+  activeSnapshotLeases += 1;
+  return { backing, released: false };
+}
+
+async function releaseSnapshot(lease: ArtifactSnapshotLease): Promise<void> {
+  if (lease.released) return;
+  lease.released = true;
+  lease.backing.references -= 1;
+  activeSnapshotLeases -= 1;
+  if (lease.backing.references < 0 || activeSnapshotLeases < 0) {
+    // Do not make a corrupt counter look like spare public capacity. Retain
+    // the descriptor and pin the global lease gate shut for operator review.
+    lease.backing.references = 1;
+    activeSnapshotLeases = PIN_RELEASE_SNAPSHOT_MAX_LEASES;
+    logWarn("pin release snapshot lease accounting failed closed");
+    return;
+  }
+  if (lease.backing.references === 0) {
+    // Delete before the first await. A request entering after this point may
+    // construct a new generation, and the old close must never delete it.
+    if (completedArtifactSnapshots.get(lease.backing.approvalKey) === lease.backing) {
+      completedArtifactSnapshots.delete(lease.backing.approvalKey);
+    }
+    await closeSnapshotBacking(lease.backing);
+  }
+}
+
+function artifactSnapshotApprovalKey(
+  release: VerifiedRelease,
+  artifact: PinReleaseArtifact,
+): string {
+  const manifest = release.loaded.manifest;
+  const identities = [
+    ...manifest.artifacts.map((candidate) => [
+      candidate.name,
+      release.artifactIdentities.get(candidate.name),
+    ] as const),
+    [manifest.authority.name, release.artifactIdentities.get(manifest.authority.name)] as const,
+  ];
+  if (identities.some(([, identity]) => identity === undefined)) {
+    throw unavailable("release_changed_during_verification");
+  }
+  return JSON.stringify([
+    release.realRoot,
+    release.manifestIdentity,
+    manifest.releaseId,
+    artifact.role,
+    artifact.name,
+    artifact.size,
+    artifact.sha256,
+    identities,
+  ]);
+}
+
+async function buildArtifactSnapshot(
+  store: ReleaseStore,
+  manifest: PinReleaseManifest,
+  artifact: PinReleaseArtifact,
+  approvalKey: string,
+  reservationBytes: number,
+): Promise<ArtifactSnapshotBacking> {
+  let source: VerifiedArtifact | undefined;
+  let snapshot: FileHandle | undefined;
+  let reservationOwned = true;
+  try {
+    source = await openVerifiedArtifact(store, manifest, artifact);
+    const sourceBefore = await source.handle.stat();
+    if (
+      sourceBefore.size !== artifact.size ||
+      fileIdentity(sourceBefore) !== source.identity
+    ) throw unavailable("snapshot_source_changed");
+
+    snapshot = await createAnonymousSnapshotHandle();
+    const digest = createHash("sha256");
+    const chunk = Buffer.allocUnsafe(Math.min(SNAPSHOT_CHUNK_BYTES, artifact.size));
+    let position = 0;
+    while (position < artifact.size) {
+      const length = Math.min(chunk.length, artifact.size - position);
+      const { bytesRead } = await source.handle.read(chunk, 0, length, position);
+      if (bytesRead !== length) throw unavailable("snapshot_size_mismatch");
+      digest.update(chunk.subarray(0, bytesRead));
+      await writeSnapshotChunk(snapshot, chunk, bytesRead, position);
+      snapshotCopiedBytes += bytesRead;
+      position += bytesRead;
+    }
+    const extra = Buffer.allocUnsafe(1);
+    if ((await source.handle.read(extra, 0, 1, artifact.size)).bytesRead !== 0) {
+      throw unavailable("snapshot_size_mismatch");
+    }
+    if (digest.digest("hex") !== artifact.sha256) {
+      throw unavailable("snapshot_sha256_mismatch");
+    }
+
+    const sourceAfter = await source.handle.stat();
+    if (fileIdentity(sourceAfter) !== fileIdentity(sourceBefore)) {
+      throw unavailable("snapshot_source_changed");
+    }
+    const snapshotStat = await snapshot.stat();
+    if (
+      !snapshotStat.isFile() || snapshotStat.nlink !== 0 ||
+      snapshotStat.size !== artifact.size || (snapshotStat.mode & 0o777) !== 0o600
+    ) throw unavailable("snapshot_size_mismatch");
+
+    await source.handle.close();
+    source = undefined;
+    const backing: ArtifactSnapshotBacking = {
+      approvalKey,
+      handle: snapshot,
+      size: artifact.size,
+      reservationBytes,
+      references: 0,
+      closing: false,
+      closed: false,
+      closePromise: null,
+    };
+    snapshot = undefined;
+    reservationOwned = false;
+    createdSnapshots += 1;
+    return backing;
+  } catch (error) {
+    throw error instanceof PinReleaseServingError ? error : unavailable("snapshot_copy_failed");
+  } finally {
+    buildingSnapshots -= 1;
+    await source?.handle.close().catch(() => undefined);
+    await snapshot?.close().catch(() => undefined);
+    if (reservationOwned) releaseArtifactSnapshotReservation(reservationBytes);
+  }
+}
+
+async function acquireArtifactSnapshot(
+  store: ReleaseStore,
+  release: VerifiedRelease,
+  artifact: PinReleaseArtifact,
+): Promise<ArtifactSnapshotLease> {
+  const manifest = release.loaded.manifest;
+  const key = artifactSnapshotApprovalKey(release, artifact);
+  const completed = completedArtifactSnapshots.get(key);
+  if (completed !== undefined) {
+    if (!completed.closing && !completed.closed && completed.references > 0) {
+      return retainSnapshot(completed);
+    }
+    if (completedArtifactSnapshots.get(key) === completed) {
+      completedArtifactSnapshots.delete(key);
+    }
+    if (completed.references === 0) await closeSnapshotBacking(completed).catch(() => undefined);
+  }
+
+  const active = artifactSnapshotFlight;
+  if (active !== null) {
+    if (active.key !== key) {
+      rejectedSnapshots += 1;
+      throw unavailable("snapshot_capacity_exhausted");
+    }
+    return retainSnapshot(await active.promise);
+  }
+
+  const reservationBytes = reserveArtifactSnapshot(artifact.size);
+  const promise = (async () => {
+    const backing = await buildArtifactSnapshot(store, manifest, artifact, key, reservationBytes);
+    const prior = completedArtifactSnapshots.get(key);
+    if (prior !== undefined && prior !== backing) {
+      await closeSnapshotBacking(backing).catch(() => undefined);
+      throw unavailable("snapshot_capacity_exhausted");
+    }
+    completedArtifactSnapshots.set(key, backing);
+    return backing;
+  })();
+  artifactSnapshotFlight = Object.freeze({ key, promise });
+  try {
+    const backing = await promise;
+    try {
+      return retainSnapshot(backing);
+    } catch (error) {
+      // A lease can fill while this descriptor is being constructed. If no
+      // waiter retained the completed backing, close it here rather than leave
+      // an unreferenced discoverable anonymous file charged to the quota.
+      if (backing.references === 0) await closeSnapshotBacking(backing).catch(() => undefined);
+      throw error;
+    }
+  } finally {
+    if (artifactSnapshotFlight?.promise === promise) artifactSnapshotFlight = null;
+  }
+}
+
+function requestedArtifactRange(request: Request, size: number): ArtifactByteRange {
+  const value = request.headers.get("range");
+  if (value === null) return { start: 0, end: size - 1, partial: false };
+  if (value.length > 128 || value.includes(",")) throw unavailable("artifact_range_invalid");
+  const match = /^bytes=([0-9]*)-([0-9]*)$/u.exec(value);
+  if (!match || (match[1] === "" && match[2] === "")) {
+    throw unavailable("artifact_range_invalid");
+  }
+
+  if (match[1] === "") {
+    const suffix = Number(match[2]);
+    if (!Number.isSafeInteger(suffix) || suffix <= 0) throw unavailable("artifact_range_invalid");
+    return { start: Math.max(0, size - suffix), end: size - 1, partial: true };
+  }
+
+  const start = Number(match[1]);
+  const requestedEnd = match[2] === "" ? size - 1 : Number(match[2]);
+  if (
+    !Number.isSafeInteger(start) || !Number.isSafeInteger(requestedEnd) ||
+    start < 0 || requestedEnd < start || start >= size
+  ) throw unavailable("artifact_range_invalid");
+  return { start, end: Math.min(requestedEnd, size - 1), partial: true };
+}
+
+function snapshotResponseBody(
+  lease: ArtifactSnapshotLease,
+  range: ArtifactByteRange,
+  signal: AbortSignal,
+): ReadableStream<Uint8Array> {
+  let position = range.start;
+  let finished = false;
+  let streamController: ReadableStreamDefaultController<Uint8Array> | null = null;
+  let idleTimer: ReturnType<typeof setTimeout> | null = null;
+  let lifetimeTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const armTimer = (callback: () => void, milliseconds: number): ReturnType<typeof setTimeout> => {
+    const timer = setTimeout(callback, milliseconds);
+    if (typeof timer === "object" && timer !== null && "unref" in timer) {
+      (timer as { unref(): void }).unref();
+    }
+    return timer;
+  };
+
+  const finish = (streamError?: Error): void => {
+    if (finished) return;
+    finished = true;
+    if (idleTimer !== null) clearTimeout(idleTimer);
+    if (lifetimeTimer !== null) clearTimeout(lifetimeTimer);
+    signal.removeEventListener("abort", abort);
+    if (streamError !== undefined) streamController?.error(streamError);
+    void releaseSnapshot(lease).catch(() => undefined);
+  };
+  const abort = (): void => {
+    finish(new Error("Pin release response aborted."));
+  };
+  const expire = (): void => {
+    if (finished) return;
+    expiredSnapshotLeases += 1;
+    finish(new Error("Pin release snapshot lease expired."));
+  };
+  const renewIdleDeadline = (): void => {
+    if (idleTimer !== null) clearTimeout(idleTimer);
+    idleTimer = armTimer(expire, PIN_RELEASE_SNAPSHOT_IDLE_TIMEOUT_MS);
+  };
+
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      streamController = controller;
+      if (signal.aborted) abort();
+      else {
+        signal.addEventListener("abort", abort, { once: true });
+        renewIdleDeadline();
+        lifetimeTimer = armTimer(expire, PIN_RELEASE_SNAPSHOT_MAX_LIFETIME_MS);
+      }
+    },
+    async pull(controller) {
+      if (finished) return;
+      const length = Math.min(SNAPSHOT_CHUNK_BYTES, range.end - position + 1);
+      if (length <= 0) {
+        controller.close();
+        finish();
+        return;
+      }
+      try {
+        const buffer = Buffer.allocUnsafe(length);
+        const { bytesRead } = await lease.backing.handle.read(buffer, 0, length, position);
+        if (bytesRead !== length) throw new Error("snapshot short read");
+        if (finished) return;
+        position += bytesRead;
+        controller.enqueue(buffer);
+        renewIdleDeadline();
+        if (position > range.end) {
+          controller.close();
+          finish();
+        }
+      } catch {
+        if (!finished) controller.error(new Error("Pin release artifact stream failed."));
+        finish();
+      }
+    },
+    cancel() {
+      finish();
+    },
+  });
+}
+
+function canonicalEvidenceValue(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalEvidenceValue).join(",")}]`;
+  const recordValue = value as Record<string, unknown>;
+  return `{${Object.keys(recordValue).sort().map((key) =>
+    `${JSON.stringify(key)}:${canonicalEvidenceValue(recordValue[key])}`).join(",")}}`;
+}
+
+function parseCanonicalEvidenceJson(bytes: Buffer, reason: PinReleaseFailureReason): Record<string, unknown> {
+  let value: unknown;
+  try {
+    value = JSON.parse(bytes.toString("utf8"));
+  } catch {
+    throw unavailable(reason);
+  }
+  if (!isRecord(value) || bytes.toString("utf8") !== `${canonicalEvidenceValue(value)}\n`) {
+    throw unavailable(reason);
+  }
+  return value;
+}
+
+function decodeEvidencePayload(value: unknown): Buffer {
+  if (
+    typeof value !== "string" || value.length === 0 || value.length > 96 * 1024 * 1024 ||
+    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(value)
+  ) throw unavailable("authority_invalid");
+  const bytes = Buffer.from(value, "base64");
+  if (bytes.length === 0 || bytes.toString("base64") !== value) throw unavailable("authority_invalid");
+  return bytes;
+}
+
+function digestBytes(value: Buffer | string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function parseHostedAuthorityEvidence(bytes: Buffer, manifest: PinReleaseManifest): void {
+  const evidence = parseCanonicalEvidenceJson(bytes, "authority_invalid");
+  exactFields(evidence, EVIDENCE_FIELDS, "authority_invalid");
+  if (
+    evidence.schema !== "revival.pin-hosted-release-evidence" || evidence.version !== 1 ||
+    evidence.provider !== "github-actions-sigstore" || evidence.runnerEnvironment !== "github-hosted" ||
+    evidence.runnerLabel !== "ubuntu-24.04" || evidence.runnerArchitecture !== "x64" ||
+    evidence.repository !== "TheAndersMadsen/ai-pin-revival" || evidence.sourceRef !== "refs/heads/main" ||
+    typeof evidence.runnerInvocationUri !== "string" ||
+    !/^https:\/\/github\.com\/TheAndersMadsen\/ai-pin-revival\/actions\/runs\/[1-9][0-9]*\/attempts\/[1-9][0-9]*$/u.test(evidence.runnerInvocationUri)
+  ) throw unavailable("authority_invalid");
+  const authorityRecord = manifest.authority as unknown as Record<string, unknown>;
+  for (const field of AUTHORITY_FIELDS.slice(4)) {
+    if (authorityRecord[field] !== evidence[field]) throw unavailable("authority_invalid");
+  }
+  for (const field of [
+    "policySha256", "requestSha256", "predicateSha256", "trustedRootSha256",
+    "preSignBundleSha256", "releaseBundleSha256", "preSignVerificationSha256",
+    "releaseVerificationSha256", "sourceGenerationSha256", "sourceTarSha256", "toolchainSha256",
+  ]) {
+    if (typeof evidence[field] !== "string" || !SHA256_RE.test(evidence[field] as string)) {
+      throw unavailable("authority_invalid");
+    }
+  }
+  if (
+    typeof evidence.sourceDigest !== "string" || !/^[0-9a-f]{40}$/u.test(evidence.sourceDigest) ||
+    typeof evidence.builderImageId !== "string" || !/^sha256:[0-9a-f]{64}$/u.test(evidence.builderImageId)
+  ) throw unavailable("authority_invalid");
+  if (!Array.isArray(evidence.artifacts) || evidence.artifacts.length !== PIN_RELEASE_ROLES.length) {
+    throw unavailable("authority_invalid");
+  }
+  for (const [index, role] of PIN_RELEASE_ROLES.entries()) {
+    const attested = evidence.artifacts[index];
+    const artifact = manifest.artifacts[index];
+    if (
+      !isRecord(attested) || Object.keys(attested).sort().join(",") !== "name,role,sha256,size" ||
+      attested.role !== role || attested.name !== artifact.name ||
+      attested.sha256 !== artifact.sha256 || attested.size !== artifact.size
+    ) throw unavailable("authority_invalid");
+  }
+  const encodedPayloads = evidence.payloads;
+  if (!isRecord(encodedPayloads)) throw unavailable("authority_invalid");
+  exactFields(encodedPayloads, EVIDENCE_PAYLOAD_FIELDS, "authority_invalid");
+  const payloads = Object.fromEntries(EVIDENCE_PAYLOAD_FIELDS.map((field) => [
+    field,
+    decodeEvidencePayload(encodedPayloads[field]),
+  ])) as Record<string, Buffer>;
+  const digestBindings: ReadonlyArray<readonly [string, string]> = [
+    ["policySha256", "policyBase64"],
+    ["requestSha256", "requestBase64"],
+    ["predicateSha256", "predicateBase64"],
+    ["trustedRootSha256", "trustedRootBase64"],
+    ["preSignBundleSha256", "preSignBundleBase64"],
+    ["releaseBundleSha256", "releaseBundleBase64"],
+    ["preSignVerificationSha256", "preSignVerificationBase64"],
+    ["releaseVerificationSha256", "releaseVerificationBase64"],
+  ];
+  for (const [digestField, payloadField] of digestBindings) {
+    if (evidence[digestField] !== digestBytes(payloads[payloadField])) throw unavailable("authority_invalid");
+  }
+  const request = parseCanonicalEvidenceJson(payloads.requestBase64, "authority_invalid");
+  if (
+    request.schema !== "revival.pin-hosted-release-request" || request.version !== 1 ||
+    request.repository !== evidence.repository || request.sourceRef !== evidence.sourceRef ||
+    request.sourceDigest !== evidence.sourceDigest || request.sourceGenerationSha256 !== evidence.sourceGenerationSha256 ||
+    request.sourceTarSha256 !== evidence.sourceTarSha256 || request.toolchainSha256 !== evidence.toolchainSha256 ||
+    request.builderImageId !== evidence.builderImageId || request.versionName !== manifest.version ||
+    request.versionCode !== manifest.artifacts[0].versionCode ||
+    !Array.isArray(request.roles) || request.roles.join(",") !== PIN_RELEASE_ROLES.join(",")
+  ) throw unavailable("authority_invalid");
+  const predicate = parseCanonicalEvidenceJson(payloads.predicateBase64, "authority_invalid");
+  if (
+    predicate.schema !== "revival.pin-hosted-five-apk" || predicate.version !== 1 ||
+    predicate.requestSha256 !== evidence.requestSha256 ||
+    predicate.preSignBundleSha256 !== evidence.preSignBundleSha256 ||
+    predicate.runnerInvocationUri !== evidence.runnerInvocationUri ||
+    canonicalEvidenceValue(predicate.artifacts) !== canonicalEvidenceValue(evidence.artifacts)
+  ) throw unavailable("authority_invalid");
+  parseCanonicalEvidenceJson(payloads.preSignVerificationBase64, "authority_invalid");
+  parseCanonicalEvidenceJson(payloads.releaseVerificationBase64, "authority_invalid");
+}
+
+async function verifyAuthoritySidecar(store: ReleaseStore, manifest: PinReleaseManifest): Promise<string> {
+  const authority = manifest.authority;
+  const opened = await openRegularFile(
+    store,
+    ["releases", manifest.releaseId, authority.name],
+    "unavailable",
+  );
+  try {
+    if (opened.stat.size !== authority.size) throw unavailable("authority_size_mismatch");
+    const bytes = Buffer.allocUnsafe(authority.size);
+    let position = 0;
+    while (position < bytes.length) {
+      const { bytesRead } = await opened.handle.read(bytes, position, bytes.length - position, position);
+      if (bytesRead === 0) throw unavailable("authority_size_mismatch");
+      position += bytesRead;
+    }
+    if (digestBytes(bytes) !== authority.sha256) throw unavailable("authority_sha256_mismatch");
+    parseHostedAuthorityEvidence(bytes, manifest);
+    const after = await opened.handle.stat();
+    if (
+      after.size !== opened.stat.size || after.dev !== opened.stat.dev || after.ino !== opened.stat.ino ||
+      after.mtimeMs !== opened.stat.mtimeMs || after.ctimeMs !== opened.stat.ctimeMs
+    ) throw unavailable("authority_changed_during_read");
+    return fileIdentity(opened.stat);
+  } finally {
+    await opened.handle.close().catch(() => undefined);
+  }
+}
+
 /** Verify every artifact and record the identities that verdict covers. */
 async function verifyArtifacts(
   store: ReleaseStore,
@@ -805,6 +1587,7 @@ async function verifyArtifacts(
     identities.set(artifact.name, verified.identity);
     await verified.handle.close().catch(() => undefined);
   }
+  identities.set(manifest.authority.name, await verifyAuthoritySidecar(store, manifest));
   return identities;
 }
 
@@ -864,26 +1647,81 @@ async function loadCurrentManifest(store: ReleaseStore): Promise<LoadedManifest>
   return current;
 }
 
-/**
- * A client only learns an artifact URL from the current manifest, so by the time
- * this runs the cache is normally already primed and the download costs one
- * stream instead of a stream plus a full re-hash. A cold artifact request still
- * verifies everything from scratch.
- */
-async function loadImmutableManifest(
+async function verifyImmutableRelease(
   store: ReleaseStore,
   releaseId: string,
-): Promise<LoadedManifest> {
-  const cached = cachedReleaseFor(store, releaseId);
-  if (cached && (await releaseUnchanged(store, cached, false).catch(() => false))) {
-    return cached.loaded;
-  }
-  return loadManifest(
+): Promise<VerifiedRelease> {
+  // Capture the immutable manifest identity before reading its bytes. The
+  // post-verification identity sweep below therefore rejects a rewrite at any
+  // point during the full manifest/evidence/artifact verification.
+  const manifestIdentity = await pathIdentity(
+    store,
+    ["releases", releaseId, PIN_RELEASE_IMMUTABLE_MANIFEST],
+    "not-found",
+  );
+  const loaded = await loadManifest(
     store,
     ["releases", releaseId, PIN_RELEASE_IMMUTABLE_MANIFEST],
     "not-found",
     releaseId,
   );
+  const artifactIdentities = await verifyArtifacts(store, loaded.manifest);
+  const candidate: VerifiedRelease = Object.freeze({
+    realRoot: store.realRoot,
+    loaded,
+    currentIdentity: null,
+    manifestIdentity,
+    artifactIdentities,
+  });
+
+  // Do not publish a verdict assembled across two filesystem generations. This
+  // second complete identity pass also covers evidence and all five APK names,
+  // not just the artifact the caller asked to download.
+  if (!(await releaseUnchanged(store, candidate, false).catch(() => false))) {
+    throw unavailable("release_changed_during_verification");
+  }
+
+  releaseVerifications += 1;
+  verifiedRelease = candidate;
+  logInfo(
+    `pin release verified: ${loaded.manifest.releaseId} (${loaded.manifest.version}), ${artifactIdentities.size} artifacts`,
+  );
+  return candidate;
+}
+
+/**
+ * Resolve an immutable artifact URL to a complete end-to-end release verdict.
+ *
+ * A browser normally learns this URL from `/current`, but immutable URLs are
+ * public and can be requested directly after a process restart. Consequently a
+ * cold GET or HEAD must not treat a canonical manifest plus one matching APK as
+ * authority: all five APKs and the hosted evidence sidecar are established
+ * before this returns. Concurrent cold requests share that complete verdict.
+ */
+async function loadImmutableRelease(
+  store: ReleaseStore,
+  releaseId: string,
+): Promise<VerifiedRelease> {
+  const cached = cachedReleaseFor(store, releaseId);
+  if (cached && (await releaseUnchanged(store, cached, false).catch(() => false))) {
+    return cached;
+  }
+
+  const key = `${store.realRoot}\0${releaseId}`;
+  const active = releaseVerificationFlight;
+  if (active) {
+    if (active.key === key) return active.promise;
+    await active.promise.catch(() => undefined);
+    return loadImmutableRelease(store, releaseId);
+  }
+
+  const promise = verifyImmutableRelease(store, releaseId);
+  releaseVerificationFlight = Object.freeze({ key, promise });
+  try {
+    return await promise;
+  } finally {
+    if (releaseVerificationFlight?.promise === promise) releaseVerificationFlight = null;
+  }
 }
 
 /**
@@ -1073,30 +1911,43 @@ export async function servePinReleaseArtifact(
     if (!RELEASE_ID_RE.test(releaseId) || role === null) throw notFound("artifact_route_unknown");
 
     const store = await getReleaseStore(environment);
-    const loaded = await loadImmutableManifest(store, releaseId);
-    const artifact = loaded.manifest.artifacts.find((candidate) => candidate.role === role);
+    const release = await loadImmutableRelease(store, releaseId);
+    const artifact = release.loaded.manifest.artifacts.find((candidate) => candidate.role === role);
     if (!artifact) throw unavailable("artifact_absent_from_manifest");
-    const verified = await openVerifiedArtifact(store, loaded.manifest, artifact);
-
-    const headers = hardenedHeaders(cors);
-    headers.set("content-type", "application/vnd.android.package-archive");
-    headers.set("content-length", String(artifact.size));
-    if (head) {
-      await verified.handle.close().catch(() => undefined);
-      return new Response(null, { status: 200, headers });
-    }
+    const range = requestedArtifactRange(request, artifact.size);
+    const snapshot = await acquireArtifactSnapshot(store, release, artifact);
+    let snapshotOwned = true;
 
     try {
-      const nodeStream = verified.handle.createReadStream({
-        start: 0,
-        end: artifact.size - 1,
-        autoClose: true,
-      });
-      const body = Readable.toWeb(nodeStream) as unknown as ReadableStream<Uint8Array>;
-      return new Response(body, { status: 200, headers });
-    } catch {
-      await verified.handle.close().catch(() => undefined);
-      throw unavailable("artifact_stream_failed");
+      // Snapshot construction re-hashes the held source descriptor into an
+      // unlinked private descriptor and rechecks that source's identity. Check
+      // the complete release once more after the copy so no sidecar, manifest,
+      // or other-role replacement can authorize a response from stale state.
+      if (!(await releaseUnchanged(store, release, false).catch(() => false))) {
+        throw unavailable("release_changed_during_verification");
+      }
+      if (request.signal.aborted) throw unavailable("artifact_stream_failed");
+
+      const headers = hardenedHeaders(cors);
+      headers.set("content-type", "application/vnd.android.package-archive");
+      headers.set("accept-ranges", "bytes");
+      headers.set("content-length", String(range.end - range.start + 1));
+      const status = range.partial ? 206 : 200;
+      if (range.partial) {
+        headers.set("content-range", `bytes ${range.start}-${range.end}/${artifact.size}`);
+      }
+      if (head) {
+        await releaseSnapshot(snapshot);
+        snapshotOwned = false;
+        return new Response(null, { status, headers });
+      }
+
+      const body = snapshotResponseBody(snapshot, range, request.signal);
+      const response = new Response(body, { status, headers });
+      snapshotOwned = false;
+      return response;
+    } finally {
+      if (snapshotOwned) await releaseSnapshot(snapshot).catch(() => undefined);
     }
   } catch (error) {
     return errorResponse(error, head, cors, `pin release artifact ${assetName}`);

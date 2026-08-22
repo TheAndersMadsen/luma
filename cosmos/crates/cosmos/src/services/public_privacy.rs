@@ -81,16 +81,21 @@
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use cosmos_crypto::{AES_KEY_LEN, CryptoError, WrappingKeypair};
+use cosmos_crypto::{AES_KEY_LEN, CryptoError};
 use prost::Message;
 
-use crate::keymaterial::SharedKeyMaterial;
+use crate::keymaterial::{SharedKeyMaterial, WrappingKeyMaterial};
 use crate::store::{AccountBlobKind, MemoryStore, SharedStore};
 use cosmos_protocol::krypton::grpc::key as keypb;
 use cosmos_protocol::privacy::grpc::common as commonpb;
+
+const MAX_KEY_RPC_BATCH: usize = 256;
 use cosmos_protocol::privacy::grpc::r#pub as pb;
 use pb::public_privacy_service_server::PublicPrivacyService;
 use tonic::{Request, Response, Status};
+
+type ImportedChannelKey = (String, [u8; AES_KEY_LEN]);
+type ImportOutcome = (commonpb::KeyState, Option<ImportedChannelKey>);
 
 /// Settings returned to a wearer who has not changed any privacy preference.
 ///
@@ -199,16 +204,20 @@ impl ReestablishQueue {
         SHARED.get_or_init(ReestablishQueue::default).clone()
     }
 
-    /// Record a kid this server cannot open. Empty kids are ignored — an envelope
-    /// with no `encryption_information` names nothing to repair.
+    /// Record a kid this server cannot open. Invalid kids are ignored: an
+    /// envelope cannot turn the process-wide repair queue into an unbounded or
+    /// ambiguous authority merely by naming attacker-controlled bytes.
     pub fn note_unknown(&self, kid: &str) {
-        if kid.is_empty() {
+        if !crate::keydirectory::valid_directory_kid(kid) {
+            tracing::warn!("ignoring an invalid channel-key id in the repair queue");
             return;
         }
-        self.0
-            .lock()
-            .expect("reestablish queue poisoned")
-            .insert(kid.to_owned());
+        let mut queue = self.0.lock().expect("reestablish queue poisoned");
+        if !queue.contains(kid) && queue.len() >= crate::keydirectory::MAX_DIRECTORY_KEYS {
+            tracing::warn!("channel-key repair queue reached its safe capacity");
+            return;
+        }
+        queue.insert(kid.to_owned());
     }
 
     /// Drop a kid once the device has actually re-imported it.
@@ -281,7 +290,7 @@ impl ReestablishQueue {
 // Both are fixed below: the principal parser now accepts the collapsed form that
 // is actually produced, and kid attribution understands the Center shape.
 //
-// # Why enforcement is a mode, and why the default is `audit`
+// # Why enforcement is a mode, and why migration starts in explicit `audit`
 //
 // Making the comparison fire is necessary but not sufficient, because on this
 // deployment the WEARER'S OWN keys do not all name the wearer's current user id.
@@ -305,7 +314,7 @@ impl ReestablishQueue {
 // REPORTED — a warn line naming the RPC plus a `cosmos_kid_scope_foreign_total`
 // counter — and `COSMOS_KID_SCOPE` decides whether it also refuses:
 //
-//   * `audit` (default) — permit and report. The control is live and observable;
+//   * `audit` — permit and report. The control is live and observable;
 //     an operator can see whether enforcing would break anything BEFORE it does.
 //   * `enforce` — refuse. Correct the moment the retired identity is reconciled
 //     (or on any deployment that never had one), which is the state a second
@@ -318,8 +327,8 @@ impl ReestablishQueue {
 /// How this deployment treats a key operation naming another wearer's kid.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum KidScope {
-    /// Report the foreign kid and permit the operation. The default; see the
-    /// section comment for the retired-identity evidence behind it.
+    /// Report the foreign kid and permit the operation. See the section comment
+    /// for the retired-identity evidence behind this explicit migration mode.
     Audit,
     /// Report the foreign kid and refuse the operation.
     Enforce,
@@ -337,46 +346,49 @@ impl KidScope {
 /// Environment variable selecting the [`KidScope`].
 const KID_SCOPE_ENV: &str = "COSMOS_KID_SCOPE";
 
-/// The configured scope mode, resolved once and announced when it is resolved.
+/// A scope value that passed the exact startup contract.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ConfiguredKidScope(KidScope);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[error("COSMOS_KID_SCOPE must be set to exactly `audit` or `enforce`")]
+pub struct KidScopeConfigurationError;
+
+fn parse_kid_scope(raw: Option<&str>) -> Result<KidScope, KidScopeConfigurationError> {
+    match raw {
+        Some("audit") => Ok(KidScope::Audit),
+        Some("enforce") => Ok(KidScope::Enforce),
+        _ => Err(KidScopeConfigurationError),
+    }
+}
+
+/// Validate and announce the AI-bus scope before any listener or service starts.
 ///
-/// Resolution happens while the AI-bus workload constructs `PublicPrivacy`
-/// (`lib.rs`), i.e. during startup, so the announcement lands in the boot log
-/// ahead of any key RPC. An unrecognised value is `audit` — the safe direction —
-/// but it says so rather than being taken as `enforce` by accident.
-fn configured_kid_scope() -> KidScope {
-    static SCOPE: OnceLock<KidScope> = OnceLock::new();
-    *SCOPE.get_or_init(|| {
-        let raw = std::env::var(KID_SCOPE_ENV).unwrap_or_default();
-        let scope = match raw.trim().to_ascii_lowercase().as_str() {
-            "enforce" => KidScope::Enforce,
-            "" | "audit" => KidScope::Audit,
-            _ => {
-                tracing::warn!(
-                    variable = KID_SCOPE_ENV,
-                    "unrecognised kid-scope mode; falling back to audit"
-                );
-                KidScope::Audit
-            }
-        };
-        match scope {
-            KidScope::Enforce => tracing::info!(
-                variable = KID_SCOPE_ENV,
-                mode = scope.label(),
-                "kid scoping enforces: a key operation naming another wearer is refused"
-            ),
-            // Deliberately `warn`: a protection that is not refusing anything has
-            // to be visible from the log, not from the source.
-            KidScope::Audit => tracing::warn!(
-                variable = KID_SCOPE_ENV,
-                mode = scope.label(),
-                "kid scoping is REPORTING ONLY: a key operation naming another \
-                 wearer is logged and permitted. Set COSMOS_KID_SCOPE=enforce to \
-                 refuse it — see the Principal scoping notes in public_privacy.rs \
-                 for the retired-identity reconciliation this deployment needs first"
-            ),
-        }
-        scope
-    })
+/// There is deliberately no default and no case/whitespace normalization: an
+/// unset or mistyped protection mode is an operator error, never permission to
+/// weaken enforcement silently.
+pub(crate) fn configured_kid_scope(
+    raw: Option<&str>,
+) -> Result<ConfiguredKidScope, KidScopeConfigurationError> {
+    let scope = parse_kid_scope(raw)?;
+    match scope {
+        KidScope::Enforce => tracing::info!(
+            variable = KID_SCOPE_ENV,
+            mode = scope.label(),
+            "kid scoping enforces: a key operation naming another wearer is refused"
+        ),
+        // Deliberately `warn`: a protection that is not refusing anything has
+        // to be visible from the log, not from the source.
+        KidScope::Audit => tracing::warn!(
+            variable = KID_SCOPE_ENV,
+            mode = scope.label(),
+            "kid scoping is REPORTING ONLY: a key operation naming another \
+             wearer is logged and permitted. Set COSMOS_KID_SCOPE=enforce to \
+             refuse it — see the Principal scoping notes in public_privacy.rs \
+             for the retired-identity reconciliation this deployment needs first"
+        ),
+    }
+    Ok(ConfiguredKidScope(scope))
 }
 
 /// The user id carried by an authenticated principal, in either shape the edge
@@ -529,6 +541,19 @@ fn kid_permitted(scope: KidScope, rpc: &'static str, caller: Option<&str>, kid: 
     kid_is_actionable(caller, kid) || !report_foreign_kid(scope, rpc)
 }
 
+#[allow(clippy::result_large_err)]
+fn validated_kid_bytes(kid: &[u8]) -> Result<&str, Status> {
+    let kid = std::str::from_utf8(kid).map_err(|_| {
+        Status::invalid_argument("channel-key id must be valid UTF-8 without replacement")
+    })?;
+    if !crate::keydirectory::valid_directory_kid(kid) {
+        return Err(Status::invalid_argument(
+            "channel-key id must be nonempty, at most 1024 bytes, and control-free",
+        ));
+    }
+    Ok(kid)
+}
+
 /// Refuse a batch that names a kid belonging to another wearer.
 ///
 /// Whole-RPC rather than per-kid, because the per-kid `KeyState` rows are an
@@ -545,10 +570,22 @@ fn refuse_foreign_kids<'a>(
     caller: Option<&str>,
     kids: impl IntoIterator<Item = &'a [u8]>,
 ) -> Result<(), Status> {
+    let kids: Vec<&[u8]> = kids.into_iter().take(MAX_KEY_RPC_BATCH + 1).collect();
+    if kids.len() > MAX_KEY_RPC_BATCH {
+        return Err(Status::resource_exhausted(
+            "key lifecycle request exceeds the bounded batch size",
+        ));
+    }
+    // Validate the whole batch before authorization metrics, key generation,
+    // directory reads, or mutations. In particular, distinct invalid UTF-8
+    // byte strings must never collapse through replacement characters.
+    let kids = kids
+        .into_iter()
+        .map(validated_kid_bytes)
+        .collect::<Result<Vec<_>, _>>()?;
     let mut refuse = false;
     for kid in kids {
-        let kid_text = String::from_utf8_lossy(kid);
-        if !kid_permitted(scope, rpc, caller, &kid_text) {
+        if !kid_permitted(scope, rpc, caller, kid) {
             refuse = true;
         }
     }
@@ -573,9 +610,35 @@ pub fn note_unknown_kid(kid: &str) {
 }
 
 /// The privacy service is the **writer** half of the ephemeral-key lifecycle: it
-/// publishes the server wrapping key and imports the device's channel keys into
-/// the shared [`KeyMaterial`](crate::keymaterial::KeyMaterial) that the AI-bus
-/// `Encrypted*` handlers then read from.
+/// publishes the server wrapping key from `KeyMaterial` and imports device
+/// channel keys into the authoritative `KeyDirectory` read by every workload.
+fn key_material_mutation_status(error: CryptoError) -> Status {
+    match error {
+        CryptoError::SnapshotUnreadable => Status::failed_precondition(
+            "key material snapshot is unreadable; restore it before changing channel keys",
+        ),
+        CryptoError::KeyMaterialPersistence => Status::unavailable(
+            "channel-key mutation was not committed because durable persistence failed; retry",
+        ),
+        _ => Status::internal("channel-key mutation failed"),
+    }
+}
+
+/// A durable-state fault is not an absent channel and not a corrupt envelope.
+/// Every encrypted RPC maps these two variants identically so a repairable I/O
+/// outage is never turned into `KEY_NOT_FOUND` or an authentication verdict.
+pub(crate) fn key_material_availability_status(error: &CryptoError) -> Option<Status> {
+    match error {
+        CryptoError::SnapshotUnreadable => Some(Status::failed_precondition(
+            "key material snapshot is unreadable; restore it before using channel keys",
+        )),
+        CryptoError::KeyMaterialPersistence => Some(Status::unavailable(
+            "channel-key durability could not be confirmed; retry",
+        )),
+        _ => None,
+    }
+}
+
 #[derive(Clone)]
 pub struct PublicPrivacy {
     keys: SharedKeyMaterial,
@@ -584,15 +647,16 @@ pub struct PublicPrivacy {
     /// destructive to the stock client: its all-sync trims every local setting
     /// not named by the server response.
     store: SharedStore,
-    /// Where imported keys are published for other workloads. `None` keeps the
-    /// original process-local behaviour.
+    /// The sole production channel-key authority. `None` exists only for
+    /// focused memory-only tests of the legacy service contract.
     directory: Option<crate::keydirectory::SharedKeyDirectory>,
-    /// Whether a kid naming another wearer is refused or only reported. Resolved
-    /// from the environment at construction — i.e. at workload startup — so the
-    /// mode is announced in the boot log rather than on the first key RPC.
+    /// Whether a kid naming another wearer is refused or only reported. The
+    /// serving path validates the exact environment value before binding and
+    /// passes that value into the service explicitly.
     scope: KidScope,
 }
 
+#[cfg(test)]
 impl Default for PublicPrivacy {
     fn default() -> Self {
         Self {
@@ -600,7 +664,7 @@ impl Default for PublicPrivacy {
             reestablish: ReestablishQueue::shared(),
             store: MemoryStore::shared(),
             directory: None,
-            scope: configured_kid_scope(),
+            scope: KidScope::Audit,
         }
     }
 }
@@ -638,8 +702,7 @@ impl PublicPrivacy {
         })
     }
 
-    /// Share this service's key material with the encrypted AI-bus handlers.
-    /// Publish imported keys to a directory other workloads can read.
+    /// Publish imported keys to the directory every encrypted workload reads.
     pub fn with_key_directory(
         mut self,
         directory: crate::keydirectory::SharedKeyDirectory,
@@ -648,13 +711,27 @@ impl PublicPrivacy {
         self
     }
 
+    pub(crate) fn with_key_material_and_scope(
+        keys: SharedKeyMaterial,
+        scope: ConfiguredKidScope,
+    ) -> Self {
+        Self {
+            keys,
+            reestablish: ReestablishQueue::shared(),
+            store: MemoryStore::shared(),
+            directory: None,
+            scope: scope.0,
+        }
+    }
+
+    #[cfg(test)]
     pub fn with_key_material(keys: SharedKeyMaterial) -> Self {
         Self {
             keys,
             reestablish: ReestablishQueue::shared(),
             store: MemoryStore::shared(),
             directory: None,
-            scope: configured_kid_scope(),
+            scope: KidScope::Audit,
         }
     }
 
@@ -684,11 +761,11 @@ impl PublicPrivacy {
             reestablish,
             store: Arc::new(MemoryStore::default()),
             directory: None,
-            scope: configured_kid_scope(),
+            scope: KidScope::Audit,
         }
     }
 
-    fn wrapping_key(&self) -> Result<Arc<WrappingKeypair>, Status> {
+    fn wrapping_key(&self) -> Result<Arc<WrappingKeyMaterial>, Status> {
         self.keys.wrapping_key().map_err(|err| match err {
             // `SnapshotUnreadable` is not a generation failure: the durable
             // snapshot exists but could not be read, so the keypair the device
@@ -702,6 +779,9 @@ impl PublicPrivacy {
             CryptoError::SnapshotUnreadable => Status::failed_precondition(
                 "key material snapshot is unreadable; refusing to mint a replacement \
                  wrapping key (restore the snapshot to recover)",
+            ),
+            CryptoError::KeyMaterialPersistence => Status::unavailable(
+                "wrapping key was not published because its durable snapshot could not be installed; retry",
             ),
             // Every other variant here really is a keygen/allocation failure on
             // the first-use path.
@@ -722,30 +802,24 @@ impl PublicPrivacy {
     /// here because that write is async and this path is deliberately sync.
     fn import_one(
         &self,
-        kp: Option<&WrappingKeypair>,
+        kp: Option<&WrappingKeyMaterial>,
+        kid: String,
         ik: pb::ImportableKey,
-    ) -> (commonpb::KeyState, Option<(String, [u8; AES_KEY_LEN])>) {
+    ) -> Result<ImportOutcome, CryptoError> {
         use pb::importable_key::Key;
-        let kid = String::from_utf8_lossy(&ik.kid).into_owned();
         let raw = match ik.key {
             // RSA-OAEP-wrapped ephemeral key uploaded by the device.
             Some(Key::WrappedKey(w)) => match kp.map(|kp| kp.unwrap(&w.keydata)) {
                 Some(Ok(k)) => k,
-                Some(Err(_)) | None => return (commonpb::KeyState::KeyInvalid, None),
+                Some(Err(_)) | None => return Ok((commonpb::KeyState::KeyInvalid, None)),
             },
             // Already-clear key material.
             Some(Key::ClearKey(c)) => c.jca_encoded,
-            None => return (commonpb::KeyState::KeyInvalid, None),
+            None => return Ok((commonpb::KeyState::KeyInvalid, None)),
         };
         match <[u8; AES_KEY_LEN]>::try_from(raw.as_slice()) {
-            Ok(key) => {
-                // The repair closed: stop asking the device to drop this kid, or
-                // the next SyncKeys would delete the key it just gave us.
-                self.reestablish.resolved(&kid);
-                self.keys.insert(kid.clone(), key);
-                (commonpb::KeyState::KeyImported, Some((kid, key)))
-            }
-            Err(_) => (commonpb::KeyState::KeyInvalid, None),
+            Ok(key) => Ok((commonpb::KeyState::KeyImported, Some((kid, key)))),
+            Err(_) => Ok((commonpb::KeyState::KeyInvalid, None)),
         }
     }
 }
@@ -775,8 +849,8 @@ impl PublicPrivacyService for PublicPrivacy {
     /// Import the device's ephemeral channel keys.
     ///
     /// **Scoped to the caller** — refused under `COSMOS_KID_SCOPE=enforce`, and
-    /// reported but permitted under the `audit` default (see the Principal
-    /// scoping section for why the default is `audit` on this deployment).
+    /// reported but permitted when the operator explicitly selects `audit` (see
+    /// the Principal scoping section for why migration starts in that mode).
     ///
     /// This RPC overwrites whatever key is stored under a kid, so an unscoped one
     /// lets any enrolled device replace another wearer's channel key — after
@@ -799,18 +873,34 @@ impl PublicPrivacyService for PublicPrivacy {
 
         // Materialized only if the batch actually carries a wrapped key; see
         // `import_one`.
-        let mut kp: Option<Arc<WrappingKeypair>> = None;
+        let mut kp: Option<Arc<WrappingKeyMaterial>> = None;
         let mut results = Vec::new();
         for ik in request.into_inner().keys {
             let kid = ik.kid.clone();
+            let kid_text = validated_kid_bytes(&kid)?.to_owned();
             if kp.is_none() && matches!(ik.key, Some(pb::importable_key::Key::WrappedKey(_))) {
                 kp = Some(self.wrapping_key()?);
             }
-            let (status, imported) = self.import_one(kp.as_deref(), ik);
-            // Publish to the shared directory so workloads that did not serve
-            // this RPC — contacts, above all — can open what the device sealed.
-            if let (Some(directory), Some((kid, key))) = (&self.directory, imported) {
-                directory.put(&kid, key).await;
+            let (mut status, imported) = self
+                .import_one(kp.as_deref(), kid_text, ik)
+                .map_err(key_material_mutation_status)?;
+            if let Some((imported_kid, key)) = imported {
+                // The configured directory is the sole channel-key authority.
+                // There is deliberately no second local write after this UPSERT:
+                // that former DB/local boundary admitted split-brain crashes.
+                if let Some(directory) = &self.directory {
+                    directory
+                        .put(&imported_kid, key)
+                        .await
+                        .map_err(|error| crate::keydirectory::grpc_status(&error))?;
+                } else {
+                    // Explicit memory-only/legacy test topology.
+                    self.keys
+                        .insert(imported_kid.clone(), key)
+                        .map_err(key_material_mutation_status)?;
+                }
+                self.reestablish.resolved(&imported_kid);
+                status = commonpb::KeyState::KeyImported;
             }
             results.push(commonpb::KeyStateResponse {
                 kid,
@@ -932,13 +1022,13 @@ impl PublicPrivacyService for PublicPrivacy {
     /// kid used to come back `KEY_EXISTS` or `KEY_NOT_FOUND`, which is a probe
     /// for whether that wearer's channel is established.
     ///
-    /// It is also why this RPC is the one that decided the default mode. A
+    /// It is also why this RPC is the one that decides the migration mode. A
     /// refusal here is NOT a status the client can recover from — it lands in the
     /// same `EphemeralInternalException` path as the empty-list wedge above — so
     /// misclassifying a kid as foreign costs the wearer their channel with no way
     /// back. See the Principal scoping section: this deployment's own retired
-    /// user id would be misclassified today, so the default reports instead of
-    /// refusing.
+    /// user id would be misclassified today, so the documented migration starts
+    /// in explicit `audit` rather than refusing.
     async fn request_keys(
         &self,
         request: Request<pb::RequestKeysRequest>,
@@ -951,39 +1041,45 @@ impl PublicPrivacyService for PublicPrivacy {
             request.get_ref().kids.iter().map(Vec::as_slice),
         )?;
 
-        let keys = request
-            .into_inner()
-            .kids
-            .into_iter()
-            .map(|kid| {
-                let kid_text = String::from_utf8_lossy(&kid).into_owned();
-                let status = if self.keys.holds(&kid_text) {
-                    // We DO hold this key. Do not claim KEY_NOT_FOUND: that sends
-                    // the device down the create-and-upload path, overwriting a
-                    // key we still have and orphaning anything sealed under it.
-                    //
-                    // We also do not hand the key back. The kid is now scoped to
-                    // the caller, but that scoping rests on the `u=` field, which
-                    // is empty for a channel established before login — so it is
-                    // not strong enough to authorize handing out channel key
-                    // material. Escrow recovery needs an ownership record, not an
-                    // identifier parsed out of the caller's own input; until then
-                    // KEY_EXISTS is the truthful answer that discloses nothing.
-                    commonpb::KeyState::KeyExists
-                } else {
-                    // The repair path: only this answer makes the device rebuild.
-                    commonpb::KeyState::KeyNotFound
-                };
-                pb::ExportableKey {
-                    kid,
-                    status: status as i32,
-                    // No `key` oneof arm in either branch: we never put channel
-                    // key material on the wire from here.
-                    key: None,
-                    ..Default::default()
-                }
-            })
-            .collect();
+        let mut keys = Vec::new();
+        for kid in request.into_inner().kids {
+            let kid_text = validated_kid_bytes(&kid)?;
+            let held = if let Some(directory) = &self.directory {
+                directory
+                    .holds(kid_text)
+                    .await
+                    .map_err(|error| crate::keydirectory::grpc_status(&error))?
+            } else {
+                self.keys
+                    .holds(kid_text)
+                    .map_err(key_material_mutation_status)?
+            };
+            let status = if held {
+                // We DO hold this key. Do not claim KEY_NOT_FOUND: that sends
+                // the device down the create-and-upload path, overwriting a
+                // key we still have and orphaning anything sealed under it.
+                //
+                // We also do not hand the key back. The kid is now scoped to
+                // the caller, but that scoping rests on the `u=` field, which
+                // is empty for a channel established before login — so it is
+                // not strong enough to authorize handing out channel key
+                // material. Escrow recovery needs an ownership record, not an
+                // identifier parsed out of the caller's own input; until then
+                // KEY_EXISTS is the truthful answer that discloses nothing.
+                commonpb::KeyState::KeyExists
+            } else {
+                // The repair path: only this answer makes the device rebuild.
+                commonpb::KeyState::KeyNotFound
+            };
+            keys.push(pb::ExportableKey {
+                kid,
+                status: status as i32,
+                // No `key` oneof arm in either branch: we never put channel
+                // key material on the wire from here.
+                key: None,
+                ..Default::default()
+            });
+        }
         Ok(Response::new(pb::RequestKeysResponse { keys }))
     }
 
@@ -1002,7 +1098,8 @@ impl PublicPrivacyService for PublicPrivacy {
     /// inventing one would be fabricating key material on the wire.
     ///
     /// **Scoped to the caller** under `COSMOS_KID_SCOPE=enforce`; reported and
-    /// still served under the `audit` default. The queue is process-global — one
+    /// still served when the operator selected `audit`. The queue is
+    /// process-global — one
     /// set shared by every workload, because the `Encrypted*` handlers and this
     /// service are built separately — and it used to be handed whole to whoever
     /// asked. A kid carries `u=<userId>` in cleartext
@@ -1022,12 +1119,8 @@ impl PublicPrivacyService for PublicPrivacy {
             .delete_kids()
             .into_iter()
             .filter(|kid| {
-                kid_permitted(
-                    self.scope,
-                    "SyncKeys",
-                    caller.as_deref(),
-                    &String::from_utf8_lossy(kid),
-                )
+                std::str::from_utf8(kid)
+                    .is_ok_and(|kid| kid_permitted(self.scope, "SyncKeys", caller.as_deref(), kid))
             })
             .collect();
         Ok(Response::new(pb::SyncKeysResponse {
@@ -1060,25 +1153,31 @@ impl PublicPrivacyService for PublicPrivacy {
             request.get_ref().kids.iter().map(Vec::as_slice),
         )?;
 
-        let results = request
-            .into_inner()
-            .kids
-            .into_iter()
-            .map(|kid| {
-                let kid_text = String::from_utf8_lossy(&kid).into_owned();
-                // Removing a key we never held is not an error: the device and
-                // the server agree on the end state, which is what it asked for.
-                let status = if self.keys.remove(&kid_text) {
-                    commonpb::KeyState::KeyRemoved
-                } else {
-                    commonpb::KeyState::KeyNotFound
-                };
-                commonpb::KeyStateResponse {
-                    kid,
-                    status: status as i32,
-                }
-            })
-            .collect();
+        let mut results = Vec::new();
+        for kid in request.into_inner().kids {
+            let kid_text = validated_kid_bytes(&kid)?;
+            // One authoritative DELETE. A crash before commit leaves the row;
+            // one after commit is visible everywhere and retry is idempotent.
+            let removed = if let Some(directory) = &self.directory {
+                directory
+                    .remove(kid_text)
+                    .await
+                    .map_err(|error| crate::keydirectory::grpc_status(&error))?
+            } else {
+                self.keys
+                    .remove(kid_text)
+                    .map_err(key_material_mutation_status)?
+            };
+            let status = if removed {
+                commonpb::KeyState::KeyRemoved
+            } else {
+                commonpb::KeyState::KeyNotFound
+            };
+            results.push(commonpb::KeyStateResponse {
+                kid,
+                status: status as i32,
+            });
+        }
         Ok(Response::new(pb::RemoveKeysResponse { results }))
     }
 
@@ -1107,24 +1206,30 @@ impl PublicPrivacyService for PublicPrivacy {
                 .map(|update| update.kid.as_slice()),
         )?;
 
-        let results = request
-            .into_inner()
-            .updates
-            .into_iter()
-            .map(|update| {
-                let kid_text = String::from_utf8_lossy(&update.kid).into_owned();
-                let status = if self.keys.holds(&kid_text) {
-                    // The key exists; we simply keep no attributes to update.
-                    commonpb::KeyState::KeyExists
-                } else {
-                    commonpb::KeyState::KeyNotFound
-                };
-                commonpb::KeyStateResponse {
-                    kid: update.kid,
-                    status: status as i32,
-                }
-            })
-            .collect();
+        let mut results = Vec::new();
+        for update in request.into_inner().updates {
+            let kid_text = validated_kid_bytes(&update.kid)?;
+            let held = if let Some(directory) = &self.directory {
+                directory
+                    .holds(kid_text)
+                    .await
+                    .map_err(|error| crate::keydirectory::grpc_status(&error))?
+            } else {
+                self.keys
+                    .holds(kid_text)
+                    .map_err(key_material_mutation_status)?
+            };
+            let status = if held {
+                // The key exists; we simply keep no attributes to update.
+                commonpb::KeyState::KeyExists
+            } else {
+                commonpb::KeyState::KeyNotFound
+            };
+            results.push(commonpb::KeyStateResponse {
+                kid: update.kid,
+                status: status as i32,
+            });
+        }
         Ok(Response::new(pb::UpdateKeysResponse { results }))
     }
 }
@@ -1132,6 +1237,189 @@ impl PublicPrivacyService for PublicPrivacy {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kid_scope_configuration_accepts_only_exact_explicit_modes() {
+        assert_eq!(parse_kid_scope(Some("audit")), Ok(KidScope::Audit));
+        assert_eq!(parse_kid_scope(Some("enforce")), Ok(KidScope::Enforce));
+        for rejected in [
+            None,
+            Some(""),
+            Some("Audit"),
+            Some(" enforce "),
+            Some("warn"),
+        ] {
+            assert_eq!(parse_kid_scope(rejected), Err(KidScopeConfigurationError));
+        }
+    }
+
+    fn clear_import_request(kid: &str, byte: u8) -> Request<pb::ImportKeysRequest> {
+        Request::new(pb::ImportKeysRequest {
+            keys: vec![pb::ImportableKey {
+                kid: kid.as_bytes().to_vec(),
+                key: Some(pb::importable_key::Key::ClearKey(keypb::ClearKey {
+                    kid: kid.as_bytes().to_vec(),
+                    level: keypb::Level::Unspecified as i32,
+                    algo: keypb::Algo::Unspecified as i32,
+                    ops: Vec::new(),
+                    jca_encoded: vec![byte; AES_KEY_LEN],
+                    jca_algo: "AES".to_owned(),
+                })),
+                attrs: None,
+            }],
+        })
+    }
+
+    fn import_request_bytes(kid: Vec<u8>) -> Request<pb::ImportKeysRequest> {
+        Request::new(pb::ImportKeysRequest {
+            keys: vec![pb::ImportableKey {
+                kid: kid.clone(),
+                key: Some(pb::importable_key::Key::ClearKey(keypb::ClearKey {
+                    kid,
+                    jca_encoded: vec![0x41; AES_KEY_LEN],
+                    jca_algo: "AES".to_owned(),
+                    ..Default::default()
+                })),
+                attrs: None,
+            }],
+        })
+    }
+
+    #[tokio::test]
+    async fn every_key_lifecycle_rpc_rejects_ambiguous_or_unbounded_kids_before_authority_use() {
+        let directory = Arc::new(crate::keydirectory::KeyDirectory::in_memory());
+        let retained_kid = unique_kid("retained-after-invalid");
+        let retained_key = [0x31; AES_KEY_LEN];
+        directory
+            .put(&retained_kid, retained_key)
+            .await
+            .expect("seed authority");
+        let service = PublicPrivacy::with_key_material(Default::default())
+            .with_key_directory(directory.clone());
+        let invalid_kids = [
+            Vec::new(),
+            vec![0xff],
+            vec![0xfe],
+            b"control\x01".to_vec(),
+            "c1\u{85}".as_bytes().to_vec(),
+            vec![b'x'; crate::keydirectory::MAX_DIRECTORY_KID_BYTES + 1],
+        ];
+
+        for kid in invalid_kids {
+            let requested = service
+                .request_keys(Request::new(pb::RequestKeysRequest {
+                    kids: vec![kid.clone()],
+                }))
+                .await
+                .expect_err("invalid RequestKeys kid");
+            assert_eq!(requested.code(), tonic::Code::InvalidArgument);
+
+            let imported = service
+                .import_keys(import_request_bytes(kid.clone()))
+                .await
+                .expect_err("invalid ImportKeys kid");
+            assert_eq!(imported.code(), tonic::Code::InvalidArgument);
+
+            let removed = service
+                .remove_keys(Request::new(pb::RemoveKeysRequest {
+                    kids: vec![kid.clone()],
+                    ..Default::default()
+                }))
+                .await
+                .expect_err("invalid RemoveKeys kid");
+            assert_eq!(removed.code(), tonic::Code::InvalidArgument);
+
+            let updated = service
+                .update_keys(Request::new(pb::UpdateKeysRequest {
+                    updates: vec![pb::ClientKeyUpdate {
+                        kid,
+                        client_attrs: None,
+                    }],
+                }))
+                .await
+                .expect_err("invalid UpdateKeys kid");
+            assert_eq!(updated.code(), tonic::Code::InvalidArgument);
+
+            assert_eq!(
+                directory.get(&retained_kid).await.expect("retained row"),
+                Some(retained_key),
+                "invalid input must leave the authority byte-for-byte equivalent"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn every_key_lifecycle_rpc_rejects_an_oversized_batch_before_authority_use() {
+        let directory = Arc::new(crate::keydirectory::KeyDirectory::in_memory());
+        let retained_kid = unique_kid("retained-after-batch");
+        let retained_key = [0x32; AES_KEY_LEN];
+        directory
+            .put(&retained_kid, retained_key)
+            .await
+            .expect("seed authority");
+        let service = PublicPrivacy::with_key_material(Default::default())
+            .with_key_directory(directory.clone());
+        let kids = (0..=MAX_KEY_RPC_BATCH)
+            .map(|index| format!("bounded-kid-{index}").into_bytes())
+            .collect::<Vec<_>>();
+
+        let requested = service
+            .request_keys(Request::new(pb::RequestKeysRequest { kids: kids.clone() }))
+            .await
+            .expect_err("oversized RequestKeys batch");
+        assert_eq!(requested.code(), tonic::Code::ResourceExhausted);
+        let imported = service
+            .import_keys(Request::new(pb::ImportKeysRequest {
+                keys: kids
+                    .iter()
+                    .cloned()
+                    .map(|kid| import_request_bytes(kid).into_inner().keys.remove(0))
+                    .collect(),
+            }))
+            .await
+            .expect_err("oversized ImportKeys batch");
+        assert_eq!(imported.code(), tonic::Code::ResourceExhausted);
+        let removed = service
+            .remove_keys(Request::new(pb::RemoveKeysRequest {
+                kids: kids.clone(),
+                ..Default::default()
+            }))
+            .await
+            .expect_err("oversized RemoveKeys batch");
+        assert_eq!(removed.code(), tonic::Code::ResourceExhausted);
+        let updated = service
+            .update_keys(Request::new(pb::UpdateKeysRequest {
+                updates: kids
+                    .into_iter()
+                    .map(|kid| pb::ClientKeyUpdate {
+                        kid,
+                        client_attrs: None,
+                    })
+                    .collect(),
+            }))
+            .await
+            .expect_err("oversized UpdateKeys batch");
+        assert_eq!(updated.code(), tonic::Code::ResourceExhausted);
+        assert_eq!(
+            directory.get(&retained_kid).await.expect("retained row"),
+            Some(retained_key)
+        );
+    }
+
+    #[test]
+    fn repair_queue_rejects_invalid_kids_and_stays_cardinality_bounded() {
+        let queue = ReestablishQueue::default();
+        queue.note_unknown("");
+        queue.note_unknown("c1\u{85}");
+        queue.note_unknown(&"x".repeat(crate::keydirectory::MAX_DIRECTORY_KID_BYTES + 1));
+        for index in 0..crate::keydirectory::MAX_DIRECTORY_KEYS {
+            queue.note_unknown(&format!("queued-{index}"));
+        }
+        queue.note_unknown("one-too-many");
+        let queued = queue.delete_kids();
+        assert_eq!(queued.len(), crate::keydirectory::MAX_DIRECTORY_KEYS);
+        assert!(!queued.contains(&b"one-too-many".to_vec()));
+    }
 
     /// The other half of the repair: a key we DO hold must not be reported
     /// missing.
@@ -1145,7 +1433,8 @@ mod tests {
     async fn a_held_kid_is_not_reported_missing() {
         let keys: crate::keymaterial::SharedKeyMaterial = Default::default();
         let kid = unique_kid("held");
-        keys.insert(kid.clone(), [9u8; cosmos_crypto::AES_KEY_LEN]);
+        keys.insert(kid.clone(), [9u8; cosmos_crypto::AES_KEY_LEN])
+            .expect("insert test channel key");
         let svc = PublicPrivacy::with_key_material(keys);
 
         let response = svc
@@ -1182,7 +1471,8 @@ mod tests {
         let keys: crate::keymaterial::SharedKeyMaterial = Default::default();
         let held = unique_kid("remove-held");
         let absent = unique_kid("remove-absent");
-        keys.insert(held.clone(), [4u8; cosmos_crypto::AES_KEY_LEN]);
+        keys.insert(held.clone(), [4u8; cosmos_crypto::AES_KEY_LEN])
+            .expect("insert test channel key");
         let svc = PublicPrivacy::with_key_material(keys.clone());
 
         let response = svc
@@ -1208,9 +1498,438 @@ mod tests {
             commonpb::KeyState::KeyNotFound as i32
         );
         assert!(
-            !keys.holds(&held),
+            !keys.holds(&held).expect("inspect removed key"),
             "the key must actually be gone, or the device and server disagree \
              about the channel forever",
+        );
+    }
+
+    #[tokio::test]
+    async fn import_keys_does_not_acknowledge_or_resolve_a_failed_durable_insert() {
+        use crate::keymaterial::{KeyMaterial, PersistenceFault};
+
+        let snapshot = TestSnapshot::new("rpc-import-write-failure");
+        let keys = Arc::new(KeyMaterial::at_path(snapshot.path()));
+        let queue = ReestablishQueue::default();
+        let kid = unique_kid("durable-import");
+        queue.note_unknown(&kid);
+        let svc = PublicPrivacy::with_parts(keys.clone(), queue.clone());
+        let request = || {
+            Request::new(pb::ImportKeysRequest {
+                keys: vec![pb::ImportableKey {
+                    kid: kid.as_bytes().to_vec(),
+                    key: Some(pb::importable_key::Key::ClearKey(keypb::ClearKey {
+                        kid: kid.as_bytes().to_vec(),
+                        level: keypb::Level::Unspecified as i32,
+                        algo: keypb::Algo::Unspecified as i32,
+                        ops: Vec::new(),
+                        jca_encoded: vec![0x42; AES_KEY_LEN],
+                        jca_algo: "AES".to_owned(),
+                    })),
+                    attrs: None,
+                }],
+            })
+        };
+
+        keys.fail_next_persistence_at(PersistenceFault::Write);
+        let error = svc
+            .import_keys(request())
+            .await
+            .expect_err("a failed snapshot write must fail the RPC");
+        assert_eq!(error.code(), tonic::Code::Unavailable);
+        assert!(!keys.holds(&kid).expect("inspect failed import"));
+        assert!(
+            queue.delete_kids().contains(&kid.as_bytes().to_vec()),
+            "the repair must remain pending until the key is durable"
+        );
+
+        let retried = svc
+            .import_keys(request())
+            .await
+            .expect("the unchanged request is safe to retry")
+            .into_inner();
+        assert_eq!(
+            retried.results[0].status,
+            commonpb::KeyState::KeyImported as i32
+        );
+        assert!(keys.holds(&kid).expect("inspect imported key"));
+        assert!(!queue.delete_kids().contains(&kid.as_bytes().to_vec()));
+        assert!(
+            KeyMaterial::at_path(snapshot.path())
+                .holds(&kid)
+                .expect("inspect restarted import")
+        );
+    }
+
+    #[tokio::test]
+    async fn import_waits_for_authoritative_directory_publication_before_ack_or_repair() {
+        use crate::keydirectory::{DirectoryFault, KeyDirectory};
+
+        let keys: SharedKeyMaterial = Default::default();
+        let queue = ReestablishQueue::default();
+        let kid = unique_kid("directory-import-retry");
+        queue.note_unknown(&kid);
+        let directory = Arc::new(KeyDirectory::in_memory());
+        directory.fail_next(DirectoryFault::Put);
+        let svc = PublicPrivacy::with_parts(keys.clone(), queue.clone())
+            .with_key_directory(directory.clone());
+
+        let error = svc
+            .import_keys(clear_import_request(&kid, 0x33))
+            .await
+            .expect_err("failed directory publication must fail ImportKeys");
+        assert_eq!(error.code(), tonic::Code::Unavailable);
+        assert!(!keys.holds(&kid).expect("inspect local key"));
+        assert!(
+            directory
+                .get(&kid)
+                .await
+                .expect("inspect directory")
+                .is_none()
+        );
+        assert!(
+            queue.delete_kids().contains(&kid.as_bytes().to_vec()),
+            "repair remains pending until every durable publication succeeds"
+        );
+
+        let retry = svc
+            .import_keys(clear_import_request(&kid, 0x33))
+            .await
+            .expect("idempotent retry")
+            .into_inner();
+        assert_eq!(
+            retry.results[0].status,
+            commonpb::KeyState::KeyImported as i32
+        );
+        assert!(
+            !keys.holds(&kid).expect("local key remains absent"),
+            "directory-backed imports must not recreate the retired local authority"
+        );
+        assert_eq!(
+            directory.get(&kid).await.expect("inspect directory"),
+            Some([0x33; AES_KEY_LEN])
+        );
+        assert!(!queue.delete_kids().contains(&kid.as_bytes().to_vec()));
+    }
+
+    #[tokio::test]
+    async fn import_recovers_when_the_authority_committed_but_the_ack_was_lost() {
+        use crate::keydirectory::{DirectoryFault, KeyDirectory};
+
+        let keys: SharedKeyMaterial = Default::default();
+        let queue = ReestablishQueue::default();
+        let kid = unique_kid("directory-import-post-commit");
+        queue.note_unknown(&kid);
+        let directory = Arc::new(KeyDirectory::in_memory());
+        directory.fail_next(DirectoryFault::PutAfterCommit);
+        let svc = PublicPrivacy::with_parts(keys.clone(), queue.clone())
+            .with_key_directory(directory.clone());
+
+        let error = svc
+            .import_keys(clear_import_request(&kid, 0x43))
+            .await
+            .expect_err("a lost commit acknowledgement must not ACK ImportKeys");
+        assert_eq!(error.code(), tonic::Code::Unavailable);
+        assert_eq!(
+            directory.get(&kid).await.expect("authoritative lookup"),
+            Some([0x43; AES_KEY_LEN]),
+            "the authority may have committed even though the caller saw an error"
+        );
+        assert!(queue.delete_kids().contains(&kid.as_bytes().to_vec()));
+
+        let retry = svc
+            .import_keys(clear_import_request(&kid, 0x43))
+            .await
+            .expect("idempotent UPSERT retry")
+            .into_inner();
+        assert_eq!(
+            retry.results[0].status,
+            commonpb::KeyState::KeyImported as i32
+        );
+        assert!(!queue.delete_kids().contains(&kid.as_bytes().to_vec()));
+        assert!(
+            !keys
+                .holds(&kid)
+                .expect("retired local authority stays empty")
+        );
+    }
+
+    #[tokio::test]
+    async fn request_keys_uses_the_authority_and_never_collapses_lookup_failure_to_not_found() {
+        use crate::keydirectory::{DirectoryFault, KeyDirectory};
+
+        let kid = unique_kid("request-authority");
+        let directory = Arc::new(KeyDirectory::in_memory());
+        directory
+            .put(&kid, [0x44; AES_KEY_LEN])
+            .await
+            .expect("seed authority");
+        let local: SharedKeyMaterial = Default::default();
+        let svc =
+            PublicPrivacy::with_key_material(local.clone()).with_key_directory(directory.clone());
+        let request = || {
+            Request::new(pb::RequestKeysRequest {
+                kids: vec![kid.as_bytes().to_vec()],
+            })
+        };
+
+        let held = svc
+            .request_keys(request())
+            .await
+            .expect("authoritative read")
+            .into_inner();
+        assert_eq!(held.keys[0].status, commonpb::KeyState::KeyExists as i32);
+        assert!(!local.holds(&kid).expect("local authority remains empty"));
+
+        directory.fail_next(DirectoryFault::Get);
+        let unavailable = svc
+            .request_keys(request())
+            .await
+            .expect_err("lookup failure is not KEY_NOT_FOUND");
+        assert_eq!(unavailable.code(), tonic::Code::Unavailable);
+    }
+
+    #[tokio::test]
+    async fn remove_waits_for_directory_and_removes_stale_directory_only_rows() {
+        use crate::keydirectory::{DirectoryFault, KeyDirectory};
+
+        let keys: SharedKeyMaterial = Default::default();
+        let kid = unique_kid("directory-remove-retry");
+        let directory = Arc::new(KeyDirectory::in_memory());
+        directory
+            .put(&kid, [0x55; AES_KEY_LEN])
+            .await
+            .expect("seed directory key");
+        directory.fail_next(DirectoryFault::Remove);
+        let svc =
+            PublicPrivacy::with_key_material(keys.clone()).with_key_directory(directory.clone());
+        let request = || {
+            Request::new(pb::RemoveKeysRequest {
+                kids: vec![kid.as_bytes().to_vec()],
+                deleted: true,
+            })
+        };
+
+        let error = svc
+            .remove_keys(request())
+            .await
+            .expect_err("directory failure must fail RemoveKeys");
+        assert_eq!(error.code(), tonic::Code::Unavailable);
+        assert!(
+            directory
+                .get(&kid)
+                .await
+                .expect("inspect directory")
+                .is_some()
+        );
+
+        let retry = svc
+            .remove_keys(request())
+            .await
+            .expect("retry removal")
+            .into_inner();
+        assert_eq!(
+            retry.results[0].status,
+            commonpb::KeyState::KeyRemoved as i32
+        );
+        assert!(!keys.holds(&kid).expect("local authority stays unused"));
+        assert!(
+            directory
+                .get(&kid)
+                .await
+                .expect("inspect directory")
+                .is_none()
+        );
+
+        let stale = unique_kid("stale-directory-only");
+        directory
+            .put(&stale, [0x66; AES_KEY_LEN])
+            .await
+            .expect("seed stale row");
+        let removed = svc
+            .remove_keys(Request::new(pb::RemoveKeysRequest {
+                kids: vec![stale.as_bytes().to_vec()],
+                deleted: true,
+            }))
+            .await
+            .expect("remove stale directory row")
+            .into_inner();
+        assert_eq!(
+            removed.results[0].status,
+            commonpb::KeyState::KeyRemoved as i32
+        );
+        assert!(
+            directory
+                .get(&stale)
+                .await
+                .expect("inspect directory")
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn remove_recovers_when_the_authority_committed_but_the_ack_was_lost() {
+        use crate::keydirectory::{DirectoryFault, KeyDirectory};
+
+        let kid = unique_kid("directory-remove-post-commit");
+        let directory = Arc::new(KeyDirectory::in_memory());
+        directory
+            .put(&kid, [0x65; AES_KEY_LEN])
+            .await
+            .expect("seed authority");
+        directory.fail_next(DirectoryFault::RemoveAfterCommit);
+        let svc = PublicPrivacy::with_key_material(Default::default())
+            .with_key_directory(directory.clone());
+        let request = || {
+            Request::new(pb::RemoveKeysRequest {
+                kids: vec![kid.as_bytes().to_vec()],
+                deleted: true,
+            })
+        };
+
+        let unavailable = svc
+            .remove_keys(request())
+            .await
+            .expect_err("a lost commit acknowledgement must not ACK RemoveKeys");
+        assert_eq!(unavailable.code(), tonic::Code::Unavailable);
+        assert!(
+            directory
+                .get(&kid)
+                .await
+                .expect("authoritative lookup")
+                .is_none()
+        );
+
+        let retry = svc
+            .remove_keys(request())
+            .await
+            .expect("idempotent retry")
+            .into_inner();
+        assert_eq!(
+            retry.results[0].status,
+            commonpb::KeyState::KeyNotFound as i32,
+            "the retry observes the already-committed revocation"
+        );
+    }
+
+    #[tokio::test]
+    async fn remove_keys_does_not_acknowledge_a_failed_snapshot_rename() {
+        use crate::keymaterial::{KeyMaterial, PersistenceFault};
+
+        let snapshot = TestSnapshot::new("rpc-remove-rename-failure");
+        let keys = Arc::new(KeyMaterial::at_path(snapshot.path()));
+        let kid = unique_kid("durable-remove");
+        keys.insert(kid.clone(), [0x24; AES_KEY_LEN])
+            .expect("persist baseline key");
+        let svc = PublicPrivacy::with_key_material(keys.clone());
+        let request = || {
+            Request::new(pb::RemoveKeysRequest {
+                kids: vec![kid.as_bytes().to_vec()],
+                deleted: true,
+            })
+        };
+
+        keys.fail_next_persistence_at(PersistenceFault::Rename);
+        let error = svc
+            .remove_keys(request())
+            .await
+            .expect_err("a failed snapshot rename must fail the RPC");
+        assert_eq!(error.code(), tonic::Code::Unavailable);
+        assert!(keys.holds(&kid).expect("inspect failed removal"));
+        assert!(
+            KeyMaterial::at_path(snapshot.path())
+                .holds(&kid)
+                .expect("inspect restarted failed removal")
+        );
+
+        let retried = svc
+            .remove_keys(request())
+            .await
+            .expect("the unchanged request is safe to retry")
+            .into_inner();
+        assert_eq!(
+            retried.results[0].status,
+            commonpb::KeyState::KeyRemoved as i32
+        );
+        assert!(!keys.holds(&kid).expect("inspect removed key"));
+        assert!(
+            !KeyMaterial::at_path(snapshot.path())
+                .holds(&kid)
+                .expect("inspect restarted removal")
+        );
+    }
+
+    #[tokio::test]
+    async fn request_and_update_keys_fail_precondition_on_an_unreadable_snapshot() {
+        use crate::keymaterial::KeyMaterial;
+
+        let snapshot = TestSnapshot::new("rpc-unreadable-status");
+        snapshot.write_snapshot(b"{ not a key snapshot");
+        let svc = PublicPrivacy::with_key_material(Arc::new(KeyMaterial::at_path(snapshot.path())));
+        let kid = unique_kid("unreadable-status");
+
+        let requested = svc
+            .request_keys(Request::new(pb::RequestKeysRequest {
+                kids: vec![kid.as_bytes().to_vec()],
+            }))
+            .await
+            .expect_err("unreadable state is not KEY_NOT_FOUND");
+        assert_eq!(requested.code(), tonic::Code::FailedPrecondition);
+
+        let updated = svc
+            .update_keys(Request::new(pb::UpdateKeysRequest {
+                updates: vec![pb::ClientKeyUpdate {
+                    kid: kid.as_bytes().to_vec(),
+                    client_attrs: None,
+                }],
+            }))
+            .await
+            .expect_err("unreadable state is not an absent update target");
+        assert_eq!(updated.code(), tonic::Code::FailedPrecondition);
+        assert_eq!(
+            std::fs::read(snapshot.path()).expect("snapshot remains"),
+            b"{ not a key snapshot"
+        );
+    }
+
+    #[tokio::test]
+    async fn request_keys_returns_unavailable_until_restored_directory_sync_succeeds() {
+        use crate::keymaterial::{KeyMaterial, PersistenceFault};
+
+        let snapshot = TestSnapshot::new("rpc-restored-sync-status");
+        let kid = unique_kid("restored-sync-status");
+        {
+            let first = KeyMaterial::at_path(snapshot.path());
+            first
+                .insert(kid.clone(), [0x71; AES_KEY_LEN])
+                .expect("seed durable key");
+        }
+        let keys = Arc::new(KeyMaterial::at_path_with_initial_fault(
+            snapshot.path(),
+            PersistenceFault::DirectorySync,
+        ));
+        keys.fail_next_persistence_at(PersistenceFault::DirectorySync);
+        let svc = PublicPrivacy::with_key_material(keys);
+        let request = || {
+            Request::new(pb::RequestKeysRequest {
+                kids: vec![kid.as_bytes().to_vec()],
+            })
+        };
+
+        let unavailable = svc
+            .request_keys(request())
+            .await
+            .expect_err("unconfirmed restored state must not answer KEY_NOT_FOUND");
+        assert_eq!(unavailable.code(), tonic::Code::Unavailable);
+
+        let confirmed = svc
+            .request_keys(request())
+            .await
+            .expect("retry confirms directory durability")
+            .into_inner();
+        assert_eq!(
+            confirmed.keys[0].status,
+            commonpb::KeyState::KeyExists as i32
         );
     }
 
@@ -1554,7 +2273,8 @@ mod tests {
         let keys: crate::keymaterial::SharedKeyMaterial = Default::default();
         let victim_kid = kid_owned_by(WEARER, "victim");
         let victim_key = [0x11u8; AES_KEY_LEN];
-        keys.insert(victim_kid.clone(), victim_key);
+        keys.insert(victim_kid.clone(), victim_key)
+            .expect("insert victim test key");
         let svc = PublicPrivacy::with_key_material(keys.clone()).with_kid_scope(KidScope::Enforce);
 
         let hostile = pb::ImportableKey {
@@ -1619,7 +2339,8 @@ mod tests {
         let keys: crate::keymaterial::SharedKeyMaterial = Default::default();
         let victim_kid = center_kid_owned_by(WEARER);
         let victim_key = [0x21u8; AES_KEY_LEN];
-        keys.insert(victim_kid.clone(), victim_key);
+        keys.insert(victim_kid.clone(), victim_key)
+            .expect("insert victim test key");
         let svc = PublicPrivacy::with_key_material(keys.clone()).with_kid_scope(KidScope::Enforce);
 
         let hostile = pb::ImportableKey {
@@ -1656,8 +2377,8 @@ mod tests {
         );
     }
 
-    /// The default this deployment ships with, pinned so it cannot drift into
-    /// either direction silently.
+    /// The explicit compatibility mode this deployment uses during migration,
+    /// pinned so it cannot drift into either direction silently.
     ///
     /// `audit` PERMITS the foreign kid — that is the point: this server holds 352
     /// channel keys minted under the wearer's own retired, pre-clone user id, and
@@ -1666,10 +2387,11 @@ mod tests {
     /// must never be is silent, so the same call is required to have produced a
     /// report — see `report_foreign_kid`, which is unconditional.
     #[tokio::test]
-    async fn the_audit_default_permits_a_foreign_kid_and_counts_it() {
+    async fn explicit_audit_mode_permits_a_foreign_kid_and_counts_it() {
         let keys: crate::keymaterial::SharedKeyMaterial = Default::default();
         let victim_kid = kid_owned_by(WEARER, "retired-identity");
-        keys.insert(victim_kid.clone(), [0x31u8; AES_KEY_LEN]);
+        keys.insert(victim_kid.clone(), [0x31u8; AES_KEY_LEN])
+            .expect("insert victim test key");
         let svc = PublicPrivacy::with_key_material(keys).with_kid_scope(KidScope::Audit);
 
         let before = foreign_kid_metric_total();
@@ -1904,6 +2626,42 @@ mod tests {
         format!("d=;u=;s=ai_bus.{tag};a=;{:x};{:x}", n, std::process::id())
     }
 
+    struct TestSnapshot(std::path::PathBuf);
+
+    impl TestSnapshot {
+        fn new(tag: &str) -> Self {
+            let directory = std::env::temp_dir().join(format!(
+                "cosmos-public-privacy-{tag}-{}-{:?}",
+                std::process::id(),
+                std::thread::current().id()
+            ));
+            std::fs::create_dir_all(&directory).expect("create snapshot scratch directory");
+            Self(directory.join("keymaterial.json"))
+        }
+
+        fn path(&self) -> std::path::PathBuf {
+            self.0.clone()
+        }
+
+        fn write_snapshot(&self, bytes: &[u8]) {
+            std::fs::write(&self.0, bytes).expect("write snapshot fixture");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o600))
+                    .expect("protect snapshot fixture");
+            }
+        }
+    }
+
+    impl Drop for TestSnapshot {
+        fn drop(&mut self) {
+            if let Some(directory) = self.0.parent() {
+                let _ = std::fs::remove_dir_all(directory);
+            }
+        }
+    }
+
     /// End-to-end, through the two real gRPC entry points a stranded Pin hits:
     /// an `Encrypted*` RPC that cannot be opened, then the key-sync pull the
     /// device makes every 30 minutes.
@@ -1924,7 +2682,8 @@ mod tests {
         // A healthy channel this server does hold, so the "nothing established
         // at all" precondition does not short-circuit the open path.
         let healthy = unique_kid("healthy");
-        keys.insert(healthy.clone(), [3u8; AES_KEY_LEN]);
+        keys.insert(healthy.clone(), [3u8; AES_KEY_LEN])
+            .expect("insert healthy test key");
 
         // The stranded device: a real envelope, sealed under a kid the server
         // has no key for.
@@ -2023,7 +2782,8 @@ mod tests {
 
         let keys: SharedKeyMaterial = Default::default();
         let known = unique_kid("known");
-        keys.insert(known.clone(), [1u8; AES_KEY_LEN]);
+        keys.insert(known.clone(), [1u8; AES_KEY_LEN])
+            .expect("insert known test key");
 
         // Sealed under the right kid but the wrong key: the tag will not verify.
         let sealed = cosmos_crypto::seal(&known, &[2u8; AES_KEY_LEN], b"\x08\x01", b"").unwrap();
@@ -2086,7 +2846,9 @@ mod tests {
 
     #[tokio::test]
     async fn wrapping_establish_import_and_seal_round_trip() {
-        let svc = PublicPrivacy::default();
+        let svc = PublicPrivacy::with_key_material(Arc::new(
+            crate::keymaterial::KeyMaterial::with_test_wrapping_key_generator(),
+        ));
 
         // 1) device establishes wrapping keys -> receives the server RSA pubkey.
         let est = svc
@@ -2156,7 +2918,9 @@ mod tests {
         // the published public key, and uploads it.
         let published = {
             let svc = PublicPrivacy::with_key_material(Arc::new(
-                crate::keymaterial::KeyMaterial::at_path(path.clone()),
+                crate::keymaterial::KeyMaterial::at_path_with_test_wrapping_key_generator(
+                    path.clone(),
+                ),
             ));
             let est = svc
                 .establish_wrapping_keys(Request::new(pb::EstablishWrappingKeysRequest::default()))
@@ -2189,7 +2953,9 @@ mod tests {
 
         // The restart. Same state path, brand-new process state.
         let restarted = PublicPrivacy::with_key_material(Arc::new(
-            crate::keymaterial::KeyMaterial::at_path(path.clone()),
+            crate::keymaterial::KeyMaterial::at_path_allowing_test_wrapping_key_restore(
+                path.clone(),
+            ),
         ));
 
         // The device's cached channel key still opens what the server seals, and

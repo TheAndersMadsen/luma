@@ -41,7 +41,10 @@ import { cookies } from "next/headers";
 import { SESSION_COOKIE, verifySession } from "./auth";
 import {
   ChannelKeyUnavailableError,
+  CHANNEL_KEY_IDENTITY_INVALID,
+  centerKidForPrincipal,
   namesSameWearer,
+  parseCenterPrincipal,
   saveKey,
   storedKeysFor,
   type ChannelKey,
@@ -49,6 +52,19 @@ import {
 import { Services, SessionExpiredError, call } from "./cosmos";
 import { decodeEnvelope, generateChannelKey, wrapChannelKey } from "./envelope";
 import { logWarn } from "./log";
+
+type ChannelRpcCall = <TReq extends object, TRes>(
+  service: string,
+  method: string,
+  request: TReq,
+) => Promise<TRes>;
+
+let channelRpcCall: ChannelRpcCall = call;
+
+/** Replace only the channel lifecycle's RPC seam in the Node verification process. */
+export function setChannelRpcCallForTests(replacement: ChannelRpcCall | null): void {
+  channelRpcCall = replacement ?? call;
+}
 
 /*
  * Re-exported because this is the module every route and the data seam already
@@ -63,7 +79,9 @@ export { ChannelKeyUnavailableError } from "./channelStore";
  * refuses one naming somebody else, so this is derived from our own principal.
  */
 function kidFor(principal: string): string {
-  return `${principal}/center/ephemeral`;
+  const kid = centerKidForPrincipal(principal);
+  if (kid === null) throw new ChannelKeyUnavailableError(CHANNEL_KEY_IDENTITY_INVALID);
+  return kid;
 }
 
 /**
@@ -88,16 +106,28 @@ function kidFor(principal: string): string {
  * Neither available means no key — reported, not silently swallowed.
  */
 async function channelPrincipal(): Promise<string | null> {
+  let session: Awaited<ReturnType<typeof verifySession>> = null;
   try {
     const jar = await cookies();
-    const session = await verifySession(jar.get(SESSION_COOKIE)?.value);
-    if (session?.sub) return `U:${session.sub}`;
+    session = await verifySession(jar.get(SESSION_COOKIE)?.value);
   } catch {
     // Not a request scope — `cookies()` throws there. The static identity below
     // is the only one that exists outside one anyway.
   }
-  const configured = process.env.COSMOS_PRINCIPAL?.trim() ?? "";
-  return configured.length > 0 ? configured : null;
+  // Parse outside the request-scope catch. A validly signed session carrying an
+  // invalid subject is an invalid identity, not permission to fall through to a
+  // static COSMOS_PRINCIPAL and act as somebody else.
+  if (session?.sub) {
+    const candidate = `U:${session.sub}`;
+    const parsed = parseCenterPrincipal(candidate);
+    if (parsed === null) throw new ChannelKeyUnavailableError(CHANNEL_KEY_IDENTITY_INVALID);
+    return parsed.principal;
+  }
+  const configured = process.env.COSMOS_PRINCIPAL ?? "";
+  if (configured.length === 0) return null;
+  const parsed = parseCenterPrincipal(configured);
+  if (parsed === null) throw new ChannelKeyUnavailableError(CHANNEL_KEY_IDENTITY_INVALID);
+  return parsed.principal;
 }
 
 /**
@@ -158,7 +188,7 @@ async function establish(principal: string): Promise<ChannelKey> {
   const inherited = existing ?? stored[0] ?? null;
 
   // 1. the server's wrapping public key
-  const wrapping = await call<
+  const wrapping = await channelRpcCall<
     Record<string, never>,
     { clearKey?: { jcaEncoded?: Buffer | Uint8Array | string } }
   >(Services.privacy, "EstablishWrappingKeys", {});
@@ -177,7 +207,7 @@ async function establish(principal: string): Promise<ChannelKey> {
   const key = inherited?.key ?? generateChannelKey();
 
   // 3. hand it to the server, wrapped
-  const result = await call<
+  const result = await channelRpcCall<
     { keys: Array<Record<string, unknown>> },
     { results?: Array<{ kid?: Buffer | string; status?: string | number }> }
   >(Services.privacy, "ImportKeys", {

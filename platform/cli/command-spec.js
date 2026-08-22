@@ -89,6 +89,19 @@ function requestedHelp(argv) {
 
 const DETAILS = Object.freeze({
   'doctor.local': 'Options: --json. Reports PASS, WARN, FAIL, a fix for every failure, and one next action.',
+  'dev.center': 'Starts the development stack in the foreground. Compose syncs source changes and rebuilds only when dependency manifests change.',
+  'dev.down': 'Stops only the ai-pin-revival-dev Compose project and retains its dependency and Next.js cache volumes.',
+  'check.center': 'Uses a disposable Git snapshot and reusable dependency seeds under REVIVAL_BUILD_DIR; it checks Center and the Spotify adapter without a production Next.js build.',
+  'check.cosmos': 'A nonempty TEST_FILTER is verified with Cargo/libtest discovery before every match, including ignored tests, runs. Without a filter, clippy and the full ordinary workspace tests run.',
+  'check.platform': 'Uses a clean external snapshot, batches isolation-safe acceptance files with bounded concurrency, then serializes cleanliness/release fixtures.',
+  'check.changed': 'Options: --base REF. Prefers origin/HEAD then conventional main/master refs; without one it checks the full tree. Includes both rename sides and fails closed for unknown paths.',
+  'release.candidate.prepare': 'Requires a native linux/amd64 builder. Builds once from a detached exact commit and seals the release, image bundle, Git identity, toolchains, and production-state contract outside the source tree.',
+  'release.candidate.verify': 'Filesystem-only verification. It never invokes Git, Docker, a shell, or candidate-controlled code.',
+  'release.candidate.inspect': 'Read-only. Reports exact identities and whether the candidate matches the protected live Carry storage contract.',
+  'deploy.production': 'Requires --confirm and exactly one freshly provider-reverified hosted candidate. --dry-run is local-only and cannot be combined with confirmation; local prepared candidates are never deployable.',
+  backup: 'Requires --confirm before creating the production backup or fetching its verified off-host copy.',
+  canary: 'Requires --confirm before running production semantic canaries.',
+  rollback: 'Requires --confirm and an exact prior deployment ID. It changes application release state but never restores a database.',
   'setup.local': 'Selects the local track and recomputes evidence. It does not start containers.',
   'setup.contributor': 'Selects the contributor track and recomputes evidence. It does not run gates.',
   'setup.production': 'Selects the production track. It never connects to or changes a remote host.',
@@ -112,12 +125,17 @@ const DETAILS = Object.freeze({
   'pin.network': 'Usage: revival pin network --serial SERIAL. Reads status without printing SSID or BSSID.',
   'pin.network.qr': 'Usage: revival pin network qr [--open]. Credentials remain browser-local and never enter argv.',
   'pin.install': 'Without --confirm this resolves the exact serial and release, prints a plan, and leaves the device untouched.',
-  'pin.release.build': 'Usage: revival pin release build --version YYYY-MM-DD.N --version-code INTEGER. It never runs ADB or mutates a device.',
+  'pin.build-debug': 'Credential-free and non-installable. Select fixed roles with repeated --role, or use --changed [--base REF]. Uses the canonical linux/amd64 builder with fresh tool homes and only narrow external cache-data leaves; Server selections compile runtime/core Rust and every role refuses release signing inputs.',
+  'pin.release.build': 'Usage: revival pin release build --version YYYY-MM-DD.N --version-code INTEGER. The retired local signing alias refuses before opening protected inputs; use the pinned Attested Pin release workflow on main. It never runs ADB or mutates a device.',
   'pin.release.ship': 'Plans by default. --confirm publishes to the remote Center release store.',
 });
 
 function safetyText(command) {
-  if (!command.confirmationRequired) return '';
+  if (command.effect === 'read-only') {
+    return command.exactSerialRequired
+      ? 'Safety: read-only; an exact --serial selects the device to inspect, but no device state is changed.'
+      : 'Safety: read-only; this command does not change local, remote, or device state.';
+  }
   if (command.exactSerialRequired) {
     return 'Safety: device mutation requires --confirm and an exact --serial; the delegated tool revalidates both.';
   }
@@ -125,7 +143,12 @@ function safetyText(command) {
     if (['adopt-config', 'prune-state', 'pin.release.ship'].includes(command.id)) {
       return 'Safety: this remote mutation plans first and changes state only with --confirm.';
     }
-    return 'Safety: this remote operation can execute when invoked; inspect its exact target and command help first.';
+    return command.confirmationRequired
+      ? 'Safety: remote mutation requires the command’s documented confirmation and target guards; inspect the plan before confirming.'
+      : 'Safety: this command changes remote state; inspect its exact target before running it.';
+  }
+  if (command.effect === 'local-mutation' && !command.confirmationRequired) {
+    return 'Safety: local mutation only; this command does not change a remote host or a device.';
   }
   return 'Safety: the local mutation is planned first and commits only with its documented confirmation.';
 }
@@ -148,6 +171,7 @@ function childEntries(prefix, contract) {
 function renderRootHelp(contract) {
   const top = childEntries([], contract);
   const width = Math.max(...top.map(([name]) => name.length), 1);
+  const backupUsage = findCommand(['backup'], contract)?.command.usage;
   return [
     'Ai Pin Revival',
     '',
@@ -160,7 +184,10 @@ function renderRootHelp(contract) {
     'Pin host operations (no device mutation) are under `revival pin`; device actions plan unless explicitly confirmed.',
     '  revival pin release build --version YYYY-MM-DD.N --version-code INTEGER',
     '  revival adopt-config [--confirm --reason TEXT [--expect-plan TOKEN]]',
+    ...(backupUsage ? [`  ${backupUsage}`] : []),
     '`backup --fetch` creates the off-host copy of irreplaceable key material.',
+    '',
+    'Safety: help is read-only and side-effect-free. Each command help names whether it reads state or mutates local, remote, or device state.',
     '',
     'Run `revival COMMAND --help` for command-specific help.',
   ].join('\n');
@@ -182,6 +209,8 @@ function renderGroupHelp(tokens, contract) {
     '',
     ...notes,
     ...(notes.length ? [''] : []),
+    'Safety: help is read-only and side-effect-free; inspect each command’s Safety line before running it.',
+    '',
     ...(defaultCommand ? [
       `Default: ${defaultCommand.summary}`,
       ...(DETAILS[defaultCommand.id] ? [DETAILS[defaultCommand.id]] : []),

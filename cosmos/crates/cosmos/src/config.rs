@@ -36,6 +36,14 @@ pub struct Config {
     pub service_path: ServicePath,
     pub limits: Limits,
     pub log_level: LogLevel,
+    /// Raw explicit AI-bus kid-scope mode. The serving path validates it only
+    /// for the workload that owns PublicPrivacy, before binding listeners.
+    pub kid_scope: Option<String>,
+    /// Captured once so startup policy cannot validate one environment view and
+    /// later connect using another.
+    pub database_url: Option<String>,
+    /// Durable wrapping-key directory, likewise captured with the config.
+    pub state_dir: Option<String>,
 }
 
 impl Config {
@@ -168,6 +176,9 @@ impl Config {
             service_path,
             limits,
             log_level: parse(values, "COSMOS_LOG_LEVEL", "info")?,
+            kid_scope: values.get("COSMOS_KID_SCOPE").cloned(),
+            database_url: values.get("COSMOS_DATABASE_URL").cloned(),
+            state_dir: values.get("COSMOS_STATE_DIR").cloned(),
         })
     }
 }

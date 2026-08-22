@@ -7,19 +7,24 @@ const fs = require('node:fs');
 
 const {
   PIN_RELEASE_TOOL, PIN_RELEASE_BUILD_TOOL, PIN_RELEASE_SHIP_TOOL, PIN_INSTALL_TOOL, PIN_DOCTOR_TOOL,
-  PIN_ACTIVATION_TOOL, PIN_NETWORK_TOOL, ENV_FILE, fail, operatorEnvironment, parseEnvFile, run,
+  PIN_ACTIVATION_TOOL, PIN_NETWORK_TOOL, ENV_FILE, authoritativeCompletion, fail, operatorEnvironment, parseEnvFile, resolveTool, run,
 } = require('./context');
-const { pinSourceCheck } = require('./gates');
+const { pinContributorCheck } = require('./gates');
+const { pinDebugBuild } = require('./pin-debug');
 
 function pinCommand(args) {
   const subcommand = args.shift();
   if (subcommand === 'doctor') {
-    run('node', [PIN_DOCTOR_TOOL, ...args]);
-    return;
+    const result = run(resolveTool('node'), [PIN_DOCTOR_TOOL, ...args]);
+    return authoritativeCompletion('pin.doctor', 'pin-prerequisites-verified', result);
   }
   if (subcommand === 'check') {
     if (args.length !== 0) fail('usage: ./revival pin check', 64);
-    pinSourceCheck();
+    pinContributorCheck();
+    return authoritativeCompletion('pin.check', 'pin-source-gate-passed');
+  }
+  if (subcommand === 'build-debug') {
+    pinDebugBuild(args);
     return;
   }
   if (subcommand === 'release') {
@@ -27,24 +32,35 @@ function pinCommand(args) {
     if (!operation || !['help', '--help', '-h', 'build', 'inspect', 'verify', 'plan', 'ship'].includes(operation)) {
       fail('usage: ./revival pin release build|inspect|verify|plan|ship ...', 64);
     }
-    if (operation === 'build') run('node', [PIN_RELEASE_BUILD_TOOL, ...args]);
+    if (operation === 'build') run(resolveTool('node'), [PIN_RELEASE_BUILD_TOOL, ...args]);
     // `ship` is the only Pin subcommand that writes outside this machine, and
     // like `pin install` it plans until it is given --confirm.
-    else if (operation === 'ship') run('node', [PIN_RELEASE_SHIP_TOOL, ...args]);
-    else run('node', [PIN_RELEASE_TOOL, ...args]);
-    return;
+    else if (operation === 'ship') {
+      const confirmations = args.filter((argument) => argument === '--confirm').length;
+      if (confirmations > 1) fail('pin release ship accepts exactly one literal --confirm', 64);
+      const result = run(resolveTool('node'), [PIN_RELEASE_SHIP_TOOL, ...args]);
+      return confirmations === 1
+        ? authoritativeCompletion('pin.release.ship', 'pin-release-published', result)
+        : null;
+    } else {
+      const result = run(resolveTool('node'), [PIN_RELEASE_TOOL, ...args]);
+      return operation === 'inspect'
+        ? authoritativeCompletion('pin.release.inspect', 'pin-release-inspected', result)
+        : null;
+    }
+    return null;
   }
   // The one subcommand under `pin` that can change a device, which is why it is
   // the one that demands a flag: without --confirm it resolves the release,
   // reads the Pin read-only, prints the plan and stops. The tool's own --help
   // says so in full; `./revival pin install --help` reaches it.
   if (subcommand === 'install') {
-    run('node', [PIN_INSTALL_TOOL, ...args]);
-    return;
+    run(resolveTool('node'), [PIN_INSTALL_TOOL, ...args]);
+    return null;
   }
   if (subcommand === 'activate') {
-    run('node', [PIN_ACTIVATION_TOOL, ...args]);
-    return;
+    run(resolveTool('node'), [PIN_ACTIVATION_TOOL, ...args]);
+    return null;
   }
   if (subcommand === 'network') {
     let values;
@@ -53,11 +69,11 @@ function pinCommand(args) {
     } catch (error) {
       fail(error.message);
     }
-    run('node', [PIN_NETWORK_TOOL, ...args], { env: operatorEnvironment(values) });
-    return;
+    run(resolveTool('node'), [PIN_NETWORK_TOOL, ...args], { env: operatorEnvironment(values) });
+    return null;
   }
   fail(
-    'usage: ./revival pin doctor | check | release build|inspect|verify|plan|ship ... |\n' +
+    'usage: ./revival pin doctor | check | build-debug --role ROLE [--role ROLE] | build-debug --changed [--base REF] | release build|inspect|verify|plan|ship ... |\n' +
     '              install [--confirm] [--serial SERIAL] | activate ... | network ...\n' +
     '       `install` without --confirm only plans and leaves the device untouched;\n' +
     '       `install --confirm` modifies the connected Pin. See `./revival pin install --help`.',

@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/bash
 # Logging, failure, target/layout assertions, env-file editing, and
 # copy-once primitives.
 #

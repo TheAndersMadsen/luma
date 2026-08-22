@@ -652,8 +652,11 @@ test("the post-candidate backup is digested over the pre-candidate backup's colu
     "the same-release post-candidate backup must be projected onto its baseline's columns",
   );
   assert.match(deploySource,
-    /^bash "\$release_dir\/platform\/deploy\/vps\/remote\/backup\.sh" \\\n(?:.*\\\n)*.*"\$\{postcandidate_projection_args\[@\]\}"$/mu,
+    /^run_held_release_program "\$release_dir" platform\/deploy\/vps\/remote\/backup\.sh bash 0 \\\n(?:.*\\\n)*.*"\$\{postcandidate_projection_args\[@\]\}"$/mu,
     "the projection may only be passed to this release's own backup.sh");
+  assert.doesNotMatch(deploySource,
+    /^[^\n]*\bbash "\$release_dir\/platform\/deploy\/vps\/remote\/backup\.sh"/mu,
+    "the projected backup must not fall back to a direct, unheld Bash invocation");
   // ...and the resume gets the same projection by capturing it ITSELF, with this
   // release's canonical producer, rather than asking an older backup.sh for it.
   assert.match(deploySource,

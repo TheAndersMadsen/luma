@@ -9,13 +9,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import {
-  canonicalPinReleaseManifestJson,
-  createPinReleaseManifest,
-} from "../../platform/deploy/pin/release.mjs";
+import { publishPinReleaseFixture } from "../../platform/deploy/pin/build.mjs";
 import {
   createLocalTransport,
-  shipPinRelease,
+  shipPinReleaseFixture as shipPinRelease,
 } from "../../platform/deploy/pin/ship.mjs";
 
 const {
@@ -43,6 +40,7 @@ const {
 
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 const SIGNER = "d8a64e1c3a1afdc340c4b86feaacb88e2d81d66972afbd58e743b7c5b8d1cbdb";
+process.env.REVIVAL_PIN_ENABLE_TEST_FIXTURES = "1";
 
 function helpersAvailable() {
   return ["bash", "python3"].every(
@@ -56,6 +54,8 @@ function helpersAvailable() {
  * release the publisher could never produce.
  */
 async function buildLocalStore(root, { version, versionCode }) {
+  const stagingRoot = `${root}-staging`;
+  await mkdir(stagingRoot, { recursive: true, mode: 0o700 });
   const bytesByRole = new Map(
     PIN_RELEASE_ROLES.map((role) => [
       role,
@@ -79,30 +79,19 @@ async function buildLocalStore(root, { version, versionCode }) {
       };
     }),
   };
-  const manifest = createPinReleaseManifest({ version, receipts });
-  const canonical = canonicalPinReleaseManifestJson(manifest);
-  const history = `${JSON.stringify({
-    schemaVersion: 1,
-    releases: [
-      {
-        releaseId: manifest.releaseId,
-        version,
-        versionCode,
-        manifestSha256: sha256(canonical),
-      },
-    ],
-  })}\n`;
-
-  const releaseDirectory = path.join(root, "releases", manifest.releaseId);
-  await mkdir(releaseDirectory, { recursive: true, mode: 0o700 });
-  for (const artifact of manifest.artifacts) {
-    await writeFile(path.join(releaseDirectory, artifact.name), bytesByRole.get(artifact.role), {
+  for (const artifact of receipts.artifacts) {
+    await writeFile(path.join(stagingRoot, artifact.name), bytesByRole.get(artifact.role), {
       mode: 0o600,
     });
   }
-  await writeFile(path.join(releaseDirectory, "manifest.json"), canonical, { mode: 0o600 });
-  await writeFile(path.join(root, "history.json"), history, { mode: 0o600 });
-  await writeFile(path.join(root, "current.json"), canonical, { mode: 0o600 });
+  await publishPinReleaseFixture({
+    releaseRoot: root,
+    stagingRoot,
+    version,
+    receipts,
+  });
+  const canonical = await readFile(path.join(root, "current.json"), "utf8");
+  const manifest = JSON.parse(canonical);
   return { manifest, canonical, bytesByRole };
 }
 

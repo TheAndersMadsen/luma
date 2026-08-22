@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/bash
 # Restore one verified backup into a disposable, host-isolated copy of the
 # production data plane and prove the candidate images can start against it.
 #
@@ -13,7 +13,7 @@ if [[ "${REVIVAL_STAGING_SMOKE_TRACE:-0}" == 1 ]]; then
   export PS4='+ staging-smoke:${LINENO}: '
   set -x
 fi
-source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/common.sh"
+source "${REVIVAL_HELD_COMMON:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/common.sh}"
 
 # Keep the staging consumer deliberately smaller than the backup producer.  The
 # versioned manifest, archive inventory, invariant, and channel-key validators
@@ -325,16 +325,18 @@ searxng_settings_file="$release_dir/cosmos/search/settings.yml"
 [[ -f "$searxng_settings_file" && ! -L "$searxng_settings_file" ]] \
   || fail "candidate release lacks its packaged SearXNG settings"
 load_compose_command_with_env "$release_dir" "$smoke_runtime_env" "$smoke_cosmos_env" "$smoke_provider_env" "$smoke_center_env"
-cosmos_image="ai-pin-revival/cosmos:$release_id"
-center_image="ai-pin-revival/center:$release_id"
-spotify_image="ai-pin-revival/spotify-adapter:$release_id"
+cosmos_image="$("${COMPOSE[@]}" config --format json | python3 -c 'import json,sys; print(json.load(sys.stdin)["services"]["ai-bus"]["image"])')"
+center_image="$("${COMPOSE[@]}" config --format json | python3 -c 'import json,sys; print(json.load(sys.stdin)["services"]["center"]["image"])')"
+spotify_image="$("${COMPOSE[@]}" config --format json | python3 -c 'import json,sys; print(json.load(sys.stdin)["services"]["spotify-adapter"]["image"])')"
 postgres_image="$("${COMPOSE[@]}" config --format json | python3 -c 'import json,sys; print(json.load(sys.stdin)["services"]["postgres"]["image"])')"
 keycloak_image="$("${COMPOSE[@]}" config --format json | python3 -c 'import json,sys; print(json.load(sys.stdin)["services"]["keycloak"]["image"])')"
 searxng_image="$("${COMPOSE[@]}" config --format json | python3 -c 'import json,sys; print(json.load(sys.stdin)["services"]["searxng"]["image"])')"
 helper_image="$HELPER_IMAGE"
-[[ "$postgres_image" == *@sha256:* && "$keycloak_image" == *@sha256:* \
-  && "$searxng_image" == *@sha256:* && "$helper_image" == *@sha256:* ]] \
-  || fail "staging third-party images must be digest-pinned"
+for image in "$cosmos_image" "$center_image" "$spotify_image" "$postgres_image" \
+  "$keycloak_image" "$searxng_image" "$helper_image"; do
+  [[ "$image" =~ ^sha256:[0-9a-f]{64}$ ]] \
+    || fail "staging images must use candidate-bound local content IDs"
+done
 for image in "$cosmos_image" "$center_image" "$spotify_image" "$postgres_image" "$keycloak_image" "$searxng_image" "$helper_image"; do
   docker image inspect "$image" >/dev/null 2>&1 || fail "required staging image is unavailable: $image"
 done
@@ -479,7 +481,7 @@ run_helper() {
       ;;
   esac
   created_containers+=("$name")
-  docker run --name "$name" --rm --network none --log-driver none \
+  docker run --pull=never --name "$name" --rm --network none --log-driver none \
     --memory 256m --pids-limit 128 --cpus 1 "${capability_flags[@]}" \
     --security-opt no-new-privileges:true \
     "${object_labels[@]}" "$@"
@@ -563,7 +565,7 @@ compare_archive_inventories "$projection_work/duc-backup.inventory.json" \
   "$projection_work/duc-restored.inventory.json"
 
 created_containers+=("$postgres_container")
-docker run --detach \
+docker run --pull=never --detach \
   --name "$postgres_container" \
   --network "$network" --network-alias postgres \
   --restart no \
@@ -937,7 +939,7 @@ rm -f -- "$resolved_compose"
 env_files_for_center=(--env-file "$smoke_center_runtime")
 
 created_containers+=("$keycloak_container")
-docker run --detach \
+docker run --pull=never --detach \
   --name "$keycloak_container" \
   --network "$network" --network-alias keycloak \
   --restart no --init \
@@ -953,7 +955,7 @@ docker run --detach \
 wait_healthy "$keycloak_container" 90
 
 created_containers+=("$searxng_container")
-docker run --detach \
+docker run --pull=never --detach \
   --name "$searxng_container" --network "$network" --network-alias searxng \
   --user 977:977 --restart no --init --read-only \
   --tmpfs /tmp:size=64m,mode=1777,uid=977,gid=977 \
@@ -1041,7 +1043,7 @@ common_cosmos_run=(
 )
 
 created_containers+=("$ai_bus_container")
-docker run --detach \
+docker run --pull=never --detach \
   --name "$ai_bus_container" --network-alias ai-bus \
   "${common_cosmos_run[@]}" \
   --memory 1536m \
@@ -1055,7 +1057,7 @@ docker run --detach \
   "$cosmos_image" -ec "$cosmos_command" >/dev/null
 
 created_containers+=("$provisioning_container")
-docker run --detach \
+docker run --pull=never --detach \
   --name "$provisioning_container" --network-alias provisioning \
   "${common_cosmos_run[@]}" \
   --env-file "$projection_work/provisioning.env" \
@@ -1080,7 +1082,7 @@ docker exec --user "$provisioning_user" "$provisioning_container" sh -euc \
 start_plain_cosmos_workload() {
   local container="$1" alias="$2" workload="$3"
   created_containers+=("$container")
-  docker run --detach \
+  docker run --pull=never --detach \
     --name "$container" --network-alias "$alias" \
     "${common_cosmos_run[@]}" \
     --env-file "$projection_work/$workload.env" \
@@ -1100,7 +1102,7 @@ start_plain_cosmos_workload "$notable_events_container" notable-events notable-e
 # without touching the host bridge or any physical Pin. The adapter shares only
 # this stub's network namespace; nothing is published to the host.
 created_containers+=("$spotify_stub_container")
-docker run --detach \
+docker run --pull=never --detach \
   --name "$spotify_stub_container" --network "$network" --network-alias spotify-adapter \
   --restart no --init --read-only --tmpfs /tmp:size=8m,mode=1777 \
   --memory 96m --pids-limit 64 --cpus 0.5 --log-driver none \
@@ -1113,7 +1115,7 @@ spotify_stub_ip="$(docker inspect --format "{{(index .NetworkSettings.Networks \
 [[ "$spotify_stub_ip" =~ ^[0-9a-fA-F:.]+$ ]] || fail "synthetic Spotify bridge has no isolated address"
 
 created_containers+=("$spotify_adapter_container")
-docker run --detach \
+docker run --pull=never --detach \
   --name "$spotify_adapter_container" --network "container:$spotify_stub_container" \
   --restart no --init --read-only --tmpfs /tmp:size=16m,mode=1777 \
   --memory 128m --pids-limit 128 --cpus 1 \
@@ -1149,7 +1151,7 @@ compare_archive_inventories "$projection_work/center-runtime.expected.json" \
   "$projection_work/center-runtime.inventory.json"
 
 created_containers+=("$center_container")
-docker run --detach \
+docker run --pull=never --detach \
   --name "$center_container" \
   --network "$network" --network-alias center \
   --restart no --init --read-only \
@@ -1450,7 +1452,7 @@ docker exec "$center_container" sh -euc 'rm -f /tmp/session.jwt /tmp/smoke-*.jso
 # anyway: channelKey() returns null before touching the key file when
 # COSMOS_PRINCIPAL is unset, which is the production behaviour being reproduced.
 created_containers+=("$center_production_identity_container")
-docker run --detach \
+docker run --pull=never --detach \
   --name "$center_production_identity_container" \
   --network "$network" \
   --restart no --init --read-only \

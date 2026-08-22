@@ -8,6 +8,7 @@ import test from "node:test";
 
 const root = path.resolve(import.meta.dirname, "../../..");
 const helper = path.join(root, "platform/deploy/vps/remote/domain.py");
+const commonLibrary = path.join(root, "platform/deploy/vps/remote/common.sh");
 const domainLibrary = path.join(root, "platform/deploy/vps/remote/domain.sh");
 const template = path.join(
   root,
@@ -65,7 +66,7 @@ function runHelper(arguments_, { fails = false } = {}) {
 }
 
 function runDomainShell(source, environment = {}) {
-  const result = spawnSync("bash", ["-c", source, "domain-fixture", domainLibrary], {
+  const result = spawnSync("bash", ["-c", source, "domain-fixture", domainLibrary, commonLibrary], {
     cwd: root,
     encoding: "utf8",
     env: { ...process.env, ...environment },
@@ -315,6 +316,7 @@ test("[implemented] later deployments reuse the authoritative edge discovery", (
 
   const result = runDomainShell(String.raw`
 set -euo pipefail
+source "$2"
 source "$1"
 domain_select_public_edge "$OUTPUT" "$PREVIOUS"
 `, { PREVIOUS: previous, OUTPUT: output });
@@ -1190,7 +1192,19 @@ test("[implemented] deployment entrypoints bind the Center domain transaction", 
     ]),
   );
   for (const [name, source] of Object.entries(scripts)) {
-    assertSource(source, /\/domain\.sh"/, `${name} must load the domain transaction`);
+    const commonLoad = /^source "\$\{REVIVAL_HELD_COMMON:-.*\/common\.sh\}"$/m;
+    const domainLoad = /^source "\$\{REVIVAL_HELD_DOMAIN:-.*\/domain\.sh\}"$/m;
+    assertSource(source, commonLoad, `${name} must load held common helpers`);
+    assertSource(source, domainLoad, `${name} must load the held domain transaction`);
+    assert.ok(
+      source.search(commonLoad) < source.search(domainLoad),
+      `${name} must load common.sh before domain.sh`,
+    );
+    assert.equal(
+      [...source.matchAll(/^\s*source .*$/gm)].length,
+      2,
+      `${name} must not add a direct or unheld common/domain fallback`,
+    );
   }
 
   assertSource(scripts.preflight, /domain_select_public_edge\b/, "preflight must select the live or recorded edge");

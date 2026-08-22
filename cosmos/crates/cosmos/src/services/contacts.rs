@@ -175,12 +175,17 @@ impl Contacts {
     /// This is what `server_should_decrypt = true` asks for, and honouring it is
     /// the difference between a restored address book and an empty one: the
     /// device's `handleDeltaSyncResponse` saves only the plaintext case and
-    /// DISCARDS anything still `hasEncryptedContact()`. Contacts we hold no key
-    /// for stay sealed rather than being dropped — relaying is honest, deleting
-    /// the wearer's data is not.
-    async fn decrypt_page(&self, items: &mut [pb::GetContactsStreamingResponse]) {
+    /// DISCARDS anything still `hasEncryptedContact()`. If a requested page
+    /// contains a contact we cannot open, fail the read so the restore remains
+    /// retryable. A directory outage is separately reported as UNAVAILABLE.
+    async fn decrypt_page(
+        &self,
+        items: &mut [pb::GetContactsStreamingResponse],
+    ) -> Result<(), Status> {
         let Some(directory) = &self.keys else {
-            return;
+            return Err(Status::failed_precondition(
+                "server-side contact decryption requires the channel-key directory",
+            ));
         };
         for item in items.iter_mut() {
             let Some(StreamingItem::EncryptedContact(sealed)) = &item.response else {
@@ -194,8 +199,14 @@ impl Contacts {
                     .map(|info| info.kid.clone())
                     .unwrap_or_default(),
             };
-            let Some(plaintext) = directory.open(&envelope).await else {
-                continue;
+            let Some(plaintext) = directory
+                .open(&envelope)
+                .await
+                .map_err(|error| crate::keydirectory::grpc_status(&error))?
+            else {
+                return Err(Status::failed_precondition(
+                    "a sealed contact names a channel key this deployment does not hold",
+                ));
             };
             match <pb::Contact as prost::Message>::decode(plaintext.as_slice()) {
                 Ok(contact) => item.response = Some(StreamingItem::Contact(contact)),
@@ -206,6 +217,7 @@ impl Contacts {
                 }
             }
         }
+        Ok(())
     }
 }
 
@@ -368,16 +380,15 @@ impl ContactsRpcService for Contacts {
         let request = request.into_inner();
         let mut items = streaming_items(&snapshot, cursor_of(request.streaming_request.as_ref()));
 
-        // Honour `server_should_decrypt` for whatever we hold the key to. The
-        // device DISCARDS items that arrive still encrypted, so anything left
-        // sealed here is a contact the wearer will not get back — but relaying it
-        // is still better than dropping it, and inventing one is worse than both.
+        // Honour `server_should_decrypt` for the complete page. The device
+        // DISCARDS items that arrive still encrypted, so a missing key must fail
+        // this read rather than acknowledge partial success that loses a contact.
         if request
             .streaming_request
             .as_ref()
             .is_some_and(|streaming| streaming.server_should_decrypt)
         {
-            self.decrypt_page(&mut items).await;
+            self.decrypt_page(&mut items).await?;
         }
         let items = items;
 
@@ -523,7 +534,7 @@ mod tests {
         let channel_key = [42u8; cosmos_crypto::AES_KEY_LEN];
         let kid = "kid-contacts-1";
         // The device escrowed this key via ImportKeys, in another workload.
-        directory.put(kid, channel_key).await;
+        directory.put(kid, channel_key).await.expect("put key");
         let svc = svc.with_key_directory(directory);
 
         // A contact sealed exactly as the device seals one.
@@ -601,15 +612,16 @@ mod tests {
         );
     }
 
-    /// Without the key, the contact is RELAYED, never dropped and never invented.
+    /// Without the key, a decrypting restore fails rather than acknowledging a
+    /// sealed item the stock client would discard.
     #[tokio::test]
-    async fn a_contact_we_hold_no_key_for_stays_sealed_rather_than_vanishing() {
+    async fn a_contact_we_hold_no_key_for_fails_restore_and_outage_is_unavailable() {
         use prost::Message as _;
 
         let (svc, key) = service();
         // A directory that was never given this kid — a device enrolled elsewhere.
         let directory = std::sync::Arc::new(crate::keydirectory::KeyDirectory::in_memory());
-        let svc = svc.with_key_directory(directory);
+        let svc = svc.with_key_directory(directory.clone());
 
         let sealed = cosmos_crypto::seal(
             "kid-we-never-got",
@@ -636,7 +648,7 @@ mod tests {
         .await
         .expect("write");
 
-        let mut page = svc
+        let missing = match svc
             .get_contacts_paginated_streaming(as_principal(
                 &key,
                 "device-a",
@@ -649,20 +661,35 @@ mod tests {
                 },
             ))
             .await
-            .expect("paginated read")
-            .into_inner();
+        {
+            Err(error) => error,
+            Ok(_) => panic!("missing key must keep restore retryable"),
+        };
+        assert_eq!(missing.code(), tonic::Code::FailedPrecondition);
 
-        let first = tokio_stream::StreamExt::next(&mut page)
+        directory
+            .put("kid-we-never-got", [1u8; cosmos_crypto::AES_KEY_LEN])
             .await
-            .expect("a page")
-            .expect("page is ok");
-        assert!(
-            first
-                .page_content
-                .iter()
-                .any(|item| matches!(item.response, Some(StreamingItem::EncryptedContact(_)))),
-            "an unreadable contact must be relayed sealed, not dropped"
-        );
+            .expect("seed key for outage branch");
+        directory.fail_next(crate::keydirectory::DirectoryFault::Get);
+        let unavailable = match svc
+            .get_contacts_paginated_streaming(as_principal(
+                &key,
+                "device-a",
+                pb::GetContactsStreamingPageRequest {
+                    streaming_request: Some(pb::GetContactsStreamingRequest {
+                        server_should_decrypt: true,
+                        syncoption: None,
+                    }),
+                    page_size: 0,
+                },
+            ))
+            .await
+        {
+            Err(error) => error,
+            Ok(_) => panic!("authority outage is not a partial empty restore"),
+        };
+        assert_eq!(unavailable.code(), tonic::Code::Unavailable);
     }
 
     fn service() -> (Contacts, String) {

@@ -26,6 +26,7 @@ services:
       COSMOS_AUTH_MODE: edge-authenticated
       COSMOS_ENVIRONMENT: production
       REVIVAL_DEPLOYMENT_ENVIRONMENT: production
+      COSMOS_KID_SCOPE: ${COSMOS_KID_SCOPE:?set COSMOS_KID_SCOPE to audit or enforce in the protected production env}
       COSMOS_DATABASE_URL: ${COSMOS_DATABASE_URL:?set COSMOS_DATABASE_URL in the protected production env}
       COSMOS_EDGE_TOKEN: ${COSMOS_EDGE_TOKEN:?set COSMOS_EDGE_TOKEN in the protected production env}
       COSMOS_OIDC_ISSUER: ${COSMOS_OIDC_ISSUER:-https://center.andersmadsen.dk/realms/humane}

@@ -61,6 +61,36 @@ const MANIFEST_FIELDS = Object.freeze([
   "version",
   "artifacts",
 ]);
+const ATTESTED_MANIFEST_FIELDS = Object.freeze([
+  ...MANIFEST_FIELDS,
+  "authority",
+]);
+const AUTHORITY_FIELDS = Object.freeze([
+  "kind",
+  "name",
+  "size",
+  "sha256",
+  "provider",
+  "policySha256",
+  "requestSha256",
+  "predicateSha256",
+  "trustedRootSha256",
+  "preSignBundleSha256",
+  "releaseBundleSha256",
+  "preSignVerificationSha256",
+  "releaseVerificationSha256",
+  "runnerEnvironment",
+  "runnerLabel",
+  "runnerArchitecture",
+  "runnerInvocationUri",
+  "repository",
+  "sourceRef",
+  "sourceDigest",
+  "sourceGenerationSha256",
+  "sourceTarSha256",
+  "toolchainSha256",
+  "builderImageId",
+]);
 const MANIFEST_ARTIFACT_FIELDS = Object.freeze([
   "role",
   "url",
@@ -777,9 +807,83 @@ function canonicalRoleOrder(artifacts, label) {
   return Object.freeze(PIN_RELEASE_ARTIFACT_ROLES.map((role) => byRole.get(role)));
 }
 
-function releaseIdentityPayload(version, artifacts) {
-  return {
-    schemaVersion: PIN_RELEASE_SCHEMA_VERSION,
+function parseReleaseAuthority(value) {
+  assertExactFields(value, AUTHORITY_FIELDS, "release authority");
+  if (value.kind !== "github-hosted-native-x64") {
+    fail("invalid-value", "release authority kind is not recognized");
+  }
+  if (value.name !== "hosted-attestation.json") {
+    fail("unsafe-path", "release authority must use hosted-attestation.json");
+  }
+  const digestFields = [
+    "sha256",
+    "policySha256",
+    "requestSha256",
+    "predicateSha256",
+    "trustedRootSha256",
+    "preSignBundleSha256",
+    "releaseBundleSha256",
+    "preSignVerificationSha256",
+    "releaseVerificationSha256",
+    "sourceGenerationSha256",
+    "sourceTarSha256",
+    "toolchainSha256",
+  ];
+  const digests = Object.fromEntries(digestFields.map((field) => [
+    field,
+    requiredSha256(value[field], `release authority ${field}`),
+  ]));
+  if (value.provider !== "github-actions-sigstore") {
+    fail("invalid-value", "release authority provider is not recognized");
+  }
+  if (
+    value.runnerEnvironment !== "github-hosted" || value.runnerLabel !== "ubuntu-24.04" ||
+    value.runnerArchitecture !== "x64"
+  ) fail("invalid-value", "release authority runner policy is not recognized");
+  if (
+    typeof value.runnerInvocationUri !== "string" ||
+    !/^https:\/\/github\.com\/TheAndersMadsen\/ai-pin-revival\/actions\/runs\/[1-9][0-9]*\/attempts\/[1-9][0-9]*$/u.test(value.runnerInvocationUri)
+  ) fail("invalid-value", "release authority run identity is invalid");
+  if (value.repository !== "TheAndersMadsen/ai-pin-revival" || value.sourceRef !== "refs/heads/main") {
+    fail("invalid-value", "release authority source policy is not recognized");
+  }
+  if (typeof value.sourceDigest !== "string" || !/^[0-9a-f]{40}$/u.test(value.sourceDigest)) {
+    fail("invalid-value", "release authority source digest is invalid");
+  }
+  if (typeof value.builderImageId !== "string" || !/^sha256:[0-9a-f]{64}$/u.test(value.builderImageId)) {
+    fail("invalid-value", "release authority builder image ID is invalid");
+  }
+  return Object.freeze({
+    kind: value.kind,
+    name: value.name,
+    size: requiredPositiveInteger(value.size, "release authority size", 64 * 1024 * 1024),
+    sha256: digests.sha256,
+    provider: value.provider,
+    policySha256: digests.policySha256,
+    requestSha256: digests.requestSha256,
+    predicateSha256: digests.predicateSha256,
+    trustedRootSha256: digests.trustedRootSha256,
+    preSignBundleSha256: digests.preSignBundleSha256,
+    releaseBundleSha256: digests.releaseBundleSha256,
+    preSignVerificationSha256: digests.preSignVerificationSha256,
+    releaseVerificationSha256: digests.releaseVerificationSha256,
+    runnerEnvironment: value.runnerEnvironment,
+    runnerLabel: value.runnerLabel,
+    runnerArchitecture: value.runnerArchitecture,
+    runnerInvocationUri: value.runnerInvocationUri,
+    repository: value.repository,
+    sourceRef: value.sourceRef,
+    sourceDigest: value.sourceDigest,
+    sourceGenerationSha256: digests.sourceGenerationSha256,
+    sourceTarSha256: digests.sourceTarSha256,
+    toolchainSha256: digests.toolchainSha256,
+    builderImageId: value.builderImageId,
+  });
+}
+
+function releaseIdentityPayload(version, artifacts, authority = null) {
+  const result = {
+    schemaVersion: authority === null ? PIN_RELEASE_SCHEMA_VERSION : 2,
     version,
     artifacts: artifacts.map((artifact) => ({
       role: artifact.role,
@@ -790,6 +894,8 @@ function releaseIdentityPayload(version, artifacts) {
       sha256: artifact.sha256,
     })),
   };
+  if (authority !== null) result.authority = authority;
+  return result;
 }
 
 export function derivePinReleaseId(value) {
@@ -814,12 +920,18 @@ export function derivePinReleaseId(value) {
   const ordered = canonicalRoleOrder(parsed, "release identity artifacts");
   const versionCodes = new Set(ordered.map((artifact) => artifact.versionCode));
   if (versionCodes.size !== 1) fail("version-mismatch", "all release artifacts must share one versionCode");
-  return sha256(JSON.stringify(releaseIdentityPayload(version, ordered)));
+  const authority = value.authority === undefined ? null : parseReleaseAuthority(value.authority);
+  return sha256(JSON.stringify(releaseIdentityPayload(version, ordered, authority)));
 }
 
 export function parsePinReleaseManifest(value) {
-  assertExactFields(value, MANIFEST_FIELDS, "Pin release manifest");
-  if (value.schemaVersion !== PIN_RELEASE_SCHEMA_VERSION) fail("schema-version", "Pin release manifest schemaVersion must be 1");
+  if (value?.schemaVersion === PIN_RELEASE_SCHEMA_VERSION) {
+    assertExactFields(value, MANIFEST_FIELDS, "Pin release manifest");
+  } else if (value?.schemaVersion === 2) {
+    assertExactFields(value, ATTESTED_MANIFEST_FIELDS, "Pin release manifest");
+  } else {
+    fail("schema-version", "Pin release manifest schemaVersion must be 1 or 2");
+  }
   const releaseId = requiredSha256(value.releaseId, "releaseId");
   const version = parseInstallVersion(value.version, "version").value;
   if (!Array.isArray(value.artifacts)) fail("invalid-shape", "artifacts must be an array");
@@ -829,7 +941,14 @@ export function parsePinReleaseManifest(value) {
   );
   const versionCodes = new Set(artifacts.map((artifact) => artifact.versionCode));
   if (versionCodes.size !== 1) fail("version-mismatch", "all manifest artifacts must share one versionCode");
-  const manifest = Object.freeze({ schemaVersion: 1, releaseId, version, artifacts });
+  const authority = value.schemaVersion === 2 ? parseReleaseAuthority(value.authority) : null;
+  const manifest = Object.freeze({
+    schemaVersion: value.schemaVersion,
+    releaseId,
+    version,
+    artifacts,
+    ...(authority === null ? {} : { authority }),
+  });
   const derived = derivePinReleaseId(manifest);
   if (derived !== releaseId) fail("release-id-mismatch", "releaseId does not match canonical artifact metadata");
   return manifest;
@@ -837,7 +956,7 @@ export function parsePinReleaseManifest(value) {
 
 export function canonicalPinReleaseManifestJson(value) {
   const manifest = parsePinReleaseManifest(value);
-  return `${JSON.stringify({
+  const document = {
     schemaVersion: manifest.schemaVersion,
     releaseId: manifest.releaseId,
     version: manifest.version,
@@ -850,7 +969,9 @@ export function canonicalPinReleaseManifestJson(value) {
       size: artifact.size,
       sha256: artifact.sha256,
     })),
-  })}\n`;
+  };
+  if (manifest.authority !== undefined) document.authority = manifest.authority;
+  return `${JSON.stringify(document)}\n`;
 }
 
 export function parseCanonicalPinReleaseManifestDocument(source) {
@@ -861,7 +982,7 @@ export function parseCanonicalPinReleaseManifestDocument(source) {
   return manifest;
 }
 
-export function createPinReleaseManifest({ version, receipts }) {
+export function createPinReleaseManifest({ version, receipts, authority = null }) {
   const parsedReceipts = parsePinReleaseReceiptBundle(receipts);
   const normalizedVersion = parseInstallVersion(version, "version").value;
   for (const receipt of parsedReceipts.artifacts) {
@@ -869,9 +990,14 @@ export function createPinReleaseManifest({ version, receipts }) {
       fail("version-mismatch", `${receipt.role} APK versionName does not match release version`);
     }
   }
-  const releaseId = derivePinReleaseId({ version: normalizedVersion, artifacts: parsedReceipts.artifacts });
+  const parsedAuthority = authority === null ? null : parseReleaseAuthority(authority);
+  const releaseId = derivePinReleaseId({
+    version: normalizedVersion,
+    artifacts: parsedReceipts.artifacts,
+    ...(parsedAuthority === null ? {} : { authority: parsedAuthority }),
+  });
   return parsePinReleaseManifest({
-    schemaVersion: 1,
+    schemaVersion: parsedAuthority === null ? 1 : 2,
     releaseId,
     version: normalizedVersion,
     artifacts: parsedReceipts.artifacts.map((receipt) => ({
@@ -883,6 +1009,7 @@ export function createPinReleaseManifest({ version, receipts }) {
       size: receipt.size,
       sha256: receipt.sha256,
     })),
+    ...(parsedAuthority === null ? {} : { authority: parsedAuthority }),
   });
 }
 

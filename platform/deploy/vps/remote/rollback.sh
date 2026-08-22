@@ -1,7 +1,67 @@
-#!/usr/bin/env bash
+#!/usr/bin/bash
 set -euo pipefail
-source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/common.sh"
-source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/domain.sh"
+source "${REVIVAL_HELD_COMMON:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/common.sh}"
+source "${REVIVAL_HELD_DOMAIN:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/domain.sh}"
+
+target_candidate=""
+target_candidate_id=""
+pin_local_docker_daemon() {
+  local -a inherited=("${!DOCKER_@}")
+  local docker_config="$REMOTE_ROOT/private/docker-cli-empty"
+  if ((${#inherited[@]} != 0)); then
+    [[ "${DOCKER_HOST:-}" == unix:///var/run/docker.sock \
+      && "${DOCKER_CONFIG:-}" == "$docker_config" \
+      && "$(printf '%s\n' "${inherited[@]}" | LC_ALL=C sort)" == $'DOCKER_CONFIG\nDOCKER_HOST' ]] \
+      || fail "refusing ambient Docker daemon/config selection: ${inherited[*]}"
+  fi
+  if [[ ! -e "$docker_config" && ! -L "$docker_config" ]]; then
+    mkdir -m 700 -- "$docker_config"
+  fi
+  [[ -d "$docker_config" && ! -L "$docker_config" \
+    && "$(readlink -f -- "$docker_config")" == "$docker_config" \
+    && "$(stat -c '%a:%u:%g' "$docker_config")" == "700:$(id -u):$(id -g)" \
+    && -z "$(find "$docker_config" -mindepth 1 -maxdepth 1 -print -quit)" ]] \
+    || fail "Docker configuration anchor must be an empty owner-owned mode-0700 directory"
+  export DOCKER_HOST=unix:///var/run/docker.sock
+  export DOCKER_CONFIG="$docker_config"
+}
+apply_retained_candidate_image_override() {
+  [[ "${revival_candidate_authority_required:-0}" == 1 \
+    && "${revival_candidate_override_sha256:-}" =~ ^[0-9a-f]{64}$ \
+    && "${revival_candidate_authority_receipt_sha256:-}" =~ ^[0-9a-f]{64}$ ]] \
+    || fail "rollback retained candidate authority is incomplete"
+  "${COMPOSE[@]}" config --quiet
+}
+read_record_candidate_id() {
+  local selected_record="$1" id_file="$1/candidate-id" path_file="$1/candidate-path" selected_id selected_path
+  if [[ ! -e "$id_file" && ! -L "$id_file" && ! -e "$path_file" && ! -L "$path_file" ]]; then
+    return 1
+  fi
+  [[ -d "$selected_record" && ! -L "$selected_record" \
+    && "$(readlink -f -- "$selected_record")" == "$selected_record" \
+    && "$(stat -c '%a:%u:%g' "$selected_record")" == "700:$(id -u):$(id -g)" ]] \
+    || fail "candidate deployment record authority is unsafe"
+  for evidence in "$id_file" "$path_file"; do
+    [[ -f "$evidence" && ! -L "$evidence" \
+      && "$(stat -c '%a:%u:%g:%h' "$evidence")" == "600:$(id -u):$(id -g):1" ]] \
+      || fail "candidate deployment identity evidence is unsafe"
+  done
+  selected_id="$(tr -d '\r\n' <"$id_file")"
+  selected_path="$(tr -d '\r\n' <"$path_file")"
+  [[ "$selected_id" =~ ^[0-9a-f]{64}$ \
+    && "$selected_path" == "$REMOTE_ROOT/release-candidates/$selected_id" ]] \
+    || fail "candidate deployment identity evidence is inconsistent"
+  printf '%s\n' "$selected_id"
+}
+verify_candidate_release_authority() {
+  local helper="$1" selected_record="$2" selected_candidate_id="$3" selected_release_id="$4" output
+  release_material_file_is_safe "$helper" || fail "candidate release authority helper is missing"
+  output="$(python3 -I "$helper" --root "$REMOTE_ROOT" --candidate-id "$selected_candidate_id" \
+    --release-id "$selected_release_id" --record "$selected_record")" \
+    || fail "retained candidate refused release/manifest authority"
+  node -e 'const v=JSON.parse(process.argv[1]);if(v.ok!==true||v.releaseId!==process.argv[2]||!["existing","published"].includes(v.state))process.exit(1)' \
+    "$output" "$selected_release_id" || fail "candidate release authority returned invalid evidence"
+}
 
 deployment_id=""
 json=0
@@ -17,8 +77,9 @@ done
 
 assert_target
 assert_remote_root
-for command in docker flock python3 sha256sum systemctl curl readlink openssl pgrep; do need "$command"; done
+for command in docker flock node python3 sha256sum systemctl curl readlink openssl pgrep cmp; do need "$command"; done
 ensure_layout
+pin_local_docker_daemon
 exec 9>"$LOCK_FILE"
 flock -n 9 || fail "another deployment or backup holds the lock"
 
@@ -26,8 +87,8 @@ record="$DEPLOYMENTS_DIR/$deployment_id"
 resuming_operation=0
 resuming_pointer_transaction=0
 resuming_accepted_transaction=0
-authority_transaction_driver="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/transaction.py"
-[[ -f "$authority_transaction_driver" && ! -L "$authority_transaction_driver" ]] \
+authority_transaction_driver="${REVIVAL_HELD_TRANSACTION:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/transaction.py}"
+release_material_file_is_safe "$authority_transaction_driver" \
   || fail "global authority transaction helper is missing or unsafe"
 inventory_json="$(python3 "$authority_transaction_driver" --root "$REMOTE_ROOT" --inventory)" \
   || fail "global authority transaction inventory is invalid"
@@ -85,25 +146,30 @@ if ((resuming_pointer_transaction == 0)); then
   [[ "$(safe_release_pointer "$REMOTE_ROOT/current")" == "$current_release" ]] \
     || fail "current release and deployment record disagree"
 fi
-rollback_driver="$(readlink -f -- "${BASH_SOURCE[0]}")"
-rollback_common="$(readlink -f -- "$(dirname -- "${BASH_SOURCE[0]}")/common.sh")"
-rollback_domain="$(readlink -f -- "$(dirname -- "${BASH_SOURCE[0]}")/domain.sh")"
-rollback_domain_helper="$(readlink -f -- "$(dirname -- "${BASH_SOURCE[0]}")/domain.py")"
-[[ "$rollback_driver" == "$current_release/platform/deploy/vps/remote/rollback.sh" \
-  && "$rollback_common" == "$current_release/platform/deploy/vps/remote/common.sh" \
-  && "$rollback_domain" == "$current_release/platform/deploy/vps/remote/domain.sh" \
-  && "$rollback_domain_helper" == "$current_release/platform/deploy/vps/remote/domain.py" ]] \
+rollback_release_logical_root="${REVIVAL_HELD_RELEASE_LOGICAL_ROOT:-}"
+rollback_driver="${BASH_SOURCE[0]}"
+rollback_common="${REVIVAL_HELD_COMMON:-}"
+rollback_domain="${REVIVAL_HELD_DOMAIN:-}"
+rollback_domain_helper="${REVIVAL_HELD_DOMAIN_PY:-}"
+[[ "$rollback_release_logical_root" == "$current_release" \
+  && "${REVIVAL_HELD_RELEASE_ID:-}" == "$current_release_id" \
+  && "${REVIVAL_HELD_EXEC:-}" =~ ^/proc/self/fd/[1-9][0-9]*$ ]] \
   || fail "rollback driver is stale relative to the locked current release"
 current_manifest="$MANIFESTS_DIR/$current_release_id.json"
-current_verifier="$current_release/platform/deploy/vps/verify-release.py"
-transaction_driver="$current_release/platform/deploy/vps/remote/transaction.py"
-[[ -f "$current_manifest" && -f "$current_verifier" && ! -L "$current_verifier" ]] \
-  || fail "current release verification material is missing"
-[[ -f "$transaction_driver" && ! -L "$transaction_driver" ]] \
+current_verifier="${REVIVAL_HELD_RELEASE_VERIFIER:-$current_release/platform/deploy/vps/verify-release.py}"
+current_release_store="${REVIVAL_HELD_RELEASE_STORE:-$current_release/platform/deploy/vps/remote/release-store.py}"
+transaction_driver="${REVIVAL_HELD_TRANSACTION:-$current_release/platform/deploy/vps/remote/transaction.py}"
+release_material_file_is_safe "$transaction_driver" \
   || fail "current release transaction helper is missing"
-verify_release_verifier_entry "$current_manifest" "$current_verifier" "$current_release_id" \
-  || fail "current release verifier is not independently bound to its manifest"
-python3 "$current_verifier" --tree "$current_release" --manifest "$current_manifest" --json >/dev/null
+current_candidate_id=""
+[[ -e "$record/candidate-id" || -L "$record/candidate-id" \
+  || -e "$record/candidate-path" || -L "$record/candidate-path" ]] \
+  || fail "rollback requires the current deployment's retained offline candidate"
+current_candidate_id="$(read_record_candidate_id "$record")" \
+  || fail "current candidate identity evidence could not be read"
+current_candidate="$REMOTE_ROOT/release-candidates/$current_candidate_id"
+verify_candidate_release_authority "$current_release_store" "$record" \
+  "$current_candidate_id" "$current_release_id"
 if ((resuming_pointer_transaction)); then
   python3 "$transaction_driver" --root "$REMOTE_ROOT" --record "$record" \
     --namespace rollback --reconcile --prepare-only
@@ -137,9 +203,7 @@ target_record="$(tr -d '\r\n' <"$record/old-current-deployment")"
 target_kind=canonical
 target_release_id=""
 if [[ -z "$target_release" && -z "$target_record" ]]; then
-  target_kind=legacy
-  [[ -f "$record/before/running-identities.tsv" && -f "$record/before/mounts.tsv" \
-    && -f "$record/before/semantic-baseline.tsv" ]] || fail "legacy rollback evidence is incomplete"
+  fail "rollback to a legacy cache-only target is forbidden; no retained candidate bundle exists"
 elif [[ -z "$target_release" || -z "$target_record" ]]; then
   fail "recorded rollback lineage is internally inconsistent"
 else
@@ -155,19 +219,27 @@ else
   validate_release_id "$target_release_id"
   [[ "$(tr -d '\r\n' <"$target_record/release-id")" == "$target_release_id" ]] \
     || fail "target release and deployment evidence disagree"
-  target_manifest="$MANIFESTS_DIR/$target_release_id.json"
-  target_verifier="$target_release/platform/deploy/vps/verify-release.py"
-  [[ -f "$target_manifest" && -f "$target_verifier" && ! -L "$target_verifier" ]] \
-    || fail "target release verification material is missing"
-  verify_release_verifier_entry "$target_manifest" "$target_verifier" "$target_release_id" \
-    || fail "target release verifier is not independently bound to its manifest"
-  # CROSS-RELEASE INVOCATION: verify-release.py out of $target_release — the
-  # release being rolled back TO, which is by definition not this one. A release
-  # tree is verified by the verifier its own manifest binds, so this must be that
-  # tree's copy; its interface must not be assumed. See
-  # cross_release_baseline_options in common.sh.
-  assert_cross_release_options verify-release.py --tree --manifest --json
-  python3 "$target_verifier" --tree "$target_release" --manifest "$target_manifest" --json >/dev/null
+
+  [[ -e "$target_record/candidate-id" || -L "$target_record/candidate-id" \
+    || -e "$target_record/candidate-path" || -L "$target_record/candidate-path" ]] \
+    || fail "rollback target has no retained offline candidate bundle"
+  target_candidate_id="$(read_record_candidate_id "$target_record")" \
+    || fail "target candidate identity evidence could not be read"
+  target_candidate="$REMOTE_ROOT/release-candidates/$target_candidate_id"
+  [[ "$target_candidate_id" =~ ^[0-9a-f]{64}$ \
+    && -d "$target_candidate" && ! -L "$target_candidate" \
+    && -f "$target_candidate/images.tar" && ! -L "$target_candidate/images.tar" \
+    && -f "$target_candidate/image-receipt.json" && ! -L "$target_candidate/image-receipt.json" ]] \
+    || fail "target candidate rollback bundle is unsafe or incomplete"
+  [[ "${REVIVAL_HELD_CANDIDATE_VERIFIER:-}" =~ ^/proc/self/fd/[1-9][0-9]*$ ]] \
+    || fail "current release lacks its trusted candidate verifier"
+  target_candidate_verification="$(run_held_candidate_verifier verify --candidate "$target_candidate" --expect-id "$target_candidate_id" --json)" \
+    || fail "target candidate failed filesystem-only rollback verification"
+  node -e 'const value=JSON.parse(process.argv[1]);if(value.ok!==true||value.candidateId!==process.argv[2]||value.releaseId!==process.argv[3]||value.productionCompatible!==true)process.exit(1)' \
+    "$target_candidate_verification" "$target_candidate_id" "$target_release_id" \
+    || fail "target candidate does not bind the requested rollback release and Carry contract"
+  verify_candidate_release_authority "$current_release_store" "$target_record" \
+    "$target_candidate_id" "$target_release_id"
 fi
 target_center_domain=0
 if [[ "$target_kind" == canonical \
@@ -304,6 +376,9 @@ verify_target_images_for_compose() {
   python3 - "$evidence" 3< <("${COMPOSE[@]}" config --format json) <<'PY'
 import json,os,subprocess,sys
 expected={}; image_ids={}
+docker_env={"DOCKER_CONFIG":"/home/anders/ai-pin-revival/private/docker-cli-empty",
+            "DOCKER_HOST":"unix:///var/run/docker.sock","HOME":"/nonexistent",
+            "LANG":"C.UTF-8","LC_ALL":"C.UTF-8","PATH":"/usr/bin:/usr/sbin","TZ":"UTC"}
 for number,line in enumerate(open(sys.argv[1],encoding="utf-8"),1):
     fields=line.rstrip("\n").split("\t"); assert len(fields)>=3 and all(fields[:3])
     service,image,image_id=fields[:3]; assert service not in expected
@@ -315,7 +390,8 @@ services=model.get("services") or {}
 assert set(services)==set(expected)
 for service,(image,image_id) in expected.items(): assert services[service].get("image")==image
 for image,image_id in image_ids.items():
-    actual=subprocess.check_output(["docker","image","inspect","--format","{{.Id}}",image],text=True).strip()
+    actual=subprocess.check_output(["/usr/bin/docker","image","inspect","--format","{{.Id}}",image],
+                                   text=True,env=docker_env).strip()
     assert actual==image_id
 PY
 }
@@ -325,6 +401,13 @@ validate_config_snapshot "$target_config" || fail "target protected configuratio
 if [[ "$target_kind" == canonical ]]; then
   load_compose_command_with_env "$target_release" "$target_config/runtime.env" "$target_config/cosmos.env" \
     "$target_config/providers.env" "$target_config/center.env"
+  activate_retained_candidate_authority "$target_release" "$target_record" "$record" \
+    rollback-candidate "$target_config/runtime.env" "$target_config/cosmos.env" \
+    "$target_config/providers.env" "$target_config/center.env" \
+    || fail "rollback target candidate/model authority could not be activated"
+  [[ "$(docker image inspect --format '{{.Id}}' "$HELPER_IMAGE")" == "$HELPER_IMAGE" ]] \
+    || fail "rollback helper image has no exact loaded local candidate binding"
+  apply_retained_candidate_image_override
   "${COMPOSE[@]}" config --quiet
   assert_compose_ports
   verify_target_images_for_compose "$target_record/running-images.tsv"
@@ -438,14 +521,17 @@ else
     "remote.domain:$rollback_domain" "remote.domain-helper:$rollback_domain_helper" \
     "release.verifier:$current_verifier"; do
     label="${spec%%:*}"; path="${spec#*:}"
-    [[ -f "$path" && ! -L "$path" ]] || fail "executing rollback material is missing or unsafe: $label"
-    printf '%s\t%s\t%s\n' "$label" "$(sha256sum "$path" | awk '{print $1}')" "$(stat -c '%a' "$path")" \
+    release_material_file_is_safe "$path" || fail "executing rollback material is missing or unsafe: $label"
+    printf '%s\t%s\t%s\n' "$label" "$(sha256sum "$path" | awk '{print $1}')" "$(stat -Lc '%a' "$path")" \
       >>"$work/executing-code.tsv"
   done
-  for common_lib in "$(dirname -- "$rollback_common")"/lib/*.sh; do
-    [[ -f "$common_lib" && ! -L "$common_lib" ]] || fail "common library material is missing or unsafe"
-    printf 'remote.common-lib.%s\t%s\t%s\n' "$(basename "$common_lib")" \
-      "$(sha256sum "$common_lib" | awk '{print $1}')" "$(stat -c '%a' "$common_lib")" \
+  for common_name in paths ingress release_transactions configuration compose backup database canary drift; do
+    common_key="REVIVAL_HELD_COMMON_LIB_${common_name^^}"
+    common_key="${common_key//-/_}"
+    common_lib="${!common_key:-}"
+    release_material_file_is_safe "$common_lib" || fail "common library material is missing or unsafe"
+    printf 'remote.common-lib.%s.sh\t%s\t%s\n' "$common_name" \
+      "$(sha256sum "$common_lib" | awk '{print $1}')" "$(stat -Lc '%a' "$common_lib")" \
       >>"$work/executing-code.tsv"
   done
   chmod 600 "$work/executing-code.tsv"
@@ -593,7 +679,7 @@ reprove_target_acceptance() {
       --require-remote-tts --require-owner-spotify --cookie-file "$cookie")
     ((target_center_domain)) || canary_args+=(--legacy-dashboard-origin)
     [[ -z "$fresh_backup" || ! -f "$fresh_backup/invariants.tsv" ]] || canary_args+=(--baseline "$fresh_backup")
-    bash "$current_release/platform/deploy/vps/remote/canary.sh" "${canary_args[@]}" >/dev/null
+    run_held_release_program "$current_release" platform/deploy/vps/remote/canary.sh bash 0 "${canary_args[@]}" >/dev/null
     status=$?
     rm -f -- "$cookie"
     ((status == 0)) || return 1
@@ -641,7 +727,7 @@ PY
       --image-evidence "$target_record/running-images.tsv" --require-remote-tts \
       --require-owner-spotify --cookie-file "$resume_cookie")
     ((target_center_domain)) || resume_canary+=(--legacy-dashboard-origin)
-    bash "$current_release/platform/deploy/vps/remote/canary.sh" "${resume_canary[@]}"
+    run_held_release_program "$current_release" platform/deploy/vps/remote/canary.sh bash 0 "${resume_canary[@]}"
   else
     verify_legacy_application "$record/before" \
       || fail "accepted legacy rollback target no longer matches its recorded application"
@@ -753,9 +839,11 @@ finish_rollback() {
     restore_pointer previous "$previous_pointer" || recovery_ok=0
     restore_pointer current-deployment "$record" || recovery_ok=0
   fi
-  load_compose_command "$current_release"
-  "${COMPOSE[@]}" up -d --pull never --no-build --remove-orphans || recovery_ok=0
-  wait_for_services "$current_release" || recovery_ok=0
+  if activate_retained_candidate_authority "$current_release" "$record" "$record" \
+      rollback-recovery-current; then
+    load_compose_command "$current_release"
+    "${COMPOSE[@]}" up -d --pull never --no-build --remove-orphans || recovery_ok=0
+    wait_for_services "$current_release" || recovery_ok=0
   domain_keycloak_apply "$record" "$work/current-config/runtime.env" 8088 center.andersmadsen.dk \
     || recovery_ok=0
   domain_nginx_verify_desired "$record" || recovery_ok=0
@@ -770,19 +858,25 @@ finish_rollback() {
     --require-remote-tts --require-owner-spotify --quiesced-loopback --expect-bridge-ready \
     --cookie-file "$owner_canary_cookie")
   if [[ -n "$fresh_backup" && -f "$fresh_backup/invariants.tsv" ]]; then recovery_canary+=(--baseline "$fresh_backup"); fi
-  bash "$current_release/platform/deploy/vps/remote/canary.sh" "${recovery_canary[@]}" >/dev/null || recovery_ok=0
+  run_held_release_program "$current_release" platform/deploy/vps/remote/canary.sh bash 0 "${recovery_canary[@]}" >/dev/null || recovery_ok=0
   restore_ingress_services "$ingress_evidence" "$record" desired || recovery_ok=0
   domain_cloudflared_verify_desired "$record" || recovery_ok=0
   assert_ingress_matches_recorded "$ingress_evidence" || recovery_ok=0
-  if ((recovery_ok)); then
-    ingress_quiesced=0
-    public_recovery_canary=(--release-id "$current_release_id" \
-      --image-evidence "$record/running-images.tsv" --require-remote-tts --require-owner-spotify \
-      --cookie-file "$owner_canary_cookie")
-    [[ -z "$fresh_backup" || ! -f "$fresh_backup/invariants.tsv" ]] \
-      || public_recovery_canary+=(--baseline "$fresh_backup")
-    bash "$current_release/platform/deploy/vps/remote/canary.sh" "${public_recovery_canary[@]}" >/dev/null \
-      || recovery_ok=0
+    if ((recovery_ok)); then
+      ingress_quiesced=0
+      public_recovery_canary=(--release-id "$current_release_id" \
+        --image-evidence "$record/running-images.tsv" --require-remote-tts --require-owner-spotify \
+        --cookie-file "$owner_canary_cookie")
+      [[ -z "$fresh_backup" || ! -f "$fresh_backup/invariants.tsv" ]] \
+        || public_recovery_canary+=(--baseline "$fresh_backup")
+      run_held_release_program "$current_release" platform/deploy/vps/remote/canary.sh bash 0 "${public_recovery_canary[@]}" >/dev/null \
+        || recovery_ok=0
+    fi
+  else
+    # Never fall back to ambient tags/cache after retained bundle activation
+    # fails.  Leave ingress closed and preserve the prepared staging tree for a
+    # later exact-authority resume or operator inspection.
+    recovery_ok=0
   fi
   if ((recovery_ok)); then
     printf '%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$work/CURRENT_RECOVERED"
@@ -920,7 +1014,7 @@ else
     --operation-ingress-evidence "$ingress_evidence"
   python3 "$transaction_driver" --root "$REMOTE_ROOT" --record "$record" \
     --namespace rollback --operation-action quiescing
-  bash "$current_release/platform/deploy/vps/remote/backup.sh" \
+  run_held_release_program "$current_release" platform/deploy/vps/remote/backup.sh bash 0 \
     --backup-id "$rollback_backup_id" --leave-quiesced --already-locked \
     --cloudflared-record "$record" --cloudflared-state desired --ingress-evidence "$ingress_evidence"
   python3 "$transaction_driver" --root "$REMOTE_ROOT" --record "$record" \
@@ -961,7 +1055,7 @@ if [[ "$target_kind" == canonical ]]; then
   [[ -f "$target_config/spotify-token" && ! -L "$target_config/spotify-token" ]] \
     || fail "target staging Spotify token is missing"
   install -m 600 "$target_config/spotify-token" "$target_stage/spotify-token"
-  bash "$current_release/platform/deploy/vps/remote/staging-smoke.sh" \
+  run_held_release_program "$current_release" platform/deploy/vps/remote/staging-smoke.sh bash 0 \
     --release-id "$target_release_id" --backup "$fresh_backup" --env-dir "$target_stage/env" \
     --attest-dir "$target_stage/assets/attest" --duc-dir "$target_stage/assets/duc" \
     --keycloak-theme-dir "$target_stage/assets/keycloak-theme" \
@@ -1040,6 +1134,8 @@ chmod 600 "$record/ROLLBACK_ACTIVATION_ARMED.tmp"
 mv "$record/ROLLBACK_ACTIVATION_ARMED.tmp" "$record/ROLLBACK_ACTIVATION_ARMED"
 sync -f "$record/ROLLBACK_ACTIVATION_ARMED"
 
+activate_retained_candidate_authority "$current_release" "$record" "$record" \
+  rollback-stop-current
 load_compose_command "$current_release"
 "${COMPOSE[@]}" down --remove-orphans
 stop_project_containers "$PROJECT"
@@ -1066,6 +1162,8 @@ if [[ "$target_kind" == canonical ]]; then
   sudo -n python3 "$transaction_driver" --root "$REMOTE_ROOT" --record "$record" \
     --trust-root-action record --staged-attest "$target_stage/assets/attest" \
     --staged-duc "$target_stage/assets/duc" --live-attest "$PRIVATE_DIR/attest" --live-duc "$PRIVATE_DIR/duc"
+  activate_retained_candidate_authority "$target_release" "$target_record" "$record" \
+    rollback-activate-target
   load_compose_command "$target_release"
   "${COMPOSE[@]}" up -d --pull never --no-build --remove-orphans
   wait_for_services "$target_release"
@@ -1084,7 +1182,7 @@ open(sys.argv[3],"w",encoding="utf-8").write("".join("\t".join(row)+"\n" for row
 PY
   chmod 600 "$work/target-config-evidence.tsv"
   verify_configuration_evidence "$work/target-config-evidence.tsv" "$target_release"
-  bash "$current_release/platform/deploy/vps/remote/canary.sh" --release-id "$target_release_id" \
+  run_held_release_program "$current_release" platform/deploy/vps/remote/canary.sh bash 0 --release-id "$target_release_id" \
     --baseline "$fresh_backup" --image-evidence "$target_record/running-images.tsv" \
     --require-remote-tts --quiesced-loopback "${target_origin_args[@]}"
   assert_ingress_quiesced || fail "managed ingress reopened during rollback canary"
@@ -1113,7 +1211,7 @@ if [[ "$target_kind" == canonical ]]; then
   ingress_quiesced=0
   wait_for_services "$target_release"
   write_owner_canary_cookie "$target_release" "$owner_canary_cookie"
-  bash "$current_release/platform/deploy/vps/remote/canary.sh" --release-id "$target_release_id" \
+  run_held_release_program "$current_release" platform/deploy/vps/remote/canary.sh bash 0 --release-id "$target_release_id" \
     --image-evidence "$target_record/running-images.tsv" \
     --require-remote-tts --require-owner-spotify --quiesced-loopback --expect-bridge-ready \
     --cookie-file "$owner_canary_cookie" "${target_origin_args[@]}"
@@ -1130,7 +1228,7 @@ else
 fi
 assert_ingress_matches_recorded "$ingress_evidence" || fail "rollback ingress differs from its recorded state"
 if [[ "$target_kind" == canonical ]]; then
-  bash "$current_release/platform/deploy/vps/remote/canary.sh" --release-id "$target_release_id" \
+  run_held_release_program "$current_release" platform/deploy/vps/remote/canary.sh bash 0 --release-id "$target_release_id" \
     --image-evidence "$target_record/running-images.tsv" \
     --require-remote-tts --require-owner-spotify --cookie-file "$owner_canary_cookie" \
     "${target_origin_args[@]}"

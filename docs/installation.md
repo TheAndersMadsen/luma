@@ -49,12 +49,39 @@ reachable release and matching version tag are published.
 The doctor should name every failed prerequisite and a next action. It does not
 install missing tools for you.
 
+Guided setup advances only after the referenced authoritative command returns
+its exact action-specific success result. Before dispatch it captures the exact
+argv, command contract, implementation bytes, and file identities; it
+recaptures them after success and writes a bounded mode-`0600` receipt outside
+the checkout only when nothing changed. A failed, planned, dry-run, weakened,
+or concurrently replaced action produces no receipt. Live/physical device
+acceptance is never made sticky. Hosted artifact imports additionally persist
+and revalidate their provider evidence, and `setup artifacts vps|pin` repeats
+that check explicitly.
+
+Production setup has one additional cutover prerequisite: before the first
+hosted-only deployment, the currently running production release (the
+immutable Carry release) must be produced by the accepted GitHub-hosted
+workflow, imported, and freshly
+provider-verified as the retained rollback baseline. Descriptor schemas 2/3
+and local-origin candidates are intentionally ineligible; the Carry→Cosmos
+migration has no legacy auto-adoption or promotion bypass. If that exact
+baseline cannot be attested, stop before deploying the forward candidate.
+
 ## Use the Dev Container
 
 Contributors using a Dev Container-capable editor can open the checkout in
 `.devcontainer/devcontainer.json`. It supplies Node 22.14.0, Rust 1.91.1, and
-Docker-outside-of-Docker, while keeping Cargo, Gradle, npm, and Revival state in
-an external workspace volume.
+Docker-outside-of-Docker from a digest-pinned base and exact feature lockfile.
+One `${devcontainerId}`-scoped volume holds disposable build/package caches;
+a separate owner-only volume holds Cargo/Gradle configuration and every
+`REVIVAL_*` config, secret, data, backup, and release-state directory. Release
+authority is never stored in the shared cache volume.
+
+Outside the Dev Container, rustup reads the root `rust-toolchain.toml` and
+selects Rust 1.91.1 with rustfmt and Clippy. A different patch or newer stable
+compiler is rejected by contributor and release checks so local lint behavior
+cannot drift from CI or the Cosmos build image.
 
 After the container opens:
 
@@ -65,7 +92,12 @@ After the container opens:
 ```
 
 The Dev Container does not supply private signing keys, gated native inputs, a
-connected Pin, production access, or physical acceptance.
+connected Pin, production access, or physical acceptance. Rebuild with a
+frozen `devcontainer-lock.json`; changing a feature, digest, or tool version is
+a reviewed dependency update rather than an implicit `latest` refresh.
+This follows the official Dev Container
+[lockfile contract](https://github.com/devcontainers/spec/blob/main/docs/specs/devcontainer-lockfile.md)
+and [exact Feature versioning](https://github.com/devcontainers/spec/blob/main/docs/specs/devcontainer-features.md#referencing-a-feature).
 
 ## Install Center as a PWA
 

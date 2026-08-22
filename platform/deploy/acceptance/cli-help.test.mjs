@@ -35,9 +35,11 @@ test("every current command, alias, and group resolves help before effects", () 
   try {
     const paths = [];
     const groups = new Map();
+    const commandsByPath = new Map();
     for (const command of contract.commands.filter((entry) => entry.lifecycle === "current")) {
       for (const tokens of [command.tokens, ...command.aliases]) {
         paths.push(tokens);
+        commandsByPath.set(tokens.join("\0"), command);
         for (let length = 1; length < tokens.length; length += 1) {
           groups.set(tokens.slice(0, length).join("\0"), tokens.slice(0, length));
         }
@@ -47,10 +49,57 @@ test("every current command, alias, and group resolves help before effects", () 
       const result = invoke(env, ...tokens, "--help");
       assert.equal(result.status, 0, `${tokens.join(" ")}: ${result.stderr}`);
       assert.match(result.stdout, /Usage:/, tokens.join(" "));
+      assert.match(result.stdout, /Safety:/, `${tokens.join(" ")} omits its safety boundary`);
+      const command = commandsByPath.get(tokens.join("\0"));
+      if (command?.effect === "read-only") assert.match(result.stdout, /Safety: read-only/u, command.id);
+      if (command?.effect === "local-mutation") {
+        assert.match(result.stdout, /Safety: (?:local mutation only|the local mutation)/u, command.id);
+      }
+      if (command?.effect === "remote-mutation") {
+        assert.match(result.stdout, /Safety: (?:this remote mutation|remote mutation)/u, command.id);
+      }
+      if (command?.effect === "device-mutation") assert.match(result.stdout, /Safety: device mutation/u, command.id);
     }
     assert.equal(fs.existsSync(env.REVIVAL_CONFIG_DIR), false, "help must not initialize configuration");
     assert.equal(fs.existsSync(env.REVIVAL_DATA_DIR), false, "help must not initialize data");
     assert.equal(fs.existsSync(path.join(temporary, "setup-state.json")), false, "help must not select a setup track");
+  } finally {
+    fs.rmSync(temporary, { recursive: true, force: true });
+  }
+});
+
+test("root and command help state the effect boundary without running effects", () => {
+  const { temporary, env } = isolatedEnvironment();
+  try {
+    for (const args of [[], ["help"], ["--help"], ["unknown-command", "--help"]]) {
+      const result = invoke(env, ...args);
+      assert.equal(result.status, 0, `${args.join(" ")}: ${result.stderr}`);
+      assert.match(result.stdout, /Safety: help is read-only and side-effect-free/u);
+    }
+
+    assert.equal(fs.existsSync(env.REVIVAL_CONFIG_DIR), false);
+    assert.equal(fs.existsSync(env.REVIVAL_DATA_DIR), false);
+  } finally {
+    fs.rmSync(temporary, { recursive: true, force: true });
+  }
+});
+
+test("help flags short-circuit unknown trailing arguments at every position", () => {
+  const { temporary, env } = isolatedEnvironment();
+  try {
+    for (const args of [
+      ["--help", "deploy", "production", "--poison"],
+      ["deploy", "--help", "production", "--poison"],
+      ["deploy", "production", "--poison", "--help"],
+      ["help", "deploy", "production", "--poison"],
+    ]) {
+      const result = invoke(env, ...args);
+      assert.equal(result.status, 0, `${args.join(" ")}: ${result.stderr}`);
+      assert.match(result.stdout, /Usage:/u);
+      assert.match(result.stdout, /Safety:/u);
+    }
+    assert.equal(fs.existsSync(env.REVIVAL_CONFIG_DIR), false);
+    assert.equal(fs.existsSync(env.REVIVAL_DATA_DIR), false);
   } finally {
     fs.rmSync(temporary, { recursive: true, force: true });
   }

@@ -992,14 +992,16 @@ export function buildVisiblePolicyProbeScript(
   if (settingsFile !== "shared_prefs/cmu_relay_settings.xml" && settingsFile !== "/dev/stdin") {
     throw safeError("invalid visible-policy settings source");
   }
+  const readSettings = settingsFile === "/dev/stdin"
+    ? `xml=$(cat) || exit 1; `
+    : `f='${settingsFile}'; test -r "$f" || exit 1; xml=$(cat "$f") || exit 1; `;
   const sentinelPackage = CMU_PHYSICAL_CONTRACT.sentinelPackage;
   const exactBoolean = (name, value) => [
     `[ "$(printf '%s\\n' "$xml" | grep -Fo 'name="${name}"' | wc -l | tr -d ' ')" -eq 1 ] || exit 1; `,
     `printf '%s\\n' "$xml" | grep -Fq 'name="${name}" value="${value}"' || exit 1; `,
   ].join("");
   return [
-    `f='${settingsFile}'; test -r "$f" || exit 1; `,
-    `xml=$(cat "$f") || exit 1; `,
+    readSettings,
     exactBoolean("relay_enabled", "true"),
     exactBoolean("relay_all_eligible", "true"),
     exactBoolean("relay_bodies", "false"),
@@ -1045,10 +1047,11 @@ export function buildLiveGattProbeScript(
   if (source !== "dumpsys bluetooth_manager 2>/dev/null" && source !== "cat /dev/stdin") {
     throw safeError("invalid live-GATT probe source");
   }
+  const sourceCommand = source === "cat /dev/stdin" ? "cat" : source;
   const packagePattern = escapeRegExp(CMU_PHYSICAL_CONTRACT.packageName);
   const servicePattern = escapeRegExp(TRANSPORT_RESET_CONTRACT.gattServiceUuid);
   return [
-    `${source} | `,
+    `${sourceCommand} | `,
     `awk 'function finish_app(){if(block_app && block_connection && block_service && !block_stale){same_block=1}} `,
     `BEGIN{app=0;connection=0;service=0;same_block=0;advertising=0;app_lines=0;in_adv=0;adv_lines=0} `,
     `/^[[:space:]]*Ongoing advertising:[[:space:]]*$/{in_adv=1;adv_lines=32;next} `,

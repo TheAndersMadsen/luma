@@ -54,6 +54,10 @@ export function getManagedPackageStatusText(
     return "APK Path Unreadable";
   }
 
+  if (pkg.keepDataUpdateVerdict === "may-continue") {
+    return "Continuity Unverified";
+  }
+
   if (pkg.versionComparison === "older") {
     return "Update Available";
   }
@@ -95,6 +99,7 @@ export function hasProblematicManagedPackageState(
     !pkg.healthy ||
     pkg.keepDataUpdateVerdict === "foreign-artifact" ||
     pkg.keepDataUpdateVerdict === "unreadable" ||
+    pkg.keepDataUpdateVerdict === "may-continue" ||
     pkg.versionComparison === "older" ||
     pkg.versionComparison === "newer" ||
     pkg.versionComparison === "unreadable"

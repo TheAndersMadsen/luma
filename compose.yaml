@@ -128,6 +128,9 @@ services:
       COSMOS_INSTANCE_ID: ai-bus-${REVIVAL_REVISION:-${REVIVAL_RELEASE_ID}}
       COSMOS_POD_NAME: ai-bus-${REVIVAL_REVISION:-${REVIVAL_RELEASE_ID}}-1
       COSMOS_WORKLOAD: ai-bus
+      # Explicit compatibility mode. Production overrides this with a required
+      # protected value; use `enforce` after legacy wearer ids are reconciled.
+      COSMOS_KID_SCOPE: ${COSMOS_KID_SCOPE:-audit}
       COSMOS_ADMIN_TOKEN: ${COSMOS_ADMIN_TOKEN:-}
       COSMOS_CENTER_PROJECTION_TOKEN: ${COSMOS_CENTER_PROJECTION_TOKEN:-}
       COSMOS_DEMO_ENABLED: ${COSMOS_DEMO_ENABLED:-false}

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  chmod,
   copyFile,
   mkdir,
   mkdtemp,
@@ -306,8 +307,11 @@ test("local deploy driver uses only the selected release for cutover", async () 
 
     const deploySource = await readFile(LOCAL_DEPLOY, "utf8");
     const librarySource = await readFile(LOCAL_LIB, "utf8");
-    assert.match(deploySource, /node platform\/deploy\/release\.mjs build/);
+    assert.doesNotMatch(deploySource, /node platform\/deploy\/release\.mjs build/);
     assert.match(deploySource, /node platform\/deploy\/release\.mjs verify/);
+    assert.match(deploySource, /assertLegacyProductionCompatible/);
+    assert.match(deploySource, /--candidate-id/);
+    assert.match(librarySource, /--partial --append-verify --protect-args/);
     assert.doesNotMatch(deploySource, /platform\/release\/package\.mjs/);
     assert.match(librarySource, /platform\/deploy\/release\.mjs/);
     assert.doesNotMatch(librarySource, /platform\/release\/package\.mjs/);
@@ -316,71 +320,33 @@ test("local deploy driver uses only the selected release for cutover", async () 
     assert.match(deploySource, /materialize_release_member[^\n]*RELEASE_VERIFIER_PATH/);
     assert.match(deploySource, /run_verified_release_deploy/);
     const dryRunBoundary = deploySource.indexOf("if ((dry_run))");
-    const streamedPreflight = deploySource.indexOf("run_remote_impl preflight.sh");
-    assert.ok(dryRunBoundary >= 0 && streamedPreflight > dryRunBoundary);
+    const localPreflight = deploySource.indexOf("local_preflight", dryRunBoundary);
+    assert.ok(dryRunBoundary >= 0 && localPreflight > dryRunBoundary);
+    assert.doesNotMatch(deploySource.slice(0, localPreflight), /run_ssh|remote_preupload_gate/);
     assert.match(deploySource, /--cleanup-project-images is unavailable with --dry-run/);
-    assert.match(librarySource, /python3 "\$verifier" --archive[\s\S]*--expect-release-id "\$release_id"/);
-    assert.match(librarySource, /bash "\$preflight"/);
-    assert.match(librarySource, /exec bash "\$driver"/);
-
-    const realVerifier = await readFile(VERIFIER);
-    const selectedPreflight = [
-      "#!/usr/bin/env bash",
-      "set -euo pipefail",
-      "printf '%s\\n' \"$@\" >\"$REVIVAL_REMOTE_ROOT/preflight-args\"",
-      "",
-    ].join("\n");
-    const selectedDeploy = [
-      "#!/usr/bin/env bash",
-      "set -euo pipefail",
-      "printf '%s\\n' \"$@\" >\"$REVIVAL_REMOTE_ROOT/deploy-args\"",
-      "",
-    ].join("\n");
-    const dynamicFiles = {
-      "platform/deploy/vps/remote/common.sh": { data: "# selected common\\n", mode: "0644" },
-      "platform/deploy/vps/remote/deploy.sh": { data: selectedDeploy, mode: "0644" },
-      "platform/deploy/vps/remote/preflight.sh": { data: selectedPreflight, mode: "0644" },
-      "platform/deploy/vps/verify-release.py": { data: realVerifier, mode: "0644" },
-    };
-    const dynamic = await fixture(join(directory, "dynamic"), { files: dynamicFiles });
-    const remoteRoot = join(directory, "remote-root");
-    const incoming = join(remoteRoot, "incoming", dynamic.manifest.releaseId);
-    await mkdir(incoming, { recursive: true, mode: 0o700 });
-    const remoteArchive = join(incoming, "release.tar.gz");
-    const remoteManifest = join(incoming, "release.manifest.json");
-    const remoteVerifier = join(incoming, "verify-release.py");
-    await copyFile(dynamic.archivePath, remoteArchive);
-    await copyFile(dynamic.manifestPath, remoteManifest);
-    await writeFile(remoteVerifier, realVerifier, { mode: 0o700 });
-    const archiveBytes = (await stat(remoteArchive)).size;
-    const bootstrap = run("bash", [
-      "-c",
-      [
-        'source "$1"',
-        'REMOTE_ROOT="$2"',
-        'EXPECTED_HOST="fixture-host"',
-        'EXPECTED_USER="fixture-user"',
-        'EXPECTED_ARCH="fixture-arch"',
-        'run_ssh() { bash -c "$1"; }',
-        'run_verified_release_deploy "$3" "$4" "$5" "$6" "$7" fixture-deployment 1 "$8" 0 0',
-      ].join("; "),
-      "binding-test",
-      LOCAL_LIB,
-      remoteRoot,
-      dynamic.manifest.releaseId,
-      incoming,
-      remoteArchive,
-      remoteManifest,
-      remoteVerifier,
-      String(archiveBytes),
-    ]);
-    assert.equal(bootstrap.status, 0, bootstrap.stderr);
-    assert.equal(
-      await readFile(join(incoming, "verified-driver", "platform", "deploy", "vps", "remote", "deploy.sh"), "utf8"),
-      selectedDeploy,
+    assert.match(librarySource, /cat "\$REMOTE_IMPL\/bootstrap-release\.py"/u);
+    assert.match(librarySource, /run_held_bootstrap_entry platform\/deploy\/release-candidate\.mjs node/u);
+    assert.match(librarySource, /run_held_bootstrap_entry platform\/deploy\/vps\/remote\/preflight\.sh bash/u);
+    assert.match(librarySource, /run_held_bootstrap_entry platform\/deploy\/vps\/remote\/deploy\.sh bash/u);
+    assert.match(librarySource, /os\.memfd_create\("revival-held-exec"[\s\S]*F_ADD_SEALS/u);
+    assert.match(
+      librarySource,
+      /held-release-exec\.py[\s\S]*pass_fds=\((?:sealed|sealed_fd),/u,
     );
-    assert.match(await readFile(join(remoteRoot, "preflight-args"), "utf8"), /--min-free-gb\n1\n--archive-bytes\n/);
-    assert.match(await readFile(join(remoteRoot, "deploy-args"), "utf8"), /--release-id\n[0-9a-f]{64}\n/);
+    const incomingRetirement = librarySource.slice(
+      librarySource.indexOf("# The selected driver cannot move the workspace"),
+      librarySource.indexOf('exit "$status"', librarySource.indexOf("# The selected driver cannot move the workspace")),
+    );
+    assert.match(incomingRetirement, /cat "\$REVIVAL_ROOT\/platform\/deploy\/candidate-store\.py"/u,
+      "incoming retirement must stream the canonical candidate-store helper");
+    assert.match(incomingRetirement, /retire-path --parent "\$remote_root\/incoming" --name "\$release_id"/u);
+    assert.match(incomingRetirement, /\^\\\.candidate-retired-\[0-9a-f\]\{32\}\$/u,
+      "the accepted cleanup result must be the exact content receipt name");
+    assert.match(incomingRetirement, /\(\(status != 0\)\) \|\| status=\$cleanup_status/u,
+      "cleanup must preserve a nonzero selected-driver exit status");
+    assert.doesNotMatch(incomingRetirement, /ftruncate|fchmod|unlink|rmdir|rm -rf|secrets\.|token_hex/u,
+      "the bootstrap must not carry a second destructive retirement implementation");
+    assert.doesNotMatch(librarySource, /python3 "\$verifier" --(?:archive|tree)|exec bash "\$entry"/u);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

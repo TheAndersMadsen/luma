@@ -1,0 +1,223 @@
+{
+  "schema": "revival.production-compose-authority",
+  "schemaVersion": 2,
+  "composeFiles": {
+    "compose.yaml": "bc612ba60b1b962830854cb4eb2cf20f77499b85f572a3d9d6bdf9b18ff64648",
+    "platform/compose/production.yaml": "46da4e8240e833145468fa982baa6b47b864e72aa0e6806be508fd042e9efeba"
+  },
+  "remoteCommon": {
+    "path": "platform/deploy/vps/remote/common.sh",
+    "sha256": "ee9776b190729d66e411fc8c8b2626a1a8e14cf03f33dba4eddd45ac982c7ed9"
+  },
+  "releaseConfig": {
+    "path": "platform/deploy/release.json",
+    "sha256": "dd2341ac18d671d95141d9a33f816fd4f2a46f24e4e19566abee4c18dd271a56"
+  },
+  "effective": {
+    "projectName": "ai-pin-revival",
+    "activeServices": [
+      "account",
+      "ai-bus",
+      "center",
+      "connectivity",
+      "contacts",
+      "edge",
+      "feature-flags",
+      "grafana",
+      "keycloak",
+      "notable-events",
+      "postgres",
+      "prometheus",
+      "provisioning",
+      "searxng",
+      "spotify-adapter"
+    ],
+    "serviceImages": {
+      "account": {
+        "reference": "ai-pin-revival/cosmos:{releaseId}",
+        "role": "cosmos"
+      },
+      "ai-bus": {
+        "reference": "ai-pin-revival/cosmos:{releaseId}",
+        "role": "cosmos"
+      },
+      "center": {
+        "reference": "ai-pin-revival/center:{releaseId}",
+        "role": "center"
+      },
+      "connectivity": {
+        "reference": "ai-pin-revival/cosmos:{releaseId}",
+        "role": "cosmos"
+      },
+      "contacts": {
+        "reference": "ai-pin-revival/cosmos:{releaseId}",
+        "role": "cosmos"
+      },
+      "edge": {
+        "reference": "envoyproxy/envoy:v1.31-latest@sha256:caa5b411be1633b90023592a34a7e010c933d6e60206c758f631485e53006865",
+        "role": "envoy"
+      },
+      "feature-flags": {
+        "reference": "ai-pin-revival/cosmos:{releaseId}",
+        "role": "cosmos"
+      },
+      "grafana": {
+        "reference": "grafana/grafana:11.2.0@sha256:408afb9726de5122b00a2576763a8a57a3c86d5b0eff5305bc994ceb3eb96c3f",
+        "role": "grafana"
+      },
+      "keycloak": {
+        "reference": "quay.io/keycloak/keycloak:26.0@sha256:09a381c715ab0b111835b70f2905955274843a219c6f27efb348e4d9f4086858",
+        "role": "keycloak"
+      },
+      "notable-events": {
+        "reference": "ai-pin-revival/cosmos:{releaseId}",
+        "role": "cosmos"
+      },
+      "postgres": {
+        "reference": "postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777",
+        "role": "postgres"
+      },
+      "prometheus": {
+        "reference": "prom/prometheus:v2.54.1@sha256:f6639335d34a77d9d9db382b92eeb7fc00934be8eae81dbc03b31cfe90411a94",
+        "role": "prometheus"
+      },
+      "provisioning": {
+        "reference": "ai-pin-revival/cosmos:{releaseId}",
+        "role": "cosmos"
+      },
+      "searxng": {
+        "reference": "searxng/searxng@sha256:f4c8e59de166ed71f6380c0847c312ca51f0d41996e31d0559163b6b09ecde52",
+        "role": "searxng"
+      },
+      "spotify-adapter": {
+        "reference": "ai-pin-revival/spotify-adapter:{releaseId}",
+        "role": "spotify-adapter"
+      }
+    },
+    "resources": {
+      "networks": {
+        "cosmos-internal": null,
+        "identity-edge": null,
+        "local-model": "humane-cosmos-clone_cosmos-local",
+        "loopback-publish": null,
+        "provider-egress": null,
+        "search-egress": null,
+        "search-service": null,
+        "spotify-control": null,
+        "wearer-edge": null
+      },
+      "volumes": {
+        "center-data": null,
+        "cosmos-pgdata": "humane-cosmos-clone_cosmos-pgdata",
+        "cosmos-state": "humane-cosmos-clone_cosmos-state",
+        "grafana-data": "humane-cosmos-clone_grafana-data",
+        "prometheus-data": "humane-cosmos-clone_prometheus-data"
+      }
+    },
+    "protectedVolumes": {
+      "cosmos-pgdata": {
+        "externalName": "humane-cosmos-clone_cosmos-pgdata",
+        "grants": [
+          {
+            "readOnly": false,
+            "service": "postgres",
+            "target": "/var/lib/postgresql/data"
+          }
+        ]
+      },
+      "cosmos-state": {
+        "externalName": "humane-cosmos-clone_cosmos-state",
+        "grants": [
+          {
+            "readOnly": false,
+            "service": "account",
+            "target": "/var/lib/cosmos"
+          },
+          {
+            "readOnly": false,
+            "service": "ai-bus",
+            "target": "/var/lib/cosmos"
+          },
+          {
+            "readOnly": false,
+            "service": "connectivity",
+            "target": "/var/lib/cosmos"
+          },
+          {
+            "readOnly": false,
+            "service": "contacts",
+            "target": "/var/lib/cosmos"
+          },
+          {
+            "readOnly": false,
+            "service": "feature-flags",
+            "target": "/var/lib/cosmos"
+          },
+          {
+            "readOnly": false,
+            "service": "notable-events",
+            "target": "/var/lib/cosmos"
+          },
+          {
+            "readOnly": false,
+            "service": "provisioning",
+            "target": "/var/lib/cosmos"
+          }
+        ]
+      },
+      "grafana-data": {
+        "externalName": "humane-cosmos-clone_grafana-data",
+        "grants": [
+          {
+            "readOnly": false,
+            "service": "grafana",
+            "target": "/var/lib/grafana"
+          }
+        ]
+      },
+      "prometheus-data": {
+        "externalName": "humane-cosmos-clone_prometheus-data",
+        "grants": [
+          {
+            "readOnly": false,
+            "service": "prometheus",
+            "target": "/prometheus"
+          }
+        ]
+      }
+    },
+    "protectedNetworks": {
+      "local-model": {
+        "externalName": "humane-cosmos-clone_cosmos-local",
+        "services": [
+          "ai-bus"
+        ]
+      }
+    },
+    "centerData": {
+      "readOnly": false,
+      "service": "center",
+      "source": "/home/anders/cosmos-center-data",
+      "target": "/data",
+      "type": "bind"
+    }
+  },
+  "productionState": {
+    "centerDataPath": "/home/anders/cosmos-center-data",
+    "externalNetworks": [
+      "humane-cosmos-clone_cosmos-local"
+    ],
+    "projectFamily": "humane-cosmos-clone",
+    "protectedRoot": "/home/anders/ai-pin-revival",
+    "runtimeProject": "ai-pin-revival",
+    "schema": "revival.production-state-contract",
+    "schemaVersion": 2,
+    "storageFamily": "humane-cosmos-clone",
+    "volumes": [
+      "humane-cosmos-clone_cosmos-pgdata",
+      "humane-cosmos-clone_cosmos-state",
+      "humane-cosmos-clone_grafana-data",
+      "humane-cosmos-clone_prometheus-data"
+    ]
+  }
+}

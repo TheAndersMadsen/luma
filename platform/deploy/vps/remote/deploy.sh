@@ -1,17 +1,66 @@
-#!/usr/bin/env bash
+#!/usr/bin/bash
 set -euo pipefail
-source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/common.sh"
-source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/domain.sh"
+source "${REVIVAL_HELD_COMMON:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/common.sh}"
+source "${REVIVAL_HELD_DOMAIN:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/domain.sh}"
+
+candidate_override=""
+candidate_override_sha256=""
+candidate_override_identity=""
+pin_local_docker_daemon() {
+  local -a inherited=("${!DOCKER_@}")
+  local docker_config="$REMOTE_ROOT/private/docker-cli-empty"
+  if ((${#inherited[@]} != 0)); then
+    [[ "${DOCKER_HOST:-}" == unix:///var/run/docker.sock \
+      && "${DOCKER_CONFIG:-}" == "$docker_config" \
+      && "$(printf '%s\n' "${inherited[@]}" | LC_ALL=C sort)" == $'DOCKER_CONFIG\nDOCKER_HOST' ]] \
+      || fail "refusing ambient Docker daemon/config selection: ${inherited[*]}"
+  fi
+  if [[ ! -e "$docker_config" && ! -L "$docker_config" ]]; then
+    mkdir -m 700 -- "$docker_config"
+  fi
+  [[ -d "$docker_config" && ! -L "$docker_config" \
+    && "$(readlink -f -- "$docker_config")" == "$docker_config" \
+    && "$(stat -c '%a:%u:%g' "$docker_config")" == "700:$(id -u):$(id -g)" \
+    && -z "$(find "$docker_config" -mindepth 1 -maxdepth 1 -print -quit)" ]] \
+    || fail "Docker configuration anchor must be an empty owner-owned mode-0700 directory"
+  export DOCKER_HOST=unix:///var/run/docker.sock
+  export DOCKER_CONFIG="$docker_config"
+}
+assert_candidate_override_held() {
+  [[ -n "${revival_candidate_override_path:-}" \
+    && "${revival_candidate_override_sha256:-}" =~ ^[0-9a-f]{64}$ \
+    && "${revival_candidate_id:-}" =~ ^[0-9a-f]{64}$ \
+    && "${revival_candidate_path:-}" == "$REMOTE_ROOT/release-candidates/${revival_candidate_id:-}" \
+    && "${revival_candidate_authority_receipt_sha256:-}" =~ ^[0-9a-f]{64}$ \
+    && "${revival_candidate_compose_model_sha256:-}" =~ ^[0-9a-f]{64}$ ]] \
+    || fail "candidate Compose override is not anchored"
+}
+load_candidate_compose_command() {
+  local target_release="$1"
+  load_compose_command "$target_release"
+  [[ -z "${revival_candidate_override_path:-}" || "$target_release" == "${release_dir:-}" ]] \
+    || fail "candidate Compose authority was applied to the wrong release"
+}
+load_candidate_compose_command_with_env() {
+  local target_release="$1"
+  shift
+  load_compose_command_with_env "$target_release" "$@"
+  [[ -z "${revival_candidate_override_path:-}" || "$target_release" == "${release_dir:-}" ]] \
+    || fail "candidate Compose authority was applied to the wrong release"
+}
 
 release_id=""
 archive=""
 manifest=""
 verifier=""
 deployment_id=""
+candidate_id=""
+candidate_root=""
+deployment_authority_sha256=""
 crud=0
 json=0
 usage() {
-  echo "usage: deploy --release-id SHA256 --archive PATH --manifest PATH --verifier PATH [--deployment-id ID] [--crud] [--json] [--skip-staging-smoke]" >&2
+  echo "usage: deploy --release-id SHA256 --archive PATH --manifest PATH --verifier PATH --candidate-id SHA256 --candidate-root PATH --deployment-authority-sha256 SHA256 [--deployment-id ID] [--json] [--skip-staging-smoke]" >&2
   exit 64
 }
 while (($#)); do
@@ -21,6 +70,9 @@ while (($#)); do
     --manifest) (($# >= 2)) || usage; manifest="$2"; shift 2 ;;
     --verifier) (($# >= 2)) || usage; verifier="$2"; shift 2 ;;
     --deployment-id) (($# >= 2)) || usage; deployment_id="$2"; shift 2 ;;
+    --candidate-id) (($# >= 2)) || usage; candidate_id="$2"; shift 2 ;;
+    --candidate-root) (($# >= 2)) || usage; candidate_root="$2"; shift 2 ;;
+    --deployment-authority-sha256) (($# >= 2)) || usage; deployment_authority_sha256="$2"; shift 2 ;;
     --crud) crud=1; shift ;;
     --json) json=1; shift ;;
     # Skip the ISOLATED REHEARSAL only. Everything that actually protects
@@ -37,25 +89,153 @@ while (($#)); do
 done
 skip_staging_smoke="${skip_staging_smoke:-0}"
 validate_release_id "$release_id"
+[[ "$candidate_id" =~ ^[0-9a-f]{64}$ ]] || usage
+[[ "$deployment_authority_sha256" =~ ^[0-9a-f]{64}$ ]] || usage
 [[ -n "$deployment_id" ]] || deployment_id="$(date -u +%Y%m%dT%H%M%SZ)-${release_id:0:12}"
 [[ "$deployment_id" =~ ^[A-Za-z0-9._-]{8,96}$ ]] || usage
 [[ -f "$archive" && -f "$manifest" && -f "$verifier" ]] || usage
 [[ "$archive" == "$REMOTE_ROOT/incoming/$release_id/"* ]] || fail "archive is outside the guarded incoming directory"
 [[ "$manifest" == "$REMOTE_ROOT/incoming/$release_id/"* ]] || fail "manifest is outside the guarded incoming directory"
 [[ "$verifier" == "$REMOTE_ROOT/incoming/$release_id/"* ]] || fail "verifier is outside the guarded incoming directory"
+[[ "$candidate_root" == "$REMOTE_ROOT/incoming/$release_id/.candidate-$candidate_id.partial/$candidate_id" \
+  && -d "$candidate_root" && ! -L "$candidate_root" ]] \
+  || fail "candidate root is outside the guarded incoming directory"
+candidate_files=(candidate.json compose-model.json image-receipt.json images.tar production-state.json release.json release.manifest.json release.tar.gz source-commit.txt source-receipt.json source-snapshot.tar toolchain-receipt.json verify-release.py)
+bootstrap_release_root="${REVIVAL_HELD_RELEASE_ROOT:-}"
+bootstrap_release_logical_root="${REVIVAL_HELD_RELEASE_LOGICAL_ROOT:-}"
+[[ "$bootstrap_release_logical_root" == "$REMOTE_ROOT/incoming/$release_id/verified-driver" \
+  && "${REVIVAL_HELD_RELEASE_ID:-}" == "$release_id" \
+  && "$bootstrap_release_root" == "/proc/self/fd/${REVIVAL_HELD_RELEASE_ROOT_FD:-invalid}" \
+  && "${REVIVAL_HELD_CANDIDATE_VERIFIER:-}" =~ ^/proc/self/fd/[1-9][0-9]*$ ]] \
+  || fail "candidate verifier is not the selected release-bound copy"
+verify_candidate_dir() {
+  local directory="$1" candidate_file actual expected verification
+  [[ -d "$directory" && ! -L "$directory" ]] || return 1
+  for candidate_file in "${candidate_files[@]}"; do
+    [[ -f "$directory/$candidate_file" && ! -L "$directory/$candidate_file" ]] || return 1
+  done
+  actual="$(find "$directory" -mindepth 1 -maxdepth 1 -printf '%f\n' | LC_ALL=C sort)"
+  expected="$(printf '%s\n' "${candidate_files[@]}" | LC_ALL=C sort)"
+  [[ "$actual" == "$expected" ]] || return 1
+  verification="$(run_held_candidate_verifier verify --candidate "$directory" --expect-id "$candidate_id" --json)" || return 1
+  node -e 'const value=JSON.parse(process.argv[1]); if(value.ok!==true||value.candidateId!==process.argv[2]||value.releaseId!==process.argv[3]||value.productionCompatible!==true||value.authority?.origin!=="github-hosted-actions"||value.authority?.productionUse!=="requires-point-of-use-provider-evidence")process.exit(1)' \
+    "$verification" "$candidate_id" "$release_id"
+}
+
+verify_hosted_deployment_authority() {
+  local selected="$1" expected_digest="$2" selected_candidate_id="$3" selected_release_id="$4"
+  python3 -I -B - "$selected" "$selected_candidate_id" "$selected_release_id" "$expected_digest" <<'PY'
+import hashlib,json,os,re,stat,sys
+selected,candidate_id,release_id,expected_digest=sys.argv[1:]
+before=os.lstat(selected)
+assert stat.S_ISREG(before.st_mode) and not stat.S_ISLNK(before.st_mode) and before.st_nlink==1
+assert (before.st_uid,before.st_gid,stat.S_IMODE(before.st_mode))==(os.getuid(),os.getgid(),0o600)
+descriptor=os.open(selected,os.O_RDONLY|os.O_NOFOLLOW)
+try:
+    opened=os.fstat(descriptor); assert opened==before and 0<opened.st_size<=1024*1024
+    source=bytearray()
+    while len(source)<opened.st_size:
+        block=os.read(descriptor,min(1024*1024,opened.st_size-len(source))); assert block; source.extend(block)
+    assert os.fstat(descriptor)==opened and os.lstat(selected)==before
+finally: os.close(descriptor)
+source=bytes(source); assert hashlib.sha256(source).hexdigest()==expected_digest
+value=json.loads(source)
+assert source==json.dumps(value,sort_keys=True,separators=(",",":"),ensure_ascii=False).encode()+b"\n"
+fields={"schema","version","ok","candidateId","releaseId","sourceDigest","sourceTree","sourceArchiveSha256",
+        "repository","sourceRef","runnerInvocationUri","candidateRoot","evidenceRoot","inventorySha256",
+        "receiptSha256","providerBundleSha256","verificationSha256","evidenceSha256","manifestSha256","providerEvidence"}
+sha=re.compile(r"[0-9a-f]{64}"); git=re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
+assert set(value)==fields and value["schema"]=="revival.hosted-vps-candidate-authority" and value["version"]==1 and value["ok"] is True
+assert value["candidateId"]==candidate_id and value["releaseId"]==release_id
+assert git.fullmatch(value["sourceDigest"]) and git.fullmatch(value["sourceTree"])
+for name in ("sourceArchiveSha256","inventorySha256","receiptSha256","providerBundleSha256",
+             "verificationSha256","evidenceSha256","manifestSha256"): assert sha.fullmatch(value[name])
+assert value["repository"]=="TheAndersMadsen/ai-pin-revival" and value["sourceRef"]=="refs/heads/main"
+assert re.fullmatch(r"https://github\.com/TheAndersMadsen/ai-pin-revival/actions/runs/[1-9][0-9]*/attempts/[1-9][0-9]*",value["runnerInvocationUri"])
+assert value["providerEvidence"]=="point-of-use-reverified"
+assert os.path.isabs(value["candidateRoot"]) and os.path.isabs(value["evidenceRoot"])
+PY
+}
+
+verify_hosted_rollback_baseline() {
+  local selected_release="$1" selected_record="$2"
+  local selected_release_id selected_candidate_id selected_candidate_path
+  local authority authority_digest authority_digest_file verification evidence
+  selected_release_id="$(basename -- "$selected_release")"
+  validate_release_id "$selected_release_id"
+  [[ "$selected_release" == "$RELEASES_DIR/$selected_release_id" \
+    && "$selected_record" == "$DEPLOYMENTS_DIR/"* && -d "$selected_record" && ! -L "$selected_record" \
+    && "$(readlink -f -- "$selected_record")" == "$selected_record" ]] || return 1
+  for evidence in release-id candidate-id candidate-path hosted-vps-authority.json hosted-vps-authority.sha256; do
+    evidence="$selected_record/$evidence"
+    [[ -f "$evidence" && ! -L "$evidence" \
+      && "$(stat -c '%a:%u:%g:%h' "$evidence")" == "600:$(id -u):$(id -g):1" ]] || return 1
+  done
+  [[ "$(tr -d '\r\n' <"$selected_record/release-id")" == "$selected_release_id" ]] || return 1
+  selected_candidate_id="$(tr -d '\r\n' <"$selected_record/candidate-id")"
+  selected_candidate_path="$(tr -d '\r\n' <"$selected_record/candidate-path")"
+  authority="$selected_record/hosted-vps-authority.json"
+  authority_digest_file="$selected_record/hosted-vps-authority.sha256"
+  authority_digest="$(tr -d '\r\n' <"$authority_digest_file")"
+  [[ "$selected_candidate_id" =~ ^[0-9a-f]{64}$ \
+    && "$selected_candidate_path" == "$REMOTE_ROOT/release-candidates/$selected_candidate_id" \
+    && -d "$selected_candidate_path" && ! -L "$selected_candidate_path" \
+    && "$authority_digest" =~ ^[0-9a-f]{64}$ \
+    && "$(sha256sum "$authority" | awk '{print $1}')" == "$authority_digest" ]] || return 1
+  verify_hosted_deployment_authority "$authority" "$authority_digest" \
+    "$selected_candidate_id" "$selected_release_id" || return 1
+  verification="$(run_held_candidate_verifier verify --candidate "$selected_candidate_path" \
+    --expect-id "$selected_candidate_id" --json)" || return 1
+  "$REVIVAL_HOST_NODE" -e '
+const value=JSON.parse(process.argv[1]);
+const authority=value.authority;
+if(value.ok!==true||value.candidateId!==process.argv[2]||value.releaseId!==process.argv[3]||
+   value.productionCompatible!==true||authority===null||typeof authority!=="object"||
+   Object.keys(authority).sort().join(",")!=="origin,productionUse"||
+   authority.origin!=="github-hosted-actions"||
+   authority.productionUse!=="requires-point-of-use-provider-evidence")process.exit(1);
+' "$verification" "$selected_candidate_id" "$selected_release_id"
+}
+
+activate_record_candidate_if_present() {
+  local selected_release="$1" source_record="$2" authority_record="$3" prefix="$4"
+  [[ -e "$source_record/candidate-id" || -L "$source_record/candidate-id" \
+    || -e "$source_record/candidate-path" || -L "$source_record/candidate-path" ]] \
+    || { warn "recovery release has no retained candidate image authority"; return 1; }
+  activate_retained_candidate_authority "$selected_release" "$source_record" \
+    "$authority_record" "$prefix"
+}
+transport_root="$(dirname -- "$candidate_root")"
+transport_manifest="$transport_root/transport.sha256"
+deployment_authority="$transport_root/deployment-authority.json"
+[[ "$transport_root" == "$REMOTE_ROOT/incoming/$release_id/.candidate-$candidate_id.partial" \
+  && -f "$transport_manifest" && ! -L "$transport_manifest" \
+  && "$(stat -c '%a:%u:%g:%h' "$transport_manifest")" == "600:$(id -u):$(id -g):1" ]] \
+  || fail "candidate transport receipt is unsafe"
+(cd "$transport_root" && sha256sum -c transport.sha256 >/dev/null) \
+  || fail "candidate transport failed its hash ACK"
+[[ -f "$deployment_authority" && ! -L "$deployment_authority" \
+  && "$(stat -c '%a:%u:%g:%h' "$deployment_authority")" == "600:$(id -u):$(id -g):1" \
+  && "$(sha256sum "$deployment_authority" | awk '{print $1}')" == "$deployment_authority_sha256" ]] \
+  || fail "hosted deployment authority digest changed"
+verify_hosted_deployment_authority "$deployment_authority" "$deployment_authority_sha256" \
+  "$candidate_id" "$release_id" || fail "hosted deployment authority is invalid"
+verify_candidate_dir "$candidate_root" \
+  || fail "candidate identity, archive closure, or live Carry contract is incompatible"
 ((crud == 0)) || fail "mutating CRUD canaries are disabled; use the read-only production canary"
 
 assert_target
 assert_remote_root
 for command in docker python3 node flock openssl curl sha256sum cmp systemctl sync pgrep readlink; do need "$command"; done
 ensure_layout
+pin_local_docker_daemon
 exec 9>"$LOCK_FILE"
 flock -n 9 || fail "another deployment or backup holds the lock"
 assert_durable_inputs
 assert_active_durable_mounts
 
-bootstrap_transaction_driver="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/transaction.py"
-[[ -f "$bootstrap_transaction_driver" && ! -L "$bootstrap_transaction_driver" ]] \
+bootstrap_transaction_driver="${REVIVAL_HELD_TRANSACTION:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/transaction.py}"
+release_material_file_is_safe "$bootstrap_transaction_driver" \
   || fail "global authority transaction helper is missing or unsafe"
 bootstrap_inventory="$(python3 "$bootstrap_transaction_driver" --root "$REMOTE_ROOT" --inventory)" \
   || fail "global authority transaction inventory is invalid"
@@ -76,79 +256,158 @@ chmod 700 "$record"
 printf '%s\n' "$release_id" >"$record/release-id"
 printf '%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$record/started-at"
 chmod 600 "$record/release-id" "$record/started-at"
+printf '%s\n' "$candidate_id" >"$record/candidate-id"
+chmod 600 "$record/candidate-id"
+python3 -I -B - "$deployment_authority" "$record/hosted-vps-authority.json" "$deployment_authority_sha256" <<'PY' \
+  || fail "hosted deployment authority could not be retained"
+import hashlib,os,stat,sys
+source,destination,expected=sys.argv[1:]
+before=os.lstat(source)
+assert stat.S_ISREG(before.st_mode) and not stat.S_ISLNK(before.st_mode) and before.st_nlink==1
+input_fd=os.open(source,os.O_RDONLY|os.O_NOFOLLOW)
+output_fd=-1
+try:
+    opened=os.fstat(input_fd); assert opened==before and 0<opened.st_size<=1024*1024
+    output_fd=os.open(destination,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+    digest=hashlib.sha256(); offset=0
+    while offset<opened.st_size:
+        block=os.read(input_fd,min(1024*1024,opened.st_size-offset)); assert block
+        digest.update(block); written=0
+        while written<len(block): written+=os.write(output_fd,block[written:])
+        offset+=len(block)
+    os.fchmod(output_fd,0o600); os.fsync(output_fd)
+    assert digest.hexdigest()==expected and os.fstat(input_fd)==opened and os.lstat(source)==before
+finally:
+    if output_fd>=0: os.close(output_fd)
+    os.close(input_fd)
+PY
+printf '%s\n' "$deployment_authority_sha256" >"$record/hosted-vps-authority.sha256"
+chmod 600 "$record/hosted-vps-authority.sha256"
+[[ "$(sha256sum "$record/hosted-vps-authority.json" | awk '{print $1}')" == "$deployment_authority_sha256" ]] \
+  || fail "retained hosted deployment authority digest differs"
+
+# Retain the exact sealed bundle as rollback authority. Publication is an
+# atomic same-filesystem move under the deployment lock, so the multi-gigabyte
+# bundle is never recopied. A retry can reuse an existing verified candidate.
+candidate_store_root="$REMOTE_ROOT/release-candidates"
+candidate_store="$candidate_store_root/$candidate_id"
+candidate_store_helper="${REVIVAL_HELD_CANDIDATE_STORE:-$bootstrap_release_root/platform/deploy/candidate-store.py}"
+transport_parent="$(dirname -- "$candidate_root")"
+publication_result="$(python3 -I - "$candidate_store_helper" "$transport_parent" \
+  "$candidate_store_root" "$candidate_id" <<'PY'
+import fcntl,os,re,stat,subprocess,sys
+helper_path,source_path,destination_path,candidate_id=sys.argv[1:]
+uid=os.getuid(); gid=os.getgid()
+def open_directory(path):
+    assert os.path.isabs(path) and os.path.normpath(path)==path
+    descriptor=os.open("/",os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+    try:
+        for component in path.split("/")[1:]:
+            assert component and component not in (".","..")
+            child=os.open(component,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=descriptor)
+            os.close(descriptor); descriptor=child
+        metadata=os.fstat(descriptor)
+        assert (stat.S_ISDIR(metadata.st_mode) and
+                (metadata.st_uid,metadata.st_gid,stat.S_IMODE(metadata.st_mode))==(uid,gid,0o700))
+        return descriptor
+    except BaseException:
+        os.close(descriptor); raise
+def open_file(path):
+    # The release executor passes this dependency only as a fully sealed memfd;
+    # reopening a mutable release pathname here would discard held authority.
+    assert re.fullmatch(r"/proc/self/fd/[1-9][0-9]*",path)
+    descriptor=os.open(path,os.O_RDONLY)
+    metadata=os.fstat(descriptor)
+    required=(fcntl.F_SEAL_SEAL|fcntl.F_SEAL_SHRINK|fcntl.F_SEAL_GROW|fcntl.F_SEAL_WRITE)
+    assert (stat.S_ISREG(metadata.st_mode) and metadata.st_nlink==0 and
+            (metadata.st_uid,metadata.st_gid)==(uid,gid) and
+            stat.S_IMODE(metadata.st_mode) in (0o644,0o755) and
+            fcntl.fcntl(descriptor,fcntl.F_GET_SEALS)&required==required)
+    return descriptor
+source=open_directory(source_path); destination=open_directory(destination_path)
+helper=open_file(helper_path)
+candidate_before=os.stat(candidate_id,dir_fd=source,follow_symlinks=False)
+assert stat.S_ISDIR(candidate_before.st_mode)
+candidate_anchor=os.open(candidate_id,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=source)
+candidate_opened=os.fstat(candidate_anchor)
+assert (candidate_opened.st_dev,candidate_opened.st_ino)==(candidate_before.st_dev,candidate_before.st_ino)
+try:
+    os.dup2(source,3); os.dup2(destination,4)
+    result=subprocess.run(["/usr/bin/python3","-I","-B",f"/proc/self/fd/{helper}","publish-transfer",
+                           "--stage",candidate_id,"--candidate-id",candidate_id,
+                           "--dev",str(candidate_opened.st_dev),"--ino",str(candidate_opened.st_ino)],
+                          check=False,text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE,
+                          pass_fds=(3,4,helper,candidate_anchor),
+                          env={"HOME":"/nonexistent","LANG":"C.UTF-8","LC_ALL":"C.UTF-8",
+                               "PATH":"/usr/bin:/usr/sbin","TZ":"UTC"})
+    if result.returncode: sys.stderr.write(result.stderr); raise SystemExit(result.returncode)
+    candidate_after=os.fstat(candidate_anchor)
+    assert (candidate_after.st_dev,candidate_after.st_ino)==(candidate_opened.st_dev,candidate_opened.st_ino)
+    print(result.stdout.strip())
+finally:
+    for descriptor in (candidate_anchor,helper,destination,source):
+        try: os.close(descriptor)
+        except OSError: pass
+PY
+)" || fail "candidate store publication failed its held/no-follow/no-replace transaction"
+[[ "$publication_result" == published || "$publication_result" == existing ]] \
+  || fail "candidate publication returned an invalid state"
+verify_candidate_dir "$candidate_store" || fail "retained candidate failed exact-byte verification"
+candidate_root="$candidate_store"
+archive="$candidate_store/release.tar.gz"
+manifest="$candidate_store/release.manifest.json"
+verifier="$candidate_store/verify-release.py"
+printf '%s\n' "$candidate_store" >"$record/candidate-path"
+chmod 600 "$record/candidate-path"
 
 release_dir="$RELEASES_DIR/$release_id"
-incoming_release="$RELEASES_DIR/.${release_id}.incoming"
 verification="$record/package-verification.json"
-[[ ! -e "$incoming_release" ]] || fail "stale incoming release exists"
-if [[ -d "$release_dir" ]]; then
-  python3 "$verifier" --archive "$archive" --manifest "$manifest" --json >"$verification"
-  python3 "$verifier" --tree "$release_dir" --manifest "$manifest" --json >>"$verification"
-else
-  python3 "$verifier" --archive "$archive" --manifest "$manifest" --extract "$incoming_release" --json >"$verification" \
-    || { rm -rf -- "$incoming_release"; fail "release archive verification failed"; }
-fi
-if ! python3 - "$verification" "$release_id" <<'PY'
-import json,sys
-lines=[line for line in open(sys.argv[1],encoding="utf-8") if line.strip()]
-assert lines
-for line in lines:
-    result=json.loads(line)
-    assert result.get("ok") is True
-    assert result.get("profile")=="vps"
-    assert result.get("releaseId")==sys.argv[2]
-PY
-then
-  [[ ! -e "$incoming_release" ]] || rm -rf -- "$incoming_release"
-  fail "verified package identity does not match the requested release"
-fi
-if [[ ! -d "$release_dir" ]]; then mv "$incoming_release" "$release_dir"; fi
-chmod 600 "$verification"
-if [[ -f "$MANIFESTS_DIR/$release_id.json" ]]; then
-  cmp -s "$manifest" "$MANIFESTS_DIR/$release_id.json" || fail "stored manifest conflicts with the verified release"
-else
-  install -m 600 "$manifest" "$MANIFESTS_DIR/$release_id.json"
-fi
-if [[ -f "$PACKAGES_DIR/$release_id.tar.gz" ]]; then
-  cmp -s "$archive" "$PACKAGES_DIR/$release_id.tar.gz" || fail "stored package conflicts with the verified release"
-else
-  install -m 600 "$archive" "$PACKAGES_DIR/$release_id.tar.gz"
-fi
+release_store_helper="${REVIVAL_HELD_RELEASE_STORE:-$bootstrap_release_root/platform/deploy/vps/remote/release-store.py}"
+release_material_file_is_safe "$release_store_helper" \
+  || fail "release-bound immutable store helper is missing"
+release_store_result="$(python3 -I "$release_store_helper" --root "$REMOTE_ROOT" \
+  --candidate-id "$candidate_id" --release-id "$release_id" --record "$record")" \
+  || fail "descriptor-anchored release publication failed"
+node -e 'const value=JSON.parse(process.argv[1]);if(value.ok!==true||value.releaseId!==process.argv[2]||!["published","existing"].includes(value.state))process.exit(1)' \
+  "$release_store_result" "$release_id" \
+  || fail "immutable release store returned an invalid publication result"
+[[ -d "$release_dir" && ! -L "$release_dir" \
+  && -f "$verification" && ! -L "$verification" \
+  && "$(stat -c '%a:%u:%g:%h' "$verification")" == "600:$(id -u):$(id -g):1" ]] \
+  || fail "immutable release publication evidence is unsafe"
 # Auditable evidence for the exact selected-package code that is executing the
 # cutover. Package verification proves membership; this record makes that
 # execution binding explicit without retaining mutable bootstrap copies.
-driver_path="$(readlink -f -- "${BASH_SOURCE[0]}")"
-common_path="$(readlink -f -- "$(dirname -- "${BASH_SOURCE[0]}")/common.sh")"
-domain_path="$(readlink -f -- "$(dirname -- "${BASH_SOURCE[0]}")/domain.sh")"
-domain_helper_path="$(readlink -f -- "$(dirname -- "${BASH_SOURCE[0]}")/domain.py")"
-incoming_release_dir="$REMOTE_ROOT/incoming/$release_id"
-[[ "$driver_path" == "$REMOTE_ROOT/incoming/$release_id/verified-driver/platform/deploy/vps/remote/deploy.sh" ]] \
+driver_path="${BASH_SOURCE[0]}"
+common_path="${REVIVAL_HELD_COMMON:-$bootstrap_release_logical_root/platform/deploy/vps/remote/common.sh}"
+domain_path="${REVIVAL_HELD_DOMAIN:-$bootstrap_release_logical_root/platform/deploy/vps/remote/domain.sh}"
+domain_helper_path="${REVIVAL_HELD_DOMAIN_PY:-$bootstrap_release_logical_root/platform/deploy/vps/remote/domain.py}"
+[[ "$bootstrap_release_logical_root" == "$REMOTE_ROOT/incoming/$release_id/verified-driver" ]] \
   || fail "deployment driver is not the selected verified release copy"
-[[ "$common_path" == "$REMOTE_ROOT/incoming/$release_id/verified-driver/platform/deploy/vps/remote/common.sh" ]] \
-  || fail "common deployment library is not the selected verified release copy"
-[[ "$domain_path" == "$REMOTE_ROOT/incoming/$release_id/verified-driver/platform/deploy/vps/remote/domain.sh" ]] \
-  || fail "domain transaction library is not the selected verified release copy"
-[[ "$domain_helper_path" == "$REMOTE_ROOT/incoming/$release_id/verified-driver/platform/deploy/vps/remote/domain.py" ]] \
-  || fail "domain transaction helper is not the selected verified release copy"
 : >"$record/executing-code.tsv"
 for spec in "remote.deploy:$driver_path" "remote.common:$common_path" "remote.domain:$domain_path" \
-  "remote.domain-helper:$domain_helper_path" "release.verifier:$verifier"; do
+  "remote.domain-helper:$domain_helper_path" \
+  "release.verifier:${REVIVAL_HELD_RELEASE_VERIFIER:-$verifier}" \
+  "release.store:$release_store_helper"; do
   label="${spec%%:*}"; path="${spec#*:}"
-  [[ -f "$path" && ! -L "$path" ]] || fail "executing deployment material is missing or unsafe: $label"
-  printf '%s\t%s\t%s\n' "$label" "$(sha256sum "$path" | awk '{print $1}')" "$(stat -c '%a' "$path")" \
+  release_material_file_is_safe "$path" || fail "executing deployment material is missing or unsafe: $label"
+  printf '%s\t%s\t%s\n' "$label" "$(sha256sum "$path" | awk '{print $1}')" "$(stat -Lc '%a' "$path")" \
     >>"$record/executing-code.tsv"
 done
-for common_lib in "$(dirname -- "$common_path")"/lib/*.sh; do
-  [[ -f "$common_lib" && ! -L "$common_lib" ]] || fail "common library material is missing or unsafe"
-  printf 'remote.common-lib.%s\t%s\t%s\n' "$(basename "$common_lib")" \
-    "$(sha256sum "$common_lib" | awk '{print $1}')" "$(stat -c '%a' "$common_lib")" \
+for common_name in paths ingress release_transactions configuration compose backup database canary drift; do
+  common_key="REVIVAL_HELD_COMMON_LIB_${common_name^^}"
+  common_key="${common_key//-/_}"
+  common_lib="${!common_key:-$bootstrap_release_logical_root/platform/deploy/vps/remote/lib/$common_name.sh}"
+  release_material_file_is_safe "$common_lib" || fail "common library material is missing or unsafe"
+  printf 'remote.common-lib.%s.sh\t%s\t%s\n' "$common_name" \
+    "$(sha256sum "$common_lib" | awk '{print $1}')" "$(stat -Lc '%a' "$common_lib")" \
     >>"$record/executing-code.tsv"
 done
 chmod 600 "$record/executing-code.tsv"
-release_verifier="$release_dir/platform/deploy/vps/verify-release.py"
-[[ -f "$release_verifier" && ! -L "$release_verifier" ]] || fail "selected release verifier is missing"
-transaction_driver="$release_dir/platform/deploy/vps/remote/transaction.py"
-[[ -f "$transaction_driver" && ! -L "$transaction_driver" ]] || fail "selected release transaction helper is missing"
+release_verifier="${REVIVAL_HELD_RELEASE_VERIFIER:-$release_dir/platform/deploy/vps/verify-release.py}"
+release_material_file_is_safe "$release_verifier" || fail "selected release verifier is missing"
+transaction_driver="${REVIVAL_HELD_TRANSACTION:-$release_dir/platform/deploy/vps/remote/transaction.py}"
+release_material_file_is_safe "$transaction_driver" || fail "selected release transaction helper is missing"
 
 record_keycloak_post_migration_evidence() {
   local target_record="$1" data digest temporary postgres
@@ -530,17 +789,21 @@ record_public_ingress_window() {
 # must not be assumed, so every argument list is checked against the frozen
 # release-boundary baseline before anything runs.
 run_pending_transaction() {
-  local driver="$1"
+  local driver="$1" pending_release_root
   shift
   assert_cross_release_options transaction.py "$@"
-  python3 "$driver" "$@"
+  pending_release_root="${driver%/platform/deploy/vps/remote/transaction.py}"
+  [[ "$pending_release_root" != "$driver" ]] || fail "pending transaction path is outside a release"
+  run_held_release_program "$pending_release_root" platform/deploy/vps/remote/transaction.py python 0 "$@"
 }
 
 run_pending_transaction_privileged() {
-  local driver="$1"
+  local driver="$1" pending_release_root
   shift
   assert_cross_release_options transaction.py "$@"
-  sudo -n python3 "$driver" "$@"
+  pending_release_root="${driver%/platform/deploy/vps/remote/transaction.py}"
+  [[ "$pending_release_root" != "$driver" ]] || fail "pending transaction path is outside a release"
+  run_held_release_program "$pending_release_root" platform/deploy/vps/remote/transaction.py python 1 "$@"
 }
 
 restore_pending_managed_configuration() {
@@ -674,6 +937,8 @@ recover_pending_pre_activation_application() {
       && -f "$old_deployment/config-digests.tsv" ]] || return 1
     old_release_id="$(basename "$old_current")"
     validate_release_id "$old_release_id" || return 1
+    activate_record_candidate_if_present "$old_current" "$old_deployment" \
+      "$target_record" preactivation-predecessor || return 1
     load_compose_command "$old_current" || return 1
     "${COMPOSE[@]}" up -d --pull never --no-build --remove-orphans || return 1
     wait_for_services "$old_current" || return 1
@@ -804,8 +1069,12 @@ PY
   # be its own — a release tree is verified by the verifier its manifest binds.
   # Its interface is that release's; only baseline options may be passed.
   assert_cross_release_options verify-release.py --tree --manifest --expect-release-id --json
-  python3 "$pending_verifier" --tree "$pending_release" --manifest "$pending_manifest" \
+  run_held_release_program "$pending_release" platform/deploy/vps/verify-release.py python 0 \
+    --tree "$pending_release" --manifest "$pending_manifest" \
     --expect-release-id "$pending_release_id" --json >/dev/null
+  activate_record_candidate_if_present "$pending_release" "$pending_record" \
+    "$pending_record" resume-candidate \
+    || fail "pending candidate bundle authority could not be restored"
   if [[ -f "$pending_record/OPERATION_TRANSACTION_PREPARED" \
       && ! -f "$pending_record/CANDIDATE_ACTIVATION_ARMED" ]]; then
     # Before candidate activation is armed, recovery returns to the predecessor.
@@ -1422,6 +1691,8 @@ reconcile_restore_armed_service() {
   [[ ! -f "$target_record/domain-cutover/cloudflared/RESTORED.json" ]] || route_state=before
   recorded_release_id="$(tr -d '\r\n' <"$target_record/release-id")"
   validate_release_id "$recorded_release_id" || return 1
+  activate_record_candidate_if_present "$target_release" "$target_record" \
+    "$target_record" armed-recovery || return 1
   load_compose_command "$target_release" || return 1
   "${COMPOSE[@]}" up -d --pull never --no-build --remove-orphans || return 1
   wait_for_services "$target_release" || return 1
@@ -1575,7 +1846,7 @@ if ((pending_transaction_reconciled)); then
   # The initial selected-release preflight deliberately stopped at the pending
   # activation boundary. Once authority is reconciled, run the complete gate
   # before this invocation is allowed to begin another cutover.
-  bash "$release_dir/platform/deploy/vps/remote/preflight.sh" \
+  run_held_release_program "$release_dir" platform/deploy/vps/remote/preflight.sh bash 0 \
     --min-free-gb 8 --archive-bytes "$(stat -c '%s' "$PACKAGES_DIR/$release_id.tar.gz")"
 fi
 post_reconcile_inventory="$(python3 "$transaction_driver" --root "$REMOTE_ROOT" --inventory)" \
@@ -1606,6 +1877,13 @@ if [[ -n "$old_current" ]]; then
     || fail "canonical current release lacks an exact successful deployment record pointer"
   [[ "$(tr -d '\r\n' <"$old_current_deployment/release-id")" == "$(basename "$old_current")" ]] \
     || fail "current release and deployment record disagree"
+  # A cutover is not recoverable merely because an old tree and image list
+  # exist. The predecessor must itself have been imported from the hosted
+  # workflow and provider-reverified at its point of deployment. This makes the
+  # first hosted cutover an explicit migration step: attest/import the current
+  # immutable Carry baseline before attempting the later Carry -> Cosmos move.
+  verify_hosted_rollback_baseline "$old_current" "$old_current_deployment" \
+    || fail "first hosted cutover is blocked: attest/import the current immutable Carry baseline before deployment"
   [[ -z "$(docker ps -q --filter "label=com.docker.compose.project=$LEGACY_PROJECT")" \
     && -n "$(docker ps -q --filter "label=com.docker.compose.project=$PROJECT")" ]] \
     || fail "canonical deployment topology is ambiguous under the deployment lock"
@@ -1615,20 +1893,21 @@ if [[ -n "$old_current" ]]; then
   old_manifest="$MANIFESTS_DIR/$old_release_id.json"
   [[ -f "$old_manifest" && ! -L "$old_manifest" ]] \
     || fail "current release manifest is missing or unsafe"
-  # The selected, package-verified verifier is the independent trust root for
-  # the older tree that recovery may execute.
-  python3 "$release_verifier" --tree "$old_current" --manifest "$old_manifest" \
+  run_held_release_program "$old_current" platform/deploy/vps/verify-release.py python 0 \
+    --tree "$old_current" --manifest "$old_manifest" \
     --expect-release-id "$old_release_id" --json >/dev/null
   verify_image_evidence "$old_current_deployment/running-images.tsv" "$old_current"
   verify_configuration_evidence "$old_current_deployment/config-digests.tsv" "$old_current"
+  # Recovery must be independently restartable before this deploy may quiesce
+  # one writer.  Reload the predecessor's exact bundle now, under the selected
+  # release's held runtime, and retain the generated content-ID override in the
+  # new record for every failure arm below.
+  activate_record_candidate_if_present "$old_current" "$old_current_deployment" \
+    "$record" predecessor-readiness \
+    || fail "current deployment lacks a retained offline recovery candidate"
+  clear_candidate_compose_authority
 else
-  [[ ! -e "$REMOTE_ROOT/current" && ! -L "$REMOTE_ROOT/current" ]] \
-    || fail "canonical current pointer exists but is unsafe under the deployment lock"
-  [[ ! -e "$REMOTE_ROOT/current-deployment" && ! -L "$REMOTE_ROOT/current-deployment" ]] \
-    || fail "canonical deployment lineage exists without a safe current pointer"
-  [[ -z "$(docker ps -aq --filter "label=com.docker.compose.project=$PROJECT")" \
-    && -n "$(docker ps -q --filter "label=com.docker.compose.project=$LEGACY_PROJECT")" ]] \
-    || fail "first-cutover topology is ambiguous under the deployment lock"
+  fail "first hosted cutover is blocked: attest/import the current immutable Carry baseline before deployment"
 fi
 chmod 600 "$record/old-current" "$record/old-previous" "$record/old-current-deployment"
 record_project_state "$record/before"
@@ -1837,30 +2116,72 @@ edge_token="$(openssl rand -base64 48 | tr '+/' '-_' | tr -d '=')"
 [[ "$edge_token" != "$(tr -d '\r\n' <"$spotify_stage")" ]] || fail "edge and Spotify tokens must be distinct"
 for file in "$runtime_stage" "$cosmos_stage" "$provider_stage" "$center_stage"; do update_env_value "$file" COSMOS_EDGE_TOKEN "$edge_token"; done
 unset edge_token
-python3 "$release_dir/platform/edge/render-envoy.py" \
+run_held_release_program "$release_dir" platform/edge/render-envoy.py python 0 \
   --env "$runtime_stage" --template "$release_dir/platform/edge/envoy/envoy.yaml.tpl" \
   --output "$stage_assets/edge/envoy.yaml" --cert-dir /etc/cosmos-edge/certs >/dev/null
 chmod 600 "$stage_assets/edge/envoy.yaml"
 
+clear_candidate_compose_authority
 load_compose_command_with_env "$release_dir" "$runtime_stage" "$cosmos_stage" "$provider_stage" "$center_stage"
 "${COMPOSE[@]}" config --quiet
 assert_compose_ports
-docker image inspect "$HELPER_IMAGE" >/dev/null 2>&1 || docker pull --quiet "$HELPER_IMAGE" >/dev/null
 
-# Resolve every pinned third-party image and build every first-party image before
-# entering the quiesced window. Cutover itself runs with --pull never --no-build.
+# Candidate deployment is byte consumption, never a remote recipe.  The
+# release-bound helper holds candidate.json, compose-model.json,
+# image-receipt.json and images.tar
+# open through load/tag/assert, so a same-UID pathname swap cannot select what
+# mutates the daemon.  Compose subsequently consumes a held, digest-checked
+# override containing only immutable image content IDs.
+verify_candidate_dir "$candidate_store" || fail "candidate moved immediately before Docker load"
+candidate_runtime="${REVIVAL_HELD_CANDIDATE_RUNTIME:?held candidate runtime is required}"
+candidate_authority_exec="${REVIVAL_HELD_CANDIDATE_AUTHORITY_EXEC:?held candidate authority executor is required}"
+release_material_file_is_safe "$candidate_runtime" \
+  || fail "release-bound candidate runtime helper is missing"
+release_material_file_is_safe "$candidate_authority_exec" \
+  || fail "release-bound candidate authority executor is missing"
+candidate_runtime_json="$(python3 -I "$candidate_authority_exec" \
+  --candidate "$candidate_store" --candidate-id "$candidate_id" --release-id "$release_id" \
+  --record "$record" --receipt-name candidate-compose-authority.json \
+  --program "$candidate_runtime" -- \
+  --candidate-id "$candidate_id" --release-id "$release_id" \
+  --evidence-name candidate-images.tsv --override-name candidate-images.override.json \
+  --helper-reference "$HELPER_IMAGE")" \
+  || fail "candidate image transaction failed"
+candidate_runtime_fields="$(node -e '
+const value=JSON.parse(process.argv[1]);
+if(value.ok!==true||!/^sha256:[0-9a-f]{64}$/.test(value.helperReference)||!/^[0-9a-f]{64}$/.test(value.evidenceSha256)||!/^[0-9a-f]{64}$/.test(value.overrideSha256)||!/^[0-9a-f]{64}$/.test(value.composeModelSha256)||!/^[0-9a-f]{64}$/.test(value.authorityReceiptSha256))process.exit(1);
+process.stdout.write(`${value.helperReference}\t${value.evidenceSha256}\t${value.overrideSha256}\t${value.composeModelSha256}\t${value.authorityReceiptSha256}`);
+' "$candidate_runtime_json")" || fail "candidate runtime returned invalid evidence"
+IFS=$'\t' read -r HELPER_IMAGE candidate_evidence_sha256 candidate_override_sha256 \
+  candidate_compose_model_sha256 candidate_authority_receipt_sha256 <<<"$candidate_runtime_fields"
+candidate_image_evidence="$record/candidate-images.tsv"
+candidate_override_disk="$record/candidate-images.override.json"
+exec {candidate_evidence_fd}<"$candidate_image_evidence"
+candidate_evidence_path="/proc/$$/fd/$candidate_evidence_fd"
+[[ "$(stat -Lc '%a:%u:%g:%h' "$candidate_evidence_path")" == "600:$(id -u):$(id -g):1" \
+  && "$(sha256sum "$candidate_evidence_path" | awk '{print $1}')" == "$candidate_evidence_sha256" ]] \
+  || fail "candidate image evidence changed before it was anchored"
+revival_candidate_override_path="$candidate_override_disk"
+revival_candidate_override_sha256="$candidate_override_sha256"
+revival_candidate_id="$candidate_id"
+revival_candidate_path="$candidate_store"
+revival_candidate_authority_record="$record"
+revival_candidate_authority_receipt_name="candidate-compose-authority.json"
+revival_candidate_authority_receipt_sha256="$candidate_authority_receipt_sha256"
+revival_candidate_compose_model_sha256="$candidate_compose_model_sha256"
+revival_candidate_authority_release="$release_dir"
+revival_candidate_authority_required=1
+export HELPER_IMAGE revival_candidate_override_path revival_candidate_override_sha256
+export revival_candidate_id revival_candidate_path revival_candidate_authority_record
+export revival_candidate_authority_receipt_name revival_candidate_authority_receipt_sha256
+export revival_candidate_compose_model_sha256
+export revival_candidate_authority_release revival_candidate_authority_required
+assert_candidate_override_held
+[[ "$(docker image inspect --format '{{.Id}}' "$HELPER_IMAGE")" == "$HELPER_IMAGE" ]] \
+  || fail "backup helper image has no exact loaded local candidate binding"
+load_compose_command_with_env "$release_dir" "$runtime_stage" "$cosmos_stage" "$provider_stage" "$center_stage"
+"${COMPOSE[@]}" config --quiet
 mapfile -t configured_images < <("${COMPOSE[@]}" config --images | LC_ALL=C sort -u)
-for image in "${configured_images[@]}"; do
-  [[ "$image" == ai-pin-revival/* ]] && continue
-  docker pull --quiet "$image" >/dev/null
-done
-export COMPOSE_PARALLEL_LIMIT=1
-"${COMPOSE[@]}" build --pull ai-bus
-"${COMPOSE[@]}" build --pull center
-"${COMPOSE[@]}" build --pull spotify-adapter
-for image in "ai-pin-revival/cosmos:$release_id" "ai-pin-revival/center:$release_id" "ai-pin-revival/spotify-adapter:$release_id"; do
-  docker image inspect "$image" >/dev/null || fail "candidate image was not built: $image"
-done
 : >"$record/resolved-images.tsv"
 for image in "${configured_images[@]}"; do
   image_id="$(docker image inspect --format '{{.Id}}' "$image")"
@@ -2108,7 +2429,7 @@ reprove_candidate_acceptance() {
   if [[ -n "$postcandidate_backup" && -f "$postcandidate_backup/invariants.tsv" ]]; then
     canary_args+=(--baseline "$postcandidate_backup")
   fi
-  bash "$release_dir/platform/deploy/vps/remote/canary.sh" "${canary_args[@]}" >/dev/null
+  run_held_release_program "$release_dir" platform/deploy/vps/remote/canary.sh bash 0 "${canary_args[@]}" >/dev/null
   local status=$?
   rm -f -- "$cookie"
   ((status == 0)) || return 1
@@ -2134,6 +2455,18 @@ recover_previous_application() {
   trap ':' PIPE
   trap - EXIT
   set +e
+  # Recovery authority is a prerequisite, not one more best-effort check.  Prove
+  # and reload the predecessor's exact retained candidate before quiescing
+  # ingress, loading Compose, running a canary, or evaluating any recovery
+  # evidence.  A refusal leaves every staged input intact for an operator or
+  # resumable transaction and has no Compose side effect.
+  if [[ -n "$old_current" && -d "$old_current" ]]; then
+    old_release_id="$(basename "$old_current")"
+    if ! activate_record_candidate_if_present "$old_current" "$old_current_deployment" \
+        "$record" failed-cutover-predecessor; then
+      return 1
+    fi
+  fi
   # Recovery stops public ingress again. If the cutover had already restored it
   # this is a SECOND outage the wearer pays for the same deployment, and it is
   # the longer, worse one; open a new window rather than letting it go
@@ -2142,15 +2475,24 @@ recover_previous_application() {
   quiesce_ingress_services "$ingress_evidence" 0 "$record" "$cloudflared_route_state" || recovery_ok=0
   if assert_ingress_quiesced; then ingress_quiesced=1; else recovery_ok=0; fi
   if ((cutover_started)); then
-    if [[ -f "$runtime_stage" && -f "$cosmos_stage" && -f "$provider_stage" && -f "$center_stage" ]]; then
-      load_compose_command_with_env "$release_dir" "$runtime_stage" "$cosmos_stage" "$provider_stage" "$center_stage"
+    # The initial prerequisite loaded predecessor authority.  Switch only
+    # inside a successful candidate activation while stopping the failed
+    # candidate, then reacquire predecessor authority immediately before its
+    # own Compose consumer below.
+    if activate_record_candidate_if_present "$release_dir" "$record" "$record" \
+        failed-cutover-candidate-stop; then
+      if [[ -f "$runtime_stage" && -f "$cosmos_stage" && -f "$provider_stage" && -f "$center_stage" ]]; then
+        load_candidate_compose_command_with_env "$release_dir" "$runtime_stage" "$cosmos_stage" "$provider_stage" "$center_stage"
+      else
+        load_candidate_compose_command "$release_dir"
+      fi
+      "${COMPOSE[@]}" down --remove-orphans >/dev/null 2>&1
+      if [[ $? != 0 ]]; then
+        stop_project_containers "$PROJECT" || recovery_ok=0
+        remove_project_containers "$PROJECT" || recovery_ok=0
+      fi
     else
-      load_compose_command "$release_dir"
-    fi
-    "${COMPOSE[@]}" down --remove-orphans >/dev/null 2>&1
-    if [[ $? != 0 ]]; then
-      stop_project_containers "$PROJECT" || recovery_ok=0
-      remove_project_containers "$PROJECT" || recovery_ok=0
+      recovery_ok=0
     fi
   fi
   if ((config_installed)); then
@@ -2169,36 +2511,40 @@ recover_previous_application() {
     restore_pointer current-deployment "$old_current_deployment" || recovery_ok=0
   fi
   if [[ -n "$old_current" && -d "$old_current" ]]; then
-    old_release_id="$(basename "$old_current")"
-    load_compose_command "$old_current"
-    "${COMPOSE[@]}" up -d --pull never --no-build --remove-orphans || recovery_ok=0
-    wait_for_services "$old_current" || recovery_ok=0
-    restore_domain_keycloak || recovery_ok=0
-    if [[ -n "$old_current_deployment" && -f "$old_current_deployment/running-images.tsv" \
-        && -f "$old_current_deployment/config-digests.tsv" ]]; then
-      (verify_configuration_evidence "$old_current_deployment/config-digests.tsv" "$old_current") || recovery_ok=0
-      (verify_image_evidence "$old_current_deployment/running-images.tsv" "$old_current") || recovery_ok=0
-      start_recorded_ingress_service "$ingress_evidence" penumbra-center-bridge.service || recovery_ok=0
-      write_owner_canary_cookie "$old_current" "$recovery_cookie" || recovery_ok=0
-      recovery_canary=(--release-id "$old_release_id" --image-evidence "$old_current_deployment/running-images.tsv" \
-        --require-remote-tts --require-owner-spotify --quiesced-loopback --expect-bridge-ready \
-        --cookie-file "$recovery_cookie")
-      [[ "$keycloak_before_host" != cosmos.andersmadsen.dk ]] || recovery_canary+=(--legacy-dashboard-origin)
-      if [[ -f "$backup_path/SHA256SUMS" && -f "$backup_path/invariants.tsv" ]]; then
-        recovery_canary+=(--baseline "$backup_path")
-      fi
-      bash "$release_dir/platform/deploy/vps/remote/canary.sh" "${recovery_canary[@]}" >/dev/null || recovery_ok=0
-      restore_ingress_services "$ingress_evidence" "$record" before || recovery_ok=0
-      domain_cloudflared_verify_before "$record" || recovery_ok=0
-      assert_ingress_matches_recorded "$ingress_evidence" || recovery_ok=0
-      if ((recovery_ok)); then
-        ingress_quiesced=0
-        public_recovery_canary=(--release-id "$old_release_id" \
-          --image-evidence "$old_current_deployment/running-images.tsv" --require-remote-tts \
-          --require-owner-spotify --cookie-file "$recovery_cookie")
-        [[ "$keycloak_before_host" != cosmos.andersmadsen.dk ]] || public_recovery_canary+=(--legacy-dashboard-origin)
-        [[ ! -f "$backup_path/invariants.tsv" ]] || public_recovery_canary+=(--baseline "$backup_path")
-        bash "$release_dir/platform/deploy/vps/remote/canary.sh" "${public_recovery_canary[@]}" >/dev/null || recovery_ok=0
+    if activate_record_candidate_if_present "$old_current" "$old_current_deployment" \
+        "$record" failed-cutover-predecessor-use; then
+      load_compose_command "$old_current"
+      "${COMPOSE[@]}" up -d --pull never --no-build --remove-orphans || recovery_ok=0
+      wait_for_services "$old_current" || recovery_ok=0
+      restore_domain_keycloak || recovery_ok=0
+      if [[ -n "$old_current_deployment" && -f "$old_current_deployment/running-images.tsv" \
+          && -f "$old_current_deployment/config-digests.tsv" ]]; then
+        (verify_configuration_evidence "$old_current_deployment/config-digests.tsv" "$old_current") || recovery_ok=0
+        (verify_image_evidence "$old_current_deployment/running-images.tsv" "$old_current") || recovery_ok=0
+        start_recorded_ingress_service "$ingress_evidence" penumbra-center-bridge.service || recovery_ok=0
+        write_owner_canary_cookie "$old_current" "$recovery_cookie" || recovery_ok=0
+        recovery_canary=(--release-id "$old_release_id" --image-evidence "$old_current_deployment/running-images.tsv" \
+          --require-remote-tts --require-owner-spotify --quiesced-loopback --expect-bridge-ready \
+          --cookie-file "$recovery_cookie")
+        [[ "$keycloak_before_host" != cosmos.andersmadsen.dk ]] || recovery_canary+=(--legacy-dashboard-origin)
+        if [[ -f "$backup_path/SHA256SUMS" && -f "$backup_path/invariants.tsv" ]]; then
+          recovery_canary+=(--baseline "$backup_path")
+        fi
+        run_held_release_program "$release_dir" platform/deploy/vps/remote/canary.sh bash 0 "${recovery_canary[@]}" >/dev/null || recovery_ok=0
+        restore_ingress_services "$ingress_evidence" "$record" before || recovery_ok=0
+        domain_cloudflared_verify_before "$record" || recovery_ok=0
+        assert_ingress_matches_recorded "$ingress_evidence" || recovery_ok=0
+        if ((recovery_ok)); then
+          ingress_quiesced=0
+          public_recovery_canary=(--release-id "$old_release_id" \
+            --image-evidence "$old_current_deployment/running-images.tsv" --require-remote-tts \
+            --require-owner-spotify --cookie-file "$recovery_cookie")
+          [[ "$keycloak_before_host" != cosmos.andersmadsen.dk ]] || public_recovery_canary+=(--legacy-dashboard-origin)
+          [[ ! -f "$backup_path/invariants.tsv" ]] || public_recovery_canary+=(--baseline "$backup_path")
+          run_held_release_program "$release_dir" platform/deploy/vps/remote/canary.sh bash 0 "${public_recovery_canary[@]}" >/dev/null || recovery_ok=0
+        fi
+      else
+        recovery_ok=0
       fi
     else
       recovery_ok=0
@@ -2363,8 +2709,10 @@ finish_deploy() {
     fi
     record_public_ingress_window || warn "the public ingress window could not be recorded in $record"
   fi
-  [[ ! -e "$incoming_release" ]] || rm -rf -- "$incoming_release"
-  [[ ! -e "$incoming_release_dir" ]] || rm -rf -- "$incoming_release_dir"
+  # The verified parent bootstrap owns the transport workspace and removes it
+  # after this child exits.  This child never recursively deletes the path that
+  # contains its own executable; interrupted work is handled by the age-bounded
+  # operator retention command.
   exit "$status"
 }
 trap finish_deploy EXIT
@@ -2405,7 +2753,7 @@ python3 "$transaction_driver" --root "$REMOTE_ROOT" --record "$record" \
 # under-report the window by the whole duration of a full restore-tested backup.
 open_public_ingress_window
 writers_quiesced=1
-bash "$release_dir/platform/deploy/vps/remote/backup.sh" \
+run_held_release_program "$release_dir" platform/deploy/vps/remote/backup.sh bash 0 \
   --backup-id "$deployment_id" --leave-quiesced --already-locked \
   --cloudflared-record "$record" --cloudflared-state recorded --ingress-evidence "$ingress_evidence"
 python3 "$transaction_driver" --root "$REMOTE_ROOT" --record "$record" \
@@ -2455,7 +2803,7 @@ if (( skip_staging_smoke )); then
   warn "staging smoke SKIPPED by request: the isolated rehearsal did not run for this release"
 elif ! REVIVAL_STAGING_SMOKE_TRACE="${REVIVAL_STAGING_SMOKE_TRACE:-0}" \
   REVIVAL_STAGING_SMOKE_EVIDENCE="$record/staging-smoke-evidence" \
-  bash "$release_dir/platform/deploy/vps/remote/staging-smoke.sh" \
+  run_held_release_program "$release_dir" platform/deploy/vps/remote/staging-smoke.sh bash 0 \
   --release-id "$release_id" --backup "$backup_path" --env-dir "$stage_env" \
   --attest-dir "$stage_assets/attest" --duc-dir "$stage_assets/duc" \
   --keycloak-theme-dir "$stage_assets/keycloak-theme" --spotify-token-file "$spotify_stage" \
@@ -2514,11 +2862,11 @@ domain_cloudflared_verify_desired "$record" \
   || fail "canonical Center Cloudflare route transaction did not reach its durable desired state"
 
 nginx_transaction_invoked=1
-bash "$release_dir/platform/edge/install-connectivity.sh" \
+run_held_release_program "$release_dir" platform/edge/install-connectivity.sh bash 0 \
   --source "$release_dir/platform/edge/nginx/ai-pin-revival-connectivity.conf" --backup-dir "$record" --nginx-stopped
 validate_nginx_transaction_snapshot "$record" 1 || fail "Nginx installation lacks complete transaction evidence"
 
-load_compose_command "$release_dir"
+load_candidate_compose_command "$release_dir"
 "${COMPOSE[@]}" config --quiet
 assert_compose_ports
 record_configuration_evidence "$release_dir" "$record/config-digests.tsv"
@@ -2559,7 +2907,7 @@ verify_running_against_resolved "$record/resolved-images.tsv" "$record/running-i
 verify_configuration_evidence "$record/config-digests.tsv" "$release_dir"
 owner_canary_cookie="$stage_env/owner-canary.cookies"
 write_owner_canary_cookie "$release_dir" "$owner_canary_cookie"
-bash "$release_dir/platform/deploy/vps/remote/canary.sh" \
+run_held_release_program "$release_dir" platform/deploy/vps/remote/canary.sh bash 0 \
   --release-id "$release_id" --baseline "$backup_path" --image-evidence "$record/running-images.tsv" \
   --require-remote-tts --quiesced-loopback --cookie-file "$owner_canary_cookie"
 assert_ingress_quiesced || fail "managed ingress reopened during precommit canary"
@@ -2576,7 +2924,7 @@ postcandidate_backup="$BACKUP_ROOT/$postcandidate_backup_id"
 # "did the column list change?". See compare_precommit_compatibility_state.
 postcandidate_projection_args=()
 mapfile -t postcandidate_projection_args < <(precommit_projection_args "$backup_path")
-bash "$release_dir/platform/deploy/vps/remote/backup.sh" \
+run_held_release_program "$release_dir" platform/deploy/vps/remote/backup.sh bash 0 \
   --backup-id "$postcandidate_backup_id" --leave-quiesced --already-locked --public-ingress-quiesced \
   --cloudflared-record "$record" --cloudflared-state desired --ingress-evidence "$ingress_evidence" \
   "${postcandidate_projection_args[@]}"
@@ -2606,7 +2954,7 @@ recovery_forbidden=0
 # point a failure leaves the selected candidate in place; it never runs an old
 # application against state touched after the zero-delta boundary.
 recovery_forbidden=1
-load_compose_command "$release_dir"
+load_candidate_compose_command "$release_dir"
 sudo -n python3 "$transaction_driver" --root "$REMOTE_ROOT" --record "$record" --channel-key-action verify-desired
 sudo -n python3 "$transaction_driver" --root "$REMOTE_ROOT" --record "$record" \
   --trust-root-action verify --live-attest "$PRIVATE_DIR/attest" --live-duc "$PRIVATE_DIR/duc"
@@ -2620,7 +2968,7 @@ domain_nginx_verify_desired "$record" \
   || fail "canonical Center Nginx state drifted before activation"
 domain_cloudflared_verify_desired "$record" \
   || fail "canonical Center Cloudflare route drifted before activation"
-bash "$release_dir/platform/deploy/vps/remote/canary.sh" \
+run_held_release_program "$release_dir" platform/deploy/vps/remote/canary.sh bash 0 \
   --release-id "$release_id" --baseline "$postcandidate_backup" \
   --image-evidence "$record/running-images.tsv" --require-remote-tts \
   --quiesced-loopback --cookie-file "$owner_canary_cookie"
@@ -2630,7 +2978,7 @@ bash "$release_dir/platform/deploy/vps/remote/canary.sh" \
 start_recorded_ingress_service "$ingress_evidence" penumbra-center-bridge.service
 ingress_quiesced=0
 wait_for_services "$release_dir"
-bash "$release_dir/platform/deploy/vps/remote/canary.sh" \
+run_held_release_program "$release_dir" platform/deploy/vps/remote/canary.sh bash 0 \
   --release-id "$release_id" \
   --image-evidence "$record/running-images.tsv" --require-remote-tts \
   --require-owner-spotify --require-wearer-plane --quiesced-loopback --expect-bridge-ready \
@@ -2644,7 +2992,7 @@ assert_ingress_matches_recorded "$ingress_evidence" || fail "activated ingress d
 record_public_ingress_window
 # The last gate before the deployment is accepted, and the only one that reaches
 # Center's wearer data plane through the fully activated public edge.
-bash "$release_dir/platform/deploy/vps/remote/canary.sh" \
+run_held_release_program "$release_dir" platform/deploy/vps/remote/canary.sh bash 0 \
   --release-id "$release_id" \
   --image-evidence "$record/running-images.tsv" --require-remote-tts \
   --require-owner-spotify --require-wearer-plane --cookie-file "$owner_canary_cookie"

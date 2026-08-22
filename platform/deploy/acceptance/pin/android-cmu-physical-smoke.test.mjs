@@ -510,6 +510,7 @@ test("visible policy probe accepts only the exact privacy-preserving broad polic
     "</map>",
   ].join("\n");
   const script = buildVisiblePolicyProbeScript("/dev/stdin");
+  assert.equal(script.includes("/dev/stdin"), false);
   assert.equal(executeContentFreeProbe(script, validPolicy).status, 0);
 
   const rejectedPolicies = [
@@ -543,7 +544,9 @@ test("live GATT probe requires exact advertising plus service and connection in 
     "    Connection(connected)",
     `    Service ${TRANSPORT_RESET_CONTRACT.gattServiceUuid}`,
   ].join("\n");
-  const validResult = executeContentFreeProbe(buildLiveGattProbeScript("cat /dev/stdin"), validDump);
+  const script = buildLiveGattProbeScript("cat /dev/stdin");
+  assert.equal(script.includes("/dev/stdin"), false);
+  const validResult = executeContentFreeProbe(script, validDump);
   assert.equal(validResult.status, 0);
   const parsed = parseLiveGattProbeOutput(validResult.stdout);
   assert.deepEqual(parsed, {
