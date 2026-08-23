@@ -774,6 +774,10 @@ PRIVATE_DIR="$REMOTE_ROOT/private"
 RELEASES_DIR="$REMOTE_ROOT/releases"
 DEPLOYMENTS_DIR="$REMOTE_ROOT/deployments"
 LOCK_FILE="$REMOTE_ROOT/deploy.lock"
+LEGACY_EDGE_DIR="$REMOTE_ROOT/protected/legacy-edge"
+PRODUCTION_ATTEST_DIR="$REMOTE_ROOT/protected/attestation"
+PRODUCTION_DUC_DIR="$REMOTE_ROOT/protected/device-user"
+PRODUCTION_KEYCLOAK_THEME_DIR="$REMOTE_ROOT/protected/keycloak-theme"
 log() { printf '[ai-pin-revival] %s\\n' "$*"; }
 fail() { printf '[ai-pin-revival] error: %s\\n' "$*" >&2; exit 1; }
 usage_fail() { printf '[ai-pin-revival] error: %s\\n' "$*" >&2; exit 64; }

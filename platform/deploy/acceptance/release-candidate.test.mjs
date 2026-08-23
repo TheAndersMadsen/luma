@@ -1190,7 +1190,10 @@ test("prepare strips poisoned Git directories, configs, filters, and hooks befor
     timeout: 30_000,
   });
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /incompatible with the live legacy production contract|production authority|candidate source/u);
+  assert.match(
+    result.stderr,
+    /incompatible with the live legacy production contract|production authority|candidate source|selected commit does not contain the byte-identical reviewed candidate\/deployment protocol|release candidate preparation requires a native linux\/amd64 builder and refused before Docker/u,
+  );
   assert.equal(fs.existsSync(marker), false);
 });
 
