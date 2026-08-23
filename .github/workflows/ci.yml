@@ -61,7 +61,10 @@ jobs:
       - name: CI workflow policy
         run: node --test platform/deploy/acceptance/ci-policy.test.mjs
       - name: complete platform policy and acceptance checks
-        run: ./revival check platform
+        run: |
+          sh platform/deploy/acceptance/source-policy.sh
+          sh platform/deploy/acceptance/layout.sh
+          ./revival check platform --full
 
   center:
     name: center formatting and tests

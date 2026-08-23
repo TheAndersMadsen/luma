@@ -80,6 +80,10 @@ test("setup recomputes safe file evidence without remembering command success", 
   assert.equal(changed.status, 0, changed.stderr);
   const changedReport = JSON.parse(changed.stdout);
   assert.equal(changedReport.steps.find((step) => step.id === "initialize").status, "required");
+  assert.equal(
+    changedReport.steps.find((step) => step.id === "check").evidence,
+    "run the doctor directly; setup does not execute Docker",
+  );
   assert.deepEqual(
     changedReport.steps.filter((step) => step.status === "required").map((step) => step.action),
     ["./revival init", "./revival doctor", "./revival stack up", "./revival stack status"],
@@ -190,6 +194,5 @@ test("hosted imports delegate immediately to the provider-verifying artifact too
   );
   assert.equal(result.status, 1);
   assert.match(result.stderr, /hosted candidate handoff is missing/u);
-  assert.doesNotMatch(result.stderr, /invocation binding|tracked source|receipt/u);
   assert.equal(fs.existsSync(env.REVIVAL_STATE_DIR), false, "artifact import must not create guide state");
 });

@@ -4,7 +4,7 @@
 // codes are unchanged.
 
 const {
-  PROJECT, COMPOSE_BASE, COMPOSE_DEVELOPMENT, MINIMUM_COMPOSE_VERSION, CONFIG_DIR, SECRETS_DIR, DATA_DIR, BACKUP_DIR, ENV_FILE, authoritativeCompletion, isInsideSource, fail, info, exists, run, valueOf, validateRuntime, operatorEnvironment,
+  PROJECT, COMPOSE_BASE, COMPOSE_DEVELOPMENT, MINIMUM_COMPOSE_VERSION, CONFIG_DIR, SECRETS_DIR, DATA_DIR, BACKUP_DIR, ENV_FILE, isInsideSource, fail, info, exists, run, valueOf, validateRuntime, operatorEnvironment,
 } = require('./context');
 const { parseVersion, validateHostToolchains, versionAtLeast } = require('./toolchain');
 
@@ -175,9 +175,6 @@ function localDoctor(args = []) {
     info(`NEXT ${report.next}`);
   }
   if (!report.ok) process.exitCode = 1;
-  return report.ok
-    ? authoritativeCompletion('doctor.local', 'local-prerequisites-verified')
-    : null;
 }
 
 function stack(subcommand, args) {
@@ -194,11 +191,8 @@ function stack(subcommand, args) {
       } catch (error) {
         fail(error.message);
       }
-      return authoritativeCompletion(
-        'stack.up',
-        'local-stack-started',
-        compose(['up', '--detach', '--remove-orphans', ...args]),
-      );
+      compose(['up', '--detach', '--remove-orphans', ...args]);
+      break;
     case 'down':
       if (args.some((argument) =>
         argument === '-v' || argument.startsWith('-v=') ||

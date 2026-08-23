@@ -166,15 +166,21 @@ state or isolated container volumes.
 ./revival check cosmos
 ./revival check cosmos TEST_FILTER
 ./revival check platform
+./revival check platform --full
+./revival pin check
 
 # Conservatively select checks from committed + working-tree changes
 ./revival check changed
 ./revival check changed --base origin/main
 ```
 
-`check cosmos TEST_FILTER` fails if the filter matches no tests. `check changed`
+Component checks run directly from the working tree and reuse external npm,
+Cargo, and Gradle caches. `check cosmos TEST_FILTER` fails if the filter matches no tests. `check changed`
 includes staged, unstaged, and untracked changes and fans unfamiliar shared
-paths out to all relevant checks.
+paths out to all relevant checks. The default platform check stays focused;
+`--full` discovers every top-level Node acceptance test and is selected
+automatically for safety-sensitive paths. CI and release checks run layout and
+source policy explicitly.
 
 For Pin edits on a supported Linux/x64 host, run the focused source gate:
 

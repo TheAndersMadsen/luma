@@ -56,9 +56,9 @@ configuration, logs, serials, and wearer data.
 | `revival stack config` | read | Render the Compose model without secret interpolation. |
 | `revival dev center` | local | Run Center with Turbopack and Compose source watch. |
 | `revival dev down` | local | Stop only the isolated development stack and retain its caches. |
-| `revival check center` | local | Run Center type, server, UI, and Spotify adapter checks from external build state. |
+| `revival check center` | local | Run Center type, server, UI, and Spotify adapter checks from the working tree with external caches. |
 | `revival check cosmos [TEST_FILTER]` | local | Run full Cosmos checks or a nonempty, verified Cargo test filter. |
-| `revival check platform` | local | Run source policy and platform acceptance tests. |
+| `revival check platform [--full]` | local | Run the fast subset, or every top-level Node acceptance test with `--full`; CI/release run shell policies separately. |
 | `revival check changed [--base REF]` | local | Select conservative checks from Git changes. |
 | `revival test` | local | Run the repository release gate; writes only external build/cache state. |
 | `revival release check` | local | Run immutable release checks; writes only external build/cache state. |
@@ -68,13 +68,17 @@ configuration, logs, serials, and wearer data.
 Short aliases `build`, `up`, `down`, `status`, `logs`, and bare `config` retain
 their stack behavior.
 
-The `dev` and component `check` commands are the supported inner loop. They
-keep generated dependencies, compiler targets, and Next output below external
-build state or in container volumes. Center checks include the purpose-scoped
+The `dev` and component `check` commands are the supported inner loop. They run
+against the working tree and keep package caches, compiler targets, TypeScript
+incremental output, and Next output below external build state or in container
+volumes. Center's ignored `node_modules` is reused until its package inputs or
+runtime versions change. Center checks include the purpose-scoped
 Spotify adapter. Filtered Cosmos checks use Cargo/libtest discovery and fail if
 the filter selects no tests. `check changed` prefers the remote default branch,
-falls back only to conventional `main`/`master` refs, checks the full tracked
-tree when no trustworthy default exists, and includes both sides of renames.
+then `origin/main` or `origin/master`. It checks the full tracked tree when no
+trustworthy remote default exists and includes both sides of renames.
+Safety-sensitive platform, workflow, contract, root configuration, and unknown
+paths invoke the dynamic `platform --full` inventory; docs remain on the fast subset.
 Contributor-safe Pin checks explicitly remove signing/private build variables.
 `test` and `release check` remain the full release boundary;
 the fast commands do not weaken or replace them. See the [fast local

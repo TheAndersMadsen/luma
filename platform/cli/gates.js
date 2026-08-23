@@ -1,7 +1,5 @@
 'use strict';
 
-const child = require('node:child_process');
-const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -30,6 +28,21 @@ const SERIAL_POLICY_TESTS = Object.freeze([
   'fresh-install.test.mjs',
   'release.test.mjs',
 ]);
+const CONTRIBUTOR_POLICY_TESTS = Object.freeze([
+  'cli-config.test.mjs',
+  'cli-help.test.mjs',
+  'cli-setup.test.mjs',
+  'connectivity.test.mjs',
+  'distribution.test.mjs',
+  'fast-workflow.test.mjs',
+  'fresh-install.test.mjs',
+  'local-command-authority.test.mjs',
+  'operator-setup-contract.test.mjs',
+  'revival.test.mjs',
+  'setup-projection.test.mjs',
+  'wire-divergence.test.mjs',
+  'wire-equivalence.test.mjs',
+]);
 const RELEASE_RSA_COMPATIBILITY_TEST =
   'tests::production_wrapping_key_is_4096_bit_and_accepts_explicit_sha1_oaep';
 const PIN_BUILDER_DEBUG_STORE = path.join(
@@ -39,132 +52,6 @@ const PIN_BUILDER_DEBUG_STORE = path.join(
   'pin-builder',
   'debug-store.py',
 );
-const PIN_TRUSTED_EXECUTABLES = Object.freeze({
-  sh: Object.freeze(['/bin/sh', '/usr/bin/sh']),
-  node: Object.freeze(['/usr/bin/node', '/bin/node']),
-  python3: Object.freeze(['/usr/bin/python3', '/bin/python3']),
-  docker: Object.freeze(['/usr/bin/docker', '/usr/local/bin/docker']),
-});
-const PIN_BROKER_BOOTSTRAP = String.raw`
-import fcntl
-import hashlib
-import os
-import stat
-import sys
-
-SOURCE_DESCRIPTOR = 4
-MAXIMUM_BROKER_BYTES = 8 * 1024 * 1024
-EXPECTED_SHA256 = sys.argv[1]
-BROKER_ARGUMENTS = sys.argv[2:]
-
-def stable(metadata):
-    return (
-        metadata.st_dev, metadata.st_ino, metadata.st_mode, metadata.st_uid,
-        metadata.st_gid, metadata.st_nlink, metadata.st_size,
-        metadata.st_mtime_ns, metadata.st_ctime_ns,
-    )
-
-before = os.fstat(SOURCE_DESCRIPTOR)
-if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_size > MAXIMUM_BROKER_BYTES:
-    raise SystemExit("Pin lane broker is not one bounded regular file")
-os.lseek(SOURCE_DESCRIPTOR, 0, os.SEEK_SET)
-contents = bytearray()
-while len(contents) <= MAXIMUM_BROKER_BYTES:
-    block = os.read(SOURCE_DESCRIPTOR, min(1024 * 1024, MAXIMUM_BROKER_BYTES + 1 - len(contents)))
-    if not block:
-        break
-    contents.extend(block)
-after = os.fstat(SOURCE_DESCRIPTOR)
-if (
-    len(contents) > MAXIMUM_BROKER_BYTES or stable(before) != stable(after) or
-    hashlib.sha256(contents).hexdigest() != EXPECTED_SHA256
-):
-    raise SystemExit("Pin lane broker changed before its sealed execution")
-
-sealed = os.memfd_create(
-    "revival-pin-lane-broker",
-    getattr(os, "MFD_CLOEXEC", 0x0001) | getattr(os, "MFD_ALLOW_SEALING", 0x0002),
-)
-view = memoryview(contents)
-while view:
-    written = os.write(sealed, view)
-    view = view[written:]
-os.fsync(sealed)
-required_seals = (
-    getattr(fcntl, "F_SEAL_SEAL", 0x0001) |
-    getattr(fcntl, "F_SEAL_SHRINK", 0x0002) |
-    getattr(fcntl, "F_SEAL_GROW", 0x0004) |
-    getattr(fcntl, "F_SEAL_WRITE", 0x0008)
-)
-fcntl.fcntl(sealed, getattr(fcntl, "F_ADD_SEALS", 1033), required_seals)
-if fcntl.fcntl(sealed, getattr(fcntl, "F_GET_SEALS", 1034)) & required_seals != required_seals:
-    raise SystemExit("Pin lane broker memfd did not retain every required seal")
-if stable(os.fstat(SOURCE_DESCRIPTOR)) != stable(before):
-    raise SystemExit("Pin lane broker changed while its memfd was sealed")
-
-filename = f"/proc/self/fd/{sealed}"
-code = compile(bytes(contents), filename, "exec", dont_inherit=True)
-sys.argv = [filename, *BROKER_ARGUMENTS]
-namespace = {
-    "__name__": "__main__",
-    "__file__": filename,
-    "__package__": None,
-    "__cached__": None,
-}
-exec(code, namespace, namespace)
-`;
-
-function sameStableFile(left, right) {
-  return left.dev === right.dev && left.ino === right.ino &&
-    left.mode === right.mode && left.uid === right.uid && left.gid === right.gid &&
-    left.nlink === right.nlink && left.size === right.size &&
-    left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs &&
-    left.isFile() && right.isFile();
-}
-
-function resolveTrustedPinExecutable(name, candidates = PIN_TRUSTED_EXECUTABLES[name]) {
-  if (!Array.isArray(candidates) || candidates.length === 0) {
-    throw new Error(`no fixed executable candidates exist for Pin ${name}`);
-  }
-  const failures = [];
-  for (const requested of candidates) {
-    try {
-      if (!path.isAbsolute(requested)) throw new Error('candidate is not absolute');
-      const executable = fs.realpathSync(requested);
-      let cursor = path.parse(executable).root;
-      for (const component of executable.slice(cursor.length).split(path.sep).slice(0, -1)) {
-        cursor = path.join(cursor, component);
-        const ancestor = fs.lstatSync(cursor);
-        if (!ancestor.isDirectory() || ancestor.isSymbolicLink() || ancestor.uid !== 0 ||
-            (ancestor.mode & 0o022) !== 0) {
-          throw new Error(`untrusted executable ancestor ${cursor}`);
-        }
-      }
-      const noFollow = fs.constants.O_NOFOLLOW || 0;
-      const descriptor = fs.openSync(
-        executable,
-        fs.constants.O_RDONLY | noFollow | (fs.constants.O_CLOEXEC || 0),
-      );
-      try {
-        const before = fs.lstatSync(executable);
-        const opened = fs.fstatSync(descriptor);
-        const after = fs.lstatSync(executable);
-        if (!sameStableFile(before, opened) || !sameStableFile(opened, after) ||
-            before.isSymbolicLink() || before.uid !== 0 || before.nlink !== 1 ||
-            (before.mode & 0o022) !== 0 || (before.mode & 0o111) === 0) {
-          throw new Error('executable is not one stable root-owned non-writable file');
-        }
-      } finally {
-        fs.closeSync(descriptor);
-      }
-      return executable;
-    } catch (error) {
-      failures.push(`${requested}: ${error.message}`);
-    }
-  }
-  throw new Error(`trusted Pin ${name} executable is unavailable (${failures.join('; ')})`);
-}
-
 function pinLaneSessionArguments(lane, selection = {}) {
   if (!['check', 'debug'].includes(lane)) {
     throw new Error(`unknown Pin builder lane: ${lane}`);
@@ -194,77 +81,12 @@ function pinLaneSessionArguments(lane, selection = {}) {
   return Object.freeze(arguments_);
 }
 
-function openStablePinProgram(file, label, { executable = false, snapshot = false } = {}) {
-  const noFollow = fs.constants.O_NOFOLLOW || 0;
-  const before = fs.lstatSync(file);
-  const descriptor = fs.openSync(
-    file,
-    fs.constants.O_RDONLY | noFollow | (fs.constants.O_CLOEXEC || 0),
-  );
-  try {
-    const opened = fs.fstatSync(descriptor);
-    const after = fs.lstatSync(file);
-    if (!sameStableFile(before, opened) || !sameStableFile(opened, after) ||
-        before.isSymbolicLink() || before.nlink !== 1 ||
-        (executable && (before.mode & 0o111) === 0)) {
-      throw new Error(`${label} is not one stable nofollow regular file`);
-    }
-    let sha256;
-    if (snapshot) {
-      if (opened.size < 0 || opened.size > 8 * 1024 * 1024) {
-        throw new Error(`${label} exceeds the sealed-program size bound`);
-      }
-      const contents = fs.readFileSync(descriptor);
-      const reread = fs.fstatSync(descriptor);
-      if (!sameStableFile(opened, reread) || contents.length !== opened.size) {
-        throw new Error(`${label} changed while its bytes were captured`);
-      }
-      sha256 = crypto.createHash('sha256').update(contents).digest('hex');
-    }
-    return Object.freeze({ descriptor, metadata: opened, file, label, sha256 });
-  } catch (error) {
-    fs.closeSync(descriptor);
-    throw error;
-  }
-}
-
-function revalidateStablePinProgram(program) {
-  const opened = fs.fstatSync(program.descriptor);
-  const named = fs.lstatSync(program.file);
-  if (!sameStableFile(program.metadata, opened) ||
-      !sameStableFile(program.metadata, named) || named.isSymbolicLink()) {
-    throw new Error(`${program.label} changed while the lane broker was active`);
-  }
-}
-
 function executePinLaneSession(lane, selection = {}, dependencies = {}) {
-  const pythonPath = resolveTrustedPinExecutable('python3');
-  const python = openStablePinProgram(pythonPath, 'trusted Pin Python', { executable: true });
-  const broker = openStablePinProgram(PIN_BUILDER_DEBUG_STORE, 'Pin lane broker', {
-    snapshot: true,
-  });
-  const spawn = dependencies.spawnSync ?? child.spawnSync;
-  let result;
-  try {
-    result = spawn('/proc/self/fd/3', [
-      '-I', '-S', '-B', '-c', PIN_BROKER_BOOTSTRAP, broker.sha256,
-      ...pinLaneSessionArguments(lane, selection),
-    ], {
-      cwd: ROOT,
-      env: {
-        LANG: 'C.UTF-8',
-        LC_ALL: 'C.UTF-8',
-        PYTHONDONTWRITEBYTECODE: '1',
-      },
-      stdio: ['ignore', 'inherit', 'inherit', python.descriptor, broker.descriptor],
-    });
-    revalidateStablePinProgram(python);
-    revalidateStablePinProgram(broker);
-  } finally {
-    fs.closeSync(broker.descriptor);
-    fs.closeSync(python.descriptor);
-  }
-  if (result.error) throw result.error;
+  const environment = dependencies.environment ?? testProcessEnvironment();
+  const runner = dependencies.runner ?? timedRun;
+  const result = runner('Pin contributor lane', 'python3', [
+    '-B', PIN_BUILDER_DEBUG_STORE, ...pinLaneSessionArguments(lane, selection),
+  ], { cwd: ROOT, env: environment, allowFailure: true });
   if (result.signal || result.status !== 0) throwLikeChild(result);
   return result;
 }
@@ -313,25 +135,38 @@ function policyTestPlan(testNames, { hasPinSource = true } = {}) {
   };
 }
 
-function policyTests(environment = testProcessEnvironment()) {
+function policyTestMode({ contributor = false, shellPolicies = true } = {}) {
+  return Object.freeze({ contributor, shellPolicies });
+}
+
+function policyTests(environment = testProcessEnvironment(), options = {}) {
+  const { contributor, shellPolicies } = policyTestMode(options);
   timedStage('platform version fixtures', testVersionParser);
   info('[implemented] Docker Compose minimum-version parser fixtures passed.');
   const acceptance = path.join(ROOT, 'platform', 'deploy', 'acceptance');
-  const scripts = fs.readdirSync(acceptance).sort();
+  let scripts = fs.readdirSync(acceptance).sort();
   const pinPath = path.join(ROOT, 'pin');
   const hasPinSource = fs.existsSync(pinPath);
   if (hasPinSource && !fs.lstatSync(pinPath).isDirectory()) {
     fail(`${pinPath} exists but is not a source directory`);
   }
-  timedStage('platform shell policies', () => {
-    for (const name of scripts.filter((entry) => entry.endsWith('.sh'))) {
-      if (!hasPinSource && name === 'layout.sh') {
-        info('[implemented] skipped the complete-source layout check in the Pin-free VPS profile.');
-        continue;
-      }
-      timedRun(`platform ${name}`, 'sh', [path.join(acceptance, name)], { env: environment });
+  if (contributor) {
+    const available = new Set(scripts);
+    for (const name of CONTRIBUTOR_POLICY_TESTS) {
+      if (!available.has(name)) throw new Error(`contributor platform test is missing: ${name}`);
     }
-  });
+    scripts = [...CONTRIBUTOR_POLICY_TESTS];
+  } else if (shellPolicies) {
+    timedStage('platform shell policies', () => {
+      for (const name of scripts.filter((entry) => entry.endsWith('.sh'))) {
+        if (!hasPinSource && name === 'layout.sh') {
+          info('[implemented] skipped the complete-source layout check in the Pin-free VPS profile.');
+          continue;
+        }
+        timedRun(`platform ${name}`, 'sh', [path.join(acceptance, name)], { env: environment });
+      }
+    });
+  }
   if (!hasPinSource && scripts.includes('release.test.mjs')) {
     info('[implemented] skipped the complete-source package fixture in the Pin-free VPS profile.');
   }
@@ -384,30 +219,28 @@ function vpsReleaseCheck() {
   const cosmosEnvironment = cosmosTestEnvironment(testEnvironment);
   policyTests(testEnvironment);
 
-  // Load lazily to avoid the checks -> gates module cycle during startup. A
-  // complete leased snapshot makes package-manager output disposable and
-  // prevents this release gate from ever cleaning or mutating source paths.
+  // Load lazily to avoid the checks -> gates module cycle during startup.
   const {
+    createCenterBuildWorkspace,
     exactNpmVersion,
-    isolatedSnapshotGitEnvironment,
     normalizedNpmInstallEnvironment,
-    prepareCenterWorkspace,
     prepareNpmDependencies,
   } = require('./checks');
-  const prepared = timedStage('release Center source snapshot', prepareCenterWorkspace);
+  // Next's build directory is project-relative, so the complete release gate
+  // uses an external short-lived source copy. Immutable candidate provenance
+  // is enforced later by candidate/release commands, not contributor checks.
+  const prepared = timedStage('release Center build workspace', createCenterBuildWorkspace);
   try {
-    const isolatedEnvironment = isolatedSnapshotGitEnvironment(prepared.root, testEnvironment);
-    const npmEnvironment = normalizedNpmInstallEnvironment(isolatedEnvironment);
+    const npmEnvironment = normalizedNpmInstallEnvironment(testEnvironment);
     const npmVersion = exactNpmVersion(npmEnvironment);
-    prepareNpmDependencies(prepared.center, 'center-npm', npmVersion, npmEnvironment);
-    prepareNpmDependencies(prepared.spotify, 'spotify-adapter-npm', npmVersion, npmEnvironment);
+    prepareNpmDependencies(prepared.center, 'center-release-npm', npmVersion, npmEnvironment);
+    prepareNpmDependencies(prepared.spotify, 'spotify-release-npm', npmVersion, npmEnvironment);
     timedRun('release Center tests', 'npm', ['test'], { cwd: prepared.center, env: npmEnvironment });
     runCenterUiTests(prepared.center, npmEnvironment);
     timedRun('release Center build', 'npm', ['run', 'build'], {
       cwd: prepared.center,
       env: { ...npmEnvironment, REVIVAL_RELEASE_ID: 'source-check' },
     });
-
     timedRun('release Spotify tests', 'npm', ['test'], {
       cwd: prepared.spotify,
       env: npmEnvironment,
@@ -484,16 +317,15 @@ function releaseCheck({ source = false } = {}) {
 }
 
 module.exports = {
-  PIN_BROKER_BOOTSTRAP,
   RELEASE_RSA_COMPATIBILITY_TEST,
   assertExactlyOneListedRustTest,
   policyTestArguments,
   policyTestConcurrency,
+  policyTestMode,
   policyTestPlan,
   policyTests,
   runCenterUiTests,
   vpsReleaseCheck,
-  resolveTrustedPinExecutable,
   pinLaneSessionArguments,
   executePinLaneSession,
   assertPinAmd64ConsumerHost,

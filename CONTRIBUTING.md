@@ -87,7 +87,9 @@ release gate above for a release candidate:
 ./revival check center                # typecheck + server/UI + Spotify adapter tests
 ./revival check cosmos                # fmt + clippy + full workspace tests
 ./revival check cosmos TEST_FILTER    # fmt + matching Cargo tests only
-./revival check platform              # source policy + platform acceptance
+./revival check platform              # behavior-focused platform acceptance
+./revival check platform --full       # every top-level Node acceptance test
+./revival pin check                   # credential-free canonical Pin checks
 ./revival check changed               # checks selected from Git changes
 ./revival check changed --base REF    # explicit comparison base
 ```
@@ -101,17 +103,18 @@ The watcher uses the isolated `ai-pin-revival-dev` Compose project, so it cannot
 replace an existing `ai-pin-revival` runtime with development containers. Stop
 it with `./revival dev down` when finished; its cache volumes are retained.
 
-`check platform` first scans the complete real source tree, including ignored
-agent instructions and hidden source directories, then `check center` and
-`check platform` make a unique, disposable Git snapshot below the external
-`REVIVAL_BUILD_DIR`. Ignored editor/agent files and generated residue therefore
-cannot weaken or obstruct source-layout assertions, and concurrent checks
-cannot replace each other's workspace. Center and its Spotify adapter
-reuse atomically published dependency seeds only when the OS, architecture,
-exact Node/npm versions, normalized `npm ci --include=dev` policy, and package
-manifests all match. User npm behavior settings are ignored during that install.
-Each invocation gets a private copy, so test caches cannot race. Cosmos
-build artifacts already use the external Cargo target directory. Ordinary
+The component checks run directly from the working tree. Center runs `npm ci`
+only when its package manifests, project `.npmrc`, Node/npm versions, OS, or architecture change,
+then reuses the
+working-tree `node_modules`; npm's download cache and TypeScript incremental
+file stay below external `REVIVAL_BUILD_DIR`. User npm behavior settings are
+ignored during installation. Cosmos reuses one external Cargo target. Platform
+checks default to behavior-focused acceptance tests without cloning or hashing
+the repository; `--full` dynamically adds every top-level Node acceptance test.
+CI and release checks own layout and source policy explicitly. Release-candidate
+provenance and publication checks remain in
+`./revival test` and release workflows, so run those boundaries from a clean
+isolated checkout rather than a development tree containing ignored dependencies. Ordinary
 Cosmos wrapping-key tests generate one process-local 2048-bit key in memory
 through a `cfg(test)`-only seam. Each test still gets fresh mutable
 `KeyMaterial`, including the empty -> generate -> persist -> restart path; no
@@ -133,25 +136,36 @@ A nonempty Cosmos `TEST_FILTER` is first passed to Cargo/libtest with `--list`.
 The check fails when it matches zero tests instead of reporting a false green;
 an explicitly empty filter is invalid.
 
-`check changed` compares with `origin/HEAD` when available, then the conventional
-local/remote `main` or `master` branch. If none exists, it checks the full tracked
+`check changed` compares with `origin/HEAD` when available, then `origin/main` or
+`origin/master`. If no remote default exists, it checks the full tracked
 tree instead of guessing from commit ancestry. It includes committed branch
 changes plus staged, unstaged, and untracked files, and treats both sides of a
 rename as changed. Center-, Cosmos-, and Pin-owned files select their respective checks.
-Known platform, Compose, release, and workflow paths select their affected
-components; unfamiliar shared/root paths and wire contracts conservatively fan
-out to every check. The Pin selection uses the contributor-safe source gate;
+Known platform, Compose, release, contract, and workflow paths select their affected
+components and run the dynamic full platform inventory. Documentation and ordinary
+component paths retain the fast platform subset; unfamiliar shared/root paths and
+wire contracts conservatively fan out to every check, with platform in full mode.
+The Pin selection uses the contributor-safe source gate;
 among source checks, private signing material remains required only by
 `test --source` and `release check --source`.
 
 Platform acceptance keeps safe test files in one bounded-concurrency Node
-runner. The repository-cleanliness fixture and release/package fixture run
-sequentially afterward, so neither can observe or race transient root state.
+runner. Release-only source and package fixtures remain in the full release
+gate instead of slowing every edit-test cycle. Run `check platform --full` to
+dynamically include every top-level Node acceptance test. CI additionally runs
+the exact layout and source-policy scripts from a clean checkout.
 
-Keep generated output outside the checkout. These supported commands redirect
-caches and build directories. When running bare `cargo` or `npm`, set external
-target and cache directories; the layout gate rejects in-tree `target/`,
-`node_modules/`, `.gradle/`, and similar residue.
+Install and typecheck locks fail immediately and print their exact external
+path. After confirming no matching check is running, remove only that printed
+stale file: `REVIVAL_BUILD_DIR/check-state/center-npm.install.lock`,
+`REVIVAL_BUILD_DIR/check-state/spotify-adapter-npm.install.lock`, or
+`REVIVAL_BUILD_DIR/center/typecheck.lock`.
+
+Keep compiler output outside the checkout. These supported commands redirect
+Cargo targets, Gradle state, TypeScript incremental output, and package-manager
+caches. Center's ignored `node_modules` is the sole development dependency
+directory in the checkout. The release layout gate still rejects it and all
+other generated directories, which is why releases use a clean isolated tree.
 
 Run the contract and clean-install checks when changing operator setup:
 

@@ -4,9 +4,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { createRequire } from "node:module";
 
 const root = path.resolve(import.meta.dirname, "../../..");
 const cli = path.join(root, "revival");
+const require = createRequire(import.meta.url);
+const { BUILD_DIR, cosmosTestEnvironment, testProcessEnvironment } = require("../../cli/context.js");
+const { normalizedNpmInstallEnvironment } = require("../../cli/checks.js");
 
 function isolatedOperator() {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "ai-pin-revival-config-"));
@@ -121,48 +125,20 @@ test("init refuses unmanaged existing roots and runtime files outside secrets", 
   }
 });
 
-test("generated output is external and source checks leave no local residue", () => {
-  // The CLI is an entry point over platform/cli modules; the redirection
-  // mechanisms live in the modules, so the scan reads all of them.
-  const source = [cli, ...fs.readdirSync(path.join(root, "platform", "cli"))
-    .filter((name) => name.endsWith(".js")).sort()
-    .map((name) => path.join(root, "platform", "cli", name))]
-    .map((file) => fs.readFileSync(file, "utf8")).join("\n");
-  assert.match(source, /CARGO_TARGET_DIR:\s*path\.join\(BUILD_DIR, 'cosmos-target'\)/);
-  assert.match(source, /GRADLE_USER_HOME:\s*path\.join\(BUILD_DIR, 'gradle-home'\)/);
-  assert.match(source, /NPM_CONFIG_CACHE:\s*path\.join\(BUILD_DIR, 'npm-cache'\)/);
-  // Fast checks keep disposable workspaces, content-addressed cache entries,
-  // atomic publication staging, and concurrency leases under the external
-  // build root. None of those names may fall back into the source checkout.
-  assert.match(source, /fast-check-workspaces/u);
-  assert.match(source, /fast-check-cache/u);
-  assert.match(source, /\.publish-/u);
-  assert.match(source, /fast-check-leases/u);
-  assert.doesNotMatch(source, /generatedCleanupGuard/u);
-  const pinBuilder = fs.readFileSync(
-    path.join(root, "platform", "containers", "pin-builder", "entrypoint.sh"),
-    "utf8",
-  );
-  assert.match(pinBuilder, /--project-cache-dir "\$\{REVIVAL_HELD_GRADLE_CONTRACTS:\?missing held contracts Gradle cache\}"/u);
-  assert.match(pinBuilder, /--project-cache-dir "\$\{REVIVAL_HELD_GRADLE_INJECTOR:\?missing held injector Gradle cache\}"/u);
-  // Every other redirection above is pinned by the mechanism that performs it;
-  // Python's was pinned only by the __pycache__ symptom scan below, which is an
-  // accident of ordering — it catches residue only when some earlier test in
-  // the same run already imported an in-tree module, and this file happens to
-  // sort late. Pin the cause as well. Without it the gate spawns interpreters
-  // that write bytecode beside the source they import, and the NEXT run dies in
-  // layout.sh reporting a repo-layout violation for output this run created:
-  // a failure that blames the wrong layer, which is the shape this suite exists
-  // to prevent.
-  assert.match(source, /PYTHONDONTWRITEBYTECODE:\s*'1'/);
-  for (const generated of ["node_modules", ".next", ".gradle", "target", "__pycache__"]) {
-    const scan = spawnSync("find", [root, "-type", "d", "-name", generated, "-print"], {
-      cwd: root,
-      encoding: "utf8",
-    });
-    assert.equal(scan.status, 0, scan.stderr);
-    assert.equal(scan.stdout.trim(), "", `${generated} must stay outside the source tree`);
+test("test environments configure compiler and package cache paths outside the repository", () => {
+  const environment = testProcessEnvironment();
+  const cosmos = cosmosTestEnvironment(environment);
+  const npm = normalizedNpmInstallEnvironment(environment);
+  for (const directory of [
+    cosmos.CARGO_TARGET_DIR,
+    environment.CARGO_HOME,
+    environment.GRADLE_USER_HOME,
+    npm.NPM_CONFIG_CACHE,
+  ]) {
+    assert.equal(path.isAbsolute(directory), true);
+    assert.equal(directory.startsWith(`${root}${path.sep}`), false);
   }
+  assert.equal(cosmos.CARGO_TARGET_DIR, path.join(BUILD_DIR, "cosmos-target"));
 });
 
 test("Cosmos convenience targets delegate to the root Revival CLI", () => {

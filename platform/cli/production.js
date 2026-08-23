@@ -7,7 +7,7 @@ const path = require('node:path');
 // codes are unchanged.
 
 const {
-  DEPLOY_DIR, authoritativeCompletion, fail, localProductionEnvironment, resolveTool, run,
+  DEPLOY_DIR, fail, localProductionEnvironment, resolveTool, run,
 } = require('./context');
 const CANDIDATE_TOOL = path.join(DEPLOY_DIR, '..', 'release-candidate.mjs');
 
@@ -18,8 +18,7 @@ function deploymentScript(name, args) {
 }
 
 function productionDoctor(args) {
-  const result = deploymentScript('preflight.sh', args);
-  return authoritativeCompletion('doctor.production', 'production-preflight-passed', result);
+  deploymentScript('preflight.sh', args);
 }
 
 function confirmationCount(args) {
@@ -32,10 +31,9 @@ function requireConfirmedMutation(args, label, { allowDryRun = false } = {}) {
   if (args.includes('--dry-run')) {
     if (!allowDryRun) fail(`${label} does not support --dry-run`, 64);
     if (confirmations !== 0) fail(`${label} --dry-run cannot be combined with --confirm`, 64);
-    return false;
+    return;
   }
   if (confirmations !== 1) fail(`${label} changes production and requires one literal --confirm`, 64);
-  return true;
 }
 
 function deployProduction(args) {
@@ -53,11 +51,8 @@ function deployProduction(args) {
       (candidateId && !/^[0-9a-f]{64}$/.test(candidateId))) {
     fail('deploy production requires exactly one of --candidate PATH or --candidate-id SHA256; it never builds a release', 64);
   }
-  const confirmed = requireConfirmedMutation(args, 'deploy production', { allowDryRun: true });
-  const result = deploymentScript('deploy.sh', args);
-  return confirmed
-    ? authoritativeCompletion('deploy.production', 'production-deployment-applied', result)
-    : null;
+  requireConfirmedMutation(args, 'deploy production', { allowDryRun: true });
+  deploymentScript('deploy.sh', args);
 }
 
 function registerLegacyPredecessor(args) {
@@ -75,11 +70,8 @@ function registerLegacyPredecessor(args) {
       (candidateId && !/^[0-9a-f]{64}$/.test(candidateId))) {
     fail('deploy legacy-predecessor requires exactly one of --candidate PATH or --candidate-id SHA256', 64);
   }
-  const confirmed = requireConfirmedMutation(args, 'deploy legacy-predecessor', { allowDryRun: true });
-  const result = deploymentScript('register-legacy-predecessor.sh', args);
-  return confirmed
-    ? authoritativeCompletion('deploy.legacy-predecessor', 'legacy-predecessor-registered', result)
-    : null;
+  requireConfirmedMutation(args, 'deploy legacy-predecessor', { allowDryRun: true });
+  deploymentScript('register-legacy-predecessor.sh', args);
 }
 
 function releaseCandidate(args) {
@@ -93,14 +85,12 @@ function releaseCandidate(args) {
 
 function backupProduction(args) {
   requireConfirmedMutation(args, 'backup');
-  const result = deploymentScript('backup.sh', args);
-  return authoritativeCompletion('backup', 'production-backup-created', result);
+  deploymentScript('backup.sh', args);
 }
 
 function canaryProduction(args) {
   requireConfirmedMutation(args, 'canary');
-  const result = deploymentScript('canary.sh', args);
-  return authoritativeCompletion('canary', 'production-canary-passed', result);
+  deploymentScript('canary.sh', args);
 }
 
 function rollbackProduction(args) {

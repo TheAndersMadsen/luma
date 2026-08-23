@@ -839,7 +839,21 @@ function validateCaches(ci, release) {
 
   const platform = ci.jobs.get("layout-and-wire");
   invariant(platform !== undefined, "complete platform CI job is missing");
-  assertUnconditionalValidation(platform, /\.\/revival check platform/u, "complete platform suite");
+  assertUnconditionalValidation(
+    platform,
+    /^\s*sh platform\/deploy\/acceptance\/source-policy\.sh\s*$/mu,
+    "release source policy",
+  );
+  assertUnconditionalValidation(
+    platform,
+    /^\s*sh platform\/deploy\/acceptance\/layout\.sh\s*$/mu,
+    "release layout policy",
+  );
+  assertUnconditionalValidation(
+    platform,
+    /\.\/revival check platform --full(?:\s|$)/u,
+    "complete platform suite",
+  );
   invariant(!ci.jobs.has("source-gate"), "serial duplicate release source gate must stay removed");
   assertUnconditionalValidation(center, /npm --prefix center run build/u, "Center production build");
   assertUnconditionalValidation(
@@ -985,7 +999,7 @@ function validateWorkflowSources({
     "complete platform suite",
   );
   const platformSuite = ci.jobs.get("layout-and-wire")?.steps.find((step) =>
-    (step.properties.get("run") ?? "").includes("./revival check platform"));
+    (step.properties.get("run") ?? "").includes("./revival check platform --full"));
   invariant(
     platformSuite && platformNodeBinding.start < platformSuite.start,
     "complete platform suite must bind fixed Node before invoking revival",
@@ -1351,11 +1365,44 @@ test("mutation: release coverage cannot return to one serial duplicate source ga
   expectRejected((value) => {
     value.ciText = changed(
       value.ciText,
-      value.ciText.replace("./revival check platform", "./revival release check"),
+      value.ciText.replace("./revival check platform --full", "./revival release check"),
       "serial release gate",
     );
     return value;
   }, /complete platform suite/u);
+});
+
+test("mutation: the complete platform CI job cannot silently use the fast subset", () => {
+  expectRejected((value) => {
+    value.ciText = changed(
+      value.ciText,
+      value.ciText.replace("./revival check platform --full", "./revival check platform"),
+      "fast platform subset",
+    );
+    return value;
+  }, /complete platform suite/u);
+});
+
+test("mutation: complete CI cannot drop the explicit release source policy", () => {
+  expectRejected((value) => {
+    value.ciText = changed(
+      value.ciText,
+      value.ciText.replace("          sh platform/deploy/acceptance/source-policy.sh\n", ""),
+      "release source policy",
+    );
+    return value;
+  }, /release source policy/u);
+});
+
+test("mutation: complete CI cannot drop the explicit release layout policy", () => {
+  expectRejected((value) => {
+    value.ciText = changed(
+      value.ciText,
+      value.ciText.replace("          sh platform/deploy/acceptance/layout.sh\n", ""),
+      "release layout policy",
+    );
+    return value;
+  }, /release layout policy/u);
 });
 
 test("mutation: an ordinary Cosmos workspace test cannot be rerun serially", () => {

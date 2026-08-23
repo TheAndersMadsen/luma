@@ -219,7 +219,7 @@
       "effect": "local-mutation",
       "confirmationRequired": false,
       "exactSerialRequired": false,
-      "summary": "Run Center type, server, UI, and Spotify adapter checks from external build state.",
+      "summary": "Run Center type, server, UI, and Spotify adapter checks directly from the working tree.",
       "usage": "revival check center",
       "documentationAnchor": "CONTRIBUTING.md#fast-local-loop"
     },
@@ -249,8 +249,8 @@
       "effect": "local-mutation",
       "confirmationRequired": false,
       "exactSerialRequired": false,
-      "summary": "Run platform source-policy and acceptance checks.",
-      "usage": "revival check platform",
+      "summary": "Run fast platform checks, or the full Node acceptance inventory with --full.",
+      "usage": "revival check platform [--full]",
       "documentationAnchor": "CONTRIBUTING.md#fast-local-loop"
     },
     {

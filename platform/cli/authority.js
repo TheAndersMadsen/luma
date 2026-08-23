@@ -146,27 +146,10 @@ function trustedPath() {
   return [...new Set([...SYSTEM_PATH, ...USER_TOOL_PATHS])].join(path.delimiter);
 }
 
-function currentNodeIsAuthoritative() {
-  let current;
-  try {
-    current = fs.realpathSync.native(process.execPath);
-  } catch {
-    return false;
-  }
-  return candidatesFor('node').some((candidate) => {
-    try {
-      return isExecutableFile(candidate) && fs.realpathSync.native(candidate) === current;
-    } catch {
-      return false;
-    }
-  });
-}
-
 module.exports = {
   HOME,
   PLATFORM_CANDIDATES,
   candidatesFor,
-  currentNodeIsAuthoritative,
   isExecutableFile,
   resolveTool,
   trustedPath,

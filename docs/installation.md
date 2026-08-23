@@ -49,15 +49,12 @@ reachable release and matching version tag are published.
 The doctor should name every failed prerequisite and a next action. It does not
 install missing tools for you.
 
-Guided setup advances only after the referenced authoritative command returns
-its exact action-specific success result. Before dispatch it captures the exact
-argv, command contract, implementation bytes, and file identities; it
-recaptures them after success and writes a bounded mode-`0600` receipt outside
-the checkout only when nothing changed. A failed, planned, dry-run, weakened,
-or concurrently replaced action produces no receipt. Live/physical device
-acceptance is never made sticky. Hosted artifact imports additionally persist
-and revalidate their provider evidence, and `setup artifacts vps|pin` repeats
-that check explicitly.
+Guided setup stores only the selected track. Each status call recomputes safe
+local file evidence, while live services, production operations, releases, and
+physical-device checks remain required until you run their owning commands.
+Setup never remembers a successful live action. Hosted artifact imports verify
+and persist their provider evidence, and `setup artifacts vps|pin` repeats that
+verification explicitly.
 
 Production setup has one exceptional first-cutover prerequisite. The
 already-running pre-workflow predecessor release cannot be reproduced by the hosted

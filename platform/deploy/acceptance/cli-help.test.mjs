@@ -84,6 +84,25 @@ test("root and command help state the effect boundary without running effects", 
   }
 });
 
+test("contributor check help describes the direct working-tree loop", () => {
+  const { temporary, env } = isolatedEnvironment();
+  try {
+    for (const component of ["center", "platform"]) {
+      const result = invoke(env, "check", component, "--help");
+      assert.equal(result.status, 0, result.stderr);
+      assert.match(result.stdout, /directly from the working tree/u);
+      assert.doesNotMatch(result.stdout, /disposable|snapshot|source-policy/u);
+    }
+    const platform = invoke(env, "check", "platform", "--help");
+    assert.match(platform.stdout, /--full/u);
+    const group = invoke(env, "check", "--help");
+    assert.equal(group.status, 0, group.stderr);
+    assert.doesNotMatch(group.stdout, /^\s*pin\s+/mu);
+  } finally {
+    fs.rmSync(temporary, { recursive: true, force: true });
+  }
+});
+
 test("help flags short-circuit unknown trailing arguments at every position", () => {
   const { temporary, env } = isolatedEnvironment();
   try {

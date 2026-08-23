@@ -12,7 +12,6 @@ const os = require('node:os');
 const path = require('node:path');
 const {
   HOME: LOGIN_HOME,
-  currentNodeIsAuthoritative,
   resolveTool,
   trustedPath,
 } = require('./authority');
@@ -161,25 +160,6 @@ function run(command, args, options = {}) {
   if (result.error) fail(`${path.basename(executable)} could not run: ${result.error.message}`);
   if (result.status !== 0 && !options.allowFailure) process.exit(result.status || 1);
   return result;
-}
-
-// A setup journey may only advance from a command-owned semantic success, not
-// from the launcher's process exit code.  Owners call this after their final
-// gate/mutation has completed; setup-state independently binds the action,
-// exact argv, confirmation policy, and outcome literal before writing a
-// receipt.
-function authoritativeCompletion(actionId, outcome, result = { status: 0, signal: null }) {
-  if (!/^[a-z0-9.-]+$/u.test(actionId) || !/^[a-z0-9-]+$/u.test(outcome) ||
-      result === null || typeof result !== 'object' || result.status !== 0 || result.signal !== null) {
-    throw new Error('authoritative command completion requires one successful synchronous result');
-  }
-  return Object.freeze({
-    schemaVersion: 1,
-    actionId,
-    outcome,
-    status: 0,
-    signal: null,
-  });
 }
 
 function hasManagedMarker(directory) {
@@ -1459,5 +1439,5 @@ function pinBuildEnvironment() {
 }
 
 module.exports = {
-  ROOT, PRODUCT, PROJECT, ENV_EXAMPLE, COMPOSE_BASE, COMPOSE_DEVELOPMENT, PACKAGE_TOOL, PIN_RELEASE_TOOL, PIN_RELEASE_BUILD_TOOL, PIN_RELEASE_SHIP_TOOL, PIN_INSTALL_TOOL, PIN_DOCTOR_TOOL, PKI_TOOL, PIN_ACTIVATION_TOOL, PIN_NETWORK_TOOL, DEPLOY_DIR, TOOLCHAIN_CONFIG, MINIMUM_COMPOSE_VERSION, MANAGED_DIRECTORY_MARKER, DEFAULT_CONFIG_DIR, DEFAULT_SECRETS_DIR, DEFAULT_DATA_DIR, DEFAULT_BACKUP_DIR, CONFIG_DIR, SECRETS_DIR, DATA_DIR, BACKUP_DIR, ENV_FILE, RELEASE_DIR, BUILD_DIR, PIN_SECRET_DIR, PIN_SIGNING_ENV_FILE, PIN_PRIVATE_ASSETS_DIR, COMPATIBILITY_ALIASES, externalPath, canonicalCandidate, isInsideDirectory, isInsideSource, requireExternalDirectory, fail, info, exists, run, authoritativeCompletion, hasManagedMarker, isDefaultOperatorDirectory, ensureManagedRoot, secureDirectory, atomicWrite, fillBlankGeneratedSecrets, fillBlankInitializerDefaults, localIdentityRealm, ensureLocalIdentityRealm, initialize, parseEnvFile, parseExportEnvFile, valueOf, isExactBase64Bytes, rejectCompatibilityConflicts, requireValue, isProtectedRegularFile, validateLocalIdentityRealm, validateRuntime, operatorEnvironment, localProductionEnvironment, currentNodeIsAuthoritative, resolveTool, unsafeTestEnvironmentName, trustedRustupDirectoryRole, validateTrustedRustupHome, resolveTrustedRustupHome, ensureEmptyTestNpmConfig, testProcessEnvironment, cosmosTestEnvironment, validateDisposablePostgresTestUrl, realPostgresTestEnvironment, pinBuildEnvironment,
+  ROOT, PRODUCT, PROJECT, ENV_EXAMPLE, COMPOSE_BASE, COMPOSE_DEVELOPMENT, PACKAGE_TOOL, PIN_RELEASE_TOOL, PIN_RELEASE_BUILD_TOOL, PIN_RELEASE_SHIP_TOOL, PIN_INSTALL_TOOL, PIN_DOCTOR_TOOL, PKI_TOOL, PIN_ACTIVATION_TOOL, PIN_NETWORK_TOOL, DEPLOY_DIR, TOOLCHAIN_CONFIG, MINIMUM_COMPOSE_VERSION, MANAGED_DIRECTORY_MARKER, DEFAULT_CONFIG_DIR, DEFAULT_SECRETS_DIR, DEFAULT_DATA_DIR, DEFAULT_BACKUP_DIR, CONFIG_DIR, SECRETS_DIR, DATA_DIR, BACKUP_DIR, ENV_FILE, RELEASE_DIR, BUILD_DIR, PIN_SECRET_DIR, PIN_SIGNING_ENV_FILE, PIN_PRIVATE_ASSETS_DIR, COMPATIBILITY_ALIASES, externalPath, canonicalCandidate, isInsideDirectory, isInsideSource, requireExternalDirectory, fail, info, exists, run, hasManagedMarker, isDefaultOperatorDirectory, ensureManagedRoot, secureDirectory, atomicWrite, fillBlankGeneratedSecrets, fillBlankInitializerDefaults, localIdentityRealm, ensureLocalIdentityRealm, initialize, parseEnvFile, parseExportEnvFile, valueOf, isExactBase64Bytes, rejectCompatibilityConflicts, requireValue, isProtectedRegularFile, validateLocalIdentityRealm, validateRuntime, operatorEnvironment, localProductionEnvironment, resolveTool, unsafeTestEnvironmentName, trustedRustupDirectoryRole, validateTrustedRustupHome, resolveTrustedRustupHome, ensureEmptyTestNpmConfig, testProcessEnvironment, cosmosTestEnvironment, validateDisposablePostgresTestUrl, realPostgresTestEnvironment, pinBuildEnvironment,
 };

@@ -4,7 +4,6 @@ const fs = require('node:fs');
 
 const {
   ENV_FILE,
-  authoritativeCompletion,
   atomicWrite,
   fail,
   info,
@@ -271,10 +270,7 @@ function configCommand(args) {
   if (operation === 'path') configPath(args);
   else if (operation === 'get') configGet(args);
   else if (operation === 'set') configSet(args);
-  else if (operation === 'check') {
-    const report = configCheck(args);
-    return report.ok ? authoritativeCompletion('config.check', 'configuration-validated') : null;
-  }
+  else if (operation === 'check') configCheck(args);
   else if (operation === 'list') configList(args);
   else if (operation === 'template') configTemplate(args);
   else fail('usage: ./revival config path|get|set|check|list|template ...', 64);

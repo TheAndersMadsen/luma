@@ -37,7 +37,7 @@ function commandEvidence(commandId, selectedTrack) {
   if (commandId === 'doctor.local') {
     return {
       complete: false,
-      evidence: 'authoritative doctor must be run; setup does not execute Docker',
+      evidence: 'run the doctor directly; setup does not execute Docker',
     };
   }
   if (commandId === 'stack.up' || commandId === 'stack.status') {
@@ -46,24 +46,24 @@ function commandEvidence(commandId, selectedTrack) {
   if (commandId === 'pin.doctor') {
     return {
       complete: false,
-      evidence: 'authoritative Pin doctor must be run; setup does not inspect a device',
+      evidence: 'run the Pin doctor directly; setup does not inspect a device',
     };
   }
   if (commandId.startsWith('pin.release.')) {
-    return { complete: false, evidence: 'authoritative release command must be run' };
+    return { complete: false, evidence: 'run the release command directly' };
   }
   if (commandId === 'pki.import' || commandId === 'pki.init') {
-    return { complete: false, evidence: 'authoritative PKI validation must be run' };
+    return { complete: false, evidence: 'run PKI validation directly' };
   }
   if (commandId === 'config.check') {
-    return { complete: false, evidence: 'authoritative configuration check must be run' };
+    return { complete: false, evidence: 'run the configuration check directly' };
   }
   if (commandId === 'version') {
     return { complete: true, evidence: 'stamped release descriptor' };
   }
   // Setup is a guide, not deployment authority. Mutable checks and physical
   // acceptance are deliberately rerun by their owning commands.
-  return { complete: false, evidence: 'authoritative command must be run' };
+  return { complete: false, evidence: 'run this command directly' };
 }
 
 function artifactToolEnvironment() {

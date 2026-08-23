@@ -865,8 +865,8 @@ contains `current.json`, `history.json`, and `releases/`:
 ./revival setup artifacts pin --data-dir /external/revival-data
 ```
 
-Import and status both perform point-of-use provider verification; they do not
-turn the setup receipt into signing or publication authority. The import record
+Import and status both perform point-of-use provider verification; the selected
+setup track is never signing or publication authority. The import record
 also does not silently redirect `pin release ship`: pass the same exact
 `--release-root`, or set `REVIVAL_PIN_RELEASE_OUTPUT_DIR` explicitly.
 

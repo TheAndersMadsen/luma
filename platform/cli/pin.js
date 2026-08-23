@@ -7,7 +7,7 @@ const fs = require('node:fs');
 
 const {
   PIN_RELEASE_TOOL, PIN_RELEASE_BUILD_TOOL, PIN_RELEASE_SHIP_TOOL, PIN_INSTALL_TOOL, PIN_DOCTOR_TOOL,
-  PIN_ACTIVATION_TOOL, PIN_NETWORK_TOOL, ENV_FILE, authoritativeCompletion, fail, operatorEnvironment, parseEnvFile, resolveTool, run,
+  PIN_ACTIVATION_TOOL, PIN_NETWORK_TOOL, ENV_FILE, fail, operatorEnvironment, parseEnvFile, resolveTool, run,
 } = require('./context');
 const { pinContributorCheck } = require('./gates');
 const { pinDebugBuild } = require('./pin-debug');
@@ -15,13 +15,13 @@ const { pinDebugBuild } = require('./pin-debug');
 function pinCommand(args) {
   const subcommand = args.shift();
   if (subcommand === 'doctor') {
-    const result = run(resolveTool('node'), [PIN_DOCTOR_TOOL, ...args]);
-    return authoritativeCompletion('pin.doctor', 'pin-prerequisites-verified', result);
+    run(resolveTool('node'), [PIN_DOCTOR_TOOL, ...args]);
+    return;
   }
   if (subcommand === 'check') {
     if (args.length !== 0) fail('usage: ./revival pin check', 64);
     pinContributorCheck();
-    return authoritativeCompletion('pin.check', 'pin-source-gate-passed');
+    return;
   }
   if (subcommand === 'build-debug') {
     pinDebugBuild(args);
@@ -38,15 +38,11 @@ function pinCommand(args) {
     else if (operation === 'ship') {
       const confirmations = args.filter((argument) => argument === '--confirm').length;
       if (confirmations > 1) fail('pin release ship accepts exactly one literal --confirm', 64);
-      const result = run(resolveTool('node'), [PIN_RELEASE_SHIP_TOOL, ...args]);
-      return confirmations === 1
-        ? authoritativeCompletion('pin.release.ship', 'pin-release-published', result)
-        : null;
+      run(resolveTool('node'), [PIN_RELEASE_SHIP_TOOL, ...args]);
+      return;
     } else {
-      const result = run(resolveTool('node'), [PIN_RELEASE_TOOL, ...args]);
-      return operation === 'inspect'
-        ? authoritativeCompletion('pin.release.inspect', 'pin-release-inspected', result)
-        : null;
+      run(resolveTool('node'), [PIN_RELEASE_TOOL, ...args]);
+      return;
     }
     return null;
   }
