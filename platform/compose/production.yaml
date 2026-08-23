@@ -298,8 +298,7 @@ services:
       org.opencontainers.image.revision: ${REVIVAL_RELEASE_ID:?set REVIVAL_RELEASE_ID to the immutable release id}
     healthcheck:
       # Process/config liveness only. A powered-off Pin must not make Compose
-      # unhealthy; bridge and owner/device readiness belong to /readyz and the
-      # guarded post-ingress canary.
+      # unhealthy; bridge and owner/device readiness belong to /readyz.
       test:
         - CMD
         - node

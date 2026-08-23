@@ -68,7 +68,7 @@ test("config uses the contract, redacts secrets, and writes atomically at 0600",
   }
 });
 
-test("config inventory prints metadata only and templates omit secret settings", () => {
+test("config list prints metadata only and templates omit secret settings", () => {
   const { temporary, env } = fixture();
   try {
     const list = invoke(env, ["config", "list", "--json"]);
@@ -93,7 +93,7 @@ test("config inventory prints metadata only and templates omit secret settings",
   }
 });
 
-test("the root config contract represents every required production Compose input", () => {
+test("the root config contract represents Compose inputs in runtime.env", () => {
   const compose = ["compose.yaml", "platform/compose/production.yaml"]
     .map((file) => fs.readFileSync(path.join(root, file), "utf8"))
     .join("\n");
@@ -110,6 +110,12 @@ test("the root config contract represents every required production Compose inpu
 
   assert.deepEqual([...new Set(required.filter((name) => !exampleNames.has(name)))], []);
   assert.deepEqual([...new Set(required.filter((name) => !contractNames.has(name)))], []);
+  assert.deepEqual(
+    contract.settings
+      .filter((setting) => !exampleNames.has(setting.name) || setting.home !== "runtime.env")
+      .map((setting) => setting.name),
+    [],
+  );
 });
 
 test("production validation rejects malformed endpoints, database URLs, and weak passwords", () => {
@@ -218,13 +224,13 @@ test("production commands validate the exact env file and reject duplicate env f
   }
 });
 
-test("config check delegates conditional TTS and Spotify validation to the runtime contract", () => {
+test("config check delegates conditional TTS and Spotify pairing validation to the runtime contract", () => {
   const { temporary, env } = fixture();
   try {
     assert.equal(invoke(env, ["init"]).status, 0);
     let runtime = fs.readFileSync(env.REVIVAL_ENV_FILE, "utf8");
     runtime = setValue(runtime, "COSMOS_REMOTE_TTS_ENABLED", "true");
-    runtime = setValue(runtime, "REVIVAL_SPOTIFY_ADAPTER_URL", "http://10.0.7.1:18081");
+    runtime = setValue(runtime, "REVIVAL_PIN_BRIDGE_OWNER_SUB", "owner-test");
     fs.writeFileSync(env.REVIVAL_ENV_FILE, runtime);
 
     const result = invoke(env, ["config", "check", "--json"]);
@@ -234,7 +240,7 @@ test("config check delegates conditional TTS and Spotify validation to the runti
     assert.equal(failures.length, 1);
     assert.equal(failures[0].id, "runtime-contract");
     assert.match(failures[0].message, /COSMOS_AZURE_SPEECH_KEY/);
-    assert.match(failures[0].message, /REVIVAL_SPOTIFY_ADAPTER_URL, REVIVAL_SPOTIFY_ADAPTER_TOKEN_FILE/);
+    assert.match(failures[0].message, /REVIVAL_PIN_BRIDGE_OWNER_SUB and REVIVAL_PIN_BRIDGE_DEVICE_ID/);
   } finally {
     fs.rmSync(temporary, { recursive: true, force: true });
   }
@@ -278,10 +284,8 @@ test("a fresh root config can satisfy production Compose through the CLI", (cont
       ["COSMOS_CAPTURE_UPLOAD_BASE_URL", "https://uploads.example.test", false],
       ["COSMOS_ENROLLMENT_PINCODE", "0000", true],
       ["COSMOS_ENROLLMENT_USER_ID", "U:production-config-test", false],
-      ["REVIVAL_SPOTIFY_ADAPTER_URL", "http://10.0.7.1:18081", false],
-      ["REVIVAL_SPOTIFY_ADAPTER_TOKEN_FILE", "/run/secrets/spotify_adapter_token", true],
       ["REVIVAL_PIN_BRIDGE_OWNER_SUB", "owner-production-config-test", false],
-      ["REVIVAL_PIN_BRIDGE_DEVICE_ID", "device-production-config-test", false],
+      ["REVIVAL_PIN_BRIDGE_DEVICE_ID", "2c2a00010000abcd", false],
     ]) {
       const result = secret
         ? invoke(env, ["config", "set", name, "--stdin"], value)

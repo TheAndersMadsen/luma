@@ -370,7 +370,7 @@ test("Apple MusicKit user-token handoff stays encrypted and remains playback-gat
 test("the Pin gateway bearer is derived, constant-time checked, and errors retain provider status", async (t) => {
   environment(t, "REVIVAL_SPOTIFY_ADAPTER_TOKEN_FILE", undefined);
   environment(t, "REVIVAL_SPOTIFY_ADAPTER_TOKEN", "adapter-root-token-".repeat(3));
-  environment(t, "REVIVAL_PIN_BRIDGE_DEVICE_ID", "owned-pin");
+  environment(t, "REVIVAL_PIN_BRIDGE_DEVICE_ID", "2c2a00010000abcd");
   environment(t, "REVIVAL_PIN_BRIDGE_OWNER_SUB", "owner-subject");
   environment(t, "REVIVAL_MUSIC_GATEWAY_ORIGIN", "https://center.example.test");
   const bearer = await spotifyBridge.deviceMusicGatewayToken();

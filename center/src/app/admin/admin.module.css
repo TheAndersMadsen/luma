@@ -329,77 +329,7 @@
 .rowError { max-width: 320px; }
 .panelError { margin-top: 12px; }
 
-/* ------------------------------------------------ deployment configuration -- */
-
-/* A list rather than the flag table. A flag is one name and one value, so a
-   table row fits it; a setting carries a state, what its absence costs, and —
-   when it cannot be changed here — the sentence naming where it actually lives.
-   Squeezing that into a cell is what produces a column nobody can read. */
-
-.settingGroup { margin-top: 18px; }
-
-.settingGroupHead {
-  margin: 0 0 8px;
-  font-size: 11px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--hu-text-muted);
-}
-
-.settingList {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-}
-
-.settingRow {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 12px 0;
-  border-bottom: 1px solid var(--hu-divider);
-}
-.settingRow:last-child { border-bottom: 0; }
-
-.settingName { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-
-.settingImpact {
-  margin: 0;
-  font-size: 13px;
-  line-height: 1.5;
-  color: var(--hu-colors-crater-base);
-}
-
-/* Where the setting really lives, for everything this console will not write.
-   Deliberately as readable as the editable rows: an operator who cannot find a
-   setting edits Compose by hand, which is the change the deploy transaction
-   cannot account for. */
-.settingGuidance {
-  margin: 0;
-  font-size: 13px;
-  line-height: 1.5;
-  color: var(--hu-text-muted);
-}
-
-.settingControl { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
-
-.settingInputRow { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-.settingInput {
-  composes: field from "../../components/controls.module.css";
-  max-width: 360px;
-}
-
-.settingHint {
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--hu-text-muted);
-}
-
 @media (max-width: 720px) {
   .consoleNav { width: 100%; box-sizing: border-box; }
   .flagsHead { flex-direction: column; }
-  .settingInput { max-width: 100%; }
 }

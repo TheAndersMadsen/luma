@@ -8,7 +8,6 @@ import { StatusChip } from "@/components/Status";
 import styles from "./admin.module.css";
 import { AdminFeatureFlags, type FlagRowError, type FlagView, type PanelStatus } from "./AdminFeatureFlags";
 import { AdminProvisioning } from "./AdminProvisioning";
-import { AdminConfiguration } from "./AdminConfiguration";
 import { AdminDataPanels } from "./AdminDataPanels";
 import type { Bundle, Overview, ProvisionedDevice } from "./AdminTypes";
 
@@ -310,7 +309,6 @@ export default function AdminPage() {
           <a href="#enrollment">Enrollment</a>
           <a href="#provision">Provisioning</a>
           <a href="#feature-flags">Feature flags</a>
-          <a href="#configuration">Configuration</a>
           <a href="#devices">Devices</a>
           <a href="#persistence">Data</a>
         </nav>
@@ -358,7 +356,7 @@ export default function AdminPage() {
             <ul className={styles.envList}>
               <li><code>COSMOS_ADMIN_TOKEN</code> — the same secret on the dashboard and the ai-bus workload</li>
               <li><code>COSMOS_ATTEST_CA_CERT</code> / <code>COSMOS_ATTEST_CA_KEY</code> — the CA the edge trusts, to mint device credentials</li>
-              <li><code>COSMOS_DUC_CA_CERT</code> / <code>COSMOS_DUC_CA_KEY</code> — the DeviceUser-issuing CA</li>
+              <li><code>revival pki init device-user</code> or <code>revival pki import device-user --cert FILE --key FILE</code> — plan DeviceUser CA setup, then rerun with <code>--confirm</code></li>
             </ul>
           </section>
         )}
@@ -412,11 +410,6 @@ export default function AdminPage() {
           onResetText={setResetText}
           onReset={() => void resetAllOverrides()}
         />
-
-        {/* Not gated on `status`. This panel reads Center's own environment and
-            its own data volume, so it answers when the backend does not — which
-            is exactly when an operator is looking for a missing setting. */}
-        <AdminConfiguration />
 
         {status === "ready" && overview ? (
           <AdminDataPanels

@@ -9,11 +9,9 @@ import styles from "./login.module.css";
 /**
  * The sign-in page.
  *
- * This deployment exposes one direct password sign-in action. The hosted
- * Authorization Code + PKCE endpoint remains available to compatibility and
- * canary callers, but presenting both paths here made the unexplained
- * "Continue" action look mandatory before the form that actually signs this
- * wearer in.
+ * This deployment exposes one direct password sign-in action. The OIDC
+ * callback remains available for authentication, but the page presents only
+ * the form the wearer actually uses.
  */
 function LoginForm() {
   const router = useRouter();

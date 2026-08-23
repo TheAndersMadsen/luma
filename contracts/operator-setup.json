@@ -525,7 +525,7 @@
       "exactSerialRequired": false,
       "summary": "Read one non-secret configuration setting.",
       "usage": "revival config get [options]",
-      "documentationAnchor": "docs/operations.md#changing-a-setting-from-the-dashboard"
+      "documentationAnchor": "docs/configuration.md#commands"
     },
     {
       "id": "config.set",
@@ -540,7 +540,7 @@
       "exactSerialRequired": false,
       "summary": "Set one supported configuration setting outside the repository.",
       "usage": "revival config set [options]",
-      "documentationAnchor": "docs/operations.md#changing-a-setting-from-the-dashboard"
+      "documentationAnchor": "docs/configuration.md#commands"
     },
     {
       "id": "config.check",
@@ -555,7 +555,7 @@
       "exactSerialRequired": false,
       "summary": "Validate configuration names, scopes, and dependencies.",
       "usage": "revival config check [options]",
-      "documentationAnchor": "docs/operations.md#changing-a-setting-from-the-dashboard"
+      "documentationAnchor": "docs/configuration.md#commands"
     },
     {
       "id": "pki.init",
@@ -690,7 +690,7 @@
       "exactSerialRequired": false,
       "summary": "Print the active external configuration path.",
       "usage": "revival config path [options]",
-      "documentationAnchor": "docs/operations.md#changing-a-setting-from-the-dashboard"
+      "documentationAnchor": "docs/configuration.md#commands"
     },
     {
       "id": "config.list",
@@ -705,7 +705,7 @@
       "exactSerialRequired": false,
       "summary": "List settings without revealing their values.",
       "usage": "revival config list [options]",
-      "documentationAnchor": "docs/operations.md#changing-a-setting-from-the-dashboard"
+      "documentationAnchor": "docs/configuration.md#commands"
     },
     {
       "id": "config.template",
@@ -720,7 +720,7 @@
       "exactSerialRequired": false,
       "summary": "Print a scoped, secret-free configuration template.",
       "usage": "revival config template [options]",
-      "documentationAnchor": "docs/operations.md#changing-a-setting-from-the-dashboard"
+      "documentationAnchor": "docs/configuration.md#commands"
     }
   ],
   "journeys": [
@@ -874,7 +874,7 @@
           "centerRoute": null,
           "surface": "cli",
           "verification": "cli",
-          "documentationAnchor": "docs/operations.md#changing-a-setting-from-the-dashboard"
+          "documentationAnchor": "docs/configuration.md#commands"
         },
         {
           "id": "preflight",
@@ -968,7 +968,7 @@
           "centerRoute": "/settings/pin",
           "surface": "cli",
           "verification": "cli",
-          "documentationAnchor": "docs/operations.md#changing-a-setting-from-the-dashboard"
+          "documentationAnchor": "docs/configuration.md#commands"
         },
         {
           "id": "identity",
@@ -1038,7 +1038,7 @@
       "name": "COSMOS_OIDC_ISSUER",
       "group": "production",
       "sensitivity": "identity",
-      "home": "center.env"
+      "home": "runtime.env"
     },
     {
       "name": "COSMOS_CAPTURE_SHARE_BASE_URL",
@@ -1080,25 +1080,25 @@
       "name": "COSMOS_MUSICBRAINZ_BASE_URL",
       "group": "provider",
       "sensitivity": "operational",
-      "home": "providers.env"
+      "home": "runtime.env"
     },
     {
       "name": "COSMOS_SHOPPING_VISUAL_SEARCH_URL",
       "group": "provider",
       "sensitivity": "operational",
-      "home": "providers.env"
+      "home": "runtime.env"
     },
     {
       "name": "COSMOS_SHOPPING_ALLOWED_HOSTS",
       "group": "provider",
       "sensitivity": "operational",
-      "home": "providers.env"
+      "home": "runtime.env"
     },
     {
       "name": "COSMOS_SHOPPING_API_KEY",
       "group": "provider",
       "sensitivity": "secret",
-      "home": "providers.env"
+      "home": "runtime.env"
     },
     {
       "name": "COSMOS_AUTH_MODE",
@@ -1116,49 +1116,49 @@
       "name": "AUTH_SESSION_SECRET",
       "group": "production",
       "sensitivity": "secret",
-      "home": "center.env"
+      "home": "runtime.env"
     },
     {
       "name": "REVIVAL_MUSIC_GATEWAY_ORIGIN",
       "group": "production",
       "sensitivity": "operational",
-      "home": "center.env"
+      "home": "runtime.env"
     },
     {
       "name": "REVIVAL_MUSIC_SESSION_SECRET",
       "group": "production",
       "sensitivity": "secret",
-      "home": "center.env"
+      "home": "runtime.env"
     },
     {
       "name": "TIDAL_CLIENT_ID",
       "group": "provider",
       "sensitivity": "identity",
-      "home": "center.env"
+      "home": "runtime.env"
     },
     {
       "name": "TIDAL_CLIENT_SECRET",
       "group": "provider",
       "sensitivity": "secret",
-      "home": "center.env"
+      "home": "runtime.env"
     },
     {
       "name": "TIDAL_SCOPES",
       "group": "provider",
       "sensitivity": "operational",
-      "home": "center.env"
+      "home": "runtime.env"
     },
     {
       "name": "TIDAL_COUNTRY_CODE",
       "group": "provider",
       "sensitivity": "operational",
-      "home": "center.env"
+      "home": "runtime.env"
     },
     {
       "name": "APPLE_MUSIC_DEVELOPER_TOKEN",
       "group": "provider",
       "sensitivity": "secret",
-      "home": "center.env"
+      "home": "runtime.env"
     },
     {
       "name": "COSMOS_SHARE_TOKEN_SECRET",
@@ -1182,49 +1182,37 @@
       "name": "COSMOS_REMOTE_TTS_ENABLED",
       "group": "provider",
       "sensitivity": "operational",
-      "home": "cosmos.env"
+      "home": "runtime.env"
     },
     {
       "name": "COSMOS_AZURE_SPEECH_KEY",
       "group": "provider",
       "sensitivity": "secret",
-      "home": "providers.env"
+      "home": "runtime.env"
     },
     {
       "name": "COSMOS_AZURE_SPEECH_REGION",
       "group": "provider",
       "sensitivity": "operational",
-      "home": "providers.env"
+      "home": "runtime.env"
     },
     {
       "name": "COSMOS_AZURE_SPEECH_VOICE",
       "group": "provider",
       "sensitivity": "operational",
-      "home": "providers.env"
-    },
-    {
-      "name": "REVIVAL_SPOTIFY_ADAPTER_URL",
-      "group": "pin",
-      "sensitivity": "operational",
-      "home": "pin.env"
-    },
-    {
-      "name": "REVIVAL_SPOTIFY_ADAPTER_TOKEN_FILE",
-      "group": "pin",
-      "sensitivity": "secret",
-      "home": "pin.env"
+      "home": "runtime.env"
     },
     {
       "name": "REVIVAL_PIN_BRIDGE_OWNER_SUB",
       "group": "pin",
       "sensitivity": "identity",
-      "home": "pin.env"
+      "home": "runtime.env"
     },
     {
       "name": "REVIVAL_PIN_BRIDGE_DEVICE_ID",
       "group": "pin",
       "sensitivity": "identity",
-      "home": "pin.env"
+      "home": "runtime.env"
     },
     {
       "name": "REVIVAL_IDENTITY_ENABLED",
@@ -1233,196 +1221,166 @@
       "home": "runtime.env"
     },
     {
-      "name": "KEYCLOAK_BASE_URL",
-      "group": "production",
-      "sensitivity": "identity",
-      "home": "center.env"
-    },
-    {
-      "name": "KEYCLOAK_REALM",
-      "group": "production",
-      "sensitivity": "identity",
-      "home": "center.env"
-    },
-    {
       "name": "KEYCLOAK_CLIENT_ID",
       "group": "production",
       "sensitivity": "identity",
-      "home": "center.env"
+      "home": "runtime.env"
     },
     {
       "name": "KEYCLOAK_CLIENT_SECRET",
       "group": "production",
       "sensitivity": "secret",
-      "home": "center.env"
+      "home": "runtime.env"
     },
     {
       "name": "KEYCLOAK_SCOPES",
       "group": "production",
       "sensitivity": "operational",
-      "home": "center.env"
+      "home": "runtime.env"
     },
     {
       "name": "KEYCLOAK_ADMIN",
       "group": "production",
       "sensitivity": "identity",
-      "home": "center.env"
+      "home": "runtime.env"
     },
     {
       "name": "KEYCLOAK_ADMIN_PASSWORD",
       "group": "production",
       "sensitivity": "secret",
-      "home": "center.env"
+      "home": "runtime.env"
     },
     {
       "name": "COSMOS_ENROLLMENT_PINCODE",
       "group": "pin",
       "sensitivity": "secret",
-      "home": "pin.env"
+      "home": "runtime.env"
     },
     {
       "name": "COSMOS_ENROLLMENT_USER_ID",
       "group": "pin",
       "sensitivity": "identity",
-      "home": "pin.env"
+      "home": "runtime.env"
     },
     {
       "name": "COSMOS_OPAQUE_SEED",
       "group": "pin",
       "sensitivity": "secret",
-      "home": "pin.env"
-    },
-    {
-      "name": "COSMOS_DUC_CA_CERT",
-      "group": "pin",
-      "sensitivity": "operational",
-      "home": "pin.env"
-    },
-    {
-      "name": "COSMOS_DUC_CA_KEY",
-      "group": "pin",
-      "sensitivity": "secret",
-      "home": "pin.env"
+      "home": "runtime.env"
     },
     {
       "name": "COSMOS_OPERATOR_EMAILS",
       "group": "production",
       "sensitivity": "identity",
-      "home": "center.env"
+      "home": "runtime.env"
     },
     {
       "name": "COSMOS_KID_SCOPE",
       "group": "production",
       "sensitivity": "identity",
-      "home": "cosmos.env"
+      "home": "runtime.env"
     },
     {
       "name": "SEARXNG_SECRET",
       "group": "production",
       "sensitivity": "secret",
-      "home": "providers.env"
+      "home": "runtime.env"
     },
     {
       "name": "COSMOS_LLM_BASE_URL",
       "group": "provider",
       "sensitivity": "operational",
-      "home": "providers.env"
+      "home": "runtime.env"
     },
     {
       "name": "COSMOS_LLM_API_KEY",
       "group": "provider",
       "sensitivity": "secret",
-      "home": "providers.env"
+      "home": "runtime.env"
     },
     {
       "name": "COSMOS_OPENROUTER_API_KEY",
       "group": "provider",
       "sensitivity": "secret",
-      "home": "providers.env"
+      "home": "runtime.env"
     },
     {
       "name": "COSMOS_LLM_MODEL",
       "group": "provider",
       "sensitivity": "operational",
-      "home": "providers.env"
+      "home": "runtime.env"
     },
     {
       "name": "COSMOS_LLM_REASONING_EFFORT",
       "group": "provider",
       "sensitivity": "operational",
-      "home": "providers.env"
+      "home": "runtime.env"
     },
     {
       "name": "COSMOS_LLM_MAX_TOKENS",
       "group": "provider",
       "sensitivity": "operational",
-      "home": "providers.env"
+      "home": "runtime.env"
     },
     {
       "name": "COSMOS_VISION_MODEL",
       "group": "provider",
       "sensitivity": "operational",
-      "home": "providers.env"
+      "home": "runtime.env"
     },
     {
       "name": "COSMOS_INTERSTITIAL_BASE_URL",
       "group": "provider",
       "sensitivity": "operational",
-      "home": "providers.env"
+      "home": "runtime.env"
     },
     {
       "name": "COSMOS_INTERSTITIAL_MODEL",
       "group": "provider",
       "sensitivity": "operational",
-      "home": "providers.env"
+      "home": "runtime.env"
     },
     {
       "name": "COSMOS_INTERSTITIAL_API_KEY",
       "group": "provider",
       "sensitivity": "secret",
-      "home": "providers.env"
-    },
-    {
-      "name": "COSMOS_LOCAL_MODEL_NETWORK",
-      "group": "local",
-      "sensitivity": "operational",
       "home": "runtime.env"
     },
     {
       "name": "COSMOS_SERPAPI_KEY",
       "group": "provider",
       "sensitivity": "secret",
-      "home": "providers.env"
+      "home": "runtime.env"
     },
     {
       "name": "COSMOS_GOOGLE_MAPS_KEY",
       "group": "provider",
       "sensitivity": "secret",
-      "home": "providers.env"
+      "home": "runtime.env"
     },
     {
       "name": "COSMOS_PIRATE_WEATHER_KEY",
       "group": "provider",
       "sensitivity": "secret",
-      "home": "providers.env"
+      "home": "runtime.env"
     },
     {
       "name": "COSMOS_WOLFRAM_APP_ID",
       "group": "provider",
       "sensitivity": "secret",
-      "home": "providers.env"
+      "home": "runtime.env"
     },
     {
       "name": "COSMOS_PPLX_API_KEY",
       "group": "provider",
       "sensitivity": "secret",
-      "home": "providers.env"
+      "home": "runtime.env"
     },
     {
       "name": "COSMOS_PPLX_MODEL",
       "group": "provider",
       "sensitivity": "operational",
-      "home": "providers.env"
+      "home": "runtime.env"
     }
   ]
 }

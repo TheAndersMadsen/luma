@@ -22,8 +22,8 @@ const CLIENT_ID = process.env.KEYCLOAK_CLIENT_ID ?? "center";
 const CLIENT_SECRET = process.env.KEYCLOAK_CLIENT_SECRET ?? "";
 const KEYCLOAK_BASE_URL = (process.env.KEYCLOAK_BASE_URL ?? "").replace(/\/$/, "");
 const SESSION_SECRET = process.env.AUTH_SESSION_SECRET ?? "";
-// Keycloak role names are persisted outside this repository. Keep issuing and
-// recognizing the deployed legacy role so a rollback sees the same operator.
+// Keycloak role names live in the realm outside this repository. Keep this name
+// aligned with that existing realm configuration.
 const OPERATOR_ROLE = "cosmos-operator";
 const OPERATOR_EMAILS = new Set(
   (process.env.COSMOS_OPERATOR_EMAILS ?? "")
@@ -332,7 +332,7 @@ export function setTokenCookies(
   }
 }
 
-/** Clear the manifest, every possible chunk, and a legacy single-cookie value. */
+/** Clear the manifest and every possible chunk, including the earlier one-cookie form. */
 export function clearTokenCookies(jar: CookieWriter, options: TokenCookieOptions = {}): void {
   jar.set(TOKENS_COOKIE, "", { ...options, maxAge: 0 });
   for (let index = 0; index < TOKEN_COOKIE_MAX_CHUNKS; index += 1) {

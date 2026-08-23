@@ -227,10 +227,8 @@ const DEADLINE_MS = Number(process.env.COSMOS_DEADLINE_MS ?? 8000);
  * minutes idle while this cookie lasts 12 hours, so a wearer who steps away
  * comes back "logged in" to an identity the workloads will not accept.
  *
- * This is deliberately NOT raised when there is simply no session: the
- * production canary and the staging smoke both drive Center with a
- * session-only cookie jar and must keep receiving the degraded-but-honest
- * answer rather than a 401.
+ * This is deliberately not raised when there is simply no session; that case
+ * keeps returning the ordinary degraded response rather than a misleading 401.
  */
 export class SessionExpiredError extends Error {
   constructor() {
@@ -356,9 +354,8 @@ export async function requestMetadata(): Promise<grpc.Metadata> {
   // development-insecure) ⇒ omitted, unchanged.
   const edgeToken = process.env.COSMOS_EDGE_TOKEN?.trim();
   if (edgeToken) {
-    // Header names are an external wire ABI shared with both the upgraded and
-    // rollback backend. The environment variable is logically Cosmos; its
-    // stable default remains the deployed legacy spelling.
+    // This header name is an external wire ABI shared with the backend. Any
+    // configured override must match the backend's edge-header setting.
     md.set(process.env.COSMOS_EDGE_TOKEN_HEADER?.trim() || "x-cosmos-edge-token", edgeToken);
   }
   return md;

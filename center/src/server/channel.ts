@@ -215,9 +215,8 @@ async function establish(principal: string): Promise<ChannelKey> {
       {
         kid: Buffer.from(kid, "utf8"),
         wrappedKey: {
-          // The backend key directory persists this identifier and rollback
-          // releases recognize the legacy spelling. It is a wire key, not a
-          // logical implementation name.
+          // The backend key directory persists this identifier. It is a stable
+          // wire key, not a logical implementation name.
           wrappingKid: Buffer.from("cosmos-clone/wrapping/rsa-oaep", "utf8"),
           keydata: wrapChannelKey(der, key),
         },
@@ -236,7 +235,7 @@ async function establish(principal: string): Promise<ChannelKey> {
   const channel = { kid, key };
   // Persist whenever the store does not already hold this exact kid. That is
   // the first establishment AND the rename: the inherited bytes gain a second
-  // name, and the write migrates the legacy top-level pair into the map so both
+  // name, and the write migrates the earlier top-level pair into the map so both
   // names stay reachable to `channelKeyForSealed` below.
   if (!existing) saveKey(channel);
   return channel;

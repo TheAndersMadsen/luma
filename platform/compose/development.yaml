@@ -133,8 +133,8 @@ services:
       REVIVAL_DEPLOYMENT_ENVIRONMENT: development
       COSMOS_OIDC_ISSUER: ${REVIVAL_LOCAL_OIDC_ISSUER:-}
       COSMOS_OIDC_JWKS_URI: ${REVIVAL_LOCAL_OIDC_JWKS_URI:-}
-      COSMOS_DUC_CA_CERT: ${COSMOS_DUC_CA_CERT:-/run/secrets/duc_ca_cert}
-      COSMOS_DUC_CA_KEY: ${COSMOS_DUC_CA_KEY:-/run/secrets/duc_ca_key}
+      COSMOS_DUC_CA_CERT: /run/secrets/duc_ca_cert
+      COSMOS_DUC_CA_KEY: /run/secrets/duc_ca_key
     secrets:
       - duc_ca_cert
       - duc_ca_key

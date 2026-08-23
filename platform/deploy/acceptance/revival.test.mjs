@@ -9,7 +9,12 @@ import { createRequire } from "node:module";
 const root = path.resolve(import.meta.dirname, "../../..");
 const cli = path.join(root, "revival");
 const require = createRequire(import.meta.url);
-const { BUILD_DIR, cosmosTestEnvironment, testProcessEnvironment } = require("../../cli/context.js");
+const {
+  BUILD_DIR,
+  cosmosTestEnvironment,
+  operatorEnvironment,
+  testProcessEnvironment,
+} = require("../../cli/context.js");
 const { normalizedNpmInstallEnvironment } = require("../../cli/checks.js");
 
 function isolatedOperator() {
@@ -252,33 +257,38 @@ test("every Compose volume-deletion flag form is blocked before runtime access",
   }
 });
 
-test("Spotify adapter configuration is all-or-none and device identity is bounded", () => {
+test("Spotify pairing is all-or-none and uses the Cosmos device-id grammar", () => {
   const { temporary, env } = isolatedOperator();
   try {
     const initialized = invoke(env, "init");
     assert.equal(initialized.status, 0, initialized.stderr);
     const runtimeFile = path.join(env.REVIVAL_SECRETS_DIR, "runtime.env");
     let contents = fs.readFileSync(runtimeFile, "utf8");
-    contents = setValue(contents, "REVIVAL_SPOTIFY_ADAPTER_URL", "http://10.0.7.1:18081");
+    contents = setValue(contents, "REVIVAL_PIN_BRIDGE_OWNER_SUB", '"   "');
+    contents = setValue(contents, "REVIVAL_PIN_BRIDGE_DEVICE_ID", "2c2a00010000abcd");
     fs.writeFileSync(runtimeFile, contents, { mode: 0o600 });
 
-    const partial = invoke(env, "doctor");
+    const partial = invoke(env, "doctor", "--json");
     assert.notEqual(partial.status, 0);
     assert.match(
       `${partial.stdout}\n${partial.stderr}`,
-      /REVIVAL_SPOTIFY_ADAPTER_URL, REVIVAL_SPOTIFY_ADAPTER_TOKEN_FILE, REVIVAL_PIN_BRIDGE_OWNER_SUB, and REVIVAL_PIN_BRIDGE_DEVICE_ID must be configured together/,
+      /REVIVAL_PIN_BRIDGE_OWNER_SUB and REVIVAL_PIN_BRIDGE_DEVICE_ID must be configured together/,
     );
 
-    contents = setValue(contents, "REVIVAL_SPOTIFY_ADAPTER_TOKEN_FILE", "/run/secrets/spotify_adapter_token");
-    contents = setValue(contents, "REVIVAL_PIN_BRIDGE_OWNER_SUB", "owner-subject");
-    contents = setValue(contents, "REVIVAL_PIN_BRIDGE_DEVICE_ID", "x".repeat(257));
+    contents = setValue(contents, "REVIVAL_PIN_BRIDGE_OWNER_SUB", '" owner-subject "');
+    contents = setValue(contents, "REVIVAL_PIN_BRIDGE_DEVICE_ID", "2C2A00010000ABCD");
     fs.writeFileSync(runtimeFile, contents, { mode: 0o600 });
+    const boundary = JSON.parse(invoke(env, "doctor", "--json").stdout);
+    assert.equal(boundary.checks.find((check) => check.id === "configuration")?.status, "PASS");
+    assert.equal(boundary.checks.find((check) => check.id === "spotify")?.status, "PASS");
 
-    const oversized = invoke(env, "doctor");
-    assert.notEqual(oversized.status, 0);
+    contents = setValue(contents, "REVIVAL_PIN_BRIDGE_DEVICE_ID", "device-1");
+    fs.writeFileSync(runtimeFile, contents, { mode: 0o600 });
+    const malformed = invoke(env, "doctor", "--json");
+    assert.notEqual(malformed.status, 0);
     assert.match(
-      `${oversized.stdout}\n${oversized.stderr}`,
-      /REVIVAL_PIN_BRIDGE_DEVICE_ID must be a nonblank device identifier no longer than 256 UTF-8 bytes/,
+      `${malformed.stdout}\n${malformed.stderr}`,
+      /REVIVAL_PIN_BRIDGE_DEVICE_ID must be the detected Pin device id in hexadecimal/,
     );
   } finally {
     fs.rmSync(temporary, { recursive: true, force: true });
@@ -353,7 +363,7 @@ test("production Compose binds one release identity and keeps web services priva
         COSMOS_INTERSTITIAL_BASE_URL: "http://cosmos-ollama:11434/v1",
         COSMOS_INTERSTITIAL_MODEL: "qwen2.5:3b-instruct",
         REVIVAL_PIN_BRIDGE_OWNER_SUB: "owner-compose-contract-test",
-        REVIVAL_PIN_BRIDGE_DEVICE_ID: "device-compose-contract-test",
+        REVIVAL_PIN_BRIDGE_DEVICE_ID: "2c2a00010000abcd",
       },
     },
   );
@@ -533,7 +543,7 @@ test("production Compose binds one release identity and keeps web services priva
     }
   }
   assert.equal(rendered.services.center.environment.REVIVAL_PIN_BRIDGE_OWNER_SUB, "owner-compose-contract-test");
-  assert.equal(rendered.services.center.environment.REVIVAL_PIN_BRIDGE_DEVICE_ID, "device-compose-contract-test");
+  assert.equal(rendered.services.center.environment.REVIVAL_PIN_BRIDGE_DEVICE_ID, "2c2a00010000abcd");
   assert.equal(rendered.services.keycloak.profiles, undefined);
   assert.deepEqual(
     Object.fromEntries(Object.entries(rendered.volumes).map(([name, volume]) => [name, {
@@ -585,7 +595,7 @@ test("development identity profile controls Keycloak and OIDC wiring", (context)
     AZURE_SPEECH_REGION: "ignored-development-region",
     AZURE_SPEECH_VOICE: "ignored-development-voice",
   };
-  const render = (profileArguments, environment) => {
+  const render = (profileArguments, values) => {
     const result = spawnSync(
       "docker",
       [
@@ -599,7 +609,7 @@ test("development identity profile controls Keycloak and OIDC wiring", (context)
         "--format",
         "json",
       ],
-      { cwd: root, encoding: "utf8", env: environment },
+      { cwd: root, encoding: "utf8", env: operatorEnvironment(values) },
     );
     assert.equal(result.status, 0, result.stderr);
     return JSON.parse(result.stdout);
@@ -608,13 +618,13 @@ test("development identity profile controls Keycloak and OIDC wiring", (context)
   const disabled = render([], {
     ...baseEnvironment,
     REVIVAL_IDENTITY_ENABLED: "false",
-    REVIVAL_LOCAL_OIDC_ISSUER: "",
-    REVIVAL_LOCAL_OIDC_JWKS_URI: "",
-    KEYCLOAK_BASE_URL: "",
+    KEYCLOAK_BASE_URL: "https://ignored.invalid",
+    KEYCLOAK_REALM: "ignored",
   });
   assert.equal(Object.keys(disabled.services).length, 8);
   assert.equal(disabled.services.keycloak, undefined);
   assert.equal(disabled.services.center.environment.KEYCLOAK_BASE_URL, "");
+  assert.equal(disabled.services.center.environment.KEYCLOAK_REALM, "humane");
   assert.equal(
     disabled.services.center.image,
     "ai-pin-revival/center-development:identity-contract-test",
@@ -637,14 +647,14 @@ test("development identity profile controls Keycloak and OIDC wiring", (context)
   const enabled = render(["--profile", "identity"], {
     ...baseEnvironment,
     REVIVAL_IDENTITY_ENABLED: "true",
-    REVIVAL_LOCAL_OIDC_ISSUER: issuer,
-    REVIVAL_LOCAL_OIDC_JWKS_URI: jwks,
-    KEYCLOAK_BASE_URL: "http://keycloak:8080",
+    KEYCLOAK_BASE_URL: "https://ignored.invalid",
+    KEYCLOAK_REALM: "ignored",
   });
   assert.equal(Object.keys(enabled.services).length, 9);
   assert.deepEqual(enabled.services.keycloak.profiles, ["identity"]);
   assert.equal(enabled.services.keycloak.ports[0].host_ip, "127.0.0.1");
   assert.equal(enabled.services.center.environment.KEYCLOAK_BASE_URL, "http://keycloak:8080");
+  assert.equal(enabled.services.center.environment.KEYCLOAK_REALM, "humane");
 
   const oidcWorkloads = [
     "connectivity",

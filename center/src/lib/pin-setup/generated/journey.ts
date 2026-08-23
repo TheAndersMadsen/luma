@@ -63,7 +63,7 @@ export const PIN_SETUP_JOURNEY = {
       "centerRoute": "/settings/pin",
       "surface": "cli",
       "verification": "cli",
-      "documentationAnchor": "docs/operations.md#changing-a-setting-from-the-dashboard"
+      "documentationAnchor": "docs/configuration.md#commands"
     },
     {
       "id": "identity",

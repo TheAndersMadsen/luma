@@ -49,7 +49,7 @@ function probeRunningLocalIdentity(values, { emit = true } = {}) {
   }
 
   const port = values.REVIVAL_KEYCLOAK_PORT || '8088';
-  const realm = values.KEYCLOAK_REALM || 'humane';
+  const realm = 'humane';
   const base = `http://127.0.0.1:${port}/realms/${realm}`;
   const expectedIssuer = `http://localhost:${port}/realms/${realm}`;
   const script = `
@@ -128,8 +128,11 @@ function localDoctorReport() {
     add('configuration', 'PASS', `${ENV_FILE} is mode 0600 and internally coherent.`);
     add('remote-tts', values.COSMOS_REMOTE_TTS_ENABLED === 'true' ? 'PASS' : 'WARN',
       `Remote TTS is ${values.COSMOS_REMOTE_TTS_ENABLED === 'true' ? 'enabled' : 'disabled'} by configuration.`);
-    add('spotify', values.REVIVAL_SPOTIFY_ADAPTER_URL ? 'PASS' : 'WARN',
-      `Pin-native Spotify adapter configuration is ${values.REVIVAL_SPOTIFY_ADAPTER_URL ? 'present' : 'not configured'}; no token contents were read.`);
+    const spotifyPaired = Boolean(
+      values.REVIVAL_PIN_BRIDGE_OWNER_SUB?.trim() && values.REVIVAL_PIN_BRIDGE_DEVICE_ID?.trim()
+    );
+    add('spotify', spotifyPaired ? 'PASS' : 'WARN',
+      `Pin-native Spotify pairing is ${spotifyPaired ? 'configured' : 'not configured'}; no token contents were read.`);
   } catch (error) {
     add('configuration', 'FAIL', error.message, './revival init, then update only the settings named by the failure.');
   }

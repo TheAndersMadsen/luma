@@ -142,6 +142,12 @@ function cleanBoundedString(value: unknown, maximum: number): string | undefined
   return trimmed;
 }
 
+function canonicalDeviceId(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return /^[0-9a-f]+$/iu.test(trimmed) ? trimmed.toLowerCase() : undefined;
+}
+
 function timeoutMs(): number {
   const configured = Number(process.env.REVIVAL_SPOTIFY_ADAPTER_TIMEOUT_MS ?? DEFAULT_TIMEOUT_MS);
   if (!Number.isFinite(configured)) return DEFAULT_TIMEOUT_MS;
@@ -462,8 +468,8 @@ export function musicGatewayOrigin(): string {
 }
 
 export async function deviceMusicGatewayToken(): Promise<string> {
-  const deviceId = process.env.REVIVAL_PIN_BRIDGE_DEVICE_ID?.trim() ?? "";
-  if (!deviceId || deviceId.length > 128 || /\p{Cc}/u.test(deviceId)) {
+  const deviceId = canonicalDeviceId(process.env.REVIVAL_PIN_BRIDGE_DEVICE_ID);
+  if (!deviceId) {
     throw new SpotifyBridgeError("bridge_not_configured", 503, "Music gateway is unavailable.");
   }
   return createHmac("sha256", await adapterToken())
@@ -483,8 +489,8 @@ export async function requireOwnedPairedPin(
   fetchImpl: typeof fetch = fetch,
 ): Promise<void> {
   const owner = process.env.REVIVAL_PIN_BRIDGE_OWNER_SUB?.trim() ?? "";
-  const expectedDeviceId = process.env.REVIVAL_PIN_BRIDGE_DEVICE_ID?.trim() ?? "";
-  if (!owner || !expectedDeviceId || cleanBoundedString(expectedDeviceId, 128) === undefined) {
+  const expectedDeviceId = canonicalDeviceId(process.env.REVIVAL_PIN_BRIDGE_DEVICE_ID);
+  if (!owner || !expectedDeviceId) {
     throw new SpotifyBridgeError("bridge_not_configured", 503, "Spotify setup is unavailable.");
   }
   if (session.sub !== owner) {
@@ -516,7 +522,7 @@ export async function requireOwnedPairedPin(
   const pairings = Array.isArray(body?.pairings) ? body.pairings : [];
   const ownedDeviceIds = pairings.flatMap((value) => {
     const pairing = objectRecord(value);
-    const deviceId = cleanBoundedString(pairing?.device_id, 128);
+    const deviceId = canonicalDeviceId(pairing?.device_id);
     return pairing?.account_sub === session.sub && deviceId ? [deviceId] : [];
   });
   if (ownedDeviceIds.length === 0) {

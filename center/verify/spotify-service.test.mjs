@@ -25,6 +25,7 @@ const session = {
   name: "Wearer",
   operator: false,
 };
+const DEVICE_ID = "2c2a00010000abcd";
 
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -35,7 +36,7 @@ function json(body, status = 200) {
 
 function configureBridge() {
   process.env.REVIVAL_PIN_BRIDGE_OWNER_SUB = session.sub;
-  process.env.REVIVAL_PIN_BRIDGE_DEVICE_ID = "owned-pin";
+  process.env.REVIVAL_PIN_BRIDGE_DEVICE_ID = DEVICE_ID;
   process.env.COSMOS_WEBAPI_BASE_URL = "http://cosmos.test:8081";
   process.env.COSMOS_ADMIN_TOKEN = "c".repeat(40);
   process.env.REVIVAL_SPOTIFY_ADAPTER_URL = "http://10.0.7.1:18081";
@@ -132,7 +133,7 @@ test("bridge binds a signed wearer to the deployment owner and durable Pin roste
   const fetchMock = async (url, init = {}) => {
     calls.push({ url: String(url), init });
     if (String(url).endsWith("/demo-api/admin/devices")) {
-      return json({ pairings: [{ account_sub: session.sub, device_id: "owned-pin" }] });
+      return json({ pairings: [{ account_sub: session.sub, device_id: DEVICE_ID }] });
     }
     return json({
       enabled: false,
@@ -168,7 +169,7 @@ test("bridge rejects an owner without a paired Pin", async () => {
   configureBridge();
   await assert.rejects(
     () => requireOwnedPairedPin(session, async () => json({
-      pairings: [{ account_sub: "someone-else", device_id: "other-pin" }],
+      pairings: [{ account_sub: "someone-else", device_id: "0011223344556677" }],
     })),
     (error) => error instanceof SpotifyBridgeError && error.code === "pin_not_paired" && error.status === 409,
   );
@@ -176,12 +177,12 @@ test("bridge rejects an owner without a paired Pin", async () => {
 
 test("single-target bridge requires the exact one rostered device", async () => {
   configureBridge();
-  process.env.REVIVAL_PIN_BRIDGE_DEVICE_ID = "expected-pin";
+  process.env.REVIVAL_PIN_BRIDGE_DEVICE_ID = "aabbccdd";
   for (const pairings of [
-    [{ account_sub: session.sub, device_id: "different-pin" }],
+    [{ account_sub: session.sub, device_id: "00112233" }],
     [
-      { account_sub: session.sub, device_id: "expected-pin" },
-      { account_sub: session.sub, device_id: "second-pin" },
+      { account_sub: session.sub, device_id: "aabbccdd" },
+      { account_sub: session.sub, device_id: "eeff0011" },
     ],
   ]) {
     await assert.rejects(
@@ -194,6 +195,24 @@ test("single-target bridge requires the exact one rostered device", async () => 
   }
 });
 
+test("bridge device ids follow Cosmos hexadecimal grammar and lowercase normalization", async () => {
+  configureBridge();
+  const canonicalToken = await deviceMusicGatewayToken();
+  process.env.REVIVAL_PIN_BRIDGE_DEVICE_ID = DEVICE_ID.toUpperCase();
+  assert.equal(await deviceMusicGatewayToken(), canonicalToken);
+  await requireOwnedPairedPin(session, async () => json({
+    pairings: [{ account_sub: session.sub, device_id: DEVICE_ID }],
+  }));
+
+  for (const invalid of ["owned-pin", "🔒", " "]) {
+    process.env.REVIVAL_PIN_BRIDGE_DEVICE_ID = invalid;
+    await assert.rejects(
+      () => deviceMusicGatewayToken(),
+      (error) => error instanceof SpotifyBridgeError && error.code === "bridge_not_configured",
+    );
+  }
+});
+
 test("Pin request rejection remains distinct from adapter unavailability", async () => {
   configureBridge();
   let calls = 0;
@@ -201,7 +220,7 @@ test("Pin request rejection remains distinct from adapter unavailability", async
     () => runSpotifyBridgeAction(session, "pair", undefined, async (url) => {
       calls += 1;
       if (String(url).endsWith("/demo-api/admin/devices")) {
-        return json({ pairings: [{ account_sub: session.sub, device_id: "owned-pin" }] });
+        return json({ pairings: [{ account_sub: session.sub, device_id: DEVICE_ID }] });
       }
       return json({ error: "pin_rejected_spotify_request" }, 409);
     }),
@@ -227,7 +246,7 @@ test("mounted adapter token derives a distinct server-only music gateway bearer"
   const fetchMock = async (url, init = {}) => {
     calls.push({ url: String(url), init });
     if (String(url).endsWith("/demo-api/admin/devices")) {
-      return json({ pairings: [{ account_sub: session.sub, device_id: "owned-pin" }] });
+      return json({ pairings: [{ account_sub: session.sub, device_id: DEVICE_ID }] });
     }
     return json({
       enabled: true,
@@ -372,7 +391,7 @@ test("search rides the ownership gate and forwards only q and kind", async () =>
   const result = await runSpotifySearch(session, "  blue monday  ", async (url, init = {}) => {
     calls.push({ url: String(url), init });
     if (String(url).endsWith("/demo-api/admin/devices")) {
-      return json({ pairings: [{ account_sub: session.sub, device_id: "owned-pin" }] });
+      return json({ pairings: [{ account_sub: session.sub, device_id: DEVICE_ID }] });
     }
     return json({
       items: [
@@ -423,7 +442,7 @@ test("search rides the ownership gate and forwards only q and kind", async () =>
 
 test("search refuses a body that is not a bounded track list", async () => {
   configureBridge();
-  const roster = { pairings: [{ account_sub: session.sub, device_id: "owned-pin" }] };
+  const roster = { pairings: [{ account_sub: session.sub, device_id: DEVICE_ID }] };
   const withBody = (body, status = 200) => async (url) =>
     String(url).endsWith("/demo-api/admin/devices") ? json(roster) : json(body, status);
 

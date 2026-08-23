@@ -115,8 +115,7 @@ test("Git and Docker ignore the local channel-key file and temporary siblings", 
 });
 
 test("a wearer keeps their key when the kid we derive for them changes shape", async (t) => {
-  // Exactly what /home/anders/cosmos-center-data/channel-key.json holds today:
-  // the pre-fix COSMOS_PRINCIPAL kid, no map.
+  // Exercise the earlier single-key store shape: a COSMOS_PRINCIPAL kid with no map.
   await withStore(t, { kid: STORED_KID, key: STORED_KEY });
 
   const found = storedKeysFor(DERIVED_KID);

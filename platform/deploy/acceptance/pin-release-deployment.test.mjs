@@ -30,7 +30,7 @@ function composeEnvironment(dataDirectory) {
     GRAFANA_ADMIN_PASSWORD: "placeholder-grafana",
     SEARXNG_SECRET: "placeholder-search-secret",
     REVIVAL_PIN_BRIDGE_OWNER_SUB: "owner-pin-release-deployment-contract",
-    REVIVAL_PIN_BRIDGE_DEVICE_ID: "device-pin-release-deployment-contract",
+    REVIVAL_PIN_BRIDGE_DEVICE_ID: "2c2a00010000abcd",
   };
 }
 

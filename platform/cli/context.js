@@ -254,7 +254,7 @@ function fillBlankInitializerDefaults(contents) {
 }
 
 function localIdentityRealm(values) {
-  const realm = values.KEYCLOAK_REALM || 'humane';
+  const realm = 'humane';
   const clientId = values.KEYCLOAK_CLIENT_ID || 'center';
   const centerPort = values.REVIVAL_CENTER_PORT || '4000';
   const origins = [
@@ -580,7 +580,7 @@ function validateLocalIdentityRealm(values, problems) {
     problems.push(`${realmFile} must contain valid JSON; rerun ./revival init after moving the invalid file aside`);
     return;
   }
-  const expectedRealm = values.KEYCLOAK_REALM || 'humane';
+  const expectedRealm = 'humane';
   const expectedClient = values.KEYCLOAK_CLIENT_ID || 'center';
   const client = Array.isArray(realm.clients)
     ? realm.clients.find((candidate) => candidate?.clientId === expectedClient)
@@ -699,7 +699,6 @@ function validateRuntime({ production = false, envFile = ENV_FILE } = {}) {
   if (!/^(true|false)$/.test(identityEnabled)) {
     problems.push('REVIVAL_IDENTITY_ENABLED must be exactly true or false');
   } else if (identityEnabled === 'true') {
-    requireValue(values, 'KEYCLOAK_BASE_URL', problems, 8);
     requireValue(values, 'KEYCLOAK_CLIENT_SECRET', problems, 16);
     requireValue(values, 'KEYCLOAK_ADMIN', problems, 1);
     requireValue(values, 'KEYCLOAK_ADMIN_PASSWORD', problems, 16);
@@ -722,10 +721,6 @@ function validateRuntime({ production = false, envFile = ENV_FILE } = {}) {
     if (!isExactBase64Bytes(opaqueSeed, 32)) {
       problems.push('COSMOS_OPAQUE_SEED must decode from canonical base64 to exactly 32 private bytes when enrollment is enabled');
     }
-    if (values.COSMOS_DUC_CA_CERT !== '/run/secrets/duc_ca_cert' ||
-        values.COSMOS_DUC_CA_KEY !== '/run/secrets/duc_ca_key') {
-      problems.push('COSMOS_DUC_CA_CERT and COSMOS_DUC_CA_KEY must use the reviewed /run/secrets paths');
-    }
     for (const filename of ['duc-ca.crt', 'duc-ca.key']) {
       const file = path.join(SECRETS_DIR, 'pki', filename);
       if (!isProtectedRegularFile(file, true)) {
@@ -739,26 +734,14 @@ function validateRuntime({ production = false, envFile = ENV_FILE } = {}) {
     problems.push('REVIVAL_CENTER_PORT must be an integer from 1 to 65535');
   }
 
-  const spotifyAdapter = [
-    values.REVIVAL_SPOTIFY_ADAPTER_URL || '',
-    values.REVIVAL_SPOTIFY_ADAPTER_TOKEN_FILE || '',
-    values.REVIVAL_PIN_BRIDGE_OWNER_SUB || '',
-    values.REVIVAL_PIN_BRIDGE_DEVICE_ID || ''
-  ];
-  if (spotifyAdapter.some(Boolean) && !spotifyAdapter.every(Boolean)) {
-    problems.push('REVIVAL_SPOTIFY_ADAPTER_URL, REVIVAL_SPOTIFY_ADAPTER_TOKEN_FILE, REVIVAL_PIN_BRIDGE_OWNER_SUB, and REVIVAL_PIN_BRIDGE_DEVICE_ID must be configured together');
+  const spotifyOwner = (values.REVIVAL_PIN_BRIDGE_OWNER_SUB || '').trim();
+  const spotifyDeviceId = (values.REVIVAL_PIN_BRIDGE_DEVICE_ID || '').trim();
+  const spotifyPairing = [spotifyOwner, spotifyDeviceId];
+  if (spotifyPairing.some(Boolean) && !spotifyPairing.every(Boolean)) {
+    problems.push('REVIVAL_PIN_BRIDGE_OWNER_SUB and REVIVAL_PIN_BRIDGE_DEVICE_ID must be configured together');
   }
-  if (spotifyAdapter.every(Boolean)) {
-    if (values.REVIVAL_SPOTIFY_ADAPTER_URL !== 'http://10.0.7.1:18081') {
-      problems.push('REVIVAL_SPOTIFY_ADAPTER_URL must use the private production adapter endpoint');
-    }
-    if (values.REVIVAL_SPOTIFY_ADAPTER_TOKEN_FILE !== '/run/secrets/spotify_adapter_token') {
-      problems.push('REVIVAL_SPOTIFY_ADAPTER_TOKEN_FILE must use the read-only container secret path');
-    }
-    const deviceIdBytes = Buffer.byteLength(values.REVIVAL_PIN_BRIDGE_DEVICE_ID.trim(), 'utf8');
-    if (deviceIdBytes < 1 || deviceIdBytes > 256) {
-      problems.push('REVIVAL_PIN_BRIDGE_DEVICE_ID must be a nonblank device identifier no longer than 256 UTF-8 bytes');
-    }
+  if (spotifyDeviceId && !/^[0-9a-f]+$/iu.test(spotifyDeviceId)) {
+    problems.push('REVIVAL_PIN_BRIDGE_DEVICE_ID must be the detected Pin device id in hexadecimal (0-9a-f)');
   }
 
   const uniqueProblems = [...new Set(problems)];
@@ -881,7 +864,12 @@ function operatorEnvironment(values) {
   if (openssl) env.OPENSSL = openssl;
   const localIdentity = env.REVIVAL_IDENTITY_ENABLED === 'true';
   const identityPort = env.REVIVAL_KEYCLOAK_PORT || '8088';
-  const identityRealm = env.KEYCLOAK_REALM || 'humane';
+  const identityRealm = 'humane';
+  env.KEYCLOAK_BASE_URL = localIdentity ? 'http://keycloak:8080' : '';
+  env.KEYCLOAK_REALM = identityRealm;
+  if (env.REVIVAL_PIN_BRIDGE_DEVICE_ID) {
+    env.REVIVAL_PIN_BRIDGE_DEVICE_ID = env.REVIVAL_PIN_BRIDGE_DEVICE_ID.trim().toLowerCase();
+  }
   env.REVIVAL_LOCAL_OIDC_ISSUER = localIdentity
     ? `http://localhost:${identityPort}/realms/${identityRealm}`
     : '';
