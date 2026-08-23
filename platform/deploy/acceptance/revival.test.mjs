@@ -392,6 +392,10 @@ test("production Compose binds one release identity and keeps web services priva
   assert.equal(rendered.services.center.environment.REVIVAL_RELEASE_ID, releaseId);
   assert.equal(rendered.services.center.image, `ai-pin-revival/center:${releaseId}`);
   assert.equal(rendered.services["ai-bus"].image, `ai-pin-revival/cosmos:${releaseId}`);
+  assert.equal(
+    rendered.services.keycloak.environment.KC_DB_URL,
+    "jdbc:postgresql://postgres:5432/keycloak",
+  );
   assert.deepEqual(Object.keys(rendered.networks).sort(), [
     "cosmos-internal",
     "loopback-publish",

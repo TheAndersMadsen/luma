@@ -365,7 +365,7 @@ services:
       - start
     environment: !override
       KC_DB: postgres
-      KC_DB_URL: jdbc:postgresql://postgres:5432/cosmos
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
       KC_DB_USERNAME: cosmos
       KC_DB_PASSWORD: ${COSMOS_PG_PASSWORD:?set COSMOS_PG_PASSWORD in the protected production env}
       KC_HOSTNAME: ${REVIVAL_PUBLIC_ORIGIN:-https://center.andersmadsen.dk}
