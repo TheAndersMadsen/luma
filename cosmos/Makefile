@@ -20,8 +20,7 @@ render:
 # Production requires protected env files and deliberately has no sample-secret
 # fallback. The root Ai Pin Revival deployer supplies those inputs.
 render-production:
-	@test -n "$(CANDIDATE_ID)" || { echo "set CANDIDATE_ID to one sealed candidate SHA-256" >&2; exit 64; }
-	cd .. && ./revival deploy production --candidate-id "$(CANDIDATE_ID)" --dry-run
+	cd .. && ./revival deploy production --dry-run
 
 hygiene:
 	python3 verify/hygiene.py

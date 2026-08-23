@@ -1355,37 +1355,6 @@ export function createDockerReleaseVerificationInvocation({
   });
 }
 
-export function createDockerVpsCandidateVerificationInvocation({
-  receiptPath,
-  bundlePath,
-  candidateRoot,
-  outputRoot,
-  verifierAuthority,
-}) {
-  requireAbsolutePaths(
-    [receiptPath, bundlePath, candidateRoot, outputRoot],
-    "hosted VPS candidate verification",
-  );
-  return Object.freeze({
-    command: FIXED_DOCKER,
-    args: Object.freeze([
-      ...hostedVerifierDockerBase({ verifierAuthority }),
-      "--mount", mount(receiptPath, "/run/hosted-vps/receipt.json", true),
-      "--mount", mount(bundlePath, "/run/hosted-vps/provider.sigstore.json", true),
-      "--mount", mount(candidateRoot, "/run/hosted-vps/candidate", true),
-      "--mount", mount(outputRoot, "/verified-output"),
-      FIXED_VERIFIER_RUNTIME_IMAGE_ID,
-      FIXED_VERIFIER_TARGETS.verifier,
-      "verify-vps-candidate",
-      "--receipt", "/run/hosted-vps/receipt.json",
-      "--bundle", "/run/hosted-vps/provider.sigstore.json",
-      "--candidate-root", "/run/hosted-vps/candidate",
-      "--output", "/verified-output/evidence.json",
-      "--verification-output", "/verified-output/verification.json",
-    ]),
-  });
-}
-
 async function defaultCommandRunner(invocation) {
   if (invocation.command !== FIXED_DOCKER) {
     fail("command-invalid", "Pin release Docker execution must use the fixed host binary");
@@ -2545,55 +2514,6 @@ export async function parsePersistedHostedAuthorityBindingFixture(options) {
     fail("test-fixture-disabled", "persisted hosted binding fixtures require explicit test mode");
   }
   return await parsePersistedHostedAuthorityBinding(options);
-}
-
-/**
- * Verify a file-only GitHub-hosted VPS candidate handoff with the same sealed
- * gh binary, trusted root, fixed Docker runtime, and non-self-hosted policy as
- * the Pin release lane.  This verifies provenance only; it does not deploy,
- * load an image, read a secret, or grant a remote publication capability.
- */
-export async function verifyHostedVpsCandidateHandoff({
-  receiptPath,
-  bundlePath,
-  candidateRoot,
-  outputRoot,
-  verifierCacheRoot,
-  uid,
-  gid,
-}) {
-  const output = await requireOwnerDirectory(
-    outputRoot,
-    "hosted VPS candidate verification output",
-    { create: false },
-  );
-  await withFixedVerifierAuthority({
-    cacheRoot: verifierCacheRoot ?? defaultHostedVerifierCacheRoot(),
-    uid,
-    gid,
-  }, async (verifierAuthority) => {
-    await defaultCommandRunner(createDockerVpsCandidateVerificationInvocation({
-      receiptPath: resolve(receiptPath),
-      bundlePath: resolve(bundlePath),
-      candidateRoot: resolve(candidateRoot),
-      outputRoot: output,
-      verifierAuthority,
-    }));
-  });
-  const evidencePath = await requireProtectedFile(
-    join(output, "evidence.json"),
-    "hosted VPS candidate verification evidence",
-  );
-  const verificationPath = await requireProtectedFile(
-    join(output, "verification.json"),
-    "hosted VPS candidate canonical verifier output",
-  );
-  return Object.freeze({
-    evidencePath,
-    evidenceBytes: await readFile(evidencePath),
-    verificationPath,
-    verificationBytes: await readFile(verificationPath),
-  });
 }
 
 /**

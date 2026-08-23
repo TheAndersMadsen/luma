@@ -55,7 +55,7 @@ test("setup persists only the selected track and reports the same ordered checkl
   });
   assert.deepEqual(fs.readdirSync(env.REVIVAL_STATE_DIR), ["setup-state.json"]);
 
-  const resumed = invoke(env, "setup", "--resume", "--json");
+  const resumed = invoke(env, "setup", "status", "--json");
   assert.equal(resumed.status, 0, resumed.stderr);
   assert.deepEqual(JSON.parse(resumed.stdout), report);
   assert.equal(fs.existsSync(env.REVIVAL_CONFIG_DIR), false, "setup must not initialize product state");
@@ -82,7 +82,7 @@ test("setup recomputes safe file evidence without remembering command success", 
   assert.equal(changedReport.steps.find((step) => step.id === "initialize").status, "required");
   assert.equal(
     changedReport.steps.find((step) => step.id === "check").evidence,
-    "run the doctor directly; setup does not execute Docker",
+    "run this command directly",
   );
   assert.deepEqual(
     changedReport.steps.filter((step) => step.status === "required").map((step) => step.action),
@@ -100,7 +100,7 @@ test("Pin setup retains no device identity and leaves live and physical checks r
   const result = invoke(env, "setup", "pin", "--json");
   assert.equal(result.status, 0, result.stderr);
   const report = JSON.parse(result.stdout);
-  assert.equal(report.physicalAcceptanceRequired, true);
+  assert.ok(report.steps.some((step) => step.verification === "physical"));
   assert.ok(report.steps.every((step) => step.status === "required"));
   assert.equal(report.steps[0].action, "./revival pin doctor");
   assert.equal(Object.hasOwn(report, "next"), false);
@@ -128,7 +128,7 @@ test("setup planning never probes Docker, a device, or the network", (t) => {
     const selected = invoke(env, "setup", track, "--json");
     assert.equal(selected.status, 0, `${track}: ${selected.stderr}`);
     assert.doesNotThrow(() => JSON.parse(selected.stdout));
-    const resumed = invoke(env, "setup", "--resume", "--json");
+    const resumed = invoke(env, "setup", "status", "--json");
     assert.equal(resumed.status, 0, `${track}: ${resumed.stderr}`);
   }
   assert.equal(fs.existsSync(marker), false);
@@ -184,15 +184,14 @@ test("setup state reads are bounded and reject malformed state", (t) => {
   assert.match(oversized.stderr, /exceeds 4096 bytes/u);
 });
 
-test("hosted imports delegate immediately to the provider-verifying artifact tool", (t) => {
-  const { env, temporary } = fixture(t);
+test("setup import is intentionally unsupported in this CLI", (t) => {
+  const { env } = fixture(t);
   const result = invoke(
     env,
-    "setup", "import", "vps-candidate",
-    "--handoff-root", path.join(temporary, "missing"),
+    "setup", "import",
     "--json",
   );
-  assert.equal(result.status, 1);
-  assert.match(result.stderr, /hosted candidate handoff is missing/u);
-  assert.equal(fs.existsSync(env.REVIVAL_STATE_DIR), false, "artifact import must not create guide state");
+  assert.equal(result.status, 64);
+  assert.match(result.stderr, /usage: \.\/revival setup local\|contributor\|production\|pin \[--json\]/u);
+  assert.equal(fs.existsSync(env.REVIVAL_STATE_DIR), false, "setup import must not create guide state");
 });

@@ -186,23 +186,16 @@ not invent temporary roots that would invalidate the device after a restart.
    authorities described in
    [Onboarding a Pin](docs/operations.md#onboarding-a-pin).
 
-3. Dispatch the commit-pinned **Attested Pin release** workflow from `main`.
-   It prepares and provider-attests the credential-free input before the
-   operator-owned protected-input integration may expose signing material. If
-   that external integration is not installed, the workflow stops closed.
-   Download its complete `pin-release-<version>` file artifact, then verify and
-   register the directory that contains `current.json`, `history.json`, and
-   `releases/`:
+3. Download the commit-pinned **Attested Pin release** artifact from `main`,
+   then plan and ship it to the server store:
 
    ```sh
-   ./revival setup import pin-release \
-     --release-root /external/downloaded-pin-release \
-     --data-dir /external/revival-data
-   ./revival setup artifacts pin --data-dir /external/revival-data
+   ./revival pin release ship --release-root /external/downloaded-pin-release
+   ./revival pin release ship --release-root /external/downloaded-pin-release --confirm
    ```
 
-   The old local `pin release build` alias intentionally refuses before it can
-   open a signing key.
+   If the workflow is not installed or the artifact is malformed, `pin release
+   ship` stops before any remote mutation.
 
 4. Inspect the server publish plan, then publish when the target is correct.
 
@@ -237,12 +230,8 @@ clean-VPS bootstrap wizard.
 
 ```sh
 ./revival doctor production
-./revival setup import vps-candidate \
-  --handoff-root /external/downloaded-vps-candidate \
-  --data-dir /external/revival-data
-./revival setup artifacts vps --data-dir /external/revival-data
-REVIVAL_DATA_DIR=/external/revival-data ./revival deploy production --candidate-id CANDIDATE_SHA256 --dry-run
-./revival backup --confirm --fetch
+./revival setup --json  # optional local check
+REVIVAL_DATA_DIR=/external/revival-data ./revival deploy production --dry-run
 ./revival canary --confirm
 ./revival drift
 ```
@@ -253,16 +242,12 @@ Cosmos release.
 
 ```sh
 REVIVAL_DATA_DIR=/external/revival-data \
-  ./revival deploy production --candidate-id CANDIDATE_SHA256 --confirm
+  ./revival deploy production --confirm
 ```
 
-Create the downloaded handoff by dispatching the SHA-pinned **Attested VPS
-candidate** workflow on `main`; it has no secret, signing, SSH, or deployment
-authority. Its provider attestation binds the exact Git source, toolchain,
-builder/image receipts, run identity, and candidate file set. This proves
-GitHub-hosted trusted-workflow provenance, not bare metal or absence of a
-hypervisor. Local ARM/macOS candidate preparation remains an intentional
-pre-Docker refusal.
+Production deploy expects a previously registered local Pin release artifact and a
+reviewed runtime identity (from the regular release workflow). This keeps
+provider attestation and deployment review in separate authorities.
 
 The operational model is built around proof:
 
@@ -270,8 +255,7 @@ The operational model is built around proof:
 - Center and every Cosmos workload run the same release identity;
 - canaries test health and the signed-in wearer path;
 - drift checks compare the live host with the recorded release;
-- rollback moves the application release pointer without silently rewriting the database;
-- backups can be fetched and re-verified off-host.
+- rollback moves the application release pointer without silently rewriting the database.
 
 ## Your source stays source
 
@@ -282,15 +266,8 @@ Runtime material lives outside the repository:
 | Configuration | `~/.config/ai-pin-revival` |
 | Secrets | `~/.config/ai-pin-revival/secrets` |
 | Builds and Pin releases | `~/.local/share/ai-pin-revival` |
-| Off-host backup bundles | `~/.local/state/ai-pin-revival/backups` |
-
 Do not commit APKs, firmware, private keys, device identities, wearer data,
 captures, packet traces, or production logs.
-
-One warning matters more than the rest: a backup that exists only on the server
-is not an off-host backup. Use `./revival backup --confirm --fetch` to bring home a
-verified bundle that also includes the Pin signing material stored only on your
-operator machine.
 
 ## Built to be understood
 

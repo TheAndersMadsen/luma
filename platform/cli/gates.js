@@ -20,7 +20,6 @@ const {
   probePinAmd64Runtime,
   testVersionParser,
 } = require('./toolchain');
-
 const SERIAL_POLICY_TESTS = Object.freeze([
   'fresh-install.test.mjs',
 ]);
@@ -82,6 +81,57 @@ function executePinLaneSession(lane, selection = {}, dependencies = {}) {
   ], { cwd: ROOT, env: environment, allowFailure: true });
   if (result.signal || result.status !== 0) throwLikeChild(result);
   return result;
+}
+
+function runContributorCheckUnit(runner, command, args, {
+  environment,
+  cwd,
+  ...options
+} = {}) {
+  return runner(`Pin contributor check: ${command} ${args.join(' ')}`, command, args, {
+    cwd,
+    env: environment,
+    allowFailure: false,
+    ...options,
+  });
+}
+
+function runPinContributorChecks(runner, environment) {
+  const rootEnvironment = Object.freeze({
+    ...environment,
+    LANG: 'C',
+    LC_ALL: 'C',
+  });
+  const coreTarget = path.join(environment.CARGO_TARGET_DIR, 'runtime-core');
+  const bridgeTarget = path.join(environment.CARGO_TARGET_DIR, 'bridge');
+  const gradleProjectCache = path.join(environment.GRADLE_USER_HOME, 'pin-contributor');
+  const gradleInjectorCache = path.join(environment.GRADLE_USER_HOME, 'pin-contributor-injector');
+  fs.mkdirSync(coreTarget, { recursive: true });
+  fs.mkdirSync(bridgeTarget, { recursive: true });
+  fs.mkdirSync(gradleProjectCache, { recursive: true });
+  fs.mkdirSync(gradleInjectorCache, { recursive: true });
+  runContributorCheckUnit(runner, 'cargo', ['test', '--locked'], {
+    cwd: path.join(ROOT, 'pin', 'runtime', 'core'),
+    environment: Object.freeze({ ...rootEnvironment, CARGO_TARGET_DIR: coreTarget }),
+  });
+  runContributorCheckUnit(runner, 'cargo', ['test', '--locked'], {
+    cwd: path.join(ROOT, 'pin', 'bridge'),
+    environment: Object.freeze({ ...rootEnvironment, CARGO_TARGET_DIR: bridgeTarget }),
+  });
+  runContributorCheckUnit(runner, '/usr/bin/bash', [path.join(ROOT, 'pin', 'gradlew'), '--no-daemon',
+    '--project-cache-dir', gradleProjectCache,
+    ':contracts:stock-aibus:testDebugUnitTest',
+    ':contracts:penumbra-ipc:testDebugUnitTest'], {
+    cwd: path.join(ROOT, 'pin'),
+    environment: Object.freeze({ ...rootEnvironment, GRADLE_USER_HOME: environment.GRADLE_USER_HOME }),
+  });
+  runContributorCheckUnit(runner, '/usr/bin/bash', [path.join(ROOT, 'pin', 'injector/gradlew'), '--no-daemon',
+    '--project-cache-dir', gradleInjectorCache,
+    '-p', 'injector',
+    ':common:testDebugUnitTest'], {
+    cwd: path.join(ROOT, 'pin'),
+    environment: Object.freeze({ ...rootEnvironment, GRADLE_USER_HOME: environment.GRADLE_USER_HOME }),
+  });
 }
 
 function policyTestConcurrency() {
@@ -174,15 +224,13 @@ function pinContributorCheck(dependencies = {}) {
   // Docker state merely by asking for a Pin check.
   const preflight = dependencies.preflight ?? assertPinAmd64ConsumerHost;
   preflight(Object.freeze({ LANG: 'C', LC_ALL: 'C' }));
-  // One helper remains alive from its first watch-before-target traversal
-  // through source policy, policy tests, Docker build/run, and final
-  // revalidation. JavaScript never prepares or reauthorizes a lane pathname.
-  (dependencies.sessionRunner ?? executePinLaneSession)(
-    'check',
-    {},
-    dependencies,
-  );
-  info('[implemented] Pin policy, Cargo, and canonical Android contract/common checks passed in one held lane session.');
+  const environment = Object.freeze({
+    ...testProcessEnvironment(),
+    ...(dependencies.environment || {}),
+  });
+  const sessionRunner = dependencies.sessionRunner ?? timedRun;
+  runPinContributorChecks(sessionRunner, environment);
+  info('[implemented] Pin policy, Cargo, and canonical Android contract/common checks passed in direct contributor checks.');
   info('[implemented] contributor Pin checks require no signing keys or private release assets.');
   info('[unknown] this host gate does not build a signed device bundle or verify a physical Pin.');
 }

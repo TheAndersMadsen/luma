@@ -151,12 +151,10 @@ test("a TERM-ignoring grandchild holding stdout is group-killed without an orpha
 });
 
 test("every hosted build, gh, SSH, rsync, and READY child is tracked and bounded", async () => {
-  const [build, ship, verifier, setup, vpsWorkflow, pinWorkflow] = await Promise.all([
+  const [build, ship, verifier, pinWorkflow] = await Promise.all([
     readFile(resolve(ROOT, "platform/deploy/pin/build.mjs"), "utf8"),
     readFile(resolve(ROOT, "platform/deploy/pin/ship.mjs"), "utf8"),
     readFile(resolve(ROOT, "platform/deploy/pin/hosted-attestation.mjs"), "utf8"),
-    readFile(resolve(ROOT, "platform/cli/setup.js"), "utf8"),
-    readFile(resolve(ROOT, ".github/workflows/vps-candidate.yml"), "utf8"),
     readFile(resolve(ROOT, ".github/workflows/pin-release.yml"), "utf8"),
   ]);
   for (const [label, source] of [["build", build], ["ship", ship], ["verifier", verifier]]) {
@@ -184,8 +182,5 @@ test("every hosted build, gh, SSH, rsync, and READY child is tracked and bounded
   assert.match(ship, /post-READY wall-clock deadline/u);
   assert.match(ship, /RSYNC_TIMEOUT_MILLISECONDS/u);
   assert.match(verifier, /VERIFIER_TIMEOUT_MILLISECONDS/u);
-  assert.match(setup, /timeout: ARTIFACT_TOOL_TIMEOUT_MILLISECONDS/u);
-  assert.match(setup, /killSignal: 'SIGKILL'/u);
-  assert.match(vpsWorkflow, /timeout-minutes: 180/u);
   assert.match(pinWorkflow, /timeout-minutes: 180/u);
 });

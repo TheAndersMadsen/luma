@@ -146,7 +146,7 @@ test("Cosmos convenience targets delegate to the root Revival CLI", () => {
   assert.match(makefile, /render:\n\tcd \.\. && \.\/revival doctor/);
   assert.match(
     makefile,
-    /render-production:[\s\S]*\.\/revival deploy production --candidate-id "\$\(CANDIDATE_ID\)" --dry-run/,
+    /render-production:[\s\S]*\.\/revival deploy production --dry-run/,
   );
   assert.doesNotMatch(makefile, /cd \.\.\/\.\. && \.\/revival/);
 });
@@ -526,15 +526,14 @@ test("production Compose binds one release identity and keeps web services priva
   assert.equal(rendered.services.keycloak.profiles, undefined);
   assert.deepEqual(
     Object.fromEntries(Object.entries(rendered.volumes).map(([name, volume]) => [name, {
-      external: volume.external,
       name: volume.name,
     }])),
     {
-      "center-data": { external: false, name: "ai-pin-revival_center-data" },
-      "cosmos-pgdata": { external: false, name: "ai-pin-revival_cosmos-pgdata" },
-      "cosmos-state": { external: false, name: "ai-pin-revival_cosmos-state" },
-      "grafana-data": { external: false, name: "ai-pin-revival_grafana-data" },
-      "prometheus-data": { external: false, name: "ai-pin-revival_prometheus-data" },
+      "center-data": { name: "ai-pin-revival_center-data" },
+      "cosmos-pgdata": { name: "ai-pin-revival_cosmos-pgdata" },
+      "cosmos-state": { name: "ai-pin-revival_cosmos-state" },
+      "grafana-data": { name: "ai-pin-revival_grafana-data" },
+      "prometheus-data": { name: "ai-pin-revival_prometheus-data" },
     },
   );
   const centerData = rendered.services.center.volumes.filter((volume) => volume.target === "/data");

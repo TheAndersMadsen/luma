@@ -306,10 +306,7 @@ test("platform checks keep the fast contributor inventory distinct from the dyna
   assert.deepEqual(parsePlatformArguments(["--full"]), { full: true });
 });
 
-test("Pin check keeps preflight first and invokes the existing lane directly", () => {
-  assert.deepEqual(pinLaneSessionArguments("check"), [
-    "lane-session", require("../../cli/context.js").DATA_DIR, BUILD_DIR, root, "check",
-  ]);
+test("Pin check keeps preflight first and runs direct contributor checks", () => {
   let invocation;
   executePinLaneSession("check", {}, {
     environment: { LANG: "C.UTF-8", LC_ALL: "C.UTF-8" },
@@ -326,9 +323,36 @@ test("Pin check keeps preflight first and invokes the existing lane directly", (
   const ordering = [];
   pinContributorCheck({
     preflight() { ordering.push("preflight"); },
-    sessionRunner(lane, selection) { ordering.push([lane, selection]); },
+    sessionRunner(label, command, args) {
+      ordering.push([label, command, args.slice(0, 3)]);
+    },
   });
-  assert.deepEqual(ordering, ["preflight", ["check", {}]]);
+  const [preflightMarker, coreRust, bridgeRust, pinGradle, injectorGradle] = ordering;
+  assert.equal(preflightMarker, "preflight");
+  assert.deepEqual(coreRust, [
+    "Pin contributor check: cargo test --locked",
+    "cargo",
+    ["test", "--locked"],
+  ]);
+  assert.deepEqual(bridgeRust, [
+    "Pin contributor check: cargo test --locked",
+    "cargo",
+    ["test", "--locked"],
+  ]);
+  assert.match(
+    pinGradle[0],
+    new RegExp(`^Pin contributor check: /usr/bin/bash ${path.join(root, "pin", "gradlew")} --no-daemon --project-cache-dir `),
+  );
+  assert.equal(pinGradle[1], "/usr/bin/bash");
+  assert.equal(pinGradle[2][0], path.join(root, "pin", "gradlew"));
+  assert.equal(pinGradle[2][1], "--no-daemon");
+  assert.match(
+    injectorGradle[0],
+    new RegExp(`^Pin contributor check: /usr/bin/bash ${path.join(root, "pin", "injector", "gradlew")} --no-daemon --project-cache-dir `),
+  );
+  assert.equal(injectorGradle[1], "/usr/bin/bash");
+  assert.equal(injectorGradle[2][0], path.join(root, "pin", "injector/gradlew"));
+  assert.equal(injectorGradle[2][1], "--no-daemon");
 });
 
 test("changed paths select precise component checks and unfamiliar paths fail closed", () => {

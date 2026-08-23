@@ -58,7 +58,7 @@ operator-supplied signing material for release builds.
 - Generated APKs, Cargo/Gradle/npm output, signer material, device snapshots,
   and recovery evidence live under the external Revival config/data roots.
 
-### Persistent legacy-production compatibility
+### Persistent compatibility contract
 
 Cosmos is the logical product name, but an APK keep-data replacement must keep
 the identifiers already stored on the Pin. The physical contract remains:
