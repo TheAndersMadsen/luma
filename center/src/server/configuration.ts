@@ -600,7 +600,7 @@ const CATALOG: ConfigurationSetting[] = [
     path: false,
     fallback: null,
     impact:
-      "The self-hosted bootstrap allowlist. Empty is normal and correct once the legacy `carry-operator` realm role is granted.",
+      "The self-hosted bootstrap allowlist. Empty is normal and correct once the legacy `cosmos-operator` realm role is granted.",
     ...never("An editor here converts one operator session into permanent operator access for any address."),
   },
 

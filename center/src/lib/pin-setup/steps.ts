@@ -102,7 +102,7 @@ export interface PinSetupServerFacts {
 /**
  * `Settings.Global` clone mode — read over ADB, never written from here.
  *
- * `penumbra_carry_remote_mode=1` is the commit gate the on-device activation
+ * `penumbra_cosmos_remote_mode=1` is the commit gate the on-device activation
  * transaction writes LAST, so reading it is the honest answer to "is this Pin
  * pointed at our stack".
  */
@@ -536,7 +536,7 @@ function deriveIdentity(facts: PinSetupFacts): DraftStep {
    *
    * Activation imports the minted identity into AndroidKeyStore, validating that
    * the certificate and private key match and chain to the pinned root, and only
-   * THEN writes `penumbra_carry_remote_mode=1` — last, as the commit gate
+   * THEN writes `penumbra_cosmos_remote_mode=1` — last, as the commit gate
    * (docs/operations.md §7, `CosmosActivationTransaction.kt:292-301`). So clone
    * mode being on is committed evidence that a credential was minted for this
    * device and accepted by it. This is the inverse of the forbidden inference:
@@ -616,7 +616,7 @@ function deriveActivate(facts: PinSetupFacts): DraftStep {
         next: "Re-run activation with the edge IPv4 in the bundle; clone mode without an address leaves every hook inert.",
       };
     }
-    // `penumbra_carry_remote_mode=1` says the Pin is pointed at SOME server; it
+    // `penumbra_cosmos_remote_mode=1` says the Pin is pointed at SOME server; it
     // does not say it is pointed at this one. Reporting done on that alone told
     // a newcomer the step was finished while their captures went to an address
     // they may not control — the worst thing a setup flow can get wrong.

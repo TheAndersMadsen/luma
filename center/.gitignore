@@ -15,6 +15,6 @@ next-env.d.ts
 # The wearer's channel keys, plus the `<file>.<pid>.tmp` sibling the store
 # renames over them so a replacement is atomic. The glob covers both: a
 # temporary left behind by a crash is still wearer key material.
-.carry-channel-key.json*
+.cosmos-channel-key.json*
 .cosmos-channel-key.json*
 .gstack/

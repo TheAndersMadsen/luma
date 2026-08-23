@@ -446,7 +446,7 @@ async fn the_full_ceremony_completes_against_a_running_deployment() {
     // enroll but cannot call normal APIs; the newly issued DeviceUser key can
     // call APIs but cannot return to onboarding.
     let api_authority =
-        var("COSMOS_LIVE_API_AUTHORITY").unwrap_or_else(|| "api.carry.humane.cloud".to_owned());
+        var("COSMOS_LIVE_API_AUTHORITY").unwrap_or_else(|| "api.cosmos.humane.cloud".to_owned());
     let attestation_on_api = mtls_endpoint(
         &endpoint,
         &api_authority,

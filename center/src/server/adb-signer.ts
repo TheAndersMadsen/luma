@@ -8,7 +8,7 @@
  * browser at `install/device/adbAuth.ts`.
  *
  * Center cannot: `connect-src 'self'` in `next.config.mjs` is what keeps browser
- * JavaScript on the origin that holds the `carry_tokens` session cookie from
+ * JavaScript on the origin that holds the `cosmos_tokens` session cookie from
  * talking to third parties, and widening it to a third-party Worker to make one
  * call would weaken every page on the origin. So the call moves server-side and
  * the browser talks to `/api/pin/adb/sign`, same-origin. The CSP is untouched.

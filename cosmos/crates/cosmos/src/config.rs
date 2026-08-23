@@ -64,7 +64,7 @@ impl Config {
             workload,
             environment,
             instance,
-            get(values, "COSMOS_TRUST_DOMAIN", "carry.local"),
+            get(values, "COSMOS_TRUST_DOMAIN", "cosmos.local"),
         )?;
 
         let grpc_bind: SocketAddr = parse(values, "COSMOS_GRPC_BIND", "127.0.0.1:50051")?;
@@ -291,7 +291,7 @@ impl EdgeAuthentication {
 }
 
 /// Header the edge uses to prove a request passed through it.
-pub const EDGE_TOKEN_HEADER: &str = "x-carry-edge-token";
+pub const EDGE_TOKEN_HEADER: &str = "x-cosmos-edge-token";
 
 /// The header the edge injects the verified client certificate in, and the
 /// default this deployment reads the principal from. Named here so the HTTP

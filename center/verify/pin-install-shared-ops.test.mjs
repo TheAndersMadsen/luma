@@ -393,7 +393,7 @@ describe("verifyInstalledManagedState", () => {
         deviceShell(),
         inPlacePolicy({
           retainedInstaller: {
-            versionName: "carry-2026.08.07",
+            versionName: "cosmos-2026.08.07",
             signerIdentity: DEVICE_SIGNER_IDENTITY,
           },
         }),

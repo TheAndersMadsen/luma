@@ -71,7 +71,7 @@ export class ChannelKeyUnavailableError extends Error {
  *
  * ONE file, holding a map from kid to key — not one file per wearer. The path is
  * the only one the deployment declares (`COSMOS_CHANNEL_KEY_FILE`, with the
- * legacy `CARRY_CHANNEL_KEY_FILE` accepted as an exact alias), and the only one
+ * legacy `COSMOS_CHANNEL_KEY_FILE` accepted as an exact alias), and the only one
  * the restore/backup contract knows. Both local default names and their
  * transient siblings are covered by `.gitignore` and `.dockerignore`.
  * (`writeStore` uses `<file>.<pid>.tmp` so replacement can be atomic.)
@@ -82,17 +82,17 @@ export class ChannelKeyUnavailableError extends Error {
  */
 export function channelKeyFile(): string {
   const cosmos = nonBlankEnvironmentPath(process.env.COSMOS_CHANNEL_KEY_FILE);
-  const legacyAlias = nonBlankEnvironmentPath(process.env.CARRY_CHANNEL_KEY_FILE);
+  const legacyAlias = nonBlankEnvironmentPath(process.env.COSMOS_CHANNEL_KEY_FILE);
   if (cosmos && legacyAlias && cosmos !== legacyAlias) {
     throw new ChannelKeyUnavailableError(
-      "COSMOS_CHANNEL_KEY_FILE and CARRY_CHANNEL_KEY_FILE disagree; refusing to choose a channel-key store.",
+      "COSMOS_CHANNEL_KEY_FILE and COSMOS_CHANNEL_KEY_FILE disagree; refusing to choose a channel-key store.",
     );
   }
   if (cosmos) return cosmos;
   if (legacyAlias) return legacyAlias;
 
   const cosmosDefault = path.join(process.cwd(), ".cosmos-channel-key.json");
-  const legacyDefault = path.join(process.cwd(), ".carry-channel-key.json");
+  const legacyDefault = path.join(process.cwd(), ".cosmos-channel-key.json");
   // Reuse legacy key material in place; default selection must never rename or
   // rewrite the only copy.
   if (pathEntryExists(cosmosDefault)) return cosmosDefault;
@@ -123,7 +123,7 @@ interface KeyStore {
 
 const MAX_STORE_BYTES = 16_384;
 const MAX_KID_BYTES = 1_024;
-// A 16 KiB document cannot safely carry thousands of entries. Keep the logical
+// A 16 KiB document cannot safely hold thousands of entries. Keep the logical
 // cardinality below the byte ceiling so an operator sees one honest bound rather
 // than a nominal 4,096-entry promise that the serializer can never satisfy.
 const MAX_MAPPED_KEYS = 256;

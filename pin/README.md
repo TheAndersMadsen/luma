@@ -63,13 +63,13 @@ operator-supplied signing material for release builds.
 Cosmos is the logical product name, but an APK keep-data replacement must keep
 the identifiers already stored on the Pin. The physical contract remains:
 
-- Settings.Global keys use the `penumbra_carry_*` namespace.
-- AndroidKeyStore uses `penumbra_carry_device_attestation_v1`.
-- the identity provider authority is `com.penumbraos.server.carryidentity`.
+- Settings.Global keys use the `penumbra_cosmos_*` namespace.
+- AndroidKeyStore uses `penumbra_cosmos_device_attestation_v1`.
+- the identity provider authority is `com.penumbraos.server.cosmosidentity`.
 - API, onboarding, and connectivity wire authorities remain under
-  `*.carry.humane.cloud`.
+  `*.cosmos.humane.cloud`.
 - the pinned public root has subject and issuer
-  `O=humane-carry-clone, CN=Carry Clone Root EC 1`; its DER SHA-256 fingerprint
+  `O=humane-cosmos-clone, CN=Cosmos Clone Root EC 1`; its DER SHA-256 fingerprint
   is `7F:82:FB:F9:4A:37:03:79:ED:23:8F:B0:C9:D2:E2:D1:33:16:D6:71:97:FA:BA:29:48:C0:E3:D9:2A:C3:45:8B`.
 
 Those spellings are compatibility ABI, not stale implementation names. An

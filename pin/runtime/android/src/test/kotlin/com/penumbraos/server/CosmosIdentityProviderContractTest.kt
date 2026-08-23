@@ -18,11 +18,11 @@ class CosmosIdentityProviderContractTest {
     @Test
     fun logicalRenameKeepsTheDeployedContentProviderAuthority() {
         assertEquals(
-            "com.penumbraos.server.carryidentity",
+            "com.penumbraos.server.cosmosidentity",
             CosmosIdentityProvider.AUTHORITY,
         )
         assertEquals(
-            "penumbra_carry_device_attestation_v1",
+            "penumbra_cosmos_device_attestation_v1",
             CosmosIdentityProvider.KEY_ALIAS,
         )
     }

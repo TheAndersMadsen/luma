@@ -191,7 +191,7 @@ test("accepted principals keep the legacy wrapping kid and persist in the exact 
   // Each principal is imported once before and once after the simulated
   // restart; all four issuances must stay readable by a rollback backend.
   assert.equal(wrappingKids.length, 4);
-  assert.deepEqual([...new Set(wrappingKids)], ["carry-clone/wrapping/rsa-oaep"]);
+  assert.deepEqual([...new Set(wrappingKids)], ["cosmos-clone/wrapping/rsa-oaep"]);
 });
 
 test("invalid current or legacy principals perform no RPC and create no store", async (t) => {

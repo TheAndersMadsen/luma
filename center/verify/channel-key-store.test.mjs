@@ -54,14 +54,14 @@ async function withStore(context, contents) {
   const directory = await mkdtemp(path.join(tmpdir(), "revival-channel-key-"));
   const file = path.join(directory, "channel-key.json");
   const previous = process.env.COSMOS_CHANNEL_KEY_FILE;
-  const previousLegacyAlias = process.env.CARRY_CHANNEL_KEY_FILE;
-  delete process.env.CARRY_CHANNEL_KEY_FILE;
+  const previousLegacyAlias = process.env.COSMOS_CHANNEL_KEY_FILE;
+  delete process.env.COSMOS_CHANNEL_KEY_FILE;
   process.env.COSMOS_CHANNEL_KEY_FILE = file;
   context.after(async () => {
     if (previous === undefined) delete process.env.COSMOS_CHANNEL_KEY_FILE;
     else process.env.COSMOS_CHANNEL_KEY_FILE = previous;
-    if (previousLegacyAlias === undefined) delete process.env.CARRY_CHANNEL_KEY_FILE;
-    else process.env.CARRY_CHANNEL_KEY_FILE = previousLegacyAlias;
+    if (previousLegacyAlias === undefined) delete process.env.COSMOS_CHANNEL_KEY_FILE;
+    else process.env.COSMOS_CHANNEL_KEY_FILE = previousLegacyAlias;
     await rm(directory, { recursive: true, force: true });
   });
   if (contents !== undefined) {
@@ -76,18 +76,18 @@ const read = async (file) => JSON.parse(await readFile(file, "utf8"));
 
 function preserveChannelFileEnvironment(context) {
   const cosmos = process.env.COSMOS_CHANNEL_KEY_FILE;
-  const legacyAlias = process.env.CARRY_CHANNEL_KEY_FILE;
+  const legacyAlias = process.env.COSMOS_CHANNEL_KEY_FILE;
   context.after(() => {
     if (cosmos === undefined) delete process.env.COSMOS_CHANNEL_KEY_FILE;
     else process.env.COSMOS_CHANNEL_KEY_FILE = cosmos;
-    if (legacyAlias === undefined) delete process.env.CARRY_CHANNEL_KEY_FILE;
-    else process.env.CARRY_CHANNEL_KEY_FILE = legacyAlias;
+    if (legacyAlias === undefined) delete process.env.COSMOS_CHANNEL_KEY_FILE;
+    else process.env.COSMOS_CHANNEL_KEY_FILE = legacyAlias;
   });
 }
 
 async function withDefaultStoreDirectory(context) {
   preserveChannelFileEnvironment(context);
-  delete process.env.CARRY_CHANNEL_KEY_FILE;
+  delete process.env.COSMOS_CHANNEL_KEY_FILE;
   delete process.env.COSMOS_CHANNEL_KEY_FILE;
   const directory = await mkdtemp(path.join(tmpdir(), "revival-channel-default-"));
   const previousWorkingDirectory = process.cwd();
@@ -99,7 +99,7 @@ async function withDefaultStoreDirectory(context) {
   return {
     directory,
     cosmos: path.join(directory, ".cosmos-channel-key.json"),
-    legacy: path.join(directory, ".carry-channel-key.json"),
+    legacy: path.join(directory, ".cosmos-channel-key.json"),
   };
 }
 
@@ -111,7 +111,7 @@ test("a direct upgrade reads the pre-rename channel-key path without a Cosmos va
   await writeFile(file, JSON.stringify({ kid: LEGACY_KID, key: LEGACY_KEY }), { mode: 0o600 });
 
   delete process.env.COSMOS_CHANNEL_KEY_FILE;
-  process.env.CARRY_CHANNEL_KEY_FILE = file;
+  process.env.COSMOS_CHANNEL_KEY_FILE = file;
 
   assert.equal(channelKeyFile(), file);
   assert.equal(storedKeysFor(DERIVED_KID)[0]?.key.toString("base64"), LEGACY_KEY);
@@ -119,18 +119,18 @@ test("a direct upgrade reads the pre-rename channel-key path without a Cosmos va
 
 test("matching legacy and Cosmos channel-key aliases retain the production path", (t) => {
   preserveChannelFileEnvironment(t);
-  process.env.CARRY_CHANNEL_KEY_FILE = "/data/channel-key.json";
+  process.env.COSMOS_CHANNEL_KEY_FILE = "/data/channel-key.json";
   process.env.COSMOS_CHANNEL_KEY_FILE = "/data/channel-key.json";
   assert.equal(channelKeyFile(), "/data/channel-key.json");
 });
 
 test("conflicting channel-key aliases fail closed before reading either store", (t) => {
   preserveChannelFileEnvironment(t);
-  process.env.CARRY_CHANNEL_KEY_FILE = "/data/legacy-channel-key.json";
+  process.env.COSMOS_CHANNEL_KEY_FILE = "/data/legacy-channel-key.json";
   process.env.COSMOS_CHANNEL_KEY_FILE = "/data/new-channel-key.json";
   assert.throws(
     () => channelKeyFile(),
-    /CARRY_CHANNEL_KEY_FILE disagree/u,
+    /COSMOS_CHANNEL_KEY_FILE disagree/u,
   );
 });
 
@@ -174,7 +174,7 @@ test("Git and Docker ignore both local channel-key filenames and their temporary
   for (const name of [".gitignore", ".dockerignore"]) {
     const lines = new Set((await readFile(new URL(name, center), "utf8")).split(/\r?\n/u));
     assert.equal(
-      lines.has(".carry-channel-key.json*"),
+      lines.has(".cosmos-channel-key.json*"),
       true,
       `${name} exposes legacy key files`,
     );
@@ -187,7 +187,7 @@ test("Git and Docker ignore both local channel-key filenames and their temporary
 });
 
 test("a wearer keeps their key when the kid we derive for them changes shape", async (t) => {
-  // Exactly what /home/anders/carry-center-data/channel-key.json holds today:
+  // Exactly what /home/anders/cosmos-center-data/channel-key.json holds today:
   // the pre-fix COSMOS_PRINCIPAL kid, no map.
   await withStore(t, { kid: LEGACY_KID, key: LEGACY_KEY });
 

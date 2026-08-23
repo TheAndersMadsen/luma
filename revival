@@ -9,9 +9,7 @@ if (nodeMajor !== 22 || nodeMinor < 14) {
   process.exit(126);
 }
 
-// This file is intentionally a thin dispatcher. Artifact provenance, clean
-// source checks, production compatibility, and device safety belong to the
-// release/deploy/install commands that enforce those boundaries.
+// This file is intentionally a thin dispatcher.
 const rawArgs = process.argv.slice(2);
 const { requestedHelp, renderHelp, versionInfo } = require('./platform/cli/command-spec');
 
@@ -42,20 +40,11 @@ if (rawArgs[0] === '--version' || rawArgs[0] === 'version') {
 
 const { PKI_TOOL, fail, initialize, resolveTool, run } = require('./platform/cli/context');
 const { developmentCommand, localDoctor, stack } = require('./platform/cli/stack');
-const { buildRelease, verifyRelease } = require('./platform/cli/releases');
 const { releaseCheck } = require('./platform/cli/gates');
 const { checkCommand } = require('./platform/cli/checks');
 const {
-  adoptProtectedConfiguration,
-  backupProduction,
-  canaryProduction,
   deployProduction,
-  registerLegacyPredecessor,
-  deploymentScript,
   productionDoctor,
-  pruneState,
-  releaseCandidate,
-  rollbackProduction,
 } = require('./platform/cli/production');
 const { pinCommand } = require('./platform/cli/pin');
 const { setupCommand } = require('./platform/cli/setup');
@@ -92,33 +81,8 @@ runTimedBoundary(() => {
   } else if (command === 'config') {
     if (['path', 'get', 'set', 'check', 'list', 'template'].includes(args[0])) configCommand(args);
     else stack('config', args);
-  } else if (command === 'release') {
-    const subcommand = args.shift();
-    if (subcommand === 'build') buildRelease(args);
-    else if (subcommand === 'verify') verifyRelease(args);
-    else if (subcommand === 'candidate') releaseCandidate(args);
-    else if (subcommand === 'check' && (args.length === 0 || (args.length === 1 && args[0] === '--source'))) {
-      releaseCheck({ source: args[0] === '--source' });
-    } else {
-      fail('usage: ./revival release check [--source] | build ... | verify ... | candidate prepare|verify|inspect ...');
-    }
   } else if (command === 'deploy') {
-    const target = args.shift();
-    if (target === 'production') deployProduction(args);
-    else if (target === 'legacy-predecessor' || target === 'carry-baseline') registerLegacyPredecessor(args);
-    else fail('usage: ./revival deploy production|legacy-predecessor [--confirm] [--dry-run]');
-  } else if (command === 'backup') {
-    backupProduction(args);
-  } else if (command === 'canary') {
-    canaryProduction(args);
-  } else if (command === 'drift') {
-    deploymentScript('drift.sh', args);
-  } else if (command === 'adopt-config') {
-    adoptProtectedConfiguration(args);
-  } else if (command === 'prune-state') {
-    pruneState(args);
-  } else if (command === 'rollback') {
-    rollbackProduction(args);
+    deployProduction(args);
   } else if (command === 'pin') {
     pinCommand(args);
   } else if (command === 'pki') {

@@ -149,7 +149,7 @@ const DEFAULT_DISPLAY_NAME: &str = "Cosmos User";
 // Deployed password files were derived from this exact legacy setup seed.
 // The product rename must never mint a second OPAQUE server setup over the same
 // database: that would make every existing password file unverifiable.
-const DEFAULT_OPAQUE_SEED: [u8; 32] = *b"carry-clone-opaque-setup-seed-01";
+const DEFAULT_OPAQUE_SEED: [u8; 32] = *b"cosmos-clone-opaque-setup-seed-01";
 
 /// The clone's single enrolled user id — a stable, deterministic UUID.
 ///
@@ -181,7 +181,7 @@ pub const DUC_CA_KEY_ENV: &str = "COSMOS_DUC_CA_KEY";
 /// The legacy-qualified name is a deployed mixed-version contract. A logical
 /// product rename must not make an older AI-bus unable to observe readiness
 /// while a rollback-compatible provisioning workload is running.
-pub const DUC_CA_HEALTH_SERVICE: &str = "carry.enrollment.DeviceUserCa";
+pub const DUC_CA_HEALTH_SERVICE: &str = "cosmos.enrollment.DeviceUserCa";
 
 /// Whether this process can issue a DeviceUser certificate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -765,7 +765,7 @@ impl EnrollmentStore for PostgresEnrollmentStore {
         // Insert-if-absent then read back, so two replicas racing on a fresh
         // database converge on one setup instead of overwriting each other.
         sqlx::query(
-            "INSERT INTO carry_opaque_setup (id, setup) VALUES ($1, $2) \
+            "INSERT INTO cosmos_opaque_setup (id, setup) VALUES ($1, $2) \
              ON CONFLICT (id) DO NOTHING",
         )
         .bind(SERVER_SETUP_ROW)
@@ -777,7 +777,7 @@ impl EnrollmentStore for PostgresEnrollmentStore {
             EnrollmentStoreError
         })?;
 
-        let row: (Vec<u8>,) = sqlx::query_as("SELECT setup FROM carry_opaque_setup WHERE id = $1")
+        let row: (Vec<u8>,) = sqlx::query_as("SELECT setup FROM cosmos_opaque_setup WHERE id = $1")
             .bind(SERVER_SETUP_ROW)
             .fetch_one(&self.pool)
             .await
@@ -795,7 +795,7 @@ impl EnrollmentStore for PostgresEnrollmentStore {
     ) -> Stored<Vec<u8>> {
         self.ready().await?;
         sqlx::query(
-            "INSERT INTO carry_opaque_password_file (credential_id, record) VALUES ($1, $2) \
+            "INSERT INTO cosmos_opaque_password_file (credential_id, record) VALUES ($1, $2) \
              ON CONFLICT (credential_id) DO NOTHING",
         )
         .bind(credential_id)
@@ -808,7 +808,7 @@ impl EnrollmentStore for PostgresEnrollmentStore {
         })?;
 
         let row: (Vec<u8>,) = sqlx::query_as(
-            "SELECT record FROM carry_opaque_password_file WHERE credential_id = $1",
+            "SELECT record FROM cosmos_opaque_password_file WHERE credential_id = $1",
         )
         .bind(credential_id)
         .fetch_one(&self.pool)
@@ -823,7 +823,7 @@ impl EnrollmentStore for PostgresEnrollmentStore {
     async fn put_login(&self, principal: &str, state: &[u8]) -> Stored<()> {
         self.ready().await?;
         sqlx::query(
-            "INSERT INTO carry_opaque_login (principal, state, written_epoch) VALUES ($1, $2, $3) \
+            "INSERT INTO cosmos_opaque_login (principal, state, written_epoch) VALUES ($1, $2, $3) \
              ON CONFLICT (principal) DO UPDATE SET state = EXCLUDED.state, \
              written_epoch = EXCLUDED.written_epoch",
         )
@@ -844,7 +844,7 @@ impl EnrollmentStore for PostgresEnrollmentStore {
         // DELETE ... RETURNING is the atomic pop: two concurrent finishes cannot
         // both come away with the state, so a KE3 cannot be replayed.
         let row: Option<(Vec<u8>, i64)> = sqlx::query_as(
-            "DELETE FROM carry_opaque_login WHERE principal = $1 RETURNING state, written_epoch",
+            "DELETE FROM cosmos_opaque_login WHERE principal = $1 RETURNING state, written_epoch",
         )
         .bind(principal)
         .fetch_optional(&self.pool)
@@ -856,7 +856,7 @@ impl EnrollmentStore for PostgresEnrollmentStore {
 
         // Opportunistic pruning: abandoned ceremonies would otherwise accumulate
         // forever, and an expired row is not a live login anyway.
-        let _ = sqlx::query("DELETE FROM carry_opaque_login WHERE written_epoch < $1")
+        let _ = sqlx::query("DELETE FROM cosmos_opaque_login WHERE written_epoch < $1")
             .bind(now_epoch_seconds() - LOGIN_STATE_TTL_SECONDS)
             .execute(&self.pool)
             .await;
@@ -869,7 +869,7 @@ impl EnrollmentStore for PostgresEnrollmentStore {
     async fn put_session(&self, principal: &str, session_key: &[u8; 32]) -> Stored<()> {
         self.ready().await?;
         sqlx::query(
-            "INSERT INTO carry_opaque_session (principal, session_key, written_epoch) \
+            "INSERT INTO cosmos_opaque_session (principal, session_key, written_epoch) \
              VALUES ($1, $2, $3) ON CONFLICT (principal) DO UPDATE SET \
              session_key = EXCLUDED.session_key, written_epoch = EXCLUDED.written_epoch",
         )
@@ -887,13 +887,13 @@ impl EnrollmentStore for PostgresEnrollmentStore {
 
     async fn session(&self, principal: &str) -> Stored<Option<[u8; 32]>> {
         self.ready().await?;
-        let _ = sqlx::query("DELETE FROM carry_opaque_session WHERE written_epoch < $1")
+        let _ = sqlx::query("DELETE FROM cosmos_opaque_session WHERE written_epoch < $1")
             .bind(now_epoch_seconds() - SESSION_TTL_SECONDS)
             .execute(&self.pool)
             .await;
 
         let row: Option<(Vec<u8>, i64)> = sqlx::query_as(
-            "SELECT session_key, written_epoch FROM carry_opaque_session WHERE principal = $1",
+            "SELECT session_key, written_epoch FROM cosmos_opaque_session WHERE principal = $1",
         )
         .bind(principal)
         .fetch_optional(&self.pool)
@@ -928,13 +928,13 @@ impl EnrollmentStore for PostgresEnrollmentStore {
         // below the ceiling: the upsert serializes on the primary key and each
         // caller is RETURNED its own post-increment value.
         let row: (i32,) = sqlx::query_as(
-            "INSERT INTO carry_opaque_login_attempt (principal, attempts, window_start_epoch) \
+            "INSERT INTO cosmos_opaque_login_attempt (principal, attempts, window_start_epoch) \
              VALUES ($1, 1, $2) \
              ON CONFLICT (principal) DO UPDATE SET \
-             attempts = CASE WHEN carry_opaque_login_attempt.window_start_epoch < $3 \
-                             THEN 1 ELSE carry_opaque_login_attempt.attempts + 1 END, \
-             window_start_epoch = CASE WHEN carry_opaque_login_attempt.window_start_epoch < $3 \
-                             THEN $2 ELSE carry_opaque_login_attempt.window_start_epoch END \
+             attempts = CASE WHEN cosmos_opaque_login_attempt.window_start_epoch < $3 \
+                             THEN 1 ELSE cosmos_opaque_login_attempt.attempts + 1 END, \
+             window_start_epoch = CASE WHEN cosmos_opaque_login_attempt.window_start_epoch < $3 \
+                             THEN $2 ELSE cosmos_opaque_login_attempt.window_start_epoch END \
              RETURNING attempts",
         )
         .bind(principal)
@@ -951,7 +951,7 @@ impl EnrollmentStore for PostgresEnrollmentStore {
 
         // Opportunistic pruning of windows that have fully elapsed, exactly like
         // `take_login`. An expired row is not a live lockout.
-        let _ = sqlx::query("DELETE FROM carry_opaque_login_attempt WHERE window_start_epoch < $1")
+        let _ = sqlx::query("DELETE FROM cosmos_opaque_login_attempt WHERE window_start_epoch < $1")
             .bind(window_opened_after)
             .execute(&self.pool)
             .await;
@@ -961,7 +961,7 @@ impl EnrollmentStore for PostgresEnrollmentStore {
 
     async fn clear_login_attempts(&self, principal: &str) -> Stored<()> {
         self.ready().await?;
-        sqlx::query("DELETE FROM carry_opaque_login_attempt WHERE principal = $1")
+        sqlx::query("DELETE FROM cosmos_opaque_login_attempt WHERE principal = $1")
             .bind(principal)
             .execute(&self.pool)
             .await
@@ -975,7 +975,7 @@ impl EnrollmentStore for PostgresEnrollmentStore {
     async fn put_device_account(&self, device_id: &str, account_sub: &str) -> Stored<()> {
         self.ready().await?;
         sqlx::query(
-            "INSERT INTO carry_device_account (device_id, account_sub, paired_at_epoch) \
+            "INSERT INTO cosmos_device_account (device_id, account_sub, paired_at_epoch) \
              VALUES ($1, $2, $3) ON CONFLICT (device_id) DO UPDATE SET \
              account_sub = EXCLUDED.account_sub, paired_at_epoch = EXCLUDED.paired_at_epoch",
         )
@@ -994,7 +994,7 @@ impl EnrollmentStore for PostgresEnrollmentStore {
     async fn device_account(&self, device_id: &str) -> Stored<Option<String>> {
         self.ready().await?;
         let row: Option<(String,)> =
-            sqlx::query_as("SELECT account_sub FROM carry_device_account WHERE device_id = $1")
+            sqlx::query_as("SELECT account_sub FROM cosmos_device_account WHERE device_id = $1")
                 .bind(device_id)
                 .fetch_optional(&self.pool)
                 .await
@@ -1012,7 +1012,7 @@ impl EnrollmentStore for PostgresEnrollmentStore {
     ) -> Stored<bool> {
         self.ready().await?;
         let result = sqlx::query(
-            "DELETE FROM carry_device_account WHERE device_id = $1 AND account_sub = $2",
+            "DELETE FROM cosmos_device_account WHERE device_id = $1 AND account_sub = $2",
         )
         .bind(device_id)
         .bind(expected_account_sub)
@@ -1028,7 +1028,7 @@ impl EnrollmentStore for PostgresEnrollmentStore {
     async fn device_accounts(&self) -> Stored<Vec<DeviceAccountPairing>> {
         self.ready().await?;
         let rows: Vec<(String, String, i64)> = sqlx::query_as(
-            "SELECT device_id, account_sub, paired_at_epoch FROM carry_device_account \
+            "SELECT device_id, account_sub, paired_at_epoch FROM cosmos_device_account \
              ORDER BY paired_at_epoch, device_id",
         )
         .fetch_all(&self.pool)
@@ -1670,7 +1670,7 @@ impl Enrollment {
     /// so the first replica fixes it and every later one reads the same bytes. Only
     /// the credential id, and therefore the fabricated password file, varies per
     /// account. Both the setup and each account's record are install-if-absent in
-    /// the store, so rotating a pincode means deleting the `carry_opaque_password_file`
+    /// the store, so rotating a pincode means deleting the `cosmos_opaque_password_file`
     /// row, not editing the environment; the stored record wins, because silently
     /// replacing it would invalidate the credential a wearer already enrolled with.
     async fn credential(&self, account: &str) -> Stored<Arc<Credential>> {
@@ -2234,7 +2234,7 @@ pub(crate) mod tests {
         ];
         let mut distinguished_name = rcgen::DistinguishedName::new();
         // Retained fixture subject: changing certificate bytes is outside the Cosmos naming migration.
-        distinguished_name.push(rcgen::DnType::CommonName, "Carry Clone DeviceUser CA");
+        distinguished_name.push(rcgen::DnType::CommonName, "Cosmos Clone DeviceUser CA");
         distinguished_name.push(rcgen::DnType::OrganizationName, "Humane");
         distinguished_name.push(rcgen::DnType::OrganizationalUnitName, "DeviceUser");
         params.distinguished_name = distinguished_name;
@@ -2860,7 +2860,7 @@ pub(crate) mod tests {
         params.key_usages = vec![rcgen::KeyUsagePurpose::KeyCertSign];
         let mut distinguished_name = rcgen::DistinguishedName::new();
         // Retained fixture subject: changing certificate bytes is outside the Cosmos naming migration.
-        distinguished_name.push(rcgen::DnType::CommonName, "Carry Clone DeviceUser CA");
+        distinguished_name.push(rcgen::DnType::CommonName, "Cosmos Clone DeviceUser CA");
         params.distinguished_name = distinguished_name;
         let certificate = params.self_signed(&key).expect("self-signed");
         let cert_pem = certificate.pem();
@@ -3437,6 +3437,6 @@ pub(crate) mod tests {
 
     #[test]
     fn opaque_fallback_seed_is_the_deployed_legacy_compatibility_value() {
-        assert_eq!(DEFAULT_OPAQUE_SEED, *b"carry-clone-opaque-setup-seed-01");
+        assert_eq!(DEFAULT_OPAQUE_SEED, *b"cosmos-clone-opaque-setup-seed-01");
     }
 }

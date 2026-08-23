@@ -114,7 +114,7 @@ async function channelPrincipal(): Promise<string | null> {
     // Not a request scope — `cookies()` throws there. The static identity below
     // is the only one that exists outside one anyway.
   }
-  // Parse outside the request-scope catch. A validly signed session carrying an
+  // Parse outside the request-scope catch. A validly signed session containing an
   // invalid subject is an invalid identity, not permission to fall through to a
   // static COSMOS_PRINCIPAL and act as somebody else.
   if (session?.sub) {
@@ -218,7 +218,7 @@ async function establish(principal: string): Promise<ChannelKey> {
           // The backend key directory persists this identifier and rollback
           // releases recognize the legacy spelling. It is a wire key, not a
           // logical implementation name.
-          wrappingKid: Buffer.from("carry-clone/wrapping/rsa-oaep", "utf8"),
+          wrappingKid: Buffer.from("cosmos-clone/wrapping/rsa-oaep", "utf8"),
           keydata: wrapChannelKey(der, key),
         },
       },

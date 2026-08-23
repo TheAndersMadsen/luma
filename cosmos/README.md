@@ -37,7 +37,7 @@ Compose.
 
 `COSMOS_*` remains the logical source/configuration namespace. The development
 Compose model may use `/var/lib/cosmos`, but production deliberately overrides
-the physical state target to the legacy `/var/lib/carry` path and reuses the
+the physical state target to the legacy `/var/lib/cosmos` path and reuses the
 exact deployed legacy volumes, network, database identities, and Center
 directory. Those are
 persistent ABI, not product names; changing them requires a separately reviewed,

@@ -23,10 +23,10 @@ export type InPlacePackageRole = (typeof IN_PLACE_PACKAGE_ROLES)[number];
  * the one device this profile exists to describe. Re-read from the device on
  * 2026-08-11 (serial 1H4MPA42230112) with `dumpsys package <pkg>`:
  *
- *   com.penumbraos.systeminjector   versionName=carry-2026.08.07    versionCode=20260807
- *   com.penumbraos.hook             versionName=carry-2026.08.07    versionCode=20260807
- *   com.penumbraos.server           versionName=carry-2026.08.08.2  versionCode=2026080802
- *   com.penumbraos.hook.injector    versionName=carry-2026.08.07    versionCode=20260807
+ *   com.penumbraos.systeminjector   versionName=cosmos-2026.08.07    versionCode=20260807
+ *   com.penumbraos.hook             versionName=cosmos-2026.08.07    versionCode=20260807
+ *   com.penumbraos.server           versionName=cosmos-2026.08.08.2  versionCode=2026080802
+ *   com.penumbraos.hook.injector    versionName=cosmos-2026.08.07    versionCode=20260807
  *
  * Note these names do NOT parse as release versions (`parseInstallVersion`
  * wants YYYY-MM-DD.N): the legacy builds predate that scheme, which is exactly
@@ -35,10 +35,10 @@ export type InPlacePackageRole = (typeof IN_PLACE_PACKAGE_ROLES)[number];
 export const LEGACY_MIGRATION_PROFILE = Object.freeze({
   signerIdentity: "dd07f452",
   versions: Object.freeze({
-    installer: "carry-2026.08.07",
-    hook: "carry-2026.08.07",
-    server: "carry-2026.08.08.2",
-    injector: "carry-2026.08.07",
+    installer: "cosmos-2026.08.07",
+    hook: "cosmos-2026.08.07",
+    server: "cosmos-2026.08.08.2",
+    injector: "cosmos-2026.08.07",
   } satisfies Readonly<Record<ManagedPackageRole, string>>),
 });
 

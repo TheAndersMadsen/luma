@@ -141,7 +141,7 @@ pub(crate) fn principal_for(
     Ok(None)
 }
 
-const WEB_PROJECTION_TOKEN_HEADER: &str = "x-carry-web-projection-token";
+const WEB_PROJECTION_TOKEN_HEADER: &str = "x-cosmos-web-projection-token";
 
 fn valid_projection_token(headers: &axum::http::HeaderMap) -> bool {
     let Some(expected) = std::env::var("COSMOS_CENTER_PROJECTION_TOKEN")
@@ -940,7 +940,7 @@ async fn get_thumbnail(
         [
             ("content-type", "image/jpeg"),
             ("cache-control", "private, no-store"),
-            ("x-carry-projection", "opened"),
+            ("x-cosmos-projection", "opened"),
         ],
         jpeg,
     )
@@ -1032,7 +1032,7 @@ async fn get_file(
         [
             ("content-type", "image/jpeg"),
             ("cache-control", "private, no-store"),
-            ("x-carry-projection", "opened"),
+            ("x-cosmos-projection", "opened"),
         ],
         jpeg,
     )

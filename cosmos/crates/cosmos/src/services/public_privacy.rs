@@ -294,11 +294,11 @@ impl ReestablishQueue {
 //
 // Making the comparison fire is necessary but not sufficient, because on this
 // deployment the WEARER'S OWN keys do not all name the wearer's current user id.
-// Read-only off the live `carry_channel_key` table on 2026-08-10: 377 rows — 21
+// Read-only off the live `cosmos_channel_key` table on 2026-08-10: 377 rows — 21
 // krypton kids under the user id the clone's DeviceUser certificate names
 // (minted 2026-08-07/08), 3 with an empty `u=`, 1 Center kid, and 352 minted
 // between 2024-04 and 2025-02 under a RETIRED user id from the Humane-cloud era
-// that this server has no record of anywhere else (`carry_device_account` knows
+// that this server has no record of anywhere else (`cosmos_device_account` knows
 // only the current one). A pure caller-vs-kid comparison classifies those 352 as
 // foreign, and `refuse_foreign_kids` is whole-RPC: one legacy kid in a batch
 // refuses the batch. On `ImportKeys` that strands the key the device just
@@ -834,7 +834,7 @@ impl PublicPrivacyService for PublicPrivacy {
         // Publish the server's RSA-OAEP wrapping public key (SPKI DER) so the
         // device can wrap its ephemeral AES-128 channel keys to it.
         let clear_key = keypb::ClearKey {
-            kid: b"carry-clone/wrapping/rsa-oaep".to_vec(),
+            kid: b"cosmos-clone/wrapping/rsa-oaep".to_vec(),
             level: keypb::Level::Unspecified as i32,
             algo: keypb::Algo::RsaOaep as i32,
             ops: vec![keypb::Op::Wrap as i32, keypb::Op::Encrypt as i32],

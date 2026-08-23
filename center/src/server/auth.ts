@@ -24,7 +24,7 @@ const KEYCLOAK_BASE_URL = (process.env.KEYCLOAK_BASE_URL ?? "").replace(/\/$/, "
 const SESSION_SECRET = process.env.AUTH_SESSION_SECRET ?? "";
 // Keycloak role names are persisted outside this repository. Keep issuing and
 // recognizing the deployed legacy role so a rollback sees the same operator.
-const OPERATOR_ROLE = "carry-operator";
+const OPERATOR_ROLE = "cosmos-operator";
 const OPERATOR_EMAILS = new Set(
   (process.env.COSMOS_OPERATOR_EMAILS ?? "")
     .split(",")
@@ -34,7 +34,7 @@ const OPERATOR_EMAILS = new Set(
 
 // Browser cookie names are a deployed storage ABI. Renaming them signs the
 // wearer out and strands the encrypted bearer set during a keep-data upgrade.
-export const SESSION_COOKIE = "carry_session";
+export const SESSION_COOKIE = "cosmos_session";
 export const SESSION_TTL_SECONDS = 60 * 60 * 12;
 export const AUTH_ENABLED = KEYCLOAK_BASE_URL.length > 0;
 
@@ -258,7 +258,7 @@ function decodeJwtClaims(jwt: string | undefined): Record<string, unknown> {
 // only the Node BFF does — so a live access token never rides in a
 // merely-signed payload.
 
-export const TOKENS_COOKIE = "carry_tokens";
+export const TOKENS_COOKIE = "cosmos_tokens";
 
 // Chromium rejects a Set-Cookie header once the name, encrypted value, and
 // attributes cross the per-cookie limit (roughly 4 KiB).  A Keycloak

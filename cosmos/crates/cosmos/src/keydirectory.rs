@@ -209,14 +209,14 @@ impl KeyDirectory {
                 .execute(&mut *tx)
                 .await?;
             let (exists,) = sqlx::query_as::<_, (bool,)>(
-                "SELECT EXISTS (SELECT 1 FROM carry_channel_key WHERE kid = $1)",
+                "SELECT EXISTS (SELECT 1 FROM cosmos_channel_key WHERE kid = $1)",
             )
             .bind(kid)
             .fetch_one(&mut *tx)
             .await?;
             if !exists {
                 let (count,) =
-                    sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM carry_channel_key")
+                    sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM cosmos_channel_key")
                         .fetch_one(&mut *tx)
                         .await?;
                 if count >= MAX_DIRECTORY_KEYS as i64 {
@@ -224,7 +224,7 @@ impl KeyDirectory {
                 }
             }
             sqlx::query(
-                "INSERT INTO carry_channel_key (kid, key) VALUES ($1, $2)
+                "INSERT INTO cosmos_channel_key (kid, key) VALUES ($1, $2)
                  ON CONFLICT (kid) DO UPDATE SET key = EXCLUDED.key",
             )
             .bind(kid)
@@ -258,7 +258,7 @@ impl KeyDirectory {
             return Err(KeyDirectoryError::Injected("remove"));
         }
         let durable_removed = if let Some(pool) = &self.pool {
-            sqlx::query("DELETE FROM carry_channel_key WHERE kid = $1")
+            sqlx::query("DELETE FROM cosmos_channel_key WHERE kid = $1")
                 .bind(kid)
                 .execute(pool)
                 .await?
@@ -319,7 +319,7 @@ impl KeyDirectory {
                 .copied());
         };
         let row =
-            sqlx::query_as::<_, (Vec<u8>,)>("SELECT key FROM carry_channel_key WHERE kid = $1")
+            sqlx::query_as::<_, (Vec<u8>,)>("SELECT key FROM cosmos_channel_key WHERE kid = $1")
                 .bind(kid)
                 .fetch_optional(pool)
                 .await?;
@@ -349,7 +349,7 @@ impl KeyDirectory {
                 .is_empty());
         };
         let (exists,) =
-            sqlx::query_as::<_, (bool,)>("SELECT EXISTS (SELECT 1 FROM carry_channel_key LIMIT 1)")
+            sqlx::query_as::<_, (bool,)>("SELECT EXISTS (SELECT 1 FROM cosmos_channel_key LIMIT 1)")
                 .fetch_one(pool)
                 .await?;
         Ok(!exists)
@@ -944,8 +944,8 @@ mod tests {
         );
         let (constraints,) = sqlx::query_as::<_, (i64,)>(
             "SELECT COUNT(*) FROM pg_constraint
-             WHERE conname = 'carry_channel_key_shape'
-               AND conrelid = 'carry_channel_key'::regclass",
+             WHERE conname = 'cosmos_channel_key_shape'
+               AND conrelid = 'cosmos_channel_key'::regclass",
         )
         .fetch_one(directories[0].pool.as_ref().expect("postgres pool"))
         .await

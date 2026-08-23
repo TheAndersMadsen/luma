@@ -13,17 +13,17 @@ class ChannelFactoryBypassTest {
     @Test
     fun cloneAttestationAliasMatchesTheHostImportContract() {
         assertEquals(
-            "penumbra_carry_device_attestation_v1",
+            "penumbra_cosmos_device_attestation_v1",
             CosmosRemoteTransport.ATTESTATION_KEY_ALIAS,
         )
-        assertEquals("penumbra_carry_remote_mode", CosmosRemoteTransport.ENABLED_SETTING)
-        assertEquals("penumbra_carry_edge_ipv4", CosmosRemoteTransport.EDGE_IPV4_SETTING)
+        assertEquals("penumbra_cosmos_remote_mode", CosmosRemoteTransport.ENABLED_SETTING)
+        assertEquals("penumbra_cosmos_edge_ipv4", CosmosRemoteTransport.EDGE_IPV4_SETTING)
         assertEquals(
-            "penumbra_carry_attestation_bundle_b64",
+            "penumbra_cosmos_attestation_bundle_b64",
             CosmosRemoteTransport.ATTESTATION_BUNDLE_SETTING,
         )
         assertEquals(
-            "penumbra_carry_onboarding_pincode",
+            "penumbra_cosmos_onboarding_pincode",
             CosmosOnboardingAutomation.PINCODE_SETTING,
         )
     }
@@ -110,8 +110,8 @@ class ChannelFactoryBypassTest {
     @Test
     fun connectivityChecksUseOnlyExactCloneHosts() {
         for (host in listOf(
-            "connectivity-check.carry.humane.cloud",
-            "n.carry.humane.cloud",
+            "connectivity-check.cosmos.humane.cloud",
+            "n.cosmos.humane.cloud",
         )) {
             assertTrue(CosmosRemoteTransport.isAllowedNetworkHost(host))
             assertTrue(CosmosRemoteTransport.isAllowedNetworkHost("  ${host.uppercase()}  "))
@@ -120,9 +120,9 @@ class ChannelFactoryBypassTest {
         for (host in listOf(
             "connectivity-check.prod.humane.cloud",
             "n.prod.humane.cloud",
-            "connectivity-check.carry.humane.cloud.evil.example",
-            "n.carry.humane.cloud.evil.example",
-            "evil-connectivity-check.carry.humane.cloud",
+            "connectivity-check.cosmos.humane.cloud.evil.example",
+            "n.cosmos.humane.cloud.evil.example",
+            "evil-connectivity-check.cosmos.humane.cloud",
             "connectivity-check.cosmos.humane.cloud",
             "n.cosmos.humane.cloud",
             "evil.example",
@@ -137,8 +137,8 @@ class ChannelFactoryBypassTest {
     fun exactConnectivityHostsResolveToTheConfiguredOperatorAddress() {
         val configured = byteArrayOf(203.toByte(), 0, 113, 42)
         for (host in listOf(
-            "connectivity-check.carry.humane.cloud",
-            "n.carry.humane.cloud",
+            "connectivity-check.cosmos.humane.cloud",
+            "n.cosmos.humane.cloud",
         )) {
             val resolved = CosmosRemoteTransport.resolvedNetworkAddress(host, configured)
             assertEquals("203.0.113.42", resolved?.hostAddress)
@@ -147,7 +147,7 @@ class ChannelFactoryBypassTest {
 
         assertNull(
             CosmosRemoteTransport.resolvedNetworkAddress(
-                "n.carry.humane.cloud.evil.example",
+                "n.cosmos.humane.cloud.evil.example",
                 configured,
             ),
         )
@@ -185,13 +185,13 @@ class ChannelFactoryBypassTest {
 
     @Test
     fun legacyWireGatewaysAreExactAndTlsOnly() {
-        assertTrue(CosmosRemoteTransport.isAllowedGateway("api.carry.humane.cloud:443"))
-        assertTrue(CosmosRemoteTransport.isAllowedGateway("onboarding.carry.humane.cloud"))
+        assertTrue(CosmosRemoteTransport.isAllowedGateway("api.cosmos.humane.cloud:443"))
+        assertTrue(CosmosRemoteTransport.isAllowedGateway("onboarding.cosmos.humane.cloud"))
         assertFalse(CosmosRemoteTransport.isAllowedGateway("api.prod.humane.cloud:443"))
-        assertFalse(CosmosRemoteTransport.isAllowedGateway("location.carry.humane.cloud:443"))
-        assertFalse(CosmosRemoteTransport.isAllowedGateway("api.carry.humane.cloud:80"))
-        assertFalse(CosmosRemoteTransport.isAllowedGateway("api.carry.humane.cloud.evil:443"))
-        assertFalse(CosmosRemoteTransport.isAllowedGateway("https://api.carry.humane.cloud/path"))
+        assertFalse(CosmosRemoteTransport.isAllowedGateway("location.cosmos.humane.cloud:443"))
+        assertFalse(CosmosRemoteTransport.isAllowedGateway("api.cosmos.humane.cloud:80"))
+        assertFalse(CosmosRemoteTransport.isAllowedGateway("api.cosmos.humane.cloud.evil:443"))
+        assertFalse(CosmosRemoteTransport.isAllowedGateway("https://api.cosmos.humane.cloud/path"))
         assertFalse(CosmosRemoteTransport.isAllowedGateway("api.cosmos.humane.cloud:443"))
         assertFalse(CosmosRemoteTransport.isAllowedGateway("onboarding.cosmos.humane.cloud:443"))
     }
@@ -199,11 +199,11 @@ class ChannelFactoryBypassTest {
     @Test
     fun logicalCosmosTransportMapsOnlyToStableLegacyWireAuthorities() {
         assertEquals(
-            "api.carry.humane.cloud:443",
+            "api.cosmos.humane.cloud:443",
             CosmosRemoteTransport.redirectedGateway("api.prod.humane.cloud"),
         )
         assertEquals(
-            "onboarding.carry.humane.cloud:443",
+            "onboarding.cosmos.humane.cloud:443",
             CosmosRemoteTransport.redirectedGateway("onboarding.prod.humane.cloud:443"),
         )
         assertNull(CosmosRemoteTransport.redirectedGateway("location.prod.humane.cloud"))
@@ -214,14 +214,14 @@ class ChannelFactoryBypassTest {
     @Test
     fun provisioningProcessUsesTheAttestationOnlyOnboardingPlane() {
         assertEquals(
-            "onboarding.carry.humane.cloud:443",
+            "onboarding.cosmos.humane.cloud:443",
             CosmosRemoteTransport.redirectedGatewayForProcess(
                 "api.prod.humane.cloud",
                 CosmosRemoteTransport.PROVISIONING_PROCESS,
             ),
         )
         assertEquals(
-            "api.carry.humane.cloud:443",
+            "api.cosmos.humane.cloud:443",
             CosmosRemoteTransport.redirectedGatewayForProcess(
                 "api.prod.humane.cloud",
                 "hu.ma.ne.ironman",

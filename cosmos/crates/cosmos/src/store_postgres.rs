@@ -21,7 +21,7 @@
 //! a clock that steps backwards — must still order. More than that, the cursor
 //! must not be *assigned* before the write it belongs to becomes visible: a
 //! writer that commits second holding the lower cursor is a write the device
-//! will never ask for again. `carry_sync_cursor` is the allocator that makes
+//! will never ask for again. `cosmos_sync_cursor` is the allocator that makes
 //! assignment and commit one step; see [`PostgresStore::next_cursor`]. The
 //! in-memory store gets the same property from holding its lock across both.
 //!
@@ -117,7 +117,7 @@ pub(crate) const STORE_MIGRATIONS: &[EmbeddedMigration] = &[
 #[cfg(test)]
 const REVIEWED_DATA_REMOVALS: &[(&str, &str)] = &[(
     "0005_device_status_namespacing.sql",
-    "DELETE FROM CARRY_ACCOUNT_BLOB WHERE KIND = 'DEVICE_STATUS' \
+    "DELETE FROM COSMOS_ACCOUNT_BLOB WHERE KIND = 'DEVICE_STATUS' \
      AND STRPOS(PRINCIPAL, '#DEVICE:') = 0;",
 )];
 
@@ -255,7 +255,7 @@ impl PostgresStore {
     /// pass the predicate matches nothing.
     async fn backfill_thumbnail_counts(&self) {
         let repaired = sqlx::query(&format!(
-            "UPDATE carry_memory SET thumbnail_count = {THUMBNAIL_COUNT_EXPRESSION} \
+            "UPDATE cosmos_memory SET thumbnail_count = {THUMBNAIL_COUNT_EXPRESSION} \
              WHERE thumbnail_count IS NULL"
         ))
         .execute(&self.pool)
@@ -299,9 +299,9 @@ impl PostgresStore {
         principal: &str,
     ) -> Result<SyncTime, StoreError> {
         let nanos: i64 = sqlx::query_scalar(
-            "INSERT INTO carry_sync_cursor (principal, cursor_nanos) VALUES ($1, $2)
+            "INSERT INTO cosmos_sync_cursor (principal, cursor_nanos) VALUES ($1, $2)
              ON CONFLICT (principal) DO UPDATE SET
-                cursor_nanos = GREATEST(carry_sync_cursor.cursor_nanos + 1, EXCLUDED.cursor_nanos)
+                cursor_nanos = GREATEST(cosmos_sync_cursor.cursor_nanos + 1, EXCLUDED.cursor_nanos)
              RETURNING cursor_nanos",
         )
         .bind(principal)
@@ -379,7 +379,7 @@ fn kind_from_i16(value: i16) -> MemoryKind {
     }
 }
 
-/// One `carry_memory` row -> [`MemoryRecord`].
+/// One `cosmos_memory` row -> [`MemoryRecord`].
 ///
 /// A blob that does not decode is corruption, not "this capture has no
 /// thumbnails / no upload slots": handing back an emptier capture than the one
@@ -431,7 +431,7 @@ fn memory_from_row(row: &sqlx::postgres::PgRow) -> Result<MemoryRecord, StoreErr
     })
 }
 
-/// One `carry_memory` row read through the INDEX projection -> [`MemorySummary`].
+/// One `cosmos_memory` row read through the INDEX projection -> [`MemorySummary`].
 ///
 /// Deliberately cannot see `thumbnails`: the count arrives as a scalar computed
 /// by [`THUMBNAIL_COUNT_EXPRESSION`], so there is no way for this function to
@@ -460,7 +460,7 @@ fn memory_summary_from_row(row: &sqlx::postgres::PgRow) -> Result<MemorySummary,
     })
 }
 
-/// One `carry_note` row -> [`NoteRecord`].
+/// One `cosmos_note` row -> [`NoteRecord`].
 ///
 /// Sealed bodies stay opaque: a body that does not decode is genuinely absent to
 /// us (the device sealed it under a key we may not hold), which is why this is
@@ -527,7 +527,7 @@ impl Store for PostgresStore {
             // device reads it back out of the encoded `contact` blob, not out of
             // the column.
             let version: i32 = sqlx::query_scalar(
-                "SELECT COALESCE(MAX(version), 0) + 1 FROM carry_contact \
+                "SELECT COALESCE(MAX(version), 0) + 1 FROM cosmos_contact \
                  WHERE principal = $1 AND id = $2",
             )
             .bind(principal)
@@ -541,7 +541,7 @@ impl Store for PostgresStore {
             // A swallowed failure here is reported to the Pin as a successful
             // write; it will not retry, and the wearer's contact is gone.
             sqlx::query(
-                "INSERT INTO carry_contact
+                "INSERT INTO cosmos_contact
                     (principal, id, contact, version, modified_seconds, modified_nanos)
                  VALUES ($1, $2, $3, $4, $5, $6)
                  ON CONFLICT (principal, id) DO UPDATE SET
@@ -562,7 +562,7 @@ impl Store for PostgresStore {
 
             // Re-creating an id retires its tombstone, or a delta sync would
             // report the contact as both present and deleted.
-            sqlx::query("DELETE FROM carry_contact_tombstone WHERE principal = $1 AND id = $2")
+            sqlx::query("DELETE FROM cosmos_contact_tombstone WHERE principal = $1 AND id = $2")
                 .bind(principal)
                 .bind(&id)
                 .execute(&mut *tx)
@@ -586,7 +586,7 @@ impl Store for PostgresStore {
             // A swallowed failure here is reported to the Pin as a successful
             // write; it will not retry, and the wearer's contact is gone.
             sqlx::query(
-                "INSERT INTO carry_contact_encrypted
+                "INSERT INTO cosmos_contact_encrypted
                     (principal, ciphertext, version, modified_seconds, modified_nanos)
                  VALUES ($1, $2, $3, $4, $5)
                  ON CONFLICT (principal, ciphertext) DO UPDATE SET
@@ -622,7 +622,7 @@ impl Store for PostgresStore {
             // creates no state, matching the in-memory store. The DELETE's own
             // row count answers that, so there is no separate SELECT to race
             // against.
-            let removed = sqlx::query("DELETE FROM carry_contact WHERE principal = $1 AND id = $2")
+            let removed = sqlx::query("DELETE FROM cosmos_contact WHERE principal = $1 AND id = $2")
                 .bind(principal)
                 .bind(id)
                 .execute(&mut *tx)
@@ -635,7 +635,7 @@ impl Store for PostgresStore {
             // A lost tombstone is worse than a lost delete: the contact silently
             // reappears on the device's next delta sync.
             sqlx::query(
-                "INSERT INTO carry_contact_tombstone
+                "INSERT INTO cosmos_contact_tombstone
                     (principal, id, deleted_seconds, deleted_nanos)
                  VALUES ($1, $2, $3, $4)
                  ON CONFLICT (principal, id) DO UPDATE SET
@@ -662,7 +662,7 @@ impl Store for PostgresStore {
         // would render the wearer's contacts as gone AND get `latest = None`, so
         // the next delta sync had no cursor to resume from either.
         let rows = sqlx::query(
-            "SELECT contact, modified_seconds, modified_nanos FROM carry_contact \
+            "SELECT contact, modified_seconds, modified_nanos FROM cosmos_contact \
              WHERE principal = $1",
         )
         .bind(principal)
@@ -684,7 +684,7 @@ impl Store for PostgresStore {
 
         let rows = sqlx::query(
             "SELECT ciphertext, version, modified_seconds, modified_nanos \
-             FROM carry_contact_encrypted WHERE principal = $1",
+             FROM cosmos_contact_encrypted WHERE principal = $1",
         )
         .bind(principal)
         .fetch_all(&self.pool)
@@ -705,7 +705,7 @@ impl Store for PostgresStore {
         }
 
         let rows = sqlx::query(
-            "SELECT id, deleted_seconds, deleted_nanos FROM carry_contact_tombstone \
+            "SELECT id, deleted_seconds, deleted_nanos FROM cosmos_contact_tombstone \
              WHERE principal = $1 ORDER BY id",
         )
         .bind(principal)
@@ -742,7 +742,7 @@ impl Store for PostgresStore {
             // mints a SECOND uuid for a capture that already has one, orphaning
             // the first attempt's upload slots.
             let found = sqlx::query(
-                "SELECT uuid FROM carry_memory WHERE principal = $1 AND device_local_id = $2 \
+                "SELECT uuid FROM cosmos_memory WHERE principal = $1 AND device_local_id = $2 \
                  AND deleted_seconds IS NULL",
             )
             .bind(principal)
@@ -760,7 +760,7 @@ impl Store for PostgresStore {
 
         // Never `unwrap_or(1)`: a failed sequence read would hand every capture
         // in the outage the same numeric id.
-        let numeric_id: i64 = sqlx::query_scalar("SELECT nextval('carry_memory_id_seq')")
+        let numeric_id: i64 = sqlx::query_scalar("SELECT nextval('cosmos_memory_id_seq')")
             .fetch_one(&self.pool)
             .await
             .map_err(|_| StoreError::Unavailable)?;
@@ -770,7 +770,7 @@ impl Store for PostgresStore {
             serde_json::to_vec(&record.thumbnails.iter().map(encode).collect::<Vec<_>>())
                 .unwrap_or_default();
         sqlx::query(
-            "INSERT INTO carry_memory
+            "INSERT INTO cosmos_memory
                 (principal, uuid, numeric_id, device_local_id, kind,
                  created_seconds, created_nanos, device_created_seconds, device_created_nanos,
                  gmt_offset, thumbnails, thumbnail_count, encrypted_location, bursts,
@@ -805,7 +805,7 @@ impl Store for PostgresStore {
         // upload worker treats as FATAL (`STATUS_MEMORY_NOT_FOUND` falls to its
         // `default:` arm) and never retries.
         let Some(row) = sqlx::query(
-            "SELECT * FROM carry_memory WHERE principal = $1 \
+            "SELECT * FROM cosmos_memory WHERE principal = $1 \
              AND (uuid = $2 OR numeric_id::text = $2) AND deleted_seconds IS NULL",
         )
         .bind(principal)
@@ -852,7 +852,7 @@ impl Store for PostgresStore {
                     upload_complete, bursts, \
                     (encrypted_location IS NOT NULL) AS has_location, \
                     {THUMBNAIL_COUNT_EXPRESSION} AS thumbnail_count \
-               FROM carry_memory \
+               FROM cosmos_memory \
               WHERE principal = $1 AND deleted_seconds IS NULL \
                 AND ($2::smallint[] IS NULL OR kind = ANY($2)) \
               ORDER BY COALESCE(device_created_seconds, created_seconds) DESC, numeric_id DESC \
@@ -876,7 +876,7 @@ impl Store for PostgresStore {
 
     async fn count_memories(&self, principal: &str, kinds: &[MemoryKind]) -> Written<i64> {
         sqlx::query_scalar(
-            "SELECT COUNT(*) FROM carry_memory \
+            "SELECT COUNT(*) FROM cosmos_memory \
              WHERE principal = $1 AND deleted_seconds IS NULL \
                AND ($2::smallint[] IS NULL OR kind = ANY($2))",
         )
@@ -907,7 +907,7 @@ impl Store for PostgresStore {
                       WHEN thumbnails IS NULL OR octet_length(thumbnails) < 2 THEN NULL \
                       ELSE (convert_from(thumbnails, 'UTF8')::jsonb -> $3)::text \
                     END \
-               FROM carry_memory \
+               FROM cosmos_memory \
               WHERE principal = $1 AND (uuid = $2 OR numeric_id::text = $2) \
                 AND deleted_seconds IS NULL",
         )
@@ -939,7 +939,7 @@ impl Store for PostgresStore {
         // `unwrap_or(false)` here used to turn a database outage into "no such
         // capture", which the device reads as a settled delete.
         let affected = sqlx::query(
-            "UPDATE carry_memory SET deleted_seconds = $3, deleted_nanos = $4 \
+            "UPDATE cosmos_memory SET deleted_seconds = $3, deleted_nanos = $4 \
              WHERE principal = $1 AND (uuid = $2 OR numeric_id::text = $2) \
              AND deleted_seconds IS NULL",
         )
@@ -956,7 +956,7 @@ impl Store for PostgresStore {
 
     async fn record_upload_complete(&self, principal: &str, uuid_or_id: &str) -> Written<bool> {
         let affected = sqlx::query(
-            "UPDATE carry_memory SET upload_complete = TRUE \
+            "UPDATE cosmos_memory SET upload_complete = TRUE \
              WHERE principal = $1 AND (uuid = $2 OR numeric_id::text = $2) \
              AND deleted_seconds IS NULL",
         )
@@ -986,7 +986,7 @@ impl Store for PostgresStore {
         // for a row that was never written — and the device keeps no copy of the
         // note to retry from, so the wearer's note was simply gone.
         sqlx::query(
-            "INSERT INTO carry_note
+            "INSERT INTO cosmos_note
                 (principal, uuid, indexed_text, encrypted_note, encrypted_location,
                  created_seconds, created_nanos)
              VALUES ($1,$2,NULL,$3,$4,$5,$6)",
@@ -1018,7 +1018,7 @@ impl Store for PostgresStore {
             created: SyncTime::now(),
         };
         sqlx::query(
-            "INSERT INTO carry_note
+            "INSERT INTO cosmos_note
                 (principal, uuid, indexed_text, encrypted_note, encrypted_location,
                  created_seconds, created_nanos)
              VALUES ($1,$2,$3,$4,$5,$6,$7)",
@@ -1055,7 +1055,7 @@ impl Store for PostgresStore {
         // account, which is the very regression `NOTE_SCAN_LIMIT` was added to
         // fix at the caller while the store kept fetching the whole table.
         //
-        // `carry_note_recent` (migrations/0004_listing.sql) covers this order,
+        // `cosmos_note_recent` (migrations/0004_listing.sql) covers this order,
         // so the bound stops the scan rather than merely trimming a materialised
         // sort. The columns are named explicitly, in place of the star this
         // statement used to contain, so it asks for exactly what `note_from_row`
@@ -1066,7 +1066,7 @@ impl Store for PostgresStore {
         let rows = sqlx::query(
             "SELECT uuid, indexed_text, encrypted_note, encrypted_location,
                     created_seconds, created_nanos
-               FROM carry_note WHERE principal = $1
+               FROM cosmos_note WHERE principal = $1
                AND ($2::bigint IS NULL OR created_seconds >= $2)
                AND ($3::bigint IS NULL OR created_seconds <= $3)
              ORDER BY created_seconds DESC, created_nanos DESC
@@ -1112,7 +1112,7 @@ impl Store for PostgresStore {
         let rows = sqlx::query(
             "SELECT uuid, indexed_text, encrypted_note, encrypted_location, \
                     created_seconds, created_nanos \
-               FROM carry_note WHERE principal = $1 \
+               FROM cosmos_note WHERE principal = $1 \
               ORDER BY created_seconds DESC, created_nanos DESC \
               LIMIT $2 OFFSET $3",
         )
@@ -1128,7 +1128,7 @@ impl Store for PostgresStore {
     }
 
     async fn count_notes(&self, principal: &str) -> Written<i64> {
-        sqlx::query_scalar("SELECT COUNT(*) FROM carry_note WHERE principal = $1")
+        sqlx::query_scalar("SELECT COUNT(*) FROM cosmos_note WHERE principal = $1")
             .bind(principal)
             .fetch_one(&self.pool)
             .await
@@ -1138,7 +1138,7 @@ impl Store for PostgresStore {
     async fn delete_all_notes(&self, principal: &str) -> Written<usize> {
         // `unwrap_or(0)` reported a failed erasure as "there was nothing to
         // erase" — the wearer asked for a deletion and would be told it happened.
-        let affected = sqlx::query("DELETE FROM carry_note WHERE principal = $1")
+        let affected = sqlx::query("DELETE FROM cosmos_note WHERE principal = $1")
             .bind(principal)
             .execute(&self.pool)
             .await
@@ -1151,7 +1151,7 @@ impl Store for PostgresStore {
         // `principal` is half the primary key, so another account's uuid matches
         // no row and the statement's own row count is the answer — no separate
         // SELECT to race against, the same shape `delete_contacts` uses.
-        let affected = sqlx::query("DELETE FROM carry_note WHERE principal = $1 AND uuid = $2")
+        let affected = sqlx::query("DELETE FROM cosmos_note WHERE principal = $1 AND uuid = $2")
             .bind(principal)
             .bind(uuid)
             .execute(&self.pool)
@@ -1169,7 +1169,7 @@ impl Store for PostgresStore {
         // that fails to index is unsearchable forever, and `recall_memory` then
         // tells the wearer nothing matches a note they definitely saved.
         if let Err(error) = sqlx::query(
-            "UPDATE carry_note SET indexed_text = $3 WHERE principal = $1 AND uuid = $2",
+            "UPDATE cosmos_note SET indexed_text = $3 WHERE principal = $1 AND uuid = $2",
         )
         .bind(principal)
         .bind(uuid)
@@ -1196,7 +1196,7 @@ impl Store for PostgresStore {
         // perform would misrepresent the order.
         let terms: Vec<String> = needle.split_whitespace().map(str::to_owned).collect();
         let rows = sqlx::query(
-            "SELECT uuid, indexed_text, created_seconds, created_nanos FROM carry_note \
+            "SELECT uuid, indexed_text, created_seconds, created_nanos FROM cosmos_note \
              WHERE principal = $1 AND indexed_text IS NOT NULL \
              ORDER BY created_seconds DESC, created_nanos DESC",
         )
@@ -1229,7 +1229,7 @@ impl Store for PostgresStore {
     ) -> Written<Vec<SearchableNote>> {
         let limit = i64::try_from(maximum).unwrap_or(i64::MAX);
         let rows = sqlx::query(
-            "SELECT uuid, indexed_text FROM carry_note \
+            "SELECT uuid, indexed_text FROM cosmos_note \
              WHERE principal = $1 AND indexed_text IS NOT NULL \
              ORDER BY created_seconds DESC, created_nanos DESC LIMIT $2",
         )
@@ -1273,7 +1273,7 @@ impl Store for PostgresStore {
             .map_err(|_| StoreError::Unavailable)?;
         for chunk in batch.chunks(crate::store::INGEST_CHUNK) {
             let mut builder = sqlx::QueryBuilder::new(
-                "INSERT INTO carry_event
+                "INSERT INTO cosmos_event
                     (principal, event_identifier, originator_identifier, creation_seconds,
                      creation_nanos, event_type, event_data, encrypted_event_data,
                      encrypted_location, device_is_locked, indexed_text,
@@ -1350,7 +1350,7 @@ impl Store for PostgresStore {
             "SELECT event_identifier, originator_identifier, creation_seconds, creation_nanos,
                     event_type, event_data, encrypted_event_data, encrypted_location,
                     device_is_locked, indexed_text, ingested_seconds, ingested_nanos
-               FROM carry_event WHERE principal = $1
+               FROM cosmos_event WHERE principal = $1
                AND ($2 = '' OR event_type = $2)
                AND ($3 = '' OR originator_identifier = $3)
                AND ($4::bigint IS NULL OR creation_seconds >= $4)
@@ -1405,7 +1405,7 @@ impl Store for PostgresStore {
         // `ingest_events` upserts on — so this deletes at most one row and only
         // ever one belonging to the caller.
         let affected =
-            sqlx::query("DELETE FROM carry_event WHERE principal = $1 AND event_identifier = $2")
+            sqlx::query("DELETE FROM cosmos_event WHERE principal = $1 AND event_identifier = $2")
                 .bind(principal)
                 .bind(event_identifier)
                 .execute(&self.pool)
@@ -1428,7 +1428,7 @@ impl Store for PostgresStore {
         payload: &[u8],
     ) -> Written<()> {
         sqlx::query(
-            "INSERT INTO carry_account_blob (principal, kind, payload) VALUES ($1, $2, $3)
+            "INSERT INTO cosmos_account_blob (principal, kind, payload) VALUES ($1, $2, $3)
              ON CONFLICT (principal, kind) DO UPDATE SET payload = EXCLUDED.payload",
         )
         .bind(principal)
@@ -1449,7 +1449,7 @@ impl Store for PostgresStore {
         // rendered as "nothing stored" is an empty allergy list, which the
         // assistant would plan meals against.
         let row = sqlx::query(
-            "SELECT payload FROM carry_account_blob WHERE principal = $1 AND kind = $2",
+            "SELECT payload FROM cosmos_account_blob WHERE principal = $1 AND kind = $2",
         )
         .bind(principal)
         .bind(kind.as_str())
@@ -1469,7 +1469,7 @@ impl Store for PostgresStore {
         let affected = match expected {
             Some(expected) => {
                 sqlx::query(
-                    "UPDATE carry_account_blob SET payload = $4 \
+                    "UPDATE cosmos_account_blob SET payload = $4 \
                      WHERE principal = $1 AND kind = $2 AND payload = $3",
                 )
                 .bind(principal)
@@ -1481,7 +1481,7 @@ impl Store for PostgresStore {
             }
             None => {
                 sqlx::query(
-                    "INSERT INTO carry_account_blob (principal, kind, payload) \
+                    "INSERT INTO cosmos_account_blob (principal, kind, payload) \
                      VALUES ($1, $2, $3) ON CONFLICT (principal, kind) DO NOTHING",
                 )
                 .bind(principal)
@@ -1639,23 +1639,23 @@ mod tests {
         assert_eq!(
             signatures,
             vec![
-                "CREATE TABLE IF NOT EXISTS carry_contact (",
-                "CREATE TABLE IF NOT EXISTS carry_contact_encrypted (",
-                "CREATE TABLE IF NOT EXISTS carry_contact_tombstone (",
-                "CREATE TABLE IF NOT EXISTS carry_memory (",
-                "CREATE UNIQUE INDEX IF NOT EXISTS carry_memory_device_local",
-                "CREATE TABLE IF NOT EXISTS carry_note (",
-                "ALTER TABLE IF EXISTS carry_event",
-                "CREATE TABLE IF NOT EXISTS carry_event (",
-                "CREATE TABLE IF NOT EXISTS carry_sync_cursor (",
-                "INSERT INTO carry_sync_cursor (principal, cursor_nanos)",
-                "CREATE SEQUENCE IF NOT EXISTS carry_memory_id_seq;",
-                "CREATE TABLE IF NOT EXISTS carry_account_blob (",
-                "ALTER TABLE IF EXISTS carry_memory",
-                "CREATE INDEX IF NOT EXISTS carry_event_recent",
-                "CREATE INDEX IF NOT EXISTS carry_memory_recent",
-                "CREATE INDEX IF NOT EXISTS carry_note_recent",
-                "DELETE FROM carry_account_blob",
+                "CREATE TABLE IF NOT EXISTS cosmos_contact (",
+                "CREATE TABLE IF NOT EXISTS cosmos_contact_encrypted (",
+                "CREATE TABLE IF NOT EXISTS cosmos_contact_tombstone (",
+                "CREATE TABLE IF NOT EXISTS cosmos_memory (",
+                "CREATE UNIQUE INDEX IF NOT EXISTS cosmos_memory_device_local",
+                "CREATE TABLE IF NOT EXISTS cosmos_note (",
+                "ALTER TABLE IF EXISTS cosmos_event",
+                "CREATE TABLE IF NOT EXISTS cosmos_event (",
+                "CREATE TABLE IF NOT EXISTS cosmos_sync_cursor (",
+                "INSERT INTO cosmos_sync_cursor (principal, cursor_nanos)",
+                "CREATE SEQUENCE IF NOT EXISTS cosmos_memory_id_seq;",
+                "CREATE TABLE IF NOT EXISTS cosmos_account_blob (",
+                "ALTER TABLE IF EXISTS cosmos_memory",
+                "CREATE INDEX IF NOT EXISTS cosmos_event_recent",
+                "CREATE INDEX IF NOT EXISTS cosmos_memory_recent",
+                "CREATE INDEX IF NOT EXISTS cosmos_note_recent",
+                "DELETE FROM cosmos_account_blob",
             ]
         );
     }
@@ -2475,7 +2475,7 @@ mod tests {
             .await
             .expect("write succeeds");
 
-        sqlx::query("UPDATE carry_memory SET thumbnail_count = NULL WHERE principal = $1")
+        sqlx::query("UPDATE cosmos_memory SET thumbnail_count = NULL WHERE principal = $1")
             .bind(&principal)
             .execute(&store.pool)
             .await
@@ -2492,7 +2492,7 @@ mod tests {
 
         store.backfill_thumbnail_counts().await;
         let repaired: Option<i32> =
-            sqlx::query_scalar("SELECT thumbnail_count FROM carry_memory WHERE principal = $1")
+            sqlx::query_scalar("SELECT thumbnail_count FROM cosmos_memory WHERE principal = $1")
                 .bind(&principal)
                 .fetch_one(&store.pool)
                 .await

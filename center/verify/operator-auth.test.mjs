@@ -20,12 +20,12 @@ function jwtPayload(token) {
 
 test("realm role, client role, and exact bootstrap email resolve to one operator bit", () => {
   assert.equal(
-    operatorClaimFromKeycloakClaims({ realm_access: { roles: ["carry-operator"] } }, "wearer@example.com"),
+    operatorClaimFromKeycloakClaims({ realm_access: { roles: ["cosmos-operator"] } }, "wearer@example.com"),
     true,
   );
   assert.equal(
     operatorClaimFromKeycloakClaims(
-      { resource_access: { "center-test": { roles: ["carry-operator"] } } },
+      { resource_access: { "center-test": { roles: ["cosmos-operator"] } } },
       "wearer@example.com",
     ),
     true,
@@ -33,7 +33,7 @@ test("realm role, client role, and exact bootstrap email resolve to one operator
   assert.equal(operatorClaimFromKeycloakClaims({}, "BOOTSTRAP@example.com"), true);
   assert.equal(operatorClaimFromKeycloakClaims({}, "bootstrap@example.com.evil"), false);
   assert.equal(
-    operatorClaimFromKeycloakClaims({ resource_access: { other: { roles: ["carry-operator"] } } }, "wearer@example.com"),
+    operatorClaimFromKeycloakClaims({ resource_access: { other: { roles: ["cosmos-operator"] } } }, "wearer@example.com"),
     false,
   );
   assert.equal(

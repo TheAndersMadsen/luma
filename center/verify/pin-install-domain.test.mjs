@@ -526,7 +526,7 @@ test("decideInstallMigration recognizes the exact observed legacy profile and re
   assert.deepEqual(result.rolesToInstall, IN_PLACE_ROLES);
   assert.deepEqual(result.retainedInstaller, {
     packageName: MANAGED_PACKAGES.installer,
-    versionName: "carry-2026.08.07",
+    versionName: "cosmos-2026.08.07",
     signerIdentity: "dd07f452",
   });
 });

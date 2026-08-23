@@ -4,8 +4,8 @@ import { EncryptJWT, jwtDecrypt } from "jose";
 const SHARE_TTL_SECONDS = 7 * 24 * 60 * 60;
 // These claims are embedded in durable public links. Stable legacy issuance is
 // required so both the upgraded service and a rolled-back service accept them.
-const SHARE_ISSUER = "humane-carry-clone:center";
-const SHARE_AUDIENCE = "humane-carry-clone:public-share";
+const SHARE_ISSUER = "humane-cosmos-clone:center";
+const SHARE_AUDIENCE = "humane-cosmos-clone:public-share";
 
 function isCanonicalCompactJwe(token: string): boolean {
   const parts = token.split(".");
@@ -39,7 +39,7 @@ function key(): Uint8Array {
  */
 export async function mintShareToken(memoryUuid: string, userId: string): Promise<string> {
   return new EncryptJWT({ memoryUuid, userId })
-    .setProtectedHeader({ alg: "dir", enc: "A256GCM", typ: "carry-share+jwe" })
+    .setProtectedHeader({ alg: "dir", enc: "A256GCM", typ: "cosmos-share+jwe" })
     .setIssuer(SHARE_ISSUER)
     .setAudience(SHARE_AUDIENCE)
     .setJti(randomUUID())
