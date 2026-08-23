@@ -3,7 +3,6 @@ set -euo pipefail
 
 readonly SOURCE_ROOT="${REVIVAL_HELD_PIN_SOURCE_ROOT:-/workspace/pin}"
 readonly TOOL_ROOT="${REVIVAL_HELD_TOOL_ROOT:-/workspace/platform/containers/pin-builder}"
-readonly DEBUG_STORE_TOOL="${REVIVAL_HELD_DEBUG_STORE_TOOL:-/usr/local/libexec/ai-pin-debug-store}"
 readonly BOOTSTRAP_ALIUHOOK="${REVIVAL_HELD_BOOTSTRAP_ALIUHOOK:-${TOOL_ROOT}/bootstrap-aliuhook.sh}"
 readonly CREDENTIAL_FREE_TOOL_ROOT="${REVIVAL_HELD_CREDENTIAL_FREE_TOOL_ROOT:-/tmp/revival-pin-credential-free}"
 readonly CACHE_CARGO_REGISTRY="/cache-data/cargo-registry"
@@ -20,9 +19,6 @@ readonly SIGNING_ENV_FILE="/run/secrets/pin/signing.env"
 readonly COMPATIBILITY_SIGNING_STORE="/run/secrets/pin/compatibility.keystore"
 readonly EMBEDDED_PATCH_SIGNING_STORE="/run/secrets/pin/embedded-patch.keystore"
 readonly PRIVATE_ASSETS_ROOT="/run/private-assets"
-readonly HOSTED_ATTESTATION_TOOL="/usr/local/libexec/ai-pin-hosted-attestation/hosted-attestation.mjs"
-readonly HOSTED_RELEASE_REQUEST="/run/hosted-release/request.json"
-readonly HOSTED_PRE_SIGN_BUNDLE="/run/hosted-release/pre-sign.sigstore.json"
 readonly COMPATIBILITY_CERT_SHA256="d8a64e1c3a1afdc340c4b86feaacb88e2d81d66972afbd58e743b7c5b8d1cbdb"
 
 # The private-assets mount is a fixed absolute container path. Export it at the
@@ -51,17 +47,14 @@ Usage:
   device-builder check-unit
   device-builder prefetch-release --version YYYY-MM-DD.N --version-code INTEGER
   device-builder build-release --version YYYY-MM-DD.N --version-code INTEGER
-  device-builder verify-hosted-release [fixed verifier options]
   device-builder shell
 
 The product source is read from /workspace/pin. Builds happen only
 in /state/device-build/worktree; results are copied to
 /state/artifacts/device. The source mount is never modified.
 
-The host first runs prefetch-release without signing material. The offline
-build-release path verifies the fixed hosted pre-sign Sigstore bundle before it
-opens externally mounted signing inputs. verify-hosted-release re-verifies both
-bundles against the exact five APKs before host publication.
+The host first runs prefetch-release without signing material. The release build
+then consumes externally mounted signing inputs and emits exactly five APKs.
 The image never runs ADB, provisions a Pin, or installs anything on hardware.
 Role-scoped debug outputs are compile-only developer artifacts. They are never
 signed with release credentials, published to the release store, or installable
@@ -114,55 +107,15 @@ reject_signing_material() {
     "${COMPATIBILITY_SIGNING_STORE}" \
     "${EMBEDDED_PATCH_SIGNING_STORE}"; do
     if [[ -e "${name}" ]]; then
-      die "signing mount ${name} is present outside the attested build-release path"
+      die "signing mount ${name} is present outside the release build path"
     fi
   done
 }
 
-verify_hosted_pre_sign() {
-  local version="$1" version_code="$2" output
-  require_mounted_file "${HOSTED_RELEASE_REQUEST}" "hosted release request"
-  require_mounted_file "${HOSTED_PRE_SIGN_BUNDLE}" "hosted pre-sign Sigstore bundle"
-  [[ -f "${HOSTED_ATTESTATION_TOOL}" && ! -L "${HOSTED_ATTESTATION_TOOL}" ]] ||
-    die "image-baked hosted attestation verifier is unavailable"
-  output="$(mktemp /tmp/revival-pre-sign-verification.XXXXXX)"
-  rm -f "${output}"
-  /usr/bin/python3 -B "${DEBUG_STORE_TOOL}" require-hosted-native-attestation \
-    --request "${HOSTED_RELEASE_REQUEST}" \
-    --bundle "${HOSTED_PRE_SIGN_BUNDLE}" \
-    --output "${output}" ||
-    die "trusted hosted pre-sign attestation was not verified"
-  [[ -f "${output}" && ! -L "${output}" && -s "${output}" ]] ||
-    die "hosted pre-sign verifier emitted no evidence"
-  [[ "$(jq -er '.versionName' "${HOSTED_RELEASE_REQUEST}")" == "${version}" ]] ||
-    die "attested release version differs from build-release"
-  [[ "$(jq -er '.versionCode' "${HOSTED_RELEASE_REQUEST}")" == "${version_code}" ]] ||
-    die "attested release versionCode differs from build-release"
-  rm -f "${output}"
-}
-
 prepare_workspace() {
-  local debug_roots_prepared="${1:-false}"
   require_source
   reject_signing_material
-  if [[ "${debug_roots_prepared}" == true ]]; then
-    # debug-store.py created and descriptor-validated this path before any
-    # path-based writer was allowed to run. Never mkdir/chmod below a caller-
-    # controlled /state ancestry here.
-    [[ -d "${WORK_ROOT}" && ! -L "${WORK_ROOT}" ]] ||
-      die "validated debug worktree disappeared before staging"
-    if [[ "${REVIVAL_PIN_EPHEMERAL_COMPILER_SOURCE:-}" == 1 ]]; then
-      # The supervising broker extracted this invocation's held sealed tar into
-      # a fresh container-private tmpfs directory. It is never host-mounted or
-      # reused, so compiler-generated sources cannot be supplied by an older or
-      # concurrently mutable warm worktree.
-      [[ "${WORK_ROOT}" == /proc/self/fd/[0-9]* || "${WORK_ROOT}" == /proc/[0-9]*/fd/[0-9]* ]] ||
-        die "ephemeral compiler source is not descriptor-held"
-      return
-    fi
-  else
-    mkdir -p "${WORK_ROOT}" "${ARTIFACT_ROOT}"
-  fi
+  mkdir -p "${WORK_ROOT}" "${ARTIFACT_ROOT}"
 
   # The destination is a fixed ignored state directory. Secret, proprietary,
   # release, and generated material is never copied into the build worktree.
@@ -196,21 +149,8 @@ prepare_credential_free_lane() {
   require_source
   reject_signing_material
   umask 077
-  [[ "${REVIVAL_PIN_LANE_INNER:-}" == 1 ]] ||
-    die "credential-free commands require the descriptor-held container session"
-  # The supervising Python process already holds /state, the source/tool
-  # roots, all five cache leaves, the random tool root, every fresh tool-home
-  # child, and the empty npm config files. These values are /proc/self/fd
-  # descendants inherited from that still-live supervisor; never recreate or
-  # reauthorize them here.
-  for name in HOME XDG_CONFIG_HOME XDG_CACHE_HOME XDG_DATA_HOME XDG_STATE_HOME \
-    CARGO_HOME GRADLE_USER_HOME NPM_CONFIG_CACHE NPM_CONFIG_USERCONFIG \
-    NPM_CONFIG_GLOBALCONFIG ANDROID_USER_HOME; do
-    case "${!name:-}" in
-      /proc/self/fd/[0-9]*|/proc/[0-9]*/fd/[0-9]*) ;;
-      *) die "${name} is not a descriptor-held lane path" ;;
-    esac
-  done
+  mkdir -p "${CARGO_HOME}" "${GRADLE_USER_HOME}" "${NPM_CONFIG_CACHE}" \
+    "${ANDROID_USER_HOME}" "${STATE_ROOT}"
 }
 
 prepare_release_workspace() {
@@ -656,11 +596,6 @@ build_release() {
     die "--version-code must be a positive decimal integer"
   (( version_code <= 2147483647 )) || die "--version-code exceeds Android's limit"
 
-  # This is deliberately before validate_release_inputs: no signing
-  # environment, keystore, embedded-patch key, or private release asset is
-  # opened until GitHub's provider-signed hosted-runner/workflow certificate
-  # and the exact source/toolchain/builder request have verified.
-  verify_hosted_pre_sign "${version}" "${version_code}"
   validate_release_inputs
   prepare_release_workspace
   AI_PIN_SOURCE_ROOT="${WORK_ROOT}" bash "${BOOTSTRAP_ALIUHOOK}" --verify-only
@@ -743,8 +678,8 @@ debug_role_contract() {
 }
 
 build_debug_role() {
-  local role contract task project package output final has_server=false
-  local -a roles=() root_tasks=() injector_tasks=() role_outputs=()
+  local role contract task project package output has_server=false
+  local -a roles=() root_tasks=() injector_tasks=() matches=()
   while (( $# > 0 )); do
     case "$1" in
       --role)
@@ -767,7 +702,7 @@ build_debug_role() {
     die "build-debug-role roles must use installer, bootstrap, hook, server, hook-injector order"
 
   prepare_credential_free_lane debug
-  prepare_workspace true
+  prepare_workspace
   unset REVIVAL_PIN_PRIVATE_ASSETS_DIR
   unset REVIVAL_PIN_EMBEDDED_PATCH_SIGNING_STORE_FILE
   unset REVIVAL_PIN_LEGACY_DEBUG_SIGNING_STORE_FILE
@@ -791,26 +726,29 @@ build_debug_role() {
     # surfaces without a TFLite binary, Codex binary, signing key, or device.
     (
       cd "${WORK_ROOT}/runtime/core"
-      CARGO_TARGET_DIR="${REVIVAL_HELD_CARGO_DEBUG_TARGET:?missing held debug Cargo target}" \
+      CARGO_TARGET_DIR="${STATE_ROOT}/cargo-debug-runtime-core" \
         cargo check --locked --all-targets --features local-nlu,iroh
     )
   fi
   if (( ${#root_tasks[@]} > 0 )); then
-    (cd "${WORK_ROOT}" && ./gradlew --no-daemon --project-cache-dir "${REVIVAL_HELD_GRADLE_DEBUG_ROOT:?missing held debug Gradle cache}" -PrevivalCompileOnlyDebug=true "${root_tasks[@]}")
+    (cd "${WORK_ROOT}" && ./gradlew --no-daemon --project-cache-dir "${STATE_ROOT}/gradle-debug-root" -PrevivalCompileOnlyDebug=true "${root_tasks[@]}")
   fi
   if (( ${#injector_tasks[@]} > 0 )); then
-    (cd "${WORK_ROOT}" && ./injector/gradlew --no-daemon --project-cache-dir "${REVIVAL_HELD_GRADLE_DEBUG_INJECTOR:?missing held injector Gradle cache}" -p injector -PrevivalCompileOnlyDebug=true "${injector_tasks[@]}")
+    (cd "${WORK_ROOT}" && ./injector/gradlew --no-daemon --project-cache-dir "${STATE_ROOT}/gradle-debug-injector" -p injector -PrevivalCompileOnlyDebug=true "${injector_tasks[@]}")
   fi
+  mkdir -p "${DEBUG_ARTIFACT_ROOT}"
+  find "${DEBUG_ARTIFACT_ROOT}" -mindepth 1 -maxdepth 1 -type f -delete
   for role in "${roles[@]}"; do
     IFS=$'\t' read -r task project package output <<< "$(debug_role_contract "${role}")"
-    role_outputs+=(--role-output "${role}" "${WORK_ROOT}/${output}")
+    mapfile -d '' -t matches < <(find "${WORK_ROOT}/${output}" -maxdepth 1 -type f -name '*.apk' -print0)
+    [[ ${#matches[@]} -eq 1 ]] || die "${role} debug build did not produce exactly one APK"
+    install -m 0600 "${matches[0]}" "${DEBUG_ARTIFACT_ROOT}/${role}.apk"
   done
-  # One helper process holds the artifact root, random append-only set, every
-  # staged file, and its selection record through final revalidation. There is
-  # no inter-process identity gap or mutable latest pointer.
-  final="$(/usr/bin/python3 -B "${DEBUG_STORE_TOOL}" build-publish \
-    "${DEBUG_ARTIFACT_ROOT}" "${role_outputs[@]}")"
-  printf 'device-builder: compile-only debug artifact set published atomically to %s; it is non-release and non-installable\n' "${final}"
+  (
+    cd "${DEBUG_ARTIFACT_ROOT}"
+    sha256sum -- *.apk > SHA256SUMS
+  )
+  printf 'device-builder: compile-only debug APKs written to %s\n' "${DEBUG_ARTIFACT_ROOT}"
 }
 
 check_unit() {
@@ -819,25 +757,25 @@ check_unit() {
   # private-asset, USB, or device surface is mounted by the caller.
   unset REVIVAL_PIN_PRIVATE_ASSETS_DIR
   prepare_credential_free_lane check
-  prepare_workspace true
+  prepare_workspace
   (
     cd "${WORK_ROOT}/runtime/core"
-    CARGO_TARGET_DIR="${REVIVAL_HELD_CARGO_RUNTIME_TARGET:?missing held runtime Cargo target}" \
+    CARGO_TARGET_DIR="${STATE_ROOT}/cargo-runtime-target" \
       cargo test --locked
   )
   (
     cd "${WORK_ROOT}/bridge"
-    CARGO_TARGET_DIR="${REVIVAL_HELD_CARGO_BRIDGE_TARGET:?missing held bridge Cargo target}" \
+    CARGO_TARGET_DIR="${STATE_ROOT}/cargo-bridge-target" \
       cargo test --locked
   )
   (
     cd "${WORK_ROOT}"
     ./gradlew --no-daemon \
-      --project-cache-dir "${REVIVAL_HELD_GRADLE_CONTRACTS:?missing held contracts Gradle cache}" \
+      --project-cache-dir "${STATE_ROOT}/gradle-contracts" \
       :contracts:stock-aibus:testDebugUnitTest \
       :contracts:penumbra-ipc:testDebugUnitTest
     ./injector/gradlew --no-daemon \
-      --project-cache-dir "${REVIVAL_HELD_GRADLE_INJECTOR:?missing held injector Gradle cache}" \
+      --project-cache-dir "${STATE_ROOT}/gradle-injector" \
       -p injector \
       :common:testDebugUnitTest
   )
@@ -893,19 +831,6 @@ if (( $# > 0 )); then
   shift
 fi
 
-if [[ "${REVIVAL_PIN_LANE_INNER:-}" != 1 ]]; then
-  case "${command}" in
-    check-unit)
-      exec /usr/bin/python3 -B "${DEBUG_STORE_TOOL}" \
-        container-session check check-unit "$@"
-      ;;
-    build-debug-role)
-      exec /usr/bin/python3 -B "${DEBUG_STORE_TOOL}" \
-        container-session debug build-debug-role "$@"
-      ;;
-  esac
-fi
-
 case "${command}" in
   help|-h|--help)
     show_help
@@ -947,15 +872,6 @@ case "${command}" in
     ;;
   build-release)
     build_release "$@"
-    ;;
-  verify-hosted-pre)
-    reject_signing_material
-    exec /usr/bin/python3 -B "${DEBUG_STORE_TOOL}" \
-      require-hosted-native-attestation "$@"
-    ;;
-  verify-hosted-release)
-    reject_signing_material
-    exec /usr/bin/node "${HOSTED_ATTESTATION_TOOL}" verify-release "$@"
     ;;
   shell)
     require_source

@@ -75,7 +75,6 @@ function fixture() {
   const home = join(temporary, "home");
   const environment = { ...process.env };
   for (const variable of [
-    "REVIVAL_BACKUP_DIR",
     "REVIVAL_BUILD_DIR",
     "REVIVAL_CONFIG_DIR",
     "REVIVAL_DATA_DIR",
@@ -123,7 +122,6 @@ test("a clean isolated-XDG setup is safe, private, and idempotent", () => {
     assert.equal(plan.selectedTrack, "local");
     assert.equal(Object.hasOwn(plan, "next"), false);
     assert.equal(plan.steps.find((step) => step.id === "initialize").status, "required");
-    assert.equal(plan.physicalAcceptanceRequired, false);
     const setupProbes = existsSync(commandLog) ? readFileSync(commandLog, "utf8") : "";
     assert.ok(
       setupProbes === "" || setupProbes === "docker compose version --short\n",
@@ -133,26 +131,20 @@ test("a clean isolated-XDG setup is safe, private, and idempotent", () => {
     const first = invoke(environment, "init");
     assert.equal(first.status, 0, first.stderr);
     const runtime = join(xdgConfig, "ai-pin-revival", "secrets", "runtime.env");
-    const state = join(xdgState, "ai-pin-revival", "setup-state.json");
     const firstRuntime = readFileSync(runtime);
-    const firstState = readFileSync(state);
 
     const second = invoke(environment, "init");
     assert.equal(second.status, 0, second.stderr);
     assert.deepEqual(readFileSync(runtime), firstRuntime, "init must preserve generated secrets");
-    assert.deepEqual(readFileSync(state), firstState, "init must not rewrite setup selection");
 
     for (const directory of [
       join(xdgConfig, "ai-pin-revival"),
       join(xdgConfig, "ai-pin-revival", "secrets"),
       join(xdgData, "ai-pin-revival"),
-      join(xdgState, "ai-pin-revival"),
-      join(xdgState, "ai-pin-revival", "backups"),
     ]) {
       assert.equal(mode(directory), 0o700, `${directory} must be owner-only`);
     }
     assert.equal(mode(runtime), 0o600);
-    assert.equal(mode(state), 0o600);
 
     assert.equal(
       existsSync(commandLog) ? readFileSync(commandLog, "utf8") : "",

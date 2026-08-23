@@ -116,8 +116,8 @@ const DETAILS = Object.freeze({
   'pin.network': 'Usage: revival pin network --serial SERIAL. Reads status without printing SSID or BSSID.',
   'pin.network.qr': 'Usage: revival pin network qr [--open]. Credentials remain browser-local and never enter argv.',
   'pin.install': 'Without --confirm this resolves the exact serial and release, prints a plan, and leaves the device untouched.',
-  'pin.build-debug': 'Credential-free and non-installable. Select fixed roles with repeated --role, or use --changed [--base REF]. Uses the canonical linux/amd64 builder with fresh tool homes and only narrow external cache-data leaves; Server selections compile runtime/core Rust and every role refuses release signing inputs.',
-  'pin.release.build': 'Usage: revival pin release build --version YYYY-MM-DD.N --version-code INTEGER. The retired local signing alias refuses before opening protected inputs; use the pinned Attested Pin release workflow on main. It never runs ADB or mutates a device.',
+  'pin.build-debug': 'Credential-free and non-installable. Select roles with repeated --role, or use --changed [--base REF]. Reuses the pinned linux/amd64 builder and external build caches; every role refuses release signing inputs.',
+  'pin.release.build': 'Usage: revival pin release build --version YYYY-MM-DD.N --version-code INTEGER. Builds the signed five-APK release into the external release store. It never runs ADB or mutates a device.',
   'pin.release.ship': 'Plans by default. --confirm publishes to the remote Center release store.',
 });
 

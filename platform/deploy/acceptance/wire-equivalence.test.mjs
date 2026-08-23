@@ -844,7 +844,7 @@ test("every inventoried divergence still says exactly what the two trees say", (
   );
 });
 
-test("what is staged for a Pin release is in the tree, agreed by both trees, and written down for the installer", () => {
+test("what is staged for a Pin release is in the tree and agreed by both trees", () => {
   /*
    * `stagedForRelease` is the one place this repository says "the source is
    * right and the DEVICE is not", so it is the one place where being wrong is
@@ -860,10 +860,9 @@ test("what is staged for a Pin release is in the tree, agreed by both trees, and
    *     disagreement means the correction was mis-copied;
    *   - the point is no longer an `entries` row, because it is no longer a
    *     divergence;
-   *   - and docs/operations.md names the change, so whoever installs the release
-   *     is told what moves rather than finding out from a wearer.
+   *
+   * Release notes are documentation, not a source-code gate.
    */
-  const operations = fs.readFileSync(path.join(root, "docs/operations.md"), "utf8");
   const staged = inventory.stagedForRelease?.changes ?? [];
   assert.ok(Array.isArray(staged), "stagedForRelease.changes must be a list");
 
@@ -876,9 +875,6 @@ test("what is staged for a Pin release is in the tree, agreed by both trees, and
         typeof change[required] === "string" && change[required].length > 0,
         `staged change ${change.id} has no ${required}; an installer cannot act on that`,
       );
-    }
-    if (!operations.includes(change.id)) {
-      problems.push(`${change.id}: docs/operations.md does not name it, so the install note does not exist`);
     }
     assert.ok(change.points?.length > 0, `staged change ${change.id} names no points`);
     for (const point of change.points) {

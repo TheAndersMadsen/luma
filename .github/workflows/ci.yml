@@ -6,7 +6,13 @@ on:
   push:
     branches:
       - main
+    paths-ignore:
+      - "**/*.md"
+      - "diagrams/**"
   pull_request:
+    paths-ignore:
+      - "**/*.md"
+      - "diagrams/**"
 
 permissions:
   contents: read
@@ -215,7 +221,7 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
-      - name: reject detectable non-Linux/x64 execution (not hardware attestation)
+      - name: Require Linux/x64
         run: |
           test "$RUNNER_OS" = Linux
           test "$RUNNER_ARCH" = X64
@@ -224,86 +230,38 @@ jobs:
         with:
           node-version: 22.14.0
           package-manager-cache: false
-      - name: bind Node 22.14.0 to the fixed trusted path
-        shell: /usr/bin/bash --noprofile --norc -euo pipefail {0}
-        run: |
-          export LANG=C LC_ALL=C PATH=/usr/bin:/bin
-          node_source=/opt/hostedtoolcache/node/22.14.0/x64/bin/node
-          node_destination=/usr/bin/node
-          expected_node_sha256=1abce2374a485bddae3c27b17a3e3143e2780232026e627c4fe74ddde3f380a1
-          test "$(/usr/bin/realpath -e -- "${node_source}")" = "${node_source}"
-          test -f "${node_source}" && test ! -L "${node_source}" && test -x "${node_source}"
-          test "$("${node_source}" --version)" = v22.14.0
-          source_digest="$(/usr/bin/sha256sum -- "${node_source}")"
-          source_digest="${source_digest%% *}"
-          [[ "${source_digest}" =~ ^[0-9a-f]{64}$ ]]
-          test "${source_digest}" = "${expected_node_sha256}"
-          /usr/bin/sudo /usr/bin/install -T -o root -g root -m 0555 -- \
-            "${node_source}" "${node_destination}"
-          test "$(/usr/bin/realpath -e -- "${node_destination}")" = "${node_destination}"
-          test -f "${node_destination}" && test ! -L "${node_destination}" && test -x "${node_destination}"
-          test "$(/usr/bin/stat -c '%u:%g:%a:%F:%h' -- "${node_destination}")" = \
-            '0:0:555:regular file:1'
-          test "$("${node_destination}" --version)" = v22.14.0
-          destination_digest="$(/usr/bin/sha256sum -- "${node_destination}")"
-          destination_digest="${destination_digest%% *}"
-          source_digest_after="$(/usr/bin/sha256sum -- "${node_source}")"
-          source_digest_after="${source_digest_after%% *}"
-          test "${destination_digest}" = "${source_digest}"
-          test "${source_digest_after}" = "${source_digest}"
-      - name: restore exactly five external Pin cache-data leaves
+      - name: Restore Pin build cache
         id: pin-builder-deps
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
-          path: |
-            ${{ runner.temp }}/pin-builder-data/build/pin-builder-cache-data/cargo-registry
-            ${{ runner.temp }}/pin-builder-data/build/pin-builder-cache-data/cargo-git
-            ${{ runner.temp }}/pin-builder-data/build/pin-builder-cache-data/gradle-caches
-            ${{ runner.temp }}/pin-builder-data/build/pin-builder-cache-data/gradle-wrapper
-            ${{ runner.temp }}/pin-builder-data/build/pin-builder-cache-data/npm-cacache
-          key: pin-builder-dependencies-v3-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('platform/containers/pin-builder/Dockerfile', 'platform/containers/pin-builder/debug-store.py', 'platform/containers/pin-builder/entrypoint.sh', 'platform/containers/pin-builder/toolchain.json', 'pin/gradle/wrapper/gradle-wrapper.properties', 'pin/injector/gradle/wrapper/gradle-wrapper.properties', 'pin/**/*.gradle', 'pin/**/*.gradle.kts', 'pin/**/Cargo.lock') }}
+          path: ${{ runner.temp }}/pin-builder-data/build/pin-builder-cache
+          key: pin-builder-v4-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('platform/containers/pin-builder/Dockerfile', 'platform/containers/pin-builder/entrypoint.sh', 'pin/gradle/wrapper/gradle-wrapper.properties', 'pin/injector/gradle/wrapper/gradle-wrapper.properties', 'pin/**/*.gradle', 'pin/**/*.gradle.kts', 'pin/**/Cargo.lock') }}
           restore-keys: |
-            pin-builder-dependencies-v3-${{ runner.os }}-${{ runner.arch }}-
-      - name: run the continuous credential-free Pin check session
+            pin-builder-v4-${{ runner.os }}-${{ runner.arch }}-
+      - name: Run Pin contributor checks
         run: |
           set -euo pipefail
           data="$RUNNER_TEMP/pin-builder-data"
           build="$data/build"
           REVIVAL_DATA_DIR="$data" REVIVAL_BUILD_DIR="$build" \
-            /usr/bin/node ./revival pin check
-      - name: run the continuous all-five debug publication session
+            node ./revival pin check
+      - name: Build all debug APKs
         run: |
           set -euo pipefail
           data="$RUNNER_TEMP/pin-builder-data"
           build="$data/build"
           REVIVAL_DATA_DIR="$data" REVIVAL_BUILD_DIR="$build" \
-            /usr/bin/node ./revival pin build-debug \
+            node ./revival pin build-debug \
               --role installer --role bootstrap --role hook --role server --role hook-injector
-      - name: verify the append-only all-five debug selection
+      - name: Verify debug APK checksums
         run: |
           set -euo pipefail
           root="$RUNNER_TEMP/pin-builder-data/build/pin-debug-builder-state/artifacts/device-debug"
-          selection="$(/usr/bin/python3 -B platform/containers/pin-builder/debug-store.py \
-            select-latest "$root" --json)"
-          /usr/bin/python3 -B - "$selection" <<'PY'
-          import json
-          import sys
-
-          selected = json.loads(sys.argv[1])
-          assert selected["schema"] == "revival.pin-debug-selected-set"
-          assert selected["roles"] == [
-              "installer", "bootstrap", "hook", "server", "hook-injector"
-          ]
-          assert len(selected["setId"]) == 64
-          PY
-      - name: save external Pin builder dependency cache
+          test "$(find "$root" -maxdepth 1 -type f -name '*.apk' | wc -l)" -eq 5
+          (cd "$root" && sha256sum --check SHA256SUMS)
+      - name: Save Pin build cache
         if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.pin-builder-deps.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
-          path: |
-            ${{ runner.temp }}/pin-builder-data/build/pin-builder-cache-data/cargo-registry
-            ${{ runner.temp }}/pin-builder-data/build/pin-builder-cache-data/cargo-git
-            ${{ runner.temp }}/pin-builder-data/build/pin-builder-cache-data/gradle-caches
-            ${{ runner.temp }}/pin-builder-data/build/pin-builder-cache-data/gradle-wrapper
-            ${{ runner.temp }}/pin-builder-data/build/pin-builder-cache-data/npm-cacache
-          key: pin-builder-dependencies-v3-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('platform/containers/pin-builder/Dockerfile', 'platform/containers/pin-builder/debug-store.py', 'platform/containers/pin-builder/entrypoint.sh', 'platform/containers/pin-builder/toolchain.json', 'pin/gradle/wrapper/gradle-wrapper.properties', 'pin/injector/gradle/wrapper/gradle-wrapper.properties', 'pin/**/*.gradle', 'pin/**/*.gradle.kts', 'pin/**/Cargo.lock') }}
+          path: ${{ runner.temp }}/pin-builder-data/build/pin-builder-cache
+          key: pin-builder-v4-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('platform/containers/pin-builder/Dockerfile', 'platform/containers/pin-builder/entrypoint.sh', 'pin/gradle/wrapper/gradle-wrapper.properties', 'pin/injector/gradle/wrapper/gradle-wrapper.properties', 'pin/**/*.gradle', 'pin/**/*.gradle.kts', 'pin/**/Cargo.lock') }}

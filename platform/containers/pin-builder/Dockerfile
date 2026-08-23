@@ -18,10 +18,6 @@ ARG CARGO_NDK_ARCHIVE_URL=https://github.com/bbqsrc/cargo-ndk/releases/download/
 ARG CARGO_NDK_ARCHIVE_ROOT=cargo-ndk-x86_64-unknown-linux-gnu-v4.1.2
 ARG CARGO_NDK_ARCHIVE_SIZE=2504202
 ARG CARGO_NDK_ARCHIVE_SHA256=9451622c4567e8abb2c8005001855e32901c0b716ccdd3a173a4375fd03426e1
-ARG GITHUB_CLI_VERSION=2.98.0
-ARG GITHUB_CLI_ARCHIVE_URL=https://github.com/cli/cli/releases/download/v2.98.0/gh_2.98.0_linux_amd64.tar.gz
-ARG GITHUB_CLI_ARCHIVE_SHA256=3b8ac6b30336802fc1a858d7c084e11cdf24ac1a761ca90b68022d7d729208de
-ARG GITHUB_CLI_BINARY_SHA256=62885b97de6a0cd85e616cdd94bcda908bf5cf1018094385892b05cea3537163
 
 # Download and extract the architecture-independent Android SDK contents on
 # the native build platform. On an ARM contributor host this avoids running
@@ -39,10 +35,6 @@ ARG ANDROID_NDK_ARCHIVE_ROOT
 ARG ANDROID_NDK_ARCHIVE_SIZE
 ARG ANDROID_NDK_ARCHIVE_SHA1
 ARG ANDROID_NDK_ARCHIVE_SHA256
-ARG GITHUB_CLI_VERSION
-ARG GITHUB_CLI_ARCHIVE_URL
-ARG GITHUB_CLI_ARCHIVE_SHA256
-ARG GITHUB_CLI_BINARY_SHA256
 ENV JAVA_HOME=/opt/java/openjdk \
     ANDROID_HOME=/opt/android-sdk \
     ANDROID_SDK_ROOT=/opt/android-sdk
@@ -77,17 +69,6 @@ RUN set -eux; \
     unzip -q /tmp/android-command-line-tools.zip -d /tmp/android-command-line-tools; \
     mv /tmp/android-command-line-tools/cmdline-tools "/opt/android-sdk/cmdline-tools/${ANDROID_COMMAND_LINE_TOOLS_VERSION}"; \
     rm -rf /tmp/android-command-line-tools /tmp/android-command-line-tools.zip
-RUN set -eux; \
-    curl --fail --location --silent --show-error \
-      "${GITHUB_CLI_ARCHIVE_URL}" \
-      --output /tmp/github-cli.tar.gz; \
-    echo "${GITHUB_CLI_ARCHIVE_SHA256}  /tmp/github-cli.tar.gz" | sha256sum --check --strict; \
-    mkdir -p /tmp/github-cli /opt/github-cli; \
-    tar -xzf /tmp/github-cli.tar.gz -C /tmp/github-cli; \
-    test "$(find /tmp/github-cli -mindepth 1 -maxdepth 1 -type d -printf '%f\n')" = "gh_${GITHUB_CLI_VERSION}_linux_amd64"; \
-    echo "${GITHUB_CLI_BINARY_SHA256}  /tmp/github-cli/gh_${GITHUB_CLI_VERSION}_linux_amd64/bin/gh" | sha256sum --check --strict; \
-    install -m 0555 "/tmp/github-cli/gh_${GITHUB_CLI_VERSION}_linux_amd64/bin/gh" /opt/github-cli/gh; \
-    rm -rf /tmp/github-cli /tmp/github-cli.tar.gz
 RUN set -eux; \
     yes | "/opt/android-sdk/cmdline-tools/${ANDROID_COMMAND_LINE_TOOLS_VERSION}/bin/sdkmanager" --sdk_root=/opt/android-sdk --licenses >/dev/null; \
     "/opt/android-sdk/cmdline-tools/${ANDROID_COMMAND_LINE_TOOLS_VERSION}/bin/sdkmanager" --sdk_root=/opt/android-sdk \
@@ -251,27 +232,16 @@ RUN set -eux; \
       existing_group=builder; \
     fi; \
     useradd --create-home --uid "${BUILDER_UID}" --gid "${existing_group}" --shell /bin/bash builder; \
-    mkdir -p /cache/android /cache/cargo /cache/gradle /cache/npm \
-      /cache-data/cargo-registry /cache-data/cargo-git \
-      /cache-data/gradle-caches /cache-data/gradle-wrapper \
-      /cache-data/npm-cacache /state \
+    mkdir -p /cache/android /cache/cargo /cache/gradle /cache/npm /state \
       /run/secrets/pin /run/private-assets; \
-    chown -R builder:"${existing_group}" /cache /cache-data /state
+    chown -R builder:"${existing_group}" /cache /state
 
 COPY --from=rust_target_native /opt/rust-target/ /usr/local/rustup/toolchains/1.91.1-x86_64-unknown-linux-gnu/
 COPY --from=rust_target_native /opt/cargo-ndk/bin/ /usr/local/cargo/bin/
 
 COPY --from=android_sdk_native /opt/android-sdk /opt/android-sdk
-COPY --from=android_sdk_native /opt/github-cli/gh /usr/bin/gh
 
 COPY --chmod=0555 --chown=0:0 platform/containers/pin-builder/entrypoint.sh /usr/local/bin/ai-pin-device-builder
-COPY --chmod=0555 --chown=0:0 platform/containers/pin-builder/debug-store.py /usr/local/libexec/ai-pin-debug-store
-COPY --chmod=0555 --chown=0:0 platform/deploy/pin/hosted-attestation.mjs /usr/local/libexec/ai-pin-hosted-attestation/hosted-attestation.mjs
-COPY --chmod=0555 --chown=0:0 platform/deploy/pin/bounded-process.mjs /usr/local/libexec/ai-pin-hosted-attestation/bounded-process.mjs
-COPY --chmod=0444 --chown=0:0 platform/deploy/pin/hosted-attestation-policy.json /usr/local/libexec/ai-pin-hosted-attestation/hosted-attestation-policy.json
-COPY --chmod=0444 --chown=0:0 platform/deploy/pin/github-private-trusted-root.jsonl /usr/local/libexec/ai-pin-hosted-attestation/github-private-trusted-root.jsonl
-RUN touch /run/revival-source.tar /run/revival-source-manifest.json && \
-    chmod 0444 /run/revival-source.tar /run/revival-source-manifest.json
 
 USER builder
 WORKDIR /workspace

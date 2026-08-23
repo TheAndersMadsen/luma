@@ -1,138 +1,67 @@
-name: Attested Pin release
+name: Pin release
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: Monotonic release version (YYYY-MM-DD.N)
+        description: Release version (YYYY-MM-DD.N)
         required: true
         type: string
       version_code:
-        description: Monotonic Android versionCode
+        description: Android versionCode
         required: true
         type: number
 
 concurrency:
-  group: attested-pin-release-main
+  group: pin-release-main
   cancel-in-progress: false
 
+permissions:
+  contents: read
+
 jobs:
-  build-attest-publish:
+  build:
     if: github.repository == 'TheAndersMadsen/ai-pin-revival' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     environment: pin-release
-    permissions:
-      contents: read
-      id-token: write
-      attestations: write
-      artifact-metadata: write
     steps:
-      - name: Check out the attested source
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          fetch-depth: 0
           persist-credentials: false
-
-      - name: Require the fixed hosted identity and bind runner paths
-        shell: /usr/bin/bash --noprofile --norc -euo pipefail {0}
-        run: |
-          export PATH=/usr/bin:/bin
-          test "${GITHUB_REPOSITORY}" = "TheAndersMadsen/ai-pin-revival"
-          test "${GITHUB_REF}" = "refs/heads/main"
-          test "${RUNNER_ARCH}" = "X64"
-          runner_temp="$(/usr/bin/realpath -e -- "${RUNNER_TEMP}")"
-          test "${runner_temp}" = "${RUNNER_TEMP}"
-          test -f "${GITHUB_ENV}" && test ! -L "${GITHUB_ENV}"
-          # External protected-input provisioning is operator-owned. A trusted
-          # environment integration may populate these fixed paths only after
-          # the pre-sign attestation; absent inputs keep signing fail-closed.
-          /usr/bin/printf '%s\n' \
-            "REVIVAL_PIN_HOSTED_RUN_ROOT=${runner_temp}/pin-release-run" \
-            "REVIVAL_PIN_RELEASE_OUTPUT_DIR=${runner_temp}/published-pin-releases" \
-            "REVIVAL_CONFIG_DIR=${runner_temp}/operator-inputs/config" \
-            "REVIVAL_SECRETS_DIR=${runner_temp}/operator-inputs/secrets" \
-            "REVIVAL_PIN_PRIVATE_ASSETS_DIR=${runner_temp}/operator-inputs/config/pin-assets" \
-            >> "${GITHUB_ENV}"
-
-      - name: Prepare clean source, toolchain, and immutable builder request
-        shell: /usr/bin/bash --noprofile --norc -euo pipefail {0}
-        run: |
-          export PATH=/usr/bin:/bin
-          umask 077
-          /usr/bin/mkdir -m 0700 "${REVIVAL_PIN_HOSTED_RUN_ROOT}"
-          /usr/local/bin/node platform/deploy/pin/build.mjs build \
-            --hosted-phase prepare \
-            --run-root "${REVIVAL_PIN_HOSTED_RUN_ROOT}" \
-            --version "${{ inputs.version }}" \
-            --version-code "${{ inputs.version_code }}" \
-            --json
-
-      - name: Provider-sign the pre-sign input request
-        id: pre_attest
-        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
-          subject-path: ${{ runner.temp }}/pin-release-run/attestation/request.json
-          predicate-type: https://github.com/TheAndersMadsen/ai-pin-revival/attestations/pin-release-input/v1
-          predicate-path: ${{ runner.temp }}/pin-release-run/attestation/request.json
-
-      - name: Seal the pre-sign bundle at its fixed path
-        shell: /usr/bin/bash --noprofile --norc -euo pipefail {0}
+          node-version: 22.14.0
+          package-manager-cache: false
+      - name: Prepare protected build inputs
+        env:
+          SIGNING_ENV_BASE64: ${{ secrets.PIN_SIGNING_ENV_BASE64 }}
+          SIGNING_KEYSTORE_BASE64: ${{ secrets.PIN_SIGNING_KEYSTORE_BASE64 }}
+          PRIVATE_ASSETS_TAR_BASE64: ${{ secrets.PIN_PRIVATE_ASSETS_TAR_BASE64 }}
         run: |
-          export PATH=/usr/bin:/bin
-          /usr/bin/install -m 0600 "${{ steps.pre_attest.outputs.bundle-path }}" \
-            "${REVIVAL_PIN_HOSTED_RUN_ROOT}/attestation/pre-sign.sigstore.json"
-
-      - name: Require operator-provisioned protected signing inputs
-        shell: /usr/bin/bash --noprofile --norc -euo pipefail {0}
+          set -euo pipefail
+          inputs="$RUNNER_TEMP/pin-inputs"
+          mkdir -m 0700 -p "$inputs/secrets/pin" "$inputs/config/pin-assets" "$RUNNER_TEMP/pin-build" "$RUNNER_TEMP/pin-releases"
+          printf '%s' "$SIGNING_ENV_BASE64" | base64 --decode > "$inputs/secrets/pin/signing.env"
+          printf '%s' "$SIGNING_KEYSTORE_BASE64" | base64 --decode > "$inputs/secrets/pin/compatibility.keystore"
+          printf '%s' "$PRIVATE_ASSETS_TAR_BASE64" | base64 --decode | tar -xz -C "$inputs/config/pin-assets"
+          chmod 0600 "$inputs/secrets/pin/signing.env" "$inputs/secrets/pin/compatibility.keystore"
+          printf '%s\n' \
+            "REVIVAL_CONFIG_DIR=$inputs/config" \
+            "REVIVAL_SECRETS_DIR=$inputs/secrets" \
+            "REVIVAL_PIN_SIGNING_STORE_FILE=$inputs/secrets/pin/compatibility.keystore" \
+            "REVIVAL_BUILD_DIR=$RUNNER_TEMP/pin-build" \
+            "REVIVAL_PIN_RELEASE_OUTPUT_DIR=$RUNNER_TEMP/pin-releases" >> "$GITHUB_ENV"
+      - name: Build signed five-APK release
         run: |
-          export PATH=/usr/bin:/bin
-          test -f "${REVIVAL_SECRETS_DIR}/pin/signing.env"
-          test -d "${REVIVAL_PIN_PRIVATE_ASSETS_DIR}"
-
-      - name: Verify pre-attestation, then build and sign exactly five APKs
-        shell: /usr/bin/bash --noprofile --norc -euo pipefail {0}
-        run: |
-          export PATH=/usr/bin:/bin
-          /usr/local/bin/node platform/deploy/pin/build.mjs build \
-            --hosted-phase sign \
-            --run-root "${REVIVAL_PIN_HOSTED_RUN_ROOT}" \
+          node ./revival pin release build \
             --version "${{ inputs.version }}" \
             --version-code "${{ inputs.version_code }}" \
             --json
-
-      - name: Provider-sign the exact five-APK subject set
-        id: release_attest
-        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
-        with:
-          subject-checksums: ${{ runner.temp }}/pin-release-run/attestation/release-checksums.txt
-          predicate-type: https://github.com/TheAndersMadsen/ai-pin-revival/attestations/pin-release-five-apk/v1
-          predicate-path: ${{ runner.temp }}/pin-release-run/attestation/release-predicate.json
-
-      - name: Seal the exact-five bundle at its fixed path
-        shell: /usr/bin/bash --noprofile --norc -euo pipefail {0}
-        run: |
-          export PATH=/usr/bin:/bin
-          /usr/bin/install -m 0600 "${{ steps.release_attest.outputs.bundle-path }}" \
-            "${REVIVAL_PIN_HOSTED_RUN_ROOT}/attestation/release.sigstore.json"
-
-      - name: Reverify both bundles and publish the evidence-bound VerifiedSet
-        shell: /usr/bin/bash --noprofile --norc -euo pipefail {0}
-        run: |
-          export PATH=/usr/bin:/bin
-          umask 077
-          /usr/bin/mkdir -m 0700 "${REVIVAL_PIN_RELEASE_OUTPUT_DIR}"
-          /usr/local/bin/node platform/deploy/pin/build.mjs build \
-            --hosted-phase publish \
-            --run-root "${REVIVAL_PIN_HOSTED_RUN_ROOT}" \
-            --version "${{ inputs.version }}" \
-            --version-code "${{ inputs.version_code }}" \
-            --json
-
-      - name: Persist the evidence-bound release set
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - name: Upload release store
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: pin-release-${{ inputs.version }}
-          path: ${{ runner.temp }}/published-pin-releases
+          path: ${{ runner.temp }}/pin-releases/
           if-no-files-found: error
           retention-days: 30

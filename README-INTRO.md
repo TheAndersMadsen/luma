@@ -186,30 +186,22 @@ not invent temporary roots that would invalidate the device after a restart.
    authorities described in
    [Onboarding a Pin](docs/operations.md#onboarding-a-pin).
 
-3. Download the commit-pinned **Attested Pin release** artifact from `main`,
-   then plan and ship it to the server store:
+3. Run the Pin release workflow on `main`, download its signed five-APK release
+   artifact, then plan and publish it to Center:
 
    ```sh
    ./revival pin release ship --release-root /external/downloaded-pin-release
    ./revival pin release ship --release-root /external/downloaded-pin-release --confirm
    ```
 
-   If the workflow is not installed or the artifact is malformed, `pin release
-   ship` stops before any remote mutation.
+   A malformed or incomplete release is rejected before any remote change.
 
-4. Inspect the server publish plan, then publish when the target is correct.
-
-   ```sh
-   ./revival pin release ship --release-root /external/downloaded-pin-release
-   ./revival pin release ship --release-root /external/downloaded-pin-release --confirm
-   ```
-
-5. Open `/settings/pin/install` in Center. Connect the Pin over WebUSB. Center
+4. Open `/settings/pin/install` in Center. Connect the Pin over WebUSB. Center
    verifies the exact-five release manifest, then maintains the four steady
    installed roles. The bootstrap APK is recovery-only and is never part of a
    routine healthy-installer update.
 
-6. Provision the device identity, activate the clone endpoint, connect Wi-Fi,
+5. Provision the device identity, activate the Cosmos endpoint, connect Wi-Fi,
    and complete enrollment. Activation is a journalled device transaction, but
    invoking it is still a documented manual step.
 

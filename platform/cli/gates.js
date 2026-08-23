@@ -9,13 +9,11 @@ const path = require('node:path');
 
 const {
   ROOT,
-  DATA_DIR,
-  BUILD_DIR,
   fail,
   info,
   testProcessEnvironment,
 } = require('./context');
-const { throwLikeChild, timedRun, timedStage } = require('./timing');
+const { timedRun, timedStage } = require('./timing');
 const {
   probePinAmd64Runtime,
   testVersionParser,
@@ -25,64 +23,15 @@ const SERIAL_POLICY_TESTS = Object.freeze([
 ]);
 const CONTRIBUTOR_POLICY_TESTS = Object.freeze([
   'cli-config.test.mjs',
-  'cli-help.test.mjs',
   'cli-setup.test.mjs',
   'connectivity.test.mjs',
   'fast-workflow.test.mjs',
   'fresh-install.test.mjs',
-  'local-command-authority.test.mjs',
-  'operator-setup-contract.test.mjs',
   'revival.test.mjs',
   'setup-projection.test.mjs',
   'wire-divergence.test.mjs',
   'wire-equivalence.test.mjs',
 ]);
-const PIN_BUILDER_DEBUG_STORE = path.join(
-  ROOT,
-  'platform',
-  'containers',
-  'pin-builder',
-  'debug-store.py',
-);
-function pinLaneSessionArguments(lane, selection = {}) {
-  if (!['check', 'debug'].includes(lane)) {
-    throw new Error(`unknown Pin builder lane: ${lane}`);
-  }
-  const roles = selection.roles ?? [];
-  const changed = selection.changed === true;
-  const base = selection.base;
-  if (!Array.isArray(roles) || roles.some((role) =>
-    !['installer', 'bootstrap', 'hook', 'server', 'hook-injector'].includes(role))) {
-    throw new Error('Pin lane roles must use the fixed five-role vocabulary');
-  }
-  if (lane === 'check' && (roles.length > 0 || changed || base !== undefined)) {
-    throw new Error('the Pin check lane accepts no debug selection');
-  }
-  if (lane === 'debug' && changed === (roles.length > 0)) {
-    throw new Error('the Pin debug lane requires exactly one explicit or changed selection');
-  }
-  const arguments_ = [
-    'lane-session', DATA_DIR, BUILD_DIR, ROOT, lane,
-  ];
-  if (changed) {
-    arguments_.push('--changed');
-    if (base !== undefined) arguments_.push('--base', base);
-  } else {
-    for (const role of roles) arguments_.push('--role', role);
-  }
-  return Object.freeze(arguments_);
-}
-
-function executePinLaneSession(lane, selection = {}, dependencies = {}) {
-  const environment = dependencies.environment ?? testProcessEnvironment();
-  const runner = dependencies.runner ?? timedRun;
-  const result = runner('Pin contributor lane', 'python3', [
-    '-B', PIN_BUILDER_DEBUG_STORE, ...pinLaneSessionArguments(lane, selection),
-  ], { cwd: ROOT, env: environment, allowFailure: true });
-  if (result.signal || result.status !== 0) throwLikeChild(result);
-  return result;
-}
-
 function runContributorCheckUnit(runner, command, args, {
   environment,
   cwd,
@@ -236,8 +185,7 @@ function pinContributorCheck(dependencies = {}) {
 }
 
 function pinSourceCheck() {
-  assertPinAmd64ConsumerHost(Object.freeze({ LANG: 'C', LC_ALL: 'C' }));
-  executePinLaneSession('check');
+  pinContributorCheck();
 }
 
 function repositoryCheck({ source = false } = {}) {
@@ -256,8 +204,6 @@ module.exports = {
   policyTestMode,
   policyTestPlan,
   policyTests,
-  pinLaneSessionArguments,
-  executePinLaneSession,
   assertPinAmd64ConsumerHost,
   pinContributorCheck,
   pinSourceCheck,

@@ -30,9 +30,7 @@ const {
   testProcessEnvironment,
 } = require("../../cli/context.js");
 const {
-  executePinLaneSession,
   pinContributorCheck,
-  pinLaneSessionArguments,
   policyTestArguments,
   policyTestMode,
   policyTestPlan,
@@ -307,19 +305,6 @@ test("platform checks keep the fast contributor inventory distinct from the dyna
 });
 
 test("Pin check keeps preflight first and runs direct contributor checks", () => {
-  let invocation;
-  executePinLaneSession("check", {}, {
-    environment: { LANG: "C.UTF-8", LC_ALL: "C.UTF-8" },
-    runner(label, command, args, options) {
-      invocation = { label, command, args, options };
-      return { status: 0, signal: null, stdout: "", stderr: "" };
-    },
-  });
-  assert.equal(invocation.command, "python3");
-  assert.deepEqual(invocation.args.slice(0, 3), [
-    "-B", path.join(root, "platform/containers/pin-builder/debug-store.py"), "lane-session",
-  ]);
-  assert.equal(JSON.stringify(invocation).includes("/proc/self/fd"), false);
   const ordering = [];
   pinContributorCheck({
     preflight() { ordering.push("preflight"); },

@@ -17,7 +17,7 @@ import { logInfo, logWarn } from "./log";
  * operator-mounted directory. It never discovers APKs in the source tree and
  * never synthesizes a fallback manifest.
  */
-export const PIN_RELEASE_SCHEMA_VERSION = 2;
+export const PIN_RELEASE_SCHEMA_VERSION = 1;
 export const PIN_RELEASE_CURRENT_MANIFEST = "current.json";
 export const PIN_RELEASE_IMMUTABLE_MANIFEST = "manifest.json";
 export const MAX_PIN_RELEASE_MANIFEST_BYTES = 64 * 1024;
@@ -56,45 +56,16 @@ export interface PinReleaseArtifact extends PinReleaseArtifactIdentity {
 }
 
 export interface PinReleaseManifest {
-  readonly schemaVersion: 2;
+  readonly schemaVersion: 1;
   readonly releaseId: string;
   readonly version: string;
   readonly artifacts: readonly PinReleaseArtifact[];
-  readonly authority: PinReleaseAuthority;
 }
 
 export interface PinReleaseIdentityInput {
-  readonly schemaVersion: 2;
+  readonly schemaVersion: 1;
   readonly version: string;
   readonly artifacts: readonly PinReleaseArtifactIdentity[];
-  readonly authority: PinReleaseAuthority;
-}
-
-export interface PinReleaseAuthority {
-  readonly kind: "github-hosted-native-x64";
-  readonly name: "hosted-attestation.json";
-  readonly size: number;
-  readonly sha256: string;
-  readonly provider: "github-actions-sigstore";
-  readonly policySha256: string;
-  readonly requestSha256: string;
-  readonly predicateSha256: string;
-  readonly trustedRootSha256: string;
-  readonly preSignBundleSha256: string;
-  readonly releaseBundleSha256: string;
-  readonly preSignVerificationSha256: string;
-  readonly releaseVerificationSha256: string;
-  readonly runnerEnvironment: "github-hosted";
-  readonly runnerLabel: "ubuntu-24.04";
-  readonly runnerArchitecture: "x64";
-  readonly runnerInvocationUri: string;
-  readonly repository: "TheAndersMadsen/ai-pin-revival";
-  readonly sourceRef: "refs/heads/main";
-  readonly sourceDigest: string;
-  readonly sourceGenerationSha256: string;
-  readonly sourceTarSha256: string;
-  readonly toolchainSha256: string;
-  readonly builderImageId: string;
 }
 
 export interface PinReleaseEnvironment {
@@ -187,7 +158,6 @@ type PinReleaseFailureReason =
   | "manifest_release_id_unexpected"
   | "manifest_version_shape"
   | "manifest_artifacts_not_array"
-  | "manifest_authority_invalid"
   | "manifest_not_canonical"
   | "manifest_pair_mismatch"
   | "manifest_serialize_missing_role"
@@ -209,10 +179,6 @@ type PinReleaseFailureReason =
   | "artifact_short_read"
   | "artifact_size_drift"
   | "artifact_changed_during_read"
-  | "authority_sha256_mismatch"
-  | "authority_size_mismatch"
-  | "authority_invalid"
-  | "authority_changed_during_read"
   | "release_changed_during_verification"
   | "artifact_range_invalid"
   | "snapshot_capacity_exhausted"
@@ -250,15 +216,7 @@ const RELEASE_ID_RE = /^[0-9a-f]{64}$/;
 const SHA256_RE = /^[0-9a-f]{64}$/;
 const APK_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,254}\.apk$/;
 const INSTALL_VERSION_RE = /^(\d{4})-(\d{2})-(\d{2})\.(\d+)$/;
-const ROOT_FIELDS = ["schemaVersion", "releaseId", "version", "artifacts", "authority"];
-const AUTHORITY_FIELDS = [
-  "kind", "name", "size", "sha256", "provider", "policySha256", "requestSha256",
-  "predicateSha256", "trustedRootSha256", "preSignBundleSha256", "releaseBundleSha256",
-  "preSignVerificationSha256", "releaseVerificationSha256", "runnerEnvironment",
-  "runnerLabel", "runnerArchitecture", "runnerInvocationUri", "repository", "sourceRef",
-  "sourceDigest", "sourceGenerationSha256", "sourceTarSha256", "toolchainSha256",
-  "builderImageId",
-];
+const ROOT_FIELDS = ["schemaVersion", "releaseId", "version", "artifacts"];
 const ARTIFACT_FIELDS = [
   "role",
   "url",
@@ -267,19 +225,6 @@ const ARTIFACT_FIELDS = [
   "versionCode",
   "size",
   "sha256",
-];
-const EVIDENCE_FIELDS = [
-  "schema", "version", "provider", "policySha256", "requestSha256", "predicateSha256",
-  "trustedRootSha256", "preSignBundleSha256", "releaseBundleSha256",
-  "preSignVerificationSha256", "releaseVerificationSha256", "runnerEnvironment",
-  "runnerLabel", "runnerArchitecture", "runnerInvocationUri", "repository", "sourceRef",
-  "sourceDigest", "sourceGenerationSha256", "sourceTarSha256", "toolchainSha256",
-  "builderImageId", "artifacts", "payloads",
-];
-const EVIDENCE_PAYLOAD_FIELDS = [
-  "policyBase64", "requestBase64", "predicateBase64", "trustedRootBase64",
-  "preSignBundleBase64", "releaseBundleBase64", "preSignVerificationBase64",
-  "releaseVerificationBase64",
 ];
 const HASH_CHUNK_BYTES = 1024 * 1024;
 const SNAPSHOT_CHUNK_BYTES = 1024 * 1024;
@@ -408,58 +353,6 @@ function orderedIdentityArtifacts(
   });
 }
 
-function parseReleaseAuthority(value: unknown): PinReleaseAuthority {
-  if (!isRecord(value)) throw unavailable("manifest_authority_invalid");
-  exactFields(value, AUTHORITY_FIELDS, "manifest_authority_invalid");
-  if (value.kind !== "github-hosted-native-x64" || value.name !== "hosted-attestation.json") {
-    throw unavailable("manifest_authority_invalid");
-  }
-  const digest = (field: string): string => {
-    const result = requiredString(value[field], 64, "manifest_authority_invalid");
-    if (!SHA256_RE.test(result)) throw unavailable("manifest_authority_invalid");
-    return result;
-  };
-  if (
-    value.provider !== "github-actions-sigstore" || value.runnerEnvironment !== "github-hosted" ||
-    value.runnerLabel !== "ubuntu-24.04" || value.runnerArchitecture !== "x64" ||
-    value.repository !== "TheAndersMadsen/ai-pin-revival" || value.sourceRef !== "refs/heads/main"
-  ) throw unavailable("manifest_authority_invalid");
-  const runnerInvocationUri = requiredString(value.runnerInvocationUri, 256, "manifest_authority_invalid");
-  if (!/^https:\/\/github\.com\/TheAndersMadsen\/ai-pin-revival\/actions\/runs\/[1-9][0-9]*\/attempts\/[1-9][0-9]*$/u.test(runnerInvocationUri)) {
-    throw unavailable("manifest_authority_invalid");
-  }
-  const sourceDigest = requiredString(value.sourceDigest, 40, "manifest_authority_invalid");
-  if (!/^[0-9a-f]{40}$/u.test(sourceDigest)) throw unavailable("manifest_authority_invalid");
-  const builderImageId = requiredString(value.builderImageId, 71, "manifest_authority_invalid");
-  if (!/^sha256:[0-9a-f]{64}$/u.test(builderImageId)) throw unavailable("manifest_authority_invalid");
-  return Object.freeze({
-    kind: "github-hosted-native-x64",
-    name: "hosted-attestation.json",
-    size: positiveInteger(value.size, 64 * 1024 * 1024, "manifest_authority_invalid"),
-    sha256: digest("sha256"),
-    provider: "github-actions-sigstore",
-    policySha256: digest("policySha256"),
-    requestSha256: digest("requestSha256"),
-    predicateSha256: digest("predicateSha256"),
-    trustedRootSha256: digest("trustedRootSha256"),
-    preSignBundleSha256: digest("preSignBundleSha256"),
-    releaseBundleSha256: digest("releaseBundleSha256"),
-    preSignVerificationSha256: digest("preSignVerificationSha256"),
-    releaseVerificationSha256: digest("releaseVerificationSha256"),
-    runnerEnvironment: "github-hosted",
-    runnerLabel: "ubuntu-24.04",
-    runnerArchitecture: "x64",
-    runnerInvocationUri,
-    repository: "TheAndersMadsen/ai-pin-revival",
-    sourceRef: "refs/heads/main",
-    sourceDigest,
-    sourceGenerationSha256: digest("sourceGenerationSha256"),
-    sourceTarSha256: digest("sourceTarSha256"),
-    toolchainSha256: digest("toolchainSha256"),
-    builderImageId,
-  });
-}
-
 /**
  * Implemented identity contract shared with the host-side publisher. URLs and
  * releaseId are excluded so the digest has no circular input; all APK hashes,
@@ -477,7 +370,6 @@ export function canonicalPinReleaseIdentity(input: PinReleaseIdentityInput): str
       size: artifact.size,
       sha256: artifact.sha256,
     })),
-    authority: input.authority,
   });
 }
 
@@ -503,7 +395,6 @@ export function serializePinReleaseManifest(manifest: PinReleaseManifest): strin
         sha256: artifact.sha256,
       };
     }),
-    authority: manifest.authority,
   })}\n`;
 }
 
@@ -565,22 +456,18 @@ export function parsePinReleaseManifest(payload: unknown): PinReleaseManifest {
   const artifacts = orderedIdentityArtifacts(parsed) as readonly PinReleaseArtifact[];
   const versionCodes = new Set(artifacts.map((artifact) => artifact.versionCode));
   if (versionCodes.size !== 1) throw unavailable("artifact_version_code_mismatch");
-  const authority = parseReleaseAuthority(payload.authority);
-
   const computedReleaseId = computePinReleaseId({
-    schemaVersion: 2,
+    schemaVersion: 1,
     version,
     artifacts,
-    authority,
   });
   if (computedReleaseId !== releaseId) throw unavailable("manifest_release_id_mismatch");
 
   return Object.freeze({
-    schemaVersion: 2,
+    schemaVersion: 1,
     releaseId,
     version,
     artifacts: Object.freeze([...artifacts]),
-    authority,
   });
 }
 
@@ -965,13 +852,6 @@ async function releaseUnchanged(
     );
     if (identity !== cached.artifactIdentities.get(artifact.name)) return false;
   }
-  const authority = cached.loaded.manifest.authority;
-  const authorityIdentity = await pathIdentity(
-    store,
-    ["releases", releaseId, authority.name],
-    "unavailable",
-  );
-  if (authorityIdentity !== cached.artifactIdentities.get(authority.name)) return false;
   return true;
 }
 
@@ -1172,13 +1052,10 @@ function artifactSnapshotApprovalKey(
   artifact: PinReleaseArtifact,
 ): string {
   const manifest = release.loaded.manifest;
-  const identities = [
-    ...manifest.artifacts.map((candidate) => [
-      candidate.name,
-      release.artifactIdentities.get(candidate.name),
-    ] as const),
-    [manifest.authority.name, release.artifactIdentities.get(manifest.authority.name)] as const,
-  ];
+  const identities = manifest.artifacts.map((candidate) => [
+    candidate.name,
+    release.artifactIdentities.get(candidate.name),
+  ] as const);
   if (identities.some(([, identity]) => identity === undefined)) {
     throw unavailable("release_changed_during_verification");
   }
@@ -1430,152 +1307,6 @@ function snapshotResponseBody(
   });
 }
 
-function canonicalEvidenceValue(value: unknown): string {
-  if (value === null || typeof value !== "object") return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(canonicalEvidenceValue).join(",")}]`;
-  const recordValue = value as Record<string, unknown>;
-  return `{${Object.keys(recordValue).sort().map((key) =>
-    `${JSON.stringify(key)}:${canonicalEvidenceValue(recordValue[key])}`).join(",")}}`;
-}
-
-function parseCanonicalEvidenceJson(bytes: Buffer, reason: PinReleaseFailureReason): Record<string, unknown> {
-  let value: unknown;
-  try {
-    value = JSON.parse(bytes.toString("utf8"));
-  } catch {
-    throw unavailable(reason);
-  }
-  if (!isRecord(value) || bytes.toString("utf8") !== `${canonicalEvidenceValue(value)}\n`) {
-    throw unavailable(reason);
-  }
-  return value;
-}
-
-function decodeEvidencePayload(value: unknown): Buffer {
-  if (
-    typeof value !== "string" || value.length === 0 || value.length > 96 * 1024 * 1024 ||
-    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(value)
-  ) throw unavailable("authority_invalid");
-  const bytes = Buffer.from(value, "base64");
-  if (bytes.length === 0 || bytes.toString("base64") !== value) throw unavailable("authority_invalid");
-  return bytes;
-}
-
-function digestBytes(value: Buffer | string): string {
-  return createHash("sha256").update(value).digest("hex");
-}
-
-function parseHostedAuthorityEvidence(bytes: Buffer, manifest: PinReleaseManifest): void {
-  const evidence = parseCanonicalEvidenceJson(bytes, "authority_invalid");
-  exactFields(evidence, EVIDENCE_FIELDS, "authority_invalid");
-  if (
-    evidence.schema !== "revival.pin-hosted-release-evidence" || evidence.version !== 1 ||
-    evidence.provider !== "github-actions-sigstore" || evidence.runnerEnvironment !== "github-hosted" ||
-    evidence.runnerLabel !== "ubuntu-24.04" || evidence.runnerArchitecture !== "x64" ||
-    evidence.repository !== "TheAndersMadsen/ai-pin-revival" || evidence.sourceRef !== "refs/heads/main" ||
-    typeof evidence.runnerInvocationUri !== "string" ||
-    !/^https:\/\/github\.com\/TheAndersMadsen\/ai-pin-revival\/actions\/runs\/[1-9][0-9]*\/attempts\/[1-9][0-9]*$/u.test(evidence.runnerInvocationUri)
-  ) throw unavailable("authority_invalid");
-  const authorityRecord = manifest.authority as unknown as Record<string, unknown>;
-  for (const field of AUTHORITY_FIELDS.slice(4)) {
-    if (authorityRecord[field] !== evidence[field]) throw unavailable("authority_invalid");
-  }
-  for (const field of [
-    "policySha256", "requestSha256", "predicateSha256", "trustedRootSha256",
-    "preSignBundleSha256", "releaseBundleSha256", "preSignVerificationSha256",
-    "releaseVerificationSha256", "sourceGenerationSha256", "sourceTarSha256", "toolchainSha256",
-  ]) {
-    if (typeof evidence[field] !== "string" || !SHA256_RE.test(evidence[field] as string)) {
-      throw unavailable("authority_invalid");
-    }
-  }
-  if (
-    typeof evidence.sourceDigest !== "string" || !/^[0-9a-f]{40}$/u.test(evidence.sourceDigest) ||
-    typeof evidence.builderImageId !== "string" || !/^sha256:[0-9a-f]{64}$/u.test(evidence.builderImageId)
-  ) throw unavailable("authority_invalid");
-  if (!Array.isArray(evidence.artifacts) || evidence.artifacts.length !== PIN_RELEASE_ROLES.length) {
-    throw unavailable("authority_invalid");
-  }
-  for (const [index, role] of PIN_RELEASE_ROLES.entries()) {
-    const attested = evidence.artifacts[index];
-    const artifact = manifest.artifacts[index];
-    if (
-      !isRecord(attested) || Object.keys(attested).sort().join(",") !== "name,role,sha256,size" ||
-      attested.role !== role || attested.name !== artifact.name ||
-      attested.sha256 !== artifact.sha256 || attested.size !== artifact.size
-    ) throw unavailable("authority_invalid");
-  }
-  const encodedPayloads = evidence.payloads;
-  if (!isRecord(encodedPayloads)) throw unavailable("authority_invalid");
-  exactFields(encodedPayloads, EVIDENCE_PAYLOAD_FIELDS, "authority_invalid");
-  const payloads = Object.fromEntries(EVIDENCE_PAYLOAD_FIELDS.map((field) => [
-    field,
-    decodeEvidencePayload(encodedPayloads[field]),
-  ])) as Record<string, Buffer>;
-  const digestBindings: ReadonlyArray<readonly [string, string]> = [
-    ["policySha256", "policyBase64"],
-    ["requestSha256", "requestBase64"],
-    ["predicateSha256", "predicateBase64"],
-    ["trustedRootSha256", "trustedRootBase64"],
-    ["preSignBundleSha256", "preSignBundleBase64"],
-    ["releaseBundleSha256", "releaseBundleBase64"],
-    ["preSignVerificationSha256", "preSignVerificationBase64"],
-    ["releaseVerificationSha256", "releaseVerificationBase64"],
-  ];
-  for (const [digestField, payloadField] of digestBindings) {
-    if (evidence[digestField] !== digestBytes(payloads[payloadField])) throw unavailable("authority_invalid");
-  }
-  const request = parseCanonicalEvidenceJson(payloads.requestBase64, "authority_invalid");
-  if (
-    request.schema !== "revival.pin-hosted-release-request" || request.version !== 1 ||
-    request.repository !== evidence.repository || request.sourceRef !== evidence.sourceRef ||
-    request.sourceDigest !== evidence.sourceDigest || request.sourceGenerationSha256 !== evidence.sourceGenerationSha256 ||
-    request.sourceTarSha256 !== evidence.sourceTarSha256 || request.toolchainSha256 !== evidence.toolchainSha256 ||
-    request.builderImageId !== evidence.builderImageId || request.versionName !== manifest.version ||
-    request.versionCode !== manifest.artifacts[0].versionCode ||
-    !Array.isArray(request.roles) || request.roles.join(",") !== PIN_RELEASE_ROLES.join(",")
-  ) throw unavailable("authority_invalid");
-  const predicate = parseCanonicalEvidenceJson(payloads.predicateBase64, "authority_invalid");
-  if (
-    predicate.schema !== "revival.pin-hosted-five-apk" || predicate.version !== 1 ||
-    predicate.requestSha256 !== evidence.requestSha256 ||
-    predicate.preSignBundleSha256 !== evidence.preSignBundleSha256 ||
-    predicate.runnerInvocationUri !== evidence.runnerInvocationUri ||
-    canonicalEvidenceValue(predicate.artifacts) !== canonicalEvidenceValue(evidence.artifacts)
-  ) throw unavailable("authority_invalid");
-  parseCanonicalEvidenceJson(payloads.preSignVerificationBase64, "authority_invalid");
-  parseCanonicalEvidenceJson(payloads.releaseVerificationBase64, "authority_invalid");
-}
-
-async function verifyAuthoritySidecar(store: ReleaseStore, manifest: PinReleaseManifest): Promise<string> {
-  const authority = manifest.authority;
-  const opened = await openRegularFile(
-    store,
-    ["releases", manifest.releaseId, authority.name],
-    "unavailable",
-  );
-  try {
-    if (opened.stat.size !== authority.size) throw unavailable("authority_size_mismatch");
-    const bytes = Buffer.allocUnsafe(authority.size);
-    let position = 0;
-    while (position < bytes.length) {
-      const { bytesRead } = await opened.handle.read(bytes, position, bytes.length - position, position);
-      if (bytesRead === 0) throw unavailable("authority_size_mismatch");
-      position += bytesRead;
-    }
-    if (digestBytes(bytes) !== authority.sha256) throw unavailable("authority_sha256_mismatch");
-    parseHostedAuthorityEvidence(bytes, manifest);
-    const after = await opened.handle.stat();
-    if (
-      after.size !== opened.stat.size || after.dev !== opened.stat.dev || after.ino !== opened.stat.ino ||
-      after.mtimeMs !== opened.stat.mtimeMs || after.ctimeMs !== opened.stat.ctimeMs
-    ) throw unavailable("authority_changed_during_read");
-    return fileIdentity(opened.stat);
-  } finally {
-    await opened.handle.close().catch(() => undefined);
-  }
-}
-
 /** Verify every artifact and record the identities that verdict covers. */
 async function verifyArtifacts(
   store: ReleaseStore,
@@ -1587,7 +1318,6 @@ async function verifyArtifacts(
     identities.set(artifact.name, verified.identity);
     await verified.handle.close().catch(() => undefined);
   }
-  identities.set(manifest.authority.name, await verifyAuthoritySidecar(store, manifest));
   return identities;
 }
 
@@ -1694,9 +1424,8 @@ async function verifyImmutableRelease(
  *
  * A browser normally learns this URL from `/current`, but immutable URLs are
  * public and can be requested directly after a process restart. Consequently a
- * cold GET or HEAD must not treat a canonical manifest plus one matching APK as
- * authority: all five APKs and the hosted evidence sidecar are established
- * before this returns. Concurrent cold requests share that complete verdict.
+ * cold GET or HEAD verifies the complete five-APK release before returning.
+ * Concurrent cold requests share that verification.
  */
 async function loadImmutableRelease(
   store: ReleaseStore,
