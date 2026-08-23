@@ -35,10 +35,10 @@
     "GRADLE_USER_HOME": "/workspace-private/gradle",
     "NPM_CONFIG_CACHE": "/workspace-cache/npm",
     "NPM_CONFIG_USERCONFIG": "/workspace-private/npm/npmrc",
-    "REVIVAL_CONFIG_DIR": "/workspace-private/revival/config",
-    "REVIVAL_SECRETS_DIR": "/workspace-private/revival/secrets",
-    "REVIVAL_DATA_DIR": "/workspace-private/revival/data"
+    "REVIVAL_CONFIG_DIR": "/workspaces/.ai-pin-revival/config",
+    "REVIVAL_SECRETS_DIR": "/workspaces/.ai-pin-revival/secrets",
+    "REVIVAL_DATA_DIR": "/workspaces/.ai-pin-revival/data"
   },
-  "postCreateCommand": "sudo chown -R root:root /usr/local/rustup /usr/local/cargo && sudo chmod -R go-w /usr/local/rustup /usr/local/cargo && sudo chown -R vscode:vscode /workspace-cache /workspace-private && sudo chmod 0750 /workspace-cache && sudo chmod 0700 /workspace-private && mkdir -p /workspace-cache/cargo-target /workspace-cache/npm /workspace-private/cargo /workspace-private/gradle /workspace-private/npm /workspace-private/revival/config /workspace-private/revival/secrets /workspace-private/revival/data && chmod 0700 /workspace-private/cargo /workspace-private/gradle /workspace-private/npm /workspace-private/revival /workspace-private/revival/config /workspace-private/revival/secrets /workspace-private/revival/data",
+  "postCreateCommand": "sudo chown -R root:root /usr/local/rustup /usr/local/cargo && sudo chmod -R go-w /usr/local/rustup /usr/local/cargo && sudo chown -R vscode:vscode /workspace-cache /workspace-private && sudo chmod 0750 /workspace-cache && sudo chmod 0700 /workspace-private && mkdir -p /workspace-cache/cargo-target /workspace-cache/npm /workspace-private/cargo /workspace-private/gradle /workspace-private/npm /workspaces/.ai-pin-revival/config /workspaces/.ai-pin-revival/secrets /workspaces/.ai-pin-revival/data && chmod 0700 /workspace-private/cargo /workspace-private/gradle /workspace-private/npm /workspaces/.ai-pin-revival /workspaces/.ai-pin-revival/config /workspaces/.ai-pin-revival/secrets /workspaces/.ai-pin-revival/data",
   "remoteUser": "vscode"
 }
