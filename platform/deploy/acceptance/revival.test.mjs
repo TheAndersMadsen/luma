@@ -441,6 +441,7 @@ test("production Compose binds one release identity and keeps web services priva
   assert.deepEqual(Object.keys(rendered.services.center.networks).sort(), [
     "cosmos-internal",
     "loopback-publish",
+    "provider-egress",
     "spotify-control",
   ]);
   assert.deepEqual(Object.keys(rendered.services.keycloak.networks).sort(), [
@@ -450,8 +451,9 @@ test("production Compose binds one release identity and keeps web services priva
   assert.deepEqual(
     Object.entries(rendered.services)
       .filter(([, service]) => service.networks?.["provider-egress"])
-      .map(([name]) => name),
-    ["ai-bus"],
+      .map(([name]) => name)
+      .sort(),
+    ["ai-bus", "center"],
   );
   assert.deepEqual(
     Object.entries(rendered.services)

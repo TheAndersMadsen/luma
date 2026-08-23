@@ -238,9 +238,13 @@ services:
       - center-data:/data
       - ${REVIVAL_DATA_DIR:-/home/anders/ai-pin-revival/data}/pin-releases:/var/lib/ai-pin-revival/pin-releases:ro
     networks: !override
-      - cosmos-internal
-      - spotify-control
-      - loopback-publish
+      cosmos-internal: {}
+      spotify-control: {}
+      loopback-publish: {}
+      # Center performs provider-owned OAuth and catalog requests directly
+      # (YouTube Music, TIDAL, and Apple Music).
+      provider-egress:
+        gw_priority: 1
     secrets:
       - source: spotify_adapter_token
         target: spotify_adapter_token
