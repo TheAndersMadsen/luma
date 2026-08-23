@@ -3096,7 +3096,7 @@ mod tests {
         let device_cn = "V:01:D:pin1:U:alice";
         headers.insert(
             crate::config::EDGE_PRINCIPAL_HEADER,
-            format!("By=spiffe://carry.local/edge;Subject=\"CN={device_cn}\"")
+            format!("By=spiffe://cosmos.local/edge;Subject=\"CN={device_cn}\"")
                 .parse()
                 .unwrap(),
         );

@@ -4,14 +4,14 @@ case "${BASH_SOURCE[0]}" in /*) SCRIPT_PATH="${BASH_SOURCE[0]}" ;; *) SCRIPT_PAT
 SCRIPT_DIR="${SCRIPT_PATH%/*}"
 builtin source "$SCRIPT_DIR/lib/local.sh"
 
-# The one-time Carry registrar is a separate operator command and entry point,
+# The one-time legacy predecessor registrar is a separate operator command and entry point,
 # not an override flag accepted by `deploy production`.  It sources this shared
 # candidate transport so provider verification, snapshotting, resumable upload,
 # and the held-release bootstrap remain byte-identical.
 deploy_operation=deploy
 if ((${#BASH_SOURCE[@]} >= 2)) \
-  && [[ "${BASH_SOURCE[1]}" == "$SCRIPT_DIR/register-carry-baseline.sh" ]]; then
-  deploy_operation=register-carry-baseline
+  && [[ "${BASH_SOURCE[1]}" == "$SCRIPT_DIR/register-legacy-predecessor.sh" ]]; then
+  deploy_operation=register-legacy-predecessor
 fi
 
 dry_run=0 cleanup=0 confirm=0 json=0 min_free_gb=8 skip_smoke=0
@@ -46,12 +46,12 @@ if ((dry_run)); then
 else
   ((confirm == 1)) || usage_error "production deployment requires one literal --confirm"
 fi
-if [[ "$deploy_operation" == register-carry-baseline ]]; then
+if [[ "$deploy_operation" == register-legacy-predecessor ]]; then
   ((cleanup == 0 && skip_smoke == 0)) \
-    || usage_error "Carry baseline registration does not accept deployment cleanup or smoke overrides"
+    || usage_error "legacy predecessor registration does not accept deployment cleanup or smoke overrides"
 fi
 
-# Candidate verification and the protected Carry-state comparison intentionally
+# Candidate verification and the protected legacy production-state comparison intentionally
 # precede local_preflight: neither SSH nor any remote command is reachable until
 # the exact immutable input has passed both local gates.
 snapshot_dir="$(mktemp -d)"

@@ -12,12 +12,12 @@ firmware or a generic server installer. It is not affiliated with Humane.
 
 > [!CAUTION]
 > **Never deploy from a dirty checkout. Never deploy `HEAD` or `main` while the
-> Carry → Cosmos production-compatibility work remains unresolved.** Production
-> still owns exact Carry-era volumes, paths, database identities, certificates,
+> legacy-predecessor → Cosmos production-compatibility work remains unresolved.**
+> Production still owns exact legacy volumes, paths, database identities, certificates,
 > settings, and rollback authority. A normal `git pull`, merge, Compose launch,
 > or source-tree deploy can strand durable data. Production releases must come
 > only from an isolated, immutable, provider-verified candidate after every
-> Carry compatibility gate passes. See [Production safety](#production-safety).
+> legacy-production compatibility gate passes. See [Production safety](#production-safety).
 
 ## Project status
 
@@ -28,7 +28,7 @@ firmware or a generic server installer. It is not affiliated with Humane.
 | Cosmos | Device APIs, enrollment, persistence, feature flags, assistant/tool routing, search, speech adapters, and Center projections are implemented. |
 | Pin | System Injector, Hook, Android/Rust runtime, authenticated bridge, stock-wire contracts, and deterministic builders are present. Safe installation and wearer-visible behavior still require exact-device acceptance. |
 | CI and release evidence | Push/PR CI, an attested VPS-candidate workflow, and an attested exact-five-APK workflow are defined. The hosted workflows build evidence; they do not deploy a VPS or mutate a Pin. |
-| Production | Existing-installation operations are implemented, but deploying current `main` remains blocked until the Carry physical-resource contract and first-cutover rollback path are completely verified. |
+| Production | Existing-installation operations are implemented, but deploying current `main` remains blocked until the legacy physical-resource contract and first-cutover rollback path are completely verified. |
 | Distribution | Source checkout and Dev Container are the supported entry points today. Release-archive and Homebrew publication machinery exists, but no public binary/formula is advertised without a reachable matching release. |
 
 The project uses four evidence labels consistently: `observed`, `derived`,
@@ -82,7 +82,7 @@ remain in charge. The Hook replaces the retired provider boundary and delegates
 network/auth work to the Pin runtime or the wearer-scoped Center gateway. No
 YouTube Music, TIDAL, or Apple Music app is installed on the Pin by this project.
 Compatibility identifiers such as `penumbra_carry_*`, stock authorities,
-Android package names, and the pinned Carry root are intentionally retained
+Android package names, and the pinned legacy root are intentionally retained
 where an in-place upgrade depends on them.
 
 Read [Architecture](docs/architecture.md) for the runtime, edge, wire, and trust
@@ -311,7 +311,7 @@ downloaded hosted handoff, fresh provider verification, exact service → image
 IDs, resumable upload, `--pull never`, `--no-build`, dry-run/confirm gates,
 semantic canaries, drift proof, and retained rollback evidence.
 
-The current deployment's physical ABI remains Carry even though the logical
+The current deployment keeps its legacy physical ABI even though the logical
 product and source are Cosmos. At minimum, production authority includes:
 
 | Resource | Exact retained identity |
@@ -326,8 +326,10 @@ product and source are Cosmos. At minimum, production authority includes:
 | Container state target | `/var/lib/carry` |
 
 The physical PostgreSQL role/database/schema/sequence identities, PKI files,
-public hostnames/SNI, protected configuration paths, backup-v1 fields, metrics,
-and Pin/Center compatibility keys must also remain Carry-compatible. There is
+public hostnames/SNI, protected configuration paths, backup-v1 fields, and
+Pin/Center compatibility keys must also remain rollback-compatible. Prometheus
+keeps its exact data volume while live metric families use the logical
+`cosmos_*` namespace. There is
 no authorized automatic create, copy, rename, migration, deletion, relabeling,
 or second-writer alias for these resources.
 
@@ -431,7 +433,7 @@ responsibility.
   crosses Center, Cosmos, Pin, or Platform, and add the narrow regression test
   that proves the boundary.
 - Preserve stock package names, wire fields, authorities, certificate subjects,
-  persistent keys, and Carry-era storage identities unless a separately
+  persistent keys, and legacy storage identities unless a separately
   reviewed reversible migration explicitly proves otherwise.
 - Run focused checks during development and the full applicable release gate
   before asking another person or a hosted workflow to trust the change.

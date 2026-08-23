@@ -397,7 +397,7 @@ mod tests {
             Workload::AiBus,
             DeploymentEnvironment::Development,
             instance,
-            "carry.local",
+            "cosmos.local",
         )
         .expect("valid workload identity")
     }

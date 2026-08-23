@@ -23,7 +23,7 @@ const CLIENT_SECRET = process.env.KEYCLOAK_CLIENT_SECRET ?? "";
 const KEYCLOAK_BASE_URL = (process.env.KEYCLOAK_BASE_URL ?? "").replace(/\/$/, "");
 const SESSION_SECRET = process.env.AUTH_SESSION_SECRET ?? "";
 // Keycloak role names are persisted outside this repository. Keep issuing and
-// recognizing the deployed Carry role so a rollback sees the same operator.
+// recognizing the deployed legacy role so a rollback sees the same operator.
 const OPERATOR_ROLE = "carry-operator";
 const OPERATOR_EMAILS = new Set(
   (process.env.COSMOS_OPERATOR_EMAILS ?? "")
@@ -38,7 +38,7 @@ export const SESSION_COOKIE = "carry_session";
 export const SESSION_TTL_SECONDS = 60 * 60 * 12;
 export const AUTH_ENABLED = KEYCLOAK_BASE_URL.length > 0;
 
-const DEV_FALLBACK_SECRET = "carry-center-dev-session-secret-change-me";
+const DEV_FALLBACK_SECRET = "cosmos-center-dev-session-secret-change-me";
 
 function secretKey(): Uint8Array {
   if (SESSION_SECRET) return new TextEncoder().encode(SESSION_SECRET);

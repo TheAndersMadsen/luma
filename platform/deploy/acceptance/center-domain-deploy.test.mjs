@@ -1243,7 +1243,7 @@ test("[implemented] deployment entrypoints bind the Center domain transaction", 
   }
 
   assertSource(scripts.canary, /center_base=https:\/\/center\.andersmadsen\.dk/, "public canary must use Center");
-  assertSource(scripts.canary, /https:\/\/carry\.andersmadsen\.dk/, "public canary must retain Carry redirect coverage");
+  assertSource(scripts.canary, /https:\/\/carry\.andersmadsen\.dk/, "public canary must retain legacy redirect coverage");
   assertSource(scripts.canary, /307/, "legacy redirect must preserve the request method");
   assertSource(scripts.canary, /[Ll]ocation/, "legacy redirect must verify Location");
 });

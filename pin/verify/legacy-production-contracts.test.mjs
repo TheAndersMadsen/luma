@@ -59,7 +59,7 @@ test("provider and manifest keep the deployed content authority and key alias", 
   assert.doesNotMatch(manifest, /com\.penumbraos\.server\.cosmosidentity/u);
 });
 
-test("API, onboarding, connectivity, and status keep their Carry wire authorities", async () => {
+test("API, onboarding, connectivity, and status keep their legacy wire authorities", async () => {
   const [activation, transport, reporter] = await Promise.all([
     read(paths.activation),
     read(paths.transport),
@@ -79,7 +79,7 @@ test("API, onboarding, connectivity, and status keep their Carry wire authoritie
   assert.doesNotMatch(`${activation}\n${transport}\n${reporter}`, /(?:^|[.])cosmos\.humane\.cloud|cosmos-api\.andersmadsen\.dk/u);
 });
 
-test("both Pin consumers pin the unchanged Carry root documented for operators", async () => {
+test("both Pin consumers pin the unchanged legacy root documented for operators", async () => {
   const [transport, provider, readme] = await Promise.all([
     read(paths.transport),
     read(paths.provider),

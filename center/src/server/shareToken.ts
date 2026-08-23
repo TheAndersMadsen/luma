@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { EncryptJWT, jwtDecrypt } from "jose";
 
 const SHARE_TTL_SECONDS = 7 * 24 * 60 * 60;
-// These claims are embedded in durable public links. Stable Carry issuance is
+// These claims are embedded in durable public links. Stable legacy issuance is
 // required so both the upgraded service and a rolled-back service accept them.
 const SHARE_ISSUER = "humane-carry-clone:center";
 const SHARE_AUDIENCE = "humane-carry-clone:public-share";

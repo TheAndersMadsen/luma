@@ -256,3 +256,46 @@ test("production mutations require exact confirmation before any external tool",
     assertNoExternalTool(evidence);
   }
 });
+
+test("deprecated predecessor spelling shares the canonical plan and confirmation gates", (t) => {
+  const selected = isolatedSource(t, "predecessor-alias");
+  const script = path.join(
+    selected.sourceRoot,
+    "platform", "deploy", "vps", "register-legacy-predecessor.sh",
+  );
+  fs.writeFileSync(script, "#!/bin/sh\nprintf '%s\\n' \"$@\"\n", { mode: 0o700 });
+  const candidate = path.join(selected.temporary, "candidate");
+
+  for (const { tail, status } of [
+    { tail: ["--candidate", candidate], status: 64 },
+    { tail: ["--candidate", candidate, "--dry-run"], status: 0 },
+    { tail: ["--candidate", candidate, "--confirm"], status: 0 },
+    { tail: ["--candidate", candidate, "--confirm", "--confirm"], status: 64 },
+    { tail: ["--candidate", candidate, "--dry-run", "--confirm"], status: 64 },
+  ]) {
+    const canonical = invoke(selected.environment, ["deploy", "legacy-predecessor", ...tail], {
+      cwd: selected.sourceRoot,
+      cli: selected.launcher,
+    });
+    const compatibility = invoke(selected.environment, ["deploy", "carry-baseline", ...tail], {
+      cwd: selected.sourceRoot,
+      cli: selected.launcher,
+    });
+    assert.equal(canonical.status, status, canonical.stderr);
+    assert.equal(compatibility.status, status, compatibility.stderr);
+    assert.equal(compatibility.stdout, canonical.stdout);
+    assert.equal(compatibility.stderr, canonical.stderr);
+  }
+
+  for (const target of ["carry", "legacy-baseline", "carry-baseline-extra"]) {
+    const result = invoke(
+      selected.environment,
+      ["deploy", target, "--candidate", candidate, "--dry-run"],
+      { cwd: selected.sourceRoot, cli: selected.launcher },
+    );
+    assert.notEqual(result.status, 0, target);
+    assert.match(result.stderr, /deploy production\|legacy-predecessor/u);
+    assert.doesNotMatch(result.stderr, /carry-baseline/u);
+    assert.equal(result.stdout, "");
+  }
+});

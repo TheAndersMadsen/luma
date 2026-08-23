@@ -184,7 +184,7 @@ class ChannelFactoryBypassTest {
     }
 
     @Test
-    fun remoteCarryWireGatewaysAreExactAndTlsOnly() {
+    fun legacyWireGatewaysAreExactAndTlsOnly() {
         assertTrue(CosmosRemoteTransport.isAllowedGateway("api.carry.humane.cloud:443"))
         assertTrue(CosmosRemoteTransport.isAllowedGateway("onboarding.carry.humane.cloud"))
         assertFalse(CosmosRemoteTransport.isAllowedGateway("api.prod.humane.cloud:443"))
@@ -197,7 +197,7 @@ class ChannelFactoryBypassTest {
     }
 
     @Test
-    fun logicalCosmosTransportMapsOnlyToStableCarryWireAuthorities() {
+    fun logicalCosmosTransportMapsOnlyToStableLegacyWireAuthorities() {
         assertEquals(
             "api.carry.humane.cloud:443",
             CosmosRemoteTransport.redirectedGateway("api.prod.humane.cloud"),

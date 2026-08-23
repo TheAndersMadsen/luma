@@ -72,7 +72,7 @@ static_resources:
                   virtual_hosts:
                     - name: cosmos_onboarding
                       domains: ["*"]
-                      # Retain only the release-coupled Carry ABI. Strip both
+                      # Retain only the release-coupled legacy ABI. Strip both
                       # names so a renamed-client header can never survive as
                       # caller-selected principal or edge-token authority.
                       request_headers_to_remove: ["x-carry-edge-token", "x-cosmos-edge-token", "x-carry-authenticated-principal", "x-cosmos-authenticated-principal"]

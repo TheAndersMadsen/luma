@@ -497,13 +497,13 @@ test("preflight proves the edge trusts the CAs that actually issue device certif
   // enumerated rather than only the first.
   assert.match(preflight, /^\s*\/-----BEGIN CERTIFICATE-----\/ \{ count \+= 1 \}$/m);
   // The server half is bound to the exact release-held activation source, not a
-  // mutable tree pathname, then checked against the immutable Carry root and
+  // mutable tree pathname, then checked against the immutable legacy root and
   // every SNI value accepted by either device listener.
   assert.match(
     heldReleaseExec,
     /^    "platform\/deploy\/pin\/activate\.mjs": "REVIVAL_HELD_PIN_ACTIVATE",$/m,
   );
-  assert.match(preflight, /^verify_pinned_carry_edge_certificate\(\) \($/m);
+  assert.match(preflight, /^verify_pinned_legacy_edge_certificate\(\) \($/m);
   assert.match(preflight, /^  release_material_file_is_safe "\$activate_source" \|\| return 1$/m);
   assert.match(
     preflight,

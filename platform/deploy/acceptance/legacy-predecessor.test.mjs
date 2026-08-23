@@ -9,9 +9,9 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
-const baselineTool = path.join(ROOT, "platform/deploy/vps/remote/carry-baseline.py");
-const registrar = readFileSync(path.join(ROOT, "platform/deploy/vps/remote/register-carry-baseline.sh"), "utf8");
-const library = readFileSync(path.join(ROOT, "platform/deploy/vps/remote/lib/carry-baseline.sh"), "utf8");
+const predecessorTool = path.join(ROOT, "platform/deploy/vps/remote/legacy-predecessor.py");
+const registrar = readFileSync(path.join(ROOT, "platform/deploy/vps/remote/register-legacy-predecessor.sh"), "utf8");
+const library = readFileSync(path.join(ROOT, "platform/deploy/vps/remote/lib/legacy-predecessor.sh"), "utf8");
 const deploy = readFileSync(path.join(ROOT, "platform/deploy/vps/remote/deploy.sh"), "utf8");
 const rollback = readFileSync(path.join(ROOT, "platform/deploy/vps/remote/rollback.sh"), "utf8");
 const preflight = readFileSync(path.join(ROOT, "platform/deploy/vps/remote/preflight.sh"), "utf8");
@@ -19,12 +19,12 @@ const localDeploy = readFileSync(path.join(ROOT, "platform/deploy/vps/deploy.sh"
 const localLibrary = readFileSync(path.join(ROOT, "platform/deploy/vps/lib/local.sh"), "utf8");
 const productionCli = readFileSync(path.join(ROOT, "platform/cli/production.js"), "utf8");
 
-test("adopted Carry records are closed, deterministic, content-addressed, and tamper evident", () => {
+test("adopted legacy predecessor records are closed, deterministic, content-addressed, and tamper evident", () => {
   const script = String.raw`
 import copy,importlib.util,os,tempfile
-spec=importlib.util.spec_from_file_location("carry_baseline",__import__("sys").argv[1])
+spec=importlib.util.spec_from_file_location("legacy_predecessor",__import__("sys").argv[1])
 module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
-fixture=tempfile.mkdtemp(prefix="revival-carry-baseline-"); os.chmod(fixture,0o700)
+fixture=tempfile.mkdtemp(prefix="revival-legacy-predecessor-"); os.chmod(fixture,0o700)
 center=os.path.join(fixture,"center-data"); os.mkdir(center,0o700)
 config=[]
 for name,kind in (("runtime","file"),("backends","file"),("center","file"),
@@ -83,7 +83,7 @@ try:
     module.build_observation(wrong_edge_mount,volumes,networks,"active","a"*64,
                              config_paths=tuple(config),center_data_path=center,resource_paths=resources)
 except SystemExit: pass
-else: raise AssertionError("legacy edge certificate copy was accepted as the deployed Carry mount")
+else: raise AssertionError("legacy edge certificate copy was accepted as the deployed legacy mount")
 active=module.build_observation(containers("active"),volumes,networks,"active","a"*64,
                                 config_paths=tuple(config),center_data_path=center,resource_paths=resources)
 record=module.make_record(active,"b"*64,"c"*64,"d"*64)
@@ -126,26 +126,26 @@ module.validate_privileged_configurations(privileged)
 wrong_owner=copy.deepcopy(privileged); wrong_owner["attestation-pki"]["entries"][0]["uid"]=0
 try: module.validate_privileged_configurations(wrong_owner)
 except SystemExit: pass
-else: raise AssertionError("privileged Carry PKI owner substitution was accepted")
+else: raise AssertionError("privileged legacy PKI owner substitution was accepted")
 
 store=os.path.join(fixture,"store-root"); os.mkdir(store,0o700); module.REMOTE_ROOT=store
-baseline=module.register_record(store,record)
-assert baseline==module.register_record(store,record)
-assert module.read_record(store,baseline)==record
-assert open(os.path.join(store,module.STORE_BASENAME,"active"),encoding="utf-8").read()==baseline+"\n"
+predecessor=module.register_record(store,record)
+assert predecessor==module.register_record(store,record)
+assert module.read_record(store,predecessor)==record
+assert open(os.path.join(store,module.STORE_BASENAME,"active"),encoding="utf-8").read()==predecessor+"\n"
 assert (os.stat(os.path.join(store,module.STORE_BASENAME,"active")).st_mode&0o777)==0o400
 different=copy.deepcopy(record); different["registrar"]["deploymentAuthoritySha256"]="e"*64
 try: module.register_record(store,different)
 except SystemExit: pass
-else: raise AssertionError("retry replaced an active baseline")
-record_path=os.path.join(store,module.STORE_BASENAME,baseline+".json")
+else: raise AssertionError("retry replaced the active predecessor")
+record_path=os.path.join(store,module.STORE_BASENAME,predecessor+".json")
 os.chmod(record_path,0o600)
-try: module.read_record(store,baseline)
+try: module.read_record(store,predecessor)
 except SystemExit: pass
-else: raise AssertionError("writable baseline record was accepted")
+else: raise AssertionError("writable predecessor record was accepted")
 print(len(attacks))
 `;
-  const result = spawnSync("/usr/bin/python3", ["-I", "-B", "-c", script, baselineTool], {
+  const result = spawnSync("/usr/bin/python3", ["-I", "-B", "-c", script, predecessorTool], {
     encoding: "utf8",
     timeout: 30_000,
     env: { HOME: "/nonexistent", LANG: "C.UTF-8", LC_ALL: "C.UTF-8", PATH: "/usr/bin:/usr/sbin", TZ: "UTC" },
@@ -155,16 +155,16 @@ print(len(attacks))
 });
 
 test("registration is a dedicated no-runtime-mutation command with held provider authority", () => {
-  assert.match(productionCli, /registerCarryBaseline[\s\S]*register-carry-baseline\.sh/u);
-  assert.match(localDeploy, /BASH_SOURCE\[1\][\s\S]*register-carry-baseline\.sh/u);
-  assert.doesNotMatch(localDeploy, /--(?:register|adopt)-carry-baseline/u,
-    "normal deploy accepted a hidden baseline override flag");
+  assert.match(productionCli, /registerLegacyPredecessor[\s\S]*register-legacy-predecessor\.sh/u);
+  assert.match(localDeploy, /BASH_SOURCE\[1\][\s\S]*register-legacy-predecessor\.sh/u);
+  assert.doesNotMatch(localDeploy, /--(?:register|adopt)-legacy-predecessor/u,
+    "normal deploy accepted a hidden predecessor-registration flag");
   assert.match(registrar, /point-of-use-reverified[\s\S]*observed-live-runtime-not-provider-built/u);
   assert.match(registrar, /flock -n 9[\s\S]*value\.get\("active"\)==\[\]/u);
-  assert.match(registrar, /capture_adopted_live_carry_observation "\$first" active[\s\S]*"\$second" active[\s\S]*cmp -s/u);
+  assert.match(registrar, /capture_legacy_predecessor_observation "\$first" active[\s\S]*"\$second" active[\s\S]*cmp -s/u);
   assert.equal((registrar.match(/^assert_active_durable_mounts$/gmu) ?? []).length, 4,
     "registration must re-prove exact mounts and alternate-writer absence at both captures and publication");
-  assert.match(library, /write_exact_carry_security_identity[\s\S]*"attestation-pki":\("\/home\/anders\/carry-attest",65532,65532\)[\s\S]*write_privileged_carry_configuration_inventory[\s\S]*--privileged-config-fd 6/u);
+  assert.match(library, /write_exact_legacy_security_identity[\s\S]*"attestation-pki":\("\/home\/anders\/carry-attest",65532,65532\)[\s\S]*write_privileged_legacy_configuration_inventory[\s\S]*--privileged-config-fd 6/u);
   assert.doesNotMatch(`${registrar}\n${library}`, /docker\s+(?:stop|start|rm|run|compose|image\s+rm|volume\s+(?:create|rm)|network\s+(?:create|rm))\b/u);
   for (const invocation of library.matchAll(/docker\s+([^\n]+)/gu)) {
     assert.match(invocation[0], /docker (?:ps|inspect|volume inspect|network inspect)\b/u,
@@ -193,13 +193,13 @@ docker() {
   fi
   return 97
 }
-if capture_adopted_live_carry_observation "$4" active; then exit 91; fi
+if capture_legacy_predecessor_observation "$4" active; then exit 91; fi
 [[ ! -e "$4" ]]
 `;
-    const trace = path.join("/tmp", `revival-carry-baseline-${process.pid}-${scenario}.trace`);
+    const trace = path.join("/tmp", `revival-legacy-predecessor-${process.pid}-${scenario}.trace`);
     const output = `${trace}.json`;
-    const result = spawnSync("/usr/bin/bash", ["-c", script, "baseline-hostile", path.join(ROOT,
-      "platform/deploy/vps/remote/lib/carry-baseline.sh"), scenario, trace, output], {
+    const result = spawnSync("/usr/bin/bash", ["-c", script, "predecessor-hostile", path.join(ROOT,
+      "platform/deploy/vps/remote/lib/legacy-predecessor.sh"), scenario, trace, output], {
       encoding: "utf8",
       env: { HOME: "/nonexistent", LANG: "C.UTF-8", LC_ALL: "C.UTF-8", PATH: "/usr/bin:/usr/sbin", TZ: "UTC" },
     });
@@ -212,7 +212,7 @@ if capture_adopted_live_carry_observation "$4" active; then exit 91; fi
   }
 });
 
-test("wrong or missing Carry resources refuse before incoming creation, upload, or image removal", () => {
+test("wrong or missing legacy resources refuse before incoming creation, upload, or image removal", () => {
   const match = localLibrary.match(/remote_preupload_gate\(\) \{[\s\S]*?<<'REMOTE'\n(?<body>[\s\S]*?)\nREMOTE\n\}/u);
   assert.ok(match?.groups?.body, "remote pre-upload gate body was not found");
   assert.match(match.groups.body,
@@ -261,8 +261,8 @@ esac
         .replaceAll("/usr/bin/docker", fakeDocker)
         .replaceAll("/home/anders/ai-pin-revival", root)
         .replaceAll("/home/anders/carry-center-data", center)
-        .replace(/carry_security_digest\(\) \{[\s\S]*?\nPY\n\}/u,
-          `carry_security_digest() { printf '%s\\n' '${"f".repeat(64)}'; }`)
+        .replace(/legacy_security_digest\(\) \{[\s\S]*?\nPY\n\}/u,
+          `legacy_security_digest() { printf '%s\\n' '${"f".repeat(64)}'; }`)
         .replaceAll("exit 1", "return 1");
       const script = `${transformed}\n`;
       const wrapped = [
@@ -305,27 +305,34 @@ esac
 });
 
 test("first deploy and exceptional rollback consume only the exact immediate observed predecessor", () => {
-  const preflightVerify = preflight.indexOf("verify_adopted_live_carry");
+  const preflightVerify = preflight.indexOf("verify_legacy_predecessor");
   const preflightCleanup = preflight.indexOf("cleanup_project_images");
   assert.ok(preflightVerify >= 0 && preflightCleanup > preflightVerify,
-    "preflight cleanup preceded adopted Carry equality proof");
+    "preflight cleanup preceded adopted legacy predecessor equality proof");
 
-  const selected = deploy.indexOf("carry_baseline_id=\"$(active_adopted_live_carry_id)\"");
+  const selected = deploy.indexOf("legacy_predecessor_id=\"$(active_legacy_predecessor_id)\"");
   const bound = deploy.indexOf("$record/carry-baseline-id", selected);
   const quiescing = deploy.lastIndexOf("--namespace deploy --operation-action quiescing");
-  const boundaryVerify = deploy.indexOf("Carry predecessor changed at the first-cutover quiescence boundary", quiescing);
+  const boundaryVerify = deploy.indexOf(
+    'verify_legacy_predecessor "$legacy_predecessor_id" active',
+    quiescing,
+  );
   const stopLegacy = deploy.indexOf('stop_project_containers "$LEGACY_PROJECT"', boundaryVerify);
   assert.ok(selected >= 0 && bound > selected && quiescing > bound && boundaryVerify > quiescing && stopLegacy > boundaryVerify,
-    "first cutover did not bind and reprove its baseline before quiescing/stopping Carry");
-  assert.match(deploy, /if \[\[ -n "\$old_current" \]\][\s\S]*verify_hosted_rollback_baseline[\s\S]*else[\s\S]*active_adopted_live_carry_id/u,
+    "first cutover did not bind and reprove its predecessor before quiescing/stopping it");
+  assert.match(deploy, /if \[\[ -n "\$old_current" \]\][\s\S]*verify_hosted_rollback_baseline[\s\S]*else[\s\S]*active_legacy_predecessor_id/u,
     "routine canonical and exceptional observed predecessors share authority");
 
-  const legacySelection = rollback.indexOf("legacy rollback lacks its one-time adopted-live-carry-v1 binding");
-  const stoppedProof = rollback.indexOf('verify_adopted_live_carry "$carry_baseline_id" stopped', legacySelection);
+  const legacySelection = rollback.indexOf('if [[ -z "$target_release" && -z "$target_record" ]]; then');
+  const legacyBinding = rollback.indexOf('[[ -f "$record/carry-baseline-id"', legacySelection);
+  const stoppedProof = rollback.indexOf('verify_legacy_predecessor "$legacy_predecessor_id" stopped', legacyBinding);
   const firstMutation = rollback.indexOf("rollback_started=1", stoppedProof);
-  const finalProof = rollback.indexOf("Carry predecessor identity changed at the legacy activation boundary", firstMutation);
+  const finalProof = rollback.indexOf(
+    'verify_legacy_predecessor "$legacy_predecessor_id" stopped',
+    firstMutation,
+  );
   const startLegacy = rollback.indexOf('start_recorded_containers "$record/before/running-containers.txt"', finalProof);
-  assert.ok(legacySelection >= 0 && stoppedProof > legacySelection && firstMutation > stoppedProof &&
+  assert.ok(legacySelection >= 0 && legacyBinding > legacySelection && stoppedProof > legacyBinding && firstMutation > stoppedProof &&
     finalProof > firstMutation && startLegacy > finalProof,
   "legacy rollback did not prove the stopped observed predecessor before mutation and activation");
   assert.match(rollback, /if \[\[ -z "\$target_release" && -z "\$target_record" \]\][\s\S]*target_kind=legacy[\s\S]*elif[\s\S]*retained offline candidate/u);

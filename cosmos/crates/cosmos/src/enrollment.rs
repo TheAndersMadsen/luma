@@ -146,7 +146,7 @@ const DEFAULT_DISPLAY_NAME: &str = "Cosmos User";
 /// The proposal only matters the first time: whichever setup reaches the store
 /// first wins forever after (see [`EnrollmentStore::server_setup_or_install`]),
 /// because a changed setup silently invalidates every password file it created.
-// Deployed password files were derived from this exact Carry-era setup seed.
+// Deployed password files were derived from this exact legacy setup seed.
 // The product rename must never mint a second OPAQUE server setup over the same
 // database: that would make every existing password file unverifiable.
 const DEFAULT_OPAQUE_SEED: [u8; 32] = *b"carry-clone-opaque-setup-seed-01";
@@ -178,7 +178,7 @@ pub const DUC_CA_KEY_ENV: &str = "COSMOS_DUC_CA_KEY";
 /// sub-service on it lets the workload that HOLDS the CA answer the question,
 /// with no new route, no new RPC and no shared admin token.
 ///
-/// The Carry-qualified name is a deployed mixed-version contract.  A logical
+/// The legacy-qualified name is a deployed mixed-version contract. A logical
 /// product rename must not make an older AI-bus unable to observe readiness
 /// while a rollback-compatible provisioning workload is running.
 pub const DUC_CA_HEALTH_SERVICE: &str = "carry.enrollment.DeviceUserCa";
@@ -3436,7 +3436,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn opaque_fallback_seed_is_the_deployed_carry_compatibility_value() {
+    fn opaque_fallback_seed_is_the_deployed_legacy_compatibility_value() {
         assert_eq!(DEFAULT_OPAQUE_SEED, *b"carry-clone-opaque-setup-seed-01");
     }
 }

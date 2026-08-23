@@ -478,7 +478,7 @@ assert_bind_mount_objects fixture-container fixture "$2" "$2"
   assert.equal(result.status, 0, result.stderr);
 });
 
-test("every container is refused an alternate writer or mount target for Carry security paths", async () => {
+test("every container is refused an alternate writer or mount target for legacy security paths", async () => {
   const backupLibrary = await readFile(path.join(remote, "lib/backup.sh"), "utf8");
   const guardStart = backupLibrary.indexOf("assert_no_alternate_security_writers() {");
   const guardEnd = backupLibrary.indexOf("\nrunning_durable_writer_names() {", guardStart);
@@ -525,7 +525,7 @@ assert_no_alternate_security_writers
   }
 });
 
-test("all stopped and running containers are closed over exact Carry durable resources", async () => {
+test("all stopped and running containers are closed over exact legacy durable resources", async () => {
   const backupLibrary = await readFile(path.join(remote, "lib/backup.sh"), "utf8");
   const guardStart = backupLibrary.indexOf("assert_global_durable_resource_holders() {");
   const guardEnd = backupLibrary.indexOf("\nrunning_durable_writer_names() {", guardStart);
@@ -1103,7 +1103,7 @@ async function rollbackRecoveryFixture(name) {
   await writeFile(path.join(record, "candidate-path"), `${candidatePath}\n`);
   await writeFile(path.join(work, "current-config/runtime.env"), "fixture=true\n");
   // Rollback rehearses only disposable configuration/theme/token material.
-  // Deployed Carry security roots are never copied into this private work tree.
+  // Deployed legacy security roots are never copied into this private work tree.
   await writeFile(path.join(work, "target-stage/assets/keycloak-theme/member"), "theme\n", { mode: 0o600 });
   await writeFile(path.join(currentRelease, "platform/deploy/vps/remote/canary.sh"), [
     "#!/usr/bin/env bash", "printf 'canary:%s\\n' \"$*\" >>\"$TRACE\"", "",
@@ -1212,7 +1212,7 @@ test("recovery after a publicly accepted rollback leaves no unresumable authorit
   assert.deepEqual(activeAuthority(directory), []);
   assert.match(await readFile(path.join(record, "ROLLBACK_POINTER_TRANSACTION_ABORTED"), "utf8"), /\S/u);
   // Terminal, so the real cleanup_work_secrets may remove the disposable
-  // rehearsal material. There are no staged copies of the Carry roots.
+  // rehearsal material. There are no staged copies of the legacy roots.
   await assert.rejects(readFile(path.join(work, "target-stage/assets/keycloak-theme/member")));
   await assert.rejects(readFile(path.join(work, "current-config/runtime.env")));
 });
@@ -1341,10 +1341,10 @@ test("an EXIT trap brackets the reconcile before anything in it can quiesce ingr
   const call = at(deploy, "\nreconcile_pending_deployment_transaction\n");
   const firstTrap = at(deploy, "\ntrap ");
   assert.ok(install < call, "the reconcile's EXIT trap must be installed before the reconcile runs");
-  assert.ok(firstTrap < install, "the pre-record Carry identity workspace should already have cleanup coverage");
+  assert.ok(firstTrap < install, "the pre-record legacy predecessor identity workspace should already have cleanup coverage");
   assert.match(deploy.slice(firstTrap, install),
-    /trap 'rm -rf -- "\$carry_security_work"' EXIT[\s\S]*carry_security_work=""[\s\S]*trap - EXIT/u,
-    "the only earlier trap must be the cleared read-only Carry identity workspace cleanup");
+    /trap 'rm -rf -- "\$legacy_security_work"' EXIT[\s\S]*legacy_security_work=""[\s\S]*trap - EXIT/u,
+    "the only earlier trap must be the cleared read-only legacy predecessor identity workspace cleanup");
 
   // Every quiesce the reconcile can reach lives inside a function body, and the
   // only one this path enters is the bracketed call. What must never appear above

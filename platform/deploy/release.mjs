@@ -144,7 +144,7 @@ const REVIEWED_SOURCE_POLICY_PATH_LITERALS = new Map([
   ])],
 ]);
 // The production authority and its executable mirror deliberately name one
-// forbidden Carry->Cosmos migration target. Unlike instruction-file reviews,
+// forbidden legacy-to-Cosmos migration target. Unlike instruction-file reviews,
 // these approvals bind the literal to its complete declaration context. Any
 // edit, move, duplication, alternate spelling, or expression remains visible
 // to the ordinary source policy.

@@ -531,7 +531,7 @@ test("decideInstallMigration recognizes the exact observed legacy profile and re
   });
 });
 
-test("a mechanically renamed Cosmos profile cannot replace the deployed Carry identity", () => {
+test("a mechanically renamed Cosmos profile cannot replace the deployed legacy identity", () => {
   const target = createResolvedInstallTargetFixture();
   const result = decideInstallMigration({
     target,

@@ -943,7 +943,7 @@ def trust_root_action(args: argparse.Namespace) -> None:
         if root == Path("/home/anders/ai-pin-revival") and (
             staged_attest != production_attest or staged_duc != production_duc
         ):
-            die("production trust roots must be observed directly at the immutable Carry paths")
+            die("production trust roots must be observed directly at the immutable legacy paths")
     production = root == Path("/home/anders/ai-pin-revival")
     expected_owner = (65532, 65532) if production else None
     live = {

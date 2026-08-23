@@ -29,6 +29,7 @@ x-cosmos-environment: &cosmos-environment
   COSMOS_REQUEST_TIMEOUT_MS: ${COSMOS_REQUEST_TIMEOUT_MS:-15000}
   COSMOS_REVISION: ${REVIVAL_REVISION:-${REVIVAL_RELEASE_ID:?set REVIVAL_RELEASE_ID to the immutable release id}}
   COSMOS_SHUTDOWN_GRACE_MS: ${COSMOS_SHUTDOWN_GRACE_MS:-5000}
+  # `carry.local` is the deployed legacy trust-domain ABI.
   COSMOS_TRUST_DOMAIN: ${COSMOS_TRUST_DOMAIN:-carry.local}
   COSMOS_STATE_DIR: /var/lib/cosmos
   COSMOS_OIDC_ISSUER: ${COSMOS_OIDC_ISSUER:-}
@@ -235,7 +236,7 @@ services:
       REVIVAL_PRODUCT: Ai Pin Revival
       REVIVAL_RELEASE_ID: ${REVIVAL_RELEASE_ID:?set REVIVAL_RELEASE_ID to the immutable release id}
       REVIVAL_DEPLOYMENT_ENVIRONMENT: ${REVIVAL_DEPLOYMENT_ENVIRONMENT:-production}
-      # A signed-in browser sends the chunked `carry_tokens` set back on every
+      # A signed-in browser sends the legacy `carry_tokens` set back on every
       # request, so the Cookie line alone can reach ~12.5 KB. Node's default
       # 16 KB cap covers the whole request header block, which also carries the
       # edge's X-Forwarded-* set and Cloudflare's cf-* headers, so the default

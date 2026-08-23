@@ -914,7 +914,7 @@ try:
                        read_dump(before_manifest,database,before_rows[database]),
                        read_dump(after_manifest,database,after_rows[database]))
         if database!=legacy_database:
-            refuse(f"{database}: only the deployed Carry database may contain a pending migration; the "
+            refuse(f"{database}: only the deployed legacy database may contain a pending migration; the "
                    f"{database} schema must not change at all, additively or otherwise"
                    + (f"; observed {'; '.join(notes)}" if notes else
                       "; the change is not even a classifiable statement delta"))

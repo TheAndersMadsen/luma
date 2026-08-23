@@ -60,9 +60,9 @@ function deployProduction(args) {
     : null;
 }
 
-function registerCarryBaseline(args) {
+function registerLegacyPredecessor(args) {
   if (args.includes('--release-json')) {
-    fail('Carry baseline registration requires one verified immutable hosted candidate; --release-json and implicit builds are retired', 64);
+    fail('Legacy predecessor registration requires one verified immutable hosted candidate; --release-json and implicit builds are retired', 64);
   }
   const candidateIndexes = args.flatMap((value, index) => value === '--candidate' ? [index] : []);
   const idIndexes = args.flatMap((value, index) => value === '--candidate-id' ? [index] : []);
@@ -73,12 +73,12 @@ function registerCarryBaseline(args) {
   if (candidateIndexes.length + idIndexes.length !== 1 || Boolean(candidate) === Boolean(candidateId) ||
       candidate?.startsWith('-') || candidateId?.startsWith('-') ||
       (candidateId && !/^[0-9a-f]{64}$/.test(candidateId))) {
-    fail('deploy carry-baseline requires exactly one of --candidate PATH or --candidate-id SHA256', 64);
+    fail('deploy legacy-predecessor requires exactly one of --candidate PATH or --candidate-id SHA256', 64);
   }
-  const confirmed = requireConfirmedMutation(args, 'deploy carry-baseline', { allowDryRun: true });
-  const result = deploymentScript('register-carry-baseline.sh', args);
+  const confirmed = requireConfirmedMutation(args, 'deploy legacy-predecessor', { allowDryRun: true });
+  const result = deploymentScript('register-legacy-predecessor.sh', args);
   return confirmed
-    ? authoritativeCompletion('deploy.carry-baseline', 'carry-baseline-registered', result)
+    ? authoritativeCompletion('deploy.legacy-predecessor', 'legacy-predecessor-registered', result)
     : null;
 }
 
@@ -173,7 +173,7 @@ module.exports = {
   deploymentScript,
   productionDoctor,
   deployProduction,
-  registerCarryBaseline,
+  registerLegacyPredecessor,
   releaseCandidate,
   backupProduction,
   canaryProduction,

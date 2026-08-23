@@ -197,19 +197,19 @@ if ((resuming_pointer_transaction == 0)); then
   domain_sudo python3 "$DOMAIN_HELPER" client-check-marker --record "$record" --state applied \
     || fail "current deployment lacks its applied Center Keycloak marker"
 fi
-verify_exact_carry_security_identity "$record/carry-security-identity.json"
+verify_exact_legacy_security_identity "$record/carry-security-identity.json"
 
 target_release="$(tr -d '\r\n' <"$record/old-current")"
 target_record="$(tr -d '\r\n' <"$record/old-current-deployment")"
 target_kind=canonical
 target_release_id=""
-carry_baseline_id=""
+legacy_predecessor_id=""
 if [[ -z "$target_release" && -z "$target_record" ]]; then
   [[ -f "$record/carry-baseline-id" && ! -L "$record/carry-baseline-id" \
     && "$(stat -c '%a:%u:%g:%h' "$record/carry-baseline-id")" == "600:$(id -u):$(id -g):1" ]] \
     || fail "legacy rollback lacks its one-time adopted-live-carry-v1 binding"
-  carry_baseline_id="$(tr -d '\r\n' <"$record/carry-baseline-id")"
-  [[ "$carry_baseline_id" =~ ^[0-9a-f]{64}$ ]] \
+  legacy_predecessor_id="$(tr -d '\r\n' <"$record/carry-baseline-id")"
+  [[ "$legacy_predecessor_id" =~ ^[0-9a-f]{64}$ ]] \
     || fail "legacy rollback baseline identity is invalid"
   current_authority_sha256="$(tr -d '\r\n' <"$record/hosted-vps-authority.sha256")"
   [[ "$current_authority_sha256" =~ ^[0-9a-f]{64}$ ]] \
@@ -218,9 +218,9 @@ if [[ -z "$target_release" && -z "$target_record" ]]; then
   # only when it is bound to the exact current first-cutover candidate and its
   # retained containers are stopped with byte-identical image/config/resource
   # identity. It can never enter the normal canonical target branch below.
-  verify_adopted_live_carry "$carry_baseline_id" stopped \
+  verify_legacy_predecessor "$legacy_predecessor_id" stopped \
     "$current_candidate_id" "$current_release_id" "$current_authority_sha256" \
-    || fail "retained Carry predecessor differs from its sealed first-cutover authority"
+    || fail "retained legacy predecessor differs from its sealed first-cutover authority"
   [[ -f "$record/before/running-containers.txt" \
     && -f "$record/before/running-identities.tsv" \
     && -f "$record/before/mounts.tsv" \
@@ -260,12 +260,12 @@ else
     || fail "target candidate failed filesystem-only rollback verification"
   node -e 'const value=JSON.parse(process.argv[1]);if(value.ok!==true||value.candidateId!==process.argv[2]||value.releaseId!==process.argv[3]||value.productionCompatible!==true)process.exit(1)' \
     "$target_candidate_verification" "$target_candidate_id" "$target_release_id" \
-    || fail "target candidate does not bind the requested rollback release and Carry contract"
+    || fail "target candidate does not bind the requested rollback release and legacy production contract"
   verify_candidate_release_authority "$current_release_store" "$target_record" \
     "$target_candidate_id" "$target_release_id"
-  verify_exact_carry_security_identity "$target_record/carry-security-identity.json"
+  verify_exact_legacy_security_identity "$target_record/carry-security-identity.json"
   cmp -s "$record/carry-security-identity.json" "$target_record/carry-security-identity.json" \
-    || fail "canonical rollback records disagree about the immutable Carry security identity"
+    || fail "canonical rollback records disagree about the immutable legacy security identity"
 fi
 target_center_domain=0
 if [[ "$target_kind" == canonical \
@@ -1015,7 +1015,7 @@ if ((resuming_pointer_transaction)); then
     [[ -d "$target_stage/env" && -d "$target_stage/assets/keycloak-theme" \
       && -f "$target_stage/spotify-token" ]] \
       || fail "rollback resume lost its isolated target rehearsal material"
-    verify_exact_carry_security_identity "$target_record/carry-security-identity.json"
+    verify_exact_legacy_security_identity "$target_record/carry-security-identity.json"
   fi
 else
   rollback_backup_id="rollback-${deployment_id:0:54}-$(date -u +%Y%m%dT%H%M%SZ)"
@@ -1063,7 +1063,7 @@ if [[ "$target_kind" == canonical ]]; then
       == "$(sha256sum "$target_config/$name" | awk '{print $1}')" ]] \
       || fail "target staging environment copy changed: $name"
   done
-  verify_exact_carry_security_identity "$target_record/carry-security-identity.json"
+  verify_exact_legacy_security_identity "$target_record/carry-security-identity.json"
   sudo -n test -d "$PRODUCTION_KEYCLOAK_THEME_DIR" \
     && ! sudo -n test -L "$PRODUCTION_KEYCLOAK_THEME_DIR" \
     || fail "target staging Keycloak theme is missing or unsafe"
@@ -1180,7 +1180,7 @@ if [[ "$target_kind" == canonical ]]; then
     --trust-root-action record --staged-attest "$PRODUCTION_ATTEST_DIR" \
     --staged-duc "$PRODUCTION_DUC_DIR" --live-attest "$PRODUCTION_ATTEST_DIR" \
     --live-duc "$PRODUCTION_DUC_DIR"
-  verify_exact_carry_security_identity "$target_record/carry-security-identity.json"
+  verify_exact_legacy_security_identity "$target_record/carry-security-identity.json"
   activate_retained_candidate_authority "$target_release" "$target_record" "$record" \
     rollback-activate-target
   load_compose_command "$target_release"
@@ -1206,10 +1206,10 @@ PY
     --require-remote-tts --quiesced-loopback "${target_origin_args[@]}"
   assert_ingress_quiesced || fail "managed ingress reopened during rollback canary"
 else
-  verify_exact_carry_security_identity "$record/carry-security-identity.json"
-  verify_adopted_live_carry "$carry_baseline_id" stopped \
+  verify_exact_legacy_security_identity "$record/carry-security-identity.json"
+  verify_legacy_predecessor "$legacy_predecessor_id" stopped \
     "$current_candidate_id" "$current_release_id" "$current_authority_sha256" absent \
-    || fail "Carry predecessor identity changed at the legacy activation boundary"
+    || fail "legacy predecessor identity changed at the legacy activation boundary"
   assert_global_durable_resource_holders legacy-only
   start_recorded_containers "$record/before/running-containers.txt"
   restore_target_keycloak_state \

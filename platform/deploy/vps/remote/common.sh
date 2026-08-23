@@ -174,7 +174,7 @@ LEGACY_DATABASE_USER="carry"
 LEGACY_DATABASE_NAME="carry"
 
 # These are deployed physical identities, not migration inputs.  The canonical
-# Cosmos-named workloads deliberately continue to consume the exact Carry
+# Cosmos-named workloads deliberately continue to consume the exact legacy predecessor
 # certificate/key inodes for the whole rollback window.  No deployment path is
 # allowed to copy, rename, chown, chmod, relabel, create, or otherwise replace
 # them.  Only the generated Envoy configuration is release-private.
@@ -301,7 +301,7 @@ MANAGED_CLOUDFLARED_USER_UNIT="cloudflared-hermes.service"
 # into the same staging directory before the entry point runs.
 _revival_common_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 for _revival_common_lib in \
-  paths ingress release_transactions configuration compose backup database canary carry-baseline drift; do
+  paths ingress release_transactions configuration compose backup database canary legacy-predecessor drift; do
   _revival_common_key="REVIVAL_HELD_COMMON_LIB_${_revival_common_lib^^}"
   _revival_common_key="${_revival_common_key//-/_}"
   _revival_common_path="${!_revival_common_key:-$_revival_common_dir/lib/$_revival_common_lib.sh}"

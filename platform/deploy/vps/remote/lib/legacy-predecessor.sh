@@ -1,14 +1,14 @@
 #!/usr/bin/bash
-# One-time adopted Carry predecessor authority.  A hosted release proves this
+# One-time legacy predecessor authority. A hosted release proves this
 # registrar/checker, never the provenance of the pre-workflow image bytes it
 # observes.
 
-carry_baseline_program() {
-  local program="${REVIVAL_HELD_CARRY_BASELINE:-}"
+legacy_predecessor_program() {
+  local program="${REVIVAL_HELD_LEGACY_PREDECESSOR:-}"
   [[ "$program" =~ ^/proc/self/fd/[1-9][0-9]*$ ]] \
-    || fail "held Carry baseline registrar authority is unavailable"
+    || fail "held legacy predecessor registrar authority is unavailable"
   release_material_file_is_safe "$program" \
-    || fail "Carry baseline registrar is not one sealed release object"
+    || fail "legacy predecessor registrar is not one sealed release object"
   python3 "$program" "$@"
 }
 
@@ -18,7 +18,7 @@ carry_baseline_program() {
 # read-only through the existing positive-environment sudo allowlist and emits
 # only inode/metadata/content digests; private key bytes never cross stdout or
 # enter the adopted record.
-write_exact_carry_security_identity() {
+write_exact_legacy_security_identity() {
   sudo -n python3 - <<'PY'
 import hashlib,json,os,stat
 
@@ -104,7 +104,7 @@ def inventory(name,path,expected_uid,expected_gid):
                     entries.append({"path":child_relative,"kind":"file",**identity(before),
                                     "sha256":digest.hexdigest()})
                 finally: os.close(child)
-            else: raise SystemExit("unsupported privileged Carry configuration object")
+            else: raise SystemExit("unsupported privileged legacy configuration object")
             assert len(entries)<=MAX_MEMBERS
         assert sorted(os.listdir(descriptor))==names
         assert identity(os.fstat(descriptor))==identity(opened)
@@ -125,29 +125,28 @@ print(json.dumps(result,sort_keys=True,separators=(",",":"),ensure_ascii=False))
 PY
 }
 
-# Backwards-compatible name used by the adopted-live capture.  Keeping one
-# implementation means baseline authority and every forward/rollback gate
+# Shared by the predecessor capture and every forward/rollback gate so they
 # compare the exact same inode/content/metadata closure.
-write_privileged_carry_configuration_inventory() {
-  write_exact_carry_security_identity
+write_privileged_legacy_configuration_inventory() {
+  write_exact_legacy_security_identity
 }
 
-record_exact_carry_security_identity() {
+record_exact_legacy_security_identity() {
   local output="$1"
   [[ ! -e "$output" && ! -L "$output" ]] \
-    || fail "Carry security identity output already exists"
-  write_exact_carry_security_identity >"$output" \
-    || { rm -f -- "$output"; fail "exact Carry security paths are missing, aliased, writable, unowned, or unstable"; }
+    || fail "legacy security identity output already exists"
+  write_exact_legacy_security_identity >"$output" \
+    || { rm -f -- "$output"; fail "exact legacy security paths are missing, aliased, writable, unowned, or unstable"; }
   chmod 600 "$output"
   [[ -f "$output" && ! -L "$output" \
     && "$(stat -c '%a:%u:%g:%h' "$output")" == "600:$(id -u):$(id -g):1" ]] \
-    || fail "Carry security identity evidence is unsafe"
+    || fail "legacy security identity evidence is unsafe"
 }
 
-verify_exact_carry_security_identity() {
+verify_exact_legacy_security_identity() {
   local expected="$1" current status=0
-  current="$(mktemp)" || fail "could not allocate Carry security verification workspace"
-  write_exact_carry_security_identity >"$current" || status=$?
+  current="$(mktemp)" || fail "could not allocate legacy security verification workspace"
+  write_exact_legacy_security_identity >"$current" || status=$?
   if ((status == 0)); then
     python3 - "$expected" "$current" <<'PY' || status=$?
 import os,stat,sys
@@ -181,35 +180,35 @@ PY
   fi
   rm -f -- "$current" || status=1
   ((status == 0)) \
-    || fail "Carry PKI/certificate path inode, metadata, or content identity changed"
+    || fail "legacy PKI/certificate path inode, metadata, or content identity changed"
 }
 
-capture_adopted_live_carry_observation() {
+capture_legacy_predecessor_observation() {
   local output="$1" expected_state="$2" canonical_expectation="${3:-present}"
   local canonical_ids legacy_output work semantic container status=0
   local -a legacy_ids=()
   [[ "$expected_state" == active || "$expected_state" == stopped ]] \
-    || fail "unsupported Carry observation state"
+    || fail "unsupported legacy predecessor observation state"
   [[ ! -e "$output" && ! -L "$output" ]] \
-    || fail "Carry observation output already exists"
+    || fail "legacy predecessor observation output already exists"
 
   canonical_ids="$(docker ps -a --no-trunc -q \
     --filter "label=com.docker.compose.project=$PROJECT")" \
     || fail "canonical project inventory failed"
   if [[ "$expected_state" == active ]]; then
     [[ -z "$canonical_ids" ]] \
-      || fail "canonical project exists while the adopted Carry predecessor is authoritative"
+      || fail "canonical project exists while the legacy predecessor is authoritative"
   else
     case "$canonical_expectation" in
       present)
         [[ -n "$canonical_ids" ]] \
-          || fail "stopped Carry identity is only admissible beside its immediate canonical first-cutover successor"
+          || fail "stopped legacy predecessor identity is only admissible beside its immediate canonical first-cutover successor"
         ;;
       absent)
         [[ -z "$canonical_ids" ]] \
           || fail "canonical containers still exist at the legacy activation boundary"
         ;;
-      *) fail "invalid canonical topology expectation for stopped Carry verification" ;;
+      *) fail "invalid canonical topology expectation for stopped legacy predecessor verification" ;;
     esac
   fi
   legacy_output="$(docker ps -a --no-trunc -q \
@@ -225,7 +224,7 @@ capture_adopted_live_carry_observation() {
       || fail "legacy project returned a truncated or invalid container identity"
   done
 
-  work="$(mktemp -d)" || fail "could not create private Carry observation workspace"
+  work="$(mktemp -d)" || fail "could not create private legacy predecessor observation workspace"
   chmod 700 "$work"
   semantic="$work/semantic.tsv"
   if [[ "$expected_state" == active ]]; then
@@ -233,20 +232,20 @@ capture_adopted_live_carry_observation() {
   fi
   if ((status == 0)); then
     if [[ "$expected_state" == active ]]; then
-      carry_baseline_program capture --state active \
+      legacy_predecessor_program capture --state active \
         --containers-fd 3 --volumes-fd 4 --networks-fd 5 \
         --privileged-config-fd 6 --semantic "$semantic" --output "$output" \
         3< <(docker inspect "${legacy_ids[@]}") \
         4< <(docker volume inspect "$STATE_VOLUME" "$PG_VOLUME" "$PROMETHEUS_VOLUME" "$GRAFANA_VOLUME") \
         5< <(docker network inspect "$LOCAL_MODEL_NETWORK" carry-net) \
-        6< <(write_privileged_carry_configuration_inventory) || status=$?
+        6< <(write_privileged_legacy_configuration_inventory) || status=$?
     else
-      carry_baseline_program capture --state stopped \
+      legacy_predecessor_program capture --state stopped \
         --containers-fd 3 --volumes-fd 4 --networks-fd 5 --privileged-config-fd 6 --output "$output" \
         3< <(docker inspect "${legacy_ids[@]}") \
         4< <(docker volume inspect "$STATE_VOLUME" "$PG_VOLUME" "$PROMETHEUS_VOLUME" "$GRAFANA_VOLUME") \
         5< <(docker network inspect "$LOCAL_MODEL_NETWORK" carry-net) \
-        6< <(write_privileged_carry_configuration_inventory) || status=$?
+        6< <(write_privileged_legacy_configuration_inventory) || status=$?
     fi
   fi
   rm -rf -- "$work" || status=1
@@ -256,36 +255,36 @@ capture_adopted_live_carry_observation() {
   fi
   [[ -f "$output" && ! -L "$output" \
     && "$(stat -c '%a:%u:%g:%h' "$output")" == "600:$(id -u):$(id -g):1" ]] \
-    || fail "Carry observation output is unsafe"
+    || fail "legacy predecessor observation output is unsafe"
 }
 
-active_adopted_live_carry_id() {
-  carry_baseline_program active-id --root "$REMOTE_ROOT"
+active_legacy_predecessor_id() {
+  legacy_predecessor_program active-id --root "$REMOTE_ROOT"
 }
 
-register_adopted_live_carry() {
+register_legacy_predecessor() {
   local observation="$1" candidate_id="$2" release_id="$3" authority_sha256="$4"
-  carry_baseline_program register --root "$REMOTE_ROOT" --observation "$observation" \
+  legacy_predecessor_program register --root "$REMOTE_ROOT" --observation "$observation" \
     --candidate-id "$candidate_id" --release-id "$release_id" \
     --deployment-authority-sha256 "$authority_sha256"
 }
 
-verify_adopted_live_carry() {
-  local baseline_id="$1" state="$2" candidate_id="${3:-}" release_id="${4:-}" authority_sha256="${5:-}"
+verify_legacy_predecessor() {
+  local predecessor_id="$1" state="$2" candidate_id="${3:-}" release_id="${4:-}" authority_sha256="${5:-}"
   local canonical_expectation="${6:-present}"
   local work current status=0
   local -a arguments=()
-  work="$(mktemp -d)" || fail "could not create private Carry verification workspace"
+  work="$(mktemp -d)" || fail "could not create private legacy predecessor verification workspace"
   chmod 700 "$work"
   current="$work/current.json"
-  capture_adopted_live_carry_observation "$current" "$state" "$canonical_expectation" || status=$?
+  capture_legacy_predecessor_observation "$current" "$state" "$canonical_expectation" || status=$?
   if ((status == 0)); then
-    arguments=(verify --root "$REMOTE_ROOT" --baseline-id "$baseline_id" \
+    arguments=(verify --root "$REMOTE_ROOT" --predecessor-id "$predecessor_id" \
       --current "$current" --state "$state")
     [[ -z "$candidate_id" ]] || arguments+=(--candidate-id "$candidate_id")
     [[ -z "$release_id" ]] || arguments+=(--release-id "$release_id")
     [[ -z "$authority_sha256" ]] || arguments+=(--deployment-authority-sha256 "$authority_sha256")
-    carry_baseline_program "${arguments[@]}" >/dev/null || status=$?
+    legacy_predecessor_program "${arguments[@]}" >/dev/null || status=$?
   fi
   rm -rf -- "$work" || status=1
   return "$status"

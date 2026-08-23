@@ -46,7 +46,7 @@ prepare_private_copies() {
   done
 
   # PKI/certificate/theme trees are deployed physical identities.  They are
-  # consumed directly and read-only from their Carry paths; this bootstrap may
+  # consumed directly and read-only from their legacy paths; this bootstrap may
   # import env files, but must never manufacture alternate security roots.
 }
 
@@ -102,7 +102,7 @@ stage_private_configuration() {
   chmod 600 "$destination"/*.env
   normalize_compatibility_aliases "$destination/runtime.env" "$destination/cosmos.env" \
     "$destination/providers.env" "$destination/center.env"
-  assert_carry_database_configuration "$destination/runtime.env" "$destination/cosmos.env" \
+  assert_legacy_database_configuration "$destination/runtime.env" "$destination/cosmos.env" \
     "$destination/providers.env" "$destination/center.env"
   merge_scoped_provider_values "$destination/runtime.env" "$destination/providers.env"
 }
@@ -333,8 +333,8 @@ for canonical,names in groups.items():
         locations=", ".join(sorted(f"{os.path.basename(path)}:{key}" for path,key,_ in selected))
         raise SystemExit(f"conflicting staged compatibility aliases for {canonical}: {locations}")
 
-# Retain the Carry rows as rollback evidence and add/update only the logical
-# Cosmos name in the SAME file. In particular, a Carry provider value stays in
+# Retain the legacy predecessor rows as rollback evidence and add/update only the logical
+# Cosmos name in the SAME file. In particular, a legacy provider value stays in
 # providers.env rather than being leaked into cosmos.env.
 rendered=[]
 for path,lines,values in documents:
@@ -372,8 +372,8 @@ PY
   chmod 600 "$@"
 }
 
-assert_carry_database_configuration() {
-  (($# == 4)) || fail "Carry database configuration gate needs the exact staged env set"
+assert_legacy_database_configuration() {
+  (($# == 4)) || fail "legacy database configuration gate needs the exact staged env set"
   python3 - "$@" "$LEGACY_DATABASE_USER" "$LEGACY_DATABASE_NAME" <<'PY'
 import sys,urllib.parse
 paths=sys.argv[1:5]; expected_user,expected_database=sys.argv[5:7]
@@ -389,7 +389,7 @@ for path in paths:
             values.setdefault(key,set()).add(value)
 for key in ("COSMOS_DATABASE_URL","COSMOS_PG_PASSWORD"):
     if len(values.get(key,set()))!=1:
-        raise SystemExit(f"staged {key} is missing or conflicts across the Carry compatibility inputs")
+        raise SystemExit(f"staged {key} is missing or conflicts across the legacy compatibility inputs")
 url=next(iter(values["COSMOS_DATABASE_URL"])); password=next(iter(values["COSMOS_PG_PASSWORD"]))
 parsed=urllib.parse.urlsplit(url)
 if (parsed.scheme not in {"postgres","postgresql"}
@@ -397,7 +397,7 @@ if (parsed.scheme not in {"postgres","postgresql"}
         or parsed.hostname!="postgres" or parsed.port not in {None,5432}
         or parsed.path!="/"+expected_database or parsed.query or parsed.fragment
         or urllib.parse.unquote(parsed.password or "")!=password):
-    raise SystemExit("staged COSMOS_DATABASE_URL does not preserve the exact Carry role/database/password authority")
+    raise SystemExit("staged COSMOS_DATABASE_URL does not preserve the exact legacy role/database/password authority")
 PY
 }
 

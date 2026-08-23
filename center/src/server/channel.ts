@@ -216,7 +216,7 @@ async function establish(principal: string): Promise<ChannelKey> {
         kid: Buffer.from(kid, "utf8"),
         wrappedKey: {
           // The backend key directory persists this identifier and rollback
-          // releases recognize the Carry spelling. It is a wire key, not a
+          // releases recognize the legacy spelling. It is a wire key, not a
           // logical implementation name.
           wrappingKid: Buffer.from("carry-clone/wrapping/rsa-oaep", "utf8"),
           keydata: wrapChannelKey(der, key),

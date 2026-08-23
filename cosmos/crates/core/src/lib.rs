@@ -578,7 +578,7 @@ mod tests {
                 Workload::AiBus,
                 DeploymentEnvironment::Development,
                 "pod:evil",
-                "carry.local",
+                "cosmos.local",
             )
             .is_err(),
             "instance must stay strict"
@@ -607,17 +607,17 @@ mod tests {
         )
         .expect("valid identity");
 
-        assert_eq!(identity.trust_domain(), "carry.local");
+        assert_eq!(identity.trust_domain(), "cosmos.local");
         assert_eq!(
             identity.uri(),
-            "spiffe://carry.local/env/parity/workload/feature-flags/instance/flags-01"
+            "spiffe://cosmos.local/env/parity/workload/feature-flags/instance/flags-01"
         );
         assert!(
             WorkloadIdentity::new(
                 Workload::AiBus,
                 DeploymentEnvironment::Development,
                 "contains/a/slash",
-                "carry.local"
+                "cosmos.local"
             )
             .is_err()
         );

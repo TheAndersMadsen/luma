@@ -311,7 +311,7 @@ impl ReestablishQueue {
 // Refusing the wearer's own history is not a security win, and it would fail
 // exactly the way everything else in this system has failed: invisibly, blaming
 // the wrong layer. So the comparison always RUNS and every foreign kid is always
-// REPORTED — a warn line naming the RPC plus a `carry_kid_scope_foreign_total`
+// REPORTED — a warn line naming the RPC plus a `cosmos_kid_scope_foreign_total`
 // counter — and `COSMOS_KID_SCOPE` decides whether it also refuses:
 //
 //   * `audit` — permit and report. The control is live and observable;
@@ -510,7 +510,7 @@ fn kid_is_actionable(caller: Option<&str>, kid: &str) -> bool {
 /// whether enforcing is safe.
 fn report_foreign_kid(scope: KidScope, rpc: &'static str) -> bool {
     crate::metrics::increment(
-        "carry_kid_scope_foreign_total",
+        "cosmos_kid_scope_foreign_total",
         &[("rpc", rpc), ("mode", scope.label())],
     );
     match scope {
@@ -2426,13 +2426,13 @@ mod tests {
         );
     }
 
-    /// Sum of every `carry_kid_scope_foreign_total` series in the process-wide
+    /// Sum of every `cosmos_kid_scope_foreign_total` series in the process-wide
     /// registry. Read out of the exposition text because that is the surface an
     /// operator actually sees; a count that never reaches it is not a report.
     fn foreign_kid_metric_total() -> u64 {
         crate::metrics::render()
             .lines()
-            .filter(|line| line.starts_with("carry_kid_scope_foreign_total"))
+            .filter(|line| line.starts_with("cosmos_kid_scope_foreign_total"))
             .filter_map(|line| line.rsplit(' ').next()?.parse::<f64>().ok())
             .map(|value| value as u64)
             .sum()

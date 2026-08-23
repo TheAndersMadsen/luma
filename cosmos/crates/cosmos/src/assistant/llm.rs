@@ -551,7 +551,7 @@ impl ChatModel for OpenAiChatModel {
         let started = std::time::Instant::now();
         // Every arm of this chain is counted and named. Only `.send()` used to
         // be, which made `llm_transport` the ONLY producer of
-        // `carry_errors_total` in the codebase and left the two failures an
+        // `cosmos_errors_total` in the codebase and left the two failures an
         // operator actually hits — a refused request and a body that will not
         // parse — with no counter and no log at all.
         let resp = self

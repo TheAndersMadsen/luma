@@ -22,12 +22,12 @@
     ]
   },
   "composeFiles": {
-    "compose.yaml": "bcfe542c5b21c96fb61545b2d147e6ea90f1e17d49c41dfaa7e0ab0c2120909a",
-    "platform/compose/production.yaml": "74cf5c6e28d91d98a97bd0dfa019bdf0b752d470bbcd0e8555fe574a9b64d7e1"
+    "compose.yaml": "2042dbd8d1cdd93ba2ff01249ad23d7c57d226e8f5e5b86f28d146e52a27b1da",
+    "platform/compose/production.yaml": "4529e15608f9d416669bf37e680cdecf050a082526e16453693c3f776c99c7da"
   },
   "remoteCommon": {
     "path": "platform/deploy/vps/remote/common.sh",
-    "sha256": "3749602897577f23a80424a3a2863c3119fe23724c03146b88bb28e10f1c0579"
+    "sha256": "2fa00857b78f170418bc3acb84433c09724b5d20137bc43da564318aba904b73"
   },
   "releaseConfig": {
     "path": "platform/deploy/release.json",

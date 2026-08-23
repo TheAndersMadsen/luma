@@ -373,7 +373,7 @@ find "$backup" -type d -exec chmod 700 {} +
 find "$backup" -type f -exec chmod 600 {} +
 # The exact pre-rename optional schema sidecar. Candidate issuance must retain
 # this filename because the parent verifier has never heard of the Cosmos suffix.
-printf 'parent Carry schema fixture\n' >"$backup/postgres-schema.tsv.carry.sql"
+printf 'parent legacy schema fixture\n' >"$backup/postgres-schema.tsv.carry.sql"
 chmod 600 "$backup/postgres-schema.tsv.carry.sql"
 write_backup_artifact_manifest "$backup" backup-fixture-0001
 verify_backup_artifact_manifest "$backup"
@@ -400,7 +400,7 @@ verify_backup_artifact_manifest "$backup"
 
   // Verify a backup emitted by the candidate with the exact parent release's
   // verifier too. This is the rollback-window direction that matters: an old
-  // Carry release must be able to consume every candidate-issued artifact.
+  // legacy release must be able to consume every candidate-issued artifact.
   const parentRoot = path.join(directory, "parent-release");
   const parentCommon = await materializeRemoteLibraries("82aa2d7^", parentRoot);
   const parentResult = spawnSync(

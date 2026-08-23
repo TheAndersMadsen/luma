@@ -516,19 +516,24 @@
       "documentationAnchor": "docs/operations.md#production"
     },
     {
-      "id": "deploy.carry-baseline",
+      "id": "deploy.legacy-predecessor",
       "tokens": [
         "deploy",
-        "carry-baseline"
+        "legacy-predecessor"
       ],
-      "aliases": [],
+      "aliases": [
+        [
+          "deploy",
+          "carry-baseline"
+        ]
+      ],
       "lifecycle": "current",
       "effect": "remote-mutation",
       "confirmationRequired": true,
       "exactSerialRequired": false,
-      "summary": "One-time registration of the exact live Carry rollback predecessor without changing it.",
-      "usage": "revival deploy carry-baseline [--candidate PATH] [--candidate-id SHA256] [--confirm] [--dry-run] [options]",
-      "documentationAnchor": "docs/operations.md#one-time-carry-baseline-registration"
+      "summary": "One-time registration of the exact live legacy rollback predecessor without changing it.",
+      "usage": "revival deploy legacy-predecessor [--candidate PATH] [--candidate-id SHA256] [--confirm] [--dry-run] [options]",
+      "documentationAnchor": "docs/operations.md#one-time-legacy-predecessor-registration"
     },
     {
       "id": "backup",

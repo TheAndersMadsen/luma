@@ -261,26 +261,26 @@ test("release packaging is clean, deterministic, and independently verifiable", 
         null,
         "a statically joined canonical path remains approved",
       );
-      const legacyCarryCenter = ["", "home", "anders", "carry-center-data"].join(slash);
+      const legacyCenterData = ["", "home", "anders", "carry-center-data"].join(slash);
       assert.equal(
-        findUnapprovedMachinePath(JSON.stringify(legacyCarryCenter), productionHome),
+        findUnapprovedMachinePath(JSON.stringify(legacyCenterData), productionHome),
         null,
-        "the exact legacy Carry Center data root remains an immutable production contract",
+        "the exact legacy Center data root remains an immutable production contract",
       );
       assert.equal(
-        findUnapprovedMachinePath(JSON.stringify(`${legacyCarryCenter}/releases`), productionHome),
+        findUnapprovedMachinePath(JSON.stringify(`${legacyCenterData}/releases`), productionHome),
         null,
-        "the legacy Carry Center operational data root permits real descendants",
+        "the legacy Center operational data root permits real descendants",
       );
       for (const nearNeighbor of [
-        `${legacyCarryCenter}-copy`,
+        `${legacyCenterData}-copy`,
         ["", "home", "anders", "carry-center"].join(slash),
         ["", "home", "anders", "carry-center-database"].join(slash),
       ]) {
         assert.notEqual(
           findUnapprovedMachinePath(JSON.stringify(nearNeighbor), productionHome),
           null,
-          `legacy Carry approval must reject ${nearNeighbor}`,
+          `legacy path approval must reject ${nearNeighbor}`,
         );
       }
       assert.equal(

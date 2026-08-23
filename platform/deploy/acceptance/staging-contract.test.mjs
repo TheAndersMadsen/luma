@@ -331,7 +331,7 @@ test("protected-root declarations are closed and bind both trust-root identities
   }
 });
 
-test("staging uses exact read-only Carry security roots without projecting copies", async () => {
+test("staging uses exact read-only legacy security roots without projecting copies", async () => {
   const stagingScript = await readFile(staging, "utf8");
   const rollback = await readFile(path.join(root, "platform/deploy/vps/remote/rollback.sh"), "utf8");
   const deploy = await readFile(path.join(root, "platform/deploy/vps/remote/deploy.sh"), "utf8");
@@ -340,7 +340,7 @@ test("staging uses exact read-only Carry security roots without projecting copie
   assert.match(stagingScript, /\[\[ "\$attest_dir" == "\$PRODUCTION_ATTEST_DIR" && "\$duc_dir" == "\$PRODUCTION_DUC_DIR"/u);
   assert.match(stagingScript, /--mount "type=bind,src=\$attest_dir,dst=\/etc\/cosmos-attest,readonly"/u);
   assert.match(stagingScript, /--mount "type=bind,src=\$duc_dir,dst=\/etc\/cosmos-duc,readonly"/u);
-  assert.ok((stagingScript.match(/verify_exact_carry_security_identity "\$security_identity"/gu) ?? []).length >= 4);
+  assert.ok((stagingScript.match(/verify_exact_legacy_security_identity "\$security_identity"/gu) ?? []).length >= 4);
   assert.match(deploy, /--security-identity "\$record\/carry-security-identity\.json"/u);
   assert.match(rollback, /--attest-dir "\$PRODUCTION_ATTEST_DIR" --duc-dir "\$PRODUCTION_DUC_DIR"/u);
   assert.match(rollback, /--security-identity "\$target_record\/carry-security-identity\.json"/u);

@@ -1269,7 +1269,7 @@ mod tests {
                     .uri(uri)
                     .header(
                         crate::config::EDGE_PRINCIPAL_HEADER,
-                        format!("By=spiffe://carry.local/edge;Subject=\"CN={device_cn}\""),
+                        format!("By=spiffe://cosmos.local/edge;Subject=\"CN={device_cn}\""),
                     )
                     .body(Body::empty())
                     .unwrap(),
@@ -1697,7 +1697,7 @@ mod tests {
                     .uri(format!("/capture/memory/{}/thumbnail/0", record.uuid))
                     .header(
                         crate::config::EDGE_PRINCIPAL_HEADER,
-                        format!("By=spiffe://carry.local/edge;Subject=\"CN={device_cn}\""),
+                        format!("By=spiffe://cosmos.local/edge;Subject=\"CN={device_cn}\""),
                     )
                     .body(Body::empty())
                     .unwrap(),
@@ -1826,7 +1826,7 @@ mod tests {
                     .uri(uri)
                     .header(
                         crate::config::EDGE_PRINCIPAL_HEADER,
-                        format!("By=spiffe://carry.local/edge;Subject=\"CN={device_cn}\""),
+                        format!("By=spiffe://cosmos.local/edge;Subject=\"CN={device_cn}\""),
                     )
                     .body(Body::empty())
                     .unwrap(),

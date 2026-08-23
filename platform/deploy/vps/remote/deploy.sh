@@ -221,7 +221,7 @@ deployment_authority="$transport_root/deployment-authority.json"
 verify_hosted_deployment_authority "$deployment_authority" "$deployment_authority_sha256" \
   "$candidate_id" "$release_id" || fail "hosted deployment authority is invalid"
 verify_candidate_dir "$candidate_root" \
-  || fail "candidate identity, archive closure, or live Carry contract is incompatible"
+  || fail "candidate identity, archive closure, or live legacy production contract is incompatible"
 ((crud == 0)) || fail "mutating CRUD canaries are disabled; use the read-only production canary"
 
 assert_target
@@ -234,14 +234,14 @@ flock -n 9 || fail "another deployment or backup holds the lock"
 assert_durable_inputs
 assert_active_durable_mounts
 
-# Capture the exact immutable Carry PKI/certificate closure before creating a
+# Capture the exact immutable legacy PKI/certificate closure before creating a
 # deployment record.  The pre-upload gate already made the same proof before
 # any release byte arrived; this second, held-code proof closes the transport
 # window and gives the forward/rollback transaction an inode-level baseline.
-carry_security_work="$(mktemp -d)" || fail "could not allocate Carry security evidence workspace"
-chmod 700 "$carry_security_work"
-trap 'rm -rf -- "$carry_security_work"' EXIT
-record_exact_carry_security_identity "$carry_security_work/identity.json"
+legacy_security_work="$(mktemp -d)" || fail "could not allocate legacy security evidence workspace"
+chmod 700 "$legacy_security_work"
+trap 'rm -rf -- "$legacy_security_work"' EXIT
+record_exact_legacy_security_identity "$legacy_security_work/identity.json"
 
 bootstrap_transaction_driver="${REVIVAL_HELD_TRANSACTION:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/transaction.py}"
 release_material_file_is_safe "$bootstrap_transaction_driver" \
@@ -265,10 +265,10 @@ chmod 700 "$record"
 printf '%s\n' "$release_id" >"$record/release-id"
 printf '%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$record/started-at"
 chmod 600 "$record/release-id" "$record/started-at"
-install -m 600 "$carry_security_work/identity.json" "$record/carry-security-identity.json"
-verify_exact_carry_security_identity "$record/carry-security-identity.json"
-rm -rf -- "$carry_security_work"
-carry_security_work=""
+install -m 600 "$legacy_security_work/identity.json" "$record/carry-security-identity.json"
+verify_exact_legacy_security_identity "$record/carry-security-identity.json"
+rm -rf -- "$legacy_security_work"
+legacy_security_work=""
 trap - EXIT
 printf '%s\n' "$candidate_id" >"$record/candidate-id"
 chmod 600 "$record/candidate-id"
@@ -1871,7 +1871,7 @@ PY
 old_current=""
 old_previous=""
 old_current_deployment=""
-carry_baseline_id=""
+legacy_predecessor_id=""
 if old_current="$(safe_release_pointer "$REMOTE_ROOT/current" 2>/dev/null)"; then printf '%s\n' "$old_current" >"$record/old-current"; else : >"$record/old-current"; fi
 if old_previous="$(safe_release_pointer "$REMOTE_ROOT/previous" 2>/dev/null)"; then printf '%s\n' "$old_previous" >"$record/old-previous"; else : >"$record/old-previous"; fi
 if old_current_deployment="$(safe_deployment_pointer "$REMOTE_ROOT/current-deployment" 2>/dev/null)"; then
@@ -1890,7 +1890,7 @@ if [[ -n "$old_current" ]]; then
   [[ "$(tr -d '\r\n' <"$old_current_deployment/release-id")" == "$(basename "$old_current")" ]] \
     || fail "current release and deployment record disagree"
   # Routine canonical predecessors remain hosted/provider-verified releases.
-  # The exceptional observed Carry authority below is never accepted here.
+  # The exceptional observed legacy predecessor authority below is never accepted here.
   verify_hosted_rollback_baseline "$old_current" "$old_current_deployment" \
     || fail "canonical predecessor lacks its retained hosted/provider-verified rollback authority"
   [[ -z "$(docker ps -q --filter "label=com.docker.compose.project=$LEGACY_PROJECT")" \
@@ -1907,7 +1907,7 @@ if [[ -n "$old_current" ]]; then
     --expect-release-id "$old_release_id" --json >/dev/null
   verify_image_evidence "$old_current_deployment/running-images.tsv" "$old_current"
   verify_configuration_evidence "$old_current_deployment/config-digests.tsv" "$old_current"
-  verify_exact_carry_security_identity "$old_current_deployment/carry-security-identity.json"
+  verify_exact_legacy_security_identity "$old_current_deployment/carry-security-identity.json"
   # Recovery must be independently restartable before this deploy may quiesce
   # one writer.  Reload the predecessor's exact bundle now, under the selected
   # release's held runtime, and retain the generated content-ID override in the
@@ -1919,23 +1919,23 @@ if [[ -n "$old_current" ]]; then
 else
   [[ -z "$old_current_deployment" && -z "$old_previous" ]] \
     || fail "first cutover has stale canonical deployment lineage"
-  carry_baseline_id="$(active_adopted_live_carry_id)" \
-    || fail "first cutover requires the dedicated deploy carry-baseline command with this exact hosted candidate"
-  verify_adopted_live_carry "$carry_baseline_id" active \
+  legacy_predecessor_id="$(active_legacy_predecessor_id)" \
+    || fail "first cutover requires the dedicated deploy legacy-predecessor command with this exact hosted candidate"
+  verify_legacy_predecessor "$legacy_predecessor_id" active \
     "$candidate_id" "$release_id" "$deployment_authority_sha256" \
-    || fail "first-cutover Carry runtime differs from its sealed adopted-live-carry-v1 authority"
+    || fail "first-cutover legacy runtime differs from its sealed adopted-live-carry-v1 authority"
 fi
-verify_exact_carry_security_identity "$record/carry-security-identity.json"
+verify_exact_legacy_security_identity "$record/carry-security-identity.json"
 chmod 600 "$record/old-current" "$record/old-previous" "$record/old-current-deployment"
 record_project_state "$record/before"
 if [[ -z "$old_current" ]]; then
-  printf '%s\n' "$carry_baseline_id" >"$record/carry-baseline-id"
+  printf '%s\n' "$legacy_predecessor_id" >"$record/carry-baseline-id"
   chmod 600 "$record/carry-baseline-id"
   write_legacy_semantic_evidence "$record/before/semantic-baseline.tsv" \
     || fail "legacy application does not satisfy the first-cutover recovery baseline"
-  verify_adopted_live_carry "$carry_baseline_id" active \
+  verify_legacy_predecessor "$legacy_predecessor_id" active \
     "$candidate_id" "$release_id" "$deployment_authority_sha256" \
-    || fail "Carry predecessor changed while the first-cutover record was prepared"
+    || fail "legacy predecessor changed while the first-cutover record was prepared"
 fi
 domain_discovery="$record/public-edge-discovery.json"
 previous_domain_discovery=""
@@ -1988,13 +1988,13 @@ postgres_before="$(find_postgres_container)"
 stage_paired_identity "$postgres_before" "$stage_env/center.env"
 
 # Security material is never staged or copied.  The isolated rehearsal and the
-# live stack both mount the exact deployed Carry roots read-only; only the
+# live stack both mount the exact deployed legacy roots read-only; only the
 # candidate-rendered Envoy YAML is written below.
 [[ "$(active_attestation_root)" == "$PRODUCTION_ATTEST_DIR" \
   && "$(active_device_user_root)" == "$PRODUCTION_DUC_DIR" \
   && "$(active_edge_security_root)" == "$LEGACY_EDGE_DIR" ]] \
-  || fail "active security mounts are not the immutable Carry roots"
-verify_exact_carry_security_identity "$record/carry-security-identity.json"
+  || fail "active security mounts are not the immutable legacy roots"
+verify_exact_legacy_security_identity "$record/carry-security-identity.json"
 sudo -n test -d "$PRODUCTION_KEYCLOAK_THEME_DIR" \
   || fail "required Keycloak theme tree is missing"
 
@@ -2440,7 +2440,7 @@ reprove_candidate_acceptance() {
     --channel-key-action verify-desired || return 1
   sudo -n python3 "$transaction_driver" --root "$REMOTE_ROOT" --record "$record" \
     --trust-root-action verify --live-attest "$PRODUCTION_ATTEST_DIR" --live-duc "$PRODUCTION_DUC_DIR" || return 1
-  verify_exact_carry_security_identity "$record/carry-security-identity.json" || return 1
+  verify_exact_legacy_security_identity "$record/carry-security-identity.json" || return 1
   write_owner_canary_cookie "$release_dir" "$cookie" || return 1
   canary_args=(--release-id "$release_id" --image-evidence "$record/running-images.tsv" \
     --require-remote-tts --require-owner-spotify --cookie-file "$cookie")
@@ -2744,10 +2744,10 @@ trap 'exit 143' TERM
 python3 "$release_verifier" --tree "$release_dir" \
   --manifest "$MANIFESTS_DIR/$release_id.json" --json >/dev/null
 
-if [[ -n "$carry_baseline_id" ]]; then
-  verify_adopted_live_carry "$carry_baseline_id" active \
+if [[ -n "$legacy_predecessor_id" ]]; then
+  verify_legacy_predecessor "$legacy_predecessor_id" active \
     "$candidate_id" "$release_id" "$deployment_authority_sha256" \
-    || fail "Carry predecessor changed before first-cutover quiescence"
+    || fail "legacy predecessor changed before first-cutover quiescence"
 fi
 
 # Snapshot the exact existing Center client before the baseline backup. Admin
@@ -2771,10 +2771,10 @@ python3 "$transaction_driver" --root "$REMOTE_ROOT" --record "$record" \
 prepare_candidate_commit
 python3 "$transaction_driver" --root "$REMOTE_ROOT" --record "$record" \
   --namespace deploy --operation-action quiescing
-if [[ -n "$carry_baseline_id" ]]; then
-  verify_adopted_live_carry "$carry_baseline_id" active \
+if [[ -n "$legacy_predecessor_id" ]]; then
+  verify_legacy_predecessor "$legacy_predecessor_id" active \
     "$candidate_id" "$release_id" "$deployment_authority_sha256" \
-    || fail "Carry predecessor changed at the first-cutover quiescence boundary"
+    || fail "legacy predecessor changed at the first-cutover quiescence boundary"
 fi
 # The wearer's outage starts HERE, not at quiesce_ingress_services below: the
 # backup on the next line runs with --leave-quiesced, so it is the step that
@@ -2849,7 +2849,7 @@ chmod 600 "$record/LIVE_MUTATION_STARTED.tmp"
 mv "$record/LIVE_MUTATION_STARTED.tmp" "$record/LIVE_MUTATION_STARTED"
 sync -f "$record/LIVE_MUTATION_STARTED"
 cutover_started=1
-if [[ -n "$carry_baseline_id" ]]; then
+if [[ -n "$legacy_predecessor_id" ]]; then
   assert_global_durable_resource_holders legacy-only
 else
   assert_global_durable_resource_holders canonical-with-retained-legacy
@@ -2862,7 +2862,7 @@ stop_project_containers "$LEGACY_PROJECT"
 config_installed=1
 mkdir -p "$PRIVATE_DIR" "$PRIVATE_DIR/edge" "$PRIVATE_DIR/spotify-adapter"
 chmod 700 "$PRIVATE_DIR" "$PRIVATE_DIR/edge" "$PRIVATE_DIR/spotify-adapter"
-verify_exact_carry_security_identity "$record/carry-security-identity.json"
+verify_exact_legacy_security_identity "$record/carry-security-identity.json"
 for spec in "$runtime_stage:$RUNTIME_ENV" "$cosmos_stage:$COSMOS_ENV" "$provider_stage:$PROVIDER_ENV" "$center_stage:$CENTER_ENV"; do
   source_file="${spec%%:*}"; destination_file="${spec#*:}"
   temporary="$(mktemp "${destination_file}.tmp.XXXXXX")"
@@ -2909,7 +2909,7 @@ apply_channel_key_metadata "$transaction_driver" "$record"
 sudo -n python3 "$transaction_driver" --root "$REMOTE_ROOT" --record "$record" \
   --trust-root-action record --staged-attest "$PRODUCTION_ATTEST_DIR" --staged-duc "$PRODUCTION_DUC_DIR" \
   --live-attest "$PRODUCTION_ATTEST_DIR" --live-duc "$PRODUCTION_DUC_DIR"
-verify_exact_carry_security_identity "$record/carry-security-identity.json"
+verify_exact_legacy_security_identity "$record/carry-security-identity.json"
 if ! "${COMPOSE[@]}" up -d --pull never --no-build --remove-orphans; then
   # The candidate is torn down by recovery, taking its container logs with it.
   # Preserve the failing containers' state and logs in the record first so a
@@ -2988,7 +2988,7 @@ load_candidate_compose_command "$release_dir"
 sudo -n python3 "$transaction_driver" --root "$REMOTE_ROOT" --record "$record" --channel-key-action verify-desired
 sudo -n python3 "$transaction_driver" --root "$REMOTE_ROOT" --record "$record" \
   --trust-root-action verify --live-attest "$PRODUCTION_ATTEST_DIR" --live-duc "$PRODUCTION_DUC_DIR"
-verify_exact_carry_security_identity "$record/carry-security-identity.json"
+verify_exact_legacy_security_identity "$record/carry-security-identity.json"
 "${COMPOSE[@]}" up -d --pull never --no-build --remove-orphans
 wait_for_services "$release_dir"
 domain_keycloak_apply "$record" "$RUNTIME_ENV" 8088 center.andersmadsen.dk \

@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Capture and seal the one exceptional live Carry rollback authority.
+"""Capture and seal the exceptional live legacy rollback authority.
 
-The pre-workflow Carry deployment cannot truthfully acquire hosted build
-provenance after the fact.  This module therefore records an observation of
-the exact live runtime.  The hosted candidate authenticates only the registrar
-code that makes and later checks that observation.
+The pre-workflow deployment cannot truthfully acquire hosted build provenance
+after the fact. This module records the exact live runtime; the hosted candidate
+authenticates only the code that records and later checks it.
 """
 
 from __future__ import annotations
@@ -73,7 +72,7 @@ MAX_CONFIG_BYTES = 256 * 1024 * 1024
 
 
 def refuse(message: str) -> NoReturn:
-    raise SystemExit(f"Carry baseline refusal: {message}")
+    raise SystemExit(f"Legacy predecessor refusal: {message}")
 
 
 def canonical(value: object) -> bytes:
@@ -233,7 +232,7 @@ def validate_privileged_configurations(value: object) -> dict[str, dict[str, obj
                 refuse(f"privileged configuration entry path is invalid: {name}")
             seen.add(relative)
             if entry.get("uid") != expected_uid or entry.get("gid") != expected_gid:
-                refuse(f"privileged configuration ownership differs from the deployed Carry ABI: {name}")
+                refuse(f"privileged configuration ownership differs from the deployed legacy ABI: {name}")
             if (not all(isinstance(entry.get(key), int) and entry[key] >= 0 for key in identity_keys) or
                     entry["mode"] & 0o022):
                 refuse(f"privileged configuration metadata is unsafe: {name}")
@@ -256,7 +255,7 @@ def center_data_identity(path: str = CENTER_DATA) -> dict[str, object]:
     if (not stat.S_ISDIR(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode) or
             os.path.realpath(path) != path or metadata.st_uid != os.getuid() or
             metadata.st_gid != os.getgid() or stat.S_IMODE(metadata.st_mode) & 0o002):
-        refuse("Carry Center data root is missing or unsafe")
+        refuse("legacy Center data root is missing or unsafe")
     return {"path": path, **file_identity(metadata)}
 
 
@@ -358,7 +357,7 @@ def container_projection(container: dict[str, Any], expected_state: str,
         for name, value in sorted(((container.get("NetworkSettings") or {}).get("Networks") or {}).items())
     }
     if service == "ai-bus" and paths["localModelNetwork"] not in networks:
-        refuse("legacy ai-bus is not attached to the exact retained Carry local-model network")
+        refuse("legacy ai-bus is not attached to the exact retained legacy local-model network")
     return {
         "service": service,
         "containerId": identifier,
@@ -419,20 +418,20 @@ def build_observation(containers: list[dict[str, Any]], volumes: list[dict[str, 
         refuse("durable volume inspection is incomplete")
     volume_map = {item.get("Name"): item for item in volumes if isinstance(item, dict)}
     if set(volume_map) != set(VOLUME_NAMES):
-        refuse("durable volume identity differs from the exact Carry contract")
+        refuse("durable volume identity differs from the exact legacy production contract")
     projected_volumes = [volume_projection(volume_map[name]) for name in VOLUME_NAMES]
 
     if not isinstance(networks, list) or len(networks) != 2:
-        refuse("Carry network inspection is incomplete")
+        refuse("legacy network inspection is incomplete")
     network_map = {item.get("Name"): item for item in networks if isinstance(item, dict)}
     if set(network_map) != {LOCAL_MODEL_NETWORK, ROLLBACK_NETWORK}:
-        refuse("network identity differs from the exact Carry contract")
+        refuse("network identity differs from the exact legacy production contract")
     projected_networks = [network_projection(network_map[name]) for name in (LOCAL_MODEL_NETWORK, ROLLBACK_NETWORK)]
 
     if expected_state == "active" and not SHA256.fullmatch(semantic_sha256 or ""):
-        refuse("active Carry observation lacks semantic evidence")
+        refuse("active legacy predecessor observation lacks semantic evidence")
     if expected_state == "stopped" and semantic_sha256 is not None:
-        refuse("stopped Carry observation cannot claim live semantic evidence")
+        refuse("stopped legacy predecessor observation cannot claim live semantic evidence")
     privileged = (validate_privileged_configurations(privileged_configurations)
                   if privileged_configurations is not None else {})
     configs = []
@@ -471,18 +470,18 @@ def validate_observation(value: object) -> dict[str, Any]:
         "schema", "version", "project", "state", "services", "volumes", "networks",
         "configurations", "centerData", "semanticSha256",
     }:
-        refuse("Carry observation schema is not closed")
+        refuse("legacy predecessor observation schema is not closed")
     if value.get("schema") != "revival.live-carry-observation" or value.get("version") != 1 or value.get("project") != LEGACY_PROJECT:
-        refuse("Carry observation identity is invalid")
+        refuse("legacy predecessor observation identity is invalid")
     if value.get("state") not in ("active", "stopped") or not isinstance(value.get("services"), list):
-        refuse("Carry observation state or service inventory is invalid")
+        refuse("legacy predecessor observation state or service inventory is invalid")
     services = [item.get("service") for item in value["services"] if isinstance(item, dict)]
     if services != list(EXPECTED_SERVICES):
-        refuse("Carry observation service inventory is not exact and sorted")
+        refuse("legacy predecessor observation service inventory is not exact and sorted")
     if value["state"] == "active" and not SHA256.fullmatch(str(value.get("semanticSha256") or "")):
-        refuse("active Carry observation semantic evidence is invalid")
+        refuse("active legacy predecessor observation semantic evidence is invalid")
     if value["state"] == "stopped" and value.get("semanticSha256") is not None:
-        refuse("stopped Carry observation has impossible semantic evidence")
+        refuse("stopped legacy predecessor observation has impossible semantic evidence")
     return value
 
 
@@ -490,7 +489,7 @@ def make_record(observation: dict[str, Any], candidate_id: str, release_id: str,
                 authority_sha256: str) -> dict[str, object]:
     validate_observation(observation)
     if observation["state"] != "active":
-        refuse("only a live active Carry runtime can be registered")
+        refuse("only a live active legacy runtime can be registered")
     if not all(SHA256.fullmatch(value) for value in (candidate_id, release_id, authority_sha256)):
         refuse("registrar authority identities are invalid")
     return {
@@ -513,25 +512,25 @@ def validate_record(value: object) -> dict[str, Any]:
     if not isinstance(value, dict) or set(value) != {
         "schema", "version", "authorityKind", "eligibility", "runtimeProvenance", "registrar", "observation",
     }:
-        refuse("adopted Carry authority schema is not closed")
+        refuse("adopted legacy predecessor authority schema is not closed")
     if (value.get("schema") != "revival.adopted-live-carry-authority" or value.get("version") != 1 or
             value.get("authorityKind") != AUTHORITY_KIND or
             value.get("eligibility") != "immediate-first-cutover-predecessor-only" or
             value.get("runtimeProvenance") != "observed-live-runtime-not-provider-built"):
-        refuse("adopted Carry authority scope is invalid")
+        refuse("adopted legacy predecessor authority scope is invalid")
     registrar = value.get("registrar")
     if not isinstance(registrar, dict) or set(registrar) != {
         "candidateId", "releaseId", "deploymentAuthoritySha256", "providerEvidence",
     }:
-        refuse("adopted Carry registrar schema is invalid")
+        refuse("adopted legacy predecessor registrar schema is invalid")
     if registrar.get("providerEvidence") != "point-of-use-reverified-registrar-code-only":
-        refuse("old Carry images were assigned false provider provenance")
+        refuse("old predecessor images were assigned false provider provenance")
     if not all(SHA256.fullmatch(str(registrar.get(name) or "")) for name in
                    ("candidateId", "releaseId", "deploymentAuthoritySha256")):
-        refuse("adopted Carry registrar identities are invalid")
+        refuse("adopted legacy predecessor registrar identities are invalid")
     validate_observation(value.get("observation"))
     if value["observation"]["state"] != "active":
-        refuse("adopted Carry record is not an active-runtime observation")
+        refuse("adopted legacy predecessor record is not an active-runtime observation")
     return value
 
 
@@ -572,30 +571,30 @@ def safe_directory(path: str, *, create: bool) -> None:
         refuse(f"private authority directory is unsafe: {path}")
 
 
-def record_paths(root: str, baseline_id: str) -> tuple[str, str, str]:
-    if root != REMOTE_ROOT or not SHA256.fullmatch(baseline_id):
-        refuse("adopted Carry store root or identity is invalid")
+def record_paths(root: str, predecessor_id: str) -> tuple[str, str, str]:
+    if root != REMOTE_ROOT or not SHA256.fullmatch(predecessor_id):
+        refuse("adopted legacy predecessor store root or identity is invalid")
     store = os.path.join(root, STORE_BASENAME)
-    return store, os.path.join(store, f"{baseline_id}.json"), os.path.join(store, "active")
+    return store, os.path.join(store, f"{predecessor_id}.json"), os.path.join(store, "active")
 
 
-def read_record(root: str, baseline_id: str, *, require_active: bool = True) -> dict[str, Any]:
-    store, record_path, active_path = record_paths(root, baseline_id)
+def read_record(root: str, predecessor_id: str, *, require_active: bool = True) -> dict[str, Any]:
+    store, record_path, active_path = record_paths(root, predecessor_id)
     safe_directory(store, create=False)
     payload = safe_file_bytes(record_path, 0o400)
-    if digest(payload) != baseline_id:
-        refuse("adopted Carry authority content address does not match its bytes")
+    if digest(payload) != predecessor_id:
+        refuse("adopted legacy predecessor authority content address does not match its bytes")
     try:
         value = json.loads(payload)
     except (UnicodeDecodeError, json.JSONDecodeError):
-        refuse("adopted Carry authority is not JSON")
+        refuse("adopted legacy predecessor authority is not JSON")
     if canonical(value) != payload:
-        refuse("adopted Carry authority is not canonical JSON")
+        refuse("adopted legacy predecessor authority is not canonical JSON")
     value = validate_record(value)
     if require_active:
         pointer = safe_file_bytes(active_path, 0o400, 128)
-        if pointer != f"{baseline_id}\n".encode():
-            refuse("active adopted Carry authority pointer disagrees")
+        if pointer != f"{predecessor_id}\n".encode():
+            refuse("active adopted legacy predecessor authority pointer disagrees")
     return value
 
 
@@ -623,30 +622,30 @@ def write_output(path: str, payload: bytes) -> None:
 
 def register_record(root: str, record: dict[str, Any]) -> str:
     if root != REMOTE_ROOT:
-        refuse("adopted Carry record may only be written to the protected production root")
+        refuse("adopted legacy predecessor record may only be written to the protected production root")
     root_meta = os.lstat(root)
     if (not stat.S_ISDIR(root_meta.st_mode) or stat.S_ISLNK(root_meta.st_mode) or
             root_meta.st_uid != os.getuid() or root_meta.st_gid != os.getgid() or
             stat.S_IMODE(root_meta.st_mode) != 0o700 or os.path.realpath(root) != root):
         refuse("protected production root is unsafe")
     payload = canonical(validate_record(record))
-    baseline_id = digest(payload)
-    store, record_path, active_path = record_paths(root, baseline_id)
+    predecessor_id = digest(payload)
+    store, record_path, active_path = record_paths(root, predecessor_id)
     safe_directory(store, create=True)
     if os.path.lexists(active_path):
         existing_id = safe_file_bytes(active_path, 0o400, 128).decode().strip()
         existing = read_record(root, existing_id)
         if canonical(existing) != payload:
-            refuse("a different adopted Carry authority is already active")
+            refuse("a different adopted legacy predecessor authority is already active")
         return existing_id
     if os.path.lexists(record_path):
         if safe_file_bytes(record_path, 0o400) != payload:
-            refuse("adopted Carry content-addressed record bytes disagree")
+            refuse("adopted legacy predecessor content-addressed record bytes disagree")
     else:
         write_once(record_path, payload, 0o400)
     temporary = os.path.join(store, f".active.{os.getpid()}.{secrets.token_hex(8)}")
     try:
-        write_once(temporary, f"{baseline_id}\n".encode(), 0o400)
+        write_once(temporary, f"{predecessor_id}\n".encode(), 0o400)
         # link(2) is the no-replace publication primitive here. rename(2)
         # would silently overwrite an authority another process published
         # between the existence check and this linearization point.
@@ -662,8 +661,8 @@ def register_record(root: str, record: dict[str, Any]) -> str:
             os.unlink(temporary)
         except FileNotFoundError:
             pass
-    read_record(root, baseline_id)
-    return baseline_id
+    read_record(root, predecessor_id)
+    return predecessor_id
 
 
 def verify_live(record: dict[str, Any], current: dict[str, Any], expected_state: str,
@@ -675,18 +674,18 @@ def verify_live(record: dict[str, Any], current: dict[str, Any], expected_state:
     for supplied, name in ((candidate_id, "candidateId"), (release_id, "releaseId"),
                            (authority_sha256, "deploymentAuthoritySha256")):
         if supplied is not None and registrar[name] != supplied:
-            refuse(f"forward candidate does not match adopted Carry registrar {name}")
+            refuse(f"forward candidate does not match adopted legacy predecessor registrar {name}")
     if current["state"] != expected_state:
-        refuse("current Carry runtime was captured in the wrong state")
+        refuse("current legacy runtime was captured in the wrong state")
     recorded = record["observation"]
     if expected_state == "active":
         if canonical(recorded) != canonical(current):
-            refuse("live Carry runtime changed since adopted baseline registration")
+            refuse("live legacy runtime changed since registration")
     elif expected_state == "stopped":
         if canonical(immutable_observation(recorded)) != canonical(immutable_observation(current)):
-            refuse("stopped Carry predecessor identity changed since registration")
+            refuse("stopped legacy predecessor identity changed since registration")
     else:
-        refuse("unsupported adopted Carry verification state")
+        refuse("unsupported adopted legacy predecessor verification state")
 
 
 def parser() -> argparse.ArgumentParser:
@@ -708,7 +707,7 @@ def parser() -> argparse.ArgumentParser:
     register.add_argument("--deployment-authority-sha256", required=True)
     verify = subcommands.add_parser("verify")
     verify.add_argument("--root", required=True)
-    verify.add_argument("--baseline-id", required=True)
+    verify.add_argument("--predecessor-id", required=True)
     verify.add_argument("--current", required=True)
     verify.add_argument("--state", choices=("active", "stopped"), required=True)
     verify.add_argument("--candidate-id")
@@ -716,7 +715,7 @@ def parser() -> argparse.ArgumentParser:
     verify.add_argument("--deployment-authority-sha256")
     inspect = subcommands.add_parser("inspect")
     inspect.add_argument("--root", required=True)
-    inspect.add_argument("--baseline-id", required=True)
+    inspect.add_argument("--predecessor-id", required=True)
     active = subcommands.add_parser("active-id")
     active.add_argument("--root", required=True)
     return result
@@ -758,29 +757,29 @@ def main() -> None:
         )
         write_output(args.output, canonical(observation))
     elif args.command == "register":
-        observation = validate_observation(json_file(args.observation, "Carry observation"))
+        observation = validate_observation(json_file(args.observation, "legacy predecessor observation"))
         record = make_record(observation, args.candidate_id, args.release_id, args.deployment_authority_sha256)
         print(register_record(args.root, record))
     elif args.command == "verify":
-        record = read_record(args.root, args.baseline_id)
-        current = validate_observation(json_file(args.current, "current Carry observation"))
+        record = read_record(args.root, args.predecessor_id)
+        current = validate_observation(json_file(args.current, "current legacy predecessor observation"))
         verify_live(record, current, args.state, args.candidate_id, args.release_id,
                     args.deployment_authority_sha256)
-        print(args.baseline_id)
+        print(args.predecessor_id)
     elif args.command == "inspect":
-        value = read_record(args.root, args.baseline_id)
+        value = read_record(args.root, args.predecessor_id)
         print(canonical(value).decode(), end="")
     elif args.command == "active-id":
         if args.root != REMOTE_ROOT:
-            refuse("adopted Carry store root is invalid")
+            refuse("adopted legacy predecessor store root is invalid")
         store = os.path.join(args.root, STORE_BASENAME)
         safe_directory(store, create=False)
         active_path = os.path.join(store, "active")
-        baseline_id = safe_file_bytes(active_path, 0o400, 128).decode().strip()
-        if not SHA256.fullmatch(baseline_id):
-            refuse("active adopted Carry authority identity is invalid")
-        read_record(args.root, baseline_id)
-        print(baseline_id)
+        predecessor_id = safe_file_bytes(active_path, 0o400, 128).decode().strip()
+        if not SHA256.fullmatch(predecessor_id):
+            refuse("active adopted legacy predecessor authority identity is invalid")
+        read_record(args.root, predecessor_id)
+        print(predecessor_id)
     else:
         refuse("unsupported command")
 

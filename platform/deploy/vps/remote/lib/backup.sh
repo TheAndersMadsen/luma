@@ -13,7 +13,7 @@ assert_durable_inputs() {
   network_name="$(docker network inspect --format '{{.Name}}' "$LOCAL_MODEL_NETWORK" 2>/dev/null)" \
     || fail "required local-model network is missing: $LOCAL_MODEL_NETWORK"
   [[ "$network_name" == "$LOCAL_MODEL_NETWORK" ]] \
-    || fail "local-model network identity differs from the reviewed Carry resource"
+    || fail "local-model network identity differs from the reviewed legacy resource"
   [[ -d "$CENTER_DATA_DIR" && ! -L "$CENTER_DATA_DIR" ]] \
     || fail "Center data directory is missing or unsafe"
 }
@@ -83,7 +83,7 @@ print(mounts[0].get("Source", ""))
     || fail "active $label mounts do not share the reviewed root"
   root="$(dirname -- "$first_source")"
   [[ "$canonical_root" == "$legacy_root" && "$root" == "$canonical_root" ]] \
-    || fail "active $label root is not the exact deployed Carry location"
+    || fail "active $label root is not the exact deployed legacy location"
   sudo -n test -d "$root" && ! sudo -n test -L "$root" \
     && sudo -n test -f "$first_source" && ! sudo -n test -L "$first_source" \
     && sudo -n test -f "$second_source" && ! sudo -n test -L "$second_source" \
@@ -122,7 +122,7 @@ assert len(mounts)==1 and mounts[0].get("Type")=="bind" and mounts[0].get("RW") 
 print(mounts[0].get("Source", ""))
 ' "$destination")" || fail "active edge certificate mount is not one reviewed read-only bind"
     [[ "$source" == "$expected" ]] \
-      || fail "active edge certificate mount does not use the exact deployed Carry inode path"
+      || fail "active edge certificate mount does not use the exact deployed legacy inode path"
     mounted_objects+=("$source" "$destination")
   done <<EOF
 $(if [[ "$project" == "$LEGACY_PROJECT" ]]; then
@@ -166,7 +166,7 @@ mount=matches[0]
 assert mount.get("Type")==kind and mount.get("RW") is True
 assert mount.get("Name" if kind=="volume" else "Source")==expected
 ' "$destination" "$type" "$expected" \
-      || fail "active $service mount at $destination is not the one exact writable Carry source"
+      || fail "active $service mount at $destination is not the one exact writable legacy source"
     if [[ "$type" == bind ]]; then
       assert_bind_mount_objects "$container" "$service data" "$expected" "$destination"
     fi
@@ -186,7 +186,7 @@ EOF
   ai_bus="$(active_service_container ai-bus)"
   network_attached="$(docker inspect --format "{{if index .NetworkSettings.Networks \"$LOCAL_MODEL_NETWORK\"}}$LOCAL_MODEL_NETWORK{{end}}" "$ai_bus")"
   [[ "$network_attached" == "$LOCAL_MODEL_NETWORK" ]] \
-    || fail "active ai-bus is not attached to the reviewed Carry local-model network"
+    || fail "active ai-bus is not attached to the reviewed legacy local-model network"
   active_attestation_root >/dev/null
   active_device_user_root >/dev/null
   active_edge_security_root >/dev/null
@@ -242,7 +242,7 @@ for container in body:
         assert candidate in allowed
         assert mount.get("RW") is False
 ' "$PROJECT" "$LEGACY_PROJECT" \
-    || fail "a container has an unreviewed or writable path to deployed Carry security material"
+    || fail "a container has an unreviewed or writable path to deployed legacy security material"
 }
 
 # Close durable storage over the complete Docker inventory, not merely the
@@ -265,7 +265,7 @@ assert_global_durable_resource_holders() {
     3< <(docker inspect "${containers[@]}") \
     4< <(docker volume inspect "$STATE_VOLUME" "$PG_VOLUME" \
       "$PROMETHEUS_VOLUME" "$GRAFANA_VOLUME") <<'PY' \
-    || fail "a container has unreviewed or duplicate access to a Carry durable resource"
+    || fail "a container has unreviewed or duplicate access to a legacy durable resource"
 import json,os,sys
 
 canonical,legacy,topology,state,pg,prometheus,grafana,center=sys.argv[1:]

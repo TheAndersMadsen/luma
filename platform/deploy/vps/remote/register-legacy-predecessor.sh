@@ -9,7 +9,7 @@ deployment_authority=""
 deployment_authority_sha256=""
 json=0
 usage() {
-  echo "usage: register-carry-baseline --candidate-id SHA256 --candidate-root PATH --release-id SHA256 --deployment-authority PATH --deployment-authority-sha256 SHA256 [--json]" >&2
+  echo "usage: register-legacy-predecessor --candidate-id SHA256 --candidate-root PATH --release-id SHA256 --deployment-authority PATH --deployment-authority-sha256 SHA256 [--json]" >&2
   exit 64
 }
 while (($#)); do
@@ -35,25 +35,25 @@ for command in docker flock python3 node sha256sum cmp stat readlink curl system
 [[ "${REVIVAL_HELD_RELEASE_ID:-}" == "$release_id" \
   && "${REVIVAL_HELD_RELEASE_LOGICAL_ROOT:-}" == "$REMOTE_ROOT/incoming/$release_id/verified-driver" \
   && "${REVIVAL_HELD_EXEC:-}" =~ ^/proc/self/fd/[1-9][0-9]*$ ]] \
-  || fail "Carry registrar is not the selected candidate's held release"
+  || fail "legacy predecessor registrar is not the selected candidate's held release"
 [[ "${DOCKER_HOST:-}" == unix:///var/run/docker.sock \
   && "${DOCKER_CONFIG:-}" == "$PRIVATE_DIR/docker-cli-empty" \
   && -d "$DOCKER_CONFIG" && ! -L "$DOCKER_CONFIG" \
   && -z "$(find "$DOCKER_CONFIG" -mindepth 1 -maxdepth 1 -print -quit)" ]] \
-  || fail "Carry registrar Docker authority is not the fixed empty local configuration"
+  || fail "legacy predecessor registrar Docker authority is not the fixed empty local configuration"
 
 candidate_verification="$(run_held_candidate_verifier verify --candidate "$candidate_root" \
   --expect-id "$candidate_id" --json)" \
-  || fail "Carry registrar candidate failed held filesystem verification"
+  || fail "legacy predecessor registrar candidate failed held filesystem verification"
 node -e 'const v=JSON.parse(process.argv[1]);if(v.ok!==true||v.candidateId!==process.argv[2]||v.releaseId!==process.argv[3]||v.productionCompatible!==true||v.authority?.origin!=="github-hosted-actions")process.exit(1)' \
   "$candidate_verification" "$candidate_id" "$release_id" \
-  || fail "Carry registrar candidate is not the selected hosted compatible release"
+  || fail "legacy predecessor registrar candidate is not the selected hosted compatible release"
 [[ -f "$deployment_authority" && ! -L "$deployment_authority" \
   && "$(stat -c '%a:%u:%g:%h' "$deployment_authority")" == "600:$(id -u):$(id -g):1" \
   && "$(sha256sum "$deployment_authority" | awk '{print $1}')" == "$deployment_authority_sha256" ]] \
-  || fail "Carry registrar deployment authority is unsafe or changed"
+  || fail "legacy predecessor registrar deployment authority is unsafe or changed"
 python3 - "$deployment_authority" "$candidate_id" "$release_id" "$deployment_authority_sha256" <<'PY' \
-  || fail "Carry registrar lacks exact point-of-use provider evidence"
+  || fail "legacy predecessor registrar lacks exact point-of-use provider evidence"
 import hashlib,json,os,re,stat,sys
 path,candidate_id,release_id,expected_sha=sys.argv[1:]
 before=os.lstat(path)
@@ -87,18 +87,18 @@ flock -n 9 || fail "another deployment or backup holds the lock"
 
 transaction_driver="${REVIVAL_HELD_TRANSACTION:-}"
 release_material_file_is_safe "$transaction_driver" \
-  || fail "Carry registrar transaction inventory authority is unavailable"
+  || fail "legacy predecessor registrar transaction inventory authority is unavailable"
 inventory="$(python3 "$transaction_driver" --root "$REMOTE_ROOT" --inventory)" \
-  || fail "Carry registrar could not inspect global transaction authority"
+  || fail "legacy predecessor registrar could not inspect global transaction authority"
 python3 - "$inventory" <<'PY' \
-  || fail "Carry registrar refuses while any authority transaction is pending"
+  || fail "legacy predecessor registrar refuses while any authority transaction is pending"
 import json,sys
 value=json.loads(sys.argv[1])
 assert value.get("schemaVersion")==1 and value.get("active")==[]
 PY
 for pointer in current previous current-deployment; do
   [[ ! -e "$REMOTE_ROOT/$pointer" && ! -L "$REMOTE_ROOT/$pointer" ]] \
-    || fail "Carry registrar refuses an existing canonical release pointer: $pointer"
+    || fail "legacy predecessor registrar refuses an existing canonical release pointer: $pointer"
 done
 assert_durable_inputs
 assert_active_durable_mounts
@@ -110,21 +110,21 @@ trap cleanup EXIT
 first="$work/observation.first.json"
 second="$work/observation.second.json"
 assert_active_durable_mounts
-capture_adopted_live_carry_observation "$first" active
+capture_legacy_predecessor_observation "$first" active
 assert_active_durable_mounts
-capture_adopted_live_carry_observation "$second" active
+capture_legacy_predecessor_observation "$second" active
 cmp -s "$first" "$second" \
-  || fail "live Carry runtime changed while its rollback observation was captured"
+  || fail "live legacy runtime changed while its rollback observation was captured"
 assert_active_durable_mounts
-baseline_id="$(register_adopted_live_carry "$second" "$candidate_id" "$release_id" \
+predecessor_id="$(register_legacy_predecessor "$second" "$candidate_id" "$release_id" \
   "$deployment_authority_sha256")" \
-  || fail "adopted Carry authority could not be sealed"
-[[ "$baseline_id" =~ ^[0-9a-f]{64}$ \
-  && "$(active_adopted_live_carry_id)" == "$baseline_id" ]] \
-  || fail "sealed adopted Carry authority is not active"
+  || fail "adopted legacy predecessor authority could not be sealed"
+[[ "$predecessor_id" =~ ^[0-9a-f]{64}$ \
+  && "$(active_legacy_predecessor_id)" == "$predecessor_id" ]] \
+  || fail "sealed adopted legacy predecessor authority is not active"
 
 if ((json)); then
-  python3 - "$baseline_id" "$candidate_id" "$release_id" <<'PY'
+  python3 - "$predecessor_id" "$candidate_id" "$release_id" <<'PY'
 import json,sys
 print(json.dumps({"ok":True,"authorityKind":"adopted-live-carry-v1","baselineId":sys.argv[1],
                   "registrarCandidateId":sys.argv[2],"registrarReleaseId":sys.argv[3],
@@ -132,5 +132,5 @@ print(json.dumps({"ok":True,"authorityKind":"adopted-live-carry-v1","baselineId"
                  sort_keys=True,separators=(",",":")))
 PY
 else
-  log "registered adopted-live-carry-v1 baseline $baseline_id without changing the live runtime"
+  log "registered adopted-live-carry-v1 predecessor $predecessor_id without changing the live runtime"
 fi

@@ -23,11 +23,11 @@ const {
   sealTokens,
   setTokenCookies,
   verifySession,
-} = await import("../src/server/auth.ts?persistent-carry-contracts");
+} = await import("../src/server/auth.ts?legacy-production-contracts");
 const {
   mintShareToken,
   verifyShareToken,
-} = await import("../src/server/shareToken.ts?persistent-carry-contracts");
+} = await import("../src/server/shareToken.ts?legacy-production-contracts");
 
 const shareKey = new Uint8Array(createHash("sha256").update(SHARE_SECRET, "utf8").digest());
 const authTokenKey = new Uint8Array(createHash("sha256").update(AUTH_SECRET, "utf8").digest());
@@ -83,7 +83,7 @@ test("pre-rename session and token cookies remain readable without a new namespa
   assert.equal(tokenCookies.has("cosmos_tokens"), false);
 });
 
-test("new bearer-cookie issuance uses only the rollback-compatible Carry names", async () => {
+test("new bearer-cookie issuance uses only the rollback-compatible legacy names", async () => {
   const writes = [];
   const sealed = await sealTokens({
     accessToken: "new-access-token",
@@ -101,7 +101,7 @@ test("new bearer-cookie issuance uses only the rollback-compatible Carry names",
   assert.equal(writes.some(({ name }) => name.startsWith("cosmos_tokens")), false);
 });
 
-test("a pre-rename Carry share capability remains accepted", async () => {
+test("a legacy predecessor share capability remains accepted", async () => {
   const token = await new EncryptJWT({
     memoryUuid: "memory-before-rename",
     userId: "wearer-before-rename",
@@ -131,11 +131,11 @@ test("new share capabilities keep the legacy issuer, audience, and type", async 
   assert.equal(payload.userId, "wearer-after-upgrade");
 });
 
-test("admin flag delivery observes the deployed Carry metric series", async () => {
+test("admin flag delivery observes the Cosmos metric series", async () => {
   const source = await readFile(
     new URL("../src/app/api/admin/flags/route.ts", import.meta.url),
     "utf8",
   );
-  assert.match(source, /\/manage\/metrics\/carry_rpc_requests_total/u);
-  assert.doesNotMatch(source, /\/manage\/metrics\/cosmos_rpc_requests_total/u);
+  assert.match(source, /\/manage\/metrics\/cosmos_rpc_requests_total/u);
+  assert.doesNotMatch(source, /\/manage\/metrics\/carry_rpc_requests_total/u);
 });

@@ -71,11 +71,10 @@ export class ChannelKeyUnavailableError extends Error {
  *
  * ONE file, holding a map from kid to key — not one file per wearer. The path is
  * the only one the deployment declares (`COSMOS_CHANNEL_KEY_FILE`, with the
- * pre-rename `CARRY_CHANNEL_KEY_FILE` accepted as an exact alias), the only one
- * the restore/backup contract knows, and the only one `.gitignore` and
- * `.dockerignore` name; inventing sibling filenames would put wearer key
- * material somewhere neither of those covers. (`writeStore` does use one
- * transient sibling, `<file>.<pid>.tmp`, so the replacement can be atomic.)
+ * legacy `CARRY_CHANNEL_KEY_FILE` accepted as an exact alias), and the only one
+ * the restore/backup contract knows. Both local default names and their
+ * transient siblings are covered by `.gitignore` and `.dockerignore`.
+ * (`writeStore` uses `<file>.<pid>.tmp` so replacement can be atomic.)
  *
  * Read per call rather than captured at import: a deployment sets it before the
  * process starts, so nothing changes there, and a test can point one case at a
@@ -83,13 +82,31 @@ export class ChannelKeyUnavailableError extends Error {
  */
 export function channelKeyFile(): string {
   const cosmos = nonBlankEnvironmentPath(process.env.COSMOS_CHANNEL_KEY_FILE);
-  const carry = nonBlankEnvironmentPath(process.env.CARRY_CHANNEL_KEY_FILE);
-  if (cosmos && carry && cosmos !== carry) {
+  const legacyAlias = nonBlankEnvironmentPath(process.env.CARRY_CHANNEL_KEY_FILE);
+  if (cosmos && legacyAlias && cosmos !== legacyAlias) {
     throw new ChannelKeyUnavailableError(
       "COSMOS_CHANNEL_KEY_FILE and CARRY_CHANNEL_KEY_FILE disagree; refusing to choose a channel-key store.",
     );
   }
-  return cosmos ?? carry ?? path.join(process.cwd(), ".carry-channel-key.json");
+  if (cosmos) return cosmos;
+  if (legacyAlias) return legacyAlias;
+
+  const cosmosDefault = path.join(process.cwd(), ".cosmos-channel-key.json");
+  const legacyDefault = path.join(process.cwd(), ".carry-channel-key.json");
+  // Reuse legacy key material in place; default selection must never rename or
+  // rewrite the only copy.
+  if (pathEntryExists(cosmosDefault)) return cosmosDefault;
+  return pathEntryExists(legacyDefault) ? legacyDefault : cosmosDefault;
+}
+
+function pathEntryExists(file: string): boolean {
+  try {
+    fs.lstatSync(file);
+    return true;
+  } catch (error) {
+    if (errnoOf(error) === "ENOENT") return false;
+    throw invalidStore(file, `path lookup failed with ${errnoOf(error)}`);
+  }
 }
 
 function nonBlankEnvironmentPath(value: string | undefined): string | null {

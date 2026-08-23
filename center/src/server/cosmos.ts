@@ -358,7 +358,7 @@ export async function requestMetadata(): Promise<grpc.Metadata> {
   if (edgeToken) {
     // Header names are an external wire ABI shared with both the upgraded and
     // rollback backend. The environment variable is logically Cosmos; its
-    // stable default remains the deployed Carry spelling.
+    // stable default remains the deployed legacy spelling.
     md.set(process.env.COSMOS_EDGE_TOKEN_HEADER?.trim() || "x-carry-edge-token", edgeToken);
   }
   return md;

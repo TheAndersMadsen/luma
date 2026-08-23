@@ -50,21 +50,21 @@ extraction. Runtime state and secrets are not release contents.
 Production commands target an existing reviewed installation; they are not a
 clean-server bootstrap workflow.
 
-### One-time Carry baseline registration
+### One-time legacy-predecessor registration
 
-The already-running pre-workflow Carry build cannot honestly be reconstructed
+The already-running pre-workflow predecessor build cannot honestly be reconstructed
 and relabeled as provider-built. Do not mint a candidate receipt for those old
-images. For the first Carry-to-Cosmos cutover only, use held registrar code from
+images. For the first legacy-to-Cosmos cutover only, use held registrar code from
 the **same freshly provider-verified forward candidate** to record the live
 runtime as the exceptional `adopted-live-carry-v1` predecessor:
 
 ```sh
-REVIVAL_DATA_DIR=/external/revival-data ./revival deploy carry-baseline --candidate-id CANDIDATE_SHA256 --dry-run
-REVIVAL_DATA_DIR=/external/revival-data ./revival deploy carry-baseline --candidate-id CANDIDATE_SHA256 --confirm
+REVIVAL_DATA_DIR=/external/revival-data ./revival deploy legacy-predecessor --candidate-id CANDIDATE_SHA256 --dry-run
+REVIVAL_DATA_DIR=/external/revival-data ./revival deploy legacy-predecessor --candidate-id CANDIDATE_SHA256 --confirm
 ```
 
 Under the deployment lock, the registrar requires no pending transaction or
-canonical project and observes the exact Carry service/container/image IDs,
+canonical project and observes the exact legacy service/container/image IDs,
 health, mounts, networks, configuration/PKI inode and content identities, and
 durable resource identities twice. It then writes one deterministic,
 content-addressed private record. It does not stop, restart, create, remove,
@@ -75,19 +75,19 @@ different bytes or a different candidate refuse rather than replacing it.
 Deploy the same candidate immediately afterward. The forward deploy reproves
 the complete live observation before cleanup and again at the quiescence
 boundary, binds the baseline ID into its deployment record, and stops—but never
-removes—the old Carry containers and images. Only that successful first-cutover
+removes—the old predecessor containers and images. Only that successful first-cutover
 record may consume the observation as its immediate rollback predecessor. A
 rollback reproves the exact stopped container/image/configuration/resource
-identity before any mutation and immediately before restarting Carry. The
+identity before any mutation and immediately before restarting the predecessor. The
 observation cannot become `current`, `previous`, a normal candidate, or a
 routine predecessor. Every later canonical predecessor remains a normally
 provider-verified retained candidate. Descriptor schemas 2 and 3 and every
 local-origin candidate remain ineligible as canonical candidates.
 
 The cutover keeps the exact
-Carry volumes, Carry local-model network, Carry Center data directory,
+legacy volumes, legacy local-model network, legacy Center data directory,
 `/var/lib/carry` container target, physical `carry` PostgreSQL
-role/database/schema, and Carry PKI/configuration paths in place; it does not
+role/database/schema, and legacy PKI/configuration paths in place; it does not
 create, copy, rename, migrate, or delete those resources. In particular,
 `humane-cosmos-clone_cosmos-*`,
 `humane-cosmos-clone_{prometheus,grafana}-data`,
@@ -163,7 +163,7 @@ services collapse to exactly nine distinct model-bound images, and the fixed
 backup-helper reference contributes one separate tenth ID. Missing, extra,
 aliased, or caller-selected helper inventory refuses before daemon access.
 
-The live installation still owns the historical Carry volume, network, and
+The live installation still owns the historical legacy volume, network, and
 Center-data identities. Candidate preparation refuses a snapshot whose
 production model does not declare that exact contract before Docker is called;
 deployment repeats the refusal before SSH/upload. In particular, the current
@@ -303,7 +303,7 @@ exercises the same sealed-bearer path a wearer does.
 **What to create, in Keycloak (`https://center.andersmadsen.dk`, realm
 `humane`).** One ordinary realm user, and it must be *ordinary*:
 
-- **not** in `COSMOS_OPERATOR_EMAILS` and holding no `carry-operator` role, on
+- **not** in `COSMOS_OPERATOR_EMAILS` and holding no legacy `carry-operator` role, on
   the realm or on the `center` client;
 - **not** the paired Pin owner (`REVIVAL_PIN_BRIDGE_OWNER_SUB`);
 - paired to no device, so it has its own empty `U:<sub>` partition.

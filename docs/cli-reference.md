@@ -87,8 +87,8 @@ loop](../CONTRIBUTING.md#fast-local-loop).
 | `revival doctor production` | read | Check production prerequisites. |
 | `revival release candidate prepare [--commit COMMIT]` | local | Build a sealed local diagnostic candidate from an exact detached commit; it is candidate-only and cannot deploy. |
 | `revival release candidate verify (--candidate PATH | --id SHA256)` | read | Recompute every candidate identity and digest without Git, Docker, a shell, or candidate-controlled code. |
-| `revival release candidate inspect (--candidate PATH | --id SHA256)` | read | Report provenance, image identities, and protected Carry compatibility. |
-| `revival deploy carry-baseline (--candidate PATH | --candidate-id SHA256) [--dry-run\|--confirm]` | remote | One-time only: observe and seal the already-running Carry predecessor using held registrar code from the exact hosted forward candidate, without changing the runtime. |
+| `revival release candidate inspect (--candidate PATH | --id SHA256)` | read | Report provenance, image identities, and protected legacy-production compatibility. |
+| `revival deploy legacy-predecessor (--candidate PATH | --candidate-id SHA256) [--dry-run\|--confirm]` | remote | One-time only: observe and seal the already-running legacy predecessor using held registrar code from the exact hosted forward candidate, without changing the runtime. |
 | `revival deploy production (--candidate PATH | --candidate-id SHA256) --confirm` | remote | Freshly provider-verify, transfer, and deploy one imported GitHub-hosted immutable candidate; never build or pull on the host. |
 | `revival backup --confirm` | remote | Create a verified server backup; `--fetch` adds the off-host copy. |
 | `revival canary --confirm` | remote | Run semantic production canaries. |
@@ -114,12 +114,12 @@ The sealed candidate identity also commits the complete 15-service
 that held mapping rather than reconstructing authority from mutable tags or
 paths.
 
-The already-running pre-workflow Carry release cannot honestly be reproduced
-and relabeled as provider-built. For the first Carry-to-Cosmos cutover only,
-`deploy carry-baseline` uses held registrar code from the same freshly
+The already-running pre-workflow predecessor release cannot honestly be reproduced
+and relabeled as provider-built. For the first legacy-to-Cosmos cutover only,
+`deploy legacy-predecessor` uses held registrar code from the same freshly
 provider-verified forward candidate to capture it twice as the exceptional
 `adopted-live-carry-v1` predecessor. The record explicitly does not claim the
-observed Carry images were provider-built, changes no runtime resource, is
+observed predecessor images were provider-built, changes no runtime resource, is
 bound to that one forward candidate, and is eligible only as that candidate's
 immediate rollback predecessor. Deploy the same candidate immediately after
 registration; every later canonical predecessor must be a normally
@@ -142,7 +142,7 @@ The live storage authority remains `/home/anders/carry-center-data` with
 `humane-carry-clone_prometheus-data`, and
 `humane-carry-clone_grafana-data`. Candidate preparation intentionally refuses
 a source snapshot whose effective Compose/common values rename those paths.
-Logical Cosmos keys attach directly to the existing Carry resources; no
+Logical Cosmos keys attach directly to the existing legacy resources; no
 automatic create, copy, rename, migration, deletion, or “adoption” exists.
 
 ## Pin host, PKI, release, and device commands

@@ -17,7 +17,7 @@ host they resolve to `DEPLOYMENT_HOME=/home/anders`,
 values from its verified deployment and backup evidence rather than assuming a
 different account layout is interchangeable.
 
-The names above are the protected live Carry contract. In particular, do not
+The names above are the protected live legacy-production contract. In particular, do not
 substitute the repository's current Cosmos-renamed defaults for
 `/home/anders/carry-center-data` or the `humane-carry-clone_carry-*` volumes.
 Those volumes are exactly `humane-carry-clone_carry-state`,

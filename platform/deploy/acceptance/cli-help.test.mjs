@@ -105,6 +105,25 @@ test("help flags short-circuit unknown trailing arguments at every position", ()
   }
 });
 
+test("deprecated predecessor spelling resolves canonical help without being advertised", () => {
+  const { temporary, env } = isolatedEnvironment();
+  try {
+    const canonical = invoke(env, "deploy", "legacy-predecessor", "--help");
+    const compatibility = invoke(env, "deploy", "carry-baseline", "--help");
+    const group = invoke(env, "deploy", "--help");
+    assert.equal(canonical.status, 0, canonical.stderr);
+    assert.equal(compatibility.status, 0, compatibility.stderr);
+    assert.equal(group.status, 0, group.stderr);
+    assert.equal(compatibility.stdout, canonical.stdout);
+    assert.match(canonical.stdout, /Usage: revival deploy legacy-predecessor\b/u);
+    assert.doesNotMatch(canonical.stdout, /carry-baseline/u);
+    assert.match(group.stdout, /^  legacy-predecessor\s+/mu);
+    assert.doesNotMatch(group.stdout, /carry-baseline/u);
+  } finally {
+    fs.rmSync(temporary, { recursive: true, force: true });
+  }
+});
+
 test("version is stamped and doctor JSON is one actionable document", () => {
   const { temporary, env } = isolatedEnvironment();
   try {

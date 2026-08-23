@@ -129,7 +129,7 @@ test("production defaults make Center the single dashboard and identity origin",
   assert.doesNotMatch(JSON.stringify(model), new RegExp(legacyOrigin.replaceAll(".", "\\.")));
 });
 
-test("legacy Carry is only a method-preserving temporary redirect", () => {
+test("legacy predecessor is only a method-preserving temporary redirect", () => {
   const legacyServers = [...edge.matchAll(
     /server\s*\{(?:(?!\n\}).)*?server_name\s+carry\.andersmadsen\.dk;(?:(?!\n\}).)*?\n\}/gs,
   )].map((match) => match[0]);

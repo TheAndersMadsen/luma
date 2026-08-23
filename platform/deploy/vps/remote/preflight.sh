@@ -219,30 +219,30 @@ if ((pending_activation)); then
 fi
 
 # Exact durable-resource and active-mount authority is proved before the first
-# cleanup or other remote mutation. A missing/wrong Carry volume, network,
+# cleanup or other remote mutation. A missing/wrong legacy volume, network,
 # Center directory, or project-specific mount therefore cannot be papered over
 # by Docker auto-creation or leave even an image-removal side effect.
 assert_durable_inputs
 assert_active_durable_mounts
 if [[ -n "${canonical_record:-}" ]]; then
-  verify_exact_carry_security_identity "$canonical_record/carry-security-identity.json"
+  verify_exact_legacy_security_identity "$canonical_record/carry-security-identity.json"
 else
-  # The adopted baseline below binds this same complete identity to the hosted
+  # The predecessor authority below binds this same complete identity to the hosted
   # registrar.  This first pass is intentionally before cleanup/capacity work.
-  write_exact_carry_security_identity >/dev/null \
-    || fail "deployed Carry PKI/certificate paths are unsafe"
+  write_exact_legacy_security_identity >/dev/null \
+    || fail "deployed legacy PKI/certificate paths are unsafe"
 fi
 
-# A pre-workflow Carry runtime is not a hosted release and is never described
+# A pre-workflow legacy runtime is not a hosted release and is never described
 # as one.  Its sole first-cutover authority is the deterministic observation
 # registered by held code from this exact candidate.  Reprove it before any
 # cleanup, image removal, staging write, or writer quiesce.
 if ((first_cutover)); then
-  carry_baseline_id="$(active_adopted_live_carry_id)" \
+  legacy_predecessor_id="$(active_legacy_predecessor_id)" \
     || fail "first cutover requires the one-time adopted-live-carry-v1 registration"
-  verify_adopted_live_carry "$carry_baseline_id" active \
+  verify_legacy_predecessor "$legacy_predecessor_id" active \
     "$candidate_id" "$candidate_release_id" "$deployment_authority_sha256" \
-    || fail "live Carry predecessor differs from its sealed one-time baseline"
+    || fail "live legacy predecessor differs from its sealed one-time authority"
 fi
 
 # Legacy rollback compatibility only. Canonical Center and Keycloak are not
@@ -427,11 +427,11 @@ anchor_accepts_issuer "$duc_dir/duc-ca.crt" "$edge_certs/api-client-ca.crt" \
   || fail "the edge API anchor ($edge_certs/api-client-ca.crt) is not the DeviceUser CA that mints device client certificates ($duc_dir/duc-ca.crt); every enrolled Pin will be rejected at the edge"
 
 # Complete the other half of the device TLS contract before quiescing one
-# writer.  activate.mjs is in the VPS release and pins the same immutable Carry
+# writer. activate.mjs is in the VPS release and pins the same immutable legacy
 # root as both installed device paths.  held-release-exec exposes that exact
 # reviewed file as a sealed descriptor: reopening a mutable release pathname
 # here would let a swapped root bless the wrong live certificate.
-verify_pinned_carry_edge_certificate() (
+verify_pinned_legacy_edge_certificate() (
   set -euo pipefail
   local activate_source="${REVIVAL_HELD_PIN_ACTIVATE:-}" work root_file source_sha subject fingerprint authority
   [[ "$activate_source" =~ ^/proc/self/fd/[1-9][0-9]*$ ]] || return 1
@@ -488,8 +488,8 @@ PY
       || return 1
   done
 )
-verify_pinned_carry_edge_certificate \
-  || fail "edge server certificate does not chain to the exact pinned Carry root or cover every device SNI authority"
+verify_pinned_legacy_edge_certificate \
+  || fail "edge server certificate does not chain to the exact pinned legacy root or cover every device SNI authority"
 
 # The edge server pair. A mismatch here means Envoy presents a certificate it
 # cannot prove it owns and every device TLS handshake dies before a request line
@@ -522,13 +522,13 @@ done
 [[ "$(sudo -n stat -c '%a' "$attest_dir/ca.key")" == 600 ]] || fail "attestation key must be mode 0600"
 [[ "$(sudo -n stat -c '%a' "$duc_dir/duc-ca.key")" == 600 ]] || fail "DeviceUser key must be mode 0600"
 if [[ -n "${canonical_record:-}" ]]; then
-  verify_exact_carry_security_identity "$canonical_record/carry-security-identity.json"
+  verify_exact_legacy_security_identity "$canonical_record/carry-security-identity.json"
 else
-  write_exact_carry_security_identity >/dev/null \
-    || fail "deployed Carry PKI/certificate identity changed during preflight"
+  write_exact_legacy_security_identity >/dev/null \
+    || fail "deployed legacy PKI/certificate identity changed during preflight"
 fi
 
-# This is the first allowed mutation in preflight. Every fixed Carry volume,
+# This is the first allowed mutation in preflight. Every fixed legacy volume,
 # network, mount, source path, owner, link topology, inode and certificate
 # relationship has been re-proved above.
 if ((cleanup)); then

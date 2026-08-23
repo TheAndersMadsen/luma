@@ -278,10 +278,10 @@ export const LEGACY_PRODUCTION_STATE = deepFreeze({
   protectedRoot: PROTECTED_PRODUCTION_ROOT,
 });
 
-// These are the tempting resources emitted by the undeployed Carry→Cosmos
+// These are the tempting resources emitted by the undeployed legacy-to-Cosmos
 // rename.  Naming them explicitly in the closed production authority makes the
 // negative half of the bridge reviewable: a generated candidate cannot merely
-// omit the known-good Carry names and let Compose auto-create empty replacements.
+// omit the known-good legacy names and let Compose auto-create empty replacements.
 export const FORBIDDEN_RENAMED_PRODUCTION_RESOURCES = deepFreeze({
   centerDataPaths: ["/home/anders/cosmos-center-data"],
   networks: ["humane-cosmos-clone_cosmos-local"],
@@ -527,7 +527,7 @@ export function productionCompatibilityDifferences(actual, expected = LEGACY_PRO
 export function assertLegacyProductionCompatible(actual) {
   const differences = productionCompatibilityDifferences(actual);
   if (differences.length > 0) {
-    const error = new Error(`candidate production-state is incompatible with the live Carry contract (${differences.map((entry) => entry.field).join(", ")}); refusal occurs before upload or Docker/runtime mutation`);
+    const error = new Error(`candidate production-state is incompatible with the live legacy production contract (${differences.map((entry) => entry.field).join(", ")}); refusal occurs before upload or Docker/runtime mutation`);
     error.code = "PRODUCTION_STATE_INCOMPATIBLE";
     error.differences = differences;
     throw error;
@@ -2352,7 +2352,7 @@ function validateComposeAuthority(authority) {
   }
   validateProductionState(authority.productionState);
   if (canonicalStringify(authority.productionState) !== canonicalStringify(LEGACY_PRODUCTION_STATE)) {
-    fail("production Compose authority differs from the exact live Carry resource contract",
+    fail("production Compose authority differs from the exact live legacy resource contract",
       "PRODUCTION_STATE_INCOMPATIBLE");
   }
   assertExactKeys(authority.forbiddenRenamedResources,

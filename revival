@@ -50,7 +50,7 @@ const {
   backupProduction,
   canaryProduction,
   deployProduction,
-  registerCarryBaseline,
+  registerLegacyPredecessor,
   deploymentScript,
   productionDoctor,
   pruneState,
@@ -105,8 +105,8 @@ runTimedBoundary(() => {
   } else if (command === 'deploy') {
     const target = args.shift();
     if (target === 'production') deployProduction(args);
-    else if (target === 'carry-baseline') registerCarryBaseline(args);
-    else fail('usage: ./revival deploy production|carry-baseline [--confirm] [--dry-run]');
+    else if (target === 'legacy-predecessor' || target === 'carry-baseline') registerLegacyPredecessor(args);
+    else fail('usage: ./revival deploy production|legacy-predecessor [--confirm] [--dry-run]');
   } else if (command === 'backup') {
     backupProduction(args);
   } else if (command === 'canary') {

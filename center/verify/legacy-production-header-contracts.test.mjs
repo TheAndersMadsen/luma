@@ -11,12 +11,12 @@ delete process.env.COSMOS_PRINCIPAL;
 const {
   requestMetadata,
   webapiGetForUser,
-} = await import("../src/server/cosmos.ts?carry-header-contracts");
+} = await import("../src/server/cosmos.ts?legacy-production-header-contracts");
 const {
   getCaptureOriginal,
-} = await import("../src/server/domain/captures.ts?carry-header-contracts");
+} = await import("../src/server/domain/captures.ts?legacy-production-header-contracts");
 
-test("Center issues the stable Carry projection and edge headers", async (t) => {
+test("Center issues the stable legacy projection and edge headers", async (t) => {
   const originalFetch = globalThis.fetch;
   const calls = [];
   t.after(() => {
@@ -40,7 +40,7 @@ test("Center issues the stable Carry projection and edge headers", async (t) => 
   assert.deepEqual(metadata.get("x-cosmos-edge-token"), []);
 });
 
-test("capture projection consumes only the authenticated Carry verdict", async (t) => {
+test("capture projection consumes only the authenticated legacy verdict", async (t) => {
   const originalFetch = globalThis.fetch;
   t.after(() => {
     globalThis.fetch = originalFetch;

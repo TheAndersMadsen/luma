@@ -626,7 +626,7 @@ case "$arch:$(uname -m)" in aarch64:aarch64|aarch64:arm64) ;; *) echo 'pre-uploa
 if [[ -e "$root" || -L "$root" ]]; then [[ -d "$root" && ! -L "$root" ]] || exit 1; fi
 [[ ! -e "$incoming" && ! -L "$incoming" ]] || { echo 'incoming release path already exists' >&2; exit 1; }
 
-carry_security_digest() {
+legacy_security_digest() {
   /usr/bin/sudo -n /usr/bin/env -i HOME=/nonexistent LANG=C.UTF-8 LC_ALL=C.UTF-8 \
     PATH=/usr/bin:/usr/sbin TZ=UTC /usr/bin/python3 -I -B - <<'PY'
 import hashlib,os,stat
@@ -694,23 +694,23 @@ for label,(path,uid,gid,required) in sorted(roots.items()): inspect(label,path,u
 print(overall.hexdigest())
 PY
 }
-security_before="$(carry_security_digest)" \
-  || { echo 'pre-upload deployed Carry PKI/certificate identity is unsafe' >&2; exit 1; }
+security_before="$(legacy_security_digest)" \
+  || { echo 'pre-upload deployed legacy PKI/certificate identity is unsafe' >&2; exit 1; }
 [[ "$security_before" =~ ^[0-9a-f]{64}$ ]] || exit 1
 
 # This is deliberately duplicated from the signed production authority rather
 # than inferred from candidate receipts or remote environment. It is the last
 # read-only boundary before any incoming directory can be created or one byte
-# uploaded, and therefore proves that the cutover will retain the deployed Carry
+# uploaded, and therefore proves that the cutover will retain the deployed legacy
 # resources rather than allowing Compose to create empty Cosmos replacements.
 for volume in "$state_volume" "$pg_volume" "$prometheus_volume" "$grafana_volume"; do
   [[ "$("${docker[@]}" volume inspect --format '{{.Name}}' "$volume" 2>/dev/null)" == "$volume" ]] \
-    || { echo "pre-upload required Carry volume is missing: $volume" >&2; exit 1; }
+    || { echo "pre-upload required legacy volume is missing: $volume" >&2; exit 1; }
 done
 [[ "$("${docker[@]}" network inspect --format '{{.Name}}' "$local_model_network" 2>/dev/null)" == "$local_model_network" ]] \
-  || { echo 'pre-upload required Carry local-model network is missing' >&2; exit 1; }
+  || { echo 'pre-upload required legacy local-model network is missing' >&2; exit 1; }
 /usr/bin/python3 -I -B - "$center_data" <<'PY' \
-  || { echo 'pre-upload Carry Center data directory is missing or unsafe' >&2; exit 1; }
+  || { echo 'pre-upload legacy Center data directory is missing or unsafe' >&2; exit 1; }
 import os,stat,sys
 target=sys.argv[1]
 assert target=="/home/anders/carry-center-data"
@@ -734,9 +734,9 @@ else
   active_project="$legacy_project"
   [[ -n "$legacy_ids" && ! -e "$root/current" && ! -L "$root/current" \
     && ! -e "$root/current-deployment" && ! -L "$root/current-deployment" ]] \
-    || { echo 'pre-upload first cutover lacks one authoritative Carry project' >&2; exit 1; }
+    || { echo 'pre-upload first cutover lacks one authoritative legacy project' >&2; exit 1; }
   [[ "$("${docker[@]}" network inspect --format '{{.Name}}' carry-net 2>/dev/null)" == carry-net ]] \
-    || { echo 'pre-upload Carry rollback network is missing' >&2; exit 1; }
+    || { echo 'pre-upload legacy rollback network is missing' >&2; exit 1; }
 fi
 containers=()
 for service in postgres connectivity ai-bus account contacts edge feature-flags notable-events provisioning prometheus grafana center; do
@@ -757,7 +757,7 @@ mapfile -t all_containers < <("${docker[@]}" ps -aq --no-trunc)
     "$prometheus_volume" "$grafana_volume") \
   "$active_project" "$project" "$legacy_project" "$state_volume" "$pg_volume" \
   "$prometheus_volume" "$grafana_volume" "$local_model_network" "$center_data" <<'PY' \
-  || { echo 'pre-upload active production mounts differ from the exact Carry contract' >&2; exit 1; }
+  || { echo 'pre-upload active production mounts differ from the exact legacy production contract' >&2; exit 1; }
 import json,os,sys
 active,canonical,legacy,state,pg,prometheus,grafana,network,center=sys.argv[1:]
 body=json.load(os.fdopen(3))
@@ -909,10 +909,10 @@ for (item_project,item_service),identifiers in holders.items():
         retained=[item for item in all_body if item.get("Id") in identifiers]
         assert len(retained)==1 and (retained[0].get("State") or {}).get("Running") is False
 PY
-security_after="$(carry_security_digest)" \
-  || { echo 'pre-upload deployed Carry PKI/certificate identity changed during inspection' >&2; exit 1; }
+security_after="$(legacy_security_digest)" \
+  || { echo 'pre-upload deployed legacy PKI/certificate identity changed during inspection' >&2; exit 1; }
 [[ "$security_after" == "$security_before" ]] \
-  || { echo 'pre-upload deployed Carry PKI/certificate identity changed during inspection' >&2; exit 1; }
+  || { echo 'pre-upload deployed legacy PKI/certificate identity changed during inspection' >&2; exit 1; }
 available_kb="$(df -Pk /home/anders | awk 'NR==2 {print $4}')"
 required_kb=$((min_gb * 1024 * 1024 + archive_bytes * 6 / 1024))
 ((available_kb >= required_kb)) || { echo 'insufficient remote build capacity' >&2; exit 1; }
@@ -938,7 +938,7 @@ run_verified_release_deploy() {
      && "$json" =~ ^[01]$ && "$skip_smoke" =~ ^[01]$ && "$candidate_id" =~ ^[0-9a-f]{64}$ \
      && "$candidate_root" == "$incoming/.candidate-$candidate_id.partial/$candidate_id" \
      && "$deployment_authority_sha256" =~ ^[0-9a-f]{64}$ \
-     && ( "$operation" == deploy || "$operation" == register-carry-baseline ) ]] \
+     && ( "$operation" == deploy || "$operation" == register-legacy-predecessor ) ]] \
     || usage_error "invalid selected-release deployment arguments"
   local args
   args="$(remote_quote \
@@ -962,7 +962,7 @@ operation="${19}"
    && "$deployment_authority_sha256" =~ ^[0-9a-f]{64}$ \
    && -d "$candidate_root" && ! -L "$candidate_root" ]] \
   || { echo 'release bootstrap failed: invalid immutable candidate root' >&2; exit 1; }
-[[ "$operation" == deploy || "$operation" == register-carry-baseline ]] \
+[[ "$operation" == deploy || "$operation" == register-legacy-predecessor ]] \
   || { echo 'release bootstrap failed: invalid selected operation' >&2; exit 1; }
 transport_root="$(dirname -- "$candidate_root")"
 transport="$transport_root/transport.sha256"
@@ -1072,12 +1072,12 @@ common="$driver_root/platform/deploy/vps/remote/common.sh"
 preflight="$driver_root/platform/deploy/vps/remote/preflight.sh"
 candidate_verifier="$driver_root/platform/deploy/release-candidate.mjs"
 held_release_exec="$driver_root/platform/deploy/vps/remote/held-release-exec.py"
-carry_registrar="$driver_root/platform/deploy/vps/remote/register-carry-baseline.sh"
+legacy_predecessor_registrar="$driver_root/platform/deploy/vps/remote/register-legacy-predecessor.sh"
 [[ -f "$driver" && ! -L "$driver" && -f "$common" && ! -L "$common" && \
    -f "$preflight" && ! -L "$preflight" \
    && -f "$candidate_verifier" && ! -L "$candidate_verifier" \
    && -f "$held_release_exec" && ! -L "$held_release_exec" \
-   && -f "$carry_registrar" && ! -L "$carry_registrar" ]] \
+   && -f "$legacy_predecessor_registrar" && ! -L "$legacy_predecessor_registrar" ]] \
   || { echo 'release bootstrap failed: verified driver is incomplete' >&2; exit 1; }
 run_held_bootstrap_entry() {
   local entry="$1" interpreter="$2"
@@ -1154,7 +1154,7 @@ candidate_verification="$(run_held_bootstrap_entry platform/deploy/release-candi
   || { echo 'release bootstrap failed: candidate verification refused before Docker' >&2; exit 1; }
 /usr/bin/node -e 'const value=JSON.parse(process.argv[1]);if(value.ok!==true||value.candidateId!==process.argv[2]||value.releaseId!==process.argv[3]||value.productionCompatible!==true||value.authority?.origin!=="github-hosted-actions"||value.authority?.productionUse!=="requires-point-of-use-provider-evidence")process.exit(1)' \
   "$candidate_verification" "$candidate_id" "$release_id" \
-  || { echo 'release bootstrap failed: candidate is not the requested Carry-compatible release' >&2; exit 1; }
+  || { echo 'release bootstrap failed: candidate is not the requested legacy-compatible release' >&2; exit 1; }
 # Refuse SSH-forwarded daemon/context/config state, then pin every preflight and
 # deploy Docker/Compose call to the production host's local Unix socket.
 inherited_docker=("${!DOCKER_@}")
@@ -1208,7 +1208,7 @@ else
     --deployment-authority-sha256 "$deployment_authority_sha256"
   )
   [[ "$emit_json" == 0 ]] || registrar_args+=(--json)
-  run_held_bootstrap_entry platform/deploy/vps/remote/register-carry-baseline.sh bash \
+  run_held_bootstrap_entry platform/deploy/vps/remote/register-legacy-predecessor.sh bash \
     "${registrar_args[@]}" || status=$?
 fi
 # The selected driver cannot move the workspace containing its own logical

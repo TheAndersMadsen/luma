@@ -53,7 +53,7 @@ const commonSource = (
 const deploySource = await readFile(path.join(root, "platform/deploy/vps/remote/deploy.sh"), "utf8");
 const rollbackSource = await readFile(path.join(root, "platform/deploy/vps/remote/rollback.sh"), "utf8");
 
-test("already-applied Carry migrations retain their deployed SQLx checksums", async () => {
+test("already-applied legacy migrations retain their deployed SQLx checksums", async () => {
   const expected = new Map([
     ["0001_store.sql", "6534ae5466c141a7a93329068527cede5d2287293386f66601203af19258b11c"],
     ["0002_enrollment.sql", "97be9d06e01a9ae144ce98e04c2dfb23afc8e56597c9b316436ea9643cf7eb55"],
@@ -65,7 +65,7 @@ test("already-applied Carry migrations retain their deployed SQLx checksums", as
     ["0005_device_status_namespacing.sql", "62677af91ac27c42eeca099f09ea6415fe74fa5db864ff60c398762cac2e4104"],
   ]);
   // SQLx stores these checksums in _sqlx_migrations. Editing even a comment in
-  // one already applied on the Carry database makes startup refuse the volume.
+  // one already applied on the legacy database makes startup refuse the volume.
   for (const [name, digest] of expected) {
     const body = await readFile(path.join(root, "cosmos/migrations", name));
     assert.equal(createHash("sha256").update(body).digest("hex"), digest, name);
@@ -188,7 +188,7 @@ const INDEXES_0004 = [
   index("carry_note_recent", "carry_note", '"principal", "created_seconds" DESC, "created_nanos" DESC'),
 ];
 
-function carry({ token = "9dcd1c3b", memory = MEMORY, event = EVENT, note = NOTE, indexes = [], extra = "" } = {}) {
+function legacyDatabase({ token = "9dcd1c3b", memory = MEMORY, event = EVENT, note = NOTE, indexes = [], extra = "" } = {}) {
   return [
     header(token),
     table("carry_event", event),
@@ -258,8 +258,8 @@ async function verdict(t, before, after) {
 
 test("the real 0004_listing.sql delta is accepted, and named", async (t) => {
   const { differs, result } = await verdict(t,
-    { carry: carry({ token: "1f0aa2" }), keycloak: keycloak({ token: "1f0aa2" }) },
-    { carry: carry({ token: "b73c91", memory: MEMORY_0004, indexes: INDEXES_0004 }), keycloak: keycloak({ token: "b73c91" }) });
+    { carry: legacyDatabase({ token: "1f0aa2" }), keycloak: keycloak({ token: "1f0aa2" }) },
+    { carry: legacyDatabase({ token: "b73c91", memory: MEMORY_0004, indexes: INDEXES_0004 }), keycloak: keycloak({ token: "b73c91" }) });
 
   assert.ok(differs, "0004 must still be a real digest delta; the allowance runs only after equality fails");
   assert.equal(result.status, 0, result.stderr);
@@ -277,48 +277,48 @@ test("a table this delta creates is additive; its decoration comes with it", asy
   // its identity column, the column default that reads from it, its ownership, its
   // primary key, and an index on it. All of it is scoped to a table that did not
   // exist before, so none of it can touch a row that did.
-  const created = table("carry_listing", ['"numeric_id" bigint NOT NULL', '"principal" "text" NOT NULL'])
-    + 'CREATE SEQUENCE "public"."carry_listing_numeric_id_seq" AS integer START WITH 1 INCREMENT BY 1 NO MINVALUE NO MAXVALUE CACHE 1;\n\n'
-    + 'ALTER SEQUENCE "public"."carry_listing_numeric_id_seq" OWNER TO "carry";\n\n'
-    + 'ALTER SEQUENCE "public"."carry_listing_numeric_id_seq" OWNED BY "public"."carry_listing"."numeric_id";\n\n'
-    + 'ALTER TABLE ONLY "public"."carry_listing" ALTER COLUMN "numeric_id" SET DEFAULT "nextval"(\'"public"."carry_listing_numeric_id_seq"\'::"regclass");\n\n'
-    + 'ALTER TABLE ONLY "public"."carry_listing"\n    ADD CONSTRAINT "carry_listing_pkey" PRIMARY KEY ("numeric_id");\n\n'
-    + index("carry_listing_recent", "carry_listing", '"principal"');
+  const created = table("cosmos_listing", ['"numeric_id" bigint NOT NULL', '"principal" "text" NOT NULL'])
+    + 'CREATE SEQUENCE "public"."cosmos_listing_numeric_id_seq" AS integer START WITH 1 INCREMENT BY 1 NO MINVALUE NO MAXVALUE CACHE 1;\n\n'
+    + 'ALTER SEQUENCE "public"."cosmos_listing_numeric_id_seq" OWNER TO "carry";\n\n'
+    + 'ALTER SEQUENCE "public"."cosmos_listing_numeric_id_seq" OWNED BY "public"."cosmos_listing"."numeric_id";\n\n'
+    + 'ALTER TABLE ONLY "public"."cosmos_listing" ALTER COLUMN "numeric_id" SET DEFAULT "nextval"(\'"public"."cosmos_listing_numeric_id_seq"\'::"regclass");\n\n'
+    + 'ALTER TABLE ONLY "public"."cosmos_listing"\n    ADD CONSTRAINT "cosmos_listing_pkey" PRIMARY KEY ("numeric_id");\n\n'
+    + index("cosmos_listing_recent", "cosmos_listing", '"principal"');
   const { result } = await verdict(t,
-    { carry: carry(), keycloak: keycloak() },
-    { carry: carry({ token: "aa11", extra: created }), keycloak: keycloak({ token: "aa11" }) });
+    { carry: legacyDatabase(), keycloak: keycloak() },
+    { carry: legacyDatabase({ token: "aa11", extra: created }), keycloak: keycloak({ token: "aa11" }) });
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /\+table public\.carry_listing/u);
-  assert.match(result.stdout, /\+ownership on new table public\.carry_listing/u);
-  assert.match(result.stdout, /\+constraint on new table public\.carry_listing/u);
-  assert.match(result.stdout, /\+column default on new table public\.carry_listing/u);
-  assert.match(result.stdout, /\+sequence public\.carry_listing_numeric_id_seq/u);
-  assert.match(result.stdout, /\+index carry_listing_recent on public\.carry_listing/u);
+  assert.match(result.stdout, /\+table public\.cosmos_listing/u);
+  assert.match(result.stdout, /\+ownership on new table public\.cosmos_listing/u);
+  assert.match(result.stdout, /\+constraint on new table public\.cosmos_listing/u);
+  assert.match(result.stdout, /\+column default on new table public\.cosmos_listing/u);
+  assert.match(result.stdout, /\+sequence public\.cosmos_listing_numeric_id_seq/u);
+  assert.match(result.stdout, /\+index cosmos_listing_recent on public\.cosmos_listing/u);
 });
 
 test("a new table may be UNLOGGED; only a pre-existing table's heading is frozen", async (t) => {
   // The heading check must not overreach into tables this delta created. A table
   // that did not exist has no rows to lose, so how it is created is its own
   // business.
-  const created = table("carry_scratch", ['"principal" "text" NOT NULL'])
-    .replace('CREATE TABLE "public"."carry_scratch"', 'CREATE UNLOGGED TABLE "public"."carry_scratch"');
+  const created = table("cosmos_scratch", ['"principal" "text" NOT NULL'])
+    .replace('CREATE TABLE "public"."cosmos_scratch"', 'CREATE UNLOGGED TABLE "public"."cosmos_scratch"');
   const { result } = await verdict(t,
-    { carry: carry(), keycloak: keycloak() },
-    { carry: carry({ token: "cd34", extra: created }), keycloak: keycloak({ token: "cd34" }) });
+    { carry: legacyDatabase(), keycloak: keycloak() },
+    { carry: legacyDatabase({ token: "cd34", extra: created }), keycloak: keycloak({ token: "cd34" }) });
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /\+table public\.carry_scratch/u);
+  assert.match(result.stdout, /\+table public\.cosmos_scratch/u);
 });
 
 test("the same decoration aimed at a pre-existing table is refused", async (t) => {
   // The mirror image of the test above, and the reason "new table" is defined as
   // "absent from the BEFORE dump" rather than "mentioned by an added statement".
   for (const [name, statement, expected] of [
-    ["a primary key", 'ALTER TABLE ONLY "public"."carry_memory"\n    ADD CONSTRAINT "carry_memory_second" PRIMARY KEY ("principal");\n\n', /ALTER TABLE ONLY is not a provably additive change \(constraint carry_memory_second on table public\.carry_memory\)/u],
+    ["a primary key", 'ALTER TABLE ONLY "public"."carry_memory"\n    ADD CONSTRAINT "cosmos_memory_second" PRIMARY KEY ("principal");\n\n', /ALTER TABLE ONLY is not a provably additive change \(constraint cosmos_memory_second on table public\.carry_memory\)/u],
     ["a column default", 'ALTER TABLE ONLY "public"."carry_memory" ALTER COLUMN "created_seconds" SET DEFAULT 0;\n\n', /default of column public\.carry_memory\.created_seconds/u],
   ]) {
     const { result } = await verdict(t,
-      { carry: carry(), keycloak: keycloak() },
-      { carry: carry({ token: "bb22", extra: statement }), keycloak: keycloak({ token: "bb22" }) });
+      { carry: legacyDatabase(), keycloak: keycloak() },
+      { carry: legacyDatabase({ token: "bb22", extra: statement }), keycloak: keycloak({ token: "bb22" }) });
     assert.notEqual(result.status, 0, `${name} on a pre-existing table was accepted: ${result.stdout}`);
     assert.match(result.stderr, expected);
   }
@@ -329,53 +329,53 @@ test("the same decoration aimed at a pre-existing table is refused", async (t) =
 const refusals = [
   {
     name: "a dropped column",
-    after: { carry: carry({ memory: MEMORY.filter((column) => !column.includes("thumbnails")) }) },
+    after: { carry: legacyDatabase({ memory: MEMORY.filter((column) => !column.includes("thumbnails")) }) },
     expect: /table public\.carry_memory lost column\(s\) thumbnails/u,
   },
   {
     name: "a renamed column",
     // The trap case: pg_dump rewrites the CREATE TABLE block, so a rename looks
     // exactly like a removed line plus an added line.
-    after: { carry: carry({ memory: MEMORY.map((column) => column.replace('"thumbnails"', '"thumbs"')) }) },
+    after: { carry: legacyDatabase({ memory: MEMORY.map((column) => column.replace('"thumbnails"', '"thumbs"')) }) },
     expect: /column thumbnails was dropped or renamed; position 6 now holds thumbs/u,
   },
   {
     name: "a retyped column",
-    after: { carry: carry({ memory: MEMORY.map((column) => (column.includes("numeric_id") ? column.replace("bigint", "integer") : column)) }) },
+    after: { carry: legacyDatabase({ memory: MEMORY.map((column) => (column.includes("numeric_id") ? column.replace("bigint", "integer") : column)) }) },
     expect: /changed the definition of pre-existing column numeric_id: before <"numeric_id" bigint NOT NULL> after <"numeric_id" integer NOT NULL>/u,
   },
   {
     name: "a column dropped while another is appended",
     // Same column COUNT before and after, so anything counting columns passes it.
-    after: { carry: carry({ memory: [...MEMORY.slice(0, -1), '"thumbnail_count" integer'] }) },
+    after: { carry: legacyDatabase({ memory: [...MEMORY.slice(0, -1), '"thumbnail_count" integer'] }) },
     expect: /column thumbnails was dropped or renamed; position 6 now holds thumbnail_count/u,
   },
   {
     name: "a column inserted among the pre-existing ones",
-    after: { carry: carry({ memory: [...MEMORY.slice(0, 2), '"inserted" "text"', ...MEMORY.slice(2)] }) },
+    after: { carry: legacyDatabase({ memory: [...MEMORY.slice(0, 2), '"inserted" "text"', ...MEMORY.slice(2)] }) },
     expect: /reordered its pre-existing columns; position 3 held created_seconds and now holds inserted/u,
   },
   {
     name: "a nullability change on a pre-existing column",
-    after: { carry: carry({ memory: MEMORY.map((column) => (column === '"created_seconds" bigint' ? `${column} NOT NULL` : column)) }) },
+    after: { carry: legacyDatabase({ memory: MEMORY.map((column) => (column === '"created_seconds" bigint' ? `${column} NOT NULL` : column)) }) },
     expect: /changed the definition of pre-existing column created_seconds/u,
   },
   {
     name: "a default change on a pre-existing column",
-    before: { carry: carry({ extra: 'ALTER TABLE ONLY "public"."carry_memory" ALTER COLUMN "created_seconds" SET DEFAULT 0;\n\n' }) },
-    after: { carry: carry({ extra: 'ALTER TABLE ONLY "public"."carry_memory" ALTER COLUMN "created_seconds" SET DEFAULT 1;\n\n' }) },
+    before: { carry: legacyDatabase({ extra: 'ALTER TABLE ONLY "public"."carry_memory" ALTER COLUMN "created_seconds" SET DEFAULT 0;\n\n' }) },
+    after: { carry: legacyDatabase({ extra: 'ALTER TABLE ONLY "public"."carry_memory" ALTER COLUMN "created_seconds" SET DEFAULT 1;\n\n' }) },
     expect: /default of column public\.carry_memory\.created_seconds was redefined/u,
   },
   {
     name: "a dropped index",
-    before: { carry: carry({ indexes: INDEXES_0004 }) },
-    after: { carry: carry({ indexes: INDEXES_0004.slice(0, 2) }) },
+    before: { carry: legacyDatabase({ indexes: INDEXES_0004 }) },
+    after: { carry: legacyDatabase({ indexes: INDEXES_0004.slice(0, 2) }) },
     expect: /CREATE INDEX disappeared from the schema \(index carry_note_recent\)/u,
   },
   {
     name: "a redefined index",
-    before: { carry: carry({ indexes: INDEXES_0004 }) },
-    after: { carry: carry({ indexes: [...INDEXES_0004.slice(0, 2), index("carry_note_recent", "carry_note", '"principal"')] }) },
+    before: { carry: legacyDatabase({ indexes: INDEXES_0004 }) },
+    after: { carry: legacyDatabase({ indexes: [...INDEXES_0004.slice(0, 2), index("carry_note_recent", "carry_note", '"principal"')] }) },
     expect: /index carry_note_recent was redefined/u,
   },
   {
@@ -385,37 +385,37 @@ const refusals = [
   },
   {
     name: "a dropped constraint",
-    after: { carry: carry({ extra: "" }).replace(PRIMARY_KEY, "") },
+    after: { carry: legacyDatabase({ extra: "" }).replace(PRIMARY_KEY, "") },
     expect: /constraint carry_memory_pkey on table public\.carry_memory/u,
   },
   {
     name: "an ownership change",
-    after: { carry: carry().replace('ALTER TABLE "public"."carry_note" OWNER TO "carry";', 'ALTER TABLE "public"."carry_note" OWNER TO "postgres";') },
+    after: { carry: legacyDatabase().replace('ALTER TABLE "public"."carry_note" OWNER TO "carry";', 'ALTER TABLE "public"."carry_note" OWNER TO "postgres";') },
     expect: /ownership of table public\.carry_note was redefined/u,
   },
   {
     name: "a new grant",
-    after: { carry: carry({ extra: 'GRANT SELECT ON TABLE "public"."carry_memory" TO "readonly";\n\n' }) },
+    after: { carry: legacyDatabase({ extra: 'GRANT SELECT ON TABLE "public"."carry_memory" TO "readonly";\n\n' }) },
     expect: /GRANT SELECT ON TABLE is not a provably additive change/u,
   },
   {
     name: "a new trigger",
-    after: { carry: carry({ extra: 'CREATE TRIGGER "audit" AFTER INSERT ON "public"."carry_memory" FOR EACH ROW EXECUTE FUNCTION "public"."audit"();\n\n' }) },
+    after: { carry: legacyDatabase({ extra: 'CREATE TRIGGER "audit" AFTER INSERT ON "public"."carry_memory" FOR EACH ROW EXECUTE FUNCTION "public"."audit"();\n\n' }) },
     expect: /CREATE TRIGGER is not a provably additive change/u,
   },
   {
     name: "a new function",
-    after: { carry: carry({ extra: 'CREATE FUNCTION "public"."audit"() RETURNS "trigger" LANGUAGE "plpgsql" AS $$begin return new; end;$$;\n\n' }) },
+    after: { carry: legacyDatabase({ extra: 'CREATE FUNCTION "public"."audit"() RETURNS "trigger" LANGUAGE "plpgsql" AS $$begin return new; end;$$;\n\n' }) },
     expect: /CREATE FUNCTION is not a provably additive change/u,
   },
   {
     name: "a UNIQUE index over rows that already exist",
-    after: { carry: carry({ indexes: [index("carry_memory_unique", "carry_memory", '"principal"', true)] }) },
+    after: { carry: legacyDatabase({ indexes: [index("cosmos_memory_unique", "carry_memory", '"principal"', true)] }) },
     expect: /adds a UNIQUE constraint to pre-existing table public\.carry_memory/u,
   },
   {
     name: "an inline CHECK constraint on an existing table",
-    after: { carry: carry({ memory: [...MEMORY, 'CONSTRAINT "carry_memory_positive" CHECK (("numeric_id" > 0))'] }) },
+    after: { carry: legacyDatabase({ memory: [...MEMORY, 'CONSTRAINT "cosmos_memory_positive" CHECK (("numeric_id" > 0))'] }) },
     expect: /gained an inline table constraint, which can reject or reinterpret rows that already exist/u,
   },
   {
@@ -424,8 +424,8 @@ const refusals = [
     // migration; widening the classifier to accept constraints would weaken
     // every future cutover.
     name: "the pending key-directory bounds constraint on the deployed table",
-    before: { carry: carry({ extra: table("carry_channel_key", ['"kid" "text" NOT NULL', '"key" bytea NOT NULL']) }) },
-    after: { carry: carry({
+    before: { carry: legacyDatabase({ extra: table("carry_channel_key", ['"kid" "text" NOT NULL', '"key" bytea NOT NULL']) }) },
+    after: { carry: legacyDatabase({
       extra: table("carry_channel_key", ['"kid" "text" NOT NULL', '"key" bytea NOT NULL'])
         + 'ALTER TABLE ONLY "public"."carry_channel_key"\n    ADD CONSTRAINT "carry_channel_key_shape" CHECK (((octet_length("kid") >= 1) AND (octet_length("kid") <= 1024) AND (octet_length("key") = 16)));\n\n',
     }) },
@@ -439,7 +439,7 @@ const refusals = [
     // byte-identical to the one the real 0004 delta prints. Unlogged means every
     // row that already exists is discarded on the next crash.
     name: "a pre-existing table quietly converted to UNLOGGED beneath an additive column",
-    after: { carry: carry({ memory: MEMORY_0004, indexes: INDEXES_0004 })
+    after: { carry: legacyDatabase({ memory: MEMORY_0004, indexes: INDEXES_0004 })
       .replace('CREATE TABLE "public"."carry_memory"', 'CREATE UNLOGGED TABLE "public"."carry_memory"') },
     expect: /table public\.carry_memory changed its CREATE TABLE heading/u,
   },
@@ -447,7 +447,7 @@ const refusals = [
     // The same hole from the other side: nothing about the heading is permitted to
     // drift, whether or not this particular keyword is destructive on its own.
     name: "a rewritten CREATE TABLE heading on a pre-existing table",
-    after: { carry: carry({ memory: MEMORY_0004 })
+    after: { carry: legacyDatabase({ memory: MEMORY_0004 })
       .replace('CREATE TABLE "public"."carry_memory"', 'CREATE TABLE IF NOT EXISTS "public"."carry_memory"') },
     expect: /table public\.carry_memory changed its CREATE TABLE heading/u,
   },
@@ -456,8 +456,8 @@ const refusals = [
     // exact equality rather than being read as "no table changed" -- fail closed,
     // not fail open, is the whole posture.
     name: "a change to a table shape the classifier does not model",
-    before: { carry: carry({ extra: 'CREATE TABLE "public"."carry_slice_2026" PARTITION OF "public"."carry_slice" FOR VALUES FROM (\'2026-01-01\') TO (\'2027-01-01\');\n\n' }) },
-    after: { carry: carry({ extra: 'CREATE TABLE "public"."carry_slice_2026" PARTITION OF "public"."carry_slice" FOR VALUES FROM (\'2026-06-01\') TO (\'2027-01-01\');\n\n' }) },
+    before: { carry: legacyDatabase({ extra: 'CREATE TABLE "public"."cosmos_slice_2026" PARTITION OF "public"."cosmos_slice" FOR VALUES FROM (\'2026-01-01\') TO (\'2027-01-01\');\n\n' }) },
+    after: { carry: legacyDatabase({ extra: 'CREATE TABLE "public"."cosmos_slice_2026" PARTITION OF "public"."cosmos_slice" FOR VALUES FROM (\'2026-06-01\') TO (\'2027-01-01\');\n\n' }) },
     expect: /CREATE TABLE disappeared from the schema/u,
   },
   {
@@ -470,8 +470,8 @@ const refusals = [
 for (const { name, before, after, expect } of refusals) {
   test(`the allowance refuses ${name}, by name`, async (t) => {
     const { differs, result } = await verdict(t,
-      { carry: carry(), keycloak: keycloak(), ...before },
-      { carry: carry(), keycloak: keycloak(), ...after });
+      { carry: legacyDatabase(), keycloak: keycloak(), ...before },
+      { carry: legacyDatabase(), keycloak: keycloak(), ...after });
     assert.ok(differs, `${name} must be a real digest delta for the allowance to be reached`);
     assert.notEqual(result.status, 0, `${name} was accepted: ${result.stdout}`);
     assert.match(result.stderr, /schema delta refused/u);
@@ -482,22 +482,22 @@ for (const { name, before, after, expect } of refusals) {
 
 /* ---------- keycloak is out of scope entirely ------------------------------- */
 
-test("no keycloak delta is additive, not even one that would pass in the Carry database", async (t) => {
-  // Byte-for-byte the change the allowance permits in carry: a column appended to
+test("no keycloak delta is additive, not even one that would pass in the legacy database", async (t) => {
+  // Byte-for-byte the change the allowance permits in the legacy database: a column appended to
   // an existing table. The identity database is simply not in scope.
   const { result } = await verdict(t,
-    { carry: carry(), keycloak: keycloak() },
-    { carry: carry(), keycloak: keycloak({ token: "ee44", columns: [...KEYCLOAK_COLUMNS, '"nickname" "text"'] }) });
+    { carry: legacyDatabase(), keycloak: keycloak() },
+    { carry: legacyDatabase(), keycloak: keycloak({ token: "ee44", columns: [...KEYCLOAK_COLUMNS, '"nickname" "text"'] }) });
   assert.notEqual(result.status, 0, `keycloak delta was accepted: ${result.stdout}`);
-  assert.match(result.stderr, /keycloak: only the deployed Carry database may contain a pending migration/u);
+  assert.match(result.stderr, /keycloak: only the deployed legacy database may contain a pending migration/u);
   assert.match(result.stderr, /\+column public\.user_entity\.nickname/u);
 });
 
-test("a keycloak delta refuses even when the Carry database delta is the accepted one", async (t) => {
+test("a keycloak delta refuses even when the legacy database delta is the accepted one", async (t) => {
   const { result } = await verdict(t,
-    { carry: carry(), keycloak: keycloak() },
+    { carry: legacyDatabase(), keycloak: keycloak() },
     {
-      carry: carry({ token: "ff55", memory: MEMORY_0004, indexes: INDEXES_0004 }),
+      carry: legacyDatabase({ token: "ff55", memory: MEMORY_0004, indexes: INDEXES_0004 }),
       keycloak: keycloak({ token: "ff55", columns: [...KEYCLOAK_COLUMNS, '"nickname" "text"'] }),
     });
   assert.notEqual(result.status, 0, `keycloak delta was accepted: ${result.stdout}`);
@@ -510,9 +510,9 @@ test("classification is refused unless the retained text reproduces the gate's d
   const directory = await mkdtemp(path.join(os.tmpdir(), "revival-schema-tamper-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const before = await capture(directory, "postgres-schema.restored.tsv",
-    { carry: carry(), keycloak: keycloak() });
+    { carry: legacyDatabase(), keycloak: keycloak() });
   const after = await capture(directory, "postgres-schema.after.tsv",
-    { carry: carry({ token: "ab12", memory: MEMORY.filter((column) => !column.includes("thumbnails")) }), keycloak: keycloak({ token: "ab12" }) });
+    { carry: legacyDatabase({ token: "ab12", memory: MEMORY.filter((column) => !column.includes("thumbnails")) }), keycloak: keycloak({ token: "ab12" }) });
 
   // Substituting an innocent dump for the one that was actually hashed is the
   // obvious way to launder a destructive delta past a classifier.
@@ -530,8 +530,8 @@ test("classification is refused unless the retained text reproduces the gate's d
 
 test("a digest delta with no statement-level explanation is refused, not waved through", async (t) => {
   const { differs, result } = await verdict(t,
-    { carry: carry(), keycloak: keycloak() },
-    { carry: carry().replace("-- Name: carry_note; Type: TABLE", "-- Name: carry_note; Type: TABLE "), keycloak: keycloak() });
+    { carry: legacyDatabase(), keycloak: keycloak() },
+    { carry: legacyDatabase().replace("-- Name: carry_note; Type: TABLE", "-- Name: carry_note; Type: TABLE "), keycloak: keycloak() });
   assert.ok(differs, "a comment-only edit must still move the digest");
   assert.notEqual(result.status, 0, `an unexplained delta was accepted: ${result.stdout}`);
   assert.match(result.stderr, /no statement-level delta explains it/u);
@@ -627,7 +627,7 @@ test("every pre-vs-post schema comparison goes through the allowance, not a bare
   // the way the schema half is. The only change is that both sides are first
   // stripped of Keycloak's two session relations, which any authentication
   // rewrites and which the deploy's own wearer canary therefore moves on every
-  // run. Everything else, including every Carry relation, is still compared byte
+  // run. Everything else, including every legacy relation, is still compared byte
   // for byte and still fails by the same name.
   assert.match(deploySource,
     /^  zero_delta_volatile_filtered "\$before\/postgres-data\.tsv" "\$volatile_work\/before\.tsv"$/mu);

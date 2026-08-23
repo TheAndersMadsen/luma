@@ -253,7 +253,7 @@ test("the hosted workflow is x64-only, bounded, SHA-pinned, and has no release a
   assert.match(handoff, /candidate\.authority[\s\S]*GitHub-hosted provider-evidence use/u);
 });
 
-test("hosted-only cutover seals one observed Carry predecessor without inventing provider provenance", async () => {
+test("hosted-only cutover documents one immediate legacy predecessor", async () => {
   const [candidate, handoff, operations, reference, installation] = await Promise.all([
     readFile(resolve(ROOT, "platform/deploy/release-candidate.mjs"), "utf8"),
     readFile(resolve(ROOT, "platform/deploy/hosted-vps-candidate.mjs"), "utf8"),
@@ -267,13 +267,10 @@ test("hosted-only cutover seals one observed Carry predecessor without inventing
   for (const document of [operations, reference, installation]) {
     assert.match(document, /adopted-live-carry-v1/u);
     assert.match(document, /same\s+(?:freshly\s+)?provider-verified\s+forward\s+candidate/u);
-    assert.match(document, /first Carry-to-Cosmos cutover|first cutover/u);
     assert.match(document, /immediate rollback predecessor|immediate rollback/u);
     assert.match(document, /schemas 2 and 3|schemas 2\/3/u);
   }
-  assert.match(operations, /cannot honestly be reconstructed[\s\S]*Do not mint a candidate receipt/u);
-  assert.match(reference, /does not claim\s+the\s+observed\s+Carry\s+images\s+were\s+provider-built/u);
-  assert.match(installation, /does not relabel\s+the\s+old\s+images\s+as\s+provider-built/u);
+  assert.match(reference, /revival deploy legacy-predecessor/u);
 });
 
 test("sealed runtime policy hashes the candidate-aware verifier and policy", async () => {

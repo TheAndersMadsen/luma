@@ -109,7 +109,7 @@ test("DeviceUser init plans without mutation, then creates a validated protected
       size: metadata.size,
       digest: createHash("sha256").update(readFileSync(path)).digest("hex"),
     };
-  }), retained, "refused reinitialization must preserve the exact existing Carry CA files");
+  }), retained, "refused reinitialization must preserve the exact existing legacy CA files");
 });
 
 test("import validates first, stays plan-only by default and refuses overwrite", () => {
@@ -148,7 +148,7 @@ test("import validates first, stays plan-only by default and refuses overwrite",
       size: metadata.size,
       digest: createHash("sha256").update(readFileSync(path)).digest("hex"),
     };
-  }), retained, "refused reimport must preserve the exact existing Carry CA files");
+  }), retained, "refused reimport must preserve the exact existing legacy CA files");
 });
 
 test("protected import inputs reject permissive files and links", () => {

@@ -125,7 +125,7 @@ fn assignment(key: &str, val: Val) -> FeatureFlagAssignment {
     FeatureFlagAssignment {
         // Stable, opaque, server-side; derived from the key so it is
         // deterministic across restarts without inventing external state.
-        flag_id: format!("carry-clone/{key}"),
+        flag_id: format!("cosmos/{key}"),
         flag_name: key.to_owned(),
         val: Some(val),
     }
@@ -515,7 +515,11 @@ mod tests {
             // An empty key is dropped device-side with "somehow have null or
             // empty key".
             assert!(!flag.flag_name.is_empty(), "{key} must contain a key");
-            assert!(!flag.flag_id.is_empty(), "{key} needs a server id");
+            assert_eq!(
+                flag.flag_id,
+                format!("cosmos/{key}"),
+                "{key} has a stale server id"
+            );
             // `requireType` THROWS on a mismatched arm, so this is a wire contract.
             let got_arm = match flag.val {
                 Some(Val::ValBool(_)) => "bool",

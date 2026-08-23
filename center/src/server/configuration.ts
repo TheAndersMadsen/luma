@@ -600,7 +600,7 @@ const CATALOG: ConfigurationSetting[] = [
     path: false,
     fallback: null,
     impact:
-      "The self-hosted bootstrap allowlist. Empty is normal and correct once the carry-operator realm role is granted.",
+      "The self-hosted bootstrap allowlist. Empty is normal and correct once the legacy `carry-operator` realm role is granted.",
     ...never("An editor here converts one operator session into permanent operator access for any address."),
   },
 
@@ -724,7 +724,7 @@ const CATALOG: ConfigurationSetting[] = [
     home: "center.env",
     observable: true,
     path: true,
-    fallback: ".carry-channel-key.json in the working directory",
+    fallback: ".cosmos-channel-key.json in the working directory",
     impact:
       "Must be on the persistent volume and readable by 1000:1001, or established channel keys are lost on restart.",
     ...never("Points at wearer key material; the deploy owns the volume it must live on."),

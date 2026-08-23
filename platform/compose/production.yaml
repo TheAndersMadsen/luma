@@ -100,7 +100,7 @@ services:
       COSMOS_ENROLLMENT_USER_ID: ${COSMOS_ENROLLMENT_USER_ID:?set the enrollment user id}
     volumes: !override
       - cosmos-state:/var/lib/carry
-      # Carry PKI is a deployed inode-level ABI. Never copy or auto-create it.
+      # legacy PKI is a deployed inode-level ABI. Never copy or auto-create it.
       - type: bind
         source: /home/anders/carry-attest/ca.crt
         target: /etc/cosmos-attest/ca.crt
@@ -652,7 +652,7 @@ networks: !override
       config:
         - subnet: 10.0.7.0/24
           gateway: 10.0.7.1
-  # The local Ollama service is intentionally owned by the established Carry
+  # The local Ollama service is intentionally owned by the established legacy
   # runtime. Declaring the attachment here makes name resolution survive an
   # ai-bus recreation instead of depending on an operator-issued
   # `docker network connect` repair.

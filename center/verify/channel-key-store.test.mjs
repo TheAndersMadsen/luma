@@ -54,14 +54,14 @@ async function withStore(context, contents) {
   const directory = await mkdtemp(path.join(tmpdir(), "revival-channel-key-"));
   const file = path.join(directory, "channel-key.json");
   const previous = process.env.COSMOS_CHANNEL_KEY_FILE;
-  const previousCarry = process.env.CARRY_CHANNEL_KEY_FILE;
+  const previousLegacyAlias = process.env.CARRY_CHANNEL_KEY_FILE;
   delete process.env.CARRY_CHANNEL_KEY_FILE;
   process.env.COSMOS_CHANNEL_KEY_FILE = file;
   context.after(async () => {
     if (previous === undefined) delete process.env.COSMOS_CHANNEL_KEY_FILE;
     else process.env.COSMOS_CHANNEL_KEY_FILE = previous;
-    if (previousCarry === undefined) delete process.env.CARRY_CHANNEL_KEY_FILE;
-    else process.env.CARRY_CHANNEL_KEY_FILE = previousCarry;
+    if (previousLegacyAlias === undefined) delete process.env.CARRY_CHANNEL_KEY_FILE;
+    else process.env.CARRY_CHANNEL_KEY_FILE = previousLegacyAlias;
     await rm(directory, { recursive: true, force: true });
   });
   if (contents !== undefined) {
@@ -76,18 +76,36 @@ const read = async (file) => JSON.parse(await readFile(file, "utf8"));
 
 function preserveChannelFileEnvironment(context) {
   const cosmos = process.env.COSMOS_CHANNEL_KEY_FILE;
-  const carry = process.env.CARRY_CHANNEL_KEY_FILE;
+  const legacyAlias = process.env.CARRY_CHANNEL_KEY_FILE;
   context.after(() => {
     if (cosmos === undefined) delete process.env.COSMOS_CHANNEL_KEY_FILE;
     else process.env.COSMOS_CHANNEL_KEY_FILE = cosmos;
-    if (carry === undefined) delete process.env.CARRY_CHANNEL_KEY_FILE;
-    else process.env.CARRY_CHANNEL_KEY_FILE = carry;
+    if (legacyAlias === undefined) delete process.env.CARRY_CHANNEL_KEY_FILE;
+    else process.env.CARRY_CHANNEL_KEY_FILE = legacyAlias;
   });
+}
+
+async function withDefaultStoreDirectory(context) {
+  preserveChannelFileEnvironment(context);
+  delete process.env.CARRY_CHANNEL_KEY_FILE;
+  delete process.env.COSMOS_CHANNEL_KEY_FILE;
+  const directory = await mkdtemp(path.join(tmpdir(), "revival-channel-default-"));
+  const previousWorkingDirectory = process.cwd();
+  process.chdir(directory);
+  context.after(async () => {
+    process.chdir(previousWorkingDirectory);
+    await rm(directory, { recursive: true, force: true });
+  });
+  return {
+    directory,
+    cosmos: path.join(directory, ".cosmos-channel-key.json"),
+    legacy: path.join(directory, ".carry-channel-key.json"),
+  };
 }
 
 test("a direct upgrade reads the pre-rename channel-key path without a Cosmos variable", async (t) => {
   preserveChannelFileEnvironment(t);
-  const directory = await mkdtemp(path.join(tmpdir(), "revival-carry-channel-key-"));
+  const directory = await mkdtemp(path.join(tmpdir(), "revival-legacy-channel-key-"));
   const file = path.join(directory, "channel-key.json");
   t.after(() => rm(directory, { recursive: true, force: true }));
   await writeFile(file, JSON.stringify({ kid: LEGACY_KID, key: LEGACY_KEY }), { mode: 0o600 });
@@ -99,7 +117,7 @@ test("a direct upgrade reads the pre-rename channel-key path without a Cosmos va
   assert.equal(storedKeysFor(DERIVED_KID)[0]?.key.toString("base64"), LEGACY_KEY);
 });
 
-test("matching Carry and Cosmos channel-key aliases retain the production path", (t) => {
+test("matching legacy and Cosmos channel-key aliases retain the production path", (t) => {
   preserveChannelFileEnvironment(t);
   process.env.CARRY_CHANNEL_KEY_FILE = "/data/channel-key.json";
   process.env.COSMOS_CHANNEL_KEY_FILE = "/data/channel-key.json";
@@ -116,11 +134,56 @@ test("conflicting channel-key aliases fail closed before reading either store", 
   );
 });
 
-test("the unconfigured local default remains the pre-rename physical filename", (t) => {
-  preserveChannelFileEnvironment(t);
-  delete process.env.CARRY_CHANNEL_KEY_FILE;
-  delete process.env.COSMOS_CHANNEL_KEY_FILE;
-  assert.equal(channelKeyFile(), path.join(process.cwd(), ".carry-channel-key.json"));
+test("the unconfigured local default uses the Cosmos filename", async (t) => {
+  const defaults = await withDefaultStoreDirectory(t);
+  assert.equal(channelKeyFile(), defaults.cosmos);
+
+  await writeFile(defaults.legacy, "legacy", { mode: 0o600 });
+  await writeFile(defaults.cosmos, "cosmos", { mode: 0o600 });
+  assert.equal(
+    channelKeyFile(),
+    defaults.cosmos,
+    "the legacy file must not override a Cosmos store",
+  );
+});
+
+test("an existing legacy-only default is reused in place without changing key bytes or mode", async (t) => {
+  const defaults = await withDefaultStoreDirectory(t);
+  const bytes = Buffer.from(JSON.stringify({ kid: LEGACY_KID, key: LEGACY_KEY }));
+  await writeFile(defaults.legacy, bytes, { mode: 0o600 });
+
+  assert.equal(channelKeyFile(), defaults.legacy);
+  assert.equal(storedKeysFor(DERIVED_KID)[0]?.key.toString("base64"), LEGACY_KEY);
+  assert.deepEqual(await readFile(defaults.legacy), bytes);
+  assert.equal((await stat(defaults.legacy)).mode & 0o777, 0o600);
+  await assert.rejects(stat(defaults.cosmos), { code: "ENOENT" });
+});
+
+test("an explicit Cosmos path takes precedence over an implicit legacy default", async (t) => {
+  const defaults = await withDefaultStoreDirectory(t);
+  await writeFile(defaults.legacy, "legacy", { mode: 0o600 });
+  const explicit = path.join(defaults.directory, "configured-channel-key.json");
+  process.env.COSMOS_CHANNEL_KEY_FILE = explicit;
+
+  assert.equal(channelKeyFile(), explicit);
+  assert.equal(await readFile(defaults.legacy, "utf8"), "legacy");
+});
+
+test("Git and Docker ignore both local channel-key filenames and their temporary siblings", async () => {
+  const center = new URL("../", import.meta.url);
+  for (const name of [".gitignore", ".dockerignore"]) {
+    const lines = new Set((await readFile(new URL(name, center), "utf8")).split(/\r?\n/u));
+    assert.equal(
+      lines.has(".carry-channel-key.json*"),
+      true,
+      `${name} exposes legacy key files`,
+    );
+    assert.equal(
+      lines.has(".cosmos-channel-key.json*"),
+      true,
+      `${name} exposes Cosmos key files`,
+    );
+  }
 });
 
 test("a wearer keeps their key when the kid we derive for them changes shape", async (t) => {

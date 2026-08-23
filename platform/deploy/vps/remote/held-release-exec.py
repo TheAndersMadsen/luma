@@ -42,7 +42,7 @@ HELD_ENV_BINDINGS = {
     "platform/deploy/vps/remote/domain.sh": "REVIVAL_HELD_DOMAIN",
     "platform/deploy/vps/remote/domain.py": "REVIVAL_HELD_DOMAIN_PY",
     "platform/deploy/vps/remote/transaction.py": "REVIVAL_HELD_TRANSACTION",
-    "platform/deploy/vps/remote/carry-baseline.py": "REVIVAL_HELD_CARRY_BASELINE",
+    "platform/deploy/vps/remote/legacy-predecessor.py": "REVIVAL_HELD_LEGACY_PREDECESSOR",
     "platform/deploy/vps/remote/candidate-runtime.py": "REVIVAL_HELD_CANDIDATE_RUNTIME",
     "platform/deploy/vps/remote/candidate-authority-exec.py": "REVIVAL_HELD_CANDIDATE_AUTHORITY_EXEC",
     "platform/deploy/vps/remote/release-store.py": "REVIVAL_HELD_RELEASE_STORE",

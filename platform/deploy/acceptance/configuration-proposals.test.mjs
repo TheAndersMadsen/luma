@@ -247,7 +247,7 @@ async function scratch(settings) {
 }
 
 async function aliasScratch(contents = {}) {
-  const work = await mkdtemp(path.join(os.tmpdir(), "carry-compatibility-aliases-"));
+  const work = await mkdtemp(path.join(os.tmpdir(), "legacy-compatibility-aliases-"));
   for (const file of ["runtime.env", "cosmos.env", "providers.env", "center.env"]) {
     await writeFile(path.join(work, file), contents[file] ?? "");
   }
@@ -266,14 +266,14 @@ source ${JSON.stringify(pathsLibraryPath)}
 source ${JSON.stringify(configurationLibraryPath)}
 normalize_compatibility_aliases "$@"
 ${mergeProviders ? 'merge_scoped_provider_values "$1" "$3"' : ":"}`,
-      "carry-alias-test",
+      "legacy-alias-test",
       ...files,
     ],
     { encoding: "utf8", env: { ...process.env, PATH: process.env.PATH } },
   );
 }
 
-function assertCarryDatabase(work) {
+function assertLegacyDatabase(work) {
   const files = ["runtime.env", "cosmos.env", "providers.env", "center.env"]
     .map((file) => path.join(work, file));
   return spawnSync(
@@ -285,15 +285,15 @@ source ${JSON.stringify(pathsLibraryPath)}
 source ${JSON.stringify(configurationLibraryPath)}
 LEGACY_DATABASE_USER=carry
 LEGACY_DATABASE_NAME=carry
-assert_carry_database_configuration "$@"`,
-      "carry-database-test",
+assert_legacy_database_configuration "$@"`,
+      "legacy-database-test",
       ...files,
     ],
     { encoding: "utf8", env: { ...process.env, PATH: process.env.PATH } },
   );
 }
 
-test("Carry aliases are normalized in place and provider-only values stay provider-scoped", async () => {
+test("legacy aliases are normalized in place and provider-only values stay provider-scoped", async () => {
   const work = await aliasScratch({
     "providers.env": "CARRY_LLM_MODEL=openai/legacy-model\n",
   });
@@ -314,7 +314,7 @@ test("Carry aliases are normalized in place and provider-only values stay provid
   }
 });
 
-test("the closed alias map covers every concrete Carry key recognized by the pre-rename production config", () => {
+test("the closed alias map covers every concrete legacy key recognized by the pre-rename production config", () => {
   const result = spawnSync(
     "/usr/bin/git",
     [
@@ -330,7 +330,7 @@ test("the closed alias map covers every concrete Carry key recognized by the pre
     // These are regex prefixes in the old splitters, never concrete env keys.
     .filter((suffix) => suffix && !suffix.endsWith("_"));
   const block = /for suffix in \(([\s\S]*?)\n\):/.exec(commonSource);
-  assert.ok(block, "the closed Carry compatibility suffix map must exist");
+  assert.ok(block, "the closed legacy compatibility suffix map must exist");
   const mapped = new Set([...block[1].matchAll(/"([A-Z0-9_]+)"/g)].map((match) => match[1]));
   assert.deepEqual(historical.filter((suffix) => !mapped.has(suffix)).sort(), []);
   for (const securityKey of ["KID_SCOPE", "OPAQUE_SEED", "TRUST_DOMAIN", "EDGE_TOKEN_HEADER"]) {
@@ -338,7 +338,7 @@ test("the closed alias map covers every concrete Carry key recognized by the pre
   }
 });
 
-test("Cosmos-only staged values are reverse-projected for a Carry rollback", async () => {
+test("Cosmos-only staged values are reverse-projected for a legacy rollback", async () => {
   const work = await aliasScratch({
     "center.env": "COSMOS_OPERATOR_EMAILS=operator@example.test\nCOSMOS_KID_SCOPE=enforce\n",
   });
@@ -355,7 +355,7 @@ test("Cosmos-only staged values are reverse-projected for a Carry rollback", asy
   }
 });
 
-test("Carry compatibility aliases refuse duplicate and conflicting authority before any rewrite", async () => {
+test("legacy compatibility aliases refuse duplicate and conflicting authority before any rewrite", async () => {
   const cases = [
     {
       contents: { "runtime.env": "CARRY_EDGE_TOKEN=same\nCARRY_EDGE_TOKEN=same\n" },
@@ -401,7 +401,7 @@ test("Carry compatibility aliases refuse duplicate and conflicting authority bef
   }
 });
 
-test("the staged database gate accepts only the physical Carry role and database", async () => {
+test("the staged database gate accepts only the physical legacy role and database", async () => {
   for (const [url, expectedStatus] of [
     ["postgresql://carry:secret@postgres/carry", 0],
     ["postgresql://cosmos:secret@postgres/cosmos", 1],
@@ -413,7 +413,7 @@ test("the staged database gate accepts only the physical Carry role and database
     });
     try {
       const before = await readFile(path.join(work, "cosmos.env"), "utf8");
-      const result = assertCarryDatabase(work);
+      const result = assertLegacyDatabase(work);
       assert.equal(result.status === 0 ? 0 : 1, expectedStatus, result.stderr);
       assert.equal(await readFile(path.join(work, "cosmos.env"), "utf8"), before);
     } finally {

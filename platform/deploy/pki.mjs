@@ -22,7 +22,7 @@ const SELF_PATH = fileURLToPath(import.meta.url);
 const SOURCE_ROOT = resolve(dirname(SELF_PATH), "../..");
 const MAX_PEM_BYTES = 64 * 1024;
 // The DeviceUser CA subject is a deployed mixed-version contract.  Existing
-// Pins and the rollback release still identify this issuer by its Carry name,
+// Pins and the rollback release still identify this issuer by its legacy name,
 // so the logical Cosmos rename must never mint a second authority.
 const DEVICE_USER_SUBJECT = "/O=Humane/OU=DeviceUser/CN=Carry Clone DeviceUser CA";
 

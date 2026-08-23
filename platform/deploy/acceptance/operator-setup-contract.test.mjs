@@ -14,6 +14,7 @@ import {
   operatorSetting,
   parseOperatorSetupContract,
 } from "../../contracts/operator-setup.mjs";
+import { projectPinJourney } from "../../setup/generate.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const schemaPath = path.join(root, "contracts/operator-setup.schema.json");
@@ -48,7 +49,7 @@ const CURRENT_COMMAND_IDS = Object.freeze([
   "pin.release.ship",
   "pin.install",
   "deploy.production",
-  "deploy.carry-baseline",
+  "deploy.legacy-predecessor",
   "backup",
   "canary",
   "drift",
@@ -169,6 +170,20 @@ test("all existing and new operator commands are represented exactly once", asyn
   for (const alias of ["build", "up", "down", "status", "logs", "config"]) {
     assert.ok(paths.some((tokens) => tokens.length === 1 && tokens[0] === alias));
   }
+  const predecessor = operatorCommand(contract, "deploy.legacy-predecessor");
+  assert.deepEqual(predecessor.tokens, ["deploy", "legacy-predecessor"]);
+  assert.deepEqual(predecessor.aliases, [["deploy", "carry-baseline"]]);
+  assert.match(predecessor.usage, /^revival deploy legacy-predecessor\b/u);
+  assert.doesNotMatch(predecessor.usage, /carry-baseline/u);
+});
+
+test("setup projections use canonical command tokens rather than compatibility aliases", async () => {
+  const contract = mutable(await loadOperatorSetupContract());
+  const pin = contract.journeys.find((journey) => journey.id === "pin");
+  pin.steps = [{ ...pin.steps[0], commandId: "deploy.legacy-predecessor" }];
+  const projection = projectPinJourney(contract);
+  assert.equal(projection.steps[0].command, "./revival deploy legacy-predecessor");
+  assert.doesNotMatch(JSON.stringify(projection), /carry-baseline/u);
 });
 
 test("mutation classes fail closed at the remote and physical boundaries", async () => {

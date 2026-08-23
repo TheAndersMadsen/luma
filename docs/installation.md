@@ -60,7 +60,7 @@ and revalidate their provider evidence, and `setup artifacts vps|pin` repeats
 that check explicitly.
 
 Production setup has one exceptional first-cutover prerequisite. The
-already-running pre-workflow Carry release cannot be reproduced by the hosted
+already-running pre-workflow predecessor release cannot be reproduced by the hosted
 workflow without inventing provenance. Use the same freshly provider-verified
 forward candidate, whose held registrar captures the live runtime twice as an
 `adopted-live-carry-v1` predecessor, then deploy that candidate immediately.
@@ -69,7 +69,7 @@ runtime resource, and can serve only as that first cutover's immediate rollback
 predecessor. Every later rollback baseline is a normally provider-verified
 retained candidate. Descriptor schemas 2/3 and local-origin candidates remain
 ineligible as canonical candidates; this one-time registrar is not a legacy
-candidate-adoption or promotion bypass. The cutover reuses the exact Carry
+candidate-adoption or promotion bypass. The cutover reuses the exact legacy
 volumes, network, Center data directory, and security paths in place and
 performs no automatic create, copy, rename, migration, deletion, permission
 change, or relabeling. If the exact live observation cannot be sealed, stop

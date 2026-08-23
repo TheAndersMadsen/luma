@@ -1190,7 +1190,7 @@ test("prepare strips poisoned Git directories, configs, filters, and hooks befor
     timeout: 30_000,
   });
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /incompatible with the live Carry contract|production authority|candidate source/u);
+  assert.match(result.stderr, /incompatible with the live legacy production contract|production authority|candidate source/u);
   assert.equal(fs.existsSync(marker), false);
 });
 
@@ -1265,7 +1265,7 @@ test("complete toolchain and source receipts are mandatory", () => {
   }
 });
 
-test("live Carry compatibility accepts only the exact legacy production contract", () => {
+test("live legacy compatibility accepts only the exact legacy production contract", () => {
   assert.equal(assertLegacyProductionCompatible(structuredClone(LEGACY_PRODUCTION_STATE)), true);
   const incompatible = structuredClone(LEGACY_PRODUCTION_STATE);
   incompatible.projectFamily = "renamed-project";
@@ -1423,7 +1423,7 @@ test("candidate verify and inspect views cannot weaken the fixed production imag
   assert.equal(output.release.releaseId, sealed.release.releaseId);
 });
 
-test("operator candidate and recovery docs name the protected Carry authority", () => {
+test("operator candidate and recovery docs name the protected legacy predecessor authority", () => {
   const cliReference = fs.readFileSync(path.join(ROOT, "docs/cli-reference.md"), "utf8");
   const recovery = fs.readFileSync(path.join(ROOT, "docs/recovery.md"), "utf8");
   for (const command of ["prepare", "verify", "inspect"]) {
@@ -2626,7 +2626,7 @@ files={
 }
 for name in ("deploy.sh","rollback.sh","prune-state.sh"):
     files["platform/deploy/vps/remote/"+name]=(action,0o755)
-for name in ("paths","ingress","release_transactions","configuration","compose","backup","database","canary","carry-baseline","drift"):
+for name in ("paths","ingress","release_transactions","configuration","compose","backup","database","canary","legacy-predecessor","drift"):
     relative="platform/deploy/vps/remote/lib/"+name+".sh"
     files[relative]=(open(os.path.join(common_lib,name+".sh"),"rb").read(),0o644)
 entries=[]
@@ -2754,7 +2754,7 @@ test("actual sealed production candidate validates a full fixture through nested
     ...fixtureSourceFiles(),
     { path: "platform/deploy/release-candidate.mjs", data: fs.readFileSync(path.join(ROOT, "platform/deploy/release-candidate.mjs")), mode: 0o644 },
     { path: "platform/deploy/vps/remote/common.sh", data: fs.readFileSync(path.join(ROOT, "platform/deploy/vps/remote/common.sh")), mode: 0o644 },
-    ...["paths", "ingress", "release_transactions", "configuration", "compose", "backup", "database", "canary", "carry-baseline", "drift"].map((name) => ({
+    ...["paths", "ingress", "release_transactions", "configuration", "compose", "backup", "database", "canary", "legacy-predecessor", "drift"].map((name) => ({
       path: `platform/deploy/vps/remote/lib/${name}.sh`,
       data: fs.readFileSync(path.join(ROOT, `platform/deploy/vps/remote/lib/${name}.sh`)),
       mode: 0o644,
@@ -2987,11 +2987,14 @@ test("production consumes one candidate with resumable ACKed transport and has n
   assert.match(bootstrap, /deployment-authority\.json[\s\S]*point-of-use-reverified[\s\S]*--deployment-authority-sha256/u);
   assert.match(remote, /deployment-authority-sha256[\s\S]*hosted-vps-authority\.json[\s\S]*hosted-vps-authority\.sha256/u);
   assert.match(remote, /verify_hosted_rollback_baseline "\$old_current" "\$old_current_deployment"/u);
-  assert.match(remote, /first cutover requires the dedicated deploy carry-baseline command with this exact hosted candidate/u);
   const rollbackBaselineGate = remote.indexOf('verify_hosted_rollback_baseline "$old_current" "$old_current_deployment"');
+  const firstCutoverGuard = remote.indexOf('[[ -z "$old_current_deployment" && -z "$old_previous" ]]', rollbackBaselineGate);
+  const firstCutoverSelection = remote.indexOf('legacy_predecessor_id="$(active_legacy_predecessor_id)"', firstCutoverGuard);
+  const firstCutoverProof = remote.indexOf('verify_legacy_predecessor "$legacy_predecessor_id" active', firstCutoverSelection);
   const firstTopologyDocker = remote.indexOf('docker ps -q --filter "label=com.docker.compose.project=$LEGACY_PROJECT"', rollbackBaselineGate);
   const predecessorActivation = remote.indexOf('activate_record_candidate_if_present "$old_current" "$old_current_deployment"', rollbackBaselineGate);
   assert.ok(rollbackBaselineGate >= 0 && firstTopologyDocker > rollbackBaselineGate);
+  assert.ok(firstCutoverGuard > rollbackBaselineGate && firstCutoverSelection > firstCutoverGuard && firstCutoverProof > firstCutoverSelection);
   assert.ok(predecessorActivation > rollbackBaselineGate);
   assert.doesNotMatch(local, /immutable-candidate protocol marker|\.includes\(marker\)/u);
   assert.match(bootstrap, /for attempt in 1 2 3; do/u);

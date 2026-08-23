@@ -110,7 +110,7 @@ required_security={
     "device-user":"/home/anders/carry-duc",
 }
 if security!=required_security:
-    raise SystemExit("active security roots are not the exact deployed Carry paths")
+    raise SystemExit("active security roots are not the exact deployed legacy paths")
 if len(set(security.values()))!=2: raise SystemExit("active security roots overlap")
 required={
     security["attestation"],security["device-user"],
@@ -292,8 +292,8 @@ spotify_token_file="$(readlink -f -- "$spotify_token_file")"
   || fail "staging security roots or isolated mutable assets are outside their exact guarded paths"
 [[ "$backup_attest_root" == "$PRODUCTION_ATTEST_DIR" \
   && "$backup_duc_root" == "$PRODUCTION_DUC_DIR" ]] \
-  || fail "staging backup was not captured from the exact deployed Carry security roots"
-verify_exact_carry_security_identity "$security_identity"
+  || fail "staging backup was not captured from the exact deployed legacy security roots"
+verify_exact_legacy_security_identity "$security_identity"
 sudo -n test -f "$attest_dir/ca.crt" && sudo -n test -f "$attest_dir/ca.key" \
   || fail "staging attestation CA is unavailable"
 sudo -n test -f "$duc_dir/duc-ca.crt" && sudo -n test -f "$duc_dir/duc-ca.key" \
@@ -693,11 +693,11 @@ compare_backup_invariants() {
   done <"$backup_dir/invariants.tsv"
 }
 
-carry_tables="$(docker exec "$postgres_container" psql -X -v ON_ERROR_STOP=1 -U revival_restore_bootstrap -d "$LEGACY_DATABASE_NAME" -Atc \
+legacy_tables="$(docker exec "$postgres_container" psql -X -v ON_ERROR_STOP=1 -U revival_restore_bootstrap -d "$LEGACY_DATABASE_NAME" -Atc \
   "select count(*) from pg_tables where schemaname='public'" | tr -d '[:space:]')"
 keycloak_tables="$(docker exec "$postgres_container" psql -X -v ON_ERROR_STOP=1 -U revival_restore_bootstrap -d keycloak -Atc \
   "select count(*) from pg_tables where schemaname='public'" | tr -d '[:space:]')"
-((carry_tables >= 10)) || fail "restored Carry database has too few tables"
+((legacy_tables >= 10)) || fail "restored legacy database has too few tables"
 ((keycloak_tables >= 50)) || fail "restored Keycloak database has too few tables"
 
 keycloak_realms_before="$(smoke_db_count keycloak realm)"
@@ -993,7 +993,7 @@ common_cosmos_run=(
 )
 
 created_containers+=("$ai_bus_container")
-verify_exact_carry_security_identity "$security_identity"
+verify_exact_legacy_security_identity "$security_identity"
 docker run --pull=never --detach \
   --name "$ai_bus_container" --network-alias ai-bus \
   "${common_cosmos_run[@]}" \
@@ -1008,7 +1008,7 @@ docker run --pull=never --detach \
   "$cosmos_image" -ec "$cosmos_command" >/dev/null
 
 created_containers+=("$provisioning_container")
-verify_exact_carry_security_identity "$security_identity"
+verify_exact_legacy_security_identity "$security_identity"
 docker run --pull=never --detach \
   --name "$provisioning_container" --network-alias provisioning \
   "${common_cosmos_run[@]}" \
@@ -1023,7 +1023,7 @@ docker run --pull=never --detach \
 
 wait_healthy "$ai_bus_container" 75
 wait_healthy "$provisioning_container" 75
-verify_exact_carry_security_identity "$security_identity"
+verify_exact_legacy_security_identity "$security_identity"
 ai_bus_user="$(docker inspect --format '{{.Config.User}}' "$ai_bus_container")"
 provisioning_user="$(docker inspect --format '{{.Config.User}}' "$provisioning_container")"
 [[ -n "$ai_bus_user" && -n "$provisioning_user" ]] || fail "candidate Cosmos image must declare a non-root runtime user"
