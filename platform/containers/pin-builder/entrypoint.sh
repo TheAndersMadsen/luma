@@ -566,8 +566,7 @@ prefetch_release() {
       :common:assembleRelease \
       :installer:generateReleaseLintVitalReportModel \
       :exploit:generateReleaseLintVitalReportModel
-    cargo fetch --locked --target aarch64-linux-android \
-      --manifest-path runtime/core/Cargo.toml
+    cargo fetch --locked --manifest-path runtime/core/Cargo.toml
     prefetch_embedding_model
   )
 }
