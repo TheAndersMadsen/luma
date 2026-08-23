@@ -51,7 +51,7 @@ const PRIVATE_ASSETS = Object.freeze([
 const SHA256_RE = /^[0-9a-f]{64}$/u;
 const MAX_VERSION_CODE = 2_147_483_647;
 
-export class PinReleaseBuildError extends Error {
+class PinReleaseBuildError extends Error {
   constructor(code, message) {
     super(message);
     this.name = "PinReleaseBuildError";
@@ -171,7 +171,7 @@ export function defaultOperatorPaths(environment = process.env) {
   });
 }
 
-export async function validatePinReleaseBuildInputs(options = {}) {
+async function validatePinReleaseBuildInputs(options = {}) {
   const sourceRoot = await directory(resolve(options.sourceRoot ?? SOURCE_ROOT), "source root");
   const environment = options.environment ?? process.env;
   const defaults = defaultOperatorPaths(environment);
@@ -387,7 +387,6 @@ export async function publishRelease({ releaseRoot, stagingRoot, version, receip
     }
   }
   await atomicWrite(join(releaseRoot, "current.json"), canonical);
-  await rm(join(releaseRoot, "history.json"), { recursive: true, force: true });
   for (const entry of await readdir(releasesRoot)) {
     if (entry !== manifest.releaseId) {
       await rm(join(releasesRoot, entry), { recursive: true, force: true });
@@ -405,7 +404,7 @@ export async function publishRelease({ releaseRoot, stagingRoot, version, receip
   });
 }
 
-export async function buildAndPublishPinRelease(options) {
+async function buildAndPublishPinRelease(options) {
   const { version, versionCode } = validatePinReleaseVersion(options.version, options.versionCode);
   const inputs = await validatePinReleaseBuildInputs(options);
   const stateDir = await directory(join(inputs.buildDir, "pin-release-state"), "Pin release state", { create: true });

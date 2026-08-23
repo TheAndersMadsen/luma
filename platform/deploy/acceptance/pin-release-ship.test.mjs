@@ -122,10 +122,10 @@ test("ship planning verifies the source and requires both version axes to advanc
     () => createPinReleaseShipPlan({ local, remote: { ...local, verified: false } }),
     /not fully verified/u,
   );
-  await writeFile(join(local.root, "history.json"), "{}\n");
+  await writeFile(join(local.root, "unexpected"), "unexpected\n");
   await assert.rejects(
     readLocalPinReleaseStore({ root: local.root }),
-    /obsolete history\.json; rebuild/u,
+    /must contain only current\.json and releases/u,
   );
 });
 

@@ -233,9 +233,5 @@ function configCommand(args) {
 }
 
 module.exports = {
-  settingsRegistry,
-  resolveSetting,
-  replaceSetting,
-  configCheckReport,
   configCommand,
 };

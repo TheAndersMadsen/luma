@@ -226,7 +226,7 @@ class CosmosActivationTransactionTest {
     }
 
     @Test
-    fun keepDataReplacementReadsPreRenameStateAndDoesNotReimportIdentity() {
+    fun keepDataReplacementReadsExistingStateAndDoesNotReimportIdentity() {
         assertEquals("penumbra_cosmos_remote_mode", CosmosActivationContract.REMOTE_MODE_SETTING)
         assertEquals("penumbra_cosmos_edge_ipv4", CosmosActivationContract.EDGE_IPV4_SETTING)
         assertEquals(
@@ -238,8 +238,8 @@ class CosmosActivationTransactionTest {
             CosmosActivationContract.ATTESTATION_KEY_ALIAS,
         )
 
-        // This map is the Settings.Global state already present before the
-        // logical rename. A keep-data APK replacement must observe it directly.
+        // This map is the existing Settings.Global state. A keep-data APK
+        // replacement must observe it directly.
         val settings = FakeSettings(
             "penumbra_cosmos_remote_mode" to "1",
             "penumbra_cosmos_edge_ipv4" to "203.0.113.9",

@@ -35,13 +35,12 @@ Compose.
 - `unknown`: complete stock parity and physical-Pin speech playback until an
   authorized target run observes them.
 
-`COSMOS_*` remains the logical source/configuration namespace. The development
-Compose model may use `/var/lib/cosmos`, but production deliberately overrides
-the physical state target to the legacy `/var/lib/cosmos` path and reuses the
-exact deployed legacy volumes, network, database identities, and Center
-directory. Those are
-persistent ABI, not product names; changing them requires a separately reviewed,
-reversible migration and is not part of the rename.
+`COSMOS_*` is the runtime configuration namespace. Compose mounts the shared
+`cosmos-state` volume at `/var/lib/cosmos`; production pins it as
+`ai-pin-revival_cosmos-state` and stores PostgreSQL data in
+`ai-pin-revival_cosmos-pgdata`. Validate production configuration with
+`./revival doctor production`, then deploy the root Compose model with its
+production overlay through `./revival deploy production`.
 
 Workspace boundaries are in [architecture](../docs/architecture.md); runtime
 commands are in [operations](../docs/operations.md).

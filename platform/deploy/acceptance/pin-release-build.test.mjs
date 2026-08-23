@@ -108,12 +108,11 @@ test("builder metadata accepts exactly five digest-matched APKs", async () => {
   );
 });
 
-test("a successful build removes obsolete history and old local releases", async (t) => {
+test("a successful build removes old local releases", async (t) => {
   const temporary = await mkdtemp(join(tmpdir(), "revival-release-store-"));
   t.after(() => rm(temporary, { recursive: true, force: true }));
   const releaseRoot = join(temporary, "published");
   await mkdir(join(releaseRoot, "releases", "old-release"), { recursive: true });
-  await writeFile(join(releaseRoot, "history.json"), "{}\n");
 
   const version = "2026-08-23.2", versionCode = 202_608_232;
   const stagingRoot = join(temporary, "staging");

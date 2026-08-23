@@ -69,4 +69,4 @@ function deployProduction(args) {
   deploymentScript('deploy.sh', options.filter((argument) => argument !== '--confirm'), parsed.envFile);
 }
 
-module.exports = { parseProductionOptions, deploymentScript, productionDoctor, deployProduction };
+module.exports = { productionDoctor, deployProduction };

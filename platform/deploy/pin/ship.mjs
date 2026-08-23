@@ -62,9 +62,6 @@ async function verifyLocalRelease(directory, manifest, canonical, label) {
 export async function readLocalPinReleaseStore({ root, label = "local Pin release store" }) {
   const storeRoot = await realDirectory(root, label);
   const entries = await readdir(storeRoot, { withFileTypes: true });
-  if (entries.some((entry) => entry.name === "history.json")) {
-    fail("store-invalid", `${label} uses obsolete history.json; rebuild the local release store`);
-  }
   if (entries.length !== 2 ||
       !entries.some((entry) => entry.name === "current.json" && entry.isFile()) ||
       !entries.some((entry) => entry.name === "releases" && entry.isDirectory()))

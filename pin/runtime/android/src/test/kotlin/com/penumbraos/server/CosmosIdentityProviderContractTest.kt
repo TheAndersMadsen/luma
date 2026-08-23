@@ -16,7 +16,7 @@ class CosmosIdentityProviderContractTest {
     }
 
     @Test
-    fun logicalRenameKeepsTheDeployedContentProviderAuthority() {
+    fun persistedIdentityUsesTheDeployedContentProviderAuthority() {
         assertEquals(
             "com.penumbraos.server.cosmosidentity",
             CosmosIdentityProvider.AUTHORITY,
