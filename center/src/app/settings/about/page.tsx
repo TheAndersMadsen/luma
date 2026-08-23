@@ -1,5 +1,7 @@
 import styles from "../settings.module.css";
 
+export const dynamic = "force-dynamic";
+
 export const metadata = { title: "Humane Center" };
 
 /**

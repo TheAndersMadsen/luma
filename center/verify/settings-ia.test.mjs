@@ -108,6 +108,8 @@ test("retired settings routes lead to a useful wearer page while Services stays 
   assert.doesNotMatch(services, /redirect\(/);
   assert.doesNotMatch(about, /redirect\(/);
   assert.match(about, /REVIVAL_RELEASE_ID/);
+  assert.match(about, /REVIVAL_DEPLOYMENT_ENVIRONMENT/);
+  assert.match(about, /dynamic\s*=\s*["']force-dynamic["']/);
   assert.match(about, /about-release/);
 });
 
