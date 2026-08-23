@@ -14,10 +14,10 @@ ARG ANDROID_NDK_ARCHIVE_SIZE=722261334
 ARG ANDROID_NDK_ARCHIVE_SHA1=a7b54a5de87fecd125a17d54f73c446199e72a64
 ARG ANDROID_NDK_ARCHIVE_SHA256=dfb20d396df28ca02a8c708314b814a4d961dc9074f9a161932746f815aa552f
 ARG CARGO_NDK_VERSION=4.1.2
-ARG CARGO_NDK_ARCHIVE_URL=https://github.com/bbqsrc/cargo-ndk/releases/download/v4.1.2/cargo-ndk-x86_64-unknown-linux-gnu-v4.1.2.tgz
-ARG CARGO_NDK_ARCHIVE_ROOT=cargo-ndk-x86_64-unknown-linux-gnu-v4.1.2
-ARG CARGO_NDK_ARCHIVE_SIZE=2504202
-ARG CARGO_NDK_ARCHIVE_SHA256=9451622c4567e8abb2c8005001855e32901c0b716ccdd3a173a4375fd03426e1
+ARG CARGO_NDK_ARCHIVE_URL=https://github.com/bbqsrc/cargo-ndk/releases/download/v4.1.2/cargo-ndk-x86_64-unknown-linux-musl-v4.1.2.tgz
+ARG CARGO_NDK_ARCHIVE_ROOT=cargo-ndk-x86_64-unknown-linux-musl-v4.1.2
+ARG CARGO_NDK_ARCHIVE_SIZE=2736539
+ARG CARGO_NDK_ARCHIVE_SHA256=dc148bebbfcd7d5355e9858530d5a69c20ce69cf3268c54b9f63c60cb4c9a966
 
 # Download and extract the architecture-independent Android SDK contents on
 # the native build platform. On an ARM contributor host this avoids running
@@ -135,6 +135,7 @@ RUN set -eux; \
     for executable in cargo-ndk cargo-ndk-env cargo-ndk-runner cargo-ndk-test; do \
       install -m 0755 "/tmp/cargo-ndk/${CARGO_NDK_ARCHIVE_ROOT}/${executable}" "/opt/cargo-ndk/bin/${executable}"; \
     done; \
+    /opt/cargo-ndk/bin/cargo-ndk --version; \
     rm -rf /tmp/cargo-ndk /tmp/cargo-ndk.tgz
 
 FROM eclipse-temurin:17.0.14_7-jdk-jammy@sha256:23f74f7840a6948f9da3870876f475c4febeb365757891a6a9ebda38a42cf53f AS jdk_runtime

@@ -609,10 +609,10 @@ export function parsePinBuilderDockerfileContract(
     exactlyOneLiteral(text, 'install -m 0755 "/tmp/cargo-ndk/${CARGO_NDK_ARCHIVE_ROOT}/${executable}" "/opt/cargo-ndk/bin/${executable}";') &&
     gradle?.cargoNdkConsumerValid === true;
   const validCargoNdkArchiveUrl = cargoNdkArchiveUrl !== null && cargoNdk !== null &&
-    cargoNdkArchiveUrl === `https://github.com/bbqsrc/cargo-ndk/releases/download/v${cargoNdk}/cargo-ndk-x86_64-unknown-linux-gnu-v${cargoNdk}.tgz` &&
+    cargoNdkArchiveUrl === `https://github.com/bbqsrc/cargo-ndk/releases/download/v${cargoNdk}/cargo-ndk-x86_64-unknown-linux-musl-v${cargoNdk}.tgz` &&
     exactlyOneLiteral(text, '"${CARGO_NDK_ARCHIVE_URL}" \\\n      --output /tmp/cargo-ndk.tgz;');
   const validCargoNdkArchiveRoot = cargoNdkArchiveRoot !== null && cargoNdk !== null &&
-    cargoNdkArchiveRoot === `cargo-ndk-x86_64-unknown-linux-gnu-v${cargoNdk}` &&
+    cargoNdkArchiveRoot === `cargo-ndk-x86_64-unknown-linux-musl-v${cargoNdk}` &&
     exactlyOneLiteral(text, 'test "$(find /tmp/cargo-ndk -mindepth 1 -maxdepth 1 -type d -printf \'%f\\n\')" = "${CARGO_NDK_ARCHIVE_ROOT}";');
   const validCargoNdkArchiveSize = /^\d+$/u.test(cargoNdkArchiveSize ?? "") &&
     exactlyOneLiteral(text, 'test "$(stat --format=\'%s\' /tmp/cargo-ndk.tgz)" = "${CARGO_NDK_ARCHIVE_SIZE}";');
@@ -660,7 +660,7 @@ export function parsePinBuilderDockerfileContract(
     cargoNdkArchiveRoot: validCargoNdkArchiveRoot ? cargoNdkArchiveRoot : null,
     cargoNdkArchiveSize: validCargoNdkArchiveSize ? cargoNdkArchiveSize : null,
     cargoNdkArchiveSha256: validCargoNdkArchiveSha256 ? cargoNdkArchiveSha256 : null,
-    cargoNdkArchiveTarget: validCargoNdkArchiveRoot ? "x86_64-unknown-linux-gnu" : null,
+    cargoNdkArchiveTarget: validCargoNdkArchiveRoot ? "x86_64-unknown-linux-musl" : null,
   };
 }
 
