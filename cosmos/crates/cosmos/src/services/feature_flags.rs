@@ -146,9 +146,9 @@ fn text(key: &str, value: &str) -> FeatureFlagAssignment {
 /// Whether this deployment hosts server-side speech synthesis.
 ///
 /// It does: `SpeechService` is registered and returns real Azure audio when
-/// `AZURE_SPEECH_KEY` is configured. An earlier version of this comment said the
-/// service was unimplemented, which stopped being true and then justified leaving
-/// the flag off.
+/// `COSMOS_AZURE_SPEECH_KEY` is configured. An earlier version of this comment
+/// said the service was unimplemented, which stopped being true and then
+/// justified leaving the flag off.
 ///
 /// The env name matters and was wrong for a while: this read `COSMOS_REMOTE_TTS`
 /// while the root runtime template, Compose model, and README all set

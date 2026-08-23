@@ -69,6 +69,7 @@ test("init creates a protected, wearer-free local identity realm tied to runtime
     assert.ok(runtime.KEYCLOAK_ADMIN.length >= 8);
     assert.ok(runtime.KEYCLOAK_ADMIN_PASSWORD.length >= 32);
     assert.ok(runtime.COSMOS_ADMIN_TOKEN.length >= 32);
+    assert.match(runtime.SEARXNG_SECRET, /^[0-9a-f]{64}$/);
     assert.equal(Buffer.from(runtime.COSMOS_OPAQUE_SEED, "base64").length, 32);
     assert.equal(client.secret, runtime.KEYCLOAK_CLIENT_SECRET);
     assert.equal(client.publicClient, false);
@@ -342,6 +343,12 @@ test("production Compose binds one release identity and keeps web services priva
         COSMOS_PG_PASSWORD: "placeholder-postgres",
         GRAFANA_ADMIN_PASSWORD: "placeholder-grafana",
         SEARXNG_SECRET: "placeholder-search-secret",
+        COSMOS_AZURE_SPEECH_KEY: "placeholder-cosmos-speech-key",
+        COSMOS_AZURE_SPEECH_REGION: "southeastasia",
+        COSMOS_AZURE_SPEECH_VOICE: "da-DK-ChristelNeural",
+        AZURE_SPEECH_KEY: "ignored-generic-speech-key",
+        AZURE_SPEECH_REGION: "ignored-region",
+        AZURE_SPEECH_VOICE: "ignored-voice",
         COSMOS_OPENROUTER_API_KEY: "placeholder-openrouter-key",
         COSMOS_INTERSTITIAL_BASE_URL: "http://cosmos-ollama:11434/v1",
         COSMOS_INTERSTITIAL_MODEL: "qwen2.5:3b-instruct",
@@ -459,6 +466,18 @@ test("production Compose binds one release identity and keeps web services priva
     rendered.services["ai-bus"].environment.COSMOS_INTERSTITIAL_MODEL,
     "qwen2.5:3b-instruct",
   );
+  assert.equal(
+    rendered.services["ai-bus"].environment.COSMOS_AZURE_SPEECH_KEY,
+    "placeholder-cosmos-speech-key",
+  );
+  assert.equal(rendered.services["ai-bus"].environment.COSMOS_AZURE_SPEECH_REGION, "southeastasia");
+  assert.equal(
+    rendered.services["ai-bus"].environment.COSMOS_AZURE_SPEECH_VOICE,
+    "da-DK-ChristelNeural",
+  );
+  for (const name of ["AZURE_SPEECH_KEY", "AZURE_SPEECH_REGION", "AZURE_SPEECH_VOICE"]) {
+    assert.equal(Object.hasOwn(rendered.services["ai-bus"].environment, name), false);
+  }
   assert.deepEqual(rendered.services["ai-bus"].depends_on.searxng, {
     condition: "service_healthy",
     required: true,
@@ -559,6 +578,12 @@ test("development identity profile controls Keycloak and OIDC wiring", (context)
     REVIVAL_DATA_DIR: path.join(os.tmpdir(), "ai-pin-revival-identity-data"),
     REVIVAL_SECRETS_DIR: path.join(os.tmpdir(), "ai-pin-revival-identity-secrets"),
     REVIVAL_DEPLOYMENT_ENVIRONMENT: "development",
+    COSMOS_AZURE_SPEECH_KEY: "development-cosmos-speech-key",
+    COSMOS_AZURE_SPEECH_REGION: "northeurope",
+    COSMOS_AZURE_SPEECH_VOICE: "en-GB-SoniaNeural",
+    AZURE_SPEECH_KEY: "ignored-development-generic-key",
+    AZURE_SPEECH_REGION: "ignored-development-region",
+    AZURE_SPEECH_VOICE: "ignored-development-voice",
   };
   const render = (profileArguments, environment) => {
     const result = spawnSync(
@@ -594,6 +619,18 @@ test("development identity profile controls Keycloak and OIDC wiring", (context)
     disabled.services.center.image,
     "ai-pin-revival/center-development:identity-contract-test",
   );
+  assert.equal(
+    disabled.services["ai-bus"].environment.COSMOS_AZURE_SPEECH_KEY,
+    "development-cosmos-speech-key",
+  );
+  assert.equal(disabled.services["ai-bus"].environment.COSMOS_AZURE_SPEECH_REGION, "northeurope");
+  assert.equal(
+    disabled.services["ai-bus"].environment.COSMOS_AZURE_SPEECH_VOICE,
+    "en-GB-SoniaNeural",
+  );
+  for (const name of ["AZURE_SPEECH_KEY", "AZURE_SPEECH_REGION", "AZURE_SPEECH_VOICE"]) {
+    assert.equal(Object.hasOwn(disabled.services["ai-bus"].environment, name), false);
+  }
 
   const issuer = "http://localhost:8088/realms/humane";
   const jwks = "http://keycloak:8080/realms/humane/protocol/openid-connect/certs";

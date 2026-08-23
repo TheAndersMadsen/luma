@@ -132,6 +132,7 @@ test("a clean isolated-XDG setup is safe, private, and idempotent", () => {
     assert.equal(first.status, 0, first.stderr);
     const runtime = join(xdgConfig, "ai-pin-revival", "secrets", "runtime.env");
     const firstRuntime = readFileSync(runtime);
+    assert.match(firstRuntime.toString("utf8"), /^SEARXNG_SECRET=[0-9a-f]{64}$/m);
 
     const second = invoke(environment, "init");
     assert.equal(second.status, 0, second.stderr);

@@ -15,7 +15,7 @@
 //!
 //! | Env var | Backend | Surfaces |
 //! |---|---|---|
-//! | `AZURE_SPEECH_KEY` + `AZURE_SPEECH_REGION` | Azure AI Speech | unary/streaming TTS, translated speech |
+//! | `COSMOS_AZURE_SPEECH_KEY` + `COSMOS_AZURE_SPEECH_REGION` | Azure AI Speech | unary/streaming TTS, translated speech |
 //! | `COSMOS_GOOGLE_MAPS_KEY` | Google Maps Platform | nearby search, reverse geocode, directions |
 //! | `COSMOS_SEARXNG_BASE_URL` | Private SearXNG (preferred when configured) | `web_search` (`MODE_SERP_API`) |
 //! | `COSMOS_SERPAPI_KEY` | SerpApi (fallback when SearXNG is absent, unavailable, or empty) | `web_search` (`MODE_SERP_API`) |
@@ -28,9 +28,8 @@
 //! deployment choice. Its adapter preserves the observed `web_search` tool
 //! boundary; it is not a claim about Humane's internal search infrastructure.
 //!
-//! Azure Speech additionally accepts `AZURE_SPEECH_VOICE` (default:
-//! `en-US-AvaMultilingualNeural`). Scoped `COSMOS_AZURE_SPEECH_*` names take
-//! precedence when both forms are present.
+//! Azure Speech additionally accepts `COSMOS_AZURE_SPEECH_VOICE` (default:
+//! `en-US-AvaMultilingualNeural`).
 //!
 //! ## Fidelity note on weather
 //!

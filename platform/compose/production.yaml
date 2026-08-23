@@ -65,15 +65,9 @@ services:
       COSMOS_WOLFRAM_APP_ID: ${COSMOS_WOLFRAM_APP_ID:-}
       COSMOS_PPLX_API_KEY: ${COSMOS_PPLX_API_KEY:-}
       COSMOS_PPLX_MODEL: ${COSMOS_PPLX_MODEL:-sonar}
-      # The Rust adapter accepts both the established COSMOS_AZURE_SPEECH_*
-      # names and the unscoped Azure names; these values stay scoped to ai-bus.
-      # Key and region are one credential pair — a key is only valid in the
-      # region that issued it — so both resolve from the scoped names first.
-      # Preferring the unscoped region here once paired a southeastasia key
-      # with a stale eastus region and every synthesis failed with 401.
-      AZURE_SPEECH_KEY: ${COSMOS_AZURE_SPEECH_KEY:-${AZURE_SPEECH_KEY:-}}
-      AZURE_SPEECH_REGION: ${COSMOS_AZURE_SPEECH_REGION:-${AZURE_SPEECH_REGION:-}}
-      AZURE_SPEECH_VOICE: ${COSMOS_AZURE_SPEECH_VOICE:-${AZURE_SPEECH_VOICE:-en-US-AvaMultilingualNeural}}
+      COSMOS_AZURE_SPEECH_KEY: ${COSMOS_AZURE_SPEECH_KEY:-}
+      COSMOS_AZURE_SPEECH_REGION: ${COSMOS_AZURE_SPEECH_REGION:-}
+      COSMOS_AZURE_SPEECH_VOICE: ${COSMOS_AZURE_SPEECH_VOICE:-en-US-AvaMultilingualNeural}
       COSMOS_ATTEST_CA_CERT: /etc/cosmos-attest/ca.crt
       COSMOS_ATTEST_CA_KEY: /etc/cosmos-attest/ca.key
       COSMOS_DEVICE_STATUS_CA_CERT: /etc/cosmos-attest/ca.crt

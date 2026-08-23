@@ -204,6 +204,7 @@ function fillBlankGeneratedSecrets(contents) {
     ['COSMOS_CENTER_PROJECTION_TOKEN', () => crypto.randomBytes(32).toString('hex')],
     ['COSMOS_EDGE_TOKEN', () => crypto.randomBytes(32).toString('hex')],
     ['COSMOS_ADMIN_TOKEN', () => crypto.randomBytes(32).toString('hex')],
+    ['SEARXNG_SECRET', () => crypto.randomBytes(32).toString('hex')],
     ['COSMOS_OPAQUE_SEED', () => crypto.randomBytes(32).toString('base64')],
     ['KEYCLOAK_CLIENT_SECRET', () => crypto.randomBytes(32).toString('hex')],
     ['KEYCLOAK_ADMIN', () => `revival-admin-${crypto.randomBytes(4).toString('hex')}`],

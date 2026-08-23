@@ -13,12 +13,9 @@ use reqwest::redirect::Policy;
 use tokio::sync::mpsc;
 use tokio_stream::{Stream, wrappers::ReceiverStream};
 
-const KEY_ENV: &str = "AZURE_SPEECH_KEY";
-const SCOPED_KEY_ENV: &str = "COSMOS_AZURE_SPEECH_KEY";
-const REGION_ENV: &str = "AZURE_SPEECH_REGION";
-const SCOPED_REGION_ENV: &str = "COSMOS_AZURE_SPEECH_REGION";
-const VOICE_ENV: &str = "AZURE_SPEECH_VOICE";
-const SCOPED_VOICE_ENV: &str = "COSMOS_AZURE_SPEECH_VOICE";
+const KEY_ENV: &str = "COSMOS_AZURE_SPEECH_KEY";
+const REGION_ENV: &str = "COSMOS_AZURE_SPEECH_REGION";
+const VOICE_ENV: &str = "COSMOS_AZURE_SPEECH_VOICE";
 const DEFAULT_VOICE: &str = "en-US-AvaMultilingualNeural";
 const MAX_TEXT_BYTES: usize = 8 * 1024;
 const MAX_UNARY_AUDIO_BYTES: usize = 4 * 1024 * 1024 - 128;
@@ -88,15 +85,14 @@ pub struct AzureSpeechClient {
 
 impl AzureSpeechClient {
     pub fn from_environment() -> Result<Option<Self>, AzureSpeechError> {
-        let key = first_nonempty(SCOPED_KEY_ENV, KEY_ENV);
-        let region = first_nonempty(SCOPED_REGION_ENV, REGION_ENV);
+        let key = super::key(KEY_ENV);
+        let region = super::key(REGION_ENV);
         if key.is_none() && region.is_none() {
             return Ok(None);
         }
         let key = key.ok_or(AzureSpeechError::InvalidConfiguration)?;
         let region = region.ok_or(AzureSpeechError::InvalidConfiguration)?;
-        let voice =
-            first_nonempty(SCOPED_VOICE_ENV, VOICE_ENV).unwrap_or_else(|| DEFAULT_VOICE.to_owned());
+        let voice = super::key(VOICE_ENV).unwrap_or_else(|| DEFAULT_VOICE.to_owned());
         Self::new(key, region, voice).map(Some)
     }
 
@@ -343,17 +339,6 @@ pub fn configured_recognition_backend() -> Option<Arc<dyn SpeechRecognitionBacke
         Ok(Some(client)) => Some(Arc::new(client)),
         _ => None,
     }
-}
-
-fn first_nonempty(primary: &str, fallback: &str) -> Option<String> {
-    std::env::var(primary)
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| {
-            std::env::var(fallback)
-                .ok()
-                .filter(|value| !value.trim().is_empty())
-        })
 }
 
 fn valid_region(value: &str) -> bool {
