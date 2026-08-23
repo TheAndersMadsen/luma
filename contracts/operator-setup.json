@@ -336,59 +336,11 @@
       ],
       "aliases": [],
       "lifecycle": "current",
-      "effect": "read-only",
+      "effect": "local-mutation",
       "confirmationRequired": false,
       "exactSerialRequired": false,
-      "summary": "Refuse local signing and direct operators to the attested hosted release workflow.",
+      "summary": "Build, sign, and verify the five-APK Pin release in the pinned builder.",
       "usage": "revival pin release build [options]",
-      "documentationAnchor": "docs/operations.md#onboarding-a-pin"
-    },
-    {
-      "id": "pin.release.inspect",
-      "tokens": [
-        "pin",
-        "release",
-        "inspect"
-      ],
-      "aliases": [],
-      "lifecycle": "current",
-      "effect": "read-only",
-      "confirmationRequired": false,
-      "exactSerialRequired": false,
-      "summary": "Inspect signed Pin release metadata.",
-      "usage": "revival pin release inspect [options]",
-      "documentationAnchor": "docs/operations.md#onboarding-a-pin"
-    },
-    {
-      "id": "pin.release.verify",
-      "tokens": [
-        "pin",
-        "release",
-        "verify"
-      ],
-      "aliases": [],
-      "lifecycle": "current",
-      "effect": "read-only",
-      "confirmationRequired": false,
-      "exactSerialRequired": false,
-      "summary": "Verify a signed Pin release bundle.",
-      "usage": "revival pin release verify [options]",
-      "documentationAnchor": "docs/operations.md#onboarding-a-pin"
-    },
-    {
-      "id": "pin.release.plan",
-      "tokens": [
-        "pin",
-        "release",
-        "plan"
-      ],
-      "aliases": [],
-      "lifecycle": "current",
-      "effect": "read-only",
-      "confirmationRequired": false,
-      "exactSerialRequired": false,
-      "summary": "Plan a Pin release transition without changing a device.",
-      "usage": "revival pin release plan [options]",
       "documentationAnchor": "docs/operations.md#onboarding-a-pin"
     },
     {
@@ -904,7 +856,6 @@
         "pki.import",
         "pki.init",
         "pin.doctor",
-        "pin.release.inspect",
         "pin.release.build",
         "pin.release.ship",
         "pin.install",
@@ -926,18 +877,9 @@
           "documentationAnchor": "docs/operations.md#onboarding-a-pin"
         },
         {
-          "id": "inspect",
-          "title": "Inspect device and release state",
-          "commandId": "pin.release.inspect",
-          "centerRoute": "/settings/pin/install",
-          "surface": "cli",
-          "verification": "cli",
-          "documentationAnchor": "docs/operations.md#onboarding-a-pin"
-        },
-        {
           "id": "release",
-          "title": "Verify the signed Pin release",
-          "commandId": "pin.release.verify",
+          "title": "Build and verify the signed Pin release",
+          "commandId": "pin.release.build",
           "centerRoute": "/settings/pin/install",
           "surface": "cli",
           "verification": "cli",

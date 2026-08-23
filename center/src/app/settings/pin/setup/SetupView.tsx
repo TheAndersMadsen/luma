@@ -28,20 +28,13 @@ import pin from "../pin.module.css";
 import styles from "./setup.module.css";
 import { StatusChip, StatusMessage } from "@/components/Status";
 import {
-  MANAGED_PACKAGE_ROLE_ORDER,
-  formatManagedPackageRole,
-  getDisplayedPackageVersion,
-  getManagedPackageStatusText,
-  hasProblematicManagedPackageState,
-} from "@/lib/pin-install";
-import {
   derivePinSetupPlan,
   type PinSetupFacts,
   type PinSetupStep,
   type PinSetupStepStatus,
 } from "@/lib/pin-setup";
 import { usePinDevice } from "../PinDeviceProvider";
-import { usePinSetupFacts, type PinSetupReadings } from "./usePinSetupFacts";
+import { usePinSetupFacts } from "./usePinSetupFacts";
 
 const STATE_LABELS: Record<PinSetupStepStatus, string> = {
   done: "Done",
@@ -211,20 +204,7 @@ export default function SetupView({
               connecting,
               usbSupported: readings.facts.usb.browserSupported !== false,
               onConnect: () => void onConnect(),
-              onRecheck: readings.refresh,
-              rechecking: readings.refreshing,
             })}
-            /*
-             * Gated on the READING, not on the cache. React Query keeps the
-             * last inspection after the Pin is unplugged; rendering it under a
-             * step that has gone back to "waiting" would show a disconnected
-             * wearer a package table for a device that is no longer there.
-             */
-            detail={
-              step.id === "inspect" && readings.facts.install.state === "read" ? (
-                <PackageList readings={readings} />
-              ) : null
-            }
           />
         ))}
       </section>
@@ -315,12 +295,10 @@ function StepRow({
   step,
   focused,
   actions,
-  detail,
 }: {
   step: PinSetupStep;
   focused: boolean;
   actions: React.ReactNode;
-  detail: React.ReactNode;
 }) {
   // Exactly one step exposes instructions and controls. Other steps still show
   // their current fact, without competing calls to action.
@@ -346,9 +324,6 @@ function StepRow({
         </div>
         <p className={styles.summary}>{step.summary}</p>
         {expanded && step.next ? <p className={styles.next}>{step.next}</p> : null}
-        {/* Evidence stays visible after the step passes: "4 of 4 installed" is
-            a claim, and the four rows under it are what backs it up. */}
-        {detail}
         {expanded && (step.commands.length > 0 || step.manualNote) ? (
           <div className={styles.manual}>
             {step.manualNote ? <p className={styles.manualNote}>{step.manualNote}</p> : null}
@@ -387,16 +362,12 @@ function renderStepActions({
   connecting,
   usbSupported,
   onConnect,
-  onRecheck,
-  rechecking,
 }: {
   step: PinSetupStep;
   adminHref: string | null;
   connecting: boolean;
   usbSupported: boolean;
   onConnect: () => void;
-  onRecheck: () => void;
-  rechecking: boolean;
 }): React.ReactNode {
   switch (step.id) {
     case "connect":
@@ -424,20 +395,6 @@ function renderStepActions({
           data-testid="pin-setup-connect"
         >
           {connecting ? "Connecting…" : "Connect over USB"}
-        </button>
-      );
-
-    case "inspect":
-      if (step.status === "blocked") return null;
-      return (
-        <button
-          type="button"
-          className={pin.buttonQuiet}
-          disabled={rechecking}
-          onClick={onRecheck}
-          data-testid="pin-setup-reinspect"
-        >
-          {rechecking ? "Reading…" : "Read the Pin again"}
         </button>
       );
 
@@ -494,31 +451,6 @@ function renderStepActions({
     default:
       return null;
   }
-}
-
-/** The four managed packages, exactly as the installer names them. */
-function PackageList({ readings }: { readings: PinSetupReadings }) {
-  const inspection = readings.inspection;
-  if (!inspection) return null;
-
-  return (
-    <div className={styles.packages} data-testid="pin-setup-packages">
-      {MANAGED_PACKAGE_ROLE_ORDER.map((role) => {
-        const pkg = inspection.packages[role];
-        const problem = hasProblematicManagedPackageState(pkg);
-        const statusText = getManagedPackageStatusText(pkg);
-        return (
-          <div className={styles.package} key={role}>
-            <span className={styles.packageName}>{formatManagedPackageRole(role)}</span>
-            <span className={styles.packageValue} data-problem={problem ? "true" : "false"}>
-              {getDisplayedPackageVersion(pkg.versionName, pkg.installed)}
-              {statusText ? ` · ${statusText}` : ""}
-            </span>
-          </div>
-        );
-      })}
-    </div>
-  );
 }
 
 function EvidenceRow({

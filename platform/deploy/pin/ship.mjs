@@ -257,10 +257,6 @@ export async function shipPinRelease({ releaseRoot, remoteRoot, transport, confi
   return Object.freeze({ ...summary, applied: true, unchanged: plan.unchanged });
 }
 
-export async function shipPinReleaseFixture(options) {
-  return await shipPinRelease(options);
-}
-
 function help() {
   process.stdout.write(
     "Usage: ./revival pin release ship [--remote NAME | --local] [--remote-root PATH]\n" +

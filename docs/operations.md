@@ -61,13 +61,12 @@ service logs, and health endpoints provide the direct operator view.
 
 ## Pin releases
 
-The hosted Pin workflow builds and signs all five APK roles as one set. Before
-shipping or installing:
+The pinned builder builds, signs, and verifies all five APK roles as one set:
 
 ```sh
-./revival pin release inspect --release-dir DIR
-./revival pin release verify --release-dir DIR
+./revival pin release build --version YYYY-MM-DD.N --version-code INTEGER
 ./revival pin release ship
+./revival pin release ship --confirm
 ```
 
 `ship` plans by default and publishes only with `--confirm`.
@@ -76,8 +75,8 @@ shipping or installing:
 
 ```sh
 ./revival pin doctor --serial SERIAL
-./revival pin install --serial SERIAL --release-dir DIR
-./revival pin install --serial SERIAL --release-dir DIR --confirm
+./revival pin install --serial SERIAL
+./revival pin install --serial SERIAL --confirm
 ```
 
 The first install command prints the plan. Confirmation rechecks the exact

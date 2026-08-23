@@ -82,6 +82,7 @@ function longestKnownPath(tokens, contract = operatorContract()) {
 
 function requestedHelp(argv) {
   if (argv[0] === 'help') return { requested: true, tokens: argv.slice(1).filter((item) => !HELP_FLAGS.has(item)) };
+  if (argv.at(-1) === 'help') return { requested: true, tokens: longestKnownPath(argv.slice(0, -1)) };
   if (!argv.some((item) => HELP_FLAGS.has(item))) return { requested: false, tokens: [] };
   const withoutFlags = argv.filter((item) => !HELP_FLAGS.has(item));
   return { requested: true, tokens: longestKnownPath(withoutFlags) };
@@ -186,7 +187,7 @@ function renderGroupHelp(tokens, contract) {
   const heading = tokens.join(' ');
   const defaultCommand = findCommand(tokens, contract)?.command || null;
   const notes = [];
-  if (heading === 'pin release') notes.push('Pin release host contract (read-only). Ship still plans until explicitly confirmed.');
+  if (heading === 'pin release') notes.push('Build writes the local release store. Ship plans until explicitly confirmed.');
   if (heading === 'config') notes.push('Bare `revival config` renders the Compose model.');
   if (heading === 'pin') notes.push('Device mutation requires an exact serial and explicit confirmation in the delegated tool.');
   return [

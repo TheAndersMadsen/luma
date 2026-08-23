@@ -30,11 +30,11 @@ Or create one:
 The first invocation prints the plan. Confirmation changes only the DeviceUser
 CA and does not replace the separate attestation CA.
 
-## 3. Verify a signed release
+## 3. Build and verify a signed release
 
 ```sh
-./revival pin release inspect --release-dir DIR
-./revival pin release verify --release-dir DIR
+./revival pin release build --version YYYY-MM-DD.N --version-code INTEGER
+./revival pin release ship --confirm
 ```
 
 A valid release contains one signed artifact for each of the five roles:
@@ -45,13 +45,13 @@ Server, Hook, Hook injector, installer, and bootstrap.
 Plan first:
 
 ```sh
-./revival pin install --serial SERIAL --release-dir DIR
+./revival pin install --serial SERIAL
 ```
 
 Then perform the same exact plan:
 
 ```sh
-./revival pin install --serial SERIAL --release-dir DIR --confirm
+./revival pin install --serial SERIAL --confirm
 ```
 
 The installer rechecks the serial, product, signatures, versions, free space,

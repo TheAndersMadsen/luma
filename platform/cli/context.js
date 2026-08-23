@@ -19,7 +19,6 @@ const PROJECT = 'ai-pin-revival';
 const ENV_EXAMPLE = path.join(ROOT, '.env.example');
 const COMPOSE_BASE = path.join(ROOT, 'compose.yaml');
 const COMPOSE_DEVELOPMENT = path.join(ROOT, 'platform', 'compose', 'development.yaml');
-const PIN_RELEASE_TOOL = path.join(ROOT, 'platform', 'deploy', 'pin', 'release.mjs');
 const PIN_RELEASE_BUILD_TOOL = path.join(ROOT, 'platform', 'deploy', 'pin', 'build.mjs');
 const PIN_RELEASE_SHIP_TOOL = path.join(ROOT, 'platform', 'deploy', 'pin', 'ship.mjs');
 const PIN_INSTALL_TOOL = path.join(ROOT, 'platform', 'deploy', 'pin', 'install.mjs');
@@ -1016,7 +1015,6 @@ module.exports = {
   PROJECT,
   COMPOSE_BASE,
   COMPOSE_DEVELOPMENT,
-  PIN_RELEASE_TOOL,
   PIN_RELEASE_BUILD_TOOL,
   PIN_RELEASE_SHIP_TOOL,
   PIN_INSTALL_TOOL,

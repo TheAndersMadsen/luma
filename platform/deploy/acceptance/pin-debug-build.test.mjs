@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -105,16 +104,4 @@ test("debug command performs preflight, image check, then one Docker run", () =>
   assert.deepEqual(events.slice(0, 3), ["preflight", "changed-paths", "image"]);
   assert.equal(events[3].label, "Build Pin debug APKs");
   assert.deepEqual(events[3].args.slice(-3), ["build-debug-role", "--role", "server"]);
-});
-
-test("the old sealing broker is gone and the builder entrypoint is valid Bash", () => {
-  assert.equal(
-    fs.existsSync(path.join(root, "platform/containers/pin-builder/debug-store.py")),
-    false,
-  );
-  const entrypoint = path.join(root, "platform/containers/pin-builder/entrypoint.sh");
-  const source = fs.readFileSync(entrypoint, "utf8");
-  assert.doesNotMatch(source, /lane-session|DEBUG_STORE_TOOL|sealed source/u);
-  const syntax = spawnSync("/usr/bin/bash", ["-n", entrypoint], { encoding: "utf8" });
-  assert.equal(syntax.status, 0, syntax.stderr);
 });

@@ -253,58 +253,6 @@ function deriveConnect(usb: PinSetupUsbFacts): DraftStep {
   };
 }
 
-function deriveInspect(facts: PinSetupFacts): DraftStep {
-  const { usb, install } = facts;
-
-  if (!usb.connected) {
-    return {
-      status: "blocked",
-      summary: "Nothing has been read from a Pin yet.",
-      next: "Connect a Pin first — every reading below comes over that one USB session.",
-    };
-  }
-
-  if (install.state === "checking") {
-    return { status: "todo", summary: "Reading the Pin's installed packages…", next: null };
-  }
-
-  if (install.state === "failed") {
-    return {
-      status: "attention",
-      summary: install.detail
-        ? `The Pin could not be inspected: ${install.detail}`
-        : "The Pin could not be inspected.",
-      next: "Check the cable and try again. A device that answers ADB but not package queries is usually still booting.",
-    };
-  }
-
-  if (install.state === "read") {
-    if (install.deviceLocked === true) {
-      return {
-        status: "attention",
-        summary:
-          "The Pin answered, but its credential-encrypted storage is locked, so nothing can be installed.",
-        next: "Unlock the device, then read it again.",
-      };
-    }
-    return {
-      status: "done",
-      summary: `Read: ${install.rolesInstalled} of ${install.rolesTotal} Revival packages are installed${
-        install.conflicts > 0
-          ? `, and ${install.conflicts} known conflicting package${install.conflicts === 1 ? "" : "s"} ${install.conflicts === 1 ? "is" : "are"} present`
-          : ""
-      }.`,
-      next: null,
-    };
-  }
-
-  return {
-    status: "todo",
-    summary: "This Pin has not been read yet.",
-    next: "Read the device to see which Revival packages it already has.",
-  };
-}
-
 function deriveRelease(release: PinSetupReleaseFacts): DraftStep {
   switch (release.availability) {
     case "published":
@@ -326,9 +274,9 @@ function deriveRelease(release: PinSetupReleaseFacts): DraftStep {
         status: "manual",
         summary:
           "Center has no published release, so it cannot tell whether a signed release was built on an operator host.",
-        next: "Build a signed, immutable release on the operator host, or inspect the existing local release before continuing.",
+        next: "Build the signed release on the operator host, then publish it to Center.",
         manualNote:
-          "A browser cannot inspect the operator host's release store. The command below is the canonical build entry point and will explain its required version inputs.",
+          "A browser cannot build the release. The command below shows the required version inputs.",
       };
     case "unreadable":
       return {
@@ -336,7 +284,7 @@ function deriveRelease(release: PinSetupReleaseFacts): DraftStep {
         summary: release.detail
           ? `Center could not use the published release as build evidence: ${release.detail}`
           : "Center could not verify the published release as evidence of a completed build.",
-        next: "Inspect the release on the operator host. A manifest that does not verify is never installation evidence.",
+        next: "Build and publish a valid release again.",
       };
     default:
       return {
@@ -718,7 +666,6 @@ const DERIVATIONS: Readonly<
   Record<PinSetupStepId, (facts: PinSetupFacts) => DraftStep>
 > = Object.freeze({
   connect: (facts) => deriveConnect(facts.usb),
-  inspect: deriveInspect,
   release: (facts) => deriveRelease(facts.release),
   ship: (facts) => deriveShip(facts.release),
   install: deriveInstall,

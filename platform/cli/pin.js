@@ -6,7 +6,7 @@
 const fs = require('node:fs');
 
 const {
-  PIN_RELEASE_TOOL, PIN_RELEASE_BUILD_TOOL, PIN_RELEASE_SHIP_TOOL, PIN_INSTALL_TOOL, PIN_DOCTOR_TOOL,
+  PIN_RELEASE_BUILD_TOOL, PIN_RELEASE_SHIP_TOOL, PIN_INSTALL_TOOL, PIN_DOCTOR_TOOL,
   PIN_ACTIVATION_TOOL, PIN_NETWORK_TOOL, ENV_FILE, fail, operatorEnvironment, parseEnvFile, resolveTool, run,
 } = require('./context');
 const { pinContributorCheck } = require('./gates');
@@ -29,8 +29,8 @@ function pinCommand(args) {
   }
   if (subcommand === 'release') {
     const operation = args[0];
-    if (!operation || !['help', '--help', '-h', 'build', 'inspect', 'verify', 'plan', 'ship'].includes(operation)) {
-      fail('usage: ./revival pin release build|inspect|verify|plan|ship ...', 64);
+    if (!operation || !['build', 'ship'].includes(operation)) {
+      fail('usage: ./revival pin release build|ship ...', 64);
     }
     if (operation === 'build') run(resolveTool('node'), [PIN_RELEASE_BUILD_TOOL, ...args]);
     // `ship` is the only Pin subcommand that writes outside this machine, and
@@ -39,9 +39,6 @@ function pinCommand(args) {
       const confirmations = args.filter((argument) => argument === '--confirm').length;
       if (confirmations > 1) fail('pin release ship accepts exactly one literal --confirm', 64);
       run(resolveTool('node'), [PIN_RELEASE_SHIP_TOOL, ...args]);
-      return;
-    } else {
-      run(resolveTool('node'), [PIN_RELEASE_TOOL, ...args]);
       return;
     }
     return null;
@@ -69,7 +66,7 @@ function pinCommand(args) {
     return null;
   }
   fail(
-    'usage: ./revival pin doctor | check | build-debug --role ROLE [--role ROLE] | build-debug --changed [--base REF] | release build|inspect|verify|plan|ship ... |\n' +
+    'usage: ./revival pin doctor | check | build-debug --role ROLE [--role ROLE] | build-debug --changed [--base REF] | release build|ship ... |\n' +
     '              install [--confirm] [--serial SERIAL] | activate ... | network ...\n' +
     '       `install` without --confirm only plans and leaves the device untouched;\n' +
     '       `install --confirm` modifies the connected Pin. See `./revival pin install --help`.',

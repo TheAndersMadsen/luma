@@ -243,49 +243,9 @@
   overflow-wrap: anywhere;
 }
 
-/* --------------------------------------------------------- package table -- */
-
-.packages {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-top: 4px;
-}
-
-.package {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 16px;
-  font-size: 13px;
-  line-height: 1.5;
-}
-
-.packageName {
-  color: var(--hu-colors-apollo-base);
-}
-
-.packageValue {
-  color: var(--hu-colors-crater-base);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  text-align: right;
-  overflow-wrap: anywhere;
-}
-
-.packageValue[data-problem="true"] {
-  color: var(--hu-status-warning);
-}
-
 @media (max-width: 700px) {
   .step {
     grid-template-columns: minmax(0, 1fr);
     gap: 10px;
-  }
-  .package {
-    flex-direction: column;
-    gap: 2px;
-  }
-  .packageValue {
-    text-align: left;
   }
 }

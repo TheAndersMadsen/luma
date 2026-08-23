@@ -16,20 +16,10 @@ export const PIN_SETUP_JOURNEY = {
       "documentationAnchor": "docs/operations.md#onboarding-a-pin"
     },
     {
-      "id": "inspect",
-      "title": "Inspect device and release state",
-      "commandId": "pin.release.inspect",
-      "command": "./revival pin release inspect",
-      "centerRoute": "/settings/pin/install",
-      "surface": "cli",
-      "verification": "cli",
-      "documentationAnchor": "docs/operations.md#onboarding-a-pin"
-    },
-    {
       "id": "release",
-      "title": "Verify the signed Pin release",
-      "commandId": "pin.release.verify",
-      "command": "./revival pin release verify",
+      "title": "Build and verify the signed Pin release",
+      "commandId": "pin.release.build",
+      "command": "./revival pin release build",
       "centerRoute": "/settings/pin/install",
       "surface": "cli",
       "verification": "cli",

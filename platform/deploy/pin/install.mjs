@@ -57,9 +57,8 @@ const CENTER_SRC_URL = pathToFileURL(join(SOURCE_ROOT, "center", "src", "/")).hr
  *
  * Center is a Next codebase: it writes extensionless relative imports and the
  * `@/` alias, and Node's ESM resolver does neither. `center/verify/` solves the
- * same problem for its own tests with an out-of-thread `register()` hook. The
- * hook below uses that Node 22.14-compatible API and is carried as immutable
- * data from this already-loaded file, so it adds no mutable loader pathname.
+ * same problem for its own tests with an out-of-thread `register()` hook. This
+ * CLI uses the same Node 22.14-compatible API.
  * The empty candidate is tried FIRST, so every specifier Node already resolves
  * — builtins, ./release.mjs, the stubs below — resolves exactly as it would
  * without the hook, and a genuinely missing module still fails as missing.
@@ -267,9 +266,8 @@ async function readStoreFile(path, label) {
 /**
  * Read and validate the store BEFORE anything touches the Pin.
  *
- * Every check here is release.mjs's — the same parsers `pin release
- * build|verify` use — so a store this tool accepts is a store that tool would
- * accept: canonical manifest bytes, a releaseId derived from the artifact
+ * Every check here uses release.mjs, the same contract used by `pin release
+ * build`: canonical manifest bytes, a releaseId derived from the artifact
  * metadata rather than asserted by it, fixed package identity per role, and a
  * strictly monotonic history whose recorded manifest digest must match the
  * manifest actually on disk.

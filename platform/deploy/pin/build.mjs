@@ -23,7 +23,6 @@ import {
   PIN_RELEASE_PACKAGE_BY_ROLE,
   canonicalPinReleaseManifestJson,
   createPinReleaseManifest,
-  parseCanonicalPinReleaseManifestDocument,
   parsePinReleaseHistory,
   parsePinReleaseJson,
   parsePinReleaseReceiptBundle,

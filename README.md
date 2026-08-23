@@ -139,18 +139,17 @@ material and can modify a physical device.
 ./revival pin doctor --serial SERIAL
 ./revival pin check
 ./revival pin build-debug --role server
-./revival pin release inspect --release-dir DIR
-./revival pin release verify --release-dir DIR
-./revival pin install --serial SERIAL --release-dir DIR
+./revival pin release build --version YYYY-MM-DD.N --version-code INTEGER
+./revival pin release ship --confirm
+./revival pin install --serial SERIAL
 ```
 
 An install is a plan until `--confirm` is supplied. The installer rechecks the
 exact serial, APK set, signatures, versions, and installed Hook path. It refuses
 unsafe partial updates.
 
-Signed releases are built by
-[`.github/workflows/pin-release.yml`](.github/workflows/pin-release.yml) as one
-five-APK set. The workflow never runs ADB or touches a Pin.
+The pinned builder signs and verifies all five APK roles as one set. Building
+and shipping never run ADB or touch a Pin.
 
 ## Documentation
 

@@ -154,15 +154,19 @@ test("Cosmos convenience targets delegate to the root Revival CLI", () => {
   assert.doesNotMatch(makefile, /cd \.\.\/\.\. && \.\/revival/);
 });
 
-test("Pin commands expose host-only build/publish and read-only planning without device mutation", () => {
+test("Pin release exposes only build and plan-by-default shipping", () => {
   const { temporary, env } = isolatedOperator();
   try {
     const releaseHelp = invoke(env, "pin", "release", "--help");
     assert.equal(releaseHelp.status, 0, releaseHelp.stderr);
-    assert.match(releaseHelp.stdout, /Pin release host contract \(read-only\)/);
-    assert.match(releaseHelp.stdout, /inspect/);
-    assert.match(releaseHelp.stdout, /verify/);
-    assert.match(releaseHelp.stdout, /plan/);
+    assert.match(releaseHelp.stdout, /Build writes the local release store/);
+    assert.match(releaseHelp.stdout, /build/);
+    assert.match(releaseHelp.stdout, /ship/);
+    assert.doesNotMatch(releaseHelp.stdout, /\n  (?:inspect|verify|plan)\s/);
+
+    const literalReleaseHelp = invoke(env, "pin", "release", "help");
+    assert.equal(literalReleaseHelp.status, 0, literalReleaseHelp.stderr);
+    assert.equal(literalReleaseHelp.stdout, releaseHelp.stdout);
 
     const buildHelp = invoke(env, "pin", "release", "build", "--help");
     assert.equal(buildHelp.status, 0, buildHelp.stderr);
@@ -172,7 +176,7 @@ test("Pin commands expose host-only build/publish and read-only planning without
     for (const operation of ["install", "flash", "reset", "provision"]) {
       const rejected = invoke(env, "pin", "release", operation);
       assert.equal(rejected.status, 64, `${operation}: ${rejected.stderr}`);
-      assert.match(rejected.stderr, /build\|inspect\|verify\|plan/);
+      assert.match(rejected.stderr, /build\|ship/);
     }
 
     const help = invoke(env, "--help");
