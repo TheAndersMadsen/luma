@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "contractId": "operator-setup",
-  "contractVersion": "2.0.0",
+  "contractVersion": "2.1.0",
   "mutationPolicies": {
     "read-only": {
       "confirmationRequired": false,
@@ -1044,6 +1044,36 @@
       "name": "COSMOS_CAPTURE_SHARE_BASE_URL",
       "group": "production",
       "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
+      "name": "COSMOS_ONBOARDING_ENDPOINT",
+      "group": "production",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
+      "name": "COSMOS_CAPTURE_UPLOAD_BASE_URL",
+      "group": "production",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
+      "name": "COSMOS_PG_PASSWORD",
+      "group": "production",
+      "sensitivity": "secret",
+      "home": "runtime.env"
+    },
+    {
+      "name": "COSMOS_DATABASE_URL",
+      "group": "production",
+      "sensitivity": "secret",
+      "home": "runtime.env"
+    },
+    {
+      "name": "GRAFANA_ADMIN_PASSWORD",
+      "group": "production",
+      "sensitivity": "secret",
       "home": "runtime.env"
     },
     {

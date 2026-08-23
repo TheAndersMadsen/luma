@@ -198,7 +198,12 @@ function atomicWrite(file, contents, mode = 0o600) {
 function fillBlankGeneratedSecrets(contents) {
   let updated = contents;
   let count = 0;
+  const configuredDatabasePassword = /^COSMOS_PG_PASSWORD=(.*)$/m.exec(contents)?.[1].trim();
+  const databasePassword = configuredDatabasePassword || crypto.randomBytes(32).toString('hex');
   const generated = [
+    ['COSMOS_PG_PASSWORD', () => databasePassword],
+    ['COSMOS_DATABASE_URL', () => `postgresql://cosmos:${encodeURIComponent(databasePassword)}@postgres:5432/cosmos`],
+    ['GRAFANA_ADMIN_PASSWORD', () => crypto.randomBytes(32).toString('hex')],
     ['AUTH_SESSION_SECRET', () => crypto.randomBytes(32).toString('hex')],
     ['COSMOS_SHARE_TOKEN_SECRET', () => crypto.randomBytes(32).toString('hex')],
     ['COSMOS_CENTER_PROJECTION_TOKEN', () => crypto.randomBytes(32).toString('hex')],

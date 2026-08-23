@@ -132,7 +132,20 @@ test("a clean isolated-XDG setup is safe, private, and idempotent", () => {
     assert.equal(first.status, 0, first.stderr);
     const runtime = join(xdgConfig, "ai-pin-revival", "secrets", "runtime.env");
     const firstRuntime = readFileSync(runtime);
-    assert.match(firstRuntime.toString("utf8"), /^SEARXNG_SECRET=[0-9a-f]{64}$/m);
+    const runtimeText = firstRuntime.toString("utf8");
+    assert.match(runtimeText, /^SEARXNG_SECRET=[0-9a-f]{64}$/m);
+    const databasePassword = /^COSMOS_PG_PASSWORD=([0-9a-f]{64})$/m.exec(runtimeText)?.[1];
+    assert.ok(databasePassword, "init must create the production database password");
+    assert.match(runtimeText, /^GRAFANA_ADMIN_PASSWORD=[0-9a-f]{64}$/m);
+    assert.match(
+      runtimeText,
+      new RegExp(`^COSMOS_DATABASE_URL=postgresql://cosmos:${databasePassword}@postgres:5432/cosmos$`, "m"),
+    );
+    assert.match(
+      runtimeText,
+      /^COSMOS_ONBOARDING_ENDPOINT=https:\/\/onboarding\.cosmos\.humane\.cloud$/m,
+    );
+    assert.match(runtimeText, /^COSMOS_CAPTURE_UPLOAD_BASE_URL=$/m);
 
     const second = invoke(environment, "init");
     assert.equal(second.status, 0, second.stderr);

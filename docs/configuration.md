@@ -52,3 +52,18 @@ For production, validate first:
 ./revival config check
 ./revival doctor production
 ```
+
+`./revival init` generates `COSMOS_PG_PASSWORD`, a matching in-stack
+`COSMOS_DATABASE_URL`, and an independent `GRAFANA_ADMIN_PASSWORD`. It also
+uses the onboarding endpoint built into Pin activation. Nonblank values are
+preserved, so an external database can supply both database settings instead.
+
+Set `COSMOS_CAPTURE_UPLOAD_BASE_URL` explicitly before production validation:
+
+```sh
+./revival config set COSMOS_CAPTURE_UPLOAD_BASE_URL https://uploads.example.com
+```
+
+That origin must route `/capture/*` to the loopback-published ai-bus HTTP
+service. It is intentionally not inferred from Center or the mTLS gRPC edge,
+which do not expose that route.
