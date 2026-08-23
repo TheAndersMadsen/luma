@@ -42,10 +42,7 @@ import { parseArgs } from "node:util";
 
 import {
   PinReleaseContractError,
-  canonicalPinReleaseManifestJson,
   parseCanonicalPinReleaseManifestDocument,
-  parsePinReleaseHistory,
-  parsePinReleaseJson,
 } from "./release.mjs";
 
 const SELF_PATH = fileURLToPath(import.meta.url);
@@ -214,7 +211,6 @@ const {
   INSTALL_OPERATION_PHASES,
   InstallPlanningError,
   createInstallPlan,
-  createMemoryPinReleaseHistory,
   inspectInstallState,
   isPinReleaseError,
   resolveInstallTarget,
@@ -244,10 +240,6 @@ async function sha256File(path) {
   return digest.digest("hex");
 }
 
-function sha256Text(text) {
-  return createHash("sha256").update(text).digest("hex");
-}
-
 class InstallError extends Error {
   constructor(message) {
     super(message);
@@ -269,8 +261,7 @@ async function readStoreFile(path, label) {
  * Every check here uses release.mjs, the same contract used by `pin release
  * build`: canonical manifest bytes, a releaseId derived from the artifact
  * metadata rather than asserted by it, fixed package identity per role, and a
- * strictly monotonic history whose recorded manifest digest must match the
- * manifest actually on disk.
+ * immutable manifest whose bytes must match the atomic current pointer.
  */
 export async function readRelease(storeRoot, requestedReleaseId) {
   const currentSource = await readStoreFile(join(storeRoot, "current.json"), "current release pointer");
@@ -291,29 +282,11 @@ export async function readRelease(storeRoot, requestedReleaseId) {
     );
   }
 
-  const history = parsePinReleaseHistory(
-    parsePinReleaseJson(
-      await readStoreFile(join(storeRoot, "history.json"), "release history"),
-      "release history",
-    ),
-  );
-  const historyEntry = history.releases.find((entry) => entry.releaseId === releaseId);
-  if (!historyEntry) {
-    throw new InstallError(`release ${releaseId} is absent from the store's release history`);
-  }
-  const manifestSha256 = sha256Text(canonicalPinReleaseManifestJson(manifest));
-  if (historyEntry.manifestSha256 !== manifestSha256) {
-    throw new InstallError(
-      `release ${releaseId} manifest digest ${manifestSha256} does not match the ${historyEntry.manifestSha256} recorded when it was published`,
-    );
-  }
-
   return Object.freeze({
     releaseId,
     releaseDir,
     manifest,
     manifestSource,
-    historyEntry,
     isCurrent: releaseId === current.releaseId,
     currentReleaseId: current.releaseId,
   });
@@ -1069,7 +1042,7 @@ async function main(argv) {
   section("Release");
   const release = await readRelease(storeRoot, values.release);
   line(`  store            ${storeRoot}`);
-  line(`  release          ${release.manifest.version} (versionCode ${release.historyEntry.versionCode})`);
+  line(`  release          ${release.manifest.version} (versionCode ${release.manifest.artifacts[0].versionCode})`);
   line(`  releaseId        ${release.releaseId}${release.isCurrent ? " (current)" : ""}`);
   if (!release.isCurrent) {
     line(`  note             the store's current release is ${release.currentReleaseId}`);
@@ -1085,13 +1058,6 @@ async function main(argv) {
     fetchImpl: storeFetch,
     manifestUrl: STORE_MANIFEST_URL,
     baseUrl: `${STORE_ORIGIN}/`,
-    // The browser keeps a persistent history so a remote service cannot walk a
-    // wearer back to an older release or equivocate about one releaseId. Here
-    // the store IS the trust root and its own history.json has already been
-    // checked for exactly that, monotonically and against the manifest digest,
-    // so a second per-run history would only re-answer a question already
-    // answered from disk.
-    history: createMemoryPinReleaseHistory(),
   });
 
   section("Device");

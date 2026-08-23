@@ -2,12 +2,11 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://ai-pin-revival.invalid/contracts/pin-releases.schema.json",
   "title": "Ai Pin release contracts",
-  "description": "The Setup v1 manifest plus host-side inspection, history, installed-state, verification, and plan descriptors.",
+  "description": "The Setup v1 manifest plus host-side receipt, installed-state, verification, and plan descriptors.",
   "oneOf": [
     { "$ref": "#/$defs/setupManifest" },
     { "$ref": "#/$defs/receiptBundle" },
     { "$ref": "#/$defs/installedState" },
-    { "$ref": "#/$defs/releaseHistory" },
     { "$ref": "#/$defs/verification" },
     { "$ref": "#/$defs/installPlan" }
   ],
@@ -119,7 +118,7 @@
         }
       },
       "x-runtime-invariants": [
-        "The five roles are unique and canonicalized in installer, bootstrap, hook, server, hook-injector order.",
+        "The five roles and APK names are unique and canonicalized in installer, bootstrap, hook, server, hook-injector order.",
         "All versionCode values are identical.",
         "releaseId is SHA-256 of compact JSON containing schemaVersion, version, and ordered role/name/package/versionCode/size/sha256 artifact identity; releaseId and URLs are excluded.",
         "Each URL is exactly ./{releaseId}/{role}.apk.",
@@ -173,7 +172,7 @@
         }
       },
       "x-runtime-invariants": [
-        "All five roles and paths are unique.",
+        "All five roles, paths, and APK names are unique.",
         "Every name equals the basename of path.",
         "All versionName and versionCode values are identical."
       ]
@@ -212,7 +211,7 @@
         "currentRelease": {
           "oneOf": [
             { "type": "null" },
-            { "$ref": "#/$defs/historyEntry" }
+            { "$ref": "#/$defs/releaseIdentity" }
           ]
         },
         "artifacts": {
@@ -241,7 +240,7 @@
           },
           "then": {
             "properties": {
-              "currentRelease": { "$ref": "#/$defs/historyEntry" },
+              "currentRelease": { "$ref": "#/$defs/releaseIdentity" },
               "artifacts": { "minItems": 4, "maxItems": 5 }
             }
           }
@@ -253,32 +252,15 @@
         "atomic has all four steady roles, optional bootstrap, a non-null exact currentRelease identity, and every artifact versionName/versionCode equals that identity."
       ]
     },
-    "historyEntry": {
+    "releaseIdentity": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["releaseId", "version", "versionCode", "manifestSha256"],
+      "required": ["releaseId", "version", "versionCode"],
       "properties": {
         "releaseId": { "$ref": "#/$defs/sha256" },
         "version": { "$ref": "#/$defs/version" },
-        "versionCode": { "$ref": "#/$defs/versionCode" },
-        "manifestSha256": { "$ref": "#/$defs/sha256" }
+        "versionCode": { "$ref": "#/$defs/versionCode" }
       }
-    },
-    "releaseHistory": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["schemaVersion", "releases"],
-      "properties": {
-        "schemaVersion": { "const": 1 },
-        "releases": {
-          "type": "array",
-          "items": { "$ref": "#/$defs/historyEntry" }
-        }
-      },
-      "x-runtime-invariants": [
-        "releaseId values are unique.",
-        "version and versionCode both increase strictly."
-      ]
     },
     "verifiedArtifact": {
       "type": "object",
@@ -300,8 +282,7 @@
         "versionCode",
         "signerSha256",
         "manifestSha256",
-        "artifacts",
-        "historyEntry"
+        "artifacts"
       ],
       "properties": {
         "schemaVersion": { "const": 1 },
@@ -315,8 +296,7 @@
           "minItems": 5,
           "maxItems": 5,
           "items": { "$ref": "#/$defs/verifiedArtifact" }
-        },
-        "historyEntry": { "$ref": "#/$defs/historyEntry" }
+        }
       }
     },
     "planOperation": {

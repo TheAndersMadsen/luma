@@ -25,14 +25,6 @@
  *   origin over HTTPS, with no fragment and no credentials. These checks run
  *   *before* the fetch, so a mis-configured manifest URL never becomes a request.
  *
- *   Monotonicity (assertMonotonicRelease) — the same immutable releaseId must
- *   always describe the same bytes, and a new releaseId must advance both the
- *   version and the versionCode. This is the anti-rollback rule: without it, a
- *   server that once shipped a fixed build can re-serve the vulnerable one. The
- *   history key deliberately ignores the query string, so cache-busting cannot
- *   be used to reset the floor, and a persisted history that cannot be read is
- *   treated as an attack rather than as "no history yet".
- *
  *   Asset integrity (downloadInstallTargetAssets) — declared length, received
  *   size, and SHA-256 must all agree with the manifest before any blob is handed
  *   to the installer. These three are the last check before bytes reach the Pin.
@@ -49,8 +41,6 @@ import { isDeepStrictEqual } from "node:util";
 const {
   DEFAULT_PIN_RELEASE_MANIFEST_URL,
   PinReleaseError,
-  createMemoryPinReleaseHistory,
-  createPersistentPinReleaseHistory,
   fetchPinReleaseManifest,
   getPinReleaseManifestUrl,
   parsePinReleaseManifest,
@@ -80,7 +70,6 @@ const { createResolvedInstallTargetFixture } = await import(
 delete process.env.NEXT_PUBLIC_PIN_RELEASE_MANIFEST_URL;
 
 const RELEASE_ID = "a".repeat(64);
-const NEXT_RELEASE_ID = "b".repeat(64);
 const SHA256 = "c".repeat(64);
 const MANIFEST_URL = "https://center.example.test/api/pin/releases/current";
 
@@ -258,8 +247,7 @@ test("parsePinReleaseManifest rejects unknown fields and unsupported schema vers
 });
 
 test("parsePinReleaseManifest rejects bad release IDs and non-monotonic version syntax", () => {
-  // The releaseId is the identity the anti-rollback history is keyed on; a
-  // human-readable label like "mutable" is exactly the thing it must not be.
+  // The releaseId is the immutable identity used by every artifact URL.
   assert.throws(
     () => parsePinReleaseManifest({ ...createManifest(), releaseId: "mutable" }, MANIFEST_URL),
     PinReleaseError,
@@ -298,6 +286,12 @@ test("parsePinReleaseManifest rejects inconsistent versionCodes within one atomi
   assert.throws(() => parsePinReleaseManifest(manifest, MANIFEST_URL), PinReleaseError);
 });
 
+test("parsePinReleaseManifest requires five distinct APK names", () => {
+  const manifest = createManifest();
+  manifest.artifacts[1].name = manifest.artifacts[0].name;
+  assert.throws(() => parsePinReleaseManifest(manifest, MANIFEST_URL), PinReleaseError);
+});
+
 test("parsePinReleaseManifest rejects insecure absolute and cross-origin artifact URLs", () => {
   // Plaintext: the APK is about to be installed with elevated privileges.
   const insecure = createManifest();
@@ -319,7 +313,7 @@ test("parsePinReleaseManifest rejects insecure absolute and cross-origin artifac
 
 /*
  * ---------------------------------------------------------------------------
- * fetchPinReleaseManifest — provenance, transport failure, and the rollback floor
+ * fetchPinReleaseManifest — provenance and transport failure
  * ---------------------------------------------------------------------------
  */
 
@@ -346,7 +340,6 @@ test("fetchPinReleaseManifest fetches the configured endpoint without losing glo
   try {
     const result = await fetchPinReleaseManifest({
       baseUrl: "https://center.example.test/setup",
-      history: createMemoryPinReleaseHistory(),
     });
     assert.equal(result.manifest.version, "2026-08-09.0");
     assert.deepEqual(calls, ["/api/pin/releases/current"]);
@@ -365,7 +358,6 @@ test("fetchPinReleaseManifest rejects insecure absolute manifest URLs before fet
     fetchPinReleaseManifest({
       manifestUrl: "http://center.example.test/api/pin/releases/current",
       fetchImpl,
-      history: createMemoryPinReleaseHistory(),
     }),
     { code: "release-manifest-untrusted" },
   );
@@ -383,7 +375,6 @@ test("fetchPinReleaseManifest rejects cross-origin and fragment manifest URLs be
       manifestUrl: "https://attacker.example.test/api/pin/releases/current",
       baseUrl,
       fetchImpl,
-      history: createMemoryPinReleaseHistory(),
     }),
     { code: "release-manifest-untrusted" },
   );
@@ -393,7 +384,6 @@ test("fetchPinReleaseManifest rejects cross-origin and fragment manifest URLs be
       manifestUrl: "/api/pin/releases/current#unexpected",
       baseUrl,
       fetchImpl,
-      history: createMemoryPinReleaseHistory(),
     }),
     { code: "release-manifest-untrusted" },
   );
@@ -408,7 +398,7 @@ test("fetchPinReleaseManifest rejects a manifest response that landed on another
   // service worker or a proxy can hand back a response from anywhere. A
   // manifest is a list of APKs to install with system privileges, so it may
   // only ever be believed from the origin Setup itself is served from.
-  const common = { baseUrl: "https://center.example.test/", history: createMemoryPinReleaseHistory() };
+  const common = { baseUrl: "https://center.example.test/" };
 
   await rejectsWith(
     fetchPinReleaseManifest({
@@ -444,7 +434,6 @@ test("fetchPinReleaseManifest maps network and HTTP failures to manifest fetch e
     fetchPinReleaseManifest({
       fetchImpl: networkFetch,
       baseUrl: "https://center.example.test/",
-      history: createMemoryPinReleaseHistory(),
     }),
     { code: "release-manifest-fetch-failed" },
   );
@@ -454,129 +443,8 @@ test("fetchPinReleaseManifest maps network and HTTP failures to manifest fetch e
     fetchPinReleaseManifest({
       fetchImpl: httpFetch,
       baseUrl: "https://center.example.test/",
-      history: createMemoryPinReleaseHistory(),
     }),
     { code: "release-manifest-fetch-failed", status: 503 },
-  );
-});
-
-test("fetchPinReleaseManifest rejects releaseId equivocation and version or versionCode regression", async () => {
-  const history = createMemoryPinReleaseHistory();
-  let payload = createManifest();
-  const fetchImpl = async () => response(payload);
-  const options = { fetchImpl, baseUrl: "https://center.example.test/", history };
-
-  // Same release, served twice, byte-identical: accepted both times.
-  await fetchPinReleaseManifest(options);
-  const repeat = await fetchPinReleaseManifest(options);
-  assert.equal(repeat.manifest.releaseId, RELEASE_ID);
-
-  // Equivocation: one immutable releaseId describing two different documents.
-  // The changed field is only a filename, which is the point — any difference at
-  // all means the identity was reused, so nothing about it can be trusted.
-  payload = createManifest();
-  payload.artifacts[0].name = "Changed-Installer.apk";
-  await rejectsWith(fetchPinReleaseManifest(options), {
-    code: "release-manifest-equivocation",
-  });
-
-  // Rollback: a new releaseId containing an older version and versionCode is the
-  // server re-offering a build that a fix has already superseded.
-  payload = createManifest({
-    releaseId: NEXT_RELEASE_ID,
-    version: "2026-08-08.9",
-    versionCode: 202_608_089,
-  });
-  await rejectsWith(fetchPinReleaseManifest(options), {
-    code: "release-manifest-version-regression",
-  });
-
-  // Half a rollback is still a rollback: the version string advances while the
-  // versionCode — the number Android itself compares — stands still.
-  payload = createManifest({
-    releaseId: NEXT_RELEASE_ID,
-    version: "2026-08-09.1",
-    versionCode: 202_608_090,
-  });
-  await rejectsWith(fetchPinReleaseManifest(options), {
-    code: "release-manifest-version-regression",
-  });
-});
-
-test("fetchPinReleaseManifest accepts a new release only when both version dimensions increase", async () => {
-  // The counterpart to the case above: the floor must not be so strict that a
-  // genuine upgrade cannot land, or the guard would be removed the first time it
-  // blocked a real release.
-  const history = createMemoryPinReleaseHistory();
-  let payload = createManifest();
-  const fetchImpl = async () => response(payload);
-  const options = { fetchImpl, baseUrl: "https://center.example.test/", history };
-
-  await fetchPinReleaseManifest(options);
-  payload = createManifest({
-    releaseId: NEXT_RELEASE_ID,
-    version: "2026-08-09.1",
-    versionCode: 202_608_091,
-  });
-  const upgraded = await fetchPinReleaseManifest(options);
-  assert.equal(upgraded.manifest.releaseId, NEXT_RELEASE_ID);
-  assert.equal(upgraded.manifest.version, "2026-08-09.1");
-});
-
-test("fetchPinReleaseManifest keeps the monotonic floor across cache-busting query parameters", async () => {
-  // The history key is origin + pathname. If it ever included the query string,
-  // appending `?cache=<anything>` would mint a fresh, empty history and hand back
-  // the rollback that the previous test just blocked.
-  const history = createMemoryPinReleaseHistory();
-  let payload = createManifest({
-    releaseId: NEXT_RELEASE_ID,
-    version: "2026-08-09.1",
-    versionCode: 202_608_091,
-  });
-  const fetchImpl = async () => response(payload);
-  const common = { fetchImpl, baseUrl: "https://center.example.test/setup/", history };
-
-  await fetchPinReleaseManifest({
-    ...common,
-    manifestUrl: "/api/pin/releases/current?cache=one",
-  });
-  payload = createManifest();
-
-  await rejectsWith(
-    fetchPinReleaseManifest({
-      ...common,
-      manifestUrl: "/api/pin/releases/current?cache=two",
-    }),
-    { code: "release-manifest-version-regression" },
-  );
-});
-
-test("fetchPinReleaseManifest fails closed when persistent release history is unavailable or corrupt", async () => {
-  // No storage is not "no history yet". A browser with storage disabled — or an
-  // attacker who cleared it — must not be able to install anything, because a
-  // client that cannot remember what it accepted cannot detect a rollback.
-  const fetchImpl = async () => response(createManifest());
-  const common = { fetchImpl, baseUrl: "https://center.example.test/setup/" };
-
-  await rejectsWith(
-    fetchPinReleaseManifest({
-      ...common,
-      history: createPersistentPinReleaseHistory(() => null),
-    }),
-    { code: "release-manifest-untrusted" },
-  );
-
-  // Unparseable history is treated the same way, rather than being discarded and
-  // replaced — discarding it is precisely what an attacker would want.
-  await rejectsWith(
-    fetchPinReleaseManifest({
-      ...common,
-      history: createPersistentPinReleaseHistory(() => ({
-        getItem: () => "{not-json",
-        setItem: () => undefined,
-      })),
-    }),
-    { code: "release-manifest-untrusted" },
   );
 });
 
@@ -612,7 +480,6 @@ function resolveFixtureTarget() {
   return resolveInstallTarget({
     fetchImpl: async () => response(assetManifest()),
     baseUrl: "https://center.example.test/setup",
-    history: createMemoryPinReleaseHistory(),
   });
 }
 

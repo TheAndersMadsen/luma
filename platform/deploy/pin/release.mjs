@@ -53,13 +53,6 @@ const RECEIPT_FIELDS = Object.freeze([
   "sha256",
   "signerSha256",
 ]);
-const HISTORY_FIELDS = Object.freeze(["schemaVersion", "releases"]);
-const HISTORY_ENTRY_FIELDS = Object.freeze([
-  "releaseId",
-  "version",
-  "versionCode",
-  "manifestSha256",
-]);
 
 export class PinReleaseContractError extends Error {
   constructor(code, message) {
@@ -176,7 +169,7 @@ function parseInstallVersion(value, label = "version") {
   return Object.freeze({ value: version, dateKey: year * 10000 + month * 100 + day, increment });
 }
 
-function compareInstallVersions(left, right) {
+export function compareInstallVersions(left, right) {
   const a = parseInstallVersion(left, "left version");
   const b = parseInstallVersion(right, "right version");
   if (a.dateKey !== b.dateKey) return a.dateKey < b.dateKey ? -1 : 1;
@@ -234,7 +227,11 @@ function canonicalRoleOrder(artifacts, label) {
   for (const role of PIN_RELEASE_ARTIFACT_ROLES) {
     if (!byRole.has(role)) fail("partial-bundle", `${label} is missing role ${role}`);
   }
-  return Object.freeze(PIN_RELEASE_ARTIFACT_ROLES.map((role) => byRole.get(role)));
+  const ordered = PIN_RELEASE_ARTIFACT_ROLES.map((role) => byRole.get(role));
+  if (new Set(ordered.map((artifact) => artifact.name)).size !== ordered.length) {
+    fail("duplicate-name", `${label} must use five distinct APK names`);
+  }
+  return Object.freeze(ordered);
 }
 
 function releaseIdentityPayload(version, artifacts) {
@@ -400,69 +397,6 @@ export function parsePinReleaseReceiptBundle(value) {
   return Object.freeze({ schemaVersion: 1, artifacts });
 }
 
-export function parsePinReleaseHistory(value) {
-  assertExactFields(value, HISTORY_FIELDS, "release history");
-  if (value.schemaVersion !== PIN_RELEASE_SCHEMA_VERSION) fail("schema-version", "release history schemaVersion must be 1");
-  if (!Array.isArray(value.releases)) fail("invalid-shape", "release history releases must be an array");
-  const seen = new Set();
-  const releases = value.releases.map((entry, index) => {
-    assertExactFields(entry, HISTORY_ENTRY_FIELDS, `release history[${index}]`);
-    const releaseId = requiredSha256(entry.releaseId, `release history[${index}].releaseId`);
-    if (seen.has(releaseId)) fail("release-equivocation", `release history duplicates releaseId ${releaseId}`);
-    seen.add(releaseId);
-    return Object.freeze({
-      releaseId,
-      version: parseInstallVersion(entry.version, `release history[${index}].version`).value,
-      versionCode: requiredPositiveInteger(entry.versionCode, `release history[${index}].versionCode`, MAX_VERSION_CODE),
-      manifestSha256: requiredSha256(entry.manifestSha256, `release history[${index}].manifestSha256`),
-    });
-  });
-  for (let index = 1; index < releases.length; index += 1) {
-    if (
-      compareInstallVersions(releases[index].version, releases[index - 1].version) !== 1 ||
-      releases[index].versionCode <= releases[index - 1].versionCode
-    ) {
-      fail("version-regression", "release history is not strictly monotonic");
-    }
-  }
-  return Object.freeze({ schemaVersion: 1, releases: Object.freeze(releases) });
-}
-
-function assertAntiEquivocation(manifest, manifestSha256, historyValue) {
-  const versionCode = manifest.artifacts[0].versionCode;
-  const entry = Object.freeze({
-    releaseId: manifest.releaseId,
-    version: manifest.version,
-    versionCode,
-    manifestSha256,
-  });
-  if (historyValue === undefined || historyValue === null) return entry;
-  const history = parsePinReleaseHistory(historyValue);
-  const existingIndex = history.releases.findIndex((release) => release.releaseId === manifest.releaseId);
-  if (existingIndex >= 0) {
-    const existing = history.releases[existingIndex];
-    if (
-      existing.manifestSha256 !== manifestSha256 ||
-      existing.version !== manifest.version ||
-      existing.versionCode !== versionCode
-    ) {
-      fail("release-equivocation", "release history tuple changed while retaining the same releaseId");
-    }
-    if (existingIndex !== history.releases.length - 1) {
-      fail("version-regression", "an older accepted release cannot become current again");
-    }
-    return existing;
-  }
-  const previous = history.releases.at(-1);
-  if (
-    previous &&
-    (compareInstallVersions(manifest.version, previous.version) !== 1 || versionCode <= previous.versionCode)
-  ) {
-    fail("version-regression", "release version and versionCode must both increase monotonically");
-  }
-  return entry;
-}
-
 function compareReceiptToManifest(receipt, artifact, version, expectedSigner) {
   for (const field of ["role", "name", "package", "versionCode", "size", "sha256"]) {
     if (receipt[field] !== artifact[field]) fail("receipt-mismatch", `${artifact.role} receipt ${field} does not match manifest`);
@@ -471,7 +405,7 @@ function compareReceiptToManifest(receipt, artifact, version, expectedSigner) {
   if (receipt.signerSha256 !== expectedSigner) fail("signer-mismatch", `${artifact.role} receipt signer is not approved`);
 }
 
-export function verifyPinReleaseMetadata({ manifest: manifestValue, receipts: receiptValue, expectedSigner, history }) {
+export function verifyPinReleaseMetadata({ manifest: manifestValue, receipts: receiptValue, expectedSigner }) {
   const manifest = parsePinReleaseManifest(manifestValue);
   const receipts = parsePinReleaseReceiptBundle(receiptValue);
   const signerSha256 = requiredSha256(expectedSigner, "expected signer fingerprint");
@@ -484,6 +418,5 @@ export function verifyPinReleaseMetadata({ manifest: manifestValue, receipts: re
     );
   }
   const manifestSha256 = sha256(canonicalPinReleaseManifestJson(manifest));
-  const historyEntry = assertAntiEquivocation(manifest, manifestSha256, history);
-  return Object.freeze({ manifest, receipts, signerSha256, manifestSha256, historyEntry });
+  return Object.freeze({ manifest, receipts, signerSha256, manifestSha256 });
 }

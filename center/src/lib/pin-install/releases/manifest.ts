@@ -1,4 +1,4 @@
-import { compareInstallVersions, parseInstallVersion } from "../domain/versions";
+import { parseInstallVersion } from "../domain/versions";
 import { MANAGED_PACKAGES } from "../domain/managedPackages";
 
 export const DEFAULT_PIN_RELEASE_MANIFEST_URL = "/api/pin/releases/current";
@@ -43,18 +43,6 @@ export interface PinReleaseManifest {
   readonly artifacts: readonly PinReleaseArtifact[];
 }
 
-export interface AcceptedPinRelease {
-  readonly releaseId: string;
-  readonly version: string;
-  readonly versionCode: number;
-  readonly canonicalManifest: string;
-}
-
-export interface PinReleaseHistory {
-  read(channelKey: string): AcceptedPinRelease | null;
-  write(channelKey: string, release: AcceptedPinRelease): void;
-}
-
 export interface FetchResponseLike {
   readonly ok: boolean;
   readonly status: number;
@@ -72,8 +60,6 @@ export type PinReleaseErrorCode =
   | "release-manifest-fetch-failed"
   | "release-manifest-invalid"
   | "release-manifest-untrusted"
-  | "release-manifest-version-regression"
-  | "release-manifest-equivocation"
   | "release-asset-download-failed"
   | "release-asset-integrity-failed";
 
@@ -127,7 +113,6 @@ const ARTIFACT_FIELDS = [
   "size",
   "sha256",
 ];
-const HISTORY_STORAGE_PREFIX = "ai-pin-revival.pin-release.v1:";
 
 function invalidManifest(
   message: string,
@@ -189,7 +174,6 @@ function isExplicitUrl(value: string): boolean {
 function resolveTrustedManifestUrl(rawUrl: string, baseUrl: string): {
   readonly requestUrl: string;
   readonly absoluteUrl: string;
-  readonly historyKey: string;
 } {
   const requestUrl = requiredTrimmedString(rawUrl, "release manifest URL");
   let base: URL;
@@ -232,7 +216,6 @@ function resolveTrustedManifestUrl(rawUrl: string, baseUrl: string): {
   return {
     requestUrl,
     absoluteUrl: resolved.toString(),
-    historyKey: `${resolved.origin}${resolved.pathname}`,
   };
 }
 
@@ -340,17 +323,6 @@ function parseArtifact(
   });
 }
 
-function canonicalizeManifest(manifest: PinReleaseManifest): string {
-  return JSON.stringify({
-    schemaVersion: manifest.schemaVersion,
-    releaseId: manifest.releaseId,
-    version: manifest.version,
-    artifacts: PIN_RELEASE_ARTIFACT_ROLES.map((role) =>
-      manifest.artifacts.find((artifact) => artifact.role === role),
-    ),
-  });
-}
-
 export function parsePinReleaseManifest(
   payload: unknown,
   manifestUrl: string,
@@ -416,6 +388,12 @@ export function parsePinReleaseManifest(
       releaseId,
     });
   }
+  if (new Set(artifacts.map((artifact) => artifact.name)).size !== artifacts.length) {
+    invalidManifest("The five Pin release artifacts must use distinct APK names.", {
+      manifestUrl,
+      releaseId,
+    });
+  }
   return Object.freeze({
     schemaVersion: 1 as const,
     releaseId,
@@ -425,177 +403,6 @@ export function parsePinReleaseManifest(
         (role) => artifacts.find((artifact) => artifact.role === role)!,
       ),
     ),
-  });
-}
-
-function isAcceptedPinRelease(value: unknown): value is AcceptedPinRelease {
-  if (!isRecord(value)) {
-    return false;
-  }
-  const actualFields = Object.keys(value).sort();
-  const acceptedFields = [
-    "canonicalManifest",
-    "releaseId",
-    "version",
-    "versionCode",
-  ];
-  return (
-    actualFields.length === acceptedFields.length &&
-    actualFields.every((field, index) => field === acceptedFields[index]) &&
-    typeof value.releaseId === "string" &&
-    RELEASE_ID_RE.test(value.releaseId) &&
-    typeof value.version === "string" &&
-    parseInstallVersion(value.version) !== null &&
-    typeof value.versionCode === "number" &&
-    Number.isSafeInteger(value.versionCode) &&
-    value.versionCode > 0 &&
-    value.versionCode <= 2_147_483_647 &&
-    typeof value.canonicalManifest === "string" &&
-    value.canonicalManifest.length > 0
-  );
-}
-
-export function createMemoryPinReleaseHistory(): PinReleaseHistory {
-  const entries = new Map<string, AcceptedPinRelease>();
-  return {
-    read(manifestUrl) {
-      return entries.get(manifestUrl) ?? null;
-    },
-    write(manifestUrl, release) {
-      entries.set(manifestUrl, release);
-    },
-  };
-}
-
-function getBrowserStorage(): Storage | null {
-  return typeof globalThis.localStorage === "undefined"
-    ? null
-    : globalThis.localStorage;
-}
-
-function releaseHistoryUnavailable(message: string): never {
-  throw new PinReleaseError({
-    code: "release-manifest-untrusted",
-    message,
-  });
-}
-
-export function createPersistentPinReleaseHistory(
-  storageProvider: () => Pick<Storage, "getItem" | "setItem"> | null =
-    getBrowserStorage,
-): PinReleaseHistory {
-  function requireStorage(): Pick<Storage, "getItem" | "setItem"> {
-    try {
-      const storage = storageProvider();
-      if (storage) {
-        return storage;
-      }
-    } catch {
-      // Converted to a stable, redacted release trust error below.
-    }
-
-    return releaseHistoryUnavailable(
-      "Persistent Pin release history is unavailable; release installation is disabled.",
-    );
-  }
-
-  return {
-    read(channelKey) {
-      const storage = requireStorage();
-      let raw: string | null;
-      try {
-        raw = storage.getItem(`${HISTORY_STORAGE_PREFIX}${channelKey}`);
-      } catch {
-        return releaseHistoryUnavailable(
-          "Persistent Pin release history could not be read; release installation is disabled.",
-        );
-      }
-
-      if (raw === null) {
-        return null;
-      }
-
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(raw);
-      } catch {
-        return releaseHistoryUnavailable(
-          "Persistent Pin release history is corrupt; release installation is disabled.",
-        );
-      }
-
-      if (!isAcceptedPinRelease(parsed)) {
-        return releaseHistoryUnavailable(
-          "Persistent Pin release history is invalid; release installation is disabled.",
-        );
-      }
-      return Object.freeze({ ...parsed });
-    },
-    write(channelKey, release) {
-      if (!isAcceptedPinRelease(release)) {
-        return releaseHistoryUnavailable(
-          "The accepted Pin release record is invalid; release installation is disabled.",
-        );
-      }
-
-      try {
-        requireStorage().setItem(
-          `${HISTORY_STORAGE_PREFIX}${channelKey}`,
-          JSON.stringify(release),
-        );
-      } catch (error) {
-        if (isPinReleaseError(error)) {
-          throw error;
-        }
-        return releaseHistoryUnavailable(
-          "Persistent Pin release history could not be updated; release installation is disabled.",
-        );
-      }
-    },
-  };
-}
-
-const defaultHistory = createPersistentPinReleaseHistory();
-
-function assertMonotonicRelease(
-  manifest: PinReleaseManifest,
-  manifestUrl: string,
-  historyKey: string,
-  history: PinReleaseHistory,
-): void {
-  const versionCode = manifest.artifacts[0].versionCode;
-  const canonicalManifest = canonicalizeManifest(manifest);
-  const previous = history.read(historyKey);
-
-  if (previous?.releaseId === manifest.releaseId) {
-    if (previous.canonicalManifest !== canonicalManifest) {
-      throw new PinReleaseError({
-        code: "release-manifest-equivocation",
-        message: "The release manifest changed while retaining the same immutable releaseId.",
-        manifestUrl,
-        releaseId: manifest.releaseId,
-      });
-    }
-    return;
-  }
-
-  if (previous) {
-    const versionOrder = compareInstallVersions(manifest.version, previous.version);
-    if (versionOrder !== 1 || versionCode <= previous.versionCode) {
-      throw new PinReleaseError({
-        code: "release-manifest-version-regression",
-        message: "The release manifest version and versionCode must increase monotonically.",
-        manifestUrl,
-        releaseId: manifest.releaseId,
-      });
-    }
-  }
-
-  history.write(historyKey, {
-    releaseId: manifest.releaseId,
-    version: manifest.version,
-    versionCode,
-    canonicalManifest,
   });
 }
 
@@ -627,7 +434,6 @@ export interface FetchPinReleaseManifestOptions {
   readonly fetchImpl?: FetchLike;
   readonly manifestUrl?: string;
   readonly baseUrl?: string;
-  readonly history?: PinReleaseHistory;
 }
 
 export async function fetchPinReleaseManifest(
@@ -695,11 +501,5 @@ export async function fetchPinReleaseManifest(
   }
 
   const manifest = parsePinReleaseManifest(payload, source.absoluteUrl);
-  assertMonotonicRelease(
-    manifest,
-    source.absoluteUrl,
-    source.historyKey,
-    options.history ?? defaultHistory,
-  );
   return Object.freeze({ manifest, manifestUrl: source.absoluteUrl });
 }

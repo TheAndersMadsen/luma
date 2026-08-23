@@ -93,32 +93,16 @@ test("release metadata rejects partial, duplicate, escaped, and mismatched APK s
   throwsCode(() => parsePinReleaseReceiptBundle(wrongPackage), "package-mismatch");
 });
 
-test("release history rejects equivocation and version regressions", () => {
-  const current = releaseFixture();
-  const verified = verifyPinReleaseMetadata({ ...current, expectedSigner: SIGNER });
-  assert.equal(verified.historyEntry.releaseId, current.manifest.releaseId);
+test("manifest and receipt artifacts require five distinct APK names", () => {
+  const release = releaseFixture();
+  const receipts = structuredClone(release.receipts);
+  receipts.artifacts[1].path = `nested/${receipts.artifacts[0].name}`;
+  receipts.artifacts[1].name = receipts.artifacts[0].name;
+  throwsCode(() => parsePinReleaseReceiptBundle(receipts), "duplicate-name");
 
-  throwsCode(
-    () => verifyPinReleaseMetadata({
-      ...current,
-      expectedSigner: SIGNER,
-      history: {
-        schemaVersion: 1,
-        releases: [{ ...verified.historyEntry, manifestSha256: "0".repeat(64) }],
-      },
-    }),
-    "release-equivocation",
-  );
-
-  const older = releaseFixture({ version: "2026-08-09.0", versionCode: 202_608_090 });
-  throwsCode(
-    () => verifyPinReleaseMetadata({
-      ...older,
-      expectedSigner: SIGNER,
-      history: { schemaVersion: 1, releases: [verified.historyEntry] },
-    }),
-    "version-regression",
-  );
+  const manifest = structuredClone(release.manifest);
+  manifest.artifacts[1].name = manifest.artifacts[0].name;
+  throwsCode(() => canonicalPinReleaseManifestJson(manifest), "duplicate-name");
 });
 
 test("JSON errors and Setup manifest fields stay explicit", async () => {

@@ -23,8 +23,6 @@ import {
   PIN_RELEASE_PACKAGE_BY_ROLE,
   canonicalPinReleaseManifestJson,
   createPinReleaseManifest,
-  parsePinReleaseHistory,
-  parsePinReleaseJson,
   parsePinReleaseReceiptBundle,
   verifyPinReleaseMetadata,
 } from "./release.mjs";
@@ -339,16 +337,6 @@ export async function parseBuilderMetadata({ stagingRoot, version, versionCode }
   return parsePinReleaseReceiptBundle({ schemaVersion: 1, artifacts });
 }
 
-async function readHistory(releaseRoot) {
-  const source = await readFile(join(releaseRoot, "history.json"), "utf8").catch((error) => {
-    if (error?.code === "ENOENT") return null;
-    throw error;
-  });
-  return source === null
-    ? parsePinReleaseHistory({ schemaVersion: 1, releases: [] })
-    : parsePinReleaseHistory(parsePinReleaseJson(source, "Pin release history"));
-}
-
 async function verifyExistingRelease(directoryPath, manifest, canonical) {
   const names = (await readdir(directoryPath)).sort();
   const expected = ["manifest.json", ...manifest.artifacts.map((artifact) => artifact.name)].sort();
@@ -366,14 +354,12 @@ async function verifyExistingRelease(directoryPath, manifest, canonical) {
 }
 
 async function publishRelease({ releaseRoot, stagingRoot, version, receipts }) {
-  const history = await readHistory(releaseRoot);
   const manifest = createPinReleaseManifest({ version, receipts });
   const canonical = canonicalPinReleaseManifestJson(manifest);
-  const verified = verifyPinReleaseMetadata({
+  verifyPinReleaseMetadata({
     manifest,
     receipts,
     expectedSigner: PIN_COMPATIBILITY_CERT_SHA256,
-    history,
   });
   const releasesRoot = join(releaseRoot, "releases");
   await mkdir(releasesRoot, { recursive: true, mode: 0o700 });
@@ -400,11 +386,6 @@ async function publishRelease({ releaseRoot, stagingRoot, version, receipts }) {
       throw error;
     }
   }
-  const releases = history.releases.at(-1)?.releaseId === verified.historyEntry.releaseId
-    ? [...history.releases]
-    : [...history.releases, verified.historyEntry];
-  const nextHistory = parsePinReleaseHistory({ schemaVersion: 1, releases });
-  await atomicWrite(join(releaseRoot, "history.json"), `${JSON.stringify(nextHistory)}\n`);
   await atomicWrite(join(releaseRoot, "current.json"), canonical);
   return Object.freeze({
     schemaVersion: 1,
