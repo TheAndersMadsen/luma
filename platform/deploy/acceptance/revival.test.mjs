@@ -396,6 +396,14 @@ test("production Compose binds one release identity and keeps web services priva
     rendered.services.keycloak.environment.KC_DB_URL,
     "jdbc:postgresql://postgres:5432/keycloak",
   );
+  assert.equal(
+    rendered.services.connectivity.environment.COSMOS_OIDC_JWKS_URI,
+    "http://keycloak:8080/realms/humane/protocol/openid-connect/certs",
+  );
+  assert.deepEqual(rendered.services.connectivity.depends_on.keycloak, {
+    condition: "service_healthy",
+    required: true,
+  });
   assert.deepEqual(Object.keys(rendered.networks).sort(), [
     "cosmos-internal",
     "loopback-publish",

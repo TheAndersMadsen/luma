@@ -16,7 +16,11 @@ services:
       COSMOS_AUTH_MODE: edge-authenticated
       COSMOS_ENVIRONMENT: production
       COSMOS_STATE_DIR: /var/lib/cosmos
+      COSMOS_OIDC_ISSUER: ${COSMOS_OIDC_ISSUER:-https://center.andersmadsen.dk/realms/humane}
+      COSMOS_OIDC_JWKS_URI: ${COSMOS_OIDC_JWKS_URI:-http://keycloak:8080/realms/humane/protocol/openid-connect/certs}
+      COSMOS_OIDC_AUDIENCE: ${COSMOS_OIDC_AUDIENCE:-}
       REVIVAL_DEPLOYMENT_ENVIRONMENT: production
+    depends_on: *production-cosmos-dependencies
     ports:
       - 127.0.0.1:${REVIVAL_CONNECTIVITY_PORT:-18085}:18080
     networks:
