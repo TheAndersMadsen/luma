@@ -282,6 +282,58 @@ test("instruction-file review redacts only the exact historical path literals", 
   assert.match(result.stderr, /machine-local path found.*AGENTS\.md/u);
 });
 
+test("compose authority review permits only the two exact legacy Center declarations", (t) => {
+  const reviewedPath = runtimeJoin(["", "home", "anders", "cosmos-center-data"], "/");
+  const reviewedFiles = [
+    "platform/deploy/production-compose-authority.json",
+    "platform/deploy/release-candidate.mjs",
+  ];
+
+  for (const reviewedFile of reviewedFiles) {
+    const root = makeRoot(t);
+    writeBaseline(root);
+    const reviewedSource = readFileSync(join(ROOT, reviewedFile), "utf8");
+    writeFileSync(join(root, reviewedFile), reviewedSource);
+    assert.equal(runPolicy(root).status, 0, `${reviewedFile} rejected its exact reviewed path`);
+
+    const quotedPath = JSON.stringify(reviewedPath);
+    const variants = [
+      ["descendant", reviewedSource.replace(reviewedPath, `${reviewedPath}/copy`)],
+      ["suffix", reviewedSource.replace(reviewedPath, `${reviewedPath}-copy`)],
+      ["query punctuation", reviewedSource.replace(reviewedPath, `${reviewedPath}?copy=1`)],
+      ["comma punctuation", reviewedSource.replace(reviewedPath, `${reviewedPath},copy`)],
+      ["concatenation", reviewedSource.replace(quotedPath, `${quotedPath} + ${JSON.stringify("/copy")}`)],
+      ["alternate quoting", reviewedSource.replace(quotedPath, `'${reviewedPath}'`)],
+      ["duplicate", reviewedSource.replace(quotedPath, `${quotedPath}, ${quotedPath}`)],
+      ["prefix", reviewedSource.replace(reviewedPath, `/srv${reviewedPath}`)],
+    ];
+    for (const [label, variant] of variants) {
+      writeFileSync(join(root, reviewedFile), variant);
+      const result = runPolicy(root);
+      assert.notEqual(result.status, 0, `${reviewedFile} accepted ${label}`);
+      assert.match(
+        result.stderr,
+        new RegExp(`machine-local path found.*${reviewedFile.replaceAll("/", "\\/")}`, "u"),
+        `${reviewedFile} ${label}`,
+      );
+    }
+
+    const injected = runtimeJoin(["", "home", "different-user", "secret"], "/");
+    writeFileSync(join(root, reviewedFile), `${reviewedSource}\n${JSON.stringify(injected)}\n`);
+    const additionalPath = runPolicy(root);
+    assert.notEqual(additionalPath.status, 0, `${reviewedFile} hid an additional path`);
+    assert.match(additionalPath.stderr, /machine-local path found/u);
+  }
+
+  const root = makeRoot(t);
+  writeBaseline(root);
+  mkdirSync(join(root, "center"), { recursive: true });
+  writeFileSync(join(root, "center", "unreviewed.mjs"), `${JSON.stringify(reviewedPath)}\n`);
+  const misplaced = runPolicy(root);
+  assert.notEqual(misplaced.status, 0, "reviewed literal escaped its two owning files");
+  assert.match(misplaced.stderr, /machine-local path found.*center\/unreviewed\.mjs/u);
+});
+
 test("cheap source policy rejects nested private and generated hiding places", (t) => {
   for (const directory of [
     "secrets",

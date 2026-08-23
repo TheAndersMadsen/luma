@@ -966,10 +966,7 @@ mod tests {
     async fn a_capped_family_drops_new_series_and_says_so() {
         let before = registry().dropped.load(Ordering::Relaxed);
         for index in 0..(MAX_SERIES_PER_FAMILY + 8) {
-            increment(
-                "carry_metrics_test_cap_total",
-                &[("n", &index.to_string())],
-            );
+            increment("carry_metrics_test_cap_total", &[("n", &index.to_string())]);
         }
         let after = registry().dropped.load(Ordering::Relaxed);
         assert!(

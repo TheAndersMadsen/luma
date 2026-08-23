@@ -753,6 +753,8 @@ mapfile -t all_containers < <("${docker[@]}" ps -aq --no-trunc)
   || { echo 'pre-upload production container inventory is empty' >&2; exit 1; }
 3< <("${docker[@]}" inspect "${containers[@]}") \
 4< <("${docker[@]}" inspect "${all_containers[@]}") /usr/bin/python3 -I -B - \
+  5< <("${docker[@]}" volume inspect "$state_volume" "$pg_volume" \
+    "$prometheus_volume" "$grafana_volume") \
   "$active_project" "$project" "$legacy_project" "$state_volume" "$pg_volume" \
   "$prometheus_volume" "$grafana_volume" "$local_model_network" "$center_data" <<'PY' \
   || { echo 'pre-upload active production mounts differ from the exact Carry contract' >&2; exit 1; }
@@ -844,6 +846,68 @@ for item in all_body:
         if not any(overlaps(source,root) for root in roots): continue
         assert (item_project,item_service,source,mount.get("Destination")) in allowed
         assert mount.get("RW") is False
+
+# Close the four durable volumes and Center data over every stopped or running
+# container. Docker volume names alone are insufficient: a bind of a volume's
+# host Mountpoint (or a parent/child) reaches the same bytes.
+volume_body=json.load(os.fdopen(5)); volume_names=(state,pg,prometheus,grafana)
+assert isinstance(volume_body,list) and len(volume_body)==len(volume_names)
+volume_items={item.get("Name"):item for item in volume_body if isinstance(item,dict)}
+assert set(volume_items)==set(volume_names)
+def exact_absolute(value):
+    return (isinstance(value,str) and value.startswith("/") and value!="/" and
+            os.path.normpath(value)==value)
+mountpoints={}
+for name in volume_names:
+    mountpoint=volume_items[name].get("Mountpoint")
+    assert exact_absolute(mountpoint); mountpoints[name]=mountpoint
+assert len(set(mountpoints.values()))==len(mountpoints) and exact_absolute(center)
+def durable_overlap(source,root):
+    if not isinstance(source,str) or not source.startswith("/"): return False
+    normalized=os.path.normpath(source)
+    try: common=os.path.commonpath((normalized,root))
+    except ValueError: return False
+    return common in (normalized,root)
+durable_grants={
+    "postgres":("volume",pg,"/var/lib/postgresql/data",True),
+    "prometheus":("volume",prometheus,"/prometheus",True),
+    "grafana":("volume",grafana,"/var/lib/grafana",True),
+    "center":("bind",center,"/data",True),
+}
+for service in ("connectivity","ai-bus","account","contacts","feature-flags",
+                "notable-events","provisioning"):
+    durable_grants[service]=("volume",state,"/var/lib/carry",True)
+allowed_projects={legacy} if active==legacy else {canonical,legacy}
+holders={}
+for item in all_body:
+    identifier=item.get("Id"); assert isinstance(identifier,str) and identifier
+    labels=(item.get("Config") or {}).get("Labels") or {}
+    item_project=labels.get("com.docker.compose.project")
+    item_service=labels.get("com.docker.compose.service")
+    relevant=0
+    for mount in item.get("Mounts") or []:
+        kind=mount.get("Type"); name=mount.get("Name"); source=mount.get("Source")
+        protected_name=kind=="volume" and name in mountpoints
+        protected_path=(isinstance(source,str) and
+                        (durable_overlap(source,center) or
+                         any(durable_overlap(source,path) for path in mountpoints.values())))
+        if not (protected_name or protected_path): continue
+        relevant+=1
+        assert item_project in allowed_projects and item_service in durable_grants
+        expected_kind,expected_source,expected_destination,expected_rw=durable_grants[item_service]
+        assert kind==expected_kind and mount.get("Destination")==expected_destination
+        assert mount.get("RW") is expected_rw
+        if kind=="volume":
+            assert name==expected_source and source==mountpoints[expected_source]
+        else:
+            assert source==expected_source
+        holders.setdefault((item_project,item_service),set()).add(identifier)
+    assert relevant<=1
+for (item_project,item_service),identifiers in holders.items():
+    assert len(identifiers)==1
+    if active==canonical and item_project==legacy:
+        retained=[item for item in all_body if item.get("Id") in identifiers]
+        assert len(retained)==1 and (retained[0].get("State") or {}).get("Running") is False
 PY
 security_after="$(carry_security_digest)" \
   || { echo 'pre-upload deployed Carry PKI/certificate identity changed during inspection' >&2; exit 1; }

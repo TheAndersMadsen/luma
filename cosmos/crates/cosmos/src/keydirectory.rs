@@ -326,11 +326,10 @@ impl KeyDirectory {
                 .expect("key directory is not poisoned")
                 .is_empty());
         };
-        let (exists,) = sqlx::query_as::<_, (bool,)>(
-            "SELECT EXISTS (SELECT 1 FROM carry_channel_key LIMIT 1)",
-        )
-        .fetch_one(pool)
-        .await?;
+        let (exists,) =
+            sqlx::query_as::<_, (bool,)>("SELECT EXISTS (SELECT 1 FROM carry_channel_key LIMIT 1)")
+                .fetch_one(pool)
+                .await?;
         Ok(!exists)
     }
 

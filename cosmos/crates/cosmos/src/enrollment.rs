@@ -951,11 +951,10 @@ impl EnrollmentStore for PostgresEnrollmentStore {
 
         // Opportunistic pruning of windows that have fully elapsed, exactly like
         // `take_login`. An expired row is not a live lockout.
-        let _ =
-            sqlx::query("DELETE FROM carry_opaque_login_attempt WHERE window_start_epoch < $1")
-                .bind(window_opened_after)
-                .execute(&self.pool)
-                .await;
+        let _ = sqlx::query("DELETE FROM carry_opaque_login_attempt WHERE window_start_epoch < $1")
+            .bind(window_opened_after)
+            .execute(&self.pool)
+            .await;
 
         Ok(row.0.max(0) as u32)
     }

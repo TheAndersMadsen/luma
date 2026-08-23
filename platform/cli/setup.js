@@ -1,7 +1,6 @@
 'use strict';
 
 const fs = require('node:fs');
-const crypto = require('node:crypto');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
@@ -12,10 +11,8 @@ const {
 } = require('./context');
 const { operatorContract } = require('./command-spec');
 const {
-  readSetupActionReceipt,
   readSetupState,
   selectSetupTrack,
-  validateSetupInvocationBinding,
 } = require('./setup-state');
 
 const ROOT = path.resolve(__dirname, '..', '..');
@@ -36,13 +33,6 @@ function commandEvidence(commandId, selectedTrack) {
   }
   if (commandId === 'init') {
     return { complete: protectedFile(ENV_FILE), evidence: 'external runtime configuration' };
-  }
-  const receipt = readSetupActionReceipt(commandId);
-  if (receipt) {
-    return {
-      complete: true,
-      evidence: `source/action-bound success receipt valid until ${receipt.expiresAt}`,
-    };
   }
   if (commandId === 'doctor.local') {
     return {
@@ -71,9 +61,8 @@ function commandEvidence(commandId, selectedTrack) {
   if (commandId === 'version') {
     return { complete: true, evidence: 'stamped release descriptor' };
   }
-  // Any remaining action has no accepted action-specific result receipt.
-  // Physical acceptance is always nonsticky; mutable live state must still be
-  // rechecked at the point of use even when a bounded command receipt exists.
+  // Setup is a guide, not deployment authority. Mutable checks and physical
+  // acceptance are deliberately rerun by their owning commands.
   return { complete: false, evidence: 'authoritative command must be run' };
 }
 
@@ -158,10 +147,6 @@ function validatePinImportResult(result) {
   ) throw new Error('hosted Pin import returned an unsupported success record');
 }
 
-function artifactCompletion(actionId, outcome) {
-  return Object.freeze({ schemaVersion: 1, actionId, outcome, status: 0, signal: null });
-}
-
 function printArtifactResult(operation, kind, execution) {
   if (execution.json) {
     process.stdout.write(execution.stdout);
@@ -175,27 +160,19 @@ function printArtifactResult(operation, kind, execution) {
   }
 }
 
-function setupArtifactCommand(operation, args, invocationBinding) {
+function setupArtifactCommand(operation, args) {
   const kind = args.shift();
   if (operation === 'import' && kind === 'vps-candidate') {
-    validateSetupInvocationBinding(invocationBinding, { actionId: 'setup.import.vps-candidate' });
     const execution = runArtifactTool(HOSTED_VPS_CANDIDATE_TOOL, 'import', args);
     validateVpsImportResult(execution.parsed);
     printArtifactResult(operation, kind, execution);
-    return Object.freeze({
-      completion: artifactCompletion('setup.import.vps-candidate', 'hosted-vps-candidate-imported'),
-      evidenceSha256: crypto.createHash('sha256').update(execution.stdout).digest('hex'),
-    });
+    return;
   }
   if (operation === 'import' && kind === 'pin-release') {
-    validateSetupInvocationBinding(invocationBinding, { actionId: 'setup.import.pin-release' });
     const execution = runArtifactTool(HOSTED_PIN_ARTIFACT_TOOL, 'import', args);
     validatePinImportResult(execution.parsed);
     printArtifactResult(operation, kind, execution);
-    return Object.freeze({
-      completion: artifactCompletion('setup.import.pin-release', 'hosted-pin-release-imported'),
-      evidenceSha256: crypto.createHash('sha256').update(execution.stdout).digest('hex'),
-    });
+    return;
   }
   if (operation === 'artifacts' && kind === 'vps') {
     const execution = runArtifactTool(HOSTED_VPS_CANDIDATE_TOOL, 'status', args);
@@ -227,34 +204,24 @@ function setupReport(selectedTrack) {
   const journey = contract.journeys.find((candidate) => candidate.id === selectedTrack);
   if (!journey) throw new Error(`operator contract has no ${selectedTrack} journey`);
   const commands = new Map(contract.commands.map((command) => [command.id, command]));
-  let waiting = false;
   const steps = journey.steps.map((step) => {
     const command = commands.get(step.commandId);
     if (!command) throw new Error(`operator contract journey references unknown command ${step.commandId}`);
     const evidence = commandEvidence(step.commandId, selectedTrack);
-    let status;
-    if (evidence.complete) status = 'complete';
-    else if (waiting) status = 'blocked';
-    else {
-      status = 'pending';
-      waiting = true;
-    }
     return Object.freeze({
       id: step.id,
       title: step.title,
-      status,
+      status: evidence.complete ? 'complete' : 'required',
       evidence: evidence.evidence,
       action: normalizeCommand(command),
       verification: step.verification,
     });
   });
-  const next = steps.find((step) => step.status === 'pending') || null;
   return Object.freeze({
-    schemaVersion: 1,
+    schemaVersion: 2,
     selectedTrack,
     label: journey.label,
     steps,
-    next: next ? { step: next.id, action: next.action } : null,
     physicalAcceptanceRequired: steps.some((step) => step.verification === 'physical'),
   });
 }
@@ -275,17 +242,17 @@ function printSetupReport(report, json) {
   }
   info(`${report.label} (${report.selectedTrack})`);
   for (const step of report.steps) {
-    const marker = { complete: 'PASS', pending: 'NEXT', blocked: 'WAIT' }[step.status];
+    const marker = { complete: 'PASS', required: 'DO' }[step.status];
     info(`${marker.padEnd(4)} ${step.title}`);
-    if (step.status === 'pending') info(`     action: ${step.action}`);
+    if (step.status === 'required') info(`     action: ${step.action}`);
   }
   if (report.physicalAcceptanceRequired) {
     info('Physical acceptance remains explicit; setup never marks it complete from host evidence.');
   }
-  if (!report.next) info('All recomputable setup evidence is complete. Re-run physical and live acceptance where documented.');
+  info('This checklist does not infer completion of live or physical actions; their owning commands report results.');
 }
 
-function setupCommand(args, { invocationBinding = null } = {}) {
+function setupCommand(args) {
   const operation = args.shift();
   try {
     if (['local', 'contributor', 'production', 'pin'].includes(operation)) {
@@ -302,7 +269,8 @@ function setupCommand(args, { invocationBinding = null } = {}) {
       return null;
     }
     if (operation === 'import' || operation === 'artifacts') {
-      return setupArtifactCommand(operation, args, invocationBinding);
+      setupArtifactCommand(operation, args);
+      return;
     }
     fail('usage: ./revival setup local|contributor|production|pin [--json] | status [--json] | --resume [--json] | import ... | artifacts ...', 64);
   } catch (error) {

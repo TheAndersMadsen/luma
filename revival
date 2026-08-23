@@ -1,733 +1,26 @@
-#!/usr/bin/env -S /bin/sh -p
-':' //; revival_home=${HOME-}
-':' //; case "$revival_home" in /*) ;; *) revival_home=/nonexistent ;; esac
-':' //; revival_node=
-':' //; for revival_candidate in /usr/bin/node /opt/homebrew/opt/node@22/bin/node /usr/local/opt/node@22/bin/node /opt/homebrew/bin/node /usr/local/bin/node; do
-':' //;   if [ -x "$revival_candidate" ] && [ ! -d "$revival_candidate" ]; then revival_node=$revival_candidate; break; fi
-':' //; done
-':' //; if [ -z "$revival_node" ]; then printf '%s\n' 'error: Node.js 22 is unavailable at a supported fixed platform path' >&2; exit 126; fi
-':' //; exec /usr/bin/env -i HOME="$revival_home" PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/opt/node@22/bin:/usr/local/opt/node@22/bin:/opt/homebrew/bin:/usr/local/bin:$revival_home/.cargo/bin:$revival_home/Android/Sdk/platform-tools:$revival_home/Library/Android/sdk/platform-tools" LANG=C LC_ALL=C TZ=UTC XDG_CONFIG_HOME="${XDG_CONFIG_HOME-}" XDG_DATA_HOME="${XDG_DATA_HOME-}" XDG_STATE_HOME="${XDG_STATE_HOME-}" REVIVAL_CONFIG_DIR="${REVIVAL_CONFIG_DIR-}" REVIVAL_SECRETS_DIR="${REVIVAL_SECRETS_DIR-}" REVIVAL_DATA_DIR="${REVIVAL_DATA_DIR-}" REVIVAL_BACKUP_DIR="${REVIVAL_BACKUP_DIR-}" REVIVAL_ENV_FILE="${REVIVAL_ENV_FILE-}" REVIVAL_PRIVATE_DIR="${REVIVAL_PRIVATE_DIR-}" REVIVAL_BUILD_DIR="${REVIVAL_BUILD_DIR-}" REVIVAL_STATE_DIR="${REVIVAL_STATE_DIR-}" REVIVAL_DEPLOY_REMOTE="${REVIVAL_DEPLOY_REMOTE-}" REVIVAL_SSH_IDENTITY_FILE="${REVIVAL_SSH_IDENTITY_FILE-}" REVIVAL_SSH_KNOWN_HOSTS_FILE="${REVIVAL_SSH_KNOWN_HOSTS_FILE-}" REVIVAL_PIN_RELEASE_OUTPUT_DIR="${REVIVAL_PIN_RELEASE_OUTPUT_DIR-}" REVIVAL_PIN_ENABLE_TEST_FIXTURES="${REVIVAL_PIN_ENABLE_TEST_FIXTURES-}" CI="${CI-}" FORCE_COLOR="${FORCE_COLOR-}" NO_COLOR="${NO_COLOR-}" TERM="${TERM-}" "$revival_node" "$0" "$@"
+#!/usr/bin/env node
 'use strict';
 
-// Receipt progress is operator convenience, never deployment or publication
-// authority.  Capture its complete source/action basis before Node can load
-// any repository module: a module loaded before this boundary could otherwise
-// execute old bytes and then let a replacement pathname supply the receipt.
-const bootstrapCrypto = require('node:crypto');
-const bootstrapFs = require('node:fs');
-const bootstrapPath = require('node:path');
-const { spawnSync: bootstrapSpawnSync } = require('node:child_process');
-
-const rawArgs = Object.freeze(process.argv.slice(2));
-const BOOTSTRAP_ROOT = __dirname;
-const BOOTSTRAP_FILE_IDENTITY_FIELDS = Object.freeze([
-  'dev', 'ino', 'mode', 'nlink', 'uid', 'gid', 'size', 'mtimeNs', 'ctimeNs',
-]);
-const BOOTSTRAP_RECEIPT_ACTIONS = new Set([
-  'doctor.local',
-  'stack.up',
-  'stack.status',
-  'test',
-  'pin.check',
-  'config.check',
-  'doctor.production',
-  'backup',
-  'deploy.production',
-  'deploy.carry-baseline',
-  'canary',
-  'pin.doctor',
-  'pin.release.inspect',
-  'pin.release.ship',
-  'pki.init',
-  'pki.import',
-  'setup.import.vps-candidate',
-  'setup.import.pin-release',
-]);
-const BOOTSTRAP_TRACKED_SOURCE_SCHEMA_VERSION = 2;
-const BOOTSTRAP_TRACKED_SOURCE_MAX_FILES = 10_000;
-const BOOTSTRAP_TRACKED_SOURCE_MAX_BYTES = 512 * 1024 * 1024;
-const BOOTSTRAP_TRACKED_SOURCE_MAX_FILE_BYTES = 256 * 1024 * 1024;
-const BOOTSTRAP_TRACKED_SOURCE_MAX_GIT_OUTPUT_BYTES = 32 * 1024 * 1024;
-const BOOTSTRAP_TRACKED_SOURCE_TIMEOUT_MILLISECONDS = 15_000;
-const BOOTSTRAP_TRACKED_GIT_EXECUTABLE = '/usr/bin/git';
-const BOOTSTRAP_TRACKED_UNTRACKED_POLICY = Object.freeze({
-  schemaVersion: 1,
-  allowedWorkspaceInstructions: Object.freeze(['AGENTS.md', 'CLAUDE.md']),
-  enumeration: 'git-ls-files-others-unfiltered',
-  usesRepositoryGitignore: false,
-  usesGitInfoExclude: false,
-  usesGlobalOrSystemExcludes: false,
-});
-
-function bootstrapCanonical(value) {
-  if (value === null || typeof value !== 'object') return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map((item) => bootstrapCanonical(item)).join(',')}]`;
-  return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${bootstrapCanonical(value[key])}`).join(',')}}`;
-}
-
-function bootstrapSha256(value) {
-  return bootstrapCrypto.createHash('sha256').update(value).digest('hex');
-}
-
-function bootstrapFileIdentity(metadata) {
-  return Object.freeze(Object.fromEntries(
-    BOOTSTRAP_FILE_IDENTITY_FIELDS.map((field) => [field, String(metadata[field])]),
-  ));
-}
-
-function bootstrapSameFileIdentity(left, right) {
-  return BOOTSTRAP_FILE_IDENTITY_FIELDS.every((field) => left[field] === right[field]);
-}
-
-function bootstrapStableFile(relative) {
-  if (typeof relative !== 'string' || bootstrapPath.isAbsolute(relative) ||
-      relative.split(bootstrapPath.sep).includes('..')) {
-    throw new Error(`launcher bootstrap source path is unsafe: ${relative}`);
-  }
-  const absolute = bootstrapPath.join(BOOTSTRAP_ROOT, relative);
-  const before = bootstrapFs.lstatSync(absolute, { bigint: true });
-  if (before.isSymbolicLink() || !before.isFile() || before.nlink !== 1n || before.size < 0n ||
-      before.size > BigInt(BOOTSTRAP_TRACKED_SOURCE_MAX_FILE_BYTES)) {
-    throw new Error(`launcher bootstrap source is unsafe: ${relative}`);
-  }
-  const descriptor = bootstrapFs.openSync(
-    absolute,
-    bootstrapFs.constants.O_RDONLY | (bootstrapFs.constants.O_NOFOLLOW || 0),
+const [nodeMajor, nodeMinor] = process.versions.node.split('.').map(Number);
+if (nodeMajor !== 22 || nodeMinor < 14) {
+  process.stderr.write(
+    `error: ./revival requires Node.js 22.14 or newer on the Node 22 line; observed ${process.version}\n`,
   );
-  try {
-    const opened = bootstrapFs.fstatSync(descriptor, { bigint: true });
-    const openedIdentity = bootstrapFileIdentity(opened);
-    if (!bootstrapSameFileIdentity(bootstrapFileIdentity(before), openedIdentity)) {
-      throw new Error(`launcher bootstrap source moved before open: ${relative}`);
-    }
-    const bytes = bootstrapFs.readFileSync(descriptor);
-    const after = bootstrapFs.fstatSync(descriptor, { bigint: true });
-    const rebound = bootstrapFs.lstatSync(absolute, { bigint: true });
-    if (
-      BigInt(bytes.length) !== opened.size ||
-      !bootstrapSameFileIdentity(openedIdentity, bootstrapFileIdentity(after)) ||
-      !bootstrapSameFileIdentity(openedIdentity, bootstrapFileIdentity(rebound))
-    ) throw new Error(`launcher bootstrap source changed while captured: ${relative}`);
-    return Object.freeze({
-      record: Object.freeze({
-        path: relative,
-        sha256: bootstrapSha256(bytes),
-        ...openedIdentity,
-      }),
-      bytes,
-    });
-  } finally {
-    bootstrapFs.closeSync(descriptor);
-  }
-}
-
-function bootstrapTrackedDeadline() {
-  return process.hrtime.bigint() +
-    BigInt(BOOTSTRAP_TRACKED_SOURCE_TIMEOUT_MILLISECONDS) * 1_000_000n;
-}
-
-function bootstrapRequireTrackedDeadline(deadline) {
-  if (process.hrtime.bigint() >= deadline) {
-    throw new Error('launcher tracked source capture exceeded its total time bound');
-  }
-}
-
-function bootstrapRemainingTrackedMilliseconds(deadline) {
-  const remaining = deadline - process.hrtime.bigint();
-  if (remaining <= 0n) throw new Error('launcher tracked source capture exceeded its total time bound');
-  return Math.max(1, Math.min(
-    BOOTSTRAP_TRACKED_SOURCE_TIMEOUT_MILLISECONDS,
-    Number((remaining + 999_999n) / 1_000_000n),
-  ));
-}
-
-function bootstrapStableDirectory(absolute, recordPath, deadline) {
-  bootstrapRequireTrackedDeadline(deadline);
-  const before = bootstrapFs.lstatSync(absolute, { bigint: true });
-  if (before.isSymbolicLink() || !before.isDirectory()) {
-    throw new Error(`launcher tracked source directory is unsafe: ${recordPath}`);
-  }
-  const canonicalPath = bootstrapFs.realpathSync.native(absolute);
-  const identity = bootstrapFileIdentity(before);
-  const after = bootstrapFs.lstatSync(absolute, { bigint: true });
-  if (
-    canonicalPath !== bootstrapPath.resolve(absolute) ||
-    !bootstrapSameFileIdentity(identity, bootstrapFileIdentity(after))
-  ) throw new Error(`launcher tracked source directory changed while captured: ${recordPath}`);
-  return Object.freeze({ path: recordPath, type: 'directory', ...identity });
-}
-
-function bootstrapGitDirectoryEvidence(record) {
-  // Read-only Git may create and remove an index.lock, which changes directory
-  // timestamps without changing source authority. Bind the directory inode and
-  // access policy here; the exact index inode/bytes and membership are bound
-  // separately and retain all meaningful repository-change detection.
-  return Object.freeze(Object.fromEntries([
-    ['path', record.path],
-    ['type', record.type],
-    ...['dev', 'ino', 'mode', 'uid', 'gid'].map((field) => [field, record[field]]),
-  ]));
-}
-
-function bootstrapGitControlPathEvidence(record) {
-  return record.type === 'directory' ? bootstrapGitDirectoryEvidence(record) : record;
-}
-
-function bootstrapStableBoundedFile(absolute, recordPath, maximumBytes, deadline, {
-  rootOwnedExecutable = false,
-} = {}) {
-  bootstrapRequireTrackedDeadline(deadline);
-  const before = bootstrapFs.lstatSync(absolute, { bigint: true });
-  if (before.isSymbolicLink() || !before.isFile() || before.nlink !== 1n ||
-      before.size < 0n || before.size > BigInt(maximumBytes)) {
-    throw new Error(`launcher tracked source file is unsafe or unbounded: ${recordPath}`);
-  }
-  if (rootOwnedExecutable && (
-    before.uid !== 0n || (before.mode & 0o022n) !== 0n || (before.mode & 0o111n) === 0n
-  )) throw new Error(`launcher tracked Git is not fixed root-owned executable authority: ${recordPath}`);
-  const descriptor = bootstrapFs.openSync(
-    absolute,
-    bootstrapFs.constants.O_RDONLY | (bootstrapFs.constants.O_NOFOLLOW || 0),
-  );
-  try {
-    const opened = bootstrapFs.fstatSync(descriptor, { bigint: true });
-    const openedIdentity = bootstrapFileIdentity(opened);
-    if (!bootstrapSameFileIdentity(bootstrapFileIdentity(before), openedIdentity)) {
-      throw new Error(`launcher tracked source moved before open: ${recordPath}`);
-    }
-    const bytes = bootstrapFs.readFileSync(descriptor);
-    const after = bootstrapFs.fstatSync(descriptor, { bigint: true });
-    const rebound = bootstrapFs.lstatSync(absolute, { bigint: true });
-    if (
-      BigInt(bytes.length) !== opened.size ||
-      !bootstrapSameFileIdentity(openedIdentity, bootstrapFileIdentity(after)) ||
-      !bootstrapSameFileIdentity(openedIdentity, bootstrapFileIdentity(rebound))
-    ) throw new Error(`launcher tracked source changed while captured: ${recordPath}`);
-    bootstrapRequireTrackedDeadline(deadline);
-    return Object.freeze({
-      record: Object.freeze({
-        path: recordPath,
-        type: 'file',
-        contentSha256: bootstrapSha256(bytes),
-        ...openedIdentity,
-      }),
-      bytes,
-    });
-  } finally {
-    bootstrapFs.closeSync(descriptor);
-  }
-}
-
-function bootstrapStableTrackedSymlink(absolute, member, deadline) {
-  bootstrapRequireTrackedDeadline(deadline);
-  const before = bootstrapFs.lstatSync(absolute, { bigint: true });
-  if (!before.isSymbolicLink() || before.nlink !== 1n ||
-      before.size < 0n || before.size > BigInt(BOOTSTRAP_TRACKED_SOURCE_MAX_FILE_BYTES)) {
-    throw new Error(`launcher tracked source link has an unexpected type: ${member.path}`);
-  }
-  const linkText = bootstrapFs.readlinkSync(absolute, { encoding: 'buffer' });
-  const identity = bootstrapFileIdentity(before);
-  const after = bootstrapFs.lstatSync(absolute, { bigint: true });
-  if (BigInt(linkText.length) !== before.size ||
-      !bootstrapSameFileIdentity(identity, bootstrapFileIdentity(after))) {
-    throw new Error(`launcher tracked source link changed while captured: ${member.path}`);
-  }
-  bootstrapRequireTrackedDeadline(deadline);
-  return Object.freeze({
-    path: member.path,
-    gitMode: member.gitMode,
-    objectId: member.objectId,
-    type: 'symlink',
-    linkTextBase64: linkText.toString('base64'),
-    contentSha256: bootstrapSha256(linkText),
-    ...identity,
-  });
-}
-
-function bootstrapStableTrackedFile(absolute, member, deadline) {
-  const selected = bootstrapStableBoundedFile(
-    absolute,
-    member.path,
-    BOOTSTRAP_TRACKED_SOURCE_MAX_FILE_BYTES,
-    deadline,
-  );
-  return Object.freeze({
-    path: member.path,
-    gitMode: member.gitMode,
-    objectId: member.objectId,
-    type: 'file',
-    contentSha256: selected.record.contentSha256,
-    ...Object.fromEntries(BOOTSTRAP_FILE_IDENTITY_FIELDS.map((field) => [field, selected.record[field]])),
-  });
-}
-
-function bootstrapDiscoverTrackedGitDirectory(deadline) {
-  const dotGitPath = bootstrapPath.join(BOOTSTRAP_ROOT, '.git');
-  const metadata = bootstrapFs.lstatSync(dotGitPath, { bigint: true });
-  let dotGit;
-  let gitDirectory;
-  if (metadata.isDirectory() && !metadata.isSymbolicLink()) {
-    dotGit = bootstrapStableDirectory(dotGitPath, '.git', deadline);
-    gitDirectory = dotGitPath;
-  } else if (metadata.isFile() && !metadata.isSymbolicLink()) {
-    const captured = bootstrapStableBoundedFile(dotGitPath, '.git', 4096, deadline);
-    const source = captured.bytes.toString('utf8');
-    if (!Buffer.from(source, 'utf8').equals(captured.bytes)) {
-      throw new Error('launcher tracked Git indirection is not canonical UTF-8');
-    }
-    const match = /^gitdir: ([^\0\r\n]+)\n?$/u.exec(source);
-    if (!match) throw new Error('launcher tracked Git indirection has an unsupported shape');
-    gitDirectory = bootstrapPath.resolve(BOOTSTRAP_ROOT, match[1]);
-    dotGit = Object.freeze({ ...captured.record, type: 'gitfile' });
-  } else {
-    throw new Error('launcher tracked source requires one real .git directory or gitfile');
-  }
-  const gitDir = bootstrapStableDirectory(gitDirectory, 'gitdir', deadline);
-  return Object.freeze({ dotGit, gitDir, gitDirectory: bootstrapPath.resolve(gitDirectory) });
-}
-
-function bootstrapTrackedGitEnvironment() {
-  return Object.freeze({
-    HOME: '/nonexistent',
-    XDG_CONFIG_HOME: '/nonexistent',
-    PATH: '/usr/bin:/bin',
-    LANG: 'C',
-    LC_ALL: 'C',
-    TZ: 'UTC',
-    GIT_CONFIG_NOSYSTEM: '1',
-    GIT_CONFIG_GLOBAL: '/dev/null',
-    GIT_OPTIONAL_LOCKS: '0',
-    GIT_TERMINAL_PROMPT: '0',
-    GIT_LITERAL_PATHSPECS: '1',
-    GIT_PROTOCOL_FROM_USER: '0',
-    GIT_PAGER: '/bin/cat',
-    GIT_EDITOR: '/bin/false',
-  });
-}
-
-function bootstrapRunTrackedGit(gitDirectory, commandArguments, deadline, label) {
-  const result = bootstrapSpawnSync(BOOTSTRAP_TRACKED_GIT_EXECUTABLE, [
-    '-c', 'core.hooksPath=/dev/null',
-    '-c', 'core.fsmonitor=false',
-    '-c', 'core.untrackedCache=false',
-    '-c', 'core.attributesFile=/dev/null',
-    '-c', 'core.excludesFile=/dev/null',
-    '-c', 'submodule.recurse=false',
-    '-c', 'fetch.recurseSubmodules=false',
-    '-c', 'protocol.file.allow=never',
-    '-c', 'protocol.ext.allow=never',
-    `--git-dir=${gitDirectory}`,
-    `--work-tree=${BOOTSTRAP_ROOT}`,
-    ...commandArguments,
-  ], {
-    cwd: BOOTSTRAP_ROOT,
-    env: bootstrapTrackedGitEnvironment(),
-    encoding: 'buffer',
-    maxBuffer: BOOTSTRAP_TRACKED_SOURCE_MAX_GIT_OUTPUT_BYTES,
-    timeout: bootstrapRemainingTrackedMilliseconds(deadline),
-    windowsHide: true,
-  });
-  if (result.error || result.status !== 0 || result.signal !== null || result.stderr.length !== 0) {
-    throw new Error(`fixed config-free Git could not enumerate launcher ${label}: ${
-      result.error?.message || result.stderr.toString('utf8').trim() || `status ${result.status}`
-    }`);
-  }
-  bootstrapRequireTrackedDeadline(deadline);
-  return result.stdout;
-}
-
-function bootstrapTrackedGitMembership(gitDirectory, deadline) {
-  const output = bootstrapRunTrackedGit(
-    gitDirectory,
-    ['ls-files', '--cached', '--stage', '--full-name', '-z', '--'],
-    deadline,
-    'tracked source',
-  );
-  const rows = [];
-  let offset = 0;
-  let previousPath = null;
-  let previousPathBytes = null;
-  while (offset < output.length) {
-    const end = output.indexOf(0, offset);
-    if (end < 0) throw new Error('launcher tracked Git membership is not NUL terminated');
-    const row = output.subarray(offset, end);
-    offset = end + 1;
-    const separator = row.indexOf(0x09);
-    if (separator <= 0) throw new Error('launcher tracked Git membership row is malformed');
-    const header = row.subarray(0, separator).toString('ascii');
-    const pathBytes = row.subarray(separator + 1);
-    const match = /^(100644|100755|120000) ([0-9a-f]{40}|[0-9a-f]{64}) 0$/u.exec(header);
-    if (!match) throw new Error('launcher tracked Git membership has unsupported mode, object ID, or stage');
-    const selectedPath = pathBytes.toString('utf8');
-    if (!Buffer.from(selectedPath, 'utf8').equals(pathBytes) || pathBytes.length === 0 ||
-        pathBytes.length > 4096 || bootstrapPath.isAbsolute(selectedPath) ||
-        bootstrapPath.posix.normalize(selectedPath) !== selectedPath ||
-        selectedPath.split('/').some((part) => part === '' || part === '.' || part === '..') ||
-        selectedPath.split('/').includes('.git')) {
-      throw new Error('launcher tracked Git membership contains an unsafe path');
-    }
-    if (previousPath === selectedPath ||
-        (previousPathBytes !== null && Buffer.compare(previousPathBytes, pathBytes) >= 0)) {
-      throw new Error('launcher tracked Git membership is duplicate or not canonical index order');
-    }
-    rows.push(Object.freeze({ gitMode: match[1], objectId: match[2], path: selectedPath }));
-    if (rows.length > BOOTSTRAP_TRACKED_SOURCE_MAX_FILES) {
-      throw new Error('launcher tracked source exceeds its file-count bound');
-    }
-    previousPath = selectedPath;
-    previousPathBytes = Buffer.from(pathBytes);
-  }
-  if (rows.length === 0) throw new Error('launcher tracked source membership is empty');
-  bootstrapRequireTrackedDeadline(deadline);
-  return Object.freeze(rows);
-}
-
-function bootstrapParseCanonicalUntrackedPaths(output, label) {
-  const rows = [];
-  let offset = 0;
-  let previousPathBytes = null;
-  while (offset < output.length) {
-    const end = output.indexOf(0, offset);
-    if (end < 0) throw new Error(`${label} is not NUL terminated`);
-    const pathBytes = output.subarray(offset, end);
-    offset = end + 1;
-    const selectedPath = pathBytes.toString('utf8');
-    if (!Buffer.from(selectedPath, 'utf8').equals(pathBytes) || pathBytes.length === 0 ||
-        pathBytes.length > 4096 || bootstrapPath.isAbsolute(selectedPath) ||
-        bootstrapPath.posix.normalize(selectedPath) !== selectedPath ||
-        selectedPath.split('/').some((part) => part === '' || part === '.' || part === '..') ||
-        selectedPath.split('/').includes('.git') ||
-        (previousPathBytes !== null && Buffer.compare(previousPathBytes, pathBytes) >= 0)) {
-      throw new Error(`${label} contains an unsafe, duplicate, or unordered path`);
-    }
-    rows.push(selectedPath);
-    if (rows.length > BOOTSTRAP_TRACKED_SOURCE_MAX_FILES) {
-      throw new Error(`${label} exceeds its file-count bound`);
-    }
-    previousPathBytes = Buffer.from(pathBytes);
-  }
-  return Object.freeze(rows);
-}
-
-function bootstrapTrackedGitUntracked(gitDirectory, deadline) {
-  const untracked = bootstrapParseCanonicalUntrackedPaths(bootstrapRunTrackedGit(
-    gitDirectory,
-    ['ls-files', '--others', '-z', '--'],
-    deadline,
-    'unfiltered untracked source',
-  ), 'launcher unfiltered untracked source');
-  const allowed = new Set(BOOTSTRAP_TRACKED_UNTRACKED_POLICY.allowedWorkspaceInstructions);
-  const unexpected = untracked.find((selectedPath) => !allowed.has(selectedPath));
-  if (unexpected !== undefined) {
-    throw new Error(`unexpected untracked source refuses launcher receipt capture: ${unexpected}`);
-  }
-  bootstrapRequireTrackedDeadline(deadline);
-  return untracked;
-}
-
-function bootstrapValidateTrackedDirectoryClosure(directoryPaths, deadline) {
-  const expected = new Set(directoryPaths);
-  const selected = [...expected].sort();
-  const records = [];
-  for (const relative of ['.', ...selected]) {
-    bootstrapRequireTrackedDeadline(deadline);
-    const absolute = relative === '.'
-      ? BOOTSTRAP_ROOT
-      : bootstrapPath.join(BOOTSTRAP_ROOT, ...relative.split('/'));
-    const before = bootstrapStableDirectory(absolute, relative, deadline);
-    const children = bootstrapFs.readdirSync(absolute, { withFileTypes: true })
-      .sort((left, right) => Buffer.compare(Buffer.from(left.name), Buffer.from(right.name)));
-    for (const child of children) {
-      if (!child.isDirectory() || (relative === '.' && child.name === '.git')) continue;
-      const childPath = relative === '.' ? child.name : `${relative}/${child.name}`;
-      if (!expected.has(childPath)) {
-        throw new Error(`unexpected untracked directory refuses launcher receipt capture: ${childPath}`);
-      }
-    }
-    const after = bootstrapStableDirectory(absolute, relative, deadline);
-    if (bootstrapCanonical(after) !== bootstrapCanonical(before)) {
-      throw new Error(`launcher tracked source directory changed while closing its inventory: ${relative}`);
-    }
-    if (relative !== '.') records.push(before);
-  }
-  bootstrapRequireTrackedDeadline(deadline);
-  return Object.freeze(records);
-}
-
-function bootstrapCaptureTrackedSource() {
-  const deadline = bootstrapTrackedDeadline();
-  const root = bootstrapStableDirectory(BOOTSTRAP_ROOT, '.', deadline);
-  const gitExecutable = bootstrapStableBoundedFile(
-    BOOTSTRAP_TRACKED_GIT_EXECUTABLE,
-    BOOTSTRAP_TRACKED_GIT_EXECUTABLE,
-    16 * 1024 * 1024,
-    deadline,
-    { rootOwnedExecutable: true },
-  ).record;
-  const repository = bootstrapDiscoverTrackedGitDirectory(deadline);
-  const indexPath = bootstrapPath.join(repository.gitDirectory, 'index');
-  const index = bootstrapStableBoundedFile(indexPath, 'gitdir/index', 64 * 1024 * 1024, deadline).record;
-  const membership = bootstrapTrackedGitMembership(repository.gitDirectory, deadline);
-  const untracked = bootstrapTrackedGitUntracked(repository.gitDirectory, deadline);
-  const required = new Set(membership.map((entry) => entry.path));
-  for (const selected of ['revival', 'contracts/operator-setup.json']) {
-    if (!required.has(selected)) throw new Error(`launcher tracked source omits required input: ${selected}`);
-  }
-
-  const directoryPaths = new Set();
-  for (const member of membership) {
-    const parts = member.path.split('/');
-    for (let length = 1; length < parts.length; length += 1) {
-      directoryPaths.add(parts.slice(0, length).join('/'));
-    }
-  }
-  const directories = bootstrapValidateTrackedDirectoryClosure(directoryPaths, deadline);
-  const entries = [];
-  let totalBytes = 0;
-  for (const member of membership) {
-    bootstrapRequireTrackedDeadline(deadline);
-    const absolute = bootstrapPath.join(BOOTSTRAP_ROOT, ...member.path.split('/'));
-    const entry = member.gitMode === '120000'
-      ? bootstrapStableTrackedSymlink(absolute, member, deadline)
-      : bootstrapStableTrackedFile(absolute, member, deadline);
-    totalBytes += Number(entry.size);
-    if (!Number.isSafeInteger(totalBytes) || totalBytes > BOOTSTRAP_TRACKED_SOURCE_MAX_BYTES) {
-      throw new Error('launcher tracked source exceeds its total byte bound');
-    }
-    entries.push(entry);
-  }
-
-  for (const entry of entries) {
-    const absolute = bootstrapPath.join(BOOTSTRAP_ROOT, ...entry.path.split('/'));
-    const rebound = entry.type === 'symlink'
-      ? bootstrapStableTrackedSymlink(absolute, entry, deadline)
-      : bootstrapStableTrackedFile(absolute, entry, deadline);
-    if (bootstrapCanonical(rebound) !== bootstrapCanonical(entry)) {
-      throw new Error(`launcher tracked source entry changed before capture completed: ${entry.path}`);
-    }
-  }
-  for (const directory of directories) {
-    const rebound = bootstrapStableDirectory(
-      bootstrapPath.join(BOOTSTRAP_ROOT, ...directory.path.split('/')),
-      directory.path,
-      deadline,
-    );
-    if (bootstrapCanonical(rebound) !== bootstrapCanonical(directory)) {
-      throw new Error(`launcher tracked source directory changed before capture completed: ${directory.path}`);
-    }
-  }
-
-  const rootAfter = bootstrapStableDirectory(BOOTSTRAP_ROOT, '.', deadline);
-  const gitExecutableAfter = bootstrapStableBoundedFile(
-    BOOTSTRAP_TRACKED_GIT_EXECUTABLE,
-    BOOTSTRAP_TRACKED_GIT_EXECUTABLE,
-    16 * 1024 * 1024,
-    deadline,
-    { rootOwnedExecutable: true },
-  ).record;
-  const repositoryAfter = bootstrapDiscoverTrackedGitDirectory(deadline);
-  const indexAfter = bootstrapStableBoundedFile(indexPath, 'gitdir/index', 64 * 1024 * 1024, deadline).record;
-  const untrackedAfter = bootstrapTrackedGitUntracked(repository.gitDirectory, deadline);
-  if (
-    bootstrapCanonical(rootAfter) !== bootstrapCanonical(root) ||
-    bootstrapCanonical(gitExecutableAfter) !== bootstrapCanonical(gitExecutable) ||
-    bootstrapCanonical(bootstrapGitControlPathEvidence(repositoryAfter.dotGit)) !==
-      bootstrapCanonical(bootstrapGitControlPathEvidence(repository.dotGit)) ||
-    bootstrapCanonical(bootstrapGitDirectoryEvidence(repositoryAfter.gitDir)) !==
-      bootstrapCanonical(bootstrapGitDirectoryEvidence(repository.gitDir)) ||
-    repositoryAfter.gitDirectory !== repository.gitDirectory ||
-    bootstrapCanonical(indexAfter) !== bootstrapCanonical(index) ||
-    bootstrapCanonical(untrackedAfter) !== bootstrapCanonical(untracked)
-  ) throw new Error('launcher tracked repository or Git authority changed while captured');
-
-  const frozenEntries = Object.freeze(entries);
-  const evidence = Object.freeze({
-    schemaVersion: BOOTSTRAP_TRACKED_SOURCE_SCHEMA_VERSION,
-    root,
-    gitExecutable,
-    repository: Object.freeze({
-      dotGit: bootstrapGitControlPathEvidence(repository.dotGit),
-      gitDir: bootstrapGitDirectoryEvidence(repository.gitDir),
-      gitDirectory: repository.gitDirectory,
-      index,
-    }),
-    untrackedPolicy: BOOTSTRAP_TRACKED_UNTRACKED_POLICY,
-    untracked,
-    membership,
-    directories,
-    entries: frozenEntries,
-    fileCount: frozenEntries.length,
-    totalBytes,
-  });
-  const semanticEntries = frozenEntries.map((entry) => ({
-    path: entry.path,
-    gitMode: entry.gitMode,
-    objectId: entry.objectId,
-    type: entry.type,
-    size: entry.size,
-    contentSha256: entry.contentSha256,
-    ...(entry.type === 'symlink' ? { linkTextBase64: entry.linkTextBase64 } : {}),
-  }));
-  return Object.freeze({
-    ...evidence,
-    untrackedPolicySha256: bootstrapSha256(bootstrapCanonical(BOOTSTRAP_TRACKED_UNTRACKED_POLICY)),
-    untrackedEnumerationSha256: bootstrapSha256(bootstrapCanonical(untracked)),
-    trackedMembershipSha256: bootstrapSha256(bootstrapCanonical(membership)),
-    trackedSourceBindingSha256: bootstrapSha256(bootstrapCanonical({
-      schemaVersion: BOOTSTRAP_TRACKED_SOURCE_SCHEMA_VERSION,
-      gitExecutableSha256: gitExecutable.contentSha256,
-      indexSha256: index.contentSha256,
-      untrackedPolicy: BOOTSTRAP_TRACKED_UNTRACKED_POLICY,
-      untracked,
-      membership,
-      entries: semanticEntries,
-    })),
-    trackedSourceEvidenceSha256: bootstrapSha256(bootstrapCanonical(evidence)),
-  });
-}
-
-function bootstrapMappedInputMatchesTracked(input, trackedEntry) {
-  return input.path === trackedEntry.path && input.sha256 === trackedEntry.contentSha256 &&
-    BOOTSTRAP_FILE_IDENTITY_FIELDS.every((field) => input[field] === trackedEntry[field]);
-}
-
-function bootstrapMatchedCommand(argv, contract) {
-  let selected = null;
-  for (const command of contract.commands) {
-    for (const candidate of [command.tokens, ...command.aliases]) {
-      if (
-        candidate.length <= argv.length &&
-        candidate.every((token, index) => argv[index] === token) &&
-        (selected === null || candidate.length > selected.length)
-      ) selected = { command, length: candidate.length };
-    }
-  }
-  return selected;
-}
-
-function captureBootstrapInvocation(argv) {
-  const launcher = bootstrapStableFile('revival');
-  const contractSource = bootstrapStableFile('contracts/operator-setup.json');
-  let contract;
-  try {
-    const contractText = contractSource.bytes.toString('utf8');
-    if (!Buffer.from(contractText, 'utf8').equals(contractSource.bytes)) {
-      throw new Error('operator contract is not canonical UTF-8');
-    }
-    contract = JSON.parse(contractText);
-  } catch (error) {
-    throw new Error(`launcher bootstrap cannot parse operator contract: ${error.message}`);
-  }
-  if (contract?.schemaVersion !== 1 || !Array.isArray(contract.commands) ||
-      !Array.isArray(contract.journeys) || !Array.isArray(contract.settings)) {
-    throw new Error('launcher bootstrap requires the schema-version 1 operator contract');
-  }
-  const matched = bootstrapMatchedCommand(argv, contract);
-  const actionId = matched?.command?.id ?? null;
-  const base = {
-    schemaVersion: 1,
-    argv: Object.freeze([...argv]),
-    launcher: launcher.record,
-    actionMapping: Object.freeze({
-      contract: contractSource.record,
-      actionId,
-      matchedLength: matched?.length ?? 0,
-    }),
-  };
-  if (!BOOTSTRAP_RECEIPT_ACTIONS.has(actionId)) {
-    return Object.freeze({
-      ...base,
-      trackedSource: null,
-      invocationBinding: null,
-    });
-  }
-  const trackedSource = bootstrapCaptureTrackedSource();
-  const trackedByPath = new Map(trackedSource.entries.map((entry) => [entry.path, entry]));
-  if (
-    !bootstrapMappedInputMatchesTracked(launcher.record, trackedByPath.get('revival')) ||
-    !bootstrapMappedInputMatchesTracked(
-      contractSource.record,
-      trackedByPath.get('contracts/operator-setup.json'),
-    )
-  ) throw new Error('launcher action mapping input changed before tracked source capture');
-  const invocationBinding = Object.freeze({
-    schemaVersion: 3,
-    actionId,
-    actionBindingSha256: bootstrapSha256(bootstrapCanonical(matched.command)),
-    untrackedPolicySha256: trackedSource.untrackedPolicySha256,
-    untrackedEnumerationSha256: trackedSource.untrackedEnumerationSha256,
-    trackedMembershipSha256: trackedSource.trackedMembershipSha256,
-    trackedSourceBindingSha256: trackedSource.trackedSourceBindingSha256,
-    trackedSourceEvidenceSha256: trackedSource.trackedSourceEvidenceSha256,
-    invocationSha256: bootstrapSha256(bootstrapCanonical(argv)),
-  });
-  return Object.freeze({ ...base, trackedSource, invocationBinding });
-}
-
-function bootstrapNodeIsAuthoritative() {
-  const candidates = process.platform === 'darwin'
-    ? [
-      '/opt/homebrew/opt/node@22/bin/node',
-      '/usr/local/opt/node@22/bin/node',
-      '/opt/homebrew/bin/node',
-      '/usr/local/bin/node',
-    ]
-    : ['/usr/bin/node', '/usr/local/bin/node'];
-  let current;
-  try {
-    current = bootstrapFs.realpathSync.native(process.execPath);
-  } catch {
-    return false;
-  }
-  return candidates.some((candidate) => {
-    try {
-      const metadata = bootstrapFs.statSync(candidate);
-      bootstrapFs.accessSync(candidate, bootstrapFs.constants.X_OK);
-      return metadata.isFile() && bootstrapFs.realpathSync.native(candidate) === current;
-    } catch {
-      return false;
-    }
-  });
-}
-
-if (!bootstrapNodeIsAuthoritative() || !/^v22\./u.test(process.version)) {
-  process.stderr.write(`error: ./revival requires Node.js 22 from a supported fixed platform path; observed ${process.execPath} ${process.version}\n`);
   process.exit(126);
 }
 
-let bootstrapInvocation;
-try {
-  bootstrapInvocation = captureBootstrapInvocation(rawArgs);
-} catch (error) {
-  process.stderr.write(`error: launcher bootstrap could not capture stable source evidence: ${error.message}\n`);
-  process.exit(1);
-}
-
-// The repository authority module is intentionally the first non-built-in
-// dependency, and is loaded only after the immutable bootstrap capture above.
-const {
-  currentNodeIsAuthoritative,
-} = require('./platform/cli/authority');
-if (!currentNodeIsAuthoritative()) {
-  process.stderr.write(`error: ./revival requires Node.js 22 from a supported fixed platform path; observed ${process.execPath} ${process.version}\n`);
-  process.exit(126);
-}
-
-// The stable operator entry point. Command implementations live in
-// platform/cli/ — context (configuration and runtime validation), toolchain,
-// stack, gates, releases, production, and pin — and this file only parses the
-// command line and dispatches. Help is generated from the operator contract;
-// effectful plan/confirm behavior remains delegated to the owning tools.
-
-// Help and version resolve before command implementations are loaded. This is
-// an effect boundary: even `init --help` and deeply nested aliases can neither
-// initialize state nor probe Docker, ADB, or a remote host.
+// This file is intentionally a thin dispatcher. Artifact provenance, clean
+// source checks, production compatibility, and device safety belong to the
+// release/deploy/install commands that enforce those boundaries.
+const rawArgs = process.argv.slice(2);
 const { requestedHelp, renderHelp, versionInfo } = require('./platform/cli/command-spec');
+
 const helpRequest = requestedHelp(rawArgs);
 if (helpRequest.requested || rawArgs.length === 0) {
   process.stdout.write(`${renderHelp(helpRequest.tokens)}\n`);
   process.exit(0);
 }
+
 if (rawArgs[0] === '--version' || rawArgs[0] === 'version') {
   const options = rawArgs.slice(1);
   if ((rawArgs[0] === '--version' && options.length > 0) ||
@@ -747,7 +40,7 @@ if (rawArgs[0] === '--version' || rawArgs[0] === 'version') {
   }
 }
 
-const { PKI_TOOL, authoritativeCompletion, fail, initialize, resolveTool, run } = require('./platform/cli/context');
+const { PKI_TOOL, fail, initialize, resolveTool, run } = require('./platform/cli/context');
 const { developmentCommand, localDoctor, stack } = require('./platform/cli/stack');
 const { buildRelease, verifyRelease } = require('./platform/cli/releases');
 const { releaseCheck } = require('./platform/cli/gates');
@@ -769,27 +62,10 @@ const { setupCommand } = require('./platform/cli/setup');
 const { configCommand } = require('./platform/cli/config');
 const { supportBundleCommand } = require('./platform/cli/support-bundle');
 const { runTimedBoundary } = require('./platform/cli/timing');
-const {
-  captureSetupInvocation,
-  recordSetupInvocationSuccess,
-} = require('./platform/cli/setup-state');
 
-// Recompute with the now-loaded implementation and accept only byte-identical
-// evidence to the built-in bootstrap.  This also makes duplicated mapping
-// logic fail closed if the contract or setup-state policy evolves.
-const loadedSetupInvocation = captureSetupInvocation(rawArgs, {
-  trackedSourceCapture: bootstrapInvocation.trackedSource,
-});
-const setupInvocationBinding = (
-  bootstrapInvocation.invocationBinding !== null &&
-  loadedSetupInvocation !== null &&
-  bootstrapCanonical(bootstrapInvocation.invocationBinding) === bootstrapCanonical(loadedSetupInvocation)
-) ? bootstrapInvocation.invocationBinding : null;
 runTimedBoundary(() => {
   const args = [...rawArgs];
   const command = args.shift();
-  let completion = null;
-  let completionEvidenceSha256;
 
   if (command === 'init') {
     if (args.length !== 0) fail('usage: ./revival init', 64);
@@ -801,21 +77,21 @@ runTimedBoundary(() => {
   } else if (command === 'doctor') {
     if (args[0] === 'production') {
       args.shift();
-      completion = productionDoctor(args);
+      productionDoctor(args);
     } else {
-      completion = localDoctor(args);
+      localDoctor(args);
     }
   } else if (command === 'stack') {
-    completion = stack(args.shift(), args);
+    stack(args.shift(), args);
   } else if (command === 'dev') {
     developmentCommand(args);
   } else if (command === 'check') {
     checkCommand(args);
   } else if (['build', 'up', 'down', 'status', 'logs'].includes(command)) {
-    completion = stack(command, args);
+    stack(command, args);
   } else if (command === 'config') {
-    if (['path', 'get', 'set', 'check', 'list', 'template'].includes(args[0])) completion = configCommand(args);
-    else completion = stack('config', args);
+    if (['path', 'get', 'set', 'check', 'list', 'template'].includes(args[0])) configCommand(args);
+    else stack('config', args);
   } else if (command === 'release') {
     const subcommand = args.shift();
     if (subcommand === 'build') buildRelease(args);
@@ -823,17 +99,18 @@ runTimedBoundary(() => {
     else if (subcommand === 'candidate') releaseCandidate(args);
     else if (subcommand === 'check' && (args.length === 0 || (args.length === 1 && args[0] === '--source'))) {
       releaseCheck({ source: args[0] === '--source' });
+    } else {
+      fail('usage: ./revival release check [--source] | build ... | verify ... | candidate prepare|verify|inspect ...');
     }
-    else fail('usage: ./revival release check [--source] | build ... | verify ... | candidate prepare|verify|inspect ...');
   } else if (command === 'deploy') {
     const target = args.shift();
-    if (target === 'production') completion = deployProduction(args);
-    else if (target === 'carry-baseline') completion = registerCarryBaseline(args);
+    if (target === 'production') deployProduction(args);
+    else if (target === 'carry-baseline') registerCarryBaseline(args);
     else fail('usage: ./revival deploy production|carry-baseline [--confirm] [--dry-run]');
   } else if (command === 'backup') {
-    completion = backupProduction(args);
+    backupProduction(args);
   } else if (command === 'canary') {
-    completion = canaryProduction(args);
+    canaryProduction(args);
   } else if (command === 'drift') {
     deploymentScript('drift.sh', args);
   } else if (command === 'adopt-config') {
@@ -841,31 +118,15 @@ runTimedBoundary(() => {
   } else if (command === 'prune-state') {
     pruneState(args);
   } else if (command === 'rollback') {
-    completion = rollbackProduction(args);
+    rollbackProduction(args);
   } else if (command === 'pin') {
-    completion = pinCommand(args);
+    pinCommand(args);
   } else if (command === 'pki') {
     const confirmations = args.filter((argument) => argument === '--confirm').length;
     if (confirmations > 1) fail('pki accepts exactly one literal --confirm', 64);
-    const result = run(resolveTool('node'), [PKI_TOOL, ...args]);
-    if (confirmations === 1 && ['init', 'import'].includes(args[0])) {
-      completion = authoritativeCompletion(
-        `pki.${args[0]}`,
-        args[0] === 'init' ? 'device-user-ca-created' : 'device-user-ca-imported',
-        result,
-      );
-    }
+    run(resolveTool('node'), [PKI_TOOL, ...args]);
   } else if (command === 'setup') {
-    const setupResult = setupCommand(args, { invocationBinding: setupInvocationBinding });
-    if (setupResult !== null) {
-      if (
-        typeof setupResult !== 'object' || Array.isArray(setupResult) ||
-        Object.keys(setupResult).sort().join(',') !== 'completion,evidenceSha256' ||
-        !/^[0-9a-f]{64}$/u.test(setupResult.evidenceSha256 || '')
-      ) fail('setup command returned unsupported completion evidence');
-      completion = setupResult.completion;
-      completionEvidenceSha256 = setupResult.evidenceSha256;
-    }
+    setupCommand(args);
   } else if (command === 'support-bundle') {
     supportBundleCommand(args);
   } else if (command === 'test') {
@@ -873,36 +134,7 @@ runTimedBoundary(() => {
       fail('usage: ./revival test [--source]', 64);
     }
     releaseCheck({ source: args[0] === '--source' });
-    completion = authoritativeCompletion('test', 'repository-gate-passed');
   } else {
     fail(`unknown command: ${command}`);
-  }
-
-  // The dispatcher cannot infer semantic success from a zero exit. Only an
-  // owning command may return this closed proof after its final gate or
-  // mutation. A final built-in-only recapture must still match launcher,
-  // argv, contract, action, bytes, and every file identity observed before
-  // any repository module loaded. Receipts remain non-authoritative progress
-  // hints and are silently withheld on a concurrent edit.
-  if (completion !== null) {
-    let sourceUnchanged = false;
-    let postBootstrapInvocation = null;
-    try {
-      postBootstrapInvocation = captureBootstrapInvocation(rawArgs);
-      sourceUnchanged = bootstrapCanonical(postBootstrapInvocation) ===
-        bootstrapCanonical(bootstrapInvocation);
-    } catch {
-      sourceUnchanged = false;
-    }
-    if (sourceUnchanged && setupInvocationBinding !== null) {
-      const receiptOptions = {
-        invocationBinding: setupInvocationBinding,
-        postTrackedSourceCapture: postBootstrapInvocation.trackedSource,
-      };
-      if (completionEvidenceSha256 !== undefined) {
-        receiptOptions.evidenceSha256 = completionEvidenceSha256;
-      }
-      recordSetupInvocationSuccess(rawArgs, completion, receiptOptions);
-    }
   }
 });

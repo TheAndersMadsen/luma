@@ -685,7 +685,7 @@
       "effect": "read-only",
       "confirmationRequired": false,
       "exactSerialRequired": false,
-      "summary": "Resume the active setup journey at its next action.",
+      "summary": "Show the active setup journey as an ordered checklist.",
       "usage": "revival setup --resume [options]",
       "documentationAnchor": "README.md#run-locally"
     },
@@ -700,7 +700,7 @@
       "effect": "read-only",
       "confirmationRequired": false,
       "exactSerialRequired": false,
-      "summary": "Show completed, blocked, and next setup steps.",
+      "summary": "Show complete and still-required setup steps.",
       "usage": "revival setup status [options]",
       "documentationAnchor": "README.md#run-locally"
     },

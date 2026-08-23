@@ -1210,6 +1210,7 @@ else
   verify_adopted_live_carry "$carry_baseline_id" stopped \
     "$current_candidate_id" "$current_release_id" "$current_authority_sha256" absent \
     || fail "Carry predecessor identity changed at the legacy activation boundary"
+  assert_global_durable_resource_holders legacy-only
   start_recorded_containers "$record/before/running-containers.txt"
   restore_target_keycloak_state \
     || fail "legacy Cosmos domain and Keycloak state could not be restored"

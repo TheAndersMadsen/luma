@@ -503,6 +503,99 @@ assert_no_alternate_security_writers
   }
 });
 
+test("all stopped and running containers are closed over exact Carry durable resources", async () => {
+  const backupLibrary = await readFile(path.join(remote, "lib/backup.sh"), "utf8");
+  const guardStart = backupLibrary.indexOf("assert_global_durable_resource_holders() {");
+  const guardEnd = backupLibrary.indexOf("\nrunning_durable_writer_names() {", guardStart);
+  assert.ok(guardStart >= 0 && guardEnd > guardStart, "durable holder guard is not a complete function");
+  const guard = backupLibrary.slice(guardStart, guardEnd);
+  const directory = await realpath(await mkdtemp(path.join(os.tmpdir(), "revival-durable-holders-")));
+  const containersPath = path.join(directory, "containers.json");
+  const volumesPath = path.join(directory, "volumes.json");
+  const names = {
+    state: "humane-carry-clone_carry-state",
+    postgres: "humane-carry-clone_carry-pgdata",
+    prometheus: "humane-carry-clone_prometheus-data",
+    grafana: "humane-carry-clone_grafana-data",
+  };
+  const mountpoints = {
+    [names.state]: "/docker/volumes/carry-state/_data",
+    [names.postgres]: "/docker/volumes/carry-pgdata/_data",
+    [names.prometheus]: "/docker/volumes/prometheus-data/_data",
+    [names.grafana]: "/docker/volumes/grafana-data/_data",
+  };
+  await writeFile(volumesPath, JSON.stringify(Object.entries(mountpoints).map(([Name, Mountpoint]) => ({ Name, Mountpoint }))));
+  const holder = ({
+    id = "legacy-connectivity", project = "humane-carry-clone", service = "connectivity",
+    running = true, type = "volume", name = names.state, source = mountpoints[names.state],
+    destination = "/var/lib/carry", rw = true,
+  } = {}) => ({
+    Id: id,
+    State: { Running: running },
+    Config: { Labels: {
+      "com.docker.compose.project": project,
+      "com.docker.compose.service": service,
+    } },
+    Mounts: [{ Type: type, Name: name, Source: source, Destination: destination, RW: rw }],
+  });
+  const exact = [holder()];
+  const cases = [
+    ["stopped duplicate", [holder(), holder({ id: "legacy-connectivity-copy", running: false })], "legacy-only"],
+    ["unrelated project", [holder({ project: "unreviewed" })], "legacy-only"],
+    ["read-only consumer", [holder({ rw: false })], "legacy-only"],
+    ["wrong destination", [holder({ destination: "/var/lib/cosmos" })], "legacy-only"],
+    ["volume mountpoint bind", [holder({ type: "bind", name: "", source: mountpoints[names.state] })], "legacy-only"],
+    ["volume mountpoint parent bind", [holder({ type: "bind", name: "", source: "/docker/volumes" })], "legacy-only"],
+    ["volume mountpoint child bind", [holder({ type: "bind", name: "", source: `${mountpoints[names.state]}/child` })], "legacy-only"],
+    ["noncanonical mountpoint alias", [holder({ type: "bind", name: "", source: `${mountpoints[names.state]}/../_data` })], "legacy-only"],
+    ["Center descendant bind", [holder({ service: "center", type: "bind", name: "", source: "/home/anders/carry-center-data/child", destination: "/data" })], "legacy-only"],
+    ["canonical holder during legacy topology", [holder({ project: "ai-pin-revival" })], "legacy-only"],
+    ["running retained legacy holder", [
+      holder({ id: "canonical", project: "ai-pin-revival" }),
+      holder({ id: "legacy", running: true }),
+    ], "canonical-with-retained-legacy"],
+  ];
+  const script = String.raw`
+set -euo pipefail
+${guard}
+PROJECT=ai-pin-revival
+LEGACY_PROJECT=humane-carry-clone
+STATE_VOLUME=humane-carry-clone_carry-state
+PG_VOLUME=humane-carry-clone_carry-pgdata
+PROMETHEUS_VOLUME=humane-carry-clone_prometheus-data
+GRAFANA_VOLUME=humane-carry-clone_grafana-data
+CENTER_DATA_DIR=/home/anders/carry-center-data
+containers_file="$1"; volumes_file="$2"; topology="$3"
+fail() { printf '%s\n' "$*" >&2; return 1; }
+docker() {
+  if [[ "$1" == ps ]]; then
+    python3 - "$containers_file" <<'PY'
+import json,sys
+for item in json.load(open(sys.argv[1],encoding="utf-8")): print(item["Id"])
+PY
+  elif [[ "$1" == inspect ]]; then cat "$containers_file"
+  elif [[ "$1 $2" == "volume inspect" ]]; then cat "$volumes_file"
+  else return 97
+  fi
+}
+assert_global_durable_resource_holders "$topology"
+`;
+  await writeFile(containersPath, JSON.stringify(exact));
+  let result = spawnSync("bash", ["-c", script, "fixture", containersPath, volumesPath, "legacy-only"], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  await writeFile(containersPath, JSON.stringify([
+    holder({ id: "canonical", project: "ai-pin-revival" }),
+    holder({ id: "legacy", running: false }),
+  ]));
+  result = spawnSync("bash", ["-c", script, "fixture", containersPath, volumesPath, "canonical-with-retained-legacy"], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  for (const [label, containers, topology] of cases) {
+    await writeFile(containersPath, JSON.stringify(containers));
+    result = spawnSync("bash", ["-c", script, label, containersPath, volumesPath, topology], { encoding: "utf8" });
+    assert.notEqual(result.status, 0, `${label} durable access unexpectedly passed`);
+  }
+});
+
 test("archive inventory and channel-key contract retain root and child metadata", async () => {
   const common = path.join(remote, "common.sh");
   const directory = await mkdtemp(path.join(os.tmpdir(), "revival-metadata-"));

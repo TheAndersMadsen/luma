@@ -129,10 +129,10 @@ const PBES2_CIPHERS = new Map([
 // tracked diagrams and any future .claude/.gstack source are scanned exactly
 // like application code.
 const SOURCE_POLICY_EXCLUDED_ROOT_DIRECTORIES = new Set([".git"]);
-// These two ignored, harness-injected safety documents contain two deliberate
-// historical path literals. Approval is bound to the exact file AND exact
-// literal; every other byte (including a newly injected token or key) remains
-// under the ordinary source policy.
+// Two ignored, harness-injected instruction documents must name paths that the
+// source policy otherwise forbids. Approval is bound to the exact file AND
+// exact full path token; every other byte (including a newly injected token or
+// key) remains under the ordinary source policy.
 const REVIEWED_SOURCE_POLICY_PATH_LITERALS = new Map([
   ["AGENTS.md", Object.freeze([
     ["", "Users", "andersmadsen", "Desktop", "Ai Pin Revival"].join(POLICY_SLASH),
@@ -143,6 +143,42 @@ const REVIEWED_SOURCE_POLICY_PATH_LITERALS = new Map([
     ["", "home", "anders", "carry-cent*"].join(POLICY_SLASH),
   ])],
 ]);
+// The production authority and its executable mirror deliberately name one
+// forbidden Carry->Cosmos migration target. Unlike instruction-file reviews,
+// these approvals bind the literal to its complete declaration context. Any
+// edit, move, duplication, alternate spelling, or expression remains visible
+// to the ordinary source policy.
+const REVIEWED_SOURCE_POLICY_PATH_CONTEXTS = new Map([
+  ["platform/deploy/production-compose-authority.json", Object.freeze([
+    Object.freeze({
+      prefix: [
+        "  \"forbiddenRenamedResources\": {\n",
+        "    \"centerDataPaths\": [\n",
+        "      \"",
+      ].join(""),
+      literal: ["", "home", "anders", "cosmos-center-data"].join(POLICY_SLASH),
+      suffix: [
+        "\"\n",
+        "    ],\n",
+        "    \"networks\": [",
+      ].join(""),
+    }),
+  ])],
+  ["platform/deploy/release-candidate.mjs", Object.freeze([
+    Object.freeze({
+      prefix: [
+        "export const FORBIDDEN_RENAMED_PRODUCTION_RESOURCES = deepFreeze({\n",
+        "  centerDataPaths: [\"",
+      ].join(""),
+      literal: ["", "home", "anders", "cosmos-center-data"].join(POLICY_SLASH),
+      suffix: [
+        "\"],\n",
+        "  networks: [\"humane-cosmos-clone_cosmos-local\"],",
+      ].join(""),
+    }),
+  ])],
+]);
+const SOURCE_POLICY_PATH_TOKEN_CHARACTER = /[A-Za-z0-9._~!$&'()*+,;=:@%/\\-]/u;
 const LIVE_KEY_SNAPSHOT_BASENAME_PATTERNS = Object.freeze([
   /^\.cosmos-channel-key\.json(?:\..+)?$/iu,
   /^channel-key\.json(?:\..+)?$/iu,
@@ -2847,10 +2883,51 @@ export function findUnapprovedMachinePath(text, machinePath = null) {
 }
 
 function applyReviewedSourcePolicyPathLiterals(text, releasePath) {
-  const literals = REVIEWED_SOURCE_POLICY_PATH_LITERALS.get(releasePath);
-  if (!literals) return text;
   let reviewed = text;
-  for (const literal of literals) reviewed = reviewed.replaceAll(literal, "[reviewed historical path]");
+  const contexts = REVIEWED_SOURCE_POLICY_PATH_CONTEXTS.get(releasePath);
+  for (const context of contexts ?? []) {
+    const target = `${context.prefix}${context.literal}${context.suffix}`;
+    const index = reviewed.indexOf(target);
+    // Exactly one byte-identical owning declaration is required. Multiple
+    // declarations are not equivalent to the single reviewed negative guard.
+    if (index === -1 || reviewed.lastIndexOf(target) !== index) continue;
+    const literalIndex = index + context.prefix.length;
+    reviewed = [
+      reviewed.slice(0, literalIndex),
+      "[reviewed source-policy path]",
+      reviewed.slice(literalIndex + context.literal.length),
+    ].join("");
+  }
+
+  const literals = REVIEWED_SOURCE_POLICY_PATH_LITERALS.get(releasePath);
+  if (!literals) return reviewed;
+  for (const literal of literals) {
+    let cursor = 0;
+    let redacted = "";
+    while (cursor < reviewed.length) {
+      const index = reviewed.indexOf(literal, cursor);
+      if (index === -1) {
+        redacted += reviewed.slice(cursor);
+        break;
+      }
+      redacted += reviewed.slice(cursor, index);
+      const previous = index === 0 ? "" : reviewed[index - 1];
+      const next = reviewed[index + literal.length] ?? "";
+      // A review covers the complete path token only. A prefix/suffix variant,
+      // descendant, or embedding inside another path remains visible to the
+      // ordinary machine-local path detector.
+      if (
+        (!previous || !SOURCE_POLICY_PATH_TOKEN_CHARACTER.test(previous))
+        && (!next || !SOURCE_POLICY_PATH_TOKEN_CHARACTER.test(next))
+      ) {
+        redacted += "[reviewed source-policy path]";
+      } else {
+        redacted += literal;
+      }
+      cursor = index + literal.length;
+    }
+    reviewed = redacted;
+  }
   return reviewed;
 }
 

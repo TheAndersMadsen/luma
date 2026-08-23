@@ -2849,6 +2849,11 @@ chmod 600 "$record/LIVE_MUTATION_STARTED.tmp"
 mv "$record/LIVE_MUTATION_STARTED.tmp" "$record/LIVE_MUTATION_STARTED"
 sync -f "$record/LIVE_MUTATION_STARTED"
 cutover_started=1
+if [[ -n "$carry_baseline_id" ]]; then
+  assert_global_durable_resource_holders legacy-only
+else
+  assert_global_durable_resource_holders canonical-with-retained-legacy
+fi
 stop_project_containers "$PROJECT"
 stop_project_containers "$LEGACY_PROJECT"
 

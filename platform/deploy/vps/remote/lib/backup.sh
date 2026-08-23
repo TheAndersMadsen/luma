@@ -107,12 +107,18 @@ EOF
 }
 
 assert_active_durable_mounts() {
-  local service destination expected container type project ai_bus network_attached
+  local service destination expected container type project active_project="" ai_bus network_attached
   while IFS=$'\t' read -r service destination expected type; do
     container="$(active_service_container "$service")"
     project="$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' "$container")"
     [[ "$project" == "$PROJECT" || "$project" == "$LEGACY_PROJECT" ]] \
       || fail "active $service container is outside the reviewed production projects"
+    if [[ -z "$active_project" ]]; then
+      active_project="$project"
+    else
+      [[ "$project" == "$active_project" ]] \
+        || fail "active durable services span multiple production projects"
+    fi
     [[ "$destination" != '@state@' ]] || destination=/var/lib/carry
     docker inspect "$container" | python3 -c '
 import json,sys
@@ -147,6 +153,11 @@ EOF
   active_device_user_root >/dev/null
   active_edge_security_root >/dev/null
   assert_no_alternate_security_writers
+  if [[ "$active_project" == "$LEGACY_PROJECT" ]]; then
+    assert_global_durable_resource_holders legacy-only
+  else
+    assert_global_durable_resource_holders canonical-with-retained-legacy
+  fi
 }
 
 assert_no_alternate_security_writers() {
@@ -194,6 +205,109 @@ for container in body:
         assert mount.get("RW") is False
 ' "$PROJECT" "$LEGACY_PROJECT" \
     || fail "a container has an unreviewed or writable path to deployed Carry security material"
+}
+
+# Close durable storage over the complete Docker inventory, not merely the
+# active Compose view. A stopped duplicate is latent restart authority, and a
+# bind of a Docker volume's host mountpoint (or any parent/child) bypasses the
+# volume Name checks. Read-only alternates are refused too: production has one
+# exact project/service/source/destination/RW grant for every durable holder.
+assert_global_durable_resource_holders() {
+  local topology="$1"
+  local -a containers=()
+  case "$topology" in
+    legacy-only|canonical-with-retained-legacy) ;;
+    *) fail "invalid durable-holder topology" ;;
+  esac
+  mapfile -t containers < <(docker ps -aq --no-trunc)
+  ((${#containers[@]} > 0)) || fail "production container inventory is empty"
+  python3 - "$PROJECT" "$LEGACY_PROJECT" "$topology" \
+    "$STATE_VOLUME" "$PG_VOLUME" "$PROMETHEUS_VOLUME" "$GRAFANA_VOLUME" \
+    "$CENTER_DATA_DIR" \
+    3< <(docker inspect "${containers[@]}") \
+    4< <(docker volume inspect "$STATE_VOLUME" "$PG_VOLUME" \
+      "$PROMETHEUS_VOLUME" "$GRAFANA_VOLUME") <<'PY' \
+    || fail "a container has unreviewed or duplicate access to a Carry durable resource"
+import json,os,sys
+
+canonical,legacy,topology,state,pg,prometheus,grafana,center=sys.argv[1:]
+containers=json.load(os.fdopen(3)); volume_body=json.load(os.fdopen(4))
+volume_names=(state,pg,prometheus,grafana)
+assert isinstance(containers,list) and containers
+assert isinstance(volume_body,list) and len(volume_body)==len(volume_names)
+volumes={item.get("Name"):item for item in volume_body if isinstance(item,dict)}
+assert set(volumes)==set(volume_names)
+
+def exact_absolute(value):
+    return (isinstance(value,str) and value.startswith("/") and value!="/" and
+            os.path.normpath(value)==value)
+
+mountpoints={}
+for name in volume_names:
+    mountpoint=volumes[name].get("Mountpoint")
+    assert exact_absolute(mountpoint)
+    mountpoints[name]=mountpoint
+assert len(set(mountpoints.values()))==len(mountpoints)
+assert exact_absolute(center)
+
+def overlaps(source,root):
+    if not isinstance(source,str) or not source.startswith("/"): return False
+    normalized=os.path.normpath(source)
+    try: common=os.path.commonpath((normalized,root))
+    except ValueError: return False
+    return common in (normalized,root)
+
+state_services=("connectivity","ai-bus","account","contacts","feature-flags",
+                "notable-events","provisioning")
+grants={
+    "postgres":("volume",pg,"/var/lib/postgresql/data",True),
+    "prometheus":("volume",prometheus,"/prometheus",True),
+    "grafana":("volume",grafana,"/var/lib/grafana",True),
+    "center":("bind",center,"/data",True),
+}
+for service in state_services:
+    grants[service]=("volume",state,"/var/lib/carry",True)
+
+allowed_projects={legacy} if topology=="legacy-only" else {canonical,legacy}
+holders={}
+for container in containers:
+    assert isinstance(container,dict)
+    identifier=container.get("Id")
+    assert isinstance(identifier,str) and identifier
+    labels=((container.get("Config") or {}).get("Labels") or {})
+    project=labels.get("com.docker.compose.project")
+    service=labels.get("com.docker.compose.service")
+    relevant=0
+    for mount in container.get("Mounts") or []:
+        assert isinstance(mount,dict)
+        kind=mount.get("Type"); name=mount.get("Name"); source=mount.get("Source")
+        protected_name=kind=="volume" and name in mountpoints
+        protected_path=(isinstance(source,str) and
+                        (overlaps(source,center) or
+                         any(overlaps(source,path) for path in mountpoints.values())))
+        if not (protected_name or protected_path): continue
+        relevant+=1
+        assert project in allowed_projects
+        assert service in grants
+        expected_kind,expected_source,expected_destination,expected_rw=grants[service]
+        assert kind==expected_kind and mount.get("Destination")==expected_destination
+        assert mount.get("RW") is expected_rw
+        if kind=="volume":
+            assert name==expected_source and source==mountpoints[expected_source]
+        else:
+            assert source==expected_source
+        key=(project,service)
+        holders.setdefault(key,set()).add(identifier)
+    # Every reviewed durable service owns exactly one protected mount. A second
+    # exact mount in the same container is still alternate authority.
+    assert relevant<=1
+
+for (project,service),identifiers in holders.items():
+    assert len(identifiers)==1
+    if topology=="canonical-with-retained-legacy" and project==legacy:
+        retained=[item for item in containers if item.get("Id") in identifiers]
+        assert len(retained)==1 and (retained[0].get("State") or {}).get("Running") is False
+PY
 }
 
 running_durable_writer_names() {

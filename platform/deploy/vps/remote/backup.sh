@@ -295,6 +295,12 @@ trap 'exit 143' TERM
 
 postgres="$(find_postgres_container)"
 [[ "$(docker inspect --format '{{.State.Running}}' "$postgres")" == true ]] || fail "Postgres is not running"
+postgres_project="$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' "$postgres")"
+case "$postgres_project" in
+  "$LEGACY_PROJECT") durable_holder_topology=legacy-only ;;
+  "$PROJECT") durable_holder_topology=canonical-with-retained-legacy ;;
+  *) fail "Postgres is outside the reviewed production projects" ;;
+esac
 prove_bridge_healthy || fail "the Pin bridge must be active and listening before backup"
 bridge_was_active=1
 if ((public_ingress_quiesced)); then
@@ -380,6 +386,7 @@ chmod 600 "$destination/quiesced-containers.txt"
 quiesced=1
 if ((${#writer_names[@]})); then
   mapfile -t writer_names < <(printf '%s\n' "${writer_names[@]}" | awk 'NF && !seen[$0]++')
+  assert_global_durable_resource_holders "$durable_holder_topology"
   docker stop --time 30 "${writer_names[@]}" >/dev/null
 fi
 assert_durable_writers_quiesced "$postgres" "$active_attest_dir" "$active_duc_dir"
@@ -507,6 +514,7 @@ printf '%s\n' "$postgres_image_id" >"$destination/postgres-restore-image-id.txt"
 # network client and durable-volume peer is already stopped; now stop the exact
 # PostgreSQL container cleanly and prove no RW holder remains before archiving.
 postgres_stopped=1
+assert_global_durable_resource_holders "$durable_holder_topology"
 docker stop --time 60 "$postgres" >/dev/null
 [[ "$(docker inspect --format '{{.State.Running}}' "$postgres")" == false ]] \
   || fail "PostgreSQL did not stop for its exact volume snapshot"

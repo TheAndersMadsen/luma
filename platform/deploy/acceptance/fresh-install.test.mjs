@@ -121,7 +121,8 @@ test("a clean isolated-XDG setup is safe, private, and idempotent", () => {
     assert.equal(setup.status, 0, setup.stderr);
     const plan = JSON.parse(setup.stdout);
     assert.equal(plan.selectedTrack, "local");
-    assert.equal(plan.next.action, "./revival init");
+    assert.equal(Object.hasOwn(plan, "next"), false);
+    assert.equal(plan.steps.find((step) => step.id === "initialize").status, "required");
     assert.equal(plan.physicalAcceptanceRequired, false);
     const setupProbes = existsSync(commandLog) ? readFileSync(commandLog, "utf8") : "";
     assert.ok(
