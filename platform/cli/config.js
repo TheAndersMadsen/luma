@@ -184,25 +184,6 @@ function configCheckReport() {
     checks.push({ id: 'runtime-file', status: 'FAIL', message: error.message, fix: './revival init' });
   }
   if (values) {
-    const selected = (name) => settingValue(values, resolveSetting(name));
-    if (selected('COSMOS_REMOTE_TTS_ENABLED') === 'true') {
-      for (const required of ['COSMOS_AZURE_SPEECH_KEY', 'COSMOS_AZURE_SPEECH_REGION']) {
-        if (!selected(required)) checks.push({
-          id: `dependency-${required}`,
-          status: 'FAIL',
-          message: `${required} is required when remote TTS is enabled.`,
-          fix: `./revival config set ${required} ${resolveSetting(required).sensitivity === 'secret' ? '--stdin' : 'VALUE'}`,
-        });
-      }
-    }
-    if (selected('REVIVAL_SPOTIFY_ADAPTER_URL') && !selected('REVIVAL_SPOTIFY_ADAPTER_TOKEN_FILE')) {
-      checks.push({
-        id: 'dependency-spotify-token',
-        status: 'FAIL',
-        message: 'REVIVAL_SPOTIFY_ADAPTER_TOKEN_FILE is required when the Spotify adapter URL is set.',
-        fix: './revival config set REVIVAL_SPOTIFY_ADAPTER_TOKEN_FILE --stdin',
-      });
-    }
     try {
       validateRuntime();
       checks.push({ id: 'runtime-contract', status: 'PASS', message: 'Runtime values satisfy the complete local configuration contract.' });

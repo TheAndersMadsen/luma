@@ -25,6 +25,22 @@ function invoke(env, args, input) {
   return spawnSync(process.execPath, [cli, ...args], { cwd: root, env, input, encoding: "utf8" });
 }
 
+function setValue(contents, name, value) {
+  return contents.replace(new RegExp(`^${name}=.*$`, "m"), `${name}=${value}`);
+}
+
+function validateProduction(env, envFile = env.REVIVAL_ENV_FILE) {
+  return spawnSync(
+    process.execPath,
+    [
+      "-e",
+      "require('./platform/cli/context').validateRuntime({ production: true, envFile: process.argv[1] })",
+      envFile,
+    ],
+    { cwd: root, env, encoding: "utf8" },
+  );
+}
+
 test("config uses the contract, redacts secrets, and writes atomically at 0600", () => {
   const { temporary, env } = fixture();
   try {
@@ -96,6 +112,156 @@ test("the root config contract represents every required production Compose inpu
   assert.deepEqual([...new Set(required.filter((name) => !contractNames.has(name)))], []);
 });
 
+test("production validation rejects malformed endpoints, database URLs, and weak passwords", () => {
+  const { temporary, env } = fixture();
+  try {
+    assert.equal(invoke(env, ["init"]).status, 0);
+    let valid = fs.readFileSync(env.REVIVAL_ENV_FILE, "utf8");
+    valid = setValue(valid, "COSMOS_AUTH_MODE", "edge-authenticated");
+    valid = setValue(valid, "COSMOS_CAPTURE_UPLOAD_BASE_URL", "https://uploads.example.test");
+    valid = setValue(valid, "COSMOS_ONBOARDING_ENDPOINT", "https://onboarding.example.test/v1/onboard");
+    fs.writeFileSync(env.REVIVAL_ENV_FILE, valid);
+    assert.equal(validateProduction(env).status, 0);
+
+    const databaseUrl = /^COSMOS_DATABASE_URL=(.*)$/m.exec(valid)[1];
+
+    for (const [name, value, message] of [
+      ["COSMOS_CAPTURE_UPLOAD_BASE_URL", "https://uploads.example.test/capture", /public HTTPS origin/],
+      ["COSMOS_CAPTURE_UPLOAD_BASE_URL", "http://uploads.example.test", /public HTTPS origin/],
+      ["COSMOS_ONBOARDING_ENDPOINT", "https://localhost/onboard", /public HTTPS URL/],
+      ["COSMOS_ONBOARDING_ENDPOINT", "https://localhost./onboard", /public HTTPS URL/],
+      ["COSMOS_ONBOARDING_ENDPOINT", "https://onboarding.service.local/onboard", /public HTTPS URL/],
+      ["COSMOS_ONBOARDING_ENDPOINT", "https://10.0.0.8/onboard", /public HTTPS URL/],
+      ["COSMOS_ONBOARDING_ENDPOINT", "not-a-url", /public HTTPS URL/],
+      ["COSMOS_ONBOARDING_ENDPOINT", "https://onboarding.example.test/${INJECTED_PATH}", /public HTTPS URL/],
+      ["COSMOS_ONBOARDING_ENDPOINT", "https://onboarding.example.test/v1\\onboard", /public HTTPS URL/],
+      ["COSMOS_ONBOARDING_ENDPOINT", '"https://onboarding.example.test/v1/onboard"', /public HTTPS URL/],
+      ["COSMOS_ONBOARDING_ENDPOINT", "https://onboarding.example.test/v1/onboard # comment", /public HTTPS URL/],
+      ["COSMOS_DATABASE_URL", "mysql://cosmos:password@database/cosmos", /PostgreSQL URL/],
+      ["COSMOS_DATABASE_URL", "postgresql://cosmos@database/cosmos", /PostgreSQL URL/],
+      ["COSMOS_DATABASE_URL", "postgresql://cosmos:short@postgres/cosmos", /PostgreSQL URL/],
+      ["COSMOS_DATABASE_URL", `${databaseUrl}?host=evil.example`, /PostgreSQL URL/],
+      ["COSMOS_DATABASE_URL", databaseUrl.replace(/\/cosmos$/, "/cosmos//"), /PostgreSQL URL/],
+      ["COSMOS_DATABASE_URL", databaseUrl.replace("cosmos:", "other:"), /PostgreSQL URL/],
+      ["COSMOS_DATABASE_URL", databaseUrl.replace(/(?<=postgresql:\/\/cosmos:)[^@]+/, "b".repeat(64)), /PostgreSQL URL/],
+      ["COSMOS_DATABASE_URL", databaseUrl.replace("@postgres:5432/", "@postgres:6543/"), /PostgreSQL URL/],
+      ["COSMOS_DATABASE_URL", `postgresql://cosmos:${"a".repeat(32)}$DB_PASSWORD@db.example.test/cosmos`, /PostgreSQL URL/],
+      ["COSMOS_DATABASE_URL", `postgresql://cosmos:${"a".repeat(32)}\\escape@db.example.test/cosmos`, /PostgreSQL URL/],
+      ["COSMOS_DATABASE_URL", `${databaseUrl} # compose comment`, /PostgreSQL URL/],
+      ["COSMOS_DATABASE_URL", `"${databaseUrl}"`, /PostgreSQL URL/],
+      ["COSMOS_PG_PASSWORD", "too-short", /at least 32 characters/],
+      ["COSMOS_PG_PASSWORD", `${"a".repeat(32)} # compose comment`, /using only letters/],
+      ["COSMOS_PG_PASSWORD", "${A_VERY_LONG_INTERPOLATED_DATABASE_PASSWORD}", /using only letters/],
+      ["GRAFANA_ADMIN_PASSWORD", "too-short", /at least 32 characters/],
+      ["GRAFANA_ADMIN_PASSWORD", `"${"a".repeat(32)}"`, /using only letters/],
+    ]) {
+      fs.writeFileSync(env.REVIVAL_ENV_FILE, setValue(valid, name, value));
+      const rejected = invoke(env, ["doctor", "production"]);
+      assert.notEqual(rejected.status, 0, `${name} unexpectedly passed`);
+      assert.match(rejected.stderr, message);
+    }
+
+    for (const acceptedOnboardingEndpoint of [
+      "https://onboarding.example.test",
+      "https://onboarding.example.test/v1/onboard",
+      "https://onboarding.example.test/v1/onboard?source=pin&mode=guided",
+    ]) {
+      fs.writeFileSync(
+        env.REVIVAL_ENV_FILE,
+        setValue(valid, "COSMOS_ONBOARDING_ENDPOINT", acceptedOnboardingEndpoint),
+      );
+      const accepted = validateProduction(env);
+      assert.equal(accepted.status, 0, accepted.stderr);
+    }
+
+    for (const acceptedDatabaseUrl of [
+      databaseUrl.replace("@postgres:5432/", "@postgres/"),
+      `postgresql://cosmos:${"%41".repeat(32)}@db.example.test:5432/cosmos`,
+    ]) {
+      fs.writeFileSync(env.REVIVAL_ENV_FILE, setValue(valid, "COSMOS_DATABASE_URL", acceptedDatabaseUrl));
+      const accepted = validateProduction(env);
+      assert.equal(accepted.status, 0, accepted.stderr);
+    }
+  } finally {
+    fs.rmSync(temporary, { recursive: true, force: true });
+  }
+});
+
+test("production commands validate the exact env file and reject duplicate env flags", () => {
+  const { temporary, env } = fixture();
+  try {
+    assert.equal(invoke(env, ["init"]).status, 0);
+    let primary = fs.readFileSync(env.REVIVAL_ENV_FILE, "utf8");
+    primary = setValue(primary, "COSMOS_AUTH_MODE", "edge-authenticated");
+    primary = setValue(primary, "COSMOS_CAPTURE_UPLOAD_BASE_URL", "https://uploads.example.test");
+    fs.writeFileSync(env.REVIVAL_ENV_FILE, primary);
+
+    const alternate = path.join(env.REVIVAL_SECRETS_DIR, "alternate.env");
+    fs.writeFileSync(
+      alternate,
+      setValue(primary, "COSMOS_CAPTURE_UPLOAD_BASE_URL", "https://127.0.0.1"),
+      { mode: 0o600 },
+    );
+    const bypass = invoke(env, ["doctor", "production", "--env-file", alternate]);
+    assert.notEqual(bypass.status, 0);
+    assert.match(bypass.stderr, /COSMOS_CAPTURE_UPLOAD_BASE_URL must be a valid public HTTPS origin/);
+
+    for (const args of [
+      ["doctor", "production", "--env-file"],
+      ["doctor", "production", "--env-file", env.REVIVAL_ENV_FILE, "--env-file", alternate],
+      ["deploy", "production", "--dry-run", "--env-file", env.REVIVAL_ENV_FILE, "--env-file", alternate],
+    ]) {
+      assert.equal(invoke(env, args).status, 64, args.join(" "));
+    }
+  } finally {
+    fs.rmSync(temporary, { recursive: true, force: true });
+  }
+});
+
+test("config check delegates conditional TTS and Spotify validation to the runtime contract", () => {
+  const { temporary, env } = fixture();
+  try {
+    assert.equal(invoke(env, ["init"]).status, 0);
+    let runtime = fs.readFileSync(env.REVIVAL_ENV_FILE, "utf8");
+    runtime = setValue(runtime, "COSMOS_REMOTE_TTS_ENABLED", "true");
+    runtime = setValue(runtime, "REVIVAL_SPOTIFY_ADAPTER_URL", "http://10.0.7.1:18081");
+    fs.writeFileSync(env.REVIVAL_ENV_FILE, runtime);
+
+    const result = invoke(env, ["config", "check", "--json"]);
+    assert.equal(result.status, 1);
+    const report = JSON.parse(result.stdout);
+    const failures = report.checks.filter((check) => check.status === "FAIL");
+    assert.equal(failures.length, 1);
+    assert.equal(failures[0].id, "runtime-contract");
+    assert.match(failures[0].message, /COSMOS_AZURE_SPEECH_KEY/);
+    assert.match(failures[0].message, /REVIVAL_SPOTIFY_ADAPTER_URL, REVIVAL_SPOTIFY_ADAPTER_TOKEN_FILE/);
+  } finally {
+    fs.rmSync(temporary, { recursive: true, force: true });
+  }
+});
+
+test("init derives the database URL from a dotenv-decoded safe quoted password", () => {
+  const { temporary, env } = fixture();
+  try {
+    assert.equal(invoke(env, ["init"]).status, 0);
+    const password = "manual_database_password_0123456789";
+    let runtime = fs.readFileSync(env.REVIVAL_ENV_FILE, "utf8");
+    runtime = setValue(runtime, "COSMOS_PG_PASSWORD", `"${password}"`);
+    runtime = setValue(runtime, "COSMOS_DATABASE_URL", "");
+    fs.writeFileSync(env.REVIVAL_ENV_FILE, runtime);
+
+    const initialized = invoke(env, ["init"]);
+    assert.equal(initialized.status, 0, initialized.stderr);
+    const updated = fs.readFileSync(env.REVIVAL_ENV_FILE, "utf8");
+    assert.match(updated, new RegExp(
+      `^COSMOS_DATABASE_URL=postgresql://cosmos:${encodeURIComponent(password)}@postgres:5432/cosmos$`,
+      "m",
+    ));
+  } finally {
+    fs.rmSync(temporary, { recursive: true, force: true });
+  }
+});
+
 test("a fresh root config can satisfy production Compose through the CLI", (context) => {
   const compose = spawnSync("docker", ["compose", "version"], { encoding: "utf8" });
   if (compose.error?.code === "ENOENT") {
@@ -108,9 +274,12 @@ test("a fresh root config can satisfy production Compose through the CLI", (cont
   try {
     assert.equal(invoke(env, ["init"]).status, 0);
     for (const [name, value, secret] of [
+      ["COSMOS_AUTH_MODE", "edge-authenticated", false],
       ["COSMOS_CAPTURE_UPLOAD_BASE_URL", "https://uploads.example.test", false],
       ["COSMOS_ENROLLMENT_PINCODE", "0000", true],
       ["COSMOS_ENROLLMENT_USER_ID", "U:production-config-test", false],
+      ["REVIVAL_SPOTIFY_ADAPTER_URL", "http://10.0.7.1:18081", false],
+      ["REVIVAL_SPOTIFY_ADAPTER_TOKEN_FILE", "/run/secrets/spotify_adapter_token", true],
       ["REVIVAL_PIN_BRIDGE_OWNER_SUB", "owner-production-config-test", false],
       ["REVIVAL_PIN_BRIDGE_DEVICE_ID", "device-production-config-test", false],
     ]) {
@@ -119,6 +288,8 @@ test("a fresh root config can satisfy production Compose through the CLI", (cont
         : invoke(env, ["config", "set", name, value]);
       assert.equal(result.status, 0, `${name}: ${result.stderr}`);
     }
+    fs.writeFileSync(path.join(env.REVIVAL_SECRETS_DIR, "pki", "duc-ca.crt"), "test certificate\n");
+    fs.writeFileSync(path.join(env.REVIVAL_SECRETS_DIR, "pki", "duc-ca.key"), "test private key\n");
 
     const doctor = invoke(env, ["doctor", "production"]);
     assert.equal(doctor.status, 0, doctor.stderr);

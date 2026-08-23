@@ -4,6 +4,7 @@
 const child = require('node:child_process');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
+const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 const {
@@ -195,10 +196,22 @@ function atomicWrite(file, contents, mode = 0o600) {
   }
 }
 
+function decodeEnvValue(rawValue) {
+  let value = rawValue.trim();
+  if ((value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))) {
+    value = value.slice(1, -1);
+  }
+  return value;
+}
+
 function fillBlankGeneratedSecrets(contents) {
   let updated = contents;
   let count = 0;
-  const configuredDatabasePassword = /^COSMOS_PG_PASSWORD=(.*)$/m.exec(contents)?.[1].trim();
+  const databasePasswordMatch = /^COSMOS_PG_PASSWORD=(.*)$/m.exec(contents);
+  const configuredDatabasePassword = databasePasswordMatch
+    ? decodeEnvValue(databasePasswordMatch[1])
+    : '';
   const databasePassword = configuredDatabasePassword || crypto.randomBytes(32).toString('hex');
   const generated = [
     ['COSMOS_PG_PASSWORD', () => databasePassword],
@@ -218,7 +231,7 @@ function fillBlankGeneratedSecrets(contents) {
   for (const [key, generate] of generated) {
     const pattern = new RegExp(`^${key}=(.*)$`, 'm');
     const match = pattern.exec(updated);
-    if (match && match[1].trim().length > 0) continue;
+    if (match && decodeEnvValue(match[1]).length > 0) continue;
     const replacement = `${key}=${generate()}`;
     if (match) updated = updated.replace(pattern, replacement);
     else updated = `${updated.replace(/\s*$/, '')}\n${replacement}\n`;
@@ -449,12 +462,7 @@ function parseEnvFile(file) {
     if (Object.hasOwn(values, match[1])) {
       throw new Error(`${file}:${index + 1} repeats ${match[1]}`);
     }
-    let value = match[2].trim();
-    if ((value.startsWith('"') && value.endsWith('"')) ||
-        (value.startsWith("'") && value.endsWith("'"))) {
-      value = value.slice(1, -1);
-    }
-    values[match[1]] = value;
+    values[match[1]] = decodeEnvValue(match[2]);
   }
   return values;
 }
@@ -470,6 +478,84 @@ function isExactBase64Bytes(value, bytes) {
 function requireValue(values, name, problems, minimum = 1) {
   if ((values[name] || '').length < minimum) {
     problems.push(`${name} must contain at least ${minimum} characters`);
+  }
+}
+
+function requireProductionPassword(values, source, name, problems) {
+  const value = values[name] || '';
+  if (!/^[A-Za-z0-9_-]{32,}$/.test(value) ||
+      !source.split(/\r?\n/).includes(`${name}=${value}`)) {
+    problems.push(`${name} must contain at least 32 characters using only letters, digits, _ or -`);
+  }
+}
+
+function isPublicDnsHostname(hostname) {
+  if (!hostname.includes('.') || hostname.endsWith('.') ||
+      hostname.endsWith('.localhost') || hostname.endsWith('.local')) return false;
+  const address = hostname.startsWith('[') && hostname.endsWith(']')
+    ? hostname.slice(1, -1)
+    : hostname;
+  if (net.isIP(address) !== 0 || hostname.length > 253) return false;
+  return hostname.split('.').every((label) =>
+    /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label));
+}
+
+function requireProductionHttpsUrl(values, source, name, problems, { origin = false } = {}) {
+  const value = values[name] || '';
+  const exactSafeLine = !/[\u0000-\u0020\u007f$\\'"#]/u.test(value) &&
+    source.split(/\r?\n/).includes(`${name}=${value}`);
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    problems.push(`${name} must be a valid public HTTPS ${origin ? 'origin' : 'URL'}`);
+    return;
+  }
+  if (!exactSafeLine || url.protocol !== 'https:' || !isPublicDnsHostname(url.hostname) ||
+      url.username || url.password ||
+      url.hash || (origin && (url.pathname !== '/' || url.search))) {
+    problems.push(`${name} must be a valid public HTTPS ${origin ? 'origin' : 'URL'}`);
+  }
+}
+
+function requireProductionDatabaseUrl(values, source, problems) {
+  const message = 'COSMOS_DATABASE_URL must be a PostgreSQL URL with user, password, host, and one database';
+  const rawValue = values.COSMOS_DATABASE_URL || '';
+  const rawValueIsSafe = /^[A-Za-z0-9._~:/@%\[\]-]+$/.test(rawValue) &&
+    source.split(/\r?\n/).includes(`COSMOS_DATABASE_URL=${rawValue}`);
+  let url;
+  try {
+    url = new URL(rawValue);
+  } catch {
+    problems.push(message);
+    return;
+  }
+  let username;
+  let password;
+  try {
+    username = decodeURIComponent(url.username);
+    password = decodeURIComponent(url.password);
+  } catch {
+    problems.push(message);
+    return;
+  }
+  const database = /^\/([A-Za-z_][A-Za-z0-9_-]*)$/.exec(url.pathname)?.[1] || '';
+  const host = url.hostname;
+  const hostAddress = host.startsWith('[') && host.endsWith(']') ? host.slice(1, -1) : host;
+  const hostnameIsSafe = net.isIP(hostAddress) !== 0 || (
+    !host.endsWith('.') && host.split('.').every((label) =>
+      /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label))
+  );
+  const valid = ['postgres:', 'postgresql:'].includes(url.protocol) &&
+    /^[A-Za-z_][A-Za-z0-9_-]*$/.test(username) &&
+    password.length >= 32 && !/[\0\r\n]/.test(password) &&
+    hostnameIsSafe && Boolean(host) && Boolean(database) && !url.search && !url.hash;
+  const canonicalStackDatabase = host !== 'postgres' || (
+    username === 'cosmos' && database === 'cosmos' && password === values.COSMOS_PG_PASSWORD &&
+    (!url.port || url.port === '5432')
+  );
+  if (!rawValueIsSafe || !valid || !canonicalStackDatabase) {
+    problems.push(message);
   }
 }
 
@@ -533,10 +619,10 @@ function validateLocalIdentityRealm(values, problems) {
   }
 }
 
-function validateRuntime({ production = false } = {}) {
-  requireExternalDirectory(ENV_FILE, 'REVIVAL_ENV_FILE');
-  if (!isInsideDirectory(ENV_FILE, SECRETS_DIR)) {
-    throw new Error(`REVIVAL_ENV_FILE must be inside REVIVAL_SECRETS_DIR: ${ENV_FILE}`);
+function validateRuntime({ production = false, envFile = ENV_FILE } = {}) {
+  requireExternalDirectory(envFile, 'REVIVAL_ENV_FILE');
+  if (!isInsideDirectory(envFile, SECRETS_DIR)) {
+    throw new Error(`REVIVAL_ENV_FILE must be inside REVIVAL_SECRETS_DIR: ${envFile}`);
   }
   for (const directory of [CONFIG_DIR, SECRETS_DIR, DATA_DIR, BUILD_DIR]) {
     if (!fs.existsSync(directory)) throw new Error(`operator directory is missing: ${directory}`);
@@ -548,20 +634,20 @@ function validateRuntime({ production = false } = {}) {
       throw new Error(`operator directory must not be accessible by group or other users: ${directory}`);
     }
   }
-  if (!fs.existsSync(ENV_FILE)) {
-    throw new Error(`runtime configuration is missing; run ./revival init (expected ${ENV_FILE})`);
+  if (!fs.existsSync(envFile)) {
+    throw new Error(`runtime configuration is missing; run ./revival init (expected ${envFile})`);
   }
-  if (fs.lstatSync(ENV_FILE).isSymbolicLink()) {
-    throw new Error(`${ENV_FILE} must not be a symbolic link`);
+  if (fs.lstatSync(envFile).isSymbolicLink()) {
+    throw new Error(`${envFile} must not be a symbolic link`);
   }
-  if (!fs.statSync(ENV_FILE).isFile()) {
-    throw new Error(`${ENV_FILE} must be a regular file`);
+  if (!fs.statSync(envFile).isFile()) {
+    throw new Error(`${envFile} must be a regular file`);
   }
-  if ((fs.statSync(ENV_FILE).mode & 0o777) !== 0o600) {
-    throw new Error(`${ENV_FILE} must have mode 0600`);
+  if ((fs.statSync(envFile).mode & 0o777) !== 0o600) {
+    throw new Error(`${envFile} must have mode 0600`);
   }
 
-  const values = parseEnvFile(ENV_FILE);
+  const values = parseEnvFile(envFile);
   const problems = [];
   if (values.REVIVAL_CONFIG_VERSION !== '1') problems.push('REVIVAL_CONFIG_VERSION must be 1');
   requireValue(values, 'REVIVAL_RELEASE_ID', problems, 1);
@@ -580,6 +666,14 @@ function validateRuntime({ production = false } = {}) {
   }
   if (production && authMode !== 'edge-authenticated') {
     problems.push('production requires COSMOS_AUTH_MODE=edge-authenticated');
+  }
+  if (production) {
+    const envSource = fs.readFileSync(envFile, 'utf8');
+    requireProductionHttpsUrl(values, envSource, 'COSMOS_CAPTURE_UPLOAD_BASE_URL', problems, { origin: true });
+    requireProductionHttpsUrl(values, envSource, 'COSMOS_ONBOARDING_ENDPOINT', problems);
+    requireProductionDatabaseUrl(values, envSource, problems);
+    requireProductionPassword(values, envSource, 'COSMOS_PG_PASSWORD', problems);
+    requireProductionPassword(values, envSource, 'GRAFANA_ADMIN_PASSWORD', problems);
   }
 
   requireValue(values, 'AUTH_SESSION_SECRET', problems, 32);
