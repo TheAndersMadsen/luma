@@ -52,7 +52,6 @@ const EXCLUDED_DIRECTORY_PATHS = new Set([
   ".claude",
   ".codex",
   ".secrets",
-  "backups",
   "captures",
   "data",
   "decompile-workspace",

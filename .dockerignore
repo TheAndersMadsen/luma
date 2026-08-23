@@ -11,7 +11,6 @@ private
 state
 var
 artifacts
-backups
 releases
 deployments
 **/secrets

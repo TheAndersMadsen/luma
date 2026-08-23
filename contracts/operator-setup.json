@@ -1012,448 +1012,384 @@
   "settings": [
     {
       "name": "REVIVAL_CONFIG_VERSION",
-      "aliases": [],
       "group": "local",
       "sensitivity": "operational",
       "home": "runtime.env"
     },
     {
       "name": "REVIVAL_RELEASE_ID",
-      "aliases": [],
       "group": "local",
       "sensitivity": "operational",
       "home": "runtime.env"
     },
     {
       "name": "REVIVAL_CENTER_PORT",
-      "aliases": [],
       "group": "local",
       "sensitivity": "operational",
       "home": "runtime.env"
     },
     {
       "name": "REVIVAL_PUBLIC_ORIGIN",
-      "aliases": [],
       "group": "production",
       "sensitivity": "operational",
       "home": "runtime.env"
     },
     {
       "name": "COSMOS_OIDC_ISSUER",
-      "aliases": [],
       "group": "production",
       "sensitivity": "identity",
       "home": "center.env"
     },
     {
       "name": "COSMOS_CAPTURE_SHARE_BASE_URL",
-      "aliases": [],
       "group": "production",
       "sensitivity": "operational",
       "home": "runtime.env"
     },
     {
       "name": "COSMOS_MUSICBRAINZ_BASE_URL",
-      "aliases": [],
       "group": "provider",
       "sensitivity": "operational",
       "home": "providers.env"
     },
     {
       "name": "COSMOS_SHOPPING_VISUAL_SEARCH_URL",
-      "aliases": [],
       "group": "provider",
       "sensitivity": "operational",
       "home": "providers.env"
     },
     {
       "name": "COSMOS_SHOPPING_ALLOWED_HOSTS",
-      "aliases": [],
       "group": "provider",
       "sensitivity": "operational",
       "home": "providers.env"
     },
     {
       "name": "COSMOS_SHOPPING_API_KEY",
-      "aliases": [],
       "group": "provider",
       "sensitivity": "secret",
       "home": "providers.env"
     },
     {
       "name": "COSMOS_AUTH_MODE",
-      "aliases": [],
       "group": "local",
       "sensitivity": "operational",
       "home": "runtime.env"
     },
     {
       "name": "COSMOS_EDGE_TOKEN",
-      "aliases": [],
       "group": "production",
       "sensitivity": "secret",
       "home": "runtime.env"
     },
     {
       "name": "AUTH_SESSION_SECRET",
-      "aliases": [],
       "group": "production",
       "sensitivity": "secret",
       "home": "center.env"
     },
     {
       "name": "REVIVAL_MUSIC_GATEWAY_ORIGIN",
-      "aliases": [],
       "group": "production",
       "sensitivity": "operational",
       "home": "center.env"
     },
     {
       "name": "REVIVAL_MUSIC_SESSION_SECRET",
-      "aliases": [],
       "group": "production",
       "sensitivity": "secret",
       "home": "center.env"
     },
     {
       "name": "TIDAL_CLIENT_ID",
-      "aliases": [],
       "group": "provider",
       "sensitivity": "identity",
       "home": "center.env"
     },
     {
       "name": "TIDAL_CLIENT_SECRET",
-      "aliases": [],
       "group": "provider",
       "sensitivity": "secret",
       "home": "center.env"
     },
     {
       "name": "TIDAL_SCOPES",
-      "aliases": [],
       "group": "provider",
       "sensitivity": "operational",
       "home": "center.env"
     },
     {
       "name": "TIDAL_COUNTRY_CODE",
-      "aliases": [],
       "group": "provider",
       "sensitivity": "operational",
       "home": "center.env"
     },
     {
       "name": "APPLE_MUSIC_DEVELOPER_TOKEN",
-      "aliases": [],
       "group": "provider",
       "sensitivity": "secret",
       "home": "center.env"
     },
     {
       "name": "COSMOS_SHARE_TOKEN_SECRET",
-      "aliases": [],
       "group": "production",
       "sensitivity": "secret",
       "home": "runtime.env"
     },
     {
       "name": "COSMOS_CENTER_PROJECTION_TOKEN",
-      "aliases": [],
       "group": "production",
       "sensitivity": "secret",
       "home": "runtime.env"
     },
     {
       "name": "COSMOS_ADMIN_TOKEN",
-      "aliases": [],
       "group": "production",
       "sensitivity": "secret",
       "home": "runtime.env"
     },
     {
       "name": "COSMOS_REMOTE_TTS_ENABLED",
-      "aliases": [],
       "group": "provider",
       "sensitivity": "operational",
       "home": "cosmos.env"
     },
     {
       "name": "COSMOS_AZURE_SPEECH_KEY",
-      "aliases": [],
       "group": "provider",
       "sensitivity": "secret",
       "home": "providers.env"
     },
     {
       "name": "COSMOS_AZURE_SPEECH_REGION",
-      "aliases": [],
       "group": "provider",
       "sensitivity": "operational",
       "home": "providers.env"
     },
     {
       "name": "COSMOS_AZURE_SPEECH_VOICE",
-      "aliases": [],
       "group": "provider",
       "sensitivity": "operational",
       "home": "providers.env"
     },
     {
       "name": "REVIVAL_SPOTIFY_ADAPTER_URL",
-      "aliases": [],
       "group": "pin",
       "sensitivity": "operational",
       "home": "pin.env"
     },
     {
       "name": "REVIVAL_SPOTIFY_ADAPTER_TOKEN_FILE",
-      "aliases": [],
       "group": "pin",
       "sensitivity": "secret",
       "home": "pin.env"
     },
     {
       "name": "REVIVAL_PIN_BRIDGE_OWNER_SUB",
-      "aliases": [],
       "group": "pin",
       "sensitivity": "identity",
       "home": "pin.env"
     },
     {
       "name": "REVIVAL_PIN_BRIDGE_DEVICE_ID",
-      "aliases": [],
       "group": "pin",
       "sensitivity": "identity",
       "home": "pin.env"
     },
     {
       "name": "REVIVAL_IDENTITY_ENABLED",
-      "aliases": [],
       "group": "local",
       "sensitivity": "operational",
       "home": "runtime.env"
     },
     {
       "name": "KEYCLOAK_BASE_URL",
-      "aliases": [],
       "group": "production",
       "sensitivity": "identity",
       "home": "center.env"
     },
     {
       "name": "KEYCLOAK_REALM",
-      "aliases": [],
       "group": "production",
       "sensitivity": "identity",
       "home": "center.env"
     },
     {
       "name": "KEYCLOAK_CLIENT_ID",
-      "aliases": [],
       "group": "production",
       "sensitivity": "identity",
       "home": "center.env"
     },
     {
       "name": "KEYCLOAK_CLIENT_SECRET",
-      "aliases": [],
       "group": "production",
       "sensitivity": "secret",
       "home": "center.env"
     },
     {
       "name": "KEYCLOAK_SCOPES",
-      "aliases": [],
       "group": "production",
       "sensitivity": "operational",
       "home": "center.env"
     },
     {
       "name": "KEYCLOAK_ADMIN",
-      "aliases": [],
       "group": "production",
       "sensitivity": "identity",
       "home": "center.env"
     },
     {
       "name": "KEYCLOAK_ADMIN_PASSWORD",
-      "aliases": [],
       "group": "production",
       "sensitivity": "secret",
       "home": "center.env"
     },
     {
       "name": "COSMOS_ENROLLMENT_PINCODE",
-      "aliases": [],
       "group": "pin",
       "sensitivity": "secret",
       "home": "pin.env"
     },
     {
       "name": "COSMOS_ENROLLMENT_USER_ID",
-      "aliases": [],
       "group": "pin",
       "sensitivity": "identity",
       "home": "pin.env"
     },
     {
       "name": "COSMOS_OPAQUE_SEED",
-      "aliases": [],
       "group": "pin",
       "sensitivity": "secret",
       "home": "pin.env"
     },
     {
       "name": "COSMOS_DUC_CA_CERT",
-      "aliases": [],
       "group": "pin",
       "sensitivity": "operational",
       "home": "pin.env"
     },
     {
       "name": "COSMOS_DUC_CA_KEY",
-      "aliases": [],
       "group": "pin",
       "sensitivity": "secret",
       "home": "pin.env"
     },
     {
       "name": "COSMOS_OPERATOR_EMAILS",
-      "aliases": [],
       "group": "production",
       "sensitivity": "identity",
       "home": "center.env"
     },
     {
       "name": "COSMOS_KID_SCOPE",
-      "aliases": [],
       "group": "production",
       "sensitivity": "identity",
       "home": "cosmos.env"
     },
     {
       "name": "SEARXNG_SECRET",
-      "aliases": [],
       "group": "production",
       "sensitivity": "secret",
       "home": "providers.env"
     },
     {
       "name": "COSMOS_LLM_BASE_URL",
-      "aliases": [],
       "group": "provider",
       "sensitivity": "operational",
       "home": "providers.env"
     },
     {
       "name": "COSMOS_LLM_API_KEY",
-      "aliases": [],
       "group": "provider",
       "sensitivity": "secret",
       "home": "providers.env"
     },
     {
       "name": "COSMOS_OPENROUTER_API_KEY",
-      "aliases": [],
       "group": "provider",
       "sensitivity": "secret",
       "home": "providers.env"
     },
     {
       "name": "COSMOS_LLM_MODEL",
-      "aliases": [],
       "group": "provider",
       "sensitivity": "operational",
       "home": "providers.env"
     },
     {
       "name": "COSMOS_LLM_REASONING_EFFORT",
-      "aliases": [],
       "group": "provider",
       "sensitivity": "operational",
       "home": "providers.env"
     },
     {
       "name": "COSMOS_LLM_MAX_TOKENS",
-      "aliases": [],
       "group": "provider",
       "sensitivity": "operational",
       "home": "providers.env"
     },
     {
       "name": "COSMOS_VISION_MODEL",
-      "aliases": [],
       "group": "provider",
       "sensitivity": "operational",
       "home": "providers.env"
     },
     {
       "name": "COSMOS_INTERSTITIAL_BASE_URL",
-      "aliases": [],
       "group": "provider",
       "sensitivity": "operational",
       "home": "providers.env"
     },
     {
       "name": "COSMOS_INTERSTITIAL_MODEL",
-      "aliases": [],
       "group": "provider",
       "sensitivity": "operational",
       "home": "providers.env"
     },
     {
       "name": "COSMOS_INTERSTITIAL_API_KEY",
-      "aliases": [],
       "group": "provider",
       "sensitivity": "secret",
       "home": "providers.env"
     },
     {
       "name": "COSMOS_LOCAL_MODEL_NETWORK",
-      "aliases": [],
       "group": "local",
       "sensitivity": "operational",
       "home": "runtime.env"
     },
     {
       "name": "COSMOS_SERPAPI_KEY",
-      "aliases": [],
       "group": "provider",
       "sensitivity": "secret",
       "home": "providers.env"
     },
     {
       "name": "COSMOS_GOOGLE_MAPS_KEY",
-      "aliases": [],
       "group": "provider",
       "sensitivity": "secret",
       "home": "providers.env"
     },
     {
       "name": "COSMOS_PIRATE_WEATHER_KEY",
-      "aliases": [],
       "group": "provider",
       "sensitivity": "secret",
       "home": "providers.env"
     },
     {
       "name": "COSMOS_WOLFRAM_APP_ID",
-      "aliases": [],
       "group": "provider",
       "sensitivity": "secret",
       "home": "providers.env"
     },
     {
       "name": "COSMOS_PPLX_API_KEY",
-      "aliases": [],
       "group": "provider",
       "sensitivity": "secret",
       "home": "providers.env"
     },
     {
       "name": "COSMOS_PPLX_MODEL",
-      "aliases": [],
       "group": "provider",
       "sensitivity": "operational",
       "home": "providers.env"
