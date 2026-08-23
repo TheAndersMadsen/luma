@@ -135,7 +135,7 @@ RUN set -eux; \
     for executable in cargo-ndk cargo-ndk-env cargo-ndk-runner cargo-ndk-test; do \
       install -m 0755 "/tmp/cargo-ndk/${CARGO_NDK_ARCHIVE_ROOT}/${executable}" "/opt/cargo-ndk/bin/${executable}"; \
     done; \
-    /opt/cargo-ndk/bin/cargo-ndk --version; \
+    PATH="/opt/cargo-ndk/bin:${PATH}" cargo ndk --version; \
     rm -rf /tmp/cargo-ndk /tmp/cargo-ndk.tgz
 
 FROM eclipse-temurin:17.0.14_7-jdk-jammy@sha256:23f74f7840a6948f9da3870876f475c4febeb365757891a6a9ebda38a42cf53f AS jdk_runtime
