@@ -87,7 +87,6 @@ export async function readLocalPinReleaseStore({ root, label = "local Pin releas
   const expected = new Set([
     "manifest.json",
     ...manifest.artifacts.map((artifact) => artifact.name),
-    ...(manifest.authority ? [manifest.authority.name] : []),
   ]);
   const names = (await readdir(releaseDirectory)).sort();
   if (names.length !== expected.size || names.some((name) => !expected.has(name))) {
@@ -106,13 +105,6 @@ export async function readLocalPinReleaseStore({ root, label = "local Pin releas
       fail("store-invalid", `${label} ${artifact.role} APK differs from the manifest`);
     }
     entries.set(artifact.name, identity);
-  }
-  if (manifest.authority) {
-    const identity = await sha256File(join(releaseDirectory, manifest.authority.name));
-    if (identity.sha256 !== manifest.authority.sha256 || identity.size !== manifest.authority.size) {
-      fail("store-invalid", `${label} authority file differs from the manifest`);
-    }
-    entries.set(manifest.authority.name, identity);
   }
   return Object.freeze({
     root: storeRoot,

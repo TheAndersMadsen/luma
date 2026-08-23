@@ -93,25 +93,6 @@ const BUILD_DIR = externalPath('REVIVAL_BUILD_DIR', path.join(DATA_DIR, 'build')
 const PIN_SECRET_DIR = path.join(SECRETS_DIR, 'pin');
 const PIN_PRIVATE_ASSETS_DIR = path.join(CONFIG_DIR, 'pin-assets');
 
-const COMPATIBILITY_ALIASES = Object.freeze({
-  COSMOS_AUTH_MODE: 'REVIVAL_AUTH_MODE',
-  COSMOS_EDGE_TOKEN: 'REVIVAL_EDGE_TOKEN',
-  COSMOS_SHARE_TOKEN_SECRET: 'REVIVAL_SHARE_TOKEN_SECRET',
-  COSMOS_CENTER_PROJECTION_TOKEN: 'REVIVAL_CENTER_PROJECTION_TOKEN',
-  COSMOS_ADMIN_TOKEN: 'REVIVAL_ADMIN_TOKEN',
-  COSMOS_OPAQUE_SEED: 'REVIVAL_OPAQUE_SEED',
-  COSMOS_REMOTE_TTS_ENABLED: 'REVIVAL_REMOTE_TTS_ENABLED',
-  COSMOS_ENROLLMENT_PINCODE: 'REVIVAL_ENROLLMENT_PINCODE',
-  COSMOS_ENROLLMENT_USER_ID: 'REVIVAL_ENROLLMENT_USER_ID',
-  COSMOS_DUC_CA_CERT: 'REVIVAL_DUC_CA_CERT',
-  COSMOS_DUC_CA_KEY: 'REVIVAL_DUC_CA_KEY',
-  COSMOS_OPERATOR_EMAILS: 'REVIVAL_OPERATOR_EMAILS',
-  COSMOS_AZURE_SPEECH_KEY: 'AZURE_SPEECH_KEY',
-  COSMOS_AZURE_SPEECH_REGION: 'AZURE_SPEECH_REGION',
-  COSMOS_AZURE_SPEECH_VOICE: 'AZURE_SPEECH_VOICE'
-});
-
-
 function fail(message, code = 1) {
   process.stderr.write(`error: ${message}\n`);
   process.exit(code);
@@ -218,26 +199,22 @@ function fillBlankGeneratedSecrets(contents) {
   let updated = contents;
   let count = 0;
   const generated = [
-    ['AUTH_SESSION_SECRET', null, () => crypto.randomBytes(32).toString('hex')],
-    ['REVIVAL_SHARE_TOKEN_SECRET', 'COSMOS_SHARE_TOKEN_SECRET', () => crypto.randomBytes(32).toString('hex')],
-    ['REVIVAL_CENTER_PROJECTION_TOKEN', 'COSMOS_CENTER_PROJECTION_TOKEN', () => crypto.randomBytes(32).toString('hex')],
-    ['REVIVAL_EDGE_TOKEN', 'COSMOS_EDGE_TOKEN', () => crypto.randomBytes(32).toString('hex')],
-    ['REVIVAL_ADMIN_TOKEN', 'COSMOS_ADMIN_TOKEN', () => crypto.randomBytes(32).toString('hex')],
-    ['REVIVAL_OPAQUE_SEED', 'COSMOS_OPAQUE_SEED', () => crypto.randomBytes(32).toString('base64')],
-    ['KEYCLOAK_CLIENT_SECRET', null, () => crypto.randomBytes(32).toString('hex')],
-    ['KEYCLOAK_ADMIN', null, () => `revival-admin-${crypto.randomBytes(4).toString('hex')}`],
-    ['KEYCLOAK_ADMIN_PASSWORD', null, () => crypto.randomBytes(32).toString('base64url')]
+    ['AUTH_SESSION_SECRET', () => crypto.randomBytes(32).toString('hex')],
+    ['COSMOS_SHARE_TOKEN_SECRET', () => crypto.randomBytes(32).toString('hex')],
+    ['COSMOS_CENTER_PROJECTION_TOKEN', () => crypto.randomBytes(32).toString('hex')],
+    ['COSMOS_EDGE_TOKEN', () => crypto.randomBytes(32).toString('hex')],
+    ['COSMOS_ADMIN_TOKEN', () => crypto.randomBytes(32).toString('hex')],
+    ['COSMOS_OPAQUE_SEED', () => crypto.randomBytes(32).toString('base64')],
+    ['KEYCLOAK_CLIENT_SECRET', () => crypto.randomBytes(32).toString('hex')],
+    ['KEYCLOAK_ADMIN', () => `revival-admin-${crypto.randomBytes(4).toString('hex')}`],
+    ['KEYCLOAK_ADMIN_PASSWORD', () => crypto.randomBytes(32).toString('base64url')]
   ];
-  for (const [key, compatibility, generate] of generated) {
-    const canonicalPattern = new RegExp(`^${key}=(.*)$`, 'm');
-    const canonicalMatch = canonicalPattern.exec(updated);
-    const compatibilityMatch = compatibility
-      ? new RegExp(`^${compatibility}=(.+)$`, 'm').exec(updated)
-      : null;
-    if (compatibilityMatch && compatibilityMatch[1].trim().length > 0) continue;
-    if (canonicalMatch && canonicalMatch[1].trim().length > 0) continue;
+  for (const [key, generate] of generated) {
+    const pattern = new RegExp(`^${key}=(.*)$`, 'm');
+    const match = pattern.exec(updated);
+    if (match && match[1].trim().length > 0) continue;
     const replacement = `${key}=${generate()}`;
-    if (canonicalMatch) updated = updated.replace(canonicalPattern, replacement);
+    if (match) updated = updated.replace(pattern, replacement);
     else updated = `${updated.replace(/\s*$/, '')}\n${replacement}\n`;
     count += 1;
   }
@@ -476,10 +453,6 @@ function parseEnvFile(file) {
   return values;
 }
 
-function valueOf(values, canonical, compatibility) {
-  return values[canonical] || (compatibility ? values[compatibility] : '') || '';
-}
-
 function isExactBase64Bytes(value, bytes) {
   if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) {
     return false;
@@ -488,20 +461,9 @@ function isExactBase64Bytes(value, bytes) {
   return decoded.length === bytes && decoded.toString('base64') === value;
 }
 
-function rejectCompatibilityConflicts(values, problems) {
-  for (const [compatibility, canonical] of Object.entries(COMPATIBILITY_ALIASES)) {
-    const canonicalValue = values[canonical] || '';
-    const compatibilityValue = values[compatibility] || '';
-    if (canonicalValue && compatibilityValue && canonicalValue !== compatibilityValue) {
-      problems.push(`${canonical} and compatibility alias ${compatibility} must not disagree`);
-    }
-  }
-}
-
-function requireValue(values, canonical, problems, minimum = 1, compatibility) {
-  if (valueOf(values, canonical, compatibility).length < minimum) {
-    const suffix = compatibility ? ` (${compatibility} remains a supported compatibility alias)` : '';
-    problems.push(`${canonical} must contain at least ${minimum} characters${suffix}`);
+function requireValue(values, name, problems, minimum = 1) {
+  if ((values[name] || '').length < minimum) {
+    problems.push(`${name} must contain at least ${minimum} characters`);
   }
 }
 
@@ -595,7 +557,6 @@ function validateRuntime({ production = false } = {}) {
 
   const values = parseEnvFile(ENV_FILE);
   const problems = [];
-  rejectCompatibilityConflicts(values, problems);
   if (values.REVIVAL_CONFIG_VERSION !== '1') problems.push('REVIVAL_CONFIG_VERSION must be 1');
   requireValue(values, 'REVIVAL_RELEASE_ID', problems, 1);
   for (const file of [
@@ -607,31 +568,31 @@ function validateRuntime({ production = false } = {}) {
     }
   }
 
-  const authMode = valueOf(values, 'REVIVAL_AUTH_MODE', 'COSMOS_AUTH_MODE');
+  const authMode = values.COSMOS_AUTH_MODE || '';
   if (!['development-insecure', 'edge-authenticated'].includes(authMode)) {
-    problems.push('REVIVAL_AUTH_MODE must be development-insecure or edge-authenticated');
+    problems.push('COSMOS_AUTH_MODE must be development-insecure or edge-authenticated');
   }
   if (production && authMode !== 'edge-authenticated') {
-    problems.push('production requires REVIVAL_AUTH_MODE=edge-authenticated');
+    problems.push('production requires COSMOS_AUTH_MODE=edge-authenticated');
   }
 
   requireValue(values, 'AUTH_SESSION_SECRET', problems, 32);
-  requireValue(values, 'REVIVAL_SHARE_TOKEN_SECRET', problems, 32, 'COSMOS_SHARE_TOKEN_SECRET');
-  requireValue(values, 'REVIVAL_CENTER_PROJECTION_TOKEN', problems, 32, 'COSMOS_CENTER_PROJECTION_TOKEN');
-  requireValue(values, 'REVIVAL_EDGE_TOKEN', problems, 32, 'COSMOS_EDGE_TOKEN');
-  requireValue(values, 'REVIVAL_ADMIN_TOKEN', problems, 32, 'COSMOS_ADMIN_TOKEN');
+  requireValue(values, 'COSMOS_SHARE_TOKEN_SECRET', problems, 32);
+  requireValue(values, 'COSMOS_CENTER_PROJECTION_TOKEN', problems, 32);
+  requireValue(values, 'COSMOS_EDGE_TOKEN', problems, 32);
+  requireValue(values, 'COSMOS_ADMIN_TOKEN', problems, 32);
   requireValue(values, 'KEYCLOAK_CLIENT_SECRET', problems, 32);
   requireValue(values, 'KEYCLOAK_ADMIN', problems, 8);
   requireValue(values, 'KEYCLOAK_ADMIN_PASSWORD', problems, 32);
   validateLocalIdentityRealm(values, problems);
 
-  const remoteTts = valueOf(values, 'REVIVAL_REMOTE_TTS_ENABLED', 'COSMOS_REMOTE_TTS_ENABLED');
+  const remoteTts = values.COSMOS_REMOTE_TTS_ENABLED || '';
   if (!/^(true|false)$/.test(remoteTts)) {
-    problems.push('REVIVAL_REMOTE_TTS_ENABLED must be exactly true or false');
+    problems.push('COSMOS_REMOTE_TTS_ENABLED must be exactly true or false');
   } else if (remoteTts === 'true') {
-    requireValue(values, 'AZURE_SPEECH_KEY', problems, 16, 'COSMOS_AZURE_SPEECH_KEY');
-    requireValue(values, 'AZURE_SPEECH_REGION', problems, 2);
-    requireValue(values, 'AZURE_SPEECH_VOICE', problems, 2);
+    requireValue(values, 'COSMOS_AZURE_SPEECH_KEY', problems, 16);
+    requireValue(values, 'COSMOS_AZURE_SPEECH_REGION', problems, 2);
+    requireValue(values, 'COSMOS_AZURE_SPEECH_VOICE', problems, 2);
   }
 
   const identityEnabled = values.REVIVAL_IDENTITY_ENABLED || 'false';
@@ -648,22 +609,22 @@ function validateRuntime({ production = false } = {}) {
     }
   }
 
-  const enrollmentCode = valueOf(values, 'REVIVAL_ENROLLMENT_PINCODE', 'COSMOS_ENROLLMENT_PINCODE');
-  const enrollmentUser = valueOf(values, 'REVIVAL_ENROLLMENT_USER_ID', 'COSMOS_ENROLLMENT_USER_ID');
+  const enrollmentCode = values.COSMOS_ENROLLMENT_PINCODE || '';
+  const enrollmentUser = values.COSMOS_ENROLLMENT_USER_ID || '';
   if (enrollmentCode && !/^\d{4}$/.test(enrollmentCode)) {
-    problems.push('REVIVAL_ENROLLMENT_PINCODE must be blank or exactly four digits');
+    problems.push('COSMOS_ENROLLMENT_PINCODE must be blank or exactly four digits');
   }
   if (Boolean(enrollmentCode) !== Boolean(enrollmentUser)) {
-    problems.push('REVIVAL_ENROLLMENT_PINCODE and REVIVAL_ENROLLMENT_USER_ID must be set together');
+    problems.push('COSMOS_ENROLLMENT_PINCODE and COSMOS_ENROLLMENT_USER_ID must be set together');
   }
   if (enrollmentCode) {
-    const opaqueSeed = valueOf(values, 'REVIVAL_OPAQUE_SEED', 'COSMOS_OPAQUE_SEED');
+    const opaqueSeed = values.COSMOS_OPAQUE_SEED || '';
     if (!isExactBase64Bytes(opaqueSeed, 32)) {
-      problems.push('REVIVAL_OPAQUE_SEED must decode from canonical base64 to exactly 32 private bytes when enrollment is enabled');
+      problems.push('COSMOS_OPAQUE_SEED must decode from canonical base64 to exactly 32 private bytes when enrollment is enabled');
     }
-    if (valueOf(values, 'REVIVAL_DUC_CA_CERT', 'COSMOS_DUC_CA_CERT') !== '/run/secrets/duc_ca_cert' ||
-        valueOf(values, 'REVIVAL_DUC_CA_KEY', 'COSMOS_DUC_CA_KEY') !== '/run/secrets/duc_ca_key') {
-      problems.push('REVIVAL_DUC_CA_CERT and REVIVAL_DUC_CA_KEY must use the reviewed /run/secrets paths');
+    if (values.COSMOS_DUC_CA_CERT !== '/run/secrets/duc_ca_cert' ||
+        values.COSMOS_DUC_CA_KEY !== '/run/secrets/duc_ca_key') {
+      problems.push('COSMOS_DUC_CA_CERT and COSMOS_DUC_CA_KEY must use the reviewed /run/secrets paths');
     }
     for (const filename of ['duc-ca.crt', 'duc-ca.key']) {
       const file = path.join(SECRETS_DIR, 'pki', filename);
@@ -715,8 +676,6 @@ function operatorValueNames() {
     throw new Error(`cannot read the operator environment contract ${ENV_EXAMPLE}: ${error.message}`);
   }
   const names = new Set([
-    ...Object.keys(COMPATIBILITY_ALIASES),
-    ...Object.values(COMPATIBILITY_ALIASES),
     'PIN_SIGNING_STORE_FILE',
     'PIN_SIGNING_STORE_PASSWORD',
     'PIN_SIGNING_KEY_ALIAS',
@@ -820,9 +779,6 @@ function operatorEnvironment(values) {
   if (adb) env.ADB = adb;
   const openssl = resolveTool('openssl', { required: false });
   if (openssl) env.OPENSSL = openssl;
-  for (const [compatibility, canonical] of Object.entries(COMPATIBILITY_ALIASES)) {
-    if (env[canonical]) env[compatibility] = env[canonical];
-  }
   const localIdentity = env.REVIVAL_IDENTITY_ENABLED === 'true';
   const identityPort = env.REVIVAL_KEYCLOAK_PORT || '8088';
   const identityRealm = env.KEYCLOAK_REALM || 'humane';
@@ -998,7 +954,6 @@ module.exports = {
   atomicWrite,
   initialize,
   parseEnvFile,
-  valueOf,
   validateRuntime,
   operatorEnvironment,
   resolveTool,

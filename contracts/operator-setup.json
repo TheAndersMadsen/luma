@@ -1081,19 +1081,15 @@
       "home": "providers.env"
     },
     {
-      "name": "REVIVAL_AUTH_MODE",
-      "aliases": [
-        "COSMOS_AUTH_MODE"
-      ],
+      "name": "COSMOS_AUTH_MODE",
+      "aliases": [],
       "group": "local",
       "sensitivity": "operational",
       "home": "runtime.env"
     },
     {
-      "name": "REVIVAL_EDGE_TOKEN",
-      "aliases": [
-        "COSMOS_EDGE_TOKEN"
-      ],
+      "name": "COSMOS_EDGE_TOKEN",
+      "aliases": [],
       "group": "production",
       "sensitivity": "secret",
       "home": "runtime.env"
@@ -1155,64 +1151,50 @@
       "home": "center.env"
     },
     {
-      "name": "REVIVAL_SHARE_TOKEN_SECRET",
-      "aliases": [
-        "COSMOS_SHARE_TOKEN_SECRET"
-      ],
+      "name": "COSMOS_SHARE_TOKEN_SECRET",
+      "aliases": [],
       "group": "production",
       "sensitivity": "secret",
       "home": "runtime.env"
     },
     {
-      "name": "REVIVAL_CENTER_PROJECTION_TOKEN",
-      "aliases": [
-        "COSMOS_CENTER_PROJECTION_TOKEN"
-      ],
+      "name": "COSMOS_CENTER_PROJECTION_TOKEN",
+      "aliases": [],
       "group": "production",
       "sensitivity": "secret",
       "home": "runtime.env"
     },
     {
-      "name": "REVIVAL_ADMIN_TOKEN",
-      "aliases": [
-        "COSMOS_ADMIN_TOKEN"
-      ],
+      "name": "COSMOS_ADMIN_TOKEN",
+      "aliases": [],
       "group": "production",
       "sensitivity": "secret",
       "home": "runtime.env"
     },
     {
-      "name": "REVIVAL_REMOTE_TTS_ENABLED",
-      "aliases": [
-        "COSMOS_REMOTE_TTS_ENABLED"
-      ],
+      "name": "COSMOS_REMOTE_TTS_ENABLED",
+      "aliases": [],
       "group": "provider",
       "sensitivity": "operational",
       "home": "cosmos.env"
     },
     {
-      "name": "AZURE_SPEECH_KEY",
-      "aliases": [
-        "COSMOS_AZURE_SPEECH_KEY"
-      ],
+      "name": "COSMOS_AZURE_SPEECH_KEY",
+      "aliases": [],
       "group": "provider",
       "sensitivity": "secret",
       "home": "providers.env"
     },
     {
-      "name": "AZURE_SPEECH_REGION",
-      "aliases": [
-        "COSMOS_AZURE_SPEECH_REGION"
-      ],
+      "name": "COSMOS_AZURE_SPEECH_REGION",
+      "aliases": [],
       "group": "provider",
       "sensitivity": "operational",
       "home": "providers.env"
     },
     {
-      "name": "AZURE_SPEECH_VOICE",
-      "aliases": [
-        "COSMOS_AZURE_SPEECH_VOICE"
-      ],
+      "name": "COSMOS_AZURE_SPEECH_VOICE",
+      "aliases": [],
       "group": "provider",
       "sensitivity": "operational",
       "home": "providers.env"
@@ -1302,55 +1284,43 @@
       "home": "center.env"
     },
     {
-      "name": "REVIVAL_ENROLLMENT_PINCODE",
-      "aliases": [
-        "COSMOS_ENROLLMENT_PINCODE"
-      ],
+      "name": "COSMOS_ENROLLMENT_PINCODE",
+      "aliases": [],
       "group": "pin",
       "sensitivity": "secret",
       "home": "pin.env"
     },
     {
-      "name": "REVIVAL_ENROLLMENT_USER_ID",
-      "aliases": [
-        "COSMOS_ENROLLMENT_USER_ID"
-      ],
+      "name": "COSMOS_ENROLLMENT_USER_ID",
+      "aliases": [],
       "group": "pin",
       "sensitivity": "identity",
       "home": "pin.env"
     },
     {
-      "name": "REVIVAL_OPAQUE_SEED",
-      "aliases": [
-        "COSMOS_OPAQUE_SEED"
-      ],
+      "name": "COSMOS_OPAQUE_SEED",
+      "aliases": [],
       "group": "pin",
       "sensitivity": "secret",
       "home": "pin.env"
     },
     {
-      "name": "REVIVAL_DUC_CA_CERT",
-      "aliases": [
-        "COSMOS_DUC_CA_CERT"
-      ],
+      "name": "COSMOS_DUC_CA_CERT",
+      "aliases": [],
       "group": "pin",
       "sensitivity": "operational",
       "home": "pin.env"
     },
     {
-      "name": "REVIVAL_DUC_CA_KEY",
-      "aliases": [
-        "COSMOS_DUC_CA_KEY"
-      ],
+      "name": "COSMOS_DUC_CA_KEY",
+      "aliases": [],
       "group": "pin",
       "sensitivity": "secret",
       "home": "pin.env"
     },
     {
-      "name": "REVIVAL_OPERATOR_EMAILS",
-      "aliases": [
-        "COSMOS_OPERATOR_EMAILS"
-      ],
+      "name": "COSMOS_OPERATOR_EMAILS",
+      "aliases": [],
       "group": "production",
       "sensitivity": "identity",
       "home": "center.env"

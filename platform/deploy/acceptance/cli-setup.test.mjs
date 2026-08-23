@@ -18,7 +18,6 @@ function fixture(t) {
     REVIVAL_ENV_FILE: path.join(temporary, "secrets", "runtime.env"),
     REVIVAL_DATA_DIR: path.join(temporary, "data"),
     REVIVAL_BUILD_DIR: path.join(temporary, "data", "build"),
-    REVIVAL_BACKUP_DIR: path.join(temporary, "backups"),
     REVIVAL_STATE_DIR: path.join(temporary, "state"),
   };
   return { temporary, env };

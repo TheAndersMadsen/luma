@@ -22,7 +22,6 @@ function isolatedOperator() {
     REVIVAL_PRIVATE_DIR: path.join(temporary, "secrets"),
     REVIVAL_DATA_DIR: path.join(temporary, "data"),
     REVIVAL_BUILD_DIR: path.join(temporary, "data", "build"),
-    REVIVAL_BACKUP_DIR: path.join(temporary, "backups"),
   };
   return { temporary, env };
 }
@@ -69,8 +68,8 @@ test("init creates a protected, wearer-free local identity realm tied to runtime
     assert.ok(runtime.KEYCLOAK_CLIENT_SECRET.length >= 32);
     assert.ok(runtime.KEYCLOAK_ADMIN.length >= 8);
     assert.ok(runtime.KEYCLOAK_ADMIN_PASSWORD.length >= 32);
-    assert.ok(runtime.REVIVAL_ADMIN_TOKEN.length >= 32);
-    assert.equal(Buffer.from(runtime.REVIVAL_OPAQUE_SEED, "base64").length, 32);
+    assert.ok(runtime.COSMOS_ADMIN_TOKEN.length >= 32);
+    assert.equal(Buffer.from(runtime.COSMOS_OPAQUE_SEED, "base64").length, 32);
     assert.equal(client.secret, runtime.KEYCLOAK_CLIENT_SECRET);
     assert.equal(client.publicClient, false);
     assert.equal(client.implicitFlowEnabled, false);
@@ -100,7 +99,6 @@ test("init refuses unmanaged existing roots and runtime files outside secrets", 
       REVIVAL_PRIVATE_DIR: path.join(unmanaged, "secrets"),
       REVIVAL_DATA_DIR: path.join(temporary, "new-data"),
       REVIVAL_BUILD_DIR: path.join(temporary, "new-data", "build"),
-      REVIVAL_BACKUP_DIR: path.join(temporary, "new-backups"),
     };
     const rejected = invoke(unmanagedEnv, "init");
     assert.notEqual(rejected.status, 0);
@@ -114,7 +112,6 @@ test("init refuses unmanaged existing roots and runtime files outside secrets", 
       REVIVAL_PRIVATE_DIR: path.join(temporary, "secrets"),
       REVIVAL_DATA_DIR: path.join(temporary, "data"),
       REVIVAL_BUILD_DIR: path.join(temporary, "data", "build"),
-      REVIVAL_BACKUP_DIR: path.join(temporary, "backups"),
       REVIVAL_ENV_FILE: path.join(temporary, "runtime.env"),
     };
     const outside = invoke(outsideEnv, "init");
@@ -204,21 +201,16 @@ test("root CLI wires PKI, activation, and credential-free network tools", () => 
   }
 });
 
-test("canonical and compatibility values cannot disagree", () => {
+test("init writes only canonical Cosmos deployment settings", () => {
   const { temporary, env } = isolatedOperator();
   try {
     const initialized = invoke(env, "init");
     assert.equal(initialized.status, 0, initialized.stderr);
     const runtimeFile = path.join(env.REVIVAL_SECRETS_DIR, "runtime.env");
-    let contents = fs.readFileSync(runtimeFile, "utf8");
-    contents = setValue(contents, "COSMOS_ADMIN_TOKEN", "incompatible-admin-token-value-00000000");
-    fs.writeFileSync(runtimeFile, contents, { mode: 0o600 });
-    const result = invoke(env, "doctor");
-    assert.notEqual(result.status, 0);
-    assert.match(
-      `${result.stdout}\n${result.stderr}`,
-      /REVIVAL_ADMIN_TOKEN and compatibility alias COSMOS_ADMIN_TOKEN must not disagree/,
-    );
+    const contents = fs.readFileSync(runtimeFile, "utf8");
+    assert.match(contents, /^COSMOS_ADMIN_TOKEN=.+$/m);
+    assert.match(contents, /^COSMOS_OPAQUE_SEED=.+$/m);
+    assert.doesNotMatch(contents, /^(?:REVIVAL_(?:AUTH_MODE|EDGE_TOKEN|SHARE_TOKEN_SECRET|CENTER_PROJECTION_TOKEN|ADMIN_TOKEN|OPAQUE_SEED|REMOTE_TTS_ENABLED|ENROLLMENT_PINCODE|ENROLLMENT_USER_ID|DUC_CA_CERT|DUC_CA_KEY|OPERATOR_EMAILS)|AZURE_SPEECH_(?:KEY|REGION|VOICE))=/m);
   } finally {
     fs.rmSync(temporary, { recursive: true, force: true });
   }
@@ -231,15 +223,15 @@ test("enrollment refuses a malformed or non-private OPAQUE seed", () => {
     assert.equal(initialized.status, 0, initialized.stderr);
     const runtimeFile = path.join(env.REVIVAL_SECRETS_DIR, "runtime.env");
     let contents = fs.readFileSync(runtimeFile, "utf8");
-    contents = setValue(contents, "REVIVAL_ENROLLMENT_PINCODE", "1234");
-    contents = setValue(contents, "REVIVAL_ENROLLMENT_USER_ID", "local-wearer");
-    contents = setValue(contents, "REVIVAL_OPAQUE_SEED", "not-32-private-bytes");
+    contents = setValue(contents, "COSMOS_ENROLLMENT_PINCODE", "1234");
+    contents = setValue(contents, "COSMOS_ENROLLMENT_USER_ID", "local-wearer");
+    contents = setValue(contents, "COSMOS_OPAQUE_SEED", "not-32-private-bytes");
     fs.writeFileSync(runtimeFile, contents, { mode: 0o600 });
     const result = invoke(env, "doctor");
     assert.notEqual(result.status, 0);
     assert.match(
       `${result.stdout}\n${result.stderr}`,
-      /REVIVAL_OPAQUE_SEED must decode from canonical base64 to exactly 32 private bytes/,
+      /COSMOS_OPAQUE_SEED must decode from canonical base64 to exactly 32 private bytes/,
     );
   } finally {
     fs.rmSync(temporary, { recursive: true, force: true });

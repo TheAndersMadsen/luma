@@ -17,7 +17,6 @@ function fixture() {
     REVIVAL_ENV_FILE: path.join(temporary, "secrets", "runtime.env"),
     REVIVAL_DATA_DIR: path.join(temporary, "data"),
     REVIVAL_BUILD_DIR: path.join(temporary, "data", "build"),
-    REVIVAL_BACKUP_DIR: path.join(temporary, "backups"),
   };
   return { temporary, env };
 }
@@ -59,13 +58,13 @@ test("config inventory prints metadata only and templates omit secret settings",
     const list = invoke(env, ["config", "list", "--group", "provider", "--json"]);
     assert.equal(list.status, 0, list.stderr);
     const settings = JSON.parse(list.stdout).settings;
-    assert.ok(settings.some((setting) => setting.name === "AZURE_SPEECH_KEY"));
+    assert.ok(settings.some((setting) => setting.name === "COSMOS_AZURE_SPEECH_KEY"));
     assert.ok(settings.every((setting) => !Object.hasOwn(setting, "value")));
 
     const template = invoke(env, ["config", "template", "--group", "provider"]);
     assert.equal(template.status, 0, template.stderr);
-    assert.match(template.stdout, /AZURE_SPEECH_REGION=/);
-    assert.doesNotMatch(template.stdout, /^AZURE_SPEECH_KEY=/m);
+    assert.match(template.stdout, /COSMOS_AZURE_SPEECH_REGION=/);
+    assert.doesNotMatch(template.stdout, /^COSMOS_AZURE_SPEECH_KEY=/m);
   } finally {
     fs.rmSync(temporary, { recursive: true, force: true });
   }

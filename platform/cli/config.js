@@ -18,11 +18,7 @@ const GROUPS = Object.freeze(['local', 'production', 'provider', 'pin']);
 
 function settingsRegistry() {
   const settings = operatorContract().settings;
-  const byName = new Map();
-  for (const setting of settings) {
-    byName.set(setting.name, setting);
-    for (const alias of setting.aliases) byName.set(alias, setting);
-  }
+  const byName = new Map(settings.map((setting) => [setting.name, setting]));
   return { settings, byName };
 }
 
@@ -44,11 +40,7 @@ function requireRuntimeFile() {
 }
 
 function settingValue(values, setting) {
-  if (Object.hasOwn(values, setting.name) && values[setting.name] !== '') return values[setting.name];
-  for (const alias of setting.aliases) {
-    if (Object.hasOwn(values, alias) && values[alias] !== '') return values[alias];
-  }
-  return '';
+  return values[setting.name] || '';
 }
 
 function parseGroupAndJson(args, usage, { allowGroup = true, allowJson = true } = {}) {
@@ -79,13 +71,11 @@ function configList(args) {
       group: setting.group,
       sensitivity: setting.sensitivity,
       home: setting.home,
-      aliases: setting.aliases,
     }));
   if (json) info(JSON.stringify({ settings: rows }));
   else {
     for (const row of rows) {
-      const aliases = row.aliases.length ? ` aliases=${row.aliases.join(',')}` : '';
-      info(`${row.name}\t${row.group}\t${row.sensitivity}\t${row.home}${aliases}`);
+      info(`${row.name}\t${row.group}\t${row.sensitivity}\t${row.home}`);
     }
   }
 }
@@ -136,13 +126,12 @@ function validateEnvValue(value) {
 }
 
 function replaceSetting(contents, setting, value) {
-  const names = new Set([setting.name, ...setting.aliases]);
   const lines = contents.split(/\r?\n/);
   let replaced = false;
   const output = [];
   for (const line of lines) {
     const match = /^([A-Za-z_][A-Za-z0-9_]*)=/.exec(line.trim());
-    if (!match || !names.has(match[1])) {
+    if (!match || match[1] !== setting.name) {
       output.push(line);
       continue;
     }
@@ -150,7 +139,6 @@ function replaceSetting(contents, setting, value) {
       output.push(`${setting.name}=${value}`);
       replaced = true;
     }
-    // Drop duplicate compatibility aliases so the edited value is unambiguous.
   }
   if (!replaced) {
     while (output.length > 0 && output[output.length - 1] === '') output.pop();
@@ -196,23 +184,9 @@ function configCheckReport() {
     checks.push({ id: 'runtime-file', status: 'FAIL', message: error.message, fix: './revival init' });
   }
   if (values) {
-    for (const setting of settingsRegistry().settings) {
-      const canonical = values[setting.name] || '';
-      for (const alias of setting.aliases) {
-        const compatible = values[alias] || '';
-        if (canonical && compatible && canonical !== compatible) {
-          checks.push({
-            id: `alias-${setting.name}`,
-            status: 'FAIL',
-            message: `${setting.name} and compatibility alias ${alias} disagree.`,
-            fix: `./revival config set ${setting.name} ${setting.sensitivity === 'secret' ? '--stdin' : 'VALUE'}`,
-          });
-        }
-      }
-    }
     const selected = (name) => settingValue(values, resolveSetting(name));
-    if (selected('REVIVAL_REMOTE_TTS_ENABLED') === 'true') {
-      for (const required of ['AZURE_SPEECH_KEY', 'AZURE_SPEECH_REGION']) {
+    if (selected('COSMOS_REMOTE_TTS_ENABLED') === 'true') {
+      for (const required of ['COSMOS_AZURE_SPEECH_KEY', 'COSMOS_AZURE_SPEECH_REGION']) {
         if (!selected(required)) checks.push({
           id: `dependency-${required}`,
           status: 'FAIL',
@@ -242,7 +216,7 @@ function configCheckReport() {
     }
   }
   if (!checks.some((check) => check.status === 'FAIL')) {
-    checks.push({ id: 'contract-settings', status: 'PASS', message: 'Contract-backed aliases and dependencies are coherent.' });
+    checks.push({ id: 'contract-settings', status: 'PASS', message: 'Contract-backed settings and dependencies are coherent.' });
   }
   const next = checks.find((check) => check.status === 'FAIL')?.fix || './revival doctor';
   return { schemaVersion: 1, ok: !checks.some((check) => check.status === 'FAIL'), checks, next };
