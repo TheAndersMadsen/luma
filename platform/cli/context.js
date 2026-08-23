@@ -836,10 +836,8 @@ function operatorEnvironment(values) {
     GIT_CONFIG_NOSYSTEM: '1',
     GIT_ATTR_NOSYSTEM: '1',
     GIT_TERMINAL_PROMPT: '0',
-    // The ordinary CLI needs no Docker credentials. A fixed impossible root
-    // is safer than a reusable build directory whose config.json or helper
-    // settings could survive from an earlier same-UID process.
-    DOCKER_CONFIG: '/nonexistent/ai-pin-revival-docker-config',
+    // Docker requires this directory to exist even when no credentials are used.
+    DOCKER_CONFIG: BUILD_DIR,
     DOCKER_HOST: 'unix:///var/run/docker.sock',
     DOCKER_CONTEXT: 'default',
     PYTHONDONTWRITEBYTECODE: '1',
