@@ -91,7 +91,7 @@ function createManifest({ releaseId = RELEASE_ID, version = "2026-08-09.0", vers
     artifacts: ROLES.map((role, index) => ({
       role,
       url: `./${role}.apk`,
-      name: `AiPinRevival-${role}-${version}.apk`,
+      name: `${role}.apk`,
       package: PACKAGES[role],
       versionCode,
       size: index + 1,
@@ -225,7 +225,7 @@ test("parsePinReleaseManifest rejects a sixth artifact that shadows a role", () 
   const manifest = createManifest();
   manifest.artifacts.unshift({
     ...manifest.artifacts[0],
-    name: "AiPinRevival-installer-shadow.apk",
+    name: "installer-shadow.apk",
     sha256: "e".repeat(64),
   });
   assert.equal(manifest.artifacts.length, 6);
@@ -286,9 +286,9 @@ test("parsePinReleaseManifest rejects inconsistent versionCodes within one atomi
   assert.throws(() => parsePinReleaseManifest(manifest, MANIFEST_URL), PinReleaseError);
 });
 
-test("parsePinReleaseManifest requires five distinct APK names", () => {
+test("parsePinReleaseManifest requires canonical role APK names", () => {
   const manifest = createManifest();
-  manifest.artifacts[1].name = manifest.artifacts[0].name;
+  manifest.artifacts[1].name = "branded-bootstrap.apk";
   assert.throws(() => parsePinReleaseManifest(manifest, MANIFEST_URL), PinReleaseError);
 });
 
@@ -467,7 +467,7 @@ function assetManifest() {
     artifacts: ROLES.map((role) => ({
       role,
       url: `./${role}.apk`,
-      name: `AiPinRevival-${role}-2026-08-09.0.apk`,
+      name: `${role}.apk`,
       package: PACKAGES[role],
       versionCode: 202_608_090,
       size: APK_BYTES.byteLength,

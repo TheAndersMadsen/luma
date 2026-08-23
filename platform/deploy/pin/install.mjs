@@ -43,6 +43,7 @@ import { parseArgs } from "node:util";
 import {
   PinReleaseContractError,
   parseCanonicalPinReleaseManifestDocument,
+  parsePinReleaseJson,
 } from "./release.mjs";
 
 const SELF_PATH = fileURLToPath(import.meta.url);

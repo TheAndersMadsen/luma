@@ -21,7 +21,6 @@ export const PIN_RELEASE_PACKAGE_BY_ROLE = Object.freeze({
 });
 const MAX_PIN_ARTIFACT_SIZE_BYTES = 512 * 1024 * 1024;
 const SHA256_RE = /^[0-9a-f]{64}$/;
-const APK_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,254}\.apk$/;
 const SAFE_PATH_SEGMENT_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$/;
 const VERSION_RE = /^(\d{4})-(\d{2})-(\d{2})\.(\d+)$/;
 const MAX_VERSION_CODE = 2_147_483_647;
@@ -198,7 +197,7 @@ function parseManifestArtifact(value, index, releaseId) {
     fail("url-mismatch", `${role}.url must be exactly ${expectedUrl}`);
   }
   const name = requiredTrimmedString(value.name, `${role}.name`);
-  if (!APK_NAME_RE.test(name)) fail("unsafe-path", `${role}.name must be a safe APK filename`);
+  if (name !== `${role}.apk`) fail("name-mismatch", `${role}.name must be exactly ${role}.apk`);
   const packageName = requiredTrimmedString(value.package, `${role}.package`);
   if (packageName !== PIN_RELEASE_PACKAGE_BY_ROLE[role]) {
     fail("package-mismatch", `${role}.package does not match its fixed package identity`);
@@ -228,9 +227,6 @@ function canonicalRoleOrder(artifacts, label) {
     if (!byRole.has(role)) fail("partial-bundle", `${label} is missing role ${role}`);
   }
   const ordered = PIN_RELEASE_ARTIFACT_ROLES.map((role) => byRole.get(role));
-  if (new Set(ordered.map((artifact) => artifact.name)).size !== ordered.length) {
-    fail("duplicate-name", `${label} must use five distinct APK names`);
-  }
   return Object.freeze(ordered);
 }
 
@@ -256,7 +252,7 @@ function derivePinReleaseId(value) {
     if (!isRecord(artifact)) fail("invalid-shape", `artifacts[${index}] must be an object`);
     const role = requiredRole(artifact.role, `artifacts[${index}].role`);
     const name = requiredTrimmedString(artifact.name, `${role}.name`);
-    if (!APK_NAME_RE.test(name)) fail("unsafe-path", `${role}.name must be a safe APK filename`);
+    if (name !== `${role}.apk`) fail("name-mismatch", `${role}.name must be exactly ${role}.apk`);
     const packageName = requiredTrimmedString(artifact.package, `${role}.package`);
     if (packageName !== PIN_RELEASE_PACKAGE_BY_ROLE[role]) fail("package-mismatch", `${role}.package is invalid`);
     return {
@@ -359,8 +355,8 @@ function parseReceipt(value, index) {
   const role = requiredRole(value.role, `receipt artifacts[${index}].role`);
   const path = validatePinReleaseRelativePath(value.path, `${role}.path`);
   const name = requiredTrimmedString(value.name, `${role}.name`);
-  if (!APK_NAME_RE.test(name) || basename(path) !== name) {
-    fail("unsafe-path", `${role}.name must be the safe APK basename of its receipt path`);
+  if (name !== `${role}.apk` || basename(path) !== name) {
+    fail("name-mismatch", `${role}.name must be exactly ${role}.apk and match its receipt path`);
   }
   const packageName = requiredTrimmedString(value.package, `${role}.package`);
   if (packageName !== PIN_RELEASE_PACKAGE_BY_ROLE[role]) fail("package-mismatch", `${role}.package is invalid`);

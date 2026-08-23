@@ -334,9 +334,8 @@ function ensureShellSuccess(result: ShellResult, fallback: string) {
 /**
  * The name an APK must have before it may touch the device.
  *
- * Identical to the server's `APK_NAME_RE` for published release artifacts
- * (center/src/server/pin-releases.ts), so a locally-picked file and a
- * server-served one are held to one rule. Quoting at the sinks above already
+ * Published release manifests are stricter and bind each role to `role.apk`.
+ * This broader rule is only for locally picked files. Quoting at the sinks above
  * makes an exotic name harmless; this rejects it anyway, BEFORE any device I/O,
  * because a name that needs quoting to be safe has no business on a device in
  * the first place — and because `install`'s wire format joins names with commas.

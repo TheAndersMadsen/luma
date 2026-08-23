@@ -353,7 +353,7 @@ async function verifyExistingRelease(directoryPath, manifest, canonical) {
   }
 }
 
-async function publishRelease({ releaseRoot, stagingRoot, version, receipts }) {
+export async function publishRelease({ releaseRoot, stagingRoot, version, receipts }) {
   const manifest = createPinReleaseManifest({ version, receipts });
   const canonical = canonicalPinReleaseManifestJson(manifest);
   verifyPinReleaseMetadata({
@@ -387,6 +387,12 @@ async function publishRelease({ releaseRoot, stagingRoot, version, receipts }) {
     }
   }
   await atomicWrite(join(releaseRoot, "current.json"), canonical);
+  await rm(join(releaseRoot, "history.json"), { recursive: true, force: true });
+  for (const entry of await readdir(releasesRoot)) {
+    if (entry !== manifest.releaseId) {
+      await rm(join(releasesRoot, entry), { recursive: true, force: true });
+    }
+  }
   return Object.freeze({
     schemaVersion: 1,
     releaseId: manifest.releaseId,

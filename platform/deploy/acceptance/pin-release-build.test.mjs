@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -12,6 +12,7 @@ import {
   createDockerRunInvocation,
   parseBuilderMetadata,
   parseLiteralSigningEnvironment,
+  publishRelease,
   validatePinReleaseVersion,
 } from "../pin/build.mjs";
 import { PIN_RELEASE_ARTIFACT_ROLES, PIN_RELEASE_PACKAGE_BY_ROLE } from "../pin/release.mjs";
@@ -105,4 +106,33 @@ test("builder metadata accepts exactly five digest-matched APKs", async () => {
     parseBuilderMetadata({ stagingRoot, version, versionCode }),
     /server APK differs/u,
   );
+});
+
+test("a successful build removes obsolete history and old local releases", async (t) => {
+  const temporary = await mkdtemp(join(tmpdir(), "revival-release-store-"));
+  t.after(() => rm(temporary, { recursive: true, force: true }));
+  const releaseRoot = join(temporary, "published");
+  await mkdir(join(releaseRoot, "releases", "old-release"), { recursive: true });
+  await writeFile(join(releaseRoot, "history.json"), "{}\n");
+
+  const version = "2026-08-23.2", versionCode = 202_608_232;
+  const stagingRoot = join(temporary, "staging");
+  await mkdir(stagingRoot);
+  const rows = [];
+  for (const role of PIN_RELEASE_ARTIFACT_ROLES) {
+    const bytes = Buffer.from(`fixture-${version}-${role}`);
+    const digest = createHash("sha256").update(bytes).digest("hex");
+    await writeFile(join(stagingRoot, `${role}.apk`), bytes);
+    rows.push([
+      role, PIN_RELEASE_PACKAGE_BY_ROLE[role], version, versionCode,
+      PIN_COMPATIBILITY_CERT_SHA256, digest, bytes.length,
+    ].join("\t"));
+  }
+  await writeFile(join(stagingRoot, "release-metadata.tsv"), `${rows.join("\n")}\n`);
+  const receipts = await parseBuilderMetadata({ stagingRoot, version, versionCode });
+  const published = await publishRelease({ releaseRoot, stagingRoot, version, receipts });
+
+  assert.deepEqual((await readdir(releaseRoot)).sort(), ["current.json", "releases"]);
+  assert.deepEqual(await readdir(join(releaseRoot, "releases")), [published.releaseId]);
+  assert.equal(await readFile(published.currentManifest, "utf8"), await readFile(join(published.releaseDirectory, "manifest.json"), "utf8"));
 });

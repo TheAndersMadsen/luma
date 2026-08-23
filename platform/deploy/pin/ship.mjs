@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFile, lstat, mkdir, readFile, readdir, realpath, rename, rm, writeFile } from "node:fs/promises";
-import { basename, dirname, posix, resolve } from "node:path";
+import { lstat, readFile, readdir, realpath } from "node:fs/promises";
+import { posix, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { compareInstallVersions, parseCanonicalPinReleaseManifestDocument } from "./release.mjs";
@@ -11,6 +11,7 @@ const SELF_PATH = fileURLToPath(import.meta.url);
 const DEFAULT_REMOTE_ROOT = "/home/anders/ai-pin-revival/data/pin-releases";
 const MAX_DOCUMENT_BYTES = 1024 * 1024, SSH_TIMEOUT_MS = 30_000, TRANSFER_TIMEOUT_MS = 30 * 60_000;
 const RSYNC_OPTIONS = Object.freeze(["--recursive", "--partial", "--delete"]);
+const RELEASE_ID_RE = /^[0-9a-f]{64}$/u;
 class PinReleaseShipError extends Error { constructor(code, message) { super(message); this.name = "PinReleaseShipError"; this.code = code; } }
 function fail(code, message) { throw new PinReleaseShipError(code, message); }
 function digest(value) { return createHash("sha256").update(value).digest("hex"); }
@@ -61,6 +62,9 @@ async function verifyLocalRelease(directory, manifest, canonical, label) {
 export async function readLocalPinReleaseStore({ root, label = "local Pin release store" }) {
   const storeRoot = await realDirectory(root, label);
   const entries = await readdir(storeRoot, { withFileTypes: true });
+  if (entries.some((entry) => entry.name === "history.json")) {
+    fail("store-invalid", `${label} uses obsolete history.json; rebuild the local release store`);
+  }
   if (entries.length !== 2 ||
       !entries.some((entry) => entry.name === "current.json" && entry.isFile()) ||
       !entries.some((entry) => entry.name === "releases" && entry.isDirectory()))
@@ -83,87 +87,16 @@ export function createPinReleaseShipPlan({ local, remote }) {
       fail("version-regression", "version and versionCode must both advance beyond remote current");
   }
   const uploads = same ? [] : [
-    ...[...local.entries].map(([name, value]) => ({ name, ...value })),
-    { name: "current.json", size: Buffer.byteLength(local.currentSource) },
+    ...(remote?.desiredFinalized === true
+      ? []
+      : [...local.entries].map(([name, value]) => ({ name, ...value }))),
+    ...(remote?.desiredPointerReady === true
+      ? []
+      : [{ name: "current.json", size: Buffer.byteLength(local.currentSource) }]),
   ];
   return Object.freeze({ releaseId: local.manifest.releaseId, version: local.manifest.version,
     versionCode: local.manifest.artifacts[0].versionCode, unchanged: same, uploads: Object.freeze(uploads),
     uploadBytes: uploads.reduce((sum, file) => sum + file.size, 0) });
-}
-async function missing(filename) {
-  return await lstat(filename).then(() => false, (error) => {
-    if (error?.code === "ENOENT") return true;
-    throw error;
-  });
-}
-async function inspectPreparedLocal(root, desired) {
-  if (!desired) fail("store-invalid", "target exists without current.json");
-  const entries = await readdir(root, { withFileTypes: true });
-  if (entries.length !== 1 || entries[0].name !== "releases" || !entries[0].isDirectory())
-    fail("store-invalid", "partial target root is corrupt");
-  const releases = await realDirectory(posix.join(root, "releases"), "target releases");
-  const staging = `.incoming-${desired.manifest.releaseId}`;
-  const partial = await readdir(releases, { withFileTypes: true });
-  if (partial.length !== 1 || partial[0].name !== staging || !partial[0].isDirectory())
-    fail("store-invalid", "partial target releases are corrupt");
-  await realDirectory(posix.join(releases, staging), "release staging");
-  requireSafeMembers(await readdir(posix.join(releases, staging), { withFileTypes: true }),
-    expectedNames(desired.manifest), "release staging");
-  return Object.freeze({ prepared: true, verified: true, manifest: null, currentSource: null });
-}
-export function createLocalTransport() {
-  const transport = {
-    describe: () => "local",
-    async inspect(remoteRoot, desired) {
-      const root = resolve(remoteRoot);
-      if (await missing(root)) return null;
-      await realDirectory(root, "local target Pin release store");
-      return await missing(posix.join(root, "current.json"))
-        ? inspectPreparedLocal(root, desired)
-        : readLocalPinReleaseStore({ root, label: "local target Pin release store" });
-    },
-    async publish({ local, remote, remoteRoot }) {
-      const root = resolve(remoteRoot);
-      await realDirectory(dirname(root), "local target parent");
-      if (await missing(root)) await mkdir(root, { mode: 0o700 });
-      await realDirectory(root, "local target root");
-      const releases = posix.join(root, "releases");
-      if (await missing(releases)) await mkdir(releases, { mode: 0o700 });
-      await realDirectory(releases, "local target releases");
-      const final = posix.join(releases, local.manifest.releaseId);
-      const staging = posix.join(releases, `.incoming-${local.manifest.releaseId}`);
-      if (await missing(final)) {
-        if (await missing(staging)) await mkdir(staging, { mode: 0o700 });
-        else {
-          await realDirectory(staging, "local release staging");
-          requireSafeMembers(await readdir(staging, { withFileTypes: true }),
-            expectedNames(local.manifest), "local release staging");
-        }
-        for (const name of local.entries.keys())
-          await copyFile(posix.join(local.releaseDirectory, name), posix.join(staging, name));
-        await verifyLocalRelease(staging, local.manifest, local.currentSource, "local staged release");
-        await rename(staging, final);
-      }
-      await verifyLocalRelease(final, local.manifest, local.currentSource, "local published release");
-      if (!await missing(staging)) {
-        await realDirectory(staging, "local stale release staging");
-        requireSafeMembers(await readdir(staging, { withFileTypes: true }),
-          expectedNames(local.manifest), "local stale release staging");
-        await rm(staging, { recursive: true });
-      }
-      const pointer = posix.join(releases, `.current-${local.manifest.releaseId}.tmp`);
-      await writeFile(pointer, local.currentSource, { mode: 0o600 });
-      const current = posix.join(root, "current.json");
-      const actual = await missing(current) ? null : await readDocument(current, "local current.json");
-      if (actual !== (remote?.currentSource ?? null)) {
-        const installed = await transport.inspect(root, local);
-        if (installed?.currentSource === local.currentSource) return await rm(pointer, { force: true });
-        fail("remote", "local current.json changed during publication");
-      }
-      await rename(pointer, current);
-    },
-  };
-  return Object.freeze(transport);
 }
 function run(command, args, { capture = false, timeoutMs = SSH_TIMEOUT_MS } = {}) {
   return new Promise((resolvePromise, rejectPromise) => {
@@ -199,16 +132,30 @@ export function validateRemoteRoot(value) {
     fail("usage", `unsafe remote release store path: ${String(value)}`);
   return value;
 }
-export function createSshTransport({ remote, execute = run }) {
+export function createSshTransport({
+  remote,
+  execute = run,
+  warn = (message) => process.stderr.write(`${message}\n`),
+}) {
   const target = validateSshTarget(remote);
   const options = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3"];
-  const ssh = (args, capture = false) => execute("ssh", [...options, target, ...args], { capture, timeoutMs: SSH_TIMEOUT_MS });
   const quote = (value) => `'${String(value).replaceAll("'", `'"'"'`)}'`;
+  const ssh = (args, capture = false) => execute(
+    "ssh",
+    [...options, target, args.map(quote).join(" ")],
+    { capture, timeoutMs: SSH_TIMEOUT_MS },
+  );
+  const sshScript = (script, capture = false) => execute(
+    "ssh",
+    [...options, target, script],
+    { capture, timeoutMs: SSH_TIMEOUT_MS },
+  );
   const requireSsh = async (args, label) => {
     const result = await ssh(args);
     if (result.status !== 0) fail("remote", `${label} failed (status ${result.status})`);
   };
   const info = async (path) => {
+    // GNU stat does not follow symlinks unless --dereference is requested.
     const result = await ssh(["stat", "--format=%f:%s", "--", path], true);
     if (result.status !== 0) return null;
     const match = /^([0-9a-f]+):(\d+)\n?$/u.exec(result.stdout ?? "");
@@ -229,7 +176,7 @@ export function createSshTransport({ remote, execute = run }) {
     return result.stdout;
   };
   const list = async (path) => {
-    const result = await ssh(["find", path, "-mindepth", "1", "-maxdepth", "1", "-printf", "%f\0%y\0"], true);
+    const result = await ssh(["find", path, "-mindepth", "1", "-maxdepth", "1", "-printf", "%f\\0%y\\0"], true);
     if (result.status !== 0) fail("remote", `could not list ${path}`);
     const fields = (result.stdout ?? "").split("\0"); fields.pop();
     if (fields.length % 2) fail("remote", `invalid listing for ${path}`);
@@ -263,6 +210,90 @@ export function createSshTransport({ remote, execute = run }) {
     }
     fail("remote", `rsync failed after 3 attempts (status ${status})`);
   };
+  const verifyStaging = async (path, manifest, label = "remote staging") => {
+    await requireDirectory(path, label);
+    const entries = await list(path), expected = expectedNames(manifest);
+    if (entries.some((entry) => entry.type !== "f" || !expected.includes(entry.name))) {
+      fail("store-invalid", `${label} contains unsafe or unexpected files`);
+    }
+  };
+  const inspectReleaseMembers = async ({ releases, desired, currentManifest, currentCanonical, allowOlder }) => {
+    const desiredId = desired?.manifest.releaseId;
+    const stagingName = desiredId ? `.incoming-${desiredId}` : null;
+    const pointerName = desiredId ? `.current-${desiredId}.tmp` : null;
+    let currentFound = false, desiredFinalized = false, desiredPointerReady = false;
+    for (const entry of await list(releases)) {
+      const selected = posix.join(releases, entry.name);
+      if (entry.name === desiredId) {
+        if (entry.type !== "d") fail("store-invalid", "desired remote release is unsafe");
+        await verifyRelease(selected, desired.manifest, desired.currentSource);
+        desiredFinalized = true;
+        if (entry.name === currentManifest?.releaseId) currentFound = true;
+      } else if (entry.name === currentManifest?.releaseId) {
+        if (entry.type !== "d") fail("store-invalid", "current remote release is unsafe");
+        await verifyRelease(selected, currentManifest, currentCanonical);
+        currentFound = true;
+      } else if (entry.name === stagingName) {
+        if (entry.type !== "d") fail("store-invalid", "remote staging is unsafe");
+        await verifyStaging(selected, desired.manifest);
+      } else if (entry.name === pointerName) {
+        if (entry.type !== "f" || await remoteDocument(selected, "remote current staging") !== desired.currentSource) {
+          fail("store-invalid", "remote current staging is unsafe");
+        }
+        desiredPointerReady = true;
+      } else if (allowOlder && RELEASE_ID_RE.test(entry.name) && entry.type === "d") {
+        await requireDirectory(selected, "older remote release");
+      } else {
+        fail("store-invalid", `remote releases contains unexpected member ${entry.name}`);
+      }
+    }
+    if (currentManifest && !currentFound) fail("store-invalid", "current remote release is missing");
+    if (desiredPointerReady && !desiredFinalized) {
+      fail("store-invalid", "remote current staging exists without its finalized release");
+    }
+    return { desiredFinalized, desiredPointerReady };
+  };
+  const pruneOlderReleases = async (releases, currentId, desiredId) => {
+    // Keep the immediately previous release so downloads opened before the
+    // pointer swap can finish against the same immutable files.
+    const kept = new Set([
+      currentId,
+      desiredId,
+      `.incoming-${desiredId}`,
+      `.current-${desiredId}.tmp`,
+    ]);
+    for (const entry of await list(releases)) {
+      const selected = posix.join(releases, entry.name);
+      if (kept.has(entry.name)) {
+        if (entry.name.startsWith(".current-")) {
+          if (entry.type !== "f") fail("remote", "remote current staging is unsafe");
+        } else {
+          if (entry.type !== "d") fail("remote", `remote release member ${entry.name} is unsafe`);
+          await requireDirectory(selected, `retained remote release member ${entry.name}`);
+        }
+        continue;
+      }
+      if (!RELEASE_ID_RE.test(entry.name) || entry.type !== "d") {
+        fail("remote", `remote releases contains unexpected member ${entry.name}`);
+      }
+      await requireDirectory(selected, "older remote release");
+      await requireSsh(["rm", "-rf", "--", selected], `older remote release ${entry.name} cleanup`);
+    }
+  };
+  const cleanupPublisherTemps = async ({ staging, pointer, manifest, canonical }) => {
+    const pointerMetadata = await info(pointer);
+    if (pointerMetadata) {
+      if (pointerMetadata.mode !== 0x8000 ||
+          await remoteDocument(pointer, "remote current staging") !== canonical) {
+        fail("remote", "remote current staging became unsafe");
+      }
+      await requireSsh(["rm", "-f", "--", pointer], "remote current staging cleanup");
+    }
+    if (await info(staging) !== null) {
+      await verifyStaging(staging, manifest, "remote stale staging");
+      await requireSsh(["rm", "-rf", "--", staging], "remote stale staging cleanup");
+    }
+  };
   const transport = {
     describe: () => target,
     async inspect(remoteRoot, desired) {
@@ -270,31 +301,35 @@ export function createSshTransport({ remote, execute = run }) {
       if (await info(root) === null) return null;
       await requireDirectory(root, "remote release root");
       const entries = await list(root);
-      if (!entries.some((entry) => entry.name === "current.json")) {
-        if (!desired || entries.length !== 1 || entries[0].name !== "releases" || entries[0].type !== "d") {
-          fail("store-invalid", "remote root exists without a valid current.json");
-        }
-        const releases = posix.join(root, "releases");
-        await requireDirectory(releases, "remote releases");
-        const partial = await list(releases);
-        const staging = `.incoming-${desired.manifest.releaseId}`;
-        if (partial.length !== 1 || partial[0].name !== staging || partial[0].type !== "d") {
-          fail("store-invalid", "remote partial release root is corrupt");
-        }
-        await requireDirectory(posix.join(releases, staging), "remote staging");
-        const staged = await list(posix.join(releases, staging)), expected = expectedNames(desired.manifest);
-        if (staged.some((entry) => entry.type !== "f" || !expected.includes(entry.name)))
-          fail("store-invalid", "remote staging contains unsafe or unexpected files");
-        return Object.freeze({ prepared: true, verified: true, manifest: null, currentSource: null });
-      }
-      if (entries.length !== 2 || entries.some((entry) =>
-        !((entry.name === "current.json" && entry.type === "f") || (entry.name === "releases" && entry.type === "d")))) {
+      const currentEntry = entries.find((entry) => entry.name === "current.json");
+      const releasesEntry = entries.find((entry) => entry.name === "releases");
+      if (entries.some((entry) => !["current.json", "releases"].includes(entry.name)) ||
+          (currentEntry && currentEntry.type !== "f") ||
+          (releasesEntry && releasesEntry.type !== "d") ||
+          (currentEntry && (!releasesEntry || entries.length !== 2)) ||
+          (!currentEntry && entries.length > (releasesEntry ? 1 : 0))) {
         fail("store-invalid", "remote release root has unexpected files");
       }
+      const releases = posix.join(root, "releases");
+      if (!currentEntry) {
+        if (!desired) fail("store-invalid", "remote root exists without current.json");
+        const state = releasesEntry
+          ? await requireDirectory(releases, "remote releases").then(() => inspectReleaseMembers({
+            releases, desired, currentManifest: null, currentCanonical: undefined, allowOlder: false,
+          }))
+          : { desiredFinalized: false, desiredPointerReady: false };
+        return Object.freeze({
+          prepared: true, ...state, verified: true,
+          manifest: null, currentSource: null,
+        });
+      }
+      await requireDirectory(releases, "remote releases");
       const currentSource = await remoteDocument(posix.join(root, "current.json"), "remote current.json");
       const manifest = parseCanonicalPinReleaseManifestDocument(currentSource);
-      await verifyRelease(posix.join(root, "releases", manifest.releaseId), manifest, currentSource);
-      return Object.freeze({ manifest, currentSource, verified: true });
+      const state = await inspectReleaseMembers({
+        releases, desired, currentManifest: manifest, currentCanonical: currentSource, allowOlder: true,
+      });
+      return Object.freeze({ manifest, currentSource, ...state, verified: true });
     },
     async publish({ local, remote: previous, remoteRoot }) {
       const root = validateRemoteRoot(remoteRoot);
@@ -304,15 +339,13 @@ export function createSshTransport({ remote, execute = run }) {
       const releases = posix.join(root, "releases");
       if (await info(releases) === null) await requireSsh(["mkdir", "--", releases], "remote releases creation");
       await requireDirectory(releases, "remote releases");
+      const previousId = previous?.manifest?.releaseId;
+      if (previousId && !RELEASE_ID_RE.test(previousId)) fail("remote", "unsafe previous releaseId");
       const final = posix.join(releases, local.manifest.releaseId);
       const staging = posix.join(releases, `.incoming-${local.manifest.releaseId}`);
       if (await info(final) === null) {
         if (await info(staging) === null) await requireSsh(["mkdir", "--", staging], "remote staging creation");
-        await requireDirectory(staging, "remote staging");
-        const partial = await list(staging), expected = expectedNames(local.manifest);
-        if (partial.some((entry) => entry.type !== "f" || !expected.includes(entry.name))) {
-          fail("remote", "remote staging contains unsafe or unexpected files");
-        }
+        await verifyStaging(staging, local.manifest);
         await upload(`${local.releaseDirectory}/`, `${staging}/`);
         await verifyRelease(staging, local.manifest, local.currentSource);
         const moved = await ssh(["mv", "-T", "--", staging, final]);
@@ -323,34 +356,59 @@ export function createSshTransport({ remote, execute = run }) {
       }
       await verifyRelease(final, local.manifest, local.currentSource);
       if (await info(staging) !== null) {
-        await requireDirectory(staging, "remote stale staging");
-        const stale = await list(staging), expected = expectedNames(local.manifest);
-        if (stale.some((entry) => entry.type !== "f" || !expected.includes(entry.name)))
-          fail("remote", "remote stale staging contains unsafe or unexpected files");
+        await verifyStaging(staging, local.manifest, "remote stale staging");
         await requireSsh(["rm", "-rf", "--", staging], "remote stale staging cleanup");
       }
       const pointer = posix.join(releases, `.current-${local.manifest.releaseId}.tmp`);
       const pointerInfo = await info(pointer);
       if (pointerInfo && pointerInfo.mode !== 0x8000) fail("remote", "remote current staging is unsafe");
-      await upload(posix.join(local.root, "current.json"), pointer);
+      if (!previous?.desiredPointerReady) await upload(posix.join(local.root, "current.json"), pointer);
       if (await remoteDocument(pointer, "remote current staging") !== local.currentSource) {
         fail("remote", "remote current staging differs from release");
       }
       const current = posix.join(root, "current.json");
       const expected = previous?.currentSource == null
         ? `[ ! -e ${quote(current)} ] && [ ! -L ${quote(current)} ]`
-        : `[ ! -L ${quote(current)} ] && [ "$(sha256sum -- ${quote(current)} | cut -d ' ' -f 1)" = ${quote(digest(previous.currentSource))} ]`;
-      const script = `set -eu; ${expected} || exit 73; [ "$(sha256sum -- ${quote(pointer)} | cut -d ' ' -f 1)" = ${quote(digest(local.currentSource))} ] || exit 74; mv -T -f -- ${quote(pointer)} ${quote(current)}`;
-      const committed = await ssh([`flock -x ${quote(root)} sh -c ${quote(script)}`]);
-      if (committed.status === 73) {
+        : `[ ! -L ${quote(current)} ] && [ -f ${quote(current)} ] && [ "$(sha256sum -- ${quote(current)} | cut -d ' ' -f 1)" = ${quote(digest(previous.currentSource))} ]`;
+      const pointerReady = `[ ! -L ${quote(pointer)} ] && [ -f ${quote(pointer)} ] && [ "$(sha256sum -- ${quote(pointer)} | cut -d ' ' -f 1)" = ${quote(digest(local.currentSource))} ]`;
+      const script = `set -eu; ${expected} || exit 73; ${pointerReady} || exit 74; mv -T -f -- ${quote(pointer)} ${quote(current)}`;
+      let committed;
+      try {
+        committed = await sshScript(`flock -x ${quote(root)} sh -c ${quote(script)}`);
+      } catch (error) {
+        await cleanupPublisherTemps({
+          staging,
+          pointer,
+          manifest: local.manifest,
+          canonical: local.currentSource,
+        });
         const installed = await transport.inspect(root, local);
-        if (installed?.currentSource === local.currentSource) {
-          await requireSsh(["rm", "-f", "--", pointer], "remote current staging cleanup");
-          return;
-        }
-        fail("remote", "remote current.json changed during publication");
+        if (installed?.currentSource === local.currentSource) return;
+        throw error;
       }
-      if (committed.status !== 0) fail("remote", `remote current publication failed (status ${committed.status})`);
+      if (committed.status !== 0) {
+        await cleanupPublisherTemps({
+          staging,
+          pointer,
+          manifest: local.manifest,
+          canonical: local.currentSource,
+        });
+        const installed = await transport.inspect(root, local);
+        if (installed?.currentSource === local.currentSource) return;
+        if (committed.status === 73) fail("remote", "remote current.json changed during publication");
+        fail("remote", `remote current publication failed (status ${committed.status})`);
+      }
+      if (await remoteDocument(current, "remote current.json") !== local.currentSource) {
+        fail("remote", "remote current.json did not commit the desired release");
+      }
+      if (previousId && previousId !== local.manifest.releaseId) {
+        try {
+          await pruneOlderReleases(releases, previousId, local.manifest.releaseId);
+        } catch (error) {
+          warn(`pin-release-ship: post-publication cleanup skipped: ${
+            error instanceof Error ? error.message : String(error)}`);
+        }
+      }
     },
   };
   return Object.freeze(transport);
@@ -373,7 +431,7 @@ export async function shipPinRelease({ releaseRoot, remoteRoot, transport, confi
   return Object.freeze({ ...summary, applied: true, unchanged: plan.unchanged });
 }
 function help() {
-  process.stdout.write("Usage: ./revival pin release ship [--remote NAME | --local] [--remote-root PATH]\n" +
+  process.stdout.write("Usage: ./revival pin release ship [--remote NAME] [--remote-root PATH]\n" +
     "                                  [--release-root DIR] [--confirm] [--json]\n");
 }
 function parseCli(args) {
@@ -381,11 +439,10 @@ function parseCli(args) {
   try {
     ({ values } = parseArgs({ args, strict: true, options: {
       confirm: { type: "boolean", default: false }, json: { type: "boolean", default: false },
-      local: { type: "boolean", default: false }, remote: { type: "string" },
+      remote: { type: "string" },
       "remote-root": { type: "string" }, "release-root": { type: "string" },
     } }));
   } catch (error) { fail("usage", error.message); }
-  if (values.local && values.remote) fail("usage", "--local and --remote are mutually exclusive");
   return { ...values, remoteRoot: values["remote-root"], releaseRoot: values["release-root"] };
 }
 async function main(args) {
@@ -394,10 +451,10 @@ async function main(args) {
   if (args.length === 1 && ["help", "--help", "-h"].includes(args[0])) return help();
   const options = parseCli(args);
   const releaseRoot = resolve(options.releaseRoot ?? defaultOperatorPaths().releaseRoot);
-  const remoteRoot = options.local ? resolve(options.remoteRoot ??
-    posix.join(dirname(releaseRoot), `${basename(releaseRoot)}-served`)) : validateRemoteRoot(options.remoteRoot ?? DEFAULT_REMOTE_ROOT);
-  const transport = options.local ? createLocalTransport() :
-    createSshTransport({ remote: options.remote ?? process.env.REVIVAL_DEPLOY_REMOTE ?? "vps" });
+  const remoteRoot = validateRemoteRoot(options.remoteRoot ?? DEFAULT_REMOTE_ROOT);
+  const transport = createSshTransport({
+    remote: options.remote ?? process.env.REVIVAL_DEPLOY_REMOTE ?? "vps",
+  });
   const result = await shipPinRelease({ releaseRoot, remoteRoot, transport, confirm: options.confirm });
   if (options.json) process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   else if (!result.applied) process.stdout.write(`[plan] ${result.releaseId} (${result.version}) -> ` +

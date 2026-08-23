@@ -93,16 +93,16 @@ test("release metadata rejects partial, duplicate, escaped, and mismatched APK s
   throwsCode(() => parsePinReleaseReceiptBundle(wrongPackage), "package-mismatch");
 });
 
-test("manifest and receipt artifacts require five distinct APK names", () => {
+test("manifest and receipt artifacts require canonical role APK names", () => {
   const release = releaseFixture();
   const receipts = structuredClone(release.receipts);
   receipts.artifacts[1].path = `nested/${receipts.artifacts[0].name}`;
   receipts.artifacts[1].name = receipts.artifacts[0].name;
-  throwsCode(() => parsePinReleaseReceiptBundle(receipts), "duplicate-name");
+  throwsCode(() => parsePinReleaseReceiptBundle(receipts), "name-mismatch");
 
   const manifest = structuredClone(release.manifest);
   manifest.artifacts[1].name = manifest.artifacts[0].name;
-  throwsCode(() => canonicalPinReleaseManifestJson(manifest), "duplicate-name");
+  throwsCode(() => canonicalPinReleaseManifestJson(manifest), "name-mismatch");
 });
 
 test("JSON errors and Setup manifest fields stay explicit", async () => {

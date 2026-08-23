@@ -5,7 +5,6 @@ const FIXTURE_SHA256 = "a".repeat(64);
 
 function artifact(
   role: PinReleaseArtifactRole,
-  name: string,
   packageName: string,
   size: number,
   versionCode: number,
@@ -13,7 +12,7 @@ function artifact(
   return Object.freeze({
     role,
     url: `https://center.example.test/api/pin/releases/${role}.apk`,
-    name,
+    name: `${role}.apk`,
     package: packageName,
     versionCode,
     size,
@@ -37,35 +36,30 @@ export function createResolvedInstallTargetFixture(
     artifacts: {
       installerApk: artifact(
         "installer",
-        "AiPinRevival-Installer-2026-04-29.1.apk",
         "com.penumbraos.systeminjector",
         101,
         versionCode,
       ),
       exploitApk: artifact(
         "bootstrap",
-        "AiPinRevival-Bootstrap-2026-04-29.1.apk",
         "com.penumbraos.systeminjector.exploit",
         102,
         versionCode,
       ),
       hookApk: artifact(
         "hook",
-        "AiPinRevival-Hook-2026-04-29.1.apk",
         "com.penumbraos.hook",
         103,
         versionCode,
       ),
       serverApk: artifact(
         "server",
-        "AiPinRevival-Server-2026-04-29.1.apk",
         "com.penumbraos.server",
         104,
         versionCode,
       ),
       injectorApk: artifact(
         "hook-injector",
-        "AiPinRevival-HookInjector-2026-04-29.1.apk",
         "com.penumbraos.hook.injector",
         105,
         versionCode,

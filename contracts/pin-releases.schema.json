@@ -50,23 +50,23 @@
       "allOf": [
         {
           "if": { "properties": { "role": { "const": "installer" } }, "required": ["role"] },
-          "then": { "properties": { "package": { "const": "com.penumbraos.systeminjector" } } }
+          "then": { "properties": { "name": { "const": "installer.apk" }, "package": { "const": "com.penumbraos.systeminjector" } } }
         },
         {
           "if": { "properties": { "role": { "const": "bootstrap" } }, "required": ["role"] },
-          "then": { "properties": { "package": { "const": "com.penumbraos.systeminjector.exploit" } } }
+          "then": { "properties": { "name": { "const": "bootstrap.apk" }, "package": { "const": "com.penumbraos.systeminjector.exploit" } } }
         },
         {
           "if": { "properties": { "role": { "const": "hook" } }, "required": ["role"] },
-          "then": { "properties": { "package": { "const": "com.penumbraos.hook" } } }
+          "then": { "properties": { "name": { "const": "hook.apk" }, "package": { "const": "com.penumbraos.hook" } } }
         },
         {
           "if": { "properties": { "role": { "const": "server" } }, "required": ["role"] },
-          "then": { "properties": { "package": { "const": "com.penumbraos.server" } } }
+          "then": { "properties": { "name": { "const": "server.apk" }, "package": { "const": "com.penumbraos.server" } } }
         },
         {
           "if": { "properties": { "role": { "const": "hook-injector" } }, "required": ["role"] },
-          "then": { "properties": { "package": { "const": "com.penumbraos.hook.injector" } } }
+          "then": { "properties": { "name": { "const": "hook-injector.apk" }, "package": { "const": "com.penumbraos.hook.injector" } } }
         }
       ]
     },
@@ -118,7 +118,7 @@
         }
       },
       "x-runtime-invariants": [
-        "The five roles and APK names are unique and canonicalized in installer, bootstrap, hook, server, hook-injector order.",
+        "Each name is exactly {role}.apk; roles are canonicalized in installer, bootstrap, hook, server, hook-injector order.",
         "All versionCode values are identical.",
         "releaseId is SHA-256 of compact JSON containing schemaVersion, version, and ordered role/name/package/versionCode/size/sha256 artifact identity; releaseId and URLs are excluded.",
         "Each URL is exactly ./{releaseId}/{role}.apk.",
@@ -172,8 +172,8 @@
         }
       },
       "x-runtime-invariants": [
-        "All five roles, paths, and APK names are unique.",
-        "Every name equals the basename of path.",
+        "All five roles and paths are unique.",
+        "Every name is exactly {role}.apk and equals the basename of path.",
         "All versionName and versionCode values are identical."
       ]
     },

@@ -102,7 +102,6 @@ export function isPinReleaseError(error: unknown): error is PinReleaseError {
 
 const RELEASE_ID_RE = /^[0-9a-f]{64}$/;
 const SHA256_RE = /^[0-9a-f]{64}$/;
-const APK_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,254}\.apk$/;
 const ROOT_FIELDS = ["schemaVersion", "releaseId", "version", "artifacts"];
 const ARTIFACT_FIELDS = [
   "role",
@@ -281,8 +280,8 @@ function parseArtifact(
   }
   const role = rawRole as PinReleaseArtifactRole;
   const name = requiredTrimmedString(value.name, `${role}.name`);
-  if (!APK_NAME_RE.test(name)) {
-    invalidManifest(`${role}.name must be a safe APK filename.`, {
+  if (name !== `${role}.apk`) {
+    invalidManifest(`${role}.name must be exactly ${role}.apk.`, {
       role,
       assetName: name,
     });
@@ -384,12 +383,6 @@ export function parsePinReleaseManifest(
   const versionCodes = new Set(artifacts.map((artifact) => artifact.versionCode));
   if (versionCodes.size !== 1) {
     invalidManifest("All artifacts in an atomic Pin release must have the same versionCode.", {
-      manifestUrl,
-      releaseId,
-    });
-  }
-  if (new Set(artifacts.map((artifact) => artifact.name)).size !== artifacts.length) {
-    invalidManifest("The five Pin release artifacts must use distinct APK names.", {
       manifestUrl,
       releaseId,
     });

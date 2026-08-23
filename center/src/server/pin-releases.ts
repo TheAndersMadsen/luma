@@ -3,7 +3,7 @@ import { createReadStream } from "node:fs";
 import { lstat, readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 import { Readable } from "node:stream";
-import { logInfo, logWarn } from "./log";
+import { logWarn } from "./log";
 
 export const PIN_RELEASE_SCHEMA_VERSION = 1;
 export const PIN_RELEASE_CURRENT_MANIFEST = "current.json";
@@ -76,9 +76,7 @@ interface LoadedManifest {
 }
 
 interface VerifiedRelease extends LoadedManifest {
-  readonly storeRoot: string;
   readonly paths: ReadonlyMap<PinReleaseRole, string>;
-  readonly fingerprint: string;
 }
 
 class PinReleaseServingError extends Error {
@@ -99,14 +97,12 @@ class PinReleaseServingError extends Error {
 
 const RELEASE_ID_RE = /^[0-9a-f]{64}$/u;
 const SHA256_RE = /^[0-9a-f]{64}$/u;
-const APK_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,254}\.apk$/u;
 const VERSION_RE = /^(\d{4})-(\d{2})-(\d{2})\.(\d+)$/u;
 const ROOT_FIELDS = ["schemaVersion", "releaseId", "version", "artifacts"];
 const ARTIFACT_FIELDS = ["role", "url", "name", "package", "versionCode", "size", "sha256"];
-
-let cachedRelease: VerifiedRelease | null = null;
-let verificationCount = 0;
-let hashedBytes = 0;
+const VERIFIED_RELEASE_CACHE_LIMIT = 2;
+const verificationInFlight = new Map<string, Promise<VerifiedRelease>>();
+const verifiedReleaseCache = new Map<string, VerifiedRelease>();
 
 function runtimeEnvironment(): PinReleaseEnvironment {
   return {
@@ -219,7 +215,7 @@ export function parsePinReleaseManifest(payload: unknown): PinReleaseManifest {
     if (!(PIN_RELEASE_ROLES as readonly string[]).includes(roleValue)) throw unavailable("artifact_role");
     const role = roleValue as PinReleaseRole;
     const name = requiredString(value.name, 259, "artifact_name");
-    if (!APK_NAME_RE.test(name)) throw unavailable("artifact_name");
+    if (name !== `${role}.apk`) throw unavailable("artifact_name");
     const packageName = requiredString(value.package, 128, "artifact_package");
     if (packageName !== PIN_RELEASE_PACKAGE_BY_ROLE[role]) throw unavailable("artifact_package");
     const sha256 = requiredString(value.sha256, 64, "artifact_sha256");
@@ -337,20 +333,13 @@ async function loadManifest(
   return Object.freeze({ manifest, canonical });
 }
 
-function fileIdentity(metadata: Awaited<ReturnType<typeof lstat>>): string {
-  return [metadata.dev, metadata.ino, metadata.size, metadata.mtimeMs, metadata.ctimeMs].join(":");
-}
-
-async function hashArtifact(file: string, artifact: PinReleaseArtifact): Promise<string> {
-  const before = await lstat(file);
-  if (before.size !== artifact.size) throw unavailable("artifact_size_mismatch");
+async function hashArtifact(file: string, artifact: PinReleaseArtifact): Promise<void> {
+  if ((await lstat(file)).size !== artifact.size) throw unavailable("artifact_size_mismatch");
   const hash = createHash("sha256");
   for await (const chunk of createReadStream(file)) hash.update(chunk);
-  const after = await lstat(file);
-  if (fileIdentity(before) !== fileIdentity(after)) throw unavailable("artifact_changed");
-  hashedBytes += artifact.size;
-  if (hash.digest("hex") !== artifact.sha256) throw unavailable("artifact_sha256_mismatch");
-  return fileIdentity(after);
+  if (hash.digest("hex") !== artifact.sha256) {
+    throw unavailable("artifact_sha256_mismatch");
+  }
 }
 
 async function verifyRelease(
@@ -367,40 +356,56 @@ async function verifyRelease(
   if (expectedCanonical !== undefined && loaded.canonical !== expectedCanonical) {
     throw unavailable("manifest_pair_mismatch");
   }
-
-  const paths = new Map<PinReleaseRole, string>();
-  const identities: string[] = [];
-  for (const artifact of loaded.manifest.artifacts) {
+  const files = await Promise.all(loaded.manifest.artifacts.map(async (artifact) => {
     const file = await regularFile(store, ["releases", releaseId, artifact.name]);
     const metadata = await lstat(file);
-    paths.set(artifact.role, file);
-    identities.push(`${artifact.role}:${fileIdentity(metadata)}`);
+    if (metadata.size !== artifact.size) throw unavailable("artifact_size_mismatch");
+    return {
+      artifact,
+      file,
+      dev: metadata.dev,
+      ino: metadata.ino,
+      size: metadata.size,
+      mtimeMs: metadata.mtimeMs,
+      ctimeMs: metadata.ctimeMs,
+    };
+  }));
+  const cacheKey = JSON.stringify([
+    store.root,
+    loaded.canonical,
+    files.map(({ dev, ino, size, mtimeMs, ctimeMs }) => [dev, ino, size, mtimeMs, ctimeMs]),
+  ]);
+  const cached = verifiedReleaseCache.get(cacheKey);
+  if (cached) {
+    verifiedReleaseCache.delete(cacheKey);
+    verifiedReleaseCache.set(cacheKey, cached);
+    return cached;
   }
-  const fingerprint = createHash("sha256")
-    .update(store.root)
-    .update(loaded.canonical)
-    .update(identities.join("\n"))
-    .digest("hex");
-  const cached = cachedRelease;
-  if (cached?.fingerprint === fingerprint) return cached;
+  const active = verificationInFlight.get(cacheKey);
+  if (active) return await active;
 
-  await Promise.all(loaded.manifest.artifacts.map((artifact) =>
-    hashArtifact(paths.get(artifact.role)!, artifact),
-  ));
-  const verified = Object.freeze({
-    ...loaded,
-    storeRoot: store.root,
-    paths: paths as ReadonlyMap<PinReleaseRole, string>,
-    fingerprint,
-  });
-  cachedRelease = verified;
-  verificationCount += 1;
-  logInfo(`pin release verified: ${releaseId} (${loaded.manifest.version})`);
-  return verified;
-}
-
-export function pinReleaseVerificationStats(): { readonly verifications: number; readonly hashedBytes: number } {
-  return { verifications: verificationCount, hashedBytes };
+  const promise = (async (): Promise<VerifiedRelease> => {
+    const paths = new Map<PinReleaseRole, string>();
+    for (const { artifact, file } of files) paths.set(artifact.role, file);
+    await Promise.all(files.map(({ artifact, file }) =>
+      hashArtifact(file, artifact),
+    ));
+    return Object.freeze({
+      ...loaded,
+      paths: paths as ReadonlyMap<PinReleaseRole, string>,
+    });
+  })();
+  verificationInFlight.set(cacheKey, promise);
+  try {
+    const verified = await promise;
+    verifiedReleaseCache.set(cacheKey, verified);
+    while (verifiedReleaseCache.size > VERIFIED_RELEASE_CACHE_LIMIT) {
+      verifiedReleaseCache.delete(verifiedReleaseCache.keys().next().value!);
+    }
+    return verified;
+  } finally {
+    if (verificationInFlight.get(cacheKey) === promise) verificationInFlight.delete(cacheKey);
+  }
 }
 
 function configuredSetupOrigin(environment: PinReleaseEnvironment): string | null {
