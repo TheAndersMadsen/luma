@@ -37,9 +37,9 @@ test("realm role, client role, and exact bootstrap email resolve to one operator
     false,
   );
   assert.equal(
-    operatorClaimFromKeycloakClaims({ realm_access: { roles: ["cosmos-operator"] } }, "wearer@example.com"),
+    operatorClaimFromKeycloakClaims({ realm_access: { roles: ["revival-operator"] } }, "wearer@example.com"),
     false,
-    "a new logical namespace must not replace the deployed Keycloak role",
+    "an unrelated role must not unlock the operator plane",
   );
 });
 

@@ -1362,7 +1362,7 @@ test("decideInstallMigration still refuses a package of unknown provenance", () 
   });
 
   assert.equal(result.kind, "blocked");
-  assert.match(result.reason, /does not match its exact migration baseline/u);
+  assert.match(result.reason, /Canonical hook state/u);
 });
 
 test("decideInstallMigration refuses to silently downgrade a newer installed role", () => {
@@ -1381,5 +1381,5 @@ test("decideInstallMigration refuses to silently downgrade a newer installed rol
   });
 
   assert.equal(result.kind, "blocked");
-  assert.match(result.reason, /does not match its exact migration baseline/u);
+  assert.match(result.reason, /Canonical hook state/u);
 });
