@@ -803,6 +803,33 @@ test("resolveGatedAssets reports a clean checkout as absent without throwing", (
   }
 });
 
+test("resolveGatedAssets follows the configured private-assets directory", () => {
+  const root = mkdtempSync(join(tmpdir(), "revival-pin-doctor-"));
+  try {
+    const config = join(root, "operator-config");
+    const body = Buffer.from("configured private asset fixture\n");
+    const digest = createHash("sha256").update(body).digest("hex");
+    mkdirSync(join(root, "runtime", "android"), { recursive: true });
+    writeFileSync(join(root, "runtime", "android", "build.gradle.kts"), [
+      `val codexAppServerSha256 = "${digest}"`,
+      `val tfliteRuntimeSha256 = "${digest}"`,
+    ].join("\n"));
+    for (const spec of GATED_BUILD_ASSETS) {
+      const suffix = spec.fallbackPath.replace("~/.config/ai-pin-revival/pin-assets/", "");
+      const target = join(config, "pin-assets", suffix);
+      mkdirSync(dirname(target), { recursive: true });
+      writeFileSync(target, body);
+    }
+
+    const assets = resolveGatedAssets(root, join(root, "unused-home"), {
+      REVIVAL_CONFIG_DIR: config,
+    });
+    assert.ok(assets.every((asset) => asset.exists && asset.actualSha256 === digest));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("parseGatedAssetPins reads digests while paths remain external defaults", () => {
   const gradle = readFileSync(resolve(REPO_ROOT, "runtime/android/build.gradle.kts"), "utf8");
   const pins = parseGatedAssetPins(gradle);

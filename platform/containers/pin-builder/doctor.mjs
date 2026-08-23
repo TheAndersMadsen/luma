@@ -1749,7 +1749,7 @@ function sha256OfFile(path) {
  * that is only reachable through `collectProbes` is a decision no test can
  * make go red.
  */
-export function resolveGatedAssets(repoRoot, operatorHome = homedir()) {
+export function resolveGatedAssets(repoRoot, operatorHome = homedir(), environment = process.env) {
   const pins = parseGatedAssetPins(
     readTextOrNull(join(repoRoot, "runtime", "android", "build.gradle.kts")),
   );
@@ -1757,8 +1757,18 @@ export function resolveGatedAssets(repoRoot, operatorHome = homedir()) {
   return GATED_BUILD_ASSETS.map((spec) => {
     const pin = pins[spec.id] ?? null;
     const relativePath = pin?.path ?? spec.fallbackPath;
-    const absolutePath = relativePath.startsWith("~/")
-      ? join(operatorHome, relativePath.slice(2))
+    const privateAssetsRoot = resolve(
+      environment.REVIVAL_PIN_PRIVATE_ASSETS_DIR ??
+        join(
+          environment.REVIVAL_CONFIG_DIR ??
+            join(environment.XDG_CONFIG_HOME ?? join(operatorHome, ".config"), "ai-pin-revival"),
+          "pin-assets",
+        ),
+    );
+    const absolutePath = relativePath.startsWith("~/.config/ai-pin-revival/pin-assets/")
+      ? join(privateAssetsRoot, relativePath.slice("~/.config/ai-pin-revival/pin-assets/".length))
+      : relativePath.startsWith("~/")
+        ? join(operatorHome, relativePath.slice(2))
       : join(repoRoot, relativePath);
 
     let sizeBytes = null;
@@ -1933,7 +1943,7 @@ export function collectProbes({ repoRoot, env = process.env } = {}) {
       exists: existsSync(join(root, STOCK_EVIDENCE_RELATIVE_PATH)),
       path: STOCK_EVIDENCE_RELATIVE_PATH,
     },
-    gatedAssets: resolveGatedAssets(root),
+    gatedAssets: resolveGatedAssets(root, homedir(), env),
     signingEnv: {
       exists: signingText !== null,
       path: signingPath,

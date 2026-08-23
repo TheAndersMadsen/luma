@@ -6,7 +6,7 @@
       "version": "28.5.2",
       "moby": false,
       "dockerDashComposeVersion": "none",
-      "installDockerBuildx": false,
+      "installDockerBuildx": true,
       "installDockerComposeSwitch": false
     },
     "ghcr.io/devcontainers/features/node:2.1.0": {
