@@ -64,7 +64,6 @@ const ENVELOPE_SEAL_FAILED: &str = "could not seal the response envelope";
 const NO_COMPLETION: &str = "No answer came back. Try again.";
 const VISION_UNAVAILABLE: &str = "Image analysis is unavailable. Try again.";
 const AUDIO_TRANSCRIPTION_UNAVAILABLE: &str = "Audio could not be transcribed.";
-const ACTION_INTERSTITIAL: &str = "Working on that.";
 const LOADING_MESSAGE: &str = "One moment.";
 
 /// `humane.aibus.AIBusService` — the assistant + its per-turn cloud tools.
@@ -1580,10 +1579,11 @@ impl AiBusService for AiBusMain {
         request: Request<pb::EncryptedActionBasedInterstitialRequest>,
     ) -> Result<Response<pb::EncryptedActionBasedInterstitialResponse>, Status> {
         let request = request.into_inner();
-        let (_req, kid): (pb::ActionBasedInterstitialRequest, _) =
+        let (req, kid): (pb::ActionBasedInterstitialRequest, _) =
             self.open_request(request.request).await?;
         let response = pb::ActionBasedInterstitialResponse {
-            interstitial: ACTION_INTERSTITIAL.to_owned(),
+            interstitial: catalog::progress_cue_from_action_strings(&req.action_strings)
+                .unwrap_or_default(),
         };
         let response = pb::EncryptedActionBasedInterstitialResponse {
             response: Some(
@@ -2083,7 +2083,6 @@ mod tests {
             NO_COMPLETION,
             VISION_UNAVAILABLE,
             AUDIO_TRANSCRIPTION_UNAVAILABLE,
-            ACTION_INTERSTITIAL,
             LOADING_MESSAGE,
         ] {
             let lower = text.to_ascii_lowercase();

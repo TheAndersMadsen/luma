@@ -1572,11 +1572,6 @@ impl Capture {
         store: crate::store::SharedStore,
         _keys: crate::keymaterial::SharedKeyMaterial,
     ) -> Self {
-        #[cfg(test)]
-        let capture_keys = Arc::new(crate::keydirectory::KeyDirectory::from_test_key_material(
-            &_keys,
-        ));
-        #[cfg(not(test))]
         let capture_keys = Arc::new(crate::keydirectory::KeyDirectory::in_memory());
         Self {
             authenticator,
@@ -1763,11 +1758,6 @@ impl TestingAutomation {
         store: crate::store::SharedStore,
         _keys: crate::keymaterial::SharedKeyMaterial,
     ) -> Self {
-        #[cfg(test)]
-        let keys = Arc::new(crate::keydirectory::KeyDirectory::from_test_key_material(
-            &_keys,
-        ));
-        #[cfg(not(test))]
         let keys = Arc::new(crate::keydirectory::KeyDirectory::in_memory());
         Self {
             authenticator,
@@ -2839,6 +2829,15 @@ mod tests {
         std::sync::Arc::new(crate::store::MemoryStore::default())
     }
 
+    async fn key_directory(
+        kid: &str,
+        key: [u8; cosmos_crypto::AES_KEY_LEN],
+    ) -> crate::keydirectory::SharedKeyDirectory {
+        let directory = Arc::new(crate::keydirectory::KeyDirectory::in_memory());
+        directory.put(kid, key).await.expect("seed test key");
+        directory
+    }
+
     fn isolated_automation() -> TestingAutomation {
         TestingAutomation::new(
             crate::auth::RequestAuthenticator::new(
@@ -3444,15 +3443,18 @@ mod tests {
 
         let store = fresh_store();
         let keys: crate::keymaterial::SharedKeyMaterial = Default::default();
-        keys.insert("wearer-kid".to_owned(), [0x29; cosmos_crypto::AES_KEY_LEN])
+        let key = [0x29; cosmos_crypto::AES_KEY_LEN];
+        keys.insert("wearer-kid".to_owned(), key)
             .expect("seed test channel key");
+        let directory = key_directory("wearer-kid", key).await;
         let automation = TestingAutomation::new(
             crate::auth::RequestAuthenticator::new(
                 crate::config::Authentication::DevelopmentInsecure,
             ),
             store,
             keys.clone(),
-        );
+        )
+        .with_key_directory(directory);
         let note = cosmos_protocol::capture::Note {
             text: "sealed note body".to_owned(),
             ..Default::default()
@@ -3533,12 +3535,15 @@ mod tests {
         let store: crate::store::SharedStore =
             std::sync::Arc::new(crate::store::MemoryStore::default());
         let keys: crate::keymaterial::SharedKeyMaterial = Default::default();
-        keys.insert("wearer-kid".to_owned(), [9u8; cosmos_crypto::AES_KEY_LEN])
+        let key = [9u8; cosmos_crypto::AES_KEY_LEN];
+        keys.insert("wearer-kid".to_owned(), key)
             .expect("insert test channel key");
+        let directory = key_directory("wearer-kid", key).await;
         let auth = crate::auth::RequestAuthenticator::new(
             crate::config::Authentication::DevelopmentInsecure,
         );
-        let notes = TestingAutomation::new(auth.clone(), store.clone(), keys.clone());
+        let notes = TestingAutomation::new(auth.clone(), store.clone(), keys.clone())
+            .with_key_directory(directory);
         let search = WebSearch::new(auth, store.clone());
 
         // The device seals the note; the server stores it verbatim.
@@ -3597,12 +3602,15 @@ mod tests {
         let store: crate::store::SharedStore =
             std::sync::Arc::new(crate::store::MemoryStore::default());
         let keys: crate::keymaterial::SharedKeyMaterial = Default::default();
-        keys.insert("wearer-kid".to_owned(), [6u8; cosmos_crypto::AES_KEY_LEN])
+        let key = [6u8; cosmos_crypto::AES_KEY_LEN];
+        keys.insert("wearer-kid".to_owned(), key)
             .expect("insert test channel key");
+        let directory = key_directory("wearer-kid", key).await;
         let auth = crate::auth::RequestAuthenticator::new(
             crate::config::Authentication::DevelopmentInsecure,
         );
-        let capture = Capture::new(auth, store.clone(), keys.clone());
+        let capture =
+            Capture::new(auth, store.clone(), keys.clone()).with_capture_key_directory(directory);
 
         // Exactly what the device puts in the envelope: a Note message.
         let note = cosmos_protocol::capture::Note {
@@ -3683,12 +3691,15 @@ mod tests {
         let store: crate::store::SharedStore =
             std::sync::Arc::new(crate::store::MemoryStore::default());
         let keys: crate::keymaterial::SharedKeyMaterial = Default::default();
-        keys.insert("wearer-kid".to_owned(), [5u8; cosmos_crypto::AES_KEY_LEN])
+        let key = [5u8; cosmos_crypto::AES_KEY_LEN];
+        keys.insert("wearer-kid".to_owned(), key)
             .expect("insert test channel key");
+        let directory = key_directory("wearer-kid", key).await;
         let auth = crate::auth::RequestAuthenticator::new(
             crate::config::Authentication::DevelopmentInsecure,
         );
-        let capture = Capture::new(auth.clone(), store.clone(), keys.clone());
+        let capture = Capture::new(auth.clone(), store.clone(), keys.clone())
+            .with_capture_key_directory(directory);
 
         // The device seals the note, exactly as it does on the wire.
         let sealed = keys
@@ -3737,13 +3748,17 @@ mod tests {
         let store: crate::store::SharedStore =
             std::sync::Arc::new(crate::store::MemoryStore::default());
         let keys: crate::keymaterial::SharedKeyMaterial = Default::default();
-        keys.insert("wearer-kid".to_owned(), [0x39; cosmos_crypto::AES_KEY_LEN])
+        let key = [0x39; cosmos_crypto::AES_KEY_LEN];
+        keys.insert("wearer-kid".to_owned(), key)
             .expect("seed test channel key");
+        let directory = key_directory("wearer-kid", key).await;
         let auth = crate::auth::RequestAuthenticator::new(
             crate::config::Authentication::DevelopmentInsecure,
         );
-        let capture = Capture::new(auth.clone(), store.clone(), keys.clone());
-        let automation = TestingAutomation::new(auth, store.clone(), Default::default());
+        let capture = Capture::new(auth.clone(), store.clone(), keys.clone())
+            .with_capture_key_directory(directory.clone());
+        let automation = TestingAutomation::new(auth, store.clone(), Default::default())
+            .with_key_directory(directory);
 
         let sealed = keys
             .seal("wearer-kid", b"sealed note body", b"")

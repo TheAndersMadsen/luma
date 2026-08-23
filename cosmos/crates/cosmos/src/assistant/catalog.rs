@@ -208,6 +208,159 @@ fn query_schema() -> Value {
     })
 }
 
+const MAX_PROGRESS_SUBJECT_BYTES: usize = 48;
+const MAX_ACTION_CUE_JSON_BYTES: usize = 4 * 1024;
+
+/// A short, deterministic progress cue for work the assistant has actually
+/// selected. The cue comes from the tool and its safe public subject, not from
+/// a second model call, so it adds no latency and cannot drift into generic
+/// filler such as "Just a moment".
+pub(crate) fn progress_cue(action: &str, arguments: &str) -> Option<String> {
+    let arguments = serde_json::from_str::<Value>(arguments).ok()?;
+    progress_cue_from_value(action, &arguments)
+}
+
+/// Stock sends action interstitials as `{ "tool": { ...arguments... } }`.
+/// More than one entry is a repeated/accumulated request, so only the first
+/// single-action request speaks.
+pub(crate) fn progress_cue_from_action_strings(actions: &[String]) -> Option<String> {
+    let raw = actions.first()?;
+    if actions.len() != 1 || raw.len() > MAX_ACTION_CUE_JSON_BYTES {
+        return None;
+    }
+    let Value::Object(object) = serde_json::from_str::<Value>(raw).ok()? else {
+        return None;
+    };
+    if object.len() != 1 {
+        return None;
+    }
+    let (action, arguments) = object.iter().next()?;
+    progress_cue_from_value(action, arguments)
+}
+
+fn progress_cue_from_value(action: &str, arguments: &Value) -> Option<String> {
+    match action {
+        "weather" => cue_with_subject(
+            arguments,
+            "place",
+            "Checking the weather in ",
+            "Checking the local weather",
+        ),
+        "nearby" => {
+            let query = argument_subject(arguments, "query");
+            let place = argument_subject(arguments, "place");
+            Some(match (query, place) {
+                (Some(query), Some(place)) => format!("Finding {query} near {place}"),
+                (Some(query), None) => format!("Finding {query} nearby"),
+                (None, Some(place)) => format!("Finding places near {place}"),
+                (None, None) => "Finding nearby places".to_owned(),
+            })
+        }
+        "food_lookup" => cue_with_subject(
+            arguments,
+            "query",
+            "Checking nutrition for ",
+            "Checking nutrition",
+        ),
+        "web_search" | "ask_online" | "wikipedia" | "knowledge_lookup" => {
+            cue_with_subject(arguments, "query", "Looking up ", "Looking that up")
+        }
+        "wolfram" => cue_with_subject(arguments, "query", "Calculating ", "Calculating that"),
+        "recall_history" => Some("Checking recent activity".to_owned()),
+        "recall_memory" | "memory_search" => Some("Checking saved memories".to_owned()),
+
+        // The Pin's local read-tool names use the same formatter when stock
+        // asks Cosmos for an action interstitial.
+        "place_search" => cue_with_subject(arguments, "query", "Finding ", "Finding that place"),
+        "weather_at_place" => cue_with_subject(
+            arguments,
+            "location",
+            "Checking the weather in ",
+            "Checking the weather",
+        ),
+        "current_location" | "reverse_geocode" => Some("Checking the location".to_owned()),
+        "current_weather" => cue_with_subject(
+            arguments,
+            "location",
+            "Checking the weather in ",
+            "Checking the local weather",
+        ),
+        "nearby_search" => {
+            cue_with_subject(arguments, "query", "Finding ", "Finding nearby places").map(|cue| {
+                if cue == "Finding nearby places" {
+                    cue
+                } else {
+                    format!("{cue} nearby")
+                }
+            })
+        }
+        "route" => cue_with_subject(
+            arguments,
+            "destination",
+            "Finding directions to ",
+            "Finding directions",
+        ),
+        "music_artist_top_tracks" => {
+            cue_with_subject(arguments, "artist", "Finding songs by ", "Finding songs")
+        }
+        "music_catalog_search" => cue_with_subject(arguments, "query", "Finding ", "Finding music"),
+        "current_music" => Some("Checking the current music".to_owned()),
+
+        // Writes, device mutations, answers, and unknown actions never need a
+        // wait cue.
+        _ => None,
+    }
+}
+
+fn cue_with_subject(arguments: &Value, key: &str, prefix: &str, fallback: &str) -> Option<String> {
+    Some(
+        argument_subject(arguments, key)
+            .map(|value| format!("{prefix}{value}"))
+            .unwrap_or_else(|| fallback.to_owned()),
+    )
+}
+
+fn argument_subject(arguments: &Value, key: &str) -> Option<String> {
+    arguments
+        .get(key)
+        .and_then(Value::as_str)
+        .and_then(progress_subject)
+}
+
+fn progress_subject(raw: &str) -> Option<String> {
+    let cleaned = raw
+        .chars()
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect::<String>();
+    let cleaned = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
+    let cleaned = cleaned.trim_matches(|character: char| {
+        character.is_whitespace()
+            || matches!(
+                character,
+                '.' | ',' | '?' | '!' | ':' | ';' | '"' | '“' | '”'
+            )
+    });
+    if cleaned.is_empty() {
+        return None;
+    }
+    if cleaned.len() <= MAX_PROGRESS_SUBJECT_BYTES {
+        return Some(cleaned.to_owned());
+    }
+
+    let mut end = MAX_PROGRESS_SUBJECT_BYTES.saturating_sub('…'.len_utf8());
+    while end > 0 && !cleaned.is_char_boundary(end) {
+        end -= 1;
+    }
+    let shortened = cleaned[..end].trim_end();
+    (!shortened.is_empty()).then(|| format!("{shortened}…"))
+}
+
 /// The server tools this deployment adds on top of the device catalog.
 const SERVER_TOOLS: &[ServerTool] = &[
     ServerTool {
@@ -2086,6 +2239,65 @@ const NOTE_SCAN_LIMIT: i32 = 200;
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn progress_cues_describe_the_selected_work() {
+        assert_eq!(
+            progress_cue("weather", r#"{"place":"Hvidovre"}"#).as_deref(),
+            Some("Checking the weather in Hvidovre")
+        );
+        assert_eq!(
+            progress_cue("nearby", r#"{"query":"coffee","place":"Hvidovre"}"#).as_deref(),
+            Some("Finding coffee near Hvidovre")
+        );
+        assert_eq!(
+            progress_cue("web_search", r#"{"query":"FC København result"}"#).as_deref(),
+            Some("Looking up FC København result")
+        );
+        assert_eq!(
+            progress_cue(
+                "weather_at_place",
+                r#"{"location":"Hvidovre","latitude":55.65,"longitude":12.48}"#,
+            )
+            .as_deref(),
+            Some("Checking the weather in Hvidovre")
+        );
+    }
+
+    #[test]
+    fn progress_cues_do_not_echo_private_memory_or_mutations() {
+        assert_eq!(
+            progress_cue("recall_memory", r#"{"query":"private detail"}"#).as_deref(),
+            Some("Checking saved memories")
+        );
+        assert_eq!(
+            progress_cue("remember", r#"{"text":"private detail"}"#),
+            None
+        );
+        assert_eq!(progress_cue("Respond", r#"{"Response":"done"}"#), None);
+        assert_eq!(progress_cue("weather", "not json"), None);
+    }
+
+    #[test]
+    fn progress_cues_from_stock_actions_are_single_bounded_and_normalized() {
+        assert_eq!(
+            progress_cue_from_action_strings(&[r#"{"weather":{"place":"  Hvidovre\n  "}}"#.into()])
+                .as_deref(),
+            Some("Checking the weather in Hvidovre")
+        );
+        assert_eq!(
+            progress_cue_from_action_strings(&[
+                r#"{"web_search":{"query":"one"}}"#.into(),
+                r#"{"web_search":{"query":"one"}}"#.into(),
+            ]),
+            None
+        );
+        let long = "ø".repeat(100);
+        let cue = progress_cue("web_search", &json!({"query": long}).to_string()).unwrap();
+        assert!(cue.ends_with('…'));
+        assert!(cue.len() < 80);
+        assert!(!cue.contains('\n'));
+    }
 
     /// The wearer's own position must reach a location-taking tool.
     ///

@@ -345,9 +345,9 @@ export function AiMicChat({ autoListen = false, active = true }: { autoListen?: 
           <article key={t.id} className={`${styles.turn} ${t.role === "you" ? styles.you : ""}`}>
             <span className={styles.who}>{t.role === "you" ? "You" : "Ai Pin"}</span>
             <div className={styles.body}>
-              {t.cue && <p className={styles.cue}>{t.cue}</p>}
+              {t.cue && <p className={styles.cue} role="status">{t.cue}</p>}
               {t.text ? <p className={styles.say}>{t.text}</p>
-                : t.streaming ? (
+                : t.streaming && !t.cue ? (
                   <p className={styles.thinking} role="status">
                     <span className={styles.dots} aria-hidden><i /><i /><i /></span>
                     Working…

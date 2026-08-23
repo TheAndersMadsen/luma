@@ -29,6 +29,12 @@ test("assistant answers stay primary and implementation traces stay out of the U
   assert.match(chat, /Done on your Pin\. No spoken reply\./);
 });
 
+test("a task-specific cue replaces the generic working indicator", async () => {
+  const chat = await source("src/components/AiMicChat.tsx");
+  assert.match(chat, /t\.cue && <p className=\{styles\.cue\} role="status">\{t\.cue\}<\/p>/);
+  assert.match(chat, /t\.streaming && !t\.cue \? \(/);
+});
+
 test("legacy full-page Ai Mic links open the floating assistant", async () => {
   const talk = await source("src/app/talk/page.tsx");
   assert.match(talk, /redirect\("\/\?assistant=open"\)/);
