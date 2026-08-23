@@ -4,13 +4,13 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const {
-  DEPLOY_DIR, fail, localProductionEnvironment, resolveTool, run,
+  DEPLOY_DIR, fail, operatorEnvironment, resolveTool, run,
 } = require('./context');
 
 function deploymentScript(name, args) {
   const script = path.join(DEPLOY_DIR, name);
   if (!fs.existsSync(script)) fail(`deployment command is unavailable: ${script}`);
-  return run(resolveTool('bash'), [script, ...args], { env: localProductionEnvironment() });
+  return run(resolveTool('bash'), [script, ...args], { env: operatorEnvironment() });
 }
 
 function productionDoctor(args) {

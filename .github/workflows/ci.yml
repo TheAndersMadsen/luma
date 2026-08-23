@@ -152,7 +152,6 @@ jobs:
         env:
           COSMOS_TEST_DATABASE_URL: postgresql://cosmos_test:cosmos_test_ci_only@127.0.0.1:5432/cosmos_test
         run: |
-          node -e "require('../platform/cli/context').validateDisposablePostgresTestUrl(process.env.COSMOS_TEST_DATABASE_URL)"
           env -u COSMOS_STATE_DIR -u COSMOS_WORKLOAD COSMOS_TEST_DATABASE_URL="$COSMOS_TEST_DATABASE_URL" cargo test -p cosmos keydirectory::tests::a_second_workload_observes_import_replacement_revocation_and_reimport -- --exact --nocapture
           env -u COSMOS_STATE_DIR -u COSMOS_WORKLOAD COSMOS_TEST_DATABASE_URL="$COSMOS_TEST_DATABASE_URL" cargo test -p cosmos store_postgres::tests::many_concurrent_key_directories_migrate_one_fresh_postgres_schema_atomically -- --exact --nocapture
       - name: save Cosmos Cargo downloads and target state

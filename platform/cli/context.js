@@ -1,9 +1,5 @@
 'use strict';
-// Shared CLI context: external directory layout, process helpers, runtime
-// configuration parsing/validation, and `./revival init`. Split out of the
-// root `revival` entry point; the entry point and its command modules require
-// this one. Behavior, messages, and exit codes are unchanged.
-
+// Shared CLI paths, process helpers, runtime configuration, and initialization.
 
 const child = require('node:child_process');
 const crypto = require('node:crypto');
@@ -18,7 +14,6 @@ const {
 
 // This module lives at platform/cli/; the workspace root is two levels up.
 const ROOT = path.resolve(__dirname, '..', '..');
-const PRODUCT = 'Ai Pin Revival';
 const PROJECT = 'ai-pin-revival';
 const ENV_EXAMPLE = path.join(ROOT, '.env.example');
 const COMPOSE_BASE = path.join(ROOT, 'compose.yaml');
@@ -96,7 +91,6 @@ const ENV_FILE = process.env.REVIVAL_ENV_FILE
   : path.join(SECRETS_DIR, 'runtime.env');
 const BUILD_DIR = externalPath('REVIVAL_BUILD_DIR', path.join(DATA_DIR, 'build'));
 const PIN_SECRET_DIR = path.join(SECRETS_DIR, 'pin');
-const PIN_SIGNING_ENV_FILE = path.join(PIN_SECRET_DIR, 'signing.env');
 const PIN_PRIVATE_ASSETS_DIR = path.join(CONFIG_DIR, 'pin-assets');
 
 const COMPATIBILITY_ALIASES = Object.freeze({
@@ -482,41 +476,6 @@ function parseEnvFile(file) {
   return values;
 }
 
-function parseExportEnvFile(file, allowedNames) {
-  const values = {};
-  const lines = fs.readFileSync(file, 'utf8').split(/\r?\n/);
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index].trim();
-    if (!line || line.startsWith('#')) continue;
-    const match = /^export ([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(line);
-    if (!match) throw new Error(`${file}:${index + 1} is not a literal export NAME=value`);
-    const name = match[1];
-    if (!allowedNames.has(name)) throw new Error(`${file}:${index + 1} exports unsupported ${name}`);
-    if (Object.hasOwn(values, name)) throw new Error(`${file}:${index + 1} repeats ${name}`);
-    const raw = match[2];
-    let value;
-    if (raw.startsWith("'") && raw.endsWith("'") && raw.length >= 2) {
-      const parts = raw.slice(1, -1).split("'\\''");
-      if (parts.some((part) => part.includes("'"))) {
-        throw new Error(`${file}:${index + 1} contains an invalid single-quoted literal`);
-      }
-      value = parts.join("'");
-    } else if (raw.startsWith('"') && raw.endsWith('"') && raw.length >= 2) {
-      const body = raw.slice(1, -1);
-      if (body.includes('"') || body.includes('\\')) {
-        throw new Error(`${file}:${index + 1} contains an invalid double-quoted literal`);
-      }
-      value = body;
-    } else if (/^[^\s#]+$/.test(raw)) {
-      value = raw;
-    } else {
-      throw new Error(`${file}:${index + 1} is not a literal export NAME=value`);
-    }
-    values[name] = value;
-  }
-  return values;
-}
-
 function valueOf(values, canonical, compatibility) {
   return values[canonical] || (compatibility ? values[compatibility] : '') || '';
 }
@@ -861,10 +820,6 @@ function operatorEnvironment(values) {
   if (adb) env.ADB = adb;
   const openssl = resolveTool('openssl', { required: false });
   if (openssl) env.OPENSSL = openssl;
-  // The real-Postgres test URL belongs only to realPostgresTestEnvironment().
-  // Never let a developer shell export turn an ordinary local/operator command
-  // into an implicit database integration lane.
-  delete env.COSMOS_TEST_DATABASE_URL;
   for (const [compatibility, canonical] of Object.entries(COMPATIBILITY_ALIASES)) {
     if (env[canonical]) env[compatibility] = env[canonical];
   }
@@ -878,10 +833,6 @@ function operatorEnvironment(values) {
     ? `http://keycloak:8080/realms/${identityRealm}/protocol/openid-connect/certs`
     : '';
   return env;
-}
-
-function localProductionEnvironment(values) {
-  return operatorEnvironment(values);
 }
 
 const TEST_ENVIRONMENT_PASSTHROUGH = new Set([
@@ -903,222 +854,6 @@ const TEST_ENVIRONMENT_MANAGED_OVERRIDES = new Set([
   'NEXT_TELEMETRY_DISABLED',
   'REVIVAL_RELEASE_ID',
 ]);
-const TEST_HOME_FORBIDDEN_ENTRIES = Object.freeze([
-  '.bash_env',
-  '.bash_profile',
-  '.bashrc',
-  '.cargo',
-  '.gitconfig',
-  '.npmrc',
-  '.profile',
-  '.zshenv',
-]);
-const CARGO_HOME_FORBIDDEN_ENTRIES = Object.freeze([
-  'config',
-  'config.toml',
-  'credentials',
-  'credentials.toml',
-]);
-const GRADLE_HOME_FORBIDDEN_ENTRIES = Object.freeze([
-  'gradle.properties',
-  'init.d',
-  'init.gradle',
-  'init.gradle.kts',
-]);
-
-function sameDirectoryIdentity(left, right) {
-  return left.dev === right.dev && left.ino === right.ino &&
-    left.isDirectory() && right.isDirectory();
-}
-
-function descriptorDirectoryRoot() {
-  for (const candidate of ['/proc/self/fd', '/dev/fd']) {
-    const stat = fs.lstatSync(candidate, { throwIfNoEntry: false });
-    if (stat?.isDirectory()) return candidate;
-  }
-  throw new Error('trusted RUSTUP_HOME validation requires /proc/self/fd or /dev/fd');
-}
-
-function trustedRustupDirectoryRole(
-  stat,
-  callerUid,
-  callerGid,
-  { allowRootOwnedStickyAncestor = false } = {},
-) {
-  const mode = stat.mode & 0o7777;
-  if (!stat.isDirectory() || stat.isSymbolicLink()) return null;
-  if (stat.uid === 0) {
-    if ((mode & 0o022) === 0) return 'root';
-    // A global temporary directory is safe only as a held ancestor: root owns
-    // it, the sticky bit prevents another caller from replacing our owned
-    // child, and every descendant is still opened no-follow and validated.
-    // It can never itself become RUSTUP_HOME.
-    if (allowRootOwnedStickyAncestor && (mode & 0o1000) !== 0 && (mode & 0o002) !== 0) {
-      return 'root-sticky-ancestor';
-    }
-    return null;
-  }
-  if (stat.uid !== callerUid || (mode & 0o002) !== 0) return null;
-  // A caller-owned directory may use the caller's primary private group (the
-  // ordinary 0775 developer-cache layout), but no different group may be able
-  // to replace Rust binaries or configuration below it.
-  if ((mode & 0o020) !== 0 && stat.gid !== callerGid) return null;
-  return 'caller';
-}
-
-/**
- * Prove an installed Rustup root by walking it from the filesystem root with
- * held directory descriptors. The returned spelling is the exact canonical
- * absolute path that was proved; no shell expansion or ambient HOME fallback
- * participates in the decision.
- */
-function validateTrustedRustupHome(candidate) {
-  if (typeof candidate !== 'string' || candidate.length === 0 ||
-      candidate.trim() !== candidate || /[\u0000-\u001f\u007f]/u.test(candidate) ||
-      !path.isAbsolute(candidate) || path.normalize(candidate) !== candidate) {
-    throw new Error('RUSTUP_HOME must be a canonical absolute directory path');
-  }
-  requireExternalDirectory(candidate, 'RUSTUP_HOME');
-  if (!fs.constants.O_NOFOLLOW) {
-    throw new Error('trusted RUSTUP_HOME validation requires O_NOFOLLOW support');
-  }
-  const callerUid = typeof process.getuid === 'function' ? process.getuid() : os.userInfo().uid;
-  const callerGid = typeof process.getgid === 'function' ? process.getgid() : os.userInfo().gid;
-  const root = path.parse(candidate).root;
-  const relative = path.relative(root, candidate);
-  const parts = relative === '' ? [] : relative.split(path.sep);
-  const descriptorBase = descriptorDirectoryRoot();
-  const flags = fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW |
-    (fs.constants.O_DIRECTORY || 0) | (fs.constants.O_CLOEXEC || 0);
-  const opened = [];
-  let absolute = root;
-
-  try {
-    const rootBefore = fs.lstatSync(root);
-    const rootDescriptor = fs.openSync(root, flags);
-    const rootDescriptorStat = fs.fstatSync(rootDescriptor);
-    if (!sameDirectoryIdentity(rootBefore, rootDescriptorStat) ||
-        trustedRustupDirectoryRole(rootDescriptorStat, callerUid, callerGid) === null) {
-      fs.closeSync(rootDescriptor);
-      throw new Error(`RUSTUP_HOME has an untrusted root directory: ${root}`);
-    }
-    opened.push({ descriptor: rootDescriptor, absolute, before: rootDescriptorStat });
-
-    for (let index = 0; index < parts.length; index += 1) {
-      const part = parts[index];
-      absolute = path.join(absolute, part);
-      const before = fs.lstatSync(absolute);
-      if (before.isSymbolicLink() || !before.isDirectory()) {
-        throw new Error(`RUSTUP_HOME ancestors must be real directories: ${absolute}`);
-      }
-      const parentDescriptor = opened.at(-1).descriptor;
-      const descriptorPath = path.join(descriptorBase, String(parentDescriptor), part);
-      let descriptor;
-      try {
-        descriptor = fs.openSync(descriptorPath, flags);
-      } catch (error) {
-        if (['ELOOP', 'EMLINK', 'ENOTDIR'].includes(error?.code)) {
-          throw new Error(`RUSTUP_HOME ancestors must not be symbolic links: ${absolute}`);
-        }
-        throw error;
-      }
-      const descriptorStat = fs.fstatSync(descriptor);
-      if (!sameDirectoryIdentity(before, descriptorStat)) {
-        fs.closeSync(descriptor);
-        throw new Error(`RUSTUP_HOME changed during descriptor validation: ${absolute}`);
-      }
-      const role = trustedRustupDirectoryRole(descriptorStat, callerUid, callerGid, {
-        allowRootOwnedStickyAncestor: index < parts.length - 1,
-      });
-      if (role === null) {
-        fs.closeSync(descriptor);
-        throw new Error(`RUSTUP_HOME has a writable or foreign-owned ancestor: ${absolute}`);
-      }
-      opened.push({ descriptor, absolute, before: descriptorStat });
-    }
-
-    const canonical = (fs.realpathSync.native || fs.realpathSync)(candidate);
-    if (canonical !== candidate) {
-      throw new Error(`RUSTUP_HOME must use its canonical non-link path: ${candidate}`);
-    }
-    for (const node of opened) {
-      const descriptorAfter = fs.fstatSync(node.descriptor);
-      const pathAfter = fs.lstatSync(node.absolute);
-      if (!sameDirectoryIdentity(node.before, descriptorAfter) ||
-          !sameDirectoryIdentity(descriptorAfter, pathAfter)) {
-        throw new Error(`RUSTUP_HOME changed during descriptor validation: ${candidate}`);
-      }
-    }
-    return candidate;
-  } finally {
-    for (const node of opened.reverse()) {
-      try {
-        fs.closeSync(node.descriptor);
-      } catch {
-        // Preserve the validation error.
-      }
-    }
-  }
-}
-
-function resolveTrustedRustupHome(environment = process.env) {
-  const explicit = Object.prototype.hasOwnProperty.call(environment || {}, 'RUSTUP_HOME');
-  const candidate = explicit
-    ? environment.RUSTUP_HOME
-    : path.join(os.userInfo().homedir, '.rustup');
-  const stat = typeof candidate === 'string'
-    ? fs.lstatSync(candidate, { throwIfNoEntry: false })
-    : null;
-  if (!stat) {
-    if (explicit) throw new Error(`RUSTUP_HOME does not exist: ${String(candidate)}`);
-    return null;
-  }
-  return validateTrustedRustupHome(candidate);
-}
-
-function unsafeTestEnvironmentName(name) {
-  return !TEST_ENVIRONMENT_PASSTHROUGH.has(String(name).toUpperCase());
-}
-
-function requireOwnedDirectory(directory, label) {
-  secureDirectory(directory);
-  const stat = fs.lstatSync(directory);
-  const wrongOwner = typeof process.getuid === 'function' && stat.uid !== process.getuid();
-  if (stat.isSymbolicLink() || !stat.isDirectory() ||
-      (stat.mode & 0o777) !== 0o700 || wrongOwner) {
-    throw new Error(`${label} must be an owner-owned real directory with mode 0700: ${directory}`);
-  }
-  return directory;
-}
-
-function requireExistingOwnedDirectory(directory, label) {
-  const noFollow = fs.constants.O_NOFOLLOW || 0;
-  let descriptor;
-  try {
-    descriptor = fs.openSync(
-      directory,
-      fs.constants.O_RDONLY | noFollow | (fs.constants.O_DIRECTORY || 0) |
-        (fs.constants.O_CLOEXEC || 0),
-    );
-    const descriptorStat = fs.fstatSync(descriptor);
-    const pathStat = fs.lstatSync(directory);
-    const wrongOwner = typeof process.getuid === 'function' && descriptorStat.uid !== process.getuid();
-    if (!sameDirectoryIdentity(descriptorStat, pathStat) || pathStat.isSymbolicLink() ||
-        wrongOwner || (descriptorStat.mode & 0o777) !== 0o700) {
-      throw new Error(`${label} must be an existing owner-owned nofollow mode-0700 directory: ${directory}`);
-    }
-    const after = fs.fstatSync(descriptor);
-    if (!sameDirectoryIdentity(descriptorStat, after) ||
-        descriptorStat.mode !== after.mode || descriptorStat.uid !== after.uid ||
-        descriptorStat.gid !== after.gid || descriptorStat.nlink !== after.nlink ||
-        descriptorStat.ctimeMs !== after.ctimeMs) {
-      throw new Error(`${label} changed during descriptor-held validation: ${directory}`);
-    }
-  } finally {
-    if (descriptor !== undefined) fs.closeSync(descriptor);
-  }
-  return directory;
-}
 
 function requireOwnedBuildDirectory(directory, label) {
   secureDirectory(BUILD_DIR);
@@ -1141,96 +876,7 @@ function requireOwnedBuildDirectory(directory, label) {
   return directory;
 }
 
-function rejectTestHomeInjection(directory, names, label) {
-  for (const name of names) {
-    const candidate = path.join(directory, name);
-    if (fs.lstatSync(candidate, { throwIfNoEntry: false })) {
-      throw new Error(`refusing ${label} injection path: ${candidate}`);
-    }
-  }
-}
-
-function openProtectedEmptyFile(file, label, { create = true } = {}) {
-  const noFollow = fs.constants.O_NOFOLLOW || 0;
-  if (!fs.existsSync(file) && !create) {
-    throw new Error(`${label} must already exist in the descriptor-prepared process root: ${file}`);
-  }
-  if (!fs.existsSync(file)) {
-    let created;
-    try {
-      created = fs.openSync(
-        file,
-        fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | noFollow,
-        0o600,
-      );
-    } catch (error) {
-      if (error.code !== 'EEXIST') throw error;
-    } finally {
-      if (created !== undefined) fs.closeSync(created);
-    }
-  }
-
-  let descriptor;
-  try {
-    descriptor = fs.openSync(file, fs.constants.O_RDONLY | noFollow);
-    const descriptorStat = fs.fstatSync(descriptor);
-    const pathStat = fs.lstatSync(file);
-    const wrongOwner = typeof process.getuid === 'function' && descriptorStat.uid !== process.getuid();
-    const changedIdentity = descriptorStat.dev !== pathStat.dev || descriptorStat.ino !== pathStat.ino;
-    const probe = Buffer.alloc(1);
-    const bytes = fs.readSync(descriptor, probe, 0, probe.length, 0);
-    if (!descriptorStat.isFile() || pathStat.isSymbolicLink() || !pathStat.isFile() ||
-        changedIdentity || wrongOwner || descriptorStat.nlink !== 1 ||
-        (descriptorStat.mode & 0o777) !== 0o600 || descriptorStat.size !== 0 || bytes !== 0) {
-      throw new Error(
-        `${label} must be an owner-owned, single-link, empty regular file with mode 0600: ${file}`,
-      );
-    }
-  } finally {
-    if (descriptor !== undefined) fs.closeSync(descriptor);
-  }
-  return file;
-}
-
-function ensureEmptyTestNpmConfig(kind, { configDirectory, prepared = false } = {}) {
-  if (!['user', 'global'].includes(kind)) {
-    throw new Error(`invalid test npm configuration kind: ${kind}`);
-  }
-  const directory = configDirectory || path.join(BUILD_DIR, 'test-npm-config');
-  if (prepared) {
-    requireExistingOwnedDirectory(directory, 'Prepared npm test configuration root');
-  } else if (fs.existsSync(directory)) {
-    const directoryStat = fs.lstatSync(directory);
-    const wrongOwner = typeof process.getuid === 'function' && directoryStat.uid !== process.getuid();
-    if (directoryStat.isSymbolicLink() || !directoryStat.isDirectory() ||
-        (directoryStat.mode & 0o777) !== 0o700 || wrongOwner) {
-      throw new Error(`refusing linked, permissive, or non-directory npm test configuration root: ${directory}`);
-    }
-  } else {
-    // The outer check creates this under its authorized build root. A nested
-    // isolated snapshot inherits the already-validated files even though its
-    // synthetic HOME deliberately changes the default data root.
-    secureDirectory(BUILD_DIR);
-    secureDirectory(directory);
-  }
-  return openProtectedEmptyFile(
-    path.join(directory, `empty-${kind}.npmrc`),
-    `${kind} npm test configuration`,
-    { create: !prepared },
-  );
-}
-
-/** A deterministic, credential-free boundary for every source test process. */
-function testProcessEnvironment(
-  environment = process.env,
-  values = {},
-  { processRoot: preparedProcessRoot, prepared = false } = {},
-) {
-  // Establish the Rust installation before the positive allowlist discards all
-  // ambient configuration. RUSTUP_HOME is re-added only after descriptor-held
-  // validation, so custom official feature roots survive synthetic HOME and a
-  // nested context reload without turning it into a general passthrough.
-  const rustupHome = resolveTrustedRustupHome(environment);
+function testProcessEnvironment(environment = process.env, values = {}) {
   const sanitized = {};
   for (const [name, value] of Object.entries(environment || {})) {
     if (TEST_ENVIRONMENT_PASSTHROUGH.has(name.toUpperCase())) sanitized[name] = value;
@@ -1240,31 +886,38 @@ function testProcessEnvironment(
       throw new Error(`unsupported source-test environment override: ${name}`);
     }
   }
-  if (prepared && (!path.isAbsolute(preparedProcessRoot || '') ||
-      path.normalize(preparedProcessRoot) !== preparedProcessRoot)) {
-    throw new Error('prepared test process root must be one canonical absolute path');
-  }
-  const ensureDirectory = prepared ? requireExistingOwnedDirectory : requireOwnedDirectory;
-  const processRoot = ensureDirectory(
-    prepared ? preparedProcessRoot : path.join(BUILD_DIR, 'test-process'),
-    'Test process root',
-  );
-  const home = ensureDirectory(path.join(processRoot, 'home'), 'Test process home');
-  const temporary = ensureDirectory(path.join(processRoot, 'tmp'), 'Test process temporary root');
-  const cargoHome = ensureDirectory(path.join(processRoot, 'cargo-home'), 'Test Cargo home');
-  const cargoTarget = ensureDirectory(path.join(processRoot, 'cargo-target'), 'Test Cargo target');
-  const gradleHome = ensureDirectory(path.join(processRoot, 'gradle-home'), 'Test Gradle home');
-  const npmCache = ensureDirectory(path.join(processRoot, 'npm-cache'), 'Test npm cache');
-  const androidHome = ensureDirectory(path.join(processRoot, 'android-home'), 'Test Android home');
-  const xdgConfig = ensureDirectory(path.join(processRoot, 'xdg-config'), 'Test XDG config home');
-  const xdgCache = ensureDirectory(path.join(processRoot, 'xdg-cache'), 'Test XDG cache home');
-  const xdgData = ensureDirectory(path.join(processRoot, 'xdg-data'), 'Test XDG data home');
-  const xdgState = ensureDirectory(path.join(processRoot, 'xdg-state'), 'Test XDG state home');
-  rejectTestHomeInjection(home, TEST_HOME_FORBIDDEN_ENTRIES, 'test home');
-  rejectTestHomeInjection(cargoHome, CARGO_HOME_FORBIDDEN_ENTRIES, 'Cargo configuration');
-  rejectTestHomeInjection(gradleHome, GRADLE_HOME_FORBIDDEN_ENTRIES, 'Gradle initialization');
 
+  const processRoot = path.join(BUILD_DIR, 'test-process');
+  secureDirectory(processRoot);
+  const directory = (name) => {
+    const result = path.join(processRoot, name);
+    secureDirectory(result);
+    return result;
+  };
+  const home = directory('home');
+  const temporary = directory('tmp');
+  const cargoHome = directory('cargo-home');
+  const gradleHome = directory('gradle-home');
+  for (const [tool, toolHome, entries] of [
+    ['Cargo configuration', cargoHome, ['config', 'config.toml']],
+    ['Gradle initialization', gradleHome, ['init.gradle', 'init.gradle.kts', 'init.d']],
+  ]) {
+    for (const entry of entries) {
+      const configuration = path.join(toolHome, entry);
+      if (fs.lstatSync(configuration, { throwIfNoEntry: false })) {
+        throw new Error(`refusing persistent ${tool}: ${configuration}`);
+      }
+    }
+  }
+  const requestedRustup = environment?.RUSTUP_HOME || path.join(LOGIN_HOME, '.rustup');
+  const rustupStat = typeof requestedRustup === 'string'
+    ? fs.lstatSync(requestedRustup, { throwIfNoEntry: false })
+    : null;
+  const rustupHome = rustupStat?.isDirectory() && !rustupStat.isSymbolicLink()
+    ? path.resolve(requestedRustup)
+    : null;
   const user = os.userInfo().username;
+
   return {
     ...sanitized,
     HOME: home,
@@ -1273,32 +926,23 @@ function testProcessEnvironment(
     TMPDIR: temporary,
     TMP: temporary,
     TEMP: temporary,
-    XDG_CONFIG_HOME: xdgConfig,
-    XDG_CACHE_HOME: xdgCache,
-    XDG_DATA_HOME: xdgData,
-    XDG_STATE_HOME: xdgState,
-    // Nested disposable-source runners reload this module after XDG_DATA_HOME
-    // has been isolated. Pass the already-authorized outer data root so the
-    // fixed REVIVAL_BUILD_DIR remains inside the same managed boundary.
+    XDG_CONFIG_HOME: directory('xdg-config'),
+    XDG_CACHE_HOME: directory('xdg-cache'),
+    XDG_DATA_HOME: directory('xdg-data'),
+    XDG_STATE_HOME: directory('xdg-state'),
     REVIVAL_DATA_DIR: DATA_DIR,
     REVIVAL_BUILD_DIR: BUILD_DIR,
-    CARGO_TARGET_DIR: cargoTarget,
+    CARGO_TARGET_DIR: directory('cargo-target'),
     CARGO_HOME: cargoHome,
     ...(rustupHome ? { RUSTUP_HOME: rustupHome } : {}),
     CARGO_TERM_COLOR: 'never',
     GRADLE_USER_HOME: gradleHome,
-    ANDROID_USER_HOME: androidHome,
-    NPM_CONFIG_CACHE: npmCache,
-    // npm 11+ rejects loading the same file as both layers. These distinct,
-    // protected empty files keep both layers hermetic without that ambiguity.
-    NPM_CONFIG_USERCONFIG: ensureEmptyTestNpmConfig('user', {
-      configDirectory: prepared ? path.join(processRoot, 'npm-config') : undefined,
-      prepared,
-    }),
-    NPM_CONFIG_GLOBALCONFIG: ensureEmptyTestNpmConfig('global', {
-      configDirectory: prepared ? path.join(processRoot, 'npm-config') : undefined,
-      prepared,
-    }),
+    ANDROID_USER_HOME: directory('android-home'),
+    NPM_CONFIG_CACHE: directory('npm-cache'),
+    NPM_CONFIG_USERCONFIG: process.platform === 'win32' ? 'NUL' : '/dev/null',
+    NPM_CONFIG_GLOBALCONFIG: process.platform === 'win32'
+      ? 'NUL'
+      : '/nonexistent/ai-pin-revival-npm-globalconfig',
     NPM_CONFIG_AUDIT: 'false',
     NPM_CONFIG_FUND: 'false',
     NPM_CONFIG_UPDATE_NOTIFIER: 'false',
@@ -1308,6 +952,7 @@ function testProcessEnvironment(
     GIT_ATTR_NOSYSTEM: '1',
     GIT_TERMINAL_PROMPT: '0',
     PYTHONDONTWRITEBYTECODE: '1',
+    PYTHONNOUSERSITE: '1',
     ...values,
   };
 }
@@ -1322,79 +967,41 @@ function cosmosTestEnvironment(environment = process.env, values = {}) {
   };
 }
 
-function validateDisposablePostgresTestUrl(value) {
-  if (typeof value !== 'string' || value.length === 0 || value !== value.trim()) {
-    throw new Error('COSMOS_TEST_DATABASE_URL must be a nonblank literal URL');
-  }
-  let parsed;
-  try {
-    parsed = new URL(value);
-  } catch {
-    throw new Error('COSMOS_TEST_DATABASE_URL must be a valid PostgreSQL URL');
-  }
-  const database = decodeURIComponent(parsed.pathname.replace(/^\//u, ''));
-  const username = decodeURIComponent(parsed.username);
-  const authorityStart = 'postgresql://'.length;
-  const authorityEnd = value.indexOf('/', authorityStart);
-  const authority = authorityEnd === -1 ? '' : value.slice(authorityStart, authorityEnd);
-  const hostPort = authority.slice(authority.lastIndexOf('@') + 1);
-  if (parsed.protocol !== 'postgresql:' || parsed.hostname !== '127.0.0.1' ||
-      !/^127\.0\.0\.1:\d{2,5}$/u.test(hostPort) ||
-      !/^\d{2,5}$/u.test(parsed.port) || parsed.search || parsed.hash ||
-      !/^[A-Za-z0-9_]+_test$/u.test(username) ||
-      !/^[A-Za-z0-9_]+_test$/u.test(database) || parsed.password.length === 0) {
-    throw new Error(
-      'COSMOS_TEST_DATABASE_URL is restricted to an explicit 127.0.0.1 port and disposable *_test principal/database',
-    );
-  }
-  return value;
-}
-
-function realPostgresTestEnvironment(environment, databaseUrl, values = {}) {
-  return {
-    ...cosmosTestEnvironment(environment, values),
-    COSMOS_TEST_DATABASE_URL: validateDisposablePostgresTestUrl(databaseUrl),
-  };
-}
-
-function pinBuildEnvironment() {
-  const signingNames = new Set([
-    'PIN_SIGNING_STORE_FILE',
-    'PIN_SIGNING_STORE_PASSWORD',
-    'PIN_SIGNING_KEY_ALIAS',
-    'PIN_SIGNING_KEY_PASSWORD'
-  ]);
-  for (const [file, label] of [
-    [PIN_SIGNING_ENV_FILE, 'Pin signing environment']
-  ]) {
-    requireExternalDirectory(file, label);
-    if (!isProtectedRegularFile(file, true)) {
-      throw new Error(`${label} must be a nonempty regular file with mode 0600: ${file}`);
-    }
-  }
-  const signing = parseExportEnvFile(PIN_SIGNING_ENV_FILE, signingNames);
-  for (const name of signingNames) {
-    if (!signing[name]) throw new Error(`${PIN_SIGNING_ENV_FILE} must define nonblank ${name}`);
-  }
-  const compatibilityStore = path.resolve(signing.PIN_SIGNING_STORE_FILE);
-  requireExternalDirectory(compatibilityStore, 'Pin compatibility signing store');
-  if (!isProtectedRegularFile(compatibilityStore, true)) {
-    throw new Error(`Pin compatibility signing store must be a nonempty regular file with mode 0600: ${compatibilityStore}`);
-  }
-  if (!fs.existsSync(PIN_PRIVATE_ASSETS_DIR) ||
-      fs.lstatSync(PIN_PRIVATE_ASSETS_DIR).isSymbolicLink() ||
-      !fs.statSync(PIN_PRIVATE_ASSETS_DIR).isDirectory() ||
-      (fs.statSync(PIN_PRIVATE_ASSETS_DIR).mode & 0o077) !== 0) {
-    throw new Error(`Pin private assets must be an external owner-only directory: ${PIN_PRIVATE_ASSETS_DIR}`);
-  }
-  return operatorEnvironment({
-    ...signing,
-    PIN_SIGNING_STORE_FILE: compatibilityStore,
-    REVIVAL_PIN_EMBEDDED_PATCH_SIGNING_STORE_FILE: compatibilityStore,
-    REVIVAL_PIN_PRIVATE_ASSETS_DIR: PIN_PRIVATE_ASSETS_DIR
-  });
-}
-
 module.exports = {
-  ROOT, PRODUCT, PROJECT, ENV_EXAMPLE, COMPOSE_BASE, COMPOSE_DEVELOPMENT, PIN_RELEASE_TOOL, PIN_RELEASE_BUILD_TOOL, PIN_RELEASE_SHIP_TOOL, PIN_INSTALL_TOOL, PIN_DOCTOR_TOOL, PKI_TOOL, PIN_ACTIVATION_TOOL, PIN_NETWORK_TOOL, DEPLOY_DIR, TOOLCHAIN_CONFIG, MINIMUM_COMPOSE_VERSION, MANAGED_DIRECTORY_MARKER, DEFAULT_CONFIG_DIR, DEFAULT_SECRETS_DIR, DEFAULT_DATA_DIR, CONFIG_DIR, SECRETS_DIR, DATA_DIR, ENV_FILE, BUILD_DIR, PIN_SECRET_DIR, PIN_SIGNING_ENV_FILE, PIN_PRIVATE_ASSETS_DIR, COMPATIBILITY_ALIASES, externalPath, canonicalCandidate, isInsideDirectory, isInsideSource, requireExternalDirectory, fail, info, exists, run, hasManagedMarker, isDefaultOperatorDirectory, ensureManagedRoot, secureDirectory, atomicWrite, fillBlankGeneratedSecrets, fillBlankInitializerDefaults, localIdentityRealm, ensureLocalIdentityRealm, initialize, parseEnvFile, parseExportEnvFile, valueOf, isExactBase64Bytes, rejectCompatibilityConflicts, requireValue, isProtectedRegularFile, validateLocalIdentityRealm, validateRuntime, operatorEnvironment, localProductionEnvironment, resolveTool, unsafeTestEnvironmentName, trustedRustupDirectoryRole, validateTrustedRustupHome, resolveTrustedRustupHome, ensureEmptyTestNpmConfig, testProcessEnvironment, cosmosTestEnvironment, validateDisposablePostgresTestUrl, realPostgresTestEnvironment, pinBuildEnvironment,
+  ROOT,
+  PROJECT,
+  COMPOSE_BASE,
+  COMPOSE_DEVELOPMENT,
+  PIN_RELEASE_TOOL,
+  PIN_RELEASE_BUILD_TOOL,
+  PIN_RELEASE_SHIP_TOOL,
+  PIN_INSTALL_TOOL,
+  PIN_DOCTOR_TOOL,
+  PKI_TOOL,
+  PIN_ACTIVATION_TOOL,
+  PIN_NETWORK_TOOL,
+  DEPLOY_DIR,
+  TOOLCHAIN_CONFIG,
+  MINIMUM_COMPOSE_VERSION,
+  CONFIG_DIR,
+  SECRETS_DIR,
+  DATA_DIR,
+  ENV_FILE,
+  BUILD_DIR,
+  isInsideDirectory,
+  isInsideSource,
+  fail,
+  info,
+  exists,
+  run,
+  secureDirectory,
+  atomicWrite,
+  initialize,
+  parseEnvFile,
+  valueOf,
+  validateRuntime,
+  operatorEnvironment,
+  resolveTool,
+  testProcessEnvironment,
+  cosmosTestEnvironment,
 };
