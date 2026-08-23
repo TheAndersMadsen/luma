@@ -4,7 +4,7 @@
 // codes are unchanged.
 
 const {
-  PROJECT, COMPOSE_BASE, COMPOSE_DEVELOPMENT, MINIMUM_COMPOSE_VERSION, CONFIG_DIR, SECRETS_DIR, DATA_DIR, BACKUP_DIR, ENV_FILE, isInsideSource, fail, info, exists, run, valueOf, validateRuntime, operatorEnvironment,
+  PROJECT, COMPOSE_BASE, COMPOSE_DEVELOPMENT, MINIMUM_COMPOSE_VERSION, CONFIG_DIR, SECRETS_DIR, DATA_DIR, ENV_FILE, isInsideSource, fail, info, exists, run, valueOf, validateRuntime, operatorEnvironment,
 } = require('./context');
 const { parseVersion, validateHostToolchains, versionAtLeast } = require('./toolchain');
 
@@ -89,14 +89,14 @@ function localDoctorReport() {
     id, status, message, ...(fix ? { fix } : {}),
   });
 
-  for (const directory of [CONFIG_DIR, SECRETS_DIR, DATA_DIR, BACKUP_DIR]) {
+  for (const directory of [CONFIG_DIR, SECRETS_DIR, DATA_DIR]) {
     if (isInsideSource(directory)) {
       add('external-paths', 'FAIL', `${directory} is inside the source tree.`,
         'Set the corresponding REVIVAL_*_DIR override to an owner-only external directory.');
     }
   }
   if (!checks.some((check) => check.id === 'external-paths')) {
-    add('external-paths', 'PASS', 'Configuration, secrets, data, and backups resolve outside the source tree.');
+    add('external-paths', 'PASS', 'Configuration, secrets, and data resolve outside the source tree.');
   }
 
   try {

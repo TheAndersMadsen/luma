@@ -73,7 +73,7 @@ function providerStatus(state = "inactive") {
   if (state === "inactive") {
     return "Result: Bundle[{ok=true, state=inactive, managed=false, present=false, identity_usable=false}]\n";
   }
-  return `Result: Bundle[{ok=true, state=active, managed=true, edge_ipv4=203.0.113.9, present=true, identity_usable=true, fingerprint_sha256=${FINGERPRINT}, api_endpoint=https://api.carry.humane.cloud, onboarding_endpoint=https://onboarding.carry.humane.cloud}]\n`;
+  return `Result: Bundle[{ok=true, state=active, managed=true, edge_ipv4=203.0.113.9, present=true, identity_usable=true, fingerprint_sha256=${FINGERPRINT}, api_endpoint=https://api.cosmos.humane.cloud, onboarding_endpoint=https://onboarding.cosmos.humane.cloud}]\n`;
 }
 
 function fakeRuntime({ reportedSerial = SERIAL } = {}) {
@@ -179,7 +179,7 @@ test("host activation pins the same clone root as both installed device paths", 
     certificate.fingerprint256.replaceAll(":", "").toLowerCase(),
     "7f82fbf94a370379ed238fb0c9d2e2d13316d67197faba2948c0e3d92ac3458b",
   );
-  assert.equal(certificate.subject, "O=humane-carry-clone\nCN=Carry Clone Root EC 1");
+  assert.match(certificate.subject, /Root EC 1$/u);
 });
 
 function awaitImportX509() {
@@ -256,8 +256,8 @@ test("confirmed activation streams the envelope on stdin and verifies postcondit
   assert.equal(write.args.some((value) => value.endsWith(".json") && !value.startsWith("content://")), false);
   const envelope = JSON.parse(write.input);
   assert.equal(envelope.private_key_pem, SECRET_MARKER);
-  assert.equal(envelope.api_endpoint, "https://api.carry.humane.cloud");
-  assert.equal(envelope.onboarding_endpoint, "https://onboarding.carry.humane.cloud");
+  assert.equal(envelope.api_endpoint, "https://api.cosmos.humane.cloud");
+  assert.equal(envelope.onboarding_endpoint, "https://onboarding.cosmos.humane.cloud");
   assert.equal(envelope.edge_ipv4, "203.0.113.9");
   assert.equal(fake.calls.some((call) => call.args.includes("push")), false);
   assert.doesNotMatch(fake.text(), new RegExp(SECRET_MARKER, "u"));
@@ -287,6 +287,6 @@ test("activation envelope rejects noncanonical IPv4 and fixes both endpoints", (
   };
   assert.throws(() => buildActivationEnvelope(credential, "203.000.113.9"), /canonical edge IPv4/);
   const envelope = buildActivationEnvelope(credential, "203.0.113.9");
-  assert.equal(envelope.api_endpoint, "https://api.carry.humane.cloud");
-  assert.equal(envelope.onboarding_endpoint, "https://onboarding.carry.humane.cloud");
+  assert.equal(envelope.api_endpoint, "https://api.cosmos.humane.cloud");
+  assert.equal(envelope.onboarding_endpoint, "https://onboarding.cosmos.humane.cloud");
 });

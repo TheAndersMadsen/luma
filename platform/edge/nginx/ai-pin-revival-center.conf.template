@@ -1,7 +1,6 @@
-# Source-owned public Center edge. The deployment transaction must replace the
-# five @@...@@ tokens with absolute TLS paths and decimal loopback ports, write
-# the rendered file atomically, run `nginx -t`, and retain the prior vhost for
-# rollback. No token is an Nginx runtime variable.
+# Source-owned public Center edge. Replace the five @@...@@ tokens with absolute
+# TLS paths and decimal loopback ports before installing it. No token is an
+# Nginx runtime variable.
 #
 # THIS FILE NO LONGER BINDS THE PUBLIC :443. The Pin dials every clone gateway on
 # port 443 and authenticates to Envoy with a client certificate, so the public
@@ -30,33 +29,6 @@ upstream ai_pin_revival_keycloak {
     keepalive 16;
 }
 
-# The former dashboard hostname remains a reversible, temporary compatibility
-# entrypoint. 307 deliberately preserves method, body, path, and query string.
-server {
-    listen 80;
-    listen [::]:80;
-    server_name carry.andersmadsen.dk;
-
-    return 307 https://center.andersmadsen.dk$request_uri;
-}
-
-# `default_server` is explicit because this listener is now fed by the :443 stream,
-# which hands it every SNI that is not a clone gateway — including an absent or
-# unknown one. That used to be implicit (this was the first block to bind :443, so
-# it was the port's default); naming it keeps the same answer, a 307 to Center,
-# rather than making it depend on block order on a port shared with Center's own.
-server {
-    listen 127.0.0.1:@@REVIVAL_LOCAL_TLS_PORT@@ ssl http2 default_server;
-    server_name carry.andersmadsen.dk;
-
-    ssl_certificate @@REVIVAL_PUBLIC_TLS_CERTIFICATE@@;
-    ssl_certificate_key @@REVIVAL_PUBLIC_TLS_PRIVATE_KEY@@;
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_session_tickets off;
-
-    return 307 https://center.andersmadsen.dk$request_uri;
-}
-
 server {
     # The Cloudflare connector terminates TLS and forwards cleartext to port 80,
     # so the canonical host is served on both the cleartext and the TLS listener
@@ -67,7 +39,7 @@ server {
     # and reaches here through the :443 stream.
     listen 80;
     listen [::]:80;
-    listen 127.0.0.1:@@REVIVAL_LOCAL_TLS_PORT@@ ssl http2;
+    listen 127.0.0.1:@@REVIVAL_LOCAL_TLS_PORT@@ ssl http2 default_server;
     server_name center.andersmadsen.dk;
 
     if ($http_x_forwarded_proto = "") {
@@ -89,9 +61,9 @@ server {
 
     # A successful sign-in is the largest header exchange this origin performs.
     # `setTokenCookies` seals the Keycloak access, refresh, and id tokens into one
-    # JWE and splits it across `carry_tokens.0..3` (3000 bytes each, so the
+    # JWE and splits it across `cosmos_tokens.0..3` (3000 bytes each, so the
     # browser's 4096-byte per-cookie ceiling is never reached), then writes the
-    # manifest, the cleared unused slots, and `carry_session` besides. The reply
+    # manifest, the cleared unused slots, and `cosmos_session` besides. The reply
     # therefore carries six Set-Cookie lines — ten on the OIDC callback, which
     # also clears the four ceremony cookies — up to roughly 14 KB in total.
     # Nginx must hold an entire upstream header block in ONE proxy buffer, and

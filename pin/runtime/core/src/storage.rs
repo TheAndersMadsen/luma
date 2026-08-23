@@ -1911,13 +1911,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn legacy_flat_files_remain_readable_and_retry_safe() {
+    async fn previous_flat_files_remain_readable_and_retry_safe() {
         use std::io::Read as _;
 
         let (_directory, mut store) = test_store().await;
         let memory_id = create_test_memory(&mut store, &["capture.jpg"]).await;
-        let legacy_path = store.media_file_path(&memory_id, "capture.jpg").unwrap();
-        std::fs::write(&legacy_path, b"legacy-bytes").unwrap();
+        let previous_path = store.media_file_path(&memory_id, "capture.jpg").unwrap();
+        std::fs::write(&previous_path, b"legacy-bytes").unwrap();
 
         let mut opened = store
             .open_media_file(&memory_id, "capture.jpg")
@@ -1931,7 +1931,7 @@ mod tests {
         let mut identical = store.begin_upload(&memory_id, "capture.jpg").await.unwrap();
         identical.write_chunk(b"legacy-bytes").await.unwrap();
         assert_eq!(identical.commit().await.unwrap(), 12);
-        assert_eq!(std::fs::read(&legacy_path).unwrap(), b"legacy-bytes");
+        assert_eq!(std::fs::read(&previous_path).unwrap(), b"legacy-bytes");
 
         let mut conflicting = store.begin_upload(&memory_id, "capture.jpg").await.unwrap();
         conflicting.write_chunk(b"different").await.unwrap();
@@ -1939,7 +1939,7 @@ mod tests {
             conflicting.commit().await,
             std::io::ErrorKind::AlreadyExists,
         );
-        assert_eq!(std::fs::read(&legacy_path).unwrap(), b"legacy-bytes");
+        assert_eq!(std::fs::read(&previous_path).unwrap(), b"legacy-bytes");
     }
 
     #[tokio::test]

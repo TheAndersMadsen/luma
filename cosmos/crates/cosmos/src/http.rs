@@ -176,7 +176,6 @@ fn build_router_with_uploads_and_keys(
     };
     let router = Router::new()
         .route("/", get(no_content).head(no_content))
-        .route("/connectivity", get(no_content).head(no_content))
         .route("/healthz", get(no_content).head(no_content))
         .route("/readyz", get(ready).head(ready));
     let router = if demo_enabled {
@@ -2943,21 +2942,6 @@ mod tests {
             );
             assert_eq!(response.headers().get("x-humane-service-path"), None);
         }
-    }
-
-    #[tokio::test]
-    async fn legacy_connectivity_route_remains_available() {
-        let response = router(Readiness::default())
-            .oneshot(
-                Request::builder()
-                    .uri("/connectivity")
-                    .body(Body::empty())
-                    .expect("request"),
-            )
-            .await
-            .expect("response");
-
-        assert_eq!(response.status(), StatusCode::NO_CONTENT);
     }
 
     #[tokio::test]

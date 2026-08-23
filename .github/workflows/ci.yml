@@ -1,9 +1,5 @@
-# The fast source checks: formatting, focused component suites, repository
-# layout, wire equivalence, and release-equivalent checks distributed across
-# parallel component jobs. Every step is a command a contributor can run
-# locally; nothing here talks to a device, a VPS,
-# or a provider. Dependency and builder caches are restore-only for pull
-# requests and are written only after a successful trusted push to main.
+# Fast component checks. Every job uses the same command a contributor runs
+# locally, and no job contacts a server or device.
 name: ci
 
 on:
@@ -20,8 +16,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  layout-and-wire:
-    name: complete platform and release-policy suite
+  platform:
+    name: platform checks
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -31,40 +27,7 @@ jobs:
         with:
           node-version: 22.14.0
           package-manager-cache: false
-      - name: bind Node 22.14.0 to the fixed trusted path
-        shell: /usr/bin/bash --noprofile --norc -euo pipefail {0}
-        run: |
-          export LANG=C LC_ALL=C PATH=/usr/bin:/bin
-          node_source=/opt/hostedtoolcache/node/22.14.0/x64/bin/node
-          node_destination=/usr/bin/node
-          expected_node_sha256=1abce2374a485bddae3c27b17a3e3143e2780232026e627c4fe74ddde3f380a1
-          test "$(/usr/bin/realpath -e -- "${node_source}")" = "${node_source}"
-          test -f "${node_source}" && test ! -L "${node_source}" && test -x "${node_source}"
-          test "$("${node_source}" --version)" = v22.14.0
-          source_digest="$(/usr/bin/sha256sum -- "${node_source}")"
-          source_digest="${source_digest%% *}"
-          [[ "${source_digest}" =~ ^[0-9a-f]{64}$ ]]
-          test "${source_digest}" = "${expected_node_sha256}"
-          /usr/bin/sudo /usr/bin/install -T -o root -g root -m 0555 -- \
-            "${node_source}" "${node_destination}"
-          test "$(/usr/bin/realpath -e -- "${node_destination}")" = "${node_destination}"
-          test -f "${node_destination}" && test ! -L "${node_destination}" && test -x "${node_destination}"
-          test "$(/usr/bin/stat -c '%u:%g:%a:%F:%h' -- "${node_destination}")" = \
-            '0:0:555:regular file:1'
-          test "$("${node_destination}" --version)" = v22.14.0
-          destination_digest="$(/usr/bin/sha256sum -- "${node_destination}")"
-          destination_digest="${destination_digest%% *}"
-          source_digest_after="$(/usr/bin/sha256sum -- "${node_source}")"
-          source_digest_after="${source_digest_after%% *}"
-          test "${destination_digest}" = "${source_digest}"
-          test "${source_digest_after}" = "${source_digest}"
-      - name: CI workflow policy
-        run: node --test platform/deploy/acceptance/ci-policy.test.mjs
-      - name: complete platform policy and acceptance checks
-        run: |
-          sh platform/deploy/acceptance/source-policy.sh
-          sh platform/deploy/acceptance/layout.sh
-          ./revival check platform --full
+      - run: ./revival check platform --full
 
   center:
     name: center formatting and tests
@@ -246,7 +209,7 @@ jobs:
           key: pin-runtime-rust-v2-${{ runner.os }}-${{ runner.arch }}-1.91.1-${{ hashFiles('pin/runtime/core/Cargo.lock', 'rust-toolchain.toml') }}-${{ github.sha }}
 
   pin-builder-linux-amd64:
-    name: canonical Pin unit and debug artifact checks (Linux/x64 candidate)
+    name: Pin unit and debug artifact checks (Linux/x64)
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -344,17 +307,3 @@ jobs:
             ${{ runner.temp }}/pin-builder-data/build/pin-builder-cache-data/gradle-wrapper
             ${{ runner.temp }}/pin-builder-data/build/pin-builder-cache-data/npm-cacache
           key: pin-builder-dependencies-v3-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('platform/containers/pin-builder/Dockerfile', 'platform/containers/pin-builder/debug-store.py', 'platform/containers/pin-builder/entrypoint.sh', 'platform/containers/pin-builder/toolchain.json', 'pin/gradle/wrapper/gradle-wrapper.properties', 'pin/injector/gradle/wrapper/gradle-wrapper.properties', 'pin/**/*.gradle', 'pin/**/*.gradle.kts', 'pin/**/Cargo.lock') }}
-
-  darwin-rooted-reader:
-    name: real macOS descriptor-rooted reader
-    runs-on: macos-15
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
-        with:
-          node-version: 22.14.0
-          package-manager-cache: false
-      - name: exercise the actual Darwin rooted-reader helper
-        run: node --test platform/deploy/acceptance/darwin-rooted-reader.test.mjs

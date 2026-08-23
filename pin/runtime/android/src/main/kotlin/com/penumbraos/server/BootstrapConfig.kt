@@ -9,7 +9,6 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
-import java.security.MessageDigest
 
 object BootstrapConfig {
 
@@ -19,13 +18,6 @@ object BootstrapConfig {
     private const val LOCAL_CONFIG_FILE_NAME = "config.local.toml"
     private const val CONFIG_SECURITY_SCHEMA_FILE_NAME = ".config-security-schema"
     private const val CONFIG_SECURITY_SCHEMA_VERSION = "1"
-    private const val LEGACY_ADMIN_TOKEN_ROTATION_FILE_NAME = ".legacy-admin-token-rotation"
-    private const val LEGACY_ADMIN_TOKEN_ROTATION_VERSION = "1"
-    private val LEGACY_ADMIN_TOKEN_ROTATION_PENDING_REGEX = Regex(
-        "version=$LEGACY_ADMIN_TOKEN_ROTATION_VERSION\\n" +
-            "state=pending\\n" +
-            "previous_token_sha256=([0-9a-f]{64})\\n",
-    )
     private const val MEDIA_DIR_NAME = "media"
     private const val DB_FILE_NAME = "penumbra.db"
     private const val DATABASE_DIR_NAME = "database"
@@ -38,17 +30,17 @@ object BootstrapConfig {
     private const val STORAGE_DB_PATH_KEY = "db_path"
     private const val LOGGING_SECTION = "logging"
     private const val LOGGING_DIR_KEY = "log_dir"
-    private const val LEGACY_EXTERNAL_STORAGE_ALIAS = "/sdcard"
+    private const val PREVIOUS_EXTERNAL_STORAGE_ALIAS = "/sdcard"
     private const val STORAGE_MEDIA_PLACEHOLDER = "__APP_MEDIA_DIR__"
     private const val STORAGE_DB_PLACEHOLDER = "__APP_DB_PATH__"
     private const val LOG_DIR_PLACEHOLDER = "__APP_LOG_DIR__"
     private const val MEMORY_PATH_PLACEHOLDER = "__APP_MEMORY_PATH__"
     private const val ADMIN_TOKEN_PLACEHOLDER = "__APP_ADMIN_TOKEN__"
     private const val PERSISTENT_ROOT_DIR_NAME = "PenumbraOS"
-    private val LEGACY_DEFAULT_SYSTEM_PROMPT_LINES = listOf(
+    private val PREVIOUS_DEFAULT_SYSTEM_PROMPT_LINES = listOf(
         "system_prompt = \"You are a helpful assistant running on a Humane AI Pin. Keep responses concise - they will be displayed on a laser projector and spoken aloud.\"",
     )
-    private val LEGACY_DEFAULT_STATUS_PROMPT_LINES = listOf(
+    private val PREVIOUS_DEFAULT_STATUS_PROMPT_LINES = listOf(
         "status_prompt = \"\"\"",
         "Current request status:",
         "- Current timestamp: {{current_timestamp}}",
@@ -84,8 +76,6 @@ object BootstrapConfig {
         val configFile = File(context.filesDir, CONFIG_FILE_NAME)
         val localConfigFile = File(context.filesDir, LOCAL_CONFIG_FILE_NAME)
         val securitySchemaFile = File(context.filesDir, CONFIG_SECURITY_SCHEMA_FILE_NAME)
-        val legacyAdminTokenRotationFile =
-            File(context.filesDir, LEGACY_ADMIN_TOKEN_ROTATION_FILE_NAME)
         val legacyConfigFile = File(externalRoot, CONFIG_FILE_NAME)
         val legacyLocalConfigFile = File(externalRoot, LOCAL_CONFIG_FILE_NAME)
         val mediaDir = File(externalRoot, MEDIA_DIR_NAME)
@@ -119,10 +109,6 @@ object BootstrapConfig {
         val legacyMemoryFiles = legacyMemoryFiles(externalRoot)
         migrateLegacyMemoryFile(legacyMemoryFiles, memoryFile)
         val privateConfigExistedAtStart = configFile.exists()
-        val privateConfigWasProvenAtStart = privateConfigExistedAtStart &&
-            hasCurrentPrivateConfigSecuritySchema(securitySchemaFile)
-        val legacyBaseStillPresent = legacyConfigFile.exists() ||
-            Files.isSymbolicLink(legacyConfigFile.toPath())
 
         check(mediaDir.exists() || mediaDir.mkdirs()) {
             "Failed to create media dir at ${mediaDir.absolutePath}"
@@ -189,20 +175,15 @@ object BootstrapConfig {
             Log.w(TAG, "Ignored untrusted legacy local config overlay")
         }
 
-        val rotateAdminToken = prepareLegacyAdminTokenRotation(
-            configFile,
-            legacyAdminTokenRotationFile,
-            rotationRequired = privateConfigWasProvenAtStart && legacyBaseStillPresent,
-        )
         val legacyDbPaths = listOf(
             externalLegacyDbFile.absolutePath,
-            "$LEGACY_EXTERNAL_STORAGE_ALIAS/$PERSISTENT_ROOT_DIR_NAME/$DB_FILE_NAME",
+            "$PREVIOUS_EXTERNAL_STORAGE_ALIAS/$PERSISTENT_ROOT_DIR_NAME/$DB_FILE_NAME",
             credentialLegacyDbFile.absolutePath,
             deviceLegacyDbFile.absolutePath,
         )
         val legacyLogPaths = listOf(
             legacyLogDir.absolutePath,
-            "$LEGACY_EXTERNAL_STORAGE_ALIAS/$PERSISTENT_ROOT_DIR_NAME/$LOG_DIR_NAME",
+            "$PREVIOUS_EXTERNAL_STORAGE_ALIAS/$PERSISTENT_ROOT_DIR_NAME/$LOG_DIR_NAME",
         )
         val dbPathNeedsRetarget = retargetLegacyDatabasePath(
             configFile.readText(),
@@ -238,7 +219,6 @@ object BootstrapConfig {
         applyAndroidConfigMigrations(
             configFile,
             managedFields(mediaDir, dbFile, logDir, memoryFile),
-            rotateAdminToken = rotateAdminToken,
             legacyDbPaths = legacyDbPaths,
             dbPath = dbFile.absolutePath,
             legacyLogPaths = legacyLogPaths,
@@ -271,7 +251,6 @@ object BootstrapConfig {
             LogStorage.retireLegacyLogs(legacyLogDir)
         }
         removeLegacyConfigArtifacts(legacyConfigFile, legacyLocalConfigFile)
-        markLegacyAdminTokenRotationComplete(legacyAdminTokenRotationFile)
         writePrivateConfigSecuritySchema(securitySchemaFile)
 
         return configFile.absolutePath
@@ -326,74 +305,6 @@ object BootstrapConfig {
         writePrivateConfig(securitySchemaFile, "$CONFIG_SECURITY_SCHEMA_VERSION\n")
     }
 
-    /**
-     * Make invalidation of an administration token that may have existed on
-     * shared storage exactly-once across process death. The pending record is
-     * written before rotation and contains only a SHA-256 fingerprint of the
-     * previous private token. On retry, a changed fingerprint proves the
-     * atomic config replacement already completed, so the token is not rotated
-     * a second time. A completed record also makes later recreation of the
-     * untrusted legacy file harmless.
-     */
-    internal fun prepareLegacyAdminTokenRotation(
-        privateConfigFile: File,
-        rotationStateFile: File,
-        rotationRequired: Boolean,
-    ): Boolean {
-        check(!Files.isSymbolicLink(rotationStateFile.toPath())) {
-            "Refusing to use a symbolic-link legacy token rotation state"
-        }
-
-        if (rotationStateFile.exists()) {
-            check(rotationStateFile.isFile) { "Invalid legacy token rotation state" }
-            val state = rotationStateFile.readText()
-            if (state == legacyAdminTokenRotationCompleteState()) return false
-
-            val pending = LEGACY_ADMIN_TOKEN_ROTATION_PENDING_REGEX.matchEntire(state)
-                ?: error("Invalid legacy token rotation state")
-            val previousFingerprint = pending.groupValues[1]
-            val currentFingerprint = adminTokenFingerprint(privateConfigFile)
-            return MessageDigest.isEqual(
-                previousFingerprint.toByteArray(StandardCharsets.US_ASCII),
-                currentFingerprint.toByteArray(StandardCharsets.US_ASCII),
-            )
-        }
-
-        if (!rotationRequired) return false
-
-        val previousFingerprint = adminTokenFingerprint(privateConfigFile)
-        writePrivateConfig(
-            rotationStateFile,
-            "version=$LEGACY_ADMIN_TOKEN_ROTATION_VERSION\n" +
-                "state=pending\n" +
-                "previous_token_sha256=$previousFingerprint\n",
-        )
-        return true
-    }
-
-    internal fun markLegacyAdminTokenRotationComplete(rotationStateFile: File) {
-        if (!Files.isSymbolicLink(rotationStateFile.toPath()) &&
-            rotationStateFile.isFile &&
-            rotationStateFile.readText() == legacyAdminTokenRotationCompleteState()
-        ) {
-            return
-        }
-        writePrivateConfig(rotationStateFile, legacyAdminTokenRotationCompleteState())
-    }
-
-    private fun adminTokenFingerprint(privateConfigFile: File): String {
-        check(privateConfigFile.isFile && !Files.isSymbolicLink(privateConfigFile.toPath())) {
-            "Canonical config unavailable for legacy token rotation"
-        }
-        val token = ConfigSecurity.readAdminToken(privateConfigFile.readText())
-        return MessageDigest.getInstance("SHA-256")
-            .digest(token.toByteArray(StandardCharsets.US_ASCII))
-            .joinToString(separator = "") { byte -> "%02x".format(byte.toInt() and 0xff) }
-    }
-
-    private fun legacyAdminTokenRotationCompleteState(): String =
-        "version=$LEGACY_ADMIN_TOKEN_ROTATION_VERSION\nstate=complete\n"
-
     internal fun importUntrustedLegacyBaseConfig(
         privateConfigFile: File,
         legacyConfigFile: File,
@@ -417,7 +328,7 @@ object BootstrapConfig {
     private fun legacyMemoryFiles(externalRoot: File): List<File> = listOf(
         File(externalRoot, MEMORY_FILE_NAME),
         File(
-            File(LEGACY_EXTERNAL_STORAGE_ALIAS, PERSISTENT_ROOT_DIR_NAME),
+            File(PREVIOUS_EXTERNAL_STORAGE_ALIAS, PERSISTENT_ROOT_DIR_NAME),
             MEMORY_FILE_NAME,
         ),
     )
@@ -477,7 +388,6 @@ object BootstrapConfig {
     private fun applyAndroidConfigMigrations(
         configFile: File,
         fields: List<ManagedField>,
-        rotateAdminToken: Boolean,
         legacyDbPaths: List<String>,
         dbPath: String,
         legacyLogPaths: List<String>,
@@ -504,12 +414,6 @@ object BootstrapConfig {
             text = bindMigration.text
             changedAny = true
             migratedLegacyHttpBind = true
-        }
-
-        if (rotateAdminToken) {
-            text = ConfigSecurity.rotateAdminToken(text).text
-            changedAny = true
-            addedAdminToken = true
         }
 
         val tokenMigration = ConfigSecurity.ensureAdminToken(text)
@@ -552,7 +456,7 @@ object BootstrapConfig {
         }
 
         val (textWithoutLegacySystemPrompt, removedSystemPrompt) =
-            removeLegacyDefaultPrompt(text, LEGACY_DEFAULT_SYSTEM_PROMPT_LINES)
+            removeLegacyDefaultPrompt(text, PREVIOUS_DEFAULT_SYSTEM_PROMPT_LINES)
         if (removedSystemPrompt) {
             text = textWithoutLegacySystemPrompt
             changedAny = true
@@ -560,7 +464,7 @@ object BootstrapConfig {
         }
 
         val (textWithoutLegacyStatusPrompt, removedStatusPrompt) =
-            removeLegacyDefaultPrompt(text, LEGACY_DEFAULT_STATUS_PROMPT_LINES)
+            removeLegacyDefaultPrompt(text, PREVIOUS_DEFAULT_STATUS_PROMPT_LINES)
         if (removedStatusPrompt) {
             text = textWithoutLegacyStatusPrompt
             changedAny = true

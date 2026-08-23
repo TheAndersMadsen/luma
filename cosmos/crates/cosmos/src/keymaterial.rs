@@ -36,7 +36,6 @@
 //! so the public key the device wrapped to stays valid. Older releases also
 //! wrote `{kid -> channel key}` here; that field remains readable solely for the
 //! fail-closed one-time migration in
-//! [`crate::keydirectory::KeyDirectory::reconcile_legacy_key_material`].
 //!
 //! # Handling
 //!
@@ -698,43 +697,6 @@ impl KeyMaterial {
         self.finish_pending_persistence(&mut state)?;
         self.verify_committed_observation(&state)?;
         Ok(state.keys.entries().any(|(known, _)| known == kid))
-    }
-
-    /// Snapshot of the pre-directory channel map used only during the one-time
-    /// compare-and-strip upgrade. No caller may publish these bytes into the
-    /// directory: authoritative storage must already contain an identical row.
-    pub(crate) fn legacy_channel_keys(
-        &self,
-    ) -> Result<Vec<(String, [u8; AES_KEY_LEN])>, CryptoError> {
-        self.refuse_if_unreadable()?;
-        let mut state = self.state.lock().expect("key material poisoned");
-        self.finish_pending_persistence(&mut state)?;
-        self.verify_committed_observation(&state)?;
-        Ok(state
-            .keys
-            .entries()
-            .map(|(kid, key)| (kid.to_owned(), *key))
-            .collect())
-    }
-
-    /// Durably remove a legacy local channel map after the authoritative
-    /// directory has independently proved every row identical. The wrapping key
-    /// remains untouched. Persist-before-commit preserves the old map on every
-    /// pre-rename failure; a post-rename sync failure remains pending/hidden and
-    /// must resolve before startup can continue.
-    pub(crate) fn strip_legacy_channel_keys(&self) -> Result<(), CryptoError> {
-        self.refuse_if_unreadable()?;
-        let mut state = self.state.lock().expect("key material poisoned");
-        self.finish_pending_persistence(&mut state)?;
-        self.verify_committed_observation(&state)?;
-        if state.keys.entries().next().is_none() {
-            return Ok(());
-        }
-        let mut next = state.clone();
-        next.keys = ChannelKeyStore::default();
-        next.observation = self.persist_state(&next)?;
-        *state = next;
-        Ok(())
     }
 
     /// Forget a channel key. Returns whether it was held.

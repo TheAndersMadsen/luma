@@ -436,7 +436,7 @@ fn delivery_state_reports_only_observed_milestones() {
 }
 
 #[test]
-fn locked_keys_can_only_clear_legacy_overrides_and_unknown_resets_fail() {
+fn locked_keys_can_only_clear_previous_overrides_and_unknown_resets_fail() {
     for key in [
         "feature_flag_suppress_sync_on_startup",
         "accessory_feature_flags",

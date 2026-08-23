@@ -134,7 +134,7 @@
       "consumers": ["pin", "platform"],
       "evidence": {
         "label": "unknown",
-        "claim": "Physical stock-unit provisioning is not compatible until a rollback-backed exact-target run passes."
+        "claim": "Physical stock-unit provisioning is not compatible until an exact-target acceptance run passes."
       }
     },
     {

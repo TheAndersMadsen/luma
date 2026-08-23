@@ -157,7 +157,7 @@ pub fn extract_agentic_conversation_context(
     let historical_turns = &context.turns[..current_index];
     let mut turns = Vec::new();
     for (index, turn) in historical_turns.iter().enumerate().rev() {
-        if is_legacy_synthetic_cue_turn(historical_turns, index) {
+        if is_previous_synthetic_cue_turn(historical_turns, index) {
             continue;
         }
         let extracted = match turn.content.as_ref() {
@@ -297,7 +297,7 @@ fn trusted_context_observation_source(source: i32) -> bool {
 /// Adjacency, a nonempty parent link, the registered read catalog, the fixed
 /// empty action shape, and the closed status-only observation keep genuine or
 /// malformed action/observation history intact.
-fn legacy_synthetic_cue_pair_at(turns: &[SynapseChatTurn], action_index: usize) -> bool {
+fn previous_synthetic_cue_pair_at(turns: &[SynapseChatTurn], action_index: usize) -> bool {
     let Some(action_turn) = turns.get(action_index) else {
         return false;
     };
@@ -344,11 +344,11 @@ fn legacy_synthetic_cue_pair_at(turns: &[SynapseChatTurn], action_index: usize) 
             || (observation.action_name.is_empty() && status == "unavailable"))
 }
 
-fn is_legacy_synthetic_cue_turn(turns: &[SynapseChatTurn], index: usize) -> bool {
-    legacy_synthetic_cue_pair_at(turns, index)
+fn is_previous_synthetic_cue_turn(turns: &[SynapseChatTurn], index: usize) -> bool {
+    previous_synthetic_cue_pair_at(turns, index)
         || index
             .checked_sub(1)
-            .is_some_and(|action_index| legacy_synthetic_cue_pair_at(turns, action_index))
+            .is_some_and(|action_index| previous_synthetic_cue_pair_at(turns, action_index))
 }
 
 fn verified_context_action(
@@ -490,7 +490,7 @@ pub async fn extract_history(
         if Some(i) == last_user_request_idx {
             continue;
         }
-        if is_legacy_synthetic_cue_turn(&ctx.turns, i) {
+        if is_previous_synthetic_cue_turn(&ctx.turns, i) {
             continue;
         }
 
@@ -702,7 +702,7 @@ mod tests {
         }
     }
 
-    fn legacy_cue_action(identifier: &str, action: &str) -> SynapseChatTurn {
+    fn previous_cue_action(identifier: &str, action: &str) -> SynapseChatTurn {
         SynapseChatTurn {
             user: SynapseUser::Assistant as i32,
             identifier: identifier.to_string(),
@@ -717,7 +717,7 @@ mod tests {
         }
     }
 
-    fn legacy_cue_observation(
+    fn previous_cue_observation(
         identifier: &str,
         parent_identifier: &str,
         action_name: &str,
@@ -755,12 +755,12 @@ mod tests {
     }
 
     #[test]
-    fn legacy_synthetic_cue_matching_is_closed_and_parent_linked() {
+    fn previous_synthetic_cue_matching_is_closed_and_parent_linked() {
         for tool in crate::synapse::catalog::read_tool_catalog() {
             for status in ["pending", "ok", "unavailable"] {
                 let turns = vec![
-                    legacy_cue_action("cue-action", tool.name),
-                    legacy_cue_observation(
+                    previous_cue_action("cue-action", tool.name),
+                    previous_cue_observation(
                         "cue-observation",
                         "cue-action",
                         tool.name,
@@ -768,17 +768,17 @@ mod tests {
                     ),
                 ];
                 assert!(
-                    legacy_synthetic_cue_pair_at(&turns, 0),
+                    previous_synthetic_cue_pair_at(&turns, 0),
                     "{} {status}",
                     tool.name
                 );
                 assert!(
-                    is_legacy_synthetic_cue_turn(&turns, 0),
+                    is_previous_synthetic_cue_turn(&turns, 0),
                     "{} {status}",
                     tool.name
                 );
                 assert!(
-                    is_legacy_synthetic_cue_turn(&turns, 1),
+                    is_previous_synthetic_cue_turn(&turns, 1),
                     "{} {status}",
                     tool.name
                 );
@@ -786,8 +786,8 @@ mod tests {
         }
 
         let closing_pair = vec![
-            legacy_cue_action("cue-action", "knowledge_lookup"),
-            legacy_cue_observation(
+            previous_cue_action("cue-action", "knowledge_lookup"),
+            previous_cue_observation(
                 "cue-observation",
                 "cue-action",
                 "",
@@ -795,25 +795,25 @@ mod tests {
             ),
         ];
         assert!(
-            legacy_synthetic_cue_pair_at(&closing_pair, 0),
+            previous_synthetic_cue_pair_at(&closing_pair, 0),
             "the legacy unresolved-cue closer names its action only by parent id"
         );
 
         let empty_pending_name = vec![
-            legacy_cue_action("cue-action", "knowledge_lookup"),
-            legacy_cue_observation(
+            previous_cue_action("cue-action", "knowledge_lookup"),
+            previous_cue_observation(
                 "cue-observation",
                 "cue-action",
                 "",
                 r#"{"status":"pending"}"#,
             ),
         ];
-        assert!(!legacy_synthetic_cue_pair_at(&empty_pending_name, 0));
+        assert!(!previous_synthetic_cue_pair_at(&empty_pending_name, 0));
 
         let valid_pair = || {
             vec![
-                legacy_cue_action("cue-action", "knowledge_lookup"),
-                legacy_cue_observation(
+                previous_cue_action("cue-action", "knowledge_lookup"),
+                previous_cue_observation(
                     "cue-observation",
                     "cue-action",
                     "knowledge_lookup",
@@ -823,62 +823,62 @@ mod tests {
         };
         let mut lookalike = valid_pair();
         action_content(&mut lookalike[0]).thought = "real reasoning".to_string();
-        assert!(!legacy_synthetic_cue_pair_at(&lookalike, 0));
+        assert!(!previous_synthetic_cue_pair_at(&lookalike, 0));
 
         let mut lookalike = valid_pair();
         action_content(&mut lookalike[0]).input = "{ }".to_string();
-        assert!(!legacy_synthetic_cue_pair_at(&lookalike, 0));
+        assert!(!previous_synthetic_cue_pair_at(&lookalike, 0));
 
         let mut lookalike = valid_pair();
         action_content(&mut lookalike[0]).device_payload = vec![1];
-        assert!(!legacy_synthetic_cue_pair_at(&lookalike, 0));
+        assert!(!previous_synthetic_cue_pair_at(&lookalike, 0));
 
         let mut lookalike = valid_pair();
         action_content(&mut lookalike[0]).source = SynapseSource::Device as i32;
-        assert!(!legacy_synthetic_cue_pair_at(&lookalike, 0));
+        assert!(!previous_synthetic_cue_pair_at(&lookalike, 0));
 
         let mut lookalike = valid_pair();
         lookalike[0].parent_identifier.clear();
-        assert!(!legacy_synthetic_cue_pair_at(&lookalike, 0));
+        assert!(!previous_synthetic_cue_pair_at(&lookalike, 0));
 
         let mut lookalike = valid_pair();
         action_content(&mut lookalike[0]).action = "not_a_registered_read_tool".to_string();
-        assert!(!legacy_synthetic_cue_pair_at(&lookalike, 0));
+        assert!(!previous_synthetic_cue_pair_at(&lookalike, 0));
 
         let mut lookalike = valid_pair();
         lookalike[1].parent_identifier = "different-action".to_string();
-        assert!(!legacy_synthetic_cue_pair_at(&lookalike, 0));
+        assert!(!previous_synthetic_cue_pair_at(&lookalike, 0));
 
         let mut lookalike = valid_pair();
         observation_content(&mut lookalike[1]).source = SynapseSource::Device as i32;
-        assert!(!legacy_synthetic_cue_pair_at(&lookalike, 0));
+        assert!(!previous_synthetic_cue_pair_at(&lookalike, 0));
 
         let mut lookalike = valid_pair();
         observation_content(&mut lookalike[1]).is_final = true;
-        assert!(!legacy_synthetic_cue_pair_at(&lookalike, 0));
+        assert!(!previous_synthetic_cue_pair_at(&lookalike, 0));
 
         let mut lookalike = valid_pair();
         observation_content(&mut lookalike[1]).action_name = "current_location".to_string();
-        assert!(!legacy_synthetic_cue_pair_at(&lookalike, 0));
+        assert!(!previous_synthetic_cue_pair_at(&lookalike, 0));
 
         let mut lookalike = valid_pair();
         observation_content(&mut lookalike[1]).observation =
             r#"{"status":"ok","result":"real"}"#.to_string();
-        assert!(!legacy_synthetic_cue_pair_at(&lookalike, 0));
+        assert!(!previous_synthetic_cue_pair_at(&lookalike, 0));
 
         let mut nonadjacent = valid_pair();
         nonadjacent.insert(1, user_turn("intervening", "keep this turn"));
-        assert!(!legacy_synthetic_cue_pair_at(&nonadjacent, 0));
+        assert!(!previous_synthetic_cue_pair_at(&nonadjacent, 0));
 
-        let unmatched_action = vec![legacy_cue_action("cue-action", "knowledge_lookup")];
-        assert!(!is_legacy_synthetic_cue_turn(&unmatched_action, 0));
-        let unmatched_observation = vec![legacy_cue_observation(
+        let unmatched_action = vec![previous_cue_action("cue-action", "knowledge_lookup")];
+        assert!(!is_previous_synthetic_cue_turn(&unmatched_action, 0));
+        let unmatched_observation = vec![previous_cue_observation(
             "cue-observation",
             "missing-action",
             "knowledge_lookup",
             r#"{"status":"pending"}"#,
         )];
-        assert!(!is_legacy_synthetic_cue_turn(&unmatched_observation, 0));
+        assert!(!is_previous_synthetic_cue_turn(&unmatched_observation, 0));
     }
 
     #[test]
@@ -1020,7 +1020,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn model_history_scrubs_only_complete_legacy_cue_pairs() {
+    async fn model_history_scrubs_only_complete_previous_cue_pairs() {
         let mut prior_user = user_turn("prior-user", "what is in this image");
         let Some(synapse_chat_turn::Content::UserRequest(request)) = prior_user.content.as_mut()
         else {
@@ -1030,20 +1030,20 @@ mod tests {
         // stripped from the emitted history (text-only per R-001).
         request.image_data = vec![1, 2, 3];
 
-        let mut real_read_action = legacy_cue_action("real-read", "current_location");
+        let mut real_read_action = previous_cue_action("real-read", "current_location");
         action_content(&mut real_read_action).thought = "perform the actual read".to_string();
         let context = SynapseDeviceContext {
             turns: vec![
                 prior_user,
-                legacy_cue_action("cue-action", "knowledge_lookup"),
-                legacy_cue_observation(
+                previous_cue_action("cue-action", "knowledge_lookup"),
+                previous_cue_observation(
                     "cue-observation",
                     "cue-action",
                     "knowledge_lookup",
                     r#"{"status":"pending"}"#,
                 ),
                 real_read_action,
-                legacy_cue_observation(
+                previous_cue_observation(
                     "real-read-observation",
                     "real-read",
                     "current_location",
@@ -1130,23 +1130,23 @@ mod tests {
     }
 
     #[test]
-    fn agentic_context_scrubs_only_complete_legacy_cue_pairs() {
-        let mut real_read_action = legacy_cue_action("real-read", "current_location");
+    fn agentic_context_scrubs_only_complete_previous_cue_pairs() {
+        let mut real_read_action = previous_cue_action("real-read", "current_location");
         action_content(&mut real_read_action).thought = "perform the actual read".to_string();
         let request = SynapseUnderstandingRequest {
             utterance: "follow up".to_string(),
             device_context: Some(SynapseDeviceContext {
                 turns: vec![
                     user_turn("prior-user", "where was I"),
-                    legacy_cue_action("cue-action", "knowledge_lookup"),
-                    legacy_cue_observation(
+                    previous_cue_action("cue-action", "knowledge_lookup"),
+                    previous_cue_observation(
                         "cue-observation",
                         "cue-action",
                         "knowledge_lookup",
                         r#"{"status":"ok"}"#,
                     ),
                     real_read_action,
-                    legacy_cue_observation(
+                    previous_cue_observation(
                         "real-read-observation",
                         "real-read",
                         "current_location",

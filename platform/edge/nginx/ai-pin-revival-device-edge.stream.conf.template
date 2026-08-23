@@ -1,7 +1,7 @@
 # Source-owned public device edge. The deployment transaction replaces the two
 # @@...@@ tokens with decimal loopback backends, writes the rendered file
 # atomically into /etc/nginx/streams-enabled/, runs `nginx -t`, asserts the
-# single-owner invariant below, and retains the prior state for rollback. This
+# single-owner invariant below. This
 # file lives in the `stream` context (nginx.conf: `stream { include
 # /etc/nginx/streams-enabled/*.conf; }`), not in `http`.
 #
@@ -57,13 +57,13 @@ map $ssl_preread_server_name $ai_pin_revival_443_backend {
 
     default                          ai_pin_revival_local_tls;
 
-    api.carry.humane.cloud           ai_pin_revival_device_edge;
+    api.cosmos.humane.cloud          ai_pin_revival_device_edge;
     api.clone.invalid                ai_pin_revival_device_edge;
-    eastus.carry.humane.cloud        ai_pin_revival_device_edge;
-    eastus-1.carry.humane.cloud      ai_pin_revival_device_edge;
-    onboarding.carry.humane.cloud    ai_pin_revival_device_edge;
+    eastus.cosmos.humane.cloud       ai_pin_revival_device_edge;
+    eastus-1.cosmos.humane.cloud     ai_pin_revival_device_edge;
+    onboarding.cosmos.humane.cloud   ai_pin_revival_device_edge;
     onboarding.clone.invalid         ai_pin_revival_device_edge;
-    carry-edge                        ai_pin_revival_device_edge;
+    cosmos-edge                      ai_pin_revival_device_edge;
 }
 
 # `max_fails=0` on both single-server groups: passive health checking has nothing

@@ -58,7 +58,7 @@ const {
   "../src/lib/pin-install/releases/manifest.ts?pin-install-releases-test"
 );
 
-const { downloadInstallTargetAssets, recognizeLegacyApkFilename, resolveInstallTarget } =
+const { downloadInstallTargetAssets, resolveInstallTarget } =
   await import("../src/lib/pin-install/releases/assets.ts?pin-install-releases-test");
 
 const { clearTargetLock, getLockedTarget, lockResolvedInstallTarget } = await import(
@@ -691,22 +691,6 @@ function assetResponse(bytes = APK_BYTES, { stream = false, contentLength, url }
     },
   };
 }
-
-test("recognizeLegacyApkFilename recognizes old filenames without using them as a release source", () => {
-  // Operators still hand over hand-downloaded PenumbraOS APKs. Recognising the
-  // filename is a courtesy for labelling them; it is never how a release is
-  // chosen, because a filename asserts nothing about the bytes.
-  assert.equal(
-    recognizeLegacyApkFilename("PenumbraOS-SystemInjector-Installer-2026-04-29.0.apk"),
-    "installer",
-  );
-  assert.equal(
-    recognizeLegacyApkFilename("PenumbraOS-SystemInjector-Exploit-2026-04-29.0.apk"),
-    "bootstrap",
-  );
-  assert.equal(recognizeLegacyApkFilename("PenumbraOS-HumaneHooks-2026-04-29.0.apk"), "hook");
-  assert.equal(recognizeLegacyApkFilename("unrelated.apk"), null);
-});
 
 test("resolveInstallTarget maps one typed manifest into one atomic install target", async () => {
   const resolved = await resolveFixtureTarget();

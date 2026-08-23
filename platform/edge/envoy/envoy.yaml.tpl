@@ -41,7 +41,7 @@ static_resources:
             "@type": type.googleapis.com/envoy.extensions.filters.listener.tls_inspector.v3.TlsInspector
       filter_chains:
         - filter_chain_match:
-            server_names: ["onboarding.carry.humane.cloud", "onboarding.clone.invalid", "carry-edge"]
+            server_names: ["onboarding.cosmos.humane.cloud", "onboarding.clone.invalid", "cosmos-edge"]
           filters:
             - name: envoy.filters.network.http_connection_manager
               typed_config:
@@ -72,12 +72,9 @@ static_resources:
                   virtual_hosts:
                     - name: cosmos_onboarding
                       domains: ["*"]
-                      # Retain only the release-coupled legacy ABI. Strip both
-                      # names so a renamed-client header can never survive as
-                      # caller-selected principal or edge-token authority.
-                      request_headers_to_remove: ["x-carry-edge-token", "x-cosmos-edge-token", "x-carry-authenticated-principal", "x-cosmos-authenticated-principal"]
+                      request_headers_to_remove: ["x-cosmos-edge-token", "x-cosmos-authenticated-principal"]
                       request_headers_to_add:
-                        - header: { key: "x-carry-edge-token", value: "@@EDGE_TOKEN@@" }
+                        - header: { key: "x-cosmos-edge-token", value: "@@EDGE_TOKEN@@" }
                           append_action: OVERWRITE_IF_EXISTS_OR_ADD
                       routes:
                         - match: { prefix: "/humane.provisioning." }
@@ -106,7 +103,7 @@ static_resources:
                 validation_context:
                   trusted_ca: { filename: "@@CERT_DIR@@/onboarding-client-ca.crt" }
         - filter_chain_match:
-            server_names: ["api.carry.humane.cloud", "api.clone.invalid", "eastus.carry.humane.cloud", "eastus-1.carry.humane.cloud"]
+            server_names: ["api.cosmos.humane.cloud", "api.clone.invalid", "eastus.cosmos.humane.cloud", "eastus-1.cosmos.humane.cloud"]
           filters:
             - name: envoy.filters.network.http_connection_manager
               typed_config:
@@ -133,9 +130,9 @@ static_resources:
                   virtual_hosts:
                     - name: cosmos_api
                       domains: ["*"]
-                      request_headers_to_remove: ["x-carry-edge-token", "x-cosmos-edge-token", "x-carry-authenticated-principal", "x-cosmos-authenticated-principal"]
+                      request_headers_to_remove: ["x-cosmos-edge-token", "x-cosmos-authenticated-principal"]
                       request_headers_to_add:
-                        - header: { key: "x-carry-edge-token", value: "@@EDGE_TOKEN@@" }
+                        - header: { key: "x-cosmos-edge-token", value: "@@EDGE_TOKEN@@" }
                           append_action: OVERWRITE_IF_EXISTS_OR_ADD
                       routes:
                         - match: { prefix: "/humane.featureflags." }

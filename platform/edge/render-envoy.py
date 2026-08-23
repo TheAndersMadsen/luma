@@ -57,7 +57,7 @@ def assert_edge_reachable(template: str, envoy_template_path: Path) -> None:
     The device dials every clone gateway at <host>:443 and nothing on the server
     answers for a name that has no route: the ClientHello dies before a request
     line exists, so neither Nginx nor Envoy nor Cosmos writes a single line about
-    it.  That is precisely how api.carry.humane.cloud went unserved indefinitely.
+    it. That is precisely how a configured Cosmos endpoint can go unserved.
     The two lists are edited in different files by different concerns, so bind
     them here, at the one moment both are on disk and neither is live yet.
     """

@@ -11,71 +11,7 @@ import type { ResolvedInstallTarget } from "../releases/assets";
 export const IN_PLACE_PACKAGE_ROLES = ["hook", "server", "injector"] as const;
 export type InPlacePackageRole = (typeof IN_PLACE_PACKAGE_ROLES)[number];
 
-/**
- * observed: the exact healthy legacy package set on the operator-owned Ai Pin
- * for which the first canonical migration is implemented.
- *
- * These are versionNAMEs, because that is the field every comparison below
- * reads (`pkg.versionName === LEGACY_MIGRATION_PROFILE.versions[role]`). They
- * previously held that device's versionCODEs — 20260807 and 2026080802 — which
- * are real values from the same packages but a different field, so no installed
- * package could ever match and `decideInstallMigration` refused every install on
- * the one device this profile exists to describe. Re-read from the device on
- * 2026-08-11 (serial 1H4MPA42230112) with `dumpsys package <pkg>`:
- *
- *   com.penumbraos.systeminjector   versionName=cosmos-2026.08.07    versionCode=20260807
- *   com.penumbraos.hook             versionName=cosmos-2026.08.07    versionCode=20260807
- *   com.penumbraos.server           versionName=cosmos-2026.08.08.2  versionCode=2026080802
- *   com.penumbraos.hook.injector    versionName=cosmos-2026.08.07    versionCode=20260807
- *
- * Note these names do NOT parse as release versions (`parseInstallVersion`
- * wants YYYY-MM-DD.N): the legacy builds predate that scheme, which is exactly
- * why the migration matches them literally instead of comparing ordinally.
- */
-export const LEGACY_MIGRATION_PROFILE = Object.freeze({
-  signerIdentity: "dd07f452",
-  versions: Object.freeze({
-    installer: "cosmos-2026.08.07",
-    hook: "cosmos-2026.08.07",
-    server: "cosmos-2026.08.08.2",
-    injector: "cosmos-2026.08.07",
-  } satisfies Readonly<Record<ManagedPackageRole, string>>),
-});
-
-/**
- * Is this installed version one the legacy migration is allowed to update from?
- *
- * Three answers, and the third is why this function exists:
- *  - the exact legacy versionName, which does not parse as a release version
- *    because those builds predate the scheme;
- *  - the target itself, i.e. the role is already done;
- *  - ANY published release version at or below the target.
- *
- * That third case is a device left mid-migration — some roles updated, the
- * batch interrupted before the rest. It is not exotic: an install that pushes
- * 200 MiB per role and restarts system_server has a real window in which to be
- * interrupted, and that is exactly how this Pin reached hook and injector at
- * 2026-08-11.1 with a legacy installer and no server. Admitting only "legacy or
- * target" left such a device permanently blocked by the very rule meant to
- * protect it, with no path forward but a hand-driven recovery.
- *
- * It stays strict about what it is protecting against — a package of UNKNOWN
- * provenance. A version that parses as a release version and is not newer than
- * the target is one this installer published and installed. A version that does
- * not parse, or that is newer than what we are installing, still refuses: the
- * first is not ours, and the second would be a silent downgrade.
- */
-function isKnownLegacyMigrationVersion(
-  role: InPlacePackageRole,
-  installedVersion: string | null,
-  targetVersion: string,
-): boolean {
-  if (installedVersion === LEGACY_MIGRATION_PROFILE.versions[role]) return true;
-  if (installedVersion === targetVersion) return true;
-  if (!installedVersion) return false;
-  const ordering = compareInstallVersions(installedVersion, targetVersion);
-  return ordering !== null && ordering < 0;
-}
+export const PIN_RELEASE_SIGNER_IDENTITY = "dd07f452";
 
 export interface RetainedInstallerIdentity {
   readonly packageName: typeof MANAGED_PACKAGES.installer;
@@ -84,7 +20,7 @@ export interface RetainedInstallerIdentity {
 }
 
 interface InPlaceMigrationDecision {
-  readonly kind: "legacy-in-place" | "routine-in-place";
+  readonly kind: "routine-in-place";
   readonly reason: string;
   readonly rolesToInstall: readonly InPlacePackageRole[];
   readonly retainedInstaller: RetainedInstallerIdentity;
@@ -158,7 +94,7 @@ function installedRoleHasExpectedIdentity(
   return (
     !pkg.installed ||
     (pkg.packageName === EXPECTED_PACKAGE_BY_ROLE[role] &&
-      pkg.signerIdentity === LEGACY_MIGRATION_PROFILE.signerIdentity)
+      pkg.signerIdentity === PIN_RELEASE_SIGNER_IDENTITY)
   );
 }
 
@@ -171,8 +107,8 @@ function roleIsKnownForRecovery(
   return (
     !pkg.installed ||
     (pkg.healthy &&
-      (pkg.versionName === LEGACY_MIGRATION_PROFILE.versions[role] ||
-        pkg.versionName === target.version))
+      compareInstallVersions(pkg.versionName, target.version) !== null &&
+      compareInstallVersions(pkg.versionName, target.version)! <= 0)
   );
 }
 
@@ -244,7 +180,7 @@ export function inspectionRequiresBootstrapRecovery(
 
 /**
  * implemented: derive the only mutation path the installer may use for the
- * inspected device. Any state outside a proved legacy/canonical profile fails
+ * inspected device. Any state outside a verified release profile fails
  * closed.
  */
 export function decideInstallMigration(options: {
@@ -288,9 +224,12 @@ export function decideInstallMigration(options: {
   }
 
   const installer = inspection.packages.installer;
+  const installerVersionOrdering = compareInstallVersions(
+    installer.versionName,
+    target.version,
+  );
   const installerVersionKnown =
-    installer.versionName === LEGACY_MIGRATION_PROFILE.versions.installer ||
-    installer.versionName === target.version;
+    installerVersionOrdering !== null && installerVersionOrdering <= 0;
 
   if (!installer.installed || !installer.healthy) {
     if (installer.installed && !installerVersionKnown) {
@@ -326,44 +265,9 @@ export function decideInstallMigration(options: {
     signerIdentity: installer.signerIdentity,
   };
 
-  if (installer.versionName === LEGACY_MIGRATION_PROFILE.versions.installer) {
-    for (const role of IN_PLACE_PACKAGE_ROLES) {
-      const pkg = inspection.packages[role];
-      if (pkg.installed && !pkg.healthy) {
-        return blocked(
-          `Legacy ${role} state does not match its exact migration baseline.`,
-        );
-      }
-      if (pkg.installed && !isKnownLegacyMigrationVersion(role, pkg.versionName, target.version)) {
-        return blocked(
-          `Legacy ${role} state does not match its exact migration baseline.`,
-        );
-      }
-    }
-
-    const rolesToInstall = IN_PLACE_PACKAGE_ROLES.filter(
-      (role) => inspection.packages[role].versionName !== target.version,
-    );
-    const refusal = findKeepDataUpdateRefusal(inspection, target, rolesToInstall);
-    if (refusal) {
-      return blocked(refusal);
-    }
-
-    return {
-      kind: "legacy-in-place",
-      reason: "The exact supported legacy package profile is installed.",
-      rolesToInstall,
-      retainedInstaller,
-    };
-  }
-
-  const installerVersionOrdering = compareInstallVersions(
-    installer.versionName,
-    target.version,
-  );
   if (installerVersionOrdering === null || installerVersionOrdering > 0) {
     return blocked(
-      "The healthy installer is neither a supported canonical version at or below the selected target nor the supported legacy baseline.",
+      "The healthy installer is not a supported release version at or below the selected target.",
     );
   }
 

@@ -40,12 +40,12 @@ const { setLogSinkForTests } = await import("../src/server/log.ts");
  */
 
 const SUB = "42364959-05da-423c-8c30-731fd7a7490e";
-const LEGACY_KID = `V:01:D:web-demo:U:${SUB}/center/ephemeral`;
+const STORED_KID = `V:01:D:web-demo:U:${SUB}/center/ephemeral`;
 const DERIVED_KID = `U:${SUB}/center/ephemeral`;
 const OTHER_KID = "U:9f1d0c33-1111-2222-3333-444455556666/center/ephemeral";
 
 /** Distinct, canonical, 16-byte AES-128 material, as the store holds it. */
-const LEGACY_KEY = Buffer.alloc(16, 0x11).toString("base64");
+const STORED_KEY = Buffer.alloc(16, 0x11).toString("base64");
 const FRESH_KEY = Buffer.alloc(16, 0x22);
 const OTHER_KEY = Buffer.alloc(16, 0x33).toString("base64");
 
@@ -54,14 +54,10 @@ async function withStore(context, contents) {
   const directory = await mkdtemp(path.join(tmpdir(), "revival-channel-key-"));
   const file = path.join(directory, "channel-key.json");
   const previous = process.env.COSMOS_CHANNEL_KEY_FILE;
-  const previousLegacyAlias = process.env.COSMOS_CHANNEL_KEY_FILE;
-  delete process.env.COSMOS_CHANNEL_KEY_FILE;
   process.env.COSMOS_CHANNEL_KEY_FILE = file;
   context.after(async () => {
     if (previous === undefined) delete process.env.COSMOS_CHANNEL_KEY_FILE;
     else process.env.COSMOS_CHANNEL_KEY_FILE = previous;
-    if (previousLegacyAlias === undefined) delete process.env.COSMOS_CHANNEL_KEY_FILE;
-    else process.env.COSMOS_CHANNEL_KEY_FILE = previousLegacyAlias;
     await rm(directory, { recursive: true, force: true });
   });
   if (contents !== undefined) {
@@ -76,18 +72,14 @@ const read = async (file) => JSON.parse(await readFile(file, "utf8"));
 
 function preserveChannelFileEnvironment(context) {
   const cosmos = process.env.COSMOS_CHANNEL_KEY_FILE;
-  const legacyAlias = process.env.COSMOS_CHANNEL_KEY_FILE;
   context.after(() => {
     if (cosmos === undefined) delete process.env.COSMOS_CHANNEL_KEY_FILE;
     else process.env.COSMOS_CHANNEL_KEY_FILE = cosmos;
-    if (legacyAlias === undefined) delete process.env.COSMOS_CHANNEL_KEY_FILE;
-    else process.env.COSMOS_CHANNEL_KEY_FILE = legacyAlias;
   });
 }
 
 async function withDefaultStoreDirectory(context) {
   preserveChannelFileEnvironment(context);
-  delete process.env.COSMOS_CHANNEL_KEY_FILE;
   delete process.env.COSMOS_CHANNEL_KEY_FILE;
   const directory = await mkdtemp(path.join(tmpdir(), "revival-channel-default-"));
   const previousWorkingDirectory = process.cwd();
@@ -99,85 +91,21 @@ async function withDefaultStoreDirectory(context) {
   return {
     directory,
     cosmos: path.join(directory, ".cosmos-channel-key.json"),
-    legacy: path.join(directory, ".cosmos-channel-key.json"),
   };
 }
-
-test("a direct upgrade reads the pre-rename channel-key path without a Cosmos variable", async (t) => {
-  preserveChannelFileEnvironment(t);
-  const directory = await mkdtemp(path.join(tmpdir(), "revival-legacy-channel-key-"));
-  const file = path.join(directory, "channel-key.json");
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  await writeFile(file, JSON.stringify({ kid: LEGACY_KID, key: LEGACY_KEY }), { mode: 0o600 });
-
-  delete process.env.COSMOS_CHANNEL_KEY_FILE;
-  process.env.COSMOS_CHANNEL_KEY_FILE = file;
-
-  assert.equal(channelKeyFile(), file);
-  assert.equal(storedKeysFor(DERIVED_KID)[0]?.key.toString("base64"), LEGACY_KEY);
-});
-
-test("matching legacy and Cosmos channel-key aliases retain the production path", (t) => {
-  preserveChannelFileEnvironment(t);
-  process.env.COSMOS_CHANNEL_KEY_FILE = "/data/channel-key.json";
-  process.env.COSMOS_CHANNEL_KEY_FILE = "/data/channel-key.json";
-  assert.equal(channelKeyFile(), "/data/channel-key.json");
-});
-
-test("conflicting channel-key aliases fail closed before reading either store", (t) => {
-  preserveChannelFileEnvironment(t);
-  process.env.COSMOS_CHANNEL_KEY_FILE = "/data/legacy-channel-key.json";
-  process.env.COSMOS_CHANNEL_KEY_FILE = "/data/new-channel-key.json";
-  assert.throws(
-    () => channelKeyFile(),
-    /COSMOS_CHANNEL_KEY_FILE disagree/u,
-  );
-});
 
 test("the unconfigured local default uses the Cosmos filename", async (t) => {
   const defaults = await withDefaultStoreDirectory(t);
   assert.equal(channelKeyFile(), defaults.cosmos);
 
-  await writeFile(defaults.legacy, "legacy", { mode: 0o600 });
   await writeFile(defaults.cosmos, "cosmos", { mode: 0o600 });
-  assert.equal(
-    channelKeyFile(),
-    defaults.cosmos,
-    "the legacy file must not override a Cosmos store",
-  );
+  assert.equal(channelKeyFile(), defaults.cosmos);
 });
 
-test("an existing legacy-only default is reused in place without changing key bytes or mode", async (t) => {
-  const defaults = await withDefaultStoreDirectory(t);
-  const bytes = Buffer.from(JSON.stringify({ kid: LEGACY_KID, key: LEGACY_KEY }));
-  await writeFile(defaults.legacy, bytes, { mode: 0o600 });
-
-  assert.equal(channelKeyFile(), defaults.legacy);
-  assert.equal(storedKeysFor(DERIVED_KID)[0]?.key.toString("base64"), LEGACY_KEY);
-  assert.deepEqual(await readFile(defaults.legacy), bytes);
-  assert.equal((await stat(defaults.legacy)).mode & 0o777, 0o600);
-  await assert.rejects(stat(defaults.cosmos), { code: "ENOENT" });
-});
-
-test("an explicit Cosmos path takes precedence over an implicit legacy default", async (t) => {
-  const defaults = await withDefaultStoreDirectory(t);
-  await writeFile(defaults.legacy, "legacy", { mode: 0o600 });
-  const explicit = path.join(defaults.directory, "configured-channel-key.json");
-  process.env.COSMOS_CHANNEL_KEY_FILE = explicit;
-
-  assert.equal(channelKeyFile(), explicit);
-  assert.equal(await readFile(defaults.legacy, "utf8"), "legacy");
-});
-
-test("Git and Docker ignore both local channel-key filenames and their temporary siblings", async () => {
+test("Git and Docker ignore the local channel-key file and temporary siblings", async () => {
   const center = new URL("../", import.meta.url);
   for (const name of [".gitignore", ".dockerignore"]) {
     const lines = new Set((await readFile(new URL(name, center), "utf8")).split(/\r?\n/u));
-    assert.equal(
-      lines.has(".cosmos-channel-key.json*"),
-      true,
-      `${name} exposes legacy key files`,
-    );
     assert.equal(
       lines.has(".cosmos-channel-key.json*"),
       true,
@@ -189,13 +117,13 @@ test("Git and Docker ignore both local channel-key filenames and their temporary
 test("a wearer keeps their key when the kid we derive for them changes shape", async (t) => {
   // Exactly what /home/anders/cosmos-center-data/channel-key.json holds today:
   // the pre-fix COSMOS_PRINCIPAL kid, no map.
-  await withStore(t, { kid: LEGACY_KID, key: LEGACY_KEY });
+  await withStore(t, { kid: STORED_KID, key: STORED_KEY });
 
   const found = storedKeysFor(DERIVED_KID);
   assert.equal(found.length, 1, "the established key was abandoned by the new derivation");
   // Returned under its OWN kid, because that is the name its envelopes use.
-  assert.equal(found[0].kid, LEGACY_KID);
-  assert.equal(found[0].key.toString("base64"), LEGACY_KEY);
+  assert.equal(found[0].kid, STORED_KID);
+  assert.equal(found[0].key.toString("base64"), STORED_KEY);
 });
 
 test("a key stored under another wearer's kid is never returned", async (t) => {
@@ -203,8 +131,8 @@ test("a key stored under another wearer's kid is never returned", async (t) => {
   assert.deepEqual(storedKeysFor(DERIVED_KID), []);
 
   // Both supported kid forms are parsed to one exact wearer subject.
-  assert.equal(namesSameWearer(LEGACY_KID, DERIVED_KID), true);
-  assert.equal(namesSameWearer(DERIVED_KID, LEGACY_KID), true);
+  assert.equal(namesSameWearer(STORED_KID, DERIVED_KID), true);
+  assert.equal(namesSameWearer(DERIVED_KID, STORED_KID), true);
   assert.equal(namesSameWearer(OTHER_KID, DERIVED_KID), false);
   // No suffix, path, or delimiter trick may manufacture the same subject.
   assert.equal(namesSameWearer("U:cab/center/ephemeral", "U:ab/center/ephemeral"), false);
@@ -223,10 +151,10 @@ test("a key stored under another wearer's kid is never returned", async (t) => {
     assert.equal(namesSameWearer(DERIVED_KID, forged), false, forged);
   }
   assert.deepEqual(parseCenterPrincipal(`U:${SUB}`), { principal: `U:${SUB}`, subject: SUB });
-  assert.deepEqual(parseCenterKid(LEGACY_KID), {
+  assert.deepEqual(parseCenterKid(STORED_KID), {
     principal: `V:01:D:web-demo:U:${SUB}`,
     subject: SUB,
-    kid: LEGACY_KID,
+    kid: STORED_KID,
   });
 });
 
@@ -236,10 +164,10 @@ test("the exact kid is offered before an inherited one", async (t) => {
   // satisfied by the sort in storedKeysFor and not by the shape of the fixture.
   // With the derived kid listed first this test passed with the sort deleted.
   await withStore(t, {
-    kid: LEGACY_KID,
-    key: LEGACY_KEY,
+    kid: STORED_KID,
+    key: STORED_KEY,
     keys: {
-      [LEGACY_KID]: LEGACY_KEY,
+      [STORED_KID]: STORED_KEY,
       [DERIVED_KID]: FRESH_KEY.toString("base64"),
     },
   });
@@ -247,26 +175,26 @@ test("the exact kid is offered before an inherited one", async (t) => {
   const found = storedKeysFor(DERIVED_KID);
   assert.deepEqual(
     found.map((candidate) => candidate.kid),
-    [DERIVED_KID, LEGACY_KID],
+    [DERIVED_KID, STORED_KID],
   );
   // The one we seal under really is the one the exact kid names.
   assert.equal(found[0].key.toString("base64"), FRESH_KEY.toString("base64"));
 });
 
 test("persisting a key migrates the legacy pair into the map instead of orphaning it", async (t) => {
-  const { file, directory } = await withStore(t, { kid: LEGACY_KID, key: LEGACY_KEY });
+  const { file, directory } = await withStore(t, { kid: STORED_KID, key: STORED_KEY });
 
   saveKey({ kid: DERIVED_KID, key: FRESH_KEY });
   const document = await read(file);
 
   // The restore-compatible mirror is untouched: it is the shape a restored
   // deployment carries forward and the shape the staging smoke asserts.
-  assert.equal(document.kid, LEGACY_KID);
-  assert.equal(document.key, LEGACY_KEY);
+  assert.equal(document.kid, STORED_KID);
+  assert.equal(document.key, STORED_KEY);
   // …and the key it names is now reachable through the map as well, so a reader
   // resolving an envelope by its kid finds it.
   assert.deepEqual(document.keys, {
-    [LEGACY_KID]: LEGACY_KEY,
+    [STORED_KID]: STORED_KEY,
     [DERIVED_KID]: FRESH_KEY.toString("base64"),
   });
 
@@ -300,7 +228,7 @@ test("the store is replaced by rename, never truncated in place", async (t) => {
    * or the whole new one" and "a reader can see a truncated file", and it is
    * checkable without racing a crash.
    */
-  const { file } = await withStore(t, { kid: LEGACY_KID, key: LEGACY_KEY });
+  const { file } = await withStore(t, { kid: STORED_KID, key: STORED_KEY });
   const before = await stat(file);
 
   saveKey({ kid: DERIVED_KID, key: FRESH_KEY });
@@ -317,15 +245,15 @@ test("the store is replaced by rename, never truncated in place", async (t) => {
 });
 
 test("a second wearer establishing does not erase the first", async (t) => {
-  const { file } = await withStore(t, { kid: LEGACY_KID, key: LEGACY_KEY });
+  const { file } = await withStore(t, { kid: STORED_KID, key: STORED_KEY });
 
   saveKey({ kid: DERIVED_KID, key: FRESH_KEY });
   saveKey({ kid: OTHER_KID, key: Buffer.from(OTHER_KEY, "base64") });
 
   const document = await read(file);
-  assert.deepEqual(Object.keys(document.keys).sort(), [LEGACY_KID, OTHER_KID, DERIVED_KID].sort());
+  assert.deepEqual(Object.keys(document.keys).sort(), [STORED_KID, OTHER_KID, DERIVED_KID].sort());
   assert.equal(document.keys[DERIVED_KID], FRESH_KEY.toString("base64"));
-  assert.equal(document.kid, LEGACY_KID);
+  assert.equal(document.kid, STORED_KID);
 });
 
 test("an unreadable store is reported, never mistaken for a first run", async (t) => {
@@ -365,7 +293,7 @@ test("an unreadable store is reported, never mistaken for a first run", async (t
 });
 
 test("a parent-directory fsync failure is propagated and a retry completes durability", async (t) => {
-  const { file } = await withStore(t, { kid: LEGACY_KID, key: LEGACY_KEY });
+  const { file } = await withStore(t, { kid: STORED_KID, key: STORED_KEY });
   const originalFsync = fs.fsyncSync;
   let calls = 0;
   fs.fsyncSync = (descriptor) => {
@@ -402,7 +330,7 @@ test("a parent-directory fsync failure is propagated and a retry completes durab
 });
 
 test("an existing store must be exactly 0600 and remains byte-identical when refused", async (t) => {
-  const { file } = await withStore(t, { kid: DERIVED_KID, key: LEGACY_KEY });
+  const { file } = await withStore(t, { kid: DERIVED_KID, key: STORED_KEY });
   for (const mode of [0o640, 0o400, 0o666]) {
     await chmod(file, mode);
     const before = await readFile(file);
@@ -416,7 +344,7 @@ test("an existing store must be exactly 0600 and remains byte-identical when ref
 });
 
 test("the store is opened no-follow and read from that same bounded descriptor", async (t) => {
-  const { file } = await withStore(t, { kid: DERIVED_KID, key: LEGACY_KEY });
+  const { file } = await withStore(t, { kid: DERIVED_KID, key: STORED_KEY });
   const originalOpen = fs.openSync;
   const originalRead = fs.readSync;
   let openedDescriptor = null;
@@ -443,7 +371,7 @@ test("the store is opened no-follow and read from that same bounded descriptor",
 });
 
 test("a post-open read failure is never reclassified as an absent first run", async (t) => {
-  const { file } = await withStore(t, { kid: DERIVED_KID, key: LEGACY_KEY });
+  const { file } = await withStore(t, { kid: DERIVED_KID, key: STORED_KEY });
   const before = await readFile(file);
   const originalRead = fs.readSync;
   fs.readSync = () => {
@@ -464,7 +392,7 @@ test("a post-open read failure is never reclassified as an absent first run", as
 });
 
 test("a path replacement after descriptor observation fails closed", async (t) => {
-  const { file } = await withStore(t, { kid: DERIVED_KID, key: LEGACY_KEY });
+  const { file } = await withStore(t, { kid: DERIVED_KID, key: STORED_KEY });
   const originalLstat = fs.lstatSync;
   const originalPath = `${file}.observed`;
   let swapped = false;
@@ -483,7 +411,7 @@ test("a path replacement after descriptor observation fails closed", async (t) =
   assert.throws(() => storedKeysFor(DERIVED_KID), new RegExp(CHANNEL_KEY_STORE_DEGRADED));
   assert.deepEqual(
     await readFile(originalPath),
-    Buffer.from(JSON.stringify({ kid: DERIVED_KID, key: LEGACY_KEY })),
+    Buffer.from(JSON.stringify({ kid: DERIVED_KID, key: STORED_KEY })),
   );
 });
 

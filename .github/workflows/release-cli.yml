@@ -34,11 +34,8 @@ jobs:
         with:
           node-version: 22.14.0
           package-manager-cache: false
-      - name: Validate distribution contract
-        run: |
-          sh platform/deploy/acceptance/layout.sh
-          node --test platform/deploy/acceptance/ci-policy.test.mjs
-          node --test platform/deploy/acceptance/distribution.test.mjs
+      - name: Validate the distribution builder
+        run: ./revival check platform
       - name: Validate opt-in publication coordinates
         if: ${{ inputs.publish_release == true }}
         env:

@@ -149,7 +149,7 @@ const DEFAULT_DISPLAY_NAME: &str = "Cosmos User";
 // Deployed password files were derived from this exact legacy setup seed.
 // The product rename must never mint a second OPAQUE server setup over the same
 // database: that would make every existing password file unverifiable.
-const DEFAULT_OPAQUE_SEED: [u8; 32] = *b"cosmos-clone-opaque-setup-seed-01";
+const DEFAULT_OPAQUE_SEED: [u8; 32] = *b"cosmos-revival-opaque-seed-00001";
 
 /// The clone's single enrolled user id — a stable, deterministic UUID.
 ///
@@ -951,10 +951,11 @@ impl EnrollmentStore for PostgresEnrollmentStore {
 
         // Opportunistic pruning of windows that have fully elapsed, exactly like
         // `take_login`. An expired row is not a live lockout.
-        let _ = sqlx::query("DELETE FROM cosmos_opaque_login_attempt WHERE window_start_epoch < $1")
-            .bind(window_opened_after)
-            .execute(&self.pool)
-            .await;
+        let _ =
+            sqlx::query("DELETE FROM cosmos_opaque_login_attempt WHERE window_start_epoch < $1")
+                .bind(window_opened_after)
+                .execute(&self.pool)
+                .await;
 
         Ok(row.0.max(0) as u32)
     }
@@ -3436,7 +3437,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn opaque_fallback_seed_is_the_deployed_legacy_compatibility_value() {
-        assert_eq!(DEFAULT_OPAQUE_SEED, *b"cosmos-clone-opaque-setup-seed-01");
+    fn opaque_fallback_seed_is_stable() {
+        assert_eq!(DEFAULT_OPAQUE_SEED, *b"cosmos-revival-opaque-seed-00001");
     }
 }

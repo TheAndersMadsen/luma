@@ -23,7 +23,6 @@ const PROJECT = 'ai-pin-revival';
 const ENV_EXAMPLE = path.join(ROOT, '.env.example');
 const COMPOSE_BASE = path.join(ROOT, 'compose.yaml');
 const COMPOSE_DEVELOPMENT = path.join(ROOT, 'platform', 'compose', 'development.yaml');
-const PACKAGE_TOOL = path.join(ROOT, 'platform', 'deploy', 'release.mjs');
 const PIN_RELEASE_TOOL = path.join(ROOT, 'platform', 'deploy', 'pin', 'release.mjs');
 const PIN_RELEASE_BUILD_TOOL = path.join(ROOT, 'platform', 'deploy', 'pin', 'build.mjs');
 const PIN_RELEASE_SHIP_TOOL = path.join(ROOT, 'platform', 'deploy', 'pin', 'ship.mjs');
@@ -46,12 +45,6 @@ const DEFAULT_DATA_DIR = path.join(
   process.env.XDG_DATA_HOME || path.join(LOGIN_HOME, '.local', 'share'),
   PROJECT
 );
-const DEFAULT_BACKUP_DIR = path.join(
-  process.env.XDG_STATE_HOME || path.join(LOGIN_HOME, '.local', 'state'),
-  PROJECT,
-  'backups'
-);
-
 function externalPath(variable, fallback) {
   return path.resolve(process.env[variable] || fallback);
 }
@@ -98,14 +91,9 @@ const DATA_DIR = externalPath(
   'REVIVAL_DATA_DIR',
   DEFAULT_DATA_DIR
 );
-const BACKUP_DIR = externalPath(
-  'REVIVAL_BACKUP_DIR',
-  DEFAULT_BACKUP_DIR
-);
 const ENV_FILE = process.env.REVIVAL_ENV_FILE
   ? path.resolve(process.env.REVIVAL_ENV_FILE)
   : path.join(SECRETS_DIR, 'runtime.env');
-const RELEASE_DIR = path.join(DATA_DIR, 'releases');
 const BUILD_DIR = externalPath('REVIVAL_BUILD_DIR', path.join(DATA_DIR, 'build'));
 const PIN_SECRET_DIR = path.join(SECRETS_DIR, 'pin');
 const PIN_SIGNING_ENV_FILE = path.join(PIN_SECRET_DIR, 'signing.env');
@@ -171,7 +159,7 @@ function hasManagedMarker(directory) {
 
 function isDefaultOperatorDirectory(directory) {
   const candidate = canonicalCandidate(directory);
-  return [DEFAULT_CONFIG_DIR, DEFAULT_SECRETS_DIR, DEFAULT_DATA_DIR, DEFAULT_BACKUP_DIR]
+  return [DEFAULT_CONFIG_DIR, DEFAULT_SECRETS_DIR, DEFAULT_DATA_DIR]
     .map((entry) => canonicalCandidate(entry))
     .includes(candidate);
 }
@@ -201,7 +189,7 @@ function ensureManagedRoot(directory, label) {
 }
 
 function secureDirectory(directory) {
-  const managedParent = [SECRETS_DIR, DATA_DIR, BACKUP_DIR, CONFIG_DIR]
+  const managedParent = [SECRETS_DIR, DATA_DIR, CONFIG_DIR]
     .find((candidate) => isInsideDirectory(directory, candidate));
   if (!managedParent) {
     throw new Error(`refusing to create or modify an unmanaged directory: ${directory}`);
@@ -294,7 +282,7 @@ function localIdentityRealm(values) {
     accessTokenLifespan: 900,
     attributes: { aiPinRevivalManaged: 'true' },
     roles: {
-      realm: [{ name: 'carry-operator', description: 'Ai Pin Revival operator access' }]
+      realm: [{ name: 'cosmos-operator', description: 'Ai Pin Revival operator access' }]
     },
     clients: [{
       clientId,
@@ -357,8 +345,7 @@ function initialize() {
   for (const [directory, label] of [
     [CONFIG_DIR, 'REVIVAL_CONFIG_DIR'],
     [SECRETS_DIR, 'REVIVAL_SECRETS_DIR'],
-    [DATA_DIR, 'REVIVAL_DATA_DIR'],
-    [BACKUP_DIR, 'REVIVAL_BACKUP_DIR']
+    [DATA_DIR, 'REVIVAL_DATA_DIR']
   ]) {
     requireExternalDirectory(directory, label);
   }
@@ -373,10 +360,8 @@ function initialize() {
   for (const [directory, label] of [
     [CONFIG_DIR, 'REVIVAL_CONFIG_DIR'],
     [SECRETS_DIR, 'REVIVAL_SECRETS_DIR'],
-    [DATA_DIR, 'REVIVAL_DATA_DIR'],
-    [BACKUP_DIR, 'REVIVAL_BACKUP_DIR']
+    [DATA_DIR, 'REVIVAL_DATA_DIR']
   ]) ensureManagedRoot(directory, label);
-  secureDirectory(RELEASE_DIR);
   secureDirectory(BUILD_DIR);
   for (const directory of [
     path.join(SECRETS_DIR, 'pki'),
@@ -445,7 +430,6 @@ function initialize() {
   info(`[implemented] secrets: ${SECRETS_DIR}`);
   info(`[implemented] runtime data: ${DATA_DIR}`);
   info(`[implemented] generated output: ${BUILD_DIR}`);
-  info(`[implemented] backups: ${BACKUP_DIR}`);
   if (createdRuntime) {
     info('Provider credentials, Spotify pairing, wearer identity, enrollment, and device PKI remain unconfigured.');
   }
@@ -617,8 +601,8 @@ function validateLocalIdentityRealm(values, problems) {
     problems.push(`${realmFile} redirect origins do not match REVIVAL_CENTER_PORT=${centerPort}; regenerate the local realm intentionally`);
   }
   const roles = Array.isArray(realm.roles?.realm) ? realm.roles.realm : [];
-  if (!roles.some((role) => role?.name === 'carry-operator')) {
-    problems.push(`${realmFile} must define the optional carry-operator realm role`);
+  if (!roles.some((role) => role?.name === 'cosmos-operator')) {
+    problems.push(`${realmFile} must define the optional cosmos-operator realm role`);
   }
 }
 
@@ -627,7 +611,7 @@ function validateRuntime({ production = false } = {}) {
   if (!isInsideDirectory(ENV_FILE, SECRETS_DIR)) {
     throw new Error(`REVIVAL_ENV_FILE must be inside REVIVAL_SECRETS_DIR: ${ENV_FILE}`);
   }
-  for (const directory of [CONFIG_DIR, SECRETS_DIR, DATA_DIR, BACKUP_DIR, BUILD_DIR]) {
+  for (const directory of [CONFIG_DIR, SECRETS_DIR, DATA_DIR, BUILD_DIR]) {
     if (!fs.existsSync(directory)) throw new Error(`operator directory is missing: ${directory}`);
     const stat = fs.lstatSync(directory);
     if (stat.isSymbolicLink() || !stat.isDirectory()) {
@@ -832,7 +816,6 @@ function operatorEnvironment(values) {
     REVIVAL_CONFIG_DIR: CONFIG_DIR,
     REVIVAL_SECRETS_DIR: SECRETS_DIR,
     REVIVAL_DATA_DIR: DATA_DIR,
-    REVIVAL_BACKUP_DIR: BACKUP_DIR,
     REVIVAL_ENV_FILE: ENV_FILE,
     REVIVAL_PRIVATE_DIR: safeOptionalEnvironment('REVIVAL_PRIVATE_DIR', path.isAbsolute) || SECRETS_DIR,
     REVIVAL_BUILD_DIR: BUILD_DIR,
@@ -898,33 +881,7 @@ function operatorEnvironment(values) {
 }
 
 function localProductionEnvironment(values) {
-  const env = operatorEnvironment(values);
-  const required = {
-    REVIVAL_LOCAL_BASH: 'bash',
-    REVIVAL_LOCAL_NODE: 'node',
-    REVIVAL_LOCAL_PYTHON: 'python3',
-    REVIVAL_LOCAL_GIT: 'git',
-    REVIVAL_LOCAL_SSH: 'ssh',
-    REVIVAL_LOCAL_RSYNC: 'rsync',
-    REVIVAL_LOCAL_AWK: 'awk',
-    REVIVAL_LOCAL_TAR: 'tar',
-  };
-  for (const [name, tool] of Object.entries(required)) env[name] = resolveTool(tool);
-  const sha256sum = resolveTool('sha256sum', { required: false });
-  const shasum = resolveTool('shasum', { required: false });
-  if (!sha256sum && !shasum) {
-    throw new Error('a supported fixed-path sha256sum or shasum is required');
-  }
-  if (sha256sum) env.REVIVAL_LOCAL_SHA256SUM = sha256sum;
-  if (shasum) env.REVIVAL_LOCAL_SHASUM = shasum;
-  env.REVIVAL_LOCAL_AUTHORITY = 'v1';
-  const identity = safeOptionalEnvironment('REVIVAL_SSH_IDENTITY_FILE', path.isAbsolute) ||
-    path.join(LOGIN_HOME, '.ssh', 'id_ed25519');
-  const knownHosts = safeOptionalEnvironment('REVIVAL_SSH_KNOWN_HOSTS_FILE', path.isAbsolute) ||
-    path.join(LOGIN_HOME, '.ssh', 'known_hosts');
-  env.REVIVAL_SSH_IDENTITY_FILE = identity;
-  env.REVIVAL_SSH_KNOWN_HOSTS_FILE = knownHosts;
-  return env;
+  return operatorEnvironment(values);
 }
 
 const TEST_ENVIRONMENT_PASSTHROUGH = new Set([
@@ -1321,7 +1278,7 @@ function testProcessEnvironment(
     XDG_DATA_HOME: xdgData,
     XDG_STATE_HOME: xdgState,
     // Nested disposable-source runners reload this module after XDG_DATA_HOME
-    // has been isolated. Carry the already-authorized outer data root so the
+    // has been isolated. Pass the already-authorized outer data root so the
     // fixed REVIVAL_BUILD_DIR remains inside the same managed boundary.
     REVIVAL_DATA_DIR: DATA_DIR,
     REVIVAL_BUILD_DIR: BUILD_DIR,
@@ -1439,5 +1396,5 @@ function pinBuildEnvironment() {
 }
 
 module.exports = {
-  ROOT, PRODUCT, PROJECT, ENV_EXAMPLE, COMPOSE_BASE, COMPOSE_DEVELOPMENT, PACKAGE_TOOL, PIN_RELEASE_TOOL, PIN_RELEASE_BUILD_TOOL, PIN_RELEASE_SHIP_TOOL, PIN_INSTALL_TOOL, PIN_DOCTOR_TOOL, PKI_TOOL, PIN_ACTIVATION_TOOL, PIN_NETWORK_TOOL, DEPLOY_DIR, TOOLCHAIN_CONFIG, MINIMUM_COMPOSE_VERSION, MANAGED_DIRECTORY_MARKER, DEFAULT_CONFIG_DIR, DEFAULT_SECRETS_DIR, DEFAULT_DATA_DIR, DEFAULT_BACKUP_DIR, CONFIG_DIR, SECRETS_DIR, DATA_DIR, BACKUP_DIR, ENV_FILE, RELEASE_DIR, BUILD_DIR, PIN_SECRET_DIR, PIN_SIGNING_ENV_FILE, PIN_PRIVATE_ASSETS_DIR, COMPATIBILITY_ALIASES, externalPath, canonicalCandidate, isInsideDirectory, isInsideSource, requireExternalDirectory, fail, info, exists, run, hasManagedMarker, isDefaultOperatorDirectory, ensureManagedRoot, secureDirectory, atomicWrite, fillBlankGeneratedSecrets, fillBlankInitializerDefaults, localIdentityRealm, ensureLocalIdentityRealm, initialize, parseEnvFile, parseExportEnvFile, valueOf, isExactBase64Bytes, rejectCompatibilityConflicts, requireValue, isProtectedRegularFile, validateLocalIdentityRealm, validateRuntime, operatorEnvironment, localProductionEnvironment, resolveTool, unsafeTestEnvironmentName, trustedRustupDirectoryRole, validateTrustedRustupHome, resolveTrustedRustupHome, ensureEmptyTestNpmConfig, testProcessEnvironment, cosmosTestEnvironment, validateDisposablePostgresTestUrl, realPostgresTestEnvironment, pinBuildEnvironment,
+  ROOT, PRODUCT, PROJECT, ENV_EXAMPLE, COMPOSE_BASE, COMPOSE_DEVELOPMENT, PIN_RELEASE_TOOL, PIN_RELEASE_BUILD_TOOL, PIN_RELEASE_SHIP_TOOL, PIN_INSTALL_TOOL, PIN_DOCTOR_TOOL, PKI_TOOL, PIN_ACTIVATION_TOOL, PIN_NETWORK_TOOL, DEPLOY_DIR, TOOLCHAIN_CONFIG, MINIMUM_COMPOSE_VERSION, MANAGED_DIRECTORY_MARKER, DEFAULT_CONFIG_DIR, DEFAULT_SECRETS_DIR, DEFAULT_DATA_DIR, CONFIG_DIR, SECRETS_DIR, DATA_DIR, ENV_FILE, BUILD_DIR, PIN_SECRET_DIR, PIN_SIGNING_ENV_FILE, PIN_PRIVATE_ASSETS_DIR, COMPATIBILITY_ALIASES, externalPath, canonicalCandidate, isInsideDirectory, isInsideSource, requireExternalDirectory, fail, info, exists, run, hasManagedMarker, isDefaultOperatorDirectory, ensureManagedRoot, secureDirectory, atomicWrite, fillBlankGeneratedSecrets, fillBlankInitializerDefaults, localIdentityRealm, ensureLocalIdentityRealm, initialize, parseEnvFile, parseExportEnvFile, valueOf, isExactBase64Bytes, rejectCompatibilityConflicts, requireValue, isProtectedRegularFile, validateLocalIdentityRealm, validateRuntime, operatorEnvironment, localProductionEnvironment, resolveTool, unsafeTestEnvironmentName, trustedRustupDirectoryRole, validateTrustedRustupHome, resolveTrustedRustupHome, ensureEmptyTestNpmConfig, testProcessEnvironment, cosmosTestEnvironment, validateDisposablePostgresTestUrl, realPostgresTestEnvironment, pinBuildEnvironment,
 };

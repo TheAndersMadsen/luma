@@ -95,19 +95,11 @@ const DETAILS = Object.freeze({
   'check.cosmos': 'A nonempty TEST_FILTER is verified with Cargo/libtest discovery before every match, including ignored tests, runs. Without a filter, clippy and the full ordinary workspace tests run.',
   'check.platform': 'Runs the fast contributor acceptance suite directly from the working tree. --full dynamically includes every top-level Node acceptance test; CI and release own shell policies.',
   'check.changed': 'Options: --base REF. Uses only origin/HEAD, origin/main, or origin/master automatically; without one it checks the full tracked tree. Safety-sensitive paths run platform --full.',
-  'release.candidate.prepare': 'Requires a native linux/amd64 builder. Builds once from a detached exact commit and seals the release, image bundle, Git identity, toolchains, and production-state contract outside the source tree.',
-  'release.candidate.verify': 'Filesystem-only verification. It never invokes Git, Docker, a shell, or candidate-controlled code.',
-  'release.candidate.inspect': 'Read-only. Reports exact identities and whether the candidate matches the protected legacy production storage contract.',
-  'deploy.production': 'Requires --confirm and exactly one freshly provider-reverified hosted candidate. --dry-run is local-only and cannot be combined with confirmation; local prepared candidates are never deployable.',
-  'deploy.legacy-predecessor': 'One-time only: uses held code from the exact hosted forward candidate to observe and seal the already-running legacy predecessor. It never claims the old images were provider-built and does not stop or change the runtime.',
-  backup: 'Requires --confirm before creating the production backup or fetching its verified off-host copy.',
-  canary: 'Requires --confirm before running production semantic canaries.',
-  rollback: 'Requires --confirm and an exact prior deployment ID. It changes application release state but never restores a database.',
+  'deploy.production': 'Runs the direct Cosmos deployment on this host. Use --dry-run to print the Compose command or --confirm to apply it.',
   'setup.local': 'Selects the local track and recomputes evidence. It does not start containers.',
   'setup.contributor': 'Selects the contributor track and recomputes evidence. It does not run gates.',
   'setup.production': 'Selects the production track. It never connects to or changes a remote host.',
   'setup.pin': 'Selects the Pin track. It never reads from or writes to a device.',
-  'setup.resume': 'Compatibility alias for the selected track checklist; it does not infer completed live actions.',
   'setup.status': 'Options: --json. Shows an ordered checklist; no serial, secret, or completed live action is stored.',
   'config.path': 'Options: --json. Prints the active external runtime configuration path.',
   'config.get': 'Usage: revival config get NAME [--json]. Secret values are reported only as set or unset.',
@@ -117,8 +109,6 @@ const DETAILS = Object.freeze({
   'config.template': 'Options: --group local|production|provider|pin. Omits every secret setting.',
   'support-bundle': 'Options: --output FILE, --json. Writes a fixed, redacted allowlist outside the source tree at mode 0600.',
   version: 'Options: --json. Reads the version stamped into this release.',
-  'adopt-config': 'WITHOUT --confirm this only PLANS. A confirmation requires --reason and applies to the pending/current deployment baseline named by the plan.',
-  'prune-state': 'Without --confirm this only plans retention. Use --expect-plan with confirmation to bind the exact reviewed plan.',
   'pki.init': 'Usage: revival pki init device-user [--confirm]. Plans unless --confirm is supplied; never changes the attestation CA.',
   'pki.import': 'Usage: revival pki import device-user --cert FILE --key FILE [--confirm]. Plans unless confirmed.',
   'pin.activate': 'Usage: revival pin activate --serial SERIAL --credential-file FILE --edge-ipv4 A.B.C.D [--confirm]. Exact serial and confirmation are enforced by the activation tool.',
@@ -141,7 +131,7 @@ function safetyText(command) {
     return 'Safety: device mutation requires --confirm and an exact --serial; the delegated tool revalidates both.';
   }
   if (command.effect === 'remote-mutation') {
-    if (['adopt-config', 'prune-state', 'pin.release.ship'].includes(command.id)) {
+    if (command.id === 'pin.release.ship') {
       return 'Safety: this remote mutation plans first and changes state only with --confirm.';
     }
     return command.confirmationRequired
@@ -172,7 +162,6 @@ function childEntries(prefix, contract) {
 function renderRootHelp(contract) {
   const top = childEntries([], contract);
   const width = Math.max(...top.map(([name]) => name.length), 1);
-  const backupUsage = findCommand(['backup'], contract)?.command.usage;
   return [
     'Ai Pin Revival',
     '',
@@ -184,9 +173,6 @@ function renderRootHelp(contract) {
     'Short local aliases: build, up, down, status, logs, config.',
     'Pin host operations (no device mutation) are under `revival pin`; device actions plan unless explicitly confirmed.',
     '  revival pin release build --version YYYY-MM-DD.N --version-code INTEGER',
-    '  revival adopt-config [--confirm --reason TEXT [--expect-plan TOKEN]]',
-    ...(backupUsage ? [`  ${backupUsage}`] : []),
-    '`backup --fetch` creates the off-host copy of irreplaceable key material.',
     '',
     'Safety: help is read-only and side-effect-free. Each command help names whether it reads state or mutates local, remote, or device state.',
     '',
@@ -201,7 +187,7 @@ function renderGroupHelp(tokens, contract) {
   const defaultCommand = findCommand(tokens, contract)?.command || null;
   const notes = [];
   if (heading === 'pin release') notes.push('Pin release host contract (read-only). Ship still plans until explicitly confirmed.');
-  if (heading === 'config') notes.push('Bare `revival config` retains its compatibility behavior: render the Compose model.');
+  if (heading === 'config') notes.push('Bare `revival config` renders the Compose model.');
   if (heading === 'pin') notes.push('Device mutation requires an exact serial and explicit confirmation in the delegated tool.');
   return [
     defaultCommand
@@ -241,8 +227,8 @@ function renderCommandHelp(command) {
 function renderHelp(tokens = []) {
   const contract = operatorContract();
   if (tokens.length === 0) return renderRootHelp(contract);
-  // A prefix with children is a group even when it is also a compatibility
-  // alias (`config`), because help must expose the discoverable new surface.
+  // A prefix with children is a group even when it is also the bare `config`
+  // command, because help must expose the discoverable subcommands.
   if (isGroup(tokens, contract)) return renderGroupHelp(tokens, contract);
   const resolved = findCommand(tokens, contract);
   if (resolved) return renderCommandHelp(resolved.command);

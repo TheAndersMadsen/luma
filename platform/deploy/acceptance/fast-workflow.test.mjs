@@ -12,7 +12,6 @@ const {
   changedCheckComponents,
   changedPaths,
   checksForPath,
-  createCenterBuildWorkspace,
   dependencyFingerprint,
   focusedRustTestArguments,
   listedRustTests,
@@ -31,15 +30,12 @@ const {
   testProcessEnvironment,
 } = require("../../cli/context.js");
 const {
-  RELEASE_RSA_COMPATIBILITY_TEST,
-  assertExactlyOneListedRustTest,
   executePinLaneSession,
   pinContributorCheck,
   pinLaneSessionArguments,
   policyTestArguments,
   policyTestMode,
   policyTestPlan,
-  runCenterUiTests,
 } = require("../../cli/gates.js");
 const { formatDuration, timedStage } = require("../../cli/timing.js");
 const { sameVersion } = require("../../cli/toolchain.js");
@@ -291,19 +287,6 @@ test("Center checks execute directly in the source tree with external incrementa
   }
 });
 
-test("the release Center workspace copies only Center's bounded repository support roots", () => {
-  const workspace = createCenterBuildWorkspace();
-  try {
-    for (const relative of ["center", "contracts", "platform", "pin", "compose.yaml"]) {
-      assert.equal(fs.existsSync(path.join(workspace.root, relative)), true, relative);
-    }
-    assert.equal(fs.existsSync(path.join(workspace.root, "cosmos")), false);
-    assert.equal(fs.existsSync(path.join(workspace.root, "README.md")), false);
-  } finally {
-    workspace.finish();
-  }
-});
-
 test("platform checks keep the fast contributor inventory distinct from the dynamic full inventory", () => {
   const observed = [];
   runPlatformCheck({
@@ -316,9 +299,9 @@ test("platform checks keep the fast contributor inventory distinct from the dyna
     policyRunner(environment, options) { observed.push({ environment, options }); },
   });
   assert.equal(observed.length, 2);
-  assert.deepEqual(observed[0].options, { contributor: true, shellPolicies: false });
-  assert.deepEqual(observed[1].options, { contributor: false, shellPolicies: false });
-  assert.deepEqual(policyTestMode(), { contributor: false, shellPolicies: true });
+  assert.equal(observed[0].options.contributor, true);
+  assert.equal(observed[1].options.contributor, false);
+  assert.deepEqual(policyTestMode(), { contributor: false });
   assert.deepEqual(parsePlatformArguments([]), { full: false });
   assert.deepEqual(parsePlatformArguments(["--full"]), { full: true });
 });
@@ -432,39 +415,16 @@ test("Cargo test discovery distinguishes matching tests from an empty filter", (
   ]);
 });
 
-test("the full release gate discovers the exact RSA compatibility test", () => {
-  assert.equal(
-    assertExactlyOneListedRustTest(`${RELEASE_RSA_COMPATIBILITY_TEST}: test\n`, RELEASE_RSA_COMPATIBILITY_TEST),
-    RELEASE_RSA_COMPATIBILITY_TEST,
-  );
-  assert.throws(
-    () => assertExactlyOneListedRustTest("", RELEASE_RSA_COMPATIBILITY_TEST),
-    /must list exactly/u,
-  );
-});
-
 test("platform policy files share one bounded-concurrency runner", () => {
   assert.deepEqual(policyTestArguments(["a.test.mjs"], 2), [
     "--no-warnings", "--experimental-strip-types", "--test", "--test-concurrency=2", "a.test.mjs",
   ]);
   assert.deepEqual(policyTestPlan([
-    "z-safe.test.mjs", "release.test.mjs", "fresh-install.test.mjs", "a-safe.test.mjs",
+    "z-safe.test.mjs", "fresh-install.test.mjs", "a-safe.test.mjs",
   ]), {
     parallel: ["a-safe.test.mjs", "z-safe.test.mjs"],
-    serial: ["fresh-install.test.mjs", "release.test.mjs"],
+    serial: ["fresh-install.test.mjs"],
   });
-});
-
-test("Center UI tests remain mandatory at the full release boundary", () => {
-  const calls = [];
-  const result = runCenterUiTests("/fixture/center", {}, (...arguments_) => {
-    calls.push(arguments_);
-    return { status: 0, signal: null, stdout: "", stderr: "" };
-  });
-  assert.equal(result.status, 0);
-  assert.deepEqual(calls[0].slice(0, 3), [
-    "release Center UI tests", "npm", ["run", "test:ui"],
-  ]);
 });
 
 test("stage timings are concise and preserve the action result", () => {

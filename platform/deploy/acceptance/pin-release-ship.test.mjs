@@ -3339,7 +3339,7 @@ test("a successful rsync exit cannot bypass the far-side SHA-256 gate", async (t
   assert.deepEqual(await readdir(served), ["releases"]);
 });
 
-test("the remote invocation and rsync endpoints are quoted, bounded, and carry no secrets", async () => {
+test("the remote invocation and rsync endpoints are quoted, bounded, and contain no secrets", async () => {
   const shipSource = await readFile(SHIP_TOOL, "utf8");
   assert.equal(shipSource.includes('payload_file="$(mktemp)"'), false);
   assert.equal(shipSource.includes("REVIVAL_PIN_PAYLOAD"), false);

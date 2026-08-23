@@ -622,13 +622,14 @@ impl Store for PostgresStore {
             // creates no state, matching the in-memory store. The DELETE's own
             // row count answers that, so there is no separate SELECT to race
             // against.
-            let removed = sqlx::query("DELETE FROM cosmos_contact WHERE principal = $1 AND id = $2")
-                .bind(principal)
-                .bind(id)
-                .execute(&mut *tx)
-                .await
-                .map_err(|_| StoreError::Unavailable)?
-                .rows_affected();
+            let removed =
+                sqlx::query("DELETE FROM cosmos_contact WHERE principal = $1 AND id = $2")
+                    .bind(principal)
+                    .bind(id)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(|_| StoreError::Unavailable)?
+                    .rows_affected();
             if removed == 0 {
                 continue;
             }

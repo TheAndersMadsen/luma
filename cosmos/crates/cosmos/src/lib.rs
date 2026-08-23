@@ -160,14 +160,6 @@ where
         } else {
             None
         };
-    // Reconcile the former dual-written snapshot before either the HTTP or gRPC
-    // plane is started. Every legacy row must already match PostgreSQL; then
-    // only the redundant local channel map is durably stripped. A local-only or
-    // mismatched row fails startup rather than being resurrected into the one
-    // authority. The wrapping key remains in the snapshot.
-    if let (Some(directory), Some(material)) = (&ai_bus_keys, &ai_bus_key_material) {
-        directory.reconcile_legacy_key_material(material).await?;
-    }
     let http_app = if demo_enabled {
         http::demo_router(
             readiness.clone(),

@@ -40,7 +40,7 @@ if (rawArgs[0] === '--version' || rawArgs[0] === 'version') {
 
 const { PKI_TOOL, fail, initialize, resolveTool, run } = require('./platform/cli/context');
 const { developmentCommand, localDoctor, stack } = require('./platform/cli/stack');
-const { releaseCheck } = require('./platform/cli/gates');
+const { repositoryCheck } = require('./platform/cli/gates');
 const { checkCommand } = require('./platform/cli/checks');
 const {
   deployProduction,
@@ -97,7 +97,7 @@ runTimedBoundary(() => {
     if (args.length > 1 || (args.length === 1 && args[0] !== '--source')) {
       fail('usage: ./revival test [--source]', 64);
     }
-    releaseCheck({ source: args[0] === '--source' });
+    repositoryCheck({ source: args[0] === '--source' });
   } else {
     fail(`unknown command: ${command}`);
   }

@@ -88,7 +88,7 @@ test("DeviceUser init plans without mutation, then creates a validated protected
     { requireSelfSigned: true },
   );
   assert.equal(metadata.fingerprintSha256, result.metadata.fingerprintSha256);
-  assert.match(metadata.subject, /CN=Carry Clone DeviceUser CA/u);
+  assert.match(metadata.subject, /CN=Cosmos DeviceUser CA/u);
   assert.equal(pkiStatus(captured.runtime).state, "ready");
   const retained = [paths.certificate, paths.key].map((path) => {
     const metadata = lstatSync(path, { bigint: true });

@@ -33,6 +33,6 @@ graph LR
   Observe -.->|"metrics"| Cosmos
   Observe -.->|"metrics"| Center
 
-  Tooling["Platform tooling<br/>build · deploy · backup · canary<br/>drift · rollback"] -.->|"operates"| Nginx
+  Tooling["Platform tooling<br/>build · check · deploy"] -.->|"operates"| Nginx
   Tooling -.->|"operates"| Center
   Tooling -.->|"operates"| Cosmos

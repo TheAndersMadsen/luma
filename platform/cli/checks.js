@@ -24,9 +24,6 @@ const COSMOS_PLATFORM_BOUNDARY = new Set([
 const FULL_PLATFORM_ROOT_PATHS = new Set([
   '.dockerignore', '.env.example', '.gitignore', 'compose.yaml', 'revival', 'rust-toolchain.toml',
 ]);
-const CENTER_RELEASE_SOURCE_PATHS = Object.freeze([
-  'center', 'contracts', 'platform', 'pin', 'compose.yaml',
-]);
 
 function requiredCommands(commands, label, environment = testProcessEnvironment()) {
   for (const command of commands) if (!exists(command, environment)) fail(`${label} requires ${command}`);
@@ -182,33 +179,6 @@ function prepareNpmDependencies(project, namespace, npmVersion, environment, run
   });
 }
 
-// The full release gate still needs a disposable location for `next build`.
-// Contributor checks never call this helper and execute against ROOT directly.
-function createCenterBuildWorkspace() {
-  secureDirectory(BUILD_DIR);
-  const parent = path.join(BUILD_DIR, 'release-center-workspaces');
-  secureDirectory(parent);
-  const container = fs.mkdtempSync(path.join(parent, 'run-'));
-  fs.chmodSync(container, 0o700);
-  const root = path.join(container, 'source');
-  const center = path.join(root, 'center');
-  fs.mkdirSync(root, { mode: 0o700 });
-  const filter = (source) => !path.relative(ROOT, source).replaceAll('\\', '/').split('/')
-    .some((entry) => [
-      '.git', '.gradle', '.kotlin', '.next', '__pycache__',
-      'build', 'coverage', 'node_modules', 'target',
-    ].includes(entry));
-  for (const relative of CENTER_RELEASE_SOURCE_PATHS) {
-    fs.cpSync(path.join(ROOT, relative), path.join(root, relative), { recursive: true, filter });
-  }
-  return {
-    root,
-    center,
-    spotify: path.join(center, 'adapters', 'spotify'),
-    finish() { fs.rmSync(container, { recursive: true, force: true, maxRetries: 3 }); },
-  };
-}
-
 function runCenterCheck(dependencies = {}) {
   const environment = dependencies.environment ?? testProcessEnvironment(process.env, {
     NEXT_TELEMETRY_DISABLED: '1',
@@ -280,10 +250,7 @@ function runPlatformCheck(dependencies = {}) {
   const full = dependencies.full === true;
   requiredCommands(['node'], 'Platform check', environment);
   try { validateHostToolchains({ includeRust: false, env: environment }); } catch (error) { fail(error.message); }
-  (dependencies.policyRunner ?? policyTests)(environment, {
-    contributor: !full,
-    shellPolicies: false,
-  });
+  (dependencies.policyRunner ?? policyTests)(environment, { contributor: !full });
   info(full
     ? '[implemented] full platform Node acceptance inventory passed from the working tree.'
     : '[implemented] contributor platform acceptance checks passed from the working tree.');
@@ -323,9 +290,6 @@ function checksForPath(file) {
   if (normalized.startsWith('platform/containers/observability/')) return orderedChecks('platform', 'center', 'cosmos');
   if (normalized.startsWith('platform/compose/') || normalized.startsWith('platform/deploy/vps/') ||
       normalized.startsWith('platform/edge/')) return orderedChecks('platform', 'center', 'cosmos');
-  if (normalized === 'platform/deploy/release.json' || normalized === 'platform/deploy/release.mjs') {
-    return orderedChecks(...ALL_CHECKS);
-  }
   if (normalized.startsWith('platform/setup/') || normalized.startsWith('platform/contracts/')) {
     return orderedChecks('platform', 'center');
   }
@@ -465,7 +429,7 @@ function checkCommand(args) {
 
 module.exports = {
   changedCheckComponents, changedPaths, checkCommand, checksForPath,
-  createCenterBuildWorkspace, defaultBaseCommit, dependencyFingerprint,
+  defaultBaseCommit, dependencyFingerprint,
   exactNpmVersion, focusedRustTestArguments, listedRustTests,
   normalizedNpmInstallEnvironment, parseChangedArguments, parseCosmosArguments, parsePlatformArguments,
   prepareNpmDependencies, runCenterCheck, runCosmosCheck, runPlatformCheck,

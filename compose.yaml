@@ -2,8 +2,7 @@ name: ai-pin-revival
 
 # Canonical application model. Environment-specific policy belongs in
 # platform/compose/development.yaml or platform/compose/production.yaml.
-# REVIVAL_RELEASE_ID is deliberately mandatory: Center and every Cosmos
-# workload are built, labelled, and run from one immutable release identity.
+# REVIVAL_RELEASE_ID labels the source revision used for a deployment.
 
 x-revival-image-labels: &revival-image-labels
   dk.andersmadsen.ai-pin-revival.product: Ai Pin Revival
@@ -29,8 +28,7 @@ x-cosmos-environment: &cosmos-environment
   COSMOS_REQUEST_TIMEOUT_MS: ${COSMOS_REQUEST_TIMEOUT_MS:-15000}
   COSMOS_REVISION: ${REVIVAL_REVISION:-${REVIVAL_RELEASE_ID:?set REVIVAL_RELEASE_ID to the immutable release id}}
   COSMOS_SHUTDOWN_GRACE_MS: ${COSMOS_SHUTDOWN_GRACE_MS:-5000}
-  # `carry.local` is the deployed legacy trust-domain ABI.
-  COSMOS_TRUST_DOMAIN: ${COSMOS_TRUST_DOMAIN:-carry.local}
+  COSMOS_TRUST_DOMAIN: ${COSMOS_TRUST_DOMAIN:-cosmos.local}
   COSMOS_STATE_DIR: /var/lib/cosmos
   COSMOS_OIDC_ISSUER: ${COSMOS_OIDC_ISSUER:-}
   COSMOS_OIDC_JWKS_URI: ${COSMOS_OIDC_JWKS_URI:-}
@@ -129,9 +127,7 @@ services:
       COSMOS_INSTANCE_ID: ai-bus-${REVIVAL_REVISION:-${REVIVAL_RELEASE_ID}}
       COSMOS_POD_NAME: ai-bus-${REVIVAL_REVISION:-${REVIVAL_RELEASE_ID}}-1
       COSMOS_WORKLOAD: ai-bus
-      # Explicit compatibility mode. Production overrides this with a required
-      # protected value; use `enforce` after legacy wearer ids are reconciled.
-      COSMOS_KID_SCOPE: ${COSMOS_KID_SCOPE:-audit}
+      COSMOS_KID_SCOPE: ${COSMOS_KID_SCOPE:-enforce}
       COSMOS_ADMIN_TOKEN: ${COSMOS_ADMIN_TOKEN:-}
       COSMOS_CENTER_PROJECTION_TOKEN: ${COSMOS_CENTER_PROJECTION_TOKEN:-}
       COSMOS_DEMO_ENABLED: ${COSMOS_DEMO_ENABLED:-false}
@@ -236,7 +232,7 @@ services:
       REVIVAL_PRODUCT: Ai Pin Revival
       REVIVAL_RELEASE_ID: ${REVIVAL_RELEASE_ID:?set REVIVAL_RELEASE_ID to the immutable release id}
       REVIVAL_DEPLOYMENT_ENVIRONMENT: ${REVIVAL_DEPLOYMENT_ENVIRONMENT:-production}
-      # A signed-in browser sends the legacy `carry_tokens` set back on every
+      # A signed-in browser sends the `cosmos_tokens` set back on every
       # request, so the Cookie line alone can reach ~12.5 KB. Node's default
       # 16 KB cap covers the whole request header block, which also carries the
       # edge's X-Forwarded-* set and Cloudflare's cf-* headers, so the default

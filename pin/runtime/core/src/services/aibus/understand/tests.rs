@@ -2064,7 +2064,7 @@ fn visual_state_ids_bind_to_the_canonical_repaired_current_turn() {
         None
     );
 
-    let legacy_inline = SynapseUnderstandingRequest {
+    let previous_inline = SynapseUnderstandingRequest {
         utterance: "what is this?".into(),
         device_context: Some(SynapseDeviceContext {
             turns: vec![SynapseChatTurn {
@@ -2085,11 +2085,11 @@ fn visual_state_ids_bind_to_the_canonical_repaired_current_turn() {
         ..Default::default()
     };
     assert_eq!(
-        validated_inline_image_id(&legacy_inline, "legacy-inline"),
+        validated_inline_image_id(&previous_inline, "legacy-inline"),
         Some("legacy-inline")
     );
 
-    let mut mismatch = legacy_inline;
+    let mut mismatch = previous_inline;
     let Some(synapse_chat_turn::Content::UserRequest(current)) = mismatch
         .device_context
         .as_mut()
@@ -3073,7 +3073,7 @@ fn request_location_restores_stock_situation_location_fallback() {
 
 #[test]
 #[allow(deprecated)]
-fn request_location_accepts_valid_legacy_coordinates_but_not_defaults() {
+fn request_location_accepts_valid_previous_coordinates_but_not_defaults() {
     let legacy = situation_request(SynapseUserSituation {
         latitude: 55.3,
         longitude: 12.3,
@@ -5011,13 +5011,13 @@ fn mention_only_location_text_never_enters_restricted_location_routing() {
 }
 
 #[test]
-fn locked_legacy_clock_setting_does_not_gate_restored_clock_actions() {
-    let legacy_gate = crate::feature_flags::settings_global_feature_gate_spec(
+fn locked_previous_clock_setting_does_not_gate_restored_clock_actions() {
+    let previous_gate = crate::feature_flags::settings_global_feature_gate_spec(
         settings_global_feature_flags::CLOCK_ENABLED,
     )
     .expect("the exact installed Settings.Global key must stay registered");
-    assert!(!legacy_gate.default);
-    assert!(!legacy_gate.writable);
+    assert!(!previous_gate.default);
+    assert!(!previous_gate.writable);
 
     for (utterance, expected_action) in [
         ("set a timer for five minutes", native_actions::TIMER),

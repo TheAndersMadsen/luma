@@ -8,7 +8,7 @@
 //!
 //! Open Food Facts' current v3 API supports product-by-barcode reads, but not
 //! full-text search. The isolated name-search path therefore uses the documented
-//! legacy `/cgi/search.pl` endpoint. Official references:
+//! documented `/cgi/search.pl` endpoint. Official references:
 //! - <https://openfoodfacts.github.io/documentation/docs/Product-Opener/api/>
 //! - <https://openfoodfacts.github.io/openfoodfacts-server/api/ref-cheatsheet/>
 
@@ -25,7 +25,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value};
 
 const PRODUCT_ENDPOINT: &str = "https://world.openfoodfacts.org/api/v3/product/";
-const LEGACY_SEARCH_ENDPOINT: &str = "https://world.openfoodfacts.org/cgi/search.pl";
+const NAME_SEARCH_ENDPOINT: &str = "https://world.openfoodfacts.org/cgi/search.pl";
 const PRODUCT_FIELDS: &str = "code,product_name,brands,serving_size,nutriments";
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_RESPONSE_BYTES: usize = 256 * 1024;
@@ -225,7 +225,7 @@ pub struct OpenFoodFactsClient {
     options: OpenFoodFactsOptions,
     user_agent: HeaderValue,
     product_endpoint: Url,
-    legacy_search_endpoint: Url,
+    name_search_endpoint: Url,
     search_rate_limiter: Arc<tokio::sync::Mutex<SearchRateLimiter>>,
 }
 
@@ -259,14 +259,14 @@ impl OpenFoodFactsClient {
         }
         let product_endpoint =
             Url::parse(PRODUCT_ENDPOINT).map_err(|_| OpenFoodFactsError::InvalidConfiguration)?;
-        let legacy_search_endpoint = Url::parse(LEGACY_SEARCH_ENDPOINT)
+        let name_search_endpoint = Url::parse(NAME_SEARCH_ENDPOINT)
             .map_err(|_| OpenFoodFactsError::InvalidConfiguration)?;
         Ok(Self {
             http,
             options,
             user_agent,
             product_endpoint,
-            legacy_search_endpoint,
+            name_search_endpoint,
             search_rate_limiter: Arc::new(tokio::sync::Mutex::new(SearchRateLimiter::default())),
         })
     }
@@ -289,7 +289,7 @@ impl OpenFoodFactsClient {
 
     #[cfg(test)]
     pub(crate) fn with_test_search_endpoint(mut self, endpoint: &str) -> Self {
-        self.legacy_search_endpoint = Url::parse(endpoint).expect("valid test search endpoint");
+        self.name_search_endpoint = Url::parse(endpoint).expect("valid test search endpoint");
         self
     }
 
@@ -345,7 +345,7 @@ impl OpenFoodFactsClient {
     }
 
     /// Full-text product-name search is intentionally isolated here because
-    /// Open Food Facts documents it as a legacy-only capability. Callers invoke
+    /// Open Food Facts documents it as a documented-only capability. Callers invoke
     /// this once for a completed voice request, never for search-as-you-type.
     pub async fn lookup_name(&self, input: &str) -> Result<Vec<FoodProduct>, OpenFoodFactsError> {
         let query = validate_name_query(input)?;
@@ -363,7 +363,7 @@ impl OpenFoodFactsClient {
             return Err(OpenFoodFactsError::RateLimited);
         }
 
-        let mut url = self.legacy_search_endpoint.clone();
+        let mut url = self.name_search_endpoint.clone();
         if url.cannot_be_a_base() || url.fragment().is_some() || url.query().is_some() {
             return Err(OpenFoodFactsError::InvalidConfiguration);
         }
@@ -375,7 +375,7 @@ impl OpenFoodFactsClient {
             .append_pair("page", "1")
             .append_pair("page_size", &MAX_SEARCH_RESULTS.to_string())
             .append_pair("fields", PRODUCT_FIELDS);
-        if !same_origin(&url, &self.legacy_search_endpoint) {
+        if !same_origin(&url, &self.name_search_endpoint) {
             return Err(OpenFoodFactsError::InvalidConfiguration);
         }
 
@@ -389,7 +389,7 @@ impl OpenFoodFactsClient {
             .map_err(|_| OpenFoodFactsError::Transport)?;
         // Production construction disables redirects. Keep this check as a
         // second boundary for tests or callers that inject their own client.
-        if !same_origin(response.url(), &self.legacy_search_endpoint) {
+        if !same_origin(response.url(), &self.name_search_endpoint) {
             return Err(OpenFoodFactsError::ProviderUnavailable);
         }
 
@@ -1004,7 +1004,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn explicit_name_lookup_is_a_bounded_legacy_get() {
+    async fn explicit_name_lookup_is_a_bounded_get() {
         let body = serde_json::json!({
             "products": [
                 {"product_name":"Apple","brands":"Orchard"},

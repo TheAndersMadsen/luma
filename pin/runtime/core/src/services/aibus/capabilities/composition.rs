@@ -984,7 +984,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn compose_and_legacy_summary_return_stock_responses() {
+    async fn compose_and_previous_summary_return_stock_responses() {
         let service = service([Ok(ChatResult::Text(
             r#"{"formal":"I will arrive shortly.","casual":"Be there soon!"}"#.into(),
         ))]);

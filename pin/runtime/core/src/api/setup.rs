@@ -63,9 +63,6 @@ pub(super) fn router() -> Router {
         .route("/setup", get(setup_redirect))
         .route("/setup/", get(setup_index))
         .route("/setup/{*path}", get(setup_path))
-        .route("/center", get(setup_redirect))
-        .route("/center/", get(setup_redirect))
-        .route("/center/{*path}", get(setup_path))
 }
 
 async fn root_redirect() -> Redirect {
@@ -339,8 +336,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn roots_and_legacy_center_redirect_to_setup_directory() {
-        for path in ["/", "/setup", "/center", "/center/"] {
+    async fn root_and_setup_redirect_to_setup_directory() {
+        for path in ["/", "/setup"] {
             let response = response(path).await;
             assert_eq!(response.status(), StatusCode::PERMANENT_REDIRECT);
             assert_eq!(

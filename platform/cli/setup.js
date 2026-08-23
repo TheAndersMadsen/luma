@@ -74,13 +74,13 @@ function setupCommand(args) {
       selectSetupTrack(operation);
       return printSetupReport(setupReport(operation), json);
     }
-    if (operation === 'status' || operation === '--resume') {
+    if (operation === 'status') {
       const json = parseJsonOnly(args, `./revival setup ${operation} [--json]`);
       const state = readSetupState();
       if (!state) fail('no setup journey is selected; run ./revival setup local|contributor|production|pin', 64);
       return printSetupReport(setupReport(state.selectedTrack), json);
     }
-    fail('usage: ./revival setup local|contributor|production|pin [--json] | status [--json] | --resume [--json]', 64);
+    fail('usage: ./revival setup local|contributor|production|pin [--json] | status [--json]', 64);
   } catch (error) {
     fail(error.message);
   }

@@ -30,7 +30,7 @@
  *     of silently comparing equal — an install decision hangs off that value.
  *
  *   decideInstallMigration — the fail-closed gate in front of the mutation.
- *     Only an exactly recognised legacy or canonical package profile, on an
+ *     Only an exactly recognised previous or canonical package profile, on an
  *     unlocked and recognised Pin with no conflicts and a verified target, may
  *     proceed; every other shape is "blocked".
  *
@@ -60,7 +60,7 @@ const { inspectInstallState } = await import(
 const { classifyInstalledVersion, compareInstallVersions, parseInstallVersion } = await import(
   `../src/lib/pin-install/domain/versions.ts${QUERY}`
 );
-const { decideInstallMigration, LEGACY_MIGRATION_PROFILE } = await import(
+const { decideInstallMigration, PIN_RELEASE_SIGNER_IDENTITY } = await import(
   `../src/lib/pin-install/domain/migrationDecision.ts${QUERY}`
 );
 const { isRecognizedAiPin } = await import(
@@ -336,8 +336,8 @@ test("inspectInstallState detects known conflicting package groups by wildcard p
       readinessSettleDelayMs: 0,
       knownPackageConflicts: [
         {
-          id: "legacy-suite",
-          label: "Legacy Suite",
+          id: "previous-suite",
+          label: "Previous Suite",
           packageIds: ["conflict.one", "conflict.two*"],
           cleanupCommands: [],
         },
@@ -360,7 +360,7 @@ test("inspectInstallState detects known conflicting package groups by wildcard p
     })),
     [
       {
-        id: "legacy-suite",
+        id: "previous-suite",
         installedPackageIds: ["conflict.one", "conflict.two.alpha"],
         cleanupCommands: [],
       },
@@ -423,15 +423,11 @@ const PACKAGE_BY_ROLE = {
   injector: MANAGED_PACKAGES.injector,
 };
 
-/*
- * A package as the migration gate sees it, at the legacy baseline.
- *
- * The version names are read from LEGACY_MIGRATION_PROFILE rather than written
- * out here: the profile is the device description this decision exists to
- * recognise, and a copy in the test would only prove the copy matched itself.
- */
+const EXISTING_RELEASE_VERSION = "2026-04-28.0";
+
+/** A healthy managed package from the previous published release. */
 function snapshot(role, target, overrides = {}) {
-  const versionName = LEGACY_MIGRATION_PROFILE.versions[role];
+  const versionName = EXISTING_RELEASE_VERSION;
   const packageName = PACKAGE_BY_ROLE[role];
   return {
     role,
@@ -439,13 +435,13 @@ function snapshot(role, target, overrides = {}) {
     installed: true,
     healthy: true,
     versionName,
-    signerIdentity: LEGACY_MIGRATION_PROFILE.signerIdentity,
+    signerIdentity: PIN_RELEASE_SIGNER_IDENTITY,
     versionReadable: true,
     querySucceeded: true,
     rawOutput: `versionName=${versionName}`,
     targetVersion: target.version,
-    versionComparison: "unreadable",
-    // The baseline device runs every managed package from the path the system
+    versionComparison: "older",
+    // The installed device runs every managed package from the path the system
     // injector owns, under the system app id. This is not decoration: the
     // installer on the Pin refuses a keep-data update for any other artifact,
     // so a fixture without it describes a device that cannot be updated at all.
@@ -511,27 +507,20 @@ function inspection(options = {}) {
   };
 }
 
-/*
- * The legacy profile describes one real device — the operator-owned Pin the
- * first canonical migration was written for — by versionName and signer. Being
- * able to recognise it is the whole point of the profile: the installer that is
- * already there is what grants the install, so it is retained by identity
- * rather than replaced.
- */
-test("decideInstallMigration recognizes the exact observed legacy profile and retains its installer", () => {
+test("decideInstallMigration updates a previous release and retains its installer", () => {
   const target = createResolvedInstallTargetFixture();
   const result = decideInstallMigration({ target, inspection: inspection({ target }) });
 
-  assert.equal(result.kind, "legacy-in-place");
+  assert.equal(result.kind, "routine-in-place");
   assert.deepEqual(result.rolesToInstall, IN_PLACE_ROLES);
   assert.deepEqual(result.retainedInstaller, {
     packageName: MANAGED_PACKAGES.installer,
-    versionName: "cosmos-2026.08.07",
+    versionName: EXISTING_RELEASE_VERSION,
     signerIdentity: "dd07f452",
   });
 });
 
-test("a mechanically renamed Cosmos profile cannot replace the deployed legacy identity", () => {
+test("an unparseable package version is not accepted as a release", () => {
   const target = createResolvedInstallTargetFixture();
   const result = decideInstallMigration({
     target,
@@ -551,7 +540,7 @@ test("a mechanically renamed Cosmos profile cannot replace the deployed legacy i
   assert.equal(result.retainedInstaller, null);
 });
 
-test("decideInstallMigration resumes only the bounded legacy roles that are not canonical yet", () => {
+test("decideInstallMigration resumes only release roles that still need updating", () => {
   const target = createResolvedInstallTargetFixture();
   const result = decideInstallMigration({
     target,
@@ -573,7 +562,7 @@ test("decideInstallMigration resumes only the bounded legacy roles that are not 
     }),
   });
 
-  assert.equal(result.kind, "legacy-in-place");
+  assert.equal(result.kind, "routine-in-place");
   assert.deepEqual(result.rolesToInstall, ["server", "injector"]);
 });
 
@@ -662,7 +651,7 @@ test("decideInstallMigration blocks an unsupported version baseline for any role
   }
 });
 
-test("decideInstallMigration blocks an unhealthy legacy runtime package", () => {
+test("decideInstallMigration blocks an unhealthy previous runtime package", () => {
   const target = createResolvedInstallTargetFixture();
   for (const role of IN_PLACE_ROLES) {
     const result = decideInstallMigration({
@@ -672,7 +661,7 @@ test("decideInstallMigration blocks an unhealthy legacy runtime package", () => 
         packageOverrides: { [role]: { healthy: false } },
       }),
     });
-    assert.equal(result.kind, "blocked", `unhealthy legacy ${role} runtime`);
+    assert.equal(result.kind, "blocked", `unhealthy previous ${role} runtime`);
   }
 });
 
@@ -1075,7 +1064,7 @@ test("decideInstallMigration plans an in-place update only while the injector ow
       packageOverrides: { server: { baseApkPath: INJECTED_SERVER_PATH } },
     }),
   });
-  assert.equal(owned.kind, "legacy-in-place");
+  assert.equal(owned.kind, "routine-in-place");
   assert.ok(owned.rolesToInstall.includes("server"));
 
   const foreign = decideInstallMigration({
@@ -1161,7 +1150,7 @@ test("decideInstallMigration checks the APK path only for packages it is about t
     }),
   });
 
-  assert.equal(result.kind, "legacy-in-place");
+  assert.equal(result.kind, "routine-in-place");
   assert.deepEqual(result.rolesToInstall, ["hook", "injector"]);
 });
 
@@ -1322,13 +1311,11 @@ test("isRecognizedAiPin requires exact manufacturer and model matches", () => {
   assert.equal(isRecognizedAiPin({ manufacturer: undefined, model: "Ai Pin" }), false);
 });
 
-test("decideInstallMigration resumes a device left mid-migration by an interrupted install", () => {
+test("decideInstallMigration resumes a device left mid-update by an interrupted install", () => {
   // The state this Pin was actually in: hook and injector updated to a PREVIOUS
-  // published release, the server gone, the installer still legacy. An install
+  // published release and the server gone. An install
   // that pushes 200 MiB per role and restarts system_server has a real window in
   // which to be interrupted, so this is an ordinary outcome, not an exotic one.
-  // Admitting only "the legacy version or the exact target" left such a device
-  // permanently blocked by the rule meant to protect it.
   const target = createResolvedInstallTargetFixture();
   const result = decideInstallMigration({
     target,
@@ -1354,7 +1341,7 @@ test("decideInstallMigration resumes a device left mid-migration by an interrupt
     }),
   });
 
-  assert.equal(result.kind, "legacy-in-place");
+  assert.equal(result.kind, "routine-in-place");
   assert.deepEqual(result.rolesToInstall, IN_PLACE_ROLES);
 });
 

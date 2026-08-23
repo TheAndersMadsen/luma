@@ -16,7 +16,6 @@ class PersistentConfigVaultFormatTest {
                 "[dev]\napk_install_enabled = false\n".toByteArray(),
             )
             put(
-                PersistentConfigVaultFormat.LEGACY_ROTATION_FILE_NAME,
                 "version=1\nstate=complete\n".toByteArray(),
             )
             put(

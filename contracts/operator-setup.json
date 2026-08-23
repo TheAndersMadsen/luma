@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "contractId": "operator-setup",
-  "contractVersion": "1.2.0",
+  "contractVersion": "2.0.0",
   "mutationPolicies": {
     "read-only": {
       "confirmationRequired": false,
@@ -60,8 +60,8 @@
       "effect": "read-only",
       "confirmationRequired": false,
       "exactSerialRequired": false,
-      "summary": "Check production prerequisites without changing the server.",
-      "usage": "revival doctor production [options]",
+      "summary": "Validate the production Compose configuration on this host.",
+      "usage": "revival doctor production [--env-file FILE] [--project-name NAME]",
       "documentationAnchor": "docs/operations.md#production"
     },
     {
@@ -283,87 +283,6 @@
       "documentationAnchor": "CONTRIBUTING.md#run-and-test"
     },
     {
-      "id": "release.check",
-      "tokens": [
-        "release",
-        "check"
-      ],
-      "aliases": [],
-      "lifecycle": "current",
-      "effect": "local-mutation",
-      "confirmationRequired": false,
-      "exactSerialRequired": false,
-      "summary": "Run the immutable release checks.",
-      "usage": "revival release check [options]",
-      "documentationAnchor": "CONTRIBUTING.md#run-and-test"
-    },
-    {
-      "id": "release.build",
-      "tokens": [
-        "release",
-        "build"
-      ],
-      "aliases": [],
-      "lifecycle": "current",
-      "effect": "local-mutation",
-      "confirmationRequired": false,
-      "exactSerialRequired": false,
-      "summary": "Build an immutable release archive.",
-      "usage": "revival release build [options]",
-      "documentationAnchor": "CONTRIBUTING.md#run-and-test"
-    },
-    {
-      "id": "release.verify",
-      "tokens": [
-        "release",
-        "verify"
-      ],
-      "aliases": [],
-      "lifecycle": "current",
-      "effect": "read-only",
-      "confirmationRequired": false,
-      "exactSerialRequired": false,
-      "summary": "Verify a release archive and manifest.",
-      "usage": "revival release verify [options]",
-      "documentationAnchor": "CONTRIBUTING.md#run-and-test"
-    },
-    {
-      "id": "release.candidate.prepare",
-      "tokens": ["release", "candidate", "prepare"],
-      "aliases": [],
-      "lifecycle": "current",
-      "effect": "local-mutation",
-      "confirmationRequired": false,
-      "exactSerialRequired": false,
-      "summary": "Build and seal a local candidate-only diagnostic from an exact commit; it cannot be deployed.",
-      "usage": "revival release candidate prepare [--commit COMMIT] [--data-dir DIR] [--json]",
-      "documentationAnchor": "docs/operations.md#production"
-    },
-    {
-      "id": "release.candidate.verify",
-      "tokens": ["release", "candidate", "verify"],
-      "aliases": [],
-      "lifecycle": "current",
-      "effect": "read-only",
-      "confirmationRequired": false,
-      "exactSerialRequired": false,
-      "summary": "Purely verify every byte and receipt in an immutable candidate.",
-      "usage": "revival release candidate verify (--candidate PATH) or (--id SHA256) [--data-dir DIR] [--json]",
-      "documentationAnchor": "docs/operations.md#production"
-    },
-    {
-      "id": "release.candidate.inspect",
-      "tokens": ["release", "candidate", "inspect"],
-      "aliases": [],
-      "lifecycle": "current",
-      "effect": "read-only",
-      "confirmationRequired": false,
-      "exactSerialRequired": false,
-      "summary": "Inspect candidate identity, provenance, images, and production compatibility.",
-      "usage": "revival release candidate inspect (--candidate PATH) or (--id SHA256) [--data-dir DIR] [--json]",
-      "documentationAnchor": "docs/operations.md#production"
-    },
-    {
       "id": "pin.doctor",
       "tokens": [
         "pin",
@@ -395,7 +314,10 @@
     },
     {
       "id": "pin.build-debug",
-      "tokens": ["pin", "build-debug"],
+      "tokens": [
+        "pin",
+        "build-debug"
+      ],
       "aliases": [],
       "lifecycle": "current",
       "effect": "local-mutation",
@@ -511,112 +433,8 @@
       "effect": "remote-mutation",
       "confirmationRequired": true,
       "exactSerialRequired": false,
-      "summary": "Deploy one imported GitHub-hosted, freshly provider-verified immutable release.",
-      "usage": "revival deploy production [--candidate PATH] [--candidate-id SHA256] [--confirm] [--dry-run] [options]",
-      "documentationAnchor": "docs/operations.md#production"
-    },
-    {
-      "id": "deploy.legacy-predecessor",
-      "tokens": [
-        "deploy",
-        "legacy-predecessor"
-      ],
-      "aliases": [
-        [
-          "deploy",
-          "carry-baseline"
-        ]
-      ],
-      "lifecycle": "current",
-      "effect": "remote-mutation",
-      "confirmationRequired": true,
-      "exactSerialRequired": false,
-      "summary": "One-time registration of the exact live legacy rollback predecessor without changing it.",
-      "usage": "revival deploy legacy-predecessor [--candidate PATH] [--candidate-id SHA256] [--confirm] [--dry-run] [options]",
-      "documentationAnchor": "docs/operations.md#one-time-legacy-predecessor-registration"
-    },
-    {
-      "id": "backup",
-      "tokens": [
-        "backup"
-      ],
-      "aliases": [],
-      "lifecycle": "current",
-      "effect": "remote-mutation",
-      "confirmationRequired": true,
-      "exactSerialRequired": false,
-      "summary": "Create and optionally fetch a production backup.",
-      "usage": "revival backup --confirm [--remote vps] [--backup-id ID] [--leave-quiesced] [--fetch [--fetch-dir DIR]] [--json]",
-      "documentationAnchor": "docs/operations.md#production"
-    },
-    {
-      "id": "canary",
-      "tokens": [
-        "canary"
-      ],
-      "aliases": [],
-      "lifecycle": "current",
-      "effect": "remote-mutation",
-      "confirmationRequired": true,
-      "exactSerialRequired": false,
-      "summary": "Run production semantic canaries.",
-      "usage": "revival canary --confirm [options]",
-      "documentationAnchor": "docs/operations.md#production"
-    },
-    {
-      "id": "drift",
-      "tokens": [
-        "drift"
-      ],
-      "aliases": [],
-      "lifecycle": "current",
-      "effect": "read-only",
-      "confirmationRequired": false,
-      "exactSerialRequired": false,
-      "summary": "Compare protected production state with its recorded contract.",
-      "usage": "revival drift [options]",
-      "documentationAnchor": "docs/operations.md#production"
-    },
-    {
-      "id": "adopt-config",
-      "tokens": [
-        "adopt-config"
-      ],
-      "aliases": [],
-      "lifecycle": "current",
-      "effect": "remote-mutation",
-      "confirmationRequired": true,
-      "exactSerialRequired": false,
-      "summary": "Plan or confirm a protected configuration adoption.",
-      "usage": "revival adopt-config [options]",
-      "documentationAnchor": "docs/operations.md#production"
-    },
-    {
-      "id": "prune-state",
-      "tokens": [
-        "prune-state"
-      ],
-      "aliases": [],
-      "lifecycle": "current",
-      "effect": "remote-mutation",
-      "confirmationRequired": true,
-      "exactSerialRequired": false,
-      "summary": "Plan or confirm safe release and backup retention.",
-      "usage": "revival prune-state [options]",
-      "documentationAnchor": "docs/operations.md#production"
-    },
-    {
-      "id": "rollback",
-      "tokens": [
-        "rollback"
-      ],
-      "aliases": [],
-      "lifecycle": "current",
-      "effect": "remote-mutation",
-      "confirmationRequired": true,
-      "exactSerialRequired": false,
-      "summary": "Move production to an exact earlier deployment.",
-      "usage": "revival rollback --deployment ID --confirm [options]",
+      "summary": "Deploy Cosmos directly on this host.",
+      "usage": "revival deploy production (--dry-run | --confirm) [--env-file FILE] [--project-name NAME] [--wait-timeout SECONDS]",
       "documentationAnchor": "docs/operations.md#production"
     },
     {
@@ -680,21 +498,6 @@
       "documentationAnchor": "docs/operations.md#onboarding-a-pin"
     },
     {
-      "id": "setup.resume",
-      "tokens": [
-        "setup",
-        "--resume"
-      ],
-      "aliases": [],
-      "lifecycle": "current",
-      "effect": "read-only",
-      "confirmationRequired": false,
-      "exactSerialRequired": false,
-      "summary": "Show the active setup journey as an ordered checklist.",
-      "usage": "revival setup --resume [options]",
-      "documentationAnchor": "README.md#run-locally"
-    },
-    {
       "id": "setup.status",
       "tokens": [
         "setup",
@@ -708,54 +511,6 @@
       "summary": "Show complete and still-required setup steps.",
       "usage": "revival setup status [options]",
       "documentationAnchor": "README.md#run-locally"
-    },
-    {
-      "id": "setup.import.vps-candidate",
-      "tokens": ["setup", "import", "vps-candidate"],
-      "aliases": [],
-      "lifecycle": "current",
-      "effect": "local-mutation",
-      "confirmationRequired": false,
-      "exactSerialRequired": false,
-      "summary": "Verify and import a GitHub-hosted immutable VPS candidate handoff.",
-      "usage": "revival setup import vps-candidate --handoff-root DIR [--data-dir DIR] [--json]",
-      "documentationAnchor": "docs/operations.md#production"
-    },
-    {
-      "id": "setup.import.pin-release",
-      "tokens": ["setup", "import", "pin-release"],
-      "aliases": [],
-      "lifecycle": "current",
-      "effect": "local-mutation",
-      "confirmationRequired": false,
-      "exactSerialRequired": false,
-      "summary": "Verify and register a downloaded Attested Pin release store.",
-      "usage": "revival setup import pin-release --release-root DIR [--data-dir DIR] [--json]",
-      "documentationAnchor": "docs/operations.md#onboarding-a-pin"
-    },
-    {
-      "id": "setup.artifacts.vps",
-      "tokens": ["setup", "artifacts", "vps"],
-      "aliases": [],
-      "lifecycle": "current",
-      "effect": "local-mutation",
-      "confirmationRequired": false,
-      "exactSerialRequired": false,
-      "summary": "Freshly provider-verify and report the currently imported hosted VPS candidate.",
-      "usage": "revival setup artifacts vps [--data-dir DIR] [--verifier-cache-root DIR] [--json]",
-      "documentationAnchor": "docs/operations.md#production"
-    },
-    {
-      "id": "setup.artifacts.pin",
-      "tokens": ["setup", "artifacts", "pin"],
-      "aliases": [],
-      "lifecycle": "current",
-      "effect": "local-mutation",
-      "confirmationRequired": false,
-      "exactSerialRequired": false,
-      "summary": "Rehash and report the currently registered hosted Pin release.",
-      "usage": "revival setup artifacts pin [--data-dir DIR] [--json]",
-      "documentationAnchor": "docs/operations.md#onboarding-a-pin"
     },
     {
       "id": "config.get",
@@ -1041,7 +796,6 @@
         "check.platform",
         "check.changed",
         "test",
-        "release.check",
         "pin.check",
         "support-bundle",
         "version"
@@ -1096,23 +850,12 @@
     },
     {
       "id": "production",
-      "label": "Operate an immutable production deployment",
+      "label": "Deploy Cosmos",
       "commandIds": [
         "setup.production",
         "config.check",
         "doctor.production",
-        "setup.import.vps-candidate",
-        "setup.artifacts.vps",
-        "release.candidate.prepare",
-        "release.candidate.verify",
-        "release.candidate.inspect",
-        "deploy.production",
-        "backup",
-        "canary",
-        "drift",
-        "adopt-config",
-        "prune-state",
-        "rollback"
+        "deploy.production"
       ],
       "steps": [
         {
@@ -1143,36 +886,9 @@
           "documentationAnchor": "docs/operations.md#production"
         },
         {
-          "id": "release",
-          "title": "Import the attested hosted immutable candidate",
-          "commandId": "setup.import.vps-candidate",
-          "centerRoute": null,
-          "surface": "cli",
-          "verification": "cli",
-          "documentationAnchor": "docs/operations.md#production"
-        },
-        {
-          "id": "backup",
-          "title": "Create an off-host recovery copy",
-          "commandId": "backup",
-          "centerRoute": null,
-          "surface": "cli",
-          "verification": "cli",
-          "documentationAnchor": "docs/operations.md#production"
-        },
-        {
           "id": "deploy",
-          "title": "Confirm the immutable deployment",
+          "title": "Deploy Cosmos directly",
           "commandId": "deploy.production",
-          "centerRoute": null,
-          "surface": "cli",
-          "verification": "cli",
-          "documentationAnchor": "docs/operations.md#production"
-        },
-        {
-          "id": "verify",
-          "title": "Run canary and drift verification",
-          "commandId": "canary",
           "centerRoute": null,
           "surface": "cli",
           "verification": "cli",
@@ -1189,8 +905,6 @@
         "pki.init",
         "pin.doctor",
         "pin.release.inspect",
-        "setup.import.pin-release",
-        "setup.artifacts.pin",
         "pin.release.build",
         "pin.release.ship",
         "pin.install",
@@ -1222,8 +936,8 @@
         },
         {
           "id": "release",
-          "title": "Import the attested hosted signed release",
-          "commandId": "setup.import.pin-release",
+          "title": "Verify the signed Pin release",
+          "commandId": "pin.release.verify",
           "centerRoute": "/settings/pin/install",
           "surface": "cli",
           "verification": "cli",

@@ -12,7 +12,7 @@
  *
  * What each group catches:
  *
- *   createInstallPlan     — a healthy legacy installer is RETAINED, never
+ *   createInstallPlan     — a healthy previous installer is RETAINED, never
  *                           reinstalled, and a mismatched-but-healthy installer
  *                           is never quietly promoted into the destructive
  *                           bootstrap-recovery path. Recovery itself demands a
@@ -53,7 +53,7 @@ import { describe, it } from "node:test";
 const {
   DEFAULT_POST_INSTALL_LINK,
   InstallPlanningError,
-  LEGACY_MIGRATION_PROFILE,
+  PIN_RELEASE_SIGNER_IDENTITY,
   MANAGED_PACKAGES,
   createInitialInstallControllerState,
   createInstallPlan,
@@ -142,13 +142,11 @@ const PACKAGE_BY_ROLE = Object.freeze({
 
 const MANAGED_ROLES = ["installer", "hook", "server", "injector"];
 
-/**
- * One healthy managed package as inspection reports it. The version names come
- * from `LEGACY_MIGRATION_PROFILE`, so the default inspection describes exactly
- * the legacy device the first canonical migration exists to serve.
- */
+const EXISTING_RELEASE_VERSION = "2026-04-28.0";
+
+/** One healthy managed package from the previous published release. */
 function packageSnapshot(role, target, overrides = {}) {
-  const versionName = LEGACY_MIGRATION_PROFILE.versions[role];
+  const versionName = EXISTING_RELEASE_VERSION;
   const packageName = PACKAGE_BY_ROLE[role];
   return {
     role,
@@ -156,14 +154,14 @@ function packageSnapshot(role, target, overrides = {}) {
     installed: true,
     healthy: true,
     versionName,
-    signerIdentity: LEGACY_MIGRATION_PROFILE.signerIdentity,
+    signerIdentity: PIN_RELEASE_SIGNER_IDENTITY,
     versionReadable: true,
     querySucceeded: true,
     rawOutput: `versionName=${versionName}`,
     targetVersion: target.version,
-    versionComparison: "unreadable",
-    // See the same defaults in verify/pin-install-domain.test.mjs: the legacy
-    // device this describes runs every managed package from the path the system
+    versionComparison: "older",
+    // See the same defaults in verify/pin-install-domain.test.mjs: the device
+    // runs every managed package from the path the system
     // injector owns, which is what makes an in-place update possible at all.
     appId: 1000,
     baseApkPath: `/data/app/${packageName}-injected/base.apk`,
@@ -233,7 +231,7 @@ function createInternals(target, inspection) {
 }
 
 describe("createInstallPlan", () => {
-  it("retains the healthy legacy installer and selects only runtime artifacts", () => {
+  it("retains a healthy release installer and selects only runtime artifacts", () => {
     const target = createResolvedInstallTargetFixture();
     const plan = createInstallPlan({
       transport: createFakeTransport(),
@@ -241,7 +239,7 @@ describe("createInstallPlan", () => {
       inspection: createInspection({ target }),
     });
 
-    assert.equal(plan.kind, "legacy-in-place");
+    assert.equal(plan.kind, "routine-in-place");
     assert.deepEqual(plan.assetRoles, ["hookApk", "serverApk", "injectorApk"]);
     assert.deepEqual(plan.packageRoles, ["hook", "server", "injector"]);
     assert.deepEqual(plan.expectedExistingPackageNames, [
@@ -256,7 +254,7 @@ describe("createInstallPlan", () => {
     assert.equal(plan.shouldBootstrapInstaller, false);
     assert.equal(
       plan.retainedInstaller?.versionName,
-      LEGACY_MIGRATION_PROFILE.versions.installer,
+      EXISTING_RELEASE_VERSION,
     );
   });
 
@@ -353,7 +351,7 @@ describe("createInstallPlan", () => {
 });
 
 describe("runInstallOperation", () => {
-  it("migrates the exact legacy profile without cleanup or installer bootstrap", async () => {
+  it("migrates the exact previous profile without cleanup or installer bootstrap", async () => {
     const target = createResolvedInstallTargetFixture();
     const inspection = createInspection({ target });
     const internals = createInternals(target, inspection);
@@ -375,7 +373,7 @@ describe("runInstallOperation", () => {
     ]);
 
     // Nothing is removed, nothing is re-privileged, no launcher or vendor
-    // package is touched: a legacy migration is additive.
+    // package is touched: an in-place update is additive.
     assert.equal(internals.cleanupManagedPackages.calls.length, 0);
     assert.equal(internals.bootstrapFinalInstaller.calls.length, 0);
     assert.equal(internals.disableConfiguredPackages.calls.length, 0);
@@ -394,7 +392,7 @@ describe("runInstallOperation", () => {
     assert.equal(policy.mode, "in-place");
     assert.equal(
       policy.retainedInstaller?.versionName,
-      LEGACY_MIGRATION_PROFILE.versions.installer,
+      EXISTING_RELEASE_VERSION,
     );
   });
 
@@ -509,7 +507,7 @@ describe("runInstallOperation", () => {
    * and re-privileges the installer. Every asset it needs is downloaded and
    * digest-checked first, so a release the device cannot actually be given
    * costs the wearer nothing. That ordering is currently correct but was not
-   * guarded anywhere — the asset-preflight case above runs a legacy migration,
+   * guarded anywhere — the asset-preflight case above runs a previous migration,
    * whose plan has no cleanup at all, so it would keep passing if the phases
    * were swapped. This case uses the one plan that does destroy something.
    */
@@ -601,19 +599,19 @@ describe("runInstallOperation", () => {
 
 function createConflict(overrides = {}) {
   return {
-    id: "legacy-suite",
-    label: "Legacy Suite",
+    id: "previous-suite",
+    label: "Previous Suite",
     packageIds: ["one.pkg", "two.pkg"],
     installedPackageIds: ["one.pkg", "two.pkg"],
-    warningCopy: "Legacy suite may interfere.",
+    warningCopy: "Previous suite may interfere.",
     cleanupCommands: [],
     ...overrides,
   };
 }
 
-const LEGACY_DATA_CLEANUP = Object.freeze({
-  argv: ["pm", "clear", "legacy.data"],
-  description: "Clear legacy data",
+const CONFLICT_DATA_CLEANUP = Object.freeze({
+  argv: ["pm", "clear", "previous.data"],
+  description: "Clear previous data",
 });
 
 describe("runRemoveConflictsOperation", () => {
@@ -625,7 +623,7 @@ describe("runRemoveConflictsOperation", () => {
     const result = await runRemoveConflictsOperation(
       {
         transport: createFakeTransport("Fake Device"),
-        conflicts: [createConflict({ cleanupCommands: [LEGACY_DATA_CLEANUP] })],
+        conflicts: [createConflict({ cleanupCommands: [CONFLICT_DATA_CLEANUP] })],
         onProgress: progress,
       },
       {
@@ -650,7 +648,7 @@ describe("runRemoveConflictsOperation", () => {
       "exists:one.pkg",
       "uninstall:two.pkg",
       "exists:two.pkg",
-      "cleanup:pm clear legacy.data",
+      "cleanup:pm clear previous.data",
     ]);
     assert.equal(result.success, true);
     assert.deepEqual(result.warnings, []);
@@ -688,7 +686,7 @@ describe("runRemoveConflictsOperation", () => {
         conflicts: [
           createConflict({
             installedPackageIds: [],
-            cleanupCommands: [LEGACY_DATA_CLEANUP],
+            cleanupCommands: [CONFLICT_DATA_CLEANUP],
           }),
         ],
       },
@@ -717,7 +715,7 @@ describe("runRemoveConflictsOperation", () => {
         conflicts: [
           createConflict({
             installedPackageIds: [],
-            cleanupCommands: [LEGACY_DATA_CLEANUP],
+            cleanupCommands: [CONFLICT_DATA_CLEANUP],
           }),
         ],
       },
@@ -727,7 +725,7 @@ describe("runRemoveConflictsOperation", () => {
           return false;
         },
         async runCleanupCommand() {
-          throw new AdbDeviceStepTimeoutError("shell pm clear legacy.data");
+          throw new AdbDeviceStepTimeoutError("shell pm clear previous.data");
         },
       },
     );
@@ -1003,11 +1001,11 @@ describe("deriveInstallControllerCommands", () => {
         inspection: createControllerInspection({
           detectedConflicts: [
             {
-              id: "legacy-suite",
-              label: "Legacy Suite",
+              id: "previous-suite",
+              label: "Previous Suite",
               packageIds: ["conflict.one"],
               installedPackageIds: ["conflict.one"],
-              warningCopy: "Legacy suite may interfere.",
+              warningCopy: "Previous suite may interfere.",
               cleanupCommands: [],
             },
           ],
@@ -1028,11 +1026,11 @@ describe("deriveInstallControllerCommands", () => {
         inspection: createControllerInspection({
           detectedConflicts: [
             {
-              id: "legacy-suite",
-              label: "Legacy Suite",
+              id: "previous-suite",
+              label: "Previous Suite",
               packageIds: ["conflict.one"],
               installedPackageIds: ["conflict.one"],
-              warningCopy: "Legacy suite may interfere.",
+              warningCopy: "Previous suite may interfere.",
               cleanupCommands: [],
             },
           ],
@@ -1141,11 +1139,11 @@ describe("installControllerReducer", () => {
 });
 
 const VIEW_MODEL_CONFLICT = Object.freeze({
-  id: "legacy-suite",
-  label: "Legacy Suite",
+  id: "previous-suite",
+  label: "Previous Suite",
   packageIds: ["conflict.one", "conflict.two"],
   installedPackageIds: ["conflict.one"],
-  warningCopy: "Legacy suite may interfere.",
+  warningCopy: "Previous suite may interfere.",
   cleanupCommands: [{ argv: ["pm", "clear", "conflict.one"], description: "Clear conflict data" }],
 });
 
@@ -1209,7 +1207,7 @@ describe("derivePrimaryCardViewModel", () => {
 
     assert.equal(viewModel.conflictRows.length, 1);
     const [row] = viewModel.conflictRows;
-    assert.equal(row.role, "Legacy Suite");
+    assert.equal(row.role, "Previous Suite");
     assert.equal(row.tone, "warning");
     assert.equal(row.category, "conflict");
     assert.equal(row.badge, "Warning");

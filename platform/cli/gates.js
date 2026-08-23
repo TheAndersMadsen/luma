@@ -3,7 +3,7 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-// Validation gates: source policy, layout, the VPS release gate, and the Pin source gate.
+// Validation gates shared by contributor checks.
 // Split out of the root `revival` entry point; behavior, messages, and exit
 // codes are unchanged.
 
@@ -13,27 +13,22 @@ const {
   BUILD_DIR,
   fail,
   info,
-  exists,
   testProcessEnvironment,
-  cosmosTestEnvironment,
 } = require('./context');
 const { throwLikeChild, timedRun, timedStage } = require('./timing');
 const {
   probePinAmd64Runtime,
   testVersionParser,
-  validateHostToolchains,
 } = require('./toolchain');
 
 const SERIAL_POLICY_TESTS = Object.freeze([
   'fresh-install.test.mjs',
-  'release.test.mjs',
 ]);
 const CONTRIBUTOR_POLICY_TESTS = Object.freeze([
   'cli-config.test.mjs',
   'cli-help.test.mjs',
   'cli-setup.test.mjs',
   'connectivity.test.mjs',
-  'distribution.test.mjs',
   'fast-workflow.test.mjs',
   'fresh-install.test.mjs',
   'local-command-authority.test.mjs',
@@ -43,8 +38,6 @@ const CONTRIBUTOR_POLICY_TESTS = Object.freeze([
   'wire-divergence.test.mjs',
   'wire-equivalence.test.mjs',
 ]);
-const RELEASE_RSA_COMPATIBILITY_TEST =
-  'tests::production_wrapping_key_is_4096_bit_and_accepts_explicit_sha1_oaep';
 const PIN_BUILDER_DEBUG_STORE = path.join(
   ROOT,
   'platform',
@@ -91,20 +84,6 @@ function executePinLaneSession(lane, selection = {}, dependencies = {}) {
   return result;
 }
 
-function assertExactlyOneListedRustTest(output, expected) {
-  const listed = output
-    .split(/\r?\n/u)
-    .map((line) => line.trim())
-    .filter((line) => line.endsWith(': test'))
-    .map((line) => line.slice(0, -': test'.length));
-  if (listed.length !== 1 || listed[0] !== expected) {
-    throw new Error(
-      `release RSA compatibility discovery must list exactly ${expected}; observed ${listed.length}: ${listed.length === 0 ? '<none>' : listed.join(', ')}`,
-    );
-  }
-  return listed[0];
-}
-
 function policyTestConcurrency() {
   const available = typeof os.availableParallelism === 'function'
     ? os.availableParallelism()
@@ -135,12 +114,12 @@ function policyTestPlan(testNames, { hasPinSource = true } = {}) {
   };
 }
 
-function policyTestMode({ contributor = false, shellPolicies = true } = {}) {
-  return Object.freeze({ contributor, shellPolicies });
+function policyTestMode({ contributor = false } = {}) {
+  return Object.freeze({ contributor });
 }
 
 function policyTests(environment = testProcessEnvironment(), options = {}) {
-  const { contributor, shellPolicies } = policyTestMode(options);
+  const { contributor } = policyTestMode(options);
   timedStage('platform version fixtures', testVersionParser);
   info('[implemented] Docker Compose minimum-version parser fixtures passed.');
   const acceptance = path.join(ROOT, 'platform', 'deploy', 'acceptance');
@@ -156,19 +135,6 @@ function policyTests(environment = testProcessEnvironment(), options = {}) {
       if (!available.has(name)) throw new Error(`contributor platform test is missing: ${name}`);
     }
     scripts = [...CONTRIBUTOR_POLICY_TESTS];
-  } else if (shellPolicies) {
-    timedStage('platform shell policies', () => {
-      for (const name of scripts.filter((entry) => entry.endsWith('.sh'))) {
-        if (!hasPinSource && name === 'layout.sh') {
-          info('[implemented] skipped the complete-source layout check in the Pin-free VPS profile.');
-          continue;
-        }
-        timedRun(`platform ${name}`, 'sh', [path.join(acceptance, name)], { env: environment });
-      }
-    });
-  }
-  if (!hasPinSource && scripts.includes('release.test.mjs')) {
-    info('[implemented] skipped the complete-source package fixture in the Pin-free VPS profile.');
   }
   const plan = policyTestPlan(
     scripts.filter((entry) => entry.endsWith('.test.mjs')),
@@ -182,98 +148,13 @@ function policyTests(environment = testProcessEnvironment(), options = {}) {
       env: environment,
     });
   }
-  // fresh-install observes repository cleanliness and release exercises the
-  // packaging boundary. Never overlap either with a process that can create or
-  // inspect root state; release stays last so no later check can observe its
-  // transient build fixture.
+  // fresh-install observes repository cleanliness, so keep it out of the
+  // parallel runner.
   for (const name of plan.serial) {
     timedRun(`platform isolated ${name}`, 'node', policyTestArguments([
       path.join(acceptance, name),
     ], 1), { env: environment });
   }
-}
-
-function runCenterUiTests(center, environment, runner = timedRun) {
-  const result = runner('release Center UI tests', 'npm', ['run', 'test:ui'], {
-    cwd: center,
-    env: environment,
-    allowFailure: true,
-  });
-  if (result.signal || result.status !== 0) throwLikeChild(result);
-  return result;
-}
-
-function vpsReleaseCheck() {
-  const testEnvironment = testProcessEnvironment();
-  for (const command of ['node', 'npm', 'rustc', 'cargo']) {
-    if (!exists(command, testEnvironment)) fail(`release check requires ${command}`);
-  }
-
-  try {
-    validateHostToolchains({ env: testEnvironment });
-  } catch (error) {
-    fail(error.message);
-  }
-
-  const cosmos = path.join(ROOT, 'cosmos');
-  const cosmosEnvironment = cosmosTestEnvironment(testEnvironment);
-  policyTests(testEnvironment);
-
-  // Load lazily to avoid the checks -> gates module cycle during startup.
-  const {
-    createCenterBuildWorkspace,
-    exactNpmVersion,
-    normalizedNpmInstallEnvironment,
-    prepareNpmDependencies,
-  } = require('./checks');
-  // Next's build directory is project-relative, so the complete release gate
-  // uses an external short-lived source copy. Immutable candidate provenance
-  // is enforced later by candidate/release commands, not contributor checks.
-  const prepared = timedStage('release Center build workspace', createCenterBuildWorkspace);
-  try {
-    const npmEnvironment = normalizedNpmInstallEnvironment(testEnvironment);
-    const npmVersion = exactNpmVersion(npmEnvironment);
-    prepareNpmDependencies(prepared.center, 'center-release-npm', npmVersion, npmEnvironment);
-    prepareNpmDependencies(prepared.spotify, 'spotify-release-npm', npmVersion, npmEnvironment);
-    timedRun('release Center tests', 'npm', ['test'], { cwd: prepared.center, env: npmEnvironment });
-    runCenterUiTests(prepared.center, npmEnvironment);
-    timedRun('release Center build', 'npm', ['run', 'build'], {
-      cwd: prepared.center,
-      env: { ...npmEnvironment, REVIVAL_RELEASE_ID: 'source-check' },
-    });
-    timedRun('release Spotify tests', 'npm', ['test'], {
-      cwd: prepared.spotify,
-      env: npmEnvironment,
-    });
-  } finally {
-    prepared.finish();
-  }
-
-  timedRun('release Cosmos format', 'cargo', ['fmt', '--all', '--check'], { cwd: cosmos, env: cosmosEnvironment });
-  timedRun('release Cosmos clippy', 'cargo', [
-    'clippy', '--workspace', '--all-targets', '--locked', '--', '-D', 'warnings',
-  ], { cwd: cosmos, env: cosmosEnvironment });
-  timedRun('release Cosmos tests', 'cargo', [
-    'test', '--workspace', '--locked',
-  ], { cwd: cosmos, env: cosmosEnvironment });
-  const rsaDiscovery = timedRun('release Cosmos 4096-bit RSA test discovery', 'cargo', [
-    'test', '-p', 'cosmos-crypto', '--locked',
-    RELEASE_RSA_COMPATIBILITY_TEST,
-    '--', '--ignored', '--exact', '--list',
-  ], { cwd: cosmos, env: cosmosEnvironment, capture: true, allowFailure: true });
-  if (rsaDiscovery.signal || rsaDiscovery.status !== 0) {
-    if (rsaDiscovery.stdout) process.stdout.write(rsaDiscovery.stdout);
-    if (rsaDiscovery.stderr) process.stderr.write(rsaDiscovery.stderr);
-    throwLikeChild(rsaDiscovery);
-  }
-  assertExactlyOneListedRustTest(rsaDiscovery.stdout, RELEASE_RSA_COMPATIBILITY_TEST);
-  timedRun('release Cosmos 4096-bit RSA compatibility test', 'cargo', [
-    'test', '-p', 'cosmos-crypto', '--locked',
-    RELEASE_RSA_COMPATIBILITY_TEST,
-    '--', '--ignored', '--exact', '--test-threads=1',
-  ], { cwd: cosmos, env: cosmosEnvironment });
-
-  info('[implemented] root policy/package, Center, Cosmos, and Spotify adapter VPS release checks passed.');
 }
 
 function assertPinAmd64ConsumerHost(pinEnvironment) {
@@ -311,25 +192,26 @@ function pinSourceCheck() {
   executePinLaneSession('check');
 }
 
-function releaseCheck({ source = false } = {}) {
-  vpsReleaseCheck();
+function repositoryCheck({ source = false } = {}) {
+  // Load lazily to avoid the checks -> gates module cycle during startup.
+  const { runCenterCheck, runCosmosCheck, runPlatformCheck } = require('./checks');
+  runPlatformCheck({ full: true });
+  runCenterCheck();
+  runCosmosCheck();
   if (source) pinSourceCheck();
+  info('[implemented] repository checks passed.');
 }
 
 module.exports = {
-  RELEASE_RSA_COMPATIBILITY_TEST,
-  assertExactlyOneListedRustTest,
   policyTestArguments,
   policyTestConcurrency,
   policyTestMode,
   policyTestPlan,
   policyTests,
-  runCenterUiTests,
-  vpsReleaseCheck,
   pinLaneSessionArguments,
   executePinLaneSession,
   assertPinAmd64ConsumerHost,
   pinContributorCheck,
   pinSourceCheck,
-  releaseCheck,
+  repositoryCheck,
 };

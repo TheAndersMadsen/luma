@@ -104,11 +104,6 @@ class PersistentConfigVaultProvider : ContentProvider() {
             PersistentConfigVaultFormat.LOCAL_CONFIG_FILE_NAME,
             snapshot.files[PersistentConfigVaultFormat.LOCAL_CONFIG_FILE_NAME],
         )
-        restoreOptionalArtifact(
-            filesDir,
-            PersistentConfigVaultFormat.LEGACY_ROTATION_FILE_NAME,
-            snapshot.files[PersistentConfigVaultFormat.LEGACY_ROTATION_FILE_NAME],
-        )
         restoreArtifact(
             filesDir,
             PersistentConfigVaultFormat.ESIM_TOKEN_FILE_NAME,

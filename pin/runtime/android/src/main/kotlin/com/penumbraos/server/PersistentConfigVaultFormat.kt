@@ -19,7 +19,6 @@ internal object PersistentConfigVaultFormat {
     const val CONFIG_FILE_NAME = "config.toml"
     const val LOCAL_CONFIG_FILE_NAME = "config.local.toml"
     const val SECURITY_SCHEMA_FILE_NAME = ".config-security-schema"
-    const val LEGACY_ROTATION_FILE_NAME = ".legacy-admin-token-rotation"
     const val ESIM_TOKEN_FILE_NAME = "esim-bridge-auth.token"
     const val CODEX_AUTH_FILE_NAME = "codex-auth.json"
     const val SPOTIFY_AUTH_FILE_NAME = "spotify-auth.json"
@@ -39,13 +38,9 @@ internal object PersistentConfigVaultFormat {
         CONFIG_FILE_NAME,
         LOCAL_CONFIG_FILE_NAME,
         SECURITY_SCHEMA_FILE_NAME,
-        LEGACY_ROTATION_FILE_NAME,
         ESIM_TOKEN_FILE_NAME,
         CODEX_AUTH_FILE_NAME,
         SPOTIFY_AUTH_FILE_NAME,
-    )
-    private val legacyRotationRegex = Regex(
-        "version=1\\nstate=(?:complete|pending\\nprevious_token_sha256=[0-9a-f]{64})\\n",
     )
 
     data class Snapshot(
@@ -148,11 +143,6 @@ internal object PersistentConfigVaultFormat {
         EsimBridgeAuthentication.requireValidToken(tokenText)
 
         files[LOCAL_CONFIG_FILE_NAME]?.let(::strictUtf8)
-        files[LEGACY_ROTATION_FILE_NAME]?.let { rotation ->
-            require(legacyRotationRegex.matches(strictUtf8(rotation))) {
-                "Invalid legacy token rotation state"
-            }
-        }
         files[CODEX_AUTH_FILE_NAME]?.let { auth ->
             val text = strictUtf8(auth).trim()
             require(

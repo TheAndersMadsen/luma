@@ -16,12 +16,11 @@
 
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { constants as fsConstants, createReadStream } from "node:fs";
+import { constants as fsConstants } from "node:fs";
 import {
   chmod,
   lstat,
   open,
-  readdir,
   readFile,
   realpath,
   rename,
@@ -113,30 +112,6 @@ const EVIDENCE_PAYLOAD_FIELDS = Object.freeze([
   "preSignVerificationBase64",
   "releaseVerificationBase64",
 ]);
-const VPS_RECEIPT_FIELDS = Object.freeze([
-  "schema",
-  "version",
-  "policySha256",
-  "repository",
-  "sourceRef",
-  "sourceDigest",
-  "sourceTree",
-  "runnerEnvironment",
-  "runnerLabel",
-  "runnerArchitecture",
-  "runnerInvocationUri",
-  "candidateId",
-  "releaseId",
-  "sourceArchiveSha256",
-  "sourceReceiptSha256",
-  "toolchainReceiptSha256",
-  "imageReceiptSha256",
-  "imageBundleSha256",
-  "files",
-]);
-const VPS_FILE_FIELDS = Object.freeze(["role", "name", "sha256", "size"]);
-const MAX_VPS_CANDIDATE_FILE_BYTES = 32 * 1024 * 1024 * 1024;
-
 export class HostedAttestationError extends Error {
   constructor(code, message) {
     super(message);
@@ -242,7 +217,7 @@ export async function loadPolicy(pathValue = POLICY_PATH) {
     "sourceVisibility", "signerWorkflow", "signerWorkflowUri", "signerDigestPolicy",
     "workflowName", "workflowTrigger",
     "runnerEnvironment", "runnerLabel", "runnerArchitecture", "issuer", "githubCli", "trustedRoot",
-    "attestAction", "vpsCandidate", "preSignPredicateType", "releasePredicateType", "roles",
+    "attestAction", "preSignPredicateType", "releasePredicateType", "roles",
   ], "hosted release policy");
   exactString(policy.schema, "revival.pin-hosted-release-policy", "policy schema");
   if (policy.version !== 1) fail("policy-mismatch", "hosted release policy version changed");
@@ -306,50 +281,6 @@ export async function loadPolicy(pathValue = POLICY_PATH) {
     "1e69f48acb82d1966a394da916b4c1698aa569d6",
     "attest action commit",
   );
-  exactFields(
-    policy.vpsCandidate,
-    ["signerWorkflow", "signerWorkflowUri", "workflowName", "predicateType", "receiptSchema", "receiptVersion", "files"],
-    "policy vpsCandidate",
-  );
-  exactString(policy.vpsCandidate.signerWorkflow, ".github/workflows/vps-candidate.yml", "VPS candidate signer workflow");
-  exactString(
-    policy.vpsCandidate.signerWorkflowUri,
-    "https://github.com/TheAndersMadsen/ai-pin-revival/.github/workflows/vps-candidate.yml@refs/heads/main",
-    "VPS candidate signer workflow URI",
-  );
-  exactString(policy.vpsCandidate.workflowName, "Attested VPS candidate", "VPS candidate workflow name");
-  exactString(
-    policy.vpsCandidate.predicateType,
-    "https://github.com/TheAndersMadsen/ai-pin-revival/attestations/vps-candidate/v1",
-    "VPS candidate predicate type",
-  );
-  exactString(policy.vpsCandidate.receiptSchema, "revival.hosted-vps-candidate-receipt", "VPS candidate receipt schema");
-  if (policy.vpsCandidate.receiptVersion !== 1) fail("policy-mismatch", "VPS candidate receipt version changed");
-  const expectedCandidateFiles = [
-    ["candidate-descriptor", "candidate.json"],
-    ["release-archive", "release.tar.gz"],
-    ["release-manifest", "release.manifest.json"],
-    ["release-descriptor", "release.json"],
-    ["release-verifier", "verify-release.py"],
-    ["source-snapshot", "source-snapshot.tar"],
-    ["source-commit-object", "source-commit.txt"],
-    ["source-snapshot-receipt", "source-receipt.json"],
-    ["production-compose-model", "compose-model.json"],
-    ["production-state-contract", "production-state.json"],
-    ["toolchain-receipt", "toolchain-receipt.json"],
-    ["docker-image-receipt", "image-receipt.json"],
-    ["docker-image-bundle", "images.tar"],
-  ];
-  if (!Array.isArray(policy.vpsCandidate.files) || policy.vpsCandidate.files.length !== expectedCandidateFiles.length) {
-    fail("policy-mismatch", "VPS candidate file policy changed");
-  }
-  for (let index = 0; index < expectedCandidateFiles.length; index += 1) {
-    const entry = policy.vpsCandidate.files[index];
-    exactFields(entry, ["role", "name"], `VPS candidate policy file ${index}`);
-    if (entry.role !== expectedCandidateFiles[index][0] || entry.name !== expectedCandidateFiles[index][1]) {
-      fail("policy-mismatch", "VPS candidate file policy changed");
-    }
-  }
   exactString(
     policy.preSignPredicateType,
     "https://github.com/TheAndersMadsen/ai-pin-revival/attestations/pin-release-input/v1",

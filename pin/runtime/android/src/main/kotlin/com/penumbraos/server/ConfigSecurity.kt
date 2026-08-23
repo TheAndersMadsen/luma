@@ -9,7 +9,7 @@ internal object ConfigSecurity {
 
     private const val ADMIN_TOKEN_PATH = "server.admin_token"
     private const val HTTP_BIND_PATH = "server.http_bind_addr"
-    private const val LEGACY_WILDCARD_BIND = "0.0.0.0:8080"
+    private const val PREVIOUS_WILDCARD_BIND = "0.0.0.0:8080"
     private const val SAFE_LOOPBACK_BIND = "127.0.0.1:8080"
 
     private val writeOnlyPaths = setOf(
@@ -139,15 +139,6 @@ internal object ConfigSecurity {
         """.trimIndent() + "\n"
     }
 
-    fun rotateAdminToken(
-        text: String,
-        tokenGenerator: () -> String = { generateAdminToken() },
-    ): TextMigration {
-        val withoutOldToken = removeAdminToken(text)
-        val replacement = ensureAdminToken(withoutOldToken.text, tokenGenerator)
-        return TextMigration(replacement.text, changed = true)
-    }
-
     /**
      * Preserve a legacy local overlay privately, except for authentication and
      * the old shipped wildcard bind. Android keeps its admin token in the base
@@ -192,7 +183,7 @@ internal object ConfigSecurity {
 
             check(!found) { "Duplicate $HTTP_BIND_PATH field" }
             found = true
-            if (parseSimpleTomlString(assignment.second) == LEGACY_WILDCARD_BIND) {
+            if (parseSimpleTomlString(assignment.second) == PREVIOUS_WILDCARD_BIND) {
                 val indentation = line.raw.takeWhile(Char::isWhitespace)
                 output += "$indentation${HTTP_BIND_PATH.substringAfterLast('.')} = \"$SAFE_LOOPBACK_BIND\""
                 changed = true

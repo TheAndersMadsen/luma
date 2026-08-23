@@ -2549,7 +2549,7 @@ mod tests {
     }
 
     #[test]
-    fn locked_legacy_feature_flag_overrides_are_discarded_on_load() {
+    fn locked_previous_feature_flag_overrides_are_discarded_on_load() {
         let dir = tempfile::tempdir().unwrap();
         let path = write_config(
             &dir,

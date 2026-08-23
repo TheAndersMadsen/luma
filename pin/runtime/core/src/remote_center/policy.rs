@@ -24,7 +24,7 @@ pub const MAX_REQUEST_LIFETIME_MS: u64 = 5 * 60 * 1_000;
 pub const MAX_CLOCK_SKEW_MS: u64 = 30 * 1_000;
 pub const MAX_LEDGER_ENTRIES: usize = 4_096;
 pub const IDEMPOTENCY_RETENTION_MS: u64 = 10 * 60 * 1_000;
-const MAX_LEGACY_FULL_ACCESS_BODY_BYTES: u64 = 1024 * 1024;
+const MAX_PREVIOUS_FULL_ACCESS_BODY_BYTES: u64 = 1024 * 1024;
 
 const MIN_REQUEST_ID_BYTES: usize = 16;
 const MAX_REQUEST_ID_BYTES: usize = 64;
@@ -483,7 +483,7 @@ pub fn authorize_full_access(
         scope,
         required_capability: None,
         max_body_bytes: if scope.is_write() {
-            MAX_LEGACY_FULL_ACCESS_BODY_BYTES
+            MAX_PREVIOUS_FULL_ACCESS_BODY_BYTES
         } else {
             0
         },
@@ -1656,7 +1656,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_full_access_keeps_local_only_routes_denied_and_uses_write_guards() {
+    fn previous_full_access_keeps_local_only_routes_denied_and_uses_write_guards() {
         let assets = catalog();
         let policy = context(&assets, Capabilities::none());
 

@@ -14,7 +14,7 @@ import {
 import type { InstallInspectionResult } from "../domain/inspection";
 import {
   decideInstallMigration,
-  LEGACY_MIGRATION_PROFILE,
+  PIN_RELEASE_SIGNER_IDENTITY,
   type InPlacePackageRole,
   type RetainedInstallerIdentity,
 } from "../domain/migrationDecision";
@@ -178,7 +178,7 @@ function emitInstallerSubstep(
 }
 
 function getShortAssetLabel(assetName: string): string {
-  // Keep old filenames readable without exposing the legacy helper term.
+  // Keep old filenames readable without exposing the previous helper term.
   const stripped = assetName.replace(/^PenumbraOS-/, "");
   const versionStripped = stripped.replace(/-\d{4}-\d{2}-\d{2}\.\d+\.apk$/, "");
   if (versionStripped !== stripped) {
@@ -246,7 +246,7 @@ export class InstallPlanningError extends Error {
 }
 
 export interface InstallPlan {
-  readonly kind: "legacy-in-place" | "routine-in-place" | "bootstrap-recovery";
+  readonly kind: "routine-in-place" | "bootstrap-recovery";
   readonly rolesToUpdate: readonly InPlacePackageRole[];
   readonly packageRoles: readonly InPlacePackageRole[];
   readonly expectedExistingPackageNames: readonly string[];
@@ -299,7 +299,7 @@ export function createInstallPlan(options: InstallOperationOptions): InstallPlan
     retainedInstaller: decision.retainedInstaller,
     verificationPolicy: {
       mode: recovery ? "bootstrap-recovery" : "in-place",
-      expectedSignerIdentity: LEGACY_MIGRATION_PROFILE.signerIdentity,
+      expectedSignerIdentity: PIN_RELEASE_SIGNER_IDENTITY,
       retainedInstaller: decision.retainedInstaller,
     },
     shouldRunPreinstallCleanup: recovery,

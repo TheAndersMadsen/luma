@@ -3,10 +3,10 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { BACKUP_DIR, isInsideSource } = require('./context');
+const { DATA_DIR, isInsideSource } = require('./context');
 
 const TRACKS = Object.freeze(['local', 'contributor', 'production', 'pin']);
-const STATE_DIR = path.resolve(process.env.REVIVAL_STATE_DIR || path.dirname(BACKUP_DIR));
+const STATE_DIR = path.resolve(process.env.REVIVAL_STATE_DIR || DATA_DIR);
 const STATE_FILE = path.join(STATE_DIR, 'setup-state.json');
 const STATE_FILE_MAX_BYTES = 4096;
 

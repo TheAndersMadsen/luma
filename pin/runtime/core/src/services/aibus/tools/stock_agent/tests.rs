@@ -1583,7 +1583,7 @@ fn explicit_enum_casing_is_preserved_exactly() {
 }
 
 #[test]
-fn explicit_legacy_stock_fields_are_used_only_when_offered() {
+fn explicit_previous_stock_fields_are_used_only_when_offered() {
     let timer = explicit_request(
         "set a timer for five minutes",
         vec![function_tool(

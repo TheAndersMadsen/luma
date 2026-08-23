@@ -6,30 +6,6 @@ import {
   type PinReleaseArtifactRole,
 } from "./manifest";
 
-export const LEGACY_APK_FILENAME_PATTERNS: Readonly<
-  Record<PinReleaseArtifactRole, RegExp>
-> = Object.freeze({
-  installer: /^PenumbraOS-SystemInjector-Installer-.+\.apk$/,
-  bootstrap: /^PenumbraOS-SystemInjector-Exploit-.+\.apk$/,
-  hook: /^PenumbraOS-HumaneHooks-.+\.apk$/,
-  server: /^PenumbraOS-Server-.+\.apk$/,
-  "hook-injector": /^PenumbraOS-HumaneHookInjector-.+\.apk$/,
-});
-
-/** Compatibility parser for operator-supplied legacy filenames only. */
-export function recognizeLegacyApkFilename(
-  filename: string,
-): PinReleaseArtifactRole | null {
-  for (const [role, pattern] of Object.entries(
-    LEGACY_APK_FILENAME_PATTERNS,
-  ) as [PinReleaseArtifactRole, RegExp][]) {
-    if (pattern.test(filename)) {
-      return role;
-    }
-  }
-  return null;
-}
-
 export interface ResolvedInstallTarget {
   /** implemented: true only after strict same-origin manifest validation. */
   readonly manifestVerified: true;

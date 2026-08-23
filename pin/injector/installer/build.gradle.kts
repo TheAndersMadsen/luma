@@ -26,12 +26,12 @@ fun externalRegularFile(rawPath: String, label: String): File {
     return canonical
 }
 
-val legacyDebugSigningStoreFile = providers.gradleProperty("legacyDebugSigningStoreFile")
-    .orElse(providers.environmentVariable("REVIVAL_PIN_LEGACY_DEBUG_SIGNING_STORE_FILE"))
+val debugSigningStoreFile = providers.gradleProperty("debugSigningStoreFile")
+    .orElse(providers.environmentVariable("REVIVAL_PIN_DEBUG_SIGNING_STORE_FILE"))
     .orNull
     ?.trim()
     ?.takeIf(String::isNotEmpty)
-    ?.let { externalRegularFile(it, "Pin legacy debug signing store") }
+    ?.let { externalRegularFile(it, "Pin debug signing store") }
 val embeddedPatchSigningStoreFile = providers.gradleProperty("embeddedPatchSigningStoreFile")
     .orElse(providers.environmentVariable("REVIVAL_PIN_EMBEDDED_PATCH_SIGNING_STORE_FILE"))
     .orNull
@@ -106,9 +106,9 @@ android {
     compileSdk = 34
 
     signingConfigs {
-        legacyDebugSigningStoreFile?.let { legacyStore ->
-            create("legacyDebug") {
-                storeFile = legacyStore
+        debugSigningStoreFile?.let { debugStore ->
+            create("externalDebug") {
+                storeFile = debugStore
                 storePassword = "abxdroppedapk"
                 keyAlias = "abxdroppedapk"
                 keyPassword = "abxdroppedapk"
@@ -141,7 +141,7 @@ android {
             signingConfigs.findByName("externalCompatibility")?.let { signingConfig = it }
         }
         getByName("debug") {
-            signingConfigs.findByName("legacyDebug")?.let { signingConfig = it }
+            signingConfigs.findByName("externalDebug")?.let { signingConfig = it }
         }
     }
 

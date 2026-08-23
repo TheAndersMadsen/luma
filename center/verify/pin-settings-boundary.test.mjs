@@ -58,7 +58,7 @@ const {
 // tools/memory are deliberately included even though this Center form does not
 // edit them: capability detection keys off which sections the Pin serialises,
 // so a trimmed fixture would stop testing the thing that matters.
-const RELEASED_LEGACY_SETTINGS_RESPONSE = {
+const BASE_SETTINGS_RESPONSE = {
   llm: {
     provider: "echo",
     model: "gemini-2.5-flash",
@@ -116,7 +116,7 @@ This status applies to the current user request only. If it conflicts with earli
 /* ── normalizeSettingsResponse ────────────────────────────────────────────── */
 
 test("normalizes the exact released response to hidden, safe-off capabilities", () => {
-  const result = normalizeSettingsResponse(RELEASED_LEGACY_SETTINGS_RESPONSE);
+  const result = normalizeSettingsResponse(BASE_SETTINGS_RESPONSE);
 
   assert.deepEqual(result.capabilities, {
     adminTokenAuth: false,
@@ -152,7 +152,7 @@ test("normalizes the exact released response to hidden, safe-off capabilities", 
 
 test("tracks optional sections independently", () => {
   const result = normalizeSettingsResponse({
-    ...RELEASED_LEGACY_SETTINGS_RESPONSE,
+    ...BASE_SETTINGS_RESPONSE,
     restart_required: true,
     google_maps: {
       has_api_key: true,
@@ -184,7 +184,7 @@ test("tracks optional sections independently", () => {
 
 test("normalizes advertised weather units and marks them writable", () => {
   const result = normalizeSettingsResponse({
-    ...RELEASED_LEGACY_SETTINGS_RESPONSE,
+    ...BASE_SETTINGS_RESPONSE,
     weather: {
       has_api_key: true,
       measurement_system: "IMPERIAL",
@@ -199,16 +199,16 @@ test("normalizes advertised weather units and marks them writable", () => {
 
 test("uses the explicit admin-token auth capability in a modern bundle", () => {
   const result = normalizeSettingsResponse({
-    ...RELEASED_LEGACY_SETTINGS_RESPONSE,
+    ...BASE_SETTINGS_RESPONSE,
     restart_required: true,
     llm: {
-      ...RELEASED_LEGACY_SETTINGS_RESPONSE.llm,
+      ...BASE_SETTINGS_RESPONSE.llm,
       codex_bridge_url: "http://127.0.0.1:8765",
       has_codex_bridge_token: false,
       has_codex_bridge_ca: false,
     },
     server: {
-      ...RELEASED_LEGACY_SETTINGS_RESPONSE.server,
+      ...BASE_SETTINGS_RESPONSE.server,
       admin_token_auth: true,
       lan_dashboard_enabled: true,
     },
@@ -251,9 +251,9 @@ test("uses the explicit admin-token auth capability in a modern bundle", () => {
 
 test("tracks admin-token auth independently of optional integrations", () => {
   const result = normalizeSettingsResponse({
-    ...RELEASED_LEGACY_SETTINGS_RESPONSE,
+    ...BASE_SETTINGS_RESPONSE,
     server: {
-      ...RELEASED_LEGACY_SETTINGS_RESPONSE.server,
+      ...BASE_SETTINGS_RESPONSE.server,
       admin_token_auth: true,
     },
   });
@@ -267,7 +267,7 @@ test("rejects malformed restart metadata", () => {
   assert.throws(
     () =>
       normalizeSettingsResponse({
-        ...RELEASED_LEGACY_SETTINGS_RESPONSE,
+        ...BASE_SETTINGS_RESPONSE,
         restart_required: "yes",
       }),
     {
@@ -281,7 +281,7 @@ test("rejects a malformed core response with a controlled boundary error", () =>
   assert.throws(
     () =>
       normalizeSettingsResponse({
-        ...RELEASED_LEGACY_SETTINGS_RESPONSE,
+        ...BASE_SETTINGS_RESPONSE,
         server: { system_prompt: null },
       }),
     {

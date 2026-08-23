@@ -61,10 +61,6 @@ pub enum KeyDirectoryError {
     CorruptRow,
     #[error("key-directory held the named key but the payload could not be opened")]
     OpenFailed,
-    #[error("legacy local channel-key snapshot disagrees with the authoritative directory")]
-    ReconciliationMismatch,
-    #[error("legacy local channel-key snapshot could not be stripped durably: {0}")]
-    LocalPersistence(cosmos_crypto::CryptoError),
     #[error("channel-key id is empty, oversized, or contains controls")]
     InvalidKid,
     #[error("the authoritative channel-key directory reached its bounded cardinality")]
@@ -97,22 +93,6 @@ pub(crate) const KEY_DIRECTORY_MIGRATIONS: &[crate::store_postgres::EmbeddedMigr
     ),
 ];
 
-const DEFER_KEY_DIRECTORY_BOUNDS_ENV: &str = "COSMOS_DEFER_KEY_DIRECTORY_BOUNDS";
-
-fn key_directory_bounds_deferred() -> bool {
-    std::env::var(DEFER_KEY_DIRECTORY_BOUNDS_ENV).as_deref() == Ok("1")
-}
-
-fn selected_key_directory_migrations(
-    defer_bounds: bool,
-) -> impl Iterator<Item = &'static crate::store_postgres::EmbeddedMigration> {
-    KEY_DIRECTORY_MIGRATIONS.iter().filter(move |migration| {
-        !(defer_bounds
-            && migration.version == 6
-            && migration.filename == "0006_key_directory_bounds.sql")
-    })
-}
-
 impl KeyDirectory {
     /// Memory-only. Reserved for explicit local and test topologies.
     pub fn in_memory() -> Self {
@@ -124,24 +104,6 @@ impl KeyDirectory {
         }
     }
 
-    /// Snapshot a focused unit test's memory-only channel map into the test
-    /// directory facade. This method does not exist in dependency/production
-    /// builds; production constructors are always given the authoritative
-    /// directory explicitly by `lib.rs`.
-    #[cfg(test)]
-    pub(crate) fn from_test_key_material(material: &crate::keymaterial::KeyMaterial) -> Self {
-        let directory = Self::in_memory();
-        let entries = material
-            .legacy_channel_keys()
-            .expect("focused test key material must be readable");
-        directory
-            .memory
-            .lock()
-            .expect("test key directory is not poisoned")
-            .extend(entries);
-        directory
-    }
-
     /// Back the directory with Postgres, creating the table if absent.
     pub async fn connect(url: &str) -> Result<Self, sqlx::Error> {
         let pool = sqlx::PgPool::connect(url).await?;
@@ -150,13 +112,7 @@ impl KeyDirectory {
             .bind(KEY_DIRECTORY_SCHEMA_LOCK_KEY)
             .execute(&mut *tx)
             .await?;
-        let defer_bounds = key_directory_bounds_deferred();
-        if defer_bounds {
-            tracing::info!(
-                "key directory: deferring the reviewed bounds constraint for the legacy production cutover"
-            );
-        }
-        for migration in selected_key_directory_migrations(defer_bounds) {
+        for migration in KEY_DIRECTORY_MIGRATIONS {
             for statement in migration.statements() {
                 sqlx::query(statement).execute(&mut *tx).await?;
             }
@@ -348,10 +304,11 @@ impl KeyDirectory {
                 .expect("key directory is not poisoned")
                 .is_empty());
         };
-        let (exists,) =
-            sqlx::query_as::<_, (bool,)>("SELECT EXISTS (SELECT 1 FROM cosmos_channel_key LIMIT 1)")
-                .fetch_one(pool)
-                .await?;
+        let (exists,) = sqlx::query_as::<_, (bool,)>(
+            "SELECT EXISTS (SELECT 1 FROM cosmos_channel_key LIMIT 1)",
+        )
+        .fetch_one(pool)
+        .await?;
         Ok(!exists)
     }
 
@@ -385,31 +342,6 @@ impl KeyDirectory {
             .map(Some)
             .map_err(|_| KeyDirectoryError::OpenFailed)
     }
-
-    /// Upgrade from the former DB-first/local-second writer without ever
-    /// resurrecting local state. Every local row must already exist identically
-    /// in the authoritative directory; only then is the local channel map
-    /// durably stripped while its wrapping key is preserved.
-    pub async fn reconcile_legacy_key_material(
-        &self,
-        material: &crate::keymaterial::KeyMaterial,
-    ) -> Result<(), KeyDirectoryError> {
-        let legacy = material
-            .legacy_channel_keys()
-            .map_err(KeyDirectoryError::LocalPersistence)?;
-        for (kid, key) in &legacy {
-            match self.get(kid).await? {
-                Some(authoritative) if authoritative == *key => {}
-                Some(_) | None => return Err(KeyDirectoryError::ReconciliationMismatch),
-            }
-        }
-        if !legacy.is_empty() {
-            material
-                .strip_legacy_channel_keys()
-                .map_err(KeyDirectoryError::LocalPersistence)?;
-        }
-        Ok(())
-    }
 }
 
 pub type SharedKeyDirectory = Arc<KeyDirectory>;
@@ -432,16 +364,9 @@ pub(crate) fn grpc_status(error: &KeyDirectoryError) -> tonic::Status {
         KeyDirectoryError::DirectoryFull => tonic::Status::resource_exhausted(
             "the authoritative channel-key directory reached its safe capacity",
         ),
-        KeyDirectoryError::CorruptRow | KeyDirectoryError::ReconciliationMismatch => {
-            tonic::Status::failed_precondition(
-                "the authoritative channel-key state is inconsistent; repair it before retrying",
-            )
-        }
-        KeyDirectoryError::LocalPersistence(error) => {
-            crate::services::public_privacy::key_material_availability_status(error).unwrap_or_else(
-                || tonic::Status::failed_precondition("legacy channel-key reconciliation failed"),
-            )
-        }
+        KeyDirectoryError::CorruptRow => tonic::Status::failed_precondition(
+            "the authoritative channel-key state is inconsistent; repair it before retrying",
+        ),
         KeyDirectoryError::OpenFailed => tonic::Status::failed_precondition(
             "the established channel key could not open the envelope",
         ),
@@ -451,31 +376,6 @@ pub(crate) fn grpc_status(error: &KeyDirectoryError) -> tonic::Status {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    struct TempSnapshot(std::path::PathBuf);
-
-    impl TempSnapshot {
-        fn new(name: &str) -> Self {
-            let directory = std::env::temp_dir().join(format!(
-                "cosmos-keydirectory-{name}-{}",
-                uuid::Uuid::new_v4()
-            ));
-            std::fs::create_dir_all(&directory).expect("create scratch directory");
-            Self(directory.join("keymaterial.json"))
-        }
-
-        fn path(&self) -> std::path::PathBuf {
-            self.0.clone()
-        }
-    }
-
-    impl Drop for TempSnapshot {
-        fn drop(&mut self) {
-            if let Some(parent) = self.0.parent() {
-                let _ = std::fs::remove_dir_all(parent);
-            }
-        }
-    }
 
     fn sealed(kid: &str, key: [u8; AES_KEY_LEN], plaintext: &[u8]) -> cosmos_crypto::EncryptedData {
         let aad = b"humane.contacts.Contact";
@@ -516,25 +416,6 @@ mod tests {
             !KeyDirectory::in_memory().is_shared(),
             "a process-local directory must not claim to be visible to other workloads"
         );
-    }
-
-    #[test]
-    fn legacy_cutover_defers_only_the_reviewed_bounds_constraint() {
-        let ordinary = selected_key_directory_migrations(false)
-            .map(|migration| (migration.version, migration.filename))
-            .collect::<Vec<_>>();
-        assert_eq!(
-            ordinary,
-            vec![
-                (3, "0003_key_directory.sql"),
-                (6, "0006_key_directory_bounds.sql")
-            ]
-        );
-
-        let deferred = selected_key_directory_migrations(true)
-            .map(|migration| (migration.version, migration.filename))
-            .collect::<Vec<_>>();
-        assert_eq!(deferred, vec![(3, "0003_key_directory.sql")]);
     }
 
     #[tokio::test]
@@ -673,155 +554,6 @@ mod tests {
             directory.memory.lock().expect("memory authority").len(),
             MAX_DIRECTORY_KEYS
         );
-    }
-
-    #[tokio::test]
-    async fn equal_legacy_rows_are_stripped_without_changing_the_authority() {
-        let snapshot = TempSnapshot::new("equal-migration");
-        let material = crate::keymaterial::KeyMaterial::at_path_with_test_wrapping_key_generator(
-            snapshot.path(),
-        );
-        material
-            .wrapping_key()
-            .expect("seed the wrapping key through the ordinary durable branch");
-        let key = [0x31; AES_KEY_LEN];
-        material
-            .insert("legacy".to_owned(), key)
-            .expect("seed legacy snapshot");
-        let before: serde_json::Value = serde_json::from_slice(
-            &std::fs::read(snapshot.path()).expect("snapshot before migration"),
-        )
-        .expect("snapshot JSON");
-        let directory = KeyDirectory::in_memory();
-        directory.put("legacy", key).await.expect("seed authority");
-
-        directory
-            .reconcile_legacy_key_material(&material)
-            .await
-            .expect("compare and strip");
-        assert!(
-            material
-                .legacy_channel_keys()
-                .expect("local state")
-                .is_empty()
-        );
-        assert_eq!(directory.get("legacy").await.expect("authority"), Some(key));
-        let after: serde_json::Value = serde_json::from_slice(
-            &std::fs::read(snapshot.path()).expect("snapshot after migration"),
-        )
-        .expect("snapshot JSON");
-        assert!(before["wrapping_private_key"].is_string());
-        assert_eq!(
-            after["wrapping_private_key"], before["wrapping_private_key"],
-            "one-time channel-map stripping must preserve the exact wrapping key"
-        );
-        assert!(
-            crate::keymaterial::KeyMaterial::at_path_allowing_test_wrapping_key_restore(
-                snapshot.path()
-            )
-            .legacy_channel_keys()
-            .expect("restart")
-            .is_empty(),
-            "stripping must survive restart"
-        );
-    }
-
-    #[tokio::test]
-    async fn local_only_or_mismatched_legacy_rows_fail_closed_byte_identically() {
-        for (name, authoritative) in [
-            ("local-only", None),
-            ("mismatch", Some([0x42; AES_KEY_LEN])),
-        ] {
-            let snapshot = TempSnapshot::new(name);
-            let material = crate::keymaterial::KeyMaterial::at_path(snapshot.path());
-            material
-                .insert("legacy".to_owned(), [0x41; AES_KEY_LEN])
-                .expect("seed local snapshot");
-            let before = std::fs::read(snapshot.path()).expect("snapshot bytes");
-            let directory = KeyDirectory::in_memory();
-            if let Some(key) = authoritative {
-                directory.put("legacy", key).await.expect("seed authority");
-            }
-            assert!(matches!(
-                directory.reconcile_legacy_key_material(&material).await,
-                Err(KeyDirectoryError::ReconciliationMismatch)
-            ));
-            assert_eq!(
-                std::fs::read(snapshot.path()).expect("snapshot bytes"),
-                before
-            );
-            assert!(material.holds("legacy").expect("local remains"));
-        }
-    }
-
-    #[tokio::test]
-    async fn directory_only_state_is_valid_and_strip_failure_retries_idempotently() {
-        let directory_only = KeyDirectory::in_memory();
-        directory_only
-            .put("authoritative", [0x51; AES_KEY_LEN])
-            .await
-            .expect("seed authority");
-        let empty = crate::keymaterial::KeyMaterial::default();
-        directory_only
-            .reconcile_legacy_key_material(&empty)
-            .await
-            .expect("DB-only state is authoritative");
-
-        let snapshot = TempSnapshot::new("strip-retry");
-        let material = crate::keymaterial::KeyMaterial::at_path(snapshot.path());
-        let key = [0x61; AES_KEY_LEN];
-        material
-            .insert("legacy".to_owned(), key)
-            .expect("seed local snapshot");
-        let directory = KeyDirectory::in_memory();
-        directory.put("legacy", key).await.expect("seed authority");
-        material.fail_next_persistence_at(crate::keymaterial::PersistenceFault::Write);
-        assert!(matches!(
-            directory.reconcile_legacy_key_material(&material).await,
-            Err(KeyDirectoryError::LocalPersistence(
-                cosmos_crypto::CryptoError::KeyMaterialPersistence
-            ))
-        ));
-        assert!(
-            material
-                .holds("legacy")
-                .expect("pre-rename failure rolls back")
-        );
-        directory
-            .reconcile_legacy_key_material(&material)
-            .await
-            .expect("retry strip");
-        assert!(material.legacy_channel_keys().expect("stripped").is_empty());
-    }
-
-    #[tokio::test]
-    async fn post_rename_strip_failure_converges_on_retry_and_restart() {
-        let snapshot = TempSnapshot::new("strip-post-rename");
-        let material = crate::keymaterial::KeyMaterial::at_path(snapshot.path());
-        let key = [0x71; AES_KEY_LEN];
-        material
-            .insert("legacy".to_owned(), key)
-            .expect("seed local snapshot");
-        let directory = KeyDirectory::in_memory();
-        directory.put("legacy", key).await.expect("seed authority");
-        material.fail_next_persistence_at(crate::keymaterial::PersistenceFault::DirectorySync);
-        assert!(matches!(
-            directory.reconcile_legacy_key_material(&material).await,
-            Err(KeyDirectoryError::LocalPersistence(
-                cosmos_crypto::CryptoError::KeyMaterialPersistence
-            ))
-        ));
-        directory
-            .reconcile_legacy_key_material(&material)
-            .await
-            .expect("retry confirms renamed strip");
-        assert!(
-            crate::keymaterial::KeyMaterial::at_path(snapshot.path())
-                .legacy_channel_keys()
-                .expect("restart")
-                .is_empty()
-        );
-        assert_eq!(directory.get("legacy").await.expect("authority"), Some(key));
     }
 
     #[tokio::test]
