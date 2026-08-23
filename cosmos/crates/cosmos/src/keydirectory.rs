@@ -97,6 +97,22 @@ pub(crate) const KEY_DIRECTORY_MIGRATIONS: &[crate::store_postgres::EmbeddedMigr
     ),
 ];
 
+const DEFER_KEY_DIRECTORY_BOUNDS_ENV: &str = "COSMOS_DEFER_KEY_DIRECTORY_BOUNDS";
+
+fn key_directory_bounds_deferred() -> bool {
+    std::env::var(DEFER_KEY_DIRECTORY_BOUNDS_ENV).as_deref() == Ok("1")
+}
+
+fn selected_key_directory_migrations(
+    defer_bounds: bool,
+) -> impl Iterator<Item = &'static crate::store_postgres::EmbeddedMigration> {
+    KEY_DIRECTORY_MIGRATIONS.iter().filter(move |migration| {
+        !(defer_bounds
+            && migration.version == 6
+            && migration.filename == "0006_key_directory_bounds.sql")
+    })
+}
+
 impl KeyDirectory {
     /// Memory-only. Reserved for explicit local and test topologies.
     pub fn in_memory() -> Self {
@@ -134,7 +150,13 @@ impl KeyDirectory {
             .bind(KEY_DIRECTORY_SCHEMA_LOCK_KEY)
             .execute(&mut *tx)
             .await?;
-        for migration in KEY_DIRECTORY_MIGRATIONS {
+        let defer_bounds = key_directory_bounds_deferred();
+        if defer_bounds {
+            tracing::info!(
+                "key directory: deferring the reviewed bounds constraint for the legacy production cutover"
+            );
+        }
+        for migration in selected_key_directory_migrations(defer_bounds) {
             for statement in migration.statements() {
                 sqlx::query(statement).execute(&mut *tx).await?;
             }
@@ -494,6 +516,25 @@ mod tests {
             !KeyDirectory::in_memory().is_shared(),
             "a process-local directory must not claim to be visible to other workloads"
         );
+    }
+
+    #[test]
+    fn legacy_cutover_defers_only_the_reviewed_bounds_constraint() {
+        let ordinary = selected_key_directory_migrations(false)
+            .map(|migration| (migration.version, migration.filename))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ordinary,
+            vec![
+                (3, "0003_key_directory.sql"),
+                (6, "0006_key_directory_bounds.sql")
+            ]
+        );
+
+        let deferred = selected_key_directory_migrations(true)
+            .map(|migration| (migration.version, migration.filename))
+            .collect::<Vec<_>>();
+        assert_eq!(deferred, vec![(3, "0003_key_directory.sql")]);
     }
 
     #[tokio::test]

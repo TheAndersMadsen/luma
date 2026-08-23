@@ -163,7 +163,10 @@ assert re.fullmatch(
     r"# Netscape HTTP Cookie File\n"
     r"127\.0\.0\.1\tFALSE\t/\tFALSE\t[0-9]+\tcarry_session\t(?P<token>[A-Za-z0-9_.-]+)\n"
     r"#HttpOnly_center\.andersmadsen\.dk\tFALSE\t/\tFALSE\t[0-9]+\tcarry_session\t(?P=token)\n"
-    r"#HttpOnly_cosmos\.andersmadsen\.dk\tFALSE\t/\tFALSE\t[0-9]+\tcarry_session\t(?P=token)\n",
+    # carry.andersmadsen.dk is the exact deployed dashboard-host cookie ABI.
+    # Cosmos is the product name; changing this host would make curl omit the
+    # session during legacy-origin rollback canaries.
+    r"#HttpOnly_carry\.andersmadsen\.dk\tFALSE\t/\tFALSE\t[0-9]+\tcarry_session\t(?P=token)\n",
     data,
 )
 PY

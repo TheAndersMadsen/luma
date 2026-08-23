@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
@@ -6,10 +7,26 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const deploy = readFileSync(path.join(root, "platform/deploy/vps/remote/deploy.sh"), "utf8");
-const compose = readFileSync(path.join(root, "compose.yaml"), "utf8");
 const production = readFileSync(path.join(root, "platform/compose/production.yaml"), "utf8");
 const cosmosServer = readFileSync(path.join(root, "cosmos/crates/cosmos/src/lib.rs"), "utf8");
 const operations = readFileSync(path.join(root, "docs/operations.md"), "utf8");
+
+function effectiveCompose(files) {
+  const env = { ...process.env, REVIVAL_RELEASE_ID: "a".repeat(64) };
+  for (const file of files) {
+    const source = readFileSync(path.join(root, file), "utf8");
+    for (const match of source.matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*):\?[^}]*\}/gu)) {
+      env[match[1]] = match[1].endsWith("_DIR") ? "/tmp/ai-pin-revival-compose-probe" : "compose-probe";
+    }
+  }
+  const rendered = spawnSync(
+    "docker",
+    ["compose", ...files.flatMap((file) => ["-f", file]), "config", "--format", "json"],
+    { cwd: root, encoding: "utf8", env, maxBuffer: 32 * 1024 * 1024 },
+  );
+  assert.equal(rendered.status, 0, rendered.stderr);
+  return JSON.parse(rendered.stdout);
+}
 
 function serviceBlock(source, name) {
   const start = source.indexOf(`\n  ${name}:\n`);
@@ -46,8 +63,20 @@ test("durable channel-key dependencies are explicit before any serving listener"
       `${workload} must require the protected PostgreSQL authority`,
     );
   }
-  assert.match(compose, /^  COSMOS_STATE_DIR: \/var\/lib\/cosmos$/mu);
-  assert.match(serviceBlock(production, "ai-bus"), /- cosmos-state:\/var\/lib\/cosmos/u);
+  const model = effectiveCompose(["compose.yaml", "platform/compose/production.yaml"]);
+  const stateGrants = Object.entries(model.services)
+    .flatMap(([service, definition]) => (definition.volumes ?? [])
+      .filter((volume) => volume.type === "volume" && volume.source === "cosmos-state")
+      .map((volume) => [service, volume.target]));
+  assert.deepEqual(stateGrants.sort(), [
+    ["account", "/var/lib/carry"],
+    ["ai-bus", "/var/lib/carry"],
+    ["connectivity", "/var/lib/carry"],
+    ["contacts", "/var/lib/carry"],
+    ["feature-flags", "/var/lib/carry"],
+    ["notable-events", "/var/lib/carry"],
+    ["provisioning", "/var/lib/carry"],
+  ]);
 
   const validation = cosmosServer.indexOf("validate_durable_key_configuration(&config)?;");
   const directory = cosmosServer.indexOf("KeyDirectory::configured_from(config.database_url.as_deref())");
@@ -64,4 +93,50 @@ test("durable channel-key dependencies are explicit before any serving listener"
   assert.match(operations, /PostgreSQL is the sole channel-key authority in parity and production/u);
   assert.match(operations, /refuse startup before binding a\s+listener/u);
   assert.match(operations, /Development and test may use the explicit\s+memory-only shape/u);
+});
+
+test("the effective production model exposes only used resources and the four legacy storage ABIs", () => {
+  const model = effectiveCompose(["compose.yaml", "platform/compose/production.yaml"]);
+  assert.deepEqual(Object.keys(model.volumes ?? {}).sort(), [
+    "cosmos-pgdata",
+    "cosmos-state",
+    "grafana-data",
+    "prometheus-data",
+  ]);
+  assert.deepEqual(
+    Object.fromEntries(Object.entries(model.volumes).map(([name, volume]) => [name, volume.name])),
+    {
+      "cosmos-pgdata": "humane-carry-clone_carry-pgdata",
+      "cosmos-state": "humane-carry-clone_carry-state",
+      "grafana-data": "humane-carry-clone_grafana-data",
+      "prometheus-data": "humane-carry-clone_prometheus-data",
+    },
+  );
+  assert.ok(Object.values(model.volumes).every((volume) => volume.external === true));
+  assert.deepEqual(Object.keys(model.networks ?? {}).sort(), [
+    "cosmos-internal",
+    "local-model",
+    "loopback-publish",
+    "provider-egress",
+    "search-egress",
+    "search-service",
+    "spotify-control",
+  ]);
+  assert.equal(model.networks["local-model"].name, "humane-carry-clone_carry-local");
+  assert.equal(model.networks["local-model"].external, true);
+
+  for (const service of ["ai-bus", "contacts", "notable-events"]) {
+    assert.equal(model.services[service].environment.COSMOS_DEFER_KEY_DIRECTORY_BOUNDS, "1");
+  }
+
+  const base = effectiveCompose(["compose.yaml"]);
+  const development = effectiveCompose(["compose.yaml", "platform/compose/development.yaml"]);
+  assert.deepEqual(Object.keys(base.volumes ?? {}).sort(), ["center-data", "cosmos-state"]);
+  assert.deepEqual(Object.keys(base.networks ?? {}).sort(), ["cosmos-internal", "wearer-edge"]);
+  assert.deepEqual(Object.keys(development.volumes ?? {}).sort(), [
+    "center-data",
+    "center-development-next",
+    "cosmos-state",
+  ]);
+  assert.deepEqual(Object.keys(development.networks ?? {}).sort(), ["cosmos-internal", "wearer-edge"]);
 });

@@ -95,6 +95,36 @@ function curlJar({ chunks = 2, manifest = null, session = "eyJhbGciOiJIUzI1NiJ9.
   return `${rows.join("\n")}\n`;
 }
 
+test("the Cosmos owner-canary writer emits the exact legacy dashboard cookie ABI", async (t) => {
+  const directory = await workspace(t);
+  const output = path.join(directory, "owner.cookies");
+  const result = bash(String.raw`
+source "$1"
+load_compose_command() { COMPOSE=(docker compose); }
+read_env_value() { printf 'owner-subject\n'; }
+docker() {
+  if [[ "$1 $2 $3 $4" == "compose ps -q center" ]]; then
+    printf 'center-container\n'
+    return
+  fi
+  [[ "$1" == exec && "$2" == -i && "$3" == -e && "$5" == center-container && "$6" == node ]] || return 97
+  REVIVAL_CANARY_SUB="\${4#REVIVAL_CANARY_SUB=}" \
+    AUTH_SESSION_SECRET=0123456789abcdef0123456789abcdef node
+}
+write_owner_canary_cookie fixture-release "$2"
+`, [output]);
+  assert.equal(result.status, 0, result.stderr);
+
+  const rows = (await readFile(output, "utf8")).trimEnd().split("\n").slice(1);
+  assert.deepEqual(rows.map((row) => row.split("\t")[0]), [
+    "127.0.0.1",
+    "#HttpOnly_center.andersmadsen.dk",
+    "#HttpOnly_carry.andersmadsen.dk",
+  ]);
+  assert.ok(rows.every((row) => row.split("\t")[5] === "carry_session"));
+  assert.equal(fs.statSync(output).mode & 0o777, 0o600);
+});
+
 /*
  * What Center ACTUALLY answers a successful login with, down to the two details
  * that broke the first real run of this gate against production:

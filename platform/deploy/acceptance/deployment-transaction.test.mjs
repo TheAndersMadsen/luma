@@ -442,6 +442,7 @@ test("active attestation roots are bound to matching read-only production mounts
   const script = String.raw`
 source "$1"
 active_service_container() { printf 'ai-bus\n'; }
+assert_bind_mount_objects() { :; }
 fixture="$2"
 docker() {
   [[ "$1" == inspect ]] || return 1
@@ -453,6 +454,27 @@ fixture="$3"; ! (active_attestation_root >/dev/null)
 fixture="$4"; ! (active_attestation_root >/dev/null)
 `;
   const result = spawnSync("bash", ["-c", script, "fixture", common, good, mixed, writable], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test("active bind verification compares the host object with the running mount namespace", async () => {
+  const common = path.join(remote, "common.sh");
+  const directory = await realpath(await mkdtemp(path.join(os.tmpdir(), "revival-bind-object-")));
+  const source = path.join(directory, "source");
+  const other = path.join(directory, "other");
+  await mkdir(source);
+  await mkdir(other);
+  const script = String.raw`
+source "$1"
+docker() {
+  [[ "$1" == inspect && "$2" == --format ]] || return 97
+  printf 'true %s\n' "$$"
+}
+sudo() { [[ "$1" != -n ]] || shift; "$@"; }
+assert_bind_mount_objects fixture-container fixture "$2" "$2"
+! (assert_bind_mount_objects fixture-container fixture "$2" "$3")
+`;
+  const result = spawnSync("bash", ["-c", script, "fixture", common, source, other], { encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr);
 });
 

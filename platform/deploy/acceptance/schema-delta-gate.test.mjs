@@ -419,6 +419,19 @@ const refusals = [
     expect: /gained an inline table constraint, which can reject or reinterpret rows that already exist/u,
   },
   {
+    // 0006 remains a deliberate schema operation, not something the generic
+    // first-cutover classifier may wave through. Production defers this exact
+    // migration; widening the classifier to accept constraints would weaken
+    // every future cutover.
+    name: "the pending key-directory bounds constraint on the deployed table",
+    before: { carry: carry({ extra: table("carry_channel_key", ['"kid" "text" NOT NULL', '"key" bytea NOT NULL']) }) },
+    after: { carry: carry({
+      extra: table("carry_channel_key", ['"kid" "text" NOT NULL', '"key" bytea NOT NULL'])
+        + 'ALTER TABLE ONLY "public"."carry_channel_key"\n    ADD CONSTRAINT "carry_channel_key_shape" CHECK (((octet_length("kid") >= 1) AND (octet_length("kid") <= 1024) AND (octet_length("key") = 16)));\n\n',
+    }) },
+    expect: /constraint carry_channel_key_shape on table public\.carry_channel_key/u,
+  },
+  {
     // A CREATE TABLE block is more than its column list. `ALTER TABLE ... SET
     // UNLOGGED` rewrites only the block's HEADING, so a classifier that compared
     // column sets alone would find nothing to say about it and let it ride along

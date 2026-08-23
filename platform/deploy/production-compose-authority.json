@@ -23,7 +23,7 @@
   },
   "composeFiles": {
     "compose.yaml": "bcfe542c5b21c96fb61545b2d147e6ea90f1e17d49c41dfaa7e0ab0c2120909a",
-    "platform/compose/production.yaml": "21c30a0110bf7c5db44847313e12d6b3b81416332c0fef00a0c288e231dd5a1a"
+    "platform/compose/production.yaml": "74cf5c6e28d91d98a97bd0dfa019bdf0b752d470bbcd0e8555fe574a9b64d7e1"
   },
   "remoteCommon": {
     "path": "platform/deploy/vps/remote/common.sh",
@@ -117,17 +117,14 @@
     "resources": {
       "networks": {
         "cosmos-internal": null,
-        "identity-edge": null,
         "local-model": "humane-carry-clone_carry-local",
         "loopback-publish": null,
         "provider-egress": null,
         "search-egress": null,
         "search-service": null,
-        "spotify-control": null,
-        "wearer-edge": null
+        "spotify-control": null
       },
       "volumes": {
-        "center-data": null,
         "cosmos-pgdata": "humane-carry-clone_carry-pgdata",
         "cosmos-state": "humane-carry-clone_carry-state",
         "grafana-data": "humane-carry-clone_grafana-data",

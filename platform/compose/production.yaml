@@ -35,6 +35,11 @@ services:
       REVIVAL_DEPLOYMENT_ENVIRONMENT: production
       COSMOS_KID_SCOPE: ${COSMOS_KID_SCOPE:?set COSMOS_KID_SCOPE to audit or enforce in the protected production env}
       COSMOS_DATABASE_URL: ${COSMOS_DATABASE_URL:?set COSMOS_DATABASE_URL in the protected production env}
+      # The first zero-copy cutover must not add a CHECK constraint to the
+      # deployed database as a side effect of process startup. Runtime writes
+      # already enforce these bounds. Remove this only in a separately reviewed
+      # schema operation after the legacy rows have been validated.
+      COSMOS_DEFER_KEY_DIRECTORY_BOUNDS: "1"
       COSMOS_EDGE_TOKEN: ${COSMOS_EDGE_TOKEN:?set COSMOS_EDGE_TOKEN in the protected production env}
       COSMOS_OIDC_ISSUER: ${COSMOS_OIDC_ISSUER:-https://center.andersmadsen.dk/realms/humane}
       COSMOS_OIDC_JWKS_URI: ${COSMOS_OIDC_JWKS_URI:-http://keycloak:8080/realms/humane/protocol/openid-connect/certs}
@@ -143,6 +148,7 @@ services:
       COSMOS_STATE_DIR: /var/lib/carry
       REVIVAL_DEPLOYMENT_ENVIRONMENT: production
       COSMOS_DATABASE_URL: ${COSMOS_DATABASE_URL:?set COSMOS_DATABASE_URL in the protected production env}
+      COSMOS_DEFER_KEY_DIRECTORY_BOUNDS: "1"
       COSMOS_EDGE_TOKEN: ${COSMOS_EDGE_TOKEN:?set COSMOS_EDGE_TOKEN in the protected production env}
       COSMOS_OIDC_ISSUER: ${COSMOS_OIDC_ISSUER:-https://center.andersmadsen.dk/realms/humane}
       COSMOS_OIDC_JWKS_URI: ${COSMOS_OIDC_JWKS_URI:-http://keycloak:8080/realms/humane/protocol/openid-connect/certs}
@@ -174,6 +180,7 @@ services:
       COSMOS_STATE_DIR: /var/lib/carry
       REVIVAL_DEPLOYMENT_ENVIRONMENT: production
       COSMOS_DATABASE_URL: ${COSMOS_DATABASE_URL:?set COSMOS_DATABASE_URL in the protected production env}
+      COSMOS_DEFER_KEY_DIRECTORY_BOUNDS: "1"
       COSMOS_EDGE_TOKEN: ${COSMOS_EDGE_TOKEN:?set COSMOS_EDGE_TOKEN in the protected production env}
       COSMOS_OIDC_ISSUER: ${COSMOS_OIDC_ISSUER:-https://center.andersmadsen.dk/realms/humane}
       COSMOS_OIDC_JWKS_URI: ${COSMOS_OIDC_JWKS_URI:-http://keycloak:8080/realms/humane/protocol/openid-connect/certs}
@@ -617,7 +624,7 @@ services:
       prometheus:
         condition: service_healthy
 
-networks:
+networks: !override
   cosmos-internal:
     internal: true
   # Docker silently drops host port publication for a container attached only
@@ -657,16 +664,16 @@ secrets:
   spotify_adapter_token:
     file: ${REVIVAL_SPOTIFY_ADAPTER_SECRET_FILE:-${REVIVAL_PRIVATE_DIR:-/home/anders/ai-pin-revival/private}/spotify-adapter/token}
 
-volumes:
-  cosmos-state: !override
+volumes: !override
+  cosmos-state:
     external: true
     name: humane-carry-clone_carry-state
-  cosmos-pgdata: !override
+  cosmos-pgdata:
     external: true
     name: humane-carry-clone_carry-pgdata
-  prometheus-data: !override
+  prometheus-data:
     external: true
     name: humane-carry-clone_prometheus-data
-  grafana-data: !override
+  grafana-data:
     external: true
     name: humane-carry-clone_grafana-data

@@ -18,6 +18,36 @@ assert_durable_inputs() {
     || fail "Center data directory is missing or unsafe"
 }
 
+# Docker's mount record proves the requested source path. This second check
+# proves the running process sees that same host object at the container target.
+# A replaced path or stale mount therefore cannot pass on matching strings.
+assert_bind_mount_objects() {
+  local container="$1" label="$2" state pid
+  shift 2
+  (($# >= 2 && $# % 2 == 0)) || fail "active $label bind-object check is malformed"
+  state="$(docker inspect --format '{{.State.Running}} {{.State.Pid}}' "$container" 2>/dev/null)" \
+    || fail "active $label container state is unavailable"
+  [[ "$state" =~ ^true\ [1-9][0-9]*$ ]] \
+    || fail "active $label container is not running with one mount namespace"
+  pid="${state#true }"
+  sudo -n python3 -I -B - "$pid" "$@" <<'PY' \
+    || fail "active $label container does not see the exact deployed bind objects"
+import os,stat,sys
+
+pid,*pairs=sys.argv[1:]
+assert pid.isdigit() and int(pid)>0 and len(pairs)>=2 and len(pairs)%2==0
+for source,destination in zip(pairs[::2],pairs[1::2]):
+    assert os.path.isabs(source) and os.path.normpath(source)==source
+    assert os.path.isabs(destination) and destination!="/" and os.path.normpath(destination)==destination
+    host=os.lstat(source)
+    mounted=os.lstat(f"/proc/{pid}/root{destination}")
+    assert not stat.S_ISLNK(host.st_mode) and not stat.S_ISLNK(mounted.st_mode)
+    assert stat.S_IFMT(host.st_mode) in (stat.S_IFREG,stat.S_IFDIR)
+    assert (host.st_dev,host.st_ino,stat.S_IFMT(host.st_mode)) == \
+           (mounted.st_dev,mounted.st_ino,stat.S_IFMT(mounted.st_mode))
+PY
+}
+
 active_read_only_security_root() {
   local service="$1" first_destination="$2" second_destination="$3"
   local legacy_first_destination="$4" legacy_second_destination="$5"
@@ -58,6 +88,8 @@ print(mounts[0].get("Source", ""))
     && sudo -n test -f "$first_source" && ! sudo -n test -L "$first_source" \
     && sudo -n test -f "$second_source" && ! sudo -n test -L "$second_source" \
     || fail "active $label root contains an unsafe object"
+  assert_bind_mount_objects "$container" "$label security" \
+    "$first_source" "$first_destination" "$second_source" "$second_destination"
   printf '%s\n' "$root"
 }
 
@@ -75,6 +107,7 @@ active_device_user_root() {
 
 active_edge_security_root() {
   local container project destination source expected
+  local -a mounted_objects=()
   container="$(active_service_container edge)"
   project="$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' "$container")"
   case "$project" in "$PROJECT"|"$LEGACY_PROJECT") ;; *)
@@ -90,6 +123,7 @@ print(mounts[0].get("Source", ""))
 ' "$destination")" || fail "active edge certificate mount is not one reviewed read-only bind"
     [[ "$source" == "$expected" ]] \
       || fail "active edge certificate mount does not use the exact deployed Carry inode path"
+    mounted_objects+=("$source" "$destination")
   done <<EOF
 $(if [[ "$project" == "$LEGACY_PROJECT" ]]; then
     printf '/etc/carry-edge/certs/server.crt\t%s/server.crt\n' "$PRODUCTION_EDGE_CERT_DIR"
@@ -103,6 +137,7 @@ $(if [[ "$project" == "$LEGACY_PROJECT" ]]; then
     printf '/etc/cosmos-edge/certs/onboarding-client-ca.crt\t%s/onboarding-client-ca.crt\n' "$PRODUCTION_EDGE_CERT_DIR"
   fi)
 EOF
+  assert_bind_mount_objects "$container" "edge security" "${mounted_objects[@]}"
   printf '%s\n' "$LEGACY_EDGE_DIR"
 }
 
@@ -132,6 +167,9 @@ assert mount.get("Type")==kind and mount.get("RW") is True
 assert mount.get("Name" if kind=="volume" else "Source")==expected
 ' "$destination" "$type" "$expected" \
       || fail "active $service mount at $destination is not the one exact writable Carry source"
+    if [[ "$type" == bind ]]; then
+      assert_bind_mount_objects "$container" "$service data" "$expected" "$destination"
+    fi
   done <<EOF
 postgres	/var/lib/postgresql/data	$PG_VOLUME	volume
 connectivity	@state@	$STATE_VOLUME	volume
