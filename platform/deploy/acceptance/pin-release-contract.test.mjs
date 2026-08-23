@@ -46,12 +46,6 @@ import {
 const SIGNER = "a".repeat(64);
 const OTHER_SIGNER = "b".repeat(64);
 const SERIAL = "1H4MPA3C180234";
-const STEADY_ROLES = Object.freeze([
-  "installer",
-  "hook",
-  "server",
-  "hook-injector",
-]);
 
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), "revival-pin-release-"));
@@ -103,51 +97,12 @@ async function fixture(t) {
     return { apkRoot, receipts, manifest };
   }
 
-  async function makeLegacyRollback(name, metadataByRole) {
-    const apkRoot = join(root, name);
-    await mkdir(apkRoot, { recursive: true });
-    for (const role of STEADY_ROLES) {
-      const artifactMetadata = metadataByRole[role];
-      assert.ok(artifactMetadata, `legacy fixture metadata missing for ${role}`);
-      const apkPath = join(apkRoot, `${role}.apk`);
-      const bytes = [
-        "signed-legacy-apk-fixture",
-        name,
-        role,
-        artifactMetadata.versionName,
-        artifactMetadata.versionCode,
-        "",
-      ].join(":");
-      await writeFile(apkPath, bytes);
-      const record = {
-        package: PIN_RELEASE_PACKAGE_BY_ROLE[role],
-        versionName: artifactMetadata.versionName,
-        versionCode: artifactMetadata.versionCode,
-        signerSha256: artifactMetadata.signerSha256 ?? SIGNER,
-      };
-      metadata.set(await realpath(apkPath), record);
-      metadataByBytes.set(bytes, record);
-    }
-    const artifacts = [];
-    for (const role of STEADY_ROLES) {
-      artifacts.push(await inspectPinReleaseArtifact({
-        role,
-        apkRoot,
-        path: `${role}.apk`,
-        expectedSigner: metadataByRole[role].signerSha256 ?? SIGNER,
-        toolRunner,
-      }));
-    }
-    return { apkRoot, artifacts };
-  }
-
   return {
     root,
     metadata,
     metadataByBytes,
     toolRunner,
     makeRelease,
-    makeLegacyRollback,
   };
 }
 
@@ -195,23 +150,6 @@ function installedState(
       signerSha256:
         receipts?.artifacts.find((artifact) => artifact.role === role)?.signerSha256 ??
         SIGNER,
-    })),
-  };
-}
-
-function legacyInstalledState(artifacts, { serial = SERIAL } = {}) {
-  return {
-    schemaVersion: 1,
-    serial,
-    mode: "legacy-mixed",
-    currentRelease: null,
-    artifacts: artifacts.map((artifact) => ({
-      role: artifact.role,
-      package: artifact.package,
-      versionName: artifact.versionName,
-      versionCode: artifact.versionCode,
-      sha256: artifact.sha256,
-      signerSha256: artifact.signerSha256,
     })),
   };
 }
@@ -288,7 +226,6 @@ test("inspect, canonical manifest, verify, and plan form one host-only atomic co
   assert.equal(plan.fromVersionCode, 202_608_090);
   assert.equal(plan.toVersionCode, 202_608_091);
   assert.deepEqual(plan.operations.map((operation) => operation.role), PIN_RELEASE_ARTIFACT_ROLES);
-  assert.equal(plan.rollback, null);
 });
 
 test("host identity and canonical bytes are byte-exact with Center's independent consumer", async (t) => {
@@ -699,294 +636,6 @@ test("history rejects releaseId equivocation and both version dimensions regress
   );
 });
 
-test("rollback descriptor is complete, byte-verified, signer-bound, and serial-bound", async (t) => {
-  const f = await fixture(t);
-  const target = await f.makeRelease("upgrade", {
-    version: "2026-08-09.1",
-    versionCode: 202_608_091,
-  });
-  const previous = await f.makeRelease("rollback", {
-    version: "2026-08-09.0",
-    versionCode: 202_608_090,
-  });
-  const rollbackBundle = {
-    schemaVersion: 1,
-    kind: "atomic",
-    serial: SERIAL,
-    manifest: previous.manifest,
-    receipts: previous.receipts,
-  };
-  const previousIdentity = verifyPinReleaseMetadata({
-    manifest: previous.manifest,
-    receipts: previous.receipts,
-    expectedSigner: SIGNER,
-  }).historyEntry;
-  const plan = await planPinRelease({
-    ...target,
-    expectedSigner: SIGNER,
-    toolRunner: f.toolRunner,
-    serial: SERIAL,
-    installedState: installedState(202_608_090, {
-      currentRelease: previousIdentity,
-      receipts: previous.receipts,
-    }),
-    rollbackBundle,
-    rollbackRoot: previous.apkRoot,
-  });
-  assert.equal(plan.rollback.kind, "atomic");
-  assert.equal(plan.rollback.releaseId, previous.manifest.releaseId);
-  assert.equal(plan.rollback.versionCode, 202_608_090);
-  assert.equal(plan.rollback.artifacts.length, 5);
-
-  await rejectsCode(
-    () => planPinRelease({
-      ...target,
-      expectedSigner: SIGNER,
-      toolRunner: f.toolRunner,
-      serial: SERIAL,
-      installedState: installedState(202_608_090, {
-        currentRelease: previousIdentity,
-        receipts: previous.receipts,
-      }),
-      rollbackBundle: { ...rollbackBundle, serial: "WRONG123" },
-      rollbackRoot: previous.apkRoot,
-    }),
-    "serial-mismatch",
-  );
-
-  const completeAtomicState = installedState(202_608_090, {
-    complete: true,
-    currentRelease: previousIdentity,
-    receipts: previous.receipts,
-  });
-  await rejectsCode(
-    () => planPinRelease({
-      ...target,
-      expectedSigner: SIGNER,
-      toolRunner: f.toolRunner,
-      serial: SERIAL,
-      installedState: {
-        ...completeAtomicState,
-        artifacts: completeAtomicState.artifacts.map((artifact) =>
-          artifact.role === "bootstrap"
-            ? { ...artifact, sha256: OTHER_SIGNER }
-            : artifact,
-        ),
-      },
-      rollbackBundle,
-      rollbackRoot: previous.apkRoot,
-    }),
-    "rollback-invalid",
-  );
-
-  const wrongLineage = await f.makeRelease("wrong-lineage-rollback", {
-    version: "2026-08-08.9",
-    versionCode: 202_608_090,
-  });
-  await rejectsCode(
-    () => planPinRelease({
-      ...target,
-      expectedSigner: SIGNER,
-      toolRunner: f.toolRunner,
-      serial: SERIAL,
-      installedState: installedState(202_608_090, {
-        currentRelease: previousIdentity,
-        receipts: previous.receipts,
-      }),
-      rollbackBundle: {
-        schemaVersion: 1,
-        kind: "atomic",
-        serial: SERIAL,
-        manifest: wrongLineage.manifest,
-        receipts: wrongLineage.receipts,
-      },
-      rollbackRoot: wrongLineage.apkRoot,
-    }),
-    "rollback-invalid",
-  );
-
-  const future = await f.makeRelease("future-rollback", {
-    version: "2099-01-01.1",
-    versionCode: 202_608_090,
-  });
-  const futureIdentity = verifyPinReleaseMetadata({
-    manifest: future.manifest,
-    receipts: future.receipts,
-    expectedSigner: SIGNER,
-  }).historyEntry;
-  await rejectsCode(
-    () => planPinRelease({
-      ...target,
-      expectedSigner: SIGNER,
-      toolRunner: f.toolRunner,
-      serial: SERIAL,
-      installedState: installedState(202_608_090, {
-        currentRelease: futureIdentity,
-        receipts: future.receipts,
-      }),
-      rollbackBundle: {
-        schemaVersion: 1,
-        kind: "atomic",
-        serial: SERIAL,
-        manifest: future.manifest,
-        receipts: future.receipts,
-      },
-      rollbackRoot: future.apkRoot,
-    }),
-    "version-regression",
-  );
-});
-
-test("legacy mixed migration preserves the real first-migration rollback identities", async (t) => {
-  const f = await fixture(t);
-  const target = await f.makeRelease("legacy-upgrade", {
-    version: "2026-08-09.1",
-    versionCode: 2_026_080_901,
-  });
-  const legacy = await f.makeLegacyRollback("legacy-rollback", {
-    installer: { versionName: "2026-08-07.0", versionCode: 20_260_807 },
-    hook: { versionName: "2026-08-07.0", versionCode: 20_260_807 },
-    server: { versionName: "2026-08-08.2", versionCode: 2_026_080_802 },
-    "hook-injector": { versionName: "2026-08-07.0", versionCode: 20_260_807 },
-  });
-  const state = legacyInstalledState(legacy.artifacts);
-  const rollbackBundle = {
-    schemaVersion: 1,
-    kind: "legacy-mixed",
-    serial: SERIAL,
-    artifacts: legacy.artifacts,
-  };
-  const options = {
-    ...target,
-    expectedSigner: SIGNER,
-    toolRunner: f.toolRunner,
-    serial: SERIAL,
-    installedState: state,
-    rollbackBundle,
-    rollbackRoot: legacy.apkRoot,
-  };
-
-  const plan = await planPinRelease(options);
-  assert.equal(plan.fromVersionCode, 2_026_080_802);
-  assert.equal(plan.toVersionCode, 2_026_080_901);
-  assert.equal(plan.rollback.kind, "legacy-mixed");
-  assert.deepEqual(
-    plan.rollback.artifacts.map(({ role, versionName, versionCode }) => ({
-      role,
-      versionName,
-      versionCode,
-    })),
-    [
-      { role: "installer", versionName: "2026-08-07.0", versionCode: 20_260_807 },
-      { role: "hook", versionName: "2026-08-07.0", versionCode: 20_260_807 },
-      { role: "server", versionName: "2026-08-08.2", versionCode: 2_026_080_802 },
-      { role: "hook-injector", versionName: "2026-08-07.0", versionCode: 20_260_807 },
-    ],
-  );
-
-  await rejectsCode(
-    () => planPinRelease({ ...options, rollbackBundle: undefined }),
-    "rollback-invalid",
-  );
-  await rejectsCode(
-    () => planPinRelease({
-      ...options,
-      rollbackBundle: { ...rollbackBundle, serial: "WRONG123" },
-    }),
-    "serial-mismatch",
-  );
-  await rejectsCode(
-    () => planPinRelease({
-      ...options,
-      rollbackBundle: {
-        ...rollbackBundle,
-        artifacts: rollbackBundle.artifacts.slice(0, 3),
-      },
-    }),
-    "partial-bundle",
-  );
-
-  for (const [field, value] of [
-    ["versionName", "2026-08-07.1"],
-    ["versionCode", 20_260_808],
-    ["sha256", OTHER_SIGNER],
-    ["signerSha256", OTHER_SIGNER],
-  ]) {
-    await rejectsCode(
-      () => planPinRelease({
-        ...options,
-        rollbackBundle: {
-          ...rollbackBundle,
-          artifacts: rollbackBundle.artifacts.map((artifact) =>
-            artifact.role === "installer" ? { ...artifact, [field]: value } : artifact,
-          ),
-        },
-      }),
-      "rollback-invalid",
-    );
-  }
-
-  await rejectsCode(
-    () => planPinRelease({
-      ...options,
-      installedState: {
-        ...state,
-        artifacts: state.artifacts.map((artifact) =>
-          artifact.role === "server"
-            ? { ...artifact, signerSha256: OTHER_SIGNER }
-            : artifact,
-        ),
-      },
-    }),
-    "signer-mismatch",
-  );
-
-  const staleTarget = await f.makeRelease("legacy-stale-version", {
-    version: "2026-08-08.1",
-    versionCode: 2_026_080_902,
-  });
-  await rejectsCode(
-    () => planPinRelease({ ...options, ...staleTarget }),
-    "version-regression",
-  );
-
-  assert.throws(
-    () => parsePinInstalledState({
-      ...state,
-      mode: "atomic",
-      currentRelease: {
-        releaseId: "c".repeat(64),
-        version: "2026-08-08.2",
-        versionCode: 2_026_080_802,
-        manifestSha256: "d".repeat(64),
-      },
-    }),
-    (error) =>
-      error instanceof PinReleaseContractError &&
-      error.code === "installed-state-invalid",
-  );
-  assert.throws(
-    () => parsePinInstalledState({ ...state, artifacts: state.artifacts.slice(0, 3) }),
-    (error) =>
-      error instanceof PinReleaseContractError &&
-      error.code === "installed-state-invalid",
-  );
-
-  const serverPath = join(legacy.apkRoot, "server.apk");
-  const tamperedBytes = "tampered-after-legacy-inspection";
-  await writeFile(serverPath, tamperedBytes);
-  f.metadataByBytes.set(tamperedBytes, {
-    package: PIN_RELEASE_PACKAGE_BY_ROLE.server,
-    versionName: "2026-08-08.2",
-    versionCode: 2_026_080_802,
-    signerSha256: SIGNER,
-  });
-  await rejectsCode(
-    () => planPinRelease(options),
-    "receipt-mismatch",
-  );
-});
-
 test("strict JSON rejects duplicate keys and the shared schema freezes Setup v1 fields", async () => {
   assert.throws(
     () => parsePinReleaseJson('{"schemaVersion":1,"schemaVersion":1}'),
@@ -1013,14 +662,10 @@ test("strict JSON rejects duplicate keys and the shared schema freezes Setup v1 
     schema.$defs.installedArtifact.required,
     ["role", "package", "versionName", "versionCode", "sha256", "signerSha256"],
   );
-  assert.deepEqual(
-    schema.$defs.rollbackBundle.oneOf.map((entry) => entry.$ref),
-    ["#/$defs/atomicRollbackBundle", "#/$defs/legacyRollbackBundle"],
-  );
-  assert.deepEqual(
-    schema.$defs.rollbackPlan.oneOf.map((entry) => entry.$ref),
-    ["#/$defs/atomicRollbackPlan", "#/$defs/legacyRollbackPlan"],
-  );
+  assert.deepEqual(schema.$defs.installedState.properties.mode.enum, ["empty", "atomic"]);
+  assert.deepEqual(Object.keys(schema.$defs.installPlan.properties), [
+    "schemaVersion", "serial", "releaseId", "fromVersionCode", "toVersionCode", "operations",
+  ]);
 });
 
 test("host release module exposes no device mutation command surface", async () => {

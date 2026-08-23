@@ -104,19 +104,6 @@ const HISTORY_ENTRY_FIELDS = Object.freeze([
   "versionCode",
   "manifestSha256",
 ]);
-const ATOMIC_ROLLBACK_FIELDS = Object.freeze([
-  "schemaVersion",
-  "kind",
-  "serial",
-  "manifest",
-  "receipts",
-]);
-const LEGACY_ROLLBACK_FIELDS = Object.freeze([
-  "schemaVersion",
-  "kind",
-  "serial",
-  "artifacts",
-]);
 
 export class PinReleaseContractError extends Error {
   constructor(code, message) {
@@ -945,8 +932,8 @@ export function parsePinInstalledState(value) {
   if (value.schemaVersion !== PIN_RELEASE_SCHEMA_VERSION) fail("schema-version", "installed-state schemaVersion must be 1");
   const serial = requiredSerial(value.serial);
   const mode = requiredTrimmedString(value.mode, "installed-state mode");
-  if (!["empty", "atomic", "legacy-mixed"].includes(mode)) {
-    fail("installed-state-invalid", "installed-state mode must be empty, atomic, or legacy-mixed");
+  if (!["empty", "atomic"].includes(mode)) {
+    fail("installed-state-invalid", "installed-state mode must be empty or atomic");
   }
   let currentRelease = null;
   if (value.currentRelease !== null) {
@@ -1006,16 +993,6 @@ export function parsePinInstalledState(value) {
       ))
   ) {
     fail("installed-state-invalid", "atomic installed state must bind every steady role to currentRelease");
-  }
-  if (
-    mode === "legacy-mixed" &&
-    (currentRelease !== null ||
-      artifacts.length !== STEADY_INSTALLED_ROLES.length ||
-      !hasAllSteadyRoles ||
-      artifacts.some((artifact) => artifact.role === "bootstrap") ||
-      new Set(artifacts.map((artifact) => artifact.versionCode)).size < 2)
-  ) {
-    fail("installed-state-invalid", "legacy-mixed state must bind four steady roles with mixed versionCodes");
   }
   return Object.freeze({
     schemaVersion: 1,
@@ -1164,56 +1141,6 @@ export async function verifyPinReleaseBundle(options) {
   });
 }
 
-export function parsePinRollbackBundle(value) {
-  if (!isRecord(value)) fail("invalid-shape", "rollback-bundle descriptor must be an object");
-  const kind = requiredTrimmedString(value.kind, "rollback kind");
-  if (kind === "atomic") {
-    assertExactFields(value, ATOMIC_ROLLBACK_FIELDS, "atomic rollback-bundle descriptor");
-    if (value.schemaVersion !== PIN_RELEASE_SCHEMA_VERSION) fail("schema-version", "rollback-bundle schemaVersion must be 1");
-    return Object.freeze({
-      schemaVersion: 1,
-      kind,
-      serial: requiredSerial(value.serial, "rollback serial"),
-      manifest: parsePinReleaseManifest(value.manifest),
-      receipts: parsePinReleaseReceiptBundle(value.receipts),
-    });
-  }
-  if (kind === "legacy-mixed") {
-    assertExactFields(value, LEGACY_ROLLBACK_FIELDS, "legacy rollback-bundle descriptor");
-    if (value.schemaVersion !== PIN_RELEASE_SCHEMA_VERSION) fail("schema-version", "rollback-bundle schemaVersion must be 1");
-    if (!Array.isArray(value.artifacts)) fail("invalid-shape", "legacy rollback artifacts must be an array");
-    const parsed = value.artifacts.map((artifact, index) => parseReceipt(artifact, index));
-    const byRole = new Map();
-    for (const artifact of parsed) {
-      if (!STEADY_INSTALLED_ROLES.includes(artifact.role)) {
-        fail("rollback-invalid", "legacy rollback may contain only steady installed roles");
-      }
-      if (byRole.has(artifact.role)) fail("duplicate-role", `legacy rollback duplicates role ${artifact.role}`);
-      byRole.set(artifact.role, artifact);
-    }
-    if (
-      byRole.size !== STEADY_INSTALLED_ROLES.length ||
-      STEADY_INSTALLED_ROLES.some((role) => !byRole.has(role))
-    ) {
-      fail("partial-bundle", "legacy rollback must contain all four steady installed roles");
-    }
-    const artifacts = Object.freeze(STEADY_INSTALLED_ROLES.map((role) => byRole.get(role)));
-    if (new Set(artifacts.map((artifact) => artifact.path)).size !== artifacts.length) {
-      fail("duplicate-path", "legacy rollback artifacts must use distinct paths");
-    }
-    if (new Set(artifacts.map((artifact) => artifact.versionCode)).size < 2) {
-      fail("rollback-invalid", "legacy rollback must preserve a genuinely mixed versionCode set");
-    }
-    return Object.freeze({
-      schemaVersion: 1,
-      kind,
-      serial: requiredSerial(value.serial, "rollback serial"),
-      artifacts,
-    });
-  }
-  fail("rollback-invalid", "rollback kind must be atomic or legacy-mixed");
-}
-
 export async function planPinRelease(options) {
   const serial = requiredSerial(options?.serial, "requested serial");
   const installed = parsePinInstalledState(options?.installedState);
@@ -1239,113 +1166,6 @@ export async function planPinRelease(options) {
   ) {
     fail("version-regression", "release version must be newer than the installed current release");
   }
-  if (
-    installed.mode === "legacy-mixed" &&
-    installed.artifacts.some(
-      (artifact) => compareInstallVersions(verified.version, artifact.versionName) !== 1,
-    )
-  ) {
-    fail("version-regression", "release version must be newer than every legacy installed package");
-  }
-  if (
-    installed.mode === "legacy-mixed" &&
-    (options.rollbackBundle === undefined || options.rollbackBundle === null)
-  ) {
-    fail("rollback-invalid", "legacy-mixed migration requires an exact per-role rollback bundle");
-  }
-
-  let rollback = null;
-  if (options.rollbackBundle !== undefined && options.rollbackBundle !== null) {
-    const descriptor = parsePinRollbackBundle(options.rollbackBundle);
-    if (descriptor.serial !== serial) fail("serial-mismatch", "rollback bundle serial does not exactly match requested serial");
-    const installedRoles = new Set(installed.artifacts.map((artifact) => artifact.role));
-    if (STEADY_INSTALLED_ROLES.some((role) => !installedRoles.has(role))) {
-      fail("rollback-invalid", "rollback planning requires all four steady installed package roles");
-    }
-    if (descriptor.kind === "atomic") {
-      if (installed.mode !== "atomic" || installed.currentRelease === null) {
-        fail("rollback-invalid", "atomic rollback requires an atomic installed-state identity");
-      }
-      if (descriptor.manifest.releaseId === verified.releaseId) fail("rollback-invalid", "rollback release must differ from target release");
-      const installedCodes = new Set(installed.artifacts.map((artifact) => artifact.versionCode));
-      const rollbackVersionCode = descriptor.manifest.artifacts[0].versionCode;
-      if (installedCodes.size !== 1 || installedMaximum !== rollbackVersionCode) {
-        fail("rollback-invalid", "rollback release must exactly match the installed atomic versionCode");
-      }
-      const rollbackVerified = await verifyPinReleaseBundle({
-        manifest: descriptor.manifest,
-        receipts: descriptor.receipts,
-        apkRoot: options.rollbackRoot ?? options.apkRoot,
-        expectedSigner: verified.signerSha256,
-        apkanalyzer: options.apkanalyzer,
-        apksigner: options.apksigner,
-        toolRunner: options.toolRunner,
-      });
-      if (
-        rollbackVerified.releaseId !== installed.currentRelease.releaseId ||
-        rollbackVerified.version !== installed.currentRelease.version ||
-        rollbackVerified.versionCode !== installed.currentRelease.versionCode ||
-        rollbackVerified.manifestSha256 !== installed.currentRelease.manifestSha256
-      ) {
-        fail("rollback-invalid", "rollback release does not match the exact installed release identity");
-      }
-      for (const installedArtifact of installed.artifacts) {
-        const role = installedArtifact.role;
-        const rollbackReceipt = descriptor.receipts.artifacts.find((artifact) => artifact.role === role);
-        for (const field of ["package", "versionName", "versionCode", "sha256", "signerSha256"]) {
-          if (installedArtifact[field] !== rollbackReceipt[field]) {
-            fail("rollback-invalid", `atomic rollback ${role} does not match installed ${field}`);
-          }
-        }
-      }
-      if (
-        compareInstallVersions(rollbackVerified.version, verified.version) !== -1 ||
-        rollbackVerified.versionCode >= verified.versionCode
-      ) {
-        fail("rollback-invalid", "rollback release must be older than the target in both version dimensions");
-      }
-      rollback = Object.freeze({
-        kind: "atomic",
-        releaseId: rollbackVerified.releaseId,
-        version: rollbackVerified.version,
-        versionCode: rollbackVerified.versionCode,
-        artifacts: rollbackVerified.artifacts,
-      });
-    } else {
-      if (installed.mode !== "legacy-mixed") {
-        fail("rollback-invalid", "legacy-mixed rollback requires a legacy-mixed installed state");
-      }
-      for (const receipt of descriptor.artifacts) {
-        const installedArtifact = installed.artifacts.find((artifact) => artifact.role === receipt.role);
-        for (const field of ["package", "versionName", "versionCode", "sha256", "signerSha256"]) {
-          if (installedArtifact[field] !== receipt[field]) {
-            fail("rollback-invalid", `legacy rollback ${receipt.role} does not match installed ${field}`);
-          }
-        }
-      }
-      const live = await verifyLiveReceiptArtifacts(
-        descriptor.artifacts,
-        {
-          apkRoot: options.rollbackRoot ?? options.apkRoot,
-          apkanalyzer: options.apkanalyzer,
-          apksigner: options.apksigner,
-          toolRunner: options.toolRunner,
-        },
-        verified.signerSha256,
-      );
-      rollback = Object.freeze({
-        kind: "legacy-mixed",
-        artifacts: Object.freeze(live.map((receipt) => Object.freeze({
-          role: receipt.role,
-          path: receipt.path,
-          versionName: receipt.versionName,
-          versionCode: receipt.versionCode,
-          sha256: receipt.sha256,
-        }))),
-      });
-    }
-  }
-
   return Object.freeze({
     schemaVersion: 1,
     serial,
@@ -1359,7 +1179,6 @@ export async function planPinRelease(options) {
       path: artifact.path,
       sha256: artifact.sha256,
     }))),
-    rollback,
   });
 }
 
@@ -1404,7 +1223,7 @@ async function runCli(argv) {
       "Pin release host contract (read-only)\n\n" +
       "  inspect --root DIR --artifact ROLE=PATH (five times) [--signer SHA256] [--apkanalyzer PATH] [--apksigner PATH]\n" +
       "  verify --root DIR --manifest FILE --receipts FILE --signer SHA256 --history FILE [tool options]\n" +
-      "  plan --root DIR --manifest FILE --receipts FILE --signer SHA256 --history FILE --installed FILE --serial SERIAL [--rollback FILE --rollback-root DIR] [tool options]\n",
+      "  plan --root DIR --manifest FILE --receipts FILE --signer SHA256 --history FILE --installed FILE --serial SERIAL [tool options]\n",
     );
     return;
   }
@@ -1428,7 +1247,7 @@ async function runCli(argv) {
     return;
   }
   const commonAllowed = ["root", "manifest", "receipts", "signer", "history", "apkanalyzer", "apksigner"];
-  assertCliKeys(values, command === "plan" ? [...commonAllowed, "installed", "serial", "rollback", "rollback-root"] : commonAllowed);
+  assertCliKeys(values, command === "plan" ? [...commonAllowed, "installed", "serial"] : commonAllowed);
   const manifest = await readCanonicalManifestFile(cliValue(values, "manifest", { required: true }));
   const receipts = await readJsonFile(cliValue(values, "receipts", { required: true }), "receipts");
   const historyPath = cliValue(values, "history", { required: true });
@@ -1444,13 +1263,10 @@ async function runCli(argv) {
     process.stdout.write(`${JSON.stringify(await verifyPinReleaseBundle(common), null, 2)}\n`);
     return;
   }
-  const rollbackPath = cliValue(values, "rollback");
   process.stdout.write(`${JSON.stringify(await planPinRelease({
     ...common,
     installedState: await readJsonFile(cliValue(values, "installed", { required: true }), "installed state"),
     serial: cliValue(values, "serial", { required: true }),
-    rollbackBundle: rollbackPath ? await readJsonFile(rollbackPath, "rollback bundle") : undefined,
-    rollbackRoot: cliValue(values, "rollback-root"),
   }), null, 2)}\n`);
 }
 

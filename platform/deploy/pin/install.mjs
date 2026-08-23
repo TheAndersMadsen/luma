@@ -1019,7 +1019,6 @@ async function selectSerial(adbPath, requested) {
 
 function describePlan(plan, target) {
   const kinds = {
-    "legacy-in-place": "in-place update from the supported legacy profile",
     "routine-in-place": "in-place update from the canonical profile",
     "bootstrap-recovery": "installer bootstrap recovery (destructive)",
   };
@@ -1219,11 +1218,7 @@ async function main(argv) {
   if (!result.success) {
     section("Failed");
     process.stderr.write(`error: install failed during ${result.failedPhase ?? "planning"}: ${result.error?.message}\n`);
-    if (result.rollbackAvailable) {
-      process.stderr.write(
-        "error: the device was already being modified when this failed; re-run the install, or use the Center installer's rollback\n",
-      );
-    }
+    if (result.rollbackAvailable) process.stderr.write("error: re-run the install after correcting the reported failure\n");
     await transport.disconnect();
     return 1;
   }
