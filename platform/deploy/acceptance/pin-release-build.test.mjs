@@ -65,6 +65,7 @@ test("Docker release flow separates dependency fetch from signing inputs", () =>
   assert.deepEqual(build.args.slice(0, 3), ["build", "--platform", "linux/amd64"]);
   const prefetch = createDockerPrefetchInvocation(common);
   assert.ok(prefetch.args.includes("prefetch-release"));
+  assert.ok(prefetch.args.includes("EMBED_MODEL_CACHE_DIR=/cache/huggingface"));
   assert.equal(prefetch.args.some((value) => value.includes("signing.env")), false);
   const signed = createDockerRunInvocation({
     ...common,
@@ -74,6 +75,7 @@ test("Docker release flow separates dependency fetch from signing inputs", () =>
     privateAssets: "/inputs/assets",
   });
   assert.ok(signed.args.includes("none"));
+  assert.ok(signed.args.includes("EMBED_MODEL_CACHE_DIR=/cache/huggingface"));
   assert.ok(signed.args.some((value) => value.includes("/run/secrets/pin/signing.env")));
   assert.ok(signed.args.some((value) => value === "type=bind,src=/source,dst=/workspace,readonly"));
   assert.ok(signed.args.includes("build-release"));

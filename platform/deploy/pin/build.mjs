@@ -241,6 +241,7 @@ function baseRunArguments({ sourceRoot, stateDir, cacheDir, image }) {
     "run", "--rm", "--init", "--platform", "linux/amd64",
     "--user", `${uid}:${gid}`,
     "--read-only",
+    "--env", "EMBED_MODEL_CACHE_DIR=/cache/huggingface",
     "--tmpfs", "/tmp:rw,nosuid,nodev,mode=1777,size=2g",
     "--mount", mount(sourceRoot, "/workspace", true),
     "--mount", mount(stateDir, "/state"),
