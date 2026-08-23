@@ -297,55 +297,6 @@ export async function loadPolicy(pathValue = POLICY_PATH) {
   return Object.freeze({ policy: Object.freeze(policy), bytes: loaded.bytes, sha256: loaded.sha256 });
 }
 
-export function parseHostedVpsCandidateReceipt(value, policyRecord) {
-  const { policy, sha256: policySha256 } = policyRecord;
-  exactFields(value, VPS_RECEIPT_FIELDS, "hosted VPS candidate receipt");
-  exactString(value.schema, policy.vpsCandidate.receiptSchema, "VPS candidate receipt schema");
-  if (value.version !== policy.vpsCandidate.receiptVersion) {
-    fail("invalid-value", "hosted VPS candidate receipt version changed");
-  }
-  exactString(value.policySha256, policySha256, "VPS candidate receipt policy digest");
-  exactString(value.repository, policy.repository, "VPS candidate receipt repository");
-  exactString(value.sourceRef, policy.sourceRef, "VPS candidate receipt source ref");
-  if (!GIT_SHA_RE.test(value.sourceDigest) || !GIT_SHA_RE.test(value.sourceTree)) {
-    fail("invalid-value", "VPS candidate source identity is invalid");
-  }
-  exactString(value.runnerEnvironment, policy.runnerEnvironment, "VPS candidate runner environment");
-  exactString(value.runnerLabel, policy.runnerLabel, "VPS candidate runner label");
-  exactString(value.runnerArchitecture, policy.runnerArchitecture, "VPS candidate runner architecture");
-  if (!RUN_URI_RE.test(value.runnerInvocationUri)) {
-    fail("invalid-value", "VPS candidate run identity is invalid");
-  }
-  for (const field of [
-    "candidateId", "releaseId", "sourceArchiveSha256", "sourceReceiptSha256",
-    "toolchainReceiptSha256", "imageReceiptSha256", "imageBundleSha256",
-  ]) {
-    if (!SHA256_RE.test(value[field])) fail("invalid-value", `VPS candidate ${field} is invalid`);
-  }
-  if (!Array.isArray(value.files) || value.files.length !== policy.vpsCandidate.files.length) {
-    fail("invalid-value", "VPS candidate receipt has the wrong file count");
-  }
-  const files = value.files.map((file, index) => {
-    exactFields(file, VPS_FILE_FIELDS, `VPS candidate receipt file ${index}`);
-    const expected = policy.vpsCandidate.files[index];
-    exactString(file.role, expected.role, `VPS candidate file ${index} role`);
-    exactString(file.name, expected.name, `VPS candidate file ${index} name`);
-    if (!SHA256_RE.test(file.sha256)) fail("invalid-value", `VPS candidate ${file.role} digest is invalid`);
-    positiveInteger(file.size, `VPS candidate ${file.role} size`);
-    if (file.size > MAX_VPS_CANDIDATE_FILE_BYTES) fail("invalid-value", `VPS candidate ${file.role} is oversized`);
-    return Object.freeze(file);
-  });
-  const byRole = new Map(files.map((file) => [file.role, file]));
-  for (const [field, role] of [
-    ["sourceArchiveSha256", "source-snapshot"],
-    ["sourceReceiptSha256", "source-snapshot-receipt"],
-    ["toolchainReceiptSha256", "toolchain-receipt"],
-    ["imageReceiptSha256", "docker-image-receipt"],
-    ["imageBundleSha256", "docker-image-bundle"],
-  ]) exactString(value[field], byRole.get(role).sha256, `VPS candidate ${field}`);
-  return Object.freeze({ ...value, files: Object.freeze(files) });
-}
-
 function positiveInteger(value, label) {
   if (!Number.isSafeInteger(value) || value <= 0) fail("invalid-value", `${label} must be a positive integer`);
   return value;
@@ -775,117 +726,6 @@ export async function verifyRelease({
   return Object.freeze({ pre, releaseBundle, predicateFile, predicate, artifacts, canonicalVerification, rawResults });
 }
 
-async function digestHostedVpsCandidateFile(candidateRoot, item) {
-  const selected = resolve(candidateRoot, item.name);
-  if (dirname(selected) !== candidateRoot) fail("invalid-input", "VPS candidate file escaped its root");
-  const before = await lstat(selected, { bigint: true }).catch((error) => {
-    if (error?.code === "ENOENT") fail("missing-input", `VPS candidate ${item.role} is missing`);
-    throw error;
-  });
-  if (
-    before.isSymbolicLink() || !before.isFile() || before.size <= 0n ||
-    before.size > BigInt(MAX_VPS_CANDIDATE_FILE_BYTES) || before.size !== BigInt(item.size) ||
-    await realpath(selected) !== selected
-  ) fail("invalid-input", `VPS candidate ${item.role} is not the exact bounded regular file`);
-  const digest = createHash("sha256");
-  let size = 0;
-  for await (const chunk of createReadStream(selected, { highWaterMark: 1024 * 1024 })) {
-    size += chunk.length;
-    if (size > item.size) fail("input-changed", `VPS candidate ${item.role} grew while read`);
-    digest.update(chunk);
-  }
-  const after = await lstat(selected, { bigint: true });
-  if (
-    after.dev !== before.dev || after.ino !== before.ino || after.size !== before.size ||
-    after.mtimeNs !== before.mtimeNs || after.ctimeNs !== before.ctimeNs ||
-    size !== item.size || digest.digest("hex") !== item.sha256
-  ) fail("input-changed", `VPS candidate ${item.role} differs from its attested receipt`);
-  return Object.freeze({ path: selected, size, sha256: item.sha256 });
-}
-
-function hostedVpsCandidatePolicy(policy) {
-  return Object.freeze({
-    ...policy,
-    signerWorkflow: policy.vpsCandidate.signerWorkflow,
-    signerWorkflowUri: policy.vpsCandidate.signerWorkflowUri,
-    workflowName: policy.vpsCandidate.workflowName,
-  });
-}
-
-export async function verifyHostedVpsCandidate({ receiptPath, bundlePath, candidateRoot }) {
-  const policyRecord = await loadPolicy();
-  const [receiptFile, bundle, trustedRoot] = await Promise.all([
-    protectedFile(receiptPath, "hosted VPS candidate receipt", 256 * 1024, false),
-    protectedFile(bundlePath, "hosted VPS candidate Sigstore bundle", MAX_ATTESTATION_BYTES, false),
-    loadPinnedTrustedRoot(policyRecord),
-  ]);
-  const receipt = parseHostedVpsCandidateReceipt(
-    strictJson(receiptFile.bytes.toString("utf8"), "hosted VPS candidate receipt"),
-    policyRecord,
-  );
-  const root = resolve(candidateRoot);
-  const rootMetadata = await lstat(root);
-  if (rootMetadata.isSymbolicLink() || !rootMetadata.isDirectory() || await realpath(root) !== root) {
-    fail("invalid-input", "hosted VPS candidate root must be one canonical real directory");
-  }
-  const names = (await readdir(root)).sort();
-  const expectedNames = receipt.files.map((item) => item.name).sort();
-  if (names.length !== expectedNames.length || names.some((name, index) => name !== expectedNames[index])) {
-    fail("invalid-input", "hosted VPS candidate root has missing or unexpected entries");
-  }
-  const files = [];
-  for (const item of receipt.files) files.push(await digestHostedVpsCandidateFile(root, item));
-  const candidateDescriptor = files[0];
-  const candidatePolicy = hostedVpsCandidatePolicy(policyRecord.policy);
-  const result = await runFixedGh(verificationArguments({
-    policy: candidatePolicy,
-    artifact: candidateDescriptor.path,
-    bundle: bundle.path,
-    trustedRoot: trustedRoot.path,
-    predicateType: policyRecord.policy.vpsCandidate.predicateType,
-    request: receipt,
-  }));
-  const parsed = parseVerifierOutput(result.stdout, {
-    policy: candidatePolicy,
-    request: receipt,
-    predicateType: policyRecord.policy.vpsCandidate.predicateType,
-    predicate: receipt,
-    expectedSubjects: receipt.files.map(({ name, sha256: digest }) => ({ name, sha256: digest })),
-    expectedRunUri: receipt.runnerInvocationUri,
-  });
-  // Point-of-use rehash after gh consumed the statement and selected subject.
-  for (const item of receipt.files) await digestHostedVpsCandidateFile(root, item);
-  const canonicalVerification = canonicalJson(parsed);
-  const evidence = {
-    schema: "revival.hosted-vps-candidate-verification",
-    version: 1,
-    policySha256: policyRecord.sha256,
-    receiptSha256: receiptFile.sha256,
-    bundleSha256: bundle.sha256,
-    verificationSha256: sha256(canonicalVerification),
-    runnerEnvironment: parsed.certificate.runnerEnvironment,
-    runnerLabel: policyRecord.policy.runnerLabel,
-    runnerArchitecture: policyRecord.policy.runnerArchitecture,
-    runnerInvocationUri: parsed.runUri,
-    repository: receipt.repository,
-    sourceRef: receipt.sourceRef,
-    sourceDigest: receipt.sourceDigest,
-    sourceTree: receipt.sourceTree,
-    candidateId: receipt.candidateId,
-    releaseId: receipt.releaseId,
-    files: receipt.files,
-  };
-  return Object.freeze({
-    policyRecord,
-    receiptFile,
-    receipt,
-    bundle,
-    parsed,
-    canonicalVerification,
-    evidence: Object.freeze(evidence),
-  });
-}
-
 export function createAuthorityEvidence(verified) {
   const { pre, releaseBundle, predicateFile, predicate, canonicalVerification } = verified;
   const preVerification = canonicalJson(pre.parsed);
@@ -1109,21 +949,7 @@ async function main(argumentsList) {
     await atomicWrite(requiredOption(options, "output"), createAuthorityEvidence(verified));
     return;
   }
-  if (command === "verify-vps-candidate") {
-    const allowed = ["receipt", "bundle", "candidate-root", "output", "verification-output"];
-    if (options.size !== allowed.length || allowed.some((name) => !options.has(name))) {
-      fail("usage", "verify-vps-candidate requires the exact documented option set");
-    }
-    const verified = await verifyHostedVpsCandidate({
-      receiptPath: requiredOption(options, "receipt"),
-      bundlePath: requiredOption(options, "bundle"),
-      candidateRoot: requiredOption(options, "candidate-root"),
-    });
-    await atomicWrite(requiredOption(options, "verification-output"), Buffer.from(verified.canonicalVerification));
-    await atomicWrite(requiredOption(options, "output"), Buffer.from(canonicalJson(verified.evidence)));
-    return;
-  }
-  fail("usage", "expected verify-pre, verify-release, or verify-vps-candidate");
+  fail("usage", "expected verify-pre or verify-release");
 }
 
 if (resolve(process.argv[1] ?? "") === SELF_PATH) {

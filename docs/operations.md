@@ -40,10 +40,10 @@ On the production host, configure runtime settings outside the checkout, then ru
 ./revival deploy production --confirm
 ```
 
-Preflight checks connectivity, required tools, configuration, Compose input,
-and available space. Dry-run renders the actions without changing the server.
-Confirmed deployment sends the current Cosmos source and configuration to the
-configured host and starts the production Compose project.
+Preflight checks the environment file, Docker Compose, and the resolved Compose
+model. Dry-run prints the exact Compose command without changing services.
+Confirmed deployment builds the current checkout and starts the production
+Compose project on this host.
 
 There is no alternate production command or migration mode. Fix the current
 Cosmos configuration and deploy again when a deployment fails.
@@ -54,12 +54,10 @@ Use:
 
 ```sh
 ./revival doctor production
-./revival status
-./revival logs
 ```
 
-Center exposes wearer-visible status. Service logs and health endpoints provide
-the direct operator view.
+The deployment prints `docker compose ps` after its health wait. Center,
+service logs, and health endpoints provide the direct operator view.
 
 ## Pin releases
 

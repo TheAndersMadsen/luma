@@ -10,7 +10,7 @@
  * Center reads a store with exactly that layout from
  * `REVIVAL_PIN_RELEASE_DIR` (center/src/server/pin-releases.ts), and the
  * deploy creates that directory on the VPS and bind-mounts it read-only
- * (platform/deploy/vps/remote/common.sh, platform/compose/production.yaml).
+ * (platform/compose/production.yaml).
  * Nothing ever put a release INTO it, so `/api/pin/releases/current` answered
  * 404 for the browser installer and both the canary and the staging smoke
  * accepted that 404 as normal. This is the missing step, and only that step —

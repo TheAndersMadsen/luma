@@ -278,7 +278,7 @@
       "effect": "local-mutation",
       "confirmationRequired": false,
       "exactSerialRequired": false,
-      "summary": "Run the repository release gate.",
+      "summary": "Run the broad repository checks.",
       "usage": "revival test [options]",
       "documentationAnchor": "CONTRIBUTING.md#run-and-test"
     },

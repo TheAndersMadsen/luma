@@ -35,29 +35,6 @@
     "repository": "actions/attest",
     "commit": "1e69f48acb82d1966a394da916b4c1698aa569d6"
   },
-  "vpsCandidate": {
-    "signerWorkflow": ".github/workflows/vps-candidate.yml",
-    "signerWorkflowUri": "https://github.com/TheAndersMadsen/ai-pin-revival/.github/workflows/vps-candidate.yml@refs/heads/main",
-    "workflowName": "Attested VPS candidate",
-    "predicateType": "https://github.com/TheAndersMadsen/ai-pin-revival/attestations/vps-candidate/v1",
-    "receiptSchema": "revival.hosted-vps-candidate-receipt",
-    "receiptVersion": 1,
-    "files": [
-      { "role": "candidate-descriptor", "name": "candidate.json" },
-      { "role": "release-archive", "name": "release.tar.gz" },
-      { "role": "release-manifest", "name": "release.manifest.json" },
-      { "role": "release-descriptor", "name": "release.json" },
-      { "role": "release-verifier", "name": "verify-release.py" },
-      { "role": "source-snapshot", "name": "source-snapshot.tar" },
-      { "role": "source-commit-object", "name": "source-commit.txt" },
-      { "role": "source-snapshot-receipt", "name": "source-receipt.json" },
-      { "role": "production-compose-model", "name": "compose-model.json" },
-      { "role": "production-state-contract", "name": "production-state.json" },
-      { "role": "toolchain-receipt", "name": "toolchain-receipt.json" },
-      { "role": "docker-image-receipt", "name": "image-receipt.json" },
-      { "role": "docker-image-bundle", "name": "images.tar" }
-    ]
-  },
   "preSignPredicateType": "https://github.com/TheAndersMadsen/ai-pin-revival/attestations/pin-release-input/v1",
   "releasePredicateType": "https://github.com/TheAndersMadsen/ai-pin-revival/attestations/pin-release-five-apk/v1",
   "roles": [

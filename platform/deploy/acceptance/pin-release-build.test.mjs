@@ -21,7 +21,7 @@ import {
   PIN_RELEASE_PACKAGE_BY_ROLE,
 } from "../pin/release.mjs";
 
-// The schema-1 publisher is a candidate-store fixture only. Authoritative
+// The schema-1 publisher is a compatibility fixture only. Authoritative
 // entrypoints explicitly reject this mode, and ship/Center never accept its
 // evidence-free output.
 process.env.REVIVAL_PIN_ENABLE_TEST_FIXTURES = "1";
