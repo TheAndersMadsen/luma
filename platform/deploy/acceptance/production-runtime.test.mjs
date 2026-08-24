@@ -104,6 +104,12 @@ exit 0
   const source = fs.readFileSync(verify, "utf8");
   assert.match(source, /identity\.release !== expectedRelease/u);
   assert.match(source, /identity\.environment !== expectedEnvironment/u);
+  assert.match(source, /publicPages = \['\/', '\/about', '\/contact', '\/privacy', '\/developers'\]/u);
+  assert.match(source, /headers: \{ accept: 'text\/markdown' \}/u);
+  assert.match(source, /\/openapi\.json/u);
+  assert.match(source, /\/llms\.txt/u);
+  assert.match(source, /missing\.status !== 404/u);
+  assert.match(source, /pinRelease\.status !== 200 && pinRelease\.status !== 404/u);
   assert.doesNotMatch(source, /Object\.hasOwn\(identity, 'environment'\)/u);
   assert.match(source, /REVIVAL_DEVICE_EDGE_IPV4/u);
   assert.match(source, /-connect "\$edge_ipv4:443" -servername api\.cosmos\.humane\.cloud/u);

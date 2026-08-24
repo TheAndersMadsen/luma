@@ -112,7 +112,8 @@ test("public version endpoint exposes product, release, and explicit runtime env
   assert.match(identity, /environment: environment\.REVIVAL_ENVIRONMENT\?\.trim\(\) \|\| "development"/);
   assert.match(route, /"cache-control": "no-store"/);
   assert.doesNotMatch(`${route}\n${identity}`, /hostname|provider|region|endpoint|secret/i);
-  assert.match(middleware, /pathname === "\/api\/version"/);
+  assert.match(middleware, /RATE_LIMITED_PUBLIC_API_PATHS/);
+  assert.match(middleware, /"\/api\/version"/);
 
   const priorRelease = process.env.REVIVAL_RELEASE_ID;
   const priorRevision = process.env.COSMOS_REVISION;

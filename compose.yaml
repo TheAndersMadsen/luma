@@ -217,6 +217,7 @@ services:
       REVIVAL_RELEASE_ID: ${REVIVAL_RELEASE_ID:?set REVIVAL_RELEASE_ID to the immutable release id}
       REVIVAL_ENVIRONMENT: ${REVIVAL_ENVIRONMENT:-development}
       REVIVAL_DEPLOYMENT_ENVIRONMENT: ${REVIVAL_DEPLOYMENT_ENVIRONMENT:-production}
+      REVIVAL_PUBLIC_ORIGIN: ${REVIVAL_PUBLIC_ORIGIN:-http://127.0.0.1:4000}
       # A signed-in browser sends the `cosmos_tokens` set back on every
       # request, so the Cookie line alone can reach ~12.5 KB. Node's default
       # 16 KB cap covers the whole request header block, which also carries the

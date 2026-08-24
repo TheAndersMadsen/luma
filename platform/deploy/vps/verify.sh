@@ -72,6 +72,70 @@ async function check() {
   if (identity.environment !== expectedEnvironment) {
     throw new Error(`Center environment mismatch: expected ${expectedEnvironment}, received ${identity.environment}`);
   }
+  if (!version.headers.has('ratelimit-policy') || !version.headers.has('ratelimit')) {
+    throw new Error('Center version endpoint omitted RateLimit fields');
+  }
+
+  const publicPages = ['/', '/about', '/contact', '/privacy', '/developers'];
+  for (const path of publicPages) {
+    const response = await fetch(`${origin}${path}`, {
+      headers: { accept: 'text/html' }, redirect: 'error', signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) throw new Error(`public page ${path} returned ${response.status}`);
+    const body = await response.text();
+    if (!body.includes('<h1') || body.length < 500) {
+      throw new Error(`public page ${path} did not contain substantial server-rendered content`);
+    }
+  }
+
+  const markdown = await fetch(`${origin}/developers`, {
+    headers: { accept: 'text/markdown' }, redirect: 'error', signal: AbortSignal.timeout(10_000),
+  });
+  if (!markdown.ok || !markdown.headers.get('content-type')?.startsWith('text/markdown')) {
+    throw new Error(`Center Markdown negotiation returned ${markdown.status}/${markdown.headers.get('content-type')}`);
+  }
+  const vary = (markdown.headers.get('vary') || '').toLowerCase().split(',').map((value) => value.trim());
+  if (!vary.includes('accept') || !vary.includes('accept-encoding')) {
+    throw new Error(`Center Markdown negotiation returned incomplete Vary: ${vary.join(', ')}`);
+  }
+
+  for (const [path, contentType] of [
+    ['/llms.txt', 'text/markdown'],
+    ['/robots.txt', 'text/plain'],
+    ['/sitemap.xml', 'application/xml'],
+  ]) {
+    const response = await fetch(`${origin}${path}`, { redirect: 'error', signal: AbortSignal.timeout(10_000) });
+    if (!response.ok || !response.headers.get('content-type')?.startsWith(contentType)) {
+      throw new Error(`public resource ${path} returned ${response.status}/${response.headers.get('content-type')}`);
+    }
+  }
+
+  const openApiResponse = await fetch(`${origin}/openapi.json`, {
+    redirect: 'error', signal: AbortSignal.timeout(10_000),
+  });
+  if (!openApiResponse.ok) throw new Error(`OpenAPI endpoint returned ${openApiResponse.status}`);
+  const openApi = await openApiResponse.json();
+  const operationIds = Object.values(openApi.paths || {}).flatMap((path) =>
+    Object.values(path || {}).map((operation) => operation?.operationId).filter(Boolean));
+  if (!String(openApi.openapi || '').startsWith('3.1.') || operationIds.length !== new Set(operationIds).size) {
+    throw new Error('OpenAPI document is missing a 3.1 version or unique operation IDs');
+  }
+
+  const pinRelease = await fetch(`${origin}/api/pin/releases/current`, {
+    redirect: 'error', signal: AbortSignal.timeout(10_000),
+  });
+  if (pinRelease.status !== 200 && pinRelease.status !== 404) {
+    throw new Error(`current Pin release endpoint returned ${pinRelease.status}`);
+  }
+  if (pinRelease.status === 200 && (await pinRelease.json()).artifacts?.length !== 5) {
+    throw new Error('current Pin release endpoint did not return the exact five artifacts');
+  }
+
+  const missing = await fetch(`${origin}/.ai-pin-revival-verification-missing`, {
+    headers: { accept: 'text/markdown' }, redirect: 'error', signal: AbortSignal.timeout(10_000),
+  });
+  if (missing.status !== 404) throw new Error(`unknown public path returned ${missing.status}, expected 404`);
+
   const discovery = await fetch(`${issuer}/.well-known/openid-configuration`, {
     redirect: 'error', signal: AbortSignal.timeout(10_000),
   });
@@ -114,5 +178,5 @@ if [[ ",${COMPOSE_PROFILES:-}," == *,pin,* ]]; then
   }
 fi
 
-printf 'Verified healthy services, exact Center release identity, OIDC, and capture routing%s.\n' \
+printf 'Verified healthy services, Center identity and public discovery, OIDC, and capture routing%s.\n' \
   "$( [[ ",${COMPOSE_PROFILES:-}," == *,pin,* ]] && printf ', plus the configured Pin certificate chain' || true )"

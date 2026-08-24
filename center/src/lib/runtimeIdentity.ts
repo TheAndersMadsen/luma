@@ -1,4 +1,6 @@
-export function centerRuntimeIdentity(environment: NodeJS.ProcessEnv = process.env) {
+export function centerRuntimeIdentity(
+  environment: Record<string, string | undefined> = process.env,
+) {
   return {
     product: "Ai Pin Revival Center",
     release:

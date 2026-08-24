@@ -1,22 +1,43 @@
 import type { Metadata, Viewport } from "next";
+import { headers } from "next/headers";
 import "./globals.css";
 import { Providers } from "@/components/Providers";
+import { centerRuntimeIdentity } from "@/lib/runtimeIdentity";
+import { PUBLIC_PROJECT_NAME, PUBLIC_REPOSITORY_URL, PUBLIC_SITE_NAME, publicOrigin } from "@/lib/public-site";
 
-export const metadata: Metadata = {
-  title: "Humane Center",
-  applicationName: "Humane Center",
-  description: "Manage your Ai Pin, captures, notes, and settings.",
-  manifest: "/manifest.json",
-  icons: {
-    icon: [{ url: "/favicon.ico", sizes: "any" }],
-    apple: [{ url: "/apple-touch-icon.png", sizes: "180x180", type: "image/png" }],
-  },
-  appleWebApp: {
-    capable: true,
-    statusBarStyle: "black",
-    title: "Center",
-  },
-};
+export async function generateMetadata(): Promise<Metadata> {
+  // Reading request headers keeps portable release images domain-neutral at
+  // build time. Production supplies REVIVAL_PUBLIC_ORIGIN at runtime.
+  await headers();
+  const origin = publicOrigin();
+  return {
+    metadataBase: new URL(origin),
+    title: { default: PUBLIC_SITE_NAME, template: `%s | ${PUBLIC_SITE_NAME}` },
+    applicationName: PUBLIC_SITE_NAME,
+    description:
+      "Self-hosted Center and Cosmos services for operating a Humane Ai Pin independently.",
+    alternates: { canonical: "/" },
+    manifest: "/manifest.json",
+    icons: {
+      icon: [{ url: "/favicon.ico", sizes: "any" }],
+      apple: [{ url: "/apple-touch-icon.png", sizes: "180x180", type: "image/png" }],
+    },
+    openGraph: {
+      type: "website",
+      url: "/",
+      siteName: PUBLIC_SITE_NAME,
+      title: PUBLIC_SITE_NAME,
+      description: "Self-hosted replacement services for a Humane Ai Pin.",
+      images: [{ url: "/icon-512.png", width: 512, height: 512, alt: PUBLIC_PROJECT_NAME }],
+    },
+    robots: { index: true, follow: true },
+    appleWebApp: {
+      capable: true,
+      statusBarStyle: "black",
+      title: "Center",
+    },
+  };
+}
 
 export const viewport: Viewport = {
   width: "device-width",
@@ -25,7 +46,7 @@ export const viewport: Viewport = {
   themeColor: "black",
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
   capturemodal,
 }: {
@@ -35,6 +56,43 @@ export default function RootLayout({
   // returns null) on every route that isn't an intercepted capture.
   capturemodal: React.ReactNode;
 }) {
+  await headers();
+  const origin = publicOrigin();
+  const identity = centerRuntimeIdentity();
+  const structuredData = {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "SoftwareApplication",
+        "@id": `${origin}/#software`,
+        name: PUBLIC_PROJECT_NAME,
+        alternateName: PUBLIC_SITE_NAME,
+        description: "Self-hosted replacement services and owner tools for a Humane Ai Pin.",
+        url: origin,
+        applicationCategory: "UtilitiesApplication",
+        operatingSystem: "Web, Android, Linux",
+        softwareVersion: identity.release,
+        isAccessibleForFree: true,
+        codeRepository: PUBLIC_REPOSITORY_URL,
+        author: { "@id": `${origin}/#project` },
+      },
+      {
+        "@type": "Organization",
+        "@id": `${origin}/#project`,
+        name: PUBLIC_PROJECT_NAME,
+        url: origin,
+        logo: `${origin}/icon-512.png`,
+        sameAs: [PUBLIC_REPOSITORY_URL],
+        contactPoint: {
+          "@type": "ContactPoint",
+          contactType: "technical support",
+          url: `${origin}/contact`,
+        },
+      },
+    ],
+  };
+  const structuredJson = JSON.stringify(structuredData).replaceAll("<", "\\u003c");
+
   return (
     <html lang="en" data-theme="dark">
       <head>
@@ -65,6 +123,10 @@ export default function RootLayout({
         />
       </head>
       <body>
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: structuredJson }}
+        />
         <Providers>
           {children}
           {capturemodal}

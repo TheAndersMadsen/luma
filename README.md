@@ -142,6 +142,25 @@ If GHCR packages are private, first run:
 
 Enter a package-read token only at Docker's hidden prompt.
 
+### Public verification and agent discovery
+
+Center publishes a small unauthenticated discovery surface. It contains no
+wearer data and is useful for release checks, search engines, and setup agents:
+
+| URL | Purpose |
+| --- | --- |
+| `/api/version` | Product, immutable release ID, and runtime environment |
+| `/api/pin/releases/current` | Current verified five-APK release manifest, when imported |
+| `/developers` or `/developers.md` | Deployment, CLI, API, and agent guidance |
+| `/openapi.json` | Typed OpenAPI 3.1 contract for public read operations |
+| `/llms.txt` | Concise when-to-use instructions and canonical links |
+| `/sitemap.xml` and `/robots.txt` | Public page discovery and crawler policy |
+
+Public information pages are server-rendered and return Markdown when requested
+with `Accept: text/markdown`. Unknown paths return HTTP 404 rather than the app
+shell. Public API responses include `RateLimit-Policy` and `RateLimit`; a 429
+also includes `Retry-After`.
+
 ## Connect a Pin
 
 The GitHub release publishes the signed five-APK Pin set as a separate archive.
@@ -214,6 +233,8 @@ Inputs:
 
 Rules:
 - Read the repository README first.
+- After deployment, read https://[DOMAIN]/llms.txt and use the linked developer
+  index and OpenAPI document as the public machine-readable authority.
 - Deploy only the checksum-verified operator archive from the latest stable
   GitHub release. Do not clone or deploy a source checkout.
 - Use the bundled ./revival commands and their --help output as authority.
@@ -230,6 +251,8 @@ Success evidence:
 - ./revival verify production passes after deployment.
 - GET https://[DOMAIN]/api/version returns the expected release and
   environment "production".
+- https://[DOMAIN]/llms.txt, /openapi.json, /sitemap.xml, and /developers.md
+  return successful machine-readable responses.
 
 Continue until all success evidence is green or report one exact blocker and
 the command/output that proves it.

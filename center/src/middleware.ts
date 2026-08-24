@@ -6,6 +6,101 @@ import {
   operatorGateOutcome,
   verifySession,
 } from "@/server/auth";
+import {
+  PUBLIC_CONTENT_PATHS,
+  preferredPublicRepresentation,
+  publicPageFromMarkdownPath,
+  publicPageMarkdown,
+} from "@/lib/public-site";
+import {
+  consumePublicApiQuota,
+  publicRateLimitHeaders,
+} from "@/lib/public-rate-limit";
+
+const PUBLIC_MACHINE_PATHS = new Set([
+  "/llms.txt",
+  "/openapi.json",
+  "/robots.txt",
+  "/sitemap.xml",
+]);
+
+const RATE_LIMITED_PUBLIC_API_PATHS = new Set([
+  "/api/version",
+  "/api/pin/releases/current",
+]);
+
+const PROTECTED_PAGE_PATTERNS = [
+  /^\/captures(?:\/[^/]+)?$/u,
+  /^\/notes(?:\/(?:new|search|[^/]+))?$/u,
+  /^\/my-data(?:\/(?:ai-mic|calls|music|translation))?$/u,
+  /^\/settings$/u,
+  /^\/settings\/(?:about|contacts|privacy)$/u,
+  /^\/settings\/account(?:\/(?:details|devices|features|orders|services))?$/u,
+  /^\/settings\/pin$/u,
+  /^\/settings\/pin\/(?:activity|contacts|diagnostics|esim|fitness|flags|gallery|install|llm|server|services|setup)$/u,
+  /^\/settings\/pin\/conversations(?:\/[^/]+)?$/u,
+  /^\/settings\/pin\/gallery\/[^/]+$/u,
+  /^\/admin$/u,
+  /^\/admin\/pin\/terminal$/u,
+  /^\/talk$/u,
+] as const;
+
+export function isProtectedPageRequest(pathname: string): boolean {
+  return PROTECTED_PAGE_PATTERNS.some((pattern) => pattern.test(pathname));
+}
+
+function appendVary(response: NextResponse, ...names: string[]): NextResponse {
+  const existing = (response.headers.get("vary") ?? "")
+    .split(",")
+    .map((name) => name.trim())
+    .filter(Boolean);
+  const combined = [...new Set([...existing, ...names])];
+  response.headers.set("vary", combined.join(", "));
+  return response;
+}
+
+function publicResponse(response: NextResponse): NextResponse {
+  response.headers.set("cache-control", "public, max-age=300, s-maxage=3600");
+  response.headers.set("x-content-type-options", "nosniff");
+  return appendVary(response, "Accept", "Accept-Encoding");
+}
+
+function markdownResponse(markdown: string, status = 200): NextResponse {
+  return publicResponse(new NextResponse(markdown, {
+    status,
+    headers: { "content-type": "text/markdown; charset=utf-8" },
+  }));
+}
+
+function publicApiClient(request: NextRequest): string {
+  return request.headers.get("cf-connecting-ip")?.trim() ||
+    request.headers.get("x-forwarded-for")?.split(",", 1)[0]?.trim() ||
+    "unidentified";
+}
+
+function rateLimitedPublicApi(request: NextRequest): NextResponse {
+  const quota = consumePublicApiQuota(publicApiClient(request));
+  const headers = publicRateLimitHeaders(quota);
+  if (!quota.allowed) {
+    return new NextResponse(JSON.stringify({
+      type: "https://iana.org/assignments/http-problem-types#quota-exceeded",
+      title: "Public read quota exceeded",
+      status: 429,
+      detail: `Retry after ${quota.resetSeconds} seconds.`,
+    }), {
+      status: 429,
+      headers: {
+        ...headers,
+        "content-type": "application/problem+json",
+        "retry-after": String(quota.resetSeconds),
+        "cache-control": "private, no-store",
+      },
+    });
+  }
+  const response = NextResponse.next();
+  for (const [name, value] of Object.entries(headers)) response.headers.set(name, value);
+  return response;
+}
 
 /** Dynamic Center responses contain wearer or deployment state and are never shared-cacheable. */
 function privateResponse(response: NextResponse): NextResponse {
@@ -59,6 +154,43 @@ export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const sessionToken = request.cookies.get(SESSION_COOKIE)?.value;
 
+  const explicitMarkdown = publicPageFromMarkdownPath(pathname);
+  if (explicitMarkdown) {
+    return markdownResponse(publicPageMarkdown(explicitMarkdown.path) ?? "");
+  }
+
+  if (PUBLIC_CONTENT_PATHS.has(pathname)) {
+    const representation = preferredPublicRepresentation(request.headers.get("accept"));
+    if (representation === null) {
+      return new NextResponse("Available representations: text/html, text/markdown\n", {
+        status: 406,
+        headers: { "content-type": "text/plain; charset=utf-8", vary: "Accept" },
+      });
+    }
+    if (representation === "markdown") {
+      return markdownResponse(publicPageMarkdown(pathname) ?? "");
+    }
+    if (pathname === "/") {
+      const session = AUTH_ENABLED ? await verifySession(sessionToken) : null;
+      if (!AUTH_ENABLED || session) return privateResponse(NextResponse.next());
+      const url = request.nextUrl.clone();
+      url.pathname = "/welcome";
+      return publicResponse(NextResponse.rewrite(url));
+    }
+    return publicResponse(NextResponse.next());
+  }
+
+  if (PUBLIC_MACHINE_PATHS.has(pathname)) {
+    return publicResponse(NextResponse.next());
+  }
+
+  if (
+    RATE_LIMITED_PUBLIC_API_PATHS.has(pathname) &&
+    (request.method === "GET" || request.method === "HEAD")
+  ) {
+    return rateLimitedPublicApi(request);
+  }
+
   // Operator routes always fail closed, including local deployments where the
   // wearer surface is intentionally open — which is why this branch sits ABOVE
   // the `!AUTH_ENABLED` open door below. The internal admin token is not an
@@ -111,21 +243,12 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  if (!AUTH_ENABLED) return privateResponse(NextResponse.next());
-  // Always-open: the sign-in page + its auth API, the PUBLIC share view (a shared
-  // memory must be viewable by a recipient who has no .Center account), the
-  // Wi-Fi QR generator, and immutable read-only Pin release downloads needed by
-  // Setup before a Center session exists.
-  //
-  // /wifi is public on purpose. Its own stylesheet calls it "the one public page";
-  // it reads NO account data and never calls the BFF — the QR payload is built
-  // entirely in the browser from what you type — so nothing can leak through it.
-  // And its whole reason to exist is the moment a Pin is off the network, which
-  // is exactly the moment its owner may not be able to sign in.
+  // Public utilities and share links still carry private/no-store semantics:
+  // query parameters can describe login state, and a share response must never
+  // be reused for another recipient. Keep this ahead of unknown-path handling.
   if (
     pathname === "/login" ||
     pathname === "/wifi" ||
-    pathname === "/api/version" ||
     pathname.startsWith("/api/auth/") ||
     pathname.startsWith("/share/") ||
     pathname.startsWith("/api/share/")
@@ -134,11 +257,24 @@ export async function middleware(request: NextRequest) {
     if (pathname.startsWith("/share/") || pathname.startsWith("/api/share/")) {
       response.headers.set("referrer-policy", "no-referrer");
       response.headers.set("x-content-type-options", "nosniff");
-      response.headers.set("cache-control", "private, no-store, max-age=0");
     }
     return privateResponse(response);
   }
 
+  // Let Next answer unknown public paths with its real 404. Authentication
+  // applies only to routes that actually exist; otherwise every probe becomes
+  // a login-page soft 404 and agents cannot discover the site's boundaries.
+  if (!pathname.startsWith("/api/") && !isProtectedPageRequest(pathname)) {
+    if (preferredPublicRepresentation(request.headers.get("accept")) === "markdown") {
+      return markdownResponse(
+        "# Page not found\n\nThis path does not exist. See [/sitemap.xml](/sitemap.xml), [/llms.txt](/llms.txt), or [/developers](/developers).\n",
+        404,
+      );
+    }
+    return publicResponse(NextResponse.next());
+  }
+
+  if (!AUTH_ENABLED) return privateResponse(NextResponse.next());
   const session = await verifySession(sessionToken);
   if (session) return privateResponse(NextResponse.next());
 
