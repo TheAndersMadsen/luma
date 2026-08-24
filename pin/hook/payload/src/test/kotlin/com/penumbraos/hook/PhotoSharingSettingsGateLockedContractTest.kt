@@ -104,7 +104,7 @@ class PhotoSharingSettingsGateLockedContractTest {
         val capture = repoFile("runtime/core/src/services/capture.rs").readText()
         val proto = repoFile("runtime/core/proto/humane/capture/capture.proto").readText()
         val api = repoFile("runtime/core/src/api.rs").readText()
-        val main = repoFile("runtime/core/src/main.rs").readText()
+        val main = repoFile("runtime/core/src/boot/mod.rs").readText()
 
         assertTrue(capture.contains("Capture.GetMemoryShareLink (stub)"))
         assertTrue(capture.contains("share_link: String::new()"))

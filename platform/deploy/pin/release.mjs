@@ -5,6 +5,8 @@ import {
 } from "node:path";
 
 const PIN_RELEASE_SCHEMA_VERSION = 1;
+export const PIN_COMPATIBILITY_CERT_SHA256 =
+  "d8a64e1c3a1afdc340c4b86feaacb88e2d81d66972afbd58e743b7c5b8d1cbdb";
 export const PIN_RELEASE_ARTIFACT_ROLES = Object.freeze([
   "installer",
   "bootstrap",

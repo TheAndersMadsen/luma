@@ -499,37 +499,16 @@ pub struct ServerConfig {
     /// Display name shown during onboarding welcome screen.
     pub display_name: Option<String>,
 
-    /// Enable the iroh P2P tunnel for remote Center access without LAN.
-    /// When enabled, the Pin exposes an iroh endpoint that authorized Mac
-    /// helpers can connect to using an EndpointTicket. Defaults on so existing
-    /// installs — whose persisted config predates this flag — still bring up the
-    /// remote Center that powers https://aipin.example.com.
-    #[serde(default = "default_iroh_remote_center_enabled")]
-    pub iroh_remote_center_enabled: bool,
-
-    /// Bypass the narrow read-only remote-Center policy and give the tunnel
-    /// full access to the API (so the remote Center can load memories, settings,
-    /// etc.). ONLY safe when `iroh_remote_center_allowed_peers` restricts the
-    /// tunnel to the trusted bridge identity. Edge authentication does not
-    /// protect the direct iroh listener. Off by default.
+    /// Enable the optional iroh P2P tunnel for remote Center access without LAN.
+    /// It remains off until at least one trusted bridge identity is configured.
     #[serde(default)]
-    pub iroh_remote_center_full_access: bool,
+    pub iroh_remote_center_enabled: bool,
 
     /// Remote `EndpointId`s permitted to open a connection, as 64-char hex.
     ///
-    /// The connector dispatches through the API router **without** the
-    /// administration-auth layer the LAN listener gets, so in full-access mode
-    /// the Pin's own EndpointId is effectively the only credential — and it is
-    /// persisted, stable across reboots, printed at startup and stored on the
-    /// relay host. That makes it a bearer secret that was never designed to be
-    /// one, with no rotation and no revocation.
-    ///
-    /// Listing peers here restores mutual authentication using iroh's existing
-    /// key crypto: a caller must additionally *be* a permitted endpoint, which
-    /// it cannot forge without that peer's private key. Empty means "accept any
-    /// peer" — the previous behaviour, kept so an existing install does not lose
-    /// its remote Center on upgrade, but the connector logs a warning whenever
-    /// full access is combined with an empty list.
+    /// The direct listener has no HTTP administration-auth layer. Every
+    /// connection therefore requires one of these iroh identities, in addition
+    /// to the closed route/capability policy.
     #[serde(default)]
     pub iroh_remote_center_allowed_peers: Vec<String>,
 }
@@ -1278,10 +1257,6 @@ fn default_llm_tools_enabled() -> bool {
     true
 }
 
-fn default_iroh_remote_center_enabled() -> bool {
-    true
-}
-
 fn default_dynamic_tool_count() -> usize {
     8
 }
@@ -1454,8 +1429,7 @@ impl Default for ServerConfig {
             system_prompt: None,
             status_prompt: None,
             display_name: None,
-            iroh_remote_center_enabled: true,
-            iroh_remote_center_full_access: false,
+            iroh_remote_center_enabled: false,
             iroh_remote_center_allowed_peers: Vec::new(),
         }
     }
@@ -1716,6 +1690,12 @@ impl ServerConfig {
         self.iroh_remote_center_allowed_peers = normalize_iroh_remote_center_allowed_peers(
             std::mem::take(&mut self.iroh_remote_center_allowed_peers),
         )?;
+        if self.iroh_remote_center_enabled && self.iroh_remote_center_allowed_peers.is_empty() {
+            return Err(
+                "server.iroh_remote_center_enabled requires at least one trusted EndpointId in server.iroh_remote_center_allowed_peers"
+                    .into(),
+            );
+        }
 
         Ok(())
     }
@@ -2529,6 +2509,7 @@ mod tests {
         assert_eq!(config.weather.temperature_unit, TemperatureUnit::Celsius);
         assert_eq!(config.server.http_bind_addr, default_http_bind_addr());
         assert!(!config.server.lan_dashboard_enabled);
+        assert!(!config.server.iroh_remote_center_enabled);
         assert!(config.server.admin_token.is_none());
         assert_eq!(config.server.system_prompt, None);
         assert_eq!(
@@ -2632,6 +2613,21 @@ mod tests {
                 + 1
         ])
         .is_err());
+    }
+
+    #[test]
+    fn iroh_cannot_start_without_a_trusted_bridge_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_config(
+            &dir,
+            "config.toml",
+            "[server]\niroh_remote_center_enabled = true\n",
+        );
+
+        assert!(Config::load(&path)
+            .unwrap_err()
+            .to_string()
+            .contains("requires at least one trusted EndpointId"));
     }
 
     #[test]

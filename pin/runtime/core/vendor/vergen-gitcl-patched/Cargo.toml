@@ -24,7 +24,6 @@ autobenches = false
 description = "Generate 'cargo:rustc-env' instructions via 'build.rs' for use in your code via the 'env!' macro"
 homepage = "https://github.com/rustyhorde/vergen"
 documentation = "https://docs.rs/vergen"
-readme = "README.md"
 keywords = [
     "cargo",
     "instructions",

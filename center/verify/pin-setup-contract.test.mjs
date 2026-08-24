@@ -83,9 +83,9 @@ test("the committed Center journey is an in-sync projection of the root contract
   );
 });
 
-test("Center exposes the canonical build, PKI, activation, and network commands", () => {
+test("Center exposes the canonical release import, PKI, activation, and network commands", () => {
   const steps = new Map(derivePinSetupPlan(facts()).steps.map((step) => [step.id, step]));
-  assert.equal(steps.get("release").command, "./revival pin release build");
+  assert.equal(steps.get("release").command, "./revival pin release import");
   assert.equal(steps.has("ship"), false);
   assert.equal(steps.get("identity").command, "./revival pki import");
   assert.equal(steps.get("activate").command, "./revival pin activate");
@@ -112,7 +112,7 @@ test("one step is focused and aggregate software health proves neither exact net
   );
 });
 
-test("an unpublished release points directly to the mounted-store build", () => {
+test("an unpublished release points directly to the verified archive import", () => {
   const plan = derivePinSetupPlan(
     facts({
       release: { availability: "not-published", version: null, detail: null },
@@ -120,9 +120,10 @@ test("an unpublished release points directly to the mounted-store build", () => 
   );
   const release = plan.steps.find((step) => step.id === "release");
   assert.equal(release.status, "manual");
-  assert.deepEqual(release.commands, ["./revival pin release build"]);
+  assert.deepEqual(release.commands, ["./revival pin release import"]);
   assert.match(release.summary, /no signed Pin release/);
-  assert.match(release.next, /becomes current atomically/);
+  assert.match(release.next, /Download the signed Pin archive/);
+  assert.match(release.manualNote, /makes the complete release current atomically/);
   assert.equal(plan.steps.some((step) => step.id === "ship"), false);
 });
 

@@ -16,6 +16,7 @@ internal object CosmosActivationContract {
     const val REMOTE_MODE_SETTING = "penumbra_cosmos_remote_mode"
     const val EDGE_IPV4_SETTING = "penumbra_cosmos_edge_ipv4"
     const val ROOT_CERTIFICATE_SETTING = "penumbra_cosmos_root_certificate_der_b64"
+    const val DEVICE_STATUS_ENDPOINT_SETTING = "penumbra_cosmos_device_status_endpoint"
     const val ATTESTATION_BUNDLE_SETTING = "penumbra_cosmos_attestation_bundle_b64"
     const val ATTESTATION_KEY_ALIAS = "penumbra_cosmos_device_attestation_v1"
     const val ATTESTATION_PRODUCT_ID = "00000001"
@@ -28,10 +29,12 @@ internal object CosmosActivationContract {
     fun plan(
         apiEndpoint: String,
         onboardingEndpoint: String,
+        deviceStatusEndpoint: String,
         edgeIpv4: String,
     ): CosmosEndpointPlan = CosmosEndpointPlan(
         apiEndpoint = canonicalHttpsEndpoint(apiEndpoint, API_HOST),
         onboardingEndpoint = canonicalHttpsEndpoint(onboardingEndpoint, ONBOARDING_HOST),
+        deviceStatusEndpoint = canonicalDeviceStatusEndpoint(deviceStatusEndpoint),
         edgeIpv4 = canonicalIpv4(edgeIpv4),
     )
 
@@ -63,6 +66,24 @@ internal object CosmosActivationContract {
         return "https://$expectedHost"
     }
 
+    fun canonicalDeviceStatusEndpoint(value: String): String {
+        val parsed = runCatching { URI(value.trim()) }
+            .getOrElse { throw IllegalArgumentException("Device status endpoint is invalid") }
+        require(parsed.scheme.equals("https", ignoreCase = true) && !parsed.host.isNullOrBlank()) {
+            "Device status endpoint must use HTTPS"
+        }
+        require(parsed.userInfo == null && parsed.query == null && parsed.fragment == null) {
+            "Device status endpoint cannot contain credentials, a query, or a fragment"
+        }
+        require(parsed.port == -1 || parsed.port == 443) {
+            "Device status endpoint must use port 443"
+        }
+        require(parsed.path == "/device-status/v1/report") {
+            "Device status endpoint path is invalid"
+        }
+        return "https://${parsed.host.lowercase(Locale.US)}/device-status/v1/report"
+    }
+
     private fun canonicalIpv4(value: String): String {
         val parts = value.trim().split('.')
         require(parts.size == 4) { "Cosmos edge address must be IPv4" }
@@ -85,6 +106,7 @@ private fun Char.isAsciiHexDigit(): Boolean =
 internal data class CosmosEndpointPlan(
     val apiEndpoint: String,
     val onboardingEndpoint: String,
+    val deviceStatusEndpoint: String,
     val edgeIpv4: String,
 )
 
@@ -134,13 +156,87 @@ internal data class CosmosActivationRecord(
     val previousRemoteMode: String?,
     val previousEdgeIpv4: String?,
     val previousRootCertificateDerBase64: String?,
+    val previousDeviceStatusEndpoint: String?,
     val identityWasPresent: Boolean,
     val targetFingerprintSha256: String,
     val targetRootFingerprintSha256: String,
     val apiEndpoint: String,
     val onboardingEndpoint: String,
+    val deviceStatusEndpoint: String,
     val targetEdgeIpv4: String,
+    val rollbackFailed: Boolean = false,
 )
+
+internal enum class CosmosActivationStatusState(val wireValue: String) {
+    ACTIVE("active"),
+    INACTIVE("inactive"),
+    PREPARING("preparing"),
+    DEACTIVATING("deactivating"),
+    ROLLBACK_FAILED("rollback_failed"),
+    INCONSISTENT("inconsistent"),
+}
+
+internal data class CosmosActivationObservedState(
+    val remoteMode: String?,
+    val edgeIpv4: String?,
+    val deviceStatusEndpoint: String?,
+    val rootCertificatePresent: Boolean,
+    val rootCertificateFingerprintSha256: String?,
+    val identityPresent: Boolean,
+    val identityUsable: Boolean,
+    val identityFingerprintSha256: String?,
+)
+
+internal data class CosmosActivationStatus(
+    val state: CosmosActivationStatusState,
+    val consistent: Boolean,
+    val managed: Boolean,
+    val phase: CosmosActivationPhase?,
+    val rollbackFailed: Boolean,
+    val rollbackComplete: Boolean,
+    val remoteGateEnabled: Boolean,
+    val targetMatches: Boolean,
+)
+
+/** Reconcile the durable transaction journal with the live activation inputs. */
+internal fun reconcileCosmosActivationStatus(
+    record: CosmosActivationRecord?,
+    observed: CosmosActivationObservedState,
+): CosmosActivationStatus {
+    val remoteGateEnabled = observed.remoteMode == "1"
+    val targetMatches = record != null &&
+        observed.edgeIpv4 == record.targetEdgeIpv4 &&
+        observed.deviceStatusEndpoint == record.deviceStatusEndpoint &&
+        observed.rootCertificateFingerprintSha256 == record.targetRootFingerprintSha256 &&
+        observed.identityPresent &&
+        observed.identityUsable &&
+        observed.identityFingerprintSha256 == record.targetFingerprintSha256
+
+    val state = when {
+        record?.rollbackFailed == true -> CosmosActivationStatusState.ROLLBACK_FAILED
+        record?.phase == CosmosActivationPhase.PREPARING -> CosmosActivationStatusState.PREPARING
+        record?.phase == CosmosActivationPhase.DEACTIVATING -> CosmosActivationStatusState.DEACTIVATING
+        record?.phase == CosmosActivationPhase.ACTIVE && remoteGateEnabled && targetMatches ->
+            CosmosActivationStatusState.ACTIVE
+        record != null -> CosmosActivationStatusState.INCONSISTENT
+        remoteGateEnabled || observed.edgeIpv4 != null || observed.deviceStatusEndpoint != null ||
+            observed.rootCertificatePresent || observed.identityPresent ->
+            CosmosActivationStatusState.INCONSISTENT
+        else -> CosmosActivationStatusState.INACTIVE
+    }
+    val consistent = state == CosmosActivationStatusState.ACTIVE ||
+        state == CosmosActivationStatusState.INACTIVE
+    return CosmosActivationStatus(
+        state = state,
+        consistent = consistent,
+        managed = record != null,
+        phase = record?.phase,
+        rollbackFailed = record?.rollbackFailed == true,
+        rollbackComplete = consistent,
+        remoteGateEnabled = remoteGateEnabled,
+        targetMatches = targetMatches,
+    )
+}
 
 internal interface CosmosActivationRecordPort {
     fun load(): CosmosActivationRecord?
@@ -185,6 +281,7 @@ internal data class CosmosActivationResult(
     val rollbackComplete: Boolean,
     val apiEndpoint: String? = null,
     val onboardingEndpoint: String? = null,
+    val deviceStatusEndpoint: String? = null,
     val edgeIpv4: String? = null,
     val identityFingerprintSha256: String? = null,
     val rootCertificateFingerprintSha256: String? = null,
@@ -195,8 +292,8 @@ internal data class CosmosActivationResult(
 /**
  * Pure commit coordinator for Pin -> Cosmos activation.
  *
- * Implemented ordering: validate everything, journal, import identity, write
- * edge, verify the attestation staging key is absent, and enable remote mode
+ * Implemented ordering: validate everything, journal, persist and read back the
+ * root, import identity, write the edge, clear staging, and enable remote mode
  * last. Every Settings.Global write is read back exactly.
  */
 internal class CosmosActivationTransaction(
@@ -206,13 +303,19 @@ internal class CosmosActivationTransaction(
     fun activate(
         apiEndpoint: String,
         onboardingEndpoint: String,
+        deviceStatusEndpoint: String,
         edgeIpv4: String,
         root: CosmosRootDescriptor,
         identity: CosmosIdentityPort,
         clearStaging: (() -> Boolean)? = null,
     ): CosmosActivationResult {
         val plan = try {
-            CosmosActivationContract.plan(apiEndpoint, onboardingEndpoint, edgeIpv4)
+            CosmosActivationContract.plan(
+                apiEndpoint,
+                onboardingEndpoint,
+                deviceStatusEndpoint,
+                edgeIpv4,
+            )
         } catch (_: Throwable) {
             return failure(CosmosActivationCode.INVALID_REQUEST)
         }
@@ -236,6 +339,7 @@ internal class CosmosActivationTransaction(
 
         if (existingRecord?.phase != null && existingRecord.phase != CosmosActivationPhase.ACTIVE) {
             if (!completeInterruptedTransition(existingRecord, identity)) {
+                markRollbackFailed(existingRecord)
                 return failure(CosmosActivationCode.ROLLBACK_FAILED, rollbackComplete = false)
             }
         }
@@ -251,6 +355,8 @@ internal class CosmosActivationTransaction(
             ?: return failure(CosmosActivationCode.TRANSACTION_FAILED)
         val currentRoot = safeRead(CosmosActivationContract.ROOT_CERTIFICATE_SETTING)
             ?: return failure(CosmosActivationCode.TRANSACTION_FAILED)
+        val currentDeviceStatus = safeRead(CosmosActivationContract.DEVICE_STATUS_ENDPOINT_SETTING)
+            ?: return failure(CosmosActivationCode.TRANSACTION_FAILED)
         val pendingAttestation = safeRead(CosmosActivationContract.ATTESTATION_BUNDLE_SETTING)
             ?: return failure(CosmosActivationCode.TRANSACTION_FAILED)
         val currentIdentity = try {
@@ -265,6 +371,7 @@ internal class CosmosActivationTransaction(
 
         if (currentRemote.value == "1") {
             val matches = currentEdge.value == plan.edgeIpv4 &&
+                currentDeviceStatus.value == plan.deviceStatusEndpoint &&
                 currentRoot.value == root.certificateDerBase64 &&
                 currentIdentity?.fingerprintSha256 == candidate.fingerprintSha256 &&
                 currentIdentity.usableForTls
@@ -303,11 +410,13 @@ internal class CosmosActivationTransaction(
             previousRemoteMode = currentRemote.value,
             previousEdgeIpv4 = currentEdge.value,
             previousRootCertificateDerBase64 = currentRoot.value,
+            previousDeviceStatusEndpoint = currentDeviceStatus.value,
             identityWasPresent = currentIdentity != null,
             targetFingerprintSha256 = candidate.fingerprintSha256,
             targetRootFingerprintSha256 = root.fingerprintSha256,
             apiEndpoint = plan.apiEndpoint,
             onboardingEndpoint = plan.onboardingEndpoint,
+            deviceStatusEndpoint = plan.deviceStatusEndpoint,
             targetEdgeIpv4 = plan.edgeIpv4,
         )
         if (!safeSave(preparing)) {
@@ -323,6 +432,10 @@ internal class CosmosActivationTransaction(
             check(installed.fingerprintSha256 == candidate.fingerprintSha256)
             check(installed.usableForTls)
             check(writeExact(CosmosActivationContract.EDGE_IPV4_SETTING, plan.edgeIpv4))
+            check(writeExact(
+                CosmosActivationContract.DEVICE_STATUS_ENDPOINT_SETTING,
+                plan.deviceStatusEndpoint,
+            ))
             check(
                 clearStaging?.invoke()
                     ?: writeExact(CosmosActivationContract.ATTESTATION_BUNDLE_SETTING, null),
@@ -347,6 +460,7 @@ internal class CosmosActivationTransaction(
                 runCatching { records.clear() }
                 failure(CosmosActivationCode.TRANSACTION_FAILED)
             } else {
+                markRollbackFailed(preparing)
                 failure(CosmosActivationCode.ROLLBACK_FAILED, rollbackComplete = false)
             }
         }
@@ -371,6 +485,7 @@ internal class CosmosActivationTransaction(
             return if (completeInterruptedTransition(record, identity)) {
                 success(CosmosActivationCode.ALREADY_INACTIVE, changed = false, managed = false)
             } else {
+                markRollbackFailed(record)
                 failure(CosmosActivationCode.ROLLBACK_FAILED, rollbackComplete = false)
             }
         }
@@ -398,6 +513,8 @@ internal class CosmosActivationTransaction(
             ?: return failure(CosmosActivationCode.TRANSACTION_FAILED)
         val activeRoot = safeRead(CosmosActivationContract.ROOT_CERTIFICATE_SETTING)
             ?: return failure(CosmosActivationCode.TRANSACTION_FAILED)
+        val activeDeviceStatus = safeRead(CosmosActivationContract.DEVICE_STATUS_ENDPOINT_SETTING)
+            ?: return failure(CosmosActivationCode.TRANSACTION_FAILED)
         val deactivating = record.copy(phase = CosmosActivationPhase.DEACTIVATING)
         if (!safeSave(deactivating)) {
             return failure(CosmosActivationCode.TRANSACTION_FAILED)
@@ -410,6 +527,10 @@ internal class CosmosActivationTransaction(
             check(writeExact(
                 CosmosActivationContract.ROOT_CERTIFICATE_SETTING,
                 record.previousRootCertificateDerBase64,
+            ))
+            check(writeExact(
+                CosmosActivationContract.DEVICE_STATUS_ENDPOINT_SETTING,
+                record.previousDeviceStatusEndpoint,
             ))
             check(writeExact(CosmosActivationContract.ATTESTATION_BUNDLE_SETTING, null))
             if (!record.identityWasPresent) {
@@ -427,6 +548,7 @@ internal class CosmosActivationTransaction(
                 plan = CosmosEndpointPlan(
                     record.apiEndpoint,
                     record.onboardingEndpoint,
+                    record.deviceStatusEndpoint,
                     record.targetEdgeIpv4,
                 ),
                 candidate = CosmosIdentityDescriptor(
@@ -444,12 +566,17 @@ internal class CosmosActivationTransaction(
             val restoredActive = !identityRemoved && identityWasUsable &&
                 writeExact(CosmosActivationContract.EDGE_IPV4_SETTING, activeEdge.value) &&
                 writeExact(CosmosActivationContract.ROOT_CERTIFICATE_SETTING, activeRoot.value) &&
+                writeExact(
+                    CosmosActivationContract.DEVICE_STATUS_ENDPOINT_SETTING,
+                    activeDeviceStatus.value,
+                ) &&
                 writeExact(CosmosActivationContract.ATTESTATION_BUNDLE_SETTING, null) &&
                 writeExact(CosmosActivationContract.REMOTE_MODE_SETTING, activeRemote.value) &&
                 safeSave(record)
             if (restoredActive) {
                 failure(CosmosActivationCode.TRANSACTION_FAILED)
             } else {
+                markRollbackFailed(deactivating)
                 failure(CosmosActivationCode.ROLLBACK_FAILED, rollbackComplete = false)
             }
         }
@@ -477,6 +604,10 @@ internal class CosmosActivationTransaction(
             CosmosActivationContract.ROOT_CERTIFICATE_SETTING,
             record.previousRootCertificateDerBase64,
         ))
+        check(writeExact(
+            CosmosActivationContract.DEVICE_STATUS_ENDPOINT_SETTING,
+            record.previousDeviceStatusEndpoint,
+        ))
         check(writeExact(CosmosActivationContract.ATTESTATION_BUNDLE_SETTING, null))
         if (!record.identityWasPresent) {
             check(identity.removeIfMatches(record.targetFingerprintSha256))
@@ -496,6 +627,10 @@ internal class CosmosActivationTransaction(
         check(writeExact(
             CosmosActivationContract.ROOT_CERTIFICATE_SETTING,
             record.previousRootCertificateDerBase64,
+        ))
+        check(writeExact(
+            CosmosActivationContract.DEVICE_STATUS_ENDPOINT_SETTING,
+            record.previousDeviceStatusEndpoint,
         ))
         check(writeExact(CosmosActivationContract.ATTESTATION_BUNDLE_SETTING, null))
         if (!record.identityWasPresent) {
@@ -519,6 +654,11 @@ internal class CosmosActivationTransaction(
         ) {
             return false
         }
+        if (settings.read(CosmosActivationContract.DEVICE_STATUS_ENDPOINT_SETTING) !=
+            record.previousDeviceStatusEndpoint
+        ) {
+            return false
+        }
         if (settings.read(CosmosActivationContract.ATTESTATION_BUNDLE_SETTING) != null) {
             return false
         }
@@ -538,6 +678,10 @@ internal class CosmosActivationTransaction(
         records.save(record) && records.load() == record
     }.getOrDefault(false)
 
+    private fun markRollbackFailed(record: CosmosActivationRecord) {
+        safeSave(record.copy(rollbackFailed = true))
+    }
+
     private data class ReadValue(val value: String?)
 
     private fun safeRead(key: String): ReadValue? = runCatching {
@@ -551,6 +695,7 @@ internal class CosmosActivationTransaction(
         root: CosmosRootDescriptor,
     ): Boolean = record.apiEndpoint == plan.apiEndpoint &&
         record.onboardingEndpoint == plan.onboardingEndpoint &&
+        record.deviceStatusEndpoint == plan.deviceStatusEndpoint &&
         record.targetEdgeIpv4 == plan.edgeIpv4 &&
         record.targetFingerprintSha256 == candidate.fingerprintSha256 &&
         record.targetRootFingerprintSha256 == root.fingerprintSha256
@@ -589,6 +734,7 @@ internal class CosmosActivationTransaction(
         rollbackComplete = true,
         apiEndpoint = plan?.apiEndpoint,
         onboardingEndpoint = plan?.onboardingEndpoint,
+        deviceStatusEndpoint = plan?.deviceStatusEndpoint,
         edgeIpv4 = plan?.edgeIpv4,
         identityFingerprintSha256 = candidate?.fingerprintSha256,
         rootCertificateFingerprintSha256 = root?.fingerprintSha256,

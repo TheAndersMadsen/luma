@@ -9,6 +9,7 @@ import android.os.BatteryManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.util.Base64
 import android.util.Log
 import java.net.URL
@@ -30,8 +31,6 @@ import org.json.JSONObject
 internal class DeviceStatusReporter(private val context: Context) {
     companion object {
         private const val TAG = "DeviceStatusReporter"
-        private const val DEFAULT_URL =
-            "https://cosmos-api.andersmadsen.dk/device-status/v1/report"
         private const val SUCCESS_INTERVAL_MS = 5 * 60 * 1000L
         private const val RETRY_INTERVAL_MS = 60 * 1000L
         private const val CONNECT_TIMEOUT_MS = 10_000
@@ -45,13 +44,14 @@ internal class DeviceStatusReporter(private val context: Context) {
     private val tick = object : Runnable {
         override fun run() {
             if (stopped || inFlight) return
+            val endpoint = configuredEndpoint() ?: return
             inFlight = true
             Thread({
-                val succeeded = runCatching { reportOnce() }
+                val succeeded = runCatching { reportOnce(endpoint) }
                     .onFailure { Log.w(TAG, "Status report failed (${it.javaClass.simpleName})") }
                     .getOrDefault(false)
                 inFlight = false
-                if (!stopped) {
+                if (!stopped && configuredEndpoint() != null) {
                     handler.postDelayed(this, if (succeeded) SUCCESS_INTERVAL_MS else RETRY_INTERVAL_MS)
                 }
             }, "penumbra-device-status").start()
@@ -61,11 +61,11 @@ internal class DeviceStatusReporter(private val context: Context) {
     fun start() {
         stopped = false
         handler.removeCallbacks(tick)
-        handler.post(tick)
+        if (configuredEndpoint() != null) handler.post(tick)
     }
 
     fun reportSoon() {
-        if (stopped) return
+        if (stopped || configuredEndpoint() == null) return
         handler.removeCallbacks(tick)
         handler.postDelayed(tick, 2_000)
     }
@@ -75,7 +75,7 @@ internal class DeviceStatusReporter(private val context: Context) {
         handler.removeCallbacks(tick)
     }
 
-    private fun reportOnce(): Boolean {
+    private fun reportOnce(endpoint: String): Boolean {
         val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
         val key = store.getKey(CosmosIdentityProvider.KEY_ALIAS, null) ?: return false
         val certificate = store.getCertificate(CosmosIdentityProvider.KEY_ALIAS) as? X509Certificate
@@ -92,9 +92,6 @@ internal class DeviceStatusReporter(private val context: Context) {
             .put("signature_der", Base64.encodeToString(signature, Base64.NO_WRAP))
             .toString()
 
-        val endpoint = readSystemProperty("persist.penumbra.device_status_url")
-            .trim()
-            .ifEmpty { DEFAULT_URL }
         val connection = (URL(endpoint).openConnection() as HttpsURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = CONNECT_TIMEOUT_MS
@@ -177,6 +174,20 @@ internal class DeviceStatusReporter(private val context: Context) {
             .ifBlank { readSystemProperty("ro.boot.serialno") }
         if (property.isNotBlank()) return property
         return runCatching { Build.getSerial() }.getOrDefault("")
+    }
+
+    private fun configuredEndpoint(): String? {
+        if (Settings.Global.getString(
+                context.contentResolver,
+                CosmosActivationContract.REMOTE_MODE_SETTING,
+            ) != "1"
+        ) return null
+        val stored = Settings.Global.getString(
+            context.contentResolver,
+            CosmosActivationContract.DEVICE_STATUS_ENDPOINT_SETTING,
+        ) ?: return null
+        return runCatching { CosmosActivationContract.canonicalDeviceStatusEndpoint(stored) }
+            .getOrNull()
     }
 
     private fun readSystemProperty(name: String): String =

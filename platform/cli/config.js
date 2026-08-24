@@ -13,6 +13,10 @@ const {
   validateRuntime,
 } = require('./context');
 const { operatorContract } = require('./command-spec');
+const {
+  hasProductionSetupMarker,
+  validateProductionArtifacts,
+} = require('./production-setup');
 
 const GROUPS = Object.freeze(['local', 'production', 'provider', 'pin']);
 
@@ -184,9 +188,14 @@ function configCheckReport() {
     checks.push({ id: 'runtime-file', status: 'FAIL', message: error.message, fix: './revival init' });
   }
   if (values) {
+    const production = hasProductionSetupMarker(values);
     try {
-      validateRuntime();
-      checks.push({ id: 'runtime-contract', status: 'PASS', message: 'Runtime values satisfy the complete local configuration contract.' });
+      validateRuntime({ production });
+      checks.push({
+        id: 'runtime-contract',
+        status: 'PASS',
+        message: `Runtime values satisfy the complete ${production ? 'production' : 'local'} configuration contract.`,
+      });
     } catch (error) {
       checks.push({
         id: 'runtime-contract',
@@ -194,6 +203,19 @@ function configCheckReport() {
         message: error.message,
         fix: 'Update only the named settings with ./revival config set, then rerun ./revival config check.',
       });
+    }
+    if (production && !checks.some((check) => check.id === 'runtime-contract' && check.status === 'FAIL')) {
+      try {
+        validateProductionArtifacts(values);
+        checks.push({ id: 'production-artifacts', status: 'PASS', message: 'Production-generated configuration and artifacts are complete.' });
+      } catch (error) {
+        checks.push({
+          id: 'production-artifacts',
+          status: 'FAIL',
+          message: error.message,
+          fix: './revival setup production',
+        });
+      }
     }
   }
   if (!checks.some((check) => check.status === 'FAIL')) {

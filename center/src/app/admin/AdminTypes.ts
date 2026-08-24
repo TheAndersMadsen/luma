@@ -15,6 +15,8 @@ export type Overview = {
   }>;
   provisioned_devices: number;
   onboarding: { endpoint: string; authority: string };
+  device_edge_ipv4: string | null;
+  device_status_endpoint: string | null;
 };
 
 export type Bundle = {

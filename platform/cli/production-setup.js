@@ -23,6 +23,17 @@ const {
 const PRODUCTION_DIR = path.join(CONFIG_DIR, 'production');
 const OPERATOR_COMPOSE = path.join(PRODUCTION_DIR, 'operator.compose.yaml');
 const IROH_TICKET_FILE = path.join(PRODUCTION_DIR, 'iroh-ticket');
+const EDGE_ROOT_DIR = path.join(PRODUCTION_DIR, 'edge-root');
+const DEVICE_USER_ROOT_DIR = path.join(PRODUCTION_DIR, 'device-user-root');
+const PIN_TRUST_FILE = path.join(PRODUCTION_DIR, 'pin-trust.json');
+const EDGE_ROOT = Object.freeze({
+  certificate: path.join(EDGE_ROOT_DIR, 'edge-ca.crt'),
+  key: path.join(EDGE_ROOT_DIR, 'edge-ca.key'),
+});
+const DEVICE_USER_ROOT = Object.freeze({
+  certificate: path.join(DEVICE_USER_ROOT_DIR, 'duc-ca.crt'),
+  key: path.join(DEVICE_USER_ROOT_DIR, 'duc-ca.key'),
+});
 const PROFILES = new Set(['pin', 'search', 'spotify', 'observability']);
 const PIN_RELEASE_VALIDATOR = path.join(ROOT, 'platform', 'deploy', 'pin', 'validate-release-store.mjs');
 const PIN_SERVER_NAMES = Object.freeze([
@@ -44,6 +55,22 @@ function regularFile(file, { mode, nonempty = true } = {}) {
   const stat = fs.lstatSync(file);
   return !stat.isSymbolicLink() && stat.isFile() && (!nonempty || stat.size > 0) &&
     (mode === undefined || (stat.mode & 0o777) === mode);
+}
+
+function hasProductionSetupMarker(values = null) {
+  if (regularFile(OPERATOR_COMPOSE) || regularFile(path.join(PRODUCTION_DIR, 'realm.json'))) return true;
+  let configured = values;
+  if (configured === null) {
+    if (!regularFile(ENV_FILE, { nonempty: true })) return false;
+    try { configured = parseEnvFile(ENV_FILE); } catch { return false; }
+  }
+  return [
+    'REVIVAL_PUBLIC_DOMAIN',
+    'REVIVAL_PUBLIC_ORIGIN',
+    'REVIVAL_ACME_EMAIL',
+    'REVIVAL_FIRST_OPERATOR_EMAIL',
+    'REVIVAL_COMPOSE_APPLICATION',
+  ].some((name) => Boolean(configured?.[name]?.trim()));
 }
 
 function replaceEnvironmentValues(contents, updates) {
@@ -213,6 +240,71 @@ function ensurePair(certificate, key, generate, { force = false } = {}) {
   return true;
 }
 
+function ensureImmutableRootPair({ label, directory, certificate, key }, generate) {
+  if (fs.existsSync(directory)) {
+    const directoryStat = fs.lstatSync(directory);
+    if (directoryStat.isSymbolicLink() || !directoryStat.isDirectory() ||
+        (directoryStat.mode & 0o777) !== 0o700 ||
+        !regularFile(certificate, { mode: 0o444 }) || !regularFile(key, { mode: 0o444 })) {
+      throw new Error(`${label} is established but incomplete or unsafe; restore its original pair instead of regenerating it: ${directory}`);
+    }
+    try {
+      validatePair(certificate, key);
+      runOpenSsl(['verify', '-CAfile', certificate, certificate]);
+    } catch {
+      throw new Error(`${label} is established but does not contain its original matching root pair; restore it instead of regenerating it: ${directory}`);
+    }
+    return Object.freeze({ certificate, key, created: false });
+  }
+
+  const staging = fs.mkdtempSync(path.join(PRODUCTION_DIR, `.${path.basename(directory)}-`));
+  const stagedCertificate = path.join(staging, path.basename(certificate));
+  const stagedKey = path.join(staging, path.basename(key));
+  let committed = false;
+  try {
+    generate(stagedCertificate, stagedKey);
+    fs.chmodSync(stagedCertificate, 0o444);
+    fs.chmodSync(stagedKey, 0o444);
+    fs.chmodSync(staging, 0o700);
+    validatePair(stagedCertificate, stagedKey);
+    runOpenSsl(['verify', '-CAfile', stagedCertificate, stagedCertificate]);
+    // One directory rename publishes the pair. A crash before this point can
+    // leave staging, but never an incomplete established root.
+    fs.renameSync(staging, directory);
+    committed = true;
+  } finally {
+    if (!committed && fs.existsSync(staging)) fs.rmSync(staging, { recursive: true, force: true });
+  }
+  return Object.freeze({ certificate, key, created: true });
+}
+
+function certificateSha256(file) {
+  return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+}
+
+function readPinTrust() {
+  if (!fs.existsSync(PIN_TRUST_FILE)) return null;
+  if (!regularFile(PIN_TRUST_FILE, { mode: 0o444 })) {
+    throw new Error(`Pin trust record must be a nonempty regular mode-0444 file: ${PIN_TRUST_FILE}`);
+  }
+  let trust;
+  try { trust = JSON.parse(fs.readFileSync(PIN_TRUST_FILE, 'utf8')); } catch {
+    throw new Error(`Pin trust record is not valid JSON: ${PIN_TRUST_FILE}`);
+  }
+  if (trust?.schemaVersion !== 1 ||
+      !/^[a-f0-9]{64}$/u.test(trust.edgeRootSha256 || '') ||
+      !/^[a-f0-9]{64}$/u.test(trust.deviceUserRootSha256 || '')) {
+    throw new Error(`Pin trust record has an unsupported shape: ${PIN_TRUST_FILE}`);
+  }
+  return Object.freeze(trust);
+}
+
+function assertRootFingerprint(label, certificate, expected) {
+  if (certificateSha256(certificate) !== expected) {
+    throw new Error(`${label} does not match the established Pin trust record; restore the original root instead of rotating it`);
+  }
+}
+
 function generateCa(certificate, key, subject) {
   runOpenSsl(['genpkey', '-algorithm', 'EC', '-pkeyopt', 'ec_paramgen_curve:P-256', '-out', key]);
   runOpenSsl([
@@ -258,31 +350,47 @@ function certificateVerifies(certificate, authority, hostname = null) {
 }
 
 function ensureProductionPki() {
-  const edgeCa = {
-    certificate: path.join(PRODUCTION_DIR, 'edge-ca.crt'),
-    key: path.join(PRODUCTION_DIR, 'edge-ca.key'),
-  };
+  const establishedTrust = readPinTrust();
+  if (establishedTrust && (!fs.existsSync(EDGE_ROOT_DIR) || !fs.existsSync(DEVICE_USER_ROOT_DIR))) {
+    throw new Error('Pin trust is established but a root directory is missing; restore the original roots instead of regenerating them');
+  }
   const attest = {
     certificate: path.join(PRODUCTION_DIR, 'attestation-ca.crt'),
     key: path.join(PRODUCTION_DIR, 'attestation-ca.key'),
-  };
-  const duc = {
-    certificate: path.join(PRODUCTION_DIR, 'duc-ca.crt'),
-    key: path.join(PRODUCTION_DIR, 'duc-ca.key'),
   };
   const server = {
     certificate: path.join(PRODUCTION_DIR, 'edge-server.crt'),
     key: path.join(PRODUCTION_DIR, 'edge-server.key'),
   };
-  const edgeCaChanged = ensurePair(edgeCa.certificate, edgeCa.key, (certificate, key) =>
-    generateCa(certificate, key, '/O=Ai Pin Revival/CN=Cosmos Edge Root CA'));
+  const edgeCa = ensureImmutableRootPair({
+    label: 'Cosmos edge root CA',
+    directory: EDGE_ROOT_DIR,
+    ...EDGE_ROOT,
+  }, (certificate, key) => generateCa(certificate, key, '/O=Ai Pin Revival/CN=Cosmos Edge Root CA'));
+  if (establishedTrust) {
+    assertRootFingerprint('Cosmos edge root CA', edgeCa.certificate, establishedTrust.edgeRootSha256);
+  }
   ensurePair(attest.certificate, attest.key, (certificate, key, staging) =>
     generateIntermediateCa(
       certificate, key, staging, edgeCa,
       '/O=Ai Pin Revival/OU=DeviceAttestation/CN=Cosmos Attestation CA',
-    ), { force: edgeCaChanged || !certificateVerifies(attest.certificate, edgeCa.certificate) });
-  ensurePair(duc.certificate, duc.key, (certificate, key) =>
-    generateCa(certificate, key, '/O=Humane/OU=DeviceUser/CN=Cosmos DeviceUser CA'));
+    ), { force: !certificateVerifies(attest.certificate, edgeCa.certificate) });
+  const duc = ensureImmutableRootPair({
+    label: 'Cosmos DeviceUser root CA',
+    directory: DEVICE_USER_ROOT_DIR,
+    ...DEVICE_USER_ROOT,
+  }, (certificate, key) => generateCa(certificate, key, '/O=Humane/OU=DeviceUser/CN=Cosmos DeviceUser CA'));
+  if (establishedTrust) {
+    assertRootFingerprint(
+      'Cosmos DeviceUser root CA', duc.certificate, establishedTrust.deviceUserRootSha256,
+    );
+  } else {
+    atomicWrite(PIN_TRUST_FILE, `${JSON.stringify({
+      schemaVersion: 1,
+      edgeRootSha256: certificateSha256(edgeCa.certificate),
+      deviceUserRootSha256: certificateSha256(duc.certificate),
+    }, null, 2)}\n`, 0o444);
+  }
   ensurePair(server.certificate, server.key, (certificate, key, staging) => {
     const request = path.join(staging, 'server.csr');
     const extensions = path.join(staging, 'server.ext');
@@ -302,8 +410,7 @@ function ensureProductionPki() {
       '-set_serial', '1', '-out', certificate, '-days', '825', '-sha256', '-extfile', extensions,
     ]);
   }, {
-    force: edgeCaChanged ||
-      !certificateVerifies(server.certificate, edgeCa.certificate, 'api.cosmos.humane.cloud'),
+    force: !certificateVerifies(server.certificate, edgeCa.certificate, 'api.cosmos.humane.cloud'),
   });
   return { edgeCa, attest, duc, server };
 }
@@ -316,9 +423,9 @@ function validatePair(certificate, key) {
 
 function validatePki() {
   const files = {
-    edgeCa: [path.join(PRODUCTION_DIR, 'edge-ca.crt'), path.join(PRODUCTION_DIR, 'edge-ca.key')],
+    edgeCa: [EDGE_ROOT.certificate, EDGE_ROOT.key],
     attest: [path.join(PRODUCTION_DIR, 'attestation-ca.crt'), path.join(PRODUCTION_DIR, 'attestation-ca.key')],
-    duc: [path.join(PRODUCTION_DIR, 'duc-ca.crt'), path.join(PRODUCTION_DIR, 'duc-ca.key')],
+    duc: [DEVICE_USER_ROOT.certificate, DEVICE_USER_ROOT.key],
     server: [path.join(PRODUCTION_DIR, 'edge-server.crt'), path.join(PRODUCTION_DIR, 'edge-server.key')],
   };
   for (const [certificate, key] of Object.values(files)) validatePair(certificate, key);
@@ -326,6 +433,10 @@ function validatePki() {
   runOpenSsl(['verify', '-CAfile', files.edgeCa[0], files.attest[0]]);
   runOpenSsl(['verify', '-CAfile', files.edgeCa[0], '-verify_hostname', 'api.cosmos.humane.cloud', files.server[0]]);
   runOpenSsl(['verify', '-CAfile', files.duc[0], files.duc[0]]);
+  const trust = readPinTrust();
+  if (!trust) throw new Error(`Pin trust record is missing: ${PIN_TRUST_FILE}`);
+  assertRootFingerprint('Cosmos edge root CA', files.edgeCa[0], trust.edgeRootSha256);
+  assertRootFingerprint('Cosmos DeviceUser root CA', files.duc[0], trust.deviceUserRootSha256);
 }
 
 function productionRealm(values, firstPassword) {
@@ -490,13 +601,16 @@ function renderOperatorCompose(profiles) {
       - { source: duc_ca_cert, target: /etc/cosmos-edge/certs/api-client-ca.crt, mode: 0444 }
       - { source: attestation_ca_cert, target: /etc/cosmos-edge/certs/onboarding-client-ca.crt, mode: 0444 }`,
     );
-    for (const [name, filename] of [
-      ['edge_ca_cert', 'edge-ca.crt'],
-      ['attestation_ca_cert', 'attestation-ca.crt'], ['attestation_ca_key', 'attestation-ca.key'],
-      ['duc_ca_cert', 'duc-ca.crt'], ['duc_ca_key', 'duc-ca.key'],
-      ['envoy_config', 'envoy.yaml'], ['edge_server_cert', 'edge-server.crt'],
-      ['edge_server_key', 'edge-server.key'],
-    ]) secrets.push(`  ${name}: { file: ${safeYaml(path.join(PRODUCTION_DIR, filename))} }`);
+    for (const [name, file] of [
+      ['edge_ca_cert', EDGE_ROOT.certificate],
+      ['attestation_ca_cert', path.join(PRODUCTION_DIR, 'attestation-ca.crt')],
+      ['attestation_ca_key', path.join(PRODUCTION_DIR, 'attestation-ca.key')],
+      ['duc_ca_cert', DEVICE_USER_ROOT.certificate],
+      ['duc_ca_key', DEVICE_USER_ROOT.key],
+      ['envoy_config', path.join(PRODUCTION_DIR, 'envoy.yaml')],
+      ['edge_server_cert', path.join(PRODUCTION_DIR, 'edge-server.crt')],
+      ['edge_server_key', path.join(PRODUCTION_DIR, 'edge-server.key')],
+    ]) secrets.push(`  ${name}: { file: ${safeYaml(file)} }`);
     centerEnvironment.push(
       '      REVIVAL_PIN_RELEASE_DIR: /var/lib/ai-pin-revival/pin-releases',
       '      REVIVAL_PIN_SETUP_ORIGIN: ${REVIVAL_PUBLIC_ORIGIN:?run revival setup production}',
@@ -602,9 +716,12 @@ function activeArtifactFiles(values) {
     path.join(PRODUCTION_DIR, 'traefik-dynamic.yaml'),
     path.join(PRODUCTION_DIR, 'postgres-init.sql'),
     ...(profiles.has('pin') ? [
-      'edge-ca.crt', 'edge-ca.key', 'edge-server.crt', 'edge-server.key',
-      'attestation-ca.crt', 'attestation-ca.key', 'duc-ca.crt', 'duc-ca.key', 'envoy.yaml',
-    ].map((name) => path.join(PRODUCTION_DIR, name)) : []),
+      PIN_TRUST_FILE,
+      EDGE_ROOT.certificate, EDGE_ROOT.key,
+      DEVICE_USER_ROOT.certificate, DEVICE_USER_ROOT.key,
+      ...['edge-server.crt', 'edge-server.key', 'attestation-ca.crt', 'attestation-ca.key', 'envoy.yaml']
+        .map((name) => path.join(PRODUCTION_DIR, name)),
+    ] : []),
     ...(profiles.has('spotify') ? [
       path.join(PRODUCTION_DIR, 'spotify-token'),
       IROH_TICKET_FILE,
@@ -780,11 +897,12 @@ function setupProduction(args) {
     profiles: options.profiles,
     operatorCompose: OPERATOR_COMPOSE,
     credentials: regularFile(credentials, { mode: 0o600 }) ? credentials : null,
-    pinTrustRoot: pin ? path.join(PRODUCTION_DIR, 'edge-ca.crt') : null,
+    pinTrustRoot: pin ? EDGE_ROOT.certificate : null,
   });
 }
 
 module.exports = {
+  hasProductionSetupMarker,
   OPERATOR_COMPOSE,
   PIN_SERVER_NAMES,
   PRODUCTION_DIR,

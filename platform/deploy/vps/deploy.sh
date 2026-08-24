@@ -42,7 +42,7 @@ compose=(
   -f "$application"
   -f "$operator_compose"
 )
-up=(up --detach --wait --wait-timeout "$wait_timeout" --pull always --remove-orphans)
+up=(up --yes --detach --wait --wait-timeout "$wait_timeout" --pull always --remove-orphans)
 
 if ((dry_run)); then
   printf 'docker compose'
@@ -51,6 +51,14 @@ if ((dry_run)); then
   exit 0
 fi
 
+[[ "${REVIVAL_DEPLOY_CONFIRMED:-}" == 1 ]] || {
+  echo "production deployment requires revival deploy production --confirm" >&2
+  exit 1
+}
+
+# `--yes` is Compose's supported noninteractive trust flag for remote Compose
+# artifacts. Revival has already required an explicit --confirm and completed
+# preflight, so there is no second prompt that could print interpolated secrets.
 docker compose "${compose[@]}" "${up[@]}"
 docker compose "${compose[@]}" ps
 "$SCRIPT_DIR/verify.sh" --env-file "$env_file" --project-name "$project_name"

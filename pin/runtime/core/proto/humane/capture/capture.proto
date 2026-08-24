@@ -343,7 +343,7 @@ message DeleteMemoryResponse {
 // client's forNumber() already knows, so it decodes as FAILURE rather than as an
 // unrecognized status. The staging record, the verdict and the install check are
 // in contracts/wire-divergence.json (`stagedForRelease`) and
-// docs/operations.md.
+// README.md#connect-a-pin.
 //
 // NOT_AUTHORIZED is declared but never emitted: this runtime authorizes nothing
 // on the loopback path. It is here because the NUMBER has to be right.

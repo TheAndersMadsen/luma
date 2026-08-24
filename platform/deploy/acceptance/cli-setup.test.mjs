@@ -273,11 +273,59 @@ test("pin profile creates enrollment inputs and requires a public IPv4 address",
   const pinCompose = renderProductionCompose(env);
   if (pinCompose) assert.equal(pinCompose.status, 0, pinCompose.stderr);
 
-  const edgeKey = path.join(env.REVIVAL_CONFIG_DIR, "production", "edge-ca.key");
+  const production = path.join(env.REVIVAL_CONFIG_DIR, "production");
+  const edgeRoot = path.join(production, "edge-root");
+  const deviceUserRoot = path.join(production, "device-user-root");
+  const edgeCertificate = path.join(edgeRoot, "edge-ca.crt");
+  const edgeKey = path.join(edgeRoot, "edge-ca.key");
+  const deviceUserCertificate = path.join(deviceUserRoot, "duc-ca.crt");
+  const deviceUserKey = path.join(deviceUserRoot, "duc-ca.key");
+  assert.equal(fs.existsSync(path.join(production, "edge-ca.crt")), false);
+  assert.equal(fs.existsSync(path.join(production, "duc-ca.crt")), false);
+  assert.equal(fs.statSync(edgeRoot).mode & 0o777, 0o700);
+  assert.equal(fs.statSync(deviceUserRoot).mode & 0o777, 0o700);
+  assert.equal(fs.statSync(path.join(production, "pin-trust.json")).mode & 0o777, 0o444);
+  const originalEdgeKey = fs.readFileSync(edgeKey);
+  const originalDeviceUserKey = fs.readFileSync(deviceUserKey);
+  const originalEdgeCertificate = fs.readFileSync(edgeCertificate);
+  const originalDeviceUserCertificate = fs.readFileSync(deviceUserCertificate);
   fs.unlinkSync(edgeKey);
-  const recovered = invoke(env, "setup", "production");
-  assert.equal(recovered.status, 0, recovered.stderr);
-  assert.ok(fs.statSync(edgeKey).size > 0);
+  const missingRoot = invoke(env, "setup", "production");
+  assert.equal(missingRoot.status, 1);
+  assert.match(missingRoot.stderr, /edge root CA is established but incomplete/u);
+  assert.equal(fs.existsSync(edgeKey), false, "setup must not rotate a missing established root");
+
+  fs.writeFileSync(edgeKey, originalEdgeKey, { mode: 0o444 });
+  fs.chmodSync(deviceUserKey, 0o600);
+  fs.writeFileSync(deviceUserKey, originalEdgeKey);
+  fs.chmodSync(deviceUserKey, 0o444);
+  const mismatchedRoot = invoke(env, "setup", "production");
+  assert.equal(mismatchedRoot.status, 1);
+  assert.match(mismatchedRoot.stderr, /DeviceUser root CA is established but does not contain its original matching root pair/u);
+
+  fs.chmodSync(deviceUserKey, 0o600);
+  fs.writeFileSync(deviceUserKey, originalDeviceUserKey);
+  fs.chmodSync(deviceUserKey, 0o444);
+  fs.unlinkSync(path.join(production, "edge-server.key"));
+  const recoveredDerivedCertificate = invoke(env, "setup", "production");
+  assert.equal(recoveredDerivedCertificate.status, 0, recoveredDerivedCertificate.stderr);
+  assert.deepEqual(fs.readFileSync(edgeCertificate), originalEdgeCertificate, "derived repair must retain the edge root");
+
+  fs.chmodSync(edgeCertificate, 0o600);
+  fs.chmodSync(edgeKey, 0o600);
+  fs.writeFileSync(edgeCertificate, originalDeviceUserCertificate);
+  fs.writeFileSync(edgeKey, originalDeviceUserKey);
+  fs.chmodSync(edgeCertificate, 0o444);
+  fs.chmodSync(edgeKey, 0o444);
+  const rotatedRoot = invoke(env, "setup", "production");
+  assert.equal(rotatedRoot.status, 1);
+  assert.match(rotatedRoot.stderr, /does not match the established Pin trust record/u);
+
+  fs.rmSync(edgeRoot, { recursive: true });
+  const deletedRoot = invoke(env, "setup", "production");
+  assert.equal(deletedRoot.status, 1);
+  assert.match(deletedRoot.stderr, /Pin trust is established but a root directory is missing/u);
+  assert.equal(fs.existsSync(edgeRoot), false, "setup must not replace a deleted established root");
 });
 
 test("core setup omits optional state and --no-profiles clears active profiles", (t) => {

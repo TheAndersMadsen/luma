@@ -72,12 +72,14 @@ class HealthTrackerGateParityContractTest {
     }
 
     @Test
-    fun `replacement acknowledges stock notable events without retaining health history`() {
+    fun `replacement acknowledges stock notable event shapes and retains queryable history`() {
         val events = repoFile("runtime/core/src/services/events.rs").readText()
 
         assertTrue(events.contains("yield acknowledge_event(event)?"))
-        assertTrue(events.contains("yield acknowledge_batch(batch)?"))
-        assertTrue(events.contains("EventsQueryResponse { events: Vec::new() }"))
+        assertTrue(events.contains("yield IngestBatchResponse {"))
+        assertTrue(events.contains("event_identifier: response,"))
+        assertTrue(events.contains("db.upsert_notable_event(&event)"))
+        assertTrue(events.contains("Ok(Response::new(EventsQueryResponse { events }))"))
         assertFalse(events.contains("INSERT INTO"))
         assertFalse(events.contains("File::create"))
     }

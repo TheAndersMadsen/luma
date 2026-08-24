@@ -108,6 +108,7 @@ const DETAILS = Object.freeze({
   'check.platform': 'Runs the fast contributor acceptance suite directly from the working tree. --full dynamically includes every top-level Node acceptance test; CI and release own shell policies.',
   'check.changed': 'Options: --base REF. Uses only origin/HEAD, origin/main, or origin/master automatically; without one it checks the full tracked tree. Safety-sensitive paths run platform --full.',
   'deploy.production': 'Runs the direct Cosmos deployment on this host. Use --dry-run to print the Compose command or --confirm to apply it.',
+  'registry.login': 'Logs in to ghcr.io with Docker’s hidden interactive token prompt. Credentials are stored only in the managed Docker configuration used by production deploys.',
   'verify.production': 'Validates healthy services, the configured Center release, OIDC, capture routing, and the configured Pin certificate chain when enabled.',
   'setup.local': 'Creates the external local configuration and generated secrets. It does not start containers.',
   'setup.contributor': 'Creates the external contributor configuration and caches. It does not run gates.',
@@ -131,6 +132,8 @@ const DETAILS = Object.freeze({
   'pin.install': 'Without --confirm this resolves the exact serial and release, prints a plan, and leaves the device untouched.',
   'pin.build-debug': 'Credential-free and non-installable. Select roles with repeated --role, or use --changed [--base REF]. Reuses the pinned linux/amd64 builder and external build caches; every role refuses release signing inputs.',
   'pin.release.build': 'Usage: revival pin release build --version YYYY-MM-DD.N --version-code INTEGER. Builds the signed five-APK release into the external store mounted by Center. It never runs ADB or mutates a device.',
+  'pin.release.import': 'Usage: revival pin release import ARCHIVE [--json]. Verifies the archive layout, signer receipt, manifest, and all five APK digests before atomically publishing it to Center.',
+  'pin.release.export': 'Usage: revival pin release export --output ARCHIVE [--json]. Exports the current verified five-APK release for publication.',
 });
 
 function safetyText(command) {
@@ -181,7 +184,7 @@ function renderRootHelp(contract) {
     '',
     'Short local aliases: build, up, down, status, logs, config.',
     'Pin host operations (no device mutation) are under `revival pin`; device actions plan unless explicitly confirmed.',
-    '  revival pin release build --version YYYY-MM-DD.N --version-code INTEGER',
+    '  revival pin release import ARCHIVE',
     '',
     'Safety: help is read-only and side-effect-free. Each command help names whether it reads state or mutates local, remote, or device state.',
     '',
@@ -195,7 +198,7 @@ function renderGroupHelp(tokens, contract) {
   const heading = tokens.join(' ');
   const defaultCommand = findCommand(tokens, contract)?.command || null;
   const notes = [];
-  if (heading === 'pin release') notes.push('Build atomically updates the release store mounted by Center.');
+  if (heading === 'pin release') notes.push('Build creates a signed release; import publishes a verified archive to Center.');
   if (heading === 'config') notes.push('Bare `revival config` renders the Compose model.');
   if (heading === 'pin') notes.push('Device mutation requires an exact serial and explicit confirmation in the delegated tool.');
   return [

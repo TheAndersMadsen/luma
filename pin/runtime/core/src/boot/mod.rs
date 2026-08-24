@@ -484,7 +484,7 @@ pub(crate) async fn run(
     #[cfg(feature = "iroh")]
     let iroh_connector = if config.server.iroh_remote_center_enabled {
         use remote_center::iroh_connector::{IrohConfig, IrohConnectorState};
-        use remote_center::policy::{Capabilities, Capability};
+        use remote_center::policy::operator_bridge_capabilities;
 
         let iroh_config = IrohConfig {
             enabled: true,
@@ -499,12 +499,8 @@ pub(crate) async fn run(
         // so every asset the dashboard references is dispatchable.
         let center_entries = api::setup::asset_paths();
 
-        // Read-only remote access: Setup assets and `/api/health` need no
-        // capability; grant device-metadata and feature-flag reads so the
-        // dashboard's status views populate. No write capability is granted.
-        let capabilities = Capabilities::none()
-            .with(Capability::DeviceMetadataRead)
-            .with(Capability::FeatureFlagsRead);
+        // Issue only the reviewed Center/Spotify capability bundle.
+        let capabilities = operator_bridge_capabilities();
 
         // Persist the Pin's iroh identity next to the app database so its
         // EndpointId — and therefore the ticket the VPS bridge dials — survives
@@ -520,7 +516,6 @@ pub(crate) async fn run(
             connector_router,
             iroh_config,
             iroh_secret_key_path,
-            config.server.iroh_remote_center_full_access,
             config.server.iroh_remote_center_allowed_peers.clone(),
         )
         .await

@@ -245,6 +245,43 @@ test("config check delegates conditional TTS and Spotify pairing validation to t
   }
 });
 
+test("config check recognizes production and validates its generated artifacts", () => {
+  const { temporary, env } = fixture();
+  try {
+    const setup = invoke(env, [
+      "setup", "production",
+      "--domain", "pin.example.test",
+      "--acme-email", "acme@example.test",
+      "--operator-email", "owner@example.test",
+    ]);
+    assert.equal(setup.status, 0, setup.stderr);
+
+    const ready = invoke(env, ["config", "check", "--json"]);
+    assert.equal(ready.status, 0, ready.stderr);
+    const report = JSON.parse(ready.stdout);
+    assert.equal(report.ok, true);
+    assert.equal(
+      report.checks.find((check) => check.id === "production-artifacts")?.status,
+      "PASS",
+    );
+    assert.match(
+      report.checks.find((check) => check.id === "runtime-contract")?.message ?? "",
+      /production configuration contract/u,
+    );
+
+    fs.unlinkSync(path.join(env.REVIVAL_CONFIG_DIR, "production", "traefik.yaml"));
+    const incomplete = invoke(env, ["config", "check", "--json"]);
+    assert.equal(incomplete.status, 1);
+    const failed = JSON.parse(incomplete.stdout);
+    assert.equal(
+      failed.checks.find((check) => check.id === "production-artifacts")?.status,
+      "FAIL",
+    );
+  } finally {
+    fs.rmSync(temporary, { recursive: true, force: true });
+  }
+});
+
 test("init derives the database URL from a dotenv-decoded safe quoted password", () => {
   const { temporary, env } = fixture();
   try {

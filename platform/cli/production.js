@@ -34,7 +34,7 @@ function parseProductionOptions(args, { deploy = false } = {}) {
   return { envFile };
 }
 
-function deploymentScript(name, args, envFile = ENV_FILE) {
+function deploymentScript(name, args, envFile = ENV_FILE, { confirmed = false } = {}) {
   let values;
   try {
     values = validateRuntime({ production: true, envFile });
@@ -57,7 +57,9 @@ function deploymentScript(name, args, envFile = ENV_FILE) {
   }
   const script = path.join(DEPLOY_DIR, name);
   if (!fs.existsSync(script)) fail(`deployment command is unavailable: ${script}`);
-  return run(resolveTool('bash'), [script, ...args], { env: operatorEnvironment(values) });
+  const environment = operatorEnvironment(values);
+  if (confirmed) environment.REVIVAL_DEPLOY_CONFIRMED = '1';
+  return run(resolveTool('bash'), [script, ...args], { env: environment });
 }
 
 function productionDoctor(args) {
@@ -84,7 +86,12 @@ function deployProduction(args) {
     }
     fail(`usage: ${DEPLOY_USAGE}`, 64);
   }
-  deploymentScript('deploy.sh', options.filter((argument) => argument !== '--confirm'), parsed.envFile);
+  deploymentScript(
+    'deploy.sh',
+    options.filter((argument) => argument !== '--confirm'),
+    parsed.envFile,
+    { confirmed: options.includes('--confirm') },
+  );
 }
 
 function verifyProduction(args) {

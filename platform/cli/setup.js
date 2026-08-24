@@ -1,10 +1,8 @@
 'use strict';
 
 const fs = require('node:fs');
-const path = require('node:path');
 
 const {
-  parseEnvFile,
   ENV_FILE,
   fail,
   info,
@@ -12,8 +10,7 @@ const {
   validateRuntime,
 } = require('./context');
 const {
-  OPERATOR_COMPOSE,
-  PRODUCTION_DIR,
+  hasProductionSetupMarker,
   setupProduction,
   validateProductionArtifacts,
 } = require('./production-setup');
@@ -25,28 +22,6 @@ function protectedFile(file, requireContent = true) {
   const stat = fs.lstatSync(file);
   return !stat.isSymbolicLink() && stat.isFile() && (stat.mode & 0o777) === 0o600 &&
     (!requireContent || stat.size > 0);
-}
-
-function regularFile(file) {
-  if (!fs.existsSync(file)) return false;
-  const stat = fs.lstatSync(file);
-  return !stat.isSymbolicLink() && stat.isFile();
-}
-
-function hasProductionSetupMarker() {
-  if (regularFile(OPERATOR_COMPOSE) || regularFile(path.join(PRODUCTION_DIR, 'realm.json'))) return true;
-  if (!regularFile(ENV_FILE)) return false;
-  try {
-    const values = parseEnvFile(ENV_FILE);
-    return [
-      'REVIVAL_PUBLIC_DOMAIN',
-      'REVIVAL_PUBLIC_ORIGIN',
-      'REVIVAL_ACME_EMAIL',
-      'REVIVAL_FIRST_OPERATOR_EMAIL',
-    ].some((name) => Boolean(values[name]?.trim()));
-  } catch {
-    return false;
-  }
 }
 
 function setupStatus() {

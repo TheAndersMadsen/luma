@@ -118,6 +118,9 @@ test("operator release is lean, versioned, and bound to exact OCI digests", (t) 
   assert.equal(listed.status, 0, listed.stderr);
   assert.match(listed.stdout, new RegExp(`ai-pin-revival-operator-${version}/revival`, "u"));
   assert.match(listed.stdout, /platform\/deploy\/vps\/deploy\.sh/u);
+  assert.match(listed.stdout, /platform\/deploy\/pin\/activate\.mjs/u);
+  assert.match(listed.stdout, /platform\/deploy\/pin\/device-target-guard\.mjs/u);
+  assert.match(listed.stdout, /platform\/deploy\/pin\/import-release\.mjs/u);
   assert.doesNotMatch(listed.stdout, /center\/src|cosmos\/crates|pin\/runtime|compose\.yaml/u);
   assert.ok(fs.statSync(archive).size < 2 * 1024 * 1024, "operator bundle should remain under 2 MiB");
 
@@ -153,9 +156,50 @@ test("operator release is lean, versioned, and bound to exact OCI digests", (t) 
     "--operator-email", "owner@example.test",
   ], { cwd: bundle, env: operatorEnv, encoding: "utf8", timeout: 30_000 });
   assert.equal(setup.status, 0, setup.stderr);
+
+  const importUsage = spawnSync(process.execPath, [
+    path.join(bundle, "revival"), "pin", "release", "import",
+  ], { cwd: bundle, env: operatorEnv, encoding: "utf8" });
+  assert.equal(importUsage.status, 1);
+  assert.match(importUsage.stderr, /pin release import ARCHIVE/u);
+  assert.doesNotMatch(importUsage.stderr, /ERR_MODULE_NOT_FOUND|Cannot find module/u);
+
+  const activateUsage = spawnSync(process.execPath, [
+    path.join(bundle, "revival"), "pin", "activate",
+  ], { cwd: bundle, env: operatorEnv, encoding: "utf8" });
+  assert.notEqual(activateUsage.status, 0);
+  assert.match(activateUsage.stderr, /--serial is required|usage/u);
+  assert.doesNotMatch(activateUsage.stderr, /ERR_MODULE_NOT_FOUND|Cannot find module/u);
   const runtime = fs.readFileSync(operatorEnv.REVIVAL_ENV_FILE, "utf8");
   assert.match(runtime, new RegExp(`^REVIVAL_RELEASE_ID=${revision}$`, "mu"));
   assert.match(runtime, new RegExp(`^REVIVAL_COMPOSE_APPLICATION=oci://ghcr\\.io/.+@${applicationDigest}$`, "mu"));
+
+  const production = path.join(operatorEnv.REVIVAL_CONFIG_DIR, "production");
+  const preservedRealm = fs.readFileSync(path.join(production, "realm.json"), "utf8");
+  const preservedSessionSecret = /^AUTH_SESSION_SECRET=(.+)$/mu.exec(runtime)?.[1];
+  const nextRevision = "c".repeat(40);
+  const nextApplicationDigest = digest("d");
+  fs.writeFileSync(
+    path.join(bundle, "platform/distribution/version.json"),
+    `${JSON.stringify({
+      schemaVersion: 1,
+      version: "1.2.4",
+      revision: nextRevision,
+      application: `oci://ghcr.io/theandersmadsen/ai-pin-revival/application@${nextApplicationDigest}`,
+    })}\n`,
+  );
+  const upgrade = spawnSync(process.execPath, [path.join(bundle, "revival"), "setup", "production"], {
+    cwd: bundle,
+    env: operatorEnv,
+    encoding: "utf8",
+    timeout: 30_000,
+  });
+  assert.equal(upgrade.status, 0, upgrade.stderr);
+  const upgradedRuntime = fs.readFileSync(operatorEnv.REVIVAL_ENV_FILE, "utf8");
+  assert.match(upgradedRuntime, new RegExp(`^REVIVAL_RELEASE_ID=${nextRevision}$`, "mu"));
+  assert.match(upgradedRuntime, new RegExp(`^REVIVAL_COMPOSE_APPLICATION=oci://ghcr\\.io/.+@${nextApplicationDigest}$`, "mu"));
+  assert.equal(/^AUTH_SESSION_SECRET=(.+)$/mu.exec(upgradedRuntime)?.[1], preservedSessionSecret);
+  assert.equal(fs.readFileSync(path.join(production, "realm.json"), "utf8"), preservedRealm);
 
   const checksums = fs.readFileSync(path.join(output, "SHA256SUMS"), "utf8");
   assert.match(checksums, new RegExp(`  ${archiveName}$`, "mu"));

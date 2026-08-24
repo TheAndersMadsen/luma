@@ -409,7 +409,6 @@ struct ServerSettingsResponse {
     public_addr: String,
     lan_dashboard_enabled: bool,
     iroh_remote_center_enabled: bool,
-    iroh_remote_center_full_access: bool,
     /// Peer identities are write-only; expose only whether the direct tunnel
     /// is constrained and how many identities are trusted.
     iroh_remote_center_allowed_peer_count: usize,
@@ -578,7 +577,6 @@ fn settings_response_with_restart(config: &Config, restart_required: bool) -> Se
             public_addr: config.server.public_addr.clone(),
             lan_dashboard_enabled: config.server.lan_dashboard_enabled,
             iroh_remote_center_enabled: config.server.iroh_remote_center_enabled,
-            iroh_remote_center_full_access: config.server.iroh_remote_center_full_access,
             iroh_remote_center_allowed_peer_count: config
                 .server
                 .iroh_remote_center_allowed_peers
@@ -734,9 +732,6 @@ struct UpdateServerSettings {
     /// Persisted immediately; the iroh connector picks it up on the next server
     /// start (it is initialized once at startup).
     iroh_remote_center_enabled: Option<bool>,
-    /// Persisted immediately; applied on the next server start. Only safe behind
-    /// an iroh peer allowlist; edge auth does not protect the direct listener.
-    iroh_remote_center_full_access: Option<bool>,
     /// Write-only trusted bridge EndpointIds. Applied on the next server start.
     iroh_remote_center_allowed_peers: Option<Vec<String>>,
     /// Write-only. The administration token cannot be cleared through the API.
@@ -1197,15 +1192,21 @@ async fn update_settings(
         if let Some(enabled) = server.iroh_remote_center_enabled {
             config.server.iroh_remote_center_enabled = enabled;
         }
-        if let Some(enabled) = server.iroh_remote_center_full_access {
-            config.server.iroh_remote_center_full_access = enabled;
-        }
         if let Some(peers) = server.iroh_remote_center_allowed_peers.clone() {
             config.server.iroh_remote_center_allowed_peers =
                 match normalize_iroh_remote_center_allowed_peers(peers) {
                     Ok(peers) => peers,
                     Err(error) => return (StatusCode::BAD_REQUEST, error).into_response(),
                 };
+        }
+        if config.server.iroh_remote_center_enabled
+            && config.server.iroh_remote_center_allowed_peers.is_empty()
+        {
+            return (
+                StatusCode::BAD_REQUEST,
+                "iroh remote Center requires at least one trusted bridge EndpointId",
+            )
+                .into_response();
         }
         match &server.system_prompt {
             PromptUpdate::Unchanged => {}
@@ -2049,8 +2050,6 @@ fn persist_config_inner(
         table["lan_dashboard_enabled"] = toml_edit::value(config.server.lan_dashboard_enabled);
         table["iroh_remote_center_enabled"] =
             toml_edit::value(config.server.iroh_remote_center_enabled);
-        table["iroh_remote_center_full_access"] =
-            toml_edit::value(config.server.iroh_remote_center_full_access);
         let mut allowed_peers = toml_edit::Array::new();
         for peer in &config.server.iroh_remote_center_allowed_peers {
             allowed_peers.push(peer.as_str());
@@ -2878,12 +2877,10 @@ mod tests {
         let peer = "09ad483a6a046e4148a71a7e05f2880e82abd3086369b42f3fb6bda6ee7f3b63";
         let mut config = Config::load(&dir.path().join("missing.toml")).unwrap();
         config.server.iroh_remote_center_enabled = true;
-        config.server.iroh_remote_center_full_access = true;
         config.server.iroh_remote_center_allowed_peers = vec![peer.into()];
 
         let response = serde_json::to_value(settings_response(&config)).unwrap();
         assert_eq!(response["server"]["iroh_remote_center_enabled"], true);
-        assert_eq!(response["server"]["iroh_remote_center_full_access"], true);
         assert_eq!(
             response["server"]["iroh_remote_center_allowed_peer_count"],
             1

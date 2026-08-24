@@ -26,9 +26,9 @@ use tower::ServiceExt as _;
 use tracing::{error, info, warn};
 
 use super::policy::{
-    authorize, authorize_full_access, ApiOperation, ApprovedOperation, AssetMethod, Capabilities,
-    CenterAssetCatalog, CenterGeneration, CompletionState, MetadataLedger, PolicyContext,
-    RequestEnvelope, RequestFingerprint, ReservationDecision,
+    authorize, ApiOperation, ApprovedOperation, AssetMethod, Capabilities, CenterAssetCatalog,
+    CenterGeneration, CompletionState, MetadataLedger, PolicyContext, RequestEnvelope,
+    RequestFingerprint, ReservationDecision,
 };
 
 /// Bound on the replay/idempotency ledger. The remote Center is a single
@@ -123,22 +123,14 @@ pub struct IrohConnectorState {
     generation: CenterGeneration,
     center_catalog: CenterAssetCatalog<'static>,
     /// Capabilities the remote peer is granted. Center assets and `/api/health`
-    /// need none; device-metadata and feature-flag reads are opt-in here.
+    /// need none; every sensitive Center/Spotify route is opt-in here.
     capabilities: Capabilities,
     /// Replay + idempotency ledger consulted before every dispatch, so a
     /// replayed request id or a conflicting idempotency key fails closed.
     ledger: tokio::sync::Mutex<MetadataLedger>,
     http_router: Arc<RwLock<axum::Router>>,
     config: IrohConfig,
-    /// When true the closed capability table is replaced by the legacy broad
-    /// `/api` compatibility proxy. Envelope validation, hard-denied namespaces,
-    /// freshness, replay protection and mutation idempotency still apply. This
-    /// is ONLY safe when the tunnel is independently authenticated and peer
-    /// allowlisted, which is why it is off by default. See
-    /// `server.iroh_remote_center_full_access`.
-    full_access: bool,
-    /// Remote `EndpointId`s permitted to connect, lower-case hex. Empty means
-    /// "accept any peer" (the historical behaviour).
+    /// Remote `EndpointId`s permitted to connect, lower-case hex.
     allowed_peers: Vec<String>,
 }
 
@@ -151,7 +143,6 @@ impl IrohConnectorState {
         http_router: axum::Router,
         config: IrohConfig,
         secret_key_path: Option<PathBuf>,
-        full_access: bool,
         allowed_peers: Vec<String>,
     ) -> Result<Arc<Self>, Box<dyn std::error::Error + Send + Sync>> {
         let allowed_peers: Vec<String> = allowed_peers
@@ -159,6 +150,11 @@ impl IrohConnectorState {
             .map(|peer| peer.trim().to_ascii_lowercase())
             .filter(|peer| !peer.is_empty())
             .collect();
+        if allowed_peers.is_empty() {
+            return Err(
+                "iroh remote Center requires at least one trusted bridge EndpointId".into(),
+            );
+        }
         let generation = CenterGeneration::new(generation)?;
         let catalog = CenterAssetCatalog::new(Box::leak(center_entries.into_boxed_slice()))?;
         let ledger = tokio::sync::Mutex::new(MetadataLedger::new(generation, LEDGER_CAPACITY)?);
@@ -195,24 +191,6 @@ impl IrohConnectorState {
             "iroh connector initialized with node ID"
         );
 
-        if full_access {
-            if allowed_peers.is_empty() {
-                // Worth shouting about: with the policy bypassed and no peer
-                // allowlist, the Pin's own EndpointId is the only credential —
-                // and it is persisted, stable and printed at startup.
-                warn!(
-                    "iroh remote Center is in FULL-ACCESS mode with NO peer allowlist: \
-                     any peer that learns this EndpointId gets the full API. Set \
-                     server.iroh_remote_center_allowed_peers to the bridge's EndpointId."
-                );
-            } else {
-                info!(
-                    allowed_peers = allowed_peers.len(),
-                    "iroh remote Center is in FULL-ACCESS mode, restricted to an allowlist"
-                );
-            }
-        }
-
         Ok(Arc::new(Self {
             endpoint,
             allowed_peers,
@@ -222,7 +200,6 @@ impl IrohConnectorState {
             ledger,
             http_router: Arc::new(RwLock::new(http_router)),
             config,
-            full_access,
         }))
     }
 
@@ -283,16 +260,11 @@ async fn handle_connection(
     // startup. A caller must now additionally *be* a permitted endpoint, which
     // it cannot forge without that peer's private key.
     //
-    // An empty allowlist preserves the historical accept-any behaviour so an
-    // existing install does not lose its remote Center on upgrade; `new` warns
-    // loudly when that is combined with full access.
-    if !state.allowed_peers.is_empty() {
-        let remote_hex = remote.to_string().to_ascii_lowercase();
-        if !state.allowed_peers.iter().any(|peer| peer == &remote_hex) {
-            warn!("rejected iroh connection from a peer that is not on the allowlist");
-            connection.close(1u32.into(), b"peer not allowed");
-            return Ok(());
-        }
+    let remote_hex = remote.to_string().to_ascii_lowercase();
+    if !state.allowed_peers.iter().any(|peer| peer == &remote_hex) {
+        warn!("rejected iroh connection from a peer that is not on the allowlist");
+        connection.close(1u32.into(), b"peer not allowed");
+        return Ok(());
     }
 
     info!(
@@ -408,14 +380,7 @@ async fn handle_request_stream(
             center_assets: &state.center_catalog,
         };
 
-        // Legacy full-access mode retains broad Center compatibility, but no
-        // longer bypasses request validation, local-only route denial, replay
-        // protection, or write idempotency.
-        let validated = match if state.full_access {
-            authorize_full_access(&envelope, &context)
-        } else {
-            authorize(&envelope, &context)
-        } {
+        let validated = match authorize(&envelope, &context) {
             Ok(validated) => validated,
             Err(policy_error) => {
                 warn!(error = %policy_error, "remote request denied by policy");
@@ -462,34 +427,24 @@ async fn handle_request_stream(
             continue;
         }
 
-        // Typed mode never forwards the peer's method, path, query or headers.
-        // It constructs an exact in-process request from the closed operation;
-        // only the legacy compatibility mode retains its reviewed broad proxy.
-        let dispatch = if state.full_access {
-            DispatchRequest {
-                method: Method::from_bytes(request.method.as_bytes()).unwrap_or(Method::GET),
-                target: request.path.clone(),
-                content_type: request.content_type.clone(),
-                body: request_body,
-            }
-        } else {
-            match typed_dispatch_request(
-                reservation.operation(),
-                &state.center_catalog,
-                request_body,
-            ) {
-                Ok(dispatch) => dispatch,
-                Err(message) => {
-                    let mut ledger = state.ledger.lock().await;
-                    let _ = ledger.record_completion(
-                        &reservation,
-                        CompletionState::Completed,
-                        dispatch_now_ms,
-                    );
-                    drop(ledger);
-                    send_error_response(send, StatusCode::BAD_REQUEST, message).await?;
-                    continue;
-                }
+        // Never forward the peer's method, path, query or headers. Construct an
+        // exact in-process request from the authorized typed operation.
+        let dispatch = match typed_dispatch_request(
+            reservation.operation(),
+            &state.center_catalog,
+            request_body,
+        ) {
+            Ok(dispatch) => dispatch,
+            Err(message) => {
+                let mut ledger = state.ledger.lock().await;
+                let _ = ledger.record_completion(
+                    &reservation,
+                    CompletionState::Completed,
+                    dispatch_now_ms,
+                );
+                drop(ledger);
+                send_error_response(send, StatusCode::BAD_REQUEST, message).await?;
+                continue;
             }
         };
 
@@ -516,7 +471,7 @@ async fn handle_request_stream(
         let body_base64 = base64::engine::general_purpose::STANDARD.encode(&body_bytes);
 
         // Record the terminal metadata state (content-free) so a duplicate can
-        // never re-execute a completed mutation in either policy mode.
+        // never re-execute a completed mutation.
         let mut ledger = state.ledger.lock().await;
         let _ = ledger.record_completion(&reservation, CompletionState::Completed, now_ms);
         drop(ledger);
@@ -619,9 +574,6 @@ fn typed_dispatch_request(
                     ),
                     None,
                 ),
-                ApiOperation::LegacyFullAccessProxy => {
-                    return Err("legacy proxy operation reached typed dispatch")
-                }
                 #[cfg(test)]
                 ApiOperation::TestMutation => return Err("test mutation reached typed dispatch"),
             };

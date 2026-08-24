@@ -45,6 +45,14 @@ http:
       priority: 120
       tls:
         certResolver: letsencrypt
+    device-status:
+      entryPoints: [websecure]
+      rule: "Host(`@@PUBLIC_DOMAIN@@`) && Path(`/device-status/v1/report`)"
+      service: ai-bus
+      middlewares: [secure-headers]
+      priority: 130
+      tls:
+        certResolver: letsencrypt
     center:
       entryPoints: [websecure]
       rule: "Host(`@@PUBLIC_DOMAIN@@`)"

@@ -268,6 +268,7 @@ class CosmosIdentityProvider : ContentProvider() {
                     transaction.activate(
                         apiEndpoint = envelope.apiEndpoint,
                         onboardingEndpoint = envelope.onboardingEndpoint,
+                        deviceStatusEndpoint = envelope.deviceStatusEndpoint,
                         edgeIpv4 = envelope.edgeIpv4,
                         root = envelope.identity.rootDescriptor,
                         identity = AndroidCosmosIdentityPort(envelope.identity, settings),
@@ -340,26 +341,45 @@ class CosmosIdentityProvider : ContentProvider() {
             val resolver = requireNotNull(context).contentResolver
             val settings = AndroidCosmosSettingsPort(resolver)
             val record = FileCosmosActivationRecordPort(activationRecordFile()).load()
+            val remoteMode = settings.read(CosmosActivationContract.REMOTE_MODE_SETTING)
+            val edgeIpv4 = settings.read(CosmosActivationContract.EDGE_IPV4_SETTING)
+            val deviceStatusEndpoint = settings.read(
+                CosmosActivationContract.DEVICE_STATUS_ENDPOINT_SETTING,
+            )
+            val encodedRoot = settings.read(CosmosActivationContract.ROOT_CERTIFICATE_SETTING)
             val identity = AndroidCosmosIdentityPort(candidateBundle = null, settings = settings).current()
-            val root = parseProvisionedCosmosRoot(
-                settings.read(CosmosActivationContract.ROOT_CERTIFICATE_SETTING),
+            val rootFingerprint = parseProvisionedCosmosRoot(encodedRoot)?.let {
+                sha256Hex(it.encoded)
+            }
+            val status = reconcileCosmosActivationStatus(
+                record = record,
+                observed = CosmosActivationObservedState(
+                    remoteMode = remoteMode,
+                    edgeIpv4 = edgeIpv4,
+                    deviceStatusEndpoint = deviceStatusEndpoint,
+                    rootCertificatePresent = encodedRoot != null,
+                    rootCertificateFingerprintSha256 = rootFingerprint,
+                    identityPresent = identity != null,
+                    identityUsable = identity?.usableForTls == true,
+                    identityFingerprintSha256 = identity?.fingerprintSha256,
+                ),
             )
             Bundle().apply {
                 putBoolean(RESULT_OK, true)
-                putString(
-                    "state",
-                    if (settings.read(CosmosActivationContract.REMOTE_MODE_SETTING) == "1") {
-                        "active"
-                    } else {
-                        "inactive"
-                    },
-                )
-                putBoolean("managed", record?.phase == CosmosActivationPhase.ACTIVE)
-                putString("edge_ipv4", settings.read(CosmosActivationContract.EDGE_IPV4_SETTING))
+                putString("state", status.state.wireValue)
+                putBoolean("consistent", status.consistent)
+                putBoolean("managed", status.managed)
+                status.phase?.let { putString("journal_phase", it.name) }
+                putBoolean("rollback_failed", status.rollbackFailed)
+                putBoolean("rollback_complete", status.rollbackComplete)
+                putBoolean("remote_gate_enabled", status.remoteGateEnabled)
+                putBoolean("target_matches", status.targetMatches)
+                putString("edge_ipv4", edgeIpv4)
+                putString("device_status_endpoint", deviceStatusEndpoint)
                 putBoolean(RESULT_PRESENT, identity != null)
                 putBoolean("identity_usable", identity?.usableForTls == true)
                 putString(RESULT_FINGERPRINT, identity?.fingerprintSha256)
-                putString("root_certificate_sha256", root?.let { sha256Hex(it.encoded) })
+                putString("root_certificate_sha256", rootFingerprint)
                 putString("api_endpoint", record?.apiEndpoint ?: CosmosActivationContract.API_ENDPOINT)
                 putString(
                     "onboarding_endpoint",
@@ -368,7 +388,17 @@ class CosmosIdentityProvider : ContentProvider() {
             }
         } catch (error: Throwable) {
             Log.e(TAG, "Cosmos activation status failed (${error.javaClass.simpleName})")
-            result(false, "Cosmos activation status is unavailable")
+            Bundle().apply {
+                putBoolean(RESULT_OK, false)
+                putString("state", CosmosActivationStatusState.INCONSISTENT.wireValue)
+                putBoolean("consistent", false)
+                putBoolean("managed", false)
+                putBoolean("rollback_failed", false)
+                putBoolean("rollback_complete", false)
+                putBoolean("remote_gate_enabled", false)
+                putBoolean("target_matches", false)
+                putString("message", "Cosmos activation status is unavailable")
+            }
         } finally {
             Binder.restoreCallingIdentity(callingIdentity)
         }
@@ -383,6 +413,7 @@ class CosmosIdentityProvider : ContentProvider() {
         putBoolean("rollback_complete", result.rollbackComplete)
         result.apiEndpoint?.let { putString("api_endpoint", it) }
         result.onboardingEndpoint?.let { putString("onboarding_endpoint", it) }
+        result.deviceStatusEndpoint?.let { putString("device_status_endpoint", it) }
         result.edgeIpv4?.let { putString("edge_ipv4", it) }
         result.identityFingerprintSha256?.let { putString(RESULT_FINGERPRINT, it) }
         result.rootCertificateFingerprintSha256?.let {
@@ -634,6 +665,7 @@ internal data class CosmosAttestationBundle(
 private data class CosmosActivationEnvelope(
     val apiEndpoint: String,
     val onboardingEndpoint: String,
+    val deviceStatusEndpoint: String,
     val edgeIpv4: String,
     val identity: CosmosAttestationBundle,
 ) {
@@ -643,6 +675,7 @@ private data class CosmosActivationEnvelope(
             return CosmosActivationEnvelope(
                 apiEndpoint = value.getString("api_endpoint"),
                 onboardingEndpoint = value.getString("onboarding_endpoint"),
+                deviceStatusEndpoint = value.getString("device_status_endpoint"),
                 edgeIpv4 = value.getString("edge_ipv4"),
                 identity = CosmosAttestationBundle.parse(json),
             )
@@ -771,7 +804,7 @@ private class FileCosmosActivationRecordPort(
     private val file: File,
 ) : CosmosActivationRecordPort {
     companion object {
-        private const val VERSION = 2
+        private const val VERSION = 3
         private const val MAX_RECORD_BYTES = 24 * 1024L
         private const val MAX_SETTING_CHARS = 128
         private const val MAX_ROOT_SETTING_CHARS = 16 * 1024
@@ -825,12 +858,18 @@ private class FileCosmosActivationRecordPort(
             "previous_root_certificate_der_b64",
             record.previousRootCertificateDerBase64 ?: JSONObject.NULL,
         )
+        .put(
+            "previous_device_status_endpoint",
+            record.previousDeviceStatusEndpoint ?: JSONObject.NULL,
+        )
         .put("identity_was_present", record.identityWasPresent)
         .put("target_fingerprint_sha256", record.targetFingerprintSha256)
         .put("target_root_fingerprint_sha256", record.targetRootFingerprintSha256)
         .put("api_endpoint", record.apiEndpoint)
         .put("onboarding_endpoint", record.onboardingEndpoint)
+        .put("device_status_endpoint", record.deviceStatusEndpoint)
         .put("target_edge_ipv4", record.targetEdgeIpv4)
+        .put("rollback_failed", record.rollbackFailed)
 
     private fun decode(value: JSONObject): CosmosActivationRecord {
         check(value.getInt("version") == VERSION)
@@ -842,6 +881,11 @@ private class FileCosmosActivationRecordPort(
             "previous_root_certificate_der_b64",
             MAX_ROOT_SETTING_CHARS,
         )
+        val previousDeviceStatus = nullableBoundedString(
+            value,
+            "previous_device_status_endpoint",
+            2048,
+        )
         val fingerprint = value.getString("target_fingerprint_sha256")
             .lowercase(Locale.US)
         check(fingerprint.length == 64 && fingerprint.all(Char::isHexDigit))
@@ -851,6 +895,7 @@ private class FileCosmosActivationRecordPort(
         val plan = CosmosActivationContract.plan(
             apiEndpoint = value.getString("api_endpoint"),
             onboardingEndpoint = value.getString("onboarding_endpoint"),
+            deviceStatusEndpoint = value.getString("device_status_endpoint"),
             edgeIpv4 = value.getString("target_edge_ipv4"),
         )
         return CosmosActivationRecord(
@@ -858,12 +903,15 @@ private class FileCosmosActivationRecordPort(
             previousRemoteMode = previousRemote,
             previousEdgeIpv4 = previousEdge,
             previousRootCertificateDerBase64 = previousRoot,
+            previousDeviceStatusEndpoint = previousDeviceStatus,
             identityWasPresent = value.getBoolean("identity_was_present"),
             targetFingerprintSha256 = fingerprint,
             targetRootFingerprintSha256 = rootFingerprint,
             apiEndpoint = plan.apiEndpoint,
             onboardingEndpoint = plan.onboardingEndpoint,
+            deviceStatusEndpoint = plan.deviceStatusEndpoint,
             targetEdgeIpv4 = plan.edgeIpv4,
+            rollbackFailed = value.optBoolean("rollback_failed", false),
         )
     }
 

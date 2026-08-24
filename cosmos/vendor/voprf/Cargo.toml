@@ -16,7 +16,6 @@ name = "voprf"
 version = "0.4.0-pre.3"
 authors = ["Kevin Lewi <klewi@fb.com>"]
 description = "An implementation of a verifiable oblivious pseudorandom function (VOPRF)"
-readme = "README.md"
 keywords = ["oprf"]
 categories = [
     "no-std",

@@ -8,6 +8,7 @@ import {
 import { sourceHeaders } from "@/server/headers";
 import { getCaptures, getContacts, getNotes } from "@/server/source";
 import { SESSION_COOKIE, verifySession } from "@/server/auth";
+import { parseDeviceEdgeDeclaration } from "@/lib/pin-setup";
 
 /**
  * GET /api/admin/overview — the operator console's headline state, proxied from
@@ -80,6 +81,20 @@ export async function GET() {
       memories: { state: captures.state, degraded: captures.degraded ?? null },
       contacts: { state: contacts.state, degraded: contacts.degraded ?? null },
     };
+    const deviceEdge = parseDeviceEdgeDeclaration(process.env.REVIVAL_DEVICE_EDGE_IPV4);
+    overview.device_edge_ipv4 = deviceEdge.state === "available" ? deviceEdge.edgeIpv4 : null;
+    const pinSetupOrigin = process.env.REVIVAL_PIN_SETUP_ORIGIN;
+    try {
+      const parsed = new URL(pinSetupOrigin ?? "");
+      overview.device_status_endpoint = parsed.protocol === "https:" &&
+          !parsed.username && !parsed.password && !parsed.port &&
+          (parsed.pathname === "/" || parsed.pathname === "") &&
+          !parsed.search && !parsed.hash
+        ? `${parsed.origin}/device-status/v1/report`
+        : null;
+    } catch {
+      overview.device_status_endpoint = null;
+    }
 
     const degradedDomains = [
       { domain: "notes", state: notes.state },

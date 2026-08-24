@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { validateDeviceSerial } from "../acceptance/pin/device-target-guard.mjs";
+import { validateDeviceSerial } from "./device-target-guard.mjs";
 
 const SELF_PATH = fileURLToPath(import.meta.url);
 

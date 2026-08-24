@@ -19,9 +19,9 @@
 //     timed out. Nothing here compiles anything. The one bulk read is the
 //     SHA-256 of the two pinned native build inputs (~220 MB when present).
 //
-// Android/JDK/Node expectations are parsed from README.md. Rust is stricter:
-// the exact operational version comes from toolchain.json and must equal the
-// root rust-toolchain.toml, so the doctor cannot silently follow moving stable.
+// Android, JDK, Node, and Rust expectations come from toolchain.json. Rust must
+// also equal the root rust-toolchain.toml, so the doctor cannot silently follow
+// moving stable.
 // The pinned-asset paths and digests are parsed from `runtime/android/build.gradle.kts`
 // for exactly the same reason — that file is what enforces the gate.
 //
@@ -129,40 +129,29 @@ const MAX_LISTED_ITEMS = 8;
 // ---------------------------------------------------------------------------
 
 /**
- * Read the documented host requirements out of README.md's single prerequisite
- * sentence. Returns null when that sentence cannot be found, which downgrades
- * the version comparisons to warnings rather than inventing a number.
+ * Read host requirements from the machine-owned Pin builder contract.
  */
-export function parseRequirementsFromReadme(text) {
+export function parseRequirementsFromToolchain(text) {
   if (typeof text !== "string" || text.length === 0) return null;
-  const lines = text.split("\n");
-  const index = lines.findIndex(
-    (line) =>
-      line.includes("JDK") &&
-      line.includes("NDK") &&
-      line.includes("Node"),
-  );
-  if (index === -1) return null;
-
-  const line = lines[index];
-  const jdk = /\bJDK\s+(\d+)\b/.exec(line);
-  const sdk = /\bAndroid SDK\s+(\d+)\b/.exec(line);
-  // The prerequisite line is prose that gets restyled: the NDK may be written
-  // "Android NDK r28c" or just "NDK r28c", and the Node floor with ASCII ">="
-  // or a Unicode "≥" (U+2265). Accept every spelling the document has shipped so
-  // a cosmetic edit does not silently disable all version validation. This only
-  // ever widens what parses; a line with no version still returns null below.
-  const ndk = /\b(?:Android )?NDK\s+(r(\d+)[a-z]?)\b/.exec(line);
-  const node = /\bNode\s*(?:>=|≥)\s*(\d+(?:\.\d+){0,2})\b/.exec(line);
-  if (!jdk || !ndk || !node) return null;
+  let contract;
+  try {
+    contract = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  const jdk = /^(\d+)(?:\.|$)/u.exec(String(contract?.toolchain?.jdk?.version ?? ""));
+  const sdk = /^(\d+)$/u.exec(String(contract?.toolchain?.android?.platform ?? ""));
+  const ndk = /^r(\d+)[a-z]$/u.exec(String(contract?.toolchain?.android?.ndkRelease ?? ""));
+  const node = /^(\d+(?:\.\d+){0,2})$/u.exec(String(contract?.toolchain?.node?.version ?? ""));
+  if (!jdk || !sdk || !ndk || !node) return null;
 
   return Object.freeze({
     jdkMajor: Number(jdk[1]),
-    androidSdkApi: sdk ? Number(sdk[1]) : null,
-    ndkLabel: ndk[1],
-    ndkMajor: Number(ndk[2]),
+    androidSdkApi: Number(sdk[1]),
+    ndkLabel: contract.toolchain.android.ndkRelease,
+    ndkMajor: Number(ndk[1]),
     nodeMinimum: node[1],
-    sourceRef: `README.md:${index + 1}`,
+    sourceRef: "platform/containers/pin-builder/toolchain.json",
   });
 }
 
@@ -850,7 +839,7 @@ function checkNode(probes) {
   const requirements = probes.requirements ?? null;
   const version = probes.node?.version ?? null;
   const minimum = requirements?.nodeMinimum ?? null;
-  const ref = requirements?.sourceRef ?? "README.md";
+  const ref = requirements?.sourceRef ?? "toolchain.json";
 
   if (!version) {
     return makeCheck("node", "Node.js", CHECK_STATUS.FAIL, {
@@ -861,8 +850,8 @@ function checkNode(probes) {
   }
   if (!minimum) {
     return makeCheck("node", "Node.js", CHECK_STATUS.WARN, {
-      detail: `Found v${version}; could not read the minimum from README.md.`,
-      fix: "Restore the prerequisite line in README.md so the required Node version has one source of truth.",
+      detail: `Found v${version}; could not read the minimum from toolchain.json.`,
+      fix: "Restore the Node version in toolchain.json.",
     });
   }
   if (compareVersions(version, minimum) < 0) {
@@ -882,7 +871,7 @@ function checkJdk(probes) {
   const requirements = probes.requirements ?? null;
   const java = probes.java ?? null;
   const expected = requirements?.jdkMajor ?? null;
-  const ref = requirements?.sourceRef ?? "README.md";
+  const ref = requirements?.sourceRef ?? "toolchain.json";
   const installHint =
     "Install a JDK and put `java` on PATH (Adoptium Temurin; on macOS `brew install --cask temurin@17`).";
 
@@ -922,7 +911,7 @@ function checkAndroidSdk(probes) {
   const sdk = probes.androidSdk ?? null;
   const requirements = probes.requirements ?? null;
   const api = requirements?.androidSdkApi ?? null;
-  const ref = requirements?.sourceRef ?? "README.md";
+  const ref = requirements?.sourceRef ?? "toolchain.json";
 
   if (!sdk?.path) {
     return makeCheck("android_sdk", "Android SDK", CHECK_STATUS.FAIL, {
@@ -991,7 +980,7 @@ function checkNdk(probes) {
   const requirements = probes.requirements ?? null;
   const documentedLabel = requirements?.ndkLabel ?? null;
   const documentedMajor = requirements?.ndkMajor ?? null;
-  const ref = requirements?.sourceRef ?? "README.md";
+  const ref = requirements?.sourceRef ?? "toolchain.json";
 
   if (!ndk?.path) {
     return makeCheck("android_ndk", "Android NDK", CHECK_STATUS.FAIL, {
@@ -1507,7 +1496,7 @@ export function renderHuman(result, { verbose = false, home = homedir() } = {}) 
   lines.push(
     result.requirementsSource
       ? `Expected versions read from ${result.requirementsSource}.`
-      : "Expected versions could not be read from README.md; version comparisons are reported as warnings.",
+      : "Expected versions could not be read from toolchain.json; version comparisons are reported as warnings.",
   );
   lines.push(
     `Canonical build path: ${result.buildPath === "pinned-container" ? "pinned host-native container" : "host toolchain"}.`,
@@ -1852,7 +1841,6 @@ export function resolveSigningEnvPath(environment = process.env, operatorHome = 
 export function collectProbes({ repoRoot, env = process.env } = {}) {
   const root = repoRoot ?? resolve(dirname(fileURLToPath(import.meta.url)), "../../../pin");
   const productRoot = resolve(root, "..");
-  const requirements = parseRequirementsFromReadme(readTextOrNull(join(root, "README.md")));
   const rustContractPath = join(
     productRoot,
     "platform",
@@ -1861,6 +1849,7 @@ export function collectProbes({ repoRoot, env = process.env } = {}) {
     "toolchain.json",
   );
   const rustContractText = readTextOrNull(rustContractPath);
+  const requirements = parseRequirementsFromToolchain(rustContractText);
   const pinBuilderDockerfileText = readTextOrNull(join(
     productRoot,
     "platform",

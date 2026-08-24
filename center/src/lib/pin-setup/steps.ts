@@ -259,7 +259,7 @@ function deriveRelease(release: PinSetupReleaseFacts): DraftStep {
       return {
         status: "done",
         summary: release.version
-          ? `Release ${release.version} was built and signed; Center verified its published manifest.`
+          ? `Signed release ${release.version} is imported; Center verified its manifest.`
           : "A signed release exists; Center verified its published manifest.",
         next: null,
       };
@@ -273,18 +273,18 @@ function deriveRelease(release: PinSetupReleaseFacts): DraftStep {
       return {
         status: "manual",
         summary:
-          "Center has no signed Pin release in its mounted release store.",
-        next: "Build the signed release on this server; the completed build becomes current atomically.",
+          "Center has no signed Pin release in its release store.",
+        next: "Download the signed Pin archive from GitHub Releases, then import it with the command below.",
         manualNote:
-          "A browser cannot build the release. The command below shows the required version inputs.",
+          "The import verifies every APK and makes the complete release current atomically.",
       };
     case "unreadable":
       return {
         status: "attention",
         summary: release.detail
-          ? `Center could not use the published release as build evidence: ${release.detail}`
-          : "Center could not verify the published release as evidence of a completed build.",
-        next: "Build a valid release again on this server.",
+          ? `Center could not verify the imported release: ${release.detail}`
+          : "Center could not verify the imported release.",
+        next: "Download the signed archive again and re-import it.",
       };
     default:
       return {
@@ -434,22 +434,8 @@ const IDENTITY_CREDENTIAL_NOTE =
 function deriveIdentity(facts: PinSetupFacts): DraftStep {
   const { activation, operator } = facts;
 
-  /*
-   * The credential itself is never observable: the bundle is shown once, at
-   * mint time, and never stored, so before activation there is nothing on the
-   * device or the server to read back. But there is ONE thing Center can read
-   * that proves a credential was minted — and it is downstream, not upstream, so
-   * reading it does not break the rule this file exists to enforce.
-   *
-   * Activation imports the minted identity into AndroidKeyStore, validating that
-   * the certificate and private key match and chain to the pinned root, and only
-   * THEN writes `penumbra_cosmos_remote_mode=1` — last, as the commit gate
-   * (docs/operations.md §7, `CosmosActivationTransaction.kt:292-301`). So clone
-   * mode being on is committed evidence that a credential was minted for this
-   * device and accepted by it. This is the inverse of the forbidden inference:
-   * not "the step before finished, so this one did", but "a later step reached a
-   * state it could only reach if this one already had".
-   */
+  // Activation enables remote mode only after AndroidKeyStore accepts the
+  // minted key and certificate chain, so active mode proves identity import.
   if (activation.state === "active") {
     return {
       status: "done",

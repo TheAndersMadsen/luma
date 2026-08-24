@@ -342,8 +342,8 @@ test("changed paths select precise component checks and unfamiliar paths fail cl
   assert.deepEqual([...checksForPath("center/src/app/page.tsx")], ["center"]);
   assert.deepEqual([...checksForPath("cosmos/crates/cosmos/src/lib.rs")], ["cosmos"]);
   assert.deepEqual([...checksForPath("pin/runtime/core/src/lib.rs")], ["pin"]);
-  assert.deepEqual([...checksForPath("docs/architecture.md")], ["platform"]);
-  assert.equal(requiresFullPlatformCheck("docs/architecture.md"), false);
+  assert.deepEqual([...checksForPath("README.md")], ["platform"]);
+  assert.equal(requiresFullPlatformCheck("README.md"), false);
   assert.equal(requiresFullPlatformCheck("center/src/app/page.tsx"), false);
   assert.equal(requiresFullPlatformCheck("platform/deploy/acceptance/new-check.test.mjs"), true);
   assert.equal(requiresFullPlatformCheck("unknown-root/file"), true);

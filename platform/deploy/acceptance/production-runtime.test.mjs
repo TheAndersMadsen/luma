@@ -139,10 +139,48 @@ test("confirmed deployment runs public verification before reporting success", (
   assert.doesNotMatch(source, /deployment .* is healthy/u);
   assert.match(source, /-f "\$application"[\s\S]*-f "\$operator_compose"/u);
   assert.doesNotMatch(source, /ROOT\/compose\.yaml|platform\/compose\/production\.yaml/u);
-  assert.doesNotMatch(source, /--yes|printf ['"]?y|echo ['"]?y/u);
-  assert.match(source, /up --detach --wait --wait-timeout/u);
+  assert.match(source, /up --yes --detach --wait --wait-timeout/u);
+  assert.doesNotMatch(source, /printf ['"]?y|echo ['"]?y/u);
+  assert.match(source, /REVIVAL_DEPLOY_CONFIRMED/u);
   const dryRunExit = source.indexOf("exit 0", source.indexOf("if ((dry_run))"));
   assert.ok(dryRunExit >= 0 && dryRunExit < up, "dry-run must exit before deployment and verification");
+});
+
+test("confirmed deploy passes Compose --yes without printing interpolation secrets", (t) => {
+  const { env } = fixture(t, `#!/bin/sh
+printf '%s\n' "$*" >> "$REVIVAL_TEST_DOCKER_LOG"
+case "$*" in
+  *"compose version --short"*) printf '%s\n' 2.34.0 ;;
+  *"config --quiet"*) ;;
+  *"ps --status running --services traefik"*) printf '%s\n' traefik ;;
+  *"config --services"*) printf '%s\n' center ;;
+  *"ps --status running --services"*) printf '%s\n' center ;;
+esac
+exit 0
+`);
+  const dockerLog = path.join(path.dirname(env.REVIVAL_CONFIG_DIR), "docker.log");
+  const deploymentEnv = {
+    ...env,
+    REVIVAL_DEPLOY_CONFIRMED: "1",
+    REVIVAL_TEST_DOCKER_LOG: dockerLog,
+    TEST_PLAINTEXT_INTERPOLATION_SECRET: "must-not-appear",
+  };
+  const result = spawnSync("/usr/bin/bash", [deploy], {
+    cwd: root,
+    env: deploymentEnv,
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(fs.readFileSync(dockerLog, "utf8"), /up --yes --detach --wait/u);
+  assert.doesNotMatch(`${result.stdout}${result.stderr}`, /must-not-appear/u);
+
+  const unconfirmed = spawnSync("/usr/bin/bash", [deploy], {
+    cwd: root,
+    env: { ...deploymentEnv, REVIVAL_DEPLOY_CONFIRMED: "" },
+    encoding: "utf8",
+  });
+  assert.equal(unconfirmed.status, 1);
+  assert.match(unconfirmed.stderr, /requires revival deploy production --confirm/u);
 });
 
 test("the containerized iroh bridge is nonroot, persistent, and Pin-independent for health", () => {

@@ -13,17 +13,17 @@ export const PIN_SETUP_JOURNEY = {
       "centerRoute": "/settings/pin/install",
       "surface": "cli",
       "verification": "cli",
-      "documentationAnchor": "docs/operations.md#onboarding-a-pin"
+      "documentationAnchor": "README.md#connect-a-pin"
     },
     {
       "id": "release",
-      "title": "Build and verify the signed Pin release",
-      "commandId": "pin.release.build",
-      "command": "./revival pin release build",
+      "title": "Import and verify the published Pin release",
+      "commandId": "pin.release.import",
+      "command": "./revival pin release import",
       "centerRoute": "/settings/pin/install",
       "surface": "cli",
       "verification": "cli",
-      "documentationAnchor": "docs/operations.md#onboarding-a-pin"
+      "documentationAnchor": "README.md#connect-a-pin"
     },
     {
       "id": "install",
@@ -33,7 +33,7 @@ export const PIN_SETUP_JOURNEY = {
       "centerRoute": "/settings/pin/install",
       "surface": "cli",
       "verification": "physical",
-      "documentationAnchor": "docs/operations.md#onboarding-a-pin"
+      "documentationAnchor": "README.md#connect-a-pin"
     },
     {
       "id": "configure",
@@ -43,7 +43,7 @@ export const PIN_SETUP_JOURNEY = {
       "centerRoute": "/settings/pin",
       "surface": "cli",
       "verification": "cli",
-      "documentationAnchor": "docs/configuration.md#commands"
+      "documentationAnchor": "README.md#configuration"
     },
     {
       "id": "identity",
@@ -53,7 +53,7 @@ export const PIN_SETUP_JOURNEY = {
       "centerRoute": "/settings/pin",
       "surface": "cli",
       "verification": "cli",
-      "documentationAnchor": "docs/operations.md#onboarding-a-pin"
+      "documentationAnchor": "README.md#connect-a-pin"
     },
     {
       "id": "activate",
@@ -63,7 +63,7 @@ export const PIN_SETUP_JOURNEY = {
       "centerRoute": "/settings/pin",
       "surface": "cli",
       "verification": "physical",
-      "documentationAnchor": "docs/operations.md#onboarding-a-pin"
+      "documentationAnchor": "README.md#connect-a-pin"
     },
     {
       "id": "network",
@@ -73,7 +73,7 @@ export const PIN_SETUP_JOURNEY = {
       "centerRoute": "/wifi",
       "surface": "cli",
       "verification": "physical",
-      "documentationAnchor": "docs/operations.md#onboarding-a-pin"
+      "documentationAnchor": "README.md#connect-a-pin"
     },
     {
       "id": "confirm",
@@ -83,7 +83,7 @@ export const PIN_SETUP_JOURNEY = {
       "centerRoute": "/settings/pin",
       "surface": "cli",
       "verification": "physical",
-      "documentationAnchor": "docs/operations.md#onboarding-a-pin"
+      "documentationAnchor": "README.md#connect-a-pin"
     }
   ]
 } as const;

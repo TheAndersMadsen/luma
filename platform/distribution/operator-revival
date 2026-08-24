@@ -12,11 +12,15 @@ if (nodeMajor !== 22 || nodeMinor < 14) {
 const HELP = `Ai Pin Revival operator CLI
 
 Usage:
-  ./revival setup production [options]
+  ./revival setup production --domain HOST --acme-email EMAIL --operator-email EMAIL [--profile NAME ...]
   ./revival setup status [--json]
+  ./revival registry login --username GITHUB_USER
   ./revival doctor production [options]
   ./revival deploy production (--dry-run | --confirm) [options]
   ./revival verify production [options]
+  ./revival pin release import ARCHIVE [--json]
+  ./revival pin activate --serial SERIAL --credential-file FILE --edge-ipv4 A.B.C.D [--confirm]
+  ./revival pin activate status --serial SERIAL
   ./revival config path|get|set|check|list|template [options]
   ./revival support-bundle [options]
   ./revival version [--json]
@@ -51,8 +55,15 @@ if (rawArgs[0] === '--version' || rawArgs[0] === 'version') {
   }
 }
 
-const { fail } = require('./platform/cli/context');
+const {
+  PIN_ACTIVATION_TOOL,
+  PIN_RELEASE_IMPORT_TOOL,
+  fail,
+  resolveTool,
+  run,
+} = require('./platform/cli/context');
 const { configCommand } = require('./platform/cli/config');
+const { registryCommand } = require('./platform/cli/registry');
 const { deployProduction, productionDoctor, verifyProduction } = require('./platform/cli/production');
 const { setupCommand } = require('./platform/cli/setup');
 const { supportBundleCommand } = require('./platform/cli/support-bundle');
@@ -64,8 +75,13 @@ runTimedBoundary(() => {
   if (command === 'setup' && ['production', 'status'].includes(args[0])) setupCommand(args);
   else if (command === 'doctor' && args.shift() === 'production') productionDoctor(args);
   else if (command === 'deploy') deployProduction(args);
+  else if (command === 'registry') registryCommand(args);
   else if (command === 'verify') verifyProduction(args);
   else if (command === 'config') configCommand(args);
   else if (command === 'support-bundle') supportBundleCommand(args);
-  else fail(`unsupported operator command: ${rawArgs.join(' ')}`, 64);
+  else if (command === 'pin' && args[0] === 'release' && args[1] === 'import') {
+    run(resolveTool('node'), [PIN_RELEASE_IMPORT_TOOL, ...args.slice(2)]);
+  } else if (command === 'pin' && args[0] === 'activate') {
+    run(resolveTool('node'), [PIN_ACTIVATION_TOOL, ...args.slice(1)]);
+  } else fail(`unsupported operator command: ${rawArgs.join(' ')}`, 64);
 });

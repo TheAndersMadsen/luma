@@ -62,7 +62,7 @@
       "exactSerialRequired": false,
       "summary": "Validate the production Compose configuration on this host.",
       "usage": "revival doctor production [--env-file FILE] [--project-name NAME]",
-      "documentationAnchor": "docs/operations.md#production"
+      "documentationAnchor": "README.md#deploy-cosmos"
     },
     {
       "id": "verify.production",
@@ -77,7 +77,7 @@
       "exactSerialRequired": false,
       "summary": "Verify the running production services and public endpoints.",
       "usage": "revival verify production [--env-file FILE] [--project-name NAME]",
-      "documentationAnchor": "docs/operations.md#production"
+      "documentationAnchor": "README.md#deploy-cosmos"
     },
     {
       "id": "stack.build",
@@ -206,7 +206,7 @@
       "exactSerialRequired": false,
       "summary": "Run Center with Turbopack hot reload and Compose Watch.",
       "usage": "revival dev center",
-      "documentationAnchor": "CONTRIBUTING.md#fast-local-loop"
+      "documentationAnchor": "README.md#development"
     },
     {
       "id": "dev.down",
@@ -221,7 +221,7 @@
       "exactSerialRequired": false,
       "summary": "Stop the isolated development stack without deleting volumes.",
       "usage": "revival dev down",
-      "documentationAnchor": "CONTRIBUTING.md#fast-local-loop"
+      "documentationAnchor": "README.md#development"
     },
     {
       "id": "check.center",
@@ -236,7 +236,7 @@
       "exactSerialRequired": false,
       "summary": "Run Center type, server, UI, and Spotify adapter checks directly from the working tree.",
       "usage": "revival check center",
-      "documentationAnchor": "CONTRIBUTING.md#fast-local-loop"
+      "documentationAnchor": "README.md#development"
     },
     {
       "id": "check.cosmos",
@@ -251,7 +251,7 @@
       "exactSerialRequired": false,
       "summary": "Run Cosmos checks, optionally selecting one test filter.",
       "usage": "revival check cosmos [TEST_FILTER]",
-      "documentationAnchor": "CONTRIBUTING.md#fast-local-loop"
+      "documentationAnchor": "README.md#development"
     },
     {
       "id": "check.platform",
@@ -266,7 +266,7 @@
       "exactSerialRequired": false,
       "summary": "Run fast platform checks, or the full Node acceptance inventory with --full.",
       "usage": "revival check platform [--full]",
-      "documentationAnchor": "CONTRIBUTING.md#fast-local-loop"
+      "documentationAnchor": "README.md#development"
     },
     {
       "id": "check.changed",
@@ -281,7 +281,7 @@
       "exactSerialRequired": false,
       "summary": "Select the smallest safe checks for committed and working-tree changes.",
       "usage": "revival check changed [--base REF]",
-      "documentationAnchor": "CONTRIBUTING.md#fast-local-loop"
+      "documentationAnchor": "README.md#development"
     },
     {
       "id": "test",
@@ -295,7 +295,7 @@
       "exactSerialRequired": false,
       "summary": "Run the broad repository checks.",
       "usage": "revival test [options]",
-      "documentationAnchor": "CONTRIBUTING.md#run-and-test"
+      "documentationAnchor": "README.md#development"
     },
     {
       "id": "pin.doctor",
@@ -310,7 +310,7 @@
       "exactSerialRequired": false,
       "summary": "Check Pin host, signing, assets, and device prerequisites.",
       "usage": "revival pin doctor [options]",
-      "documentationAnchor": "docs/operations.md#onboarding-a-pin"
+      "documentationAnchor": "README.md#connect-a-pin"
     },
     {
       "id": "pin.check",
@@ -325,7 +325,7 @@
       "exactSerialRequired": false,
       "summary": "Run Pin source checks.",
       "usage": "revival pin check [options]",
-      "documentationAnchor": "docs/operations.md#onboarding-a-pin"
+      "documentationAnchor": "README.md#connect-a-pin"
     },
     {
       "id": "pin.build-debug",
@@ -340,7 +340,7 @@
       "exactSerialRequired": false,
       "summary": "Compile selected non-installable debug APK roles.",
       "usage": "revival pin build-debug (--role ROLE...) or (--changed [--base REF])",
-      "documentationAnchor": "docs/operations.md#fast-pin-debug-compiles"
+      "documentationAnchor": "README.md#build-the-pin-apps"
     },
     {
       "id": "pin.release.build",
@@ -356,7 +356,39 @@
       "exactSerialRequired": false,
       "summary": "Build, sign, and verify the five-APK Pin release in the pinned builder.",
       "usage": "revival pin release build [options]",
-      "documentationAnchor": "docs/operations.md#onboarding-a-pin"
+      "documentationAnchor": "README.md#connect-a-pin"
+    },
+    {
+      "id": "pin.release.import",
+      "tokens": [
+        "pin",
+        "release",
+        "import"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Verify and import a published five-APK Pin release archive.",
+      "usage": "revival pin release import ARCHIVE [--json]",
+      "documentationAnchor": "README.md#connect-a-pin"
+    },
+    {
+      "id": "pin.release.export",
+      "tokens": [
+        "pin",
+        "release",
+        "export"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Export the current verified five-APK Pin release for publication.",
+      "usage": "revival pin release export --output ARCHIVE [--json]",
+      "documentationAnchor": "README.md#connect-a-pin"
     },
     {
       "id": "pin.install",
@@ -371,7 +403,7 @@
       "exactSerialRequired": true,
       "summary": "Install a verified release on one exact Pin.",
       "usage": "revival pin install [options]",
-      "documentationAnchor": "docs/operations.md#onboarding-a-pin"
+      "documentationAnchor": "README.md#connect-a-pin"
     },
     {
       "id": "deploy.production",
@@ -386,7 +418,22 @@
       "exactSerialRequired": false,
       "summary": "Deploy Cosmos directly on this host.",
       "usage": "revival deploy production (--dry-run | --confirm) [--env-file FILE] [--project-name NAME] [--wait-timeout SECONDS]",
-      "documentationAnchor": "docs/operations.md#production"
+      "documentationAnchor": "README.md#deploy-cosmos"
+    },
+    {
+      "id": "registry.login",
+      "tokens": [
+        "registry",
+        "login"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Authenticate Docker to private Ai Pin Revival packages.",
+      "usage": "revival registry login --username GITHUB_USER",
+      "documentationAnchor": "README.md#deploy-cosmos"
     },
     {
       "id": "setup.local",
@@ -430,8 +477,8 @@
       "confirmationRequired": false,
       "exactSerialRequired": false,
       "summary": "Generate a complete portable production configuration.",
-      "usage": "revival setup production --domain HOST --acme-email EMAIL --operator-email EMAIL [--iroh-ticket-file FILE] [options]",
-      "documentationAnchor": "docs/operations.md#production"
+      "usage": "revival setup production --domain HOST --acme-email EMAIL --operator-email EMAIL [--public-ip IPV4] [--iroh-ticket-file FILE] [options]",
+      "documentationAnchor": "README.md#deploy-cosmos"
     },
     {
       "id": "setup.pin",
@@ -446,7 +493,7 @@
       "exactSerialRequired": false,
       "summary": "Initialize the host prerequisites for Pin setup.",
       "usage": "revival setup pin",
-      "documentationAnchor": "docs/operations.md#onboarding-a-pin"
+      "documentationAnchor": "README.md#connect-a-pin"
     },
     {
       "id": "setup.status",
@@ -476,7 +523,7 @@
       "exactSerialRequired": false,
       "summary": "Read one non-secret configuration setting.",
       "usage": "revival config get [options]",
-      "documentationAnchor": "docs/configuration.md#commands"
+      "documentationAnchor": "README.md#configuration"
     },
     {
       "id": "config.set",
@@ -491,7 +538,7 @@
       "exactSerialRequired": false,
       "summary": "Set one supported configuration setting outside the repository.",
       "usage": "revival config set [options]",
-      "documentationAnchor": "docs/configuration.md#commands"
+      "documentationAnchor": "README.md#configuration"
     },
     {
       "id": "config.check",
@@ -506,7 +553,7 @@
       "exactSerialRequired": false,
       "summary": "Validate configuration names, scopes, and dependencies.",
       "usage": "revival config check [options]",
-      "documentationAnchor": "docs/configuration.md#commands"
+      "documentationAnchor": "README.md#configuration"
     },
     {
       "id": "pki.init",
@@ -521,7 +568,7 @@
       "exactSerialRequired": false,
       "summary": "Plan or confirm creation of new device identity PKI.",
       "usage": "revival pki init device-user [--confirm]",
-      "documentationAnchor": "docs/operations.md#onboarding-a-pin"
+      "documentationAnchor": "README.md#connect-a-pin"
     },
     {
       "id": "pki.import",
@@ -536,7 +583,7 @@
       "exactSerialRequired": false,
       "summary": "Plan or confirm import of existing device identity PKI.",
       "usage": "revival pki import device-user --cert FILE --key FILE [--confirm]",
-      "documentationAnchor": "docs/operations.md#onboarding-a-pin"
+      "documentationAnchor": "README.md#connect-a-pin"
     },
     {
       "id": "support-bundle",
@@ -579,7 +626,7 @@
       "exactSerialRequired": true,
       "summary": "Activate one exact Pin against the configured backend.",
       "usage": "revival pin activate [options]",
-      "documentationAnchor": "docs/operations.md#onboarding-a-pin"
+      "documentationAnchor": "README.md#connect-a-pin"
     },
     {
       "id": "pin.activate.status",
@@ -595,7 +642,7 @@
       "exactSerialRequired": true,
       "summary": "Inspect activation state for one exact Pin.",
       "usage": "revival pin activate status [options]",
-      "documentationAnchor": "docs/operations.md#onboarding-a-pin"
+      "documentationAnchor": "README.md#connect-a-pin"
     },
     {
       "id": "pin.network",
@@ -610,7 +657,7 @@
       "exactSerialRequired": true,
       "summary": "Inspect network readiness for one exact Pin.",
       "usage": "revival pin network [options]",
-      "documentationAnchor": "docs/operations.md#onboarding-a-pin"
+      "documentationAnchor": "README.md#connect-a-pin"
     },
     {
       "id": "pin.network.qr",
@@ -626,7 +673,7 @@
       "exactSerialRequired": false,
       "summary": "Prepare network onboarding from a Wi-Fi QR code.",
       "usage": "revival pin network qr [options]",
-      "documentationAnchor": "docs/operations.md#onboarding-a-pin"
+      "documentationAnchor": "README.md#connect-a-pin"
     },
     {
       "id": "config.path",
@@ -641,7 +688,7 @@
       "exactSerialRequired": false,
       "summary": "Print the active external configuration path.",
       "usage": "revival config path [options]",
-      "documentationAnchor": "docs/configuration.md#commands"
+      "documentationAnchor": "README.md#configuration"
     },
     {
       "id": "config.list",
@@ -656,7 +703,7 @@
       "exactSerialRequired": false,
       "summary": "List settings without revealing their values.",
       "usage": "revival config list [options]",
-      "documentationAnchor": "docs/configuration.md#commands"
+      "documentationAnchor": "README.md#configuration"
     },
     {
       "id": "config.template",
@@ -671,7 +718,7 @@
       "exactSerialRequired": false,
       "summary": "Print a scoped, secret-free configuration template.",
       "usage": "revival config template [options]",
-      "documentationAnchor": "docs/configuration.md#commands"
+      "documentationAnchor": "README.md#configuration"
     }
   ],
   "journeys": [
@@ -777,7 +824,7 @@
           "centerRoute": null,
           "surface": "cli",
           "verification": "cli",
-          "documentationAnchor": "CONTRIBUTING.md#run-and-test"
+          "documentationAnchor": "README.md#development"
         },
         {
           "id": "source",
@@ -786,7 +833,7 @@
           "centerRoute": null,
           "surface": "cli",
           "verification": "cli",
-          "documentationAnchor": "docs/operations.md#onboarding-a-pin"
+          "documentationAnchor": "README.md#connect-a-pin"
         },
         {
           "id": "verify",
@@ -816,7 +863,7 @@
           "centerRoute": null,
           "surface": "cli",
           "verification": "cli",
-          "documentationAnchor": "docs/operations.md#production"
+          "documentationAnchor": "README.md#deploy-cosmos"
         },
         {
           "id": "configure",
@@ -825,7 +872,7 @@
           "centerRoute": null,
           "surface": "cli",
           "verification": "cli",
-          "documentationAnchor": "docs/configuration.md#commands"
+          "documentationAnchor": "README.md#configuration"
         },
         {
           "id": "preflight",
@@ -834,7 +881,7 @@
           "centerRoute": null,
           "surface": "cli",
           "verification": "cli",
-          "documentationAnchor": "docs/operations.md#production"
+          "documentationAnchor": "README.md#deploy-cosmos"
         },
         {
           "id": "deploy",
@@ -843,7 +890,7 @@
           "centerRoute": null,
           "surface": "cli",
           "verification": "cli",
-          "documentationAnchor": "docs/operations.md#production"
+          "documentationAnchor": "README.md#deploy-cosmos"
         }
       ]
     },
@@ -856,6 +903,8 @@
         "pki.init",
         "pin.doctor",
         "pin.release.build",
+        "pin.release.import",
+        "pin.release.export",
         "pin.install",
         "config.check",
         "pin.activate.status",
@@ -872,16 +921,16 @@
           "centerRoute": "/settings/pin/install",
           "surface": "cli",
           "verification": "cli",
-          "documentationAnchor": "docs/operations.md#onboarding-a-pin"
+          "documentationAnchor": "README.md#connect-a-pin"
         },
         {
           "id": "release",
-          "title": "Build and verify the signed Pin release",
-          "commandId": "pin.release.build",
+          "title": "Import and verify the published Pin release",
+          "commandId": "pin.release.import",
           "centerRoute": "/settings/pin/install",
           "surface": "cli",
           "verification": "cli",
-          "documentationAnchor": "docs/operations.md#onboarding-a-pin"
+          "documentationAnchor": "README.md#connect-a-pin"
         },
         {
           "id": "install",
@@ -890,7 +939,7 @@
           "centerRoute": "/settings/pin/install",
           "surface": "cli",
           "verification": "physical",
-          "documentationAnchor": "docs/operations.md#onboarding-a-pin"
+          "documentationAnchor": "README.md#connect-a-pin"
         },
         {
           "id": "configure",
@@ -899,7 +948,7 @@
           "centerRoute": "/settings/pin",
           "surface": "cli",
           "verification": "cli",
-          "documentationAnchor": "docs/configuration.md#commands"
+          "documentationAnchor": "README.md#configuration"
         },
         {
           "id": "identity",
@@ -908,7 +957,7 @@
           "centerRoute": "/settings/pin",
           "surface": "cli",
           "verification": "cli",
-          "documentationAnchor": "docs/operations.md#onboarding-a-pin"
+          "documentationAnchor": "README.md#connect-a-pin"
         },
         {
           "id": "activate",
@@ -917,7 +966,7 @@
           "centerRoute": "/settings/pin",
           "surface": "cli",
           "verification": "physical",
-          "documentationAnchor": "docs/operations.md#onboarding-a-pin"
+          "documentationAnchor": "README.md#connect-a-pin"
         },
         {
           "id": "network",
@@ -926,7 +975,7 @@
           "centerRoute": "/wifi",
           "surface": "cli",
           "verification": "physical",
-          "documentationAnchor": "docs/operations.md#onboarding-a-pin"
+          "documentationAnchor": "README.md#connect-a-pin"
         },
         {
           "id": "confirm",
@@ -935,7 +984,7 @@
           "centerRoute": "/settings/pin",
           "surface": "cli",
           "verification": "physical",
-          "documentationAnchor": "docs/operations.md#onboarding-a-pin"
+          "documentationAnchor": "README.md#connect-a-pin"
         }
       ]
     }

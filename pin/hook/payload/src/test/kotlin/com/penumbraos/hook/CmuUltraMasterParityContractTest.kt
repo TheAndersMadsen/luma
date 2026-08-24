@@ -92,7 +92,7 @@ class CmuUltraMasterParityContractTest {
         val composition = repoFile(
             "runtime/core/src/services/aibus/capabilities/composition.rs",
         ).readText()
-        val server = repoFile("runtime/core/src/main.rs").readText()
+        val server = repoFile("runtime/core/src/boot/mod.rs").readText()
 
         assertTrue(ironman.contains("ChannelFactoryBypass.install(cl)"))
         assertTrue(channel.contains("const val MOCK_SERVER_URI = \"127.0.0.1:9090\""))

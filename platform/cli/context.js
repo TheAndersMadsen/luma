@@ -20,6 +20,8 @@ const ENV_EXAMPLE = path.join(ROOT, '.env.example');
 const COMPOSE_BASE = path.join(ROOT, 'compose.yaml');
 const COMPOSE_DEVELOPMENT = path.join(ROOT, 'platform', 'compose', 'development.yaml');
 const PIN_RELEASE_BUILD_TOOL = path.join(ROOT, 'platform', 'deploy', 'pin', 'build.mjs');
+const PIN_RELEASE_IMPORT_TOOL = path.join(ROOT, 'platform', 'deploy', 'pin', 'import-release.mjs');
+const PIN_RELEASE_EXPORT_TOOL = path.join(ROOT, 'platform', 'deploy', 'pin', 'export-release.mjs');
 const PIN_INSTALL_TOOL = path.join(ROOT, 'platform', 'deploy', 'pin', 'install.mjs');
 const PIN_DOCTOR_TOOL = path.join(ROOT, 'platform', 'containers', 'pin-builder', 'doctor.mjs');
 const PKI_TOOL = path.join(ROOT, 'platform', 'deploy', 'pki.mjs');
@@ -260,8 +262,10 @@ function fillBlankInitializerDefaults(contents, profiles = null) {
   const releasePattern = /^REVIVAL_RELEASE_ID=(.*)$/m;
   const releaseMatch = releasePattern.exec(generated.contents);
   const currentRelease = releaseMatch ? decodeEnvValue(releaseMatch[1]) : '';
-  const release = bundled && (!currentRelease || currentRelease === 'local')
-    ? bundled.revision : (currentRelease || 'local');
+  // Release identity belongs to the operator bundle, not to the operator's
+  // configuration. A newer bundle must advance it while preserving every
+  // user-owned setting and secret in this file.
+  const release = bundled ? bundled.revision : (currentRelease || 'local');
   let updated = releaseMatch
     ? generated.contents.replace(releasePattern, `REVIVAL_RELEASE_ID=${release}`)
     : `${generated.contents.replace(/\s*$/, '')}\nREVIVAL_RELEASE_ID=${release}\n`;
@@ -270,7 +274,7 @@ function fillBlankInitializerDefaults(contents, profiles = null) {
   const applicationPattern = /^REVIVAL_COMPOSE_APPLICATION=(.*)$/m;
   const applicationMatch = applicationPattern.exec(updated);
   const currentApplication = applicationMatch ? decodeEnvValue(applicationMatch[1]) : '';
-  const application = currentApplication || bundled?.application || '';
+  const application = bundled ? bundled.application : currentApplication;
   if (application !== currentApplication || !applicationMatch) {
     updated = applicationMatch
       ? updated.replace(applicationPattern, `REVIVAL_COMPOSE_APPLICATION=${application}`)
@@ -453,7 +457,7 @@ function initialize({ suppressDeviceCaWarning = false, quiet = false, profiles =
     if (createdRuntime) {
       info('Provider credentials, Spotify pairing, wearer identity, enrollment, and device PKI remain unconfigured.');
     }
-    info('Next steps from a stock Pin to a provisioned device: docs/operations.md#onboarding-a-pin');
+    info('Next steps from a stock Pin to a provisioned device: README.md#connect-a-pin');
   }
 
   // Unconditional, and on stderr. This used to be reported only inside the
@@ -477,7 +481,7 @@ function initialize({ suppressDeviceCaWarning = false, quiet = false, profiles =
       '  Mount the same material in every provisioning replica and in the edge\n' +
       '  DeviceUser trust bundle. Until then a Pin can attest and connect and still\n' +
       '  never obtain a DeviceUser certificate.\n' +
-      '  See docs/operations.md#onboarding-a-pin\n'
+      '  See README.md#connect-a-pin\n'
     );
   }
 }
@@ -730,7 +734,9 @@ function validateRuntime({ production = false, envFile = ENV_FILE } = {}) {
   if (values.REVIVAL_CONFIG_VERSION !== '1') problems.push('REVIVAL_CONFIG_VERSION must be 1');
   requireValue(values, 'REVIVAL_RELEASE_ID', problems, 1);
   if (!production || profiles.includes('pin')) {
-    const pkiRoot = production ? path.join(CONFIG_DIR, 'production') : path.join(SECRETS_DIR, 'pki');
+    const pkiRoot = production
+      ? path.join(CONFIG_DIR, 'production', 'device-user-root')
+      : path.join(SECRETS_DIR, 'pki');
     for (const file of ['duc-ca.crt', 'duc-ca.key'].map((name) => path.join(pkiRoot, name))) {
       const ready = production
         ? fs.existsSync(file) && !fs.lstatSync(file).isSymbolicLink() && fs.statSync(file).isFile() &&
@@ -1150,6 +1156,8 @@ module.exports = {
   COMPOSE_BASE,
   COMPOSE_DEVELOPMENT,
   PIN_RELEASE_BUILD_TOOL,
+  PIN_RELEASE_IMPORT_TOOL,
+  PIN_RELEASE_EXPORT_TOOL,
   PIN_INSTALL_TOOL,
   PIN_DOCTOR_TOOL,
   PKI_TOOL,

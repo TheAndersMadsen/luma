@@ -91,7 +91,7 @@ NODE
 if [[ ",${COMPOSE_PROFILES:-}," == *,pin,* ]]; then
   command -v openssl >/dev/null || { echo "openssl is required to verify Pin TLS" >&2; exit 1; }
   edge_ipv4="${REVIVAL_DEVICE_EDGE_IPV4:?REVIVAL_DEVICE_EDGE_IPV4 is required for the pin profile}"
-  expected_ca="${REVIVAL_CONFIG_DIR:?REVIVAL_CONFIG_DIR is required}/production/edge-ca.crt"
+  expected_ca="${REVIVAL_CONFIG_DIR:?REVIVAL_CONFIG_DIR is required}/production/edge-root/edge-ca.crt"
   expected_server="${REVIVAL_CONFIG_DIR}/production/edge-server.crt"
   timeout 10 openssl s_client -connect "$edge_ipv4:443" -servername api.cosmos.humane.cloud \
     -showcerts </dev/null >"$temporary/pin-handshake" 2>&1 || true

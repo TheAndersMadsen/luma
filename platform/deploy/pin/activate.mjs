@@ -9,7 +9,7 @@ import { lstatSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { validateDeviceSerial } from "../acceptance/pin/device-target-guard.mjs";
+import { validateDeviceSerial } from "./device-target-guard.mjs";
 
 const SELF_PATH = fileURLToPath(import.meta.url);
 const MAX_CREDENTIAL_BYTES = 64 * 1024;
@@ -41,6 +41,28 @@ function canonicalIpv4(value) {
     fail("edge-invalid", "a canonical edge IPv4 address is required");
   }
   return parts.join(".");
+}
+
+function canonicalDeviceStatusEndpoint(value) {
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    fail("credential-invalid", "device_status_endpoint must be a valid HTTPS URL");
+  }
+  if (
+    parsed.protocol !== "https:" ||
+    !parsed.hostname ||
+    parsed.username ||
+    parsed.password ||
+    (parsed.port && parsed.port !== "443") ||
+    parsed.pathname !== "/device-status/v1/report" ||
+    parsed.search ||
+    parsed.hash
+  ) {
+    fail("credential-invalid", "device_status_endpoint must be an HTTPS origin plus /device-status/v1/report");
+  }
+  return `https://${parsed.hostname.toLowerCase()}/device-status/v1/report`;
 }
 
 function requireSinglePem(source, label, kind) {
@@ -85,7 +107,14 @@ function parseCredentialDocument(source) {
       fail("credential-invalid", `credential file must not choose ${key}; activation fixes its own endpoints`);
     }
   }
-  for (const key of ["device_id", "certificate_pem", "private_key_pem", "ca_certificate_pem", "root_certificate_pem"]) {
+  for (const key of [
+    "device_id",
+    "certificate_pem",
+    "private_key_pem",
+    "ca_certificate_pem",
+    "root_certificate_pem",
+    "device_status_endpoint",
+  ]) {
     if (typeof value[key] !== "string" || value[key].length === 0) {
       fail("credential-invalid", `credential file is missing ${key}`);
     }
@@ -98,6 +127,7 @@ function parseCredentialDocument(source) {
     privateKeyPem: value.private_key_pem,
     caCertificatePem: value.ca_certificate_pem,
     rootCertificatePem: value.root_certificate_pem,
+    deviceStatusEndpoint: canonicalDeviceStatusEndpoint(value.device_status_endpoint),
   });
 }
 
@@ -184,6 +214,7 @@ export function buildActivationEnvelope(credential, edgeIpv4) {
   return Object.freeze({
     api_endpoint: API_ENDPOINT,
     onboarding_endpoint: ONBOARDING_ENDPOINT,
+    device_status_endpoint: credential.deviceStatusEndpoint,
     edge_ipv4: canonicalIpv4(edgeIpv4),
     device_id: credential.deviceId,
     certificate_pem: credential.certificatePem,
@@ -205,14 +236,23 @@ export function parseProviderBundle(output) {
   return Object.freeze({
     ok: read("ok", "true|false") === "true",
     state: read("state", "[a-z_]+"),
+    consistent: read("consistent", "true|false") === "true",
     changed: read("changed", "true|false") === "true",
     managed: read("managed", "true|false") === "true",
+    journalPhase: read("journal_phase", "PREPARING|ACTIVE|DEACTIVATING"),
+    rollbackFailed: read("rollback_failed", "true|false") === "true",
     rollbackComplete: read("rollback_complete", "true|false") === "true",
+    remoteGateEnabled: read("remote_gate_enabled", "true|false") === "true",
+    targetMatches: read("target_matches", "true|false") === "true",
     edgeIpv4: read("edge_ipv4", "[0-9.]+"),
     fingerprintSha256: read("fingerprint_sha256", "[0-9a-fA-F]{64}")?.toLowerCase() ?? null,
     rootCertificateSha256: read("root_certificate_sha256", "[0-9a-fA-F]{64}")?.toLowerCase() ?? null,
     apiEndpoint: read("api_endpoint", "https://api\\.cosmos\\.humane\\.cloud"),
     onboardingEndpoint: read("onboarding_endpoint", "https://onboarding\\.cosmos\\.humane\\.cloud"),
+    deviceStatusEndpoint: read(
+      "device_status_endpoint",
+      "https://[A-Za-z0-9.-]+/device-status/v1/report",
+    ),
     identityPresent: read("present", "true|false") === "true",
     identityUsable: read("identity_usable", "true|false") === "true",
   });
@@ -276,14 +316,20 @@ function verifyActivePostcondition(status, expected) {
   if (
     !status.ok ||
     status.state !== "active" ||
+    !status.consistent ||
     !status.managed ||
+    status.journalPhase !== "ACTIVE" ||
+    status.rollbackFailed ||
+    !status.remoteGateEnabled ||
+    !status.targetMatches ||
     !status.identityPresent ||
     !status.identityUsable ||
     status.edgeIpv4 !== expected.edgeIpv4 ||
     status.fingerprintSha256 !== expected.fingerprintSha256 ||
     status.rootCertificateSha256 !== expected.rootCertificateSha256 ||
     status.apiEndpoint !== API_ENDPOINT ||
-    status.onboardingEndpoint !== ONBOARDING_ENDPOINT
+    status.onboardingEndpoint !== ONBOARDING_ENDPOINT ||
+    status.deviceStatusEndpoint !== expected.deviceStatusEndpoint
   ) {
     fail("postcondition", "Pin activation postconditions did not match the requested identity and edge");
   }
@@ -343,6 +389,7 @@ export function activatePin(options, runtime = defaultRuntime()) {
       `  root SHA-256: ${credential.rootFingerprintSha256}\n` +
       `  current state: ${before.state ?? "unknown"}\n` +
       "  endpoints: fixed stock Humane hostnames over HTTPS\n" +
+      `  device status: ${envelope.device_status_endpoint}\n` +
       "No device change has been made. Re-run with --confirm to stage and activate.\n",
     );
     if (!options.confirm) return Object.freeze({ changed: false, before });
@@ -367,6 +414,7 @@ export function activatePin(options, runtime = defaultRuntime()) {
       edgeIpv4: envelope.edge_ipv4,
       fingerprintSha256: credential.fingerprintSha256,
       rootCertificateSha256: credential.rootFingerprintSha256,
+      deviceStatusEndpoint: envelope.device_status_endpoint,
     });
     runtime.out(`Activated Pin ${serial}; provider postconditions match.\n`);
     return Object.freeze({ changed: activation.changed, before, activation, after });
@@ -381,10 +429,22 @@ export function main(args = process.argv.slice(2), runtime = defaultRuntime()) {
   if (options.command === "status") {
     const status = readActivationStatus(runtime, options.serial);
     runtime.out(
-      `Pin ${options.serial}: ${status.state ?? "unknown"}` +
-      `${status.edgeIpv4 ? `, edge ${status.edgeIpv4}` : ""}` +
-      `${status.managed ? ", managed" : ""}\n`,
+      `Pin ${options.serial}: ${status.state ?? "unknown"}\n` +
+      `  journal phase: ${status.journalPhase ?? "none"}\n` +
+      `  remote gate: ${status.remoteGateEnabled ? "enabled" : "disabled"}\n` +
+      `  edge: ${status.edgeIpv4 ?? "none"}\n` +
+      `  root SHA-256: ${status.rootCertificateSha256 ?? "none"}\n` +
+      `  device status: ${status.deviceStatusEndpoint ?? "disabled"}\n` +
+      `  identity: ${status.identityPresent ? (status.identityUsable ? "usable" : "unusable") : "absent"}` +
+      `${status.fingerprintSha256 ? ` (${status.fingerprintSha256})` : ""}\n` +
+      `  target match: ${status.targetMatches ? "yes" : "no"}\n`,
     );
+    if (!status.ok || !status.consistent || !["active", "inactive"].includes(status.state)) {
+      const recovery = status.managed
+        ? `Unlock the Pin, run adb -s ${options.serial} shell content call --uri ${PROVIDER_URI} --method DEACTIVATE, then check status again.`
+        : "No activation journal is available; do not retry activation until the unmanaged Cosmos settings and identity have been inspected and cleared.";
+      fail("status-inconsistent", `Pin activation state is inconsistent. ${recovery}`);
+    }
     return status;
   }
   return activatePin(options, runtime);

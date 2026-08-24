@@ -76,7 +76,7 @@ show_versions() {
 }
 
 require_source() {
-  [[ -r "${SOURCE_ROOT}/README.md" ]] ||
+  [[ -r "${SOURCE_ROOT}/settings.gradle.kts" ]] ||
     die "mount the isolated device source at ${SOURCE_ROOT} (read-only is recommended)"
   [[ -x "${SOURCE_ROOT}/gradlew" ]] ||
     die "${SOURCE_ROOT}/gradlew is missing or not executable"

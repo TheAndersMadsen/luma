@@ -24,8 +24,6 @@ pub const MAX_REQUEST_LIFETIME_MS: u64 = 5 * 60 * 1_000;
 pub const MAX_CLOCK_SKEW_MS: u64 = 30 * 1_000;
 pub const MAX_LEDGER_ENTRIES: usize = 4_096;
 pub const IDEMPOTENCY_RETENTION_MS: u64 = 10 * 60 * 1_000;
-const MAX_PREVIOUS_FULL_ACCESS_BODY_BYTES: u64 = 1024 * 1024;
-
 const MIN_REQUEST_ID_BYTES: usize = 16;
 const MAX_REQUEST_ID_BYTES: usize = 64;
 const MIN_IDEMPOTENCY_KEY_BYTES: usize = 16;
@@ -140,6 +138,19 @@ impl Default for Capabilities {
     }
 }
 
+/// Exact capability bundle issued to the persisted operator bridge.
+///
+/// Assets and health need no capability. These four grants cover Center's
+/// device summary and the reviewed Spotify adapter surface; they do not turn
+/// on the legacy full-access proxy or grant any namespace by prefix.
+pub const fn operator_bridge_capabilities() -> Capabilities {
+    Capabilities::none()
+        .with(Capability::DeviceMetadataRead)
+        .with(Capability::FeatureFlagsRead)
+        .with(Capability::SpotifyRead)
+        .with(Capability::SpotifyManage)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AssetMethod {
     Get,
@@ -166,10 +177,6 @@ pub enum ApiOperation {
     SpotifyPairingCancel,
     SpotifySessionDelete,
     SpotifySearch(SpotifySearchQuery),
-    /// Transitional proxy operation for the legacy full-access Center mode.
-    /// It remains subject to origin-form validation, hard-denied namespaces,
-    /// payload bounds, freshness, replay protection, and idempotency.
-    LegacyFullAccessProxy,
     #[cfg(test)]
     TestMutation,
 }
@@ -425,7 +432,6 @@ struct RouteRule {
 enum ContentTypeRule {
     Forbidden,
     JsonRequired,
-    LegacyAny,
 }
 
 /// Validate and classify one remote request without reading or retaining its
@@ -449,49 +455,6 @@ pub fn authorize(
     validate_rule(envelope, context, rule)
 }
 
-/// Transitional authorization for the legacy remote-Center full-access mode.
-///
-/// Unlike the historical bypass, this still validates the request envelope and
-/// returns a ledger-compatible reservation input. Only `/setup`, its legacy
-/// `/center` alias, and `/api`
-/// remain dispatchable, while device-local and high-risk namespaces stay
-/// permanently denied regardless of the full-access flag.
-pub fn authorize_full_access(
-    envelope: &RequestEnvelope<'_>,
-    context: &PolicyContext<'_, '_>,
-) -> Result<ValidatedRequest, PolicyError> {
-    let method = HttpMethod::parse(envelope.method)?;
-    let target = validate_origin_target(envelope.target)?;
-    if hard_denied(target.path) {
-        return Err(PolicyError::HardDeniedRoute);
-    }
-    if !in_namespace(target.path, "/api")
-        && !in_namespace(target.path, "/setup")
-        && !in_namespace(target.path, "/center")
-    {
-        return Err(PolicyError::RouteNotAllowed);
-    }
-
-    let scope = match method {
-        HttpMethod::Get | HttpMethod::Head | HttpMethod::Options => SENSITIVE_READ,
-        HttpMethod::Post | HttpMethod::Put | HttpMethod::Delete | HttpMethod::Patch => {
-            SENSITIVE_WRITE
-        }
-    };
-    let rule = RouteRule {
-        operation: ApprovedOperation::Api(ApiOperation::LegacyFullAccessProxy),
-        scope,
-        required_capability: None,
-        max_body_bytes: if scope.is_write() {
-            MAX_PREVIOUS_FULL_ACCESS_BODY_BYTES
-        } else {
-            0
-        },
-        content_type: ContentTypeRule::LegacyAny,
-    };
-    validate_rule(envelope, context, rule)
-}
-
 fn validate_rule(
     envelope: &RequestEnvelope<'_>,
     context: &PolicyContext<'_, '_>,
@@ -505,8 +468,7 @@ fn validate_rule(
     }
     match (rule.content_type, envelope.content_type) {
         (ContentTypeRule::Forbidden, Some(_)) => return Err(PolicyError::ContentTypeNotAllowed),
-        (ContentTypeRule::JsonRequired, Some("application/json"))
-        | (ContentTypeRule::LegacyAny, _) => {}
+        (ContentTypeRule::JsonRequired, Some("application/json")) => {}
         (ContentTypeRule::JsonRequired, _) => return Err(PolicyError::InvalidContentType),
         (ContentTypeRule::Forbidden, None) => {}
     }
@@ -1534,6 +1496,40 @@ mod tests {
     }
 
     #[test]
+    fn operator_bridge_capabilities_enable_spotify_without_privileged_routes() {
+        let assets = catalog();
+        let policy = context(&assets, operator_bridge_capabilities());
+        assert!(authorize(&envelope("GET", "/api/spotify/status"), &policy).is_ok());
+        assert!(authorize(
+            &envelope("GET", "/api/spotify/search?q=Roads&kind=track"),
+            &policy,
+        )
+        .is_ok());
+
+        let mut settings = envelope("PUT", "/api/spotify/settings");
+        settings.content_type = Some("application/json");
+        settings.header_count = 1;
+        settings.header_bytes = 28;
+        settings.body_bytes = 32;
+        settings.declared_body_bytes = Some(32);
+        settings.idempotency_key = Some("spotify-settings-bridge-1");
+        assert!(authorize(&settings, &policy).is_ok());
+
+        for (method, target) in [
+            ("GET", "/api/settings"),
+            ("PUT", "/api/feature-flags"),
+            ("GET", "/api/logs/server"),
+            ("GET", "/api/wifi/status"),
+            ("POST", "/api/dev/restart"),
+        ] {
+            assert!(
+                authorize(&envelope(method, target), &policy).is_err(),
+                "{method} {target}"
+            );
+        }
+    }
+
+    #[test]
     fn spotify_search_and_settings_are_strictly_bounded() {
         let assets = catalog();
         let read_policy = context(&assets, Capabilities::none().with(Capability::SpotifyRead));
@@ -1653,39 +1649,6 @@ mod tests {
                 "{path}"
             );
         }
-    }
-
-    #[test]
-    fn previous_full_access_keeps_local_only_routes_denied_and_uses_write_guards() {
-        let assets = catalog();
-        let policy = context(&assets, Capabilities::none());
-
-        for path in [
-            "/api/esim/state",
-            "/api/esim/delete-profile",
-            "/api/cellular/set-enabled",
-            "/api/wifi/set-enabled",
-            "/api/logs/server",
-            "/api/spotify/diagnostics/track/example",
-            "/upload/example",
-        ] {
-            assert_eq!(
-                authorize_full_access(&envelope("GET", path), &policy).unwrap_err(),
-                PolicyError::HardDeniedRoute,
-                "{path}"
-            );
-        }
-
-        let mut write = envelope("PUT", "/api/settings");
-        write.body_bytes = 2;
-        write.declared_body_bytes = Some(2);
-        assert_eq!(
-            authorize_full_access(&write, &policy).unwrap_err(),
-            PolicyError::MissingIdempotencyKey
-        );
-        write.idempotency_key = Some("idempotency-key-0001");
-        let validated = authorize_full_access(&write, &policy).unwrap();
-        assert_eq!(validated.scope(), SENSITIVE_WRITE);
     }
 
     #[test]

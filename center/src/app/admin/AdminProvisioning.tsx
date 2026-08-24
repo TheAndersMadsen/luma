@@ -1,5 +1,5 @@
 import { StatusChip, StatusMessage } from "@/components/Status";
-import { createActivationBundleJson } from "./activationBundle";
+import { activationCommands, createActivationBundleJson } from "./activationBundle";
 import styles from "./admin.module.css";
 import type { Bundle, Overview } from "./AdminTypes";
 
@@ -38,6 +38,9 @@ export function AdminProvisioning({
   onClearBundle: () => void;
 }) {
   const enrollment = overview.enrollment;
+  const commands = bundle
+    ? activationCommands(bundle.device_id, overview.device_edge_ipv4)
+    : null;
 
   return (
     <>
@@ -151,32 +154,43 @@ export function AdminProvisioning({
               </button>
             </div>
             <StatusMessage tone="warning">
-              This private key and pincode are shown once and never stored. Download the activation
-              file before you leave or reload this page, then keep it private.
+              This activation file contains a one-time private key and is never stored. Download it
+              before you leave or reload this page, then keep it private. The enrollment PIN is a
+              separate one-time code and is not included in the file.
             </StatusMessage>
             <div className={styles.downloads}>
               <button
                 type="button"
                 className={styles.miniButton}
                 onClick={() => download(
-                  `cosmos-activation-${bundle.device_id}.json`,
-                  createActivationBundleJson(bundle),
+                  commands!.credentialFile,
+                  createActivationBundleJson(bundle, overview.device_status_endpoint!),
                   "application/json",
                 )}
+                disabled={!overview.device_status_endpoint}
               >
                 ↓ activation.json
               </button>
             </div>
             <ol className={styles.steps}>
-              <li>Save the activation JSON on the trusted computer connected to this Pin.</li>
               <li>
-                Point onboarding at <code>{bundle.onboarding.endpoint || "the onboarding edge"}</code>
-                {bundle.onboarding.authority ? <> with authority <code>{bundle.onboarding.authority}</code></> : null},
-                presenting <code>device.crt</code> and <code>device.key</code> for mTLS.
+                Move <code>{commands!.credentialFile}</code> to <code>{commands!.credentialPath}</code>
+                on the trusted computer connected to the Pin. Keep the directory at <code>0700</code>
+                and the file at <code>0600</code>; never store it in a repository.
               </li>
               <li>
-                Complete OPAQUE with pincode {bundle.pincode ? <code>{bundle.pincode}</code> : <em>none (keyless)</em>},
-                then run <code>CreateDeviceUserBinding</code> to receive a DeviceUser certificate.
+                Keep the enrollment PIN {bundle.pincode ? <code>{bundle.pincode}</code> : <em>none (keyless)</em>} separate.
+                It is used once during onboarding, not by the activation command.
+              </li>
+              <li>
+                Replace <code>PIN_SERIAL</code> with the serial reported by <code>adb devices</code>,
+                then preview the exact device change:<br /><code>{commands!.plan}</code>
+              </li>
+              <li>
+                Review the plan, then apply it:<br /><code>{commands!.confirm}</code>
+              </li>
+              <li>
+                Verify the reconciled activation state:<br /><code>{commands!.status}</code>
               </li>
             </ol>
           </div>

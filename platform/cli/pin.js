@@ -6,7 +6,8 @@
 const fs = require('node:fs');
 
 const {
-  PIN_RELEASE_BUILD_TOOL, PIN_INSTALL_TOOL, PIN_DOCTOR_TOOL,
+  PIN_RELEASE_BUILD_TOOL, PIN_RELEASE_IMPORT_TOOL, PIN_RELEASE_EXPORT_TOOL,
+  PIN_INSTALL_TOOL, PIN_DOCTOR_TOOL,
   PIN_ACTIVATION_TOOL, PIN_NETWORK_TOOL, ENV_FILE, fail, operatorEnvironment, parseEnvFile, resolveTool, run,
 } = require('./context');
 const { pinContributorCheck } = require('./gates');
@@ -29,10 +30,15 @@ function pinCommand(args) {
   }
   if (subcommand === 'release') {
     const operation = args[0];
-    if (operation !== 'build') {
-      fail('usage: ./revival pin release build ...', 64);
+    const tools = {
+      build: PIN_RELEASE_BUILD_TOOL,
+      import: PIN_RELEASE_IMPORT_TOOL,
+      export: PIN_RELEASE_EXPORT_TOOL,
+    };
+    if (!tools[operation]) {
+      fail('usage: ./revival pin release build ... | import ARCHIVE [--json] | export --output ARCHIVE [--json]', 64);
     }
-    run(resolveTool('node'), [PIN_RELEASE_BUILD_TOOL, ...args]);
+    run(resolveTool('node'), [tools[operation], ...(operation === 'build' ? args : args.slice(1))]);
     return null;
   }
   // The one subcommand under `pin` that can change a device, which is why it is
@@ -58,7 +64,7 @@ function pinCommand(args) {
     return null;
   }
   fail(
-    'usage: ./revival pin doctor | check | build-debug --role ROLE [--role ROLE] | build-debug --changed [--base REF] | release build ... |\n' +
+    'usage: ./revival pin doctor | check | build-debug --role ROLE [--role ROLE] | build-debug --changed [--base REF] | release build|import|export ... |\n' +
     '              install [--confirm] [--serial SERIAL] | activate ... | network ...\n' +
     '       `install` without --confirm only plans and leaves the device untouched;\n' +
     '       `install --confirm` modifies the connected Pin. See `./revival pin install --help`.',

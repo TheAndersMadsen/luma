@@ -19,6 +19,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  PIN_COMPATIBILITY_CERT_SHA256,
   PIN_RELEASE_ARTIFACT_ROLES,
   PIN_RELEASE_PACKAGE_BY_ROLE,
   canonicalPinReleaseManifestJson,
@@ -29,8 +30,7 @@ import {
 
 const SELF_PATH = fileURLToPath(import.meta.url);
 export const SOURCE_ROOT = resolve(dirname(SELF_PATH), "../../..");
-export const PIN_COMPATIBILITY_CERT_SHA256 =
-  "d8a64e1c3a1afdc340c4b86feaacb88e2d81d66972afbd58e743b7c5b8d1cbdb";
+export { PIN_COMPATIBILITY_CERT_SHA256 } from "./release.mjs";
 
 const SIGNING_NAMES = Object.freeze([
   "PIN_SIGNING_STORE_FILE",

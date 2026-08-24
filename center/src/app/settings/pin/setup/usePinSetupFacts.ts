@@ -149,12 +149,7 @@ export function usePinSetupFacts(options: { operator: boolean }): PinSetupReadin
   const connected = status === "connected";
   const serial = connectionInfo?.serial ?? null;
 
-  /*
-   * The published release. Independent of any device: a newcomer with no Pin in
-   * hand can still find out that this Center has nothing to install, which is
-   * the failure `docs/operations.md` records as the one that "fails quietly and
-   * blames the wrong layer".
-   */
+  // Release availability is independent of the attached device.
   const releaseQuery = useQuery({
     queryKey: [SETUP_QUERY_KEY, "release"],
     staleTime: 60_000,

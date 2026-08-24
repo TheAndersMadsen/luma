@@ -64,7 +64,6 @@ class NativeActionParityLedgerTest {
             "replacement_rpc",
             "context_only",
             "internal_only",
-            "safety_denied",
             "developer_only",
         )
         val validBoundaries = setOf(
@@ -150,12 +149,20 @@ class NativeActionParityLedgerTest {
     }
 
     @Test
-    fun `destructive trust radio and contact mutations remain outside broad planners`() {
-        val denied = rows.filter { it.penumbraRoute == "safety_denied" }.map { it.action }.toSet()
-        assertEquals(safetyDeniedActions, denied)
-        rows.filter { it.action in safetyDeniedActions }.forEach {
+    fun `restored trust radio power and contact mutations retain explicit safety boundaries`() {
+        assertTrue(rows.none { it.penumbraRoute == "safety_denied" })
+        assertEquals(
+            safetySensitiveActions,
+            rows.filter { it.action in safetySensitiveActions }.map { it.action }.toSet(),
+        )
+        rows.filter { it.action in safetySensitiveActions }.forEach {
+            assertEquals(
+                "Safety-sensitive ${it.action} is not on the bounded restored route",
+                "restored_direct",
+                it.penumbraRoute,
+            )
             assertTrue(
-                "Denied ${it.action} has a non-safety boundary ${it.safetyBoundary}",
+                "Restored ${it.action} has a non-safety boundary ${it.safetyBoundary}",
                 it.safetyBoundary in setOf(
                     "destructive_mutation",
                     "power_mutation",
@@ -166,39 +173,17 @@ class NativeActionParityLedgerTest {
             )
         }
 
-        val broadPlannerSources = listOf(
-            "runtime/core/src/synapse/native_device_actions.rs",
-            "runtime/core/src/synapse/capabilities/communications.rs",
-            "runtime/core/src/synapse/capabilities/messaging.rs",
-            "runtime/core/src/synapse/capabilities/music.rs",
-            "runtime/core/src/synapse/capabilities/nutrition.rs",
-            "runtime/core/src/synapse/capabilities/settings.rs",
-            "runtime/core/src/synapse/capabilities/translation.rs",
-        ).joinToString("\n") { repoFile(it).readText() }
-        safetyDeniedActions.forEach { action ->
-            val rawLiteral = "\"$action\""
-            assertFalse(
-                "Safety-denied $action leaked into a broad compatibility planner",
-                broadPlannerSources.contains(rawLiteral) ||
-                    sourceReferencesRustNativeAction(broadPlannerSources, action),
+        val mutationPlanner = repoFile(
+            "runtime/core/src/synapse/native_device_actions/stock_mutations.rs",
+        ).readText()
+        assertTrue(mutationPlanner.contains("strict_restored_stock_command"))
+        assertTrue(mutationPlanner.contains("spec.requires_confirmed_unlock()"))
+        safetySensitiveActions.forEach { action ->
+            assertTrue(
+                "Restored safety-sensitive action $action is absent from the bounded planner",
+                sourceReferencesRustNativeAction(mutationPlanner, action),
             )
         }
-
-        val stockTools = repoFile("runtime/core/src/services/aibus/tools/stock_agent.rs").readText()
-        assertTrue(stockTools.contains("DENIED_SETTINGS_TOOLS.contains(&name)"))
-        assertTrue(stockTools.contains("DESTRUCTIVE_TOOLS.contains(&name)"))
-        assertTrue(
-            sourceReferencesRustNativeAction(
-                stockTools,
-                TierASymbols.NativeActions.CREATE_CONTACT,
-            ),
-        )
-        assertTrue(
-            sourceReferencesRustNativeAction(
-                stockTools,
-                TierASymbols.NativeActions.UPDATE_CONTACT_TRUSTED,
-            ),
-        )
     }
 
     @Test
@@ -375,7 +360,7 @@ class NativeActionParityLedgerTest {
         "ViewCallLog",
     )
 
-    private val safetyDeniedActions = setOf(
+    private val safetySensitiveActions = setOf(
         "ConnectToWifi",
         "CreateContact",
         "DisconnectWifi",

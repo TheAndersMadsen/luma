@@ -1,7 +1,5 @@
 use super::*;
 
-use super::*;
-
 fn request(utterance: &str) -> SynapseUnderstandingRequest {
     SynapseUnderstandingRequest {
         utterance: utterance.to_string(),

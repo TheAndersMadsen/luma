@@ -126,7 +126,9 @@ class VisionCustomGestureParityContractTest {
         )
 
         val synapseVision = repoFile("runtime/core/src/synapse/vision.rs").readText()
-        val understand = repoFile("runtime/core/src/services/aibus/understand.rs").readText()
+        val understand = repoFile(
+            "runtime/core/src/services/aibus/understand/cascade.rs",
+        ).readText()
         val analyzeImage = repoFile("runtime/core/src/services/aibus/vision.rs").readText()
         val imageStore = repoFile("runtime/core/src/synapse/image_store.rs").readText()
 

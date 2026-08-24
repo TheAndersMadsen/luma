@@ -155,7 +155,7 @@ class PhotographyJpgSettingsGateLockedContractTest {
         assertTrue(spec.contains("writable: false"))
         assertTrue(spec.contains("restart_recommended: false"))
         assertTrue(spec.contains("stock YUV mode reads only the raw-data filename"))
-        assertTrue(spec.contains("Penumbra currently creates the JPG upload contract"))
+        assertTrue(spec.contains("Ai Pin Revival currently creates the JPG upload contract"))
 
         assertTrue(api.contains("let jpg_off = BTreeMap::from([(\"humane_photography_jpg_enabled\".into(), Some(false))])"))
         assertTrue(api.contains("for safe_value in [Some(true), None]"))

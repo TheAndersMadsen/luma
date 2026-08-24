@@ -3,8 +3,7 @@
 // results, so a "healthy host" and a "nothing installed" host are both
 // reproducible on any machine.
 //
-// README parsing remains covered directly; Rust expectations instead come from
-// the exact toolchain contract and root pin, both exercised as pure fixtures.
+// Host expectations come from the exact toolchain contract and root Rust pin.
 //
 // Run: node --test platform/containers/pin-builder/doctor.test.mjs
 
@@ -37,7 +36,7 @@ import {
   parsePinBuilderDockerfileContract,
   parsePinBuilderToolchainContract,
   parsePinGradleToolchainConsumers,
-  parseRequirementsFromReadme,
+  parseRequirementsFromToolchain,
   parseRustToolchainContract,
   parseRustToolchainToml,
   parseSdkDir,
@@ -113,7 +112,7 @@ function healthyProbes(overrides = {}) {
       ndkLabel: "r28c",
       ndkMajor: 28,
       nodeMinimum: "20.19.0",
-      sourceRef: "README.md:100",
+      sourceRef: "platform/containers/pin-builder/toolchain.json",
     },
     rustToolchain: {
       expectedVersion: "1.91.1",
@@ -338,7 +337,7 @@ test("known-bad ARM QEMU is a required failure before an expensive Pin consumer"
   assert.match(check.fix, /native hosted linux\/amd64.*do not alter binfmt/u);
 });
 
-test("a Node runtime below the documented minimum is a required failure", () => {
+test("a Node runtime below the contracted minimum is a required failure", () => {
   const result = evaluate(healthyProbes({ node: { version: "18.20.0" } }));
   const check = checkById(result, "node");
   assert.equal(check.status, CHECK_STATUS.FAIL);
@@ -414,7 +413,7 @@ test("an unauthorized device is a warning, not a failure", () => {
 // NDK drift is a warning, not a blocker.
 // ---------------------------------------------------------------------------
 
-test("an NDK whose major differs from the documented one is a warn, not a fail", () => {
+test("an NDK whose major differs from the contracted one is a warn, not a fail", () => {
   const result = evaluate(
     healthyProbes({
       ndk: {
@@ -434,7 +433,7 @@ test("an NDK whose major differs from the documented one is a warn, not a fail",
   assert.match(check.fix, /not a blocker/);
 });
 
-test("a matching NDK major passes and cites the documented label", () => {
+test("a matching NDK major passes and cites the contracted label", () => {
   const check = checkById(evaluate(healthyProbes()), "android_ndk");
   assert.equal(check.status, CHECK_STATUS.PASS);
   assert.match(check.detail, /r28c/);
@@ -459,7 +458,7 @@ test("an NDK with no readable revision degrades to a warn rather than a false ve
 // Unreadable requirements must degrade honestly, never invent a version.
 // ---------------------------------------------------------------------------
 
-test("unreadable README requirements degrade version comparisons to warns without failing", () => {
+test("unreadable toolchain requirements degrade version comparisons to warns without failing", () => {
   const result = evaluate(healthyProbes({ requirements: null }));
   assert.equal(result.ok, true);
   assert.equal(result.requirementsSource, null);
@@ -469,7 +468,7 @@ test("unreadable README requirements degrade version comparisons to warns withou
   assert.equal(checkById(result, "protoc").status, CHECK_STATUS.PASS);
 });
 
-test("missing tools still fail when the documented requirements are unreadable", () => {
+test("missing tools still fail when the contracted requirements are unreadable", () => {
   const result = evaluate(
     healthyProbes({ requirements: null, protoc: { present: false, version: null } }),
   );
@@ -1023,21 +1022,27 @@ test("a poisoned key list cannot leak into rendered output", () => {
 // Parsers
 // ---------------------------------------------------------------------------
 
-test("the real README.md prerequisite line is still parseable", () => {
-  const readme = readFileSync(resolve(REPO_ROOT, "README.md"), "utf8");
-  const requirements = parseRequirementsFromReadme(readme);
-  assert.ok(requirements, "README.md no longer contains a parseable prerequisite line");
-  assert.ok(Number.isInteger(requirements.jdkMajor) && requirements.jdkMajor > 0);
-  assert.ok(Number.isInteger(requirements.ndkMajor) && requirements.ndkMajor > 0);
-  assert.match(requirements.ndkLabel, /^r\d+[a-z]?$/);
-  assert.match(requirements.nodeMinimum, /^\d+(\.\d+){0,2}$/);
-  assert.match(requirements.sourceRef, /^README\.md:\d+$/);
+test("the real toolchain contract provides every host requirement", () => {
+  const source = readFileSync(
+    resolve(PRODUCT_ROOT, "platform/containers/pin-builder/toolchain.json"),
+    "utf8",
+  );
+  const requirements = parseRequirementsFromToolchain(source);
+  assert.deepEqual({ ...requirements }, {
+    jdkMajor: 17,
+    androidSdkApi: 34,
+    ndkLabel: "r28c",
+    ndkMajor: 28,
+    nodeMinimum: "22.14.0",
+    sourceRef: "platform/containers/pin-builder/toolchain.json",
+  });
 });
 
-test("parseRequirementsFromReadme returns null when the prerequisite line is absent", () => {
-  assert.equal(parseRequirementsFromReadme("# Title\n\nNo prerequisites here.\n"), null);
-  assert.equal(parseRequirementsFromReadme(""), null);
-  assert.equal(parseRequirementsFromReadme(null), null);
+test("host requirement parsing fails closed for malformed or incomplete contracts", () => {
+  assert.equal(parseRequirementsFromToolchain("not json"), null);
+  assert.equal(parseRequirementsFromToolchain("{}"), null);
+  assert.equal(parseRequirementsFromToolchain(""), null);
+  assert.equal(parseRequirementsFromToolchain(null), null);
 });
 
 test("Rust command banners and both canonical pins require one exact version", () => {
@@ -1215,15 +1220,14 @@ test("host cargo-ndk is compared to the exact builder contract", () => {
   }
 });
 
-test("parseRequirementsFromReadme reads the versions the document actually states", () => {
-  const text = [
-    "# Repo",
-    "",
-    "## Build prerequisites",
-    "",
-    "JDK 21, Android SDK 35, Android NDK r30a, stable Rust with the `aarch64-linux-android` target, and Node >= 24.1.0.",
-  ].join("\n");
-  const requirements = parseRequirementsFromReadme(text);
+test("host requirement parsing reads explicit contract values", () => {
+  const requirements = parseRequirementsFromToolchain(JSON.stringify({
+    toolchain: {
+      jdk: { version: "21.0.7+6" },
+      android: { platform: "35", ndkRelease: "r30a" },
+      node: { version: "24.1.0" },
+    },
+  }));
   assert.deepEqual(
     { ...requirements },
     {
@@ -1232,32 +1236,7 @@ test("parseRequirementsFromReadme reads the versions the document actually state
       ndkLabel: "r30a",
       ndkMajor: 30,
       nodeMinimum: "24.1.0",
-      sourceRef: "README.md:5",
-    },
-  );
-});
-
-test("parseRequirementsFromReadme reads the restyled prerequisite line (bare NDK, Unicode ≥)", () => {
-  // The shipped README.md writes the requirements as a mid-dot list with a bare
-  // "NDK" label and a Unicode "≥" floor. The parser must read that spelling, or
-  // the doctor silently degrades every version check to a "cannot compare"
-  // warning. Pinned here as a synthetic fixture so this stays covered even if
-  // the real README.md is restyled again.
-  const text = [
-    "# Repo",
-    "",
-    "**Prerequisites** — JDK 17 · Android SDK 34 · NDK r28c · Rust (`aarch64-linux-android`) · `cargo-ndk` · `protoc` · Node ≥ 20.19",
-  ].join("\n");
-  const requirements = parseRequirementsFromReadme(text);
-  assert.deepEqual(
-    { ...requirements },
-    {
-      jdkMajor: 17,
-      androidSdkApi: 34,
-      ndkLabel: "r28c",
-      ndkMajor: 28,
-      nodeMinimum: "20.19",
-      sourceRef: "README.md:3",
+      sourceRef: "platform/containers/pin-builder/toolchain.json",
     },
   );
 });
@@ -1389,7 +1368,10 @@ test("renderJson mirrors evaluate and exposes no probe internals", () => {
   const json = renderJson(result);
   assert.equal(json.tool, "revival-pin-doctor");
   assert.equal(json.ok, true);
-  assert.equal(json.requirements_source, "README.md:100");
+  assert.equal(
+    json.requirements_source,
+    "platform/containers/pin-builder/toolchain.json",
+  );
   assert.equal(json.checks.length, result.checks.length);
   assert.deepEqual(Object.keys(json.checks[0]).sort(), [
     "detail",

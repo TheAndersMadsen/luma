@@ -30,10 +30,11 @@ use axum::http::{header, HeaderMap, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::Router;
 use base64::Engine as _;
-use clap::{Parser, ValueEnum};
+use clap::Parser;
 use iroh::{Endpoint, EndpointAddr};
 use iroh_tickets::endpoint::EndpointTicket;
 use serde::{Deserialize, Serialize};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 use uuid::Uuid;
@@ -47,16 +48,6 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_SPOTIFY_SETTINGS_BODY_BYTES: usize = 512;
 const MAX_SPOTIFY_SEARCH_QUERY_BYTES: usize = 256;
 const MAX_TICKET_BYTES: usize = 16 * 1024;
-
-/// Defense-in-depth policy applied by the HTTP bridge before a request is
-/// put on the authenticated iroh tunnel. Compatibility remains the default so
-/// existing Setup recovery flows do not change during a staged rollout.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
-enum ProxyPolicy {
-    #[default]
-    Compatibility,
-    Reviewed,
-}
 
 /// Wire protocol request to the Pin. Mirrors `RemoteRequest` in
 /// `runtime/core/src/remote_center/iroh_connector.rs`.
@@ -81,19 +72,55 @@ struct RemoteRequest {
 /// `runtime/core/src/remote_center/iroh_connector.rs`: the body is base64 so
 /// binary assets survive the JSON envelope, and `content_type` carries the
 /// exact header the Pin served.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct RemoteResponse {
-    #[allow(dead_code)]
     protocol: String,
-    #[allow(dead_code)]
     request_id: String,
-    #[allow(dead_code)]
     generation: u64,
     status: u16,
     #[serde(default)]
     content_type: Option<String>,
     #[serde(default)]
     body_base64: Option<String>,
+}
+
+type BridgeError = Box<dyn std::error::Error + Send + Sync>;
+
+async fn wire_roundtrip<W, R>(
+    send: &mut W,
+    recv: &mut R,
+    request: &RemoteRequest,
+) -> Result<RemoteResponse, BridgeError>
+where
+    W: AsyncWrite + Unpin,
+    R: AsyncRead + Unpin,
+{
+    let request_json = serde_json::to_vec(request)?;
+    let request_len = u32::try_from(request_json.len())?.to_be_bytes();
+    send.write_all(&request_len).await?;
+    send.write_all(&request_json).await?;
+    send.flush().await?;
+
+    let mut len_buf = [0u8; 4];
+    recv.read_exact(&mut len_buf).await?;
+    let response_len = u32::from_be_bytes(len_buf) as usize;
+    if response_len > MAX_RESPONSE_BYTES {
+        return Err(format!("response too large: {response_len} bytes").into());
+    }
+
+    let mut response_buf = vec![0u8; response_len];
+    recv.read_exact(&mut response_buf).await?;
+    let response: RemoteResponse = serde_json::from_slice(&response_buf)?;
+    if response.protocol != PROTOCOL_VERSION {
+        return Err("response protocol does not match the request".into());
+    }
+    if response.request_id != request.request_id {
+        return Err("response request_id does not match the request".into());
+    }
+    if response.generation != request.generation {
+        return Err("response generation does not match the request".into());
+    }
+    Ok(response)
 }
 
 /// Shared state between the HTTP server and the iroh connection.
@@ -104,93 +131,41 @@ struct BridgeState {
     endpoint: Endpoint,
     node_addr: EndpointAddr,
     generation: u64,
-    proxy_policy: ProxyPolicy,
 }
 
 impl BridgeState {
-    /// Ensure we have an active stream to the Pin, reconnecting if needed.
-    async fn get_or_connect(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let mut stream_guard = self.stream.lock().await;
-        if stream_guard.is_some() {
-            return Ok(());
-        }
+    /// Connect, open the stream, write, and read one complete correlated
+    /// response under one total deadline. Any failure invalidates the stream;
+    /// QUIC stream state cannot be safely reused after a partial exchange.
+    async fn roundtrip(&self, request: RemoteRequest) -> Result<RemoteResponse, BridgeError> {
+        let result = tokio::time::timeout(REQUEST_TIMEOUT, async {
+            let mut stream = self.stream.lock().await;
+            if stream.is_none() {
+                info!("connecting to Pin via iroh...");
+                let connection = self.endpoint.connect(self.node_addr.clone(), ALPN).await?;
+                info!(
+                    "connected to Pin (remote endpoint: {})",
+                    connection.remote_id()
+                );
+                *stream = Some(connection.open_bi().await?);
+                info!("bidirectional stream established");
+            }
+            let (send, recv) = stream.as_mut().ok_or("iroh stream was not established")?;
+            wire_roundtrip(send, recv, &request).await
+        })
+        .await;
 
-        info!("connecting to Pin via iroh...");
-        let connection = self.endpoint.connect(self.node_addr.clone(), ALPN).await?;
-        info!(
-            "connected to Pin (remote endpoint: {})",
-            connection.remote_id()
-        );
-
-        let (send, recv) = connection.open_bi().await?;
-        *stream_guard = Some((send, recv));
-        info!("bidirectional stream established");
-
-        Ok(())
-    }
-
-    /// Send a request and receive a response over the iroh stream.
-    async fn roundtrip(
-        &self,
-        request: RemoteRequest,
-    ) -> Result<RemoteResponse, Box<dyn std::error::Error + Send + Sync>> {
-        let mut stream_guard = self.stream.lock().await;
-
-        let (send, recv) = match stream_guard.as_mut() {
-            Some(pair) => pair,
-            None => return Err("not connected".into()),
-        };
-
-        // Write length-prefixed JSON request (u32 big-endian length prefix).
-        // No explicit flush: iroh/quinn transmits buffered stream data as the
-        // connection drives itself, and the server writes its response only
-        // after reading a full request — mirroring the server's own path.
-        let request_json = serde_json::to_vec(&request)?;
-        let len = (request_json.len() as u32).to_be_bytes();
-        // Drop the stream on a write failure too, not just on read failures: if
-        // the Pin restarts, the shared stream dies and the write is the first
-        // thing to fail. Leaving it in place would wedge the bridge into
-        // permanent "connection lost" (502) until it was restarted by hand.
-        if let Err(e) = send.write_all(&len).await {
-            *stream_guard = None;
-            return Err(format!("write error: {e}").into());
-        }
-        if let Err(e) = send.write_all(&request_json).await {
-            *stream_guard = None;
-            return Err(format!("write error: {e}").into());
-        }
-
-        // Read length-prefixed JSON response.
-        let mut len_buf = [0u8; 4];
-        let read_result =
-            tokio::time::timeout(REQUEST_TIMEOUT, recv.read_exact(&mut len_buf)).await;
-        match read_result {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => {
-                // Connection lost; drop the stream so the next call reconnects.
-                *stream_guard = None;
-                return Err(format!("read error: {e}").into());
+        match result {
+            Ok(Ok(response)) => Ok(response),
+            Ok(Err(error)) => {
+                *self.stream.lock().await = None;
+                Err(error)
             }
             Err(_) => {
-                *stream_guard = None;
-                return Err("response timed out".into());
+                *self.stream.lock().await = None;
+                Err("Pin request exceeded its total timeout".into())
             }
         }
-
-        let response_len = u32::from_be_bytes(len_buf) as usize;
-        if response_len > MAX_RESPONSE_BYTES {
-            *stream_guard = None;
-            return Err(format!("response too large: {response_len} bytes").into());
-        }
-
-        let mut response_buf = vec![0u8; response_len];
-        if let Err(e) = recv.read_exact(&mut response_buf).await {
-            *stream_guard = None;
-            return Err(format!("read error: {e}").into());
-        }
-
-        let response: RemoteResponse = serde_json::from_slice(&response_buf)?;
-        Ok(response)
     }
 }
 
@@ -202,9 +177,7 @@ async fn proxy_request(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    if state.proxy_policy == ProxyPolicy::Reviewed
-        && !reviewed_route_allowed(&method, &uri, &headers, body.len())
-    {
+    if !reviewed_route_allowed(&method, &uri, &headers, body.len()) {
         warn!(method = %method, path = uri.path(), "request denied by bridge allowlist");
         return (StatusCode::FORBIDDEN, "request denied by bridge policy\n").into_response();
     }
@@ -254,10 +227,6 @@ async fn proxy_request(
     let mut response = None;
     let mut last_error = String::from("not connected");
     for attempt in 0..2 {
-        if let Err(e) = state.get_or_connect().await {
-            last_error = format!("cannot connect to Pin: {e}");
-            continue;
-        }
         match state.roundtrip(request.clone()).await {
             Ok(received) => {
                 response = Some(received);
@@ -348,13 +317,16 @@ fn reviewed_route_allowed(
         return true;
     }
 
-    if uri.query().is_none() && bodyless && no_content_type && *method == Method::GET {
-        if matches!(
+    if uri.query().is_none()
+        && bodyless
+        && no_content_type
+        && *method == Method::GET
+        && matches!(
             path,
             "/api/health" | "/api/device" | "/api/feature-flags" | "/api/spotify/status"
-        ) {
-            return true;
-        }
+        )
+    {
+        return true;
     }
 
     match (method, path, uri.query()) {
@@ -501,17 +473,9 @@ struct Args {
     /// Where to persist this bridge's iroh secret key.
     ///
     /// Without it the bridge gets a fresh identity on every restart, so the Pin
-    /// cannot allowlist it — and an allowlist is the only thing standing
-    /// between a full-access tunnel and anyone who learns the Pin's
-    /// EndpointId. With it, this bridge has a stable EndpointId to pin.
+    /// cannot authorize it. With it, this bridge has a stable EndpointId.
     #[arg(long, default_value = "/var/lib/center-iroh-bridge/endpoint.key")]
     secret_key_file: PathBuf,
-
-    /// Local defense-in-depth route policy. Keep compatibility during rollout;
-    /// switch to reviewed after the Center adapter and typed Pin release are
-    /// both deployed and the Pin's full-access mode has been disabled.
-    #[arg(long, value_enum, default_value_t)]
-    proxy_policy: ProxyPolicy,
 }
 
 /// Read the Pin credential from a file without ever placing it in argv or env.
@@ -628,7 +592,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         endpoint,
         node_addr,
         generation: args.generation,
-        proxy_policy: args.proxy_policy,
     });
 
     // Every request proxies to the Pin except the local status route. Using a
@@ -814,6 +777,117 @@ mod tests {
         );
         let body = B64.decode(resp.body_base64.unwrap()).unwrap();
         assert_eq!(body, b"<html>OK</html>");
+    }
+
+    fn correlated_wire_request() -> RemoteRequest {
+        RemoteRequest {
+            protocol: PROTOCOL_VERSION.to_string(),
+            request_id: "wire-request-1".to_string(),
+            generation: 7,
+            method: "GET".to_string(),
+            path: "/api/spotify/status".to_string(),
+            idempotency_key: None,
+            content_type: None,
+            body_base64: None,
+        }
+    }
+
+    async fn exchange_test_response(
+        response: RemoteResponse,
+    ) -> Result<RemoteResponse, BridgeError> {
+        let (client, server) = tokio::io::duplex(4096);
+        let (mut client_read, mut client_write) = tokio::io::split(client);
+        tokio::spawn(async move {
+            let (mut server_read, mut server_write) = tokio::io::split(server);
+            let mut request_len = [0u8; 4];
+            server_read.read_exact(&mut request_len).await.unwrap();
+            let mut request = vec![0u8; u32::from_be_bytes(request_len) as usize];
+            server_read.read_exact(&mut request).await.unwrap();
+            let encoded = serde_json::to_vec(&response).unwrap();
+            server_write
+                .write_all(&u32::try_from(encoded.len()).unwrap().to_be_bytes())
+                .await
+                .unwrap();
+            server_write.write_all(&encoded).await.unwrap();
+        });
+        wire_roundtrip(
+            &mut client_write,
+            &mut client_read,
+            &correlated_wire_request(),
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn wire_response_must_match_protocol_request_and_generation() {
+        let matching = RemoteResponse {
+            protocol: PROTOCOL_VERSION.to_string(),
+            request_id: "wire-request-1".to_string(),
+            generation: 7,
+            status: 200,
+            content_type: Some("application/json".to_string()),
+            body_base64: Some(B64.encode(b"{}")),
+        };
+        assert_eq!(exchange_test_response(matching).await.unwrap().status, 200);
+
+        for mismatched in [
+            RemoteResponse {
+                protocol: "wrong-protocol".to_string(),
+                request_id: "wire-request-1".to_string(),
+                generation: 7,
+                status: 200,
+                content_type: None,
+                body_base64: None,
+            },
+            RemoteResponse {
+                protocol: PROTOCOL_VERSION.to_string(),
+                request_id: "other-request".to_string(),
+                generation: 7,
+                status: 200,
+                content_type: None,
+                body_base64: None,
+            },
+            RemoteResponse {
+                protocol: PROTOCOL_VERSION.to_string(),
+                request_id: "wire-request-1".to_string(),
+                generation: 8,
+                status: 200,
+                content_type: None,
+                body_base64: None,
+            },
+        ] {
+            assert!(exchange_test_response(mismatched).await.is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn one_deadline_covers_a_stalled_full_response_body() {
+        let (client, server) = tokio::io::duplex(4096);
+        let (mut client_read, mut client_write) = tokio::io::split(client);
+        tokio::spawn(async move {
+            let (mut server_read, mut server_write) = tokio::io::split(server);
+            let mut request_len = [0u8; 4];
+            server_read.read_exact(&mut request_len).await.unwrap();
+            let mut request = vec![0u8; u32::from_be_bytes(request_len) as usize];
+            server_read.read_exact(&mut request).await.unwrap();
+            server_write.write_all(&32_u32.to_be_bytes()).await.unwrap();
+            server_write.write_all(b"{").await.unwrap();
+            server_write.flush().await.unwrap();
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        });
+        let result = tokio::time::timeout(
+            Duration::from_millis(50),
+            wire_roundtrip(
+                &mut client_write,
+                &mut client_read,
+                &correlated_wire_request(),
+            ),
+        )
+        .await;
+        assert!(
+            result.is_err(),
+            "the partial response must not escape the total deadline"
+        );
     }
 
     /// The reason the body is base64 at all: binary assets (logo.png,

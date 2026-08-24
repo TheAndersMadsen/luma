@@ -178,7 +178,7 @@ class FitnessTrackerExtraDataParityContractTest {
         assertTrue(historyApi.contains("delete(delete_session)"))
         assertTrue(historyApi.contains("get(list_sessions).delete(clear_sessions)"))
 
-        val apiMain = repoFile("runtime/core/src/main.rs").readText()
+        val apiMain = repoFile("runtime/core/src/boot/mod.rs").readText()
         assertTrue(apiMain.contains("api::require_admin_auth"))
     }
 
