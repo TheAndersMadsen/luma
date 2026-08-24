@@ -271,6 +271,7 @@ test("release publication model contains only digest images and portable storage
   ], { cwd: root, encoding: "utf8", maxBuffer: 8 * 1024 * 1024 });
   assert.equal(compose.status, 0, compose.stderr);
   const model = JSON.parse(compose.stdout);
+  assert.deepEqual(model.services.edge.entrypoint, ["envoy"]);
   assert.ok(model.services["center-iroh-bridge"], "profiled bridge must be in the audited model");
   assert.equal(
     model.services["center-iroh-bridge"].image,

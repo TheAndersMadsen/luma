@@ -229,6 +229,7 @@ services:
   edge:
     profiles: [pin]
     image: ${REVIVAL_ENVOY_IMAGE:-envoyproxy/envoy:v1.31-latest@sha256:caa5b411be1633b90023592a34a7e010c933d6e60206c758f631485e53006865}
+    entrypoint: [envoy]
     command: [-c, /etc/cosmos-edge/envoy.yaml]
     restart: unless-stopped
     read_only: true

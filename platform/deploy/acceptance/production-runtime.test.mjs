@@ -112,7 +112,8 @@ exit 0
   assert.match(source, /pinRelease\.status !== 200 && pinRelease\.status !== 404/u);
   assert.doesNotMatch(source, /Object\.hasOwn\(identity, 'environment'\)/u);
   assert.match(source, /REVIVAL_DEVICE_EDGE_IPV4/u);
-  assert.match(source, /-connect "\$edge_ipv4:443" -servername api\.cosmos\.humane\.cloud/u);
+  assert.match(source, /-connect 127\.0\.0\.1:443 -servername api\.cosmos\.humane\.cloud/u);
+  assert.doesNotMatch(source, /-connect "\$edge_ipv4:443"/u);
   assert.match(source, /dk\.andersmadsen\.ai-pin-revival\.release/u);
   assert.match(source, /org\.opencontainers\.image\.revision/u);
 });
