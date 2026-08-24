@@ -9,6 +9,7 @@ import android.net.Uri
 import android.os.Binder
 import android.os.Bundle
 import android.os.ParcelFileDescriptor
+import android.os.UserManager
 import android.provider.Settings
 import android.security.keystore.KeyProperties
 import android.security.keystore.KeyProtection
@@ -208,6 +209,7 @@ class CosmosIdentityProvider : ContentProvider() {
 
         val callingIdentity = Binder.clearCallingIdentity()
         return try {
+            requireUserUnlocked()
             val bundle = CosmosAttestationBundle.parse(staged.readText(Charsets.UTF_8))
             val hardwareId = readSystemProperty("ro.boot.deviceid")
             check(hardwareId.isNotBlank()) { "Pin hardware id is unavailable" }
@@ -243,6 +245,7 @@ class CosmosIdentityProvider : ContentProvider() {
 
         val callingIdentity = Binder.clearCallingIdentity()
         return try {
+            requireUserUnlocked()
             val bytes = staged.readBytes()
             try {
                 check(bytes.size.toLong() in 1..MAX_BUNDLE_BYTES)
@@ -256,8 +259,9 @@ class CosmosIdentityProvider : ContentProvider() {
                 // checked before the transaction journal or Settings.Global is touched.
                 envelope.identity.validate()
 
+                val settings = AndroidCosmosSettingsPort(requireNotNull(context).contentResolver)
                 val transaction = CosmosActivationTransaction(
-                    settings = AndroidCosmosSettingsPort(requireNotNull(context).contentResolver),
+                    settings = settings,
                     records = FileCosmosActivationRecordPort(activationRecordFile()),
                 )
                 activationResultBundle(
@@ -265,7 +269,8 @@ class CosmosIdentityProvider : ContentProvider() {
                         apiEndpoint = envelope.apiEndpoint,
                         onboardingEndpoint = envelope.onboardingEndpoint,
                         edgeIpv4 = envelope.edgeIpv4,
-                        identity = AndroidCosmosIdentityPort(envelope.identity),
+                        root = envelope.identity.rootDescriptor,
+                        identity = AndroidCosmosIdentityPort(envelope.identity, settings),
                     ),
                 )
             } finally {
@@ -291,12 +296,18 @@ class CosmosIdentityProvider : ContentProvider() {
     private fun deactivateCosmos(): Bundle {
         val callingIdentity = Binder.clearCallingIdentity()
         return try {
+            val settings = AndroidCosmosSettingsPort(requireNotNull(context).contentResolver)
             val transaction = CosmosActivationTransaction(
-                settings = AndroidCosmosSettingsPort(requireNotNull(context).contentResolver),
+                settings = settings,
                 records = FileCosmosActivationRecordPort(activationRecordFile()),
             )
             activationResultBundle(
-                transaction.deactivate(AndroidCosmosIdentityPort(candidateBundle = null)),
+                transaction.deactivate(
+                    AndroidCosmosIdentityPort(
+                        candidateBundle = null,
+                        settings = settings,
+                    ),
+                ),
             )
         } catch (error: Throwable) {
             Log.e(TAG, "Cosmos deactivation failed (${error.javaClass.simpleName})")
@@ -320,7 +331,10 @@ class CosmosIdentityProvider : ContentProvider() {
             val resolver = requireNotNull(context).contentResolver
             val settings = AndroidCosmosSettingsPort(resolver)
             val record = FileCosmosActivationRecordPort(activationRecordFile()).load()
-            val identity = AndroidCosmosIdentityPort(candidateBundle = null).current()
+            val identity = AndroidCosmosIdentityPort(candidateBundle = null, settings = settings).current()
+            val root = parseProvisionedCosmosRoot(
+                settings.read(CosmosActivationContract.ROOT_CERTIFICATE_SETTING),
+            )
             Bundle().apply {
                 putBoolean(RESULT_OK, true)
                 putString(
@@ -336,6 +350,7 @@ class CosmosIdentityProvider : ContentProvider() {
                 putBoolean(RESULT_PRESENT, identity != null)
                 putBoolean("identity_usable", identity?.usableForTls == true)
                 putString(RESULT_FINGERPRINT, identity?.fingerprintSha256)
+                putString("root_certificate_sha256", root?.let { sha256Hex(it.encoded) })
                 putString("api_endpoint", record?.apiEndpoint ?: CosmosActivationContract.API_ENDPOINT)
                 putString(
                     "onboarding_endpoint",
@@ -361,12 +376,16 @@ class CosmosIdentityProvider : ContentProvider() {
         result.onboardingEndpoint?.let { putString("onboarding_endpoint", it) }
         result.edgeIpv4?.let { putString("edge_ipv4", it) }
         result.identityFingerprintSha256?.let { putString(RESULT_FINGERPRINT, it) }
+        result.rootCertificateFingerprintSha256?.let {
+            putString("root_certificate_sha256", it)
+        }
     }
 
     private fun identityStatus(): Bundle {
         val callingIdentity = Binder.clearCallingIdentity()
         return try {
-            val identity = AndroidCosmosIdentityPort(candidateBundle = null).current()
+            val settings = AndroidCosmosSettingsPort(requireNotNull(context).contentResolver)
+            val identity = AndroidCosmosIdentityPort(candidateBundle = null, settings = settings).current()
             if (identity == null) {
                 Bundle().apply {
                     putBoolean(RESULT_OK, true)
@@ -405,6 +424,10 @@ class CosmosIdentityProvider : ContentProvider() {
             }
             val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
             if (store.containsAlias(KEY_ALIAS)) store.deleteEntry(KEY_ALIAS)
+            check(AndroidCosmosSettingsPort(resolver).write(
+                CosmosActivationContract.ROOT_CERTIFICATE_SETTING,
+                null,
+            ))
             stagingFile().delete()
             incomingFile().delete()
             Bundle().apply {
@@ -438,6 +461,11 @@ class CosmosIdentityProvider : ContentProvider() {
         File(requireNotNull(context).filesDir, ACTIVATION_RECORD_NAME)
 
     private fun readSystemProperty(name: String): String = readAndroidSystemProperty(name)
+
+    private fun requireUserUnlocked() {
+        val userManager = requireNotNull(context).getSystemService(UserManager::class.java)
+        check(userManager?.isUserUnlocked == true) { "Unlock the Pin before Cosmos activation" }
+    }
 
     private fun result(ok: Boolean, message: String): Bundle = Bundle().apply {
         putBoolean(RESULT_OK, ok)
@@ -481,12 +509,19 @@ internal data class CosmosAttestationBundle(
     val privateKey: java.security.PrivateKey,
     val leaf: X509Certificate,
     val issuer: X509Certificate,
+    val root: X509Certificate,
 ) {
     val descriptor: CosmosIdentityDescriptor
         get() = CosmosIdentityDescriptor(
             fingerprintSha256 = sha256Hex(leaf.encoded),
             subject = leaf.subjectX500Principal.name,
             usableForTls = true,
+        )
+
+    val rootDescriptor: CosmosRootDescriptor
+        get() = CosmosRootDescriptor(
+            certificateDerBase64 = Base64.getEncoder().encodeToString(root.encoded),
+            fingerprintSha256 = sha256Hex(root.encoded),
         )
 
     fun importIntoAndroidKeyStore(alias: String) {
@@ -497,7 +532,7 @@ internal data class CosmosAttestationBundle(
             check(existing != null && MessageDigest.isEqual(existing.encoded, leaf.encoded)) {
                 "A different clone identity already exists"
             }
-            check(androidKeyStoreIdentity(store, alias)?.usableForTls == true) {
+            check(androidKeyStoreIdentity(store, alias, root)?.usableForTls == true) {
                 "The existing clone identity is not usable for TLS"
             }
             return
@@ -518,7 +553,7 @@ internal data class CosmosAttestationBundle(
                 KeyStore.PrivateKeyEntry(privateKey, arrayOf(leaf, issuer)),
                 protection,
             )
-            val installed = androidKeyStoreIdentity(store, alias)
+            val installed = androidKeyStoreIdentity(store, alias, root)
             check(installed?.fingerprintSha256 == descriptor.fingerprintSha256) {
                 "Imported clone certificate is unavailable"
             }
@@ -536,9 +571,10 @@ internal data class CosmosAttestationBundle(
     fun validate() {
         check(deviceId.isNotEmpty() && deviceId.all(Char::isHexDigit)) { "Invalid device id" }
         check(privateKey.algorithm.equals("EC", ignoreCase = true)) { "Clone key must be EC" }
-        val root = parseCertificate(CLONE_ROOT_PEM)
-        root.verify(root.publicKey)
+        validateCosmosRoot(root)
+        check(issuer.issuerX500Principal == root.subjectX500Principal)
         issuer.verify(root.publicKey)
+        check(leaf.issuerX500Principal == issuer.subjectX500Principal)
         leaf.verify(issuer.publicKey)
         root.checkValidity()
         issuer.checkValidity()
@@ -578,6 +614,9 @@ internal data class CosmosAttestationBundle(
                 privateKey = privateKey,
                 leaf = parseCertificate(objectValue.getString("certificate_pem")),
                 issuer = parseCertificate(objectValue.getString("ca_certificate_pem")),
+                root = checkNotNull(
+                    parseProvisionedCosmosRoot(objectValue.getString("root_certificate_der_b64")),
+                ) { "Cosmos root certificate is invalid" },
             )
         }
     }
@@ -619,13 +658,17 @@ private class AndroidCosmosSettingsPort(
 
 private class AndroidCosmosIdentityPort(
     private val candidateBundle: CosmosAttestationBundle?,
+    private val settings: CosmosSettingsPort,
 ) : CosmosIdentityPort {
     override fun candidate(): CosmosIdentityDescriptor =
         candidateBundle?.descriptor ?: error("No candidate identity was supplied")
 
     override fun current(): CosmosIdentityDescriptor? {
         val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-        return androidKeyStoreIdentity(store, CosmosActivationContract.ATTESTATION_KEY_ALIAS)
+        val root = parseProvisionedCosmosRoot(
+            settings.read(CosmosActivationContract.ROOT_CERTIFICATE_SETTING),
+        )
+        return androidKeyStoreIdentity(store, CosmosActivationContract.ATTESTATION_KEY_ALIAS, root)
     }
 
     override fun installCandidate(): CosmosIdentityDescriptor {
@@ -648,6 +691,7 @@ private class AndroidCosmosIdentityPort(
 private fun androidKeyStoreIdentity(
     store: KeyStore,
     alias: String,
+    root: X509Certificate?,
 ): CosmosIdentityDescriptor? {
     if (!store.containsAlias(alias)) return null
     val leaf = store.getCertificate(alias) as? X509Certificate
@@ -661,7 +705,7 @@ private fun androidKeyStoreIdentity(
             ?: error("Cosmos identity certificate chain is missing")
         check(chain.size >= 2) { "Cosmos identity certificate chain is incomplete" }
         val issuer = chain[1]
-        validateStoredCosmosIdentity(key, leaf, issuer)
+        validateStoredCosmosIdentity(key, leaf, issuer, checkNotNull(root))
     }.isSuccess
     return CosmosIdentityDescriptor(
         fingerprintSha256 = fingerprint,
@@ -674,11 +718,13 @@ private fun validateStoredCosmosIdentity(
     privateKey: java.security.PrivateKey,
     leaf: X509Certificate,
     issuer: X509Certificate,
+    root: X509Certificate,
 ) {
     check(privateKey.algorithm.equals("EC", ignoreCase = true))
-    val root = parseCertificate(CLONE_ROOT_PEM)
-    root.verify(root.publicKey)
+    validateCosmosRoot(root)
+    check(issuer.issuerX500Principal == root.subjectX500Principal)
     issuer.verify(root.publicKey)
+    check(leaf.issuerX500Principal == issuer.subjectX500Principal)
     leaf.verify(issuer.publicKey)
     root.checkValidity()
     issuer.checkValidity()
@@ -716,9 +762,10 @@ private class FileCosmosActivationRecordPort(
     private val file: File,
 ) : CosmosActivationRecordPort {
     companion object {
-        private const val VERSION = 1
-        private const val MAX_RECORD_BYTES = 8 * 1024L
+        private const val VERSION = 2
+        private const val MAX_RECORD_BYTES = 24 * 1024L
         private const val MAX_SETTING_CHARS = 128
+        private const val MAX_ROOT_SETTING_CHARS = 16 * 1024
     }
 
     override fun load(): CosmosActivationRecord? {
@@ -765,8 +812,13 @@ private class FileCosmosActivationRecordPort(
         .put("phase", record.phase.name)
         .put("previous_remote_mode", record.previousRemoteMode ?: JSONObject.NULL)
         .put("previous_edge_ipv4", record.previousEdgeIpv4 ?: JSONObject.NULL)
+        .put(
+            "previous_root_certificate_der_b64",
+            record.previousRootCertificateDerBase64 ?: JSONObject.NULL,
+        )
         .put("identity_was_present", record.identityWasPresent)
         .put("target_fingerprint_sha256", record.targetFingerprintSha256)
+        .put("target_root_fingerprint_sha256", record.targetRootFingerprintSha256)
         .put("api_endpoint", record.apiEndpoint)
         .put("onboarding_endpoint", record.onboardingEndpoint)
         .put("target_edge_ipv4", record.targetEdgeIpv4)
@@ -776,9 +828,17 @@ private class FileCosmosActivationRecordPort(
         val phase = CosmosActivationPhase.valueOf(value.getString("phase"))
         val previousRemote = nullableBoundedString(value, "previous_remote_mode")
         val previousEdge = nullableBoundedString(value, "previous_edge_ipv4")
+        val previousRoot = nullableBoundedString(
+            value,
+            "previous_root_certificate_der_b64",
+            MAX_ROOT_SETTING_CHARS,
+        )
         val fingerprint = value.getString("target_fingerprint_sha256")
             .lowercase(Locale.US)
         check(fingerprint.length == 64 && fingerprint.all(Char::isHexDigit))
+        val rootFingerprint = value.getString("target_root_fingerprint_sha256")
+            .lowercase(Locale.US)
+        check(rootFingerprint.length == 64 && rootFingerprint.all(Char::isHexDigit))
         val plan = CosmosActivationContract.plan(
             apiEndpoint = value.getString("api_endpoint"),
             onboardingEndpoint = value.getString("onboarding_endpoint"),
@@ -788,18 +848,24 @@ private class FileCosmosActivationRecordPort(
             phase = phase,
             previousRemoteMode = previousRemote,
             previousEdgeIpv4 = previousEdge,
+            previousRootCertificateDerBase64 = previousRoot,
             identityWasPresent = value.getBoolean("identity_was_present"),
             targetFingerprintSha256 = fingerprint,
+            targetRootFingerprintSha256 = rootFingerprint,
             apiEndpoint = plan.apiEndpoint,
             onboardingEndpoint = plan.onboardingEndpoint,
             targetEdgeIpv4 = plan.edgeIpv4,
         )
     }
 
-    private fun nullableBoundedString(value: JSONObject, key: String): String? {
+    private fun nullableBoundedString(
+        value: JSONObject,
+        key: String,
+        maximumChars: Int = MAX_SETTING_CHARS,
+    ): String? {
         if (value.isNull(key)) return null
         return value.getString(key).also { text ->
-            check(text.length <= MAX_SETTING_CHARS)
+            check(text.length <= maximumChars)
         }
     }
 }
@@ -837,15 +903,23 @@ private fun sha256Hex(bytes: ByteArray): String =
         "%02x".format(byte.toInt() and 0xff)
     }
 
-private const val CLONE_ROOT_PEM = """-----BEGIN CERTIFICATE-----
-MIIBzzCCAXWgAwIBAgIUG0G9aHsMfyhLhDfspkqgDopmdXwwCgYIKoZIzj0EAwIw
-PTEbMBkGA1UECgwSaHVtYW5lLWNhcnJ5LWNsb25lMR4wHAYDVQQDDBVDYXJyeSBD
-bG9uZSBSb290IEVDIDEwHhcNMjYwODAxMTEzMTQ5WhcNMzYwNzI5MTEzMTQ5WjA9
-MRswGQYDVQQKDBJodW1hbmUtY2FycnktY2xvbmUxHjAcBgNVBAMMFUNhcnJ5IENs
-b25lIFJvb3QgRUMgMTBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABM7QiKCUWid8
-QLtJVzmr+bLLEvyRIrel6v+gpdY59d2DgmCo3Qv1f0eNPTHYvIw08Wr+gz7wI1pt
-nRGPzfZZv4ujUzBRMB0GA1UdDgQWBBRk8MPuXmmegN70uNHAAz3ewVE5BzAfBgNV
-HSMEGDAWgBRk8MPuXmmegN70uNHAAz3ewVE5BzAPBgNVHRMBAf8EBTADAQH/MAoG
-CCqGSM49BAMCA0gAMEUCIHWX228mwwn7IACG3gFPYKpVMjlCh1z9cME+aMmIoFUI
-AiEArCIbto59wRwtioqqBalsCroF8W5OjMCzqE3jlvN4w18=
------END CERTIFICATE-----"""
+internal fun parseProvisionedCosmosRoot(encoded: String?): X509Certificate? = runCatching {
+    require(!encoded.isNullOrEmpty() && encoded.length <= 16_384)
+    val der = Base64.getDecoder().decode(encoded)
+    require(der.size in 1..8192)
+    require(Base64.getEncoder().encodeToString(der) == encoded)
+    val certificate = CertificateFactory.getInstance("X.509")
+        .generateCertificate(ByteArrayInputStream(der)) as X509Certificate
+    require(MessageDigest.isEqual(certificate.encoded, der))
+    validateCosmosRoot(certificate)
+    certificate
+}.getOrNull()
+
+private fun validateCosmosRoot(root: X509Certificate) {
+    check(root.basicConstraints >= 0) { "Cosmos root is not a CA" }
+    check(root.subjectX500Principal == root.issuerX500Principal) {
+        "Cosmos root is not self-issued"
+    }
+    root.verify(root.publicKey)
+    root.checkValidity()
+}

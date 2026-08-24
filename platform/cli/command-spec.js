@@ -30,10 +30,21 @@ function versionInfo() {
   if (version.schemaVersion !== 1 || typeof version.version !== 'string' || !version.version) {
     throw new Error(`${VERSION_FILE} is not a supported schema-version 1 descriptor`);
   }
+  const revision = version.revision ?? 'source';
+  const application = version.application ?? null;
+  if (revision !== 'source' && !/^[0-9a-f]{40}$/u.test(revision)) {
+    throw new Error(`${VERSION_FILE} has an invalid source revision`);
+  }
+  if (application !== null &&
+      !/^oci:\/\/ghcr\.io\/[a-z0-9][a-z0-9._/-]*@sha256:[0-9a-f]{64}$/u.test(application)) {
+    throw new Error(`${VERSION_FILE} has an invalid OCI application reference`);
+  }
   const contract = operatorContract();
   return Object.freeze({
     product: 'Ai Pin Revival',
     version: version.version,
+    revision,
+    application,
     contractVersion: contract.contractVersion,
   });
 }
@@ -100,7 +111,7 @@ const DETAILS = Object.freeze({
   'verify.production': 'Validates healthy services, the configured Center release, OIDC, capture routing, and the configured Pin certificate chain when enabled.',
   'setup.local': 'Creates the external local configuration and generated secrets. It does not start containers.',
   'setup.contributor': 'Creates the external contributor configuration and caches. It does not run gates.',
-  'setup.production': 'Requires --domain, --acme-email and --operator-email initially. Optional profiles: pin, search, spotify, observability; --no-profiles clears them. Production uses prebuilt images; registry-distributed Compose is Phase 2.',
+  'setup.production': 'Requires --domain, --acme-email and --operator-email initially. Optional profiles: pin, search, spotify, observability; --no-profiles clears them. Production releases use prebuilt images and a digest-pinned OCI Compose application.',
   'setup.pin': 'Creates host-side Pin prerequisites. It never reads from or writes to a device.',
   'setup.status': 'Options: --json. Recomputes readiness from current artifacts; no progress state is stored.',
   'config.path': 'Options: --json. Prints the active external runtime configuration path.',

@@ -1,0 +1,71 @@
+#!/usr/bin/env node
+'use strict';
+
+const [nodeMajor, nodeMinor] = process.versions.node.split('.').map(Number);
+if (nodeMajor !== 22 || nodeMinor < 14) {
+  process.stderr.write(
+    `error: revival requires Node.js 22.14 or newer on the Node 22 line; observed ${process.version}\n`,
+  );
+  process.exit(126);
+}
+
+const HELP = `Ai Pin Revival operator CLI
+
+Usage:
+  ./revival setup production [options]
+  ./revival setup status [--json]
+  ./revival doctor production [options]
+  ./revival deploy production (--dry-run | --confirm) [options]
+  ./revival verify production [options]
+  ./revival config path|get|set|check|list|template [options]
+  ./revival support-bundle [options]
+  ./revival version [--json]
+
+The production application is pulled from the digest-pinned OCI reference
+stamped into this operator release. Local development and source builds remain
+available from the repository's full ./revival CLI.`;
+
+const rawArgs = process.argv.slice(2);
+if (rawArgs.length === 0 || rawArgs.includes('--help') || rawArgs.includes('-h') || rawArgs[0] === 'help') {
+  process.stdout.write(`${HELP}\n`);
+  process.exit(0);
+}
+
+const { versionInfo } = require('./platform/cli/command-spec');
+if (rawArgs[0] === '--version' || rawArgs[0] === 'version') {
+  const options = rawArgs.slice(1);
+  if ((rawArgs[0] === '--version' && options.length > 0) ||
+      options.length > 1 || (options.length === 1 && options[0] !== '--json')) {
+    process.stderr.write('error: usage: ./revival version [--json] | ./revival --version\n');
+    process.exit(64);
+  }
+  try {
+    const descriptor = versionInfo();
+    process.stdout.write(options[0] === '--json'
+      ? `${JSON.stringify(descriptor)}\n`
+      : `${descriptor.product} ${descriptor.version} (${descriptor.revision})\n`);
+    process.exit(0);
+  } catch (error) {
+    process.stderr.write(`error: ${error.message}\n`);
+    process.exit(1);
+  }
+}
+
+const { fail } = require('./platform/cli/context');
+const { configCommand } = require('./platform/cli/config');
+const { deployProduction, productionDoctor, verifyProduction } = require('./platform/cli/production');
+const { setupCommand } = require('./platform/cli/setup');
+const { supportBundleCommand } = require('./platform/cli/support-bundle');
+const { runTimedBoundary } = require('./platform/cli/timing');
+
+runTimedBoundary(() => {
+  const args = [...rawArgs];
+  const command = args.shift();
+  if (command === 'setup' && ['production', 'status'].includes(args[0])) setupCommand(args);
+  else if (command === 'doctor' && args.shift() === 'production') productionDoctor(args);
+  else if (command === 'deploy') deployProduction(args);
+  else if (command === 'verify') verifyProduction(args);
+  else if (command === 'config') configCommand(args);
+  else if (command === 'support-bundle') supportBundleCommand(args);
+  else fail(`unsupported operator command: ${rawArgs.join(' ')}`, 64);
+});

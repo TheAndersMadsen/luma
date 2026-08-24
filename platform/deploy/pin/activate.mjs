@@ -19,21 +19,6 @@ const API_ENDPOINT = "https://api.cosmos.humane.cloud";
 const ONBOARDING_ENDPOINT = "https://onboarding.cosmos.humane.cloud";
 const DEVICE_ID_RE = /^[0-9a-f]+$/u;
 
-// Exact certificate pinned by the installed runtime and hook. Host activation
-// accepts no flag or environment override for this trust root.
-export const CLONE_ROOT_PEM = `-----BEGIN CERTIFICATE-----
-MIIBzzCCAXWgAwIBAgIUG0G9aHsMfyhLhDfspkqgDopmdXwwCgYIKoZIzj0EAwIw
-PTEbMBkGA1UECgwSaHVtYW5lLWNhcnJ5LWNsb25lMR4wHAYDVQQDDBVDYXJyeSBD
-bG9uZSBSb290IEVDIDEwHhcNMjYwODAxMTEzMTQ5WhcNMzYwNzI5MTEzMTQ5WjA9
-MRswGQYDVQQKDBJodW1hbmUtY2FycnktY2xvbmUxHjAcBgNVBAMMFUNhcnJ5IENs
-b25lIFJvb3QgRUMgMTBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABM7QiKCUWid8
-QLtJVzmr+bLLEvyRIrel6v+gpdY59d2DgmCo3Qv1f0eNPTHYvIw08Wr+gz7wI1pt
-nRGPzfZZv4ujUzBRMB0GA1UdDgQWBBRk8MPuXmmegN70uNHAAz3ewVE5BzAfBgNV
-HSMEGDAWgBRk8MPuXmmegN70uNHAAz3ewVE5BzAPBgNVHRMBAf8EBTADAQH/MAoG
-CCqGSM49BAMCA0gAMEUCIHWX228mwwn7IACG3gFPYKpVMjlCh1z9cME+aMmIoFUI
-AiEArCIbto59wRwtioqqBalsCroF8W5OjMCzqE3jlvN4w18=
------END CERTIFICATE-----`;
-
 export class PinActivationError extends Error {
   constructor(code, message) {
     super(message);
@@ -100,7 +85,7 @@ function parseCredentialDocument(source) {
       fail("credential-invalid", `credential file must not choose ${key}; activation fixes its own endpoints`);
     }
   }
-  for (const key of ["device_id", "certificate_pem", "private_key_pem", "ca_certificate_pem"]) {
+  for (const key of ["device_id", "certificate_pem", "private_key_pem", "ca_certificate_pem", "root_certificate_pem"]) {
     if (typeof value[key] !== "string" || value[key].length === 0) {
       fail("credential-invalid", `credential file is missing ${key}`);
     }
@@ -112,18 +97,16 @@ function parseCredentialDocument(source) {
     certificatePem: value.certificate_pem,
     privateKeyPem: value.private_key_pem,
     caCertificatePem: value.ca_certificate_pem,
+    rootCertificatePem: value.root_certificate_pem,
   });
 }
 
-/**
- * Full fixed-chain validation, parameterized only for isolated host tests.
- * Production calls validateActivationCredential(), whose root is not
- * caller-selectable.
- */
-export function validateCredentialAgainstRoot(source, rootPem, options = {}) {
+/** Validate the complete operator-issued activation document. */
+export function validateActivationCredential(source, options = {}) {
   const parsed = parseCredentialDocument(source);
   requireSinglePem(parsed.certificatePem, "device certificate", "CERTIFICATE");
   requireSinglePem(parsed.caCertificatePem, "attestation CA certificate", "CERTIFICATE");
+  requireSinglePem(parsed.rootCertificatePem, "operator root certificate", "CERTIFICATE");
   requireSinglePem(parsed.privateKeyPem, "device private key", "PRIVATE KEY");
 
   let root;
@@ -131,7 +114,7 @@ export function validateCredentialAgainstRoot(source, rootPem, options = {}) {
   let leaf;
   let key;
   try {
-    root = new X509Certificate(rootPem);
+    root = new X509Certificate(parsed.rootCertificatePem);
     issuer = new X509Certificate(parsed.caCertificatePem);
     leaf = new X509Certificate(parsed.certificatePem);
   } catch {
@@ -143,14 +126,14 @@ export function validateCredentialAgainstRoot(source, rootPem, options = {}) {
     fail("credential-invalid", "credential private key is not usable PKCS#8 PEM");
   }
 
-  validNow(root, "pinned clone root", options.now);
+  validNow(root, "operator root certificate", options.now);
   validNow(issuer, "attestation CA certificate", options.now);
   validNow(leaf, "device certificate", options.now);
-  if (!root.ca || !root.verify(root.publicKey)) {
-    fail("credential-chain", "pinned clone root is not a self-signed CA");
+  if (!root.ca || !root.checkIssued(root) || !root.verify(root.publicKey)) {
+    fail("credential-chain", "operator root certificate is not a self-signed CA");
   }
   if (!issuer.ca || !issuer.checkIssued(root) || !issuer.verify(root.publicKey)) {
-    fail("credential-chain", "attestation CA does not chain to the pinned clone root");
+    fail("credential-chain", "attestation CA does not chain to the operator root");
   }
   if (leaf.ca || !leaf.checkIssued(issuer) || !leaf.verify(issuer.publicKey)) {
     fail("credential-chain", "device certificate does not chain to the attestation CA");
@@ -171,11 +154,9 @@ export function validateCredentialAgainstRoot(source, rootPem, options = {}) {
     fingerprintSha256: fingerprint(leaf),
     subject: leaf.subject,
     validTo: leaf.validTo,
+    rootCertificateDerB64: root.raw.toString("base64"),
+    rootFingerprintSha256: fingerprint(root),
   });
-}
-
-export function validateActivationCredential(source, options = {}) {
-  return validateCredentialAgainstRoot(source, CLONE_ROOT_PEM, options);
 }
 
 function requireCredentialFile(candidate) {
@@ -208,6 +189,7 @@ export function buildActivationEnvelope(credential, edgeIpv4) {
     certificate_pem: credential.certificatePem,
     private_key_pem: credential.privateKeyPem,
     ca_certificate_pem: credential.caCertificatePem,
+    root_certificate_der_b64: credential.rootCertificateDerB64,
   });
 }
 
@@ -228,6 +210,7 @@ export function parseProviderBundle(output) {
     rollbackComplete: read("rollback_complete", "true|false") === "true",
     edgeIpv4: read("edge_ipv4", "[0-9.]+"),
     fingerprintSha256: read("fingerprint_sha256", "[0-9a-fA-F]{64}")?.toLowerCase() ?? null,
+    rootCertificateSha256: read("root_certificate_sha256", "[0-9a-fA-F]{64}")?.toLowerCase() ?? null,
     apiEndpoint: read("api_endpoint", "https://api\\.cosmos\\.humane\\.cloud"),
     onboardingEndpoint: read("onboarding_endpoint", "https://onboarding\\.cosmos\\.humane\\.cloud"),
     identityPresent: read("present", "true|false") === "true",
@@ -273,6 +256,15 @@ function hardwareId(runtime, serial) {
   return id;
 }
 
+function requireUnlockedCredentialStorage(runtime, serial) {
+  const available = adb(runtime, serial, ["shell", "getprop", "sys.user.0.ce_available"])
+    .trim()
+    .toLowerCase();
+  if (available !== "1" && available !== "true") {
+    fail("device-locked", "unlock the Pin and retry activation");
+  }
+}
+
 export function readActivationStatus(runtime, serial) {
   const selected = ensureExactPinTarget(runtime, serial);
   return parseProviderBundle(adb(runtime, selected, [
@@ -289,6 +281,7 @@ function verifyActivePostcondition(status, expected) {
     !status.identityUsable ||
     status.edgeIpv4 !== expected.edgeIpv4 ||
     status.fingerprintSha256 !== expected.fingerprintSha256 ||
+    status.rootCertificateSha256 !== expected.rootCertificateSha256 ||
     status.apiEndpoint !== API_ENDPOINT ||
     status.onboardingEndpoint !== ONBOARDING_ENDPOINT
   ) {
@@ -329,6 +322,7 @@ export function parseActivationArgs(args) {
 
 export function activatePin(options, runtime = defaultRuntime()) {
   const serial = ensureExactPinTarget(runtime, options.serial);
+  requireUnlockedCredentialStorage(runtime, serial);
   const file = requireCredentialFile(options.credentialFile);
   let sourceBytes;
   let envelopeSource;
@@ -346,6 +340,7 @@ export function activatePin(options, runtime = defaultRuntime()) {
     runtime.out(
       `Plan: activate Pin ${serial} for edge ${envelope.edge_ipv4}.\n` +
       `  credential SHA-256: ${credential.fingerprintSha256}\n` +
+      `  root SHA-256: ${credential.rootFingerprintSha256}\n` +
       `  current state: ${before.state ?? "unknown"}\n` +
       "  endpoints: fixed stock Humane hostnames over HTTPS\n" +
       "No device change has been made. Re-run with --confirm to stage and activate.\n",
@@ -371,6 +366,7 @@ export function activatePin(options, runtime = defaultRuntime()) {
     verifyActivePostcondition(after, {
       edgeIpv4: envelope.edge_ipv4,
       fingerprintSha256: credential.fingerprintSha256,
+      rootCertificateSha256: credential.rootFingerprintSha256,
     });
     runtime.out(`Activated Pin ${serial}; provider postconditions match.\n`);
     return Object.freeze({ changed: activation.changed, before, activation, after });

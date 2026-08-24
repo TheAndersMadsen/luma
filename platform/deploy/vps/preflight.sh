@@ -6,6 +6,7 @@ ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 
 env_file="${REVIVAL_ENV_FILE:?REVIVAL_ENV_FILE is required}"
 operator_compose="${REVIVAL_CONFIG_DIR:?REVIVAL_CONFIG_DIR is required}/production/operator.compose.yaml"
+application="${REVIVAL_COMPOSE_APPLICATION:?REVIVAL_COMPOSE_APPLICATION is required}"
 project_name="${COMPOSE_PROJECT_NAME:-ai-pin-revival}"
 
 usage() {
@@ -33,15 +34,27 @@ done
   echo "invalid Compose project name: $project_name" >&2
   exit 1
 }
+[[ "$application" =~ ^oci://ghcr\.io/[a-z0-9][a-z0-9._/-]*@sha256:[0-9a-f]{64}$ ]] || {
+  echo "production application must be an immutable oci://ghcr.io/...@sha256 reference" >&2
+  exit 1
+}
 command -v docker >/dev/null || { echo "docker is required" >&2; exit 1; }
-docker compose version >/dev/null
+compose_version="$(docker compose version --short)" || {
+  echo "Docker Compose 2.34.0 or newer is required" >&2
+  exit 1
+}
+if [[ ! "$compose_version" =~ ^v?([0-9]+)\.([0-9]+)\.([0-9]+)([-+].*)?$ ]] ||
+   (( 10#${BASH_REMATCH[1]:-0} < 2 )) ||
+   (( 10#${BASH_REMATCH[1]:-0} == 2 && 10#${BASH_REMATCH[2]:-0} < 34 )); then
+  echo "Docker Compose 2.34.0 or newer is required; observed ${compose_version:-unknown}" >&2
+  exit 1
+fi
 
 compose=(
   --project-directory "$ROOT"
   --project-name "$project_name"
   --env-file "$env_file"
-  -f "$ROOT/compose.yaml"
-  -f "$ROOT/platform/compose/production.yaml"
+  -f "$application"
   -f "$operator_compose"
 )
 

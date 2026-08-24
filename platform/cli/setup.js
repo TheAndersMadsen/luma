@@ -103,7 +103,7 @@ function setupCommand(args) {
       }
       if (result.pinTrustRoot) info(`Generated Pin trust root: ${result.pinTrustRoot}`);
       info(`Enabled optional profiles: ${result.profiles.join(', ') || 'none'}.`);
-      info('Production uses prebuilt images. Phase 2 will distribute the Compose application itself from the registry.');
+      info('Production uses the digest-pinned OCI Compose application stamped into this operator release.');
       info('NEXT ./revival doctor production');
       return;
     }

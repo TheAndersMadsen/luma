@@ -29,6 +29,8 @@ use serde::Serialize;
 pub const ATTEST_CA_CERT_ENV: &str = "COSMOS_ATTEST_CA_CERT";
 /// PEM (PKCS#8) path of that CA's private key.
 pub const ATTEST_CA_KEY_ENV: &str = "COSMOS_ATTEST_CA_KEY";
+/// PEM path of the self-signed operator root that issued the attestation CA.
+pub const ATTEST_ROOT_CERT_ENV: &str = "COSMOS_ATTEST_ROOT_CERT";
 
 /// A device the operator has issued an attestation credential for.
 ///
@@ -88,6 +90,8 @@ pub struct AttestationBundle {
     pub private_key_pem: String,
     /// The signing CA certificate (PEM), so the device can pin the trust anchor.
     pub ca_certificate_pem: String,
+    /// The operator's self-signed root certificate (PEM).
+    pub root_certificate_pem: String,
 }
 
 /// Why a provisioning request could not be fulfilled, mapped to an HTTP status by
@@ -140,6 +144,7 @@ struct AttestCa {
     key: rcgen::KeyPair,
     certificate: rcgen::Certificate,
     certificate_pem: String,
+    root_certificate_pem: String,
 }
 
 impl AttestCa {
@@ -150,20 +155,27 @@ impl AttestCa {
         let key_path = std::env::var(ATTEST_CA_KEY_ENV)
             .ok()
             .filter(|v| !v.is_empty());
-        match (cert_path, key_path) {
-            (Some(cert), Some(key)) => Self::from_pem_files(&cert, &key).map(Some),
-            (None, None) => Ok(None),
+        let root_path = std::env::var(ATTEST_ROOT_CERT_ENV)
+            .ok()
+            .filter(|v| !v.is_empty());
+        match (cert_path, key_path, root_path) {
+            (Some(cert), Some(key), Some(root)) => {
+                Self::from_pem_files(&cert, &key, &root).map(Some)
+            }
+            (None, None, None) => Ok(None),
             _ => Err(format!(
-                "{ATTEST_CA_CERT_ENV} and {ATTEST_CA_KEY_ENV} must be set together"
+                "{ATTEST_CA_CERT_ENV}, {ATTEST_CA_KEY_ENV}, and {ATTEST_ROOT_CERT_ENV} must be set together"
             )),
         }
     }
 
-    fn from_pem_files(cert_path: &str, key_path: &str) -> Result<Self, String> {
+    fn from_pem_files(cert_path: &str, key_path: &str, root_path: &str) -> Result<Self, String> {
         let cert_pem = std::fs::read_to_string(cert_path)
             .map_err(|error| format!("reading {ATTEST_CA_CERT_ENV} ({cert_path}): {error}"))?;
         let key_pem = std::fs::read_to_string(key_path)
             .map_err(|error| format!("reading {ATTEST_CA_KEY_ENV} ({key_path}): {error}"))?;
+        let root_pem = std::fs::read_to_string(root_path)
+            .map_err(|error| format!("reading {ATTEST_ROOT_CERT_ENV} ({root_path}): {error}"))?;
 
         let key = rcgen::KeyPair::from_pem(&key_pem)
             .map_err(|error| format!("{ATTEST_CA_KEY_ENV} is not a usable PKCS#8 key: {error}"))?;
@@ -181,10 +193,14 @@ impl AttestCa {
         // Same check, same reason, as `enrollment::DucCa::from_pem`.
         {
             let mut reader = std::io::BufReader::new(cert_pem.as_bytes());
-            let certificate_der = rustls_pemfile::certs(&mut reader)
+            let mut certificates = rustls_pemfile::certs(&mut reader);
+            let certificate_der = certificates
                 .next()
                 .ok_or_else(|| format!("{ATTEST_CA_CERT_ENV} contains no certificate"))?
                 .map_err(|error| format!("{ATTEST_CA_CERT_ENV} is not valid PEM: {error}"))?;
+            if certificates.next().is_some() {
+                return Err(format!("{ATTEST_CA_CERT_ENV} must contain one certificate"));
+            }
             let (_, parsed) =
                 x509_parser::parse_x509_certificate(&certificate_der).map_err(|error| {
                     format!("{ATTEST_CA_CERT_ENV} is not a usable certificate: {error}")
@@ -193,6 +209,45 @@ impl AttestCa {
                 return Err(format!(
                     "{ATTEST_CA_KEY_ENV} is not the private key for {ATTEST_CA_CERT_ENV}"
                 ));
+            }
+
+            let mut root_reader = std::io::BufReader::new(root_pem.as_bytes());
+            let mut roots = rustls_pemfile::certs(&mut root_reader);
+            let root_der = roots
+                .next()
+                .ok_or_else(|| format!("{ATTEST_ROOT_CERT_ENV} contains no certificate"))?
+                .map_err(|error| format!("{ATTEST_ROOT_CERT_ENV} is not valid PEM: {error}"))?;
+            if roots.next().is_some() {
+                return Err(format!("{ATTEST_ROOT_CERT_ENV} must contain one certificate"));
+            }
+            let (_, root) = x509_parser::parse_x509_certificate(&root_der).map_err(|error| {
+                format!("{ATTEST_ROOT_CERT_ENV} is not a usable certificate: {error}")
+            })?;
+            if !root.is_ca() || root.subject() != root.issuer() {
+                return Err(format!(
+                    "{ATTEST_ROOT_CERT_ENV} must be a self-signed CA certificate"
+                ));
+            }
+            root.verify_signature(Some(root.public_key())).map_err(|error| {
+                format!("{ATTEST_ROOT_CERT_ENV} is not self-signed: {error}")
+            })?;
+            if !root.validity().is_valid() {
+                return Err(format!("{ATTEST_ROOT_CERT_ENV} is not currently valid"));
+            }
+            if !parsed.is_ca() || parsed.issuer() != root.subject() {
+                return Err(format!(
+                    "{ATTEST_CA_CERT_ENV} was not issued by {ATTEST_ROOT_CERT_ENV}"
+                ));
+            }
+            parsed
+                .verify_signature(Some(root.public_key()))
+                .map_err(|error| {
+                    format!(
+                        "{ATTEST_CA_CERT_ENV} does not chain to {ATTEST_ROOT_CERT_ENV}: {error}"
+                    )
+                })?;
+            if !parsed.validity().is_valid() {
+                return Err(format!("{ATTEST_CA_CERT_ENV} is not currently valid"));
             }
         }
 
@@ -210,6 +265,7 @@ impl AttestCa {
             key,
             certificate,
             certificate_pem: cert_pem,
+            root_certificate_pem: root_pem,
         })
     }
 }
@@ -284,6 +340,7 @@ pub fn mint(device_id: &str, product: &str) -> Result<AttestationBundle, Provisi
         certificate_pem: certificate.pem(),
         private_key_pem: device_key.serialize_pem(),
         ca_certificate_pem: ca.certificate_pem,
+        root_certificate_pem: ca.root_certificate_pem,
     })
 }
 
@@ -313,11 +370,13 @@ mod tests {
             unsafe {
                 std::env::set_var(ATTEST_CA_CERT_ENV, &cert_path);
                 std::env::set_var(ATTEST_CA_KEY_ENV, &key_path);
+                std::env::set_var(ATTEST_ROOT_CERT_ENV, &cert_path);
             }
             let bundle = mint("00aa11bb", "00000001");
             unsafe {
                 std::env::remove_var(ATTEST_CA_CERT_ENV);
                 std::env::remove_var(ATTEST_CA_KEY_ENV);
+                std::env::remove_var(ATTEST_ROOT_CERT_ENV);
             }
             bundle
         }
@@ -385,7 +444,11 @@ mod tests {
         // Matched by hand rather than `expect_err`: `AttestCa` deliberately has
         // no `Debug`, because it holds the CA private key.
         let Err(error) =
-            AttestCa::from_pem_files(cert_path.to_str().unwrap(), key_path.to_str().unwrap())
+            AttestCa::from_pem_files(
+                cert_path.to_str().unwrap(),
+                key_path.to_str().unwrap(),
+                cert_path.to_str().unwrap(),
+            )
         else {
             panic!("a mismatched pair must not load");
         };
@@ -397,8 +460,76 @@ mod tests {
         // And the matching pair still loads, so the assertion above pins the
         // pairing rather than a blanket refusal.
         std::fs::write(&key_path, ca_key.serialize_pem()).unwrap();
-        AttestCa::from_pem_files(cert_path.to_str().unwrap(), key_path.to_str().unwrap())
+        AttestCa::from_pem_files(
+            cert_path.to_str().unwrap(),
+            key_path.to_str().unwrap(),
+            cert_path.to_str().unwrap(),
+        )
             .expect("the real pair loads");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_wrong_or_non_self_signed_root_is_refused() {
+        let issuer_key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
+        let mut issuer_params = rcgen::CertificateParams::new(Vec::<String>::new()).unwrap();
+        issuer_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        issuer_params
+            .distinguished_name
+            .push(rcgen::DnType::CommonName, "Attestation intermediate");
+        let issuer = issuer_params.self_signed(&issuer_key).unwrap();
+
+        let stranger_key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
+        let mut stranger_params = rcgen::CertificateParams::new(Vec::<String>::new()).unwrap();
+        stranger_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        stranger_params
+            .distinguished_name
+            .push(rcgen::DnType::CommonName, "Stranger root");
+        let stranger = stranger_params.self_signed(&stranger_key).unwrap();
+
+        let dir = std::env::temp_dir().join(format!(
+            "cosmos-attest-root-validation-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cert_path = dir.join("ca.crt");
+        let key_path = dir.join("ca.key");
+        let root_path = dir.join("root.crt");
+        std::fs::write(&cert_path, issuer.pem()).unwrap();
+        std::fs::write(&key_path, issuer_key.serialize_pem()).unwrap();
+        std::fs::write(&root_path, stranger.pem()).unwrap();
+
+        let wrong_chain = AttestCa::from_pem_files(
+            cert_path.to_str().unwrap(),
+            key_path.to_str().unwrap(),
+            root_path.to_str().unwrap(),
+        )
+        .err()
+        .expect("an unrelated root must be rejected");
+        assert!(wrong_chain.contains(ATTEST_ROOT_CERT_ENV));
+
+        let delegated_root_key =
+            rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
+        let mut delegated_root_params =
+            rcgen::CertificateParams::new(Vec::<String>::new()).unwrap();
+        delegated_root_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        delegated_root_params
+            .distinguished_name
+            .push(rcgen::DnType::CommonName, "Delegated non-root CA");
+        let delegated_root = delegated_root_params
+            .signed_by(&delegated_root_key, &stranger, &stranger_key)
+            .unwrap();
+        std::fs::write(&root_path, delegated_root.pem()).unwrap();
+
+        let non_self_signed = AttestCa::from_pem_files(
+            cert_path.to_str().unwrap(),
+            key_path.to_str().unwrap(),
+            root_path.to_str().unwrap(),
+        )
+        .err()
+        .expect("a delegated CA must not be accepted as the root");
+        assert!(non_self_signed.contains("self-signed"));
 
         std::fs::remove_dir_all(&dir).ok();
     }

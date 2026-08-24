@@ -13,6 +13,7 @@ import java.security.KeyFactory
 import java.security.Principal
 import java.security.PrivateKey
 import java.security.KeyStore
+import java.security.MessageDigest
 import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
 import java.security.spec.PKCS8EncodedKeySpec
@@ -33,6 +34,7 @@ internal object CosmosRemoteTransport {
 
     internal const val ENABLED_SETTING = "penumbra_cosmos_remote_mode"
     internal const val EDGE_IPV4_SETTING = "penumbra_cosmos_edge_ipv4"
+    internal const val ROOT_CERTIFICATE_SETTING = "penumbra_cosmos_root_certificate_der_b64"
     internal const val ATTESTATION_KEY_ALIAS = "penumbra_cosmos_device_attestation_v1"
     internal const val ATTESTATION_BUNDLE_SETTING = "penumbra_cosmos_attestation_bundle_b64"
     internal const val ATTESTATION_PRODUCT_ID = "00000001"
@@ -69,21 +71,6 @@ internal object CosmosRemoteTransport {
     )
 
     private val networkDnsInstalled = AtomicBoolean(false)
-
-    // Public certificate for the operator-owned clone. No private key is
-    // present on the Pin or in this repository.
-    private const val CLONE_ROOT_PEM = """-----BEGIN CERTIFICATE-----
-MIIBzzCCAXWgAwIBAgIUG0G9aHsMfyhLhDfspkqgDopmdXwwCgYIKoZIzj0EAwIw
-PTEbMBkGA1UECgwSaHVtYW5lLWNhcnJ5LWNsb25lMR4wHAYDVQQDDBVDYXJyeSBD
-bG9uZSBSb290IEVDIDEwHhcNMjYwODAxMTEzMTQ5WhcNMzYwNzI5MTEzMTQ5WjA9
-MRswGQYDVQQKDBJodW1hbmUtY2FycnktY2xvbmUxHjAcBgNVBAMMFUNhcnJ5IENs
-b25lIFJvb3QgRUMgMTBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABM7QiKCUWid8
-QLtJVzmr+bLLEvyRIrel6v+gpdY59d2DgmCo3Qv1f0eNPTHYvIw08Wr+gz7wI1pt
-nRGPzfZZv4ujUzBRMB0GA1UdDgQWBBRk8MPuXmmegN70uNHAAz3ewVE5BzAfBgNV
-HSMEGDAWgBRk8MPuXmmegN70uNHAAz3ewVE5BzAPBgNVHRMBAf8EBTADAQH/MAoG
-CCqGSM49BAMCA0gAMEUCIHWX228mwwn7IACG3gFPYKpVMjlCh1z9cME+aMmIoFUI
-AiEArCIbto59wRwtioqqBalsCroF8W5OjMCzqE3jlvN4w18=
------END CERTIFICATE-----"""
 
     fun isEnabled(): Boolean {
         val application = currentApplication() ?: return false
@@ -299,9 +286,7 @@ AiEArCIbto59wRwtioqqBalsCroF8W5OjMCzqE3jlvN4w18=
     }
 
     private fun cloneSslContext(keyManager: X509KeyManager): SSLContext {
-        val certificate = CertificateFactory.getInstance("X.509").generateCertificate(
-            ByteArrayInputStream(CLONE_ROOT_PEM.toByteArray(Charsets.US_ASCII)),
-        )
+        val certificate = configuredRootCertificate()
         val store = KeyStore.getInstance(KeyStore.getDefaultType())
         store.load(null, null)
         store.setCertificateEntry("cosmos_clone_root_ec_1", certificate)
@@ -505,9 +490,10 @@ AiEArCIbto59wRwtioqqBalsCroF8W5OjMCzqE3jlvN4w18=
         issuer: X509Certificate,
     ) {
         check(privateKey.algorithm.equals("EC", ignoreCase = true))
-        val root = parseCertificate(CLONE_ROOT_PEM)
-        root.verify(root.publicKey)
+        val root = configuredRootCertificate()
+        check(issuer.issuerX500Principal == root.subjectX500Principal)
         issuer.verify(root.publicKey)
+        check(leaf.issuerX500Principal == issuer.subjectX500Principal)
         leaf.verify(issuer.publicKey)
         root.checkValidity()
         issuer.checkValidity()
@@ -533,6 +519,29 @@ AiEArCIbto59wRwtioqqBalsCroF8W5OjMCzqE3jlvN4w18=
         CertificateFactory.getInstance("X.509").generateCertificate(
             ByteArrayInputStream(pem.toByteArray(Charsets.US_ASCII)),
         ) as X509Certificate
+
+    private fun configuredRootCertificate(): X509Certificate {
+        val application = currentApplication()
+            ?: throw SecurityException("Remote Cosmos application context is unavailable")
+        return parseProvisionedRootCertificate(
+            Settings.Global.getString(application.contentResolver, ROOT_CERTIFICATE_SETTING),
+        ) ?: throw SecurityException("Remote Cosmos root certificate is missing or invalid")
+    }
+
+    internal fun parseProvisionedRootCertificate(encoded: String?): X509Certificate? = runCatching {
+        require(!encoded.isNullOrEmpty() && encoded.length <= 16_384)
+        val der = Base64.getDecoder().decode(encoded)
+        require(der.size in 1..8192)
+        require(Base64.getEncoder().encodeToString(der) == encoded)
+        val certificate = CertificateFactory.getInstance("X.509")
+            .generateCertificate(ByteArrayInputStream(der)) as X509Certificate
+        require(MessageDigest.isEqual(certificate.encoded, der))
+        require(certificate.basicConstraints >= 0)
+        require(certificate.subjectX500Principal == certificate.issuerX500Principal)
+        certificate.verify(certificate.publicKey)
+        certificate.checkValidity()
+        certificate
+    }.getOrNull()
 
     private fun parsePem(pem: String, label: String): ByteArray {
         val prefix = "-----BEGIN $label-----"

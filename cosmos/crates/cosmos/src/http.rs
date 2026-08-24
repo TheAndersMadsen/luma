@@ -1398,6 +1398,7 @@ struct ProvisionResponse {
     certificate_pem: String,
     private_key_pem: String,
     ca_certificate_pem: String,
+    root_certificate_pem: String,
     /// The pincode this device enters to complete OPAQUE — surfaced so the
     /// operator can hand the device and its pincode together.
     pincode: String,
@@ -1425,6 +1426,7 @@ async fn admin_provision(
             certificate_pem: bundle.certificate_pem,
             private_key_pem: bundle.private_key_pem,
             ca_certificate_pem: bundle.ca_certificate_pem,
+            root_certificate_pem: bundle.root_certificate_pem,
             pincode: crate::enrollment::configured_pincode(),
             onboarding: onboarding_hint(),
         })),

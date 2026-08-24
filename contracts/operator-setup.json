@@ -954,6 +954,12 @@
       "home": "runtime.env"
     },
     {
+      "name": "REVIVAL_COMPOSE_APPLICATION",
+      "group": "production",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
       "name": "REVIVAL_CENTER_PORT",
       "group": "local",
       "sensitivity": "operational",

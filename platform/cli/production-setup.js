@@ -524,7 +524,7 @@ function renderOperatorCompose(profiles) {
     secrets.push(`  prometheus_config: { file: ${safeYaml(path.join(PRODUCTION_DIR, 'prometheus.yml'))} }`);
   }
   atomicWrite(OPERATOR_COMPOSE, [
-    '# Generated local overlay. Phase 2 will distribute the base application as an OCI artifact.',
+    '# Generated local overlay for the digest-pinned OCI Compose application.',
     'services:', ...services, 'secrets:', ...secrets, '',
   ].join('\n'));
 }

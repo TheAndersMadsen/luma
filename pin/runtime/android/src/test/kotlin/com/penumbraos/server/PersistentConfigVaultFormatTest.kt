@@ -16,9 +16,6 @@ class PersistentConfigVaultFormatTest {
                 "[dev]\napk_install_enabled = false\n".toByteArray(),
             )
             put(
-                "version=1\nstate=complete\n".toByteArray(),
-            )
-            put(
                 PersistentConfigVaultFormat.CODEX_AUTH_FILE_NAME,
                 "{\"auth_mode\":\"chatgpt\",\"tokens\":{}}\n".toByteArray(),
             )

@@ -23,6 +23,7 @@ export type Bundle = {
   certificate_pem: string;
   private_key_pem: string;
   ca_certificate_pem: string;
+  root_certificate_pem: string;
   pincode: string;
   onboarding: { endpoint: string; authority: string };
 };

@@ -27,6 +27,7 @@ const PIN_ACTIVATION_TOOL = path.join(ROOT, 'platform', 'deploy', 'pin', 'activa
 const PIN_NETWORK_TOOL = path.join(ROOT, 'platform', 'deploy', 'pin', 'network.mjs');
 const DEPLOY_DIR = path.join(ROOT, 'platform', 'deploy', 'vps');
 const TOOLCHAIN_CONFIG = path.join(ROOT, 'platform', 'containers', 'pin-builder', 'toolchain.json');
+const DISTRIBUTION_VERSION = path.join(ROOT, 'platform', 'distribution', 'version.json');
 const MINIMUM_COMPOSE_VERSION = Object.freeze([2, 34, 0]);
 const MANAGED_DIRECTORY_MARKER = '.ai-pin-revival-managed';
 
@@ -246,15 +247,37 @@ function fillBlankGeneratedSecrets(contents, profiles = null) {
 
 function fillBlankInitializerDefaults(contents, profiles = null) {
   const generated = fillBlankGeneratedSecrets(contents, profiles);
+  let bundled = null;
+  try {
+    const candidate = JSON.parse(fs.readFileSync(DISTRIBUTION_VERSION, 'utf8'));
+    if (candidate.schemaVersion === 1 && /^[0-9a-f]{40}$/u.test(candidate.revision) &&
+        /^oci:\/\/ghcr\.io\/[a-z0-9][a-z0-9._/-]*@sha256:[0-9a-f]{64}$/u.test(candidate.application)) {
+      bundled = candidate;
+    }
+  } catch {
+    // A source checkout has no published application identity.
+  }
   const releasePattern = /^REVIVAL_RELEASE_ID=(.*)$/m;
   const releaseMatch = releasePattern.exec(generated.contents);
-  if (releaseMatch && releaseMatch[1].trim().length > 0) return generated;
+  const currentRelease = releaseMatch ? decodeEnvValue(releaseMatch[1]) : '';
+  const release = bundled && (!currentRelease || currentRelease === 'local')
+    ? bundled.revision : (currentRelease || 'local');
+  let updated = releaseMatch
+    ? generated.contents.replace(releasePattern, `REVIVAL_RELEASE_ID=${release}`)
+    : `${generated.contents.replace(/\s*$/, '')}\nREVIVAL_RELEASE_ID=${release}\n`;
+  let count = generated.count + (release !== currentRelease ? 1 : 0);
 
-  const replacement = 'REVIVAL_RELEASE_ID=local';
-  const updated = releaseMatch
-    ? generated.contents.replace(releasePattern, replacement)
-    : `${generated.contents.replace(/\s*$/, '')}\n${replacement}\n`;
-  return { contents: updated, count: generated.count + 1 };
+  const applicationPattern = /^REVIVAL_COMPOSE_APPLICATION=(.*)$/m;
+  const applicationMatch = applicationPattern.exec(updated);
+  const currentApplication = applicationMatch ? decodeEnvValue(applicationMatch[1]) : '';
+  const application = currentApplication || bundled?.application || '';
+  if (application !== currentApplication || !applicationMatch) {
+    updated = applicationMatch
+      ? updated.replace(applicationPattern, `REVIVAL_COMPOSE_APPLICATION=${application}`)
+      : `${updated.replace(/\s*$/, '')}\nREVIVAL_COMPOSE_APPLICATION=${application}\n`;
+    count += 1;
+  }
+  return { contents: updated, count };
 }
 
 function localIdentityRealm(values) {

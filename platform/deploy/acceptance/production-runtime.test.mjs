@@ -35,6 +35,7 @@ function fixture(t, dockerScript) {
       REVIVAL_CONFIG_DIR: config,
       REVIVAL_ENV_FILE: envFile,
       REVIVAL_RELEASE_ID: "test-release",
+      REVIVAL_COMPOSE_APPLICATION: `oci://ghcr.io/example/ai-pin-revival/application@sha256:${"a".repeat(64)}`,
       REVIVAL_PUBLIC_ORIGIN: "https://pin.example.test",
       REVIVAL_PUBLIC_DOMAIN: "pin.example.test",
       COSMOS_OIDC_ISSUER: "https://pin.example.test/realms/humane",
@@ -46,7 +47,8 @@ function fixture(t, dockerScript) {
 test("production preflight reports occupied public ports without stopping their owner", (t) => {
   const { env } = fixture(t, `#!/bin/sh
 case "$*" in
-  *"compose version"*|*"config --quiet"*) exit 0 ;;
+  *"compose version --short"*) printf '%s\n' 2.34.0; exit 0 ;;
+  *"config --quiet"*) exit 0 ;;
   *"ps --status running --services traefik"*) exit 0 ;;
 esac
 exit 0
@@ -61,7 +63,8 @@ exit 0
 test("production preflight permits an update when this project's Traefik already owns the ports", (t) => {
   const { env } = fixture(t, `#!/bin/sh
 case "$*" in
-  *"compose version"*|*"config --quiet"*) exit 0 ;;
+  *"compose version --short"*) printf '%s\n' 2.34.0; exit 0 ;;
+  *"config --quiet"*) exit 0 ;;
   *"ps --status running --services traefik"*) printf '%s\\n' traefik; exit 0 ;;
 esac
 exit 0
@@ -70,10 +73,23 @@ exit 0
   assert.equal(result.status, 0, result.stderr);
 });
 
+test("production preflight enforces the Compose OCI minimum", (t) => {
+  const { env } = fixture(t, `#!/bin/sh
+case "$*" in
+  *"compose version --short"*) printf '%s\n' 2.33.9; exit 0 ;;
+esac
+exit 0
+`);
+  const result = spawnSync("/usr/bin/bash", [preflight], { cwd: root, env, encoding: "utf8" });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Compose 2\.34\.0 or newer is required; observed 2\.33\.9/u);
+});
+
 test("production verification rejects an unhealthy configured container", (t) => {
   const { env } = fixture(t, `#!/bin/sh
 case "$*" in
-  *"compose version"*|*"config --quiet"*) exit 0 ;;
+  *"compose version --short"*) printf '%s\n' 2.34.0; exit 0 ;;
+  *"config --quiet"*) exit 0 ;;
   *"ps --status running --services traefik"*) printf '%s\\n' traefik; exit 0 ;;
   *"config --services"*|*"ps --status running --services"*) printf '%s\\n' center traefik; exit 0 ;;
   *"ps --quiet"*) printf '%s\\n' container-center; exit 0 ;;
@@ -98,7 +114,8 @@ exit 0
 test("production verification rejects missing runtime release labels", (t) => {
   const { env } = fixture(t, `#!/bin/sh
 case "$*" in
-  *"compose version"*|*"config --quiet"*) exit 0 ;;
+  *"compose version --short"*) printf '%s\n' 2.34.0; exit 0 ;;
+  *"config --quiet"*) exit 0 ;;
   *"ps --status running --services traefik"*) printf '%s\n' traefik; exit 0 ;;
   *"config --services"*|*"ps --status running --services"*) printf '%s\n' center traefik; exit 0 ;;
   *"ps --quiet"*) printf '%s\n' container-center; exit 0 ;;
@@ -120,6 +137,10 @@ test("confirmed deployment runs public verification before reporting success", (
   const success = source.indexOf("passed production verification");
   assert.ok(up >= 0 && verification > up && success > verification);
   assert.doesNotMatch(source, /deployment .* is healthy/u);
+  assert.match(source, /-f "\$application"[\s\S]*-f "\$operator_compose"/u);
+  assert.doesNotMatch(source, /ROOT\/compose\.yaml|platform\/compose\/production\.yaml/u);
+  assert.doesNotMatch(source, /--yes|printf ['"]?y|echo ['"]?y/u);
+  assert.match(source, /up --detach --wait --wait-timeout/u);
   const dryRunExit = source.indexOf("exit 0", source.indexOf("if ((dry_run))"));
   assert.ok(dryRunExit >= 0 && dryRunExit < up, "dry-run must exit before deployment and verification");
 });

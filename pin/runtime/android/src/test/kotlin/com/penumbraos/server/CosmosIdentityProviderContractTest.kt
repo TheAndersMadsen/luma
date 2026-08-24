@@ -3,6 +3,7 @@ package com.penumbraos.server
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 class CosmosIdentityProviderContractTest {
@@ -25,5 +26,12 @@ class CosmosIdentityProviderContractTest {
             "penumbra_cosmos_device_attestation_v1",
             CosmosIdentityProvider.KEY_ALIAS,
         )
+    }
+
+    @Test
+    fun serverRejectsMissingOrMalformedProvisionedRoot() {
+        assertNull(parseProvisionedCosmosRoot(null))
+        assertNull(parseProvisionedCosmosRoot("not-base64"))
+        assertNull(parseProvisionedCosmosRoot("bm90LWEtY2VydGlmaWNhdGU="))
     }
 }

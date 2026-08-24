@@ -6,6 +6,7 @@ ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 
 env_file="${REVIVAL_ENV_FILE:?REVIVAL_ENV_FILE is required}"
 operator_compose="${REVIVAL_CONFIG_DIR:?REVIVAL_CONFIG_DIR is required}/production/operator.compose.yaml"
+application="${REVIVAL_COMPOSE_APPLICATION:?REVIVAL_COMPOSE_APPLICATION is required}"
 project_name="${COMPOSE_PROJECT_NAME:-ai-pin-revival}"
 wait_timeout="${REVIVAL_DEPLOY_WAIT_TIMEOUT:-180}"
 dry_run=0
@@ -38,11 +39,10 @@ compose=(
   --project-directory "$ROOT"
   --project-name "$project_name"
   --env-file "$env_file"
-  -f "$ROOT/compose.yaml"
-  -f "$ROOT/platform/compose/production.yaml"
+  -f "$application"
   -f "$operator_compose"
 )
-up=(up --detach --pull always --remove-orphans --wait --wait-timeout "$wait_timeout")
+up=(up --detach --wait --wait-timeout "$wait_timeout" --pull always --remove-orphans)
 
 if ((dry_run)); then
   printf 'docker compose'

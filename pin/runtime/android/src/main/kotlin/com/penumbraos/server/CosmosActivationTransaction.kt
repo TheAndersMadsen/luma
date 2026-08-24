@@ -1,6 +1,8 @@
 package com.penumbraos.server
 
 import java.net.URI
+import java.security.MessageDigest
+import java.util.Base64
 import java.util.Locale
 
 /**
@@ -13,6 +15,7 @@ import java.util.Locale
 internal object CosmosActivationContract {
     const val REMOTE_MODE_SETTING = "penumbra_cosmos_remote_mode"
     const val EDGE_IPV4_SETTING = "penumbra_cosmos_edge_ipv4"
+    const val ROOT_CERTIFICATE_SETTING = "penumbra_cosmos_root_certificate_der_b64"
     const val ATTESTATION_BUNDLE_SETTING = "penumbra_cosmos_attestation_bundle_b64"
     const val ATTESTATION_KEY_ALIAS = "penumbra_cosmos_device_attestation_v1"
     const val ATTESTATION_PRODUCT_ID = "00000001"
@@ -91,6 +94,11 @@ internal data class CosmosIdentityDescriptor(
     val usableForTls: Boolean = true,
 )
 
+internal data class CosmosRootDescriptor(
+    val certificateDerBase64: String,
+    val fingerprintSha256: String,
+)
+
 internal interface CosmosSettingsPort {
     fun read(key: String): String?
 
@@ -125,8 +133,10 @@ internal data class CosmosActivationRecord(
     val phase: CosmosActivationPhase,
     val previousRemoteMode: String?,
     val previousEdgeIpv4: String?,
+    val previousRootCertificateDerBase64: String?,
     val identityWasPresent: Boolean,
     val targetFingerprintSha256: String,
+    val targetRootFingerprintSha256: String,
     val apiEndpoint: String,
     val onboardingEndpoint: String,
     val targetEdgeIpv4: String,
@@ -177,6 +187,7 @@ internal data class CosmosActivationResult(
     val onboardingEndpoint: String? = null,
     val edgeIpv4: String? = null,
     val identityFingerprintSha256: String? = null,
+    val rootCertificateFingerprintSha256: String? = null,
 ) {
     val message: String get() = code.safeMessage
 }
@@ -196,6 +207,7 @@ internal class CosmosActivationTransaction(
         apiEndpoint: String,
         onboardingEndpoint: String,
         edgeIpv4: String,
+        root: CosmosRootDescriptor,
         identity: CosmosIdentityPort,
     ): CosmosActivationResult {
         val plan = try {
@@ -206,6 +218,11 @@ internal class CosmosActivationTransaction(
 
         val candidate = try {
             identity.candidate().also(::requireSafeDescriptor)
+        } catch (_: Throwable) {
+            return failure(CosmosActivationCode.INVALID_REQUEST)
+        }
+        try {
+            requireSafeRoot(root)
         } catch (_: Throwable) {
             return failure(CosmosActivationCode.INVALID_REQUEST)
         }
@@ -231,6 +248,8 @@ internal class CosmosActivationTransaction(
             ?: return failure(CosmosActivationCode.TRANSACTION_FAILED)
         val currentEdge = safeRead(CosmosActivationContract.EDGE_IPV4_SETTING)
             ?: return failure(CosmosActivationCode.TRANSACTION_FAILED)
+        val currentRoot = safeRead(CosmosActivationContract.ROOT_CERTIFICATE_SETTING)
+            ?: return failure(CosmosActivationCode.TRANSACTION_FAILED)
         val pendingAttestation = safeRead(CosmosActivationContract.ATTESTATION_BUNDLE_SETTING)
             ?: return failure(CosmosActivationCode.TRANSACTION_FAILED)
         val currentIdentity = try {
@@ -245,19 +264,21 @@ internal class CosmosActivationTransaction(
 
         if (currentRemote.value == "1") {
             val matches = currentEdge.value == plan.edgeIpv4 &&
+                currentRoot.value == root.certificateDerBase64 &&
                 currentIdentity?.fingerprintSha256 == candidate.fingerprintSha256 &&
                 currentIdentity.usableForTls
             if (!matches) {
                 return failure(CosmosActivationCode.ACTIVE_CONFIGURATION_CONFLICT)
             }
             val managed = activeRecord?.phase == CosmosActivationPhase.ACTIVE &&
-                recordTargets(activeRecord, plan, candidate)
+                recordTargets(activeRecord, plan, candidate, root)
             return success(
                 code = CosmosActivationCode.ALREADY_ACTIVE,
                 changed = false,
                 managed = managed,
                 plan = plan,
                 candidate = candidate,
+                root = root,
             )
         }
 
@@ -280,8 +301,10 @@ internal class CosmosActivationTransaction(
             phase = CosmosActivationPhase.PREPARING,
             previousRemoteMode = currentRemote.value,
             previousEdgeIpv4 = currentEdge.value,
+            previousRootCertificateDerBase64 = currentRoot.value,
             identityWasPresent = currentIdentity != null,
             targetFingerprintSha256 = candidate.fingerprintSha256,
+            targetRootFingerprintSha256 = root.fingerprintSha256,
             apiEndpoint = plan.apiEndpoint,
             onboardingEndpoint = plan.onboardingEndpoint,
             targetEdgeIpv4 = plan.edgeIpv4,
@@ -291,6 +314,10 @@ internal class CosmosActivationTransaction(
         }
 
         return try {
+            check(writeExact(
+                CosmosActivationContract.ROOT_CERTIFICATE_SETTING,
+                root.certificateDerBase64,
+            ))
             val installed = identity.installCandidate().also(::requireSafeDescriptor)
             check(installed.fingerprintSha256 == candidate.fingerprintSha256)
             check(installed.usableForTls)
@@ -308,6 +335,7 @@ internal class CosmosActivationTransaction(
                 managed = true,
                 plan = plan,
                 candidate = candidate,
+                root = root,
             )
         } catch (_: Throwable) {
             val rolledBack = rollbackActivation(preparing, identity)
@@ -364,6 +392,8 @@ internal class CosmosActivationTransaction(
             ?: return failure(CosmosActivationCode.TRANSACTION_FAILED)
         val activeEdge = safeRead(CosmosActivationContract.EDGE_IPV4_SETTING)
             ?: return failure(CosmosActivationCode.TRANSACTION_FAILED)
+        val activeRoot = safeRead(CosmosActivationContract.ROOT_CERTIFICATE_SETTING)
+            ?: return failure(CosmosActivationCode.TRANSACTION_FAILED)
         val deactivating = record.copy(phase = CosmosActivationPhase.DEACTIVATING)
         if (!safeSave(deactivating)) {
             return failure(CosmosActivationCode.TRANSACTION_FAILED)
@@ -373,6 +403,10 @@ internal class CosmosActivationTransaction(
         return try {
             check(writeExact(CosmosActivationContract.REMOTE_MODE_SETTING, record.previousRemoteMode))
             check(writeExact(CosmosActivationContract.EDGE_IPV4_SETTING, record.previousEdgeIpv4))
+            check(writeExact(
+                CosmosActivationContract.ROOT_CERTIFICATE_SETTING,
+                record.previousRootCertificateDerBase64,
+            ))
             check(writeExact(CosmosActivationContract.ATTESTATION_BUNDLE_SETTING, null))
             if (!record.identityWasPresent) {
                 check(identity.removeIfMatches(record.targetFingerprintSha256))
@@ -395,15 +429,17 @@ internal class CosmosActivationTransaction(
                     record.targetFingerprintSha256,
                     subject = "",
                 ),
+                root = CosmosRootDescriptor(
+                    certificateDerBase64 = activeRoot.value.orEmpty(),
+                    fingerprintSha256 = record.targetRootFingerprintSha256,
+                ),
             )
         } catch (_: Throwable) {
-            val identityStillUsable = runCatching {
-                val current = identity.current()
-                current?.fingerprintSha256 == record.targetFingerprintSha256 &&
-                    current.usableForTls
-            }.getOrDefault(false)
-            val restoredActive = !identityRemoved && identityStillUsable &&
+            val identityWasUsable = currentIdentity?.fingerprintSha256 ==
+                record.targetFingerprintSha256 && currentIdentity.usableForTls
+            val restoredActive = !identityRemoved && identityWasUsable &&
                 writeExact(CosmosActivationContract.EDGE_IPV4_SETTING, activeEdge.value) &&
+                writeExact(CosmosActivationContract.ROOT_CERTIFICATE_SETTING, activeRoot.value) &&
                 writeExact(CosmosActivationContract.ATTESTATION_BUNDLE_SETTING, null) &&
                 writeExact(CosmosActivationContract.REMOTE_MODE_SETTING, activeRemote.value) &&
                 safeSave(record)
@@ -433,6 +469,10 @@ internal class CosmosActivationTransaction(
     ): Boolean = runCatching {
         check(writeExact(CosmosActivationContract.REMOTE_MODE_SETTING, record.previousRemoteMode))
         check(writeExact(CosmosActivationContract.EDGE_IPV4_SETTING, record.previousEdgeIpv4))
+        check(writeExact(
+            CosmosActivationContract.ROOT_CERTIFICATE_SETTING,
+            record.previousRootCertificateDerBase64,
+        ))
         check(writeExact(CosmosActivationContract.ATTESTATION_BUNDLE_SETTING, null))
         if (!record.identityWasPresent) {
             check(identity.removeIfMatches(record.targetFingerprintSha256))
@@ -449,6 +489,10 @@ internal class CosmosActivationTransaction(
         check(record.previousRemoteMode != "1")
         check(writeExact(CosmosActivationContract.REMOTE_MODE_SETTING, record.previousRemoteMode))
         check(writeExact(CosmosActivationContract.EDGE_IPV4_SETTING, record.previousEdgeIpv4))
+        check(writeExact(
+            CosmosActivationContract.ROOT_CERTIFICATE_SETTING,
+            record.previousRootCertificateDerBase64,
+        ))
         check(writeExact(CosmosActivationContract.ATTESTATION_BUNDLE_SETTING, null))
         if (!record.identityWasPresent) {
             check(identity.removeIfMatches(record.targetFingerprintSha256))
@@ -464,6 +508,11 @@ internal class CosmosActivationTransaction(
             return false
         }
         if (settings.read(CosmosActivationContract.EDGE_IPV4_SETTING) != record.previousEdgeIpv4) {
+            return false
+        }
+        if (settings.read(CosmosActivationContract.ROOT_CERTIFICATE_SETTING) !=
+            record.previousRootCertificateDerBase64
+        ) {
             return false
         }
         if (settings.read(CosmosActivationContract.ATTESTATION_BUNDLE_SETTING) != null) {
@@ -495,15 +544,30 @@ internal class CosmosActivationTransaction(
         record: CosmosActivationRecord,
         plan: CosmosEndpointPlan,
         candidate: CosmosIdentityDescriptor,
+        root: CosmosRootDescriptor,
     ): Boolean = record.apiEndpoint == plan.apiEndpoint &&
         record.onboardingEndpoint == plan.onboardingEndpoint &&
         record.targetEdgeIpv4 == plan.edgeIpv4 &&
-        record.targetFingerprintSha256 == candidate.fingerprintSha256
+        record.targetFingerprintSha256 == candidate.fingerprintSha256 &&
+        record.targetRootFingerprintSha256 == root.fingerprintSha256
 
     private fun requireSafeDescriptor(descriptor: CosmosIdentityDescriptor) {
         require(descriptor.fingerprintSha256.length == 64)
         require(descriptor.fingerprintSha256.all(Char::isAsciiHexDigit))
         require(!descriptor.subject.contains("PRIVATE KEY", ignoreCase = true))
+    }
+
+    private fun requireSafeRoot(root: CosmosRootDescriptor) {
+        require(root.fingerprintSha256.length == 64)
+        require(root.fingerprintSha256.all(Char::isAsciiHexDigit))
+        require(root.certificateDerBase64.length in 1..16_384)
+        val der = Base64.getDecoder().decode(root.certificateDerBase64)
+        require(der.size in 1..8192)
+        require(Base64.getEncoder().encodeToString(der) == root.certificateDerBase64)
+        val digest = MessageDigest.getInstance("SHA-256").digest(der).joinToString("") { byte ->
+            "%02x".format(byte.toInt() and 0xff)
+        }
+        require(digest.equals(root.fingerprintSha256, ignoreCase = true))
     }
 
     private fun success(
@@ -512,6 +576,7 @@ internal class CosmosActivationTransaction(
         managed: Boolean,
         plan: CosmosEndpointPlan? = null,
         candidate: CosmosIdentityDescriptor? = null,
+        root: CosmosRootDescriptor? = null,
     ): CosmosActivationResult = CosmosActivationResult(
         ok = true,
         code = code,
@@ -522,6 +587,7 @@ internal class CosmosActivationTransaction(
         onboardingEndpoint = plan?.onboardingEndpoint,
         edgeIpv4 = plan?.edgeIpv4,
         identityFingerprintSha256 = candidate?.fingerprintSha256,
+        rootCertificateFingerprintSha256 = root?.fingerprintSha256,
     )
 
     private fun failure(

@@ -1,31 +1,160 @@
-# A distribution is the complete immutable product payload, not a compiled
-# standalone executable. Manual runs build and verify it by default. Publishing
-# is an additional opt-in that is accepted only when this workflow is dispatched
-# from the matching, existing version tag. Release builds deliberately do not
-# consume mutable CI dependency or build caches.
-name: distribution release
+name: immutable release
 
 on:
-  workflow_dispatch:
-    inputs:
-      version:
-        description: Version to stamp into the immutable payload
-        required: true
-        default: 0.1.0-dev
-        type: string
-      publish_release:
-        description: Publish only when dispatched from the matching vVERSION tag
-        required: true
-        default: false
-        type: boolean
+  push:
+    tags:
+      - "v*"
 
 permissions:
   contents: read
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE_PREFIX: ghcr.io/theandersmadsen/ai-pin-revival
+  APPLICATION_REPOSITORY: ghcr.io/theandersmadsen/ai-pin-revival/application
+
 jobs:
-  build:
-    name: build and verify full payload
+  coordinates:
+    name: validate release coordinates
     runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      revision: ${{ steps.release.outputs.revision }}
+      created: ${{ steps.release.outputs.created }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - id: release
+        name: Require an exact semantic version tag and commit
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          [[ "$RELEASE_TAG" == "v$version" ]]
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]
+          revision="$(git rev-parse HEAD)"
+          [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
+          created="$(git show -s --format=%cI HEAD)"
+          printf 'version=%s\nrevision=%s\ncreated=%s\n' \
+            "$version" "$revision" "$created" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22.14.0
+          package-manager-cache: false
+      - name: Validate release and platform policies
+        run: ./revival check platform --full
+
+  images:
+    name: publish ${{ matrix.name }} linux/amd64
+    needs: coordinates
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: cosmos
+            title: Cosmos backend
+            context: ./cosmos
+            dockerfile: ./cosmos/Dockerfile
+            build_contexts: wire_contracts=./contracts/wire
+            release_id_arg: false
+          - name: center
+            title: Revival Center
+            context: ./center
+            dockerfile: ./center/Dockerfile
+            build_contexts: wire_contracts=./contracts/wire
+            release_id_arg: true
+          - name: spotify-adapter
+            title: Spotify adapter
+            context: ./center/adapters/spotify
+            dockerfile: ./center/adapters/spotify/Dockerfile
+            build_contexts: ""
+            release_id_arg: false
+          - name: keycloak
+            title: Optimized Keycloak
+            context: .
+            dockerfile: ./platform/containers/keycloak/Dockerfile
+            build_contexts: ""
+            release_id_arg: false
+          - name: center-iroh-bridge
+            title: Center iroh bridge
+            context: .
+            dockerfile: ./platform/containers/center-iroh-bridge/Dockerfile
+            build_contexts: ""
+            release_id_arg: false
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+      - id: image
+        name: Build and publish immutable image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          build-contexts: ${{ matrix.build_contexts }}
+          build-args: ${{ matrix.release_id_arg && format('REVIVAL_RELEASE_ID={0}', needs.coordinates.outputs.revision) || '' }}
+          platforms: linux/amd64
+          pull: true
+          push: true
+          tags: ${{ env.IMAGE_PREFIX }}/${{ matrix.name }}:${{ github.ref_name }}
+          labels: |
+            org.opencontainers.image.title=${{ matrix.title }}
+            org.opencontainers.image.description=Ai Pin Revival ${{ matrix.title }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ needs.coordinates.outputs.revision }}
+            org.opencontainers.image.version=${{ needs.coordinates.outputs.version }}
+            org.opencontainers.image.created=${{ needs.coordinates.outputs.created }}
+            dk.andersmadsen.ai-pin-revival.product=Ai Pin Revival
+            dk.andersmadsen.ai-pin-revival.release=${{ needs.coordinates.outputs.revision }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=release-${{ matrix.name }}
+          cache-to: type=gha,scope=release-${{ matrix.name }},mode=max
+      - name: Record exact image digest
+        env:
+          COMPONENT: ${{ matrix.name }}
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          export REFERENCE="$IMAGE_PREFIX/$COMPONENT@$DIGEST"
+          node --input-type=module <<'NODE'
+          import { writeFileSync } from "node:fs";
+          const { COMPONENT: name, REFERENCE: reference, DIGEST: digest, RUNNER_TEMP: root } = process.env;
+          if (!/^sha256:[0-9a-f]{64}$/.test(digest)) throw new Error("Buildx returned an invalid digest");
+          const receipt = { schemaVersion: 1, name, reference, digest, platform: "linux/amd64" };
+          writeFileSync(`${root}/${name}.json`, `${JSON.stringify(receipt)}\n`, { flag: "wx" });
+          NODE
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: release-image-${{ matrix.name }}
+          path: ${{ runner.temp }}/${{ matrix.name }}.json
+          if-no-files-found: error
+          retention-days: 2
+
+  application:
+    name: publish digest-pinned Compose application
+    needs: [coordinates, images]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -34,51 +163,70 @@ jobs:
         with:
           node-version: 22.14.0
           package-manager-cache: false
-      - name: Validate the distribution builder
-        run: ./revival check platform
-      - name: Validate opt-in publication coordinates
-        if: ${{ inputs.publish_release == true }}
-        env:
-          RELEASE_VERSION: ${{ inputs.version }}
-          REF_NAME: ${{ github.ref_name }}
-          REF_TYPE: ${{ github.ref_type }}
-        run: |
-          set -euo pipefail
-          if [[ "$REF_TYPE" != tag || "$REF_NAME" != "v$RELEASE_VERSION" ]]; then
-            echo "Publishing requires dispatching from the existing v$RELEASE_VERSION tag." >&2
-            exit 64
-          fi
-      - name: Build immutable distribution
-        env:
-          RELEASE_VERSION: ${{ inputs.version }}
-        run: |
-          set -euo pipefail
-          output="$RUNNER_TEMP/ai-pin-revival-distribution"
-          node platform/distribution/build.mjs \
-            --version "$RELEASE_VERSION" \
-            --output "$output" \
-            --json > "$RUNNER_TEMP/distribution-result.json"
-          cp "$RUNNER_TEMP/distribution-result.json" "$output/build-result.json"
-      - name: Verify mandatory checksums
-        run: |
-          set -euo pipefail
-          cd "$RUNNER_TEMP/ai-pin-revival-distribution"
-          sha256sum --check SHA256SUMS
-      - name: Upload build-only artifact
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
-          name: ai-pin-revival-${{ inputs.version }}
-          path: ${{ runner.temp }}/ai-pin-revival-distribution/
+          pattern: release-image-*
+          path: ${{ runner.temp }}/release-receipts
+          merge-multiple: true
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+      - name: Require Docker Compose 2.34 or newer
+        run: |
+          set -euo pipefail
+          version="$(docker compose version --short)"
+          [[ "$version" =~ ^v?([0-9]+)\.([0-9]+)\.([0-9]+)([-+].*)?$ ]]
+          (( 10#${BASH_REMATCH[1]} > 2 || (10#${BASH_REMATCH[1]} == 2 && 10#${BASH_REMATCH[2]} >= 34) ))
+      - name: Build and audit the secret-free publication model
+        env:
+          RELEASE_REVISION: ${{ needs.coordinates.outputs.revision }}
+        run: |
+          set -euo pipefail
+          publication_env="$RUNNER_TEMP/release-publication.env"
+          node platform/distribution/publication-environment.mjs \
+            "$RUNNER_TEMP/release-receipts" "$publication_env" "$RELEASE_REVISION"
+          docker compose --env-file "$publication_env" \
+            -f compose.yaml -f platform/compose/production.yaml \
+            config --format json | node platform/distribution/audit-compose-publication.mjs
+      - name: Publish the audited Compose application
+        env:
+          RELEASE_REVISION: ${{ needs.coordinates.outputs.revision }}
+        run: |
+          set -euo pipefail
+          publication_env="$RUNNER_TEMP/release-publication.env"
+          application_tag="$APPLICATION_REPOSITORY:${GITHUB_REF_NAME}"
+          # --yes is limited to this reviewed publisher input. Runtime trust
+          # prompts remain interactive and are never bypassed by the operator CLI.
+          docker compose --env-file "$publication_env" \
+            -f compose.yaml -f platform/compose/production.yaml \
+            publish --yes --resolve-image-digests "$application_tag"
+          docker buildx imagetools inspect "$application_tag" \
+            --format '{{json .Manifest}}' > "$RUNNER_TEMP/application-manifest.json"
+          export APPLICATION_TAG="$application_tag"
+          node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from "node:fs";
+          const manifest = JSON.parse(readFileSync(`${process.env.RUNNER_TEMP}/application-manifest.json`, "utf8"));
+          const digest = manifest.digest;
+          if (!/^sha256:[0-9a-f]{64}$/.test(digest)) throw new Error("OCI application digest is invalid");
+          const repository = process.env.APPLICATION_TAG.replace(/:[^/:]+$/, "");
+          const receipt = { schemaVersion: 1, reference: `oci://${repository}@${digest}`, digest };
+          writeFileSync(`${process.env.RUNNER_TEMP}/application.json`, `${JSON.stringify(receipt)}\n`, { flag: "wx" });
+          NODE
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: release-application
+          path: ${{ runner.temp }}/application.json
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 2
 
-  publish:
-    name: publish explicitly tagged release
-    needs: build
-    if: >-
-      ${{ inputs.publish_release == true &&
-          github.ref_type == 'tag' &&
-          github.ref_name == format('v{0}', inputs.version) }}
+  operator-release:
+    name: publish lean operator release asset
+    needs: [coordinates, application]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -90,51 +238,46 @@ jobs:
         with:
           node-version: 22.14.0
           package-manager-cache: false
-      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
-          name: ai-pin-revival-${{ inputs.version }}
-          path: ${{ runner.temp }}/ai-pin-revival-distribution
-      - name: Reverify downloaded payload
-        run: |
-          set -euo pipefail
-          cd "$RUNNER_TEMP/ai-pin-revival-distribution"
-          sha256sum --check SHA256SUMS
-      - name: Render release-bound Homebrew formula
+          pattern: release-*
+          path: ${{ runner.temp }}/release-receipts
+          merge-multiple: true
+      - name: Build and verify the operator bundle
         env:
-          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_VERSION: ${{ needs.coordinates.outputs.version }}
+          RELEASE_REVISION: ${{ needs.coordinates.outputs.revision }}
           RELEASE_TAG: ${{ github.ref_name }}
-          REPOSITORY: ${{ github.repository }}
-          SERVER_URL: ${{ github.server_url }}
+          SOURCE_REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
-          output="$RUNNER_TEMP/ai-pin-revival-distribution"
-          descriptor="$output/ai-pin-revival-$RELEASE_VERSION.distribution.json"
-          archive="ai-pin-revival-$RELEASE_VERSION.tar.gz"
-          sha256="$(node -e 'const d=require(process.argv[1]); process.stdout.write(d.payload.archiveSha256)' "$descriptor")"
-          node platform/distribution/render-homebrew-formula.mjs \
-            --template platform/distribution/homebrew/ai-pin-revival.rb.template \
-            --output "$output/ai-pin-revival.rb" \
-            --homepage "$SERVER_URL/$REPOSITORY" \
-            --url "$SERVER_URL/$REPOSITORY/releases/download/$RELEASE_TAG/$archive" \
+          output="$RUNNER_TEMP/operator-release"
+          node platform/distribution/build.mjs \
             --version "$RELEASE_VERSION" \
-            --sha256 "$sha256"
-          sha256sum "$output/ai-pin-revival.rb" >> "$output/SHA256SUMS"
-          sort -o "$output/SHA256SUMS" "$output/SHA256SUMS"
+            --revision "$RELEASE_REVISION" \
+            --repository "$SOURCE_REPOSITORY" \
+            --tag "$RELEASE_TAG" \
+            --receipts "$RUNNER_TEMP/release-receipts" \
+            --output "$output"
           (cd "$output" && sha256sum --check SHA256SUMS)
-      - name: Publish release assets
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: ai-pin-revival-operator-${{ needs.coordinates.outputs.version }}
+          path: ${{ runner.temp }}/operator-release/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Create the immutable GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
-          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_VERSION: ${{ needs.coordinates.outputs.version }}
         run: |
           set -euo pipefail
-          output="$RUNNER_TEMP/ai-pin-revival-distribution"
+          output="$RUNNER_TEMP/operator-release"
           gh release create "$RELEASE_TAG" \
             --verify-tag \
             --title "Ai Pin Revival $RELEASE_VERSION" \
             --generate-notes \
-            "$output/ai-pin-revival-$RELEASE_VERSION.tar.gz" \
-            "$output/ai-pin-revival-$RELEASE_VERSION.manifest.json" \
-            "$output/ai-pin-revival-$RELEASE_VERSION.distribution.json" \
-            "$output/SHA256SUMS" \
-            "$output/ai-pin-revival.rb"
+            "$output/ai-pin-revival-operator-$RELEASE_VERSION-linux-x64.tar.gz" \
+            "$output/ai-pin-revival-$RELEASE_VERSION.release.json" \
+            "$output/SHA256SUMS"

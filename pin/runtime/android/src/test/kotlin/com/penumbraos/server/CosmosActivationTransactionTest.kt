@@ -1,5 +1,7 @@
 package com.penumbraos.server
 
+import java.security.MessageDigest
+import java.util.Base64
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -11,6 +13,7 @@ class CosmosActivationTransactionTest {
         fingerprintSha256 = "ab".repeat(32),
         subject = "CN=V:01:D:1a2b3c4d:P:00000001",
     )
+    private val root = rootDescriptor("operator-root")
 
     @Test
     fun firstActivationCommitsIdentityEdgeThenRemoteGate() {
@@ -27,16 +30,18 @@ class CosmosActivationTransactionTest {
         assertEquals(CosmosActivationCode.ACTIVATED, result.code)
         assertEquals("1", settings[CosmosActivationContract.REMOTE_MODE_SETTING])
         assertEquals("203.0.113.9", settings[CosmosActivationContract.EDGE_IPV4_SETTING])
+        assertEquals(root.certificateDerBase64, settings[CosmosActivationContract.ROOT_CERTIFICATE_SETTING])
         assertNull(settings[CosmosActivationContract.ATTESTATION_BUNDLE_SETTING])
         assertEquals(candidate, identity.current())
         assertEquals(1, identity.installCalls)
         assertEquals(
             listOf(
+                CosmosActivationContract.ROOT_CERTIFICATE_SETTING,
                 CosmosActivationContract.EDGE_IPV4_SETTING,
                 CosmosActivationContract.ATTESTATION_BUNDLE_SETTING,
                 CosmosActivationContract.REMOTE_MODE_SETTING,
             ),
-            settings.successfulWrites.takeLast(3),
+            settings.successfulWrites.takeLast(4),
         )
         assertEquals(CosmosActivationPhase.ACTIVE, records.value?.phase)
     }
@@ -67,6 +72,7 @@ class CosmosActivationTransactionTest {
         val settings = FakeSettings(
             CosmosActivationContract.REMOTE_MODE_SETTING to "custom-disabled",
             CosmosActivationContract.EDGE_IPV4_SETTING to "198.51.100.22",
+            CosmosActivationContract.ROOT_CERTIFICATE_SETTING to "previous-root",
         ).apply {
             failNextWrite(CosmosActivationContract.REMOTE_MODE_SETTING)
         }
@@ -83,6 +89,7 @@ class CosmosActivationTransactionTest {
             settings[CosmosActivationContract.REMOTE_MODE_SETTING],
         )
         assertEquals("198.51.100.22", settings[CosmosActivationContract.EDGE_IPV4_SETTING])
+        assertEquals("previous-root", settings[CosmosActivationContract.ROOT_CERTIFICATE_SETTING])
         assertNull(settings[CosmosActivationContract.ATTESTATION_BUNDLE_SETTING])
         assertNull(identity.current())
         assertNull(records.value)
@@ -94,7 +101,7 @@ class CosmosActivationTransactionTest {
             CosmosActivationContract.REMOTE_MODE_SETTING to "0",
             CosmosActivationContract.EDGE_IPV4_SETTING to "198.51.100.23",
         ).apply {
-            ignoreNextWrite(CosmosActivationContract.EDGE_IPV4_SETTING)
+            ignoreNextWrite(CosmosActivationContract.ROOT_CERTIFICATE_SETTING)
         }
         val records = FakeRecords()
         val identity = FakeIdentity(candidate)
@@ -104,8 +111,43 @@ class CosmosActivationTransactionTest {
         assertFalse(result.ok)
         assertEquals("0", settings[CosmosActivationContract.REMOTE_MODE_SETTING])
         assertEquals("198.51.100.23", settings[CosmosActivationContract.EDGE_IPV4_SETTING])
+        assertNull(settings[CosmosActivationContract.ROOT_CERTIFICATE_SETTING])
         assertNull(identity.current())
         assertNull(records.value)
+    }
+
+    @Test
+    fun interruptedPreparationRestoresThePreviousRootBeforeRetrying() {
+        val previousRoot = rootDescriptor("previous-root")
+        val settings = FakeSettings(
+            CosmosActivationContract.REMOTE_MODE_SETTING to "0",
+            CosmosActivationContract.EDGE_IPV4_SETTING to "203.0.113.9",
+            CosmosActivationContract.ROOT_CERTIFICATE_SETTING to root.certificateDerBase64,
+        )
+        val records = FakeRecords().apply {
+            value = CosmosActivationRecord(
+                phase = CosmosActivationPhase.PREPARING,
+                previousRemoteMode = "0",
+                previousEdgeIpv4 = "198.51.100.44",
+                previousRootCertificateDerBase64 = previousRoot.certificateDerBase64,
+                identityWasPresent = false,
+                targetFingerprintSha256 = candidate.fingerprintSha256,
+                targetRootFingerprintSha256 = root.fingerprintSha256,
+                apiEndpoint = CosmosActivationContract.API_ENDPOINT,
+                onboardingEndpoint = CosmosActivationContract.ONBOARDING_ENDPOINT,
+                targetEdgeIpv4 = "203.0.113.9",
+            )
+        }
+        val identity = FakeIdentity(candidate, installed = candidate)
+
+        val result = transaction(settings, records).activateValid(identity)
+
+        assertTrue(result.ok)
+        assertEquals(CosmosActivationCode.ACTIVATED, result.code)
+        assertEquals(1, identity.removalCalls)
+        assertEquals(1, identity.installCalls)
+        assertEquals(root.certificateDerBase64, settings[CosmosActivationContract.ROOT_CERTIFICATE_SETTING])
+        assertEquals(CosmosActivationPhase.ACTIVE, records.value?.phase)
     }
 
     @Test
@@ -113,6 +155,7 @@ class CosmosActivationTransactionTest {
         val settings = FakeSettings(
             CosmosActivationContract.REMOTE_MODE_SETTING to "custom-disabled",
             CosmosActivationContract.EDGE_IPV4_SETTING to "198.51.100.24",
+            CosmosActivationContract.ROOT_CERTIFICATE_SETTING to "previous-root",
         )
         val records = FakeRecords()
         val identity = FakeIdentity(candidate)
@@ -128,6 +171,7 @@ class CosmosActivationTransactionTest {
             settings[CosmosActivationContract.REMOTE_MODE_SETTING],
         )
         assertEquals("198.51.100.24", settings[CosmosActivationContract.EDGE_IPV4_SETTING])
+        assertEquals("previous-root", settings[CosmosActivationContract.ROOT_CERTIFICATE_SETTING])
         assertNull(settings[CosmosActivationContract.ATTESTATION_BUNDLE_SETTING])
         assertNull(identity.current())
         assertNull(records.value)
@@ -234,6 +278,10 @@ class CosmosActivationTransactionTest {
             CosmosActivationContract.ATTESTATION_BUNDLE_SETTING,
         )
         assertEquals(
+            "penumbra_cosmos_root_certificate_der_b64",
+            CosmosActivationContract.ROOT_CERTIFICATE_SETTING,
+        )
+        assertEquals(
             "penumbra_cosmos_device_attestation_v1",
             CosmosActivationContract.ATTESTATION_KEY_ALIAS,
         )
@@ -243,14 +291,17 @@ class CosmosActivationTransactionTest {
         val settings = FakeSettings(
             "penumbra_cosmos_remote_mode" to "1",
             "penumbra_cosmos_edge_ipv4" to "203.0.113.9",
+            "penumbra_cosmos_root_certificate_der_b64" to root.certificateDerBase64,
         )
         val records = FakeRecords().apply {
             value = CosmosActivationRecord(
                 phase = CosmosActivationPhase.ACTIVE,
                 previousRemoteMode = "0",
                 previousEdgeIpv4 = null,
+                previousRootCertificateDerBase64 = null,
                 identityWasPresent = false,
                 targetFingerprintSha256 = candidate.fingerprintSha256,
+                targetRootFingerprintSha256 = root.fingerprintSha256,
                 apiEndpoint = CosmosActivationContract.API_ENDPOINT,
                 onboardingEndpoint = CosmosActivationContract.ONBOARDING_ENDPOINT,
                 targetEdgeIpv4 = "203.0.113.9",
@@ -265,8 +316,9 @@ class CosmosActivationTransactionTest {
         assertEquals(0, identity.installCalls)
         assertEquals(0, identity.removalCalls)
         assertTrue(settings.successfulWrites.isEmpty())
-        assertNull(settings["penumbra_cosmos_remote_mode"])
-        assertNull(settings["penumbra_cosmos_edge_ipv4"])
+        assertEquals("1", settings["penumbra_cosmos_remote_mode"])
+        assertEquals("203.0.113.9", settings["penumbra_cosmos_edge_ipv4"])
+        assertEquals(root.certificateDerBase64, settings["penumbra_cosmos_root_certificate_der_b64"])
     }
 
     private fun transaction(
@@ -278,8 +330,17 @@ class CosmosActivationTransactionTest {
         apiEndpoint = CosmosActivationContract.API_ENDPOINT,
         onboardingEndpoint = CosmosActivationContract.ONBOARDING_ENDPOINT,
         edgeIpv4 = "203.0.113.9",
+        root = root,
         identity = identity,
     )
+
+    private fun rootDescriptor(value: String): CosmosRootDescriptor {
+        val bytes = value.toByteArray(Charsets.UTF_8)
+        val digest = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { byte ->
+            "%02x".format(byte.toInt() and 0xff)
+        }
+        return CosmosRootDescriptor(Base64.getEncoder().encodeToString(bytes), digest)
+    }
 
     private class FakeSettings(vararg initial: Pair<String, String?>) : CosmosSettingsPort {
         private val values = mutableMapOf<String, String>()

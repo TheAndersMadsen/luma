@@ -19,6 +19,10 @@ class ChannelFactoryBypassTest {
         assertEquals("penumbra_cosmos_remote_mode", CosmosRemoteTransport.ENABLED_SETTING)
         assertEquals("penumbra_cosmos_edge_ipv4", CosmosRemoteTransport.EDGE_IPV4_SETTING)
         assertEquals(
+            "penumbra_cosmos_root_certificate_der_b64",
+            CosmosRemoteTransport.ROOT_CERTIFICATE_SETTING,
+        )
+        assertEquals(
             "penumbra_cosmos_attestation_bundle_b64",
             CosmosRemoteTransport.ATTESTATION_BUNDLE_SETTING,
         )
@@ -26,6 +30,13 @@ class ChannelFactoryBypassTest {
             "penumbra_cosmos_onboarding_pincode",
             CosmosOnboardingAutomation.PINCODE_SETTING,
         )
+    }
+
+    @Test
+    fun missingOrMalformedProvisionedRootFailsClosed() {
+        assertNull(CosmosRemoteTransport.parseProvisionedRootCertificate(null))
+        assertNull(CosmosRemoteTransport.parseProvisionedRootCertificate("not-base64"))
+        assertNull(CosmosRemoteTransport.parseProvisionedRootCertificate("bm90LWEtY2VydGlmaWNhdGU="))
     }
 
     @Test

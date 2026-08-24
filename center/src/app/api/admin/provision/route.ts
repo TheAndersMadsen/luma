@@ -16,7 +16,7 @@ const STOCK_PRODUCT = "00000001";
  * proxied to `/demo-api/admin/provision`. Body: `{ device_id, product? }`.
  *
  * The response carries the device certificate, its private key (issued once,
- * never stored), the signing CA, and the enrollment pincode — everything the
+ * never stored), the signing intermediate, operator root, and enrollment pincode — everything the
  * operator hands a device so it can run the OPAQUE ceremony. That key is
  * sensitive, so this is POST-only and admin-gated; the token is injected here,
  * and the console marks the response as shown-once with a control to clear it

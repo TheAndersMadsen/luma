@@ -6,6 +6,7 @@ const path = require('node:path');
 const {
   DEPLOY_DIR, ENV_FILE, ROOT, fail, operatorEnvironment, resolveTool, run, validateRuntime,
 } = require('./context');
+const { versionInfo } = require('./command-spec');
 const { validateProductionArtifacts } = require('./production-setup');
 
 const DOCTOR_USAGE = './revival doctor production [--env-file FILE] [--project-name NAME]';
@@ -38,6 +39,19 @@ function deploymentScript(name, args, envFile = ENV_FILE) {
   try {
     values = validateRuntime({ production: true, envFile });
     validateProductionArtifacts(values);
+    const release = versionInfo();
+    const configured = values.REVIVAL_COMPOSE_APPLICATION || '';
+    const application = configured || release.application || '';
+    if (!/^oci:\/\/ghcr\.io\/[a-z0-9][a-z0-9._/-]*@sha256:[0-9a-f]{64}$/u.test(application)) {
+      throw new Error('production requires REVIVAL_COMPOSE_APPLICATION=oci://ghcr.io/...@sha256:<64 lowercase hex characters>');
+    }
+    if (release.application && configured && release.application !== configured) {
+      throw new Error('REVIVAL_COMPOSE_APPLICATION does not match this operator release');
+    }
+    if (release.revision !== 'source' && values.REVIVAL_RELEASE_ID !== release.revision) {
+      throw new Error('REVIVAL_RELEASE_ID does not match this operator release revision');
+    }
+    values = { ...values, REVIVAL_COMPOSE_APPLICATION: application };
   } catch (error) {
     fail(error.message);
   }

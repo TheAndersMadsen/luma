@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { createHash, X509Certificate } from "node:crypto";
 import {
   chmodSync,
   mkdtempSync,
@@ -13,19 +12,18 @@ import { join } from "node:path";
 import test from "node:test";
 
 import {
-  CLONE_ROOT_PEM,
   PinActivationError,
   activatePin,
   buildActivationEnvelope,
   parseActivationArgs,
   parseProviderBundle,
   validateActivationCredential,
-  validateCredentialAgainstRoot,
 } from "../pin/activate.mjs";
 
 const SERIAL = "1H4MPA42230112";
 const DEVICE_ID = "2c2a00010000abcd";
 const FINGERPRINT = "ab".repeat(32);
+const ROOT_FINGERPRINT = "cd".repeat(32);
 const SECRET_MARKER = "fixture-private-key-must-never-reach-argv";
 
 function openssl(args) {
@@ -57,6 +55,7 @@ function chainFixture() {
     certificate_pem: readFileSync(paths.leafCert, "utf8"),
     private_key_pem: readFileSync(paths.leafKey, "utf8"),
     ca_certificate_pem: readFileSync(paths.issuerCert, "utf8"),
+    root_certificate_pem: readFileSync(paths.rootCert, "utf8"),
   };
   return { root, paths, document, rootPem: readFileSync(paths.rootCert, "utf8") };
 }
@@ -73,10 +72,10 @@ function providerStatus(state = "inactive") {
   if (state === "inactive") {
     return "Result: Bundle[{ok=true, state=inactive, managed=false, present=false, identity_usable=false}]\n";
   }
-  return `Result: Bundle[{ok=true, state=active, managed=true, edge_ipv4=203.0.113.9, present=true, identity_usable=true, fingerprint_sha256=${FINGERPRINT}, api_endpoint=https://api.cosmos.humane.cloud, onboarding_endpoint=https://onboarding.cosmos.humane.cloud}]\n`;
+  return `Result: Bundle[{ok=true, state=active, managed=true, edge_ipv4=203.0.113.9, present=true, identity_usable=true, fingerprint_sha256=${FINGERPRINT}, root_certificate_sha256=${ROOT_FINGERPRINT}, api_endpoint=https://api.cosmos.humane.cloud, onboarding_endpoint=https://onboarding.cosmos.humane.cloud}]\n`;
 }
 
-function fakeRuntime({ reportedSerial = SERIAL } = {}) {
+function fakeRuntime({ reportedSerial = SERIAL, unlocked = true } = {}) {
   const calls = [];
   const output = [];
   let statusCalls = 0;
@@ -89,6 +88,8 @@ function fakeRuntime({ reportedSerial = SERIAL } = {}) {
       certificatePem: "certificate-public-fixture",
       privateKeyPem: SECRET_MARKER,
       caCertificatePem: "issuer-public-fixture",
+      rootCertificateDerB64: "root-public-fixture",
+      rootFingerprintSha256: ROOT_FINGERPRINT,
       fingerprintSha256: FINGERPRINT,
       subject: `CN=V:01:D:${DEVICE_ID}:P:00000001`,
     }),
@@ -97,6 +98,9 @@ function fakeRuntime({ reportedSerial = SERIAL } = {}) {
       calls.push({ command, args: [...args], input });
       if (args.at(-1) === "get-serialno") return { status: 0, stdout: `${reportedSerial}\n`, stderr: "" };
       if (args.at(-1) === "ro.boot.deviceid") return { status: 0, stdout: `${DEVICE_ID}\n`, stderr: "" };
+      if (args.at(-1) === "sys.user.0.ce_available") {
+        return { status: 0, stdout: unlocked ? "1\n" : "0\n", stderr: "" };
+      }
       if (args.includes("ACTIVATION_STATUS")) {
         statusCalls += 1;
         return { status: 0, stdout: providerStatus(statusCalls > 1 ? "active" : "inactive"), stderr: "" };
@@ -136,72 +140,73 @@ test("provider response parser accepts only the bounded activation fields", () =
   assert.equal(parsed.state, "active");
   assert.equal(parsed.edgeIpv4, "203.0.113.9");
   assert.equal(parsed.fingerprintSha256, FINGERPRINT);
+  assert.equal(parsed.rootCertificateSha256, ROOT_FINGERPRINT);
   assert.throws(() => parseProviderBundle("ok=true"), /unreadable response/);
 });
 
 test("credential validator proves the full leaf -> issuer -> selected root chain", () => {
   const fixture = chainFixture();
   const source = JSON.stringify(fixture.document);
-  const credential = validateCredentialAgainstRoot(source, fixture.rootPem);
+  const credential = validateActivationCredential(source);
   assert.equal(credential.deviceId, DEVICE_ID);
   assert.match(credential.fingerprintSha256, /^[0-9a-f]{64}$/u);
-
-  assert.throws(
-    () => validateActivationCredential(source),
-    /does not chain to the pinned clone root/,
-    "the production root must not be caller-selected",
-  );
-  assert.doesNotThrow(() => new (awaitImportX509())(CLONE_ROOT_PEM));
+  assert.match(credential.rootFingerprintSha256, /^[0-9a-f]{64}$/u);
+  assert.equal(Buffer.from(credential.rootCertificateDerB64, "base64").length > 0, true);
 });
 
-test("host activation pins the same clone root as both installed device paths", () => {
+test("host and device paths contain no compiled operator certificate", () => {
   const sources = [
+    readFileSync(new URL("../pin/activate.mjs", import.meta.url), "utf8"),
     readFileSync(new URL("../../../pin/runtime/android/src/main/kotlin/com/penumbraos/server/CosmosIdentityProvider.kt", import.meta.url), "utf8"),
     readFileSync(new URL("../../../pin/hook/payload/src/main/kotlin/com/penumbraos/hook/CosmosRemoteTransport.kt", import.meta.url), "utf8"),
   ];
   for (const source of sources) {
-    const match = /CLONE_ROOT_PEM = """([\s\S]*?)"""/u.exec(source);
-    assert.ok(match, "device path must keep an explicit pinned root");
-    assert.equal(match[1], CLONE_ROOT_PEM);
+    assert.doesNotMatch(source, /-----BEGIN CERTIFICATE-----/u);
+    assert.doesNotMatch(source, /Carry Clone Root/u);
   }
-
-  const certificate = new X509Certificate(CLONE_ROOT_PEM);
-  assert.equal(Buffer.byteLength(CLONE_ROOT_PEM), 687);
-  assert.equal(
-    createHash("sha256").update(CLONE_ROOT_PEM).digest("hex"),
-    "e1fe74c7c960f070264933deed138cadc1c0d1cd3d833297422119599353b2b9",
-  );
-  assert.equal(
-    createHash("sha256").update(`${CLONE_ROOT_PEM}\n`).digest("hex"),
-    "1b947b4e4dae58dc5f8aac1863723eb0eaa313da993e2b8ec7abed38727e22ed",
-  );
-  assert.equal(
-    certificate.fingerprint256.replaceAll(":", "").toLowerCase(),
-    "7f82fbf94a370379ed238fb0c9d2e2d13316d67197faba2948c0e3d92ac3458b",
-  );
-  assert.match(certificate.subject, /Root EC 1$/u);
 });
-
-function awaitImportX509() {
-  // Keep the production-root parse assertion synchronous and dependency-free.
-  return globalThis.process.getBuiltinModule("node:crypto").X509Certificate;
-}
 
 test("credential validator rejects endpoint injection and a wrong certificate subject", () => {
   const fixture = chainFixture();
   assert.throws(
-    () => validateCredentialAgainstRoot(JSON.stringify({
+    () => validateActivationCredential(JSON.stringify({
       ...fixture.document,
       api_endpoint: "https://attacker.invalid",
-    }), fixture.rootPem),
+    })),
     /must not choose api_endpoint/,
   );
   assert.throws(
-    () => validateCredentialAgainstRoot(JSON.stringify({
+    () => validateActivationCredential(JSON.stringify({
       ...fixture.document,
       device_id: "ffffffffffffffff",
-    }), fixture.rootPem),
+    })),
     /subject does not match/,
+  );
+});
+
+test("credential validator rejects malformed, non-self-signed, and wrong-chain roots", () => {
+  const fixture = chainFixture();
+  const stranger = chainFixture();
+  assert.throws(
+    () => validateActivationCredential(JSON.stringify({
+      ...fixture.document,
+      root_certificate_pem: "not PEM",
+    })),
+    /operator root certificate must contain exactly one PEM/u,
+  );
+  assert.throws(
+    () => validateActivationCredential(JSON.stringify({
+      ...fixture.document,
+      root_certificate_pem: fixture.document.ca_certificate_pem,
+    })),
+    /not a self-signed CA/u,
+  );
+  assert.throws(
+    () => validateActivationCredential(JSON.stringify({
+      ...fixture.document,
+      root_certificate_pem: stranger.document.root_certificate_pem,
+    })),
+    /does not chain to the operator root/u,
   );
 });
 
@@ -259,8 +264,24 @@ test("confirmed activation streams the envelope on stdin and verifies postcondit
   assert.equal(envelope.api_endpoint, "https://api.cosmos.humane.cloud");
   assert.equal(envelope.onboarding_endpoint, "https://onboarding.cosmos.humane.cloud");
   assert.equal(envelope.edge_ipv4, "203.0.113.9");
+  assert.equal(envelope.root_certificate_der_b64, "root-public-fixture");
   assert.equal(fake.calls.some((call) => call.args.includes("push")), false);
   assert.doesNotMatch(fake.text(), new RegExp(SECRET_MARKER, "u"));
+});
+
+test("locked credential storage is rejected before provider staging", () => {
+  const file = credentialFile({ fixture: true });
+  const fake = fakeRuntime({ unlocked: false });
+  assert.throws(
+    () => activatePin({
+      serial: SERIAL,
+      credentialFile: file,
+      edgeIpv4: "203.0.113.9",
+      confirm: true,
+    }, fake.runtime),
+    /unlock the Pin/u,
+  );
+  assert.equal(fake.calls.some((call) => call.args.includes("write")), false);
 });
 
 test("exact target mismatch fails before credential staging", () => {
@@ -284,6 +305,7 @@ test("activation envelope rejects noncanonical IPv4 and fixes both endpoints", (
     certificatePem: "cert",
     privateKeyPem: "key",
     caCertificatePem: "ca",
+    rootCertificateDerB64: "root-der",
   };
   assert.throws(() => buildActivationEnvelope(credential, "203.000.113.9"), /canonical edge IPv4/);
   const envelope = buildActivationEnvelope(credential, "203.0.113.9");

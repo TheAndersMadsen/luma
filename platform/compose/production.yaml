@@ -1,6 +1,6 @@
-# `revival setup production` writes the operator-local overlay. Services use
-# prebuilt images; publishing this Compose application as an OCI artifact is the
-# remaining Phase 2 distribution step.
+# `revival setup production` writes the operator-local overlay. The release
+# workflow publishes this source-only model as an OCI Compose application;
+# operator files and values are added only by the local overlay at deployment.
 
 x-production-labels: &production-labels
   dk.andersmadsen.ai-pin-revival.product: Ai Pin Revival
@@ -197,7 +197,7 @@ services:
       postgres: { condition: service_healthy }
 
   traefik:
-    image: ${REVIVAL_TRAEFIK_IMAGE:-traefik:v3.6}
+    image: ${REVIVAL_TRAEFIK_IMAGE:-traefik:v3.6.25@sha256:31267173a15b4944e797a76ffd9c419707c8d8b32fe5b610f80cd0cfa05f372d}
     command: [--configFile=/etc/traefik/traefik.yml]
     restart: unless-stopped
     ports:

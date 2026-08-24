@@ -1,9 +1,10 @@
 import { StatusChip, StatusMessage } from "@/components/Status";
+import { createActivationBundleJson } from "./activationBundle";
 import styles from "./admin.module.css";
 import type { Bundle, Overview } from "./AdminTypes";
 
-function download(name: string, text: string) {
-  const url = URL.createObjectURL(new Blob([text], { type: "application/x-pem-file" }));
+function download(name: string, text: string, type: string) {
+  const url = URL.createObjectURL(new Blob([text], { type }));
   const anchor = document.createElement("a");
   anchor.href = url;
   anchor.download = name;
@@ -150,16 +151,24 @@ export function AdminProvisioning({
               </button>
             </div>
             <StatusMessage tone="warning">
-              This private key and pincode are shown once and never stored. Download all three files
-              before you leave or reload this page.
+              This private key and pincode are shown once and never stored. Download the activation
+              file before you leave or reload this page, then keep it private.
             </StatusMessage>
             <div className={styles.downloads}>
-              <button type="button" className={styles.miniButton} onClick={() => download(`device-${bundle.device_id}.crt`, bundle.certificate_pem)}>↓ device.crt</button>
-              <button type="button" className={styles.miniButton} onClick={() => download(`device-${bundle.device_id}.key`, bundle.private_key_pem)}>↓ device.key</button>
-              <button type="button" className={styles.miniButton} onClick={() => download("attestation-ca.crt", bundle.ca_certificate_pem)}>↓ ca.crt</button>
+              <button
+                type="button"
+                className={styles.miniButton}
+                onClick={() => download(
+                  `cosmos-activation-${bundle.device_id}.json`,
+                  createActivationBundleJson(bundle),
+                  "application/json",
+                )}
+              >
+                ↓ activation.json
+              </button>
             </div>
             <ol className={styles.steps}>
-              <li>Save the device certificate, private key, and trusted CA on the Pin or test harness.</li>
+              <li>Save the activation JSON on the trusted computer connected to this Pin.</li>
               <li>
                 Point onboarding at <code>{bundle.onboarding.endpoint || "the onboarding edge"}</code>
                 {bundle.onboarding.authority ? <> with authority <code>{bundle.onboarding.authority}</code></> : null},
