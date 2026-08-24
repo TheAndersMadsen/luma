@@ -49,8 +49,13 @@ test("debug syntax keeps explicit and changed selection separate", () => {
 
 test("debug Docker invocation mounts source read-only and keeps state and caches external", () => {
   const directories = temporaryDirectories();
-  const invocation = debug.pinBuilderRunInvocation(["hook", "server"], directories, "fixture:image");
+  const invocation = debug.pinBuilderRunInvocation(
+    ["hook", "server"], directories, "fixture:image", "arm64",
+  );
   assert.equal(invocation.command, "docker");
+  assert.deepEqual(invocation.args.slice(0, 5), [
+    "run", "--rm", "--init", "--platform", "linux/arm64",
+  ]);
   assert.ok(invocation.args.includes("--read-only"));
   assert.ok(invocation.args.includes(`type=bind,src=${root},dst=/workspace,readonly`));
   assert.ok(invocation.args.includes(`type=bind,src=${directories.state},dst=/state`));
@@ -58,6 +63,15 @@ test("debug Docker invocation mounts source read-only and keeps state and caches
   assert.deepEqual(invocation.args.slice(-5), [
     "build-debug-role", "--role", "hook", "--role", "server",
   ]);
+});
+
+test("debug builder uses the native Docker platform", () => {
+  assert.deepEqual(
+    debug.pinBuilderBuildInvocation("fixture:image", "x64").args.slice(0, 3),
+    ["build", "--platform", "linux/amd64"],
+  );
+  assert.equal(debug.nativeDockerPlatform("arm64"), "linux/arm64");
+  assert.throws(() => debug.nativeDockerPlatform("riscv64"), /do not support/u);
 });
 
 test("builder image is rebuilt only when its small input fingerprint changes", () => {
@@ -84,13 +98,12 @@ test("builder image is rebuilt only when its small input fingerprint changes", (
   assert.deepEqual(calls[0].args, ["image", "inspect", "fixture:image"]);
 });
 
-test("debug command performs preflight, image check, then one Docker run", () => {
+test("debug command resolves changes, checks its image, then runs Docker once", () => {
   const events = [];
   const directories = temporaryDirectories();
   debug.pinDebugBuild(["--changed"], {
     directories,
     environment: {},
-    preflight() { events.push("preflight"); },
     pathResolver() {
       events.push("changed-paths");
       return ["pin/runtime/core/src/lib.rs"];
@@ -101,7 +114,7 @@ test("debug command performs preflight, image check, then one Docker run", () =>
       return { status: 0, signal: null, stdout: "", stderr: "" };
     },
   });
-  assert.deepEqual(events.slice(0, 3), ["preflight", "changed-paths", "image"]);
-  assert.equal(events[3].label, "Build Pin debug APKs");
-  assert.deepEqual(events[3].args.slice(-3), ["build-debug-role", "--role", "server"]);
+  assert.deepEqual(events.slice(0, 2), ["changed-paths", "image"]);
+  assert.equal(events[2].label, "Build Pin debug APKs");
+  assert.deepEqual(events[2].args.slice(-3), ["build-debug-role", "--role", "server"]);
 });

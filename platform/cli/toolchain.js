@@ -1,9 +1,7 @@
 'use strict';
 
-const child = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
-const path = require('node:path');
 // Host toolchain contracts: version parsing and the pinned Node/Rust/JDK checks.
 // Split out of the root `revival` entry point; behavior, messages, and exit
 // codes are unchanged.
@@ -43,73 +41,8 @@ function parseCommandVersion(value, command) {
   return parseNamedCommandVersion(value, command);
 }
 
-function parseQemuX86VersionBanner(value) {
-  if (typeof value !== 'string') return null;
-  const matches = [...value.matchAll(/^qemu-x86_64 version (\d+)\.(\d+)\.(\d+)(?:[ \t].*)?$/gm)];
-  return matches.length === 1 ? matches[0].slice(1, 4).map(Number) : null;
-}
-
 const PIN_AMD64_HOSTED_GUIDANCE =
-  'Run the canonical Pin Android consumer on a native hosted linux/amd64 runner; ' +
-  'keep this ARM host for static/image-assembly validation and do not alter its binfmt registration.';
-const QEMU_VERSION_PROBE_ENVIRONMENT = Object.freeze({ LANG: 'C', LC_ALL: 'C' });
-const AARCH64_BINFMT_INTERPRETER = '/usr/libexec/qemu-binfmt/aarch64-binfmt-P';
-const CANONICAL_AARCH64_BINFMT_RECORD = [
-  'qemu-aarch64',
-  'enabled',
-  `interpreter ${AARCH64_BINFMT_INTERPRETER}`,
-  'flags: POF',
-  'offset 0',
-  'magic 7f454c460201010000000000000000000200b700',
-  'mask ffffffffffffff00fffffffffffffffffeffffff',
-  '',
-].join('\n');
-
-function cpuInfoIsConsistentNativeX86(cpuInfo) {
-  if (typeof cpuInfo !== 'string' || cpuInfo.trim() === '') return false;
-  const blocks = cpuInfo.trim().split(/\n\s*\n/u);
-  let expectedVendor = null;
-  for (const block of blocks) {
-    const values = new Map();
-    for (const line of block.split('\n')) {
-      if (line.trim() === '') continue;
-      const match = /^([^:\n]+?)\s*:\s*(.*?)\s*$/u.exec(line);
-      if (!match) return false;
-      const key = match[1];
-      const canonicalKey = key.toLowerCase();
-      if (canonicalKey === 'vendor_id' && key !== 'vendor_id') return false;
-      if (canonicalKey.includes('vendor') && canonicalKey !== 'vendor_id') return false;
-      if (['cpu implementer', 'cpu architecture', 'cpu variant', 'cpu part', 'cpu revision',
-        'architecture'].includes(canonicalKey)) return false;
-      if (values.has(canonicalKey)) return false;
-      values.set(canonicalKey, match[2]);
-    }
-    const vendor = values.get('vendor_id');
-    if (!['GenuineIntel', 'AuthenticAMD'].includes(vendor)) return false;
-    if (expectedVendor !== null && vendor !== expectedVendor) return false;
-    expectedVendor = vendor;
-    if (values.has('processor') && !/^\d+$/u.test(values.get('processor'))) return false;
-  }
-  return expectedVendor !== null;
-}
-
-function fixedAarch64InterpreterIsTrusted() {
-  try {
-    if (fs.realpathSync.native(AARCH64_BINFMT_INTERPRETER) !== AARCH64_BINFMT_INTERPRETER) return false;
-    let cursor = path.parse(AARCH64_BINFMT_INTERPRETER).root;
-    for (const part of AARCH64_BINFMT_INTERPRETER.slice(cursor.length).split('/').filter(Boolean)) {
-      cursor = path.join(cursor, part);
-      const metadata = fs.lstatSync(cursor, { bigint: true });
-      if (metadata.isSymbolicLink() || metadata.uid !== 0n || (metadata.mode & 0o022n) !== 0n) return false;
-      if (cursor === AARCH64_BINFMT_INTERPRETER) {
-        if (!metadata.isFile() || metadata.nlink !== 1n || (metadata.mode & 0o111n) === 0n) return false;
-      } else if (!metadata.isDirectory()) return false;
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
+  'Run the amd64 Pin builder on a native linux/amd64 host.';
 
 function diagnosePinAmd64Runtime({
   architecture,
@@ -117,10 +50,6 @@ function diagnosePinAmd64Runtime({
   kernelArchitecture = architecture,
   runnerArchitecture = null,
   runnerOs = null,
-  binfmtRegistered = false,
-  qemuVersionBanner = '',
-  cpuInfo = '',
-  emulationEvidence = '',
 }) {
   const normalizeArchitecture = (value) => {
     if (typeof value !== 'string') return null;
@@ -134,12 +63,8 @@ function diagnosePinAmd64Runtime({
   const runnerAbsent = runnerArchitecture === null && runnerOs === null;
   const runnerConsistent = runnerAbsent ||
     (runnerArchitecture === 'X64' && runnerOs === 'Linux');
-  const evidence = `${qemuVersionBanner}\n${cpuInfo}\n${emulationEvidence}`.toLowerCase();
-  const translated = ['qemu', 'tcg', 'rosetta', 'emulat', 'translated', 'box64', 'fex-emu']
-    .some((token) => evidence.includes(token));
   if (platform === 'linux' && nodeArchitecture === 'amd64' && kernel === 'amd64' &&
-      runnerConsistent &&
-      !binfmtRegistered && cpuInfoIsConsistentNativeX86(cpuInfo) && !translated) {
+      runnerConsistent) {
     return Object.freeze({ safe: true, detail: 'native linux/amd64 runtime' });
   }
   return Object.freeze({
@@ -152,105 +77,16 @@ function diagnosePinAmd64Runtime({
 function probePinAmd64Runtime({
   architecture = process.arch,
   platform = process.platform,
-  kernelArchitecture = null,
+  kernelArchitecture = architecture === process.arch ? os.machine() : architecture,
   runnerArchitecture = process.env.RUNNER_ARCH ?? null,
   runnerOs = process.env.RUNNER_OS ?? null,
-  readRegistration = () => fs.readFileSync('/proc/sys/fs/binfmt_misc/qemu-x86_64', 'utf8'),
-  readBinfmtRegistrations = () => {
-    let names;
-    try {
-      names = fs.readdirSync('/proc/sys/fs/binfmt_misc');
-    } catch (error) {
-      if (error?.code === 'ENOENT') return '';
-      throw error;
-    }
-    return names
-      .filter((name) => !['register', 'status'].includes(name))
-      .map((name) => `${name}\n${fs.readFileSync(`/proc/sys/fs/binfmt_misc/${name}`, 'utf8')}`)
-      .join('\n\n');
-  },
-  readCpuInfo = () => fs.readFileSync('/proc/cpuinfo', 'utf8'),
-  readEvidence = () => [
-    fs.readFileSync('/proc/self/status', 'utf8'),
-    fs.readFileSync('/proc/self/maps', 'utf8'),
-    ...[
-      '/sys/class/dmi/id/product_name',
-      '/sys/class/dmi/id/sys_vendor',
-      '/sys/class/dmi/id/board_vendor',
-    ].map((filename) => {
-      try { return fs.readFileSync(filename, 'utf8'); } catch { return ''; }
-    }),
-  ].join('\n'),
-  resolveInterpreter = (value) => fs.realpathSync(value),
-  verifyAarch64Interpreter = fixedAarch64InterpreterIsTrusted,
-  spawn = child.spawnSync,
 } = {}) {
-  // An injected architecture fixture remains self-contained; the real process
-  // always adds the independently observed kernel machine label.
-  const observedKernelArchitecture = kernelArchitecture ??
-    (architecture === process.arch ? os.machine() : architecture);
-  // The credential-free APK lane is deliberately native-only. Do not inspect
-  // or execute binfmt/QEMU on ARM: even a newer emulator is not evidence for
-  // the native linux/amd64 compiler contract proved by hosted CI.
-  if (platform !== 'linux' || architecture !== 'x64') {
-    void readRegistration;
-    void readBinfmtRegistrations;
-    void readCpuInfo;
-    void readEvidence;
-    void resolveInterpreter;
-    void verifyAarch64Interpreter;
-    void spawn;
-    return diagnosePinAmd64Runtime({
-      architecture,
-      platform,
-      kernelArchitecture: observedKernelArchitecture,
-      runnerArchitecture,
-      runnerOs,
-      binfmtRegistered: false,
-      qemuVersionBanner: '',
-      cpuInfo: '',
-      emulationEvidence: '',
-    });
-  }
-  let registration = '';
-  try {
-    registration = readBinfmtRegistrations();
-    if (typeof registration !== 'string') throw new TypeError('binfmt enumeration was not text');
-  } catch {
-    // Absence of the binfmt filesystem is represented by the injected reader
-    // returning an authoritative empty enumeration. Permission/I/O/schema
-    // failures are unknown host state and must never be treated as native.
-    return diagnosePinAmd64Runtime({
-      architecture,
-      platform,
-      kernelArchitecture: observedKernelArchitecture,
-      runnerArchitecture,
-      runnerOs,
-      binfmtRegistered: true,
-      qemuVersionBanner: 'unreadable-binfmt-enumeration',
-      cpuInfo: '',
-      emulationEvidence: 'unknown host translation state',
-    });
-  }
-  void readRegistration;
-  let cpuInfo = '';
-  let emulationEvidence = '';
-  try { cpuInfo = readCpuInfo(); } catch { cpuInfo = ''; }
-  try { emulationEvidence = readEvidence(); } catch { emulationEvidence = 'unreadable-emulation-evidence'; }
-  void resolveInterpreter;
-  void spawn;
-  const translationRegistrationUnsafe = registration !== '' &&
-    (registration !== CANONICAL_AARCH64_BINFMT_RECORD || verifyAarch64Interpreter() !== true);
   return diagnosePinAmd64Runtime({
     architecture,
     platform,
-    kernelArchitecture: observedKernelArchitecture,
+    kernelArchitecture,
     runnerArchitecture,
     runnerOs,
-    binfmtRegistered: translationRegistrationUnsafe,
-    qemuVersionBanner: translationRegistrationUnsafe ? registration : '',
-    cpuInfo,
-    emulationEvidence,
   });
 }
 
@@ -391,13 +227,9 @@ module.exports = {
   parseNamedCommandVersion,
   parseJavaVersionBanner,
   parseCommandVersion,
-  parseQemuX86VersionBanner,
-  cpuInfoIsConsistentNativeX86,
-  CANONICAL_AARCH64_BINFMT_RECORD,
   diagnosePinAmd64Runtime,
   probePinAmd64Runtime,
   PIN_AMD64_HOSTED_GUIDANCE,
-  QEMU_VERSION_PROBE_ENVIRONMENT,
   versionAtLeast,
   versionText,
   sameMajorAndAtLeast,

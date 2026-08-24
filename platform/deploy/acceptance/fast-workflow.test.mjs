@@ -304,16 +304,14 @@ test("platform checks keep the fast contributor inventory distinct from the dyna
   assert.deepEqual(parsePlatformArguments(["--full"]), { full: true });
 });
 
-test("Pin check keeps preflight first and runs direct contributor checks", () => {
+test("Pin check runs direct contributor checks", () => {
   const ordering = [];
   pinContributorCheck({
-    preflight() { ordering.push("preflight"); },
     sessionRunner(label, command, args) {
       ordering.push([label, command, args.slice(0, 3)]);
     },
   });
-  const [preflightMarker, coreRust, bridgeRust, pinGradle, injectorGradle] = ordering;
-  assert.equal(preflightMarker, "preflight");
+  const [coreRust, bridgeRust, pinGradle, injectorGradle] = ordering;
   assert.deepEqual(coreRust, [
     "Pin contributor check: cargo test --locked",
     "cargo",

@@ -169,7 +169,6 @@ services:
         - action: sync
           path: ./center
           target: /app
-          initial_sync: true
           ignore:
             - .next/
             - node_modules/
@@ -188,7 +187,6 @@ services:
         - action: sync+restart
           path: ./contracts/wire
           target: /app/contracts
-          initial_sync: true
 
   keycloak:
     labels:

@@ -14,10 +14,7 @@ const {
   testProcessEnvironment,
 } = require('./context');
 const { timedRun, timedStage } = require('./timing');
-const {
-  probePinAmd64Runtime,
-  testVersionParser,
-} = require('./toolchain');
+const { testVersionParser } = require('./toolchain');
 const SERIAL_POLICY_TESTS = Object.freeze([
   'fresh-install.test.mjs',
 ]);
@@ -156,23 +153,7 @@ function policyTests(environment = testProcessEnvironment(), options = {}) {
   }
 }
 
-function assertPinAmd64ConsumerHost(pinEnvironment) {
-  // The probe itself uses a fixed two-variable locale environment. It never
-  // forwards even this already-sanitized contributor environment.
-  void pinEnvironment;
-  const diagnosis = probePinAmd64Runtime();
-  if (diagnosis.safe !== true) {
-    throw new Error(`unsafe linux/amd64 Pin consumer host: ${diagnosis.detail}. ${diagnosis.guidance}`);
-  }
-  return diagnosis;
-}
-
 function pinContributorCheck(dependencies = {}) {
-  // Native-only refusal is the first operational action. In particular, an
-  // ARM/macOS host cannot create synthetic homes, npm configs, cache roots, or
-  // Docker state merely by asking for a Pin check.
-  const preflight = dependencies.preflight ?? assertPinAmd64ConsumerHost;
-  preflight(Object.freeze({ LANG: 'C', LC_ALL: 'C' }));
   const environment = Object.freeze({
     ...testProcessEnvironment(),
     ...(dependencies.environment || {}),
@@ -181,7 +162,7 @@ function pinContributorCheck(dependencies = {}) {
   runPinContributorChecks(sessionRunner, environment);
   info('[implemented] Pin policy, Cargo, and canonical Android contract/common checks passed in direct contributor checks.');
   info('[implemented] contributor Pin checks require no signing keys or private release assets.');
-  info('[unknown] this host gate does not build a signed device bundle or verify a physical Pin.');
+  info('[unknown] contributor checks do not build a signed device bundle or verify a physical Pin.');
 }
 
 function pinSourceCheck() {
@@ -204,7 +185,6 @@ module.exports = {
   policyTestMode,
   policyTestPlan,
   policyTests,
-  assertPinAmd64ConsumerHost,
   pinContributorCheck,
   pinSourceCheck,
   repositoryCheck,

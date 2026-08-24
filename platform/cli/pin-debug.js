@@ -12,7 +12,6 @@ const {
   info,
   testProcessEnvironment,
 } = require('./context');
-const { assertPinAmd64ConsumerHost } = require('./gates');
 const {
   changedPaths: authoritativeChangedPaths,
   validGitBaseRef,
@@ -126,12 +125,18 @@ function mount(source, target, readOnly = false) {
   return `type=bind,src=${source},dst=${target}${readOnly ? ',readonly' : ''}`;
 }
 
-function pinBuilderBuildInvocation(image = BUILDER_IMAGE) {
+function nativeDockerPlatform(architecture = process.arch) {
+  if (architecture === 'x64') return 'linux/amd64';
+  if (architecture === 'arm64') return 'linux/arm64';
+  throw new Error(`Pin debug builds do not support host architecture ${architecture}`);
+}
+
+function pinBuilderBuildInvocation(image = BUILDER_IMAGE, architecture = process.arch) {
   return Object.freeze({
     command: 'docker',
     args: Object.freeze([
       'build',
-      '--platform', 'linux/amd64',
+      '--platform', nativeDockerPlatform(architecture),
       '--file', path.join(ROOT, 'platform/containers/pin-builder/Dockerfile'),
       '--tag', image,
       ROOT,
@@ -139,14 +144,19 @@ function pinBuilderBuildInvocation(image = BUILDER_IMAGE) {
   });
 }
 
-function pinBuilderRunInvocation(roles, directories = debugDirectories(), image = BUILDER_IMAGE) {
+function pinBuilderRunInvocation(
+  roles,
+  directories = debugDirectories(),
+  image = BUILDER_IMAGE,
+  architecture = process.arch,
+) {
   const uid = typeof process.getuid === 'function' ? process.getuid() : os.userInfo().uid;
   const gid = typeof process.getgid === 'function' ? process.getgid() : os.userInfo().gid;
   return Object.freeze({
     command: 'docker',
     args: Object.freeze([
       'run', '--rm', '--init',
-      '--platform', 'linux/amd64',
+      '--platform', nativeDockerPlatform(architecture),
       '--user', `${uid}:${gid}`,
       '--read-only',
       '--tmpfs', '/tmp:rw,nosuid,nodev,mode=1777,size=2g',
@@ -210,8 +220,6 @@ function pinDebugBuild(args, dependencies = {}) {
   }
 
   try {
-    const preflight = dependencies.preflight ?? assertPinAmd64ConsumerHost;
-    preflight(Object.freeze({ LANG: 'C.UTF-8', LC_ALL: 'C.UTF-8' }));
     const selection = resolveDebugBuildSelection(
       parsed,
       dependencies.pathResolver ?? changedPaths,
@@ -249,6 +257,7 @@ module.exports = {
   debugDirectories,
   prepareDebugDirectories,
   builderFingerprint,
+  nativeDockerPlatform,
   pinBuilderBuildInvocation,
   pinBuilderRunInvocation,
   debugBuildInvocations,
