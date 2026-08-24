@@ -140,7 +140,6 @@ material and can modify a physical device.
 ./revival pin check
 ./revival pin build-debug --role server
 ./revival pin release build --version YYYY-MM-DD.N --version-code INTEGER
-./revival pin release ship --confirm
 ./revival pin install --serial SERIAL
 ```
 
@@ -148,8 +147,9 @@ An install is a plan until `--confirm` is supplied. The installer rechecks the
 exact serial, APK set, signatures, versions, and installed Hook path. It refuses
 unsafe partial updates.
 
-The pinned builder signs and verifies all five APK roles as one set. Building
-and shipping never run ADB or touch a Pin.
+The pinned builder signs and verifies all five APK roles as one set, then
+atomically updates the release store mounted by Center. Building never runs ADB
+or touches a Pin.
 
 ## Documentation
 

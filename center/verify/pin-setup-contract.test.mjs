@@ -83,10 +83,10 @@ test("the committed Center journey is an in-sync projection of the root contract
   );
 });
 
-test("Center exposes the canonical build, ship, PKI, activation, and network commands", () => {
+test("Center exposes the canonical build, PKI, activation, and network commands", () => {
   const steps = new Map(derivePinSetupPlan(facts()).steps.map((step) => [step.id, step]));
   assert.equal(steps.get("release").command, "./revival pin release build");
-  assert.equal(steps.get("ship").command, "./revival pin release ship");
+  assert.equal(steps.has("ship"), false);
   assert.equal(steps.get("identity").command, "./revival pki import");
   assert.equal(steps.get("activate").command, "./revival pin activate");
   assert.equal(steps.get("network").command, "./revival pin network qr");
@@ -112,20 +112,18 @@ test("one step is focused and aggregate software health proves neither exact net
   );
 });
 
-test("an unpublished release build and ship use separate truthful actions", () => {
+test("an unpublished release points directly to the mounted-store build", () => {
   const plan = derivePinSetupPlan(
     facts({
       release: { availability: "not-published", version: null, detail: null },
     }),
   );
   const release = plan.steps.find((step) => step.id === "release");
-  const ship = plan.steps.find((step) => step.id === "ship");
   assert.equal(release.status, "manual");
   assert.deepEqual(release.commands, ["./revival pin release build"]);
-  assert.match(release.summary, /cannot tell whether a signed release was built/);
-  assert.equal(ship.status, "manual");
-  assert.deepEqual(ship.commands, ["./revival pin release ship"]);
-  assert.doesNotMatch(ship.summary, /copy/i);
+  assert.match(release.summary, /no signed Pin release/);
+  assert.match(release.next, /becomes current atomically/);
+  assert.equal(plan.steps.some((step) => step.id === "ship"), false);
 });
 
 test("invalid deployment edge configuration cannot look absent or verified", () => {

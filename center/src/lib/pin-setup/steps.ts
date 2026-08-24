@@ -266,15 +266,15 @@ function deriveRelease(release: PinSetupReleaseFacts): DraftStep {
     case "checking":
       return {
         status: "todo",
-        summary: "Checking whether a built release reached this Center…",
+        summary: "Checking the signed release store mounted by this Center…",
         next: null,
       };
     case "not-published":
       return {
         status: "manual",
         summary:
-          "Center has no published release, so it cannot tell whether a signed release was built on an operator host.",
-        next: "Build the signed release on the operator host, then publish it to Center.",
+          "Center has no signed Pin release in its mounted release store.",
+        next: "Build the signed release on this server; the completed build becomes current atomically.",
         manualNote:
           "A browser cannot build the release. The command below shows the required version inputs.",
       };
@@ -284,53 +284,12 @@ function deriveRelease(release: PinSetupReleaseFacts): DraftStep {
         summary: release.detail
           ? `Center could not use the published release as build evidence: ${release.detail}`
           : "Center could not verify the published release as evidence of a completed build.",
-        next: "Build and publish a valid release again.",
+        next: "Build a valid release again on this server.",
       };
     default:
       return {
         status: "todo",
         summary: "Whether a signed release exists has not been established yet.",
-        next: null,
-      };
-  }
-}
-
-function deriveShip(release: PinSetupReleaseFacts): DraftStep {
-  switch (release.availability) {
-    case "published":
-      return {
-        status: "done",
-        summary: release.version
-          ? `Release ${release.version} is published here, and its manifest verified.`
-          : "A verified release is published on this Center.",
-        next: null,
-      };
-    case "checking":
-      return {
-        status: "todo",
-        summary: "Asking this Center which release it serves…",
-        next: null,
-      };
-    case "not-published":
-      return {
-        status: "manual",
-        summary: "This Center is serving no Pin release, so the installer has nothing to install.",
-        next: "Ship the built release to Center with the canonical publication command.",
-        manualNote:
-          "Publication is an explicit remote mutation. The CLI plans it first and requires confirmation instead of asking you to copy the release store by hand.",
-      };
-    case "unreadable":
-      return {
-        status: "attention",
-        summary: release.detail
-          ? `The published release was refused: ${release.detail}`
-          : "The published release could not be verified.",
-        next: "Fix or re-ship the store on the server. Retrying an unverifiable manifest cannot make it safe to install.",
-      };
-    default:
-      return {
-        status: "todo",
-        summary: "Publication has not been checked yet.",
         next: null,
       };
   }
@@ -667,7 +626,6 @@ const DERIVATIONS: Readonly<
 > = Object.freeze({
   connect: (facts) => deriveConnect(facts.usb),
   release: (facts) => deriveRelease(facts.release),
-  ship: (facts) => deriveShip(facts.release),
   install: deriveInstall,
   configure: deriveConfigure,
   identity: deriveIdentity,

@@ -344,22 +344,6 @@
       "documentationAnchor": "docs/operations.md#onboarding-a-pin"
     },
     {
-      "id": "pin.release.ship",
-      "tokens": [
-        "pin",
-        "release",
-        "ship"
-      ],
-      "aliases": [],
-      "lifecycle": "current",
-      "effect": "remote-mutation",
-      "confirmationRequired": true,
-      "exactSerialRequired": false,
-      "summary": "Publish a signed Pin release to the remote Center store.",
-      "usage": "revival pin release ship --release-root PATH [--confirm] [options]",
-      "documentationAnchor": "docs/operations.md#onboarding-a-pin"
-    },
-    {
       "id": "pin.install",
       "tokens": [
         "pin",
@@ -857,7 +841,6 @@
         "pki.init",
         "pin.doctor",
         "pin.release.build",
-        "pin.release.ship",
         "pin.install",
         "config.check",
         "pin.activate.status",
@@ -880,15 +863,6 @@
           "id": "release",
           "title": "Build and verify the signed Pin release",
           "commandId": "pin.release.build",
-          "centerRoute": "/settings/pin/install",
-          "surface": "cli",
-          "verification": "cli",
-          "documentationAnchor": "docs/operations.md#onboarding-a-pin"
-        },
-        {
-          "id": "ship",
-          "title": "Confirm publication to Center",
-          "commandId": "pin.release.ship",
           "centerRoute": "/settings/pin/install",
           "surface": "cli",
           "verification": "cli",

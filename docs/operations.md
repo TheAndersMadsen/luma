@@ -65,11 +65,10 @@ The pinned builder builds, signs, and verifies all five APK roles as one set:
 
 ```sh
 ./revival pin release build --version YYYY-MM-DD.N --version-code INTEGER
-./revival pin release ship
-./revival pin release ship --confirm
 ```
 
-`ship` plans by default and publishes only with `--confirm`.
+The successful build atomically updates the external release store that Center
+mounts read-only. There is no separate upload or remote publication step.
 
 ## Install one Pin
 

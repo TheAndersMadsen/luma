@@ -26,16 +26,6 @@ export const PIN_SETUP_JOURNEY = {
       "documentationAnchor": "docs/operations.md#onboarding-a-pin"
     },
     {
-      "id": "ship",
-      "title": "Confirm publication to Center",
-      "commandId": "pin.release.ship",
-      "command": "./revival pin release ship",
-      "centerRoute": "/settings/pin/install",
-      "surface": "cli",
-      "verification": "cli",
-      "documentationAnchor": "docs/operations.md#onboarding-a-pin"
-    },
-    {
       "id": "install",
       "title": "Confirm installation on the exact Pin",
       "commandId": "pin.install",

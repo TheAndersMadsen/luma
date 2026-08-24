@@ -39,7 +39,7 @@ import { usePinSetupFacts } from "./usePinSetupFacts";
 const STATE_LABELS: Record<PinSetupStepStatus, string> = {
   done: "Done",
   todo: "Do this next",
-  // Covers both the terminal-only steps (publish a release, activate over ADB)
+  // Covers both the terminal-only steps (build a release, activate over ADB)
   // and the operator-only one (mint a credential): none can be finished in this
   // browser session, which is the honest thing they have in common.
   manual: "Outside this browser",
@@ -399,7 +399,6 @@ function renderStepActions({
       );
 
     case "release":
-    case "ship":
       // These are operator-host mutations. The generated CLI command is the
       // action; an adjacent Center link would falsely imply the browser can do it.
       return null;

@@ -52,12 +52,11 @@ Run `./revival --help` or append `--help` to any command.
 | `revival pin doctor --serial SERIAL` | Check host, assets, and one exact device. |
 | `revival pin check` | Run credential-free Pin source checks. |
 | `revival pin build-debug --role ROLE` | Build selected non-installable debug APKs. |
-| `revival pin release build --version YYYY-MM-DD.N --version-code INTEGER` | Build, sign, and verify all five APK roles. |
-| `revival pin release ship [--release-root DIR] [--confirm]` | Publish a verified release to Center. |
+| `revival pin release build --version YYYY-MM-DD.N --version-code INTEGER` | Build, sign, verify, and publish all five APK roles to Center's mounted store. |
 | `revival pin install --serial SERIAL [--store DIR] [--confirm]` | Plan or perform an exact-device install. |
 | `revival pin activate ... [--confirm]` | Plan or perform activation. |
 | `revival pin network ...` | Inspect or prepare network onboarding. |
 | `revival pki init\|import ... [--confirm]` | Plan or change device identity PKI. |
 
 Pin installation and activation require an exact serial and explicit
-confirmation. Build, ship, and doctor commands do not mutate a device.
+confirmation. Build and doctor commands do not mutate a device.

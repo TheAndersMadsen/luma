@@ -30,6 +30,7 @@ test("Center's committed setup projection matches the root contract", async () =
     model,
     /(?:from|import\()\s*["'][^"']*contracts\/operator-setup\.json/,
   );
-  assert.match(generated, /\.\/revival pin release ship/);
+  assert.match(generated, /\.\/revival pin release build/);
+  assert.doesNotMatch(generated, /pin release ship/);
   assert.match(generated, /"centerRoute": "\/wifi"/);
 });

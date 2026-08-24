@@ -160,14 +160,14 @@ test("Cosmos convenience targets delegate to the root Revival CLI", () => {
   assert.doesNotMatch(makefile, /cd \.\.\/\.\. && \.\/revival/);
 });
 
-test("Pin release exposes only build and plan-by-default shipping", () => {
+test("Pin release exposes only the local build that Center mounts", () => {
   const { temporary, env } = isolatedOperator();
   try {
     const releaseHelp = invoke(env, "pin", "release", "--help");
     assert.equal(releaseHelp.status, 0, releaseHelp.stderr);
-    assert.match(releaseHelp.stdout, /Build writes the local release store/);
+    assert.match(releaseHelp.stdout, /Build atomically updates the release store mounted by Center/);
     assert.match(releaseHelp.stdout, /build/);
-    assert.match(releaseHelp.stdout, /ship/);
+    assert.doesNotMatch(releaseHelp.stdout, /ship/);
     assert.doesNotMatch(releaseHelp.stdout, /\n  (?:inspect|verify|plan)\s/);
 
     const literalReleaseHelp = invoke(env, "pin", "release", "help");
@@ -182,7 +182,7 @@ test("Pin release exposes only build and plan-by-default shipping", () => {
     for (const operation of ["install", "flash", "reset", "provision"]) {
       const rejected = invoke(env, "pin", "release", operation);
       assert.equal(rejected.status, 64, `${operation}: ${rejected.stderr}`);
-      assert.match(rejected.stderr, /build\|ship/);
+      assert.match(rejected.stderr, /release build/);
     }
 
     const help = invoke(env, "--help");

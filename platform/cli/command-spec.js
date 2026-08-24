@@ -118,8 +118,7 @@ const DETAILS = Object.freeze({
   'pin.network.qr': 'Usage: revival pin network qr [--open]. Credentials remain browser-local and never enter argv.',
   'pin.install': 'Without --confirm this resolves the exact serial and release, prints a plan, and leaves the device untouched.',
   'pin.build-debug': 'Credential-free and non-installable. Select roles with repeated --role, or use --changed [--base REF]. Reuses the pinned linux/amd64 builder and external build caches; every role refuses release signing inputs.',
-  'pin.release.build': 'Usage: revival pin release build --version YYYY-MM-DD.N --version-code INTEGER. Builds the signed five-APK release into the external release store. It never runs ADB or mutates a device.',
-  'pin.release.ship': 'Plans by default. --confirm publishes to the remote Center release store.',
+  'pin.release.build': 'Usage: revival pin release build --version YYYY-MM-DD.N --version-code INTEGER. Builds the signed five-APK release into the external store mounted by Center. It never runs ADB or mutates a device.',
 });
 
 function safetyText(command) {
@@ -132,9 +131,6 @@ function safetyText(command) {
     return 'Safety: device mutation requires --confirm and an exact --serial; the delegated tool revalidates both.';
   }
   if (command.effect === 'remote-mutation') {
-    if (command.id === 'pin.release.ship') {
-      return 'Safety: this remote mutation plans first and changes state only with --confirm.';
-    }
     return command.confirmationRequired
       ? 'Safety: remote mutation requires the command’s documented confirmation and target guards; inspect the plan before confirming.'
       : 'Safety: this command changes remote state; inspect its exact target before running it.';
@@ -187,7 +183,7 @@ function renderGroupHelp(tokens, contract) {
   const heading = tokens.join(' ');
   const defaultCommand = findCommand(tokens, contract)?.command || null;
   const notes = [];
-  if (heading === 'pin release') notes.push('Build writes the local release store. Ship plans until explicitly confirmed.');
+  if (heading === 'pin release') notes.push('Build atomically updates the release store mounted by Center.');
   if (heading === 'config') notes.push('Bare `revival config` renders the Compose model.');
   if (heading === 'pin') notes.push('Device mutation requires an exact serial and explicit confirmation in the delegated tool.');
   return [

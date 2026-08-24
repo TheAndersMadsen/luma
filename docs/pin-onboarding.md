@@ -34,11 +34,11 @@ CA and does not replace the separate attestation CA.
 
 ```sh
 ./revival pin release build --version YYYY-MM-DD.N --version-code INTEGER
-./revival pin release ship --confirm
 ```
 
 A valid release contains one signed artifact for each of the five roles:
-Server, Hook, Hook injector, installer, and bootstrap.
+Server, Hook, Hook injector, installer, and bootstrap. A successful build makes
+that verified set current in Center's mounted release store.
 
 ## 4. Install
 

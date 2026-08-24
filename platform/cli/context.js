@@ -20,7 +20,6 @@ const ENV_EXAMPLE = path.join(ROOT, '.env.example');
 const COMPOSE_BASE = path.join(ROOT, 'compose.yaml');
 const COMPOSE_DEVELOPMENT = path.join(ROOT, 'platform', 'compose', 'development.yaml');
 const PIN_RELEASE_BUILD_TOOL = path.join(ROOT, 'platform', 'deploy', 'pin', 'build.mjs');
-const PIN_RELEASE_SHIP_TOOL = path.join(ROOT, 'platform', 'deploy', 'pin', 'ship.mjs');
 const PIN_INSTALL_TOOL = path.join(ROOT, 'platform', 'deploy', 'pin', 'install.mjs');
 const PIN_DOCTOR_TOOL = path.join(ROOT, 'platform', 'containers', 'pin-builder', 'doctor.mjs');
 const PKI_TOOL = path.join(ROOT, 'platform', 'deploy', 'pki.mjs');
@@ -1016,7 +1015,6 @@ module.exports = {
   COMPOSE_BASE,
   COMPOSE_DEVELOPMENT,
   PIN_RELEASE_BUILD_TOOL,
-  PIN_RELEASE_SHIP_TOOL,
   PIN_INSTALL_TOOL,
   PIN_DOCTOR_TOOL,
   PKI_TOOL,
