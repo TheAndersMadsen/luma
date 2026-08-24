@@ -9,6 +9,10 @@ const MIN_TIMEOUT_MS = 250;
 const MAX_TIMEOUT_MS = 15_000;
 const MIN_TOKEN_BYTES = 32;
 const MAX_TOKEN_BYTES = 512;
+const ALLOWED_UPSTREAM_ORIGINS = new Set([
+  "http://127.0.0.1:18080",
+  "http://center-iroh-bridge:18080",
+]);
 
 const LOOPBACK_ADDRESSES = new BlockList();
 LOOPBACK_ADDRESSES.addSubnet("127.0.0.0", 8, "ipv4");
@@ -44,6 +48,32 @@ function parseBindAddress(rawValue) {
     throw new Error("REVIVAL_SPOTIFY_ADAPTER_BIND_ADDRESS must not be a loopback address");
   }
   return address;
+}
+
+function parseUpstreamOrigin(rawValue) {
+  const value = rawValue?.trim();
+  if (!value) {
+    throw new Error("REVIVAL_SPOTIFY_ADAPTER_UPSTREAM_ORIGIN is required");
+  }
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error("REVIVAL_SPOTIFY_ADAPTER_UPSTREAM_ORIGIN must be an HTTP origin");
+  }
+  if (
+    !["http:", "https:"].includes(url.protocol) ||
+    url.username ||
+    url.password ||
+    url.pathname !== "/" ||
+    url.search ||
+    url.hash ||
+    value !== url.origin ||
+    !ALLOWED_UPSTREAM_ORIGINS.has(url.origin)
+  ) {
+    throw new Error("REVIVAL_SPOTIFY_ADAPTER_UPSTREAM_ORIGIN must be an exact HTTP origin");
+  }
+  return url.origin;
 }
 
 export function digestToken(token) {
@@ -84,6 +114,9 @@ function readTokenDigest(tokenFile, readFile) {
 
 export function loadConfig(env = process.env, readFile = readFileSync) {
   const bindAddress = parseBindAddress(env.REVIVAL_SPOTIFY_ADAPTER_BIND_ADDRESS);
+  const upstreamOrigin = parseUpstreamOrigin(
+    env.REVIVAL_SPOTIFY_ADAPTER_UPSTREAM_ORIGIN,
+  );
   const port = parseInteger(
     "REVIVAL_SPOTIFY_ADAPTER_PORT",
     env.REVIVAL_SPOTIFY_ADAPTER_PORT,
@@ -104,6 +137,7 @@ export function loadConfig(env = process.env, readFile = readFileSync) {
 
   return Object.freeze({
     bindAddress,
+    upstreamOrigin,
     port,
     timeoutMs,
     expectedTokenDigest,

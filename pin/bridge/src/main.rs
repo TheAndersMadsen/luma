@@ -1,23 +1,25 @@
-//! Setup iroh bridge — Mac helper for remote Ai Pin Setup access.
+//! Setup iroh bridge — exposes a Pin's remote Center API over local HTTP.
 //!
 //! Connects to a Pin's iroh endpoint using an EndpointTicket and exposes the
-//! Setup dashboard on a local loopback HTTP port. No LAN, USB, or VPS
-//! required — iroh handles NAT traversal automatically via the n0 relay and
-//! DNS discovery.
+//! Setup dashboard on a local HTTP port. It defaults to loopback for direct
+//! use; the container deployment explicitly binds its private Compose network.
+//! iroh handles NAT traversal automatically via the n0 relay and DNS discovery.
 //!
 //! Usage:
 //! 1. On the Pin: enable `[server] iroh_remote_center_enabled = true`.
 //! 2. Fetch the ticket once (over LAN or `adb forward`) from
 //!    `GET /api/iroh/ticket`; it returns
 //!    `{ "ticket": "<EndpointTicket>", "node_id": "..." }`.
-//! 3. On the Mac: `cargo run -- --ticket <EndpointTicket>`.
+//! 3. Save the ticket in a protected file, then run
+//!    `cargo run -- --ticket-file /path/to/iroh-ticket`.
 //! 4. Open `http://localhost:18080/setup/` in your browser.
 //!
-//! Everything binds to loopback only. The ticket is the sole credential; the
-//! iroh connection is end-to-end encrypted to the Pin's key, and the Pin's
-//! policy layer grants read-only access (Center assets + a few status reads).
+//! The ticket is the sole Pin dial credential; the iroh connection is
+//! end-to-end encrypted to the Pin's key, and the Pin applies its route policy.
 
-use std::net::SocketAddr;
+use std::io::Write as _;
+use std::net::{IpAddr, SocketAddr};
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -44,8 +46,9 @@ const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_SPOTIFY_SETTINGS_BODY_BYTES: usize = 512;
 const MAX_SPOTIFY_SEARCH_QUERY_BYTES: usize = 256;
+const MAX_TICKET_BYTES: usize = 16 * 1024;
 
-/// Defense-in-depth policy applied by the loopback bridge before a request is
+/// Defense-in-depth policy applied by the HTTP bridge before a request is
 /// put on the authenticated iroh tunnel. Compatibility remains the default so
 /// existing Setup recovery flows do not change during a staged rollout.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
@@ -456,7 +459,14 @@ fn guess_content_type(path: &str) -> &'static str {
 
 /// Status endpoint showing connection info (served locally, not proxied).
 async fn status(State(state): State<Arc<BridgeState>>) -> impl IntoResponse {
-    let connected = state.stream.lock().await.is_some();
+    // Liveness describes this bridge process, not whether the physical Pin is
+    // online. `try_lock` also keeps the probe responsive while another request
+    // is waiting for a dial or a Pin response.
+    let connected = state
+        .stream
+        .try_lock()
+        .map(|stream| stream.is_some())
+        .unwrap_or(false);
 
     axum::Json(serde_json::json!({
         "local_endpoint_id": state.endpoint.id().to_string(),
@@ -469,14 +479,18 @@ async fn status(State(state): State<Arc<BridgeState>>) -> impl IntoResponse {
 
 #[derive(Parser, Debug)]
 #[command(name = "center-iroh-bridge")]
-#[command(about = "Mac helper: exposes Ai Pin Setup over iroh P2P")]
+#[command(about = "Exposes Ai Pin Setup over an authenticated iroh connection")]
 struct Args {
-    /// The EndpointTicket from the Pin (GET /api/iroh/ticket). Base64-encoded;
-    /// contains the Pin's EndpointId and relay/direct addresses.
-    #[arg(long, short)]
-    ticket: String,
+    /// File containing the EndpointTicket from the Pin (GET /api/iroh/ticket).
+    /// The credential itself is never accepted through argv or the environment.
+    #[arg(long, default_value = "/run/secrets/iroh_ticket")]
+    ticket_file: PathBuf,
 
-    /// Local port to serve Center on. Binds to loopback only.
+    /// IP address on which the local HTTP server listens.
+    #[arg(long, default_value = "127.0.0.1")]
+    listen_ip: IpAddr,
+
+    /// Local port to serve Center on.
     #[arg(long, short, default_value = "18080")]
     port: u16,
 
@@ -490,8 +504,8 @@ struct Args {
     /// cannot allowlist it — and an allowlist is the only thing standing
     /// between a full-access tunnel and anyone who learns the Pin's
     /// EndpointId. With it, this bridge has a stable EndpointId to pin.
-    #[arg(long, default_value = "/etc/penumbra/bridge_secret.key")]
-    secret_key_file: String,
+    #[arg(long, default_value = "/var/lib/center-iroh-bridge/endpoint.key")]
+    secret_key_file: PathBuf,
 
     /// Local defense-in-depth route policy. Keep compatibility during rollout;
     /// switch to reviewed after the Center adapter and typed Pin release are
@@ -500,12 +514,40 @@ struct Args {
     proxy_policy: ProxyPolicy,
 }
 
+/// Read the Pin credential from a file without ever placing it in argv or env.
+fn read_ticket_file(path: &Path) -> std::io::Result<String> {
+    let bytes = std::fs::read(path)?;
+    if bytes.is_empty() || bytes.len() > MAX_TICKET_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "endpoint ticket file is empty or too large",
+        ));
+    }
+    let source = std::str::from_utf8(&bytes).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "endpoint ticket file is not UTF-8",
+        )
+    })?;
+    let ticket = source
+        .strip_suffix("\r\n")
+        .or_else(|| source.strip_suffix('\n'))
+        .unwrap_or(source);
+    if ticket.is_empty() || ticket.bytes().any(|byte| !(0x21..=0x7e).contains(&byte)) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "endpoint ticket file must contain one visible ASCII value",
+        ));
+    }
+    Ok(ticket.to_owned())
+}
+
 /// Load a 32-byte iroh secret key, creating it `0600` on first run.
 ///
-/// Mirrors what the Pin does for its own identity. Any I/O problem is
-/// non-fatal: we fall back to an ephemeral key so the tunnel still works, just
-/// without a pinnable identity.
-fn load_or_create_secret_key(path: &std::path::Path) -> std::io::Result<iroh::SecretKey> {
+/// A stable endpoint identity is part of the Pin's allowlist boundary, so an
+/// unreadable or unwritable key is fatal rather than an excuse to use a new
+/// ephemeral identity.
+fn load_or_create_secret_key(path: &Path) -> std::io::Result<iroh::SecretKey> {
     match std::fs::read(path) {
         Ok(bytes) if bytes.len() == 32 => {
             let mut key = [0u8; 32];
@@ -521,12 +563,16 @@ fn load_or_create_secret_key(path: &std::path::Path) -> std::io::Result<iroh::Se
             if let Some(parent) = path.parent() {
                 std::fs::create_dir_all(parent)?;
             }
-            std::fs::write(path, secret.to_bytes())?;
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create_new(true);
             #[cfg(unix)]
             {
-                use std::os::unix::fs::PermissionsExt as _;
-                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+                use std::os::unix::fs::OpenOptionsExt as _;
+                options.mode(0o600);
             }
+            let mut file = options.open(path)?;
+            file.write_all(&secret.to_bytes())?;
+            file.sync_all()?;
             Ok(secret)
         }
         Err(error) => Err(error),
@@ -545,7 +591,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
     // Parse the EndpointTicket and extract the Pin's dialable address.
-    let ticket = EndpointTicket::from_str(&args.ticket)
+    let ticket_value = read_ticket_file(&args.ticket_file)
+        .map_err(|error| format!("cannot read endpoint ticket file: {error}"))?;
+    let ticket = EndpointTicket::from_str(&ticket_value)
         .map_err(|e| format!("invalid EndpointTicket: {e}"))?;
     let node_addr = ticket.endpoint_addr().clone();
 
@@ -561,15 +609,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create our own iroh endpoint using the n0 relay + DNS discovery preset,
     // matching the Pin so relay-assisted NAT traversal works out of the box.
-    let mut builder = Endpoint::builder(iroh::endpoint::presets::N0).alpns(vec![ALPN.to_vec()]);
-    match load_or_create_secret_key(std::path::Path::new(&args.secret_key_file)) {
-        Ok(secret) => builder = builder.secret_key(secret),
-        Err(error) => error!(
-            "could not persist bridge identity at {}: {error}; using an ephemeral key \
-             (the Pin will not be able to allowlist this bridge)",
-            args.secret_key_file
-        ),
-    }
+    let secret = load_or_create_secret_key(&args.secret_key_file)
+        .map_err(|error| format!("cannot load persistent bridge identity: {error}"))?;
+    let builder = Endpoint::builder(iroh::endpoint::presets::N0)
+        .alpns(vec![ALPN.to_vec()])
+        .secret_key(secret);
     let endpoint = builder.bind().await?;
 
     // Stable across restarts once persisted — this is the value to put in the
@@ -594,9 +638,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .fallback(proxy_request)
         .with_state(state);
 
-    // Loopback only — never expose the tunnel on the LAN.
-    let addr = SocketAddr::from(([127, 0, 0, 1], args.port));
-    info!("listening on http://localhost:{}/setup/", args.port);
+    let addr = SocketAddr::new(args.listen_ip, args.port);
+    info!(
+        "listening on http://{}:{}/setup/",
+        args.listen_ip, args.port
+    );
     info!("open your browser to access Ai Pin Setup");
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -620,6 +666,60 @@ mod tests {
 
     const B64: base64::engine::general_purpose::GeneralPurpose =
         base64::engine::general_purpose::STANDARD;
+
+    fn temporary_directory() -> PathBuf {
+        let directory = std::env::temp_dir().join(format!("center-iroh-bridge-{}", Uuid::new_v4()));
+        std::fs::create_dir(&directory).unwrap();
+        directory
+    }
+
+    #[test]
+    fn command_line_defaults_to_loopback_and_file_backed_credentials() {
+        let args = Args::try_parse_from(["center-iroh-bridge"]).unwrap();
+        assert_eq!(args.listen_ip, IpAddr::from([127, 0, 0, 1]));
+        assert_eq!(args.port, 18_080);
+        assert_eq!(args.ticket_file, Path::new("/run/secrets/iroh_ticket"));
+        assert_eq!(
+            args.secret_key_file,
+            Path::new("/var/lib/center-iroh-bridge/endpoint.key")
+        );
+        assert!(Args::try_parse_from(["center-iroh-bridge", "--ticket", "secret"]).is_err());
+    }
+
+    #[test]
+    fn ticket_is_read_only_from_one_bounded_secret_file() {
+        let directory = temporary_directory();
+        let ticket = directory.join("ticket");
+        std::fs::write(&ticket, b"endpoint-ticket-value\n").unwrap();
+        assert_eq!(read_ticket_file(&ticket).unwrap(), "endpoint-ticket-value");
+
+        std::fs::write(&ticket, b"two\nlines\n").unwrap();
+        assert!(read_ticket_file(&ticket).is_err());
+        std::fs::write(&ticket, vec![b'x'; MAX_TICKET_BYTES + 1]).unwrap();
+        assert!(read_ticket_file(&ticket).is_err());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn endpoint_key_is_persistent_and_invalid_state_is_fatal() {
+        let directory = temporary_directory();
+        let key_file = directory.join("endpoint.key");
+        let first = load_or_create_secret_key(&key_file).unwrap();
+        let second = load_or_create_secret_key(&key_file).unwrap();
+        assert_eq!(first.to_bytes(), second.to_bytes());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            assert_eq!(
+                std::fs::metadata(&key_file).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+
+        std::fs::write(&key_file, b"not-a-32-byte-key").unwrap();
+        assert!(load_or_create_secret_key(&key_file).is_err());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 
     /// The request we emit must deserialize into the Pin's `RemoteRequest`
     /// (`runtime/core/src/remote_center/iroh_connector.rs`). Its `idempotency_key`

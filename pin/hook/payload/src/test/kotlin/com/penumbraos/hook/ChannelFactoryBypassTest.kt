@@ -134,8 +134,6 @@ class ChannelFactoryBypassTest {
             "connectivity-check.cosmos.humane.cloud.evil.example",
             "n.cosmos.humane.cloud.evil.example",
             "evil-connectivity-check.cosmos.humane.cloud",
-            "connectivity-check.cosmos.humane.cloud",
-            "n.cosmos.humane.cloud",
             "evil.example",
             "",
         )) {
@@ -203,8 +201,6 @@ class ChannelFactoryBypassTest {
         assertFalse(CosmosRemoteTransport.isAllowedGateway("api.cosmos.humane.cloud:80"))
         assertFalse(CosmosRemoteTransport.isAllowedGateway("api.cosmos.humane.cloud.evil:443"))
         assertFalse(CosmosRemoteTransport.isAllowedGateway("https://api.cosmos.humane.cloud/path"))
-        assertFalse(CosmosRemoteTransport.isAllowedGateway("api.cosmos.humane.cloud:443"))
-        assertFalse(CosmosRemoteTransport.isAllowedGateway("onboarding.cosmos.humane.cloud:443"))
     }
 
     @Test

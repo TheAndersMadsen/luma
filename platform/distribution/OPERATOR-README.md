@@ -15,3 +15,7 @@ The bundled release descriptor pins the Compose application by OCI digest.
 During deployment, Docker Compose shows the remote configuration and local
 interpolation values for review. Read those prompts; the CLI never accepts
 them automatically.
+
+If the release packages are private, log in first with `docker login ghcr.io`
+using an account token that can read packages. Public packages need no registry
+login; package visibility is not changed by this bundle.

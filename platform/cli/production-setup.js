@@ -22,6 +22,7 @@ const {
 
 const PRODUCTION_DIR = path.join(CONFIG_DIR, 'production');
 const OPERATOR_COMPOSE = path.join(PRODUCTION_DIR, 'operator.compose.yaml');
+const IROH_TICKET_FILE = path.join(PRODUCTION_DIR, 'iroh-ticket');
 const PROFILES = new Set(['pin', 'search', 'spotify', 'observability']);
 const PIN_RELEASE_VALIDATOR = path.join(ROOT, 'platform', 'deploy', 'pin', 'validate-release-store.mjs');
 const PIN_SERVER_NAMES = Object.freeze([
@@ -78,6 +79,7 @@ function parseOptions(args, current = {}) {
     acmeEmail: current.REVIVAL_ACME_EMAIL || '',
     operatorEmail: current.REVIVAL_FIRST_OPERATOR_EMAIL || '',
     publicIpv4: current.REVIVAL_DEVICE_EDGE_IPV4 || '',
+    irohTicketFile: '',
   };
   const selectedProfiles = new Set();
   const seen = new Set();
@@ -104,6 +106,7 @@ function parseOptions(args, current = {}) {
       ['--acme-email', 'acmeEmail'],
       ['--operator-email', 'operatorEmail'],
       ['--public-ip', 'publicIpv4'],
+      ['--iroh-ticket-file', 'irohTicketFile'],
     ]);
     if (!fields.has(option) || seen.has(option)) throw new Error('usage');
     const value = args.shift();
@@ -116,6 +119,7 @@ function parseOptions(args, current = {}) {
   options.acmeEmail = options.acmeEmail.trim().toLowerCase();
   options.operatorEmail = options.operatorEmail.trim().toLowerCase();
   options.publicIpv4 = options.publicIpv4.trim();
+  options.irohTicketFile = options.irohTicketFile.trim();
   options.profiles = clearProfiles
     ? []
     : profilesSpecified
@@ -138,7 +142,29 @@ function parseOptions(args, current = {}) {
   if (options.profiles.includes('pin') && !options.publicIpv4) {
     throw new Error('the pin profile requires --public-ip');
   }
+  if (options.irohTicketFile && !options.profiles.includes('spotify')) {
+    throw new Error('--iroh-ticket-file requires the spotify profile');
+  }
   return options;
+}
+
+function readIrohTicket(file) {
+  if (!fs.existsSync(file)) throw new Error(`iroh ticket file does not exist: ${file}`);
+  const stat = fs.lstatSync(file);
+  if (stat.isSymbolicLink() || !stat.isFile() || stat.size < 1 || stat.size > 16 * 1024) {
+    throw new Error(`iroh ticket must be a nonempty regular file no larger than 16 KiB: ${file}`);
+  }
+  const bytes = fs.readFileSync(file);
+  const source = bytes.toString('utf8');
+  if (!Buffer.from(source, 'utf8').equals(bytes)) {
+    throw new Error(`iroh ticket must be UTF-8: ${file}`);
+  }
+  const ticket = source.endsWith('\r\n') ? source.slice(0, -2)
+    : source.endsWith('\n') ? source.slice(0, -1) : source;
+  if (!ticket || !/^[!-~]+$/u.test(ticket)) {
+    throw new Error(`iroh ticket must contain exactly one visible ASCII value: ${file}`);
+  }
+  return `${ticket}\n`;
 }
 
 function runOpenSsl(args) {
@@ -308,6 +334,7 @@ function productionRealm(values, firstPassword) {
   return {
     realm: 'humane',
     displayName: 'Ai Pin Revival',
+    loginTheme: 'revival',
     enabled: true,
     sslRequired: 'external',
     registrationAllowed: false,
@@ -444,11 +471,13 @@ function renderOperatorCompose(profiles) {
     environment:
       COSMOS_ATTEST_CA_CERT: /etc/cosmos-attest/ca.crt
       COSMOS_ATTEST_CA_KEY: /etc/cosmos-attest/ca.key
+      COSMOS_ATTEST_ROOT_CERT: /etc/cosmos-attest/root.crt
       COSMOS_DEVICE_STATUS_CA_CERT: /etc/cosmos-attest/ca.crt
       COSMOS_ONBOARDING_ENDPOINT: \${COSMOS_ONBOARDING_ENDPOINT:?run revival setup production}
     secrets:
       - { source: attestation_ca_cert, target: /etc/cosmos-attest/ca.crt, mode: 0444 }
-      - { source: attestation_ca_key, target: /etc/cosmos-attest/ca.key, mode: 0444 }`,
+      - { source: attestation_ca_key, target: /etc/cosmos-attest/ca.key, mode: 0444 }
+      - { source: edge_ca_cert, target: /etc/cosmos-attest/root.crt, mode: 0444 }`,
       `  provisioning:
     secrets:
       - { source: duc_ca_cert, target: /etc/cosmos-duc/duc-ca.crt, mode: 0444 }
@@ -462,6 +491,7 @@ function renderOperatorCompose(profiles) {
       - { source: attestation_ca_cert, target: /etc/cosmos-edge/certs/onboarding-client-ca.crt, mode: 0444 }`,
     );
     for (const [name, filename] of [
+      ['edge_ca_cert', 'edge-ca.crt'],
       ['attestation_ca_cert', 'attestation-ca.crt'], ['attestation_ca_key', 'attestation-ca.key'],
       ['duc_ca_cert', 'duc-ca.crt'], ['duc_ca_key', 'duc-ca.key'],
       ['envoy_config', 'envoy.yaml'], ['edge_server_cert', 'edge-server.crt'],
@@ -479,9 +509,15 @@ function renderOperatorCompose(profiles) {
         bind: { create_host_path: false }`);
   }
   if (enabled.has('spotify')) {
-    services.push(`  spotify-adapter:
+    services.push(
+      `  center-iroh-bridge:
     secrets:
-      - { source: spotify_adapter_token, target: /run/secrets/spotify_adapter_token, mode: 0444 }`);
+      - { source: iroh_ticket, target: /run/secrets/iroh_ticket, mode: 0444 }`,
+      `  spotify-adapter:
+    secrets:
+      - { source: spotify_adapter_token, target: /run/secrets/spotify_adapter_token, mode: 0444 }`,
+    );
+    secrets.push(`  iroh_ticket: { file: ${safeYaml(IROH_TICKET_FILE)} }`);
     secrets.push(`  spotify_adapter_token: { file: ${safeYaml(path.join(PRODUCTION_DIR, 'spotify-token'))} }`);
     centerEnvironment.push(
       '      REVIVAL_SPOTIFY_ADAPTER_URL: http://spotify-adapter:18081',
@@ -569,7 +605,10 @@ function activeArtifactFiles(values) {
       'edge-ca.crt', 'edge-ca.key', 'edge-server.crt', 'edge-server.key',
       'attestation-ca.crt', 'attestation-ca.key', 'duc-ca.crt', 'duc-ca.key', 'envoy.yaml',
     ].map((name) => path.join(PRODUCTION_DIR, name)) : []),
-    ...(profiles.has('spotify') ? [path.join(PRODUCTION_DIR, 'spotify-token')] : []),
+    ...(profiles.has('spotify') ? [
+      path.join(PRODUCTION_DIR, 'spotify-token'),
+      IROH_TICKET_FILE,
+    ] : []),
     ...(profiles.has('search') ? [path.join(PRODUCTION_DIR, 'searxng-settings.yml')] : []),
     ...(profiles.has('observability') ? [path.join(PRODUCTION_DIR, 'prometheus.yml')] : []),
   ];
@@ -596,6 +635,11 @@ function validateProductionArtifacts(values = parseEnvFile(ENV_FILE)) {
     problems.push(`${firstLogin} must be a nonempty regular file with mode 0600, or be deleted after first login`);
   }
   const profiles = new Set((values.COMPOSE_PROFILES || '').split(',').filter(Boolean));
+  if (profiles.has('spotify')) {
+    if (regularFile(IROH_TICKET_FILE, { mode: 0o444 })) {
+      try { readIrohTicket(IROH_TICKET_FILE); } catch (error) { problems.push(error.message); }
+    }
+  }
   if (profiles.has('pin') && !problems.some((problem) => /(?:\.crt|\.key|envoy\.yaml)/u.test(problem))) {
     try { validatePki(); } catch (error) { problems.push(error.message); }
     const releases = path.join(DATA_DIR, 'pin-releases');
@@ -613,6 +657,17 @@ function validateProductionArtifacts(values = parseEnvFile(ENV_FILE)) {
 function setupProduction(args) {
   const before = regularFile(ENV_FILE, { mode: 0o600 }) ? parseEnvFile(ENV_FILE) : {};
   const options = parseOptions([...args], before);
+  let irohTicket = null;
+  if (options.profiles.includes('spotify')) {
+    if (options.irohTicketFile) {
+      irohTicket = readIrohTicket(options.irohTicketFile);
+    } else {
+      if (!regularFile(IROH_TICKET_FILE, { mode: 0o444 })) {
+        throw new Error('the spotify profile requires --iroh-ticket-file on first setup');
+      }
+      irohTicket = readIrohTicket(IROH_TICKET_FILE);
+    }
+  }
   initialize({ suppressDeviceCaWarning: true, quiet: true, profiles: options.profiles, localIdentity: false });
   const initialized = parseEnvFile(ENV_FILE);
   const origin = `https://${options.domain}`;
@@ -666,6 +721,8 @@ function setupProduction(args) {
     if (!fs.existsSync(credentials)) atomicWrite(credentials, firstLoginContents(values, password));
     atomicWrite(realmFile, `${JSON.stringify(productionRealm(values, password), null, 2)}\n`, 0o444);
   }
+
+  if (options.irohTicketFile) atomicWrite(IROH_TICKET_FILE, irohTicket, 0o444);
 
   renderTemplate(
     path.join(ROOT, 'platform', 'edge', 'traefik', 'traefik.yaml.tpl'),

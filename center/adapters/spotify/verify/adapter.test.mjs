@@ -6,6 +6,7 @@ import { adapterContract, createAdapterServer } from "../src/adapter.mjs";
 import { digestToken } from "../src/config.mjs";
 
 const TOKEN = "adapter-test-token".padEnd(40, "x");
+const UPSTREAM_ORIGIN = "http://center-iroh-bridge:18080";
 
 function spotifyStatus(overrides = {}) {
   return {
@@ -31,6 +32,7 @@ async function runningAdapter(t, fetchImpl) {
   const server = createAdapterServer(
     {
       bindAddress: "127.0.0.1",
+      upstreamOrigin: UPSTREAM_ORIGIN,
       port: 0,
       timeoutMs: 300,
       expectedTokenDigest: digestToken(TOKEN),
@@ -72,7 +74,6 @@ test("exposes only the six exact route and method pairs", () => {
     liveness: "/healthz",
     readiness: "/readyz",
   });
-  assert.equal(adapterContract.upstreamOrigin, "http://127.0.0.1:18080");
 });
 
 test("requires the private bearer token and rejects non-allowlisted shapes", async (t) => {
@@ -150,7 +151,7 @@ test("search forwards only a query it rebuilt itself", async (t) => {
   // The query the Pin receives is re-encoded from validated values, and the
   // default kind is stated rather than left for the device to infer.
   assert.deepEqual(requested, [
-    "http://127.0.0.1:18080/api/spotify/search?q=blue+monday&kind=track",
+    `${UPSTREAM_ORIGIN}/api/spotify/search?q=blue+monday&kind=track`,
   ]);
 });
 
@@ -213,7 +214,7 @@ test("forwards canonical settings only and never forwards inbound credentials", 
   );
   assert.equal(response.status, 200);
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].url, "http://127.0.0.1:18080/api/spotify/settings");
+  assert.equal(calls[0].url, `${UPSTREAM_ORIGIN}/api/spotify/settings`);
   assert.equal(calls[0].init.method, "PUT");
   assert.equal(calls[0].init.redirect, "manual");
   assert.equal(calls[0].init.headers.Authorization, undefined);
@@ -423,8 +424,8 @@ test("remote Pin settings are bearer-authenticated and forwarded without browser
   assert.deepEqual(
     calls.map(({ url, init }) => ({ url, method: init.method })),
     [
-      { url: "http://127.0.0.1:18080/api/settings", method: "GET" },
-      { url: "http://127.0.0.1:18080/api/settings", method: "PUT" },
+      { url: `${UPSTREAM_ORIGIN}/api/settings`, method: "GET" },
+      { url: `${UPSTREAM_ORIGIN}/api/settings`, method: "PUT" },
     ],
   );
   assert.equal(calls[1].init.headers.Authorization, undefined);

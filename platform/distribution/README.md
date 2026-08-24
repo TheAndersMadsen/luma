@@ -15,3 +15,7 @@ to the exact application digest, five exact image digests, platform, and CLI
 archive checksum. The archive's stamped `version.json` gives production deploys
 the same immutable OCI application reference while the repository's full
 `./revival` remains the developer interface.
+
+GHCR package visibility is an explicit repository-owner decision. The release
+workflow publishes packages but never changes their public/private setting; a
+private release therefore requires an authenticated `docker login ghcr.io`.

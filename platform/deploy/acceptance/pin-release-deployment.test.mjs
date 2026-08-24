@@ -79,6 +79,8 @@ test("production Center mounts only the operator-local Pin release tree", (conte
   ], { cwd: root, env: environment, encoding: "utf8" });
   assert.equal(setup.status, 0, setup.stderr);
   seedPinRelease(environment);
+  const irohTicket = path.join(temporary, "iroh-ticket");
+  fs.writeFileSync(irohTicket, "test-endpoint-ticket\n", { mode: 0o600 });
   const pinSetup = spawnSync(process.execPath, [
     cli,
     "setup", "production",
@@ -86,6 +88,7 @@ test("production Center mounts only the operator-local Pin release tree", (conte
     "--profile", "search",
     "--profile", "spotify",
     "--profile", "observability",
+    "--iroh-ticket-file", irohTicket,
     "--public-ip", "203.0.113.42",
   ], { cwd: root, env: environment, encoding: "utf8" });
   assert.equal(pinSetup.status, 0, pinSetup.stderr);

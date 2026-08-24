@@ -20,6 +20,7 @@ try {
     REVIVAL_CENTER_IMAGE: images.center.reference,
     REVIVAL_KEYCLOAK_IMAGE: images.keycloak.reference,
     REVIVAL_SPOTIFY_IMAGE: images["spotify-adapter"].reference,
+    REVIVAL_CENTER_IROH_BRIDGE_IMAGE: images["center-iroh-bridge"].reference,
     REVIVAL_DEPLOYMENT_ENVIRONMENT: "production",
     REVIVAL_ENVIRONMENT: "production",
     REVIVAL_PUBLIC_ORIGIN: "https://operator.invalid",

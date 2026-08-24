@@ -192,6 +192,7 @@ jobs:
             "$RUNNER_TEMP/release-receipts" "$publication_env" "$RELEASE_REVISION"
           docker compose --env-file "$publication_env" \
             -f compose.yaml -f platform/compose/production.yaml \
+            --profile '*' \
             config --format json | node platform/distribution/audit-compose-publication.mjs
       - name: Publish the audited Compose application
         env:
@@ -204,6 +205,7 @@ jobs:
           # prompts remain interactive and are never bypassed by the operator CLI.
           docker compose --env-file "$publication_env" \
             -f compose.yaml -f platform/compose/production.yaml \
+            --profile '*' \
             publish --yes --resolve-image-digests "$application_tag"
           docker buildx imagetools inspect "$application_tag" \
             --format '{{json .Manifest}}' > "$RUNNER_TEMP/application-manifest.json"

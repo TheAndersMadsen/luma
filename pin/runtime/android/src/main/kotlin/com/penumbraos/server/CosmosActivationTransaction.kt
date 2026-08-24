@@ -209,6 +209,7 @@ internal class CosmosActivationTransaction(
         edgeIpv4: String,
         root: CosmosRootDescriptor,
         identity: CosmosIdentityPort,
+        clearStaging: (() -> Boolean)? = null,
     ): CosmosActivationResult {
         val plan = try {
             CosmosActivationContract.plan(apiEndpoint, onboardingEndpoint, edgeIpv4)
@@ -322,7 +323,10 @@ internal class CosmosActivationTransaction(
             check(installed.fingerprintSha256 == candidate.fingerprintSha256)
             check(installed.usableForTls)
             check(writeExact(CosmosActivationContract.EDGE_IPV4_SETTING, plan.edgeIpv4))
-            check(writeExact(CosmosActivationContract.ATTESTATION_BUNDLE_SETTING, null))
+            check(
+                clearStaging?.invoke()
+                    ?: writeExact(CosmosActivationContract.ATTESTATION_BUNDLE_SETTING, null),
+            )
             // Commit gate is always last. Until this exact read-back succeeds,
             // stock traffic cannot be redirected to a partially configured edge.
             check(writeExact(CosmosActivationContract.REMOTE_MODE_SETTING, "1"))

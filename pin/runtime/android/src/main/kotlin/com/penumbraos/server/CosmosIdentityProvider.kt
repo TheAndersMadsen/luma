@@ -271,6 +271,15 @@ class CosmosIdentityProvider : ContentProvider() {
                         edgeIpv4 = envelope.edgeIpv4,
                         root = envelope.identity.rootDescriptor,
                         identity = AndroidCosmosIdentityPort(envelope.identity, settings),
+                        clearStaging = {
+                            val fileCleared = (!staged.exists() || staged.delete()) && !staged.exists()
+                            fileCleared &&
+                                settings.write(
+                                    CosmosActivationContract.ATTESTATION_BUNDLE_SETTING,
+                                    null,
+                                ) &&
+                                settings.read(CosmosActivationContract.ATTESTATION_BUNDLE_SETTING) == null
+                        },
                     ),
                 )
             } finally {

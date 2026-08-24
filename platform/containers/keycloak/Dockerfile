@@ -4,6 +4,7 @@ ARG KEYCLOAK_IMAGE=quay.io/keycloak/keycloak:26.0@sha256:09a381c715ab0b111835b70
 FROM ${KEYCLOAK_IMAGE} AS builder
 ENV KC_DB=postgres \
     KC_HEALTH_ENABLED=true
+COPY --chown=keycloak:keycloak platform/containers/keycloak/themes/revival /opt/keycloak/themes/revival
 RUN /opt/keycloak/bin/kc.sh build
 
 FROM ${KEYCLOAK_IMAGE}

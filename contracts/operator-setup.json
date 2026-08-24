@@ -430,7 +430,7 @@
       "confirmationRequired": false,
       "exactSerialRequired": false,
       "summary": "Generate a complete portable production configuration.",
-      "usage": "revival setup production --domain HOST --acme-email EMAIL --operator-email EMAIL [options]",
+      "usage": "revival setup production --domain HOST --acme-email EMAIL --operator-email EMAIL [--iroh-ticket-file FILE] [options]",
       "documentationAnchor": "docs/operations.md#production"
     },
     {

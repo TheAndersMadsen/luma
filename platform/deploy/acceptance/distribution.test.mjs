@@ -55,7 +55,7 @@ test("tag release workflow publishes the exact hardened image and Compose bounda
   assert.match(source, /sbom: true/u);
   assert.match(source, /cache-from: type=gha,scope=release-\$\{\{ matrix\.name \}\}/u);
   assert.match(source, /cache-to: type=gha,scope=release-\$\{\{ matrix\.name \}\},mode=max/u);
-  assert.match(source, /publish --yes --resolve-image-digests/u);
+  assert.match(source, /--profile '\*'\s+\\\n\s+publish --yes --resolve-image-digests/u);
   assert.doesNotMatch(source, /--with-env/u);
   const buildArgs = source.match(/^\s*build-args:.*$/gmu) || [];
   assert.equal(buildArgs.length, 1);
@@ -63,6 +63,19 @@ test("tag release workflow publishes the exact hardened image and Compose bounda
   assert.match(source, /REVIVAL_RELEASE_ID=/u);
   assert.match(source, /platform\/containers\/keycloak\/Dockerfile/u);
   assert.match(source, /platform\/containers\/center-iroh-bridge\/Dockerfile/u);
+
+  const keycloakDockerfile = fs.readFileSync(
+    path.join(root, "platform/containers/keycloak/Dockerfile"),
+    "utf8",
+  );
+  assert.match(keycloakDockerfile, /COPY --chown=keycloak:keycloak .*themes\/revival \/opt\/keycloak\/themes\/revival/u);
+  assert.equal(
+    fs.readFileSync(
+      path.join(root, "platform/containers/keycloak/themes/revival/login/theme.properties"),
+      "utf8",
+    ),
+    "parent=keycloak\nstyles=css/login.css css/revival.css\n",
+  );
 
   const production = fs.readFileSync(path.join(root, "platform/compose/production.yaml"), "utf8");
   assert.match(production, /traefik:v3\.6\.25@sha256:[0-9a-f]{64}/u);
@@ -193,12 +206,46 @@ test("release publication model contains only digest images and portable storage
     "--env-file", publicationEnv,
     "-f", path.join(root, "compose.yaml"),
     "-f", path.join(root, "platform/compose/production.yaml"),
+    "--profile", "*",
     "config", "--format", "json",
   ], { cwd: root, encoding: "utf8", maxBuffer: 8 * 1024 * 1024 });
   assert.equal(compose.status, 0, compose.stderr);
+  const model = JSON.parse(compose.stdout);
+  assert.ok(model.services["center-iroh-bridge"], "profiled bridge must be in the audited model");
+  assert.equal(
+    model.services["center-iroh-bridge"].image,
+    `ghcr.io/theandersmadsen/ai-pin-revival/center-iroh-bridge@${digest("2")}`,
+  );
+  assert.deepEqual(
+    Object.keys(model.services["center-iroh-bridge"].networks).sort(),
+    ["provider-egress", "spotify-control"],
+  );
+  assert.equal(model.networks["spotify-control"].internal, true);
+  assert.equal(
+    model.services["spotify-adapter"].environment.REVIVAL_SPOTIFY_ADAPTER_UPSTREAM_ORIGIN,
+    "http://center-iroh-bridge:18080",
+  );
+  assert.equal(
+    model.services["spotify-adapter"].depends_on["center-iroh-bridge"].condition,
+    "service_healthy",
+  );
+  assert.equal(model.services["center-iroh-bridge"].extra_hosts, undefined);
   const audit = spawnSync(process.execPath, [
     path.join(root, "platform/distribution/audit-compose-publication.mjs"),
   ], { cwd: root, input: compose.stdout, encoding: "utf8" });
   assert.equal(audit.status, 0, audit.stderr);
   assert.match(audit.stdout, /publishable services/u);
+
+  // Exercise Compose's OCI encoder too: `config` accepts some shapes that
+  // `publish` cannot encode. Dry-run keeps this independent of a registry.
+  const publish = spawnSync("docker", [
+    "compose",
+    "--env-file", publicationEnv,
+    "-f", path.join(root, "compose.yaml"),
+    "-f", path.join(root, "platform/compose/production.yaml"),
+    "--profile", "*",
+    "publish", "--dry-run", "--yes",
+    "ghcr.io/example/ai-pin-revival/application:dryrun",
+  ], { cwd: root, encoding: "utf8", maxBuffer: 8 * 1024 * 1024 });
+  assert.equal(publish.status, 0, publish.stderr);
 });

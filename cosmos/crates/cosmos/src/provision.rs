@@ -218,7 +218,9 @@ impl AttestCa {
                 .ok_or_else(|| format!("{ATTEST_ROOT_CERT_ENV} contains no certificate"))?
                 .map_err(|error| format!("{ATTEST_ROOT_CERT_ENV} is not valid PEM: {error}"))?;
             if roots.next().is_some() {
-                return Err(format!("{ATTEST_ROOT_CERT_ENV} must contain one certificate"));
+                return Err(format!(
+                    "{ATTEST_ROOT_CERT_ENV} must contain one certificate"
+                ));
             }
             let (_, root) = x509_parser::parse_x509_certificate(&root_der).map_err(|error| {
                 format!("{ATTEST_ROOT_CERT_ENV} is not a usable certificate: {error}")
@@ -228,9 +230,8 @@ impl AttestCa {
                     "{ATTEST_ROOT_CERT_ENV} must be a self-signed CA certificate"
                 ));
             }
-            root.verify_signature(Some(root.public_key())).map_err(|error| {
-                format!("{ATTEST_ROOT_CERT_ENV} is not self-signed: {error}")
-            })?;
+            root.verify_signature(Some(root.public_key()))
+                .map_err(|error| format!("{ATTEST_ROOT_CERT_ENV} is not self-signed: {error}"))?;
             if !root.validity().is_valid() {
                 return Err(format!("{ATTEST_ROOT_CERT_ENV} is not currently valid"));
             }
@@ -443,13 +444,11 @@ mod tests {
 
         // Matched by hand rather than `expect_err`: `AttestCa` deliberately has
         // no `Debug`, because it holds the CA private key.
-        let Err(error) =
-            AttestCa::from_pem_files(
-                cert_path.to_str().unwrap(),
-                key_path.to_str().unwrap(),
-                cert_path.to_str().unwrap(),
-            )
-        else {
+        let Err(error) = AttestCa::from_pem_files(
+            cert_path.to_str().unwrap(),
+            key_path.to_str().unwrap(),
+            cert_path.to_str().unwrap(),
+        ) else {
             panic!("a mismatched pair must not load");
         };
         assert!(
@@ -465,7 +464,7 @@ mod tests {
             key_path.to_str().unwrap(),
             cert_path.to_str().unwrap(),
         )
-            .expect("the real pair loads");
+        .expect("the real pair loads");
 
         std::fs::remove_dir_all(&dir).ok();
     }

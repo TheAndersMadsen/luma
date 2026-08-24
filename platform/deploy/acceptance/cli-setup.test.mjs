@@ -45,6 +45,20 @@ function invoke(env, ...args) {
   });
 }
 
+function renderProductionCompose(env) {
+  const available = spawnSync("docker", ["compose", "version"], { encoding: "utf8" });
+  if (available.error?.code === "ENOENT" || available.status !== 0) return null;
+  return spawnSync("docker", [
+    "compose",
+    "--project-directory", root,
+    "--env-file", env.REVIVAL_ENV_FILE,
+    "-f", path.join(root, "compose.yaml"),
+    "-f", path.join(root, "platform/compose/production.yaml"),
+    "-f", path.join(env.REVIVAL_CONFIG_DIR, "production", "operator.compose.yaml"),
+    "config", "--quiet",
+  ], { cwd: root, env, encoding: "utf8" });
+}
+
 function parseEnv(file) {
   return Object.fromEntries(
     fs.readFileSync(file, "utf8")
@@ -99,6 +113,7 @@ test("generated production identity supports Center's direct password grant", ()
     KEYCLOAK_CLIENT_ID: "center",
     KEYCLOAK_CLIENT_SECRET: "s".repeat(32),
   }, password);
+  assert.equal(realm.loginTheme, "revival");
   assert.equal(realm.clients[0].publicClient, false);
   assert.equal(realm.clients[0].directAccessGrantsEnabled, true);
   assert.deepEqual(realm.users[0].requiredActions, []);
@@ -177,6 +192,7 @@ test("production setup creates a complete portable operator installation and is 
 
   const realm = JSON.parse(fs.readFileSync(realmFile, "utf8"));
   assert.equal(realm.realm, "humane");
+  assert.equal(realm.loginTheme, "revival");
   assert.equal(realm.users[0].id, runtime.REVIVAL_FIRST_OPERATOR_ID);
   assert.equal(realm.clients[0].directAccessGrantsEnabled, true);
   assert.deepEqual(realm.users[0].requiredActions, []);
@@ -248,6 +264,14 @@ test("pin profile creates enrollment inputs and requires a public IPv4 address",
   assert.match(runtime.COSMOS_ENROLLMENT_PINCODE, /^\d{4}$/u);
   assert.equal(runtime.COSMOS_ENROLLMENT_USER_ID, runtime.REVIVAL_FIRST_OPERATOR_ID);
   assert.equal(runtime.REVIVAL_DEVICE_EDGE_IPV4, "203.0.113.42");
+  const pinOverlay = fs.readFileSync(
+    path.join(env.REVIVAL_CONFIG_DIR, "production", "operator.compose.yaml"),
+    "utf8",
+  );
+  assert.match(pinOverlay, /COSMOS_ATTEST_ROOT_CERT: \/etc\/cosmos-attest\/root\.crt/u);
+  assert.match(pinOverlay, /edge_ca_cert, target: \/etc\/cosmos-attest\/root\.crt/u);
+  const pinCompose = renderProductionCompose(env);
+  if (pinCompose) assert.equal(pinCompose.status, 0, pinCompose.stderr);
 
   const edgeKey = path.join(env.REVIVAL_CONFIG_DIR, "production", "edge-ca.key");
   fs.unlinkSync(edgeKey);
@@ -257,7 +281,7 @@ test("pin profile creates enrollment inputs and requires a public IPv4 address",
 });
 
 test("core setup omits optional state and --no-profiles clears active profiles", (t) => {
-  const { env } = fixture(t);
+  const { env, temporary } = fixture(t);
   const common = [
     "setup", "production",
     "--domain", "pin.example.test",
@@ -286,10 +310,33 @@ test("core setup omits optional state and --no-profiles clears active profiles",
   assert.equal(runtime.COSMOS_SEARXNG_BASE_URL, "");
   assert.doesNotMatch(fs.readFileSync(path.join(production, "operator.compose.yaml"), "utf8"), /searxng/u);
 
-  const spotify = invoke(env, "setup", "production", "--profile", "spotify");
+  const missingTicket = invoke(env, "setup", "production", "--profile", "spotify");
+  assert.equal(missingTicket.status, 1);
+  assert.match(missingTicket.stderr, /requires --iroh-ticket-file on first setup/u);
+
+  const ticketSource = path.join(temporary, "pin-iroh-ticket");
+  fs.writeFileSync(ticketSource, "test-endpoint-ticket\n", { mode: 0o600 });
+  const spotify = invoke(
+    env,
+    "setup", "production",
+    "--profile", "spotify",
+    "--iroh-ticket-file", ticketSource,
+  );
   assert.equal(spotify.status, 0, spotify.stderr);
   const spotifyOverlay = fs.readFileSync(path.join(production, "operator.compose.yaml"), "utf8");
   assert.match(spotifyOverlay, /http:\/\/spotify-adapter:18081/u);
+  assert.match(spotifyOverlay, /center-iroh-bridge:/u);
+  assert.match(spotifyOverlay, /production\/iroh-ticket/u);
+  const protectedTicket = path.join(production, "iroh-ticket");
+  assert.equal(fs.statSync(protectedTicket).mode & 0o777, 0o444);
+  const spotifyCompose = renderProductionCompose(env);
+  if (spotifyCompose) assert.equal(spotifyCompose.status, 0, spotifyCompose.stderr);
+
+  fs.writeFileSync(ticketSource, "replacement-ticket\n", { mode: 0o600 });
+  const preservedTicket = fs.readFileSync(protectedTicket, "utf8");
+  const spotifyRerun = invoke(env, "setup", "production");
+  assert.equal(spotifyRerun.status, 0, spotifyRerun.stderr);
+  assert.equal(fs.readFileSync(protectedTicket, "utf8"), preservedTicket);
 });
 
 test("production setup resumes from a first-login handoff written before the realm", (t) => {

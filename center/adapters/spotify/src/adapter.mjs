@@ -3,7 +3,6 @@ import { createServer } from "node:http";
 
 import { LIVENESS_PATH, READINESS_PATH, probeContract } from "./probes.mjs";
 
-const UPSTREAM_ORIGIN = "http://127.0.0.1:18080";
 const MAX_AUTHORIZATION_BYTES = 1_024;
 const MAX_SETTINGS_BODY_BYTES = 1_024;
 const MAX_UPSTREAM_RESPONSE_BYTES = 64 * 1024;
@@ -382,7 +381,7 @@ function safeUpstreamFailure(status) {
   return { status: 502, code: "pin_spotify_unavailable" };
 }
 
-async function withUpstream(fetchImpl, path, options, timeoutMs, consume) {
+async function withUpstream(fetchImpl, upstreamOrigin, path, options, timeoutMs, consume) {
   const controller = new AbortController();
   let timedOut = false;
   const timeout = setTimeout(() => {
@@ -392,7 +391,7 @@ async function withUpstream(fetchImpl, path, options, timeoutMs, consume) {
   timeout.unref?.();
 
   try {
-    const response = await fetchImpl(`${UPSTREAM_ORIGIN}${path}`, {
+    const response = await fetchImpl(`${upstreamOrigin}${path}`, {
       ...options,
       redirect: "manual",
       signal: controller.signal,
@@ -407,10 +406,11 @@ async function withUpstream(fetchImpl, path, options, timeoutMs, consume) {
   }
 }
 
-async function checkUpstream(fetchImpl, timeoutMs) {
+async function checkUpstream(fetchImpl, upstreamOrigin, timeoutMs) {
   try {
     return await withUpstream(
       fetchImpl,
+      upstreamOrigin,
       "/api/spotify/status",
       { method: "GET", headers: { Accept: "application/json" } },
       timeoutMs,
@@ -485,7 +485,15 @@ function pinRemoteTarget(pathname, rawQuery) {
   return `${targetPath}${rawQuery ? `?${rawQuery}` : ""}`;
 }
 
-async function proxyPinRemote(request, response, target, body, fetchImpl, timeoutMs) {
+async function proxyPinRemote(
+  request,
+  response,
+  target,
+  body,
+  fetchImpl,
+  upstreamOrigin,
+  timeoutMs,
+) {
   const headers = { Accept: "*/*" };
   if (body.length > 0) headers["Content-Type"] = request.headers["content-type"];
 
@@ -493,6 +501,7 @@ async function proxyPinRemote(request, response, target, body, fetchImpl, timeou
   try {
     result = await withUpstream(
       fetchImpl,
+      upstreamOrigin,
       target,
       {
         method: request.method,
@@ -523,7 +532,16 @@ async function proxyPinRemote(request, response, target, body, fetchImpl, timeou
   sendBytes(response, result.status, result.body, result.contentType);
 }
 
-async function proxy(request, response, route, upstreamPath, body, fetchImpl, timeoutMs) {
+async function proxy(
+  request,
+  response,
+  route,
+  upstreamPath,
+  body,
+  fetchImpl,
+  upstreamOrigin,
+  timeoutMs,
+) {
   let upstreamBody;
   const headers = { Accept: "application/json" };
   if (route.kind === "settings") {
@@ -535,6 +553,7 @@ async function proxy(request, response, route, upstreamPath, body, fetchImpl, ti
   try {
     result = await withUpstream(
       fetchImpl,
+      upstreamOrigin,
       upstreamPath,
       {
         method: request.method,
@@ -611,7 +630,11 @@ export function createAdapterServer(config, { fetchImpl = globalThis.fetch } = {
         if (request.url === READINESS_PATH && request.method === "GET") {
           const body = await readBoundedRequestBody(request, 0);
           if (body.length !== 0) throw new RequestError(413, "request_too_large");
-          const upstreamReady = await checkUpstream(fetchImpl, config.timeoutMs);
+          const upstreamReady = await checkUpstream(
+            fetchImpl,
+            config.upstreamOrigin,
+            config.timeoutMs,
+          );
           sendJson(response, upstreamReady ? 200 : 503, {
             adapter: "ready",
             upstream: upstreamReady ? "ready" : "unavailable",
@@ -661,7 +684,15 @@ export function createAdapterServer(config, { fetchImpl = globalThis.fetch } = {
           ) {
             throw new RequestError(404, "not_found");
           }
-          await proxyPinRemote(request, response, pinTarget, body, fetchImpl, config.timeoutMs);
+          await proxyPinRemote(
+            request,
+            response,
+            pinTarget,
+            body,
+            fetchImpl,
+            config.upstreamOrigin,
+            config.timeoutMs,
+          );
           return;
         }
 
@@ -683,7 +714,16 @@ export function createAdapterServer(config, { fetchImpl = globalThis.fetch } = {
         const upstreamPath =
           route.query === "search" ? canonicalSearchPath(rawQuery) : pathname;
         const body = await readBoundedRequestBody(request, route.maxBodyBytes);
-        await proxy(request, response, route, upstreamPath, body, fetchImpl, config.timeoutMs);
+        await proxy(
+          request,
+          response,
+          route,
+          upstreamPath,
+          body,
+          fetchImpl,
+          config.upstreamOrigin,
+          config.timeoutMs,
+        );
       } catch (error) {
         if (response.headersSent) {
           response.end();
@@ -706,7 +746,6 @@ export function createAdapterServer(config, { fetchImpl = globalThis.fetch } = {
 }
 
 export const adapterContract = Object.freeze({
-  upstreamOrigin: UPSTREAM_ORIGIN,
   probes: probeContract,
   routes: [...ROUTES.keys()],
   maxSettingsBodyBytes: MAX_SETTINGS_BODY_BYTES,

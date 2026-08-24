@@ -1,0 +1,20 @@
+:root {
+  --pf-global--primary-color--100: #20251f;
+  --pf-global--primary-color--200: #10130f;
+}
+
+.login-pf body {
+  background: #f2f1eb;
+}
+
+.card-pf {
+  border: 0;
+  border-radius: 1rem;
+  box-shadow: 0 1rem 3rem rgb(24 28 22 / 12%);
+}
+
+#kc-header-wrapper {
+  color: #20251f;
+  letter-spacing: -0.03em;
+  text-transform: none;
+}

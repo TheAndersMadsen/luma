@@ -18,7 +18,7 @@ const {
   validateProductionArtifacts,
 } = require('./production-setup');
 
-const PRODUCTION_USAGE = './revival setup production --domain HOST --acme-email EMAIL --operator-email EMAIL [--public-ip IPV4] [--profile pin|search|spotify|observability ... | --no-profiles]';
+const PRODUCTION_USAGE = './revival setup production --domain HOST --acme-email EMAIL --operator-email EMAIL [--public-ip IPV4] [--iroh-ticket-file FILE] [--profile pin|search|spotify|observability ... | --no-profiles]';
 
 function protectedFile(file, requireContent = true) {
   if (!fs.existsSync(file)) return false;

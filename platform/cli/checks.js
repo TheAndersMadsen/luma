@@ -286,7 +286,6 @@ function checksForPath(file) {
   }
   if (normalized.startsWith('platform/containers/pin-builder/') ||
       normalized.startsWith('platform/deploy/pin/')) return orderedChecks('platform', 'pin');
-  if (normalized.startsWith('platform/deploy/bridge/')) return orderedChecks('platform', 'center', 'pin');
   if (normalized.startsWith('platform/containers/observability/')) return orderedChecks('platform', 'center', 'cosmos');
   if (normalized.startsWith('platform/compose/') || normalized.startsWith('platform/deploy/vps/') ||
       normalized.startsWith('platform/edge/')) return orderedChecks('platform', 'center', 'cosmos');

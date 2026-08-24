@@ -29,10 +29,19 @@ RUN rm -f /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources \
         'Check-Valid-Until: no' \
         > /etc/apt/sources.list.d/debian.sources \
     && apt-get update \
-    && apt-get install --no-install-recommends --yes ca-certificates \
+    && apt-get install --no-install-recommends --yes ca-certificates curl \
+    && install -d --owner=65532 --group=65532 --mode=0700 /var/lib/center-iroh-bridge \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /center-iroh-bridge /usr/local/bin/center-iroh-bridge
 
 USER 65532:65532
+EXPOSE 18080
+VOLUME ["/var/lib/center-iroh-bridge"]
+
+# `/__status` reports the bridge process and its current connection state, but
+# intentionally remains 200 while the physical Pin is offline.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD ["curl", "--fail", "--silent", "--show-error", "--max-time", "4", "http://127.0.0.1:18080/__status"]
+
 ENTRYPOINT ["/usr/local/bin/center-iroh-bridge"]

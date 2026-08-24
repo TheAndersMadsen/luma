@@ -2,7 +2,7 @@
 name = "center-iroh-bridge"
 version = "0.1.0"
 edition = "2021"
-description = "Mac helper: exposes Ai Pin Setup over iroh P2P from the Pin"
+description = "Exposes Ai Pin Setup over iroh P2P from the Pin"
 
 [dependencies]
 iroh = "1.0"

@@ -287,6 +287,33 @@ services:
       start_period: 20s
       retries: 3
 
+  center-iroh-bridge:
+    profiles: [spotify]
+    image: ${REVIVAL_CENTER_IROH_BRIDGE_IMAGE:-ghcr.io/theandersmadsen/ai-pin-revival/center-iroh-bridge:${REVIVAL_RELEASE_ID:?set REVIVAL_RELEASE_ID}}
+    command:
+      - --listen-ip
+      - 0.0.0.0
+      - --port
+      - "18080"
+      - --ticket-file
+      - /run/secrets/iroh_ticket
+      - --secret-key-file
+      - /var/lib/center-iroh-bridge/endpoint.key
+    restart: unless-stopped
+    read_only: true
+    volumes:
+      - iroh-bridge-data:/var/lib/center-iroh-bridge
+    networks:
+      spotify-control: {}
+      provider-egress: { gw_priority: 1 }
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 256m
+    pids_limit: 128
+    labels:
+      <<: *production-labels
+      dk.andersmadsen.ai-pin-revival.component: center-iroh-bridge
+
   spotify-adapter:
     profiles: [spotify]
     image: ${REVIVAL_SPOTIFY_IMAGE:-ghcr.io/theandersmadsen/ai-pin-revival/spotify-adapter:${REVIVAL_RELEASE_ID:?set REVIVAL_RELEASE_ID}}
@@ -297,6 +324,7 @@ services:
       REVIVAL_SPOTIFY_ADAPTER_PORT: "18081"
       REVIVAL_SPOTIFY_ADAPTER_TIMEOUT_MS: ${REVIVAL_SPOTIFY_ADAPTER_TIMEOUT_MS:-5000}
       REVIVAL_SPOTIFY_ADAPTER_TOKEN_FILE: /run/secrets/spotify_adapter_token
+      REVIVAL_SPOTIFY_ADAPTER_UPSTREAM_ORIGIN: http://center-iroh-bridge:18080
     networks: [spotify-control]
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
@@ -305,6 +333,8 @@ services:
     labels:
       <<: *production-labels
       dk.andersmadsen.ai-pin-revival.component: spotify-adapter
+    depends_on:
+      center-iroh-bridge: { condition: service_healthy }
 
   prometheus:
     profiles: [observability]
@@ -337,7 +367,10 @@ services:
     profiles: [observability]
     image: grafana/grafana:11.2.0@sha256:408afb9726de5122b00a2576763a8a57a3c86d5b0eff5305bc994ceb3eb96c3f
     ports:
-      - 127.0.0.1:${REVIVAL_GRAFANA_PORT:-13001}:3000
+      - target: 3000
+        published: "${REVIVAL_GRAFANA_PORT:-13001}"
+        host_ip: 127.0.0.1
+        protocol: tcp
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-}
@@ -380,3 +413,4 @@ volumes: !override
   traefik-acme: {}
   prometheus-data: {}
   grafana-data: {}
+  iroh-bridge-data: {}

@@ -144,3 +144,18 @@ test("confirmed deployment runs public verification before reporting success", (
   const dryRunExit = source.indexOf("exit 0", source.indexOf("if ((dry_run))"));
   assert.ok(dryRunExit >= 0 && dryRunExit < up, "dry-run must exit before deployment and verification");
 });
+
+test("the containerized iroh bridge is nonroot, persistent, and Pin-independent for health", () => {
+  const dockerfile = fs.readFileSync(
+    path.join(root, "platform/containers/center-iroh-bridge/Dockerfile"),
+    "utf8",
+  );
+  assert.match(dockerfile, /^USER 65532:65532$/mu);
+  assert.match(dockerfile, /^VOLUME \["\/var\/lib\/center-iroh-bridge"\]$/mu);
+  assert.match(dockerfile, /HEALTHCHECK[^\n]*[\s\S]*http:\/\/127\.0\.0\.1:18080\/__status/u);
+
+  const bridge = fs.readFileSync(path.join(root, "pin/bridge/src/main.rs"), "utf8");
+  assert.match(bridge, /stream\s*\.try_lock\(\)/u);
+  assert.doesNotMatch(bridge, /using an ephemeral key/u);
+  assert.doesNotMatch(bridge, /#\[arg\(long, short\)\]\s*ticket:/u);
+});

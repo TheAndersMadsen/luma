@@ -355,7 +355,7 @@ export default function AdminPage() {
             </p>
             <ul className={styles.envList}>
               <li><code>COSMOS_ADMIN_TOKEN</code> — the same secret on the dashboard and the ai-bus workload</li>
-              <li><code>COSMOS_ATTEST_CA_CERT</code> / <code>COSMOS_ATTEST_CA_KEY</code> — the CA the edge trusts, to mint device credentials</li>
+              <li><code>COSMOS_ATTEST_CA_CERT</code> / <code>COSMOS_ATTEST_CA_KEY</code> / <code>COSMOS_ATTEST_ROOT_CERT</code> — the attestation intermediate, its key, and operator root</li>
               <li><code>revival pki init device-user</code> or <code>revival pki import device-user --cert FILE --key FILE</code> — plan DeviceUser CA setup, then rerun with <code>--confirm</code></li>
             </ul>
           </section>

@@ -674,6 +674,7 @@ function validateProductionIdentityRealm(values, problems) {
     ? realm.users.find((candidate) => candidate?.id === values.REVIVAL_FIRST_OPERATOR_ID)
     : null;
   if (realm.realm !== 'humane' || realm.enabled !== true || realm.sslRequired !== 'external' ||
+      realm.loginTheme !== 'revival' ||
       realm.attributes?.aiPinRevivalManaged !== 'production-v1') {
     problems.push(`${realmFile} must define the managed production humane realm`);
   }

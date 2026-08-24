@@ -47,6 +47,34 @@ class CosmosActivationTransactionTest {
     }
 
     @Test
+    fun stagedSecretIsClearedAfterIdentityAndEdgeButBeforeRemoteMode() {
+        val settings = FakeSettings(CosmosActivationContract.REMOTE_MODE_SETTING to "0")
+        val records = FakeRecords()
+        val identity = FakeIdentity(candidate)
+        var stagingCleared = false
+
+        val result = transaction(settings, records).activate(
+            apiEndpoint = CosmosActivationContract.API_ENDPOINT,
+            onboardingEndpoint = CosmosActivationContract.ONBOARDING_ENDPOINT,
+            edgeIpv4 = "203.0.113.9",
+            root = root,
+            identity = identity,
+            clearStaging = {
+                check(settings[CosmosActivationContract.ROOT_CERTIFICATE_SETTING] == root.certificateDerBase64)
+                check(identity.current() == candidate)
+                check(settings[CosmosActivationContract.EDGE_IPV4_SETTING] == "203.0.113.9")
+                check(settings[CosmosActivationContract.REMOTE_MODE_SETTING] != "1")
+                stagingCleared = true
+                true
+            },
+        )
+
+        assertTrue(result.ok)
+        assertTrue(stagingCleared)
+        assertEquals(CosmosActivationContract.REMOTE_MODE_SETTING, settings.successfulWrites.last())
+    }
+
+    @Test
     fun matchingActivationIsAVerifiedNoOp() {
         val settings = FakeSettings(
             CosmosActivationContract.REMOTE_MODE_SETTING to "0",
