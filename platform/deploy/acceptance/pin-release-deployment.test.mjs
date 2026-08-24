@@ -93,6 +93,10 @@ test("production Center mounts only the operator-local Pin release tree", (conte
   ], { cwd: root, env: environment, encoding: "utf8" });
   assert.equal(pinSetup.status, 0, pinSetup.stderr);
   const operatorCompose = path.join(environment.REVIVAL_CONFIG_DIR, "production", "operator.compose.yaml");
+  assert.match(
+    fs.readFileSync(operatorCompose, "utf8"),
+    /target: \/var\/lib\/ai-pin-revival\/pin-releases\n\s+read_only: true\n\s+bind: \{ create_host_path: false \}/,
+  );
   const result = spawnSync(
     "docker",
     [
@@ -114,13 +118,14 @@ test("production Center mounts only the operator-local Pin release tree", (conte
   assert.equal(center.environment.REVIVAL_PIN_SETUP_ORIGIN, "https://pin.example.test");
   const mounts = center.volumes.filter((mount) => mount.target === releaseTarget);
   assert.equal(mounts.length, 1);
-  assert.deepEqual(mounts[0], {
+  const { bind, ...mount } = mounts[0];
+  assert.deepEqual(mount, {
     type: "bind",
     source: path.join(environment.REVIVAL_DATA_DIR, "pin-releases"),
     target: releaseTarget,
     read_only: true,
-    bind: { create_host_path: false },
   });
+  assert.deepEqual(bind, bind?.create_host_path === false ? { create_host_path: false } : {});
   assert.equal(center.environment.REVIVAL_SPOTIFY_ADAPTER_URL, "http://spotify-adapter:18081");
   assert.equal(
     JSON.parse(result.stdout).services["spotify-adapter"].environment.REVIVAL_SPOTIFY_ADAPTER_BIND_ADDRESS,
