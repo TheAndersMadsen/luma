@@ -701,7 +701,9 @@ build_debug_role() {
 
   prepare_credential_free_lane debug
   prepare_workspace
-  unset REVIVAL_PIN_PRIVATE_ASSETS_DIR
+  REVIVAL_PIN_PRIVATE_ASSETS_DIR="${STATE_ROOT}/empty-private-assets"
+  export REVIVAL_PIN_PRIVATE_ASSETS_DIR
+  mkdir -p "${REVIVAL_PIN_PRIVATE_ASSETS_DIR}"
   unset REVIVAL_PIN_EMBEDDED_PATCH_SIGNING_STORE_FILE
   unset REVIVAL_CODEX_APP_SERVER_BINARY
   unset REVIVAL_TFLITE_RUNTIME_BINARY
