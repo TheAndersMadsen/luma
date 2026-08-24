@@ -877,6 +877,8 @@ function operatorEnvironment(values) {
 }
 
 const TEST_ENVIRONMENT_PASSTHROUGH = new Set([
+  'ANDROID_HOME',
+  'ANDROID_SDK_ROOT',
   'CI',
   'FORCE_COLOR',
   'GITHUB_ACTIONS',

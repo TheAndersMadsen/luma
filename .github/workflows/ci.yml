@@ -174,9 +174,10 @@ jobs:
           runner_temp="$(/usr/bin/realpath -e -- "${RUNNER_TEMP}")"
           test "${runner_temp}" = "${RUNNER_TEMP}"
           test -f "${GITHUB_ENV}" && test ! -L "${GITHUB_ENV}"
-          /usr/bin/printf 'CARGO_HOME=%s\nCARGO_TARGET_DIR=%s\n' \
+          /usr/bin/printf 'CARGO_HOME=%s\nCARGO_TARGET_DIR=%s\nGRADLE_USER_HOME=%s\n' \
             "${runner_temp}/pin-runtime-cargo-home" \
-            "${runner_temp}/pin-runtime-cargo-target" >> "${GITHUB_ENV}"
+            "${runner_temp}/pin-runtime-cargo-target" \
+            "${runner_temp}/pin-gradle-home" >> "${GITHUB_ENV}"
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
@@ -191,10 +192,12 @@ jobs:
             ${{ runner.temp }}/pin-runtime-cargo-home/registry
             ${{ runner.temp }}/pin-runtime-cargo-home/git
             ${{ runner.temp }}/pin-runtime-cargo-target
-          key: pin-runtime-rust-v2-${{ runner.os }}-${{ runner.arch }}-1.91.1-${{ hashFiles('pin/runtime/core/Cargo.lock', 'rust-toolchain.toml') }}-${{ github.sha }}
+            ${{ runner.temp }}/pin-gradle-home/caches
+            ${{ runner.temp }}/pin-gradle-home/wrapper
+          key: pin-unit-v3-${{ runner.os }}-${{ runner.arch }}-1.91.1-${{ hashFiles('pin/runtime/core/Cargo.lock', 'pin/bridge/Cargo.lock', 'rust-toolchain.toml', 'pin/gradle/wrapper/gradle-wrapper.properties', 'pin/injector/gradle/wrapper/gradle-wrapper.properties', 'pin/**/*.gradle', 'pin/**/*.gradle.kts') }}-${{ github.sha }}
           restore-keys: |
-            pin-runtime-rust-v2-${{ runner.os }}-${{ runner.arch }}-1.91.1-${{ hashFiles('pin/runtime/core/Cargo.lock', 'rust-toolchain.toml') }}-
-            pin-runtime-rust-v2-${{ runner.os }}-${{ runner.arch }}-1.91.1-
+            pin-unit-v3-${{ runner.os }}-${{ runner.arch }}-1.91.1-${{ hashFiles('pin/runtime/core/Cargo.lock', 'pin/bridge/Cargo.lock', 'rust-toolchain.toml', 'pin/gradle/wrapper/gradle-wrapper.properties', 'pin/injector/gradle/wrapper/gradle-wrapper.properties', 'pin/**/*.gradle', 'pin/**/*.gradle.kts') }}-
+            pin-unit-v3-${{ runner.os }}-${{ runner.arch }}-1.91.1-
       - name: install protobuf compiler
         run: |
           sudo apt-get update
@@ -203,6 +206,18 @@ jobs:
         run: cargo fmt --check --manifest-path pin/runtime/core/Cargo.toml
       - name: focused component checks
         run: cargo test --locked --manifest-path pin/runtime/core/Cargo.toml
+      - name: bridge checks
+        run: cargo test --locked --manifest-path pin/bridge/Cargo.toml
+      - name: Android contract checks
+        working-directory: pin
+        run: |
+          ./gradlew --no-daemon \
+            --project-cache-dir "$RUNNER_TEMP/pin-gradle-project-cache" \
+            :contracts:stock-aibus:testDebugUnitTest \
+            :contracts:penumbra-ipc:testDebugUnitTest
+          ./injector/gradlew --no-daemon \
+            --project-cache-dir "$RUNNER_TEMP/pin-injector-gradle-project-cache" \
+            -p injector :common:testDebugUnitTest
       - name: save Pin runtime Cargo downloads and target state
         if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.pin-runtime-rust-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
@@ -211,7 +226,9 @@ jobs:
             ${{ runner.temp }}/pin-runtime-cargo-home/registry
             ${{ runner.temp }}/pin-runtime-cargo-home/git
             ${{ runner.temp }}/pin-runtime-cargo-target
-          key: pin-runtime-rust-v2-${{ runner.os }}-${{ runner.arch }}-1.91.1-${{ hashFiles('pin/runtime/core/Cargo.lock', 'rust-toolchain.toml') }}-${{ github.sha }}
+            ${{ runner.temp }}/pin-gradle-home/caches
+            ${{ runner.temp }}/pin-gradle-home/wrapper
+          key: pin-unit-v3-${{ runner.os }}-${{ runner.arch }}-1.91.1-${{ hashFiles('pin/runtime/core/Cargo.lock', 'pin/bridge/Cargo.lock', 'rust-toolchain.toml', 'pin/gradle/wrapper/gradle-wrapper.properties', 'pin/injector/gradle/wrapper/gradle-wrapper.properties', 'pin/**/*.gradle', 'pin/**/*.gradle.kts') }}-${{ github.sha }}
 
   pin-builder-linux-amd64:
     name: Pin unit and debug artifact checks (Linux/x64)
@@ -229,10 +246,6 @@ jobs:
         with:
           node-version: 22.14.0
           package-manager-cache: false
-      - name: Install protobuf compiler
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends libprotobuf-dev protobuf-compiler
       - name: Restore Pin build cache
         id: pin-builder-deps
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
@@ -241,13 +254,6 @@ jobs:
           key: pin-builder-v4-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('platform/containers/pin-builder/Dockerfile', 'platform/containers/pin-builder/entrypoint.sh', 'pin/gradle/wrapper/gradle-wrapper.properties', 'pin/injector/gradle/wrapper/gradle-wrapper.properties', 'pin/**/*.gradle', 'pin/**/*.gradle.kts', 'pin/**/Cargo.lock') }}
           restore-keys: |
             pin-builder-v4-${{ runner.os }}-${{ runner.arch }}-
-      - name: Run Pin contributor checks
-        run: |
-          set -euo pipefail
-          data="$RUNNER_TEMP/pin-builder-data"
-          build="$data/build"
-          REVIVAL_DATA_DIR="$data" REVIVAL_BUILD_DIR="$build" \
-            node ./revival pin check
       - name: Build all debug APKs
         run: |
           set -euo pipefail

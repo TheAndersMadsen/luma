@@ -129,7 +129,11 @@ test("init refuses unmanaged existing roots and runtime files outside secrets", 
 });
 
 test("test environments configure compiler and package cache paths outside the repository", () => {
-  const environment = testProcessEnvironment();
+  const environment = testProcessEnvironment({
+    ...process.env,
+    ANDROID_HOME: "/opt/android-sdk",
+    ANDROID_SDK_ROOT: "/opt/android-sdk",
+  });
   const cosmos = cosmosTestEnvironment(environment);
   const npm = normalizedNpmInstallEnvironment(environment);
   for (const directory of [
@@ -142,6 +146,8 @@ test("test environments configure compiler and package cache paths outside the r
     assert.equal(directory.startsWith(`${root}${path.sep}`), false);
   }
   assert.equal(cosmos.CARGO_TARGET_DIR, path.join(BUILD_DIR, "cosmos-target"));
+  assert.equal(environment.ANDROID_HOME, "/opt/android-sdk");
+  assert.equal(environment.ANDROID_SDK_ROOT, "/opt/android-sdk");
 });
 
 test("Cosmos convenience targets delegate to the root Revival CLI", () => {
