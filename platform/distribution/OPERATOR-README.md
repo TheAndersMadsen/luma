@@ -19,3 +19,24 @@ them automatically.
 If the release packages are private, log in first with `docker login ghcr.io`
 using an account token that can read packages. Public packages need no registry
 login; package visibility is not changed by this bundle.
+
+## Optional Spotify bridge
+
+Enable the Pin's Iroh remote-Center feature, then fetch
+`/api/iroh/ticket` from its loopback Setup API (directly or through an ADB port
+forward). Save only the response's `ticket` value as one line and pass that file
+to `setup production --profile spotify --iroh-ticket-file FILE`.
+
+After the Pin is paired, bind the bridge to that one account and device. The
+owner value is the first operator's `REVIVAL_FIRST_OPERATOR_ID`; the device
+value is the paired hexadecimal `device_id` shown by Center:
+
+```sh
+./revival config get REVIVAL_FIRST_OPERATOR_ID
+./revival config set REVIVAL_PIN_BRIDGE_OWNER_SUB VALUE_FROM_ABOVE
+./revival config set REVIVAL_PIN_BRIDGE_DEVICE_ID HEX_DEVICE_ID
+./revival config check
+```
+
+Redeploy after changing those values. Core remains healthy when this optional
+profile is disabled or the Pin is offline.
