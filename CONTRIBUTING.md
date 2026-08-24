@@ -97,5 +97,5 @@ checks.
 ## CI
 
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs component jobs in
-parallel. [`.github/workflows/pin-release.yml`](.github/workflows/pin-release.yml)
-builds signed Pin releases from `main` without device access.
+parallel. Signed Pin releases are built locally with `./revival pin release build`
+so signing keys and private assets never need to be copied into GitHub.
