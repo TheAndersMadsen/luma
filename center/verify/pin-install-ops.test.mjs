@@ -45,6 +45,11 @@
 import "./tsResolve.mjs";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import {
+  deviceShell,
+  fakeDevice,
+  packageDump,
+} from "./fixtures/fake-pin-device.mjs";
 
 // The installer's public surface. The `?query` gives this test its own instance
 // of the barrel; the modules it re-exports are reached by plain relative
@@ -74,7 +79,12 @@ const {
 const { createResolvedInstallTargetFixture } = await import(
   "../src/lib/pin-install/releases/testFixtures.ts"
 );
-const { AdbDeviceStepTimeoutError } = await import("../src/lib/pin-install/device.ts");
+const { AdbDeviceStepTimeoutError, waitForPackageManagerReady } = await import(
+  "../src/lib/pin-install/device.ts"
+);
+const { verifyInstalledManagedState } = await import(
+  "../src/lib/pin-install/ops/shared.ts"
+);
 
 /**
  * A device that answers identity questions and refuses everything else.
@@ -220,6 +230,8 @@ function createInternals(target, inspection) {
       serverApk: new Blob(["server"]),
       injectorApk: new Blob(["injector"]),
     })),
+    inspectInstallStateAfterPackageManagerReady: spy(async () => inspection),
+    waitForPackageManagerReady: spy(),
     runPreinstallCleanupCommand: spy(async () => ({ success: true, message: "ok" })),
     cleanupManagedPackages: spy(),
     bootstrapFinalInstaller: spy(),
@@ -240,7 +252,6 @@ describe("createInstallPlan", () => {
     });
 
     assert.equal(plan.kind, "routine-in-place");
-    assert.deepEqual(plan.assetRoles, ["hookApk", "serverApk", "injectorApk"]);
     assert.deepEqual(plan.packageRoles, ["hook", "server", "injector"]);
     assert.deepEqual(plan.expectedExistingPackageNames, [
       MANAGED_PACKAGES.hook,
@@ -297,7 +308,6 @@ describe("createInstallPlan", () => {
     });
 
     assert.equal(plan.kind, "routine-in-place");
-    assert.deepEqual(plan.assetRoles, ["hookApk", "serverApk", "injectorApk"]);
     assert.equal(plan.shouldRunPreinstallCleanup, false);
     assert.equal(plan.shouldCleanupManagedPackages, false);
     assert.equal(plan.shouldBootstrapInstaller, false);
@@ -338,13 +348,6 @@ describe("createInstallPlan", () => {
       bootstrapRecoveryConfirmed: true,
     });
     assert.equal(plan.kind, "bootstrap-recovery");
-    assert.deepEqual(plan.assetRoles, [
-      "installerApk",
-      "exploitApk",
-      "hookApk",
-      "serverApk",
-      "injectorApk",
-    ]);
     assert.equal(plan.shouldCleanupManagedPackages, true);
     assert.equal(plan.shouldBootstrapInstaller, true);
   });
@@ -362,11 +365,18 @@ describe("runInstallOperation", () => {
     );
 
     assert.equal(result.success, true);
+    assert.equal(internals.waitForPackageManagerReady.calls.length, 1);
+    assert.equal(
+      internals.inspectInstallStateAfterPackageManagerReady.calls.length,
+      1,
+    );
 
     const [downloadTarget, downloadOptions] =
       internals.downloadInstallTargetAssets.calls[0];
     assert.equal(downloadTarget, target);
     assert.deepEqual(downloadOptions.assetRoles, [
+      "installerApk",
+      "exploitApk",
       "hookApk",
       "serverApk",
       "injectorApk",
@@ -396,7 +406,40 @@ describe("runInstallOperation", () => {
     );
   });
 
-  it("fails closed before downloads or device work for unsupported state", async () => {
+  it("uses one generic package-readiness probe through the real verifier", async () => {
+    const target = createResolvedInstallTargetFixture();
+    const inspection = createInspection({ target });
+    const transport = fakeDevice(
+      deviceShell({
+        "dumpsys package com.penumbraos.systeminjector": packageDump(
+          MANAGED_PACKAGES.installer,
+          EXISTING_RELEASE_VERSION,
+        ),
+      }),
+    );
+    const internals = createInternals(target, inspection);
+    internals.waitForPackageManagerReady.implementation =
+      waitForPackageManagerReady;
+    internals.verifyInstalledManagedState.implementation =
+      verifyInstalledManagedState;
+
+    const result = await runInstallOperation(
+      { transport, target, inspection },
+      internals,
+    );
+
+    assert.equal(result.success, true);
+    assert.equal(internals.waitForPackageManagerReady.calls.length, 1);
+    assert.equal(internals.verifyInstalledManagedState.calls.length, 1);
+    assert.equal(
+      transport.commands.filter(
+        (command) => command === "cmd package path android",
+      ).length,
+      1,
+    );
+  });
+
+  it("refreshes state after asset validation but fails before mutations for unsupported state", async () => {
     const target = createResolvedInstallTargetFixture();
     const inspection = createInspection({
       target,
@@ -410,14 +453,20 @@ describe("runInstallOperation", () => {
     );
 
     assert.equal(result.success, false);
-    // `failedPhase` is null because no phase ever started: planning refused.
+    // Non-device assets are safe to validate first. Readiness and a fresh
+    // inspection then run before planning refuses the unsupported device.
     assert.equal(result.failedPhase, null);
     assert.equal(result.rollbackAvailable, false);
-    assert.equal(internals.downloadInstallTargetAssets.calls.length, 0);
+    assert.equal(
+      internals.inspectInstallStateAfterPackageManagerReady.calls.length,
+      1,
+    );
+    assert.equal(internals.waitForPackageManagerReady.calls.length, 1);
+    assert.equal(internals.downloadInstallTargetAssets.calls.length, 1);
     assert.equal(internals.installManagedPackages.calls.length, 0);
   });
 
-  it("does no work when bootstrap recovery has not been separately confirmed", async () => {
+  it("does no mutation when bootstrap recovery was not separately confirmed", async () => {
     const target = createResolvedInstallTargetFixture();
     const inspection = createInspection({
       target,
@@ -439,7 +488,8 @@ describe("runInstallOperation", () => {
 
     assert.match(result.error?.message ?? "", /separate explicit confirmation/);
     assert.equal(result.rollbackAvailable, false);
-    assert.equal(internals.downloadInstallTargetAssets.calls.length, 0);
+    assert.equal(internals.downloadInstallTargetAssets.calls.length, 1);
+    assert.equal(internals.waitForPackageManagerReady.calls.length, 1);
     assert.equal(internals.cleanupManagedPackages.calls.length, 0);
   });
 
@@ -480,6 +530,106 @@ describe("runInstallOperation", () => {
 
     const [, , policy] = internals.verifyInstalledManagedState.calls[0];
     assert.equal(policy.mode, "bootstrap-recovery");
+  });
+
+  it("refreshes stale missing-package state after readiness before planning", async () => {
+    const target = createResolvedInstallTargetFixture();
+    const staleInspection = createInspection({
+      target,
+      packageOverrides: Object.fromEntries(
+        MANAGED_ROLES.map((role) => [
+          role,
+          {
+            installed: false,
+            healthy: false,
+            versionName: null,
+            signerIdentity: null,
+          },
+        ]),
+      ),
+    });
+    const events = [];
+    let packageProbe = 0;
+    const transport = createFakeTransport();
+    transport.shell = async (command) => {
+      const text = Array.isArray(command) ? command.join(" ") : command;
+      if (text === "cmd package path android") {
+        packageProbe += 1;
+        if (packageProbe === 1) {
+          events.push("package-unavailable");
+          return {
+            stdout: "",
+            stderr: "cmd: Can't find service: package",
+            exitCode: 20,
+          };
+        }
+        events.push("package-ready");
+        return {
+          stdout: "package:/system/framework/framework-res.apk\n",
+          stderr: "",
+          exitCode: 0,
+        };
+      }
+      throw new Error(`Unexpected shell command: ${text}`);
+    };
+
+    const refreshedInspection = createInspection({ target });
+    const internals = createInternals(target, refreshedInspection);
+    internals.downloadInstallTargetAssets.implementation = async () => {
+      events.push("assets-verified");
+      return {
+        target,
+        installerApk: new Blob(["installer"]),
+        exploitApk: new Blob(["bootstrap"]),
+        hookApk: new Blob(["hook"]),
+        serverApk: new Blob(["server"]),
+        injectorApk: new Blob(["injector"]),
+      };
+    };
+    internals.inspectInstallStateAfterPackageManagerReady.implementation = async () => {
+      events.push("fresh-post-ready-inspection");
+      return refreshedInspection;
+    };
+    internals.waitForPackageManagerReady.implementation = async (device) => {
+      await waitForPackageManagerReady(device, 1_000, 0, 0);
+      events.push("package-manager-ready");
+    };
+    internals.installManagedPackages.implementation = async () => {
+      events.push("install-mutation");
+    };
+
+    const result = await runInstallOperation(
+      {
+        transport,
+        target,
+        inspection: staleInspection,
+        bootstrapRecoveryConfirmed: true,
+      },
+      internals,
+    );
+
+    assert.equal(result.success, true);
+    assert.deepEqual(events, [
+      "assets-verified",
+      "package-unavailable",
+      "package-ready",
+      "package-manager-ready",
+      "fresh-post-ready-inspection",
+      "install-mutation",
+    ]);
+    assert.equal(packageProbe, 2);
+    assert.equal(internals.waitForPackageManagerReady.calls.length, 1);
+    assert.equal(
+      internals.inspectInstallStateAfterPackageManagerReady.calls.length,
+      1,
+    );
+    assert.equal(internals.runPreinstallCleanupCommand.calls.length, 0);
+    assert.equal(internals.cleanupManagedPackages.calls.length, 0);
+    assert.equal(internals.bootstrapFinalInstaller.calls.length, 0);
+    assert.equal(internals.installManagedPackages.calls.length, 1);
+    assert.equal(internals.verifyInstalledManagedState.calls.length, 1);
+    const [, , verificationPolicy] = internals.verifyInstalledManagedState.calls[0];
+    assert.equal(verificationPolicy.mode, "in-place");
   });
 
   it("does not advertise rollback when asset preflight fails", async () => {
@@ -627,6 +777,9 @@ describe("runRemoveConflictsOperation", () => {
         onProgress: progress,
       },
       {
+        async waitForPackageManagerReady() {
+          calls.push("package-ready");
+        },
         async uninstallPackage(_transport, packageId) {
           calls.push(`uninstall:${packageId}`);
           installed.delete(packageId);
@@ -644,6 +797,7 @@ describe("runRemoveConflictsOperation", () => {
 
     // Each removal is confirmed against the device before the next one starts.
     assert.deepEqual(calls, [
+      "package-ready",
       "uninstall:one.pkg",
       "exists:one.pkg",
       "uninstall:two.pkg",
@@ -663,6 +817,7 @@ describe("runRemoveConflictsOperation", () => {
         conflicts: [createConflict({ installedPackageIds: ["stuck.pkg"] })],
       },
       {
+        async waitForPackageManagerReady() {},
         async uninstallPackage() {},
         async packageExists() {
           return true;
@@ -691,6 +846,7 @@ describe("runRemoveConflictsOperation", () => {
         ],
       },
       {
+        async waitForPackageManagerReady() {},
         async uninstallPackage() {},
         async packageExists() {
           return false;
@@ -720,6 +876,7 @@ describe("runRemoveConflictsOperation", () => {
         ],
       },
       {
+        async waitForPackageManagerReady() {},
         async uninstallPackage() {},
         async packageExists() {
           return false;
@@ -735,6 +892,39 @@ describe("runRemoveConflictsOperation", () => {
     assert.ok(result.error instanceof AdbDeviceStepTimeoutError);
     assert.deepEqual(result.warnings, []);
   });
+
+  it("does not mutate conflicts when package readiness times out", async () => {
+    const mutations = [];
+    const result = await runRemoveConflictsOperation(
+      {
+        transport: createFakeTransport("Fake Device"),
+        conflicts: [createConflict({ installedPackageIds: ["one.pkg"] })],
+      },
+      {
+        async waitForPackageManagerReady() {
+          throw new Error(
+            "Timed out waiting for Android's package service. Wait for startup to finish, then retry.",
+          );
+        },
+        async uninstallPackage() {
+          mutations.push("uninstall");
+        },
+        async packageExists() {
+          mutations.push("query-after-uninstall");
+          return false;
+        },
+        async runCleanupCommand() {
+          mutations.push("cleanup");
+          return { success: true, message: "ok" };
+        },
+      },
+    );
+
+    assert.equal(result.success, false);
+    assert.match(result.error?.message ?? "", /wait for startup to finish/i);
+    assert.deepEqual(mutations, []);
+    assert.deepEqual(result.removedPackageIds, []);
+  });
 });
 
 /* ------------------------------------------------------------------ *
@@ -747,6 +937,7 @@ describe("runRollbackOperation", () => {
     const result = await runRollbackOperation(
       { transport: createFakeTransport("Fake Device"), onProgress: progress },
       {
+        async waitForPackageManagerReady() {},
         async cleanupManagedPackages() {},
         async restoreConfiguredPackages() {
           return [];
@@ -764,6 +955,7 @@ describe("runRollbackOperation", () => {
     const result = await runRollbackOperation(
       { transport: createFakeTransport("Fake Device") },
       {
+        async waitForPackageManagerReady() {},
         async cleanupManagedPackages() {
           throw new Error("cleanup failed");
         },
@@ -782,6 +974,7 @@ describe("runRollbackOperation", () => {
     const result = await runRollbackOperation(
       { transport: createFakeTransport("Fake Device") },
       {
+        async waitForPackageManagerReady() {},
         async cleanupManagedPackages() {},
         async restoreConfiguredPackages() {
           throw new AdbDeviceStepTimeoutError("shell pm enable --user 0 humane.ota");
@@ -796,6 +989,34 @@ describe("runRollbackOperation", () => {
     // was given, not left with a bare "failed".
     assert.match(result.error.message, /60000ms/);
   });
+
+  it("does not mutate rollback state when package readiness fails", async () => {
+    const mutations = [];
+    let readinessCalls = 0;
+    const result = await runRollbackOperation(
+      { transport: createFakeTransport("Fake Device") },
+      {
+        async waitForPackageManagerReady() {
+          readinessCalls += 1;
+          throw new Error("Android package service is not ready");
+        },
+        async cleanupManagedPackages() {
+          mutations.push("cleanup");
+        },
+        async restoreConfiguredPackages() {
+          mutations.push("restore");
+          return [];
+        },
+        async verifyUninstalledManagedState() {
+          mutations.push("verify");
+        },
+      },
+    );
+
+    assert.equal(result.success, false);
+    assert.equal(readinessCalls, 1);
+    assert.deepEqual(mutations, []);
+  });
 });
 
 describe("runUninstallOperation", () => {
@@ -805,6 +1026,9 @@ describe("runUninstallOperation", () => {
     const result = await runUninstallOperation(
       { transport: createFakeTransport("Fake Device"), onProgress: progress },
       {
+        async waitForPackageManagerReady() {
+          calls.push("package-ready");
+        },
         async cleanupManagedPackages() {
           calls.push("cleanup");
         },
@@ -826,7 +1050,7 @@ describe("runUninstallOperation", () => {
 
     // Order is load-bearing: managed packages come off before stock packages go
     // back on, and only then is the end state verified.
-    assert.deepEqual(calls, ["cleanup", "restore", "verify"]);
+    assert.deepEqual(calls, ["package-ready", "cleanup", "restore", "verify"]);
     // A package that could not be re-enabled is reported, not fatal.
     assert.equal(result.success, true);
     assert.equal(result.warnings.length, 1);
@@ -837,6 +1061,7 @@ describe("runUninstallOperation", () => {
     const result = await runUninstallOperation(
       { transport: createFakeTransport("Fake Device") },
       {
+        async waitForPackageManagerReady() {},
         async cleanupManagedPackages() {},
         async restoreConfiguredPackages() {
           return [];
@@ -855,6 +1080,7 @@ describe("runUninstallOperation", () => {
     const result = await runUninstallOperation(
       { transport: createFakeTransport("Fake Device") },
       {
+        async waitForPackageManagerReady() {},
         async cleanupManagedPackages() {
           throw new AdbDeviceStepTimeoutError("shell pm uninstall com.penumbraos.server");
         },
@@ -868,6 +1094,34 @@ describe("runUninstallOperation", () => {
     assert.equal(result.success, false);
     assert.ok(result.error instanceof AdbDeviceStepTimeoutError);
     assert.match(result.error.message, /60000ms/);
+  });
+
+  it("does not mutate uninstall state when package readiness fails", async () => {
+    const mutations = [];
+    let readinessCalls = 0;
+    const result = await runUninstallOperation(
+      { transport: createFakeTransport("Fake Device") },
+      {
+        async waitForPackageManagerReady() {
+          readinessCalls += 1;
+          throw new Error("Android package service is not ready");
+        },
+        async cleanupManagedPackages() {
+          mutations.push("cleanup");
+        },
+        async restoreConfiguredPackages() {
+          mutations.push("restore");
+          return [];
+        },
+        async verifyUninstalledManagedState() {
+          mutations.push("verify");
+        },
+      },
+    );
+
+    assert.equal(result.success, false);
+    assert.equal(readinessCalls, 1);
+    assert.deepEqual(mutations, []);
   });
 });
 
@@ -1174,6 +1428,38 @@ function createCommands() {
 }
 
 describe("derivePrimaryCardViewModel", () => {
+  it("says no changes were made when package readiness fails before mutation", () => {
+    const viewModel = derivePrimaryCardViewModel(
+      createControllerState({
+        stage: "result",
+        inspection: createControllerInspection({
+          credentialState: { state: "unlocked", ceAvailableRaw: "1" },
+        }),
+        lastOperationResult: {
+          kind: "install",
+          result: {
+            success: false,
+            warnings: [],
+            inspection: null,
+            error: new Error(
+              "Timed out waiting for Android's package service.",
+            ),
+            failedPhase: null,
+            rollbackAttempted: false,
+            rollbackSucceeded: false,
+            rollbackAvailable: false,
+          },
+        },
+      }),
+      createCommands(),
+    );
+
+    assert.deepEqual(viewModel.notice, {
+      tone: "warning",
+      text: "No changes were made. Wait for Android to finish starting, then retry.",
+    });
+  });
+
   it("shows a lock warning when CE availability is not confirmed", () => {
     const viewModel = derivePrimaryCardViewModel(
       createControllerState({

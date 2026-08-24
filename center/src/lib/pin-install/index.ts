@@ -13,7 +13,7 @@
  *   device.ts  — the ONLY seam onto `@/lib/pin-device`; internal.
  *   domain/    — what is on the device and what may be done to it.
  *   releases/  — what a trustworthy release is, and how to fetch/verify one.
- *   ops/       — the mutation pipelines (install, uninstall, rollback, cleanup).
+ *   ops/       — the mutation pipelines (install, uninstall, conflict cleanup).
  *   app/state  — the pure reducer + command derivation the route hook drives.
  *   presentation/ — view models over the above; still framework-free.
  *
@@ -42,7 +42,6 @@ export * from "./ops/phases";
 export * from "./ops/shared";
 export * from "./ops/install";
 export * from "./ops/uninstall";
-export * from "./ops/rollback";
 export * from "./ops/removeConflicts";
 
 export * from "./app/state";

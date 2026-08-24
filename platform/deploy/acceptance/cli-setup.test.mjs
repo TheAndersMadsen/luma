@@ -1,26 +1,39 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { createRequire } from "node:module";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
+import {
+  canonicalPinReleaseManifestJson,
+  createPinReleaseManifest,
+  PIN_RELEASE_ARTIFACT_ROLES,
+  PIN_RELEASE_PACKAGE_BY_ROLE,
+} from "../pin/release.mjs";
+
 const root = path.resolve(import.meta.dirname, "../../..");
 const cli = path.join(root, "revival");
+const require = createRequire(import.meta.url);
+const { productionRealm } = require("../../cli/production-setup.js");
 
 function fixture(t) {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "revival-setup-"));
   t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
-  const env = {
-    ...process.env,
-    REVIVAL_CONFIG_DIR: path.join(temporary, "config"),
-    REVIVAL_SECRETS_DIR: path.join(temporary, "secrets"),
-    REVIVAL_ENV_FILE: path.join(temporary, "secrets", "runtime.env"),
-    REVIVAL_DATA_DIR: path.join(temporary, "data"),
-    REVIVAL_BUILD_DIR: path.join(temporary, "data", "build"),
-    REVIVAL_STATE_DIR: path.join(temporary, "state"),
+  return {
+    temporary,
+    env: {
+      ...process.env,
+      REVIVAL_CONFIG_DIR: path.join(temporary, "config"),
+      REVIVAL_SECRETS_DIR: path.join(temporary, "secrets"),
+      REVIVAL_ENV_FILE: path.join(temporary, "secrets", "runtime.env"),
+      REVIVAL_DATA_DIR: path.join(temporary, "data"),
+      REVIVAL_BUILD_DIR: path.join(temporary, "data", "build"),
+      REVIVAL_STATE_DIR: path.join(temporary, "state"),
+    },
   };
-  return { temporary, env };
 }
 
 function invoke(env, ...args) {
@@ -28,169 +41,379 @@ function invoke(env, ...args) {
     cwd: root,
     env,
     encoding: "utf8",
-    timeout: 20_000,
+    timeout: 30_000,
   });
 }
 
-test("setup persists only the selected track and reports the same ordered checklist", (t) => {
-  const { env } = fixture(t);
-  const selected = invoke(env, "setup", "local", "--json");
-  assert.equal(selected.status, 0, selected.stderr);
-  const report = JSON.parse(selected.stdout);
-  assert.equal(report.schemaVersion, 2);
-  assert.equal(report.selectedTrack, "local");
-  assert.equal(Object.hasOwn(report, "next"), false);
-  assert.deepEqual(
-    report.steps.filter((step) => step.status === "required").map((step) => step.action),
-    ["./revival init", "./revival doctor", "./revival stack up", "./revival stack status"],
+function parseEnv(file) {
+  return Object.fromEntries(
+    fs.readFileSync(file, "utf8")
+      .split(/\r?\n/u)
+      .filter((line) => line && !line.startsWith("#"))
+      .map((line) => {
+        const separator = line.indexOf("=");
+        return [line.slice(0, separator), line.slice(separator + 1)];
+      }),
   );
+}
 
-  const stateFile = path.join(env.REVIVAL_STATE_DIR, "setup-state.json");
-  assert.equal(fs.statSync(env.REVIVAL_STATE_DIR).mode & 0o777, 0o700);
-  assert.equal(fs.statSync(stateFile).mode & 0o777, 0o600);
-  assert.deepEqual(JSON.parse(fs.readFileSync(stateFile, "utf8")), {
-    schemaVersion: 1,
-    selectedTrack: "local",
+function seedPinRelease(env) {
+  const root = path.join(env.REVIVAL_DATA_DIR, "pin-releases");
+  const version = "2026-08-24.1";
+  const versionCode = 202_608_241;
+  const signerSha256 = "c".repeat(64);
+  const byRole = new Map();
+  const artifacts = PIN_RELEASE_ARTIFACT_ROLES.map((role) => {
+    const bytes = Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), Buffer.from(`signed-${role}`)]);
+    byRole.set(role, bytes);
+    return {
+      role,
+      path: `signed/${role}.apk`,
+      name: `${role}.apk`,
+      package: PIN_RELEASE_PACKAGE_BY_ROLE[role],
+      versionName: version,
+      versionCode,
+      size: bytes.length,
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+      signerSha256,
+    };
   });
-  assert.deepEqual(fs.readdirSync(env.REVIVAL_STATE_DIR), ["setup-state.json"]);
+  const manifest = createPinReleaseManifest({ version, receipts: { schemaVersion: 1, artifacts } });
+  const document = canonicalPinReleaseManifestJson(manifest);
+  const release = path.join(root, "releases", manifest.releaseId);
+  fs.mkdirSync(release, { recursive: true, mode: 0o700 });
+  for (const role of PIN_RELEASE_ARTIFACT_ROLES) {
+    fs.writeFileSync(path.join(release, `${role}.apk`), byRole.get(role), { mode: 0o600 });
+  }
+  fs.writeFileSync(path.join(release, "manifest.json"), document, { mode: 0o600 });
+  fs.writeFileSync(path.join(root, "current.json"), document, { mode: 0o600 });
+  return { manifest, release };
+}
 
-  const resumed = invoke(env, "setup", "status", "--json");
-  assert.equal(resumed.status, 0, resumed.stderr);
-  assert.deepEqual(JSON.parse(resumed.stdout), report);
-  assert.equal(fs.existsSync(env.REVIVAL_CONFIG_DIR), false, "setup must not initialize product state");
+test("generated production identity supports Center's direct password grant", () => {
+  const password = "p".repeat(32);
+  const realm = productionRealm({
+    REVIVAL_PUBLIC_ORIGIN: "https://pin.example.test",
+    REVIVAL_FIRST_OPERATOR_EMAIL: "owner@example.test",
+    REVIVAL_FIRST_OPERATOR_ID: "11111111-1111-4111-8111-111111111111",
+    KEYCLOAK_CLIENT_ID: "center",
+    KEYCLOAK_CLIENT_SECRET: "s".repeat(32),
+  }, password);
+  assert.equal(realm.clients[0].publicClient, false);
+  assert.equal(realm.clients[0].directAccessGrantsEnabled, true);
+  assert.deepEqual(realm.users[0].requiredActions, []);
+  assert.deepEqual(realm.users[0].credentials, [{ type: "password", value: password, temporary: false }]);
+  assert.match(fs.readFileSync(path.join(root, "center/src/server/auth.ts"), "utf8"), /grant_type: "password"/u);
 });
 
-test("setup recomputes safe file evidence without remembering command success", (t) => {
+test("local setup creates real external configuration and status derives from it", (t) => {
   const { env } = fixture(t);
-  fs.mkdirSync(path.dirname(env.REVIVAL_ENV_FILE), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(env.REVIVAL_ENV_FILE, "REVIVAL_CONFIG_VERSION=1\n", { mode: 0o600 });
+  const setup = invoke(env, "setup", "local");
+  assert.equal(setup.status, 0, setup.stderr);
+  assert.match(setup.stdout, /NEXT \.\/revival doctor/u);
+  assert.equal(fs.statSync(env.REVIVAL_ENV_FILE).mode & 0o777, 0o600);
+  assert.equal(fs.existsSync(env.REVIVAL_STATE_DIR), false, "setup keeps no progress state");
 
-  const configured = invoke(env, "setup", "local", "--json");
-  assert.equal(configured.status, 0, configured.stderr);
-  const configuredReport = JSON.parse(configured.stdout);
-  assert.equal(configuredReport.steps.find((step) => step.id === "initialize").status, "complete");
-  assert.deepEqual(
-    configuredReport.steps.filter((step) => step.status === "required").map((step) => step.action),
-    ["./revival doctor", "./revival stack up", "./revival stack status"],
-  );
+  const status = invoke(env, "setup", "status", "--json");
+  assert.equal(status.status, 0, status.stderr);
+  assert.deepEqual(JSON.parse(status.stdout), {
+    schemaVersion: 3,
+    mode: "local",
+    ok: true,
+    next: "./revival doctor",
+  });
 
   fs.unlinkSync(env.REVIVAL_ENV_FILE);
   const changed = invoke(env, "setup", "status", "--json");
-  assert.equal(changed.status, 0, changed.stderr);
-  const changedReport = JSON.parse(changed.stdout);
-  assert.equal(changedReport.steps.find((step) => step.id === "initialize").status, "required");
-  assert.equal(
-    changedReport.steps.find((step) => step.id === "check").evidence,
-    "run this command directly",
-  );
-  assert.deepEqual(
-    changedReport.steps.filter((step) => step.status === "required").map((step) => step.action),
-    ["./revival init", "./revival doctor", "./revival stack up", "./revival stack status"],
-  );
+  assert.equal(changed.status, 1);
+  assert.deepEqual(JSON.parse(changed.stdout), {
+    schemaVersion: 3,
+    mode: "uninitialized",
+    ok: false,
+    next: "./revival setup local or ./revival setup production --help",
+  });
 });
 
-test("Pin setup retains no device identity and leaves live and physical checks required", (t) => {
+test("production setup creates a complete portable operator installation and is idempotent", (t) => {
   const { env } = fixture(t);
-  env.REVIVAL_TEST_SECRET = "never-write-this-secret";
-  const signingFile = path.join(env.REVIVAL_SECRETS_DIR, "pin", "signing.env");
-  fs.mkdirSync(path.dirname(signingFile), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(signingFile, "PIN_SIGNING_STORE_FILE=/protected/store\n", { mode: 0o600 });
+  const args = [
+    "setup", "production",
+    "--domain", "pin.example.test",
+    "--acme-email", "acme@example.test",
+    "--operator-email", "owner@example.test",
+    "--profile", "search",
+    "--profile", "observability",
+  ];
+  const first = invoke(env, ...args);
+  assert.equal(first.status, 0, first.stderr);
+  assert.match(first.stdout, /Production configuration is ready for https:\/\/pin\.example\.test/u);
 
-  const result = invoke(env, "setup", "pin", "--json");
-  assert.equal(result.status, 0, result.stderr);
-  const report = JSON.parse(result.stdout);
-  assert.ok(report.steps.some((step) => step.verification === "physical"));
-  assert.ok(report.steps.every((step) => step.status === "required"));
-  assert.equal(report.steps[0].action, "./revival pin doctor");
-  assert.equal(Object.hasOwn(report, "next"), false);
+  const runtime = parseEnv(env.REVIVAL_ENV_FILE);
+  assert.equal(runtime.REVIVAL_PUBLIC_ORIGIN, "https://pin.example.test");
+  assert.equal(runtime.COSMOS_OIDC_ISSUER, "https://pin.example.test/realms/humane");
+  assert.equal(runtime.COMPOSE_PROFILES, "observability,search");
+  assert.equal(runtime.COSMOS_ENROLLMENT_PINCODE, "");
+  assert.equal(runtime.REVIVAL_FIRST_OPERATOR_EMAIL, "owner@example.test");
+  assert.equal(Object.hasOwn(runtime, "REVIVAL_FIRST_OPERATOR_PASSWORD"), false);
 
-  const state = fs.readFileSync(path.join(env.REVIVAL_STATE_DIR, "setup-state.json"), "utf8");
-  assert.doesNotMatch(state, /serial|secret|never-write-this-secret/i);
+  const production = path.join(env.REVIVAL_CONFIG_DIR, "production");
+  const operatorCompose = path.join(production, "operator.compose.yaml");
+  const realmFile = path.join(production, "realm.json");
+  const protectedFiles = [operatorCompose, path.join(production, "first-login.txt")];
+  const containerFiles = [
+    path.join(production, "traefik.yaml"),
+    path.join(production, "traefik-dynamic.yaml"),
+    path.join(production, "postgres-init.sql"),
+    realmFile,
+    path.join(production, "searxng-settings.yml"),
+    path.join(production, "prometheus.yml"),
+  ];
+  for (const file of protectedFiles) {
+    assert.ok(fs.statSync(file).size > 0, `${file} must be nonempty`);
+    assert.equal(fs.statSync(file).mode & 0o077, 0, `${file} must be operator-only`);
+  }
+  for (const file of containerFiles) assert.equal(fs.statSync(file).mode & 0o777, 0o444, file);
+  assert.equal(fs.statSync(production).mode & 0o777, 0o700);
+
+  const realm = JSON.parse(fs.readFileSync(realmFile, "utf8"));
+  assert.equal(realm.realm, "humane");
+  assert.equal(realm.users[0].id, runtime.REVIVAL_FIRST_OPERATOR_ID);
+  assert.equal(realm.clients[0].directAccessGrantsEnabled, true);
+  assert.deepEqual(realm.users[0].requiredActions, []);
+  assert.equal(realm.users[0].credentials[0].temporary, false);
+  assert.ok(realm.users[0].credentials[0].value.length >= 24);
+  assert.deepEqual(realm.users[0].realmRoles, ["cosmos-operator"]);
+  const loginHandoff = fs.readFileSync(path.join(production, "first-login.txt"), "utf8");
+  assert.match(loginHandoff, new RegExp(`^Initial password: ${realm.users[0].credentials[0].value}$`, "m"));
+  assert.match(fs.readFileSync(path.join(root, "center/src/server/auth.ts"), "utf8"), /grant_type: "password"/u);
+  assert.match(fs.readFileSync(path.join(production, "traefik-dynamic.yaml"), "utf8"), /pin\.example\.test/u);
+  const operatorModel = fs.readFileSync(operatorCompose, "utf8");
+  assert.doesNotMatch(operatorModel, /container-inputs|spotify-token|edge-server|pin-releases/u);
+  assert.match(operatorModel, /searxng-settings|prometheus/u);
+  assert.doesNotMatch(operatorModel, /center\.andersmadsen\.dk|\/home\/anders\/carry/u);
+  assert.equal(fs.existsSync(path.join(production, "container-inputs")), false);
+  assert.equal(fs.existsSync(path.join(env.REVIVAL_DATA_DIR, "pin-releases")), false);
+  assert.equal(fs.existsSync(path.join(env.REVIVAL_SECRETS_DIR, "pki")), false);
+  assert.equal(fs.existsSync(path.join(env.REVIVAL_CONFIG_DIR, "pin-assets")), false);
+  assert.equal(fs.existsSync(env.REVIVAL_STATE_DIR), false);
+
+  const preserved = {
+    realm: fs.readFileSync(realmFile, "utf8"),
+  };
+  fs.unlinkSync(path.join(production, "first-login.txt"));
+  const rerun = invoke(env, "setup", "production");
+  assert.equal(rerun.status, 0, rerun.stderr);
+  const after = parseEnv(env.REVIVAL_ENV_FILE);
+  assert.equal(Object.hasOwn(after, "REVIVAL_FIRST_OPERATOR_PASSWORD"), false);
+  assert.equal(fs.readFileSync(realmFile, "utf8"), preserved.realm);
+  assert.equal(fs.existsSync(path.join(production, "first-login.txt")), false);
+
+  const status = invoke(env, "setup", "status", "--json");
+  assert.equal(status.status, 0, status.stderr);
+  assert.deepEqual(JSON.parse(status.stdout), {
+    schemaVersion: 3,
+    mode: "production",
+    ok: true,
+    next: "./revival deploy production --dry-run",
+  });
 });
 
-test("setup planning never probes Docker, a device, or the network", (t) => {
-  const { temporary, env } = fixture(t);
-  const bin = path.join(temporary, "bin");
-  const marker = path.join(temporary, "executed-tools.txt");
-  fs.mkdirSync(bin, { mode: 0o700 });
-  for (const command of ["adb", "curl", "docker", "scp", "ssh"]) {
-    fs.writeFileSync(
-      path.join(bin, command),
-      "#!/bin/sh\nprintf '%s\\n' \"$0\" >> \"$REVIVAL_EXEC_MARKER\"\nexit 97\n",
-      { mode: 0o700 },
-    );
-  }
-  env.PATH = `${bin}${path.delimiter}${process.env.PATH}`;
-  env.REVIVAL_EXEC_MARKER = marker;
-
-  for (const track of ["local", "contributor", "production", "pin"]) {
-    const selected = invoke(env, "setup", track, "--json");
-    assert.equal(selected.status, 0, `${track}: ${selected.stderr}`);
-    assert.doesNotThrow(() => JSON.parse(selected.stdout));
-    const resumed = invoke(env, "setup", "status", "--json");
-    assert.equal(resumed.status, 0, `${track}: ${resumed.stderr}`);
-  }
-  assert.equal(fs.existsSync(marker), false);
-});
-
-test("setup state refuses unsafe roots for both selection and status reads", (t) => {
-  const { temporary, env } = fixture(t);
-
-  for (const operation of ["local", "status"]) {
-    const insideSource = invoke(
-      { ...env, REVIVAL_STATE_DIR: path.join(root, ".setup-state-test") },
-      "setup",
-      operation,
-    );
-    assert.equal(insideSource.status, 1);
-    assert.match(insideSource.stderr, /outside the source tree/u);
-  }
-
-  const realDirectory = path.join(temporary, "real-state");
-  const linkedDirectory = path.join(temporary, "linked-state");
-  fs.mkdirSync(realDirectory, { mode: 0o700 });
-  fs.symlinkSync(realDirectory, linkedDirectory);
-  for (const operation of ["local", "status"]) {
-    const linked = invoke({ ...env, REVIVAL_STATE_DIR: linkedDirectory }, "setup", operation);
-    assert.equal(linked.status, 1);
-    assert.match(linked.stderr, /must be a real directory/u);
-  }
-
-  const looseDirectory = path.join(temporary, "loose-state");
-  fs.mkdirSync(looseDirectory, { mode: 0o700 });
-  fs.chmodSync(looseDirectory, 0o755);
-  for (const operation of ["local", "status"]) {
-    const loose = invoke({ ...env, REVIVAL_STATE_DIR: looseDirectory }, "setup", operation);
-    assert.equal(loose.status, 1);
-    assert.match(loose.stderr, /mode 0700/u);
-  }
-});
-
-test("setup state reads are bounded and reject malformed state", (t) => {
+test("pin profile creates enrollment inputs and requires a public IPv4 address", (t) => {
   const { env } = fixture(t);
+  const common = [
+    "setup", "production",
+    "--domain", "pin.example.test",
+    "--acme-email", "acme@example.test",
+    "--operator-email", "owner@example.test",
+    "--profile", "pin",
+  ];
+  const missing = invoke(env, ...common);
+  assert.equal(missing.status, 1);
+  assert.match(missing.stderr, /pin profile requires --public-ip/u);
+  assert.equal(fs.existsSync(env.REVIVAL_CONFIG_DIR), false, "invalid setup must not create partial state");
 
-  const selected = invoke(env, "setup", "local");
-  assert.equal(selected.status, 0, selected.stderr);
-  const stateFile = path.join(env.REVIVAL_STATE_DIR, "setup-state.json");
-  fs.writeFileSync(stateFile, "{}\n", { mode: 0o600 });
-  const malformed = invoke(env, "setup", "status");
-  assert.equal(malformed.status, 1);
-  assert.match(malformed.stderr, /unsupported shape/u);
-
-  fs.writeFileSync(stateFile, " ".repeat(4097), { mode: 0o600 });
-  const oversized = invoke(env, "setup", "status");
-  assert.equal(oversized.status, 1);
-  assert.match(oversized.stderr, /exceeds 4096 bytes/u);
-});
-
-test("setup import is intentionally unsupported in this CLI", (t) => {
-  const { env } = fixture(t);
-  const result = invoke(
+  const core = invoke(
     env,
-    "setup", "import",
-    "--json",
+    "setup", "production",
+    "--domain", "pin.example.test",
+    "--acme-email", "acme@example.test",
+    "--operator-email", "owner@example.test",
   );
+  assert.equal(core.status, 0, core.stderr);
+  seedPinRelease(env);
+  const setup = invoke(env, ...common, "--public-ip", "203.0.113.42");
+  assert.equal(setup.status, 0, setup.stderr);
+  const runtime = parseEnv(env.REVIVAL_ENV_FILE);
+  assert.equal(runtime.COMPOSE_PROFILES, "pin");
+  assert.match(runtime.COSMOS_ENROLLMENT_PINCODE, /^\d{4}$/u);
+  assert.equal(runtime.COSMOS_ENROLLMENT_USER_ID, runtime.REVIVAL_FIRST_OPERATOR_ID);
+  assert.equal(runtime.REVIVAL_DEVICE_EDGE_IPV4, "203.0.113.42");
+
+  const edgeKey = path.join(env.REVIVAL_CONFIG_DIR, "production", "edge-ca.key");
+  fs.unlinkSync(edgeKey);
+  const recovered = invoke(env, "setup", "production");
+  assert.equal(recovered.status, 0, recovered.stderr);
+  assert.ok(fs.statSync(edgeKey).size > 0);
+});
+
+test("core setup omits optional state and --no-profiles clears active profiles", (t) => {
+  const { env } = fixture(t);
+  const common = [
+    "setup", "production",
+    "--domain", "pin.example.test",
+    "--acme-email", "acme@example.test",
+    "--operator-email", "owner@example.test",
+  ];
+  const core = invoke(env, ...common);
+  assert.equal(core.status, 0, core.stderr);
+  let runtime = parseEnv(env.REVIVAL_ENV_FILE);
+  assert.equal(runtime.COMPOSE_PROFILES, "");
+  assert.equal(runtime.GRAFANA_ADMIN_PASSWORD, "");
+  assert.equal(runtime.SEARXNG_SECRET, "");
+  assert.equal(runtime.COSMOS_OPAQUE_SEED, "");
+  const production = path.join(env.REVIVAL_CONFIG_DIR, "production");
+  for (const name of ["envoy.yaml", "spotify-token", "searxng-settings.yml", "prometheus.yml", "grafana"]) {
+    assert.equal(fs.existsSync(path.join(production, name)), false, name);
+  }
+
+  const search = invoke(env, ...common, "--profile", "search");
+  assert.equal(search.status, 0, search.stderr);
+  assert.equal(parseEnv(env.REVIVAL_ENV_FILE).COMPOSE_PROFILES, "search");
+  const cleared = invoke(env, "setup", "production", "--no-profiles");
+  assert.equal(cleared.status, 0, cleared.stderr);
+  runtime = parseEnv(env.REVIVAL_ENV_FILE);
+  assert.equal(runtime.COMPOSE_PROFILES, "");
+  assert.equal(runtime.COSMOS_SEARXNG_BASE_URL, "");
+  assert.doesNotMatch(fs.readFileSync(path.join(production, "operator.compose.yaml"), "utf8"), /searxng/u);
+
+  const spotify = invoke(env, "setup", "production", "--profile", "spotify");
+  assert.equal(spotify.status, 0, spotify.stderr);
+  const spotifyOverlay = fs.readFileSync(path.join(production, "operator.compose.yaml"), "utf8");
+  assert.match(spotifyOverlay, /http:\/\/spotify-adapter:18081/u);
+});
+
+test("production setup resumes from a first-login handoff written before the realm", (t) => {
+  const { env } = fixture(t);
+  const args = [
+    "setup", "production",
+    "--domain", "pin.example.test",
+    "--acme-email", "acme@example.test",
+    "--operator-email", "owner@example.test",
+  ];
+  const first = invoke(env, ...args);
+  assert.equal(first.status, 0, first.stderr);
+  const production = path.join(env.REVIVAL_CONFIG_DIR, "production");
+  const realmFile = path.join(production, "realm.json");
+  const password = JSON.parse(fs.readFileSync(realmFile, "utf8")).users[0].credentials[0].value;
+  fs.unlinkSync(realmFile);
+
+  const resumed = invoke(env, "setup", "production");
+  assert.equal(resumed.status, 0, resumed.stderr);
+  assert.equal(JSON.parse(fs.readFileSync(realmFile, "utf8")).users[0].credentials[0].value, password);
+});
+
+test("production identity bootstrap refuses changed immutable inputs", (t) => {
+  const { env } = fixture(t);
+  const setup = invoke(
+    env,
+    "setup", "production",
+    "--domain", "pin.example.test",
+    "--acme-email", "acme@example.test",
+    "--operator-email", "owner@example.test",
+  );
+  assert.equal(setup.status, 0, setup.stderr);
+  const before = fs.readFileSync(env.REVIVAL_ENV_FILE, "utf8");
+  const changed = invoke(env, "setup", "production", "--domain", "other.example.test");
+  assert.equal(changed.status, 1);
+  assert.match(changed.stderr, /identity bootstrap is immutable/u);
+  assert.equal(fs.readFileSync(env.REVIVAL_ENV_FILE, "utf8"), before);
+});
+
+test("pin profile is not ready with an empty release directory", (t) => {
+  const { env } = fixture(t);
+  const setup = invoke(
+    env,
+    "setup", "production",
+    "--domain", "pin.example.test",
+    "--acme-email", "acme@example.test",
+    "--operator-email", "owner@example.test",
+    "--profile", "pin",
+    "--public-ip", "203.0.113.42",
+  );
+  assert.equal(setup.status, 1);
+  assert.match(setup.stderr, /current\.json must identify a canonical, digest-matched five-APK Pin release/u);
+});
+
+test("pin profile rejects a text file substituted for a canonical APK", (t) => {
+  const { env } = fixture(t);
+  const core = invoke(
+    env,
+    "setup", "production",
+    "--domain", "pin.example.test",
+    "--acme-email", "acme@example.test",
+    "--operator-email", "owner@example.test",
+  );
+  assert.equal(core.status, 0, core.stderr);
+  const { manifest, release } = seedPinRelease(env);
+  const server = manifest.artifacts.find((artifact) => artifact.role === "server");
+  fs.writeFileSync(path.join(release, "server.apk"), Buffer.alloc(server.size, 0x78), { mode: 0o600 });
+  const setup = invoke(env, "setup", "production", "--profile", "pin", "--public-ip", "203.0.113.42");
+  assert.equal(setup.status, 1);
+  assert.match(setup.stderr, /server artifact sha256/u);
+});
+
+test("production readiness fails when a required generated artifact is missing", (t) => {
+  const { env } = fixture(t);
+  const setup = invoke(
+    env,
+    "setup", "production",
+    "--domain", "pin.example.test",
+    "--acme-email", "acme@example.test",
+    "--operator-email", "owner@example.test",
+  );
+  assert.equal(setup.status, 0, setup.stderr);
+  fs.unlinkSync(path.join(env.REVIVAL_CONFIG_DIR, "production", "traefik-dynamic.yaml"));
+
+  const status = invoke(env, "setup", "status", "--json");
+  assert.equal(status.status, 1);
+  const report = JSON.parse(status.stdout);
+  assert.equal(report.mode, "production");
+  assert.equal(report.ok, false);
+  assert.match(report.problem, /traefik-dynamic\.yaml must be a nonempty regular file/u);
+
+  const doctor = invoke(env, "doctor", "production");
+  assert.equal(doctor.status, 1);
+  assert.match(doctor.stderr, /production artifacts are not ready/u);
+});
+
+test("setup status keeps incomplete production setup on its resumable path", (t) => {
+  const { env } = fixture(t);
+  fs.mkdirSync(path.dirname(env.REVIVAL_ENV_FILE), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(env.REVIVAL_ENV_FILE, "REVIVAL_PUBLIC_DOMAIN=pin.example.test\n", { mode: 0o600 });
+
+  let status = invoke(env, "setup", "status", "--json");
+  assert.equal(status.status, 1);
+  let report = JSON.parse(status.stdout);
+  assert.equal(report.mode, "production");
+  assert.equal(report.ok, false);
+  assert.equal(report.next, "./revival setup production");
+
+  fs.unlinkSync(env.REVIVAL_ENV_FILE);
+  const production = path.join(env.REVIVAL_CONFIG_DIR, "production");
+  fs.mkdirSync(production, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(path.join(production, "realm.json"), "{}\n", { mode: 0o444 });
+
+  status = invoke(env, "setup", "status", "--json");
+  assert.equal(status.status, 1);
+  report = JSON.parse(status.stdout);
+  assert.equal(report.mode, "production");
+  assert.equal(report.next, "./revival setup production");
+});
+
+test("unsupported setup commands fail without creating operator state", (t) => {
+  const { env } = fixture(t);
+  const result = invoke(env, "setup", "import");
   assert.equal(result.status, 64);
-  assert.match(result.stderr, /usage: \.\/revival setup local\|contributor\|production\|pin \[--json\]/u);
-  assert.equal(fs.existsSync(env.REVIVAL_STATE_DIR), false, "setup import must not create guide state");
+  assert.match(result.stderr, /usage: \.\/revival setup local\|contributor\|pin/u);
+  assert.equal(fs.existsSync(env.REVIVAL_CONFIG_DIR), false);
 });

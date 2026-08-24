@@ -4,7 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 
-env_file="${REVIVAL_ENV_FILE:-$ROOT/.env.production}"
+env_file="${REVIVAL_ENV_FILE:?REVIVAL_ENV_FILE is required}"
+operator_compose="${REVIVAL_CONFIG_DIR:?REVIVAL_CONFIG_DIR is required}/production/operator.compose.yaml"
 project_name="${COMPOSE_PROJECT_NAME:-ai-pin-revival}"
 wait_timeout="${REVIVAL_DEPLOY_WAIT_TIMEOUT:-180}"
 dry_run=0
@@ -31,12 +32,6 @@ done
   exit 1
 }
 
-if [[ -z "${REVIVAL_RELEASE_ID:-}" ]]; then
-  REVIVAL_RELEASE_ID="$(git -C "$ROOT" rev-parse --short=12 HEAD 2>/dev/null || printf local)"
-  export REVIVAL_RELEASE_ID
-fi
-export REVIVAL_DEPLOYMENT_ENVIRONMENT=production
-
 "$SCRIPT_DIR/preflight.sh" --env-file "$env_file" --project-name "$project_name"
 
 compose=(
@@ -45,8 +40,9 @@ compose=(
   --env-file "$env_file"
   -f "$ROOT/compose.yaml"
   -f "$ROOT/platform/compose/production.yaml"
+  -f "$operator_compose"
 )
-up=(up --build --detach --remove-orphans --wait --wait-timeout "$wait_timeout")
+up=(up --detach --pull always --remove-orphans --wait --wait-timeout "$wait_timeout")
 
 if ((dry_run)); then
   printf 'docker compose'
@@ -57,4 +53,5 @@ fi
 
 docker compose "${compose[@]}" "${up[@]}"
 docker compose "${compose[@]}" ps
-printf 'Cosmos deployment %s is healthy.\n' "$REVIVAL_RELEASE_ID"
+"$SCRIPT_DIR/verify.sh" --env-file "$env_file" --project-name "$project_name"
+printf 'Cosmos deployment %s passed production verification.\n' "$REVIVAL_RELEASE_ID"

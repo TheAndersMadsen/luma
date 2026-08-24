@@ -1,5 +1,5 @@
-# Rendered by render-envoy.py into protected storage. Never commit the rendered
-# file. COSMOS_EDGE_TOKEN is the private proof that the mTLS edge, not a caller,
+# Rendered by `revival setup production` into protected storage. Never commit
+# the output. COSMOS_EDGE_TOKEN is the private proof that the mTLS edge, not a caller,
 # supplies the authenticated device principal.
 admin:
   address:
@@ -26,7 +26,7 @@ static_resources:
       # is logged once, by the http_connection_manager below, not twice.
       # DOWNSTREAM_TRANSPORT_FAILURE_REASON is the field that separates "no
       # certificate offered" from "certificate offered and rejected"; the SNI the
-      # device asked for is on the Nginx stream's line for the same connection.
+      # device asked for is visible at the Traefik TCP passthrough boundary.
       access_log:
         - name: envoy.access_loggers.file
           typed_config:

@@ -12,7 +12,7 @@
  *  - `unsupported-device` — shown once per CONNECTION (keyed on serial+name) when
  *    the device fails the Humane Ai Pin identity check, so acknowledging it for
  *    one Pin never carries over to the next one plugged in.
- *  - `rollback` / `uninstall` / `remove-conflicts` — what the action removes.
+ *  - `uninstall` / `remove-conflicts` — what the action removes.
  *  - `newer-than-target` — the installed packages are ahead of the resolved
  *    release; continuing is a downgrade.
  *  - `known-conflicts` — another Ai Pin project's packages are present, which
@@ -35,7 +35,7 @@ import {
   type InstallControllerState,
 } from "@/lib/pin-install";
 
-type PendingAction = "primary" | "rollback" | "uninstall" | "remove-conflicts";
+type PendingAction = "primary" | "uninstall" | "remove-conflicts";
 
 export type InstallConfirmationChoiceAction =
   | PendingAction
@@ -46,7 +46,6 @@ export type InstallConfirmationChoiceAction =
 type ConfirmationRequirementKind =
   | "risk"
   | "unsupported-device"
-  | "rollback"
   | "uninstall"
   | "newer-than-target"
   | "known-conflicts"
@@ -77,7 +76,6 @@ export interface InstallConfirmationDialog {
 export interface InstallActionConfirmation {
   readonly dialog: InstallConfirmationDialog | null;
   requestPrimaryAction(): Promise<void>;
-  requestRollback(): Promise<void>;
   requestUninstall(): Promise<void>;
   requestRemoveConflicts(): Promise<void>;
   dismissDialog(): void;
@@ -113,15 +111,6 @@ function createUnsupportedDeviceRequirement(): InstallConfirmationRequirement {
     title: "Unsupported Device",
     description:
       "This device does not match the recognized Humane Ai Pin identity check. Package migration is blocked for this connection.",
-  };
-}
-
-function createRollbackRequirement(): InstallConfirmationRequirement {
-  return {
-    kind: "rollback",
-    title: "Confirm Rollback",
-    description:
-      "Rollback removes the managed Revival runtime packages and re-enables the configured stock/system packages when possible.",
   };
 }
 
@@ -208,10 +197,6 @@ export function createDialogForAction(options: {
     requirements.push(createUnsupportedDeviceRequirement());
   }
 
-  if (options.action === "rollback") {
-    requirements.push(createRollbackRequirement());
-  }
-
   if (options.action === "uninstall") {
     requirements.push(createUninstallRequirement());
   }
@@ -270,11 +255,7 @@ export function createDialogForAction(options: {
     title:
       bootstrapRecovery && options.action === "primary"
         ? "Confirm Installer Recovery"
-        : options.action === "rollback" &&
-            requirements.length === 1 &&
-            requirements[0].kind === "rollback"
-          ? "Confirm Rollback"
-          : options.action === "uninstall" &&
+        : options.action === "uninstall" &&
               requirements.length === 1 &&
               requirements[0].kind === "uninstall"
             ? "Confirm Uninstall"
@@ -288,9 +269,7 @@ export function createDialogForAction(options: {
         ? "Review the recovery boundary before replacing a missing or unhealthy system injector."
         : options.action === "primary"
           ? `Review the following before continuing with ${primaryActionLabel}.`
-          : options.action === "rollback"
-            ? "Review the following before continuing with rollback."
-            : options.action === "remove-conflicts"
+          : options.action === "remove-conflicts"
               ? "Review the following before removing detected conflicts."
               : "Review the following before continuing with uninstall.",
     choices: [
@@ -304,9 +283,7 @@ export function createDialogForAction(options: {
             ? "Start Recovery Bootstrap"
             : options.action === "primary"
               ? `Continue with ${primaryActionLabel}`
-              : options.action === "rollback"
-                ? "Continue with Rollback"
-                : options.action === "remove-conflicts"
+              : options.action === "remove-conflicts"
                   ? "Remove Conflicts"
                   : "Continue with Uninstall",
         tone: "primary",
@@ -323,7 +300,6 @@ export function useInstallActionConfirmation(options: {
   runPrimaryAction: (options?: {
     readonly bootstrapRecoveryConfirmed?: boolean;
   }) => Promise<void>;
-  runRollback: () => Promise<void>;
   runUninstall: () => Promise<void>;
   runRemoveConflicts: () => Promise<void>;
   runFixConflictsThenPrimaryAction: (options?: {
@@ -334,7 +310,6 @@ export function useInstallActionConfirmation(options: {
     state,
     commands,
     runPrimaryAction,
-    runRollback,
     runUninstall,
     runRemoveConflicts,
     runFixConflictsThenPrimaryAction,
@@ -365,13 +340,6 @@ export function useInstallActionConfirmation(options: {
     }
 
     if (
-      dialog.action === "rollback" &&
-      (!commands.rollback.visible || commands.rollback.disabled)
-    ) {
-      return null;
-    }
-
-    if (
       dialog.action === "uninstall" &&
       (!commands.uninstall.visible || commands.uninstall.disabled)
     ) {
@@ -391,8 +359,6 @@ export function useInstallActionConfirmation(options: {
     commands.primaryAction.visible,
     commands.removeConflicts.disabled,
     commands.removeConflicts.visible,
-    commands.rollback.disabled,
-    commands.rollback.visible,
     commands.uninstall.disabled,
     commands.uninstall.visible,
     dialog,
@@ -450,15 +416,6 @@ export function useInstallActionConfirmation(options: {
         return;
       }
 
-      if (action === "rollback") {
-        if (!commands.rollback.visible || commands.rollback.disabled) {
-          return;
-        }
-
-        await runRollback();
-        return;
-      }
-
       if (action === "remove-conflicts") {
         if (
           !commands.removeConflicts.visible ||
@@ -482,14 +439,11 @@ export function useInstallActionConfirmation(options: {
       commands.primaryAction.visible,
       commands.removeConflicts.disabled,
       commands.removeConflicts.visible,
-      commands.rollback.disabled,
-      commands.rollback.visible,
       commands.uninstall.disabled,
       commands.uninstall.visible,
       runFixConflictsThenPrimaryAction,
       runPrimaryAction,
       runRemoveConflicts,
-      runRollback,
       runUninstall,
     ],
   );
@@ -515,33 +469,6 @@ export function useInstallActionConfirmation(options: {
   }, [
     commands.primaryAction.disabled,
     commands.primaryAction.visible,
-    executeAction,
-    riskAcknowledged,
-    state,
-    unsupportedDeviceConfirmedForSession,
-  ]);
-
-  const requestRollback = useCallback(async () => {
-    if (!commands.rollback.visible || commands.rollback.disabled) {
-      return;
-    }
-
-    const nextDialog = createDialogForAction({
-      action: "rollback",
-      state,
-      riskAcknowledged,
-      unsupportedDeviceConfirmedForSession,
-    });
-
-    if (nextDialog) {
-      setDialog(nextDialog);
-      return;
-    }
-
-    await executeAction("rollback");
-  }, [
-    commands.rollback.disabled,
-    commands.rollback.visible,
     executeAction,
     riskAcknowledged,
     state,
@@ -647,7 +574,6 @@ export function useInstallActionConfirmation(options: {
   return {
     dialog: effectiveDialog,
     requestPrimaryAction,
-    requestRollback,
     requestUninstall,
     requestRemoveConflicts,
     dismissDialog,

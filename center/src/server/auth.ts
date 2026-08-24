@@ -576,7 +576,7 @@ const ISSUER = `${KEYCLOAK_BASE_URL}/realms/${REALM}`;
  *
  * `request.nextUrl.origin` reports the server's own bind address (localhost:4000)
  * behind `next start` + a reverse proxy, so it can't be used to build redirect
- * URIs. Cloudflare/nginx forward the real host and scheme, so read those.
+ * URIs. The edge forwards the real host and scheme, so read those.
  */
 export function originFromHeaders(h: Headers): string | null {
   const host = h.get("x-forwarded-host") ?? h.get("host");

@@ -21,7 +21,6 @@ export interface PrimaryCardActionViewModel {
     | "primaryAction"
     | "installApkFile"
     | "openTerminal"
-    | "rollback"
     | "recheck"
     | "goToCenter"
     | "uninstall"
@@ -119,7 +118,7 @@ function getBaseSummary(state: InstallControllerState) {
       title: "Install Failed",
       copy:
         state.lastOperationResult.result.error?.message ??
-        "The install did not complete. Review diagnostics, then recheck or roll back.",
+        "The install did not complete. Review diagnostics, then recheck the device.",
       progressPercent: 100,
       showProgress: false,
     };
@@ -261,9 +260,17 @@ function getNotice(state: InstallControllerState) {
     state.lastOperationResult?.kind === "install" &&
     !state.lastOperationResult.result.success
   ) {
+    const result = state.lastOperationResult.result;
+    const packageReadinessFailure =
+      !result.deviceChangesStarted &&
+      (result.error?.message.includes("Android's package service") ?? false);
     return {
       tone: "warning" as const,
-      text: "Install changes were preserved. Recheck or roll back manually.",
+      text: packageReadinessFailure
+        ? "No changes were made. Wait for Android to finish starting, then retry."
+        : result.deviceChangesStarted
+          ? "Install changes were preserved. Recheck the device or use Uninstall to remove the managed runtime."
+          : "Install stopped before making changes. Recheck the device, then retry.",
     };
   }
 
@@ -432,7 +439,6 @@ function getOverflowActions(
 
 function getPrimaryAction(commands: InstallControllerCommands) {
   return (
-    createActionFromCommand("rollback", commands.rollback) ??
     createActionFromCommand("recheck", commands.recheck) ??
     createActionFromCommand("primaryAction", commands.primaryAction) ??
     createActionFromCommand("connect", commands.connect) ??

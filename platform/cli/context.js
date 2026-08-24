@@ -27,7 +27,7 @@ const PIN_ACTIVATION_TOOL = path.join(ROOT, 'platform', 'deploy', 'pin', 'activa
 const PIN_NETWORK_TOOL = path.join(ROOT, 'platform', 'deploy', 'pin', 'network.mjs');
 const DEPLOY_DIR = path.join(ROOT, 'platform', 'deploy', 'vps');
 const TOOLCHAIN_CONFIG = path.join(ROOT, 'platform', 'containers', 'pin-builder', 'toolchain.json');
-const MINIMUM_COMPOSE_VERSION = Object.freeze([2, 33, 1]);
+const MINIMUM_COMPOSE_VERSION = Object.freeze([2, 34, 0]);
 const MANAGED_DIRECTORY_MARKER = '.ai-pin-revival-managed';
 
 const DEFAULT_CONFIG_DIR = path.join(
@@ -203,7 +203,7 @@ function decodeEnvValue(rawValue) {
   return value;
 }
 
-function fillBlankGeneratedSecrets(contents) {
+function fillBlankGeneratedSecrets(contents, profiles = null) {
   let updated = contents;
   let count = 0;
   const databasePasswordMatch = /^COSMOS_PG_PASSWORD=(.*)$/m.exec(contents);
@@ -214,17 +214,23 @@ function fillBlankGeneratedSecrets(contents) {
   const generated = [
     ['COSMOS_PG_PASSWORD', () => databasePassword],
     ['COSMOS_DATABASE_URL', () => `postgresql://cosmos:${encodeURIComponent(databasePassword)}@postgres:5432/cosmos`],
-    ['GRAFANA_ADMIN_PASSWORD', () => crypto.randomBytes(32).toString('hex')],
     ['AUTH_SESSION_SECRET', () => crypto.randomBytes(32).toString('hex')],
     ['COSMOS_SHARE_TOKEN_SECRET', () => crypto.randomBytes(32).toString('hex')],
     ['COSMOS_CENTER_PROJECTION_TOKEN', () => crypto.randomBytes(32).toString('hex')],
     ['COSMOS_EDGE_TOKEN', () => crypto.randomBytes(32).toString('hex')],
     ['COSMOS_ADMIN_TOKEN', () => crypto.randomBytes(32).toString('hex')],
-    ['SEARXNG_SECRET', () => crypto.randomBytes(32).toString('hex')],
-    ['COSMOS_OPAQUE_SEED', () => crypto.randomBytes(32).toString('base64')],
     ['KEYCLOAK_CLIENT_SECRET', () => crypto.randomBytes(32).toString('hex')],
     ['KEYCLOAK_ADMIN', () => `revival-admin-${crypto.randomBytes(4).toString('hex')}`],
-    ['KEYCLOAK_ADMIN_PASSWORD', () => crypto.randomBytes(32).toString('base64url')]
+    ['KEYCLOAK_ADMIN_PASSWORD', () => crypto.randomBytes(32).toString('base64url')],
+    ...(profiles === null || profiles.includes('observability')
+      ? [['GRAFANA_ADMIN_PASSWORD', () => crypto.randomBytes(32).toString('hex')]]
+      : []),
+    ...(profiles === null || profiles.includes('search')
+      ? [['SEARXNG_SECRET', () => crypto.randomBytes(32).toString('hex')]]
+      : []),
+    ...(profiles === null || profiles.includes('pin')
+      ? [['COSMOS_OPAQUE_SEED', () => crypto.randomBytes(32).toString('base64')]]
+      : []),
   ];
   for (const [key, generate] of generated) {
     const pattern = new RegExp(`^${key}=(.*)$`, 'm');
@@ -238,8 +244,8 @@ function fillBlankGeneratedSecrets(contents) {
   return { contents: updated, count };
 }
 
-function fillBlankInitializerDefaults(contents) {
-  const generated = fillBlankGeneratedSecrets(contents);
+function fillBlankInitializerDefaults(contents, profiles = null) {
+  const generated = fillBlankGeneratedSecrets(contents, profiles);
   const releasePattern = /^REVIVAL_RELEASE_ID=(.*)$/m;
   const releaseMatch = releasePattern.exec(generated.contents);
   if (releaseMatch && releaseMatch[1].trim().length > 0) return generated;
@@ -328,7 +334,7 @@ function ensureLocalIdentityRealm(values) {
   return true;
 }
 
-function initialize() {
+function initialize({ suppressDeviceCaWarning = false, quiet = false, profiles = null, localIdentity = true } = {}) {
   let createdRuntime = false;
   for (const [directory, label] of [
     [CONFIG_DIR, 'REVIVAL_CONFIG_DIR'],
@@ -352,10 +358,10 @@ function initialize() {
   ]) ensureManagedRoot(directory, label);
   secureDirectory(BUILD_DIR);
   for (const directory of [
-    path.join(SECRETS_DIR, 'pki'),
-    path.join(SECRETS_DIR, 'identity'),
-    PIN_SECRET_DIR,
-    PIN_PRIVATE_ASSETS_DIR
+    ...(localIdentity ? [path.join(SECRETS_DIR, 'identity')] : []),
+    ...(profiles === null
+      ? [path.join(SECRETS_DIR, 'pki'), PIN_SECRET_DIR, PIN_PRIVATE_ASSETS_DIR]
+      : []),
   ]) {
     secureDirectory(directory);
   }
@@ -366,10 +372,10 @@ function initialize() {
   // still empty so the operator is told, rather than discovering it as a device
   // that enrols nowhere.
   const emptyDeviceUserCaFiles = [];
-  for (const placeholder of [
+  for (const placeholder of profiles === null ? [
     path.join(SECRETS_DIR, 'pki', 'duc-ca.crt'),
     path.join(SECRETS_DIR, 'pki', 'duc-ca.key')
-  ]) {
+  ] : []) {
     if (fs.existsSync(placeholder)) {
       const stat = fs.lstatSync(placeholder);
       if (stat.isSymbolicLink() || !stat.isFile()) {
@@ -394,34 +400,38 @@ function initialize() {
       throw new Error(`runtime configuration must already have mode 0600: ${ENV_FILE}`);
     }
     const current = fs.readFileSync(ENV_FILE, 'utf8');
-    const filled = fillBlankInitializerDefaults(current);
+    const filled = fillBlankInitializerDefaults(current, profiles);
     if (filled.count > 0) {
       atomicWrite(ENV_FILE, filled.contents);
-      info(`Filled ${filled.count} blank local setting${filled.count === 1 ? '' : 's'}; nonblank values were preserved.`);
+      if (!quiet) info(`Filled ${filled.count} blank local setting${filled.count === 1 ? '' : 's'}; nonblank values were preserved.`);
     } else {
-      info('Runtime configuration already exists; no values were replaced.');
+      if (!quiet) info('Runtime configuration already exists; no values were replaced.');
     }
   } else {
-    const template = fillBlankInitializerDefaults(fs.readFileSync(ENV_EXAMPLE, 'utf8')).contents;
+    const template = fillBlankInitializerDefaults(fs.readFileSync(ENV_EXAMPLE, 'utf8'), profiles).contents;
     atomicWrite(ENV_FILE, template);
     createdRuntime = true;
-    info('Created an external runtime configuration with independent local server secrets.');
+    if (!quiet) info('Created an external runtime configuration with independent local server secrets.');
   }
 
-  const runtimeValues = parseEnvFile(ENV_FILE);
-  const wroteRealm = ensureLocalIdentityRealm(runtimeValues);
-  if (wroteRealm) {
-    info('Created or refreshed a sanitized local identity realm with no wearer accounts or fixed passwords.');
+  if (localIdentity) {
+    const runtimeValues = parseEnvFile(ENV_FILE);
+    const wroteRealm = ensureLocalIdentityRealm(runtimeValues);
+    if (!quiet && wroteRealm) {
+      info('Created or refreshed a sanitized local identity realm with no wearer accounts or fixed passwords.');
+    }
   }
 
-  info(`[implemented] configuration: ${CONFIG_DIR}`);
-  info(`[implemented] secrets: ${SECRETS_DIR}`);
-  info(`[implemented] runtime data: ${DATA_DIR}`);
-  info(`[implemented] generated output: ${BUILD_DIR}`);
-  if (createdRuntime) {
-    info('Provider credentials, Spotify pairing, wearer identity, enrollment, and device PKI remain unconfigured.');
+  if (!quiet) {
+    info(`[implemented] configuration: ${CONFIG_DIR}`);
+    info(`[implemented] secrets: ${SECRETS_DIR}`);
+    info(`[implemented] runtime data: ${DATA_DIR}`);
+    info(`[implemented] generated output: ${BUILD_DIR}`);
+    if (createdRuntime) {
+      info('Provider credentials, Spotify pairing, wearer identity, enrollment, and device PKI remain unconfigured.');
+    }
+    info('Next steps from a stock Pin to a provisioned device: docs/operations.md#onboarding-a-pin');
   }
-  info('Next steps from a stock Pin to a provisioned device: docs/operations.md#onboarding-a-pin');
 
   // Unconditional, and on stderr. This used to be reported only inside the
   // `createdRuntime` branch above, so the common case — a rerun, or a second
@@ -430,7 +440,7 @@ function initialize() {
   // Cosmos answers the enrollment RPCs with UNIMPLEMENTED, which the device
   // reads as "this server does not do onboarding" rather than "the operator has
   // not supplied a CA yet". Name the exact files and the exact consequence.
-  if (emptyDeviceUserCaFiles.length > 0) {
+  if (!suppressDeviceCaWarning && emptyDeviceUserCaFiles.length > 0) {
     const certificate = path.join(SECRETS_DIR, 'pki', 'duc-ca.crt');
     const key = path.join(SECRETS_DIR, 'pki', 'duc-ca.key');
     process.stderr.write(
@@ -617,6 +627,50 @@ function validateLocalIdentityRealm(values, problems) {
   }
 }
 
+function validateProductionIdentityRealm(values, problems) {
+  const realmFile = path.join(CONFIG_DIR, 'production', 'realm.json');
+  const realmReady = fs.existsSync(realmFile) && !fs.lstatSync(realmFile).isSymbolicLink() &&
+    fs.statSync(realmFile).isFile() && fs.statSync(realmFile).size > 0 &&
+    (fs.statSync(realmFile).mode & 0o777) === 0o444;
+  if (!realmReady) {
+    problems.push(`${realmFile} must be a nonempty regular file with mode 0444; rerun ./revival setup production`);
+    return;
+  }
+  let realm;
+  try {
+    realm = JSON.parse(fs.readFileSync(realmFile, 'utf8'));
+  } catch {
+    problems.push(`${realmFile} must contain valid JSON; rerun ./revival setup production`);
+    return;
+  }
+  const origin = values.REVIVAL_PUBLIC_ORIGIN || '';
+  const client = Array.isArray(realm.clients)
+    ? realm.clients.find((candidate) => candidate?.clientId === (values.KEYCLOAK_CLIENT_ID || 'center'))
+    : null;
+  const operator = Array.isArray(realm.users)
+    ? realm.users.find((candidate) => candidate?.id === values.REVIVAL_FIRST_OPERATOR_ID)
+    : null;
+  if (realm.realm !== 'humane' || realm.enabled !== true || realm.sslRequired !== 'external' ||
+      realm.attributes?.aiPinRevivalManaged !== 'production-v1') {
+    problems.push(`${realmFile} must define the managed production humane realm`);
+  }
+  if (!client || client.secret !== values.KEYCLOAK_CLIENT_SECRET || client.publicClient !== false ||
+      client.standardFlowEnabled !== true || client.directAccessGrantsEnabled !== true ||
+      client.implicitFlowEnabled !== false ||
+      !client.redirectUris?.includes(`${origin}/api/auth/callback/humane`) ||
+      !client.webOrigins?.includes(origin) ||
+      client.attributes?.['pkce.code.challenge.method'] !== 'S256') {
+    problems.push(`${realmFile} must define the confidential Center client for ${origin}`);
+  }
+  if (!operator || operator.email !== values.REVIVAL_FIRST_OPERATOR_EMAIL || operator.enabled !== true ||
+      !operator.realmRoles?.includes('cosmos-operator') ||
+      operator.requiredActions?.includes('UPDATE_PASSWORD') ||
+      !operator.credentials?.some((credential) => credential?.type === 'password' &&
+        typeof credential.value === 'string' && credential.value.length >= 24 && credential.temporary === false)) {
+    problems.push(`${realmFile} must contain a password-grant-compatible first operator`);
+  }
+}
+
 function validateRuntime({ production = false, envFile = ENV_FILE } = {}) {
   requireExternalDirectory(envFile, 'REVIVAL_ENV_FILE');
   if (!isInsideDirectory(envFile, SECRETS_DIR)) {
@@ -647,14 +701,20 @@ function validateRuntime({ production = false, envFile = ENV_FILE } = {}) {
 
   const values = parseEnvFile(envFile);
   const problems = [];
+  const rawProfiles = values.COMPOSE_PROFILES || '';
+  const profiles = rawProfiles.split(',').filter(Boolean);
   if (values.REVIVAL_CONFIG_VERSION !== '1') problems.push('REVIVAL_CONFIG_VERSION must be 1');
   requireValue(values, 'REVIVAL_RELEASE_ID', problems, 1);
-  for (const file of [
-    path.join(SECRETS_DIR, 'pki', 'duc-ca.crt'),
-    path.join(SECRETS_DIR, 'pki', 'duc-ca.key')
-  ]) {
-    if (!isProtectedRegularFile(file)) {
-      problems.push(`${file} must be a non-symlink regular file with mode 0600`);
+  if (!production || profiles.includes('pin')) {
+    const pkiRoot = production ? path.join(CONFIG_DIR, 'production') : path.join(SECRETS_DIR, 'pki');
+    for (const file of ['duc-ca.crt', 'duc-ca.key'].map((name) => path.join(pkiRoot, name))) {
+      const ready = production
+        ? fs.existsSync(file) && !fs.lstatSync(file).isSymbolicLink() && fs.statSync(file).isFile() &&
+          fs.statSync(file).size > 0 && (fs.statSync(file).mode & 0o777) === 0o444
+        : isProtectedRegularFile(file);
+      if (!ready) {
+        problems.push(`${file} must be a nonempty non-symlink regular file with mode ${production ? '0444' : '0600'}`);
+      }
     }
   }
 
@@ -667,11 +727,29 @@ function validateRuntime({ production = false, envFile = ENV_FILE } = {}) {
   }
   if (production) {
     const envSource = fs.readFileSync(envFile, 'utf8');
+    requireProductionHttpsUrl(values, envSource, 'REVIVAL_PUBLIC_ORIGIN', problems, { origin: true });
+    requireProductionHttpsUrl(values, envSource, 'COSMOS_OIDC_ISSUER', problems);
     requireProductionHttpsUrl(values, envSource, 'COSMOS_CAPTURE_UPLOAD_BASE_URL', problems, { origin: true });
-    requireProductionHttpsUrl(values, envSource, 'COSMOS_ONBOARDING_ENDPOINT', problems);
+    requireProductionHttpsUrl(values, envSource, 'COSMOS_CAPTURE_SHARE_BASE_URL', problems, { origin: true });
+    requireProductionHttpsUrl(values, envSource, 'REVIVAL_MUSIC_GATEWAY_ORIGIN', problems, { origin: true });
+    if (profiles.includes('pin')) {
+      requireProductionHttpsUrl(values, envSource, 'COSMOS_ONBOARDING_ENDPOINT', problems);
+    }
     requireProductionDatabaseUrl(values, envSource, problems);
     requireProductionPassword(values, envSource, 'COSMOS_PG_PASSWORD', problems);
-    requireProductionPassword(values, envSource, 'GRAFANA_ADMIN_PASSWORD', problems);
+    if (profiles.includes('observability')) {
+      requireProductionPassword(values, envSource, 'GRAFANA_ADMIN_PASSWORD', problems);
+    }
+    let origin;
+    try { origin = new URL(values.REVIVAL_PUBLIC_ORIGIN); } catch { origin = null; }
+    if (!isPublicDnsHostname(values.REVIVAL_PUBLIC_DOMAIN || '') ||
+        origin?.hostname !== values.REVIVAL_PUBLIC_DOMAIN) {
+      problems.push('REVIVAL_PUBLIC_DOMAIN must exactly match the host in REVIVAL_PUBLIC_ORIGIN');
+    }
+    if (!/^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/u
+      .test(values.REVIVAL_ACME_EMAIL || '')) {
+      problems.push('REVIVAL_ACME_EMAIL must be a valid email address');
+    }
   }
 
   requireValue(values, 'AUTH_SESSION_SECRET', problems, 32);
@@ -682,7 +760,16 @@ function validateRuntime({ production = false, envFile = ENV_FILE } = {}) {
   requireValue(values, 'KEYCLOAK_CLIENT_SECRET', problems, 32);
   requireValue(values, 'KEYCLOAK_ADMIN', problems, 8);
   requireValue(values, 'KEYCLOAK_ADMIN_PASSWORD', problems, 32);
-  validateLocalIdentityRealm(values, problems);
+  if (profiles.includes('search')) requireValue(values, 'SEARXNG_SECRET', problems, 32);
+  if (production) {
+    requireValue(values, 'REVIVAL_PUBLIC_DOMAIN', problems, 4);
+    requireValue(values, 'REVIVAL_ACME_EMAIL', problems, 5);
+    requireValue(values, 'REVIVAL_FIRST_OPERATOR_EMAIL', problems, 5);
+    requireValue(values, 'REVIVAL_FIRST_OPERATOR_ID', problems, 16);
+    validateProductionIdentityRealm(values, problems);
+  } else {
+    validateLocalIdentityRealm(values, problems);
+  }
 
   const remoteTts = values.COSMOS_REMOTE_TTS_ENABLED || '';
   if (!/^(true|false)$/.test(remoteTts)) {
@@ -700,8 +787,15 @@ function validateRuntime({ production = false, envFile = ENV_FILE } = {}) {
     requireValue(values, 'KEYCLOAK_CLIENT_SECRET', problems, 16);
     requireValue(values, 'KEYCLOAK_ADMIN', problems, 1);
     requireValue(values, 'KEYCLOAK_ADMIN_PASSWORD', problems, 16);
-    const realm = path.join(SECRETS_DIR, 'identity', 'realm.json');
-    if (!isProtectedRegularFile(realm, true)) {
+    const realm = production
+      ? path.join(CONFIG_DIR, 'production', 'realm.json')
+      : path.join(SECRETS_DIR, 'identity', 'realm.json');
+    const realmReady = production
+      ? fs.existsSync(realm) && !fs.lstatSync(realm).isSymbolicLink() &&
+        fs.statSync(realm).isFile() && fs.statSync(realm).size > 0 &&
+        (fs.statSync(realm).mode & 0o777) === 0o444
+      : isProtectedRegularFile(realm, true);
+    if (!realmReady) {
       problems.push(`${realm} must contain the reviewed realm export when identity is enabled`);
     }
   }
@@ -719,11 +813,30 @@ function validateRuntime({ production = false, envFile = ENV_FILE } = {}) {
     if (!isExactBase64Bytes(opaqueSeed, 32)) {
       problems.push('COSMOS_OPAQUE_SEED must decode from canonical base64 to exactly 32 private bytes when enrollment is enabled');
     }
-    for (const filename of ['duc-ca.crt', 'duc-ca.key']) {
-      const file = path.join(SECRETS_DIR, 'pki', filename);
-      if (!isProtectedRegularFile(file, true)) {
-        problems.push(`${file} must contain reviewed DeviceUser CA material when enrollment is configured`);
+    if (!production) {
+      for (const filename of ['duc-ca.crt', 'duc-ca.key']) {
+        const file = path.join(SECRETS_DIR, 'pki', filename);
+        if (!isProtectedRegularFile(file, true)) {
+          problems.push(`${file} must contain reviewed DeviceUser CA material when enrollment is configured`);
+        }
       }
+    }
+  }
+
+  const unsupportedProfiles = profiles.filter((profile) =>
+    !['pin', 'search', 'spotify', 'observability'].includes(profile));
+  if (unsupportedProfiles.length > 0) {
+    problems.push(`COMPOSE_PROFILES contains unsupported values: ${unsupportedProfiles.join(', ')}`);
+  }
+  if (new Set(profiles).size !== profiles.length || [...profiles].sort().join(',') !== rawProfiles) {
+    problems.push('COMPOSE_PROFILES must be a unique, sorted comma-separated list');
+  }
+  if (production && profiles.includes('pin')) {
+    if (!enrollmentCode || !enrollmentUser) {
+      problems.push('the pin profile requires COSMOS_ENROLLMENT_PINCODE and COSMOS_ENROLLMENT_USER_ID');
+    }
+    if (net.isIP(values.REVIVAL_DEVICE_EDGE_IPV4 || '') !== 4) {
+      problems.push('the pin profile requires REVIVAL_DEVICE_EDGE_IPV4');
     }
   }
 
@@ -816,7 +929,6 @@ function operatorEnvironment(values) {
     REVIVAL_SECRETS_DIR: SECRETS_DIR,
     REVIVAL_DATA_DIR: DATA_DIR,
     REVIVAL_ENV_FILE: ENV_FILE,
-    REVIVAL_PRIVATE_DIR: safeOptionalEnvironment('REVIVAL_PRIVATE_DIR', path.isAbsolute) || SECRETS_DIR,
     REVIVAL_BUILD_DIR: BUILD_DIR,
     CARGO_TARGET_DIR: path.join(BUILD_DIR, 'cosmos-target'),
     GRADLE_USER_HOME: path.join(BUILD_DIR, 'gradle-home'),
@@ -847,7 +959,6 @@ function operatorEnvironment(values) {
     ['FORCE_COLOR', (value) => /^[0-3]$/u.test(value)],
     ['NO_COLOR', (value) => value.length <= 32],
     ['TERM', (value) => /^[A-Za-z0-9._+-]{1,64}$/u.test(value)],
-    ['REVIVAL_DEPLOY_REMOTE', (value) => /^[A-Za-z0-9._@:-]{1,255}$/u.test(value)],
     ['REVIVAL_PIN_ENABLE_TEST_FIXTURES', (value) => value === '1'],
     ['REVIVAL_PIN_RELEASE_OUTPUT_DIR', path.isAbsolute],
   ]) {

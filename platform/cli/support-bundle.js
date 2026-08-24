@@ -4,9 +4,9 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { exists, fail, info, isInsideSource } = require('./context');
+const { DATA_DIR, exists, fail, info, isInsideSource } = require('./context');
 const { CONTRACT_FILE, VERSION_FILE, versionInfo } = require('./command-spec');
-const { STATE_DIR } = require('./setup-state');
+const STATE_DIR = path.resolve(process.env.REVIVAL_STATE_DIR || DATA_DIR);
 
 function sha256(file) {
   return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');

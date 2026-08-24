@@ -8,9 +8,11 @@ import {
 import { detectKnownPackageConflicts } from "./knownPackageConflicts";
 import { MANAGED_PACKAGES } from "./managedPackages";
 import {
+  createTimedAdbSessionTransport,
   getDeviceIdentity,
   getInstalledPackageMetadata,
   inspectPackageQueryability,
+  waitForPackageManagerReady,
   type AdbSessionTransport,
   type DeviceIdentity,
   type DeviceReadinessResult,
@@ -120,26 +122,42 @@ function createPackageSnapshot(
 
 export async function inspectInstallState(
   transport: AdbSessionTransport,
-  options?: {
-    target?: ResolvedInstallTarget | null;
-    targetResolutionError?: Error | null;
-    readinessSettleDelayMs?: number;
-    knownPackageConflicts?: readonly KnownPackageConflictDefinition[];
-  },
+  options?: InspectInstallStateOptions,
+): Promise<InstallInspectionResult> {
+  const deviceTransport = createTimedAdbSessionTransport(transport);
+  await waitForPackageManagerReady(deviceTransport);
+
+  return inspectInstallStateAfterPackageManagerReady(deviceTransport, options);
+}
+
+export interface InspectInstallStateOptions {
+  target?: ResolvedInstallTarget | null;
+  targetResolutionError?: Error | null;
+  readinessSettleDelayMs?: number;
+  knownPackageConflicts?: readonly KnownPackageConflictDefinition[];
+}
+
+/**
+ * Reads package state after the caller has completed the operation's one
+ * bounded PackageManager readiness gate.
+ */
+export async function inspectInstallStateAfterPackageManagerReady(
+  deviceTransport: AdbSessionTransport,
+  options?: InspectInstallStateOptions,
 ): Promise<InstallInspectionResult> {
   const target = options?.target ?? null;
   const targetResolutionError = options?.targetResolutionError ?? null;
-  const device = await getDeviceIdentity(transport);
+  const device = await getDeviceIdentity(deviceTransport);
 
   const [installerMetadata, hookMetadata, serverMetadata, injectorMetadata, helperMetadata, readiness, detectedConflicts] =
     await Promise.all([
-      getInstalledPackageMetadata(transport, MANAGED_PACKAGES.installer),
-      getInstalledPackageMetadata(transport, MANAGED_PACKAGES.hook),
-      getInstalledPackageMetadata(transport, MANAGED_PACKAGES.server),
-      getInstalledPackageMetadata(transport, MANAGED_PACKAGES.injector),
-      getInstalledPackageMetadata(transport, MANAGED_PACKAGES.exploitHelper),
+      getInstalledPackageMetadata(deviceTransport, MANAGED_PACKAGES.installer),
+      getInstalledPackageMetadata(deviceTransport, MANAGED_PACKAGES.hook),
+      getInstalledPackageMetadata(deviceTransport, MANAGED_PACKAGES.server),
+      getInstalledPackageMetadata(deviceTransport, MANAGED_PACKAGES.injector),
+      getInstalledPackageMetadata(deviceTransport, MANAGED_PACKAGES.exploitHelper),
       inspectPackageQueryability(
-        transport,
+        deviceTransport,
         [
           MANAGED_PACKAGES.installer,
           MANAGED_PACKAGES.hook,
@@ -148,7 +166,7 @@ export async function inspectInstallState(
         ],
         options?.readinessSettleDelayMs,
       ),
-      detectKnownPackageConflicts(transport, options?.knownPackageConflicts),
+      detectKnownPackageConflicts(deviceTransport, options?.knownPackageConflicts),
     ]);
 
   const packages: Record<ManagedPackageRole, ManagedPackageVersionSnapshot> = {

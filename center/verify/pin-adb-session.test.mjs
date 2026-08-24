@@ -259,8 +259,77 @@ const { promisify } = await import("node:util");
 const { join } = await import("node:path");
 const runShell = promisify(execFile);
 
-const { isValidApkStagingName, stageSystemApkBatchInstall, waitForStagingProviderReady } =
-  await import("../src/lib/pin-device/adb/systemInstaller.ts?pin-adb-session-test");
+const {
+  isValidApkStagingName,
+  stageSystemApkBatchInstall,
+  waitForPackageManagerReady,
+  waitForStagingProviderReady,
+} = await import(
+  "../src/lib/pin-device/adb/systemInstaller.ts?pin-adb-session-test"
+);
+
+test("package readiness requires a real absolute package path", async () => {
+  const responses = [
+    { stdout: "package:not found\n", stderr: "", exitCode: 0 },
+    { stdout: "package: not found\n", stderr: "", exitCode: 0 },
+    {
+      stdout: "package:/system/framework/framework-res.apk\n",
+      stderr: "",
+      exitCode: 0,
+    },
+  ];
+  let probes = 0;
+  const transport = {
+    async shell(command) {
+      const text = Array.isArray(command) ? command.join(" ") : command;
+      assert.equal(text, "cmd package path android");
+      const response = responses[Math.min(probes, responses.length - 1)];
+      probes += 1;
+      return response;
+    },
+  };
+
+  await waitForPackageManagerReady(transport, 1_000, 0, 0);
+
+  assert.equal(probes, 3);
+});
+
+test("package readiness timeout preserves the last response and retry guidance", async () => {
+  let probes = 0;
+  const transport = {
+    async shell(command) {
+      const text = Array.isArray(command) ? command.join(" ") : command;
+      assert.equal(text, "cmd package path android");
+      probes += 1;
+      throw new Error("ADB shell unavailable while Android is starting");
+    },
+  };
+
+  await assert.rejects(
+    () => waitForPackageManagerReady(transport, 20, 1, 0),
+    (error) => {
+      assert.match(error.message, /wait for startup to finish, then retry/i);
+      assert.match(error.message, /ADB shell unavailable while Android is starting/);
+      return true;
+    },
+  );
+  assert.ok(probes > 0);
+});
+
+test("package readiness bounds a probe that never returns", async () => {
+  const startedAt = Date.now();
+  const transport = {
+    shell() {
+      return new Promise(() => undefined);
+    },
+  };
+
+  await assert.rejects(
+    () => waitForPackageManagerReady(transport, 20, 1, 0),
+    /wait for Android package service/,
+  );
+  assert.ok(Date.now() - startedAt < 500);
+});
 
 test("a hostile value in a shell sink is inert on a real shell", async () => {
   const scratch = await mkdtemp(join(import.meta.dirname, "shellq-"));

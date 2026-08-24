@@ -35,15 +35,9 @@ x-cosmos-environment: &cosmos-environment
   COSMOS_OIDC_AUDIENCE: ${COSMOS_OIDC_AUDIENCE:-}
 
 x-cosmos-service: &cosmos-service
-  build:
-    context: ./cosmos
-    dockerfile: Dockerfile
-    additional_contexts:
-      wire_contracts: ./contracts/wire
-    labels:
-      <<: *revival-image-labels
-      dk.andersmadsen.ai-pin-revival.component: cosmos
-  image: ai-pin-revival/cosmos:${REVIVAL_RELEASE_ID:?set REVIVAL_RELEASE_ID to the immutable release id}
+  # Production consumes a prebuilt image. The development override is the only
+  # place that adds a build section.
+  image: ${REVIVAL_COSMOS_IMAGE:-ghcr.io/theandersmadsen/ai-pin-revival/cosmos:${REVIVAL_RELEASE_ID:?set REVIVAL_RELEASE_ID to the immutable release id}}
   entrypoint:
     - /bin/sh
     - -ec
@@ -210,17 +204,7 @@ services:
       COSMOS_OPAQUE_SEED: ${COSMOS_OPAQUE_SEED:-}
 
   center:
-    build:
-      context: ./center
-      dockerfile: Dockerfile
-      additional_contexts:
-        wire_contracts: ./contracts/wire
-      args:
-        REVIVAL_RELEASE_ID: ${REVIVAL_RELEASE_ID:?set REVIVAL_RELEASE_ID to the immutable release id}
-      labels:
-        <<: *revival-image-labels
-        dk.andersmadsen.ai-pin-revival.component: center
-    image: ai-pin-revival/center:${REVIVAL_RELEASE_ID:?set REVIVAL_RELEASE_ID to the immutable release id}
+    image: ${REVIVAL_CENTER_IMAGE:-ghcr.io/theandersmadsen/ai-pin-revival/center:${REVIVAL_RELEASE_ID:?set REVIVAL_RELEASE_ID to the immutable release id}}
     user: "1000:1001"
     restart: unless-stopped
     init: true
@@ -231,12 +215,13 @@ services:
     environment:
       REVIVAL_PRODUCT: Ai Pin Revival
       REVIVAL_RELEASE_ID: ${REVIVAL_RELEASE_ID:?set REVIVAL_RELEASE_ID to the immutable release id}
+      REVIVAL_ENVIRONMENT: ${REVIVAL_ENVIRONMENT:-development}
       REVIVAL_DEPLOYMENT_ENVIRONMENT: ${REVIVAL_DEPLOYMENT_ENVIRONMENT:-production}
       # A signed-in browser sends the `cosmos_tokens` set back on every
       # request, so the Cookie line alone can reach ~12.5 KB. Node's default
       # 16 KB cap covers the whole request header block, which also carries the
-      # edge's X-Forwarded-* set and Cloudflare's cf-* headers, so the default
-      # leaves too little room and answers 431 once the edge stops truncating.
+      # reverse proxy's forwarded headers, so the default leaves too little room
+      # and answers 431 for a signed-in request.
       NODE_OPTIONS: --max-http-header-size=65536
       COSMOS_ENDPOINT_AI_BUS: ai-bus:15051
       COSMOS_ENDPOINT_NOTABLE_EVENTS: notable-events:15051
@@ -251,7 +236,7 @@ services:
       COSMOS_SHARE_TOKEN_SECRET: ${COSMOS_SHARE_TOKEN_SECRET:-}
       COSMOS_OPERATOR_EMAILS: ${COSMOS_OPERATOR_EMAILS:-}
       AUTH_SESSION_SECRET: ${AUTH_SESSION_SECRET:-}
-      REVIVAL_MUSIC_GATEWAY_ORIGIN: ${REVIVAL_MUSIC_GATEWAY_ORIGIN:-https://center.andersmadsen.dk}
+      REVIVAL_MUSIC_GATEWAY_ORIGIN: ${REVIVAL_MUSIC_GATEWAY_ORIGIN:-${REVIVAL_PUBLIC_ORIGIN:-http://127.0.0.1:4000}}
       REVIVAL_MUSIC_SESSION_DIR: /data/music-sessions
       REVIVAL_MUSIC_SESSION_SECRET: ${REVIVAL_MUSIC_SESSION_SECRET:-}
       TIDAL_CLIENT_ID: ${TIDAL_CLIENT_ID:-}
@@ -307,7 +292,7 @@ services:
       retries: 5
 
   keycloak:
-    image: quay.io/keycloak/keycloak:26.0@sha256:09a381c715ab0b111835b70f2905955274843a219c6f27efb348e4d9f4086858
+    image: ${REVIVAL_KEYCLOAK_IMAGE:-quay.io/keycloak/keycloak:26.0@sha256:09a381c715ab0b111835b70f2905955274843a219c6f27efb348e4d9f4086858}
     profiles:
       - identity
     restart: unless-stopped

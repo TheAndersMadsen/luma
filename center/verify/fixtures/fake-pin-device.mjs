@@ -107,6 +107,9 @@ export function deviceShell(overrides = {}) {
   const dump = (version, packageName) => packageDump(packageName, version);
 
   return {
+    "cmd package path android": OK(
+      "package:/system/framework/framework-res.apk\n",
+    ),
     "getprop ro.product.manufacturer": OK("Humane\n"),
     "getprop ro.product.model": OK("Ai Pin\n"),
     "getprop ro.product.device": OK("mako\n"),

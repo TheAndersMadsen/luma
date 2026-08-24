@@ -1,16 +1,13 @@
 import { NextResponse } from "next/server";
 
-export const dynamic = "force-dynamic";
+import { centerRuntimeIdentity } from "@/lib/runtimeIdentity";
 
-const RELEASE_ID =
-  process.env.REVIVAL_RELEASE_ID?.trim() ||
-  process.env.COSMOS_REVISION?.trim() ||
-  "development";
+export const dynamic = "force-dynamic";
 
 /** Public deployment identity for canaries; deliberately excludes infrastructure details. */
 export async function GET() {
   return NextResponse.json(
-    { product: "Ai Pin Revival Center", release: RELEASE_ID },
+    centerRuntimeIdentity(),
     { headers: { "cache-control": "no-store" } },
   );
 }

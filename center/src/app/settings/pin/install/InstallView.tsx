@@ -8,8 +8,8 @@
  * installed packages → resolve and lock a verified release target → download
  * and SHA-256 verify the artifacts → remove known conflicts → bootstrap the
  * installer through the exploit chain (with its reboots) → install the five
- * APK roles → configure → verify readiness. Rollback, uninstall, conflict
- * removal and local-APK install are all still here, each behind its
+ * APK roles → configure → verify readiness. Uninstall, conflict removal and
+ * local-APK install are all still here, each behind its
  * confirmation.
  *
  * The one structural difference from the SPA: the ADB session is shared. It
@@ -63,7 +63,6 @@ export default function InstallView({
     state: controller.state,
     commands: controller.commands,
     runPrimaryAction: controller.runPrimaryAction,
-    runRollback: controller.runRollback,
     runUninstall: controller.runUninstall,
     runRemoveConflicts: controller.runRemoveConflicts,
     runFixConflictsThenPrimaryAction:
@@ -97,9 +96,6 @@ export default function InstallView({
         handlers={{
           onPrimaryAction: () => {
             void confirmation.requestPrimaryAction();
-          },
-          onRollback: () => {
-            void confirmation.requestRollback();
           },
           onUninstall: () => {
             void confirmation.requestUninstall();

@@ -45,6 +45,7 @@ const { checkCommand } = require('./platform/cli/checks');
 const {
   deployProduction,
   productionDoctor,
+  verifyProduction,
 } = require('./platform/cli/production');
 const { pinCommand } = require('./platform/cli/pin');
 const { setupCommand } = require('./platform/cli/setup');
@@ -83,6 +84,8 @@ runTimedBoundary(() => {
     else stack('config', args);
   } else if (command === 'deploy') {
     deployProduction(args);
+  } else if (command === 'verify') {
+    verifyProduction(args);
   } else if (command === 'pin') {
     pinCommand(args);
   } else if (command === 'pki') {

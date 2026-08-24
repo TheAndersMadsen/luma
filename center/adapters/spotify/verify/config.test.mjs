@@ -6,11 +6,9 @@ import { configBounds, digestToken, loadConfig } from "../src/config.mjs";
 const TOKEN = "test-token-".padEnd(40, "x");
 const readToken = () => Buffer.from(`${TOKEN}\n`);
 
-test("requires a specific non-wildcard, non-loopback bind address", () => {
+test("requires a literal non-loopback bind address", () => {
   assert.throws(() => loadConfig({}, readToken), /BIND_ADDRESS is required/);
   for (const bindAddress of [
-    "0.0.0.0",
-    "::",
     "127.0.0.1",
     "127.99.2.3",
     "::1",
@@ -26,13 +24,14 @@ test("requires a specific non-wildcard, non-loopback bind address", () => {
       /BIND_ADDRESS/,
     );
   }
+  assert.equal(loadConfig({ REVIVAL_SPOTIFY_ADAPTER_BIND_ADDRESS: "0.0.0.0" }, readToken).bindAddress, "0.0.0.0");
 });
 
 test("loads bounded configuration and only retains the token digest", () => {
   let observedPath;
   const config = loadConfig(
     {
-      REVIVAL_SPOTIFY_ADAPTER_BIND_ADDRESS: "10.0.7.1",
+      REVIVAL_SPOTIFY_ADAPTER_BIND_ADDRESS: "192.0.2.20",
       REVIVAL_SPOTIFY_ADAPTER_PORT: "19081",
       REVIVAL_SPOTIFY_ADAPTER_TIMEOUT_MS: "750",
       REVIVAL_SPOTIFY_ADAPTER_TOKEN_FILE: "/private/token",
@@ -45,7 +44,7 @@ test("loads bounded configuration and only retains the token digest", () => {
   );
 
   assert.equal(observedPath, "/private/token");
-  assert.equal(config.bindAddress, "10.0.7.1");
+  assert.equal(config.bindAddress, "192.0.2.20");
   assert.equal(config.port, 19081);
   assert.equal(config.timeoutMs, 750);
   assert.deepEqual(config.expectedTokenDigest, digestToken(TOKEN));
@@ -53,7 +52,7 @@ test("loads bounded configuration and only retains the token digest", () => {
 });
 
 test("rejects unsafe token and timeout values", () => {
-  const env = { REVIVAL_SPOTIFY_ADAPTER_BIND_ADDRESS: "10.0.7.1" };
+  const env = { REVIVAL_SPOTIFY_ADAPTER_BIND_ADDRESS: "192.0.2.20" };
   assert.throws(() => loadConfig(env, () => Buffer.from("short")), /32-512/);
   assert.throws(() => loadConfig(env, () => Buffer.from("x".repeat(513))), /32-512/);
   assert.throws(() => loadConfig(env, () => Buffer.from(`${"x".repeat(31)} y`)), /32-512/);
@@ -80,7 +79,7 @@ test("reports token file failures without disclosing the path", () => {
     () =>
       loadConfig(
         {
-          REVIVAL_SPOTIFY_ADAPTER_BIND_ADDRESS: "10.0.7.1",
+          REVIVAL_SPOTIFY_ADAPTER_BIND_ADDRESS: "192.0.2.20",
           REVIVAL_SPOTIFY_ADAPTER_TOKEN_FILE: "/private/very-secret-name",
         },
         () => {

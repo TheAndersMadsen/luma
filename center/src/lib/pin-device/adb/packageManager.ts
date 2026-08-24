@@ -106,6 +106,7 @@ export async function listInstalledPackages(
   transport: AdbSessionTransport,
 ): Promise<string[]> {
   const result = await transport.shell(["pm", "list", "packages"]);
+  ensureShellSuccess(result, "Unable to list installed packages.");
   return parseInstalledPackageNames(result.stdout);
 }
 
@@ -114,6 +115,7 @@ export async function packageExists(
   packageName: string,
 ): Promise<boolean> {
   const result = await transport.shell(shellCommand(["pm", "list", "packages", packageName]));
+  ensureShellSuccess(result, `Unable to query package ${packageName}.`);
   return hasExactPackageLine(result.stdout, packageName);
 }
 

@@ -59,7 +59,7 @@ function fixture() {
     const executable = join(bin, command);
     const body = command === "docker"
       ? `#!/bin/sh\nprintf '%s\\n' "docker $*" >> '${commandLog}'\n` +
-        `if [ "$*" = "compose version --short" ]; then printf '%s\\n' '2.33.1'; exit 0; fi\nexit 97\n`
+        `if [ "$*" = "compose version --short" ]; then printf '%s\\n' '2.34.0'; exit 0; fi\nexit 97\n`
       : `#!/bin/sh\nprintf '%s\\n' "${command} $*" >> '${commandLog}'\nexit 97\n`;
     writeFileSync(
       executable,
@@ -79,7 +79,6 @@ function fixture() {
     "REVIVAL_CONFIG_DIR",
     "REVIVAL_DATA_DIR",
     "REVIVAL_ENV_FILE",
-    "REVIVAL_PRIVATE_DIR",
     "REVIVAL_SECRETS_DIR",
     "REVIVAL_STATE_DIR",
   ]) {
@@ -116,26 +115,18 @@ test("a clean isolated-XDG setup is safe, private, and idempotent", () => {
     assert.equal(existsSync(xdgState), false, "help must not initialize setup state");
     assert.equal(existsSync(commandLog), false, "help must not probe external tools");
 
-    const setup = invoke(environment, "setup", "local", "--json");
+    const setup = invoke(environment, "setup", "local");
     assert.equal(setup.status, 0, setup.stderr);
-    const plan = JSON.parse(setup.stdout);
-    assert.equal(plan.selectedTrack, "local");
-    assert.equal(Object.hasOwn(plan, "next"), false);
-    assert.equal(plan.steps.find((step) => step.id === "initialize").status, "required");
+    assert.match(setup.stdout, /NEXT \.\/revival doctor/u);
     const setupProbes = existsSync(commandLog) ? readFileSync(commandLog, "utf8") : "";
-    assert.ok(
-      setupProbes === "" || setupProbes === "docker compose version --short\n",
-      `setup may perform only the read-only Compose version probe; observed ${setupProbes}`,
-    );
+    assert.equal(setupProbes, "", "setup must not probe Docker, ADB, or the network");
 
-    const first = invoke(environment, "init");
-    assert.equal(first.status, 0, first.stderr);
     const runtime = join(xdgConfig, "ai-pin-revival", "secrets", "runtime.env");
     const firstRuntime = readFileSync(runtime);
     const runtimeText = firstRuntime.toString("utf8");
     assert.match(runtimeText, /^SEARXNG_SECRET=[0-9a-f]{64}$/m);
     const databasePassword = /^COSMOS_PG_PASSWORD=([0-9a-f]{64})$/m.exec(runtimeText)?.[1];
-    assert.ok(databasePassword, "init must create the production database password");
+    assert.ok(databasePassword, "setup must create the database password");
     assert.match(runtimeText, /^GRAFANA_ADMIN_PASSWORD=[0-9a-f]{64}$/m);
     assert.match(
       runtimeText,
@@ -147,9 +138,9 @@ test("a clean isolated-XDG setup is safe, private, and idempotent", () => {
     );
     assert.match(runtimeText, /^COSMOS_CAPTURE_UPLOAD_BASE_URL=$/m);
 
-    const second = invoke(environment, "init");
+    const second = invoke(environment, "setup", "local");
     assert.equal(second.status, 0, second.stderr);
-    assert.deepEqual(readFileSync(runtime), firstRuntime, "init must preserve generated secrets");
+    assert.deepEqual(readFileSync(runtime), firstRuntime, "setup must preserve generated secrets");
 
     for (const directory of [
       join(xdgConfig, "ai-pin-revival"),
@@ -163,7 +154,7 @@ test("a clean isolated-XDG setup is safe, private, and idempotent", () => {
     assert.equal(
       existsSync(commandLog) ? readFileSync(commandLog, "utf8") : "",
       setupProbes,
-      "init must not run Docker, ADB, network, or remote tools",
+      "setup must not run Docker, ADB, network, or remote tools",
     );
     assert.equal(gitStatus(), beforeSource, "fresh setup must leave no source-tree residue");
   } finally {

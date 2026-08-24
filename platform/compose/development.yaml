@@ -4,6 +4,14 @@
 x-development-labels: &development-labels
   dk.andersmadsen.ai-pin-revival.environment: development
 
+x-development-cosmos-build: &development-cosmos-build
+  image: ai-pin-revival/cosmos-development:${REVIVAL_RELEASE_ID:?set REVIVAL_RELEASE_ID to the development source id}
+  build:
+    context: ./cosmos
+    dockerfile: Dockerfile
+    additional_contexts:
+      wire_contracts: ./contracts/wire
+
 # Optional while local identity is disabled. When the root CLI enables the
 # identity profile, every OIDC verifier waits for Keycloak's health check before
 # it fetches the initial JWKS.
@@ -14,6 +22,7 @@ x-development-identity-dependency: &development-identity-dependency
 
 services:
   connectivity:
+    <<: *development-cosmos-build
     depends_on: *development-identity-dependency
     labels:
       <<: *development-labels
@@ -28,6 +37,7 @@ services:
       - 127.0.0.1:${REVIVAL_CONNECTIVITY_PORT:-18080}:18080
 
   ai-bus:
+    <<: *development-cosmos-build
     depends_on: *development-identity-dependency
     labels:
       <<: *development-labels
@@ -67,6 +77,7 @@ services:
       - 127.0.0.1:${REVIVAL_AI_BUS_GRPC_PORT:-15051}:15051
 
   account:
+    <<: *development-cosmos-build
     depends_on: *development-identity-dependency
     labels:
       <<: *development-labels
@@ -81,6 +92,7 @@ services:
       - 127.0.0.1:${REVIVAL_ACCOUNT_GRPC_PORT:-15052}:15051
 
   contacts:
+    <<: *development-cosmos-build
     depends_on: *development-identity-dependency
     labels:
       <<: *development-labels
@@ -95,6 +107,7 @@ services:
       - 127.0.0.1:${REVIVAL_CONTACTS_GRPC_PORT:-15053}:15051
 
   feature-flags:
+    <<: *development-cosmos-build
     depends_on: *development-identity-dependency
     labels:
       <<: *development-labels
@@ -109,6 +122,7 @@ services:
       - 127.0.0.1:${REVIVAL_FEATURE_FLAGS_GRPC_PORT:-15054}:15051
 
   notable-events:
+    <<: *development-cosmos-build
     depends_on: *development-identity-dependency
     labels:
       <<: *development-labels
@@ -123,6 +137,7 @@ services:
       - 127.0.0.1:${REVIVAL_NOTABLE_EVENTS_GRPC_PORT:-15055}:15051
 
   provisioning:
+    <<: *development-cosmos-build
     depends_on: *development-identity-dependency
     labels:
       <<: *development-labels
@@ -144,6 +159,10 @@ services:
   center:
     image: ai-pin-revival/center-development:${REVIVAL_RELEASE_ID:?set REVIVAL_RELEASE_ID to the development source id}
     build:
+      context: ./center
+      dockerfile: Dockerfile
+      additional_contexts:
+        wire_contracts: ./contracts/wire
       target: development
     command:
       - npm
@@ -157,6 +176,7 @@ services:
     user: "1000:1000"
     environment:
       NODE_ENV: development
+      REVIVAL_ENVIRONMENT: development
       REVIVAL_DEPLOYMENT_ENVIRONMENT: development
     ports:
       - 127.0.0.1:${REVIVAL_CENTER_PORT:-4000}:4000

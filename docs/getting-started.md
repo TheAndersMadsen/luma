@@ -3,7 +3,7 @@
 ## Prerequisites
 
 - Node.js 22.14 or newer on the Node 22 line
-- Docker with Compose 2.33.1 or newer
+- Docker with Compose 2.34.0 or newer
 - Git
 
 Check the host:

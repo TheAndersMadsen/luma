@@ -288,12 +288,22 @@ const verify = (handlers, policy) =>
   verifyInstalledManagedState(fakeDevice(handlers), target, policy);
 
 describe("verifyInstalledManagedState", () => {
-  it("returns the inspection for a device that matches the plan", async () => {
-    const inspection = await verify(deviceShell(), inPlacePolicy());
+  it("uses bounded metadata polling without nesting a generic readiness gate", async () => {
+    const device = fakeDevice(deviceShell());
+    const inspection = await verifyInstalledManagedState(
+      device,
+      target,
+      inPlacePolicy(),
+    );
 
     assert.equal(inspection.helperPresentUnexpectedly, false);
     assert.equal(inspection.readiness.packageQueryabilityOk, true);
     assert.equal(inspection.packages.server.versionName, target.version);
+    assert.equal(
+      device.commands.filter((command) => command === "cmd package path android")
+        .length,
+      0,
+    );
   });
 
   it("rejects a device the bootstrap helper is still installed on", async () => {

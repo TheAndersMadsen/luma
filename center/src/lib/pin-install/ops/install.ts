@@ -1,6 +1,8 @@
 import {
+  assertPackageManagerReady,
   createTimedAdbSessionTransport,
   setHomeActivity,
+  waitForPackageManagerReady,
   type AdbSessionTransport,
   type SystemInstallerProgressEvent,
 } from "../device";
@@ -11,7 +13,10 @@ import {
   type DownloadInstallTargetAssetsOptions,
   type ResolvedInstallTarget,
 } from "../releases/assets";
-import type { InstallInspectionResult } from "../domain/inspection";
+import {
+  inspectInstallStateAfterPackageManagerReady,
+  type InstallInspectionResult,
+} from "../domain/inspection";
 import {
   decideInstallMigration,
   PIN_RELEASE_SIGNER_IDENTITY,
@@ -45,9 +50,7 @@ export interface InstallOperationResult {
   readonly inspection: InstallInspectionResult | null;
   readonly error: Error | null;
   readonly failedPhase: InstallOperationPhase | null;
-  readonly rollbackAttempted: boolean;
-  readonly rollbackSucceeded: boolean;
-  readonly rollbackAvailable: boolean;
+  readonly deviceChangesStarted: boolean;
 }
 
 export interface InstallOperationOptions {
@@ -65,6 +68,15 @@ export interface InstallOperationInternals {
     target: ResolvedInstallTarget,
     options?: DownloadInstallTargetAssetsOptions,
   ): Promise<DownloadedInstallTargetAssets>;
+  inspectInstallStateAfterPackageManagerReady(
+    transport: AdbSessionTransport,
+    options: {
+      readonly target: ResolvedInstallTarget;
+      readonly readinessSettleDelayMs: number;
+    },
+  ): Promise<InstallInspectionResult>;
+  waitForPackageManagerReady(transport: AdbSessionTransport): Promise<void>;
+  assertPackageManagerReady(transport: AdbSessionTransport): Promise<void>;
   runPreinstallCleanupCommand(
     transport: AdbSessionTransport,
     command: KnownPackageConflictCleanupCommand,
@@ -112,7 +124,10 @@ export interface InstallOperationInternals {
 }
 
 const defaultInstallInternals: InstallOperationInternals = {
+  assertPackageManagerReady,
   downloadInstallTargetAssets,
+  inspectInstallStateAfterPackageManagerReady,
+  waitForPackageManagerReady,
   async runPreinstallCleanupCommand(transport, command) {
     const result = await transport.shell(command.argv);
     return {
@@ -195,30 +210,18 @@ const INSTALLABLE_PACKAGE_ROLES: readonly InPlacePackageRole[] = [
   "injector",
 ];
 
-function getAssetsForRoles(
-  roles: readonly ManagedPackageRole[],
+function getRequiredAssetRoles(
+  packageRoles: readonly InPlacePackageRole[],
+  bootstrapInstaller: boolean,
 ): readonly DownloadedInstallAssetRole[] {
-  const assets = new Set<DownloadedInstallAssetRole>();
-
-  for (const role of roles) {
-    switch (role) {
-      case "installer":
-        assets.add("installerApk");
-        assets.add("exploitApk");
-        break;
-      case "hook":
-        assets.add("hookApk");
-        break;
-      case "server":
-        assets.add("serverApk");
-        break;
-      case "injector":
-        assets.add("injectorApk");
-        break;
-    }
+  const roles: DownloadedInstallAssetRole[] = [];
+  if (bootstrapInstaller) {
+    roles.push("installerApk", "exploitApk");
   }
-
-  return [...assets];
+  for (const role of packageRoles) {
+    roles.push(`${role}Apk` as DownloadedInstallAssetRole);
+  }
+  return roles;
 }
 
 function requireDownloadedAsset(
@@ -250,7 +253,7 @@ export interface InstallPlan {
   readonly rolesToUpdate: readonly InPlacePackageRole[];
   readonly packageRoles: readonly InPlacePackageRole[];
   readonly expectedExistingPackageNames: readonly string[];
-  readonly assetRoles: readonly DownloadedInstallAssetRole[];
+  readonly requiredAssetRoles: readonly DownloadedInstallAssetRole[];
   readonly retainedInstaller: RetainedInstallerIdentity | null;
   readonly verificationPolicy: InstallVerificationPolicy;
   readonly shouldRunPreinstallCleanup: boolean;
@@ -293,9 +296,7 @@ export function createInstallPlan(options: InstallOperationOptions): InstallPlan
     rolesToUpdate,
     packageRoles: rolesToUpdate,
     expectedExistingPackageNames,
-    assetRoles: recovery
-      ? getAssetsForRoles(["installer", ...INSTALLABLE_PACKAGE_ROLES])
-      : getAssetsForRoles(rolesToUpdate),
+    requiredAssetRoles: getRequiredAssetRoles(rolesToUpdate, recovery),
     retainedInstaller: decision.retainedInstaller,
     verificationPolicy: {
       mode: recovery ? "bootstrap-recovery" : "in-place",
@@ -316,24 +317,7 @@ export async function runInstallOperation(
 ): Promise<InstallOperationResult> {
   const warnings: OperationWarning[] = [];
   const deviceTransport = createTimedAdbSessionTransport(options.transport);
-  let installPlan: InstallPlan;
-  try {
-    installPlan = createInstallPlan(options);
-  } catch (error) {
-    const operationError =
-      error instanceof Error ? error : new Error(String(error));
-    return {
-      success: false,
-      warnings,
-      inspection: null,
-      error: operationError,
-      failedPhase: null,
-      rollbackAttempted: false,
-      rollbackSucceeded: false,
-      rollbackAvailable: false,
-    };
-  }
-  let destructiveWorkStarted = false;
+  let deviceChangesStarted = false;
   let failedPhase: InstallOperationPhase | null = null;
   let timedOut = false;
 
@@ -356,10 +340,35 @@ export async function runInstallOperation(
   try {
     emitProgress({
       phase: "Assets",
-      message: "Downloading install assets.",
+      message: "Waiting for Android package services and inspecting installed state.",
       phaseIndex: 0,
       phaseCompleted: 0,
-      phaseTotal: installPlan.assetRoles.length,
+      phaseTotal: 1,
+      phaseUnitLabel: "step",
+      logEntry: true,
+    });
+    await internals.waitForPackageManagerReady(deviceTransport);
+
+    const refreshedInspection =
+      await internals.inspectInstallStateAfterPackageManagerReady(
+        deviceTransport,
+        {
+          target: options.target,
+          readinessSettleDelayMs: 0,
+        },
+      );
+    const installPlan = createInstallPlan({
+      ...options,
+      transport: deviceTransport,
+      inspection: refreshedInspection,
+    });
+
+    emitProgress({
+      phase: "Assets",
+      message: "Downloading and verifying required install assets.",
+      phaseIndex: 0,
+      phaseCompleted: 0,
+      phaseTotal: installPlan.requiredAssetRoles.length,
       phaseUnitLabel: "assets",
       logEntry: true,
     });
@@ -368,7 +377,7 @@ export async function runInstallOperation(
       options.target,
       {
         fetchImpl: options.fetchImpl,
-        assetRoles: installPlan.assetRoles,
+        assetRoles: installPlan.requiredAssetRoles,
         onAssetProgress: ({
           assetName,
           assetIndex,
@@ -401,20 +410,32 @@ export async function runInstallOperation(
 
     emitPhaseProgress(options.onProgress, {
       phase: "Assets",
-      message: "Install assets downloaded.",
+      message: "Install assets downloaded and verified.",
       phaseIndex: 0,
-      phaseCompleted: installPlan.assetRoles.length,
-      phaseTotal: installPlan.assetRoles.length,
+      phaseCompleted: installPlan.requiredAssetRoles.length,
+      phaseTotal: installPlan.requiredAssetRoles.length,
       phaseUnitLabel: "assets",
       logEntry: true,
     });
 
+    const willMutate =
+      installPlan.shouldRunPreinstallCleanup ||
+      installPlan.shouldCleanupManagedPackages ||
+      installPlan.shouldBootstrapInstaller ||
+      installPlan.packageRoles.length > 0 ||
+      installPlan.shouldDisableConfiguredPackages ||
+      installPlan.shouldSetHomeActivity;
+    if (willMutate) {
+      await internals.assertPackageManagerReady(deviceTransport);
+    }
+
     failedPhase = "Cleanup";
+
     if (
       installPlan.shouldRunPreinstallCleanup ||
       installPlan.shouldCleanupManagedPackages
     ) {
-      destructiveWorkStarted = true;
+      deviceChangesStarted = true;
     }
     const cleanupSteps =
       (installPlan.shouldRunPreinstallCleanup
@@ -565,7 +586,7 @@ export async function runInstallOperation(
         expectedExistingPackageNames:
           installPlan.expectedExistingPackageNames,
         onMutationStart: () => {
-          destructiveWorkStarted = true;
+          deviceChangesStarted = true;
         },
         onProgress: (event) => {
           if (event.step.startsWith("bootstrap")) {
@@ -720,9 +741,7 @@ export async function runInstallOperation(
       inspection,
       error: null,
       failedPhase: null,
-      rollbackAttempted: false,
-      rollbackSucceeded: false,
-      rollbackAvailable: false,
+      deviceChangesStarted,
     };
   } catch (error) {
     timedOut = true;
@@ -735,9 +754,7 @@ export async function runInstallOperation(
       inspection: null,
       error: operationError,
       failedPhase,
-      rollbackAttempted: false,
-      rollbackSucceeded: false,
-      rollbackAvailable: destructiveWorkStarted,
+      deviceChangesStarted,
     };
   }
 }

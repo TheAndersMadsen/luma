@@ -24,7 +24,6 @@ function isolatedOperator() {
     REVIVAL_CONFIG_DIR: path.join(temporary, "config"),
     REVIVAL_SECRETS_DIR: path.join(temporary, "secrets"),
     REVIVAL_ENV_FILE: path.join(temporary, "secrets", "runtime.env"),
-    REVIVAL_PRIVATE_DIR: path.join(temporary, "secrets"),
     REVIVAL_DATA_DIR: path.join(temporary, "data"),
     REVIVAL_BUILD_DIR: path.join(temporary, "data", "build"),
   };
@@ -102,7 +101,6 @@ test("init refuses unmanaged existing roots and runtime files outside secrets", 
       REVIVAL_CONFIG_DIR: unmanaged,
       REVIVAL_SECRETS_DIR: path.join(unmanaged, "secrets"),
       REVIVAL_ENV_FILE: path.join(unmanaged, "secrets", "runtime.env"),
-      REVIVAL_PRIVATE_DIR: path.join(unmanaged, "secrets"),
       REVIVAL_DATA_DIR: path.join(temporary, "new-data"),
       REVIVAL_BUILD_DIR: path.join(temporary, "new-data", "build"),
     };
@@ -115,7 +113,6 @@ test("init refuses unmanaged existing roots and runtime files outside secrets", 
       ...process.env,
       REVIVAL_CONFIG_DIR: path.join(temporary, "config"),
       REVIVAL_SECRETS_DIR: path.join(temporary, "secrets"),
-      REVIVAL_PRIVATE_DIR: path.join(temporary, "secrets"),
       REVIVAL_DATA_DIR: path.join(temporary, "data"),
       REVIVAL_BUILD_DIR: path.join(temporary, "data", "build"),
       REVIVAL_ENV_FILE: path.join(temporary, "runtime.env"),
@@ -310,6 +307,7 @@ test("Docker build frontends are digest-bound release inputs", () => {
     "# syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e";
   for (const relative of [
     "cosmos/Dockerfile",
+    "platform/containers/keycloak/Dockerfile",
     "platform/containers/pin-builder/Dockerfile",
   ]) {
     const firstLine = fs.readFileSync(path.join(root, relative), "utf8").split(/\r?\n/, 1)[0];
@@ -317,7 +315,7 @@ test("Docker build frontends are digest-bound release inputs", () => {
   }
 });
 
-test("production Compose binds one release identity and keeps web services private", (context) => {
+test("production Compose is an image-only portable appliance with opt-in services", (context) => {
   const composeVersion = spawnSync("docker", ["compose", "version"], {
     cwd: root,
     encoding: "utf8",
@@ -329,270 +327,134 @@ test("production Compose binds one release identity and keeps web services priva
   assert.equal(composeVersion.status, 0, composeVersion.stderr);
 
   const releaseId = "compose-contract-test";
-  const result = spawnSync(
-    "docker",
-    [
-      "compose",
-      "-f",
-      "compose.yaml",
-      "-f",
-      "platform/compose/production.yaml",
-      "config",
-      "--format",
-      "json",
-    ],
-    {
-      cwd: root,
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        REVIVAL_RELEASE_ID: releaseId,
-        COSMOS_KID_SCOPE: "enforce",
-        COSMOS_DATABASE_URL: "postgresql://cosmos:placeholder@postgres/cosmos",
-        COSMOS_EDGE_TOKEN: "placeholder-edge",
-        COSMOS_ADMIN_TOKEN: "placeholder-admin",
-        COSMOS_CENTER_PROJECTION_TOKEN: "placeholder-projection",
-        COSMOS_CAPTURE_UPLOAD_BASE_URL: "https://uploads.example.test",
-        COSMOS_ONBOARDING_ENDPOINT: "https://onboarding.example.test",
-        COSMOS_ENROLLMENT_PINCODE: "0000",
-        COSMOS_ENROLLMENT_USER_ID: "U:compose-contract-test",
-        COSMOS_OPAQUE_SEED: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-        AUTH_SESSION_SECRET: "placeholder-session",
-        COSMOS_SHARE_TOKEN_SECRET: "placeholder-share",
-        KEYCLOAK_CLIENT_SECRET: "placeholder-keycloak",
-        COSMOS_PG_PASSWORD: "placeholder-postgres",
-        GRAFANA_ADMIN_PASSWORD: "placeholder-grafana",
-        SEARXNG_SECRET: "placeholder-search-secret",
-        COSMOS_AZURE_SPEECH_KEY: "placeholder-cosmos-speech-key",
-        COSMOS_AZURE_SPEECH_REGION: "southeastasia",
-        COSMOS_AZURE_SPEECH_VOICE: "da-DK-ChristelNeural",
-        AZURE_SPEECH_KEY: "ignored-generic-speech-key",
-        AZURE_SPEECH_REGION: "ignored-region",
-        AZURE_SPEECH_VOICE: "ignored-voice",
-        COSMOS_OPENROUTER_API_KEY: "placeholder-openrouter-key",
-        COSMOS_INTERSTITIAL_BASE_URL: "http://cosmos-ollama:11434/v1",
-        COSMOS_INTERSTITIAL_MODEL: "qwen2.5:3b-instruct",
-        REVIVAL_PIN_BRIDGE_OWNER_SUB: "owner-compose-contract-test",
-        REVIVAL_PIN_BRIDGE_DEVICE_ID: "2c2a00010000abcd",
-      },
-    },
-  );
-  assert.equal(result.status, 0, result.stderr);
+  const environment = {
+    ...process.env,
+    REVIVAL_RELEASE_ID: releaseId,
+    REVIVAL_PUBLIC_DOMAIN: "pin.example.test",
+    REVIVAL_PUBLIC_ORIGIN: "https://pin.example.test",
+    REVIVAL_MUSIC_GATEWAY_ORIGIN: "https://pin.example.test",
+    COSMOS_OIDC_ISSUER: "https://pin.example.test/realms/humane",
+    COSMOS_DATABASE_URL: "postgresql://cosmos:placeholder@postgres/cosmos",
+    COSMOS_PG_PASSWORD: "placeholder-postgres",
+    COSMOS_EDGE_TOKEN: "placeholder-edge",
+    COSMOS_ADMIN_TOKEN: "placeholder-admin",
+    COSMOS_CENTER_PROJECTION_TOKEN: "placeholder-projection",
+    COSMOS_CAPTURE_UPLOAD_BASE_URL: "https://pin.example.test",
+    COSMOS_CAPTURE_SHARE_BASE_URL: "https://pin.example.test",
+    COSMOS_ONBOARDING_ENDPOINT: "https://onboarding.cosmos.humane.cloud",
+    AUTH_SESSION_SECRET: "placeholder-session",
+    COSMOS_SHARE_TOKEN_SECRET: "placeholder-share",
+    KEYCLOAK_CLIENT_SECRET: "placeholder-keycloak",
+    KEYCLOAK_ADMIN: "bootstrap-admin",
+    KEYCLOAK_ADMIN_PASSWORD: "placeholder-keycloak-admin-password",
+    GRAFANA_ADMIN_PASSWORD: "placeholder-grafana",
+    SEARXNG_SECRET: "placeholder-search-secret",
+    COSMOS_ENROLLMENT_PINCODE: "0000",
+    COSMOS_ENROLLMENT_USER_ID: "operator-id",
+    COSMOS_OPAQUE_SEED: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+    COSMOS_AZURE_SPEECH_KEY: "placeholder-cosmos-speech-key",
+    COSMOS_AZURE_SPEECH_REGION: "southeastasia",
+    COSMOS_AZURE_SPEECH_VOICE: "da-DK-ChristelNeural",
+    COSMOS_OPENROUTER_API_KEY: "placeholder-openrouter-key",
+    COSMOS_INTERSTITIAL_BASE_URL: "http://model-runtime:11434/v1",
+    COSMOS_INTERSTITIAL_MODEL: "qwen2.5:3b-instruct",
+  };
+  const render = (profiles = []) => {
+    const profileArgs = profiles.flatMap((profile) => ["--profile", profile]);
+    const result = spawnSync(
+      "docker",
+      [
+        "compose",
+        "-f",
+        "compose.yaml",
+        "-f",
+        "platform/compose/production.yaml",
+        ...profileArgs,
+        "config",
+        "--format",
+        "json",
+      ],
+      { cwd: root, encoding: "utf8", env: environment },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    return JSON.parse(result.stdout);
+  };
 
-  const rendered = JSON.parse(result.stdout);
-  assert.equal(Object.keys(rendered.services).length, 15);
-  assert.deepEqual(rendered.services.center.build.args, { REVIVAL_RELEASE_ID: releaseId });
-  for (const [serviceName, service] of Object.entries(rendered.services)) {
-    if (!service.build || serviceName === "center") continue;
-    assert.deepEqual(service.build.args ?? {}, {}, `${serviceName} has an untracked build argument`);
+  const core = render();
+  assert.deepEqual(Object.keys(core.services).sort(), [
+    "account",
+    "ai-bus",
+    "center",
+    "contacts",
+    "feature-flags",
+    "keycloak",
+    "notable-events",
+    "postgres",
+    "traefik",
+  ]);
+  for (const [name, service] of Object.entries(core.services)) {
+    assert.equal(service.build, undefined, name + " must run an image, never a source build");
+    assert.ok(service.image, name + " must define an image");
   }
-  for (const [serviceName, service] of Object.entries(rendered.services)) {
-    if (!service.build) continue;
-    const labels = service.build.labels;
-    assert.equal(labels["dk.andersmadsen.ai-pin-revival.release"], releaseId);
-    assert.equal(labels["org.opencontainers.image.revision"], releaseId);
-    assert.equal(labels["dk.andersmadsen.ai-pin-revival.environment"], undefined);
-    assert.equal(service.labels["dk.andersmadsen.ai-pin-revival.environment"], "production", serviceName);
-  }
-  assert.equal(rendered.services.center.build.args.REVIVAL_RELEASE_ID, releaseId);
-  assert.equal(rendered.services.center.environment.REVIVAL_RELEASE_ID, releaseId);
-  assert.equal(rendered.services.center.image, `ai-pin-revival/center:${releaseId}`);
-  assert.equal(rendered.services["ai-bus"].image, `ai-pin-revival/cosmos:${releaseId}`);
   assert.equal(
-    rendered.services.keycloak.environment.KC_DB_URL,
+    core.services.center.image,
+    "ghcr.io/theandersmadsen/ai-pin-revival/center:" + releaseId,
+  );
+  assert.equal(
+    core.services["ai-bus"].image,
+    "ghcr.io/theandersmadsen/ai-pin-revival/cosmos:" + releaseId,
+  );
+  assert.deepEqual(core.services.keycloak.command, ["start", "--optimized", "--import-realm"]);
+  assert.equal(
+    core.services.keycloak.image,
+    "ghcr.io/theandersmadsen/ai-pin-revival/keycloak:" + releaseId,
+  );
+  assert.equal(
+    core.services.keycloak.environment.KC_DB_URL,
     "jdbc:postgresql://postgres:5432/keycloak",
   );
-  assert.equal(
-    rendered.services.connectivity.environment.COSMOS_OIDC_JWKS_URI,
-    "http://keycloak:8080/realms/humane/protocol/openid-connect/certs",
-  );
-  assert.deepEqual(rendered.services.connectivity.depends_on.keycloak, {
-    condition: "service_healthy",
-    required: true,
-  });
-  assert.deepEqual(Object.keys(rendered.networks).sort(), [
-    "cosmos-internal",
-    "loopback-publish",
-    "provider-egress",
-    "search-egress",
-    "search-service",
-    "spotify-control",
-  ]);
-  // Docker silently drops host port publication for a container attached only
-  // to internal networks, so every loopback-published service needs exactly one
-  // non-internal attachment. `loopback-publish` disables IP masquerade, so it
-  // grants publication without granting internet egress.
-  assert.notEqual(rendered.networks["loopback-publish"].internal, true);
-  assert.equal(
-    rendered.networks["loopback-publish"].driver_opts[
-      "com.docker.network.bridge.enable_ip_masquerade"
-    ],
-    "false",
-  );
-  assert.deepEqual(
-    Object.entries(rendered.services)
-      .filter(([, service]) => service.ports?.length)
-      .map(([name]) => name)
-      .sort(),
-    ["ai-bus", "center", "connectivity", "edge", "grafana", "keycloak"],
-  );
-  for (const [name, service] of Object.entries(rendered.services)) {
-    if (!service.ports?.length) continue;
-    const attachments = Object.keys(service.networks ?? {});
-    assert.ok(
-      attachments.includes("loopback-publish") || attachments.includes("provider-egress"),
-      `${name} publishes a port but has no non-internal network attachment`,
-    );
-  }
-  assert.deepEqual(Object.keys(rendered.services.center.networks).sort(), [
-    "cosmos-internal",
-    "loopback-publish",
-    "provider-egress",
-    "spotify-control",
-  ]);
-  assert.deepEqual(Object.keys(rendered.services.keycloak.networks).sort(), [
-    "cosmos-internal",
-    "loopback-publish",
-  ]);
-  assert.deepEqual(
-    Object.entries(rendered.services)
-      .filter(([, service]) => service.networks?.["provider-egress"])
-      .map(([name]) => name)
-      .sort(),
-    ["ai-bus", "center"],
-  );
-  assert.deepEqual(
-    Object.entries(rendered.services)
-      .filter(([, service]) => service.networks?.["search-service"])
-      .map(([name]) => name)
-      .sort(),
-    ["ai-bus", "searxng"],
-  );
-  assert.deepEqual(
-    Object.entries(rendered.services)
-      .filter(([, service]) => service.networks?.["search-egress"])
-      .map(([name]) => name),
-    ["searxng"],
-  );
-  const providerKey = /^(?:AZURE_|COSMOS_AZURE_|COSMOS_LLM_|COSMOS_OPENROUTER_API_KEY$|COSMOS_INTERSTITIAL_|COSMOS_SERPAPI_KEY$|COSMOS_GOOGLE_MAPS_KEY$|COSMOS_PIRATE_WEATHER_KEY$|COSMOS_WOLFRAM_APP_ID$|COSMOS_PPLX_)/;
-  assert.deepEqual(
-    Object.entries(rendered.services)
-      .filter(([, service]) => Object.keys(service.environment ?? {}).some((key) => providerKey.test(key)))
-      .map(([name]) => name),
-    ["ai-bus"],
-  );
-  assert.deepEqual(
-    Object.entries(rendered.services)
-      .filter(([, service]) => Object.hasOwn(service.environment ?? {}, "COSMOS_SEARXNG_BASE_URL"))
-      .map(([name]) => name),
-    ["ai-bus"],
-  );
-  assert.equal(rendered.services["ai-bus"].environment.COSMOS_SEARXNG_BASE_URL, "http://searxng:8080");
-  assert.equal(
-    rendered.services["ai-bus"].environment.COSMOS_OPENROUTER_API_KEY,
-    "placeholder-openrouter-key",
-  );
-  assert.equal(
-    rendered.services["ai-bus"].environment.COSMOS_INTERSTITIAL_BASE_URL,
-    "http://cosmos-ollama:11434/v1",
-  );
-  assert.equal(
-    rendered.services["ai-bus"].environment.COSMOS_INTERSTITIAL_MODEL,
-    "qwen2.5:3b-instruct",
-  );
-  assert.equal(
-    rendered.services["ai-bus"].environment.COSMOS_AZURE_SPEECH_KEY,
-    "placeholder-cosmos-speech-key",
-  );
-  assert.equal(rendered.services["ai-bus"].environment.COSMOS_AZURE_SPEECH_REGION, "southeastasia");
-  assert.equal(
-    rendered.services["ai-bus"].environment.COSMOS_AZURE_SPEECH_VOICE,
-    "da-DK-ChristelNeural",
-  );
-  for (const name of ["AZURE_SPEECH_KEY", "AZURE_SPEECH_REGION", "AZURE_SPEECH_VOICE"]) {
-    assert.equal(Object.hasOwn(rendered.services["ai-bus"].environment, name), false);
-  }
-  assert.deepEqual(rendered.services["ai-bus"].depends_on.searxng, {
-    condition: "service_healthy",
-    required: true,
-  });
 
-  const search = rendered.services.searxng;
+  const published = Object.entries(core.services)
+    .filter(([, service]) => service.ports?.length)
+    .map(([name]) => name);
+  assert.deepEqual(published, ["traefik"]);
+  assert.deepEqual(
+    core.services.traefik.ports.map((port) => Number(port.published)).sort((left, right) => left - right),
+    [80, 443],
+  );
   assert.equal(
-    search.image,
-    "searxng/searxng@sha256:f4c8e59de166ed71f6380c0847c312ca51f0d41996e31d0559163b6b09ecde52",
+    core.services.traefik.volumes.some((mount) => mount.source === "/var/run/docker.sock"),
+    false,
   );
-  assert.equal(search.user, "977:977");
-  assert.equal(search.read_only, true);
-  assert.deepEqual(search.cap_drop, ["ALL"]);
-  assert.deepEqual(search.security_opt, ["no-new-privileges:true"]);
-  assert.equal(search.pids_limit, 128);
-  assert.equal(search.mem_limit, "536870912");
-  assert.equal(search.ports, undefined);
-  assert.deepEqual(Object.keys(search.environment).sort(), ["FORCE_OWNERSHIP", "SEARXNG_SECRET"]);
-  assert.equal(search.environment.SEARXNG_SECRET, "placeholder-search-secret");
+  assert.deepEqual(core.services.traefik.command, ["--configFile=/etc/traefik/traefik.yml"]);
+  assert.equal(core.services.center.environment.REVIVAL_ENVIRONMENT, "production");
+
+  const aiBus = core.services["ai-bus"].environment;
+  assert.equal(aiBus.COSMOS_OPENROUTER_API_KEY, "placeholder-openrouter-key");
+  assert.equal(aiBus.COSMOS_INTERSTITIAL_MODEL, "qwen2.5:3b-instruct");
+  assert.equal(aiBus.COSMOS_AZURE_SPEECH_KEY, "placeholder-cosmos-speech-key");
+  assert.equal(aiBus.COSMOS_AZURE_SPEECH_REGION, "southeastasia");
+  assert.equal(aiBus.COSMOS_AZURE_SPEECH_VOICE, "da-DK-ChristelNeural");
+
+  const full = render(["pin", "search", "spotify", "observability"]);
   assert.deepEqual(
-    Object.entries(rendered.services)
-      .filter(([, service]) => Object.hasOwn(service.environment ?? {}, "SEARXNG_SECRET"))
-      .map(([name]) => name),
-    ["searxng"],
+    ["connectivity", "edge", "provisioning", "searxng", "spotify-adapter", "prometheus", "grafana"]
+      .filter((name) => !full.services[name]),
+    [],
   );
-  assert.equal(search.volumes.length, 1);
-  assert.equal(search.volumes[0].target, "/etc/searxng/settings.yml");
-  assert.equal(search.volumes[0].read_only, true);
-  assert.match(search.volumes[0].source, /cosmos\/search\/settings\.yml$/);
-  assert.deepEqual(search.healthcheck.test, [
-    "CMD",
-    "wget",
-    "--quiet",
-    "--tries=1",
-    "--spider",
-    "http://127.0.0.1:8080/healthz",
-  ]);
-  assert.deepEqual(rendered.services["spotify-adapter"].healthcheck.test, [
-    "CMD",
-    "node",
-    "src/healthcheck.mjs",
-  ]);
-  for (const [serviceName, service] of Object.entries(rendered.services)) {
-    assert.notEqual(service.privileged, true, `${serviceName} must not be privileged`);
-    assert.ok(service.pids_limit > 0, `${serviceName} must have a PID ceiling`);
-    assert.ok(Number(service.mem_limit) > 0, `${serviceName} must have a memory ceiling`);
-    assert.deepEqual(service.logging, {
-      driver: "json-file",
-      options: { "max-file": "3", "max-size": "10m" },
-    }, `${serviceName} must have bounded local logs`);
-    if (!service.build) {
-      assert.match(service.image, /@sha256:[0-9a-f]{64}$/, `${serviceName} must use a pinned image`);
-    }
+  for (const [name, service] of Object.entries(full.services)) {
+    assert.equal(service.build, undefined, name + " must remain image-only under profiles");
+    assert.equal(service.labels["dk.andersmadsen.ai-pin-revival.release"], releaseId, name);
+    assert.equal(service.labels["org.opencontainers.image.revision"], releaseId, name);
+    assert.equal(service.labels["dk.andersmadsen.ai-pin-revival.environment"], "production", name);
   }
-  assert.equal(rendered.services.center.environment.REVIVAL_PIN_BRIDGE_OWNER_SUB, "owner-compose-contract-test");
-  assert.equal(rendered.services.center.environment.REVIVAL_PIN_BRIDGE_DEVICE_ID, "2c2a00010000abcd");
-  assert.equal(rendered.services.keycloak.profiles, undefined);
-  assert.deepEqual(
-    Object.fromEntries(Object.entries(rendered.volumes).map(([name, volume]) => [name, {
-      name: volume.name,
-    }])),
-    {
-      "center-data": { name: "ai-pin-revival_center-data" },
-      "cosmos-pgdata": { name: "ai-pin-revival_cosmos-pgdata" },
-      "cosmos-state": { name: "ai-pin-revival_cosmos-state" },
-      "grafana-data": { name: "ai-pin-revival_grafana-data" },
-      "prometheus-data": { name: "ai-pin-revival_prometheus-data" },
-    },
-  );
-  const centerData = rendered.services.center.volumes.filter((volume) => volume.target === "/data");
-  assert.deepEqual(centerData, [{
-    type: "volume",
-    source: "center-data",
-    target: "/data",
-    volume: {},
-  }]);
-  assert.ok(
-    Object.values(rendered.services)
-      .flatMap((service) => service.ports ?? [])
-      .every((port) => port.host_ip === "127.0.0.1"),
-  );
+  assert.equal(full.services.edge.networks["cosmos-internal"] !== undefined, true);
+  assert.equal(full.services.searxng.ports, undefined);
+  assert.deepEqual(Object.keys(full.services["spotify-adapter"].networks), ["spotify-control"]);
+  assert.equal(full.services.center.environment.REVIVAL_SPOTIFY_ADAPTER_URL, undefined);
+  assert.equal(full.services.grafana.ports[0].host_ip, "127.0.0.1");
+  assert.equal(full.services.grafana.networks["loopback-publish"] !== undefined, true);
+  assert.equal(full.networks["loopback-publish"].driver_opts["com.docker.network.bridge.enable_ip_masquerade"], "false");
 });
 
 test("development identity profile controls Keycloak and OIDC wiring", (context) => {
@@ -649,6 +511,7 @@ test("development identity profile controls Keycloak and OIDC wiring", (context)
   assert.equal(disabled.services.keycloak, undefined);
   assert.equal(disabled.services.center.environment.KEYCLOAK_BASE_URL, "");
   assert.equal(disabled.services.center.environment.KEYCLOAK_REALM, "humane");
+  assert.equal(disabled.services.center.environment.REVIVAL_ENVIRONMENT, "development");
   assert.equal(
     disabled.services.center.image,
     "ai-pin-revival/center-development:identity-contract-test",

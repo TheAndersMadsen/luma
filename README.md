@@ -26,7 +26,7 @@ the checkout.
 ## Requirements
 
 - Node.js 22.14 or newer on the Node 22 line
-- Docker with Compose 2.33.1 or newer
+- Docker with Compose 2.34.0 or newer
 - Rust 1.91.1 for Cosmos work
 - Linux/x86-64 Docker for Android and Pin builds
 
@@ -121,13 +121,20 @@ Secret settings accept `--stdin` instead of a command-line value.
 Production uses one direct path:
 
 ```sh
+./revival setup production \
+  --domain pin.example.com \
+  --acme-email admin@example.com \
+  --operator-email owner@example.com
 ./revival doctor production
 ./revival deploy production --dry-run
 ./revival deploy production --confirm
+./revival verify production
 ```
 
 The preflight checks the host where the command runs. Dry-run shows the
-deployment without changing it; `--confirm` applies the current Cosmos stack. See
+deployment without changing it; `--confirm` pulls and starts the configured
+prebuilt images without compiling the checkout, then runs production
+verification. `verify` reruns the same read-only checks later. See
 [`docs/operations.md`](docs/operations.md).
 
 ## Pin

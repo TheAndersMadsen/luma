@@ -18,21 +18,14 @@ export const UNINSTALL_OPERATION_PHASES = [
   "Restore",
   "Verify",
 ] as const;
-export const ROLLBACK_OPERATION_PHASES = [
-  "Cleanup",
-  "Restore",
-  "Verify",
-] as const;
 
 export type InstallOperationPhase = (typeof INSTALL_OPERATION_PHASES)[number];
 export type UninstallOperationPhase =
   (typeof UNINSTALL_OPERATION_PHASES)[number];
-export type RollbackOperationPhase = (typeof ROLLBACK_OPERATION_PHASES)[number];
 
 export type OperationWarningCode =
   | "disable-failed"
   | "restore-failed"
-  | "rollback-failed"
   | "conflict-cleanup-command-failed"
   | "preinstall-cleanup-command-failed";
 
@@ -48,11 +41,7 @@ export interface OperationProgressBytes {
 }
 
 export interface OperationProgressEvent {
-  readonly phase:
-    | InstallOperationPhase
-    | UninstallOperationPhase
-    | RollbackOperationPhase
-    | "Rollback";
+  readonly phase: InstallOperationPhase | UninstallOperationPhase;
   readonly message: string;
   readonly overallPercent: number;
   readonly phasePercent: number;

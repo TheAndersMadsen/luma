@@ -96,7 +96,6 @@ export interface InstallControllerCommands {
   readonly connect: InstallActionCommand;
   readonly primaryAction: InstallActionCommand;
   readonly installApkFile: InstallActionCommand;
-  readonly rollback: InstallActionCommand;
   readonly uninstall: InstallActionCommand;
   readonly removeConflicts: InstallActionCommand;
   readonly recheck: InstallActionCommand;
@@ -132,11 +131,6 @@ interface OperationStartedAction {
   readonly type: "operation-started";
 }
 
-interface OperationInspectionUpdatedAction {
-  readonly type: "operation-inspection-updated";
-  readonly inspection: InstallInspectionResult;
-}
-
 interface OperationProgressAction {
   readonly type: "operation-progress";
   readonly event: OperationProgressEvent;
@@ -163,7 +157,6 @@ export type InstallControllerAction =
   | InspectionCompletedAction
   | InspectionFailedAction
   | OperationStartedAction
-  | OperationInspectionUpdatedAction
   | OperationProgressAction
   | OperationCompletedAction
   | OperationFailedAction
@@ -314,26 +307,6 @@ export function installControllerReducer(
       };
     }
 
-    case "operation-inspection-updated": {
-      // During an in-progress operation, intermediate inspections can briefly
-      // show packages as missing (e.g. during cleanup before reinstall). Keep
-      // the previous package snapshots so the UI doesn't flash "Not installed"
-      // while the operation is still running.
-      if (state.stage === "operating" && state.inspection) {
-        return {
-          ...state,
-          inspection: {
-            ...action.inspection,
-            packages: state.inspection.packages,
-          },
-        };
-      }
-      return {
-        ...state,
-        inspection: action.inspection,
-      };
-    }
-
     case "operation-progress": {
       const nextEntry = createProgressEntry(action.event);
       const shouldLogEntry = action.event.logEntry ?? true;
@@ -458,22 +431,6 @@ export function deriveInstallControllerCommands(
               : !installerAvailable
                 ? "APK file install requires system injector to be installed."
                 : null,
-    },
-    rollback: {
-      visible:
-        hasConnection &&
-        state.stage === "result" &&
-        state.lastOperationResult?.kind === "install" &&
-        !state.lastOperationResult.result.success &&
-        state.lastOperationResult.result.rollbackAvailable,
-      label: "Rollback Install",
-      disabled: state.isBusy || !hasConnection,
-      reason: state.isBusy
-        ? "Wait for the current task to finish."
-        : !hasConnection
-          ? "Reconnect the device before rolling back."
-          : null,
-      prominent: true,
     },
     uninstall: {
       visible:

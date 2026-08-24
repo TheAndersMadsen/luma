@@ -114,10 +114,10 @@ function localDoctorReport() {
     const result = run('docker', ['compose', 'version', '--short'], { capture: true, allowFailure: true });
     const composeVersion = result.status === 0 ? parseVersion(result.stdout) : null;
     if (composeVersion && versionAtLeast(composeVersion, MINIMUM_COMPOSE_VERSION)) {
-      add('compose', 'PASS', `Docker Compose ${composeVersion.join('.')} satisfies the 2.33.1 minimum.`);
+      add('compose', 'PASS', `Docker Compose ${composeVersion.join('.')} satisfies the 2.34.0 minimum.`);
       dockerReady = true;
     } else {
-      add('compose', 'FAIL', 'Docker Compose 2.33.1 or newer is required.',
+      add('compose', 'FAIL', 'Docker Compose 2.34.0 or newer is required.',
         'Upgrade Docker Compose, then rerun ./revival doctor.');
     }
   }

@@ -4,7 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 
-env_file="${REVIVAL_ENV_FILE:-$ROOT/.env.production}"
+env_file="${REVIVAL_ENV_FILE:?REVIVAL_ENV_FILE is required}"
+operator_compose="${REVIVAL_CONFIG_DIR:?REVIVAL_CONFIG_DIR is required}/production/operator.compose.yaml"
 project_name="${COMPOSE_PROJECT_NAME:-ai-pin-revival}"
 
 usage() {
@@ -22,10 +23,12 @@ while (($#)); do
 done
 
 [[ "$env_file" = /* ]] || env_file="$PWD/$env_file"
-[[ -f "$env_file" && ! -L "$env_file" && -r "$env_file" ]] || {
-  echo "production environment is not a readable regular file: $env_file" >&2
-  exit 1
-}
+for file in "$env_file" "$operator_compose"; do
+  [[ -f "$file" && ! -L "$file" && -r "$file" ]] || {
+    echo "production input is not a readable regular file: $file" >&2
+    exit 1
+  }
+done
 [[ "$project_name" =~ ^[a-z0-9][a-z0-9_-]*$ ]] || {
   echo "invalid Compose project name: $project_name" >&2
   exit 1
@@ -33,19 +36,37 @@ done
 command -v docker >/dev/null || { echo "docker is required" >&2; exit 1; }
 docker compose version >/dev/null
 
-if [[ -z "${REVIVAL_RELEASE_ID:-}" ]]; then
-  REVIVAL_RELEASE_ID="$(git -C "$ROOT" rev-parse --short=12 HEAD 2>/dev/null || printf local)"
-  export REVIVAL_RELEASE_ID
-fi
-export REVIVAL_DEPLOYMENT_ENVIRONMENT=production
-
 compose=(
   --project-directory "$ROOT"
   --project-name "$project_name"
   --env-file "$env_file"
   -f "$ROOT/compose.yaml"
   -f "$ROOT/platform/compose/production.yaml"
+  -f "$operator_compose"
 )
 
 docker compose "${compose[@]}" config --quiet
-printf 'Compose configuration is valid for %s (%s).\n' "$project_name" "$REVIVAL_RELEASE_ID"
+
+# A running Traefik container in this project already owns the ports during a
+# normal update. Otherwise, fail before Compose reaches a vague bind error.
+if ! docker compose "${compose[@]}" ps --status running --services traefik 2>/dev/null |
+    grep -qx traefik; then
+  listeners=""
+  if command -v ss >/dev/null; then
+    listeners="$(ss -H -ltnp 2>/dev/null | awk '$4 ~ /:(80|443)$/')"
+  else
+    listeners="$(awk '
+      NR > 1 && $4 == "0A" {
+        split($2, address, ":")
+        if (address[2] == "0050" || address[2] == "01BB") print FILENAME ":" $0
+      }
+    ' /proc/net/tcp /proc/net/tcp6 2>/dev/null || true)"
+  fi
+  if [[ -n "$listeners" ]]; then
+    echo "host ports 80 or 443 are already in use:" >&2
+    echo "$listeners" >&2
+    echo "Stop or reconfigure the owning service (commonly Nginx, Apache, Caddy, or another Compose stack), then rerun. Ai Pin Revival will not stop it automatically." >&2
+    exit 1
+  fi
+fi
+printf 'Production configuration is complete for %s (%s).\n' "$project_name" "$REVIVAL_RELEASE_ID"

@@ -31,8 +31,9 @@ Run `./revival --help` or append `--help` to any command.
 
 | Command | Purpose |
 | --- | --- |
-| `revival setup local\|contributor\|production\|pin` | Select and show a setup checklist. |
-| `revival setup status [--json]` | Show the selected checklist. |
+| `revival setup local\|contributor\|pin` | Initialize the selected local workspace. |
+| `revival setup production --domain HOST --acme-email EMAIL --operator-email EMAIL [options]` | Generate the portable production configuration and first login. |
+| `revival setup status [--json]` | Validate readiness from the current artifacts. |
 | `revival config path\|get\|set\|check\|list\|template` | Manage contract-backed settings. |
 | `revival support-bundle --output FILE` | Write a redacted local diagnostic bundle. |
 | `revival version [--json]` | Show the CLI and contract versions. |
@@ -44,6 +45,7 @@ Run `./revival --help` or append `--help` to any command.
 | `revival doctor production [options]` | Run production preflight without changing the server. |
 | `revival deploy production --dry-run [options]` | Show the direct Cosmos deployment. |
 | `revival deploy production --confirm [options]` | Apply the direct Cosmos deployment. |
+| `revival verify production [options]` | Verify running services, release identity, OIDC, and configured Pin TLS. |
 
 ## Pin
 

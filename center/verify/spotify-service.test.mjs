@@ -39,7 +39,7 @@ function configureBridge() {
   process.env.REVIVAL_PIN_BRIDGE_DEVICE_ID = DEVICE_ID;
   process.env.COSMOS_WEBAPI_BASE_URL = "http://cosmos.test:8081";
   process.env.COSMOS_ADMIN_TOKEN = "c".repeat(40);
-  process.env.REVIVAL_SPOTIFY_ADAPTER_URL = "http://10.0.7.1:18081";
+  process.env.REVIVAL_SPOTIFY_ADAPTER_URL = "http://spotify-adapter:18081";
   process.env.REVIVAL_SPOTIFY_ADAPTER_TOKEN = "s".repeat(40);
   process.env.REVIVAL_MUSIC_GATEWAY_ORIGIN = "https://center.example.test";
   delete process.env.REVIVAL_SPOTIFY_ADAPTER_TOKEN_FILE;
@@ -149,7 +149,7 @@ test("bridge binds a signed wearer to the deployment owner and durable Pin roste
   assert.equal(result.state, "disabled");
   assert.equal(calls.length, 2);
   assert.equal(calls[0].url, "http://cosmos.test:8081/demo-api/admin/devices");
-  assert.equal(calls[1].url, "http://10.0.7.1:18081/api/spotify/status");
+  assert.equal(calls[1].url, "http://spotify-adapter:18081/api/spotify/status");
   assert.equal(new Headers(calls[0].init.headers).get("authorization"), `Bearer ${"c".repeat(40)}`);
   assert.equal(new Headers(calls[1].init.headers).get("authorization"), `Bearer ${"s".repeat(40)}`);
   assert.doesNotMatch(JSON.stringify(result), /secret|never serialize/);
@@ -265,7 +265,7 @@ test("mounted adapter token derives a distinct server-only music gateway bearer"
   await runSpotifyBridgeAction(session, "settings", settings, fetchMock);
 
   const adapter = calls[1];
-  assert.equal(adapter.url, "http://10.0.7.1:18081/api/spotify/settings");
+  assert.equal(adapter.url, "http://spotify-adapter:18081/api/spotify/settings");
   assert.equal(adapter.init.method, "PUT");
   assert.equal(new Headers(adapter.init.headers).get("authorization"), `Bearer ${token}`);
   const forwarded = JSON.parse(String(adapter.init.body));
@@ -426,7 +426,7 @@ test("search rides the ownership gate and forwards only q and kind", async () =>
 
   assert.equal(calls.length, 2);
   assert.equal(calls[0].url, "http://cosmos.test:8081/demo-api/admin/devices");
-  assert.equal(calls[1].url, "http://10.0.7.1:18081/api/spotify/search?q=blue+monday&kind=track");
+  assert.equal(calls[1].url, "http://spotify-adapter:18081/api/spotify/search?q=blue+monday&kind=track");
   assert.equal(calls[1].init.method, "GET");
   assert.equal(new Headers(calls[1].init.headers).get("authorization"), `Bearer ${"s".repeat(40)}`);
 

@@ -1,5 +1,7 @@
 import styles from "../settings.module.css";
 
+import { centerRuntimeIdentity } from "@/lib/runtimeIdentity";
+
 export const dynamic = "force-dynamic";
 
 export const metadata = { title: "Humane Center" };
@@ -12,8 +14,7 @@ export const metadata = { title: "Humane Center" };
  * dashboard against a Pin or a deployment record.
  */
 export default function AboutPage() {
-  const release = process.env.REVIVAL_RELEASE_ID ?? "unknown";
-  const environment = process.env.REVIVAL_DEPLOYMENT_ENVIRONMENT ?? "unknown";
+  const { release, environment } = centerRuntimeIdentity();
 
   return (
     <>
@@ -50,7 +51,9 @@ export default function AboutPage() {
             Environment
           </span>
           <div className={styles.descWrapper}>
-            <span className={styles.description}>{environment}</span>
+            <span className={styles.description} data-testid="about-environment">
+              {environment}
+            </span>
           </div>
         </div>
       </section>

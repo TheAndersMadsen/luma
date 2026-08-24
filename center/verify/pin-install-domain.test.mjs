@@ -49,6 +49,8 @@ import test from "node:test";
 // what a healthy device answers; see the module header for how it works.
 import { OK, deviceShell, fakeDevice, packageDump } from "./fixtures/fake-pin-device.mjs";
 
+const FAILED = (stderr) => ({ stdout: "", stderr, exitCode: 20 });
+
 const QUERY = "?pin-install-domain-test";
 
 const { deriveInstallActionState } = await import(
@@ -255,6 +257,26 @@ test("inspectInstallState derives Reinstall for a healthy current device", async
   assert.equal(result.actionState.action, "Reinstall");
   assert.equal(result.installActionsBlocked, false);
   assert.equal(result.packages.server.versionComparison, "equal");
+});
+
+test("inspectInstallState never treats a failed package query as absence", async () => {
+  await assert.rejects(
+    () =>
+      inspectInstallState(
+        fakeDevice(
+          deviceShell({
+            "pm list packages com.penumbraos.systeminjector": FAILED(
+              "cmd: Can't find service: package",
+            ),
+          }),
+        ),
+        {
+          target: createResolvedInstallTargetFixture(),
+          readinessSettleDelayMs: 0,
+        },
+      ),
+    /cmd: Can't find service: package/,
+  );
 });
 
 test("inspectInstallState derives Update when one package is older than the target", async () => {

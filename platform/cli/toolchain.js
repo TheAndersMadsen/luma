@@ -187,9 +187,10 @@ function validateHostToolchains({
 
 function testVersionParser() {
   const cases = [
-    ['2.33.1', true],
+    ['2.34.0', true],
     ['Docker Compose version v2.35.0-desktop.1', true],
     ['5.1.0', true],
+    ['2.33.1', false],
     ['2.33.0', false],
     ['2.24.4', false],
     ['not-a-version', null]

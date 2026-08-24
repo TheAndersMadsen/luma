@@ -97,16 +97,42 @@ test("dynamic Center responses are private and hardened", async () => {
   assert.match(middleware, /private, no-store, max-age=0, must-revalidate/);
 });
 
-test("public version endpoint exposes only product and immutable release identity", async () => {
-  const [route, middleware] = await Promise.all([
+test("public version endpoint exposes product, release, and explicit runtime environment", async () => {
+  const [route, identity, middleware] = await Promise.all([
     source("src/app/api/version/route.ts"),
+    source("src/lib/runtimeIdentity.ts"),
     source("src/middleware.ts"),
   ]);
 
-  assert.match(route, /REVIVAL_RELEASE_ID/);
-  assert.match(route, /COSMOS_REVISION/);
-  assert.match(route, /product: "Ai Pin Revival Center", release: RELEASE_ID/);
+  assert.match(route, /centerRuntimeIdentity\(\)/);
+  assert.match(identity, /REVIVAL_RELEASE_ID/);
+  assert.match(identity, /COSMOS_REVISION/);
+  assert.match(identity, /REVIVAL_ENVIRONMENT/);
+  assert.match(identity, /product: "Ai Pin Revival Center"/);
+  assert.match(identity, /environment: environment\.REVIVAL_ENVIRONMENT\?\.trim\(\) \|\| "development"/);
   assert.match(route, /"cache-control": "no-store"/);
-  assert.doesNotMatch(route, /hostname|provider|region|endpoint|secret/i);
+  assert.doesNotMatch(`${route}\n${identity}`, /hostname|provider|region|endpoint|secret/i);
   assert.match(middleware, /pathname === "\/api\/version"/);
+
+  const priorRelease = process.env.REVIVAL_RELEASE_ID;
+  const priorRevision = process.env.COSMOS_REVISION;
+  const priorEnvironment = process.env.REVIVAL_ENVIRONMENT;
+  try {
+    process.env.REVIVAL_RELEASE_ID = "test-release";
+    process.env.COSMOS_REVISION = "ignored-revision";
+    process.env.REVIVAL_ENVIRONMENT = "production";
+    const { centerRuntimeIdentity } = await import(`../src/lib/runtimeIdentity.ts?identity=${Date.now()}`);
+    assert.deepEqual(centerRuntimeIdentity(), {
+      product: "Ai Pin Revival Center",
+      release: "test-release",
+      environment: "production",
+    });
+  } finally {
+    if (priorRelease === undefined) delete process.env.REVIVAL_RELEASE_ID;
+    else process.env.REVIVAL_RELEASE_ID = priorRelease;
+    if (priorRevision === undefined) delete process.env.COSMOS_REVISION;
+    else process.env.COSMOS_REVISION = priorRevision;
+    if (priorEnvironment === undefined) delete process.env.REVIVAL_ENVIRONMENT;
+    else process.env.REVIVAL_ENVIRONMENT = priorEnvironment;
+  }
 });

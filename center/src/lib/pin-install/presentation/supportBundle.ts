@@ -31,9 +31,7 @@ interface SerializedOperationResult {
     readonly warnings: readonly unknown[];
     readonly error: SerializedError | null;
     readonly failedPhase?: string | null;
-    readonly rollbackAttempted?: boolean;
-    readonly rollbackSucceeded?: boolean;
-    readonly rollbackAvailable?: boolean;
+    readonly deviceChangesStarted?: boolean;
     readonly removedPackageIds?: readonly string[];
   };
 }
@@ -96,9 +94,7 @@ function serializeOperationResult(
         warnings: result.result.warnings,
         error: serializeError(result.result.error),
         failedPhase: result.result.failedPhase,
-        rollbackAttempted: result.result.rollbackAttempted,
-        rollbackSucceeded: result.result.rollbackSucceeded,
-        rollbackAvailable: result.result.rollbackAvailable,
+        deviceChangesStarted: result.result.deviceChangesStarted,
       },
     };
   }

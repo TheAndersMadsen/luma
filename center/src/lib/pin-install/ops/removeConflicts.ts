@@ -2,6 +2,7 @@ import {
   createTimedAdbSessionTransport,
   packageExists,
   uninstallPackage,
+  waitForPackageManagerReady,
   type AdbSessionTransport,
 } from "../device";
 import type { DetectedPackageConflict, KnownPackageConflictCleanupCommand } from "../domain/types";
@@ -25,6 +26,7 @@ export interface RemoveConflictsOperationOptions {
 }
 
 export interface RemoveConflictsOperationInternals {
+  waitForPackageManagerReady(transport: AdbSessionTransport): Promise<void>;
   uninstallPackage(transport: AdbSessionTransport, packageId: string): Promise<void>;
   packageExists(transport: AdbSessionTransport, packageId: string): Promise<boolean>;
   runCleanupCommand(
@@ -34,6 +36,7 @@ export interface RemoveConflictsOperationInternals {
 }
 
 const defaultRemoveConflictsInternals: RemoveConflictsOperationInternals = {
+  waitForPackageManagerReady,
   uninstallPackage,
   packageExists,
   async runCleanupCommand(transport, command) {
@@ -116,11 +119,12 @@ export async function runRemoveConflictsOperation(
 
   try {
     emitConflictProgress({
-      message: "Conflict cleanup started.",
+      message: "Waiting for Android package services before conflict cleanup.",
       completed: 0,
       total: totalSteps,
       logEntry: true,
     });
+    await internals.waitForPackageManagerReady(deviceTransport);
 
     for (const conflict of conflicts) {
       for (const packageId of conflict.installedPackageIds) {

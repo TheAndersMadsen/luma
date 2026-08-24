@@ -6,9 +6,11 @@ const path = require('node:path');
 const {
   DEPLOY_DIR, ENV_FILE, ROOT, fail, operatorEnvironment, resolveTool, run, validateRuntime,
 } = require('./context');
+const { validateProductionArtifacts } = require('./production-setup');
 
 const DOCTOR_USAGE = './revival doctor production [--env-file FILE] [--project-name NAME]';
 const DEPLOY_USAGE = './revival deploy production (--dry-run | --confirm) [--env-file FILE] [--project-name NAME] [--wait-timeout SECONDS]';
+const VERIFY_USAGE = './revival verify production [--env-file FILE] [--project-name NAME]';
 
 function parseProductionOptions(args, { deploy = false } = {}) {
   const values = new Set(['--env-file', '--project-name', ...(deploy ? ['--wait-timeout'] : [])]);
@@ -32,14 +34,16 @@ function parseProductionOptions(args, { deploy = false } = {}) {
 }
 
 function deploymentScript(name, args, envFile = ENV_FILE) {
+  let values;
   try {
-    validateRuntime({ production: true, envFile });
+    values = validateRuntime({ production: true, envFile });
+    validateProductionArtifacts(values);
   } catch (error) {
     fail(error.message);
   }
   const script = path.join(DEPLOY_DIR, name);
   if (!fs.existsSync(script)) fail(`deployment command is unavailable: ${script}`);
-  return run(resolveTool('bash'), [script, ...args], { env: operatorEnvironment() });
+  return run(resolveTool('bash'), [script, ...args], { env: operatorEnvironment(values) });
 }
 
 function productionDoctor(args) {
@@ -69,4 +73,16 @@ function deployProduction(args) {
   deploymentScript('deploy.sh', options.filter((argument) => argument !== '--confirm'), parsed.envFile);
 }
 
-module.exports = { productionDoctor, deployProduction };
+function verifyProduction(args) {
+  const [target, ...options] = args;
+  if (target !== 'production') fail(`usage: ${VERIFY_USAGE}`, 64);
+  let parsed;
+  try {
+    parsed = parseProductionOptions(options);
+  } catch {
+    fail(`usage: ${VERIFY_USAGE}`, 64);
+  }
+  deploymentScript('verify.sh', options, parsed.envFile);
+}
+
+module.exports = { productionDoctor, deployProduction, verifyProduction };

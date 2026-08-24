@@ -118,12 +118,17 @@ test("the root config contract represents Compose inputs in runtime.env", () => 
   );
 });
 
-test("production validation rejects malformed endpoints, database URLs, and weak passwords", () => {
+test("core production validation rejects malformed endpoints, database URLs, and core passwords", () => {
   const { temporary, env } = fixture();
   try {
-    assert.equal(invoke(env, ["init"]).status, 0);
+    const setup = invoke(env, [
+      "setup", "production",
+      "--domain", "pin.example.test",
+      "--acme-email", "acme@example.test",
+      "--operator-email", "owner@example.test",
+    ]);
+    assert.equal(setup.status, 0, setup.stderr);
     let valid = fs.readFileSync(env.REVIVAL_ENV_FILE, "utf8");
-    valid = setValue(valid, "COSMOS_AUTH_MODE", "edge-authenticated");
     valid = setValue(valid, "COSMOS_CAPTURE_UPLOAD_BASE_URL", "https://uploads.example.test");
     valid = setValue(valid, "COSMOS_ONBOARDING_ENDPOINT", "https://onboarding.example.test/v1/onboard");
     fs.writeFileSync(env.REVIVAL_ENV_FILE, valid);
@@ -134,15 +139,6 @@ test("production validation rejects malformed endpoints, database URLs, and weak
     for (const [name, value, message] of [
       ["COSMOS_CAPTURE_UPLOAD_BASE_URL", "https://uploads.example.test/capture", /public HTTPS origin/],
       ["COSMOS_CAPTURE_UPLOAD_BASE_URL", "http://uploads.example.test", /public HTTPS origin/],
-      ["COSMOS_ONBOARDING_ENDPOINT", "https://localhost/onboard", /public HTTPS URL/],
-      ["COSMOS_ONBOARDING_ENDPOINT", "https://localhost./onboard", /public HTTPS URL/],
-      ["COSMOS_ONBOARDING_ENDPOINT", "https://onboarding.service.local/onboard", /public HTTPS URL/],
-      ["COSMOS_ONBOARDING_ENDPOINT", "https://10.0.0.8/onboard", /public HTTPS URL/],
-      ["COSMOS_ONBOARDING_ENDPOINT", "not-a-url", /public HTTPS URL/],
-      ["COSMOS_ONBOARDING_ENDPOINT", "https://onboarding.example.test/${INJECTED_PATH}", /public HTTPS URL/],
-      ["COSMOS_ONBOARDING_ENDPOINT", "https://onboarding.example.test/v1\\onboard", /public HTTPS URL/],
-      ["COSMOS_ONBOARDING_ENDPOINT", '"https://onboarding.example.test/v1/onboard"', /public HTTPS URL/],
-      ["COSMOS_ONBOARDING_ENDPOINT", "https://onboarding.example.test/v1/onboard # comment", /public HTTPS URL/],
       ["COSMOS_DATABASE_URL", "mysql://cosmos:password@database/cosmos", /PostgreSQL URL/],
       ["COSMOS_DATABASE_URL", "postgresql://cosmos@database/cosmos", /PostgreSQL URL/],
       ["COSMOS_DATABASE_URL", "postgresql://cosmos:short@postgres/cosmos", /PostgreSQL URL/],
@@ -158,8 +154,6 @@ test("production validation rejects malformed endpoints, database URLs, and weak
       ["COSMOS_PG_PASSWORD", "too-short", /at least 32 characters/],
       ["COSMOS_PG_PASSWORD", `${"a".repeat(32)} # compose comment`, /using only letters/],
       ["COSMOS_PG_PASSWORD", "${A_VERY_LONG_INTERPOLATED_DATABASE_PASSWORD}", /using only letters/],
-      ["GRAFANA_ADMIN_PASSWORD", "too-short", /at least 32 characters/],
-      ["GRAFANA_ADMIN_PASSWORD", `"${"a".repeat(32)}"`, /using only letters/],
     ]) {
       fs.writeFileSync(env.REVIVAL_ENV_FILE, setValue(valid, name, value));
       const rejected = invoke(env, ["doctor", "production"]);
@@ -196,9 +190,14 @@ test("production validation rejects malformed endpoints, database URLs, and weak
 test("production commands validate the exact env file and reject duplicate env flags", () => {
   const { temporary, env } = fixture();
   try {
-    assert.equal(invoke(env, ["init"]).status, 0);
+    const setup = invoke(env, [
+      "setup", "production",
+      "--domain", "pin.example.test",
+      "--acme-email", "acme@example.test",
+      "--operator-email", "owner@example.test",
+    ]);
+    assert.equal(setup.status, 0, setup.stderr);
     let primary = fs.readFileSync(env.REVIVAL_ENV_FILE, "utf8");
-    primary = setValue(primary, "COSMOS_AUTH_MODE", "edge-authenticated");
     primary = setValue(primary, "COSMOS_CAPTURE_UPLOAD_BASE_URL", "https://uploads.example.test");
     fs.writeFileSync(env.REVIVAL_ENV_FILE, primary);
 
@@ -278,26 +277,23 @@ test("a fresh root config can satisfy production Compose through the CLI", (cont
 
   const { temporary, env } = fixture();
   try {
-    assert.equal(invoke(env, ["init"]).status, 0);
-    for (const [name, value, secret] of [
-      ["COSMOS_AUTH_MODE", "edge-authenticated", false],
-      ["COSMOS_CAPTURE_UPLOAD_BASE_URL", "https://uploads.example.test", false],
-      ["COSMOS_ENROLLMENT_PINCODE", "0000", true],
-      ["COSMOS_ENROLLMENT_USER_ID", "U:production-config-test", false],
-      ["REVIVAL_PIN_BRIDGE_OWNER_SUB", "owner-production-config-test", false],
-      ["REVIVAL_PIN_BRIDGE_DEVICE_ID", "2c2a00010000abcd", false],
-    ]) {
-      const result = secret
-        ? invoke(env, ["config", "set", name, "--stdin"], value)
-        : invoke(env, ["config", "set", name, value]);
-      assert.equal(result.status, 0, `${name}: ${result.stderr}`);
-    }
-    fs.writeFileSync(path.join(env.REVIVAL_SECRETS_DIR, "pki", "duc-ca.crt"), "test certificate\n");
-    fs.writeFileSync(path.join(env.REVIVAL_SECRETS_DIR, "pki", "duc-ca.key"), "test private key\n");
-
-    const doctor = invoke(env, ["doctor", "production"]);
-    assert.equal(doctor.status, 0, doctor.stderr);
-    assert.match(doctor.stdout, /Compose configuration is valid/);
+    const setup = invoke(env, [
+      "setup", "production",
+      "--domain", "pin.example.test",
+      "--acme-email", "acme@example.test",
+      "--operator-email", "owner@example.test",
+    ]);
+    assert.equal(setup.status, 0, setup.stderr);
+    const configured = spawnSync("docker", [
+      "compose",
+      "--project-directory", root,
+      "--env-file", env.REVIVAL_ENV_FILE,
+      "-f", path.join(root, "compose.yaml"),
+      "-f", path.join(root, "platform/compose/production.yaml"),
+      "-f", path.join(env.REVIVAL_CONFIG_DIR, "production", "operator.compose.yaml"),
+      "config", "--quiet",
+    ], { cwd: root, env, encoding: "utf8" });
+    assert.equal(configured.status, 0, configured.stderr);
   } finally {
     fs.rmSync(temporary, { recursive: true, force: true });
   }

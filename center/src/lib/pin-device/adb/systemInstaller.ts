@@ -1,6 +1,7 @@
 import {
   AdbDeviceStepTimeoutError,
   DEVICE_STEP_TIMEOUT_MS,
+  withDeviceStepTimeout,
   type AdbSessionTransport,
   type ShellResult,
 } from "./transport";
@@ -374,14 +375,16 @@ export async function waitForDeviceReady(
 
   while (Date.now() - start < timeoutMs) {
     try {
-      await transport.shell(["echo", "ready"]);
-      return;
+      const result = await transport.shell(["echo", "ready"]);
+      if (result.exitCode === 0) {
+        return;
+      }
     } catch (error) {
       if (isDeviceStepTimeoutError(error)) {
         throw error;
       }
-      await sleep(pollMs);
     }
+    await sleep(pollMs);
   }
 
   throw new Error(`Timed out after ${timeoutMs}ms waiting for device.`);
@@ -391,31 +394,85 @@ export async function waitForPackageManagerReady(
   transport: AdbSessionTransport,
   timeoutMs = SYSTEM_READY_TIMEOUT_MS,
   pollMs = SYSTEM_READY_POLL_MS,
-  settleMs = SYSTEM_READY_SETTLE_MS,
+  settleMs = 0,
 ): Promise<void> {
-  await waitForDeviceReady(transport, timeoutMs, pollMs);
+  const deadline = Date.now() + timeoutMs;
+  let lastResponse = "no response";
 
-  const start = Date.now();
-
-  while (Date.now() - start < timeoutMs) {
+  while (Date.now() < deadline) {
     try {
-      const result = await transport.shell(["service", "check", "package"]);
-      if (result.stdout.includes("found")) {
-        await sleep(settleMs);
+      // Probe the same `cmd package` Binder path used by the mutations below.
+      // `service check package` is weaker and its `not found` response used to
+      // pass an `includes("found")` check, allowing install to start too early.
+      const result = await withDeviceStepTimeout(
+        "wait for Android package service",
+        () =>
+          transport.shell([
+            "cmd",
+            "package",
+            "path",
+            "android",
+          ]),
+        Math.max(1, deadline - Date.now()),
+      );
+      const output = `${result.stdout}\n${result.stderr}`.trim();
+      lastResponse = output || `exit code ${result.exitCode}`;
+      if (isPackageManagerProbeReady(result)) {
+        if (settleMs > 0) {
+          await sleep(settleMs);
+        }
         return;
       }
     } catch (error) {
-      if (isDeviceStepTimeoutError(error)) {
-        throw error;
-      }
-      // Retry until timeout.
+      lastResponse = error instanceof Error ? error.message : String(error);
     }
 
-    await sleep(pollMs);
+    const remainingMs = deadline - Date.now();
+    if (remainingMs > 0) {
+      await sleep(Math.min(pollMs, remainingMs));
+    }
   }
 
   throw new Error(
-    `Timed out after ${timeoutMs}ms waiting for PackageManagerService.`,
+    `Timed out after ${timeoutMs}ms waiting for Android's package service. ` +
+      `Keep the Pin powered on and unlocked, wait for startup to finish, then retry. ` +
+      `Last response: ${lastResponse.slice(0, 240)}`,
+  );
+}
+
+function isPackageManagerProbeReady(result: ShellResult): boolean {
+  return (
+    result.exitCode === 0 &&
+    result.stdout
+      .split(/\r?\n/u)
+      .some((line) => /^package:\/\S+$/u.test(line.trim()))
+  );
+}
+
+/**
+ * One fail-closed probe used after a potentially long asset download. This is
+ * deliberately not a retry loop: the operation already performed its bounded
+ * readiness wait before inspecting and planning from fresh state.
+ */
+export async function assertPackageManagerReady(
+  transport: AdbSessionTransport,
+  timeoutMs = DEVICE_STEP_TIMEOUT_MS,
+): Promise<void> {
+  const result = await withDeviceStepTimeout(
+    "confirm Android package service",
+    () => transport.shell(["cmd", "package", "path", "android"]),
+    timeoutMs,
+  );
+  if (isPackageManagerProbeReady(result)) {
+    return;
+  }
+
+  const response =
+    `${result.stdout}\n${result.stderr}`.trim() || `exit code ${result.exitCode}`;
+  throw new Error(
+    `Android's package service became unavailable before install. ` +
+      `No package changes were started. Wait for Android to finish starting, then retry. ` +
+      `Last response: ${response.slice(0, 240)}`,
   );
 }
 

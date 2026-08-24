@@ -21,7 +21,6 @@ const SERIAL_POLICY_TESTS = Object.freeze([
 const CONTRIBUTOR_POLICY_TESTS = Object.freeze([
   'cli-config.test.mjs',
   'cli-setup.test.mjs',
-  'connectivity.test.mjs',
   'fast-workflow.test.mjs',
   'fresh-install.test.mjs',
   'revival.test.mjs',

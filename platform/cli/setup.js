@@ -1,10 +1,24 @@
 'use strict';
 
 const fs = require('node:fs');
+const path = require('node:path');
 
-const { ENV_FILE, fail, info } = require('./context');
-const { operatorContract } = require('./command-spec');
-const { readSetupState, selectSetupTrack } = require('./setup-state');
+const {
+  parseEnvFile,
+  ENV_FILE,
+  fail,
+  info,
+  initialize,
+  validateRuntime,
+} = require('./context');
+const {
+  OPERATOR_COMPOSE,
+  PRODUCTION_DIR,
+  setupProduction,
+  validateProductionArtifacts,
+} = require('./production-setup');
+
+const PRODUCTION_USAGE = './revival setup production --domain HOST --acme-email EMAIL --operator-email EMAIL [--public-ip IPV4] [--profile pin|search|spotify|observability ... | --no-profiles]';
 
 function protectedFile(file, requireContent = true) {
   if (!fs.existsSync(file)) return false;
@@ -13,77 +27,106 @@ function protectedFile(file, requireContent = true) {
     (!requireContent || stat.size > 0);
 }
 
-function commandEvidence(commandId, selectedTrack) {
-  if (['setup.local', 'setup.contributor', 'setup.production', 'setup.pin'].includes(commandId)) {
-    return { complete: commandId === `setup.${selectedTrack}`, evidence: 'journey selection' };
-  }
-  if (commandId === 'init') {
-    return { complete: protectedFile(ENV_FILE), evidence: 'runtime configuration' };
-  }
-  if (commandId === 'version') return { complete: true, evidence: 'version descriptor' };
-  return { complete: false, evidence: 'run this command directly' };
+function regularFile(file) {
+  if (!fs.existsSync(file)) return false;
+  const stat = fs.lstatSync(file);
+  return !stat.isSymbolicLink() && stat.isFile();
 }
 
-function normalizeCommand(command) {
-  const usage = command.usage.replace(/ \[options\]$/, '');
-  return usage.startsWith('revival ') ? `./${usage}` : usage;
+function hasProductionSetupMarker() {
+  if (regularFile(OPERATOR_COMPOSE) || regularFile(path.join(PRODUCTION_DIR, 'realm.json'))) return true;
+  if (!regularFile(ENV_FILE)) return false;
+  try {
+    const values = parseEnvFile(ENV_FILE);
+    return [
+      'REVIVAL_PUBLIC_DOMAIN',
+      'REVIVAL_PUBLIC_ORIGIN',
+      'REVIVAL_ACME_EMAIL',
+      'REVIVAL_FIRST_OPERATOR_EMAIL',
+    ].some((name) => Boolean(values[name]?.trim()));
+  } catch {
+    return false;
+  }
 }
 
-function setupReport(selectedTrack) {
-  const contract = operatorContract();
-  const journey = contract.journeys.find((candidate) => candidate.id === selectedTrack);
-  if (!journey) throw new Error(`operator contract has no ${selectedTrack} journey`);
-  const commands = new Map(contract.commands.map((command) => [command.id, command]));
-  const steps = journey.steps.map((step) => {
-    const command = commands.get(step.commandId);
-    if (!command) throw new Error(`operator contract journey references unknown command ${step.commandId}`);
-    const evidence = commandEvidence(step.commandId, selectedTrack);
+function setupStatus() {
+  const production = hasProductionSetupMarker();
+  if (!protectedFile(ENV_FILE) && !production) {
     return Object.freeze({
-      id: step.id,
-      title: step.title,
-      status: evidence.complete ? 'complete' : 'required',
-      evidence: evidence.evidence,
-      action: normalizeCommand(command),
-      verification: step.verification,
+      schemaVersion: 3,
+      mode: 'uninitialized',
+      ok: false,
+      next: './revival setup local or ./revival setup production --help',
     });
-  });
-  return Object.freeze({ schemaVersion: 2, selectedTrack, label: journey.label, steps });
-}
-
-function parseJsonOnly(args, usage) {
-  if (args.length === 0) return false;
-  if (args.length === 1 && args[0] === '--json') return true;
-  fail(`usage: ${usage}`, 64);
-}
-
-function printSetupReport(report, json) {
-  if (json) return info(JSON.stringify(report));
-  info(`${report.label} (${report.selectedTrack})`);
-  for (const step of report.steps) {
-    const marker = step.status === 'complete' ? 'PASS' : 'DO';
-    info(`${marker.padEnd(4)} ${step.title}`);
-    if (step.status === 'required') info(`     action: ${step.action}`);
   }
+  try {
+    validateRuntime({ production });
+    if (production) validateProductionArtifacts();
+    return Object.freeze({
+      schemaVersion: 3,
+      mode: production ? 'production' : 'local',
+      ok: true,
+      next: production ? './revival deploy production --dry-run' : './revival doctor',
+    });
+  } catch (error) {
+    return Object.freeze({
+      schemaVersion: 3,
+      mode: production ? 'production' : 'local',
+      ok: false,
+      problem: error.message,
+      next: production ? './revival setup production' : './revival init',
+    });
+  }
+}
+
+function printStatus(report, json) {
+  if (json) info(JSON.stringify(report));
+  else {
+    info(`${report.ok ? 'PASS' : 'FAIL'} ${report.mode} setup ${report.ok ? 'is ready' : 'is not ready'}.`);
+    if (report.problem) info(`     ${report.problem}`);
+    info(`NEXT ${report.next}`);
+  }
+  if (!report.ok) process.exitCode = 1;
 }
 
 function setupCommand(args) {
   const operation = args.shift();
   try {
-    if (['local', 'contributor', 'production', 'pin'].includes(operation)) {
-      const json = parseJsonOnly(args, `./revival setup ${operation} [--json]`);
-      selectSetupTrack(operation);
-      return printSetupReport(setupReport(operation), json);
+    if (operation === 'production') {
+      const result = setupProduction(args);
+      info(`Production configuration is ready for ${result.origin}.`);
+      info(`Operator overlay: ${result.operatorCompose}`);
+      if (result.credentials) {
+        info(`First login: ${result.credentials} (delete this handoff after signing in).`);
+      } else {
+        info('First login handoff has been consumed or removed; setup did not recreate it.');
+      }
+      if (result.pinTrustRoot) info(`Generated Pin trust root: ${result.pinTrustRoot}`);
+      info(`Enabled optional profiles: ${result.profiles.join(', ') || 'none'}.`);
+      info('Production uses prebuilt images. Phase 2 will distribute the Compose application itself from the registry.');
+      info('NEXT ./revival doctor production');
+      return;
+    }
+    if (['local', 'contributor', 'pin'].includes(operation)) {
+      if (args.length > 0) fail(`usage: ./revival setup ${operation}`, 64);
+      initialize();
+      info(operation === 'pin'
+        ? 'NEXT ./revival pin doctor'
+        : 'NEXT ./revival doctor');
+      return;
     }
     if (operation === 'status') {
-      const json = parseJsonOnly(args, `./revival setup ${operation} [--json]`);
-      const state = readSetupState();
-      if (!state) fail('no setup journey is selected; run ./revival setup local|contributor|production|pin', 64);
-      return printSetupReport(setupReport(state.selectedTrack), json);
+      let json = false;
+      if (args.length === 1 && args[0] === '--json') json = true;
+      else if (args.length > 0) fail('usage: ./revival setup status [--json]', 64);
+      printStatus(setupStatus(), json);
+      return;
     }
-    fail('usage: ./revival setup local|contributor|production|pin [--json] | status [--json]', 64);
+    fail(`usage: ./revival setup local|contributor|pin | ${PRODUCTION_USAGE} | ./revival setup status [--json]`, 64);
   } catch (error) {
+    if (error.message === 'usage') fail(`usage: ${PRODUCTION_USAGE}`, 64);
     fail(error.message);
   }
 }
 
-module.exports = { protectedFile, commandEvidence, setupReport, setupCommand };
+module.exports = { PRODUCTION_USAGE, protectedFile, setupCommand, setupStatus };

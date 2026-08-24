@@ -11,7 +11,7 @@ the external directories created by `./revival init`.
 ./revival setup contributor
 ```
 
-Node 22.14, Rust 1.91.1, and Docker Compose 2.33.1 are the pinned host tools.
+Node 22.14, Rust 1.91.1, and Docker Compose 2.34.0 are the pinned host tools.
 Pin Android builds use the repository's Linux/x86-64 builder.
 
 ## Development

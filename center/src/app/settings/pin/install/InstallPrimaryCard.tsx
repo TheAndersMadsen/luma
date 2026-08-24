@@ -37,7 +37,6 @@ import type { InstallController } from "./useInstallController";
 
 export interface PrimaryCardHandlers {
   onPrimaryAction: () => void;
-  onRollback: () => void;
   onUninstall: () => void;
   onRemoveConflicts: () => void;
 }
@@ -54,9 +53,6 @@ function runAction(options: {
   }
 
   switch (action.key) {
-    case "rollback":
-      handlers.onRollback();
-      return;
     case "primaryAction":
       handlers.onPrimaryAction();
       return;

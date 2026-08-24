@@ -1,5 +1,6 @@
 import {
   createTimedAdbSessionTransport,
+  waitForPackageManagerReady,
   type AdbSessionTransport,
 } from "../device";
 import {
@@ -26,12 +27,14 @@ export interface UninstallOperationOptions {
 }
 
 export interface UninstallOperationInternals {
+  waitForPackageManagerReady(transport: AdbSessionTransport): Promise<void>;
   cleanupManagedPackages(transport: AdbSessionTransport): Promise<void>;
   restoreConfiguredPackages(transport: AdbSessionTransport): Promise<OperationWarning[]>;
   verifyUninstalledManagedState(transport: AdbSessionTransport): Promise<void>;
 }
 
 const defaultUninstallInternals: UninstallOperationInternals = {
+  waitForPackageManagerReady,
   cleanupManagedPackages,
   restoreConfiguredPackages,
   verifyUninstalledManagedState,
@@ -81,6 +84,17 @@ export async function runUninstallOperation(
   };
 
   try {
+    emitProgress({
+      phase: "Cleanup",
+      message: "Waiting for Android package services before uninstall.",
+      phaseIndex: 0,
+      phaseCompleted: 0,
+      phaseTotal: 1,
+      phaseUnitLabel: "step",
+      logEntry: true,
+    });
+    await internals.waitForPackageManagerReady(deviceTransport);
+
     emitProgress({
       phase: "Cleanup",
       message: "Uninstall cleanup started.",

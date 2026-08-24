@@ -31,19 +31,28 @@ The CLI verifies that a filter matches at least one test before running it.
 
 ## Production
 
-On the production host, configure runtime settings outside the checkout, then run:
+On the production host, generate the operator-local configuration, then run:
 
 ```sh
+./revival setup production \
+  --domain pin.example.com \
+  --acme-email admin@example.com \
+  --operator-email owner@example.com
 ./revival config check
 ./revival doctor production
 ./revival deploy production --dry-run
 ./revival deploy production --confirm
+./revival verify production
 ```
 
 Preflight checks the environment file, Docker Compose, and the resolved Compose
 model. Dry-run prints the exact Compose command without changing services.
-Confirmed deployment builds the current checkout and starts the production
-Compose project on this host.
+Confirmed deployment pulls and starts the configured prebuilt images; it does
+not compile application images from the checkout. It then runs production
+verification automatically. The standalone verification command reruns the
+same read-only checks: container health and release labels, Center's
+release/environment identity, OIDC, capture routing, and the Pin TLS edge when
+that profile is enabled.
 
 There is no alternate production command or migration mode. Fix the current
 Cosmos configuration and deploy again when a deployment fails.
@@ -53,7 +62,7 @@ Cosmos configuration and deploy again when a deployment fails.
 Use:
 
 ```sh
-./revival doctor production
+./revival verify production
 ```
 
 The deployment prints `docker compose ps` after its health wait. Center,

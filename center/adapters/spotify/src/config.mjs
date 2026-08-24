@@ -40,9 +40,6 @@ function parseBindAddress(rawValue) {
   if (isIP(address) === 0) {
     throw new Error("REVIVAL_SPOTIFY_ADAPTER_BIND_ADDRESS must be a literal IP address");
   }
-  if (address === "0.0.0.0" || address === "::") {
-    throw new Error("REVIVAL_SPOTIFY_ADAPTER_BIND_ADDRESS must not be a wildcard address");
-  }
   if (isLoopback(address)) {
     throw new Error("REVIVAL_SPOTIFY_ADAPTER_BIND_ADDRESS must not be a loopback address");
   }

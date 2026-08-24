@@ -65,6 +65,21 @@
       "documentationAnchor": "docs/operations.md#production"
     },
     {
+      "id": "verify.production",
+      "tokens": [
+        "verify",
+        "production"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "read-only",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Verify the running production services and public endpoints.",
+      "usage": "revival verify production [--env-file FILE] [--project-name NAME]",
+      "documentationAnchor": "docs/operations.md#production"
+    },
+    {
       "id": "stack.build",
       "tokens": [
         "stack",
@@ -384,8 +399,8 @@
       "effect": "local-mutation",
       "confirmationRequired": false,
       "exactSerialRequired": false,
-      "summary": "Guide setup of the local product.",
-      "usage": "revival setup local [options]",
+      "summary": "Initialize the local product configuration.",
+      "usage": "revival setup local",
       "documentationAnchor": "README.md#run-locally"
     },
     {
@@ -399,8 +414,8 @@
       "effect": "local-mutation",
       "confirmationRequired": false,
       "exactSerialRequired": false,
-      "summary": "Guide setup of a contributor workspace.",
-      "usage": "revival setup contributor [options]",
+      "summary": "Initialize a contributor workspace.",
+      "usage": "revival setup contributor",
       "documentationAnchor": "README.md#run-locally"
     },
     {
@@ -414,8 +429,8 @@
       "effect": "local-mutation",
       "confirmationRequired": false,
       "exactSerialRequired": false,
-      "summary": "Guide setup of a production operator workspace.",
-      "usage": "revival setup production [options]",
+      "summary": "Generate a complete portable production configuration.",
+      "usage": "revival setup production --domain HOST --acme-email EMAIL --operator-email EMAIL [options]",
       "documentationAnchor": "docs/operations.md#production"
     },
     {
@@ -429,8 +444,8 @@
       "effect": "local-mutation",
       "confirmationRequired": false,
       "exactSerialRequired": false,
-      "summary": "Guide setup for one exact Pin.",
-      "usage": "revival setup pin [options]",
+      "summary": "Initialize the host prerequisites for Pin setup.",
+      "usage": "revival setup pin",
       "documentationAnchor": "docs/operations.md#onboarding-a-pin"
     },
     {
@@ -444,7 +459,7 @@
       "effect": "read-only",
       "confirmationRequired": false,
       "exactSerialRequired": false,
-      "summary": "Show complete and still-required setup steps.",
+      "summary": "Validate setup from current artifacts without stored progress state.",
       "usage": "revival setup status [options]",
       "documentationAnchor": "README.md#run-locally"
     },
@@ -951,6 +966,18 @@
       "home": "runtime.env"
     },
     {
+      "name": "REVIVAL_PUBLIC_DOMAIN",
+      "group": "production",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
+      "name": "REVIVAL_ACME_EMAIL",
+      "group": "production",
+      "sensitivity": "identity",
+      "home": "runtime.env"
+    },
+    {
       "name": "COSMOS_OIDC_ISSUER",
       "group": "production",
       "sensitivity": "identity",
@@ -1131,6 +1158,18 @@
       "home": "runtime.env"
     },
     {
+      "name": "REVIVAL_SPOTIFY_ADAPTER_URL",
+      "group": "pin",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
+      "name": "REVIVAL_DEVICE_EDGE_IPV4",
+      "group": "pin",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
       "name": "REVIVAL_IDENTITY_ENABLED",
       "group": "local",
       "sensitivity": "operational",
@@ -1167,6 +1206,18 @@
       "home": "runtime.env"
     },
     {
+      "name": "REVIVAL_FIRST_OPERATOR_EMAIL",
+      "group": "production",
+      "sensitivity": "identity",
+      "home": "runtime.env"
+    },
+    {
+      "name": "REVIVAL_FIRST_OPERATOR_ID",
+      "group": "production",
+      "sensitivity": "identity",
+      "home": "runtime.env"
+    },
+    {
       "name": "COSMOS_ENROLLMENT_PINCODE",
       "group": "pin",
       "sensitivity": "secret",
@@ -1200,6 +1251,18 @@
       "name": "SEARXNG_SECRET",
       "group": "production",
       "sensitivity": "secret",
+      "home": "runtime.env"
+    },
+    {
+      "name": "COSMOS_SEARXNG_BASE_URL",
+      "group": "provider",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
+      "name": "COMPOSE_PROFILES",
+      "group": "production",
+      "sensitivity": "operational",
       "home": "runtime.env"
     },
     {

@@ -107,10 +107,11 @@ test("retired settings routes lead to a useful wearer page while Services stays 
   assert.match(services, /SpotifyServiceCard/);
   assert.doesNotMatch(services, /redirect\(/);
   assert.doesNotMatch(about, /redirect\(/);
-  assert.match(about, /REVIVAL_RELEASE_ID/);
-  assert.match(about, /REVIVAL_DEPLOYMENT_ENVIRONMENT/);
+  assert.match(about, /centerRuntimeIdentity/);
+  assert.doesNotMatch(about, /"unknown"/);
   assert.match(about, /dynamic\s*=\s*["']force-dynamic["']/);
   assert.match(about, /about-release/);
+  assert.match(about, /about-environment/);
 });
 
 test("device page avoids unsupported placeholder rows", async () => {

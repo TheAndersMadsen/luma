@@ -1,5 +1,5 @@
 import {
-  inspectInstallState,
+  inspectInstallStateAfterPackageManagerReady,
   type InstallInspectionResult,
 } from "../domain/inspection";
 import {
@@ -196,8 +196,10 @@ export async function verifyInstalledManagedState(
   const inspection = await withDeviceStepTimeout(
     "verify install phase",
     async () => {
+      // These bounded metadata polls already fail closed until package queries
+      // work, so verification does not need a second generic readiness loop.
       await waitForManagedPackageVersions(transport);
-      return inspectInstallState(transport, {
+      return inspectInstallStateAfterPackageManagerReady(transport, {
         target,
         readinessSettleDelayMs: 0,
       });

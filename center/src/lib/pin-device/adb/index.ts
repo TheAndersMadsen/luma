@@ -109,6 +109,7 @@ export type {
 export {
   AFTER_INSTALL_TIMEOUT_MS,
   APK_STAGING_NAME_RE,
+  assertPackageManagerReady,
   BATCH_INSTALL_TIMEOUT_MS,
   bootstrapInstaller,
   DEVICE_TMP_DIR,
