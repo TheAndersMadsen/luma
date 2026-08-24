@@ -57,12 +57,12 @@ RELEASE_TAG="v${RELEASE_VERSION}"
 RELEASE_BASE="https://github.com/TheAndersMadsen/ai-pin-revival/releases/download/${RELEASE_TAG}"
 
 curl --fail --location --remote-name \
-  "${RELEASE_BASE}/ai-pin-revival-operator-${RELEASE_VERSION}-linux-x64.tar.gz"
+  "${RELEASE_BASE}/ai-pin-revival-operator-${RELEASE_VERSION}-linux.tar.gz"
 curl --fail --location --remote-name \
   "${RELEASE_BASE}/ai-pin-revival-${RELEASE_VERSION}.release.json"
 curl --fail --location --remote-name "${RELEASE_BASE}/SHA256SUMS"
 sha256sum --check SHA256SUMS
-tar -xzf "ai-pin-revival-operator-${RELEASE_VERSION}-linux-x64.tar.gz"
+tar -xzf "ai-pin-revival-operator-${RELEASE_VERSION}-linux.tar.gz"
 cd "ai-pin-revival-operator-${RELEASE_VERSION}"
 ```
 

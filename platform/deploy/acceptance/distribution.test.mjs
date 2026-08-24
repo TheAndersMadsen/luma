@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { IMAGE_NAMES } from "../../distribution/release-descriptor.mjs";
+import { IMAGE_NAMES, IMAGE_PLATFORMS } from "../../distribution/release-descriptor.mjs";
 
 const root = path.resolve(import.meta.dirname, "../../..");
 const workflow = path.join(root, ".github/workflows/release-cli.yml");
@@ -26,11 +26,11 @@ function fixture(t) {
   IMAGE_NAMES.forEach((name, index) => {
     const imageDigest = digest(String(index + 1));
     fs.writeFileSync(path.join(receipts, `${name}.json`), `${JSON.stringify({
-      schemaVersion: 1,
+      schemaVersion: 2,
       name,
       reference: `ghcr.io/theandersmadsen/ai-pin-revival/${name}@${imageDigest}`,
       digest: imageDigest,
-      platform: "linux/amd64",
+      platforms: IMAGE_PLATFORMS,
     })}\n`);
   });
   const applicationDigest = digest("a");
@@ -50,7 +50,8 @@ test("tag release workflow publishes the exact hardened image and Compose bounda
   for (const match of source.matchAll(/^\s*uses:\s+[^@\s]+@([^\s#]+)/gmu)) {
     assert.match(match[1], /^[0-9a-f]{40}$/u, match[0]);
   }
-  assert.match(source, /platforms: linux\/amd64/u);
+  assert.match(source, /platforms: linux\/amd64,linux\/arm64/u);
+  assert.match(source, /docker\/setup-qemu-action@[0-9a-f]{40}/u);
   assert.match(source, /provenance: mode=max/u);
   assert.match(source, /sbom: true/u);
   assert.match(source, /cache-from: type=gha,scope=release-\$\{\{ matrix\.name \}\}/u);
@@ -98,13 +99,15 @@ test("operator release is lean, versioned, and bound to exact OCI digests", (t) 
   ], { cwd: root, encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr);
 
-  const archiveName = `ai-pin-revival-operator-${version}-linux-x64.tar.gz`;
+  const archiveName = `ai-pin-revival-operator-${version}-linux.tar.gz`;
   const archive = path.join(output, archiveName);
   const descriptorName = `ai-pin-revival-${version}.release.json`;
   const descriptor = JSON.parse(fs.readFileSync(path.join(output, descriptorName), "utf8"));
   assert.deepEqual(Object.keys(descriptor).sort(), [
-    "application", "images", "operator", "platform", "product", "revision", "schemaVersion", "source", "version",
+    "application", "images", "operator", "platforms", "product", "revision", "schemaVersion", "source", "version",
   ]);
+  assert.equal(descriptor.schemaVersion, 2);
+  assert.deepEqual(descriptor.platforms, IMAGE_PLATFORMS);
   assert.equal(descriptor.revision, revision);
   assert.equal(descriptor.application.digest, applicationDigest);
   assert.deepEqual(Object.keys(descriptor.images), IMAGE_NAMES);

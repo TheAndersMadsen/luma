@@ -153,7 +153,7 @@ export async function buildOperatorBundle(options) {
   const stageParent = await mkdtemp(join(output, ".operator-build-"));
   const directoryName = `ai-pin-revival-operator-${options.version}`;
   const stage = join(stageParent, directoryName);
-  const archiveName = `ai-pin-revival-operator-${options.version}-linux-x64.tar.gz`;
+  const archiveName = `ai-pin-revival-operator-${options.version}-linux.tar.gz`;
   const archiveTemporary = join(stageParent, archiveName);
   const archive = join(output, archiveName);
   const descriptorName = `ai-pin-revival-${options.version}.release.json`;

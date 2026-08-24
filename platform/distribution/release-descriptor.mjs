@@ -8,6 +8,7 @@ export const IMAGE_NAMES = Object.freeze([
   "keycloak",
   "spotify-adapter",
 ]);
+export const IMAGE_PLATFORMS = Object.freeze(["linux/amd64", "linux/arm64"]);
 
 const DIGEST = /^sha256:[0-9a-f]{64}$/u;
 const VERSION = /^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$/u;
@@ -43,8 +44,8 @@ function immutableReference(value, digest, label, { oci = false } = {}) {
 }
 
 export function validateImageReceipt(value, expectedName = null) {
-  exactFields(value, ["schemaVersion", "name", "reference", "digest", "platform"], "image receipt");
-  if (value.schemaVersion !== 1) throw new Error("image receipt schemaVersion must be 1");
+  exactFields(value, ["schemaVersion", "name", "reference", "digest", "platforms"], "image receipt");
+  if (value.schemaVersion !== 2) throw new Error("image receipt schemaVersion must be 2");
   if (!IMAGE_NAMES.includes(value.name) || (expectedName !== null && value.name !== expectedName)) {
     throw new Error(`unexpected image receipt name: ${value.name}`);
   }
@@ -53,8 +54,12 @@ export function validateImageReceipt(value, expectedName = null) {
   if (!value.reference.endsWith(`/${value.name}@${value.digest}`)) {
     throw new Error(`${value.name} reference must use the matching image repository`);
   }
-  if (value.platform !== "linux/amd64") throw new Error(`${value.name} platform must be linux/amd64`);
-  return Object.freeze({ ...value });
+  if (!Array.isArray(value.platforms) ||
+      value.platforms.length !== IMAGE_PLATFORMS.length ||
+      value.platforms.some((platform, index) => platform !== IMAGE_PLATFORMS[index])) {
+    throw new Error(`${value.name} platforms must be linux/amd64 and linux/arm64`);
+  }
+  return Object.freeze({ ...value, platforms: Object.freeze([...value.platforms]) });
 }
 
 export function validateApplicationReceipt(value) {
@@ -107,17 +112,17 @@ export function createReleaseDescriptor({
   exactFields(images, IMAGE_NAMES, "release images");
   for (const name of IMAGE_NAMES) normalizedImages[name] = validateImageReceipt(images[name], name);
   exactFields(operator, ["archive", "sha256"], "operator payload");
-  if (operator.archive !== `ai-pin-revival-operator-${version}-linux-x64.tar.gz`) {
+  if (operator.archive !== `ai-pin-revival-operator-${version}-linux.tar.gz`) {
     throw new Error("operator archive name does not match the release version");
   }
   required(operator.sha256, /^[0-9a-f]{64}$/u, "operator archive sha256");
   return Object.freeze({
-    schemaVersion: 1,
+    schemaVersion: 2,
     product: "Ai Pin Revival",
     version,
     revision,
     source: Object.freeze({ repository, tag }),
-    platform: Object.freeze({ os: "linux", architecture: "amd64" }),
+    platforms: IMAGE_PLATFORMS,
     application,
     images: Object.freeze(normalizedImages),
     operator: Object.freeze({ ...operator }),
