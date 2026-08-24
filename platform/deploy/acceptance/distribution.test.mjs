@@ -272,6 +272,7 @@ test("release publication model contains only digest images and portable storage
   assert.equal(compose.status, 0, compose.stderr);
   const model = JSON.parse(compose.stdout);
   assert.deepEqual(model.services.edge.entrypoint, ["envoy"]);
+  assert.equal(model.services.edge.user, "101:101");
   assert.ok(model.services["center-iroh-bridge"], "profiled bridge must be in the audited model");
   assert.equal(
     model.services["center-iroh-bridge"].image,
