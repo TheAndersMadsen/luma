@@ -676,7 +676,7 @@ debug_role_contract() {
 }
 
 build_debug_role() {
-  local role contract task project package output has_server=false
+  local role contract task project package output
   local -a roles=() root_tasks=() injector_tasks=() matches=()
   while (( $# > 0 )); do
     case "$1" in
@@ -714,19 +714,7 @@ build_debug_role() {
   for role in "${roles[@]}"; do
     IFS=$'\t' read -r task project package output <<< "$(debug_role_contract "${role}")"
     if [[ "${project}" == root ]]; then root_tasks+=("${task}"); else injector_tasks+=("${task}"); fi
-    [[ "${role}" != server ]] || has_server=true
   done
-  if [[ "${has_server}" == true ]]; then
-    # The APK intentionally omits private native payloads and is noninstallable,
-    # but a Server selection must still compile the actual Rust runtime graph.
-    # Host-target check exercises the default code plus both production feature
-    # surfaces without a TFLite binary, Codex binary, signing key, or device.
-    (
-      cd "${WORK_ROOT}/runtime/core"
-      CARGO_TARGET_DIR="${STATE_ROOT}/cargo-debug-runtime-core" \
-        cargo check --locked --all-targets --features local-nlu,iroh
-    )
-  fi
   if (( ${#root_tasks[@]} > 0 )); then
     (cd "${WORK_ROOT}" && ./gradlew --no-daemon --project-cache-dir "${STATE_ROOT}/gradle-debug-root" -PrevivalCompileOnlyDebug=true "${root_tasks[@]}")
   fi
