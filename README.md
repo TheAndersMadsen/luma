@@ -136,7 +136,7 @@ Pin builds and installs remain separate because they use protected signing
 material and can modify a physical device.
 
 ```sh
-./revival pin doctor --serial SERIAL
+./revival pin doctor
 ./revival pin check
 ./revival pin build-debug --role server
 ./revival pin release build --version YYYY-MM-DD.N --version-code INTEGER

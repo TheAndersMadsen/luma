@@ -2,14 +2,16 @@
 
 Every device command uses the exact serial printed by `adb devices`.
 
-## 1. Check the host and device
+## 1. Check the host, then connect the device
 
 ```sh
-./revival pin doctor --serial SERIAL
+./revival pin doctor
+adb devices -l
 ```
 
-The target must identify as the expected Pin product. Resolve USB, ADB,
-toolchain, signing-input, or storage failures before continuing.
+Resolve host toolchain, signing-input, and private-asset failures first. The Pin
+must then appear in the `device` state; the install plan later verifies its
+product identity, packages, and storage.
 
 ## 2. Prepare device identity
 

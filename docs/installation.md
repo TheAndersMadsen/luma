@@ -34,7 +34,7 @@ Override these locations with the `REVIVAL_*_DIR` variables documented in
 Pin Android builds require Linux/x86-64 Docker. Start with:
 
 ```sh
-./revival pin doctor --serial SERIAL
+./revival pin doctor
 ./revival pin check
 ```
 

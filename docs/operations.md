@@ -73,7 +73,7 @@ mounts read-only. There is no separate upload or remote publication step.
 ## Install one Pin
 
 ```sh
-./revival pin doctor --serial SERIAL
+./revival pin doctor
 ./revival pin install --serial SERIAL
 ./revival pin install --serial SERIAL --confirm
 ```

@@ -49,7 +49,7 @@ Run `./revival --help` or append `--help` to any command.
 
 | Command | Purpose |
 | --- | --- |
-| `revival pin doctor --serial SERIAL` | Check host, assets, and one exact device. |
+| `revival pin doctor` | Check host toolchain, signing inputs, and private assets. |
 | `revival pin check` | Run credential-free Pin source checks. |
 | `revival pin build-debug --role ROLE` | Build selected non-installable debug APKs. |
 | `revival pin release build --version YYYY-MM-DD.N --version-code INTEGER` | Build, sign, verify, and publish all five APK roles to Center's mounted store. |
