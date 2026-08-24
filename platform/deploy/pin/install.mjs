@@ -989,7 +989,7 @@ async function selectSerial(adbPath, requested) {
   );
 }
 
-function describePlan(plan, target) {
+export function describePlan(plan, target) {
   const kinds = {
     "routine-in-place": "in-place update from the canonical profile",
     "bootstrap-recovery": "installer bootstrap recovery (destructive)",
@@ -997,7 +997,7 @@ function describePlan(plan, target) {
   line(`  migration        ${plan.kind} — ${kinds[plan.kind]}`);
   line(`  packages         ${plan.packageRoles.length > 0 ? plan.packageRoles.join(", ") : "(none; already at target)"}`);
   line(`  keeping data of  ${plan.expectedExistingPackageNames.join(", ") || "(nothing; every package is new)"}`);
-  line(`  assets to load   ${plan.assetRoles.join(", ")}`);
+  line(`  assets to load   ${plan.requiredAssetRoles.join(", ") || "(none)"}`);
   line(
     `  installer        ${
       plan.retainedInstaller
@@ -1009,7 +1009,7 @@ function describePlan(plan, target) {
   line();
   line("  Phases the pipeline will run, in order:");
   const steps = {
-    Assets: `load and re-verify ${plan.assetRoles.length} APK${plan.assetRoles.length === 1 ? "" : "s"} from the local store`,
+    Assets: `load and re-verify ${plan.requiredAssetRoles.length} APK${plan.requiredAssetRoles.length === 1 ? "" : "s"} from the local store`,
     Cleanup: plan.shouldRunPreinstallCleanup || plan.shouldCleanupManagedPackages
       ? "run pre-install cleanup and remove the managed packages"
       : "skipped; the installer and app data are retained",
@@ -1183,7 +1183,9 @@ async function main(argv) {
   if (!result.success) {
     section("Failed");
     process.stderr.write(`error: install failed during ${result.failedPhase ?? "planning"}: ${result.error?.message}\n`);
-    if (result.rollbackAvailable) process.stderr.write("error: re-run the install after correcting the reported failure\n");
+    if (result.deviceChangesStarted) {
+      process.stderr.write("error: device changes started; inspect the Pin before retrying or uninstalling\n");
+    }
     await transport.disconnect();
     return 1;
   }

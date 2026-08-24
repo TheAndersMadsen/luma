@@ -30,7 +30,7 @@ const CONSOLE_PANES: ReadonlyArray<{ href: string; label: string; desc: string }
   {
     href: "/settings/pin/install",
     label: "Install software",
-    desc: "Install, roll back, or remove a verified Revival release.",
+    desc: "Install or remove a verified Revival release.",
   },
   {
     href: "/settings/pin/server",

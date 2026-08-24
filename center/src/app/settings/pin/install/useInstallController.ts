@@ -663,6 +663,7 @@ export function useInstallController(
           result: {
             ...installResult,
             warnings: [...conflictResult.warnings, ...installResult.warnings],
+            deviceChangesStarted: true,
           },
         };
 

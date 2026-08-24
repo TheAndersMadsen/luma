@@ -18,14 +18,12 @@
  *                           bootstrap-recovery path. Recovery itself demands a
  *                           second, explicit confirmation.
  *   runInstallOperation   — unsupported device state fails closed BEFORE any
- *                           download or device write; rollback is offered only
- *                           once the device has actually been mutated, so the
- *                           UI never invites a wearer to "roll back" a device
- *                           nothing was written to.
+ *                           download or device write, and records whether any
+ *                           device change actually started.
  *   runRemoveConflicts    — a package that survives its own uninstall is a
  *                           failure, not a warning; a wedged device times out
  *                           instead of hanging.
- *   runRollback/Uninstall — cleanup → restore → verify runs in that order, and
+ *   runUninstall          — cleanup → restore → verify runs in that order, and
  *                           a verification failure fails the operation.
  *   deriveInstallController— the primary action is disabled unless the device
  *                           proved its credential-encrypted storage is
@@ -44,6 +42,7 @@
 // siblings, `@/lib/...` aliases, barrel directories) and Node does not.
 import "./tsResolve.mjs";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { describe, it } from "node:test";
 import {
   deviceShell,
@@ -68,7 +67,6 @@ const {
   lockResolvedInstallTarget,
   runInstallOperation,
   runRemoveConflictsOperation,
-  runRollbackOperation,
   runUninstallOperation,
 } = await import("../src/lib/pin-install/index.ts?pin-install-ops-test");
 
@@ -84,6 +82,13 @@ const { AdbDeviceStepTimeoutError, waitForPackageManagerReady } = await import(
 );
 const { verifyInstalledManagedState } = await import(
   "../src/lib/pin-install/ops/shared.ts"
+);
+const installControllerSource = await readFile(
+  new URL(
+    "../src/app/settings/pin/install/useInstallController.ts",
+    import.meta.url,
+  ),
+  "utf8",
 );
 
 /**
@@ -232,6 +237,7 @@ function createInternals(target, inspection) {
     })),
     inspectInstallStateAfterPackageManagerReady: spy(async () => inspection),
     waitForPackageManagerReady: spy(),
+    assertPackageManagerReady: spy(),
     runPreinstallCleanupCommand: spy(async () => ({ success: true, message: "ok" })),
     cleanupManagedPackages: spy(),
     bootstrapFinalInstaller: spy(),
@@ -253,6 +259,11 @@ describe("createInstallPlan", () => {
 
     assert.equal(plan.kind, "routine-in-place");
     assert.deepEqual(plan.packageRoles, ["hook", "server", "injector"]);
+    assert.deepEqual(plan.requiredAssetRoles, [
+      "hookApk",
+      "serverApk",
+      "injectorApk",
+    ]);
     assert.deepEqual(plan.expectedExistingPackageNames, [
       MANAGED_PACKAGES.hook,
       MANAGED_PACKAGES.server,
@@ -311,6 +322,35 @@ describe("createInstallPlan", () => {
     assert.equal(plan.shouldRunPreinstallCleanup, false);
     assert.equal(plan.shouldCleanupManagedPackages, false);
     assert.equal(plan.shouldBootstrapInstaller, false);
+    assert.deepEqual(plan.requiredAssetRoles, [
+      "hookApk",
+      "serverApk",
+      "injectorApk",
+    ]);
+  });
+
+  it("omits the large Server APK when only Hook needs an update", () => {
+    const target = createResolvedInstallTargetFixture();
+    const plan = createInstallPlan({
+      transport: createFakeTransport(),
+      target,
+      inspection: createInspection({
+        target,
+        packageOverrides: {
+          server: {
+            versionName: target.version,
+            versionComparison: "equal",
+          },
+          injector: {
+            versionName: target.version,
+            versionComparison: "equal",
+          },
+        },
+      }),
+    });
+
+    assert.deepEqual(plan.packageRoles, ["hook"]);
+    assert.deepEqual(plan.requiredAssetRoles, ["hookApk"]);
   });
 
   it("requires separate confirmation before a missing installer recovery plan", () => {
@@ -350,6 +390,13 @@ describe("createInstallPlan", () => {
     assert.equal(plan.kind, "bootstrap-recovery");
     assert.equal(plan.shouldCleanupManagedPackages, true);
     assert.equal(plan.shouldBootstrapInstaller, true);
+    assert.deepEqual(plan.requiredAssetRoles, [
+      "installerApk",
+      "exploitApk",
+      "hookApk",
+      "serverApk",
+      "injectorApk",
+    ]);
   });
 });
 
@@ -366,6 +413,7 @@ describe("runInstallOperation", () => {
 
     assert.equal(result.success, true);
     assert.equal(internals.waitForPackageManagerReady.calls.length, 1);
+    assert.equal(internals.assertPackageManagerReady.calls.length, 1);
     assert.equal(
       internals.inspectInstallStateAfterPackageManagerReady.calls.length,
       1,
@@ -375,8 +423,6 @@ describe("runInstallOperation", () => {
       internals.downloadInstallTargetAssets.calls[0];
     assert.equal(downloadTarget, target);
     assert.deepEqual(downloadOptions.assetRoles, [
-      "installerApk",
-      "exploitApk",
       "hookApk",
       "serverApk",
       "injectorApk",
@@ -406,7 +452,42 @@ describe("runInstallOperation", () => {
     );
   });
 
-  it("uses one generic package-readiness probe through the real verifier", async () => {
+  it("downloads only the APK selected by the fresh plan", async () => {
+    const target = createResolvedInstallTargetFixture();
+    const freshInspection = createInspection({
+      target,
+      packageOverrides: {
+        server: {
+          versionName: target.version,
+          versionComparison: "equal",
+        },
+        injector: {
+          versionName: target.version,
+          versionComparison: "equal",
+        },
+      },
+    });
+    const internals = createInternals(target, freshInspection);
+
+    const result = await runInstallOperation(
+      {
+        transport: createFakeTransport(),
+        target,
+        inspection: createInspection({ target }),
+      },
+      internals,
+    );
+
+    assert.equal(result.success, true);
+    const [, downloadOptions] =
+      internals.downloadInstallTargetAssets.calls[0];
+    assert.deepEqual(downloadOptions.assetRoles, ["hookApk"]);
+    assert.equal(downloadOptions.assetRoles.includes("serverApk"), false);
+    const [, , installOptions] = internals.installManagedPackages.calls[0];
+    assert.deepEqual(installOptions.roles, ["hook"]);
+  });
+
+  it("uses one bounded readiness gate through the real verifier", async () => {
     const target = createResolvedInstallTargetFixture();
     const inspection = createInspection({ target });
     const transport = fakeDevice(
@@ -430,6 +511,7 @@ describe("runInstallOperation", () => {
 
     assert.equal(result.success, true);
     assert.equal(internals.waitForPackageManagerReady.calls.length, 1);
+    assert.equal(internals.assertPackageManagerReady.calls.length, 1);
     assert.equal(internals.verifyInstalledManagedState.calls.length, 1);
     assert.equal(
       transport.commands.filter(
@@ -439,7 +521,7 @@ describe("runInstallOperation", () => {
     );
   });
 
-  it("refreshes state after asset validation but fails before mutations for unsupported state", async () => {
+  it("fails from fresh state before downloads or mutations for unsupported state", async () => {
     const target = createResolvedInstallTargetFixture();
     const inspection = createInspection({
       target,
@@ -453,16 +535,17 @@ describe("runInstallOperation", () => {
     );
 
     assert.equal(result.success, false);
-    // Non-device assets are safe to validate first. Readiness and a fresh
-    // inspection then run before planning refuses the unsupported device.
+    // The stale UI snapshot is ignored; the post-readiness inspection drives
+    // planning and refuses before a large release asset is fetched.
     assert.equal(result.failedPhase, null);
-    assert.equal(result.rollbackAvailable, false);
+    assert.equal(result.deviceChangesStarted, false);
     assert.equal(
       internals.inspectInstallStateAfterPackageManagerReady.calls.length,
       1,
     );
     assert.equal(internals.waitForPackageManagerReady.calls.length, 1);
-    assert.equal(internals.downloadInstallTargetAssets.calls.length, 1);
+    assert.equal(internals.downloadInstallTargetAssets.calls.length, 0);
+    assert.equal(internals.assertPackageManagerReady.calls.length, 0);
     assert.equal(internals.installManagedPackages.calls.length, 0);
   });
 
@@ -487,9 +570,10 @@ describe("runInstallOperation", () => {
     );
 
     assert.match(result.error?.message ?? "", /separate explicit confirmation/);
-    assert.equal(result.rollbackAvailable, false);
-    assert.equal(internals.downloadInstallTargetAssets.calls.length, 1);
+    assert.equal(result.deviceChangesStarted, false);
+    assert.equal(internals.downloadInstallTargetAssets.calls.length, 0);
     assert.equal(internals.waitForPackageManagerReady.calls.length, 1);
+    assert.equal(internals.assertPackageManagerReady.calls.length, 0);
     assert.equal(internals.cleanupManagedPackages.calls.length, 0);
   });
 
@@ -521,6 +605,15 @@ describe("runInstallOperation", () => {
     assert.equal(result.success, true);
     assert.equal(internals.cleanupManagedPackages.calls.length, 1);
     assert.equal(internals.bootstrapFinalInstaller.calls.length, 1);
+    const [, downloadOptions] =
+      internals.downloadInstallTargetAssets.calls[0];
+    assert.deepEqual(downloadOptions.assetRoles, [
+      "installerApk",
+      "exploitApk",
+      "hookApk",
+      "serverApk",
+      "injectorApk",
+    ]);
 
     const [, , installOptions] = internals.installManagedPackages.calls[0];
     assert.deepEqual(installOptions.roles, ["hook", "server", "injector"]);
@@ -594,6 +687,9 @@ describe("runInstallOperation", () => {
       await waitForPackageManagerReady(device, 1_000, 0, 0);
       events.push("package-manager-ready");
     };
+    internals.assertPackageManagerReady.implementation = async () => {
+      events.push("package-manager-still-ready");
+    };
     internals.installManagedPackages.implementation = async () => {
       events.push("install-mutation");
     };
@@ -610,15 +706,17 @@ describe("runInstallOperation", () => {
 
     assert.equal(result.success, true);
     assert.deepEqual(events, [
-      "assets-verified",
       "package-unavailable",
       "package-ready",
       "package-manager-ready",
       "fresh-post-ready-inspection",
+      "assets-verified",
+      "package-manager-still-ready",
       "install-mutation",
     ]);
     assert.equal(packageProbe, 2);
     assert.equal(internals.waitForPackageManagerReady.calls.length, 1);
+    assert.equal(internals.assertPackageManagerReady.calls.length, 1);
     assert.equal(
       internals.inspectInstallStateAfterPackageManagerReady.calls.length,
       1,
@@ -632,7 +730,7 @@ describe("runInstallOperation", () => {
     assert.equal(verificationPolicy.mode, "in-place");
   });
 
-  it("does not advertise rollback when asset preflight fails", async () => {
+  it("records no device changes when asset verification fails", async () => {
     const target = createResolvedInstallTargetFixture();
     const inspection = createInspection({ target });
     const internals = createInternals(target, inspection);
@@ -646,7 +744,36 @@ describe("runInstallOperation", () => {
     );
 
     assert.equal(result.success, false);
-    assert.equal(result.rollbackAvailable, false);
+    assert.equal(result.deviceChangesStarted, false);
+    assert.equal(internals.assertPackageManagerReady.calls.length, 0);
+    assert.equal(internals.installManagedPackages.calls.length, 0);
+  });
+
+  it("fails one-shot readiness without a second wait or mutation", async () => {
+    const target = createResolvedInstallTargetFixture();
+    const inspection = createInspection({ target });
+    const internals = createInternals(target, inspection);
+    internals.assertPackageManagerReady.implementation = async () => {
+      throw new Error(
+        "Android's package service became unavailable before install. " +
+          "No package changes were started. Last response: cmd: Can't find service: package",
+      );
+    };
+
+    const result = await runInstallOperation(
+      { transport: createFakeTransport(), target, inspection },
+      internals,
+    );
+
+    assert.equal(result.success, false);
+    assert.equal(result.failedPhase, null);
+    assert.equal(result.deviceChangesStarted, false);
+    assert.equal(internals.waitForPackageManagerReady.calls.length, 1);
+    assert.equal(internals.assertPackageManagerReady.calls.length, 1);
+    assert.equal(internals.downloadInstallTargetAssets.calls.length, 1);
+    assert.equal(internals.runPreinstallCleanupCommand.calls.length, 0);
+    assert.equal(internals.cleanupManagedPackages.calls.length, 0);
+    assert.equal(internals.bootstrapFinalInstaller.calls.length, 0);
     assert.equal(internals.installManagedPackages.calls.length, 0);
   });
 
@@ -690,14 +817,13 @@ describe("runInstallOperation", () => {
     );
 
     assert.equal(result.success, false);
-    // Nothing was removed and nothing was cleared, so there is nothing to roll
-    // back: the device is exactly as the wearer handed it over.
+    // Nothing was removed or cleared; the device is unchanged.
     assert.equal(internals.runPreinstallCleanupCommand.calls.length, 0);
     assert.equal(internals.cleanupManagedPackages.calls.length, 0);
-    assert.equal(result.rollbackAvailable, false);
+    assert.equal(result.deviceChangesStarted, false);
   });
 
-  it("does not advertise rollback when provider capability preflight fails", async () => {
+  it("records no device changes when provider capability preflight fails", async () => {
     const target = createResolvedInstallTargetFixture();
     const inspection = createInspection({ target });
     const internals = createInternals(target, inspection);
@@ -714,7 +840,7 @@ describe("runInstallOperation", () => {
 
     assert.equal(result.success, false);
     assert.equal(result.failedPhase, "Install");
-    assert.equal(result.rollbackAvailable, false);
+    assert.equal(result.deviceChangesStarted, false);
   });
 
   it("marks mutation as started only when the in-place provider install begins", async () => {
@@ -737,9 +863,7 @@ describe("runInstallOperation", () => {
 
     assert.equal(result.success, false);
     assert.equal(result.failedPhase, "Install");
-    // The device was written to, so rollback is a real option — the mirror of
-    // the two preflight cases above.
-    assert.equal(result.rollbackAvailable, true);
+    assert.equal(result.deviceChangesStarted, true);
   });
 });
 
@@ -928,96 +1052,8 @@ describe("runRemoveConflictsOperation", () => {
 });
 
 /* ------------------------------------------------------------------ *
- * rollback and uninstall: putting the device back
+ * uninstall: removing the managed runtime and restoring stock packages
  * ------------------------------------------------------------------ */
-
-describe("runRollbackOperation", () => {
-  it("returns success when cleanup, restore, and verify all succeed", async () => {
-    const progress = spy();
-    const result = await runRollbackOperation(
-      { transport: createFakeTransport("Fake Device"), onProgress: progress },
-      {
-        async waitForPackageManagerReady() {},
-        async cleanupManagedPackages() {},
-        async restoreConfiguredPackages() {
-          return [];
-        },
-        async verifyUninstalledManagedState() {},
-      },
-    );
-
-    assert.equal(result.success, true);
-    assert.equal(result.error, null);
-    assertCompletedPhase(lastEvent(progress), "Verify");
-  });
-
-  it("returns failure when cleanup or verification fails", async () => {
-    const result = await runRollbackOperation(
-      { transport: createFakeTransport("Fake Device") },
-      {
-        async waitForPackageManagerReady() {},
-        async cleanupManagedPackages() {
-          throw new Error("cleanup failed");
-        },
-        async restoreConfiguredPackages() {
-          return [];
-        },
-        async verifyUninstalledManagedState() {},
-      },
-    );
-
-    assert.equal(result.success, false);
-    assert.match(result.error?.message ?? "", /cleanup failed/);
-  });
-
-  it("returns failure when a device-side rollback step times out", async () => {
-    const result = await runRollbackOperation(
-      { transport: createFakeTransport("Fake Device") },
-      {
-        async waitForPackageManagerReady() {},
-        async cleanupManagedPackages() {},
-        async restoreConfiguredPackages() {
-          throw new AdbDeviceStepTimeoutError("shell pm enable --user 0 humane.ota");
-        },
-        async verifyUninstalledManagedState() {},
-      },
-    );
-
-    assert.equal(result.success, false);
-    assert.ok(result.error instanceof AdbDeviceStepTimeoutError);
-    // The bound is part of the contract: the wearer is told how long the step
-    // was given, not left with a bare "failed".
-    assert.match(result.error.message, /60000ms/);
-  });
-
-  it("does not mutate rollback state when package readiness fails", async () => {
-    const mutations = [];
-    let readinessCalls = 0;
-    const result = await runRollbackOperation(
-      { transport: createFakeTransport("Fake Device") },
-      {
-        async waitForPackageManagerReady() {
-          readinessCalls += 1;
-          throw new Error("Android package service is not ready");
-        },
-        async cleanupManagedPackages() {
-          mutations.push("cleanup");
-        },
-        async restoreConfiguredPackages() {
-          mutations.push("restore");
-          return [];
-        },
-        async verifyUninstalledManagedState() {
-          mutations.push("verify");
-        },
-      },
-    );
-
-    assert.equal(result.success, false);
-    assert.equal(readinessCalls, 1);
-    assert.deepEqual(mutations, []);
-  });
-});
 
 describe("runUninstallOperation", () => {
   it("runs cleanup, restore, and verify in order", async () => {
@@ -1122,6 +1158,28 @@ describe("runUninstallOperation", () => {
     assert.equal(result.success, false);
     assert.equal(readinessCalls, 1);
     assert.deepEqual(mutations, []);
+  });
+});
+
+describe("Center installer inspection scheduling", () => {
+  it("streams progress without launching concurrent inspections", () => {
+    assert.doesNotMatch(installControllerSource, /inspectionRefreshInFlight/);
+    assert.doesNotMatch(
+      installControllerSource,
+      /operation-inspection-updated/,
+    );
+    assert.match(installControllerSource, /onProgress: progress\.onProgress/);
+    assert.match(
+      installControllerSource,
+      /onProgress: installProgress\.onProgress/,
+    );
+  });
+
+  it("does not reinspect after a package readiness failure", () => {
+    assert.match(
+      installControllerSource,
+      /isPackageReadinessError\(result\.error\)/,
+    );
   });
 });
 
@@ -1344,9 +1402,7 @@ describe("deriveInstallControllerCommands", () => {
           inspection: null,
           error: null,
           failedPhase: null,
-          rollbackAttempted: false,
-          rollbackSucceeded: false,
-          rollbackAvailable: false,
+          deviceChangesStarted: true,
         },
       },
     });
@@ -1407,13 +1463,6 @@ function createCommands() {
     connect: { visible: false, label: "Connect Device", disabled: false, reason: null },
     primaryAction: { visible: true, label: "Reinstall", disabled: false, reason: null },
     installApkFile: { visible: true, label: "Install APK File", disabled: false, reason: null },
-    rollback: {
-      visible: false,
-      label: "Rollback Install",
-      disabled: false,
-      reason: null,
-      prominent: false,
-    },
     uninstall: { visible: true, label: "Uninstall", disabled: false, reason: null },
     removeConflicts: {
       visible: true,
@@ -1445,9 +1494,7 @@ describe("derivePrimaryCardViewModel", () => {
               "Timed out waiting for Android's package service.",
             ),
             failedPhase: null,
-            rollbackAttempted: false,
-            rollbackSucceeded: false,
-            rollbackAvailable: false,
+            deviceChangesStarted: false,
           },
         },
       }),

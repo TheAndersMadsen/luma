@@ -260,6 +260,7 @@ const { join } = await import("node:path");
 const runShell = promisify(execFile);
 
 const {
+  assertPackageManagerReady,
   isValidApkStagingName,
   stageSystemApkBatchInstall,
   waitForPackageManagerReady,
@@ -308,6 +309,7 @@ test("package readiness timeout preserves the last response and retry guidance",
   await assert.rejects(
     () => waitForPackageManagerReady(transport, 20, 1, 0),
     (error) => {
+      assert.match(error.message, /Timed out after 20ms/);
       assert.match(error.message, /wait for startup to finish, then retry/i);
       assert.match(error.message, /ADB shell unavailable while Android is starting/);
       return true;
@@ -329,6 +331,27 @@ test("package readiness bounds a probe that never returns", async () => {
     /wait for Android package service/,
   );
   assert.ok(Date.now() - startedAt < 500);
+});
+
+test("the pre-mutation package assertion probes once and fails closed", async () => {
+  let probes = 0;
+  const transport = {
+    async shell(command) {
+      assert.equal(command.join(" "), "cmd package path android");
+      probes += 1;
+      return {
+        stdout: "",
+        stderr: "cmd: Can't find service: package",
+        exitCode: 20,
+      };
+    },
+  };
+
+  await assert.rejects(
+    () => assertPackageManagerReady(transport, 20),
+    /No package changes were started.*Can't find service: package/,
+  );
+  assert.equal(probes, 1);
 });
 
 test("a hostile value in a shell sink is inert on a real shell", async () => {
