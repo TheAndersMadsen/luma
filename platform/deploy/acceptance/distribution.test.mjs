@@ -82,6 +82,19 @@ test("tag release workflow publishes the exact hardened image and Compose bounda
   assert.match(production, /traefik:v3\.6\.25@sha256:[0-9a-f]{64}/u);
   assert.doesNotMatch(production, /^\s+build:/mu);
   assert.match(fs.readFileSync(path.join(root, "platform/compose/development.yaml"), "utf8"), /^\s+build:/mu);
+
+  for (const dockerfile of [
+    "cosmos/Dockerfile",
+    "platform/containers/center-iroh-bridge/Dockerfile",
+  ]) {
+    const rustImage = fs.readFileSync(path.join(root, dockerfile), "utf8");
+    assert.match(rustImage, /^ARG TARGETARCH$/mu, dockerfile);
+    const cacheMounts = [...rustImage.matchAll(/--mount=type=cache,([^ \\\n]+)/gu)];
+    assert.ok(cacheMounts.length > 0, `${dockerfile} must use BuildKit caches`);
+    for (const [, options] of cacheMounts) {
+      assert.match(options, /id=[^,]*\$\{TARGETARCH\}/u, `${dockerfile} cache must be architecture-scoped`);
+    }
+  }
 });
 
 test("operator release is lean, versioned, and bound to exact OCI digests", (t) => {
