@@ -10,6 +10,7 @@ import {
   createDockerBuildInvocation,
   createDockerPrefetchInvocation,
   createDockerRunInvocation,
+  nativeDockerPlatform,
   parseBuilderMetadata,
   parseLiteralSigningEnvironment,
   publishRelease,
@@ -62,7 +63,7 @@ test("Docker release flow separates dependency fetch from signing inputs", () =>
     versionCode: 202_608_231,
   };
   const build = createDockerBuildInvocation({ sourceRoot: common.sourceRoot, image: common.image });
-  assert.deepEqual(build.args.slice(0, 3), ["build", "--platform", "linux/amd64"]);
+  assert.deepEqual(build.args.slice(0, 3), ["build", "--platform", nativeDockerPlatform()]);
   const prefetch = createDockerPrefetchInvocation(common);
   assert.ok(prefetch.args.includes("prefetch-release"));
   assert.ok(prefetch.args.includes("EMBED_MODEL_CACHE_DIR=/cache/huggingface"));

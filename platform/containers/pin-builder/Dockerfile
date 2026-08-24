@@ -1,8 +1,8 @@
 # syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
 
 # The image digests make the language runtimes repeatable even if their tags
-# are later moved. Android's Linux NDK toolchain is x86_64-only, so this image
-# intentionally targets linux/amd64 (including under emulation on Apple Silicon).
+# are later moved. Run Java and Rust on the host architecture; Android's Linux
+# SDK/NDK binaries remain x86_64 and use binfmt only when they are invoked.
 ARG ANDROID_COMMAND_LINE_TOOLS_VERSION=15859902
 ARG ANDROID_COMMAND_LINE_TOOLS_SHA256=4e4c464f145a7512b57d088ac6c278c03c9eea610886b35a5e0804e74eedf583
 ARG ANDROID_PLATFORM_VERSION=34
@@ -18,6 +18,10 @@ ARG CARGO_NDK_ARCHIVE_URL=https://github.com/bbqsrc/cargo-ndk/releases/download/
 ARG CARGO_NDK_ARCHIVE_ROOT=cargo-ndk-x86_64-unknown-linux-musl-v4.1.2
 ARG CARGO_NDK_ARCHIVE_SIZE=2736539
 ARG CARGO_NDK_ARCHIVE_SHA256=dc148bebbfcd7d5355e9858530d5a69c20ce69cf3268c54b9f63c60cb4c9a966
+ARG CARGO_NDK_ARM64_ARCHIVE_URL=https://github.com/bbqsrc/cargo-ndk/releases/download/v4.1.2/cargo-ndk-aarch64-unknown-linux-musl-v4.1.2.tgz
+ARG CARGO_NDK_ARM64_ARCHIVE_ROOT=cargo-ndk-aarch64-unknown-linux-musl-v4.1.2
+ARG CARGO_NDK_ARM64_ARCHIVE_SIZE=2642233
+ARG CARGO_NDK_ARM64_ARCHIVE_SHA256=2d9f4f28f797ee98a97a5b760197e4e64f2ce2967d716cf57c69ad01f4ed72ba
 
 # Download and extract the architecture-independent Android SDK contents on
 # the native build platform. On an ARM contributor host this avoids running
@@ -95,45 +99,53 @@ RUN set -eux; \
     test ! -e "/opt/android-sdk/ndk/${ANDROID_NDK_ARCHIVE_ROOT}"; \
     rm -rf /tmp/android-ndk /tmp/android-ndk.zip
 
-# Keep the target-platform component manifest as inert input. Docker can copy
-# it across stages without executing the x86_64 rustup binary under QEMU.
+# The final image uses the same architecture as the build host.
 FROM rust:1.91.1-bookworm@sha256:c1e5f19e773b7878c3f7a805dd00a495e747acbdc76fb2337a4ebf0418896b33 AS rust_runtime
 
-# rustup's x86_64 binary is unreliable under some ARM-host QEMU versions.
-# Install the host-independent Android target on the native build platform,
-# normalize it for the final x86_64 sysroot, and use cargo-ndk's upstream
-# prebuilt x86_64 release asset instead of compiling it under emulation.
+# Install the Android Rust target and matching cargo-ndk binary natively.
 FROM --platform=$BUILDPLATFORM rust:1.91.1-bookworm@sha256:c1e5f19e773b7878c3f7a805dd00a495e747acbdc76fb2337a4ebf0418896b33 AS rust_target_native
+ARG TARGETARCH
 ARG CARGO_NDK_VERSION
 ARG CARGO_NDK_ARCHIVE_URL
 ARG CARGO_NDK_ARCHIVE_ROOT
 ARG CARGO_NDK_ARCHIVE_SIZE
 ARG CARGO_NDK_ARCHIVE_SHA256
-COPY --from=rust_runtime /usr/local/rustup/toolchains/1.91.1-x86_64-unknown-linux-gnu/lib/rustlib/components /tmp/x86-rust-components
+ARG CARGO_NDK_ARM64_ARCHIVE_URL
+ARG CARGO_NDK_ARM64_ARCHIVE_ROOT
+ARG CARGO_NDK_ARM64_ARCHIVE_SIZE
+ARG CARGO_NDK_ARM64_ARCHIVE_SHA256
 RUN set -eux; \
     rustc --version; \
     rustup target add aarch64-linux-android --toolchain 1.91.1; \
     rust_sysroot="$(rustc --print sysroot)"; \
     grep -Fx rust-std-aarch64-linux-android "${rust_sysroot}/lib/rustlib/components"; \
-    test -f "${rust_sysroot}/lib/rustlib/manifest-rust-std-aarch64-linux-android"; \
-    mkdir -p /opt/rust-target/lib/rustlib; \
-    cp -a "${rust_sysroot}/lib/rustlib/aarch64-linux-android" /opt/rust-target/lib/rustlib/; \
-    cp -a "${rust_sysroot}/lib/rustlib/manifest-rust-std-aarch64-linux-android" /opt/rust-target/lib/rustlib/; \
-    cp /tmp/x86-rust-components /opt/rust-target/lib/rustlib/components; \
-    test "$(grep -Fxc rust-std-aarch64-linux-android /opt/rust-target/lib/rustlib/components)" = 0; \
-    printf '%s\n' rust-std-aarch64-linux-android >> /opt/rust-target/lib/rustlib/components; \
-    test "$(grep -Fxc rust-std-aarch64-linux-android /opt/rust-target/lib/rustlib/components)" = 1
+    test -f "${rust_sysroot}/lib/rustlib/manifest-rust-std-aarch64-linux-android"
 RUN set -eux; \
+    case "${TARGETARCH}" in \
+      amd64) \
+        cargo_ndk_url="${CARGO_NDK_ARCHIVE_URL}"; \
+        cargo_ndk_root="${CARGO_NDK_ARCHIVE_ROOT}"; \
+        cargo_ndk_size="${CARGO_NDK_ARCHIVE_SIZE}"; \
+        cargo_ndk_sha256="${CARGO_NDK_ARCHIVE_SHA256}" \
+        ;; \
+      arm64) \
+        cargo_ndk_url="${CARGO_NDK_ARM64_ARCHIVE_URL}"; \
+        cargo_ndk_root="${CARGO_NDK_ARM64_ARCHIVE_ROOT}"; \
+        cargo_ndk_size="${CARGO_NDK_ARM64_ARCHIVE_SIZE}"; \
+        cargo_ndk_sha256="${CARGO_NDK_ARM64_ARCHIVE_SHA256}" \
+        ;; \
+      *) echo "unsupported Pin builder architecture: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
     curl --fail --location --silent --show-error \
-      "${CARGO_NDK_ARCHIVE_URL}" \
+      "${cargo_ndk_url}" \
       --output /tmp/cargo-ndk.tgz; \
-    test "$(stat --format='%s' /tmp/cargo-ndk.tgz)" = "${CARGO_NDK_ARCHIVE_SIZE}"; \
-    echo "${CARGO_NDK_ARCHIVE_SHA256}  /tmp/cargo-ndk.tgz" | sha256sum --check --strict; \
+    test "$(stat --format='%s' /tmp/cargo-ndk.tgz)" = "${cargo_ndk_size}"; \
+    echo "${cargo_ndk_sha256}  /tmp/cargo-ndk.tgz" | sha256sum --check --strict; \
     mkdir -p /tmp/cargo-ndk /opt/cargo-ndk/bin; \
     tar -xzf /tmp/cargo-ndk.tgz -C /tmp/cargo-ndk; \
-    test "$(find /tmp/cargo-ndk -mindepth 1 -maxdepth 1 -type d -printf '%f\n')" = "${CARGO_NDK_ARCHIVE_ROOT}"; \
+    test "$(find /tmp/cargo-ndk -mindepth 1 -maxdepth 1 -type d -printf '%f\n')" = "${cargo_ndk_root}"; \
     for executable in cargo-ndk cargo-ndk-env cargo-ndk-runner cargo-ndk-test; do \
-      install -m 0755 "/tmp/cargo-ndk/${CARGO_NDK_ARCHIVE_ROOT}/${executable}" "/opt/cargo-ndk/bin/${executable}"; \
+      install -m 0755 "/tmp/cargo-ndk/${cargo_ndk_root}/${executable}" "/opt/cargo-ndk/bin/${executable}"; \
     done; \
     PATH="/opt/cargo-ndk/bin:${PATH}" cargo ndk --version; \
     rm -rf /tmp/cargo-ndk /tmp/cargo-ndk.tgz
@@ -142,6 +154,7 @@ FROM eclipse-temurin:17.0.14_7-jdk-jammy@sha256:23f74f7840a6948f9da3870876f475c4
 FROM node:22.14.0-bookworm-slim@sha256:1c18d9ab3af4585870b92e4dbc5cac5a0dc77dd13df1a5905cea89fc720eb05b AS node_runtime
 FROM rust_runtime
 
+ARG BUILDARCH
 ARG TARGETARCH
 ARG BUILDER_UID=1000
 ARG BUILDER_GID=1000
@@ -177,10 +190,16 @@ COPY --from=node_runtime /usr/local/lib/node_modules /usr/local/lib/node_modules
 # Resolve builder packages from the dated Debian archives aligned with the
 # digest-pinned Bookworm base, not mutable bookworm/security suite heads.
 RUN set -eux; \
-    case "${TARGETARCH:-amd64}" in \
-      amd64) ;; \
-      *) echo "Ai Pin device builds require linux/amd64; got ${TARGETARCH}" >&2; exit 1 ;; \
+    test "${BUILDARCH}" = "${TARGETARCH}"; \
+    android_x86_runtime=''; \
+    case "${TARGETARCH}" in \
+      amd64|arm64) ;; \
+      *) echo "unsupported Pin builder architecture: ${TARGETARCH}" >&2; exit 1 ;; \
     esac; \
+    if [ "${TARGETARCH}" = arm64 ]; then \
+      dpkg --add-architecture amd64; \
+      android_x86_runtime='libc6:amd64 libgcc-s1:amd64 libxml2:amd64 zlib1g:amd64'; \
+    fi; \
     test ! -e /usr/bin/node; \
     ln /usr/local/bin/node /usr/bin/node; \
     ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm; \
@@ -224,7 +243,8 @@ RUN set -eux; \
       python3 \
       rsync \
       unzip \
-      zip; \
+      zip \
+      ${android_x86_runtime}; \
     rm -rf /var/lib/apt/lists/*; \
     if getent group "${BUILDER_GID}" >/dev/null; then \
       existing_group="$(getent group "${BUILDER_GID}" | cut -d: -f1)"; \
@@ -237,7 +257,7 @@ RUN set -eux; \
       /run/secrets/pin /run/private-assets; \
     chown -R builder:"${existing_group}" /cache /state
 
-COPY --from=rust_target_native /opt/rust-target/ /usr/local/rustup/toolchains/1.91.1-x86_64-unknown-linux-gnu/
+COPY --from=rust_target_native /usr/local/rustup/ /usr/local/rustup/
 COPY --from=rust_target_native /opt/cargo-ndk/bin/ /usr/local/cargo/bin/
 
 COPY --from=android_sdk_native /opt/android-sdk /opt/android-sdk

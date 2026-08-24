@@ -376,6 +376,13 @@ export function parsePinBuilderToolchainContract(text) {
         : null,
       cargoNdkArchiveSha256: toolchain?.cargoNdk?.archive?.sha256 ?? null,
       cargoNdkArchiveTarget: toolchain?.cargoNdk?.archive?.target ?? null,
+      cargoNdkArm64ArchiveUrl: toolchain?.cargoNdk?.arm64Archive?.url ?? null,
+      cargoNdkArm64ArchiveRoot: toolchain?.cargoNdk?.arm64Archive?.sourceRoot ?? null,
+      cargoNdkArm64ArchiveSize: Number.isSafeInteger(toolchain?.cargoNdk?.arm64Archive?.size)
+        ? String(toolchain.cargoNdk.arm64Archive.size)
+        : null,
+      cargoNdkArm64ArchiveSha256: toolchain?.cargoNdk?.arm64Archive?.sha256 ?? null,
+      cargoNdkArm64ArchiveTarget: toolchain?.cargoNdk?.arm64Archive?.target ?? null,
     };
   } catch {
     return null;
@@ -498,7 +505,8 @@ export function parsePinBuilderDockerfileContract(
     /rustup\s+target\s+add\s+(\S+)\s+--toolchain\s+(\d+\.\d+\.\d+)\s*;/gu,
   )];
   const rustup = rustupMatches.length === 1 ? rustupMatches[0] : null;
-  const amd64Guard = /case\s+"\$\{TARGETARCH:-amd64\}"\s+in[\s\S]*?amd64\)\s*;;[\s\S]*?\*\)[\s\S]*?exit\s+1\s*;;[\s\S]*?esac;/u.test(text);
+  const nativePlatformGuard = exactlyOneLiteral(text, 'test "${BUILDARCH}" = "${TARGETARCH}";') &&
+    /case\s+"\$\{TARGETARCH\}"\s+in[\s\S]*?amd64\|arm64\)\s*;;[\s\S]*?\*\)[\s\S]*?exit\s+1\s*;;[\s\S]*?esac;/u.test(text);
   const commandLineToolsVersion = argument("ANDROID_COMMAND_LINE_TOOLS_VERSION");
   const commandLineToolsSha256 = argument("ANDROID_COMMAND_LINE_TOOLS_SHA256");
   const androidPlatform = argument("ANDROID_PLATFORM_VERSION");
@@ -514,6 +522,10 @@ export function parsePinBuilderDockerfileContract(
   const cargoNdkArchiveRoot = argument("CARGO_NDK_ARCHIVE_ROOT");
   const cargoNdkArchiveSize = argument("CARGO_NDK_ARCHIVE_SIZE");
   const cargoNdkArchiveSha256 = argument("CARGO_NDK_ARCHIVE_SHA256");
+  const cargoNdkArm64ArchiveUrl = argument("CARGO_NDK_ARM64_ARCHIVE_URL");
+  const cargoNdkArm64ArchiveRoot = argument("CARGO_NDK_ARM64_ARCHIVE_ROOT");
+  const cargoNdkArm64ArchiveSize = argument("CARGO_NDK_ARM64_ARCHIVE_SIZE");
+  const cargoNdkArm64ArchiveSha256 = argument("CARGO_NDK_ARM64_ARCHIVE_SHA256");
   const commandLineUrl = exactlyOneMatch(
     text,
     /"(https:\/\/dl\.google\.com\/android\/repository\/commandlinetools-linux-[^"\s]+_latest\.zip)"/gu,
@@ -574,50 +586,43 @@ export function parsePinBuilderDockerfileContract(
     : null;
   const validRustTargetCopy = exactlyOneLiteral(
     text,
-    "COPY --from=rust_target_native /opt/rust-target/ /usr/local/rustup/toolchains/1.91.1-x86_64-unknown-linux-gnu/",
-  ) && exactlyOneLiteral(
-    text,
-    "COPY --from=rust_runtime /usr/local/rustup/toolchains/1.91.1-x86_64-unknown-linux-gnu/lib/rustlib/components /tmp/x86-rust-components",
+    "COPY --from=rust_target_native /usr/local/rustup/ /usr/local/rustup/",
   ) && exactlyOneLiteral(
     text,
     'grep -Fx rust-std-aarch64-linux-android "${rust_sysroot}/lib/rustlib/components";',
   ) && exactlyOneLiteral(
     text,
-    'test -f "${rust_sysroot}/lib/rustlib/manifest-rust-std-aarch64-linux-android";',
-  ) && exactlyOneLiteral(
-    text,
-    'cp -a "${rust_sysroot}/lib/rustlib/aarch64-linux-android" /opt/rust-target/lib/rustlib/;',
-  ) && exactlyOneLiteral(
-    text,
-    'cp -a "${rust_sysroot}/lib/rustlib/manifest-rust-std-aarch64-linux-android" /opt/rust-target/lib/rustlib/',
-  ) && exactlyOneLiteral(
-    text,
-    "cp /tmp/x86-rust-components /opt/rust-target/lib/rustlib/components;",
-  ) && exactlyOneLiteral(
-    text,
-    "test \"$(grep -Fxc rust-std-aarch64-linux-android /opt/rust-target/lib/rustlib/components)\" = 0;",
-  ) && exactlyOneLiteral(
-    text,
-    "printf '%s\\n' rust-std-aarch64-linux-android >> /opt/rust-target/lib/rustlib/components;",
-  ) && exactlyOneLiteral(
-    text,
-    "test \"$(grep -Fxc rust-std-aarch64-linux-android /opt/rust-target/lib/rustlib/components)\" = 1",
+    'test -f "${rust_sysroot}/lib/rustlib/manifest-rust-std-aarch64-linux-android"',
   );
   const validCargoNdk = cargoNdk !== null &&
     exactlyOneLiteral(text, "COPY --from=rust_target_native /opt/cargo-ndk/bin/ /usr/local/cargo/bin/") &&
     exactlyOneLiteral(text, "for executable in cargo-ndk cargo-ndk-env cargo-ndk-runner cargo-ndk-test; do") &&
-    exactlyOneLiteral(text, 'install -m 0755 "/tmp/cargo-ndk/${CARGO_NDK_ARCHIVE_ROOT}/${executable}" "/opt/cargo-ndk/bin/${executable}";') &&
+    exactlyOneLiteral(text, 'install -m 0755 "/tmp/cargo-ndk/${cargo_ndk_root}/${executable}" "/opt/cargo-ndk/bin/${executable}";') &&
     gradle?.cargoNdkConsumerValid === true;
   const validCargoNdkArchiveUrl = cargoNdkArchiveUrl !== null && cargoNdk !== null &&
     cargoNdkArchiveUrl === `https://github.com/bbqsrc/cargo-ndk/releases/download/v${cargoNdk}/cargo-ndk-x86_64-unknown-linux-musl-v${cargoNdk}.tgz` &&
-    exactlyOneLiteral(text, '"${CARGO_NDK_ARCHIVE_URL}" \\\n      --output /tmp/cargo-ndk.tgz;');
+    exactlyOneLiteral(text, 'cargo_ndk_url="${CARGO_NDK_ARCHIVE_URL}";');
   const validCargoNdkArchiveRoot = cargoNdkArchiveRoot !== null && cargoNdk !== null &&
     cargoNdkArchiveRoot === `cargo-ndk-x86_64-unknown-linux-musl-v${cargoNdk}` &&
-    exactlyOneLiteral(text, 'test "$(find /tmp/cargo-ndk -mindepth 1 -maxdepth 1 -type d -printf \'%f\\n\')" = "${CARGO_NDK_ARCHIVE_ROOT}";');
+    exactlyOneLiteral(text, 'cargo_ndk_root="${CARGO_NDK_ARCHIVE_ROOT}";');
   const validCargoNdkArchiveSize = /^\d+$/u.test(cargoNdkArchiveSize ?? "") &&
-    exactlyOneLiteral(text, 'test "$(stat --format=\'%s\' /tmp/cargo-ndk.tgz)" = "${CARGO_NDK_ARCHIVE_SIZE}";');
+    exactlyOneLiteral(text, 'cargo_ndk_size="${CARGO_NDK_ARCHIVE_SIZE}";');
   const validCargoNdkArchiveSha256 = /^[0-9a-f]{64}$/u.test(cargoNdkArchiveSha256 ?? "") &&
-    exactlyOneLiteral(text, 'echo "${CARGO_NDK_ARCHIVE_SHA256}  /tmp/cargo-ndk.tgz" | sha256sum --check --strict;');
+    exactlyOneLiteral(text, 'cargo_ndk_sha256="${CARGO_NDK_ARCHIVE_SHA256}"');
+  const validCargoNdkArm64ArchiveUrl = cargoNdkArm64ArchiveUrl !== null && cargoNdk !== null &&
+    cargoNdkArm64ArchiveUrl === `https://github.com/bbqsrc/cargo-ndk/releases/download/v${cargoNdk}/cargo-ndk-aarch64-unknown-linux-musl-v${cargoNdk}.tgz` &&
+    exactlyOneLiteral(text, 'cargo_ndk_url="${CARGO_NDK_ARM64_ARCHIVE_URL}";');
+  const validCargoNdkArm64ArchiveRoot = cargoNdkArm64ArchiveRoot !== null && cargoNdk !== null &&
+    cargoNdkArm64ArchiveRoot === `cargo-ndk-aarch64-unknown-linux-musl-v${cargoNdk}` &&
+    exactlyOneLiteral(text, 'cargo_ndk_root="${CARGO_NDK_ARM64_ARCHIVE_ROOT}";');
+  const validCargoNdkArm64ArchiveSize = /^\d+$/u.test(cargoNdkArm64ArchiveSize ?? "") &&
+    exactlyOneLiteral(text, 'cargo_ndk_size="${CARGO_NDK_ARM64_ARCHIVE_SIZE}";');
+  const validCargoNdkArm64ArchiveSha256 = /^[0-9a-f]{64}$/u.test(cargoNdkArm64ArchiveSha256 ?? "") &&
+    exactlyOneLiteral(text, 'cargo_ndk_sha256="${CARGO_NDK_ARM64_ARCHIVE_SHA256}"');
+  const validCargoNdkConsumers = exactlyOneLiteral(text, '"${cargo_ndk_url}" \\\n      --output /tmp/cargo-ndk.tgz;') &&
+    exactlyOneLiteral(text, 'test "$(stat --format=\'%s\' /tmp/cargo-ndk.tgz)" = "${cargo_ndk_size}";') &&
+    exactlyOneLiteral(text, 'echo "${cargo_ndk_sha256}  /tmp/cargo-ndk.tgz" | sha256sum --check --strict;') &&
+    exactlyOneLiteral(text, 'test "$(find /tmp/cargo-ndk -mindepth 1 -maxdepth 1 -type d -printf \'%f\\n\')" = "${cargo_ndk_root}";');
   const validJdk = jdkImage !== null && nativeJdkImage === jdkImage &&
     aliasedPlatform("android_jdk_native") === "$BUILDPLATFORM" &&
     exactlyOneLiteral(text, "COPY --from=jdk_runtime /opt/java/openjdk /opt/java/openjdk") &&
@@ -633,7 +638,7 @@ export function parsePinBuilderDockerfileContract(
     exactlyOneLiteral(text, "ln -s /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx;") &&
     [...text.matchAll(/^\s*node --version;\s*\\\s*$/gmu)].length === 1;
   return {
-    platform: amd64Guard ? "linux/amd64" : null,
+    platform: nativePlatformGuard ? "host-native" : null,
     jdkImage: validJdk ? jdkImage : null,
     nodeImage: validNode ? nodeImage : null,
     centerNodeImages: parseCenterDockerfileNodeImages(centerDockerfileText),
@@ -656,11 +661,26 @@ export function parsePinBuilderDockerfileContract(
       ? rustup[1]
       : null,
     cargoNdk: validCargoNdk ? cargoNdk : null,
-    cargoNdkArchiveUrl: validCargoNdkArchiveUrl ? cargoNdkArchiveUrl : null,
-    cargoNdkArchiveRoot: validCargoNdkArchiveRoot ? cargoNdkArchiveRoot : null,
-    cargoNdkArchiveSize: validCargoNdkArchiveSize ? cargoNdkArchiveSize : null,
-    cargoNdkArchiveSha256: validCargoNdkArchiveSha256 ? cargoNdkArchiveSha256 : null,
+    cargoNdkArchiveUrl: validCargoNdkArchiveUrl && validCargoNdkConsumers ? cargoNdkArchiveUrl : null,
+    cargoNdkArchiveRoot: validCargoNdkArchiveRoot && validCargoNdkConsumers ? cargoNdkArchiveRoot : null,
+    cargoNdkArchiveSize: validCargoNdkArchiveSize && validCargoNdkConsumers ? cargoNdkArchiveSize : null,
+    cargoNdkArchiveSha256: validCargoNdkArchiveSha256 && validCargoNdkConsumers ? cargoNdkArchiveSha256 : null,
     cargoNdkArchiveTarget: validCargoNdkArchiveRoot ? "x86_64-unknown-linux-musl" : null,
+    cargoNdkArm64ArchiveUrl: validCargoNdkArm64ArchiveUrl && validCargoNdkConsumers
+      ? cargoNdkArm64ArchiveUrl
+      : null,
+    cargoNdkArm64ArchiveRoot: validCargoNdkArm64ArchiveRoot && validCargoNdkConsumers
+      ? cargoNdkArm64ArchiveRoot
+      : null,
+    cargoNdkArm64ArchiveSize: validCargoNdkArm64ArchiveSize && validCargoNdkConsumers
+      ? cargoNdkArm64ArchiveSize
+      : null,
+    cargoNdkArm64ArchiveSha256: validCargoNdkArm64ArchiveSha256 && validCargoNdkConsumers
+      ? cargoNdkArm64ArchiveSha256
+      : null,
+    cargoNdkArm64ArchiveTarget: validCargoNdkArm64ArchiveRoot
+      ? "aarch64-unknown-linux-musl"
+      : null,
   };
 }
 
@@ -689,6 +709,11 @@ const PIN_BUILDER_CONTRACT_LABELS = Object.freeze({
   cargoNdkArchiveSize: "cargo-ndk archive size",
   cargoNdkArchiveSha256: "cargo-ndk archive SHA-256",
   cargoNdkArchiveTarget: "cargo-ndk archive target",
+  cargoNdkArm64ArchiveUrl: "ARM64 cargo-ndk archive URL",
+  cargoNdkArm64ArchiveRoot: "ARM64 cargo-ndk archive root",
+  cargoNdkArm64ArchiveSize: "ARM64 cargo-ndk archive size",
+  cargoNdkArm64ArchiveSha256: "ARM64 cargo-ndk archive SHA-256",
+  cargoNdkArm64ArchiveTarget: "ARM64 cargo-ndk archive target",
 });
 
 export function pinBuilderToolchainMismatches(expected, actual) {
@@ -779,10 +804,10 @@ function checkContainerBuilder(probes) {
       detail: builder.platformsDetermined === true
         ? `Docker Buildx does not advertise the required ${requiredPlatform} platform (found ${list(builder.platforms)}).`
         : `Docker Buildx platforms could not be determined; ${requiredPlatform} support is required.`,
-      fix: `Select or create a Buildx builder with ${requiredPlatform} support (install binfmt/QEMU on an ARM host), then rerun \`docker buildx inspect\` and this doctor.`,
+      fix: `Select or create a Buildx builder with native ${requiredPlatform} support, then rerun \`docker buildx inspect\` and this doctor.`,
     });
   }
-  if (builder.amd64Runtime?.safe !== true) {
+  if (requiredPlatform === "linux/amd64" && builder.amd64Runtime?.safe !== true) {
     return makeCheck("container_builder", "Pinned container builder", CHECK_STATUS.FAIL, {
       required: true,
       detail: builder.amd64Runtime?.detail ?? "The linux/amd64 runtime safety probe did not produce a verdict.",
@@ -792,7 +817,7 @@ function checkContainerBuilder(probes) {
   }
   return makeCheck("container_builder", "Pinned container builder", CHECK_STATUS.PASS, {
     required: true,
-    detail: `ready${builder.version ? ` (Docker ${builder.version})` : ""}; JDK 17, Android SDK/NDK, Rust, cargo-ndk, and protoc are supplied inside the pinned linux/amd64 image.`,
+    detail: `ready${builder.version ? ` (Docker ${builder.version})` : ""}; JDK 17, Android SDK/NDK, Rust, cargo-ndk, and protoc are supplied inside the native ${requiredPlatform} image.`,
   });
 }
 
@@ -810,7 +835,7 @@ function checkBuilderToolchainContract(probes) {
   }
   return makeCheck("builder_toolchain_contract", "Builder toolchain contract", CHECK_STATUS.PASS, {
     required: true,
-    detail: "Pin and Center images/digests plus actual Android SDK/NDK, Rust, cargo-ndk, and linux/amd64 consumers match toolchain.json exactly.",
+    detail: "Pin and Center images/digests plus actual Android SDK/NDK, Rust, and cargo-ndk consumers match toolchain.json.",
   });
 }
 
@@ -1485,7 +1510,7 @@ export function renderHuman(result, { verbose = false, home = homedir() } = {}) 
       : "Expected versions could not be read from README.md; version comparisons are reported as warnings.",
   );
   lines.push(
-    `Canonical build path: ${result.buildPath === "pinned-container" ? "pinned linux/amd64 container" : "host toolchain"}.`,
+    `Canonical build path: ${result.buildPath === "pinned-container" ? "pinned host-native container" : "host toolchain"}.`,
   );
   lines.push("");
 
@@ -1874,18 +1899,19 @@ export function collectProbes({ repoRoot, env = process.env } = {}) {
   // Names only. `parseEnvKeyNames` never captures anything right of `=`.
   const signingFileKeys = signingText === null ? [] : parseEnvKeyNames(signingText);
   const insidePinnedBuilder = env.REVIVAL_INSIDE_PIN_BUILDER === "true";
+  const hostPlatform = process.arch === "arm64" ? "linux/arm64" : "linux/amd64";
   const dockerProbe = insidePinnedBuilder
     ? { ok: true, stdout: "pinned-image", stderr: "" }
     : runCapture("docker", ["version", "--format", "{{.Client.Version}}"], env);
   const buildxProbe = insidePinnedBuilder
-    ? { ok: true, stdout: "Platforms: linux/amd64", stderr: "" }
+    ? { ok: true, stdout: `Platforms: ${hostPlatform}`, stderr: "" }
     : dockerProbe.ok
       ? runCapture("docker", ["buildx", "inspect"], env)
       : { ok: false, stdout: "", stderr: "" };
   const buildxPlatforms = parseDockerBuildxPlatforms(buildxProbe.stdout);
-  const amd64Runtime = insidePinnedBuilder
-    ? { safe: true, detail: "inside the pinned linux/amd64 builder" }
-    : probePinAmd64Runtime();
+  const amd64Runtime = hostPlatform === "linux/amd64" && !insidePinnedBuilder
+    ? probePinAmd64Runtime()
+    : { safe: true, detail: `using native ${hostPlatform}` };
   const containerContractFiles = [
     "center/Dockerfile",
     "platform/containers/pin-builder/Dockerfile",
@@ -1917,7 +1943,7 @@ export function collectProbes({ repoRoot, env = process.env } = {}) {
       version: firstLine(dockerProbe.stdout),
       contractFilesPresent: containerContractFiles.every((file) => existsSync(join(productRoot, file))),
       suppliesHostToolchain: true,
-      requiredPlatform: expectedBuilderToolchain?.platform ?? "linux/amd64",
+      requiredPlatform: hostPlatform,
       platformsDetermined: buildxProbe.ok && buildxPlatforms.length > 0,
       platforms: buildxPlatforms,
       amd64Runtime,

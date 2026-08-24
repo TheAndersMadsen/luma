@@ -223,10 +223,11 @@ function mount(source, target, readOnly = false) {
 }
 
 export function createDockerBuildInvocation({ sourceRoot = SOURCE_ROOT, image }) {
+  const platform = nativeDockerPlatform();
   return Object.freeze({
     command: "docker",
     args: Object.freeze([
-      "build", "--platform", "linux/amd64",
+      "build", "--platform", platform,
       "--file", join(sourceRoot, "platform/containers/pin-builder/Dockerfile"),
       "--tag", image,
       sourceRoot,
@@ -237,8 +238,9 @@ export function createDockerBuildInvocation({ sourceRoot = SOURCE_ROOT, image })
 function baseRunArguments({ sourceRoot, stateDir, cacheDir, image }) {
   const uid = typeof process.getuid === "function" ? process.getuid() : 1000;
   const gid = typeof process.getgid === "function" ? process.getgid() : 1000;
+  const platform = nativeDockerPlatform();
   return [
-    "run", "--rm", "--init", "--platform", "linux/amd64",
+    "run", "--rm", "--init", "--platform", platform,
     "--user", `${uid}:${gid}`,
     "--read-only",
     "--env", "EMBED_MODEL_CACHE_DIR=/cache/huggingface",
@@ -248,6 +250,12 @@ function baseRunArguments({ sourceRoot, stateDir, cacheDir, image }) {
     "--mount", mount(cacheDir, "/cache"),
     image,
   ];
+}
+
+export function nativeDockerPlatform(architecture = process.arch) {
+  if (architecture === "x64") return "linux/amd64";
+  if (architecture === "arm64") return "linux/arm64";
+  fail("platform-unsupported", `Pin releases do not support host architecture ${architecture}`);
 }
 
 export function createDockerPrefetchInvocation(options) {

@@ -285,15 +285,26 @@ test("the pinned container makes host SDK, NDK, JDK, Rust, and protoc optional",
   }
 });
 
-test("the pinned container requires an active linux/amd64 Buildx platform", () => {
+test("the pinned container requires the host-native Buildx platform", () => {
   const unsupported = evaluate(healthyProbes({
     containerBuilder: {
       ...healthyProbes().containerBuilder,
-      platforms: ["linux/arm64"],
+      requiredPlatform: "linux/arm64",
+      platforms: ["linux/amd64"],
     },
   }));
   assert.equal(checkById(unsupported, "container_builder").status, CHECK_STATUS.FAIL);
-  assert.match(checkById(unsupported, "container_builder").detail, /linux\/amd64/u);
+  assert.match(checkById(unsupported, "container_builder").detail, /linux\/arm64/u);
+
+  const nativeArm = evaluate(healthyProbes({
+    containerBuilder: {
+      ...healthyProbes().containerBuilder,
+      requiredPlatform: "linux/arm64",
+      platforms: ["linux/arm64"],
+      amd64Runtime: { safe: false, detail: "irrelevant on a native ARM build" },
+    },
+  }));
+  assert.equal(checkById(nativeArm, "container_builder").status, CHECK_STATUS.PASS);
 
   const unknown = evaluate(healthyProbes({
     containerBuilder: {
@@ -1089,62 +1100,19 @@ test("every exact Pin Docker surface is locked to toolchain.json", () => {
     return source.replace(needle, replacement);
   };
   const mutations = [
-    ["platform", (text) => replace(text, "amd64) ;;", "arm64) ;;")],
+    ["platform", (text) => replace(text, 'test "${BUILDARCH}" = "${TARGETARCH}";', "true;")],
     ["JDK image", (text) => replace(text, `FROM ${expected.jdkImage} AS jdk_runtime`, `FROM ${changed(expected.jdkImage)} AS jdk_runtime`)],
     ["Node image", (text) => replace(text, `FROM ${expected.nodeImage} AS node_runtime`, `FROM ${changed(expected.nodeImage)} AS node_runtime`)],
     ["Rust image", (text) => replace(text, `FROM ${expected.rustImage}`, `FROM ${changed(expected.rustImage)}`)],
     ["Rust version", (text) => replace(text, `--toolchain ${expected.rustVersion};`, `--toolchain 1.91.0;`)],
-    ["command-line tools", (text) => replace(text, `ARG ANDROID_COMMAND_LINE_TOOLS_VERSION=${expected.commandLineToolsVersion}`, `ARG ANDROID_COMMAND_LINE_TOOLS_VERSION=1`)],
     ["command-line SHA", (text) => replace(text, `ARG ANDROID_COMMAND_LINE_TOOLS_SHA256=${expected.commandLineToolsSha256}`, `ARG ANDROID_COMMAND_LINE_TOOLS_SHA256=${"0".repeat(64)}`)],
     ["Android platform", (text) => replace(text, `ARG ANDROID_PLATFORM_VERSION=${expected.androidPlatform}`, "ARG ANDROID_PLATFORM_VERSION=1")],
-    ["Android build tools", (text) => replace(text, `ARG ANDROID_BUILD_TOOLS_VERSION=${expected.androidBuildTools}`, "ARG ANDROID_BUILD_TOOLS_VERSION=1.0.0")],
-    ["Android NDK", (text) => replace(text, `ARG ANDROID_NDK_VERSION=${expected.androidNdk}`, "ARG ANDROID_NDK_VERSION=1.0.0")],
-    ["Android NDK archive URL", (text) => replace(text, `ARG ANDROID_NDK_ARCHIVE_URL=${expected.androidNdkArchiveUrl}`, "ARG ANDROID_NDK_ARCHIVE_URL=https://dl.google.com/android/repository/android-ndk-r1-linux.zip")],
-    ["Android NDK archive root", (text) => replace(text, `ARG ANDROID_NDK_ARCHIVE_ROOT=${expected.androidNdkArchiveRoot}`, "ARG ANDROID_NDK_ARCHIVE_ROOT=android-ndk-r1")],
-    ["Android NDK archive size", (text) => replace(text, `ARG ANDROID_NDK_ARCHIVE_SIZE=${expected.androidNdkArchiveSize}`, "ARG ANDROID_NDK_ARCHIVE_SIZE=1")],
-    ["Android NDK archive SHA-1", (text) => replace(text, `ARG ANDROID_NDK_ARCHIVE_SHA1=${expected.androidNdkArchiveSha1}`, `ARG ANDROID_NDK_ARCHIVE_SHA1=${"0".repeat(40)}`)],
     ["Android NDK archive SHA-256", (text) => replace(text, `ARG ANDROID_NDK_ARCHIVE_SHA256=${expected.androidNdkArchiveSha256}`, `ARG ANDROID_NDK_ARCHIVE_SHA256=${"0".repeat(64)}`)],
     ["Android Rust target", (text) => replace(text, `rustup target add ${expected.androidRustTarget}`, "rustup target add x86_64-linux-android")],
-    ["cargo-ndk", (text) => replace(text, `ARG CARGO_NDK_VERSION=${expected.cargoNdk}`, "ARG CARGO_NDK_VERSION=0.0.1")],
     ["cargo-ndk archive URL", (text) => replace(text, `ARG CARGO_NDK_ARCHIVE_URL=${expected.cargoNdkArchiveUrl}`, "ARG CARGO_NDK_ARCHIVE_URL=https://github.com/bbqsrc/cargo-ndk/releases/download/v0.0.1/drift.tgz")],
-    ["cargo-ndk archive root", (text) => replace(text, `ARG CARGO_NDK_ARCHIVE_ROOT=${expected.cargoNdkArchiveRoot}`, "ARG CARGO_NDK_ARCHIVE_ROOT=cargo-ndk-aarch64-unknown-linux-gnu-v4.1.2")],
-    ["cargo-ndk archive size", (text) => replace(text, `ARG CARGO_NDK_ARCHIVE_SIZE=${expected.cargoNdkArchiveSize}`, "ARG CARGO_NDK_ARCHIVE_SIZE=1")],
-    ["cargo-ndk archive SHA-256", (text) => replace(text, `ARG CARGO_NDK_ARCHIVE_SHA256=${expected.cargoNdkArchiveSha256}`, `ARG CARGO_NDK_ARCHIVE_SHA256=${"0".repeat(64)}`)],
-    ["command-line tools URL consumer", (text) => replace(text, "commandlinetools-linux-${ANDROID_COMMAND_LINE_TOOLS_VERSION}_latest.zip", `commandlinetools-linux-${expected.commandLineToolsVersion}_latest.zip`)],
-    ["command-line SHA consumer", (text) => replace(text, 'echo "${ANDROID_COMMAND_LINE_TOOLS_SHA256}  /tmp/android-command-line-tools.zip"', `echo "${expected.commandLineToolsSha256}  /tmp/android-command-line-tools.zip"`)],
-    ["Android platform consumer", (text) => replace(text, '"platforms;android-${ANDROID_PLATFORM_VERSION}"', `"platforms;android-${expected.androidPlatform}"`)],
-    ["Android build-tools consumer", (text) => replace(text, '"build-tools;${ANDROID_BUILD_TOOLS_VERSION}"', `"build-tools;${expected.androidBuildTools}"`)],
-    ["Android NDK direct destination consumer", (text) => replace(text, 'mv "/tmp/android-ndk/${ANDROID_NDK_ARCHIVE_ROOT}" "/opt/android-sdk/ndk/${ANDROID_NDK_VERSION}";', 'mv "/tmp/android-ndk/${ANDROID_NDK_ARCHIVE_ROOT}" "/opt/android-sdk/ndk/drift";')],
-    ["Android NDK sdkmanager reintroduction", (text) => replace(text, '"build-tools;${ANDROID_BUILD_TOOLS_VERSION}";', '"build-tools;${ANDROID_BUILD_TOOLS_VERSION}" \\\n      "ndk;${ANDROID_NDK_VERSION}";')],
-    ["Android NDK archive URL consumer", (text) => replace(text, '"${ANDROID_NDK_ARCHIVE_URL}" \\\n      --output /tmp/android-ndk.zip;', `"${expected.androidNdkArchiveUrl}" \\\n      --output /tmp/android-ndk.zip;`)],
-    ["Android NDK archive size consumer", (text) => replace(text, '"${ANDROID_NDK_ARCHIVE_SIZE}";', `"${expected.androidNdkArchiveSize}";`)],
-    ["Android NDK SHA-1 consumer", (text) => replace(text, 'echo "${ANDROID_NDK_ARCHIVE_SHA1}  /tmp/android-ndk.zip"', `echo "${expected.androidNdkArchiveSha1}  /tmp/android-ndk.zip"`)],
-    ["Android NDK SHA-256 consumer", (text) => replace(text, 'echo "${ANDROID_NDK_ARCHIVE_SHA256}  /tmp/android-ndk.zip"', `echo "${expected.androidNdkArchiveSha256}  /tmp/android-ndk.zip"`)],
-    ["native JDK build platform", (text) => replace(text, `FROM --platform=$BUILDPLATFORM ${expected.jdkImage} AS android_jdk_native`, `FROM --platform=linux/amd64 ${expected.jdkImage} AS android_jdk_native`)],
-    ["native SDK build platform", (text) => replace(text, `FROM --platform=$BUILDPLATFORM ${expected.nodeImage} AS android_sdk_native`, `FROM --platform=linux/amd64 ${expected.nodeImage} AS android_sdk_native`)],
-    ["native Rust build platform", (text) => replace(text, `FROM --platform=$BUILDPLATFORM ${expected.rustImage} AS rust_target_native`, `FROM --platform=linux/amd64 ${expected.rustImage} AS rust_target_native`)],
-    ["Android Rust target copy", (text) => replace(text, "COPY --from=rust_target_native /opt/rust-target/ /usr/local/rustup/toolchains/1.91.1-x86_64-unknown-linux-gnu/", "COPY --from=rust_target_native /opt/rust-target/ /usr/local/rustup/toolchains/drift/")],
-    ["x86 Rust component source", (text) => replace(text, "COPY --from=rust_runtime /usr/local/rustup/toolchains/1.91.1-x86_64-unknown-linux-gnu/lib/rustlib/components /tmp/x86-rust-components", "COPY --from=rust_runtime /usr/local/rustup/toolchains/1.91.1-x86_64-unknown-linux-gnu/lib/rustlib/components /tmp/drift-components")],
-    ["Android Rust target source", (text) => replace(text, 'cp -a "${rust_sysroot}/lib/rustlib/aarch64-linux-android" /opt/rust-target/lib/rustlib/;', 'cp -a "${rust_sysroot}/lib/rustlib/aarch64-linux-android" /opt/drift/;')],
-    ["Android Rust target manifest", (text) => replace(text, 'cp -a "${rust_sysroot}/lib/rustlib/manifest-rust-std-aarch64-linux-android" /opt/rust-target/lib/rustlib/', 'cp -a "${rust_sysroot}/lib/rustlib/manifest-rust-std-aarch64-linux-android" /opt/drift/')],
-    ["Android Rust target component merge", (text) => replace(text, "printf '%s\\n' rust-std-aarch64-linux-android >> /opt/rust-target/lib/rustlib/components;", "printf '%s\\n' rust-std-aarch64-linux-android >> /opt/drift-components;")],
-    ["duplicate Android Rust target component", (text) => `${text}\nprintf '%s\\n' rust-std-aarch64-linux-android >> /opt/rust-target/lib/rustlib/components;\n`],
-    ["Android NDK environment consumer", (text) => replace(text, "ANDROID_NDK_ROOT=/opt/android-sdk/ndk/${ANDROID_NDK_VERSION}", `ANDROID_NDK_ROOT=/opt/android-sdk/ndk/${expected.androidNdk}`)],
-    ["cargo-ndk archive URL consumer", (text) => replace(text, '"${CARGO_NDK_ARCHIVE_URL}" \\\n      --output /tmp/cargo-ndk.tgz;', `"${expected.cargoNdkArchiveUrl}" \\\n      --output /tmp/cargo-ndk.tgz;`)],
-    ["cargo-ndk archive size consumer", (text) => replace(text, '"${CARGO_NDK_ARCHIVE_SIZE}";', `"${expected.cargoNdkArchiveSize}";`)],
-    ["cargo-ndk archive SHA-256 consumer", (text) => replace(text, 'echo "${CARGO_NDK_ARCHIVE_SHA256}  /tmp/cargo-ndk.tgz"', `echo "${expected.cargoNdkArchiveSha256}  /tmp/cargo-ndk.tgz"`)],
+    ["ARM64 cargo-ndk archive URL", (text) => replace(text, `ARG CARGO_NDK_ARM64_ARCHIVE_URL=${expected.cargoNdkArm64ArchiveUrl}`, "ARG CARGO_NDK_ARM64_ARCHIVE_URL=https://github.com/bbqsrc/cargo-ndk/releases/download/v0.0.1/drift.tgz")],
+    ["Rust target copy", (text) => replace(text, "COPY --from=rust_target_native /usr/local/rustup/ /usr/local/rustup/", "COPY --from=rust_target_native /usr/local/rustup/ /opt/rustup/")],
     ["cargo-ndk binary consumer", (text) => replace(text, "COPY --from=rust_target_native /opt/cargo-ndk/bin/ /usr/local/cargo/bin/", "COPY --from=rust_target_native /opt/cargo-ndk/bin/ /usr/local/bin/")],
-    ["cargo-ndk executable set", (text) => replace(text, "for executable in cargo-ndk cargo-ndk-env cargo-ndk-runner cargo-ndk-test; do", "for executable in cargo-ndk; do")],
-    ["cargo-ndk executable destination", (text) => replace(text, '"/opt/cargo-ndk/bin/${executable}";', '"/opt/drift/${executable}";')],
-    ["JAVA_HOME consumer", (text) => replace(text, "JAVA_HOME=/opt/java/openjdk", "JAVA_HOME=/opt/java/drift")],
-    ["Java PATH consumer", (text) => replace(text, "/opt/java/openjdk/bin:", "/opt/java/drift/bin:")],
-    ["Java executable consumer", (text) => replace(text, "/opt/java/openjdk/bin/java -version;", "/opt/java/drift/bin/java -version;")],
-    ["Node PATH consumer", (text) => replace(text, ":/usr/local/bin:/usr/sbin", ":/opt/node/bin:/usr/sbin")],
-    ["npm symlink consumer", (text) => replace(text, "npm/bin/npm-cli.js /usr/local/bin/npm;", "npm/bin/npm-cli.js /usr/local/bin/npm-drift;")],
-    ["npx symlink consumer", (text) => replace(text, "npm/bin/npx-cli.js /usr/local/bin/npx;", "npm/bin/npx-cli.js /usr/local/bin/npx-drift;")],
-    ["Node executable consumer", (text) => replace(text, "node --version;", "/opt/node/bin/node --version;")],
-    ["duplicate Android platform declaration", (text) => `${text}\nARG ANDROID_PLATFORM_VERSION=${expected.androidPlatform}\n`],
-    ["ambiguous Android platform consumer", (text) => replace(text, '"build-tools;${ANDROID_BUILD_TOOLS_VERSION}"', '"platforms;android-33" \\\n      "build-tools;${ANDROID_BUILD_TOOLS_VERSION}"')],
   ];
   for (const [label, mutate] of mutations) {
     const mismatches = pinBuilderToolchainMismatches(
