@@ -3,8 +3,8 @@ Ai Pin Revival operator bundle
 This archive deploys one immutable Cosmos release. It contains the operator
 CLI and digest-pinned application descriptor, not application source.
 
-Requirements: Ubuntu 24.04 x86_64, Node.js 22.14+ on Node 22, Docker Engine,
-and Docker Compose 2.34+.
+Requirements: 64-bit Ubuntu 24.04 on amd64/x86_64 or arm64/aarch64,
+Node.js 22.14+ on Node 22, Docker Engine, and Docker Compose 2.34+.
 
 Fresh server:
 
