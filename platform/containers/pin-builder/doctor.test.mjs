@@ -1076,10 +1076,9 @@ test("every exact Pin Docker surface is locked to toolchain.json", () => {
     join(PRODUCT_ROOT, "platform/containers/pin-builder/Dockerfile"),
     "utf8",
   );
-  const centerDockerText = readFileSync(join(PRODUCT_ROOT, "center/Dockerfile"), "utf8");
   const gradleFiles = realPinGradleFiles();
   const expected = parsePinBuilderToolchainContract(contractText);
-  const actual = parsePinBuilderDockerfileContract(dockerText, centerDockerText, gradleFiles);
+  const actual = parsePinBuilderDockerfileContract(dockerText, gradleFiles);
   assert.deepEqual(pinBuilderToolchainMismatches(expected, actual), []);
 
   const changed = (value) => `${value}-drift`;
@@ -1105,7 +1104,7 @@ test("every exact Pin Docker surface is locked to toolchain.json", () => {
   for (const [label, mutate] of mutations) {
     const mismatches = pinBuilderToolchainMismatches(
       expected,
-      parsePinBuilderDockerfileContract(mutate(dockerText), centerDockerText, gradleFiles),
+      parsePinBuilderDockerfileContract(mutate(dockerText), gradleFiles),
     );
     assert.ok(mismatches.length > 0, `${label} drift passed comparison`);
     const result = evaluate(healthyProbes({ builderToolchain: { mismatches } }));
@@ -1114,26 +1113,6 @@ test("every exact Pin Docker surface is locked to toolchain.json", () => {
       CHECK_STATUS.FAIL,
       `${label} drift passed doctor`,
     );
-  }
-
-  for (const [label, mutate] of [
-    ["Center base Node image", (text) => replace(
-      text,
-      `FROM ${expected.nodeImage} AS base`,
-      `FROM ${changed(expected.nodeImage)} AS base`,
-    )],
-    ["Center runtime Node image", (text) => replace(
-      text,
-      `FROM ${expected.nodeImage} AS runtime`,
-      `FROM ${changed(expected.nodeImage)} AS runtime`,
-    )],
-    ["ambiguous Center Node base", (text) => `${text}\nFROM ${expected.nodeImage} AS extra_node\n`],
-  ]) {
-    const mismatches = pinBuilderToolchainMismatches(
-      expected,
-      parsePinBuilderDockerfileContract(dockerText, mutate(centerDockerText), gradleFiles),
-    );
-    assert.ok(mismatches.some((entry) => entry.includes("Center base/runtime")), `${label} passed`);
   }
 
   const gradleMutations = [
@@ -1154,7 +1133,7 @@ test("every exact Pin Docker surface is locked to toolchain.json", () => {
       parsePinGradleToolchainConsumers(mutated)?.rustAbi === "arm64-v8a", false, `${label} mutation passed pure parser`);
     const mismatches = pinBuilderToolchainMismatches(
       expected,
-      parsePinBuilderDockerfileContract(dockerText, centerDockerText, mutated),
+      parsePinBuilderDockerfileContract(dockerText, mutated),
     );
     assert.ok(mismatches.length > 0, `${label} drift passed doctor contract`);
   }

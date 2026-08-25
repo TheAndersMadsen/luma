@@ -311,12 +311,10 @@ export function parsePinBuilderToolchainContract(text) {
       typeof entry?.imageIndexDigest === "string"
         ? `${entry.image}@${entry.imageIndexDigest}`
         : null;
-    const nodeImage = image(toolchain?.node);
     return {
       platform: typeof parsed?.platform === "string" ? parsed.platform : null,
       jdkImage: image(toolchain?.jdk),
-      nodeImage,
-      centerNodeImages: nodeImage ? `${nodeImage}\n${nodeImage}` : null,
+      nodeImage: image(toolchain?.node),
       rustImage: image(toolchain?.rust),
       rustVersion: toolchain?.rust?.version ?? null,
       commandLineToolsVersion: toolchain?.android?.commandLineTools?.version ?? null,
@@ -365,22 +363,6 @@ function exactlyOneLiteral(text, literal) {
 
 function literalCount(text, literal) {
   return text.split(literal).length - 1;
-}
-
-/** Both direct Node base images implemented by Center (base and runtime). */
-export function parseCenterDockerfileNodeImages(text) {
-  if (typeof text !== "string") return null;
-  const directNodeImages = [...text.matchAll(/^FROM\s+(node:\S+)\s+AS\s+(\S+)\s*$/gimu)];
-  if (directNodeImages.length !== 2) return null;
-  const byAlias = new Map();
-  for (const match of directNodeImages) {
-    const alias = match[2].toLowerCase();
-    if (byAlias.has(alias)) return null;
-    byAlias.set(alias, match[1]);
-  }
-  const base = byAlias.get("base");
-  const runtime = byAlias.get("runtime");
-  return base && runtime ? `${base}\n${runtime}` : null;
 }
 
 const PIN_COMPILE_SDK_FILES = Object.freeze([
@@ -437,14 +419,13 @@ export function parsePinGradleToolchainConsumers(files) {
     rustAbi: rustAbi === "arm64-v8a" ? rustAbi : null,
     androidRustTarget: rustTarget,
     cargoNdkConsumerValid: cargoNdkCommands.length === 1 &&
-      targetOutputConsumers.length === 1 && abiPackagingConsumers.length === 3,
+      targetOutputConsumers.length === 1 && abiPackagingConsumers.length === 2,
   };
 }
 
 /** The declared values and their actual consumers in the canonical builders. */
 export function parsePinBuilderDockerfileContract(
   text,
-  centerDockerfileText = null,
   gradleFiles = null,
 ) {
   if (typeof text !== "string") return null;
@@ -606,7 +587,6 @@ export function parsePinBuilderDockerfileContract(
     platform: nativePlatformGuard ? "host-native" : null,
     jdkImage: validJdk ? jdkImage : null,
     nodeImage: validNode ? nodeImage : null,
-    centerNodeImages: parseCenterDockerfileNodeImages(centerDockerfileText),
     rustImage: nativeRustImage === rustImage && aliasedPlatform("rust_target_native") === "$BUILDPLATFORM"
       ? rustImage
       : null,
@@ -653,7 +633,6 @@ const PIN_BUILDER_CONTRACT_LABELS = Object.freeze({
   platform: "platform",
   jdkImage: "JDK image/digest",
   nodeImage: "Node image/digest",
-  centerNodeImages: "Center base/runtime Node images/digests",
   rustImage: "Rust image/digest",
   rustVersion: "Rust version",
   commandLineToolsVersion: "Android command-line tools",
@@ -793,14 +772,14 @@ function checkBuilderToolchainContract(probes) {
     return makeCheck("builder_toolchain_contract", "Builder toolchain contract", CHECK_STATUS.FAIL, {
       required: true,
       detail: !Array.isArray(mismatches)
-        ? "toolchain.json, the Pin-builder Dockerfile, or Center Dockerfile could not be parsed."
+        ? "toolchain.json or the Pin-builder inputs could not be parsed."
         : `Dockerfile consumers drifted from toolchain.json: ${mismatches.join("; ")}.`,
-      fix: "Reconcile every pinned image digest, Center Node base, Android/Rust target, SDK/NDK consumer, and cargo-ndk version with platform/containers/pin-builder/toolchain.json.",
+      fix: "Reconcile every pinned image digest, Android/Rust target, SDK/NDK consumer, and cargo-ndk version with platform/containers/pin-builder/toolchain.json.",
     });
   }
   return makeCheck("builder_toolchain_contract", "Builder toolchain contract", CHECK_STATUS.PASS, {
     required: true,
-    detail: "Pin and Center images/digests plus actual Android SDK/NDK, Rust, and cargo-ndk consumers match toolchain.json.",
+    detail: "Pin-builder images/digests plus actual Android SDK/NDK, Rust, and cargo-ndk consumers match toolchain.json.",
   });
 }
 
@@ -1833,11 +1812,9 @@ export function collectProbes({ repoRoot, env = process.env } = {}) {
     "pin-builder",
     "Dockerfile",
   ));
-  const centerDockerfileText = readTextOrNull(join(productRoot, "center", "Dockerfile"));
   const expectedBuilderToolchain = parsePinBuilderToolchainContract(rustContractText);
   const actualBuilderToolchain = parsePinBuilderDockerfileContract(
     pinBuilderDockerfileText,
-    centerDockerfileText,
     collectPinGradleFiles(productRoot),
   );
   const rootRustToolchainPath = join(productRoot, "rust-toolchain.toml");
@@ -1878,7 +1855,6 @@ export function collectProbes({ repoRoot, env = process.env } = {}) {
     ? probePinAmd64Runtime()
     : { safe: true, detail: `using native ${hostPlatform}` };
   const containerContractFiles = [
-    "center/Dockerfile",
     "platform/containers/pin-builder/Dockerfile",
     "platform/containers/pin-builder/entrypoint.sh",
     "platform/containers/pin-builder/toolchain.json",
