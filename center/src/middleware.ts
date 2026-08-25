@@ -37,7 +37,7 @@ const PROTECTED_PAGE_PATTERNS = [
   /^\/settings\/(?:about|contacts|privacy)$/u,
   /^\/settings\/account(?:\/(?:details|devices|features|orders|services))?$/u,
   /^\/settings\/pin$/u,
-  /^\/settings\/pin\/(?:activity|contacts|diagnostics|esim|fitness|flags|gallery|install|llm|server|services|setup)$/u,
+  /^\/settings\/pin\/(?:activity|contacts|diagnostics|esim|fitness|flags|gallery|install|llm|provision|server|services|setup)$/u,
   /^\/settings\/pin\/conversations(?:\/[^/]+)?$/u,
   /^\/settings\/pin\/gallery\/[^/]+$/u,
   /^\/admin$/u,

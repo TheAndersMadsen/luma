@@ -84,12 +84,7 @@
 .srcTag { margin-left: 8px; }
 .obs { margin: 4px 0 0; color: var(--hu-colors-crater-base, #a9abab); font-size: 12px; line-height: 1.45; }
 
-.thinking { display: flex; align-items: center; gap: 9px; margin: 0; color: var(--hu-colors-crater-base); font-size: 14px; }
-.dots { display: inline-flex; gap: 4px; margin: 0; }
-.dots i { width: 5px; height: 5px; border-radius: 50%; background: var(--hu-colors-beam-base, #00ffe0); animation: pulse 0.9s ease-in-out infinite alternate; }
-.dots i:nth-child(2) { animation-delay: 0.2s; }
-.dots i:nth-child(3) { animation-delay: 0.4s; }
-@keyframes pulse { from { opacity: 0.3; } to { opacity: 1; } }
+.thinking { display: flex; align-items: center; margin: 0; min-height: 32px; }
 
 /* The composer is a panel, so it uses the one panel edge. */
 .composer {
@@ -143,6 +138,5 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .dots i,
   .micButton.micButtonOn { animation: none; }
 }

@@ -45,27 +45,27 @@ const CONSOLE_PANES: ReadonlyArray<{ href: string; label: string; desc: string }
   {
     href: "/settings/pin/esim",
     label: "eSIM & cellular",
-    desc: "Carrier status and the Pin's eSIM profiles: activate, enable, rename, delete.",
+    desc: "Manage cellular service and eSIM profiles.",
   },
   {
     href: "/settings/pin/flags",
     label: "Device flags",
-    desc: "The device's own feature flags and Settings.Global gates, with delivery confirmation.",
+    desc: "Advanced behavior for this Pin.",
   },
   {
     href: "/settings/pin/diagnostics",
     label: "Diagnostics & logs",
-    desc: "Remote APK install, plus server logs and logcat downloaded straight off the device.",
+    desc: "Logs and software diagnostics.",
   },
   {
     href: "/settings/pin/fitness",
     label: "Fitness",
-    desc: "Sessions the Pin recorded, their summaries, and their files.",
+    desc: "Workouts stored on this Pin.",
   },
   {
     href: "/settings/pin/contacts",
     label: "Contacts on the Pin",
-    desc: "The address book used for calls and messages on this Pin.",
+    desc: "Contacts stored on this Pin.",
   },
 ];
 
@@ -133,10 +133,10 @@ export default function ConnectPinPage() {
             }
             detail={
               usbConnected
-                ? "This browser holds an authorized ADB session to the Pin."
+                ? "Connected to this Pin over USB."
                 : remotelyConnected
-                  ? "Center reaches your paired Pin through its encrypted Iroh connection."
-                  : "Center is looking for your paired Pin over Iroh. USB is available for maintenance."
+                  ? "Connected securely to your paired Pin."
+                  : "Waiting for your paired Pin. Use USB for setup or repair."
             }
           />
         </div>
@@ -186,10 +186,10 @@ export default function ConnectPinPage() {
             </span>
             <span className={styles.rowDesc}>
               {usbConnected
-                ? "USB takes priority while attached, so installs, eSIM, Wi-Fi radio changes and logs stay local."
+                ? "Maintenance actions use this USB connection."
                 : remotelyConnected
-                  ? "Pin settings, flags, activity, captures, fitness and contacts work here without a cable. Cosmos services and music accounts stay in account settings."
-                  : "Center reconnects to your paired Pin automatically. Connect USB only for installation, recovery, eSIM, Wi-Fi radio changes or logs."}
+                  ? "Pin settings are available without a cable."
+                  : "Center reconnects automatically. Use USB for setup or repair."}
             </span>
           </span>
           {usbConnected ? (
@@ -272,9 +272,7 @@ export default function ConnectPinPage() {
                     : "Checking"
               }
               detail={
-                connectionMode === "remote"
-                  ? "Whether the Revival server answers through the encrypted Iroh bridge."
-                  : "Whether the Revival server answers over this USB session."
+                "Whether the Revival service on this Pin is responding."
               }
             />
           </div>
@@ -285,8 +283,8 @@ export default function ConnectPinPage() {
             <div className={styles.stateRow}>
               <StatusMessage tone="warning" onRetry={() => void refreshService()}>
                 {connectionMode === "remote"
-                  ? "The paired Pin is not answering over Iroh yet. Center will keep retrying; use USB below only if it needs repair."
-                  : "The Pin is attached, but its Revival server is not answering. That is expected before setup — install the software below."}
+                  ? "Your paired Pin is not responding. Center will keep trying."
+                  : "The Pin is attached, but Revival is not running. Install or repair it below."}
               </StatusMessage>
             </div>
           ) : (
@@ -311,14 +309,14 @@ export default function ConnectPinPage() {
 
       <section className={settings.section} data-testid="pin-console-index">
         <div className={settings.sectionHeader}>
-          <span className={settings.sectionTitle}>What you can do here</span>
+          <span className={settings.sectionTitle}>Pin settings</span>
         </div>
 
         {!connected ? (
           <div className={styles.noteRow}>
             <p className={styles.note}>
-              Center will load normal Pin settings over Iroh as soon as the paired device is online.
-              Maintenance panes will clearly ask for USB when a physical connection is required.
+              Center loads these settings when your paired Pin is online. Maintenance actions
+              will ask for USB when needed.
             </p>
           </div>
         ) : null}
@@ -335,13 +333,6 @@ export default function ConnectPinPage() {
           </div>
         ))}
 
-        <div className={styles.noteRow}>
-          <p className={styles.note}>
-            Ai Pin Revival is an independent project built with PenumbraOS compatibility technology.
-            It is not affiliated with Humane Inc. or HP Inc. The Ai Pin trademark and archived
-            content remain property of HP.
-          </p>
-        </div>
       </section>
     </>
   );

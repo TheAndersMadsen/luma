@@ -81,12 +81,12 @@ function activationEvidence(activation: PinSetupFacts["activation"]): {
 
 export default function SetupView({
   operator,
-  adminHref,
+  provisioningHref,
 }: {
   /** Whether the signed-in session carries the operator claim (decided server-side). */
   operator: boolean;
-  /** The operator console, when this session may reach it. */
-  adminHref: string | null;
+  /** The operator-only provisioning pane, when this session may reach it. */
+  provisioningHref: string | null;
 }) {
   const { connect, clearError, error, support } = usePinDevice();
   const readings = usePinSetupFacts({ operator });
@@ -153,10 +153,8 @@ export default function SetupView({
 
         <div className={pin.noteRow}>
           <p className={pin.note}>
-            Use these checks to finish setting up your Pin. The {plan.total} steps
-            come from the current setup contract; only the highlighted one is the
-            current action. <em>Outside this browser</em> means a terminal, operator,
-            or physical Pin is required.
+            Complete the highlighted step. Some steps require a terminal, an operator,
+            or the physical Pin.
           </p>
         </div>
 
@@ -200,7 +198,7 @@ export default function SetupView({
             focused={step.id === plan.focusStepId}
             actions={renderStepActions({
               step,
-              adminHref,
+              provisioningHref,
               connecting,
               usbSupported: readings.facts.usb.browserSupported !== false,
               onConnect: () => void onConnect(),
@@ -211,7 +209,7 @@ export default function SetupView({
 
       <section className={settings.section} data-testid="pin-setup-evidence">
         <div className={settings.sectionHeader}>
-          <span className={settings.sectionTitle}>What this page read</span>
+          <span className={settings.sectionTitle}>Setup checks</span>
         </div>
 
         <EvidenceRow
@@ -234,7 +232,7 @@ export default function SetupView({
                   ? "Refused"
                   : "Checking"
           }
-          detail="GET /api/pin/releases/current, through the same manifest verifier the installer uses."
+          detail="The current release published by Center."
         />
         <EvidenceRow
           label="Pin's own server"
@@ -252,13 +250,13 @@ export default function SetupView({
                 ? "Not answering"
                 : "Unknown"
           }
-          detail="The Revival server on the device, probed over this USB session."
+          detail="The Revival service running on this Pin."
         />
         <EvidenceRow
           label="Pointed at this server"
           tone={activation.tone}
           chip={activation.chip}
-          detail="Clone mode and its edge are read over ADB, then compared with this deployment's independently declared edge."
+          detail="The Cosmos address reported by this Pin."
         />
         <EvidenceRow
           label="Reporting to this Center"
@@ -283,7 +281,7 @@ export default function SetupView({
           detail={
             readings.lastReportAtEpoch
               ? `Last report ${new Date(readings.lastReportAtEpoch).toLocaleString()}.`
-              : "The paired-device roster and each Pin's certificate-signed status report."
+              : "The latest status reported by your paired Pin."
           }
         />
       </section>
@@ -358,13 +356,13 @@ function StepRow({
  */
 function renderStepActions({
   step,
-  adminHref,
+  provisioningHref,
   connecting,
   usbSupported,
   onConnect,
 }: {
   step: PinSetupStep;
-  adminHref: string | null;
+  provisioningHref: string | null;
   connecting: boolean;
   usbSupported: boolean;
   onConnect: () => void;
@@ -422,9 +420,9 @@ function renderStepActions({
     case "identity":
       // No link at all without the operator claim: an entry point that only
       // bounces the wearer back to "/" is worse than none.
-      if (!adminHref) return null;
+      if (!provisioningHref) return null;
       return (
-        <Link className={settings.additionLink} href={adminHref}>
+        <Link className={settings.additionLink} href={provisioningHref}>
           Open provisioning
         </Link>
       );

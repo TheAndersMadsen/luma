@@ -174,7 +174,7 @@ export default function Page() {
               {mutation.isError ? (
                 <div className={settings.stateRow}>
                   <StatusMessage tone="warning">
-                    That setting wasn&rsquo;t written — the switch has been put back. Try again.
+                    Couldn&rsquo;t save that setting. Try again.
                   </StatusMessage>
                 </div>
               ) : null}

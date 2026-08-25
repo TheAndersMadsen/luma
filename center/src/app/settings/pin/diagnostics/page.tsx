@@ -146,8 +146,8 @@ export default function PinDiagnosticsPane() {
             />
             <StatusMessage tone={apkInstallEnabled ? "warning" : "info"}>
               {apkInstallEnabled
-                ? "This Pin will install software handed to it over its network API. Leave this on only while you are actively installing something, and turn it off afterwards."
-                : "Off. Software can still be installed over USB from the installer, which is the path this Center uses."}
+                ? "Remote installs are enabled. Turn this off when you finish."
+                : "Off. Use the USB installer to install software."}
             </StatusMessage>
           </FormRow>
         </PaneSection>
@@ -156,10 +156,7 @@ export default function PinDiagnosticsPane() {
       <PaneSection title="Device logs" testId="pin-diagnostics-logs">
         <div className={styles.formRow}>
           <p className={styles.formHelp}>
-            Read straight off the device over the USB session and saved by this
-            browser. Nothing is uploaded to Center, so a log can be captured from a
-            Pin with no network connection at all. Logs can contain wearer content —
-            treat the saved file as personal data.
+            Downloaded directly from the Pin over USB. Logs can contain personal data.
           </p>
           <div className={styles.actionRow}>
             <button
@@ -187,9 +184,7 @@ export default function PinDiagnosticsPane() {
         {versions ? (
           <div className={styles.formRow}>
             <p className={styles.formHelp}>
-              What the connected device reports right now over USB. Your account&rsquo;s
-              paired-device record on My Ai Pin is a different reading — it is
-              whatever the Pin last reported to the cloud.
+              Versions reported by the connected Pin.
             </p>
             <dl className={styles.factList}>
               <dt>arcOS</dt>
@@ -231,9 +226,7 @@ export default function PinDiagnosticsPane() {
               <span className={styles.inlineTag}>Operators only</span>
             </span>
             <span className={settings.additionRowDesc}>
-              An interactive root shell on the device, for an install that failed
-              mid-bootstrap. Center refuses this page for any session that is not an
-              operator and returns you to the home page.
+              Root shell for recovering a failed install. Operators only.
             </span>
           </span>
           <Link className={settings.additionLink} href="/admin/pin/terminal">

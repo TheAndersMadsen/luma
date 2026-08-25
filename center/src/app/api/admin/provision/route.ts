@@ -44,7 +44,7 @@ export async function POST(request: Request) {
   }
   if (!COSMOS_ADMIN_ENABLED) {
     return Response.json(
-      { error: "The operator console is not configured (no COSMOS_ADMIN_TOKEN)." },
+      { error: "Operator provisioning is not configured (no COSMOS_ADMIN_TOKEN)." },
       {
         status: 503,
         headers: {

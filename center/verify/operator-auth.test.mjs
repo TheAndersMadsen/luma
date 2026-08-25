@@ -83,8 +83,8 @@ test("source-visible local signing key can never unlock the operator plane", asy
   }
 });
 
-test("operator route classification is narrow and includes every admin surface", () => {
-  for (const pathname of ["/admin", "/admin/", "/admin/setup", "/api/admin", "/api/admin/flags"]) {
+test("operator route classification is narrow and includes every operator surface", () => {
+  for (const pathname of ["/admin", "/admin/", "/admin/setup", "/api/admin", "/api/admin/flags", "/settings/pin/provision", "/settings/pin/provision/"]) {
     assert.equal(isOperatorPath(pathname), true, pathname);
   }
   for (const pathname of ["/", "/captures", "/api/adminish", "/api/capture/memories"]) {

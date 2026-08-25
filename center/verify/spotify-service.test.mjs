@@ -374,7 +374,7 @@ test("Services renders every Pin-native state, polling and settings fallback", a
   }
   assert.match(view, /active_provider/);
   assert.doesNotMatch(view, /Metrolist|install the app on the Pin|provider app owns its login/i);
-  assert.match(view, /Pear.*ad fields|ad\/tracker hosts/);
+  assert.match(view, /filters ads and trackers/);
   assert.doesNotMatch(`${page}\n${view}`, /client secret|developer OAuth/i);
 });
 

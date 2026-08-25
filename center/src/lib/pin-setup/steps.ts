@@ -219,7 +219,7 @@ function deriveConnect(usb: PinSetupUsbFacts): DraftStep {
     return {
       status: "attention",
       summary: "This browser cannot reach a Pin over USB.",
-      next: "Open Center in a desktop Chromium browser, over HTTPS or on localhost. WebUSB is a browser capability, so no command replaces it.",
+      next: "Use desktop Chrome or Edge over HTTPS, or on localhost.",
     };
   }
 
@@ -227,7 +227,7 @@ function deriveConnect(usb: PinSetupUsbFacts): DraftStep {
     return {
       status: "attention",
       summary: "A device is attached, but it does not identify as an Ai Pin.",
-      next: "Disconnect it. Installing Revival software on another device is not supported and can leave it unusable.",
+      next: "Disconnect it. Revival supports Ai Pin hardware only.",
     };
   }
 
@@ -235,20 +235,20 @@ function deriveConnect(usb: PinSetupUsbFacts): DraftStep {
     return {
       status: "done",
       summary: usb.serial
-        ? `A Pin is attached to this browser over USB (serial ${usb.serial}).`
-        : "A Pin is attached to this browser over USB.",
+        ? `Connected over USB · ${usb.serial}`
+        : "Connected over USB.",
       next: null,
     };
   }
 
   if (usb.connecting) {
-    return { status: "todo", summary: "Waiting for the browser's device picker.", next: null };
+    return { status: "todo", summary: "Choose your Pin in the USB prompt.", next: null };
   }
 
   return {
     status: "todo",
-    summary: "No Pin is attached to this browser.",
-    next: "Plug the Pin into this computer with a USB-C cable, then choose it in the browser's device picker.",
+    summary: "No Pin is connected.",
+    next: "Connect the Pin with USB-C, then choose it in the USB prompt.",
   };
 }
 
@@ -258,24 +258,22 @@ function deriveRelease(release: PinSetupReleaseFacts): DraftStep {
       return {
         status: "done",
         summary: release.version
-          ? `Signed release ${release.version} is imported; Center verified its manifest.`
-          : "A signed release exists; Center verified its published manifest.",
+          ? `Release ${release.version} is ready.`
+          : "A signed release is ready.",
         next: null,
       };
     case "checking":
       return {
         status: "todo",
-        summary: "Checking the signed release store mounted by this Center…",
+        summary: "Checking for a signed release…",
         next: null,
       };
     case "not-published":
       return {
         status: "manual",
-        summary:
-          "Center has no signed Pin release in its release store.",
-        next: "Download the signed Pin archive from GitHub Releases, then import it with the command below.",
-        manualNote:
-          "The import verifies every APK and makes the complete release current atomically.",
+        summary: "No signed Pin release is available.",
+        next: "Download the signed archive from GitHub Releases, then import it.",
+        manualNote: "Import verifies every APK before publishing the release.",
       };
     case "unreadable":
       return {
@@ -288,7 +286,7 @@ function deriveRelease(release: PinSetupReleaseFacts): DraftStep {
     default:
       return {
         status: "todo",
-        summary: "Whether a signed release exists has not been established yet.",
+        summary: "Release status has not been checked.",
         next: null,
       };
   }
@@ -300,7 +298,7 @@ function deriveInstall(facts: PinSetupFacts): DraftStep {
   if (!usb.connected) {
     return {
       status: "blocked",
-      summary: "Installing needs the Pin attached over USB.",
+      summary: "Connect the Pin over USB to install.",
       next: null,
     };
   }
@@ -314,18 +312,18 @@ function deriveInstall(facts: PinSetupFacts): DraftStep {
     return {
       status: "blocked",
       summary: stillChecking
-        ? "Waiting to hear which release this Center serves."
+        ? "Checking the published release."
         : "There is no verified release to install.",
       next: stillChecking
         ? null
-        : "Publish a release first — the installer resolves its target from this Center and refuses anything it cannot verify.",
+        : "Publish a verified release first.",
     };
   }
 
   if (install.state !== "read") {
     return {
       status: "blocked",
-      summary: "The Pin has not been read yet, so there is nothing to compare against the release.",
+      summary: "Inspecting the Pin.",
       next: null,
     };
   }
@@ -341,8 +339,8 @@ function deriveInstall(facts: PinSetupFacts): DraftStep {
   if (install.rolesInstalled === 0) {
     return {
       status: "todo",
-      summary: "None of the Revival packages are on this Pin yet.",
-      next: "Run the installer: it downloads the release, checks every artifact's SHA-256, and installs the roles.",
+      summary: "Revival is not installed on this Pin.",
+      next: "Open the installer.",
     };
   }
 
@@ -358,13 +356,13 @@ function deriveInstall(facts: PinSetupFacts): DraftStep {
           ? `, and ${install.unhealthyRoles} installed package${install.unhealthyRoles === 1 ? " is" : "s are"} not answering`
           : ""
       }.`,
-      next: "Run the installer to bring every role to the published version.",
+      next: "Open the installer to update every package.",
     };
   }
 
   return {
     status: "done",
-    summary: `All ${install.rolesTotal} packages are installed, answering, and match the published release.`,
+    summary: `All ${install.rolesTotal} packages match the published release.`,
     next: null,
   };
 }
@@ -373,7 +371,7 @@ function deriveConfigure(facts: PinSetupFacts): DraftStep {
   const { usb, server, install } = facts;
 
   if (!usb.connected) {
-    return { status: "blocked", summary: "Configuration is read from the Pin itself over USB.", next: null };
+    return { status: "blocked", summary: "Connect the Pin over USB to check its setup.", next: null };
   }
 
   if (server.answering === "checking") {
@@ -383,7 +381,7 @@ function deriveConfigure(facts: PinSetupFacts): DraftStep {
   if (server.answering === "unknown") {
     return {
       status: "todo",
-      summary: "Whether the Pin runs a Revival server has not been established yet.",
+      summary: "Pin service status has not been checked.",
       next: null,
     };
   }
@@ -393,29 +391,29 @@ function deriveConfigure(facts: PinSetupFacts): DraftStep {
     return {
       status: installed ? "attention" : "blocked",
       summary: installed
-        ? "The Revival packages are installed, but the Pin's server is not answering over USB."
-        : "The Pin is not running a Revival server yet, which is expected before the software is installed.",
+        ? "Revival is installed but not responding."
+        : "Install Revival first.",
       next: installed
-        ? "Reinstall or repair the software, then come back — every setting on this page is read from that server."
+        ? "Repair or reinstall it."
         : null,
     };
   }
 
   if (server.assistantReady === null) {
-    return { status: "todo", summary: "Reading Cosmos service status…", next: null };
+    return { status: "todo", summary: "Checking Cosmos services…", next: null };
   }
 
   if (!server.assistantReady) {
     return {
       status: "todo",
-      summary: "The Pin's server is answering, but the Cosmos assistant is not configured.",
-      next: "Configure the assistant on the Cosmos server, then refresh. No provider key is copied to the Pin.",
+      summary: "Cosmos Assistant needs setup.",
+      next: "Configure Assistant in Settings → Services.",
     };
   }
 
   return {
     status: "done",
-    summary: `The Pin answers over USB and Cosmos is ready${
+    summary: `Pin and Cosmos are ready${
       server.assistantModel ? ` (${server.assistantModel})` : ""
     }.`,
     next: null,
@@ -424,7 +422,7 @@ function deriveConfigure(facts: PinSetupFacts): DraftStep {
 
 /** The one warning that is true of the minted bundle in every branch below. */
 const IDENTITY_CREDENTIAL_NOTE =
-  "The private key is issued once and never stored anywhere. Treat the response as credential material: it is the device's identity.";
+  "Download the activation file now. Its private key is not stored.";
 
 function deriveIdentity(facts: PinSetupFacts): DraftStep {
   const { activation, operator } = facts;
@@ -434,8 +432,7 @@ function deriveIdentity(facts: PinSetupFacts): DraftStep {
   if (activation.state === "active") {
     return {
       status: "done",
-      summary:
-        "This Pin holds an imported device identity: activation turns clone mode on only after a minted certificate and key are validated and installed, so a credential was issued for this device.",
+      summary: "Device identity is installed.",
       next: null,
     };
   }
@@ -450,18 +447,16 @@ function deriveIdentity(facts: PinSetupFacts): DraftStep {
   if (operator) {
     return {
       status: "todo",
-      summary:
-        "Center cannot confirm whether this Pin has a credential — the bundle is shown once and never stored, and this Pin is not activated, so there is nothing to read back. Mint one if you have not.",
-      next: "Open the operator console and use the Provisioning card. It returns the device id, certificate, private key, CA certificate and enrolment pincode — once. Keep the bundle: activation needs it.",
+      summary: "This Pin has not been activated.",
+      next: "Open Provisioning and create its activation file.",
       manualNote: IDENTITY_CREDENTIAL_NOTE,
     };
   }
 
   return {
     status: "manual",
-    summary:
-      "Center cannot confirm whether this Pin has a credential, and this session cannot mint one — the Provisioning card is behind the operator gate, which this session does not contain.",
-    next: "Ask an operator to mint a device credential. From the operator console's Provisioning card it returns the device id, certificate, private key, CA certificate and enrolment pincode — once.",
+    summary: "This Pin has not been activated.",
+    next: "Ask an operator to create its activation file.",
     manualNote: IDENTITY_CREDENTIAL_NOTE,
   };
 }
@@ -472,25 +467,25 @@ function deriveActivate(facts: PinSetupFacts): DraftStep {
   if (!usb.connected) {
     return {
       status: "blocked",
-      summary: "Whether the Pin is pointed at this server is read from the device over USB.",
+      summary: "Connect over USB to check activation.",
       next: null,
     };
   }
 
   if (activation.state === "checking") {
-    return { status: "todo", summary: "Reading clone mode from the device…", next: null };
+    return { status: "todo", summary: "Checking activation…", next: null };
   }
 
   if (activation.state === "unknown") {
-    return { status: "todo", summary: "Clone mode has not been read from this Pin yet.", next: null };
+    return { status: "todo", summary: "Activation has not been checked.", next: null };
   }
 
   if (activation.state === "unreadable") {
     return {
       status: "attention",
       summary: activation.detail
-        ? `Clone mode could not be read: ${activation.detail}`
-        : "Clone mode could not be read from the device.",
+        ? `Couldn’t read activation: ${activation.detail}`
+        : "Couldn’t read activation from the Pin.",
       next: null,
     };
   }
@@ -499,9 +494,8 @@ function deriveActivate(facts: PinSetupFacts): DraftStep {
     if (!activation.edgeIpv4) {
       return {
         status: "manual",
-        summary:
-          "Clone mode is on, but no edge address is set — the hook has nothing to resolve the stock hostnames to.",
-        next: "Re-run activation with the edge IPv4 in the bundle; clone mode without an address leaves every hook inert.",
+        summary: "Activation is incomplete: no edge address is set.",
+        next: "Run activation again with the Cosmos edge IPv4.",
       };
     }
     // `penumbra_cosmos_remote_mode=1` says the Pin is pointed at SOME server; it
@@ -511,51 +505,50 @@ function deriveActivate(facts: PinSetupFacts): DraftStep {
     if (activation.expectedEdgeState === "checking" || activation.expectedEdgeState === "unknown") {
       return {
         status: "todo",
-        summary: `Clone mode is on and the Pin resolves stock Humane hostnames to ${activation.edgeIpv4}; Center is still checking its own declared edge address.`,
+        summary: `Pin edge: ${activation.edgeIpv4}. Checking Cosmos…`,
         next: null,
       };
     }
     if (activation.expectedEdgeState === "invalid") {
       return {
         status: "attention",
-        summary: `Clone mode is on and the Pin resolves stock Humane hostnames to ${activation.edgeIpv4}, but this deployment's REVIVAL_DEVICE_EDGE_IPV4 value is invalid.`,
-        next: "Set REVIVAL_DEVICE_EDGE_IPV4 to one canonical IPv4 address. Center will not treat malformed configuration as an absent declaration.",
+        summary: `Pin edge is ${activation.edgeIpv4}, but Center’s edge setting is invalid.`,
+        next: "Set REVIVAL_DEVICE_EDGE_IPV4 to one IPv4 address.",
       };
     }
     if (activation.expectedEdgeState === "unreadable") {
       return {
         status: "attention",
-        summary: `Clone mode is on and the Pin resolves stock Humane hostnames to ${activation.edgeIpv4}, but Center could not read its expected edge declaration.`,
-        next: "Check Center's setup endpoint, then read this step again. The Pin's address cannot be accepted without an independent deployment value.",
+        summary: `Pin edge is ${activation.edgeIpv4}, but Center’s edge setting couldn’t be read.`,
+        next: "Check Center’s environment and try again.",
       };
     }
     if (activation.expectedEdgeState === "absent" || activation.expectedEdgeIpv4 === null) {
       return {
         status: "attention",
-        summary: `Clone mode is on: the Pin resolves the stock Humane hostnames to ${activation.edgeIpv4}. This deployment has not declared its own edge address, so the dashboard cannot confirm that is this server.`,
-        next: "Set REVIVAL_DEVICE_EDGE_IPV4 for Center to the address this deployment's device edge answers on, and this step will verify itself.",
+        summary: `Pin edge is ${activation.edgeIpv4}, but Center has no edge address to compare.`,
+        next: "Set REVIVAL_DEVICE_EDGE_IPV4 to this Cosmos edge.",
       };
     }
     if (activation.expectedEdgeIpv4 !== activation.edgeIpv4) {
       return {
         status: "attention",
-        summary: `Clone mode is on, but the Pin resolves the stock Humane hostnames to ${activation.edgeIpv4} — not this server (${activation.expectedEdgeIpv4}).`,
-        next: "Re-run activation with this server's edge IPv4, or the Pin will keep sending its captures elsewhere.",
+        summary: `Pin edge ${activation.edgeIpv4} does not match Cosmos ${activation.expectedEdgeIpv4}.`,
+        next: "Run activation again with the Cosmos edge IPv4.",
       };
     }
     return {
       status: "done",
-      summary: `Clone mode is on: the Pin resolves the stock Humane hostnames to ${activation.edgeIpv4}, which is this server.`,
+      summary: `Pin is connected to Cosmos at ${activation.edgeIpv4}.`,
       next: null,
     };
   }
 
   return {
     status: "manual",
-    summary: "Clone mode is off: this Pin is still talking to the original Humane cloud.",
-    next: "Run the canonical activation command with the exact Pin serial, credential bundle, and edge IPv4.",
-    manualNote:
-      "Activation is a confirmed, exact-device mutation. The CLI uses the Pin's journalled transaction; never write the three Settings.Global keys by hand.",
+    summary: "This Pin is not activated for Cosmos.",
+    next: "Run the activation command with this Pin’s serial, activation file, and Cosmos edge IPv4.",
+    manualNote: "Review the exact-device plan before using --confirm.",
   };
 }
 
@@ -563,42 +556,40 @@ function deriveNetwork(cloud: PinSetupCloudFacts): DraftStep {
   if (cloud.state === "unknown") {
     return {
       status: "todo",
-      summary: "Checking account-wide reports for supporting network context…",
+      summary: "Checking Pin reports…",
       next: null,
     };
   }
 
   let context: string;
   if (cloud.state === "degraded") {
-    context = "Center could not read the account-wide reporting context.";
+    context = "Pin reports are unavailable.";
   } else if (cloud.state === "absent") {
-    context = "This deployment has no reporting service to provide account-wide context.";
+    context = "Pin reporting is not configured.";
   } else if (cloud.reportingCount > 0) {
-    context = `${cloud.reportingCount} paired Pin${cloud.reportingCount === 1 ? " is" : "s are"} reporting somewhere on this account, but those reports do not identify the exact Pin attached here.`;
+    context = `${cloud.reportingCount} paired Pin${cloud.reportingCount === 1 ? " is" : "s are"} reporting.`;
   } else {
-    context = `${cloud.pairedCount ?? 0} Pin${cloud.pairedCount === 1 ? " is" : "s are"} paired, and none is currently reporting.`;
+    context = "No paired Pin is reporting.";
   }
 
   return {
     status: "manual",
-    summary: `${context} The connected Pin's network path remains unverified.`,
-    next: "Create the Wi-Fi QR code in this browser, scan it with the Pin, then run the exact-device network check.",
-    manualNote:
-      "The /wifi page creates the QR payload entirely in this browser. Center never receives or stores the network name or password, and account-wide reports are never accepted as exact-device proof.",
+    summary: `${context} This Pin still needs a network check.`,
+    next: "Create the Wi-Fi QR code, scan it on the Pin, then run the network check.",
+    manualNote: "Wi-Fi details stay in this browser.",
   };
 }
 
 function deriveConfirm(cloud: PinSetupCloudFacts): DraftStep {
   const onlineEvidence =
     cloud.state === "live" && cloud.reportingCount > 0
-      ? `${cloud.reportingCount} paired Pin${cloud.reportingCount === 1 ? " is" : "s are"} reporting, so the software path is online.`
-      : "Center does not currently have a live report proving the full software path is online.";
+      ? `${cloud.reportingCount} paired Pin${cloud.reportingCount === 1 ? " is" : "s are"} online.`
+      : "No live Pin report is available.";
   return {
     status: "manual",
-    summary: `${onlineEvidence} Physical gesture, microphone, speaker, and wearer-response acceptance are separate and are not recorded by this page.`,
-    next: "On the physical Pin, trigger a known prompt and confirm the gesture, audible response, and expected action yourself.",
-    manualNote:
-      "Center never turns service health into a physical-pass claim and never saves a checkbox as substitute evidence. Re-run the CLI status check for software facts; perform physical acceptance on the device.",
+    summary: `${onlineEvidence} Test this Pin’s microphone, speaker, and gesture.`,
+    next: "Make a voice request on the Pin and confirm the response.",
+    manualNote: "Use the CLI status command for software checks.",
   };
 }
 

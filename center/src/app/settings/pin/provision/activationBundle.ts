@@ -1,7 +1,10 @@
-import type { Bundle } from "./AdminTypes";
+import type { ActivationBundle } from "./types";
 
 /** The one file accepted by `pin activate --credential-file`. */
-export function createActivationBundleJson(bundle: Bundle, deviceStatusEndpoint: string): string {
+export function createActivationBundleJson(
+  bundle: ActivationBundle,
+  deviceStatusEndpoint: string,
+): string {
   return `${JSON.stringify({
     device_id: bundle.device_id,
     certificate_pem: bundle.certificate_pem,

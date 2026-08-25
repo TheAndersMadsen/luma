@@ -6,10 +6,11 @@ import { usePathname } from "next/navigation";
 import { ChevronLeft } from "@/icons";
 import styles from "./settings.module.css";
 import {
-  SETTINGS_GROUPS,
   routeIsActive,
+  settingsGroupsFor,
   type SettingsRoute,
 } from "./settingsRegistry";
+import { useOperatorEntitlement } from "./useOperatorEntitlement";
 
 function NavLink({ route }: { route: SettingsRoute }) {
   const pathname = usePathname();
@@ -31,9 +32,12 @@ function NavLink({ route }: { route: SettingsRoute }) {
 }
 
 export function SettingsNav() {
+  const operator = useOperatorEntitlement();
+  const groups = settingsGroupsFor(operator);
+
   return (
     <nav className={styles.navContainer} aria-label="Settings">
-      {SETTINGS_GROUPS.map((group) => (
+      {groups.map((group) => (
         <div key={group.header} className={styles.group}>
           <span className={styles.categoryHeader}>{group.header}</span>
           <div className={styles.groupLinks}>

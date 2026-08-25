@@ -102,12 +102,12 @@ test("one step is focused and aggregate software health proves neither exact net
   assert.equal(plan.steps.find((step) => step.id === "network").status, "manual");
   assert.match(
     plan.steps.find((step) => step.id === "network").summary,
-    /reports do not identify the exact Pin attached here.*network path remains unverified/,
+    /This Pin still needs a network check/,
   );
   assert.equal(plan.steps.find((step) => step.id === "confirm").status, "manual");
   assert.match(
     plan.steps.find((step) => step.id === "confirm").summary,
-    /Physical gesture, microphone, speaker, and wearer-response acceptance are separate/,
+    /Test this Pin.*microphone, speaker, and gesture/,
   );
 });
 
@@ -120,9 +120,9 @@ test("an unpublished release points directly to the verified archive import", ()
   const release = plan.steps.find((step) => step.id === "release");
   assert.equal(release.status, "manual");
   assert.deepEqual(release.commands, ["./revival pin release import"]);
-  assert.match(release.summary, /no signed Pin release/);
-  assert.match(release.next, /Download the signed Pin archive/);
-  assert.match(release.manualNote, /makes the complete release current atomically/);
+  assert.match(release.summary, /No signed Pin release/);
+  assert.match(release.next, /Download the signed archive/);
+  assert.match(release.manualNote, /verifies every APK/);
   assert.equal(plan.steps.some((step) => step.id === "ship"), false);
 });
 
@@ -140,7 +140,8 @@ test("invalid deployment edge configuration cannot look absent or verified", () 
   );
   const activation = plan.steps.find((step) => step.id === "activate");
   assert.equal(activation.status, "attention");
-  assert.match(activation.summary, /REVIVAL_DEVICE_EDGE_IPV4 value is invalid/);
+  assert.match(activation.summary, /edge setting is invalid/);
+  assert.match(activation.next, /REVIVAL_DEVICE_EDGE_IPV4/);
   assert.equal(plan.focusStepId, "activate");
 });
 

@@ -173,11 +173,8 @@ export default function PinServerPane() {
               label="LAN admin token"
               help={
                 <>
-                  Write-only. This is the bearer token a browser on the Pin&rsquo;s Wi-Fi
-                  network would have to present to reach the Pin&rsquo;s admin API. It is
-                  never read back — the Pin only reports whether one is set. Setting
-                  it here goes over Center&rsquo;s authenticated Iroh connection or USB,
-                  so the change cannot lock this page out of the device.
+                  Used by the Pin&rsquo;s local Wi-Fi API. It is write-only and does not
+                  affect Center&rsquo;s connection.
                 </>
               }
             >
@@ -192,9 +189,7 @@ export default function PinServerPane() {
           ) : (
             <div className={styles.formRow}>
               <StatusMessage tone="warning">
-                This Pin&rsquo;s server does not advertise LAN admin authentication.
-                Install a newer Revival release over USB before enabling network
-                administration.
+                Update the Pin before enabling network administration.
               </StatusMessage>
             </div>
           )}
@@ -202,11 +197,11 @@ export default function PinServerPane() {
           {capabilities.lanDashboard ? (
             <FormRow
               label="Wi-Fi dashboard"
-              help="Takes effect after the Pin restarts. Traffic is protected by the admin token above but uses plaintext HTTP, so enable it only on a network you trust."
+              help="Takes effect after restart. Enable only on a trusted network; it uses HTTP."
             >
               <ToggleRow
                 ariaLabel="Wi-Fi dashboard listener"
-                copy="Make the authenticated Pin API discoverable and reachable on the Pin's current Wi-Fi network."
+                copy="Make the Pin's local API available over Wi-Fi."
                 checked={lanDashboardEnabled}
                 onChange={setLanDashboardEnabled}
               />

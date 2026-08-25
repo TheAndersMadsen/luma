@@ -70,7 +70,7 @@ test("user interface source stays free of generic AI and prompt filler", async (
 
 test("Pin setup instructions stay direct", async () => {
   const setup = withoutComments(await source("src/app/settings/pin/setup/SetupView.tsx"));
-  assert.match(setup, /Use these checks to finish setting up your Pin\./);
+  assert.match(setup, /Complete the highlighted step\./);
   assert.doesNotMatch(setup, /Stock Humane had no surface|walks the same ceremony|rather than asking you/);
 });
 
@@ -111,17 +111,22 @@ test("Pin settings do not render raw API errors", async () => {
   assert.doesNotMatch(withoutComments(provider), /stopped answering|maintenance or recovery/);
 });
 
-test("operator navigation requires both entitlement and a configured console", async () => {
-  const [route, menu] = await Promise.all([
+test("operator tools live in Settings and stay out of the account menu", async () => {
+  const [route, menu, entitlement, registry, nav] = await Promise.all([
     source("src/app/api/auth/session/route.ts"),
     source("src/components/NavMenu.tsx"),
+    source("src/app/settings/useOperatorEntitlement.ts"),
+    source("src/app/settings/settingsRegistry.ts"),
+    source("src/app/settings/SettingsNav.tsx"),
   ]);
   assert.match(route, /await verifySession/);
   assert.match(route, /operator: session\?\.operator === true/);
   assert.match(route, /cache-control": "private, no-store/);
-  assert.match(menu, /useOperatorEntitlement\(open\)/);
-  assert.match(menu, /useConsoleConfigured\(open && operatorEntitled === true\)/);
-  assert.match(menu, /operatorEntitled === true && consoleConfigured === true/);
+  assert.doesNotMatch(menu, /Operator Console|href="\/admin"|api\/admin\/overview|useQuery/);
+  assert.match(entitlement, /fetch\("\/api\/auth\/session"/);
+  assert.match(registry, /href: "\/settings\/pin\/provision"/);
+  assert.match(registry, /operatorOnly: true/);
+  assert.match(nav, /settingsGroupsFor\(operator\)/);
 });
 
 test("core interactive controls retain a 44 pixel touch target", async () => {

@@ -682,12 +682,6 @@ export default function PinEsimPane() {
                   </div>
                 )}
 
-                {enabled && profile.protected !== true ? (
-                  <p className={styles.formHelp}>
-                    Deleting is only offered once a profile is disabled — that order
-                    makes the reversible step come first.
-                  </p>
-                ) : null}
               </article>
             );
           })
@@ -702,7 +696,7 @@ export default function PinEsimPane() {
         <FormRow
           label="Activation code"
           htmlFor={activationCodeId}
-          help="The LPA string from your carrier. It is a provisioning credential: this browser drops its copy the moment the Pin accepts the request, and the redaction layer keeps it out of every log line."
+          help="Carrier activation code. Center clears it after the Pin accepts it."
         >
           <input
             id={activationCodeId}

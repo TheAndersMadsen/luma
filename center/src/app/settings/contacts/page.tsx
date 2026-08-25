@@ -27,16 +27,13 @@ export default function ContactsPage() {
       */}
       <section className={settings.section} data-testid="contacts-authority">
         <div className={settings.sectionHeader}>
-          <span className={settings.sectionTitle}>Contacts on the Pin itself</span>
+          <span className={settings.sectionTitle}>Pin contacts</span>
         </div>
         <div className={settings.additionRow}>
           <span className={settings.additionRowText}>
             <span className={settings.additionRowDesc}>
-              The contacts above live in your account on this server. The Pin also
-              keeps its own address book on the device, and that is the one it
-              answers calls and messages from. The two are not synced, so a contact
-              you need on the Pin has to exist there too. Open the Pin contacts pane
-              to see and edit it remotely, or over USB while the device is attached.
+              Account contacts and Pin contacts are separate. Add a contact to the Pin
+              to use it for calls or messages.
             </span>
           </span>
           <Link className={settings.additionLink} href="/settings/pin/contacts">

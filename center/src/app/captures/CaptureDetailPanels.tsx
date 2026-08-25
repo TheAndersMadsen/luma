@@ -113,7 +113,7 @@ export function CaptureInfo({ uuid, created, frameCount, selectedFrame }: { uuid
       <details className={styles.technicalDetails}>
         <summary>Technical details</summary>
         <div className={styles.infoRow}><span className={styles.infoLabel}>Memory UUID</span><span className={styles.infoValue}>{uuid}</span></div>
-        <p className={styles.infoNote}>Capture bodies stay sealed under the wearer&rsquo;s channel key. Location, dimensions, and EXIF are not available from the current capture index.</p>
+        <p className={styles.infoNote}>Location and camera details aren&rsquo;t available for this capture.</p>
       </details>
     </div>
   );

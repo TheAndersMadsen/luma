@@ -119,7 +119,7 @@ export default function MemoryDetailView({ uuid }: { uuid: string }) {
         <EmptyState
           inline
           title="That is not an identifier this Pin can address."
-          detail="The device's media store only accepts canonical UUIDs, so there is nothing to read at this address. Open the capture from the gallery instead."
+          detail="Open the capture from the gallery."
           action={{ label: "Back to the gallery", href: "/settings/pin/gallery" }}
         />
       </PaneSection>

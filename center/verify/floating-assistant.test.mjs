@@ -49,6 +49,8 @@ test("a task-specific cue replaces the generic working indicator", async () => {
   const chat = await source("src/components/AiMicChat.tsx");
   assert.match(chat, /t\.cue && <p className=\{styles\.cue\} role="status">\{t\.cue\}<\/p>/);
   assert.match(chat, /t\.streaming && !t\.cue \? \(/);
+  assert.match(chat, /<StatusChip tone="live" label="Working" \/>/);
+  assert.doesNotMatch(chat, /styles\.dots|<i \/>/);
 });
 
 test("legacy full-page Ai Mic links open the floating assistant", async () => {

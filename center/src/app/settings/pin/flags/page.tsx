@@ -352,15 +352,11 @@ export default function PinFlagsPane() {
         <StatusMessage tone="info">{saveMessage}</StatusMessage>
       ) : null}
 
-      <PaneSection title="What this pane is" testId="pin-flags-authority">
+      <PaneSection title="About device flags" testId="pin-flags-authority">
         <div className={settings.additionRow}>
           <span className={settings.additionRowText}>
             <span className={settings.additionRowDesc}>
-              These flags belong to the connected <strong>device</strong>: they are the
-              assignment set stock arcOS fetches over its FeatureFlags gRPC service,
-              plus the Pin&rsquo;s own Android Settings.Global gates. Your account&rsquo;s
-              Features list is a different authority — a cloud allowlist for your
-              wearer profile — and changing one does not change the other.
+              These settings belong to this Pin. Account features are managed separately.
             </span>
           </span>
           <Link className={settings.additionLink} href="/settings/account/features">
@@ -384,9 +380,7 @@ export default function PinFlagsPane() {
         <PaneSection title="Cloud feature flags" testId="pin-flags-cloud">
           <div className={styles.formRow}>
             <p className={styles.formHelp}>
-              &ldquo;Use default&rdquo; removes the server override. A Revival baseline
-              remains in the gRPC assignment set; otherwise the key is omitted and
-              stock arcOS resolves its firmware default.
+              &ldquo;Use default&rdquo; removes the override and restores the Pin&rsquo;s normal value.
             </p>
           </div>
           {writableFlags.map((flag) => (
@@ -515,18 +509,18 @@ function DeliveryPollNotice({
     switch (status.state) {
       case "polling":
         return status.attempt === 0
-          ? "Starting automatic checks for exact stock-cache acknowledgement."
-          : `Checking for exact stock-cache acknowledgement (attempt ${status.attempt} of ${status.maxAttempts}).`;
+          ? "Checking that your Pin received the changes."
+          : `Checking your Pin (${status.attempt} of ${status.maxAttempts}).`;
       case "verified":
         return consumerPending
-          ? "Stock acknowledged the exact assignment-set hash. Automatic checks are complete. Restart-required consumers are still pending."
-          : "Stock acknowledged the exact assignment-set hash. Automatic checks are complete.";
+          ? "Your Pin received the changes. Restart it to finish applying them."
+          : "Your Pin received the changes.";
       case "timed_out":
-        return `Automatic checks stopped after ${status.attempts} attempts without exact stock-cache acknowledgement.`;
+        return `Couldn’t confirm the changes after ${status.attempts} checks.`;
       case "superseded":
-        return "Automatic checks stopped because the Pin desired a different assignment set. Reload this page before making more changes.";
+        return "The feature list changed while this page was checking. Reload before making more changes.";
       case "error":
-        return "Automatic delivery checks could not continue because the Pin became unavailable.";
+        return "Your Pin went offline before the changes could be confirmed.";
     }
   })();
 
@@ -669,7 +663,7 @@ function GateControl({
           </span>
           <span className={styles.cardMeta}>
             <code className={styles.mono}>{gate.key}</code>
-            <span>Android Settings.Global · integer bool</span>
+            <span>On-device setting</span>
           </span>
         </span>
         {gate.writable ? (

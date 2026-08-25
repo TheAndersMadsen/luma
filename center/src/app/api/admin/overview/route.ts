@@ -11,7 +11,7 @@ import { SESSION_COOKIE, verifySession } from "@/server/auth";
 import { parseDeviceEdgeDeclaration } from "@/lib/pin-setup";
 
 /**
- * GET /api/admin/overview — the operator console's headline state, proxied from
+ * GET /api/admin/overview — the provisioning summary, proxied from
  * the clone's admin surface (`/demo-api/admin/overview`): enrollment status, the
  * enrollment pincode, persistence counts, and the provisioned-credential tally.
  *
@@ -36,7 +36,7 @@ export async function GET() {
   }
   if (!COSMOS_ADMIN_ENABLED) {
     return Response.json(
-      { error: "The operator console is not configured (no COSMOS_ADMIN_TOKEN)." },
+      { error: "Operator provisioning is not configured (no COSMOS_ADMIN_TOKEN)." },
       {
         status: 503,
         headers: sourceHeaders({ source: "unconfigured", state: "absent", fallback: "empty" }),

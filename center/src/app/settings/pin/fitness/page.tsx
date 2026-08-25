@@ -230,8 +230,7 @@ export default function PinFitnessPane() {
     >
       <div className={styles.formRow}>
         <p className={styles.formHelp}>
-          Recorded by the Pin and stored only on the Pin — Center holds no copy, so
-          export anything you want to keep before deleting it.
+          Stored on this Pin. Export a workout before deleting it.
         </p>
         {message ? <StatusMessage tone="warning">{message}</StatusMessage> : null}
       </div>
@@ -239,7 +238,7 @@ export default function PinFitnessPane() {
       {sessions.length > 0 ? (
         <ArmedClearControl
           armed={clearArmed}
-          question={`Delete all ${sessions.length} saved ${sessions.length === 1 ? "workout" : "workouts"} from this Pin? They are not synced anywhere, so this cannot be undone — export anything you want to keep first.`}
+          question={`Delete all ${sessions.length} saved ${sessions.length === 1 ? "workout" : "workouts"} from this Pin? This cannot be undone.`}
           armLabel="Delete all workouts on this Pin"
           confirmLabel={`Delete all ${sessions.length} ${sessions.length === 1 ? "workout" : "workouts"}`}
           busy={mutating}
@@ -255,7 +254,7 @@ export default function PinFitnessPane() {
         <EmptyState
           inline
           title="No workouts recorded yet"
-          detail="Start an activity on the Pin and it will appear here the next time this pane loads."
+          detail="Start an activity on the Pin to see it here."
         />
       ) : (
         sessions.map((session) => (

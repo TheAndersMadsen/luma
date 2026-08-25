@@ -12,6 +12,7 @@ export interface SettingsRoute {
   readonly testid: string;
   readonly matchChildren?: boolean;
   readonly keywords?: readonly string[];
+  readonly operatorOnly?: boolean;
 }
 
 export interface SettingsGroup {
@@ -56,6 +57,15 @@ export const SETTINGS_GROUPS: readonly SettingsGroup[] = [
         description: "Connection, battery, software and setup.",
         testid: "menu-my-devices-link",
         keywords: ["device", "pair", "setup", "install", "recovery", "battery"],
+      },
+      {
+        title: "Provisioning",
+        label: "Provisioning",
+        href: "/settings/pin/provision",
+        description: "Enroll a Pin with Cosmos.",
+        testid: "menu-pin-provision-link",
+        keywords: ["activate", "enroll", "operator", "credential"],
+        operatorOnly: true,
       },
       {
         title: "Features",
@@ -182,6 +192,13 @@ export const SETTINGS_GROUPS: readonly SettingsGroup[] = [
 ] as const;
 
 export const SETTINGS_ROUTES = SETTINGS_GROUPS.flatMap((group) => group.routes);
+
+export function settingsGroupsFor(operator: boolean): readonly SettingsGroup[] {
+  return SETTINGS_GROUPS.map((group) => ({
+    ...group,
+    routes: group.routes.filter((route) => !route.operatorOnly || operator),
+  })).filter((group) => group.routes.length > 0);
+}
 
 const FLOW_PANES: Record<string, { title: string; group: string }> = {
   "/settings": { title: "Settings", group: "" },

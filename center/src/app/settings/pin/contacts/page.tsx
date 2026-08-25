@@ -492,15 +492,11 @@ export default function PinContactsPane() {
       <PaneSection title="Rebuild the Pin's contacts database" testId="pin-contacts-reset">
         <div className={styles.formRow}>
           <p className={styles.formHelp}>
-            Use this when the Pin shows contacts that are not on this list, or shows
-            none at all. It tells the Pin to empty the address book its own software
-            keeps and re-sync it from the contacts above on the next contact sync.
+            Use this when the Pin&rsquo;s contacts do not match the list above.
           </p>
           <p className={styles.formHelp}>
-            Anything the Pin holds that is <strong>not</strong> listed above is deleted
-            and cannot be recovered, and the Pin has no contacts at all until the
-            re-sync finishes. Nothing on this pane and nothing in your account is
-            touched.
+            Contacts not listed above will be deleted from the Pin. Account contacts
+            are not changed.
           </p>
         </div>
 
@@ -526,10 +522,9 @@ export default function PinContactsPane() {
         </div>
       </PaneSection>
 
-      <PaneSection title="What this pane is" testId="pin-contacts-authority">
+      <PaneSection title="Contact lists" testId="pin-contacts-authority">
         <CrossAuthorityNote href="/settings/contacts" linkLabel="Account contacts">
-          These contacts are available to your Pin for calls and messages. Your account keeps a
-          separate list, and Center never merges the two automatically.
+          These contacts are stored on the Pin. Account contacts are separate.
         </CrossAuthorityNote>
       </PaneSection>
     </>

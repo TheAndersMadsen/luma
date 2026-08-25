@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 import {
   activationCommands,
   createActivationBundleJson,
-} from "../src/app/admin/activationBundle.ts";
+} from "../src/app/settings/pin/provision/activationBundle.ts";
 
 test("provisioning downloads one activation document with the complete certificate chain", () => {
   const parsed = JSON.parse(createActivationBundleJson({
@@ -45,13 +45,14 @@ test("provisioning gives one-file plan, confirm, and status commands", () => {
 
 test("provisioning copy keeps the one-time PIN separate and removes split PEM instructions", () => {
   const source = readFileSync(
-    new URL("../src/app/admin/AdminProvisioning.tsx", import.meta.url),
+    new URL("../src/app/settings/pin/provision/ProvisioningView.tsx", import.meta.url),
     "utf8",
   );
-  assert.match(source, /enrollment PIN is a[\s\S]*separate one-time code/u);
-  assert.match(source, /not included in the file/u);
-  assert.match(source, /commands!\.plan/u);
-  assert.match(source, /commands!\.confirm/u);
+  assert.match(source, /private key is shown only once; keep the enrollment PIN separate/u);
+  assert.match(source, /isActivationBundle/u);
+  assert.match(source, /maxLength=\{128\}/u);
+  assert.match(source, /commands\.plan/u);
+  assert.match(source, /commands\.confirm/u);
   assert.doesNotMatch(source, /device\.crt|device\.key|Complete OPAQUE/u);
   assert.doesNotMatch(source, /in this repository/u);
 });

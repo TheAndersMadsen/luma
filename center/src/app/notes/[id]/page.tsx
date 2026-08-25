@@ -209,7 +209,7 @@ export default function NoteDetailPage({ params }: { params: Promise<{ id: strin
         <div className={styles.pageContainer}>
           <ErrorState
             title="Note not found"
-            detail="It may have been deleted, or this id doesn't exist in the current data source."
+            detail="It may have been deleted."
             onRetry={() => refetch()}
           />
         </div>

@@ -14,6 +14,14 @@ test("public Wi-Fi setup uses public chrome without private navigation", () => {
   assert.match(frame, /<Shell/);
 });
 
+test("the Wi-Fi back button returns to the previous page with a direct-load fallback", () => {
+  assert.match(frame, /useRouter\(\)/);
+  assert.match(frame, /window\.history\.length > 1/);
+  assert.match(frame, /router\.back\(\)/);
+  assert.match(frame, /router\.replace\("\/"\)/);
+  assert.doesNotMatch(frame, /<Link href="\/"/);
+});
+
 test("Wi-Fi credentials remain browser-local and no dead support link is shown", () => {
   assert.match(page, /stay in this browser/);
   assert.doesNotMatch(page, /humane\.com\/support/);

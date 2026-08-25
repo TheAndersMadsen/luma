@@ -110,7 +110,7 @@ export function SourceBadge() {
   const label = expired
     ? "Your session expired. Sign in again to see your data."
     : state === "degraded"
-      ? "Your Pin couldn't be reached just now."
+      ? "Cosmos couldn't be reached just now."
       : "Connect a Pin to see your data here.";
 
   /*

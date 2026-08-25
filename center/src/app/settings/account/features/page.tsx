@@ -165,8 +165,7 @@ export default function Page() {
         </div>
         <div className={styles.intro}>
           <p>
-            Choose how your Pin behaves. Changes are saved to your account and sent to your Pin
-            automatically. Some changes finish applying after your Pin restarts.
+            Choose how your Pin behaves. Some changes require a restart.
           </p>
         </div>
       </section>

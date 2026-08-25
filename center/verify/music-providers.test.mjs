@@ -558,8 +558,8 @@ test("Center exposes only exact authenticated gateway operations and exact opaqu
   assert.match(musicView, /musickit\/v3\/musickit\.js/);
   assert.match(musicView, /instance\.authorize\(\)/);
   assert.match(musicView, /music_user_token: musicUserToken/);
-  assert.match(musicView, /No Apple Music app is installed on the Pin/);
-  assert.match(musicView, /official Android playback and DRM runtime/);
+  assert.match(musicView, /Apple Music connects through MusicKit/);
+  assert.match(musicView, /Full playback still requires Apple.*Android runtime/);
   assert.match(appleRoute, /maxBytes: 24 \* 1024/);
   assert.match(nextConfig, /connect-src[^\n]+https:\/\/api\.music\.apple\.com/);
   assert.match(nextConfig, /frame-src[^\n]+https:\/\/authorize\.music\.apple\.com/);

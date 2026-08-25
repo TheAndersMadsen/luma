@@ -71,6 +71,6 @@ test("Memories and Captures never describe an empty fallback as sample data", as
   assert.match(capturesPage, /Captures couldn&rsquo;t be loaded/);
   assert.match(healthRoute, /fallback: state === "live" \? undefined : "empty"/);
   assert.match(healthRoute, /state: "degraded",\s+fallback: "empty"/);
-  assert.match(status, /Your Pin couldn't be reached just now/);
+  assert.match(status, /Cosmos couldn't be reached just now/);
   assert.doesNotMatch(status, /data\.fallback === "fixtures"/);
 });

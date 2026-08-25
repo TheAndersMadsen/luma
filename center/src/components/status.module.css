@@ -4,7 +4,7 @@
  * OURS, NOT RECOVERED. Four states and one sentence stem each, so "live",
  * "you have none yet", "this backend never had that" and "it isn't answering
  * right now" look the same on the faithful pages, in Settings, and in the
- * operator console. Before this file the app had twelve phrasings for absence,
+ * operator-only settings. Before this file the app had twelve phrasings for absence,
  * four status vocabularies, two switch geometries and two off-palette hexes.
  *
  * The one absolute rule: anything that failed is NEVER the caption colour.

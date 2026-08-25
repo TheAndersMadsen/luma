@@ -272,8 +272,7 @@ export default function PinGalleryPane() {
       </PaneSection>
 
       <CrossAuthorityNote href="/captures" linkLabel="Open Captures">
-        This is the device&apos;s own store. Captures that finished uploading also
-        exist in your account, and deleting one here does not remove that copy.
+        These captures are stored on the Pin. Uploaded copies appear in Captures.
       </CrossAuthorityNote>
     </>
   );

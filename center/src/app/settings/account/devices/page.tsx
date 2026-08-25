@@ -134,8 +134,8 @@ export default function Page() {
     <div className={settings.stateRow}>
       <StatusMessage tone="warning" onRetry={() => void statusQuery.refetch()}>
         {statusUnread > 0 && statusAsked > 1
-          ? `${statusUnread} of your ${statusAsked} Pins couldn’t be read just now. They are still paired.`
-          : "Your Pin’s status couldn’t be read just now. If a Pin is paired below, it is still paired."}
+          ? `${statusUnread} of your ${statusAsked} Pins are unavailable. Pairing is unchanged.`
+          : "Your Pin’s status is unavailable. Pairing is unchanged."}
       </StatusMessage>
     </div>
   ) : null;
@@ -349,7 +349,7 @@ function SealedNetworksRow({
             {count} saved {plural}
           </span>
           <span className={styles.wifiSealedMeta}>
-            Saved on your Pin. Center cannot read network names or passwords.
+            Saved on your Pin. Network details stay encrypted.
             {pinIsReporting ? " The Pin reported the network shown below." : ""}
           </span>
         </span>
@@ -358,7 +358,7 @@ function SealedNetworksRow({
         tone="absent"
         variant="tag"
         label="Sealed"
-        detail="Encrypted with the Pin's key. Center cannot decrypt it, by design."
+        detail="Protected by your Pin."
       />
     </div>
   );
@@ -680,8 +680,7 @@ function PairPinRow({ onPaired }: { onPaired: () => void }) {
             </button>
           </div>
           <span className={styles.pairHelp}>
-            Use the hexadecimal hardware ID shown by the provisioning flow. The printed serial number
-            is a different identifier.
+            Use the device ID shown during provisioning, not the printed serial number.
           </span>
           {result ? (
             <StatusMessage tone={result.tone} inline>

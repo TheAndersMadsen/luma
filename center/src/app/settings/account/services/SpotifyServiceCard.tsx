@@ -185,14 +185,14 @@ function spotifyState(status: SpotifyStatus): { label: string; tone: StatusTone;
   if (status.state === "unavailable") {
     const copy =
       status.unavailable_reason === "pin_not_paired"
-        ? "Connect provider accounts now, then pair your Ai Pin to choose which one receives native music prompts."
+        ? "Connect an account now. Pair your Pin when you’re ready to choose the default."
         : status.unavailable_reason === "not_configured"
-          ? "Provider accounts can be managed here, but this deployment cannot send music to a Pin yet."
+          ? "Music accounts are available, but Pin playback is not configured."
         : status.unavailable_reason === "pairing_unconfirmed"
-          ? "Your Pin pairing couldn’t be confirmed. Provider accounts remain available in Center."
+          ? "Your Pin pairing couldn’t be confirmed."
           : status.unavailable_reason === "pin_update_required"
-            ? "Your Pin’s music service needs an update. Provider accounts remain available in Center."
-            : "Your Pin couldn’t be reached. Provider accounts remain available in Center.";
+            ? "Update your Pin’s music service."
+            : "Your Pin couldn’t be reached.";
     return { label: "Unavailable", tone: "degraded", copy };
   }
   if (status.state === "disabled") {
@@ -813,8 +813,7 @@ export function SpotifyServiceCard() {
                       </div>
                       <span>{youtubeAccountState?.copy}</span>
                       <span>
-                        No app is installed on the Pin. Center uses an audio-only InnerTube session,
-                        removes Pear&rsquo;s ad fields, blocks ad/tracker hosts, and returns only opaque streams.
+                        Cosmos handles playback and filters ads and trackers.
                       </span>
                       {youtubeCode && status.providers?.youtube_music.state === "pairing" ? (
                         <div className={styles.deviceCode}>
@@ -844,8 +843,8 @@ export function SpotifyServiceCard() {
                         ) : null}
                       </div>
                       <span>{tidalAccountState?.copy}</span>
-                      <span>No TIDAL app is installed on the Pin. Sign-in uses TIDAL&rsquo;s official OAuth + PKCE flow.</span>
-                      {!status.providers?.tidal.configured ? <span>The operator must configure a TIDAL developer client first.</span> : null}
+                      <span>TIDAL connects through its official sign-in.</span>
+                      {!status.providers?.tidal.configured ? <span>Configure a TIDAL developer client first.</span> : null}
                       <div className={styles.providerActions}>
                         {status.providers?.tidal.state === "connected" ? (
                           <button type="button" className={styles.dangerButton} disabled={busy} onClick={() => void providerAction("tidal", "DELETE")}>Disconnect</button>
@@ -863,21 +862,13 @@ export function SpotifyServiceCard() {
                         ) : null}
                       </div>
                       <span>{appleAccountState?.copy}</span>
-                      <span>
-                        No Apple Music app is installed on the Pin. Sign-in uses Apple&rsquo;s official
-                        MusicKit window and Center stores the resulting account token encrypted.
-                      </span>
+                      <span>Apple Music connects through MusicKit. Account tokens are encrypted.</span>
                       {!status.providers?.apple_music.configured ? (
-                        <span>The operator must configure an Apple Music developer token first.</span>
+                        <span>Configure an Apple Music developer token first.</span>
                       ) : status.providers.apple_music.state === "connected_playback_runtime_required" ? (
-                        <span>
-                          Your account is connected. Apple&rsquo;s official Android playback and DRM runtime
-                          is still required before Apple Music can be selected for Pin prompts.
-                        </span>
+                        <span>Connected. Full playback still requires Apple&rsquo;s Android runtime.</span>
                       ) : (
-                        <span>
-                          Center does not substitute previews or bypass Apple&rsquo;s playback protection.
-                        </span>
+                        <span>Full tracks use Apple&rsquo;s protected playback.</span>
                       )}
                       <div className={styles.providerActions}>
                         {status.providers?.apple_music.state === "connected_playback_runtime_required" ? (

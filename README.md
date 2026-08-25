@@ -338,8 +338,8 @@ before package changes begin and tells you to wait and retry.
 
 ### 5. Activate and prove the device
 
-1. In Center's operator provisioning view, create and download the one-time
-   activation document for that exact device.
+1. In **Center → Settings → My Ai Pin → Provisioning**, create and download the
+   one-time activation document for that exact device.
 2. Disconnect the Pin in Center or close the installer tab so native ADB can
    claim the USB interface again.
 3. Run the exact plan command Center shows on the connected computer. Review

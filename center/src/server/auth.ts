@@ -145,6 +145,9 @@ export const OPERATOR_PIN_SHELL_PATH = "/admin/pin/terminal";
 /** Every route beneath this prefix is operator-only, and additionally server-guarded by `app/admin/pin/layout.tsx`. */
 export const OPERATOR_PIN_PATH_PREFIX = "/admin/pin";
 
+/** The operator-only enrollment pane lives in Settings without weakening its gate. */
+export const OPERATOR_PROVISIONING_PATH = "/settings/pin/provision";
+
 /**
  * Where the device shell sat while the Pin console was a standalone SPA.
  * Nothing serves this path, and nothing should: it is named here so that
@@ -161,6 +164,7 @@ export function isOperatorPath(pathname: string): boolean {
     pathname.startsWith("/admin/") ||
     pathname === "/api/admin" ||
     pathname.startsWith("/api/admin/") ||
+    (pathname === OPERATOR_PROVISIONING_PATH || pathname === `${OPERATOR_PROVISIONING_PATH}/`) ||
     pathname === "/settings/pin/terminal"
   );
 }

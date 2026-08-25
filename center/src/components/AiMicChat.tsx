@@ -389,10 +389,9 @@ export function AiMicChat({ autoListen = false, active = true }: { autoListen?: 
               {t.cue && <p className={styles.cue} role="status">{t.cue}</p>}
               {t.text ? <p className={styles.say}>{t.text}</p>
                 : t.streaming && !t.cue ? (
-                  <p className={styles.thinking} role="status">
-                    <span className={styles.dots} aria-hidden><i /><i /><i /></span>
-                    Working…
-                  </p>
+                  <div className={styles.thinking} role="status">
+                    <StatusChip tone="live" label="Working" />
+                  </div>
                 )
                 : null}
             </div>

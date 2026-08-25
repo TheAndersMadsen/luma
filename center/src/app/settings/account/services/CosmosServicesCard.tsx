@@ -388,16 +388,14 @@ export function CosmosServicesCard({ operator }: { operator: boolean }) {
       </div>
 
       <div className={styles.providerNote}>
-        <strong>One provider authority</strong>
-        <span>
-          Center saves these settings directly to Cosmos. Your Ai Pin receives only the Cosmos endpoint, trust root and its own device identity during activation; no search, maps, assistant or speech key is copied to the device.
-        </span>
+        <strong>Managed by Cosmos</strong>
+        <span>Provider credentials stay in Cosmos. Your Pin receives only its Cosmos connection.</span>
       </div>
 
       {!operator ? (
         <div className={styles.providerNote}>
           <strong>Operator access required</strong>
-          <span>Sign in as this Center&rsquo;s operator to change server integrations.</span>
+          <span>Only this Center&rsquo;s operator can change integrations.</span>
         </div>
       ) : loading || !draft || !view ? (
         <div className={styles.integrationMessage} role="status">Loading Cosmos settings…</div>
@@ -405,7 +403,7 @@ export function CosmosServicesCard({ operator }: { operator: boolean }) {
         <div className={styles.integrationSettings}>
           <section className={styles.integrationGroup}>
             <div className={styles.integrationIntro}>
-              <span><strong>Assistant</strong><small>Choose one server-side model provider.</small></span>
+              <span><strong>Assistant</strong><small>Choose a model provider.</small></span>
               <StatusChip tone={view.assistant.configured ? "live" : "off"} label={view.assistant.configured ? "Connected" : "Needs setup"} />
             </div>
             <div className={styles.integrationField}>
@@ -444,7 +442,7 @@ export function CosmosServicesCard({ operator }: { operator: boolean }) {
                   <small>
                     {view.assistant.codex.connected
                       ? [view.assistant.codex.email, view.assistant.codex.plan].filter(Boolean).join(" · ") || "ChatGPT subscription connected"
-                      : "Sign in once here. The official Codex app server keeps and refreshes the session on Cosmos."}
+                      : "Sign in here to connect your subscription."}
                   </small>
                 </span>
                 {view.assistant.codex.connected ? (
@@ -483,7 +481,7 @@ export function CosmosServicesCard({ operator }: { operator: boolean }) {
               </select>
             </div>
             <div className={styles.integrationField}>
-              <label htmlFor="max-tokens"><strong>Maximum response tokens</strong><small>Bounds each assistant model step.</small></label>
+              <label htmlFor="max-tokens"><strong>Maximum response tokens</strong><small>Limit for each model response.</small></label>
               <input id="max-tokens" className={styles.integrationInput} type="number" min="64" max="8192" value={draft.maxTokens} onChange={(event) => setDraft({ ...draft, maxTokens: event.target.value })} />
             </div>
           </section>
@@ -526,7 +524,7 @@ export function CosmosServicesCard({ operator }: { operator: boolean }) {
 
           {message ? <div className={styles.integrationMessage} data-tone={message.tone} role="status">{message.text}</div> : null}
           <div className={styles.integrationActions}>
-            <span>Changes apply to new Cosmos requests. Re-provisioning the Pin is not required.</span>
+            <span>Changes apply to the next request.</span>
             <button className={styles.primaryButton} type="button" disabled={saving} onClick={() => void save()}>{saving ? "Saving…" : "Save Cosmos settings"}</button>
           </div>
         </div>

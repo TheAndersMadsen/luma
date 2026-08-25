@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 import { BackIcon } from "@/icons";
 import buttons from "./buttons.module.css";
@@ -15,6 +15,16 @@ export function PublicUtilityFrame({
   title: string;
   children: React.ReactNode;
 }) {
+  const router = useRouter();
+
+  function goBack() {
+    if (window.history.length > 1) {
+      router.back();
+      return;
+    }
+    router.replace("/");
+  }
+
   return (
     <Shell
       showNav={false}
@@ -24,9 +34,9 @@ export function PublicUtilityFrame({
     >
       <div className={styles.layout}>
         <header className={styles.header}>
-          <Link href="/" aria-label="Back to Center" className={buttons.circularButton}>
+          <button type="button" aria-label="Go back" className={buttons.circularButton} onClick={goBack}>
             <BackIcon size={20} />
-          </Link>
+          </button>
           <h1>{title}</h1>
           <span aria-hidden />
         </header>

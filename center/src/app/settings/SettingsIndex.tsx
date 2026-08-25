@@ -4,18 +4,20 @@ import Link from "next/link";
 import { useId, useMemo, useState } from "react";
 import { SearchIcon } from "@/icons";
 import styles from "./settings.module.css";
-import { SETTINGS_GROUPS, routeMatchesSearch } from "./settingsRegistry";
+import { routeMatchesSearch, settingsGroupsFor } from "./settingsRegistry";
+import { useOperatorEntitlement } from "./useOperatorEntitlement";
 
 export function SettingsIndex() {
   const searchId = useId();
   const [query, setQuery] = useState("");
+  const operator = useOperatorEntitlement();
   const visibleGroups = useMemo(
     () =>
-      SETTINGS_GROUPS.map((group) => ({
+      settingsGroupsFor(operator).map((group) => ({
         ...group,
         routes: group.routes.filter((route) => routeMatchesSearch(route, query)),
       })).filter((group) => group.routes.length > 0),
-    [query],
+    [operator, query],
   );
 
   return (

@@ -5,7 +5,7 @@
  *
  * The switch itself is gone from this file: its 46x28 track and 22px white knob
  * ARE the app's one switch now, and they live in @/components/Status so the
- * operator console's feature-flag toggles are the same control. Both write a
+ * feature toggles use the same control. Both write a
  * boolean the wearer's device reads, so they should not have been two.
  *
  * The typed-DELETE confirmation below is deliberately unchanged — it is the

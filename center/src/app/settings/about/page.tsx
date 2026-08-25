@@ -29,7 +29,7 @@ export default function AboutPage() {
           <div className={styles.descWrapper}>
             <span className={styles.description}>Ai Pin Revival Center</span>
             <span className={styles.muted}>
-              An operator-owned dashboard for a Humane Ai Pin. It is not affiliated with Humane.
+              Your Ai Pin dashboard.
             </span>
           </div>
         </div>
@@ -42,7 +42,7 @@ export default function AboutPage() {
               {release}
             </span>
             <span className={styles.muted}>
-              The immutable release identity this deployment is serving.
+              Running release.
             </span>
           </div>
         </div>

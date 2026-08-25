@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import test from "node:test";
 
 const root = new URL("../", import.meta.url);
@@ -35,6 +35,7 @@ test("settings navigation exposes only current consumer destinations", async () 
     "/settings/pin/esim",
     "/settings/pin/flags",
     "/settings/pin/diagnostics",
+    "/settings/pin/provision",
     "/settings/about",
   ]) {
     const pattern = new RegExp(`"${destination.replaceAll("/", "\\/")}"`);
@@ -67,9 +68,10 @@ test("settings navigation exposes only current consumer destinations", async () 
     'PIN_ADVANCED_GROUP = "Advanced"',
   ]) assert.match(registry, new RegExp(group.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
 
-  assert.match(nav, /SETTINGS_GROUPS\.map/);
-  assert.match(index, /SETTINGS_GROUPS\.map/);
+  assert.match(nav, /settingsGroupsFor\(operator\)/);
+  assert.match(index, /settingsGroupsFor\(operator\)/);
   assert.match(index, /routeMatchesSearch/);
+  assert.match(registry, /operatorOnly: true/);
   assert.doesNotMatch(registry, /Added|additionTag|PIN_CONSOLE_GROUP/);
   assert.doesNotMatch(registry, /Plan & billing|Set up & recover|Conversations/);
   assert.doesNotMatch(nav, /SettingsRoutePicker/);
@@ -106,8 +108,8 @@ test("retired settings routes lead to a useful wearer page while Services stays 
   assert.match(orders, /redirect\("\/settings\/account\/details"\)/);
   assert.match(services, /CosmosServicesCard/);
   assert.match(services, /SpotifyServiceCard/);
-  assert.match(cosmosServices, /One provider authority/);
-  assert.match(cosmosServices, /no search, maps, assistant or speech key is copied to the device/);
+  assert.match(cosmosServices, /Managed by Cosmos/);
+  assert.match(cosmosServices, /Provider credentials stay in Cosmos/);
   assert.doesNotMatch(services, /redirect\(/);
   assert.doesNotMatch(about, /redirect\(/);
   assert.match(about, /centerRuntimeIdentity/);
@@ -137,7 +139,7 @@ test("Services configures Cosmos providers without placing credentials on the Pi
   ]) assert.match(card, new RegExp(label));
   assert.match(card, /type="password"/);
   assert.match(card, /api_key_configured/);
-  assert.match(card, /no search, maps, assistant or speech key is copied to the device/);
+  assert.match(card, /Provider credentials stay in Cosmos/);
   assert.doesNotMatch(card, /\/api\/pin\/|PENUMBRA_|OPENAI_API_KEY/);
   for (const sourceText of [route, codexRoute]) {
     assert.match(sourceText, /requireOperatorRequest/);
@@ -151,6 +153,29 @@ test("Services configures Cosmos providers without placing credentials on the Pi
     css,
     /\.settingRow > span:not\(\[data-status-tone\]\),\s*\.fieldRow > span:not\(\[data-status-tone\]\)\s*\{[^}]*display:\s*grid/s,
   );
+});
+
+test("the old admin dashboard is one Settings provisioning pane without duplicate panels", async () => {
+  const [admin, page, view, setup] = await Promise.all([
+    source("src/app/admin/page.tsx"),
+    source("src/app/settings/pin/provision/page.tsx"),
+    source("src/app/settings/pin/provision/ProvisioningView.tsx"),
+    source("src/app/settings/pin/setup/page.tsx"),
+  ]);
+
+  assert.match(admin, /requireOperatorSession\("\/admin"\)/);
+  assert.match(admin, /redirect\(OPERATOR_PROVISIONING_PATH\)/);
+  assert.match(page, /requireOperatorSession\(OPERATOR_PROVISIONING_PATH\)/);
+  assert.match(view, /Create activation file/);
+  assert.match(setup, /provisioningHref=\{operator \? "\/settings\/pin\/provision" : null\}/);
+  assert.doesNotMatch(view, /api\/admin\/(?:flags|devices)|Feature flags|Persistence|Device roster/);
+
+  for (const removed of [
+    "src/app/admin/AdminFeatureFlags.tsx",
+    "src/app/admin/AdminDataPanels.tsx",
+    "src/app/api/admin/flags/route.ts",
+    "src/app/api/admin/devices/route.ts",
+  ]) await assert.rejects(access(new URL(removed, root)), undefined, `${removed} still exists`);
 });
 
 test("device page avoids unsupported placeholder rows", async () => {

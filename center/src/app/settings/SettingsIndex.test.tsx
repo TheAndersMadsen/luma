@@ -10,6 +10,10 @@ vi.mock("next/link", () => ({
   ),
 }));
 
+vi.mock("./useOperatorEntitlement", () => ({
+  useOperatorEntitlement: () => false,
+}));
+
 describe("SettingsIndex", () => {
   it("searches every settings destination without hiding routes on mobile", async () => {
     const user = userEvent.setup();

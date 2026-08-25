@@ -1,4 +1,4 @@
-export type Overview = {
+export type ProvisioningOverview = {
   enrollment: {
     open: boolean;
     provisioning_configured: boolean;
@@ -8,18 +8,12 @@ export type Overview = {
     user_id: string;
     display_name: string;
   };
-  persistence: { notes: number | null; memories: number | null; contacts: number | null };
-  persistenceProvenance?: Record<"notes" | "memories" | "contacts", {
-    state: "live" | "absent" | "degraded";
-    degraded?: string | null;
-  }>;
-  provisioned_devices: number;
   onboarding: { endpoint: string; authority: string };
   device_edge_ipv4: string | null;
   device_status_endpoint: string | null;
 };
 
-export type Bundle = {
+export type ActivationBundle = {
   device_id: string;
   subject: string;
   certificate_pem: string;
@@ -28,11 +22,4 @@ export type Bundle = {
   root_certificate_pem: string;
   pincode: string;
   onboarding: { endpoint: string; authority: string };
-};
-
-export type ProvisionedDevice = {
-  device_id: string;
-  product: string;
-  subject: string;
-  provisioned_at_unix: number;
 };

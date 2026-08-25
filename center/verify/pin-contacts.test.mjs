@@ -210,7 +210,8 @@ test("the device contacts pane says which store it is and guards the rebuild", a
   // database and re-syncs it from them (pin/hook/.../ContactsHooks.kt) — so
   // copy claiming this pane's list is erased would be wrong, and copy calling
   // it harmless would be worse.
-  assert.match(pane, /not<\/strong> listed above is deleted/);
+  assert.match(pane, /Contacts not listed above will be deleted from the Pin/);
+  assert.match(pane, /Account contacts\s+are not changed/);
   assert.match(pane, /re-sync/);
   assert.doesNotMatch(pane, /delete every contact on this pane/i);
 
@@ -230,8 +231,8 @@ test("both contacts panes name their store and point at the other one", async ()
   assert.match(accountPane, /href="\/settings\/pin\/contacts"/);
   // Neither may describe itself as simply "Contacts" while the other exists.
   assert.match(devicePane, /Contacts on this Pin/);
-  assert.match(accountPane, /contacts above live in your account/i);
-  assert.match(accountPane, /not synced/);
+  assert.match(accountPane, /Account contacts and Pin contacts are separate/i);
+  assert.match(accountPane, /Add a contact to the Pin/i);
 
   // Registered in the information architecture, and distinguishable there: the
   // device pane sits under the "On this Pin" group and the account pane under
