@@ -126,7 +126,7 @@
 }
 
 .providerNote strong { color: var(--hu-colors-white); font-weight: 500; }
-.providerNote span { display: block; }
+.providerNote > span { display: block; }
 .providerNote a { color: var(--hu-colors-beam-base); }
 
 .providerHeading {
@@ -148,6 +148,14 @@
   align-items: center;
   gap: 14px;
   padding: 12px 0;
+}
+
+.deviceCode .pairingTimer {
+  display: grid;
+  place-items: center;
+  flex: none;
+  line-height: 1;
+  text-align: center;
 }
 
 .acknowledgement {

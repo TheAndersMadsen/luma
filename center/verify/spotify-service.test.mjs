@@ -319,10 +319,11 @@ test("Center routes require session, owner roster and same-origin mutations", as
 });
 
 test("Services renders every Pin-native state, polling and settings fallback", async () => {
-  const [page, view, registry] = await Promise.all([
+  const [page, view, registry, styles] = await Promise.all([
     source("src/app/settings/account/services/page.tsx"),
     source("src/app/settings/account/services/SpotifyServiceCard.tsx"),
     source("src/app/settings/settingsRegistry.ts"),
+    source("src/app/settings/account/services/services.module.css"),
   ]);
   assert.match(page, /SpotifyServiceCard/);
   assert.match(registry, /menu-services-link/);
@@ -363,6 +364,8 @@ test("Services renders every Pin-native state, polling and settings fallback", a
   assert.match(view, /Provider account/);
   assert.match(view, /connectedProvider/);
   assert.match(view, /— Connected/);
+  assert.match(styles, /\.deviceCode \.pairingTimer\s*\{[^}]*display: grid;[^}]*place-items: center;/s);
+  assert.doesNotMatch(styles, /\.providerNote span\s*\{/);
   assert.doesNotMatch(view, /Pair your Ai Pin before setting up Spotify/);
   assert.doesNotMatch(view, /<strong>\{providerOption\(activeProvider\)\.label\}<\/strong>/);
   assert.match(view, /window\.confirm\("Disconnect Spotify from this Ai Pin\?"\)/);

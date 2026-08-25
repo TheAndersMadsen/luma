@@ -65,6 +65,26 @@ test("wearer music sessions are encrypted at rest and written with owner-only pe
   );
 });
 
+test("obsolete provider selection cannot invalidate saved music credentials", async (t) => {
+  await encryptedStore(t);
+  const subject = "provider-selection-wearer";
+  const record = await store.updateMusicAccountRecord(subject, () => ({
+    version: 1,
+    active_provider: "youtube_music",
+    youtube_music: {
+      connected_at: "2026-08-20T00:00:00.000Z",
+      credentials: {
+        access_token: "youtube-access-token",
+        refresh_token: "youtube-refresh-token",
+        expiry_date: "2026-08-26T00:00:00.000Z",
+      },
+    },
+  }));
+
+  assert.equal("active_provider" in record, false);
+  assert.deepEqual(await youtube.youtubeConnectionStatus(subject), { state: "connected" });
+});
+
 test("a durable YouTube connection wins over a failed in-memory retry", async (t) => {
   await encryptedStore(t);
   const subject = "youtube-retry-wearer";

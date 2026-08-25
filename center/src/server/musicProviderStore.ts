@@ -148,15 +148,16 @@ function recordShape(value: unknown): MusicAccountRecord {
     throw new MusicSessionStoreError();
   }
   const record = value as Record<string, unknown>;
+  const { active_provider: _removedSelection, ...current } = record;
   if (
-    record.version !== 1 ||
-    Object.keys(record).some(
+    current.version !== 1 ||
+    Object.keys(current).some(
       (key) => !new Set(["version", "youtube_music", "apple_music", "tidal"]).has(key),
     )
   ) {
     throw new MusicSessionStoreError();
   }
-  return value as MusicAccountRecord;
+  return current as MusicAccountRecord;
 }
 
 function decryptRecord(subject: string, value: unknown): MusicAccountRecord {
