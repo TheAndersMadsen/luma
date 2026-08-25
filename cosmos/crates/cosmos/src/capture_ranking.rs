@@ -1,25 +1,21 @@
-//! Best-frame selection for stock three-frame photo bursts.
+//! Best-frame selection and private visual-search metadata for Pin photos.
 //!
-//! `observed`: the photography app asks CCAPS for `numPhotosPerBurst`, defaults
-//! that value to three, uploads every resulting frame and (when
-//! `humane_capture_upload_3_thumbnails` is true, as shipped) every thumbnail.
-//! Recovered Center also exposes `POST /memory/{uuid}/best_photo` and
-//! `POST /memory/{uuid}/bestFrame?frame={n}`.
-//!
-//! The original server-side model and prompt are `unknown`. This module is an
-//! independently implemented replacement: it asks the operator-configured
-//! multimodal model to compare the three opened thumbnails and falls back to a
-//! deterministic image-quality score when no model is configured or reachable.
-//! All originals remain stored; selection changes only which frame Center uses
-//! as the hero image.
+//! The photography app uploads every frame and thumbnail in a stock photo
+//! burst. Cosmos asks the operator-selected multimodal assistant to choose the
+//! best frame and describe visible content, then falls back to a deterministic
+//! quality score when vision is unavailable. Every original remains stored.
 
 use base64::Engine as _;
 use image::DynamicImage;
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
+use std::sync::OnceLock;
 
-const MODEL_TIMEOUT: Duration = Duration::from_secs(15);
+const MAX_CONCURRENT_RANKINGS: usize = 2;
+
 const MAX_REASON_CHARS: usize = 180;
+const MAX_CAPTION_CHARS: usize = 240;
+const MAX_TAG_CHARS: usize = 48;
+const MAX_TAGS: usize = 24;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -28,6 +24,17 @@ pub(crate) struct BestFrameSelection {
     /// `vision_v1`, `quality_v1`, or `manual`.
     pub method: String,
     pub reason: String,
+    /// Private visual-search metadata; capture API responses never expose it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub caption: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+}
+
+impl BestFrameSelection {
+    pub(crate) fn has_visual_index(&self) -> bool {
+        !self.caption.is_empty() || !self.tags.is_empty()
+    }
 }
 
 #[derive(Deserialize)]
@@ -35,12 +42,51 @@ struct VisionChoice {
     best_frame: usize,
     #[serde(default)]
     reason: String,
+    #[serde(default)]
+    caption: String,
+    #[serde(default)]
+    tags: Vec<String>,
+}
+
+fn bounded_text(text: &str, maximum: usize) -> String {
+    text.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(maximum)
+        .collect()
 }
 
 fn bounded_reason(reason: &str, fallback: &str) -> String {
-    let clean = reason.split_whitespace().collect::<Vec<_>>().join(" ");
-    let clean = if clean.is_empty() { fallback } else { &clean };
-    clean.chars().take(MAX_REASON_CHARS).collect()
+    let clean = bounded_text(reason, MAX_REASON_CHARS);
+    if clean.is_empty() {
+        fallback.to_owned()
+    } else {
+        clean
+    }
+}
+
+fn normalized_tags(tags: &[String]) -> Vec<String> {
+    let mut normalized = Vec::new();
+    for tag in tags {
+        let clean = tag
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_lowercase();
+        let clean = clean
+            .trim_matches(|character: char| !character.is_alphanumeric())
+            .chars()
+            .take(MAX_TAG_CHARS)
+            .collect::<String>();
+        if !clean.is_empty() && !normalized.contains(&clean) {
+            normalized.push(clean);
+        }
+        if normalized.len() == MAX_TAGS {
+            break;
+        }
+    }
+    normalized
 }
 
 fn json_object(text: &str) -> Option<&str> {
@@ -50,65 +96,26 @@ fn json_object(text: &str) -> Option<&str> {
 }
 
 async fn vision_choice(frames: &[Vec<u8>]) -> Option<BestFrameSelection> {
-    let config = crate::integrations::active().snapshot().assistant;
-    if config.provider != crate::integrations::AssistantProvider::OpenAiCompatible
-        || !config.configured()
-    {
-        return None;
-    }
-    let base_url = config.base_url;
-    let api_key = config.api_key?;
-    let model = config.model;
-
-    let mut content = vec![serde_json::json!({
-        "type": "text",
-        "text": "These are consecutive frames from one wearable-camera photo burst, in zero-based order. Choose the single best keepsake photo. Prefer a sharp, well-exposed, unobstructed, naturally composed frame; avoid blink, motion blur and accidental occlusion. Return only JSON: {\"best_frame\":0,\"reason\":\"brief non-sensitive quality reason\"}."
-    })];
-    for frame in frames {
-        content.push(serde_json::json!({
-            "type": "image_url",
-            "image_url": {
-                "url": format!(
-                    "data:image/jpeg;base64,{}",
-                    base64::engine::general_purpose::STANDARD.encode(frame)
-                )
-            }
-        }));
-    }
-    let body = serde_json::json!({
-        "model": model,
-        "messages": [
-            {
-                "role": "system",
-                "content": "Select image quality only. Do not identify people, infer sensitive traits, or describe private scene contents."
-            },
-            { "role": "user", "content": content }
-        ],
-        // Reasoning models count hidden analysis against the completion cap.
-        // 120 cut a real production answer off at `{"best_frame`; minimal
-        // reasoning plus 512 leaves room for the tiny JSON contract to finish.
-        "reasoning": { "effort": "minimal", "exclude": true },
-        "max_tokens": 512
-    });
-    let request = reqwest::Client::new()
-        .post(format!(
-            "{}/chat/completions",
-            base_url.trim_end_matches('/')
-        ))
-        .bearer_auth(api_key)
-        .json(&body)
-        .send();
-    let response = tokio::time::timeout(MODEL_TIMEOUT, request)
+    static LIMIT: OnceLock<tokio::sync::Semaphore> = OnceLock::new();
+    let _permit = LIMIT
+        .get_or_init(|| tokio::sync::Semaphore::new(MAX_CONCURRENT_RANKINGS))
+        .acquire()
         .await
-        .ok()?
         .ok()?;
-    let response = response.error_for_status().ok()?;
-    let value: serde_json::Value = response.json().await.ok()?;
-    let text = value
-        .pointer("/choices/0/message/content")?
-        .as_str()?
-        .trim();
-    let choice: VisionChoice = serde_json::from_str(json_object(text)?).ok()?;
+    let image_urls = frames
+        .iter()
+        .map(|frame| {
+            format!(
+                "data:image/jpeg;base64,{}",
+                base64::engine::general_purpose::STANDARD.encode(frame)
+            )
+        })
+        .collect::<Vec<_>>();
+    let prompt = "These are consecutive frames from one wearable-camera photo burst, in zero-based order. Choose the single best keepsake photo. Prefer a sharp, well-exposed, unobstructed, naturally composed frame. Also describe visible content for private search. Return only JSON: {\"best_frame\":0,\"reason\":\"brief quality reason\",\"caption\":\"objective description, at most 20 words\",\"tags\":[\"specific object\",\"broader category\"]}. Use lower-case tags for visible objects, animals, settings, and activities; include useful broader categories (for example cat, pet, animal). Never name or identify a person, infer sensitive traits, or include text that is not visibly supported.";
+    let text = crate::assistant::vision::complete(prompt, &image_urls)
+        .await
+        .ok()?;
+    let choice: VisionChoice = serde_json::from_str(json_object(&text)?).ok()?;
     if choice.best_frame >= frames.len() {
         return None;
     }
@@ -116,6 +123,8 @@ async fn vision_choice(frames: &[Vec<u8>]) -> Option<BestFrameSelection> {
         frame: choice.best_frame,
         method: "vision_v1".to_owned(),
         reason: bounded_reason(&choice.reason, "Selected by the configured vision model."),
+        caption: bounded_text(&choice.caption, MAX_CAPTION_CHARS),
+        tags: normalized_tags(&choice.tags),
     })
 }
 
@@ -170,8 +179,6 @@ fn quality_score(bytes: &[u8]) -> Option<f64> {
         .count() as f64
         / count;
     let exposure = 1.0 - ((mean - 127.5).abs() / 127.5).min(1.0);
-    // Log sharpness prevents one noisy frame from overwhelming exposure and
-    // contrast. The values are comparative inside one burst, not universal.
     Some((1.0 + sharpness(&image)).ln() * 2.2 + variance.sqrt() * 0.05 + exposure - clipped * 2.0)
 }
 
@@ -184,20 +191,19 @@ fn quality_choice(frames: &[Vec<u8>]) -> Option<BestFrameSelection> {
     Some(BestFrameSelection {
         frame,
         method: "quality_v1".to_owned(),
-        reason: "Selected for sharpness, exposure and contrast.".to_owned(),
+        reason: if frames.len() == 1 {
+            "Only one frame was available.".to_owned()
+        } else {
+            "Selected for sharpness, exposure and contrast.".to_owned()
+        },
+        caption: String::new(),
+        tags: Vec::new(),
     })
 }
 
 pub(crate) async fn choose_best_frame(frames: &[Vec<u8>]) -> Option<BestFrameSelection> {
     if frames.is_empty() {
         return None;
-    }
-    if frames.len() == 1 {
-        return Some(BestFrameSelection {
-            frame: 0,
-            method: "quality_v1".to_owned(),
-            reason: "Only one frame was available.".to_owned(),
-        });
     }
     vision_choice(frames)
         .await
@@ -220,5 +226,30 @@ mod tests {
         let reason = bounded_reason("  one\n two   three ", "fallback");
         assert_eq!(reason, "one two three");
         assert!(bounded_reason(&"x".repeat(500), "fallback").chars().count() <= MAX_REASON_CHARS);
+    }
+
+    #[test]
+    fn visual_metadata_is_normalized_and_bounded() {
+        let tags = (0..40)
+            .map(|index| format!("  Cat {index} !!! "))
+            .chain(std::iter::once("CAT 0".to_owned()))
+            .collect::<Vec<_>>();
+        let normalized = normalized_tags(&tags);
+        assert_eq!(normalized.len(), MAX_TAGS);
+        assert_eq!(normalized[0], "cat 0");
+        assert!(normalized.iter().all(|tag| tag.len() <= MAX_TAG_CHARS));
+        assert!(
+            bounded_text(&"word ".repeat(100), MAX_CAPTION_CHARS)
+                .chars()
+                .count()
+                <= MAX_CAPTION_CHARS
+        );
+    }
+
+    #[test]
+    fn old_sidecars_deserialize_without_visual_metadata() {
+        let selection: BestFrameSelection =
+            serde_json::from_str(r#"{"frame":1,"method":"quality_v1","reason":"sharp"}"#).unwrap();
+        assert!(!selection.has_visual_index());
     }
 }

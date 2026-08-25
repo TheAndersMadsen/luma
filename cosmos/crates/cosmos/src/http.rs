@@ -199,6 +199,7 @@ fn build_router_with_uploads_and_keys(
                 "/demo-api/admin/integrations",
                 get(admin_integrations).put(update_integrations),
             )
+            .route("/demo-api/admin/integrations/test", post(test_integration))
             .route(
                 "/demo-api/admin/integrations/codex",
                 post(start_codex_login).delete(logout_codex),
@@ -687,6 +688,61 @@ struct SpeechIntegrationView {
     azure_voice: String,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum IntegrationTestTarget {
+    Assistant,
+    Searxng,
+    Serpapi,
+    Perplexity,
+    Maps,
+    Weather,
+    Wolfram,
+    Speech,
+}
+
+impl IntegrationTestTarget {
+    fn configured(self, config: &crate::integrations::IntegrationsConfig) -> bool {
+        match self {
+            Self::Assistant => config.assistant.configured(),
+            Self::Searxng => config.search.searxng_base_url.is_some(),
+            Self::Serpapi => config.search.serpapi_key.is_some(),
+            Self::Perplexity => config.search.perplexity_api_key.is_some(),
+            Self::Maps => config.maps.google_maps_key.is_some(),
+            Self::Weather => config.search.weather_api_key.is_some(),
+            Self::Wolfram => config.search.wolfram_app_id.is_some(),
+            Self::Speech => {
+                config.speech.azure_key.is_some() && config.speech.azure_region.is_some()
+            }
+        }
+    }
+
+    fn success_message(self) -> &'static str {
+        match self {
+            Self::Assistant => "Assistant and photo understanding are working.",
+            Self::Searxng => "SearXNG returned search results.",
+            Self::Serpapi => "SerpApi returned search results.",
+            Self::Perplexity => "Perplexity answered successfully.",
+            Self::Maps => "Google Maps returned nearby places.",
+            Self::Weather => "Pirate Weather returned current conditions.",
+            Self::Wolfram => "Wolfram|Alpha answered successfully.",
+            Self::Speech => "Azure Speech returned audio.",
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct IntegrationTestRequest {
+    target: IntegrationTestTarget,
+}
+
+#[derive(Serialize)]
+struct IntegrationTestView {
+    ok: bool,
+    message: &'static str,
+}
+
 async fn integrations_view(config: crate::integrations::IntegrationsConfig) -> IntegrationsView {
     let codex =
         if config.assistant.provider == crate::integrations::AssistantProvider::CodexSubscription {
@@ -769,6 +825,83 @@ async fn update_integrations(
             ),
         })?;
     Ok(Json(integrations_view(config).await))
+}
+
+async fn test_integration(
+    headers: HeaderMap,
+    State(state): State<HttpState>,
+    Json(request): Json<IntegrationTestRequest>,
+) -> Result<Json<IntegrationTestView>, DemoError> {
+    use crate::backends::azure_speech::{
+        AzureSpeechClient, SpeechAudioFormat, SpeechSynthesisBackend,
+    };
+
+    require_admin(&headers)?;
+    let config = state.integrations.snapshot();
+    if !request.target.configured(&config) {
+        return Err(demo_error(
+            StatusCode::CONFLICT,
+            "Save this provider's settings before testing it.",
+        ));
+    }
+    let message = request.target.success_message();
+    let test: std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send>> = match request
+        .target
+    {
+        IntegrationTestTarget::Assistant => Box::pin(async move {
+            let image = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=".to_owned();
+            crate::assistant::vision::complete(
+                "This is a connection test. Reply with OK.",
+                &[image],
+            )
+            .await
+            .is_ok_and(|answer| !answer.trim().is_empty())
+        }),
+        IntegrationTestTarget::Searxng => {
+            Box::pin(async { crate::backends::search::probe_searxng().await.is_ok() })
+        }
+        IntegrationTestTarget::Serpapi => {
+            Box::pin(async { crate::backends::search::probe_serpapi().await.is_ok() })
+        }
+        IntegrationTestTarget::Perplexity => Box::pin(async {
+            crate::backends::perplexity::ask("Reply with OK.")
+                .await
+                .is_ok()
+        }),
+        IntegrationTestTarget::Maps => Box::pin(async {
+            crate::backends::places::nearby("coffee", Some((55.6761, 12.5683)), 1_000.0)
+                .await
+                .is_ok()
+        }),
+        IntegrationTestTarget::Weather => Box::pin(async {
+            crate::backends::weather::current(55.6761, 12.5683)
+                .await
+                .is_ok()
+        }),
+        IntegrationTestTarget::Wolfram => {
+            Box::pin(async { crate::backends::wolfram::query("2 + 2").await.is_ok() })
+        }
+        IntegrationTestTarget::Speech => Box::pin(async {
+            let Ok(Some(client)) = AzureSpeechClient::from_configuration() else {
+                return false;
+            };
+            client
+                .synthesize("Cosmos is ready.", SpeechAudioFormat::Raw24Khz16BitMonoPcm)
+                .await
+                .is_ok()
+        }),
+    };
+    match tokio::time::timeout(std::time::Duration::from_secs(30), test).await {
+        Ok(true) => Ok(Json(IntegrationTestView { ok: true, message })),
+        Ok(false) => Err(demo_error(
+            StatusCode::BAD_GATEWAY,
+            "The provider did not complete the test request. Check its credential and settings.",
+        )),
+        Err(_) => Err(demo_error(
+            StatusCode::GATEWAY_TIMEOUT,
+            "The provider test timed out.",
+        )),
+    }
 }
 
 async fn start_codex_login(
@@ -3844,5 +3977,47 @@ mod admin_gate_tests {
         ] {
             assert!(!response.contains(secret));
         }
+    }
+
+    #[test]
+    fn integration_tests_cover_every_configurable_provider_without_exposing_secrets() {
+        let mut config = crate::integrations::IntegrationsConfig::default();
+        config.assistant.base_url = "https://openrouter.ai/api/v1".to_owned();
+        config.assistant.api_key = Some("private-assistant-key".to_owned());
+        config.search.searxng_base_url = Some("https://search.example.com".to_owned());
+        config.search.serpapi_key = Some("private-serpapi-key".to_owned());
+        config.search.perplexity_api_key = Some("private-perplexity-key".to_owned());
+        config.search.weather_api_key = Some("private-weather-key".to_owned());
+        config.search.wolfram_app_id = Some("private-wolfram-id".to_owned());
+        config.maps.google_maps_key = Some("private-maps-key".to_owned());
+        config.speech.azure_key = Some("private-speech-key".to_owned());
+        config.speech.azure_region = Some("westeurope".to_owned());
+
+        for name in [
+            "assistant",
+            "searxng",
+            "serpapi",
+            "perplexity",
+            "maps",
+            "weather",
+            "wolfram",
+            "speech",
+        ] {
+            let request: IntegrationTestRequest =
+                serde_json::from_value(serde_json::json!({ "target": name })).unwrap();
+            assert!(
+                request.target.configured(&config),
+                "{name} was not configured"
+            );
+            let message = request.target.success_message();
+            assert!(!message.is_empty());
+            assert!(!message.contains("private-"));
+        }
+        assert!(
+            serde_json::from_value::<IntegrationTestRequest>(serde_json::json!({
+                "target": "unknown"
+            }))
+            .is_err()
+        );
     }
 }

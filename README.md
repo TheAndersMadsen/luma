@@ -58,6 +58,11 @@ Activation copies only the Cosmos endpoint, operator trust root, and that Pin's
 device identity. It never copies an assistant, search, maps, or speech
 credential to the device.
 
+Cosmos sends uploaded photo thumbnails to the assistant provider you select so
+Center can find visible subjects such as “cat” across the full capture library.
+The resulting captions and tags stay inside Cosmos and are never returned by
+the capture API; older photos are indexed in the background on first search.
+
 The repository retains required stock `humane.*` protocol names and Android
 package identities because the original software calls them byte-for-byte.
 Product, deployment, configuration, and operator-facing names use Cosmos.
@@ -469,7 +474,9 @@ For a broad change:
 Dependencies and compiler output are reused from the external build directory,
 so narrow reruns avoid rebuilding unrelated components. Configuration defaults
 to `~/.config/ai-pin-revival`; data and caches default to
-`~/.local/share/ai-pin-revival`.
+`~/.local/share/ai-pin-revival`. Successful Cosmos checks keep the eight newest
+incremental variants per crate and remove superseded ones automatically, which
+prevents fast local rebuilds from growing the VPS disk without bound.
 
 ## Configuration
 

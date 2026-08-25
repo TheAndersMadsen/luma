@@ -119,12 +119,13 @@ test("retired settings routes lead to a useful wearer page while Services stays 
   assert.match(about, /about-environment/);
 });
 
-test("Services configures Cosmos providers without placing credentials on the Pin", async () => {
-  const [page, card, route, codexRoute, css] = await Promise.all([
+test("Services configures and tests Cosmos providers without placing credentials on the Pin", async () => {
+  const [page, card, route, codexRoute, testRoute, css] = await Promise.all([
     source("src/app/settings/account/services/page.tsx"),
     source("src/app/settings/account/services/CosmosServicesCard.tsx"),
     source("src/app/api/admin/integrations/route.ts"),
     source("src/app/api/admin/integrations/codex/route.ts"),
+    source("src/app/api/admin/integrations/test/route.ts"),
     source("src/app/settings/account/services/services.module.css"),
   ]);
 
@@ -140,14 +141,29 @@ test("Services configures Cosmos providers without placing credentials on the Pi
   assert.match(card, /type="password"/);
   assert.match(card, /api_key_configured/);
   assert.match(card, /Provider credentials stay in Cosmos/);
+  for (const target of [
+    "assistant",
+    "searxng",
+    "serpapi",
+    "perplexity",
+    "maps",
+    "weather",
+    "wolfram",
+    "speech",
+  ]) assert.match(card, new RegExp(`"${target}"`));
+  assert.match(card, /Test/);
+  assert.match(card, /Working/);
+  assert.match(card, /Failed/);
   assert.doesNotMatch(card, /\/api\/pin\/|PENUMBRA_|OPENAI_API_KEY/);
-  for (const sourceText of [route, codexRoute]) {
+  for (const sourceText of [route, codexRoute, testRoute]) {
     assert.match(sourceText, /requireOperatorRequest/);
     assert.match(sourceText, /adminAuthHeaders/);
     assert.match(sourceText, /cache-control.*private, no-store/s);
   }
   assert.match(route, /isSameOriginRequest/);
   assert.match(codexRoute, /isSameOriginRequest/);
+  assert.match(testRoute, /isSameOriginRequest/);
+  assert.match(testRoute, /demo-api\/admin\/integrations\/test/);
   assert.match(css, /\.pairingTimer\s*\{[^}]*place-items:\s*center/s);
   assert.match(
     css,

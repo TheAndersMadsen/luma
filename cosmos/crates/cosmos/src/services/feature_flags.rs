@@ -576,7 +576,7 @@ mod tests {
     }
 
     #[test]
-    fn bidi_flag_defaults_on_so_a_stock_pin_takes_it() {
+    fn bidi_flag_follows_the_explicit_transport_setting() {
         let on = build_flags(false, true);
         let off = build_flags(false, false);
         let val = |flags: &[FeatureFlagAssignment]| {
@@ -587,7 +587,8 @@ mod tests {
         };
         assert_eq!(val(&on), Some(Val::ValBool(true)));
         assert_eq!(val(&off), Some(Val::ValBool(false)));
-        // The env-driven default is ON (the value a stock Pin needs to pick bidi).
+        // The environment-controlled value is passed through without changing
+        // the stock-compatible default asserted above.
         assert_eq!(
             val(&default_flags()),
             Some(Val::ValBool(bidirectional_streaming_enabled()))

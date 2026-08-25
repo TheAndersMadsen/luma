@@ -70,8 +70,15 @@ test("user interface source stays free of generic AI and prompt filler", async (
 
 test("Pin setup instructions stay direct", async () => {
   const setup = withoutComments(await source("src/app/settings/pin/setup/SetupView.tsx"));
-  assert.match(setup, /Complete the highlighted step\./);
-  assert.doesNotMatch(setup, /Stock Humane had no surface|walks the same ceremony|rather than asking you/);
+  for (const stage of [
+    "Connect your Pin",
+    "Install the software",
+    "Connect to Cosmos",
+    "Get online and try it",
+  ]) {
+    assert.match(setup, new RegExp(stage));
+  }
+  assert.doesNotMatch(setup, /step\.commands|manualNote|<pre|Outside this browser|terminal/i);
 });
 
 test("Ai Mic shows answers without suggestions, tool traces, or reasoning labels", async () => {

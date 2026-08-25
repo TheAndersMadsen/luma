@@ -362,6 +362,7 @@ fn turn_start_params(
     model: &str,
     effort: Option<&str>,
     prompt: String,
+    image_urls: &[String],
     cwd: &str,
 ) -> Value {
     let output_schema = json!({
@@ -385,9 +386,15 @@ fn turn_start_params(
         "required": ["content", "thought", "tool_calls"],
         "additionalProperties": false
     });
+    let mut input = vec![json!({ "type": "text", "text": prompt, "text_elements": [] })];
+    input.extend(
+        image_urls
+            .iter()
+            .map(|url| json!({ "type": "image", "url": url, "detail": "low" })),
+    );
     let mut params = json!({
         "threadId": thread_id,
-        "input": [{ "type": "text", "text": prompt, "text_elements": [] }],
+        "input": input,
         "cwd": cwd,
         "approvalPolicy": "never",
         "sandboxPolicy": { "type": "externalSandbox", "networkAccess": "restricted" },
@@ -405,6 +412,15 @@ pub async fn complete(
     effort: Option<&str>,
     prompt: String,
 ) -> Result<CodexModelOutput, CodexError> {
+    complete_with_images(model, effort, prompt, &[]).await
+}
+
+pub async fn complete_with_images(
+    model: &str,
+    effort: Option<&str>,
+    prompt: String,
+    image_urls: &[String],
+) -> Result<CodexModelOutput, CodexError> {
     if !account_status().await.connected {
         return Err(CodexError::NotConnected);
     }
@@ -419,7 +435,8 @@ pub async fn complete(
         .and_then(Value::as_str)
         .ok_or(CodexError::Protocol)?
         .to_owned();
-    let turn_params = turn_start_params(&thread_id, model, effort, prompt, &cwd);
+    let turn_params =
+        turn_start_params(thread_id.as_str(), model, effort, prompt, image_urls, &cwd);
     let turn = connection.request("turn/start", turn_params).await?;
     let turn_id = turn
         .pointer("/turn/id")
@@ -518,9 +535,13 @@ mod tests {
             "gpt-test",
             Some("low"),
             "wearer request".to_owned(),
+            &["data:image/jpeg;base64,aW1hZ2U=".to_owned()],
             "/var/lib/cosmos/codex-workspace",
         );
         assert_eq!(turn["input"][0]["text_elements"], json!([]));
+        assert_eq!(turn["input"][1]["type"], "image");
+        assert_eq!(turn["input"][1]["detail"], "low");
+        assert_eq!(turn["input"][1]["url"], "data:image/jpeg;base64,aW1hZ2U=");
         assert_eq!(turn["sandboxPolicy"]["type"], "externalSandbox");
         assert_eq!(turn["sandboxPolicy"]["networkAccess"], "restricted");
         assert_eq!(turn["outputSchema"]["additionalProperties"], false);

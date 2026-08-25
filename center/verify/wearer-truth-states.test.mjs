@@ -147,8 +147,12 @@ test("the dashboard names the part that failed, using the provenance it already 
   }
 });
 
-test("capture search says so when it is not searching, and recovers when the backend does", async () => {
-  const page = await source("app/captures/page.tsx");
+test("capture search covers Cosmos visual metadata and recovers when the backend does", async () => {
+  const [page, route, domain] = await Promise.all([
+    source("app/captures/page.tsx"),
+    source("app/api/capture/search/route.ts"),
+    source("server/domain/captures.ts"),
+  ]);
 
   // src/server/headers.ts: `x-data-state` is the one to branch on. `cosmos` is
   // only accidentally equivalent to `live`.
@@ -172,13 +176,21 @@ test("capture search says so when it is not searching, and recovers when the bac
   // formatted date only, while the server also matches memoryType, so "photo"
   // silently returned nothing with the wearer's photos one line above.
   assert.match(page, /Showing matches by date and ID only/);
-  const suppressed = page.indexOf("searching && searchFallback ? null");
+  const suppressed = page.indexOf("searchFallback || visualIndex?.state === \"building\"");
   const noMatches = page.indexOf('title="No matching captures"');
   assert.ok(suppressed > 0 && noMatches > 0);
   assert.ok(
     suppressed < noMatches,
     "the empty state still claims nothing matched a search that never ran",
   );
+
+  assert.match(route, /searchCaptures\(query, page, size\)/);
+  assert.doesNotMatch(route, /getCaptures\(/);
+  assert.match(route, /x-total-count/);
+  assert.match(route, /x-visual-index/);
+  assert.match(domain, /\/capture\/search\?query=/);
+  assert.match(page, /Search checks your\s*full library/);
+  assert.match(page, /Preparing \{visualIndex\.pending\}/);
 });
 
 test("a capped page is never reported as the whole of the wearer's data", async () => {

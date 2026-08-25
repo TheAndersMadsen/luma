@@ -41,9 +41,7 @@
 }
 
 .mono,
-.subject,
-.steps code,
-.steps pre {
+.subject {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
 }
@@ -101,30 +99,65 @@
   overflow-wrap: anywhere;
 }
 
-.steps {
+.directSetup,
+.fallbackBody {
   display: flex;
+  width: 100%;
   flex-direction: column;
-  gap: 12px;
-  margin: 0;
-  padding-left: 22px;
-  color: var(--hu-colors-crater-base);
-  line-height: 1.5;
+  align-items: flex-start;
+  gap: 16px;
 }
 
-.steps pre {
-  margin: 6px 0 0;
-  padding: 10px 12px;
-  overflow-x: auto;
-  border-radius: var(--hu-radius-control);
-  background: var(--hu-colors-eclipse-base);
-  color: var(--hu-colors-apollo-base);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+.directHeader {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.directHeader > span:first-child {
+  display: grid;
+  gap: 4px;
+}
+
+.directHeader strong {
+  color: var(--hu-colors-white);
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.directHeader small {
+  color: var(--hu-text-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.fallback {
+  width: 100%;
+  padding-top: 16px;
+  border-top: 1px solid var(--hu-divider);
+}
+
+.fallback > summary {
+  width: fit-content;
+  cursor: pointer;
+  color: var(--hu-text-muted);
+  font-size: 13px;
+}
+
+.fallbackBody {
+  padding-top: 16px;
 }
 
 @media (max-width: 560px) {
   .facts > div {
     grid-template-columns: 1fr;
     gap: 6px;
+  }
+
+  .directHeader {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }

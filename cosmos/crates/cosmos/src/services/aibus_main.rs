@@ -549,58 +549,14 @@ impl AiBusMain {
         if image_urls.is_empty() {
             return Err(Status::invalid_argument("vision request has no images"));
         }
-        let config = crate::integrations::active().snapshot().assistant;
-        if config.provider != crate::integrations::AssistantProvider::OpenAiCompatible
-            || !config.configured()
-        {
-            return Err(Status::failed_precondition(
-                "vision requires an OpenAI-compatible assistant provider in Center",
-            ));
-        }
-        let base_url = config.base_url;
-        let api_key = config
-            .api_key
-            .expect("configured OpenAI-compatible provider has an API key");
-        let model = config.model;
-
-        let mut content = vec![serde_json::json!({ "type": "text", "text": prompt })];
-        content.extend(
-            image_urls
-                .into_iter()
-                .map(|url| serde_json::json!({ "type": "image_url", "image_url": { "url": url } })),
-        );
-        let body = serde_json::json!({
-            "model": model,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": "Describe only what is supported by the supplied image. Be concise and state uncertainty."
-                },
-                { "role": "user", "content": content }
-            ]
-        });
-        let response: serde_json::Value = reqwest::Client::new()
-            .post(format!(
-                "{}/chat/completions",
-                base_url.trim_end_matches('/')
-            ))
-            .bearer_auth(api_key)
-            .json(&body)
-            .send()
+        crate::assistant::vision::complete(&prompt, &image_urls)
             .await
-            .map_err(|e| Status::unavailable(format!("vision transport failed: {e}")))?
-            .error_for_status()
-            .map_err(|e| Status::unavailable(format!("vision endpoint rejected request: {e}")))?
-            .json()
-            .await
-            .map_err(|e| Status::unavailable(format!("vision response was malformed: {e}")))?;
-        let content = response
-            .pointer("/choices/0/message/content")
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .filter(|v| !v.is_empty())
-            .ok_or_else(|| Status::unavailable("vision response contained no observation"))?;
-        Ok(content.to_owned())
+            .map_err(|error| match error {
+                crate::assistant::vision::VisionError::Unsupported => {
+                    Status::failed_precondition(error.to_string())
+                }
+                _ => Status::unavailable(error.to_string()),
+            })
     }
 
     async fn analyze_image_inner(

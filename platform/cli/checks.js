@@ -24,6 +24,54 @@ const COSMOS_PLATFORM_BOUNDARY = new Set([
 const FULL_PLATFORM_ROOT_PATHS = new Set([
   '.dockerignore', '.env.example', '.gitignore', 'compose.yaml', 'revival', 'rust-toolchain.toml',
 ]);
+const CARGO_INCREMENTAL_VARIANTS_PER_CRATE = 8;
+const CARGO_INCREMENTAL_ACTIVE_MS = 10 * 60 * 1000;
+
+/**
+ * Keep the useful recent rustc states without letting test/clippy profile hashes
+ * grow forever. Cargo's stable GC covers downloads, not target artifacts.
+ */
+function pruneCargoIncremental(targetDirectory, {
+  now = Date.now(),
+  keep = CARGO_INCREMENTAL_VARIANTS_PER_CRATE,
+  activeMs = CARGO_INCREMENTAL_ACTIVE_MS,
+} = {}) {
+  if (!Number.isInteger(keep) || keep < 1 || !Number.isFinite(activeMs) || activeMs < 0) {
+    throw new Error('invalid Cargo incremental retention policy');
+  }
+  let removed = 0;
+  for (const profile of ['debug', 'release']) {
+    const root = path.join(targetDirectory, profile, 'incremental');
+    let entries;
+    try {
+      entries = fs.readdirSync(root, { withFileTypes: true });
+    } catch (error) {
+      if (error.code === 'ENOENT') continue;
+      throw error;
+    }
+    const groups = new Map();
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
+      const match = /^(.*)-[a-z0-9]+$/u.exec(entry.name);
+      if (!match) continue;
+      const fullPath = path.join(root, entry.name);
+      const stat = fs.lstatSync(fullPath);
+      if (!stat.isDirectory() || stat.isSymbolicLink()) continue;
+      const rows = groups.get(match[1]) ?? [];
+      rows.push({ fullPath, modified: stat.mtimeMs });
+      groups.set(match[1], rows);
+    }
+    for (const rows of groups.values()) {
+      rows.sort((left, right) => right.modified - left.modified);
+      for (const row of rows.slice(keep)) {
+        if (now - row.modified < activeMs) continue;
+        fs.rmSync(row.fullPath, { recursive: true, force: false, maxRetries: 2 });
+        removed += 1;
+      }
+    }
+  }
+  return removed;
+}
 
 function requiredCommands(commands, label, environment = testProcessEnvironment()) {
   for (const command of commands) if (!exists(command, environment)) fail(`${label} requires ${command}`);
@@ -243,6 +291,8 @@ function runCosmosCheck(filter = null, dependencies = {}) {
   info(filter === null
     ? '[implemented] Cosmos format, lint, and tests passed from the working tree.'
     : '[implemented] Cosmos format and selected tests passed from the working tree.');
+  const removed = pruneCargoIncremental(environment.CARGO_TARGET_DIR);
+  if (removed > 0) info(`[cache] removed ${removed} superseded Rust incremental state${removed === 1 ? '' : 's'}.`);
 }
 
 function runPlatformCheck(dependencies = {}) {
@@ -431,6 +481,6 @@ module.exports = {
   defaultBaseCommit, dependencyFingerprint,
   exactNpmVersion, focusedRustTestArguments, listedRustTests,
   normalizedNpmInstallEnvironment, parseChangedArguments, parseCosmosArguments, parsePlatformArguments,
-  prepareNpmDependencies, runCenterCheck, runCosmosCheck, runPlatformCheck,
+  prepareNpmDependencies, pruneCargoIncremental, runCenterCheck, runCosmosCheck, runPlatformCheck,
   requiresFullPlatformCheck, runSelectedComponents, validGitBaseRef,
 };

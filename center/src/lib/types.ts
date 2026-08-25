@@ -24,6 +24,8 @@ export interface CaptureData {
   /** Clone-owned selector provenance; Humane's original model is unknown. */
   bestFrameMethod?: "vision_v1" | "quality_v1" | "manual" | string;
   bestFrameReason?: string;
+  /** True after Cosmos has indexed visible content for private search. */
+  visualSearchReady?: boolean;
   /** True when the body is EncryptedData the server cannot open. */
   sealed?: boolean;
 }

@@ -14,17 +14,3 @@ export function createActivationBundleJson(
     device_status_endpoint: deviceStatusEndpoint,
   }, null, 2)}\n`;
 }
-
-export function activationCommands(deviceId: string, edgeIpv4: string | null) {
-  const credentialFile = `cosmos-activation-${deviceId}.json`;
-  const credentialPath = `~/.config/ai-pin-revival/${credentialFile}`;
-  const edge = edgeIpv4 ?? "SERVER_PUBLIC_IPV4";
-  const plan = `./revival pin activate --serial PIN_SERIAL --credential-file ${credentialPath} --edge-ipv4 ${edge}`;
-  return {
-    credentialFile,
-    credentialPath,
-    plan,
-    confirm: `${plan} --confirm`,
-    status: "./revival pin activate status --serial PIN_SERIAL",
-  } as const;
-}

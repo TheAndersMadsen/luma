@@ -19,6 +19,7 @@ const {
   parseChangedArguments,
   parsePlatformArguments,
   prepareNpmDependencies,
+  pruneCargoIncremental,
   requiresFullPlatformCheck,
   runCenterCheck,
   runPlatformCheck,
@@ -78,6 +79,32 @@ test("Cosmos test environment drops credentials and points its target outside th
   assert.notEqual(environment.NPM_CONFIG_CACHE, "/tmp/poison-cache");
   assert.equal(path.isAbsolute(environment.CARGO_TARGET_DIR), true);
   assert.equal(environment.CARGO_TARGET_DIR.startsWith(`${root}${path.sep}`), false);
+});
+
+test("Cosmos checks bound superseded incremental states without touching active variants", () => {
+  const target = fs.mkdtempSync(path.join(os.tmpdir(), "revival-cargo-target-"));
+  const incremental = path.join(target, "debug", "incremental");
+  fs.mkdirSync(incremental, { recursive: true });
+  const now = Date.now();
+  try {
+    for (const [index, age] of [50_000, 40_000, 30_000, 20_000, 100].entries()) {
+      const directory = path.join(incremental, `cosmos-hash${index}`);
+      fs.mkdirSync(directory);
+      fs.writeFileSync(path.join(directory, "artifact"), "compiled");
+      const modified = new Date(now - age);
+      fs.utimesSync(directory, modified, modified);
+    }
+    const foreign = path.join(incremental, "not-a-cargo-entry");
+    fs.mkdirSync(foreign);
+
+    assert.equal(pruneCargoIncremental(target, { now, keep: 2, activeMs: 1_000 }), 3);
+    assert.deepEqual(
+      fs.readdirSync(incremental).sort(),
+      ["cosmos-hash3", "cosmos-hash4", "not-a-cargo-entry"],
+    );
+  } finally {
+    fs.rmSync(target, { recursive: true, force: true });
+  }
 });
 
 test("npm normalization ignores inherited behavior changes and uses the external cache", () => {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { StatusChip, type StatusTone } from "@/components/Status";
 import { useAssistantStatus, type AssistantStatus } from "@/components/AiMicChat";
 import settings from "../../settings.module.css";
@@ -70,6 +70,18 @@ type SecretName =
   | "azureKey";
 
 type SecretDraft = Record<SecretName, string | null>;
+
+type IntegrationTestTarget =
+  | "assistant"
+  | "searxng"
+  | "serpapi"
+  | "perplexity"
+  | "maps"
+  | "weather"
+  | "wolfram"
+  | "speech";
+
+type IntegrationTestView = { ok: boolean; message: string };
 
 type DeviceCode = {
   login_id: string;
@@ -155,12 +167,14 @@ function SecretField({
   configured,
   value,
   onChange,
+  action,
 }: {
   label: string;
   detail: string;
   configured: boolean;
   value: string | null;
   onChange: (value: string) => void;
+  action?: ReactNode;
 }) {
   return (
     <div className={styles.integrationField}>
@@ -183,6 +197,7 @@ function SecretField({
             Remove
           </button>
         ) : null}
+        {action}
       </div>
     </div>
   );
@@ -197,6 +212,8 @@ export function CosmosServicesCard({ operator }: { operator: boolean }) {
   const [secrets, setSecrets] = useState<SecretDraft>(EMPTY_SECRETS);
   const [loading, setLoading] = useState(operator);
   const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState<IntegrationTestTarget>();
+  const [testResults, setTestResults] = useState<Partial<Record<IntegrationTestTarget, "Working" | "Failed">>>({});
   const [message, setMessage] = useState<{ tone: "ok" | "error"; text: string }>();
   const [deviceCode, setDeviceCode] = useState<DeviceCode>();
   const [now, setNow] = useState(Date.now());
@@ -266,11 +283,9 @@ export function CosmosServicesCard({ operator }: { operator: boolean }) {
     setSecrets((current) => ({ ...current, [name]: value }));
   }
 
-  async function save() {
+  function updatePayload() {
     if (!draft) return;
-    setSaving(true);
-    setMessage(undefined);
-    const payload = {
+    return {
       assistant: {
         provider: draft.provider,
         base_url: draft.baseUrl,
@@ -294,20 +309,61 @@ export function CosmosServicesCard({ operator }: { operator: boolean }) {
         ...(secrets.azureKey === null ? {} : { azure_key: secrets.azureKey }),
       },
     };
+  }
+
+  async function persist() {
+    const payload = updatePayload();
+    if (!payload) throw new Error("Cosmos settings are still loading.");
+    const next = await responseJson<IntegrationsView>(await fetch("/api/admin/integrations", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    }));
+    setView(next);
+    setDraft(draftFrom(next));
+    setSecrets(EMPTY_SECRETS);
+    return next;
+  }
+
+  async function save() {
+    if (!draft) return;
+    setSaving(true);
+    setMessage(undefined);
     try {
-      const next = await responseJson<IntegrationsView>(await fetch("/api/admin/integrations", {
-        method: "PUT",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(payload),
-      }));
-      setView(next);
-      setDraft(draftFrom(next));
-      setSecrets(EMPTY_SECRETS);
+      await persist();
       setMessage({ tone: "ok", text: "Cosmos settings saved. New requests use them immediately." });
     } catch (error) {
       setMessage({ tone: "error", text: error instanceof Error ? error.message : "Settings could not be saved." });
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function testIntegration(target: IntegrationTestTarget, label: string) {
+    setTesting(target);
+    setMessage(undefined);
+    setTestResults((current) => {
+      const next = { ...current };
+      delete next[target];
+      return next;
+    });
+    try {
+      await persist();
+      const result = await responseJson<IntegrationTestView>(await fetch("/api/admin/integrations/test", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ target }),
+      }));
+      setTestResults((current) => ({ ...current, [target]: "Working" }));
+      setMessage({ tone: "ok", text: result.message });
+    } catch (error) {
+      setTestResults((current) => ({ ...current, [target]: "Failed" }));
+      setMessage({
+        tone: "error",
+        text: error instanceof Error ? `${label}: ${error.message}` : `${label} could not be tested.`,
+      });
+    } finally {
+      setTesting(undefined);
     }
   }
 
@@ -357,6 +413,33 @@ export function CosmosServicesCard({ operator }: { operator: boolean }) {
     }
   }
 
+  function secretReady(name: SecretName, configured: boolean): boolean {
+    const value = secrets[name];
+    return value === null ? configured : value.trim().length > 0;
+  }
+
+  function testControl(target: IntegrationTestTarget, label: string, disabled = false) {
+    const result = testResults[target];
+    return (
+      <span className={styles.testControl}>
+        <button
+          className={styles.inlineButton}
+          type="button"
+          aria-label={`Test ${label}`}
+          disabled={disabled || saving || testing !== undefined}
+          onClick={() => void testIntegration(target, label)}
+        >
+          {testing === target ? "Testing…" : "Test"}
+        </button>
+        {result ? (
+          <span className={styles.testResult} data-tone={result === "Working" ? "ok" : "error"} role="status">
+            {result}
+          </span>
+        ) : null}
+      </span>
+    );
+  }
+
   return (
     <section className={settings.section} data-testid="cosmos-services-card">
       <div className={settings.sectionHeader}>
@@ -403,8 +486,17 @@ export function CosmosServicesCard({ operator }: { operator: boolean }) {
         <div className={styles.integrationSettings}>
           <section className={styles.integrationGroup}>
             <div className={styles.integrationIntro}>
-              <span><strong>Assistant</strong><small>Choose a model provider.</small></span>
-              <StatusChip tone={view.assistant.configured ? "live" : "off"} label={view.assistant.configured ? "Connected" : "Needs setup"} />
+              <span><strong>Assistant</strong><small>Choose a model for answers and photo search.</small></span>
+              <span className={styles.integrationIntroActions}>
+                <StatusChip tone={view.assistant.configured ? "live" : "off"} label={view.assistant.configured ? "Connected" : "Needs setup"} />
+                {testControl(
+                  "assistant",
+                  "Assistant",
+                  !draft.model.trim() || (draft.provider === "codex-subscription"
+                    ? !view.assistant.codex.connected
+                    : !draft.baseUrl.trim() || !secretReady("assistantApiKey", view.assistant.api_key_configured)),
+                )}
+              </span>
             </div>
             <div className={styles.integrationField}>
               <label htmlFor="assistant-provider"><strong>Provider</strong><small>OpenAI-compatible API or a Codex subscription.</small></label>
@@ -493,23 +585,29 @@ export function CosmosServicesCard({ operator }: { operator: boolean }) {
             </div>
             <div className={styles.integrationField}>
               <label htmlFor="searxng-url"><strong>SearxNG URL</strong><small>Recommended self-hosted web search.</small></label>
-              <input id="searxng-url" className={styles.integrationInput} type="url" value={draft.searxngBaseUrl} placeholder="https://search.example.com" onChange={(event) => setDraft({ ...draft, searxngBaseUrl: event.target.value })} />
+              <div className={styles.secretControl}>
+                <input id="searxng-url" className={styles.integrationInput} type="url" value={draft.searxngBaseUrl} placeholder="https://search.example.com" onChange={(event) => setDraft({ ...draft, searxngBaseUrl: event.target.value })} />
+                {testControl("searxng", "SearXNG", !draft.searxngBaseUrl.trim())}
+              </div>
             </div>
-            <SecretField label="SerpAPI key" detail="Alternative web-search provider." configured={view.search.serpapi_key_configured} value={secrets.serpapiKey} onChange={(value) => secret("serpapiKey", value)} />
-            <SecretField label="Perplexity API key" detail="Optional research answer provider." configured={view.search.perplexity_key_configured} value={secrets.perplexityKey} onChange={(value) => secret("perplexityKey", value)} />
+            <SecretField label="SerpAPI key" detail="Alternative web-search provider." configured={view.search.serpapi_key_configured} value={secrets.serpapiKey} onChange={(value) => secret("serpapiKey", value)} action={testControl("serpapi", "SerpApi", !secretReady("serpapiKey", view.search.serpapi_key_configured))} />
+            <SecretField label="Perplexity API key" detail="Optional research answer provider." configured={view.search.perplexity_key_configured} value={secrets.perplexityKey} onChange={(value) => secret("perplexityKey", value)} action={testControl("perplexity", "Perplexity", !secretReady("perplexityKey", view.search.perplexity_key_configured))} />
             <div className={styles.integrationField}>
               <label htmlFor="perplexity-model"><strong>Perplexity model</strong><small>Only used when a Perplexity key is configured.</small></label>
               <input id="perplexity-model" className={styles.integrationInput} value={draft.perplexityModel} placeholder="sonar" onChange={(event) => setDraft({ ...draft, perplexityModel: event.target.value })} />
             </div>
-            <SecretField label="Google Maps key" detail="Places, geocoding and directions." configured={view.maps.configured} value={secrets.googleMapsKey} onChange={(value) => secret("googleMapsKey", value)} />
-            <SecretField label="Weather API key" detail="Pirate Weather forecasts." configured={view.search.weather_configured} value={secrets.weatherApiKey} onChange={(value) => secret("weatherApiKey", value)} />
-            <SecretField label="Wolfram App ID" detail="Computational knowledge queries." configured={view.search.wolfram_configured} value={secrets.wolframAppId} onChange={(value) => secret("wolframAppId", value)} />
+            <SecretField label="Google Maps key" detail="Places, geocoding and directions." configured={view.maps.configured} value={secrets.googleMapsKey} onChange={(value) => secret("googleMapsKey", value)} action={testControl("maps", "Google Maps", !secretReady("googleMapsKey", view.maps.configured))} />
+            <SecretField label="Weather API key" detail="Pirate Weather forecasts." configured={view.search.weather_configured} value={secrets.weatherApiKey} onChange={(value) => secret("weatherApiKey", value)} action={testControl("weather", "Pirate Weather", !secretReady("weatherApiKey", view.search.weather_configured))} />
+            <SecretField label="Wolfram App ID" detail="Computational knowledge queries." configured={view.search.wolfram_configured} value={secrets.wolframAppId} onChange={(value) => secret("wolframAppId", value)} action={testControl("wolfram", "Wolfram|Alpha", !secretReady("wolframAppId", view.search.wolfram_configured))} />
           </section>
 
           <section className={styles.integrationGroup}>
             <div className={styles.integrationIntro}>
               <span><strong>Speech</strong><small>Cosmos transcribes requests and renders spoken answers.</small></span>
-              <StatusChip tone={view.speech.configured ? "live" : "off"} label={view.speech.configured ? "Configured" : "Needs setup"} />
+              <span className={styles.integrationIntroActions}>
+                <StatusChip tone={view.speech.configured ? "live" : "off"} label={view.speech.configured ? "Configured" : "Needs setup"} />
+                {testControl("speech", "Azure Speech", !draft.azureRegion.trim() || !secretReady("azureKey", view.speech.azure_key_configured))}
+              </span>
             </div>
             <SecretField label="Azure Speech key" detail="Stored only in Cosmos." configured={view.speech.azure_key_configured} value={secrets.azureKey} onChange={(value) => secret("azureKey", value)} />
             <div className={styles.integrationField}>
@@ -525,7 +623,7 @@ export function CosmosServicesCard({ operator }: { operator: boolean }) {
           {message ? <div className={styles.integrationMessage} data-tone={message.tone} role="status">{message.text}</div> : null}
           <div className={styles.integrationActions}>
             <span>Changes apply to the next request.</span>
-            <button className={styles.primaryButton} type="button" disabled={saving} onClick={() => void save()}>{saving ? "Saving…" : "Save Cosmos settings"}</button>
+            <button className={styles.primaryButton} type="button" disabled={saving || testing !== undefined} onClick={() => void save()}>{saving ? "Saving…" : "Save Cosmos settings"}</button>
           </div>
         </div>
       )}

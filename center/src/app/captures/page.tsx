@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Shell } from "@/components/Shell";
 import { Page } from "@/components/Page";
@@ -22,6 +22,12 @@ export default function CapturesPage() {
   // Server-side search results (GET /api/capture/search). Null means "use the
   // local filter" — either no query, or the search endpoint isn't available.
   const [serverResults, setServerResults] = useState<CaptureRecord[] | null>(null);
+  const [searchTotal, setSearchTotal] = useState<number | null>(null);
+  const [visualIndex, setVisualIndex] = useState<{
+    state: "building" | "unavailable";
+    pending: number;
+  } | null>(null);
+  const [searchRevision, setSearchRevision] = useState(0);
   /**
    * Set when the SEARCH call did not come back live and the local filter is
    * standing in for it. Null means the results on screen are the server's.
@@ -33,45 +39,6 @@ export default function CapturesPage() {
     state: "absent" | "degraded";
     reason?: string;
   } | null>(null);
-  const rankingAttempted = useRef(new Set<string>());
-
-  // New stock photo memories arrive as a three-frame burst. Rank unselected
-  // uploads in small batches so Center naturally settles on the best frame even
-  // if the wearer never opens the detail view. Cosmos caches each answer.
-  useEffect(() => {
-    if (data?.state !== "live") return;
-    const pending = data.data
-      .filter(
-        (capture) =>
-          capture.data.memoryType === "PHOTO" &&
-          capture.data.uploadComplete === true &&
-          (capture.data.frameCount ?? 0) > 1 &&
-          capture.data.bestFrameIndex === undefined &&
-          !rankingAttempted.current.has(capture.uuid),
-      )
-      .slice(0, 6);
-    if (pending.length === 0) return;
-    pending.forEach((capture) => rankingAttempted.current.add(capture.uuid));
-    let cancelled = false;
-    void Promise.allSettled(
-      pending.map((capture) =>
-        fetch(`/api/capture/memory/${encodeURIComponent(capture.uuid)}/best-photo`, {
-          method: "POST",
-        }).then((response) => {
-          if (!response.ok) throw new Error(`selection -> ${response.status}`);
-        }),
-      ),
-    ).then((outcomes) => {
-      if (!cancelled && outcomes.some((outcome) => outcome.status === "fulfilled")) {
-        void queryClient.invalidateQueries({ queryKey: ["captures"] });
-        void queryClient.invalidateQueries({ queryKey: ["memories-dashboard"] });
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [data, queryClient]);
-
   /**
    * Real server-side search, backed by the webapi. Debounced, and it degrades to
    * the client-side filter below when the endpoint does not answer live.
@@ -108,10 +75,13 @@ export default function CapturesPage() {
     const q = query.trim();
     if (!q) {
       setServerResults(null);
+      setSearchTotal(null);
+      setVisualIndex(null);
       setSearchFallback(null);
       return;
     }
     const controller = new AbortController();
+    let refreshTimer: ReturnType<typeof setTimeout> | undefined;
     const timer = setTimeout(async () => {
       try {
         const res = await fetch(`/api/capture/search?query=${encodeURIComponent(q)}&size=200`, {
@@ -121,11 +91,24 @@ export default function CapturesPage() {
         const results = (await res.json()) as CaptureRecord[];
         if (res.headers.get("x-data-state") === "live") {
           setServerResults(results);
+          setSearchTotal(Number.parseInt(res.headers.get("x-total-count") ?? "0", 10) || 0);
           setSearchFallback(null);
+          const indexState = res.headers.get("x-visual-index");
+          const pending = Number.parseInt(res.headers.get("x-visual-pending") ?? "0", 10) || 0;
+          if (indexState === "building") {
+            setVisualIndex({ state: "building", pending });
+            refreshTimer = setTimeout(() => setSearchRevision((revision) => revision + 1), 5000);
+          } else if (indexState === "unavailable") {
+            setVisualIndex({ state: "unavailable", pending });
+          } else {
+            setVisualIndex(null);
+          }
         } else {
           // The search did not run. Hand back to the local filter and remember
           // that it IS the local filter, so the grid can say so.
           setServerResults(null);
+          setSearchTotal(null);
+          setVisualIndex(null);
           setSearchFallback({
             state: res.headers.get("x-data-state") === "absent" ? "absent" : "degraded",
             reason: res.headers.get("x-data-degraded") ?? undefined,
@@ -134,15 +117,18 @@ export default function CapturesPage() {
       } catch (e) {
         if ((e as Error).name !== "AbortError") {
           setServerResults(null);
+          setSearchTotal(null);
+          setVisualIndex(null);
           setSearchFallback({ state: "degraded", reason: (e as Error).message });
         }
       }
     }, 300);
     return () => {
       clearTimeout(timer);
+      if (refreshTimer) clearTimeout(refreshTimer);
       controller.abort();
     };
-  }, [query, dataUpdatedAt]);
+  }, [query, dataUpdatedAt, searchRevision]);
 
   const captures = useMemo(() => {
     const all = data?.data ?? [];
@@ -300,18 +286,28 @@ export default function CapturesPage() {
    */
   const searching = Boolean(query.trim());
 
-  /*
-   * The grid holds one capped page — the backend clamps every capture list to
-   * two hundred rows and nothing in this app asks for a second page — and it
-   * never said so. The older half of a wearer's library was simply unreachable
-   * and unsearchable, including through the server search, which filters this
-   * same capped list. `total` is the backend's own count of what they have.
-   */
   const cappedNotice =
-    typeof data.total === "number" && data.total > data.data.length ? (
+    !searching && typeof data.total === "number" && data.total > data.data.length ? (
       <StatusMessage tone="info">
-        Showing your {data.data.length} most recent captures of {data.total}. Older ones
-        aren&rsquo;t loaded here, and search only looks at the ones that are.
+        Showing your {data.data.length} most recent captures of {data.total}. Search checks your
+        full library.
+      </StatusMessage>
+    ) : null;
+  const searchCountNotice =
+    searching && searchTotal !== null && searchTotal > captures.length ? (
+      <StatusMessage tone="info">
+        Showing {captures.length} of {searchTotal} matches. Refine your search to narrow them down.
+      </StatusMessage>
+    ) : null;
+  const visualIndexNotice =
+    searching && visualIndex?.state === "building" ? (
+      <StatusMessage tone="info">
+        Preparing {visualIndex.pending} older photo{visualIndex.pending === 1 ? "" : "s"} for
+        search&hellip;
+      </StatusMessage>
+    ) : searching && visualIndex?.state === "unavailable" ? (
+      <StatusMessage tone="warning">
+        Connect a vision-capable assistant to search what&rsquo;s in older photos.
       </StatusMessage>
     ) : null;
   const searchFallbackNotice =
@@ -351,6 +347,8 @@ export default function CapturesPage() {
 
         {provenance}
         {cappedNotice}
+        {searchCountNotice}
+        {visualIndexNotice}
         {searchFallbackNotice}
 
         {captures.length === 0 ? (
@@ -366,7 +364,7 @@ export default function CapturesPage() {
            * matching captures" is a claim about a search that never ran, so the
            * notice above is left to speak for itself.
            */
-          searching && searchFallback ? null : query.trim() ? (
+          searching && (searchFallback || visualIndex?.state === "building") ? null : query.trim() ? (
             <EmptyState
               icon={<CapturesEmptyIcon size={56} />}
               title="No matching captures"

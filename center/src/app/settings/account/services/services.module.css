@@ -366,7 +366,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  width: min(100%, 460px);
+  width: min(100%, 560px);
 }
 
 .secretControl .integrationInput {
@@ -376,6 +376,27 @@
 
 .inlineButton {
   composes: buttonQuietSmall from "../../../../components/controls.module.css";
+}
+
+.integrationIntroActions,
+.testControl {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.testControl {
+  flex: none;
+}
+
+.testResult {
+  color: var(--hu-colors-beam-base);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.testResult[data-tone="error"] {
+  color: var(--hu-colors-red-50);
 }
 
 .codexConnect {
@@ -447,5 +468,6 @@
   .integrationInput,
   .secretControl,
   .providerSelect { width: 100%; max-width: none; }
+  .integrationIntroActions { justify-content: space-between; }
   .integrationActions > button { align-self: flex-end; }
 }

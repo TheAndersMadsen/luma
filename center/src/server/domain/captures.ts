@@ -242,6 +242,7 @@ interface MemoryDto {
   bestFrameIndex: number | null;
   bestFrameMethod: string | null;
   bestFrameReason: string | null;
+  visualSearchReady: boolean;
   hasLocation: boolean;
   burstCount: number;
   sealed: boolean;
@@ -267,6 +268,7 @@ function memoryDtoToCapture(m: MemoryDto): CaptureRecord {
       bestFrameIndex: m.bestFrameIndex ?? undefined,
       bestFrameMethod: m.bestFrameMethod ?? undefined,
       bestFrameReason: m.bestFrameReason ?? undefined,
+      visualSearchReady: m.visualSearchReady,
       sealed: m.sealed,
     },
   };
@@ -292,6 +294,43 @@ export async function getCaptures(
     // the grid. Dropping it is what let the capture surfaces present one capped
     // page as the whole of someone's photos.
     return { ...live(data), total: page.totalElements };
+  } catch (error) {
+    return failedWebapi([], error);
+  }
+}
+
+/** Search every capture in Cosmos, including its private visual index. */
+export async function searchCaptures(
+  query: string,
+  page = 0,
+  size = 200,
+): Promise<
+  Sourced<CaptureRecord[]> & {
+    visualIndex?: "ready" | "building" | "unavailable";
+    visualPending?: number;
+  }
+> {
+  if (!COSMOS_WEBAPI_ENABLED) return unconfigured([], "empty", WEBAPI_UNSET);
+  try {
+    const path = `/capture/search?query=${encodeURIComponent(query)}&page=${Math.max(0, page)}&size=${boundedPageSize(size)}`;
+    const headers = await webapiHeaders();
+    const response = await fetch(`${COSMOS_WEBAPI}${path}`, {
+      signal: AbortSignal.timeout(Number(process.env.COSMOS_DEADLINE_MS ?? 8000)),
+      cache: "no-store",
+      headers,
+    });
+    if (!response.ok) throw new Error(`webapi ${path} -> ${response.status}`);
+    const result = (await response.json()) as SpringPage<MemoryDto>;
+    const visualIndex = response.headers.get("x-cosmos-visual-index");
+    return {
+      ...live(result.content.map(memoryDtoToCapture)),
+      total: result.totalElements,
+      visualIndex:
+        visualIndex === "ready" || visualIndex === "building" || visualIndex === "unavailable"
+          ? visualIndex
+          : undefined,
+      visualPending: Number.parseInt(response.headers.get("x-cosmos-visual-pending") ?? "0", 10) || 0,
+    };
   } catch (error) {
     return failedWebapi([], error);
   }

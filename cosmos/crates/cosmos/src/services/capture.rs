@@ -610,10 +610,11 @@ impl CaptureObjectStore {
         if record.kind != MemoryKind::Photo || record.thumbnails.is_empty() {
             return Ok(None);
         }
-        if let Some(existing) = self.read_best_frame(principal, &record.uuid).await? {
-            if !force_automatic || existing.method == "manual" {
-                return Ok(Some(existing));
-            }
+        if let Some(existing) = self.read_best_frame(principal, &record.uuid).await?
+            && existing.has_visual_index()
+            && (!force_automatic || existing.method == "manual")
+        {
+            return Ok(Some(existing));
         }
 
         // A frame we cannot open is skipped, but never silently: ranking that
@@ -702,9 +703,14 @@ impl CaptureObjectStore {
         selection.frame = opened[selection.frame].0;
 
         // The vision request can take seconds. Center may receive a manual
-        // choice while it runs; the wearer always wins that race.
+        // choice while it runs; retain that frame while adding the new private
+        // visual-search metadata.
         if let Some(existing) = self.read_best_frame(principal, memory_uuid).await? {
-            if existing.method == "manual" || !force_automatic {
+            if existing.method == "manual" {
+                selection.frame = existing.frame;
+                selection.method = existing.method;
+                selection.reason = existing.reason;
+            } else if existing.has_visual_index() && !force_automatic {
                 return Ok(Some(existing));
             }
         }
@@ -2377,7 +2383,7 @@ impl CaptureService for Capture {
         // Pin retain or retry an otherwise complete upload.
         if status == Ack::Acknowledged
             && record.kind == crate::store::MemoryKind::Photo
-            && record.thumbnails.len() > 1
+            && !record.thumbnails.is_empty()
             && let AssetArrival::Objects(objects) = &self.asset_arrival
         {
             let objects = Arc::clone(objects);

@@ -1,22 +1,3 @@
-/*
- * The guided setup rail.
- *
- * Written in the --hu-* tokens from globals.css and on settings.module.css's
- * row rhythm (18px/24px), so a setup step reads as the same furniture as a row
- * on /settings/account/devices rather than as a second design system. The Pin
- * console's own pin.module.css supplies buttons, mono text and section prose;
- * only the things that stylesheet has no word for — the numbered rail, the step
- * state pill, and the block that carries a shell command Center cannot run —
- * are added here.
- *
- * Deliberately NOT reusing <StatusChip> for step state: that component's four
- * tones are a provenance vocabulary (live / absent / degraded / off) about
- * where a VALUE came from. "This step is blocked behind the one above it" is a
- * different claim, and borrowing the tone words for it would erode the one
- * vocabulary the rest of Center depends on. StatusChip still appears on this
- * page — for the facts that really are provenance claims.
- */
-
 /* ------------------------------------------------------------- progress -- */
 
 .progress {
@@ -110,13 +91,12 @@
   color: var(--hu-status-warning);
 }
 
-.badge[data-state="todo"],
-.badge[data-state="manual"] {
+.badge[data-state="focus"] {
   box-shadow: inset 0 0 0 1px var(--hu-colors-apollo-base);
   color: var(--hu-colors-white);
 }
 
-.badge[data-state="unobservable"] {
+.badge[data-state="waiting"] {
   box-shadow: inset 0 0 0 1px var(--hu-colors-crater-grey-200);
   color: var(--hu-text-muted);
 }
@@ -140,10 +120,6 @@
   font-size: 16px;
   font-weight: 500;
   color: var(--hu-colors-white);
-}
-
-.stepDim .title {
-  color: var(--hu-colors-crater-base);
 }
 
 /* The state word. Same pill geometry as settings.module.css `.additionTag`. */
@@ -170,8 +146,7 @@
   color: var(--hu-status-warning);
 }
 
-.state[data-state="todo"],
-.state[data-state="manual"] {
+.state[data-state="focus"] {
   color: var(--hu-colors-white);
 }
 
@@ -183,14 +158,6 @@
   max-width: 640px;
 }
 
-.next {
-  font-size: 14px;
-  font-weight: 400;
-  line-height: 1.45;
-  color: var(--hu-colors-apollo-base);
-  max-width: 640px;
-}
-
 .actions {
   display: flex;
   align-items: center;
@@ -199,48 +166,25 @@
   padding-top: 2px;
 }
 
-/* -------------------------------------------------- commands Center lacks -- */
-
-/*
- * A step that has no console yet.
- *
- * The whole point of this block is that it is NOT a button: it says what has to
- * be typed elsewhere, and the note above it says why there is nothing to click.
- * Pretending otherwise is the failure mode this page exists to remove.
- */
-.manual {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-top: 4px;
-  padding: 14px 16px;
-  border-radius: var(--hu-radius-control);
-  background: var(--hu-colors-penumbra-200);
-  box-shadow: var(--outline-shadow);
+.evidenceDetails > summary {
+  cursor: pointer;
+  list-style: none;
 }
 
-.manualNote {
-  font-size: 13px;
-  font-weight: 400;
-  line-height: 1.5;
-  color: var(--hu-colors-crater-base);
+.evidenceDetails > summary::-webkit-details-marker {
+  display: none;
 }
 
-.commands {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin: 0;
+.evidenceDetails > summary::after {
+  content: "+";
+  margin-left: auto;
+  color: var(--hu-text-muted);
+  font-size: 20px;
+  font-weight: 300;
 }
 
-.command {
-  margin: 0;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
-  line-height: 1.55;
-  color: var(--hu-colors-apollo-base);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+.evidenceDetails[open] > summary::after {
+  content: "−";
 }
 
 @media (max-width: 700px) {

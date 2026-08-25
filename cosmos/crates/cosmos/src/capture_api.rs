@@ -44,7 +44,10 @@
 //! error: it is an ordinary, truthful answer, and the caller learns nothing
 //! about whether the identifier exists under some *other* account.
 
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 use axum::{
     Router,
@@ -237,6 +240,7 @@ fn router_with_objects(
     Router::new()
         .route("/capture/memories", get(list_memories))
         .route("/capture/captures", get(list_captures))
+        .route("/capture/search", get(search_captures))
         .route("/capture/memory/:uuid", get(get_memory))
         // `observed` in recovered Center. The original ranking internals are
         // unknown; these routes drive the clone-owned selector documented in
@@ -323,6 +327,7 @@ struct PageQuery {
 /// everything at once from turning one request into an unbounded serialization.
 const DEFAULT_PAGE_SIZE: i64 = 20;
 const MAX_PAGE_SIZE: i64 = 200;
+const CAPTURE_KINDS: &[MemoryKind] = &[MemoryKind::Photo, MemoryKind::Video];
 
 impl PageQuery {
     /// The window this request asks for: `(page, size, offset)`.
@@ -406,6 +411,9 @@ struct MemoryDto {
     best_frame_method: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     best_frame_reason: Option<String>,
+    /// Whether this photo has private object/category metadata available for
+    /// semantic search. The metadata itself is never serialized.
+    visual_search_ready: bool,
     /// The content is `EncryptedData` readable only on the Pin.
     sealed: bool,
 }
@@ -431,6 +439,9 @@ impl MemoryDto {
         selection: Option<crate::capture_ranking::BestFrameSelection>,
     ) -> Self {
         let selection = selection.filter(|selection| selection.frame < m.frame_count);
+        let visual_search_ready = selection
+            .as_ref()
+            .is_some_and(crate::capture_ranking::BestFrameSelection::has_visual_index);
         Self {
             uuid: m.uuid.clone(),
             id: m.numeric_id,
@@ -449,6 +460,7 @@ impl MemoryDto {
             best_frame_index: selection.as_ref().map(|selection| selection.frame),
             best_frame_method: selection.as_ref().map(|selection| selection.method.clone()),
             best_frame_reason: selection.map(|selection| selection.reason),
+            visual_search_ready,
             sealed: true,
         }
     }
@@ -649,6 +661,53 @@ impl ApiState {
 /// 8): a page must not be able to starve the pool it shares with the device
 /// plane.
 const PAGE_SIDE_READ_CONCURRENCY: usize = 8;
+const VISUAL_INDEX_CONCURRENCY: usize = 2;
+static VISUAL_INDEX_RUNNING: AtomicBool = AtomicBool::new(false);
+
+struct VisualIndexRun;
+
+impl Drop for VisualIndexRun {
+    fn drop(&mut self) {
+        VISUAL_INDEX_RUNNING.store(false, Ordering::Release);
+    }
+}
+
+fn schedule_visual_index(state: &ApiState, account: &str, uuids: Vec<String>) {
+    if uuids.is_empty()
+        || !crate::assistant::vision::configured()
+        || VISUAL_INDEX_RUNNING
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+    {
+        return;
+    }
+    let Some(objects) = state.objects.clone() else {
+        VISUAL_INDEX_RUNNING.store(false, Ordering::Release);
+        return;
+    };
+    let store = state.store.clone();
+    let keys = state.keys.clone();
+    let account = account.to_owned();
+    tokio::spawn(async move {
+        use futures_util::StreamExt as _;
+        let _run = VisualIndexRun;
+        futures_util::stream::iter(uuids)
+            .for_each_concurrent(VISUAL_INDEX_CONCURRENCY, |uuid| {
+                let store = store.clone();
+                let keys = keys.clone();
+                let objects = objects.clone();
+                let account = account.clone();
+                async move {
+                    if let Ok(Some(record)) = store.memory(&account, &uuid).await {
+                        let _ = objects
+                            .rank_photo_best_frame(&keys, &account, &record, false)
+                            .await;
+                    }
+                }
+            })
+            .await;
+    });
+}
 
 /// The DTOs for one page of captures, with their best-frame reads overlapped.
 ///
@@ -661,6 +720,25 @@ async fn memory_dtos(state: &ApiState, account: &str, page: Vec<MemorySummary>) 
         .map(|summary| async move {
             let selection = best_frame_metadata(state, account, &summary.uuid).await;
             MemoryDto::new(&summary, selection)
+        })
+        .buffered(PAGE_SIDE_READ_CONCURRENCY)
+        .collect()
+        .await
+}
+
+async fn memories_with_selections(
+    state: &ApiState,
+    account: &str,
+    page: Vec<MemorySummary>,
+) -> Vec<(
+    MemorySummary,
+    Option<crate::capture_ranking::BestFrameSelection>,
+)> {
+    use futures_util::StreamExt as _;
+    futures_util::stream::iter(page)
+        .map(|summary| async move {
+            let selection = best_frame_metadata(state, account, &summary.uuid).await;
+            (summary, selection)
         })
         .buffered(PAGE_SIDE_READ_CONCURRENCY)
         .collect()
@@ -707,7 +785,6 @@ async fn list_captures(
     // The filter is pushed into the store rather than applied to the page here:
     // selecting photos out of an already-limited fetch returns short pages and a
     // total that counts rows the caller never asked for.
-    const CAPTURE_KINDS: &[MemoryKind] = &[MemoryKind::Photo, MemoryKind::Video];
     match state
         .store
         .memory_page(&resolved.account, CAPTURE_KINDS, offset, size)
@@ -719,6 +796,151 @@ async fn list_captures(
         }
         Err(_) => unavailable(),
     }
+}
+
+#[derive(Deserialize)]
+struct CaptureSearchQuery {
+    query: String,
+    page: Option<i64>,
+    size: Option<i64>,
+    #[allow(dead_code)]
+    sort: Option<String>,
+}
+
+fn normalized_search_words(text: &str) -> Vec<String> {
+    text.split(|character: char| !character.is_alphanumeric())
+        .filter_map(|word| {
+            let mut word = word.trim().to_lowercase();
+            if word.chars().count() > 3 && word.ends_with('s') && !word.ends_with("ss") {
+                word.pop();
+            }
+            (!word.is_empty()).then_some(word)
+        })
+        .collect()
+}
+
+fn capture_matches(
+    summary: &MemorySummary,
+    selection: Option<&crate::capture_ranking::BestFrameSelection>,
+    query: &str,
+) -> bool {
+    let query = query.trim();
+    if query.is_empty() {
+        return false;
+    }
+    let literal = query.to_lowercase();
+    if summary.uuid.to_lowercase().contains(&literal)
+        || summary.device_local_id.to_lowercase().contains(&literal)
+    {
+        return true;
+    }
+    let mut searchable = vec![kind_str(summary.kind).to_owned()];
+    searchable.push(summary.created.seconds().to_string());
+    if let Some(created) = summary.device_created_time.as_ref() {
+        searchable.push(created.seconds().to_string());
+    }
+    if let Some(selection) = selection {
+        searchable.push(selection.caption.clone());
+        searchable.extend(selection.tags.iter().cloned());
+    }
+    let words = searchable
+        .iter()
+        .flat_map(|value| normalized_search_words(value))
+        .collect::<Vec<_>>();
+    let wanted = normalized_search_words(query);
+    !wanted.is_empty()
+        && wanted
+            .iter()
+            .all(|word| words.iter().any(|candidate| candidate == word))
+}
+
+/// Search the complete capture index, including private vision metadata.
+/// Captions and tags are used for matching but never leave Cosmos.
+async fn search_captures(
+    State(state): State<ApiState>,
+    headers: axum::http::HeaderMap,
+    Query(query): Query<CaptureSearchQuery>,
+) -> Response {
+    let resolved = match state.account_for(&headers) {
+        Ok(resolved) => resolved,
+        Err(status) => return status.into_response(),
+    };
+    let (page, size, requested_offset) = PageQuery {
+        page: query.page,
+        size: query.size,
+        sort: query.sort,
+    }
+    .window();
+    if query.query.trim().is_empty() {
+        return axum::Json(page_of(Vec::<MemoryDto>::new(), 0, page, size)).into_response();
+    }
+
+    let mut source_offset = 0i64;
+    let mut matches = Vec::new();
+    let mut pending_visual_index = Vec::new();
+    loop {
+        let rows = match state
+            .store
+            .memory_page(
+                &resolved.account,
+                CAPTURE_KINDS,
+                source_offset,
+                MAX_PAGE_SIZE,
+            )
+            .await
+        {
+            Ok(rows) => rows,
+            Err(_) => return unavailable(),
+        };
+        let total = rows.total;
+        let count = rows.records.len() as i64;
+        for (summary, selection) in
+            memories_with_selections(&state, &resolved.account, rows.records).await
+        {
+            if summary.kind == MemoryKind::Photo
+                && summary.thumbnail_count > 0
+                && !selection
+                    .as_ref()
+                    .is_some_and(crate::capture_ranking::BestFrameSelection::has_visual_index)
+            {
+                pending_visual_index.push(summary.uuid.clone());
+            }
+            if capture_matches(&summary, selection.as_ref(), &query.query) {
+                matches.push(MemoryDto::new(&summary, selection));
+            }
+        }
+        source_offset += count;
+        if count == 0 || source_offset >= total {
+            break;
+        }
+    }
+
+    let total = matches.len() as i64;
+    let content = matches
+        .into_iter()
+        .skip(requested_offset as usize)
+        .take(size as usize)
+        .collect();
+    let visual_index_state = if pending_visual_index.is_empty() {
+        "ready"
+    } else if crate::assistant::vision::configured() && state.objects.is_some() {
+        "building"
+    } else {
+        "unavailable"
+    };
+    let pending = pending_visual_index.len();
+    schedule_visual_index(&state, &resolved.account, pending_visual_index);
+    let mut response = axum::Json(page_of(content, total, page, size)).into_response();
+    response.headers_mut().insert(
+        "x-cosmos-visual-index",
+        axum::http::HeaderValue::from_static(visual_index_state),
+    );
+    if let Ok(value) = axum::http::HeaderValue::from_str(&pending.to_string()) {
+        response
+            .headers_mut()
+            .insert("x-cosmos-visual-pending", value);
+    }
+    response
 }
 
 async fn get_memory(
@@ -821,10 +1043,20 @@ async fn set_best_frame(
     let Some(objects) = state.objects.as_ref() else {
         return unavailable();
     };
+    let existing = objects
+        .read_best_frame(&resolved.account, &record.uuid)
+        .await
+        .ok()
+        .flatten();
     let selection = crate::capture_ranking::BestFrameSelection {
         frame: query.frame,
         method: "manual".to_owned(),
         reason: "Chosen by the wearer.".to_owned(),
+        caption: existing
+            .as_ref()
+            .map(|selection| selection.caption.clone())
+            .unwrap_or_default(),
+        tags: existing.map(|selection| selection.tags).unwrap_or_default(),
     };
     // `record.uuid`, never the path segment. `Store::memory` resolves a capture
     // by EITHER its uuid or its numeric id (`uuid = $2 OR numeric_id::text = $2`
@@ -1630,6 +1862,73 @@ mod tests {
         let (_, memories) = get(&app, "/capture/memories?size=1").await;
         assert_eq!(memories["totalElements"], 6);
         assert_eq!(memories["content"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn visual_search_covers_the_full_library_without_leaking_its_index() {
+        let store = fresh();
+        let cat = store
+            .create_memory("U:alice", photo("old-cat"))
+            .await
+            .unwrap();
+        for index in 0..205 {
+            store
+                .create_memory("U:alice", photo(&format!("newer-{index}")))
+                .await
+                .unwrap();
+        }
+        let bobs_cat = store
+            .create_memory("U:bob", photo("bobs-cat"))
+            .await
+            .unwrap();
+
+        let objects = crate::services::capture::CaptureObjectStore::for_tests();
+        let selection = |caption: &str| crate::capture_ranking::BestFrameSelection {
+            frame: 0,
+            method: "vision_v1".to_owned(),
+            reason: "Best exposed frame.".to_owned(),
+            caption: caption.to_owned(),
+            tags: vec!["cat".to_owned(), "pet".to_owned(), "animal".to_owned()],
+        };
+        objects
+            .write_best_frame("U:alice", &cat.uuid, &selection("A black cat on a sofa."))
+            .await
+            .unwrap();
+        objects
+            .write_best_frame("U:bob", &bobs_cat.uuid, &selection("A white cat."))
+            .await
+            .unwrap();
+
+        let app = router_with_objects(
+            store,
+            fresh_keys(),
+            DEMO_PRINCIPAL,
+            Some(test_verifier()),
+            Some(objects),
+        );
+        let (status, alice) = get_with_bearer(
+            &app,
+            "/capture/search?query=cats&size=200",
+            &bearer_for("alice"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(alice["totalElements"], 1);
+        assert_eq!(alice["content"][0]["uuid"], cat.uuid);
+        assert_eq!(alice["content"][0]["visualSearchReady"], true);
+        let public_json = serde_json::to_string(&alice).unwrap();
+        assert!(!public_json.contains("caption"));
+        assert!(!public_json.contains("tags"));
+        assert!(!public_json.contains("black cat"));
+
+        let (_, bob) = get_with_bearer(
+            &app,
+            "/capture/search?query=cat&size=200",
+            &bearer_for("bob"),
+        )
+        .await;
+        assert_eq!(bob["totalElements"], 1);
+        assert_eq!(bob["content"][0]["uuid"], bobs_cat.uuid);
     }
 
     /// A sealed frame whose key we do not hold is an OUTAGE, not a missing frame.

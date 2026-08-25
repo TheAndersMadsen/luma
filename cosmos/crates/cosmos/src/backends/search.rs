@@ -122,6 +122,26 @@ pub async fn search(query: &str) -> Result<String, BackendError> {
     .await
 }
 
+/// Verify the configured private SearXNG endpoint without falling back to a
+/// different provider. Center uses this to tell an operator whether this exact
+/// connection works, rather than reporting a healthy SerpApi fallback as a
+/// successful SearXNG test.
+pub(crate) async fn probe_searxng() -> Result<(), BackendError> {
+    let base_url = key(SEARXNG_BASE_URL_VAR).ok_or(BackendError::NotConfigured)?;
+    search_searxng("OpenAI", &base_url, SEARCH_TIMEOUT)
+        .await
+        .map(|_| ())
+}
+
+/// Verify the configured SerpApi credential directly, even when SearXNG is the
+/// deployment's preferred search path.
+pub(crate) async fn probe_serpapi() -> Result<(), BackendError> {
+    let api_key = key(SERPAPI_KEY_VAR).ok_or(BackendError::NotConfigured)?;
+    search_serpapi("OpenAI", &api_key, SERPAPI_BASE_URL)
+        .await
+        .map(|_| ())
+}
+
 /// SearXNG remains the first and private path. If it cannot answer, an
 /// explicitly configured SerpApi key provides continuity instead of turning a
 /// transient engine block into an offline response on the Pin. That fallback

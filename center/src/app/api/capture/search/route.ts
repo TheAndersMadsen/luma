@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { sourceHeaders } from "@/server/headers";
-import { getCaptures } from "@/server/source";
-import type { CaptureRecord } from "@/lib/types";
+import { searchCaptures } from "@/server/domain/captures";
 
 /**
  * GET /api/capture/search?query=&page=&size=
@@ -19,8 +18,8 @@ import type { CaptureRecord } from "@/lib/types";
 export async function GET(request: Request) {
   const url = new URL(request.url);
   const query = (url.searchParams.get("query") ?? "").trim();
-  const size = url.searchParams.get("size") ?? "200";
-  const page = url.searchParams.get("page") ?? "0";
+  const size = Math.max(1, Math.min(200, Number.parseInt(url.searchParams.get("size") ?? "200", 10) || 200));
+  const page = Math.max(0, Number.parseInt(url.searchParams.get("page") ?? "0", 10) || 0);
 
   if (!query) {
     return NextResponse.json([], {
@@ -29,25 +28,18 @@ export async function GET(request: Request) {
   }
 
   try {
-    // The clone's authenticated capture index is the source of truth. Humane's
-    // web search endpoint is observed, but its private ranking/index internals
-    // are unknown; this independently implemented compatibility projection
-    // searches only fields Center actually receives and never fabricates tags.
-    const result = await getCaptures();
+    const result = await searchCaptures(query, page, size);
     if (result.state !== "live") {
       return NextResponse.json([], { headers: sourceHeaders(result) });
     }
-
-    const needle = query.toLowerCase();
-    const matches = result.data.filter((record: CaptureRecord) =>
-      record.uuid.toLowerCase().includes(needle) ||
-      record.userCreatedAt.toLowerCase().includes(needle) ||
-      (record.data.memoryType ?? "").toLowerCase().includes(needle),
-    );
-    const pageNumber = Math.max(0, Number.parseInt(page, 10) || 0);
-    const pageSize = Math.max(1, Math.min(500, Number.parseInt(size, 10) || 200));
-    const data = matches.slice(pageNumber * pageSize, (pageNumber + 1) * pageSize);
-    return NextResponse.json(data, { headers: sourceHeaders(result) });
+    return NextResponse.json(result.data, {
+      headers: {
+        ...sourceHeaders(result),
+        "x-total-count": String(result.total ?? result.data.length),
+        ...(result.visualIndex ? { "x-visual-index": result.visualIndex } : {}),
+        ...(result.visualPending ? { "x-visual-pending": String(result.visualPending) } : {}),
+      },
+    });
   } catch (error) {
     return NextResponse.json([], {
       headers: sourceHeaders({

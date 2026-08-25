@@ -1,25 +1,6 @@
 "use client";
 
-/**
- * Guided setup — the ordered path from a stock Ai Pin to a provisioned one.
- *
- * The Pin console already had every capability this page needs: connect,
- * install, server, assistant, service keys, eSIM, flags, diagnostics. What it
- * did not have was an ORDER. Each pane assumed you already knew which one came
- * first and what it was for, which is fine for the person who built them and
- * useless for anyone else. This page adds the sequence and nothing else: it
- * links into those panes rather than reimplementing them, and the one device
- * action it performs itself — claiming the USB session — is the same shared
- * session every pane uses, so connecting here IS connecting there.
- *
- * Two rules it holds itself to:
- *
- *  1. Every state on this page was READ. Nothing is marked done because the
- *     step above it is; `usePinSetupFacts` names the authority for each one.
- *  2. Where a step cannot be finished in a browser today, it says so and prints
- *     the command projected from the canonical setup contract. Physical
- *     acceptance remains a separate wearer-observed gate.
- */
+/** Four wearer-facing stages backed by the canonical setup checks. */
 
 import Link from "next/link";
 import { useState } from "react";
@@ -30,23 +11,81 @@ import { StatusChip, StatusMessage } from "@/components/Status";
 import {
   derivePinSetupPlan,
   type PinSetupFacts,
+  type PinSetupPlan,
   type PinSetupStep,
-  type PinSetupStepStatus,
 } from "@/lib/pin-setup";
 import { usePinDevice } from "../PinDeviceProvider";
 import { usePinSetupFacts } from "./usePinSetupFacts";
 
-const STATE_LABELS: Record<PinSetupStepStatus, string> = {
-  done: "Done",
-  todo: "Do this next",
-  // Covers both the terminal-only steps (build a release, activate over ADB)
-  // and the operator-only one (mint a credential): none can be finished in this
-  // browser session, which is the honest thing they have in common.
-  manual: "Outside this browser",
-  attention: "Needs attention",
-  blocked: "Waiting",
-  unobservable: "Not visible here",
+type SetupStageId = "connect" | "install" | "cosmos" | "finish";
+type SetupStageState = "done" | "focus" | "attention" | "waiting";
+
+type SetupStage = {
+  id: SetupStageId;
+  ordinal: number;
+  title: string;
+  summary: string;
+  state: SetupStageState;
+  focusedStep: PinSetupStep | null;
 };
+
+const SETUP_STAGES: ReadonlyArray<{
+  id: SetupStageId;
+  title: string;
+  summary: string;
+  done: string;
+  steps: ReadonlyArray<PinSetupStep["id"]>;
+}> = [
+  {
+    id: "connect",
+    title: "Connect your Pin",
+    summary: "Use USB-C and choose your Ai Pin in the browser.",
+    done: "Your Pin is connected.",
+    steps: ["connect"],
+  },
+  {
+    id: "install",
+    title: "Install the software",
+    summary: "Center installs and verifies the current Revival release.",
+    done: "The current software is installed.",
+    steps: ["release", "install"],
+  },
+  {
+    id: "cosmos",
+    title: "Connect to Cosmos",
+    summary: "Choose your services, then activate this Pin from Center.",
+    done: "This Pin is connected to Cosmos.",
+    steps: ["configure", "identity", "activate"],
+  },
+  {
+    id: "finish",
+    title: "Get online and try it",
+    summary: "Add Wi-Fi, then make a voice request on the Pin.",
+    done: "Your Pin is ready to use.",
+    steps: ["network", "confirm"],
+  },
+];
+
+function setupStages(plan: PinSetupPlan): SetupStage[] {
+  return SETUP_STAGES.map((definition, index) => {
+    const steps = definition.steps.map((id) => plan.steps.find((step) => step.id === id)!);
+    const focusedStep = steps.find((step) => step.id === plan.focusStepId) ?? null;
+    const done = steps.every((step) => step.status === "done");
+    const attention = focusedStep?.status === "attention";
+    return {
+      id: definition.id,
+      ordinal: index + 1,
+      title: definition.title,
+      summary: done
+        ? definition.done
+        : focusedStep
+          ? (focusedStep.next ?? focusedStep.summary)
+          : definition.summary,
+      state: done ? "done" : focusedStep ? (attention ? "attention" : "focus") : "waiting",
+      focusedStep,
+    };
+  });
+}
 
 type EvidenceTone = "live" | "absent" | "degraded" | "off";
 
@@ -91,6 +130,9 @@ export default function SetupView({
   const { connect, clearError, error, support } = usePinDevice();
   const readings = usePinSetupFacts({ operator });
   const plan = derivePinSetupPlan(readings.facts);
+  const stages = setupStages(plan);
+  const completeStages = stages.filter((stage) => stage.state === "done").length;
+  const focusedStage = stages.find((stage) => stage.state === "focus" || stage.state === "attention");
   const activation = activationEvidence(readings.facts.activation);
   const [connecting, setConnecting] = useState(false);
 
@@ -107,16 +149,13 @@ export default function SetupView({
     }
   }
 
-  const percent =
-    plan.observableCount === 0
-      ? 0
-      : Math.round((plan.doneCount / plan.observableCount) * 100);
+  const percent = Math.round((completeStages / stages.length) * 100);
 
   return (
     <>
       <section className={settings.section} data-testid="pin-setup-overview">
         <div className={settings.sectionHeader}>
-          <span className={settings.sectionTitle}>Where you are</span>
+          <span className={settings.sectionTitle}>Set up your Ai Pin</span>
           <button
             type="button"
             className={pin.buttonQuiet}
@@ -131,31 +170,22 @@ export default function SetupView({
         <div className={styles.progress}>
           <div className={styles.progressHead}>
             <span className={styles.progressCount} data-testid="pin-setup-progress">
-              {plan.doneCount} of {plan.observableCount} checks passing
+              {completeStages} of {stages.length} steps complete
             </span>
             <span className={styles.progressMeta}>
-              {plan.focusStepId
-                ? `Next: ${plan.steps.find((step) => step.id === plan.focusStepId)?.title}`
-                : "Every step this page can check has passed."}
+              {focusedStage ? `Next: ${focusedStage.title}` : "Your Pin is ready."}
             </span>
           </div>
           <div
             className={styles.progressTrack}
             role="progressbar"
-            aria-valuenow={plan.doneCount}
+            aria-valuenow={completeStages}
             aria-valuemin={0}
-            aria-valuemax={plan.observableCount}
+            aria-valuemax={stages.length}
             aria-label="Pin setup progress"
           >
             <div className={styles.progressFill} style={{ width: `${percent}%` }} />
           </div>
-        </div>
-
-        <div className={pin.noteRow}>
-          <p className={pin.note}>
-            Complete the highlighted step. Some steps require a terminal, an operator,
-            or the physical Pin.
-          </p>
         </div>
 
         {error ? (
@@ -188,16 +218,15 @@ export default function SetupView({
 
       <section className={settings.section} data-testid="pin-setup-steps">
         <div className={settings.sectionHeader}>
-          <span className={settings.sectionTitle}>The path</span>
+          <span className={settings.sectionTitle}>Your setup</span>
         </div>
 
-        {plan.steps.map((step) => (
-          <StepRow
-            key={step.id}
-            step={step}
-            focused={step.id === plan.focusStepId}
-            actions={renderStepActions({
-              step,
+        {stages.map((stage) => (
+          <StageRow
+            key={stage.id}
+            stage={stage}
+            actions={renderStageAction({
+              stage,
               provisioningHref,
               connecting,
               usbSupported: readings.facts.usb.browserSupported !== false,
@@ -208,175 +237,147 @@ export default function SetupView({
       </section>
 
       <section className={settings.section} data-testid="pin-setup-evidence">
-        <div className={settings.sectionHeader}>
-          <span className={settings.sectionTitle}>Setup checks</span>
-        </div>
+        <details className={styles.evidenceDetails}>
+          <summary className={settings.sectionHeader}>
+            <span className={settings.sectionTitle}>Connection details</span>
+          </summary>
 
-        <EvidenceRow
-          label="Published release"
-          tone={
-            readings.facts.release.availability === "published"
-              ? "live"
-              : readings.facts.release.availability === "not-published"
-                ? "absent"
-                : readings.facts.release.availability === "unreadable"
+          <EvidenceRow
+            label="Published release"
+            tone={
+              readings.facts.release.availability === "published"
+                ? "live"
+                : readings.facts.release.availability === "not-published"
+                  ? "absent"
+                  : readings.facts.release.availability === "unreadable"
+                    ? "degraded"
+                    : "off"
+            }
+            chip={
+              readings.facts.release.availability === "published"
+                ? (readings.facts.release.version ?? "Published")
+                : readings.facts.release.availability === "not-published"
+                  ? "None published"
+                  : readings.facts.release.availability === "unreadable"
+                    ? "Refused"
+                    : "Checking"
+            }
+            detail="The current release published by Center."
+          />
+          <EvidenceRow
+            label="Pin's own server"
+            tone={
+              readings.facts.server.answering === "online"
+                ? "live"
+                : readings.facts.server.answering === "offline"
                   ? "degraded"
                   : "off"
-          }
-          chip={
-            readings.facts.release.availability === "published"
-              ? (readings.facts.release.version ?? "Published")
-              : readings.facts.release.availability === "not-published"
-                ? "None published"
-                : readings.facts.release.availability === "unreadable"
-                  ? "Refused"
-                  : "Checking"
-          }
-          detail="The current release published by Center."
-        />
-        <EvidenceRow
-          label="Pin's own server"
-          tone={
-            readings.facts.server.answering === "online"
-              ? "live"
-              : readings.facts.server.answering === "offline"
+            }
+            chip={
+              readings.facts.server.answering === "online"
+                ? "Answering"
+                : readings.facts.server.answering === "offline"
+                  ? "Not answering"
+                  : "Unknown"
+            }
+            detail="The Revival service running on this Pin."
+          />
+          <EvidenceRow
+            label="Pointed at this server"
+            tone={activation.tone}
+            chip={activation.chip}
+            detail="The Cosmos address reported by this Pin."
+          />
+          <EvidenceRow
+            label="Reporting to this Center"
+            tone={
+              readings.facts.cloud.state === "degraded"
                 ? "degraded"
-                : "off"
-          }
-          chip={
-            readings.facts.server.answering === "online"
-              ? "Answering"
-              : readings.facts.server.answering === "offline"
-                ? "Not answering"
-                : "Unknown"
-          }
-          detail="The Revival service running on this Pin."
-        />
-        <EvidenceRow
-          label="Pointed at this server"
-          tone={activation.tone}
-          chip={activation.chip}
-          detail="The Cosmos address reported by this Pin."
-        />
-        <EvidenceRow
-          label="Reporting to this Center"
-          tone={
-            readings.facts.cloud.state === "degraded"
-              ? "degraded"
-              : readings.facts.cloud.state === "absent"
-                ? "absent"
-                : readings.facts.cloud.reportingCount > 0
-                  ? "live"
-                  : "off"
-          }
-          chip={
-            readings.facts.cloud.state === "degraded"
-              ? "Couldn’t check"
-              : readings.facts.cloud.state === "absent"
-                ? "Not connected"
-                : readings.facts.cloud.reportingCount > 0
-                  ? `${readings.facts.cloud.reportingCount} online`
-                  : "Not reporting"
-          }
-          detail={
-            readings.lastReportAtEpoch
-              ? `Last report ${new Date(readings.lastReportAtEpoch).toLocaleString()}.`
-              : "The latest status reported by your paired Pin."
-          }
-        />
+                : readings.facts.cloud.state === "absent"
+                  ? "absent"
+                  : readings.facts.cloud.reportingCount > 0
+                    ? "live"
+                    : "off"
+            }
+            chip={
+              readings.facts.cloud.state === "degraded"
+                ? "Couldn’t check"
+                : readings.facts.cloud.state === "absent"
+                  ? "Not connected"
+                  : readings.facts.cloud.reportingCount > 0
+                    ? `${readings.facts.cloud.reportingCount} online`
+                    : "Not reporting"
+            }
+            detail={
+              readings.lastReportAtEpoch
+                ? `Last report ${new Date(readings.lastReportAtEpoch).toLocaleString()}.`
+                : "The latest status reported by your paired Pin."
+            }
+          />
+        </details>
       </section>
     </>
   );
 }
 
-function StepRow({
-  step,
-  focused,
+const STAGE_LABELS: Record<SetupStageState, string> = {
+  done: "Complete",
+  focus: "Next",
+  attention: "Check",
+  waiting: "Waiting",
+};
+
+function StageRow({
+  stage,
   actions,
 }: {
-  step: PinSetupStep;
-  focused: boolean;
+  stage: SetupStage;
   actions: React.ReactNode;
 }) {
-  // Exactly one step exposes instructions and controls. Other steps still show
-  // their current fact, without competing calls to action.
-  const expanded = focused;
-  const dim = step.status === "blocked" || step.status === "unobservable";
+  const focused = stage.state === "focus" || stage.state === "attention";
 
   return (
     <div
-      className={`${styles.step} ${focused ? styles.stepFocus : ""} ${dim ? styles.stepDim : ""}`}
-      data-testid={`pin-setup-step-${step.id}`}
-      data-state={step.status}
+      className={`${styles.step} ${focused ? styles.stepFocus : ""}`}
+      data-testid={`pin-setup-stage-${stage.id}`}
+      data-state={stage.state}
       aria-current={focused ? "step" : undefined}
     >
-      <span className={styles.badge} data-state={step.status} aria-hidden="true">
-        {step.status === "done" ? "✓" : step.ordinal}
+      <span className={styles.badge} data-state={stage.state} aria-hidden="true">
+        {stage.state === "done" ? "✓" : stage.ordinal}
       </span>
       <div className={styles.body}>
         <div className={styles.head}>
-          <span className={styles.title}>{step.title}</span>
-          <span className={styles.state} data-state={step.status}>
-            {STATE_LABELS[step.status]}
+          <span className={styles.title}>{stage.title}</span>
+          <span className={styles.state} data-state={stage.state}>
+            {STAGE_LABELS[stage.state]}
           </span>
         </div>
-        <p className={styles.summary}>{step.summary}</p>
-        {expanded && step.next ? <p className={styles.next}>{step.next}</p> : null}
-        {expanded && (step.commands.length > 0 || step.manualNote) ? (
-          <div className={styles.manual}>
-            {step.manualNote ? <p className={styles.manualNote}>{step.manualNote}</p> : null}
-            {step.commands.length > 0 ? (
-              <div className={styles.commands}>
-                {step.commands.map((command) => (
-                  <pre className={styles.command} key={command}>
-                    {command}
-                  </pre>
-                ))}
-              </div>
-            ) : null}
-          </div>
-        ) : null}
-        {expanded && actions ? <div className={styles.actions}>{actions}</div> : null}
+        <p className={styles.summary}>{stage.summary}</p>
+        {focused && actions ? <div className={styles.actions}>{actions}</div> : null}
       </div>
     </div>
   );
 }
 
-/**
- * What can be clicked for a step — and deliberately nothing where nothing can.
- *
- * Every link here goes to a pane that already exists. The one exception is
- * "Connect over USB", which drives the shared session directly because that is
- * the session the whole console runs on; it is the same call the Connect pane
- * makes, against the same module-scoped transport.
- *
- * A plain function rather than a component, so a step with no affordance
- * returns null to its CALLER and the row can leave the control area out
- * entirely instead of rendering an empty one.
- */
-function renderStepActions({
-  step,
+function renderStageAction({
+  stage,
   provisioningHref,
   connecting,
   usbSupported,
   onConnect,
 }: {
-  step: PinSetupStep;
+  stage: SetupStage;
   provisioningHref: string | null;
   connecting: boolean;
   usbSupported: boolean;
   onConnect: () => void;
 }): React.ReactNode {
-  switch (step.id) {
+  const step = stage.focusedStep;
+  if (!step) return null;
+
+  switch (stage.id) {
     case "connect":
-      /*
-       * The button appears only when connecting is actually the thing to do.
-       * The two "attention" cases — an unsupported browser, and a device that
-       * is not an Ai Pin — are both resolved somewhere other than this button,
-       * and offering it anyway would say "click here" about a problem clicking
-       * cannot fix. Releasing a device is the Connect pane's job, not this
-       * page's, so that is where the link goes.
-       */
       if (step.status !== "todo") {
         return step.centerRoute ? (
           <Link className={settings.additionLink} href={step.centerRoute}>
@@ -396,54 +397,37 @@ function renderStepActions({
         </button>
       );
 
-    case "release":
-      // These are operator-host mutations. The generated CLI command is the
-      // action; an adjacent Center link would falsely imply the browser can do it.
-      return null;
-
     case "install":
-      if (step.status === "blocked") return null;
-      return step.centerRoute ? (
-        <Link className={settings.additionLink} href={step.centerRoute}>
-          Open the installer
-        </Link>
-      ) : null;
-
-    case "configure":
-      if (step.status === "blocked") return null;
-      return step.centerRoute ? (
-        <Link className={settings.additionLink} href={step.centerRoute}>
-          Open Pin settings
-        </Link>
-      ) : null;
-
-    case "identity":
-      // No link at all without the operator claim: an entry point that only
-      // bounces the wearer back to "/" is worse than none.
-      if (!provisioningHref) return null;
       return (
-        <Link className={settings.additionLink} href={provisioningHref}>
-          Open provisioning
+        <Link className={settings.additionLink} href="/settings/pin/install">
+          Open installer
         </Link>
       );
 
-    case "activate":
-      // The generated exact-device command is the only mutation affordance.
-      return null;
-
-    case "network":
-      return step.centerRoute ? (
-        <Link className={settings.additionLink} href={step.centerRoute}>
-          Create Wi-Fi QR code
+    case "cosmos":
+      if (step.id === "configure") {
+        return (
+          <Link className={settings.additionLink} href="/settings/account/services">
+            Set up services
+          </Link>
+        );
+      }
+      return provisioningHref ? (
+        <Link className={settings.additionLink} href={provisioningHref}>
+          Connect to Cosmos
         </Link>
       ) : null;
 
-    case "confirm":
-      return step.centerRoute ? (
-        <Link className={settings.additionLink} href={step.centerRoute}>
-          Open Pin status
+    case "finish":
+      return step.id === "network" ? (
+        <Link className={settings.additionLink} href="/wifi">
+          Add Wi-Fi
         </Link>
-      ) : null;
+      ) : (
+        <Link className={settings.additionLink} href="/settings/account/devices">
+          Check Pin status
+        </Link>
+      );
 
     default:
       return null;
