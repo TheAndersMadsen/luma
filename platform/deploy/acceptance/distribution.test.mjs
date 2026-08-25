@@ -88,7 +88,17 @@ test("tag release workflow publishes the exact hardened image and Compose bounda
     "platform/containers/center-iroh-bridge/Dockerfile",
   ]) {
     const rustImage = fs.readFileSync(path.join(root, dockerfile), "utf8");
+    assert.match(
+      rustImage,
+      /^FROM --platform=\$BUILDPLATFORM rust:1\.91\.1-bookworm@sha256:[0-9a-f]{64} AS build$/mu,
+      `${dockerfile} must compile Rust on the native build platform`,
+    );
+    assert.match(rustImage, /^ARG BUILDARCH$/mu, dockerfile);
     assert.match(rustImage, /^ARG TARGETARCH$/mu, dockerfile);
+    assert.match(rustImage, /x86_64-unknown-linux-gnu/u, dockerfile);
+    assert.match(rustImage, /aarch64-unknown-linux-gnu/u, dockerfile);
+    assert.match(rustImage, /gcc-x86-64-linux-gnu/u, dockerfile);
+    assert.match(rustImage, /gcc-aarch64-linux-gnu/u, dockerfile);
     const cacheMounts = [...rustImage.matchAll(/--mount=type=cache,([^ \\\n]+)/gu)];
     assert.ok(cacheMounts.length > 0, `${dockerfile} must use BuildKit caches`);
     for (const [, options] of cacheMounts) {
