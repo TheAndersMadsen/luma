@@ -56,6 +56,7 @@ export type SpotifyPinState = "disabled" | "not_configured" | "pairing" | "ready
 export type SpotifyCenterState = SpotifyPinState | "unavailable";
 export type SpotifyUnavailableReason =
   | "not_configured"
+  | "pin_not_paired"
   | "pairing_unconfirmed"
   | "pin_unavailable"
   | "pin_update_required";
@@ -526,7 +527,11 @@ export async function requireOwnedPairedPin(
     return pairing?.account_sub === session.sub && deviceId ? [deviceId] : [];
   });
   if (ownedDeviceIds.length === 0) {
-    throw new SpotifyBridgeError("pin_not_paired", 409, "Pair your Ai Pin before setting up Spotify.");
+    throw new SpotifyBridgeError(
+      "pin_not_paired",
+      409,
+      "Pair your Ai Pin before choosing a default music provider.",
+    );
   }
   if (ownedDeviceIds.length !== 1 || ownedDeviceIds[0] !== expectedDeviceId) {
     throw new SpotifyBridgeError(
@@ -614,6 +619,7 @@ export function isSpotifyUnavailableError(error: unknown): boolean {
     error instanceof SpotifyBridgeError &&
     new Set<SpotifyBridgeErrorCode>([
       "bridge_not_configured",
+      "pin_not_paired",
       "roster_unavailable",
       "adapter_unavailable",
       "invalid_response",

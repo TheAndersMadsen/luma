@@ -17,6 +17,7 @@ const {
   runSpotifySearch,
   unavailableSpotifyStatus,
   deviceMusicGatewayToken,
+  isSpotifyUnavailableError,
 } = await import("../src/server/spotifyBridge.ts?spotify-service-tests");
 
 const session = {
@@ -125,6 +126,16 @@ test("unavailable status exposes only bounded recovery guidance", () => {
     engine_ready: false,
     unavailable_reason: "pairing_unconfirmed",
   });
+  assert.equal(
+    isSpotifyUnavailableError(
+      new SpotifyBridgeError(
+        "pin_not_paired",
+        409,
+        "Pair your Ai Pin before choosing a default music provider.",
+      ),
+    ),
+    true,
+  );
 });
 
 test("bridge binds a signed wearer to the deployment owner and durable Pin roster", async () => {
@@ -300,6 +311,10 @@ test("Center routes require session, owner roster and same-origin mutations", as
   assert.match(bridge, /REVIVAL_PIN_BRIDGE_DEVICE_ID/);
   assert.match(bridge, /account_sub === session\.sub/);
   assert.match(bridge, /AbortSignal\.timeout/);
+  assert.match(route, /musicProviderStatus\(session\.sub\)\.catch\(\(\) => undefined\)/);
+  assert.match(route, /spotifyError\(error, true, providers\)/);
+  assert.match(support, /code === "pin_not_paired"/);
+  assert.doesNotMatch(bridge, /Pair your Ai Pin before setting up Spotify/);
   assert.doesNotMatch(bridge, /client_secret|refresh_token|access_token|Spotify Accounts/);
 });
 
@@ -338,6 +353,12 @@ test("Services renders every Pin-native state, polling and settings fallback", a
   assert.match(view, /Open connection & maintenance/);
   assert.doesNotMatch(view, /aipin\.andersmadsen\.dk/);
   assert.match(view, /fallback_setup/);
+  assert.match(view, /<strong>Music providers<\/strong>/);
+  assert.match(view, /Connect Spotify, YouTube Music, Apple Music, or TIDAL/);
+  assert.match(view, /Pair My Ai Pin/);
+  assert.match(view, /status\.state === "unavailable"/);
+  assert.doesNotMatch(view, /Pair your Ai Pin before setting up Spotify/);
+  assert.doesNotMatch(view, /<strong>\{providerOption\(activeProvider\)\.label\}<\/strong>/);
   assert.match(view, /window\.confirm\("Disconnect Spotify from this Ai Pin\?"\)/);
   for (const provider of ["Spotify", "YouTube Music", "Apple Music", "TIDAL"]) {
     assert.match(view, new RegExp(provider));

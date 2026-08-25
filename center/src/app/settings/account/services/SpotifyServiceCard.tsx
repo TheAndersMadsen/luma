@@ -150,6 +150,7 @@ type SpotifyStatus = {
   last_error?: string;
   unavailable_reason?:
     | "not_configured"
+    | "pin_not_paired"
     | "pairing_unconfirmed"
     | "pin_unavailable"
     | "pin_update_required";
@@ -183,13 +184,15 @@ function trackSubtitle(track: SpotifySearchTrack): string {
 function spotifyState(status: SpotifyStatus): { label: string; tone: StatusTone; copy: string } {
   if (status.state === "unavailable") {
     const copy =
-      status.unavailable_reason === "not_configured"
-        ? "Spotify setup isn’t available in Center yet."
+      status.unavailable_reason === "pin_not_paired"
+        ? "Connect provider accounts now, then pair your Ai Pin to choose which one receives native music prompts."
+        : status.unavailable_reason === "not_configured"
+          ? "Provider accounts can be managed here, but this deployment cannot send music to a Pin yet."
         : status.unavailable_reason === "pairing_unconfirmed"
-          ? "Your paired Pin couldn’t be confirmed."
+          ? "Your Pin pairing couldn’t be confirmed. Provider accounts remain available in Center."
           : status.unavailable_reason === "pin_update_required"
-            ? "Your Pin’s Spotify service needs an update."
-            : "Your Pin couldn’t be reached.";
+            ? "Your Pin’s music service needs an update. Provider accounts remain available in Center."
+            : "Your Pin couldn’t be reached. Provider accounts remain available in Center.";
     return { label: "Unavailable", tone: "degraded", copy };
   }
   if (status.active_provider !== "spotify") {
@@ -598,8 +601,8 @@ export function SpotifyServiceCard() {
       <div className={styles.serviceHead}>
         <span className={styles.musicMark} aria-hidden="true">♪</span>
         <span className={styles.serviceCopy}>
-          <strong>{providerOption(activeProvider).label}</strong>
-          <span>Select the service that receives every native music prompt.</span>
+          <strong>Music providers</strong>
+          <span>Connect Spotify, YouTube Music, Apple Music, or TIDAL, then choose the default.</span>
         </span>
         {state ? <StatusChip tone={state.tone} label={state.label} /> : null}
       </div>
@@ -608,23 +611,30 @@ export function SpotifyServiceCard() {
         <div className={settings.stateRow}>
           <span className={settings.muted}>Checking music services…</span>
         </div>
-      ) : status?.state === "unavailable" ? (
-        <div className={styles.noticeArea}>
-          <StatusMessage tone="warning" onRetry={() => void loadStatus()}>
-            {state?.copy ?? "Music services are unavailable."}
-          </StatusMessage>
-          {status.fallback_setup ? (
-            <Link className={styles.quietButton} href="/settings/pin">
-              Open connection & maintenance
-            </Link>
-          ) : null}
-        </div>
       ) : status ? (
         <>
-          <div className={styles.summary}>
-            <span>{state?.copy}</span>
-            {status.username ? <span className={styles.account}>{status.username}</span> : null}
-          </div>
+          {status.state === "unavailable" ? (
+            <div className={styles.noticeArea}>
+              <StatusMessage tone="warning" onRetry={() => void loadStatus()}>
+                {state?.copy ?? "Your Pin’s music service is unavailable."}
+              </StatusMessage>
+              {status.unavailable_reason === "pin_not_paired" ||
+              status.unavailable_reason === "pairing_unconfirmed" ? (
+                <Link className={styles.quietButton} href="/settings/account/devices">
+                  Pair My Ai Pin
+                </Link>
+              ) : status.fallback_setup ? (
+                <Link className={styles.quietButton} href="/settings/pin">
+                  Open connection & maintenance
+                </Link>
+              ) : null}
+            </div>
+          ) : (
+            <div className={styles.summary}>
+              <span>{state?.copy}</span>
+              {status.username ? <span className={styles.account}>{status.username}</span> : null}
+            </div>
+          )}
 
           {spotifySelected && status.state === "pairing" ? (
             <div className={styles.pairingPanel} data-testid="spotify-pairing-state">
@@ -664,7 +674,15 @@ export function SpotifyServiceCard() {
                 </select>
               </label>
 
-              {spotifySelected ? (
+              {spotifySelected && status.state === "unavailable" ? (
+                <div className={styles.providerNote}>
+                  <strong>Pair Spotify with your Ai Pin</strong>
+                  <span>
+                    Spotify pairs directly with the Pin. Pair your Pin first, or choose another
+                    provider above to connect its account in Center now.
+                  </span>
+                </div>
+              ) : spotifySelected ? (
                 <>
                   <div className={styles.settingRow}>
                     <span>
@@ -797,7 +815,13 @@ export function SpotifyServiceCard() {
                 <button
                   type="button"
                   className={styles.secondaryButton}
-                  disabled={busy || !dirty || !providerReady || (spotifySelected && !nameValid)}
+                  disabled={
+                    busy ||
+                    status.state === "unavailable" ||
+                    !dirty ||
+                    !providerReady ||
+                    (spotifySelected && !nameValid)
+                  }
                   onClick={() => void saveSettings()}
                 >
                   {action === "saving" ? "Saving…" : "Save"}

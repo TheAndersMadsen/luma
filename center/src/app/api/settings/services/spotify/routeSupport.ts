@@ -12,6 +12,7 @@ import {
   SpotifyBridgeError,
   isSpotifyUnavailableError,
   unavailableSpotifyStatus,
+  type SpotifyStatus,
 } from "@/server/spotifyBridge";
 
 const PRIVATE_HEADERS = { "cache-control": "private, no-store" } as const;
@@ -122,22 +123,32 @@ export function spotifyJson(body: unknown, status = 200): NextResponse {
   return NextResponse.json(body, { status, headers: PRIVATE_HEADERS });
 }
 
-export function spotifyError(error: unknown, statusRead = false): NextResponse {
+export function spotifyError(
+  error: unknown,
+  statusRead = false,
+  providers?: SpotifyStatus["providers"],
+): NextResponse {
   if (statusRead && isSpotifyUnavailableError(error)) {
     const code = error instanceof SpotifyBridgeError ? error.code : "adapter_unavailable";
     const reason =
       code === "bridge_not_configured"
         ? "not_configured"
-        : code === "roster_unavailable"
-          ? "pairing_unconfirmed"
-          : code === "invalid_response"
-            ? "pin_update_required"
-            : "pin_unavailable";
+        : code === "pin_not_paired"
+          ? "pin_not_paired"
+          : code === "roster_unavailable"
+            ? "pairing_unconfirmed"
+            : code === "invalid_response"
+              ? "pin_update_required"
+              : "pin_unavailable";
     const fallbackSetup = code === "adapter_unavailable" || code === "bridge_not_configured";
-    return spotifyJson({ ...unavailableSpotifyStatus(reason), fallback_setup: fallbackSetup });
+    return spotifyJson({
+      ...unavailableSpotifyStatus(reason),
+      ...(providers ? { providers } : {}),
+      fallback_setup: fallbackSetup,
+    });
   }
   if (error instanceof SpotifyBridgeError) {
     return spotifyJson({ error: error.message }, error.status);
   }
-  return spotifyJson({ error: "Spotify could not be reached." }, 503);
+  return spotifyJson({ error: "Music services could not be reached." }, 503);
 }

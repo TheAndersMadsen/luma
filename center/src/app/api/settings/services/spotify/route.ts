@@ -15,13 +15,14 @@ import {
 export async function GET() {
   const session = await requireSpotifySession();
   if (session instanceof Response) return session;
+  const providers = await musicProviderStatus(session.sub).catch(() => undefined);
   try {
     return spotifyJson({
       ...(await runSpotifyBridgeAction(session, "status")),
-      providers: await musicProviderStatus(session.sub),
+      ...(providers ? { providers } : {}),
     });
   } catch (error) {
-    return spotifyError(error, true);
+    return spotifyError(error, true, providers);
   }
 }
 
