@@ -130,6 +130,69 @@ test("a durable YouTube connection wins over a failed in-memory retry", async (t
   assert.deepEqual(await youtube.youtubeConnectionStatus(subject), { state: "connected" });
 });
 
+test("YouTube Music keeps connected OAuth credentials out of public catalog searches", async (t) => {
+  await encryptedStore(t);
+  const subject = "youtube-catalog-wearer";
+  await store.updateMusicAccountRecord(subject, (record) => ({
+    ...record,
+    youtube_music: {
+      connected_at: "2026-08-25T00:00:00.000Z",
+      credentials: {
+        access_token: "youtube-access-token",
+        refresh_token: "youtube-refresh-token",
+        expiry_date: "2026-08-26T00:00:00.000Z",
+      },
+    },
+  }));
+
+  const originalCreate = Innertube.create;
+  t.after(() => {
+    Innertube.create = originalCreate;
+  });
+  let createOptions;
+  let searchCall;
+  Innertube.create = async (options) => {
+    createOptions = options;
+    return {
+      session: {
+        signIn: async () => assert.fail("public catalog search must not attach OAuth credentials"),
+      },
+      music: {
+        search: async (query, filters) => {
+          searchCall = { query, filters };
+          return {
+            songs: {
+              contents: [{
+                id: "6f8gDL-wPN8",
+                title: "Life Is Good (feat. Drake)",
+                artists: [{ name: "Future" }, { name: "Drake" }],
+                album: { name: "High Off Life" },
+                duration: { seconds: 238 },
+              }],
+            },
+          };
+        },
+      },
+    };
+  };
+
+  assert.deepEqual(
+    await youtube.queryYoutubeMusic(subject, { kind: "track", primary: "Drake", limit: 10 }),
+    [{
+      id: "youtube_music:6f8gDL-wPN8",
+      title: "Life Is Good (feat. Drake)",
+      artists: ["Future", "Drake"],
+      album: "High Off Life",
+      duration_ms: 238_000,
+      track_number: 0,
+      disc_number: 0,
+      explicit: false,
+    }],
+  );
+  assert.equal(createOptions.retrieve_player, false);
+  assert.deepEqual(searchCall, { query: "Drake", filters: { type: "song" } });
+});
+
 test("YouTube Music removes ad payloads and refuses ad or non-media hosts", () => {
   assert.deepEqual(
     youtube.pruneYoutubeAdFields({

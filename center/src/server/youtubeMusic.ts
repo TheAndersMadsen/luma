@@ -348,6 +348,29 @@ async function authenticatedYoutubeClient(subject: string): Promise<YoutubeClien
   }
 }
 
+async function connectedYoutubeCatalogClient(subject: string): Promise<YoutubeClient> {
+  try {
+    const record = await readMusicAccountRecord(subject);
+    if (!record.youtube_music?.credentials) {
+      throw new YoutubeMusicError("Connect YouTube Music in Center.", 401);
+    }
+    // Google currently rejects OAuth bearer tokens on the WEB_REMIX catalog
+    // endpoints used by youtubei.js. The catalog itself is public, so keep the
+    // saved connection as the account authority without attaching its token to
+    // search and browse requests. Account-only actions still use the signed-in
+    // client above.
+    return await Innertube.create({
+      fetch: adBlockingYoutubeFetch,
+      retrieve_player: false,
+      generate_session_locally: true,
+      enable_session_cache: false,
+    });
+  } catch (error) {
+    if (error instanceof YoutubeMusicError || error instanceof MusicSessionStoreError) throw error;
+    throw new YoutubeMusicError("YouTube Music catalog could not be reached.");
+  }
+}
+
 function prefixedId(videoId: string): string {
   return `youtube_music:${videoId}`;
 }
@@ -472,7 +495,9 @@ export async function queryYoutubeMusic(
     limit: number;
   },
 ): Promise<YoutubeTrack[]> {
-  const client = await authenticatedYoutubeClient(subject);
+  const client = request.kind === "favorites"
+    ? await authenticatedYoutubeClient(subject)
+    : await connectedYoutubeCatalogClient(subject);
   const limit = Math.max(1, Math.min(100, request.limit));
 
   if ((request.kind === "radio" || request.kind === "recommendations") && request.primary) {
