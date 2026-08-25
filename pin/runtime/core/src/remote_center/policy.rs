@@ -1601,8 +1601,6 @@ mod tests {
             ("GET", "/api/fitness/sessions"),
             ("GET", "/api/spotify/status"),
             ("GET", "/api/spotify/search"),
-            ("GET", "/api/codex/status"),
-            ("POST", "/api/codex/login/device-code"),
             ("GET", "/api/feature-flags"),
             ("PUT", "/api/feature-flags"),
             ("PUT", "/api/wifi/set-enabled"),

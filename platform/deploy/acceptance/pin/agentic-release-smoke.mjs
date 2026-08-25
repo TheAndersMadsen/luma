@@ -60,7 +60,6 @@ const MUSIC_SEARCH_PATH =
 const FIXED_API_PATHS = new Set([
   "/api/health",
   "/api/settings",
-  "/api/codex/status",
   "/api/spotify/status",
   "/api/feature-flags",
   MUSIC_SEARCH_PATH,
@@ -446,16 +445,15 @@ export async function collectReadiness(options, token, deadline = null, now = ()
   if (deadline !== null && now() >= deadline) {
     throw new SafeSmokeError("readiness collection exceeded the deadline");
   }
-  const [settings, codex, spotify, featureFlags] = await Promise.all([
+  const [settings, spotify, featureFlags] = await Promise.all([
     deviceJsonGet(options, token, "/api/settings", deadline, now),
-    deviceJsonGet(options, token, "/api/codex/status", deadline, now),
     deviceJsonGet(options, token, "/api/spotify/status", deadline, now),
     deviceJsonGet(options, token, "/api/feature-flags", deadline, now),
   ]);
   if (deadline !== null && now() >= deadline) {
     throw new SafeSmokeError("readiness collection exceeded the deadline");
   }
-  return { health, settings, codex, spotify, featureFlags };
+  return { health, settings, spotify, featureFlags };
 }
 
 export function openAdbShellAibusTunnel(

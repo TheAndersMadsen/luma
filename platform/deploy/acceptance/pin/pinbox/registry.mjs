@@ -82,13 +82,6 @@ export const COMMANDS = [
     serial: null, adb: null, json: null, tokenFile: null,
   },
   {
-    name: "ab-gate",
-    category: "Transport / Infra",
-    file: "model-ab-gate.mjs",
-    summary: "Model A/B gating over admin/grpc URLs (uses --token-file natively).",
-    serial: null, adb: null, json: "--json", tokenFile: "--token-file",
-  },
-  {
     name: "readiness",
     category: "Transport / Infra",
     file: null,

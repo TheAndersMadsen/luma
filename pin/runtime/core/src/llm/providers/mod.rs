@@ -1,5 +1,4 @@
 mod anthropic;
-mod codex;
 mod echo;
 mod gemini;
 mod openai;
@@ -11,7 +10,6 @@ use crate::config::{LlmProvider, ResolvedConfig};
 use crate::llm::backend::LlmBackend;
 use crate::llm::memory::MemoryService;
 use crate::llm::providers::anthropic::AnthropicProvider;
-use crate::llm::providers::codex::CodexProvider;
 use crate::llm::providers::echo::EchoProvider;
 use crate::llm::providers::gemini::GeminiProvider;
 use crate::llm::providers::openai::OpenAiProvider;
@@ -25,7 +23,9 @@ pub async fn build_backend(
 ) -> Result<Arc<dyn LlmBackend>, Box<dyn std::error::Error + Send + Sync>> {
     match config.config.llm.provider {
         LlmProvider::Echo => Ok(EchoProvider::build()),
-        LlmProvider::Codex => CodexProvider::build(config),
+        LlmProvider::Codex => {
+            Err(std::io::Error::other("assistant providers are configured in Cosmos").into())
+        }
         LlmProvider::Gemini => {
             GeminiProvider::build(config, http_client, request_logger, memory).await
         }

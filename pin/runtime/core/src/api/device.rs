@@ -7,8 +7,6 @@ use tokio::process::Command;
 use tracing::error;
 
 use super::ApiState;
-use crate::config::LlmProvider;
-
 const HUMANE_DISPLAY_VERSION_SETTING: &str = "penumbra.humane_display_version";
 
 #[derive(Clone, Serialize)]
@@ -156,8 +154,6 @@ pub struct DeviceInfo {
     display_name: String,
     http_bind_addr: String,
     grpc_bind_addr: String,
-    llm_provider: LlmProvider,
-    llm_model: String,
     versions: DeviceVersionSnapshot,
 }
 
@@ -165,7 +161,7 @@ pub struct DeviceApi;
 
 impl DeviceApi {
     pub async fn get_device(State(state): State<ApiState>) -> Json<DeviceInfo> {
-        let (display_name, http_bind_addr, grpc_bind_addr, llm_provider, llm_model) = {
+        let (display_name, http_bind_addr, grpc_bind_addr) = {
             let config = state.shared_config.read().await;
             (
                 config
@@ -175,8 +171,6 @@ impl DeviceApi {
                     .unwrap_or_else(|| "Ai Pin Revival".into()),
                 config.server.http_bind_addr.clone(),
                 config.server.grpc_bind_addr.clone(),
-                config.llm.provider,
-                config.llm.model.clone(),
             )
         };
 
@@ -188,8 +182,6 @@ impl DeviceApi {
             display_name,
             http_bind_addr,
             grpc_bind_addr,
-            llm_provider,
-            llm_model,
             versions,
         })
     }

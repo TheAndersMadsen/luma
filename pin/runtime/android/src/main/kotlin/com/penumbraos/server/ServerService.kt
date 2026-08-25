@@ -99,9 +99,6 @@ class ServerService : Service() {
         ServerRuntime.setStateListener { running ->
             mainHandler.post {
                 runtimeRunning = running
-                if (running) {
-                    com.penumbraos.server.stockaibus.StockAiBusBridgeRuntime.requestConnection()
-                }
                 refreshAdvertisement()
             }
         }
@@ -120,24 +117,17 @@ class ServerService : Service() {
             }
             val configPath = BootstrapConfig.ensureCanonicalConfig(applicationContext)
             val httpPort = BootstrapConfig.readEffectiveHttpPort(configPath)
-            val grpcPort = BootstrapConfig.readEffectiveGrpcPort(configPath)
-            val grpcAuthToken = BootstrapConfig.readEffectiveGrpcAuthToken(configPath)
             // Seed the vault on first install and make completed Android-side
             // migrations durable before the native runtime is exposed.
             PersistentConfigVaultClient.commit(applicationContext)
             advertisedConfig = BootstrapConfig.readAdvertisedConfig(configPath)
             CenterUsbBridge.start(configPath)
             SpotifyBridgeRuntime.configure(esimBridgeToken, httpPort)
-            com.penumbraos.server.stockaibus.StockAiBusBridgeRuntime.configure(
-                grpcPort,
-                grpcAuthToken,
-            )
             ServerRuntime.start(applicationContext, configPath, esimBridgeToken)
             deviceStatusReporter.start()
             updateNotification("On-device server running")
         } catch (t: Throwable) {
             SpotifyBridgeRuntime.clear()
-            com.penumbraos.server.stockaibus.StockAiBusBridgeRuntime.clear()
             CenterUsbBridge.stop()
             try {
                 ServerRuntime.stop()
@@ -173,7 +163,6 @@ class ServerService : Service() {
         SettingsGlobalBridgeServer.stop()
         EsimSocketServer.stop()
         SpotifyBridgeRuntime.clear()
-        com.penumbraos.server.stockaibus.StockAiBusBridgeRuntime.clear()
         releaseMulticastLock()
         super.onDestroy()
     }

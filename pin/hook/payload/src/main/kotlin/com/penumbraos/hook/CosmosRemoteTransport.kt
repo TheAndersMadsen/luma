@@ -253,27 +253,6 @@ internal object CosmosRemoteTransport {
             }
         }
 
-    /**
-     * The clone :443 listener presents a chain signed by the operator's private
-     * CA — a root no OS platform trust store and no stock Humane BKS bundle
-     * contains. So the redirect to the clone gateway is only safe once
-     * [installCloneTrust] has swapped this ChannelFactory's TLS trust to the
-     * clone root. If that hook could not be installed (the `getSslContext` seam
-     * is absent or unhookable on this firmware), redirecting anyway sends every
-     * clone-bound channel — the push relay's persistent `Subscribe` stream above
-     * all — into a TLS handshake that dies against the private CA, and on the
-     * device that surfaces only as an endless reconnect-with-backoff storm.
-     *
-     * Returns true when a clone redirect MUST be refused because clone trust is
-     * not in place. Pure so both arms are unit-tested without a live process;
-     * `cloneEnabled` is the caller's `isEnabled()` and `cloneTrustInstalled` is
-     * the per-ChannelFactory result of [installCloneTrust].
-     */
-    internal fun cloneRedirectRefusedForMissingTrust(
-        cloneEnabled: Boolean,
-        cloneTrustInstalled: Boolean,
-    ): Boolean = cloneEnabled && !cloneTrustInstalled
-
     private fun configuredAddress(): ByteArray {
         val application = currentApplication()
             ?: throw SecurityException("Remote Cosmos application context is unavailable")

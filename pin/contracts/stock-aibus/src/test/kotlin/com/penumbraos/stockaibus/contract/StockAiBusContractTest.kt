@@ -115,28 +115,6 @@ class StockAiBusContractTest {
         }
     }
 
-    @Test
-    fun delegatingBinderRoutesOnlySelectedTransactionsWhenLocalIsAvailable() {
-        val synapse = TierASymbols.Binder.AiBusBridge.TRANSACTION_SYNAPSE_UNDERSTANDING
-        val selected = setOf(synapse)
-        assertFalse(StockAiBusDelegatingBinder.shouldRouteLocal(synapse, false, selected))
-        assertTrue(StockAiBusDelegatingBinder.shouldRouteLocal(synapse, true, selected))
-        assertFalse(
-            StockAiBusDelegatingBinder.shouldRouteLocal(
-                TierASymbols.Binder.AiBusBridge.TRANSACTION_ANALYZE_IMAGE,
-                true,
-                selected,
-            ),
-        )
-        assertFalse(
-            StockAiBusDelegatingBinder.shouldRouteLocal(
-                TierASymbols.Binder.AiBusBridge.TRANSACTION_BIDIRECTIONAL_STREAMING_UNDERSTAND,
-                true,
-                selected,
-            ),
-        )
-    }
-
     private fun WireValue.protoClassName(): String? = when (this) {
         is WireValue.Proto -> className
         is WireValue.StreamObserver -> valueClassName

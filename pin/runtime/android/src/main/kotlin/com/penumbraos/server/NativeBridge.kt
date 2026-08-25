@@ -53,16 +53,6 @@ object NativeBridge {
         processBuilder.environment()[SettingsGlobalBridgeAuthentication.TOKEN_ENVIRONMENT_VARIABLE] =
             SettingsGlobalBridgeAuthentication.deriveToken(validatedEsimBridgeToken)
 
-        // Read DashScope API key for Qwen model-provider (never logged)
-        val dashscopeApiKey = BootstrapConfig.readEffectiveDashScopeApiKey(configPath)
-
-        CodexOnDeviceRuntime.configure(
-            context,
-            processBuilder.environment(),
-            validatedEsimBridgeToken,
-            dashscopeApiKey,
-        )
-
         val databaseKey = DatabaseKeyManager.loadOrCreate(
             BootstrapConfig.databaseFile(context),
         )

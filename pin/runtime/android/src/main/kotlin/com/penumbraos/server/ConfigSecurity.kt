@@ -153,6 +153,66 @@ internal object ConfigSecurity {
         )
     }
 
+    /** Remove every device-side provider setting; Cosmos is the sole authority. */
+    fun enforceCosmosProviderAuthority(
+        text: String,
+        addRoutingDefaults: Boolean,
+    ): TextMigration {
+        validateManagedTableShapes(text)
+        val providerSections = setOf(
+            "google_maps",
+            "brave_search",
+            "open_food_facts",
+            "azure_speech",
+            "openstreetmap",
+            "searxng",
+            "serpapi",
+            "web_search",
+        )
+        val output = mutableListOf<String>()
+        var section = ""
+        var discardSection = false
+
+        for (line in scanTomlLines(text)) {
+            val code = line.structuralCode.trim()
+            val table = parseTableHeader(code)
+            if (table != null) {
+                section = table
+                discardSection = table == "llm" || table.startsWith("llm.") ||
+                    table in providerSections
+                if (!discardSection) output += line.raw
+                continue
+            }
+            if (discardSection) continue
+
+            val assignment = parseAssignment(code)
+            if (section == "weather" && assignment?.first == "pirate_weather_api_key") {
+                continue
+            }
+            output += line.raw
+        }
+
+        val preserved = output.joinToString("\n").trimEnd()
+        val result = if (addRoutingDefaults) {
+            buildString {
+                if (preserved.isNotEmpty()) {
+                    append(preserved)
+                    append("\n\n")
+                }
+                append("[llm]\n")
+                append("provider = \"echo\"\n")
+                append("model = \"cosmos-remote\"\n\n")
+                append("[llm.memory]\n")
+                append("enabled = false\n")
+            }
+        } else if (preserved.isEmpty()) {
+            ""
+        } else {
+            "$preserved\n"
+        }
+        return TextMigration(result, result != text)
+    }
+
     fun migrateLegacyWildcardBind(text: String): TextMigration {
         validateManagedTableShapes(text)
         val scanned = scanTomlLines(text)

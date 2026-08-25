@@ -175,7 +175,6 @@ class BootstrapConfigSecurityTest {
                     admin_token = "${"a".repeat(64)}"
                     http_bind_addr = "127.0.0.1:9191"
                     grpc_bind_addr = "127.0.0.1:9192"
-                    grpc_auth_token = "${"b".repeat(64)}"
                     lan_dashboard_enabled = false
                     display_name = "Test Pin"
                 """.trimIndent() + "\n",
@@ -185,17 +184,12 @@ class BootstrapConfigSecurityTest {
                     [server]
                     http_bind_addr = "127.0.0.1:9292"
                     grpc_bind_addr = "127.0.0.1:9293"
-                    grpc_auth_token = "${"c".repeat(64)}"
                     lan_dashboard_enabled = true
                 """.trimIndent() + "\n",
             )
 
             assertEquals(9292, BootstrapConfig.readEffectiveHttpPort(config.absolutePath))
             assertEquals(9293, BootstrapConfig.readEffectiveGrpcPort(config.absolutePath))
-            assertEquals(
-                "c".repeat(64),
-                BootstrapConfig.readEffectiveGrpcAuthToken(config.absolutePath),
-            )
             assertTrue(BootstrapConfig.readEffectiveLanDashboardEnabled(config.absolutePath))
             val advertised = BootstrapConfig.readAdvertisedConfig(config.absolutePath)
             assertEquals(9292, advertised.httpPort)
@@ -282,65 +276,4 @@ class BootstrapConfigSecurityTest {
         }
     }
 
-    @Test
-    fun legacyMemoryPathIsRetargetedButOperatorAndCurrentValuesAreNot() {
-        val legacyExternal = "/storage/emulated/0/PenumbraOS/assistant-memory.mv2"
-        val legacyAlias = "/sdcard/PenumbraOS/assistant-memory.mv2"
-        val legacyPaths = listOf(legacyExternal, legacyAlias)
-        val current =
-            "/storage/emulated/0/Android/data/com.penumbraos.server/files/memory/assistant-memory.mv2"
-
-        // The regression this guards: the managed-field pass is insert-only, so
-        // an existing key kept the flock-incapable shared-volume path forever.
-        for (legacy in legacyPaths) {
-            val (text, changed) = BootstrapConfig.retargetLegacyMemoryPath(
-                "[llm.memory]\npath = \"$legacy\"\ntop_k = 5\n\n[server]\n",
-                legacyPaths,
-                current,
-            )
-            assertTrue(changed)
-            assertEquals(current, ConfigSecurity.readOptionalString(text, "llm.memory.path"))
-            // Sibling keys and the following section survive the line rewrite.
-            assertTrue(text.contains("top_k = 5"))
-            assertTrue(text.contains("[server]"))
-            assertFalse(text.contains(legacy))
-        }
-
-        // An operator-chosen value is never replaced.
-        val operatorChosen = "/data/local/tmp/my-own-memory.mv2"
-        val (operatorText, operatorChanged) = BootstrapConfig.retargetLegacyMemoryPath(
-            "[llm.memory]\npath = \"$operatorChosen\"\n",
-            legacyPaths,
-            current,
-        )
-        assertFalse(operatorChanged)
-        assertEquals(operatorChosen, ConfigSecurity.readOptionalString(operatorText, "llm.memory.path"))
-
-        // Idempotent: a config already on the current path is left byte-identical.
-        val settled = "[llm.memory]\npath = \"$current\"\n"
-        val (settledText, settledChanged) =
-            BootstrapConfig.retargetLegacyMemoryPath(settled, legacyPaths, current)
-        assertFalse(settledChanged)
-        assertEquals(settled, settledText)
-
-        // A commented-out legacy path is not config and must not be rewritten.
-        val commented = "[llm.memory]\n# path = \"$legacyExternal\"\n"
-        val (commentedText, commentedChanged) =
-            BootstrapConfig.retargetLegacyMemoryPath(commented, legacyPaths, current)
-        assertFalse(commentedChanged)
-        assertEquals(commented, commentedText)
-
-        // A key of the same name in a different section is out of scope.
-        val otherSection = "[storage]\npath = \"$legacyExternal\"\n"
-        val (otherText, otherChanged) =
-            BootstrapConfig.retargetLegacyMemoryPath(otherSection, legacyPaths, current)
-        assertFalse(otherChanged)
-        assertEquals(otherSection, otherText)
-
-        // No [llm.memory] section at all: nothing to retarget.
-        val (absentText, absentChanged) =
-            BootstrapConfig.retargetLegacyMemoryPath("[server]\n", legacyPaths, current)
-        assertFalse(absentChanged)
-        assertEquals("[server]\n", absentText)
-    }
 }

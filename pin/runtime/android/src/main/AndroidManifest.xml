@@ -139,18 +139,5 @@
             android:grantUriPermissions="false"
             android:process="system" />
 
-        <!--
-            Supplies the local gRPC bearer token only to the four exact stock
-            packages whose ChannelFactory is redirected by the Hook APK. The
-            provider enforces package, UID, and stock-signature checks itself.
-        -->
-        <provider
-            android:name=".GrpcAuthTokenProvider"
-            android:authorities="com.penumbraos.server.grpcauth"
-            android:directBootAware="false"
-            android:enabled="true"
-            android:exported="true"
-            android:grantUriPermissions="false" />
-
     </application>
 </manifest>

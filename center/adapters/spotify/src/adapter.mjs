@@ -459,7 +459,6 @@ function pinRemotePolicy(method, pathname, rawQuery, contentType, bodyBytes) {
     ["/api/activity", new Set(["GET", "DELETE"])],
     ["/api/fitness", new Set(["GET", "POST", "DELETE"])],
     ["/api/contacts", new Set(["GET", "POST", "PUT", "DELETE"])],
-    ["/api/codex", new Set(["GET", "POST"])],
     ["/api/spotify", new Set(["GET", "POST", "PUT", "DELETE"])],
   ]);
 

@@ -24,7 +24,6 @@ object IronmanHooks {
 
     fun install(cl: ClassLoader) {
         Log.w(TAG, "Installing ironman hooks...")
-        Log.w(TAG, "  Mock server: ${ChannelFactoryBypass.MOCK_SERVER_URI}")
 
         // This must run before another hook loads SynapseInterpreter or the
         // stock wake-lock classes: both snapshot AIBusService.AIMIC_TIMEOUT_MS
@@ -64,14 +63,8 @@ object IronmanHooks {
         // configurable timeout that only starts from touchpad activity
         HandTrackingTimeoutHooks.install(cl)
 
-        // Redirect all gRPC traffic to mock server
+        // Route stock cloud traffic only to the activated Cosmos edge.
         ChannelFactoryBypass.install(cl)
-
-        // Replace only the stock Brainstem unary Understand transaction when
-        // the authenticated Server-owned Binder reports ready. Every other
-        // IAiBusBridge method and every unavailable-startup case delegates to
-        // the original stock bridge.
-        StockAiBusBridgeInstallHooks.install(cl)
 
         // Confirm a fetched flag snapshot only after stock FeatureFlagManager has
         // synchronously applied it to the system Binder cache and exact read-back

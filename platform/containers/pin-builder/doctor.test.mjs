@@ -656,21 +656,6 @@ for (const spec of GATED_BUILD_ASSETS) {
   });
 }
 
-test("the codex fix says plainly that canonical source has no authorized download", () => {
-  const result = evaluate(
-    healthyProbes({
-      gatedAssets: healthyGatedAssets({
-        gated_asset_codex_app_server: { exists: false, sizeBytes: null, actualSha256: null },
-      }),
-    }),
-  );
-  const fix = checkById(result, "gated_asset_codex_app_server").fix;
-  assert.match(fix, /provides no authorized download/);
-  // ...and still gives the operator-controlled override and canonical pin.
-  assert.match(fix, /-PcodexAppServerBinary/);
-  assert.match(fix, /runtime\/android\/build\.gradle\.kts/);
-});
-
 test("the TFLite fix requires an external authorized asset without prescribing extraction", () => {
   const result = evaluate(
     healthyProbes({
@@ -690,7 +675,7 @@ test("a re-pinned asset passes on its digest when its size differs from the obse
   // re-pinning the TFLite runtime to a source build changes both, and only the
   // gradle digest gates the build. The verdict must follow the digest, and the
   // prior observation must be surfaced rather than turned into a failure.
-  const spec = GATED_BUILD_ASSETS[1];
+  const spec = GATED_BUILD_ASSETS[0];
   const result = evaluate(
     healthyProbes({
       gatedAssets: healthyGatedAssets({
@@ -708,11 +693,11 @@ test("an unreadable present asset says so rather than reporting a digest mismatc
   const result = evaluate(
     healthyProbes({
       gatedAssets: healthyGatedAssets({
-        gated_asset_codex_app_server: { actualSha256: null },
+        gated_asset_tflite_runtime: { actualSha256: null },
       }),
     }),
   );
-  const check = checkById(result, "gated_asset_codex_app_server");
+  const check = checkById(result, "gated_asset_tflite_runtime");
   assert.equal(check.status, CHECK_STATUS.FAIL);
   assert.match(check.detail, /unreadable file/);
 });
@@ -721,7 +706,7 @@ test("a present asset with no readable pin is a warn, not a false pass or a fals
   const result = evaluate(
     healthyProbes({
       gatedAssets: healthyGatedAssets({
-        gated_asset_codex_app_server: {
+        gated_asset_tflite_runtime: {
           expectedSha256: null,
           expectedSha256Ref: null,
           actualSha256: null,
@@ -729,7 +714,7 @@ test("a present asset with no readable pin is a warn, not a false pass or a fals
       }),
     }),
   );
-  const check = checkById(result, "gated_asset_codex_app_server");
+  const check = checkById(result, "gated_asset_tflite_runtime");
   assert.equal(check.status, CHECK_STATUS.WARN);
   assert.equal(result.ok, true);
   assert.match(check.fix, /shasum -a 256/);
@@ -758,7 +743,6 @@ test("resolveGatedAssets hashes on presence, not on a prior observed size", () =
     const digest = createHash("sha256").update(body).digest("hex");
 
     const gradle = [
-      `val codexAppServerSha256 = "${digest}"`,
       `val tfliteRuntimeSha256 = "${digest}"`,
     ].join("\n");
 
@@ -821,7 +805,6 @@ test("resolveGatedAssets follows the configured private-assets directory", () =>
     const digest = createHash("sha256").update(body).digest("hex");
     mkdirSync(join(root, "runtime", "android"), { recursive: true });
     writeFileSync(join(root, "runtime", "android", "build.gradle.kts"), [
-      `val codexAppServerSha256 = "${digest}"`,
       `val tfliteRuntimeSha256 = "${digest}"`,
     ].join("\n"));
     for (const spec of GATED_BUILD_ASSETS) {

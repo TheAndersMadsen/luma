@@ -1,42 +1,10 @@
 [llm]
-provider = "codex"
-model = "gpt-5.6-sol"
+provider = "echo"
+model = "cosmos-remote"
 gemini_google_search = false
 
-[llm.codex]
-# OpenAI-compatible model provider for on-device Codex (e.g., Qwen via DashScope).
-# Activation requires ALL THREE of: provider_base_url, model, and a resolvable
-# API key. When they resolve, the Pin routes through this provider (the
-# app-server uses `model` here, not the [llm].model above) and the ChatGPT
-# device-code login is not used. If any is missing, the Pin falls back to
-# [llm].model on native ChatGPT device-code login.
-#
-# Durable credential (survives an app data-clear). Never write a real key into
-# this packaged asset; provide it one of two ways instead:
-#   1. Set the write-only key through the authenticated settings API
-#      (`llm.codex_api_key`). It is persisted app-private as
-#      `llm.codex.api_key`, redacted (presence-only) on read, and snapshotted
-#      with the config into the system-owned vault
-#      (/data/system_ce/0/penumbraos), which the Server restores on boot
-#      before the runtime starts. Agentic routes therefore recover from a
-#      data-clear without any re-login.
-#   2. Export the environment variable named by `api_key_env` in the server
-#      process environment (host-side runs and tests). On-device, the Android
-#      wrapper reads `llm.codex.api_key` from the restored config and injects
-#      it under this name.
-# Unlike a ChatGPT device-code session, a static provider API key never
-# rotates, so a restored vault snapshot cannot hold an invalidated credential.
-provider_base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-model = "qwen3.7-max"
-api_key_env = "DASHSCOPE_API_KEY"
-provider_name = "dashscope"
-# Codex 0.144.x speaks the OpenAI /responses protocol; DashScope compatible-mode
-# supports it with function tools + parallel tool calls.
-wire_api = "responses"
-# api_key = ""  # write-only; set via the settings API, never in this file
-
 [llm.memory]
-path = "__APP_MEMORY_PATH__"
+enabled = false
 
 [server]
 http_bind_addr = "127.0.0.1:8080"
@@ -55,37 +23,6 @@ db_path = "__APP_DB_PATH__"
 [weather]
 measurement_system = "metric"
 temperature_unit = "celsius"
-
-[google_maps]
-geolocation_enabled = false
-routes_enabled = false
-routes_compliance_acknowledged = false
-routes_travel_mode = "walk"
-language_code = "en-US"
-
-# Brave Search backs the `web_search` read tool (open web: news, events, local,
-# anything the encyclopedia lookup cannot answer). With no subscription token
-# the tool is not advertised to the planner at all and `knowledge_lookup`
-# remains the only search path.
-#
-# The token is write-only. Set it either by exporting BRAVE_SEARCH_API_KEY in
-# the server environment, or with a settings API write; it is then persisted
-# app-private and reported presence-only (`brave_search.has_api_key`). Never
-# write the value into this file — this file ships inside the APK.
-[brave_search]
-# api_key = ""  # write-only; set via the settings API, never in this file
-
-[open_food_facts]
-enabled = false
-attribution_acknowledged = false
-
-[azure_speech]
-enabled = false
-cloud_consent_acknowledged = false
-
-[openstreetmap]
-enabled = false
-location_consent_acknowledged = false
 
 [spotify]
 enabled = false

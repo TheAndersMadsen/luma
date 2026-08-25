@@ -881,9 +881,7 @@
       "fields": [],
       "status": "live",
       "emitter": "runtime/core/src/synapse/chat_turn_loop.rs",
-      "consumers": [
-        "platform/deploy/acceptance/pin/model-ab-gate.mjs"
-      ]
+      "consumers": []
     },
     {
       "name": "step_backend_error",
@@ -891,9 +889,7 @@
       "fields": [],
       "status": "live",
       "emitter": "runtime/core/src/synapse/chat_turn_loop.rs",
-      "consumers": [
-        "platform/deploy/acceptance/pin/model-ab-gate.mjs"
-      ]
+      "consumers": []
     },
     {
       "name": "decline",
@@ -901,9 +897,7 @@
       "fields": [],
       "status": "live",
       "emitter": "runtime/core/src/synapse/chat_turn_loop.rs",
-      "consumers": [
-        "platform/deploy/acceptance/pin/model-ab-gate.mjs"
-      ]
+      "consumers": []
     },
     {
       "name": "local_weather_physical_trace",

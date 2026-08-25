@@ -36,24 +36,9 @@ use crate::tier_a::native_actions;
 // deadline made valid multi-tool runs fail after their first successful read.
 // These are per-call circuit breakers, not a prescribed number of loop steps.
 //
-// The first retained-session request can consume every bounded bridge phase:
-// device-to-host identity proof, Codex thread initialization, the interactive
-// turn, and an interrupt acknowledgement when that turn reaches its deadline.
-// Keep that composition explicit so changing one nested deadline cannot
-// silently invert the outer device deadline again. Five additional seconds
-// are reserved for TLS/HTTP transit and scheduling on the phone and host.
-const MODEL_FIRST_TURN_BRIDGE_BOUND: Duration = crate::llm::CODEX_BRIDGE_IDENTITY_TIMEOUT
-    .saturating_add(crate::llm::CODEX_THREAD_START_TIMEOUT)
-    .saturating_add(crate::llm::CODEX_INTERACTIVE_CHAT_TIMEOUT)
-    .saturating_add(crate::llm::CODEX_INTERRUPT_CLEANUP_TIMEOUT);
-const MODEL_STEP_TRANSPORT_MARGIN: Duration = Duration::from_secs(5);
-const MODEL_STEP_TIMEOUT: Duration =
-    MODEL_FIRST_TURN_BRIDGE_BOUND.saturating_add(MODEL_STEP_TRANSPORT_MARGIN);
-// Direct HTTP providers (DashScope/qwen, OpenAI, Gemini, Anthropic) return a
-// step in seconds. Two attempts at this bound stay well inside the 75s runtime
-// breaker and the stock request budget, so a hung provider still leaves room for
-// a graceful terminal instead of a timeout apology.
-const HTTP_PROVIDER_MODEL_STEP_TIMEOUT: Duration = Duration::from_secs(20);
+// Provider execution belongs to Cosmos. This fallback loop remains bounded so
+// a stale, non-Cosmos configuration cannot consume the stock request budget.
+const MODEL_STEP_TIMEOUT: Duration = Duration::from_secs(20);
 const MUSIC_PROVIDER_TIMEOUT: Duration = Duration::from_secs(6);
 const CURRENT_MUSIC_TTL: Duration = Duration::from_secs(60);
 const MAX_TOOL_ITEMS: usize = 20;
@@ -106,11 +91,8 @@ const MAX_WEB_AGE_BYTES: usize = 32;
 /// too long to respond" instead of an answer or a graceful decline. Bounding
 /// those providers tightly makes a hang fail fast enough to leave budget for the
 /// retry and a terminal operation.
-pub(crate) fn model_step_timeout(provider: LlmProvider) -> Duration {
-    match provider {
-        LlmProvider::Codex => MODEL_STEP_TIMEOUT,
-        _ => HTTP_PROVIDER_MODEL_STEP_TIMEOUT,
-    }
+pub(crate) fn model_step_timeout(_provider: LlmProvider) -> Duration {
+    MODEL_STEP_TIMEOUT
 }
 
 #[derive(Clone)]
@@ -1861,47 +1843,15 @@ mod tests {
 
     #[test]
     fn every_dynamic_model_step_gets_the_same_bounded_retry_budget() {
-        // Codex keeps the multi-phase bridge bound it genuinely needs.
-        assert_eq!(model_step_timeout(LlmProvider::Codex), MODEL_STEP_TIMEOUT);
-        // Direct HTTP providers are bounded tightly: applying the Codex bound
-        // let one hung request eat the whole stock budget and surface as
-        // "took too long to respond" instead of an answer or a decline.
         for provider in [
+            LlmProvider::Codex,
             LlmProvider::OpenAiCompatible,
             LlmProvider::OpenAi,
             LlmProvider::Gemini,
             LlmProvider::Anthropic,
         ] {
-            assert_eq!(
-                model_step_timeout(provider),
-                HTTP_PROVIDER_MODEL_STEP_TIMEOUT
-            );
+            assert_eq!(model_step_timeout(provider), MODEL_STEP_TIMEOUT);
         }
-        // The HTTP provider bound must fit inside the outer runtime breaker
-        // with room left for tool work and a terminal step.
-        assert!(
-            HTTP_PROVIDER_MODEL_STEP_TIMEOUT
-                < crate::services::aibus::understand::AGENTIC_RUNTIME_TIMEOUT
-        );
-        // 5 (identity) + 10 (thread/start) + 18 (interactive) + 2 (cleanup).
-        // `thread/start` was 20s, which could not be reached inside an 18s
-        // interactive window; tightening it to 10s lowers this composed bound
-        // from 45s to 35s. These literals are a tripwire, not a target: they
-        // exist so a change to any nested deadline has to be acknowledged here.
-        assert_eq!(MODEL_FIRST_TURN_BRIDGE_BOUND, Duration::from_secs(35));
-        assert_eq!(MODEL_STEP_TRANSPORT_MARGIN, Duration::from_secs(5));
-        assert_eq!(MODEL_STEP_TIMEOUT, Duration::from_secs(40));
-        assert_eq!(
-            MODEL_FIRST_TURN_BRIDGE_BOUND,
-            crate::llm::CODEX_BRIDGE_IDENTITY_TIMEOUT
-                + crate::llm::CODEX_THREAD_START_TIMEOUT
-                + crate::llm::CODEX_INTERACTIVE_CHAT_TIMEOUT
-                + crate::llm::CODEX_INTERRUPT_CLEANUP_TIMEOUT,
-        );
-        assert_eq!(
-            MODEL_STEP_TIMEOUT,
-            MODEL_FIRST_TURN_BRIDGE_BOUND + MODEL_STEP_TRANSPORT_MARGIN,
-        );
         assert!(MODEL_STEP_TIMEOUT < crate::services::aibus::understand::AGENTIC_RUNTIME_TIMEOUT);
         assert!(
             MODEL_STEP_TIMEOUT < crate::services::aibus::stock_deadline::HOOKED_IRONMAN_TIMEOUT
@@ -1953,23 +1903,6 @@ mod tests {
              ({DEFAULT_GRACE_RESERVE:?}) must fit inside the loop budget \
              ({AGENTIC_LOOP_TIME_BUDGET:?}); raising a nested deadline without \
              re-deriving this hierarchy makes the grace answer unreachable"
-        );
-
-        // Bridge chain: every bound applied INSIDE the interactive window must
-        // be strictly smaller than it, or it can never be reached and its
-        // failure is indistinguishable from a model-step timeout.
-        assert!(
-            crate::llm::CODEX_THREAD_START_TIMEOUT < crate::llm::CODEX_INTERACTIVE_CHAT_TIMEOUT,
-            "thread/start and turn/start run inside the interactive window"
-        );
-        assert!(
-            crate::llm::CODEX_INTERRUPT_CLEANUP_TIMEOUT
-                < crate::llm::CODEX_INTERACTIVE_CHAT_TIMEOUT,
-            "cleanup runs inside the interactive window"
-        );
-        assert!(
-            crate::llm::CODEX_INTERACTIVE_CHAT_TIMEOUT < MODEL_STEP_TIMEOUT,
-            "the provider step bound must outlive the bridge bound it wraps"
         );
     }
 

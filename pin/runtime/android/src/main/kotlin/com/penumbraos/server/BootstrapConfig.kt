@@ -22,10 +22,6 @@ object BootstrapConfig {
     private const val DB_FILE_NAME = "penumbra.db"
     private const val DATABASE_DIR_NAME = "database"
     private const val LOG_DIR_NAME = "logs"
-    private const val MEMORY_FILE_NAME = "assistant-memory.mv2"
-    private const val MEMORY_DIR_NAME = "memory"
-    private const val MEMORY_SECTION = "llm.memory"
-    private const val MEMORY_PATH_KEY = "path"
     private const val STORAGE_SECTION = "storage"
     private const val STORAGE_DB_PATH_KEY = "db_path"
     private const val LOGGING_SECTION = "logging"
@@ -34,7 +30,6 @@ object BootstrapConfig {
     private const val STORAGE_MEDIA_PLACEHOLDER = "__APP_MEDIA_DIR__"
     private const val STORAGE_DB_PLACEHOLDER = "__APP_DB_PATH__"
     private const val LOG_DIR_PLACEHOLDER = "__APP_LOG_DIR__"
-    private const val MEMORY_PATH_PLACEHOLDER = "__APP_MEMORY_PATH__"
     private const val ADMIN_TOKEN_PLACEHOLDER = "__APP_ADMIN_TOKEN__"
     private const val PERSISTENT_ROOT_DIR_NAME = "PenumbraOS"
     private val PREVIOUS_DEFAULT_SYSTEM_PROMPT_LINES = listOf(
@@ -97,17 +92,6 @@ object BootstrapConfig {
         // persistent artifacts. getExternalFilesDir is reached through the
         // Android/data bind mount, which is served by the same filesystem that
         // backs /data and does support flock. This is not app-private internal
-        // storage; it is the app-scoped directory on the shared volume, so it
-        // stays readable for host-side backup while remaining flock-capable.
-        // Existing memory files at the legacy shared-volume paths are migrated
-        // on first run.
-        val memoryDir = File(context.getExternalFilesDir(null), MEMORY_DIR_NAME)
-        check(memoryDir.exists() || memoryDir.mkdirs()) {
-            "Failed to create memory dir at ${memoryDir.absolutePath}"
-        }
-        val memoryFile = File(memoryDir, MEMORY_FILE_NAME)
-        val legacyMemoryFiles = legacyMemoryFiles(externalRoot)
-        migrateLegacyMemoryFile(legacyMemoryFiles, memoryFile)
         val privateConfigExistedAtStart = configFile.exists()
 
         check(mediaDir.exists() || mediaDir.mkdirs()) {
@@ -129,8 +113,7 @@ object BootstrapConfig {
                 "config=${configFile.absolutePath}, " +
                 "db=${dbFile.absolutePath}, " +
                 "media=${mediaDir.absolutePath}, " +
-                "logs=${logDir.absolutePath}, " +
-                "memory=${memoryFile.absolutePath}",
+                "logs=${logDir.absolutePath}",
         )
 
         val resetUnprovenPrivateConfig = resetUnprovenPrivateConfigIfNeeded(
@@ -152,7 +135,6 @@ object BootstrapConfig {
                     .replace(STORAGE_MEDIA_PLACEHOLDER, mediaDir.absolutePath)
                     .replace(STORAGE_DB_PLACEHOLDER, dbFile.absolutePath)
                     .replace(LOG_DIR_PLACEHOLDER, logDir.absolutePath)
-                    .replace(MEMORY_PATH_PLACEHOLDER, memoryFile.absolutePath)
                     .replace(ADMIN_TOKEN_PLACEHOLDER, ConfigSecurity.generateAdminToken())
 
                 writePrivateConfig(configFile, renderedToml)
@@ -218,16 +200,16 @@ object BootstrapConfig {
         }
         applyAndroidConfigMigrations(
             configFile,
-            managedFields(mediaDir, dbFile, logDir, memoryFile),
+            managedFields(mediaDir, dbFile, logDir),
             legacyDbPaths = legacyDbPaths,
             dbPath = dbFile.absolutePath,
             legacyLogPaths = legacyLogPaths,
             logPath = logDir.absolutePath,
-            legacyMemoryPaths = legacyMemoryFiles.map { it.absolutePath },
-            memoryPath = memoryFile.absolutePath,
         )
+        enforceCosmosProviderAuthority(configFile, addRoutingDefaults = true)
         if (localConfigFile.exists()) {
             applyAndroidLocalConfigMigrations(localConfigFile)
+            enforceCosmosProviderAuthority(localConfigFile, addRoutingDefaults = false)
         }
         // Validate the exact effective token before removing the recoverable
         // legacy source. This value is intentionally neither returned here nor
@@ -320,63 +302,16 @@ object BootstrapConfig {
 
     private data class ManagedField(val section: String, val key: String, val value: String)
 
-    /**
-     * Every spelling of the pre-relocation memory file. The shared volume is
-     * reachable both through the resolved external storage root and through the
-     * `/sdcard` compatibility symlink, and an older config may hold either.
-     */
-    private fun legacyMemoryFiles(externalRoot: File): List<File> = listOf(
-        File(externalRoot, MEMORY_FILE_NAME),
-        File(
-            File(PREVIOUS_EXTERNAL_STORAGE_ALIAS, PERSISTENT_ROOT_DIR_NAME),
-            MEMORY_FILE_NAME,
-        ),
-    )
-
-    /**
-     * One-shot copy of assistant-memory.mv2 off the FUSE-served shared volume,
-     * where fs2 flock fails with ENOSYS and memvid-core cannot open the store,
-     * into the flock-capable app-scoped directory. The legacy file is left in
-     * place as a manual-recovery fallback until the new path is proven stable.
-     *
-     * A legacy file that is newer than an existing target is never copied over
-     * the target; that combination means a previous relocation was followed by
-     * further writes to the old path, and choosing a winner automatically could
-     * discard memories. It is reported instead.
-     */
-    private fun migrateLegacyMemoryFile(legacyFiles: List<File>, targetFile: File) {
-        val legacyFile = legacyFiles.firstOrNull { it.exists() } ?: return
-        if (targetFile.exists()) {
-            if (legacyFile.lastModified() > targetFile.lastModified()) {
-                Log.w(
-                    TAG,
-                    "Legacy memory file at ${legacyFile.absolutePath} is newer than " +
-                        "${targetFile.absolutePath}; keeping the relocated file and " +
-                        "leaving the legacy file for manual recovery",
-                )
-            }
-            return
-        }
-        try {
-            legacyFile.copyTo(targetFile, overwrite = false)
-            Log.w(TAG, "Migrated memory file from ${legacyFile.absolutePath} to ${targetFile.absolutePath}")
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to migrate memory file: ${e.message}")
-        }
-    }
-
     private data class SectionBounds(val headerIdx: Int, val endIdx: Int)
 
     private fun managedFields(
         mediaDir: File,
         dbFile: File,
         logDir: File,
-        memoryFile: File,
     ): List<ManagedField> = listOf(
         ManagedField("storage", "media_dir", mediaDir.absolutePath),
         ManagedField("storage", "db_path", dbFile.absolutePath),
         ManagedField("logging", "log_dir", logDir.absolutePath),
-        ManagedField("llm.memory", "path", memoryFile.absolutePath),
     )
 
     /**
@@ -392,8 +327,6 @@ object BootstrapConfig {
         dbPath: String,
         legacyLogPaths: List<String>,
         logPath: String,
-        legacyMemoryPaths: List<String>,
-        memoryPath: String,
     ) {
         val original = configFile.readText()
 
@@ -405,7 +338,6 @@ object BootstrapConfig {
         var addedManagedDefaults = false
         var retargetedDatabasePath = false
         var retargetedLogPath = false
-        var retargetedMemoryPath = false
         var removedLegacySystemPrompt = false
         var removedLegacyStatusPrompt = false
 
@@ -446,15 +378,6 @@ object BootstrapConfig {
             retargetedLogPath = true
         }
 
-        // Runs after the insert-only pass so a freshly inserted key is already
-        // correct and this becomes a no-op.
-        val memoryRetarget = retargetLegacyMemoryPath(text, legacyMemoryPaths, memoryPath)
-        if (memoryRetarget.second) {
-            text = memoryRetarget.first
-            changedAny = true
-            retargetedMemoryPath = true
-        }
-
         val (textWithoutLegacySystemPrompt, removedSystemPrompt) =
             removeLegacyDefaultPrompt(text, PREVIOUS_DEFAULT_SYSTEM_PROMPT_LINES)
         if (removedSystemPrompt) {
@@ -485,7 +408,6 @@ object BootstrapConfig {
                 "addedManagedDefaults=$addedManagedDefaults, " +
                 "retargetedDatabasePath=$retargetedDatabasePath, " +
                 "retargetedLogPath=$retargetedLogPath, " +
-                "retargetedMemoryPath=$retargetedMemoryPath, " +
                 "removedLegacySystemPrompt=$removedLegacySystemPrompt, " +
                 "removedLegacyStatusPrompt=$removedLegacyStatusPrompt",
         )
@@ -505,6 +427,16 @@ object BootstrapConfig {
         writePrivateConfig(bak, scrubbedBackup)
         writePrivateConfig(configFile, migration.text)
         Log.w(TAG, "Migrated app-private local config overlay")
+    }
+
+    private fun enforceCosmosProviderAuthority(configFile: File, addRoutingDefaults: Boolean) {
+        val migration = ConfigSecurity.enforceCosmosProviderAuthority(
+            configFile.readText(),
+            addRoutingDefaults,
+        )
+        if (!migration.changed) return
+        writePrivateConfig(configFile, migration.text)
+        Log.w(TAG, "Removed device-side provider configuration; Cosmos owns providers")
     }
 
     /**
@@ -546,44 +478,6 @@ object BootstrapConfig {
         val toInsert = missing.map { """${it.key} = "${escapeToml(it.value)}"""" }
         lines.addAll(bounds.headerIdx + 1, toInsert)
         return lines.joinToString("\n") to true
-    }
-
-    /**
-     * Returns (newText, changed). Rewrites `[llm.memory] path` when it still
-     * holds one of the flock-incapable legacy shared-volume values.
-     *
-     * `ensureFieldsInSection` is insert-only, so relocating the memory file in
-     * code alone never reaches a device that already has a canonical config:
-     * the key is present, the managed default is skipped, and the server keeps
-     * opening the old path and failing its lock. This is the one managed field
-     * whose stale value must be replaced. The rewrite is deliberately narrow —
-     * it matches the exact legacy paths this project generated and leaves any
-     * other value, including an operator's own, untouched.
-     */
-    internal fun retargetLegacyMemoryPath(
-        text: String,
-        legacyPaths: List<String>,
-        memoryPath: String,
-    ): Pair<String, Boolean> {
-        if (memoryPath in legacyPaths) return text to false
-
-        val structuralLines = ConfigSecurity.structuralCodeByLine(text)
-        val bounds = findSectionBounds(structuralLines, MEMORY_SECTION) ?: return text to false
-        val lines = text.lines().toMutableList()
-
-        for (i in bounds.headerIdx + 1 until bounds.endIdx) {
-            val trimmed = structuralLines[i].trim()
-            val eq = trimmed.indexOf('=')
-            if (eq <= 0 || trimmed.substring(0, eq).trim() != MEMORY_PATH_KEY) continue
-
-            val current = parseTomlBasicString(trimmed.substring(eq + 1).trim())
-            if (current == null || current !in legacyPaths) return text to false
-
-            lines[i] = """$MEMORY_PATH_KEY = "${escapeToml(memoryPath)}""""
-            return lines.joinToString("\n") to true
-        }
-
-        return text to false
     }
 
     /** Rewrite only database paths previously generated on shared storage. */
@@ -853,28 +747,6 @@ object BootstrapConfig {
     fun readEffectiveGrpcPort(configPath: String): Int =
         readEffectiveServerPort(configPath, "server.grpc_bind_addr", "127.0.0.1:9090", "gRPC")
 
-    fun readEffectiveGrpcAuthToken(configPath: String): String {
-        val configFile = File(configPath)
-        check(!Files.isSymbolicLink(configFile.toPath())) {
-            "Refusing to read a symbolic-link canonical config"
-        }
-        val localConfigFile = File(configFile.parentFile, LOCAL_CONFIG_FILE_NAME)
-        val localConfig = if (localConfigFile.exists()) {
-            check(!Files.isSymbolicLink(localConfigFile.toPath())) {
-                "Refusing to read a symbolic-link local config"
-            }
-            localConfigFile.readText()
-        } else {
-            null
-        }
-        return GrpcAuthTokenResolver.resolve(
-            baseConfig = configFile.readText(),
-            localConfig = localConfig,
-            grpcEnvironment = System.getenv("PENUMBRA_GRPC_AUTH_TOKEN"),
-            adminEnvironment = System.getenv("PENUMBRA_ADMIN_TOKEN"),
-        )
-    }
-
     private fun readEffectiveServerPort(
         configPath: String,
         key: String,
@@ -974,46 +846,4 @@ object BootstrapConfig {
         )
     }
 
-    /**
-     * Read the DashScope API key for the Codex model-provider from the config file.
-     * Returns null if not configured. The key is never logged.
-     */
-    fun readEffectiveDashScopeApiKey(configPath: String): String? {
-        val configFile = File(configPath)
-        check(!Files.isSymbolicLink(configFile.toPath())) {
-            "Refusing to read a symbolic-link canonical config"
-        }
-
-        // Check environment variable first (for testing/override)
-        System.getenv("DASHSCOPE_API_KEY")?.takeIf { it.isNotEmpty() }?.let { return it }
-
-        // Read from config file [llm.codex] section
-        val localConfigFile = File(configFile.parentFile, LOCAL_CONFIG_FILE_NAME)
-        if (localConfigFile.exists()) {
-            check(!Files.isSymbolicLink(localConfigFile.toPath())) {
-                "Refusing to read a symbolic-link local config"
-            }
-            ConfigSecurity.readOptionalString(
-                localConfigFile.readText(),
-                "llm.codex.api_key",
-            )?.takeIf { it.isNotEmpty() }?.let { return it }
-        }
-
-        // Check external storage for local config (for initial setup without root)
-        val externalLocalConfig = File(ensurePersistentRoot(), LOCAL_CONFIG_FILE_NAME)
-        if (externalLocalConfig.exists()) {
-            check(!Files.isSymbolicLink(externalLocalConfig.toPath())) {
-                "Refusing to read a symbolic-link external local config"
-            }
-            ConfigSecurity.readOptionalString(
-                externalLocalConfig.readText(),
-                "llm.codex.api_key",
-            )?.takeIf { it.isNotEmpty() }?.let { return it }
-        }
-
-        return ConfigSecurity.readOptionalString(
-            configFile.readText(),
-            "llm.codex.api_key",
-        )?.takeIf { it.isNotEmpty() }
-    }
 }

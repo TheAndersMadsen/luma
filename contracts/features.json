@@ -447,13 +447,9 @@
       "writable": true,
       "application": {
         "mode": "settings_global_restart",
-        "restartRecommended": true,
-        "requires": [
-          { "kind": "provider", "key": "open_food_facts", "predicate": "enabled" },
-          { "kind": "consent", "key": "open_food_facts_attribution", "predicate": "acknowledged" }
-        ]
+        "restartRecommended": true
       },
-      "evidence": { "label": "implemented", "claim": "The Pin runtime validates provider and attribution dependencies before enabling stock nutrition grammar." }
+      "evidence": { "label": "implemented", "claim": "The flag enables stock nutrition grammar; provider readiness and attribution are owned by Cosmos." }
     },
     {
       "key": "humane_clock_enabled",

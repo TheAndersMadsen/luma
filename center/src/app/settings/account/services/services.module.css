@@ -42,6 +42,20 @@
   line-height: 1;
 }
 
+.cosmosMark {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  flex: none;
+  border: 1px solid color-mix(in srgb, var(--hu-colors-beam-base) 45%, transparent);
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #183c39, #080b0b 70%);
+  color: var(--hu-colors-beam-base);
+  font-size: 22px;
+  line-height: 1;
+}
+
 .serviceCopy {
   display: grid;
   gap: 3px;

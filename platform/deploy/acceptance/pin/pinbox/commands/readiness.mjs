@@ -46,15 +46,11 @@ export async function run({ common, passthrough, ctx }) {
     out(JSON.stringify(result, null, 2) + "\n");
   } else {
     const lines = ["readiness:"];
-    const llm = readiness?.settings?.llm;
-    if (llm) {
-      lines.push(`  provider           : ${llm.provider ?? "?"}`);
-      lines.push(`  model              : ${llm.model ?? "?"}`);
-      lines.push(`  tools.enabled      : ${llm.tools?.enabled ?? "?"}`);
-      lines.push(`  codex_custom_active: ${llm.codex_custom_active ?? "?"}`);
-      lines.push(`  has_api_key        : ${llm.has_api_key ?? "?"}`);
+    if (readiness?.settings) {
+      lines.push("  provider authority : cosmos");
+      lines.push("  Pin provider keys  : none");
     } else {
-      lines.push(`  settings: unavailable (${readiness?.error ?? "no llm settings"})`);
+      lines.push(`  settings: unavailable (${readiness?.error ?? "no settings"})`);
     }
     if (gate.warn) lines.push(`  WARN: ${gate.warn}`);
     out(lines.join("\n") + "\n");

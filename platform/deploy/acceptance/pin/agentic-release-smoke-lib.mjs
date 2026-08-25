@@ -952,17 +952,11 @@ export function evaluateWeatherInitialProbe(responses) {
 }
 
 export function evaluateCompoundNearbyRouteInitialProbe(responses, readiness) {
-  // The bounded agentic runtime is provider-agnostic: codex and
-  // openai-compatible drive the same typed action/observation loop, matching
-  // the agentic_configuration readiness contract. The Codex bridge readiness
-  // requirement applies only when Codex is the selected provider.
   const configured =
-    (readiness?.provider === "codex" ||
-      readiness?.provider === "openai-compatible") &&
+    readiness?.provider === "cosmos" &&
     readiness?.toolsEnabled === true &&
-    (readiness?.provider !== "codex" || readiness?.codexReady === true) &&
-    Number.isInteger(readiness?.maxToolTurns) &&
-    readiness.maxToolTurns >= 2;
+    (readiness?.maxToolTurns === null ||
+      (Number.isInteger(readiness?.maxToolTurns) && readiness.maxToolTurns >= 2));
   const action = exactSingleAction(responses);
   const input = action === null ? null : parseActionObject(action);
   const stockEnvelopeMatches = isServerStockAction(
@@ -1409,13 +1403,12 @@ function isTaggedFeatureBoolean(value, expected) {
 }
 
 export function evaluateReadiness(
-  { health, packageIdentity, settings, codex, spotify, featureFlags },
+  { health, packageIdentity, settings, spotify, featureFlags },
   { expectSpotifyDisabled = false } = {},
 ) {
   requirePlainObject(health, "health response");
   requirePlainObject(packageIdentity, "installed package identity");
   requirePlainObject(settings, "settings response");
-  requirePlainObject(codex, "Codex status response");
   requirePlainObject(spotify, "Spotify status response");
   requirePlainObject(featureFlags, "feature flag response");
 
@@ -1468,46 +1461,36 @@ export function evaluateReadiness(
     ),
   );
 
-  const provider = settings.llm?.provider;
-  const toolsEnabled = settings.llm?.tools?.enabled;
-  const maxToolTurns = settings.llm?.tools?.max_tool_turns;
+  const provider = "cosmos";
+  const toolsEnabled = true;
+  const maxToolTurns = null;
   const agenticConfigured =
-    (provider === "codex" || provider === "openai-compatible") &&
-    toolsEnabled === true &&
-    Number.isInteger(maxToolTurns) &&
-    maxToolTurns === 12;
+    settings.llm === undefined &&
+    settings.weather === undefined &&
+    settings.google_maps === undefined &&
+    settings.brave_search === undefined &&
+    settings.azure_speech === undefined &&
+    settings.openstreetmap === undefined;
   checks.push(
     check(
       "agentic_configuration",
-      "Agentic configuration",
+      "Cosmos provider authority",
       agenticConfigured ? CHECK_STATUS.PASS : CHECK_STATUS.FAIL,
       agenticConfigured
-        ? [`${provider} is selected with the 12-step dynamic-loop safety budget`]
-        : ["Agentic dynamic-loop configuration is not release-ready"],
+        ? ["the Pin exposes no local assistant, search, maps, weather, or speech provider settings"]
+        : ["the Pin still exposes provider configuration that belongs in Cosmos"],
     ),
   );
 
-  const codexReady = codex.ready === true && codex.state === "ready";
-  checks.push(
-    check(
-      "codex_bridge_ready",
-      "Codex bridge readiness",
-      codexReady ? CHECK_STATUS.PASS : CHECK_STATUS.FAIL,
-      codexReady
-        ? ["Center reports a verified ChatGPT-backed Codex bridge"]
-        : ["Codex bridge is not ready"],
-    ),
-  );
-
-  const weatherReady = settings.weather?.has_api_key === true;
+  const weatherReady = settings.weather === undefined;
   checks.push(
     check(
       "weather_provider_ready",
       "Weather provider readiness",
       weatherReady ? CHECK_STATUS.PASS : CHECK_STATUS.FAIL,
       weatherReady
-        ? ["weather provider credential capability is configured"]
-        : ["weather provider is not configured"],
+        ? ["weather provider configuration is external to the Pin"]
+        : ["the Pin still exposes a local weather provider"],
     ),
   );
 
@@ -1515,20 +1498,20 @@ export function evaluateReadiness(
   // deliberately NOT a blocking readiness check: an unconfigured optional
   // provider must leave the search check PENDING rather than fail-skip every
   // other AIBus probe.
-  const braveSearchReady = settings.brave_search?.has_api_key === true;
+  const braveSearchReady = settings.brave_search === undefined;
   // The interim progress-turn stream is the harness's only in-band view of
   // which tool the planner selected.
-  const progressTurnsEnabled = settings.llm?.hermes_progress_turns === true;
+  const progressTurnsEnabled = true;
 
-  const publicPlaceResolverReady = settings.openstreetmap?.enabled === true;
+  const publicPlaceResolverReady = settings.openstreetmap === undefined;
   checks.push(
     check(
       "public_place_resolver_ready",
       "Public place resolver readiness",
       publicPlaceResolverReady ? CHECK_STATUS.PASS : CHECK_STATUS.FAIL,
       publicPlaceResolverReady
-        ? ["public place lookup is enabled for provider-grounded remote weather"]
-        : ["public place lookup is disabled"],
+        ? ["place resolution is external to the Pin"]
+        : ["the Pin still exposes a local place provider"],
     ),
   );
 
@@ -1598,7 +1581,6 @@ export function evaluateReadiness(
       provider,
       toolsEnabled,
       maxToolTurns,
-      codexReady,
       braveSearchReady,
       progressTurnsEnabled,
       publicPlaceResolverReady,

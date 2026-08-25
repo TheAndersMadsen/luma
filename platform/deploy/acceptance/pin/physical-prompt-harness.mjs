@@ -1877,6 +1877,14 @@ export function evaluatePhysicalReadiness(snapshot, identity, expected) {
         (flag) => flag?.key === FEATURE_FLAGS.cloud.tickle,
       )
     : undefined;
+  const cosmosAuthority = [
+    "llm",
+    "weather",
+    "google_maps",
+    "brave_search",
+    "azure_speech",
+    "openstreetmap",
+  ].every((key) => snapshot?.settings?.[key] === undefined);
   const checks = {
     exactServerIdentity:
       identity?.packageName === SERVER_PACKAGE &&
@@ -1889,11 +1897,9 @@ export function evaluatePhysicalReadiness(snapshot, identity, expected) {
     noRestartPending: snapshot?.settings?.restart_required === false,
     aibusLoopback:
       parseLoopbackGrpcPort(snapshot?.settings?.server?.grpc_bind_addr) !== null,
-    codexReady: snapshot?.codex?.ready === true && snapshot?.codex?.state === "ready",
-    weatherReady: snapshot?.settings?.weather?.has_api_key === true,
-    weatherLocalityReady:
-      snapshot?.settings?.openstreetmap?.enabled === true &&
-      snapshot?.settings?.openstreetmap?.location_consent_acknowledged === true,
+    cosmosAuthority,
+    weatherReady: cosmosAuthority,
+    weatherLocalityReady: cosmosAuthority,
     spotifyReady:
       snapshot?.spotify?.enabled === true &&
       snapshot?.spotify?.experimental_acknowledged === true &&
@@ -2613,8 +2619,8 @@ export async function executePhysicalSuite(options, dependencies = {}) {
   try {
     for (const item of selectedCases) {
       if (item.kind === "loading_message") {
-        if (item.isUnlocked && !readiness.checks.codexReady) {
-          cases.push(blockedCase(item, "codex_progress_classifier_unavailable"));
+        if (item.isUnlocked && !readiness.checks.cosmosAuthority) {
+          cases.push(blockedCase(item, "cosmos_provider_authority_unavailable"));
         } else {
           cases.push(await observeLoadingMessageCase(device, item, grpcPort));
         }
@@ -2633,8 +2639,8 @@ export async function executePhysicalSuite(options, dependencies = {}) {
           );
         }
       } else if (item.kind === "agentic_remote_weather") {
-        if (!readiness.checks.codexReady) {
-          cases.push(blockedCase(item, "codex_agentic_planner_unavailable"));
+        if (!readiness.checks.cosmosAuthority) {
+          cases.push(blockedCase(item, "cosmos_provider_authority_unavailable"));
         } else if (!readiness.checks.weatherReady) {
           cases.push(blockedCase(item, "weather_provider_unavailable"));
         } else if (!readiness.checks.weatherLocalityReady) {

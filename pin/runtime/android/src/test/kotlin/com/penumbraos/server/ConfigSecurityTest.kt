@@ -9,6 +9,57 @@ import org.junit.Test
 
 class ConfigSecurityTest {
     @Test
+    fun cosmosAuthorityRemovesDeviceProvidersAndKeepsLocalSettings() {
+        val input = """
+            [server]
+            display_name = "Kitchen Pin"
+
+            [llm]
+            provider = "codex"
+            api_key = "secret"
+
+            [llm.codex]
+            api_key = "secret"
+
+            [weather]
+            pirate_weather_api_key = "secret"
+            measurement_system = "metric"
+
+            [google_maps]
+            api_key = "secret"
+
+            [contacts]
+            trust_all_contacts = true
+        """.trimIndent() + "\n"
+
+        val migrated = ConfigSecurity.enforceCosmosProviderAuthority(input, true)
+
+        assertTrue(migrated.changed)
+        assertTrue(migrated.text.contains("display_name = \"Kitchen Pin\""))
+        assertTrue(migrated.text.contains("measurement_system = \"metric\""))
+        assertTrue(migrated.text.contains("trust_all_contacts = true"))
+        assertTrue(migrated.text.contains("provider = \"echo\""))
+        assertTrue(migrated.text.contains("model = \"cosmos-remote\""))
+        assertTrue(migrated.text.contains("enabled = false"))
+        assertFalse(migrated.text.contains("api_key"))
+        assertFalse(migrated.text.contains("[google_maps]"))
+        assertFalse(migrated.text.contains("provider = \"codex\""))
+        assertFalse(
+            ConfigSecurity.enforceCosmosProviderAuthority(migrated.text, true).changed,
+        )
+    }
+
+    @Test
+    fun localOverlayDropsProvidersWithoutAddingAnLlmSection() {
+        val migrated = ConfigSecurity.enforceCosmosProviderAuthority(
+            "[llm]\nprovider = \"openai\"\n\n[server]\ndisplay_name = \"Kept\"\n",
+            false,
+        )
+
+        assertEquals("[server]\ndisplay_name = \"Kept\"\n", migrated.text)
+    }
+
+    @Test
     fun generatedTokenIsA32ByteVisibleAsciiSecret() {
         val token = ConfigSecurity.generateAdminToken()
         assertEquals(64, token.length)

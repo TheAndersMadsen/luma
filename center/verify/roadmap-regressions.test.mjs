@@ -82,16 +82,11 @@ test("Ai Mic shows answers without suggestions, tool traces, or reasoning labels
 });
 
 test("Assistant status never renders a saved model response", async () => {
-  const [assistantPage, memoriesPage, health, timeline] = await Promise.all([
-    source("src/app/settings/pin/llm/page.tsx"),
+  const [memoriesPage, timeline] = await Promise.all([
     source("src/app/page.tsx"),
-    source("src/app/settings/pin/_lib/providerHealth.ts"),
     source("src/components/MemoriesTimeline.tsx"),
   ]);
-  assert.doesNotMatch(assistantPage, /providerHealth\.evidenceText|\.response\b|<pre/);
   assert.doesNotMatch(withoutComments(memoriesPage), /eventData\.response/);
-  assert.doesNotMatch(health, /proves:|doesNotProve:/);
-  assert.match(health, /evidenceText:\s*null/);
   assert.doesNotMatch(timeline, /eventData\.response|\.response\s*\|\|/);
 });
 

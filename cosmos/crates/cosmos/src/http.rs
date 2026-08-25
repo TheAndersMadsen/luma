@@ -328,6 +328,8 @@ async fn capture_upload(
 
 #[derive(Serialize)]
 struct DemoStatus {
+    /// External provider calls are owned by Cosmos, never by a connected Pin.
+    provider_authority: &'static str,
     assistant: bool,
     speech: bool,
     model: String,
@@ -2320,6 +2322,7 @@ async fn demo_status(State(state): State<HttpState>) -> Json<DemoStatus> {
     let model = std::env::var("COSMOS_LLM_MODEL")
         .unwrap_or_else(|_| crate::assistant::llm::DEFAULT_LLM_MODEL.to_owned());
     Json(DemoStatus {
+        provider_authority: "cosmos",
         assistant,
         speech,
         model,
@@ -2879,6 +2882,26 @@ mod tests {
             .expect("response");
 
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn demo_status_names_cosmos_as_the_only_provider_authority() {
+        let response = demo_app(Readiness::default())
+            .oneshot(
+                Request::builder()
+                    .uri("/demo-api/status")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .expect("body bytes");
+        let payload: serde_json::Value = serde_json::from_slice(&bytes).expect("json body");
+        assert_eq!(payload["provider_authority"], "cosmos");
     }
 
     /// The Center REST surface must read the store supplied by server startup.

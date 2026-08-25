@@ -95,7 +95,8 @@ class CmuUltraMasterParityContractTest {
         val server = repoFile("runtime/core/src/boot/mod.rs").readText()
 
         assertTrue(ironman.contains("ChannelFactoryBypass.install(cl)"))
-        assertTrue(channel.contains("const val MOCK_SERVER_URI = \"127.0.0.1:9090\""))
+        assertTrue(channel.contains("Routes every stock cloud channel to the activated, operator-owned Cosmos edge"))
+        assertFalse(channel.contains("127.0.0.1"))
         assertTrue(composition.contains("async fn categorize_notifications("))
         assertTrue(composition.contains(".map(deterministic_category)"))
         assertTrue(composition.contains(".unwrap_or(fallback)"))

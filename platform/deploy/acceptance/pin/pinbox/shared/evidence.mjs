@@ -70,20 +70,22 @@ export function summarizeResponses(responses) {
   };
 }
 
-// The agentic (hermes) path runs only when llm.tools.enabled (and provider
-// supports it + agentic_external is set). If tools are off, the stock path
-// runs — and a test is not exercising the agentic system it claims to. Surface
-// that so a green run isn't misread.
 export function assessAgenticGate(readiness) {
-  const llm = readiness?.settings?.llm;
-  if (!llm) return { known: false, warn: "settings unavailable — cannot confirm the agentic path" };
-  const toolsEnabled = llm.tools?.enabled === true;
+  const settings = readiness?.settings;
+  if (!settings) return { known: false, warn: "settings unavailable" };
+  const cosmosOwned = [
+    "llm",
+    "weather",
+    "google_maps",
+    "brave_search",
+    "azure_speech",
+    "openstreetmap",
+  ].every((key) => settings[key] === undefined);
   return {
     known: true,
-    toolsEnabled,
-    provider: llm.provider ?? null,
-    codexCustomActive: llm.codex_custom_active ?? null,
-    warn: toolsEnabled ? null : "llm.tools.enabled is FALSE — the stock path runs, not the agentic (hermes) one",
+    toolsEnabled: cosmosOwned,
+    provider: "cosmos",
+    warn: cosmosOwned ? null : "the Pin still exposes provider settings owned by Cosmos",
   };
 }
 

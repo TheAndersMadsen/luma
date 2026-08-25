@@ -62,7 +62,6 @@ val rustAbi = "arm64-v8a"
 val rustTarget = "aarch64-linux-android"
 val rustExecutableName = "humane-server"
 val packagedRustLibraryName = "libpenumbra_server_android.so"
-val packagedCodexAppServerName = "libcodex_app_server.so"
 val rustProjectDir = rootProject.layout.projectDirectory.dir("runtime/core")
 val rustTargetBinary = rustProjectDir.file("target/$rustTarget/release/$rustExecutableName")
 
@@ -101,14 +100,8 @@ fun externalPrivateAsset(propertyName: String, environmentName: String, relative
     return candidate
 }
 
-val codexAppServerBinary = externalPrivateAsset(
-    "codexAppServerBinary",
-    "REVIVAL_CODEX_APP_SERVER_BINARY",
-    "codex-0.144.3/codex-app-server-aarch64-unknown-linux-musl",
-)
-val codexAppServerSha256 = "3f364d7813feb8807ac0b38fb8e02654774da1f3dd93c399a695b9e24714afc1"
 // Compatible TFLite C runtime for the local-NLU assists. Pinned the same way as
-// the Codex binary; the SONAME must stay `libtensorflowlite_jni.so`
+// the Rust toolchain; the SONAME must stay `libtensorflowlite_jni.so`
 // so the packaged name matches what the Rust link step recorded.
 val tfliteRuntimeBinary = externalPrivateAsset(
     "tfliteRuntimeBinary",
@@ -194,35 +187,12 @@ val stageRustServerJniLibs by tasks.registering(Sync::class) {
         into(rustAbi)
         rename { packagedRustLibraryName }
     }
-    from(codexAppServerBinary) {
-        into(rustAbi)
-        rename { packagedCodexAppServerName }
-    }
     from(tfliteRuntimeBinary) {
         into(rustAbi)
         rename { packagedTfliteName }
     }
 
-    inputs.file(codexAppServerBinary)
     doFirst {
-        check(codexAppServerBinary.isFile) {
-            "Codex app-server binary is missing: ${codexAppServerBinary.absolutePath}"
-        }
-        val digest = MessageDigest.getInstance("SHA-256")
-        codexAppServerBinary.inputStream().buffered().use { input ->
-            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-            while (true) {
-                val read = input.read(buffer)
-                if (read < 0) break
-                digest.update(buffer, 0, read)
-            }
-        }
-        val actual = digest.digest().joinToString("") { byte ->
-            "%02x".format(byte.toInt() and 0xff)
-        }
-        check(actual == codexAppServerSha256) {
-            "Codex app-server binary failed SHA-256 verification"
-        }
         check(tfliteRuntimeBinary.isFile) {
             "Pinned TFLite runtime is missing: ${tfliteRuntimeBinary.absolutePath}"
         }
@@ -290,7 +260,6 @@ android {
         jniLibs {
             useLegacyPackaging = true
             keepDebugSymbols += "**/libpenumbra_server_android.so"
-            keepDebugSymbols += "**/libcodex_app_server.so"
         }
     }
 

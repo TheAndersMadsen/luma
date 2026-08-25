@@ -102,51 +102,6 @@ fn a_wearable_never_reads_a_developer_string_aloud() {
 /// They reach this module as the `backend_error` of a declined turn, so
 /// this is the fixture that proves the speech boundary rewrites them.
 ///
-/// A copied fixture normally rots in silence; this one is pinned against
-/// `codex.rs` itself by `the_codex_error_fixture_still_matches_its_source`,
-/// so rewording a provider sentence turns that test red rather than quietly
-/// dropping the sentence out of the corpus.
-const CODEX_SOURCE_ERROR_LITERALS: &[&str] = &[
-    "The Codex bridge token is not configured. Add it in server settings.",
-    "The Codex bridge returned an empty response.",
-    "The Codex bridge returned an invalid response.",
-    "The Codex bridge returned an invalid response. Please restart the host bridge.",
-    "The camera image is too large for vision analysis.",
-    "The camera returned an unsupported image format.",
-    "The Codex host bridge timed out. Please try again.",
-    "I couldn't reach the Codex host bridge. Check Wi-Fi and the bridge process.",
-    "The Codex host bridge could not be verified. Check Wi-Fi, TLS, and the bridge process.",
-    "The Codex bridge token was rejected. Check the server settings.",
-    "Codex on the host is unavailable right now. Please try again.",
-    // Interpolated at the call site; rendered below with a real status.
-    "The Codex host bridge failed with HTTP status {status}.",
-];
-
-/// The fixture as it actually arrives, with the one format hole filled.
-fn codex_backend_errors() -> Vec<String> {
-    CODEX_SOURCE_ERROR_LITERALS
-        .iter()
-        .map(|literal| literal.replace("{status}", "503 Service Unavailable"))
-        .collect()
-}
-
-#[test]
-fn the_codex_error_fixture_still_matches_its_source() {
-    const CODEX_SOURCE: &str = include_str!("../../llm/providers/codex.rs");
-    // Aliveness: a path that stopped resolving to the provider, or a scan
-    // that matched nothing, would make every assertion below vacuous.
-    assert!(
-        CODEX_SOURCE.contains("fn bridge_status_error"),
-        "the fixture is no longer reading the Codex provider",
-    );
-    for literal in CODEX_SOURCE_ERROR_LITERALS {
-        assert!(
-            CODEX_SOURCE.contains(literal),
-            "the Codex provider no longer says this, so the corpus stopped covering it: {literal}",
-        );
-    }
-}
-
 /// Everything a wearer can hear from this module, built by CALLING the
 /// producers rather than by copying their text, so a new decline reason or
 /// a reworded sentence is covered automatically.
@@ -179,13 +134,6 @@ fn spoken_corpus() -> Vec<String> {
         corpus.push(decline_speech(
             ChatTurnDeclineReason::BackendUnavailable,
             Some(authored),
-        ));
-    }
-    // Every Codex host-operator sentence, as the wearer would hear it.
-    for raw in codex_backend_errors() {
-        corpus.push(decline_speech(
-            ChatTurnDeclineReason::BackendUnavailable,
-            Some(&raw),
         ));
     }
     corpus
@@ -261,7 +209,7 @@ fn a_spoken_decline_never_carries_internal_vocabulary() {
     // floor counts the eight lines this module authors plus both halves of
     // the backend-error boundary, so losing either half is red.
     assert!(
-        corpus.len() >= 8 + WEARER_FACING_ERRORS.len() + CODEX_SOURCE_ERROR_LITERALS.len(),
+        corpus.len() >= 8 + WEARER_FACING_ERRORS.len(),
         "corpus collapsed: {}",
         corpus.len(),
     );
@@ -269,12 +217,6 @@ fn a_spoken_decline_never_carries_internal_vocabulary() {
         corpus.iter().any(|line| line == CHAT_TURN_GENERIC_DECLINE),
         "the generic decline vanished from the corpus",
     );
-    assert!(
-        CODEX_SOURCE_ERROR_LITERALS.len() >= 10,
-        "the Codex fixture collapsed: {}",
-        CODEX_SOURCE_ERROR_LITERALS.len(),
-    );
-
     for line in &corpus {
         assert!(!line.trim().is_empty(), "a spoken line was empty");
         assert_eq!(

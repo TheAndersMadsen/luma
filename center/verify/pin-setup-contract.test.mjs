@@ -36,9 +36,8 @@ function facts(overrides = {}) {
     },
     server: {
       answering: "online",
-      assistantProvider: "openai",
       assistantModel: "gpt-5",
-      assistantKeyPresent: true,
+      assistantReady: true,
     },
     activation: {
       state: "active",

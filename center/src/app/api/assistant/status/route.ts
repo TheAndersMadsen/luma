@@ -15,7 +15,13 @@ import { sourceHeaders } from "@/server/headers";
 export async function GET() {
   if (!COSMOS_WEBAPI_ENABLED) {
     return Response.json(
-      { assistant: false, speech: false, model: "not configured" },
+      {
+        assistant: false,
+        speech: false,
+        model: "not configured",
+        provider_authority: "unknown",
+        tools: [],
+      },
       {
         headers: sourceHeaders({
           source: "unconfigured",
@@ -36,7 +42,13 @@ export async function GET() {
     // deployment that simply has no model configured.
     if (!res.ok) {
       return Response.json(
-        { assistant: false, speech: false, model: "unreachable" },
+        {
+          assistant: false,
+          speech: false,
+          model: "unreachable",
+          provider_authority: "unknown",
+          tools: [],
+        },
         {
           status: 503,
           headers: sourceHeaders({
@@ -57,7 +69,13 @@ export async function GET() {
     });
   } catch {
     return Response.json(
-      { assistant: false, speech: false, model: "unreachable" },
+      {
+        assistant: false,
+        speech: false,
+        model: "unreachable",
+        provider_authority: "unknown",
+        tools: [],
+      },
       {
         status: 503,
         headers: sourceHeaders({

@@ -12,8 +12,7 @@
  *                          here means the same thing it means there
  *   what is installed      `inspectInstallState()` over the borrowed session
  *   is the server up       the provider's own health probe over that session
- *   is it configured       `GET /api/settings` on the device, through the
- *                          SHARED `useDeviceSettings` cache the panes use
+ *   is Cosmos configured   `/api/assistant/status` on Center
  *   is it pointed at us    `Settings.Global penumbra_cosmos_remote_mode`, read
  *                          over ADB and never written from here
  *   is it reporting        `/api/devices/pair` + `/api/devices/status`, the same
@@ -34,6 +33,7 @@
 import { useCallback, useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { logInfo } from "@/lib/pin-device";
+import { useAssistantStatus } from "@/components/AiMicChat";
 import {
   isPinReleaseError,
   type InstallInspectionResult,
@@ -48,7 +48,6 @@ import type {
   PinSetupServerFacts,
 } from "@/lib/pin-setup";
 import { usePinDevice } from "../PinDeviceProvider";
-import { useDeviceSettings } from "../_lib/useDeviceSettings";
 
 /**
  * The installer brain is loaded ON DEMAND, not with the page.
@@ -144,7 +143,7 @@ export function usePinSetupFacts(options: { operator: boolean }): PinSetupReadin
   const queryClient = useQueryClient();
   const { status, serviceStatus, connectionInfo, identity, support, borrowSession } =
     usePinDevice();
-  const deviceSettings = useDeviceSettings("pin-setup");
+  const assistantStatus = useAssistantStatus();
 
   const connected = status === "connected";
   const serial = connectionInfo?.serial ?? null;
@@ -324,19 +323,13 @@ export function usePinSetupFacts(options: { operator: boolean }): PinSetupReadin
   }, [connected, inspectionQuery.data, inspectionQuery.error, inspectionQuery.isError, inspectionQuery.isFetching]);
 
   const server = useMemo<PinSetupServerFacts>(() => {
-    const llm = deviceSettings.settings?.llm;
-    const keyPresent =
-      llm === undefined
-        ? null
-        : llm.has_api_key === true ||
-          (llm.codex_custom_active === true && llm.has_codex_api_key === true);
+    const assistant = assistantStatus.data;
     return {
       answering: serviceStatus,
-      assistantProvider: llm?.provider ?? null,
-      assistantModel: llm?.model ?? null,
-      assistantKeyPresent: keyPresent,
+      assistantModel: assistant?.model ?? null,
+      assistantReady: assistant?.provider_authority === "cosmos" ? assistant.assistant : null,
     };
-  }, [deviceSettings.settings, serviceStatus]);
+  }, [assistantStatus.data, serviceStatus]);
 
   const activation = useMemo<PinSetupActivationFacts>(() => {
     const expected = expectedEdgeQuery.data;
@@ -465,9 +458,9 @@ export function usePinSetupFacts(options: { operator: boolean }): PinSetupReadin
     void queryClient.invalidateQueries({ queryKey: [SETUP_QUERY_KEY] });
     void queryClient.invalidateQueries({ queryKey: ["paired-pins"] });
     void queryClient.invalidateQueries({ queryKey: ["device-status"] });
-    deviceSettings.reload();
+    void assistantStatus.refetch();
     logInfo("pin-setup", "Re-reading Pin setup state on request");
-  }, [deviceSettings, queryClient]);
+  }, [assistantStatus, queryClient]);
 
   return {
     facts,
@@ -480,6 +473,7 @@ export function usePinSetupFacts(options: { operator: boolean }): PinSetupReadin
       inspectionQuery.isFetching ||
       activationQuery.isFetching ||
       pairingsQuery.isFetching ||
-      statusQuery.isFetching,
+      statusQuery.isFetching ||
+      assistantStatus.isFetching,
   };
 }

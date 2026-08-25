@@ -83,13 +83,7 @@ function readinessFixture() {
         admin_token_auth: true,
         grpc_bind_addr: "127.0.0.1:9090",
       },
-      weather: { has_api_key: true },
-      openstreetmap: {
-        enabled: true,
-        location_consent_acknowledged: true,
-      },
     },
-    codex: { ready: true, state: "ready" },
     spotify: {
       enabled: true,
       experimental_acknowledged: true,
@@ -1145,7 +1139,7 @@ test("readiness requires exact release, authenticated Center, and live provider 
   const stale = readinessFixture();
   stale.spotify.engine_ready = false;
   stale.featureFlags.delivery.stock_cache_verified = false;
-  stale.settings.openstreetmap.location_consent_acknowledged = false;
+  stale.settings.openstreetmap = {};
   const notReady = evaluatePhysicalReadiness(stale, identityFixture(), EXPECTED);
   assert.equal(notReady.pass, false);
   assert.equal(notReady.checks.spotifyReady, false);

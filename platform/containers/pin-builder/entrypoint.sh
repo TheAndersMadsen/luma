@@ -325,7 +325,6 @@ verify_native_contract() {
       ;;
     server)
       required_entries=(
-        lib/arm64-v8a/libcodex_app_server.so
         lib/arm64-v8a/libonnxruntime.so
         lib/arm64-v8a/libonnxruntime4j_jni.so
         lib/arm64-v8a/libpenumbra_server_android.so
@@ -349,15 +348,8 @@ verify_native_contract() {
       die "${role} native payload ${entry} is not ELF64"
     grep -Eq '^[[:space:]]*Machine:[[:space:]]*AArch64[[:space:]]*$' <<< "${header}" ||
       die "${role} native payload ${entry} is not AArch64"
-    if [[ "${entry}" == lib/arm64-v8a/libcodex_app_server.so ]]; then
-      # The pinned musl Codex app-server is intentionally a standalone ET_EXEC
-      # file whose APK entry is renamed to keep Android from compressing it.
-      grep -Eq '^[[:space:]]*Type:[[:space:]]*EXEC[[:space:]]' <<< "${header}" ||
-        die "${role} native payload ${entry} is not the expected executable"
-    else
-      grep -Eq '^[[:space:]]*Type:[[:space:]]*DYN[[:space:]]' <<< "${header}" ||
-        die "${role} native payload ${entry} is not a shared object or PIE executable"
-    fi
+    grep -Eq '^[[:space:]]*Type:[[:space:]]*DYN[[:space:]]' <<< "${header}" ||
+      die "${role} native payload ${entry} is not a shared object or PIE executable"
   done < <(grep -E '^lib/.*\.so$' <<< "${entries}" || true)
   for required in "${required_entries[@]}"; do
     grep -Fxq "${required}" <<< "${entries}" ||
@@ -705,7 +697,6 @@ build_debug_role() {
   export REVIVAL_PIN_PRIVATE_ASSETS_DIR
   mkdir -p "${REVIVAL_PIN_PRIVATE_ASSETS_DIR}"
   unset REVIVAL_PIN_EMBEDDED_PATCH_SIGNING_STORE_FILE
-  unset REVIVAL_CODEX_APP_SERVER_BINARY
   unset REVIVAL_TFLITE_RUNTIME_BINARY
   for role in "${roles[@]}"; do
     if [[ "${role}" == hook ]]; then

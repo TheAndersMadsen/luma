@@ -6,7 +6,7 @@ import android.util.Log
 internal object CosmosOnboardingTransportHooks {
     fun install(classLoader: ClassLoader) {
         Log.w(HookComponentFactory.TAG, "Installing stock onboarding clone transport")
-        ChannelFactoryBypass.installRemoteOnly(classLoader)
+        ChannelFactoryBypass.install(classLoader)
         CosmosOnboardingAutomation.install(classLoader)
     }
 }

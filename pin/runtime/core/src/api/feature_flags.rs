@@ -1211,17 +1211,13 @@ fn validate_settings_global_dependencies(
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct CrossPlaneDependencyScope {
-    food: bool,
     cmu: bool,
 }
 
 impl CrossPlaneDependencyScope {
     #[cfg(test)]
     const fn all() -> Self {
-        Self {
-            food: true,
-            cmu: true,
-        }
+        Self { cmu: true }
     }
 }
 
@@ -1230,11 +1226,10 @@ fn cross_plane_dependency_scope(
     candidate: &Config,
     patch: &BTreeMap<String, Option<bool>>,
 ) -> Result<CrossPlaneDependencyScope, CrossPlaneDependencyError> {
-    let food = patch.contains_key(settings_global_keys::FOOD_ENABLED);
     let cmu = patch.contains_key(settings_global_keys::CMU_ULTRA_ENABLED)
         || effective_cloud_bool(original, cloud_keys::CMU_ULTRA_ENABLED)?
             != effective_cloud_bool(candidate, cloud_keys::CMU_ULTRA_ENABLED)?;
-    Ok(CrossPlaneDependencyScope { food, cmu })
+    Ok(CrossPlaneDependencyScope { cmu })
 }
 
 fn validate_settings_global_dependencies_in_scope(
@@ -1243,19 +1238,6 @@ fn validate_settings_global_dependencies_in_scope(
     reads: &[SettingsGlobalGateRead],
     scope: CrossPlaneDependencyScope,
 ) -> Result<(), CrossPlaneDependencyError> {
-    if scope.food {
-        let food_enabled =
-            effective_settings_global_bool(patch, reads, settings_global_keys::FOOD_ENABLED)?;
-        if food_enabled
-            && (!config.open_food_facts.enabled || !config.open_food_facts.attribution_acknowledged)
-        {
-            return Err(CrossPlaneDependencyError::Invalid(format!(
-                "`{}=true` requires Open Food Facts enablement and the independent attribution acknowledgement",
-                settings_global_keys::FOOD_ENABLED,
-            )));
-        }
-    }
-
     if scope.cmu {
         let global_cmu_enabled =
             effective_settings_global_bool(patch, reads, settings_global_keys::CMU_ULTRA_ENABLED)?;
@@ -1560,42 +1542,6 @@ async fn read_settings_global_gate<R: SettingsGlobalCommandRunner>(
         stored_value,
         available,
     }
-}
-
-async fn validate_open_food_facts_provider_dependency_with_runner<
-    R: SettingsGlobalCommandRunner,
->(
-    config: &Config,
-    runner: &R,
-) -> Result<(), CrossPlaneDependencyError> {
-    config
-        .open_food_facts
-        .validate()
-        .map_err(CrossPlaneDependencyError::Invalid)?;
-    if config.open_food_facts.enabled && config.open_food_facts.attribution_acknowledged {
-        return Ok(());
-    }
-    let spec = settings_global_feature_gate_spec(settings_global_keys::FOOD_ENABLED)
-        .expect("food gate is part of the static allowlist");
-    let read = read_settings_global_gate(runner, spec).await;
-    let food_enabled = effective_settings_global_bool(&BTreeMap::new(), &[read], spec.key)?;
-    if food_enabled {
-        return Err(CrossPlaneDependencyError::Invalid(format!(
-            "Open Food Facts cannot be disabled or lose attribution acknowledgement while Settings.Global `{}=true`; disable the feature gate first",
-            settings_global_keys::FOOD_ENABLED,
-        )));
-    }
-    Ok(())
-}
-
-pub(super) async fn validate_open_food_facts_provider_dependency(
-    config: &Config,
-) -> Result<(), CrossPlaneDependencyError> {
-    validate_open_food_facts_provider_dependency_with_runner(
-        config,
-        &SystemSettingsGlobalCommandRunner,
-    )
-    .await
 }
 
 fn settings_global_command_for(key: &str, value: Option<bool>) -> SettingsGlobalCommand {

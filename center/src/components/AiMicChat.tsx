@@ -21,7 +21,15 @@ type TraceStep = { kind: StepKind; name: string; source: "device" | "server"; te
 type Turn = { id: string; role: "you" | "pin"; text: string; cue?: string; steps: TraceStep[]; streaming: boolean };
 
 /** What this deployment reports about the assistant behind the mic. */
-export type AssistantStatus = { assistant: boolean; speech: boolean; model: string };
+export type AssistantToolStatus = { name: string; live: boolean; needs: string };
+
+export type AssistantStatus = {
+  assistant: boolean;
+  speech: boolean;
+  model: string;
+  provider_authority: "cosmos" | "unknown";
+  tools: AssistantToolStatus[];
+};
 
 /**
  * The assistant's readiness. Shared query key, so the chat, the floating
@@ -34,11 +42,31 @@ export function useAssistantStatus() {
     queryFn: async (): Promise<AssistantStatus> => {
       const res = await fetch("/api/assistant/status", { cache: "no-store" }).catch(() => null);
       const body = res ? ((await res.json().catch(() => null)) as Partial<AssistantStatus> | null) : null;
-      if (!body) return { assistant: false, speech: false, model: "unreachable" };
+      if (!body) {
+        return {
+          assistant: false,
+          speech: false,
+          model: "unreachable",
+          provider_authority: "unknown",
+          tools: [],
+        };
+      }
+      const tools = Array.isArray(body.tools)
+        ? body.tools.flatMap((tool) =>
+            tool &&
+            typeof tool.name === "string" &&
+            typeof tool.live === "boolean" &&
+            typeof tool.needs === "string"
+              ? [{ name: tool.name, live: tool.live, needs: tool.needs }]
+              : [],
+          )
+        : [];
       return {
         assistant: Boolean(body.assistant),
         speech: Boolean(body.speech),
         model: typeof body.model === "string" ? body.model : "unknown",
+        provider_authority: body.provider_authority === "cosmos" ? "cosmos" : "unknown",
+        tools,
       };
     },
     retry: false,

@@ -66,12 +66,12 @@ export const SETTINGS_GROUPS: readonly SettingsGroup[] = [
         keywords: ["controls", "behavior"],
       },
       {
-        title: "Connected apps",
-        label: "Connected apps",
+        title: "Services",
+        label: "Services",
         href: "/settings/account/services",
-        description: "Music and other linked services.",
+        description: "Cosmos providers and connected music accounts.",
         testid: "menu-services-link",
-        keywords: ["spotify", "music", "services"],
+        keywords: ["assistant", "search", "maps", "speech", "azure", "google", "spotify", "music"],
       },
       {
         title: "Wi-Fi",
@@ -133,20 +133,12 @@ export const SETTINGS_GROUPS: readonly SettingsGroup[] = [
     header: PIN_SETTINGS_GROUP,
     routes: [
       {
-        title: "Assistant",
-        label: "Assistant",
-        href: "/settings/pin/llm",
-        description: "Choose who answers and check sign-in.",
-        testid: "menu-pin-llm-link",
-        keywords: ["codex", "chatgpt", "gemini", "anthropic", "openai"],
-      },
-      {
-        title: "Search, maps & speech",
-        label: "Search, maps & speech",
+        title: "Calls & messages",
+        label: "Calls & messages",
         href: "/settings/pin/services",
-        description: "Keys and services used for search, places and voice.",
+        description: "Who may call or message this Pin.",
         testid: "menu-pin-services-link",
-        keywords: ["weather", "places", "voice", "azure", "google"],
+        keywords: ["calls", "messages", "contacts", "inbound"],
       },
       {
         title: "Cellular & eSIM",

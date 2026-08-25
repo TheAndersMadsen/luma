@@ -163,36 +163,6 @@ class ChannelFactoryBypassTest {
     }
 
     @Test
-    fun authorizationIsAttachedOnlyToTheExactLocalTarget() {
-        assertTrue(ChannelFactoryBypass.shouldAttachAuthorization("127.0.0.1:9090"))
-        assertFalse(ChannelFactoryBypass.shouldAttachAuthorization("127.0.0.1:16789"))
-        assertFalse(ChannelFactoryBypass.shouldAttachAuthorization("api.example.test:443"))
-        assertFalse(ChannelFactoryBypass.shouldAttachAuthorization(null))
-    }
-
-    @Test
-    fun tokenValidationMatchesTheServerContract() {
-        val token = "a".repeat(32)
-        assertEquals(token, ChannelFactoryBypass.requireValidToken(token))
-        assertFails<IllegalArgumentException> {
-            ChannelFactoryBypass.requireValidToken("short")
-        }
-        assertFails<IllegalArgumentException> {
-            ChannelFactoryBypass.requireValidToken("a".repeat(31) + " ")
-        }
-        assertFails<IllegalArgumentException> {
-            ChannelFactoryBypass.requireValidToken("a".repeat(513))
-        }
-    }
-
-    @Test
-    fun providerContractMatchesTheServerAuthority() {
-        assertEquals("content://com.penumbraos.server.grpcauth", ChannelFactoryBypass.AUTH_PROVIDER_URI)
-        assertEquals("GET_TOKEN", ChannelFactoryBypass.AUTH_PROVIDER_METHOD)
-        assertEquals("token", ChannelFactoryBypass.AUTH_PROVIDER_RESULT)
-    }
-
-    @Test
     fun legacyWireGatewaysAreExactAndTlsOnly() {
         assertTrue(CosmosRemoteTransport.isAllowedGateway("api.cosmos.humane.cloud:443"))
         assertTrue(CosmosRemoteTransport.isAllowedGateway("onboarding.cosmos.humane.cloud"))
@@ -288,71 +258,18 @@ class ChannelFactoryBypassTest {
         assertNull(CosmosRemoteTransport.parseIpv4("198.51.100.42.example"))
     }
 
-    /**
-     * The device must never redirect to the clone :443 without clone trust
-     * installed on that factory — that is exactly the handshake failure against
-     * the operator's private CA the transport exists to avoid (the push relay's
-     * persistent `Subscribe` stream is the loudest victim: an endless
-     * reconnect-with-backoff storm). Only the clone-on / trust-missing corner is
-     * unsafe; the other three must proceed so working and local paths do not
-     * regress.
-     */
     @Test
-    fun cloneRedirectIsRefusedOnlyWhenCloneModeIsOnAndTrustIsMissing() {
-        assertTrue(
-            "clone mode with no clone trust must be refused, not dialed",
-            CosmosRemoteTransport.cloneRedirectRefusedForMissingTrust(
-                cloneEnabled = true,
-                cloneTrustInstalled = false,
-            ),
-        )
-        assertFalse(
-            "clone mode with clone trust installed is the working path",
-            CosmosRemoteTransport.cloneRedirectRefusedForMissingTrust(
-                cloneEnabled = true,
-                cloneTrustInstalled = true,
-            ),
-        )
-        assertFalse(
-            "clone mode off: this gate must not fire (local/plaintext path owns it)",
-            CosmosRemoteTransport.cloneRedirectRefusedForMissingTrust(
-                cloneEnabled = false,
-                cloneTrustInstalled = false,
-            ),
-        )
-        assertFalse(
-            "clone mode off with trust present is still not this gate's concern",
-            CosmosRemoteTransport.cloneRedirectRefusedForMissingTrust(
-                cloneEnabled = false,
-                cloneTrustInstalled = true,
-            ),
-        )
-    }
-
-    /**
-     * Pins the WIRING, not just the decision: the redirect must consult
-     * [CosmosRemoteTransport.cloneRedirectRefusedForMissingTrust] with the value
-     * [CosmosRemoteTransport.installCloneTrust] returned for the SAME factory.
-     * Deleting the gate (so the redirect proceeds regardless of trust) leaves the
-     * pure-function test above green, so a source-level check is what catches it.
-     */
-    @Test
-    fun theRedirectIsGatedOnCloneTrustBeingInstalled() {
+    fun channelRoutingIsRemoteOnlyAndFailsClosed() {
         val bypass = repoFile(
             "hook/payload/src/main/kotlin/com/penumbraos/hook/ChannelFactoryBypass.kt",
         ).readText()
 
-        // installCloneTrust's result is captured (not discarded) and fed to the gate.
-        assertTrue(
-            "the redirect must capture installCloneTrust's result",
-            bypass.contains("CosmosRemoteTransport.installCloneTrust(clazz)") &&
-                bypass.contains("val cloneTrustInstalled ="),
-        )
-        assertTrue(
-            "the redirect must refuse the clone gateway when clone trust is missing",
-            bypass.contains("cloneRedirectRefusedForMissingTrust(") &&
-                bypass.contains("cloneTrustInstalled"),
-        )
+        assertTrue(bypass.contains("val cloneTrustInstalled = CosmosRemoteTransport.installCloneTrust(factory)"))
+        assertTrue(bypass.contains("if (!CosmosRemoteTransport.isEnabled())"))
+        assertTrue(bypass.contains("if (!cloneTrustInstalled)"))
+        assertTrue(bypass.contains("CosmosRemoteTransport.redirectedGatewayForCurrentProcess("))
+        assertFalse(bypass.contains("127.0.0.1"))
+        assertFalse(bypass.contains("ContentResolver"))
     }
 
     private fun repoFile(relativePath: String): File {

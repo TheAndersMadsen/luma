@@ -17,12 +17,12 @@ import { deviceErrorMessage } from "./deviceErrorPresentation";
 import { PIN_QUERY_KEY } from "../PinDeviceProvider";
 
 /*
- * GET/PUT /api/settings, once, for the four panes that split the SPA's single
- * 2,249-line Settings page (server, llm, services, diagnostics).
+ * GET/PUT /api/settings, once, for the three Pin-local panes (server,
+ * calls/messages and diagnostics).
  *
  * The endpoint is one document, so the panes MUST share one cache entry: two
- * independent copies would let a wearer edit the LLM pane, save from the
- * Services pane, and silently overwrite the LLM change with a stale baseline.
+ * independent copies could let one pane save a stale device document over a
+ * change from another pane.
  * React Query gives that for free — the mutation writes the server's own
  * response back into the cache, and every mounted pane re-derives from it.
  *

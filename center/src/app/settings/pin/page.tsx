@@ -35,17 +35,12 @@ const CONSOLE_PANES: ReadonlyArray<{ href: string; label: string; desc: string }
   {
     href: "/settings/pin/server",
     label: "Pin server",
-    desc: "Display name, local access, and assistant instructions.",
-  },
-  {
-    href: "/settings/pin/llm",
-    label: "Assistant",
-    desc: "Choose the service that answers on this Pin.",
+    desc: "Display name and local network access.",
   },
   {
     href: "/settings/pin/services",
-    label: "Service keys",
-    desc: "Maps, places, speech and units — the third-party keys the Pin uses directly.",
+    label: "Calls & messages",
+    desc: "Choose who may call or message this Pin.",
   },
   {
     href: "/settings/pin/esim",
@@ -193,7 +188,7 @@ export default function ConnectPinPage() {
               {usbConnected
                 ? "USB takes priority while attached, so installs, eSIM, Wi-Fi radio changes and logs stay local."
                 : remotelyConnected
-                  ? "Settings, providers, flags, activity, captures, fitness, contacts, Spotify and Codex work here without a cable."
+                  ? "Pin settings, flags, activity, captures, fitness and contacts work here without a cable. Cosmos services and music accounts stay in account settings."
                   : "Center reconnects to your paired Pin automatically. Connect USB only for installation, recovery, eSIM, Wi-Fi radio changes or logs."}
             </span>
           </span>
@@ -285,17 +280,7 @@ export default function ConnectPinPage() {
           </div>
 
           {serviceStatus === "online" ? (
-            <>
-              <DeviceRow label="Pin name" value={device?.display_name ?? "—"} />
-              <DeviceRow
-                label="Assistant"
-                value={
-                  device?.llm_provider
-                    ? `${device.llm_provider}${device.llm_model ? ` · ${device.llm_model}` : ""}`
-                    : "—"
-                }
-              />
-            </>
+            <DeviceRow label="Pin name" value={device?.display_name ?? "—"} />
           ) : serviceStatus === "offline" ? (
             <div className={styles.stateRow}>
               <StatusMessage tone="warning" onRetry={() => void refreshService()}>

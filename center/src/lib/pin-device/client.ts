@@ -4,8 +4,6 @@ import type {
   ActivityKind,
   ActivityPage,
   CellularSetEnabledResponse,
-  CodexDeviceCodeLoginResponse,
-  CodexStatusResponse,
   ContactClientResetResponse,
   ContactRecord,
   ConversationDetail,
@@ -520,22 +518,6 @@ export class PinClient {
 
       throw new AdminTokenRotationUncertainError(error);
     }
-  }
-
-  getCodexStatus(signal?: AbortSignal) {
-    return this.request<CodexStatusResponse>(
-      "/api/codex/status",
-      undefined,
-      signal,
-    );
-  }
-
-  startCodexDeviceCodeLogin(signal?: AbortSignal) {
-    return this.request<CodexDeviceCodeLoginResponse>(
-      "/api/codex/login/device-code",
-      { method: "POST" },
-      signal,
-    );
   }
 
   async getSpotifyStatus(signal?: AbortSignal): Promise<SpotifyStatusResponse> {

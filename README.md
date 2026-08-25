@@ -38,18 +38,25 @@
 
 ```mermaid
 flowchart LR
-    Owner["Owner browser"] --> Center["Center<br/>identity · settings · installer"]
-    Pin["Ai Pin<br/>Hook · Server · injector"] <-->|"stock-compatible APIs · mTLS"| Cosmos["Cosmos<br/>assistant · media · data"]
+    Owner["Owner browser"] --> Center["Center<br/>account · services · installer"]
+    Pin["Ai Pin<br/>sensors · native actions · playback"] <-->|"stock-compatible APIs · mTLS"| Cosmos["Cosmos<br/>assistant · search · maps · speech"]
     Center <--> Cosmos
     Cosmos <--> Providers["Your providers<br/>LLM · Azure Speech · search · music"]
 ```
 
 | Part | Runs on | Purpose |
 | --- | --- | --- |
-| Center | Your server | Sign-in, settings, provider connections, Pin installer, and owner data |
-| Cosmos | Your server | Stock-compatible APIs, enrollment, assistant orchestration, search, media, and storage |
-| Server | Ai Pin | Local service bridge and device runtime |
-| Hook | Ai Pin | Integrates Cosmos with the stock voice, settings, navigation, camera, and music apps |
+| Center | Your server | Sign-in, service readiness, music connections, Pin installer, and owner data |
+| Cosmos | Your server | The only provider authority: assistant, search, maps, speech, enrollment, media, and storage |
+| Server | Ai Pin | Device-local settings, captures, diagnostics, and native action bridges; it holds no provider key |
+| Hook | Ai Pin | Routes stock cloud calls only to the activated Cosmos server and fails closed before activation |
+
+Search, maps, weather, language-model work, transcription, and speech synthesis
+run in Cosmos. The Pin keeps microphone and sensor capture, cached location,
+native actions, maps presentation, and audio playback close to the hardware.
+Activation copies only the Cosmos endpoint, operator trust root, and that Pin's
+device identity. It never copies an assistant, search, maps, or speech
+credential to the device.
 
 The repository retains required stock `humane.*` protocol names and Android
 package identities because the original software calls them byte-for-byte.
@@ -348,9 +355,9 @@ before package changes begin and tells you to wait and retry.
    device answers through your Cosmos deployment.
 
 Activation stores the server hostname, device-status endpoint, trust roots, and
-device identity as one transaction. It does not use a project-wide default
-server. Installation and activation both bind to the exact serial and plan
-without changing the device until explicitly confirmed.
+device identity as one transaction. Provider credentials stay in the server's
+external configuration. Installation and activation both bind to the exact
+serial and plan without changing the device until explicitly confirmed.
 
 ## Build the Pin apps
 
@@ -365,7 +372,9 @@ native assets already authorized for the project:
 
 The pinned builder uses JDK 17, Android SDK 34, NDK r28c, Rust 1.91.1, and
 external caches. It always signs and verifies installer, bootstrap, Hook,
-Server, and injector as one release. Building never runs ADB.
+Server, and injector as one release. The Server APK no longer embeds the old
+on-device Codex executable; only the TFLite native runtime remains an external
+private build input. Building never runs ADB.
 
 ## AI-assisted setup
 

@@ -31,7 +31,6 @@ test("settings navigation exposes only current consumer destinations", async () 
     "/settings/pin/fitness",
     "/settings/pin/contacts",
     "/settings/pin/server",
-    "/settings/pin/llm",
     "/settings/pin/services",
     "/settings/pin/esim",
     "/settings/pin/flags",
@@ -97,14 +96,18 @@ test("the settings home explains the most useful areas without transport jargon"
 });
 
 test("retired settings routes lead to a useful wearer page while Services stays real", async () => {
-  const [orders, services, about] = await Promise.all([
+  const [orders, services, cosmosServices, about] = await Promise.all([
     source("src/app/settings/account/orders/page.tsx"),
     source("src/app/settings/account/services/page.tsx"),
+    source("src/app/settings/account/services/CosmosServicesCard.tsx"),
     source("src/app/settings/about/page.tsx"),
   ]);
 
   assert.match(orders, /redirect\("\/settings\/account\/details"\)/);
+  assert.match(services, /CosmosServicesCard/);
   assert.match(services, /SpotifyServiceCard/);
+  assert.match(cosmosServices, /One provider authority/);
+  assert.match(cosmosServices, /no search, maps, assistant or speech key is copied to the device/);
   assert.doesNotMatch(services, /redirect\(/);
   assert.doesNotMatch(about, /redirect\(/);
   assert.match(about, /centerRuntimeIdentity/);

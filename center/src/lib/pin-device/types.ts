@@ -182,106 +182,18 @@ export interface DeviceInfo {
   server_port?: number;
   http_bind_addr?: string;
   grpc_bind_addr?: string;
-  llm_provider: string;
-  llm_model: string;
   versions?: DeviceVersionSnapshot;
 }
 
 export interface Settings {
   /** True while persisted listener settings differ from the running process. */
   restart_required?: boolean;
-  llm: {
-    provider: string;
-    model: string;
-    has_api_key: boolean;
-    base_url?: string;
-    gemini_google_search?: boolean;
-    /** URL of the optional host-side Codex App Server bridge. */
-    codex_bridge_url?: string;
-    /** The bridge credential is write-only; only its presence is returned. */
-    has_codex_bridge_token?: boolean;
-    /** Whether a private HTTPS CA certificate is configured for the bridge. */
-    has_codex_bridge_ca?: boolean;
-    /** Base URL for OpenAI-compatible model provider (e.g., DashScope). */
-    codex_provider_base_url?: string;
-    /** Model name for the OpenAI-compatible provider. */
-    codex_model?: string;
-    /** Whether an API key is configured for the OpenAI-compatible provider. */
-    has_codex_api_key?: boolean;
-    /** Provider name (Codex model_provider id), e.g. "dashscope". */
-    codex_provider_name?: string;
-    /** Wire API for the Codex provider ("responses" for Codex 0.144.x). */
-    codex_wire_api?: string;
-    /** Optional cue model for the custom provider (falls back to codex_model). */
-    codex_cue_model?: string;
-    /** Path to a Codex model-catalog JSON (parallel tools + real context metadata). */
-    codex_model_catalog_path?: string;
-    /** True when the custom provider is active (routes through Codex, not ChatGPT). */
-    codex_custom_active?: boolean;
-    /** Effective progress-cue model (provider-aware). */
-    progress_cue_model?: string;
-  };
   server: {
     /** Explicit wire capability; the secret itself is never returned. */
     admin_token_auth?: boolean;
-    /** Present on older Kotlin-backed settings responses. */
-    port?: number;
-    /** Present on current Rust-backed settings responses. */
-    http_bind_addr?: string;
-    grpc_bind_addr?: string;
-    public_addr?: string;
-    system_prompt: string;
-    status_prompt?: string;
     display_name?: string;
     /** Expose the authenticated dashboard API on Wi-Fi after restart. */
     lan_dashboard_enabled?: boolean;
-  };
-  storage: {
-    media_dir: string;
-    db_path: string;
-  };
-  weather: {
-    has_api_key: boolean;
-    /** Optional on legacy servers; Center normalizes absence to metric. */
-    measurement_system?: MeasurementSystem;
-    /** Optional on legacy servers; Center normalizes absence to Celsius. */
-    temperature_unit?: TemperatureUnit;
-  };
-  /** Optional wire capability; absent on released legacy servers. */
-  google_maps?: {
-    /** The API key is write-only; only its resolved presence is returned. */
-    has_api_key: boolean;
-    geolocation_enabled: boolean;
-    routes_enabled: boolean;
-    routes_compliance_acknowledged: boolean;
-    routes_travel_mode: GoogleMapsTravelMode;
-    language_code: string;
-  };
-  /** Optional wire capability; absent on released legacy servers. */
-  brave_search?: {
-    /** The subscription key is write-only; only its resolved presence is returned. */
-    has_api_key: boolean;
-  };
-  /** Optional wire capability; absent on released legacy servers. */
-  open_food_facts?: {
-    enabled: boolean;
-    attribution_acknowledged: boolean;
-    attribution: string;
-    license_url: string;
-  };
-  /** Optional wire capability; absent on released legacy servers. */
-  azure_speech?: {
-    /** The subscription key is write-only; only its resolved presence is returned. */
-    has_subscription_key: boolean;
-    region?: string;
-    voice_name?: string;
-    enabled: boolean;
-    cloud_consent_acknowledged: boolean;
-  };
-  /** Optional wire capability; absent on released legacy servers. */
-  openstreetmap?: {
-    enabled: boolean;
-    location_consent_acknowledged: boolean;
   };
   contacts?: {
     trust_all_contacts?: boolean;
@@ -294,75 +206,12 @@ export interface Settings {
 
 /** Partial update request — only include fields you want to change. */
 export interface UpdateSettingsRequest {
-  llm?: {
-    provider?: string;
-    model?: string;
-    api_key?: string;
-    base_url?: string;
-    gemini_google_search?: boolean;
-    codex_bridge_url?: string;
-    codex_bridge_token?: string;
-    /** Optional PEM certificate used only to trust a private HTTPS bridge CA. */
-    codex_bridge_ca_pem?: string;
-    /** Base URL for OpenAI-compatible model provider (e.g., DashScope). */
-    codex_provider_base_url?: string;
-    /** Model name for the OpenAI-compatible provider. */
-    codex_model?: string;
-    /** API key for the OpenAI-compatible provider (write-only). */
-    codex_api_key?: string;
-    /** Provider name (Codex model_provider id), e.g. "dashscope". */
-    codex_provider_name?: string;
-    /** Wire API for the Codex provider ("responses" recommended). */
-    codex_wire_api?: string;
-    /** Optional cue model for the custom provider. */
-    codex_cue_model?: string;
-    /** Path to a Codex model-catalog JSON (parallel tools + real context metadata). */
-    codex_model_catalog_path?: string;
-    /** Progress-cue model (native or custom-provider model name). */
-    progress_cue_model?: string;
-  };
   server?: {
-    system_prompt?: string;
-    status_prompt?: string;
     display_name?: string;
     /** Write-only. Omission leaves the LAN/USB administration token unchanged. */
     admin_token?: string;
     /** Takes effect after the server process restarts. */
     lan_dashboard_enabled?: boolean;
-  };
-  weather?: {
-    pirate_weather_api_key?: string;
-    measurement_system?: MeasurementSystem;
-    temperature_unit?: TemperatureUnit;
-  };
-  google_maps?: {
-    /** Empty explicitly clears the persisted key; omission leaves it unchanged. */
-    api_key?: string;
-    geolocation_enabled?: boolean;
-    routes_enabled?: boolean;
-    routes_compliance_acknowledged?: boolean;
-    routes_travel_mode?: GoogleMapsTravelMode;
-    language_code?: string;
-  };
-  brave_search?: {
-    /** Empty explicitly clears the persisted key; omission leaves it unchanged. */
-    api_key?: string;
-  };
-  open_food_facts?: {
-    enabled?: boolean;
-    attribution_acknowledged?: boolean;
-  };
-  azure_speech?: {
-    /** Empty explicitly clears the persisted key; omission leaves it unchanged. */
-    subscription_key?: string;
-    region?: string;
-    voice_name?: string;
-    enabled?: boolean;
-    cloud_consent_acknowledged?: boolean;
-  };
-  openstreetmap?: {
-    enabled?: boolean;
-    location_consent_acknowledged?: boolean;
   };
   contacts?: {
     trust_all_contacts?: boolean;
@@ -371,35 +220,6 @@ export interface UpdateSettingsRequest {
   dev?: {
     apk_install_enabled?: boolean;
   };
-}
-
-export type GoogleMapsTravelMode =
-  | "walk"
-  | "drive"
-  | "bicycle"
-  | "two-wheeler";
-
-export type MeasurementSystem = "metric" | "imperial";
-export type TemperatureUnit = "celsius" | "fahrenheit";
-
-export type CodexStatusState =
-  | "not_configured"
-  | "unreachable"
-  | "unauthorized"
-  | "unavailable"
-  | "signed_out"
-  | "ready";
-
-export interface CodexStatusResponse {
-  state: CodexStatusState;
-  ready: boolean;
-  login_pending?: boolean;
-  login_mode?: "chatgpt" | "api_key" | "other" | null;
-}
-
-export interface CodexDeviceCodeLoginResponse {
-  verification_url: string;
-  user_code: string;
 }
 
 export type SpotifyStatusState =

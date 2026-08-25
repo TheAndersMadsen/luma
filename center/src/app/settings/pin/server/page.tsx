@@ -18,8 +18,7 @@ import { usePinPaneSession } from "../_lib/pinSession";
 import { useDeviceSettings } from "../_lib/useDeviceSettings";
 
 /*
- * The Pin's own server: identity, the LAN admin credential, the Wi-Fi listener,
- * and the two prompt templates.
+ * The Pin's own server: identity, the LAN admin credential and the Wi-Fi listener.
  *
  * Ported from the "Server" card of the retired Setup SPA's
  * `SettingsPage.tsx:886-1059`.
@@ -45,14 +44,10 @@ export default function PinServerPane() {
   const { settings, capabilities } = controller;
 
   const displayNameId = useId();
-  const systemPromptId = useId();
-  const statusPromptId = useId();
 
   const [displayName, setDisplayName] = useState("");
   const [adminToken, setAdminToken] = useState("");
   const [lanDashboardEnabled, setLanDashboardEnabled] = useState(false);
-  const [systemPrompt, setSystemPrompt] = useState("");
-  const [statusPrompt, setStatusPrompt] = useState("");
   const [validationError, setValidationError] = useState<string | null>(null);
 
   // Re-seed the form whenever the device's own document changes identity —
@@ -65,8 +60,6 @@ export default function PinServerPane() {
     setDisplayName(settings.server.display_name ?? "");
     setAdminToken("");
     setLanDashboardEnabled(settings.server.lan_dashboard_enabled ?? false);
-    setSystemPrompt(settings.server.system_prompt);
-    setStatusPrompt(settings.server.status_prompt ?? "");
     setValidationError(null);
   }, [settings]);
 
@@ -76,12 +69,6 @@ export default function PinServerPane() {
 
     if (displayName !== (settings.server.display_name ?? "")) {
       server.display_name = displayName;
-    }
-    if (systemPrompt !== settings.server.system_prompt) {
-      server.system_prompt = systemPrompt;
-    }
-    if (statusPrompt !== (settings.server.status_prompt ?? "")) {
-      server.status_prompt = statusPrompt;
     }
     if (adminToken !== "") {
       server.admin_token = adminToken;
@@ -100,8 +87,6 @@ export default function PinServerPane() {
     displayName,
     lanDashboardEnabled,
     settings,
-    statusPrompt,
-    systemPrompt,
   ]);
 
   async function handleSave() {
@@ -169,7 +154,7 @@ export default function PinServerPane() {
           <FormRow
             label="Display name"
             htmlFor={displayNameId}
-            help="What the assistant calls itself, and the name this Pin announces on the network."
+            help="How this Pin is identified in Center and on its local network."
           >
             <input
               id={displayNameId}
@@ -229,57 +214,6 @@ export default function PinServerPane() {
           ) : null}
         </PaneSection>
 
-        <PaneSection title="Assistant instructions" testId="pin-server-prompts">
-          <FormRow
-            label="Main instructions"
-            htmlFor={systemPromptId}
-            help={
-              <>
-                Sent before each request. Available{" "}
-                <a
-                  href="https://handlebarsjs.com/"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  Handlebars substitutions
-                </a>
-                : <code>{"{{run_id}}"}</code>,{" "}
-                <code>{"{{assistant_display_name}}"}</code>,{" "}
-                <code>{"{{server_public_addr}}"}</code>,{" "}
-                <code>{"{{current_timestamp}}"}</code>,{" "}
-                <code>{"{{current_date}}"}</code>, <code>{"{{current_time}}"}</code>,{" "}
-                <code>{"{{location_name}}"}</code>, <code>{"{{latitude}}"}</code>,{" "}
-                <code>{"{{longitude}}"}</code>, <code>{"{{coordinates}}"}</code>. Use
-                conditionals like <code>{"{{#if location_name}}"}</code>…
-                <code>{"{{/if}}"}</code> for optional values.
-              </>
-            }
-          >
-            <textarea
-              id={systemPromptId}
-              className={styles.textarea}
-              rows={8}
-              value={systemPrompt}
-              onChange={(event) => setSystemPrompt(event.target.value)}
-              spellCheck={false}
-            />
-          </FormRow>
-
-          <FormRow
-            label="Status instructions"
-            htmlFor={statusPromptId}
-            help="Adds current Pin status before each request. Uses the same placeholders as the main instructions."
-          >
-            <textarea
-              id={statusPromptId}
-              className={styles.textarea}
-              rows={8}
-              value={statusPrompt}
-              onChange={(event) => setStatusPrompt(event.target.value)}
-              spellCheck={false}
-            />
-          </FormRow>
-        </PaneSection>
       </fieldset>
 
       <UnsavedChangesGuard when={request !== null} />

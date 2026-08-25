@@ -40,10 +40,6 @@ const SIGNING_NAMES = Object.freeze([
 ]);
 const PRIVATE_ASSETS = Object.freeze([
   Object.freeze({
-    path: "codex-0.144.3/codex-app-server-aarch64-unknown-linux-musl",
-    sha256: "3f364d7813feb8807ac0b38fb8e02654774da1f3dd93c399a695b9e24714afc1",
-  }),
-  Object.freeze({
     path: "tflite-2.11.0/libtensorflowlite_jni.so",
     sha256: "8e2acc968c1a2c6b92a641fe016a2f75de0bfde87548cba9972bcc36905f57ea",
   }),

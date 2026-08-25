@@ -93,10 +93,9 @@ export interface PinSetupInstallFacts {
 /** The Revival server on the Pin, over the same USB session. */
 export interface PinSetupServerFacts {
   readonly answering: "unknown" | "checking" | "online" | "offline";
-  readonly assistantProvider: string | null;
   readonly assistantModel: string | null;
-  /** Whether the device holds an assistant API key. `null` until settings load. */
-  readonly assistantKeyPresent: boolean | null;
+  /** Whether the Cosmos assistant is configured. `null` until Center reads it. */
+  readonly assistantReady: boolean | null;
 }
 
 /**
@@ -402,26 +401,22 @@ function deriveConfigure(facts: PinSetupFacts): DraftStep {
     };
   }
 
-  if (server.assistantKeyPresent === null) {
-    return { status: "todo", summary: "Reading the Pin's settings…", next: null };
+  if (server.assistantReady === null) {
+    return { status: "todo", summary: "Reading Cosmos service status…", next: null };
   }
 
-  if (!server.assistantKeyPresent) {
+  if (!server.assistantReady) {
     return {
       status: "todo",
-      summary: server.assistantProvider
-        ? `The assistant is set to ${server.assistantProvider}${server.assistantModel ? ` · ${server.assistantModel}` : ""}, but the Pin holds no API key for it.`
-        : "The Pin's server is answering, but no assistant provider is configured.",
-      next: "Choose a provider and give the Pin its API key. Service keys — maps, places, speech — are optional and live beside it.",
+      summary: "The Pin's server is answering, but the Cosmos assistant is not configured.",
+      next: "Configure the assistant on the Cosmos server, then refresh. No provider key is copied to the Pin.",
     };
   }
 
   return {
     status: "done",
-    summary: `The Pin answers over USB and its assistant is configured${
-      server.assistantProvider
-        ? ` (${server.assistantProvider}${server.assistantModel ? ` · ${server.assistantModel}` : ""})`
-        : ""
+    summary: `The Pin answers over USB and Cosmos is ready${
+      server.assistantModel ? ` (${server.assistantModel})` : ""
     }.`,
     next: null,
   };

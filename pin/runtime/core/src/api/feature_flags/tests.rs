@@ -997,23 +997,8 @@ fn settings_global_dependencies_validate_the_final_cross_plane_state() {
     }
 
     let enable_food = BTreeMap::from([("humane_food_enabled".into(), Some(true))]);
-    assert!(validate_settings_global_dependencies(
-        &config,
-        &enable_food,
-        &default_settings_global_reads(),
-    )
-    .unwrap_err()
-    .message()
-    .contains("Open Food Facts"));
-    let mut configured_food = config.clone();
-    configured_food.open_food_facts.enabled = true;
-    configured_food.open_food_facts.attribution_acknowledged = true;
-    validate_settings_global_dependencies(
-        &configured_food,
-        &enable_food,
-        &default_settings_global_reads(),
-    )
-    .unwrap();
+    validate_settings_global_dependencies(&config, &enable_food, &default_settings_global_reads())
+        .expect("Cosmos owns food-provider readiness");
 
     let mut disabled_cloud_cmu = config.clone();
     disabled_cloud_cmu.feature_flags.overrides.insert(
@@ -1065,25 +1050,6 @@ fn settings_global_dependencies_validate_the_final_cross_plane_state() {
         &default_settings_global_reads(),
     )
     .expect("the unconsumed legacy global setting is not a prerequisite for the cloud chime flag");
-
-    let mut global_food_on = default_settings_global_reads();
-    global_food_on
-        .iter_mut()
-        .find(|read| read.key == "humane_food_enabled")
-        .unwrap()
-        .stored_value = Some(true);
-    assert!(
-        validate_settings_global_dependencies(&config, &BTreeMap::new(), &global_food_on,)
-            .unwrap_err()
-            .message()
-            .contains("Open Food Facts")
-    );
-    validate_settings_global_dependencies(
-        &config,
-        &BTreeMap::from([("humane_food_enabled".into(), Some(false))]),
-        &global_food_on,
-    )
-    .expect("one combined request can disable an orphaned food gate");
 }
 
 #[test]
@@ -1121,13 +1087,7 @@ fn unrelated_updates_ignore_unavailable_dependency_reads() {
     }
 
     let scope = cross_plane_dependency_scope(&original, &candidate, &patch).unwrap();
-    assert_eq!(
-        scope,
-        CrossPlaneDependencyScope {
-            food: false,
-            cmu: false,
-        }
-    );
+    assert_eq!(scope, CrossPlaneDependencyScope { cmu: false });
     validate_settings_global_dependencies_in_scope(&candidate, &patch, &reads, scope)
         .expect("unrelated updates must not require unavailable dependency gates");
     assert_eq!(
@@ -1265,71 +1225,6 @@ async fn stock_apply_ack_barrier_requires_newer_exact_hash_and_count() {
         wait_for_fresh_exact_feature_flag_apply_ack(&runner, &hash, 8, 3)
             .await
             .is_none()
-    );
-}
-
-#[tokio::test]
-async fn food_provider_transition_observes_the_live_global_gate() {
-    let mut config = default_config();
-    config.open_food_facts.enabled = false;
-    config.open_food_facts.attribution_acknowledged = false;
-
-    let runner = MockSettingsGlobalCommandRunner::default();
-    runner
-        .values
-        .lock()
-        .unwrap()
-        .insert("humane_food_enabled".into(), Some(true));
-    let conflict = validate_open_food_facts_provider_dependency_with_runner(&config, &runner)
-        .await
-        .unwrap_err();
-    assert_eq!(conflict.into_response().status(), StatusCode::BAD_REQUEST);
-
-    runner
-        .values
-        .lock()
-        .unwrap()
-        .insert("humane_food_enabled".into(), Some(false));
-    validate_open_food_facts_provider_dependency_with_runner(&config, &runner)
-        .await
-        .unwrap();
-
-    *runner.fail_get_key.lock().unwrap() = Some("humane_food_enabled".into());
-    let unavailable = validate_open_food_facts_provider_dependency_with_runner(&config, &runner)
-        .await
-        .unwrap_err();
-    assert_eq!(
-        unavailable.into_response().status(),
-        StatusCode::SERVICE_UNAVAILABLE
-    );
-
-    // Enabling the provider repairs the dependency in every possible gate
-    // state and therefore must not depend on a bridge read.
-    config.open_food_facts.enabled = true;
-    config.open_food_facts.attribution_acknowledged = true;
-    runner.commands.lock().unwrap().clear();
-    validate_open_food_facts_provider_dependency_with_runner(&config, &runner)
-        .await
-        .expect("provider recovery is safe even while the bridge is unavailable");
-    assert!(runner.commands.lock().unwrap().is_empty());
-}
-
-#[tokio::test]
-async fn intrinsic_food_configuration_fails_before_any_bridge_read() {
-    let mut config = default_config();
-    config.open_food_facts.enabled = true;
-    config.open_food_facts.attribution_acknowledged = false;
-    let runner = MockSettingsGlobalCommandRunner::default();
-    *runner.fail_get_key.lock().unwrap() = Some("humane_food_enabled".into());
-
-    let error = validate_open_food_facts_provider_dependency_with_runner(&config, &runner)
-        .await
-        .unwrap_err();
-
-    assert_eq!(error.into_response().status(), StatusCode::BAD_REQUEST);
-    assert!(
-        runner.commands.lock().unwrap().is_empty(),
-        "invalid local provider settings must not touch the live bridge"
     );
 }
 

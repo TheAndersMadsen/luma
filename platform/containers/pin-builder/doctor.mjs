@@ -68,7 +68,7 @@ export const SIGNING_ENV_RELATIVE_PATH = "~/.config/ai-pin-revival/secrets/pin/s
 export const STOCK_EVIDENCE_RELATIVE_PATH = "decompile-workspace/decompiled";
 
 // The one prerequisite no script in this repository can satisfy for you. The
-// Server build digest-gates two large native inputs that are deliberately
+// Server build digest-gates a native input that is deliberately
 // absent from canonical source and that nothing here is authorized to
 // download. runtime/android/build.gradle.kts:70-103 enforces the external-only
 // boundary. Absent,
@@ -81,26 +81,6 @@ export const STOCK_EVIDENCE_RELATIVE_PATH = "decompile-workspace/decompiled";
 // only what the build file cannot state — what the artifact is, and what this
 // repository does or does not document about obtaining it.
 export const GATED_BUILD_ASSETS = Object.freeze([
-  Object.freeze({
-    id: "gated_asset_codex_app_server",
-    title: "Pinned Codex app-server binary",
-    fallbackPath: "~/.config/ai-pin-revival/pin-assets/codex-0.144.3/codex-app-server-aarch64-unknown-linux-musl",
-    externalPolicyRef: "runtime/android/build.gradle.kts:70-110",
-    observedBytes: 217_128_768,
-    observedBytesRef: "observed: operator-held Codex 0.144.3 artifact",
-    buildFailure:
-      "`:runtime:android:stageRustServerJniLibs` fails its `check(codexAppServerBinary.isFile)` " +
-      "(runtime/android/build.gradle.kts:194-213)",
-    // Unknown: canonical source provides no authorized acquisition path.
-    provenance:
-      "Canonical source provides no authorized download for this artifact, and no script here can fetch it. " +
-      "The product tree does not invent a download path for material it is not authorized to redistribute. " +
-      "Implemented: Gradle pins the Codex app-server 0.144.3 path and SHA-256 " +
-      "(runtime/android/build.gradle.kts:105-110). Put an authorized byte-identical copy in the external " +
-      "private-assets directory, or point the build at one you already hold with " +
-      "`REVIVAL_CODEX_APP_SERVER_BINARY=<path>` or `-PcodexAppServerBinary=<path>` " +
-      "(runtime/android/build.gradle.kts:82-110) — the digest gate applies either way.",
-  }),
   Object.freeze({
     id: "gated_asset_tflite_runtime",
     title: "Pinned compatible TFLite runtime",
@@ -191,8 +171,6 @@ export function parseGatedAssetPins(text) {
 
   // Native inputs default outside the source tree. The doctor uses its fixed
   // external display paths unless a future build contract exposes a literal.
-  const codexPath = null;
-  const codexDigest = capture(/val\s+codexAppServerSha256\s*=\s*"([0-9a-f]{64})"/);
   const tflitePath = null;
   const tfliteDigest = capture(/val\s+tfliteRuntimeSha256\s*=\s*"([0-9a-f]{64})"/);
 
@@ -207,9 +185,7 @@ export function parseGatedAssetPins(text) {
         });
 
   const pins = {};
-  const codex = pin(codexPath, codexDigest);
   const tflite = pin(tflitePath, tfliteDigest);
-  if (codex) pins.gated_asset_codex_app_server = codex;
   if (tflite) pins.gated_asset_tflite_runtime = tflite;
   return Object.freeze(pins);
 }

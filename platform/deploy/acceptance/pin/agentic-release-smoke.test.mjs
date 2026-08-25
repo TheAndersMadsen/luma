@@ -182,21 +182,11 @@ function readinessFixture(overrides = {}) {
     packageIdentity: { ...RELEASE_IDENTITY },
     settings: {
       restart_required: false,
-      llm: {
-        provider: "codex",
-        has_api_key: false,
-        hermes_progress_turns: true,
-        tools: { enabled: true, max_tool_turns: 12 },
-      },
       server: {
         admin_token_auth: true,
         grpc_bind_addr: "127.0.0.1:9090",
       },
-      weather: { has_api_key: true },
-      brave_search: { has_api_key: true },
-      openstreetmap: { enabled: true, location_consent_acknowledged: false },
     },
-    codex: { state: "ready", ready: true },
     spotify: {
       enabled: true,
       experimental_acknowledged: true,
@@ -721,10 +711,9 @@ test("compound nearby-route request requires one canonical location preflight", 
     thought: AGENTIC_LOCATION_PREFLIGHT_THOUGHT,
   });
   const readiness = {
-    provider: "codex",
+    provider: "cosmos",
     toolsEnabled: true,
-    codexReady: true,
-    maxToolTurns: 4,
+    maxToolTurns: null,
   };
   const passed = evaluateCompoundNearbyRouteInitialProbe(responses, readiness);
   assert.equal(passed.status, CHECK_STATUS.PASS);
@@ -740,7 +729,7 @@ test("compound nearby-route request requires one canonical location preflight", 
   assert.equal(
     evaluateCompoundNearbyRouteInitialProbe(responses, {
       ...readiness,
-      codexReady: false,
+      provider: "openai",
     }).status,
     CHECK_STATUS.FAIL,
   );
@@ -1301,23 +1290,20 @@ test("an unconfigured search provider is pending evidence, not a failure", () =>
   assert.equal(noSignal.status, CHECK_STATUS.PENDING);
   assert.match(noSignal.evidence.join(" "), /hermes_progress_turns/);
 
-  // The precondition must not become a blocking readiness gate: an
-  // unconfigured optional provider cannot fail-skip every other AIBus probe.
-  const fixture = structuredClone(readinessFixture());
-  fixture.settings.brave_search.has_api_key = false;
-  fixture.settings.llm.hermes_progress_turns = false;
-  const readiness = evaluateReadiness(fixture);
-  assert.equal(readiness.context.braveSearchReady, false);
-  assert.equal(readiness.context.progressTurnsEnabled, false);
-  assert.equal(readiness.checks.length, 9);
+  // Cosmos owns provider readiness, so a Pin-local readiness snapshot cannot
+  // suppress the real probe. Missing evidence is therefore a failed probe.
+  const readiness = evaluateReadiness(readinessFixture());
+  assert.equal(readiness.context.braveSearchReady, true);
+  assert.equal(readiness.context.progressTurnsEnabled, true);
+  assert.equal(readiness.checks.length, 8);
   assert.ok(readiness.checks.every((check) => check.status === CHECK_STATUS.PASS));
   assert.equal(
     evaluateWebSearch([], readiness.context).status,
-    CHECK_STATUS.PENDING,
+    CHECK_STATUS.FAIL,
   );
 });
 
-test("readiness validates release identity, loopback, providers, Codex, and Tickle delivery", () => {
+test("readiness validates release identity, loopback, Cosmos authority, and Tickle delivery", () => {
   assert.equal(isRequiredReleaseVersion(RELEASE_IDENTITY.versionName), true);
   assert.equal(isRequiredReleaseVersion("2026-07-16.29-local"), false);
   assert.equal(isRequiredReleaseVersion("2026-07-31.1-local"), false);
@@ -1329,14 +1315,13 @@ test("readiness validates release identity, loopback, providers, Codex, and Tick
   assert.equal(parseLoopbackGrpcPort("0.0.0.0:9090"), null);
 
   const readiness = evaluateReadiness(readinessFixture());
-  assert.equal(readiness.checks.length, 9);
+  assert.equal(readiness.checks.length, 8);
   assert.ok(readiness.checks.every((check) => check.status === CHECK_STATUS.PASS));
   assert.deepEqual(readiness.context, {
     grpcPort: 9090,
-    provider: "codex",
+    provider: "cosmos",
     toolsEnabled: true,
-    maxToolTurns: 12,
-    codexReady: true,
+    maxToolTurns: null,
     braveSearchReady: true,
     progressTurnsEnabled: true,
     publicPlaceResolverReady: true,
@@ -1365,7 +1350,7 @@ test("readiness validates release identity, loopback, providers, Codex, and Tick
   assert.equal(negative.context.spotifyDisabled, true);
 
   const unsafeSettings = structuredClone(readinessFixture());
-  unsafeSettings.settings.llm.api_key = "must-not-be-exposed";
+  unsafeSettings.settings.llm = { api_key: "must-not-be-exposed" };
   assert.equal(
     evaluateReadiness(unsafeSettings).checks.find(
       (check) => check.id === "settings_secret_safety",
@@ -1481,29 +1466,19 @@ test("every failed prerequisite blocks tunnel creation and all raw AIBus probes"
       snapshot.settings.server.admin_token_auth = false;
     }],
     ["sanitized settings", ({ snapshot }) => {
-      snapshot.settings.llm.api_key = "must-never-be-reported";
+      snapshot.settings.llm = { api_key: "must-never-be-reported" };
     }],
     ["loopback AIBus listener", ({ snapshot }) => {
       snapshot.settings.server.grpc_bind_addr = "0.0.0.0:9090";
     }],
-    ["Codex provider", ({ snapshot }) => {
-      snapshot.settings.llm.provider = "openai";
+    ["local assistant provider settings", ({ snapshot }) => {
+      snapshot.settings.llm = {};
     }],
-    ["bounded tools enabled", ({ snapshot }) => {
-      snapshot.settings.llm.tools.enabled = false;
+    ["local weather provider settings", ({ snapshot }) => {
+      snapshot.settings.weather = {};
     }],
-    ["bounded tool turns", ({ snapshot }) => {
-      snapshot.settings.llm.tools.max_tool_turns = 1;
-    }],
-    ["Codex bridge readiness", ({ snapshot }) => {
-      snapshot.codex.ready = false;
-      snapshot.codex.state = "unavailable";
-    }],
-    ["weather provider readiness", ({ snapshot }) => {
-      snapshot.settings.weather.has_api_key = false;
-    }],
-    ["public place resolver readiness", ({ snapshot }) => {
-      snapshot.settings.openstreetmap.enabled = false;
+    ["local place provider settings", ({ snapshot }) => {
+      snapshot.settings.openstreetmap = {};
     }],
     ["Spotify provider readiness", ({ snapshot }) => {
       snapshot.spotify.engine_ready = false;

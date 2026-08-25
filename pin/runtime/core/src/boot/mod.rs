@@ -59,7 +59,6 @@ use crate::external::azure_speech::AzureSpeechClient;
 use crate::external::google_maps::GoogleMapsClient;
 use crate::external::open_food_facts::OpenFoodFactsClient;
 use crate::fitness;
-use crate::llm;
 use crate::llm::memory::MemoryService;
 use crate::llm::{LlmAgent, LlmRequestLogger};
 use crate::nearby;
@@ -380,54 +379,6 @@ pub(crate) async fn run(
         aibus_upload: upload_file_handler,
     };
 
-    // Resolve the Codex provider config if configured
-    let (codex_provider_config, codex_api_key_value) =
-        if let Some(codex_config) = config.llm.resolve_codex_provider_config() {
-            // Resolve the API key: persisted app-private value first, then env.
-            let api_key = codex_config.resolve_api_key();
-
-            // Build the CodexProviderConfig if we have the required fields
-            let provider_config = if let (Some(model), Some(base_url)) =
-                (&codex_config.model, &codex_config.provider_base_url)
-            {
-                if api_key.is_some() {
-                    Some(llm::CodexProviderConfig {
-                        model: model.clone(),
-                        base_url: base_url.clone(),
-                        provider_name: codex_config.provider_name.clone(),
-                        api_key_env: codex_config.api_key_env.clone(),
-                        wire_api: codex_config.wire_api.clone(),
-                        model_catalog_path: codex_config.model_catalog_path.clone(),
-                    })
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-
-            (provider_config, api_key)
-        } else {
-            (None, None)
-        };
-
-    // Content-free launch-mode marker: distinguishes the durable
-    // OpenAI-compatible provider path (vault/env API key) from the ChatGPT
-    // device-code login fallback when diagnosing post-data-clear behavior.
-    let codex_custom_provider_active = codex_provider_config.is_some();
-    let local_codex_runtime = llm::local_codex_bridge::LocalCodexRuntime::from_environment(
-        config.llm.resolve_codex_bridge_token(),
-        esim_bridge.clone(),
-        codex_provider_config,
-        codex_api_key_value,
-    )
-    .await?;
-    if local_codex_runtime.is_some() {
-        info!(
-            custom_provider = codex_custom_provider_active,
-            "on-device Codex runtime initialized"
-        );
-    }
     let device_versions = DeviceVersionCollector::collect().await;
     let fitness_history_path = if cfg!(target_os = "android") {
         PathBuf::from("/data/user/0/com.penumbraos.server/files/fitness-history")
@@ -662,14 +613,7 @@ pub(crate) async fn run(
     #[cfg(target_os = "android")]
     tokio::spawn(api::maintain_food_runtime_gate(startup_food_runtime_gate));
 
-    let local_codex_server = async move {
-        match local_codex_runtime {
-            Some(runtime) => runtime.serve().await.map_err(std::io::Error::other),
-            None => std::future::pending::<Result<(), std::io::Error>>().await,
-        }
-    };
-
-    tokio::try_join!(http_server, grpc_server, local_codex_server)?;
+    tokio::try_join!(http_server, grpc_server)?;
 
     Ok(())
 }

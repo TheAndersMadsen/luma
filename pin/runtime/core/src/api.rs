@@ -6,7 +6,6 @@
 
 mod activity;
 mod auth;
-mod codex;
 mod contacts;
 mod conversations;
 mod dev;
@@ -45,24 +44,15 @@ use tokio::sync::{Mutex, RwLock};
 use tracing::{info, warn};
 
 use crate::config::{
-    normalize_iroh_remote_center_allowed_peers, validate_admin_token, Config, GoogleMapsTravelMode,
-    LlmProvider, MeasurementSystem, ResolvedConfig, ServerConfig, TemperatureUnit,
+    normalize_iroh_remote_center_allowed_peers, validate_admin_token, Config, TemperatureUnit,
 };
 use crate::db::Database;
 use crate::dedup::DedupHandle;
 use crate::esim::EsimBridge;
-use crate::external::azure_speech::AzureSpeechClient;
-use crate::external::google_maps::GoogleMapsClient;
-use crate::external::open_food_facts::{
-    OpenFoodFactsClient, OPEN_FOOD_FACTS_ATTRIBUTION, OPEN_FOOD_FACTS_LICENSE_URL,
-};
 use crate::fitness::FitnessStore;
 use crate::llm::memory::MemoryService;
-use crate::llm::{validate_prompt_template, LlmAgent, LlmRequestLogger};
-use crate::nearby::NearbyClient;
-use crate::services::aibus::{
-    AiBus, AiBusExternalClients, AiBusHanders, CompositionServiceImpl, FoodRuntimeGate,
-};
+use crate::llm::LlmRequestLogger;
+use crate::services::aibus::{AiBus, CompositionServiceImpl, FoodRuntimeGate};
 use crate::services::featureflags::FeatureFlagDeliveryTracker;
 use crate::services::speech::SpeechServiceImpl;
 use crate::spotify::SpotifyService;
@@ -174,7 +164,6 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/settings", put(update_settings))
         .nest("/api/activity", activity::router())
         .nest("/api", conversations::router())
-        .nest("/api", codex::router())
         .nest("/api", esim::router())
         .route("/api/feature-flags", get(feature_flags::get_feature_flags))
         .route(
@@ -316,87 +305,9 @@ struct SettingsResponse {
     /// True only on a successful settings update that changed a listener
     /// setting. The persisted value takes effect after the server restarts.
     restart_required: bool,
-    llm: LlmSettingsResponse,
     server: ServerSettingsResponse,
-    storage: StorageSettingsResponse,
-    weather: WeatherSettingsResponse,
-    google_maps: GoogleMapsSettingsResponse,
-    brave_search: BraveSearchSettingsResponse,
-    open_food_facts: OpenFoodFactsSettingsResponse,
-    azure_speech: AzureSpeechSettingsResponse,
-    openstreetmap: OpenStreetMapSettingsResponse,
     contacts: ContactsSettingsResponse,
     dev: DevSettingsResponse,
-}
-
-#[derive(Serialize)]
-struct LlmSettingsResponse {
-    provider: LlmProvider,
-    model: String,
-    /// Retired, unconsumed compatibility flag. No production path reads it;
-    /// progress-cue delivery is NOT active (fail-closed) regardless of value.
-    hermes_progress_turns: bool,
-    /// Arms deterministic progress-cue prose on the stock action-interstitial
-    /// RPC. Ships false. Unlike `hermes_progress_turns` this one is consumed.
-    spoken_progress_cues: bool,
-    /// Allows exactly one bounded retry of a turn's first model step. Ships
-    /// false; exposed so the retry can be turned on, measured, and — if the
-    /// measurement is flat — removed.
-    first_step_retry: bool,
-    /// Persists one diagnostic record per turn. Ships false; runtime-togglable
-    /// so a fault can be captured without a rebuild or reinstall.
-    turn_trace: bool,
-    /// Widens those records from shapes to free text. Ships false and is
-    /// independent of `turn_trace`; while false, `/api/traces` serves no text.
-    turn_trace_content: bool,
-    has_api_key: bool,
-    base_url: Option<String>,
-    codex_bridge_url: String,
-    has_codex_bridge_token: bool,
-    has_codex_bridge_ca: bool,
-    /// Custom OpenAI-compatible provider routed through the on-device Codex
-    /// app-server. Secrets are presence-only.
-    codex_provider_base_url: Option<String>,
-    codex_model: Option<String>,
-    codex_provider_name: Option<String>,
-    codex_wire_api: Option<String>,
-    codex_cue_model: Option<String>,
-    /// Path to a Codex model-catalog JSON (not a secret; shown verbatim).
-    codex_model_catalog_path: Option<String>,
-    has_codex_api_key: bool,
-    /// True when the custom provider is fully configured and keyed, so the Pin
-    /// routes qwen (etc.) through Codex instead of native ChatGPT.
-    codex_custom_active: bool,
-    /// The effective progress-cue model (resolves provider-aware defaults).
-    progress_cue_model: String,
-    /// Vision-capable model used for camera-image analysis. `null` keeps
-    /// image requests on the main model.
-    vision_model: Option<String>,
-    /// Independent camera->cloud consent. While false no camera image leaves
-    /// the device and `vision_actions_enabled` is ineffective.
-    vision_consent_acknowledged: bool,
-    gemini_google_search: bool,
-    tools: LlmToolsSettingsResponse,
-    memory: LlmMemorySettingsResponse,
-}
-
-#[derive(Serialize)]
-struct LlmMemorySettingsResponse {
-    enabled: bool,
-    path: String,
-    top_k: usize,
-    snippet_chars: usize,
-    max_context_chars: usize,
-    auto_retrieve: bool,
-    auto_remember: bool,
-}
-
-#[derive(Serialize)]
-struct LlmToolsSettingsResponse {
-    enabled: bool,
-    dynamic_tool_count: usize,
-    max_tool_turns: usize,
-    tool_concurrency: usize,
 }
 
 #[derive(Serialize)]
@@ -404,69 +315,9 @@ struct ServerSettingsResponse {
     /// Capability flag for dashboard clients. The credential itself is
     /// write-only and is never included in a settings response.
     admin_token_auth: bool,
-    http_bind_addr: String,
     grpc_bind_addr: String,
-    public_addr: String,
     lan_dashboard_enabled: bool,
-    iroh_remote_center_enabled: bool,
-    /// Peer identities are write-only; expose only whether the direct tunnel
-    /// is constrained and how many identities are trusted.
-    iroh_remote_center_allowed_peer_count: usize,
-    system_prompt: String,
-    status_prompt: String,
     display_name: Option<String>,
-}
-
-#[derive(Serialize)]
-struct StorageSettingsResponse {
-    media_dir: String,
-    db_path: String,
-}
-
-#[derive(Serialize)]
-struct WeatherSettingsResponse {
-    has_api_key: bool,
-    measurement_system: MeasurementSystem,
-    temperature_unit: TemperatureUnit,
-}
-
-/// Presence only. The subscription token is write-only and never read back.
-#[derive(Serialize)]
-struct BraveSearchSettingsResponse {
-    has_api_key: bool,
-}
-
-#[derive(Serialize)]
-struct GoogleMapsSettingsResponse {
-    has_api_key: bool,
-    geolocation_enabled: bool,
-    routes_enabled: bool,
-    routes_compliance_acknowledged: bool,
-    routes_travel_mode: GoogleMapsTravelMode,
-    language_code: String,
-}
-
-#[derive(Serialize)]
-struct OpenFoodFactsSettingsResponse {
-    enabled: bool,
-    attribution_acknowledged: bool,
-    attribution: &'static str,
-    license_url: &'static str,
-}
-
-#[derive(Serialize)]
-struct AzureSpeechSettingsResponse {
-    has_subscription_key: bool,
-    region: Option<String>,
-    voice_name: Option<String>,
-    enabled: bool,
-    cloud_consent_acknowledged: bool,
-}
-
-#[derive(Serialize)]
-struct OpenStreetMapSettingsResponse {
-    enabled: bool,
-    location_consent_acknowledged: bool,
 }
 
 #[derive(Serialize)]
@@ -501,126 +352,11 @@ fn settings_response(config: &Config) -> SettingsResponse {
 fn settings_response_with_restart(config: &Config, restart_required: bool) -> SettingsResponse {
     SettingsResponse {
         restart_required,
-        llm: LlmSettingsResponse {
-            provider: config.llm.provider,
-            model: config.llm.model.clone(),
-            hermes_progress_turns: config.llm.hermes_progress_turns,
-            spoken_progress_cues: config.llm.spoken_progress_cues,
-            first_step_retry: config.llm.first_step_retry,
-            turn_trace: config.llm.turn_trace,
-            turn_trace_content: config.llm.turn_trace_content,
-            has_api_key: config.llm.resolve_api_key().is_some(),
-            base_url: config.llm.base_url.clone(),
-            codex_bridge_url: config.llm.resolve_codex_bridge_url(),
-            has_codex_bridge_token: config.llm.resolve_codex_bridge_token().is_some(),
-            has_codex_bridge_ca: config.llm.codex_bridge_ca_pem.is_some(),
-            codex_provider_base_url: config
-                .llm
-                .codex
-                .as_ref()
-                .and_then(|codex| codex.provider_base_url.clone()),
-            codex_model: config
-                .llm
-                .codex
-                .as_ref()
-                .and_then(|codex| codex.model.clone()),
-            codex_provider_name: config
-                .llm
-                .codex
-                .as_ref()
-                .map(|codex| codex.provider_name.clone()),
-            codex_wire_api: config
-                .llm
-                .codex
-                .as_ref()
-                .map(|codex| codex.wire_api.clone()),
-            codex_cue_model: config
-                .llm
-                .codex
-                .as_ref()
-                .and_then(|codex| codex.cue_model.clone()),
-            codex_model_catalog_path: config
-                .llm
-                .codex
-                .as_ref()
-                .and_then(|codex| codex.model_catalog_path.clone()),
-            has_codex_api_key: config
-                .llm
-                .codex
-                .as_ref()
-                .is_some_and(|codex| codex.resolve_api_key().is_some()),
-            codex_custom_active: config.llm.codex_custom_provider_active(),
-            progress_cue_model: config.llm.resolve_progress_cue_model().to_string(),
-            vision_model: config.llm.resolve_vision_model().map(str::to_string),
-            vision_consent_acknowledged: config.llm.vision_consent_acknowledged,
-            gemini_google_search: config.llm.gemini_google_search,
-            tools: LlmToolsSettingsResponse {
-                enabled: config.llm.tools.enabled,
-                dynamic_tool_count: config.llm.tools.dynamic_tool_count,
-                max_tool_turns: config.llm.tools.max_tool_turns,
-                tool_concurrency: config.llm.tools.tool_concurrency,
-            },
-            memory: LlmMemorySettingsResponse {
-                enabled: config.llm.memory.enabled,
-                path: config.llm.memory.path.clone(),
-                top_k: config.llm.memory.top_k,
-                snippet_chars: config.llm.memory.snippet_chars,
-                max_context_chars: config.llm.memory.max_context_chars,
-                auto_retrieve: config.llm.memory.auto_retrieve,
-                auto_remember: config.llm.memory.auto_remember,
-            },
-        },
         server: ServerSettingsResponse {
             admin_token_auth: true,
-            http_bind_addr: config.server.http_bind_addr.clone(),
             grpc_bind_addr: config.server.grpc_bind_addr.clone(),
-            public_addr: config.server.public_addr.clone(),
             lan_dashboard_enabled: config.server.lan_dashboard_enabled,
-            iroh_remote_center_enabled: config.server.iroh_remote_center_enabled,
-            iroh_remote_center_allowed_peer_count: config
-                .server
-                .iroh_remote_center_allowed_peers
-                .len(),
-            system_prompt: config.server.resolved_system_prompt(),
-            status_prompt: config.server.resolved_status_prompt(),
             display_name: config.server.display_name.clone(),
-        },
-        storage: StorageSettingsResponse {
-            media_dir: config.storage.media_dir.clone(),
-            db_path: config.storage.db_path.clone(),
-        },
-        weather: WeatherSettingsResponse {
-            has_api_key: config.weather.resolve_api_key().is_some(),
-            measurement_system: config.weather.measurement_system,
-            temperature_unit: config.weather.temperature_unit,
-        },
-        google_maps: GoogleMapsSettingsResponse {
-            has_api_key: config.google_maps.resolve_api_key().is_some(),
-            geolocation_enabled: config.google_maps.geolocation_enabled,
-            routes_enabled: config.google_maps.routes_enabled,
-            routes_compliance_acknowledged: config.google_maps.routes_compliance_acknowledged,
-            routes_travel_mode: config.google_maps.routes_travel_mode,
-            language_code: config.google_maps.language_code.clone(),
-        },
-        brave_search: BraveSearchSettingsResponse {
-            has_api_key: config.brave_search.resolve_api_key().is_some(),
-        },
-        open_food_facts: OpenFoodFactsSettingsResponse {
-            enabled: config.open_food_facts.enabled,
-            attribution_acknowledged: config.open_food_facts.attribution_acknowledged,
-            attribution: OPEN_FOOD_FACTS_ATTRIBUTION,
-            license_url: OPEN_FOOD_FACTS_LICENSE_URL,
-        },
-        azure_speech: AzureSpeechSettingsResponse {
-            has_subscription_key: config.azure_speech.resolve_subscription_key().is_some(),
-            region: config.azure_speech.region.clone(),
-            voice_name: config.azure_speech.voice_name.clone(),
-            enabled: config.azure_speech.enabled,
-            cloud_consent_acknowledged: config.azure_speech.cloud_consent_acknowledged,
-        },
-        openstreetmap: OpenStreetMapSettingsResponse {
-            enabled: config.openstreetmap.enabled,
-            location_consent_acknowledged: config.openstreetmap.location_consent_acknowledged,
         },
         contacts: ContactsSettingsResponse {
             trust_all_contacts: config.contacts.trust_all_contacts,
@@ -647,76 +383,18 @@ fn listener_restart_required(config: &Config, active_lan_dashboard_enabled: bool
 
 #[derive(Deserialize)]
 struct UpdateSettingsRequest {
-    llm: Option<UpdateLlmSettings>,
+    llm: Option<serde_json::Value>,
     server: Option<UpdateServerSettings>,
-    weather: Option<UpdateWeatherSettings>,
-    google_maps: Option<UpdateGoogleMapsSettings>,
-    brave_search: Option<UpdateBraveSearchSettings>,
-    open_food_facts: Option<UpdateOpenFoodFactsSettings>,
-    azure_speech: Option<UpdateAzureSpeechSettings>,
-    openstreetmap: Option<UpdateOpenStreetMapSettings>,
+    weather: Option<serde_json::Value>,
+    google_maps: Option<serde_json::Value>,
+    brave_search: Option<serde_json::Value>,
+    open_food_facts: Option<serde_json::Value>,
+    azure_speech: Option<serde_json::Value>,
+    openstreetmap: Option<serde_json::Value>,
     contacts: Option<UpdateContactsSettings>,
     dev: Option<UpdateDevSettings>,
     /// Storage is read-only; presence in the request is rejected.
     storage: Option<serde_json::Value>,
-}
-
-#[derive(Deserialize)]
-struct UpdateLlmSettings {
-    provider: Option<LlmProvider>,
-    model: Option<String>,
-    hermes_progress_turns: Option<bool>,
-    /// Opt-in for spoken progress-cue prose. Absent leaves the stored value
-    /// untouched; the stored default is false.
-    spoken_progress_cues: Option<bool>,
-    /// Opt-in for the bounded first-step retry. Absent leaves the stored value
-    /// untouched; the stored default is false.
-    first_step_retry: Option<bool>,
-    /// Opt-in for per-turn diagnostic traces. Absent leaves the stored value
-    /// untouched; the stored default is false.
-    turn_trace: Option<bool>,
-    /// Opt-in for free text inside those traces. Absent leaves the stored value
-    /// untouched; the stored default is false.
-    turn_trace_content: Option<bool>,
-    api_key: Option<String>,
-    base_url: Option<String>,
-    codex_bridge_url: Option<String>,
-    codex_bridge_token: Option<String>,
-    codex_bridge_ca_pem: Option<String>,
-    codex_provider_base_url: Option<String>,
-    codex_model: Option<String>,
-    codex_provider_name: Option<String>,
-    codex_wire_api: Option<String>,
-    codex_cue_model: Option<String>,
-    codex_model_catalog_path: Option<String>,
-    codex_api_key: Option<String>,
-    progress_cue_model: Option<String>,
-    /// An empty string clears the vision model (images stay on the main model).
-    vision_model: Option<String>,
-    /// Camera->cloud consent acknowledgement (fail-closed while false).
-    vision_consent_acknowledged: Option<bool>,
-    gemini_google_search: Option<bool>,
-    tools: Option<UpdateLlmToolsSettings>,
-    memory: Option<UpdateLlmMemorySettings>,
-}
-
-#[derive(Deserialize)]
-struct UpdateLlmMemorySettings {
-    enabled: Option<bool>,
-    path: Option<String>,
-    top_k: Option<usize>,
-    snippet_chars: Option<usize>,
-    max_context_chars: Option<usize>,
-    auto_retrieve: Option<bool>,
-    auto_remember: Option<bool>,
-}
-
-#[derive(Deserialize)]
-struct UpdateLlmToolsSettings {
-    enabled: Option<bool>,
-    dynamic_tool_count: Option<usize>,
-    max_tool_turns: Option<usize>,
-    tool_concurrency: Option<usize>,
 }
 
 #[derive(Deserialize)]
@@ -736,80 +414,24 @@ struct UpdateServerSettings {
     iroh_remote_center_allowed_peers: Option<Vec<String>>,
     /// Write-only. The administration token cannot be cleared through the API.
     admin_token: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_prompt_update")]
-    system_prompt: PromptUpdate,
-    #[serde(default, deserialize_with = "deserialize_prompt_update")]
-    status_prompt: PromptUpdate,
+    #[serde(default)]
+    system_prompt: FieldPresence,
+    #[serde(default)]
+    status_prompt: FieldPresence,
     display_name: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-enum PromptUpdate {
-    #[default]
-    Unchanged,
-    Clear,
-    Set(String),
-}
+#[derive(Default)]
+struct FieldPresence(bool);
 
-fn deserialize_prompt_update<'de, D>(deserializer: D) -> Result<PromptUpdate, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = Option::<String>::deserialize(deserializer)?;
-    match value {
-        None => Ok(PromptUpdate::Clear),
-        Some(prompt) if prompt.is_empty() => Ok(PromptUpdate::Clear),
-        Some(prompt) if prompt.trim().is_empty() => {
-            Err(serde::de::Error::custom("prompt cannot be whitespace-only"))
-        }
-        Some(prompt) => Ok(PromptUpdate::Set(prompt.trim().to_string())),
+impl<'de> Deserialize<'de> for FieldPresence {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let _ = serde::de::IgnoredAny::deserialize(deserializer)?;
+        Ok(Self(true))
     }
-}
-
-#[derive(Deserialize)]
-struct UpdateWeatherSettings {
-    pirate_weather_api_key: Option<String>,
-    measurement_system: Option<MeasurementSystem>,
-    temperature_unit: Option<TemperatureUnit>,
-}
-
-#[derive(Deserialize)]
-struct UpdateGoogleMapsSettings {
-    /// Write-only. An empty string explicitly clears the persisted key.
-    api_key: Option<String>,
-    geolocation_enabled: Option<bool>,
-    routes_enabled: Option<bool>,
-    routes_compliance_acknowledged: Option<bool>,
-    routes_travel_mode: Option<GoogleMapsTravelMode>,
-    language_code: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct UpdateBraveSearchSettings {
-    /// Write-only. An empty string explicitly clears the persisted token.
-    api_key: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct UpdateOpenFoodFactsSettings {
-    enabled: Option<bool>,
-    attribution_acknowledged: Option<bool>,
-}
-
-#[derive(Deserialize)]
-struct UpdateAzureSpeechSettings {
-    /// Write-only. An empty string explicitly clears the persisted key.
-    subscription_key: Option<String>,
-    region: Option<String>,
-    voice_name: Option<String>,
-    enabled: Option<bool>,
-    cloud_consent_acknowledged: Option<bool>,
-}
-
-#[derive(Deserialize)]
-struct UpdateOpenStreetMapSettings {
-    enabled: Option<bool>,
-    location_consent_acknowledged: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -832,7 +454,21 @@ async fn update_settings(
     State(state): State<ApiState>,
     Json(body): Json<UpdateSettingsRequest>,
 ) -> Response {
-    // Reject attempts to change read-only fields.
+    if contains_cosmos_owned_settings(&body) {
+        return (
+            StatusCode::BAD_REQUEST,
+            "assistant, search, maps, weather and speech providers are configured in Cosmos",
+        )
+            .into_response();
+    }
+    if contains_cosmos_owned_prompt(&body) {
+        return (
+            StatusCode::BAD_REQUEST,
+            "assistant instructions are configured in Cosmos",
+        )
+            .into_response();
+    }
+
     if let Some(ref server) = body.server {
         if server.http_bind_addr.is_some() {
             return (
@@ -855,31 +491,6 @@ async fn update_settings(
             )
                 .into_response();
         }
-    }
-    if body.storage.is_some() {
-        return (
-            StatusCode::BAD_REQUEST,
-            "storage paths cannot be changed at runtime (requires server restart)",
-        )
-            .into_response();
-    }
-
-    if let Some(ref llm) = body.llm {
-        if codex_bridge_update_conflicts_with_environment(
-            llm.codex_bridge_url.is_some(),
-            llm.codex_bridge_token.is_some(),
-            std::env::var_os("CODEX_BRIDGE_URL").is_some(),
-            std::env::var_os("CODEX_BRIDGE_TOKEN").is_some(),
-        ) {
-            return (
-                StatusCode::BAD_REQUEST,
-                "Codex bridge URL or token is managed by the process environment",
-            )
-                .into_response();
-        }
-    }
-
-    if let Some(ref server) = body.server {
         if admin_token_update_conflicts_with_environment(
             server.admin_token.is_some(),
             std::env::var_os("PENUMBRA_ADMIN_TOKEN").is_some(),
@@ -890,301 +501,19 @@ async fn update_settings(
             )
                 .into_response();
         }
-        if let PromptUpdate::Set(system_prompt) = &server.system_prompt {
-            if let Err(error) = validate_prompt_template("server.system_prompt", system_prompt) {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    format!("invalid server.system_prompt template: {error}"),
-                )
-                    .into_response();
-            }
-        }
-        if let PromptUpdate::Set(status_prompt) = &server.status_prompt {
-            if let Err(error) = validate_prompt_template("server.status_prompt", status_prompt) {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    format!("invalid server.status_prompt template: {error}"),
-                )
-                    .into_response();
-            }
-        }
+    }
+    if body.storage.is_some() {
+        return (
+            StatusCode::BAD_REQUEST,
+            "storage paths cannot be changed at runtime (requires server restart)",
+        )
+            .into_response();
     }
 
-    let runtime_rebuild_required = settings_require_runtime_rebuild(&body);
-
-    // Serialize config transactions, but keep the live config lock available
-    // to health/auth/settings readers while providers and memory are rebuilt.
     let _update_guard = state.config_update_lock.lock().await;
     let original_config = state.shared_config.read().await.clone();
     let mut config = original_config.clone();
-    // --- LLM changes ---
-    if let Some(ref llm) = body.llm {
-        if let Some(provider) = llm.provider {
-            if provider != config.llm.provider {
-                config.llm.provider = provider;
-            }
-        }
-        if let Some(ref model) = llm.model {
-            if *model != config.llm.model {
-                config.llm.model = model.clone();
-            }
-        }
-        if let Some(enabled) = llm.hermes_progress_turns {
-            // Retired, unconsumed compatibility flag: no production path reads
-            // it to gate cue delivery. Warn once so a persisted `true` is not
-            // mistaken for "progress cues active".
-            static PROGRESS_TURNS_WARNED: std::sync::Once = std::sync::Once::new();
-            PROGRESS_TURNS_WARNED.call_once(move || {
-                warn!(
-                    value = enabled,
-                    "hermes_progress_turns is a retired, unconsumed compatibility flag; \
-                     progress-cue delivery is NOT active (fail-closed) regardless of this value"
-                );
-            });
-            if enabled != config.llm.hermes_progress_turns {
-                config.llm.hermes_progress_turns = enabled;
-            }
-        }
-        if let Some(enabled) = llm.spoken_progress_cues {
-            if enabled != config.llm.spoken_progress_cues {
-                // Loud on the way up only. Enabling changes what the device
-                // says out loud and no automated check in this repository can
-                // hear it; the operator is expected to be listening.
-                if enabled {
-                    warn!(
-                        "spoken_progress_cues armed: the stock action-interstitial RPC will \
-                         now answer a first read-tool action with a fixed phrase. No interim \
-                         turns are streamed, so stock reaches that RPC only for actions \
-                         missing from its own schema catalog. Supervised listening only."
-                    );
-                } else {
-                    info!("spoken_progress_cues disarmed: empty interstitials only");
-                }
-                config.llm.spoken_progress_cues = enabled;
-            }
-        }
-        if let Some(enabled) = llm.first_step_retry {
-            if enabled != config.llm.first_step_retry {
-                if enabled {
-                    // Turning this on is a measurement, not a fix. It buys one
-                    // more chance at a failed first model step by spending wall
-                    // clock against a ~5-6s backend floor, so a retry that also
-                    // fails leaves the turn slower AND still wrong. Compare
-                    // decline rate and time-to-answer before and after; if the
-                    // difference is flat, remove the flag and the retry.
-                    info!(
-                        "first_step_retry armed: a turn whose FIRST model step fails with a \
-                         retryable fault will re-issue that step exactly once. Permanent faults \
-                         (bad key, missing model, refusal) still decline immediately. Measure \
-                         decline rate and latency; delete the flag if the result is flat."
-                    );
-                } else {
-                    info!("first_step_retry disarmed: a failed first model step declines at once");
-                }
-                config.llm.first_step_retry = enabled;
-            }
-        }
-        if let Some(enabled) = llm.turn_trace {
-            if enabled != config.llm.turn_trace {
-                if enabled {
-                    info!(
-                        "turn_trace armed: one diagnostic record per turn is written to the \
-                         rolling turn-traces log and served from /api/traces. Shapes and counts \
-                         only unless turn_trace_content is armed separately. Disarm when the \
-                         fault has been captured."
-                    );
-                } else {
-                    info!("turn_trace disarmed: no turn traces are recorded");
-                }
-                config.llm.turn_trace = enabled;
-            }
-        }
-        if let Some(enabled) = llm.turn_trace_content {
-            if enabled != config.llm.turn_trace_content {
-                // Loud on the way up only. This is the switch that puts what
-                // the wearer said, what the tools were handed, and what was
-                // spoken back onto disk and onto an HTTP response.
-                if enabled {
-                    warn!(
-                        "turn_trace_content armed: turn traces will now record the utterance, \
-                         tool arguments and results, and the spoken answer, and /api/traces will \
-                         serve them. Disarm it to stop both capture and retrieval."
-                    );
-                } else {
-                    info!(
-                        "turn_trace_content disarmed: traces are shape-only and previously \
-                         captured text is no longer served"
-                    );
-                }
-                config.llm.turn_trace_content = enabled;
-            }
-        }
-        if let Some(ref api_key) = llm.api_key {
-            config.llm.api_key = if api_key.is_empty() {
-                None
-            } else {
-                Some(api_key.clone())
-            };
-        }
-        if let Some(ref base_url) = llm.base_url {
-            let new_val = if base_url.is_empty() {
-                None
-            } else {
-                Some(base_url.clone())
-            };
-            if new_val != config.llm.base_url {
-                config.llm.base_url = new_val;
-            }
-        }
-        if let Some(ref bridge_url) = llm.codex_bridge_url {
-            let trimmed = bridge_url.trim();
-            let new_val = if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed.to_string())
-            };
-            if new_val != config.llm.codex_bridge_url {
-                config.llm.codex_bridge_url = new_val;
-            }
-        }
-        if let Some(ref bridge_token) = llm.codex_bridge_token {
-            let trimmed = bridge_token.trim();
-            config.llm.codex_bridge_token = if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed.to_string())
-            };
-        }
-        if let Some(ref bridge_ca_pem) = llm.codex_bridge_ca_pem {
-            let trimmed = bridge_ca_pem.trim();
-            config.llm.codex_bridge_ca_pem = if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed.to_string())
-            };
-        }
-        // Custom OpenAI-compatible provider for the on-device Codex app-server.
-        // Values are validated centrally by config.llm.normalize_and_validate().
-        {
-            let touches_codex = llm.codex_provider_base_url.is_some()
-                || llm.codex_model.is_some()
-                || llm.codex_provider_name.is_some()
-                || llm.codex_wire_api.is_some()
-                || llm.codex_cue_model.is_some()
-                || llm.codex_model_catalog_path.is_some()
-                || llm.codex_api_key.is_some();
-            if touches_codex && config.llm.codex.is_none() {
-                config.llm.codex = Some(crate::config::LlmCodexConfig::default());
-            }
-            if let Some(codex) = config.llm.codex.as_mut() {
-                if let Some(ref base_url) = llm.codex_provider_base_url {
-                    let trimmed = base_url.trim();
-                    codex.provider_base_url = (!trimmed.is_empty()).then(|| trimmed.to_string());
-                }
-                if let Some(ref model) = llm.codex_model {
-                    let trimmed = model.trim();
-                    codex.model = (!trimmed.is_empty()).then(|| trimmed.to_string());
-                }
-                if let Some(ref name) = llm.codex_provider_name {
-                    let trimmed = name.trim();
-                    if !trimmed.is_empty() {
-                        codex.provider_name = trimmed.to_string();
-                    }
-                }
-                if let Some(ref wire) = llm.codex_wire_api {
-                    let trimmed = wire.trim();
-                    if !trimmed.is_empty() {
-                        codex.wire_api = trimmed.to_string();
-                    }
-                }
-                if let Some(ref cue) = llm.codex_cue_model {
-                    let trimmed = cue.trim();
-                    codex.cue_model = (!trimmed.is_empty()).then(|| trimmed.to_string());
-                }
-                if let Some(ref catalog) = llm.codex_model_catalog_path {
-                    let trimmed = catalog.trim();
-                    codex.model_catalog_path = (!trimmed.is_empty()).then(|| trimmed.to_string());
-                }
-                if let Some(ref key) = llm.codex_api_key {
-                    codex.api_key = if key.is_empty() {
-                        None
-                    } else {
-                        Some(key.clone())
-                    };
-                }
-            }
-        }
-        if let Some(ref cue_model) = llm.progress_cue_model {
-            let trimmed = cue_model.trim();
-            config.llm.progress_cue_model = (!trimmed.is_empty()).then(|| trimmed.to_string());
-        }
-        if let Some(ref vision_model) = llm.vision_model {
-            let trimmed = vision_model.trim();
-            config.llm.vision_model = (!trimmed.is_empty()).then(|| trimmed.to_string());
-        }
-        if let Some(acknowledged) = llm.vision_consent_acknowledged {
-            config.llm.vision_consent_acknowledged = acknowledged;
-        }
-        if let Some(v) = llm.gemini_google_search {
-            if v != config.llm.gemini_google_search {
-                config.llm.gemini_google_search = v;
-            }
-        }
-        if let Some(ref tools) = llm.tools {
-            if let Some(enabled) = tools.enabled {
-                if enabled != config.llm.tools.enabled {
-                    config.llm.tools.enabled = enabled;
-                }
-            }
-            if let Some(dynamic_tool_count) = tools.dynamic_tool_count {
-                if dynamic_tool_count != config.llm.tools.dynamic_tool_count {
-                    config.llm.tools.dynamic_tool_count = dynamic_tool_count;
-                }
-            }
-            if let Some(max_tool_turns) = tools.max_tool_turns {
-                if max_tool_turns != config.llm.tools.max_tool_turns {
-                    config.llm.tools.max_tool_turns = max_tool_turns;
-                }
-            }
-            if let Some(tool_concurrency) = tools.tool_concurrency {
-                if tool_concurrency != config.llm.tools.tool_concurrency {
-                    config.llm.tools.tool_concurrency = tool_concurrency;
-                }
-            }
-        }
-        if let Some(ref memory) = llm.memory {
-            if let Some(enabled) = memory.enabled {
-                config.llm.memory.enabled = enabled;
-            }
-            if let Some(ref path) = memory.path {
-                let trimmed = path.trim();
-                if trimmed.is_empty() {
-                    return (StatusCode::BAD_REQUEST, "llm.memory.path cannot be empty")
-                        .into_response();
-                }
-                if trimmed != config.llm.memory.path {
-                    config.llm.memory.path = trimmed.to_string();
-                }
-            }
-            if let Some(top_k) = memory.top_k {
-                config.llm.memory.top_k = top_k.max(1);
-            }
-            if let Some(snippet_chars) = memory.snippet_chars {
-                config.llm.memory.snippet_chars = snippet_chars.max(1);
-            }
-            if let Some(max_context_chars) = memory.max_context_chars {
-                config.llm.memory.max_context_chars = max_context_chars.max(1);
-            }
-            if let Some(auto_retrieve) = memory.auto_retrieve {
-                config.llm.memory.auto_retrieve = auto_retrieve;
-            }
-            if let Some(auto_remember) = memory.auto_remember {
-                config.llm.memory.auto_remember = auto_remember;
-            }
-        }
-    }
 
-    // --- Server changes ---
     if let Some(ref server) = body.server {
         if let Some(enabled) = server.lan_dashboard_enabled {
             config.server.lan_dashboard_enabled = enabled;
@@ -1208,53 +537,12 @@ async fn update_settings(
             )
                 .into_response();
         }
-        match &server.system_prompt {
-            PromptUpdate::Unchanged => {}
-            PromptUpdate::Clear => {
-                if config.server.system_prompt.is_some() {
-                    config.server.system_prompt = None;
-                }
-            }
-            PromptUpdate::Set(system_prompt) => {
-                match ServerConfig::configured_system_prompt(system_prompt.clone()) {
-                    Ok(new_val) => {
-                        if new_val != config.server.system_prompt {
-                            config.server.system_prompt = new_val;
-                        }
-                    }
-                    Err(error) => {
-                        return (StatusCode::BAD_REQUEST, error).into_response();
-                    }
-                }
-            }
-        }
-        match &server.status_prompt {
-            PromptUpdate::Unchanged => {}
-            PromptUpdate::Clear => {
-                if config.server.status_prompt.is_some() {
-                    config.server.status_prompt = None;
-                }
-            }
-            PromptUpdate::Set(status_prompt) => {
-                match ServerConfig::configured_status_prompt(status_prompt.clone()) {
-                    Ok(new_val) => {
-                        if new_val != config.server.status_prompt {
-                            config.server.status_prompt = new_val;
-                        }
-                    }
-                    Err(error) => {
-                        return (StatusCode::BAD_REQUEST, error).into_response();
-                    }
-                }
-            }
-        }
         if let Some(ref display_name) = server.display_name {
-            let new_val = if display_name.is_empty() {
+            config.server.display_name = if display_name.is_empty() {
                 None
             } else {
                 Some(display_name.clone())
             };
-            config.server.display_name = new_val;
         }
         if let Some(ref admin_token) = server.admin_token {
             if let Err(error) = validate_admin_token(admin_token) {
@@ -1264,340 +552,38 @@ async fn update_settings(
         }
     }
 
-    // --- Weather changes ---
-    if let Some(ref weather) = body.weather {
-        if let Some(ref key) = weather.pirate_weather_api_key {
-            let new_val = if key.is_empty() {
-                None
-            } else {
-                Some(key.clone())
-            };
-            if new_val != config.weather.pirate_weather_api_key {
-                config.weather.pirate_weather_api_key = new_val;
-            }
-        }
-        if let Some(measurement_system) = weather.measurement_system {
-            config.weather.measurement_system = measurement_system;
-        }
-        if let Some(temperature_unit) = weather.temperature_unit {
-            config.weather.temperature_unit = temperature_unit;
-        }
-    }
-
-    // --- Brave Search changes ---
-    if let Some(ref brave_search) = body.brave_search {
-        if let Some(ref key) = brave_search.api_key {
-            let trimmed = key.trim();
-            config.brave_search.api_key = (!trimmed.is_empty()).then(|| trimmed.to_string());
-        }
-    }
-
-    // --- Google Maps changes ---
-    if let Some(ref google_maps) = body.google_maps {
-        if let Some(ref key) = google_maps.api_key {
-            let trimmed = key.trim();
-            config.google_maps.api_key = if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed.to_string())
-            };
-        }
-        if let Some(enabled) = google_maps.geolocation_enabled {
-            config.google_maps.geolocation_enabled = enabled;
-        }
-        if let Some(enabled) = google_maps.routes_enabled {
-            config.google_maps.routes_enabled = enabled;
-        }
-        if let Some(acknowledged) = google_maps.routes_compliance_acknowledged {
-            config.google_maps.routes_compliance_acknowledged = acknowledged;
-        }
-        if let Some(mode) = google_maps.routes_travel_mode {
-            config.google_maps.routes_travel_mode = mode;
-        }
-        if let Some(ref language_code) = google_maps.language_code {
-            config.google_maps.language_code = language_code.clone();
-        }
-    }
-
-    // --- Open Food Facts changes ---
-    if let Some(ref open_food_facts) = body.open_food_facts {
-        if let Some(enabled) = open_food_facts.enabled {
-            config.open_food_facts.enabled = enabled;
-        }
-        if let Some(acknowledged) = open_food_facts.attribution_acknowledged {
-            config.open_food_facts.attribution_acknowledged = acknowledged;
-        }
-    }
-
-    // --- Azure Speech changes ---
-    if let Some(ref azure_speech) = body.azure_speech {
-        if let Some(ref key) = azure_speech.subscription_key {
-            config.azure_speech.subscription_key = if key.trim().is_empty() {
-                None
-            } else {
-                Some(key.trim().to_string())
-            };
-        }
-        if let Some(ref region) = azure_speech.region {
-            config.azure_speech.region = if region.trim().is_empty() {
-                None
-            } else {
-                Some(region.trim().to_string())
-            };
-        }
-        if let Some(ref voice_name) = azure_speech.voice_name {
-            config.azure_speech.voice_name = if voice_name.trim().is_empty() {
-                None
-            } else {
-                Some(voice_name.trim().to_string())
-            };
-        }
-        if let Some(enabled) = azure_speech.enabled {
-            config.azure_speech.enabled = enabled;
-        }
-        if let Some(acknowledged) = azure_speech.cloud_consent_acknowledged {
-            config.azure_speech.cloud_consent_acknowledged = acknowledged;
-        }
-    }
-
-    // --- OpenStreetMap changes ---
-    if let Some(ref openstreetmap) = body.openstreetmap {
-        if let Some(enabled) = openstreetmap.enabled {
-            config.openstreetmap.enabled = enabled;
-        }
-        if let Some(acknowledged) = openstreetmap.location_consent_acknowledged {
-            config.openstreetmap.location_consent_acknowledged = acknowledged;
-        }
-    }
-
-    // --- Contacts changes ---
     if let Some(ref contacts) = body.contacts {
-        if let Some(new_val) = contacts.trust_all_contacts {
-            config.contacts.trust_all_contacts = new_val;
+        if let Some(value) = contacts.trust_all_contacts {
+            config.contacts.trust_all_contacts = value;
         }
-        if let Some(new_val) = contacts.allow_all_inbound {
-            config.contacts.allow_all_inbound = new_val;
+        if let Some(value) = contacts.allow_all_inbound {
+            config.contacts.allow_all_inbound = value;
         }
     }
 
-    // --- Dev changes ---
     if let Some(ref dev) = body.dev {
-        if let Some(new_val) = dev.apk_install_enabled {
-            config.dev.apk_install_enabled = new_val;
+        if let Some(value) = dev.apk_install_enabled {
+            config.dev.apk_install_enabled = value;
         }
-        if let Some(new_val) = dev.injected_package_recovery_enabled {
-            config.dev.injected_package_recovery_enabled = new_val;
+        if let Some(value) = dev.injected_package_recovery_enabled {
+            config.dev.injected_package_recovery_enabled = value;
         }
         if let Some(ref digest) = dev.injected_package_recovery_hook_sha256 {
-            let trimmed = digest.trim();
-            config.dev.injected_package_recovery_hook_sha256 = if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed.to_string())
-            };
+            let digest = digest.trim();
+            config.dev.injected_package_recovery_hook_sha256 =
+                (!digest.is_empty()).then(|| digest.to_string());
         }
         if let Some(ref digest) = dev.injected_package_recovery_hook_injector_sha256 {
-            let trimmed = digest.trim();
-            config.dev.injected_package_recovery_hook_injector_sha256 = if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed.to_string())
-            };
+            let digest = digest.trim();
+            config.dev.injected_package_recovery_hook_injector_sha256 =
+                (!digest.is_empty()).then(|| digest.to_string());
         }
     }
 
     if let Err(error) = config.dev.validate() {
         return (StatusCode::BAD_REQUEST, error).into_response();
     }
-    if let Err(error) = config.llm.normalize_and_validate() {
-        return (StatusCode::BAD_REQUEST, error).into_response();
-    }
-    if let Err(error) = config.google_maps.normalize_and_validate() {
-        return (StatusCode::BAD_REQUEST, error).into_response();
-    }
-    if body.open_food_facts.is_some() {
-        if let Err(error) =
-            feature_flags::validate_open_food_facts_provider_dependency(&config).await
-        {
-            return error.into_response();
-        }
-    } else if let Err(error) = config.open_food_facts.validate() {
-        return (StatusCode::BAD_REQUEST, error).into_response();
-    }
-    if let Err(error) = config.azure_speech.normalize_and_validate() {
-        return (StatusCode::BAD_REQUEST, error).into_response();
-    }
-    if let Err(error) = config.openstreetmap.validate() {
-        return (StatusCode::BAD_REQUEST, error).into_response();
-    }
-
-    // Listener/auth/display/contact/dev-only changes do not affect AiBus or
-    // Speech. Committing them directly avoids touching the active Memvid file
-    // and keeps routine dashboard provisioning fast.
-    if !runtime_rebuild_required {
-        if let Err(error) = persist_config_durably(
-            &state.config_path,
-            &config,
-            &original_config,
-            &state.esim_bridge,
-        )
-        .await
-        {
-            warn!(error = %error, "failed to persist config");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "settings update could not be confirmed; reload settings before retrying",
-            )
-                .into_response();
-        }
-        {
-            let mut live_config = state.shared_config.write().await;
-            *live_config = config.clone();
-        }
-        let settings = settings_response_with_restart(
-            &config,
-            listener_restart_required(&config, state.active_lan_dashboard_enabled),
-        );
-        info!("settings updated successfully without runtime rebuild");
-        return Json(settings).into_response();
-    }
-
-    let new_resolved = Arc::new(ResolvedConfig::resolve(config.clone()));
-    let google_maps = match GoogleMapsClient::from_options(new_resolved.google_maps_options.clone())
-    {
-        Ok(client) => client,
-        Err(error) => {
-            warn!(
-                error_kind = error.kind(),
-                "failed to initialize Google Maps provider, rolling back"
-            );
-            return (
-                StatusCode::BAD_REQUEST,
-                "invalid Google Maps provider configuration",
-            )
-                .into_response();
-        }
-    };
-    let open_food_facts =
-        match OpenFoodFactsClient::from_options(new_resolved.open_food_facts_options.clone()) {
-            Ok(client) => client,
-            Err(error) => {
-                warn!(
-                    error_kind = error.kind(),
-                    "failed to initialize Open Food Facts provider, rolling back"
-                );
-                return (
-                    StatusCode::BAD_REQUEST,
-                    "invalid Open Food Facts provider configuration",
-                )
-                    .into_response();
-            }
-        };
-    let azure_speech =
-        match AzureSpeechClient::from_options(new_resolved.azure_speech_options.clone()) {
-            Ok(client) => client,
-            Err(error) => {
-                warn!(
-                    error_kind = error.kind(),
-                    "failed to initialize Azure Speech provider, rolling back"
-                );
-                return (
-                    StatusCode::BAD_REQUEST,
-                    "invalid Azure Speech provider configuration",
-                )
-                    .into_response();
-            }
-        };
-
-    // --- Validate: build a new LLM/AiBus tree before committing ---
-    let memory = if !config.llm.memory.enabled {
-        None
-    } else if config.llm.memory == original_config.llm.memory {
-        match state.active_memory.read().await.clone() {
-            Some(memory) => Some(memory),
-            // Memory config is unchanged and no service is currently active: it
-            // failed to initialize earlier (e.g. the memvid flock/ENOSYS on
-            // sdcardfs) and is running degraded. Re-opening would fail the same
-            // way, so keep memory degraded and still apply this (unrelated)
-            // settings change instead of rejecting it. A genuine memory-config
-            // change (the `else` branch) still validates the new configuration.
-            None => match MemoryService::open(config.llm.memory.clone()).await {
-                Ok(memory) => Some(memory),
-                Err(error) => {
-                    warn!(
-                        error = %error,
-                        "assistant memory still unavailable; applying settings with memory degraded"
-                    );
-                    None
-                }
-            },
-        }
-    } else {
-        match MemoryService::open(config.llm.memory.clone()).await {
-            Ok(memory) => Some(memory),
-            Err(error) => {
-                warn!(error = %error, "failed to initialize assistant memory, rolling back");
-                return (
-                    StatusCode::BAD_REQUEST,
-                    format!("invalid memory configuration: {error}"),
-                )
-                    .into_response();
-            }
-        }
-    };
-
-    let agent_result = LlmAgent::from_config(
-        &new_resolved,
-        state.http_client.clone(),
-        state.llm_request_logger.clone(),
-        memory.clone(),
-    )
-    .await
-    .map_err(|e| e.to_string());
-
-    let (new_aibus, new_composition_agent) = match agent_result {
-        Ok(new_agent) => {
-            let agent = Arc::new(new_agent);
-            let external_clients = AiBusExternalClients::new(
-                google_maps,
-                open_food_facts,
-                Some(state.spotify.clone()),
-            )
-            .with_food_runtime_gate(state.food_runtime_gate.clone());
-            (
-                Arc::new(
-                    AiBusHanders::new_with_external_clients(
-                        agent.clone(),
-                        new_resolved.clone(),
-                        state.shared_config.clone(),
-                        NearbyClient::new(
-                            state.http_client.clone(),
-                            new_resolved.openstreetmap_options.clone(),
-                        ),
-                        state.http_client.clone(),
-                        state.db.clone(),
-                        memory.clone(),
-                        external_clients,
-                    )
-                    .with_function_execution(state.aibus.function_execution_handler()),
-                ),
-                agent,
-            )
-        }
-        Err(e) => {
-            warn!(error = %e, "failed to build AiBus service with new settings, rolling back");
-            return (
-                StatusCode::BAD_REQUEST,
-                format!("invalid LLM configuration: {e}"),
-            )
-                .into_response();
-        }
-    };
-
-    // Persist before publishing the new runtime tree. A successful response
-    // must survive reboot; on any disk failure both live and stored settings
-    // remain at the previous configuration.
-    if let Err(e) = persist_config_durably(
+    if let Err(error) = persist_config_durably(
         &state.config_path,
         &config,
         &original_config,
@@ -1605,7 +591,7 @@ async fn update_settings(
     )
     .await
     {
-        warn!(error = %e, "failed to persist config, rolling back");
+        warn!(error = %error, "failed to persist config");
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             "settings update could not be confirmed; reload settings before retrying",
@@ -1613,95 +599,33 @@ async fn update_settings(
             .into_response();
     }
 
-    if config.weather.temperature_unit != original_config.weather.temperature_unit {
-        if let Err(error) =
-            sync_weather_temperature_unit_to_device(config.weather.temperature_unit).await
-        {
-            // A bridge write can fail after the provider applied it but before
-            // the acknowledgement arrived. Best-effort restore both device UI
-            // state and durable configuration before reporting failure.
-            let device_rollback =
-                sync_weather_temperature_unit_to_device(original_config.weather.temperature_unit)
-                    .await;
-            let config_rollback = persist_config_durably(
-                &state.config_path,
-                &original_config,
-                &config,
-                &state.esim_bridge,
-            )
-            .await;
-            warn!(
-                error = %error,
-                device_rollback_ok = device_rollback.is_ok(),
-                config_rollback_ok = config_rollback.is_ok(),
-                "weather unit synchronization failed; rolled back settings"
-            );
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "weather unit could not be synchronized to the stock display; reload settings before retrying",
-            )
-                .into_response();
-        }
-    }
-
-    state.aibus.replace(new_aibus).await;
-    state
-        .composition_service
-        .replace(new_composition_agent.clone(), new_resolved.clone())
-        .await;
-    state
-        .speech_service
-        .replace_with_translation(azure_speech, new_composition_agent, new_resolved)
-        .await;
-    *state.active_memory.write().await = memory;
     {
         let mut live_config = state.shared_config.write().await;
         *live_config = config.clone();
     }
-    // Hot-apply the llm settings whose consumers cannot read the live config
-    // for themselves (the stock action-interstitial RPC boundary, and the
-    // chat-turn loop config). Deliberately here, at the commit, and not next to
-    // `ResolvedConfig::resolve` above: every rollback path between the two
-    // returns without committing, and arming from a config that was rolled back
-    // would leave the process disagreeing with both disk and the settings
-    // response.
-    crate::config::apply_spoken_progress_cues(config.llm.spoken_progress_cues);
-    crate::config::apply_first_step_retry(config.llm.first_step_retry);
-    crate::config::apply_turn_trace(config.llm.turn_trace, config.llm.turn_trace_content);
-    state.dedup.clear().await;
-    info!(
-        provider = %config.llm.provider,
-        model = %config.llm.model,
-        "hot-reloaded AiBus, Composition, and Speech services"
-    );
 
-    // Build response from the updated config.
-    let settings = settings_response_with_restart(
+    info!("Pin-local settings updated");
+    Json(settings_response_with_restart(
         &config,
         listener_restart_required(&config, state.active_lan_dashboard_enabled),
-    );
-
-    info!("settings updated successfully");
-    Json(settings).into_response()
+    ))
+    .into_response()
 }
 
-fn settings_require_runtime_rebuild(body: &UpdateSettingsRequest) -> bool {
+fn contains_cosmos_owned_settings(body: &UpdateSettingsRequest) -> bool {
     body.llm.is_some()
         || body.weather.is_some()
         || body.google_maps.is_some()
-        // A search-subscription write has to rebuild: the Brave client is
-        // constructed from the resolved config when the AiBus tree is built,
-        // and the `web_search` tool is advertised only when that client says
-        // it is configured. Persisting the token without a rebuild leaves the
-        // running planner unable to see the tool until the next restart.
         || body.brave_search.is_some()
         || body.open_food_facts.is_some()
         || body.azure_speech.is_some()
         || body.openstreetmap.is_some()
-        || body.server.as_ref().is_some_and(|server| {
-            server.system_prompt != PromptUpdate::Unchanged
-                || server.status_prompt != PromptUpdate::Unchanged
-        })
+}
+
+fn contains_cosmos_owned_prompt(body: &UpdateSettingsRequest) -> bool {
+    body.server
+        .as_ref()
+        .is_some_and(|server| server.system_prompt.0 || server.status_prompt.0)
 }
 
 fn admin_token_update_conflicts_with_environment(
@@ -1709,16 +633,6 @@ fn admin_token_update_conflicts_with_environment(
     environment_present: bool,
 ) -> bool {
     update_requested && environment_present
-}
-
-fn codex_bridge_update_conflicts_with_environment(
-    url_update_requested: bool,
-    token_update_requested: bool,
-    url_environment_present: bool,
-    token_environment_present: bool,
-) -> bool {
-    (url_update_requested && url_environment_present)
-        || (token_update_requested && token_environment_present)
 }
 
 /// Persist the config to disk using `toml_edit` for format-preserving writes.
@@ -2756,95 +1670,50 @@ mod tests {
         );
     }
 
-    #[derive(Debug, Deserialize)]
-    struct PromptUpdateFixture {
-        #[serde(default, deserialize_with = "deserialize_prompt_update")]
-        prompt: PromptUpdate,
+    #[test]
+    fn settings_response_is_pin_local() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Config::load(&dir.path().join("missing.toml")).unwrap();
+        let json = serde_json::to_value(settings_response(&config)).unwrap();
+        let object = json.as_object().unwrap();
+
+        assert_eq!(object.len(), 4);
+        for provider in [
+            "llm",
+            "weather",
+            "google_maps",
+            "brave_search",
+            "open_food_facts",
+            "azure_speech",
+            "openstreetmap",
+        ] {
+            assert!(!object.contains_key(provider), "{provider}");
+        }
+        assert_eq!(object["server"]["admin_token_auth"], true);
     }
 
     #[test]
-    fn prompt_update_missing_is_unchanged() {
-        let fixture: PromptUpdateFixture = serde_json::from_str(r#"{}"#).unwrap();
-        assert_eq!(fixture.prompt, PromptUpdate::Unchanged);
-    }
-
-    #[test]
-    fn prompt_update_null_clears() {
-        let fixture: PromptUpdateFixture = serde_json::from_str(r#"{"prompt":null}"#).unwrap();
-        assert_eq!(fixture.prompt, PromptUpdate::Clear);
-    }
-
-    #[test]
-    fn prompt_update_empty_string_clears() {
-        let fixture: PromptUpdateFixture = serde_json::from_str(r#"{"prompt":""}"#).unwrap();
-        assert_eq!(fixture.prompt, PromptUpdate::Clear);
-    }
-
-    #[test]
-    fn prompt_update_string_sets_trimmed_custom_prompt() {
-        let fixture: PromptUpdateFixture =
-            serde_json::from_str(r#"{"prompt":"  Custom prompt  "}"#).unwrap();
-        assert_eq!(fixture.prompt, PromptUpdate::Set("Custom prompt".into()));
-    }
-
-    #[test]
-    fn listener_and_access_settings_do_not_rebuild_runtime_services() {
-        let body: UpdateSettingsRequest = serde_json::from_str(
-            r#"{
-                "server":{"lan_dashboard_enabled":true,"display_name":"Pin"},
-                "contacts":{"trust_all_contacts":true},
-                "dev":{"apk_install_enabled":false}
-            }"#,
-        )
-        .unwrap();
-
-        assert!(!settings_require_runtime_rebuild(&body));
-    }
-
-    #[test]
-    fn provider_and_prompt_settings_rebuild_runtime_services() {
+    fn provider_and_prompt_writes_are_cosmos_owned() {
         for json in [
             r#"{"llm":{}}"#,
+            r#"{"weather":{}}"#,
             r#"{"google_maps":{}}"#,
             r#"{"brave_search":{}}"#,
+            r#"{"open_food_facts":{}}"#,
             r#"{"azure_speech":{}}"#,
-            r#"{"server":{"system_prompt":"Keep answers short."}}"#,
+            r#"{"openstreetmap":{}}"#,
         ] {
             let body: UpdateSettingsRequest = serde_json::from_str(json).unwrap();
-            assert!(settings_require_runtime_rebuild(&body), "{json}");
+            assert!(contains_cosmos_owned_settings(&body), "{json}");
         }
-    }
 
-    #[test]
-    fn prompt_update_whitespace_string_is_rejected() {
-        let error = serde_json::from_str::<PromptUpdateFixture>(r#"{"prompt":"   "}"#)
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("prompt cannot be whitespace-only"));
-    }
-
-    #[test]
-    fn codex_settings_response_exposes_only_token_presence() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut config = Config::load(&dir.path().join("missing.toml")).unwrap();
-        config.llm.provider = LlmProvider::Codex;
-        config.llm.codex_bridge_url = Some("http://127.0.0.1:9876".into());
-        config.llm.codex_bridge_token = Some("bridge-secret-0123456789abcdefghijkl".into());
-        config.llm.codex_bridge_ca_pem = Some(crate::llm::codex_bridge::TEST_CA_PEM.into());
-
-        let json = serde_json::to_value(settings_response(&config)).unwrap();
-        let llm = json.get("llm").unwrap();
-
-        assert_eq!(llm.get("provider").unwrap(), "codex");
-        assert!(llm.get("codex_bridge_url").unwrap().is_string());
-        assert_eq!(llm.get("has_codex_bridge_token").unwrap(), true);
-        assert_eq!(llm.get("has_codex_bridge_ca").unwrap(), true);
-        assert!(llm.get("codex_bridge_token").is_none());
-        assert!(llm.get("codex_bridge_ca_pem").is_none());
-        assert!(!json
-            .to_string()
-            .contains("bridge-secret-0123456789abcdefghijkl"));
-        assert!(!json.to_string().contains("BEGIN CERTIFICATE"));
+        for json in [
+            r#"{"server":{"system_prompt":"Keep answers short."}}"#,
+            r#"{"server":{"status_prompt":null}}"#,
+        ] {
+            let body: UpdateSettingsRequest = serde_json::from_str(json).unwrap();
+            assert!(contains_cosmos_owned_prompt(&body), "{json}");
+        }
     }
 
     #[test]
@@ -2880,14 +1749,13 @@ mod tests {
         config.server.iroh_remote_center_allowed_peers = vec![peer.into()];
 
         let response = serde_json::to_value(settings_response(&config)).unwrap();
-        assert_eq!(response["server"]["iroh_remote_center_enabled"], true);
-        assert_eq!(
-            response["server"]["iroh_remote_center_allowed_peer_count"],
-            1
-        );
-        assert!(response["server"]
-            .get("iroh_remote_center_allowed_peers")
-            .is_none());
+        for field in [
+            "iroh_remote_center_enabled",
+            "iroh_remote_center_allowed_peer_count",
+            "iroh_remote_center_allowed_peers",
+        ] {
+            assert!(response["server"].get(field).is_none(), "{field}");
+        }
         assert!(!response.to_string().contains(peer));
 
         persist_config(&path, &config).unwrap();
@@ -2974,62 +1842,6 @@ mod tests {
     }
 
     #[test]
-    fn environment_authority_rejects_shadowed_codex_bridge_updates() {
-        assert!(codex_bridge_update_conflicts_with_environment(
-            true, false, true, false,
-        ));
-        assert!(codex_bridge_update_conflicts_with_environment(
-            false, true, false, true,
-        ));
-        assert!(!codex_bridge_update_conflicts_with_environment(
-            true, false, false, true,
-        ));
-        assert!(!codex_bridge_update_conflicts_with_environment(
-            false, true, true, false,
-        ));
-        assert!(!codex_bridge_update_conflicts_with_environment(
-            false, false, true, true,
-        ));
-    }
-
-    #[test]
-    fn codex_bridge_settings_are_persisted_and_clearable() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("config.toml");
-        let mut config = Config::load(&dir.path().join("missing.toml")).unwrap();
-        config.llm.provider = LlmProvider::Codex;
-        config.llm.model = "gpt-5.4".into();
-        config.llm.codex_bridge_url = Some("http://127.0.0.1:9876".into());
-        config.llm.codex_bridge_token = Some("bridge-secret-0123456789abcdefghijkl".into());
-        config.llm.codex_bridge_ca_pem = Some(crate::llm::codex_bridge::TEST_CA_PEM.into());
-
-        persist_config(&path, &config).unwrap();
-        let loaded = Config::load(&path).unwrap();
-        assert_eq!(loaded.llm.provider, LlmProvider::Codex);
-        assert_eq!(
-            loaded.llm.codex_bridge_url.as_deref(),
-            Some("http://127.0.0.1:9876")
-        );
-        assert_eq!(
-            loaded.llm.codex_bridge_token.as_deref(),
-            Some("bridge-secret-0123456789abcdefghijkl")
-        );
-        assert_eq!(
-            loaded.llm.codex_bridge_ca_pem.as_deref(),
-            Some(crate::llm::codex_bridge::TEST_CA_PEM)
-        );
-
-        config.llm.codex_bridge_url = None;
-        config.llm.codex_bridge_token = None;
-        config.llm.codex_bridge_ca_pem = None;
-        persist_config(&path, &config).unwrap();
-        let persisted = std::fs::read_to_string(path).unwrap();
-        assert!(!persisted.contains("codex_bridge_url"));
-        assert!(!persisted.contains("codex_bridge_token"));
-        assert!(!persisted.contains("codex_bridge_ca_pem"));
-    }
-
-    #[test]
     fn injected_package_recovery_settings_are_persisted_and_clearable() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
@@ -3069,332 +1881,6 @@ mod tests {
         // settings-update surface: DevConfig::validate rejects it.
         config.dev.injected_package_recovery_hook_sha256 = Some("not-a-digest".into());
         assert!(config.dev.validate().is_err());
-    }
-
-    #[test]
-    fn spoken_progress_cues_ships_off_and_is_settable_independently_of_the_retired_flag() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut config = Config::load(&dir.path().join("missing.toml")).unwrap();
-        let defaults = serde_json::to_value(settings_response(&config)).unwrap();
-        assert_eq!(defaults["llm"]["spoken_progress_cues"], false);
-        // The retired neighbour ships `true`; reusing it would have armed
-        // every fresh install.
-        assert_eq!(defaults["llm"]["hermes_progress_turns"], true);
-
-        config.llm.spoken_progress_cues = true;
-        let armed = serde_json::to_value(settings_response(&config)).unwrap();
-        assert_eq!(armed["llm"]["spoken_progress_cues"], true);
-
-        // Absent in the request means "leave stored value alone".
-        let untouched: UpdateSettingsRequest = serde_json::from_str(r#"{"llm":{}}"#).unwrap();
-        assert_eq!(untouched.llm.unwrap().spoken_progress_cues, None);
-
-        let update: UpdateSettingsRequest =
-            serde_json::from_str(r#"{"llm":{"spoken_progress_cues":true}}"#).unwrap();
-        assert_eq!(update.llm.unwrap().spoken_progress_cues, Some(true));
-
-        // Any llm write takes the rebuild path, which is the branch containing
-        // the hot-apply of this setting.
-        let body: UpdateSettingsRequest =
-            serde_json::from_str(r#"{"llm":{"spoken_progress_cues":true}}"#).unwrap();
-        assert!(settings_require_runtime_rebuild(&body));
-    }
-
-    #[test]
-    fn first_step_retry_ships_off_and_is_settable() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut config = Config::load(&dir.path().join("missing.toml")).unwrap();
-        let defaults = serde_json::to_value(settings_response(&config)).unwrap();
-        assert_eq!(defaults["llm"]["first_step_retry"], false);
-
-        config.llm.first_step_retry = true;
-        let armed = serde_json::to_value(settings_response(&config)).unwrap();
-        assert_eq!(armed["llm"]["first_step_retry"], true);
-
-        // Absent in the request means "leave stored value alone".
-        let untouched: UpdateSettingsRequest = serde_json::from_str(r#"{"llm":{}}"#).unwrap();
-        assert_eq!(untouched.llm.unwrap().first_step_retry, None);
-
-        let update: UpdateSettingsRequest =
-            serde_json::from_str(r#"{"llm":{"first_step_retry":true}}"#).unwrap();
-        assert_eq!(update.llm.unwrap().first_step_retry, Some(true));
-
-        // Any llm write takes the rebuild path, which is the branch containing
-        // the hot-apply of this setting.
-        let body: UpdateSettingsRequest =
-            serde_json::from_str(r#"{"llm":{"first_step_retry":true}}"#).unwrap();
-        assert!(settings_require_runtime_rebuild(&body));
-    }
-
-    #[test]
-    fn turn_trace_ships_off_in_both_halves_and_each_is_settable_alone() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut config = Config::load(&dir.path().join("missing.toml")).unwrap();
-        let defaults = serde_json::to_value(settings_response(&config)).unwrap();
-        assert_eq!(defaults["llm"]["turn_trace"], false);
-        assert_eq!(defaults["llm"]["turn_trace_content"], false);
-
-        // Arming the master switch alone leaves content capture off, so the
-        // default capture is shape-only.
-        config.llm.turn_trace = true;
-        let armed = serde_json::to_value(settings_response(&config)).unwrap();
-        assert_eq!(armed["llm"]["turn_trace"], true);
-        assert_eq!(armed["llm"]["turn_trace_content"], false);
-
-        // Absent in the request means "leave stored value alone".
-        let untouched: UpdateSettingsRequest = serde_json::from_str(r#"{"llm":{}}"#).unwrap();
-        let untouched = untouched.llm.unwrap();
-        assert_eq!(untouched.turn_trace, None);
-        assert_eq!(untouched.turn_trace_content, None);
-
-        let update: UpdateSettingsRequest =
-            serde_json::from_str(r#"{"llm":{"turn_trace":true,"turn_trace_content":true}}"#)
-                .unwrap();
-        let update = update.llm.unwrap();
-        assert_eq!(update.turn_trace, Some(true));
-        assert_eq!(update.turn_trace_content, Some(true));
-
-        // Any llm write takes the rebuild path, which is the branch containing
-        // the hot-apply of these settings.
-        let body: UpdateSettingsRequest =
-            serde_json::from_str(r#"{"llm":{"turn_trace":true}}"#).unwrap();
-        assert!(settings_require_runtime_rebuild(&body));
-    }
-
-    #[test]
-    fn weather_unit_preferences_default_and_round_trip() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("config.toml");
-        let mut config = Config::load(&dir.path().join("missing.toml")).unwrap();
-        let defaults = serde_json::to_value(settings_response(&config)).unwrap();
-        assert_eq!(defaults["weather"]["measurement_system"], "metric");
-        assert_eq!(defaults["weather"]["temperature_unit"], "celsius");
-
-        config.weather.measurement_system = MeasurementSystem::Imperial;
-        config.weather.temperature_unit = TemperatureUnit::Fahrenheit;
-        persist_config(&path, &config).unwrap();
-        let loaded = Config::load(&path).unwrap();
-        assert_eq!(
-            loaded.weather.measurement_system,
-            MeasurementSystem::Imperial
-        );
-        assert_eq!(loaded.weather.temperature_unit, TemperatureUnit::Fahrenheit);
-
-        let update: UpdateSettingsRequest = serde_json::from_str(
-            r#"{"weather":{"measurement_system":"metric","temperature_unit":"celsius"}}"#,
-        )
-        .unwrap();
-        let weather = update.weather.unwrap();
-        assert_eq!(weather.measurement_system, Some(MeasurementSystem::Metric));
-        assert_eq!(weather.temperature_unit, Some(TemperatureUnit::Celsius));
-    }
-
-    #[test]
-    fn google_maps_settings_response_exposes_only_key_presence() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut config = Config::load(&dir.path().join("missing.toml")).unwrap();
-        config.google_maps.api_key = Some("maps-secret".into());
-        config.google_maps.geolocation_enabled = true;
-        config.google_maps.routes_travel_mode = GoogleMapsTravelMode::Bicycle;
-
-        let json = serde_json::to_value(settings_response(&config)).unwrap();
-        let maps = json.get("google_maps").unwrap();
-
-        assert_eq!(maps.get("has_api_key").unwrap(), true);
-        assert_eq!(maps.get("geolocation_enabled").unwrap(), true);
-        assert_eq!(maps.get("routes_enabled").unwrap(), false);
-        assert_eq!(maps.get("routes_travel_mode").unwrap(), "bicycle");
-        assert!(maps.get("api_key").is_none());
-        assert!(!json.to_string().contains("maps-secret"));
-    }
-
-    #[test]
-    fn google_maps_settings_are_persisted_and_clearable() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("config.toml");
-        let mut config = Config::load(&dir.path().join("missing.toml")).unwrap();
-        config.google_maps.api_key = Some("maps-secret".into());
-        config.google_maps.geolocation_enabled = true;
-        config.google_maps.routes_enabled = true;
-        config.google_maps.routes_compliance_acknowledged = true;
-        config.google_maps.routes_travel_mode = GoogleMapsTravelMode::Drive;
-        config.google_maps.language_code = "da-DK".into();
-
-        persist_config(&path, &config).unwrap();
-        let loaded = Config::load(&path).unwrap();
-        assert_eq!(loaded.google_maps, config.google_maps);
-
-        config.google_maps.api_key = None;
-        config.google_maps.geolocation_enabled = false;
-        config.google_maps.routes_enabled = false;
-        config.google_maps.routes_compliance_acknowledged = false;
-        persist_config(&path, &config).unwrap();
-
-        let persisted = std::fs::read_to_string(&path).unwrap();
-        let google_maps_table = persisted
-            .split("[google_maps]")
-            .nth(1)
-            .expect("google_maps table is persisted")
-            .split('\n')
-            .take_while(|line| !line.starts_with('['))
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(!google_maps_table.contains("api_key"));
-        assert!(!persisted.contains("maps-secret"));
-        assert!(!std::fs::read_to_string(path.with_extension("toml.bak"))
-            .unwrap()
-            .contains("maps-secret"));
-        assert_eq!(Config::load(&path).unwrap().google_maps.api_key, None);
-    }
-
-    #[test]
-    fn google_maps_empty_key_update_is_an_explicit_clear() {
-        let update: UpdateSettingsRequest =
-            serde_json::from_str(r#"{"google_maps":{"api_key":"","routes_enabled":false}}"#)
-                .unwrap();
-        let google_maps = update.google_maps.unwrap();
-
-        assert_eq!(google_maps.api_key.as_deref(), Some(""));
-        assert_eq!(google_maps.routes_enabled, Some(false));
-    }
-
-    #[test]
-    fn open_food_facts_settings_round_trip_without_implicit_acknowledgement() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("config.toml");
-        let mut config = Config::load(&dir.path().join("missing.toml")).unwrap();
-
-        let defaults = serde_json::to_value(settings_response(&config)).unwrap();
-        assert_eq!(defaults["open_food_facts"]["enabled"], false);
-        assert_eq!(
-            defaults["open_food_facts"]["attribution_acknowledged"],
-            false
-        );
-
-        config.open_food_facts.enabled = true;
-        config.open_food_facts.attribution_acknowledged = true;
-        persist_config(&path, &config).unwrap();
-
-        let loaded = Config::load(&path).unwrap();
-        assert_eq!(loaded.open_food_facts, config.open_food_facts);
-
-        let update: UpdateSettingsRequest =
-            serde_json::from_str(r#"{"open_food_facts":{"enabled":true}}"#).unwrap();
-        let food = update.open_food_facts.unwrap();
-        assert_eq!(food.enabled, Some(true));
-        assert_eq!(food.attribution_acknowledged, None);
-    }
-
-    #[test]
-    fn azure_speech_settings_are_write_only_persisted_and_clearable() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("config.toml");
-        let mut config = Config::load(&dir.path().join("missing.toml")).unwrap();
-        config.azure_speech.subscription_key = Some("0123456789abcdef0123456789abcdef".into());
-        config.azure_speech.region = Some("southeastasia".into());
-        config.azure_speech.voice_name = Some("en-US-AvaMultilingualNeural".into());
-        config.azure_speech.enabled = true;
-        config.azure_speech.cloud_consent_acknowledged = true;
-
-        let json = serde_json::to_value(settings_response(&config)).unwrap();
-        assert_eq!(json["azure_speech"]["has_subscription_key"], true);
-        assert_eq!(json["azure_speech"]["enabled"], true);
-        assert!(json["azure_speech"].get("subscription_key").is_none());
-        assert!(!json.to_string().contains("0123456789abcdef"));
-
-        persist_config(&path, &config).unwrap();
-        let loaded = Config::load(&path).unwrap();
-        assert_eq!(loaded.azure_speech, config.azure_speech);
-
-        config.azure_speech.subscription_key = None;
-        config.azure_speech.enabled = false;
-        config.azure_speech.cloud_consent_acknowledged = false;
-        persist_config(&path, &config).unwrap();
-        let persisted = std::fs::read_to_string(&path).unwrap();
-        let backup = std::fs::read_to_string(path.with_extension("toml.bak")).unwrap();
-        assert!(!persisted.contains("0123456789abcdef"));
-        assert!(!backup.contains("0123456789abcdef"));
-
-        let update: UpdateSettingsRequest =
-            serde_json::from_str(r#"{"azure_speech":{"subscription_key":"","enabled":false}}"#)
-                .unwrap();
-        let speech = update.azure_speech.unwrap();
-        assert_eq!(speech.subscription_key.as_deref(), Some(""));
-        assert_eq!(speech.enabled, Some(false));
-        assert_eq!(speech.cloud_consent_acknowledged, None);
-    }
-
-    #[test]
-    fn persistence_fails_closed_for_local_overlays_and_inline_tables() {
-        let local_dir = tempfile::tempdir().unwrap();
-        let local_path = local_dir.path().join("config.toml");
-        std::fs::write(&local_path, "[server]\ndisplay_name = \"Base\"\n").unwrap();
-        std::fs::write(
-            local_dir.path().join("config.local.toml"),
-            "[llm]\ncodex_bridge_token = \"local-only-secret-0123456789abcdefghijkl\"\n",
-        )
-        .unwrap();
-        let config = Config::load(&local_path).unwrap();
-        let before = std::fs::read_to_string(&local_path).unwrap();
-        let error = persist_config(&local_path, &config).unwrap_err();
-        assert!(error.contains("config.local.toml"));
-        assert_eq!(std::fs::read_to_string(&local_path).unwrap(), before);
-        assert!(!local_path.with_extension("toml.bak").exists());
-
-        let inline_dir = tempfile::tempdir().unwrap();
-        let inline_path = inline_dir.path().join("config.toml");
-        let inline = r#"llm = { provider = "codex", model = "gpt-5.4", codex_bridge_token = "inline-secret-0123456789abcdefghijkl" }
-[server]
-http_bind_addr = "127.0.0.1:8080"
-"#;
-        std::fs::write(&inline_path, inline).unwrap();
-        let config = Config::load(&inline_path).unwrap();
-        let error = persist_config(&inline_path, &config).unwrap_err();
-        assert!(error.contains("inline TOML table"));
-        assert_eq!(std::fs::read_to_string(&inline_path).unwrap(), inline);
-        assert!(!inline_path.with_extension("toml.bak").exists());
-
-        let inline_server_path = inline_dir.path().join("server-inline.toml");
-        let admin_token = "a".repeat(crate::config::MIN_ADMIN_TOKEN_BYTES);
-        let inline_server = format!(
-            "server = {{ http_bind_addr = \"127.0.0.1:8080\", admin_token = \"{admin_token}\" }}\n"
-        );
-        std::fs::write(&inline_server_path, &inline_server).unwrap();
-        let config = Config::load(&inline_server_path).unwrap();
-        let error = persist_config(&inline_server_path, &config).unwrap_err();
-        assert!(error.contains("inline TOML table"));
-        assert_eq!(
-            std::fs::read_to_string(&inline_server_path).unwrap(),
-            inline_server
-        );
-        assert!(!inline_server_path.with_extension("toml.bak").exists());
-    }
-
-    #[test]
-    fn openstreetmap_settings_round_trip_with_independent_consent() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("config.toml");
-        let mut config = Config::load(&dir.path().join("missing.toml")).unwrap();
-        let defaults = serde_json::to_value(settings_response(&config)).unwrap();
-        assert_eq!(defaults["openstreetmap"]["enabled"], false);
-        assert_eq!(
-            defaults["openstreetmap"]["location_consent_acknowledged"],
-            false
-        );
-
-        config.openstreetmap.enabled = true;
-        config.openstreetmap.location_consent_acknowledged = true;
-        persist_config(&path, &config).unwrap();
-        assert_eq!(
-            Config::load(&path).unwrap().openstreetmap,
-            config.openstreetmap
-        );
-
-        let update: UpdateSettingsRequest =
-            serde_json::from_str(r#"{"openstreetmap":{"enabled":true}}"#).unwrap();
-        let openstreetmap = update.openstreetmap.unwrap();
-        assert_eq!(openstreetmap.enabled, Some(true));
-        assert_eq!(openstreetmap.location_consent_acknowledged, None);
     }
 
     #[test]
