@@ -15,7 +15,7 @@ export async function generateMetadata(): Promise<Metadata> {
     title: { default: PUBLIC_SITE_NAME, template: `%s | ${PUBLIC_SITE_NAME}` },
     applicationName: PUBLIC_SITE_NAME,
     description:
-      "Self-hosted Center and Cosmos services for operating a Humane Ai Pin independently.",
+      "Bring a Humane Ai Pin back online with owner-operated Center and Cosmos services.",
     alternates: { canonical: "/" },
     manifest: "/manifest.json",
     icons: {
@@ -27,8 +27,13 @@ export async function generateMetadata(): Promise<Metadata> {
       url: "/",
       siteName: PUBLIC_SITE_NAME,
       title: PUBLIC_SITE_NAME,
-      description: "Self-hosted replacement services for a Humane Ai Pin.",
-      images: [{ url: "/icon-512.png", width: 512, height: 512, alt: PUBLIC_PROJECT_NAME }],
+      description: "Your Ai Pin, connected to Center and Cosmos services you operate.",
+      images: [{
+        url: "/revival-hero.webp",
+        width: 1600,
+        height: 640,
+        alt: "Ai Pin Revival connecting a Pin to a private Cosmos server",
+      }],
     },
     robots: { index: true, follow: true },
     appleWebApp: {
@@ -67,7 +72,7 @@ export default async function RootLayout({
         "@id": `${origin}/#software`,
         name: PUBLIC_PROJECT_NAME,
         alternateName: PUBLIC_SITE_NAME,
-        description: "Self-hosted replacement services and owner tools for a Humane Ai Pin.",
+        description: "Owner-operated Center and Cosmos services for a Humane Ai Pin.",
         url: origin,
         applicationCategory: "UtilitiesApplication",
         operatingSystem: "Web, Android, Linux",

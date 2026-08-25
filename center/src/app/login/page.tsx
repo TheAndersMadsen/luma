@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, Suspense, useState } from "react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { HumaneLogo } from "@/icons";
 import { StatusMessage } from "@/components/Status";
@@ -59,53 +60,68 @@ function LoginForm() {
 
   return (
     <main className={styles.screen}>
-      <div className={styles.card}>
-        <div className={styles.brand}>
-          <HumaneLogo size={30} />
+      <aside className={styles.visual}>
+        <Link className={styles.visualBrand} href="/welcome" aria-label="Ai Pin Revival home">
+          <HumaneLogo size={27} />
+          <span>Ai Pin Revival</span>
+        </Link>
+        <div className={styles.visualCopy}>
+          <p>Center + Cosmos</p>
+          <strong>Your Pin, ready when you are.</strong>
+          <span>Private services. Familiar experience. Operated by you.</span>
         </div>
-        <h1 className={styles.title}>Sign in to Center</h1>
-        <p className={styles.sub}>Access your Pin&rsquo;s memories, captures and settings.</p>
+      </aside>
 
-        <form onSubmit={submit}>
-          <label className={styles.fieldRow}>
-            <span>Email</span>
-            <input
-              className={styles.input}
-              type="email"
-              autoComplete="username"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              placeholder="you@example.com"
-              required
-            />
-          </label>
-          <label className={styles.fieldRow}>
-            <span>Password</span>
-            <input
-              className={styles.input}
-              type="password"
-              autoComplete="current-password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="••••••••"
-              required
-            />
-          </label>
+      <section className={styles.panel} aria-labelledby="sign-in-title">
+        <div className={styles.card}>
+          <Link className={styles.mobileBrand} href="/welcome" aria-label="Ai Pin Revival home">
+            <HumaneLogo size={28} />
+          </Link>
+          <p className={styles.kicker}>Private Center</p>
+          <h1 id="sign-in-title" className={styles.title}>Welcome back.</h1>
+          <p className={styles.sub}>Sign in to see your Pin&rsquo;s memories, captures, and settings.</p>
 
-          {/* A failure is never the caption colour, and never an off-palette hex. */}
-          {formError && <StatusMessage tone="danger">{formError}</StatusMessage>}
+          <form className={styles.form} onSubmit={submit}>
+            <label className={styles.fieldRow}>
+              <span>Email</span>
+              <input
+                className={styles.input}
+                type="email"
+                autoComplete="username"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                placeholder="you@example.com"
+                required
+              />
+            </label>
+            <label className={styles.fieldRow}>
+              <span>Password</span>
+              <input
+                className={styles.input}
+                type="password"
+                autoComplete="current-password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••••"
+                required
+              />
+            </label>
 
-          <button
-            type="submit"
-            className={styles.submit}
-            disabled={busy || !username.trim() || !password}
-          >
-            {busy ? "Signing in…" : "Sign in with password"}
-          </button>
-        </form>
+            {/* A failure is never the caption colour, and never an off-palette hex. */}
+            {formError && <StatusMessage tone="danger">{formError}</StatusMessage>}
 
-        <p className={styles.foot}>Secured by Keycloak</p>
-      </div>
+            <button
+              type="submit"
+              className={styles.submit}
+              disabled={busy || !username.trim() || !password}
+            >
+              {busy ? "Signing in…" : "Sign in with password"}
+            </button>
+          </form>
+
+          <p className={styles.foot}>Protected by this deployment&rsquo;s Keycloak.</p>
+        </div>
+      </section>
     </main>
   );
 }

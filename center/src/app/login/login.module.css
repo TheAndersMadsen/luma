@@ -1,69 +1,221 @@
-/* Sign-in. An addition in style terms — .Center had no first-party login form —
-   so it draws its card, its field and its buttons with the shared controls
-   rather than its own border, radius, hex and weight-600 type. */
-
 .screen {
   min-height: 100svh;
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(420px, 0.75fr);
+  gap: 16px;
+  padding: 16px;
+  background: var(--hu-colors-black);
+}
+
+.visual {
+  position: relative;
+  min-height: calc(100svh - 32px);
+  overflow: hidden;
+  border-radius: 28px;
+  background:
+    linear-gradient(0deg, rgba(0, 0, 0, 0.88) 0%, transparent 58%),
+    url("/revival-hero.webp") center / cover no-repeat,
+    var(--hu-colors-eclipse-base);
+}
+
+.visual::after {
+  position: absolute;
+  inset: 0;
+  content: "";
+  pointer-events: none;
+  background:
+    linear-gradient(90deg, rgba(0, 0, 0, 0.12), transparent 62%),
+    radial-gradient(70% 100% at 60% 20%, transparent, rgba(0, 0, 0, 0.16));
+}
+
+.visualBrand {
+  position: absolute;
+  z-index: 1;
+  top: 30px;
+  left: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 11px;
+  font-size: 15px;
+  font-weight: 400;
+}
+
+.visualCopy {
+  position: absolute;
+  z-index: 1;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  max-width: 780px;
+  padding: clamp(40px, 6vw, 80px);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.visualCopy p,
+.kicker {
+  margin: 0;
+  color: var(--hu-colors-beam-base);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.visualCopy strong {
+  margin-top: 19px;
+  font-size: clamp(50px, 5.6vw, 86px);
+  font-weight: 200;
+  line-height: 0.94;
+  letter-spacing: -0.05em;
+  text-wrap: balance;
+}
+
+.visualCopy > span {
+  max-width: 470px;
+  margin-top: 25px;
+  color: var(--hu-colors-apollo-base);
+  font-size: 18px;
+  font-weight: 300;
+  line-height: 1.5;
+}
+
+.panel {
+  min-height: calc(100svh - 32px);
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 24px;
+  border-radius: 28px;
   background:
-    radial-gradient(120% 90% at 50% -10%, rgba(0, 255, 224, 0.06), transparent 60%),
-    var(--hu-colors-eclipse-base, #0f0f0f);
+    radial-gradient(100% 80% at 50% 0%, rgba(0, 255, 224, 0.055), transparent 70%),
+    var(--hu-colors-eclipse-base);
 }
 
-/* The one raised panel edge. */
 .card {
-  composes: surfaceRaised from "../../components/controls.module.css";
-  width: 100%;
-  max-width: 380px;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  padding: 34px 30px 26px;
+  width: min(calc(100% - 64px), 420px);
+  padding: 48px 0;
 }
 
-.brand { display: flex; justify-content: center; margin-bottom: 6px; color: var(--hu-colors-solar-base, #fff); }
+.mobileBrand {
+  display: none;
+}
+
+.kicker {
+  margin-bottom: 22px;
+}
 
 .title {
   margin: 0;
-  text-align: center;
-  font-size: 21px;
-  font-weight: 500;
-  letter-spacing: -0.01em;
-  color: var(--hu-colors-solar-base, #fff);
-}
-.sub {
-  margin: 0 0 8px;
-  text-align: center;
-  font-size: 13px;
-  line-height: 1.5;
-  color: var(--hu-colors-crater-base, #a9abab);
+  color: var(--hu-colors-solar-base);
+  font-size: clamp(48px, 5vw, 68px);
+  font-weight: 200;
+  line-height: 0.96;
+  letter-spacing: -0.05em;
 }
 
-.fieldRow { display: flex; flex-direction: column; gap: 6px; }
+.sub {
+  max-width: 360px;
+  margin: 22px 0 0;
+  color: var(--hu-colors-crater-base);
+  font-size: 16px;
+  font-weight: 300;
+  line-height: 1.55;
+}
+
+.form {
+  margin-top: 40px;
+  display: grid;
+  gap: 18px;
+}
+
+.fieldRow {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
 .fieldRow > span {
-  font-size: 11px;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
+  color: var(--hu-colors-apollo-base);
+  font-size: 13px;
+  font-weight: 400;
+}
+
+.input {
+  composes: field from "../../components/controls.module.css";
+  min-height: 56px;
+  border-radius: 16px;
+  padding-inline: 18px;
+  font-size: 16px;
+  font-weight: 400;
+  background: rgba(255, 255, 255, 0.055);
+}
+
+.input::placeholder {
   color: var(--hu-text-muted);
 }
 
-/* The one text input. One focus treatment, not a second invented ring. */
-.input { composes: field from "../../components/controls.module.css"; }
-
-/* The single sign-in action. */
 .submit {
   composes: buttonPrimary from "../../components/controls.module.css";
   width: 100%;
-  margin-top: 10px;
+  min-height: 56px;
+  margin-top: 6px;
+  border-radius: 16px;
+  color: var(--hu-colors-black);
+  font-size: 16px;
+  background: var(--hu-colors-beam-base);
+}
+
+.submit:hover:not(:disabled) {
+  background: var(--hu-colors-button-background-dark-primary-hover);
 }
 
 .foot {
-  margin: 10px 0 0;
-  text-align: center;
-  font-size: 11px;
-  letter-spacing: 0.04em;
+  margin: 25px 0 0;
   color: var(--hu-text-muted);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.4;
+}
+
+@media (max-width: 980px) {
+  .screen {
+    grid-template-columns: minmax(0, 0.9fr) minmax(390px, 1.1fr);
+  }
+
+  .visualCopy strong {
+    font-size: clamp(46px, 6.5vw, 66px);
+  }
+}
+
+@media (max-width: 760px) {
+  .screen {
+    display: block;
+    padding: 0;
+  }
+
+  .visual {
+    display: none;
+  }
+
+  .panel {
+    min-height: 100svh;
+    border-radius: 0;
+    padding: 28px 0;
+  }
+
+  .card {
+    width: min(calc(100% - 40px), 420px);
+  }
+
+  .mobileBrand {
+    width: fit-content;
+    margin-bottom: 54px;
+    display: block;
+  }
+
+  .title {
+    font-size: clamp(50px, 15vw, 66px);
+  }
 }

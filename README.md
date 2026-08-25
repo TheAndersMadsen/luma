@@ -1,28 +1,48 @@
-# Ai Pin Revival
+<div align="center">
+  <img src="assets/readme/hero.png" alt="Illustration of an Ai Pin connecting to a private Cosmos server" width="100%">
+  <h1>Ai Pin Revival</h1>
+  <p><strong>Your Ai Pin. Yours again.</strong></p>
+  <p>
+    Keep the familiar experience. Run Center, Cosmos, and the signed five-app
+    Pin runtime on infrastructure you control.
+  </p>
+  <p>
+    <a href="https://github.com/TheAndersMadsen/ai-pin-revival/releases/latest"><img src="https://img.shields.io/github/v/release/TheAndersMadsen/ai-pin-revival?display_name=tag&amp;sort=semver&amp;style=flat-square&amp;color=00ffe0" alt="Latest release"></a>
+    <a href="https://github.com/TheAndersMadsen/ai-pin-revival/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/TheAndersMadsen/ai-pin-revival/ci.yml?branch=main&amp;style=flat-square&amp;label=main" alt="Main CI status"></a>
+    <img src="https://img.shields.io/badge/Linux-amd64%20%7C%20arm64-00ffe0?style=flat-square&amp;logo=linux&amp;logoColor=000" alt="Linux amd64 and arm64">
+    <img src="https://img.shields.io/badge/deployment-self--hosted-111?style=flat-square&amp;logo=docker" alt="Self-hosted deployment">
+  </p>
+  <p>
+    <a href="#deploy-cosmos">Deploy Cosmos</a> ·
+    <a href="#connect-a-pin">Connect a Pin</a> ·
+    <a href="#ai-assisted-setup">Use an AI agent</a> ·
+    <a href="#development">Develop</a>
+  </p>
+</div>
 
-Ai Pin Revival is a self-hosted replacement service for a Humane Ai Pin. It
-keeps the stock device experience while replacing the retired cloud with three
-current components:
+> [!IMPORTANT]
+> This is an independent community project. It is not affiliated with or
+> endorsed by Humane. You are responsible for the device, server, accounts,
+> credentials, and third-party services you connect.
 
-- Center: the owner-facing web application.
-- Cosmos: device APIs, identity, assistant tools, media, and data services.
-- Pin: the Android/Rust Server, injected Hook, installer, and injector.
+## Choose your path
 
-This is an independent community project. It is not affiliated with or endorsed
-by Humane. You are responsible for the device, server, accounts, credentials,
-and third-party services you connect.
-
-## Start here
-
-Choose one path:
-
-- Deploying a server: use a verified GitHub release and the small operator
-  bundle. A production server does not need this repository or a compiler.
-- Developing the project: clone the repository and use the root `revival` CLI.
-- Connecting a Pin: deploy Cosmos first, import the signed Pin archive, install
-  from Center, and activate the exact device.
+| I want to… | Start here | What happens |
+| --- | --- | --- |
+| **Run Cosmos** | [Deploy Cosmos](#deploy-cosmos) | Download one verified operator bundle; the server does not clone or compile this repository. |
+| **Connect my Pin** | [Connect a Pin](#connect-a-pin) | Import the signed five-app release, install through Center, then activate one exact serial. |
+| **Change the project** | [Development](#development) | Clone the repository and use the root `revival` CLI with external build caches. |
+| **Let an agent help** | [AI-assisted setup](#ai-assisted-setup) | Give Claude, Codex, or another agent the outcome-based prompt and required inputs. |
 
 ## Architecture
+
+```mermaid
+flowchart LR
+    Owner["Owner browser"] --> Center["Center<br/>identity · settings · installer"]
+    Pin["Ai Pin<br/>Hook · Server · injector"] <-->|"stock-compatible APIs · mTLS"| Cosmos["Cosmos<br/>assistant · media · data"]
+    Center <--> Cosmos
+    Cosmos <--> Providers["Your providers<br/>LLM · Azure Speech · search · music"]
+```
 
 | Part | Runs on | Purpose |
 | --- | --- | --- |
@@ -37,13 +57,32 @@ Product, deployment, configuration, and operator-facing names use Cosmos.
 
 ## Deploy Cosmos
 
-The supported production host is Ubuntu 24.04 x86-64 with:
+Production supports 64-bit Ubuntu 24.04 on both `amd64` (`x86_64`) and `arm64`
+(`aarch64`). Every project image in a release is published as a multi-platform,
+digest-pinned manifest; this project's production deployment runs the ARM64
+variant.
+
+| Host architecture | `uname -m` | Support |
+| --- | --- | --- |
+| Intel/AMD 64-bit | `x86_64` | Supported |
+| ARM 64-bit | `aarch64` or `arm64` | Supported |
+
+The production host also needs:
 
 - Node.js 22.14 or newer on the Node 22 line.
 - Docker Engine and Docker Compose 2.34 or newer.
 - A domain whose DNS points to the server.
 - Public ports 80 and 443 available.
 - A public IPv4 address when the `pin` profile is enabled.
+
+Confirm the two architecture-sensitive prerequisites before downloading a
+release:
+
+```sh
+uname -m
+docker version --format '{{.Server.Version}}'
+docker compose version
+```
 
 ### 1. Download a verified release
 
@@ -163,8 +202,41 @@ also includes `Retry-After`.
 
 ## Connect a Pin
 
+<p align="center">
+  <img src="assets/readme/connect-pin.png" alt="Illustration of a Pin connected directly to a laptop with a USB-C data cable" width="86%">
+</p>
+
+The installer runs in a desktop Chromium browser over HTTPS and talks directly
+to the Pin through WebUSB. The APKs travel from Center to the browser and then
+over the local USB cable; the production server never needs physical access to
+the device.
+
+### Before you connect
+
+Have these ready:
+
+- A deployed Cosmos release for which `./revival verify production` passes.
+- The matching signed Pin archive imported into Center.
+- Current desktop Chrome, Chromium, or Edge. The page checks both HTTPS and
+  WebUSB before enabling installation.
+- A known-good USB-C **data** cable connected directly to the computer when
+  possible. Disconnect other Android devices while installing.
+- A powered-on, unlocked Pin that has finished booting.
+
+Only one program can own the Pin's USB ADB interface at a time. Close Android
+Studio, scrcpy, phone-management tools, and terminals streaming `adb` output
+before using Center. The preparation commands below deliberately stop native
+ADB before the browser claims the device.
+
+WebUSB is available only in a [secure context](https://developer.mozilla.org/en-US/docs/Web/API/WebUSB_API),
+which is why production installation uses Center over HTTPS. The Linux setup
+below follows Android's [official Ubuntu device guidance](https://developer.android.com/studio/run/device.html).
+
+### 1. Import the signed Pin release
+
 The GitHub release publishes the signed five-APK Pin set as a separate archive.
-On the server, import it into the operator-owned release store:
+Download it from the same release as the operator bundle, then import it on the
+server:
 
 ```sh
 ./revival pin release import ai-pin-revival-pin-YYYY-MM-DD.N.tar.gz
@@ -174,17 +246,106 @@ The importer validates the archive, manifest, signer receipt, package roles,
 sizes, and every APK digest before making the complete release available to
 Center. A partial set is never published.
 
-Then:
+### 2. Prepare Linux USB permissions
 
-1. Open `https://center.example.com/settings/pin/install` in a Chromium browser.
-2. Connect and unlock the Pin over USB-C.
-3. Select the exact Pin and run the Center installer.
-4. In Center's operator provisioning view, create and download the one-time
-   activation document for that device.
-5. On the computer connected to the Pin, use the exact plan command Center
-   shows. Review it, then repeat it with `--confirm`.
-6. Run the shown `pin activate status --serial SERIAL` command and make one real
-   voice request on the device.
+Ubuntu users should install the standard Android udev rules and join the USB
+device group:
+
+```sh
+sudo apt update
+sudo apt install adb android-sdk-platform-tools-common
+sudo usermod -aG plugdev "$LOGNAME"
+```
+
+Log out and back in after changing the group, then verify the workstation sees
+the Pin:
+
+```sh
+id -nG | tr ' ' '\n' | grep -x plugdev
+lsusb
+adb devices -l
+```
+
+The Pin must appear in the `device` state. `unauthorized` means the device still
+needs to be unlocked or authorized; `no permissions` means the udev rule or
+group has not taken effect.
+
+<details>
+<summary><strong>Linux fallback: add a device-specific udev rule</strong></summary>
+
+Use this only when `lsusb` sees the Pin but the standard Android rules do not
+grant access. Read its hexadecimal vendor and product IDs from `lsusb`, then
+create `/etc/udev/rules.d/51-ai-pin.rules` with those exact lowercase values:
+
+```udev
+SUBSYSTEM=="usb", ATTR{idVendor}=="vvvv", ATTR{idProduct}=="pppp", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+```
+
+Do not copy `vvvv` or `pppp` literally. Reload the rules, unplug the Pin, and
+reconnect it:
+
+```sh
+sudo udevadm control --reload-rules
+sudo udevadm trigger
+```
+
+</details>
+
+macOS does not use udev rules. Windows may require a compatible Android/WinUSB
+driver before a Chromium browser can claim the device.
+
+### 3. Confirm Android finished booting
+
+The installer waits for the same package-manager path it will use for the real
+installation. You can prove that path is ready before opening Center:
+
+```sh
+adb wait-for-device
+adb shell cmd package path android
+```
+
+A ready Pin prints an absolute package path such as:
+
+```text
+package:/system/framework/framework-res.apk
+```
+
+If it prints `cmd: Can't find service: package`, reboot the Pin once, leave it
+powered on and unlocked, and retry after Android finishes starting. Do not begin
+installation until the absolute package path appears.
+
+Finally release the USB interface for WebUSB:
+
+```sh
+adb kill-server
+```
+
+### 4. Install from Center
+
+1. Sign in to `https://center.example.com/settings/pin/install` in the Chromium
+   browser on the computer physically connected to the Pin.
+2. Select **Connect**, choose the Pin in the browser's USB chooser, and verify
+   the displayed serial before continuing.
+3. Review the detected current and target versions, then run the Center
+   installer. Keep the tab open, the Pin unlocked, and the cable connected.
+4. If the Pin reboots, wait for Center to reconnect to the same serial. Do not
+   select a different device to continue a plan.
+
+Center performs a bounded package-service readiness wait and rechecks it just
+before the first mutation. If Android becomes unavailable, installation stops
+before package changes begin and tells you to wait and retry.
+
+### 5. Activate and prove the device
+
+1. In Center's operator provisioning view, create and download the one-time
+   activation document for that exact device.
+2. Disconnect the Pin in Center or close the installer tab so native ADB can
+   claim the USB interface again.
+3. Run the exact plan command Center shows on the connected computer. Review
+   the plan, then repeat it with `--confirm`.
+4. Run the shown `pin activate status --serial SERIAL` command.
+5. Make one real voice request on the Pin. Activation is complete only when the
+   device answers through your Cosmos deployment.
 
 Activation stores the server hostname, device-status endpoint, trust roots, and
 device identity as one transaction. It does not use a project-wide default
@@ -213,8 +374,8 @@ another coding agent the constraints it needs without prescribing every shell
 step. Fill in the bracketed values and run it on the target server:
 
 ```text
-Set up the latest stable Ai Pin Revival release on this Ubuntu 24.04 x86_64
-server.
+Set up the latest stable Ai Pin Revival release on this Ubuntu 24.04 64-bit
+Linux server. It may be amd64/x86_64 or arm64/aarch64.
 
 Outcome:
 - Cosmos and Center run at https://[DOMAIN].
@@ -324,10 +485,19 @@ Path overrides must be set before initialization:
 
 ## Troubleshooting
 
-- `cmd: Can't find service: package`: confirm Center and the imported Pin archive
-  are from the latest release, unlock the Pin, reboot it once, reconnect USB,
-  and rerun the installer. The current installer waits for Android's package
-  service before making changes.
+- **The browser has no USB chooser:** use current desktop Chrome, Chromium, or
+  Edge over HTTPS; unlock the Pin; try a known-good data cable and a direct USB
+  port; then recheck Linux `plugdev` and udev access above.
+- **`Unable to claim interface`:** another program owns USB ADB. Close Android
+  Studio, scrcpy, and Android management tools, run `adb kill-server`, unplug
+  the Pin, reconnect it, and select **Connect** again.
+- **`cmd: Can't find service: package`:** unlock the Pin, reboot it once, wait
+  for the stock UI to settle, and require `adb shell cmd package path android`
+  to print an absolute `package:/...` path before retrying. The installer makes
+  no package changes while this service is unavailable.
+- **The Pin reconnects as a different device:** stop. Disconnect other Android
+  hardware and restart the plan against the original serial; installation and
+  activation never switch serials implicitly.
 - Center shows an old release or unknown environment: run
   `./revival verify production`, then inspect `https://YOUR_DOMAIN/api/version`.
   A production deployment must return `environment: "production"` and the
@@ -338,7 +508,8 @@ Path overrides must be set before initialization:
 - A command is unclear: use `./revival COMMAND --help`. Help is read-only and
   states whether a command can change local, remote, or device state.
 
-## License
+## Licensing
 
-See [LICENSE](LICENSE). Third-party code retains its own license files and
-notices in the vendored source.
+The Pin and injector components retain their upstream MIT licenses in
+[pin/LICENSE](pin/LICENSE) and [pin/injector/LICENSE](pin/injector/LICENSE).
+Vendored third-party code retains its own license files and notices.

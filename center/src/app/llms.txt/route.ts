@@ -9,9 +9,9 @@ export const dynamic = "force-dynamic";
 function llmsText(origin = publicOrigin()): string {
   return `# ${PUBLIC_SITE_NAME}
 
-> Self-hosted Center and Cosmos replacement services for operating a Humane Ai Pin independently. This project is not affiliated with Humane.
+> Owner-operated Center and Cosmos services that bring a Humane Ai Pin back online. This project is not affiliated with Humane.
 
-Use this site when an owner or operator needs to deploy, verify, install, activate, configure, or develop Ai Pin Revival. Use only the documented public read operations without authentication. Wearer and operator data stays behind the deployment's own session and authorization boundaries.
+Use this site when an owner or operator needs to deploy, verify, install, activate, configure, or develop Ai Pin Revival. Call only the documented public read operations without authentication. Wearer and operator data stays behind the deployment's own session and authorization boundaries.
 
 A production setup agent should use a checksum-verified GitHub release, preserve external configuration, pass secrets through standard input, avoid deploying a source checkout, and finish by verifying that /api/version returns the intended release with environment production.
 

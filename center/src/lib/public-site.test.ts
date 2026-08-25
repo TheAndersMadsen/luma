@@ -18,15 +18,17 @@ describe("public agent content", () => {
       ])].join(" ");
       expect(text.length, page.path).toBeGreaterThan(500);
       expect(page.sections.length, page.path).toBeGreaterThan(0);
+      expect(page.eyebrow.length, page.path).toBeGreaterThan(3);
+      expect(page.headline.length, page.path).toBeGreaterThan(8);
     }
   });
 
   it("renders canonical CommonMark with absolute resource links", () => {
     const markdown = publicPageMarkdown("/developers", "https://center.example.test");
     expect(markdown).toMatch(/^# Ai Pin Revival developers\n\n> /);
-    expect(markdown).toContain("## Public HTTP API");
+    expect(markdown).toContain("## A small public API.");
     expect(markdown).toContain("https://center.example.test/openapi.json");
-    expect(markdown).toContain("## When an agent should use this project");
+    expect(markdown).toContain("## Let agents handle the repeatable parts.");
   });
 
   it("maps every advertised explicit Markdown twin", () => {

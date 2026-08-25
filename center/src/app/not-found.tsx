@@ -12,20 +12,43 @@ export const metadata: Metadata = {
 export default function NotFound() {
   return (
     <div className={styles.screen}>
-      <main className={styles.main}>
-        <div className={styles.intro}>
+      <main className={styles.notFound}>
+        <Link
+          className={`${styles.brand} ${styles.notFoundBrand}`}
+          href="/"
+          aria-label="Ai Pin Revival home"
+        >
           <HumaneLogo size={28} />
-          <p className={styles.eyebrow}>HTTP 404</p>
-          <h1>Page not found</h1>
-          <p className={styles.lede}>
-            This address is not part of Ai Pin Revival Center. Agents can use the
-            sitemap, llms.txt, or developer index to discover supported public resources.
-          </p>
-        </div>
+          <span>Ai Pin Revival</span>
+        </Link>
+        <p className={styles.eyebrow}>404 · Wrong turn</p>
+        <h1>Page not found</h1>
+        <p className={styles.lede}>
+          This address is not part of Center. Continue from the public index, or use
+          the machine-readable resources below to find a supported route.
+        </p>
         <ul className={styles.links}>
-          <li><Link href="/sitemap.xml"><strong>Sitemap</strong></Link><span>Index of public human-readable pages.</span></li>
-          <li><Link href="/llms.txt"><strong>llms.txt</strong></Link><span>Concise agent guidance and canonical resources.</span></li>
-          <li><Link href="/developers"><strong>Developer index</strong></Link><span>CLI, OpenAPI, authentication, and deployment guidance.</span></li>
+          <li>
+            <Link href="/sitemap.xml" aria-label="Sitemap">
+              <strong>Sitemap</strong>
+              <span>Every public human-readable page.</span>
+              <span className={styles.linkArrow} aria-hidden="true">→</span>
+            </Link>
+          </li>
+          <li>
+            <Link href="/llms.txt" aria-label="llms.txt">
+              <strong>llms.txt</strong>
+              <span>Agent guidance and canonical resources.</span>
+              <span className={styles.linkArrow} aria-hidden="true">→</span>
+            </Link>
+          </li>
+          <li>
+            <Link href="/developers" aria-label="Developer index">
+              <strong>Developer index</strong>
+              <span>CLI, OpenAPI, authentication, and deployment.</span>
+              <span className={styles.linkArrow} aria-hidden="true">→</span>
+            </Link>
+          </li>
         </ul>
       </main>
     </div>
