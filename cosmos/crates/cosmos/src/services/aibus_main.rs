@@ -3208,10 +3208,10 @@ mod tests {
             .expect_err("an empty audio request is rejected");
         assert_eq!(audio.code(), tonic::Code::InvalidArgument);
 
-        // Transcription with real audio but no STT backend configured: an honest
-        // capability error, never a fabricated transcript. (Empty audio would be
-        // rejected earlier as InvalidArgument, so send non-empty bytes to reach
-        // the backend-presence check.)
+        // Transcription with real audio but no dashboard-configured STT backend:
+        // an honest availability error, never a fabricated transcript. (Empty
+        // audio would be rejected earlier as InvalidArgument, so send non-empty
+        // bytes to reach the backend-presence check.)
         let stt = service
             .process_ai_request(pb::AiRequest {
                 capabilityrequest: Some(Capabilityrequest::AudioProcessingRequest(
@@ -3229,7 +3229,7 @@ mod tests {
             })
             .await
             .expect_err("no STT backend configured in tests");
-        assert_eq!(stt.code(), tonic::Code::Unimplemented);
+        assert_eq!(stt.code(), tonic::Code::Unavailable);
     }
 
     #[tokio::test]

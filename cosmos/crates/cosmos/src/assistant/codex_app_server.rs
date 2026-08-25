@@ -20,8 +20,7 @@ use tokio::sync::{Mutex, broadcast, oneshot};
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(12);
 const TURN_TIMEOUT: Duration = Duration::from_secs(24);
 
-type PendingRequests =
-    Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, CodexError>>>>>;
+type PendingRequests = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, CodexError>>>>>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum CodexError {

@@ -182,10 +182,19 @@ pub(crate) fn configured() -> bool {
 }
 
 fn selected_backend() -> Option<SelectedBackend> {
-    if let Some(base_url) = key(SEARXNG_BASE_URL_VAR) {
+    selected_backend_from(key(SEARXNG_BASE_URL_VAR), key(SERPAPI_KEY_VAR))
+}
+
+fn selected_backend_from(
+    searxng_base_url: Option<String>,
+    serpapi_key: Option<String>,
+) -> Option<SelectedBackend> {
+    if let Some(base_url) = searxng_base_url.filter(|value| !value.trim().is_empty()) {
         return Some(SelectedBackend::Searxng(base_url));
     }
-    key(SERPAPI_KEY_VAR).map(SelectedBackend::SerpApi)
+    serpapi_key
+        .filter(|value| !value.trim().is_empty())
+        .map(SelectedBackend::SerpApi)
 }
 
 async fn search_serpapi(
@@ -410,51 +419,8 @@ mod tests {
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
-        sync::{Mutex, oneshot},
+        sync::oneshot,
     };
-
-    static ENV_LOCK: Mutex<()> = Mutex::const_new(());
-
-    struct TestEnv {
-        previous: Vec<(&'static str, Option<std::ffi::OsString>)>,
-    }
-
-    impl TestEnv {
-        fn replace(values: &[(&'static str, Option<&str>)]) -> Self {
-            let previous = values
-                .iter()
-                .map(|(name, _)| (*name, std::env::var_os(name)))
-                .collect();
-            for (name, value) in values {
-                // SAFETY: all environment-mutating tests in this module hold
-                // ENV_LOCK for their full lifetime.
-                unsafe {
-                    if let Some(value) = value {
-                        std::env::set_var(name, value);
-                    } else {
-                        std::env::remove_var(name);
-                    }
-                }
-            }
-            Self { previous }
-        }
-    }
-
-    impl Drop for TestEnv {
-        fn drop(&mut self) {
-            for (name, value) in self.previous.drain(..) {
-                // SAFETY: the owning test still holds ENV_LOCK while guards
-                // drop, restoring the process environment before unlocking.
-                unsafe {
-                    if let Some(value) = value {
-                        std::env::set_var(name, value);
-                    } else {
-                        std::env::remove_var(name);
-                    }
-                }
-            }
-        }
-    }
 
     async fn serve_once(
         status: &'static str,
@@ -558,50 +524,26 @@ mod tests {
         assert!(summarize_serpapi(&empty(), "q").is_none());
     }
 
-    #[tokio::test]
-    async fn without_a_key_the_capability_reports_absent() {
-        let _lock = ENV_LOCK.lock().await;
-        let _env = TestEnv::replace(&[(SEARXNG_BASE_URL_VAR, None), (SERPAPI_KEY_VAR, None)]);
-        assert_eq!(search("anything").await, Err(BackendError::NotConfigured));
+    #[test]
+    fn without_a_key_the_capability_reports_absent() {
+        assert!(selected_backend_from(None, None).is_none());
     }
 
-    #[tokio::test]
-    async fn readiness_accepts_either_backend_but_not_blank_values() {
-        let _lock = ENV_LOCK.lock().await;
-        {
-            let _env = TestEnv::replace(&[
-                (SEARXNG_BASE_URL_VAR, Some("   ")),
-                (SERPAPI_KEY_VAR, Some("")),
-            ]);
-            assert!(!configured());
-        }
-        {
-            let _env = TestEnv::replace(&[
-                (SEARXNG_BASE_URL_VAR, Some("http://searxng:8080")),
-                (SERPAPI_KEY_VAR, None),
-            ]);
-            assert!(configured());
-            assert!(matches!(
-                selected_backend(),
-                Some(SelectedBackend::Searxng(_))
-            ));
-        }
-        {
-            let _env = TestEnv::replace(&[
-                (SEARXNG_BASE_URL_VAR, None),
-                (SERPAPI_KEY_VAR, Some("synthetic-test-key")),
-            ]);
-            assert!(configured());
-            assert!(matches!(
-                selected_backend(),
-                Some(SelectedBackend::SerpApi(_))
-            ));
-        }
+    #[test]
+    fn readiness_accepts_either_backend_but_not_blank_values() {
+        assert!(selected_backend_from(Some("   ".to_owned()), Some(String::new())).is_none());
+        assert!(matches!(
+            selected_backend_from(Some("http://searxng:8080".to_owned()), None),
+            Some(SelectedBackend::Searxng(_))
+        ));
+        assert!(matches!(
+            selected_backend_from(None, Some("synthetic-test-key".to_owned())),
+            Some(SelectedBackend::SerpApi(_))
+        ));
     }
 
     #[tokio::test]
     async fn configured_searxng_is_selected_before_serpapi() {
-        let _lock = ENV_LOCK.lock().await;
         let (base_url, request) = serve_once(
             "200 OK",
             r#"{"results":[{"title":"Local result","content":"From the private index","engine":"bing"}]}"#
@@ -609,12 +551,18 @@ mod tests {
             Duration::ZERO,
         )
         .await;
-        let _env = TestEnv::replace(&[
-            (SEARXNG_BASE_URL_VAR, Some(&base_url)),
-            (SERPAPI_KEY_VAR, Some("must-not-be-used")),
-        ]);
+        let backend = selected_backend_from(Some(base_url), Some("must-not-be-used".to_owned()))
+            .expect("one configured search backend");
+        assert!(matches!(backend, SelectedBackend::Searxng(_)));
 
-        let result = search("private search").await.unwrap();
+        let result = search_selected(
+            "private search",
+            backend,
+            Some("must-not-be-used"),
+            SERPAPI_BASE_URL,
+        )
+        .await
+        .unwrap();
         assert!(result.contains("Local result"));
         let request = request.await.unwrap();
         assert!(request.starts_with("GET /search?"));
