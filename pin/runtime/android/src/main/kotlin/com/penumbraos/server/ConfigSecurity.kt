@@ -15,8 +15,6 @@ internal object ConfigSecurity {
     private val writeOnlyPaths = setOf(
         ADMIN_TOKEN_PATH,
         "llm.api_key",
-        "llm.codex.api_key",
-        "llm.codex_bridge_token",
         "weather.pirate_weather_api_key",
         "google_maps.api_key",
         "brave_search.api_key",

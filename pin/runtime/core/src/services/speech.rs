@@ -20,14 +20,13 @@ use self::transcription::{
 };
 use self::translation::{
     azure_tts_is_configured, is_supported_locale, is_supported_pair, validate_input_text,
-    validate_locale, LlmTranslationProvider, TextTranslationProvider, TranslationInput,
-    ValidatedLocale, MAX_TRANSLATION_TEXT_BYTES,
+    validate_locale, TextTranslationProvider, TranslationInput, ValidatedLocale,
+    MAX_TRANSLATION_TEXT_BYTES,
 };
 use crate::config::ResolvedConfig;
 use crate::external::azure_speech::{
     AzureSpeechClient, AzureSpeechError, AzureSpeechOutputFormat, SynthesizedSpeech,
 };
-use crate::llm::LlmAgent;
 use crate::proto::aibus::speech_service_server::SpeechService;
 use crate::proto::aibus::{
     Audio, AudioFormat, CanTranslateRequest, CanTranslateResponse, EncryptedCanTranslateRequest,
@@ -94,7 +93,6 @@ pub struct SpeechServiceImpl {
 }
 
 impl SpeechServiceImpl {
-    #[cfg(test)]
     pub fn new(azure_speech: AzureSpeechClient) -> Self {
         Self {
             azure_speech: Arc::new(RwLock::new(azure_speech)),
@@ -102,17 +100,11 @@ impl SpeechServiceImpl {
         }
     }
 
-    /// Construct the stock speech service with the privacy-bounded one-off
-    /// translator. Translation remains disabled unless the configured Codex
-    /// bridge and the separately consented Azure TTS provider are both ready.
-    pub fn new_with_translation(
-        azure_speech: AzureSpeechClient,
-        agent: Arc<LlmAgent>,
-        config: Arc<ResolvedConfig>,
-    ) -> Self {
-        let provider = LlmTranslationProvider::configured(agent, config.clone());
+    /// Construct the device-local speech service. Cosmos owns translation, so
+    /// the Pin deliberately has no translation provider.
+    pub fn new_with_config(azure_speech: AzureSpeechClient, config: Arc<ResolvedConfig>) -> Self {
         let runtime = TranslationRuntime {
-            provider,
+            provider: None,
             transcriber: AzureConversationTranscriber::configured(&config),
             tts_ready: azure_tts_is_configured(&config),
         };
@@ -120,24 +112,6 @@ impl SpeechServiceImpl {
             azure_speech: Arc::new(RwLock::new(azure_speech)),
             translation: Arc::new(RwLock::new(runtime)),
         }
-    }
-
-    /// Refresh the provider/config gates after a dashboard settings update.
-    /// The Azure client is swapped first, so any request racing the update can
-    /// only fail closed. No request text or model output is retained in state.
-    pub async fn replace_with_translation(
-        &self,
-        azure_speech: AzureSpeechClient,
-        agent: Arc<LlmAgent>,
-        config: Arc<ResolvedConfig>,
-    ) {
-        let runtime = TranslationRuntime {
-            provider: LlmTranslationProvider::configured(agent, config.clone()),
-            transcriber: AzureConversationTranscriber::configured(&config),
-            tts_ready: azure_tts_is_configured(&config),
-        };
-        *self.azure_speech.write().await = azure_speech;
-        *self.translation.write().await = runtime;
     }
 
     #[cfg(test)]

@@ -139,7 +139,7 @@ pub(super) fn decline_speech(reason: ChatTurnDeclineReason, backend_error: Optio
 /// Speech only. The raw error is untouched everywhere it matters for diagnosis:
 /// `chat_turn_backend_error_category` and `chat_turn_backend_error_is_retryable`
 /// both still read the original text, and the precise fault is named in the host
-/// log by the layer that observed it (`llm::local_codex_bridge` `chat_outcome`).
+/// log by the layer that observed it.
 /// That separation is deliberate — a previous attempt to soften the *diagnosis*
 /// blamed login for every 503 and sent owners to repair a healthy session.
 pub(super) fn speakable_backend_error(error: &str) -> String {

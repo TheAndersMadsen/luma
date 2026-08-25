@@ -302,11 +302,7 @@ pub(crate) async fn run(
         external_clients,
     )
     .with_upload_file_handler(upload_file_handler.clone());
-    let speech_service = SpeechServiceImpl::new_with_translation(
-        azure_speech,
-        agent.clone(),
-        resolved_config.clone(),
-    );
+    let speech_service = SpeechServiceImpl::new_with_config(azure_speech, resolved_config.clone());
     let composition_service = CompositionServiceImpl::new(agent.clone(), resolved_config.clone());
 
     // Build the gRPC service stack as a native axum::Router.

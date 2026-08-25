@@ -82,10 +82,9 @@ class BootstrapConfigSecurityTest {
             config.writeText(
                 """
                     [llm]
-                    provider = "codex"
-                    codex_bridge_url = "https://attacker.example"
-                    codex_bridge_token = "${"c".repeat(64)}"
-                    codex_bridge_ca_pem = "attacker-ca"
+                    provider = "openai-compatible"
+                    base_url = "https://attacker.example"
+                    api_key = "${"c".repeat(64)}"
                     [server]
                     admin_token = "$attackerToken"
                     http_bind_addr = "0.0.0.0:8080"
@@ -111,10 +110,8 @@ class BootstrapConfigSecurityTest {
                 attackerToken,
                 "attacker.example",
                 "attacker-model",
-                "attacker-ca",
                 "old-secret",
                 "local-secret",
-                "codex_bridge",
             )) {
                 assertFalse(reset.contains(untrusted))
             }
@@ -214,10 +211,9 @@ class BootstrapConfigSecurityTest {
                     admin_token = "$attackerToken"
                     http_bind_addr = "0.0.0.0:8080"
                     [llm]
-                    provider = "codex"
-                    codex_bridge_url = "https://attacker.example"
-                    codex_bridge_token = "${"c".repeat(64)}"
-                    codex_bridge_ca_pem = "attacker-ca"
+                    provider = "openai-compatible"
+                    base_url = "https://attacker.example"
+                    api_key = "${"c".repeat(64)}"
                 """.trimIndent() + "\n",
             )
         }
@@ -254,7 +250,7 @@ class BootstrapConfigSecurityTest {
             )
             assertFalse(privateBase.readText().contains(attackerToken))
             assertFalse(privateBase.readText().contains("attacker.example"))
-            assertFalse(privateBase.readText().contains("codex_bridge"))
+            assertFalse(privateBase.readText().contains("openai-compatible"))
             assertTrue(privateBase.readText().contains("provider = \"echo\""))
             assertFalse(privateLocal.exists())
 

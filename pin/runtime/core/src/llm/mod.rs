@@ -1,7 +1,5 @@
 mod agent;
 pub(crate) mod backend;
-#[cfg(test)]
-pub(crate) mod codex_bridge;
 mod error;
 pub mod memory;
 mod prompt;

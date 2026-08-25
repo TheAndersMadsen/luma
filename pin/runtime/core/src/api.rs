@@ -813,30 +813,6 @@ fn persist_config_inner(
                 }
             }
         }
-        match &config.llm.codex_bridge_url {
-            Some(url) => table["codex_bridge_url"] = toml_edit::value(url),
-            None => {
-                if let Some(t) = table.as_table_mut() {
-                    t.remove("codex_bridge_url");
-                }
-            }
-        }
-        match &config.llm.codex_bridge_token {
-            Some(token) => table["codex_bridge_token"] = toml_edit::value(token),
-            None => {
-                if let Some(t) = table.as_table_mut() {
-                    t.remove("codex_bridge_token");
-                }
-            }
-        }
-        match &config.llm.codex_bridge_ca_pem {
-            Some(ca_pem) => table["codex_bridge_ca_pem"] = toml_edit::value(ca_pem),
-            None => {
-                if let Some(t) = table.as_table_mut() {
-                    t.remove("codex_bridge_ca_pem");
-                }
-            }
-        }
         match &config.llm.progress_cue_model {
             Some(model) => table["progress_cue_model"] = toml_edit::value(model),
             None => {
@@ -846,69 +822,6 @@ fn persist_config_inner(
             }
         }
         table["gemini_google_search"] = toml_edit::value(config.llm.gemini_google_search);
-    }
-
-    // --- [llm.codex] ---
-    {
-        match &config.llm.codex {
-            Some(codex) => {
-                if doc["llm"].as_table_mut().is_none() {
-                    doc["llm"] = toml_edit::Item::Table(toml_edit::Table::new());
-                }
-                if doc["llm"]["codex"].as_table_mut().is_none() {
-                    doc["llm"]["codex"] = toml_edit::Item::Table(toml_edit::Table::new());
-                }
-                let table = &mut doc["llm"]["codex"];
-                match &codex.provider_base_url {
-                    Some(v) => table["provider_base_url"] = toml_edit::value(v),
-                    None => {
-                        if let Some(t) = table.as_table_mut() {
-                            t.remove("provider_base_url");
-                        }
-                    }
-                }
-                match &codex.model {
-                    Some(v) => table["model"] = toml_edit::value(v),
-                    None => {
-                        if let Some(t) = table.as_table_mut() {
-                            t.remove("model");
-                        }
-                    }
-                }
-                table["api_key_env"] = toml_edit::value(&codex.api_key_env);
-                table["provider_name"] = toml_edit::value(&codex.provider_name);
-                table["wire_api"] = toml_edit::value(&codex.wire_api);
-                match &codex.cue_model {
-                    Some(v) => table["cue_model"] = toml_edit::value(v),
-                    None => {
-                        if let Some(t) = table.as_table_mut() {
-                            t.remove("cue_model");
-                        }
-                    }
-                }
-                match &codex.api_key {
-                    Some(v) => table["api_key"] = toml_edit::value(v),
-                    None => {
-                        if let Some(t) = table.as_table_mut() {
-                            t.remove("api_key");
-                        }
-                    }
-                }
-                match &codex.model_catalog_path {
-                    Some(v) => table["model_catalog_path"] = toml_edit::value(v),
-                    None => {
-                        if let Some(t) = table.as_table_mut() {
-                            t.remove("model_catalog_path");
-                        }
-                    }
-                }
-            }
-            None => {
-                if let Some(t) = doc["llm"].as_table_mut() {
-                    t.remove("codex");
-                }
-            }
-        }
     }
 
     // --- [llm.tools] ---
@@ -1224,7 +1137,7 @@ fn persist_config_inner(
         // old secret after the operator replaces or clears it.
         let mut backup_doc: DocumentMut = existing.parse()?;
         for (section, keys) in [
-            ("llm", &["api_key", "codex_bridge_token"][..]),
+            ("llm", &["api_key"][..]),
             ("weather", &["pirate_weather_api_key"][..]),
             ("google_maps", &["api_key"][..]),
             ("brave_search", &["api_key"][..]),

@@ -248,22 +248,9 @@ pub struct LlmConfig {
     /// Base URL — only used for "openai-compatible" provider.
     pub base_url: Option<String>,
 
-    /// Base URL for the host-side Codex bridge. The `CODEX_BRIDGE_URL`
-    /// environment variable takes precedence, then this value, then the
-    /// loopback default used for optional USB recovery.
-    pub codex_bridge_url: Option<String>,
-
-    /// Bearer token for the host-side Codex bridge. The
-    /// `CODEX_BRIDGE_TOKEN` environment variable takes precedence.
-    pub codex_bridge_token: Option<String>,
-
-    /// Optional public CA certificate used only to verify an HTTPS Codex
-    /// bridge. This never changes trust for other outbound providers.
-    pub codex_bridge_ca_pem: Option<String>,
-
     /// Model used for the bounded, tool-free progress-cue workload. When
-    /// `None`, the safe default (`gpt-5.3-codex-spark`) is used. This never
-    /// changes the main assistant model or agentic loop.
+    /// unset, the main model is used. This never changes the main assistant
+    /// model or agentic loop.
     pub progress_cue_model: Option<String>,
 
     /// Vision-capable model used for camera-image analysis. Image requests on
@@ -283,12 +270,6 @@ pub struct LlmConfig {
     #[serde(default)]
     pub vision_consent_acknowledged: bool,
 
-    /// Optional Codex model-provider configuration for the on-device app-server.
-    /// When present, configures Codex to use an OpenAI-compatible provider (e.g., DashScope/Qwen)
-    /// instead of ChatGPT device-code login. This keeps provider == "codex" for the agentic loop
-    /// while changing what the on-device Codex binary talks to.
-    pub codex: Option<LlmCodexConfig>,
-
     /// When provider == "gemini", enable Google's built-in Search grounding tool.
     /// No effect for other providers.
     #[serde(default)]
@@ -301,102 +282,6 @@ pub struct LlmConfig {
     /// Long-term assistant memory.
     #[serde(default)]
     pub memory: LlmMemoryConfig,
-}
-
-/// Configuration for the Codex model-provider when using an OpenAI-compatible API
-/// (e.g., DashScope for Qwen models) instead of ChatGPT device-code login.
-#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
-pub struct LlmCodexConfig {
-    /// Base URL for the OpenAI-compatible API (e.g., "https://dashscope.aliyuncs.com/compatible-mode/v1").
-    pub provider_base_url: Option<String>,
-
-    /// Model ID to use (e.g., "qwen3.7-max").
-    pub model: Option<String>,
-
-    /// Environment variable name containing the API key (default: "DASHSCOPE_API_KEY").
-    /// The actual key value is read from the environment or Android vault, never persisted in config.toml.
-    #[serde(default = "default_codex_api_key_env")]
-    pub api_key_env: String,
-
-    /// Provider name for Codex's model_provider config (default: "dashscope").
-    #[serde(default = "default_codex_provider_name")]
-    pub provider_name: String,
-
-    /// Wire API type for Codex (default: "responses"). Codex 0.144.x speaks the
-    /// OpenAI `/responses` protocol (the chat wire was removed); DashScope/Qwen
-    /// compatible-mode supports `/responses` with function tools and parallel
-    /// tool calls, so this default works out of the box for that provider.
-    #[serde(default = "default_codex_wire_api")]
-    pub wire_api: String,
-
-    /// Optional model used for the progress cue when this custom provider is
-    /// active. When unset the cue falls back to the planner `model`, so a
-    /// ChatGPT-only cue model is never sent to a custom endpoint.
-    #[serde(default)]
-    pub cue_model: Option<String>,
-
-    /// Optional API key for the custom provider, stored write-only in the
-    /// app-private config. When present it takes precedence over the environment
-    /// variable named by `api_key_env`. Redacted (presence-only) on read, like
-    /// the top-level `api_key`.
-    #[serde(default)]
-    pub api_key: Option<String>,
-
-    /// Optional path to a Codex model-catalog JSON (schema: `ModelInfo`). Gives
-    /// a custom provider's model full metadata — parallel tool calls, the real
-    /// context window, reasoning levels — instead of the unknown-slug fallback
-    /// (272k context, no parallel tools). Mirrors the codex CLI's
-    /// `model_catalog_json`.
-    #[serde(default)]
-    pub model_catalog_path: Option<String>,
-}
-
-impl LlmCodexConfig {
-    /// Resolve the custom-provider API key: the persisted app-private value
-    /// wins, otherwise the named environment variable (Android vault / shell).
-    pub fn resolve_api_key(&self) -> Option<String> {
-        self.resolve_api_key_with(|name| std::env::var(name).ok())
-    }
-
-    /// Testable core of [`Self::resolve_api_key`].
-    pub(crate) fn resolve_api_key_with(
-        &self,
-        resolve_env: impl Fn(&str) -> Option<String>,
-    ) -> Option<String> {
-        self.api_key
-            .as_deref()
-            .map(str::trim)
-            .filter(|key| !key.is_empty())
-            .map(str::to_string)
-            .or_else(|| resolve_env(&self.api_key_env).and_then(trimmed_nonempty))
-    }
-}
-
-impl Default for LlmCodexConfig {
-    fn default() -> Self {
-        Self {
-            provider_base_url: None,
-            model: None,
-            api_key_env: default_codex_api_key_env(),
-            provider_name: default_codex_provider_name(),
-            wire_api: default_codex_wire_api(),
-            cue_model: None,
-            api_key: None,
-            model_catalog_path: None,
-        }
-    }
-}
-
-fn default_codex_api_key_env() -> String {
-    "DASHSCOPE_API_KEY".to_string()
-}
-
-fn default_codex_provider_name() -> String {
-    "dashscope".to_string()
-}
-
-fn default_codex_wire_api() -> String {
-    "responses".to_string()
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
@@ -1242,14 +1127,8 @@ fn default_model() -> String {
     "gemini-2.5-flash".into()
 }
 
-pub const DEFAULT_CODEX_BRIDGE_URL: &str = "http://127.0.0.1:8765";
-pub const MAX_CODEX_BRIDGE_URL_BYTES: usize = 2_048;
-pub const MAX_CODEX_BRIDGE_CA_PEM_BYTES: usize = 32 * 1024;
-pub const MIN_CODEX_BRIDGE_TOKEN_BYTES: usize = 32;
-pub const MAX_CODEX_BRIDGE_TOKEN_BYTES: usize = 512;
 pub const MIN_ADMIN_TOKEN_BYTES: usize = 32;
 pub const MAX_ADMIN_TOKEN_BYTES: usize = 512;
-pub const DEFAULT_PROGRESS_CUE_MODEL: &str = "gpt-5.3-codex-spark";
 pub const MAX_PROGRESS_CUE_MODEL_BYTES: usize = 128;
 pub const MAX_VISION_MODEL_BYTES: usize = 128;
 
@@ -1344,13 +1223,9 @@ impl Default for LlmConfig {
             turn_trace_content: default_turn_trace_content(),
             api_key: None,
             base_url: None,
-            codex_bridge_url: None,
-            codex_bridge_token: None,
-            codex_bridge_ca_pem: None,
             progress_cue_model: None,
             vision_model: None,
             vision_consent_acknowledged: false,
-            codex: None,
             gemini_google_search: false,
             tools: LlmToolsConfig::default(),
             memory: LlmMemoryConfig::default(),
@@ -1366,25 +1241,12 @@ impl std::fmt::Debug for LlmConfig {
             .field("model", &self.model)
             .field("api_key_configured", &self.api_key.is_some())
             .field("base_url_configured", &self.base_url.is_some())
-            .field(
-                "codex_bridge_url_configured",
-                &self.codex_bridge_url.is_some(),
-            )
-            .field(
-                "codex_bridge_token_configured",
-                &self.codex_bridge_token.is_some(),
-            )
-            .field(
-                "codex_bridge_ca_configured",
-                &self.codex_bridge_ca_pem.is_some(),
-            )
             .field("progress_cue_model", &self.progress_cue_model)
             .field("vision_model", &self.vision_model)
             .field(
                 "vision_consent_acknowledged",
                 &self.vision_consent_acknowledged,
             )
-            .field("codex_provider_configured", &self.codex.is_some())
             .field("gemini_google_search", &self.gemini_google_search)
             .field("tools", &self.tools)
             .field("memory_enabled", &self.memory.enabled)
@@ -1755,52 +1617,8 @@ fn normalize_configured_prompt(
 
 impl LlmConfig {
     pub fn normalize_and_validate(&mut self) -> Result<(), String> {
-        self.codex_bridge_url = self.codex_bridge_url.take().and_then(trimmed_nonempty);
-        self.codex_bridge_token = self.codex_bridge_token.take().and_then(trimmed_nonempty);
-        self.codex_bridge_ca_pem = self.codex_bridge_ca_pem.take().and_then(trimmed_nonempty);
         self.progress_cue_model = self.progress_cue_model.take().and_then(trimmed_nonempty);
         self.vision_model = self.vision_model.take().and_then(trimmed_nonempty);
-
-        // Normalize and validate Codex provider config
-        if let Some(ref mut codex_config) = self.codex {
-            codex_config.provider_base_url = codex_config
-                .provider_base_url
-                .take()
-                .and_then(trimmed_nonempty);
-            codex_config.model = codex_config.model.take().and_then(trimmed_nonempty);
-            codex_config.cue_model = codex_config.cue_model.take().and_then(trimmed_nonempty);
-            codex_config.api_key = codex_config.api_key.take().and_then(trimmed_nonempty);
-            codex_config.model_catalog_path = codex_config
-                .model_catalog_path
-                .take()
-                .and_then(trimmed_nonempty);
-
-            if let Some(ref base_url) = codex_config.provider_base_url {
-                validate_codex_provider_base_url(base_url)?;
-            }
-            if let Some(ref model) = codex_config.model {
-                validate_codex_provider_model(model)?;
-            }
-            if let Some(ref cue_model) = codex_config.cue_model {
-                validate_codex_provider_model(cue_model)?;
-            }
-            if let Some(ref catalog_path) = codex_config.model_catalog_path {
-                validate_codex_model_catalog_path(catalog_path)?;
-            }
-            validate_codex_provider_api_key_env(&codex_config.api_key_env)?;
-            validate_codex_provider_name(&codex_config.provider_name)?;
-            validate_codex_provider_wire_api(&codex_config.wire_api)?;
-        }
-
-        if let Some(url) = self.codex_bridge_url.as_deref() {
-            validate_codex_bridge_url(url)?;
-        }
-        if let Some(token) = self.codex_bridge_token.as_deref() {
-            validate_codex_bridge_token(token)?;
-        }
-        if let Some(ca_pem) = self.codex_bridge_ca_pem.as_deref() {
-            validate_codex_bridge_ca_pem(ca_pem)?;
-        }
         if let Some(model) = self.progress_cue_model.as_deref() {
             validate_progress_cue_model(model)?;
         }
@@ -1829,80 +1647,8 @@ impl LlmConfig {
         None
     }
 
-    /// True when a custom OpenAI-compatible provider is fully configured for the
-    /// on-device Codex app-server: `provider = codex`, the codex block has a
-    /// base URL and model, and the API-key env var resolves to a non-empty
-    /// value. In this mode the app-server routes to that provider and the
-    /// ChatGPT device-code login is not used.
-    pub fn codex_custom_provider_active(&self) -> bool {
-        self.codex_custom_provider_active_with(|name| std::env::var(name).ok())
-    }
-
-    /// Testable core of [`Self::codex_custom_provider_active`]; the closure
-    /// resolves an environment variable by name.
-    pub(crate) fn codex_custom_provider_active_with(
-        &self,
-        resolve_env: impl Fn(&str) -> Option<String>,
-    ) -> bool {
-        if self.provider != LlmProvider::Codex {
-            return false;
-        }
-        let Some(codex) = self.codex.as_ref() else {
-            return false;
-        };
-        let has_base = codex
-            .provider_base_url
-            .as_deref()
-            .is_some_and(|url| !url.trim().is_empty());
-        let has_model = codex
-            .model
-            .as_deref()
-            .is_some_and(|model| !model.trim().is_empty());
-        let has_key = codex.resolve_api_key_with(&resolve_env).is_some();
-        has_base && has_model && has_key
-    }
-
-    /// The model actually sent to the provider for planner / voice / agentic
-    /// turns. When a custom Codex provider is active this is the codex block's
-    /// model, so a ChatGPT model id is never sent to a custom OpenAI-compatible
-    /// endpoint. Otherwise it is the top-level `model`.
-    pub fn effective_model(&self) -> String {
-        self.effective_model_with(|name| std::env::var(name).ok())
-    }
-
-    /// Testable core of [`Self::effective_model`].
-    pub(crate) fn effective_model_with(
-        &self,
-        resolve_env: impl Fn(&str) -> Option<String>,
-    ) -> String {
-        if self.codex_custom_provider_active_with(&resolve_env) {
-            if let Some(model) = self
-                .codex
-                .as_ref()
-                .and_then(|codex| codex.model.as_deref())
-                .map(str::trim)
-                .filter(|model| !model.is_empty())
-            {
-                return model.to_string();
-            }
-        }
-        self.model.clone()
-    }
-
-    /// Resolve the model used for the bounded progress-cue workload. The
-    /// safe default is never empty and never affects the main assistant model.
-    /// When a custom Codex provider is active, an unset cue model falls back to
-    /// the codex block's cue model (if any) or its planner model, so a
-    /// ChatGPT-only cue id is never sent to a custom endpoint.
+    /// Resolve the model used for the bounded progress-cue workload.
     pub fn resolve_progress_cue_model(&self) -> &str {
-        self.resolve_progress_cue_model_with(|name| std::env::var(name).ok())
-    }
-
-    /// Testable core of [`Self::resolve_progress_cue_model`].
-    pub(crate) fn resolve_progress_cue_model_with(
-        &self,
-        resolve_env: impl Fn(&str) -> Option<String>,
-    ) -> &str {
         if let Some(model) = self
             .progress_cue_model
             .as_deref()
@@ -1910,26 +1656,7 @@ impl LlmConfig {
         {
             return model;
         }
-        if self.codex_custom_provider_active_with(&resolve_env) {
-            if let Some(codex) = self.codex.as_ref() {
-                if let Some(cue) = codex.cue_model.as_deref().filter(|model| !model.is_empty()) {
-                    return cue;
-                }
-                if let Some(model) = codex.model.as_deref().filter(|model| !model.is_empty()) {
-                    return model;
-                }
-            }
-        }
-        // For non-Codex providers, the Codex-only default model won't exist on the
-        // provider's API. Fall back to the main model so progress cues work with
-        // any provider (Gemini, OpenAI, OpenAI-compatible, Anthropic).
-        if self.provider != LlmProvider::Codex {
-            let main_model = self.model.trim();
-            if !main_model.is_empty() {
-                return &self.model;
-            }
-        }
-        DEFAULT_PROGRESS_CUE_MODEL
+        self.model.trim()
     }
 
     /// The vision-capable model used for camera-image analysis, when one is
@@ -1941,39 +1668,6 @@ impl LlmConfig {
             .as_deref()
             .map(str::trim)
             .filter(|model| !model.is_empty())
-    }
-
-    /// Resolve the effective Codex bridge URL. Environment configuration is
-    /// intentionally authoritative so deployments can avoid persisting host
-    /// connection details on the device.
-    pub fn resolve_codex_bridge_url(&self) -> String {
-        self.resolve_codex_bridge_url_from(std::env::var("CODEX_BRIDGE_URL").ok())
-    }
-
-    fn resolve_codex_bridge_url_from(&self, environment_value: Option<String>) -> String {
-        environment_value
-            .and_then(trimmed_nonempty)
-            .or_else(|| self.codex_bridge_url.clone().and_then(trimmed_nonempty))
-            .unwrap_or_else(|| DEFAULT_CODEX_BRIDGE_URL.to_string())
-    }
-
-    /// Resolve the bearer token used only for the host bridge. ChatGPT OAuth
-    /// credentials stay in the host Codex installation and never enter this
-    /// configuration.
-    pub fn resolve_codex_bridge_token(&self) -> Option<String> {
-        self.resolve_codex_bridge_token_from(std::env::var("CODEX_BRIDGE_TOKEN").ok())
-    }
-
-    fn resolve_codex_bridge_token_from(&self, environment_value: Option<String>) -> Option<String> {
-        environment_value
-            .and_then(trimmed_nonempty)
-            .or_else(|| self.codex_bridge_token.clone().and_then(trimmed_nonempty))
-    }
-
-    /// Resolve the Codex model-provider configuration if present.
-    /// Returns None if the codex config section is not configured.
-    pub fn resolve_codex_provider_config(&self) -> Option<&LlmCodexConfig> {
-        self.codex.as_ref()
     }
 }
 
@@ -1997,182 +1691,6 @@ pub fn validate_vision_model(value: &str) -> Result<(), String> {
         return Err(format!(
             "llm.vision_model must be 1-{MAX_VISION_MODEL_BYTES} visible ASCII characters"
         ));
-    }
-    Ok(())
-}
-
-pub fn validate_codex_bridge_token(token: &str) -> Result<(), String> {
-    if !(MIN_CODEX_BRIDGE_TOKEN_BYTES..=MAX_CODEX_BRIDGE_TOKEN_BYTES).contains(&token.len())
-        || !token.bytes().all(|byte| byte.is_ascii_graphic())
-    {
-        return Err("llm.codex_bridge_token must be 32-512 visible ASCII characters".into());
-    }
-    Ok(())
-}
-
-pub fn validate_codex_bridge_ca_pem(value: &str) -> Result<(), String> {
-    if value.is_empty() || value.len() > MAX_CODEX_BRIDGE_CA_PEM_BYTES {
-        return Err(
-            "llm.codex_bridge_ca_pem must contain one public CA certificate no larger than 32 KiB"
-                .into(),
-        );
-    }
-    if contains_private_key_pem_block(value) {
-        return Err(
-            "llm.codex_bridge_ca_pem must contain only public certificate material; private keys are forbidden"
-                .into(),
-        );
-    }
-    reqwest::Certificate::from_pem(value.as_bytes()).map_err(|_| {
-        String::from("llm.codex_bridge_ca_pem must contain one valid PEM-encoded X.509 certificate")
-    })?;
-    Ok(())
-}
-
-fn contains_private_key_pem_block(value: &str) -> bool {
-    value.lines().any(|line| {
-        let line = line.trim().to_ascii_uppercase();
-        line.starts_with("-----BEGIN ") && line.ends_with("-----") && line.contains("PRIVATE KEY")
-    })
-}
-
-pub fn validate_codex_bridge_url(value: &str) -> Result<(), String> {
-    if value.is_empty() || value.len() > MAX_CODEX_BRIDGE_URL_BYTES {
-        return Err("llm.codex_bridge_url is invalid".into());
-    }
-    let url = reqwest::Url::parse(value).map_err(|_| "llm.codex_bridge_url is invalid")?;
-    let host = url
-        .host_str()
-        .ok_or("llm.codex_bridge_url must include a host")?;
-    let normalized = host
-        .strip_prefix('[')
-        .and_then(|host| host.strip_suffix(']'))
-        .unwrap_or(host);
-    let loopback = normalized.eq_ignore_ascii_case("localhost")
-        || normalized
-            .parse::<IpAddr>()
-            .is_ok_and(|address| address.is_loopback());
-    if !url.username().is_empty()
-        || url.password().is_some()
-        || url.query().is_some()
-        || url.fragment().is_some()
-    {
-        return Err(
-            "llm.codex_bridge_url must not contain credentials, a query, or a fragment".into(),
-        );
-    }
-
-    if normalized
-        .parse::<IpAddr>()
-        .is_ok_and(|address| address.is_unspecified())
-    {
-        return Err("llm.codex_bridge_url must name a connectable host".into());
-    }
-
-    match url.scheme() {
-        "http" if loopback => Ok(()),
-        "https" => Ok(()),
-        "http" => Err(
-            "llm.codex_bridge_url must use HTTPS unless the host is localhost or a loopback IP address"
-                .into(),
-        ),
-        _ => Err("llm.codex_bridge_url must use HTTP or HTTPS".into()),
-    }
-}
-
-/// Validate the Codex provider base URL. Must be a valid HTTPS URL.
-pub fn validate_codex_provider_base_url(value: &str) -> Result<(), String> {
-    if value.is_empty() || value.len() > 512 {
-        return Err("llm.codex.provider_base_url must be 1-512 characters".into());
-    }
-    let url = reqwest::Url::parse(value)
-        .map_err(|_| "llm.codex.provider_base_url must be a valid URL")?;
-    if url.scheme() != "https" {
-        return Err("llm.codex.provider_base_url must use HTTPS".into());
-    }
-    if url.username().is_empty() && url.password().is_some() {
-        return Err("llm.codex.provider_base_url must not contain credentials in URL".into());
-    }
-    Ok(())
-}
-
-/// Validate the Codex provider model ID. Must be non-empty and reasonable length.
-pub fn validate_codex_provider_model(value: &str) -> Result<(), String> {
-    if value.is_empty() || value.len() > 128 {
-        return Err("llm.codex.model must be 1-128 characters".into());
-    }
-    if !value
-        .bytes()
-        .all(|b| b.is_ascii_graphic() || b == b' ' || b == b'-' || b == b'.' || b == b'_')
-    {
-        return Err("llm.codex.model must contain only alphanumeric, space, dash, dot, or underscore characters".into());
-    }
-    Ok(())
-}
-
-/// Validate the Codex model-catalog path. It is passed verbatim into the
-/// app-server child argv, so bound its length and reject control characters:
-/// an oversized or garbage value would otherwise fail the exec at the next
-/// restart and abort server boot until the config is repaired by hand.
-pub fn validate_codex_model_catalog_path(value: &str) -> Result<(), String> {
-    if value.is_empty() || value.len() > 512 {
-        return Err("llm.codex.model_catalog_path must be 1-512 characters".into());
-    }
-    if !value.starts_with('/') {
-        return Err("llm.codex.model_catalog_path must be an absolute path".into());
-    }
-    if !value.bytes().all(|b| b.is_ascii_graphic()) {
-        return Err(
-            "llm.codex.model_catalog_path must contain only visible ASCII characters".into(),
-        );
-    }
-    Ok(())
-}
-
-/// Validate the Codex provider API key environment variable name.
-pub fn validate_codex_provider_api_key_env(value: &str) -> Result<(), String> {
-    if value.is_empty() || value.len() > 128 {
-        return Err("llm.codex.api_key_env must be 1-128 characters".into());
-    }
-    // Environment variable names typically contain only alphanumeric and underscore
-    if !value
-        .bytes()
-        .all(|b| b.is_ascii_alphanumeric() || b == b'_')
-    {
-        return Err(
-            "llm.codex.api_key_env must contain only alphanumeric and underscore characters".into(),
-        );
-    }
-    Ok(())
-}
-
-/// Validate the Codex provider name.
-pub fn validate_codex_provider_name(value: &str) -> Result<(), String> {
-    if value.is_empty() || value.len() > 64 {
-        return Err("llm.codex.provider_name must be 1-64 characters".into());
-    }
-    if !value
-        .bytes()
-        .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
-    {
-        return Err("llm.codex.provider_name must contain only alphanumeric, dash, or underscore characters".into());
-    }
-    Ok(())
-}
-
-/// Validate the Codex provider wire API type.
-pub fn validate_codex_provider_wire_api(value: &str) -> Result<(), String> {
-    if value.is_empty() || value.len() > 32 {
-        return Err("llm.codex.wire_api must be 1-32 characters".into());
-    }
-    if !value
-        .bytes()
-        .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
-    {
-        return Err(
-            "llm.codex.wire_api must contain only alphanumeric, dash, or underscore characters"
-                .into(),
-        );
     }
     Ok(())
 }
@@ -2678,26 +2196,17 @@ mod tests {
     }
 
     #[test]
-    fn llm_debug_never_renders_credentials_endpoints_or_certificate_bodies() {
+    fn llm_debug_never_renders_credentials_or_endpoints() {
         let api_key = "api-key-must-not-render";
-        let bridge_token = "bridge-token-must-not-render-0123456789";
-        let bridge_url = "https://private-host.example:8765";
-        let ca_pem = crate::llm::codex_bridge::TEST_CA_PEM;
         let config = LlmConfig {
             api_key: Some(api_key.into()),
             base_url: Some("https://private-api.example/v1".into()),
-            codex_bridge_url: Some(bridge_url.into()),
-            codex_bridge_token: Some(bridge_token.into()),
-            codex_bridge_ca_pem: Some(ca_pem.into()),
             ..LlmConfig::default()
         };
 
         let rendered = format!("{config:?}");
         assert!(rendered.contains("api_key_configured: true"));
-        assert!(rendered.contains("codex_bridge_token_configured: true"));
-        for secret in [api_key, bridge_token, bridge_url, ca_pem] {
-            assert!(!rendered.contains(secret));
-        }
+        assert!(!rendered.contains(api_key));
         assert!(!rendered.contains("private-api.example"));
     }
 
@@ -3259,155 +2768,10 @@ injected_package_recovery_hook_sha256 = "{digest}"
     }
 
     #[test]
-    fn loads_codex_bridge_configuration() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = write_config(
-            &dir,
-            "custom.toml",
-            r#"
-[llm]
-provider = "codex"
-model = "gpt-5.4"
-codex_bridge_url = "http://127.0.0.1:9876"
-codex_bridge_token = "test-bridge-token-0123456789abcdef"
-"#,
-        );
-
-        let config = Config::load(&path).unwrap();
-
-        assert_eq!(config.llm.provider, LlmProvider::Codex);
-        assert_eq!(config.llm.model, "gpt-5.4");
-        assert_eq!(
-            config.llm.codex_bridge_url.as_deref(),
-            Some("http://127.0.0.1:9876")
-        );
-        assert_eq!(
-            config.llm.codex_bridge_token.as_deref(),
-            Some("test-bridge-token-0123456789abcdef")
-        );
-    }
-
-    #[test]
-    fn codex_bridge_environment_overrides_file_values() {
-        let config = LlmConfig {
-            codex_bridge_url: Some("http://127.0.0.1:9876".into()),
-            codex_bridge_token: Some("file-token-0123456789abcdefghijkl".into()),
-            ..LlmConfig::default()
-        };
-
-        assert_eq!(
-            config.resolve_codex_bridge_url_from(Some("http://127.0.0.1:7654".into())),
-            "http://127.0.0.1:7654"
-        );
-        assert_eq!(
-            config
-                .resolve_codex_bridge_token_from(Some("environment-token-0123456789abcdef".into()))
-                .as_deref(),
-            Some("environment-token-0123456789abcdef")
-        );
-    }
-
-    #[test]
-    fn codex_bridge_configuration_requires_https_off_loopback_and_valid_tokens() {
-        for url in [
-            "http://192.0.2.10:8765",
-            "http://user:password@127.0.0.1:8765",
-            "https://0.0.0.0:8765",
-            "https://[::]:8765",
-            "https://bridge.example.test:8765?q=1",
-            "https://bridge.example.test:8765#fragment",
-        ] {
-            assert!(validate_codex_bridge_url(url).is_err(), "{url}");
-        }
-        for url in [
-            "http://localhost:8765",
-            "http://127.0.0.1:8765",
-            "http://[::1]:8765",
-            "https://127.0.0.1:8765",
-            "https://192.0.2.10:8765",
-            "https://bridge.example.test:8765",
-        ] {
-            assert!(validate_codex_bridge_url(url).is_ok(), "{url}");
-        }
-
-        assert!(validate_codex_bridge_token(&"v".repeat(MIN_CODEX_BRIDGE_TOKEN_BYTES)).is_ok());
-        assert!(
-            validate_codex_bridge_token(&"x".repeat(MIN_CODEX_BRIDGE_TOKEN_BYTES - 1)).is_err()
-        );
-        let token_with_space = format!(
-            "{} {}",
-            "a".repeat(MIN_CODEX_BRIDGE_TOKEN_BYTES / 2),
-            "b".repeat(MIN_CODEX_BRIDGE_TOKEN_BYTES / 2)
-        );
-        assert!(validate_codex_bridge_token(&token_with_space).is_err());
-        assert!(validate_codex_bridge_token(&"x".repeat(513)).is_err());
-        assert!(validate_codex_bridge_ca_pem("not a certificate").is_err());
-        assert!(
-            validate_codex_bridge_ca_pem(&"x".repeat(MAX_CODEX_BRIDGE_CA_PEM_BYTES + 1)).is_err()
-        );
-    }
-
-    #[test]
-    fn codex_bridge_configuration_accepts_and_normalizes_a_public_ca() {
-        let mut config = LlmConfig {
-            codex_bridge_url: Some("https://bridge.example.test:8765".into()),
-            codex_bridge_ca_pem: Some(format!("  {}\n", crate::llm::codex_bridge::TEST_CA_PEM)),
-            ..LlmConfig::default()
-        };
-
-        config.normalize_and_validate().unwrap();
-        assert_eq!(
-            config.codex_bridge_ca_pem.as_deref(),
-            Some(crate::llm::codex_bridge::TEST_CA_PEM)
-        );
-    }
-
-    #[test]
-    fn codex_bridge_ca_rejects_every_private_key_pem_label() {
-        for label in [
-            "PRIVATE KEY",
-            "RSA PRIVATE KEY",
-            "EC PRIVATE KEY",
-            "ENCRYPTED PRIVATE KEY",
-            "OPENSSH PRIVATE KEY",
-            "PGP PRIVATE KEY BLOCK",
-        ] {
-            let contaminated = format!(
-                "{}\n-----BEGIN {label}-----\nAA==\n-----END {label}-----\n",
-                crate::llm::codex_bridge::TEST_CA_PEM,
-            );
-            assert!(
-                validate_codex_bridge_ca_pem(&contaminated).is_err(),
-                "accepted forbidden {label} block",
-            );
-        }
-
-        let lower_case = format!(
-            "{}\n-----begin private key-----\nAA==\n-----end private key-----\n",
-            crate::llm::codex_bridge::TEST_CA_PEM,
-        );
-        assert!(validate_codex_bridge_ca_pem(&lower_case).is_err());
-    }
-
-    #[test]
-    fn progress_cue_model_defaults_to_safe_fast_model() {
-        // With no explicit cue on a non-Codex provider (the default is Echo),
-        // the cue falls back to the main model so a Codex-only cue id is never
-        // sent to another provider's API.
+    fn progress_cue_model_defaults_to_main_model() {
         let config = LlmConfig::default();
         assert_eq!(config.progress_cue_model, None);
         assert_eq!(config.resolve_progress_cue_model(), config.model.as_str());
-
-        // A Codex provider with no custom endpoint uses the safe Codex fast
-        // default, which does exist on that API.
-        let dir = tempfile::tempdir().unwrap();
-        let path = write_config(&dir, "custom.toml", "[llm]\nprovider = \"codex\"\n");
-        let config = Config::load(&path).unwrap();
-        assert_eq!(config.llm.progress_cue_model, None);
-        assert_eq!(
-            config.llm.resolve_progress_cue_model(),
-            DEFAULT_PROGRESS_CUE_MODEL
-        );
     }
 
     #[test]
@@ -3418,7 +2782,7 @@ codex_bridge_token = "test-bridge-token-0123456789abcdef"
             "custom.toml",
             r#"
 [llm]
-provider = "codex"
+provider = "openai-compatible"
 progress_cue_model = "gpt-5.4-mini"
 "#,
         );
@@ -3438,8 +2802,6 @@ progress_cue_model = "gpt-5.4-mini"
         };
         assert!(config.normalize_and_validate().is_ok());
         assert_eq!(config.progress_cue_model, None);
-        // The default (non-Codex Echo) provider falls the cue back to the main
-        // model rather than the Codex-only default.
         assert_eq!(config.resolve_progress_cue_model(), config.model.as_str());
 
         for bad in ["", "model with spaces", "tab\there", "\x01ctrl"] {
@@ -3504,20 +2866,14 @@ progress_cue_model = "gpt-5.4-mini"
     }
 
     #[test]
-    fn progress_cue_model_falls_back_to_main_model_for_non_codex_providers() {
-        // For non-Codex providers (e.g., openai-compatible with Qwen), the Codex-only
-        // default model (gpt-5.3-codex-spark) won't exist on the provider's API.
-        // The cue model should fall back to the main model.
+    fn progress_cue_model_falls_back_to_main_model_for_every_provider() {
         let config = LlmConfig {
             provider: LlmProvider::OpenAiCompatible,
             model: "qwen3.7-max".into(),
             progress_cue_model: None,
             ..LlmConfig::default()
         };
-        assert_eq!(
-            config.resolve_progress_cue_model_with(|_| None),
-            "qwen3.7-max"
-        );
+        assert_eq!(config.resolve_progress_cue_model(), "qwen3.7-max");
 
         // Same for Gemini
         let gemini_config = LlmConfig {
@@ -3527,7 +2883,7 @@ progress_cue_model = "gpt-5.4-mini"
             ..LlmConfig::default()
         };
         assert_eq!(
-            gemini_config.resolve_progress_cue_model_with(|_| None),
+            gemini_config.resolve_progress_cue_model(),
             "gemini-2.5-flash"
         );
 
@@ -3538,10 +2894,7 @@ progress_cue_model = "gpt-5.4-mini"
             progress_cue_model: None,
             ..LlmConfig::default()
         };
-        assert_eq!(
-            openai_config.resolve_progress_cue_model_with(|_| None),
-            "gpt-4o"
-        );
+        assert_eq!(openai_config.resolve_progress_cue_model(), "gpt-4o");
 
         // Same for Anthropic
         let anthropic_config = LlmConfig {
@@ -3551,7 +2904,7 @@ progress_cue_model = "gpt-5.4-mini"
             ..LlmConfig::default()
         };
         assert_eq!(
-            anthropic_config.resolve_progress_cue_model_with(|_| None),
+            anthropic_config.resolve_progress_cue_model(),
             "claude-sonnet-4-20250514"
         );
 
@@ -3563,236 +2916,8 @@ progress_cue_model = "gpt-5.4-mini"
             ..LlmConfig::default()
         };
         assert_eq!(
-            explicit_config.resolve_progress_cue_model_with(|_| None),
+            explicit_config.resolve_progress_cue_model(),
             "custom-fast-model"
         );
-
-        // Codex provider still uses the Codex-only default
-        let codex_config = LlmConfig {
-            provider: LlmProvider::Codex,
-            model: "gpt-5.6-sol".into(),
-            progress_cue_model: None,
-            ..LlmConfig::default()
-        };
-        assert_eq!(
-            codex_config.resolve_progress_cue_model_with(|_| None),
-            DEFAULT_PROGRESS_CUE_MODEL
-        );
-    }
-}
-
-#[cfg(test)]
-mod codex_config_tests {
-    use super::*;
-
-    #[test]
-    fn test_llm_codex_config_defaults() {
-        let config = LlmCodexConfig::default();
-        assert_eq!(config.api_key_env, "DASHSCOPE_API_KEY");
-        assert_eq!(config.provider_name, "dashscope");
-        assert_eq!(config.wire_api, "responses");
-        assert_eq!(config.cue_model, None);
-        assert_eq!(config.provider_base_url, None);
-        assert_eq!(config.model, None);
-    }
-
-    #[test]
-    fn test_llm_codex_config_custom_values() {
-        let config = LlmCodexConfig {
-            provider_base_url: Some("https://custom.api.com/v1".to_string()),
-            model: Some("qwen-turbo".to_string()),
-            api_key_env: "CUSTOM_KEY".to_string(),
-            provider_name: "custom".to_string(),
-            wire_api: "chat".to_string(),
-            cue_model: None,
-            api_key: None,
-            model_catalog_path: None,
-        };
-        assert_eq!(
-            config.provider_base_url,
-            Some("https://custom.api.com/v1".to_string())
-        );
-        assert_eq!(config.model, Some("qwen-turbo".to_string()));
-        assert_eq!(config.api_key_env, "CUSTOM_KEY");
-        assert_eq!(config.provider_name, "custom");
-    }
-
-    #[test]
-    fn test_llm_config_with_codex_section() {
-        let mut config = LlmConfig {
-            provider: LlmProvider::Codex,
-            model: "gpt-5.6-sol".to_string(),
-            codex: Some(LlmCodexConfig {
-                provider_base_url: Some(
-                    "https://dashscope.aliyuncs.com/compatible-mode/v1".to_string(),
-                ),
-                model: Some("qwen3.7-max".to_string()),
-                api_key_env: "DASHSCOPE_API_KEY".to_string(),
-                provider_name: "dashscope".to_string(),
-                wire_api: "chat".to_string(),
-                cue_model: None,
-                api_key: None,
-                model_catalog_path: None,
-            }),
-            ..Default::default()
-        };
-
-        assert!(config.codex.is_some());
-        let codex = config.codex.as_ref().unwrap();
-        assert_eq!(codex.model, Some("qwen3.7-max".to_string()));
-
-        config.normalize_and_validate().unwrap();
-
-        // Should still have codex config after validation
-        assert!(config.codex.is_some());
-    }
-
-    #[test]
-    fn test_codex_model_catalog_path_validation() {
-        assert!(validate_codex_model_catalog_path("/data/local/tmp/qwen-catalog.json").is_ok());
-        assert!(validate_codex_model_catalog_path("").is_err());
-        assert!(validate_codex_model_catalog_path("relative/path.json").is_err());
-        assert!(validate_codex_model_catalog_path("/path/with space.json").is_err());
-        assert!(validate_codex_model_catalog_path("/path/with\nnewline").is_err());
-        assert!(validate_codex_model_catalog_path(&format!("/{}", "x".repeat(512))).is_err());
-
-        // The whole config rejects a malformed persisted value instead of
-        // deferring the failure to the next app-server exec.
-        let mut config = LlmConfig {
-            codex: Some(LlmCodexConfig {
-                model_catalog_path: Some("relative/path.json".to_string()),
-                ..LlmCodexConfig::default()
-            }),
-            ..LlmConfig::default()
-        };
-        assert!(config.normalize_and_validate().is_err());
-    }
-
-    #[test]
-    fn custom_codex_provider_coherence() {
-        let mut config = LlmConfig {
-            provider: LlmProvider::Codex,
-            model: "gpt-5.6-sol".to_string(),
-            progress_cue_model: None,
-            codex: Some(LlmCodexConfig {
-                provider_base_url: Some(
-                    "https://dashscope.aliyuncs.com/compatible-mode/v1".to_string(),
-                ),
-                model: Some("qwen3.7-max".to_string()),
-                api_key_env: "TEST_DS_KEY".to_string(),
-                provider_name: "dashscope".to_string(),
-                wire_api: "responses".to_string(),
-                cue_model: None,
-                api_key: None,
-                model_catalog_path: None,
-            }),
-            ..Default::default()
-        };
-        let with_key = |name: &str| (name == "TEST_DS_KEY").then(|| "sk-live".to_string());
-        let no_key = |_name: &str| None;
-
-        // Key present -> custom provider active; planner + cue models come from
-        // the codex block, so a ChatGPT id never reaches the custom endpoint.
-        assert!(config.codex_custom_provider_active_with(with_key));
-        assert_eq!(config.effective_model_with(with_key), "qwen3.7-max");
-        assert_eq!(
-            config.resolve_progress_cue_model_with(with_key),
-            "qwen3.7-max"
-        );
-
-        // Key absent -> inactive; falls back to native planner + cue defaults.
-        assert!(!config.codex_custom_provider_active_with(no_key));
-        assert_eq!(config.effective_model_with(no_key), "gpt-5.6-sol");
-        assert_eq!(
-            config.resolve_progress_cue_model_with(no_key),
-            DEFAULT_PROGRESS_CUE_MODEL
-        );
-
-        // An explicit cue model on the codex block wins when active.
-        config.codex.as_mut().unwrap().cue_model = Some("qwen-flash".to_string());
-        assert_eq!(
-            config.resolve_progress_cue_model_with(with_key),
-            "qwen-flash"
-        );
-
-        // A non-codex provider is never custom-active regardless of the block.
-        config.provider = LlmProvider::Gemini;
-        assert!(!config.codex_custom_provider_active_with(with_key));
-        assert_eq!(config.effective_model_with(with_key), "gpt-5.6-sol");
-    }
-
-    #[test]
-    fn test_llm_config_without_codex_section() {
-        let config = LlmConfig {
-            provider: LlmProvider::Gemini,
-            model: "gemini-2.5-flash".to_string(),
-            codex: None,
-            ..Default::default()
-        };
-
-        assert!(config.codex.is_none());
-    }
-
-    #[test]
-    fn test_codex_provider_base_url_validation() {
-        // Valid URLs
-        assert!(validate_codex_provider_base_url("https://api.example.com/v1").is_ok());
-        assert!(validate_codex_provider_base_url(
-            "https://dashscope.aliyuncs.com/compatible-mode/v1"
-        )
-        .is_ok());
-
-        // Invalid URLs
-        assert!(validate_codex_provider_base_url("http://api.example.com").is_err());
-        assert!(validate_codex_provider_base_url("not-a-url").is_err());
-        assert!(validate_codex_provider_base_url("").is_err());
-    }
-
-    #[test]
-    fn test_codex_provider_model_validation() {
-        // Valid models
-        assert!(validate_codex_provider_model("qwen3.7-max").is_ok());
-        assert!(validate_codex_provider_model("gpt-4").is_ok());
-        assert!(validate_codex_provider_model("claude-3-opus").is_ok());
-
-        // Invalid models
-        assert!(validate_codex_provider_model("").is_err());
-        assert!(validate_codex_provider_model(&"x".repeat(129)).is_err());
-    }
-
-    #[test]
-    fn test_codex_provider_api_key_env_validation() {
-        // Valid env vars
-        assert!(validate_codex_provider_api_key_env("DASHSCOPE_API_KEY").is_ok());
-        assert!(validate_codex_provider_api_key_env("API_KEY").is_ok());
-        assert!(validate_codex_provider_api_key_env("MY_CUSTOM_KEY_123").is_ok());
-
-        // Invalid env vars
-        assert!(validate_codex_provider_api_key_env("").is_err());
-        assert!(validate_codex_provider_api_key_env("KEY-WITH-DASH").is_err());
-        assert!(validate_codex_provider_api_key_env("key.with.dots").is_err());
-    }
-
-    #[test]
-    fn test_codex_provider_name_validation() {
-        // Valid names
-        assert!(validate_codex_provider_name("dashscope").is_ok());
-        assert!(validate_codex_provider_name("custom-provider").is_ok());
-        assert!(validate_codex_provider_name("my_provider_123").is_ok());
-
-        // Invalid names
-        assert!(validate_codex_provider_name("").is_err());
-        assert!(validate_codex_provider_name("provider with spaces").is_err());
-    }
-
-    #[test]
-    fn test_codex_wire_api_validation() {
-        // Valid APIs
-        assert!(validate_codex_provider_wire_api("chat").is_ok());
-        assert!(validate_codex_provider_wire_api("chat-completions").is_ok());
-
-        // Invalid APIs
-        assert!(validate_codex_provider_wire_api("").is_err());
-        assert!(validate_codex_provider_wire_api("api with spaces").is_err());
     }
 }

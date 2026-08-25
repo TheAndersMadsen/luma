@@ -127,7 +127,6 @@ class ConfigSecurityTest {
             ConfigSecurity.readOptionalString(imported, "server.http_bind_addr"),
         )
         assertFalse(imported.contains(attackerChosen))
-        assertFalse(imported.contains("codex_bridge"))
         assertFalse(imported.contains("api_key"))
         assertTrue(imported.contains("provider = \"echo\""))
         assertTrue(imported.contains("lan_dashboard_enabled = false"))
@@ -187,10 +186,6 @@ class ConfigSecurityTest {
             admin_token = "${"a".repeat(64)}"
             [llm]
             api_key = "llm-secret"
-            codex_bridge_token = "codex-secret"
-            [llm.codex]
-            provider_name = "dashscope"
-            api_key = "dashscope-secret"
             [weather]
             pirate_weather_api_key = "weather-secret"
             [google_maps]
@@ -206,8 +201,6 @@ class ConfigSecurityTest {
         for (secret in listOf(
             "a".repeat(64),
             "llm-secret",
-            "codex-secret",
-            "dashscope-secret",
             "weather-secret",
             "maps-secret",
             "brave-secret",

@@ -3,9 +3,6 @@ provider = "gemini"          # "codex", "gemini", "anthropic", "openai", "openai
 model = "gemini-2.5-flash"   # model ID for the provider
 # api_key = "..."            # optional, overrides env var
 # base_url = "..."           # optional, for openai-compatible providers
-# codex_bridge_url = "https://bridge-host.example:8765" # HTTPS required off loopback; CODEX_BRIDGE_URL overrides
-# codex_bridge_token = "..."  # optional; prefer CODEX_BRIDGE_TOKEN
-# codex_bridge_ca_pem = """... public CA certificate ...""" # optional private CA, 32 KiB max
 # gemini_google_search = true # enable built-in Google Search grounding (Gemini only)
 
 [llm.tools]
