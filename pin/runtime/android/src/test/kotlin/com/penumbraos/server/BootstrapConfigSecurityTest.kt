@@ -144,7 +144,7 @@ class BootstrapConfigSecurityTest {
         val local = private.resolve("config.local.toml")
         val marker = private.resolve(".config-security-schema")
         val legacy = external.resolve("config.toml").apply {
-            writeText("[llm]\nprovider = \"codex\"\n")
+            writeText("[llm]\nprovider = \"openai-compatible\"\n")
         }
         try {
             assertFalse(

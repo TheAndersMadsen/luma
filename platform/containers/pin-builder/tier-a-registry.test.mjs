@@ -74,7 +74,7 @@ test("registry resolves every canonical input and generated bindings are current
   assert.equal(resolved.featureFlags.cloud.length, 20);
   assert.equal(resolved.featureFlags.settingsGlobal.length, 6);
   assert.ok(resolved.protoKids.length >= 40);
-  assert.equal(resolved.operationalMarkers.length, 40);
+  assert.equal(resolved.operationalMarkers.length, 38);
 
   const first = generateTierAOutputs(resolved);
   const second = generateTierAOutputs(loadAndResolveTierARegistry());

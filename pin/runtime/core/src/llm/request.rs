@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 use crate::config::ResolvedConfig;
 
 /// The output contract expected from a provider call. Voice requests keep the
-/// ordinary answer-only bridge instruction, while the bounded agentic runtime
-/// receives a dedicated JSON-only instruction all the way through Codex.
+/// ordinary answer-only instruction, while the bounded agentic runtime
+/// receives a dedicated JSON-only instruction.
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum LlmResponseMode {
@@ -27,10 +27,8 @@ pub(crate) enum LlmResponseMode {
     /// `<tool_call>{...}</tool_call>` blocks, so this is the one mode whose
     /// bridge instruction must NOT forbid tool calls. It stays distinct from
     /// every other mode precisely so the six genuinely tool-free `ToolFreeText`
-    /// workloads keep their unchanged "no tools" instruction. The Codex child's
-    /// own tool surface stays empty here exactly as it is for `ToolFreeText`
-    /// (see `thread_start_params`): the tools this mode permits are the
-    /// caller's, executed host-side, never Codex's.
+    /// workloads keep their unchanged "no tools" instruction. The tools this
+    /// mode permits belong to the caller and execute in the server runtime.
     #[serde(rename = "hermes_tool_loop")]
     ToolStep,
 }
@@ -146,8 +144,8 @@ impl LlmChatRequest {
         self
     }
 
-    /// Route this trusted internal request to a specific configured Codex
-    /// model without changing the model used by ordinary assistant turns.
+    /// Route this trusted internal request to a specific configured model
+    /// without changing the model used by ordinary assistant turns.
     pub fn with_model_override(mut self, model: impl Into<String>) -> Self {
         self.model_override = Some(model.into());
         self

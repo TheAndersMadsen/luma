@@ -194,7 +194,6 @@ mod tests {
         // every provider: image analysis is kept safe by forcing tool-free
         // output rather than by rejecting tool-enabled providers.
         for provider in [
-            LlmProvider::Codex,
             LlmProvider::Gemini,
             LlmProvider::OpenAi,
             LlmProvider::Anthropic,
@@ -205,7 +204,7 @@ mod tests {
         }
 
         // The real guard: `image_model_text` builds its request with a tool-free
-        // response mode distinct from the default voice mode. The rig and codex
+        // response mode distinct from the default voice mode. Provider
         // backends route only the voice mode into the tool loop and every other
         // mode to a single tool-free completion, so image analysis can never
         // enter a side-effect-capable tool loop.

@@ -82,10 +82,7 @@ const MAX_WEB_AGE_BYTES: usize = 32;
 
 /// Per-attempt provider bound for one agentic model step.
 ///
-/// The Codex path genuinely needs the multi-phase bridge bound (identity +
-/// thread setup + interactive chat + cleanup). A direct HTTP provider
-/// (openai-compatible/DashScope, OpenAI, Gemini, Anthropic) answers a single
-/// step in seconds, so applying the Codex bound there lets ONE hung request
+/// A direct HTTP provider answers a single step in seconds, so letting one hung request
 /// consume the entire stock request budget: two attempts at 50s exceed both the
 /// 75s runtime breaker and the stock deadline, and the turn surfaces as "took
 /// too long to respond" instead of an answer or a graceful decline. Bounding
@@ -1844,7 +1841,6 @@ mod tests {
     #[test]
     fn every_dynamic_model_step_gets_the_same_bounded_retry_budget() {
         for provider in [
-            LlmProvider::Codex,
             LlmProvider::OpenAiCompatible,
             LlmProvider::OpenAi,
             LlmProvider::Gemini,

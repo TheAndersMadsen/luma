@@ -346,8 +346,6 @@ pub mod operational_markers {
     pub const BACKEND_UNAVAILABLE: &str = "backend_unavailable";
     pub const BOUNDED_LOADING_MESSAGE: &str = "<<< Returning bounded stock loading message";
     pub const CATEGORIZE_NOTIFICATIONS: &str = ">>> CategorizeNotifications";
-    pub const CODEX_STEP_OUTBOUND: &str = "<<< hermes codex step outbound";
-    pub const CODEX_STEP_PARSED: &str = "<<< hermes codex step parsed";
     pub const DECLINE: &str = "<<< hermes decline";
     pub const DETERMINISTIC_COMPLETION: &str = "<<< completing device control deterministically";
     pub const ENCRYPTED_SUMMARIZE_MESSAGES: &str = ">>> EncryptedSummarizeMessages";
@@ -402,8 +400,6 @@ pub mod operational_markers {
         BACKEND_UNAVAILABLE,
         BOUNDED_LOADING_MESSAGE,
         CATEGORIZE_NOTIFICATIONS,
-        CODEX_STEP_OUTBOUND,
-        CODEX_STEP_PARSED,
         DECLINE,
         DETERMINISTIC_COMPLETION,
         ENCRYPTED_SUMMARIZE_MESSAGES,

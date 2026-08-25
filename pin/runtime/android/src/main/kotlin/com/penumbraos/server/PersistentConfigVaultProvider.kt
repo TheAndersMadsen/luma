@@ -38,8 +38,6 @@ class PersistentConfigVaultProvider : ContentProvider() {
         private const val TAG = "PenumbraConfigVault"
         private const val VAULT_ROOT_PATH = "/data/system_ce/0/penumbraos"
         private const val VAULT_FILE_NAME = "config.snapshot"
-        private const val CODEX_HOME_DIRECTORY_NAME = "codex"
-        private const val CODEX_AUTH_FILE_NAME = "auth.json"
         private const val STATUS = "status"
         private const val STATUS_ABSENT = "absent"
         private const val STATUS_RESTORED = "restored"
@@ -108,10 +106,6 @@ class PersistentConfigVaultProvider : ContentProvider() {
             filesDir,
             PersistentConfigVaultFormat.ESIM_TOKEN_FILE_NAME,
             checkNotNull(snapshot.files[PersistentConfigVaultFormat.ESIM_TOKEN_FILE_NAME]),
-        )
-        restoreOptionalCodexAuth(
-            filesDir,
-            snapshot.files[PersistentConfigVaultFormat.CODEX_AUTH_FILE_NAME],
         )
         restoreOptionalArtifact(
             filesDir,
@@ -191,26 +185,7 @@ class PersistentConfigVaultProvider : ContentProvider() {
         return providerContext.filesDir
     }
 
-    private fun artifactFile(filesDir: File, name: String): File =
-        if (name == PersistentConfigVaultFormat.CODEX_AUTH_FILE_NAME) {
-            File(codexHome(filesDir), CODEX_AUTH_FILE_NAME)
-        } else {
-            File(filesDir, name)
-        }
-
-    private fun codexHome(filesDir: File): File {
-        val directory = File(filesDir, CODEX_HOME_DIRECTORY_NAME)
-        if (directory.exists() || Files.isSymbolicLink(directory.toPath())) {
-            checkSafeDirectory(directory, "Codex home")
-        } else {
-            checkSafeDirectory(filesDir, "credential files")
-            Files.createDirectory(directory.toPath())
-            Os.chmod(directory.absolutePath, 0b111000000)
-            syncDirectory(filesDir)
-        }
-        Os.chmod(directory.absolutePath, 0b111000000)
-        return directory
-    }
+    private fun artifactFile(filesDir: File, name: String): File = File(filesDir, name)
 
     private fun requireUserUnlocked() {
         val providerContext = checkNotNull(context) { "Provider context unavailable" }
@@ -278,17 +253,6 @@ class PersistentConfigVaultProvider : ContentProvider() {
         } else {
             restoreArtifact(filesDir, name, bytes)
         }
-    }
-
-    private fun restoreOptionalCodexAuth(filesDir: File, bytes: ByteArray?) {
-        val home = codexHome(filesDir)
-        val destination = File(home, CODEX_AUTH_FILE_NAME)
-        if (bytes == null) {
-            removeArtifact(destination)
-        } else {
-            writeAtomic(destination, bytes)
-        }
-        syncDirectory(home)
     }
 
     private fun restoreArtifact(filesDir: File, name: String, bytes: ByteArray) {

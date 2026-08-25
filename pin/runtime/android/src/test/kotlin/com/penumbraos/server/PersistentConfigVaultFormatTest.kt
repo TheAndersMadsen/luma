@@ -16,10 +16,6 @@ class PersistentConfigVaultFormatTest {
                 "[dev]\napk_install_enabled = false\n".toByteArray(),
             )
             put(
-                PersistentConfigVaultFormat.CODEX_AUTH_FILE_NAME,
-                "{\"auth_mode\":\"chatgpt\",\"tokens\":{}}\n".toByteArray(),
-            )
-            put(
                 PersistentConfigVaultFormat.SPOTIFY_AUTH_FILE_NAME,
                 "{\"version\":1,\"device_id\":\"device\",\"credentials\":{}}\n".toByteArray(),
             )
@@ -61,17 +57,6 @@ class PersistentConfigVaultFormatTest {
                 "0\n".toByteArray(StandardCharsets.US_ASCII),
             )
         }
-        assertThrows(IllegalArgumentException::class.java) {
-            PersistentConfigVaultFormat.encode(1, invalid)
-        }
-    }
-
-    @Test
-    fun rejectsMalformedCodexAuthenticationState() {
-        val invalid = validFiles().toMutableMap().apply {
-            put(PersistentConfigVaultFormat.CODEX_AUTH_FILE_NAME, "not-json".toByteArray())
-        }
-
         assertThrows(IllegalArgumentException::class.java) {
             PersistentConfigVaultFormat.encode(1, invalid)
         }

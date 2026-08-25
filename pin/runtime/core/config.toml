@@ -1,5 +1,5 @@
 [llm]
-provider = "gemini"          # "codex", "gemini", "anthropic", "openai", "openai-compatible", "echo"
+provider = "gemini"          # "gemini", "anthropic", "openai", "openai-compatible", "echo"
 model = "gemini-2.5-flash"   # model ID for the provider
 # api_key = "..."            # optional, overrides env var
 # base_url = "..."           # optional, for openai-compatible providers

@@ -22,8 +22,6 @@ const OPERATIONAL_MARKERS = Object.freeze([
   TIER_A_OPERATIONAL_MARKERS.artist_scoped_completion.value,
   TIER_A_OPERATIONAL_MARKERS.decline.value,
   TIER_A_OPERATIONAL_MARKERS.step_completed.value,
-  TIER_A_OPERATIONAL_MARKERS.codex_step_outbound.value,
-  TIER_A_OPERATIONAL_MARKERS.codex_step_parsed.value,
   TIER_A_OPERATIONAL_MARKERS.tool_executed.value,
   TIER_A_OPERATIONAL_MARKERS.mutation_rejected.value,
   TIER_A_OPERATIONAL_MARKERS.mutation.value,

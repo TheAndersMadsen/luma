@@ -23,9 +23,6 @@ pub async fn build_backend(
 ) -> Result<Arc<dyn LlmBackend>, Box<dyn std::error::Error + Send + Sync>> {
     match config.config.llm.provider {
         LlmProvider::Echo => Ok(EchoProvider::build()),
-        LlmProvider::Codex => {
-            Err(std::io::Error::other("assistant providers are configured in Cosmos").into())
-        }
         LlmProvider::Gemini => {
             GeminiProvider::build(config, http_client, request_logger, memory).await
         }

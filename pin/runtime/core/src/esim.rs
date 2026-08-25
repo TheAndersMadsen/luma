@@ -718,9 +718,9 @@ impl EsimBridge {
         Ok(generation)
     }
 
-    /// Commit the provider's complete fixed artifact set. This is used after
-    /// Codex writes or refreshes its app-private OAuth state; callers cannot
-    /// provide paths or bytes, and the Android broker validates every artifact.
+    /// Commit the provider's complete fixed artifact set after Spotify updates
+    /// its app-private state. Callers cannot provide paths or bytes, and the
+    /// Android broker validates every artifact.
     pub async fn commit_persistent_artifacts(
         &self,
         timeout: std::time::Duration,

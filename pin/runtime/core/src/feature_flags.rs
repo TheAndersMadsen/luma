@@ -263,7 +263,7 @@ pub const FEATURE_FLAG_SPECS: &[FeatureFlagSpec] = &[
         penumbra_default: None,
         writable: true,
         warning: Some(
-            "Interpreter remapping is available again, but live interpretation requires configured Codex translation and consented Azure Speech. The bidirectional service has host gRPC coverage; physical touchpad, projector, and session presentation remain pending.",
+            "Interpreter remapping is available again, but live interpretation requires Cosmos speech and translation to be ready. Physical touchpad, projector, and session presentation remain pending.",
         ),
         restart_recommended: true,
     },

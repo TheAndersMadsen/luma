@@ -126,7 +126,6 @@ impl ResolvedConfig {
 #[serde(rename_all = "lowercase")]
 pub enum LlmProvider {
     Echo,
-    Codex,
     Gemini,
     Anthropic,
     OpenAi,
@@ -139,7 +138,6 @@ impl LlmProvider {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Echo => "echo",
-            Self::Codex => "codex",
             Self::Gemini => "gemini",
             Self::Anthropic => "anthropic",
             Self::OpenAi => "openai",
@@ -154,10 +152,8 @@ impl LlmProvider {
     /// validates; `Echo` is a plumbing stub with no usable model output, so it
     /// stays on the deterministic stock-local paths only.
     ///
-    /// This is deliberately not Codex-specific: the runtime, its fail-closed
-    /// parser, provenance/binding validation, lock and native-action gates run
-    /// identically regardless of provider. Widening the set only changes which
-    /// provider may *propose* an operation, never how it is validated.
+    /// The fail-closed parser, provenance/binding validation, lock and
+    /// native-action gates run identically regardless of provider.
     pub(crate) fn supports_agentic_runtime(self) -> bool {
         !matches!(self, Self::Echo)
     }
@@ -171,7 +167,7 @@ impl std::fmt::Display for LlmProvider {
 
 #[derive(Deserialize, Serialize, Clone)]
 pub struct LlmConfig {
-    /// Provider name: "codex", "gemini", "anthropic", "openai", "openai-compatible", "echo"
+    /// Provider name: "gemini", "anthropic", "openai", "openai-compatible", "echo"
     #[serde(default = "default_provider")]
     pub provider: LlmProvider,
 
@@ -255,9 +251,7 @@ pub struct LlmConfig {
 
     /// Vision-capable model used for camera-image analysis. Image requests on
     /// the OpenAI-compatible chat wire contain a real multimodal image part, so
-    /// this must name a model that accepts images (for DashScope:
-    /// `qwen-vl-max` / `qwen3-vl-plus`; the DashScope `/responses` wire is
-    /// text-only and cannot serve vision). When `None`, image requests keep
+    /// this must name a model that accepts images. When `None`, image requests keep
     /// using the main `model`, which only works if that model is itself
     /// multimodal. This never changes the main assistant model or agentic loop.
     pub vision_model: Option<String>,
@@ -1631,7 +1625,6 @@ impl LlmConfig {
     /// Resolve the API key
     pub fn resolve_api_key(&self) -> Option<String> {
         let env_var = match self.provider {
-            LlmProvider::Codex => return None,
             LlmProvider::Gemini => "GEMINI_API_KEY",
             LlmProvider::Anthropic => "ANTHROPIC_API_KEY",
             LlmProvider::OpenAi | LlmProvider::OpenAiCompatible => "OPENAI_API_KEY",
@@ -1991,12 +1984,10 @@ mod tests {
 
     #[test]
     fn every_real_provider_drives_the_agentic_runtime_and_echo_does_not() {
-        // The bounded agentic JSON-operation loop is not Codex-specific: any
-        // real model backend may propose operations that the fail-closed
+        // Any real model backend may propose operations that the fail-closed
         // runtime then parses and validates identically. Only the `echo`
         // plumbing stub, which produces no usable model output, stays off it.
         for provider in [
-            LlmProvider::Codex,
             LlmProvider::Gemini,
             LlmProvider::Anthropic,
             LlmProvider::OpenAi,

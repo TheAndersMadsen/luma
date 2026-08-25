@@ -19,9 +19,8 @@ pub enum WeatherPromptKind {
 /// Weather was not one of Humane's annotated device actions: the stock home
 /// screen called `EncryptedWeather`, while conversational weather depended on
 /// the retired remote assistant selecting a provider tool. Resolve these
-/// common prompts before the configured LLM so the bundled Codex runtime (whose
-/// arbitrary tools are intentionally disabled) can still use the configured
-/// Pirate Weather service with the Pin's current request location.
+/// common prompts before the configured LLM so the configured weather service
+/// can use the Pin's current request location.
 pub fn plan_weather_prompt(request: &SynapseUnderstandingRequest) -> Option<WeatherPromptKind> {
     if request
         .device_context

@@ -4,9 +4,7 @@
 //! JSON-schema tool catalog; the model answers with either assistant text
 //! (the final answer) or one batch of tool calls. The loop that drives steps
 //! lives in `crate::synapse::chat_turn_loop`; each backend adapts the step to its
-//! wire (rig backends pass tools natively; the Codex bridge embeds schemas in
-//! its instructions and parses `<tool_call>` blocks, mirroring the reference
-//! agent's fallback for transports without native function calling).
+//! wire. Every supported provider uses native function calling.
 //!
 //! These types deliberately mirror the OpenAI function-calling shapes because
 //! that is the interoperable format every supported provider is trained on —

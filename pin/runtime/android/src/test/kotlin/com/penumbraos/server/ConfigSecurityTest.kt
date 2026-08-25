@@ -15,10 +15,7 @@ class ConfigSecurityTest {
             display_name = "Kitchen Pin"
 
             [llm]
-            provider = "codex"
-            api_key = "secret"
-
-            [llm.codex]
+            provider = "openai-compatible"
             api_key = "secret"
 
             [weather]
@@ -43,7 +40,7 @@ class ConfigSecurityTest {
         assertTrue(migrated.text.contains("enabled = false"))
         assertFalse(migrated.text.contains("api_key"))
         assertFalse(migrated.text.contains("[google_maps]"))
-        assertFalse(migrated.text.contains("provider = \"codex\""))
+        assertFalse(migrated.text.contains("provider = \"openai-compatible\""))
         assertFalse(
             ConfigSecurity.enforceCosmosProviderAuthority(migrated.text, true).changed,
         )
@@ -209,7 +206,6 @@ class ConfigSecurityTest {
             assertFalse(scrubbed.contains(secret))
         }
         assertTrue(scrubbed.contains("region = \"northeurope\""))
-        assertTrue(scrubbed.contains("provider_name = \"dashscope\""))
     }
 
     @Test

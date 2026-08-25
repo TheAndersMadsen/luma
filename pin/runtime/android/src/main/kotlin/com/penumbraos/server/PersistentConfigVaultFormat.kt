@@ -20,7 +20,6 @@ internal object PersistentConfigVaultFormat {
     const val LOCAL_CONFIG_FILE_NAME = "config.local.toml"
     const val SECURITY_SCHEMA_FILE_NAME = ".config-security-schema"
     const val ESIM_TOKEN_FILE_NAME = "esim-bridge-auth.token"
-    const val CODEX_AUTH_FILE_NAME = "codex-auth.json"
     const val SPOTIFY_AUTH_FILE_NAME = "spotify-auth.json"
 
     const val MAX_ARTIFACT_BYTES = 256 * 1024
@@ -39,7 +38,6 @@ internal object PersistentConfigVaultFormat {
         LOCAL_CONFIG_FILE_NAME,
         SECURITY_SCHEMA_FILE_NAME,
         ESIM_TOKEN_FILE_NAME,
-        CODEX_AUTH_FILE_NAME,
         SPOTIFY_AUTH_FILE_NAME,
     )
 
@@ -143,15 +141,6 @@ internal object PersistentConfigVaultFormat {
         EsimBridgeAuthentication.requireValidToken(tokenText)
 
         files[LOCAL_CONFIG_FILE_NAME]?.let(::strictUtf8)
-        files[CODEX_AUTH_FILE_NAME]?.let { auth ->
-            val text = strictUtf8(auth).trim()
-            require(
-                text.length >= 2 &&
-                    text.first() == '{' &&
-                    text.last() == '}' &&
-                    text.none { it == '\u0000' },
-            ) { "Invalid Codex authentication state" }
-        }
         files[SPOTIFY_AUTH_FILE_NAME]?.let { auth ->
             val text = strictUtf8(auth).trim()
             require(

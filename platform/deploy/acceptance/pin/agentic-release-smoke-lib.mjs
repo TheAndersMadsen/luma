@@ -986,7 +986,7 @@ export function evaluateCompoundNearbyRouteInitialProbe(responses, readiness) {
     valid ? CHECK_STATUS.PASS : CHECK_STATUS.FAIL,
     valid
       ? [
-          "Codex and bounded tools report ready",
+          "Cosmos assistant and bounded tools report ready",
           `real AIBus Understand returned exactly one parent-linked server ${NATIVE_ACTIONS.GET_CURRENT_LOCATION} preflight with empty input`,
           "no final response or navigation mutation was emitted before an authenticated device observation",
         ]

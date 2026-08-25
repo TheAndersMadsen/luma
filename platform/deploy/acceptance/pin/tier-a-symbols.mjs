@@ -363,43 +363,6 @@ export const TIER_A_SYMBOLS = deepFreeze({
       ],
       "status": "live"
     },
-    "codex_step_outbound": {
-      "value": "<<< hermes codex step outbound",
-      "fields": [
-        "correlation",
-        "tool_count",
-        "tools_empty",
-        "tool_branch",
-        "base_prompt_bytes",
-        "system_bytes",
-        "tool_block_bytes",
-        "transcript_messages",
-        "messages_sent",
-        "wire_mode",
-        "tool_digest",
-        "tool_names"
-      ],
-      "status": "live"
-    },
-    "codex_step_parsed": {
-      "value": "<<< hermes codex step parsed",
-      "fields": [
-        "correlation",
-        "response_bytes",
-        "markup_present",
-        "open_tags",
-        "blocks_found",
-        "parsed_ok",
-        "json_parse",
-        "missing_name",
-        "unterminated",
-        "foreign_tag",
-        "reason",
-        "outcome",
-        "spoken_bytes"
-      ],
-      "status": "live"
-    },
     "decline": {
       "value": "<<< hermes decline",
       "fields": [],

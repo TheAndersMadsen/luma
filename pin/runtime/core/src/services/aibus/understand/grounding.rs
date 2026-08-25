@@ -4,10 +4,9 @@
 
 use super::*;
 
-/// Provider-independent, request-scoped location lookup for tool-less LLM
-/// backends. Codex intentionally runs without network or tool access, so the
-/// trusted Rust service performs only the narrow OSM operations that already
-/// passed the explicit provider and exact-location consent gates.
+/// Provider-independent, request-scoped location lookup. The trusted Rust
+/// service performs only the narrow OSM operations that already passed the
+/// explicit provider and exact-location consent gates.
 pub(super) struct LocationGrounding {
     pub(super) enabled: bool,
     pub(super) osm: OsmClient,
@@ -82,7 +81,7 @@ impl LocationGrounding {
         config: &ResolvedConfig,
     ) -> Self {
         let options = config.openstreetmap_options.clone();
-        let enabled = config.config.llm.provider == LlmProvider::Codex
+        let enabled = config.config.llm.provider.supports_agentic_runtime()
             && options.enabled()
             && options.location_consent_acknowledged();
         Self {

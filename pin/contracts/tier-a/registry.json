@@ -881,7 +881,9 @@
       "fields": [],
       "status": "live",
       "emitter": "runtime/core/src/synapse/chat_turn_loop.rs",
-      "consumers": []
+      "consumers": [
+        "platform/deploy/acceptance/pin/architecture-vocabulary.test.mjs"
+      ]
     },
     {
       "name": "step_backend_error",
@@ -889,7 +891,9 @@
       "fields": [],
       "status": "live",
       "emitter": "runtime/core/src/synapse/chat_turn_loop.rs",
-      "consumers": []
+      "consumers": [
+        "platform/deploy/acceptance/pin/architecture-vocabulary.test.mjs"
+      ]
     },
     {
       "name": "decline",
@@ -897,7 +901,9 @@
       "fields": [],
       "status": "live",
       "emitter": "runtime/core/src/synapse/chat_turn_loop.rs",
-      "consumers": []
+      "consumers": [
+        "platform/deploy/acceptance/pin/architecture-vocabulary.test.mjs"
+      ]
     },
     {
       "name": "local_weather_physical_trace",
@@ -1120,53 +1126,6 @@
       ],
       "status": "live",
       "emitter": "runtime/core/src/llm/rig_backend.rs",
-      "consumers": [
-        "platform/deploy/acceptance/pin/architecture-vocabulary.test.mjs"
-      ]
-    },
-    {
-      "name": "codex_step_outbound",
-      "value": "<<< hermes codex step outbound",
-      "fields": [
-        "correlation",
-        "tool_count",
-        "tools_empty",
-        "tool_branch",
-        "base_prompt_bytes",
-        "system_bytes",
-        "tool_block_bytes",
-        "transcript_messages",
-        "messages_sent",
-        "wire_mode",
-        "tool_digest",
-        "tool_names"
-      ],
-      "status": "live",
-      "emitter": "runtime/core/src/llm/providers/codex.rs",
-      "consumers": [
-        "platform/deploy/acceptance/pin/architecture-vocabulary.test.mjs"
-      ]
-    },
-    {
-      "name": "codex_step_parsed",
-      "value": "<<< hermes codex step parsed",
-      "fields": [
-        "correlation",
-        "response_bytes",
-        "markup_present",
-        "open_tags",
-        "blocks_found",
-        "parsed_ok",
-        "json_parse",
-        "missing_name",
-        "unterminated",
-        "foreign_tag",
-        "reason",
-        "outcome",
-        "spoken_bytes"
-      ],
-      "status": "live",
-      "emitter": "runtime/core/src/llm/providers/codex.rs",
       "consumers": [
         "platform/deploy/acceptance/pin/architecture-vocabulary.test.mjs"
       ]

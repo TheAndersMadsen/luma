@@ -93,10 +93,7 @@ fn a_wearable_never_reads_a_developer_string_aloud() {
     );
 }
 
-/// The error sentences the Codex provider writes, exactly as they appear in
-/// its source.
-///
-/// These are written for whoever administers the host: they name the
+/// Provider errors written for whoever administers the host may name the
 /// bridge, the transport and the HTTP status, and several instruct the
 /// reader to go restart or reconfigure something. None of that is speech.
 /// They reach this module as the `backend_error` of a declined turn, so
@@ -107,8 +104,8 @@ fn a_wearable_never_reads_a_developer_string_aloud() {
 /// a reworded sentence is covered automatically.
 ///
 /// It also covers both halves of the backend-error boundary: the sentences
-/// `llm::error` authors for a wearer (which pass through untouched) and the
-/// Codex provider's host-operator sentences (which must not).
+/// `llm::error` authors for a wearer (which pass through untouched) and raw
+/// host-operator sentences (which must not).
 fn spoken_corpus() -> Vec<String> {
     let mut corpus = vec![CHAT_TURN_GENERIC_DECLINE.to_string()];
     for reason in [
@@ -145,14 +142,14 @@ fn a_provider_sentence_written_for_the_host_is_not_read_to_the_wearer() {
     // computer they are not near.
     let spoken = decline_speech(
         ChatTurnDeclineReason::BackendUnavailable,
-        Some("The Codex host bridge could not be verified. Check Wi-Fi, TLS, and the bridge process."),
+        Some("The model host bridge could not be verified. Check Wi-Fi, TLS, and the bridge process."),
     );
     assert!(!spoken.contains("TLS"));
     assert!(!spoken.contains("bridge"));
 
     // Softened for the ear, never for the log: the classifiers that drive
     // retry and triage still read the untouched original.
-    let raw = "The Codex host bridge failed with HTTP status 503 Service Unavailable.";
+    let raw = "The model host bridge failed with HTTP status 503 Service Unavailable.";
     assert!(!speakable_backend_error(raw).contains("503"));
     assert_eq!(chat_turn_backend_error_category(raw), "backend_other");
     assert!(chat_turn_backend_error_is_retryable(raw));
@@ -843,7 +840,7 @@ fn enabled_trace(utterance: &str, include_content: bool) -> (TurnTracer, ChatTur
         },
         utterance,
     );
-    let trace = ChatTurnTrace::new(tracer.clone(), "codex", "gpt-5.6-sol");
+    let trace = ChatTurnTrace::new(tracer.clone(), "openai", "gpt-5.6-sol");
     (tracer, trace)
 }
 
@@ -929,7 +926,7 @@ fn a_disabled_trace_changes_neither_the_outcome_nor_the_transcript() {
         "how many people live there",
     );
     let (traced_outcome, traced_tools, traced_messages) =
-        run_once(Some(&ChatTurnTrace::new(tracer.clone(), "codex", "sol")));
+        run_once(Some(&ChatTurnTrace::new(tracer.clone(), "openai", "sol")));
 
     assert_eq!(untraced_outcome, traced_outcome);
     assert_eq!(untraced_tools, traced_tools);
@@ -987,7 +984,7 @@ fn an_enabled_trace_records_the_ordered_chain_of_a_tool_then_answer_turn() {
             text,
             ..
         } => {
-            assert_eq!(provider, "codex");
+            assert_eq!(provider, "openai");
             assert_eq!(model, "gpt-5.6-sol");
             // System prompt ("sys") plus the utterance, and nothing else yet.
             assert_eq!(*prompt_chars, 3 + "how many people live there".len());

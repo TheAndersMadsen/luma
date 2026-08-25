@@ -339,8 +339,6 @@ object TierASymbols {
         const val BACKEND_UNAVAILABLE = "backend_unavailable"
         const val BOUNDED_LOADING_MESSAGE = "<<< Returning bounded stock loading message"
         const val CATEGORIZE_NOTIFICATIONS = ">>> CategorizeNotifications"
-        const val CODEX_STEP_OUTBOUND = "<<< hermes codex step outbound"
-        const val CODEX_STEP_PARSED = "<<< hermes codex step parsed"
         const val DECLINE = "<<< hermes decline"
         const val DETERMINISTIC_COMPLETION = "<<< completing device control deterministically"
         const val ENCRYPTED_SUMMARIZE_MESSAGES = ">>> EncryptedSummarizeMessages"
@@ -381,8 +379,6 @@ object TierASymbols {
             BACKEND_UNAVAILABLE,
             BOUNDED_LOADING_MESSAGE,
             CATEGORIZE_NOTIFICATIONS,
-            CODEX_STEP_OUTBOUND,
-            CODEX_STEP_PARSED,
             DECLINE,
             DETERMINISTIC_COMPLETION,
             ENCRYPTED_SUMMARIZE_MESSAGES,

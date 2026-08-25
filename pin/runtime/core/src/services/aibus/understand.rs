@@ -42,7 +42,7 @@ use super::envelope::unwrap_plaintext_data;
 use super::tools::execution::FunctionExecutionHandler;
 use super::tools::stock_agent::classify_clock_family_entry;
 use super::turn::orchestration::{AgenticExternalClients, AgenticReadToolBroker};
-use crate::config::{Config, LlmProvider, ResolvedConfig};
+use crate::config::{Config, ResolvedConfig};
 use crate::db::Database;
 use crate::external::osm::{OsmClient, OsmError, ReverseGeocodeResult};
 use crate::external::weather::{WeatherClient, WeatherRequest};
@@ -593,13 +593,8 @@ impl UnderstandHandler {
         recent_track: Option<&crate::db::MusicActivityRecord>,
         conversation_context: &[String],
     ) -> Option<AiMusicCandidate> {
-        // The AI music classifier is a constrained text classification call
-        // that never uses tools. It is safe to use with any provider.
-        // Previously this was gated on provider == Codex to avoid Rig tool
-        // side effects; instead it now requests tool-free text output, which
-        // routes rig to the structured (tool-free) agent and Codex to the
-        // tool-free bridge instruction, so no provider can wander into a tool
-        // call mid-classification.
+        // The AI music classifier is a constrained, tool-free text call, so no
+        // provider can wander into a tool call mid-classification.
 
         let payload = serde_json::json!({
             "utterance": utterance,

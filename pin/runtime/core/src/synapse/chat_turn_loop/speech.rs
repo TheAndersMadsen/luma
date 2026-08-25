@@ -121,7 +121,7 @@ pub(super) fn decline_speech(reason: ChatTurnDeclineReason, backend_error: Optio
 
 /// Turn one backend error into something a person wearing a Pin can hear.
 ///
-/// Measured defect this exists for: the Pin said, out loud, "The Codex host
+/// Measured defect this exists for: the Pin said, out loud, "The model host
 /// bridge could not be verified. Check Wi-Fi, TLS, and the bridge process." The
 /// wearer is on a pavement somewhere; the computer running the bridge is not
 /// with them, and TLS is not theirs to check. That sentence reached the speaker
@@ -130,9 +130,7 @@ pub(super) fn decline_speech(reason: ChatTurnDeclineReason, backend_error: Optio
 ///
 /// The passthrough was only ever safe for the rig providers, whose errors are
 /// rewritten by `llm::error::friendly_error_message` before they leave the
-/// provider. The Codex provider mints its own sentences for a host operator and
-/// never called it, so ~9 operator instructions went straight to the speaker.
-/// The arm is therefore a WHITELIST of the sentences that layer authors for a
+/// provider. The arm is therefore a WHITELIST of the sentences that layer authors for a
 /// wearer, and everything else is mapped through the same rewriter the rig path
 /// already trusts.
 ///
@@ -248,10 +246,6 @@ pub const INTERNAL_VOCABULARY: &[(&str, &str)] = &[
     // sentence that asks them to inspect it is not an answer, it is a chore
     // they cannot do. Measured: the Pin said "Check Wi-Fi, TLS, and the bridge
     // process" out loud.
-    (
-        "codex",
-        "the host program's own name; nothing a wearer owns",
-    ),
     ("bridge", "the host process that fronts it"),
     ("tls", "transport security; not the wearer's to check"),
     (
