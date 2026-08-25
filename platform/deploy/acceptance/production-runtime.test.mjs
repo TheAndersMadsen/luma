@@ -109,6 +109,8 @@ exit 0
   assert.match(source, /\/openapi\.json/u);
   assert.match(source, /\/llms\.txt/u);
   assert.match(source, /missing\.status !== 404/u);
+  assert.match(source, /'next-router-state-tree': notFoundTree/u);
+  assert.match(source, /public RSC navigation/u);
   assert.match(source, /pinRelease\.status !== 200 && pinRelease\.status !== 404/u);
   assert.doesNotMatch(source, /Object\.hasOwn\(identity, 'environment'\)/u);
   assert.match(source, /REVIVAL_DEVICE_EDGE_IPV4/u);

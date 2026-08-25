@@ -136,6 +136,27 @@ async function check() {
   });
   if (missing.status !== 404) throw new Error(`unknown public path returned ${missing.status}, expected 404`);
 
+  const notFoundTree = JSON.stringify([
+    '',
+    { children: ['/_not-found', { children: ['__PAGE__', {}, '/.ai-pin-revival-verification-missing', 'refresh'] }] },
+    null,
+    null,
+    true,
+  ]);
+  for (const path of ['/', '/developers']) {
+    const response = await fetch(`${origin}${path}?_rsc=production-verification`, {
+      headers: {
+        accept: '*/*',
+        rsc: '1',
+        'next-router-prefetch': '1',
+        'next-router-state-tree': notFoundTree,
+      },
+      redirect: 'error',
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) throw new Error(`public RSC navigation ${path} returned ${response.status}`);
+  }
+
   const discovery = await fetch(`${issuer}/.well-known/openid-configuration`, {
     redirect: 'error', signal: AbortSignal.timeout(10_000),
   });

@@ -201,3 +201,12 @@ test("My Data and capture overlays have symmetric, reduced-motion-aware exits", 
   assert.match(captureCss, /captureOpen/);
   assert.match(captureCss, /captureClose/);
 });
+
+test("the capture modal slot closes on every non-capture soft navigation", async () => {
+  const [home, catchAll] = await Promise.all([
+    source("src/app/@capturemodal/page.tsx"),
+    source("src/app/@capturemodal/[...catchAll]/page.tsx"),
+  ]);
+  assert.match(home, /return null/);
+  assert.match(catchAll, /return null/);
+});
