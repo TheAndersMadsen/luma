@@ -20,6 +20,9 @@ use tokio::sync::{Mutex, broadcast, oneshot};
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(12);
 const TURN_TIMEOUT: Duration = Duration::from_secs(24);
 
+type PendingRequests =
+    Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, CodexError>>>>>;
+
 #[derive(Debug, thiserror::Error)]
 pub enum CodexError {
     #[error("Codex app-server is not installed")]
@@ -79,7 +82,7 @@ pub struct CodexToolCall {
 
 struct Connection {
     stdin: Mutex<ChildStdin>,
-    pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, CodexError>>>>>,
+    pending: PendingRequests,
     events: broadcast::Sender<Value>,
     next_id: AtomicU64,
     closed: Arc<AtomicBool>,
@@ -197,8 +200,7 @@ impl CodexClient {
             .map_err(|_| CodexError::Start)?;
         let stdin = child.stdin.take().ok_or(CodexError::Start)?;
         let stdout = child.stdout.take().ok_or(CodexError::Start)?;
-        let pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, CodexError>>>>> =
-            Arc::new(Mutex::new(HashMap::new()));
+        let pending: PendingRequests = Arc::new(Mutex::new(HashMap::new()));
         let (events, _) = broadcast::channel(256);
         let closed = Arc::new(AtomicBool::new(false));
         let connection = Arc::new(Connection {
