@@ -26,7 +26,23 @@ test("assistant answers stay primary and implementation traces stay out of the U
   assert.match(chat, /t\.text \? <p className=\{styles\.say\}>/);
   assert.doesNotMatch(chat, /<details className=\{styles\.trace\}/);
   assert.doesNotMatch(chat, /reasoningOf|Used \{.*tool|suggestion/i);
-  assert.match(chat, /Done on your Pin\. No spoken reply\./);
+  assert.doesNotMatch(chat, /Done on your Pin|No spoken reply/);
+  assert.match(chat, /text: t\.text \|\| assistantCompletionMessage\(t\.steps\)/);
+  assert.match(chat, /step\.kind === "action" && step\.source === "device"/);
+  assert.match(chat, /This action is only available on your Ai Pin\./);
+  assert.match(chat, /Cosmos did not return a reply\. Try again\./);
+});
+
+test("Center identifies Cosmos as the assistant authority", async () => {
+  const [shell, assistant, chat] = await Promise.all([
+    source("src/components/Shell.tsx"),
+    source("src/components/FloatingAssistant.tsx"),
+    source("src/components/AiMicChat.tsx"),
+  ]);
+
+  for (const component of [shell, assistant, chat]) assert.match(component, /Ask Cosmos/);
+  assert.doesNotMatch(`${shell}\n${assistant}\n${chat}`, /Ask (?:your )?(?:Ai )?Pin/);
+  assert.match(chat, /t\.role === "you" \? "You" : "Cosmos"/);
 });
 
 test("a task-specific cue replaces the generic working indicator", async () => {

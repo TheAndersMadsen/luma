@@ -208,7 +208,7 @@ export function Shell({
               onClick={(event) => openAssistant(event.currentTarget)}
             >
               <AiMicIcon size={15} />
-              Ask Ai Pin
+              Ask Cosmos
             </button>
           ) : null}
         </div>

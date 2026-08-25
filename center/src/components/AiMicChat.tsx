@@ -18,7 +18,16 @@ import { StatusChip } from "./Status";
 
 type StepKind = "action" | "observation" | "answer";
 type TraceStep = { kind: StepKind; name: string; source: "device" | "server"; text: string; input: string; elapsed_ms: number };
-type Turn = { id: string; role: "you" | "pin"; text: string; cue?: string; steps: TraceStep[]; streaming: boolean };
+type Turn = { id: string; role: "you" | "cosmos"; text: string; cue?: string; steps: TraceStep[]; streaming: boolean };
+
+/** Explain an answerless completed turn without pretending Center ran it on a Pin. */
+export function assistantCompletionMessage(
+  steps: ReadonlyArray<Pick<TraceStep, "kind" | "source">>,
+): string {
+  return steps.some((step) => step.kind === "action" && step.source === "device")
+    ? "This action is only available on your Ai Pin."
+    : "Cosmos did not return a reply. Try again.";
+}
 
 /** What this deployment reports about the assistant behind the mic. */
 export type AssistantToolStatus = { name: string; live: boolean; needs: string };
@@ -249,7 +258,7 @@ export function AiMicChat({ autoListen = false, active = true }: { autoListen?: 
       setBusy(true);
       setTurns((cur) => [...cur, { id: crypto.randomUUID(), role: "you", text, steps: [], streaming: false }]);
       const turnId = crypto.randomUUID();
-      setTurns((cur) => [...cur, { id: turnId, role: "pin", text: "", steps: [], streaming: true }]);
+      setTurns((cur) => [...cur, { id: turnId, role: "cosmos", text: "", steps: [], streaming: true }]);
       const patch = (fn: (t: Turn) => Turn) => setTurns((cur) => cur.map((t) => (t.id === turnId ? fn(t) : t)));
 
       let cueSpoken: Promise<void> = Promise.resolve();
@@ -301,7 +310,11 @@ export function AiMicChat({ autoListen = false, active = true }: { autoListen?: 
           // navigated away from the chat entirely.
           await reader.cancel().catch(() => undefined);
         }
-        patch((t) => ({ ...t, streaming: false }));
+        patch((t) => ({
+          ...t,
+          streaming: false,
+          text: t.text || assistantCompletionMessage(t.steps),
+        }));
         if (voice && status?.speech && reply.trim()) { await cueSpoken; await speak(reply); }
         else await cueSpoken;
       } catch (error) {
@@ -364,14 +377,14 @@ export function AiMicChat({ autoListen = false, active = true }: { autoListen?: 
       <div className={styles.thread} ref={scrollRef}>
         {turns.length === 0 && (
           <div className={styles.empty}>
-            <p>{listening ? "Listening…" : "Ask your Ai Pin"}</p>
+            <p>{listening ? "Listening…" : "Ask Cosmos"}</p>
           </div>
         )}
-        {/* Only "you" turns are styled differently; there is no `.pin` class,
+        {/* Only "you" turns are styled differently; there is no `.cosmos` class,
             and indexing for one produced className="undefined". */}
         {turns.map((t) => (
           <article key={t.id} className={`${styles.turn} ${t.role === "you" ? styles.you : ""}`}>
-            <span className={styles.who}>{t.role === "you" ? "You" : "Ai Pin"}</span>
+            <span className={styles.who}>{t.role === "you" ? "You" : "Cosmos"}</span>
             <div className={styles.body}>
               {t.cue && <p className={styles.cue} role="status">{t.cue}</p>}
               {t.text ? <p className={styles.say}>{t.text}</p>
@@ -381,7 +394,6 @@ export function AiMicChat({ autoListen = false, active = true }: { autoListen?: 
                     Working…
                   </p>
                 )
-                : t.steps.length > 0 ? <p className={styles.silent}>Done on your Pin. No spoken reply.</p>
                 : null}
             </div>
           </article>
@@ -406,10 +418,10 @@ export function AiMicChat({ autoListen = false, active = true }: { autoListen?: 
           className={styles.composerInput}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
-          placeholder={listening ? "Listening…" : "Ask your Pin…"}
+          placeholder={listening ? "Listening…" : "Ask Cosmos…"}
           maxLength={4000}
           disabled={busy}
-          aria-label="Ask your Pin"
+          aria-label="Ask Cosmos"
         />
         {speechSupported ? (
           <button

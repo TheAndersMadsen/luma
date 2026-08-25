@@ -1,4 +1,4 @@
-/* "Talk to your Pin" — an honest addition, drawn with .Center's own controls.
+/* "Talk to Cosmos" — an honest addition, drawn with .Center's own controls.
    It used to draw its own borders, radii and weight-600 type, which is a large
    part of why the additions read as a different product bolted onto this one.
    The panel edge, the buttons and the composer now come from
@@ -84,7 +84,6 @@
 .srcTag { margin-left: 8px; }
 .obs { margin: 4px 0 0; color: var(--hu-colors-crater-base, #a9abab); font-size: 12px; line-height: 1.45; }
 
-.silent { margin: 0; color: var(--hu-text-muted); font-size: 14px; }
 .thinking { display: flex; align-items: center; gap: 9px; margin: 0; color: var(--hu-colors-crater-base); font-size: 14px; }
 .dots { display: inline-flex; gap: 4px; margin: 0; }
 .dots i { width: 5px; height: 5px; border-radius: 50%; background: var(--hu-colors-beam-base, #00ffe0); animation: pulse 0.9s ease-in-out infinite alternate; }

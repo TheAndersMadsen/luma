@@ -81,7 +81,7 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
             </span>
             <span>
               <span id="ai-pin-assistant-title" className={styles.title}>Ai Mic</span>
-              <span className={styles.subtitle}>Ask your Pin</span>
+              <span className={styles.subtitle}>Ask Cosmos</span>
             </span>
           </div>
           <div className={styles.headerActions}>
