@@ -230,19 +230,27 @@ export async function youtubeConnectionStatus(subject: string): Promise<{
   state: "not_connected" | "pairing" | "connected" | "error";
   device_code?: YoutubeDeviceCode;
 }> {
+  let storeFailed = false;
+  try {
+    const record = await readMusicAccountRecord(subject);
+    if (record.youtube_music?.credentials) {
+      // A completed, encrypted account connection is authoritative. A later
+      // failed or abandoned retry must never make that account look signed out.
+      pendingLogins.delete(subject);
+      return { state: "connected" };
+    }
+  } catch (error) {
+    if (error instanceof MusicSessionStoreError) storeFailed = true;
+    else throw error;
+  }
+
   const pending = pendingLogins.get(subject);
   if (pending?.failed) return { state: "error" };
   if (pending?.code && pending.code.expires_at > Date.now()) {
     return { state: "pairing", device_code: pending.code };
   }
   if (pending?.code) pendingLogins.delete(subject);
-  try {
-    const record = await readMusicAccountRecord(subject);
-    return { state: record.youtube_music?.credentials ? "connected" : "not_connected" };
-  } catch (error) {
-    if (error instanceof MusicSessionStoreError) return { state: "error" };
-    throw error;
-  }
+  return { state: storeFailed ? "error" : "not_connected" };
 }
 
 export async function startYoutubeConnection(subject: string): Promise<YoutubeDeviceCode> {

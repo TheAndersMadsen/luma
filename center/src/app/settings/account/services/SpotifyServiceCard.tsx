@@ -195,24 +195,6 @@ function spotifyState(status: SpotifyStatus): { label: string; tone: StatusTone;
             : "Your Pin couldn’t be reached. Provider accounts remain available in Center.";
     return { label: "Unavailable", tone: "degraded", copy };
   }
-  if (status.active_provider !== "spotify") {
-    const provider = providerOption(status.active_provider);
-    const connected = providerConnected(status, status.active_provider);
-    if (status.active_provider === "apple_music" && connected) {
-      return {
-        label: "Account connected",
-        tone: "degraded",
-        copy: "Apple Music is connected in Center. Native Pin playback still needs Apple’s official runtime.",
-      };
-    }
-    return {
-      label: connected ? "Connected" : "Needs connection",
-      tone: connected ? "live" : "degraded",
-      copy: connected
-        ? `${provider.label} receives native music prompts through Center.`
-        : `${provider.label} must be connected in Center before it can receive prompts.`,
-    };
-  }
   if (status.state === "disabled") {
     return { label: "Off", tone: "off", copy: "Spotify is turned off on your Pin." };
   }
@@ -232,6 +214,60 @@ function spotifyState(status: SpotifyStatus): { label: string; tone: StatusTone;
     label: "Needs attention",
     tone: "degraded",
     copy: status.last_error || "Spotify needs to be paired again.",
+  };
+}
+
+function providerAccountState(
+  status: SpotifyStatus,
+  provider: MusicProvider,
+): { label: string; tone: StatusTone; copy: string } {
+  if (provider === "spotify") return spotifyState(status);
+  const providerLabel = providerOption(provider).label;
+  const pinCopy = status.state === "unavailable"
+    ? " Pair your Ai Pin to make it the default for native music prompts."
+    : "";
+  const state = status.providers?.[provider]?.state;
+  if (state === "connected_playback_runtime_required") {
+    return {
+      label: "Account connected",
+      tone: "degraded",
+      copy: "Apple Music is connected to Center. Native playback still needs Apple’s official runtime.",
+    };
+  }
+  if (state === "connected") {
+    return {
+      label: "Connected",
+      tone: "live",
+      copy: `${providerLabel} is connected to Center.${pinCopy}`,
+    };
+  }
+  if (state === "pairing" || state === "connecting") {
+    return {
+      label: "Connecting",
+      tone: "live",
+      copy: provider === "youtube_music"
+        ? "Waiting for you to approve the Google device code."
+        : `Finish signing in with ${providerLabel}.`,
+    };
+  }
+  if (state === "error") {
+    return {
+      label: "Connection failed",
+      tone: "degraded",
+      copy: `${providerLabel} did not finish connecting. Try the sign-in again.`,
+    };
+  }
+  if (state === "not_configured") {
+    return {
+      label: "Not available",
+      tone: "off",
+      copy: `${providerLabel} is not configured on this Center.`,
+    };
+  }
+  return {
+    label: "Not connected",
+    tone: "absent",
+    copy: `${providerLabel} is not connected to Center.`,
   };
 }
 
@@ -278,6 +314,9 @@ export function SpotifyServiceCard() {
   const [now, setNow] = useState(() => Date.now());
   const draftInitializedRef = useRef(false);
   const requestGenerationRef = useRef(0);
+  const previousYoutubeStateRef = useRef<
+    "not_connected" | "pairing" | "connected" | "error" | undefined
+  >(undefined);
   const activeRequestRef = useRef<{
     controller: AbortController;
     generation: number;
@@ -315,6 +354,13 @@ export function SpotifyServiceCard() {
   const acceptStatus = useCallback((next: SpotifyStatus, syncDraft = false) => {
     setStatus(next);
     setError(null);
+    if (next.state === "unavailable" && !draftInitializedRef.current) {
+      const connectedProvider = MUSIC_PROVIDER_OPTIONS
+        .map(({ value }) => value)
+        .find((provider) => provider !== "spotify" && providerConnected(next, provider));
+      setActiveProvider(connectedProvider ?? "spotify");
+      draftInitializedRef.current = true;
+    }
     if (next.state !== "unavailable" && (syncDraft || !draftInitializedRef.current)) {
       setActiveProvider(next.active_provider || "spotify");
       setEnabled(next.enabled);
@@ -382,6 +428,20 @@ export function SpotifyServiceCard() {
     };
   }, [loadStatus, status?.providers?.tidal.state, status?.providers?.youtube_music.state, status?.state]);
 
+  const youtubeConnectionState = status?.providers?.youtube_music.state;
+  useEffect(() => {
+    const previous = previousYoutubeStateRef.current;
+    previousYoutubeStateRef.current = youtubeConnectionState;
+    if (previous !== "pairing") return;
+    if (youtubeConnectionState === "connected") {
+      setError(null);
+      setMessage("YouTube Music connected to Center.");
+    } else if (youtubeConnectionState === "error") {
+      setMessage(null);
+      setError("YouTube Music did not finish connecting. Try the sign-in again.");
+    }
+  }, [youtubeConnectionState]);
+
   const trimmedName = deviceName.trim();
   const spotifySelected = activeProvider === "spotify";
   const nameValid = trimmedName.length > 0 && [...trimmedName].length <= 48 && !/\p{Cc}/u.test(trimmedName);
@@ -396,7 +456,11 @@ export function SpotifyServiceCard() {
   const providerReady = activeProvider === "spotify"
     ? true
     : status?.providers?.[activeProvider]?.state === "connected";
-  const state = status ? spotifyState(status) : null;
+  const pinState = status ? spotifyState(status) : null;
+  const state = status ? providerAccountState(status, activeProvider) : null;
+  const youtubeAccountState = status ? providerAccountState(status, "youtube_music") : null;
+  const tidalAccountState = status ? providerAccountState(status, "tidal") : null;
+  const appleAccountState = status ? providerAccountState(status, "apple_music") : null;
   const canPair = Boolean(
     status &&
       spotifySelected &&
@@ -521,8 +585,15 @@ export function SpotifyServiceCard() {
         window.location.assign(body.authorization_url);
         return;
       }
-      await loadStatus(true);
-      setMessage(method === "POST" ? `Finish connecting ${providerOption(provider).label}.` : `${providerOption(provider).label} disconnected.`);
+      const next = await loadStatus(true);
+      const connected = next?.providers?.[provider]?.state === "connected";
+      setMessage(
+        method === "DELETE"
+          ? `${providerOption(provider).label} disconnected.`
+          : connected
+            ? `${providerOption(provider).label} connected to Center.`
+            : `Finish connecting ${providerOption(provider).label}.`,
+      );
     } catch (cause) {
       if (!request.controller.signal.aborted) setError(cause instanceof Error ? cause.message : "Music provider couldn’t be reached.");
     } finally {
@@ -616,7 +687,7 @@ export function SpotifyServiceCard() {
           {status.state === "unavailable" ? (
             <div className={styles.noticeArea}>
               <StatusMessage tone="warning" onRetry={() => void loadStatus()}>
-                {state?.copy ?? "Your Pin’s music service is unavailable."}
+                {pinState?.copy ?? "Your Pin’s music service is unavailable."}
               </StatusMessage>
               {status.unavailable_reason === "pin_not_paired" ||
               status.unavailable_reason === "pairing_unconfirmed" ? (
@@ -659,7 +730,7 @@ export function SpotifyServiceCard() {
             <div className={styles.settingsForm}>
               <label className={styles.fieldRow}>
                 <span>
-                  <strong>Default provider</strong>
+                  <strong>{status.state === "unavailable" ? "Provider account" : "Default provider"}</strong>
                   <small>{providerOption(activeProvider).detail}</small>
                 </span>
                 <select
@@ -669,7 +740,10 @@ export function SpotifyServiceCard() {
                   onChange={(event) => setActiveProvider(event.target.value as MusicProvider)}
                 >
                   {MUSIC_PROVIDER_OPTIONS.map((provider) => (
-                    <option key={provider.value} value={provider.value}>{provider.label}</option>
+                    <option key={provider.value} value={provider.value}>
+                      {provider.label}
+                      {providerConnected(status, provider.value) ? " — Connected" : ""}
+                    </option>
                   ))}
                 </select>
               </label>
@@ -731,7 +805,13 @@ export function SpotifyServiceCard() {
                 <div className={styles.providerNote}>
                   {activeProvider === "youtube_music" ? (
                     <>
-                      <strong>Connect YouTube Music in Center</strong>
+                      <div className={styles.providerHeading}>
+                        <strong>YouTube Music</strong>
+                        {youtubeAccountState ? (
+                          <StatusChip tone={youtubeAccountState.tone} label={youtubeAccountState.label} />
+                        ) : null}
+                      </div>
+                      <span>{youtubeAccountState?.copy}</span>
                       <span>
                         No app is installed on the Pin. Center uses an audio-only InnerTube session,
                         removes Pear&rsquo;s ad fields, blocks ad/tracker hosts, and returns only opaque streams.
@@ -748,6 +828,8 @@ export function SpotifyServiceCard() {
                       <div className={styles.providerActions}>
                         {status.providers?.youtube_music.state === "connected" ? (
                           <button type="button" className={styles.dangerButton} disabled={busy} onClick={() => void providerAction("youtube_music", "DELETE")}>Disconnect</button>
+                        ) : status.providers?.youtube_music.state === "pairing" ? (
+                          <button type="button" className={styles.quietButton} disabled>Waiting for sign-in…</button>
                         ) : (
                           <button type="button" className={styles.primaryButton} disabled={busy} onClick={() => void providerAction("youtube_music", "POST")}>{action === "connecting_provider" ? "Starting…" : "Connect YouTube Music"}</button>
                         )}
@@ -755,7 +837,13 @@ export function SpotifyServiceCard() {
                     </>
                   ) : activeProvider === "tidal" ? (
                     <>
-                      <strong>Connect TIDAL in Center</strong>
+                      <div className={styles.providerHeading}>
+                        <strong>TIDAL</strong>
+                        {tidalAccountState ? (
+                          <StatusChip tone={tidalAccountState.tone} label={tidalAccountState.label} />
+                        ) : null}
+                      </div>
+                      <span>{tidalAccountState?.copy}</span>
                       <span>No TIDAL app is installed on the Pin. Sign-in uses TIDAL&rsquo;s official OAuth + PKCE flow.</span>
                       {!status.providers?.tidal.configured ? <span>The operator must configure a TIDAL developer client first.</span> : null}
                       <div className={styles.providerActions}>
@@ -768,7 +856,13 @@ export function SpotifyServiceCard() {
                     </>
                   ) : (
                     <>
-                      <strong>Connect Apple Music in Center</strong>
+                      <div className={styles.providerHeading}>
+                        <strong>Apple Music</strong>
+                        {appleAccountState ? (
+                          <StatusChip tone={appleAccountState.tone} label={appleAccountState.label} />
+                        ) : null}
+                      </div>
+                      <span>{appleAccountState?.copy}</span>
                       <span>
                         No Apple Music app is installed on the Pin. Sign-in uses Apple&rsquo;s official
                         MusicKit window and Center stores the resulting account token encrypted.

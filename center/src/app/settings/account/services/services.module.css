@@ -129,6 +129,13 @@
 .providerNote span { display: block; }
 .providerNote a { color: var(--hu-colors-beam-base); }
 
+.providerHeading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
 .providerActions {
   display: flex;
   flex-wrap: wrap;

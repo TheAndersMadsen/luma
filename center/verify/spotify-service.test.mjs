@@ -357,6 +357,12 @@ test("Services renders every Pin-native state, polling and settings fallback", a
   assert.match(view, /Connect Spotify, YouTube Music, Apple Music, or TIDAL/);
   assert.match(view, /Pair My Ai Pin/);
   assert.match(view, /status\.state === "unavailable"/);
+  assert.match(view, /providerAccountState\(status, activeProvider\)/);
+  assert.match(view, /\$\{providerLabel\} is connected to Center/);
+  assert.match(view, /Waiting for sign-in…/);
+  assert.match(view, /Provider account/);
+  assert.match(view, /connectedProvider/);
+  assert.match(view, /— Connected/);
   assert.doesNotMatch(view, /Pair your Ai Pin before setting up Spotify/);
   assert.doesNotMatch(view, /<strong>\{providerOption\(activeProvider\)\.label\}<\/strong>/);
   assert.match(view, /window\.confirm\("Disconnect Spotify from this Ai Pin\?"\)/);

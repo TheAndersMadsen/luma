@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { EventEmitter } from "node:events";
 import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { Innertube } from "youtubei.js";
 
 // Node 22.14 supports the out-of-thread register() hook used by every other
 // Center source test, but not the newer synchronous registerHooks() API.
@@ -61,6 +63,51 @@ test("wearer music sessions are encrypted at rest and written with owner-only pe
     (await store.readMusicAccountRecord(subject)).youtube_music.credentials.refresh_token,
     refreshToken,
   );
+});
+
+test("a durable YouTube connection wins over a failed in-memory retry", async (t) => {
+  await encryptedStore(t);
+  const subject = "youtube-retry-wearer";
+  const originalCreate = Innertube.create;
+  t.after(() => {
+    Innertube.create = originalCreate;
+  });
+
+  Innertube.create = async () => {
+    const session = new EventEmitter();
+    session.signOut = async () => undefined;
+    session.signIn = () => new Promise((resolve, reject) => {
+      queueMicrotask(() => {
+        session.emit("auth-pending", {
+          user_code: "ABCD-EFGH",
+          verification_url: "https://www.youtube.com/activate",
+          expires_in: 600,
+        });
+        queueMicrotask(() => {
+          const error = new Error("simulated retry failure");
+          session.emit("auth-error", error);
+          reject(error);
+        });
+      });
+    });
+    return { session };
+  };
+
+  await youtube.startYoutubeConnection(subject);
+  await new Promise((resolve) => setImmediate(resolve));
+  await store.updateMusicAccountRecord(subject, (record) => ({
+    ...record,
+    youtube_music: {
+      connected_at: "2026-08-25T00:00:00.000Z",
+      credentials: {
+        access_token: "youtube-access-token",
+        refresh_token: "youtube-refresh-token",
+        expiry_date: "2026-08-26T00:00:00.000Z",
+      },
+    },
+  }));
+
+  assert.deepEqual(await youtube.youtubeConnectionStatus(subject), { state: "connected" });
 });
 
 test("YouTube Music removes ad payloads and refuses ad or non-media hosts", () => {
