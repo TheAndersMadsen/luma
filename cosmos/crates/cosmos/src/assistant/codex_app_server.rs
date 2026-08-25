@@ -75,8 +75,22 @@ pub struct CodexModelOutput {
 #[derive(Debug, Deserialize)]
 pub struct CodexToolCall {
     pub name: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_tool_arguments")]
     pub arguments: serde_json::Value,
+}
+
+fn deserialize_tool_arguments<'de, D>(deserializer: D) -> Result<Value, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let encoded = String::deserialize(deserializer)?;
+    let value = serde_json::from_str::<Value>(&encoded).map_err(serde::de::Error::custom)?;
+    if !value.is_object() {
+        return Err(serde::de::Error::custom(
+            "tool arguments must encode an object",
+        ));
+    }
+    Ok(value)
 }
 
 struct Connection {
@@ -361,7 +375,7 @@ fn turn_start_params(
                     "type": "object",
                     "properties": {
                         "name": { "type": "string" },
-                        "arguments": { "type": "object" }
+                        "arguments": { "type": "string" }
                     },
                     "required": ["name", "arguments"],
                     "additionalProperties": false
@@ -472,11 +486,19 @@ mod tests {
     #[test]
     fn structured_model_output_keeps_object_arguments() {
         let parsed = parse_model_output(
-            r#"{"content":null,"thought":"Need weather","tool_calls":[{"name":"weather","arguments":{"city":"Hvidovre"}}]}"#,
+            r#"{"content":null,"thought":"Need weather","tool_calls":[{"name":"weather","arguments":"{\"city\":\"Hvidovre\"}"}]}"#,
         )
         .unwrap();
         assert_eq!(parsed.tool_calls[0].name, "weather");
         assert_eq!(parsed.tool_calls[0].arguments["city"], "Hvidovre");
+    }
+
+    #[test]
+    fn tool_arguments_must_encode_an_object() {
+        assert!(parse_model_output(
+            r#"{"content":null,"thought":null,"tool_calls":[{"name":"weather","arguments":"[]"}]}"#,
+        )
+        .is_err());
     }
 
     #[test]
@@ -502,6 +524,10 @@ mod tests {
         assert_eq!(turn["sandboxPolicy"]["type"], "externalSandbox");
         assert_eq!(turn["sandboxPolicy"]["networkAccess"], "restricted");
         assert_eq!(turn["outputSchema"]["additionalProperties"], false);
+        assert_eq!(
+            turn["outputSchema"]["properties"]["tool_calls"]["items"]["properties"]["arguments"]["type"],
+            "string"
+        );
         assert_eq!(turn["effort"], "low");
     }
 }

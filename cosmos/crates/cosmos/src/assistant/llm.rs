@@ -294,7 +294,7 @@ fn codex_prompt(messages: &[ChatMessage], tools: &[ToolDef]) -> Result<String, L
     }))
     .map_err(|_| LlmError::Malformed)?;
     Ok(format!(
-        "You are the model adapter for a wearable voice assistant. Do not use files, shell commands, or network tools. Read the supplied transcript and tool definitions. Either answer briefly in content or select the necessary tools. Return only the required structured output. Tool arguments must be JSON objects.\n\n{input}"
+        "You are the model adapter for a wearable voice assistant. Do not use files, shell commands, or network tools. Read the supplied transcript and tool definitions. Either answer briefly in content or select the necessary tools. Return only the required structured output. Each tool call's arguments field must be a JSON object encoded as a string.\n\n{input}"
     ))
 }
 
