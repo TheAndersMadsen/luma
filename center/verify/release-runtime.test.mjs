@@ -20,11 +20,14 @@ test("Center builds a minimal non-root standalone image with runtime assets", as
   );
   assert.match(dockerfile, /\.next\/standalone/);
   assert.match(dockerfile, /ARG REVIVAL_RELEASE_ID/);
+  assert.match(dockerfile, /FROM --platform=\$BUILDPLATFORM node:22\.14\.0-bookworm-slim/);
+  assert.match(dockerfile, /AS runtime-dependencies/);
+  assert.match(dockerfile, /rm -rf \/app\/node_modules\/typescript \/app\/node_modules\/@img/);
+  assert.match(dockerfile, /--from=runtime-dependencies[^\n]+\/app\/node_modules\/@img/);
   assert.match(dockerfile, /\/app\/\.next\/static/);
   assert.match(dockerfile, /\/app\/public/);
   assert.match(dockerfile, /COSMOS_CONTRACTS_DIR=\/app\/contracts/);
   assert.match(dockerfile, /\. \.\/contracts/);
-  assert.match(dockerfile, /rm -rf \/app\/node_modules\/typescript/);
   assert.match(dockerfile, /--chown=1000:1001/);
   assert.match(dockerfile, /USER 1000:1001/);
   assert.match(dockerfile, /COSMOS_CHANNEL_KEY_FILE=\/data\/channel-key\.json/);

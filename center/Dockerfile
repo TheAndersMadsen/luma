@@ -3,7 +3,10 @@
 # Ai Pin Revival Center. Build tooling and source stay in the builder; the final
 # image contains only Next's traced standalone runtime, public assets, and the
 # protocol definitions loaded dynamically by the Cosmos bridge.
-FROM node:22.14.0-bookworm-slim@sha256:1c18d9ab3af4585870b92e4dbc5cac5a0dc77dd13df1a5905cea89fc720eb05b AS base
+# The Next output is architecture-independent, so compile it once on the native
+# builder. Running Node's compiler through QEMU is both slower and unreliable;
+# only the small Sharp runtime package needs to follow the target architecture.
+FROM --platform=$BUILDPLATFORM node:22.14.0-bookworm-slim@sha256:1c18d9ab3af4585870b92e4dbc5cac5a0dc77dd13df1a5905cea89fc720eb05b AS base
 
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
@@ -11,6 +14,11 @@ ENV NEXT_TELEMETRY_DISABLED=1
 FROM base AS dependencies
 COPY package.json package-lock.json ./
 RUN npm ci
+
+FROM node:22.14.0-bookworm-slim@sha256:1c18d9ab3af4585870b92e4dbc5cac5a0dc77dd13df1a5905cea89fc720eb05b AS runtime-dependencies
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund
 
 # The supported inner loop uses this target through the development Compose
 # override. Source is present for the initial start and then updated in place by
@@ -78,8 +86,10 @@ COPY --from=builder --chown=1000:1001 /app/public ./public
 COPY --from=wire_contracts --chown=1000:1001 . ./contracts
 
 # Next traces its optional configuration compiler whenever TypeScript is present
-# in the build stage. The generated server does not load it at runtime.
-RUN rm -rf /app/node_modules/typescript
+# in the build stage. The generated server does not load it at runtime. Replace
+# the builder's Sharp binaries with the small set npm selected for this target.
+RUN rm -rf /app/node_modules/typescript /app/node_modules/@img
+COPY --from=runtime-dependencies --chown=1000:1001 /app/node_modules/@img ./node_modules/@img
 
 USER 1000:1001
 
