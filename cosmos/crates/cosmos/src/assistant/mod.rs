@@ -8,6 +8,7 @@
 pub mod bidi;
 pub mod catalog;
 pub mod catalog_generated;
+pub mod codex_app_server;
 pub mod engine;
 pub mod llm;
 pub mod prompts;
@@ -17,26 +18,11 @@ pub mod turn;
 use std::sync::Arc;
 
 use engine::Engine;
-use llm::{ChatModel, DEFAULT_LLM_MODEL, DemoChatModel, OpenAiChatModel, configured_api_key};
+use llm::ConfiguredChatModel;
 
-/// Build the assistant engine, selecting the model from the environment:
-/// an OpenAI-compatible endpoint when `COSMOS_LLM_BASE_URL` + `COSMOS_LLM_API_KEY`
-/// are set (`COSMOS_LLM_MODEL` optional), otherwise a deterministic keyless model
-/// so `Understand` still streams a well-formed turn with no external LLM.
+/// Build the assistant engine around Cosmos's live provider selector. Center
+/// updates are read on the next model step, while an unconfigured server keeps
+/// the deterministic keyless response used by local development.
 pub fn build_engine() -> Arc<Engine> {
-    let base = std::env::var("COSMOS_LLM_BASE_URL").unwrap_or_default();
-    let key = configured_api_key();
-    let model: Arc<dyn ChatModel> =
-        if let (false, Some(api_key)) = (base.trim().is_empty(), key.clone()) {
-            let name =
-                std::env::var("COSMOS_LLM_MODEL").unwrap_or_else(|_| DEFAULT_LLM_MODEL.to_owned());
-            Arc::new(OpenAiChatModel::new(base, api_key, name))
-        } else {
-            // No model configured: a stateless demo model runs one honest loop (tool
-            // call -> observation -> answer) so the full ReAct machinery is exercised
-            // end-to-end on the wire, identically on every request and without
-            // inventing facts.
-            Arc::new(DemoChatModel)
-        };
-    Arc::new(Engine::new(model))
+    Arc::new(Engine::new(Arc::new(ConfiguredChatModel::assistant())))
 }

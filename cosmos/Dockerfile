@@ -28,6 +28,21 @@ RUN --mount=type=cache,id=cosmos-cargo-registry-${TARGETARCH},target=/usr/local/
     cargo build --locked --release --bin cosmos \
     && cp /workspace/cosmos/target/release/cosmos /cosmos
 
+# Codex subscription support uses OpenAI's official app-server binary. Keep
+# Node and npm out of the runtime image; only the exact target-architecture
+# vendor bundle is copied across. The layer is shared by every Cosmos workload,
+# while only ai-bus starts it after an operator chooses Codex in Center.
+FROM node:22.14.0-bookworm-slim@sha256:1c18d9ab3af4585870b92e4dbc5cac5a0dc77dd13df1a5905cea89fc720eb05b AS codex
+ARG TARGETARCH
+RUN npm install --global --ignore-scripts --no-audit --no-fund @openai/codex@0.149.1 \
+    && case "$TARGETARCH" in \
+        amd64) package=codex-linux-x64; target=x86_64-unknown-linux-musl ;; \
+        arm64) package=codex-linux-arm64; target=aarch64-unknown-linux-musl ;; \
+        *) echo "unsupported Codex architecture: $TARGETARCH" >&2; exit 1 ;; \
+    esac \
+    && install -d /opt/codex \
+    && cp -a "/usr/local/lib/node_modules/@openai/codex/node_modules/@openai/$package/vendor/$target/." /opt/codex/
+
 FROM debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241 AS runtime
 
 # Match the immutable 2026-08-03 base-image snapshot. Both dated archives expose
@@ -58,6 +73,7 @@ RUN rm -f /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /cosmos /usr/local/bin/cosmos
+COPY --from=codex --chown=65532:65532 /opt/codex /opt/codex
 
 # Durable-state mountpoint (`COSMOS_STATE_DIR`). It must exist in the image AND be
 # owned by the runtime uid: Docker seeds a fresh named volume from the image

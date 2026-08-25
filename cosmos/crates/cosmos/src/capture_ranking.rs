@@ -50,22 +50,15 @@ fn json_object(text: &str) -> Option<&str> {
 }
 
 async fn vision_choice(frames: &[Vec<u8>]) -> Option<BestFrameSelection> {
-    let base_url = std::env::var("COSMOS_LLM_BASE_URL")
-        .ok()
-        .filter(|value| !value.trim().is_empty())?;
-    let api_key = crate::assistant::llm::configured_api_key()?;
-    // Compose intentionally renders an unset optional variable as `""`.
-    // Treat that as absent before falling back to the assistant's multimodal
-    // model; Result::or_else alone only handles a missing variable and made an
-    // explicitly empty COSMOS_VISION_MODEL disable AI ranking altogether.
-    let model = std::env::var("COSMOS_VISION_MODEL")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| {
-            std::env::var("COSMOS_LLM_MODEL")
-                .ok()
-                .filter(|value| !value.trim().is_empty())
-        })?;
+    let config = crate::integrations::active().snapshot().assistant;
+    if config.provider != crate::integrations::AssistantProvider::OpenAiCompatible
+        || !config.configured()
+    {
+        return None;
+    }
+    let base_url = config.base_url;
+    let api_key = config.api_key?;
+    let model = config.model;
 
     let mut content = vec![serde_json::json!({
         "type": "text",

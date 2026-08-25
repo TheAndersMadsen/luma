@@ -117,6 +117,38 @@ test("retired settings routes lead to a useful wearer page while Services stays 
   assert.match(about, /about-environment/);
 });
 
+test("Services configures Cosmos providers without placing credentials on the Pin", async () => {
+  const [page, card, route, codexRoute, css] = await Promise.all([
+    source("src/app/settings/account/services/page.tsx"),
+    source("src/app/settings/account/services/CosmosServicesCard.tsx"),
+    source("src/app/api/admin/integrations/route.ts"),
+    source("src/app/api/admin/integrations/codex/route.ts"),
+    source("src/app/settings/account/services/services.module.css"),
+  ]);
+
+  assert.match(page, /currentSession/);
+  assert.match(page, /operator=\{session\?\.operator === true\}/);
+  for (const label of [
+    "OpenAI-compatible API",
+    "Codex subscription",
+    "SearxNG URL",
+    "Google Maps key",
+    "Azure Speech key",
+  ]) assert.match(card, new RegExp(label));
+  assert.match(card, /type="password"/);
+  assert.match(card, /api_key_configured/);
+  assert.match(card, /no search, maps, assistant or speech key is copied to the device/);
+  assert.doesNotMatch(card, /\/api\/pin\/|PENUMBRA_|OPENAI_API_KEY/);
+  for (const sourceText of [route, codexRoute]) {
+    assert.match(sourceText, /requireOperatorRequest/);
+    assert.match(sourceText, /adminAuthHeaders/);
+    assert.match(sourceText, /cache-control.*private, no-store/s);
+  }
+  assert.match(route, /isSameOriginRequest/);
+  assert.match(codexRoute, /isSameOriginRequest/);
+  assert.match(css, /\.pairingTimer\s*\{[^}]*place-items:\s*center/s);
+});
+
 test("device page avoids unsupported placeholder rows", async () => {
   const devices = await source("src/app/settings/account/devices/page.tsx");
 

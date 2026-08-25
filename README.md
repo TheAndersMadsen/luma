@@ -46,8 +46,8 @@ flowchart LR
 
 | Part | Runs on | Purpose |
 | --- | --- | --- |
-| Center | Your server | Sign-in, service readiness, music connections, Pin installer, and owner data |
-| Cosmos | Your server | The only provider authority: assistant, search, maps, speech, enrollment, media, and storage |
+| Center | Your server | The owner control plane: sign-in, Cosmos integration settings, music connections, Pin installer, and provisioning |
+| Cosmos | Your server | The runtime authority: assistant, search, maps, speech, enrollment, media, and storage |
 | Server | Ai Pin | Device-local settings, captures, diagnostics, and native action bridges; it holds no provider key |
 | Hook | Ai Pin | Routes stock cloud calls only to the activated Cosmos server and fails closed before activation |
 
@@ -134,40 +134,7 @@ Rerunning setup preserves existing nonblank values.
 Optional profiles are `pin`, `search`, `spotify`, and `observability`. Spotify
 also needs the Iroh ticket file named by `./revival setup production --help`.
 
-### 3. Configure the assistant and speech
-
-See the available provider settings without exposing values:
-
-```sh
-./revival config list --group provider
-```
-
-An OpenAI-compatible assistant uses these settings:
-
-```sh
-./revival config set COSMOS_LLM_BASE_URL https://provider.example/v1
-./revival config set COSMOS_LLM_MODEL YOUR_MODEL
-./revival config set COSMOS_LLM_API_KEY --stdin
-```
-
-Paste the secret on standard input, then press Ctrl-D. This keeps it out of
-shell history. Azure Speech uses the same external configuration model:
-
-```sh
-./revival config set COSMOS_REMOTE_TTS_ENABLED true
-./revival config set COSMOS_AZURE_SPEECH_REGION YOUR_REGION
-./revival config set COSMOS_AZURE_SPEECH_VOICE YOUR_VOICE
-./revival config set COSMOS_AZURE_SPEECH_KEY --stdin
-```
-
-Existing Azure, assistant, search, music, and other provider values survive
-normal setup and deployment runs. Validate their dependencies with:
-
-```sh
-./revival config check
-```
-
-### 4. Deploy and verify
+### 3. Deploy and verify
 
 ```sh
 ./revival doctor production
@@ -187,6 +154,33 @@ If GHCR packages are private, first run:
 ```
 
 Enter a package-read token only at Docker's hidden prompt.
+
+### 4. Configure Cosmos in Center
+
+Sign in as the operator, then open **Settings → Services → Cosmos**. This is the
+normal configuration path for every Pin-facing cloud capability:
+
+- **Assistant:** choose an OpenAI-compatible API or a Codex subscription.
+  OpenAI-compatible covers OpenRouter, OpenAI, a compatible gateway, and a
+  self-hosted endpoint; enter its base URL, API key, exact model ID, reasoning
+  effort, and response limit. For Codex, select **Codex subscription**, choose
+  **Connect Codex**, and finish the device-code sign-in in the linked browser
+  page. Cosmos runs the official Codex app server and refreshes that session.
+- **Search, maps & knowledge:** add SearXNG or SerpAPI for web results and any
+  optional Perplexity, Google Maps, Pirate Weather, or Wolfram credentials.
+- **Speech:** add the Azure Speech key, region, and voice.
+
+Secret fields are never returned to the browser. A configured field says so;
+leave it blank to keep the stored value or choose **Remove** to clear it. Saving
+takes effect for new Cosmos requests without restarting or re-provisioning the
+Pin.
+
+Center sends settings over the private operator API to Cosmos. Cosmos stores
+them in its owner-only state volume; Center does not retain a second copy and
+the Pin receives none of them. Existing provider environment values are
+imported only as the initial Cosmos configuration, so upgrades keep working.
+The `./revival config` commands remain available for headless bootstrap and
+automation, but they are not part of normal Pin setup.
 
 ### Public verification and agent discovery
 
@@ -355,8 +349,8 @@ before package changes begin and tells you to wait and retry.
    device answers through your Cosmos deployment.
 
 Activation stores the server hostname, device-status endpoint, trust roots, and
-device identity as one transaction. Provider credentials stay in the server's
-external configuration. Installation and activation both bind to the exact
+device identity as one transaction. Provider credentials stay in Cosmos and
+are managed from Center. Installation and activation both bind to the exact
 serial and plan without changing the device until explicitly confirmed.
 
 ## Build the Pin apps
@@ -398,8 +392,8 @@ Inputs:
 - ACME email: [ACME_EMAIL]
 - First operator email: [OPERATOR_EMAIL]
 - Public IPv4: [PUBLIC_IPV4]
-- Assistant provider base URL and model: [BASE_URL] and [MODEL]
-- I will enter assistant and Azure secrets through stdin when asked.
+- I will connect assistant, search, maps, and speech providers in Center after
+  deployment. Do not ask for or place provider secrets on the Pin.
 
 Rules:
 - Read the repository README first.
@@ -409,6 +403,9 @@ Rules:
   GitHub release. Do not clone or deploy a source checkout.
 - Use the bundled ./revival commands and their --help output as authority.
 - Never print, log, commit, or place a secret in argv or shell history.
+- Treat Center as the provider control plane and Cosmos as the runtime
+  authority. Provision the Pin only with the Cosmos endpoint, trust root, and
+  device identity.
 - Do not add compatibility, migration, backup, or alternate deployment paths.
 - Run one narrow diagnostic after a failure; fix the cause and resume.
 - Ask me only for a missing input, credential, DNS change, firewall change, or
@@ -421,6 +418,9 @@ Success evidence:
 - ./revival verify production passes after deployment.
 - GET https://[DOMAIN]/api/version returns the expected release and
   environment "production".
+- The operator can open Settings → Services → Cosmos and choose either an
+  OpenAI-compatible provider or Codex subscription, plus search, maps, and
+  speech settings.
 - https://[DOMAIN]/llms.txt, /openapi.json, /sitemap.xml, and /developers.md
   return successful machine-readable responses.
 
@@ -511,9 +511,10 @@ Path overrides must be set before initialization:
   `./revival verify production`, then inspect `https://YOUR_DOMAIN/api/version`.
   A production deployment must return `environment: "production"` and the
   release revision you deployed.
-- Assistant or Azure speech does not start: run
-  `./revival config list --group provider` and `./revival config check`; values
-  remain external and are not replaced by deployment.
+- Assistant, search, maps, or speech is unavailable: open **Settings → Services
+  → Cosmos**, complete the field marked **Needs setup**, save, and retry. If the
+  whole card is unavailable, run `./revival verify production`; changing these
+  providers never requires a Pin reinstall or activation.
 - A command is unclear: use `./revival COMMAND --help`. Help is read-only and
   states whether a command can change local, remote, or device state.
 

@@ -317,6 +317,16 @@ test("Docker build frontends are digest-bound release inputs", () => {
   }
 });
 
+test("Cosmos bundles the pinned official Codex app server for both release architectures", () => {
+  const dockerfile = fs.readFileSync(path.join(root, "cosmos/Dockerfile"), "utf8");
+  assert.match(dockerfile, /@openai\/codex@0\.149\.1/);
+  assert.match(dockerfile, /amd64\) package=codex-linux-x64; target=x86_64-unknown-linux-musl/);
+  assert.match(dockerfile, /arm64\) package=codex-linux-arm64; target=aarch64-unknown-linux-musl/);
+  assert.match(dockerfile, /COPY --from=codex --chown=65532:65532 \/opt\/codex \/opt\/codex/);
+  const runtime = dockerfile.split(/ AS runtime\s/u, 2)[1];
+  assert.doesNotMatch(runtime, /npm install|FROM node:/u);
+});
+
 test("production Compose is an image-only portable appliance with opt-in services", (context) => {
   const composeVersion = spawnSync("docker", ["compose", "version"], {
     cwd: root,
@@ -358,8 +368,6 @@ test("production Compose is an image-only portable appliance with opt-in service
     COSMOS_AZURE_SPEECH_REGION: "southeastasia",
     COSMOS_AZURE_SPEECH_VOICE: "da-DK-ChristelNeural",
     COSMOS_OPENROUTER_API_KEY: "placeholder-openrouter-key",
-    COSMOS_INTERSTITIAL_BASE_URL: "http://model-runtime:11434/v1",
-    COSMOS_INTERSTITIAL_MODEL: "qwen2.5:3b-instruct",
   };
   const render = (profiles = []) => {
     const profileArgs = profiles.flatMap((profile) => ["--profile", profile]);
@@ -433,7 +441,6 @@ test("production Compose is an image-only portable appliance with opt-in service
 
   const aiBus = core.services["ai-bus"].environment;
   assert.equal(aiBus.COSMOS_OPENROUTER_API_KEY, "placeholder-openrouter-key");
-  assert.equal(aiBus.COSMOS_INTERSTITIAL_MODEL, "qwen2.5:3b-instruct");
   assert.equal(aiBus.COSMOS_AZURE_SPEECH_KEY, "placeholder-cosmos-speech-key");
   assert.equal(aiBus.COSMOS_AZURE_SPEECH_REGION, "southeastasia");
   assert.equal(aiBus.COSMOS_AZURE_SPEECH_VOICE, "da-DK-ChristelNeural");

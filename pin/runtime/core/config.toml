@@ -1,21 +1,15 @@
 [llm]
-provider = "gemini"          # "gemini", "anthropic", "openai", "openai-compatible", "echo"
-model = "gemini-2.5-flash"   # model ID for the provider
-# api_key = "..."            # optional, overrides env var
-# base_url = "..."           # optional, for openai-compatible providers
-# gemini_google_search = true # enable built-in Google Search grounding (Gemini only)
+provider = "echo"
+model = "local-disabled"
 
 [llm.tools]
-enabled = true
-# Tool embeddings use the model embedded into the server binary at build time.
+enabled = false
 dynamic_tool_count = 8
-# Generous circuit breaker; the stock whole-turn deadline normally ends a
-# stalled loop first. The model chooses the actual number of serial reads.
 max_tool_turns = 12
 tool_concurrency = 2
 
 [llm.memory]
-enabled = true
+enabled = false
 path = "./data/assistant-memory.mv2"
 top_k = 5
 snippet_chars = 500
@@ -34,41 +28,8 @@ lan_dashboard_enabled = false # set true and restart to expose authenticated HTT
 media_dir = "./media"       # directory for captured photos, videos, and notes
 
 [weather]
-# pirate_weather_api_key = "your-key-here"  # from https://pirate-weather.apiable.io
 measurement_system = "metric"
 temperature_unit = "celsius"
-
-[google_maps]
-# api_key = "..." # optional; GOOGLE_MAPS_API_KEY takes precedence
-# Both network services are opt-in. Geolocation sends Wi-Fi/cell/IP observations to Google.
-geolocation_enabled = false
-# Routes also requires an independent acknowledgement that attribution, terms,
-# privacy disclosures, regional requirements, and road-safety UX are implemented.
-routes_enabled = false
-routes_compliance_acknowledged = false
-routes_travel_mode = "walk"
-language_code = "en-US"
-
-[open_food_facts]
-# Barcode-only product lookup. No image upload or image download is performed.
-# Enabling requires acknowledgement of Open Food Facts attribution and
-# ODbL/DbCL obligations; both gates default off.
-enabled = false
-attribution_acknowledged = false
-
-[azure_speech]
-# subscription_key = "..." # optional; AZURE_SPEECH_KEY takes precedence
-# region = "southeastasia"
-# voice_name = "en-US-AvaMultilingualNeural"
-# Cloud TTS sends request text to Azure. Both gates default off.
-enabled = false
-cloud_consent_acknowledged = false
-
-[openstreetmap]
-# Nominatim and Overpass receive exact coordinates; nearby search also sends
-# the search text. Both gates default off.
-enabled = false
-location_consent_acknowledged = false
 
 [spotify]
 # Personal-use experimental integration. Requires Spotify Premium and an

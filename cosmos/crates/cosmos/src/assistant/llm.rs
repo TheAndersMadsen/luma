@@ -14,41 +14,6 @@ use serde::{Deserialize, Serialize};
 /// OpenRouter model identifiers include the provider namespace.
 pub const DEFAULT_LLM_MODEL: &str = "openai/gpt-5.6-luna";
 
-/// Resolve the model credential without requiring the VPS secret file to use
-/// the generic provider name. `COSMOS_OPENROUTER_API_KEY` is the
-/// deployment-scoped fallback; Compose injects both names and this resolver
-/// ignores blank values, so an empty generic key cannot shadow the fallback.
-/// The dedicated interstitial/blurb model, when a deployment configures one.
-///
-/// Cosmos ran the "little blurbs while the pin was doing stuff" on a small,
-/// self-hosted model (OpenChat 3.5 0106 on `hai`), separate from the GPT-4o that
-/// did the reasoning. `COSMOS_INTERSTITIAL_BASE_URL` + `COSMOS_INTERSTITIAL_MODEL`
-/// point at it; a local endpoint needs no credential, so a missing key is filled
-/// with a placeholder the endpoint ignores rather than disabling the model.
-pub fn blurb_model() -> Option<std::sync::Arc<dyn ChatModel>> {
-    let base_url = std::env::var("COSMOS_INTERSTITIAL_BASE_URL")
-        .ok()
-        .filter(|value| !value.trim().is_empty())?;
-    let model = std::env::var("COSMOS_INTERSTITIAL_MODEL").ok()?;
-    let api_key = std::env::var("COSMOS_INTERSTITIAL_API_KEY")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| "local".to_owned());
-    Some(std::sync::Arc::new(OpenAiChatModel::new(
-        base_url, api_key, model,
-    )))
-}
-
-pub fn configured_api_key() -> Option<String> {
-    ["COSMOS_LLM_API_KEY", "COSMOS_OPENROUTER_API_KEY"]
-        .into_iter()
-        .find_map(|name| {
-            std::env::var(name)
-                .ok()
-                .filter(|value| !value.trim().is_empty())
-        })
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum LlmError {
     #[error("llm transport: {0}")]
@@ -226,6 +191,113 @@ pub trait ChatModel: Send + Sync + 'static {
     ) -> Result<ChatResponse, LlmError>;
 }
 
+/// The live model selector backed by Cosmos's persisted integration settings.
+/// A dashboard save takes effect on the next model step; no container or Pin
+/// restart is required.
+pub struct ConfiguredChatModel {
+    demo_when_unconfigured: bool,
+}
+
+impl ConfiguredChatModel {
+    pub fn assistant() -> Self {
+        Self {
+            demo_when_unconfigured: true,
+        }
+    }
+
+    pub fn external_only() -> Self {
+        Self {
+            demo_when_unconfigured: false,
+        }
+    }
+}
+
+#[tonic::async_trait]
+impl ChatModel for ConfiguredChatModel {
+    async fn complete(
+        &self,
+        messages: &[ChatMessage],
+        tools: &[ToolDef],
+    ) -> Result<ChatResponse, LlmError> {
+        let config = crate::integrations::active().snapshot().assistant;
+        match config.provider {
+            crate::integrations::AssistantProvider::OpenAiCompatible if config.configured() => {
+                OpenAiChatModel::with_options(
+                    config.base_url,
+                    config.api_key.expect("configured API provider has a key"),
+                    config.model,
+                    (config.max_tokens != 0).then_some(config.max_tokens),
+                    config.reasoning_effort,
+                )
+                .complete(messages, tools)
+                .await
+            }
+            crate::integrations::AssistantProvider::CodexSubscription if config.configured() => {
+                let prompt = codex_prompt(messages, tools)?;
+                let response = super::codex_app_server::complete(
+                    &config.model,
+                    config.reasoning_effort.as_deref(),
+                    prompt,
+                )
+                .await
+                .map_err(|error| LlmError::Transport(error.to_string()))?;
+                let mut calls = response.tool_calls.into_iter().map(|call| ToolCall {
+                    name: call.name,
+                    arguments: match call.arguments {
+                        serde_json::Value::Object(_) => call.arguments.to_string(),
+                        _ => "{}".to_owned(),
+                    },
+                });
+                let result = ChatResponse {
+                    content: response.content,
+                    thought: response.thought.unwrap_or_default(),
+                    tool_call: calls.next(),
+                    extra_tool_calls: calls.collect(),
+                };
+                Ok(enforce_explicit_web_search(messages, tools, result))
+            }
+            _ if self.demo_when_unconfigured => DemoChatModel.complete(messages, tools).await,
+            _ => Err(LlmError::Transport(
+                "assistant provider is not configured".to_owned(),
+            )),
+        }
+    }
+}
+
+fn codex_prompt(messages: &[ChatMessage], tools: &[ToolDef]) -> Result<String, LlmError> {
+    let messages = messages
+        .iter()
+        .map(|message| {
+            serde_json::json!({
+                "role": match message.role {
+                    Role::System => "system",
+                    Role::User => "user",
+                    Role::Assistant => "assistant",
+                },
+                "content": message.content,
+            })
+        })
+        .collect::<Vec<_>>();
+    let tools = tools
+        .iter()
+        .map(|tool| {
+            serde_json::json!({
+                "name": tool.name,
+                "description": tool.description,
+                "parameters": tool.parameters,
+            })
+        })
+        .collect::<Vec<_>>();
+    let input = serde_json::to_string(&serde_json::json!({
+        "messages": messages,
+        "tools": tools,
+    }))
+    .map_err(|_| LlmError::Malformed)?;
+    Ok(format!(
+        "You are the model adapter for a wearable voice assistant. Do not use files, shell commands, or network tools. Read the supplied transcript and tool definitions. Either answer briefly in content or select the necessary tools. Return only the required structured output. Tool arguments must be JSON objects.\n\n{input}"
+    ))
+}
+
 /// Deterministic model for tests + a keyless demo: returns a scripted sequence of
 /// responses (tool calls then a final answer), one per `complete` call.
 pub struct MockChatModel {
@@ -384,13 +456,29 @@ const DEFAULT_MAX_TOKENS: u32 = 512;
 
 impl OpenAiChatModel {
     pub fn new(base_url: String, api_key: String, model: String) -> Self {
-        Self {
-            client: reqwest::Client::new(),
+        Self::with_options(
             base_url,
             api_key,
             model,
-            max_tokens: configured_max_tokens(),
-            reasoning_effort: configured_reasoning_effort(),
+            configured_max_tokens(),
+            configured_reasoning_effort(),
+        )
+    }
+
+    pub fn with_options(
+        base_url: String,
+        api_key: String,
+        model: String,
+        max_tokens: Option<u32>,
+        reasoning_effort: Option<String>,
+    ) -> Self {
+        Self {
+            client: crate::backends::http(),
+            base_url,
+            api_key,
+            model,
+            max_tokens,
+            reasoning_effort,
         }
     }
 }
@@ -398,7 +486,7 @@ impl OpenAiChatModel {
 /// Resolve the per-step reasoning effort. Unset (or blank) sends nothing at all,
 /// which is what every deployment does until someone deliberately opts in.
 fn configured_reasoning_effort() -> Option<String> {
-    parse_reasoning_effort(std::env::var("COSMOS_LLM_REASONING_EFFORT").ok().as_deref())
+    parse_reasoning_effort(crate::integrations::value("COSMOS_LLM_REASONING_EFFORT").as_deref())
 }
 
 /// Split out from the environment read so the policy is testable without mutating
@@ -417,7 +505,7 @@ fn parse_reasoning_effort(raw: Option<&str>) -> Option<String> {
 /// (for a model whose provider rejects the field); anything unparseable falls back
 /// to the default rather than silently sending no bound.
 fn configured_max_tokens() -> Option<u32> {
-    parse_max_tokens(std::env::var("COSMOS_LLM_MAX_TOKENS").ok().as_deref())
+    parse_max_tokens(crate::integrations::value("COSMOS_LLM_MAX_TOKENS").as_deref())
 }
 
 /// Split out from the environment read so the policy is testable without mutating

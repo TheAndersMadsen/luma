@@ -1357,30 +1357,6 @@
       "home": "runtime.env"
     },
     {
-      "name": "COSMOS_VISION_MODEL",
-      "group": "provider",
-      "sensitivity": "operational",
-      "home": "runtime.env"
-    },
-    {
-      "name": "COSMOS_INTERSTITIAL_BASE_URL",
-      "group": "provider",
-      "sensitivity": "operational",
-      "home": "runtime.env"
-    },
-    {
-      "name": "COSMOS_INTERSTITIAL_MODEL",
-      "group": "provider",
-      "sensitivity": "operational",
-      "home": "runtime.env"
-    },
-    {
-      "name": "COSMOS_INTERSTITIAL_API_KEY",
-      "group": "provider",
-      "sensitivity": "secret",
-      "home": "runtime.env"
-    },
-    {
       "name": "COSMOS_SERPAPI_KEY",
       "group": "provider",
       "sensitivity": "secret",

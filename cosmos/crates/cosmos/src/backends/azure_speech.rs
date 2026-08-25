@@ -6,7 +6,7 @@
 //! protobuf audio formats one-to-one onto Azure output formats.
 
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use reqwest::redirect::Policy;
@@ -17,6 +17,7 @@ const KEY_ENV: &str = "COSMOS_AZURE_SPEECH_KEY";
 const REGION_ENV: &str = "COSMOS_AZURE_SPEECH_REGION";
 const VOICE_ENV: &str = "COSMOS_AZURE_SPEECH_VOICE";
 const DEFAULT_VOICE: &str = "en-US-AvaMultilingualNeural";
+static HTTP: OnceLock<reqwest::Client> = OnceLock::new();
 const MAX_TEXT_BYTES: usize = 8 * 1024;
 const MAX_UNARY_AUDIO_BYTES: usize = 4 * 1024 * 1024 - 128;
 const MAX_STREAM_AUDIO_BYTES: usize = 16 * 1024 * 1024;
@@ -84,7 +85,7 @@ pub struct AzureSpeechClient {
 }
 
 impl AzureSpeechClient {
-    pub fn from_environment() -> Result<Option<Self>, AzureSpeechError> {
+    pub fn from_configuration() -> Result<Option<Self>, AzureSpeechError> {
         let key = super::key(KEY_ENV);
         let region = super::key(REGION_ENV);
         if key.is_none() && region.is_none() {
@@ -126,12 +127,16 @@ impl AzureSpeechClient {
         endpoint: String,
         stt_endpoint: String,
     ) -> Result<Self, AzureSpeechError> {
-        let http = reqwest::Client::builder()
-            .connect_timeout(Duration::from_secs(4))
-            .timeout(Duration::from_secs(30))
-            .redirect(Policy::none())
-            .build()
-            .map_err(|_| AzureSpeechError::InvalidConfiguration)?;
+        let http = HTTP
+            .get_or_init(|| {
+                reqwest::Client::builder()
+                    .connect_timeout(Duration::from_secs(4))
+                    .timeout(Duration::from_secs(30))
+                    .redirect(Policy::none())
+                    .build()
+                    .unwrap_or_default()
+            })
+            .clone();
         Ok(Self {
             http,
             endpoint,
@@ -268,13 +273,41 @@ impl SpeechSynthesisBackend for AzureSpeechClient {
 }
 
 pub fn configured_backend() -> Option<Arc<dyn SpeechSynthesisBackend>> {
-    match AzureSpeechClient::from_environment() {
-        Ok(Some(client)) => Some(Arc::new(client)),
-        Ok(None) => None,
-        Err(_) => {
-            tracing::warn!("Azure Speech configuration is incomplete or invalid");
-            None
-        }
+    Some(Arc::new(LiveAzureSpeech))
+}
+
+pub fn configured() -> bool {
+    AzureSpeechClient::from_configuration()
+        .ok()
+        .flatten()
+        .is_some()
+}
+
+#[derive(Clone, Copy)]
+struct LiveAzureSpeech;
+
+impl LiveAzureSpeech {
+    fn client() -> Result<AzureSpeechClient, AzureSpeechError> {
+        AzureSpeechClient::from_configuration()?.ok_or(AzureSpeechError::InvalidConfiguration)
+    }
+}
+
+#[tonic::async_trait]
+impl SpeechSynthesisBackend for LiveAzureSpeech {
+    async fn synthesize(
+        &self,
+        text: &str,
+        format: SpeechAudioFormat,
+    ) -> Result<Vec<u8>, AzureSpeechError> {
+        Self::client()?.synthesize(text, format).await
+    }
+
+    async fn synthesize_stream(
+        &self,
+        text: &str,
+        format: SpeechAudioFormat,
+    ) -> Result<SpeechAudioStream, AzureSpeechError> {
+        Self::client()?.synthesize_stream(text, format).await
     }
 }
 
@@ -335,9 +368,13 @@ impl SpeechRecognitionBackend for AzureSpeechClient {
 }
 
 pub fn configured_recognition_backend() -> Option<Arc<dyn SpeechRecognitionBackend>> {
-    match AzureSpeechClient::from_environment() {
-        Ok(Some(client)) => Some(Arc::new(client)),
-        _ => None,
+    Some(Arc::new(LiveAzureSpeech))
+}
+
+#[tonic::async_trait]
+impl SpeechRecognitionBackend for LiveAzureSpeech {
+    async fn transcribe(&self, wav: &[u8]) -> Result<String, AzureSpeechError> {
+        Self::client()?.transcribe(wav).await
     }
 }
 
@@ -470,9 +507,9 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires an operator-owned Azure Speech resource"]
     async fn live_azure_speech_returns_nonempty_stock_pcm() {
-        let client = AzureSpeechClient::from_environment()
+        let client = AzureSpeechClient::from_configuration()
             .expect("valid Azure Speech configuration")
-            .expect("Azure Speech environment variables");
+            .expect("Azure Speech settings");
         let audio = client
             .synthesize(
                 "Cosmos speech synthesis test.",

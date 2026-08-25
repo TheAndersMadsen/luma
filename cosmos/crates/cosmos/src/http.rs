@@ -27,7 +27,7 @@ use tonic::Request;
 
 use crate::{
     assistant::catalog::{RESPOND_ACTION, RESPOND_FIELD},
-    backends::azure_speech::{SpeechAudioFormat, SpeechSynthesisBackend, configured_backend},
+    backends::azure_speech::{SpeechAudioFormat, configured_backend},
     services::aibus_main::AiBusMain,
     services::capture::{CaptureObjectStore, UploadRejection, configured_object_store},
 };
@@ -55,14 +55,12 @@ pub struct Readiness(Arc<AtomicBool>);
 #[derive(Clone)]
 struct DemoBackend {
     assistant: AiBusMain,
-    speech: Option<Arc<dyn SpeechSynthesisBackend>>,
 }
 
 impl DemoBackend {
     fn new(store: crate::store::SharedStore) -> Self {
         Self {
             assistant: AiBusMain::default().with_store(store),
-            speech: configured_backend(),
         }
     }
 }
@@ -72,6 +70,7 @@ struct HttpState {
     readiness: Readiness,
     demo: Option<DemoBackend>,
     store: Option<crate::store::SharedStore>,
+    integrations: Arc<crate::integrations::IntegrationStore>,
     /// Where a wearer's captured frames land. `None` means this deployment
     /// stores nothing, and the upload route is not mounted at all.
     uploads: Option<Arc<CaptureObjectStore>>,
@@ -172,6 +171,7 @@ fn build_router_with_uploads_and_keys(
         readiness,
         demo,
         store: capture_store.clone(),
+        integrations: crate::integrations::active(),
         uploads: uploads.clone(),
     };
     let router = Router::new()
@@ -195,6 +195,14 @@ fn build_router_with_uploads_and_keys(
             // see `require_admin`; provisioning in particular hands out a
             // credential that enrolls a device.
             .route("/demo-api/admin/overview", get(admin_overview))
+            .route(
+                "/demo-api/admin/integrations",
+                get(admin_integrations).put(update_integrations),
+            )
+            .route(
+                "/demo-api/admin/integrations/codex",
+                post(start_codex_login).delete(logout_codex),
+            )
             .route("/demo-api/admin/provision", post(admin_provision))
             .route(
                 "/demo-api/admin/pair",
@@ -595,7 +603,7 @@ async fn mesh_status(state: &HttpState) -> MeshStatus {
 
 fn tool_status() -> Vec<ToolStatus> {
     fn set(name: &str) -> bool {
-        std::env::var(name).is_ok_and(|v| !v.trim().is_empty())
+        crate::integrations::value(name).is_some()
     }
     // `wikipedia`, `food_lookup`, `remember` and `recall_memory` need no vendor
     // key — the first two are open APIs, the last two are the wearer's own store.
@@ -633,6 +641,162 @@ fn tool_status() -> Vec<ToolStatus> {
     .into_iter()
     .map(|(name, live, needs)| ToolStatus { name, live, needs })
     .collect()
+}
+
+#[derive(Serialize)]
+struct IntegrationsView {
+    assistant: AssistantIntegrationView,
+    search: SearchIntegrationView,
+    maps: MapsIntegrationView,
+    speech: SpeechIntegrationView,
+}
+
+#[derive(Serialize)]
+struct AssistantIntegrationView {
+    provider: crate::integrations::AssistantProvider,
+    configured: bool,
+    base_url: String,
+    api_key_configured: bool,
+    model: String,
+    reasoning_effort: Option<String>,
+    max_tokens: u32,
+    codex: crate::assistant::codex_app_server::CodexAccountStatus,
+}
+
+#[derive(Serialize)]
+struct SearchIntegrationView {
+    configured: bool,
+    searxng_base_url: Option<String>,
+    serpapi_key_configured: bool,
+    perplexity_key_configured: bool,
+    perplexity_model: Option<String>,
+    wolfram_configured: bool,
+    weather_configured: bool,
+}
+
+#[derive(Serialize)]
+struct MapsIntegrationView {
+    configured: bool,
+}
+
+#[derive(Serialize)]
+struct SpeechIntegrationView {
+    configured: bool,
+    azure_key_configured: bool,
+    azure_region: Option<String>,
+    azure_voice: String,
+}
+
+async fn integrations_view(config: crate::integrations::IntegrationsConfig) -> IntegrationsView {
+    let codex =
+        if config.assistant.provider == crate::integrations::AssistantProvider::CodexSubscription {
+            crate::assistant::codex_app_server::account_status().await
+        } else {
+            crate::assistant::codex_app_server::CodexAccountStatus {
+                available: std::path::Path::new(
+                    &std::env::var("COSMOS_CODEX_BIN")
+                        .unwrap_or_else(|_| "/opt/codex/bin/codex".to_owned()),
+                )
+                .is_file(),
+                connected: false,
+                plan: None,
+                email: None,
+            }
+        };
+    let assistant_configured = match config.assistant.provider {
+        crate::integrations::AssistantProvider::OpenAiCompatible => config.assistant.configured(),
+        crate::integrations::AssistantProvider::CodexSubscription => {
+            config.assistant.configured() && codex.connected
+        }
+    };
+    IntegrationsView {
+        assistant: AssistantIntegrationView {
+            provider: config.assistant.provider,
+            configured: assistant_configured,
+            base_url: config.assistant.base_url,
+            api_key_configured: config.assistant.api_key.is_some(),
+            model: config.assistant.model,
+            reasoning_effort: config.assistant.reasoning_effort,
+            max_tokens: config.assistant.max_tokens,
+            codex,
+        },
+        search: SearchIntegrationView {
+            configured: config.search.searxng_base_url.is_some()
+                || config.search.serpapi_key.is_some(),
+            searxng_base_url: config.search.searxng_base_url,
+            serpapi_key_configured: config.search.serpapi_key.is_some(),
+            perplexity_key_configured: config.search.perplexity_api_key.is_some(),
+            perplexity_model: config.search.perplexity_model,
+            wolfram_configured: config.search.wolfram_app_id.is_some(),
+            weather_configured: config.search.weather_api_key.is_some(),
+        },
+        maps: MapsIntegrationView {
+            configured: config.maps.google_maps_key.is_some(),
+        },
+        speech: SpeechIntegrationView {
+            configured: config.speech.azure_key.is_some() && config.speech.azure_region.is_some(),
+            azure_key_configured: config.speech.azure_key.is_some(),
+            azure_region: config.speech.azure_region,
+            azure_voice: config.speech.azure_voice,
+        },
+    }
+}
+
+async fn admin_integrations(
+    headers: HeaderMap,
+    State(state): State<HttpState>,
+) -> Result<Json<IntegrationsView>, DemoError> {
+    require_admin(&headers)?;
+    Ok(Json(integrations_view(state.integrations.snapshot()).await))
+}
+
+async fn update_integrations(
+    headers: HeaderMap,
+    State(state): State<HttpState>,
+    Json(update): Json<crate::integrations::IntegrationsUpdate>,
+) -> Result<Json<IntegrationsView>, DemoError> {
+    require_admin(&headers)?;
+    let config = state
+        .integrations
+        .update(update)
+        .map_err(|error| match error {
+            crate::integrations::IntegrationError::Invalid(message) => {
+                demo_error(StatusCode::BAD_REQUEST, message)
+            }
+            crate::integrations::IntegrationError::Persistence(_) => demo_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Integration settings could not be saved.",
+            ),
+        })?;
+    Ok(Json(integrations_view(config).await))
+}
+
+async fn start_codex_login(
+    headers: HeaderMap,
+) -> Result<Json<crate::assistant::codex_app_server::CodexDeviceCode>, DemoError> {
+    require_admin(&headers)?;
+    crate::assistant::codex_app_server::start_device_login()
+        .await
+        .map(Json)
+        .map_err(|_| {
+            demo_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Codex sign-in could not be started.",
+            )
+        })
+}
+
+async fn logout_codex(headers: HeaderMap) -> Result<Json<serde_json::Value>, DemoError> {
+    require_admin(&headers)?;
+    crate::assistant::codex_app_server::logout()
+        .await
+        .map(|_| Json(serde_json::json!({ "ok": true })))
+        .map_err(|_| {
+            demo_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Codex could not be disconnected.",
+            )
+        })
 }
 
 /// One flag, with BOTH what cosmos served and what this deployment serves.
@@ -2312,15 +2476,18 @@ async fn admin_device_status(
 }
 
 async fn demo_status(State(state): State<HttpState>) -> Json<DemoStatus> {
-    let assistant = std::env::var("COSMOS_LLM_BASE_URL")
-        .is_ok_and(|value| !value.trim().is_empty())
-        && crate::assistant::llm::configured_api_key().is_some();
-    let speech = state
-        .demo
-        .as_ref()
-        .is_some_and(|demo| demo.speech.is_some());
-    let model = std::env::var("COSMOS_LLM_MODEL")
-        .unwrap_or_else(|_| crate::assistant::llm::DEFAULT_LLM_MODEL.to_owned());
+    let config = state.integrations.snapshot();
+    let assistant = match config.assistant.provider {
+        crate::integrations::AssistantProvider::OpenAiCompatible => config.assistant.configured(),
+        crate::integrations::AssistantProvider::CodexSubscription => {
+            config.assistant.configured()
+                && crate::assistant::codex_app_server::account_status()
+                    .await
+                    .connected
+        }
+    };
+    let speech = crate::backends::azure_speech::configured();
+    let model = config.assistant.model;
     Json(DemoStatus {
         provider_authority: "cosmos",
         assistant,
@@ -2762,16 +2929,18 @@ fn spoken_answer(input: &str) -> String {
 }
 
 async fn demo_speech(
-    State(state): State<HttpState>,
+    State(_state): State<HttpState>,
     Json(payload): Json<DemoTextRequest>,
 ) -> Result<Response, DemoError> {
     let text = validate_demo_text(payload.text)?;
-    let speech = state.demo.and_then(|demo| demo.speech).ok_or_else(|| {
-        demo_error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Speech synthesis is unavailable.",
-        )
-    })?;
+    let speech = configured_backend()
+        .filter(|_| crate::backends::azure_speech::configured())
+        .ok_or_else(|| {
+            demo_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Speech synthesis is unavailable.",
+            )
+        })?;
     let audio = tokio::time::timeout(
         DEMO_SPEECH_TIMEOUT,
         speech.synthesize(&text, SpeechAudioFormat::Audio24Khz160KBitrateMonoMp3),
@@ -3563,6 +3732,7 @@ mod admin_gate_tests {
             readiness: Readiness::default(),
             demo: Some(demo),
             store: Some(store.clone()),
+            integrations: crate::integrations::active(),
             uploads: None,
         };
         let result = admin_profile(
@@ -3648,5 +3818,31 @@ mod admin_gate_tests {
                 .is_none(),
             "a deliberately wrong partition must not observe the profile",
         );
+    }
+
+    #[tokio::test]
+    async fn integration_view_reports_readiness_without_returning_credentials() {
+        let mut config = crate::integrations::IntegrationsConfig::default();
+        config.assistant.base_url = "https://openrouter.ai/api/v1".to_owned();
+        config.assistant.api_key = Some("private-assistant-key".to_owned());
+        config.search.serpapi_key = Some("private-search-key".to_owned());
+        config.maps.google_maps_key = Some("private-maps-key".to_owned());
+        config.speech.azure_key = Some("private-speech-key".to_owned());
+        config.speech.azure_region = Some("westeurope".to_owned());
+
+        let value = serde_json::to_value(integrations_view(config).await).unwrap();
+        assert_eq!(value["assistant"]["api_key_configured"], true);
+        assert_eq!(value["search"]["serpapi_key_configured"], true);
+        assert_eq!(value["maps"]["configured"], true);
+        assert_eq!(value["speech"]["azure_key_configured"], true);
+        let response = value.to_string();
+        for secret in [
+            "private-assistant-key",
+            "private-search-key",
+            "private-maps-key",
+            "private-speech-key",
+        ] {
+            assert!(!response.contains(secret));
+        }
     }
 }

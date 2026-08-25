@@ -45,9 +45,7 @@ use pb::speech_service_server::SpeechService;
 use pb::test_automation_service_server::TestAutomationService;
 use pb::web_search_service_server::WebSearchService;
 
-use crate::assistant::llm::{
-    ChatMessage, ChatModel, DEFAULT_LLM_MODEL, OpenAiChatModel, configured_api_key,
-};
+use crate::assistant::llm::{ChatMessage, ChatModel, ConfiguredChatModel};
 use crate::backends::azure_speech::{
     AzureSpeechError, SpeechAudioFormat, SpeechRecognitionBackend, SpeechSynthesisBackend,
     configured_backend, configured_recognition_backend,
@@ -59,13 +57,7 @@ const MAX_STORED_MESSAGES: usize = 10_000;
 const MAX_CALENDAR_EVENTS: usize = 2_000;
 
 fn configured_model() -> Option<Arc<dyn ChatModel>> {
-    let base_url = std::env::var("COSMOS_LLM_BASE_URL").ok()?;
-    let api_key = configured_api_key()?;
-    if base_url.trim().is_empty() {
-        return None;
-    }
-    let model = std::env::var("COSMOS_LLM_MODEL").unwrap_or_else(|_| DEFAULT_LLM_MODEL.to_owned());
-    Some(Arc::new(OpenAiChatModel::new(base_url, api_key, model)))
+    Some(Arc::new(ConfiguredChatModel::external_only()))
 }
 
 async fn model_text(
@@ -463,7 +455,7 @@ impl CompositionService for Composition {
         }
         let model = self.model.as_ref().ok_or_else(|| {
             Status::failed_precondition(
-                "message composition requires COSMOS_LLM_BASE_URL and COSMOS_LLM_API_KEY",
+                "message composition requires an assistant provider in Center",
             )
         })?;
         let source = match req.r#type {
@@ -1369,7 +1361,7 @@ impl SpeechService for Speech {
         } else {
             let model = self.model.as_ref().ok_or_else(|| {
                 Status::failed_precondition(
-                    "text translation requires COSMOS_LLM_BASE_URL and COSMOS_LLM_API_KEY",
+                    "text translation requires an assistant provider in Center",
                 )
             })?;
             model_text(

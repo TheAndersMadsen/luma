@@ -126,8 +126,6 @@ function localDoctorReport() {
   try {
     values = validateRuntime();
     add('configuration', 'PASS', `${ENV_FILE} is mode 0600 and internally coherent.`);
-    add('remote-tts', values.COSMOS_REMOTE_TTS_ENABLED === 'true' ? 'PASS' : 'WARN',
-      `Remote TTS is ${values.COSMOS_REMOTE_TTS_ENABLED === 'true' ? 'enabled' : 'disabled'} by configuration.`);
     const spotifyPaired = Boolean(
       values.REVIVAL_PIN_BRIDGE_OWNER_SUB?.trim() && values.REVIVAL_PIN_BRIDGE_DEVICE_ID?.trim()
     );

@@ -41,7 +41,8 @@ use pb::ai_bus_service_server::AiBusService;
 use tonic::{Request, Response, Status};
 
 use crate::assistant::catalog;
-use crate::assistant::llm::{ChatMessage, ChatModel, DemoChatModel, OpenAiChatModel};
+use crate::assistant::llm::{ChatMessage, ChatModel, ConfiguredChatModel};
+#[cfg(test)]
 use std::sync::Arc;
 
 /// Concrete erased stream type used by the server-stream and bidi RPCs.
@@ -314,16 +315,7 @@ impl AiBusMain {
     }
 
     async fn run_model_completion(&self, prompt: String) -> Result<String, Status> {
-        // Interstitials and loading-message blurbs use a SEPARATE, smaller model
-        // from the main assistant — faithful to how Cosmos ran it. A former Humane
-        // engineer confirmed the `hai` OpenChat 3.5 0106 generated "the little
-        // blurbs while pin was doing stuff", while GPT-4o did the reasoning. This
-        // is a plain, tool-free completion, which is exactly what a 7B like
-        // OpenChat is good at (and why it is served over raw completions with no
-        // tool support). Falls back to the main model when no blurb model is set.
-        let model = Self::configured_blurb_model()
-            .or_else(Self::configured_model)
-            .unwrap_or_else(|| Arc::new(DemoChatModel));
+        let model = ConfiguredChatModel::assistant();
         let messages = vec![ChatMessage {
             role: crate::assistant::llm::Role::User,
             content: prompt,
@@ -505,29 +497,6 @@ impl AiBusMain {
         self
     }
 
-    /// Build an OpenAI-compatible chat model when explicitly configured.
-    fn configured_model() -> Option<Arc<dyn ChatModel>> {
-        let base_url = std::env::var("COSMOS_LLM_BASE_URL").ok()?;
-        let api_key = crate::assistant::llm::configured_api_key()?;
-        if base_url.trim().is_empty() {
-            return None;
-        }
-        let model = std::env::var("COSMOS_LLM_MODEL")
-            .unwrap_or_else(|_| crate::assistant::llm::DEFAULT_LLM_MODEL.to_owned());
-        Some(Arc::new(OpenAiChatModel::new(base_url, api_key, model)))
-    }
-
-    /// The dedicated interstitial/loading-message model, when configured.
-    ///
-    /// Kept separate from [`Self::configured_model`] so a deployment can run a
-    /// small self-hosted blurb model (e.g. `openchat:7b-v3.5-0106` on ollama)
-    /// alongside a strong reasoning model — the split Cosmos actually ran. A local
-    /// endpoint needs no credential, so a missing key is filled with a placeholder
-    /// the endpoint ignores rather than disabling the model.
-    fn configured_blurb_model() -> Option<Arc<dyn ChatModel>> {
-        crate::assistant::llm::blurb_model()
-    }
-
     /// Convert the device's opaque image bytes into an OpenAI-compatible data
     /// URL without persisting them. The schema carries no MIME type, so magic
     /// bytes select the common formats and JPEG is the conservative fallback.
@@ -572,24 +541,6 @@ impl AiBusMain {
         }
     }
 
-    /// Resolve a dedicated vision model without letting an empty environment
-    /// override mask the working general model. Compose emits configured-but-
-    /// blank values as present environment variables, so `env::var(...).or_else`
-    /// alone is not a fallback.
-    fn vision_model_name(vision_model: Option<&str>, llm_model: Option<&str>) -> Option<String> {
-        vision_model
-            .and_then(|value| {
-                let value = value.trim();
-                (!value.is_empty()).then(|| value.to_owned())
-            })
-            .or_else(|| {
-                llm_model.and_then(|value| {
-                    let value = value.trim();
-                    (!value.is_empty()).then(|| value.to_owned())
-                })
-            })
-    }
-
     /// Invoke the explicitly configured OpenAI-compatible multimodal model.
     /// This is clone-owned behavior; the stock provider/model and hidden prompt
     /// remain unknown. Images stay in-memory and are sent only to the operator's
@@ -598,22 +549,19 @@ impl AiBusMain {
         if image_urls.is_empty() {
             return Err(Status::invalid_argument("vision request has no images"));
         }
-        let base_url = std::env::var("COSMOS_LLM_BASE_URL")
-            .map_err(|_| Status::failed_precondition("vision endpoint is not configured"))?;
-        let api_key = crate::assistant::llm::configured_api_key()
-            .ok_or_else(|| Status::failed_precondition("vision endpoint is not configured"))?;
-        if base_url.trim().is_empty() {
+        let config = crate::integrations::active().snapshot().assistant;
+        if config.provider != crate::integrations::AssistantProvider::OpenAiCompatible
+            || !config.configured()
+        {
             return Err(Status::failed_precondition(
-                "vision endpoint is not configured",
+                "vision requires an OpenAI-compatible assistant provider in Center",
             ));
         }
-        let configured_vision_model = std::env::var("COSMOS_VISION_MODEL").ok();
-        let configured_llm_model = std::env::var("COSMOS_LLM_MODEL").ok();
-        let model = Self::vision_model_name(
-            configured_vision_model.as_deref(),
-            configured_llm_model.as_deref(),
-        )
-        .ok_or_else(|| Status::failed_precondition("vision model is not configured"))?;
+        let base_url = config.base_url;
+        let api_key = config
+            .api_key
+            .expect("configured OpenAI-compatible provider has an API key");
+        let model = config.model;
 
         let mut content = vec![serde_json::json!({ "type": "text", "text": prompt })];
         content.extend(
@@ -3220,19 +3168,6 @@ mod tests {
         let err = AiBusMain::analyze_image_data_url(&pb::AnalyzeImageRequest::default())
             .expect_err("missing image must be rejected before calling a provider");
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
-    }
-
-    #[test]
-    fn blank_vision_model_override_falls_back_to_general_model() {
-        assert_eq!(
-            AiBusMain::vision_model_name(Some("  \t"), Some(" openai/gpt-5.6-luna ")),
-            Some("openai/gpt-5.6-luna".to_owned())
-        );
-        assert_eq!(
-            AiBusMain::vision_model_name(Some(" openai/vision-model "), Some("general")),
-            Some("openai/vision-model".to_owned())
-        );
-        assert_eq!(AiBusMain::vision_model_name(Some(""), Some("  ")), None);
     }
 
     #[tokio::test]

@@ -51,7 +51,10 @@ pub mod weather;
 pub mod wikipedia;
 pub mod wolfram;
 
+use std::sync::OnceLock;
 use std::time::Duration;
+
+static HTTP: OnceLock<reqwest::Client> = OnceLock::new();
 
 /// Shared HTTP client for all outbound vendor calls.
 ///
@@ -59,22 +62,23 @@ use std::time::Duration;
 /// a turn down at ~25s, and the assistant already caps each model step at 10s, so
 /// a tool call must resolve well inside that.
 pub(crate) fn http() -> reqwest::Client {
-    reqwest::Client::builder()
-        .timeout(Duration::from_secs(8))
-        .connect_timeout(Duration::from_secs(4))
-        .build()
-        .unwrap_or_default()
+    HTTP.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(Duration::from_secs(8))
+            .connect_timeout(Duration::from_secs(4))
+            .build()
+            .unwrap_or_default()
+    })
+    .clone()
 }
 
-/// Read a backend credential from the environment.
+/// Read a backend setting from Cosmos's provider authority. Environment values
+/// seed that authority on first boot, before Center has saved a configuration.
 ///
 /// Returns `None` when unset or blank, which every caller treats as "this
 /// capability is not hosted here" — never as a reason to invent a result.
 pub(crate) fn key(var: &str) -> Option<String> {
-    match std::env::var(var) {
-        Ok(v) if !v.trim().is_empty() => Some(v),
-        _ => None,
-    }
+    crate::integrations::value(var)
 }
 
 /// Why a backend call produced no answer. Deliberately carries no vendor payload

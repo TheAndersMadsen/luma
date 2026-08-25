@@ -143,24 +143,22 @@ fn text(key: &str, value: &str) -> FeatureFlagAssignment {
     assignment(key, Val::ValStr(value.to_owned()))
 }
 
-/// Whether this deployment hosts server-side speech synthesis.
-///
-/// It does: `SpeechService` is registered and returns real Azure audio when
-/// `COSMOS_AZURE_SPEECH_KEY` is configured. An earlier version of this comment
-/// said the service was unimplemented, which stopped being true and then
-/// justified leaving the flag off.
-///
-/// The env name matters and was wrong for a while: this read `COSMOS_REMOTE_TTS`
-/// while the root runtime template, Compose model, and README all set
-/// `COSMOS_REMOTE_TTS_ENABLED`. The live deployment set it to `"true"` and the
-/// server never saw it, so devices were served `timeout=0` and stayed on local
-/// on-device TTS — a configured, paid-for capability that was silently off. Keep
-/// this name identical to the deployment files.
+/// Whether Cosmos currently has server-side speech synthesis. Center writes
+/// the provider settings into the state volume shared by ai-bus and this
+/// workload, so a dashboard save changes the next flag response without
+/// touching the Pin. The environment switch is only the first-deploy fallback
+/// before Center has written an integration file.
 fn remote_tts_enabled() -> bool {
-    matches!(
-        std::env::var("COSMOS_REMOTE_TTS_ENABLED").ok().as_deref(),
-        Some("1") | Some("true")
-    )
+    match crate::integrations::persisted_speech_ready(
+        std::env::var("COSMOS_STATE_DIR").ok().as_deref(),
+    ) {
+        Ok(Some(ready)) => ready,
+        Ok(None) => matches!(
+            std::env::var("COSMOS_REMOTE_TTS_ENABLED").ok().as_deref(),
+            Some("1") | Some("true")
+        ),
+        Err(_) => false,
+    }
 }
 
 /// Whether a device should take the bidirectional `Understand` transport

@@ -12,6 +12,7 @@ pub mod config;
 pub mod enrollment;
 pub mod flag_overrides;
 mod http;
+pub mod integrations;
 pub mod keydirectory;
 pub mod keymaterial;
 pub mod metrics;
@@ -43,6 +44,13 @@ pub async fn serve_until<F>(config: Config, shutdown: F) -> Result<(), ServerErr
 where
     F: Future<Output = ()> + Send + 'static,
 {
+    // Install one provider authority before any AI-bus service is constructed.
+    // Existing environment values seed it until Center saves the first update.
+    let _integrations = if config.identity.workload() == cosmos_core::Workload::AiBus {
+        Some(crate::integrations::install(config.state_dir.as_deref())?)
+    } else {
+        None
+    };
     let ai_bus_kid_scope =
         startup_kid_scope(config.identity.workload(), config.kid_scope.as_deref())?;
     validate_durable_key_configuration(&config)?;
@@ -752,6 +760,8 @@ pub enum ServerError {
     DurableKeyConfiguration(#[from] DurableKeyConfigurationError),
     #[error("kid-scope configuration invalid: {0}")]
     KidScopeConfiguration(#[from] crate::services::public_privacy::KidScopeConfigurationError),
+    #[error("integration configuration unavailable: {0}")]
+    Integrations(#[from] crate::integrations::IntegrationError),
 }
 
 #[cfg(test)]

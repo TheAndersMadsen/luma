@@ -302,6 +302,129 @@
   font-variant-numeric: tabular-nums;
 }
 
+.integrationSettings {
+  display: grid;
+}
+
+.integrationGroup {
+  display: grid;
+  border-bottom: 1px solid var(--hu-divider);
+}
+
+.integrationIntro,
+.integrationField,
+.codexConnect,
+.integrationActions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 18px 24px;
+}
+
+.integrationIntro {
+  background: color-mix(in srgb, var(--hu-colors-penumbra-200) 45%, transparent);
+}
+
+.integrationIntro > span,
+.integrationField > label,
+.codexConnect > span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.integrationIntro strong,
+.integrationField strong,
+.codexConnect strong {
+  color: var(--hu-colors-white);
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.integrationIntro small,
+.integrationField small,
+.codexConnect small,
+.integrationActions > span {
+  color: var(--hu-colors-crater-base);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.45;
+}
+
+.integrationField,
+.codexConnect {
+  border-top: 1px solid var(--hu-divider);
+}
+
+.integrationInput {
+  composes: field from "../../../../components/controls.module.css";
+  width: min(100%, 360px);
+}
+
+.secretControl {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: min(100%, 460px);
+}
+
+.secretControl .integrationInput {
+  flex: 1;
+  min-width: 0;
+}
+
+.inlineButton {
+  composes: buttonQuietSmall from "../../../../components/controls.module.css";
+}
+
+.codexConnect {
+  align-items: flex-start;
+}
+
+.deviceCode {
+  border-top: 1px solid var(--hu-divider);
+  padding: 18px 24px;
+  color: var(--hu-colors-crater-base);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.deviceCode a,
+.userCode {
+  color: var(--hu-colors-beam-base);
+}
+
+.userCode {
+  white-space: nowrap;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+}
+
+.integrationMessage {
+  padding: 18px 24px;
+  color: var(--hu-colors-crater-base);
+  font-size: 14px;
+  line-height: 1.5;
+  border-bottom: 1px solid var(--hu-divider);
+}
+
+.integrationMessage[data-tone="ok"] {
+  color: var(--hu-colors-beam-base);
+}
+
+.integrationMessage[data-tone="error"] {
+  color: var(--hu-colors-red-50);
+}
+
+.integrationActions {
+  align-items: center;
+}
+
+.integrationActions > span {
+  max-width: 520px;
+}
+
 @media (max-width: 700px) {
   .serviceHead { align-items: flex-start; flex-wrap: wrap; }
   .serviceHead > :last-child { margin-left: 60px; }
@@ -313,4 +436,16 @@
   .pairingPanel > :last-child { grid-column: 1 / -1; justify-self: end; }
   .summary { align-items: flex-start; flex-direction: column; }
   .account { text-align: left; }
+  .integrationIntro,
+  .integrationField,
+  .codexConnect,
+  .integrationActions {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .integrationInput,
+  .secretControl,
+  .providerSelect { width: 100%; max-width: none; }
+  .integrationActions > button { align-self: flex-end; }
 }
