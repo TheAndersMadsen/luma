@@ -147,6 +147,10 @@ test("Services configures Cosmos providers without placing credentials on the Pi
   assert.match(route, /isSameOriginRequest/);
   assert.match(codexRoute, /isSameOriginRequest/);
   assert.match(css, /\.pairingTimer\s*\{[^}]*place-items:\s*center/s);
+  assert.match(
+    css,
+    /\.settingRow > span:not\(\[data-status-tone\]\),\s*\.fieldRow > span:not\(\[data-status-tone\]\)\s*\{[^}]*display:\s*grid/s,
+  );
 });
 
 test("device page avoids unsupported placeholder rows", async () => {

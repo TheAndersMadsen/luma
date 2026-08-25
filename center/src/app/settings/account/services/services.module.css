@@ -112,8 +112,8 @@
   border-bottom: 1px solid var(--hu-divider);
 }
 
-.settingRow > span,
-.fieldRow > span {
+.settingRow > span:not([data-status-tone]),
+.fieldRow > span:not([data-status-tone]) {
   display: grid;
   gap: 3px;
 }
