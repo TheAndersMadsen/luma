@@ -60,6 +60,11 @@ services:
       COSMOS_AZURE_SPEECH_REGION: ${COSMOS_AZURE_SPEECH_REGION:-}
       COSMOS_AZURE_SPEECH_VOICE: ${COSMOS_AZURE_SPEECH_VOICE:-en-US-AvaMultilingualNeural}
       COSMOS_ONBOARDING_AUTHORITY: ${COSMOS_ONBOARDING_AUTHORITY:-cosmos-edge}
+      # The operator console runs here and reports the enrollment identity the
+      # provisioning ceremony binds. Without these it falls back to the built-in
+      # defaults and reports a user and pincode no device will ever present.
+      COSMOS_ENROLLMENT_PINCODE: ${COSMOS_ENROLLMENT_PINCODE:-}
+      COSMOS_ENROLLMENT_USER_ID: ${COSMOS_ENROLLMENT_USER_ID:-}
       COSMOS_CAPTURE_UPLOAD_BASE_URL: ${COSMOS_CAPTURE_UPLOAD_BASE_URL:?run revival setup production}
       COSMOS_CAPTURE_SHARE_BASE_URL: ${COSMOS_CAPTURE_SHARE_BASE_URL:?run revival setup production}
       COSMOS_SHARE_TOKEN_SECRET: ${COSMOS_SHARE_TOKEN_SECRET:?run revival setup production}

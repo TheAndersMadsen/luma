@@ -240,7 +240,10 @@ function ensurePair(certificate, key, generate, { force = false } = {}) {
   return true;
 }
 
-function ensureImmutableRootPair({ label, directory, certificate, key }, generate) {
+function ensureImmutableRootPair(
+  { label, directory, certificate, key, issuingCaAllowed = false },
+  generate,
+) {
   if (fs.existsSync(directory)) {
     const directoryStat = fs.lstatSync(directory);
     if (directoryStat.isSymbolicLink() || !directoryStat.isDirectory() ||
@@ -250,7 +253,15 @@ function ensureImmutableRootPair({ label, directory, certificate, key }, generat
     }
     try {
       validatePair(certificate, key);
-      runOpenSsl(['verify', '-CAfile', certificate, certificate]);
+      // An operator's own PKI usually signs from an issuing CA under a root it
+      // keeps offline, and only this certificate reaches the edge trust store.
+      // Requiring a self-signature there would reject the real credential and
+      // leave every device it already enrolled unable to connect.
+      if (issuingCaAllowed) {
+        assertCertificateAuthority(certificate);
+      } else {
+        runOpenSsl(['verify', '-CAfile', certificate, certificate]);
+      }
     } catch {
       throw new Error(`${label} is established but does not contain its original matching root pair; restore it instead of regenerating it: ${directory}`);
     }
@@ -379,6 +390,7 @@ function ensureProductionPki() {
     label: 'Cosmos DeviceUser root CA',
     directory: DEVICE_USER_ROOT_DIR,
     ...DEVICE_USER_ROOT,
+    issuingCaAllowed: true,
   }, (certificate, key) => generateCa(certificate, key, '/O=Humane/OU=DeviceUser/CN=Cosmos DeviceUser CA'));
   if (establishedTrust) {
     assertRootFingerprint(
@@ -413,6 +425,13 @@ function ensureProductionPki() {
     force: !certificateVerifies(server.certificate, edgeCa.certificate, 'api.cosmos.humane.cloud'),
   });
   return { edgeCa, attest, duc, server };
+}
+
+function assertCertificateAuthority(certificate) {
+  const constraints = runOpenSsl(['x509', '-in', certificate, '-noout', '-ext', 'basicConstraints']);
+  if (!/CA\s*:\s*TRUE/iu.test(constraints)) {
+    throw new Error(`not a certificate authority: ${certificate}`);
+  }
 }
 
 function validatePair(certificate, key) {

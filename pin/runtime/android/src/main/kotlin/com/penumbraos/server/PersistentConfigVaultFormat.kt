@@ -24,6 +24,9 @@ internal object PersistentConfigVaultFormat {
 
     const val MAX_ARTIFACT_BYTES = 256 * 1024
     const val MAX_BUNDLE_BYTES = 1024 * 1024
+    // Bounds a decoded bundle that still carries artifacts retired by an
+    // earlier release, so the count stays bounded as the allowed set shrinks.
+    private const val MAX_ARTIFACT_COUNT = 16
 
     private const val FORMAT_VERSION = 1
     private const val DIGEST_BYTES = 32
@@ -101,15 +104,21 @@ internal object PersistentConfigVaultFormat {
             generation = input.readLong()
             require(generation > 0) { "Invalid vault generation" }
             val fileCount = input.readInt()
-            require(fileCount in REQUIRED_FILES.size..allowedFiles.size) {
+            require(fileCount in REQUIRED_FILES.size..MAX_ARTIFACT_COUNT) {
                 "Invalid vault artifact count"
             }
+            val names = mutableSetOf<String>()
             repeat(fileCount) {
                 val name = input.readUTF()
-                require(name in allowedFiles && name !in files) { "Invalid vault artifact name" }
+                require(names.add(name)) { "Invalid vault artifact name" }
                 val size = input.readInt()
                 require(size in 0..MAX_ARTIFACT_BYTES) { "Invalid vault artifact size" }
-                files[name] = ByteArray(size).also(input::readFully)
+                val bytes = ByteArray(size).also(input::readFully)
+                // An artifact this release retired is dropped rather than
+                // rejected. Both restore and commit decode the stored snapshot
+                // first, so a bundle this build refuses to read is one the
+                // device can never replace.
+                if (name in allowedFiles) files[name] = bytes
             }
             require(input.available() == 0) { "Trailing vault payload data" }
         }
