@@ -77,26 +77,31 @@ const MUSIC_PROVIDER_OPTIONS: ReadonlyArray<{
   value: MusicProvider;
   label: string;
   detail: string;
+  playbackAvailable: boolean;
 }> = [
   {
     value: "spotify",
     label: "Spotify",
     detail: "Built into Penumbra; pair Spotify Premium from your phone.",
+    playbackAvailable: true,
   },
   {
     value: "youtube_music",
     label: "YouTube Music",
-    detail: "Connect here with a Google device code. Audio and ad payloads are filtered in Center.",
+    detail: "Connect here with a Google device code. Your Pin supplies the Wi-Fi or LTE path for playback.",
+    playbackAvailable: true,
   },
   {
     value: "apple_music",
     label: "Apple Music",
-    detail: "Connect your Apple Music account here; Pin playback stays gated until the official runtime is available.",
+    detail: "Unavailable for playback until Apple’s official Android runtime can run on the Pin.",
+    playbackAvailable: false,
   },
   {
     value: "tidal",
     label: "TIDAL",
-    detail: "Connect here with TIDAL OAuth; Center proxies the official audio stream.",
+    detail: "Connect here with TIDAL OAuth; your Pin streams the official full track.",
+    playbackAvailable: true,
   },
 ];
 
@@ -673,7 +678,8 @@ export function SpotifyServiceCard() {
         <span className={styles.musicMark} aria-hidden="true">♪</span>
         <span className={styles.serviceCopy}>
           <strong>Music providers</strong>
-          <span>Connect Spotify, YouTube Music, Apple Music, or TIDAL, then choose the default.</span>
+          <span>Connect Spotify, YouTube Music, or TIDAL, then choose the default.</span>
+          <span>Apple Music playback is unavailable until its official Android runtime exists.</span>
         </span>
         {state ? <StatusChip tone={state.tone} label={state.label} /> : null}
       </div>
@@ -740,9 +746,17 @@ export function SpotifyServiceCard() {
                   onChange={(event) => setActiveProvider(event.target.value as MusicProvider)}
                 >
                   {MUSIC_PROVIDER_OPTIONS.map((provider) => (
-                    <option key={provider.value} value={provider.value}>
+                    <option
+                      key={provider.value}
+                      value={provider.value}
+                      disabled={!provider.playbackAvailable}
+                    >
                       {provider.label}
-                      {providerConnected(status, provider.value) ? " — Connected" : ""}
+                      {!provider.playbackAvailable
+                        ? " — Playback unavailable"
+                        : providerConnected(status, provider.value)
+                          ? " — Connected"
+                          : ""}
                     </option>
                   ))}
                 </select>
@@ -813,7 +827,7 @@ export function SpotifyServiceCard() {
                       </div>
                       <span>{youtubeAccountState?.copy}</span>
                       <span>
-                        Cosmos handles playback and filters ads and trackers.
+                        Center keeps your account and filters ad payloads. Player resolution and audio bytes use your Pin&rsquo;s Wi-Fi or LTE, then the stock Music player handles playback.
                       </span>
                       {youtubeCode && status.providers?.youtube_music.state === "pairing" ? (
                         <div className={styles.deviceCode}>

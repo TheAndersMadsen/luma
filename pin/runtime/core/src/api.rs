@@ -17,6 +17,7 @@ pub(crate) mod setup;
 pub(crate) use feature_flags::{maintain_food_runtime_gate, request_startup_feature_flag_sync};
 mod fitness;
 mod media;
+pub(crate) mod music;
 mod spotify;
 mod traces;
 
@@ -170,6 +171,7 @@ pub fn router(state: ApiState) -> Router {
             "/api/feature-flags",
             put(feature_flags::update_feature_flags),
         )
+        .nest("/api/music", music::router())
         .nest("/api/spotify", spotify::router())
         .route("/api/events", get(event_stream))
         .route("/api/logs/server", get(get_server_logs))

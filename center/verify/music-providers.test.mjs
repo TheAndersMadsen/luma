@@ -567,6 +567,7 @@ test("TIDAL disconnect wins a race with token refresh and cannot recreate creden
 test("TIDAL playback accepts only official full-track HTTPS files", async (t) => {
   await encryptedStore(t);
   environment(t, "TIDAL_CLIENT_ID", "tidal-client-id");
+  environment(t, "REVIVAL_MUSIC_GATEWAY_ORIGIN", "https://center.example.test");
   const subject = "tidal-playback-wearer";
   await store.updateMusicAccountRecord(subject, (record) => ({
     ...record,
@@ -607,6 +608,10 @@ test("TIDAL playback accepts only official full-track HTTPS files", async (t) =>
   assert.equal(
     await tidal.tidalStreamUrl(subject, "tidal:full"),
     "https://audio.tdlcdn.com/full.m4a",
+  );
+  assert.deepEqual(
+    await gateway.gatewayPlayback(subject, "tidal", "tidal:full"),
+    { url: "https://audio.tdlcdn.com/full.m4a" },
   );
 });
 
@@ -659,22 +664,7 @@ test("the Pin gateway bearer is derived, constant-time checked, and errors retai
   assert.equal(gateway.musicGatewayError(new apple.AppleMusicError("bad token", 400)).status, 400);
 });
 
-test("opaque stream tickets accept one byte range and only audio-like MIME types", () => {
-  for (const range of [null, "bytes=0-", "bytes=0-4095", "bytes=-4096"]) {
-    assert.equal(gateway.isAllowedMusicRange(range), true);
-  }
-  for (const range of ["bytes=-", "bytes=0-1,4-5", "items=0-1", "bytes=abc-def"]) {
-    assert.equal(gateway.isAllowedMusicRange(range), false);
-  }
-  for (const contentType of ["audio/mp4", "audio/webm; codecs=opus", "video/mp4", "application/octet-stream"]) {
-    assert.equal(gateway.isAllowedMusicStreamContentType(contentType), true);
-  }
-  for (const contentType of [null, "text/html", "application/json", "video/webm"]) {
-    assert.equal(gateway.isAllowedMusicStreamContentType(contentType), false);
-  }
-});
-
-test("Center exposes only exact authenticated gateway operations and exact opaque stream reads", async () => {
+test("Center exposes only exact authenticated gateway operations and no public audio relay", async () => {
   const [middleware, requestSupport, musicView, appleRoute, nextConfig] = await Promise.all([
     source("src/middleware.ts"),
     source("src/app/api/music-gateway/routeSupport.ts"),
@@ -685,7 +675,7 @@ test("Center exposes only exact authenticated gateway operations and exact opaqu
   assert.match(middleware, /\/api\/music-gateway\/query/);
   assert.match(middleware, /\/api\/music-gateway\/playback/);
   assert.match(middleware, /\/api\/music-gateway\/save/);
-  assert.match(middleware, /\[A-Za-z0-9_-\]\{43\}/);
+  assert.doesNotMatch(middleware, /music-gateway\/stream/);
   assert.match(requestSupport, /request\.body.*getReader/);
   assert.match(requestSupport, /QUERY_KINDS/);
   assert.match(requestSupport, /exactKeys/);

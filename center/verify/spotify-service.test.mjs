@@ -16,6 +16,7 @@ const {
   runSpotifyBridgeAction,
   runSpotifySearch,
   unavailableSpotifyStatus,
+  deviceMusicProviderFetch,
   deviceMusicGatewayToken,
   isSpotifyUnavailableError,
 } = await import("../src/server/spotifyBridge.ts?spotify-service-tests");
@@ -45,6 +46,70 @@ function configureBridge() {
   process.env.REVIVAL_MUSIC_GATEWAY_ORIGIN = "https://center.example.test";
   delete process.env.REVIVAL_SPOTIFY_ADAPTER_TOKEN_FILE;
 }
+
+test("YouTube player requests use the authenticated Pin egress route", async () => {
+  configureBridge();
+  const calls = [];
+  const response = await deviceMusicProviderFetch(
+    new Request("https://youtubei.googleapis.com/youtubei/v1/player", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-youtube-client-name": "67",
+      },
+      body: JSON.stringify({ videoId: "Zi_XLOBDo_Y" }),
+    }),
+    undefined,
+    async (url, init) => {
+      calls.push({ url, init });
+      return json({
+        status: 200,
+        headers: { "content-type": "application/json; charset=utf-8" },
+        body_base64: Buffer.from('{"playabilityStatus":{"status":"OK"}}').toString("base64"),
+      });
+    },
+  );
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "http://spotify-adapter:18081/api/pin-remote/api/music/egress");
+  assert.equal(calls[0].init.method, "POST");
+  assert.equal(calls[0].init.headers.authorization, `Bearer ${"s".repeat(40)}`);
+  const relayed = JSON.parse(calls[0].init.body);
+  assert.equal(relayed.provider, "youtube_music");
+  assert.equal(relayed.method, "POST");
+  assert.equal(relayed.url, "https://youtubei.googleapis.com/youtubei/v1/player");
+  assert.equal(relayed.headers["x-youtube-client-name"], "67");
+  assert.equal(
+    Buffer.from(relayed.body_base64, "base64").toString("utf8"),
+    '{"videoId":"Zi_XLOBDo_Y"}',
+  );
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { playabilityStatus: { status: "OK" } });
+});
+
+test("the Pin egress route cannot relay provider audio or account headers", async () => {
+  configureBridge();
+  let networkCalls = 0;
+  const fetchImpl = async () => {
+    networkCalls += 1;
+    return json({ status: 200, headers: {}, body_base64: "" });
+  };
+  for (const request of [
+    new Request("https://r1---sn.example.googlevideo.com/videoplayback?id=fixture"),
+    new Request("https://example.test/player"),
+    new Request("https://youtubei.googleapis.com/youtubei/v1/player", {
+      method: "POST",
+      headers: { authorization: "Bearer must-not-leave-center" },
+      body: "{}",
+    }),
+  ]) {
+    await assert.rejects(
+      deviceMusicProviderFetch(request, undefined, fetchImpl),
+      /Music provider request was rejected/,
+    );
+  }
+  assert.equal(networkCalls, 0);
+});
 
 test("settings DTO accepts only safe Pin-native settings", () => {
   assert.deepEqual(
@@ -313,6 +378,8 @@ test("Center routes require session, owner roster and same-origin mutations", as
   assert.match(bridge, /AbortSignal\.timeout/);
   assert.match(route, /musicProviderStatus\(session\.sub\)\.catch\(\(\) => undefined\)/);
   assert.match(route, /spotifyError\(error, true, providers\)/);
+  assert.match(route, /settings\.active_provider === "apple_music"/);
+  assert.match(route, /native Pin playback is not available yet/);
   assert.match(support, /code === "pin_not_paired"/);
   assert.doesNotMatch(bridge, /Pair your Ai Pin before setting up Spotify/);
   assert.doesNotMatch(bridge, /client_secret|refresh_token|access_token|Spotify Accounts/);
@@ -355,7 +422,9 @@ test("Services renders every Pin-native state, polling and settings fallback", a
   assert.doesNotMatch(view, /aipin\.andersmadsen\.dk/);
   assert.match(view, /fallback_setup/);
   assert.match(view, /<strong>Music providers<\/strong>/);
-  assert.match(view, /Connect Spotify, YouTube Music, Apple Music, or TIDAL/);
+  assert.match(view, /Connect Spotify, YouTube Music, or TIDAL, then choose the default/);
+  assert.match(view, /Apple Music playback is unavailable until its official Android runtime exists/);
+  assert.match(view, /disabled=\{!provider\.playbackAvailable\}/);
   assert.match(view, /Pair My Ai Pin/);
   assert.match(view, /status\.state === "unavailable"/);
   assert.match(view, /providerAccountState\(status, activeProvider\)/);
@@ -374,7 +443,8 @@ test("Services renders every Pin-native state, polling and settings fallback", a
   }
   assert.match(view, /active_provider/);
   assert.doesNotMatch(view, /Metrolist|install the app on the Pin|provider app owns its login/i);
-  assert.match(view, /filters ads and trackers/);
+  assert.match(view, /Player resolution and audio bytes use your Pin/);
+  assert.match(view, /stock Music player handles playback/);
   assert.doesNotMatch(`${page}\n${view}`, /client secret|developer OAuth/i);
 });
 

@@ -546,6 +546,14 @@ fn typed_dispatch_request(
                 ApiOperation::FeatureFlagsRead => {
                     (Method::GET, "/api/feature-flags".to_owned(), None)
                 }
+                ApiOperation::MusicEgress => {
+                    crate::api::music::validate_egress_payload(&body)?;
+                    (
+                        Method::POST,
+                        "/api/music/egress".to_owned(),
+                        Some("application/json".to_owned()),
+                    )
+                }
                 ApiOperation::SpotifyStatus => {
                     (Method::GET, "/api/spotify/status".to_owned(), None)
                 }
@@ -577,7 +585,11 @@ fn typed_dispatch_request(
                 #[cfg(test)]
                 ApiOperation::TestMutation => return Err("test mutation reached typed dispatch"),
             };
-            if operation != ApiOperation::SpotifySettingsUpdate && !body.is_empty() {
+            if !matches!(
+                operation,
+                ApiOperation::SpotifySettingsUpdate | ApiOperation::MusicEgress
+            ) && !body.is_empty()
+            {
                 return Err("request body is not allowed for this operation");
             }
             Ok(DispatchRequest {
@@ -793,6 +805,44 @@ mod tests {
         reservation.operation()
     }
 
+    fn music_egress_operation(body: &[u8]) -> ApprovedOperation {
+        let catalog = CenterAssetCatalog::new(&["index.html"]).unwrap();
+        let generation = CenterGeneration::new(1).unwrap();
+        let request = RequestEnvelope {
+            method: "POST",
+            target: "/api/music/egress",
+            content_type: Some("application/json"),
+            header_count: 1,
+            header_bytes: 28,
+            body_bytes: body.len() as u64,
+            declared_body_bytes: Some(body.len() as u64),
+            issued_at_ms: 1_000,
+            expires_at_ms: 31_000,
+            generation: 1,
+            request_id: "music-egress-request-0001",
+            idempotency_key: Some("music-egress-idempotency-0001"),
+        };
+        let context = PolicyContext {
+            now_ms: 2_000,
+            expected_generation: generation,
+            capabilities: Capabilities::none().with(Capability::MusicEgress),
+            center_assets: &catalog,
+        };
+        let validated = authorize(&request, &context).unwrap();
+        let mut ledger = MetadataLedger::new(generation, 4).unwrap();
+        let ReservationDecision::ExecuteOnce(reservation) = ledger
+            .admit(
+                &validated,
+                request_fingerprint("POST", "/api/music/egress", body),
+                2_000,
+            )
+            .unwrap()
+        else {
+            panic!("request should receive an execution reservation");
+        };
+        reservation.operation()
+    }
+
     #[test]
     fn typed_spotify_dispatch_uses_fixed_routes_and_canonical_query() {
         let catalog = CenterAssetCatalog::new(&["index.html"]).unwrap();
@@ -843,6 +893,24 @@ mod tests {
         assert_eq!(
             typed_dispatch_request(operation, &catalog, unacknowledged.to_vec()).unwrap_err(),
             "Spotify acknowledgement is required"
+        );
+    }
+
+    #[test]
+    fn typed_music_egress_dispatch_revalidates_the_closed_provider_request() {
+        let catalog = CenterAssetCatalog::new(&["index.html"]).unwrap();
+        let valid = br#"{"provider":"youtube_music","method":"POST","url":"https://youtubei.googleapis.com/youtubei/v1/player","headers":{"content-type":"application/json"},"body_base64":"e30="}"#;
+        let operation = music_egress_operation(valid);
+        let dispatch = typed_dispatch_request(operation, &catalog, valid.to_vec()).unwrap();
+        assert_eq!(dispatch.method, Method::POST);
+        assert_eq!(dispatch.target, "/api/music/egress");
+        assert_eq!(dispatch.content_type.as_deref(), Some("application/json"));
+        assert_eq!(dispatch.body, valid);
+
+        let unsafe_target = br#"{"provider":"youtube_music","method":"POST","url":"https://example.test/player","headers":{"content-type":"application/json"},"body_base64":"e30="}"#;
+        assert_eq!(
+            typed_dispatch_request(operation, &catalog, unsafe_target.to_vec()).unwrap_err(),
+            "music egress URL is not allowed"
         );
     }
 }

@@ -308,6 +308,8 @@ class SpotifyMusicContractTest {
         )
 
         listOf(
+            "https://center.example.test/api/music-gateway/stream/${"a".repeat(43)}",
+            "https://r1.googlevideo.com/videoplayback?id=fixture",
             "https://127.0.0.1:8081/audio/abc",
             "http://localhost:8081/audio/abc",
             "http://example.com:8081/audio/abc",

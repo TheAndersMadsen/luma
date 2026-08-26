@@ -8,6 +8,7 @@ import {
   updateMusicAccountRecord,
   type YoutubeOAuthCredentials,
 } from "./musicProviderStore";
+import { deviceMusicProviderFetch } from "./spotifyBridge";
 import { youtubeContentProofToken } from "./youtubePoToken";
 import { configureYoutubePlayerEvaluator } from "./youtubePlayerEvaluator";
 
@@ -118,40 +119,45 @@ function requestUrl(input: string | URL | Request): URL {
   return new URL(input instanceof Request ? input.url : input.toString());
 }
 
-export const adBlockingYoutubeFetch: typeof fetch = async (input, init) => {
-  const url = requestUrl(input);
-  if (!isAllowedYoutubeRequestUrl(url)) {
-    throw new YoutubeMusicError("YouTube Music blocked an advertising or unexpected request.", 502);
-  }
-  const response = await fetch(input, { ...init, redirect: "error" });
-  const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
-  const declared = Number(response.headers.get("content-length") ?? "0");
-  if (
-    !contentType.includes("json") ||
-    (Number.isFinite(declared) && declared > MAX_PRUNABLE_RESPONSE_BYTES)
-  ) {
-    return response;
-  }
+export function adBlockingYoutubeFetchUsing(fetchImpl: typeof fetch): typeof fetch {
+  return async (input, init) => {
+    const url = requestUrl(input);
+    if (!isAllowedYoutubeRequestUrl(url)) {
+      throw new YoutubeMusicError("YouTube Music blocked an advertising or unexpected request.", 502);
+    }
+    const response = await fetchImpl(input, { ...init, redirect: "error" });
+    const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+    const declared = Number(response.headers.get("content-length") ?? "0");
+    if (
+      !contentType.includes("json") ||
+      (Number.isFinite(declared) && declared > MAX_PRUNABLE_RESPONSE_BYTES)
+    ) {
+      return response;
+    }
 
-  const bytes = await response.arrayBuffer();
-  if (bytes.byteLength > MAX_PRUNABLE_RESPONSE_BYTES) {
-    throw new YoutubeMusicError("YouTube Music returned an oversized response.", 502);
-  }
-  let decoded: unknown;
-  try {
-    decoded = JSON.parse(new TextDecoder().decode(bytes));
-  } catch {
-    throw new YoutubeMusicError("YouTube Music returned an invalid response.", 502);
-  }
-  const headers = new Headers(response.headers);
-  headers.delete("content-length");
-  headers.delete("content-encoding");
-  return new Response(JSON.stringify(pruneYoutubeAdFields(decoded)), {
-    status: response.status,
-    statusText: response.statusText,
-    headers,
-  });
-};
+    const bytes = await response.arrayBuffer();
+    if (bytes.byteLength > MAX_PRUNABLE_RESPONSE_BYTES) {
+      throw new YoutubeMusicError("YouTube Music returned an oversized response.", 502);
+    }
+    let decoded: unknown;
+    try {
+      decoded = JSON.parse(new TextDecoder().decode(bytes));
+    } catch {
+      throw new YoutubeMusicError("YouTube Music returned an invalid response.", 502);
+    }
+    const headers = new Headers(response.headers);
+    headers.delete("content-length");
+    headers.delete("content-encoding");
+    return new Response(JSON.stringify(pruneYoutubeAdFields(decoded)), {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    });
+  };
+}
+
+export const adBlockingYoutubeFetch = adBlockingYoutubeFetchUsing(fetch);
+const deviceAdBlockingYoutubeFetch = adBlockingYoutubeFetchUsing(deviceMusicProviderFetch);
 
 function normalizeCredentials(value: unknown): YoutubeOAuthCredentials {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -575,12 +581,12 @@ export async function youtubeMusicStreamUrl(subject: string, trackId: string): P
     const videoId = youtubeVideoId(trackId);
     const [client, proofToken] = await Promise.all([
       Innertube.create({
-        fetch: adBlockingYoutubeFetch,
+        fetch: deviceAdBlockingYoutubeFetch,
         retrieve_player: true,
         generate_session_locally: true,
         enable_session_cache: false,
       }),
-      youtubeContentProofToken(videoId, adBlockingYoutubeFetch),
+      youtubeContentProofToken(videoId, deviceAdBlockingYoutubeFetch),
     ]);
     return await resolveYoutubeAudioStream(client, videoId, proofToken);
   } catch (error) {

@@ -47,6 +47,7 @@ const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_SPOTIFY_SETTINGS_BODY_BYTES: usize = 512;
 const MAX_SPOTIFY_SEARCH_QUERY_BYTES: usize = 256;
+const MAX_MUSIC_EGRESS_BODY_BYTES: usize = 1024 * 1024;
 const MAX_TICKET_BYTES: usize = 16 * 1024;
 
 /// Wire protocol request to the Pin. Mirrors `RemoteRequest` in
@@ -330,6 +331,13 @@ fn reviewed_route_allowed(
     }
 
     match (method, path, uri.query()) {
+        (&Method::POST, "/api/music/egress", None) => {
+            body_bytes <= MAX_MUSIC_EGRESS_BODY_BYTES
+                && headers
+                    .get(header::CONTENT_TYPE)
+                    .and_then(|value| value.to_str().ok())
+                    == Some("application/json")
+        }
         (&Method::GET, "/api/spotify/search", Some(query)) => {
             bodyless && no_content_type && valid_spotify_search_query(query)
         }
@@ -1009,6 +1017,40 @@ mod tests {
             &json_headers,
             1,
         ));
+    }
+
+    #[test]
+    fn reviewed_bridge_policy_allows_only_the_exact_music_egress_write() {
+        let mut json_headers = HeaderMap::new();
+        json_headers.insert(
+            header::CONTENT_TYPE,
+            header::HeaderValue::from_static("application/json"),
+        );
+        assert!(reviewed_route_allowed(
+            &Method::POST,
+            &Uri::from_static("/api/music/egress"),
+            &json_headers,
+            MAX_MUSIC_EGRESS_BODY_BYTES,
+        ));
+        assert!(!reviewed_route_allowed(
+            &Method::POST,
+            &Uri::from_static("/api/music/egress"),
+            &json_headers,
+            MAX_MUSIC_EGRESS_BODY_BYTES + 1,
+        ));
+        for (method, uri) in [
+            (Method::GET, "/api/music/egress"),
+            (Method::POST, "/api/music/egress/"),
+            (Method::POST, "/api/music/egress?target=other"),
+            (Method::POST, "/api/music/proxy"),
+        ] {
+            assert!(!reviewed_route_allowed(
+                &method,
+                &uri.parse().unwrap(),
+                &json_headers,
+                2,
+            ));
+        }
     }
 
     #[test]

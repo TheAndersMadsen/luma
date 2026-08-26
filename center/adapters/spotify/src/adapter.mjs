@@ -452,6 +452,7 @@ function pinRemotePolicy(method, pathname, rawQuery, contentType, bodyBytes) {
     ["/api/device", new Set(["GET"])],
     ["/api/settings", new Set(["GET", "PUT"])],
     ["/api/feature-flags", new Set(["GET", "PUT"])],
+    ["/api/music/egress", new Set(["POST"])],
   ]);
   const namespaces = new Map([
     ["/api/memories", new Set(["GET", "DELETE"])],

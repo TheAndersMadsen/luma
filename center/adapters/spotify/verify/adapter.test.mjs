@@ -108,6 +108,55 @@ test("requires the private bearer token and rejects non-allowlisted shapes", asy
   assert.equal(upstreamCalls, 0);
 });
 
+test("the authenticated Pin route forwards only the exact music egress write", async (t) => {
+  const calls = [];
+  const base = await runningAdapter(t, async (url, init) => {
+    calls.push({ url, init });
+    return jsonResponse({
+      status: 200,
+      headers: { "content-type": "application/json" },
+      body_base64: Buffer.from("{}").toString("base64"),
+    });
+  });
+  const body = JSON.stringify({
+    provider: "youtube_music",
+    method: "POST",
+    url: "https://youtubei.googleapis.com/youtubei/v1/player",
+    headers: { "content-type": "application/json" },
+    body_base64: Buffer.from('{"videoId":"Zi_XLOBDo_Y"}').toString("base64"),
+  });
+  const response = await fetch(
+    `${base}/api/pin-remote/api/music/egress`,
+    authorized({
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body,
+    }),
+  );
+  assert.equal(response.status, 200);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, `${UPSTREAM_ORIGIN}/api/music/egress`);
+  assert.equal(calls[0].init.method, "POST");
+  assert.equal(Buffer.from(calls[0].init.body).toString("utf8"), body);
+
+  for (const target of [
+    "/api/pin-remote/api/music/egress/",
+    "/api/pin-remote/api/music/egress?url=https://example.test",
+    "/api/pin-remote/api/music/proxy",
+  ]) {
+    const rejected = await fetch(
+      `${base}${target}`,
+      authorized({
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      }),
+    );
+    assert.equal(rejected.status, 404, target);
+  }
+  assert.equal(calls.length, 1);
+});
+
 test("search forwards only a query it rebuilt itself", async (t) => {
   const requested = [];
   const base = await runningAdapter(t, async (url) => {

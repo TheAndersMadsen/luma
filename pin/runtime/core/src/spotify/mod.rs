@@ -1,4 +1,5 @@
 mod playback;
+mod provider_stream;
 pub mod types;
 
 use std::collections::{HashMap, VecDeque};
@@ -10,8 +11,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use axum::body::Body;
 use axum::extract::{ConnectInfo, DefaultBodyLimit, Path as AxumPath, State};
-use axum::http::{HeaderMap, Method, StatusCode};
+use axum::http::{header, HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -43,6 +45,7 @@ use self::playback::{
     PlaybackBuffer, SwitchableWavSinkController, PLAYBACK_PREROLL_DEADLINE,
     PLAYBACK_PREROLL_PCM_BYTES,
 };
+use self::provider_stream::{ProviderStream, ProviderStreamRegistry};
 pub use self::types::{
     MusicProviderStatus, SpotifyPlaybackRequest, SpotifyPlaybackResponse, SpotifyQueryRequest,
     SpotifyQueryResponse, SpotifyRankingProvenance, SpotifySaveRequest, SpotifySaveResponse,
@@ -101,6 +104,7 @@ struct SpotifyInner {
     stream_origin: String,
     bridge_token: Option<String>,
     http: Client,
+    provider_streams: Mutex<ProviderStreamRegistry>,
     persistence: EsimBridge,
     db: Database,
 }
@@ -795,6 +799,7 @@ impl SpotifyService {
                 stream_origin,
                 bridge_token,
                 http,
+                provider_streams: Mutex::new(ProviderStreamRegistry::default()),
                 persistence,
                 db,
             }),
@@ -885,7 +890,12 @@ impl SpotifyService {
         settings
             .validate()
             .map_err(|_| SpotifyError::InvalidRequest("invalid music settings"))?;
+        let provider_changed =
+            self.inner.music_settings.read().await.active_provider != settings.active_provider;
         *self.inner.music_settings.write().await = settings;
+        if provider_changed {
+            self.inner.provider_streams.lock().await.clear();
+        }
         Ok(())
     }
 
@@ -1087,19 +1097,39 @@ impl SpotifyService {
     ) -> Result<SpotifyPlaybackResponse, SpotifyError> {
         request.validate().map_err(SpotifyError::InvalidRequest)?;
         if self.inner.music_settings.read().await.active_provider != MusicProvider::Spotify {
-            let (provider, gateway_url, _) = self.music_gateway_context().await?;
+            let (provider, _, _) = self.music_gateway_context().await?;
+            let track_id = request.id.clone();
             let response: SpotifyPlaybackResponse = self
                 .music_gateway_post(
                     "playback",
                     serde_json::json!({
                         "provider": provider.as_str(),
                         "id": request.id,
-                        "duration_ms": request.duration_ms,
                     }),
                 )
                 .await?;
-            validate_gateway_stream_url(&gateway_url, &response.url)?;
-            return Ok(response);
+            for _ in 0..8 {
+                let ticket = random_ticket()?;
+                let inserted = self.inner.provider_streams.lock().await.insert(
+                    ticket.clone(),
+                    provider,
+                    track_id.clone(),
+                    &response.url,
+                );
+                match inserted {
+                    Ok(()) => {
+                        return Ok(SpotifyPlaybackResponse {
+                            url: format!(
+                                "{}/internal/spotify/provider-stream/{ticket}",
+                                self.inner.stream_origin
+                            ),
+                        });
+                    }
+                    Err("music playback ticket collision") => continue,
+                    Err(_) => return Err(SpotifyError::Unavailable),
+                }
+            }
+            return Err(SpotifyError::Unavailable);
         }
         self.require_enabled().await?;
 
@@ -1549,6 +1579,129 @@ impl SpotifyService {
             return None;
         }
         Some(buffer)
+    }
+
+    async fn provider_stream(&self, ticket: &str) -> Option<ProviderStream> {
+        self.inner.provider_streams.lock().await.get(ticket)
+    }
+
+    async fn renew_provider_stream(
+        &self,
+        ticket: &str,
+        stream: &ProviderStream,
+    ) -> Option<ProviderStream> {
+        let response: SpotifyPlaybackResponse = self
+            .music_gateway_post(
+                "playback",
+                serde_json::json!({
+                    "provider": stream.provider.as_str(),
+                    "id": stream.track_id,
+                }),
+            )
+            .await
+            .ok()?;
+        let mut streams = self.inner.provider_streams.lock().await;
+        if !streams.replace_url(ticket, &stream.url, &response.url) {
+            return None;
+        }
+        streams.get(ticket)
+    }
+
+    async fn fetch_provider_stream(
+        &self,
+        stream: &ProviderStream,
+        method: &Method,
+        range: Option<&HeaderValue>,
+    ) -> Result<ReqwestResponse, reqwest::Error> {
+        let mut request = self
+            .inner
+            .http
+            .request(method.clone(), stream.url.clone())
+            .header(reqwest::header::ACCEPT_ENCODING, "identity")
+            .timeout(Duration::from_secs(15));
+        if let Some(range) = range {
+            request = request.header(reqwest::header::RANGE, range.clone());
+        }
+        request.send().await
+    }
+
+    async fn provider_stream_response(
+        &self,
+        ticket: &str,
+        method: Method,
+        headers: &HeaderMap,
+    ) -> Response {
+        let range = match validated_music_range(headers) {
+            Ok(range) => range,
+            Err(status) => return status.into_response(),
+        };
+        let Some(mut stream) = self.provider_stream(ticket).await else {
+            return StatusCode::NOT_FOUND.into_response();
+        };
+        let mut upstream = self
+            .fetch_provider_stream(&stream, &method, range.as_ref())
+            .await;
+        let should_renew = match &upstream {
+            Ok(response) => !matches!(response.status().as_u16(), 200 | 206 | 416),
+            Err(_) => true,
+        };
+        if should_renew {
+            if let Some(renewed) = self.renew_provider_stream(ticket, &stream).await {
+                stream = renewed;
+                upstream = self
+                    .fetch_provider_stream(&stream, &method, range.as_ref())
+                    .await;
+            }
+        }
+        let response = match upstream {
+            Ok(response) => response,
+            Err(_) => return StatusCode::BAD_GATEWAY.into_response(),
+        };
+        if response.status() == reqwest::StatusCode::RANGE_NOT_SATISFIABLE {
+            return StatusCode::RANGE_NOT_SATISFIABLE.into_response();
+        }
+        if !matches!(response.status().as_u16(), 200 | 206)
+            || !valid_music_stream_content_type(response.headers().get(header::CONTENT_TYPE))
+        {
+            return StatusCode::BAD_GATEWAY.into_response();
+        }
+        let status = response.status();
+        let projected = [
+            header::CONTENT_TYPE,
+            header::CONTENT_LENGTH,
+            header::CONTENT_RANGE,
+            header::ACCEPT_RANGES,
+            header::ETAG,
+            header::LAST_MODIFIED,
+        ]
+        .into_iter()
+        .filter_map(|name| {
+            response
+                .headers()
+                .get(&name)
+                .cloned()
+                .map(|value| (name, value))
+        })
+        .collect::<Vec<_>>();
+        let body = if method == Method::HEAD {
+            Body::empty()
+        } else {
+            Body::from_stream(response.bytes_stream())
+        };
+        let mut output = Response::new(body);
+        *output.status_mut() = status;
+        output.headers_mut().insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("private, no-store"),
+        );
+        output.headers_mut().insert(
+            HeaderName::from_static("x-content-type-options"),
+            HeaderValue::from_static("nosniff"),
+        );
+        for (name, value) in projected {
+            output.headers_mut().insert(name, value);
+        }
+        output
     }
 
     async fn music_gateway_context(&self) -> Result<(MusicProvider, String, String), SpotifyError> {
@@ -3142,28 +3295,54 @@ fn artist_top_tracks_fallback_query(artist_name: &str) -> String {
     format!("artist:{}", artist_name.trim())
 }
 
-fn validate_gateway_stream_url(gateway_origin: &str, value: &str) -> Result<(), SpotifyError> {
-    let origin = reqwest::Url::parse(gateway_origin).map_err(|_| SpotifyError::Unavailable)?;
-    let url = reqwest::Url::parse(value).map_err(|_| SpotifyError::Unavailable)?;
-    if url.scheme() != "https"
-        || url.origin() != origin.origin()
-        || url.username() != ""
-        || url.password().is_some()
-        || !url.path().starts_with("/api/music-gateway/stream/")
-        || url.query().is_some()
-        || url.fragment().is_some()
-    {
-        return Err(SpotifyError::Unavailable);
+fn valid_music_range_value(value: &str) -> bool {
+    let Some(value) = value.strip_prefix("bytes=") else {
+        return false;
+    };
+    if value.contains(',') {
+        return false;
     }
-    let ticket = url.path().trim_start_matches("/api/music-gateway/stream/");
-    if ticket.len() != 43
-        || !ticket
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-    {
-        return Err(SpotifyError::Unavailable);
+    if let Some(suffix) = value.strip_prefix('-') {
+        return !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit());
     }
-    Ok(())
+    let Some((start, end)) = value.split_once('-') else {
+        return false;
+    };
+    !start.is_empty()
+        && start.bytes().all(|byte| byte.is_ascii_digit())
+        && end.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+fn validated_music_range(headers: &HeaderMap) -> Result<Option<HeaderValue>, StatusCode> {
+    let mut values = headers.get_all(header::RANGE).iter();
+    let Some(value) = values.next() else {
+        return Ok(None);
+    };
+    if values.next().is_some() {
+        return Err(StatusCode::RANGE_NOT_SATISFIABLE);
+    }
+    let raw = value
+        .to_str()
+        .map_err(|_| StatusCode::RANGE_NOT_SATISFIABLE)?;
+    if !valid_music_range_value(raw) {
+        return Err(StatusCode::RANGE_NOT_SATISFIABLE);
+    }
+    Ok(Some(value.clone()))
+}
+
+fn valid_music_stream_content_type(value: Option<&HeaderValue>) -> bool {
+    let Some(value) = value.and_then(|value| value.to_str().ok()) else {
+        return false;
+    };
+    let content_type = value
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    content_type.starts_with("audio/")
+        || content_type == "video/mp4"
+        || content_type == "application/octet-stream"
 }
 
 /// Whether a result list is ordered by descending popularity.
@@ -3515,6 +3694,10 @@ pub fn internal_router(service: SpotifyService) -> Router {
             "/internal/spotify/stream/{ticket}",
             get(internal_stream).head(internal_stream),
         )
+        .route(
+            "/internal/spotify/provider-stream/{ticket}",
+            get(internal_provider_stream).head(internal_provider_stream),
+        )
         .layer(DefaultBodyLimit::max(32 * 1024))
         .with_state(service)
 }
@@ -3590,6 +3773,21 @@ async fn internal_stream(
         return StatusCode::NOT_FOUND.into_response();
     };
     buffer.response(method == Method::HEAD, &headers).await
+}
+
+async fn internal_provider_stream(
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    State(service): State<SpotifyService>,
+    AxumPath(ticket): AxumPath<String>,
+    method: Method,
+    headers: HeaderMap,
+) -> Response {
+    if !internal_peer(&peer) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    service
+        .provider_stream_response(&ticket, method, &headers)
+        .await
 }
 
 #[derive(Deserialize)]

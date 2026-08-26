@@ -138,6 +138,13 @@ Rerunning setup preserves existing nonblank values.
 
 Optional profiles are `pin`, `search`, `spotify`, and `observability`. Spotify
 also needs the Iroh ticket file named by `./revival setup production --help`.
+The `spotify` profile owns the complete music bridge: Spotify plays natively on
+the Pin, while Center keeps YouTube Music and TIDAL account state and catalog
+logic. YouTube player requests and both providers' audio bytes leave through
+the Pin's active Wi-Fi or LTE connection and feed the stock Music player through
+an opaque loopback stream. Apple Music can be linked in Center, but cannot be
+selected for playback until Apple's official Android playback runtime is
+available; previews and web players are not used as a fallback.
 
 ### 3. Deploy and verify
 

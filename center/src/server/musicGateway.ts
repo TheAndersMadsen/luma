@@ -1,17 +1,13 @@
-import { randomBytes } from "node:crypto";
-
 import { AppleMusicError, appleConnectionStatus } from "./appleMusic";
 import { MusicSessionStoreError } from "./musicProviderStore";
 
 import {
   deviceMusicGatewayToken,
-  musicGatewayOrigin,
   SpotifyBridgeError,
   type MusicProvider,
 } from "./spotifyBridge";
 import {
   disconnectTidal,
-  isAllowedTidalStream,
   queryTidal,
   saveTidalTrack,
   startTidalConnection,
@@ -22,7 +18,6 @@ import {
 import {
   disconnectYoutube,
   equalGatewayToken,
-  isAllowedGoogleVideoStream,
   likeYoutubeTrack,
   queryYoutubeMusic,
   startYoutubeConnection,
@@ -30,10 +25,6 @@ import {
   youtubeMusicStreamUrl,
   YoutubeMusicError,
 } from "./youtubeMusic";
-
-const STREAM_TTL_MS = 5 * 60_000;
-const MAX_STREAM_TICKETS = 256;
-const tickets = new Map<string, { url: string; provider: MusicProvider; expiresAt: number }>();
 
 export class MusicGatewayError extends Error {
   readonly status: number;
@@ -96,20 +87,12 @@ export async function gatewayQuery(subject: string, request: QueryRequest) {
   };
 }
 
-function pruneTickets(now = Date.now()): void {
-  for (const [ticket, entry] of tickets) if (entry.expiresAt <= now) tickets.delete(ticket);
-  while (tickets.size >= MAX_STREAM_TICKETS) tickets.delete(tickets.keys().next().value!);
-}
-
 export async function gatewayPlayback(subject: string, providerValue: MusicProvider, id: string) {
   const provider = supportedProvider(providerValue);
   const upstream = provider === "youtube_music"
     ? await youtubeMusicStreamUrl(subject, id)
     : await tidalStreamUrl(subject, id);
-  pruneTickets();
-  const ticket = randomBytes(32).toString("base64url");
-  tickets.set(ticket, { url: upstream, provider, expiresAt: Date.now() + STREAM_TTL_MS });
-  return { url: `${musicGatewayOrigin()}/api/music-gateway/stream/${ticket}` };
+  return { url: upstream };
 }
 
 export async function gatewaySave(subject: string, providerValue: MusicProvider, id: string) {
@@ -117,60 +100,6 @@ export async function gatewaySave(subject: string, providerValue: MusicProvider,
   if (provider === "youtube_music") await likeYoutubeTrack(subject, id);
   else await saveTidalTrack(subject, id);
   return { ok: true };
-}
-
-export function isAllowedMusicRange(value: string | null): boolean {
-  return value === null || /^bytes=(?:\d+-\d*|-\d+)$/u.test(value);
-}
-
-export function isAllowedMusicStreamContentType(value: string | null): boolean {
-  const contentType = value?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
-  return (
-    contentType.startsWith("audio/") ||
-    contentType === "video/mp4" ||
-    contentType === "application/octet-stream"
-  );
-}
-
-export async function proxyMusicStream(ticket: string, request: Request): Promise<Response> {
-  if (!/^[A-Za-z0-9_-]{43}$/u.test(ticket)) return new Response(null, { status: 404 });
-  pruneTickets();
-  const entry = tickets.get(ticket);
-  if (!entry) return new Response(null, { status: 404 });
-  if (request.method !== "GET" && request.method !== "HEAD") return new Response(null, { status: 405 });
-  const valid = entry.provider === "youtube_music" ? isAllowedGoogleVideoStream(entry.url) : isAllowedTidalStream(entry.url);
-  if (!valid) {
-    tickets.delete(ticket);
-    return new Response(null, { status: 404 });
-  }
-  const range = request.headers.get("range");
-  if (!isAllowedMusicRange(range)) {
-    return new Response(null, { status: 416 });
-  }
-  const upstream = await fetch(entry.url, {
-    method: request.method,
-    headers: range ? { range } : undefined,
-    cache: "no-store",
-    redirect: "error",
-    signal: AbortSignal.timeout(15_000),
-  }).catch(() => null);
-  if (!upstream || !new Set([200, 206]).has(upstream.status)) {
-    await upstream?.body?.cancel().catch(() => undefined);
-    return new Response(null, { status: 502 });
-  }
-  if (!isAllowedMusicStreamContentType(upstream.headers.get("content-type"))) {
-    await upstream.body?.cancel().catch(() => undefined);
-    return new Response(null, { status: 502 });
-  }
-  const headers = new Headers({
-    "cache-control": "private, no-store",
-    "x-content-type-options": "nosniff",
-  });
-  for (const name of ["content-type", "content-length", "content-range", "accept-ranges", "etag", "last-modified"]) {
-    const value = upstream.headers.get(name);
-    if (value) headers.set(name, value);
-  }
-  return new Response(request.method === "HEAD" ? null : upstream.body, { status: upstream.status, headers });
 }
 
 export function musicGatewayError(error: unknown): Response {

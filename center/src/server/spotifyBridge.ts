@@ -43,12 +43,46 @@ const MAX_SEARCH_RESPONSE_BYTES = 32 * 1024;
 const STATUS_STATES = new Set(["disabled", "not_configured", "pairing", "ready", "error"]);
 const MAX_ADAPTER_RESPONSE_BYTES = 64 * 1024;
 const MAX_ROSTER_RESPONSE_BYTES = 256 * 1024;
+const MAX_DEVICE_FETCH_REQUEST_BYTES = 512 * 1024;
+const MAX_DEVICE_FETCH_BODY_BYTES = 5 * 1024 * 1024;
+const MAX_DEVICE_FETCH_RESPONSE_BYTES = 8 * 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 5_000;
 const MIN_TIMEOUT_MS = 500;
 const MAX_TIMEOUT_MS = 10_000;
 const DEFAULT_DEVICE_NAME = "Ai Pin";
 const MUSIC_PROVIDERS = new Set(["spotify", "youtube_music", "apple_music", "tidal"]);
 const MUSIC_GATEWAY_TOKEN_CONTEXT = "ai-pin-revival/music-gateway/v1";
+const DEVICE_MUSIC_EGRESS_PATH = "/api/pin-remote/api/music/egress";
+const DEVICE_MUSIC_EGRESS_METHODS = new Set(["GET", "HEAD", "POST"]);
+const DEVICE_MUSIC_EGRESS_REQUEST_HEADERS = new Set([
+  "accept",
+  "accept-language",
+  "content-type",
+  "origin",
+  "referer",
+  "user-agent",
+  "x-goog-api-format-version",
+  "x-goog-api-key",
+  "x-goog-authuser",
+  "x-goog-visitor-id",
+  "x-origin",
+  "x-youtube-bootstrap-logged-in",
+  "x-youtube-client-name",
+  "x-youtube-client-version",
+]);
+const DEVICE_MUSIC_EGRESS_RESPONSE_HEADERS = new Set([
+  "content-type",
+  "content-length",
+  "etag",
+  "last-modified",
+]);
+const DEVICE_YOUTUBE_REQUEST_HOSTS = new Set([
+  "www.youtube.com",
+  "music.youtube.com",
+  "youtube.com",
+  "youtubei.googleapis.com",
+  "jnn-pa.googleapis.com",
+]);
 
 export type MusicProvider = "spotify" | "youtube_music" | "apple_music" | "tidal";
 
@@ -476,6 +510,114 @@ export async function deviceMusicGatewayToken(): Promise<string> {
   return createHmac("sha256", await adapterToken())
     .update(`${MUSIC_GATEWAY_TOKEN_CONTEXT}\0${deviceId}`, "utf8")
     .digest("base64url");
+}
+
+function deviceYoutubeRequestUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    const host = url.hostname.toLowerCase().replace(/\.$/u, "");
+    return (
+      url.protocol === "https:" &&
+      !url.username &&
+      !url.password &&
+      DEVICE_YOUTUBE_REQUEST_HOSTS.has(host)
+    );
+  } catch {
+    return false;
+  }
+}
+
+function canonicalBase64(value: unknown, maximumBytes: number): Buffer {
+  if (typeof value !== "string" || value.length > Math.ceil(maximumBytes / 3) * 4 + 4) {
+    throw new SpotifyBridgeError("invalid_response", 502, "The Pin returned an invalid response.");
+  }
+  const bytes = Buffer.from(value, "base64");
+  if (bytes.length > maximumBytes || bytes.toString("base64") !== value) {
+    throw new SpotifyBridgeError("invalid_response", 502, "The Pin returned an invalid response.");
+  }
+  return bytes;
+}
+
+/**
+ * Execute one allowlisted YouTube player request through the paired Pin.
+ *
+ * The interface deliberately mirrors `fetch`, so youtubei.js and BotGuard do
+ * not learn about Iroh, the adapter bearer, or the Pin's bounded wire shape.
+ * Provider credentials never enter the request: this route is only for the
+ * public player/integrity traffic whose VPS source address YouTube rejects.
+ */
+export async function deviceMusicProviderFetch(
+  input: string | URL | Request,
+  init?: RequestInit,
+  fetchImpl: typeof fetch = fetch,
+): Promise<Response> {
+  const request = new Request(input, init);
+  if (!DEVICE_MUSIC_EGRESS_METHODS.has(request.method) || !deviceYoutubeRequestUrl(request.url)) {
+    throw new SpotifyBridgeError("invalid_response", 502, "Music provider request was rejected.");
+  }
+  const headers: Record<string, string> = {};
+  let headerBytes = 0;
+  for (const [name, value] of request.headers) {
+    if (!DEVICE_MUSIC_EGRESS_REQUEST_HEADERS.has(name)) {
+      throw new SpotifyBridgeError("invalid_response", 502, "Music provider request was rejected.");
+    }
+    headerBytes += Buffer.byteLength(name, "utf8") + Buffer.byteLength(value, "utf8");
+    if (headerBytes > 16 * 1024 || /[\r\n]/u.test(value)) {
+      throw new SpotifyBridgeError("invalid_response", 502, "Music provider request was rejected.");
+    }
+    headers[name] = value;
+  }
+  const requestBytes = request.body ? Buffer.from(await request.arrayBuffer()) : Buffer.alloc(0);
+  if (requestBytes.length > MAX_DEVICE_FETCH_REQUEST_BYTES) {
+    throw new SpotifyBridgeError("invalid_response", 413, "Music provider request was too large.");
+  }
+
+  const baseUrl = normalizedBaseUrl(process.env.REVIVAL_SPOTIFY_ADAPTER_URL, "The Spotify adapter");
+  const response = await fetchImpl(`${baseUrl}${DEVICE_MUSIC_EGRESS_PATH}`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${await adapterToken()}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      provider: "youtube_music",
+      method: request.method,
+      url: request.url,
+      headers,
+      ...(requestBytes.length ? { body_base64: requestBytes.toString("base64") } : {}),
+    }),
+    cache: "no-store",
+    redirect: "error",
+    signal: AbortSignal.timeout(timeoutMs()),
+  }).catch(() => null);
+  if (!response?.ok) {
+    await response?.body?.cancel().catch(() => undefined);
+    throw new SpotifyBridgeError("adapter_unavailable", 503, "Your Pin could not be reached.");
+  }
+  const decoded = objectRecord(await readJsonBounded(response, MAX_DEVICE_FETCH_RESPONSE_BYTES));
+  const status = decoded?.status;
+  const rawHeaders = objectRecord(decoded?.headers);
+  if (!Number.isSafeInteger(status) || (status as number) < 100 || (status as number) > 599 || !rawHeaders) {
+    throw new SpotifyBridgeError("invalid_response", 502, "The Pin returned an invalid response.");
+  }
+  const responseHeaders = new Headers();
+  for (const [name, value] of Object.entries(rawHeaders)) {
+    if (!DEVICE_MUSIC_EGRESS_RESPONSE_HEADERS.has(name) || typeof value !== "string" || /[\r\n]/u.test(value)) {
+      throw new SpotifyBridgeError("invalid_response", 502, "The Pin returned an invalid response.");
+    }
+    responseHeaders.set(name, value);
+  }
+  const body = canonicalBase64(decoded?.body_base64, MAX_DEVICE_FETCH_BODY_BYTES);
+  if (responseHeaders.has("content-length")) {
+    responseHeaders.set("content-length", String(body.length));
+  }
+  return new Response(
+    new Set([204, 205, 304]).has(status as number) ? null : Uint8Array.from(body),
+    {
+      status: status as number,
+      headers: responseHeaders,
+    },
+  );
 }
 
 /**

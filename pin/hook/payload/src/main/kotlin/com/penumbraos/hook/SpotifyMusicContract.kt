@@ -200,11 +200,8 @@ internal object SpotifyMusicContract {
         require(uri.userInfo == null) { "Spotify playback URL cannot contain user info" }
         val loopback = uri.scheme == "http" && uri.port in 1..65_535 &&
             (uri.host == "127.0.0.1" || uri.host == "::1" || uri.host == "[::1]")
-        val gateway = uri.scheme == "https" && uri.host?.isNotBlank() == true && uri.port == -1 &&
-            uri.rawQuery == null && uri.rawFragment == null &&
-            Regex("^/api/music-gateway/stream/[A-Za-z0-9_-]{43}$").matches(uri.rawPath.orEmpty())
-        require(loopback || gateway) {
-            "Music playback URL must be loopback or an opaque Center stream"
+        require(loopback) {
+            "Music playback URL must remain on device loopback"
         }
     }
 

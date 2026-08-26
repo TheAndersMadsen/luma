@@ -136,12 +136,6 @@ export function isDeviceMusicGatewayRequest(pathname: string, method: string): b
   ]).has(pathname);
 }
 
-/** Opaque, expiring stream tickets are the only public gateway surface. */
-export function isPublicMusicStreamRequest(pathname: string, method: string): boolean {
-  return (method.toUpperCase() === "GET" || method.toUpperCase() === "HEAD") &&
-    /^\/api\/music-gateway\/stream\/[A-Za-z0-9_-]{43}$/u.test(pathname);
-}
-
 /**
  * Gate every route behind the session cookie when auth is configured.
  *
@@ -236,10 +230,7 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  if (
-    isDeviceMusicGatewayRequest(pathname, request.method) ||
-    isPublicMusicStreamRequest(pathname, request.method)
-  ) {
+  if (isDeviceMusicGatewayRequest(pathname, request.method)) {
     return NextResponse.next();
   }
 

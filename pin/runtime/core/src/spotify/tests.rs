@@ -52,6 +52,37 @@ fn music_gateway_requests_disable_intermediary_compression() {
 }
 
 #[test]
+fn provider_stream_ranges_and_content_types_match_stock_player_reads() {
+    for value in ["bytes=0-", "bytes=0-4095", "bytes=-4096"] {
+        assert!(valid_music_range_value(value), "rejected {value}");
+    }
+    for value in ["bytes=-", "bytes=0-1,4-5", "items=0-1", "bytes=abc-def"] {
+        assert!(!valid_music_range_value(value), "accepted {value}");
+    }
+    for value in [
+        "audio/mp4",
+        "audio/webm; codecs=opus",
+        "video/mp4",
+        "application/octet-stream",
+    ] {
+        let value = HeaderValue::from_str(value).unwrap();
+        assert!(valid_music_stream_content_type(Some(&value)));
+    }
+    for value in ["text/html", "application/json", "video/webm"] {
+        let value = HeaderValue::from_str(value).unwrap();
+        assert!(!valid_music_stream_content_type(Some(&value)));
+    }
+    assert!(!valid_music_stream_content_type(None));
+}
+
+#[test]
+fn every_non_spotify_playback_returns_only_a_pin_loopback_stream() {
+    const SOURCE: &str = include_str!("mod.rs");
+    assert!(SOURCE.contains("/internal/spotify/provider-stream/{ticket}"));
+    assert!(!SOURCE.contains("/api/music-gateway/stream/"));
+}
+
+#[test]
 fn artist_top_tracks_backoff_window_is_time_bounded() {
     let now = Instant::now();
     assert!(!artist_top_tracks_backoff_is_active(None, now));

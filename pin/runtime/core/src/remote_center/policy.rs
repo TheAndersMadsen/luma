@@ -19,6 +19,7 @@ pub const MAX_HEADER_COUNT: usize = 32;
 pub const MAX_HEADER_BYTES: usize = 16 * 1024;
 pub const MAX_SPOTIFY_SEARCH_QUERY_BYTES: usize = 256;
 pub const MAX_SPOTIFY_SETTINGS_BODY_BYTES: u64 = 512;
+pub const MAX_MUSIC_EGRESS_BODY_BYTES: u64 = 1024 * 1024;
 pub const MAX_REQUEST_AGE_MS: u64 = 2 * 60 * 1_000;
 pub const MAX_REQUEST_LIFETIME_MS: u64 = 5 * 60 * 1_000;
 pub const MAX_CLOCK_SKEW_MS: u64 = 30 * 1_000;
@@ -111,6 +112,8 @@ pub enum Capability {
     SpotifyRead = 2,
     /// Change Spotify settings or pairing/session state.
     SpotifyManage = 3,
+    /// Execute one closed, validated YouTube player request from the Pin.
+    MusicEgress = 4,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -149,6 +152,7 @@ pub const fn operator_bridge_capabilities() -> Capabilities {
         .with(Capability::FeatureFlagsRead)
         .with(Capability::SpotifyRead)
         .with(Capability::SpotifyManage)
+        .with(Capability::MusicEgress)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -177,6 +181,7 @@ pub enum ApiOperation {
     SpotifyPairingCancel,
     SpotifySessionDelete,
     SpotifySearch(SpotifySearchQuery),
+    MusicEgress,
     #[cfg(test)]
     TestMutation,
 }
@@ -592,6 +597,13 @@ fn classify(
             required_capability: Some(Capability::FeatureFlagsRead),
             max_body_bytes: 0,
             content_type: ContentTypeRule::Forbidden,
+        },
+        (HttpMethod::Post, "/api/music/egress", None) => RouteRule {
+            operation: ApprovedOperation::Api(ApiOperation::MusicEgress),
+            scope: SENSITIVE_WRITE,
+            required_capability: Some(Capability::MusicEgress),
+            max_body_bytes: MAX_MUSIC_EGRESS_BODY_BYTES,
+            content_type: ContentTypeRule::JsonRequired,
         },
         (HttpMethod::Get, "/api/spotify/status", None) => RouteRule {
             operation: ApprovedOperation::Api(ApiOperation::SpotifyStatus),
@@ -1493,6 +1505,46 @@ mod tests {
             authorize(&envelope("GET", "/api/spotify/status"), &manage_policy,).unwrap_err(),
             PolicyError::CapabilityRequired(Capability::SpotifyRead)
         );
+    }
+
+    #[test]
+    fn music_egress_is_one_exact_capability_scoped_write() {
+        let assets = catalog();
+        let no_capability = context(&assets, Capabilities::none());
+        let mut request = envelope("POST", "/api/music/egress");
+        request.content_type = Some("application/json");
+        request.header_count = 1;
+        request.header_bytes = 28;
+        request.body_bytes = 512;
+        request.declared_body_bytes = Some(512);
+        request.idempotency_key = Some("music-egress-request-0001");
+        assert_eq!(
+            authorize(&request, &no_capability).unwrap_err(),
+            PolicyError::CapabilityRequired(Capability::MusicEgress)
+        );
+
+        let permitted = context(&assets, Capabilities::none().with(Capability::MusicEgress));
+        let approved = authorize(&request, &permitted).unwrap();
+        assert_eq!(
+            approved.operation,
+            ApprovedOperation::Api(ApiOperation::MusicEgress)
+        );
+        assert_eq!(approved.scope(), SENSITIVE_WRITE);
+
+        for path in [
+            "/api/music/egress/",
+            "/api/music/egress?url=https://example.test",
+            "/api/music/proxy",
+        ] {
+            let mut rejected = envelope("POST", path);
+            rejected.content_type = Some("application/json");
+            rejected.header_count = 1;
+            rejected.header_bytes = 28;
+            rejected.body_bytes = 2;
+            rejected.declared_body_bytes = Some(2);
+            rejected.idempotency_key = Some("music-egress-request-0002");
+            assert!(authorize(&rejected, &permitted).is_err(), "accepted {path}");
+        }
     }
 
     #[test]
