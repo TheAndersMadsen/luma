@@ -451,7 +451,9 @@ function validatePki() {
   runOpenSsl(['verify', '-CAfile', files.edgeCa[0], files.edgeCa[0]]);
   runOpenSsl(['verify', '-CAfile', files.edgeCa[0], files.attest[0]]);
   runOpenSsl(['verify', '-CAfile', files.edgeCa[0], '-verify_hostname', 'api.cosmos.humane.cloud', files.server[0]]);
-  runOpenSsl(['verify', '-CAfile', files.duc[0], files.duc[0]]);
+  // The DeviceUser CA is operator-supplied and is commonly an issuing CA whose
+  // root stays offline, so it is held to being a CA rather than self-signed.
+  assertCertificateAuthority(files.duc[0]);
   const trust = readPinTrust();
   if (!trust) throw new Error(`Pin trust record is missing: ${PIN_TRUST_FILE}`);
   assertRootFingerprint('Cosmos edge root CA', files.edgeCa[0], trust.edgeRootSha256);
