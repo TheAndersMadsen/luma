@@ -1047,6 +1047,23 @@ test("simple-action hook evidence is bounded by the harness marker and ordered",
   );
 });
 
+test("simple-action evidence accepts stock narration when hand tracking is disabled", () => {
+  const marker = "physical-simple-123e4567-e89b-42d3-a456-426614174000";
+  const events = parsePenumbraHookEvidence(`
+1710000000.001  100  101 I PenumbraPhysicalHarness: ${marker}
+1710000000.002  100  101 W PenumbraHook: Observed native action for physical verification | action=GetCurrentTime
+1710000000.003  100  101 W PenumbraHook:   Hand tracking feature disabled; delegating update(NARRATION_START) to stock
+1710000000.004  100  101 W PenumbraHook:   Hand tracking feature disabled; delegating update(NARRATION_END) to stock
+`, marker);
+
+  assert.deepEqual(events, [
+    "action:GetCurrentTime",
+    "narration_start",
+    "narration_end",
+  ]);
+  assert.equal(evaluateSimpleHookEvidence(events, "GetCurrentTime").pass, true);
+});
+
 test("pause cleanup accepts only the exact boundary-scoped compatibility dispatch", () => {
   const marker = "physical-simple-123e4567-e89b-42d3-a456-426614174000";
   const events = parsePenumbraHookEvidence(`

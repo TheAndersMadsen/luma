@@ -30,7 +30,7 @@ class BootInjectionReceiver : BroadcastReceiver() {
         private const val META_TARGET_PACKAGES = "com.penumbraos.hook.TARGET_PACKAGES"
 
         /** Serializes the two asynchronous boot phases and protects boot state. */
-        private val bootWorkLock = Any()
+        internal val injectionWorkLock = Any()
 
         /**
          * Tracks which packages we've already injected this boot cycle.
@@ -56,7 +56,7 @@ class BootInjectionReceiver : BroadcastReceiver() {
             Thread(
                 {
                     try {
-                        synchronized(bootWorkLock) {
+                        synchronized(injectionWorkLock) {
                             handleBoot(context, action)
                         }
                     } catch (error: Throwable) {
@@ -114,14 +114,6 @@ class BootInjectionReceiver : BroadcastReceiver() {
                 Log.e(TAG, "Server runtime policy repair failed: ${repair.message}", repair.error)
         }
 
-        // Read target package list from hook APK's manifest meta-data
-        val targetPackages = loadTargetPackages(context)
-        if (targetPackages.isEmpty()) {
-            Log.e(TAG, "No target packages found, skipping boot injection")
-            return
-        }
-        Log.w(TAG, "Target packages from hook APK: $targetPackages")
-
         // Initialize PMS references
         PackageInjector.ensureInitialized()
         if (!PackageInjector.isInitialized) {
@@ -129,19 +121,46 @@ class BootInjectionReceiver : BroadcastReceiver() {
             return
         }
 
-        val isBootCompleted = action == Intent.ACTION_BOOT_COMPLETED
-
-        for (packageName in targetPackages) {
-            try {
-                injectPackage(context, packageName, isBootCompleted)
-            } catch (error: Throwable) {
-                Log.e(TAG, "Failed to inject $packageName", error)
-            }
-        }
+        injectConfiguredTargets(
+            context = context,
+            forceRestart = action == Intent.ACTION_BOOT_COMPLETED,
+            trigger = action,
+        )
 
         disableMemfaultDaemons()
 
         Log.w(TAG, "Boot injection complete")
+    }
+
+    /**
+     * Apply the hook to the exact generated target list. The explicit post-install
+     * broadcast calls this after PMS initialization, using the
+     * same target source and process-local injected set as boot broadcasts.
+     */
+    internal fun injectConfiguredTargets(
+        context: Context,
+        forceRestart: Boolean,
+        trigger: String,
+    ) {
+        if (isDisabled()) {
+            Log.w(TAG, "Injection DISABLED via $PROP_DISABLE")
+            return
+        }
+
+        val targetPackages = loadTargetPackages(context)
+        if (targetPackages.isEmpty()) {
+            Log.e(TAG, "No target packages found, skipping injection for $trigger")
+            return
+        }
+        Log.w(TAG, "Target packages from hook APK for $trigger: $targetPackages")
+
+        for (packageName in targetPackages) {
+            try {
+                injectPackage(context, packageName, forceRestart)
+            } catch (error: Throwable) {
+                Log.e(TAG, "Failed to inject $packageName", error)
+            }
+        }
     }
 
     /**

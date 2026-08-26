@@ -112,6 +112,11 @@ class PersistentConfigVaultProvider : ContentProvider() {
             PersistentConfigVaultFormat.SPOTIFY_AUTH_FILE_NAME,
             snapshot.files[PersistentConfigVaultFormat.SPOTIFY_AUTH_FILE_NAME],
         )
+        restoreOptionalArtifact(
+            filesDir,
+            PersistentConfigVaultFormat.ACTIVATION_RECORD_FILE_NAME,
+            snapshot.files[PersistentConfigVaultFormat.ACTIVATION_RECORD_FILE_NAME],
+        )
         restoreArtifact(
             filesDir,
             PersistentConfigVaultFormat.SECURITY_SCHEMA_FILE_NAME,

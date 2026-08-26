@@ -57,6 +57,22 @@ export type ProviderInstallResponse =
   | { kind: "update-not-eligible"; packageName: string; uid: number }
   | { kind: "invalid"; detail: string };
 
+export interface UpdatedPackageActivationOperations {
+  waitForStagingProviderReady(): Promise<void>;
+  activateUpdates(): Promise<void>;
+  repairHookRuntimePolicy(): Promise<void>;
+  injectConfiguredTargets(): Promise<void>;
+}
+
+export async function runUpdatedPackageActivation(
+  operations: UpdatedPackageActivationOperations
+): Promise<void> {
+  await operations.waitForStagingProviderReady();
+  await operations.activateUpdates();
+  await operations.repairHookRuntimePolicy();
+  await operations.injectConfiguredTargets();
+}
+
 export function extractProviderMessage(output: string): string | null {
   const match = output.trim().match(/^Result: Bundle\[\{message=([^}\]]*)\}\]$/);
   return match?.[1]?.trim() ?? null;

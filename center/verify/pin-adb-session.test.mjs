@@ -262,7 +262,10 @@ const runShell = promisify(execFile);
 const {
   assertPackageManagerReady,
   isValidApkStagingName,
+  packageHasLoadedPathForUser,
   stageSystemApkBatchInstall,
+  waitForPackageUnloadedForUserZero,
+  waitForPackageForUserZero,
   waitForPackageManagerReady,
   waitForStagingProviderReady,
 } = await import(
@@ -331,6 +334,87 @@ test("package readiness bounds a probe that never returns", async () => {
     /wait for Android package service/,
   );
   assert.ok(Date.now() - startedAt < 500);
+});
+
+test("post-install package verification survives a transient package-service loss", async () => {
+  const packageName = "com.penumbraos.hook.injector";
+  const responses = [
+    {
+      stdout: "",
+      stderr: "cmd: Can't find service: package",
+      exitCode: 20,
+    },
+    { stdout: "", stderr: "", exitCode: 0 },
+    { stdout: `package:${packageName}\n`, stderr: "", exitCode: 0 },
+  ];
+  let probes = 0;
+  const transport = {
+    async shell(command) {
+      assert.match(command.join(" "), /pm.*list.*packages.*--user.*0/u);
+      const response = responses[Math.min(probes, responses.length - 1)];
+      probes += 1;
+      return response;
+    },
+  };
+
+  await waitForPackageForUserZero(transport, packageName, 1_000, 0);
+
+  assert.equal(probes, 3);
+});
+
+test("keep-data uninstall waits for a transient loaded APK path to disappear", async () => {
+  const packageName = "com.penumbraos.hook";
+  const responses = [
+    {
+      stdout: `package:/data/app/${packageName}-injected/base.apk\n`,
+      stderr: "",
+      exitCode: 0,
+    },
+    { stdout: "", stderr: "", exitCode: 0 },
+  ];
+  let probes = 0;
+  const transport = {
+    async shell(command) {
+      assert.match(command.join(" "), /pm.*path.*--user.*0/u);
+      const response = responses[Math.min(probes, responses.length - 1)];
+      probes += 1;
+      return response;
+    },
+  };
+
+  await waitForPackageUnloadedForUserZero(transport, packageName, 1_000, 0);
+
+  assert.equal(probes, 2);
+});
+
+test("an empty exit-1 package path means the user-scoped APK is unloaded", async () => {
+  const packageName = "com.penumbraos.server";
+  const transport = {
+    async shell() {
+      return { stdout: "", stderr: "", exitCode: 1 };
+    },
+  };
+
+  assert.equal(
+    await packageHasLoadedPathForUser(transport, packageName, 0),
+    false,
+  );
+  await assert.rejects(
+    () => packageHasLoadedPathForUser(
+      {
+        async shell() {
+          return {
+            stdout: "",
+            stderr: "cmd: Can't find service: package",
+            exitCode: 20,
+          };
+        },
+      },
+      packageName,
+      0,
+    ),
+    /Can't find service: package/,
+  );
 });
 
 test("the pre-mutation package assertion probes once and fails closed", async () => {

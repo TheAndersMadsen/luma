@@ -38,6 +38,12 @@ const {
 } = require("../../cli/gates.js");
 const { formatDuration, timedStage } = require("../../cli/timing.js");
 const { sameVersion } = require("../../cli/toolchain.js");
+const { resolveTool, trustedPath } = require("../../cli/authority.js");
+
+test("the validated active Node owns child checks and trusted PATH", () => {
+  assert.equal(resolveTool("node"), process.execPath);
+  assert.equal(trustedPath().split(path.delimiter)[0], path.dirname(process.execPath));
+});
 
 function runGit(cwd, ...args) {
   const result = spawnSync("git", args, { cwd, encoding: "utf8" });
@@ -351,16 +357,16 @@ test("Pin check runs direct contributor checks", () => {
   ]);
   assert.match(
     pinGradle[0],
-    new RegExp(`^Pin contributor check: /usr/bin/bash ${path.join(root, "pin", "gradlew")} --no-daemon --project-cache-dir `),
+    new RegExp(`^Pin contributor check: bash ${path.join(root, "pin", "gradlew")} --no-daemon --project-cache-dir `),
   );
-  assert.equal(pinGradle[1], "/usr/bin/bash");
+  assert.equal(pinGradle[1], "bash");
   assert.equal(pinGradle[2][0], path.join(root, "pin", "gradlew"));
   assert.equal(pinGradle[2][1], "--no-daemon");
   assert.match(
     injectorGradle[0],
-    new RegExp(`^Pin contributor check: /usr/bin/bash ${path.join(root, "pin", "injector", "gradlew")} --no-daemon --project-cache-dir `),
+    new RegExp(`^Pin contributor check: bash ${path.join(root, "pin", "injector", "gradlew")} --no-daemon --project-cache-dir `),
   );
-  assert.equal(injectorGradle[1], "/usr/bin/bash");
+  assert.equal(injectorGradle[1], "bash");
   assert.equal(injectorGradle[2][0], path.join(root, "pin", "injector/gradlew"));
   assert.equal(injectorGradle[2][1], "--no-daemon");
 });

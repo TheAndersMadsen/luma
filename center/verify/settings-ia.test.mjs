@@ -171,6 +171,23 @@ test("Services configures and tests Cosmos providers without placing credentials
   );
 });
 
+test("Services offers only reasoning efforts supported by the selected assistant provider", async () => {
+  const card = await source("src/app/settings/account/services/CosmosServicesCard.tsx");
+  const codexEfforts = card.match(/const CODEX_REASONING_EFFORTS = \[([\s\S]*?)\] as const;/)?.[1];
+  const compatibleEfforts = card.match(
+    /const OPENAI_COMPATIBLE_REASONING_EFFORTS = \[([\s\S]*?)\] as const;/,
+  )?.[1];
+
+  assert.ok(codexEfforts);
+  assert.ok(compatibleEfforts);
+  assert.doesNotMatch(codexEfforts, /minimal/);
+  for (const effort of ["low", "medium", "high", "xhigh", "max", "ultra"]) {
+    assert.match(codexEfforts, new RegExp(`value: "${effort}"`));
+  }
+  assert.match(compatibleEfforts, /value: "minimal"/);
+  assert.match(card, /draft\.provider === "codex-subscription"\s*\? CODEX_REASONING_EFFORTS/);
+});
+
 test("the old admin dashboard is one Settings provisioning pane without duplicate panels", async () => {
   const [admin, page, view, setup] = await Promise.all([
     source("src/app/admin/page.tsx"),

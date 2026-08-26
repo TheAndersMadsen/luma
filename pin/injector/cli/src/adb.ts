@@ -7,6 +7,7 @@ import {
   parseSha256Output,
   requireInjectorCodePath,
 } from "./bootstrap-protocol.js";
+import { STAGING_URI } from "./constants.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -15,6 +16,10 @@ const ADB = process.env.ADB || "adb";
 interface AdbResult {
   stdout: string;
   stderr: string;
+}
+
+export interface PackagePathCommandResult extends AdbResult {
+  exitCode: number;
 }
 
 async function adb(...args: string[]): Promise<AdbResult> {
@@ -34,6 +39,28 @@ async function adbWithTimeout(timeoutMs: number, ...args: string[]): Promise<Adb
     killSignal: "SIGKILL",
   });
   return { stdout, stderr };
+}
+
+async function adbResultWithTimeout(
+  timeoutMs: number,
+  ...args: string[]
+): Promise<PackagePathCommandResult> {
+  try {
+    const result = await adbWithTimeout(timeoutMs, ...args);
+    return { ...result, exitCode: 0 };
+  } catch (error) {
+    const commandError = error as {
+      code?: unknown;
+      stdout?: unknown;
+      stderr?: unknown;
+    };
+    if (typeof commandError.code !== "number") throw error;
+    return {
+      stdout: typeof commandError.stdout === "string" ? commandError.stdout : "",
+      stderr: typeof commandError.stderr === "string" ? commandError.stderr : "",
+      exitCode: commandError.code,
+    };
+  }
 }
 
 interface AdbDeviceRecord {
@@ -92,6 +119,48 @@ export function parseRegularPackageBaseApkPath(output: string): string {
     throw new Error(`Unsafe regular package base.apk path: ${values[0]}`);
   }
   return normalized;
+}
+
+export function parsePackagePathCommandResult(
+  result: PackagePathCommandResult,
+  packageName: string
+): boolean {
+  if (
+    result.exitCode === 1 &&
+    result.stdout.trim().length === 0 &&
+    result.stderr.trim().length === 0
+  ) {
+    return false;
+  }
+  if (result.exitCode !== 0) {
+    throw new Error(result.stderr || result.stdout || `Unable to inspect ${packageName} APK path`);
+  }
+  if (result.stderr.trim().length > 0) {
+    throw new Error(`Unexpected package path error for ${packageName}: ${result.stderr.trim()}`);
+  }
+  if (result.stdout.trim().length === 0) return false;
+  const baseApkPath = parseRegularPackageBaseApkPath(result.stdout);
+  requirePackageCodePath(path.posix.dirname(baseApkPath), packageName, true);
+  return true;
+}
+
+async function hasLoadedPackagePathForUser(
+  packageName: string,
+  userId: number,
+  timeoutMs: number
+): Promise<boolean> {
+  requirePackageName(packageName);
+  requireUserId(userId);
+  const result = await adbResultWithTimeout(
+    timeoutMs,
+    "shell",
+    "pm",
+    "path",
+    "--user",
+    String(userId),
+    packageName
+  );
+  return parsePackagePathCommandResult(result, packageName);
 }
 
 /** Trust-anchor bootstrap/replacement requires a locally attached physical USB transport. */
@@ -436,11 +505,73 @@ export async function uninstallKeepDataForUser(
       (resultLines.join(" | ") || "no Package Manager response")
     );
   }
-  if (await isInstalledForUser(packageName, userId)) {
-    throw new Error(
-      `Keep-data uninstall reported success, but ${packageName} is still installed for user ${userId}`
-    );
+  await waitForPackageUnloadedWithOperations(packageName, userId, {
+    isLoaded: async (timeoutMs) =>
+      hasLoadedPackagePathForUser(packageName, userId, timeoutMs),
+    delay: async (milliseconds) => {
+      await new Promise((resolve) => setTimeout(resolve, milliseconds));
+    },
+  });
+}
+
+export interface WaitForPackageUnloadedOperations {
+  isLoaded(timeoutMs: number): Promise<boolean>;
+  delay(milliseconds: number): Promise<void>;
+}
+
+export interface WaitForPackageUnloadedPolicy {
+  checkTimeoutMs: number;
+  verificationAttempts: number;
+  verificationIntervalMs: number;
+}
+
+const DEFAULT_WAIT_FOR_PACKAGE_UNLOADED_POLICY: WaitForPackageUnloadedPolicy = {
+  checkTimeoutMs: 2_000,
+  verificationAttempts: 12,
+  verificationIntervalMs: 250,
+};
+
+export async function waitForPackageUnloadedWithOperations(
+  packageName: string,
+  userId: number,
+  operations: WaitForPackageUnloadedOperations,
+  policy: WaitForPackageUnloadedPolicy = DEFAULT_WAIT_FOR_PACKAGE_UNLOADED_POLICY
+): Promise<void> {
+  requirePackageName(packageName);
+  requireUserId(userId);
+  for (const [name, value] of Object.entries(policy)) {
+    if (!Number.isSafeInteger(value) || value <= 0) {
+      throw new Error(`Invalid uninstall-verification ${name}: ${value}`);
+    }
   }
+
+  let lastCheckError: unknown = null;
+  for (let attempt = 0; attempt < policy.verificationAttempts; attempt += 1) {
+    try {
+      const loaded = await withTimeout(
+        operations.isLoaded(policy.checkTimeoutMs),
+        policy.checkTimeoutMs,
+        `PackageManager unload verification for ${packageName}`
+      );
+      if (!loaded) return;
+      lastCheckError = null;
+    } catch (error) {
+      lastCheckError = error;
+    }
+    if (attempt + 1 < policy.verificationAttempts) {
+      await operations.delay(policy.verificationIntervalMs);
+    }
+  }
+
+  const detail = lastCheckError === null
+    ? "the APK remained loaded"
+    : `the last state check failed: ${
+      lastCheckError instanceof Error ? lastCheckError.message : String(lastCheckError)
+    }`;
+  throw new Error(
+    `Keep-data uninstall reported success, but ${packageName} still had a loaded APK for user ` +
+    `${userId} after ${policy.verificationAttempts} bounded checks (${detail})`
+  );
 }
 
 export interface EnsureInstalledForUserOperations {
@@ -584,7 +715,7 @@ export function buildInstallExistingArguments(packageName: string, userId: numbe
 export async function ensureInstalledForUser(packageName: string, userId: number): Promise<void> {
   return ensureInstalledForUserWithOperations(packageName, userId, {
     isInstalled: async (timeoutMs) =>
-      (await getPackageUserState(packageName, userId, timeoutMs))?.installed ?? false,
+      hasLoadedPackagePathForUser(packageName, userId, timeoutMs),
     installExisting: async (timeoutMs) => {
       await adbWithTimeout(timeoutMs, ...buildInstallExistingArguments(packageName, userId));
     },
@@ -780,6 +911,54 @@ export async function waitForSystemReady(
   throw new Error(
     `Timed out after ${timeoutMs}ms waiting for PackageManagerService. ` +
     `The device may be stuck. Check: adb shell service check package`
+  );
+}
+
+function hasProviderAccessError(output: string): boolean {
+  return (
+    output.includes("Error while accessing provider:") ||
+    output.includes("Could not find provider:")
+  );
+}
+
+export async function waitForStagingProviderReady(
+  timeoutMs: number,
+  pollMs: number,
+  probeTimeoutMs = 2_000
+): Promise<void> {
+  for (const [name, value] of Object.entries({ timeoutMs, pollMs, probeTimeoutMs })) {
+    if (!Number.isSafeInteger(value) || value <= 0) {
+      throw new Error(`Invalid provider-readiness ${name}: ${value}`);
+    }
+  }
+
+  const start = Date.now();
+  let lastResponse = "provider not ready";
+  while (Date.now() - start < timeoutMs) {
+    const remainingMs = timeoutMs - (Date.now() - start);
+    try {
+      const result = await adbWithTimeout(
+        Math.max(1, Math.min(probeTimeoutMs, remainingMs)),
+        "shell",
+        "content",
+        "query",
+        "--uri",
+        `${STAGING_URI}/provider-ready-probe.apk`
+      );
+      const output = `${result.stdout}\n${result.stderr}`;
+      if (!hasProviderAccessError(output)) return;
+      lastResponse = output.trim() || "provider access failed";
+    } catch (error) {
+      lastResponse = error instanceof Error ? error.message : String(error);
+    }
+    const delayMs = Math.min(pollMs, timeoutMs - (Date.now() - start));
+    if (delayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+  throw new Error(
+    `Timed out after ${timeoutMs}ms waiting for the staging provider. ` +
+    `Last response: ${lastResponse.slice(0, 240)}`
   );
 }
 

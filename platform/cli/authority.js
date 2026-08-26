@@ -3,9 +3,10 @@
 // Local executable authority for the operator CLI.  Production and release
 // commands must never turn an ambient PATH entry into code execution.  The
 // candidates below are deliberately boring, fixed installation locations for
-// the two supported workstation families.  User-owned Homebrew/Rustup trees
-// are accepted only at their conventional absolute boundary; arbitrary PATH
-// directories and per-command environment overrides are not.
+// the two supported workstation families. The already-version-checked Node
+// process remains authoritative for child Node/npm work. Other user-owned
+// Homebrew/Rustup trees are accepted only at their conventional absolute
+// boundary; arbitrary PATH directories and per-command overrides are not.
 
 const fs = require('node:fs');
 const os = require('node:os');
@@ -22,15 +23,24 @@ function loginHome() {
 }
 
 const HOME = loginHome();
+const [ACTIVE_NODE_MAJOR, ACTIVE_NODE_MINOR] = process.versions.node.split('.').map(Number);
+const ACTIVE_NODE = ACTIVE_NODE_MAJOR === 22 && ACTIVE_NODE_MINOR >= 14 &&
+  path.isAbsolute(process.execPath) && !process.execPath.includes('\0')
+  ? process.execPath
+  : null;
+const ACTIVE_NODE_BIN = ACTIVE_NODE ? path.dirname(ACTIVE_NODE) : null;
 const MAC_HOMEBREW = Object.freeze([
-  '/opt/homebrew/bin',
   '/opt/homebrew/opt/node@22/bin',
-  '/usr/local/bin',
   '/usr/local/opt/node@22/bin',
+  '/opt/homebrew/bin',
+  '/usr/local/bin',
 ]);
-const SYSTEM_PATH = process.platform === 'darwin'
-  ? ['/usr/bin', '/bin', '/usr/sbin', '/sbin', ...MAC_HOMEBREW]
-  : ['/usr/bin', '/bin', '/usr/sbin', '/sbin'];
+const SYSTEM_PATH = Object.freeze([
+  ...(ACTIVE_NODE_BIN ? [ACTIVE_NODE_BIN] : []),
+  ...(process.platform === 'darwin'
+    ? ['/usr/bin', '/bin', '/usr/sbin', '/sbin', ...MAC_HOMEBREW]
+    : ['/usr/bin', '/bin', '/usr/sbin', '/sbin']),
+]);
 const USER_TOOL_PATHS = Object.freeze([
   path.join(HOME, '.cargo', 'bin'),
   path.join(HOME, 'Android', 'Sdk', 'platform-tools'),
@@ -41,14 +51,17 @@ const PLATFORM_CANDIDATES = Object.freeze({
   bash: process.platform === 'darwin'
     ? ['/opt/homebrew/bin/bash', '/usr/local/bin/bash', '/bin/bash']
     : ['/bin/bash', '/usr/bin/bash'],
-  node: process.platform === 'darwin'
-    ? [
+  node: [
+    ...(ACTIVE_NODE ? [ACTIVE_NODE] : []),
+    ...(process.platform === 'darwin'
+      ? [
       '/opt/homebrew/opt/node@22/bin/node',
       '/usr/local/opt/node@22/bin/node',
       '/opt/homebrew/bin/node',
       '/usr/local/bin/node',
-    ]
-    : ['/usr/bin/node', '/usr/local/bin/node'],
+      ]
+      : ['/usr/bin/node', '/usr/local/bin/node']),
+  ],
   python3: process.platform === 'darwin'
     ? ['/usr/bin/python3', '/opt/homebrew/bin/python3', '/usr/local/bin/python3']
     : ['/usr/bin/python3', '/usr/local/bin/python3'],
@@ -67,14 +80,17 @@ const PLATFORM_CANDIDATES = Object.freeze({
   tar: ['/usr/bin/tar', '/bin/tar'],
   sh: ['/bin/sh', '/usr/bin/sh'],
   cp: ['/bin/cp', '/usr/bin/cp'],
-  npm: process.platform === 'darwin'
-    ? [
+  npm: [
+    ...(ACTIVE_NODE_BIN ? [path.join(ACTIVE_NODE_BIN, 'npm')] : []),
+    ...(process.platform === 'darwin'
+      ? [
       '/opt/homebrew/opt/node@22/bin/npm',
       '/usr/local/opt/node@22/bin/npm',
       '/opt/homebrew/bin/npm',
       '/usr/local/bin/npm',
-    ]
-    : ['/usr/bin/npm', '/usr/local/bin/npm'],
+      ]
+      : ['/usr/bin/npm', '/usr/local/bin/npm']),
+  ],
   docker: process.platform === 'darwin'
     ? ['/usr/local/bin/docker', '/opt/homebrew/bin/docker']
     : ['/usr/bin/docker', '/usr/local/bin/docker'],
@@ -102,7 +118,7 @@ const PLATFORM_CANDIDATES = Object.freeze({
   ],
   qemu_x86_64: ['/usr/bin/qemu-x86_64', '/usr/local/bin/qemu-x86_64'],
   openssl: process.platform === 'darwin'
-    ? ['/usr/bin/openssl', '/opt/homebrew/bin/openssl', '/usr/local/bin/openssl']
+    ? ['/opt/homebrew/bin/openssl', '/usr/local/bin/openssl', '/usr/bin/openssl']
     : ['/usr/bin/openssl', '/usr/local/bin/openssl'],
 });
 

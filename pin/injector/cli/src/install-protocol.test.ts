@@ -3,9 +3,36 @@ import test from "node:test";
 import {
   installWithSafeUpdates,
   parseProviderInstallResponse,
+  runUpdatedPackageActivation,
 } from "./install-protocol.js";
 
 const TRANSACTION_TOKEN = "a".repeat(32);
+
+test("updated packages repair Hook policy and inject targets only after activation", async () => {
+  const calls: string[] = [];
+
+  await runUpdatedPackageActivation({
+    waitForStagingProviderReady: async () => {
+      calls.push("wait_for_staging_provider");
+    },
+    activateUpdates: async () => {
+      calls.push("activate_updates");
+    },
+    repairHookRuntimePolicy: async () => {
+      calls.push("repair_hook_runtime_policy");
+    },
+    injectConfiguredTargets: async () => {
+      calls.push("inject_configured_targets");
+    },
+  });
+
+  assert.deepEqual(calls, [
+    "wait_for_staging_provider",
+    "activate_updates",
+    "repair_hook_runtime_policy",
+    "inject_configured_targets",
+  ]);
+});
 
 function duplicateTransaction(...packageNames: string[]): string {
   return (

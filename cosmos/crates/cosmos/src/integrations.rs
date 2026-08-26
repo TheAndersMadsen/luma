@@ -462,10 +462,23 @@ fn validate(config: &IntegrationsConfig) -> Result<(), IntegrationError> {
             "assistant token limit is too large",
         ));
     }
-    if let Some(effort) = config.assistant.reasoning_effort.as_deref()
-        && !matches!(effort, "minimal" | "low" | "medium" | "high" | "xhigh")
-    {
-        return Err(IntegrationError::Invalid("unknown reasoning effort"));
+    if let Some(effort) = config.assistant.reasoning_effort.as_deref() {
+        let supported = match config.assistant.provider {
+            AssistantProvider::OpenAiCompatible => {
+                matches!(effort, "minimal" | "low" | "medium" | "high" | "xhigh")
+            }
+            AssistantProvider::CodexSubscription => {
+                matches!(
+                    effort,
+                    "low" | "medium" | "high" | "xhigh" | "max" | "ultra"
+                )
+            }
+        };
+        if !supported {
+            return Err(IntegrationError::Invalid(
+                "reasoning effort is not supported by the selected assistant provider",
+            ));
+        }
     }
     if !config.assistant.base_url.is_empty() {
         validate_url(&config.assistant.base_url, "assistant URL is invalid")?;
@@ -578,6 +591,24 @@ mod tests {
         config.assistant.base_url = "https://example.test/v1".to_owned();
         config.assistant.reasoning_effort = Some("maximum".to_owned());
         assert!(validate(&config).is_err());
+    }
+
+    #[test]
+    fn codex_reasoning_effort_rejects_minimal_and_accepts_its_supported_levels() {
+        let mut config = IntegrationsConfig::default();
+        config.assistant.provider = AssistantProvider::CodexSubscription;
+
+        config.assistant.reasoning_effort = Some("minimal".to_owned());
+        assert!(validate(&config).is_err());
+
+        for effort in ["low", "medium", "high", "xhigh", "max", "ultra"] {
+            config.assistant.reasoning_effort = Some(effort.to_owned());
+            assert!(validate(&config).is_ok(), "Codex should accept {effort}");
+        }
+
+        config.assistant.provider = AssistantProvider::OpenAiCompatible;
+        config.assistant.reasoning_effort = Some("minimal".to_owned());
+        assert!(validate(&config).is_ok());
     }
 
     #[test]

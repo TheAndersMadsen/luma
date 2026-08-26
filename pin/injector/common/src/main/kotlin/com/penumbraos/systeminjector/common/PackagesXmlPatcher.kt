@@ -141,6 +141,9 @@ object PackagesXmlPatcher {
             setAttribute("name", packageName)
             setAttribute("codePath", codePath)
             setAttribute("sharedUserId", sharedUserId.toString())
+            // These UID-1000 APKs live only under /data/app. Marking one FLAG_SYSTEM makes
+            // PackageManager's boot scan treat it as a removed system-partition package and
+            // delete its PackageSetting before the data-app scan can load it.
             setAttribute("publicFlags", "0")
             if (primaryCpuAbi != null) {
                 setAttribute("primaryCpuAbi", primaryCpuAbi)

@@ -26,6 +26,14 @@ export const EXPLOIT_STAGE2_ACTION =
   "com.penumbraos.systeminjector.exploit.STAGE2";
 export const EXPLOIT_RECEIVER =
   "com.penumbraos.systeminjector.exploit/.InstallReceiver";
+export const HOOK_RUNTIME_POLICY_REPAIR_ACTION =
+  "com.penumbraos.hook.REPAIR_SERVER_RUNTIME_POLICY";
+export const HOOK_RUNTIME_POLICY_REPAIR_RECEIVER =
+  "com.penumbraos.hook.injector/.ServerRuntimePolicyRepairReceiver";
+export const HOOK_CONFIGURED_TARGET_INJECTION_ACTION =
+  "com.penumbraos.hook.INJECT_CONFIGURED_TARGETS";
+export const HOOK_CONFIGURED_TARGET_INJECTION_RECEIVER =
+  "com.penumbraos.hook.injector/.InjectReceiver";
 export const EXPLOIT_STATUS_URI =
   "content://com.penumbraos.systeminjector.exploit.status";
 export const POLL_INTERVAL_MS = 3_000;
@@ -35,6 +43,8 @@ export const SYSTEM_READY_POLL_MS = 2_000;
 export const SYSTEM_READY_SETTLE_MS = 3_000;
 export const SOFT_REBOOT_STABILIZATION_MS = 20_000;
 export const AFTER_INSTALL_TIMEOUT_MS = 180_000;
+export const UNINSTALL_VERIFICATION_TIMEOUT_MS = 10_000;
+export const UNINSTALL_VERIFICATION_INTERVAL_MS = 250;
 export const BOOTSTRAP_STATUS_TIMEOUT_MS = 30_000;
 export const BOOTSTRAP_STATUS_POLL_MS = 500;
 export const SYSTEM_RESTART_TIMEOUT_MS = 120_000;
@@ -78,6 +88,20 @@ export interface BootstrapStageOperations {
   ): Promise<void>;
   waitForSystemServerRestart(previousPid: string): Promise<void>;
   waitForSystemReady(): Promise<void>;
+}
+
+export interface UpdatedPackageActivationOperations {
+  activateUpdates(): Promise<void>;
+  repairHookRuntimePolicy(): Promise<void>;
+  injectConfiguredTargets(): Promise<void>;
+}
+
+export async function runUpdatedPackageActivation(
+  operations: UpdatedPackageActivationOperations,
+): Promise<void> {
+  await operations.activateUpdates();
+  await operations.repairHookRuntimePolicy();
+  await operations.injectConfiguredTargets();
 }
 
 function newBootstrapTransactionId(): string {
@@ -138,6 +162,28 @@ export function buildFreshBootstrapBroadcastCommand(
     "-n",
     EXPLOIT_RECEIVER,
     ...expectedKeys.flatMap((key) => ["--es", key, extras[key]!]),
+  ]);
+}
+
+export function buildHookRuntimePolicyRepairBroadcastCommand(): readonly string[] {
+  return shellCommand([
+    "am",
+    "broadcast",
+    "-a",
+    HOOK_RUNTIME_POLICY_REPAIR_ACTION,
+    "-n",
+    HOOK_RUNTIME_POLICY_REPAIR_RECEIVER,
+  ]);
+}
+
+export function buildHookConfiguredTargetInjectionBroadcastCommand(): readonly string[] {
+  return shellCommand([
+    "am",
+    "broadcast",
+    "-a",
+    HOOK_CONFIGURED_TARGET_INJECTION_ACTION,
+    "-n",
+    HOOK_CONFIGURED_TARGET_INJECTION_RECEIVER,
   ]);
 }
 
@@ -981,26 +1027,96 @@ async function uninstallKeepDataForUserZero(
     .filter(Boolean);
   if (
     !lines.includes("Success") ||
-    lines.some((line) => line.startsWith("Failure")) ||
-    (await packageExistsForUser(transport, packageName, 0))
+    lines.some((line) => line.startsWith("Failure"))
   ) {
     throw new Error(`Keep-data uninstall was not verified for ${packageName}.`);
   }
+  await waitForPackageUnloadedForUserZero(transport, packageName);
 }
 
-async function waitForPackageForUserZero(
+export async function packageHasLoadedPathForUser(
+  transport: AdbSessionTransport,
+  packageName: string,
+  userId: number,
+): Promise<boolean> {
+  const result = await transport.shell(
+    shellCommand(["pm", "path", "--user", String(userId), packageName]),
+  );
+  if (
+    result.exitCode === 1 &&
+    result.stdout.trim().length === 0 &&
+    result.stderr.trim().length === 0
+  ) {
+    return false;
+  }
+  ensureShellSuccess(result, `Could not inspect the loaded APK for ${packageName}.`);
+  if (result.stderr.trim().length > 0) {
+    throw new Error(`Unexpected package path error for ${packageName}.`);
+  }
+  const lines = result.stdout
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length === 0) return false;
+  const escapedPackageName = packageName.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  const controlledBaseApk = new RegExp(
+    `^package:/data/app/(?:~~[A-Za-z0-9_-]+=*/)?${escapedPackageName}-(?:injected|[A-Za-z0-9_-]+=*)/base\\.apk$`,
+    "u",
+  );
+  if (lines.length === 1 && controlledBaseApk.test(lines[0]!)) return true;
+  throw new Error(`Unexpected package path response for ${packageName}.`);
+}
+
+export async function waitForPackageUnloadedForUserZero(
+  transport: AdbSessionTransport,
+  packageName: string,
+  timeoutMs = UNINSTALL_VERIFICATION_TIMEOUT_MS,
+  intervalMs = UNINSTALL_VERIFICATION_INTERVAL_MS,
+): Promise<void> {
+  const start = Date.now();
+  let lastResponse = "the APK remained loaded";
+  while (Date.now() - start < timeoutMs) {
+    try {
+      if (!(await packageHasLoadedPathForUser(transport, packageName, 0))) {
+        return;
+      }
+      lastResponse = "the APK remained loaded";
+    } catch (error) {
+      if (isDeviceStepTimeoutError(error)) throw error;
+      lastResponse = error instanceof Error ? error.message : String(error);
+    }
+    await sleep(intervalMs);
+  }
+  throw new Error(
+    `Timed out after ${timeoutMs}ms verifying keep-data uninstall for ${packageName}. ` +
+      `Last response: ${lastResponse.slice(0, 240)}`,
+  );
+}
+
+export async function waitForPackageForUserZero(
   transport: AdbSessionTransport,
   packageName: string,
   timeoutMs = AFTER_INSTALL_TIMEOUT_MS,
+  intervalMs = POLL_INTERVAL_MS,
 ): Promise<void> {
   const start = Date.now();
+  let lastResponse = "package not present";
   while (Date.now() - start < timeoutMs) {
-    if (await packageExistsForUser(transport, packageName, 0)) {
-      return;
+    try {
+      if (await packageExistsForUser(transport, packageName, 0)) {
+        return;
+      }
+      lastResponse = "package not present for user 0";
+    } catch (error) {
+      if (isDeviceStepTimeoutError(error)) throw error;
+      lastResponse = error instanceof Error ? error.message : String(error);
     }
-    await sleep(POLL_INTERVAL_MS);
+    await sleep(intervalMs);
   }
-  throw new Error(`Timed out waiting for ${packageName} for user 0.`);
+  throw new Error(
+    `Timed out waiting for ${packageName} for user 0. ` +
+      `Last response: ${lastResponse.slice(0, 240)}`,
+  );
 }
 
 async function restorePackageForUserZero(
@@ -1059,6 +1175,24 @@ async function requireSafeProviderCapabilities(
       "Installed system injector does not prove safe update activation support.",
     );
   }
+}
+
+async function repairHookRuntimePolicy(
+  transport: AdbSessionTransport,
+): Promise<void> {
+  const result = await transport.shell(
+    buildHookRuntimePolicyRepairBroadcastCommand(),
+  );
+  ensureShellSuccess(result, "Failed to wake the Hook injector after update.");
+}
+
+async function injectConfiguredTargets(
+  transport: AdbSessionTransport,
+): Promise<void> {
+  const result = await transport.shell(
+    buildHookConfiguredTargetInjectionBroadcastCommand(),
+  );
+  ensureShellSuccess(result, "Failed to inject the configured Hook targets after update.");
 }
 
 export async function stageSystemApkBatchInstall(
@@ -1188,16 +1322,22 @@ export async function stageSystemApkBatchInstall(
     }
 
     await waitForStagingProviderReady(transport);
-    await requireProviderOk(
-      await callStagingProvider(
-        transport,
-        "activate_updates",
-        installResult.installedPackages.join(","),
-        "Failed to activate updated package policy.",
-        options.onProgress,
-      ),
-      "updated package activation",
-    );
+    await runUpdatedPackageActivation({
+      activateUpdates: async () => {
+        await requireProviderOk(
+          await callStagingProvider(
+            transport,
+            "activate_updates",
+            installResult.installedPackages.join(","),
+            "Failed to activate updated package policy.",
+            options.onProgress,
+          ),
+          "updated package activation",
+        );
+      },
+      repairHookRuntimePolicy: () => repairHookRuntimePolicy(transport),
+      injectConfiguredTargets: () => injectConfiguredTargets(transport),
+    });
   } catch (error) {
     const restorationFailures: string[] = [];
     for (const packageName of [...installResult.updatedPackages].reverse()) {

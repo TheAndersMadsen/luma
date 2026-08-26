@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
+import { createReproducibleTar } from "../../archive-tar.mjs";
 import { IMAGE_NAMES, IMAGE_PLATFORMS } from "../../distribution/release-descriptor.mjs";
 
 const root = path.resolve(import.meta.dirname, "../../..");
@@ -41,6 +42,25 @@ function fixture(t) {
   })}\n`);
   return { temporary, receipts, output, applicationDigest };
 }
+
+test("release archives are byte-reproducible with the supported host tar", async (t) => {
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "revival-archive-"));
+  t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
+  const archives = [];
+
+  for (const [name, seconds] of [["first", 10], ["second", 20]]) {
+    const parent = path.join(temporary, name);
+    const directory = path.join(parent, "release");
+    fs.mkdirSync(path.join(directory, "nested"), { recursive: true });
+    fs.writeFileSync(path.join(directory, "nested", "artifact"), "same bytes\n");
+    fs.utimesSync(path.join(directory, "nested", "artifact"), seconds, seconds);
+    const archive = path.join(temporary, `${name}.tar.gz`);
+    await createReproducibleTar({ parent, directory: "release", archive });
+    archives.push(fs.readFileSync(archive));
+  }
+
+  assert.deepEqual(archives[0], archives[1]);
+});
 
 test("tag release workflow publishes the exact hardened image and Compose boundaries", () => {
   const source = fs.readFileSync(workflow, "utf8");

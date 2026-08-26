@@ -53,7 +53,7 @@ case "$*" in
 esac
 exit 0
 `);
-  const result = spawnSync("/usr/bin/bash", [preflight], { cwd: root, env, encoding: "utf8" });
+  const result = spawnSync("bash", [preflight], { cwd: root, env, encoding: "utf8" });
   assert.equal(result.status, 1);
   assert.match(result.stderr, /ports 80 or 443 are already in use/u);
   assert.match(result.stderr, /Nginx/u);
@@ -69,7 +69,7 @@ case "$*" in
 esac
 exit 0
 `);
-  const result = spawnSync("/usr/bin/bash", [preflight], { cwd: root, env, encoding: "utf8" });
+  const result = spawnSync("bash", [preflight], { cwd: root, env, encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr);
 });
 
@@ -80,7 +80,7 @@ case "$*" in
 esac
 exit 0
 `);
-  const result = spawnSync("/usr/bin/bash", [preflight], { cwd: root, env, encoding: "utf8" });
+  const result = spawnSync("bash", [preflight], { cwd: root, env, encoding: "utf8" });
   assert.equal(result.status, 1);
   assert.match(result.stderr, /Compose 2\.34\.0 or newer is required; observed 2\.33\.9/u);
 });
@@ -98,7 +98,7 @@ case "$*" in
 esac
 exit 0
 `);
-  const result = spawnSync("/usr/bin/bash", [verify], { cwd: root, env, encoding: "utf8" });
+  const result = spawnSync("bash", [verify], { cwd: root, env, encoding: "utf8" });
   assert.equal(result.status, 1);
   assert.match(result.stderr, /health=unhealthy/u);
   const source = fs.readFileSync(verify, "utf8");
@@ -134,7 +134,7 @@ case "$*" in
 esac
 exit 0
 `);
-  const result = spawnSync("/usr/bin/bash", [verify], { cwd: root, env, encoding: "utf8" });
+  const result = spawnSync("bash", [verify], { cwd: root, env, encoding: "utf8" });
   assert.equal(result.status, 1);
   assert.match(result.stderr, /release\/environment labels missing\/missing\/missing/u);
 });
@@ -174,7 +174,7 @@ exit 0
     REVIVAL_TEST_DOCKER_LOG: dockerLog,
     TEST_PLAINTEXT_INTERPOLATION_SECRET: "must-not-appear",
   };
-  const result = spawnSync("/usr/bin/bash", [deploy], {
+  const result = spawnSync("bash", [deploy], {
     cwd: root,
     env: deploymentEnv,
     encoding: "utf8",
@@ -183,7 +183,7 @@ exit 0
   assert.match(fs.readFileSync(dockerLog, "utf8"), /up --yes --detach --wait/u);
   assert.doesNotMatch(`${result.stdout}${result.stderr}`, /must-not-appear/u);
 
-  const unconfirmed = spawnSync("/usr/bin/bash", [deploy], {
+  const unconfirmed = spawnSync("bash", [deploy], {
     cwd: root,
     env: { ...deploymentEnv, REVIVAL_DEPLOY_CONFIRMED: "" },
     encoding: "utf8",

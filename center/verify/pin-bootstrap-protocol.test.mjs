@@ -8,8 +8,15 @@ register("./fixtures/source-resolve.mjs", import.meta.url);
 const {
   EXPLOIT_STAGE1_ACTION,
   EXPLOIT_STAGE2_ACTION,
+  HOOK_CONFIGURED_TARGET_INJECTION_ACTION,
+  HOOK_CONFIGURED_TARGET_INJECTION_RECEIVER,
+  HOOK_RUNTIME_POLICY_REPAIR_ACTION,
+  HOOK_RUNTIME_POLICY_REPAIR_RECEIVER,
   buildFreshBootstrapBroadcastCommand,
   buildFreshBootstrapTransaction,
+  buildHookConfiguredTargetInjectionBroadcastCommand,
+  buildHookRuntimePolicyRepairBroadcastCommand,
+  runUpdatedPackageActivation,
   runVerifiedBootstrapStage,
   waitForExpectedBootstrapStatus,
 } = await import(
@@ -17,6 +24,48 @@ const {
 );
 
 const TRANSACTION_ID = "0123456789abcdef0123456789abcdef";
+
+test("updated packages repair Hook policy and inject targets after activation", async () => {
+  const calls = [];
+
+  await runUpdatedPackageActivation({
+    activateUpdates: async () => calls.push("activate_updates"),
+    repairHookRuntimePolicy: async () => calls.push("repair_hook_runtime_policy"),
+    injectConfiguredTargets: async () => calls.push("inject_configured_targets"),
+  });
+
+  assert.deepEqual(calls, [
+    "activate_updates",
+    "repair_hook_runtime_policy",
+    "inject_configured_targets",
+  ]);
+  assert.equal(
+    HOOK_RUNTIME_POLICY_REPAIR_ACTION,
+    "com.penumbraos.hook.REPAIR_SERVER_RUNTIME_POLICY",
+  );
+  assert.equal(
+    HOOK_RUNTIME_POLICY_REPAIR_RECEIVER,
+    "com.penumbraos.hook.injector/.ServerRuntimePolicyRepairReceiver",
+  );
+  assert.deepEqual(buildHookRuntimePolicyRepairBroadcastCommand(), [
+    "sh",
+    "-c",
+    "''\\''am'\\'' '\\''broadcast'\\'' '\\''-a'\\'' '\\''com.penumbraos.hook.REPAIR_SERVER_RUNTIME_POLICY'\\'' '\\''-n'\\'' '\\''com.penumbraos.hook.injector/.ServerRuntimePolicyRepairReceiver'\\'''",
+  ]);
+  assert.equal(
+    HOOK_CONFIGURED_TARGET_INJECTION_ACTION,
+    "com.penumbraos.hook.INJECT_CONFIGURED_TARGETS",
+  );
+  assert.equal(
+    HOOK_CONFIGURED_TARGET_INJECTION_RECEIVER,
+    "com.penumbraos.hook.injector/.InjectReceiver",
+  );
+  assert.deepEqual(buildHookConfiguredTargetInjectionBroadcastCommand(), [
+    "sh",
+    "-c",
+    "''\\''am'\\'' '\\''broadcast'\\'' '\\''-a'\\'' '\\''com.penumbraos.hook.INJECT_CONFIGURED_TARGETS'\\'' '\\''-n'\\'' '\\''com.penumbraos.hook.injector/.InjectReceiver'\\'''",
+  ]);
+});
 
 test("fresh bootstrap binds both stage commands to the same complete transaction", () => {
   const transaction = buildFreshBootstrapTransaction(TRANSACTION_ID);

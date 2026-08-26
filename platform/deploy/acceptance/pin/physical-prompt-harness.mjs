@@ -1168,7 +1168,9 @@ export function parsePenumbraHookEvidence(value, boundaryMarker) {
       ) ||
       parsed.message.startsWith(
         `${OPERATIONAL_MARKERS.narration_start_without_hand_tracking.value} |`,
-      )
+      ) ||
+      parsed.message ===
+        "  Hand tracking feature disabled; delegating update(NARRATION_START) to stock"
     ) {
       events.push("narration_start");
     } else if (
@@ -1177,7 +1179,9 @@ export function parsePenumbraHookEvidence(value, boundaryMarker) {
       ) ||
       parsed.message.startsWith(
         `${OPERATIONAL_MARKERS.narration_end_without_hand_tracking.value} |`,
-      )
+      ) ||
+      parsed.message ===
+        "  Hand tracking feature disabled; delegating update(NARRATION_END) to stock"
     ) {
       events.push("narration_end");
     }

@@ -159,6 +159,51 @@ internal object ReplacementApprovalPolicy {
             FailedUpdateContinuityPolicy.isSafeRandomizedSourceDir(packageName, path)
 }
 
+/**
+ * Binds one approved replacement to the exact prior code path used by the packages.xml patch.
+ * A vanished package is recoverable only when its digest-bound controlled path has also vanished;
+ * any residual directory remains ambiguous and fails before package settings are changed.
+ */
+internal object ReplacementPathBindingPolicy {
+    fun bind(
+        packageName: String,
+        state: PackageReplacementGuard.PackageState,
+        approvedExpectedBaseApkPath: String?,
+        priorCodeDirectoryExists: Boolean,
+    ): String = when (state) {
+        is PackageReplacementGuard.PackageState.Live -> state.baseApkPath.also { livePath ->
+            check(
+                approvedExpectedBaseApkPath == null ||
+                    approvedExpectedBaseApkPath == livePath
+            ) { "Live replacement path changed for $packageName" }
+        }
+
+        is PackageReplacementGuard.PackageState.Retained -> state.baseApkPath.also { retainedPath ->
+            check(
+                approvedExpectedBaseApkPath == null ||
+                    approvedExpectedBaseApkPath == retainedPath
+            ) { "Retained replacement path changed for $packageName" }
+        }
+
+        PackageReplacementGuard.PackageState.Missing -> {
+            val approvedPath = checkNotNull(approvedExpectedBaseApkPath) {
+                "Missing replacement package has no exact approved code path: $packageName"
+            }
+            check(ReplacementApprovalPolicy.isSafeExpectedBaseApkPath(packageName, approvedPath)) {
+                "Missing replacement package has an uncontrolled approved path: $packageName"
+            }
+            check(!priorCodeDirectoryExists) {
+                "Missing replacement package still has a prior code directory: $packageName"
+            }
+            approvedPath
+        }
+
+        is PackageReplacementGuard.PackageState.InconsistentLive -> {
+            error("Replacement package has inconsistent live state: $packageName")
+        }
+    }
+}
+
 internal data class InstallBatchArtifact(
     val filename: String,
     val packageName: String,

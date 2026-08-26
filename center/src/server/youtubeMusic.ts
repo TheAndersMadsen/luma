@@ -8,6 +8,8 @@ import {
   updateMusicAccountRecord,
   type YoutubeOAuthCredentials,
 } from "./musicProviderStore";
+import { youtubeContentProofToken } from "./youtubePoToken";
+import { configureYoutubePlayerEvaluator } from "./youtubePlayerEvaluator";
 
 export type YoutubeDeviceCode = {
   user_code: string;
@@ -568,12 +570,39 @@ export async function queryYoutubeMusic(
 }
 
 export async function youtubeMusicStreamUrl(subject: string, trackId: string): Promise<string> {
-  const client = await authenticatedYoutubeClient(subject);
-  const format = await client.getStreamingData(youtubeVideoId(trackId), {
+  try {
+    await authenticatedYoutubeClient(subject);
+    const videoId = youtubeVideoId(trackId);
+    const [client, proofToken] = await Promise.all([
+      Innertube.create({
+        fetch: adBlockingYoutubeFetch,
+        retrieve_player: true,
+        generate_session_locally: true,
+        enable_session_cache: false,
+      }),
+      youtubeContentProofToken(videoId, adBlockingYoutubeFetch),
+    ]);
+    return await resolveYoutubeAudioStream(client, videoId, proofToken);
+  } catch (error) {
+    if (error instanceof YoutubeMusicError || error instanceof MusicSessionStoreError) throw error;
+    throw new YoutubeMusicError("YouTube Music audio could not be resolved.");
+  }
+}
+
+export async function resolveYoutubeAudioStream(
+  client: YoutubeClient,
+  videoId: string,
+  proofToken: string,
+): Promise<string> {
+  configureYoutubePlayerEvaluator();
+  const info = await client.getBasicInfo(videoId, {
+    client: "YTMUSIC",
+    po_token: proofToken,
+  });
+  const format = info.chooseFormat({
     type: "audio",
     quality: "best",
     format: "any",
-    client: "YTMUSIC",
   });
   if (
     !format.has_audio ||
@@ -585,11 +614,13 @@ export async function youtubeMusicStreamUrl(subject: string, trackId: string): P
   ) {
     throw new YoutubeMusicError("YouTube Music did not return an ad-free audio stream.");
   }
-  const url = format.url || (await format.decipher(client.session.player));
+  const url = await format.decipher(client.session.player);
   if (!isAllowedGoogleVideoStream(url)) {
     throw new YoutubeMusicError("YouTube Music returned an unexpected stream origin.");
   }
-  return url;
+  const stream = new URL(url);
+  stream.searchParams.set("pot", proofToken);
+  return stream.toString();
 }
 
 export function isAllowedGoogleVideoStream(value: string): boolean {

@@ -9,6 +9,7 @@ const os = require('node:os');
 const path = require('node:path');
 const {
   HOME: LOGIN_HOME,
+  isExecutableFile,
   resolveTool,
   trustedPath,
 } = require('./authority');
@@ -183,6 +184,26 @@ function secureDirectory(directory) {
   }
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   fs.chmodSync(directory, 0o700);
+}
+
+function exposeDockerDesktopCliPlugins(dockerConfig) {
+  if (process.platform !== 'darwin' || !fs.existsSync(dockerConfig)) return;
+  const pluginRoot = '/Applications/Docker.app/Contents/Resources/cli-plugins';
+  const available = ['docker-buildx', 'docker-compose']
+    .map((name) => [name, path.join(pluginRoot, name)])
+    .filter(([, source]) => isExecutableFile(source));
+  if (available.length === 0) return;
+  const plugins = path.join(dockerConfig, 'cli-plugins');
+  secureDirectory(plugins);
+  for (const [name, source] of available) {
+    const target = path.join(plugins, name);
+    if (fs.lstatSync(target, { throwIfNoEntry: false })) continue;
+    try {
+      fs.symlinkSync(source, target);
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+    }
+  }
 }
 
 function atomicWrite(file, contents, mode = 0o600) {
@@ -939,6 +960,7 @@ function safeOptionalEnvironment(name, predicate = () => true) {
 
 function operatorEnvironment(values) {
   requireExternalDirectory(BUILD_DIR, 'REVIVAL_BUILD_DIR');
+  exposeDockerDesktopCliPlugins(BUILD_DIR);
   const user = (() => {
     try { return os.userInfo().username; } catch { return 'revival'; }
   })();
@@ -1081,6 +1103,8 @@ function testProcessEnvironment(environment = process.env, values = {}) {
   const temporary = directory('tmp');
   const cargoHome = directory('cargo-home');
   const gradleHome = directory('gradle-home');
+  const dockerConfig = directory('docker-config');
+  exposeDockerDesktopCliPlugins(dockerConfig);
   for (const [tool, toolHome, entries] of [
     ['Cargo configuration', cargoHome, ['config', 'config.toml']],
     ['Gradle initialization', gradleHome, ['init.gradle', 'init.gradle.kts', 'init.d']],
@@ -1121,6 +1145,7 @@ function testProcessEnvironment(environment = process.env, values = {}) {
     CARGO_TERM_COLOR: 'never',
     GRADLE_USER_HOME: gradleHome,
     ANDROID_USER_HOME: directory('android-home'),
+    DOCKER_CONFIG: dockerConfig,
     NPM_CONFIG_CACHE: directory('npm-cache'),
     NPM_CONFIG_USERCONFIG: process.platform === 'win32' ? 'NUL' : '/dev/null',
     NPM_CONFIG_GLOBALCONFIG: process.platform === 'win32'

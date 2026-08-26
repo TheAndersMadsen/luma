@@ -9,6 +9,7 @@ import {
   extractProviderMessage,
   installWithSafeUpdates,
   parseProviderInstallResponse,
+  runUpdatedPackageActivation,
 } from "./install-protocol.js";
 import {
   appDirToCodePath,
@@ -42,8 +43,14 @@ import {
   SYSTEM_RESTART_TIMEOUT_MS,
   BOOTSTRAP_STATUS_TIMEOUT_MS,
   SYSTEM_READY_SETTLE_MS,
+  POLL_INTERVAL_MS,
+  POLL_TIMEOUT_MS,
   INSTALLER_APK,
   EXPLOIT_APK,
+  HOOK_RUNTIME_POLICY_REPAIR_ACTION,
+  HOOK_RUNTIME_POLICY_REPAIR_RECEIVER,
+  HOOK_CONFIGURED_TARGET_INJECTION_ACTION,
+  HOOK_CONFIGURED_TARGET_INJECTION_RECEIVER,
 } from "./constants.js";
 
 const USER_SYSTEM = 0;
@@ -851,14 +858,36 @@ export async function installApks(apkPaths: string[]): Promise<void> {
       await adb.ensureInstalledForUser(packageName, 0);
     }
     if (installResult.installedPackages.length > 0) {
-      const activationOutput = await adb.contentCall(
-        STAGING_URI,
-        "activate_updates",
-        installResult.installedPackages.join(",")
-      );
-      if (parseProviderInstallResponse(activationOutput).kind !== "ok") {
-        throw new Error(`Failed to activate updated package runtime policy: ${activationOutput}`);
-      }
+      await runUpdatedPackageActivation({
+        waitForStagingProviderReady: () =>
+          adb.waitForStagingProviderReady(POLL_TIMEOUT_MS, POLL_INTERVAL_MS),
+        activateUpdates: async () => {
+          const activationOutput = await adb.contentCall(
+            STAGING_URI,
+            "activate_updates",
+            installResult.installedPackages.join(",")
+          );
+          if (parseProviderInstallResponse(activationOutput).kind !== "ok") {
+            throw new Error(
+              `Failed to activate updated package runtime policy: ${activationOutput}`
+            );
+          }
+        },
+        repairHookRuntimePolicy: async () => {
+          await adb.broadcast(
+            HOOK_RUNTIME_POLICY_REPAIR_ACTION,
+            undefined,
+            HOOK_RUNTIME_POLICY_REPAIR_RECEIVER
+          );
+        },
+        injectConfiguredTargets: async () => {
+          await adb.broadcast(
+            HOOK_CONFIGURED_TARGET_INJECTION_ACTION,
+            undefined,
+            HOOK_CONFIGURED_TARGET_INJECTION_RECEIVER
+          );
+        },
+      });
     }
   } catch (error) {
     const restorationFailures: string[] = [];

@@ -107,6 +107,7 @@ object ContextHistorySafetyHooks {
                     }
                 }
             })
+            installLegacyPhysicalActionVerification(classLoader, turnClass)
             installLocalIntermediateRepair(classLoader, turnClass)
             installStockSessionRetention(classLoader)
             Log.w(TAG, "  ContextHistorySafetyHooks installed")
@@ -114,6 +115,57 @@ object ContextHistorySafetyHooks {
             Log.e(
                 TAG,
                 "ContextHistorySafetyHooks install failed: " +
+                    "${error.javaClass.simpleName}: ${error.message}",
+            )
+        }
+    }
+
+    /**
+     * Legacy local interpretation dispatches the final action directly through
+     * TaoEventRegistrar.onContent rather than producing an IntermediateEvent.
+     * Emit the same content-free physical-verification marker on both stock
+     * paths so the harness observes what the device actually dispatched.
+     */
+    private fun installLegacyPhysicalActionVerification(
+        classLoader: ClassLoader,
+        turnClass: Class<*>,
+    ) {
+        try {
+            val registrarClass = classLoader.loadClass(
+                "humaneinternal.system.tao.TaoEventRegistrar",
+            )
+            val actionContentClass = classLoader.loadClass("humane.aibus.SynapseActionContent")
+            val method = registrarClass.getDeclaredMethod(
+                "onContent",
+                actionContentClass,
+                turnClass,
+            ).apply { isAccessible = true }
+            val getActionName = actionContentClass.getMethod("getAction")
+
+            XposedBridge.hookMethod(method, object : XC_MethodHook() {
+                override fun beforeHookedMethod(param: MethodHookParam) {
+                    try {
+                        val content = param.args.getOrNull(0) ?: return
+                        physicalVerificationActionName(
+                            hasAction = true,
+                            actionName = getActionName.invoke(content) as? String,
+                        )?.let { verifiedAction ->
+                            Log.w(TAG, "$PHYSICAL_ACTION_MARKER | action=$verifiedAction")
+                        }
+                    } catch (error: Throwable) {
+                        Log.e(
+                            TAG,
+                            "Legacy physical-action verification failed: " +
+                                error.javaClass.simpleName,
+                        )
+                    }
+                }
+            })
+            Log.w(TAG, "  Legacy physical-action verification installed")
+        } catch (error: Throwable) {
+            Log.e(
+                TAG,
+                "Legacy physical-action verification install failed: " +
                     "${error.javaClass.simpleName}: ${error.message}",
             )
         }

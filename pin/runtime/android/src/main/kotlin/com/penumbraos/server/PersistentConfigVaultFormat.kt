@@ -21,6 +21,7 @@ internal object PersistentConfigVaultFormat {
     const val SECURITY_SCHEMA_FILE_NAME = ".config-security-schema"
     const val ESIM_TOKEN_FILE_NAME = "esim-bridge-auth.token"
     const val SPOTIFY_AUTH_FILE_NAME = "spotify-auth.json"
+    const val ACTIVATION_RECORD_FILE_NAME = "cosmos-activation-v1.json"
 
     const val MAX_ARTIFACT_BYTES = 256 * 1024
     const val MAX_BUNDLE_BYTES = 1024 * 1024
@@ -42,6 +43,7 @@ internal object PersistentConfigVaultFormat {
         SECURITY_SCHEMA_FILE_NAME,
         ESIM_TOKEN_FILE_NAME,
         SPOTIFY_AUTH_FILE_NAME,
+        ACTIVATION_RECORD_FILE_NAME,
     )
 
     data class Snapshot(
@@ -158,6 +160,11 @@ internal object PersistentConfigVaultFormat {
                     text.last() == '}' &&
                     text.none { it == '\u0000' },
             ) { "Invalid Spotify authentication state" }
+        }
+        files[ACTIVATION_RECORD_FILE_NAME]?.let { record ->
+            require(runCatching { CosmosActivationRecordCodec.decode(record) }.isSuccess) {
+                "Invalid Cosmos activation record"
+            }
         }
     }
 

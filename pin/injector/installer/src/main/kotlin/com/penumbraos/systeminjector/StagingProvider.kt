@@ -614,7 +614,11 @@ class StagingProvider : ContentProvider() {
                 }
                 val replacementPackages = installedDuplicates.toSet() + previouslyApprovedReplacements
                 val approvedReplacementPaths = try {
-                    bindReplacementPaths(states, replacementPackages)
+                    bindReplacementPaths(
+                        states,
+                        replacementPackages,
+                        approvalRecords.mapValues { it.value.expectedBaseApkPath },
+                    )
                 } catch (e: Exception) {
                     Log.e(TAG, "StagingProvider: replacement identity binding rejected", e)
                     return Bundle().apply { putString(RESULT_MESSAGE, "REPLACEMENT_PREFLIGHT_FAILED") }
@@ -670,7 +674,11 @@ class StagingProvider : ContentProvider() {
                     return Bundle().apply { putString(RESULT_MESSAGE, "REPLACEMENT_PREFLIGHT_FAILED") }
                 }
                 val boundPaths = try {
-                    bindReplacementPaths(states, approvalRecords.keys)
+                    bindReplacementPaths(
+                        states,
+                        approvalRecords.keys,
+                        approvalRecords.mapValues { it.value.expectedBaseApkPath },
+                    )
                 } catch (e: Exception) {
                     Log.e(TAG, "StagingProvider: retained replacement identity rejected", e)
                     return Bundle().apply { putString(RESULT_MESSAGE, "REPLACEMENT_PREFLIGHT_FAILED") }
@@ -839,12 +847,24 @@ class StagingProvider : ContentProvider() {
     private fun bindReplacementPaths(
         states: Map<String, PackageReplacementGuard.PackageState>,
         replacementPackages: Set<String>,
+        approvedExpectedPaths: Map<String, String?>,
     ): Map<String, String> = replacementPackages.associateWith { packageName ->
-        when (val state = states[packageName]) {
-            is PackageReplacementGuard.PackageState.Live -> state.baseApkPath
-            is PackageReplacementGuard.PackageState.Retained -> state.baseApkPath
-            else -> error("Replacement package $packageName has no exact PMS code-path identity: $state")
+        val state = states[packageName]
+            ?: error("Replacement package $packageName has no PMS state")
+        val approvedPath = approvedExpectedPaths[packageName]
+        val priorCodeDirectoryExists = if (
+            state is PackageReplacementGuard.PackageState.Missing && approvedPath != null
+        ) {
+            File(approvedPath).parentFile?.exists() == true
+        } else {
+            false
         }
+        ReplacementPathBindingPolicy.bind(
+            packageName = packageName,
+            state = state,
+            approvedExpectedBaseApkPath = approvedPath,
+            priorCodeDirectoryExists = priorCodeDirectoryExists,
+        )
     }
 
     private fun clearDuplicateApproval(packageNames: Set<String>) {

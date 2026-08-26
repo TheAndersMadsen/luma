@@ -270,6 +270,46 @@ class StagingSafetyTest {
     }
 
     @Test
+    fun `approved missing package reuses only an absent controlled prior path`() {
+        val packageName = "com.penumbraos.hook.injector"
+        val approvedPath = "/data/app/$packageName-injected/base.apk"
+
+        assertEquals(
+            approvedPath,
+            ReplacementPathBindingPolicy.bind(
+                packageName = packageName,
+                state = PackageReplacementGuard.PackageState.Missing,
+                approvedExpectedBaseApkPath = approvedPath,
+                priorCodeDirectoryExists = false,
+            ),
+        )
+        assertThrows(IllegalStateException::class.java) {
+            ReplacementPathBindingPolicy.bind(
+                packageName = packageName,
+                state = PackageReplacementGuard.PackageState.Missing,
+                approvedExpectedBaseApkPath = approvedPath,
+                priorCodeDirectoryExists = true,
+            )
+        }
+        assertThrows(IllegalStateException::class.java) {
+            ReplacementPathBindingPolicy.bind(
+                packageName = packageName,
+                state = PackageReplacementGuard.PackageState.Missing,
+                approvedExpectedBaseApkPath = null,
+                priorCodeDirectoryExists = false,
+            )
+        }
+        assertThrows(IllegalStateException::class.java) {
+            ReplacementPathBindingPolicy.bind(
+                packageName = packageName,
+                state = PackageReplacementGuard.PackageState.Missing,
+                approvedExpectedBaseApkPath = "/data/app/com.example.other-injected/base.apk",
+                priorCodeDirectoryExists = false,
+            )
+        }
+    }
+
+    @Test
     fun `pre-uninstall validation proves live server and retained hook as one batch`() {
         val server = "com.penumbraos.server"
         val hook = "com.penumbraos.hook"

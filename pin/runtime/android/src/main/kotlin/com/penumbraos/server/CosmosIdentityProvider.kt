@@ -19,6 +19,8 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.FileNotFoundException
 import java.io.FileOutputStream
+import java.nio.ByteBuffer
+import java.nio.charset.CodingErrorAction
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.security.KeyFactory
@@ -74,7 +76,6 @@ class CosmosIdentityProvider : ContentProvider() {
         private const val TAG = "CosmosIdentity"
         private const val MAX_BUNDLE_BYTES = 64 * 1024L
         private const val WRITE_TIMEOUT_SECONDS = 15L
-        private const val ACTIVATION_RECORD_NAME = "cosmos-activation-v1.json"
     }
 
     private val writeLock = Any()
@@ -262,7 +263,7 @@ class CosmosIdentityProvider : ContentProvider() {
                 val settings = AndroidCosmosSettingsPort(requireNotNull(context).contentResolver)
                 val transaction = CosmosActivationTransaction(
                     settings = settings,
-                    records = FileCosmosActivationRecordPort(activationRecordFile()),
+                    records = activationRecordPort(),
                 )
                 activationResultBundle(
                     transaction.activate(
@@ -309,7 +310,7 @@ class CosmosIdentityProvider : ContentProvider() {
             val settings = AndroidCosmosSettingsPort(requireNotNull(context).contentResolver)
             val transaction = CosmosActivationTransaction(
                 settings = settings,
-                records = FileCosmosActivationRecordPort(activationRecordFile()),
+                records = activationRecordPort(),
             )
             activationResultBundle(
                 transaction.deactivate(
@@ -340,7 +341,7 @@ class CosmosIdentityProvider : ContentProvider() {
         return try {
             val resolver = requireNotNull(context).contentResolver
             val settings = AndroidCosmosSettingsPort(resolver)
-            val record = FileCosmosActivationRecordPort(activationRecordFile()).load()
+            val record = activationRecordPort().load()
             val remoteMode = settings.read(CosmosActivationContract.REMOTE_MODE_SETTING)
             val edgeIpv4 = settings.read(CosmosActivationContract.EDGE_IPV4_SETTING)
             val deviceStatusEndpoint = settings.read(
@@ -498,7 +499,16 @@ class CosmosIdentityProvider : ContentProvider() {
     private fun incomingFile(): File = File(requireNotNull(context).filesDir, ".$STAGING_NAME.incoming")
 
     private fun activationRecordFile(): File =
-        File(requireNotNull(context).filesDir, ACTIVATION_RECORD_NAME)
+        File(
+            requireNotNull(context).filesDir,
+            PersistentConfigVaultFormat.ACTIVATION_RECORD_FILE_NAME,
+        )
+
+    private fun activationRecordPort(): CosmosActivationRecordPort =
+        FileCosmosActivationRecordPort(activationRecordFile()) {
+            PersistentConfigVaultClient.commit(requireNotNull(context))
+            true
+        }
 
     private fun readSystemProperty(name: String): String = readAndroidSystemProperty(name)
 
@@ -800,78 +810,65 @@ private fun validateStoredCosmosIdentity(
     })
 }
 
-private class FileCosmosActivationRecordPort(
-    private val file: File,
-) : CosmosActivationRecordPort {
-    companion object {
-        private const val VERSION = 3
-        private const val MAX_RECORD_BYTES = 24 * 1024L
-        private const val MAX_SETTING_CHARS = 128
-        private const val MAX_ROOT_SETTING_CHARS = 16 * 1024
-    }
+internal object CosmosActivationRecordCodec {
+    private const val VERSION = 3
+    internal const val MAX_RECORD_BYTES = 24 * 1024
+    private const val MAX_SETTING_CHARS = 128
+    private const val MAX_ROOT_SETTING_CHARS = 16 * 1024
+    private val REQUIRED_KEYS = setOf(
+        "version",
+        "phase",
+        "previous_remote_mode",
+        "previous_edge_ipv4",
+        "previous_root_certificate_der_b64",
+        "previous_device_status_endpoint",
+        "identity_was_present",
+        "target_fingerprint_sha256",
+        "target_root_fingerprint_sha256",
+        "api_endpoint",
+        "onboarding_endpoint",
+        "device_status_endpoint",
+        "target_edge_ipv4",
+    )
+    private const val ROLLBACK_FAILED_KEY = "rollback_failed"
 
-    override fun load(): CosmosActivationRecord? {
-        if (!file.isFile) return null
-        check(file.length() in 1..MAX_RECORD_BYTES) { "Cosmos activation record is invalid" }
-        val bytes = file.readBytes()
-        return try {
-            check(bytes.size.toLong() in 1..MAX_RECORD_BYTES)
-            decode(JSONObject(String(bytes, Charsets.UTF_8)))
-        } finally {
-            bytes.fill(0)
-        }
-    }
-
-    override fun save(record: CosmosActivationRecord): Boolean {
-        val bytes = encode(record).toString().toByteArray(Charsets.UTF_8)
-        check(bytes.size.toLong() in 1..MAX_RECORD_BYTES)
-        val temporary = File(file.parentFile, ".${file.name}.${UUID.randomUUID()}.incoming")
-        return try {
-            FileOutputStream(temporary).use { output ->
-                output.write(bytes)
-                output.fd.sync()
-            }
-            Files.move(
-                temporary.toPath(),
-                file.toPath(),
-                StandardCopyOption.ATOMIC_MOVE,
-                StandardCopyOption.REPLACE_EXISTING,
+    fun encode(record: CosmosActivationRecord): ByteArray {
+        val bytes = JSONObject()
+            .put("version", VERSION)
+            .put("phase", record.phase.name)
+            .put("previous_remote_mode", record.previousRemoteMode ?: JSONObject.NULL)
+            .put("previous_edge_ipv4", record.previousEdgeIpv4 ?: JSONObject.NULL)
+            .put(
+                "previous_root_certificate_der_b64",
+                record.previousRootCertificateDerBase64 ?: JSONObject.NULL,
             )
-            load() == record
-        } finally {
-            bytes.fill(0)
-            temporary.delete()
+            .put(
+                "previous_device_status_endpoint",
+                record.previousDeviceStatusEndpoint ?: JSONObject.NULL,
+            )
+            .put("identity_was_present", record.identityWasPresent)
+            .put("target_fingerprint_sha256", record.targetFingerprintSha256)
+            .put("target_root_fingerprint_sha256", record.targetRootFingerprintSha256)
+            .put("api_endpoint", record.apiEndpoint)
+            .put("onboarding_endpoint", record.onboardingEndpoint)
+            .put("device_status_endpoint", record.deviceStatusEndpoint)
+            .put("target_edge_ipv4", record.targetEdgeIpv4)
+            .put(ROLLBACK_FAILED_KEY, record.rollbackFailed)
+            .toString()
+            .toByteArray(Charsets.UTF_8)
+        check(bytes.size in 1..MAX_RECORD_BYTES)
+        return bytes
+    }
+
+    fun decode(bytes: ByteArray): CosmosActivationRecord {
+        check(bytes.size in 1..MAX_RECORD_BYTES) { "Cosmos activation record is invalid" }
+        val value = JSONObject(strictUtf8(bytes))
+        val keys = mutableSetOf<String>()
+        val iterator = value.keys()
+        while (iterator.hasNext()) keys += iterator.next()
+        check(keys == REQUIRED_KEYS || keys == REQUIRED_KEYS + ROLLBACK_FAILED_KEY) {
+            "Cosmos activation record fields are invalid"
         }
-    }
-
-    override fun clear(): Boolean {
-        if (file.exists() && !file.delete()) return false
-        return !file.exists()
-    }
-
-    private fun encode(record: CosmosActivationRecord): JSONObject = JSONObject()
-        .put("version", VERSION)
-        .put("phase", record.phase.name)
-        .put("previous_remote_mode", record.previousRemoteMode ?: JSONObject.NULL)
-        .put("previous_edge_ipv4", record.previousEdgeIpv4 ?: JSONObject.NULL)
-        .put(
-            "previous_root_certificate_der_b64",
-            record.previousRootCertificateDerBase64 ?: JSONObject.NULL,
-        )
-        .put(
-            "previous_device_status_endpoint",
-            record.previousDeviceStatusEndpoint ?: JSONObject.NULL,
-        )
-        .put("identity_was_present", record.identityWasPresent)
-        .put("target_fingerprint_sha256", record.targetFingerprintSha256)
-        .put("target_root_fingerprint_sha256", record.targetRootFingerprintSha256)
-        .put("api_endpoint", record.apiEndpoint)
-        .put("onboarding_endpoint", record.onboardingEndpoint)
-        .put("device_status_endpoint", record.deviceStatusEndpoint)
-        .put("target_edge_ipv4", record.targetEdgeIpv4)
-        .put("rollback_failed", record.rollbackFailed)
-
-    private fun decode(value: JSONObject): CosmosActivationRecord {
         check(value.getInt("version") == VERSION)
         val phase = CosmosActivationPhase.valueOf(value.getString("phase"))
         val previousRemote = nullableBoundedString(value, "previous_remote_mode")
@@ -911,9 +908,16 @@ private class FileCosmosActivationRecordPort(
             onboardingEndpoint = plan.onboardingEndpoint,
             deviceStatusEndpoint = plan.deviceStatusEndpoint,
             targetEdgeIpv4 = plan.edgeIpv4,
-            rollbackFailed = value.optBoolean("rollback_failed", false),
+            rollbackFailed = value.optBoolean(ROLLBACK_FAILED_KEY, false),
         )
     }
+
+    private fun strictUtf8(bytes: ByteArray): String = Charsets.UTF_8
+        .newDecoder()
+        .onMalformedInput(CodingErrorAction.REPORT)
+        .onUnmappableCharacter(CodingErrorAction.REPORT)
+        .decode(ByteBuffer.wrap(bytes))
+        .toString()
 
     private fun nullableBoundedString(
         value: JSONObject,
@@ -924,6 +928,65 @@ private class FileCosmosActivationRecordPort(
         return value.getString(key).also { text ->
             check(text.length <= maximumChars)
         }
+    }
+}
+
+internal class FileCosmosActivationRecordPort(
+    private val file: File,
+    private val commitVault: () -> Boolean = { true },
+) : CosmosActivationRecordPort {
+    override fun load(): CosmosActivationRecord? {
+        if (!file.isFile) return null
+        check(file.length() in 1..CosmosActivationRecordCodec.MAX_RECORD_BYTES.toLong()) {
+            "Cosmos activation record is invalid"
+        }
+        val buffer = ByteArray(CosmosActivationRecordCodec.MAX_RECORD_BYTES + 1)
+        val size = FileInputStream(file).use { input ->
+            var offset = 0
+            while (offset < buffer.size) {
+                val read = input.read(buffer, offset, buffer.size - offset)
+                if (read <= 0) break
+                offset += read
+            }
+            offset
+        }
+        check(size in 1..CosmosActivationRecordCodec.MAX_RECORD_BYTES) {
+            buffer.fill(0)
+            "Cosmos activation record is invalid"
+        }
+        val bytes = buffer.copyOf(size)
+        buffer.fill(0)
+        return try {
+            CosmosActivationRecordCodec.decode(bytes)
+        } finally {
+            bytes.fill(0)
+        }
+    }
+
+    override fun save(record: CosmosActivationRecord): Boolean {
+        val bytes = CosmosActivationRecordCodec.encode(record)
+        val temporary = File(file.parentFile, ".${file.name}.${UUID.randomUUID()}.incoming")
+        return try {
+            FileOutputStream(temporary).use { output ->
+                output.write(bytes)
+                output.fd.sync()
+            }
+            Files.move(
+                temporary.toPath(),
+                file.toPath(),
+                StandardCopyOption.ATOMIC_MOVE,
+                StandardCopyOption.REPLACE_EXISTING,
+            )
+            load() == record && runCatching(commitVault).getOrDefault(false)
+        } finally {
+            bytes.fill(0)
+            temporary.delete()
+        }
+    }
+
+    override fun clear(): Boolean {
+        if (file.exists() && !file.delete()) return false
+        return !file.exists() && runCatching(commitVault).getOrDefault(false)
     }
 }
 

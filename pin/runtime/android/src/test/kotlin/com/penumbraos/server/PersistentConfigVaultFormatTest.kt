@@ -22,6 +22,10 @@ class PersistentConfigVaultFormatTest {
                 PersistentConfigVaultFormat.SPOTIFY_AUTH_FILE_NAME,
                 "{\"version\":1,\"device_id\":\"device\",\"credentials\":{}}\n".toByteArray(),
             )
+            put(
+                PersistentConfigVaultFormat.ACTIVATION_RECORD_FILE_NAME,
+                validActivationRecord(),
+            )
         }
 
         val encoded = PersistentConfigVaultFormat.encode(7, files)
@@ -69,6 +73,20 @@ class PersistentConfigVaultFormatTest {
     fun rejectsMalformedSpotifyAuthenticationState() {
         val invalid = validFiles().toMutableMap().apply {
             put(PersistentConfigVaultFormat.SPOTIFY_AUTH_FILE_NAME, "not-json".toByteArray())
+        }
+
+        assertThrows(IllegalArgumentException::class.java) {
+            PersistentConfigVaultFormat.encode(1, invalid)
+        }
+    }
+
+    @Test
+    fun rejectsMalformedActivationRecordBeforeItCanBeRestored() {
+        val invalid = validFiles().toMutableMap().apply {
+            put(
+                PersistentConfigVaultFormat.ACTIVATION_RECORD_FILE_NAME,
+                "{\"version\":3,\"phase\":\"ACTIVE\"}".toByteArray(),
+            )
         }
 
         assertThrows(IllegalArgumentException::class.java) {
@@ -131,4 +149,8 @@ class PersistentConfigVaultFormatTest {
                 "$bridgeToken\n".toByteArray(StandardCharsets.US_ASCII),
         )
     }
+
+    private fun validActivationRecord(): ByteArray =
+        """{"version":3,"phase":"ACTIVE","previous_remote_mode":"0","previous_edge_ipv4":null,"previous_root_certificate_der_b64":null,"previous_device_status_endpoint":null,"identity_was_present":false,"target_fingerprint_sha256":"${"ab".repeat(32)}","target_root_fingerprint_sha256":"${"cd".repeat(32)}","api_endpoint":"${CosmosActivationContract.API_ENDPOINT}","onboarding_endpoint":"${CosmosActivationContract.ONBOARDING_ENDPOINT}","device_status_endpoint":"https://pin.example.test/device-status/v1/report","target_edge_ipv4":"203.0.113.9","rollback_failed":false}"""
+            .toByteArray(StandardCharsets.UTF_8)
 }

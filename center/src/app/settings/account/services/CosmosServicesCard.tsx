@@ -91,6 +91,23 @@ type DeviceCode = {
   expiresAt: number;
 };
 
+const OPENAI_COMPATIBLE_REASONING_EFFORTS = [
+  { value: "minimal", label: "Minimal" },
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Medium" },
+  { value: "high", label: "High" },
+  { value: "xhigh", label: "Extra high" },
+] as const;
+
+const CODEX_REASONING_EFFORTS = [
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Medium" },
+  { value: "high", label: "High" },
+  { value: "xhigh", label: "Extra high" },
+  { value: "max", label: "Maximum" },
+  { value: "ultra", label: "Ultra" },
+] as const;
+
 const SERVICES: readonly ServiceState[] = [
   {
     name: "Assistant",
@@ -511,7 +528,12 @@ export function CosmosServicesCard({ operator }: { operator: boolean }) {
                     : provider === "openai-compatible" && draft.model === "gpt-5.6-terra"
                       ? "openai/gpt-5.6-luna"
                       : draft.model;
-                  setDraft({ ...draft, provider, model });
+                  const reasoningEffort = provider === "codex-subscription" && draft.reasoningEffort === "minimal"
+                    ? "low"
+                    : provider === "openai-compatible" && ["max", "ultra"].includes(draft.reasoningEffort)
+                      ? ""
+                      : draft.reasoningEffort;
+                  setDraft({ ...draft, provider, model, reasoningEffort });
                 }}
               >
                 <option value="openai-compatible">OpenAI-compatible API</option>
@@ -565,11 +587,12 @@ export function CosmosServicesCard({ operator }: { operator: boolean }) {
               <label htmlFor="reasoning-effort"><strong>Reasoning effort</strong><small>Optional. Supported values depend on the model.</small></label>
               <select id="reasoning-effort" className={styles.providerSelect} value={draft.reasoningEffort} onChange={(event) => setDraft({ ...draft, reasoningEffort: event.target.value })}>
                 <option value="">Provider default</option>
-                <option value="minimal">Minimal</option>
-                <option value="low">Low</option>
-                <option value="medium">Medium</option>
-                <option value="high">High</option>
-                <option value="xhigh">Extra high</option>
+                {(draft.provider === "codex-subscription"
+                  ? CODEX_REASONING_EFFORTS
+                  : OPENAI_COMPATIBLE_REASONING_EFFORTS
+                ).map((effort) => (
+                  <option key={effort.value} value={effort.value}>{effort.label}</option>
+                ))}
               </select>
             </div>
             <div className={styles.integrationField}>

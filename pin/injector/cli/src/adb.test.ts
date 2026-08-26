@@ -7,7 +7,9 @@ import {
   parseAndroidUserIds,
   parseDumpsysPackageUserState,
   parsePackageUidOutput,
+  parsePackagePathCommandResult,
   parseRegularPackageBaseApkPath,
+  waitForPackageUnloadedWithOperations,
 } from "./adb.js";
 
 const PACKAGE_NAME = "com.penumbraos.server";
@@ -104,6 +106,23 @@ test("parses a normal helper base.apk path and rejects traversal", () => {
   assert.throws(
     () => parseRegularPackageBaseApkPath("package:/data/app/pkg/../other/base.apk\n"),
     /Unsafe regular package/
+  );
+});
+
+test("an empty exit-1 package path means the user-scoped APK is unloaded", () => {
+  assert.equal(
+    parsePackagePathCommandResult(
+      { stdout: "", stderr: "", exitCode: 1 },
+      PACKAGE_NAME
+    ),
+    false
+  );
+  assert.throws(
+    () => parsePackagePathCommandResult(
+      { stdout: "", stderr: "cmd: Can't find service: package", exitCode: 20 },
+      PACKAGE_NAME
+    ),
+    /Can't find service: package/
   );
 });
 
@@ -283,6 +302,27 @@ test("builds the synchronous install-existing command without callback --wait", 
     PACKAGE_NAME,
   ]);
   assert.equal(args.includes("--wait"), false);
+});
+
+test("keep-data uninstall waits for a transient loaded APK to disappear", async () => {
+  let checks = 0;
+  await waitForPackageUnloadedWithOperations(
+    PACKAGE_NAME,
+    0,
+    {
+      async isLoaded() {
+        checks += 1;
+        return checks === 1;
+      },
+      async delay() {},
+    },
+    {
+      checkTimeoutMs: 5,
+      verificationAttempts: 3,
+      verificationIntervalMs: 1,
+    }
+  );
+  assert.equal(checks, 2);
 });
 
 test("restoration succeeds from verified post-state even if install-existing hangs", async () => {

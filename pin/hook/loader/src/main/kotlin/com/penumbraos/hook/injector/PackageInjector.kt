@@ -52,8 +52,6 @@ object PackageInjector {
     var isInitialized = false
         private set
 
-    private var initAttempted = false
-
     // Cached references from init()
     private var pmsPackages: Any? = null      // WatchedArrayMap<String, AndroidPackage>
     private var settingsPackages: Any? = null  // WatchedArrayMap<String, PackageSetting>
@@ -61,16 +59,24 @@ object PackageInjector {
 
     @Synchronized
     fun ensureInitialized() {
-        if (initAttempted) return
-        initAttempted = true
+        if (isInitialized) return
 
         try {
+            clearCachedState()
             init()
             isInitialized = true
             Log.w(TAG, "PackageInjector initialized")
         } catch (t: Throwable) {
+            clearCachedState()
             Log.e(TAG, "PackageInjector initialization FAILED", t)
         }
+    }
+
+    private fun clearCachedState() {
+        isInitialized = false
+        pmsPackages = null
+        settingsPackages = null
+        mapGetMethod = null
     }
 
     /**

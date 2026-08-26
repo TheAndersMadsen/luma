@@ -5,7 +5,7 @@ import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { Innertube } from "youtubei.js";
+import { Innertube, Platform, Player } from "youtubei.js";
 
 // Node 22.14 supports the out-of-thread register() hook used by every other
 // Center source test, but not the newer synchronous registerHooks() API.
@@ -16,6 +16,7 @@ const source = async (file) => readFile(new URL(file, root), "utf8");
 
 const store = await import("../src/server/musicProviderStore.ts");
 const youtube = await import("../src/server/youtubeMusic.ts");
+const youtubePlayer = await import("../src/server/youtubePlayerEvaluator.ts");
 const tidal = await import("../src/server/tidalMusic.ts");
 const apple = await import("../src/server/appleMusic.ts");
 const gateway = await import("../src/server/musicGateway.ts");
@@ -222,6 +223,139 @@ test("YouTube Music removes ad payloads and refuses ad or non-media hosts", () =
     loader: "artist_songs",
   });
   assert.equal(youtube.youtubeCollectionPlan("track"), null);
+});
+
+test("YouTube Music binds a content proof to the player request and stream URL", async () => {
+  const calls = [];
+  const player = { id: "fixture-player" };
+  const client = {
+    session: { player },
+    getBasicInfo: async (videoId, options) => {
+      calls.push({ videoId, options });
+      return {
+        chooseFormat: (formatOptions) => {
+          calls.push({ formatOptions });
+          return {
+            has_audio: true,
+            has_video: false,
+            has_text: false,
+            drm_families: [],
+            fair_play_key_uri: undefined,
+            drm_track_type: undefined,
+            decipher: async (receivedPlayer) => {
+              calls.push({ player: receivedPlayer });
+              return "https://r1---sn.example.googlevideo.com/videoplayback?id=fixture";
+            },
+          };
+        },
+      };
+    },
+  };
+
+  const url = new URL(
+    await youtube.resolveYoutubeAudioStream(
+      client,
+      "Zi_XLOBDo_Y",
+      "fixture-content-proof",
+    ),
+  );
+
+  assert.deepEqual(calls, [
+    {
+      videoId: "Zi_XLOBDo_Y",
+      options: { client: "YTMUSIC", po_token: "fixture-content-proof" },
+    },
+    { formatOptions: { type: "audio", quality: "best", format: "any" } },
+    { player },
+  ]);
+  assert.equal(url.hostname, "r1---sn.example.googlevideo.com");
+  assert.equal(url.searchParams.get("pot"), "fixture-content-proof");
+});
+
+test("YouTube Music installs an isolated evaluator before deciphering player URLs", async (t) => {
+  const originalEvaluator = Platform.shim.eval;
+  t.after(() => {
+    Platform.shim.eval = originalEvaluator;
+  });
+  Platform.shim.eval = () => {
+    throw new Error("fixture evaluator was not configured");
+  };
+
+  const player = new Player("fixture-player", 0, {
+    output: `
+class FixtureUrl {
+  constructor(value) {
+    this.url = new URL(value);
+  }
+  clone() {
+    return new FixtureUrl(this.url.toString());
+  }
+  set(name, value) {
+    this.url.searchParams.set(name, value);
+  }
+  get(name) {
+    return this.url.searchParams.get(name);
+  }
+  transform() {
+    this.set("n", this.get("n").split("").reverse().join(""));
+  }
+}
+const exportedVars = {
+  nsigFunction: (value) => new FixtureUrl(value),
+};`,
+    exported: ["nsigFunction"],
+  });
+  const client = {
+    session: { player },
+    getBasicInfo: async () => ({
+      chooseFormat: () => ({
+        has_audio: true,
+        has_video: false,
+        has_text: false,
+        drm_families: [],
+        fair_play_key_uri: undefined,
+        drm_track_type: undefined,
+        decipher: () =>
+          player.decipher(
+            "https://r1---sn.example.googlevideo.com/videoplayback?id=fixture&n=abcdef",
+          ),
+      }),
+    }),
+  };
+
+  const url = new URL(
+    await youtube.resolveYoutubeAudioStream(
+      client,
+      "Zi_XLOBDo_Y",
+      "fixture-content-proof",
+    ),
+  );
+
+  assert.equal(url.searchParams.get("n"), "fedcba");
+  assert.equal(url.searchParams.get("pot"), "fixture-content-proof");
+  assert.equal("window" in globalThis, false);
+  assert.equal("document" in globalThis, false);
+});
+
+test("YouTube Music player evaluation rejects script-breaking values and hides host APIs", () => {
+  assert.throws(
+    () =>
+      youtubePlayer.evaluateYoutubePlayerScript(
+        { output: "return { n: 'unused' };" },
+        { n: 'unsafe"; process.exit(); //' },
+      ),
+    /player environment was invalid/,
+  );
+  assert.deepEqual(
+    youtubePlayer.evaluateYoutubePlayerScript(
+      {
+        output:
+          "return { n: typeof process + typeof Function + typeof XMLHttpRequest };",
+      },
+      {},
+    ),
+    { n: "undefinedundefinedundefined" },
+  );
 });
 
 test("YouTube Music filters tracks the stock Music contract cannot consume", () => {

@@ -27,12 +27,19 @@ class InjectReceiver : BroadcastReceiver() {
     companion object {
         private const val TAG = "PenumbraInjector"
         const val ACTION_INJECT = "com.penumbraos.hook.INJECT"
+        const val ACTION_INJECT_CONFIGURED_TARGETS =
+            "com.penumbraos.hook.INJECT_CONFIGURED_TARGETS"
         const val EXTRA_PACKAGE = "package"
     }
 
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action != ACTION_INJECT) return
+        when (intent.action) {
+            ACTION_INJECT -> injectOne(context, intent)
+            ACTION_INJECT_CONFIGURED_TARGETS -> injectConfiguredTargets(context)
+        }
+    }
 
+    private fun injectOne(context: Context, intent: Intent) {
         val packageName = intent.getStringExtra(EXTRA_PACKAGE)
         if (packageName.isNullOrBlank()) {
             Log.e(TAG, "Missing 'package' extra")
@@ -68,6 +75,54 @@ class InjectReceiver : BroadcastReceiver() {
             }.start()
         } catch (t: Throwable) {
             Log.e(TAG, "InjectReceiver.onReceive failed", t)
+        }
+    }
+
+    private fun injectConfiguredTargets(context: Context) {
+        val pendingResult = goAsync()
+        val applicationContext = context.applicationContext ?: context
+        try {
+            Thread(
+                {
+                    try {
+                        synchronized(BootInjectionReceiver.injectionWorkLock) {
+                            PackageInjector.ensureInitialized()
+                            if (!PackageInjector.isInitialized) {
+                                Log.e(TAG, "PackageInjector failed to initialize configured targets")
+                                return@synchronized
+                            }
+                            BootInjectionReceiver().injectConfiguredTargets(
+                                context = applicationContext,
+                                forceRestart = isBootCompleted(),
+                                trigger = "explicit post-install activation",
+                            )
+                        }
+                    } catch (error: Throwable) {
+                        Log.e(TAG, "Configured target injection failed", error)
+                    } finally {
+                        pendingResult.finish()
+                    }
+                },
+                "PenumbraConfiguredTargetInjection",
+            ).start()
+        } catch (error: Throwable) {
+            pendingResult.finish()
+            Log.e(TAG, "Failed to schedule configured target injection", error)
+        }
+    }
+
+    private fun isBootCompleted(): Boolean {
+        return try {
+            val systemProperties = Class.forName("android.os.SystemProperties")
+            val get = systemProperties.getDeclaredMethod(
+                "get",
+                String::class.java,
+                String::class.java,
+            )
+            get.invoke(null, "sys.boot_completed", "0") == "1"
+        } catch (error: Throwable) {
+            Log.w(TAG, "Failed to read boot completion state; not restarting targets", error)
+            false
         }
     }
 

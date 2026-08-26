@@ -404,19 +404,42 @@ fn renameat2_with_flags(
     }
 }
 
-#[cfg(all(unix, not(target_os = "linux")))]
-fn renameat2_with_flags(
+#[cfg(target_os = "macos")]
+fn renamex_np_with_flags(
+    source: &std::path::Path,
+    destination: &std::path::Path,
+    flags: libc::c_uint,
+) -> std::io::Result<()> {
+    use std::os::unix::ffi::OsStrExt as _;
+
+    let source = std::ffi::CString::new(source.as_os_str().as_bytes())
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "NUL in source path"))?;
+    let destination = std::ffi::CString::new(destination.as_os_str().as_bytes()).map_err(|_| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "NUL in destination path")
+    })?;
+    // SAFETY: both C strings are owned for the duration of the call. The
+    // caller supplies one documented renamex_np flag for already-validated
+    // absolute/sibling paths.
+    let result = unsafe { libc::renamex_np(source.as_ptr(), destination.as_ptr(), flags) };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+fn unsupported_snapshot_cas(
     _source: &std::path::Path,
     _destination: &std::path::Path,
-    _flags: libc::c_uint,
 ) -> std::io::Result<()> {
     Err(std::io::Error::new(
         std::io::ErrorKind::Unsupported,
-        "atomic snapshot CAS requires Linux renameat2",
+        "atomic snapshot CAS requires Linux renameat2 or macOS renamex_np",
     ))
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn rename_noreplace(
     source: &std::path::Path,
     destination: &std::path::Path,
@@ -424,9 +447,35 @@ fn rename_noreplace(
     renameat2_with_flags(source, destination, libc::RENAME_NOREPLACE)
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "macos")]
+fn rename_noreplace(
+    source: &std::path::Path,
+    destination: &std::path::Path,
+) -> std::io::Result<()> {
+    renamex_np_with_flags(source, destination, libc::RENAME_EXCL)
+}
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+fn rename_noreplace(
+    source: &std::path::Path,
+    destination: &std::path::Path,
+) -> std::io::Result<()> {
+    unsupported_snapshot_cas(source, destination)
+}
+
+#[cfg(target_os = "linux")]
 fn rename_exchange(source: &std::path::Path, destination: &std::path::Path) -> std::io::Result<()> {
     renameat2_with_flags(source, destination, libc::RENAME_EXCHANGE)
+}
+
+#[cfg(target_os = "macos")]
+fn rename_exchange(source: &std::path::Path, destination: &std::path::Path) -> std::io::Result<()> {
+    renamex_np_with_flags(source, destination, libc::RENAME_SWAP)
+}
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+fn rename_exchange(source: &std::path::Path, destination: &std::path::Path) -> std::io::Result<()> {
+    unsupported_snapshot_cas(source, destination)
 }
 
 impl Default for KeyMaterial {
@@ -893,11 +942,11 @@ impl KeyMaterial {
     }
 
     /// Install `temporary` only if the path still has the exact token from
-    /// which the candidate was derived. Linux renameat2 gives both required
-    /// atomic shapes: NOREPLACE for the first creation and EXCHANGE for an
-    /// existing snapshot. With EXCHANGE, the displaced inode is inspected at
-    /// the temporary name before it can be removed; a racing replacement is
-    /// exchanged back rather than overwritten.
+    /// which the candidate was derived. Linux renameat2 and macOS renamex_np
+    /// give both required atomic shapes: NOREPLACE/EXCL for the first creation
+    /// and EXCHANGE/SWAP for an existing snapshot. The displaced inode is
+    /// inspected at the temporary name before it can be removed; a racing
+    /// replacement is exchanged back rather than overwritten.
     #[cfg(unix)]
     fn install_snapshot_cas(
         &self,

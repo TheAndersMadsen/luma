@@ -1,5 +1,6 @@
 package com.penumbraos.hook
 
+import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -358,6 +359,22 @@ class ContextHistorySafetyHooksTest {
             ContextHistorySafetyHooks.physicalVerificationActionName(
                 hasAction = false,
                 actionName = "Tickle",
+            ),
+        )
+    }
+
+    @Test
+    fun `physical verification covers both legacy and streaming stock dispatch`() {
+        val source = File(
+            "src/main/kotlin/com/penumbraos/hook/ContextHistorySafetyHooks.kt",
+        ).readText()
+
+        assertTrue(source.contains("installLegacyPhysicalActionVerification"))
+        assertTrue(source.contains("installLocalIntermediateRepair"))
+        assertTrue(source.contains("\"onContent\""))
+        assertTrue(
+            source.contains(
+                "Log.w(TAG, \"\$PHYSICAL_ACTION_MARKER | action=\$verifiedAction\")",
             ),
         )
     }

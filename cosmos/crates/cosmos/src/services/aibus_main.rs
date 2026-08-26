@@ -54,6 +54,14 @@ type BoxStream<T> = std::pin::Pin<
 const NO_CHANNEL_KEY: &str = "no ephemeral channel key established; call PublicPrivacyService \
      EstablishWrappingKeys/ImportKeys first";
 
+/// Stock starts a service-scoped encrypted RPC and its first key import in
+/// parallel. Give the authoritative directory a short chance to observe that
+/// concurrent import instead of failing the wearer's first request by a few
+/// milliseconds. Twenty five-millisecond polls stay well below the stock RPC
+/// deadline while covering the observed import transaction comfortably.
+const CHANNEL_KEY_IMPORT_POLL_ATTEMPTS: usize = 20;
+const CHANNEL_KEY_IMPORT_POLL_DELAY: std::time::Duration = std::time::Duration::from_millis(5);
+
 /// The sealed request could not be opened under the established channel key.
 const ENVELOPE_OPEN_FAILED: &str = "could not open the request envelope";
 
@@ -160,19 +168,25 @@ impl AiBusMain {
     ) -> Result<Vec<u8>, Status> {
         let kid = envelope.kid.clone();
         if let Some(directory) = &self.directory {
-            return match directory
-                .open(&envelope)
-                .await
-                .map_err(|error| crate::keydirectory::grpc_status(&error))?
-            {
-                Some(plaintext) => Ok(plaintext),
-                None => {
-                    crate::services::public_privacy::note_unknown_kid(&kid);
-                    Err(Status::failed_precondition(format!(
-                        "no channel key for kid {kid}; queued for re-establishment via PublicPrivacyService SyncKeys",
-                    )))
+            for attempt in 0..=CHANNEL_KEY_IMPORT_POLL_ATTEMPTS {
+                match directory
+                    .open(&envelope)
+                    .await
+                    .map_err(|error| crate::keydirectory::grpc_status(&error))?
+                {
+                    Some(plaintext) => return Ok(plaintext),
+                    None if attempt < CHANNEL_KEY_IMPORT_POLL_ATTEMPTS => {
+                        tokio::time::sleep(CHANNEL_KEY_IMPORT_POLL_DELAY).await;
+                    }
+                    None => {
+                        crate::services::public_privacy::note_unknown_kid(&kid);
+                        return Err(Status::failed_precondition(format!(
+                            "no channel key for kid {kid}; queued for re-establishment via PublicPrivacyService SyncKeys",
+                        )));
+                    }
                 }
-            };
+            }
+            unreachable!("bounded channel-key import poll returns on its final attempt");
         }
 
         if self.keys.is_empty().map_err(|error| {
@@ -2254,6 +2268,67 @@ mod tests {
         ));
     }
 
+    /// Drive the production legacy handler, not only the catalog or engine.
+    /// A trusted model decision for the stock-local current-time phrase must
+    /// remain a DEVICE GetCurrentTime action all the way to the Pin-facing wire.
+    #[tokio::test]
+    async fn trusted_current_time_action_survives_the_full_understand_handler() {
+        use crate::assistant::{
+            engine::Engine,
+            llm::{ChatResponse, MockChatModel, ToolCall},
+        };
+        use tokio_stream::StreamExt as _;
+
+        let model = Arc::new(MockChatModel::new(vec![ChatResponse {
+            content: None,
+            thought: String::new(),
+            tool_call: Some(ToolCall {
+                name: "GetCurrentTime".to_owned(),
+                arguments: "{}".to_owned(),
+            }),
+            extra_tool_calls: Vec::new(),
+        }]));
+        let service = AiBusMain {
+            engine: Arc::new(Engine::new(model)),
+            keys: Default::default(),
+            directory: None,
+            store: crate::store::MemoryStore::shared(),
+            entitlements: Default::default(),
+        };
+
+        let mut request = Request::new(pb::SynapseUnderstandingRequest {
+            utterance: "what time is it".to_owned(),
+            ..Default::default()
+        });
+        request.extensions_mut().insert(
+            cosmos_core::AuthenticatedPrincipal::from_edge("V:01:D:test-pin:U:wearer")
+                .expect("trusted device principal"),
+        );
+        let messages = service
+            .understand(request)
+            .await
+            .expect("understand accepts the current-time request")
+            .into_inner()
+            .collect::<Vec<_>>()
+            .await;
+        let actions: Vec<_> = messages
+            .iter()
+            .filter_map(|message| message.as_ref().ok())
+            .filter_map(|message| match &message.body {
+                Some(pb::synapse_understanding_response::Body::Turn(turn)) => match &turn.content {
+                    Some(pb::synapse_chat_turn::Content::Action(action)) => Some(action),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+
+        let dispatched = actions.last().expect("handler emits a device action");
+        assert_eq!(dispatched.action, "GetCurrentTime");
+        assert_eq!(dispatched.source, pb::SynapseSource::Device as i32);
+        assert_eq!(dispatched.input, "{}");
+    }
+
     /// The encrypted assistant path is the RPC a stock Pin actually uses: seal a
     /// real `SynapseUnderstandingRequest` under an established channel key, and
     /// every streamed response must come back sealed under the same kid and open
@@ -2379,6 +2454,49 @@ mod tests {
                 .expect("well-formed response");
         }
         assert!(local.is_empty().expect("inspect local state"));
+    }
+
+    #[tokio::test]
+    async fn encrypted_request_waits_for_a_concurrent_channel_key_import() {
+        use prost::Message as _;
+        use std::time::Duration;
+
+        let kid = "d=;u=;s=ai_bus.nearby;a=;first-use;race";
+        let key = [0x5a; cosmos_crypto::AES_KEY_LEN];
+        let directory = Arc::new(crate::keydirectory::KeyDirectory::in_memory());
+        let service = AiBusMain::default().with_key_directory(directory.clone());
+        let payload = pb::NearbySearchRequest {
+            text_query: "coffee".to_owned(),
+            location: Some(pb::Location {
+                latitude: 55.0,
+                longitude: 12.0,
+            }),
+            radius_accuracy: 1_000.0,
+        };
+        let sealed = cosmos_crypto::seal(kid, &key, &payload.encode_to_vec(), b"")
+            .expect("seal first-use request");
+
+        let import = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            directory.put(kid, key).await.expect("import channel key");
+        });
+        let (opened, opened_kid) = service
+            .open_request::<pb::NearbySearchRequest>(Some(
+                cosmos_protocol::common::encryption::EncryptedData {
+                    encryption_information: Some(
+                        cosmos_protocol::common::encryption::EncryptionInformation {
+                            kid: kid.to_owned(),
+                        },
+                    ),
+                    data: sealed.data,
+                },
+            ))
+            .await
+            .expect("the request should observe the concurrent import");
+        import.await.expect("import task completes");
+
+        assert_eq!(opened_kid, kid);
+        assert_eq!(opened, payload);
     }
 
     #[tokio::test]

@@ -15,8 +15,9 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { dirname, join, relative, resolve, sep } from "node:path";
-import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+
+import { createReproducibleTar } from "../archive-tar.mjs";
 
 import {
   canonicalJson,
@@ -102,23 +103,6 @@ async function assertNoLinks(selected) {
   for (const name of await readdir(selected)) await assertNoLinks(join(selected, name));
 }
 
-function runTar(parent, directory, archive) {
-  const result = spawnSync("/usr/bin/tar", [
-    "--sort=name",
-    "--mtime=@0",
-    "--owner=0",
-    "--group=0",
-    "--numeric-owner",
-    "--format=posix",
-    "-czf", archive,
-    "-C", parent,
-    directory,
-  ], { encoding: "utf8" });
-  if (result.error || result.status !== 0) {
-    throw new Error(result.stderr?.trim() || result.error?.message || "tar failed");
-  }
-}
-
 function parseArguments(argv) {
   const result = {};
   const names = new Map([
@@ -187,7 +171,11 @@ export async function buildOperatorBundle(options) {
     await mkdir(dirname(versionPath), { recursive: true });
     await writeFile(versionPath, `${JSON.stringify(version, null, 2)}\n`, { mode: 0o644, flag: "wx" });
     await assertNoLinks(stage);
-    runTar(stageParent, directoryName, archiveTemporary);
+    await createReproducibleTar({
+      parent: stageParent,
+      directory: directoryName,
+      archive: archiveTemporary,
+    });
     await rename(archiveTemporary, archive);
     const archiveSha256 = sha256(await readFile(archive));
     const descriptor = createReleaseDescriptor({

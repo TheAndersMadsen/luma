@@ -18,6 +18,14 @@ export const EXPLOIT_STATUS_URI = `content://${EXPLOIT_STATUS_AUTHORITY}`;
 /** Explicit component targets (bypasses stopped-state restriction on fresh installs) */
 export const EXPLOIT_RECEIVER = `${EXPLOIT_PACKAGE}/.InstallReceiver`;
 export const INSTALLER_RECEIVER = `${INSTALLER_PACKAGE}/.InstallReceiver`;
+export const HOOK_RUNTIME_POLICY_REPAIR_ACTION =
+  "com.penumbraos.hook.REPAIR_SERVER_RUNTIME_POLICY";
+export const HOOK_RUNTIME_POLICY_REPAIR_RECEIVER =
+  "com.penumbraos.hook.injector/.ServerRuntimePolicyRepairReceiver";
+export const HOOK_CONFIGURED_TARGET_INJECTION_ACTION =
+  "com.penumbraos.hook.INJECT_CONFIGURED_TARGETS";
+export const HOOK_CONFIGURED_TARGET_INJECTION_RECEIVER =
+  "com.penumbraos.hook.injector/.InjectReceiver";
 
 /** Default device paths */
 export const DEVICE_TMP_DIR = "/data/local/tmp";

@@ -138,6 +138,7 @@ test("test environments configure compiler and package cache paths outside the r
     environment.CARGO_HOME,
     environment.GRADLE_USER_HOME,
     npm.NPM_CONFIG_CACHE,
+    environment.DOCKER_CONFIG,
   ]) {
     assert.equal(path.isAbsolute(directory), true);
     assert.equal(directory.startsWith(`${root}${path.sep}`), false);

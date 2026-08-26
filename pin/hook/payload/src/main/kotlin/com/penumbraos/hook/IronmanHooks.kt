@@ -39,6 +39,10 @@ object IronmanHooks {
         // contextual sessions remain entirely stock-owned.
         ContextHistorySafetyHooks.install(cl)
 
+        // Stock RespondAction gained unannotated runtime fields that its generic
+        // serializer mistakes for model inputs. Project only Request/Response.
+        RespondActionJsonCompatibilityHooks.install(cl)
+
         // Coerce null contact name getters to "" so stock NameEntityCorrector's
         // unguarded String.isEmpty() cannot NPE on a malformed (e.g. cosmos-synced)
         // contact and silently kill NER on every transcript.

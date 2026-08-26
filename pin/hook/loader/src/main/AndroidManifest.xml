@@ -34,6 +34,7 @@
             android:permission="android.permission.DUMP">
             <intent-filter>
                 <action android:name="com.penumbraos.hook.INJECT" />
+                <action android:name="com.penumbraos.hook.INJECT_CONFIGURED_TARGETS" />
             </intent-filter>
         </receiver>
 

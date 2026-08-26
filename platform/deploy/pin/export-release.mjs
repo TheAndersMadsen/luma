@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-import { spawnSync } from "node:child_process";
 import {
   chmod,
   copyFile,
@@ -15,6 +14,8 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { createReproducibleTar } from "../../archive-tar.mjs";
+
 import {
   PIN_COMPATIBILITY_CERT_SHA256,
   parsePinReleaseReceiptBundle,
@@ -22,7 +23,6 @@ import {
 import { validateReleaseStore } from "./validate-release-store.mjs";
 
 const SELF_PATH = fileURLToPath(import.meta.url);
-const TAR = "/usr/bin/tar";
 
 function defaultReleaseRoot(environment = process.env) {
   const data = resolve(
@@ -30,23 +30,6 @@ function defaultReleaseRoot(environment = process.env) {
       join(environment.XDG_DATA_HOME ?? join(homedir(), ".local", "share"), "ai-pin-revival"),
   );
   return resolve(environment.REVIVAL_PIN_RELEASE_OUTPUT_DIR ?? join(data, "pin-releases"));
-}
-
-function runTar(parent, directory, archive) {
-  const result = spawnSync(TAR, [
-    "--sort=name",
-    "--mtime=@0",
-    "--owner=0",
-    "--group=0",
-    "--numeric-owner",
-    "--format=posix",
-    "--create", "--gzip", "--file", archive,
-    "--directory", parent,
-    directory,
-  ], { encoding: "utf8" });
-  if (result.error || result.status !== 0) {
-    throw new Error(result.stderr?.trim() || result.error?.message || "tar failed");
-  }
 }
 
 export async function exportPinRelease({ output, releaseRoot = defaultReleaseRoot() }) {
@@ -89,7 +72,11 @@ export async function exportPinRelease({ output, releaseRoot = defaultReleaseRoo
     for (const name of ["manifest.json", "receipts.json", ...manifest.artifacts.map(({ name }) => name)]) {
       await chmod(join(stage, name), 0o600);
     }
-    runTar(stageParent, directoryName, temporary);
+    await createReproducibleTar({
+      parent: stageParent,
+      directory: directoryName,
+      archive: temporary,
+    });
     await rename(temporary, target);
     return Object.freeze({
       schemaVersion: 1,

@@ -63,14 +63,14 @@ function runPinContributorChecks(runner, environment) {
     cwd: path.join(ROOT, 'pin', 'bridge'),
     environment: Object.freeze({ ...rootEnvironment, CARGO_TARGET_DIR: bridgeTarget }),
   });
-  runContributorCheckUnit(runner, '/usr/bin/bash', [path.join(ROOT, 'pin', 'gradlew'), '--no-daemon',
+  runContributorCheckUnit(runner, 'bash', [path.join(ROOT, 'pin', 'gradlew'), '--no-daemon',
     '--project-cache-dir', gradleProjectCache,
     ':contracts:stock-aibus:testDebugUnitTest',
     ':contracts:penumbra-ipc:testDebugUnitTest'], {
     cwd: path.join(ROOT, 'pin'),
     environment: Object.freeze({ ...rootEnvironment, GRADLE_USER_HOME: environment.GRADLE_USER_HOME }),
   });
-  runContributorCheckUnit(runner, '/usr/bin/bash', [path.join(ROOT, 'pin', 'injector/gradlew'), '--no-daemon',
+  runContributorCheckUnit(runner, 'bash', [path.join(ROOT, 'pin', 'injector/gradlew'), '--no-daemon',
     '--project-cache-dir', gradleInjectorCache,
     '-p', 'injector',
     ':common:testDebugUnitTest'], {

@@ -48,6 +48,7 @@ class PackagesXmlPatcherUpdateTest {
         assertEquals("/data/app/new", replacement.getAttribute("codePath"))
         assertEquals("1000", replacement.getAttribute("sharedUserId"))
         assertEquals("arm64-v8a", replacement.getAttribute("primaryCpuAbi"))
+        assertEquals("0", replacement.getAttribute("publicFlags"))
         assertEquals("", replacement.getAttribute("oldMarker"))
 
         val replacementCert = xPath.compile("/packages/package[@name='$PACKAGE_NAME']/sigs/cert")

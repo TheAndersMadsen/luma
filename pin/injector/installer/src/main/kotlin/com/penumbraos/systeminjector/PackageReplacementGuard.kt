@@ -120,9 +120,8 @@ internal object PackageReplacementGuard {
     ): Boolean {
         return if (replacementApproved) {
             if (state is PackageState.Missing) {
-                // Edge case: package was completely uninstalled but has replacement approval
-                // This can happen if the package was uninstalled without --user 0 flag
-                // Allow fresh install in this case since there is no data to preserve
+                // The provider separately requires an exact digest-bound approved path and
+                // proves that its prior code directory is gone before binding this fresh write.
                 true
             } else {
                 expectedBaseApkPath != null &&
