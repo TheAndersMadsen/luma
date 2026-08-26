@@ -66,6 +66,7 @@ const DEVICE_MUSIC_EGRESS_REQUEST_HEADERS = new Set([
   "x-goog-authuser",
   "x-goog-visitor-id",
   "x-origin",
+  "x-user-agent",
   "x-youtube-bootstrap-logged-in",
   "x-youtube-client-name",
   "x-youtube-client-version",

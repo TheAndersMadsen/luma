@@ -32,12 +32,14 @@ test("updated packages repair Hook policy and inject targets after activation", 
     activateUpdates: async () => calls.push("activate_updates"),
     repairHookRuntimePolicy: async () => calls.push("repair_hook_runtime_policy"),
     injectConfiguredTargets: async () => calls.push("inject_configured_targets"),
+    startServerService: async () => calls.push("start_server_service"),
   });
 
   assert.deepEqual(calls, [
     "activate_updates",
     "repair_hook_runtime_policy",
     "inject_configured_targets",
+    "start_server_service",
   ]);
   assert.equal(
     HOOK_RUNTIME_POLICY_REPAIR_ACTION,

@@ -20,6 +20,8 @@ import { shellCommand, shellSingleQuote } from "./shellQuote";
 export const DEVICE_TMP_DIR = "/data/local/tmp";
 export const STAGING_AUTHORITY = "com.penumbraos.systeminjector.staging";
 export const STAGING_URI = `content://${STAGING_AUTHORITY}`;
+export const SERVER_MAINTENANCE_URI =
+  "content://com.penumbraos.server.maintenance";
 export const EXPLOIT_STAGE1_ACTION =
   "com.penumbraos.systeminjector.exploit.STAGE1";
 export const EXPLOIT_STAGE2_ACTION =
@@ -94,6 +96,7 @@ export interface UpdatedPackageActivationOperations {
   activateUpdates(): Promise<void>;
   repairHookRuntimePolicy(): Promise<void>;
   injectConfiguredTargets(): Promise<void>;
+  startServerService(): Promise<void>;
 }
 
 export async function runUpdatedPackageActivation(
@@ -102,6 +105,7 @@ export async function runUpdatedPackageActivation(
   await operations.activateUpdates();
   await operations.repairHookRuntimePolicy();
   await operations.injectConfiguredTargets();
+  await operations.startServerService();
 }
 
 function newBootstrapTransactionId(): string {
@@ -1195,6 +1199,22 @@ async function injectConfiguredTargets(
   ensureShellSuccess(result, "Failed to inject the configured Hook targets after update.");
 }
 
+async function startServerService(
+  transport: AdbSessionTransport,
+): Promise<void> {
+  const result = await transport.shell(
+    shellCommand([
+      "content",
+      "call",
+      "--uri",
+      SERVER_MAINTENANCE_URI,
+      "--method",
+      "START",
+    ]),
+  );
+  ensureShellSuccess(result, "Failed to start the Pin server after update.");
+}
+
 export async function stageSystemApkBatchInstall(
   transport: AdbSessionTransport,
   apks: readonly StageSystemApkBatchInstallItem[],
@@ -1337,6 +1357,7 @@ export async function stageSystemApkBatchInstall(
       },
       repairHookRuntimePolicy: () => repairHookRuntimePolicy(transport),
       injectConfiguredTargets: () => injectConfiguredTargets(transport),
+      startServerService: () => startServerService(transport),
     });
   } catch (error) {
     const restorationFailures: string[] = [];

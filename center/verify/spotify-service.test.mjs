@@ -55,6 +55,7 @@ test("YouTube player requests use the authenticated Pin egress route", async () 
       method: "POST",
       headers: {
         "content-type": "application/json",
+        "x-user-agent": "bgutils/4.0.3",
         "x-youtube-client-name": "67",
       },
       body: JSON.stringify({ videoId: "Zi_XLOBDo_Y" }),
@@ -78,6 +79,7 @@ test("YouTube player requests use the authenticated Pin egress route", async () 
   assert.equal(relayed.provider, "youtube_music");
   assert.equal(relayed.method, "POST");
   assert.equal(relayed.url, "https://youtubei.googleapis.com/youtubei/v1/player");
+  assert.equal(relayed.headers["x-user-agent"], "bgutils/4.0.3");
   assert.equal(relayed.headers["x-youtube-client-name"], "67");
   assert.equal(
     Buffer.from(relayed.body_base64, "base64").toString("utf8"),

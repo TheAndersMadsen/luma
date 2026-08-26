@@ -41,6 +41,7 @@ const REQUEST_HEADERS: &[&str] = &[
     "x-goog-authuser",
     "x-goog-visitor-id",
     "x-origin",
+    "x-user-agent",
     "x-youtube-bootstrap-logged-in",
     "x-youtube-client-name",
     "x-youtube-client-version",
@@ -244,6 +245,7 @@ mod tests {
             url: url.into(),
             headers: BTreeMap::from([
                 ("content-type".into(), "application/json".into()),
+                ("x-user-agent".into(), "bgutils/4.0.3".into()),
                 ("x-youtube-client-name".into(), "67".into()),
             ]),
             body_base64: Some(STANDARD.encode(br#"{"videoId":"Zi_XLOBDo_Y"}"#)),
