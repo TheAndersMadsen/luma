@@ -736,6 +736,13 @@ check_unit() {
   unset REVIVAL_PIN_PRIVATE_ASSETS_DIR
   prepare_credential_free_lane check
   prepare_workspace
+  # The Server module resolves its operator-supplied assets during
+  # configuration, so its JVM tests need an absolute external directory even
+  # though this lane never reads a byte out of it.
+  REVIVAL_PIN_PRIVATE_ASSETS_DIR="${STATE_ROOT}/empty-private-assets"
+  export REVIVAL_PIN_PRIVATE_ASSETS_DIR
+  mkdir -p "${REVIVAL_PIN_PRIVATE_ASSETS_DIR}"
+  unset REVIVAL_TFLITE_RUNTIME_BINARY
   (
     cd "${WORK_ROOT}/runtime/core"
     CARGO_TARGET_DIR="${STATE_ROOT}/cargo-runtime-target" \
@@ -751,7 +758,9 @@ check_unit() {
     ./gradlew --no-daemon \
       --project-cache-dir "${STATE_ROOT}/gradle-contracts" \
       :contracts:stock-aibus:testDebugUnitTest \
-      :contracts:penumbra-ipc:testDebugUnitTest
+      :contracts:penumbra-ipc:testDebugUnitTest \
+      :runtime:android:testDebugUnitTest \
+      -x :runtime:android:buildRustServerAndroid
     ./injector/gradlew --no-daemon \
       --project-cache-dir "${STATE_ROOT}/gradle-injector" \
       -p injector \

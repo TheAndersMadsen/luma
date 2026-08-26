@@ -1,6 +1,9 @@
 package com.penumbraos.server
 
+import java.io.ByteArrayOutputStream
+import java.io.DataOutputStream
 import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
@@ -71,6 +74,49 @@ class PersistentConfigVaultFormatTest {
         assertThrows(IllegalArgumentException::class.java) {
             PersistentConfigVaultFormat.encode(1, invalid)
         }
+    }
+
+    @Test
+    fun dropsArtifactRetiredByAnEarlierRelease() {
+        val expected = validFiles()
+        val encoded = encodeWithExtraArtifact(
+            generation = 9,
+            files = expected,
+            extraName = "codex-auth.json",
+            extraBytes = "{\"tokens\":{}}\n".toByteArray(StandardCharsets.US_ASCII),
+        )
+
+        val decoded = PersistentConfigVaultFormat.decode(encoded)
+
+        assertEquals(9, decoded.generation)
+        assertEquals(expected.keys, decoded.files.keys)
+        for ((name, bytes) in expected) {
+            assertArrayEquals(name, bytes, decoded.files[name])
+        }
+    }
+
+    /** Writes the on-disk bundle exactly as a release owning [extraName] did. */
+    private fun encodeWithExtraArtifact(
+        generation: Long,
+        files: Map<String, ByteArray>,
+        extraName: String,
+        extraBytes: ByteArray,
+    ): ByteArray {
+        val payloadBuffer = ByteArrayOutputStream()
+        DataOutputStream(payloadBuffer).use { output ->
+            output.write("PENUMBRA_CONFIG_VAULT\u0000".toByteArray(StandardCharsets.US_ASCII))
+            output.writeInt(1)
+            output.writeLong(generation)
+            val ordered = (files + (extraName to extraBytes)).toSortedMap()
+            output.writeInt(ordered.size)
+            for ((name, bytes) in ordered) {
+                output.writeUTF(name)
+                output.writeInt(bytes.size)
+                output.write(bytes)
+            }
+        }
+        val payload = payloadBuffer.toByteArray()
+        return payload + MessageDigest.getInstance("SHA-256").digest(payload)
     }
 
     private fun validFiles(): Map<String, ByteArray> {
