@@ -45,6 +45,12 @@ export function deviceErrorMessage(error: unknown, fallback: string): string {
     if (error.status === 0) {
       return "Couldn’t reach your Pin. Check its connection and try again.";
     }
+    // The remote link carries a reviewed set of routes, so a refusal there is
+    // not the Pin declining anything; saying "reconnect" sends the wearer to
+    // fix a connection that is already healthy.
+    if (error.status === 403 && /bridge policy/i.test(detail)) {
+      return "Connect your Pin with a cable to see this. The remote link carries only setup and playback controls.";
+    }
     if (error.status === 401 || error.status === 403) {
       return "Your Pin didn’t accept that request. Reconnect it and try again.";
     }

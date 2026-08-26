@@ -163,8 +163,8 @@ export default function PinGalleryPane() {
 
   /*
    * The device answered once and then stopped. This is not an empty gallery and
-   * must not look like one — the captures are still on the Pin, Center just
-   * cannot read them until the server comes back.
+   * must not look like one. It is not evidence that captures exist either: this
+   * pane cannot tell, so it must not claim they are waiting on the Pin.
    */
   if (serviceStatus === "offline") {
     return (
@@ -174,8 +174,8 @@ export default function PinGalleryPane() {
             {/* The banner in the console layout already names the condition
                 once, for whichever pane is mounted. This says what it means
                 HERE — an unreadable gallery must never read as an empty one. */}
-            The photos and videos are still on this Pin. They can&rsquo;t be listed until its
-            server answers again.
+            Center can&rsquo;t read this Pin&rsquo;s captures right now, so this is not an
+            empty gallery. Whatever the Pin holds stays on it; connect a cable to browse.
           </StatusMessage>
         </div>
       </PaneSection>
