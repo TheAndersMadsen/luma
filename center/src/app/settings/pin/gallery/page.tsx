@@ -65,6 +65,19 @@ function isUnsupported(error: unknown): boolean {
   );
 }
 
+/**
+ * The remote link forwards a reviewed set of routes and refuses the rest, so
+ * this failure means the cable is the only way to reach the gallery — not that
+ * anything is wrong with the Pin.
+ */
+function isRemoteRouteRefused(error: unknown): boolean {
+  return (
+    error instanceof PinApiError &&
+    error.status === 403 &&
+    /bridge policy/i.test(error.body)
+  );
+}
+
 function GalleryTile({ memory }: { memory: MemoryRecord }) {
   const { client } = usePinPaneSession();
   const addressable = isCanonicalMemoryId(memory.uuid);
@@ -184,16 +197,23 @@ export default function PinGalleryPane() {
 
   if (memoriesQuery.isError) {
     const unsupported = isUnsupported(memoriesQuery.error);
+    const remoteRefused = isRemoteRouteRefused(memoriesQuery.error);
     return (
       <PaneSection title="Captures on this Pin" testId="pin-gallery">
         <div className={settings.stateRow}>
           <StatusMessage
             tone="warning"
-            onRetry={unsupported ? undefined : () => void memoriesQuery.refetch()}
+            onRetry={
+              unsupported || remoteRefused
+                ? undefined
+                : () => void memoriesQuery.refetch()
+            }
           >
             {unsupported
               ? "This Pin's software does not serve a device gallery yet. Install a newer release over the same USB session."
-              : "Could not read the capture list from the Pin."}
+              : remoteRefused
+                ? "Connect this Pin with a cable to browse its captures. The remote link carries only setup and playback controls."
+                : "Could not read the capture list from the Pin."}
           </StatusMessage>
         </div>
       </PaneSection>
