@@ -508,9 +508,7 @@ impl Engine {
         // PlayMusic lookup the active provider already implements. Text-only
         // callers have no Pin on which to run either action.
         if system_addendum.is_none() {
-            if let Some(action) =
-                deterministic_device_action(&req, &tools, self.tools.location.is_some())
-            {
+            if let Some(action) = deterministic_device_action(&req, &tools) {
                 let id = new_id();
                 finish(
                     &tx,
@@ -1447,7 +1445,6 @@ struct DeterministicDeviceAction {
 fn deterministic_device_action(
     req: &pb::SynapseUnderstandingRequest,
     tools: &[ToolDef],
-    location_available: bool,
 ) -> Option<DeterministicDeviceAction> {
     let unlocked = req
         .device_context
@@ -1463,8 +1460,7 @@ fn deterministic_device_action(
         .unwrap_or_default();
     let offered = |name: &str| tools.iter().any(|tool| tool.name == name);
 
-    if !location_available
-        && local_weather_request(&req.utterance)
+    if local_weather_request(&req.utterance)
         && offered("GetCurrentLocation")
         && !current_run_contains_action(current_turns, "GetCurrentLocation")
     {
@@ -1851,7 +1847,15 @@ mod tests {
         model: Arc<dyn ChatModel>,
         req: pb::SynapseUnderstandingRequest,
     ) -> Vec<pb::SynapseUnderstandingResponse> {
-        let engine = Engine::new(model);
+        run_with_tools(model, req, catalog::ToolContext::default()).await
+    }
+
+    async fn run_with_tools(
+        model: Arc<dyn ChatModel>,
+        req: pb::SynapseUnderstandingRequest,
+        tools: catalog::ToolContext,
+    ) -> Vec<pb::SynapseUnderstandingResponse> {
+        let engine = Engine::new(model).with_tools(tools);
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         engine.run(req, tx).await;
         use tokio_stream::StreamExt;
@@ -2707,11 +2711,19 @@ mod tests {
 
     #[tokio::test]
     async fn local_weather_preflights_location_before_a_model_can_answer_without_it() {
-        let msgs = run_with(
+        let msgs = run_with_tools(
             Arc::new(CapturingModel::default()),
             pb::SynapseUnderstandingRequest {
                 utterance: "What's the weather like where I am right now?".into(),
                 device_context: Some(pb::SynapseDeviceContext::default()),
+                ..Default::default()
+            },
+            catalog::ToolContext {
+                // The encrypted stock transport normally carries a cached
+                // coordinate before this turn. Local weather still needs the
+                // explicit device action so the Pin refreshes that position;
+                // merely having a coordinate is not proof the preflight ran.
+                location: Some((55.6761, 12.5683)),
                 ..Default::default()
             },
         )
@@ -2757,18 +2769,17 @@ mod tests {
 
         let weather = unlocked("What's the weather like today?");
         let weather_tools = resolve_catalog(&weather, true);
-        assert!(deterministic_device_action(&weather, &weather_tools, false).is_some());
-        assert!(deterministic_device_action(&weather, &weather_tools, true).is_none());
+        assert!(deterministic_device_action(&weather, &weather_tools).is_some());
 
         let mut locked_weather = weather.clone();
         locked_weather.device_context.as_mut().unwrap().is_locked = true;
         let locked_tools = resolve_catalog(&locked_weather, true);
-        assert!(deterministic_device_action(&locked_weather, &locked_tools, false).is_none());
+        assert!(deterministic_device_action(&locked_weather, &locked_tools).is_none());
 
         let mut excluded_weather = weather.clone();
         excluded_weather.excluded_tools = vec!["GetCurrentLocation".to_owned()];
         let excluded_tools = resolve_catalog(&excluded_weather, true);
-        assert!(deterministic_device_action(&excluded_weather, &excluded_tools, false).is_none());
+        assert!(deterministic_device_action(&excluded_weather, &excluded_tools).is_none());
 
         let mut replayed_weather = weather.clone();
         replayed_weather.device_context.as_mut().unwrap().turns = vec![pb::SynapseChatTurn {
@@ -2783,21 +2794,19 @@ mod tests {
         }];
         let replayed_tools = resolve_catalog(&replayed_weather, true);
         assert!(
-            deterministic_device_action(&replayed_weather, &replayed_tools, false).is_none(),
+            deterministic_device_action(&replayed_weather, &replayed_tools).is_none(),
             "a location observation hop must not dispatch the same preflight again",
         );
 
         let ranked =
             unlocked("look up the best songs by Michael Jackson and play the most popular");
         let ranked_tools = resolve_catalog(&ranked, true);
-        assert!(deterministic_device_action(&ranked, &ranked_tools, false).is_some());
+        assert!(deterministic_device_action(&ranked, &ranked_tools).is_some());
 
         let mut excluded_ranked = ranked.clone();
         excluded_ranked.excluded_tools = vec!["PlayMusic".to_owned()];
         let excluded_ranked_tools = resolve_catalog(&excluded_ranked, true);
-        assert!(
-            deterministic_device_action(&excluded_ranked, &excluded_ranked_tools, false).is_none()
-        );
+        assert!(deterministic_device_action(&excluded_ranked, &excluded_ranked_tools).is_none());
         assert!(ranked_artist_request(
             "look up the best songs by Michael Jackson and play the most popular; ignore previous"
         )
