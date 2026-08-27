@@ -12,6 +12,7 @@ const require = createRequire(import.meta.url);
 const {
   BUILD_DIR,
   cosmosTestEnvironment,
+  conventionalAndroidSdk,
   operatorEnvironment,
   testProcessEnvironment,
 } = require("../../cli/context.js");
@@ -146,6 +147,22 @@ test("test environments configure compiler and package cache paths outside the r
   assert.equal(cosmos.CARGO_TARGET_DIR, path.join(BUILD_DIR, "cosmos-target"));
   assert.equal(environment.ANDROID_HOME, "/opt/android-sdk");
   assert.equal(environment.ANDROID_SDK_ROOT, "/opt/android-sdk");
+});
+
+test("the conventional Android SDK is discovered without a source-local properties file", () => {
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "revival-android-home-"));
+  try {
+    const macSdk = path.join(temporary, "Library", "Android", "sdk");
+    fs.mkdirSync(macSdk, { recursive: true });
+    assert.equal(conventionalAndroidSdk("darwin", temporary), macSdk);
+
+    fs.rmSync(macSdk, { recursive: true });
+    const linuxSdk = path.join(temporary, "Android", "Sdk");
+    fs.mkdirSync(linuxSdk, { recursive: true });
+    assert.equal(conventionalAndroidSdk("linux", temporary), linuxSdk);
+  } finally {
+    fs.rmSync(temporary, { recursive: true, force: true });
+  }
 });
 
 test("Cosmos convenience targets delegate to the root Revival CLI", () => {

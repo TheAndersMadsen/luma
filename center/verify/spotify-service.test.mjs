@@ -696,6 +696,8 @@ test("Services renders every Pin-native state, polling and settings fallback", a
   assert.match(view, /Apple Music playback is unavailable until its official Android runtime exists/);
   assert.match(view, /disabled=\{!provider\.playbackAvailable\}/);
   assert.match(view, /Pair My Ai Pin/);
+  assert.match(view, /href="\/settings\/pin\/setup"/);
+  assert.doesNotMatch(view, /href="\/settings\/account\/devices"/);
   assert.match(view, /status\.state === "unavailable"/);
   assert.match(view, /providerAccountState\(status, activeProvider\)/);
   assert.match(view, /\$\{providerLabel\} is connected to Center/);

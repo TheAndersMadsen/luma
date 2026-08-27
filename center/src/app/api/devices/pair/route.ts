@@ -1,5 +1,10 @@
 import { cookies } from "next/headers";
-import { AUTH_ENABLED, SESSION_COOKIE, verifySession } from "@/server/auth";
+import {
+  AUTH_ENABLED,
+  isSameOriginRequest,
+  SESSION_COOKIE,
+  verifySession,
+} from "@/server/auth";
 import {
   COSMOS_ADMIN_ENABLED,
   COSMOS_WEBAPI,
@@ -84,6 +89,12 @@ export async function POST(request: Request) {
     if (!session) {
       return Response.json({ error: "Not authenticated." }, { status: 401 });
     }
+    if (!isSameOriginRequest(request)) {
+      return Response.json(
+        { error: "A same-origin request is required." },
+        { status: 403 },
+      );
+    }
 
     if (!COSMOS_ADMIN_ENABLED) {
       return Response.json(
@@ -141,6 +152,12 @@ export async function DELETE(request: Request) {
     const jar = await cookies();
     const session = await verifySession(jar.get(SESSION_COOKIE)?.value);
     if (!session) return Response.json({ error: "Not authenticated." }, { status: 401 });
+    if (!isSameOriginRequest(request)) {
+      return Response.json(
+        { error: "A same-origin request is required." },
+        { status: 403 },
+      );
+    }
 
     const body = (await request.json().catch(() => ({}))) as { device_id?: string };
     const deviceId = (body.device_id ?? "").trim();

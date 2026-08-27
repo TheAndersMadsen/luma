@@ -153,16 +153,10 @@ export async function connectedDeviceId(session: AdbSessionTransport): Promise<s
   return deviceId;
 }
 
-export async function activateConnectedPin(
+async function preflightConnectedPinActivation(
   session: AdbSessionTransport,
-  bundle: ActivationBundle,
-  edgeIpv4: string | null,
-  deviceStatusEndpoint: string | null,
-): Promise<ActivationStatus> {
+): Promise<string> {
   const deviceId = await connectedDeviceId(session);
-  if (deviceId !== bundle.device_id.trim().toLowerCase()) {
-    throw new Error("The activation identity does not match the connected Pin.");
-  }
   const unlocked = (await shell(
     session,
     ["getprop", "sys.user.0.ce_available"],
@@ -170,6 +164,28 @@ export async function activateConnectedPin(
   )).trim().toLowerCase();
   if (unlocked !== "1" && unlocked !== "true") {
     throw new Error("Unlock the Pin, then try again.");
+  }
+
+  const status = parseActivationStatus(await shell(
+    session,
+    ["content", "call", "--uri", PROVIDER_URI, "--method", "ACTIVATION_STATUS"],
+    "Install the current Revival release on this Pin, then try again.",
+  ));
+  if (!status.ok) {
+    throw new Error("Install the current Revival release on this Pin, then try again.");
+  }
+  return deviceId;
+}
+
+async function activatePreflightedPin(
+  session: AdbSessionTransport,
+  bundle: ActivationBundle,
+  deviceId: string,
+  edgeIpv4: string | null,
+  deviceStatusEndpoint: string | null,
+): Promise<ActivationStatus> {
+  if (deviceId !== bundle.device_id.trim().toLowerCase()) {
+    throw new Error("The activation identity does not match the connected Pin.");
   }
 
   const prepared = await buildActivationEnvelope(bundle, edgeIpv4, deviceStatusEndpoint);
@@ -211,4 +227,36 @@ export async function activateConnectedPin(
     status.deviceStatusEndpoint !== expectedStatusEndpoint
   ) throw new Error("Activation finished, but the Pin did not verify the requested Cosmos identity.");
   return status;
+}
+
+/** Readiness is proven before Cosmos mints the private key it never stores. */
+export async function provisionConnectedPin(
+  session: AdbSessionTransport,
+  operations: {
+    pairDevice: (deviceId: string) => Promise<void>;
+    issueBundle: (deviceId: string) => Promise<ActivationBundle>;
+  },
+  edgeIpv4: string | null,
+  deviceStatusEndpoint: string | null,
+): Promise<ActivationStatus> {
+  const deviceId = await preflightConnectedPinActivation(session);
+  await operations.pairDevice(deviceId);
+  const bundle = await operations.issueBundle(deviceId);
+  return activatePreflightedPin(
+    session,
+    bundle,
+    deviceId,
+    edgeIpv4,
+    deviceStatusEndpoint,
+  );
+}
+
+export async function activateConnectedPin(
+  session: AdbSessionTransport,
+  bundle: ActivationBundle,
+  edgeIpv4: string | null,
+  deviceStatusEndpoint: string | null,
+): Promise<ActivationStatus> {
+  const deviceId = await preflightConnectedPinActivation(session);
+  return activatePreflightedPin(session, bundle, deviceId, edgeIpv4, deviceStatusEndpoint);
 }

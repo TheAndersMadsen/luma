@@ -1,5 +1,6 @@
 "use client";
 
+import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useState } from "react";
 
 import { ErrorState, SectionSkeleton } from "@/components/States";
@@ -7,7 +8,7 @@ import { StatusChip, StatusMessage } from "@/components/Status";
 import { usePinDevice } from "../PinDeviceProvider";
 import settings from "../../settings.module.css";
 import { createActivationBundleJson } from "./activationBundle";
-import { activateConnectedPin, connectedDeviceId } from "./browserActivation";
+import { connectedDeviceId, provisionConnectedPin } from "./browserActivation";
 import styles from "./provision.module.css";
 import type { ActivationBundle, ProvisioningOverview } from "./types";
 
@@ -45,6 +46,7 @@ function download(name: string, text: string) {
 }
 
 export default function ProvisioningView() {
+  const queryClient = useQueryClient();
   const pin = usePinDevice();
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [overview, setOverview] = useState<ProvisioningOverview | null>(null);
@@ -137,17 +139,42 @@ export default function ProvisioningView() {
     setProvisionError(null);
     try {
       const session = pin.borrowSession();
-      const id = await connectedDeviceId(session);
-      setDeviceId(id);
-      const issued = await issueBundle(id);
-      await activateConnectedPin(
+      await provisionConnectedPin(
         session,
-        issued,
+        {
+          async pairDevice(id) {
+            const response = await fetch("/api/devices/pair", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ device_id: id }),
+            });
+            const body = (await response.json().catch(() => null)) as { error?: unknown } | null;
+            if (!response.ok) {
+              throw new Error(
+                typeof body?.error === "string"
+                  ? body.error
+                  : "Center could not pair this Pin with your account.",
+              );
+            }
+          },
+          async issueBundle(id) {
+            setDeviceId(id);
+            return issueBundle(id);
+          },
+        },
         overview?.device_edge_ipv4 ?? null,
         overview?.device_status_endpoint ?? null,
       );
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["pin-setup"] }),
+        queryClient.invalidateQueries({ queryKey: ["paired-pins"] }),
+        queryClient.invalidateQueries({ queryKey: ["device-status"] }),
+      ]);
       setBundle(null);
-      setActivationMessage({ tone: "info", text: "This Pin is connected to Cosmos." });
+      setActivationMessage({
+        tone: "info",
+        text: "This Pin is connected to Cosmos and paired with your account.",
+      });
     } catch (error) {
       setActivationMessage({ tone: "danger", text: error instanceof Error ? error.message : "Center could not activate this Pin." });
     } finally {
@@ -246,7 +273,7 @@ export default function ProvisioningView() {
             <div className={styles.directHeader}>
               <span>
                 <strong>{pin.status === "connected" ? pin.connectionInfo?.name || "Ai Pin" : "Connect your Ai Pin"}</strong>
-                <small>Center installs its Cosmos identity and server address over USB.</small>
+                <small>Center pairs this Pin to your account and installs its Cosmos identity over USB.</small>
               </span>
               <StatusChip
                 tone={pin.status === "connected" ? "live" : "off"}

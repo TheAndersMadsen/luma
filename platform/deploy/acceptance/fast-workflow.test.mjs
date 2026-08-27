@@ -364,6 +364,7 @@ test("Pin check runs direct contributor checks", () => {
   assert.equal(pinGradle[2][0], path.join(root, "pin", "gradlew"));
   assert.equal(pinGradle[2][1], "--no-daemon");
   assert.equal(pinGradle[2].includes(":hook:payload:testDebugUnitTest"), true);
+  assert.equal(pinGradle[2].includes(":hook:loader:testDebugUnitTest"), true);
   assert.match(
     injectorGradle[0],
     new RegExp(`^Pin contributor check: bash ${path.join(root, "pin", "injector", "gradlew")} --no-daemon --project-cache-dir `),
@@ -481,6 +482,7 @@ test("platform policy files share one bounded-concurrency runner", () => {
     "utf8",
   );
   assert.match(entrypoint, /:hook:payload:testDebugUnitTest/u);
+  assert.match(entrypoint, /:hook:loader:testDebugUnitTest/u);
 });
 
 test("stage timings are concise and preserve the action result", () => {

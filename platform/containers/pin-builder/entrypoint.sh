@@ -760,6 +760,7 @@ check_unit() {
       :contracts:stock-aibus:testDebugUnitTest \
       :contracts:penumbra-ipc:testDebugUnitTest \
       :hook:payload:testDebugUnitTest \
+      :hook:loader:testDebugUnitTest \
       :runtime:android:testDebugUnitTest \
       -x :runtime:android:buildRustServerAndroid
     ./injector/gradlew --no-daemon \

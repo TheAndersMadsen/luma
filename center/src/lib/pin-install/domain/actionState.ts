@@ -26,14 +26,20 @@ function isNewerThanTarget(pkg: ManagedPackageInspection) {
 
 export function deriveInstallActionState(input: InstallActionStateInput): InstallActionState {
   const packages = Object.values(input.packages);
+  // A healthy canonical installer is privileged infrastructure, not a normal
+  // release payload. Routine installs deliberately retain it at its installed
+  // version; only Hook, Server, and Injector move with the selected release.
+  // Structural installer failures still select Repair below, but its version
+  // must not invent an Update that has no runtime package to update.
+  const runtimePackages = packages.filter((pkg) => pkg.role !== "installer");
   const installedPackages = packages.filter((pkg) => pkg.installed);
   const anyInstalled = installedPackages.length > 0;
   const allInstalled = installedPackages.length === packages.length;
   const missingPackages = packages.filter(isPackageMissing);
   const brokenPackages = packages.filter(isPackageBroken);
-  const unreadablePackages = packages.filter(hasUnreadableVersion);
-  const olderPackages = packages.filter(isOlderThanTarget);
-  const newerPackages = packages.filter(isNewerThanTarget);
+  const unreadablePackages = runtimePackages.filter(hasUnreadableVersion);
+  const olderPackages = runtimePackages.filter(isOlderThanTarget);
+  const newerPackages = runtimePackages.filter(isNewerThanTarget);
   const reasons: string[] = [];
 
   if (!anyInstalled) {
@@ -77,11 +83,11 @@ export function deriveInstallActionState(input: InstallActionStateInput): Instal
 
   if (olderPackages.length > 0 || unreadablePackages.length > 0) {
     if (olderPackages.length > 0) {
-      reasons.push("One or more managed packages are older than the selected target.");
+      reasons.push("One or more runtime packages are older than the selected target.");
     }
 
     if (unreadablePackages.length > 0) {
-      reasons.push("One or more managed package versions are unreadable.");
+      reasons.push("One or more runtime package versions are unreadable.");
     }
 
     return {
@@ -95,9 +101,9 @@ export function deriveInstallActionState(input: InstallActionStateInput): Instal
   }
 
   if (newerPackages.length > 0) {
-    reasons.push("One or more managed packages are newer than the selected target.");
+    reasons.push("One or more runtime packages are newer than the selected target.");
   } else {
-    reasons.push("All managed packages match the selected target.");
+    reasons.push("All runtime packages match the selected target; the healthy installer is retained separately.");
   }
 
   return {

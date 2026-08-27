@@ -995,7 +995,7 @@ export function describePlan(plan, target) {
     "bootstrap-recovery": "installer bootstrap recovery (destructive)",
   };
   line(`  migration        ${plan.kind} — ${kinds[plan.kind]}`);
-  line(`  packages         ${plan.packageRoles.length > 0 ? plan.packageRoles.join(", ") : "(none; already at target)"}`);
+  line(`  packages         ${plan.packageRoles.length > 0 ? plan.packageRoles.join(", ") : "(none; runtime packages are current)"}`);
   line(`  keeping data of  ${plan.expectedExistingPackageNames.join(", ") || "(nothing; every package is new)"}`);
   line(`  assets to load   ${plan.requiredAssetRoles.join(", ") || "(none)"}`);
   line(
@@ -1023,7 +1023,9 @@ export function describePlan(plan, target) {
       ? "disable the configured stock/system packages"
       : "skipped for a targeted update",
     Configure: plan.shouldSetHomeActivity ? "set the default launcher" : "skipped for a targeted update",
-    Verify: "re-inspect and require every managed package to match the target",
+    Verify: plan.verificationPolicy.mode === "in-place"
+      ? "re-inspect runtime packages at target and require the retained installer to stay unchanged"
+      : "re-inspect and require every managed package to match the target",
   };
   for (const [index, phase] of INSTALL_OPERATION_PHASES.entries()) {
     line(`    ${index + 1}. ${pad(phase, 10)}${steps[phase]}`);

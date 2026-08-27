@@ -9,6 +9,7 @@ import {
 import {
   buildActivationEnvelope,
   parseActivationStatus,
+  provisionConnectedPin,
 } from "../src/app/settings/pin/provision/browserActivation.ts";
 
 test("provisioning downloads one activation document with the complete certificate chain", () => {
@@ -73,10 +74,228 @@ test("provisioning prefers direct browser activation and keeps the file as a fal
   );
   assert.match(source, /Connect this Pin to Cosmos/u);
   assert.match(source, /Create an activation file instead/u);
-  assert.match(source, /activateConnectedPin/u);
+  assert.match(source, /provisionConnectedPin/u);
   assert.match(source, /isActivationBundle/u);
   assert.match(source, /maxLength=\{128\}/u);
   assert.doesNotMatch(source, /commands\.plan|commands\.confirm|Move .*0700/u);
   assert.doesNotMatch(source, /device\.crt|device\.key|Complete OPAQUE/u);
   assert.doesNotMatch(source, /in this repository/u);
+});
+
+test("direct activation keeps the pairing service's actionable failure message", () => {
+  const source = readFileSync(
+    new URL("../src/app/settings/pin/provision/ProvisioningView.tsx", import.meta.url),
+    "utf8",
+  );
+  const pairDevice = /async pairDevice\(id\) \{([\s\S]*?)\n\s*\},\n\s*async issueBundle/u.exec(source)?.[1];
+  assert.ok(pairDevice, "direct activation is missing its pairing operation");
+  assert.match(pairDevice, /await response\.json\(\)\.catch/u);
+  assert.match(pairDevice, /typeof .*error.*=== "string"/u);
+  assert.doesNotMatch(
+    pairDevice,
+    /if \(!response\.ok\) \{\s*throw new Error\("Center could not pair this Pin with your account\."\);/u,
+  );
+});
+
+test("successful direct activation refreshes every Guided Setup cache before reporting success", () => {
+  const source = readFileSync(
+    new URL("../src/app/settings/pin/provision/ProvisioningView.tsx", import.meta.url),
+    "utf8",
+  );
+  const activatePin = /async function activatePin\(\) \{([\s\S]*?)\n  \}\n\n  if \(loadState/u.exec(source)?.[1];
+  assert.ok(activatePin, "direct activation is missing its success handler");
+  assert.match(source, /import \{ useQueryClient \} from "@tanstack\/react-query"/u);
+  assert.match(source, /const queryClient = useQueryClient\(\)/u);
+  assert.match(activatePin, /queryClient/u);
+  assert.match(activatePin, /await Promise\.all/u);
+  assert.match(activatePin, /queryKey: \["pin-setup"\]/u);
+  assert.match(activatePin, /queryKey: \["paired-pins"\]/u);
+  assert.match(activatePin, /queryKey: \["device-status"\]/u);
+  assert.ok(
+    activatePin.indexOf('queryKey: ["device-status"]')
+      < activatePin.indexOf("This Pin is connected to Cosmos and paired with your account."),
+    "Guided Setup caches must refresh before activation reports success",
+  );
+});
+
+test("the owner guide uses direct Center activation as the normal path", () => {
+  const readme = readFileSync(new URL("../../README.md", import.meta.url), "utf8");
+  const section = /### 5\. Activate and prove the device\n([\s\S]*?)(?=\n## )/u.exec(readme)?.[1];
+  assert.ok(section, "README is missing the Pin activation section");
+  assert.match(section, /Connect this Pin to Cosmos/u);
+  assert.match(section, /activation file.*fallback/iu);
+  assert.doesNotMatch(section, /create and download the\s+one-time activation document/iu);
+  assert.doesNotMatch(section, /Disconnect the Pin in Center|pin activate status/iu);
+});
+
+test("direct activation does not mint a one-time key before device preflight", async () => {
+  let issued = 0;
+  const lockedSession = {
+    async shell(command) {
+      if (command.includes("ro.boot.deviceid")) {
+        return { stdout: "00aa11bb\n", stderr: "", exitCode: 0 };
+      }
+      if (command.includes("sys.user.0.ce_available")) {
+        return { stdout: "0\n", stderr: "", exitCode: 0 };
+      }
+      throw new Error(`unexpected command ${command.join(" ")}`);
+    },
+  };
+
+  await assert.rejects(
+    provisionConnectedPin(
+      lockedSession,
+      {
+        async pairDevice() {
+          throw new Error("pairing must not run before device preflight");
+        },
+        async issueBundle() {
+          issued += 1;
+          throw new Error("one-time key must not be minted");
+        },
+      },
+      "203.0.113.42",
+      "https://center.example/device-status/v1/report",
+    ),
+    /Unlock the Pin/,
+  );
+  assert.equal(issued, 0);
+});
+
+test("direct activation pairs the account before minting a one-time key", async () => {
+  const calls = [];
+  const readySession = {
+    async shell(command) {
+      if (command.includes("ro.boot.deviceid")) {
+        return { stdout: "00aa11bb\n", stderr: "", exitCode: 0 };
+      }
+      if (command.includes("sys.user.0.ce_available")) {
+        return { stdout: "1\n", stderr: "", exitCode: 0 };
+      }
+      if (command.includes("ACTIVATION_STATUS")) {
+        return {
+          stdout: "Result: Bundle[{ok=true, state=inactive, consistent=true, managed=false, remote_gate_enabled=false, target_matches=false, present=false, identity_usable=false}]\n",
+          stderr: "",
+          exitCode: 0,
+        };
+      }
+      throw new Error(`unexpected command ${command.join(" ")}`);
+    },
+  };
+
+  await assert.rejects(
+    provisionConnectedPin(
+      readySession,
+      {
+        async pairDevice(id) {
+          calls.push(`pair:${id}`);
+          throw new Error("pairing failed");
+        },
+        async issueBundle(id) {
+          calls.push(`issue:${id}`);
+          throw new Error("one-time key must not be minted");
+        },
+      },
+      "203.0.113.42",
+      "https://center.example/device-status/v1/report",
+    ),
+    /pairing failed/,
+  );
+  assert.deepEqual(calls, ["pair:00aa11bb"]);
+});
+
+test("direct activation completes one exact preflight, pairing, issuance, install, and verification transaction", async () => {
+  const calls = [];
+  const certificate = "-----BEGIN CERTIFICATE-----\nAQID\n-----END CERTIFICATE-----\n";
+  const fingerprint = "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81";
+  let statusReads = 0;
+  const session = {
+    async shell(command) {
+      if (command.includes("ro.boot.deviceid")) {
+        calls.push("device-id");
+        return { stdout: "00aa11bb\n", stderr: "", exitCode: 0 };
+      }
+      if (command.includes("sys.user.0.ce_available")) {
+        calls.push("unlocked");
+        return { stdout: "1\n", stderr: "", exitCode: 0 };
+      }
+      if (command.includes("ACTIVATE")) {
+        calls.push("activate");
+        return {
+          stdout: "Result: Bundle[{ok=true, state=activated}]\n",
+          stderr: "",
+          exitCode: 0,
+        };
+      }
+      if (command.includes("ACTIVATION_STATUS")) {
+        statusReads += 1;
+        calls.push(statusReads === 1 ? "status:preflight" : "status:verify");
+        return statusReads === 1
+          ? {
+              stdout: "Result: Bundle[{ok=true, state=inactive, consistent=true, managed=false, remote_gate_enabled=false, target_matches=false, present=false, identity_usable=false}]\n",
+              stderr: "",
+              exitCode: 0,
+            }
+          : {
+              stdout: `Result: Bundle[{ok=true, state=active, consistent=true, managed=true, remote_gate_enabled=true, target_matches=true, present=true, identity_usable=true, edge_ipv4=203.0.113.42, fingerprint_sha256=${fingerprint}, root_certificate_sha256=${fingerprint}, api_endpoint=https://api.cosmos.humane.cloud, onboarding_endpoint=https://onboarding.cosmos.humane.cloud, device_status_endpoint=https://center.example/device-status/v1/report}]\n`,
+              stderr: "",
+              exitCode: 0,
+            };
+      }
+      throw new Error(`unexpected command ${command.join(" ")}`);
+    },
+    async shellWithInput(command, body) {
+      calls.push("stage");
+      assert.deepEqual(command, [
+        "content",
+        "write",
+        "--uri",
+        "content://com.penumbraos.server.cosmosidentity/attestation.json",
+      ]);
+      const envelope = JSON.parse(await body.text());
+      assert.equal(envelope.device_id, "00aa11bb");
+      assert.equal(envelope.edge_ipv4, "203.0.113.42");
+      assert.equal(envelope.private_key_pem, "private");
+      return { stdout: "", stderr: "", exitCode: 0 };
+    },
+  };
+
+  const status = await provisionConnectedPin(
+    session,
+    {
+      async pairDevice(id) {
+        calls.push(`pair:${id}`);
+      },
+      async issueBundle(id) {
+        calls.push(`issue:${id}`);
+        return {
+          device_id: id,
+          subject: `V:01:D:${id}:P:00000001`,
+          certificate_pem: certificate,
+          private_key_pem: "private",
+          ca_certificate_pem: certificate,
+          root_certificate_pem: certificate,
+          pincode: "secret-pin",
+          onboarding: {
+            endpoint: "https://onboarding.cosmos.humane.cloud",
+            authority: "example",
+          },
+        };
+      },
+    },
+    "203.0.113.42",
+    "https://center.example/device-status/v1/report",
+  );
+
+  assert.equal(status.state, "active");
+  assert.deepEqual(calls, [
+    "device-id",
+    "unlocked",
+    "status:preflight",
+    "pair:00aa11bb",
+    "issue:00aa11bb",
+    "stage",
+    "activate",
+    "status:verify",
+  ]);
 });

@@ -67,7 +67,8 @@ function runPinContributorChecks(runner, environment) {
     '--project-cache-dir', gradleProjectCache,
     ':contracts:stock-aibus:testDebugUnitTest',
     ':contracts:penumbra-ipc:testDebugUnitTest',
-    ':hook:payload:testDebugUnitTest'], {
+    ':hook:payload:testDebugUnitTest',
+    ':hook:loader:testDebugUnitTest'], {
     cwd: path.join(ROOT, 'pin'),
     environment: Object.freeze({ ...rootEnvironment, GRADLE_USER_HOME: environment.GRADLE_USER_HOME }),
   });

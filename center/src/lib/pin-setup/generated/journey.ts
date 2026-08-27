@@ -20,7 +20,7 @@ export const PIN_SETUP_JOURNEY = {
       "title": "Import and verify the published Pin release",
       "commandId": "pin.release.import",
       "command": "./revival pin release import",
-      "centerRoute": "/settings/pin/install",
+      "centerRoute": null,
       "surface": "cli",
       "verification": "cli",
       "documentationAnchor": "README.md#connect-a-pin"

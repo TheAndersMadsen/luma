@@ -3,7 +3,7 @@
 /** Four wearer-facing stages backed by the canonical setup checks. */
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import settings from "../../settings.module.css";
 import pin from "../pin.module.css";
 import styles from "./setup.module.css";
@@ -14,6 +14,11 @@ import {
   type PinSetupPlan,
   type PinSetupStep,
 } from "@/lib/pin-setup";
+import {
+  loadSetupAcceptance,
+  saveSetupAcceptance,
+  setupAcceptanceIdentity,
+} from "@/lib/pin-setup/acceptance";
 import { usePinDevice } from "../PinDeviceProvider";
 import { usePinSetupFacts } from "./usePinSetupFacts";
 
@@ -60,7 +65,7 @@ const SETUP_STAGES: ReadonlyArray<{
   {
     id: "finish",
     title: "Get online and try it",
-    summary: "Add Wi-Fi, then make a voice request on the Pin.",
+    summary: "Use Wi-Fi or LTE, then make a voice request on the Pin.",
     done: "Your Pin is ready to use.",
     steps: ["network", "confirm"],
   },
@@ -129,12 +134,36 @@ export default function SetupView({
 }) {
   const { connect, clearError, error, support } = usePinDevice();
   const readings = usePinSetupFacts({ operator });
-  const plan = derivePinSetupPlan(readings.facts);
+  const acceptanceIdentity = setupAcceptanceIdentity(
+    readings.facts.usb.serial,
+    readings.facts.release.version,
+    readings.facts.activation.edgeIpv4,
+  );
+  const [confirmedAcceptance, setConfirmedAcceptance] = useState<string | null>(null);
+  useEffect(() => {
+    if (!acceptanceIdentity) {
+      setConfirmedAcceptance(null);
+      return;
+    }
+    setConfirmedAcceptance(
+      loadSetupAcceptance(window.localStorage, acceptanceIdentity)
+        ? acceptanceIdentity
+        : null,
+    );
+  }, [acceptanceIdentity]);
+  const setupFacts: PinSetupFacts = {
+    ...readings.facts,
+    physicalAcceptanceConfirmed:
+      acceptanceIdentity !== null && acceptanceIdentity === confirmedAcceptance,
+  };
+  const plan = derivePinSetupPlan(setupFacts);
   const stages = setupStages(plan);
   const completeStages = stages.filter((stage) => stage.state === "done").length;
   const focusedStage = stages.find((stage) => stage.state === "focus" || stage.state === "attention");
   const activation = activationEvidence(readings.facts.activation);
   const [connecting, setConnecting] = useState(false);
+  const [pairing, setPairing] = useState(false);
+  const [pairError, setPairError] = useState<string | null>(null);
 
   async function onConnect() {
     setConnecting(true);
@@ -146,6 +175,37 @@ export default function SetupView({
       // stops it from becoming an unhandled rejection.
     } finally {
       setConnecting(false);
+    }
+  }
+
+  async function onPair() {
+    const deviceId = readings.facts.usb.deviceId;
+    if (!deviceId || pairing) return;
+    setPairing(true);
+    setPairError(null);
+    try {
+      const response = await fetch("/api/devices/pair", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ device_id: deviceId }),
+      });
+      const body = (await response.json().catch(() => null)) as { error?: unknown } | null;
+      if (!response.ok) {
+        throw new Error(
+          typeof body?.error === "string"
+            ? body.error
+            : "Center could not pair this Pin with your account.",
+        );
+      }
+      readings.refresh();
+    } catch (pairingError) {
+      setPairError(
+        pairingError instanceof Error
+          ? pairingError.message
+          : "Center could not pair this Pin with your account.",
+      );
+    } finally {
+      setPairing(false);
     }
   }
 
@@ -202,6 +262,12 @@ export default function SetupView({
           </div>
         ) : null}
 
+        {pairError ? (
+          <div className={pin.stateRow}>
+            <StatusMessage tone="warning">{pairError}</StatusMessage>
+          </div>
+        ) : null}
+
         {support && !support.supported ? (
           <div className={pin.stateRow}>
             <StatusMessage tone="warning">
@@ -230,7 +296,17 @@ export default function SetupView({
               provisioningHref,
               connecting,
               usbSupported: readings.facts.usb.browserSupported !== false,
+              needsPairing:
+                readings.facts.cloud.state === "live" &&
+                readings.facts.cloud.connectedPinPaired === false,
               onConnect: () => void onConnect(),
+              onPair: () => void onPair(),
+              pairing,
+              onConfirm: () => {
+                if (!acceptanceIdentity) return;
+                saveSetupAcceptance(window.localStorage, acceptanceIdentity);
+                setConfirmedAcceptance(acceptanceIdentity);
+              },
             })}
           />
         ))}
@@ -291,22 +367,22 @@ export default function SetupView({
           <EvidenceRow
             label="Reporting to this Center"
             tone={
-              readings.facts.cloud.state === "degraded"
+              readings.facts.cloud.connectedPinReporting
+                ? "live"
+                : readings.facts.cloud.state === "degraded"
                 ? "degraded"
                 : readings.facts.cloud.state === "absent"
                   ? "absent"
-                  : readings.facts.cloud.reportingCount > 0
-                    ? "live"
-                    : "off"
+                  : "off"
             }
             chip={
-              readings.facts.cloud.state === "degraded"
+              readings.facts.cloud.connectedPinReporting
+                ? "This Pin online"
+                : readings.facts.cloud.state === "degraded"
                 ? "Couldn’t check"
                 : readings.facts.cloud.state === "absent"
                   ? "Not connected"
-                  : readings.facts.cloud.reportingCount > 0
-                    ? `${readings.facts.cloud.reportingCount} online`
-                    : "Not reporting"
+                  : "Not reporting"
             }
             detail={
               readings.lastReportAtEpoch
@@ -365,13 +441,21 @@ function renderStageAction({
   provisioningHref,
   connecting,
   usbSupported,
+  needsPairing,
   onConnect,
+  onPair,
+  pairing,
+  onConfirm,
 }: {
   stage: SetupStage;
   provisioningHref: string | null;
   connecting: boolean;
   usbSupported: boolean;
+  needsPairing: boolean;
   onConnect: () => void;
+  onPair: () => void;
+  pairing: boolean;
+  onConfirm: () => void;
 }): React.ReactNode {
   const step = stage.focusedStep;
   if (!step) return null;
@@ -398,6 +482,28 @@ function renderStageAction({
       );
 
     case "install":
+      if (step.id === "release") {
+        const exportCurrentRelease = step.commands.some((command) =>
+          command.includes(" pin release export "),
+        );
+        return (
+          <>
+            {exportCurrentRelease ? null : (
+              <a
+                className={settings.additionLink}
+                href="https://github.com/TheAndersMadsen/ai-pin-revival/releases"
+                target="_blank"
+                rel="noreferrer"
+              >
+                Download signed release
+              </a>
+            )}
+            {step.commands.map((command) => (
+              <code key={command}>{command}</code>
+            ))}
+          </>
+        );
+      }
       return (
         <Link className={settings.additionLink} href="/settings/pin/install">
           Open installer
@@ -406,11 +512,11 @@ function renderStageAction({
 
     case "cosmos":
       if (step.id === "configure") {
-        return (
+        return provisioningHref ? (
           <Link className={settings.additionLink} href="/settings/account/services">
             Set up services
           </Link>
-        );
+        ) : null;
       }
       return provisioningHref ? (
         <Link className={settings.additionLink} href={provisioningHref}>
@@ -419,14 +525,41 @@ function renderStageAction({
       ) : null;
 
     case "finish":
-      return step.id === "network" ? (
-        <Link className={settings.additionLink} href="/wifi">
-          Add Wi-Fi
-        </Link>
-      ) : (
-        <Link className={settings.additionLink} href="/settings/account/devices">
-          Check Pin status
-        </Link>
+      if (step.id === "network") {
+        if (step.status === "attention") {
+          return provisioningHref ? (
+            <Link className={settings.additionLink} href={provisioningHref}>
+              Check Cosmos setup
+            </Link>
+          ) : null;
+        }
+        if (needsPairing) {
+          return (
+            <button
+              type="button"
+              className={pin.button}
+              disabled={pairing}
+              onClick={onPair}
+            >
+              {pairing ? "Pairing…" : "Pair this Pin"}
+            </button>
+          );
+        }
+        return (
+          <Link className={settings.additionLink} href="/wifi">
+            Add Wi-Fi
+          </Link>
+        );
+      }
+      return (
+        <button
+          type="button"
+          className={pin.button}
+          onClick={onConfirm}
+          data-testid="pin-setup-confirm"
+        >
+          I tried it — it works
+        </button>
       );
 
     default:

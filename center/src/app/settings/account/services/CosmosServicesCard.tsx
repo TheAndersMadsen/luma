@@ -145,7 +145,10 @@ function chip(status: AssistantStatus | undefined, ready: boolean): {
   tone: StatusTone;
   label: string;
 } {
-  if (!status || status.model === "unreachable") {
+  if (!status) {
+    return { tone: "off", label: "Checking…" };
+  }
+  if (status.model === "unreachable") {
     return { tone: "degraded", label: "Unavailable" };
   }
   return ready

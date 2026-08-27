@@ -78,7 +78,13 @@ test("Pin setup instructions stay direct", async () => {
   ]) {
     assert.match(setup, new RegExp(stage));
   }
-  assert.doesNotMatch(setup, /step\.commands|manualNote|<pre|Outside this browser|terminal/i);
+  assert.match(setup, /step\.id === "release"[\s\S]*step\.commands\.map/);
+  assert.doesNotMatch(setup, /manualNote|<pre|Outside this browser|terminal/i);
+  assert.match(setup, /step\.status === "attention"/);
+  assert.match(setup, /Check Cosmos setup/);
+  assert.match(setup, /Pair this Pin/);
+  assert.match(setup, /\/api\/devices\/pair/);
+  assert.doesNotMatch(setup, /\/settings\/account\/devices/);
 });
 
 test("Ai Mic shows answers without suggestions, tool traces, or reasoning labels", async () => {

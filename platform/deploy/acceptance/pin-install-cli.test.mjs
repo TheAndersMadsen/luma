@@ -52,7 +52,8 @@ test("headless Pin plan renders a no-op plan without crashing", () => {
     routinePlan({ packageRoles: [], requiredAssetRoles: [] }),
   );
 
-  assert.match(output, /packages\s+\(none; already at target\)/);
+  assert.match(output, /packages\s+\(none; runtime packages are current\)/);
+  assert.doesNotMatch(output, /every managed package.*target/i);
   assert.match(output, /assets to load\s+\(none\)/);
   assert.match(output, /load and re-verify 0 APKs from the local store/);
 });

@@ -697,7 +697,7 @@ export function SpotifyServiceCard() {
               </StatusMessage>
               {status.unavailable_reason === "pin_not_paired" ||
               status.unavailable_reason === "pairing_unconfirmed" ? (
-                <Link className={styles.quietButton} href="/settings/account/devices">
+                <Link className={styles.quietButton} href="/settings/pin/setup">
                   Pair My Ai Pin
                 </Link>
               ) : status.fallback_setup ? (

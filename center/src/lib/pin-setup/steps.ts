@@ -59,6 +59,8 @@ export interface PinSetupUsbFacts {
   /** `getprop` recognition. `null` while identity is still being read. */
   readonly recognizedAiPin: boolean | null;
   readonly serial: string | null;
+  /** Stable hardware ID read from ro.boot.deviceid, used by enrollment. */
+  readonly deviceId: string | null;
 }
 
 export type PinSetupReleaseAvailability =
@@ -83,6 +85,10 @@ export interface PinSetupInstallFacts {
   readonly rolesInstalled: number;
   /** Installed AND queryable AND the same version as the published release. */
   readonly rolesMatchingTarget: number;
+  /** How the privileged installer relates to the published runtime release. */
+  readonly installerState: "unknown" | "target" | "retained" | "unsupported";
+  /** Runtime roles that would have to be downgraded to match Center. */
+  readonly runtimeRolesNewerThanTarget: number;
   readonly unhealthyRoles: number;
   readonly conflicts: number;
   /** Credential-encrypted storage. `null` when it was not read. */
@@ -163,6 +169,11 @@ export interface PinSetupCloudFacts {
   /** Paired Pins that have reported recently enough to count as online. */
   readonly reportingCount: number;
   readonly lastReportAtEpoch: number | null;
+  /** A recent status whose serial matches the Pin currently attached over USB. */
+  readonly connectedPinReporting: boolean;
+  readonly connectedPinLastReportAtEpoch: number | null;
+  /** Exact device-id match against this account's pairing roster. */
+  readonly connectedPinPaired: boolean | null;
 }
 
 export interface PinSetupFacts {
@@ -172,6 +183,8 @@ export interface PinSetupFacts {
   readonly server: PinSetupServerFacts;
   readonly activation: PinSetupActivationFacts;
   readonly cloud: PinSetupCloudFacts;
+  /** Explicit wearer confirmation after trying microphone, speaker, and gesture. */
+  readonly physicalAcceptanceConfirmed: boolean;
   /** Whether the signed-in session carries the operator claim. */
   readonly operator: boolean;
 }
@@ -252,9 +265,22 @@ function deriveConnect(usb: PinSetupUsbFacts): DraftStep {
   };
 }
 
-function deriveRelease(release: PinSetupReleaseFacts): DraftStep {
+function deriveRelease(facts: PinSetupFacts): DraftStep {
+  const { release, install } = facts;
   switch (release.availability) {
     case "published":
+      if (install.state === "read" && install.runtimeRolesNewerThanTarget > 0) {
+        return {
+          status: "manual",
+          summary: `This Pin runs newer runtime software than Center's published release${release.version ? ` ${release.version}` : ""}.`,
+          next: "On the computer that installed this Pin, export its current release; copy that archive to the Center operator host and import it.",
+          commands: [
+            "./revival pin release export --output ai-pin-revival-pin-current.tar.gz",
+            "./revival pin release import ai-pin-revival-pin-current.tar.gz",
+          ],
+          manualNote: "The installer will not silently downgrade a newer Pin; Center must publish the same signed release first.",
+        };
+      }
       return {
         status: "done",
         summary: release.version
@@ -273,6 +299,7 @@ function deriveRelease(release: PinSetupReleaseFacts): DraftStep {
         status: "manual",
         summary: "No signed Pin release is available.",
         next: "Download the signed archive from GitHub Releases, then import it.",
+        commands: ["./revival pin release import ARCHIVE"],
         manualNote: "Import verifies every APK before publishing the release.",
       };
     case "unreadable":
@@ -320,6 +347,16 @@ function deriveInstall(facts: PinSetupFacts): DraftStep {
     };
   }
 
+  if (install.state === "failed") {
+    return {
+      status: "attention",
+      summary: install.detail
+        ? `Center couldn’t inspect this Pin: ${install.detail}`
+        : "Center couldn’t inspect this Pin.",
+      next: "Reconnect the Pin or wait for Android to finish starting, then choose Check again.",
+    };
+  }
+
   if (install.state !== "read") {
     return {
       status: "blocked",
@@ -344,10 +381,29 @@ function deriveInstall(facts: PinSetupFacts): DraftStep {
     };
   }
 
+  if (install.runtimeRolesNewerThanTarget > 0) {
+    return {
+      status: "blocked",
+      summary: "Publish the signed release already running on this Pin before changing its software.",
+      next: null,
+    };
+  }
+
+  if (install.installerState === "unsupported") {
+    return {
+      status: "attention",
+      summary: "The privileged installer is not in a supported routine-install state.",
+      next: "Open the installer to inspect the recovery options for this Pin.",
+    };
+  }
+
+  const rolesSatisfied =
+    install.rolesMatchingTarget + (install.installerState === "retained" ? 1 : 0);
+
   if (
     install.rolesInstalled < install.rolesTotal ||
     install.unhealthyRoles > 0 ||
-    install.rolesMatchingTarget < install.rolesTotal
+    rolesSatisfied < install.rolesTotal
   ) {
     return {
       status: "attention",
@@ -356,7 +412,15 @@ function deriveInstall(facts: PinSetupFacts): DraftStep {
           ? `, and ${install.unhealthyRoles} installed package${install.unhealthyRoles === 1 ? " is" : "s are"} not answering`
           : ""
       }.`,
-      next: "Open the installer to update every package.",
+      next: "Open the installer to update the runtime packages.",
+    };
+  }
+
+  if (install.installerState === "retained") {
+    return {
+      status: "done",
+      summary: `All ${Math.max(0, install.rolesTotal - 1)} runtime packages match the published release; the healthy installer is intentionally retained.`,
+      next: null,
     };
   }
 
@@ -368,7 +432,7 @@ function deriveInstall(facts: PinSetupFacts): DraftStep {
 }
 
 function deriveConfigure(facts: PinSetupFacts): DraftStep {
-  const { usb, server, install } = facts;
+  const { usb, server, install, operator } = facts;
 
   if (!usb.connected) {
     return { status: "blocked", summary: "Connect the Pin over USB to check its setup.", next: null };
@@ -404,11 +468,18 @@ function deriveConfigure(facts: PinSetupFacts): DraftStep {
   }
 
   if (!server.assistantReady) {
-    return {
-      status: "todo",
-      summary: "Cosmos Assistant needs setup.",
-      next: "Configure Assistant in Settings → Services.",
-    };
+    return operator
+      ? {
+          status: "todo",
+          summary: "Cosmos Assistant needs setup.",
+          next: "Configure Assistant in Settings → Services.",
+        }
+      : {
+          status: "manual",
+          summary: "Cosmos Assistant needs operator setup.",
+          next: "Ask this Center’s operator to configure Assistant.",
+          commands: [],
+        };
   }
 
   return {
@@ -419,10 +490,6 @@ function deriveConfigure(facts: PinSetupFacts): DraftStep {
     next: null,
   };
 }
-
-/** The one warning that is true of the minted bundle in every branch below. */
-const IDENTITY_CREDENTIAL_NOTE =
-  "Download the activation file now. Its private key is not stored.";
 
 function deriveIdentity(facts: PinSetupFacts): DraftStep {
   const { activation, operator } = facts;
@@ -437,32 +504,23 @@ function deriveIdentity(facts: PinSetupFacts): DraftStep {
     };
   }
 
-  /*
-   * Not proven. This is not a no-op — it is a mandatory step Center cannot check
-   * for you, so it says exactly that and points at the one place it is done.
-   * For an operator that place is a console in this browser (the Provisioning
-   * card), so the honest status is a to-do with a real link; for anyone else the
-   * card is gated away, so it is work that happens outside this session.
-   */
   if (operator) {
     return {
       status: "todo",
       summary: "This Pin has not been activated.",
-      next: "Open Provisioning and create its activation file.",
-      manualNote: IDENTITY_CREDENTIAL_NOTE,
+      next: "Open Provisioning and connect this Pin directly to Cosmos.",
     };
   }
 
   return {
     status: "manual",
     summary: "This Pin has not been activated.",
-    next: "Ask an operator to create its activation file.",
-    manualNote: IDENTITY_CREDENTIAL_NOTE,
+    next: "Ask an operator to connect this Pin to Cosmos.",
   };
 }
 
 function deriveActivate(facts: PinSetupFacts): DraftStep {
-  const { usb, activation } = facts;
+  const { usb, activation, operator } = facts;
 
   if (!usb.connected) {
     return {
@@ -544,15 +602,28 @@ function deriveActivate(facts: PinSetupFacts): DraftStep {
     };
   }
 
-  return {
-    status: "manual",
-    summary: "This Pin is not activated for Cosmos.",
-    next: "Run the activation command with this Pin’s serial, activation file, and Cosmos edge IPv4.",
-    manualNote: "Review the exact-device plan before using --confirm.",
-  };
+  return operator
+    ? {
+        status: "todo",
+        summary: "This Pin is not connected to Cosmos.",
+        next: "Open Provisioning and connect this Pin directly to Cosmos.",
+      }
+    : {
+        status: "manual",
+        summary: "This Pin is not connected to Cosmos.",
+        next: "Ask an operator to connect this Pin to Cosmos.",
+      };
 }
 
 function deriveNetwork(cloud: PinSetupCloudFacts): DraftStep {
+  if (cloud.connectedPinReporting) {
+    return {
+      status: "done",
+      summary: "This Pin is online and reporting to Center.",
+      next: null,
+    };
+  }
+
   if (cloud.state === "unknown") {
     return {
       status: "todo",
@@ -561,17 +632,41 @@ function deriveNetwork(cloud: PinSetupCloudFacts): DraftStep {
     };
   }
 
-  let context: string;
   if (cloud.state === "degraded") {
-    context = "Pin reports are unavailable.";
-  } else if (cloud.state === "absent") {
-    context = "Pin reporting is not configured.";
-  } else if (cloud.reportingCount > 0) {
-    context = `${cloud.reportingCount} paired Pin${cloud.reportingCount === 1 ? " is" : "s are"} reporting.`;
-  } else {
-    context = "No paired Pin is reporting.";
+    return {
+      status: "attention",
+      summary: "Center couldn’t check this Pin because Pin reports are unavailable.",
+      next: "Check the Cosmos reporting connection, then try again.",
+    };
   }
 
+  if (cloud.state === "absent") {
+    return {
+      status: "attention",
+      summary: "Pin reporting is not configured for this Center.",
+      next: "Finish the Cosmos device connection setup, then try again.",
+    };
+  }
+
+  if (cloud.pairedCount === 0 || cloud.connectedPinPaired === false) {
+    return {
+      status: "todo",
+      summary: "This Pin is not paired with this account.",
+      next: "Pair this Pin with your account before checking its network.",
+    };
+  }
+
+  if (cloud.connectedPinPaired === null) {
+    return {
+      status: "todo",
+      summary: "Center is checking whether this exact Pin is paired.",
+      next: null,
+    };
+  }
+
+  const context = cloud.reportingCount > 0
+    ? `${cloud.reportingCount} other paired Pin${cloud.reportingCount === 1 ? " is" : "s are"} reporting.`
+    : "No paired Pin is reporting.";
   return {
     status: "manual",
     summary: `${context} This Pin still needs a network check.`,
@@ -580,7 +675,15 @@ function deriveNetwork(cloud: PinSetupCloudFacts): DraftStep {
   };
 }
 
-function deriveConfirm(cloud: PinSetupCloudFacts): DraftStep {
+function deriveConfirm(facts: PinSetupFacts): DraftStep {
+  if (facts.physicalAcceptanceConfirmed) {
+    return {
+      status: "done",
+      summary: "Microphone, speaker, and gesture were confirmed on this Pin.",
+      next: null,
+    };
+  }
+  const { cloud } = facts;
   const onlineEvidence =
     cloud.state === "live" && cloud.reportingCount > 0
       ? `${cloud.reportingCount} paired Pin${cloud.reportingCount === 1 ? " is" : "s are"} online.`
@@ -597,13 +700,13 @@ const DERIVATIONS: Readonly<
   Record<PinSetupStepId, (facts: PinSetupFacts) => DraftStep>
 > = Object.freeze({
   connect: (facts) => deriveConnect(facts.usb),
-  release: (facts) => deriveRelease(facts.release),
+  release: deriveRelease,
   install: deriveInstall,
   configure: deriveConfigure,
   identity: deriveIdentity,
   activate: deriveActivate,
   network: (facts) => deriveNetwork(facts.cloud),
-  confirm: (facts) => deriveConfirm(facts.cloud),
+  confirm: deriveConfirm,
 });
 
 export function derivePinSetupPlan(facts: PinSetupFacts): PinSetupPlan {

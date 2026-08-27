@@ -77,6 +77,11 @@ class BootInjectionReceiver : BroadcastReceiver() {
     }
 
     private fun handleBoot(context: Context, action: String) {
+        // Carrier recovery is independent of hook injection. Keep it on this
+        // firmware-proven boot path and ahead of the development kill switch
+        // so a replacement SIM cannot lose its persistent compatibility values.
+        repairCarrierCompatibility(context)
+
         // Check kill switch
         if (isDisabled()) {
             Log.w(TAG, "Boot injection DISABLED via $PROP_DISABLE")
@@ -130,6 +135,13 @@ class BootInjectionReceiver : BroadcastReceiver() {
         disableMemfaultDaemons()
 
         Log.w(TAG, "Boot injection complete")
+    }
+
+    private fun repairCarrierCompatibility(context: Context) {
+        val result = synchronized(CarrierCompatibility.workLock) {
+            CarrierCompatibility.repair(context)
+        }
+        CarrierCompatibilityReceiver.logResult(result)
     }
 
     /**

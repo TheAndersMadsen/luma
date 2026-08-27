@@ -26,6 +26,25 @@
             </intent-filter>
         </receiver>
 
+        <!-- Humane's original carrier was provisioned before shutdown. Recheck
+             the supplied replacement-carrier compatibility values whenever a
+             new SIM/config becomes effective and after each boot phase. The
+             receiver runs in the system process and accepts only broadcasts
+             from senders that hold the platform phone-state mutation grant. -->
+        <receiver
+            android:name=".CarrierCompatibilityReceiver"
+            android:process="system"
+            android:directBootAware="true"
+            android:exported="true"
+            android:permission="android.permission.MODIFY_PHONE_STATE">
+            <intent-filter android:priority="999">
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.telephony.action.CARRIER_CONFIG_CHANGED" />
+                <action android:name="android.intent.action.SIM_STATE_CHANGED" />
+            </intent-filter>
+        </receiver>
+
         <!-- Manual injection trigger (kept for development/debugging) -->
         <receiver
             android:name=".InjectReceiver"

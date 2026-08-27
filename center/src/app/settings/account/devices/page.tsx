@@ -207,7 +207,9 @@ export default function Page() {
           null
         ) : (
           <div className={settings.stateRow}>
-            <span className={settings.muted}>Pair a Pin below to see its status here.</span>
+            <span className={settings.muted}>
+              Open guided setup below to connect and pair your Pin.
+            </span>
           </div>
         )}
         {device && deviceIsLive ? (
@@ -508,7 +510,6 @@ function PinSetupSection({
         </Link>
       </div>
 
-      <PairPinRow onPaired={onRetry} />
     </section>
   );
 }
@@ -572,123 +573,5 @@ function UnpairDeviceButton({
         </button>
       </span>
     </span>
-  );
-}
-
-type PairResult = { tone: "info" | "warning"; text: string };
-
-function PairPinRow({ onPaired }: { onPaired: () => void }) {
-  const [open, setOpen] = useState(false);
-  const [deviceId, setDeviceId] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<PairResult | null>(null);
-
-  async function pair() {
-    const id = deviceId.trim();
-    if (!id || busy) return;
-    setBusy(true);
-    setResult(null);
-    try {
-      const res = await fetch("/api/devices/pair", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        // The account is the caller's own session `sub`, injected server-side.
-        // It is deliberately NOT in this body and must never be.
-        body: JSON.stringify({ device_id: id }),
-      });
-      if (res.ok) {
-        setResult({
-          tone: "info",
-          text: `${id} is now paired with your account. Finish setup on the Pin to connect it.`,
-        });
-        onPaired();
-        setDeviceId("");
-        return;
-      }
-      setResult({
-        tone: "warning",
-        text: "This Pin couldn’t be paired. Check the device ID and try again.",
-      });
-    } catch {
-      setResult({ tone: "warning", text: "This Pin couldn’t be paired. Try again." });
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className={styles.pairRow}>
-      <div className={settings.additionRow}>
-        <span className={settings.additionRowText}>
-          <span className={settings.additionRowTitle}>Pair a Pin</span>
-          <span className={settings.additionRowDesc}>
-            Connect a Pin to this account so its memories, captures, and settings stay together.
-          </span>
-        </span>
-        {!open ? (
-          <button
-            type="button"
-            className={styles.pairOpenButton}
-            onClick={() => {
-              setOpen(true);
-              setResult(null);
-            }}
-          >
-            Pair a Pin
-          </button>
-        ) : null}
-      </div>
-
-      {open ? (
-        <div className={styles.pairForm}>
-          <label className={styles.pairLabel} htmlFor="pair-device-id">
-            Device ID
-          </label>
-          <div className={styles.pairControls}>
-            <input
-              id="pair-device-id"
-              className={styles.pairInput}
-              data-testid="pair-device-id-field"
-              value={deviceId}
-              onChange={(e) => setDeviceId(e.target.value)}
-              placeholder="hardware ID from Pin setup"
-              autoComplete="off"
-              spellCheck={false}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") void pair();
-              }}
-            />
-            <button
-              type="button"
-              className={styles.pairSubmit}
-              data-testid="pair-submit"
-              disabled={deviceId.trim().length === 0 || busy}
-              onClick={() => void pair()}
-            >
-              {busy ? "Pairing…" : "Pair"}
-            </button>
-            <button
-              type="button"
-              className={styles.pairCancel}
-              onClick={() => {
-                setOpen(false);
-                setDeviceId("");
-                setResult(null);
-              }}
-            >
-              Cancel
-            </button>
-          </div>
-          <span className={styles.pairHelp}>
-            Use the device ID shown during provisioning, not the printed serial number.
-          </span>
-          {result ? (
-            <StatusMessage tone={result.tone} inline>
-              {result.text}
-            </StatusMessage>
-          ) : null}
-        </div>
-      ) : null}
-    </div>
   );
 }

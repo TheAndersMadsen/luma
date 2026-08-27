@@ -114,14 +114,14 @@ test("the devices pane reports an unreadable status as unread, not as unpaired",
   assert.match(page, /statusUnread/);
 
   const unreadable = page.indexOf("const statusUnreadable =");
-  const pairPrompt = page.indexOf("Pair a Pin below to see its status here.");
+  const pairPrompt = page.indexOf("Open guided setup below to connect and pair your Pin.");
   assert.ok(unreadable > 0 && pairPrompt > 0);
   // The device-absent arm of the identity section itself, not merely a mention
   // of the flag somewhere above it.
   const guarded = page.indexOf(") : statusUnreadable ? (");
   assert.ok(
     guarded > 0 && guarded < pairPrompt,
-    "the pane still falls through to the pair-a-Pin sentence when the status read failed, contradicting the pairing section beside it",
+    "the pane still falls through to the setup instruction when the status read failed, contradicting the pairing section beside it",
   );
 
   // And the per-Pin chip must stop blaming hardware for an unread admin call.

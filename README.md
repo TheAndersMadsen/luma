@@ -359,20 +359,29 @@ before package changes begin and tells you to wait and retry.
 
 ### 5. Activate and prove the device
 
-1. In **Center → Settings → My Ai Pin → Provisioning**, create and download the
-   one-time activation document for that exact device.
-2. Disconnect the Pin in Center or close the installer tab so native ADB can
-   claim the USB interface again.
-3. Run the exact plan command Center shows on the connected computer. Review
-   the plan, then repeat it with `--confirm`.
-4. Run the shown `pin activate status --serial SERIAL` command.
-5. Make one real voice request on the Pin. Activation is complete only when the
-   device answers through your Cosmos deployment.
+1. Keep the Pin connected over USB and open **Center → Settings → My Ai Pin →
+   Provisioning**. If needed, choose **Connect over USB** and select the same Pin.
+2. Choose **Connect this Pin to Cosmos**. Center reads the connected hardware ID,
+   pairs it with your signed-in account, creates its one-time identity, installs
+   the Cosmos address and trust roots, and verifies the complete activation on
+   that exact device.
+3. Return to **Guided setup** and choose **Check again**. When this Pin reports
+   online, make one real voice request and confirm that it worked.
+
+The **Create an activation file instead** section is a fallback for recovery or
+headless activation. Normal stock-Pin setup stays in Center and does not require
+native ADB commands or moving a private key by hand.
 
 Activation stores the server hostname, device-status endpoint, trust roots, and
 device identity as one transaction. Provider credentials stay in Cosmos and
 are managed from Center. Installation and activation both bind to the exact
 serial and plan without changing the device until explicitly confirmed.
+
+Penumbra also rechecks the replacement-carrier LTE/VoLTE compatibility values
+at boot and whenever Android reports a SIM or carrier-configuration change. If
+the carrier does not publish the line's phone number, Cellular Settings reports
+the validated LTE state or says that the number is unavailable; it never
+invents a phone number.
 
 ## Build the Pin apps
 
@@ -450,8 +459,9 @@ the command/output that proves it.
 ```
 
 For a new Pin, follow with: “Download the signed Pin archive from the same
-release, import it, guide me through Center's USB installer, and use Center's
-one-time activation document for the exact connected serial.”
+release, import it, guide me through Center's USB installer, and activate the
+exact connected Pin directly in Center. Use an activation file only as a
+recovery fallback.”
 
 ## Development
 

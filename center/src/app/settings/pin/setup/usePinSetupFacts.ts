@@ -47,6 +47,8 @@ import type {
   PinSetupReleaseFacts,
   PinSetupServerFacts,
 } from "@/lib/pin-setup";
+import { connectedPinReport } from "@/lib/pin-setup/reporting";
+import { connectedDeviceId } from "../provision/browserActivation";
 import { usePinDevice } from "../PinDeviceProvider";
 
 /**
@@ -86,7 +88,11 @@ interface PairedPinsResponse {
 }
 
 interface DeviceStatusResponse {
-  devices: Array<{ device_id: string; reported_at_epoch: number }>;
+  devices: Array<{
+    device_id: string;
+    serial_number: string;
+    reported_at_epoch: number;
+  }>;
   state: "live" | "absent" | "degraded";
 }
 
@@ -132,7 +138,7 @@ export interface PinSetupReadings {
   readonly target: ResolvedInstallTarget | null;
   /** The raw inspection, for the package table. */
   readonly inspection: InstallInspectionResult | null;
-  /** Epoch ms of the most recent report from a paired Pin. */
+  /** Epoch ms of the most recent report from the attached Pin. */
   readonly lastReportAtEpoch: number | null;
   /** Re-read everything this page shows. */
   readonly refresh: () => void;
@@ -174,11 +180,17 @@ export function usePinSetupFacts(options: { operator: boolean }): PinSetupReadin
     retry: 1,
     retryDelay: 400,
     refetchOnWindowFocus: false,
-    queryFn: async () =>
-      (await installerBrain()).inspectInstallState(borrowSession(), {
+    queryFn: async () => {
+      const brain = await installerBrain();
+      const inspection = await brain.inspectInstallState(borrowSession(), {
         target: releaseQuery.data ?? null,
         readinessSettleDelayMs: 0,
-      }),
+      });
+      return {
+        inspection,
+        expectedSignerIdentity: brain.PIN_RELEASE_SIGNER_IDENTITY,
+      };
+    },
   });
 
   /*
@@ -216,13 +228,15 @@ export function usePinSetupFacts(options: { operator: boolean }): PinSetupReadin
     refetchOnWindowFocus: false,
     queryFn: async () => {
       const session = borrowSession();
-      const [mode, edge] = await Promise.all([
+      const [mode, edge, deviceId] = await Promise.all([
         session.shell(["settings", "get", "global", REMOTE_MODE_SETTING]),
         session.shell(["settings", "get", "global", EDGE_IPV4_SETTING]),
+        connectedDeviceId(session),
       ]);
       return {
         remoteMode: readSettingsValue(mode.stdout),
         edgeIpv4: readSettingsValue(edge.stdout),
+        deviceId,
       };
     },
   });
@@ -287,6 +301,8 @@ export function usePinSetupFacts(options: { operator: boolean }): PinSetupReadin
       rolesTotal: 4,
       rolesInstalled: 0,
       rolesMatchingTarget: 0,
+      installerState: "unknown",
+      runtimeRolesNewerThanTarget: 0,
       unhealthyRoles: 0,
       conflicts: 0,
       deviceLocked: null,
@@ -295,7 +311,7 @@ export function usePinSetupFacts(options: { operator: boolean }): PinSetupReadin
 
     if (!connected) return { state: "unknown", ...empty };
 
-    const inspection = inspectionQuery.data;
+    const inspection = inspectionQuery.data?.inspection;
     if (!inspection) {
       if (inspectionQuery.isFetching) return { state: "checking", ...empty };
       if (inspectionQuery.isError) {
@@ -305,6 +321,19 @@ export function usePinSetupFacts(options: { operator: boolean }): PinSetupReadin
     }
 
     const packages = Object.values(inspection.packages);
+    const runtimePackages = packages.filter((entry) => entry.role !== "installer");
+    const installer = inspection.packages.installer;
+    const installerTrusted =
+      installer.installed &&
+      installer.healthy &&
+      installer.signerIdentity === inspectionQuery.data?.expectedSignerIdentity;
+    const installerState: PinSetupInstallFacts["installerState"] = installerTrusted
+      ? installer.versionComparison === "equal"
+        ? "target"
+        : installer.versionComparison === "older"
+          ? "retained"
+          : "unsupported"
+      : "unsupported";
     const credential = inspection.readiness.credentialState.state;
     return {
       state: "read",
@@ -312,6 +341,10 @@ export function usePinSetupFacts(options: { operator: boolean }): PinSetupReadin
       rolesInstalled: packages.filter((entry) => entry.installed).length,
       rolesMatchingTarget: packages.filter(
         (entry) => entry.installed && entry.healthy && entry.versionComparison === "equal",
+      ).length,
+      installerState,
+      runtimeRolesNewerThanTarget: runtimePackages.filter(
+        (entry) => entry.installed && entry.versionComparison === "newer",
       ).length,
       unhealthyRoles: packages.filter((entry) => entry.installed && !entry.healthy).length,
       conflicts: inspection.detectedConflicts.filter(
@@ -406,6 +439,19 @@ export function usePinSetupFacts(options: { operator: boolean }): PinSetupReadin
         newest === null || entry.reported_at_epoch > newest ? entry.reported_at_epoch : newest,
       null,
     );
+    const connectedReport = connectedPinReport(
+      statuses,
+      serial,
+      now,
+      PIN_REPORT_FRESHNESS_MS,
+    );
+    const connectedDeviceId = activationQuery.data?.deviceId?.trim().toLowerCase() ?? null;
+    const connectedPinPaired =
+      connectedDeviceId === null || !pairingsQuery.data
+        ? null
+        : pairingsQuery.data.devices.some(
+            (device) => device.deviceId.trim().toLowerCase() === connectedDeviceId,
+          );
 
     /*
      * ABSENCE IS CHECKED FIRST, and it has to be. On a deployment with no
@@ -430,10 +476,20 @@ export function usePinSetupFacts(options: { operator: boolean }): PinSetupReadin
         pairedCount: pairingsQuery.data?.devices.length ?? null,
         reportingCount: reporting.length,
         lastReportAtEpoch: latest,
+        connectedPinReporting: connectedReport.reporting,
+        connectedPinLastReportAtEpoch: connectedReport.lastReportAtEpoch,
+        connectedPinPaired,
       } satisfies PinSetupCloudFacts,
-      lastReportAtEpoch: latest === null ? null : latest * 1000,
+      lastReportAtEpoch: connectedReport.lastReportAtEpoch,
     };
-  }, [pairingsQuery.data, pairingsQuery.isError, statusQuery.data, statusQuery.isError]);
+  }, [
+    activationQuery.data?.deviceId,
+    pairingsQuery.data,
+    pairingsQuery.isError,
+    serial,
+    statusQuery.data,
+    statusQuery.isError,
+  ]);
 
   const facts = useMemo<PinSetupFacts>(
     () => ({
@@ -443,15 +499,30 @@ export function usePinSetupFacts(options: { operator: boolean }): PinSetupReadin
         connecting: status === "connecting",
         recognizedAiPin: identity === null ? null : identity.recognizedAiPin,
         serial,
+        deviceId: activationQuery.data?.deviceId ?? null,
       },
       release,
       install,
       server,
       activation,
       cloud,
+      physicalAcceptanceConfirmed: false,
       operator: options.operator,
     }),
-    [activation, cloud, connected, identity, install, options.operator, release, serial, server, status, support],
+    [
+      activation,
+      activationQuery.data?.deviceId,
+      cloud,
+      connected,
+      identity,
+      install,
+      options.operator,
+      release,
+      serial,
+      server,
+      status,
+      support,
+    ],
   );
 
   const refresh = useCallback(() => {
@@ -465,7 +536,7 @@ export function usePinSetupFacts(options: { operator: boolean }): PinSetupReadin
   return {
     facts,
     target: releaseQuery.data ?? null,
-    inspection: inspectionQuery.data ?? null,
+    inspection: inspectionQuery.data?.inspection ?? null,
     lastReportAtEpoch,
     refresh,
     refreshing:

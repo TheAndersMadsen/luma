@@ -215,7 +215,9 @@ test("device page avoids unsupported placeholder rows", async () => {
   const devices = await source("src/app/settings/account/devices/page.tsx");
 
   assert.doesNotMatch(devices, />Device gifting<|>Transfer my number<|>Lost &amp; Found</);
-  assert.match(devices, /PairPinRow/);
+  assert.doesNotMatch(devices, /PairPinRow|pair-device-id-field/);
+  assert.match(devices, /Open guided setup/);
+  assert.match(devices, /href="\/settings\/pin\/setup"/);
   assert.match(devices, /Wi-Fi QR code/);
   assert.match(devices, /Install or recover/);
   assert.match(devices, /href="\/settings\/pin\/install"/);

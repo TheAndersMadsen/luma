@@ -1060,6 +1060,19 @@ const TEST_ENVIRONMENT_MANAGED_OVERRIDES = new Set([
   'REVIVAL_RELEASE_ID',
 ]);
 
+function conventionalAndroidSdk(platform = process.platform, home = LOGIN_HOME) {
+  const candidates = platform === 'darwin'
+    ? [path.join(home, 'Library', 'Android', 'sdk')]
+    : platform === 'linux'
+      ? [path.join(home, 'Android', 'Sdk')]
+      : [];
+  for (const candidate of candidates) {
+    const stat = fs.lstatSync(candidate, { throwIfNoEntry: false });
+    if (stat?.isDirectory() && !stat.isSymbolicLink()) return candidate;
+  }
+  return null;
+}
+
 function requireOwnedBuildDirectory(directory, label) {
   secureDirectory(BUILD_DIR);
   if (path.dirname(directory) !== BUILD_DIR) {
@@ -1124,9 +1137,14 @@ function testProcessEnvironment(environment = process.env, values = {}) {
     ? path.resolve(requestedRustup)
     : null;
   const user = os.userInfo().username;
+  const discoveredAndroidSdk = conventionalAndroidSdk();
+  const androidHome = sanitized.ANDROID_HOME || sanitized.ANDROID_SDK_ROOT || discoveredAndroidSdk;
+  const androidSdkRoot = sanitized.ANDROID_SDK_ROOT || sanitized.ANDROID_HOME || discoveredAndroidSdk;
 
   return {
     ...sanitized,
+    ...(androidHome ? { ANDROID_HOME: androidHome } : {}),
+    ...(androidSdkRoot ? { ANDROID_SDK_ROOT: androidSdkRoot } : {}),
     HOME: home,
     USER: user,
     LOGNAME: user,
@@ -1209,6 +1227,7 @@ module.exports = {
   validateRuntime,
   operatorEnvironment,
   resolveTool,
+  conventionalAndroidSdk,
   testProcessEnvironment,
   cosmosTestEnvironment,
 };

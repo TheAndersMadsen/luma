@@ -132,51 +132,8 @@
 
 /* ------------------------------------------------- Pin setup (addition) -- */
 
-.pairRow {
-  display: flex;
-  flex-direction: column;
-}
-
 .pairOpenButton {
   composes: buttonSecondary from "../../../../components/controls.module.css";
-}
-
-.pairForm {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 0 24px 20px;
-}
-
-.pairLabel {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--hu-colors-crater-base);
-}
-
-.pairHelp {
-  max-width: 620px;
-  font-size: 12px;
-  line-height: 1.45;
-  color: var(--hu-colors-crater-base);
-}
-
-.pairControls {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 12px;
-}
-
-.pairInput {
-  composes: field from "../../../../components/controls.module.css";
-  flex: 1 1 240px;
-  min-width: 0;
-  max-width: 360px;
-}
-
-.pairSubmit {
-  composes: buttonPrimary from "../../../../components/controls.module.css";
 }
 
 .pairCancel {

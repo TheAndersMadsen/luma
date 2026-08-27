@@ -183,6 +183,22 @@ test("deriveInstallActionState offers Update when one package is older than the 
   assert.equal(state.warnings.newerThanTarget, false);
 });
 
+test("deriveInstallActionState does not call a deliberately retained installer an update", () => {
+  const state = deriveInstallActionState(
+    actionStateInput({
+      packages: {
+        installer: managedPackage("installer", { versionComparison: "older" }),
+        hook: managedPackage("hook"),
+        server: managedPackage("server"),
+        injector: managedPackage("injector"),
+      },
+    }),
+  );
+
+  assert.equal(state.action, "Reinstall");
+  assert.match(state.reasons.join(" "), /runtime packages match/i);
+});
+
 test("deriveInstallActionState offers Update when one package version is unreadable", () => {
   const state = deriveInstallActionState(
     actionStateInput({
@@ -233,9 +249,9 @@ test("deriveInstallActionState prefers Update over Reinstall when versions are m
   const state = deriveInstallActionState(
     actionStateInput({
       packages: {
-        installer: managedPackage("installer", { versionComparison: "older" }),
-        hook: managedPackage("hook", { versionComparison: "newer" }),
-        server: managedPackage("server"),
+        installer: managedPackage("installer"),
+        hook: managedPackage("hook", { versionComparison: "older" }),
+        server: managedPackage("server", { versionComparison: "newer" }),
         injector: managedPackage("injector"),
       },
     }),

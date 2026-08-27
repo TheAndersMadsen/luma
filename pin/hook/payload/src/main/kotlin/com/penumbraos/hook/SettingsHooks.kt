@@ -16,6 +16,7 @@ object SettingsHooks {
         // broad constructor suppression.
         // TcmSilencer.install(cl)
         ConnectivityCheckBypass.install(cl)
+        CellularSettingsCompatibilityHooks.install(cl)
         // Safety: EsimSettingsHooks relaxes the eSIM QR parser across a
         // prohibited cellular trust boundary.
         // EsimSettingsHooks.install(cl)

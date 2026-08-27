@@ -33,7 +33,7 @@
       "exactSerialRequired": false,
       "summary": "Initialize external configuration, secrets, and state directories.",
       "usage": "revival init [options]",
-      "documentationAnchor": "README.md#run-locally"
+      "documentationAnchor": "README.md#development"
     },
     {
       "id": "doctor.local",
@@ -47,7 +47,7 @@
       "exactSerialRequired": false,
       "summary": "Check local prerequisites and report the next action.",
       "usage": "revival doctor [options]",
-      "documentationAnchor": "README.md#run-locally"
+      "documentationAnchor": "README.md#development"
     },
     {
       "id": "doctor.production",
@@ -96,7 +96,7 @@
       "exactSerialRequired": false,
       "summary": "Build the local container stack.",
       "usage": "revival stack build [options]",
-      "documentationAnchor": "README.md#run-locally"
+      "documentationAnchor": "README.md#development"
     },
     {
       "id": "stack.up",
@@ -115,7 +115,7 @@
       "exactSerialRequired": false,
       "summary": "Start the local product stack.",
       "usage": "revival stack up [options]",
-      "documentationAnchor": "README.md#run-locally"
+      "documentationAnchor": "README.md#development"
     },
     {
       "id": "stack.down",
@@ -134,7 +134,7 @@
       "exactSerialRequired": false,
       "summary": "Stop the local product stack without deleting volumes.",
       "usage": "revival stack down [options]",
-      "documentationAnchor": "README.md#run-locally"
+      "documentationAnchor": "README.md#development"
     },
     {
       "id": "stack.status",
@@ -153,7 +153,7 @@
       "exactSerialRequired": false,
       "summary": "Show local stack service status.",
       "usage": "revival stack status [options]",
-      "documentationAnchor": "README.md#run-locally"
+      "documentationAnchor": "README.md#development"
     },
     {
       "id": "stack.logs",
@@ -172,7 +172,7 @@
       "exactSerialRequired": false,
       "summary": "Show recent local stack logs.",
       "usage": "revival stack logs [options]",
-      "documentationAnchor": "README.md#run-locally"
+      "documentationAnchor": "README.md#development"
     },
     {
       "id": "stack.config",
@@ -191,7 +191,7 @@
       "exactSerialRequired": false,
       "summary": "Render the resolved Compose model without secret interpolation.",
       "usage": "revival stack config [options]",
-      "documentationAnchor": "README.md#run-locally"
+      "documentationAnchor": "README.md#development"
     },
     {
       "id": "dev.center",
@@ -448,7 +448,7 @@
       "exactSerialRequired": false,
       "summary": "Initialize the local product configuration.",
       "usage": "revival setup local",
-      "documentationAnchor": "README.md#run-locally"
+      "documentationAnchor": "README.md#development"
     },
     {
       "id": "setup.contributor",
@@ -463,7 +463,7 @@
       "exactSerialRequired": false,
       "summary": "Initialize a contributor workspace.",
       "usage": "revival setup contributor",
-      "documentationAnchor": "README.md#run-locally"
+      "documentationAnchor": "README.md#development"
     },
     {
       "id": "setup.production",
@@ -508,7 +508,7 @@
       "exactSerialRequired": false,
       "summary": "Validate setup from current artifacts without stored progress state.",
       "usage": "revival setup status [options]",
-      "documentationAnchor": "README.md#run-locally"
+      "documentationAnchor": "README.md#development"
     },
     {
       "id": "config.get",
@@ -611,7 +611,7 @@
       "exactSerialRequired": false,
       "summary": "Show CLI and contract version information.",
       "usage": "revival version [options]",
-      "documentationAnchor": "README.md#run-locally"
+      "documentationAnchor": "README.md#development"
     },
     {
       "id": "pin.activate",
@@ -743,7 +743,7 @@
           "centerRoute": null,
           "surface": "cli",
           "verification": "cli",
-          "documentationAnchor": "README.md#run-locally"
+          "documentationAnchor": "README.md#development"
         },
         {
           "id": "initialize",
@@ -752,7 +752,7 @@
           "centerRoute": null,
           "surface": "cli",
           "verification": "cli",
-          "documentationAnchor": "README.md#run-locally"
+          "documentationAnchor": "README.md#development"
         },
         {
           "id": "check",
@@ -761,7 +761,7 @@
           "centerRoute": null,
           "surface": "cli",
           "verification": "cli",
-          "documentationAnchor": "README.md#run-locally"
+          "documentationAnchor": "README.md#development"
         },
         {
           "id": "start",
@@ -770,7 +770,7 @@
           "centerRoute": null,
           "surface": "cli",
           "verification": "cli",
-          "documentationAnchor": "README.md#run-locally"
+          "documentationAnchor": "README.md#development"
         },
         {
           "id": "verify",
@@ -779,7 +779,7 @@
           "centerRoute": null,
           "surface": "cli",
           "verification": "cli",
-          "documentationAnchor": "README.md#run-locally"
+          "documentationAnchor": "README.md#development"
         }
       ]
     },
@@ -806,7 +806,7 @@
           "centerRoute": null,
           "surface": "cli",
           "verification": "cli",
-          "documentationAnchor": "README.md#run-locally"
+          "documentationAnchor": "README.md#development"
         },
         {
           "id": "check",
@@ -815,7 +815,7 @@
           "centerRoute": null,
           "surface": "cli",
           "verification": "cli",
-          "documentationAnchor": "README.md#run-locally"
+          "documentationAnchor": "README.md#development"
         },
         {
           "id": "test",
@@ -842,7 +842,7 @@
           "centerRoute": null,
           "surface": "cli",
           "verification": "cli",
-          "documentationAnchor": "README.md#run-locally"
+          "documentationAnchor": "README.md#development"
         }
       ]
     },
@@ -927,7 +927,7 @@
           "id": "release",
           "title": "Import and verify the published Pin release",
           "commandId": "pin.release.import",
-          "centerRoute": "/settings/pin/install",
+          "centerRoute": null,
           "surface": "cli",
           "verification": "cli",
           "documentationAnchor": "README.md#connect-a-pin"
