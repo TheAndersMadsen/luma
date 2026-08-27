@@ -23,6 +23,20 @@ const MAX_SEARCH_QUERY_BYTES = 512;
 const MAX_SEARCH_QUERY_CHARACTERS = 80;
 const MAX_SEARCH_ITEMS = 10;
 const SEARCH_KINDS = new Set(["track"]);
+const MUSIC_PROVIDERS = new Set([
+  "spotify",
+  "youtube_music",
+  "tidal",
+  "apple_music",
+]);
+const SELECTABLE_MUSIC_PROVIDERS = new Set([
+  "spotify",
+  "youtube_music",
+  "tidal",
+]);
+const MAX_MUSIC_GATEWAY_URL_BYTES = 2 * 1024;
+const MIN_MUSIC_GATEWAY_TOKEN_BYTES = 32;
+const MAX_MUSIC_GATEWAY_TOKEN_BYTES = 512;
 
 /*
  * Every request shape this adapter will forward, and nothing else.
@@ -171,14 +185,25 @@ function exactSettingsBody(body, contentType) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new RequestError(400, "invalid_settings");
   }
+  if (!SELECTABLE_MUSIC_PROVIDERS.has(value.active_provider)) {
+    throw new RequestError(400, "invalid_settings");
+  }
+  const usesGateway = value.active_provider !== "spotify";
   const keys = Object.keys(value).sort();
-  const expectedKeys = ["device_name", "enabled", "experimental_acknowledged"];
+  const expectedKeys = [
+    "active_provider",
+    "device_name",
+    "enabled",
+    "experimental_acknowledged",
+    ...(usesGateway ? ["music_gateway_token", "music_gateway_url"] : []),
+  ].sort();
   if (keys.length !== expectedKeys.length || keys.some((key, index) => key !== expectedKeys[index])) {
     throw new RequestError(400, "invalid_settings");
   }
   if (
     typeof value.enabled !== "boolean" ||
     typeof value.experimental_acknowledged !== "boolean" ||
+    (value.enabled && !value.experimental_acknowledged) ||
     typeof value.device_name !== "string"
   ) {
     throw new RequestError(400, "invalid_settings");
@@ -193,11 +218,46 @@ function exactSettingsBody(body, contentType) {
     throw new RequestError(400, "invalid_settings");
   }
 
+  let gateway;
+  if (usesGateway) {
+    if (
+      typeof value.music_gateway_url !== "string" ||
+      Buffer.byteLength(value.music_gateway_url, "utf8") > MAX_MUSIC_GATEWAY_URL_BYTES ||
+      typeof value.music_gateway_token !== "string" ||
+      Buffer.byteLength(value.music_gateway_token, "utf8") < MIN_MUSIC_GATEWAY_TOKEN_BYTES ||
+      Buffer.byteLength(value.music_gateway_token, "utf8") > MAX_MUSIC_GATEWAY_TOKEN_BYTES ||
+      !/^[\x21-\x7e]+$/u.test(value.music_gateway_token)
+    ) {
+      throw new RequestError(400, "invalid_settings");
+    }
+    try {
+      const url = new URL(value.music_gateway_url);
+      if (
+        url.protocol !== "https:" ||
+        url.username ||
+        url.password ||
+        url.pathname !== "/" ||
+        url.search ||
+        url.hash
+      ) {
+        throw new Error("invalid gateway origin");
+      }
+      gateway = {
+        music_gateway_url: url.origin,
+        music_gateway_token: value.music_gateway_token,
+      };
+    } catch {
+      throw new RequestError(400, "invalid_settings");
+    }
+  }
+
   return Buffer.from(
     JSON.stringify({
+      active_provider: value.active_provider,
       enabled: value.enabled,
       experimental_acknowledged: value.experimental_acknowledged,
       device_name: trimmedName,
+      ...(gateway ?? {}),
     }),
     "utf8",
   );
@@ -252,6 +312,7 @@ function projectStatus(body) {
 
   const deviceName = boundedString(value.device_name, 48);
   if (
+    !MUSIC_PROVIDERS.has(value.active_provider) ||
     typeof value.enabled !== "boolean" ||
     typeof value.experimental_acknowledged !== "boolean" ||
     typeof value.engine_ready !== "boolean" ||
@@ -262,6 +323,7 @@ function projectStatus(body) {
   }
 
   const projected = {
+    active_provider: value.active_provider,
     enabled: value.enabled,
     experimental_acknowledged: value.experimental_acknowledged,
     state: value.state,

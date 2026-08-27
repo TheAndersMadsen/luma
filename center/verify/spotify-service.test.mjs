@@ -116,6 +116,7 @@ test("the Pin egress route cannot relay provider audio or account headers", asyn
 test("settings DTO accepts only safe Pin-native settings", () => {
   assert.deepEqual(
     parseSpotifySettingsDto({
+      active_provider: "spotify",
       enabled: true,
       experimental_acknowledged: true,
       device_name: "  Anders’ Ai Pin  ",
@@ -144,6 +145,7 @@ test("settings DTO accepts only safe Pin-native settings", () => {
   );
 
   for (const invalid of [
+    { enabled: false, experimental_acknowledged: false, device_name: "Ai Pin" },
     { enabled: true, experimental_acknowledged: false, device_name: "Ai Pin" },
     { active_provider: "tidal", enabled: true, experimental_acknowledged: false, device_name: "Ai Pin" },
     { enabled: true, experimental_acknowledged: true, device_name: "" },
@@ -160,6 +162,7 @@ test("settings DTO accepts only safe Pin-native settings", () => {
 
 test("status normalization drops secrets and unexpected fields", () => {
   const normalized = normalizeSpotifyStatus({
+    active_provider: "youtube_music",
     enabled: true,
     experimental_acknowledged: true,
     state: "ready",
@@ -171,7 +174,7 @@ test("status normalization drops secrets and unexpected fields", () => {
     access_token: "must-not-leave-the-pin",
   });
   assert.deepEqual(normalized, {
-    active_provider: "spotify",
+    active_provider: "youtube_music",
     enabled: true,
     experimental_acknowledged: true,
     state: "ready",
@@ -181,6 +184,16 @@ test("status normalization drops secrets and unexpected fields", () => {
     last_error: "Reconnecting",
   });
   assert.doesNotMatch(JSON.stringify(normalized), /credential|access_token|must-not/);
+  assert.throws(
+    () => normalizeSpotifyStatus({
+      enabled: true,
+      experimental_acknowledged: true,
+      state: "ready",
+      device_name: "Ai Pin",
+      engine_ready: true,
+    }),
+    SpotifyBridgeError,
+  );
 });
 
 test("unavailable status exposes only bounded recovery guidance", () => {
@@ -214,6 +227,7 @@ test("bridge binds a signed wearer to the deployment owner and durable Pin roste
       return json({ pairings: [{ account_sub: session.sub, device_id: DEVICE_ID }] });
     }
     return json({
+      active_provider: "spotify",
       enabled: false,
       experimental_acknowledged: false,
       state: "disabled",
@@ -327,6 +341,7 @@ test("mounted adapter token derives a distinct server-only music gateway bearer"
       return json({ pairings: [{ account_sub: session.sub, device_id: DEVICE_ID }] });
     }
     return json({
+      active_provider: "youtube_music",
       enabled: true,
       experimental_acknowledged: true,
       state: "not_configured",
@@ -444,6 +459,7 @@ test("Services renders every Pin-native state, polling and settings fallback", a
     assert.match(view, new RegExp(provider));
   }
   assert.match(view, /active_provider/);
+  assert.doesNotMatch(view, /next\.active_provider \|\| "spotify"/);
   assert.doesNotMatch(view, /Metrolist|install the app on the Pin|provider app owns its login/i);
   assert.match(view, /Player resolution and audio bytes use your Pin/);
   assert.match(view, /stock Music player handles playback/);

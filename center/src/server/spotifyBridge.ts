@@ -285,7 +285,7 @@ export function parseSpotifySettingsDto(input: unknown): SpotifySettingsDto {
       "The Spotify device name must be 1 to 48 characters.",
     );
   }
-  const providerValue = body.active_provider ?? "spotify";
+  const providerValue = body.active_provider;
   if (typeof providerValue !== "string" || !MUSIC_PROVIDERS.has(providerValue)) {
     throw new SpotifyBridgeError("invalid_response", 400, "Choose a supported music provider.");
   }
@@ -327,7 +327,7 @@ export function normalizeSpotifyStatus(input: unknown): SpotifyStatus {
   const pairingExpiresAt =
     typeof expires === "number" && Number.isSafeInteger(expires) && expires > 0 ? expires : undefined;
 
-  const providerValue = body.active_provider ?? "spotify";
+  const providerValue = body.active_provider;
   if (typeof providerValue !== "string" || !MUSIC_PROVIDERS.has(providerValue)) {
     throw new SpotifyBridgeError("invalid_response", 502, "The Pin returned an invalid response.");
   }

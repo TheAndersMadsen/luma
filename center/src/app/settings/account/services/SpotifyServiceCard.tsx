@@ -367,7 +367,7 @@ export function SpotifyServiceCard() {
       draftInitializedRef.current = true;
     }
     if (next.state !== "unavailable" && (syncDraft || !draftInitializedRef.current)) {
-      setActiveProvider(next.active_provider || "spotify");
+      setActiveProvider(next.active_provider);
       setEnabled(next.enabled);
       setAcknowledged(next.experimental_acknowledged);
       setDeviceName(next.device_name || "Ai Pin");

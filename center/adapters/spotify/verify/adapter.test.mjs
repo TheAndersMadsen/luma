@@ -10,6 +10,7 @@ const UPSTREAM_ORIGIN = "http://center-iroh-bridge:18080";
 
 function spotifyStatus(overrides = {}) {
   return {
+    active_provider: "spotify",
     enabled: true,
     experimental_acknowledged: true,
     state: "ready",
@@ -255,9 +256,12 @@ test("forwards canonical settings only and never forwards inbound credentials", 
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        active_provider: "youtube_music",
         device_name: "  Kitchen Pin  ",
         experimental_acknowledged: true,
         enabled: true,
+        music_gateway_url: "https://center.example.test",
+        music_gateway_token: "gateway-token".padEnd(40, "x"),
       }),
     }),
   );
@@ -269,10 +273,74 @@ test("forwards canonical settings only and never forwards inbound credentials", 
   assert.equal(calls[0].init.headers.Authorization, undefined);
   assert.equal(calls[0].init.headers.Cookie, undefined);
   assert.deepEqual(JSON.parse(Buffer.from(calls[0].init.body).toString("utf8")), {
+    active_provider: "youtube_music",
     enabled: true,
     experimental_acknowledged: true,
     device_name: "Kitchen Pin",
+    music_gateway_url: "https://center.example.test",
+    music_gateway_token: "gateway-token".padEnd(40, "x"),
   });
+});
+
+test("accepts only the three selectable provider settings shapes", async (t) => {
+  const forwarded = [];
+  const base = await runningAdapter(t, async (_url, init) => {
+    forwarded.push(JSON.parse(Buffer.from(init.body).toString("utf8")));
+    return jsonResponse(spotifyStatus({
+      active_provider: forwarded.at(-1).active_provider,
+      state: "not_configured",
+      engine_ready: false,
+    }));
+  });
+  const gateway = {
+    music_gateway_url: "https://center.example.test",
+    music_gateway_token: "gateway-token".padEnd(40, "x"),
+  };
+
+  for (const body of [
+    {
+      active_provider: "spotify",
+      enabled: true,
+      experimental_acknowledged: true,
+      device_name: "Ai Pin",
+    },
+    {
+      active_provider: "tidal",
+      enabled: false,
+      experimental_acknowledged: false,
+      device_name: "Ai Pin",
+      ...gateway,
+    },
+  ]) {
+    const response = await fetch(
+      `${base}/api/spotify/settings`,
+      authorized({
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+    );
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).active_provider, body.active_provider);
+  }
+
+  const apple = await fetch(
+    `${base}/api/spotify/settings`,
+    authorized({
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        active_provider: "apple_music",
+        enabled: false,
+        experimental_acknowledged: false,
+        device_name: "Ai Pin",
+        ...gateway,
+      }),
+    }),
+  );
+  assert.equal(apple.status, 400);
+  assert.deepEqual(await apple.json(), { error: "invalid_settings" });
+  assert.equal(forwarded.length, 2);
 });
 
 test("rejects extra settings fields, invalid JSON, and bodies on bodyless routes", async (t) => {
@@ -297,6 +365,40 @@ test("rejects extra settings fields, invalid JSON, and bodies on bodyless routes
   );
   assert.equal(extra.status, 400);
   assert.deepEqual(await extra.json(), { error: "invalid_settings" });
+
+  for (const body of [
+    {
+      active_provider: "unknown",
+      enabled: false,
+      experimental_acknowledged: false,
+      device_name: "Ai Pin",
+    },
+    {
+      active_provider: "youtube_music",
+      enabled: false,
+      experimental_acknowledged: false,
+      device_name: "Ai Pin",
+    },
+    {
+      active_provider: "tidal",
+      enabled: false,
+      experimental_acknowledged: false,
+      device_name: "Ai Pin",
+      music_gateway_url: "https://center.example.test/path",
+      music_gateway_token: "gateway-token".padEnd(40, "x"),
+    },
+  ]) {
+    const rejected = await fetch(
+      `${base}/api/spotify/settings`,
+      authorized({
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+    );
+    assert.equal(rejected.status, 400);
+    assert.deepEqual(await rejected.json(), { error: "invalid_settings" });
+  }
 
   const invalid = await fetch(
     `${base}/api/spotify/settings`,
