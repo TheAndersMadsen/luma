@@ -1,6 +1,220 @@
 use super::*;
+use bytes::Bytes;
+use http_body_util::BodyExt as _;
 use librespot_playback::audio_backend::Sink as _;
+use reqwest::Url;
+use std::convert::Infallible;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::task::{Context, Poll};
 use tempfile::tempdir;
+
+struct TestHttpServer {
+    origin: String,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for TestHttpServer {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+async fn spawn_test_http(app: Router) -> TestHttpServer {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let task = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    TestHttpServer { origin, task }
+}
+
+#[derive(Clone)]
+struct ProviderRouteTestService {
+    state: std::sync::Arc<ProviderRouteTestState>,
+}
+
+struct ProviderRouteTestState {
+    renewed_url: String,
+    stale_requests: std::sync::Arc<AtomicUsize>,
+    gateway_requests: std::sync::Arc<AtomicUsize>,
+    renewed_requests: std::sync::Arc<AtomicUsize>,
+    gateway_release: tokio::sync::watch::Receiver<bool>,
+    second_stale_release: tokio::sync::watch::Receiver<bool>,
+}
+
+impl tonic::server::NamedService for ProviderRouteTestService {
+    const NAME: &'static str = "api";
+}
+
+impl tower::Service<http::Request<tonic::body::Body>> for ProviderRouteTestService {
+    type Response = Response;
+    type Error = Infallible;
+    type Future = Pin<
+        Box<dyn std::future::Future<Output = Result<Self::Response, Self::Error>> + Send + 'static>,
+    >;
+
+    fn poll_ready(&mut self, _context: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn call(&mut self, request: http::Request<tonic::body::Body>) -> Self::Future {
+        let state = self.state.clone();
+        Box::pin(async move {
+            let path = request.uri().path().to_owned();
+            let _ = request.into_body().collect().await;
+            let response = match path.as_str() {
+                "/api/stale" => {
+                    let ordinal = state.stale_requests.fetch_add(1, Ordering::SeqCst) + 1;
+                    if ordinal > 2 {
+                        let mut release = state.second_stale_release.clone();
+                        let _ = release.wait_for(|released| *released).await;
+                    }
+                    StatusCode::FORBIDDEN.into_response()
+                }
+                "/api/music-gateway/playback" => {
+                    state.gateway_requests.fetch_add(1, Ordering::SeqCst);
+                    let mut release = state.gateway_release.clone();
+                    let _ = release.wait_for(|released| *released).await;
+                    let mut response = Response::new(Body::from(
+                        serde_json::json!({ "url": state.renewed_url }).to_string(),
+                    ));
+                    response.headers_mut().insert(
+                        header::CONTENT_TYPE,
+                        HeaderValue::from_static("application/json"),
+                    );
+                    response
+                }
+                "/api/renewed" => {
+                    state.renewed_requests.fetch_add(1, Ordering::SeqCst);
+                    let mut response = Response::new(Body::from("audio"));
+                    response
+                        .headers_mut()
+                        .insert(header::CONTENT_TYPE, HeaderValue::from_static("audio/mp4"));
+                    response
+                }
+                "/api/invalid-media" => {
+                    let mut response = Response::new(Body::from("not audio"));
+                    response
+                        .headers_mut()
+                        .insert(header::CONTENT_TYPE, HeaderValue::from_static("text/html"));
+                    response
+                }
+                "/api/range-unsatisfied" => {
+                    let mut response = StatusCode::RANGE_NOT_SATISFIABLE.into_response();
+                    response
+                        .headers_mut()
+                        .insert(header::CONTENT_RANGE, HeaderValue::from_static("bytes */5"));
+                    response
+                }
+                _ => StatusCode::NOT_FOUND.into_response(),
+            };
+            Ok(response)
+        })
+    }
+}
+
+struct ProviderRouteTestServer {
+    address: SocketAddr,
+    gateway_origin: String,
+    stale_url: String,
+    renewed_url: String,
+    invalid_media_url: String,
+    range_unsatisfied_url: String,
+    certificate_der: Vec<u8>,
+    stale_requests: std::sync::Arc<AtomicUsize>,
+    gateway_requests: std::sync::Arc<AtomicUsize>,
+    renewed_requests: std::sync::Arc<AtomicUsize>,
+    gateway_release: tokio::sync::watch::Sender<bool>,
+    second_stale_release: tokio::sync::watch::Sender<bool>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for ProviderRouteTestServer {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+async fn spawn_provider_route_test_server() -> ProviderRouteTestServer {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let port = address.port();
+    let gateway_origin = format!("https://gateway.test:{port}");
+    let stale_url = format!("https://r1---sn.test.googlevideo.com:{port}/api/stale");
+    let renewed_url = format!("https://r2---sn.test.googlevideo.com:{port}/api/renewed");
+    let invalid_media_url =
+        format!("https://r1---sn.test.googlevideo.com:{port}/api/invalid-media");
+    let range_unsatisfied_url =
+        format!("https://r2---sn.test.googlevideo.com:{port}/api/range-unsatisfied");
+    let stale_requests = std::sync::Arc::new(AtomicUsize::new(0));
+    let gateway_requests = std::sync::Arc::new(AtomicUsize::new(0));
+    let renewed_requests = std::sync::Arc::new(AtomicUsize::new(0));
+    let (gateway_release, gateway_release_rx) = tokio::sync::watch::channel(false);
+    let (second_stale_release, second_stale_release_rx) = tokio::sync::watch::channel(false);
+    let state = std::sync::Arc::new(ProviderRouteTestState {
+        renewed_url: renewed_url.clone(),
+        stale_requests: stale_requests.clone(),
+        gateway_requests: gateway_requests.clone(),
+        renewed_requests: renewed_requests.clone(),
+        gateway_release: gateway_release_rx,
+        second_stale_release: second_stale_release_rx,
+    });
+    let rcgen::CertifiedKey { cert, signing_key } = rcgen::generate_simple_self_signed(vec![
+        "gateway.test".into(),
+        "r1---sn.test.googlevideo.com".into(),
+        "r2---sn.test.googlevideo.com".into(),
+    ])
+    .unwrap();
+    let certificate_der = cert.der().to_vec();
+    let identity = tonic::transport::Identity::from_pem(cert.pem(), signing_key.serialize_pem());
+    let task = tokio::spawn(async move {
+        let incoming = async_stream::stream! {
+            loop {
+                match listener.accept().await {
+                    Ok((stream, _)) => yield Ok::<_, std::io::Error>(stream),
+                    Err(error) => {
+                        yield Err(error);
+                        return;
+                    }
+                }
+            }
+        };
+        tonic::transport::Server::builder()
+            .tls_config(tonic::transport::ServerTlsConfig::new().identity(identity))
+            .unwrap()
+            .add_service(ProviderRouteTestService { state })
+            .serve_with_incoming(incoming)
+            .await
+            .unwrap();
+    });
+
+    ProviderRouteTestServer {
+        address,
+        gateway_origin,
+        stale_url,
+        renewed_url,
+        invalid_media_url,
+        range_unsatisfied_url,
+        certificate_der,
+        stale_requests,
+        gateway_requests,
+        renewed_requests,
+        gateway_release,
+        second_stale_release,
+        task,
+    }
+}
+
+async fn wait_for_counter(counter: &AtomicUsize, expected: usize) {
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while counter.load(Ordering::SeqCst) < expected {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("test server did not observe the expected request");
+}
 
 #[test]
 fn pin_speaker_profile_levels_and_limits_playback() {
@@ -49,6 +263,949 @@ fn music_gateway_requests_disable_intermediary_compression() {
     const SOURCE: &str = include_str!("mod.rs");
     assert!(SOURCE.contains("reqwest::header::ACCEPT_ENCODING"));
     assert!(SOURCE.contains("MUSIC_GATEWAY_ACCEPT_ENCODING"));
+}
+
+#[test]
+fn only_playback_gets_the_wider_music_gateway_budget() {
+    assert_eq!(MUSIC_GATEWAY_TIMEOUT, Duration::from_secs(20));
+    assert_eq!(MUSIC_GATEWAY_PLAYBACK_TIMEOUT, Duration::from_secs(50));
+    assert_eq!(music_gateway_timeout("query"), MUSIC_GATEWAY_TIMEOUT);
+    assert_eq!(music_gateway_timeout("save"), MUSIC_GATEWAY_TIMEOUT);
+    assert_eq!(
+        music_gateway_timeout("playback"),
+        MUSIC_GATEWAY_PLAYBACK_TIMEOUT
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn music_gateway_total_deadline_includes_the_delayed_response_body() {
+    let app = Router::new().route(
+        "/playback",
+        axum::routing::post(|| async {
+            let body = async_stream::stream! {
+                tokio::time::sleep(Duration::from_millis(80)).await;
+                yield Ok::<Bytes, Infallible>(Bytes::from_static(br#"{"ok":true}"#));
+            };
+            Response::new(Body::from_stream(body))
+        }),
+    );
+    let server = spawn_test_http(app).await;
+    let client = Client::new();
+
+    let timed_out = execute_music_gateway_request::<SpotifySaveResponse>(
+        client.post(format!("{}/playback", server.origin)),
+        "playback",
+        Duration::from_millis(20),
+    )
+    .await;
+    assert!(matches!(timed_out, Err(SpotifyError::Unavailable)));
+
+    let response = execute_music_gateway_request::<SpotifySaveResponse>(
+        client.post(format!("{}/playback", server.origin)),
+        "playback",
+        Duration::from_secs(1),
+    )
+    .await
+    .unwrap();
+    assert!(response.ok);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn music_gateway_rejects_oversized_chunked_body_before_eof() {
+    let app = Router::new().route(
+        "/oversized",
+        axum::routing::post(|| async {
+            let body = async_stream::stream! {
+                for _ in 0..3 {
+                    yield Ok::<Bytes, Infallible>(Bytes::from(vec![b'x'; 1024 * 1024]));
+                }
+                std::future::pending::<()>().await;
+            };
+            Response::new(Body::from_stream(body))
+        }),
+    );
+    let server = spawn_test_http(app).await;
+    let client = Client::new();
+
+    let rejected = tokio::time::timeout(
+        Duration::from_secs(2),
+        execute_music_gateway_request::<SpotifySaveResponse>(
+            client.post(format!("{}/oversized", server.origin)),
+            "playback",
+            Duration::from_secs(30),
+        ),
+    )
+    .await
+    .expect("the size cap must reject a chunked body without waiting for EOF");
+
+    assert!(matches!(rejected, Err(SpotifyError::Unavailable)));
+}
+
+#[test]
+fn provider_stream_deadlines_finish_before_the_stock_player_read_timeout() {
+    let stock_player_read_timeout = Duration::from_secs(8);
+    assert!(
+        PROVIDER_STREAM_RESPONSE_HEADERS_TIMEOUT < stock_player_read_timeout,
+        "fresh or stale provider headers must resolve before DefaultHttpDataSource times out",
+    );
+    assert!(
+        PROVIDER_STREAM_IDLE_TIMEOUT < stock_player_read_timeout,
+        "an idle provider body must fail before DefaultHttpDataSource times out",
+    );
+    assert!(
+        PROVIDER_STREAM_RENEWAL_WAIT_TIMEOUT < stock_player_read_timeout,
+        "a waiter must yield before DefaultHttpDataSource times out",
+    );
+    assert!(
+        PROVIDER_STREAM_ROUTE_TIMEOUT < stock_player_read_timeout,
+        "all work before loopback response headers must stay below the stock timeout",
+    );
+}
+
+#[tokio::test]
+async fn provider_stream_header_deadline_yields_before_the_stock_player_times_out() {
+    let (request_entered_tx, request_entered_rx) = tokio::sync::oneshot::channel();
+    let request_entered_tx = std::sync::Arc::new(std::sync::Mutex::new(Some(request_entered_tx)));
+    let app = Router::new().route(
+        "/never-answers",
+        get(move || {
+            if let Some(tx) = request_entered_tx.lock().unwrap().take() {
+                let _ = tx.send(());
+            }
+            std::future::pending::<&'static str>()
+        }),
+    );
+    let server = spawn_test_http(app).await;
+    let client = Client::new();
+    let request = tokio::spawn(async move {
+        send_provider_stream_request(
+            &client,
+            &Method::GET,
+            Url::parse(&format!("{}/never-answers", server.origin)).unwrap(),
+            None,
+            PROVIDER_STREAM_RESPONSE_HEADERS_TIMEOUT,
+        )
+        .await
+    });
+    request_entered_rx.await.unwrap();
+
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(8)).await;
+    tokio::task::yield_now().await;
+
+    assert!(
+        request.is_finished(),
+        "the loopback handler was still waiting when the stock player would time out",
+    );
+    assert!(request.await.unwrap().is_err());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn provider_stream_route_detaches_one_stale_renewal_then_uses_renewed_url() {
+    let server = spawn_provider_route_test_server().await;
+    let client = Client::builder()
+        .no_proxy()
+        .add_root_certificate(reqwest::Certificate::from_der(&server.certificate_der).unwrap())
+        .resolve("gateway.test", server.address)
+        .resolve("r1---sn.test.googlevideo.com", server.address)
+        .resolve("r2---sn.test.googlevideo.com", server.address)
+        .build()
+        .unwrap();
+    let directory = tempdir().unwrap();
+    let service = SpotifyService::new(
+        MusicConfig {
+            active_provider: MusicProvider::YoutubeMusic,
+            gateway_url: Some(server.gateway_origin.clone()),
+            gateway_token: Some("t".repeat(32)),
+        },
+        SpotifyConfig::default(),
+        &directory.path().join("config.toml"),
+        SocketAddr::from(([127, 0, 0, 1], 0)),
+        client,
+        EsimBridge::start(),
+        Database::open(directory.path().join("activity.sqlite")).unwrap(),
+    )
+    .await;
+    let ticket = "a".repeat(43);
+    service
+        .inner
+        .provider_streams
+        .lock()
+        .await
+        .insert(
+            ticket.clone(),
+            MusicProvider::YoutubeMusic,
+            "youtube_music:fixture".into(),
+            &server.stale_url,
+        )
+        .unwrap();
+
+    let request = |service: SpotifyService, ticket: String| {
+        tokio::spawn(async move {
+            service
+                .provider_stream_response(&ticket, Method::GET, &HeaderMap::new())
+                .await
+        })
+    };
+    let first = request(service.clone(), ticket.clone());
+
+    wait_for_counter(&server.stale_requests, 1).await;
+    wait_for_counter(&server.gateway_requests, 1).await;
+    assert!(
+        service
+            .inner
+            .provider_stream_renewals
+            .lock()
+            .await
+            .contains_key(&ticket),
+        "the renewal must remain detached after the stale response returns",
+    );
+
+    let second = request(service.clone(), ticket.clone());
+    let third = request(service.clone(), ticket.clone());
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(
+        server.stale_requests.load(Ordering::SeqCst),
+        1,
+        "requests joining an active renewal must not refetch its stale URL",
+    );
+
+    first.abort();
+    second.abort();
+    assert!(first.await.unwrap_err().is_cancelled());
+    assert!(second.await.unwrap_err().is_cancelled());
+    assert!(
+        service
+            .inner
+            .provider_stream_renewals
+            .lock()
+            .await
+            .contains_key(&ticket),
+        "cancelling every original request must not cancel the detached renewal",
+    );
+
+    server.gateway_release.send(true).unwrap();
+    let third_response = tokio::time::timeout(Duration::from_secs(1), third)
+        .await
+        .expect("a waiter did not observe the detached renewal")
+        .unwrap();
+    assert_eq!(third_response.status(), StatusCode::OK);
+    assert_eq!(
+        third_response
+            .into_body()
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes(),
+        Bytes::from_static(b"audio"),
+    );
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while service
+            .inner
+            .provider_stream_renewals
+            .lock()
+            .await
+            .contains_key(&ticket)
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("completed renewal did not release its single-flight entry");
+    assert_eq!(
+        server.gateway_requests.load(Ordering::SeqCst),
+        1,
+        "concurrent waiters must share one detached gateway renewal",
+    );
+    assert_eq!(
+        server.renewed_requests.load(Ordering::SeqCst),
+        1,
+        "the surviving waiter must fetch the renewed URL exactly once",
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn stock_retry_cadence_reaches_a_ten_second_detached_renewal() {
+    let server = spawn_provider_route_test_server().await;
+    server.second_stale_release.send(true).unwrap();
+    let client = Client::builder()
+        .no_proxy()
+        .add_root_certificate(reqwest::Certificate::from_der(&server.certificate_der).unwrap())
+        .resolve("gateway.test", server.address)
+        .resolve("r1---sn.test.googlevideo.com", server.address)
+        .resolve("r2---sn.test.googlevideo.com", server.address)
+        .build()
+        .unwrap();
+    let directory = tempdir().unwrap();
+    let service = SpotifyService::new(
+        MusicConfig {
+            active_provider: MusicProvider::YoutubeMusic,
+            gateway_url: Some(server.gateway_origin.clone()),
+            gateway_token: Some("t".repeat(32)),
+        },
+        SpotifyConfig::default(),
+        &directory.path().join("config.toml"),
+        SocketAddr::from(([127, 0, 0, 1], 0)),
+        client,
+        EsimBridge::start(),
+        Database::open(directory.path().join("activity.sqlite")).unwrap(),
+    )
+    .await;
+    let ticket = "c".repeat(43);
+    service
+        .inner
+        .provider_streams
+        .lock()
+        .await
+        .insert(
+            ticket.clone(),
+            MusicProvider::YoutubeMusic,
+            "youtube_music:stock-retry-fixture".into(),
+            &server.stale_url,
+        )
+        .unwrap();
+
+    let gateway_release = server.gateway_release.clone();
+    let release = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(10)).await;
+        gateway_release.send(true).unwrap();
+    });
+    let stock_network_ceiling = Duration::from_secs(8);
+    let mut attempts = 0usize;
+    let mut succeeded = false;
+
+    for retry_delay in [
+        Duration::ZERO,
+        Duration::ZERO,
+        Duration::from_secs(1),
+        Duration::from_secs(2),
+    ] {
+        tokio::time::sleep(retry_delay).await;
+        attempts += 1;
+        let started = tokio::time::Instant::now();
+        let response = service
+            .provider_stream_response(&ticket, Method::GET, &HeaderMap::new())
+            .await;
+        assert!(
+            started.elapsed() < stock_network_ceiling,
+            "attempt {attempts} exceeded stock DefaultHttpDataSource's network ceiling",
+        );
+        if response.status() == StatusCode::OK {
+            assert_eq!(
+                response.into_body().collect().await.unwrap().to_bytes(),
+                Bytes::from_static(b"audio"),
+            );
+            succeeded = true;
+            break;
+        }
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    }
+
+    assert!(
+        succeeded,
+        "stock exhausted its initial load plus three retries before renewal became observable",
+    );
+    assert_eq!(
+        server.stale_requests.load(Ordering::SeqCst),
+        1,
+        "a retry must not refetch a URL already known to have an active renewal",
+    );
+    release.await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn provider_stream_route_preserves_content_range_on_416() {
+    let server = spawn_provider_route_test_server().await;
+    let client = Client::builder()
+        .no_proxy()
+        .add_root_certificate(reqwest::Certificate::from_der(&server.certificate_der).unwrap())
+        .resolve("gateway.test", server.address)
+        .resolve("r1---sn.test.googlevideo.com", server.address)
+        .resolve("r2---sn.test.googlevideo.com", server.address)
+        .build()
+        .unwrap();
+    let directory = tempdir().unwrap();
+    let service = SpotifyService::new(
+        MusicConfig {
+            active_provider: MusicProvider::YoutubeMusic,
+            gateway_url: Some(server.gateway_origin.clone()),
+            gateway_token: Some("t".repeat(32)),
+        },
+        SpotifyConfig::default(),
+        &directory.path().join("config.toml"),
+        SocketAddr::from(([127, 0, 0, 1], 0)),
+        client,
+        EsimBridge::start(),
+        Database::open(directory.path().join("activity.sqlite")).unwrap(),
+    )
+    .await;
+    let ticket = "b".repeat(43);
+    service
+        .inner
+        .provider_streams
+        .lock()
+        .await
+        .insert(
+            ticket.clone(),
+            MusicProvider::YoutubeMusic,
+            "youtube_music:range-fixture".into(),
+            &server.range_unsatisfied_url,
+        )
+        .unwrap();
+    let mut headers = HeaderMap::new();
+    headers.insert(header::RANGE, HeaderValue::from_static("bytes=5-"));
+
+    let response = service
+        .provider_stream_response(&ticket, Method::GET, &headers)
+        .await;
+
+    assert_eq!(response.status(), StatusCode::RANGE_NOT_SATISFIABLE);
+    assert_eq!(
+        response.headers().get(header::CONTENT_RANGE).unwrap(),
+        "bytes */5",
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn provider_stream_route_renews_a_success_status_with_non_media_content() {
+    let server = spawn_provider_route_test_server().await;
+    server.gateway_release.send(true).unwrap();
+    let client = Client::builder()
+        .no_proxy()
+        .add_root_certificate(reqwest::Certificate::from_der(&server.certificate_der).unwrap())
+        .resolve("gateway.test", server.address)
+        .resolve("r1---sn.test.googlevideo.com", server.address)
+        .resolve("r2---sn.test.googlevideo.com", server.address)
+        .build()
+        .unwrap();
+    let directory = tempdir().unwrap();
+    let service = SpotifyService::new(
+        MusicConfig {
+            active_provider: MusicProvider::YoutubeMusic,
+            gateway_url: Some(server.gateway_origin.clone()),
+            gateway_token: Some("t".repeat(32)),
+        },
+        SpotifyConfig::default(),
+        &directory.path().join("config.toml"),
+        SocketAddr::from(([127, 0, 0, 1], 0)),
+        client,
+        EsimBridge::start(),
+        Database::open(directory.path().join("activity.sqlite")).unwrap(),
+    )
+    .await;
+    let ticket = "d".repeat(43);
+    service
+        .inner
+        .provider_streams
+        .lock()
+        .await
+        .insert(
+            ticket.clone(),
+            MusicProvider::YoutubeMusic,
+            "youtube_music:invalid-media-fixture".into(),
+            &server.invalid_media_url,
+        )
+        .unwrap();
+
+    let response = service
+        .provider_stream_response(&ticket, Method::GET, &HeaderMap::new())
+        .await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.into_body().collect().await.unwrap().to_bytes(),
+        Bytes::from_static(b"audio"),
+    );
+    assert_eq!(server.gateway_requests.load(Ordering::SeqCst), 1);
+    assert_eq!(server.renewed_requests.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        service
+            .inner
+            .provider_streams
+            .lock()
+            .await
+            .get(&ticket)
+            .unwrap()
+            .url
+            .as_str(),
+        server.renewed_url,
+    );
+}
+
+#[tokio::test]
+async fn detached_provider_stream_renewal_is_singleflight_and_updates_later_requests() {
+    let ticket = "a".repeat(43);
+    let stale_url = "https://r1---sn.example.googlevideo.com/videoplayback?id=stale";
+    let renewed_url = "https://r2---sn.example.googlevideo.com/videoplayback?id=renewed";
+    let registry = std::sync::Arc::new(Mutex::new(ProviderStreamRegistry::default()));
+    registry
+        .lock()
+        .await
+        .insert(
+            ticket.clone(),
+            MusicProvider::YoutubeMusic,
+            "youtube_music:fixture".into(),
+            stale_url,
+        )
+        .unwrap();
+    let stale = registry.lock().await.get(&ticket).unwrap();
+    let renewals = std::sync::Arc::new(Mutex::new(std::collections::HashMap::new()));
+    let renewal_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    let (completed_tx, completed_rx) = tokio::sync::oneshot::channel();
+
+    let first_registry = registry.clone();
+    let first_count = renewal_count.clone();
+    let first_stale = stale.clone();
+    let first_completion = spawn_provider_stream_renewal_once(
+        renewals.clone(),
+        ticket.clone(),
+        stale.clone(),
+        std::future::ready(true),
+        async move {
+            first_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            release_rx.await.unwrap();
+            assert!(first_registry
+                .lock()
+                .await
+                .replace_url_or_current(&ticket, &first_stale, renewed_url)
+                .is_some());
+            let _ = completed_tx.send(());
+            true
+        },
+    )
+    .await
+    .unwrap();
+
+    let duplicate_count = renewal_count.clone();
+    let duplicate_completion = spawn_provider_stream_renewal_once(
+        renewals.clone(),
+        "a".repeat(43),
+        stale,
+        std::future::ready(true),
+        async move {
+            duplicate_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            true
+        },
+    )
+    .await
+    .unwrap();
+    tokio::task::yield_now().await;
+    assert_eq!(renewal_count.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(
+        registry
+            .lock()
+            .await
+            .get(&"a".repeat(43))
+            .unwrap()
+            .url
+            .as_str(),
+        stale_url,
+    );
+
+    release_tx.send(()).unwrap();
+    completed_rx.await.unwrap();
+    assert_eq!(
+        wait_for_provider_stream_renewal(first_completion, Duration::from_secs(1)).await,
+        ProviderStreamRenewalState::Succeeded,
+    );
+    assert_eq!(
+        wait_for_provider_stream_renewal(duplicate_completion, Duration::from_secs(1)).await,
+        ProviderStreamRenewalState::Succeeded,
+    );
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while renewals.lock().await.contains_key(&"a".repeat(43)) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("completed renewal must release its single-flight ticket");
+    assert_eq!(
+        registry
+            .lock()
+            .await
+            .get(&"a".repeat(43))
+            .unwrap()
+            .url
+            .as_str(),
+        renewed_url,
+    );
+    assert_eq!(renewal_count.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn panicked_provider_stream_renewal_releases_its_singleflight_ticket() {
+    let ticket = "a".repeat(43);
+    let mut registry = ProviderStreamRegistry::default();
+    registry
+        .insert(
+            ticket.clone(),
+            MusicProvider::YoutubeMusic,
+            "youtube_music:panic-fixture".into(),
+            "https://r1---sn.example.googlevideo.com/videoplayback?id=panic-fixture",
+        )
+        .unwrap();
+    let stale = registry.get(&ticket).unwrap();
+    let renewals = std::sync::Arc::new(Mutex::new(std::collections::HashMap::new()));
+
+    let panicked = spawn_provider_stream_renewal_once(
+        renewals.clone(),
+        ticket.clone(),
+        stale.clone(),
+        std::future::ready(true),
+        async move {
+            panic!("fixture renewal panic");
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        wait_for_provider_stream_renewal(panicked, Duration::from_secs(1)).await,
+        ProviderStreamRenewalState::Failed,
+    );
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while renewals.lock().await.contains_key(&ticket) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("panicked renewal must release its single-flight ticket");
+
+    let replacement = spawn_provider_stream_renewal_once(
+        renewals.clone(),
+        ticket.clone(),
+        stale,
+        std::future::ready(true),
+        async move { true },
+    )
+    .await
+    .expect("a later request must be able to renew after a worker panic");
+    assert_eq!(
+        wait_for_provider_stream_renewal(replacement, Duration::from_secs(1)).await,
+        ProviderStreamRenewalState::Succeeded,
+    );
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while renewals.lock().await.contains_key(&ticket) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("replacement renewal must complete");
+}
+
+#[tokio::test]
+async fn timed_out_and_failed_provider_stream_renewals_wake_and_clean_up() {
+    let ticket = "a".repeat(43);
+    let mut registry = ProviderStreamRegistry::default();
+    registry
+        .insert(
+            ticket.clone(),
+            MusicProvider::YoutubeMusic,
+            "youtube_music:timeout-fixture".into(),
+            "https://r1---sn.example.googlevideo.com/videoplayback?id=timeout-fixture",
+        )
+        .unwrap();
+    let stale = registry.get(&ticket).unwrap();
+    let renewals = std::sync::Arc::new(Mutex::new(std::collections::HashMap::new()));
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+
+    let completion = spawn_provider_stream_renewal_once(
+        renewals.clone(),
+        ticket.clone(),
+        stale.clone(),
+        std::future::ready(true),
+        async move {
+            release_rx.await.unwrap();
+            false
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        wait_for_provider_stream_renewal(completion.clone(), Duration::from_millis(20),).await,
+        ProviderStreamRenewalState::Pending,
+    );
+    assert!(renewals.lock().await.contains_key(&ticket));
+
+    release_tx.send(()).unwrap();
+    assert_eq!(
+        wait_for_provider_stream_renewal(completion, Duration::from_secs(1)).await,
+        ProviderStreamRenewalState::Failed,
+    );
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while renewals.lock().await.contains_key(&ticket) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("failed renewal must release its single-flight entry");
+
+    let replacement = spawn_provider_stream_renewal_once(
+        renewals.clone(),
+        ticket.clone(),
+        stale,
+        std::future::ready(true),
+        async move { true },
+    )
+    .await
+    .expect("a timeout followed by failure must not leave a dead entry");
+    assert_eq!(
+        wait_for_provider_stream_renewal(replacement, Duration::from_secs(1)).await,
+        ProviderStreamRenewalState::Succeeded,
+    );
+}
+
+#[tokio::test]
+async fn abandoned_provider_stream_renewal_is_replaced() {
+    let ticket = "a".repeat(43);
+    let mut registry = ProviderStreamRegistry::default();
+    registry
+        .insert(
+            ticket.clone(),
+            MusicProvider::YoutubeMusic,
+            "youtube_music:abandoned-fixture".into(),
+            "https://r1---sn.example.googlevideo.com/videoplayback?id=abandoned-fixture",
+        )
+        .unwrap();
+    let stale = registry.get(&ticket).unwrap();
+    let renewals = std::sync::Arc::new(Mutex::new(std::collections::HashMap::new()));
+    let (abandoned_sender, abandoned_completion) =
+        watch::channel(ProviderStreamRenewalState::Pending);
+    renewals.lock().await.insert(
+        ticket.clone(),
+        ProviderStreamRenewal {
+            stale: stale.clone(),
+            flight: std::sync::Arc::new(()),
+            completion: abandoned_completion,
+        },
+    );
+    drop(abandoned_sender);
+
+    let replacement = spawn_provider_stream_renewal_once(
+        renewals.clone(),
+        ticket.clone(),
+        stale,
+        std::future::ready(true),
+        async move { true },
+    )
+    .await
+    .expect("a closed pending flight must not block a replacement renewal");
+
+    assert_eq!(
+        wait_for_provider_stream_renewal(replacement, Duration::from_secs(1)).await,
+        ProviderStreamRenewalState::Succeeded,
+    );
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while renewals.lock().await.contains_key(&ticket) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("replacement renewal must release the abandoned ticket");
+}
+
+#[tokio::test]
+async fn provider_stream_new_snapshot_replaces_old_flight_without_losing_its_cleanup() {
+    let ticket = "a".repeat(43);
+    let stream_url =
+        "https://r1---sn.example.googlevideo.com/videoplayback?id=reused-ticket-fixture";
+    let mut registry = ProviderStreamRegistry::default();
+    registry
+        .insert(
+            ticket.clone(),
+            MusicProvider::YoutubeMusic,
+            "youtube_music:old-track".into(),
+            stream_url,
+        )
+        .unwrap();
+    let old = registry.get(&ticket).unwrap();
+    registry.clear();
+    registry
+        .insert(
+            ticket.clone(),
+            MusicProvider::YoutubeMusic,
+            "youtube_music:new-track".into(),
+            stream_url,
+        )
+        .unwrap();
+    let new = registry.get(&ticket).unwrap();
+    let renewals = std::sync::Arc::new(Mutex::new(std::collections::HashMap::new()));
+    let (old_release, old_released) = tokio::sync::oneshot::channel();
+    let old_completion = spawn_provider_stream_renewal_once(
+        renewals.clone(),
+        ticket.clone(),
+        old,
+        std::future::ready(true),
+        async move {
+            old_released.await.unwrap();
+            true
+        },
+    )
+    .await
+    .unwrap();
+    let old_flight = renewals.lock().await.get(&ticket).unwrap().flight.clone();
+    let (new_release, new_released) = tokio::sync::oneshot::channel();
+    let new_completion = spawn_provider_stream_renewal_once(
+        renewals.clone(),
+        ticket.clone(),
+        new,
+        std::future::ready(true),
+        async move {
+            new_released.await.unwrap();
+            true
+        },
+    )
+    .await
+    .expect("the current stream snapshot must replace an obsolete flight");
+    let new_flight = renewals.lock().await.get(&ticket).unwrap().flight.clone();
+    assert!(!std::sync::Arc::ptr_eq(&old_flight, &new_flight));
+
+    old_release.send(()).unwrap();
+    assert_eq!(
+        wait_for_provider_stream_renewal(old_completion, Duration::from_secs(1)).await,
+        ProviderStreamRenewalState::Succeeded,
+    );
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while std::sync::Arc::strong_count(&old_flight) > 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the obsolete renewal task did not finish cleanup");
+    assert!(renewals
+        .lock()
+        .await
+        .get(&ticket)
+        .is_some_and(|entry| std::sync::Arc::ptr_eq(&entry.flight, &new_flight)));
+
+    new_release.send(()).unwrap();
+    assert_eq!(
+        wait_for_provider_stream_renewal(new_completion, Duration::from_secs(1)).await,
+        ProviderStreamRenewalState::Succeeded,
+    );
+}
+
+#[tokio::test]
+async fn provider_stream_may_outlive_the_response_header_deadline_while_chunks_flow() {
+    let (release_chunks, _) = tokio::sync::broadcast::channel(8);
+    let app = Router::new().route(
+        "/audio",
+        get({
+            let release_chunks = release_chunks.clone();
+            move || {
+                let mut release_chunks = release_chunks.subscribe();
+                async move {
+                    let body = async_stream::stream! {
+                        yield Ok::<Bytes, Infallible>(Bytes::from_static(b"a"));
+                        for _ in 0..5 {
+                            release_chunks.recv().await.unwrap();
+                            yield Ok::<Bytes, Infallible>(Bytes::from_static(b"a"));
+                        }
+                    };
+                    Response::new(Body::from_stream(body))
+                }
+            }
+        }),
+    );
+    let server = spawn_test_http(app).await;
+    let client = Client::new();
+    let response = send_provider_stream_request(
+        &client,
+        &Method::GET,
+        Url::parse(&format!("{}/audio", server.origin)).unwrap(),
+        None,
+        PROVIDER_STREAM_RESPONSE_HEADERS_TIMEOUT,
+    )
+    .await
+    .unwrap();
+
+    let mut body = provider_stream_body(response, PROVIDER_STREAM_IDLE_TIMEOUT);
+    let first = body.frame().await.unwrap().unwrap().into_data().unwrap();
+    let mut received = first.to_vec();
+    tokio::time::pause();
+    let started = tokio::time::Instant::now();
+    let flowing_gap = PROVIDER_STREAM_RESPONSE_HEADERS_TIMEOUT / 2;
+
+    for _ in 0..5 {
+        let mut next_frame = Box::pin(body.frame());
+        assert!(matches!(futures::poll!(next_frame.as_mut()), Poll::Pending));
+
+        tokio::time::advance(flowing_gap).await;
+        assert_eq!(release_chunks.send(()).unwrap(), 1);
+
+        let mut delivered = None;
+        for _ in 0..10_000 {
+            match futures::poll!(next_frame.as_mut()) {
+                Poll::Ready(frame) => {
+                    delivered = Some(frame);
+                    break;
+                }
+                Poll::Pending => tokio::task::yield_now().await,
+            }
+        }
+        let chunk = delivered
+            .expect("provider chunk was not delivered while virtual time was frozen")
+            .unwrap()
+            .unwrap()
+            .into_data()
+            .unwrap();
+        received.extend_from_slice(&chunk);
+    }
+
+    assert_eq!(received, b"aaaaaa");
+    assert!(
+        tokio::time::Instant::now().duration_since(started)
+            > PROVIDER_STREAM_RESPONSE_HEADERS_TIMEOUT * 2
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn provider_stream_rejects_delayed_headers_and_an_idle_body() {
+    let app = Router::new()
+        .route(
+            "/delayed-headers",
+            get(|| async {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                "late"
+            }),
+        )
+        .route(
+            "/idle-body",
+            get(|| async {
+                let body = async_stream::stream! {
+                    yield Ok::<Bytes, Infallible>(Bytes::from_static(b"first"));
+                    tokio::time::sleep(Duration::from_millis(120)).await;
+                    yield Ok::<Bytes, Infallible>(Bytes::from_static(b"late"));
+                };
+                Response::new(Body::from_stream(body))
+            }),
+        );
+    let server = spawn_test_http(app).await;
+    let client = Client::new();
+
+    assert!(send_provider_stream_request(
+        &client,
+        &Method::GET,
+        Url::parse(&format!("{}/delayed-headers", server.origin)).unwrap(),
+        None,
+        Duration::from_millis(20),
+    )
+    .await
+    .is_err());
+
+    let response = send_provider_stream_request(
+        &client,
+        &Method::GET,
+        Url::parse(&format!("{}/idle-body", server.origin)).unwrap(),
+        None,
+        Duration::from_millis(200),
+    )
+    .await
+    .unwrap();
+    let mut body = provider_stream_body(response, Duration::from_millis(30));
+    let first = body.frame().await.unwrap().unwrap().into_data().unwrap();
+    assert_eq!(first.as_ref(), b"first");
+    assert!(body.frame().await.unwrap().is_err());
 }
 
 #[test]

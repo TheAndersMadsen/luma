@@ -190,6 +190,79 @@ function timeoutMs(): number {
   return Math.min(MAX_TIMEOUT_MS, Math.max(MIN_TIMEOUT_MS, Math.round(configured)));
 }
 
+function deviceRequestSignal(
+  input: string | URL | Request,
+  init: RequestInit | undefined,
+): AbortSignal {
+  const signals = [init?.signal ?? AbortSignal.timeout(timeoutMs())];
+  if (input instanceof Request && !signals.includes(input.signal)) signals.push(input.signal);
+  return signals.length === 1 ? signals[0] : AbortSignal.any(signals);
+}
+
+function waitForSignal<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
+  signal.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    operation.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
+async function readDeviceRequestBody(
+  request: Request,
+  maximum: number,
+  signal: AbortSignal,
+): Promise<Buffer> {
+  const declared = Number(request.headers.get("content-length") ?? "0");
+  if (Number.isFinite(declared) && declared > maximum) {
+    await request.body?.cancel().catch(() => undefined);
+    throw new SpotifyBridgeError("invalid_response", 413, "Music provider request was too large.");
+  }
+  if (!request.body) return Buffer.alloc(0);
+
+  const reader = request.body.getReader();
+  const cancelForAbort = () => {
+    void reader.cancel(signal.reason).catch(() => undefined);
+  };
+  signal.addEventListener("abort", cancelForAbort, { once: true });
+  if (signal.aborted) cancelForAbort();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maximum) {
+        await reader.cancel().catch(() => undefined);
+        throw new SpotifyBridgeError("invalid_response", 413, "Music provider request was too large.");
+      }
+      chunks.push(value);
+    }
+    signal.throwIfAborted();
+  } finally {
+    signal.removeEventListener("abort", cancelForAbort);
+    reader.releaseLock();
+  }
+
+  const body = Buffer.allocUnsafe(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return body;
+}
+
 function normalizedBaseUrl(value: string | undefined, label: string): string {
   const raw = value?.trim() ?? "";
   if (!raw) {
@@ -211,7 +284,11 @@ function normalizedBaseUrl(value: string | undefined, label: string): string {
   }
 }
 
-async function readBoundedText(response: Response, maximum: number): Promise<string> {
+async function readBoundedText(
+  response: Response,
+  maximum: number,
+  signal?: AbortSignal,
+): Promise<string> {
   const declared = Number(response.headers.get("content-length") ?? "0");
   if (Number.isFinite(declared) && declared > maximum) {
     await response.body?.cancel().catch(() => undefined);
@@ -219,7 +296,12 @@ async function readBoundedText(response: Response, maximum: number): Promise<str
   }
 
   if (!response.body) return "";
+  signal?.throwIfAborted();
   const reader = response.body.getReader();
+  const onAbort = () => {
+    void reader.cancel(signal?.reason).catch(() => undefined);
+  };
+  signal?.addEventListener("abort", onAbort, { once: true });
   const chunks: Uint8Array[] = [];
   let total = 0;
   try {
@@ -233,7 +315,9 @@ async function readBoundedText(response: Response, maximum: number): Promise<str
       }
       chunks.push(value);
     }
+    signal?.throwIfAborted();
   } finally {
+    signal?.removeEventListener("abort", onAbort);
     reader.releaseLock();
   }
 
@@ -246,12 +330,17 @@ async function readBoundedText(response: Response, maximum: number): Promise<str
   return new TextDecoder().decode(body);
 }
 
-async function readJsonBounded(response: Response, maximum: number): Promise<unknown> {
+async function readJsonBounded(
+  response: Response,
+  maximum: number,
+  signal?: AbortSignal,
+): Promise<unknown> {
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
   if (!/^application\/json(?:\s*;|$)/u.test(contentType)) {
+    await response.body?.cancel().catch(() => undefined);
     throw new SpotifyBridgeError("invalid_response", 502, "The Pin returned an invalid response.");
   }
-  const text = await readBoundedText(response, maximum);
+  const text = await readBoundedText(response, maximum, signal);
   try {
     return JSON.parse(text);
   } catch {
@@ -474,15 +563,23 @@ export function unavailableSpotifyStatus(reason: SpotifyUnavailableReason): Spot
 }
 
 /** Shared private token for Center's purpose-scoped host adapter. */
-export async function adapterToken(): Promise<string> {
+export async function adapterToken(signal?: AbortSignal): Promise<string> {
+  signal?.throwIfAborted();
   const tokenFile = process.env.REVIVAL_SPOTIFY_ADAPTER_TOKEN_FILE?.trim();
   let token = "";
   if (tokenFile) {
-    token = await readFile(tokenFile, "utf8").catch(() => "");
+    const tokenRead = readFile(tokenFile, { encoding: "utf8", signal });
+    try {
+      token = signal ? await waitForSignal(tokenRead, signal) : await tokenRead;
+    } catch (error) {
+      if (signal?.aborted) throw signal.reason;
+      token = "";
+    }
   } else {
     // Useful only for local development. Production mounts the shared secret file.
     token = process.env.REVIVAL_SPOTIFY_ADAPTER_TOKEN ?? "";
   }
+  signal?.throwIfAborted();
   token = token.trim();
   if (token.length < 32 || token.length > 512 || /\s/u.test(token)) {
     throw new SpotifyBridgeError("bridge_not_configured", 503, "Spotify setup is unavailable.");
@@ -503,12 +600,12 @@ export function musicGatewayOrigin(): string {
   }
 }
 
-export async function deviceMusicGatewayToken(): Promise<string> {
+export async function deviceMusicGatewayToken(signal?: AbortSignal): Promise<string> {
   const deviceId = canonicalDeviceId(process.env.REVIVAL_PIN_BRIDGE_DEVICE_ID);
   if (!deviceId) {
     throw new SpotifyBridgeError("bridge_not_configured", 503, "Music gateway is unavailable.");
   }
-  return createHmac("sha256", await adapterToken())
+  return createHmac("sha256", await adapterToken(signal))
     .update(`${MUSIC_GATEWAY_TOKEN_CONTEXT}\0${deviceId}`, "utf8")
     .digest("base64url");
 }
@@ -552,7 +649,9 @@ export async function deviceMusicProviderFetch(
   init?: RequestInit,
   fetchImpl: typeof fetch = fetch,
 ): Promise<Response> {
-  const request = new Request(input, init);
+  const signal = deviceRequestSignal(input, init);
+  const request = new Request(input, { ...init, signal });
+  signal.throwIfAborted();
   if (!DEVICE_MUSIC_EGRESS_METHODS.has(request.method) || !deviceYoutubeRequestUrl(request.url)) {
     throw new SpotifyBridgeError("invalid_response", 502, "Music provider request was rejected.");
   }
@@ -568,16 +667,17 @@ export async function deviceMusicProviderFetch(
     }
     headers[name] = value;
   }
-  const requestBytes = request.body ? Buffer.from(await request.arrayBuffer()) : Buffer.alloc(0);
-  if (requestBytes.length > MAX_DEVICE_FETCH_REQUEST_BYTES) {
-    throw new SpotifyBridgeError("invalid_response", 413, "Music provider request was too large.");
-  }
+  const requestBytes = await readDeviceRequestBody(
+    request,
+    MAX_DEVICE_FETCH_REQUEST_BYTES,
+    signal,
+  );
 
   const baseUrl = normalizedBaseUrl(process.env.REVIVAL_SPOTIFY_ADAPTER_URL, "The Spotify adapter");
   const response = await fetchImpl(`${baseUrl}${DEVICE_MUSIC_EGRESS_PATH}`, {
     method: "POST",
     headers: {
-      authorization: `Bearer ${await adapterToken()}`,
+      authorization: `Bearer ${await adapterToken(signal)}`,
       "content-type": "application/json",
     },
     body: JSON.stringify({
@@ -589,13 +689,23 @@ export async function deviceMusicProviderFetch(
     }),
     cache: "no-store",
     redirect: "error",
-    signal: AbortSignal.timeout(timeoutMs()),
+    signal,
   }).catch(() => null);
   if (!response?.ok) {
     await response?.body?.cancel().catch(() => undefined);
     throw new SpotifyBridgeError("adapter_unavailable", 503, "Your Pin could not be reached.");
   }
-  const decoded = objectRecord(await readJsonBounded(response, MAX_DEVICE_FETCH_RESPONSE_BYTES));
+  let decodedValue: unknown;
+  try {
+    decodedValue = await readJsonBounded(response, MAX_DEVICE_FETCH_RESPONSE_BYTES, signal);
+  } catch (error) {
+    if (signal.aborted) {
+      await response.body?.cancel().catch(() => undefined);
+      throw new SpotifyBridgeError("adapter_unavailable", 503, "Your Pin could not be reached.");
+    }
+    throw error;
+  }
+  const decoded = objectRecord(decodedValue);
   const status = decoded?.status;
   const rawHeaders = objectRecord(decoded?.headers);
   if (!Number.isSafeInteger(status) || (status as number) < 100 || (status as number) > 599 || !rawHeaders) {

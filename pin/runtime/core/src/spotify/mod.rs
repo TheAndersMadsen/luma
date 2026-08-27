@@ -82,6 +82,14 @@ const BRIDGE_TOKEN_CHARS: usize = 64;
 const MUSIC_GATEWAY_ACCEPT_ENCODING: &str = "identity";
 const MUSIC_GATEWAY_RESPONSE_BYTES: u64 = 2 * 1024 * 1024;
 const MUSIC_GATEWAY_TIMEOUT: Duration = Duration::from_secs(20);
+const MUSIC_GATEWAY_PLAYBACK_TIMEOUT: Duration = Duration::from_secs(50);
+// Stock DefaultHttpDataSource gives each loopback read 8 seconds. These are
+// deliberately shorter so the Pin returns a bounded HTTP failure instead of
+// letting the stock player win the race with its own opaque timeout.
+const PROVIDER_STREAM_RESPONSE_HEADERS_TIMEOUT: Duration = Duration::from_secs(5);
+const PROVIDER_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(5);
+const PROVIDER_STREAM_RENEWAL_WAIT_TIMEOUT: Duration = Duration::from_secs(6);
+const PROVIDER_STREAM_ROUTE_TIMEOUT: Duration = Duration::from_secs(7);
 
 #[derive(Clone)]
 pub struct SpotifyService {
@@ -105,8 +113,23 @@ struct SpotifyInner {
     bridge_token: Option<String>,
     http: Client,
     provider_streams: Mutex<ProviderStreamRegistry>,
+    provider_stream_renewals: Arc<Mutex<HashMap<String, ProviderStreamRenewal>>>,
     persistence: EsimBridge,
     db: Database,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProviderStreamRenewalState {
+    Pending,
+    Succeeded,
+    Failed,
+}
+
+#[derive(Clone)]
+struct ProviderStreamRenewal {
+    stale: ProviderStream,
+    flight: Arc<()>,
+    completion: watch::Receiver<ProviderStreamRenewalState>,
 }
 
 struct Runtime {
@@ -739,6 +762,210 @@ where
     completion.await.unwrap_or(Err(SpotifyError::Unavailable))
 }
 
+fn music_gateway_timeout(operation: &str) -> Duration {
+    if operation == "playback" {
+        MUSIC_GATEWAY_PLAYBACK_TIMEOUT
+    } else {
+        MUSIC_GATEWAY_TIMEOUT
+    }
+}
+
+async fn execute_music_gateway_request<T: DeserializeOwned>(
+    request: RequestBuilder,
+    operation: &str,
+    total_timeout: Duration,
+) -> Result<T, SpotifyError> {
+    // RequestBuilder's total deadline remains attached to the response body,
+    // so a gateway cannot evade this bound by sending headers and stalling its
+    // JSON. Playback gets a wider budget than query/save at the call site.
+    let response = request
+        .timeout(total_timeout)
+        .send()
+        .await
+        .map_err(|_| SpotifyError::Unavailable)?;
+    if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return Err(SpotifyError::RateLimited);
+    }
+    if !response.status().is_success()
+        || response
+            .content_length()
+            .is_some_and(|size| size > MUSIC_GATEWAY_RESPONSE_BYTES)
+    {
+        return Err(SpotifyError::Unavailable);
+    }
+    let mut bytes = Vec::with_capacity(
+        response
+            .content_length()
+            .unwrap_or_default()
+            .min(MUSIC_GATEWAY_RESPONSE_BYTES) as usize,
+    );
+    let mut body = response.bytes_stream();
+    while let Some(chunk) = body.next().await {
+        let chunk = chunk.map_err(|_| SpotifyError::Unavailable)?;
+        if bytes
+            .len()
+            .checked_add(chunk.len())
+            .is_none_or(|size| size as u64 > MUSIC_GATEWAY_RESPONSE_BYTES)
+        {
+            return Err(SpotifyError::Unavailable);
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    serde_json::from_slice(&bytes).map_err(|error| {
+        warn!(
+            operation,
+            response_bytes = bytes.len(),
+            error = %error,
+            "music gateway response was not valid provider JSON"
+        );
+        SpotifyError::Unavailable
+    })
+}
+
+async fn send_provider_stream_request(
+    http: &Client,
+    method: &Method,
+    url: reqwest::Url,
+    range: Option<&HeaderValue>,
+    response_headers_timeout: Duration,
+) -> Result<ReqwestResponse, ()> {
+    let mut request = http
+        .request(method.clone(), url)
+        .header(reqwest::header::ACCEPT_ENCODING, "identity");
+    if let Some(range) = range {
+        request = request.header(reqwest::header::RANGE, range.clone());
+    }
+    tokio::time::timeout(response_headers_timeout, request.send())
+        .await
+        .map_err(|_| ())?
+        .map_err(|_| ())
+}
+
+fn provider_stream_body(response: ReqwestResponse, idle_timeout: Duration) -> Body {
+    let mut upstream = response.bytes_stream();
+    let stream = async_stream::stream! {
+        loop {
+            match tokio::time::timeout(idle_timeout, upstream.next()).await {
+                Ok(Some(Ok(chunk))) => {
+                    yield Ok::<bytes::Bytes, std::io::Error>(chunk);
+                }
+                Ok(Some(Err(_))) => {
+                    yield Err::<bytes::Bytes, std::io::Error>(std::io::Error::other(
+                        "provider audio stream failed",
+                    ));
+                    return;
+                }
+                Ok(None) => return,
+                Err(_) => {
+                    yield Err::<bytes::Bytes, std::io::Error>(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "provider audio stream became idle",
+                    ));
+                    return;
+                }
+            }
+        }
+    };
+    Body::from_stream(stream)
+}
+
+async fn spawn_provider_stream_renewal_once<C, F>(
+    active: Arc<Mutex<HashMap<String, ProviderStreamRenewal>>>,
+    ticket: String,
+    stale: ProviderStream,
+    current: C,
+    renewal: F,
+) -> Option<watch::Receiver<ProviderStreamRenewalState>>
+where
+    C: std::future::Future<Output = bool>,
+    F: std::future::Future<Output = bool> + Send + 'static,
+{
+    {
+        let mut active_renewals = active.lock().await;
+        if active_renewals
+            .get(&ticket)
+            .is_some_and(provider_stream_renewal_is_abandoned)
+        {
+            active_renewals.remove(&ticket);
+        }
+        if let Some(existing) = active_renewals.get(&ticket) {
+            if same_provider_stream_snapshot(&existing.stale, &stale) {
+                return Some(existing.completion.clone());
+            }
+        }
+    }
+    if !current.await {
+        return None;
+    }
+    let mut active_renewals = active.lock().await;
+    if active_renewals
+        .get(&ticket)
+        .is_some_and(provider_stream_renewal_is_abandoned)
+    {
+        active_renewals.remove(&ticket);
+    }
+    if let Some(existing) = active_renewals.get(&ticket) {
+        if same_provider_stream_snapshot(&existing.stale, &stale) {
+            return Some(existing.completion.clone());
+        }
+    }
+    let (completed, completion) = watch::channel(ProviderStreamRenewalState::Pending);
+    let flight = Arc::new(());
+    active_renewals.insert(
+        ticket.clone(),
+        ProviderStreamRenewal {
+            stale,
+            flight: flight.clone(),
+            completion: completion.clone(),
+        },
+    );
+    drop(active_renewals);
+    tokio::spawn(async move {
+        let outcome = match AssertUnwindSafe(renewal).catch_unwind().await {
+            Ok(true) => ProviderStreamRenewalState::Succeeded,
+            Ok(false) => ProviderStreamRenewalState::Failed,
+            Err(_) => {
+                warn!("provider stream renewal worker panicked");
+                ProviderStreamRenewalState::Failed
+            }
+        };
+        let _ = completed.send(outcome);
+        let mut active_renewals = active.lock().await;
+        if active_renewals
+            .get(&ticket)
+            .is_some_and(|entry| Arc::ptr_eq(&entry.flight, &flight))
+        {
+            active_renewals.remove(&ticket);
+        }
+    });
+    Some(completion)
+}
+
+async fn wait_for_provider_stream_renewal(
+    mut completion: watch::Receiver<ProviderStreamRenewalState>,
+    timeout: Duration,
+) -> ProviderStreamRenewalState {
+    let current = *completion.borrow_and_update();
+    if current != ProviderStreamRenewalState::Pending {
+        return current;
+    }
+    let waited = tokio::time::timeout(timeout, completion.changed()).await;
+    match waited {
+        Ok(Ok(())) => *completion.borrow_and_update(),
+        Ok(Err(_)) => ProviderStreamRenewalState::Failed,
+        Err(_) => ProviderStreamRenewalState::Pending,
+    }
+}
+
+fn same_provider_stream_snapshot(left: &ProviderStream, right: &ProviderStream) -> bool {
+    left.provider == right.provider && left.track_id == right.track_id && left.url == right.url
+}
+
+fn provider_stream_renewal_is_abandoned(renewal: &ProviderStreamRenewal) -> bool {
+    *renewal.completion.borrow() == ProviderStreamRenewalState::Pending
+        && renewal.completion.has_changed().is_err()
+}
+
 impl SpotifyService {
     pub async fn new(
         music_settings: MusicConfig,
@@ -800,6 +1027,7 @@ impl SpotifyService {
                 bridge_token,
                 http,
                 provider_streams: Mutex::new(ProviderStreamRegistry::default()),
+                provider_stream_renewals: Arc::new(Mutex::new(HashMap::new())),
                 persistence,
                 db,
             }),
@@ -1601,10 +1829,58 @@ impl SpotifyService {
             .await
             .ok()?;
         let mut streams = self.inner.provider_streams.lock().await;
-        if !streams.replace_url(ticket, &stream.url, &response.url) {
+        streams.replace_url_or_current(ticket, stream, &response.url)
+    }
+
+    async fn active_provider_stream_renewal(
+        &self,
+        ticket: &str,
+        stream: &ProviderStream,
+    ) -> Option<watch::Receiver<ProviderStreamRenewalState>> {
+        let mut active_renewals = self.inner.provider_stream_renewals.lock().await;
+        if active_renewals
+            .get(ticket)
+            .is_some_and(provider_stream_renewal_is_abandoned)
+        {
+            active_renewals.remove(ticket);
             return None;
         }
-        streams.get(ticket)
+        active_renewals
+            .get(ticket)
+            .filter(|entry| same_provider_stream_snapshot(&entry.stale, stream))
+            .map(|entry| entry.completion.clone())
+    }
+
+    async fn start_provider_stream_renewal(
+        &self,
+        ticket: &str,
+        stream: &ProviderStream,
+    ) -> Option<watch::Receiver<ProviderStreamRenewalState>> {
+        let service = self.clone();
+        let task_ticket = ticket.to_owned();
+        let active_ticket = task_ticket.clone();
+        let task_stream = stream.clone();
+        let current = async {
+            self.inner
+                .provider_streams
+                .lock()
+                .await
+                .get(ticket)
+                .is_some_and(|current| same_provider_stream_snapshot(&current, stream))
+        };
+        spawn_provider_stream_renewal_once(
+            self.inner.provider_stream_renewals.clone(),
+            active_ticket,
+            stream.clone(),
+            current,
+            async move {
+                service
+                    .renew_provider_stream(&task_ticket, &task_stream)
+                    .await
+                    .is_some()
+            },
+        )
+        .await
     }
 
     async fn fetch_provider_stream(
@@ -1612,20 +1888,35 @@ impl SpotifyService {
         stream: &ProviderStream,
         method: &Method,
         range: Option<&HeaderValue>,
-    ) -> Result<ReqwestResponse, reqwest::Error> {
-        let mut request = self
-            .inner
-            .http
-            .request(method.clone(), stream.url.clone())
-            .header(reqwest::header::ACCEPT_ENCODING, "identity")
-            .timeout(Duration::from_secs(15));
-        if let Some(range) = range {
-            request = request.header(reqwest::header::RANGE, range.clone());
-        }
-        request.send().await
+    ) -> Result<ReqwestResponse, ()> {
+        send_provider_stream_request(
+            &self.inner.http,
+            method,
+            stream.url.clone(),
+            range,
+            PROVIDER_STREAM_RESPONSE_HEADERS_TIMEOUT,
+        )
+        .await
     }
 
     async fn provider_stream_response(
+        &self,
+        ticket: &str,
+        method: Method,
+        headers: &HeaderMap,
+    ) -> Response {
+        match tokio::time::timeout(
+            PROVIDER_STREAM_ROUTE_TIMEOUT,
+            self.provider_stream_response_within_deadline(ticket, method, headers),
+        )
+        .await
+        {
+            Ok(response) => response,
+            Err(_) => StatusCode::BAD_GATEWAY.into_response(),
+        }
+    }
+
+    async fn provider_stream_response_within_deadline(
         &self,
         ticket: &str,
         method: Method,
@@ -1638,27 +1929,76 @@ impl SpotifyService {
         let Some(mut stream) = self.provider_stream(ticket).await else {
             return StatusCode::NOT_FOUND.into_response();
         };
+
+        if let Some(completion) = self.active_provider_stream_renewal(ticket, &stream).await {
+            let outcome =
+                wait_for_provider_stream_renewal(completion, PROVIDER_STREAM_RENEWAL_WAIT_TIMEOUT)
+                    .await;
+            if outcome == ProviderStreamRenewalState::Pending {
+                return StatusCode::BAD_GATEWAY.into_response();
+            }
+            let Some(current) = self.provider_stream(ticket).await else {
+                return StatusCode::NOT_FOUND.into_response();
+            };
+            if outcome == ProviderStreamRenewalState::Failed
+                && same_provider_stream_snapshot(&current, &stream)
+            {
+                return StatusCode::BAD_GATEWAY.into_response();
+            }
+            stream = current;
+        }
+
         let mut upstream = self
             .fetch_provider_stream(&stream, &method, range.as_ref())
             .await;
         let should_renew = match &upstream {
-            Ok(response) => !matches!(response.status().as_u16(), 200 | 206 | 416),
+            Ok(response) => {
+                response.status() != reqwest::StatusCode::RANGE_NOT_SATISFIABLE
+                    && (!matches!(response.status().as_u16(), 200 | 206)
+                        || !valid_music_stream_content_type(
+                            response.headers().get(header::CONTENT_TYPE),
+                        ))
+            }
             Err(_) => true,
         };
         if should_renew {
-            if let Some(renewed) = self.renew_provider_stream(ticket, &stream).await {
-                stream = renewed;
-                upstream = self
-                    .fetch_provider_stream(&stream, &method, range.as_ref())
-                    .await;
+            let completion = self.start_provider_stream_renewal(ticket, &stream).await;
+            let outcome = match completion {
+                Some(completion) => {
+                    wait_for_provider_stream_renewal(
+                        completion,
+                        PROVIDER_STREAM_RENEWAL_WAIT_TIMEOUT,
+                    )
+                    .await
+                }
+                None => ProviderStreamRenewalState::Failed,
+            };
+            if outcome == ProviderStreamRenewalState::Pending {
+                return StatusCode::BAD_GATEWAY.into_response();
             }
+            let Some(current) = self.provider_stream(ticket).await else {
+                return StatusCode::NOT_FOUND.into_response();
+            };
+            if outcome == ProviderStreamRenewalState::Failed
+                && same_provider_stream_snapshot(&current, &stream)
+            {
+                return StatusCode::BAD_GATEWAY.into_response();
+            }
+            stream = current;
+            upstream = self
+                .fetch_provider_stream(&stream, &method, range.as_ref())
+                .await;
         }
         let response = match upstream {
             Ok(response) => response,
             Err(_) => return StatusCode::BAD_GATEWAY.into_response(),
         };
         if response.status() == reqwest::StatusCode::RANGE_NOT_SATISFIABLE {
-            return StatusCode::RANGE_NOT_SATISFIABLE.into_response();
+            let mut output = StatusCode::RANGE_NOT_SATISFIABLE.into_response();
+            if let Some(value) = response.headers().get(header::CONTENT_RANGE).cloned() {
+                output.headers_mut().insert(header::CONTENT_RANGE, value);
+            }
+            return output;
         }
         if !matches!(response.status().as_u16(), 200 | 206)
             || !valid_music_stream_content_type(response.headers().get(header::CONTENT_TYPE))
@@ -1686,7 +2026,7 @@ impl SpotifyService {
         let body = if method == Method::HEAD {
             Body::empty()
         } else {
-            Body::from_stream(response.bytes_stream())
+            provider_stream_body(response, PROVIDER_STREAM_IDLE_TIMEOUT)
         };
         let mut output = Response::new(body);
         *output.status_mut() = status;
@@ -1728,7 +2068,7 @@ impl SpotifyService {
         body: Value,
     ) -> Result<T, SpotifyError> {
         let (_, gateway_url, token) = self.music_gateway_context().await?;
-        let response = self
+        let request = self
             .inner
             .http
             .post(format!(
@@ -1743,37 +2083,8 @@ impl SpotifyService {
                 MUSIC_GATEWAY_ACCEPT_ENCODING,
             )
             .bearer_auth(token)
-            .timeout(MUSIC_GATEWAY_TIMEOUT)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|_| SpotifyError::Unavailable)?;
-        if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
-            return Err(SpotifyError::RateLimited);
-        }
-        if !response.status().is_success()
-            || response
-                .content_length()
-                .is_some_and(|size| size > MUSIC_GATEWAY_RESPONSE_BYTES)
-        {
-            return Err(SpotifyError::Unavailable);
-        }
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|_| SpotifyError::Unavailable)?;
-        if bytes.len() as u64 > MUSIC_GATEWAY_RESPONSE_BYTES {
-            return Err(SpotifyError::Unavailable);
-        }
-        serde_json::from_slice(&bytes).map_err(|error| {
-            warn!(
-                operation,
-                response_bytes = bytes.len(),
-                error = %error,
-                "music gateway response was not valid provider JSON"
-            );
-            SpotifyError::Unavailable
-        })
+            .json(&body);
+        execute_music_gateway_request(request, operation, music_gateway_timeout(operation)).await
     }
 
     /// Audio-path diagnostics for one track, **without playing it**.

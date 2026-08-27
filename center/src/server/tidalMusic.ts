@@ -12,8 +12,19 @@ const TOKEN_URL = "https://auth.tidal.com/v1/oauth2/token";
 const API_ORIGIN = "https://openapi.tidal.com";
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 const MAX_TOKEN_RESPONSE_BYTES = 128 * 1024;
+const TIDAL_REQUEST_TIMEOUT_MS = 15_000;
 const DEFAULT_SCOPES = "user.read collection.read collection.write playback";
 const sessionEpochs = new Map<string, number>();
+type TidalRefreshFlight = {
+  controller: AbortController;
+  epoch: number;
+  promise: Promise<TidalCredentials>;
+  grantDispatched: { value: boolean };
+  sourceAccessToken: string;
+  settled: boolean;
+  waiters: number;
+};
+const refreshFlights = new Map<string, TidalRefreshFlight>();
 
 export class TidalMusicError extends Error {
   readonly status: number;
@@ -22,6 +33,12 @@ export class TidalMusicError extends Error {
     super(message);
     this.name = "TidalMusicError";
     this.status = status;
+  }
+}
+
+class TidalRefreshRejectedError extends TidalMusicError {
+  constructor() {
+    super("Reconnect TIDAL in Center.", 401);
   }
 }
 
@@ -60,6 +77,39 @@ function invalidateSession(subject: string): void {
   sessionEpochs.set(subject, sessionEpoch(subject) + 1);
 }
 
+function tidalRequestSignal(
+  operationSignal?: AbortSignal,
+  requestSignal?: AbortSignal | null,
+): AbortSignal {
+  const signals = [
+    AbortSignal.timeout(TIDAL_REQUEST_TIMEOUT_MS),
+    operationSignal,
+    requestSignal ?? undefined,
+  ]
+    .filter((signal): signal is AbortSignal => signal !== undefined)
+    .filter((signal, index, all) => all.indexOf(signal) === index);
+  return signals.length === 1 ? signals[0] : AbortSignal.any(signals);
+}
+
+function waitForSignal<T>(operation: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return operation;
+  signal.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    operation.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
 function base64url(bytes: Uint8Array): string {
   return Buffer.from(bytes).toString("base64url");
 }
@@ -75,7 +125,13 @@ export async function tidalConnectionStatus(subject: string): Promise<{
   }
   try {
     const record = await readMusicAccountRecord(subject);
-    if (record.tidal?.credentials?.access_token) return { configured: true, state: "connected" };
+    const credentials = record.tidal?.credentials;
+    if (
+      credentials?.access_token &&
+      (credentials.expires_at > Date.now() + 60_000 || Boolean(credentials.refresh_token))
+    ) {
+      return { configured: true, state: "connected" };
+    }
     if (record.tidal?.pending && record.tidal.pending.expires_at > Date.now()) {
       return { configured: true, state: "connecting" };
     }
@@ -116,14 +172,23 @@ function stringField(record: Record<string, unknown>, name: string, required = f
   return undefined;
 }
 
-async function boundedResponseJson(response: Response, maxBytes: number): Promise<unknown> {
+async function boundedResponseJson(
+  response: Response,
+  maxBytes: number,
+  signal?: AbortSignal,
+): Promise<unknown> {
   const declared = Number(response.headers.get("content-length") ?? 0);
   if (Number.isFinite(declared) && declared > maxBytes) {
     await response.body?.cancel().catch(() => undefined);
     throw new TidalMusicError("TIDAL returned an oversized response.", 502);
   }
   if (!response.body) throw new TidalMusicError("TIDAL returned an invalid response.", 502);
+  signal?.throwIfAborted();
   const reader = response.body.getReader();
+  const onAbort = () => {
+    void reader.cancel(signal?.reason).catch(() => undefined);
+  };
+  signal?.addEventListener("abort", onAbort, { once: true });
   const chunks: Uint8Array[] = [];
   let total = 0;
   try {
@@ -137,7 +202,9 @@ async function boundedResponseJson(response: Response, maxBytes: number): Promis
       }
       chunks.push(value);
     }
+    signal?.throwIfAborted();
   } finally {
+    signal?.removeEventListener("abort", onAbort);
     reader.releaseLock();
   }
   const bytes = new Uint8Array(total);
@@ -153,22 +220,59 @@ async function boundedResponseJson(response: Response, maxBytes: number): Promis
   }
 }
 
-async function tokenRequest(fields: URLSearchParams): Promise<TidalCredentials> {
+async function tokenRequest(
+  fields: URLSearchParams,
+  operationSignal?: AbortSignal,
+  markRequestDispatched?: () => void,
+): Promise<TidalCredentials> {
   const secret = process.env.TIDAL_CLIENT_SECRET?.trim();
   if (secret) fields.set("client_secret", secret);
+  const signal = tidalRequestSignal(operationSignal);
+  markRequestDispatched?.();
   const response = await fetch(TOKEN_URL, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
     body: fields,
     cache: "no-store",
     redirect: "error",
-    signal: AbortSignal.timeout(15_000),
+    signal,
   }).catch(() => null);
-  if (!response?.ok) {
-    await response?.body?.cancel().catch(() => undefined);
+  if (!response) {
+    if (signal.aborted) throw new TidalMusicError("TIDAL could not be reached.");
     throw new TidalMusicError("TIDAL sign-in could not be completed.", 502);
   }
-  const value = await boundedResponseJson(response, MAX_TOKEN_RESPONSE_BYTES);
+  if (!response.ok) {
+    if (response.status === 400 && fields.get("grant_type") === "refresh_token") {
+      let value: unknown;
+      try {
+        value = await boundedResponseJson(response, MAX_TOKEN_RESPONSE_BYTES, signal);
+      } catch {
+        if (signal.aborted) throw new TidalMusicError("TIDAL could not be reached.");
+        throw new TidalMusicError("TIDAL sign-in could not be completed.", 502);
+      }
+      if (
+        value &&
+        typeof value === "object" &&
+        !Array.isArray(value) &&
+        (value as Record<string, unknown>).error === "invalid_grant"
+      ) {
+        throw new TidalRefreshRejectedError();
+      }
+    } else {
+      await response.body?.cancel().catch(() => undefined);
+    }
+    if (signal.aborted) throw new TidalMusicError("TIDAL could not be reached.");
+    throw new TidalMusicError("TIDAL sign-in could not be completed.", 502);
+  }
+  let value: unknown;
+  try {
+    value = await boundedResponseJson(response, MAX_TOKEN_RESPONSE_BYTES, signal);
+  } catch (error) {
+    if (signal.aborted) {
+      throw new TidalMusicError("TIDAL could not be reached.");
+    }
+    throw error;
+  }
   const body = value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : null;
@@ -223,24 +327,48 @@ export async function disconnectTidal(subject: string): Promise<void> {
   });
 }
 
-async function credentials(subject: string): Promise<TidalCredentials> {
-  const epoch = sessionEpoch(subject);
-  const current = (await readMusicAccountRecord(subject)).tidal?.credentials;
-  if (!current) throw new TidalMusicError("Connect TIDAL in Center.", 401);
-  if (current.expires_at > Date.now() + 60_000) return current;
-  if (!current.refresh_token) throw new TidalMusicError("Reconnect TIDAL in Center.", 401);
+async function rotateCredentials(
+  subject: string,
+  current: TidalCredentials,
+  epoch: number,
+  signal: AbortSignal,
+  markGrantDispatched: () => void,
+): Promise<TidalCredentials> {
   const fields = new URLSearchParams({
     client_id: clientId(),
     grant_type: "refresh_token",
-    refresh_token: current.refresh_token,
+    refresh_token: current.refresh_token!,
   });
   const scopes = requestedScopes();
   if (scopes) fields.set("scope", scopes);
-  const refreshed = await tokenRequest(fields);
+  let refreshed: TidalCredentials;
+  try {
+    refreshed = await tokenRequest(fields, signal, markGrantDispatched);
+  } catch (error) {
+    if (error instanceof TidalRefreshRejectedError) {
+      await waitForSignal(updateMusicAccountRecord(subject, (record) => {
+        signal.throwIfAborted();
+        const latest = record.tidal?.credentials;
+        if (
+          sessionEpoch(subject) !== epoch ||
+          !latest ||
+          latest.access_token !== current.access_token
+        ) {
+          throw new TidalMusicError("TIDAL was disconnected while refreshing.", 401);
+        }
+        const pending = record.tidal?.pending;
+        const { tidal: _tidal, ...rest } = record;
+        return pending ? { ...rest, tidal: { pending }, version: 1 } : { ...rest, version: 1 };
+      }), signal);
+    }
+    throw error;
+  }
+  signal?.throwIfAborted();
   if (!refreshed.refresh_token) refreshed.refresh_token = current.refresh_token;
   if (!refreshed.user_id) refreshed.user_id = current.user_id;
   if (!refreshed.country_code) refreshed.country_code = current.country_code;
-  await updateMusicAccountRecord(subject, (record) => {
+  await waitForSignal(updateMusicAccountRecord(subject, (record) => {
+    signal.throwIfAborted();
     const latest = record.tidal?.credentials;
     if (
       sessionEpoch(subject) !== epoch ||
@@ -257,14 +385,113 @@ async function credentials(subject: string): Promise<TidalCredentials> {
         connected_at: record.tidal?.connected_at ?? new Date().toISOString(),
       },
     };
-  });
+  }), signal);
   return refreshed;
 }
 
-async function tidalApi(subject: string, path: string, init?: RequestInit): Promise<unknown> {
-  const auth = await credentials(subject);
+async function sharedCredentialRefresh(
+  subject: string,
+  current: TidalCredentials,
+  epoch: number,
+  signal?: AbortSignal,
+): Promise<TidalCredentials> {
+  let flight = refreshFlights.get(subject);
+  if (
+    !flight ||
+    flight.settled ||
+    flight.controller.signal.aborted ||
+    flight.epoch !== epoch ||
+    flight.sourceAccessToken !== current.access_token
+  ) {
+    signal?.throwIfAborted();
+    const latest = (await waitForSignal(readMusicAccountRecord(subject), signal)).tidal?.credentials;
+    signal?.throwIfAborted();
+    if (sessionEpoch(subject) !== epoch || !latest) {
+      throw new TidalMusicError("Reconnect TIDAL in Center.", 401);
+    }
+    if (latest.access_token !== current.access_token) {
+      if (latest.expires_at > Date.now() + 60_000) return latest;
+      if (!latest.refresh_token) throw new TidalMusicError("Reconnect TIDAL in Center.", 401);
+      return sharedCredentialRefresh(subject, latest, epoch, signal);
+    }
+
+    flight = refreshFlights.get(subject);
+    if (
+      !flight ||
+      flight.settled ||
+      flight.controller.signal.aborted ||
+      flight.epoch !== epoch ||
+      flight.sourceAccessToken !== current.access_token
+    ) {
+      const controller = new AbortController();
+      const grantDispatched = { value: false };
+      const promise = rotateCredentials(
+        subject,
+        current,
+        epoch,
+        controller.signal,
+        () => {
+          grantDispatched.value = true;
+        },
+      );
+      flight = {
+        controller,
+        epoch,
+        promise,
+        grantDispatched,
+        sourceAccessToken: current.access_token,
+        settled: false,
+        waiters: 0,
+      };
+      refreshFlights.set(subject, flight);
+      const finish = () => {
+        flight!.settled = true;
+        if (refreshFlights.get(subject) === flight) refreshFlights.delete(subject);
+      };
+      void promise.then(finish, finish);
+    }
+  }
+
+  flight.waiters += 1;
+  try {
+    return await waitForSignal(flight.promise, signal);
+  } catch (error) {
+    if (signal?.aborted) throw new TidalMusicError("TIDAL could not be reached.");
+    throw error;
+  } finally {
+    flight.waiters -= 1;
+    if (
+      !flight.settled &&
+      flight.waiters === 0 &&
+      !flight.grantDispatched.value &&
+      !flight.controller.signal.aborted
+    ) {
+      flight.controller.abort(signal?.reason);
+    }
+  }
+}
+
+async function credentials(subject: string, signal?: AbortSignal): Promise<TidalCredentials> {
+  signal?.throwIfAborted();
+  const epoch = sessionEpoch(subject);
+  const current = (await waitForSignal(readMusicAccountRecord(subject), signal)).tidal?.credentials;
+  signal?.throwIfAborted();
+  if (!current) throw new TidalMusicError("Connect TIDAL in Center.", 401);
+  if (current.expires_at > Date.now() + 60_000) return current;
+  if (!current.refresh_token) throw new TidalMusicError("Reconnect TIDAL in Center.", 401);
+  return sharedCredentialRefresh(subject, current, epoch, signal);
+}
+
+async function tidalApi(
+  subject: string,
+  path: string,
+  init?: RequestInit,
+  operationSignal?: AbortSignal,
+): Promise<unknown> {
+  const auth = await credentials(subject, operationSignal);
   const url = new URL(path, `${API_ORIGIN}/v2/`);
   if (url.origin !== API_ORIGIN) throw new TidalMusicError("TIDAL request is invalid.", 400);
+  const signal = tidalRequestSignal(operationSignal, init?.signal);
   const response = await fetch(url, {
     ...init,
     headers: {
@@ -275,7 +502,7 @@ async function tidalApi(subject: string, path: string, init?: RequestInit): Prom
     },
     cache: "no-store",
     redirect: "error",
-    signal: AbortSignal.timeout(15_000),
+    signal,
   }).catch(() => null);
   if (!response) throw new TidalMusicError("TIDAL could not be reached.");
   const declared = Number(response.headers.get("content-length") ?? 0);
@@ -286,7 +513,12 @@ async function tidalApi(subject: string, path: string, init?: RequestInit): Prom
     throw new TidalMusicError("TIDAL could not complete that request.", 502);
   }
   if (response.status === 204) return null;
-  return boundedResponseJson(response, MAX_RESPONSE_BYTES);
+  try {
+    return await boundedResponseJson(response, MAX_RESPONSE_BYTES, signal);
+  } catch (error) {
+    if (signal.aborted) throw new TidalMusicError("TIDAL could not be reached.");
+    throw error;
+  }
 }
 
 function isoDurationMs(value: unknown): number {
@@ -543,8 +775,17 @@ export async function queryTidal(subject: string, request: { kind: string; prima
   );
 }
 
-export async function tidalStreamUrl(subject: string, id: string): Promise<string> {
-  const body = await tidalApi(subject, `trackFiles/${encodeURIComponent(tidalId(id))}?formats=AACLC&usage=PLAYBACK`) as { data?: { attributes?: { url?: unknown; trackPresentation?: unknown } } };
+export async function tidalStreamUrl(
+  subject: string,
+  id: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  const body = await tidalApi(
+    subject,
+    `trackFiles/${encodeURIComponent(tidalId(id))}?formats=AACLC&usage=PLAYBACK`,
+    undefined,
+    signal,
+  ) as { data?: { attributes?: { url?: unknown; trackPresentation?: unknown } } };
   const url = body?.data?.attributes?.url;
   if (body?.data?.attributes?.trackPresentation !== "FULL") {
     throw new TidalMusicError("TIDAL did not authorize full-track playback.", 403);

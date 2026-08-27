@@ -101,6 +101,7 @@ hex = "0.4"
 
 [dev-dependencies]
 tempfile = "3"
+tonic = { version = "0.14", features = ["tls-ring"] }
 
 [patch.crates-io]
 rig-core = { git = "https://github.com/agg23/rig", branch = "gemini-server-tool-passthrough" }

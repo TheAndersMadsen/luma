@@ -590,7 +590,7 @@ test("cases: every native-only wearer capability is represented", () => {
   assert.equal(COVERAGE_CASES.length, 89, "the exhaustive wearer catalog changed; add or remove an audited case deliberately");
 });
 
-test("LOAD-BEARING cases: every contract action emitted by native_device_actions.rs is represented", () => {
+test("LOAD-BEARING cases: every contract action emitted by the native_device_actions module is represented", () => {
   const contracts = readFileSync(
     path.join(REPO_ROOT, "contracts/tier-a/native-actions.tsv"),
     "utf8",
@@ -599,7 +599,7 @@ test("LOAD-BEARING cases: every contract action emitted by native_device_actions
     .split("\n")
     .slice(1)
     .map((line) => line.split("\t"))
-    .filter((columns) => columns[6]?.includes("native_device_actions.rs"))
+    .filter((columns) => columns[6]?.startsWith("runtime/core/src/synapse/native_device_actions"))
     .map((columns) => columns[0]);
 
   const represented = new Set(

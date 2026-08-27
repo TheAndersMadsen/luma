@@ -91,14 +91,29 @@ test("eval: --adb is translated to --adb-path; --prompt passes through", async (
   assert.equal(a.includes("--adb A "), false);
 });
 
-test("physical: --adb stays --adb (no translation)", async () => {
+test("physical: expected device, release metadata, provider, and network transport pass through unchanged", async () => {
   const { spawn, calls } = makeFakeSpawn();
   const s = sinks();
-  await dispatch(argv("physical", "--serial", "S", "--adb", "A", "--case", "x"), { ...s, spawn });
+  await dispatch(argv(
+    "physical",
+    "--serial", "S",
+    "--adb", "A",
+    "--expected-pin-serial", "S",
+    "--release-manifest", "/tmp/release.json",
+    "--release-receipts", "/tmp/receipts.json",
+    "--case", "ranked_music",
+    "--provider", "youtube_music",
+    "--expected-transport", "wifi",
+  ), { ...s, spawn });
   const a = calls[0].args.join(" ");
   assert.match(a, /--serial S /);
   assert.match(a, /--adb A /);
-  assert.match(a, /--case x/);
+  assert.match(a, /--expected-pin-serial S /);
+  assert.match(a, /--release-manifest \/tmp\/release\.json/);
+  assert.match(a, /--release-receipts \/tmp\/receipts\.json/);
+  assert.match(a, /--case ranked_music/);
+  assert.match(a, /--provider youtube_music/);
+  assert.match(a, /--expected-transport wifi/);
 });
 
 test("smoke: --json is forwarded", async () => {
@@ -141,19 +156,12 @@ test("-- forces passthrough (a colliding flag is preserved untouched)", async ()
   assert.match(a, /--json$/);
 });
 
-test("--token-file forwarded as flag for ab-gate, as env for shell-out tools", async () => {
+test("--token-file reaches shell-out tools through env and never argv", async () => {
   const { spawn, calls } = makeFakeSpawn();
   const s = sinks();
-  await dispatch(argv("ab-gate", "--token-file", "/tmp/t", "--models", "m1"), { ...s, spawn });
-  const a = calls[0].args.join(" ");
-  assert.match(a, /--token-file \/tmp\/t/);
+  await dispatch(argv("eval", "--serial", "S", "--token-file", "/tmp/t", "--prompt", "hi"), { ...s, spawn });
   assert.equal(calls[0].opts.env.PENUMBRA_PIN_ADMIN_TOKEN_FILE, "/tmp/t");
-
-  // A tool without a native --token-file still gets the env override.
-  const { spawn: s2, calls: c2 } = makeFakeSpawn();
-  await dispatch(argv("eval", "--serial", "S", "--token-file", "/tmp/t", "--prompt", "hi"), { ...s, spawn: s2 });
-  assert.equal(c2[0].opts.env.PENUMBRA_PIN_ADMIN_TOKEN_FILE, "/tmp/t");
-  assert.equal(c2[0].args.join(" ").includes("--token-file"), false);
+  assert.equal(calls[0].args.join(" ").includes("--token-file"), false);
 });
 
 test("--verbose echoes the spawn line to stderr", async () => {
@@ -528,11 +536,13 @@ test("summarizeResponses agrees with extractAnswer on synthetic decoded frames",
   assert.equal(Object.hasOwn(frames[0], "answer"), false);
 });
 
-test("assessAgenticGate: warns when tools disabled", () => {
+test("assessAgenticGate: warns when provider settings remain on the Pin", () => {
   const gate = assessAgenticGate({ settings: { llm: { tools: { enabled: false }, provider: "echo" } } });
   assert.equal(gate.known, true);
-  assert.match(gate.warn, /stock path runs/);
-  const ok = assessAgenticGate({ settings: { llm: { tools: { enabled: true }, provider: "codex" } } });
+  assert.equal(gate.toolsEnabled, false);
+  assert.match(gate.warn, /provider settings owned by Cosmos/);
+  const ok = assessAgenticGate({ settings: {} });
+  assert.equal(ok.toolsEnabled, true);
   assert.equal(ok.warn, null);
 });
 

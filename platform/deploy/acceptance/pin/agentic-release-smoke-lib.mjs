@@ -1,14 +1,22 @@
+import { isAbsolute } from "node:path";
 import { TextDecoder } from "node:util";
+import {
+  PIN_COMPATIBILITY_CERT_SHA256,
+  parseCanonicalPinReleaseManifestDocument,
+  parsePinReleaseJson,
+  parsePinReleaseReceiptBundle,
+  verifyPinReleaseMetadata,
+} from "../../pin/release.mjs";
 import { FEATURE_FLAGS, NATIVE_ACTIONS } from "./tier-a-symbols.mjs";
+import {
+  EXPECTED_PIN_SERIAL_ENV,
+  exactDeviceTargetMatches,
+  resolveExpectedDeviceSerial,
+} from "./device-target-guard.mjs";
 
 export const RELEASE_SEQUENCE = 168;
-export const RELEASE_IDENTITY = Object.freeze({
-  packageName: "com.penumbraos.server",
-  versionName: "2026-07-31.168-local",
-  versionCode: 202_607_334,
-  apkSha256:
-    "59e41f26229be571ad31c94c55231fde426662db49c1f6c74b77a3c545a17f71",
-});
+export const SERVER_PACKAGE_NAME = "com.penumbraos.server";
+export const INSTALLED_SERVER_SIGNER_IDENTITY = "dd07f452";
 export const SERVER_SOURCE = 1;
 export const USER_USER = 1;
 export const ASSISTANT_USER = 2;
@@ -100,6 +108,9 @@ const SERIAL_PATTERN = /^[0-9A-Za-z._:-]+$/;
 const MAX_SERIAL_BYTES = 128;
 const USER_TURN_ID_PATTERN = /^[0-9A-Za-z._:-]+$/;
 const MAX_USER_TURN_ID_BYTES = 128;
+const MAX_RELEASE_MANIFEST_BYTES = 1024 * 1024;
+const MAX_RELEASE_RECEIPTS_BYTES = 1024 * 1024;
+const MAX_RELEASE_PATH_BYTES = 4 * 1024;
 const UTF8 = new TextDecoder("utf-8", { fatal: true });
 const FORBIDDEN_SECRET_KEYS = /^(?:admin_token|api_key|subscription_key|client_secret|access_token|refresh_token|password|authorization)$/i;
 const PRIVATE_VALUE_KEYS = /^(?:latitude|longitude|lat|lon|coordinates|location|location_string|reverse_geocoded_location|utterance|transcript|message|response|input|thought|system_prompt|status_prompt|username)$/i;
@@ -158,6 +169,54 @@ function uniqueMatchValues(text, pattern) {
   return [...text.matchAll(pattern)].map((match) => match[1]);
 }
 
+/**
+ * Derive the installed Server target from the same canonical five-APK
+ * manifest that the release importer verifies. The manifest parser binds the
+ * exact role set, package names, shared versionCode, artifact digests, URLs,
+ * and releaseId before any field is trusted here.
+ */
+export function deriveServerIdentityFromReleaseManifest(
+  manifestSource,
+  receiptsSource,
+) {
+  try {
+    if (
+      typeof manifestSource !== "string" ||
+      manifestSource.length === 0 ||
+      Buffer.byteLength(manifestSource, "utf8") > MAX_RELEASE_MANIFEST_BYTES ||
+      typeof receiptsSource !== "string" ||
+      receiptsSource.length === 0 ||
+      Buffer.byteLength(receiptsSource, "utf8") > MAX_RELEASE_RECEIPTS_BYTES
+    ) {
+      throw new Error("invalid release metadata bytes");
+    }
+    const manifest = parseCanonicalPinReleaseManifestDocument(manifestSource);
+    const receipts = parsePinReleaseReceiptBundle(
+      parsePinReleaseJson(receiptsSource, "Pin release receipts"),
+    );
+    verifyPinReleaseMetadata({
+      manifest,
+      receipts,
+      expectedSigner: PIN_COMPATIBILITY_CERT_SHA256,
+    });
+    const server = manifest.artifacts.find((artifact) => artifact.role === "server");
+    if (server === undefined || server.package !== SERVER_PACKAGE_NAME) {
+      throw new Error("missing Server artifact");
+    }
+    return Object.freeze({
+      releaseId: manifest.releaseId,
+      packageName: server.package,
+      versionName: manifest.version,
+      versionCode: server.versionCode,
+      signerIdentity: INSTALLED_SERVER_SIGNER_IDENTITY,
+    });
+  } catch {
+    throw new Error(
+      "expected Server identity requires canonical verified five-APK release metadata",
+    );
+  }
+}
+
 export function parseInstalledServerPackageMetadata(value) {
   const text = boundedCommandText(value, "server package metadata");
   const versionNames = [
@@ -170,73 +229,60 @@ export function parseInstalledServerPackageMetadata(value) {
       uniqueMatchValues(text, /^[\t ]*versionCode=([0-9]+)(?:[\t ]|$)/gm),
     ),
   ];
-  if (versionNames.length !== 1 || versionCodes.length !== 1) {
+  const signerIdentities = [];
+  for (const match of text.matchAll(
+    /PackageSignatures\{[^}]*?\bsignatures:\s*\[([^\]]*)\]/g,
+  )) {
+    const tokens = (match[1] ?? "")
+      .split(",")
+      .map((token) => token.trim().toLowerCase())
+      .filter(Boolean);
+    if (
+      tokens.length !== 1 ||
+      !/^(?:[0-9a-f]{8}|[0-9a-f]{64})$/.test(tokens[0])
+    ) {
+      throw new Error("server package signer identity is ambiguous or incomplete");
+    }
+    signerIdentities.push(tokens[0]);
+  }
+  if (
+    versionNames.length !== 1 ||
+    versionCodes.length !== 1 ||
+    signerIdentities.length !== 1
+  ) {
     throw new Error("server package metadata is ambiguous or incomplete");
   }
   const versionCode = Number(versionCodes[0]);
   if (!Number.isSafeInteger(versionCode) || versionCode <= 0) {
     throw new Error("server package versionCode is invalid");
   }
-  return { versionName: versionNames[0], versionCode };
+  return {
+    versionName: versionNames[0],
+    versionCode,
+    signerIdentity: signerIdentities[0],
+  };
 }
 
-function safeActiveServerApkPath(path) {
+export function validateReleaseMetadataPath(value, optionName) {
   if (
-    typeof path !== "string" ||
-    !path.startsWith("/data/app/") ||
-    !path.endsWith("/base.apk") ||
-    path.includes("//")
+    typeof value !== "string" ||
+    !isAbsolute(value) ||
+    Buffer.byteLength(value, "utf8") > MAX_RELEASE_PATH_BYTES ||
+    /[\0-\x1f\x7f]/.test(value)
   ) {
-    return false;
+    throw new Error(`live mode requires an absolute ${optionName} path`);
   }
-  const components = path.split("/").slice(1);
-  return (
-    components.some(
-      (component) =>
-        component === RELEASE_IDENTITY.packageName ||
-        component.startsWith(`${RELEASE_IDENTITY.packageName}-`),
-    ) &&
-    components.every(
-      (component) =>
-        component.length > 0 &&
-        component !== "." &&
-        component !== ".." &&
-        /^[0-9A-Za-z._~+=-]+$/.test(component),
-    )
-  );
+  return value;
 }
 
-export function parseActiveServerApkPath(value) {
-  const text = boundedCommandText(value, "server package path");
-  const candidates = text
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line.startsWith("package:"))
-    .map((line) => line.slice("package:".length))
-    .filter((path) => path.endsWith("/base.apk"));
-  if (candidates.length !== 1 || !safeActiveServerApkPath(candidates[0])) {
-    throw new Error("active server APK path is ambiguous or unsafe");
-  }
-  return candidates[0];
-}
-
-export function parseActiveServerApkSha256(value, expectedPath) {
-  if (!safeActiveServerApkPath(expectedPath)) {
-    throw new Error("active server APK path is unsafe");
-  }
-  const text = boundedCommandText(value, "server APK digest").trim();
-  const match = /^([0-9A-Fa-f]{64})[\t ]+\*?(\S+)$/.exec(text);
-  if (match === null || match[2] !== expectedPath) {
-    throw new Error("server APK digest response is invalid");
-  }
-  return match[1].toLowerCase();
-}
-
-export function parseCliArgs(argv) {
+export function parseCliArgs(argv, environment = process.env) {
   const options = {
     mode: null,
     serial: null,
+    expectedPinSerial: null,
     adbPath: "adb",
+    releaseManifestPath: null,
+    releaseReceiptsPath: null,
     json: false,
     expectSpotifyDisabled: false,
     help: false,
@@ -269,10 +315,29 @@ export function parseCliArgs(argv) {
         break;
       case "--serial":
       case "-s":
+        if (options.serial !== null) throw new Error("--serial may be provided once");
         options.serial = next();
+        break;
+      case "--expected-pin-serial":
+        if (options.expectedPinSerial !== null) {
+          throw new Error("--expected-pin-serial may be provided once");
+        }
+        options.expectedPinSerial = next();
         break;
       case "--adb":
         options.adbPath = next();
+        break;
+      case "--release-manifest":
+        if (options.releaseManifestPath !== null) {
+          throw new Error("--release-manifest may be provided once");
+        }
+        options.releaseManifestPath = next();
+        break;
+      case "--release-receipts":
+        if (options.releaseReceiptsPath !== null) {
+          throw new Error("--release-receipts may be provided once");
+        }
+        options.releaseReceiptsPath = next();
         break;
       case "--json":
         options.json = true;
@@ -294,8 +359,13 @@ export function parseCliArgs(argv) {
     throw new Error("choose --self-check, --inspect, or --run-safe-aibus");
   }
   if (options.mode === "self-check") {
-    if (options.serial !== null) {
-      throw new Error("--self-check cannot be combined with --serial");
+    if (
+      options.serial !== null ||
+      options.expectedPinSerial !== null ||
+      options.releaseManifestPath !== null ||
+      options.releaseReceiptsPath !== null
+    ) {
+      throw new Error("--self-check cannot be combined with live-device options");
     }
     if (options.expectSpotifyDisabled) {
       throw new Error(
@@ -304,6 +374,23 @@ export function parseCliArgs(argv) {
     }
   } else {
     validateSerial(options.serial);
+    options.expectedPinSerial = resolveExpectedDeviceSerial({
+      cliValue: options.expectedPinSerial,
+      environment,
+      environmentName: EXPECTED_PIN_SERIAL_ENV,
+      label: "AI Pin serial",
+    });
+    if (!exactDeviceTargetMatches(options.serial, options.expectedPinSerial)) {
+      throw new Error("the explicit ADB serial does not match the expected AI Pin serial");
+    }
+    validateReleaseMetadataPath(
+      options.releaseManifestPath,
+      "--release-manifest",
+    );
+    validateReleaseMetadataPath(
+      options.releaseReceiptsPath,
+      "--release-receipts",
+    );
   }
   if (options.expectSpotifyDisabled && options.mode !== "run-safe-aibus") {
     throw new Error("--expect-spotify-disabled requires --run-safe-aibus");
@@ -1371,8 +1458,12 @@ export function evaluateTickleRouting(
   );
 }
 
-export function isRequiredReleaseVersion(value) {
-  return value === RELEASE_IDENTITY.versionName;
+export function isRequiredReleaseVersion(value, expectedIdentity) {
+  return (
+    expectedIdentity !== null &&
+    typeof expectedIdentity === "object" &&
+    value === expectedIdentity.versionName
+  );
 }
 
 export function parseLoopbackGrpcPort(value) {
@@ -1404,33 +1495,34 @@ function isTaggedFeatureBoolean(value, expected) {
 
 export function evaluateReadiness(
   { health, packageIdentity, settings, spotify, featureFlags },
-  { expectSpotifyDisabled = false } = {},
+  { expectSpotifyDisabled = false, expectedIdentity } = {},
 ) {
   requirePlainObject(health, "health response");
   requirePlainObject(packageIdentity, "installed package identity");
   requirePlainObject(settings, "settings response");
   requirePlainObject(spotify, "Spotify status response");
   requirePlainObject(featureFlags, "feature flag response");
+  requirePlainObject(expectedIdentity, "expected Server identity");
 
   const checks = [];
   const healthValid =
     health.status === "ok" &&
-    isRequiredReleaseVersion(health.version) &&
-    packageIdentity.packageName === RELEASE_IDENTITY.packageName &&
-    packageIdentity.versionName === RELEASE_IDENTITY.versionName &&
-    packageIdentity.versionCode === RELEASE_IDENTITY.versionCode &&
-    packageIdentity.apkSha256 === RELEASE_IDENTITY.apkSha256;
+    isRequiredReleaseVersion(health.version, expectedIdentity) &&
+    packageIdentity.packageName === expectedIdentity.packageName &&
+    packageIdentity.versionName === expectedIdentity.versionName &&
+    packageIdentity.versionCode === expectedIdentity.versionCode &&
+    packageIdentity.signerIdentity === expectedIdentity.signerIdentity;
   checks.push(
     check(
       "server_release_identity",
-      `Exact Server ${RELEASE_IDENTITY.versionName} release identity`,
+      `Exact Server ${expectedIdentity.versionName} release identity`,
       healthValid ? CHECK_STATUS.PASS : CHECK_STATUS.FAIL,
       healthValid
         ? [
-            `health, installed package metadata, and active APK digest match the exact ${RELEASE_IDENTITY.versionName} candidate`,
+            `health, installed package metadata, and Android signer identity match the exact ${expectedIdentity.versionName} candidate`,
           ]
         : [
-            `the runtime or installed active APK does not match the exact ${RELEASE_IDENTITY.versionName} candidate`,
+            `the runtime or installed package identity does not match the exact ${expectedIdentity.versionName} candidate`,
           ],
     ),
   );
@@ -1696,7 +1788,7 @@ export function manualVerificationChecks() {
   ];
 }
 
-export function buildPublicReport({ mode, checks, manualChecks }) {
+export function buildPublicReport({ mode, expectedIdentity, checks, manualChecks }) {
   const all = [...checks, ...manualChecks];
   const counts = Object.fromEntries(
     Object.values(CHECK_STATUS).map((status) => [
@@ -1713,7 +1805,8 @@ export function buildPublicReport({ mode, checks, manualChecks }) {
   return {
     harness: "agentic-release-smoke",
     releaseSequence: RELEASE_SEQUENCE,
-    requiredServerIdentity: { ...RELEASE_IDENTITY },
+    requiredServerIdentity:
+      expectedIdentity === null ? null : { ...expectedIdentity },
     mode,
     status,
     complete: status === "passed",

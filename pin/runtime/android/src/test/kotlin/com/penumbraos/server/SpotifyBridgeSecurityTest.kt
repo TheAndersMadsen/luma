@@ -64,6 +64,30 @@ class SpotifyBridgeSecurityTest {
     }
 
     @Test
+    fun playbackGetsLongerReadBudgetWithoutChangingOtherLoopbackTimeouts() {
+        val operations = listOf(
+            SpotifyBridgeProtocol.operationForCode(SpotifyBridgeProtocol.TRANSACTION_QUERY)!!,
+            SpotifyBridgeProtocol.operationForCode(SpotifyBridgeProtocol.TRANSACTION_PLAYBACK)!!,
+            SpotifyBridgeProtocol.operationForCode(SpotifyBridgeProtocol.TRANSACTION_SAVE)!!,
+        )
+
+        val observedTimeouts = operations.map { operation ->
+            SpotifyBridgeRuntime.connectionTimeoutsFor(operation).let { timeouts ->
+                timeouts.connectTimeoutMs to timeouts.readTimeoutMs
+            }
+        }
+
+        assertEquals(
+            listOf(
+                3_000 to 30_000,
+                3_000 to 60_000,
+                3_000 to 30_000,
+            ),
+            observedTimeouts,
+        )
+    }
+
+    @Test
     fun manifestPermitsCleartextOnlyForExactIpv4Loopback() {
         val manifest = parseXml(sourceFile("src/main/AndroidManifest.xml"))
         val application = manifest.getElementsByTagName("application").item(0) as Element

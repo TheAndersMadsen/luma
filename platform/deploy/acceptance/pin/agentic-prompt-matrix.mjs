@@ -11,16 +11,23 @@ import {
   evaluateReadiness,
   redactSensitive,
   validateSerial,
+  validateReleaseMetadataPath,
   validateUserTurnId,
 } from "./agentic-release-smoke-lib.mjs";
 import {
   collectFixedMusicRankOne,
   collectInstalledServerIdentity,
   collectReadiness,
+  loadExpectedServerIdentity,
   readAdminToken,
   runUnderstand,
   verifyExplicitDevice,
 } from "./agentic-release-smoke.mjs";
+import {
+  EXPECTED_PIN_SERIAL_ENV,
+  exactDeviceTargetMatches,
+  resolveExpectedDeviceSerial,
+} from "./device-target-guard.mjs";
 import { NATIVE_ACTIONS } from "./tier-a-symbols.mjs";
 
 const PROGRAM = "agentic-prompt-matrix";
@@ -394,15 +401,23 @@ const DETERMINISTIC_THOUGHT_ROUTES = new Map(
 function usage() {
   return [
     "Usage:",
-    "  node platform/deploy/acceptance/pin/agentic-prompt-matrix.mjs --serial SERIAL [--json]",
+    "  node platform/deploy/acceptance/pin/agentic-prompt-matrix.mjs --serial SERIAL --expected-pin-serial SERIAL --release-manifest PATH --release-receipts PATH [--json]",
     "",
     "Runs a compiled fixed public prompt matrix against raw AIBus on the exact accepted release.",
     "Returned native actions are classified but never dispatched.",
   ].join("\n");
 }
 
-export function parseMatrixCliArgs(argv) {
-  const options = { serial: null, adbPath: "adb", json: false, help: false };
+export function parseMatrixCliArgs(argv, environment = process.env) {
+  const options = {
+    serial: null,
+    expectedPinSerial: null,
+    adbPath: "adb",
+    releaseManifestPath: null,
+    releaseReceiptsPath: null,
+    json: false,
+    help: false,
+  };
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     const next = () => {
@@ -413,10 +428,29 @@ export function parseMatrixCliArgs(argv) {
     switch (argument) {
       case "--serial":
       case "-s":
+        if (options.serial !== null) throw new Error("--serial may be provided once");
         options.serial = next();
+        break;
+      case "--expected-pin-serial":
+        if (options.expectedPinSerial !== null) {
+          throw new Error("--expected-pin-serial may be provided once");
+        }
+        options.expectedPinSerial = next();
         break;
       case "--adb":
         options.adbPath = next();
+        break;
+      case "--release-manifest":
+        if (options.releaseManifestPath !== null) {
+          throw new Error("--release-manifest may be provided once");
+        }
+        options.releaseManifestPath = next();
+        break;
+      case "--release-receipts":
+        if (options.releaseReceiptsPath !== null) {
+          throw new Error("--release-receipts may be provided once");
+        }
+        options.releaseReceiptsPath = next();
         break;
       case "--json":
         options.json = true;
@@ -431,6 +465,17 @@ export function parseMatrixCliArgs(argv) {
   }
   if (options.help) return options;
   validateSerial(options.serial);
+  options.expectedPinSerial = resolveExpectedDeviceSerial({
+    cliValue: options.expectedPinSerial,
+    environment,
+    environmentName: EXPECTED_PIN_SERIAL_ENV,
+    label: "AI Pin serial",
+  });
+  if (!exactDeviceTargetMatches(options.serial, options.expectedPinSerial)) {
+    throw new Error("the explicit ADB serial does not match the expected AI Pin serial");
+  }
+  validateReleaseMetadataPath(options.releaseManifestPath, "--release-manifest");
+  validateReleaseMetadataPath(options.releaseReceiptsPath, "--release-receipts");
   if (
     typeof options.adbPath !== "string" ||
     options.adbPath.length === 0 ||
@@ -887,6 +932,7 @@ function printReport(report, { json, knownSecrets = [] }) {
 }
 
 const DEFAULT_RUNTIME = Object.freeze({
+  loadExpectedServerIdentity,
   verifyExplicitDevice,
   collectInstalledServerIdentity,
   readAdminToken,
@@ -910,15 +956,19 @@ export async function main(
       return 0;
     }
 
+    const expectedIdentity = await runtime.loadExpectedServerIdentity(options);
     await runtime.verifyExplicitDevice(options);
     const packageIdentity =
       await runtime.collectInstalledServerIdentity(options);
     adminToken = await runtime.readAdminToken();
     const snapshot = await runtime.collectReadiness(options, adminToken);
-    const readiness = runtime.evaluateReadiness({
-      ...snapshot,
-      packageIdentity,
-    });
+    const readiness = runtime.evaluateReadiness(
+      {
+        ...snapshot,
+        packageIdentity,
+      },
+      { expectedIdentity },
+    );
     if (
       !Array.isArray(readiness?.checks) ||
       !readiness.checks.every((check) => check.status === CHECK_STATUS.PASS) ||

@@ -25,7 +25,6 @@ struct Currently {
     #[serde(default)]
     icon: String,
     /// Fahrenheit — the API is queried with `units=us`.
-    #[serde(default)]
     temperature: f64,
     #[serde(default)]
     precip_intensity: f64,
@@ -40,9 +39,11 @@ struct Currently {
 ///
 /// **This is an approximation between two different vendors**, not a lossless
 /// mapping, and it is the one field of `WeatherResponse` that is not exact.
-/// Pirate emits 11 icon values; AccuWeather defines 44. Each Pirate value is
-/// mapped to the closest AccuWeather concept, preserving the day/night split
-/// that AccuWeather encodes in separate numbers:
+/// Pirate emits 11 default icon values, documents `hail` as a future value, and
+/// can rarely return `none`. AccuWeather defines 44 icon numbers, of which the
+/// stock SystemNavigation renderer supports 40. Each recognized Pirate value is
+/// mapped to the closest supported AccuWeather concept, preserving the day/night
+/// split that AccuWeather encodes in separate numbers:
 ///
 /// | Pirate | AccuWeather | |
 /// |---|---|---|
@@ -57,11 +58,13 @@ struct Currently {
 /// | `sleet` | 25 | Sleet |
 /// | `snow` | 22 | Snow |
 /// | `wind` | 32 | Windy |
+/// | `hail` | 24 | Ice |
 ///
-/// An unrecognized value yields `0` — AccuWeather has no icon 0, so the device
-/// receives an explicit "unknown" rather than a confidently wrong picture.
+/// Missing, `none`, and unrecognized values use the Pin-local adapter's generic
+/// partly-cloudy fallback (`3`). Stock treats icon `0` as an invalid response and
+/// replaces the complete weather card with "weather not available".
 fn accuweather_icon(pirate: &str) -> i32 {
-    match pirate {
+    match pirate.trim().to_ascii_lowercase().as_str() {
         "clear-day" => 1,
         "clear-night" => 33,
         "partly-cloudy-day" => 3,
@@ -73,8 +76,21 @@ fn accuweather_icon(pirate: &str) -> i32 {
         "sleet" => 25,
         "snow" => 22,
         "wind" => 32,
-        _ => 0,
+        "hail" => 24,
+        _ => 3,
     }
+}
+
+/// Icon numbers for which stock SystemNavigation has a drawable.
+pub(crate) fn stock_weather_icon_is_renderable(icon: i32) -> bool {
+    matches!(icon, 1..=8 | 11..=26 | 29..=44)
+}
+
+/// Whether stock SystemNavigation can render the complete weather payload.
+pub(crate) fn stock_weather_response_is_renderable(weather: &pb::WeatherResponse) -> bool {
+    weather.temperature_fahrenheit.is_finite()
+        && weather.temperature_celsius.is_finite()
+        && stock_weather_icon_is_renderable(weather.weather_icon)
 }
 
 /// Current conditions at a point, in cosmos's wire shape.
@@ -96,14 +112,14 @@ pub async fn current(latitude: f64, longitude: f64) -> Result<pb::WeatherRespons
         .map_err(|_| BackendError::Unavailable)?;
 
     let now = forecast.currently.ok_or(BackendError::NoResult)?;
-    Ok(to_wire(&now))
+    to_wire(&now)
 }
 
-fn to_wire(now: &Currently) -> pb::WeatherResponse {
+fn to_wire(now: &Currently) -> Result<pb::WeatherResponse, BackendError> {
     // Pirate reports "none" when dry; cosmos's field carries a type only when
     // there is precipitation, so an absent type stays empty rather than "none".
     let precipitating = now.precip_intensity > 0.0 && now.precip_type != "none";
-    pb::WeatherResponse {
+    let response = pb::WeatherResponse {
         has_precipitation: precipitating,
         precipitation_type: if precipitating {
             now.precip_type.clone()
@@ -115,6 +131,11 @@ fn to_wire(now: &Currently) -> pb::WeatherResponse {
         weather_text: now.summary.clone(),
         weather_icon: accuweather_icon(&now.icon),
         u_v_index: now.uv_index.round() as i32,
+    };
+    if stock_weather_response_is_renderable(&response) {
+        Ok(response)
+    } else {
+        Err(BackendError::NoResult)
     }
 }
 
@@ -135,7 +156,7 @@ mod tests {
 
     #[test]
     fn maps_a_dry_reading_onto_the_accuweather_shape() {
-        let w = to_wire(&sample("clear-day", 0.0, "none"));
+        let w = to_wire(&sample("clear-day", 0.0, "none")).expect("valid weather");
         assert_eq!(w.weather_text, "Clear");
         assert_eq!(w.weather_icon, 1); // Sunny
         assert!(!w.has_precipitation);
@@ -149,7 +170,7 @@ mod tests {
 
     #[test]
     fn wet_readings_preserve_the_precipitation_type() {
-        let w = to_wire(&sample("rain", 0.12, "rain"));
+        let w = to_wire(&sample("rain", 0.12, "rain")).expect("valid weather");
         assert!(w.has_precipitation);
         assert_eq!(w.precipitation_type, "rain");
         assert_eq!(w.weather_icon, 18); // Rain
@@ -170,7 +191,8 @@ mod tests {
             }"#,
         )
         .expect("real Pirate Weather current-conditions shape should deserialize");
-        let wire = to_wire(forecast.currently.as_ref().expect("current conditions"));
+        let wire = to_wire(forecast.currently.as_ref().expect("current conditions"))
+            .expect("valid weather");
 
         assert_eq!(
             (
@@ -184,19 +206,88 @@ mod tests {
     }
 
     #[test]
-    fn day_and_night_icons_stay_distinct_as_accuweather_encodes_them() {
-        assert_eq!(accuweather_icon("clear-day"), 1);
-        assert_eq!(accuweather_icon("clear-night"), 33);
-        assert_eq!(accuweather_icon("partly-cloudy-day"), 3);
-        assert_eq!(accuweather_icon("partly-cloudy-night"), 35);
+    fn every_documented_pirate_icon_maps_to_a_stock_renderable_icon() {
+        for (pirate, expected) in [
+            ("clear-day", 1),
+            ("clear-night", 33),
+            ("partly-cloudy-day", 3),
+            ("partly-cloudy-night", 35),
+            ("cloudy", 7),
+            ("fog", 11),
+            ("rain", 18),
+            ("thunderstorm", 15),
+            ("sleet", 25),
+            ("snow", 22),
+            ("wind", 32),
+            ("hail", 24),
+        ] {
+            let projected = accuweather_icon(pirate);
+            assert_eq!(projected, expected, "wrong projection for {pirate}");
+            assert!(
+                stock_weather_icon_is_renderable(projected),
+                "{pirate} projected to stock-unsupported icon {projected}",
+            );
+        }
     }
 
     #[test]
-    fn an_unknown_icon_is_explicitly_unknown_not_a_confident_guess() {
-        // AccuWeather defines no icon 0, so the device reads this as "unknown"
-        // rather than being shown the wrong weather.
-        assert_eq!(accuweather_icon("hail-of-frogs"), 0);
-        assert_eq!(accuweather_icon(""), 0);
+    fn stock_renderable_icon_set_matches_the_extracted_renderer_oracle() {
+        const STOCK_RENDERABLE_ICONS: &[i32] = &[
+            1, 2, 3, 4, 5, 6, 7, 8, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,
+            29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44,
+        ];
+
+        for icon in 0..=45 {
+            assert_eq!(
+                stock_weather_icon_is_renderable(icon),
+                STOCK_RENDERABLE_ICONS.contains(&icon),
+                "renderer oracle mismatch for icon {icon}",
+            );
+        }
+    }
+
+    #[test]
+    fn icon_projection_normalizes_harmless_provider_formatting() {
+        assert_eq!(accuweather_icon("  CLEAR-DAY\n"), 1);
+        assert_eq!(accuweather_icon("\tThunderStorm "), 15);
+    }
+
+    #[test]
+    fn missing_none_and_unknown_icons_use_the_stock_renderable_fallback() {
+        for icon in ["", "none", "hail-of-frogs"] {
+            assert_eq!(accuweather_icon(icon), 3, "wrong fallback for {icon:?}");
+        }
+
+        let forecast: Forecast = serde_json::from_str(
+            r#"{
+                "currently": {
+                    "summary": "Current conditions",
+                    "temperature": 60.96
+                }
+            }"#,
+        )
+        .expect("a provider response may omit its icon");
+        let wire = to_wire(forecast.currently.as_ref().expect("current conditions"))
+            .expect("valid weather");
+        assert_eq!(wire.weather_icon, 3);
+        assert!(stock_weather_icon_is_renderable(wire.weather_icon));
+    }
+
+    #[test]
+    fn incomplete_or_non_finite_current_conditions_are_rejected() {
+        let incomplete = serde_json::from_str::<Forecast>(
+            r#"{
+                "currently": {
+                    "summary": "Current conditions",
+                    "icon": "clear-day"
+                }
+            }"#,
+        );
+        assert!(incomplete.is_err(), "temperature must be present");
+
+        let mut invalid = sample("clear-day", 0.0, "none");
+        invalid.temperature = f64::NAN;
+        assert_eq!(to_wire(&invalid), Err(BackendError::NoResult));
     }
 
     #[tokio::test]

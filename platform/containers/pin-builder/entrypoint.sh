@@ -759,6 +759,7 @@ check_unit() {
       --project-cache-dir "${STATE_ROOT}/gradle-contracts" \
       :contracts:stock-aibus:testDebugUnitTest \
       :contracts:penumbra-ipc:testDebugUnitTest \
+      :hook:payload:testDebugUnitTest \
       :runtime:android:testDebugUnitTest \
       -x :runtime:android:buildRustServerAndroid
     ./injector/gradlew --no-daemon \

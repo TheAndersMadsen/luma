@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { RELEASE_IDENTITY } from "./agentic-release-smoke-lib.mjs";
+import {
+  INSTALLED_SERVER_SIGNER_IDENTITY,
+  SERVER_PACKAGE_NAME,
+} from "./agentic-release-smoke-lib.mjs";
 import { OPERATIONAL_MARKERS } from "./tier-a-symbols.mjs";
 
 import {
@@ -10,17 +13,23 @@ import {
   evaluateSpeechLogEvidence,
   evaluateSpeechPhysicalReadiness,
   evaluateTerminalSpeechActivity,
-  executeSpeechPhysicalSmoke,
-  main,
+  executeSpeechPhysicalSmoke as executeSpeechPhysicalSmokeWithDependencies,
+  main as speechMain,
   parseSpeechPhysicalCliArgs as parseSpeechPhysicalCliArgsWithEnvironment,
   parseSpeechPromptActivityPage,
 } from "./speech-physical-smoke.mjs";
 
 const SERIAL = "fixture-pin-serial";
 const OTHER_SERIAL = "fixture-other-device";
-const VERSION_NAME = RELEASE_IDENTITY.versionName;
-const VERSION_CODE = RELEASE_IDENTITY.versionCode;
-const APK_SHA256 = RELEASE_IDENTITY.apkSha256;
+const EXPECTED_IDENTITY = Object.freeze({
+  releaseId: "fixture-release",
+  packageName: SERVER_PACKAGE_NAME,
+  versionName: "2026-08-27.1",
+  versionCode: 202_608_271,
+  signerIdentity: INSTALLED_SERVER_SIGNER_IDENTITY,
+});
+const VERSION_NAME = EXPECTED_IDENTITY.versionName;
+const VERSION_CODE = EXPECTED_IDENTITY.versionCode;
 const FIXED_PROMPT = "In one short sentence, explain why the sky looks blue.";
 const BOUNDARY = "speech-smoke-123e4567-e89b-42d3-a456-426614174000";
 const RUN_ID = "223e4567-e89b-42d3-a456-426614174000";
@@ -37,6 +46,28 @@ const GUARDED_MEDIA_VOLUME_STATE = Object.freeze({
 });
 const parseSpeechPhysicalCliArgs = (argv, environment = {}) =>
   parseSpeechPhysicalCliArgsWithEnvironment(argv, environment);
+const executeSpeechPhysicalSmoke = (options, dependencies = {}) => {
+  const withRelease = Object.create(
+    Object.getPrototypeOf(dependencies),
+    Object.getOwnPropertyDescriptors(dependencies),
+  );
+  Object.defineProperty(withRelease, "loadExpectedServerIdentity", {
+    configurable: true,
+    enumerable: true,
+    value: async () => EXPECTED_IDENTITY,
+  });
+  return executeSpeechPhysicalSmokeWithDependencies(options, withRelease);
+};
+const main = (argv, dependencies = {}, stdout, stderr) =>
+  speechMain(
+    argv,
+    {
+      loadExpectedServerIdentity: async () => EXPECTED_IDENTITY,
+      ...dependencies,
+    },
+    stdout,
+    stderr,
+  );
 const GUARDED_MEDIA_VOLUME_DEVICE = Object.freeze({
   async readMediaVolumeState() {
     return { ...GUARDED_MEDIA_VOLUME_STATE };
@@ -53,22 +84,20 @@ function liveArgs(extra = []) {
     SERIAL,
     "--expected-pin-serial",
     SERIAL,
-    "--expect-version-name",
-    VERSION_NAME,
-    "--expect-version-code",
-    String(VERSION_CODE),
-    "--expect-apk-sha256",
-    APK_SHA256,
+    "--release-manifest",
+    "/fixture/manifest.json",
+    "--release-receipts",
+    "/fixture/receipts.json",
     ...extra,
   ];
 }
 
 function identityFixture(overrides = {}) {
   return {
-    packageName: "com.penumbraos.server",
+    packageName: SERVER_PACKAGE_NAME,
     versionName: VERSION_NAME,
     versionCode: VERSION_CODE,
-    apkSha256: APK_SHA256,
+    signerIdentity: EXPECTED_IDENTITY.signerIdentity,
     ...overrides,
   };
 }
@@ -203,9 +232,8 @@ test("live arguments require an operator-confirmed Pin and exact candidate ident
     serial: SERIAL,
     expectedPinSerial: SERIAL,
     adbPath: "adb",
-    expectedVersionName: VERSION_NAME,
-    expectedVersionCode: VERSION_CODE,
-    expectedApkSha256: APK_SHA256,
+    releaseManifestPath: "/fixture/manifest.json",
+    releaseReceiptsPath: "/fixture/receipts.json",
     json: true,
     help: false,
   });
@@ -234,25 +262,22 @@ test("live arguments require an operator-confirmed Pin and exact candidate ident
     () => parseSpeechPhysicalCliArgs([...liveArgs(), "--prompt", "anything"]),
     /unknown command option/,
   );
-  const missingHash = liveArgs().slice(0, -2);
-  assert.throws(
-    () => parseSpeechPhysicalCliArgs(missingHash),
-    /exact candidate Server APK SHA-256/,
-  );
-
-  const priorRelease = liveArgs();
-  priorRelease[priorRelease.indexOf("--expect-version-name") + 1] =
-    "2026-07-17.36-local";
-  assert.throws(
-    () => parseSpeechPhysicalCliArgs(priorRelease),
-    /exact candidate Server version name/,
-  );
-  const wrongDigest = liveArgs();
-  wrongDigest[wrongDigest.indexOf("--expect-apk-sha256") + 1] = "a".repeat(64);
-  assert.throws(
-    () => parseSpeechPhysicalCliArgs(wrongDigest),
-    /exact candidate Server APK SHA-256/,
-  );
+  for (const removed of ["--release-manifest", "--release-receipts"]) {
+    const args = liveArgs();
+    const index = args.indexOf(removed);
+    args.splice(index, 2);
+    assert.throws(() => parseSpeechPhysicalCliArgs(args), new RegExp(removed));
+  }
+  for (const obsolete of [
+    ["--expect-version-name", VERSION_NAME],
+    ["--expect-version-code", String(VERSION_CODE)],
+    ["--expect-apk-sha256", "a".repeat(64)],
+  ]) {
+    assert.throws(
+      () => parseSpeechPhysicalCliArgs([...liveArgs(), ...obsolete]),
+      /unknown command option/,
+    );
+  }
 });
 
 test("duplicate identity-bearing options are rejected instead of using the last value", () => {
@@ -260,9 +285,8 @@ test("duplicate identity-bearing options are rejected instead of using the last 
     ["--serial", SERIAL],
     ["-s", SERIAL],
     ["--expected-pin-serial", SERIAL],
-    ["--expect-version-name", VERSION_NAME],
-    ["--expect-version-code", String(VERSION_CODE)],
-    ["--expect-apk-sha256", APK_SHA256],
+    ["--release-manifest", "/fixture/manifest.json"],
+    ["--release-receipts", "/fixture/receipts.json"],
   ]) {
     assert.throws(
       () => parseSpeechPhysicalCliArgs([...liveArgs(), ...duplicate]),
@@ -326,11 +350,7 @@ test("speech evidence reads only bounded allowlisted tags from main and system",
 });
 
 test("remote readiness requires Azure consent, complete config, exact live assignments, and identity", () => {
-  const expected = {
-    versionName: VERSION_NAME,
-    versionCode: VERSION_CODE,
-    apkSha256: APK_SHA256,
-  };
+  const expected = EXPECTED_IDENTITY;
   const ready = evaluateSpeechPhysicalReadiness(
     readinessFixture(),
     identityFixture(),
@@ -355,7 +375,7 @@ test("remote readiness requires Azure consent, complete config, exact live assig
   assert.equal(
     evaluateSpeechPhysicalReadiness(
       readinessFixture(),
-      identityFixture({ apkSha256: "b".repeat(64) }),
+      identityFixture({ signerIdentity: "deadbeef" }),
       expected,
     ).checks.exact_server_identity,
     false,
@@ -800,7 +820,7 @@ test("identity mismatch blocks before readiness, logs, injection, or cleanup", a
   assert.equal(touched, false);
 });
 
-test("imported execution independently refuses another device or incomplete identity", async () => {
+test("imported execution independently refuses another device or unverified release", async () => {
   let touched = false;
   const dependencies = {
     get identity() {
@@ -817,18 +837,20 @@ test("imported execution independently refuses another device or incomplete iden
     /runtime identity was incomplete/,
   );
   await assert.rejects(
-    executeSpeechPhysicalSmoke(
-      { ...valid, expectedApkSha256: null },
-      dependencies,
+    executeSpeechPhysicalSmokeWithDependencies(
+      valid,
+      Object.create(Object.getPrototypeOf(dependencies), {
+        ...Object.getOwnPropertyDescriptors(dependencies),
+        loadExpectedServerIdentity: {
+          configurable: true,
+          enumerable: true,
+          value: async () => {
+            throw new Error("unverified release");
+          },
+        },
+      }),
     ),
-    /runtime identity was incomplete/,
-  );
-  await assert.rejects(
-    executeSpeechPhysicalSmoke(
-      { ...valid, expectedVersionName: "2026-07-17.36-local" },
-      dependencies,
-    ),
-    /runtime identity was incomplete/,
+    /verified release metadata/,
   );
   assert.equal(touched, false);
 });

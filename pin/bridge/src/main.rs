@@ -17,6 +17,7 @@
 //! The ticket is the sole Pin dial credential; the iroh connection is
 //! end-to-end encrypted to the Pin's key, and the Pin applies its route policy.
 
+use std::future::Future;
 use std::io::Write as _;
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
@@ -36,6 +37,7 @@ use iroh_tickets::endpoint::EndpointTicket;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::Mutex;
+use tokio::time::Instant;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
@@ -126,47 +128,91 @@ where
 
 /// Shared state between the HTTP server and the iroh connection.
 struct BridgeState {
-    /// The iroh stream to the Pin. Protected by a mutex because we multiplex
-    /// requests over a single bidirectional stream, one at a time.
-    stream: Mutex<Option<(iroh::endpoint::SendStream, iroh::endpoint::RecvStream)>>,
+    /// One shared QUIC connection to the Pin. Each request opens its own
+    /// bidirectional stream after releasing this mutex, so independent provider
+    /// calls cannot consume one another's deadline while waiting in a queue.
+    connection: Mutex<Option<iroh::endpoint::Connection>>,
     endpoint: Endpoint,
     node_addr: EndpointAddr,
     generation: u64,
 }
 
 impl BridgeState {
-    /// Connect, open the stream, write, and read one complete correlated
-    /// response under one total deadline. Any failure invalidates the stream;
-    /// QUIC stream state cannot be safely reused after a partial exchange.
-    async fn roundtrip(&self, request: RemoteRequest) -> Result<RemoteResponse, BridgeError> {
-        let result = tokio::time::timeout(REQUEST_TIMEOUT, async {
-            let mut stream = self.stream.lock().await;
-            if stream.is_none() {
-                info!("connecting to Pin via iroh...");
-                let connection = self.endpoint.connect(self.node_addr.clone(), ALPN).await?;
-                info!(
-                    "connected to Pin (remote endpoint: {})",
-                    connection.remote_id()
-                );
-                *stream = Some(connection.open_bi().await?);
-                info!("bidirectional stream established");
-            }
-            let (send, recv) = stream.as_mut().ok_or("iroh stream was not established")?;
-            wire_roundtrip(send, recv, &request).await
-        })
-        .await;
+    async fn shared_connection(&self) -> Result<iroh::endpoint::Connection, BridgeError> {
+        let mut cached = self.connection.lock().await;
+        if let Some(connection) = cached.as_ref() {
+            return Ok(connection.clone());
+        }
 
-        match result {
-            Ok(Ok(response)) => Ok(response),
-            Ok(Err(error)) => {
-                *self.stream.lock().await = None;
-                Err(error)
+        info!("connecting to Pin via iroh...");
+        let connection = self.endpoint.connect(self.node_addr.clone(), ALPN).await?;
+        info!(
+            "connected to Pin (remote endpoint: {})",
+            connection.remote_id()
+        );
+        *cached = Some(connection.clone());
+        Ok(connection)
+    }
+
+    async fn clear_connection_if_current(&self, stable_id: usize) {
+        let mut cached = self.connection.lock().await;
+        if cached
+            .as_ref()
+            .is_some_and(|connection| connection.stable_id() == stable_id)
+        {
+            *cached = None;
+        }
+    }
+
+    /// Open an independent stream, then write and read one complete correlated
+    /// response. A failed old clone cannot evict a newer replacement connection.
+    async fn roundtrip(&self, request: RemoteRequest) -> Result<RemoteResponse, BridgeError> {
+        let connection = self.shared_connection().await?;
+        let stable_id = connection.stable_id();
+        let result = async {
+            let (mut send, mut recv) = connection.open_bi().await?;
+            wire_roundtrip(&mut send, &mut recv, &request).await
+        }
+        .await;
+        if result.is_err() {
+            self.clear_connection_if_current(stable_id).await;
+        }
+        result
+    }
+}
+
+/// Run the initial exchange and one transparent reconnect under one deadline.
+async fn with_reconnect_retry<T, F, Fut>(
+    total_timeout: Duration,
+    mut attempt: F,
+) -> Result<T, BridgeError>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<T, BridgeError>>,
+{
+    let deadline = Instant::now() + total_timeout;
+    match tokio::time::timeout_at(deadline, async {
+        let mut last_error = None;
+        for attempt_index in 0..2 {
+            if Instant::now() >= deadline {
+                return Err("Pin request exceeded its total timeout".into());
             }
-            Err(_) => {
-                *self.stream.lock().await = None;
-                Err("Pin request exceeded its total timeout".into())
+            match attempt().await {
+                Ok(response) => return Ok(response),
+                Err(error) => {
+                    if attempt_index == 0 {
+                        warn!("roundtrip failed ({error}); reconnecting and retrying");
+                    }
+                    last_error = Some(error);
+                }
             }
         }
+        Err(last_error.unwrap_or_else(|| "Pin request did not run".into()))
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => Err("Pin request exceeded its total timeout".into()),
     }
 }
 
@@ -223,32 +269,19 @@ async fn proxy_request(
     info!(">>> {} {} (id={})", request.method, uri.path(), request_id);
 
     // Transparent reconnect-and-retry. When the Pin restarts, the shared iroh
-    // stream dies: the first attempt fails and clears it, the second redials.
+    // connection dies: the first attempt fails and clears it, the second redials.
     // Without this a Pin restart wedges the bridge into permanent 502s.
-    let mut response = None;
-    let mut last_error = String::from("not connected");
-    for attempt in 0..2 {
-        match state.roundtrip(request.clone()).await {
-            Ok(received) => {
-                response = Some(received);
-                break;
-            }
-            Err(e) => {
-                last_error = e.to_string();
-                if attempt == 0 {
-                    warn!("roundtrip failed ({last_error}); reconnecting and retrying");
-                }
-            }
+    let response = with_reconnect_retry(REQUEST_TIMEOUT, || state.roundtrip(request.clone())).await;
+    let response = match response {
+        Ok(response) => response,
+        Err(error) => {
+            error!("roundtrip failed after retry: {error}");
+            return (
+                StatusCode::BAD_GATEWAY,
+                format!("Pin request failed: {error}\n"),
+            )
+                .into_response();
         }
-    }
-
-    let Some(response) = response else {
-        error!("roundtrip failed after retry: {last_error}");
-        return (
-            StatusCode::BAD_GATEWAY,
-            format!("Pin request failed: {last_error}\n"),
-        )
-            .into_response();
     };
 
     let status = StatusCode::from_u16(response.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
@@ -440,12 +473,12 @@ fn guess_content_type(path: &str) -> &'static str {
 /// Status endpoint showing connection info (served locally, not proxied).
 async fn status(State(state): State<Arc<BridgeState>>) -> impl IntoResponse {
     // Liveness describes this bridge process, not whether the physical Pin is
-    // online. `try_lock` also keeps the probe responsive while another request
-    // is waiting for a dial or a Pin response.
+    // online. `try_lock` also keeps the probe responsive while a request is
+    // establishing or replacing the shared connection.
     let connected = state
-        .stream
+        .connection
         .try_lock()
-        .map(|stream| stream.is_some())
+        .map(|connection| connection.is_some())
         .unwrap_or(false);
 
     axum::Json(serde_json::json!({
@@ -596,7 +629,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let state = Arc::new(BridgeState {
-        stream: Mutex::new(None),
+        connection: Mutex::new(None),
         endpoint,
         node_addr,
         generation: args.generation,
@@ -787,10 +820,10 @@ mod tests {
         assert_eq!(body, b"<html>OK</html>");
     }
 
-    fn correlated_wire_request() -> RemoteRequest {
+    fn correlated_wire_request_with_id(request_id: &str) -> RemoteRequest {
         RemoteRequest {
             protocol: PROTOCOL_VERSION.to_string(),
-            request_id: "wire-request-1".to_string(),
+            request_id: request_id.to_string(),
             generation: 7,
             method: "GET".to_string(),
             path: "/api/spotify/status".to_string(),
@@ -798,6 +831,34 @@ mod tests {
             content_type: None,
             body_base64: None,
         }
+    }
+
+    fn correlated_wire_request() -> RemoteRequest {
+        correlated_wire_request_with_id("wire-request-1")
+    }
+
+    async fn answer_iroh_request(
+        (mut send, mut recv): (iroh::endpoint::SendStream, iroh::endpoint::RecvStream),
+    ) {
+        let mut request_len = [0u8; 4];
+        recv.read_exact(&mut request_len).await.unwrap();
+        let mut request = vec![0u8; u32::from_be_bytes(request_len) as usize];
+        recv.read_exact(&mut request).await.unwrap();
+        let request: serde_json::Value = serde_json::from_slice(&request).unwrap();
+        let response = RemoteResponse {
+            protocol: request["protocol"].as_str().unwrap().to_string(),
+            request_id: request["request_id"].as_str().unwrap().to_string(),
+            generation: request["generation"].as_u64().unwrap(),
+            status: 200,
+            content_type: Some("application/json".to_string()),
+            body_base64: Some(B64.encode(b"{}")),
+        };
+        let encoded = serde_json::to_vec(&response).unwrap();
+        send.write_all(&u32::try_from(encoded.len()).unwrap().to_be_bytes())
+            .await
+            .unwrap();
+        send.write_all(&encoded).await.unwrap();
+        send.finish().unwrap();
     }
 
     async fn exchange_test_response(
@@ -869,6 +930,66 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn concurrent_roundtrips_use_independent_streams_on_one_connection() {
+        let server = Endpoint::builder(iroh::endpoint::presets::Minimal)
+            .alpns(vec![ALPN.to_vec()])
+            .bind()
+            .await
+            .unwrap();
+        let client = Endpoint::builder(iroh::endpoint::presets::Minimal)
+            .bind()
+            .await
+            .unwrap();
+        let state = BridgeState {
+            connection: Mutex::new(None),
+            endpoint: client.clone(),
+            node_addr: server.addr(),
+            generation: 7,
+        };
+        let (release_server, server_released) = tokio::sync::oneshot::channel();
+        let server_endpoint = server.clone();
+        let server_task = tokio::spawn(async move {
+            let incoming = server_endpoint.accept().await.unwrap();
+            let connection = incoming.await.unwrap();
+
+            // Do not answer either request until both streams have delivered
+            // data. A globally serialized bridge can never cross this gate.
+            let first = connection.accept_bi().await.unwrap();
+            let second = connection.accept_bi().await.unwrap();
+            tokio::join!(answer_iroh_request(first), answer_iroh_request(second));
+            let _ = server_released.await;
+        });
+
+        let completed = tokio::time::timeout(Duration::from_secs(2), async {
+            tokio::join!(
+                state.roundtrip(correlated_wire_request_with_id("concurrent-1")),
+                state.roundtrip(correlated_wire_request_with_id("concurrent-2")),
+            )
+        })
+        .await
+        .expect("both requests must reach the Pin before either response is sent");
+        assert_eq!(completed.0.unwrap().request_id, "concurrent-1");
+        assert_eq!(completed.1.unwrap().request_id, "concurrent-2");
+
+        let connection_id = state.connection.lock().await.as_ref().unwrap().stable_id();
+        state
+            .clear_connection_if_current(connection_id.wrapping_add(1))
+            .await;
+        assert_eq!(
+            state.connection.lock().await.as_ref().unwrap().stable_id(),
+            connection_id,
+            "a late failure from an old connection must not clear its replacement",
+        );
+        state.clear_connection_if_current(connection_id).await;
+        assert!(state.connection.lock().await.is_none());
+
+        release_server.send(()).unwrap();
+        server_task.await.unwrap();
+        client.close().await;
+        server.close().await;
+    }
+
+    #[tokio::test]
     async fn one_deadline_covers_a_stalled_full_response_body() {
         let (client, server) = tokio::io::duplex(4096);
         let (mut client_read, mut client_write) = tokio::io::split(client);
@@ -895,6 +1016,37 @@ mod tests {
         assert!(
             result.is_err(),
             "the partial response must not escape the total deadline"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn reconnect_retry_spends_one_total_deadline() {
+        let budget = Duration::from_secs(3);
+        let started = Instant::now();
+        let mut attempts = 0;
+
+        let result: Result<(), BridgeError> = with_reconnect_retry(budget, || {
+            attempts += 1;
+            let attempt = attempts;
+            async move {
+                if attempt == 1 {
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    return Err("first attempt failed".into());
+                }
+                std::future::pending().await
+            }
+        })
+        .await;
+
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Pin request exceeded its total timeout"
+        );
+        assert_eq!(attempts, 2, "one transparent reconnect must remain");
+        assert_eq!(
+            Instant::now().duration_since(started),
+            budget,
+            "the retry must inherit the first attempt's remaining budget"
         );
     }
 

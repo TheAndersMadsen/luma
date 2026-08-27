@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
+import fs from "node:fs";
 import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -16,11 +18,14 @@ const source = async (file) => readFile(new URL(file, root), "utf8");
 
 const store = await import("../src/server/musicProviderStore.ts");
 const youtube = await import("../src/server/youtubeMusic.ts");
+const youtubeProof = await import("../src/server/youtubePoToken.ts");
 const youtubePlayer = await import("../src/server/youtubePlayerEvaluator.ts");
 const tidal = await import("../src/server/tidalMusic.ts");
 const apple = await import("../src/server/appleMusic.ts");
 const gateway = await import("../src/server/musicGateway.ts");
 const spotifyBridge = await import("../src/server/spotifyBridge.ts");
+const playbackRoute = await import("../src/app/api/music-gateway/playback/route.ts");
+const routeSupport = await import("../src/app/api/music-gateway/routeSupport.ts");
 
 function environment(t, name, value) {
   const previous = process.env[name];
@@ -38,6 +43,50 @@ async function encryptedStore(t) {
   environment(t, "REVIVAL_MUSIC_SESSION_DIR", directory);
   environment(t, "REVIVAL_MUSIC_SESSION_SECRET", "music-session-secret-".repeat(3));
   return directory;
+}
+
+function waitWithSignal(milliseconds, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason);
+      return;
+    }
+    let timer;
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      reject(signal.reason);
+    };
+    timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, milliseconds);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function delayedJsonBody(value, milliseconds, onCancel, onPull) {
+  const encoded = new TextEncoder().encode(JSON.stringify(value));
+  let timer;
+  let started = false;
+  return new Response(new ReadableStream({
+    pull(controller) {
+      if (started) return;
+      started = true;
+      onPull?.();
+      timer = setTimeout(() => {
+        timer = undefined;
+        controller.enqueue(encoded);
+        controller.close();
+      }, milliseconds);
+    },
+    cancel(reason) {
+      if (timer !== undefined) clearTimeout(timer);
+      onCancel?.(reason);
+    },
+  }, { highWaterMark: 0 }), {
+    headers: { "content-type": "application/json" },
+  });
 }
 
 test("wearer music sessions are encrypted at rest and written with owner-only permissions", async (t) => {
@@ -225,6 +274,70 @@ test("YouTube Music removes ad payloads and refuses ad or non-media hosts", () =
   assert.equal(youtube.youtubeCollectionPlan("track"), null);
 });
 
+test("YouTube Music cancels declared oversized JSON instead of bypassing ad pruning", async (t) => {
+  let cancelled = false;
+  const upstream = new Response(new ReadableStream({
+    cancel() {
+      cancelled = true;
+    },
+  }), {
+    headers: {
+      "content-length": String(16 * 1024 * 1024 + 1),
+      "content-type": "application/json",
+    },
+  });
+  t.after(() => upstream.body?.cancel().catch(() => undefined));
+  const scopedFetch = youtube.adBlockingYoutubeFetchUsing(async () => upstream);
+
+  await assert.rejects(
+    () => scopedFetch("https://youtubei.googleapis.com/youtubei/v1/player"),
+    (error) =>
+      error instanceof youtube.YoutubeMusicError &&
+      error.status === 502 &&
+      error.message === "YouTube Music returned an oversized response.",
+  );
+  assert.equal(cancelled, true);
+});
+
+test("YouTube integrity responses enforce the 64 KiB streaming limit and cancel upstream", async () => {
+  let pulls = 0;
+  let cancelled = false;
+  const response = new Response(new ReadableStream({
+    pull(controller) {
+      pulls += 1;
+      controller.enqueue(new Uint8Array(pulls === 1 ? 64 * 1024 : 1));
+    },
+    cancel() {
+      cancelled = true;
+    },
+  }, { highWaterMark: 0 }));
+
+  await assert.rejects(
+    () => youtubeProof.readYoutubeIntegrityResponse(response),
+    /YouTube integrity response was oversized/,
+  );
+  assert.equal(pulls, 2);
+  assert.equal(cancelled, true);
+});
+
+test("YouTube playback fetches share one absolute resolution budget", async () => {
+  const sharedSignal = AbortSignal.timeout(200);
+  const observedSignals = [];
+  const scopedFetch = youtube.adBlockingYoutubeFetchUsing(async (_input, init) => {
+    observedSignals.push(init?.signal);
+    await waitWithSignal(120, init?.signal);
+    return Response.json({ playabilityStatus: { status: "OK" } });
+  }, sharedSignal);
+
+  await scopedFetch("https://youtubei.googleapis.com/youtubei/v1/player");
+  await assert.rejects(
+    () => scopedFetch("https://youtubei.googleapis.com/youtubei/v1/player"),
+    (error) => error?.name === "TimeoutError",
+  );
+  assert.equal(observedSignals.length, 2);
+  assert.ok(observedSignals.every((signal) => signal instanceof AbortSignal));
+});
+
 test("YouTube Music binds a content proof to the player request and stream URL", async () => {
   const calls = [];
   const player = { id: "fixture-player" };
@@ -410,6 +523,85 @@ test("TIDAL connection uses official OAuth authorization code + PKCE state", asy
   assert.doesNotMatch(authorization.toString(), new RegExp(pending.verifier));
 });
 
+test("TIDAL status does not expose expired credentials without a refresh token as connected", async (t) => {
+  await encryptedStore(t);
+  environment(t, "TIDAL_CLIENT_ID", "tidal-client-id");
+  const subject = "tidal-expired-status";
+  await store.updateMusicAccountRecord(subject, (record) => ({
+    ...record,
+    tidal: {
+      connected_at: "2026-08-18T00:00:00.000Z",
+      credentials: {
+        access_token: "expired-access-token",
+        expires_at: Date.now() - 1_000,
+        user_id: "wearer-123",
+      },
+    },
+  }));
+
+  assert.deepEqual(await tidal.tidalConnectionStatus(subject), {
+    configured: true,
+    state: "not_connected",
+  });
+  assert.deepEqual((await gateway.musicProviderStatus(subject)).tidal, {
+    configured: true,
+    state: "not_connected",
+  });
+
+  await store.updateMusicAccountRecord(subject, (record) => ({
+    ...record,
+    tidal: {
+      ...record.tidal,
+      credentials: {
+        ...record.tidal.credentials,
+        refresh_token: "refresh-token",
+      },
+    },
+  }));
+  assert.deepEqual(await tidal.tidalConnectionStatus(subject), {
+    configured: true,
+    state: "connected",
+  });
+});
+
+test("TIDAL invalid_grant disconnects the persisted account and requires reconnection", async (t) => {
+  await encryptedStore(t);
+  environment(t, "TIDAL_CLIENT_ID", "tidal-client-id");
+  const subject = "tidal-rejected-refresh";
+  await store.updateMusicAccountRecord(subject, (record) => ({
+    ...record,
+    tidal: {
+      connected_at: "2026-08-18T00:00:00.000Z",
+      credentials: {
+        access_token: "expired-access-token",
+        refresh_token: "rejected-refresh-token",
+        expires_at: Date.now() - 1_000,
+        user_id: "wearer-123",
+      },
+    },
+  }));
+
+  const previousFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = previousFetch;
+  });
+  globalThis.fetch = async (input) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    assert.equal(url.origin, "https://auth.tidal.com");
+    return Response.json({ error: "invalid_grant" }, { status: 400 });
+  };
+
+  const error = await tidal.tidalStreamUrl(subject, "tidal:rejected").catch((reason) => reason);
+  assert.ok(error instanceof tidal.TidalMusicError);
+  assert.equal(error.status, 401);
+  assert.equal(error.message, "Reconnect TIDAL in Center.");
+  assert.deepEqual(await tidal.tidalConnectionStatus(subject), {
+    configured: true,
+    state: "not_connected",
+  });
+  assert.equal((await store.readMusicAccountRecord(subject)).tidal, undefined);
+});
+
 test("TIDAL collection prompts resolve official relationships and preserve item order", async (t) => {
   await encryptedStore(t);
   environment(t, "TIDAL_CLIENT_ID", "tidal-client-id");
@@ -564,6 +756,341 @@ test("TIDAL disconnect wins a race with token refresh and cannot recreate creden
   assert.equal((await store.readMusicAccountRecord(subject)).tidal, undefined);
 });
 
+test("concurrent TIDAL playbacks share one expired-token refresh per wearer", async (t) => {
+  await encryptedStore(t);
+  environment(t, "TIDAL_CLIENT_ID", "tidal-client-id");
+  const subject = "tidal-refresh-single-flight";
+  await store.updateMusicAccountRecord(subject, (record) => ({
+    ...record,
+    tidal: {
+      connected_at: "2026-08-18T00:00:00.000Z",
+      credentials: {
+        access_token: "expired-access-token",
+        refresh_token: "refresh-token",
+        expires_at: Date.now() - 1_000,
+        user_id: "wearer-123",
+      },
+    },
+  }));
+
+  const releaseRefresh = Promise.withResolvers();
+  const refreshStarted = Promise.withResolvers();
+  let refreshCalls = 0;
+  let lookupCalls = 0;
+  const previousFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = previousFetch;
+  });
+  globalThis.fetch = async (input, init) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    if (url.origin === "https://auth.tidal.com") {
+      refreshCalls += 1;
+      refreshStarted.resolve();
+      await releaseRefresh.promise;
+      return Response.json({
+        access_token: "rotated-access-token",
+        refresh_token: "rotated-refresh-token",
+        expires_in: 3_600,
+        user_id: "wearer-123",
+      });
+    }
+    lookupCalls += 1;
+    assert.equal(new Headers(init?.headers).get("authorization"), "Bearer rotated-access-token");
+    const id = url.pathname.split("/").at(-1);
+    return Response.json({
+      data: {
+        type: "trackFiles",
+        id,
+        attributes: {
+          trackPresentation: "FULL",
+          url: `https://audio.tdlcdn.com/${id}.m4a`,
+        },
+      },
+    });
+  };
+
+  const first = tidal.tidalStreamUrl(subject, "tidal:first");
+  await refreshStarted.promise;
+  const second = tidal.tidalStreamUrl(subject, "tidal:second");
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  releaseRefresh.resolve();
+
+  assert.deepEqual(await Promise.all([first, second]), [
+    "https://audio.tdlcdn.com/first.m4a",
+    "https://audio.tdlcdn.com/second.m4a",
+  ]);
+  assert.equal(refreshCalls, 1);
+  assert.equal(lookupCalls, 2);
+});
+
+test("a TIDAL caller leaving after refresh dispatch cannot invalidate the rotation", async (t) => {
+  await encryptedStore(t);
+  environment(t, "TIDAL_CLIENT_ID", "tidal-client-id");
+  const subject = "tidal-abandoned-refresh-flight";
+  await store.updateMusicAccountRecord(subject, (record) => ({
+    ...record,
+    tidal: {
+      connected_at: "2026-08-18T00:00:00.000Z",
+      credentials: {
+        access_token: "expired-access-token",
+        refresh_token: "refresh-token",
+        expires_at: Date.now() - 1_000,
+        user_id: "wearer-123",
+      },
+    },
+  }));
+
+  const firstRefreshStarted = Promise.withResolvers();
+  const releaseFirstRefresh = Promise.withResolvers();
+  let refreshCalls = 0;
+  const previousFetch = globalThis.fetch;
+  t.after(() => {
+    releaseFirstRefresh.resolve();
+    globalThis.fetch = previousFetch;
+  });
+  globalThis.fetch = async (input, init) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    if (url.origin === "https://auth.tidal.com") {
+      const call = ++refreshCalls;
+      if (call > 1) return Response.json({ error: "invalid_grant" }, { status: 400 });
+      if (call === 1) {
+        firstRefreshStarted.resolve();
+        await releaseFirstRefresh.promise;
+      }
+      return Response.json({
+        access_token: "rotated-access-token",
+        refresh_token: "rotated-refresh-token",
+        expires_in: 3_600,
+        user_id: "wearer-123",
+      });
+    }
+    assert.equal(new Headers(init?.headers).get("authorization"), "Bearer rotated-access-token");
+    return Response.json({
+      data: {
+        type: "trackFiles",
+        id: "replacement",
+        attributes: {
+          trackPresentation: "FULL",
+          url: "https://audio.tdlcdn.com/replacement.m4a",
+        },
+      },
+    });
+  };
+
+  const firstDeadline = new AbortController();
+  const abandoned = tidal.tidalStreamUrl(subject, "tidal:abandoned", firstDeadline.signal);
+  await firstRefreshStarted.promise;
+  firstDeadline.abort(new DOMException("caller left", "AbortError"));
+  await assert.rejects(
+    abandoned,
+    (error) => error instanceof tidal.TidalMusicError && error.status === 503,
+  );
+
+  const replacement = tidal.tidalStreamUrl(subject, "tidal:replacement");
+  void replacement.catch(() => undefined);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  releaseFirstRefresh.resolve();
+
+  assert.equal(await replacement, "https://audio.tdlcdn.com/replacement.m4a");
+  assert.equal(refreshCalls, 1);
+});
+
+test("a completed TIDAL rotation remains usable after its caller leaves", async (t) => {
+  await encryptedStore(t);
+  environment(t, "TIDAL_CLIENT_ID", "tidal-client-id");
+  const subject = "tidal-abandoned-queued-refresh";
+  await store.updateMusicAccountRecord(subject, (record) => ({
+    ...record,
+    tidal: {
+      connected_at: "2026-08-18T00:00:00.000Z",
+      credentials: {
+        access_token: "expired-access-token",
+        refresh_token: "refresh-token",
+        expires_at: Date.now() - 1_000,
+        user_id: "wearer-123",
+      },
+    },
+  }));
+
+  const lockHeld = Promise.withResolvers();
+  const releaseLock = Promise.withResolvers();
+  const blocker = store.updateMusicAccountRecord(subject, async (record) => {
+    lockHeld.resolve();
+    await releaseLock.promise;
+    return record;
+  });
+  await lockHeld.promise;
+
+  const firstRefreshBodyStarted = Promise.withResolvers();
+  const releaseFirstRefreshBody = Promise.withResolvers();
+  let firstRefreshBodyCancelled = false;
+  let refreshCalls = 0;
+  const previousFetch = globalThis.fetch;
+  t.after(async () => {
+    releaseLock.resolve();
+    releaseFirstRefreshBody.resolve();
+    await blocker;
+    globalThis.fetch = previousFetch;
+  });
+  globalThis.fetch = async (input, init) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    if (url.origin === "https://auth.tidal.com") {
+      const call = ++refreshCalls;
+      if (call > 1) return Response.json({ error: "invalid_grant" }, { status: 400 });
+      const encoded = new TextEncoder().encode(JSON.stringify({
+        access_token: "rotated-access-token",
+        refresh_token: "rotated-refresh-token",
+        expires_in: 3_600,
+        user_id: "wearer-123",
+      }));
+      let bodyStarted = false;
+      return new Response(new ReadableStream({
+        pull(controller) {
+          if (bodyStarted) return;
+          bodyStarted = true;
+          firstRefreshBodyStarted.resolve();
+          void releaseFirstRefreshBody.promise.then(() => {
+            if (firstRefreshBodyCancelled) return;
+            controller.enqueue(encoded);
+            controller.close();
+          });
+        },
+        cancel() {
+          firstRefreshBodyCancelled = true;
+        },
+      }, { highWaterMark: 0 }), {
+        headers: { "content-type": "application/json" },
+      });
+    }
+    assert.equal(new Headers(init?.headers).get("authorization"), "Bearer rotated-access-token");
+    return Response.json({
+      data: {
+        type: "trackFiles",
+        id: "replacement",
+        attributes: {
+          trackPresentation: "FULL",
+          url: "https://audio.tdlcdn.com/replacement.m4a",
+        },
+      },
+    });
+  };
+
+  const firstDeadline = new AbortController();
+  const abandoned = tidal.tidalStreamUrl(subject, "tidal:abandoned", firstDeadline.signal);
+  await firstRefreshBodyStarted.promise;
+  firstDeadline.abort(new DOMException("caller left", "AbortError"));
+  await assert.rejects(
+    abandoned,
+    (error) => error instanceof tidal.TidalMusicError && error.status === 503,
+  );
+
+  const replacement = tidal.tidalStreamUrl(subject, "tidal:replacement");
+  releaseFirstRefreshBody.resolve();
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  releaseLock.resolve();
+  await blocker;
+
+  assert.equal(await replacement, "https://audio.tdlcdn.com/replacement.m4a");
+  assert.equal(refreshCalls, 1);
+  assert.equal(firstRefreshBodyCancelled, false);
+  assert.equal(
+    (await store.readMusicAccountRecord(subject)).tidal.credentials.access_token,
+    "rotated-access-token",
+  );
+});
+
+test("a stale TIDAL credential read reuses the rotation that already settled", async (t) => {
+  await encryptedStore(t);
+  environment(t, "TIDAL_CLIENT_ID", "tidal-client-id");
+  const subject = "tidal-stale-read-after-refresh";
+  await store.updateMusicAccountRecord(subject, (record) => ({
+    ...record,
+    tidal: {
+      connected_at: "2026-08-18T00:00:00.000Z",
+      credentials: {
+        access_token: "expired-access-token",
+        refresh_token: "single-use-refresh-token",
+        expires_at: Date.now() - 1_000,
+        user_id: "wearer-123",
+      },
+    },
+  }));
+
+  const firstRefreshStarted = Promise.withResolvers();
+  const releaseFirstRefresh = Promise.withResolvers();
+  let refreshCalls = 0;
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    if (url.origin === "https://auth.tidal.com") {
+      const call = ++refreshCalls;
+      if (call > 1) return Response.json({ error: "invalid_grant" }, { status: 400 });
+      firstRefreshStarted.resolve();
+      await releaseFirstRefresh.promise;
+      return Response.json({
+        access_token: "rotated-access-token",
+        refresh_token: "rotated-refresh-token",
+        expires_in: 3_600,
+        user_id: "wearer-123",
+      });
+    }
+    assert.equal(new Headers(init?.headers).get("authorization"), "Bearer rotated-access-token");
+    const id = url.pathname.split("/").at(-1);
+    return Response.json({
+      data: {
+        type: "trackFiles",
+        id,
+        attributes: {
+          trackPresentation: "FULL",
+          url: `https://audio.tdlcdn.com/${id}.m4a`,
+        },
+      },
+    });
+  };
+
+  const sessionFile = store.musicSessionStoreFile(subject);
+  const previousReadFile = fs.promises.readFile;
+  const staleReadStarted = Promise.withResolvers();
+  const releaseStaleRead = Promise.withResolvers();
+  let pauseNextSubjectRead = false;
+  fs.promises.readFile = async (...arguments_) => {
+    const bytes = await previousReadFile(...arguments_);
+    if (pauseNextSubjectRead && String(arguments_[0]) === sessionFile) {
+      pauseNextSubjectRead = false;
+      staleReadStarted.resolve();
+      await releaseStaleRead.promise;
+    }
+    return bytes;
+  };
+  syncBuiltinESMExports();
+  t.after(() => {
+    releaseFirstRefresh.resolve();
+    releaseStaleRead.resolve();
+    fs.promises.readFile = previousReadFile;
+    syncBuiltinESMExports();
+    globalThis.fetch = previousFetch;
+  });
+
+  const first = tidal.tidalStreamUrl(subject, "tidal:first");
+  await firstRefreshStarted.promise;
+  pauseNextSubjectRead = true;
+  const second = tidal.tidalStreamUrl(subject, "tidal:second");
+  await staleReadStarted.promise;
+
+  releaseFirstRefresh.resolve();
+  assert.equal(await first, "https://audio.tdlcdn.com/first.m4a");
+  await new Promise((resolve) => setImmediate(resolve));
+  releaseStaleRead.resolve();
+
+  assert.equal(await second, "https://audio.tdlcdn.com/second.m4a");
+  assert.equal(refreshCalls, 1);
+  assert.equal(
+    (await store.readMusicAccountRecord(subject)).tidal.credentials.access_token,
+    "rotated-access-token",
+  );
+});
+
 test("TIDAL playback accepts only official full-track HTTPS files", async (t) => {
   await encryptedStore(t);
   environment(t, "TIDAL_CLIENT_ID", "tidal-client-id");
@@ -615,6 +1142,165 @@ test("TIDAL playback accepts only official full-track HTTPS files", async (t) =>
   );
 });
 
+test("TIDAL refresh and playback lookup share one absolute resolution budget", async (t) => {
+  await encryptedStore(t);
+  environment(t, "TIDAL_CLIENT_ID", "tidal-client-id");
+  const subject = "tidal-shared-playback-budget";
+  await store.updateMusicAccountRecord(subject, (record) => ({
+    ...record,
+    tidal: {
+      connected_at: "2026-08-18T00:00:00.000Z",
+      credentials: {
+        access_token: "expired-access-token",
+        refresh_token: "refresh-token",
+        expires_at: Date.now() - 1_000,
+        user_id: "wearer-123",
+      },
+    },
+  }));
+
+  const calls = [];
+  const cancelledBodies = [];
+  const previousFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = previousFetch;
+  });
+  globalThis.fetch = async (input, init) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    const kind = url.origin === "https://auth.tidal.com" ? "refresh" : "lookup";
+    calls.push(kind);
+    if (url.origin === "https://auth.tidal.com") {
+      return delayedJsonBody({
+        access_token: "refreshed-access-token",
+        refresh_token: "refreshed-refresh-token",
+        expires_in: 3_600,
+        user_id: "wearer-123",
+      }, 120, () => cancelledBodies.push(kind));
+    }
+    return delayedJsonBody({
+      data: {
+        type: "trackFiles",
+        id: "shared",
+        attributes: {
+          trackPresentation: "FULL",
+          url: "https://audio.tdlcdn.com/shared.m4a",
+        },
+      },
+    }, 120, () => cancelledBodies.push(kind));
+  };
+
+  const operationSignal = AbortSignal.timeout(200);
+  const originalTimeout = AbortSignal.timeout;
+  const requestCaps = [];
+  AbortSignal.timeout = (milliseconds) => {
+    requestCaps.push(milliseconds);
+    return originalTimeout(milliseconds);
+  };
+  t.after(() => {
+    AbortSignal.timeout = originalTimeout;
+  });
+  await assert.rejects(
+    () => tidal.tidalStreamUrl(subject, "tidal:shared", operationSignal),
+    (error) =>
+      error instanceof tidal.TidalMusicError &&
+      error.status === 503 &&
+      error.message === "TIDAL could not be reached.",
+  );
+  assert.deepEqual(calls, ["refresh", "lookup"]);
+  assert.deepEqual(cancelledBodies, ["lookup"]);
+  assert.deepEqual(requestCaps, [15_000, 15_000]);
+});
+
+test("TIDAL playback deadlines preserve an accepted token rotation", async (t) => {
+  await encryptedStore(t);
+  environment(t, "TIDAL_CLIENT_ID", "tidal-client-id");
+  const subject = "tidal-refresh-playback-deadline";
+  await store.updateMusicAccountRecord(subject, (record) => ({
+    ...record,
+    tidal: {
+      connected_at: "2026-08-18T00:00:00.000Z",
+      credentials: {
+        access_token: "expired-access-token",
+        refresh_token: "refresh-token",
+        expires_at: Date.now() - 1_000,
+        user_id: "wearer-123",
+      },
+    },
+  }));
+
+  const refreshBodyStarted = Promise.withResolvers();
+  const releaseRefreshBody = Promise.withResolvers();
+  const cancelledBodies = [];
+  let refreshCalls = 0;
+  const previousFetch = globalThis.fetch;
+  t.after(() => {
+    releaseRefreshBody.resolve();
+    globalThis.fetch = previousFetch;
+  });
+  globalThis.fetch = async (input, init) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    if (url.origin === "https://auth.tidal.com") {
+      refreshCalls += 1;
+      const encoded = new TextEncoder().encode(JSON.stringify({
+        access_token: "refreshed-access-token",
+        refresh_token: "refreshed-refresh-token",
+        expires_in: 3_600,
+        user_id: "wearer-123",
+      }));
+      let bodyStarted = false;
+      let bodyCancelled = false;
+      return new Response(new ReadableStream({
+        pull(controller) {
+          if (bodyStarted) return;
+          bodyStarted = true;
+          refreshBodyStarted.resolve();
+          void releaseRefreshBody.promise.then(() => {
+            if (bodyCancelled) return;
+            controller.enqueue(encoded);
+            controller.close();
+          });
+        },
+        cancel() {
+          bodyCancelled = true;
+          cancelledBodies.push("refresh");
+        },
+      }, { highWaterMark: 0 }), {
+        headers: { "content-type": "application/json" },
+      });
+    }
+    assert.equal(new Headers(init?.headers).get("authorization"), "Bearer refreshed-access-token");
+    return Response.json({
+      data: {
+        type: "trackFiles",
+        id: "shared",
+        attributes: {
+          trackPresentation: "FULL",
+          url: "https://audio.tdlcdn.com/shared.m4a",
+        },
+      },
+    });
+  };
+
+  const deadline = new AbortController();
+  const playback = tidal.tidalStreamUrl(subject, "tidal:shared", deadline.signal);
+  await refreshBodyStarted.promise;
+  deadline.abort(new DOMException("playback deadline", "TimeoutError"));
+
+  await assert.rejects(
+    () => playback,
+    (error) =>
+      error instanceof tidal.TidalMusicError &&
+      error.status === 503 &&
+      error.message === "TIDAL could not be reached.",
+  );
+  const replacement = tidal.tidalStreamUrl(subject, "tidal:shared");
+  releaseRefreshBody.resolve();
+
+  assert.equal(await replacement, "https://audio.tdlcdn.com/shared.m4a");
+  assert.equal(refreshCalls, 1);
+  assert.deepEqual(cancelledBodies, []);
+});
+
 test("Apple MusicKit user-token handoff stays encrypted and remains playback-gated", async (t) => {
   await encryptedStore(t);
   environment(t, "APPLE_MUSIC_DEVELOPER_TOKEN", "header.payload.signature");
@@ -664,10 +1350,85 @@ test("the Pin gateway bearer is derived, constant-time checked, and errors retai
   assert.equal(gateway.musicGatewayError(new apple.AppleMusicError("bad token", 400)).status, 400);
 });
 
+test("device music authentication honors the playback deadline", async (t) => {
+  environment(t, "REVIVAL_SPOTIFY_ADAPTER_TOKEN_FILE", undefined);
+  environment(t, "REVIVAL_SPOTIFY_ADAPTER_TOKEN", "adapter-root-token-".repeat(3));
+  environment(t, "REVIVAL_PIN_BRIDGE_DEVICE_ID", "2c2a00010000abcd");
+  environment(t, "REVIVAL_PIN_BRIDGE_OWNER_SUB", "owner-subject");
+  const bearer = await spotifyBridge.deviceMusicGatewayToken();
+  const request = new Request("https://center.example.test/api/music-gateway/playback", {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${bearer}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ provider: "tidal", id: "tidal:track" }),
+  });
+  const timeoutError = new DOMException("playback deadline", "TimeoutError");
+  const deadline = AbortSignal.abort(timeoutError);
+
+  await assert.rejects(
+    () => routeSupport.deviceMusicRequest(request, deadline),
+    (error) => error === timeoutError,
+  );
+});
+
+test("the playback deadline includes authentication and request-body parsing", async (t) => {
+  environment(t, "REVIVAL_SPOTIFY_ADAPTER_TOKEN_FILE", undefined);
+  environment(t, "REVIVAL_SPOTIFY_ADAPTER_TOKEN", "adapter-root-token-".repeat(3));
+  environment(t, "REVIVAL_PIN_BRIDGE_DEVICE_ID", "2c2a00010000abcd");
+  environment(t, "REVIVAL_PIN_BRIDGE_OWNER_SUB", "owner-subject");
+  const bearer = await spotifyBridge.deviceMusicGatewayToken();
+
+  const originalTimeout = AbortSignal.timeout;
+  const playbackDeadline = new AbortController();
+  AbortSignal.timeout = (milliseconds) =>
+    milliseconds === 40_000 ? playbackDeadline.signal : originalTimeout(milliseconds);
+  t.after(() => {
+    AbortSignal.timeout = originalTimeout;
+  });
+
+  const requestController = new AbortController();
+  const fallbackAbort = setTimeout(() => requestController.abort(), 250);
+  t.after(() => clearTimeout(fallbackAbort));
+  let bodyCancelled = false;
+  const bodyStarted = Promise.withResolvers();
+  const request = new Request("https://center.example.test/api/music-gateway/playback", {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${bearer}`,
+      "content-type": "application/json",
+    },
+    body: new ReadableStream({
+      pull() {
+        bodyStarted.resolve();
+      },
+      cancel() {
+        bodyCancelled = true;
+      },
+    }),
+    duplex: "half",
+    signal: requestController.signal,
+  });
+
+  const responsePromise = playbackRoute.POST(request);
+  await bodyStarted.promise;
+  const startedAt = performance.now();
+  playbackDeadline.abort(new DOMException("playback deadline", "TimeoutError"));
+  const response = await responsePromise;
+
+  assert.equal(response.status, 408);
+  assert.deepEqual(await response.json(), { error: "Music request timed out." });
+  assert.equal(bodyCancelled, true);
+  assert.equal(requestController.signal.aborted, false);
+  assert.ok(performance.now() - startedAt < 150, "the 40-second route budget did not cover the body read");
+});
+
 test("Center exposes only exact authenticated gateway operations and no public audio relay", async () => {
-  const [middleware, requestSupport, musicView, appleRoute, nextConfig] = await Promise.all([
+  const [middleware, requestSupport, playbackRoute, musicView, appleRoute, nextConfig] = await Promise.all([
     source("src/middleware.ts"),
     source("src/app/api/music-gateway/routeSupport.ts"),
+    source("src/app/api/music-gateway/playback/route.ts"),
     source("src/app/settings/account/services/SpotifyServiceCard.tsx"),
     source("src/app/api/settings/services/music/apple/route.ts"),
     source("next.config.mjs"),
@@ -679,6 +1440,9 @@ test("Center exposes only exact authenticated gateway operations and no public a
   assert.match(requestSupport, /request\.body.*getReader/);
   assert.match(requestSupport, /QUERY_KINDS/);
   assert.match(requestSupport, /exactKeys/);
+  assert.match(playbackRoute, /MUSIC_PLAYBACK_RESOLUTION_TIMEOUT_MS\s*=\s*40_000/);
+  assert.match(playbackRoute, /AbortSignal\.any\(\[\s*request\.signal,\s*AbortSignal\.timeout/);
+  assert.match(playbackRoute, /gatewayPlayback\([^;]+playbackSignal/s);
   assert.match(musicView, /musickit\/v3\/musickit\.js/);
   assert.match(musicView, /instance\.authorize\(\)/);
   assert.match(musicView, /music_user_token: musicUserToken/);

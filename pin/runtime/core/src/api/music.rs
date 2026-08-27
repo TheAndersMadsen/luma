@@ -21,7 +21,7 @@ const MAX_PROVIDER_REQUEST_BODY_BYTES: usize = 512 * 1024;
 const MAX_PROVIDER_BODY_BYTES: usize = 5 * 1024 * 1024;
 const MAX_URL_BYTES: usize = 8 * 1024;
 const MAX_HEADER_BYTES: usize = 16 * 1024;
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(25);
 const YOUTUBE_REQUEST_HOSTS: &[&str] = &[
     "www.youtube.com",
     "music.youtube.com",
@@ -66,7 +66,7 @@ struct ValidatedEgressRequest {
     body: Vec<u8>,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 struct MusicEgressResponse {
     status: u16,
     headers: BTreeMap<String, String>,
@@ -169,33 +169,33 @@ async fn provider_egress(
         Ok(request) => request,
         Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
     };
-    let mut upstream = state
-        .http_client
+    match execute_provider_egress_request(&state.http_client, request, REQUEST_TIMEOUT).await {
+        Ok(response) => Json(response).into_response(),
+        Err(message) => (StatusCode::BAD_GATEWAY, message).into_response(),
+    }
+}
+
+async fn execute_provider_egress_request(
+    http_client: &reqwest::Client,
+    request: ValidatedEgressRequest,
+    timeout: Duration,
+) -> Result<MusicEgressResponse, &'static str> {
+    let mut upstream = http_client
         .request(request.method, request.url)
         .headers(request.headers)
-        .timeout(REQUEST_TIMEOUT);
+        .timeout(timeout);
     if !request.body.is_empty() {
         upstream = upstream.body(request.body);
     }
-    let response = match upstream.send().await {
-        Ok(response) => response,
-        Err(_) => {
-            return (
-                StatusCode::BAD_GATEWAY,
-                "music provider egress was unavailable",
-            )
-                .into_response()
-        }
-    };
+    let response = upstream
+        .send()
+        .await
+        .map_err(|_| "music provider egress was unavailable")?;
     if response
         .content_length()
         .is_some_and(|length| length > MAX_PROVIDER_BODY_BYTES as u64)
     {
-        return (
-            StatusCode::BAD_GATEWAY,
-            "music provider response was too large",
-        )
-            .into_response();
+        return Err("music provider response was too large");
     }
     let status = response.status().as_u16();
     let headers = RESPONSE_HEADERS
@@ -211,32 +211,26 @@ async fn provider_egress(
     let mut body = Vec::new();
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {
-        let chunk = match chunk {
-            Ok(chunk) => chunk,
-            Err(_) => {
-                return (StatusCode::BAD_GATEWAY, "music provider response failed").into_response()
-            }
-        };
+        let chunk = chunk.map_err(|_| "music provider response failed")?;
         if body.len() + chunk.len() > MAX_PROVIDER_BODY_BYTES {
-            return (
-                StatusCode::BAD_GATEWAY,
-                "music provider response was too large",
-            )
-                .into_response();
+            return Err("music provider response was too large");
         }
         body.extend_from_slice(&chunk);
     }
-    Json(MusicEgressResponse {
+    Ok(MusicEgressResponse {
         status,
         headers,
         body_base64: STANDARD.encode(body),
     })
-    .into_response()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bytes::Bytes;
+    use std::convert::Infallible;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
 
     fn request(url: &str) -> MusicEgressRequest {
         MusicEgressRequest {
@@ -282,5 +276,73 @@ mod tests {
         let mut tidal = request("https://www.youtube.com/youtubei/v1/player");
         tidal.provider = MusicProvider::Tidal;
         assert!(validate_request(tidal).is_err());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn provider_deadline_allows_observed_latency_and_covers_the_complete_body() {
+        assert_eq!(REQUEST_TIMEOUT, Duration::from_secs(25));
+
+        let body_started = Arc::new(AtomicBool::new(false));
+        let app = Router::new()
+            .route(
+                "/stalled",
+                post({
+                    let body_started = body_started.clone();
+                    move || {
+                        let body_started = body_started.clone();
+                        async move {
+                            let body = async_stream::stream! {
+                                yield Ok::<Bytes, Infallible>(Bytes::from_static(b"first"));
+                                body_started.store(true, Ordering::SeqCst);
+                                tokio::time::sleep(Duration::from_secs(3)).await;
+                                yield Ok::<Bytes, Infallible>(Bytes::from_static(b"last"));
+                            };
+                            axum::response::Response::new(axum::body::Body::from_stream(body))
+                        }
+                    }
+                }),
+            )
+            .route(
+                "/complete",
+                post(|| async {
+                    let body = async_stream::stream! {
+                        yield Ok::<Bytes, Infallible>(Bytes::from_static(b"first"));
+                        tokio::time::sleep(Duration::from_millis(80)).await;
+                        yield Ok::<Bytes, Infallible>(Bytes::from_static(b"last"));
+                    };
+                    axum::response::Response::new(axum::body::Body::from_stream(body))
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let request = |path: &str| ValidatedEgressRequest {
+            method: Method::POST,
+            url: format!("{origin}/{path}").parse().unwrap(),
+            headers: HeaderMap::new(),
+            body: Vec::new(),
+        };
+        let client = reqwest::Client::new();
+
+        let timed_out =
+            execute_provider_egress_request(&client, request("stalled"), Duration::from_secs(1))
+                .await;
+        assert!(
+            body_started.load(Ordering::SeqCst),
+            "response body never started"
+        );
+        assert_eq!(timed_out.unwrap_err(), "music provider response failed");
+
+        let completed =
+            execute_provider_egress_request(&client, request("complete"), Duration::from_secs(1))
+                .await
+                .unwrap();
+        assert_eq!(
+            STANDARD.decode(completed.body_base64).unwrap(),
+            b"firstlast"
+        );
+        server.abort();
     }
 }

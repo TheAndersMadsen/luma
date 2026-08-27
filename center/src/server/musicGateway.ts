@@ -42,10 +42,13 @@ function ownerSubject(): string {
   return owner;
 }
 
-export async function authenticateMusicGateway(request: Request): Promise<string> {
+export async function authenticateMusicGateway(
+  request: Request,
+  signal?: AbortSignal,
+): Promise<string> {
   const authorization = request.headers.get("authorization") ?? "";
   const match = /^Bearer ([!-~]{32,512})$/u.exec(authorization);
-  const expected = await deviceMusicGatewayToken();
+  const expected = await deviceMusicGatewayToken(signal);
   if (!match || !equalGatewayToken(expected, match[1])) throw new MusicGatewayError("Unauthorized.", 401);
   return ownerSubject();
 }
@@ -87,11 +90,16 @@ export async function gatewayQuery(subject: string, request: QueryRequest) {
   };
 }
 
-export async function gatewayPlayback(subject: string, providerValue: MusicProvider, id: string) {
+export async function gatewayPlayback(
+  subject: string,
+  providerValue: MusicProvider,
+  id: string,
+  signal?: AbortSignal,
+) {
   const provider = supportedProvider(providerValue);
   const upstream = provider === "youtube_music"
-    ? await youtubeMusicStreamUrl(subject, id)
-    : await tidalStreamUrl(subject, id);
+    ? await youtubeMusicStreamUrl(subject, id, signal)
+    : await tidalStreamUrl(subject, id, signal);
   return { url: upstream };
 }
 

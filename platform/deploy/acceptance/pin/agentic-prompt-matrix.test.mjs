@@ -39,6 +39,19 @@ const RANK_ONE = Object.freeze({
   artists: Object.freeze(["Michael Jackson"]),
   album: "PRIVATE_PROVIDER_ALBUM_7f3a",
 });
+const EXPECTED_IDENTITY = Object.freeze({
+  releaseId: "fixture-release",
+  packageName: "com.penumbraos.server",
+  versionName: "2026-08-27.1",
+  versionCode: 202_608_271,
+  signerIdentity: "dd07f452",
+});
+const LIVE_ARGS = Object.freeze([
+  "--serial", "device-123",
+  "--expected-pin-serial", "device-123",
+  "--release-manifest", "/fixture/manifest.json",
+  "--release-receipts", "/fixture/receipts.json",
+]);
 
 function matrixCase(id) {
   const item = FIXED_PROMPT_MATRIX.find((candidate) => candidate.id === id);
@@ -200,13 +213,29 @@ test("the matrix is fixed, bounded, immutable, and the CLI accepts no prompt inp
     ),
   );
 
-  assert.deepEqual(parseMatrixCliArgs(["--serial", "device-123", "--json"]), {
+  assert.deepEqual(parseMatrixCliArgs([...LIVE_ARGS, "--json"]), {
     serial: "device-123",
+    expectedPinSerial: "device-123",
     adbPath: "adb",
+    releaseManifestPath: "/fixture/manifest.json",
+    releaseReceiptsPath: "/fixture/receipts.json",
     json: true,
     help: false,
   });
   assert.throws(() => parseMatrixCliArgs([]), /explicit ADB serial/);
+  assert.throws(
+    () => parseMatrixCliArgs(["--serial", "device-123"]),
+    /expected AI Pin serial/,
+  );
+  assert.throws(
+    () =>
+      parseMatrixCliArgs([
+        ...LIVE_ARGS.slice(0, 3),
+        "other-device",
+        ...LIVE_ARGS.slice(4),
+      ]),
+    /does not match/,
+  );
   assert.throws(
     () => parseMatrixCliArgs(["--serial", "device", "--prompt", "hello"]),
     /unknown command option/,
@@ -883,7 +912,11 @@ test("matrix main preserves the exact readiness gate before any probe", async ()
     cases: [],
     summary: { pass: 0, fail: 0, total: 0 },
   };
-  const exitCode = await main(["--serial", "device-123", "--json"], {
+  const exitCode = await main([...LIVE_ARGS, "--json"], {
+    loadExpectedServerIdentity: async () => {
+      order.push("release");
+      return EXPECTED_IDENTITY;
+    },
     verifyExplicitDevice: async () => order.push("serial"),
     collectInstalledServerIdentity: async () => {
       order.push("identity");
@@ -897,9 +930,10 @@ test("matrix main preserves the exact readiness gate before any probe", async ()
       order.push("readiness");
       return { fixture: true };
     },
-    evaluateReadiness: (snapshot) => {
+    evaluateReadiness: (snapshot, options) => {
       order.push("evaluate");
       assert.deepEqual(snapshot.packageIdentity, { packageName: "fixture" });
+      assert.equal(options.expectedIdentity, EXPECTED_IDENTITY);
       return {
         checks: [{ status: CHECK_STATUS.PASS }],
         context: { grpcPort: 9_090 },
@@ -923,6 +957,7 @@ test("matrix main preserves the exact readiness gate before any probe", async ()
 
   assert.equal(exitCode, 0);
   assert.deepEqual(order, [
+    "release",
     "serial",
     "identity",
     "token",

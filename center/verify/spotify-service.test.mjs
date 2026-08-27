@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { mkdtemp, open, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -33,6 +34,64 @@ function json(body, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
     headers: { "content-type": "application/json" },
+  });
+}
+
+function waitWithSignal(milliseconds, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason);
+      return;
+    }
+    let timer;
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      reject(signal.reason);
+    };
+    timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, milliseconds);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function delayedAdapterFetch({ headersAfterMs = 0, bodyAfterMs = 0, onBodyRead }) {
+  return async (_url, init) => {
+    await waitWithSignal(headersAfterMs, init?.signal);
+    const encoded = new TextEncoder().encode(JSON.stringify({
+      status: 200,
+      headers: { "content-type": "application/json; charset=utf-8" },
+      body_base64: Buffer.from('{"playabilityStatus":{"status":"OK"}}').toString("base64"),
+    }));
+    let bodyReadStarted = false;
+    const body = new ReadableStream({
+      async pull(controller) {
+        if (bodyReadStarted) return;
+        bodyReadStarted = true;
+        onBodyRead?.();
+        try {
+          await waitWithSignal(bodyAfterMs, init?.signal);
+          controller.enqueue(encoded);
+          controller.close();
+        } catch (error) {
+          controller.error(error);
+        }
+      },
+    }, { highWaterMark: 0 });
+    return new Response(body, {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+}
+
+function playerRequest() {
+  return new Request("https://youtubei.googleapis.com/youtubei/v1/player", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: "{}",
   });
 }
 
@@ -89,33 +148,196 @@ test("YouTube player requests use the authenticated Pin egress route", async () 
   assert.deepEqual(await response.json(), { playabilityStatus: { status: "OK" } });
 });
 
-test("YouTube Pin egress allows the observed integrity response latency", async () => {
+test("YouTube Pin egress stops a chunked request body at its byte limit", async () => {
   configureBridge();
-  delete process.env.REVIVAL_SPOTIFY_ADAPTER_TIMEOUT_MS;
-  const originalTimeout = AbortSignal.timeout;
-  let observedTimeout = null;
-  AbortSignal.timeout = (milliseconds) => {
-    observedTimeout = milliseconds;
-    return new AbortController().signal;
-  };
+  let adapterCalls = 0;
+  let bodyCancelled = false;
+  let pulls = 0;
+  const chunkBytes = 64 * 1024;
+  const request = new Request("https://youtubei.googleapis.com/youtubei/v1/player", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: new ReadableStream({
+      pull(controller) {
+        pulls += 1;
+        if (pulls > 10) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(new Uint8Array(chunkBytes));
+      },
+      cancel() {
+        bodyCancelled = true;
+      },
+    }, { highWaterMark: 0 }),
+    duplex: "half",
+  });
+
+  await assert.rejects(
+    () => deviceMusicProviderFetch(request, undefined, async () => {
+      adapterCalls += 1;
+      throw new Error("oversized provider request reached the adapter");
+    }),
+    (error) =>
+      error instanceof SpotifyBridgeError &&
+      error.status === 413 &&
+      error.message === "Music provider request was too large.",
+  );
+
+  assert.equal(adapterCalls, 0);
+  assert.equal(bodyCancelled, true);
+  assert.equal(pulls, 9);
+});
+
+test("YouTube Pin egress cancels a stalled request body at the caller deadline", async () => {
+  configureBridge();
+  const bodyStarted = Promise.withResolvers();
+  const deadline = new AbortController();
+  let adapterCalls = 0;
+  let bodyCancelReason;
+  let fallback;
+  const request = new Request("https://youtubei.googleapis.com/youtubei/v1/player", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: new ReadableStream({
+      pull(controller) {
+        bodyStarted.resolve();
+        fallback = setTimeout(() => controller.close(), 250);
+      },
+      cancel(reason) {
+        clearTimeout(fallback);
+        bodyCancelReason = reason;
+      },
+    }, { highWaterMark: 0 }),
+    duplex: "half",
+    signal: deadline.signal,
+  });
+  const pending = deviceMusicProviderFetch(request, undefined, async () => {
+    adapterCalls += 1;
+    throw new Error("cancelled provider request reached the adapter");
+  });
+
+  await bodyStarted.promise;
+  const timeoutError = new DOMException("playback deadline", "TimeoutError");
+  const startedAt = performance.now();
+  deadline.abort(timeoutError);
+
+  await assert.rejects(() => pending, (error) => error === timeoutError);
+  assert.ok(performance.now() - startedAt < 150, "request body ignored the playback deadline");
+  assert.equal(bodyCancelReason, timeoutError);
+  assert.equal(adapterCalls, 0);
+});
+
+test("YouTube Pin egress uses the caller's deadline for delayed headers and bodies", async () => {
+  configureBridge();
+  const timedOut = (error) =>
+    error?.name === "TimeoutError" ||
+    (error instanceof SpotifyBridgeError && error.code === "adapter_unavailable");
+
+  await assert.rejects(
+    () => deviceMusicProviderFetch(
+      playerRequest(),
+      { signal: AbortSignal.timeout(10) },
+      delayedAdapterFetch({ headersAfterMs: 30 }),
+    ),
+    timedOut,
+  );
+  const bodyRead = Promise.withResolvers();
+  const bodyDeadline = new AbortController();
+  const delayedBodyRequest = deviceMusicProviderFetch(
+    playerRequest(),
+    { signal: bodyDeadline.signal },
+    delayedAdapterFetch({ bodyAfterMs: 30, onBodyRead: bodyRead.resolve }),
+  );
+  await bodyRead.promise;
+  bodyDeadline.abort(new DOMException("deadline", "TimeoutError"));
+  await assert.rejects(() => delayedBodyRequest, timedOut);
+  let stalledBodyCancelled = false;
+  const stalledController = new AbortController();
+  const stalledTimer = setTimeout(
+    () => stalledController.abort(new DOMException("deadline", "TimeoutError")),
+    10,
+  );
   try {
-    await deviceMusicProviderFetch(
-      new Request("https://jnn-pa.googleapis.com/$rpc/google.internal.waa.v1.Waa/Create", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: "{}",
-      }),
-      undefined,
-      async () => json({
-        status: 200,
-        headers: { "content-type": "application/json" },
-        body_base64: Buffer.alloc(3_400_000).toString("base64"),
-      }),
+    await assert.rejects(
+      () => deviceMusicProviderFetch(
+        playerRequest(),
+        { signal: stalledController.signal },
+        async () => new Response(new ReadableStream({
+          cancel() {
+            stalledBodyCancelled = true;
+          },
+        }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+      timedOut,
     );
   } finally {
-    AbortSignal.timeout = originalTimeout;
+    clearTimeout(stalledTimer);
   }
-  assert.equal(observedTimeout, 10_000);
+  assert.equal(stalledBodyCancelled, true);
+
+  const response = await deviceMusicProviderFetch(
+    playerRequest(),
+    { signal: AbortSignal.timeout(500) },
+    delayedAdapterFetch({ headersAfterMs: 10, bodyAfterMs: 20 }),
+  );
+  assert.deepEqual(await response.json(), { playabilityStatus: { status: "OK" } });
+});
+
+test("sequential YouTube Pin egress calls share one absolute playback budget", async () => {
+  configureBridge();
+  const sharedSignal = AbortSignal.timeout(200);
+  const fetchImpl = delayedAdapterFetch({ headersAfterMs: 120 });
+
+  await deviceMusicProviderFetch(playerRequest(), { signal: sharedSignal }, fetchImpl);
+  await assert.rejects(
+    () => deviceMusicProviderFetch(playerRequest(), { signal: sharedSignal }, fetchImpl),
+    (error) =>
+      error?.name === "TimeoutError" ||
+      (error instanceof SpotifyBridgeError && error.code === "adapter_unavailable"),
+  );
+});
+
+test("YouTube Pin egress deadline includes the mounted adapter-token read", async (t) => {
+  configureBridge();
+  const directory = await mkdtemp(path.join(tmpdir(), "revival-spotify-token-deadline-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const tokenFile = path.join(directory, "adapter-token");
+  execFileSync("mkfifo", [tokenFile]);
+  process.env.REVIVAL_SPOTIFY_ADAPTER_TOKEN_FILE = tokenFile;
+  t.after(() => delete process.env.REVIVAL_SPOTIFY_ADAPTER_TOKEN_FILE);
+
+  const deadline = new AbortController();
+  let adapterCalls = 0;
+  const providerRequest = deviceMusicProviderFetch(
+    playerRequest(),
+    { signal: deadline.signal },
+    async () => {
+      adapterCalls += 1;
+      return json({
+        status: 200,
+        headers: { "content-type": "application/json" },
+        body_base64: Buffer.from("{}").toString("base64"),
+      });
+    },
+  );
+  const writer = await open(tokenFile, "w");
+  const timeoutError = new DOMException("playback deadline", "TimeoutError");
+  deadline.abort(timeoutError);
+  const settledBeforeToken = await Promise.race([
+    providerRequest.then(() => true, () => true),
+    new Promise((resolve) => setTimeout(() => resolve(false), 75)),
+  ]);
+
+  await writer.writeFile("f".repeat(48));
+  await writer.close();
+
+  assert.equal(settledBeforeToken, true);
+  await assert.rejects(() => providerRequest, (error) => error === timeoutError);
+  assert.equal(adapterCalls, 0);
 });
 
 test("the Pin egress route cannot relay provider audio or account headers", async () => {
@@ -421,7 +643,9 @@ test("Center routes require session, owner roster and same-origin mutations", as
   assert.match(bridge, /REVIVAL_PIN_BRIDGE_OWNER_SUB/);
   assert.match(bridge, /REVIVAL_PIN_BRIDGE_DEVICE_ID/);
   assert.match(bridge, /account_sub === session\.sub/);
-  assert.match(bridge, /AbortSignal\.timeout/);
+  assert.match(bridge, /const DEFAULT_TIMEOUT_MS = 10_000/);
+  assert.match(bridge, /const MAX_TIMEOUT_MS = 10_000/);
+  assert.match(bridge, /callAdapter[\s\S]+signal: AbortSignal\.timeout\(timeoutMs\(\)\)/);
   assert.match(route, /musicProviderStatus\(session\.sub\)\.catch\(\(\) => undefined\)/);
   assert.match(route, /spotifyError\(error, true, providers\)/);
   assert.match(route, /settings\.active_provider === "apple_music"/);

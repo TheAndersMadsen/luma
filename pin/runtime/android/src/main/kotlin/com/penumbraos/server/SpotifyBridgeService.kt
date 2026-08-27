@@ -112,7 +112,8 @@ internal object SpotifyBridgeRuntime {
     private const val LOOPBACK_HOST = "127.0.0.1"
     private const val INTERNAL_PATH = "/internal/spotify/"
     private const val CONNECT_TIMEOUT_MS = 3_000
-    private const val READ_TIMEOUT_MS = 30_000
+    private const val DEFAULT_READ_TIMEOUT_MS = 30_000
+    private const val PLAYBACK_READ_TIMEOUT_MS = 60_000
     private const val MAX_ERROR_MESSAGE_CHARS = 4 * 1024
 
     @Volatile
@@ -180,10 +181,11 @@ internal object SpotifyBridgeRuntime {
         val connection = URL(
             configuration.loopbackBaseUrl + operation,
         ).openConnection() as HttpURLConnection
+        val timeouts = connectionTimeoutsFor(operation)
         return try {
             connection.requestMethod = "POST"
-            connection.connectTimeout = CONNECT_TIMEOUT_MS
-            connection.readTimeout = READ_TIMEOUT_MS
+            connection.connectTimeout = timeouts.connectTimeoutMs
+            connection.readTimeout = timeouts.readTimeoutMs
             connection.instanceFollowRedirects = false
             connection.useCaches = false
             connection.doOutput = true
@@ -241,6 +243,20 @@ internal object SpotifyBridgeRuntime {
         return "http://$LOOPBACK_HOST:$httpPort$INTERNAL_PATH"
     }
 
+    internal fun connectionTimeoutsFor(operation: String): SpotifyBridgeConnectionTimeouts {
+        val readTimeoutMs = when (operation) {
+            TierASymbols.Binder.PenumbraSpotify.WIRE_NAME_QUERY,
+            TierASymbols.Binder.PenumbraSpotify.WIRE_NAME_SAVE,
+            -> DEFAULT_READ_TIMEOUT_MS
+            TierASymbols.Binder.PenumbraSpotify.WIRE_NAME_PLAYBACK -> PLAYBACK_READ_TIMEOUT_MS
+            else -> throw IllegalArgumentException("Unsupported Spotify bridge operation")
+        }
+        return SpotifyBridgeConnectionTimeouts(
+            connectTimeoutMs = CONNECT_TIMEOUT_MS,
+            readTimeoutMs = readTimeoutMs,
+        )
+    }
+
     private class Configuration(
         val bridgeToken: String,
         val loopbackBaseUrl: String,
@@ -252,4 +268,9 @@ internal object SpotifyBridgeRuntime {
 internal data class SpotifyBridgeResponse(
     val status: Int,
     val body: String,
+)
+
+internal data class SpotifyBridgeConnectionTimeouts(
+    val connectTimeoutMs: Int,
+    val readTimeoutMs: Int,
 )

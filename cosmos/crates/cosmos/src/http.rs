@@ -743,6 +743,14 @@ struct IntegrationTestView {
     message: &'static str,
 }
 
+fn weather_integration_result_is_renderable(
+    result: Result<cosmos_protocol::aibus::WeatherResponse, crate::backends::BackendError>,
+) -> bool {
+    result.is_ok_and(|weather| {
+        crate::backends::weather::stock_weather_response_is_renderable(&weather)
+    })
+}
+
 async fn integrations_view(config: crate::integrations::IntegrationsConfig) -> IntegrationsView {
     let codex =
         if config.assistant.provider == crate::integrations::AssistantProvider::CodexSubscription {
@@ -874,9 +882,9 @@ async fn test_integration(
                 .is_ok()
         }),
         IntegrationTestTarget::Weather => Box::pin(async {
-            crate::backends::weather::current(55.6761, 12.5683)
-                .await
-                .is_ok()
+            weather_integration_result_is_renderable(
+                crate::backends::weather::current(55.6761, 12.5683).await,
+            )
         }),
         IntegrationTestTarget::Wolfram => {
             Box::pin(async { crate::backends::wolfram::query("2 + 2").await.is_ok() })
@@ -3977,6 +3985,44 @@ mod admin_gate_tests {
         ] {
             assert!(!response.contains(secret));
         }
+    }
+
+    #[test]
+    fn weather_integration_success_requires_a_finite_stock_renderable_response() {
+        let valid = cosmos_protocol::aibus::WeatherResponse {
+            temperature_fahrenheit: 60.96,
+            temperature_celsius: 16.0889,
+            weather_icon: 1,
+            ..Default::default()
+        };
+        assert!(weather_integration_result_is_renderable(Ok(valid.clone())));
+
+        for icon in [0, 9, 10, 27, 28, 45] {
+            assert!(
+                !weather_integration_result_is_renderable(Ok(
+                    cosmos_protocol::aibus::WeatherResponse {
+                        weather_icon: icon,
+                        ..valid.clone()
+                    },
+                )),
+                "integration test accepted stock-unsupported icon {icon}",
+            );
+        }
+        assert!(!weather_integration_result_is_renderable(Ok(
+            cosmos_protocol::aibus::WeatherResponse {
+                temperature_fahrenheit: f64::NAN,
+                ..valid.clone()
+            },
+        )));
+        assert!(!weather_integration_result_is_renderable(Ok(
+            cosmos_protocol::aibus::WeatherResponse {
+                temperature_celsius: f64::INFINITY,
+                ..valid
+            },
+        )));
+        assert!(!weather_integration_result_is_renderable(Err(
+            crate::backends::BackendError::Unavailable,
+        )));
     }
 
     #[test]

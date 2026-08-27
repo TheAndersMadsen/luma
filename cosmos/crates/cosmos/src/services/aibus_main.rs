@@ -287,6 +287,9 @@ impl AiBusMain {
     ) -> Result<pb::Location, Status> {
         use cosmos_protocol::common::encryption::LocationStaleStatus;
 
+        if location == &cosmos_protocol::common::encryption::LocationEnvelope::default() {
+            return Err(Status::invalid_argument("missing weather location"));
+        }
         let usable_freshness = location.stalestatus == LocationStaleStatus::Undefined as i32
             || location.stalestatus == LocationStaleStatus::NotStale as i32;
         if !usable_freshness
@@ -384,6 +387,23 @@ impl AiBusMain {
                 Status::unavailable(format!("the {capability} backend could not be reached"))
             }
         }
+    }
+
+    async fn seal_nearby_response(
+        &self,
+        kid: &str,
+        places: Vec<pb::NearbyPlace>,
+    ) -> Result<pb::EncryptedNearbySearchResponse, Status> {
+        let reply = pb::NearbySearchResponse {
+            nearby_places: places,
+            status: pb::NearbySearchResultStatus::Success as i32,
+        };
+        Ok(pb::EncryptedNearbySearchResponse {
+            response: Some(
+                self.seal_response(kid, &reply, "humane.aibus.NearbySearchResponse")
+                    .await?,
+            ),
+        })
     }
 
     async fn run_model_completion(&self, prompt: String) -> Result<String, Status> {
@@ -1706,16 +1726,9 @@ impl AiBusService for AiBusMain {
             crate::backends::places::nearby(&search.text_query, near, search.radius_accuracy)
                 .await
                 .map_err(|e| Self::backend_status(e, "places-search"))?;
-        let reply = pb::NearbySearchResponse {
-            nearby_places: places,
-            status: pb::NearbySearchResultStatus::Success as i32,
-        };
-        Ok(Response::new(pb::EncryptedNearbySearchResponse {
-            response: Some(
-                self.seal_response(&kid, &reply, "humane.aibus.NearbySearchResponse")
-                    .await?,
-            ),
-        }))
+        Ok(Response::new(
+            self.seal_nearby_response(&kid, places).await?,
+        ))
     }
 
     /// Current conditions for the device's location, in cosmos's AccuWeather-shaped
@@ -1986,6 +1999,82 @@ mod tests {
         assert!((coordinates.longitude - 12.5683).abs() < 0.0001);
     }
 
+    #[tokio::test]
+    async fn encrypted_weather_rejects_the_default_location_before_provider_lookup() {
+        use prost::Message as _;
+
+        let kid = "weather-missing-location";
+        let key = [0x2bu8; cosmos_crypto::AES_KEY_LEN];
+        let keys: crate::keymaterial::SharedKeyMaterial = Default::default();
+        keys.insert(kid.to_owned(), key)
+            .expect("insert location channel key");
+        let sealed = cosmos_crypto::seal(
+            kid,
+            &key,
+            &cosmos_protocol::common::encryption::LocationEnvelope::default().encode_to_vec(),
+            b"humane.common.encryption.LocationEnvelope",
+        )
+        .expect("seal default stock location envelope");
+        let service = AiBusMain::with_key_material(keys);
+
+        let error = service
+            .encrypted_weather(Request::new(pb::EncryptedWeatherRequest {
+                location: Some(cosmos_protocol::common::encryption::EncryptedData {
+                    encryption_information: Some(
+                        cosmos_protocol::common::encryption::EncryptionInformation {
+                            kid: kid.to_owned(),
+                        },
+                    ),
+                    data: sealed.data,
+                }),
+            }))
+            .await
+            .expect_err("default location must fail before a provider lookup");
+
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
+        assert_eq!(error.message(), "missing weather location");
+    }
+
+    #[tokio::test]
+    async fn empty_provider_results_seal_as_a_stock_nearby_success() {
+        use prost::Message as _;
+
+        let kid = "nearby-empty-results";
+        let key = [0x39u8; cosmos_crypto::AES_KEY_LEN];
+        let keys: crate::keymaterial::SharedKeyMaterial = Default::default();
+        keys.insert(kid.to_owned(), key)
+            .expect("insert nearby channel key");
+        let service = AiBusMain::with_key_material(keys.clone());
+
+        for body in [
+            br#"{"status":"ZERO_RESULTS","results":[]}"#.as_slice(),
+            br#"{"status":"OK","results":[]}"#.as_slice(),
+        ] {
+            let places = crate::backends::places::decode_nearby_response(body)
+                .expect("an empty provider result is a successful empty search");
+            let encrypted = service
+                .seal_nearby_response(kid, places)
+                .await
+                .expect("empty nearby results remain a successful AIBus response")
+                .response
+                .expect("sealed nearby response");
+            let payload = keys
+                .open(&cosmos_crypto::EncryptedData {
+                    data: encrypted.data,
+                    kid: encrypted
+                        .encryption_information
+                        .map(|information| information.kid)
+                        .unwrap_or_default(),
+                })
+                .expect("nearby response opens");
+            let reply = pb::NearbySearchResponse::decode(payload.as_slice())
+                .expect("nearby response is valid protobuf");
+
+            assert!(reply.nearby_places.is_empty());
+            assert_eq!(reply.status, pb::NearbySearchResultStatus::Success as i32);
+        }
+    }
+
     #[test]
     fn reverse_geocode_and_navigation_keep_stock_location_policy_separate_from_weather() {
         let location = cosmos_protocol::common::encryption::LocationEnvelope {
@@ -1998,6 +2087,29 @@ mod tests {
 
         assert!(AiBusMain::stock_location_coordinates(&location).is_ok());
         assert!(AiBusMain::weather_location_coordinates(&location).is_err());
+    }
+
+    #[test]
+    fn weather_rejects_the_default_location_without_rejecting_real_axis_coordinates() {
+        let missing = cosmos_protocol::common::encryption::LocationEnvelope::default();
+        assert!(AiBusMain::weather_location_coordinates(&missing).is_err());
+
+        for (latitude, longitude, human_readable) in [
+            (0.0, 12.5683, "equator"),
+            (55.6761, 0.0, "prime meridian"),
+            (0.0, 0.0, "null island"),
+        ] {
+            let real = cosmos_protocol::common::encryption::LocationEnvelope {
+                latitude,
+                longitude,
+                human_readable: human_readable.into(),
+                ..Default::default()
+            };
+            assert!(
+                AiBusMain::weather_location_coordinates(&real).is_ok(),
+                "valid coordinate on an axis was rejected: {latitude},{longitude}",
+            );
+        }
     }
 
     #[tokio::test]

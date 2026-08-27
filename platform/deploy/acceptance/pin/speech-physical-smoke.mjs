@@ -7,10 +7,14 @@ import { pathToFileURL } from "node:url";
 import {
   collectInstalledServerIdentity,
   collectReadiness,
+  loadExpectedServerIdentity,
   readAdminToken,
   verifyExplicitDevice,
 } from "./agentic-release-smoke.mjs";
-import { RELEASE_IDENTITY } from "./agentic-release-smoke-lib.mjs";
+import {
+  SERVER_PACKAGE_NAME,
+  validateReleaseMetadataPath,
+} from "./agentic-release-smoke-lib.mjs";
 import {
   AUDIO_DUMP_ADB_ARGS,
   MEDIA_VOLUME_GET_ADB_ARGS,
@@ -31,10 +35,8 @@ import {
 } from "./tier-a-symbols.mjs";
 
 const PROGRAM = "speech-physical-smoke";
-const REQUIRED_SERVER_VERSION_NAME = RELEASE_IDENTITY.versionName;
-const REQUIRED_SERVER_VERSION_CODE = RELEASE_IDENTITY.versionCode;
-const REQUIRED_SERVER_APK_SHA256 = RELEASE_IDENTITY.apkSha256;
-const SERVER_PACKAGE = RELEASE_IDENTITY.packageName;
+const SERVER_PACKAGE = SERVER_PACKAGE_NAME;
+const PRELOADED_EXPECTED_IDENTITY = Symbol("preloaded expected Server identity");
 const IRONMAN_PACKAGE = PACKAGES.ironman;
 const FIXED_PROMPT = "In one short sentence, explain why the sky looks blue.";
 const PROMPT_ACTIVITY_PATH = "/api/activity/prompts?limit=100";
@@ -128,11 +130,11 @@ function usage() {
   return [
     "Usage:",
     "  node platform/deploy/acceptance/pin/speech-physical-smoke.mjs --self-check [--json]",
-    "  node platform/deploy/acceptance/pin/speech-physical-smoke.mjs --run --serial PIN_SERIAL --expected-pin-serial PIN_SERIAL --expect-version-name NAME --expect-version-code CODE --expect-apk-sha256 SHA256 [--json]",
+    "  node platform/deploy/acceptance/pin/speech-physical-smoke.mjs --run --serial PIN_SERIAL --expected-pin-serial PIN_SERIAL --release-manifest PATH --release-receipts PATH [--json]",
     "",
     "Safety contract:",
     "  - Live mode accepts no prompt and injects one fixed harmless public question through Humane's stock transcript receiver.",
-    "  - Live mode requires an exact operator-confirmed Pin serial and an exact installed Server version, code, and active APK digest.",
+    "  - Live mode requires an exact operator-confirmed Pin serial plus canonical manifest and approved signer receipts for the installed Server identity.",
     `  - The expected Pin may use --expected-pin-serial or ${EXPECTED_PIN_SERIAL_ENV}.`,
     "  - The harness never installs packages or invokes PackageInstaller.",
     "  - Output contains only capability, branch, lifecycle, cleanup, and limitation booleans; no response text, credentials, identifiers, raw logs, or audio are emitted.",
@@ -146,9 +148,8 @@ export function parseSpeechPhysicalCliArgs(argv, environment = process.env) {
     serial: null,
     expectedPinSerial: null,
     adbPath: "adb",
-    expectedVersionName: null,
-    expectedVersionCode: null,
-    expectedApkSha256: null,
+    releaseManifestPath: null,
+    releaseReceiptsPath: null,
     json: false,
     help: false,
   };
@@ -199,26 +200,20 @@ export function parseSpeechPhysicalCliArgs(argv, environment = process.env) {
         options.adbPath = takeUniqueValue("adb", argument, index);
         index += 1;
         break;
-      case "--expect-version-name":
-        options.expectedVersionName = takeUniqueValue(
-          "expected-version-name",
+      case "--release-manifest":
+        options.releaseManifestPath = takeUniqueValue(
+          "release-manifest",
           argument,
           index,
         );
         index += 1;
         break;
-      case "--expect-version-code":
-        options.expectedVersionCode = Number(
-          takeUniqueValue("expected-version-code", argument, index),
-        );
-        index += 1;
-        break;
-      case "--expect-apk-sha256":
-        options.expectedApkSha256 = takeUniqueValue(
-          "expected-apk-sha256",
+      case "--release-receipts":
+        options.releaseReceiptsPath = takeUniqueValue(
+          "release-receipts",
           argument,
           index,
-        ).toLowerCase();
+        );
         index += 1;
         break;
       case "--json":
@@ -239,9 +234,8 @@ export function parseSpeechPhysicalCliArgs(argv, environment = process.env) {
     if (
       options.serial !== null ||
       options.expectedPinSerial !== null ||
-      options.expectedVersionName !== null ||
-      options.expectedVersionCode !== null ||
-      options.expectedApkSha256 !== null
+      options.releaseManifestPath !== null ||
+      options.releaseReceiptsPath !== null
     ) {
       throw new Error("--self-check does not accept live-device options");
     }
@@ -259,15 +253,8 @@ export function parseSpeechPhysicalCliArgs(argv, environment = process.env) {
       "live speech smoke requires the exact operator-confirmed Pin serial",
     );
   }
-  if (options.expectedVersionName !== REQUIRED_SERVER_VERSION_NAME) {
-    throw new Error("the exact candidate Server version name is required");
-  }
-  if (options.expectedVersionCode !== REQUIRED_SERVER_VERSION_CODE) {
-    throw new Error("the exact candidate Server version code is required");
-  }
-  if (options.expectedApkSha256 !== REQUIRED_SERVER_APK_SHA256) {
-    throw new Error("the exact candidate Server APK SHA-256 is required");
-  }
+  validateReleaseMetadataPath(options.releaseManifestPath, "--release-manifest");
+  validateReleaseMetadataPath(options.releaseReceiptsPath, "--release-receipts");
   if (
     typeof options.adbPath !== "string" ||
     options.adbPath.length === 0 ||
@@ -477,9 +464,10 @@ export function evaluateSpeechPhysicalReadiness(snapshot, identity, expected) {
   const checks = {
     exact_server_identity:
       identity?.packageName === SERVER_PACKAGE &&
+      identity?.packageName === expected?.packageName &&
       identity?.versionName === expected?.versionName &&
       identity?.versionCode === expected?.versionCode &&
-      identity?.apkSha256 === expected?.apkSha256 &&
+      identity?.signerIdentity === expected?.signerIdentity &&
       snapshot?.health?.status === "ok" &&
       snapshot?.health?.version === expected?.versionName,
     authenticated_center:
@@ -1168,23 +1156,33 @@ async function pollUntil(timeoutMs, observe) {
 
 function identityMatches(identity, expected) {
   return (
-    identity?.packageName === SERVER_PACKAGE &&
+    expected?.packageName === SERVER_PACKAGE &&
+    identity?.packageName === expected.packageName &&
     identity?.versionName === expected.versionName &&
     identity?.versionCode === expected.versionCode &&
-    identity?.apkSha256 === expected.apkSha256
+    identity?.signerIdentity === expected.signerIdentity
   );
 }
 
 function runtimeOptionsAreExact(options) {
-  return (
-    exactDeviceTargetMatches(options?.serial, options?.expectedPinSerial) &&
-    options?.expectedVersionName === REQUIRED_SERVER_VERSION_NAME &&
-    options?.expectedVersionCode === REQUIRED_SERVER_VERSION_CODE &&
-    options?.expectedApkSha256 === REQUIRED_SERVER_APK_SHA256 &&
-    typeof options?.adbPath === "string" &&
-    options.adbPath.length > 0 &&
-    !options.adbPath.includes("\0")
-  );
+  try {
+    return (
+      exactDeviceTargetMatches(options?.serial, options?.expectedPinSerial) &&
+      validateReleaseMetadataPath(
+        options?.releaseManifestPath,
+        "--release-manifest",
+      ) === options.releaseManifestPath &&
+      validateReleaseMetadataPath(
+        options?.releaseReceiptsPath,
+        "--release-receipts",
+      ) === options.releaseReceiptsPath &&
+      typeof options?.adbPath === "string" &&
+      options.adbPath.length > 0 &&
+      !options.adbPath.includes("\0")
+    );
+  } catch {
+    return false;
+  }
 }
 
 function blockedReport(exactIdentity) {
@@ -1225,11 +1223,16 @@ export async function executeSpeechPhysicalSmoke(options, dependencies = {}) {
       "speech physical runtime identity was incomplete",
     );
   }
-  const expected = {
-    versionName: options.expectedVersionName,
-    versionCode: options.expectedVersionCode,
-    apkSha256: options.expectedApkSha256,
-  };
+  let expected;
+  try {
+    expected =
+      dependencies[PRELOADED_EXPECTED_IDENTITY] ??
+      (await (dependencies.loadExpectedServerIdentity ?? loadExpectedServerIdentity)(
+        options,
+      ));
+  } catch {
+    throw new SafeSpeechPhysicalError("refusing unverified release metadata");
+  }
   const identity =
     dependencies.identity ?? (await collectInstalledServerIdentity(options));
   if (!identityMatches(identity, expected)) return blockedReport(false);
@@ -1596,8 +1599,19 @@ export async function main(
     return report.status === "pass" ? 0 : 1;
   }
   try {
+    let expectedIdentity;
+    try {
+      expectedIdentity = await (
+        dependencies.loadExpectedServerIdentity ?? loadExpectedServerIdentity
+      )(options);
+    } catch {
+      throw new SafeSpeechPhysicalError("refusing unverified release metadata");
+    }
     await (dependencies.verifyDevice ?? verifyExplicitDevice)(options);
-    const report = await executeSpeechPhysicalSmoke(options, dependencies);
+    const report = await executeSpeechPhysicalSmoke(options, {
+      ...dependencies,
+      [PRELOADED_EXPECTED_IDENTITY]: expectedIdentity,
+    });
     writeReport(report, stdout, options.json);
     return report.status === "pass" ? 0 : 1;
   } catch (error) {

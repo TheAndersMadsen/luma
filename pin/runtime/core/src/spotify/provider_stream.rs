@@ -25,10 +25,13 @@ pub(super) struct ProviderStreamRegistry {
 }
 
 impl ProviderStreamRegistry {
-    fn prune(&mut self, now: Instant) {
+    fn prune_expired(&mut self, now: Instant) {
         self.streams.retain(|_, stream| stream.expires_at > now);
         self.order
             .retain(|ticket| self.streams.contains_key(ticket));
+    }
+
+    fn make_room_for_insert(&mut self) {
         while self.streams.len() >= MAX_STREAMS {
             let Some(ticket) = self.order.pop_front() else {
                 break;
@@ -45,10 +48,11 @@ impl ProviderStreamRegistry {
         url: &str,
     ) -> Result<(), &'static str> {
         let url = validate_provider_stream_url(provider, url)?;
-        self.prune(Instant::now());
+        self.prune_expired(Instant::now());
         if self.streams.contains_key(&ticket) {
             return Err("music playback ticket collision");
         }
+        self.make_room_for_insert();
         self.order.push_back(ticket.clone());
         self.streams.insert(
             ticket,
@@ -66,23 +70,27 @@ impl ProviderStreamRegistry {
         if !valid_ticket(ticket) {
             return None;
         }
-        self.prune(Instant::now());
+        self.prune_expired(Instant::now());
         self.streams.get(ticket).cloned()
     }
 
-    pub fn replace_url(&mut self, ticket: &str, previous: &Url, value: &str) -> bool {
-        let Some(current) = self.streams.get_mut(ticket) else {
-            return false;
-        };
-        if &current.url != previous {
-            return false;
+    pub fn replace_url_or_current(
+        &mut self,
+        ticket: &str,
+        previous: &ProviderStream,
+        value: &str,
+    ) -> Option<ProviderStream> {
+        let current = self.streams.get_mut(ticket)?;
+        if current.provider != previous.provider || current.track_id != previous.track_id {
+            return None;
         }
-        let Ok(url) = validate_provider_stream_url(current.provider, value) else {
-            return false;
-        };
+        if current.url != previous.url {
+            return Some(current.clone());
+        }
+        let url = validate_provider_stream_url(current.provider, value).ok()?;
         current.url = url;
         current.expires_at = Instant::now() + STREAM_TTL;
-        true
+        Some(current.clone())
     }
 
     pub fn clear(&mut self) {
@@ -189,14 +197,130 @@ mod tests {
         assert_eq!(stream.provider, MusicProvider::YoutubeMusic);
         assert_eq!(stream.track_id, "youtube_music:Zi_XLOBDo_Y");
         assert!(registry.get("not-a-ticket").is_none());
-        assert!(registry.replace_url(
-            &ticket,
-            &stream.url,
-            "https://r2---sn.example.googlevideo.com/videoplayback?id=renewed",
-        ));
+        assert!(registry
+            .replace_url_or_current(
+                &ticket,
+                &stream,
+                "https://r2---sn.example.googlevideo.com/videoplayback?id=renewed",
+            )
+            .is_some());
         assert_eq!(
             registry.get(&ticket).unwrap().url.host_str(),
             Some("r2---sn.example.googlevideo.com"),
         );
+    }
+
+    #[test]
+    fn full_registry_remains_readable_until_an_insert_needs_capacity() {
+        let mut registry = ProviderStreamRegistry::default();
+        let tickets = (0..MAX_STREAMS)
+            .map(|index| format!("{index:0>43}"))
+            .collect::<Vec<_>>();
+        for (index, ticket) in tickets.iter().enumerate() {
+            registry
+                .insert(
+                    ticket.clone(),
+                    MusicProvider::YoutubeMusic,
+                    format!("youtube_music:fixture-{index}"),
+                    &format!(
+                        "https://r{index}---sn.example.googlevideo.com/videoplayback?id=fixture"
+                    ),
+                )
+                .unwrap();
+        }
+
+        for ticket in &tickets {
+            assert!(
+                registry.get(ticket).is_some(),
+                "a read evicted full-capacity ticket {ticket}",
+            );
+        }
+
+        let next_ticket = format!("{:0>43}", MAX_STREAMS);
+        registry
+            .insert(
+                next_ticket.clone(),
+                MusicProvider::YoutubeMusic,
+                "youtube_music:fixture-next".into(),
+                "https://r9---sn.example.googlevideo.com/videoplayback?id=next",
+            )
+            .unwrap();
+        assert!(registry.get(&tickets[0]).is_none());
+        assert!(tickets[1..]
+            .iter()
+            .all(|ticket| registry.get(ticket).is_some()));
+        assert!(registry.get(&next_ticket).is_some());
+    }
+
+    #[test]
+    fn concurrent_renewal_loser_converges_on_the_winning_url() {
+        let mut registry = ProviderStreamRegistry::default();
+        let ticket = "a".repeat(43);
+        registry
+            .insert(
+                ticket.clone(),
+                MusicProvider::YoutubeMusic,
+                "youtube_music:Zi_XLOBDo_Y".into(),
+                "https://r1---sn.example.googlevideo.com/videoplayback?id=stale",
+            )
+            .unwrap();
+        let stale = registry.get(&ticket).unwrap();
+
+        assert!(registry
+            .replace_url_or_current(
+                &ticket,
+                &stale,
+                "https://r2---sn.example.googlevideo.com/videoplayback?id=winner",
+            )
+            .is_some());
+        let converged = registry
+            .replace_url_or_current(
+                &ticket,
+                &stale,
+                "https://r3---sn.example.googlevideo.com/videoplayback?id=loser",
+            )
+            .expect("the losing renewal must reuse the winner's validated URL");
+
+        assert_eq!(
+            converged.url.as_str(),
+            "https://r2---sn.example.googlevideo.com/videoplayback?id=winner",
+        );
+    }
+
+    #[test]
+    fn stale_renewal_cannot_overwrite_a_reused_ticket_with_a_different_track() {
+        let mut registry = ProviderStreamRegistry::default();
+        let ticket = "a".repeat(43);
+        let stale_url = "https://r1---sn.example.googlevideo.com/videoplayback?id=stale";
+        registry
+            .insert(
+                ticket.clone(),
+                MusicProvider::YoutubeMusic,
+                "youtube_music:old-track".into(),
+                stale_url,
+            )
+            .unwrap();
+        let stale = registry.get(&ticket).unwrap();
+
+        registry.clear();
+        registry
+            .insert(
+                ticket.clone(),
+                MusicProvider::YoutubeMusic,
+                "youtube_music:new-track".into(),
+                stale_url,
+            )
+            .unwrap();
+
+        assert!(registry
+            .replace_url_or_current(
+                &ticket,
+                &stale,
+                "https://r2---sn.example.googlevideo.com/videoplayback?id=wrong-track",
+            )
+            .is_none());
+        let current = registry.get(&ticket).unwrap();
+        assert_eq!(current.track_id, "youtube_music:new-track");
+        assert_eq!(current.url.as_str(), stale_url);
     }
 }

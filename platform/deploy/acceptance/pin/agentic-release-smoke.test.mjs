@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { EventEmitter, once } from "node:events";
 import {
   chmod,
@@ -19,8 +20,9 @@ import {
   CHECK_STATUS,
   GrpcFrameDecoder,
   INCOMPLETE_EXIT_CODE,
+  INSTALLED_SERVER_SIGNER_IDENTITY,
   PROMPTS,
-  RELEASE_IDENTITY,
+  SERVER_PACKAGE_NAME,
   SERVER_SOURCE,
   SMOKE_USER_TURN_ID,
   TOOL_FAILURE_REASONS,
@@ -31,6 +33,7 @@ import {
   buildPublicReport,
   containsForbiddenSecretKey,
   decodeProtoFields,
+  deriveServerIdentityFromReleaseManifest,
   decodeUnderstandingRequest,
   decodeUnderstandingResponses,
   encodeUnderstandingRequest,
@@ -43,8 +46,6 @@ import {
   evaluateWebSearch,
   isRequiredReleaseVersion,
   manualVerificationChecks,
-  parseActiveServerApkPath,
-  parseActiveServerApkSha256,
   parseCliArgs,
   parseGrpcFrames,
   parseLoopbackGrpcPort,
@@ -54,6 +55,13 @@ import {
   reportExitCode,
   wrapGrpcFrame,
 } from "./agentic-release-smoke-lib.mjs";
+import {
+  PIN_COMPATIBILITY_CERT_SHA256,
+  PIN_RELEASE_ARTIFACT_ROLES,
+  PIN_RELEASE_PACKAGE_BY_ROLE,
+  canonicalPinReleaseManifestJson,
+  createPinReleaseManifest,
+} from "../../pin/release.mjs";
 import {
   PIN_ADMIN_TOKEN_FILE_ENV,
   RUNTIME_SECRETS_DIR_ENV,
@@ -104,6 +112,59 @@ function actionResponses({
   );
   return decodeUnderstandingResponses(parseGrpcFrames(frame));
 }
+
+function verifiedManifestFixture({
+  version = "2026-08-27.1",
+  versionCode = 202_608_271,
+  signerSha256 = PIN_COMPATIBILITY_CERT_SHA256,
+} = {}) {
+  const receipts = {
+    schemaVersion: 1,
+    artifacts: PIN_RELEASE_ARTIFACT_ROLES.map((role) => {
+      const bytes = Buffer.from(`verified-${role}-${version}-${versionCode}`);
+      return {
+        role,
+        path: `${role}.apk`,
+        name: `${role}.apk`,
+        package: PIN_RELEASE_PACKAGE_BY_ROLE[role],
+        versionName: version,
+        versionCode,
+        size: bytes.length,
+        sha256: createHash("sha256").update(bytes).digest("hex"),
+        signerSha256,
+      };
+    }),
+  };
+  const manifest = createPinReleaseManifest({ version, receipts });
+  return {
+    manifest,
+    manifestSource: canonicalPinReleaseManifestJson(manifest),
+    receipts,
+    receiptsSource: `${JSON.stringify(receipts)}\n`,
+  };
+}
+
+const VERIFIED_RELEASE = verifiedManifestFixture();
+const VERIFIED_SERVER_ARTIFACT = VERIFIED_RELEASE.manifest.artifacts.find(
+  (artifact) => artifact.role === "server",
+);
+const EXPECTED_IDENTITY = Object.freeze({
+  releaseId: VERIFIED_RELEASE.manifest.releaseId,
+  packageName: SERVER_PACKAGE_NAME,
+  versionName: VERIFIED_RELEASE.manifest.version,
+  versionCode: VERIFIED_SERVER_ARTIFACT.versionCode,
+  signerIdentity: INSTALLED_SERVER_SIGNER_IDENTITY,
+});
+const LIVE_RELEASE_ARGS = Object.freeze([
+  "--serial",
+  "fixture-device",
+  "--expected-pin-serial",
+  "fixture-device",
+  "--release-manifest",
+  "/fixture/manifest.json",
+  "--release-receipts",
+  "/fixture/receipts.json",
+]);
 
 function fakeAdbChild() {
   const child = new EventEmitter();
@@ -177,9 +238,9 @@ function readinessFixture(overrides = {}) {
     health: {
       status: "ok",
       name: "Penumbra",
-      version: RELEASE_IDENTITY.versionName,
+      version: EXPECTED_IDENTITY.versionName,
     },
-    packageIdentity: { ...RELEASE_IDENTITY },
+    packageIdentity: { ...EXPECTED_IDENTITY },
     settings: {
       restart_required: false,
       server: {
@@ -198,11 +259,24 @@ function readinessFixture(overrides = {}) {
   return { ...fixture, ...overrides };
 }
 
+function evaluateFixtureReadiness(snapshot, options = {}) {
+  return evaluateReadiness(snapshot, {
+    ...options,
+    expectedIdentity: EXPECTED_IDENTITY,
+  });
+}
+
 test("CLI requires an explicit serial and an explicit execution mode", () => {
   assert.deepEqual(
     parseCliArgs([
       "--serial",
       "device-123._:usb",
+      "--expected-pin-serial",
+      "device-123._:usb",
+      "--release-manifest",
+      "/fixture/manifest.json",
+      "--release-receipts",
+      "/fixture/receipts.json",
       "--run-safe-aibus",
       "--expect-spotify-disabled",
       "--json",
@@ -210,7 +284,10 @@ test("CLI requires an explicit serial and an explicit execution mode", () => {
     {
       mode: "run-safe-aibus",
       serial: "device-123._:usb",
+      expectedPinSerial: "device-123._:usb",
       adbPath: "adb",
+      releaseManifestPath: "/fixture/manifest.json",
+      releaseReceiptsPath: "/fixture/receipts.json",
       json: true,
       expectSpotifyDisabled: true,
       help: false,
@@ -222,6 +299,31 @@ test("CLI requires an explicit serial and an explicit execution mode", () => {
     /explicit ADB serial/,
   );
   assert.throws(
+    () => parseCliArgs(["--serial", "device-123", "--inspect"]),
+    /expected AI Pin serial/,
+  );
+  assert.throws(
+    () =>
+      parseCliArgs([
+        "--serial",
+        "device-123",
+        "--expected-pin-serial",
+        "another-device",
+        "--release-manifest",
+        "/fixture/manifest.json",
+        "--release-receipts",
+        "/fixture/receipts.json",
+        "--inspect",
+      ]),
+    /does not match/,
+  );
+  for (const missing of ["--release-manifest", "--release-receipts"]) {
+    const args = [...LIVE_RELEASE_ARGS, "--inspect"];
+    const index = args.indexOf(missing);
+    args.splice(index, 2);
+    assert.throws(() => parseCliArgs(args), new RegExp(missing));
+  }
+  assert.throws(
     () => parseCliArgs(["--serial", "device;reboot", "--inspect"]),
     /explicit ADB serial/,
   );
@@ -230,7 +332,12 @@ test("CLI requires an explicit serial and an explicit execution mode", () => {
     /exactly one mode/,
   );
   assert.throws(
-    () => parseCliArgs(["--serial", "device", "--inspect", "--expect-spotify-disabled"]),
+    () =>
+      parseCliArgs([
+        ...LIVE_RELEASE_ARGS,
+        "--inspect",
+        "--expect-spotify-disabled",
+      ]),
     /requires --run-safe-aibus/,
   );
   assert.equal(parseCliArgs(["--self-check"]).serial, null);
@@ -476,60 +583,88 @@ test("AIBus shell tunnel fails closed on invalid routing or excess bytes", async
   assert.equal(child.stdout.destroyed, true);
 });
 
-test("installed release identity parsers require exact, shell-safe package evidence", () => {
-  const apkPath =
-    "/data/app/~~AbCdEf==/com.penumbraos.server-XyZ123==/base.apk";
+test("installed release identity parser requires one exact Android signer token", () => {
   assert.deepEqual(
     parseInstalledServerPackageMetadata(
-      `Package [${RELEASE_IDENTITY.packageName}]\n  versionCode=${RELEASE_IDENTITY.versionCode} minSdk=31\n  versionName=${RELEASE_IDENTITY.versionName}\n`,
+      `Package [${EXPECTED_IDENTITY.packageName}]\n  versionCode=${EXPECTED_IDENTITY.versionCode} minSdk=31\n  versionName=${EXPECTED_IDENTITY.versionName}\n  signatures=PackageSignatures{abc signatures:[${EXPECTED_IDENTITY.signerIdentity}]}\n`,
     ),
     {
-      versionName: RELEASE_IDENTITY.versionName,
-      versionCode: RELEASE_IDENTITY.versionCode,
+      versionName: EXPECTED_IDENTITY.versionName,
+      versionCode: EXPECTED_IDENTITY.versionCode,
+      signerIdentity: EXPECTED_IDENTITY.signerIdentity,
     },
-  );
-  assert.equal(
-    parseActiveServerApkPath(
-      `package:${apkPath}\npackage:${apkPath.replace("base.apk", "split_config.arm64_v8a.apk")}\n`,
-    ),
-    apkPath,
-  );
-  assert.equal(
-    parseActiveServerApkSha256(
-      `${RELEASE_IDENTITY.apkSha256}  ${apkPath}\n`,
-      apkPath,
-    ),
-    RELEASE_IDENTITY.apkSha256,
-  );
-
-  assert.throws(
-    () =>
-      parseActiveServerApkPath(
-        "package:/data/app/../data/local/tmp/evil/base.apk\n",
-      ),
-    /unsafe/,
-  );
-  assert.throws(
-    () =>
-      parseActiveServerApkPath(
-        "package:/data/app/~~AbCdEf==/com.example.other-XyZ123==/base.apk\n",
-      ),
-    /unsafe/,
-  );
-  assert.throws(
-    () =>
-      parseActiveServerApkSha256(
-        `${RELEASE_IDENTITY.apkSha256}  /data/app/other/base.apk\n`,
-        apkPath,
-      ),
-    /invalid/,
   );
   assert.throws(
     () =>
       parseInstalledServerPackageMetadata(
-        `versionCode=${RELEASE_IDENTITY.versionCode}\nversionCode=${RELEASE_IDENTITY.versionCode + 1}\nversionName=${RELEASE_IDENTITY.versionName}\n`,
+        `versionCode=${EXPECTED_IDENTITY.versionCode}\nversionName=${EXPECTED_IDENTITY.versionName}\n`,
+      ),
+    /signer|ambiguous|incomplete/,
+  );
+  assert.throws(
+    () =>
+      parseInstalledServerPackageMetadata(
+        `versionCode=${EXPECTED_IDENTITY.versionCode}\nversionName=${EXPECTED_IDENTITY.versionName}\nPackageSignatures{a signatures:[dd07f452, deadbeef]}\n`,
+      ),
+    /signer|ambiguous|incomplete/,
+  );
+  assert.throws(
+    () =>
+      parseInstalledServerPackageMetadata(
+        `versionCode=${EXPECTED_IDENTITY.versionCode}\nversionName=${EXPECTED_IDENTITY.versionName}\nPackageSignatures{a signatures:[dd07f452]}\nPackageSignatures{b signatures:[dd07f452]}\n`,
+      ),
+    /signer|ambiguous|incomplete/,
+  );
+  assert.throws(
+    () =>
+      parseInstalledServerPackageMetadata(
+        `versionCode=${EXPECTED_IDENTITY.versionCode}\nversionCode=${EXPECTED_IDENTITY.versionCode + 1}\nversionName=${EXPECTED_IDENTITY.versionName}\nPackageSignatures{a signatures:[dd07f452]}\n`,
       ),
     /ambiguous/,
+  );
+});
+
+test("the expected Server identity requires canonical manifest and approved signer receipts", () => {
+  const { manifest, manifestSource, receipts, receiptsSource } = VERIFIED_RELEASE;
+  const server = manifest.artifacts.find((artifact) => artifact.role === "server");
+  assert.deepEqual(
+    deriveServerIdentityFromReleaseManifest(manifestSource, receiptsSource),
+    {
+    releaseId: manifest.releaseId,
+    packageName: "com.penumbraos.server",
+    versionName: manifest.version,
+    versionCode: server.versionCode,
+      signerIdentity: INSTALLED_SERVER_SIGNER_IDENTITY,
+    },
+  );
+
+  const noncanonical = `${JSON.stringify(manifest, null, 2)}\n`;
+  assert.throws(
+    () => deriveServerIdentityFromReleaseManifest(noncanonical, receiptsSource),
+    /canonical verified five-APK release metadata/,
+  );
+
+  const wrongSigner = structuredClone(receipts);
+  wrongSigner.artifacts[0].signerSha256 = "a".repeat(64);
+  assert.throws(
+    () =>
+      deriveServerIdentityFromReleaseManifest(
+        manifestSource,
+        `${JSON.stringify(wrongSigner)}\n`,
+      ),
+    /canonical verified five-APK release metadata/,
+  );
+
+  const mismatchedReceipt = structuredClone(receipts);
+  mismatchedReceipt.artifacts.find((artifact) => artifact.role === "server").sha256 =
+    "0".repeat(64);
+  assert.throws(
+    () =>
+      deriveServerIdentityFromReleaseManifest(
+        manifestSource,
+        `${JSON.stringify(mismatchedReceipt)}\n`,
+      ),
+    /canonical verified five-APK release metadata/,
   );
 });
 
@@ -1292,7 +1427,7 @@ test("an unconfigured search provider is pending evidence, not a failure", () =>
 
   // Cosmos owns provider readiness, so a Pin-local readiness snapshot cannot
   // suppress the real probe. Missing evidence is therefore a failed probe.
-  const readiness = evaluateReadiness(readinessFixture());
+  const readiness = evaluateFixtureReadiness(readinessFixture());
   assert.equal(readiness.context.braveSearchReady, true);
   assert.equal(readiness.context.progressTurnsEnabled, true);
   assert.equal(readiness.checks.length, 8);
@@ -1304,17 +1439,20 @@ test("an unconfigured search provider is pending evidence, not a failure", () =>
 });
 
 test("readiness validates release identity, loopback, Cosmos authority, and Tickle delivery", () => {
-  assert.equal(isRequiredReleaseVersion(RELEASE_IDENTITY.versionName), true);
-  assert.equal(isRequiredReleaseVersion("2026-07-16.29-local"), false);
-  assert.equal(isRequiredReleaseVersion("2026-07-31.1-local"), false);
-  assert.equal(isRequiredReleaseVersion("1.35"), false);
-  assert.equal(isRequiredReleaseVersion("999.35-local"), false);
-  assert.equal(isRequiredReleaseVersion("2025-01-01.35-local"), false);
+  assert.equal(
+    isRequiredReleaseVersion(EXPECTED_IDENTITY.versionName, EXPECTED_IDENTITY),
+    true,
+  );
+  assert.equal(isRequiredReleaseVersion("2026-07-16.29-local", EXPECTED_IDENTITY), false);
+  assert.equal(isRequiredReleaseVersion("2026-07-31.1-local", EXPECTED_IDENTITY), false);
+  assert.equal(isRequiredReleaseVersion("1.35", EXPECTED_IDENTITY), false);
+  assert.equal(isRequiredReleaseVersion("999.35-local", EXPECTED_IDENTITY), false);
+  assert.equal(isRequiredReleaseVersion("2025-01-01.35-local", EXPECTED_IDENTITY), false);
   assert.equal(parseLoopbackGrpcPort("127.0.0.1:9090"), 9090);
   assert.equal(parseLoopbackGrpcPort("[::1]:9090"), 9090);
   assert.equal(parseLoopbackGrpcPort("0.0.0.0:9090"), null);
 
-  const readiness = evaluateReadiness(readinessFixture());
+  const readiness = evaluateFixtureReadiness(readinessFixture());
   assert.equal(readiness.checks.length, 8);
   assert.ok(readiness.checks.every((check) => check.status === CHECK_STATUS.PASS));
   assert.deepEqual(readiness.context, {
@@ -1339,7 +1477,7 @@ test("readiness validates release identity, loopback, Cosmos authority, and Tick
       engine_ready: false,
     },
   });
-  const negative = evaluateReadiness(disabledFixture, {
+  const negative = evaluateFixtureReadiness(disabledFixture, {
     expectSpotifyDisabled: true,
   });
   assert.equal(
@@ -1352,7 +1490,7 @@ test("readiness validates release identity, loopback, Cosmos authority, and Tick
   const unsafeSettings = structuredClone(readinessFixture());
   unsafeSettings.settings.llm = { api_key: "must-not-be-exposed" };
   assert.equal(
-    evaluateReadiness(unsafeSettings).checks.find(
+    evaluateFixtureReadiness(unsafeSettings).checks.find(
       (check) => check.id === "settings_secret_safety",
     ).status,
     CHECK_STATUS.FAIL,
@@ -1361,13 +1499,13 @@ test("readiness validates release identity, loopback, Cosmos authority, and Tick
   for (const [field, wrongValue] of [
     ["packageName", "com.example.not-penumbra"],
     ["versionName", "2026-07-16.35-rebuilt"],
-    ["versionCode", RELEASE_IDENTITY.versionCode + 1],
-    ["apkSha256", "0".repeat(64)],
+    ["versionCode", EXPECTED_IDENTITY.versionCode + 1],
+    ["signerIdentity", "deadbeef"],
   ]) {
     const wrongIdentity = structuredClone(readinessFixture());
     wrongIdentity.packageIdentity[field] = wrongValue;
     assert.equal(
-      evaluateReadiness(wrongIdentity).checks.find(
+      evaluateFixtureReadiness(wrongIdentity).checks.find(
       (check) => check.id === "server_release_identity",
       ).status,
       CHECK_STATUS.FAIL,
@@ -1380,7 +1518,7 @@ test("live feature-flag tagged values recognize applied Tickle assignment", () =
   const liveSchema = readinessFixture({
     featureFlags: liveFeatureFlagsResponseFixture(),
   });
-  const readiness = evaluateReadiness(liveSchema);
+  const readiness = evaluateFixtureReadiness(liveSchema);
   assert.equal(
     readiness.checks.find((check) => check.id === "tickle_feature_delivery")
       .status,
@@ -1405,7 +1543,7 @@ test("live feature-flag tagged values recognize applied Tickle assignment", () =
   ]) {
     const featureFlags = liveFeatureFlagsResponseFixture();
     mutate(featureFlags);
-    const rejected = evaluateReadiness(readinessFixture({ featureFlags }));
+    const rejected = evaluateFixtureReadiness(readinessFixture({ featureFlags }));
     assert.equal(
       rejected.checks.find((check) => check.id === "tickle_feature_delivery")
         .status,
@@ -1417,7 +1555,7 @@ test("live feature-flag tagged values recognize applied Tickle assignment", () =
 test("Spotify readiness remains fail-closed without explicit engine readiness", () => {
   const fixture = readinessFixture();
   delete fixture.spotify.engine_ready;
-  const readiness = evaluateReadiness(fixture);
+  const readiness = evaluateFixtureReadiness(fixture);
   assert.equal(
     readiness.checks.find(
       (check) => check.id === "spotify_provider_precondition",
@@ -1433,7 +1571,7 @@ test("Spotify readiness remains fail-closed without explicit engine readiness", 
       state: "disabled",
     },
   });
-  const disabled = evaluateReadiness(disabledFixture, {
+  const disabled = evaluateFixtureReadiness(disabledFixture, {
     expectSpotifyDisabled: true,
   });
   assert.equal(
@@ -1459,8 +1597,8 @@ test("every failed prerequisite blocks tunnel creation and all raw AIBus probes"
     ["installed versionCode", ({ identity }) => {
       identity.versionCode += 1;
     }],
-    ["active APK digest", ({ identity }) => {
-      identity.apkSha256 = "0".repeat(64);
+    ["installed signer identity", ({ identity }) => {
+      identity.signerIdentity = "deadbeef";
     }],
     ["admin-token authentication", ({ snapshot }) => {
       snapshot.settings.server.admin_token_auth = false;
@@ -1505,8 +1643,9 @@ test("every failed prerequisite blocks tunnel creation and all raw AIBus probes"
     mutate({ snapshot: fixture, identity });
 
     const exitCode = await main(
-      ["--serial", "fixture-device", "--run-safe-aibus", "--json"],
+      [...LIVE_RELEASE_ARGS, "--run-safe-aibus", "--json"],
       {
+        loadExpectedServerIdentity: async () => EXPECTED_IDENTITY,
         verifyExplicitDevice: async () => state.order.push("serial"),
         collectInstalledServerIdentity: async () => {
           state.order.push("identity");
@@ -1562,8 +1701,9 @@ test("all exact prerequisites permit safe AIBus inspection but physical gates re
   let aibusCalls = 0;
   let report;
   const exitCode = await main(
-    ["--serial", "fixture-device", "--run-safe-aibus", "--json"],
+    [...LIVE_RELEASE_ARGS, "--run-safe-aibus", "--json"],
     {
+      loadExpectedServerIdentity: async () => EXPECTED_IDENTITY,
       verifyExplicitDevice: async () => {},
       collectInstalledServerIdentity: async () => identity,
       readAdminToken: async () => "fixture-admin-token-0123456789",
@@ -1592,8 +1732,9 @@ test("inspect mode reports pending AIBus evidence as machine-incomplete", async 
   let aibusCalls = 0;
   let report;
   const exitCode = await main(
-    ["--serial", "fixture-device", "--inspect", "--json"],
+    [...LIVE_RELEASE_ARGS, "--inspect", "--json"],
     {
+      loadExpectedServerIdentity: async () => EXPECTED_IDENTITY,
       verifyExplicitDevice: async () => {},
       collectInstalledServerIdentity: async () => identity,
       readAdminToken: async () => "fixture-admin-token-0123456789",
@@ -1638,6 +1779,7 @@ test("public reports contain only bounded evidence and failures control exit", (
   const secret = "report-secret-canary";
   const report = buildPublicReport({
     mode: "inspect",
+    expectedIdentity: EXPECTED_IDENTITY,
     checks: [
       {
         id: "one",
@@ -1661,13 +1803,14 @@ test("public reports contain only bounded evidence and failures control exit", (
   assert.match(human, /1 passed, 1 failed, 4 pending/);
   assert.equal(report.status, "failed");
   assert.equal(report.complete, false);
-  assert.deepEqual(report.requiredServerIdentity, RELEASE_IDENTITY);
+  assert.deepEqual(report.requiredServerIdentity, EXPECTED_IDENTITY);
   assert.equal(report.safety.nativeActionsDispatched, false);
   assert.equal(report.safety.coordinatesCollected, false);
   assert.equal(reportExitCode(report), 1);
 
   const incomplete = buildPublicReport({
     mode: "inspect",
+    expectedIdentity: EXPECTED_IDENTITY,
     checks: [
       {
         id: "pending",
@@ -1685,6 +1828,7 @@ test("public reports contain only bounded evidence and failures control exit", (
 
   const complete = buildPublicReport({
     mode: "self-check",
+    expectedIdentity: null,
     checks: [
       {
         id: "pass",

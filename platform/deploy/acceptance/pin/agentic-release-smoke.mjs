@@ -3,7 +3,7 @@
 import { spawn as spawnProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
-import { open } from "node:fs/promises";
+import { open, readFile } from "node:fs/promises";
 import { connect as connectHttp2, constants as http2Constants } from "node:http2";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { Duplex, Transform } from "node:stream";
@@ -13,7 +13,7 @@ import {
   CHECK_STATUS,
   GrpcFrameDecoder,
   PROMPTS,
-  RELEASE_IDENTITY,
+  SERVER_PACKAGE_NAME,
   WEB_SEARCH_CHECK_ID,
   WEB_SEARCH_CHECK_TITLE,
   buildActionResponseFixture,
@@ -21,6 +21,7 @@ import {
   decodeProtoFields,
   decodeUnderstandingRequest,
   decodeUnderstandingResponses,
+  deriveServerIdentityFromReleaseManifest,
   encodeUnderstandingRequest,
   evaluateCompoundNearbyRouteInitialProbe,
   evaluateDisabledSpotifyFailClosed,
@@ -30,8 +31,6 @@ import {
   evaluateWeatherInitialProbe,
   evaluateWebSearch,
   manualVerificationChecks,
-  parseActiveServerApkPath,
-  parseActiveServerApkSha256,
   parseCliArgs,
   parseInstalledServerPackageMetadata,
   pendingAutomatedChecks,
@@ -39,8 +38,10 @@ import {
   renderHumanReport,
   reportExitCode,
   validateSerial,
+  validateReleaseMetadataPath,
   wrapGrpcFrame,
 } from "./agentic-release-smoke-lib.mjs";
+import { exactDeviceTargetMatches } from "./device-target-guard.mjs";
 import { NATIVE_ACTIONS, RPC_PATHS } from "./tier-a-symbols.mjs";
 
 const PROGRAM = "agentic-release-smoke";
@@ -77,9 +78,9 @@ function usage() {
   return [
     "Usage:",
     "  node platform/deploy/acceptance/pin/agentic-release-smoke.mjs --self-check [--json]",
-    "  node platform/deploy/acceptance/pin/agentic-release-smoke.mjs --serial SERIAL --inspect [--json]",
-    "  node platform/deploy/acceptance/pin/agentic-release-smoke.mjs --serial SERIAL --run-safe-aibus [--json]",
-    "  node platform/deploy/acceptance/pin/agentic-release-smoke.mjs --serial SERIAL --run-safe-aibus --expect-spotify-disabled [--json]",
+    "  node platform/deploy/acceptance/pin/agentic-release-smoke.mjs --serial SERIAL --expected-pin-serial SERIAL --release-manifest PATH --release-receipts PATH --inspect [--json]",
+    "  node platform/deploy/acceptance/pin/agentic-release-smoke.mjs --serial SERIAL --expected-pin-serial SERIAL --release-manifest PATH --release-receipts PATH --run-safe-aibus [--json]",
+    "  node platform/deploy/acceptance/pin/agentic-release-smoke.mjs --serial SERIAL --expected-pin-serial SERIAL --release-manifest PATH --release-receipts PATH --run-safe-aibus --expect-spotify-disabled [--json]",
     "",
     "Modes:",
     "  --self-check              Local parser/redaction self-check; no ADB request.",
@@ -88,9 +89,9 @@ function usage() {
     "  --expect-spotify-disabled Require exact disabled state and verify the fixed music prompt fails closed.",
     "",
     "Safety contract:",
-    "  - A non-self-check run always requires an explicit ADB serial.",
+    "  - A non-self-check run requires matching explicit and operator-confirmed AI Pin serials.",
     `  - The admin-token file defaults to .secrets/${TOKEN_FILE_NAME}; use one absolute ${PIN_ADMIN_TOKEN_FILE_ENV} or ${RUNTIME_SECRETS_DIR_ENV} override for external storage.`,
-    `  - AIBus is blocked unless health, package versionName/versionCode, and active APK SHA-256 match ${RELEASE_IDENTITY.versionName}.`,
+    "  - AIBus is blocked unless the canonical manifest, approved signer receipts, runtime health, installed package version, and Android signer identity all match.",
     "  - The admin token travels only through device-curl stdin config and is never printed or placed in argv.",
     "  - Understand probes contain only fixed public fixtures, no coordinates, history, images, contacts, or messages.",
     "  - The safe AIBus mode may call configured models/read-only providers and may create ordinary server activity metadata.",
@@ -214,6 +215,11 @@ function requireExplicitAdbSerial(options) {
 
 export async function verifyExplicitDevice(options) {
   const serial = requireExplicitAdbSerial(options);
+  if (!exactDeviceTargetMatches(serial, options?.expectedPinSerial)) {
+    throw new SafeSmokeError(
+      "the explicit ADB serial does not match the expected AI Pin serial",
+    );
+  }
   const state = await runAdb(
     options.adbPath,
     ["-s", serial, "get-state"],
@@ -234,54 +240,46 @@ export async function verifyExplicitDevice(options) {
 export async function collectInstalledServerIdentity(options) {
   const serial = requireExplicitAdbSerial(options);
   try {
-    const packagePathOutput = await runAdb(
-      options.adbPath,
-      [
-        "-s",
-        serial,
-        "shell",
-        `exec /system/bin/pm path ${RELEASE_IDENTITY.packageName}`,
-      ],
-      { timeoutMs: 20_000, maxStdoutBytes: 64 * 1024 },
-      "the installed server package path could not be verified",
-    );
-    const apkPath = parseActiveServerApkPath(packagePathOutput);
-
     const packageMetadataOutput = await runAdb(
       options.adbPath,
       [
         "-s",
         serial,
         "shell",
-        `exec /system/bin/dumpsys package ${RELEASE_IDENTITY.packageName}`,
+        `exec /system/bin/dumpsys package ${SERVER_PACKAGE_NAME}`,
       ],
       { timeoutMs: 20_000, maxStdoutBytes: MAX_CHILD_STDOUT_BYTES },
       "the installed server package metadata could not be verified",
     );
-    const metadata = parseInstalledServerPackageMetadata(packageMetadataOutput);
-
-    // The parser accepts only one normalized /data/app/.../base.apk path with
-    // a shell-safe character set and no dot segments before interpolation.
-    const digestOutput = await runAdb(
-      options.adbPath,
-      [
-        "-s",
-        serial,
-        "shell",
-        `exec /system/bin/toybox sha256sum '${apkPath}'`,
-      ],
-      { timeoutMs: 30_000, maxStdoutBytes: 256 },
-      "the active server APK digest could not be verified",
-    );
     return {
-      packageName: RELEASE_IDENTITY.packageName,
-      versionName: metadata.versionName,
-      versionCode: metadata.versionCode,
-      apkSha256: parseActiveServerApkSha256(digestOutput, apkPath),
+      packageName: SERVER_PACKAGE_NAME,
+      ...parseInstalledServerPackageMetadata(packageMetadataOutput),
     };
   } catch {
     throw new SafeSmokeError(
       "the installed server identity could not be verified safely",
+    );
+  }
+}
+
+export async function loadExpectedServerIdentity(options) {
+  try {
+    const manifestPath = validateReleaseMetadataPath(
+      options?.releaseManifestPath,
+      "--release-manifest",
+    );
+    const receiptsPath = validateReleaseMetadataPath(
+      options?.releaseReceiptsPath,
+      "--release-receipts",
+    );
+    const [manifestSource, receiptsSource] = await Promise.all([
+      readFile(manifestPath, "utf8"),
+      readFile(receiptsPath, "utf8"),
+    ]);
+    return deriveServerIdentityFromReleaseManifest(manifestSource, receiptsSource);
+  } catch {
+    throw new SafeSmokeError(
+      "expected Server identity requires canonical verified five-APK release metadata",
     );
   }
 }
@@ -969,6 +967,7 @@ function selfCheckReport() {
   }
   return buildPublicReport({
     mode: "self-check",
+    expectedIdentity: null,
     checks: [
       result(
         "local_protocol_and_redaction",
@@ -990,6 +989,7 @@ function printReport(report, { json, knownSecrets = [] }) {
 }
 
 const DEFAULT_RUNTIME = Object.freeze({
+  loadExpectedServerIdentity,
   verifyExplicitDevice,
   collectInstalledServerIdentity,
   readAdminToken,
@@ -1023,6 +1023,7 @@ export async function main(
       return reportExitCode(report);
     }
 
+    const expectedIdentity = await runtime.loadExpectedServerIdentity(options);
     await runtime.verifyExplicitDevice(options);
     const packageIdentity =
       await runtime.collectInstalledServerIdentity(options);
@@ -1030,7 +1031,10 @@ export async function main(
     const snapshot = await runtime.collectReadiness(options, adminToken);
     const readiness = evaluateReadiness(
       { ...snapshot, packageIdentity },
-      { expectSpotifyDisabled: options.expectSpotifyDisabled },
+      {
+        expectSpotifyDisabled: options.expectSpotifyDisabled,
+        expectedIdentity,
+      },
     );
     const checks = [...readiness.checks];
     const prerequisitesPassed = readiness.checks.every(
@@ -1067,6 +1071,7 @@ export async function main(
         ? "run-safe-aibus/expect-spotify-disabled"
         : options.mode,
       checks,
+      expectedIdentity,
       manualChecks: manualVerificationChecks(),
     });
     runtime.printReport(report, {

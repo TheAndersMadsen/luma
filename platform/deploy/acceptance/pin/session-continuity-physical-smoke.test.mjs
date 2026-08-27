@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { RELEASE_IDENTITY } from "./agentic-release-smoke-lib.mjs";
+import {
+  INSTALLED_SERVER_SIGNER_IDENTITY,
+  SERVER_PACKAGE_NAME,
+} from "./agentic-release-smoke-lib.mjs";
 import { OPERATIONAL_MARKERS } from "./tier-a-symbols.mjs";
 
 import {
@@ -23,7 +26,13 @@ import {
 
 const PIN_SERIAL = "fixture-pin-serial";
 const OTHER_SERIAL = "fixture-other-device";
-const EXPECTED = RELEASE_IDENTITY;
+const EXPECTED = Object.freeze({
+  releaseId: "fixture-release",
+  packageName: SERVER_PACKAGE_NAME,
+  versionName: "2026-08-27.1",
+  versionCode: 202_608_271,
+  signerIdentity: INSTALLED_SERVER_SIGNER_IDENTITY,
+});
 const STOCK_FINAL_OBSERVATION =
   OPERATIONAL_MARKERS.stock_run_final_observation.value;
 const STREAMING_UNDERSTAND_REQUEST_LOG =
@@ -38,12 +47,10 @@ function liveArgs(extra = []) {
     PIN_SERIAL,
     "--expected-pin-serial",
     PIN_SERIAL,
-    "--expect-version-name",
-    EXPECTED.versionName,
-    "--expect-version-code",
-    String(EXPECTED.versionCode),
-    "--expect-apk-sha256",
-    EXPECTED.apkSha256,
+    "--release-manifest",
+    "/fixture/manifest.json",
+    "--release-receipts",
+    "/fixture/receipts.json",
     ...extra,
   ];
 }
@@ -54,10 +61,10 @@ function options() {
 
 function identity(overrides = {}) {
   return {
-    packageName: "com.penumbraos.server",
+    packageName: SERVER_PACKAGE_NAME,
     versionName: EXPECTED.versionName,
     versionCode: EXPECTED.versionCode,
-    apkSha256: EXPECTED.apkSha256,
+    signerIdentity: EXPECTED.signerIdentity,
     ...overrides,
   };
 }
@@ -332,6 +339,7 @@ class FakeDevice {
 function liveDependencies(device, overrides = {}) {
   let now = 0;
   return {
+    loadExpectedServerIdentity: async () => EXPECTED,
     identity: identity(),
     token: "public-fixture-token",
     device,
@@ -350,9 +358,8 @@ test("live CLI requires an operator-confirmed Pin and complete runtime identity"
     serial: PIN_SERIAL,
     expectedPinSerial: PIN_SERIAL,
     adbPath: "adb",
-    expectedVersionName: EXPECTED.versionName,
-    expectedVersionCode: EXPECTED.versionCode,
-    expectedApkSha256: EXPECTED.apkSha256,
+    releaseManifestPath: "/fixture/manifest.json",
+    releaseReceiptsPath: "/fixture/receipts.json",
     json: true,
     help: false,
   });
@@ -393,44 +400,24 @@ test("live CLI requires an operator-confirmed Pin and complete runtime identity"
         "--expected-pin-serial",
         PIN_SERIAL,
       ]),
-    /version name/,
+    /release-manifest/,
   );
-  assert.throws(
-    () =>
-      parseSessionContinuityCliArgs(
-        liveArgs().map((value) =>
-          value === EXPECTED.versionName ? "latest" : value,
-        ),
-      ),
-    /version name/,
-  );
-  assert.throws(
-    () =>
-      parseSessionContinuityCliArgs(
-        liveArgs().map((value) =>
-          value === EXPECTED.versionName ? "2026-07-17.36-local" : value,
-        ),
-      ),
-    /pinned Server version name/,
-  );
-  assert.throws(
-    () =>
-      parseSessionContinuityCliArgs(
-        liveArgs().map((value) =>
-          value === String(EXPECTED.versionCode) ? "0" : value,
-        ),
-      ),
-    /version code/,
-  );
-  assert.throws(
-    () =>
-      parseSessionContinuityCliArgs(
-        liveArgs().map((value) =>
-          value === EXPECTED.apkSha256 ? "abc" : value,
-        ),
-      ),
-    /SHA-256/,
-  );
+  for (const removed of ["--release-manifest", "--release-receipts"]) {
+    const args = liveArgs();
+    const index = args.indexOf(removed);
+    args.splice(index, 2);
+    assert.throws(() => parseSessionContinuityCliArgs(args), new RegExp(removed));
+  }
+  for (const obsolete of [
+    ["--expect-version-name", EXPECTED.versionName],
+    ["--expect-version-code", String(EXPECTED.versionCode)],
+    ["--expect-apk-sha256", "a".repeat(64)],
+  ]) {
+    assert.throws(
+      () => parseSessionContinuityCliArgs([...liveArgs(), ...obsolete]),
+      /unknown command option/,
+    );
+  }
   assert.throws(
     () => parseSessionContinuityCliArgs([...liveArgs(), "--prompt", "PRIVATE_PROMPT"]),
     /unknown command option/,
@@ -454,9 +441,8 @@ test("live CLI requires an operator-confirmed Pin and complete runtime identity"
   for (const duplicate of [
     ["--serial", PIN_SERIAL],
     ["--expected-pin-serial", PIN_SERIAL],
-    ["--expect-version-name", EXPECTED.versionName],
-    ["--expect-version-code", String(EXPECTED.versionCode)],
-    ["--expect-apk-sha256", EXPECTED.apkSha256],
+    ["--release-manifest", "/fixture/manifest.json"],
+    ["--release-receipts", "/fixture/receipts.json"],
   ]) {
     assert.throws(
       () => parseSessionContinuityCliArgs([...liveArgs(), ...duplicate]),
@@ -467,15 +453,6 @@ test("live CLI requires an operator-confirmed Pin and complete runtime identity"
     () => parseSessionContinuityCliArgs(["--run", "--run", ...liveArgs().slice(1)]),
     /exactly one mode/,
   );
-});
-
-test("runtime identity SHA input is normalized but remains exact", () => {
-  const parsed = parseSessionContinuityCliArgs(
-    liveArgs().map((value) =>
-      value === EXPECTED.apkSha256 ? EXPECTED.apkSha256.toUpperCase() : value,
-    ),
-  );
-  assert.equal(parsed.expectedApkSha256, EXPECTED.apkSha256);
 });
 
 test("fixed continuity matrix is immutable, public, bounded, and complete", () => {
@@ -961,19 +938,19 @@ test("multiple post-boundary run keys fail attribution without claiming row owne
   assert.equal(reduced.phraseObserved, false);
 });
 
-test("candidate identity requires package, version name, code, and active APK hash", () => {
+test("candidate identity requires package, version name, code, and Android signer", () => {
   assert.deepEqual(evaluateCandidateIdentity(identity(), EXPECTED), {
     package_exact: true,
     version_name_exact: true,
     version_code_exact: true,
-    apk_sha256_exact: true,
+    signer_identity_exact: true,
     pass: true,
   });
   for (const actual of [
     identity({ packageName: "other.package" }),
     identity({ versionName: "2026-07-17.98-local" }),
     identity({ versionCode: EXPECTED.versionCode + 1 }),
-    identity({ apkSha256: "b".repeat(64) }),
+    identity({ signerIdentity: "deadbeef" }),
   ]) {
     assert.equal(evaluateCandidateIdentity(actual, EXPECTED).pass, false);
   }
@@ -1311,7 +1288,8 @@ test("identity mismatch blocks before token or activity access", async () => {
   let tokenRead = false;
   const device = new FakeDevice();
   const report = await executeSessionContinuitySuite(options(), {
-    identity: identity({ apkSha256: "b".repeat(64) }),
+    loadExpectedServerIdentity: async () => EXPECTED,
+    identity: identity({ signerIdentity: "deadbeef" }),
     readToken: async () => {
       tokenRead = true;
       return "should-not-run";
@@ -1326,7 +1304,7 @@ test("identity mismatch blocks before token or activity access", async () => {
   assert.equal(report.cleanup.cleanup_attempted, false);
 });
 
-test("suite execution independently refuses a non-Pin serial or unpinned identity", async () => {
+test("suite execution independently refuses a non-Pin serial or unverified release", async () => {
   const device = new FakeDevice();
   await assert.rejects(
     executeSessionContinuitySuite(
@@ -1337,17 +1315,14 @@ test("suite execution independently refuses a non-Pin serial or unpinned identit
   );
   await assert.rejects(
     executeSessionContinuitySuite(
-      { ...options(), expectedApkSha256: null },
-      liveDependencies(device),
+      options(),
+      liveDependencies(device, {
+        loadExpectedServerIdentity: async () => {
+          throw new Error("unverified release metadata");
+        },
+      }),
     ),
-    /unpinned candidate identity/,
-  );
-  await assert.rejects(
-    executeSessionContinuitySuite(
-      { ...options(), expectedVersionName: "2026-07-17.36-local" },
-      liveDependencies(device),
-    ),
-    /unpinned candidate identity/,
+    /verified release metadata/,
   );
   assert.deepEqual(device.injected, []);
 });
@@ -1433,6 +1408,7 @@ test("parse and device failures are sanitized before output", async () => {
     stdout: runStdout.stream,
     stderr: runStderr.stream,
     dependencies: {
+      loadExpectedServerIdentity: async () => EXPECTED,
       verifyDevice: async () => {
         throw new Error("PRIVATE_ADB_DIAGNOSTIC");
       },
@@ -1938,6 +1914,7 @@ test("cleanup timeout reports incomplete rather than falsely claiming success", 
   let now = 0;
   const device = new FakeDevice();
   const deps = {
+    loadExpectedServerIdentity: async () => EXPECTED,
     identity: identity(),
     token: "public-fixture-token",
     device,

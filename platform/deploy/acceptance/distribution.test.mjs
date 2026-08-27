@@ -13,6 +13,32 @@ const root = path.resolve(import.meta.dirname, "../../..");
 const workflow = path.join(root, ".github/workflows/release-cli.yml");
 const builder = path.join(root, "platform/distribution/build.mjs");
 
+function source(relativePath) {
+  return fs.readFileSync(path.join(root, relativePath), "utf8");
+}
+
+function integerConstant(relativePath, name) {
+  const matches = [...source(relativePath).matchAll(
+    new RegExp(
+      `\\bconst(?:\\s+val)?\\s+${name}(?:\\s*:[^=;]+)?\\s*=\\s*([0-9][0-9_]*)\\s*;?`,
+      "gu",
+    ),
+  )];
+  assert.equal(matches.length, 1, `${relativePath} must declare exactly one ${name}`);
+  return Number(matches[0][1].replaceAll("_", ""));
+}
+
+function rustDurationConstant(relativePath, name) {
+  const matches = [...source(relativePath).matchAll(
+    new RegExp(
+      `\\bconst\\s+${name}\\s*:\\s*Duration\\s*=\\s*Duration::from_secs\\(([0-9][0-9_]*)\\)\\s*;`,
+      "gu",
+    ),
+  )];
+  assert.equal(matches.length, 1, `${relativePath} must declare exactly one ${name}`);
+  return Number(matches[0][1].replaceAll("_", "")) * 1_000;
+}
+
 function digest(character) {
   return `sha256:${character.repeat(64)}`;
 }
@@ -60,6 +86,71 @@ test("release archives are byte-reproducible with the supported host tar", async
   }
 
   assert.deepEqual(archives[0], archives[1]);
+});
+
+test("music playback deadlines preserve the cross-language nested budget", () => {
+  const layers = [
+    [
+      "Pin provider request",
+      rustDurationConstant("pin/runtime/core/src/api/music.rs", "REQUEST_TIMEOUT"),
+    ],
+    ["Iroh bridge", rustDurationConstant("pin/bridge/src/main.rs", "REQUEST_TIMEOUT")],
+    [
+      "adapter music egress",
+      integerConstant("center/adapters/spotify/src/adapter.mjs", "MUSIC_EGRESS_TIMEOUT_MS"),
+    ],
+    [
+      "Center playback resolution",
+      integerConstant(
+        "center/src/app/api/music-gateway/playback/route.ts",
+        "MUSIC_PLAYBACK_RESOLUTION_TIMEOUT_MS",
+      ),
+    ],
+    [
+      "Pin music gateway playback",
+      rustDurationConstant("pin/runtime/core/src/spotify/mod.rs", "MUSIC_GATEWAY_PLAYBACK_TIMEOUT"),
+    ],
+    [
+      "Android playback read",
+      integerConstant(
+        "pin/runtime/android/src/main/kotlin/com/penumbraos/server/SpotifyBridgeService.kt",
+        "PLAYBACK_READ_TIMEOUT_MS",
+      ),
+    ],
+  ];
+  const deadlines = layers.map(([, milliseconds]) => milliseconds);
+  const minimumMargins = [5_000, 5_000, 5_000, 10_000, 10_000];
+
+  assert.deepEqual(deadlines, [25_000, 30_000, 35_000, 40_000, 50_000, 60_000]);
+  for (let index = 1; index < deadlines.length; index += 1) {
+    const [innerName] = layers[index - 1];
+    const [outerName] = layers[index];
+    assert.ok(deadlines[index] > deadlines[index - 1], `${outerName} must exceed ${innerName}`);
+    assert.ok(
+      deadlines[index] - deadlines[index - 1] >= minimumMargins[index - 1],
+      `${outerName} must retain at least ${minimumMargins[index - 1]}ms above ${innerName}`,
+    );
+  }
+});
+
+test("operator docs keep the general control timeout separate from playback", () => {
+  const example = source("center/.env.example");
+  assert.match(example, /^# General Spotify control-route timeout\./mu);
+  assert.match(example, /^# REVIVAL_SPOTIFY_ADAPTER_TIMEOUT_MS=10000$/mu);
+
+  const readme = source("README.md");
+  assert.match(
+    readme,
+    /`REVIVAL_SPOTIFY_ADAPTER_TIMEOUT_MS` remains the general control-route timeout\s+and defaults to 10 seconds\./u,
+  );
+  assert.match(
+    readme,
+    /The YouTube Music Pin-egress playback path uses a\s+separate route-specific ladder: 25 seconds for the Pin provider request, 30 for\s+Iroh, 35 for adapter egress, 40 for Center resolution, 50 for the Pin music\s+gateway, and a 60-second Android read-idle timeout\./u,
+  );
+  assert.match(
+    readme,
+    /The Android value limits how\s+long a response-body read may stay idle; it is not a strict total request\s+deadline\./u,
+  );
 });
 
 test("tag release workflow publishes the exact hardened image and Compose boundaries", () => {

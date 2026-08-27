@@ -33,6 +33,7 @@ const {
 const {
   pinContributorCheck,
   policyTestArguments,
+  policyTestInventory,
   policyTestMode,
   policyTestPlan,
 } = require("../../cli/gates.js");
@@ -341,7 +342,7 @@ test("Pin check runs direct contributor checks", () => {
   const ordering = [];
   pinContributorCheck({
     sessionRunner(label, command, args) {
-      ordering.push([label, command, args.slice(0, 3)]);
+      ordering.push([label, command, args.slice()]);
     },
   });
   const [coreRust, bridgeRust, pinGradle, injectorGradle] = ordering;
@@ -362,6 +363,7 @@ test("Pin check runs direct contributor checks", () => {
   assert.equal(pinGradle[1], "bash");
   assert.equal(pinGradle[2][0], path.join(root, "pin", "gradlew"));
   assert.equal(pinGradle[2][1], "--no-daemon");
+  assert.equal(pinGradle[2].includes(":hook:payload:testDebugUnitTest"), true);
   assert.match(
     injectorGradle[0],
     new RegExp(`^Pin contributor check: bash ${path.join(root, "pin", "injector", "gradlew")} --no-daemon --project-cache-dir `),
@@ -465,6 +467,20 @@ test("platform policy files share one bounded-concurrency runner", () => {
     parallel: ["a-safe.test.mjs", "z-safe.test.mjs"],
     serial: ["fresh-install.test.mjs"],
   });
+  const acceptance = path.join(root, "platform", "deploy", "acceptance");
+  const fullInventory = policyTestInventory(acceptance);
+  assert.equal(fullInventory.includes(path.join("pin", "pinbox.test.mjs")), true);
+  assert.equal(
+    policyTestInventory(acceptance, { contributor: true }).some(
+      (entry) => entry.startsWith(`pin${path.sep}`),
+    ),
+    false,
+  );
+  const entrypoint = fs.readFileSync(
+    path.join(root, "platform", "containers", "pin-builder", "entrypoint.sh"),
+    "utf8",
+  );
+  assert.match(entrypoint, /:hook:payload:testDebugUnitTest/u);
 });
 
 test("stage timings are concise and preserve the action result", () => {

@@ -22,13 +22,50 @@ type ProofSession = {
 let cachedSession: ProofSession | null = null;
 let operationQueue: Promise<void> = Promise.resolve();
 
-function serialized<T>(operation: () => Promise<T>): Promise<T> {
-  const result = operationQueue.then(operation, operation);
+function waitForSignal<T>(operation: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return operation;
+  signal.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    operation.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
+function fetchUsingSignal(fetchImpl: typeof fetch, operationSignal: AbortSignal): typeof fetch {
+  return (input, init) => {
+    const signals = [
+      operationSignal,
+      init?.signal,
+      input instanceof Request ? input.signal : undefined,
+    ]
+      .filter((signal): signal is AbortSignal => signal !== undefined && signal !== null)
+      .filter((signal, index, all) => all.indexOf(signal) === index);
+    const signal = signals.length === 1 ? signals[0] : AbortSignal.any(signals);
+    return fetchImpl(input, { ...init, signal });
+  };
+}
+
+function serialized<T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  const run = () => {
+    signal?.throwIfAborted();
+    return operation();
+  };
+  const result = operationQueue.then(run, run);
   operationQueue = result.then(
     () => undefined,
     () => undefined,
   );
-  return result;
+  return waitForSignal(result, signal);
 }
 
 function integrityTuple(value: unknown): {
@@ -62,19 +99,55 @@ function integrityTuple(value: unknown): {
   };
 }
 
-async function readIntegrityResponse(response: Response) {
-  if (!response.ok) throw new Error("YouTube integrity request failed");
+export async function readYoutubeIntegrityResponse(
+  response: Response,
+  signal?: AbortSignal,
+) {
+  if (signal?.aborted) {
+    await response.body?.cancel(signal.reason).catch(() => undefined);
+    signal.throwIfAborted();
+  }
+  if (!response.ok) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new Error("YouTube integrity request failed");
+  }
   const declared = Number(response.headers.get("content-length") ?? "0");
   if (Number.isFinite(declared) && declared > MAX_INTEGRITY_RESPONSE_BYTES) {
     await response.body?.cancel().catch(() => undefined);
     throw new Error("YouTube integrity response was oversized");
   }
-  const bytes = await response.arrayBuffer();
-  if (bytes.byteLength === 0 || bytes.byteLength > MAX_INTEGRITY_RESPONSE_BYTES) {
+  if (!response.body) {
+    throw new Error("YouTube integrity response was invalid");
+  }
+
+  const reader = response.body.getReader();
+  const bytes = new Uint8Array(MAX_INTEGRITY_RESPONSE_BYTES);
+  let length = 0;
+  const onAbort = () => {
+    void reader.cancel(signal?.reason).catch(() => undefined);
+  };
+  signal?.addEventListener("abort", onAbort, { once: true });
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value.byteLength > MAX_INTEGRITY_RESPONSE_BYTES - length) {
+        await reader.cancel().catch(() => undefined);
+        throw new Error("YouTube integrity response was oversized");
+      }
+      bytes.set(value, length);
+      length += value.byteLength;
+    }
+    signal?.throwIfAborted();
+  } finally {
+    signal?.removeEventListener("abort", onAbort);
+    reader.releaseLock();
+  }
+  if (length === 0) {
     throw new Error("YouTube integrity response was invalid");
   }
   try {
-    return integrityTuple(JSON.parse(new TextDecoder().decode(bytes)));
+    return integrityTuple(JSON.parse(new TextDecoder().decode(bytes.subarray(0, length))));
   } catch (error) {
     if (error instanceof SyntaxError) {
       throw new Error("YouTube integrity response was invalid");
@@ -83,11 +156,16 @@ async function readIntegrityResponse(response: Response) {
   }
 }
 
-async function createProofSession(fetchImpl: typeof fetch): Promise<ProofSession> {
+async function createProofSession(
+  fetchImpl: typeof fetch,
+  signal?: AbortSignal,
+): Promise<ProofSession> {
+  const scopedFetch = signal ? fetchUsingSignal(fetchImpl, signal) : fetchImpl;
   const challenge = await getChallenge({
-    fetchFunction: fetchImpl,
+    fetchFunction: scopedFetch,
     requestKey: PUBLIC_REQUEST_KEY,
   });
+  signal?.throwIfAborted();
   const interpreter =
     challenge.interpreterJavascript?.privateDoNotAccessOrElseSafeScriptWrappedValue;
   if (!interpreter || interpreter.length > 4 * 1024 * 1024) {
@@ -108,20 +186,25 @@ async function createProofSession(fetchImpl: typeof fetch): Promise<ProofSession
       value: USER_AGENT,
     });
     dom.window.eval(interpreter);
+    signal?.throwIfAborted();
     const botGuard = await BotGuardClient.create({
       program: challenge.program,
       globalName: challenge.globalName,
       globalObject: dom.window,
     });
+    signal?.throwIfAborted();
     const webPoSignalOutput: WebPoSignalOutput = [];
     const snapshot = await botGuard.snapshot({ webPoSignalOutput });
-    const integrity = await readIntegrityResponse(
-      await fetchImpl(buildURL("GenerateIT", true), {
+    signal?.throwIfAborted();
+    const integrity = await readYoutubeIntegrityResponse(
+      await scopedFetch(buildURL("GenerateIT", true), {
         method: "POST",
         headers: getHeaders(),
         body: JSON.stringify([PUBLIC_REQUEST_KEY, snapshot]),
       }),
+      signal,
     );
+    signal?.throwIfAborted();
     const factory = webPoSignalOutput[0];
     if (typeof factory !== "function") {
       throw new Error("YouTube proof minter was unavailable");
@@ -129,6 +212,7 @@ async function createProofSession(fetchImpl: typeof fetch): Promise<ProofSession
     const mint = await factory(
       new Uint8Array(Buffer.from(integrity.integrityToken, "base64")),
     );
+    signal?.throwIfAborted();
     if (typeof mint !== "function") {
       throw new Error("YouTube proof minter was unavailable");
     }
@@ -151,7 +235,7 @@ async function createProofSession(fetchImpl: typeof fetch): Promise<ProofSession
   }
 }
 
-async function proofSession(fetchImpl: typeof fetch): Promise<ProofSession> {
+async function proofSession(fetchImpl: typeof fetch, signal?: AbortSignal): Promise<ProofSession> {
   if (
     cachedSession &&
     cachedSession.fetch === fetchImpl &&
@@ -161,20 +245,22 @@ async function proofSession(fetchImpl: typeof fetch): Promise<ProofSession> {
   }
   cachedSession?.dom.window.close();
   cachedSession = null;
-  cachedSession = await createProofSession(fetchImpl);
+  cachedSession = await createProofSession(fetchImpl, signal);
   return cachedSession;
 }
 
 export async function youtubeContentProofToken(
   videoId: string,
   fetchImpl: typeof fetch,
+  signal?: AbortSignal,
 ): Promise<string> {
   if (!/^[A-Za-z0-9_-]{11}$/u.test(videoId)) {
     throw new Error("YouTube proof content binding was invalid");
   }
   return serialized(async () => {
-    const session = await proofSession(fetchImpl);
+    const session = await proofSession(fetchImpl, signal);
     const result = await session.mint(new TextEncoder().encode(videoId));
+    signal?.throwIfAborted();
     if (!ArrayBuffer.isView(result) || result.byteLength === 0) {
       throw new Error("YouTube proof token was invalid");
     }
@@ -191,5 +277,5 @@ export async function youtubeContentProofToken(
       throw new Error("YouTube proof token was invalid");
     }
     return token;
-  });
+  }, signal);
 }

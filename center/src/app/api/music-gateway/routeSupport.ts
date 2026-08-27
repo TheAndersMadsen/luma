@@ -42,7 +42,10 @@ function boundedText(value: unknown, name: string): string {
   return text;
 }
 
-async function boundedDeviceJson(request: Request): Promise<Record<string, unknown>> {
+async function boundedDeviceJson(
+  request: Request,
+  signal: AbortSignal,
+): Promise<Record<string, unknown>> {
   const contentType = request.headers.get("content-type")?.toLowerCase() ?? "";
   if (!/^application\/json(?:\s*;|$)/u.test(contentType)) fail("Expected a JSON body.", 415);
   const declared = Number(request.headers.get("content-length") ?? 0);
@@ -53,12 +56,13 @@ async function boundedDeviceJson(request: Request): Promise<Record<string, unkno
   const chunks: Uint8Array[] = [];
   let total = 0;
   let timedOut = false;
-  let aborted = request.signal.aborted;
+  let aborted = false;
   const cancelForAbort = () => {
     aborted = true;
     void reader.cancel().catch(() => undefined);
   };
-  request.signal.addEventListener("abort", cancelForAbort, { once: true });
+  signal.addEventListener("abort", cancelForAbort, { once: true });
+  if (signal.aborted) cancelForAbort();
   const deadline = setTimeout(() => {
     timedOut = true;
     void reader.cancel().catch(() => undefined);
@@ -76,7 +80,7 @@ async function boundedDeviceJson(request: Request): Promise<Record<string, unkno
     }
   } finally {
     clearTimeout(deadline);
-    request.signal.removeEventListener("abort", cancelForAbort);
+    signal.removeEventListener("abort", cancelForAbort);
     reader.releaseLock();
   }
   if (timedOut || aborted) fail("Music request timed out.", 408);
@@ -97,12 +101,15 @@ async function boundedDeviceJson(request: Request): Promise<Record<string, unkno
   return value as Record<string, unknown>;
 }
 
-export async function deviceMusicRequest(request: Request): Promise<{
+export async function deviceMusicRequest(
+  request: Request,
+  signal: AbortSignal = request.signal,
+): Promise<{
   subject: string;
   body: Record<string, unknown>;
 }> {
-  const subject = await authenticateMusicGateway(request);
-  return { subject, body: await boundedDeviceJson(request) };
+  const subject = await authenticateMusicGateway(request, signal);
+  return { subject, body: await boundedDeviceJson(request, signal) };
 }
 
 export function provider(value: unknown): MusicProvider {

@@ -83,27 +83,30 @@ pub async fn nearby(
     let api_key = key(KEY_VAR).ok_or(BackendError::NotConfigured)?;
     let url = place_search_url(&api_key, text_query, near, radius_m)?;
 
-    let found: PlaceSearch = http()
+    let body = http()
         .get(url)
         .send()
         .await
         .map_err(|_| BackendError::Unavailable)?
         .error_for_status()
         .map_err(|_| BackendError::Unavailable)?
-        .json()
+        .bytes()
         .await
         .map_err(|_| BackendError::Unavailable)?;
 
+    decode_nearby_response(&body)
+}
+
+pub(crate) fn decode_nearby_response(body: &[u8]) -> Result<Vec<pb::NearbyPlace>, BackendError> {
+    let found: PlaceSearch = serde_json::from_slice(body).map_err(|_| BackendError::Unavailable)?;
+
     if found.status == "ZERO_RESULTS" {
-        return Err(BackendError::NoResult);
+        return Ok(Vec::new());
     }
     if found.status != "OK" {
         return Err(BackendError::Unavailable);
     }
     let places: Vec<_> = found.results.iter().map(to_place).collect();
-    if places.is_empty() {
-        return Err(BackendError::NoResult);
-    }
     Ok(places)
 }
 

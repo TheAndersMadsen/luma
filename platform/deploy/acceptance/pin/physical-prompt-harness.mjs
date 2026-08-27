@@ -1,19 +1,22 @@
 #!/usr/bin/env node
 
 import { spawn as spawnProcess } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { connect as connectHttp2, constants as http2Constants } from "node:http2";
 import { pathToFileURL } from "node:url";
 import { TextDecoder } from "node:util";
 
 import {
   GrpcFrameDecoder,
-  RELEASE_IDENTITY,
+  SERVER_PACKAGE_NAME,
   decodeProtoFields,
+  deriveServerIdentityFromReleaseManifest,
   encodeProtoBytes,
   encodeProtoString,
   encodeProtoVarint,
   parseLoopbackGrpcPort,
+  validateReleaseMetadataPath,
   validateSerial,
   wrapGrpcFrame,
 } from "./agentic-release-smoke-lib.mjs";
@@ -25,6 +28,11 @@ import {
   readAdminToken,
   verifyExplicitDevice,
 } from "./agentic-release-smoke.mjs";
+import {
+  EXPECTED_PIN_SERIAL_ENV,
+  exactDeviceTargetMatches,
+  resolveExpectedDeviceSerial,
+} from "./device-target-guard.mjs";
 import {
   AUDIO_DUMP_ADB_ARGS,
   MEDIA_VOLUME_GET_ADB_ARGS,
@@ -43,7 +51,7 @@ import {
 } from "./tier-a-symbols.mjs";
 
 const PROGRAM = "physical-prompt-harness";
-const SERVER_PACKAGE = "com.penumbraos.server";
+const SERVER_PACKAGE = SERVER_PACKAGE_NAME;
 const IRONMAN_PACKAGE = PACKAGES.ironman;
 const MUSIC_PACKAGE = PACKAGES.music;
 const TICKLE_PACKAGE = PACKAGES.tickle;
@@ -54,7 +62,23 @@ const MAX_HTTP_BODY_BYTES = 1024 * 1024;
 const HTTP_STATUS_MARKER = "\n__PENUMBRA_PHYSICAL_HTTP_STATUS__:";
 const PROMPT_ACTIVITY_PATH = "/api/activity/prompts?limit=100";
 const MUSIC_ACTIVITY_PATH = "/api/activity/music?limit=100";
-const MUSIC_STABILITY_WINDOW_MS = 1_500;
+const MUSIC_PROVIDER_STATUS_PATH = "/api/spotify/status";
+export const MUSIC_PLAYBACK_SAMPLE_OFFSETS_MS = Object.freeze([
+  0,
+  16_000,
+  32_000,
+  48_000,
+  64_000,
+]);
+export const MUSIC_PAUSE_SAMPLE_OFFSETS_MS = Object.freeze([0, 2_500, 5_000]);
+const MUSIC_PROVIDERS = new Set(["spotify", "youtube_music", "tidal"]);
+const NETWORK_TRANSPORTS = new Set(["wifi", "cellular"]);
+const MUSIC_PLAYBACK_PATH = Object.freeze({
+  spotify: "native",
+  youtube_music: "pin_loopback",
+  tidal: "pin_loopback",
+});
+const PRELOADED_EXPECTED_IDENTITY = Symbol("preloaded expected Server identity");
 const LOADING_REQUEST_KID = PROTO_KIDS.loading_message_request;
 const LOADING_RESPONSE_KID = PROTO_KIDS.loading_message_response;
 const LOADING_RPC_PATH = RPC_PATHS.aibus_encrypted_loading_message;
@@ -156,7 +180,7 @@ export const PHYSICAL_TIMEOUT_MS = Object.freeze({
   // agentic circuit-breaker stack so a legitimate late terminal or a bounded
   // timeout is recorded instead of becoming a harness-side false negative.
   agenticRemoteWeather: 95_000,
-  music: 95_000,
+  music: 180_000,
   ticklePositive: 25_000,
   tickleNegative: 25_000,
   cleanup: 20_000,
@@ -294,31 +318,34 @@ function usage() {
   return [
     "Usage:",
     "  node platform/deploy/acceptance/pin/physical-prompt-harness.mjs --self-check [--json]",
-    "  node platform/deploy/acceptance/pin/physical-prompt-harness.mjs --run --serial SERIAL --expect-version-name NAME --expect-version-code CODE --expect-apk-sha256 SHA256 --case FIXED_CASE_ID [--json]",
+    "  node platform/deploy/acceptance/pin/physical-prompt-harness.mjs --run --serial SERIAL --expected-pin-serial SERIAL --release-manifest PATH --release-receipts PATH --case FIXED_CASE_ID [--provider spotify|youtube_music|tidal --expected-transport wifi|cellular] [--json]",
     "",
     "Safety contract:",
-    `  - The live mode accepts no caller-supplied prompt and requires an explicit ADB serial plus the pinned ${RELEASE_IDENTITY.versionName} Server identity.`,
+    "  - The live mode accepts no caller-supplied prompt and requires an exact operator-confirmed Pin serial plus canonical manifest and approved signer receipts.",
+    `  - The expected Pin may use --expected-pin-serial or ${EXPECTED_PIN_SERIAL_ENV}.`,
     "  - --case selects exactly one allowlisted fixture, so each live invocation can have an independent timeout and cleanup boundary.",
     `  - Allowed --case ids: ${PHYSICAL_PROMPT_CASES.map((item) => item.id).join(", ")}.`,
     `  - Only fixed time, battery, weather, ranked-music, pause-cleanup, and ${NATIVE_ACTIONS.TICKLE} fixtures can be injected.`,
     "  - Fixed semantic and locked loading-message fixtures call the no-action stock EncryptedLoadingMessage RPC directly.",
     "  - Calls, messages, camera, privacy mode, settings changes, installs, reboots, and package-installer session commands are structurally absent.",
-    "  - Raw prompts, responses, coordinates, Spotify metadata, account data, dumpsys text, and ADB diagnostics are never printed.",
+    "  - Raw prompts, responses, coordinates, music metadata, account data, network identifiers, dumpsys text, and ADB diagnostics are never printed.",
     `  - Music and ${NATIVE_ACTIONS.TICKLE} are skipped if their stock experience was already active. Music started by the harness is paused and its process is stopped; ${NATIVE_ACTIONS.TICKLE} processes started by the harness are stopped.`,
     "  - Only activity rows attributable to these fixed test prompts are deleted during cleanup.",
     "  - Transcript injection proves the post-ASR stock path. Microphone recognition, audible speech, and projector appearance require human confirmation.",
   ].join("\n");
 }
 
-export function parsePhysicalCliArgs(argv) {
+export function parsePhysicalCliArgs(argv, environment = process.env) {
   const options = {
     mode: null,
     serial: null,
+    expectedPinSerial: null,
     adbPath: "adb",
-    expectedVersionName: null,
-    expectedVersionCode: null,
-    expectedApkSha256: null,
+    releaseManifestPath: null,
+    releaseReceiptsPath: null,
     caseId: null,
+    provider: null,
+    expectedTransport: null,
     json: false,
     help: false,
   };
@@ -346,28 +373,52 @@ export function parsePhysicalCliArgs(argv) {
         break;
       case "--serial":
       case "-s":
+        if (options.serial !== null) {
+          throw new Error("--serial may be provided once");
+        }
         options.serial = next(argument, index);
+        index += 1;
+        break;
+      case "--expected-pin-serial":
+        if (options.expectedPinSerial !== null) {
+          throw new Error("--expected-pin-serial may be provided once");
+        }
+        options.expectedPinSerial = next(argument, index);
         index += 1;
         break;
       case "--adb":
         options.adbPath = next(argument, index);
         index += 1;
         break;
-      case "--expect-version-name":
-        options.expectedVersionName = next(argument, index);
+      case "--release-manifest":
+        if (options.releaseManifestPath !== null) {
+          throw new Error("--release-manifest may be provided once");
+        }
+        options.releaseManifestPath = next(argument, index);
         index += 1;
         break;
-      case "--expect-version-code":
-        options.expectedVersionCode = Number(next(argument, index));
-        index += 1;
-        break;
-      case "--expect-apk-sha256":
-        options.expectedApkSha256 = next(argument, index).toLowerCase();
+      case "--release-receipts":
+        if (options.releaseReceiptsPath !== null) {
+          throw new Error("--release-receipts may be provided once");
+        }
+        options.releaseReceiptsPath = next(argument, index);
         index += 1;
         break;
       case "--case":
         if (options.caseId !== null) throw new Error("--case may be provided once");
         options.caseId = next(argument, index);
+        index += 1;
+        break;
+      case "--provider":
+        if (options.provider !== null) throw new Error("--provider may be provided once");
+        options.provider = next(argument, index);
+        index += 1;
+        break;
+      case "--expected-transport":
+        if (options.expectedTransport !== null) {
+          throw new Error("--expected-transport may be provided once");
+        }
+        options.expectedTransport = next(argument, index);
         index += 1;
         break;
       case "--json":
@@ -387,10 +438,12 @@ export function parsePhysicalCliArgs(argv) {
   if (options.mode === "self-check") {
     if (
       options.serial !== null ||
-      options.expectedVersionName !== null ||
-      options.expectedVersionCode !== null ||
-      options.expectedApkSha256 !== null ||
-      options.caseId !== null
+      options.expectedPinSerial !== null ||
+      options.releaseManifestPath !== null ||
+      options.releaseReceiptsPath !== null ||
+      options.caseId !== null ||
+      options.provider !== null ||
+      options.expectedTransport !== null
     ) {
       throw new Error("--self-check does not accept live-device options");
     }
@@ -398,20 +451,40 @@ export function parsePhysicalCliArgs(argv) {
   }
 
   validateSerial(options.serial);
-  if (options.expectedVersionName !== RELEASE_IDENTITY.versionName) {
-    throw new Error("the pinned Server version name is required");
+  options.expectedPinSerial = resolveExpectedDeviceSerial({
+    cliValue: options.expectedPinSerial,
+    environment,
+    environmentName: EXPECTED_PIN_SERIAL_ENV,
+    label: "AI Pin serial",
+  });
+  if (!exactDeviceTargetMatches(options.serial, options.expectedPinSerial)) {
+    throw new Error(
+      "live mode requires the exact operator-confirmed AI Pin serial",
+    );
   }
-  if (options.expectedVersionCode !== RELEASE_IDENTITY.versionCode) {
-    throw new Error("the pinned Server version code is required");
-  }
-  if (options.expectedApkSha256 !== RELEASE_IDENTITY.apkSha256) {
-    throw new Error("the pinned Server APK SHA-256 is required");
-  }
+  validateReleaseMetadataPath(options.releaseManifestPath, "--release-manifest");
+  validateReleaseMetadataPath(options.releaseReceiptsPath, "--release-receipts");
   if (options.caseId === null) {
     throw new Error("live mode requires exactly one --case fixture");
   }
   if (!PUBLIC_CASE_IDS.has(options.caseId)) {
     throw new Error("--case must name one fixed public physical case");
+  }
+  if (options.caseId === "ranked_music") {
+    if (options.provider === null) {
+      throw new Error("ranked_music requires --provider");
+    }
+    if (!MUSIC_PROVIDERS.has(options.provider)) {
+      throw new Error("provider must be spotify, youtube_music, or tidal");
+    }
+    if (options.expectedTransport === null) {
+      throw new Error("ranked_music requires --expected-transport");
+    }
+    if (!NETWORK_TRANSPORTS.has(options.expectedTransport)) {
+      throw new Error("expected transport must be wifi or cellular");
+    }
+  } else if (options.provider !== null || options.expectedTransport !== null) {
+    throw new Error("music options require --case ranked_music");
   }
   if (
     typeof options.adbPath !== "string" ||
@@ -421,6 +494,31 @@ export function parsePhysicalCliArgs(argv) {
     throw new Error("ADB executable path is required");
   }
   return options;
+}
+
+async function loadExpectedServerIdentity(options, dependencies = {}) {
+  try {
+    const manifestPath = validateReleaseMetadataPath(
+      options?.releaseManifestPath,
+      "--release-manifest",
+    );
+    const receiptsPath = validateReleaseMetadataPath(
+      options?.releaseReceiptsPath,
+      "--release-receipts",
+    );
+    const [manifestSource, receiptsSource] = await Promise.all([
+      dependencies.releaseManifestSource ?? readFile(manifestPath, "utf8"),
+      dependencies.releaseReceiptsSource ?? readFile(receiptsPath, "utf8"),
+    ]);
+    return deriveServerIdentityFromReleaseManifest(
+      manifestSource,
+      receiptsSource,
+    );
+  } catch {
+    throw new SafePhysicalError(
+      "expected Server identity requires canonical verified five-APK release metadata",
+    );
+  }
 }
 
 function captureChild(
@@ -779,7 +877,10 @@ function runLoadingMessageRpc(options, devicePort, caseId, correlationMarker) {
 }
 
 function curlConfig(path, method, token) {
-  const validGet = path === PROMPT_ACTIVITY_PATH || path === MUSIC_ACTIVITY_PATH;
+  const validGet =
+    path === PROMPT_ACTIVITY_PATH ||
+    path === MUSIC_ACTIVITY_PATH ||
+    path === MUSIC_PROVIDER_STATUS_PATH;
   const validDelete = /^\/api\/activity\/(?:prompts|music)\/[1-9][0-9]*$/.test(path);
   if (!((method === "GET" && validGet) || (method === "DELETE" && validDelete))) {
     throw new SafePhysicalError("refusing a non-allowlisted Center activity request");
@@ -843,6 +944,15 @@ function plainObject(value) {
     !Array.isArray(value) &&
     Object.getPrototypeOf(value) === Object.prototype
   );
+}
+
+export function parseActiveMusicProviderStatus(value) {
+  if (!plainObject(value) || !MUSIC_PROVIDERS.has(value.active_provider)) {
+    throw new SafePhysicalError(
+      "the music-provider status response was malformed",
+    );
+  }
+  return value.active_provider;
 }
 
 export function parsePromptActivityPage(value) {
@@ -1032,19 +1142,83 @@ export function parsePidSet(value) {
   return [...new Set(trimmed.split(/\s+/).map(Number))].sort((a, b) => a - b);
 }
 
+export function parseActiveNetworkTransport(value) {
+  const text = Buffer.isBuffer(value) ? value.toString("utf8") : String(value);
+  if (Buffer.byteLength(text) > MAX_CHILD_STDOUT_BYTES) {
+    throw new SafePhysicalError("the active-network observation was too large");
+  }
+  const activeIds = [
+    ...new Set(
+      [...text.matchAll(/^\s*Active default network:\s*([0-9]+)\s*$/gm)].map(
+        (match) => match[1],
+      ),
+    ),
+  ];
+  if (activeIds.length !== 1) return null;
+
+  const marker = `NetworkAgentInfo{network{${activeIds[0]}}`;
+  const starts = [];
+  for (let index = text.indexOf(marker); index >= 0; index = text.indexOf(marker, index + 1)) {
+    starts.push(index);
+  }
+  if (starts.length !== 1) return null;
+  const next = text.indexOf("NetworkAgentInfo{network{", starts[0] + marker.length);
+  const block = text.slice(starts[0], next < 0 ? text.length : next);
+  const transportsStart = block.indexOf("Transports:");
+  const capabilitiesStart = block.indexOf("Capabilities:", transportsStart + 1);
+  if (transportsStart < 0 || capabilitiesStart < 0) return null;
+  const transports = block.slice(
+    transportsStart + "Transports:".length,
+    capabilitiesStart,
+  );
+  const capabilityTail = block.slice(capabilitiesStart, capabilitiesStart + 2_048);
+  if (!/\bVALIDATED\b/.test(capabilityTail)) return null;
+  const wifi = /\bWIFI\b/.test(transports);
+  const cellular = /\bCELLULAR\b/.test(transports);
+  if (wifi === cellular) return null;
+  return wifi ? "wifi" : "cellular";
+}
+
 export function parseMediaSessionSummary(value) {
   const text = Buffer.isBuffer(value) ? value.toString("utf8") : String(value);
   if (Buffer.byteLength(text) > MAX_CHILD_STDOUT_BYTES) {
     throw new SafePhysicalError("the media-session observation was too large");
   }
-  let currentPackage = null;
+  let pendingSessionHeader = null;
+  let currentSession = null;
   let sessionCount = 0;
   const states = [];
   for (const line of text.split(/\r?\n/)) {
+    const sessionHeaderMatch =
+      /^\s*(\S+)\s+(\S+\/\S+)\s+\(userId=[0-9]+\)\s*$/.exec(line);
+    if (sessionHeaderMatch !== null) {
+      pendingSessionHeader = {
+        opaqueId: sessionHeaderMatch[1],
+        component: sessionHeaderMatch[2],
+      };
+      currentSession = null;
+      continue;
+    }
+
     const packageMatch = /^\s*package=(\S+)\s*$/.exec(line);
     if (packageMatch !== null) {
-      currentPackage = packageMatch[1];
-      if (currentPackage === MUSIC_PACKAGE) sessionCount += 1;
+      const packageName = packageMatch[1];
+      if (packageName === MUSIC_PACKAGE) {
+        sessionCount += 1;
+        const component = pendingSessionHeader?.component ?? "";
+        const sessionIdentity = component.startsWith(`${MUSIC_PACKAGE}/`)
+          ? createHash("sha256")
+              .update(
+                `${pendingSessionHeader.opaqueId} ${component}`,
+                "utf8",
+              )
+              .digest("hex")
+          : null;
+        currentSession = { packageName, sessionIdentity };
+      } else {
+        currentSession = null;
+      }
+      pendingSessionHeader = null;
       continue;
     }
 
@@ -1052,33 +1226,52 @@ export function parseMediaSessionSummary(value) {
       line,
     ) ?? /^\s*state=([0-9]+),\s*position=(-?[0-9]+)/.exec(line);
     if (stateMatch !== null) {
-      if (currentPackage === MUSIC_PACKAGE) {
+      if (currentSession?.packageName === MUSIC_PACKAGE) {
         const speedMatch = /,\s*speed=(-?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+))/.exec(line);
         states.push({
           state: Number(stateMatch[1]),
           position: Number(stateMatch[2]),
           speed: speedMatch === null ? null : Number(speedMatch[1]),
+          sessionIdentity: currentSession.sessionIdentity,
         });
       }
-      currentPackage = null;
+      currentSession = null;
+      pendingSessionHeader = null;
       continue;
     }
 
     if (/^\s*state=null\s*$/.test(line)) {
-      currentPackage = null;
+      currentSession = null;
+      pendingSessionHeader = null;
     }
   }
   const playingStates = states.filter((state) => state.state === 3);
+  const pausedStates = states.filter((state) => state.state === 2);
   return {
     sessionCount,
+    playingSessionCount: playingStates.length,
+    pausedSessionCount: pausedStates.length,
     playing: playingStates.length > 0,
+    paused: pausedStates.length > 0 && playingStates.length === 0,
     playbackClockRunning: playingStates.some(
       (state) => Number.isFinite(state.speed) && state.speed > 0,
     ),
+    playingSessionIdentity:
+      playingStates.length === 1
+        ? playingStates[0].sessionIdentity
+        : null,
+    pausedSessionIdentity:
+      pausedStates.length === 1
+        ? pausedStates[0].sessionIdentity
+        : null,
     maximumPlayingPosition:
       playingStates.length === 0
         ? null
         : Math.max(...playingStates.map((state) => state.position)),
+    maximumPausedPosition:
+      pausedStates.length === 0
+        ? null
+        : Math.max(...pausedStates.map((state) => state.position)),
   };
 }
 
@@ -1094,19 +1287,154 @@ export function tickleActivityIsForeground(value) {
   );
 }
 
-export function mediaPositionAdvanced(first, second, elapsedMs = 0) {
-  const stablePlaybackClock =
-    Number.isFinite(elapsedMs) &&
-    elapsedMs >= MUSIC_STABILITY_WINDOW_MS &&
-    first?.playbackClockRunning === true &&
-    second?.playbackClockRunning === true;
+export function mediaPositionAdvanced(first, second) {
   return (
     first?.playing === true &&
     second?.playing === true &&
+    first?.playingSessionCount === 1 &&
+    second?.playingSessionCount === 1 &&
+    typeof first.playingSessionIdentity === "string" &&
+    /^[0-9a-f]{64}$/.test(first.playingSessionIdentity) &&
+    second.playingSessionIdentity === first.playingSessionIdentity &&
     Number.isSafeInteger(first.maximumPlayingPosition) &&
     Number.isSafeInteger(second.maximumPlayingPosition) &&
-    (second.maximumPlayingPosition > first.maximumPlayingPosition || stablePlaybackClock)
+    second.maximumPlayingPosition > first.maximumPlayingPosition
   );
+}
+
+export function evaluateContinuousMusicPlayback(
+  samples,
+  expectedTransport,
+  expectedProvider,
+) {
+  const expectedShape =
+    Array.isArray(samples) &&
+    samples.length === MUSIC_PLAYBACK_SAMPLE_OFFSETS_MS.length &&
+    NETWORK_TRANSPORTS.has(expectedTransport) &&
+    MUSIC_PROVIDERS.has(expectedProvider);
+  const sampleCount = Array.isArray(samples) ? samples.length : 0;
+  const durationOverSixtySeconds =
+    expectedShape &&
+    Number.isFinite(samples[0]?.elapsedMs) &&
+    Number.isFinite(samples.at(-1)?.elapsedMs) &&
+    samples.at(-1).elapsedMs - samples[0].elapsedMs > 60_000;
+  const continuouslyPlaying =
+    expectedShape &&
+    samples.every(
+      (sample) =>
+        sample?.media?.playing === true &&
+        sample.media.playingSessionCount === 1 &&
+        sample.media.pausedSessionCount === 0 &&
+        sample.media.playbackClockRunning === true &&
+        Number.isSafeInteger(sample.media.maximumPlayingPosition),
+    );
+  const repeatedlyAdvanced =
+    continuouslyPlaying &&
+    samples.slice(1).every((sample, index) => {
+      const previous = samples[index];
+      const elapsedMs = sample.elapsedMs - previous.elapsedMs;
+      return (
+        Number.isFinite(elapsedMs) &&
+        elapsedMs > 0 &&
+        mediaPositionAdvanced(previous.media, sample.media)
+      );
+    });
+  const transportStable =
+    expectedShape &&
+    samples.every((sample) => sample?.transport === expectedTransport);
+  const playbackSessionIdentity = samples?.[0]?.media?.playingSessionIdentity;
+  const sessionStable =
+    expectedShape &&
+    typeof playbackSessionIdentity === "string" &&
+    /^[0-9a-f]{64}$/.test(playbackSessionIdentity) &&
+    samples.every(
+      (sample) =>
+        sample?.media?.playingSessionIdentity === playbackSessionIdentity,
+    );
+  const providerStable =
+    expectedShape &&
+    samples.every((sample) => sample?.provider === expectedProvider);
+  return {
+    pass:
+      durationOverSixtySeconds &&
+      continuouslyPlaying &&
+      repeatedlyAdvanced &&
+      transportStable &&
+      sessionStable &&
+      providerStable,
+    sampleCount,
+    durationOverSixtySeconds,
+    continuouslyPlaying,
+    repeatedlyAdvanced,
+    transportStable,
+    sessionStable,
+    providerStable,
+  };
+}
+
+export function evaluateStableMusicPause(
+  samples,
+  expectedTransport,
+  expectedProvider,
+  expectedSessionIdentity,
+) {
+  const expectedShape =
+    Array.isArray(samples) &&
+    samples.length === MUSIC_PAUSE_SAMPLE_OFFSETS_MS.length &&
+    NETWORK_TRANSPORTS.has(expectedTransport) &&
+    MUSIC_PROVIDERS.has(expectedProvider) &&
+    typeof expectedSessionIdentity === "string" &&
+    /^[0-9a-f]{64}$/.test(expectedSessionIdentity);
+  const sampleCount = Array.isArray(samples) ? samples.length : 0;
+  const longEnough =
+    expectedShape &&
+    Number.isFinite(samples[0]?.elapsedMs) &&
+    Number.isFinite(samples.at(-1)?.elapsedMs) &&
+    samples.at(-1).elapsedMs - samples[0].elapsedMs >= 5_000;
+  const stablePaused =
+    longEnough &&
+    samples.every(
+      (sample) =>
+        sample?.media?.playing === false &&
+        sample.media.paused === true &&
+        sample.media.playingSessionCount === 0 &&
+        sample.media.pausedSessionCount === 1 &&
+        Number.isSafeInteger(sample.media.maximumPausedPosition),
+    );
+  const firstPosition = stablePaused
+    ? samples[0].media.maximumPausedPosition
+    : null;
+  const positionStable =
+    stablePaused &&
+    samples.every(
+      (sample) => sample.media.maximumPausedPosition === firstPosition,
+    );
+  const transportStable =
+    expectedShape &&
+    samples.every((sample) => sample?.transport === expectedTransport);
+  const sessionStable =
+    expectedShape &&
+    samples.every(
+      (sample) =>
+        sample?.media?.pausedSessionIdentity === expectedSessionIdentity,
+    );
+  const providerStable =
+    expectedShape &&
+    samples.every((sample) => sample?.provider === expectedProvider);
+  return {
+    pass:
+      stablePaused &&
+      positionStable &&
+      transportStable &&
+      sessionStable &&
+      providerStable,
+    sampleCount,
+    stablePaused,
+    positionStable,
+    transportStable,
+    sessionStable,
+    providerStable,
+  };
 }
 
 function parseEpochLogcatLine(line) {
@@ -1655,6 +1983,16 @@ class PhysicalDevice {
     );
   }
 
+  async musicProvider() {
+    return parseActiveMusicProviderStatus(
+      await deviceActivityRequest(
+        this.options,
+        this.token,
+        MUSIC_PROVIDER_STATUS_PATH,
+      ),
+    );
+  }
+
   async deletePrompt(id) {
     if (!Number.isSafeInteger(id) || id <= 0) throw new SafePhysicalError("invalid cleanup row");
     await deviceActivityRequest(
@@ -1708,6 +2046,17 @@ class PhysicalDevice {
         ["shell", "dumpsys", "media_session"],
         { timeoutMs: 15_000, maxStdoutBytes: MAX_CHILD_STDOUT_BYTES },
         "the media-session observation failed",
+      ),
+    );
+  }
+
+  async networkTransport() {
+    return parseActiveNetworkTransport(
+      await runAdb(
+        this.options,
+        ["shell", "dumpsys", "connectivity"],
+        { timeoutMs: 15_000, maxStdoutBytes: MAX_CHILD_STDOUT_BYTES },
+        "the active-network observation failed",
       ),
     );
   }
@@ -1875,7 +2224,16 @@ function taggedBoolean(value, expected) {
   );
 }
 
-export function evaluatePhysicalReadiness(snapshot, identity, expected) {
+export function evaluatePhysicalReadiness(
+  snapshot,
+  identity,
+  expected,
+  {
+    provider = null,
+    expectedTransport = null,
+    observedTransport = null,
+  } = {},
+) {
   const tickle = Array.isArray(snapshot?.featureFlags?.flags)
     ? snapshot.featureFlags.flags.find(
         (flag) => flag?.key === FEATURE_FLAGS.cloud.tickle,
@@ -1889,12 +2247,25 @@ export function evaluatePhysicalReadiness(snapshot, identity, expected) {
     "azure_speech",
     "openstreetmap",
   ].every((key) => snapshot?.settings?.[key] === undefined);
+  const musicProviderSelected =
+    provider === null || snapshot?.spotify?.active_provider === provider;
+  const musicProviderReady =
+    provider === null ||
+    (musicProviderSelected &&
+      (provider !== "spotify" ||
+        (snapshot?.spotify?.enabled === true &&
+          snapshot?.spotify?.experimental_acknowledged === true &&
+          snapshot?.spotify?.state === "ready" &&
+          snapshot?.spotify?.engine_ready === true)));
+  const networkTransportReady =
+    expectedTransport === null || observedTransport === expectedTransport;
   const checks = {
     exactServerIdentity:
       identity?.packageName === SERVER_PACKAGE &&
+      expected?.packageName === SERVER_PACKAGE &&
       identity?.versionName === expected.versionName &&
       identity?.versionCode === expected.versionCode &&
-      identity?.apkSha256 === expected.apkSha256 &&
+      identity?.signerIdentity === expected.signerIdentity &&
       snapshot?.health?.status === "ok" &&
       snapshot?.health?.version === expected.versionName,
     authenticatedCenter: snapshot?.settings?.server?.admin_token_auth === true,
@@ -1904,11 +2275,8 @@ export function evaluatePhysicalReadiness(snapshot, identity, expected) {
     cosmosAuthority,
     weatherReady: cosmosAuthority,
     weatherLocalityReady: cosmosAuthority,
-    spotifyReady:
-      snapshot?.spotify?.enabled === true &&
-      snapshot?.spotify?.experimental_acknowledged === true &&
-      snapshot?.spotify?.state === "ready" &&
-      snapshot?.spotify?.engine_ready === true,
+    musicProviderReady,
+    networkTransportReady,
     tickleReady:
       taggedBoolean(tickle?.desired_value, true) &&
       taggedBoolean(tickle?.assignment_value, true) &&
@@ -2366,6 +2734,31 @@ export function findAttributedMusic(rows, baselineMusicId, rankOne) {
   return { candidates, matching };
 }
 
+async function collectMusicStateSamples(
+  device,
+  offsets,
+  timing,
+) {
+  const started = timing.now();
+  const samples = [];
+  for (const offsetMs of offsets) {
+    const remainingMs = started + offsetMs - timing.now();
+    if (remainingMs > 0) await timing.sleep(remainingMs);
+    const [media, transport, provider] = await Promise.all([
+      device.media(),
+      device.networkTransport(),
+      device.musicProvider(),
+    ]);
+    samples.push({
+      elapsedMs: timing.now() - started,
+      media,
+      transport,
+      provider,
+    });
+  }
+  return samples;
+}
+
 async function observeMusicCase(
   device,
   item,
@@ -2374,51 +2767,95 @@ async function observeMusicCase(
   rankOne,
   ownedPromptIds,
   ownedMusicIds,
+  provider,
+  expectedTransport,
+  timing,
 ) {
-  const started = Date.now();
+  const started = timing.now();
+  const requiresSpotifyActivity = provider === "spotify";
+  const observedProviders = new Set();
+  let providerObservedThroughout = true;
+  const recordProvider = (observedProvider) => {
+    if (MUSIC_PROVIDERS.has(observedProvider)) {
+      observedProviders.add(observedProvider);
+    } else {
+      providerObservedThroughout = false;
+    }
+    if (observedProvider !== provider) providerObservedThroughout = false;
+    return observedProvider === provider;
+  };
   let injected = false;
-  let firstMedia = null;
   let routeObserved = false;
-  let providerMatch = false;
+  let providerRankOneMatch = requiresSpotifyActivity ? false : null;
+  const providerCatalogObserved = rankOne !== null;
   let playingObserved = false;
-  let processObserved = false;
-  let advanced = false;
+  let transportObserved = false;
+  let playbackSamples = null;
+  let playbackProof = null;
   let pauseRouteObserved = false;
+  let pauseProof = null;
   let cleanupIdle = false;
   try {
     await device.inject(item.id);
     injected = true;
     const observation = await pollUntil(PHYSICAL_TIMEOUT_MS.music, async () => {
-      const [promptRows, musicRows, media, pids] = await Promise.all([
+      const [promptRows, media, transport, observedProvider, musicRows] = await Promise.all([
         device.promptRows(),
-        device.musicRows(),
         device.media(),
-        device.pids(MUSIC_PACKAGE),
+        device.networkTransport(),
+        device.musicProvider(),
+        requiresSpotifyActivity ? device.musicRows() : Promise.resolve([]),
       ]);
+      const currentProviderMatches = recordProvider(observedProvider);
       const promptEvidence = evaluatePromptEvidence(item.id, promptRows, baselinePromptId);
       promptEvidence.ownedIds.forEach((id) => ownedPromptIds.add(id));
-      const attributedMusic = findAttributedMusic(musicRows, baselineMusicId, rankOne);
-      if (attributedMusic.matching !== undefined) {
-        ownedMusicIds.add(attributedMusic.matching.id);
+      if (requiresSpotifyActivity) {
+        const attributedMusic = findAttributedMusic(
+          musicRows,
+          baselineMusicId,
+          rankOne,
+        );
+        if (attributedMusic.matching !== undefined) {
+          ownedMusicIds.add(attributedMusic.matching.id);
+          providerRankOneMatch = true;
+          playingObserved ||=
+            attributedMusic.matching.status === "playing" &&
+            currentProviderMatches &&
+            media.playing === true &&
+            media.playingSessionCount === 1 &&
+            media.playbackClockRunning === true;
+        }
+      } else {
+        playingObserved ||=
+          currentProviderMatches &&
+          media.playing === true &&
+          media.playingSessionCount === 1 &&
+          media.playbackClockRunning === true;
       }
       routeObserved ||= promptEvidence.routeObserved;
-      providerMatch ||= attributedMusic.matching !== undefined;
-      playingObserved ||=
-        media.playing && attributedMusic.matching?.status === "playing";
-      processObserved ||= pids.length > 0;
-      if (playingObserved && firstMedia === null) firstMedia = media;
+      transportObserved ||= transport === expectedTransport;
       return {
-        done: routeObserved && providerMatch && playingObserved && processObserved,
+        done:
+          routeObserved &&
+          providerCatalogObserved &&
+          (providerRankOneMatch !== false) &&
+          playingObserved &&
+          transportObserved &&
+          currentProviderMatches,
         value: null,
       };
     });
-    if (observation.done && firstMedia !== null) {
-      const stabilityStarted = Date.now();
-      await sleep(MUSIC_STABILITY_WINDOW_MS);
-      advanced = mediaPositionAdvanced(
-        firstMedia,
-        await device.media(),
-        Date.now() - stabilityStarted,
+    if (observation.done) {
+      playbackSamples = await collectMusicStateSamples(
+        device,
+        MUSIC_PLAYBACK_SAMPLE_OFFSETS_MS,
+        timing,
+      );
+      playbackSamples.forEach((sample) => recordProvider(sample.provider));
+      playbackProof = evaluateContinuousMusicPlayback(
+        playbackSamples,
+        expectedTransport,
+        provider,
       );
     }
   } finally {
@@ -2427,11 +2864,14 @@ async function observeMusicCase(
         const pauseHookBoundary = await device.beginHookEvidence();
         await device.inject(PAUSE_CLEANUP_CASE.id);
         const pauseObservation = await pollUntil(PHYSICAL_TIMEOUT_MS.cleanup, async () => {
-          const [promptRows, media, hookEvents] = await Promise.all([
+          const [promptRows, media, transport, observedProvider, hookEvents] = await Promise.all([
             device.promptRows(),
             device.media(),
+            device.networkTransport(),
+            device.musicProvider(),
             device.hookEvidenceSince(pauseHookBoundary),
           ]);
+          const currentProviderMatches = recordProvider(observedProvider);
           const evidence = evaluatePromptEvidence(
             PAUSE_CLEANUP_CASE.id,
             promptRows,
@@ -2445,11 +2885,35 @@ async function observeMusicCase(
           pauseRouteObserved ||=
             evidence.routeObserved || actionEvidence.exactActionObserved;
           return {
-            done: pauseRouteObserved && !media.playing,
-            value: !media.playing,
+            done:
+              pauseRouteObserved &&
+              media.playing === false &&
+              media.paused === true &&
+              media.playingSessionCount === 0 &&
+              media.pausedSessionCount === 1 &&
+              transport === expectedTransport &&
+              currentProviderMatches &&
+              (playbackProof?.sessionStable !== true ||
+                media.pausedSessionIdentity ===
+                  playbackSamples?.[0]?.media?.playingSessionIdentity),
+            value: media,
           };
         });
-        cleanupIdle = pauseObservation.value === true;
+        if (pauseObservation.done) {
+          const pauseSamples = await collectMusicStateSamples(
+            device,
+            MUSIC_PAUSE_SAMPLE_OFFSETS_MS,
+            timing,
+          );
+          pauseSamples.forEach((sample) => recordProvider(sample.provider));
+          pauseProof = evaluateStableMusicPause(
+            pauseSamples,
+            expectedTransport,
+            provider,
+            playbackSamples?.[0]?.media?.playingSessionIdentity ?? null,
+          );
+        }
+        cleanupIdle = pauseProof?.pass === true;
       } catch {
         cleanupIdle = false;
       }
@@ -2462,23 +2926,34 @@ async function observeMusicCase(
   }
   const pass =
     routeObserved &&
-    providerMatch &&
+    providerCatalogObserved &&
+    providerRankOneMatch !== false &&
+    providerObservedThroughout &&
     playingObserved &&
-    processObserved &&
-    advanced &&
+    playbackProof?.pass === true &&
     pauseRouteObserved &&
+    pauseProof?.pass === true &&
     cleanupIdle;
+  const observedProvider =
+    observedProviders.size === 1 ? [...observedProviders][0] : null;
   return {
     id: item.id,
     status: pass ? "pass" : "fail",
+    provider: observedProvider,
+    expected_transport: expectedTransport,
+    playback_path: MUSIC_PLAYBACK_PATH[observedProvider] ?? null,
     route_observed: routeObserved,
-    physical_effect_observed: playingObserved && processObserved && advanced,
-    provider_rank_one_match: providerMatch,
+    physical_effect_observed: playbackProof?.pass === true,
+    provider_catalog_observed: providerCatalogObserved,
+    provider_rank_one_match: providerRankOneMatch,
+    playback_sample_count: playbackProof?.sampleCount ?? 0,
+    network_transport_observed: playbackProof?.transportStable === true,
     pause_route_observed: pauseRouteObserved,
+    pause_stable_observed: pauseProof?.pass === true,
     cleanup_restored_idle: cleanupIdle,
     terminal_observed: null,
     locality_observed: null,
-    duration_bucket: durationBucket(Date.now() - started),
+    duration_bucket: durationBucket(timing.now() - started),
   };
 }
 
@@ -2521,12 +2996,20 @@ export async function executePhysicalSuite(options, dependencies = {}) {
   } catch {
     throw new SafePhysicalError("a valid explicit ADB serial is required");
   }
-  if (
-    options?.expectedVersionName !== RELEASE_IDENTITY.versionName ||
-    options?.expectedVersionCode !== RELEASE_IDENTITY.versionCode ||
-    options?.expectedApkSha256 !== RELEASE_IDENTITY.apkSha256
-  ) {
-    throw new SafePhysicalError("refusing an unpinned candidate identity");
+  if (!exactDeviceTargetMatches(options.serial, options?.expectedPinSerial)) {
+    throw new SafePhysicalError("refusing a non-confirmed physical device");
+  }
+  try {
+    validateReleaseMetadataPath(
+      options?.releaseManifestPath,
+      "--release-manifest",
+    );
+    validateReleaseMetadataPath(
+      options?.releaseReceiptsPath,
+      "--release-receipts",
+    );
+  } catch {
+    throw new SafePhysicalError("refusing unverified release metadata");
   }
   const selectedCaseId = options.caseId ?? null;
   if (selectedCaseId === null || !PUBLIC_CASE_IDS.has(selectedCaseId)) {
@@ -2537,20 +3020,30 @@ export async function executePhysicalSuite(options, dependencies = {}) {
     (item) => item.kind !== "loading_message",
   );
   const needsMusicState = selectedCases.some((item) => item.kind === "music");
+  if (
+    needsMusicState &&
+    (!MUSIC_PROVIDERS.has(options.provider) ||
+      !NETWORK_TRANSPORTS.has(options.expectedTransport))
+  ) {
+    throw new SafePhysicalError("ranked music requires a supported provider and network transport");
+  }
+  const needsSpotifyActivity = needsMusicState && options.provider === "spotify";
   const needsTickleState = selectedCases.some(
     (item) =>
       item.kind === "tickle_positive" || item.kind === "tickle_negative",
   );
+  const expected =
+    dependencies[PRELOADED_EXPECTED_IDENTITY] ??
+    (await loadExpectedServerIdentity(options, dependencies));
   const token = dependencies.token ?? (await readAdminToken());
   const device = dependencies.device ?? new PhysicalDevice(options, token);
   const identity =
     dependencies.identity ?? (await collectInstalledServerIdentity(options));
   const snapshot =
     dependencies.snapshot ?? (await collectReadiness(options, token));
-  const readiness = evaluatePhysicalReadiness(snapshot, identity, {
-    versionName: options.expectedVersionName,
-    versionCode: options.expectedVersionCode,
-    apkSha256: options.expectedApkSha256,
+  let readiness = evaluatePhysicalReadiness(snapshot, identity, expected, {
+    provider: needsMusicState ? options.provider : null,
+    expectedTransport: needsMusicState ? options.expectedTransport : null,
   });
   if (!readiness.globalPass) {
     return {
@@ -2575,6 +3068,14 @@ export async function executePhysicalSuite(options, dependencies = {}) {
       ],
     };
   }
+  if (needsMusicState) {
+    const observedTransport = await device.networkTransport();
+    readiness = evaluatePhysicalReadiness(snapshot, identity, expected, {
+      provider: options.provider,
+      expectedTransport: options.expectedTransport,
+      observedTransport,
+    });
+  }
   const grpcPort = parseLoopbackGrpcPort(snapshot.settings.server.grpc_bind_addr);
   if (grpcPort === null) {
     throw new SafePhysicalError("the loopback AIBus listener was unavailable");
@@ -2585,14 +3086,12 @@ export async function executePhysicalSuite(options, dependencies = {}) {
     baselineMusicRows,
     initialTicklePids,
     initialTickleForeground,
-    initialMusicPids,
     initialMedia,
   ] = await Promise.all([
     needsPromptActivity ? device.promptRows() : Promise.resolve([]),
-    needsMusicState ? device.musicRows() : Promise.resolve([]),
+    needsSpotifyActivity ? device.musicRows() : Promise.resolve([]),
     needsTickleState ? device.pids(TICKLE_PACKAGE) : Promise.resolve([]),
     needsTickleState ? device.tickleForeground() : Promise.resolve(false),
-    needsMusicState ? device.pids(MUSIC_PACKAGE) : Promise.resolve([]),
     needsMusicState
       ? device.media()
       : Promise.resolve({ sessionCount: 0, playing: false }),
@@ -2605,7 +3104,6 @@ export async function executePhysicalSuite(options, dependencies = {}) {
     !initialTickleForeground;
   const musicWasIdle =
     needsMusicState &&
-    initialMusicPids.length === 0 &&
     initialMedia.sessionCount === 0;
   const ownedPromptIds = new Set();
   const ownedMusicIds = new Set();
@@ -2616,6 +3114,16 @@ export async function executePhysicalSuite(options, dependencies = {}) {
   let musicTouched = false;
   let pendingFailure = null;
   let cleanupRows = { promptsRemoved: true, musicRemoved: true };
+  const timing = dependencies.timing ?? {
+    now: () => Date.now(),
+    sleep,
+  };
+  if (
+    needsMusicState &&
+    (typeof timing.now !== "function" || typeof timing.sleep !== "function")
+  ) {
+    throw new SafePhysicalError("the music observation clock was invalid");
+  }
   const mediaVolumeSnapshot = needsPromptActivity
     ? await captureStableMediaVolumeSnapshot(device)
     : null;
@@ -2660,8 +3168,10 @@ export async function executePhysicalSuite(options, dependencies = {}) {
           );
         }
       } else if (item.kind === "music") {
-        if (!readiness.checks.spotifyReady) {
-          cases.push(blockedCase(item, "spotify_provider_unavailable"));
+        if (!readiness.checks.musicProviderReady) {
+          cases.push(blockedCase(item, "music_provider_unavailable"));
+        } else if (!readiness.checks.networkTransportReady) {
+          cases.push(blockedCase(item, "network_transport_unavailable"));
         } else if (!musicWasIdle) {
           cases.push(blockedCase(item, "preexisting_music_state"));
         } else {
@@ -2679,6 +3189,9 @@ export async function executePhysicalSuite(options, dependencies = {}) {
                 rankOne,
                 ownedPromptIds,
                 ownedMusicIds,
+                options.provider,
+                options.expectedTransport,
+                timing,
               ),
             );
           }
@@ -2733,7 +3246,7 @@ export async function executePhysicalSuite(options, dependencies = {}) {
         }
       } catch {}
     }
-    if (needsMusicState && rankOne !== null) {
+    if (needsSpotifyActivity && rankOne !== null) {
       try {
         const attributed = findAttributedMusic(
           await device.musicRows(),
@@ -2767,7 +3280,7 @@ export async function executePhysicalSuite(options, dependencies = {}) {
     prompt_activity_removed: needsPromptActivity
       ? cleanupRows.promptsRemoved
       : null,
-    music_activity_removed: needsMusicState ? cleanupRows.musicRemoved : null,
+    music_activity_removed: needsSpotifyActivity ? cleanupRows.musicRemoved : null,
     music_not_playing:
       needsMusicState && musicWasIdle
         ? finalMusicPids.length === 0 && !finalMedia.playing
@@ -2936,8 +3449,15 @@ export async function main(
     if (options.mode === "self-check") {
       report = selfCheckReport();
     } else {
+      const expectedIdentity = await loadExpectedServerIdentity(
+        options,
+        dependencies,
+      );
       await (dependencies.verifyDevice ?? verifyExplicitDevice)(options);
-      report = await executePhysicalSuite(options, dependencies);
+      report = await executePhysicalSuite(options, {
+        ...dependencies,
+        [PRELOADED_EXPECTED_IDENTITY]: expectedIdentity,
+      });
     }
     stdout.write(options.json ? `${JSON.stringify(report, null, 2)}\n` : `${renderHumanReport(report)}\n`);
     if (report.status === "pass") return 0;

@@ -66,7 +66,8 @@ function runPinContributorChecks(runner, environment) {
   runContributorCheckUnit(runner, 'bash', [path.join(ROOT, 'pin', 'gradlew'), '--no-daemon',
     '--project-cache-dir', gradleProjectCache,
     ':contracts:stock-aibus:testDebugUnitTest',
-    ':contracts:penumbra-ipc:testDebugUnitTest'], {
+    ':contracts:penumbra-ipc:testDebugUnitTest',
+    ':hook:payload:testDebugUnitTest'], {
     cwd: path.join(ROOT, 'pin'),
     environment: Object.freeze({ ...rootEnvironment, GRADLE_USER_HOME: environment.GRADLE_USER_HOME }),
   });
@@ -113,12 +114,22 @@ function policyTestMode({ contributor = false } = {}) {
   return Object.freeze({ contributor });
 }
 
+function policyTestInventory(acceptance, { contributor = false } = {}) {
+  const scripts = fs.readdirSync(acceptance).sort();
+  if (contributor) return scripts;
+  const pinAcceptance = path.join(acceptance, 'pin');
+  return [
+    ...scripts,
+    ...fs.readdirSync(pinAcceptance).sort().map((entry) => path.join('pin', entry)),
+  ];
+}
+
 function policyTests(environment = testProcessEnvironment(), options = {}) {
   const { contributor } = policyTestMode(options);
   timedStage('platform version fixtures', testVersionParser);
   info('[implemented] Docker Compose minimum-version parser fixtures passed.');
   const acceptance = path.join(ROOT, 'platform', 'deploy', 'acceptance');
-  let scripts = fs.readdirSync(acceptance).sort();
+  let scripts = policyTestInventory(acceptance, { contributor });
   const pinPath = path.join(ROOT, 'pin');
   const hasPinSource = fs.existsSync(pinPath);
   if (hasPinSource && !fs.lstatSync(pinPath).isDirectory()) {
@@ -181,6 +192,7 @@ function repositoryCheck({ source = false } = {}) {
 module.exports = {
   policyTestArguments,
   policyTestConcurrency,
+  policyTestInventory,
   policyTestMode,
   policyTestPlan,
   policyTests,

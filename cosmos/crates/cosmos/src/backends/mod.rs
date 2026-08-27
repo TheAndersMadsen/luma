@@ -35,10 +35,11 @@
 //!
 //! cosmos's `WeatherResponse` is an **AccuWeather** payload (a numeric
 //! `weather_icon`, 1–44). Pirate Weather is **Dark Sky**-shaped and reports a
-//! *string* icon from a 10-value set. Every other field maps exactly; the icon
-//! is translated through a documented table in [`weather`], and that translation
-//! is an approximation between two genuinely different vendors — flagged there
-//! rather than passed off as identical.
+//! *string* icon from an 11-value default set, with a documented rare `none` and
+//! future `hail`. Every other field maps exactly; the icon is translated through
+//! a documented table in [`weather`], and that translation is an approximation
+//! between two genuinely different vendors — flagged there rather than passed
+//! off as identical.
 
 pub mod azure_speech;
 pub mod food;

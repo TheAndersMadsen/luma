@@ -10,6 +10,8 @@ const MAX_PIN_REQUEST_BODY_BYTES = 1024 * 1024;
 const MAX_PIN_RESPONSE_BODY_BYTES = 8 * 1024 * 1024;
 const MAX_PIN_QUERY_BYTES = 2 * 1024;
 const PIN_REMOTE_PREFIX = "/api/pin-remote";
+const MUSIC_EGRESS_PATH = "/api/music/egress";
+const MUSIC_EGRESS_TIMEOUT_MS = 35_000;
 const STATUS_STATES = new Set([
   "disabled",
   "not_configured",
@@ -443,12 +445,30 @@ function safeUpstreamFailure(status) {
   return { status: 502, code: "pin_spotify_unavailable" };
 }
 
-async function withUpstream(fetchImpl, upstreamOrigin, path, options, timeoutMs, consume) {
+async function withUpstream(
+  fetchImpl,
+  upstreamOrigin,
+  path,
+  options,
+  timeoutMs,
+  consume,
+  cancellationSignal,
+) {
   const controller = new AbortController();
-  let timedOut = false;
-  const timeout = setTimeout(() => {
-    timedOut = true;
+  let abortCause;
+  const abort = (cause) => {
+    if (controller.signal.aborted) return;
+    abortCause = cause;
     controller.abort();
+  };
+  const cancelForClient = () => abort("client_disconnected");
+  if (cancellationSignal?.aborted) {
+    cancelForClient();
+  } else {
+    cancellationSignal?.addEventListener("abort", cancelForClient, { once: true });
+  }
+  const timeout = setTimeout(() => {
+    abort("upstream_timeout");
   }, timeoutMs);
   timeout.unref?.();
 
@@ -460,12 +480,28 @@ async function withUpstream(fetchImpl, upstreamOrigin, path, options, timeoutMs,
     });
     return await consume(response);
   } catch (error) {
-    if (timedOut) throw new UpstreamError("upstream_timeout");
+    if (abortCause) throw new UpstreamError(abortCause);
     if (error instanceof UpstreamError) throw error;
     throw new UpstreamError("upstream_unavailable");
   } finally {
     clearTimeout(timeout);
+    cancellationSignal?.removeEventListener("abort", cancelForClient);
   }
+}
+
+function watchClientDisconnect(request, response) {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  request.once("aborted", abort);
+  response.once("close", abort);
+  if (request.aborted || response.destroyed) abort();
+  return {
+    signal: controller.signal,
+    dispose() {
+      request.off("aborted", abort);
+      response.off("close", abort);
+    },
+  };
 }
 
 async function checkUpstream(fetchImpl, upstreamOrigin, timeoutMs) {
@@ -514,7 +550,7 @@ function pinRemotePolicy(method, pathname, rawQuery, contentType, bodyBytes) {
     ["/api/device", new Set(["GET"])],
     ["/api/settings", new Set(["GET", "PUT"])],
     ["/api/feature-flags", new Set(["GET", "PUT"])],
-    ["/api/music/egress", new Set(["POST"])],
+    [MUSIC_EGRESS_PATH, new Set(["POST"])],
   ]);
   const namespaces = new Map([
     ["/api/memories", new Set(["GET", "DELETE"])],
@@ -558,6 +594,8 @@ async function proxyPinRemote(
 ) {
   const headers = { Accept: "*/*" };
   if (body.length > 0) headers["Content-Type"] = request.headers["content-type"];
+  const clientDisconnect =
+    target === MUSIC_EGRESS_PATH ? watchClientDisconnect(request, response) : undefined;
 
   let result;
   try {
@@ -576,13 +614,17 @@ async function proxyPinRemote(
         contentType: upstream.headers.get("content-type"),
         body: await readBoundedResponseBody(upstream, MAX_PIN_RESPONSE_BODY_BYTES),
       }),
+      clientDisconnect?.signal,
     );
   } catch (error) {
     const code = error instanceof UpstreamError ? error.code : "upstream_unavailable";
+    if (code === "client_disconnected") return;
     sendJson(response, code === "upstream_timeout" ? 504 : 502, {
       error: code === "upstream_timeout" ? code : "pin_unavailable",
     });
     return;
+  } finally {
+    clientDisconnect?.dispose();
   }
 
   // The bridge may include relay/dial detail in a 5xx body. Keep that on the
@@ -670,7 +712,13 @@ async function proxy(
   }
 }
 
-export function createAdapterServer(config, { fetchImpl = globalThis.fetch } = {}) {
+export function createAdapterServer(
+  config,
+  {
+    fetchImpl = globalThis.fetch,
+    musicEgressTimeoutMs = MUSIC_EGRESS_TIMEOUT_MS,
+  } = {},
+) {
   if (typeof fetchImpl !== "function") throw new TypeError("fetch implementation is required");
 
   const server = createServer(
@@ -753,7 +801,9 @@ export function createAdapterServer(config, { fetchImpl = globalThis.fetch } = {
             body,
             fetchImpl,
             config.upstreamOrigin,
-            config.timeoutMs,
+            pinTarget === MUSIC_EGRESS_PATH
+              ? musicEgressTimeoutMs
+              : config.timeoutMs,
           );
           return;
         }

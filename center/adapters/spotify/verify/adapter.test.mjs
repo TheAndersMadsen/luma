@@ -29,16 +29,23 @@ function jsonResponse(payload, init = {}) {
   });
 }
 
-async function runningAdapter(t, fetchImpl) {
+async function runningAdapter(
+  t,
+  fetchImpl,
+  { timeoutMs = 300, musicEgressTimeoutMs } = {},
+) {
   const server = createAdapterServer(
     {
       bindAddress: "127.0.0.1",
       upstreamOrigin: UPSTREAM_ORIGIN,
       port: 0,
-      timeoutMs: 300,
+      timeoutMs,
       expectedTokenDigest: digestToken(TOKEN),
     },
-    { fetchImpl },
+    {
+      fetchImpl,
+      ...(musicEgressTimeoutMs === undefined ? {} : { musicEgressTimeoutMs }),
+    },
   );
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
@@ -156,6 +163,171 @@ test("the authenticated Pin route forwards only the exact music egress write", a
     assert.equal(rejected.status, 404, target);
   }
   assert.equal(calls.length, 1);
+});
+
+test("music egress keeps its scaled deadline through delayed headers and the complete body", async (t) => {
+  const baseTimeoutMs = 100;
+  const musicEgressTimeoutMs = 700;
+  const upstreamBody = JSON.stringify({ status: 200, body_base64: "e30=" });
+  const base = await runningAdapter(
+    t,
+    async (_url, init) => {
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(resolve, 180);
+        init.signal.addEventListener(
+          "abort",
+          () => {
+            clearTimeout(timer);
+            reject(new Error("private delayed-header detail"));
+          },
+          { once: true },
+        );
+      });
+      const split = Math.floor(upstreamBody.length / 2);
+      const stream = new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(upstreamBody.slice(0, split)));
+          const timer = setTimeout(() => {
+            controller.enqueue(new TextEncoder().encode(upstreamBody.slice(split)));
+            controller.close();
+          }, 180);
+          init.signal.addEventListener(
+            "abort",
+            () => {
+              clearTimeout(timer);
+              controller.error(new Error("private delayed-body detail"));
+            },
+            { once: true },
+          );
+        },
+      });
+      return new Response(stream, {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    },
+    { timeoutMs: baseTimeoutMs, musicEgressTimeoutMs },
+  );
+
+  const response = await fetch(
+    `${base}/api/pin-remote/api/music/egress`,
+    authorized({
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    }),
+  );
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), upstreamBody);
+});
+
+test("music egress safely maps a body that exceeds its scaled deadline to 504", async (t) => {
+  const baseTimeoutMs = 100;
+  const musicEgressTimeoutMs = 500;
+  let abortElapsedMs;
+  const startedAt = performance.now();
+  const base = await runningAdapter(
+    t,
+    async (_url, init) => {
+      const stream = new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('{"status":'));
+          init.signal.addEventListener(
+            "abort",
+            () => {
+              abortElapsedMs = performance.now() - startedAt;
+              controller.error(new Error("private stalled-body detail"));
+            },
+            { once: true },
+          );
+        },
+      });
+      return new Response(stream, {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    },
+    { timeoutMs: baseTimeoutMs, musicEgressTimeoutMs },
+  );
+
+  const response = await fetch(
+    `${base}/api/pin-remote/api/music/egress`,
+    authorized({
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    }),
+  );
+  assert.equal(response.status, 504);
+  const responseBody = await response.text();
+  assert.deepEqual(JSON.parse(responseBody), { error: "upstream_timeout" });
+  assert.doesNotMatch(responseBody, /private|stalled|body/);
+  assert.ok(
+    abortElapsedMs >= musicEgressTimeoutMs - 75,
+    `music egress aborted too early after ${abortElapsedMs}ms`,
+  );
+});
+
+test("music egress aborts its upstream work when the client disconnects", async (t) => {
+  let markUpstreamStarted;
+  const upstreamStarted = new Promise((resolve) => {
+    markUpstreamStarted = resolve;
+  });
+  let markUpstreamAborted;
+  const upstreamAborted = new Promise((resolve) => {
+    markUpstreamAborted = resolve;
+  });
+  const base = await runningAdapter(
+    t,
+    async (_url, init) => {
+      markUpstreamStarted();
+      return await new Promise((_resolve, reject) => {
+        const cleanup = setTimeout(
+          () => reject(new Error("test cleanup: upstream was left running")),
+          1_000,
+        );
+        init.signal.addEventListener(
+          "abort",
+          () => {
+            clearTimeout(cleanup);
+            markUpstreamAborted();
+            reject(new Error("private client-disconnect detail"));
+          },
+          { once: true },
+        );
+      });
+    },
+    { musicEgressTimeoutMs: 5_000 },
+  );
+
+  const client = new AbortController();
+  const clientRequest = fetch(
+    `${base}/api/pin-remote/api/music/egress`,
+    authorized({
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+      signal: client.signal,
+    }),
+  );
+  await upstreamStarted;
+  client.abort();
+  await assert.rejects(clientRequest, { name: "AbortError" });
+
+  let deadline;
+  try {
+    await Promise.race([
+      upstreamAborted,
+      new Promise((_resolve, reject) => {
+        deadline = setTimeout(
+          () => reject(new Error("upstream continued after client disconnect")),
+          500,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(deadline);
+  }
 });
 
 test("search forwards only a query it rebuilt itself", async (t) => {

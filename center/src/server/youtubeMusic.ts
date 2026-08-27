@@ -119,26 +119,98 @@ function requestUrl(input: string | URL | Request): URL {
   return new URL(input instanceof Request ? input.url : input.toString());
 }
 
-export function adBlockingYoutubeFetchUsing(fetchImpl: typeof fetch): typeof fetch {
+function waitForSignal<T>(operation: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return operation;
+  signal.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    operation.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
+function composedFetchSignal(
+  input: string | URL | Request,
+  init: RequestInit | undefined,
+  operationSignal: AbortSignal | undefined,
+): AbortSignal | undefined {
+  const signals = [operationSignal, init?.signal, input instanceof Request ? input.signal : undefined]
+    .filter((signal): signal is AbortSignal => signal !== undefined && signal !== null)
+    .filter((signal, index, all) => all.indexOf(signal) === index);
+  if (!signals.length) return undefined;
+  return signals.length === 1 ? signals[0] : AbortSignal.any(signals);
+}
+
+async function readYoutubeResponseBytes(
+  response: Response,
+  signal?: AbortSignal,
+): Promise<Uint8Array> {
+  if (!response.body) return new Uint8Array();
+  signal?.throwIfAborted();
+  const reader = response.body.getReader();
+  const onAbort = () => {
+    void reader.cancel(signal?.reason).catch(() => undefined);
+  };
+  signal?.addEventListener("abort", onAbort, { once: true });
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > MAX_PRUNABLE_RESPONSE_BYTES) {
+        await reader.cancel().catch(() => undefined);
+        throw new YoutubeMusicError("YouTube Music returned an oversized response.", 502);
+      }
+      chunks.push(value);
+    }
+    signal?.throwIfAborted();
+  } finally {
+    signal?.removeEventListener("abort", onAbort);
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
+export function adBlockingYoutubeFetchUsing(
+  fetchImpl: typeof fetch,
+  operationSignal?: AbortSignal,
+): typeof fetch {
   return async (input, init) => {
     const url = requestUrl(input);
     if (!isAllowedYoutubeRequestUrl(url)) {
       throw new YoutubeMusicError("YouTube Music blocked an advertising or unexpected request.", 502);
     }
-    const response = await fetchImpl(input, { ...init, redirect: "error" });
+    const signal = composedFetchSignal(input, init, operationSignal);
+    signal?.throwIfAborted();
+    const response = await fetchImpl(input, { ...init, redirect: "error", signal });
     const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
     const declared = Number(response.headers.get("content-length") ?? "0");
-    if (
-      !contentType.includes("json") ||
-      (Number.isFinite(declared) && declared > MAX_PRUNABLE_RESPONSE_BYTES)
-    ) {
+    if (!contentType.includes("json")) {
       return response;
     }
-
-    const bytes = await response.arrayBuffer();
-    if (bytes.byteLength > MAX_PRUNABLE_RESPONSE_BYTES) {
+    if (Number.isFinite(declared) && declared > MAX_PRUNABLE_RESPONSE_BYTES) {
+      await response.body?.cancel().catch(() => undefined);
       throw new YoutubeMusicError("YouTube Music returned an oversized response.", 502);
     }
+
+    const bytes = await readYoutubeResponseBytes(response, signal);
     let decoded: unknown;
     try {
       decoded = JSON.parse(new TextDecoder().decode(bytes));
@@ -379,6 +451,17 @@ async function connectedYoutubeCatalogClient(subject: string): Promise<YoutubeCl
   }
 }
 
+async function requireYoutubeConnection(
+  subject: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  signal?.throwIfAborted();
+  const record = await waitForSignal(readMusicAccountRecord(subject), signal);
+  if (!record.youtube_music?.credentials) {
+    throw new YoutubeMusicError("Connect YouTube Music in Center.", 401);
+  }
+}
+
 function prefixedId(videoId: string): string {
   return `youtube_music:${videoId}`;
 }
@@ -575,20 +658,38 @@ export async function queryYoutubeMusic(
   return collectionTracks(result.songs?.contents, limit);
 }
 
-export async function youtubeMusicStreamUrl(subject: string, trackId: string): Promise<string> {
+export async function youtubeMusicStreamUrl(
+  subject: string,
+  trackId: string,
+  signal?: AbortSignal,
+): Promise<string> {
   try {
-    await authenticatedYoutubeClient(subject);
+    // Playback uses only public player requests through the Pin. The durable
+    // encrypted connection is the account authority here; starting the cached
+    // OAuth client would introduce unrelated fetches that cannot safely retain
+    // a request-scoped signal after this playback request completes.
+    await requireYoutubeConnection(subject, signal);
+    signal?.throwIfAborted();
     const videoId = youtubeVideoId(trackId);
-    const [client, proofToken] = await Promise.all([
-      Innertube.create({
-        fetch: deviceAdBlockingYoutubeFetch,
-        retrieve_player: true,
-        generate_session_locally: true,
-        enable_session_cache: false,
-      }),
-      youtubeContentProofToken(videoId, deviceAdBlockingYoutubeFetch),
-    ]);
-    return await resolveYoutubeAudioStream(client, videoId, proofToken);
+    const siblingController = new AbortController();
+    const playbackSignal = signal
+      ? AbortSignal.any([signal, siblingController.signal])
+      : siblingController.signal;
+    try {
+      const playbackFetch = adBlockingYoutubeFetchUsing(deviceMusicProviderFetch, playbackSignal);
+      const [client, proofToken] = await Promise.all([
+        waitForSignal(Innertube.create({
+          fetch: playbackFetch,
+          retrieve_player: true,
+          generate_session_locally: true,
+          enable_session_cache: false,
+        }), playbackSignal),
+        youtubeContentProofToken(videoId, deviceAdBlockingYoutubeFetch, playbackSignal),
+      ]);
+      return await resolveYoutubeAudioStream(client, videoId, proofToken, playbackSignal);
+    } finally {
+      siblingController.abort();
+    }
   } catch (error) {
     if (error instanceof YoutubeMusicError || error instanceof MusicSessionStoreError) throw error;
     throw new YoutubeMusicError("YouTube Music audio could not be resolved.");
@@ -599,12 +700,14 @@ export async function resolveYoutubeAudioStream(
   client: YoutubeClient,
   videoId: string,
   proofToken: string,
+  signal?: AbortSignal,
 ): Promise<string> {
+  signal?.throwIfAborted();
   configureYoutubePlayerEvaluator();
-  const info = await client.getBasicInfo(videoId, {
+  const info = await waitForSignal(client.getBasicInfo(videoId, {
     client: "YTMUSIC",
     po_token: proofToken,
-  });
+  }), signal);
   const format = info.chooseFormat({
     type: "audio",
     quality: "best",
@@ -620,7 +723,7 @@ export async function resolveYoutubeAudioStream(
   ) {
     throw new YoutubeMusicError("YouTube Music did not return an ad-free audio stream.");
   }
-  const url = await format.decipher(client.session.player);
+  const url = await waitForSignal(format.decipher(client.session.player), signal);
   if (!isAllowedGoogleVideoStream(url)) {
     throw new YoutubeMusicError("YouTube Music returned an unexpected stream origin.");
   }

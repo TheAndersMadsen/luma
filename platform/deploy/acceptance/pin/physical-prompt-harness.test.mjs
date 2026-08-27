@@ -1,14 +1,25 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 
 import {
-  RELEASE_IDENTITY,
+  INSTALLED_SERVER_SIGNER_IDENTITY,
+  deriveServerIdentityFromReleaseManifest,
   encodeProtoBytes,
   encodeProtoString,
   encodeProtoVarint,
 } from "./agentic-release-smoke-lib.mjs";
+import {
+  PIN_COMPATIBILITY_CERT_SHA256,
+  PIN_RELEASE_ARTIFACT_ROLES,
+  PIN_RELEASE_PACKAGE_BY_ROLE,
+  canonicalPinReleaseManifestJson,
+  createPinReleaseManifest,
+} from "../../pin/release.mjs";
 
 import {
+  MUSIC_PAUSE_SAMPLE_OFFSETS_MS,
+  MUSIC_PLAYBACK_SAMPLE_OFFSETS_MS,
   PHYSICAL_TIMEOUT_MS,
   PHYSICAL_PROMPT_CASES,
   buildTranscriptInjectionCommand,
@@ -18,16 +29,20 @@ import {
   evaluateLoadingCueEvidence,
   evaluateLocalWeatherTraceEvidence,
   evaluateNativeActionHookEvidence,
+  evaluateContinuousMusicPlayback,
   evaluatePhysicalReadiness,
   evaluateProgressModelEvidence,
   evaluatePromptEvidence,
   evaluateSimpleHookEvidence,
+  evaluateStableMusicPause,
   executePhysicalSuite,
   findAttributedMusic,
   loadingCueWithinDeadline,
   main,
   mediaPositionAdvanced,
+  parseActiveMusicProviderStatus,
   parseMediaSessionSummary,
+  parseActiveNetworkTransport,
   parsePenumbraHookEvidence,
   parsePhysicalCliArgs,
   parsePidSet,
@@ -41,7 +56,51 @@ test("physical observer outlives every in-device agentic deadline", () => {
   assert.ok(PHYSICAL_TIMEOUT_MS.music > hookedClientDeadlineMs);
 });
 
-const EXPECTED = RELEASE_IDENTITY;
+function verifiedManifestFixture({
+  version = "2026-08-27.1",
+  versionCode = 202_608_271,
+} = {}) {
+  const signerSha256 = PIN_COMPATIBILITY_CERT_SHA256;
+  const receipts = {
+    schemaVersion: 1,
+    artifacts: PIN_RELEASE_ARTIFACT_ROLES.map((role) => {
+      const bytes = Buffer.from(`verified-${role}-${version}-${versionCode}`);
+      return {
+        role,
+        path: `${role}.apk`,
+        name: `${role}.apk`,
+        package: PIN_RELEASE_PACKAGE_BY_ROLE[role],
+        versionName: version,
+        versionCode,
+        size: bytes.length,
+        sha256: createHash("sha256").update(bytes).digest("hex"),
+        signerSha256,
+      };
+    }),
+  };
+  const manifest = createPinReleaseManifest({ version, receipts });
+  return {
+    manifest,
+    manifestSource: canonicalPinReleaseManifestJson(manifest),
+    receipts,
+    receiptsSource: `${JSON.stringify(receipts)}\n`,
+  };
+}
+
+const VERIFIED_RELEASE = verifiedManifestFixture();
+const RELEASE_MANIFEST_PATH = "/private/tmp/verified-pin-release.json";
+const RELEASE_RECEIPTS_PATH = "/private/tmp/verified-pin-receipts.json";
+const RELEASE_MANIFEST_SOURCE = VERIFIED_RELEASE.manifestSource;
+const RELEASE_RECEIPTS_SOURCE = VERIFIED_RELEASE.receiptsSource;
+const EXPECTED = deriveServerIdentityFromReleaseManifest(
+  RELEASE_MANIFEST_SOURCE,
+  RELEASE_RECEIPTS_SOURCE,
+);
+function stockSessionIdentity(id = "opaque-stock-id", suffix = "androidx.media3.session.id.") {
+  return createHash("sha256")
+    .update(`${id} humane.experience.music/${suffix}`, "utf8")
+    .digest("hex");
+}
 const GUARDED_MEDIA_VOLUME_STATE = Object.freeze({
   index: 7,
   minimum: 0,
@@ -57,24 +116,36 @@ const GUARDED_MEDIA_VOLUME_DEVICE = Object.freeze({
   },
 });
 
-function liveArgs(extra = [], caseId = "current_time") {
-  return [
+function liveArgs(
+  extra = [],
+  caseId = "current_time",
+  { provider = "youtube_music", expectedTransport = "wifi" } = {},
+) {
+  const args = [
     "--run",
     "--serial",
     "device-123._:usb",
-    "--expect-version-name",
-    EXPECTED.versionName,
-    "--expect-version-code",
-    String(EXPECTED.versionCode),
-    "--expect-apk-sha256",
-    EXPECTED.apkSha256,
+    "--expected-pin-serial",
+    "device-123._:usb",
+    "--release-manifest",
+    RELEASE_MANIFEST_PATH,
+    "--release-receipts",
+    RELEASE_RECEIPTS_PATH,
     "--case",
     caseId,
-    ...extra,
   ];
+  if (caseId === "ranked_music") {
+    args.push(
+      "--provider",
+      provider,
+      "--expected-transport",
+      expectedTransport,
+    );
+  }
+  return [...args, ...extra];
 }
 
-function readinessFixture() {
+function readinessFixture(provider = "spotify") {
   return {
     health: { status: "ok", version: EXPECTED.versionName },
     settings: {
@@ -85,6 +156,7 @@ function readinessFixture() {
       },
     },
     spotify: {
+      active_provider: provider,
       enabled: true,
       experimental_acknowledged: true,
       state: "ready",
@@ -111,7 +183,7 @@ function identityFixture() {
     packageName: "com.penumbraos.server",
     versionName: EXPECTED.versionName,
     versionCode: EXPECTED.versionCode,
-    apkSha256: EXPECTED.apkSha256,
+    signerIdentity: INSTALLED_SERVER_SIGNER_IDENTITY,
   };
 }
 
@@ -123,16 +195,31 @@ function memoryWriter() {
   };
 }
 
-test("the live CLI requires an explicit serial and exact release identity", () => {
+test("the live CLI requires a verified manifest and closed music provider/transport", () => {
   assert.deepEqual(parsePhysicalCliArgs([...liveArgs(), "--json"]), {
     mode: "run",
     serial: "device-123._:usb",
+    expectedPinSerial: "device-123._:usb",
     adbPath: "adb",
-    expectedVersionName: EXPECTED.versionName,
-    expectedVersionCode: EXPECTED.versionCode,
-    expectedApkSha256: EXPECTED.apkSha256,
+    releaseManifestPath: RELEASE_MANIFEST_PATH,
+    releaseReceiptsPath: RELEASE_RECEIPTS_PATH,
     caseId: "current_time",
+    provider: null,
+    expectedTransport: null,
     json: true,
+    help: false,
+  });
+  assert.deepEqual(parsePhysicalCliArgs(liveArgs([], "ranked_music")), {
+    mode: "run",
+    serial: "device-123._:usb",
+    expectedPinSerial: "device-123._:usb",
+    adbPath: "adb",
+    releaseManifestPath: RELEASE_MANIFEST_PATH,
+    releaseReceiptsPath: RELEASE_RECEIPTS_PATH,
+    caseId: "ranked_music",
+    provider: "youtube_music",
+    expectedTransport: "wifi",
+    json: false,
     help: false,
   });
   assert.throws(() => parsePhysicalCliArgs(["--run"]), /explicit ADB serial/);
@@ -142,13 +229,20 @@ test("the live CLI requires an explicit serial and exact release identity", () =
         "--run",
         "--serial",
         "device-123._:usb",
-        "--expect-version-name",
-        EXPECTED.versionName,
-        "--expect-version-code",
-        String(EXPECTED.versionCode),
-        "--expect-apk-sha256",
-        EXPECTED.apkSha256,
       ]),
+    /expected AI Pin serial/,
+  );
+  const mismatchedSerial = liveArgs();
+  mismatchedSerial[mismatchedSerial.indexOf("--expected-pin-serial") + 1] =
+    "other-device";
+  assert.throws(
+    () => parsePhysicalCliArgs(mismatchedSerial),
+    /operator-confirmed AI Pin serial/,
+  );
+  const missingCase = liveArgs();
+  missingCase.splice(missingCase.indexOf("--case"), 2);
+  assert.throws(
+    () => parsePhysicalCliArgs(missingCase),
     /requires exactly one --case/,
   );
   assert.throws(
@@ -156,17 +250,16 @@ test("the live CLI requires an explicit serial and exact release identity", () =
     /provided once/,
   );
   assert.throws(
+    () => parsePhysicalCliArgs([...liveArgs(), "--serial", "other-device"]),
+    /--serial may be provided once/,
+  );
+  assert.throws(
     () => parsePhysicalCliArgs([...liveArgs(), "--prompt", "call someone"]),
     /unknown command option/,
   );
   assert.throws(
-    () =>
-      parsePhysicalCliArgs(
-        liveArgs().map((value) =>
-          value === EXPECTED.versionName ? "2026-07-17.36-local" : value,
-        ),
-      ),
-    /pinned Server version name/,
+    () => parsePhysicalCliArgs([...liveArgs(), "--expect-version-name", EXPECTED.versionName]),
+    /unknown command option/,
   );
   assert.throws(
     () => parsePhysicalCliArgs(["--self-check", "--serial", "device"]),
@@ -184,6 +277,39 @@ test("the live CLI requires an explicit serial and exact release identity", () =
         ),
       ),
     /fixed public physical case/,
+  );
+
+  const withoutPair = (args, flag) => {
+    const copy = [...args];
+    const index = copy.indexOf(flag);
+    copy.splice(index, 2);
+    return copy;
+  };
+  for (const missing of ["--release-manifest", "--release-receipts"]) {
+    assert.throws(
+      () => parsePhysicalCliArgs(withoutPair(liveArgs(), missing)),
+      new RegExp(missing),
+    );
+  }
+  assert.throws(
+    () => parsePhysicalCliArgs(withoutPair(liveArgs([], "ranked_music"), "--provider")),
+    /ranked_music requires --provider/,
+  );
+  assert.throws(
+    () => parsePhysicalCliArgs(withoutPair(liveArgs([], "ranked_music"), "--expected-transport")),
+    /ranked_music requires --expected-transport/,
+  );
+  assert.throws(
+    () => parsePhysicalCliArgs(liveArgs([], "ranked_music", { provider: "apple_music" })),
+    /provider must be spotify, youtube_music, or tidal/,
+  );
+  assert.throws(
+    () => parsePhysicalCliArgs(liveArgs([], "ranked_music", { expectedTransport: "vps" })),
+    /expected transport must be wifi or cellular/,
+  );
+  assert.throws(
+    () => parsePhysicalCliArgs([...liveArgs(), "--provider", "spotify"]),
+    /music options require --case ranked_music/,
   );
 });
 
@@ -837,7 +963,59 @@ test("prompt attribution ignores old and unrelated rows and the Tickle control r
   );
 });
 
-test("media-session evidence honors the Android 12 playback clock when base position is static", () => {
+test("active-network parsing returns only the validated default Wi-Fi/cellular token", () => {
+  const privateSsid = "PRIVATE_HOME_NETWORK_52aa";
+  const wifi = parseActiveNetworkTransport(`
+    Active default network: 101
+    NetworkAgentInfo{network{100} ni{MOBILE CONNECTED} nc{[ Transports: CELLULAR Capabilities: INTERNET&VALIDATED ]}}
+    NetworkAgentInfo{network{101} ni{WIFI CONNECTED extra: ${privateSsid}} nc{[ Transports: WIFI Capabilities: INTERNET&VALIDATED ]}}
+  `);
+  assert.equal(wifi, "wifi");
+  assert.equal(parseActiveNetworkTransport(`
+    Active default network: 100
+    NetworkAgentInfo{network{100} ni{MOBILE CONNECTED} nc{[ Transports: CELLULAR Capabilities: INTERNET&VALIDATED ]}}
+    NetworkAgentInfo{network{101} ni{WIFI CONNECTED} nc{[ Transports: WIFI Capabilities: INTERNET&VALIDATED ]}}
+  `), "cellular");
+  assert.equal(parseActiveNetworkTransport(`
+    Active default network: 101
+    NetworkAgentInfo{network{101} ni{WIFI CONNECTED} nc{[ Transports: WIFI Capabilities: INTERNET ]}}
+  `), null);
+  assert.equal(parseActiveNetworkTransport("Active default network: null"), null);
+  assert.doesNotMatch(JSON.stringify({ wifi }), /PRIVATE_HOME_NETWORK/);
+});
+
+test("active music provider parsing returns only the closed provider token", () => {
+  assert.equal(
+    parseActiveMusicProviderStatus({
+      active_provider: "youtube_music",
+      account_name: "PRIVATE_ACCOUNT_52aa",
+    }),
+    "youtube_music",
+  );
+  assert.equal(
+    parseActiveMusicProviderStatus({ active_provider: "spotify" }),
+    "spotify",
+  );
+  assert.equal(
+    parseActiveMusicProviderStatus({ active_provider: "tidal" }),
+    "tidal",
+  );
+  for (const malformed of [
+    null,
+    [],
+    {},
+    { active_provider: "apple_music" },
+    { active_provider: "youtube_music\nPRIVATE" },
+    { active_provider: 1 },
+  ]) {
+    assert.throws(
+      () => parseActiveMusicProviderStatus(malformed),
+      /music-provider status response was malformed/,
+    );
+  }
+});
+
+test("media-session evidence scopes exact stock PLAYING/PAUSED state without metadata", () => {
   const privateTitle = "PRIVATE_TRACK_TITLE_52aa";
   const first = parseMediaSessionSummary(`
     Global priority session is com.android.server.telecom/HeadsetMediaButton (userId=0)
@@ -866,13 +1044,20 @@ test("media-session evidence honors the Android 12 playback clock when base posi
   `);
   assert.deepEqual(first, {
     sessionCount: 1,
+    playingSessionCount: 1,
+    pausedSessionCount: 0,
     playing: true,
+    paused: false,
     playbackClockRunning: true,
+    playingSessionIdentity: stockSessionIdentity(),
+    pausedSessionIdentity: null,
     maximumPlayingPosition: 100,
+    maximumPausedPosition: null,
   });
   assert.equal(mediaPositionAdvanced(first, second), false);
   assert.equal(mediaPositionAdvanced(first, second, 1_499), false);
-  assert.equal(mediaPositionAdvanced(first, second, 1_500), true);
+  assert.equal(mediaPositionAdvanced(first, second, 1_500), false);
+  assert.equal(mediaPositionAdvanced(first, second, 16_000), false);
   assert.doesNotMatch(JSON.stringify({ first, second }), /PRIVATE_TRACK/);
 });
 
@@ -890,9 +1075,15 @@ test("media-session evidence ignores unrelated playback and historical stock men
   `);
   assert.deepEqual(paused, {
     sessionCount: 1,
+    playingSessionCount: 0,
+    pausedSessionCount: 1,
     playing: false,
+    paused: true,
     playbackClockRunning: false,
+    playingSessionIdentity: null,
+    pausedSessionIdentity: stockSessionIdentity(),
     maximumPlayingPosition: null,
+    maximumPausedPosition: 400,
   });
 
   const historicalOnly = parseMediaSessionSummary(`
@@ -903,9 +1094,15 @@ test("media-session evidence ignores unrelated playback and historical stock men
   `);
   assert.deepEqual(historicalOnly, {
     sessionCount: 0,
+    playingSessionCount: 0,
+    pausedSessionCount: 0,
     playing: false,
+    paused: false,
     playbackClockRunning: false,
+    playingSessionIdentity: null,
+    pausedSessionIdentity: null,
     maximumPlayingPosition: null,
+    maximumPausedPosition: null,
   });
 });
 
@@ -924,9 +1121,15 @@ test("media-session evidence selects the greatest position across stock playing 
   `);
   assert.deepEqual(summary, {
     sessionCount: 3,
+    playingSessionCount: 2,
+    pausedSessionCount: 1,
     playing: true,
+    paused: false,
     playbackClockRunning: true,
+    playingSessionIdentity: null,
+    pausedSessionIdentity: stockSessionIdentity("paused-stock-id", "paused"),
     maximumPlayingPosition: 1700,
+    maximumPausedPosition: 2400,
   });
 });
 
@@ -944,6 +1147,198 @@ test("a stopped playback clock cannot substitute for advancing stock position", 
   assert.equal(first.playing, true);
   assert.equal(first.playbackClockRunning, false);
   assert.equal(mediaPositionAdvanced(first, second, 1_500), false);
+});
+
+function playingMedia(
+  position = 100,
+  { speed = 1, count = 1, sessionIdentity = stockSessionIdentity() } = {},
+) {
+  return {
+    sessionCount: count,
+    playingSessionCount: count,
+    pausedSessionCount: 0,
+    playing: count > 0,
+    paused: false,
+    playbackClockRunning: count > 0 && speed > 0,
+    playingSessionIdentity: count === 1 ? sessionIdentity : null,
+    pausedSessionIdentity: null,
+    maximumPlayingPosition: count > 0 ? position : null,
+    maximumPausedPosition: null,
+  };
+}
+
+function pausedMedia(
+  position = 64_100,
+  { count = 1, sessionIdentity = stockSessionIdentity() } = {},
+) {
+  return {
+    sessionCount: count,
+    playingSessionCount: 0,
+    pausedSessionCount: count,
+    playing: false,
+    paused: count > 0,
+    playbackClockRunning: false,
+    playingSessionIdentity: null,
+    pausedSessionIdentity: count === 1 ? sessionIdentity : null,
+    maximumPlayingPosition: null,
+    maximumPausedPosition: count > 0 ? position : null,
+  };
+}
+
+test("continuous stock playback requires repeated advancement over more than sixty seconds", () => {
+  assert.deepEqual(MUSIC_PLAYBACK_SAMPLE_OFFSETS_MS, [0, 16_000, 32_000, 48_000, 64_000]);
+  const advancing = MUSIC_PLAYBACK_SAMPLE_OFFSETS_MS.map((elapsedMs) => ({
+    elapsedMs,
+    transport: "wifi",
+    provider: "youtube_music",
+    media: playingMedia(100 + elapsedMs),
+  }));
+  assert.deepEqual(
+    evaluateContinuousMusicPlayback(advancing, "wifi", "youtube_music"),
+    {
+    pass: true,
+    sampleCount: 5,
+    durationOverSixtySeconds: true,
+    continuouslyPlaying: true,
+    repeatedlyAdvanced: true,
+    transportStable: true,
+      sessionStable: true,
+      providerStable: true,
+    },
+  );
+
+  const staticAndroidClock = advancing.map((sample) => ({
+    ...sample,
+    media: playingMedia(100),
+  }));
+  assert.equal(
+    evaluateContinuousMusicPlayback(
+      staticAndroidClock,
+      "wifi",
+      "youtube_music",
+    ).pass,
+    false,
+  );
+
+  const replacedSession = structuredClone(advancing);
+  replacedSession[3].media.playingSessionIdentity = stockSessionIdentity("replacement");
+  assert.equal(
+    evaluateContinuousMusicPlayback(replacedSession, "wifi", "youtube_music").pass,
+    false,
+  );
+
+  const wrongProvider = structuredClone(advancing);
+  wrongProvider[2].provider = "tidal";
+  assert.equal(
+    evaluateContinuousMusicPlayback(wrongProvider, "wifi", "youtube_music").pass,
+    false,
+  );
+
+  const onlySixtySeconds = advancing.map((sample, index) => ({
+    ...sample,
+    elapsedMs: [0, 15_000, 30_000, 45_000, 60_000][index],
+  }));
+  assert.equal(
+    evaluateContinuousMusicPlayback(onlySixtySeconds, "wifi", "youtube_music").pass,
+    false,
+  );
+
+  const interrupted = structuredClone(advancing);
+  interrupted[2].media = playingMedia(0, { speed: 0 });
+  assert.equal(
+    evaluateContinuousMusicPlayback(interrupted, "wifi", "youtube_music").pass,
+    false,
+  );
+
+  const duplicatePlaying = structuredClone(advancing);
+  duplicatePlaying[3].media = playingMedia(48_100, { count: 2 });
+  assert.equal(
+    evaluateContinuousMusicPlayback(duplicatePlaying, "wifi", "youtube_music").pass,
+    false,
+  );
+
+  const transportChanged = structuredClone(advancing);
+  transportChanged[4].transport = "cellular";
+  assert.equal(
+    evaluateContinuousMusicPlayback(transportChanged, "wifi", "youtube_music").pass,
+    false,
+  );
+});
+
+test("PauseMusic acceptance requires one stable PAUSED stock session", () => {
+  assert.deepEqual(MUSIC_PAUSE_SAMPLE_OFFSETS_MS, [0, 2_500, 5_000]);
+  const stable = MUSIC_PAUSE_SAMPLE_OFFSETS_MS.map((elapsedMs) => ({
+    elapsedMs,
+    transport: "cellular",
+    provider: "tidal",
+    media: pausedMedia(),
+  }));
+  assert.deepEqual(
+    evaluateStableMusicPause(
+      stable,
+      "cellular",
+      "tidal",
+      stockSessionIdentity(),
+    ),
+    {
+    pass: true,
+    sampleCount: 3,
+    stablePaused: true,
+    positionStable: true,
+    transportStable: true,
+      sessionStable: true,
+      providerStable: true,
+    },
+  );
+
+  const vanished = structuredClone(stable);
+  vanished[1].media = pausedMedia(0, { count: 0 });
+  assert.equal(
+    evaluateStableMusicPause(vanished, "cellular", "tidal", stockSessionIdentity()).pass,
+    false,
+  );
+
+  const resumed = structuredClone(stable);
+  resumed[2].media = playingMedia(69_100);
+  assert.equal(
+    evaluateStableMusicPause(resumed, "cellular", "tidal", stockSessionIdentity()).pass,
+    false,
+  );
+
+  const drifting = structuredClone(stable);
+  drifting[2].media = pausedMedia(64_101);
+  assert.equal(
+    evaluateStableMusicPause(drifting, "cellular", "tidal", stockSessionIdentity()).pass,
+    false,
+  );
+
+  const replacementSession = stable.map((sample) => ({
+    ...sample,
+    media: pausedMedia(64_100, {
+      sessionIdentity: stockSessionIdentity("replacement"),
+    }),
+  }));
+  assert.equal(
+    evaluateStableMusicPause(
+      replacementSession,
+      "cellular",
+      "tidal",
+      stockSessionIdentity(),
+    ).pass,
+    false,
+  );
+
+  const providerChanged = structuredClone(stable);
+  providerChanged[1].provider = "youtube_music";
+  assert.equal(
+    evaluateStableMusicPause(
+      providerChanged,
+      "cellular",
+      "tidal",
+      stockSessionIdentity(),
+    ).pass,
+    false,
+  );
 });
 
 test("music attribution requires the exact normalized provider title, artist set, and album", () => {
@@ -1148,7 +1543,7 @@ test("loading cue latency is gated at the five-second end-to-end boundary", () =
   assert.equal(loadingCueWithinDeadline(-1), false);
 });
 
-test("readiness requires exact release, authenticated Center, and live provider gates", () => {
+test("readiness requires exact manifest identity and provider-aware music gates", () => {
   const ready = evaluatePhysicalReadiness(readinessFixture(), identityFixture(), EXPECTED);
   assert.equal(ready.pass, true);
   assert.ok(Object.values(ready.checks).every(Boolean));
@@ -1159,9 +1554,79 @@ test("readiness requires exact release, authenticated Center, and live provider 
   stale.settings.openstreetmap = {};
   const notReady = evaluatePhysicalReadiness(stale, identityFixture(), EXPECTED);
   assert.equal(notReady.pass, false);
-  assert.equal(notReady.checks.spotifyReady, false);
   assert.equal(notReady.checks.tickleReady, false);
   assert.equal(notReady.checks.weatherLocalityReady, false);
+
+  const youtube = readinessFixture("youtube_music");
+  youtube.spotify.enabled = false;
+  youtube.spotify.experimental_acknowledged = false;
+  youtube.spotify.state = "not_configured";
+  youtube.spotify.engine_ready = false;
+  const youtubeReady = evaluatePhysicalReadiness(
+    youtube,
+    identityFixture(),
+    EXPECTED,
+    {
+      provider: "youtube_music",
+      expectedTransport: "wifi",
+      observedTransport: "wifi",
+    },
+  );
+  assert.equal(youtubeReady.checks.musicProviderReady, true);
+  assert.equal(youtubeReady.checks.networkTransportReady, true);
+
+  const tidalReady = evaluatePhysicalReadiness(
+    readinessFixture("tidal"),
+    identityFixture(),
+    EXPECTED,
+    {
+      provider: "tidal",
+      expectedTransport: "cellular",
+      observedTransport: "cellular",
+    },
+  );
+  assert.equal(tidalReady.checks.musicProviderReady, true);
+  assert.equal(tidalReady.checks.networkTransportReady, true);
+
+  const wrongProvider = evaluatePhysicalReadiness(
+    youtube,
+    identityFixture(),
+    EXPECTED,
+    {
+      provider: "tidal",
+      expectedTransport: "wifi",
+      observedTransport: "wifi",
+    },
+  );
+  assert.equal(wrongProvider.checks.musicProviderReady, false);
+
+  const wrongTransport = evaluatePhysicalReadiness(
+    youtube,
+    identityFixture(),
+    EXPECTED,
+    {
+      provider: "youtube_music",
+      expectedTransport: "cellular",
+      observedTransport: "wifi",
+    },
+  );
+  assert.equal(wrongTransport.checks.networkTransportReady, false);
+
+  const spotifyNotReady = readinessFixture("spotify");
+  spotifyNotReady.spotify.engine_ready = false;
+  assert.equal(
+    evaluatePhysicalReadiness(
+      spotifyNotReady,
+      identityFixture(),
+      EXPECTED,
+      {
+        provider: "spotify",
+        expectedTransport: "wifi",
+        observedTransport: "wifi",
+      },
+    ).checks.musicProviderReady,
+    false,
+  );
 });
 
 test("self-check emits a bounded report without fixture response content", async () => {
@@ -1191,6 +1656,8 @@ test("a selected loading case touches no unrelated activity or package surface",
       stdout: stdout.stream,
       stderr: stderr.stream,
       dependencies: {
+        releaseManifestSource: RELEASE_MANIFEST_SOURCE,
+        releaseReceiptsSource: RELEASE_RECEIPTS_SOURCE,
         token: "fixture-token-value-that-is-private",
         verifyDevice: async () => {},
         identity: identityFixture(),
@@ -1274,6 +1741,8 @@ test("each local-weather prompt requires its correlated four-milestone proof", a
       stdout: stdout.stream,
       stderr: stderr.stream,
       dependencies: {
+        releaseManifestSource: RELEASE_MANIFEST_SOURCE,
+        releaseReceiptsSource: RELEASE_RECEIPTS_SOURCE,
         token: "fixture-token-value-that-is-private",
         verifyDevice: async () => {},
         identity: identityFixture(),
@@ -1366,6 +1835,8 @@ test("the remote capital-weather case requires exact trace and sanitized termina
       stdout: stdout.stream,
       stderr: stderr.stream,
       dependencies: {
+        releaseManifestSource: RELEASE_MANIFEST_SOURCE,
+        releaseReceiptsSource: RELEASE_RECEIPTS_SOURCE,
         token: "fixture-token-value-that-is-private",
         verifyDevice: async () => {},
         identity: identityFixture(),
@@ -1441,6 +1912,8 @@ test("a selected simple case uses exact hook evidence without requiring a Center
     stdout: stdout.stream,
     stderr: stderr.stream,
     dependencies: {
+      releaseManifestSource: RELEASE_MANIFEST_SOURCE,
+      releaseReceiptsSource: RELEASE_RECEIPTS_SOURCE,
       token: "fixture-token-value-that-is-private",
       verifyDevice: async () => {},
       identity: identityFixture(),
@@ -1494,6 +1967,8 @@ test("a Tickle positive requires its exact hook action and stable stock launcher
     stdout: stdout.stream,
     stderr: stderr.stream,
     dependencies: {
+      releaseManifestSource: RELEASE_MANIFEST_SOURCE,
+      releaseReceiptsSource: RELEASE_RECEIPTS_SOURCE,
       token: "fixture-token-value-that-is-private",
       verifyDevice: async () => {},
       identity: identityFixture(),
@@ -1556,6 +2031,8 @@ test("the Tickle negative fails on an exact hook escape even without launcher st
     stdout: stdout.stream,
     stderr: stderr.stream,
     dependencies: {
+      releaseManifestSource: RELEASE_MANIFEST_SOURCE,
+      releaseReceiptsSource: RELEASE_RECEIPTS_SOURCE,
       token: "fixture-token-value-that-is-private",
       verifyDevice: async () => {},
       identity: identityFixture(),
@@ -1596,129 +2073,308 @@ test("the Tickle negative fails on an exact hook escape even without launcher st
   assert.equal(stderr.text(), "");
 });
 
-test("ranked music cleanup accepts exact Hook PauseMusic without a Center row", async () => {
+test("ranked YouTube Music proves long stock playback and stable PauseMusic without a Spotify row", async () => {
+  const result = await runRankedProviderMainFixture({
+    provider: "youtube_music",
+    expectedTransport: "wifi",
+    expectsSpotifyActivity: false,
+  });
+
+  const { report } = result;
+  assert.equal(result.exitCode, 0);
+  assert.equal(report.status, "pass");
+  assert.deepEqual(result.injected, ["ranked_music", "music_pause_cleanup"]);
+  assert.deepEqual(result.deletedPrompts, [81]);
+  assert.equal(result.cleanupOrder.at(-1), "volume_restore");
+  assert.equal(report.cleanup.media_volume_snapshot_captured, true);
+  assert.equal(report.cleanup.media_volume_restored, true);
+  assert.equal(report.cleanup.music_activity_removed, null);
+  assert.equal(report.cases[0].route_observed, true);
+  assert.equal(report.cases[0].physical_effect_observed, true);
+  assert.equal(report.cases[0].provider_catalog_observed, true);
+  assert.equal(report.cases[0].provider_rank_one_match, null);
+  assert.equal(report.cases[0].provider, "youtube_music");
+  assert.equal(report.cases[0].expected_transport, "wifi");
+  assert.equal(report.cases[0].playback_path, "pin_loopback");
+  assert.equal(report.cases[0].playback_sample_count, 5);
+  assert.equal(report.cases[0].pause_route_observed, true);
+  assert.equal(report.cases[0].pause_stable_observed, true);
+  assert.equal(report.cases[0].cleanup_restored_idle, true);
+  assert.equal(result.musicRowsObserved, 0);
+  assert.equal(result.stderr, "");
+  assert.doesNotMatch(
+    result.stdout,
+    /fixture-token|PRIVATE_|device-123|verified-pin-release|https?:\/\//,
+  );
+});
+
+async function runRankedProviderMainFixture({
+  provider,
+  expectedTransport,
+  expectsSpotifyActivity,
+  observedProviderForCall = () => provider,
+}) {
   const stdout = memoryWriter();
   const stderr = memoryWriter();
   const marker = "physical-simple-123e4567-e89b-42d3-a456-426614174000";
   const rankedCase = PHYSICAL_PROMPT_CASES.find((item) => item.id === "ranked_music");
   const rankOne = {
-    title: "Public Fixture Track",
-    artists: ["Public Fixture Artist"],
-    album: "Public Fixture Album",
+    title: "PRIVATE_PROVIDER_TRACK",
+    artists: ["PRIVATE_PROVIDER_ARTIST"],
+    album: "PRIVATE_PROVIDER_ALBUM",
   };
   const routeRow = {
-    id: 61,
+    id: 81,
     prompt: rankedCase.prompt,
     response: "Action: PlayMusic",
   };
   const musicRow = {
-    id: 71,
+    id: 91,
+    track_id: "private-provider-track-id",
     ...rankOne,
     status: "playing",
   };
-  const injected = [];
+  const baselineMusicRow = {
+    id: 80,
+    track_id: "older-unrelated-track-id",
+    title: "OLDER_UNRELATED_TRACK",
+    artists: ["OLDER_UNRELATED_ARTIST"],
+    album: "OLDER_UNRELATED_ALBUM",
+    status: "completed",
+  };
   const deletedPrompts = [];
   const deletedMusic = [];
+  const injected = [];
   const cleanupOrder = [];
-  let musicStarted = false;
-  let playing = false;
-  let stopped = false;
+  let phase = "idle";
+  let fakeNow = 0;
+  let musicRowsObserved = 0;
+  let musicProviderCalls = 0;
+
+  const exitCode = await main(
+    liveArgs(["--json"], "ranked_music", { provider, expectedTransport }),
+    {
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      dependencies: {
+        releaseManifestSource: RELEASE_MANIFEST_SOURCE,
+        releaseReceiptsSource: RELEASE_RECEIPTS_SOURCE,
+        token: "fixture-token-value-that-is-private",
+        verifyDevice: async () => {},
+        identity: identityFixture(),
+        snapshot: readinessFixture(provider),
+        rankOne,
+        timing: {
+          now: () => fakeNow,
+          sleep: async (durationMs) => { fakeNow += durationMs; },
+        },
+        device: {
+          ...GUARDED_MEDIA_VOLUME_DEVICE,
+          async setMediaVolumeIndex(index) {
+            assert.equal(index, GUARDED_MEDIA_VOLUME_STATE.index);
+            cleanupOrder.push("volume_restore");
+          },
+          async promptRows() {
+            return phase === "idle" ? [] : [routeRow];
+          },
+          async musicRows() {
+            musicRowsObserved += 1;
+            if (!expectsSpotifyActivity) {
+              throw new Error("non-Spotify playback must not read Spotify activity");
+            }
+            return phase === "idle"
+              ? [baselineMusicRow]
+              : [baselineMusicRow, musicRow];
+          },
+          async pids() {
+            return phase === "idle" || phase === "stopped" ? [] : [321];
+          },
+          async media() {
+            if (phase === "playing") return playingMedia(100 + fakeNow);
+            if (phase === "paused") return pausedMedia(64_100);
+            return {
+              sessionCount: 0,
+              playingSessionCount: 0,
+              pausedSessionCount: 0,
+              playing: false,
+              paused: false,
+              playbackClockRunning: false,
+              playingSessionIdentity: null,
+              pausedSessionIdentity: null,
+              maximumPlayingPosition: null,
+              maximumPausedPosition: null,
+            };
+          },
+          async networkTransport() {
+            return expectedTransport;
+          },
+          async musicProvider() {
+            musicProviderCalls += 1;
+            return observedProviderForCall(musicProviderCalls);
+          },
+          async inject(caseId) {
+            injected.push(caseId);
+            phase = caseId === "ranked_music" ? "playing" : "paused";
+          },
+          async beginHookEvidence() {
+            return marker;
+          },
+          async hookEvidenceSince(boundaryMarker) {
+            assert.equal(boundaryMarker, marker);
+            return phase === "paused" ? ["action:PauseMusic"] : [];
+          },
+          async forceStop() {
+            cleanupOrder.push("music_stop");
+            phase = "stopped";
+          },
+          async deletePrompt(id) {
+            cleanupOrder.push("prompt_cleanup");
+            deletedPrompts.push(id);
+          },
+          async deleteMusic(id) {
+            cleanupOrder.push("music_row_cleanup");
+            deletedMusic.push(id);
+          },
+        },
+      },
+    },
+  );
+
+  return {
+    exitCode,
+    report: JSON.parse(stdout.text()),
+    stdout: stdout.text(),
+    stderr: stderr.text(),
+    deletedPrompts,
+    deletedMusic,
+    injected,
+    cleanupOrder,
+    musicRowsObserved,
+    musicProviderCalls,
+  };
+}
+
+test("ranked Spotify requires its activity row and removes only the attributed row", async () => {
+  const result = await runRankedProviderMainFixture({
+    provider: "spotify",
+    expectedTransport: "wifi",
+    expectsSpotifyActivity: true,
+  });
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.report.status, "pass");
+  assert.equal(result.report.cases[0].provider, "spotify");
+  assert.equal(result.report.cases[0].playback_path, "native");
+  assert.equal(result.report.cases[0].provider_rank_one_match, true);
+  assert.equal(result.report.cleanup.music_activity_removed, true);
+  assert.deepEqual(result.deletedPrompts, [81]);
+  assert.deepEqual(result.deletedMusic, [91]);
+  assert.ok(result.musicRowsObserved >= 2);
+  assert.equal(result.stderr, "");
+});
+
+test("ranked TIDAL proves cellular Pin-loopback playback without Spotify activity", async () => {
+  const result = await runRankedProviderMainFixture({
+    provider: "tidal",
+    expectedTransport: "cellular",
+    expectsSpotifyActivity: false,
+  });
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.report.status, "pass");
+  assert.equal(result.report.cases[0].provider, "tidal");
+  assert.equal(result.report.cases[0].expected_transport, "cellular");
+  assert.equal(result.report.cases[0].playback_path, "pin_loopback");
+  assert.equal(result.report.cases[0].provider_rank_one_match, null);
+  assert.equal(result.report.cases[0].network_transport_observed, true);
+  assert.equal(result.report.cleanup.music_activity_removed, null);
+  assert.deepEqual(result.deletedPrompts, [81]);
+  assert.deepEqual(result.deletedMusic, []);
+  assert.equal(result.musicRowsObserved, 0);
+  assert.equal(result.stderr, "");
+});
+
+test("the CLI provider cannot manufacture attribution after a Pin-observed mismatch", async () => {
+  const result = await runRankedProviderMainFixture({
+    provider: "youtube_music",
+    expectedTransport: "wifi",
+    expectsSpotifyActivity: false,
+    observedProviderForCall(call) {
+      return call === 2 ? "spotify" : "youtube_music";
+    },
+  });
+
+  assert.equal(result.exitCode, 3);
+  assert.equal(result.report.status, "incomplete");
+  assert.equal(result.report.cases[0].status, "fail");
+  assert.equal(result.report.cases[0].provider, null);
+  assert.equal(result.report.cases[0].playback_path, null);
+  assert.equal(result.report.cases[0].physical_effect_observed, false);
+  assert.ok(result.musicProviderCalls >= 10);
+  assert.equal(result.stderr, "");
+});
+
+test("a pre-existing paused stock session blocks music without injection or force-stop", async () => {
+  const stdout = memoryWriter();
+  const stderr = memoryWriter();
+  let injected = 0;
+  let forceStopped = 0;
+  let volumeRestored = 0;
 
   const exitCode = await main(liveArgs(["--json"], "ranked_music"), {
     stdout: stdout.stream,
     stderr: stderr.stream,
     dependencies: {
+      releaseManifestSource: RELEASE_MANIFEST_SOURCE,
+      releaseReceiptsSource: RELEASE_RECEIPTS_SOURCE,
       token: "fixture-token-value-that-is-private",
       verifyDevice: async () => {},
       identity: identityFixture(),
-      snapshot: readinessFixture(),
-      rankOne,
+      snapshot: readinessFixture("youtube_music"),
       device: {
         ...GUARDED_MEDIA_VOLUME_DEVICE,
         async setMediaVolumeIndex(index) {
           assert.equal(index, GUARDED_MEDIA_VOLUME_STATE.index);
-          cleanupOrder.push("volume_restore");
+          volumeRestored += 1;
         },
         async promptRows() {
-          return musicStarted ? [routeRow] : [];
-        },
-        async musicRows() {
-          return musicStarted ? [musicRow] : [];
+          return [];
         },
         async pids() {
-          return musicStarted && !stopped ? [321] : [];
+          return [321];
         },
         async media() {
-          if (stopped || !musicStarted) {
-            return {
-              sessionCount: 0,
-              playing: false,
-              playbackClockRunning: false,
-              maximumPlayingPosition: null,
-            };
-          }
-          return {
-            sessionCount: 1,
-            playing,
-            playbackClockRunning: playing,
-            maximumPlayingPosition: playing ? 100 : null,
-          };
+          return pausedMedia(2_400);
         },
-        async inject(caseId) {
-          injected.push(caseId);
-          if (caseId === "ranked_music") {
-            musicStarted = true;
-            playing = true;
-          } else if (caseId === "music_pause_cleanup") {
-            playing = false;
-          }
+        async networkTransport() {
+          return "wifi";
         },
-        async beginHookEvidence() {
-          return marker;
-        },
-        async hookEvidenceSince(boundaryMarker) {
-          assert.equal(boundaryMarker, marker);
-          return injected.at(-1) === "music_pause_cleanup" ? ["action:PauseMusic"] : [];
+        async inject() {
+          injected += 1;
         },
         async forceStop() {
-          cleanupOrder.push("music_stop");
-          stopped = true;
-          playing = false;
+          forceStopped += 1;
         },
-        async deletePrompt(id) {
-          cleanupOrder.push("prompt_cleanup");
-          deletedPrompts.push(id);
+        async deletePrompt() {
+          assert.fail("no prompt row should be owned");
         },
-        async deleteMusic(id) {
-          cleanupOrder.push("music_row_cleanup");
-          deletedMusic.push(id);
+        async deleteMusic() {
+          assert.fail("no music row should be owned");
         },
       },
     },
   });
 
-  assert.equal(exitCode, 0);
+  assert.equal(exitCode, 3);
   const report = JSON.parse(stdout.text());
-  assert.equal(report.status, "pass");
-  assert.deepEqual(injected, ["ranked_music", "music_pause_cleanup"]);
-  assert.deepEqual(deletedPrompts, [61]);
-  assert.deepEqual(deletedMusic, [71]);
-  assert.equal(cleanupOrder.at(-1), "volume_restore");
-  assert.ok(cleanupOrder.indexOf("music_stop") < cleanupOrder.indexOf("volume_restore"));
-  assert.ok(cleanupOrder.indexOf("prompt_cleanup") < cleanupOrder.indexOf("volume_restore"));
-  assert.ok(cleanupOrder.indexOf("music_row_cleanup") < cleanupOrder.indexOf("volume_restore"));
-  assert.equal(report.cleanup.media_volume_snapshot_captured, true);
-  assert.equal(report.cleanup.media_volume_restored, true);
-  assert.equal(report.cases[0].route_observed, true);
-  assert.equal(report.cases[0].physical_effect_observed, true);
-  assert.equal(report.cases[0].provider_rank_one_match, true);
-  assert.equal(report.cases[0].pause_route_observed, true);
-  assert.equal(report.cases[0].cleanup_restored_idle, true);
+  assert.equal(report.status, "incomplete");
+  assert.equal(report.cases[0].status, "blocked");
+  assert.equal(report.cases[0].reason, "preexisting_music_state");
+  assert.equal(report.cleanup.music_not_playing, null);
+  assert.equal(injected, 0);
+  assert.equal(forceStopped, 0);
+  assert.equal(volumeRestored, 1);
   assert.equal(stderr.text(), "");
-  assert.doesNotMatch(
-    stdout.text(),
-    /fixture-token|Public Fixture|PRIVATE_/,
-  );
 });
 
 test("an identity mismatch blocks before any physical device method is invoked", async () => {
@@ -1729,9 +2385,11 @@ test("an identity mismatch blocks before any physical device method is invoked",
     stdout: stdout.stream,
     stderr: stderr.stream,
     dependencies: {
+      releaseManifestSource: RELEASE_MANIFEST_SOURCE,
+      releaseReceiptsSource: RELEASE_RECEIPTS_SOURCE,
       token: "fixture-token-value-that-is-private",
       verifyDevice: async () => { verified += 1; },
-      identity: { ...identityFixture(), apkSha256: "b".repeat(64) },
+      identity: { ...identityFixture(), signerIdentity: "b".repeat(8) },
       snapshot: readinessFixture(),
       device: new Proxy({}, {
         get() { throw new Error("physical device method must not be used"); },
@@ -1747,22 +2405,63 @@ test("an identity mismatch blocks before any physical device method is invoked",
   assert.doesNotMatch(stdout.text(), /fixture-token|device-123|bbbbbbbb/);
 });
 
-test("suite execution independently refuses a caller-authorized old release", async () => {
+test("invalid release receipts stop before the selected device is accessed", async () => {
+  const stdout = memoryWriter();
+  const stderr = memoryWriter();
+  let verified = 0;
+  const exitCode = await main([...liveArgs(), "--json"], {
+    stdout: stdout.stream,
+    stderr: stderr.stream,
+    dependencies: {
+      releaseManifestSource: RELEASE_MANIFEST_SOURCE,
+      releaseReceiptsSource: '{"schemaVersion":1,"artifacts":[]}',
+      verifyDevice: async () => { verified += 1; },
+    },
+  });
+
+  assert.equal(exitCode, 1);
+  assert.equal(verified, 0);
+  assert.equal(stdout.text(), "");
+  assert.match(stderr.text(), /canonical verified five-APK release metadata/);
+});
+
+test("suite execution independently rejects a mismatched confirmed serial", async () => {
+  let dependencyRead = false;
   await assert.rejects(
     executePhysicalSuite(
       {
         ...parsePhysicalCliArgs(liveArgs()),
-        expectedVersionName: "2026-07-17.36-local",
+        expectedPinSerial: "other-device",
       },
       {
-        token: "must-not-be-read",
-        device: new Proxy({}, {
-          get() { throw new Error("physical device method must not be used"); },
-        }),
+        get releaseManifestSource() {
+          dependencyRead = true;
+          throw new Error("dependency must not be read");
+        },
       },
     ),
-    /unpinned candidate identity/,
+    /non-confirmed physical device/,
   );
+  assert.equal(dependencyRead, false);
+});
+
+test("suite execution rejects noncanonical release metadata before reading device dependencies", async () => {
+  let dependencyRead = false;
+  await assert.rejects(
+    executePhysicalSuite(
+      parsePhysicalCliArgs(liveArgs()),
+      {
+        releaseManifestSource: JSON.stringify(VERIFIED_RELEASE.manifest, null, 2),
+        releaseReceiptsSource: RELEASE_RECEIPTS_SOURCE,
+        get token() {
+          dependencyRead = true;
+          throw new Error("dependency must not be read");
+        },
+      },
+    ),
+    /canonical verified five-APK release metadata/,
+  );
+  assert.equal(dependencyRead, false);
 });
 
 test("suite execution rejects a missing serial before reading dependencies", async () => {

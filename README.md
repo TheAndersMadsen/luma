@@ -146,6 +146,15 @@ an opaque loopback stream. Apple Music can be linked in Center, but cannot be
 selected for playback until Apple's official Android playback runtime is
 available; previews and web players are not used as a fallback.
 
+`REVIVAL_SPOTIFY_ADAPTER_TIMEOUT_MS` remains the general control-route timeout
+and defaults to 10 seconds. The YouTube Music Pin-egress playback path uses a
+separate route-specific ladder: 25 seconds for the Pin provider request, 30 for
+Iroh, 35 for adapter egress, 40 for Center resolution, 50 for the Pin music
+gateway, and a 60-second Android read-idle timeout. The Android value limits how
+long a response-body read may stay idle; it is not a strict total request
+deadline. Raising the general timeout does not extend playback and should not
+be used to mask a provider or Pin connectivity problem.
+
 ### 3. Deploy and verify
 
 ```sh

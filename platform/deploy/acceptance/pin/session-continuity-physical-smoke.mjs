@@ -6,10 +6,14 @@ import { pathToFileURL } from "node:url";
 
 import {
   collectInstalledServerIdentity,
+  loadExpectedServerIdentity,
   readAdminToken,
   verifyExplicitDevice,
 } from "./agentic-release-smoke.mjs";
-import { RELEASE_IDENTITY } from "./agentic-release-smoke-lib.mjs";
+import {
+  SERVER_PACKAGE_NAME,
+  validateReleaseMetadataPath,
+} from "./agentic-release-smoke-lib.mjs";
 import {
   AUDIO_DUMP_ADB_ARGS,
   MEDIA_VOLUME_GET_ADB_ARGS,
@@ -30,7 +34,8 @@ import {
 } from "./tier-a-symbols.mjs";
 
 const PROGRAM = "session-continuity-physical-smoke";
-const SERVER_PACKAGE = "com.penumbraos.server";
+const SERVER_PACKAGE = SERVER_PACKAGE_NAME;
+const PRELOADED_EXPECTED_IDENTITY = Symbol("preloaded expected Server identity");
 const IRONMAN_PACKAGE = PACKAGES.ironman;
 const PROMPT_ACTIVITY_PATH = "/api/activity/prompts?limit=100";
 const HTTP_STATUS_MARKER = "\n__PENUMBRA_CONTINUITY_HTTP_STATUS__:";
@@ -216,10 +221,10 @@ function usage() {
   return [
     "Usage:",
     "  node platform/deploy/acceptance/pin/session-continuity-physical-smoke.mjs --self-check [--json]",
-    "  node platform/deploy/acceptance/pin/session-continuity-physical-smoke.mjs --run --serial PIN_SERIAL --expected-pin-serial PIN_SERIAL --expect-version-name NAME --expect-version-code CODE --expect-apk-sha256 SHA256 [--phase PHASE] [--json]",
+    "  node platform/deploy/acceptance/pin/session-continuity-physical-smoke.mjs --run --serial PIN_SERIAL --expected-pin-serial PIN_SERIAL --release-manifest PATH --release-receipts PATH [--phase PHASE] [--json]",
     "",
     "Safety contract:",
-    `  - Live mode accepts only an operator-confirmed AI Pin serial and the pinned ${RELEASE_IDENTITY.versionName} Server identity.`,
+    "  - Live mode accepts only an operator-confirmed AI Pin serial and Server identity derived from canonical manifest plus approved signer receipts.",
     `  - The expected Pin may use --expected-pin-serial or ${EXPECTED_PIN_SERIAL_ENV}.`,
     "  - The prompt sequence is fixed in source; no caller prompt or case selector is accepted.",
     "  - Fixed phases: seed, ordinary, contextual, near_miss, exact_reset, full (default).",
@@ -244,9 +249,8 @@ export function parseSessionContinuityCliArgs(argv, environment = process.env) {
     serial: null,
     expectedPinSerial: null,
     adbPath: "adb",
-    expectedVersionName: null,
-    expectedVersionCode: null,
-    expectedApkSha256: null,
+    releaseManifestPath: null,
+    releaseReceiptsPath: null,
     json: false,
     help: false,
   };
@@ -292,26 +296,20 @@ export function parseSessionContinuityCliArgs(argv, environment = process.env) {
         options.adbPath = takeValueOnce("adb", argument, index);
         index += 1;
         break;
-      case "--expect-version-name":
-        options.expectedVersionName = takeValueOnce(
-          "version-name",
+      case "--release-manifest":
+        options.releaseManifestPath = takeValueOnce(
+          "release-manifest",
           argument,
           index,
         );
         index += 1;
         break;
-      case "--expect-version-code":
-        options.expectedVersionCode = Number(
-          takeValueOnce("version-code", argument, index),
-        );
-        index += 1;
-        break;
-      case "--expect-apk-sha256":
-        options.expectedApkSha256 = takeValueOnce(
-          "apk-sha256",
+      case "--release-receipts":
+        options.releaseReceiptsPath = takeValueOnce(
+          "release-receipts",
           argument,
           index,
-        ).toLowerCase();
+        );
         index += 1;
         break;
       case "--phase": {
@@ -341,9 +339,8 @@ export function parseSessionContinuityCliArgs(argv, environment = process.env) {
     if (
       options.serial !== null ||
       options.expectedPinSerial !== null ||
-      options.expectedVersionName !== null ||
-      options.expectedVersionCode !== null ||
-      options.expectedApkSha256 !== null ||
+      options.releaseManifestPath !== null ||
+      options.releaseReceiptsPath !== null ||
       options.adbPath !== "adb" ||
       options.phase !== "full"
     ) {
@@ -361,15 +358,8 @@ export function parseSessionContinuityCliArgs(argv, environment = process.env) {
   if (!exactDeviceTargetMatches(options.serial, options.expectedPinSerial)) {
     throw new Error("live mode requires the exact operator-confirmed AI Pin serial");
   }
-  if (options.expectedVersionName !== RELEASE_IDENTITY.versionName) {
-    throw new Error("the pinned Server version name is required");
-  }
-  if (options.expectedVersionCode !== RELEASE_IDENTITY.versionCode) {
-    throw new Error("the pinned Server version code is required");
-  }
-  if (options.expectedApkSha256 !== RELEASE_IDENTITY.apkSha256) {
-    throw new Error("the pinned Server APK SHA-256 is required");
-  }
+  validateReleaseMetadataPath(options.releaseManifestPath, "--release-manifest");
+  validateReleaseMetadataPath(options.releaseReceiptsPath, "--release-receipts");
   if (
     typeof options.adbPath !== "string" ||
     options.adbPath.length === 0 ||
@@ -901,23 +891,25 @@ export function reduceContinuityTurnActivity(turnId, rows, cursor) {
 }
 
 export function evaluateCandidateIdentity(actual, expected) {
-  const packageExact = actual?.packageName === SERVER_PACKAGE;
+  const packageExact =
+    expected?.packageName === SERVER_PACKAGE &&
+    actual?.packageName === expected.packageName;
   const versionNameExact =
     typeof expected?.versionName === "string" &&
     actual?.versionName === expected.versionName;
   const versionCodeExact =
     Number.isSafeInteger(expected?.versionCode) &&
     actual?.versionCode === expected.versionCode;
-  const apkSha256Exact =
-    typeof expected?.apkSha256 === "string" &&
-    actual?.apkSha256 === expected.apkSha256;
+  const signerIdentityExact =
+    typeof expected?.signerIdentity === "string" &&
+    actual?.signerIdentity === expected.signerIdentity;
   return {
     package_exact: packageExact,
     version_name_exact: versionNameExact,
     version_code_exact: versionCodeExact,
-    apk_sha256_exact: apkSha256Exact,
+    signer_identity_exact: signerIdentityExact,
     pass:
-      packageExact && versionNameExact && versionCodeExact && apkSha256Exact,
+      packageExact && versionNameExact && versionCodeExact && signerIdentityExact,
   };
 }
 
@@ -1404,7 +1396,7 @@ function blockedReport(identity) {
       candidate_package_exact: identity.package_exact,
       candidate_version_name_exact: identity.version_name_exact,
       candidate_version_code_exact: identity.version_code_exact,
-      candidate_apk_sha256_exact: identity.apk_sha256_exact,
+      candidate_signer_identity_exact: identity.signer_identity_exact,
       candidate_identity_exact: identity.pass,
     },
     evidence: emptyEvidence(),
@@ -1616,22 +1608,20 @@ export async function executeSessionContinuitySuite(options, dependencies = {}) 
   if (!exactDeviceTargetMatches(options?.serial, options?.expectedPinSerial)) {
     throw new SafeContinuityError("refusing a non-confirmed physical device");
   }
-  if (
-    options.expectedVersionName !== RELEASE_IDENTITY.versionName ||
-    options.expectedVersionCode !== RELEASE_IDENTITY.versionCode ||
-    options.expectedApkSha256 !== RELEASE_IDENTITY.apkSha256
-  ) {
-    throw new SafeContinuityError("refusing an unpinned candidate identity");
+  let expected;
+  try {
+    expected =
+      dependencies[PRELOADED_EXPECTED_IDENTITY] ??
+      (await (dependencies.loadExpectedServerIdentity ?? loadExpectedServerIdentity)(
+        options,
+      ));
+  } catch {
+    throw new SafeContinuityError("refusing unverified release metadata");
   }
   const phaseTurnIds = CONTINUITY_PHASES.get(options.phase ?? "full");
   if (!phaseTurnIds) {
     throw new SafeContinuityError("unknown fixed continuity phase");
   }
-  const expected = {
-    versionName: options.expectedVersionName,
-    versionCode: options.expectedVersionCode,
-    apkSha256: options.expectedApkSha256,
-  };
   const actualIdentity =
     dependencies.identity ?? (await collectInstalledServerIdentity(options));
   const identity = evaluateCandidateIdentity(actualIdentity, expected);
@@ -1758,7 +1748,7 @@ export async function executeSessionContinuitySuite(options, dependencies = {}) 
       candidate_package_exact: identity.package_exact,
       candidate_version_name_exact: identity.version_name_exact,
       candidate_version_code_exact: identity.version_code_exact,
-      candidate_apk_sha256_exact: identity.apk_sha256_exact,
+      candidate_signer_identity_exact: identity.signer_identity_exact,
       candidate_identity_exact: identity.pass,
     },
     evidence,
@@ -1869,8 +1859,19 @@ export async function main(
     if (options.mode === "self-check") {
       report = selfCheckReport();
     } else {
+      let expectedIdentity;
+      try {
+        expectedIdentity = await (
+          dependencies.loadExpectedServerIdentity ?? loadExpectedServerIdentity
+        )(options);
+      } catch {
+        throw new SafeContinuityError("refusing unverified release metadata");
+      }
       await (dependencies.verifyDevice ?? verifyExplicitDevice)(options);
-      report = await executeSessionContinuitySuite(options, dependencies);
+      report = await executeSessionContinuitySuite(options, {
+        ...dependencies,
+        [PRELOADED_EXPECTED_IDENTITY]: expectedIdentity,
+      });
     }
     stdout.write(
       options.json
