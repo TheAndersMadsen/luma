@@ -80,6 +80,10 @@ test("loads bounded configuration and only retains the token digest", () => {
   assert.equal("token" in config, false);
 });
 
+test("the default timeout covers Pin integrity responses over Iroh", () => {
+  assert.equal(loadConfig(BASE_ENV, readToken).timeoutMs, 10_000);
+});
+
 test("rejects unsafe token and timeout values", () => {
   const env = BASE_ENV;
   assert.throws(() => loadConfig(env, () => Buffer.from("short")), /32-512/);

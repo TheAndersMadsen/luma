@@ -89,6 +89,35 @@ test("YouTube player requests use the authenticated Pin egress route", async () 
   assert.deepEqual(await response.json(), { playabilityStatus: { status: "OK" } });
 });
 
+test("YouTube Pin egress allows the observed integrity response latency", async () => {
+  configureBridge();
+  delete process.env.REVIVAL_SPOTIFY_ADAPTER_TIMEOUT_MS;
+  const originalTimeout = AbortSignal.timeout;
+  let observedTimeout = null;
+  AbortSignal.timeout = (milliseconds) => {
+    observedTimeout = milliseconds;
+    return new AbortController().signal;
+  };
+  try {
+    await deviceMusicProviderFetch(
+      new Request("https://jnn-pa.googleapis.com/$rpc/google.internal.waa.v1.Waa/Create", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      }),
+      undefined,
+      async () => json({
+        status: 200,
+        headers: { "content-type": "application/json" },
+        body_base64: Buffer.alloc(3_400_000).toString("base64"),
+      }),
+    );
+  } finally {
+    AbortSignal.timeout = originalTimeout;
+  }
+  assert.equal(observedTimeout, 10_000);
+});
+
 test("the Pin egress route cannot relay provider audio or account headers", async () => {
   configureBridge();
   let networkCalls = 0;

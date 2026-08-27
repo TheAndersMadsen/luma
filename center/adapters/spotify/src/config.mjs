@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { BlockList, isIP } from "node:net";
 
 const DEFAULT_PORT = 18_081;
-const DEFAULT_TIMEOUT_MS = 5_000;
+const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_TOKEN_FILE = "/run/secrets/spotify_adapter_token";
 const MIN_TIMEOUT_MS = 250;
 const MAX_TIMEOUT_MS = 15_000;

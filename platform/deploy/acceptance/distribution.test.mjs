@@ -318,6 +318,14 @@ test("release publication model contains only digest images and portable storage
     "http://center-iroh-bridge:18080",
   );
   assert.equal(
+    model.services.center.environment.REVIVAL_SPOTIFY_ADAPTER_TIMEOUT_MS,
+    "10000",
+  );
+  assert.equal(
+    model.services["spotify-adapter"].environment.REVIVAL_SPOTIFY_ADAPTER_TIMEOUT_MS,
+    "10000",
+  );
+  assert.equal(
     model.services["spotify-adapter"].depends_on["center-iroh-bridge"].condition,
     "service_healthy",
   );
