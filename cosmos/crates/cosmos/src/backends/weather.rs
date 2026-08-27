@@ -18,6 +18,7 @@ struct Forecast {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct Currently {
     #[serde(default)]
     summary: String,
@@ -39,7 +40,7 @@ struct Currently {
 ///
 /// **This is an approximation between two different vendors**, not a lossless
 /// mapping, and it is the one field of `WeatherResponse` that is not exact.
-/// Pirate emits 10 icon values; AccuWeather defines 44. Each Pirate value is
+/// Pirate emits 11 icon values; AccuWeather defines 44. Each Pirate value is
 /// mapped to the closest AccuWeather concept, preserving the day/night split
 /// that AccuWeather encodes in separate numbers:
 ///
@@ -52,6 +53,7 @@ struct Currently {
 /// | `cloudy` | 7 | Cloudy |
 /// | `fog` | 11 | Fog |
 /// | `rain` | 18 | Rain |
+/// | `thunderstorm` | 15 | Thunderstorms |
 /// | `sleet` | 25 | Sleet |
 /// | `snow` | 22 | Snow |
 /// | `wind` | 32 | Windy |
@@ -67,6 +69,7 @@ fn accuweather_icon(pirate: &str) -> i32 {
         "cloudy" => 7,
         "fog" => 11,
         "rain" => 18,
+        "thunderstorm" => 15,
         "sleet" => 25,
         "snow" => 22,
         "wind" => 32,
@@ -150,6 +153,34 @@ mod tests {
         assert!(w.has_precipitation);
         assert_eq!(w.precipitation_type, "rain");
         assert_eq!(w.weather_icon, 18); // Rain
+    }
+
+    #[test]
+    fn pirate_camel_case_thunderstorm_maps_to_a_stock_valid_wire_shape() {
+        let forecast: Forecast = serde_json::from_str(
+            r#"{
+                "currently": {
+                    "summary": "Thunderstorms",
+                    "icon": "thunderstorm",
+                    "temperature": 60.96,
+                    "precipIntensity": 0.12,
+                    "precipType": "rain",
+                    "uvIndex": 2.79
+                }
+            }"#,
+        )
+        .expect("real Pirate Weather current-conditions shape should deserialize");
+        let wire = to_wire(forecast.currently.as_ref().expect("current conditions"));
+
+        assert_eq!(
+            (
+                wire.weather_icon,
+                wire.has_precipitation,
+                wire.precipitation_type.as_str(),
+                wire.u_v_index,
+            ),
+            (15, true, "rain", 3),
+        );
     }
 
     #[test]
