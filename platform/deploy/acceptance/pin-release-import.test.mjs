@@ -8,6 +8,7 @@ import {
   readFile,
   readdir,
   rm,
+  stat,
   symlink,
   unlink,
   writeFile,
@@ -70,6 +71,8 @@ function tar(parent, directory, archive) {
 test("published Pin release archives round-trip into a checkout-free operator store", async (t) => {
   const { temporary, archive, published, version } = await fixture(t);
   const importedStore = join(temporary, "imported-store");
+  const previousUmask = process.umask(0o077);
+  t.after(() => process.umask(previousUmask));
   const imported = await importPinRelease({ archive, releaseRoot: importedStore });
 
   assert.equal(imported.version, version);
@@ -79,6 +82,14 @@ test("published Pin release archives round-trip into a checkout-free operator st
     await readFile(join(importedStore, "current.json"), "utf8"),
     await readFile(join(importedStore, "releases", imported.releaseId, "manifest.json"), "utf8"),
   );
+  assert.equal((await stat(importedStore)).mode & 0o777, 0o755);
+  assert.equal((await stat(join(importedStore, "releases"))).mode & 0o777, 0o755);
+  const releaseDirectory = join(importedStore, "releases", imported.releaseId);
+  assert.equal((await stat(releaseDirectory)).mode & 0o777, 0o755);
+  for (const name of ["current.json", "manifest.json", ...PIN_RELEASE_ARTIFACT_ROLES.map((role) => `${role}.apk`)]) {
+    const filename = name === "current.json" ? join(importedStore, name) : join(releaseDirectory, name);
+    assert.equal((await stat(filename)).mode & 0o777, 0o444, filename);
+  }
 });
 
 test("Pin release import rejects a digest mismatch and archive links", async (t) => {

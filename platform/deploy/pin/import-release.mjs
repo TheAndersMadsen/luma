@@ -166,8 +166,11 @@ async function verifyExtracted(directory, archiveVersion) {
 async function verifyPublished(directory, manifestSource, manifest) {
   const entries = (await readdir(directory)).sort();
   const expected = ["manifest.json", ...manifest.artifacts.map(({ name }) => name)].sort();
+  const manifestPath = join(directory, "manifest.json");
+  const manifestMetadata = await lstat(manifestPath);
   if (entries.join("\0") !== expected.join("\0") ||
-      (await readFile(join(directory, "manifest.json"), "utf8")) !== manifestSource) {
+      manifestMetadata.isSymbolicLink() || !manifestMetadata.isFile() ||
+      (await readFile(manifestPath, "utf8")) !== manifestSource) {
     fail("an existing release conflicts with the imported release identity");
   }
   for (const artifact of manifest.artifacts) await verifyApk(join(directory, artifact.name), artifact);
@@ -185,8 +188,8 @@ export async function importPinRelease({ archive, releaseRoot = defaultReleaseRo
   }
   const layout = inspectArchive(selectedArchive);
   const root = resolve(releaseRoot);
-  await mkdir(root, { recursive: true, mode: 0o700 });
-  await chmod(root, 0o700);
+  await mkdir(root, { recursive: true, mode: 0o755 });
+  await chmod(root, 0o755);
   const staging = await mkdtemp(join(root, ".import-"));
   try {
     runTar([
@@ -197,7 +200,8 @@ export async function importPinRelease({ archive, releaseRoot = defaultReleaseRo
     const extracted = join(staging, layout.directory);
     const { manifest, manifestSource } = await verifyExtracted(extracted, layout.version);
     const releases = join(root, "releases");
-    await mkdir(releases, { recursive: true, mode: 0o700 });
+    await mkdir(releases, { recursive: true, mode: 0o755 });
+    await chmod(releases, 0o755);
     const destination = join(releases, manifest.releaseId);
     const existing = await lstat(destination).catch((error) => {
       if (error?.code === "ENOENT") return null;
@@ -206,6 +210,9 @@ export async function importPinRelease({ archive, releaseRoot = defaultReleaseRo
     if (existing) {
       if (existing.isSymbolicLink() || !existing.isDirectory()) fail("release destination is not a real directory");
       await verifyPublished(destination, manifestSource, manifest);
+      for (const artifact of manifest.artifacts) await chmod(join(destination, artifact.name), 0o444);
+      await chmod(join(destination, "manifest.json"), 0o444);
+      await chmod(destination, 0o755);
     } else {
       const incoming = await mkdtemp(join(releases, `.${manifest.releaseId}.`));
       try {
@@ -213,9 +220,12 @@ export async function importPinRelease({ archive, releaseRoot = defaultReleaseRo
         for (const artifact of manifest.artifacts) {
           const target = join(incoming, artifact.name);
           await copyFile(join(extracted, artifact.name), target);
-          await chmod(target, 0o600);
+          await chmod(target, 0o444);
         }
-        await writeFile(join(incoming, "manifest.json"), manifestSource, { mode: 0o600, flag: "wx" });
+        const manifestPath = join(incoming, "manifest.json");
+        await writeFile(manifestPath, manifestSource, { mode: 0o444, flag: "wx" });
+        await chmod(manifestPath, 0o444);
+        await chmod(incoming, 0o755);
         await rename(incoming, destination);
       } catch (error) {
         await rm(incoming, { recursive: true, force: true });
@@ -223,6 +233,7 @@ export async function importPinRelease({ archive, releaseRoot = defaultReleaseRo
       }
     }
     await atomicWrite(join(root, "current.json"), canonicalPinReleaseManifestJson(manifest));
+    await chmod(join(root, "current.json"), 0o444);
     for (const entry of await readdir(releases)) {
       if (entry !== manifest.releaseId) await rm(join(releases, entry), { recursive: true, force: true });
     }
