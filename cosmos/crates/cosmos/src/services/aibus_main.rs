@@ -240,6 +240,64 @@ impl AiBusMain {
         Ok((decoded, kid))
     }
 
+    /// Open the location shape sent by stock location-bearing AIBus clients.
+    ///
+    /// `EncryptedWeather`, `EncryptedReverseGeocode`, and
+    /// `EncryptedNavigationDirections` do not seal `humane.aibus.Location`:
+    /// they seal the same float/freshness-bearing `LocationEnvelope` used by
+    /// the encrypted understanding transport. Decoding it as the former fails
+    /// on the first coordinate because their protobuf wire types differ.
+    async fn open_stock_location(
+        &self,
+        enc: Option<cosmos_protocol::common::encryption::EncryptedData>,
+    ) -> Result<
+        (
+            cosmos_protocol::common::encryption::LocationEnvelope,
+            String,
+        ),
+        Status,
+    > {
+        self.open_request(enc).await
+    }
+
+    /// Convert stock float coordinates without applying a caller-specific
+    /// freshness policy. Reverse geocoding and navigation historically accept
+    /// the location supplied by their stock caller even when Weather would ask
+    /// for a fresher fix.
+    fn stock_location_coordinates(
+        location: &cosmos_protocol::common::encryption::LocationEnvelope,
+    ) -> Result<pb::Location, Status> {
+        let latitude = f64::from(location.latitude);
+        let longitude = f64::from(location.longitude);
+        if !latitude.is_finite()
+            || !longitude.is_finite()
+            || !(-90.0..=90.0).contains(&latitude)
+            || !(-180.0..=180.0).contains(&longitude)
+        {
+            return Err(Status::invalid_argument("invalid location envelope"));
+        }
+        Ok(pb::Location {
+            latitude,
+            longitude,
+        })
+    }
+
+    fn weather_location_coordinates(
+        location: &cosmos_protocol::common::encryption::LocationEnvelope,
+    ) -> Result<pb::Location, Status> {
+        use cosmos_protocol::common::encryption::LocationStaleStatus;
+
+        let usable_freshness = location.stalestatus == LocationStaleStatus::Undefined as i32
+            || location.stalestatus == LocationStaleStatus::NotStale as i32;
+        if !usable_freshness
+            || !location.accuracy.is_finite()
+            || !(0.0..=50_000.0).contains(&location.accuracy)
+        {
+            return Err(Status::invalid_argument("invalid weather location"));
+        }
+        Self::stock_location_coordinates(location)
+    }
+
     /// Seal a plaintext protobuf response back under the same channel key,
     /// binding the envelope to the response TYPE via its AAD.
     ///
@@ -1594,8 +1652,10 @@ impl AiBusService for AiBusMain {
         &self,
         request: Request<pb::EncryptedReverseGeocodeRequest>,
     ) -> Result<Response<pb::EncryptedReverseGeocodeResponse>, Status> {
-        let (location, kid): (pb::Location, _) =
-            self.open_request(request.into_inner().location).await?;
+        let (location_envelope, kid) = self
+            .open_stock_location(request.into_inner().location)
+            .await?;
+        let location = Self::stock_location_coordinates(&location_envelope)?;
         let address =
             crate::backends::places::reverse_geocode(location.latitude, location.longitude)
                 .await
@@ -1613,7 +1673,8 @@ impl AiBusService for AiBusMain {
         request: Request<pb::EncryptedNavigationDirectionsRequest>,
     ) -> Result<Response<pb::EncryptedNavigationDirectionsResponse>, Status> {
         let request = request.into_inner();
-        let (origin, _): (pb::Location, _) = self.open_request(request.location).await?;
+        let (origin_envelope, _) = self.open_stock_location(request.location).await?;
+        let origin = Self::stock_location_coordinates(&origin_envelope)?;
         let (nav, kid): (pb::NavigationDirectionsRequest, _) =
             self.open_request(request.request).await?;
         let directions =
@@ -1665,8 +1726,10 @@ impl AiBusService for AiBusMain {
         &self,
         request: Request<pb::EncryptedWeatherRequest>,
     ) -> Result<Response<pb::EncryptedWeatherResponse>, Status> {
-        let (location, kid): (pb::Location, _) =
-            self.open_request(request.into_inner().location).await?;
+        let (location_envelope, kid) = self
+            .open_stock_location(request.into_inner().location)
+            .await?;
+        let location = Self::weather_location_coordinates(&location_envelope)?;
         let weather = crate::backends::weather::current(location.latitude, location.longitude)
             .await
             .map_err(|e| Self::backend_status(e, "weather"))?;
@@ -1877,6 +1940,64 @@ mod tests {
                 let _ = std::fs::remove_dir_all(directory);
             }
         }
+    }
+
+    #[tokio::test]
+    async fn encrypted_weather_accepts_the_stock_location_envelope() {
+        use prost::Message as _;
+
+        let kid = "weather-stock-location";
+        let key = [0x2au8; cosmos_crypto::AES_KEY_LEN];
+        let keys: crate::keymaterial::SharedKeyMaterial = Default::default();
+        keys.insert(kid.to_owned(), key)
+            .expect("insert location channel key");
+        let stock_location = cosmos_protocol::common::encryption::LocationEnvelope {
+            longitude: 12.5683,
+            latitude: 55.6761,
+            stalestatus: cosmos_protocol::common::encryption::LocationStaleStatus::NotStale as i32,
+            accuracy: 10.0,
+            ..Default::default()
+        };
+        let sealed = cosmos_crypto::seal(
+            kid,
+            &key,
+            &stock_location.encode_to_vec(),
+            b"humane.common.encryption.LocationEnvelope",
+        )
+        .expect("seal stock location envelope");
+        let service = AiBusMain::with_key_material(keys);
+
+        let (location, opened_kid) = service
+            .open_stock_location(Some(cosmos_protocol::common::encryption::EncryptedData {
+                encryption_information: Some(
+                    cosmos_protocol::common::encryption::EncryptionInformation {
+                        kid: kid.to_owned(),
+                    },
+                ),
+                data: sealed.data,
+            }))
+            .await
+            .expect("stock location envelope should decode");
+
+        assert_eq!(opened_kid, kid);
+        let coordinates = AiBusMain::weather_location_coordinates(&location)
+            .expect("stock weather location should be usable");
+        assert!((coordinates.latitude - 55.6761).abs() < 0.0001);
+        assert!((coordinates.longitude - 12.5683).abs() < 0.0001);
+    }
+
+    #[test]
+    fn reverse_geocode_and_navigation_keep_stock_location_policy_separate_from_weather() {
+        let location = cosmos_protocol::common::encryption::LocationEnvelope {
+            longitude: 12.5683,
+            latitude: 55.6761,
+            stalestatus: cosmos_protocol::common::encryption::LocationStaleStatus::Stale as i32,
+            accuracy: 50_001.0,
+            ..Default::default()
+        };
+
+        assert!(AiBusMain::stock_location_coordinates(&location).is_ok());
+        assert!(AiBusMain::weather_location_coordinates(&location).is_err());
     }
 
     #[tokio::test]
