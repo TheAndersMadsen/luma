@@ -22,6 +22,7 @@ type IntegrationsView = {
     api_key_configured: boolean;
     model: string;
     reasoning_effort: string | null;
+    fast_mode: boolean;
     max_tokens: number;
     codex: {
       available: boolean;
@@ -53,6 +54,7 @@ type IntegrationDraft = {
   baseUrl: string;
   model: string;
   reasoningEffort: string;
+  fastMode: boolean;
   maxTokens: string;
   searxngBaseUrl: string;
   perplexityModel: string;
@@ -162,6 +164,7 @@ function draftFrom(view: IntegrationsView): IntegrationDraft {
     baseUrl: view.assistant.base_url,
     model: view.assistant.model,
     reasoningEffort: view.assistant.reasoning_effort ?? "",
+    fastMode: view.assistant.fast_mode,
     maxTokens: String(view.assistant.max_tokens),
     searxngBaseUrl: view.search.searxng_base_url ?? "",
     perplexityModel: view.search.perplexity_model ?? "",
@@ -311,6 +314,7 @@ export function CosmosServicesCard({ operator }: { operator: boolean }) {
         base_url: draft.baseUrl,
         model: draft.model,
         reasoning_effort: draft.reasoningEffort,
+        fast_mode: draft.fastMode,
         max_tokens: Number(draft.maxTokens),
         ...(secrets.assistantApiKey === null ? {} : { api_key: secrets.assistantApiKey }),
       },
@@ -401,6 +405,7 @@ export function CosmosServicesCard({ operator }: { operator: boolean }) {
             base_url: draft.baseUrl,
             model: draft.model,
             reasoning_effort: draft.reasoningEffort,
+            fast_mode: draft.fastMode,
             max_tokens: Number(draft.maxTokens),
           },
         }),
@@ -527,8 +532,8 @@ export function CosmosServicesCard({ operator }: { operator: boolean }) {
                 onChange={(event) => {
                   const provider = event.target.value as AssistantProvider;
                   const model = provider === "codex-subscription" && draft.model === "openai/gpt-5.6-luna"
-                    ? "gpt-5.6-terra"
-                    : provider === "openai-compatible" && draft.model === "gpt-5.6-terra"
+                    ? "gpt-5.6-sol"
+                    : provider === "openai-compatible" && draft.model === "gpt-5.6-sol"
                       ? "openai/gpt-5.6-luna"
                       : draft.model;
                   const reasoningEffort = provider === "codex-subscription" && draft.reasoningEffort === "minimal"
@@ -598,6 +603,15 @@ export function CosmosServicesCard({ operator }: { operator: boolean }) {
                 ))}
               </select>
             </div>
+            {draft.provider === "codex-subscription" ? (
+              <div className={styles.integrationField}>
+                <label htmlFor="assistant-speed"><strong>Speed</strong><small>Fast runs supported models about 1.5× faster and uses more ChatGPT credits.</small></label>
+                <select id="assistant-speed" className={styles.providerSelect} value={draft.fastMode ? "fast" : "standard"} onChange={(event) => setDraft({ ...draft, fastMode: event.target.value === "fast" })}>
+                  <option value="standard">Standard</option>
+                  <option value="fast">Fast</option>
+                </select>
+              </div>
+            ) : null}
             <div className={styles.integrationField}>
               <label htmlFor="max-tokens"><strong>Maximum response tokens</strong><small>Limit for each model response.</small></label>
               <input id="max-tokens" className={styles.integrationInput} type="number" min="64" max="8192" value={draft.maxTokens} onChange={(event) => setDraft({ ...draft, maxTokens: event.target.value })} />

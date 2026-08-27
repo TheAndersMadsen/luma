@@ -186,6 +186,9 @@ test("Services offers only reasoning efforts supported by the selected assistant
   }
   assert.match(compatibleEfforts, /value: "minimal"/);
   assert.match(card, /draft\.provider === "codex-subscription"\s*\? CODEX_REASONING_EFFORTS/);
+  assert.match(card, /fast_mode: draft\.fastMode/);
+  assert.match(card, /value=\{draft\.fastMode \? "fast" : "standard"\}/);
+  assert.match(card, />Fast</);
 });
 
 test("the old admin dashboard is one Settings provisioning pane without duplicate panels", async () => {

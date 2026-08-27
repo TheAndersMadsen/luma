@@ -13,7 +13,7 @@ use std::sync::{Arc, OnceLock, RwLock};
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_OPENAI_MODEL: &str = "openai/gpt-5.6-luna";
-pub const DEFAULT_CODEX_MODEL: &str = "gpt-5.6-terra";
+pub const DEFAULT_CODEX_MODEL: &str = "gpt-5.6-sol";
 pub const DEFAULT_AZURE_VOICE: &str = "en-US-AvaMultilingualNeural";
 const CONFIG_FILE: &str = "integrations.json";
 
@@ -34,6 +34,7 @@ pub struct AssistantConfig {
     pub api_key: Option<String>,
     pub model: String,
     pub reasoning_effort: Option<String>,
+    pub fast_mode: bool,
     pub max_tokens: u32,
 }
 
@@ -45,6 +46,7 @@ impl Default for AssistantConfig {
             api_key: None,
             model: DEFAULT_OPENAI_MODEL.to_owned(),
             reasoning_effort: None,
+            fast_mode: false,
             max_tokens: 512,
         }
     }
@@ -176,6 +178,7 @@ pub struct AssistantUpdate {
     pub api_key: Option<String>,
     pub model: Option<String>,
     pub reasoning_effort: Option<String>,
+    pub fast_mode: Option<bool>,
     pub max_tokens: Option<u32>,
 }
 
@@ -383,6 +386,9 @@ fn apply_update(config: &mut IntegrationsConfig, update: IntegrationsUpdate) {
         }
         if let Some(value) = update.reasoning_effort {
             config.assistant.reasoning_effort = optional(&value);
+        }
+        if let Some(value) = update.fast_mode {
+            config.assistant.fast_mode = value;
         }
         if let Some(value) = update.max_tokens {
             config.assistant.max_tokens = value;
@@ -624,6 +630,7 @@ mod tests {
                     base_url: Some("https://openrouter.ai/api/v1/".to_owned()),
                     api_key: Some("private-provider-key".to_owned()),
                     model: Some("openai/gpt-5.6-luna".to_owned()),
+                    fast_mode: Some(true),
                     ..AssistantUpdate::default()
                 }),
                 speech: Some(SpeechUpdate {
@@ -648,6 +655,7 @@ mod tests {
             reloaded.assistant.api_key.as_deref(),
             Some("private-provider-key")
         );
+        assert!(reloaded.assistant.fast_mode);
         assert_eq!(reloaded.speech.azure_region.as_deref(), Some("westeurope"));
         assert_eq!(
             persisted_speech_ready(directory.to_str()).unwrap(),

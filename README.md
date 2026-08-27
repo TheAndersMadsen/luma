@@ -187,6 +187,8 @@ normal configuration path for every Pin-facing cloud capability:
   effort, and response limit. For Codex, select **Codex subscription**, choose
   **Connect Codex**, and finish the device-code sign-in in the linked browser
   page. Cosmos runs the official Codex app server and refreshes that session.
+  Its separate **Speed** selector can opt supported Codex models into Fast mode;
+  Fast is about 1.5 times faster and uses more ChatGPT credits than Standard.
 - **Search, maps & knowledge:** add SearXNG or SerpAPI for web results and any
   optional Perplexity, Google Maps, Pirate Weather, or Wolfram credentials.
 - **Speech:** add the Azure Speech key, region, and voice.

@@ -660,6 +660,7 @@ struct AssistantIntegrationView {
     api_key_configured: bool,
     model: String,
     reasoning_effort: Option<String>,
+    fast_mode: bool,
     max_tokens: u32,
     codex: crate::assistant::codex_app_server::CodexAccountStatus,
 }
@@ -781,6 +782,7 @@ async fn integrations_view(config: crate::integrations::IntegrationsConfig) -> I
             api_key_configured: config.assistant.api_key.is_some(),
             model: config.assistant.model,
             reasoning_effort: config.assistant.reasoning_effort,
+            fast_mode: config.assistant.fast_mode,
             max_tokens: config.assistant.max_tokens,
             codex,
         },

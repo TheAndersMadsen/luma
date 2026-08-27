@@ -237,6 +237,7 @@ impl ChatModel for ConfiguredChatModel {
                 let response = super::codex_app_server::complete(
                     &config.model,
                     config.reasoning_effort.as_deref(),
+                    config.fast_mode,
                     prompt,
                 )
                 .await

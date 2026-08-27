@@ -346,21 +346,26 @@ pub async fn logout() -> Result<(), CodexError> {
         .map(|_| ())
 }
 
-fn thread_start_params(model: &str, cwd: &str) -> Value {
-    json!({
+fn thread_start_params(model: &str, fast_mode: bool, cwd: &str) -> Value {
+    let mut params = json!({
         "model": model,
         "cwd": cwd,
         "approvalPolicy": "never",
         "sandbox": "read-only",
         "serviceName": "ai_pin_revival",
         "ephemeral": true
-    })
+    });
+    if fast_mode {
+        params["serviceTier"] = Value::String("fast".to_owned());
+    }
+    params
 }
 
 fn turn_start_params(
     thread_id: &str,
     model: &str,
     effort: Option<&str>,
+    fast_mode: bool,
     prompt: String,
     image_urls: &[String],
     cwd: &str,
@@ -404,20 +409,25 @@ fn turn_start_params(
     if let Some(effort) = effort {
         params["effort"] = Value::String(effort.to_owned());
     }
+    if fast_mode {
+        params["serviceTier"] = Value::String("fast".to_owned());
+    }
     params
 }
 
 pub async fn complete(
     model: &str,
     effort: Option<&str>,
+    fast_mode: bool,
     prompt: String,
 ) -> Result<CodexModelOutput, CodexError> {
-    complete_with_images(model, effort, prompt, &[]).await
+    complete_with_images(model, effort, fast_mode, prompt, &[]).await
 }
 
 pub async fn complete_with_images(
     model: &str,
     effort: Option<&str>,
+    fast_mode: bool,
     prompt: String,
     image_urls: &[String],
 ) -> Result<CodexModelOutput, CodexError> {
@@ -428,15 +438,22 @@ pub async fn complete_with_images(
     let mut events = connection.events.subscribe();
     let cwd = client().workspace.to_string_lossy();
     let thread = connection
-        .request("thread/start", thread_start_params(model, &cwd))
+        .request("thread/start", thread_start_params(model, fast_mode, &cwd))
         .await?;
     let thread_id = thread
         .pointer("/thread/id")
         .and_then(Value::as_str)
         .ok_or(CodexError::Protocol)?
         .to_owned();
-    let turn_params =
-        turn_start_params(thread_id.as_str(), model, effort, prompt, image_urls, &cwd);
+    let turn_params = turn_start_params(
+        thread_id.as_str(),
+        model,
+        effort,
+        fast_mode,
+        prompt,
+        image_urls,
+        &cwd,
+    );
     let turn = connection.request("turn/start", turn_params).await?;
     let turn_id = turn
         .pointer("/turn/id")
@@ -525,15 +542,17 @@ mod tests {
 
     #[test]
     fn official_app_server_requests_are_ephemeral_and_tool_free() {
-        let thread = thread_start_params("gpt-test", "/var/lib/cosmos/codex-workspace");
+        let thread = thread_start_params("gpt-test", true, "/var/lib/cosmos/codex-workspace");
         assert_eq!(thread["sandbox"], "read-only");
         assert_eq!(thread["approvalPolicy"], "never");
         assert_eq!(thread["ephemeral"], true);
+        assert_eq!(thread["serviceTier"], "fast");
 
         let turn = turn_start_params(
             "thread-1",
             "gpt-test",
             Some("low"),
+            true,
             "wearer request".to_owned(),
             &["data:image/jpeg;base64,aW1hZ2U=".to_owned()],
             "/var/lib/cosmos/codex-workspace",
@@ -550,5 +569,9 @@ mod tests {
             "string"
         );
         assert_eq!(turn["effort"], "low");
+        assert_eq!(turn["serviceTier"], "fast");
+
+        let standard = thread_start_params("gpt-test", false, "/tmp");
+        assert!(standard.get("serviceTier").is_none());
     }
 }

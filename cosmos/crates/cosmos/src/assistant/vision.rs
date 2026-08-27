@@ -74,6 +74,7 @@ pub async fn complete(prompt: &str, image_urls: &[String]) -> Result<String, Vis
             let output = crate::assistant::codex_app_server::complete_with_images(
                 &config.model,
                 config.reasoning_effort.as_deref(),
+                config.fast_mode,
                 prompt.to_owned(),
                 image_urls,
             )
