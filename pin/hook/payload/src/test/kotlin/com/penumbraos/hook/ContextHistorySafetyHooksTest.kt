@@ -328,7 +328,12 @@ class ContextHistorySafetyHooksTest {
 
     @Test
     fun `physical verification exposes only exact content-free action names`() {
-        for (actionName in listOf("GetCurrentTime", "GetBatteryLevel", "Tickle")) {
+        for (actionName in listOf(
+            "GetCurrentTime",
+            "GetBatteryLevel",
+            "GetCurrentLocation",
+            "Tickle",
+        )) {
             assertEquals(
                 actionName,
                 ContextHistorySafetyHooks.physicalVerificationActionName(

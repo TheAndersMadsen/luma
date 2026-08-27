@@ -3231,9 +3231,9 @@ mod tests {
         let input: serde_json::Value = serde_json::from_str(&dispatched.input).unwrap();
         assert!(input["Response"].as_str().is_some_and(|s| !s.is_empty()));
 
-        // The stream closes with the explicit turn-complete marker. It does NOT
-        // open with a heartbeat: the legacy consumer keeps only action and
-        // observation turns and discards anything else.
+        // The stream itself closes the turn. It does NOT contain a heartbeat or
+        // explicit End body: the stock legacy consumer accepts only action and
+        // observation turns and logs anything else as an unexpected response.
         assert!(!msgs.iter().any(|m| matches!(
             m.body,
             Some(pb::synapse_understanding_response::Body::Heartbeat(_))
@@ -3242,7 +3242,7 @@ mod tests {
         assert!(last.is_final);
         assert!(matches!(&last.body,
             Some(pb::synapse_understanding_response::Body::Turn(t))
-                if matches!(t.content, Some(pb::synapse_chat_turn::Content::End(_)))));
+                if matches!(t.content, Some(pb::synapse_chat_turn::Content::Action(_)))));
 
         // The deterministic test RPCs return well-formed, stock-shaped Ok.
         let action = svc

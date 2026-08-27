@@ -911,7 +911,7 @@ fn ai_music_classifier_never_receives_private_context_without_confirmed_unlock()
 }
 
 #[tokio::test]
-async fn compound_agentic_failure_never_falls_through_to_a_mutating_fast_path() {
+async fn ranked_artist_lookup_reaches_stock_music_without_the_semantic_runtime() {
     let (_directory, _live_config, handler, _automation) = test_understand_handler(false).await;
     let utterance = "look up the best songs by Michael Jackson and play the most popular";
     let request = SynapseUnderstandingRequest {
@@ -924,27 +924,22 @@ async fn compound_agentic_failure_never_falls_through_to_a_mutating_fast_path() 
         ..Default::default()
     };
 
-    // The test handler intentionally has no agentic external clients. The
-    // semantic planner is therefore unavailable before any model/tool
-    // work, and the full handler must terminate rather than reaching the
-    // deterministic music mutation below it.
+    // The test handler intentionally has no agentic external clients. This
+    // bounded ranked-artist grammar must still reach stock PlayMusic: the
+    // stock provider resolves an Artist-only action to its ranked top track,
+    // so this request does not need an LLM merely to select the first result.
     let action = full_handler_action(&handler, request.clone())
         .await
-        .expect("compound failure should return one honest response");
-    assert_eq!(action.action, native_actions::RESPOND);
+        .expect("ranked artist lookup should return one stock action");
+    assert_eq!(action.action, native_actions::PLAY_MUSIC);
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&action.input).unwrap(),
-        serde_json::json!({
-            "Request": utterance,
-            "Response": "The assistant service needed for ranked playback is unavailable right now. Please try again."
-        })
+        serde_json::json!({"Artist": "Michael Jackson"})
     );
-    assert!(!action.input.contains(native_actions::PLAY_MUSIC));
 
     let mut response_excluded = request;
-    response_excluded
-        .excluded_tools
-        .push(native_actions::RESPOND.into());
+    response_excluded.excluded_tools.push(native_actions::PLAY_MUSIC.into());
+    response_excluded.excluded_tools.push(native_actions::RESPOND.into());
     let mut stream = handler
         .understand_inner(MetadataMap::new(), response_excluded, "TestUnderstand")
         .await

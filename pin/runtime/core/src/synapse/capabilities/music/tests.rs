@@ -936,7 +936,7 @@ fn popular_song_followup_uses_primary_artist_without_guessing_a_title() {
 }
 
 #[test]
-fn named_artist_lookup_and_play_is_reserved_for_the_provider_ranked_handler() {
+fn named_artist_lookup_and_play_uses_the_active_provider_stock_action() {
     for (utterance, artist) in [
         (
             "look up the best songs by Michael Jackson and play the most popular",
@@ -961,8 +961,8 @@ fn named_artist_lookup_and_play_is_reserved_for_the_provider_ranked_handler() {
             "{utterance}",
         );
         assert_eq!(
-            plan_catalog_or_contextual_music_action(&request(utterance), None),
-            None
+            action_input(&request(utterance), None),
+            (PLAY_MUSIC.into(), serde_json::json!({"Artist": artist}))
         );
         assert!(
             prefers_text_music_over_image(&request(utterance)),
@@ -976,7 +976,7 @@ fn named_artist_lookup_and_play_is_reserved_for_the_provider_ranked_handler() {
 }
 
 #[test]
-fn singular_and_anaphoric_lookup_and_play_reach_the_same_ranked_handler() {
+fn singular_and_anaphoric_lookup_and_play_use_the_same_stock_action() {
     // The phrasing a person actually used on the device. It matched neither the
     // plural-only prefixes nor the explicit-only tails, so it fell through to
     // the model and paid 3522ms for a decision this grammar already contains.
@@ -999,10 +999,10 @@ fn singular_and_anaphoric_lookup_and_play_reach_the_same_ranked_handler() {
             "{utterance}",
         );
         // Same downstream contract the plural/explicit forms already hold: the
-        // deterministic path owns it and the classifier never sees it.
+        // deterministic stock action owns it and the classifier never sees it.
         assert_eq!(
-            plan_catalog_or_contextual_music_action(&request(utterance), None),
-            None
+            action_input(&request(utterance), None),
+            (PLAY_MUSIC.into(), serde_json::json!({"Artist": artist}))
         );
         assert!(
             !is_ai_music_fallback_candidate(&request(utterance)),

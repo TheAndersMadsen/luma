@@ -603,13 +603,30 @@ fn plan_catalog_or_contextual_music_action_inner(
         return None;
     }
     let command = normalized_command(&request.utterance)?;
-    // Exact ranked lookup -> play requests are owned by the provider-backed
-    // fast path in `UnderstandHandler`. Never degrade them here to an
-    // Artist-only mutation: that would discard the provider's ranked row and
-    // make alternate callers of this shared cascade behave differently.
-    if named_artist_lookup_and_play_top_request(&command).is_some()
-        || catalog_lookup_and_play_rank_one_request(&command).is_some()
-    {
+    // A ranked artist request needs no semantic planner: stock PlayMusic
+    // resolves an Artist-only action through the active provider's artist
+    // query and starts that provider's top row. Keep the more general catalog
+    // rank-one form in the read-tool path because its query can name tracks,
+    // albums, playlists, or artists and therefore needs the returned row.
+    if let Some(artist) = named_artist_lookup_and_play_top_request(&command) {
+        if request
+            .device_context
+            .as_ref()
+            .is_none_or(|context| context.is_locked)
+            || !allow_provider_selection
+            || action_is_excluded(request, PLAY_MUSIC)
+            || !valid_catalog_value(artist)
+            || deictic_artist(artist)
+        {
+            return None;
+        }
+        return Some(PlannedMusicAction {
+            action_name: PLAY_MUSIC,
+            thought: "I should play the named artist's top provider-ranked result",
+            input_json: serde_json::json!({"Artist": artist}).to_string(),
+        });
+    }
+    if catalog_lookup_and_play_rank_one_request(&command).is_some() {
         return None;
     }
     if contains_compound_command(&command) {

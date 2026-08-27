@@ -1832,6 +1832,58 @@ async fn orphaned_observation_session_closes_instead_of_hanging() {
 }
 
 #[tokio::test]
+async fn weather_location_preflight_is_dispatchable_by_the_stock_client() {
+    let (address, _directory) = spawn_test_aibus().await;
+    let mut client = AiBusServiceClient::connect(format!("http://{address}"))
+        .await
+        .unwrap();
+    let (requests_tx, requests_rx) = mpsc::channel(2);
+    let utterance = "What's the weather like where I am right now?";
+    requests_tx
+        .send(StreamingUnderstandRequest {
+            content: Some(streaming_understand_request::Content::UnderstandingRequest(
+                Box::new(SynapseUnderstandingRequest {
+                    utterance: utterance.into(),
+                    device_context: Some(SynapseDeviceContext {
+                        turns: vec![user_request("weather-user", utterance)],
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+            )),
+        })
+        .await
+        .unwrap();
+
+    let mut responses = client
+        .bidirectional_streaming_understand(ReceiverStream::new(requests_rx))
+        .await
+        .unwrap()
+        .into_inner();
+    let first = tokio::time::timeout(Duration::from_secs(5), responses.message())
+        .await
+        .expect("the weather location preflight must be returned")
+        .unwrap()
+        .unwrap();
+    let first_event = match first.content.unwrap() {
+        streaming_understand_response::Content::IntermediateEvent(event) => event,
+        streaming_understand_response::Content::Interstitial(_) => {
+            panic!("expected weather location action event")
+        }
+    };
+    assert!(
+        first_event.requires_response,
+        "stock dispatches the location resolver only for a response-required event"
+    );
+    let first_action = match first_event.event.unwrap().content.unwrap() {
+        synapse_chat_turn::Content::Action(action) => action,
+        _ => panic!("expected GetCurrentLocation action"),
+    };
+    assert_eq!(first_action.action, GET_CURRENT_LOCATION);
+    drop(requests_tx);
+}
+
+#[tokio::test]
 async fn nearby_preflight_consumes_fresh_location_without_repeating_the_action() {
     let (address, _directory) = spawn_test_aibus().await;
     let mut client = AiBusServiceClient::connect(format!("http://{address}"))

@@ -38,6 +38,7 @@ object ContextHistorySafetyHooks {
     private val physicalVerificationActions = setOf(
         TierASymbols.NativeActions.GET_CURRENT_TIME,
         TierASymbols.NativeActions.GET_BATTERY_LEVEL,
+        TierASymbols.NativeActions.GET_CURRENT_LOCATION,
         TierASymbols.NativeActions.TICKLE,
     )
 

@@ -501,6 +501,26 @@ impl Engine {
             .map(|t| t.identifier.clone())
             .unwrap_or_default();
 
+        // Stock's legacy consumer cannot recover when the model skips a
+        // device-side prerequisite. Keep the two closed, already-grounded
+        // routes deterministic: local weather must obtain the Pin's location,
+        // and a ranked named-artist request is exactly the Artist-only
+        // PlayMusic lookup the active provider already implements. Text-only
+        // callers have no Pin on which to run either action.
+        if system_addendum.is_none() {
+            if let Some(action) =
+                deterministic_device_action(&req, &tools, self.tools.location.is_some())
+            {
+                let id = new_id();
+                finish(
+                    &tx,
+                    terminal_device_action(action.name, &action.input, action.thought, parent, id),
+                )
+                .await;
+                return;
+            }
+        }
+
         // Reconstruct the conversation the model reasons over from the state the
         // device replayed (cosmos's legacy path is stateless per call).
         let mut messages = build_history(&req);
@@ -1269,10 +1289,9 @@ async fn send(
     tx.send(Ok(msg)).await.map_err(|_| ())
 }
 
-/// Send the terminal action, then cosmos's explicit turn-complete marker
-/// (`SynapseEndContent`, `SynapseChatTurn` oneof field 10). The legacy device
-/// consumer keeps only action/observation turns, so it dispatches the terminal
-/// action and ignores the end marker; richer clients get the explicit close.
+/// Send the terminal action. Closing the server stream is the legacy protocol's
+/// completion signal; an explicit `SynapseEndContent` is not accepted by stock
+/// `SynapseInterpreter`, which logs it as an "Unexpected TAO response".
 async fn finish(
     tx: &Sender<Result<pb::SynapseUnderstandingResponse, Status>>,
     terminal: pb::SynapseUnderstandingResponse,
@@ -1301,10 +1320,7 @@ async fn finish_as(
     outcome: Option<&'static str>,
 ) {
     crate::metrics::record_turn(outcome.unwrap_or_else(|| turn_outcome(&terminal)));
-    if send(tx, terminal).await.is_err() {
-        return;
-    }
-    let _ = send(tx, end_marker()).await;
+    let _ = send(tx, terminal).await;
 }
 
 /// Which model failure ended this turn, as a short constant.
@@ -1422,6 +1438,216 @@ fn current_run_contains_action(turns: &[pb::SynapseChatTurn], action_name: &str)
     false
 }
 
+struct DeterministicDeviceAction {
+    name: &'static str,
+    input: String,
+    thought: &'static str,
+}
+
+fn deterministic_device_action(
+    req: &pb::SynapseUnderstandingRequest,
+    tools: &[ToolDef],
+    location_available: bool,
+) -> Option<DeterministicDeviceAction> {
+    let unlocked = req
+        .device_context
+        .as_ref()
+        .is_some_and(|context| !context.is_locked);
+    if !unlocked {
+        return None;
+    }
+    let current_turns = req
+        .device_context
+        .as_ref()
+        .map(|context| context.turns.as_slice())
+        .unwrap_or_default();
+    let offered = |name: &str| tools.iter().any(|tool| tool.name == name);
+
+    if !location_available
+        && local_weather_request(&req.utterance)
+        && offered("GetCurrentLocation")
+        && !current_run_contains_action(current_turns, "GetCurrentLocation")
+    {
+        return Some(DeterministicDeviceAction {
+            name: "GetCurrentLocation",
+            input: "{}".to_owned(),
+            thought: "I should get the Pin's current location before checking local weather",
+        });
+    }
+
+    let artist = ranked_artist_request(&req.utterance)?;
+    if !offered("PlayMusic") || current_run_contains_action(current_turns, "PlayMusic") {
+        return None;
+    }
+    Some(DeterministicDeviceAction {
+        name: "PlayMusic",
+        input: serde_json::json!({"Artist": artist}).to_string(),
+        thought: "I should play the named artist's top provider-ranked result",
+    })
+}
+
+fn normalized_intent(value: &str) -> Option<String> {
+    if value.is_empty() || value.len() > 384 || value.chars().any(char::is_control) {
+        return None;
+    }
+    let normalized = value
+        .chars()
+        .flat_map(char::to_lowercase)
+        .map(|character| {
+            if character.is_alphanumeric() {
+                character
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    (!normalized.is_empty()).then_some(normalized)
+}
+
+fn local_weather_request(utterance: &str) -> bool {
+    matches!(
+        normalized_intent(utterance).as_deref(),
+        Some(
+            "what is the weather"
+                | "what s the weather"
+                | "what is the weather like"
+                | "what s the weather like"
+                | "what is the weather like today"
+                | "what s the weather like today"
+                | "what is the weather here"
+                | "what s the weather here"
+                | "what is the weather like here"
+                | "what s the weather like here"
+                | "what is the weather where i am"
+                | "what s the weather where i am"
+                | "what is the weather like where i am"
+                | "what s the weather like where i am"
+                | "what is the weather where i am right now"
+                | "what s the weather where i am right now"
+                | "what is the weather like where i am right now"
+                | "what s the weather like where i am right now"
+                | "what is the weather at my current location"
+                | "what s the weather at my current location"
+                | "what is the weather outside"
+                | "what s the weather outside"
+                | "what is the weather like outside"
+                | "what s the weather like outside"
+                | "tell me the weather outside"
+                | "what is the current weather"
+                | "what s the current weather"
+                | "current weather"
+                | "weather now"
+                | "weather right now"
+                | "weather today"
+                | "what is the temperature"
+                | "what is the temperature outside"
+                | "how hot is it"
+                | "how hot is it outside"
+                | "how cold is it"
+                | "how cold is it outside"
+                | "is it raining"
+                | "is it raining outside"
+        )
+    )
+}
+
+fn ranked_artist_request(utterance: &str) -> Option<&str> {
+    let command = utterance.trim().trim_end_matches(['.', '?', '!']).trim();
+    if command.is_empty() || command.len() > 384 || unsafe_intent_text(command) {
+        return None;
+    }
+    let lower = command.to_ascii_lowercase();
+    let start = usize::from(lower.starts_with("please ")) * "please ".len();
+    let end = if lower.ends_with(" please") {
+        command.len().saturating_sub(" please".len())
+    } else {
+        command.len()
+    };
+    let command = command.get(start..end)?.trim();
+    let lower = command.to_ascii_lowercase();
+
+    const LOOKUP_VERBS: [&str; 4] = ["look up ", "lookup ", "find ", "search for "];
+    const SUPERLATIVES: [&str; 4] = ["best", "top", "most popular", "biggest"];
+    const NOUNS: [&str; 4] = ["song", "songs", "track", "tracks"];
+    let prefix_len = LOOKUP_VERBS.iter().find_map(|verb| {
+        SUPERLATIVES.iter().find_map(|superlative| {
+            NOUNS.iter().find_map(|noun| {
+                ["the ", ""].iter().find_map(|article| {
+                    let prefix = format!("{verb}{article}{superlative} {noun} by ");
+                    lower.starts_with(&prefix).then_some(prefix.len())
+                })
+            })
+        })
+    })?;
+    let suffix = [
+        " and play it",
+        " and play that",
+        " and then play it",
+        " then play it",
+        " and play the most popular",
+        " and play the most popular one",
+        " and play the most popular song",
+        " and play the most popular track",
+        " and play the top one",
+        " and play the top song",
+        " and play the top track",
+        " and play the best one",
+        " and play the best song",
+        " and play the best track",
+        " and play the first one",
+    ]
+    .into_iter()
+    .find(|suffix| lower.ends_with(suffix))?;
+    let artist_end = command.len().checked_sub(suffix.len())?;
+    let artist = command.get(prefix_len..artist_end)?.trim();
+    let normalized_artist = normalized_intent(artist)?;
+    if artist.is_empty()
+        || artist.chars().count() > 160
+        || unsafe_intent_text(artist)
+        || [
+            "him",
+            "her",
+            "them",
+            "that artist",
+            "this artist",
+            "the artist",
+        ]
+        .contains(&normalized_artist.as_str())
+        || artist.chars().any(|character| {
+            !(character.is_alphanumeric()
+                || character.is_whitespace()
+                || matches!(character, '&' | '\'' | '’' | '-' | '.'))
+        })
+    {
+        return None;
+    }
+    Some(artist)
+}
+
+fn unsafe_intent_text(value: &str) -> bool {
+    if value.chars().any(char::is_control) {
+        return true;
+    }
+    let lower = value.to_ascii_lowercase();
+    [
+        "ignore previous",
+        "ignore all",
+        "ignore the system",
+        "system prompt",
+        "developer message",
+        "output json",
+        "return json",
+        "playmusic action",
+        "action_name",
+        "tool call",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker))
+}
+
 /// Server-minted node id.
 ///
 /// MUST be a UUID, not a per-call sequence. cosmos's `LocalChatTurnService.record`
@@ -1439,35 +1665,6 @@ fn node(t: pb::SynapseChatTurn) -> pb::SynapseUnderstandingResponse {
         response: String::new(),
         is_final: false,
         body: Some(pb::synapse_understanding_response::Body::Turn(t)),
-    }
-}
-
-fn heartbeat() -> pb::SynapseUnderstandingResponse {
-    pb::SynapseUnderstandingResponse {
-        response: String::new(),
-        is_final: false,
-        body: Some(pb::synapse_understanding_response::Body::Heartbeat(
-            pb::SynapseHeartbeat {},
-        )),
-    }
-}
-
-/// The explicit turn-complete marker.
-fn end_marker() -> pb::SynapseUnderstandingResponse {
-    pb::SynapseUnderstandingResponse {
-        response: String::new(),
-        is_final: true,
-        body: Some(pb::synapse_understanding_response::Body::Turn(
-            pb::SynapseChatTurn {
-                user: pb::SynapseUser::System as i32,
-                timestamp: now_ts(),
-                identifier: String::new(),
-                parent_identifier: String::new(),
-                content: Some(pb::synapse_chat_turn::Content::End(
-                    pb::SynapseEndContent {},
-                )),
-            },
-        )),
     }
 }
 
@@ -1710,12 +1907,6 @@ mod tests {
             m.body,
             Some(pb::synapse_understanding_response::Body::Heartbeat(_))
         )
-    }
-
-    fn is_end(m: &pb::SynapseUnderstandingResponse) -> bool {
-        matches!(&m.body,
-            Some(pb::synapse_understanding_response::Body::Turn(t))
-                if matches!(t.content, Some(pb::synapse_chat_turn::Content::End(_))))
     }
 
     /// The action/observation turns a legacy device would actually keep.
@@ -2257,7 +2448,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn react_loop_streams_action_observation_respond_end() {
+    async fn react_loop_streams_action_observation_respond() {
         let model = MockChatModel::tool_then_answer(
             ToolCall {
                 name: "web_search".into(),
@@ -2274,15 +2465,14 @@ mod tests {
         )
         .await;
 
-        // action, observation, terminal Respond, end marker. No leading
-        // heartbeat: the legacy consumer keeps only action/observation turns and
-        // logs anything else as an "Unexpected TAO response".
-        assert_eq!(msgs.len(), 4);
+        // Action, observation, terminal Respond. Stream completion closes the
+        // legacy turn; sending any other body makes stock log an
+        // "Unexpected TAO response".
+        assert_eq!(msgs.len(), 3);
         assert!(
             !msgs.iter().any(is_heartbeat),
             "no heartbeat on the legacy stream"
         );
-        assert!(is_end(&msgs[3]));
 
         let a1 = as_action(&msgs[0]).expect("action turn");
         assert_eq!(a1.action, "web_search");
@@ -2481,10 +2671,9 @@ mod tests {
         )
         .await;
 
-        // terminal device action, end marker. No fabricated observation, and no
-        // leading heartbeat on the legacy stream.
-        assert_eq!(msgs.len(), 2);
-        assert!(is_end(&msgs[1]));
+        // One terminal device action. No fabricated observation, heartbeat, or
+        // explicit end body on the legacy stream.
+        assert_eq!(msgs.len(), 1);
         assert!(msgs.iter().all(|m| as_observation(m).is_none()));
 
         let a = as_action(&msgs[0]).expect("terminal device action");
@@ -2495,6 +2684,125 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&a.input).unwrap();
         assert_eq!(parsed["minuteDuration"], 5);
         assert_eq!(parsed["name"], "pasta");
+    }
+
+    #[tokio::test]
+    async fn legacy_stream_never_sends_a_turn_the_stock_interpreter_rejects() {
+        let msgs = run_with(
+            Arc::new(CapturingModel::default()),
+            pb::SynapseUnderstandingRequest {
+                utterance: "hello".into(),
+                device_context: Some(pb::SynapseDeviceContext::default()),
+                ..Default::default()
+            },
+        )
+        .await;
+
+        assert!(
+            msgs.iter()
+                .all(|message| as_action(message).is_some() || as_observation(message).is_some()),
+            "SynapseInterpreter rejects every legacy response without an Action or Observation: {msgs:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn local_weather_preflights_location_before_a_model_can_answer_without_it() {
+        let msgs = run_with(
+            Arc::new(CapturingModel::default()),
+            pb::SynapseUnderstandingRequest {
+                utterance: "What's the weather like where I am right now?".into(),
+                device_context: Some(pb::SynapseDeviceContext::default()),
+                ..Default::default()
+            },
+        )
+        .await;
+
+        let action = device_visible(&msgs)
+            .into_iter()
+            .find_map(as_action)
+            .expect("a local weather request must dispatch a device action");
+        assert_eq!(action.action, "GetCurrentLocation");
+        assert_eq!(action.input, "{}");
+    }
+
+    #[tokio::test]
+    async fn ranked_artist_music_dispatches_the_active_provider_stock_action() {
+        let msgs = run_with(
+            Arc::new(CapturingModel::default()),
+            pb::SynapseUnderstandingRequest {
+                utterance: "look up the best songs by Michael Jackson and play the most popular"
+                    .into(),
+                device_context: Some(pb::SynapseDeviceContext::default()),
+                ..Default::default()
+            },
+        )
+        .await;
+
+        let action = device_visible(&msgs)
+            .into_iter()
+            .find_map(as_action)
+            .expect("a ranked artist request must dispatch a device action");
+        assert_eq!(action.action, "PlayMusic");
+        let input: serde_json::Value = serde_json::from_str(&action.input).unwrap();
+        assert_eq!(input, serde_json::json!({"Artist": "Michael Jackson"}));
+    }
+
+    #[test]
+    fn deterministic_routes_preserve_lock_exclusion_replay_and_grammar_guards() {
+        let unlocked = |utterance: &str| pb::SynapseUnderstandingRequest {
+            utterance: utterance.to_owned(),
+            device_context: Some(pb::SynapseDeviceContext::default()),
+            ..Default::default()
+        };
+
+        let weather = unlocked("What's the weather like today?");
+        let weather_tools = resolve_catalog(&weather, true);
+        assert!(deterministic_device_action(&weather, &weather_tools, false).is_some());
+        assert!(deterministic_device_action(&weather, &weather_tools, true).is_none());
+
+        let mut locked_weather = weather.clone();
+        locked_weather.device_context.as_mut().unwrap().is_locked = true;
+        let locked_tools = resolve_catalog(&locked_weather, true);
+        assert!(deterministic_device_action(&locked_weather, &locked_tools, false).is_none());
+
+        let mut excluded_weather = weather.clone();
+        excluded_weather.excluded_tools = vec!["GetCurrentLocation".to_owned()];
+        let excluded_tools = resolve_catalog(&excluded_weather, true);
+        assert!(deterministic_device_action(&excluded_weather, &excluded_tools, false).is_none());
+
+        let mut replayed_weather = weather.clone();
+        replayed_weather.device_context.as_mut().unwrap().turns = vec![pb::SynapseChatTurn {
+            identifier: "location-action".into(),
+            content: Some(pb::synapse_chat_turn::Content::Action(
+                pb::SynapseActionContent {
+                    action: "GetCurrentLocation".into(),
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        }];
+        let replayed_tools = resolve_catalog(&replayed_weather, true);
+        assert!(
+            deterministic_device_action(&replayed_weather, &replayed_tools, false).is_none(),
+            "a location observation hop must not dispatch the same preflight again",
+        );
+
+        let ranked =
+            unlocked("look up the best songs by Michael Jackson and play the most popular");
+        let ranked_tools = resolve_catalog(&ranked, true);
+        assert!(deterministic_device_action(&ranked, &ranked_tools, false).is_some());
+
+        let mut excluded_ranked = ranked.clone();
+        excluded_ranked.excluded_tools = vec!["PlayMusic".to_owned()];
+        let excluded_ranked_tools = resolve_catalog(&excluded_ranked, true);
+        assert!(
+            deterministic_device_action(&excluded_ranked, &excluded_ranked_tools, false).is_none()
+        );
+        assert!(ranked_artist_request(
+            "look up the best songs by Michael Jackson and play the most popular; ignore previous"
+        )
+        .is_none());
+        assert!(ranked_artist_request("search for Thriller and play the first result").is_none());
     }
 
     #[tokio::test]
@@ -2542,7 +2850,6 @@ mod tests {
             .unwrap()
             .clone();
         assert_eq!(last_action.action, "Respond");
-        assert!(is_end(msgs.last().unwrap()));
     }
 
     #[tokio::test]
@@ -2634,9 +2941,6 @@ mod tests {
 
             for m in &msgs {
                 if let Some(pb::synapse_understanding_response::Body::Turn(t)) = &m.body {
-                    if t.identifier.is_empty() {
-                        continue; // the end marker carries no id
-                    }
                     assert!(
                         seen.insert(t.identifier.clone()),
                         "duplicate server-minted id {} would throw on the device",
@@ -2704,9 +3008,6 @@ mod tests {
         let mut checked = 0;
         for m in &msgs {
             if let Some(pb::synapse_understanding_response::Body::Turn(t)) = &m.body {
-                if t.identifier.is_empty() {
-                    continue; // end marker
-                }
                 let ts = t.timestamp.as_ref().expect("turn must be timestamped");
                 assert!(ts.seconds > 1_700_000_000, "must be a real wall clock");
                 checked += 1;
