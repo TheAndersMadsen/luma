@@ -159,14 +159,16 @@ const ANSWER_RESERVE: std::time::Duration = std::time::Duration::from_secs(7);
 /// Maximum time for the model step that extracts the exact title and artist
 /// from one completed ranked-music research result.
 ///
-/// The live fast model normally takes about 4.4s for this step. Capping it at
-/// 5.5s leaves the provider lookup a real window instead of letting extraction
-/// consume everything up to the terminal streaming reserve.
-const MUSIC_EXTRACTION_STEP_LIMIT: std::time::Duration = std::time::Duration::from_millis(5_500);
+/// The live fast model normally takes about 4.4s for this step but has reached
+/// 7.7s. Use that early-research slack when it exists; the calculation below
+/// still preserves the provider and terminal windows when the first lookup was
+/// slower.
+const MUSIC_EXTRACTION_STEP_LIMIT: std::time::Duration = std::time::Duration::from_secs(8);
 
-/// Time a ranked playback turn must retain after its one research lookup:
-/// 5.5s for title/artist extraction, 4.5s for active-provider verification,
-/// and 750ms to stream the terminal PlayMusic or spoken failure.
+/// Minimum time a ranked playback turn must retain after its one research
+/// lookup: 5.5s for title/artist extraction, 4.5s for active-provider
+/// verification, and 750ms to stream the terminal PlayMusic or spoken failure.
+/// Earlier research completion can extend extraction toward its 8s ceiling.
 const MUSIC_POST_RESEARCH_RESERVE: std::time::Duration = std::time::Duration::from_millis(10_750);
 
 fn music_extraction_step_timeout(remaining: std::time::Duration) -> std::time::Duration {
@@ -3300,7 +3302,7 @@ mod tests {
 
     #[test]
     fn ranked_music_research_preserves_extraction_and_provider_time() {
-        let remaining = MUSIC_POST_RESEARCH_RESERVE + std::time::Duration::from_secs(2);
+        let remaining = MUSIC_POST_RESEARCH_RESERVE + std::time::Duration::from_secs(3);
         let extraction = music_extraction_step_timeout(remaining);
 
         assert_eq!(extraction, MUSIC_EXTRACTION_STEP_LIMIT);
@@ -3322,6 +3324,22 @@ mod tests {
             tool_reserve_for("music_discover", true, true),
             TERMINAL_RESERVE,
             "provider verification must retain only its final streaming reserve"
+        );
+    }
+
+    #[test]
+    fn early_music_research_completion_uses_slack_for_observed_extraction_latency() {
+        let remaining = std::time::Duration::from_millis(13_800);
+        let extraction = music_extraction_step_timeout(remaining);
+
+        assert!(
+            extraction >= std::time::Duration::from_millis(7_700),
+            "an early research result must leave enough time for the observed slow end of the live extraction model"
+        );
+        assert!(
+            remaining.saturating_sub(extraction)
+                >= crate::backends::music_discovery::PROVIDER_MAX + TERMINAL_RESERVE,
+            "using research slack must still preserve provider verification and terminal streaming"
         );
     }
 
