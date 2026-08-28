@@ -88,7 +88,7 @@ pub fn system_prompt() -> &'static str {
      not by you. Emit the matching device action — `GetCurrentTime`, \
      `GetBatteryLevel`, `GetCurrentVolume`, `AmIOnline`, `GetCurrentLocation`, and \
      the like — and let the pin read the live value. Never answer these from the \
-     wearer-situation line or your own reasoning: that line exists to help you \
+     authenticated device-context data or your own reasoning: that data exists to help you \
      reason about time- and place-relative requests, not to be read back as the \
      pin's current state, and it says nothing at all about battery, volume, or \
      connectivity.\n\
@@ -129,10 +129,11 @@ pub fn system_prompt_for(set: &ToolSet) -> String {
     // into logs, citations, or tool arguments. Placed before the per-set guidance
     // so a capability prompt cannot read as an exception to them.
     let safety = super::prompts::safety_block();
+    let orchestration = super::prompts::orchestration_block();
     if set.guidance.trim().is_empty() {
-        format!("{base}\n\n{safety}")
+        format!("{base}\n\n{safety}\n\n{orchestration}")
     } else {
-        format!("{base}\n\n{safety}\n\n{}", set.guidance)
+        format!("{base}\n\n{safety}\n\n{orchestration}\n\n{}", set.guidance)
     }
 }
 
@@ -218,16 +219,23 @@ fn music_discovery_schema() -> Value {
             },
             "criterion": {
                 "type": "string",
-                "enum": ["viral", "trending", "newest", "underrated", "similar", "mood", "top"],
-                "description": "The semantic criterion the wearer asked for."
+                "minLength": 1,
+                "maxLength": 80,
+                "description": "A short semantic criterion such as viral, controversial, influential, underrated, or suitable for a situation."
             },
             "timeframe": {
                 "type": "string",
                 "enum": ["current", "recent", "all_time"]
             },
+            "year": {
+                "type": "integer",
+                "minimum": 1900,
+                "maximum": 2100,
+                "description": "An exact release year when the wearer supplied one."
+            },
             "context": {
                 "type": "string",
-                "description": "A short mood, situation, or reference track supplied by the wearer."
+                "description": "Short additional constraints, mood, situation, or reference track supplied by the wearer."
             }
         },
         "required": ["criterion", "timeframe"]
@@ -465,7 +473,7 @@ const SERVER_TOOLS: &[ServerTool] = &[
     },
     ServerTool {
         name: "music_discover",
-        description: "Discover one current or subjective music choice and verify that exact track against the wearer's active provider. Use this for viral, trending, newest, underrated, similar-to, and mood or situation requests. Exact named tracks and ordinary transport controls do not need this tool.",
+        description: "Discover one research-based or subjective music choice and verify that exact track against the wearer's active provider. Use this for criteria such as viral, controversial, influential, trending, newest, underrated, similar-to, and mood or situation requests. Preserve an explicit release year. Exact named tracks and ordinary transport controls do not need this tool.",
         parameters: music_discovery_schema,
     },
 ];
@@ -762,6 +770,17 @@ struct RequiredSlot {
 /// Marking these required in the schema only *asks* the model; `device_action_input`
 /// is what enforces it before anything reaches the wire.
 const REQUIRED_SLOTS: &[RequiredSlot] = &[
+    // A targetless CallPerson cannot place the requested external call. The
+    // recovered field is technically optional because the same action type can
+    // open call UI, but the central model has a separate OpenDialerHome action
+    // for that behavior; treating a missing recipient as executable would turn
+    // a model omission into an ambiguous external action.
+    RequiredSlot {
+        action: "CallPerson",
+        slot: "To",
+        aliases: &["recipient", "contact", "name"],
+        backfill: Backfill::None,
+    },
     RequiredSlot {
         action: "Alarm",
         slot: "Request",
@@ -806,10 +825,7 @@ fn required_slots_for(action: &str) -> impl Iterator<Item = &'static RequiredSlo
 
 /// Whether a slot holds usable text (present, a string, and not just blanks).
 fn slot_is_filled(object: &serde_json::Map<String, Value>, slot: &str) -> bool {
-    object
-        .get(slot)
-        .and_then(Value::as_str)
-        .is_some_and(|s| !s.trim().is_empty())
+    object.get(slot).is_some_and(|value| !is_blank(value))
 }
 
 /// A slot the device will read as absent: null, blank text, or an empty list.
@@ -1466,6 +1482,46 @@ pub fn missing_required_slots(action: &str, arguments: &str) -> Vec<&'static str
         .collect()
 }
 
+/// One concise wearer question when a device action is missing information the
+/// model cannot safely invent. Invalid values still go back to the model for
+/// self-correction; only absent required fields become a human clarification.
+pub fn clarification_question(action: &str, arguments: &str) -> Option<String> {
+    let recovered = catalog_generated::find(action)?;
+    let repaired = with_device_defaults(action, arguments);
+    let value: Value = serde_json::from_str(&repaired).ok()?;
+    let object = value.as_object()?;
+    let missing = recovered
+        .fields
+        .iter()
+        .find(|field| field.required && !slot_is_filled(object, field.name))
+        .map(|field| field.name)
+        .or_else(|| missing_required_slots(action, &repaired).into_iter().next())?;
+
+    let question = match (action, missing) {
+        ("CallPerson", "To") => "Who should I call?".to_owned(),
+        ("ComposeMessage", "To") => "Who should I write the message to?".to_owned(),
+        ("ComposeMessage", _) => "What should the message say?".to_owned(),
+        ("SetTimer", _) => "How long should the timer run?".to_owned(),
+        ("SetAlarm", _) => "What time should I set the alarm for?".to_owned(),
+        ("ConnectToWifi", _) => "Which Wi-Fi network should I connect to?".to_owned(),
+        ("Translate", _) | ("StartTranslation", _) => {
+            "Which language should I translate to?".to_owned()
+        }
+        ("PlayMusic", _) => "What would you like me to play?".to_owned(),
+        _ => {
+            let mut label = String::new();
+            for (index, character) in missing.chars().enumerate() {
+                if index > 0 && character.is_ascii_uppercase() {
+                    label.push(' ');
+                }
+                label.extend(character.to_lowercase());
+            }
+            format!("What should the {label} be?")
+        }
+    };
+    Some(question)
+}
+
 /// The corrective observation for a device action the server refused to emit.
 ///
 /// Shaped like the device's own `"Unrecognized function name and/or arguments"`
@@ -1586,6 +1642,10 @@ pub struct ToolContext {
     /// deterministic adapter; production uses the web + Center adapter.
     pub music_discovery:
         Option<std::sync::Arc<dyn crate::backends::music_discovery::MusicDiscoveryBackend>>,
+    /// Absolute turn deadline supplied by the foreground assistant. Backends
+    /// that contain multiple dependent stages share this instead of stacking
+    /// independent request timeouts beyond the Pin's turn budget.
+    pub deadline: Option<std::time::Instant>,
 }
 
 /// Counts one tool invocation when the call returns, however it returns.
@@ -1695,10 +1755,12 @@ pub async fn execute_tool_with(name: &str, arguments: &str, context: &ToolContex
             };
             let production = crate::backends::music_discovery::ProductionMusicDiscovery;
             let result = match context.music_discovery.as_ref() {
-                Some(backend) => backend.discover(request, principal).await,
+                Some(backend) => backend.discover(request, principal, context.deadline).await,
                 None => {
                     use crate::backends::music_discovery::MusicDiscoveryBackend;
-                    production.discover(request, principal).await
+                    production
+                        .discover(request, principal, context.deadline)
+                        .await
                 }
             };
             match result {
@@ -2462,6 +2524,7 @@ mod tests {
             keys: None,
             location: None,
             music_discovery: None,
+            deadline: None,
         };
         let request = json!({ "on_or_after": "2020-01-01" }).to_string();
 
@@ -2586,6 +2649,7 @@ mod tests {
             keys: Some(Default::default()),
             location: None,
             music_discovery: None,
+            deadline: None,
         };
 
         let saved = execute_tool_with(
@@ -2845,6 +2909,24 @@ mod tests {
         assert!(device_action_input("PauseMusic", "{}", "").is_ok());
     }
 
+    #[test]
+    fn a_missing_required_device_value_becomes_one_concise_clarification() {
+        assert_eq!(
+            clarification_question("CallPerson", "{}"),
+            Some("Who should I call?".to_owned())
+        );
+        assert_eq!(
+            clarification_question("CallPerson", r#"{"To":"Dana"}"#),
+            None,
+            "a complete action must not ask an unnecessary question"
+        );
+        assert_eq!(
+            clarification_question("PauseMusic", "{}"),
+            None,
+            "a zero-argument control is already unambiguous"
+        );
+    }
+
     /// REGRESSION: `schema_for` encoded the contract's types, value sets, and
     /// required flags faithfully — and nothing enforced any of them. The schema
     /// only *asks* the model; the pin is what has to deserialize, and a slot it
@@ -3074,6 +3156,7 @@ mod tests {
             keys: Some(keys.clone()),
             location: None,
             music_discovery: None,
+            deadline: None,
         };
         let recalled =
             execute_tool_with("recall_memory", r#"{"query":"wifi password"}"#, &context).await;
@@ -3115,6 +3198,7 @@ mod tests {
             keys: Some(Default::default()),
             location: None,
             music_discovery: None,
+            deadline: None,
         };
 
         // The oldest note, then more than a full scan window of newer ones.
@@ -3195,6 +3279,7 @@ mod tests {
             keys: Some(keys),
             location: None,
             music_discovery: None,
+            deadline: None,
         };
         let recalled =
             execute_tool_with("recall_memory", r#"{"query":"gate code"}"#, &context).await;
@@ -3297,8 +3382,8 @@ mod tests {
             );
         }
         assert!(
-            prompt.contains("wearer-situation line"),
-            "the prompt must forbid reciting device state from the situation line"
+            prompt.contains("authenticated device-context data"),
+            "the prompt must forbid reciting authenticated device state"
         );
     }
 

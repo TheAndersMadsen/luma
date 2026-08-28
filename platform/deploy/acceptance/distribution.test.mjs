@@ -255,6 +255,7 @@ test("operator release is lean, versioned, and bound to exact OCI digests", (t) 
   assert.equal(listed.status, 0, listed.stderr);
   assert.match(listed.stdout, new RegExp(`ai-pin-revival-operator-${version}/revival`, "u"));
   assert.match(listed.stdout, /platform\/deploy\/vps\/deploy\.sh/u);
+  assert.match(listed.stdout, /platform\/deploy\/vps\/assistant-eval\.mjs/u);
   assert.match(listed.stdout, /platform\/deploy\/pin\/activate\.mjs/u);
   assert.match(listed.stdout, /platform\/deploy\/pin\/device-target-guard\.mjs/u);
   assert.match(listed.stdout, /platform\/deploy\/pin\/import-release\.mjs/u);

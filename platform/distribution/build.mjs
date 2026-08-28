@@ -47,6 +47,7 @@ const FILES = Object.freeze([
   ["platform/deploy/pin/import-release.mjs", "platform/deploy/pin/import-release.mjs", 0o755],
   ["platform/deploy/pin/validate-release-store.mjs", "platform/deploy/pin/validate-release-store.mjs", 0o755],
   ["platform/deploy/vps/deploy.sh", "platform/deploy/vps/deploy.sh", 0o755],
+  ["platform/deploy/vps/assistant-eval.mjs", "platform/deploy/vps/assistant-eval.mjs", 0o755],
   ["platform/deploy/vps/preflight.sh", "platform/deploy/vps/preflight.sh", 0o755],
   ["platform/deploy/vps/verify.sh", "platform/deploy/vps/verify.sh", 0o755],
   ["platform/distribution/OPERATOR-README.txt", "README.txt", 0o644],

@@ -45,8 +45,9 @@ use tonic::Status;
 
 use super::catalog;
 use super::llm::{ChatMessage, ChatModel, Role, ToolCall, ToolDef};
+use super::runtime::{ForegroundRun, RouteClass, Transport};
 use super::toolsets;
-use super::turn::context::situation_line;
+use super::turn::context::{MEMORY_CONTEXT_POLICY, situation_line, wearer_memory};
 use super::turn::frames::{action_turn, now_ts, observation_turn};
 use super::turn::text::{model_facing_observation, spoken_text};
 use crate::services::gates::{self, BlockingObservation, Entitlement};
@@ -100,23 +101,7 @@ pub(super) const WEARER_FACING_FAILURE_STRINGS: &[&str] =
 /// result. Both surfaced to the wearer as "Something went wrong" at exactly
 /// 10.0s. 15s clears realistic slow calls while a call past it is genuinely
 /// stuck; the whole run stays bounded by [`RUN_BUDGET`] regardless.
-const MODEL_STEP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
-
-/// How many of the wearer's newest notes are scanned when building the facts
-/// block. A ceiling on the READ, so the query cost cannot grow with the account.
-const WEARER_FACT_SCAN: i32 = 64;
-/// How many facts are carried to the model. These ride EVERY turn, so each one is
-/// paid for on every request — but the failure mode of being too small is worse
-/// than the token cost. Past the cap the OLDEST facts drop out silently, and the
-/// only fallback is `recall_memory`, whose lexical matcher provably cannot bridge
-/// a synonym ("interests" scores zero against "i like noodles"). So a wearer who
-/// crosses the cap gets the original bug back for their older facts, quietly.
-/// 48 keeps real accounts inside the block; the char ceiling still bounds cost.
-const WEARER_FACTS_MAX_ITEMS: usize = 48;
-/// Character ceiling for the whole block, enforced alongside the item count — one
-/// pathologically long note must not consume the budget the others need. At ~40
-/// characters a fact this is roughly the item cap, so neither bound dominates.
-const WEARER_FACTS_MAX_CHARS: usize = 2_400;
+const MODEL_STEP_TIMEOUT: std::time::Duration = super::runtime::MODEL_STEP_LIMIT;
 
 /// How long this model step may run, given the budget left.
 ///
@@ -136,11 +121,11 @@ fn step_timeout_for(remaining: std::time::Duration) -> std::time::Duration {
 /// in time gRPC fires `DEADLINE_EXCEEDED`, the device discards every turn already
 /// streamed, and speaks `ERROR_TIMEOUT`. So bound the run well under 25s and always
 /// deliver a terminal `Respond` first. (Bidi carries no such deadline.)
-const RUN_BUDGET: std::time::Duration = std::time::Duration::from_secs(22);
+const RUN_BUDGET: std::time::Duration = super::runtime::FOREGROUND_BUDGET;
 
 /// Headroom held back from the run budget so that a tool which overruns still
 /// leaves time to stream the terminal `Respond` the wearer hears.
-const TERMINAL_RESERVE: std::time::Duration = std::time::Duration::from_millis(750);
+const TERMINAL_RESERVE: std::time::Duration = super::runtime::TERMINAL_RESERVE;
 
 /// The observation for a server tool that did not return inside the run's
 /// remaining budget. The tool produced nothing, so the model is told exactly
@@ -208,9 +193,16 @@ const FINAL_ANSWER_DIRECTIVE: &str = concat!(
 /// nothing. Observed live — three searches, a usable result in hand after the
 /// second, and the device's timeout string spoken at 22s with the answer sitting
 /// unread in the transcript.
-fn out_of_tool_budget(deadline: std::time::Instant) -> bool {
+fn out_of_tool_budget_with(
+    deadline: std::time::Instant,
+    terminal_reserve: std::time::Duration,
+) -> bool {
     deadline.saturating_duration_since(std::time::Instant::now())
-        <= ANSWER_RESERVE + MIN_TOOL_WINDOW
+        <= terminal_reserve + MIN_TOOL_WINDOW
+}
+
+fn out_of_tool_budget(deadline: std::time::Instant) -> bool {
+    out_of_tool_budget_with(deadline, ANSWER_RESERVE)
 }
 
 /// Run a server tool bounded by what is left of the run budget.
@@ -227,16 +219,48 @@ async fn bounded_tool<F>(fut: F, deadline: std::time::Instant) -> String
 where
     F: std::future::Future<Output = String>,
 {
+    bounded_tool_with_reserve(fut, deadline, ANSWER_RESERVE).await
+}
+
+async fn bounded_tool_with_reserve<F>(
+    fut: F,
+    deadline: std::time::Instant,
+    terminal_reserve: std::time::Duration,
+) -> String
+where
+    F: std::future::Future<Output = String>,
+{
     // Reserve the COMPOSE window, not just the streaming one. A tool allowed to
     // run to `deadline - TERMINAL_RESERVE` can return with too little left to
     // turn its own result into an answer — which is how a run ends up spending
     // 22s and speaking the timeout string with the result already in hand.
     let budget = deadline
         .saturating_duration_since(std::time::Instant::now())
-        .saturating_sub(ANSWER_RESERVE);
+        .saturating_sub(terminal_reserve);
     tokio::time::timeout(budget, fut)
         .await
         .unwrap_or_else(|_| TOOL_TIMED_OUT.to_owned())
+}
+
+/// Run a server tool under the shared deadline, but abandon it immediately when
+/// the stock response stream is gone. Dropping the future cancels reqwest-backed
+/// provider work instead of spending the rest of the turn on an unheard answer.
+async fn bounded_tool_or_cancel<F>(
+    fut: F,
+    deadline: std::time::Instant,
+    terminal_reserve: std::time::Duration,
+    tx: &Sender<Result<pb::SynapseUnderstandingResponse, Status>>,
+) -> Option<String>
+where
+    F: std::future::Future<Output = String>,
+{
+    tokio::select! {
+        biased;
+        _ = tx.closed() => None,
+        observation = bounded_tool_with_reserve(fut, deadline, terminal_reserve) => {
+            Some(observation)
+        }
+    }
 }
 
 /// cosmos's replayed-context ceiling.
@@ -325,65 +349,6 @@ impl Engine {
     /// this engine does (one assistant, two transports).
     pub fn model(&self) -> Arc<dyn ChatModel> {
         self.model.clone()
-    }
-
-    /// The wearer's saved facts as a system line, or `None` when there are none.
-    ///
-    /// Bounded on purpose. A wearer's own notes are few and every one of them is
-    /// about the person being spoken to, so the whole set is worth containing — but
-    /// "few" has to be enforced, not assumed: an unbounded block would grow with
-    /// the account until it crowded out the conversation and slowed every turn.
-    /// Newest first, so what survives the cap is what they most recently chose to
-    /// keep.
-    ///
-    /// Only notes THIS SERVER can read appear. A note a device sealed under a key
-    /// the deployment does not hold stays sealed and is simply absent — never
-    /// guessed at, never counted. A store that cannot be reached yields `None`
-    /// rather than an empty list, so a lookup failure can never render as "you
-    /// have saved nothing".
-    async fn wearer_facts(&self) -> Option<String> {
-        let principal = self.tools.principal.as_deref()?;
-        let store = self.tools.store.as_ref()?;
-        let notes = store
-            .recent_notes(principal, WEARER_FACT_SCAN, None, None)
-            .await
-            .ok()?;
-
-        let mut lines: Vec<String> = Vec::new();
-        let mut budget = WEARER_FACTS_MAX_CHARS;
-        for note in notes.iter() {
-            // Plaintext index only: a note the server sealed for the device is
-            // opaque here, and inventing a summary of it would be fabricating a
-            // memory the wearer never wrote.
-            let Some(text) = note.indexed_text.as_deref() else {
-                continue;
-            };
-            let text = text.trim();
-            if text.is_empty() {
-                continue;
-            }
-            let cost = text.chars().count() + 3;
-            if cost > budget {
-                break;
-            }
-            budget -= cost;
-            lines.push(format!("- {text}"));
-            if lines.len() >= WEARER_FACTS_MAX_ITEMS {
-                break;
-            }
-        }
-        if lines.is_empty() {
-            return None;
-        }
-        Some(format!(
-            "What the wearer has asked you to remember about them:\n{}\n\
-             Treat these as established facts about the person you are speaking to \
-             and answer from them directly. If one of them answers the question, \
-             say so plainly — do not look it up again and do not say nothing has \
-             been established. If they do not cover what was asked, say only that \
-             the specific thing is not something they have saved.",
-            lines.join("\n")
-        ))
     }
 
     /// Spend what is left of the budget turning the transcript into an answer.
@@ -507,16 +472,29 @@ impl Engine {
         // and a ranked named-artist request is exactly the Artist-only
         // PlayMusic lookup the active provider already implements. Text-only
         // callers have no Pin on which to run either action.
-        if system_addendum.is_none() {
-            if let Some(action) = deterministic_device_action(&req, &tools) {
-                let id = new_id();
-                finish(
-                    &tx,
-                    terminal_device_action(action.name, &action.input, action.thought, parent, id),
-                )
-                .await;
-                return;
-            }
+        let deterministic = system_addendum
+            .is_none()
+            .then(|| deterministic_device_action(&req, &tools))
+            .flatten();
+        let mut run = ForegroundRun::with_budget(
+            Transport::Legacy,
+            if deterministic.is_some() {
+                RouteClass::D1
+            } else {
+                RouteClass::A1
+            },
+            run_budget(),
+        )
+        .with_model(self.model.provenance());
+        if let Some(action) = deterministic {
+            let id = new_id();
+            finish(
+                &tx,
+                terminal_device_action(action.name, &action.input, action.thought, parent, id),
+            )
+            .await;
+            run.finish("device_action");
+            return;
         }
 
         // Reconstruct the conversation the model reasons over from the state the
@@ -547,8 +525,11 @@ impl Engine {
         // failure modes at once: no tool decision, no term overlap, no round trip.
         // `recall_memory` stays for dated and archive-shaped questions ("what did
         // I note last Tuesday"), where scanning beats containing everything.
-        if let Some(facts) = self.wearer_facts().await {
-            messages.push(ChatMessage::system(facts));
+        if let Ok(Some(memory)) =
+            tokio::time::timeout(run.context_timeout(), wearer_memory(&self.tools)).await
+        {
+            messages.push(ChatMessage::system(MEMORY_CONTEXT_POLICY));
+            messages.push(memory);
         }
 
         // NOTE: no leading heartbeat on the legacy server-stream.
@@ -569,7 +550,9 @@ impl Engine {
             .unwrap_or(0);
 
         // Bound the whole turn under the device's 25s deadline (see RUN_BUDGET).
-        let run_deadline = std::time::Instant::now() + run_budget();
+        let run_deadline = run.deadline();
+        let mut tool_context = self.tools.clone();
+        tool_context.deadline = Some(run_deadline);
 
         for step in 0..ACTION_LIMIT {
             // Out of turn budget: deliver a spoken terminal NOW, before the device's
@@ -580,6 +563,7 @@ impl Engine {
                 // all there is time to say.
                 let id = new_id();
                 finish(&tx, respond(ERROR_TIMEOUT, parent, id)).await;
+                run.finish("deadline");
                 return;
             }
             // Never past the remaining budget, and never so short that the last
@@ -591,35 +575,49 @@ impl Engine {
             // folding them together is what made an expired provider key raise
             // the deadline alarm. The spoken string stays stock; the outcome
             // label says what actually happened.
-            let resp =
-                match tokio::time::timeout(step_timeout, self.model.complete(&messages, &tools))
-                    .await
-                {
-                    Ok(Ok(response)) => response,
-                    Ok(Err(error)) => {
-                        let id = new_id();
-                        finish_as(
-                            &tx,
-                            respond(ERROR_TIMEOUT, parent, id),
-                            Some(model_failure_outcome(&error)),
-                        )
-                        .await;
-                        return;
-                    }
-                    // The step outran its slice of the turn budget. This one really
-                    // is a deadline.
-                    Err(_elapsed) => {
-                        let id = new_id();
-                        finish_as(&tx, respond(ERROR_TIMEOUT, parent, id), Some("deadline")).await;
-                        return;
-                    }
-                };
+            run.note_model_step();
+            let model_step =
+                tokio::time::timeout(step_timeout, self.model.complete(&messages, &tools));
+            let resolved = tokio::select! {
+                biased;
+                _ = tx.closed() => {
+                    run.finish("cancelled");
+                    return;
+                }
+                resolved = model_step => resolved,
+            };
+            let resp = match resolved {
+                Ok(Ok(response)) => response,
+                Ok(Err(error)) => {
+                    let id = new_id();
+                    finish_as(
+                        &tx,
+                        respond(ERROR_TIMEOUT, parent, id),
+                        Some(model_failure_outcome(&error)),
+                    )
+                    .await;
+                    run.finish(model_failure_outcome(&error));
+                    return;
+                }
+                // The step outran its slice of the turn budget. This one really
+                // is a deadline.
+                Err(_elapsed) => {
+                    let id = new_id();
+                    finish_as(&tx, respond(ERROR_TIMEOUT, parent, id), Some("deadline")).await;
+                    run.finish("deadline");
+                    return;
+                }
+            };
 
             if let Some(tc) = resp.tool_call {
+                let terminal_music = tc.name == "music_discover"
+                    && explicit_playback_request(&utterance)
+                    && tools.iter().any(|tool| tool.name == "PlayMusic");
                 // Unknown tool: bounce the stock unrecognized-function observation
                 // and LOOP so the model can correct itself (cosmos's device does
                 // exactly this, tagged source=DEVICE).
                 if !tools.iter().any(|t| t.name == tc.name) {
+                    run.note_tool_calls(1);
                     let action_id = new_id();
                     if send(
                         &tx,
@@ -634,6 +632,7 @@ impl Engine {
                     .await
                     .is_err()
                     {
+                        run.finish("cancelled");
                         return;
                     }
                     let obs_id = new_id();
@@ -650,12 +649,14 @@ impl Engine {
                     .await
                     .is_err()
                     {
+                        run.finish("cancelled");
                         return;
                     }
-                    messages.push(ChatMessage::user(format!(
-                        "[Called {}({}). Result: {UNRECOGNIZED_FUNCTION}]",
-                        tc.name, tc.arguments
-                    )));
+                    messages.push(ChatMessage::tool_result(
+                        &tc.name,
+                        &tc.arguments,
+                        UNRECOGNIZED_FUNCTION,
+                    ));
                     // The device counts this action turn toward `mActionLimit`
                     // like any other, so the server's ceiling must too — else a
                     // model that keeps hallucinating tools runs past the pin's
@@ -669,12 +670,14 @@ impl Engine {
                     // dispatches, so the wearer hears nothing at all.
                     if step + 1 == ACTION_LIMIT || actions_in_run + 1 > ACTION_LIMIT {
                         too_many_actions_terminal(&tx, parent).await;
+                        run.finish("too_many_actions");
                         return;
                     }
                     continue;
                 }
 
                 if catalog::is_device_tool(&tc.name) {
+                    run.note_tool_calls(1);
                     // `Respond` terminates every turn, and its `Response` slot is
                     // OPTIONAL on the device — a missing/miscased key resolves to
                     // null and the answers experience throws, so the wearer hears
@@ -694,6 +697,11 @@ impl Engine {
                             ),
                         )
                         .await;
+                        run.finish(if input.contains(NO_ANSWER) {
+                            "no_answer"
+                        } else {
+                            "answered"
+                        });
                         return;
                     }
                     // Account gate: a blocked action is replaced by the canned
@@ -713,6 +721,7 @@ impl Engine {
                         .await
                         .is_err()
                         {
+                            run.finish("cancelled");
                             return;
                         }
                         let id = new_id();
@@ -743,6 +752,7 @@ impl Engine {
                             },
                         )
                         .await;
+                        run.finish("blocked");
                         return;
                     }
                     // Runaway guard: `Switchboard` rejects any dispatched action
@@ -752,6 +762,7 @@ impl Engine {
                     // apology. Deliver the exempt `Respond` ourselves instead.
                     if actions_in_run + 1 > ACTION_LIMIT {
                         too_many_actions_terminal(&tx, parent).await;
+                        run.finish("too_many_actions");
                         return;
                     }
                     // Validate the arguments against the action's REQUIRED slots
@@ -766,6 +777,21 @@ impl Engine {
                         match catalog::device_action_input(&tc.name, &tc.arguments, &utterance) {
                             Ok(input) => input,
                             Err(observation) => {
+                                if let Some(question) =
+                                    catalog::clarification_question(&tc.name, &tc.arguments)
+                                {
+                                    let spoken = if super::policy::question_was_already_asked(
+                                        &req, &question,
+                                    ) {
+                                        "I couldn't complete that without the missing detail."
+                                    } else {
+                                        &question
+                                    };
+                                    let id = new_id();
+                                    finish(&tx, respond(spoken, parent, id)).await;
+                                    run.finish("clarification");
+                                    return;
+                                }
                                 let action_id = new_id();
                                 if send(
                                     &tx,
@@ -780,6 +806,7 @@ impl Engine {
                                 .await
                                 .is_err()
                                 {
+                                    run.finish("cancelled");
                                     return;
                                 }
                                 let obs_id = new_id();
@@ -796,21 +823,32 @@ impl Engine {
                                 .await
                                 .is_err()
                                 {
+                                    run.finish("cancelled");
                                     return;
                                 }
-                                messages.push(ChatMessage::user(format!(
-                                    "[Called {}({}). Result: {observation}]",
-                                    tc.name, tc.arguments
-                                )));
+                                messages.push(ChatMessage::tool_result(
+                                    &tc.name,
+                                    &tc.arguments,
+                                    &observation,
+                                ));
                                 actions_in_run += 1;
                                 parent = obs_id;
                                 if step + 1 == ACTION_LIMIT || actions_in_run + 1 > ACTION_LIMIT {
                                     too_many_actions_terminal(&tx, parent).await;
+                                    run.finish("too_many_actions");
                                     return;
                                 }
                                 continue;
                             }
                         };
+                    if let Some(question) =
+                        super::policy::confirmation_question(&req, &tc.name, &input)
+                    {
+                        let id = new_id();
+                        finish(&tx, respond(&question, parent, id)).await;
+                        run.finish("confirmation_required");
+                        return;
+                    }
                     // DEVICE action: the wearer's pin executes it. In the legacy
                     // server-stream path the device dispatches the *final* action,
                     // so a device tool is terminal — emit it as the last action
@@ -822,6 +860,7 @@ impl Engine {
                         terminal_device_action(&tc.name, &input, &resp.thought, parent, id),
                     )
                     .await;
+                    run.finish("device_action");
                     return;
                 }
 
@@ -829,7 +868,12 @@ impl Engine {
                 // then loop, so both are bounded by the run budget from here on:
                 // if there is not enough left to run one AND still speak, close
                 // the run now, before any action node goes out.
-                if out_of_tool_budget(run_deadline) {
+                let tool_reserve = if terminal_music {
+                    TERMINAL_RESERVE
+                } else {
+                    ANSWER_RESERVE
+                };
+                if out_of_tool_budget_with(run_deadline, tool_reserve) {
                     // The run is out of time to start another tool — but the
                     // observations it already collected are sitting in
                     // `messages`. Answer from those before falling back to the
@@ -840,6 +884,11 @@ impl Engine {
                         .await
                         .unwrap_or_else(|| ERROR_TIMEOUT.to_owned());
                     finish(&tx, respond(&spoken, parent, id)).await;
+                    run.finish(if spoken == ERROR_TIMEOUT {
+                        "deadline"
+                    } else {
+                        "answered"
+                    });
                     return;
                 }
 
@@ -855,15 +904,18 @@ impl Engine {
                 // transport (the pin dispatches the final action and returns one
                 // observation), so anything device-side falls through to the
                 // single-action path below.
-                let batched: Vec<ToolCall> = resp
-                    .extra_tool_calls
-                    .iter()
-                    .filter(|extra| {
-                        !catalog::is_device_tool(&extra.name)
-                            && catalog::is_server_tool(&extra.name)
-                    })
-                    .cloned()
-                    .collect();
+                let batched: Vec<ToolCall> = if terminal_music {
+                    Vec::new()
+                } else {
+                    resp.extra_tool_calls
+                        .iter()
+                        .filter(|extra| {
+                            !catalog::is_device_tool(&extra.name)
+                                && catalog::is_server_tool(&extra.name)
+                        })
+                        .cloned()
+                        .collect()
+                };
                 // Never exceed the run's action ceiling: the device counts every
                 // dispatched action, so a batch that overruns it would be cut
                 // short on the pin instead of here.
@@ -873,6 +925,7 @@ impl Engine {
                 if !batched.is_empty() {
                     let mut all: Vec<ToolCall> = vec![tc.clone()];
                     all.extend(batched);
+                    run.note_tool_calls(all.len());
 
                     // Emit every action first, then run them concurrently: the
                     // whole point is that two lookups cost one tool wait, not two.
@@ -892,6 +945,7 @@ impl Engine {
                         .await
                         .is_err()
                         {
+                            run.finish("cancelled");
                             return;
                         }
                         actions_in_run += 1;
@@ -903,17 +957,27 @@ impl Engine {
                     // one stalled backend here would blow the device deadline
                     // just as surely as it would on the single-tool path.
                     let results = futures_util::future::join_all(all.iter().map(|call| {
-                        bounded_tool(
-                            catalog::execute_tool_with(&call.name, &call.arguments, &self.tools),
+                        bounded_tool_or_cancel(
+                            catalog::execute_tool_with(&call.name, &call.arguments, &tool_context),
                             run_deadline,
+                            ANSWER_RESERVE,
+                            &tx,
                         )
                     }))
                     .await;
+
+                    if results.iter().any(Option::is_none) {
+                        run.finish("cancelled");
+                        return;
+                    }
 
                     let mut last_obs_id = parent.clone();
                     for ((call, action_id), observation) in
                         all.iter().zip(action_ids).zip(results.iter())
                     {
+                        let observation = observation
+                            .as_deref()
+                            .expect("cancelled batches returned above");
                         let obs_id = new_id();
                         if send(
                             &tx,
@@ -928,20 +992,21 @@ impl Engine {
                         .await
                         .is_err()
                         {
+                            run.finish("cancelled");
                             return;
                         }
-                        messages.push(ChatMessage::user(format!(
-                            "[Called {}({}). Result: {}]",
-                            call.name,
-                            call.arguments,
-                            model_facing_observation(observation)
-                        )));
+                        messages.push(ChatMessage::tool_result(
+                            &call.name,
+                            &call.arguments,
+                            &model_facing_observation(observation),
+                        ));
                         last_obs_id = obs_id;
                     }
                     parent = last_obs_id;
 
                     if step + 1 == ACTION_LIMIT || actions_in_run + 1 > ACTION_LIMIT {
                         too_many_actions_terminal(&tx, parent).await;
+                        run.finish("too_many_actions");
                         return;
                     }
                     continue;
@@ -950,6 +1015,7 @@ impl Engine {
                 // SERVER tool: resolve it server-side, emit action + paired
                 // observation, and LOOP.
                 let action_id = new_id();
+                run.note_tool_calls(1);
                 if send(
                     &tx,
                     node(action_turn(
@@ -963,14 +1029,21 @@ impl Engine {
                 .await
                 .is_err()
                 {
+                    run.finish("cancelled");
                     return;
                 }
                 actions_in_run += 1;
-                let observation = bounded_tool(
-                    catalog::execute_tool_with(&tc.name, &tc.arguments, &self.tools),
+                let Some(observation) = bounded_tool_or_cancel(
+                    catalog::execute_tool_with(&tc.name, &tc.arguments, &tool_context),
                     run_deadline,
+                    tool_reserve,
+                    &tx,
                 )
-                .await;
+                .await
+                else {
+                    run.finish("cancelled");
+                    return;
+                };
                 let obs_id = new_id();
                 if send(
                     &tx,
@@ -985,23 +1058,21 @@ impl Engine {
                 .await
                 .is_err()
                 {
+                    run.finish("cancelled");
                     return;
                 }
-                messages.push(ChatMessage::user(format!(
-                    "[Called {}({}). Result: {}]",
-                    tc.name,
-                    tc.arguments,
-                    model_facing_observation(&observation)
-                )));
+                messages.push(ChatMessage::tool_result(
+                    &tc.name,
+                    &tc.arguments,
+                    &model_facing_observation(&observation),
+                ));
                 parent = obs_id;
 
                 // A grounded discovery already contains the exact provider-
                 // verified title and artist. When the wearer explicitly asked
                 // to play it, a second model call can only add latency and is
                 // the step that used to overrun the Pin's turn deadline.
-                if tc.name == "music_discover"
-                    && explicit_playback_request(&utterance)
-                    && tools.iter().any(|tool| tool.name == "PlayMusic")
+                if terminal_music
                     && !current_run_contains_action(
                         req.device_context
                             .as_ref()
@@ -1014,6 +1085,7 @@ impl Engine {
                         crate::backends::music_discovery::play_music_arguments(&observation)
                     {
                         let id = new_id();
+                        let settlement_started = std::time::Instant::now();
                         finish(
                             &tx,
                             terminal_device_action(
@@ -1025,8 +1097,34 @@ impl Engine {
                             ),
                         )
                         .await;
+                        run.finish("device_action");
+                        crate::metrics::record_music_discovery_stage(
+                            "action",
+                            "played",
+                            settlement_started.elapsed(),
+                        );
                         return;
                     }
+                    let spoken = if observation == TOOL_TIMED_OUT {
+                        crate::backends::music_discovery::MusicDiscoveryError::Deadline
+                            .observation()
+                    } else {
+                        crate::backends::music_discovery::spoken_failure(&observation)
+                            .unwrap_or_else(|| {
+                                crate::backends::music_discovery::MusicDiscoveryError::NoEvidence
+                                    .observation()
+                            })
+                    };
+                    let id = new_id();
+                    let settlement_started = std::time::Instant::now();
+                    finish(&tx, respond(spoken, parent, id)).await;
+                    run.finish("answered");
+                    crate::metrics::record_music_discovery_stage(
+                        "action",
+                        "responded",
+                        settlement_started.elapsed(),
+                    );
+                    return;
                 }
 
                 // Budget guard: if this was the last permitted step, close the run
@@ -1034,6 +1132,7 @@ impl Engine {
                 // into a terminal Respond (Respond is exempt from the limit).
                 if step + 1 == ACTION_LIMIT || actions_in_run + 1 > ACTION_LIMIT {
                     too_many_actions_terminal(&tx, parent).await;
+                    run.finish("too_many_actions");
                     return;
                 }
             } else if let Some(answer) = resp
@@ -1053,12 +1152,14 @@ impl Engine {
                 // tool-call path; this is the same rule on the plain-content path.
                 let id = new_id();
                 finish(&tx, respond(answer, parent, id)).await;
+                run.finish("answered");
                 return;
             } else {
                 // Model returned neither a tool call nor content: still terminate
                 // the stream with a spoken `Respond` rather than silence.
                 let id = new_id();
                 finish(&tx, respond(NO_ANSWER, parent, id)).await;
+                run.finish("no_answer");
                 return;
             }
         }
@@ -1074,6 +1175,7 @@ impl Engine {
         // regressed. Close the run here the way `Switchboard` does. Bidi has
         // carried this same post-loop terminal since it was written.
         too_many_actions_terminal(&tx, parent).await;
+        run.finish("too_many_actions");
     }
 }
 
@@ -1235,7 +1337,7 @@ fn build_history(req: &pb::SynapseUnderstandingRequest) -> Vec<ChatMessage> {
         resolved_tool_set(req).set,
     ))];
     if let Some(situation) = situation_line(req) {
-        messages.push(ChatMessage::system(situation));
+        messages.push(ChatMessage::device_context(&situation));
     }
 
     if let Some(dc) = req.device_context.as_ref() {
@@ -1262,18 +1364,16 @@ fn build_history(req: &pb::SynapseUnderstandingRequest) -> Vec<ChatMessage> {
                             messages.push(ChatMessage::assistant(text));
                         }
                     } else if !a.action.is_empty() {
-                        messages.push(ChatMessage::user(format!(
-                            "[Previously called {}({})]",
-                            a.action, a.input
-                        )));
+                        messages.push(ChatMessage::prior_tool_call(&a.action, &a.input));
                     }
                 }
                 Some(pb::synapse_chat_turn::Content::Observation(o)) => {
                     if !o.observation.is_empty() {
-                        messages.push(ChatMessage::user(format!(
-                            "[Result of {}: {}]",
-                            o.action_name, o.observation
-                        )));
+                        messages.push(ChatMessage::tool_result(
+                            &o.action_name,
+                            "{}",
+                            &model_facing_observation(&o.observation),
+                        ));
                     }
                 }
                 Some(pb::synapse_chat_turn::Content::Message(m)) => {
@@ -1361,7 +1461,7 @@ async fn finish_as(
 /// that can contain the configured URL, and a metric label is not the place for
 /// it. The kinds line up with the `cosmos_errors_total{kind=…}` values the model
 /// client emits, so one incident reads the same in both families.
-fn model_failure_outcome(error: &super::llm::LlmError) -> &'static str {
+pub(crate) fn model_failure_outcome(error: &super::llm::LlmError) -> &'static str {
     use super::llm::LlmError;
     match error {
         LlmError::Status(_) => "model_refused",
@@ -1445,7 +1545,10 @@ pub(super) fn actions_in_current_run(turns: &[pb::SynapseChatTurn]) -> usize {
 /// capture in an older run disable the next vision gesture. Walking from the
 /// newest turn mirrors [`actions_in_current_run`] and the Pin's own
 /// `EventsSnapshot.runFromHead` behavior.
-fn current_run_contains_action(turns: &[pb::SynapseChatTurn], action_name: &str) -> bool {
+pub(crate) fn current_run_contains_action(
+    turns: &[pb::SynapseChatTurn],
+    action_name: &str,
+) -> bool {
     use std::collections::HashMap;
 
     let by_id: HashMap<&str, &pb::SynapseChatTurn> = turns
@@ -1584,7 +1687,7 @@ fn local_weather_request(utterance: &str) -> bool {
     )
 }
 
-fn explicit_playback_request(utterance: &str) -> bool {
+pub(crate) fn explicit_playback_request(utterance: &str) -> bool {
     let Some(intent) = normalized_intent(utterance) else {
         return false;
     };
@@ -1973,10 +2076,16 @@ mod tests {
 
     /// Records exactly what the engine handed the model on the first step, then
     /// terminates the run with a plain answer.
+    struct CapturedModelInput {
+        tools: Vec<String>,
+        system: String,
+        messages: Vec<ChatMessage>,
+    }
+
     #[derive(Default)]
     struct CapturingModel {
-        /// (tool names, concatenated system messages) of the first step.
-        seen: std::sync::Mutex<Option<(Vec<String>, String)>>,
+        /// Tool names, system context, and all messages on the first step.
+        seen: std::sync::Mutex<Option<CapturedModelInput>>,
     }
 
     impl CapturingModel {
@@ -1986,7 +2095,7 @@ mod tests {
                 .unwrap()
                 .as_ref()
                 .expect("the model must have been called")
-                .0
+                .tools
                 .clone()
         }
         fn system(&self) -> String {
@@ -1995,7 +2104,16 @@ mod tests {
                 .unwrap()
                 .as_ref()
                 .expect("the model must have been called")
-                .1
+                .system
+                .clone()
+        }
+        fn messages(&self) -> Vec<ChatMessage> {
+            self.seen
+                .lock()
+                .unwrap()
+                .as_ref()
+                .expect("the model must have been called")
+                .messages
                 .clone()
         }
     }
@@ -2009,15 +2127,16 @@ mod tests {
         ) -> Result<ChatResponse, LlmError> {
             let mut slot = self.seen.lock().unwrap();
             if slot.is_none() {
-                *slot = Some((
-                    tools.iter().map(|t| t.name.clone()).collect(),
-                    messages
+                *slot = Some(CapturedModelInput {
+                    tools: tools.iter().map(|t| t.name.clone()).collect(),
+                    system: messages
                         .iter()
                         .filter(|m| m.role == Role::System)
                         .map(|m| m.content.clone())
                         .collect::<Vec<_>>()
                         .join("\n"),
-                ));
+                    messages: messages.to_vec(),
+                });
             }
             Ok(ChatResponse {
                 content: Some("Done.".to_owned()),
@@ -2300,7 +2419,7 @@ mod tests {
                 _t: &[ToolDef],
             ) -> Result<ChatResponse, LlmError> {
                 // Second visit: both observations must already be in context.
-                if messages.iter().any(|m| m.content.starts_with("[Called ")) {
+                if messages.iter().any(|m| m.role == Role::ToolResult) {
                     return Ok(ChatResponse {
                         content: Some("Both looked up.".to_owned()),
                         ..Default::default()
@@ -2740,6 +2859,100 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_consequential_device_action_asks_before_it_executes() {
+        let model = MockChatModel::new(vec![ChatResponse {
+            tool_call: Some(ToolCall {
+                name: "CallPerson".to_owned(),
+                arguments: r#"{"To":["Dana"]}"#.to_owned(),
+            }),
+            ..Default::default()
+        }]);
+        let messages = drain(
+            model,
+            pb::SynapseUnderstandingRequest {
+                utterance: "call Dana".to_owned(),
+                ..Default::default()
+            },
+        )
+        .await;
+        let actions = messages.iter().filter_map(as_action).collect::<Vec<_>>();
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].action, catalog::RESPOND_ACTION);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&actions[0].input).unwrap()
+                [catalog::RESPOND_FIELD],
+            "Call Dana?"
+        );
+    }
+
+    #[tokio::test]
+    async fn exact_confirmation_allows_only_the_previously_described_action() {
+        let model = MockChatModel::new(vec![ChatResponse {
+            tool_call: Some(ToolCall {
+                name: "CallPerson".to_owned(),
+                arguments: r#"{"To":["Dana"]}"#.to_owned(),
+            }),
+            ..Default::default()
+        }]);
+        let messages = drain(
+            model,
+            pb::SynapseUnderstandingRequest {
+                utterance: "yes".to_owned(),
+                device_context: Some(pb::SynapseDeviceContext {
+                    turns: vec![pb::SynapseChatTurn {
+                        identifier: "confirmation".to_owned(),
+                        content: Some(pb::synapse_chat_turn::Content::Action(
+                            pb::SynapseActionContent {
+                                action: catalog::RESPOND_ACTION.to_owned(),
+                                input: catalog::respond_input("Call Dana?"),
+                                ..Default::default()
+                            },
+                        )),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        )
+        .await;
+        let actions = messages.iter().filter_map(as_action).collect::<Vec<_>>();
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].action, "CallPerson");
+    }
+
+    #[tokio::test]
+    async fn missing_device_action_information_asks_one_question_instead_of_looping() {
+        let model = MockChatModel::new(vec![ChatResponse {
+            tool_call: Some(ToolCall {
+                name: "CallPerson".to_owned(),
+                arguments: "{}".to_owned(),
+            }),
+            ..Default::default()
+        }]);
+        let messages = drain(
+            model,
+            pb::SynapseUnderstandingRequest {
+                utterance: "call someone".to_owned(),
+                ..Default::default()
+            },
+        )
+        .await;
+        let actions = messages.iter().filter_map(as_action).collect::<Vec<_>>();
+        assert_eq!(
+            actions.len(),
+            1,
+            "clarification must end this foreground run"
+        );
+        assert_eq!(actions[0].action, catalog::RESPOND_ACTION);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&actions[0].input).unwrap()
+                [catalog::RESPOND_FIELD],
+            "Who should I call?"
+        );
+    }
+
+    #[tokio::test]
     async fn legacy_stream_never_sends_a_turn_the_stock_interpreter_rejects() {
         let msgs = run_with(
             Arc::new(CapturingModel::default()),
@@ -2824,6 +3037,7 @@ mod tests {
             &self,
             request: crate::backends::music_discovery::MusicDiscoveryRequest,
             principal: &str,
+            _deadline: Option<std::time::Instant>,
         ) -> Result<
             crate::backends::music_discovery::GroundedMusicTrack,
             crate::backends::music_discovery::MusicDiscoveryError,
@@ -2839,6 +3053,23 @@ mod tests {
                 ranking_provenance: "not_ranked".to_owned(),
                 discovery_provenance: "perplexity".to_owned(),
             })
+        }
+    }
+
+    struct FailingMusicDiscovery(crate::backends::music_discovery::MusicDiscoveryError);
+
+    #[tonic::async_trait]
+    impl crate::backends::music_discovery::MusicDiscoveryBackend for FailingMusicDiscovery {
+        async fn discover(
+            &self,
+            _request: crate::backends::music_discovery::MusicDiscoveryRequest,
+            _principal: &str,
+            _deadline: Option<std::time::Instant>,
+        ) -> Result<
+            crate::backends::music_discovery::GroundedMusicTrack,
+            crate::backends::music_discovery::MusicDiscoveryError,
+        > {
+            Err(self.0)
         }
     }
 
@@ -2930,6 +3161,116 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&action.input).unwrap(),
             serde_json::json!({"Artist": "Drake", "Track": "Hotline Bling"}),
+        );
+    }
+
+    struct HistoricalMusicModel {
+        calls: std::sync::atomic::AtomicUsize,
+    }
+
+    #[tonic::async_trait]
+    impl ChatModel for HistoricalMusicModel {
+        async fn complete(
+            &self,
+            _messages: &[ChatMessage],
+            tools: &[ToolDef],
+        ) -> Result<ChatResponse, LlmError> {
+            assert!(tools.iter().any(|tool| tool.name == "music_discover"));
+            assert_eq!(
+                self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
+                0,
+                "provider-grounded playback must terminate after one model turn"
+            );
+            Ok(ChatResponse {
+                content: None,
+                thought: "I should research the historical criterion first".to_owned(),
+                tool_call: Some(ToolCall {
+                    name: "music_discover".to_owned(),
+                    arguments: serde_json::json!({
+                        "artist": "Drake",
+                        "criterion": "most controversial",
+                        "timeframe": "all_time",
+                        "year": 2013,
+                        "context": "song released during that calendar year"
+                    })
+                    .to_string(),
+                }),
+                extra_tool_calls: Vec::new(),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn historical_subjective_music_is_discovered_before_provider_playback() {
+        let backend = Arc::new(FixedMusicDiscovery::default());
+        let model = Arc::new(HistoricalMusicModel {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let msgs = run_with_tools(
+            model.clone(),
+            pb::SynapseUnderstandingRequest {
+                utterance: "Play Drake's most controversial song from 2013".to_owned(),
+                device_context: Some(pb::SynapseDeviceContext::default()),
+                ..Default::default()
+            },
+            catalog::ToolContext {
+                principal: Some("V:01:D:pin-01:U:wearer-01".to_owned()),
+                music_discovery: Some(backend.clone()),
+                ..Default::default()
+            },
+        )
+        .await;
+
+        assert_eq!(model.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let requests = backend.requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].0.artist.as_deref(), Some("Drake"));
+        assert_eq!(requests[0].0.criterion, "most controversial");
+        assert_eq!(requests[0].0.timeframe, "all_time");
+        assert_eq!(requests[0].0.year, Some(2013));
+        drop(requests);
+
+        let action = device_visible(&msgs)
+            .into_iter()
+            .rev()
+            .find_map(as_action)
+            .expect("provider-grounded historical discovery must dispatch playback");
+        assert_eq!(action.action, "PlayMusic");
+    }
+
+    #[tokio::test]
+    async fn failed_playback_discovery_speaks_the_precise_failure_without_a_second_model_call() {
+        let model = Arc::new(HistoricalMusicModel {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let msgs = run_with_tools(
+            model.clone(),
+            pb::SynapseUnderstandingRequest {
+                utterance: "Play Drake's most controversial song from 2013".to_owned(),
+                device_context: Some(pb::SynapseDeviceContext::default()),
+                ..Default::default()
+            },
+            catalog::ToolContext {
+                principal: Some("V:01:D:pin-01:U:wearer-01".to_owned()),
+                music_discovery: Some(Arc::new(FailingMusicDiscovery(
+                    crate::backends::music_discovery::MusicDiscoveryError::Ambiguous,
+                ))),
+                ..Default::default()
+            },
+        )
+        .await;
+
+        assert_eq!(model.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let action = device_visible(&msgs)
+            .into_iter()
+            .rev()
+            .find_map(as_action)
+            .expect("a failed explicit lookup must still terminate with Respond");
+        assert_eq!(action.action, "Respond");
+        let input: serde_json::Value = serde_json::from_str(&action.input).unwrap();
+        assert_eq!(
+            input["Response"],
+            crate::backends::music_discovery::MusicDiscoveryError::Ambiguous.observation()
         );
     }
 
@@ -3424,7 +3765,8 @@ mod tests {
     ///
     /// Containing the facts removes both failure modes: the model needs no tool
     /// decision and no term overlap. This asserts the note text reaches the
-    /// model's system context for a question that shares NO words with it.
+    /// model as wearer-authored data, never as system authority, for a question
+    /// that shares NO words with it.
     #[tokio::test]
     async fn what_the_wearer_asked_to_remember_reaches_the_model() {
         let store: crate::store::SharedStore =
@@ -3457,15 +3799,13 @@ mod tests {
             .await;
         while rx.recv().await.is_some() {}
 
-        let system = model.system();
-        assert!(
-            system.contains("i like noodles"),
-            "the saved fact must reach the model without a lookup; system was:\n{system}"
-        );
-        assert!(
-            system.contains("asked you to remember"),
-            "the facts must be labelled as established facts about the wearer"
-        );
+        let seen = model.messages();
+        assert!(seen.iter().any(|message| {
+            message.role == Role::Memory && message.content.contains("i like noodles")
+        }));
+        assert!(!seen.iter().any(|message| {
+            message.role == Role::System && message.content.contains("i like noodles")
+        }));
     }
 
     /// A wearer with nothing saved gets NO facts block — an empty one would be a
@@ -3520,7 +3860,7 @@ mod tests {
         let history = build_history(&req);
         let context = history
             .iter()
-            .filter(|m| m.role == Role::System)
+            .filter(|m| m.role == Role::DeviceContext)
             .map(|m| m.content.clone())
             .collect::<Vec<_>>()
             .join(" ");
@@ -4204,6 +4544,106 @@ mod tests {
         )
         .await;
         assert_eq!(starved, TOOL_TIMED_OUT);
+    }
+
+    #[tokio::test]
+    async fn dropping_the_legacy_stream_cancels_an_in_flight_model_step() {
+        struct NeverReturns;
+
+        #[tonic::async_trait]
+        impl ChatModel for NeverReturns {
+            async fn complete(
+                &self,
+                _messages: &[ChatMessage],
+                _tools: &[ToolDef],
+            ) -> Result<ChatResponse, LlmError> {
+                std::future::pending().await
+            }
+        }
+
+        shorten_run_budget(std::time::Duration::from_secs(2));
+        let engine = Engine::new(Arc::new(NeverReturns));
+        let (tx, rx) = tokio::sync::mpsc::channel(4);
+        drop(rx);
+
+        tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            engine.run(
+                pb::SynapseUnderstandingRequest {
+                    utterance: "a superseded question".to_owned(),
+                    ..Default::default()
+                },
+                tx,
+            ),
+        )
+        .await
+        .expect("the cancelled legacy stream left its model call running");
+    }
+
+    #[tokio::test]
+    async fn dropping_the_legacy_stream_cancels_an_in_flight_server_tool() {
+        struct NeverReturns(Arc<tokio::sync::Notify>);
+
+        #[tonic::async_trait]
+        impl crate::backends::music_discovery::MusicDiscoveryBackend for NeverReturns {
+            async fn discover(
+                &self,
+                _request: crate::backends::music_discovery::MusicDiscoveryRequest,
+                _principal: &str,
+                _deadline: Option<std::time::Instant>,
+            ) -> Result<
+                crate::backends::music_discovery::GroundedMusicTrack,
+                crate::backends::music_discovery::MusicDiscoveryError,
+            > {
+                self.0.notify_one();
+                std::future::pending().await
+            }
+        }
+
+        let model = Arc::new(MockChatModel::new(vec![ChatResponse {
+            tool_call: Some(ToolCall {
+                name: "music_discover".to_owned(),
+                arguments: serde_json::json!({
+                    "artist": "Drake",
+                    "criterion": "most controversial",
+                    "timeframe": "all_time",
+                    "year": 2013
+                })
+                .to_string(),
+            }),
+            ..Default::default()
+        }]));
+        let started = Arc::new(tokio::sync::Notify::new());
+        let engine = Engine::new(model).with_tools(catalog::ToolContext {
+            principal: Some("V:01:D:test:U:wearer".to_owned()),
+            music_discovery: Some(Arc::new(NeverReturns(started.clone()))),
+            ..Default::default()
+        });
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        let task = tokio::spawn(async move {
+            engine
+                .run(
+                    pb::SynapseUnderstandingRequest {
+                        utterance: "find Drake's most controversial song from 2013".to_owned(),
+                        ..Default::default()
+                    },
+                    tx,
+                )
+                .await;
+        });
+        let selected = rx
+            .recv()
+            .await
+            .expect("the server tool action is emitted first")
+            .expect("assistant stream error");
+        assert_eq!(as_action(&selected).unwrap().action, "music_discover");
+        started.notified().await;
+        drop(rx);
+
+        tokio::time::timeout(std::time::Duration::from_millis(100), task)
+            .await
+            .expect("the cancelled legacy stream left its server tool running")
+            .expect("engine task panicked");
     }
 }
 

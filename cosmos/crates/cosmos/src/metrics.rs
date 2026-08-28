@@ -61,10 +61,18 @@ const TURNS: &str = "cosmos_assistant_turns_total";
 const TOOL_CALLS: &str = "cosmos_assistant_tool_calls_total";
 /// Language-model round trips, labelled `model`.
 const MODEL_LATENCY: &str = "cosmos_model_latency_seconds";
+/// Production-plane assistant runs, with bounded content-free provenance.
+const AGENT_RUNS: &str = "cosmos_agent_runs_total";
+/// End-to-end production-plane assistant run latency.
+const AGENT_RUN_DURATION: &str = "cosmos_agent_run_duration_seconds";
 /// Grounded music discovery, with bounded semantic/provider outcome labels.
 const MUSIC_DISCOVERY: &str = "cosmos_music_discovery_total";
 /// End-to-end web discovery plus provider verification latency.
 const MUSIC_DISCOVERY_DURATION: &str = "cosmos_music_discovery_duration_seconds";
+/// Per-stage latency for the bounded research, corroboration, provider, and action path.
+const MUSIC_DISCOVERY_STAGE_DURATION: &str = "cosmos_music_discovery_stage_duration_seconds";
+/// Content-free shape of a completed discovery path.
+const MUSIC_DISCOVERY_RESOLUTION: &str = "cosmos_music_discovery_resolution_total";
 /// Failures the server chose to report, labelled `kind` — the same `kind` the
 /// matching `tracing` event carries. See [`record_error`].
 const ERRORS: &str = "cosmos_errors_total";
@@ -85,12 +93,28 @@ const HELP: &[(&str, &str)] = &[
         "Language-model round-trip latency in seconds.",
     ),
     (
+        AGENT_RUNS,
+        "Foreground assistant runs by planner plane, transport, route, model use, and terminal outcome.",
+    ),
+    (
+        AGENT_RUN_DURATION,
+        "Foreground assistant run latency by transport, route, and terminal outcome.",
+    ),
+    (
         MUSIC_DISCOVERY,
         "Grounded music discoveries, by criterion, provider, ranking provenance, and outcome.",
     ),
     (
         MUSIC_DISCOVERY_DURATION,
         "Grounded music discovery and provider verification latency in seconds.",
+    ),
+    (
+        MUSIC_DISCOVERY_STAGE_DURATION,
+        "Bounded music discovery stage latency in seconds, by stage and outcome.",
+    ),
+    (
+        MUSIC_DISCOVERY_RESOLUTION,
+        "Music discovery resolutions, by candidate count, selected index, corroboration, and disagreement.",
     ),
     (ERRORS, "Errors reported by the server, by kind."),
 ];
@@ -261,6 +285,48 @@ pub fn record_model_latency(model: &str, elapsed: Duration) {
     observe(MODEL_LATENCY, &[("model", model)], elapsed.as_secs_f64());
 }
 
+/// Content-free dimensions for one completed remote-Cosmos foreground run.
+pub struct AgentRunMetric<'a> {
+    pub transport: &'a str,
+    pub route: &'a str,
+    pub model_invoked: &'a str,
+    pub model_steps: &'a str,
+    pub model_provider: &'a str,
+    pub model: &'a str,
+    pub model_speed: &'a str,
+    pub reasoning_effort: &'a str,
+    pub terminal: &'a str,
+    pub elapsed: Duration,
+}
+
+/// Record one remote-Cosmos foreground run without any wearer content.
+pub fn record_agent_run(run: AgentRunMetric<'_>) {
+    increment(
+        AGENT_RUNS,
+        &[
+            ("planner_plane", "cosmos_remote"),
+            ("transport", run.transport),
+            ("route", run.route),
+            ("model_invoked", run.model_invoked),
+            ("model_steps", run.model_steps),
+            ("model_provider", run.model_provider),
+            ("model", run.model),
+            ("model_speed", run.model_speed),
+            ("reasoning_effort", run.reasoning_effort),
+            ("terminal", run.terminal),
+        ],
+    );
+    observe(
+        AGENT_RUN_DURATION,
+        &[
+            ("transport", run.transport),
+            ("route", run.route),
+            ("terminal", run.terminal),
+        ],
+        run.elapsed.as_secs_f64(),
+    );
+}
+
 /// Record semantic music discovery without wearer text or provider identifiers.
 ///
 /// Every argument is selected from a bounded constant set by the caller; track,
@@ -283,6 +349,47 @@ pub fn record_music_discovery(
         MUSIC_DISCOVERY_DURATION,
         &[("criterion", criterion), ("outcome", outcome)],
         elapsed.as_secs_f64(),
+    );
+}
+
+/// One bounded stage in semantic music discovery. Both labels are selected from
+/// fixed caller-owned sets; source URLs, titles, artists, and wearer text never
+/// enter the metric.
+pub fn record_music_discovery_stage(stage: &str, outcome: &str, elapsed: Duration) {
+    observe(
+        MUSIC_DISCOVERY_STAGE_DURATION,
+        &[("stage", stage), ("outcome", outcome)],
+        elapsed.as_secs_f64(),
+    );
+}
+
+/// Content-free summary of the candidate path used to settle a music request.
+pub fn record_music_discovery_resolution(
+    candidates: usize,
+    match_index: Option<usize>,
+    corroborated: bool,
+    disagreement: bool,
+) {
+    let candidates = match candidates {
+        0 => "0",
+        1 => "1",
+        2 => "2",
+        _ => "3",
+    };
+    let match_index = match match_index {
+        Some(0) => "0",
+        Some(1) => "1",
+        Some(_) => "2",
+        None => "none",
+    };
+    increment(
+        MUSIC_DISCOVERY_RESOLUTION,
+        &[
+            ("candidates", candidates),
+            ("match_index", match_index),
+            ("corroborated", if corroborated { "true" } else { "false" }),
+            ("disagreement", if disagreement { "true" } else { "false" }),
+        ],
     );
 }
 
@@ -971,6 +1078,29 @@ mod tests {
             !scrape.contains("metrics_test_unobserved_kind"),
             "an error kind nothing reported must not be published as a zero; got:\n{scrape}"
         );
+    }
+
+    #[test]
+    fn agent_run_provenance_includes_the_actual_model_configuration_without_content() {
+        record_agent_run(AgentRunMetric {
+            transport: "bidi",
+            route: "a2",
+            model_invoked: "true",
+            model_steps: "2",
+            model_provider: "codex_subscription",
+            model: "gpt-5.6-sol",
+            model_speed: "fast",
+            reasoning_effort: "low",
+            terminal: "answered",
+            elapsed: Duration::from_millis(125),
+        });
+        let scrape = render();
+        assert!(scrape.contains(
+            "cosmos_agent_runs_total{planner_plane=\"cosmos_remote\",transport=\"bidi\",route=\"a2\",model_invoked=\"true\",model_steps=\"2\",model_provider=\"codex_subscription\",model=\"gpt-5.6-sol\",model_speed=\"fast\",reasoning_effort=\"low\",terminal=\"answered\"}"
+        ));
+        assert!(!scrape.contains("utterance="));
+        assert!(!scrape.contains("principal="));
+        assert!(!scrape.contains("tool_arguments="));
     }
 
     /// Label values arrive off the wire. A value that closes the label list would

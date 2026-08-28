@@ -44,6 +44,7 @@ const { repositoryCheck } = require('./platform/cli/gates');
 const { checkCommand } = require('./platform/cli/checks');
 const {
   deployProduction,
+  evaluateAssistant,
   productionDoctor,
   verifyProduction,
 } = require('./platform/cli/production');
@@ -89,6 +90,8 @@ runTimedBoundary(() => {
     registryCommand(args);
   } else if (command === 'verify') {
     verifyProduction(args);
+  } else if (command === 'eval') {
+    evaluateAssistant(args);
   } else if (command === 'pin') {
     pinCommand(args);
   } else if (command === 'pki') {

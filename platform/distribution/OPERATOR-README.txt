@@ -18,6 +18,7 @@ Fresh server:
   ./revival deploy production --dry-run
   ./revival deploy production --confirm
   ./revival verify production
+  ./revival eval assistant production --repeat 2
 
 Use `./revival config list` to discover settings. Pass secret values through
 `./revival config set NAME --stdin`; do not put them in shell history.

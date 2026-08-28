@@ -30,6 +30,10 @@ pub const PRIVACY: &str = include_str!("../../../../prompts/content/safety/priva
 /// How to speak to someone listening through a small speaker.
 pub const SPOKEN_OUTPUT: &str =
     include_str!("../../../../prompts/content/system/spoken-output.prompt");
+pub const PLAN_TURN: &str =
+    include_str!("../../../../prompts/content/orchestration/plan-turn.prompt");
+pub const CONFIRM_ACTION: &str =
+    include_str!("../../../../prompts/content/orchestration/confirm-action.prompt");
 
 /// The registry entries that are live, joined as one system block.
 ///
@@ -38,6 +42,11 @@ pub const SPOKEN_OUTPUT: &str =
 /// that must hold even when the rest of the turn is adversarial.
 pub fn safety_block() -> String {
     format!("{}\n\n{}", UNTRUSTED_CONTENT.trim(), PRIVACY.trim())
+}
+
+/// Foreground planning and confirmation guidance shared by every tool set.
+pub fn orchestration_block() -> String {
+    format!("{}\n\n{}", PLAN_TURN.trim(), CONFIRM_ACTION.trim())
 }
 
 #[cfg(test)]
@@ -55,6 +64,8 @@ mod tests {
             ("untrusted-content", UNTRUSTED_CONTENT),
             ("privacy", PRIVACY),
             ("spoken-output", SPOKEN_OUTPUT),
+            ("plan-turn", PLAN_TURN),
+            ("confirm-action", CONFIRM_ACTION),
         ] {
             assert!(
                 text.trim().len() > 120,
@@ -71,5 +82,8 @@ mod tests {
             block.contains("minimum private context"),
             "the privacy rule must be included"
         );
+        let orchestration = orchestration_block();
+        assert!(orchestration.contains("typed capability"));
+        assert!(orchestration.contains("ask for confirmation"));
     }
 }

@@ -553,6 +553,7 @@ impl AiBusMain {
             // attach it once they have the typed request.
             location: None,
             music_discovery: None,
+            deadline: None,
         }
     }
 
@@ -3155,6 +3156,7 @@ mod tests {
                 keys: Some(Default::default()),
                 location: None,
                 music_discovery: None,
+                deadline: None,
             },
         )
         .await;

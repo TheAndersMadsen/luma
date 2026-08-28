@@ -205,6 +205,57 @@ imported only as the initial Cosmos configuration, so upgrades keep working.
 The `./revival config` commands remain available for headless bootstrap and
 automation, but they are not part of normal Pin setup.
 
+## Cosmos assistant runtime
+
+Cosmos uses one bounded foreground agent for the whole Pin, not a separate
+general agent for music. Each request follows the smallest lane that can finish
+it:
+
+| Lane | Used for | Model evidence |
+| --- | --- | --- |
+| D1 | Closed device prerequisites and already-grounded actions, such as asking the Pin for its location before local weather | No model call is credited |
+| A1 | One semantic task, direct answer, clarification, or one server lookup | Exact model provenance, step count, and terminal state are recorded |
+| A2 | A compound request with multiple tool operations | The bounded run upgrades from A1 only after more than one tool call |
+
+The run owns one 22-second absolute deadline across context loading, model
+steps, server tools, and the terminal response. Legacy and bidirectional stock
+transports share that budget and telemetry. A new utterance cancels the old
+foreground run; no detached background agent continues after the wearer moves
+on.
+
+Tool results, saved wearer facts, and authenticated device context enter the
+model as typed, untrusted data rather than system instructions. Required action
+fields are enforced after the model responds. Missing data produces one short
+clarifying question. Consequential actions such as placing a call require an
+exact, scoped confirmation, and changing the action or its arguments invalidates
+that confirmation. Reversible playback and volume controls do not gain that
+extra confirmation step.
+
+Music discovery is one specialist A1/A2 tool. It can research a subjective or
+time-bound request, corroborate ambiguous rankings once, and try up to three
+evidence-ordered candidates against the active provider. Only the grounded
+provider result becomes a stock `PlayMusic` action. Play, pause, stop, and skip
+execute on the Pin once recognized; speech recognition may still use Cosmos.
+
+Production exposes content-free Prometheus counters for route, transport, model
+use and provenance, terminal state, duration, tool outcomes, and the bounded
+music-resolution stages. Wearer text, tool arguments, identity, and provider
+results are never metric labels.
+
+After deployment, run the fixed production evaluation from the extracted
+operator release:
+
+```sh
+./revival eval assistant production --repeat 2
+```
+
+It exercises direct reasoning, fresh web search, compound multi-tool work, and
+consequential-action confirmation through the real production Engine. Every
+case must correlate its returned actions with a model-invoked run, valid model
+provenance, the expected terminal state, and the Pin deadline. This is a server
+acceptance check; final release acceptance still includes representative spoken
+turns and device actions on a physical Pin.
+
 ### Public verification and agent discovery
 
 Center publishes a small unauthenticated discovery surface. It contains no

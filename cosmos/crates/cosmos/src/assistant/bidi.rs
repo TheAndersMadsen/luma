@@ -80,7 +80,8 @@ use tonic::Status;
 use super::catalog;
 use super::engine::{ERROR_TIMEOUT, NO_ANSWER, TOO_MANY_ACTIONS};
 use super::llm::{ChatMessage, ChatModel, ChatResponse, Role, ToolCall, ToolDef};
-use super::turn::context::situation_line;
+use super::runtime::{ForegroundRun, RouteClass, TERMINAL_RESERVE, Transport};
+use super::turn::context::{MEMORY_CONTEXT_POLICY, situation_line, wearer_memory};
 use super::turn::frames::{action_turn, now_ts, observation_turn};
 use super::turn::text::{model_facing_observation, spoken_text};
 use crate::services::gates::{self, Entitlement};
@@ -91,7 +92,7 @@ const MAX_STEPS: usize = 8;
 
 /// Per-model-step ceiling, shared with the legacy engine: the device abandons the
 /// turn at its own ~25s deadline, so a step must resolve well inside that.
-const MODEL_STEP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+const MODEL_STEP_TIMEOUT: std::time::Duration = super::runtime::MODEL_STEP_LIMIT;
 
 /// Total wall-clock budget for one run, the same 22s the legacy engine bounds a
 /// turn with.
@@ -105,11 +106,11 @@ const MODEL_STEP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1
 /// the run at the same 22s the other transports use keeps the two transports
 /// answering on the same clock, and always leaves room to speak a terminal
 /// before giving up.
-const RUN_BUDGET: Duration = Duration::from_secs(22);
+const RUN_BUDGET: Duration = super::runtime::FOREGROUND_BUDGET;
 
 /// Below this there is no useful work left to start — anything begun now would
 /// overrun the budget before it could be spoken.
-const MIN_USEFUL_REMAINING: Duration = Duration::from_millis(500);
+const MIN_USEFUL_REMAINING: Duration = super::runtime::MIN_USEFUL_REMAINING;
 
 /// Bounced back in place of a server tool's result when the tool does not return
 /// inside the run's remaining budget. Not spoken directly (only `TooManyActions`
@@ -167,8 +168,13 @@ enum Step {
     Answer(ChatResponse),
     /// A new understanding request arrived; abandon this run for it.
     Superseded(Box<pb::SynapseUnderstandingRequest>),
-    /// Model error, step deadline, or the client went away.
-    Failed,
+    /// Model error or step deadline, classified without provider response text.
+    Failed(&'static str),
+}
+
+enum ToolBatchStep {
+    Observations(Vec<String>),
+    Superseded(Box<pb::SynapseUnderstandingRequest>),
 }
 
 enum Flow {
@@ -315,7 +321,8 @@ impl BidiSession {
             if !inbound_open {
                 return match pending.await {
                     Ok(Ok(r)) => Step::Answer(r),
-                    Ok(Err(_)) | Err(_) => Step::Failed,
+                    Ok(Err(error)) => Step::Failed(super::engine::model_failure_outcome(&error)),
+                    Err(_) => Step::Failed("deadline"),
                 };
             }
             tokio::select! {
@@ -346,9 +353,49 @@ impl BidiSession {
                 resolved = &mut pending => {
                     return match resolved {
                         Ok(Ok(r)) => Step::Answer(r),
-                        // Model error or step deadline: both end in a spoken apology.
-                        Ok(Err(_)) | Err(_) => Step::Failed,
+                        Ok(Err(error)) => {
+                            Step::Failed(super::engine::model_failure_outcome(&error))
+                        }
+                        Err(_) => Step::Failed("deadline"),
                     };
+                }
+            }
+        }
+    }
+
+    async fn server_tool_batch<S, F>(
+        &self,
+        work: F,
+        timeout: Duration,
+        inbound: &mut S,
+    ) -> ToolBatchStep
+    where
+        S: Stream<Item = Result<pb::StreamingUnderstandRequest, Status>> + Unpin,
+        F: std::future::Future<Output = Vec<String>>,
+    {
+        let mut pending = Box::pin(tokio::time::timeout(timeout, work));
+        let mut inbound_open = true;
+        loop {
+            if !inbound_open {
+                return ToolBatchStep::Observations(pending.await.unwrap_or_default());
+            }
+            tokio::select! {
+                biased;
+
+                incoming = inbound.next() => {
+                    match incoming {
+                        Some(Ok(message)) => match message.content {
+                            Some(pb::streaming_understand_request::Content::UnderstandingRequest(
+                                request,
+                            )) => return ToolBatchStep::Superseded(Box::new(request)),
+                            _ => continue,
+                        },
+                        Some(Err(_)) | None => inbound_open = false,
+                    }
+                }
+
+                resolved = &mut pending => {
+                    return ToolBatchStep::Observations(resolved.unwrap_or_default());
                 }
             }
         }
@@ -376,12 +423,6 @@ impl BidiSession {
             .map(|t| t.identifier.clone())
             .unwrap_or_default();
 
-        // Seed the transcript from `device_context.turns` (the server seeds its own
-        // RunState this way on the first request of a stream, §3) and grow it in
-        // place as the loop proceeds — on bidi the device sends only deltas after
-        // this point.
-        let mut messages = build_history(&req);
-
         // Seed the run's action count from the transcript the device replayed,
         // exactly as the legacy engine does. `Switchboard` counts actions over the
         // whole RUN, and a multi-hop run arrives here with earlier hops already in
@@ -389,24 +430,43 @@ impl BidiSession {
         // lets the server ride past the pin's own `mActionLimit`, at which point the
         // device cuts the run short itself — the wearer's turn dies mid-flight with
         // no terminal from us.
-        let already_taken = req
+        let mut actions_in_run = req
             .device_context
             .as_ref()
             .map(|dc| super::engine::actions_in_current_run(&dc.turns))
             .unwrap_or(0);
-        let steps_left = MAX_STEPS.saturating_sub(already_taken);
 
-        // Bound the whole run on the wall clock (see RUN_BUDGET).
-        let run_deadline = tokio::time::Instant::now() + self.run_budget;
+        // Both transports cross the same foreground-runtime seam for their
+        // absolute clock and content-free production-plane provenance.
+        let mut run = ForegroundRun::with_budget(Transport::Bidi, RouteClass::A1, self.run_budget)
+            .with_model(self.model.provenance());
+        let run_deadline = run.deadline();
+        let mut tool_context = self.tools.clone();
+        tool_context.deadline = Some(run_deadline);
 
-        for _ in 0..steps_left {
+        // Seed the transcript from `device_context.turns` (the server seeds its own
+        // RunState this way on the first request of a stream, §3) and grow it in
+        // place as the loop proceeds — on bidi the device sends only deltas after
+        // this point. Optional memory loading is bounded inside the same absolute
+        // foreground clock; personalization may degrade, the turn may not hang.
+        let mut messages = build_history(&req);
+        if let Ok(Some(memory)) =
+            tokio::time::timeout(run.context_timeout(), wearer_memory(&self.tools)).await
+        {
+            messages.push(ChatMessage::system(MEMORY_CONTEXT_POLICY));
+            messages.push(memory);
+        }
+
+        for _ in 0..MAX_STEPS {
             // Out of wall clock: speak a terminal NOW. On this transport nothing
             // else will — the pin is parked in an unbounded `responseFuture.get()`
             // and a half-close would complete it with an empty queue, i.e.
             // silence.
-            let budget_left = run_deadline.saturating_duration_since(tokio::time::Instant::now());
+            let budget_left = run_deadline.saturating_duration_since(std::time::Instant::now());
             if budget_left < MIN_USEFUL_REMAINING {
-                return self.finish(parent, ERROR_TIMEOUT).await;
+                let flow = self.finish(parent, ERROR_TIMEOUT).await;
+                run.finish("deadline");
+                return flow;
             }
 
             // Race the model step against the inbound stream. Two reasons:
@@ -425,6 +485,7 @@ impl BidiSession {
             // The step ceiling is the SMALLER of the per-step ceiling and what is
             // left of the run: a 10s step started with 3s of budget left is 7s
             // the wearer waits for a turn that can no longer be spoken.
+            run.note_model_step();
             let resp = match self
                 .step(
                     &messages,
@@ -440,12 +501,17 @@ impl BidiSession {
                 )
                 .await
             {
-                Step::Superseded(req) => return Flow::Supersede(req),
+                Step::Superseded(req) => {
+                    run.supersede();
+                    return Flow::Supersede(req);
+                }
                 Step::Answer(r) => r,
-                Step::Failed => {
+                Step::Failed(outcome) => {
                     // Even a degraded state is spoken through a terminal `Respond`
                     // device action, never a bare error the device would drop.
-                    return self.finish(parent, ERROR_TIMEOUT).await;
+                    let flow = self.finish(parent, ERROR_TIMEOUT).await;
+                    run.finish(outcome);
+                    return flow;
                 }
             };
 
@@ -465,8 +531,21 @@ impl BidiSession {
                     .map(str::trim)
                     .filter(|answer| !answer.is_empty())
                     .unwrap_or(NO_ANSWER);
-                return self.finish(parent, answer).await;
+                let flow = self.finish(parent, answer).await;
+                run.finish(if answer == NO_ANSWER {
+                    "no_answer"
+                } else {
+                    "answered"
+                });
+                return flow;
             };
+            run.note_tool_calls(1);
+
+            if actions_in_run >= MAX_STEPS {
+                let flow = self.too_many_actions(parent).await;
+                run.finish("too_many_actions");
+                return flow;
+            }
 
             // Unknown tool: bounce the stock unrecognized-function observation as
             // informational events and LOOP so the model can correct itself. The
@@ -488,6 +567,7 @@ impl BidiSession {
                     .await
                     .is_err()
                 {
+                    run.finish("cancelled");
                     return Flow::Closed;
                 }
                 let obs_id = self.next_id();
@@ -505,6 +585,7 @@ impl BidiSession {
                     .await
                     .is_err()
                 {
+                    run.finish("cancelled");
                     return Flow::Closed;
                 }
                 messages.push(tool_result(&tc, UNRECOGNIZED_FUNCTION));
@@ -526,6 +607,11 @@ impl BidiSession {
                 let input = catalog::respond_input_from_arguments(&tc.arguments)
                     .unwrap_or_else(|| catalog::respond_input(NO_ANSWER));
                 let turn = device_action_turn(&tc.name, &input, &resp.thought, parent, id);
+                run.finish(if input.contains(NO_ANSWER) {
+                    "no_answer"
+                } else {
+                    "answered"
+                });
                 return match self.emit(turn, true).await {
                     Ok(()) => Flow::Done,
                     Err(()) => Flow::Closed,
@@ -559,6 +645,7 @@ impl BidiSession {
                         .await
                         .is_err()
                     {
+                        run.finish("cancelled");
                         return Flow::Closed;
                     }
                     // Every degraded verdict is delivered spoken. The legacy engine
@@ -566,7 +653,9 @@ impl BidiSession {
                     // (`Respond`/`Narrate`/…); here the terminal is always the
                     // exempt `Respond`, which carries the same text to the wearer
                     // and is the shape this transport already terminates on.
-                    return self.finish(obs_id, blocked.observation_text()).await;
+                    let flow = self.finish(obs_id, blocked.observation_text()).await;
+                    run.finish("blocked");
+                    return flow;
                 }
                 // Required-slot validation before the action leaves the server.
                 // A missing slot resolves to null on the device: the agent entry
@@ -578,6 +667,19 @@ impl BidiSession {
                 {
                     Ok(input) => input,
                     Err(observation) => {
+                        if let Some(question) =
+                            catalog::clarification_question(&tc.name, &tc.arguments)
+                        {
+                            let spoken =
+                                if super::policy::question_was_already_asked(&req, &question) {
+                                    "I couldn't complete that without the missing detail."
+                                } else {
+                                    &question
+                                };
+                            let flow = self.finish(parent, spoken).await;
+                            run.finish("clarification");
+                            return flow;
+                        }
                         let action_id = self.next_id();
                         if self
                             .emit(
@@ -593,6 +695,7 @@ impl BidiSession {
                             .await
                             .is_err()
                         {
+                            run.finish("cancelled");
                             return Flow::Closed;
                         }
                         let obs_id = self.next_id();
@@ -610,6 +713,7 @@ impl BidiSession {
                             .await
                             .is_err()
                         {
+                            run.finish("cancelled");
                             return Flow::Closed;
                         }
                         messages.push(tool_result(&tc, &observation));
@@ -617,6 +721,12 @@ impl BidiSession {
                         continue;
                     }
                 };
+                if let Some(question) = super::policy::confirmation_question(&req, &tc.name, &input)
+                {
+                    let flow = self.finish(parent, &question).await;
+                    run.finish("confirmation_required");
+                    return flow;
+                }
                 let action_id = self.next_id();
                 if self
                     .emit(
@@ -632,6 +742,7 @@ impl BidiSession {
                     .await
                     .is_err()
                 {
+                    run.finish("cancelled");
                     return Flow::Closed;
                 }
 
@@ -641,7 +752,7 @@ impl BidiSession {
                 // the turn is dead on the device side as well); the run budget is
                 // the ceiling on the sum of them.
                 let wait_for = run_deadline
-                    .saturating_duration_since(tokio::time::Instant::now())
+                    .saturating_duration_since(std::time::Instant::now())
                     .min(self.device_timeout);
                 let awaited =
                     match tokio::time::timeout(wait_for, await_observation(inbound, &action_id))
@@ -653,11 +764,18 @@ impl BidiSession {
                         // completes the pin's pending future with an empty queue,
                         // and the wearer, who has been standing there through a
                         // whole action, hears nothing at all.
-                        Err(_elapsed) => return self.finish(action_id, ERROR_TIMEOUT).await,
+                        Err(_elapsed) => {
+                            let flow = self.finish(action_id, ERROR_TIMEOUT).await;
+                            run.finish("deadline");
+                            return flow;
+                        }
                     };
                 let (obs_id, obs) = match awaited {
                     Awaited::Observation { id, content } => (id, content),
-                    Awaited::Supersede(req) => return Flow::Supersede(req),
+                    Awaited::Supersede(req) => {
+                        run.supersede();
+                        return Flow::Supersede(req);
+                    }
                     Awaited::Closed => return Flow::Closed,
                 };
 
@@ -687,6 +805,7 @@ impl BidiSession {
                     // `TaoEventRegistrar.onObservation(String, Observation)`,
                     // whose `toContent()` carries `setIsFinal(observation.isFinal())`
                     // through `dispatchObservation`.
+                    run.finish("device_action");
                     return Flow::Closed;
                 }
                 // Thread onto the device's own turn id where it minted one.
@@ -694,84 +813,41 @@ impl BidiSession {
                 continue;
             }
 
-            // SERVER TOOL (state machine 4a): resolve it here, stream the action
-            // and its observation as informational context, and LOOP without
-            // pausing the device.
-            let action_id = self.next_id();
-            if self
-                .emit(
-                    action_turn(
-                        &tc,
-                        &resp.thought,
-                        parent,
-                        action_id.clone(),
-                        pb::SynapseSource::Server,
-                    ),
-                    false,
-                )
-                .await
-                .is_err()
-            {
-                return Flow::Closed;
+            // SERVER TOOLS. A same-step batch represents independent work, so
+            // execute it concurrently and publish observations in stable request
+            // order. The Pin counts emitted actions rather than model rounds;
+            // refuse an oversized batch before partially executing it.
+            let terminal_music = tc.name == "music_discover"
+                && super::engine::explicit_playback_request(&utterance)
+                && tools.iter().any(|tool| tool.name == "PlayMusic");
+            let mut batch = vec![tc.clone()];
+            if !terminal_music {
+                batch.extend(
+                    resp.extra_tool_calls
+                        .iter()
+                        .filter(|extra| {
+                            !catalog::is_device_tool(&extra.name)
+                                && catalog::is_server_tool(&extra.name)
+                        })
+                        .cloned(),
+                );
             }
-            // Wearer-scoped: `recall_memory` and friends need to know whose data
-            // this is, or they can only report having nothing.
-            //
-            // Bounded by what is left of the run. Every server tool is a network
-            // call to somebody else's endpoint, and an upstream that accepts the
-            // connection and then stalls would otherwise hold the whole turn open
-            // with no ceiling at all — the model step above is bounded, so this
-            // was the one remaining place a single hop could run forever.
-            let observation = bounded_tool(
-                run_deadline.saturating_duration_since(tokio::time::Instant::now()),
-                catalog::execute_tool_with(&tc.name, &tc.arguments, &self.tools),
-            )
-            .await;
-            let obs_id = self.next_id();
-            if self
-                .emit(
-                    observation_turn(
-                        &tc.name,
-                        &observation,
-                        action_id,
-                        obs_id.clone(),
-                        pb::SynapseSource::Server,
-                    ),
-                    false,
-                )
-                .await
-                .is_err()
-            {
-                return Flow::Closed;
+            if actions_in_run.saturating_add(batch.len()) > MAX_STEPS {
+                let flow = self.too_many_actions(parent).await;
+                run.finish("too_many_actions");
+                return flow;
             }
-            messages.push(tool_result(&tc, &observation));
-            parent = obs_id;
+            run.note_tool_calls(batch.len().saturating_sub(1));
 
-            // BATCHED SERVER TOOLS. The model may ask for several independent
-            // lookups in one step (every recovered stock tool set ships a
-            // parallel-invocation wrapper telling it to). The legacy engine
-            // executes them; this transport dropped them silently, so the same
-            // request answered from fewer facts here than there — and the model
-            // could answer as though a lookup it never got had run.
-            //
-            // Only server tools batch: a device action pauses this loop waiting
-            // for the pin's observation, so it can never be one of several.
-            let batched: Vec<ToolCall> = resp
-                .extra_tool_calls
-                .iter()
-                .filter(|extra| {
-                    !catalog::is_device_tool(&extra.name) && catalog::is_server_tool(&extra.name)
-                })
-                .cloned()
-                .collect();
-            for extra in batched {
+            let mut action_ids = Vec::with_capacity(batch.len());
+            for call in &batch {
                 let action_id = self.next_id();
                 if self
                     .emit(
                         action_turn(
-                            &extra,
+                            call,
                             &resp.thought,
-                            parent,
+                            parent.clone(),
                             action_id.clone(),
                             pb::SynapseSource::Server,
                         ),
@@ -780,18 +856,39 @@ impl BidiSession {
                     .await
                     .is_err()
                 {
+                    run.finish("cancelled");
                     return Flow::Closed;
                 }
-                let observation = bounded_tool(
-                    run_deadline.saturating_duration_since(tokio::time::Instant::now()),
-                    catalog::execute_tool_with(&extra.name, &extra.arguments, &self.tools),
-                )
-                .await;
+                action_ids.push(action_id);
+            }
+            actions_in_run += batch.len();
+
+            let timeout = run_deadline
+                .saturating_duration_since(std::time::Instant::now())
+                .saturating_sub(TERMINAL_RESERVE);
+            let work = futures_util::future::join_all(batch.iter().map(|call| {
+                catalog::execute_tool_with(&call.name, &call.arguments, &tool_context)
+            }));
+            let observations = match self.server_tool_batch(work, timeout, inbound).await {
+                ToolBatchStep::Observations(observations) => observations,
+                ToolBatchStep::Superseded(request) => {
+                    run.supersede();
+                    return Flow::Supersede(request);
+                }
+            };
+            if observations.len() != batch.len() {
+                let flow = self.finish(parent, ERROR_TIMEOUT).await;
+                run.finish("deadline");
+                return flow;
+            }
+
+            let mut primary_observation = None;
+            for ((call, action_id), observation) in batch.iter().zip(action_ids).zip(observations) {
                 let obs_id = self.next_id();
                 if self
                     .emit(
                         observation_turn(
-                            &extra.name,
+                            &call.name,
                             &observation,
                             action_id,
                             obs_id.clone(),
@@ -802,16 +899,66 @@ impl BidiSession {
                     .await
                     .is_err()
                 {
+                    run.finish("cancelled");
                     return Flow::Closed;
                 }
-                messages.push(tool_result(&extra, &observation));
+                if call.name == tc.name && primary_observation.is_none() {
+                    primary_observation = Some(observation.clone());
+                }
+                messages.push(tool_result(call, &observation));
                 parent = obs_id;
+            }
+
+            if terminal_music {
+                let observation = primary_observation.as_deref().unwrap_or(TOOL_TIMED_OUT);
+                if let Some(input) =
+                    crate::backends::music_discovery::play_music_arguments(observation)
+                {
+                    let id = self.next_id();
+                    let turn = device_action_turn(
+                        "PlayMusic",
+                        &input,
+                        "I found a provider-verified track to play",
+                        parent,
+                        id,
+                    );
+                    run.finish("device_action");
+                    return match self.emit(turn, true).await {
+                        Ok(()) => Flow::Done,
+                        Err(()) => Flow::Closed,
+                    };
+                }
+                let spoken = if observation == TOOL_TIMED_OUT {
+                    crate::backends::music_discovery::MusicDiscoveryError::Deadline.observation()
+                } else {
+                    crate::backends::music_discovery::spoken_failure(observation).unwrap_or_else(
+                        || {
+                            crate::backends::music_discovery::MusicDiscoveryError::NoEvidence
+                                .observation()
+                        },
+                    )
+                };
+                let flow = self.finish(parent, spoken).await;
+                run.finish("answered");
+                return flow;
+            }
+
+            if actions_in_run >= MAX_STEPS {
+                let flow = self.too_many_actions(parent).await;
+                run.finish("too_many_actions");
+                return flow;
             }
         }
 
         // Budget exhausted: close the run the way `Switchboard` does — a
         // `TooManyActions` observation converted into a terminal `Respond`
         // (`Respond` is exempt from the action limit).
+        let flow = self.too_many_actions(parent).await;
+        run.finish("too_many_actions");
+        flow
+    }
+
+    async fn too_many_actions(&mut self, parent: String) -> Flow {
         let obs_id = self.next_id();
         if self
             .emit(
@@ -1017,7 +1164,7 @@ fn build_history(req: &pb::SynapseUnderstandingRequest) -> Vec<ChatMessage> {
         super::engine::resolved_tool_set(req).set,
     ))];
     if let Some(situation) = situation_line(req) {
-        messages.push(ChatMessage::system(situation));
+        messages.push(ChatMessage::device_context(&situation));
     }
 
     if let Some(dc) = req.device_context.as_ref() {
@@ -1093,12 +1240,11 @@ fn build_history(req: &pb::SynapseUnderstandingRequest) -> Vec<ChatMessage> {
 /// engine uses (portable across OpenAI-compatible endpoints: no tool-call-id
 /// pairing required).
 fn tool_result(tc: &ToolCall, observation: &str) -> ChatMessage {
-    ChatMessage::user(format!(
-        "[Called {}({}). Result: {}]",
-        tc.name,
-        tc.arguments,
-        model_facing_observation(observation)
-    ))
+    ChatMessage::tool_result(
+        &tc.name,
+        &tc.arguments,
+        &model_facing_observation(observation),
+    )
 }
 
 /// Run a server tool under a hard ceiling.
@@ -1317,7 +1463,7 @@ mod tests {
                 messages: &[ChatMessage],
                 _t: &[ToolDef],
             ) -> Result<ChatResponse, LlmError> {
-                if messages.iter().any(|m| m.content.starts_with("[Called ")) {
+                if messages.iter().any(|m| m.role == Role::ToolResult) {
                     return Ok(ChatResponse {
                         content: Some("Both looked up.".to_owned()),
                         ..Default::default()
@@ -1358,6 +1504,186 @@ mod tests {
              the first — a dropped call the model never sees is one it may answer \
              as though it ran: {observed:?}",
         );
+    }
+
+    #[tokio::test]
+    async fn a_batched_model_step_cannot_overrun_the_replayed_device_action_budget() {
+        struct OversizedBatch;
+
+        #[tonic::async_trait]
+        impl ChatModel for OversizedBatch {
+            async fn complete(
+                &self,
+                _messages: &[ChatMessage],
+                _tools: &[ToolDef],
+            ) -> Result<ChatResponse, LlmError> {
+                Ok(ChatResponse {
+                    tool_call: Some(ToolCall {
+                        name: "web_search".to_owned(),
+                        arguments: r#"{"query":"one"}"#.to_owned(),
+                    }),
+                    extra_tool_calls: vec![
+                        ToolCall {
+                            name: "wikipedia".to_owned(),
+                            arguments: r#"{"query":"two"}"#.to_owned(),
+                        },
+                        ToolCall {
+                            name: "wolfram".to_owned(),
+                            arguments: r#"{"query":"three"}"#.to_owned(),
+                        },
+                    ],
+                    ..Default::default()
+                })
+            }
+        }
+
+        let mut turns = vec![pb::SynapseChatTurn {
+            identifier: "root".to_owned(),
+            ..Default::default()
+        }];
+        for index in 0..(MAX_STEPS - 1) {
+            let parent_identifier = turns.last().unwrap().identifier.clone();
+            turns.push(pb::SynapseChatTurn {
+                identifier: format!("prior-{index}"),
+                parent_identifier,
+                content: Some(pb::synapse_chat_turn::Content::Action(
+                    pb::SynapseActionContent {
+                        action: "web_search".to_owned(),
+                        input: "{}".to_owned(),
+                        source: pb::SynapseSource::Server as i32,
+                        ..Default::default()
+                    },
+                )),
+                ..Default::default()
+            });
+        }
+
+        let (tx, mut out) = session(Arc::new(OversizedBatch));
+        tx.send(Ok(pb::StreamingUnderstandRequest {
+            content: Some(
+                pb::streaming_understand_request::Content::UnderstandingRequest(
+                    pb::SynapseUnderstandingRequest {
+                        utterance: "look up all three".to_owned(),
+                        device_context: Some(pb::SynapseDeviceContext {
+                            turns,
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                ),
+            ),
+        }))
+        .await
+        .unwrap();
+        drop(tx);
+
+        let mut messages = Vec::new();
+        while let Some(message) = out.next().await {
+            messages.push(message.unwrap());
+        }
+        let emitted_server_actions = messages
+            .iter()
+            .filter_map(action_of)
+            .filter(|action| action.source == pb::SynapseSource::Server as i32)
+            .count();
+        assert!(
+            emitted_server_actions <= 1,
+            "only one device-counted action remained, but bidi emitted {emitted_server_actions}"
+        );
+        assert_eq!(spoken(messages.last().unwrap()), TOO_MANY_ACTIONS);
+    }
+
+    #[tokio::test]
+    async fn grounded_music_playback_settles_on_bidi_without_a_second_model_step() {
+        struct MusicModel(std::sync::atomic::AtomicUsize);
+
+        #[tonic::async_trait]
+        impl ChatModel for MusicModel {
+            async fn complete(
+                &self,
+                _messages: &[ChatMessage],
+                _tools: &[ToolDef],
+            ) -> Result<ChatResponse, LlmError> {
+                assert_eq!(
+                    self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
+                    0,
+                    "provider-grounded playback must not require another model step"
+                );
+                Ok(ChatResponse {
+                    tool_call: Some(ToolCall {
+                        name: "music_discover".to_owned(),
+                        arguments: serde_json::json!({
+                            "artist": "Drake",
+                            "criterion": "most controversial",
+                            "timeframe": "all_time",
+                            "year": 2013
+                        })
+                        .to_string(),
+                    }),
+                    ..Default::default()
+                })
+            }
+        }
+
+        struct FixedMusic;
+
+        #[tonic::async_trait]
+        impl crate::backends::music_discovery::MusicDiscoveryBackend for FixedMusic {
+            async fn discover(
+                &self,
+                _request: crate::backends::music_discovery::MusicDiscoveryRequest,
+                _principal: &str,
+                _deadline: Option<std::time::Instant>,
+            ) -> Result<
+                crate::backends::music_discovery::GroundedMusicTrack,
+                crate::backends::music_discovery::MusicDiscoveryError,
+            > {
+                Ok(crate::backends::music_discovery::GroundedMusicTrack {
+                    title: "Started From the Bottom".to_owned(),
+                    artist: "Drake".to_owned(),
+                    provider: "youtube_music".to_owned(),
+                    ranking_provenance: "provider_exact".to_owned(),
+                    discovery_provenance: "perplexity".to_owned(),
+                })
+            }
+        }
+
+        let model = Arc::new(MusicModel(std::sync::atomic::AtomicUsize::new(0)));
+        let (tx, rx) = mpsc::channel(16);
+        let mut out = BidiSession::spawn_tuned(
+            model.clone(),
+            Entitlement::Active,
+            catalog::ToolContext {
+                principal: Some("V:01:D:pin-01:U:wearer-01".to_owned()),
+                music_discovery: Some(Arc::new(FixedMusic)),
+                ..Default::default()
+            },
+            ReceiverStream::new(rx),
+            Duration::from_secs(2),
+            Duration::from_secs(2),
+        );
+        tx.send(Ok(understanding(
+            "Play Drake's most controversial song from 2013",
+        )))
+        .await
+        .unwrap();
+        drop(tx);
+
+        let server_action = next(&mut out).await;
+        assert_eq!(action_of(&server_action).unwrap().action, "music_discover");
+        let server_observation = next(&mut out).await;
+        assert_eq!(
+            observation_of(&server_observation).unwrap().action_name,
+            "music_discover"
+        );
+        let playback = next(&mut out).await;
+        let action = action_of(&playback).expect("terminal provider playback action");
+        assert_eq!(action.action, "PlayMusic");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&action.input).unwrap(),
+            serde_json::json!({"Artist": "Drake", "Track": "Started From the Bottom"})
+        );
+        assert_eq!(model.0.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
@@ -1457,6 +1783,25 @@ mod tests {
         assert_eq!(turn(&r).parent_identifier, "dev-1");
 
         drop(tx);
+        assert_closed(&mut out).await;
+    }
+
+    #[tokio::test]
+    async fn bidi_enforces_the_same_consequential_action_confirmation() {
+        let model = MockChatModel::new(vec![ChatResponse {
+            tool_call: Some(ToolCall {
+                name: "CallPerson".to_owned(),
+                arguments: r#"{"To":["Dana"]}"#.to_owned(),
+            }),
+            ..Default::default()
+        }]);
+        let (tx, mut out) = session(Arc::new(model));
+        tx.send(Ok(understanding("call Dana"))).await.unwrap();
+        drop(tx);
+
+        let response = next(&mut out).await;
+        assert_eq!(spoken(&response), "Call Dana?");
+        assert!(event(&response).requires_response);
         assert_closed(&mut out).await;
     }
 
@@ -1978,6 +2323,90 @@ mod tests {
         drop(tx);
     }
 
+    #[tokio::test]
+    async fn a_barge_in_preempts_an_in_flight_server_tool() {
+        struct PromptAwareModel;
+
+        #[tonic::async_trait]
+        impl ChatModel for PromptAwareModel {
+            async fn complete(
+                &self,
+                messages: &[ChatMessage],
+                _tools: &[ToolDef],
+            ) -> Result<ChatResponse, LlmError> {
+                let asked = messages
+                    .iter()
+                    .rev()
+                    .find(|message| message.role == Role::User)
+                    .map(|message| message.content.as_str())
+                    .unwrap_or_default();
+                if asked == "second question" {
+                    return Ok(ChatResponse {
+                        content: Some("answer to: second question".to_owned()),
+                        ..Default::default()
+                    });
+                }
+                Ok(ChatResponse {
+                    tool_call: Some(ToolCall {
+                        name: "music_discover".to_owned(),
+                        arguments: serde_json::json!({
+                            "artist": "Drake",
+                            "criterion": "most controversial",
+                            "timeframe": "all_time",
+                            "year": 2013
+                        })
+                        .to_string(),
+                    }),
+                    ..Default::default()
+                })
+            }
+        }
+
+        struct NeverReturns;
+
+        #[tonic::async_trait]
+        impl crate::backends::music_discovery::MusicDiscoveryBackend for NeverReturns {
+            async fn discover(
+                &self,
+                _request: crate::backends::music_discovery::MusicDiscoveryRequest,
+                _principal: &str,
+                _deadline: Option<std::time::Instant>,
+            ) -> Result<
+                crate::backends::music_discovery::GroundedMusicTrack,
+                crate::backends::music_discovery::MusicDiscoveryError,
+            > {
+                std::future::pending().await
+            }
+        }
+
+        let (tx, rx) = mpsc::channel(16);
+        let mut out = BidiSession::spawn_tuned(
+            Arc::new(PromptAwareModel),
+            Entitlement::Active,
+            catalog::ToolContext {
+                principal: Some("V:01:D:test:U:wearer".to_owned()),
+                music_discovery: Some(Arc::new(NeverReturns)),
+                ..Default::default()
+            },
+            ReceiverStream::new(rx),
+            Duration::from_secs(2),
+            Duration::from_secs(2),
+        );
+
+        tx.send(Ok(understanding("first question"))).await.unwrap();
+        let selected_tool = next(&mut out).await;
+        assert_eq!(action_of(&selected_tool).unwrap().action, "music_discover");
+
+        tx.send(Ok(understanding("second question"))).await.unwrap();
+        let second = tokio::time::timeout(Duration::from_millis(300), out.next())
+            .await
+            .expect("the stalled tool ignored the barge-in")
+            .expect("the session closed instead of serving the barge-in")
+            .expect("session error");
+        assert_eq!(spoken(&second), "answer to: second question");
+        drop(tx);
+    }
+
     /// A run-state seed carries no request, so `initial_run_state` is accepted
     /// and skipped rather than failing the stream. The seed here holds two
     /// agents on purpose — see the note on the literal below.
@@ -2154,6 +2583,122 @@ mod tests {
             "a stalled tool must yield an honest empty-handed observation, never \
              its late result and never an unbounded wait",
         );
+    }
+
+    #[tokio::test]
+    async fn bidi_propagates_the_foreground_deadline_into_multistage_tools() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        struct DeadlineProbe(Arc<AtomicBool>);
+
+        #[tonic::async_trait]
+        impl crate::backends::music_discovery::MusicDiscoveryBackend for DeadlineProbe {
+            async fn discover(
+                &self,
+                _request: crate::backends::music_discovery::MusicDiscoveryRequest,
+                _principal: &str,
+                deadline: Option<std::time::Instant>,
+            ) -> Result<
+                crate::backends::music_discovery::GroundedMusicTrack,
+                crate::backends::music_discovery::MusicDiscoveryError,
+            > {
+                self.0.store(deadline.is_some(), Ordering::SeqCst);
+                Err(crate::backends::music_discovery::MusicDiscoveryError::NoEvidence)
+            }
+        }
+
+        let saw_deadline = Arc::new(AtomicBool::new(false));
+        let model = Arc::new(MockChatModel::tool_then_answer(
+            ToolCall {
+                name: "music_discover".to_owned(),
+                arguments: serde_json::json!({
+                    "artist": "Drake",
+                    "criterion": "most controversial",
+                    "timeframe": "all_time",
+                    "year": 2013
+                })
+                .to_string(),
+            },
+            "No supported result was found.",
+        ));
+        let (tx, rx) = mpsc::channel(16);
+        let mut out = BidiSession::spawn_with(
+            model,
+            Entitlement::Active,
+            catalog::ToolContext {
+                principal: Some("V:01:D:test:U:wearer".to_owned()),
+                music_discovery: Some(Arc::new(DeadlineProbe(saw_deadline.clone()))),
+                ..Default::default()
+            },
+            ReceiverStream::new(rx),
+        );
+
+        tx.send(Ok(understanding(
+            "find Drake's most controversial song from 2013",
+        )))
+        .await
+        .unwrap();
+        drop(tx);
+        while out.next().await.is_some() {}
+
+        assert!(
+            saw_deadline.load(Ordering::SeqCst),
+            "every multistage tool must share the foreground turn's absolute deadline"
+        );
+    }
+
+    #[tokio::test]
+    async fn bidi_receives_the_same_typed_wearer_memory_as_legacy() {
+        #[derive(Default)]
+        struct MemoryCapturingModel(std::sync::Mutex<Vec<ChatMessage>>);
+
+        #[tonic::async_trait]
+        impl ChatModel for MemoryCapturingModel {
+            async fn complete(
+                &self,
+                messages: &[ChatMessage],
+                _tools: &[ToolDef],
+            ) -> Result<ChatResponse, LlmError> {
+                *self.0.lock().unwrap() = messages.to_vec();
+                Ok(ChatResponse {
+                    content: Some("Noodles.".to_owned()),
+                    ..Default::default()
+                })
+            }
+        }
+
+        let principal = "V:01:D:test:U:wearer";
+        let store: crate::store::SharedStore = Arc::new(crate::store::MemoryStore::default());
+        let note = store.create_note(principal, None, None).await.unwrap();
+        store
+            .index_note(principal, &note.uuid, "i like noodles")
+            .await;
+
+        let model = Arc::new(MemoryCapturingModel::default());
+        let (tx, rx) = mpsc::channel(16);
+        let mut out = BidiSession::spawn_with(
+            model.clone(),
+            Entitlement::Active,
+            catalog::ToolContext {
+                principal: Some(principal.to_owned()),
+                store: Some(store),
+                ..Default::default()
+            },
+            ReceiverStream::new(rx),
+        );
+        tx.send(Ok(understanding("what are my interests")))
+            .await
+            .unwrap();
+        let _ = next(&mut out).await;
+
+        let seen = model.0.lock().unwrap();
+        assert!(seen.iter().any(|message| {
+            message.role == Role::Memory && message.content.contains("i like noodles")
+        }));
+        assert!(!seen.iter().any(|message| {
+            message.role == Role::System && message.content.contains("i like noodles")
+        }));
+        drop(tx);
     }
 
     /// REGRESSION: every emitted turn must contain a wall-clock stamp.

@@ -80,6 +80,22 @@
       "documentationAnchor": "README.md#deploy-cosmos"
     },
     {
+      "id": "eval.assistant.production",
+      "tokens": [
+        "eval",
+        "assistant",
+        "production"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "read-only",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Evaluate the real production Cosmos assistant with repeated model-path cases.",
+      "usage": "revival eval assistant production [--repeat N] [--json] [--env-file FILE] [--project-name NAME]",
+      "documentationAnchor": "README.md#cosmos-assistant-runtime"
+    },
+    {
       "id": "stack.build",
       "tokens": [
         "stack",

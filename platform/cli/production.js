@@ -12,6 +12,7 @@ const { validateProductionArtifacts } = require('./production-setup');
 const DOCTOR_USAGE = './revival doctor production [--env-file FILE] [--project-name NAME]';
 const DEPLOY_USAGE = './revival deploy production (--dry-run | --confirm) [--env-file FILE] [--project-name NAME] [--wait-timeout SECONDS]';
 const VERIFY_USAGE = './revival verify production [--env-file FILE] [--project-name NAME]';
+const EVAL_USAGE = './revival eval assistant production [--repeat N] [--json] [--env-file FILE] [--project-name NAME]';
 
 function parseProductionOptions(args, { deploy = false } = {}) {
   const values = new Set(['--env-file', '--project-name', ...(deploy ? ['--wait-timeout'] : [])]);
@@ -34,7 +35,7 @@ function parseProductionOptions(args, { deploy = false } = {}) {
   return { envFile };
 }
 
-function deploymentScript(name, args, envFile = ENV_FILE, { confirmed = false } = {}) {
+function deploymentScript(name, args, envFile = ENV_FILE, { confirmed = false, interpreter = 'bash' } = {}) {
   let values;
   try {
     values = validateRuntime({ production: true, envFile });
@@ -59,7 +60,7 @@ function deploymentScript(name, args, envFile = ENV_FILE, { confirmed = false } 
   if (!fs.existsSync(script)) fail(`deployment command is unavailable: ${script}`);
   const environment = operatorEnvironment(values);
   if (confirmed) environment.REVIVAL_DEPLOY_CONFIRMED = '1';
-  return run(resolveTool('bash'), [script, ...args], { env: environment });
+  return run(resolveTool(interpreter), [script, ...args], { env: environment });
 }
 
 function productionDoctor(args) {
@@ -106,4 +107,24 @@ function verifyProduction(args) {
   deploymentScript('verify.sh', options, parsed.envFile);
 }
 
-module.exports = { productionDoctor, deployProduction, verifyProduction };
+function evaluateAssistant(args) {
+  const [subject, target, ...options] = args;
+  if (subject !== 'assistant' || target !== 'production') fail(`usage: ${EVAL_USAGE}`, 64);
+  let envFile = ENV_FILE;
+  const seen = new Set();
+  for (let index = 0; index < options.length; index += 1) {
+    const option = options[index];
+    if (seen.has(option) || !['--repeat', '--json', '--env-file', '--project-name'].includes(option)) {
+      fail(`usage: ${EVAL_USAGE}`, 64);
+    }
+    seen.add(option);
+    if (option === '--json') continue;
+    const value = options[index + 1];
+    if (!value || value.startsWith('-')) fail(`usage: ${EVAL_USAGE}`, 64);
+    if (option === '--env-file') envFile = path.resolve(ROOT, value);
+    index += 1;
+  }
+  deploymentScript('assistant-eval.mjs', options, envFile, { interpreter: 'node' });
+}
+
+module.exports = { productionDoctor, deployProduction, evaluateAssistant, verifyProduction };
