@@ -129,6 +129,12 @@ impl ForegroundRun {
         }
     }
 
+    pub fn note_tool_call(&mut self, tool_name: &str) {
+        if tool_name != super::catalog::RESPOND_ACTION {
+            self.note_tool_calls(1);
+        }
+    }
+
     pub fn finish(&mut self, terminal: &'static str) {
         self.terminal = terminal;
     }
@@ -205,5 +211,16 @@ mod tests {
             ForegroundRun::with_budget(Transport::Bidi, RouteClass::D1, Duration::from_secs(1));
         assert_eq!(run.model_steps, 0);
         assert_eq!(run.route, RouteClass::D1);
+    }
+
+    #[test]
+    fn terminal_respond_does_not_upgrade_one_lookup_to_compound_work() {
+        let mut run =
+            ForegroundRun::with_budget(Transport::Legacy, RouteClass::A1, Duration::from_secs(1));
+        run.note_tool_call("web_search");
+        run.note_tool_call(super::super::catalog::RESPOND_ACTION);
+
+        assert_eq!(run.tool_calls, 1);
+        assert_eq!(run.route, RouteClass::A1);
     }
 }

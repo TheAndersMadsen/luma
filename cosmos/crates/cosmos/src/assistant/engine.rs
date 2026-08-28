@@ -617,7 +617,7 @@ impl Engine {
                 // and LOOP so the model can correct itself (cosmos's device does
                 // exactly this, tagged source=DEVICE).
                 if !tools.iter().any(|t| t.name == tc.name) {
-                    run.note_tool_calls(1);
+                    run.note_tool_call(&tc.name);
                     let action_id = new_id();
                     if send(
                         &tx,
@@ -677,7 +677,7 @@ impl Engine {
                 }
 
                 if catalog::is_device_tool(&tc.name) {
-                    run.note_tool_calls(1);
+                    run.note_tool_call(&tc.name);
                     // `Respond` terminates every turn, and its `Response` slot is
                     // OPTIONAL on the device — a missing/miscased key resolves to
                     // null and the answers experience throws, so the wearer hears
@@ -1015,7 +1015,7 @@ impl Engine {
                 // SERVER tool: resolve it server-side, emit action + paired
                 // observation, and LOOP.
                 let action_id = new_id();
-                run.note_tool_calls(1);
+                run.note_tool_call(&tc.name);
                 if send(
                     &tx,
                     node(action_turn(

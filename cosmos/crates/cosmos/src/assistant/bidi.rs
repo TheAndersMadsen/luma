@@ -539,7 +539,7 @@ impl BidiSession {
                 });
                 return flow;
             };
-            run.note_tool_calls(1);
+            run.note_tool_call(&tc.name);
 
             if actions_in_run >= MAX_STEPS {
                 let flow = self.too_many_actions(parent).await;
