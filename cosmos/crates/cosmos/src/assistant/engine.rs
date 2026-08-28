@@ -1640,6 +1640,13 @@ fn deterministic_device_action(
     tools: &[ToolDef],
 ) -> Option<DeterministicDeviceAction> {
     let offered = |name: &str| tools.iter().any(|tool| tool.name == name);
+    if tickle_near_miss_request(&req.utterance) && offered(catalog::RESPOND_ACTION) {
+        return Some(DeterministicDeviceAction {
+            name: catalog::RESPOND_ACTION,
+            input: catalog::respond_input(TICKLE_NEAR_MISS_RESPONSE),
+            thought: "The wearer did not use one of the exact supported Tickle phrases",
+        });
+    }
     if future_weather_request(&req.utterance) && offered(catalog::RESPOND_ACTION) {
         return Some(DeterministicDeviceAction {
             name: catalog::RESPOND_ACTION,
@@ -1932,6 +1939,15 @@ fn local_weather_request(utterance: &str) -> bool {
 
 pub(crate) const FUTURE_WEATHER_UNAVAILABLE: &str =
     "Future weather forecasts are not available yet.";
+
+pub(crate) const TICKLE_NEAR_MISS_RESPONSE: &str =
+    "Tickle only runs for the exact phrases Tickle, Tickle my fancy, or Tickle tickle tickle.";
+
+pub(crate) fn tickle_near_miss_request(utterance: &str) -> bool {
+    !catalog::exact_tickle_request(utterance)
+        && normalized_intent(utterance)
+            .is_some_and(|intent| intent.split_whitespace().any(|word| word == "tickle"))
+}
 
 pub(crate) fn future_weather_request(utterance: &str) -> bool {
     let Some(intent) = normalized_intent(utterance) else {
@@ -3190,23 +3206,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_tickle_near_miss_is_never_offered_to_the_model() {
-        let model = Arc::new(CapturingModel::default());
-        run_with(
-            model.clone(),
-            pb::SynapseUnderstandingRequest {
-                utterance: "Please tickle.".into(),
-                device_context: Some(pb::SynapseDeviceContext::default()),
-                ..Default::default()
-            },
-        )
-        .await;
-
-        assert!(
-            !model.tools().iter().any(|tool| tool == "Tickle"),
-            "a non-exact phrase must not give the model authority to emit Tickle"
-        );
-
+    async fn an_exact_tickle_phrase_is_still_offered_to_the_model() {
         let exact = Arc::new(CapturingModel::default());
         run_with(
             exact.clone(),
@@ -3220,6 +3220,43 @@ mod tests {
         assert!(
             exact.tools().iter().any(|tool| tool == "Tickle"),
             "an exact supported phrase must retain the stock action"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_tickle_near_miss_settles_without_model_latency_or_an_adjacent_action() {
+        struct ModelMustNotRun;
+
+        #[tonic::async_trait]
+        impl ChatModel for ModelMustNotRun {
+            async fn complete(
+                &self,
+                _messages: &[ChatMessage],
+                _tools: &[ToolDef],
+            ) -> Result<ChatResponse, LlmError> {
+                panic!("a bounded negative control must not spend a model step")
+            }
+        }
+
+        let messages = run_with(
+            Arc::new(ModelMustNotRun),
+            pb::SynapseUnderstandingRequest {
+                utterance: "Please tickle.".into(),
+                ..Default::default()
+            },
+        )
+        .await;
+        let actions = messages.iter().filter_map(as_action).collect::<Vec<_>>();
+        assert_eq!(
+            actions.len(),
+            1,
+            "the near miss must have one safe terminal"
+        );
+        assert_eq!(actions[0].action, catalog::RESPOND_ACTION);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&actions[0].input).unwrap()
+                [catalog::RESPOND_FIELD],
+            TICKLE_NEAR_MISS_RESPONSE
         );
     }
 

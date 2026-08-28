@@ -445,9 +445,10 @@ impl BidiSession {
         // Both transports cross the same foreground-runtime seam for their
         // absolute clock and content-free production-plane provenance.
         let future_weather = super::engine::future_weather_request(&utterance);
+        let tickle_near_miss = super::engine::tickle_near_miss_request(&utterance);
         let mut run = ForegroundRun::with_budget(
             Transport::Bidi,
-            if future_weather {
+            if future_weather || tickle_near_miss {
                 RouteClass::D1
             } else {
                 RouteClass::A1
@@ -462,6 +463,13 @@ impl BidiSession {
         if future_weather {
             let flow = self
                 .finish(parent, super::engine::FUTURE_WEATHER_UNAVAILABLE)
+                .await;
+            run.finish("answered");
+            return flow;
+        }
+        if tickle_near_miss {
+            let flow = self
+                .finish(parent, super::engine::TICKLE_NEAR_MISS_RESPONSE)
                 .await;
             run.finish("answered");
             return flow;
@@ -1787,6 +1795,33 @@ mod tests {
             spoken(&answer),
             "Future weather forecasts are not available yet."
         );
+    }
+
+    #[tokio::test]
+    async fn tickle_near_miss_settles_on_bidi_without_model_or_adjacent_action() {
+        struct ModelMustNotRun;
+
+        #[tonic::async_trait]
+        impl ChatModel for ModelMustNotRun {
+            async fn complete(
+                &self,
+                _messages: &[ChatMessage],
+                _tools: &[ToolDef],
+            ) -> Result<ChatResponse, LlmError> {
+                panic!("a bounded negative control must not spend a model step")
+            }
+        }
+
+        let (tx, mut out) = session(Arc::new(ModelMustNotRun));
+        tx.send(Ok(understanding("Please tickle."))).await.unwrap();
+        drop(tx);
+
+        let answer = next(&mut out).await;
+        assert_eq!(
+            spoken(&answer),
+            crate::assistant::engine::TICKLE_NEAR_MISS_RESPONSE
+        );
+        assert_closed(&mut out).await;
     }
 
     #[tokio::test]

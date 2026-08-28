@@ -703,10 +703,6 @@ const DEVICE_TOOL_SET: &[(&str, &str)] = &[
         "PlayCurrentTrackRadio",
         "Start a radio station based on the current track.",
     ),
-    (
-        "PlayRecommendationsWithTrackId",
-        "Play recommendations seeded by a track. Put the track id in TrackID.",
-    ),
     // --- messages & calling -------------------------------------------------
     ("OpenMessagesMainMenu", "Open the messages menu."),
     ("OpenDialerHome", "Open the phone home screen."),
@@ -754,7 +750,6 @@ const DEVICE_TOOL_SET: &[(&str, &str)] = &[
         "SetDefaultTranslateLanguage",
         "Set the default language for translation. Put it in Language.",
     ),
-    ("PlaySound", "Play a short sound or chime."),
     ("Tickle", "Trigger the pin's playful tickle response."),
 ];
 
@@ -3114,6 +3109,24 @@ mod tests {
         assert!(catalog_generated::find("CreateMemory").is_some());
         // Recall stays available — reading saved notes is a server tool.
         assert!(tool_catalog().iter().any(|t| t.name == "recall_memory"));
+    }
+
+    #[test]
+    fn internal_renderer_transitions_are_not_offered_as_wearer_tools() {
+        for action in ["PlaySound", "PlayRecommendationsWithTrackId"] {
+            assert!(
+                !DEVICE_TOOL_SET.iter().any(|(name, _)| *name == action),
+                "{action} is an internal-only state transition, not a wearer prompt tool"
+            );
+            assert!(
+                !tool_catalog().iter().any(|tool| tool.name == action),
+                "{action} must not reach the model"
+            );
+            assert!(
+                catalog_generated::find(action).is_some(),
+                "withholding an internal action must not erase its recovered wire contract"
+            );
+        }
     }
 
     /// REGRESSION: every slot in the recovered interface carries `presence =
