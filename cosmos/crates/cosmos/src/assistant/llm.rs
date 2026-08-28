@@ -220,6 +220,46 @@ impl ModelProvenance {
     }
 }
 
+fn explicit_web_search_utterance(messages: &[ChatMessage]) -> Option<&str> {
+    let utterance = messages
+        .iter()
+        .rev()
+        .find(|message| message.role == Role::User)?
+        .content
+        .trim();
+    if utterance.is_empty() {
+        return None;
+    }
+    let normalized = utterance.to_lowercase();
+    [
+        "web_search",
+        "web search",
+        "search the web",
+        "browse the web",
+    ]
+    .iter()
+    .any(|phrase| normalized.contains(phrase))
+    .then_some(utterance)
+}
+
+fn tools_after_completed_explicit_search(
+    messages: &[ChatMessage],
+    tools: &[ToolDef],
+) -> Vec<ToolDef> {
+    let searched = messages
+        .iter()
+        .any(|message| message.is_tool_result_for("web_search"));
+    if !searched || explicit_web_search_utterance(messages).is_none() {
+        return tools.to_vec();
+    }
+
+    tools
+        .iter()
+        .filter(|tool| !matches!(tool.name.as_str(), "web_search" | "ask_online"))
+        .cloned()
+        .collect()
+}
+
 /// Honor an explicit wearer request to search even when the configured model
 /// returns an unsupported direct answer.
 ///
@@ -241,27 +281,9 @@ fn enforce_explicit_web_search(
         return response;
     }
 
-    let Some(utterance) = messages
-        .iter()
-        .rev()
-        .find(|message| message.role == Role::User)
-        .map(|message| message.content.trim())
-        .filter(|utterance| !utterance.is_empty())
-    else {
+    let Some(utterance) = explicit_web_search_utterance(messages) else {
         return response;
     };
-    let normalized = utterance.to_lowercase();
-    if ![
-        "web_search",
-        "web search",
-        "search the web",
-        "browse the web",
-    ]
-    .iter()
-    .any(|phrase| normalized.contains(phrase))
-    {
-        return response;
-    }
 
     let mut calls = response.tool_call.take().into_iter().collect::<Vec<_>>();
     calls.append(&mut response.extra_tool_calls);
@@ -363,6 +385,8 @@ impl ChatModel for ConfiguredChatModel {
         messages: &[ChatMessage],
         tools: &[ToolDef],
     ) -> Result<ChatResponse, LlmError> {
+        let tools = tools_after_completed_explicit_search(messages, tools);
+        let tools = tools.as_slice();
         let config = crate::integrations::active().snapshot().assistant;
         match config.provider {
             crate::integrations::AssistantProvider::OpenAiCompatible if config.configured() => {
@@ -1018,6 +1042,40 @@ mod tests {
         assert_eq!(
             response.content.as_deref(),
             Some("The first result is PenumbraOS.")
+        );
+    }
+
+    #[test]
+    fn a_completed_explicit_search_hides_redundant_search_tools_from_the_next_step() {
+        let messages = vec![
+            ChatMessage::user("Search the web for the latest news in Denmark."),
+            ChatMessage::tool_result("web_search", "{\"query\":\"Denmark news\"}", "found"),
+        ];
+        let tools = tools_after_completed_explicit_search(
+            &messages,
+            &[
+                web_search_tool(),
+                ToolDef {
+                    name: "ask_online".to_owned(),
+                    description: "Answer from current sources".to_owned(),
+                    parameters: serde_json::json!({"type": "object"}),
+                },
+                ToolDef {
+                    name: "wikipedia".to_owned(),
+                    description: "Read Wikipedia".to_owned(),
+                    parameters: serde_json::json!({"type": "object"}),
+                },
+                ToolDef {
+                    name: "Respond".to_owned(),
+                    description: "Answer the wearer".to_owned(),
+                    parameters: serde_json::json!({"type": "object"}),
+                },
+            ],
+        );
+
+        assert_eq!(
+            tools.into_iter().map(|tool| tool.name).collect::<Vec<_>>(),
+            vec!["wikipedia", "Respond"]
         );
     }
 
