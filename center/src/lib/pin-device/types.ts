@@ -186,11 +186,17 @@ export interface DeviceInfo {
 }
 
 export interface Settings {
-  /** True while persisted listener settings differ from the running process. */
+  /** True while a persisted listener or Pin-local provider awaits restart. */
   restart_required?: boolean;
   llm?: {
     /** Independent consent for sending this Pin's camera frames to Cosmos' vision model. */
     vision_consent_acknowledged?: boolean;
+  };
+  open_food_facts?: {
+    /** Public, keyless product-data lookups performed through this Pin's network. */
+    enabled?: boolean;
+    /** Independent acknowledgement of Open Food Facts ODbL/DbCL attribution duties. */
+    attribution_acknowledged?: boolean;
   };
   server: {
     /** Explicit wire capability; the secret itself is never returned. */
@@ -212,6 +218,10 @@ export interface Settings {
 export interface UpdateSettingsRequest {
   llm?: {
     vision_consent_acknowledged?: boolean;
+  };
+  open_food_facts?: {
+    enabled?: boolean;
+    attribution_acknowledged?: boolean;
   };
   server?: {
     display_name?: string;

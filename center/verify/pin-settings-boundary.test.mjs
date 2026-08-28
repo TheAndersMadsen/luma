@@ -33,6 +33,10 @@ const RESPONSE = {
     has_api_key: true,
     vision_consent_acknowledged: true,
   },
+  open_food_facts: {
+    enabled: true,
+    attribution_acknowledged: true,
+  },
   google_maps: { has_api_key: true },
   azure_speech: { has_subscription_key: true },
 };
@@ -44,6 +48,7 @@ test("normalizes only Pin-local settings", () => {
     adminTokenAuth: true,
     lanDashboard: true,
     visionConsent: true,
+    openFoodFacts: true,
   });
   assert.deepEqual(result.settings, {
     restart_required: false,
@@ -58,10 +63,15 @@ test("normalizes only Pin-local settings", () => {
     },
     dev: { apk_install_enabled: false },
     llm: { vision_consent_acknowledged: true },
+    open_food_facts: {
+      enabled: true,
+      attribution_acknowledged: true,
+    },
   });
   assert.equal("provider" in result.settings.llm, false);
   assert.equal("google_maps" in result.settings, false);
   assert.equal("azure_speech" in result.settings, false);
+  assert.equal(result.settings.open_food_facts.enabled, true);
 });
 
 test("older responses default optional local capabilities off", () => {
@@ -78,6 +88,10 @@ test("malformed local settings fail at the boundary while retired provider data 
   assert.throws(
     () => normalizeSettingsResponse({ server: { lan_dashboard_enabled: "yes" } }),
     /settings\.server\.lan_dashboard_enabled must be a boolean/,
+  );
+  assert.throws(
+    () => normalizeSettingsResponse({ server: {}, open_food_facts: { enabled: "yes" } }),
+    /settings\.open_food_facts\.enabled must be a boolean/,
   );
   assert.doesNotThrow(() =>
     normalizeSettingsResponse({ server: {}, llm: null, google_maps: "retired" }),
@@ -100,6 +114,7 @@ test("save filtering permits only Pin-local fields", () => {
     weather: { pirate_weather_api_key: "secret" },
     google_maps: { api_key: "secret" },
     azure_speech: { subscription_key: "secret" },
+    open_food_facts: { enabled: true, attribution_acknowledged: true },
     contacts: { trust_all_contacts: true, allow_all_inbound: false },
     dev: { apk_install_enabled: true, injected_package_recovery_enabled: true },
   };
@@ -109,9 +124,11 @@ test("save filtering permits only Pin-local fields", () => {
       adminTokenAuth: true,
       lanDashboard: true,
       visionConsent: true,
+      openFoodFacts: true,
     }),
     {
       llm: { vision_consent_acknowledged: true },
+      open_food_facts: { enabled: true, attribution_acknowledged: true },
       server: {
         display_name: "Kitchen Pin",
         admin_token: "a".repeat(32),
@@ -168,5 +185,7 @@ test("device flags exposes the independent camera consent control", async () => 
   );
   assert.match(page, /Camera and visual actions/u);
   assert.match(page, /vision_consent_acknowledged/u);
+  assert.match(page, /Open Food Facts/u);
+  assert.match(page, /attribution_acknowledged/u);
   assert.match(page, /useDeviceSettings/u);
 });

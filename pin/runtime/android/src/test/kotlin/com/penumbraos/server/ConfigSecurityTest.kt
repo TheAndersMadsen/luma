@@ -25,6 +25,10 @@ class ConfigSecurityTest {
             [google_maps]
             api_key = "secret"
 
+            [open_food_facts]
+            enabled = true
+            attribution_acknowledged = true
+
             [contacts]
             trust_all_contacts = true
         """.trimIndent() + "\n"
@@ -40,6 +44,8 @@ class ConfigSecurityTest {
         assertTrue(migrated.text.contains("enabled = false"))
         assertFalse(migrated.text.contains("api_key"))
         assertFalse(migrated.text.contains("[google_maps]"))
+        assertTrue(migrated.text.contains("[open_food_facts]"))
+        assertTrue(migrated.text.contains("attribution_acknowledged = true"))
         assertFalse(migrated.text.contains("provider = \"openai-compatible\""))
         assertFalse(
             ConfigSecurity.enforceCosmosProviderAuthority(migrated.text, true).changed,

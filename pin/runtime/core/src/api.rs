@@ -304,10 +304,11 @@ async fn get_file(
 
 #[derive(Serialize)]
 struct SettingsResponse {
-    /// True only on a successful settings update that changed a listener
-    /// setting. The persisted value takes effect after the server restarts.
+    /// True when a persisted setting is waiting for a server restart, such as
+    /// a listener change or replacement of the Pin-local food client.
     restart_required: bool,
     llm: LlmSettingsResponse,
+    open_food_facts: OpenFoodFactsSettingsResponse,
     server: ServerSettingsResponse,
     contacts: ContactsSettingsResponse,
     dev: DevSettingsResponse,
@@ -319,6 +320,12 @@ struct LlmSettingsResponse {
     /// operator-selected image model. Model/provider configuration remains
     /// Cosmos-owned.
     vision_consent_acknowledged: bool,
+}
+
+#[derive(Serialize)]
+struct OpenFoodFactsSettingsResponse {
+    enabled: bool,
+    attribution_acknowledged: bool,
 }
 
 #[derive(Serialize)]
@@ -366,6 +373,10 @@ fn settings_response_with_restart(config: &Config, restart_required: bool) -> Se
         llm: LlmSettingsResponse {
             vision_consent_acknowledged: config.llm.vision_consent_acknowledged,
         },
+        open_food_facts: OpenFoodFactsSettingsResponse {
+            enabled: config.open_food_facts.enabled,
+            attribution_acknowledged: config.open_food_facts.attribution_acknowledged,
+        },
         server: ServerSettingsResponse {
             admin_token_auth: true,
             grpc_bind_addr: config.server.grpc_bind_addr.clone(),
@@ -395,6 +406,15 @@ fn listener_restart_required(config: &Config, active_lan_dashboard_enabled: bool
     config.server.lan_dashboard_enabled != active_lan_dashboard_enabled
 }
 
+fn settings_restart_required(
+    config: &Config,
+    original_config: &Config,
+    active_lan_dashboard_enabled: bool,
+) -> bool {
+    listener_restart_required(config, active_lan_dashboard_enabled)
+        || config.open_food_facts != original_config.open_food_facts
+}
+
 #[derive(Deserialize)]
 struct UpdateSettingsRequest {
     llm: Option<UpdateLlmSettings>,
@@ -402,7 +422,7 @@ struct UpdateSettingsRequest {
     weather: Option<serde_json::Value>,
     google_maps: Option<serde_json::Value>,
     brave_search: Option<serde_json::Value>,
-    open_food_facts: Option<serde_json::Value>,
+    open_food_facts: Option<UpdateOpenFoodFactsSettings>,
     azure_speech: Option<serde_json::Value>,
     openstreetmap: Option<serde_json::Value>,
     contacts: Option<UpdateContactsSettings>,
@@ -415,6 +435,13 @@ struct UpdateSettingsRequest {
 #[serde(deny_unknown_fields)]
 struct UpdateLlmSettings {
     vision_consent_acknowledged: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UpdateOpenFoodFactsSettings {
+    enabled: Option<bool>,
+    attribution_acknowledged: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -540,6 +567,15 @@ async fn update_settings(
         }
     }
 
+    if let Some(ref open_food_facts) = body.open_food_facts {
+        if let Some(value) = open_food_facts.enabled {
+            config.open_food_facts.enabled = value;
+        }
+        if let Some(value) = open_food_facts.attribution_acknowledged {
+            config.open_food_facts.attribution_acknowledged = value;
+        }
+    }
+
     if let Some(ref server) = body.server {
         if let Some(enabled) = server.lan_dashboard_enabled {
             config.server.lan_dashboard_enabled = enabled;
@@ -609,6 +645,14 @@ async fn update_settings(
     if let Err(error) = config.dev.validate() {
         return (StatusCode::BAD_REQUEST, error).into_response();
     }
+    if let Err(error) = config.open_food_facts.validate() {
+        return (StatusCode::BAD_REQUEST, error).into_response();
+    }
+    let restart_required = settings_restart_required(
+        &config,
+        &original_config,
+        state.active_lan_dashboard_enabled,
+    );
     if let Err(error) = persist_config_durably(
         &state.config_path,
         &config,
@@ -633,7 +677,7 @@ async fn update_settings(
     info!("Pin-local settings updated");
     Json(settings_response_with_restart(
         &config,
-        listener_restart_required(&config, state.active_lan_dashboard_enabled),
+        restart_required,
     ))
     .into_response()
 }
@@ -642,7 +686,6 @@ fn contains_cosmos_owned_settings(body: &UpdateSettingsRequest) -> bool {
     body.weather.is_some()
         || body.google_maps.is_some()
         || body.brave_search.is_some()
-        || body.open_food_facts.is_some()
         || body.azure_speech.is_some()
         || body.openstreetmap.is_some()
 }
@@ -1617,17 +1660,21 @@ mod tests {
         let json = serde_json::to_value(settings_response(&config)).unwrap();
         let object = json.as_object().unwrap();
 
-        assert_eq!(object.len(), 5);
+        assert_eq!(object.len(), 6);
         for provider in [
             "weather",
             "google_maps",
             "brave_search",
-            "open_food_facts",
             "azure_speech",
             "openstreetmap",
         ] {
             assert!(!object.contains_key(provider), "{provider}");
         }
+        assert_eq!(object["open_food_facts"]["enabled"], false);
+        assert_eq!(
+            object["open_food_facts"]["attribution_acknowledged"],
+            false,
+        );
         assert_eq!(
             object["llm"]["vision_consent_acknowledged"],
             false,
@@ -1641,7 +1688,6 @@ mod tests {
             r#"{"weather":{}}"#,
             r#"{"google_maps":{}}"#,
             r#"{"brave_search":{}}"#,
-            r#"{"open_food_facts":{}}"#,
             r#"{"azure_speech":{}}"#,
             r#"{"openstreetmap":{}}"#,
         ] {
@@ -1662,6 +1708,15 @@ mod tests {
             r#"{"llm":{"model":"not-pin-local"}}"#,
         )
         .is_err());
+
+        let food: UpdateSettingsRequest = serde_json::from_str(
+            r#"{"open_food_facts":{"enabled":true,"attribution_acknowledged":true}}"#,
+        )
+        .unwrap();
+        assert!(!contains_cosmos_owned_settings(&food));
+        let food = food.open_food_facts.unwrap();
+        assert_eq!(food.enabled, Some(true));
+        assert_eq!(food.attribution_acknowledged, Some(true));
 
         for json in [
             r#"{"server":{"system_prompt":"Keep answers short."}}"#,
@@ -1688,6 +1743,28 @@ mod tests {
                 ["vision_consent_acknowledged"],
             true,
         );
+    }
+
+    #[test]
+    fn open_food_facts_is_pin_local_persisted_and_requires_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let original = Config::load(&dir.path().join("missing.toml")).unwrap();
+        let mut updated = original.clone();
+        updated.open_food_facts.enabled = true;
+        updated.open_food_facts.attribution_acknowledged = true;
+
+        assert!(settings_restart_required(&updated, &original, false));
+        persist_config(&path, &updated).unwrap();
+        let loaded = Config::load(&path).unwrap();
+        assert_eq!(loaded.open_food_facts, updated.open_food_facts);
+        let response = serde_json::to_value(settings_response_with_restart(&loaded, true)).unwrap();
+        assert_eq!(response["open_food_facts"]["enabled"], true);
+        assert_eq!(
+            response["open_food_facts"]["attribution_acknowledged"],
+            true,
+        );
+        assert_eq!(response["restart_required"], true);
     }
 
     #[test]

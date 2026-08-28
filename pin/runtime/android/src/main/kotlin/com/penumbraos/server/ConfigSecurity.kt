@@ -151,7 +151,12 @@ internal object ConfigSecurity {
         )
     }
 
-    /** Remove every device-side provider setting; Cosmos is the sole authority. */
+    /**
+     * Remove secret-bearing device provider settings. Open Food Facts is the
+     * deliberate exception: it is keyless, uses the Pin's own network path,
+     * and is guarded by an explicit attribution acknowledgement plus the
+     * independent stock food gate.
+     */
     fun enforceCosmosProviderAuthority(
         text: String,
         addRoutingDefaults: Boolean,
@@ -160,7 +165,6 @@ internal object ConfigSecurity {
         val providerSections = setOf(
             "google_maps",
             "brave_search",
-            "open_food_facts",
             "azure_speech",
             "openstreetmap",
             "searxng",

@@ -133,11 +133,17 @@ export default function PinFlagsPane() {
   // page reload, which would tear down the shared WebUSB session.
   const [reloadToken, setReloadToken] = useState(0);
   const [visionConsent, setVisionConsent] = useState(false);
+  const [foodProviderEnabled, setFoodProviderEnabled] = useState(false);
+  const [foodAttribution, setFoodAttribution] = useState(false);
   const pollSequence = useRef(0);
 
   useEffect(() => {
     if (!savedSettings) return;
     setVisionConsent(savedSettings.llm?.vision_consent_acknowledged ?? false);
+    setFoodProviderEnabled(savedSettings.open_food_facts?.enabled ?? false);
+    setFoodAttribution(
+      savedSettings.open_food_facts?.attribution_acknowledged ?? false,
+    );
   }, [savedSettings]);
 
   const populate = useCallback((response: FeatureFlagsResponse) => {
@@ -272,24 +278,47 @@ export default function PinFlagsPane() {
       ...(globalUpdate ? { settings_global: globalUpdate } : {}),
     };
   }, [cloudUpdateResult, globalUpdate]);
-  const consentUpdate = useMemo<UpdateSettingsRequest | null>(() => {
-    if (!savedSettings || !settingsController.capabilities.visionConsent) return null;
+  const localSettingsUpdate = useMemo<UpdateSettingsRequest | null>(() => {
+    if (!savedSettings) return null;
+    const request: UpdateSettingsRequest = {};
     if (
-      visionConsent ===
-      (savedSettings.llm?.vision_consent_acknowledged ?? false)
+      settingsController.capabilities.visionConsent &&
+      visionConsent !==
+        (savedSettings.llm?.vision_consent_acknowledged ?? false)
     ) {
-      return null;
+      request.llm = { vision_consent_acknowledged: visionConsent };
     }
-    return { llm: { vision_consent_acknowledged: visionConsent } };
-  }, [savedSettings, settingsController.capabilities.visionConsent, visionConsent]);
+    if (
+      settingsController.capabilities.openFoodFacts &&
+      (foodProviderEnabled !== (savedSettings.open_food_facts?.enabled ?? false) ||
+        foodAttribution !==
+          (savedSettings.open_food_facts?.attribution_acknowledged ?? false))
+    ) {
+      request.open_food_facts = {
+        enabled: foodProviderEnabled,
+        attribution_acknowledged: foodAttribution,
+      };
+    }
+    return Object.keys(request).length > 0 ? request : null;
+  }, [
+    foodAttribution,
+    foodProviderEnabled,
+    savedSettings,
+    settingsController.capabilities.openFoodFacts,
+    settingsController.capabilities.visionConsent,
+    visionConsent,
+  ]);
+
+  const foodConfigurationInvalid = foodProviderEnabled && !foodAttribution;
 
   const isDirty =
     updateRequest !== null ||
-    consentUpdate !== null ||
+    localSettingsUpdate !== null ||
     Object.keys(cloudUpdateResult.errors).length > 0;
   const canSave =
     Object.keys(cloudUpdateResult.errors).length === 0 &&
-    (updateRequest !== null || consentUpdate !== null);
+    !foodConfigurationInvalid &&
+    (updateRequest !== null || localSettingsUpdate !== null);
 
   const consumerPending = useMemo(
     () =>
@@ -337,20 +366,25 @@ export default function PinFlagsPane() {
           stockCacheVerified: response.delivery.stock_cache_verified,
         });
       }
-      if (consentUpdate && !(await settingsController.save(consentUpdate))) {
-        throw new Error("camera consent save failed");
+      if (
+        localSettingsUpdate &&
+        !(await settingsController.save(localSettingsUpdate))
+      ) {
+        throw new Error("Pin-local settings save failed");
       }
       setSaveStatus("saved");
       setSaveMessage(
-        consentUpdate
-          ? [flagMessage, "Camera consent saved."].filter(Boolean).join(" ")
+        localSettingsUpdate
+          ? [flagMessage, "Pin-local permissions and providers saved."]
+              .filter(Boolean)
+              .join(" ")
           : flagMessage,
       );
     } catch (error) {
       setSaveStatus("error");
       setSaveMessage(
         flagsSaved
-          ? "Device flags were saved, but camera consent could not be saved."
+          ? "Device flags were saved, but Pin-local settings could not be saved."
           : deviceErrorMessage(error, "Couldn’t save device flags."),
       );
       logError(SCOPE, "Failed to save device feature flags", error);
@@ -448,6 +482,51 @@ export default function PinFlagsPane() {
                   : "Disabled. Camera frames will not be sent for visual analysis."}
               </StatusMessage>
               <code className={styles.mono}>llm.vision_consent_acknowledged</code>
+            </div>
+          </PaneSection>
+        ) : null}
+
+        {settingsController.capabilities.openFoodFacts ? (
+          <PaneSection title="Food and nutrition provider" testId="pin-flags-food-provider">
+            <div className={styles.formRow}>
+              <div className={styles.toggleRow}>
+                <span className={styles.toggleCopy}>
+                  Use Open Food Facts for keyless product and nutrition lookups over this
+                  Pin&rsquo;s active Wi-Fi or LTE connection.
+                </span>
+                <Switch
+                  checked={foodProviderEnabled}
+                  onChange={(next) => {
+                    setFoodProviderEnabled(next);
+                    setSaveStatus("idle");
+                    setSaveMessage(null);
+                  }}
+                  ariaLabel="Open Food Facts provider"
+                />
+              </div>
+              <div className={styles.toggleRow}>
+                <span className={styles.toggleCopy}>
+                  I acknowledge the Open Food Facts attribution and ODbL/DbCL
+                  obligations shown in the returned food results.
+                </span>
+                <Switch
+                  checked={foodAttribution}
+                  onChange={(next) => {
+                    setFoodAttribution(next);
+                    setSaveStatus("idle");
+                    setSaveMessage(null);
+                  }}
+                  ariaLabel="Open Food Facts attribution acknowledgement"
+                />
+              </div>
+              {foodConfigurationInvalid ? (
+                <StatusMessage tone="warning">
+                  Acknowledge attribution before enabling Open Food Facts.
+                </StatusMessage>
+              ) : null}
+              <code className={styles.mono}>
+                open_food_facts.attribution_acknowledged
+              </code>
             </div>
           </PaneSection>
         ) : null}

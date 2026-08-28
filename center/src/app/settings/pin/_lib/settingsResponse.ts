@@ -8,6 +8,7 @@ type LocalServerSettings = Pick<
 export interface NormalizedSettings {
   restart_required?: boolean;
   llm?: Pick<NonNullable<Settings["llm"]>, "vision_consent_acknowledged">;
+  open_food_facts?: Settings["open_food_facts"];
   server: LocalServerSettings;
   contacts?: Settings["contacts"];
   dev?: Settings["dev"];
@@ -17,12 +18,14 @@ export interface SettingsCapabilities {
   adminTokenAuth: boolean;
   lanDashboard: boolean;
   visionConsent: boolean;
+  openFoodFacts: boolean;
 }
 
 export const NO_OPTIONAL_SETTINGS_CAPABILITIES: SettingsCapabilities = {
   adminTokenAuth: false,
   lanDashboard: false,
   visionConsent: false,
+  openFoodFacts: false,
 };
 
 export class InvalidSettingsResponseError extends Error {
@@ -71,9 +74,10 @@ function optionalString(
 }
 
 /**
- * Keep Center's device boundary deliberately small. Provider configuration and
- * assistant behavior belong to Cosmos, even if an older Pin response still
- * contains those retired sections.
+ * Keep Center's device boundary deliberately small. Secret-bearing provider
+ * configuration and assistant behavior belong to Cosmos. Keyless Open Food
+ * Facts is the exception because it intentionally uses the Pin's Wi-Fi/LTE
+ * egress and has independent local attribution and stock-feature gates.
  */
 export function normalizeSettingsResponse(input: unknown): {
   settings: NormalizedSettings;
@@ -87,6 +91,7 @@ export function normalizeSettingsResponse(input: unknown): {
       : undefined;
   const contacts = optionalRecord(root, "contacts");
   const dev = optionalRecord(root, "dev");
+  const openFoodFacts = optionalRecord(root, "open_food_facts");
   const adminTokenAuth = optionalBoolean(server, "admin_token_auth", "settings.server") === true;
   const lanDashboard = Object.hasOwn(server, "lan_dashboard_enabled");
   const visionConsent = llm
@@ -103,6 +108,22 @@ export function normalizeSettingsResponse(input: unknown): {
                 llm!,
                 "vision_consent_acknowledged",
                 "settings.llm",
+              ),
+            },
+          }
+        : {}),
+      ...(openFoodFacts
+        ? {
+            open_food_facts: {
+              enabled: optionalBoolean(
+                openFoodFacts,
+                "enabled",
+                "settings.open_food_facts",
+              ),
+              attribution_acknowledged: optionalBoolean(
+                openFoodFacts,
+                "attribution_acknowledged",
+                "settings.open_food_facts",
               ),
             },
           }
@@ -144,11 +165,16 @@ export function normalizeSettingsResponse(input: unknown): {
           }
         : {}),
     },
-    capabilities: { adminTokenAuth, lanDashboard, visionConsent },
+    capabilities: {
+      adminTokenAuth,
+      lanDashboard,
+      visionConsent,
+      openFoodFacts: openFoodFacts !== undefined,
+    },
   };
 }
 
-/** Permit only Pin-local settings; provider and prompt writes are Cosmos-owned. */
+/** Permit only Pin-local settings, including the one keyless Pin-egress provider. */
 export function filterSettingsRequestByCapabilities(
   request: UpdateSettingsRequest,
   capabilities: SettingsCapabilities,
@@ -162,6 +188,20 @@ export function filterSettingsRequestByCapabilities(
     filtered.llm = {
       vision_consent_acknowledged: request.llm.vision_consent_acknowledged,
     };
+  }
+
+  if (capabilities.openFoodFacts && request.open_food_facts) {
+    const openFoodFacts: NonNullable<UpdateSettingsRequest["open_food_facts"]> = {};
+    if (request.open_food_facts.enabled !== undefined) {
+      openFoodFacts.enabled = request.open_food_facts.enabled;
+    }
+    if (request.open_food_facts.attribution_acknowledged !== undefined) {
+      openFoodFacts.attribution_acknowledged =
+        request.open_food_facts.attribution_acknowledged;
+    }
+    if (Object.keys(openFoodFacts).length > 0) {
+      filtered.open_food_facts = openFoodFacts;
+    }
   }
 
   if (request.server) {
