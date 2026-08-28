@@ -188,6 +188,10 @@ export interface DeviceInfo {
 export interface Settings {
   /** True while persisted listener settings differ from the running process. */
   restart_required?: boolean;
+  llm?: {
+    /** Independent consent for sending this Pin's camera frames to Cosmos' vision model. */
+    vision_consent_acknowledged?: boolean;
+  };
   server: {
     /** Explicit wire capability; the secret itself is never returned. */
     admin_token_auth?: boolean;
@@ -206,6 +210,9 @@ export interface Settings {
 
 /** Partial update request — only include fields you want to change. */
 export interface UpdateSettingsRequest {
+  llm?: {
+    vision_consent_acknowledged?: boolean;
+  };
   server?: {
     display_name?: string;
     /** Write-only. Omission leaves the LAN/USB administration token unchanged. */

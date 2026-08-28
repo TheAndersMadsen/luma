@@ -307,9 +307,18 @@ struct SettingsResponse {
     /// True only on a successful settings update that changed a listener
     /// setting. The persisted value takes effect after the server restarts.
     restart_required: bool,
+    llm: LlmSettingsResponse,
     server: ServerSettingsResponse,
     contacts: ContactsSettingsResponse,
     dev: DevSettingsResponse,
+}
+
+#[derive(Serialize)]
+struct LlmSettingsResponse {
+    /// Independent Pin-local consent for sending camera frames to the
+    /// operator-selected image model. Model/provider configuration remains
+    /// Cosmos-owned.
+    vision_consent_acknowledged: bool,
 }
 
 #[derive(Serialize)]
@@ -354,6 +363,9 @@ fn settings_response(config: &Config) -> SettingsResponse {
 fn settings_response_with_restart(config: &Config, restart_required: bool) -> SettingsResponse {
     SettingsResponse {
         restart_required,
+        llm: LlmSettingsResponse {
+            vision_consent_acknowledged: config.llm.vision_consent_acknowledged,
+        },
         server: ServerSettingsResponse {
             admin_token_auth: true,
             grpc_bind_addr: config.server.grpc_bind_addr.clone(),
@@ -385,7 +397,7 @@ fn listener_restart_required(config: &Config, active_lan_dashboard_enabled: bool
 
 #[derive(Deserialize)]
 struct UpdateSettingsRequest {
-    llm: Option<serde_json::Value>,
+    llm: Option<UpdateLlmSettings>,
     server: Option<UpdateServerSettings>,
     weather: Option<serde_json::Value>,
     google_maps: Option<serde_json::Value>,
@@ -397,6 +409,12 @@ struct UpdateSettingsRequest {
     dev: Option<UpdateDevSettings>,
     /// Storage is read-only; presence in the request is rejected.
     storage: Option<serde_json::Value>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UpdateLlmSettings {
+    vision_consent_acknowledged: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -516,6 +534,12 @@ async fn update_settings(
     let original_config = state.shared_config.read().await.clone();
     let mut config = original_config.clone();
 
+    if let Some(ref llm) = body.llm {
+        if let Some(value) = llm.vision_consent_acknowledged {
+            config.llm.vision_consent_acknowledged = value;
+        }
+    }
+
     if let Some(ref server) = body.server {
         if let Some(enabled) = server.lan_dashboard_enabled {
             config.server.lan_dashboard_enabled = enabled;
@@ -615,8 +639,7 @@ async fn update_settings(
 }
 
 fn contains_cosmos_owned_settings(body: &UpdateSettingsRequest) -> bool {
-    body.llm.is_some()
-        || body.weather.is_some()
+    body.weather.is_some()
         || body.google_maps.is_some()
         || body.brave_search.is_some()
         || body.open_food_facts.is_some()
@@ -823,6 +846,8 @@ fn persist_config_inner(
                 }
             }
         }
+        table["vision_consent_acknowledged"] =
+            toml_edit::value(config.llm.vision_consent_acknowledged);
         table["gemini_google_search"] = toml_edit::value(config.llm.gemini_google_search);
     }
 
@@ -1592,9 +1617,8 @@ mod tests {
         let json = serde_json::to_value(settings_response(&config)).unwrap();
         let object = json.as_object().unwrap();
 
-        assert_eq!(object.len(), 4);
+        assert_eq!(object.len(), 5);
         for provider in [
-            "llm",
             "weather",
             "google_maps",
             "brave_search",
@@ -1604,13 +1628,16 @@ mod tests {
         ] {
             assert!(!object.contains_key(provider), "{provider}");
         }
+        assert_eq!(
+            object["llm"]["vision_consent_acknowledged"],
+            false,
+        );
         assert_eq!(object["server"]["admin_token_auth"], true);
     }
 
     #[test]
     fn provider_and_prompt_writes_are_cosmos_owned() {
         for json in [
-            r#"{"llm":{}}"#,
             r#"{"weather":{}}"#,
             r#"{"google_maps":{}}"#,
             r#"{"brave_search":{}}"#,
@@ -1622,6 +1649,20 @@ mod tests {
             assert!(contains_cosmos_owned_settings(&body), "{json}");
         }
 
+        let consent: UpdateSettingsRequest = serde_json::from_str(
+            r#"{"llm":{"vision_consent_acknowledged":true}}"#,
+        )
+        .unwrap();
+        assert!(!contains_cosmos_owned_settings(&consent));
+        assert_eq!(
+            consent.llm.unwrap().vision_consent_acknowledged,
+            Some(true),
+        );
+        assert!(serde_json::from_str::<UpdateSettingsRequest>(
+            r#"{"llm":{"model":"not-pin-local"}}"#,
+        )
+        .is_err());
+
         for json in [
             r#"{"server":{"system_prompt":"Keep answers short."}}"#,
             r#"{"server":{"status_prompt":null}}"#,
@@ -1629,6 +1670,24 @@ mod tests {
             let body: UpdateSettingsRequest = serde_json::from_str(json).unwrap();
             assert!(contains_cosmos_owned_prompt(&body), "{json}");
         }
+    }
+
+    #[test]
+    fn vision_consent_is_pin_local_and_persisted() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let mut config = Config::load(&dir.path().join("missing.toml")).unwrap();
+        assert!(!config.llm.vision_consent_acknowledged);
+
+        config.llm.vision_consent_acknowledged = true;
+        persist_config(&path, &config).unwrap();
+        let loaded = Config::load(&path).unwrap();
+        assert!(loaded.llm.vision_consent_acknowledged);
+        assert_eq!(
+            serde_json::to_value(settings_response(&loaded)).unwrap()["llm"]
+                ["vision_consent_acknowledged"],
+            true,
+        );
     }
 
     #[test]

@@ -28,7 +28,11 @@ const RESPONSE = {
   dev: { apk_install_enabled: false },
   // Older Pin releases may still return these. Center must not treat them as
   // writable authority now that providers live in Cosmos.
-  llm: { provider: "openai", has_api_key: true },
+  llm: {
+    provider: "openai",
+    has_api_key: true,
+    vision_consent_acknowledged: true,
+  },
   google_maps: { has_api_key: true },
   azure_speech: { has_subscription_key: true },
 };
@@ -39,6 +43,7 @@ test("normalizes only Pin-local settings", () => {
   assert.deepEqual(result.capabilities, {
     adminTokenAuth: true,
     lanDashboard: true,
+    visionConsent: true,
   });
   assert.deepEqual(result.settings, {
     restart_required: false,
@@ -52,8 +57,9 @@ test("normalizes only Pin-local settings", () => {
       allow_all_inbound: false,
     },
     dev: { apk_install_enabled: false },
+    llm: { vision_consent_acknowledged: true },
   });
-  assert.equal("llm" in result.settings, false);
+  assert.equal("provider" in result.settings.llm, false);
   assert.equal("google_maps" in result.settings, false);
   assert.equal("azure_speech" in result.settings, false);
 });
@@ -80,7 +86,11 @@ test("malformed local settings fail at the boundary while retired provider data 
 
 test("save filtering permits only Pin-local fields", () => {
   const request = {
-    llm: { model: "must-not-reach-the-pin", api_key: "secret" },
+    llm: {
+      model: "must-not-reach-the-pin",
+      api_key: "secret",
+      vision_consent_acknowledged: true,
+    },
     server: {
       display_name: "Kitchen Pin",
       system_prompt: "must-live-in-cosmos",
@@ -98,8 +108,10 @@ test("save filtering permits only Pin-local fields", () => {
     filterSettingsRequestByCapabilities(request, {
       adminTokenAuth: true,
       lanDashboard: true,
+      visionConsent: true,
     }),
     {
+      llm: { vision_consent_acknowledged: true },
       server: {
         display_name: "Kitchen Pin",
         admin_token: "a".repeat(32),
@@ -147,4 +159,14 @@ test("save logging keeps field names but no values", () => {
     "server.display_name",
   ]);
   assert.doesNotMatch(JSON.stringify(fields), /private-token|Private name/);
+});
+
+test("device flags exposes the independent camera consent control", async () => {
+  const page = await readFile(
+    new URL("../src/app/settings/pin/flags/page.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(page, /Camera and visual actions/u);
+  assert.match(page, /vision_consent_acknowledged/u);
+  assert.match(page, /useDeviceSettings/u);
 });

@@ -10,6 +10,7 @@ import type {
   PinClient,
   SettingsGlobalFeatureGate,
   UpdateFeatureFlagsRequest,
+  UpdateSettingsRequest,
 } from "@/lib/pin-device";
 import { logError, logInfo } from "@/lib/pin-device";
 import { StatusMessage, Switch } from "@/components/Status";
@@ -24,6 +25,7 @@ import {
 import { UnsavedChangesGuard } from "../_lib/UnsavedChangesGuard";
 import { usePinPaneSession } from "../_lib/pinSession";
 import { deviceErrorMessage } from "../_lib/deviceErrorPresentation";
+import { useDeviceSettings } from "../_lib/useDeviceSettings";
 import {
   FEATURE_FLAG_DELIVERY_POLL_MAX_ATTEMPTS,
   buildFeatureFlagUpdate,
@@ -114,6 +116,8 @@ function inheritedSource(flag: FeatureFlagDefinition): FeatureFlagSource {
 
 export default function PinFlagsPane() {
   const { client, connectionError, attachedWithoutServer } = usePinPaneSession();
+  const settingsController = useDeviceSettings(`${SCOPE}-camera-consent`);
+  const savedSettings = settingsController.settings;
 
   const [data, setData] = useState<FeatureFlagsResponse | null>(null);
   const [drafts, setDrafts] = useState<FeatureFlagDrafts>({});
@@ -128,7 +132,13 @@ export default function PinFlagsPane() {
   // Bumped by the retry affordance so the load effect re-runs without a full
   // page reload, which would tear down the shared WebUSB session.
   const [reloadToken, setReloadToken] = useState(0);
+  const [visionConsent, setVisionConsent] = useState(false);
   const pollSequence = useRef(0);
+
+  useEffect(() => {
+    if (!savedSettings) return;
+    setVisionConsent(savedSettings.llm?.vision_consent_acknowledged ?? false);
+  }, [savedSettings]);
 
   const populate = useCallback((response: FeatureFlagsResponse) => {
     setData(response);
@@ -262,9 +272,24 @@ export default function PinFlagsPane() {
       ...(globalUpdate ? { settings_global: globalUpdate } : {}),
     };
   }, [cloudUpdateResult, globalUpdate]);
+  const consentUpdate = useMemo<UpdateSettingsRequest | null>(() => {
+    if (!savedSettings || !settingsController.capabilities.visionConsent) return null;
+    if (
+      visionConsent ===
+      (savedSettings.llm?.vision_consent_acknowledged ?? false)
+    ) {
+      return null;
+    }
+    return { llm: { vision_consent_acknowledged: visionConsent } };
+  }, [savedSettings, settingsController.capabilities.visionConsent, visionConsent]);
 
   const isDirty =
-    updateRequest !== null || Object.keys(cloudUpdateResult.errors).length > 0;
+    updateRequest !== null ||
+    consentUpdate !== null ||
+    Object.keys(cloudUpdateResult.errors).length > 0;
+  const canSave =
+    Object.keys(cloudUpdateResult.errors).length === 0 &&
+    (updateRequest !== null || consentUpdate !== null);
 
   const consumerPending = useMemo(
     () =>
@@ -287,32 +312,47 @@ export default function PinFlagsPane() {
   }
 
   async function handleSave() {
-    if (!client || !updateRequest) return;
+    if (!client || !canSave) return;
     setSaveStatus("saving");
     setSaveMessage(null);
-    const cloudCount = Object.keys(updateRequest.overrides ?? {}).length;
-    const globalCount = Object.keys(updateRequest.settings_global ?? {}).length;
+    const cloudCount = Object.keys(updateRequest?.overrides ?? {}).length;
+    const globalCount = Object.keys(updateRequest?.settings_global ?? {}).length;
     logInfo(SCOPE, "Saving device feature flags", { cloudCount, globalCount });
 
+    let flagsSaved = false;
     try {
-      const response = await client.updateFeatureFlags(updateRequest);
-      populate(response);
-      if (cloudCount > 0) beginDeliveryPoll(response.delivery, "save");
+      let flagMessage: string | null = null;
+      if (updateRequest) {
+        const response = await client.updateFeatureFlags(updateRequest);
+        flagsSaved = true;
+        populate(response);
+        if (cloudCount > 0) beginDeliveryPoll(response.delivery, "save");
+        flagMessage = featureFlagSaveMessage(response.delivery, cloudCount, globalCount);
+        logInfo(SCOPE, "Device feature flags saved", {
+          cloudCount,
+          globalCount,
+          syncRequested: response.sync_requested ?? false,
+          deliveryState: response.delivery.state,
+          grpcFetchObserved: response.delivery.grpc_fetch_observed,
+          stockCacheVerified: response.delivery.stock_cache_verified,
+        });
+      }
+      if (consentUpdate && !(await settingsController.save(consentUpdate))) {
+        throw new Error("camera consent save failed");
+      }
       setSaveStatus("saved");
       setSaveMessage(
-        featureFlagSaveMessage(response.delivery, cloudCount, globalCount),
+        consentUpdate
+          ? [flagMessage, "Camera consent saved."].filter(Boolean).join(" ")
+          : flagMessage,
       );
-      logInfo(SCOPE, "Device feature flags saved", {
-        cloudCount,
-        globalCount,
-        syncRequested: response.sync_requested ?? false,
-        deliveryState: response.delivery.state,
-        grpcFetchObserved: response.delivery.grpc_fetch_observed,
-        stockCacheVerified: response.delivery.stock_cache_verified,
-      });
     } catch (error) {
       setSaveStatus("error");
-      setSaveMessage(deviceErrorMessage(error, "Couldn’t save device flags."));
+      setSaveMessage(
+        flagsSaved
+          ? "Device flags were saved, but camera consent could not be saved."
+          : deviceErrorMessage(error, "Couldn’t save device flags."),
+      );
       logError(SCOPE, "Failed to save device feature flags", error);
     }
   }
@@ -324,11 +364,14 @@ export default function PinFlagsPane() {
     );
   }
 
-  if (!data) {
+  if (!data || !savedSettings) {
     return (
       <PaneLoadState
-        error={loadError}
-        onRetry={() => setReloadToken((token) => token + 1)}
+        error={loadError ?? settingsController.loadError}
+        onRetry={() => {
+          setReloadToken((token) => token + 1);
+          settingsController.reload();
+        }}
         rows={6}
       />
     );
@@ -336,16 +379,16 @@ export default function PinFlagsPane() {
 
   const writableFlags = data.flags.filter((flag) => flag.writable);
   const lockedFlags = data.flags.filter((flag) => !flag.writable);
-  const saving = saveStatus === "saving";
+  const saving = saveStatus === "saving" || settingsController.saveStatus === "saving";
 
   return (
     <>
       <SaveBar
         status={saveStatus}
         error={saveStatus === "error" ? saveMessage : null}
-        dirty={updateRequest !== null}
+        dirty={canSave}
         onSave={() => void handleSave()}
-        label="Save overrides"
+        label="Save changes"
       />
 
       {saveStatus === "saved" && saveMessage ? (
@@ -377,6 +420,38 @@ export default function PinFlagsPane() {
         disabled={saving}
         aria-busy={saving}
       >
+        {settingsController.capabilities.visionConsent ? (
+          <PaneSection
+            title="Camera and visual actions"
+            testId="pin-flags-vision-consent"
+          >
+            <div className={styles.formRow}>
+              <div className={styles.toggleRow}>
+                <span className={styles.toggleCopy}>
+                  Allow this Pin to send camera frames to the vision model configured in
+                  Cosmos. This is required for visual rules such as &ldquo;If you see a dog,
+                  then take a picture.&rdquo;
+                </span>
+                <Switch
+                  checked={visionConsent}
+                  onChange={(next) => {
+                    setVisionConsent(next);
+                    setSaveStatus("idle");
+                    setSaveMessage(null);
+                  }}
+                  ariaLabel="Camera analysis consent"
+                />
+              </div>
+              <StatusMessage tone={visionConsent ? "warning" : "info"}>
+                {visionConsent
+                  ? "Enabled. New camera frames may leave this Pin for analysis by your configured model provider."
+                  : "Disabled. Camera frames will not be sent for visual analysis."}
+              </StatusMessage>
+              <code className={styles.mono}>llm.vision_consent_acknowledged</code>
+            </div>
+          </PaneSection>
+        ) : null}
+
         <PaneSection title="Cloud feature flags" testId="pin-flags-cloud">
           <div className={styles.formRow}>
             <p className={styles.formHelp}>

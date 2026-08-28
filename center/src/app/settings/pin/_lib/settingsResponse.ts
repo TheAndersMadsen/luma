@@ -7,6 +7,7 @@ type LocalServerSettings = Pick<
 
 export interface NormalizedSettings {
   restart_required?: boolean;
+  llm?: Pick<NonNullable<Settings["llm"]>, "vision_consent_acknowledged">;
   server: LocalServerSettings;
   contacts?: Settings["contacts"];
   dev?: Settings["dev"];
@@ -15,11 +16,13 @@ export interface NormalizedSettings {
 export interface SettingsCapabilities {
   adminTokenAuth: boolean;
   lanDashboard: boolean;
+  visionConsent: boolean;
 }
 
 export const NO_OPTIONAL_SETTINGS_CAPABILITIES: SettingsCapabilities = {
   adminTokenAuth: false,
   lanDashboard: false,
+  visionConsent: false,
 };
 
 export class InvalidSettingsResponseError extends Error {
@@ -78,14 +81,32 @@ export function normalizeSettingsResponse(input: unknown): {
 } {
   const root = record(input, "settings");
   const server = record(root.server, "settings.server");
+  const llm =
+    root.llm !== null && typeof root.llm === "object" && !Array.isArray(root.llm)
+      ? (root.llm as Record<string, unknown>)
+      : undefined;
   const contacts = optionalRecord(root, "contacts");
   const dev = optionalRecord(root, "dev");
   const adminTokenAuth = optionalBoolean(server, "admin_token_auth", "settings.server") === true;
   const lanDashboard = Object.hasOwn(server, "lan_dashboard_enabled");
+  const visionConsent = llm
+    ? Object.hasOwn(llm, "vision_consent_acknowledged")
+    : false;
 
   return {
     settings: {
       restart_required: optionalBoolean(root, "restart_required", "settings"),
+      ...(visionConsent
+        ? {
+            llm: {
+              vision_consent_acknowledged: optionalBoolean(
+                llm!,
+                "vision_consent_acknowledged",
+                "settings.llm",
+              ),
+            },
+          }
+        : {}),
       server: {
         admin_token_auth: adminTokenAuth,
         display_name: optionalString(server, "display_name", "settings.server"),
@@ -123,7 +144,7 @@ export function normalizeSettingsResponse(input: unknown): {
           }
         : {}),
     },
-    capabilities: { adminTokenAuth, lanDashboard },
+    capabilities: { adminTokenAuth, lanDashboard, visionConsent },
   };
 }
 
@@ -133,6 +154,15 @@ export function filterSettingsRequestByCapabilities(
   capabilities: SettingsCapabilities,
 ): UpdateSettingsRequest {
   const filtered: UpdateSettingsRequest = {};
+
+  if (
+    capabilities.visionConsent &&
+    request.llm?.vision_consent_acknowledged !== undefined
+  ) {
+    filtered.llm = {
+      vision_consent_acknowledged: request.llm.vision_consent_acknowledged,
+    };
+  }
 
   if (request.server) {
     const server: NonNullable<UpdateSettingsRequest["server"]> = {};

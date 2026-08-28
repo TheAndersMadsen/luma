@@ -215,50 +215,58 @@ async fn discover_with_research(
     research_backend: &dyn CandidateResearch,
     provider_catalog: &dyn ProviderCatalog,
 ) -> Result<GroundedMusicTrack, MusicDiscoveryError> {
-    let web_started = Instant::now();
-    let web_evidence = match stage_budget(
+    let web_budget = stage_budget(
         deadline,
         SETTLEMENT_RESERVE + PROVIDER_MAX + INITIAL_RESEARCH_MIN,
         WEB_RESEARCH_MAX,
-    ) {
-        Ok(web_budget) => {
-            let query = music_research_query(&request);
-            let result = tokio::time::timeout(web_budget, research_backend.web_search(&query))
-                .await
-                .unwrap_or(Err(MusicDiscoveryError::Deadline));
-            crate::metrics::record_music_discovery_stage(
-                "web_research",
-                result_outcome(&result),
-                web_started.elapsed(),
-            );
-            result.ok()
-        }
-        Err(_) => {
-            crate::metrics::record_music_discovery_stage(
-                "web_research",
-                "skipped",
-                web_started.elapsed(),
-            );
-            None
-        }
-    };
+    )
+    .ok();
     let initial_budget = stage_budget(
         deadline,
         SETTLEMENT_RESERVE + PROVIDER_MAX,
         INITIAL_RESEARCH_MAX,
     )?;
+    let web_started = Instant::now();
+    let web = async {
+        match web_budget {
+            Some(web_budget) => {
+                let query = music_research_query(&request);
+                let result = tokio::time::timeout(web_budget, research_backend.web_search(&query))
+                    .await
+                    .unwrap_or(Err(MusicDiscoveryError::Deadline));
+                crate::metrics::record_music_discovery_stage(
+                    "web_research",
+                    result_outcome(&result),
+                    web_started.elapsed(),
+                );
+                result.ok()
+            }
+            None => {
+                crate::metrics::record_music_discovery_stage(
+                    "web_research",
+                    "skipped",
+                    web_started.elapsed(),
+                );
+                None
+            }
+        }
+    };
     let initial_started = Instant::now();
-    let initial = tokio::time::timeout(
-        initial_budget,
-        research_backend.candidates(&request, None, web_evidence.as_deref()),
-    )
-    .await
-    .unwrap_or(Err(MusicDiscoveryError::Deadline));
-    crate::metrics::record_music_discovery_stage(
-        "research",
-        result_outcome(&initial),
-        initial_started.elapsed(),
-    );
+    let initial = async {
+        let result = tokio::time::timeout(
+            initial_budget,
+            research_backend.candidates(&request, None, None),
+        )
+        .await
+        .unwrap_or(Err(MusicDiscoveryError::Deadline));
+        crate::metrics::record_music_discovery_stage(
+            "research",
+            result_outcome(&result),
+            initial_started.elapsed(),
+        );
+        result
+    };
+    let (web_evidence, initial) = tokio::join!(web, initial);
     let retry_without_web = web_evidence.is_some()
         && match &initial {
             Ok(research) => {
@@ -267,7 +275,7 @@ async fn discover_with_research(
             Err(MusicDiscoveryError::NoEvidence) => true,
             Err(_) => false,
         };
-    let mut used_web_evidence = web_evidence.is_some();
+    let mut used_web_evidence = false;
     let mut research = if retry_without_web {
         let retry_budget = stage_budget(
             deadline,
@@ -280,7 +288,7 @@ async fn discover_with_research(
         let retry_started = Instant::now();
         let retry = tokio::time::timeout(
             retry_budget,
-            research_backend.candidates(&request, None, None),
+            research_backend.candidates(&request, None, web_evidence.as_deref()),
         )
         .await
         .unwrap_or(Err(MusicDiscoveryError::Deadline));
@@ -289,7 +297,7 @@ async fn discover_with_research(
             result_outcome(&retry),
             retry_started.elapsed(),
         );
-        used_web_evidence = false;
+        used_web_evidence = true;
         retry?
     } else {
         initial?
@@ -1343,7 +1351,7 @@ mod tests {
 
         assert_eq!(track.title, "Started From the Bottom");
         assert_eq!(track.provider, "youtube_music");
-        assert_eq!(track.discovery_provenance, "web_search+perplexity");
+        assert_eq!(track.discovery_provenance, "perplexity");
         assert_eq!(
             *research.web_queries.lock().unwrap(),
             vec![
@@ -1357,11 +1365,7 @@ mod tests {
             1,
             "clear evidence should settle in one research call"
         );
-        assert!(evidence.iter().all(|value| {
-            value
-                .as_deref()
-                .is_some_and(|value| value.contains("Independent web evidence"))
-        }));
+        assert_eq!(*evidence, vec![None]);
     }
 
     #[tokio::test]
@@ -1409,7 +1413,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn weak_web_leads_retry_semantic_research_before_provider_verification() {
+    async fn weak_web_leads_do_not_poison_semantic_research_before_provider_verification() {
         let research = WeakLeadResearch {
             candidate_evidence: std::sync::Mutex::new(Vec::new()),
         };
@@ -1436,18 +1440,12 @@ mod tests {
             &catalog,
         )
         .await
-        .expect("semantic research should retry without weak retrieval leads");
+        .expect("semantic research should stay independent of weak retrieval leads");
 
         assert_eq!(track.title, "Started From the Bottom");
         assert_eq!(track.provider, "youtube_music");
         assert_eq!(track.discovery_provenance, "perplexity");
-        assert_eq!(
-            *research.candidate_evidence.lock().unwrap(),
-            vec![
-                Some("Weak search leads that do not identify a track.".to_owned()),
-                None,
-            ]
-        );
+        assert_eq!(*research.candidate_evidence.lock().unwrap(), vec![None]);
         assert_eq!(
             *catalog.queries.lock().unwrap(),
             vec!["Started From the Bottom".to_owned()]
