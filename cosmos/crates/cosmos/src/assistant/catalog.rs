@@ -82,8 +82,8 @@ pub fn system_prompt() -> &'static str {
      anything else. Device actions (set a timer, play music, search contacts, \
      take a photo, and so on) run on the pin itself.\n\
      \n\
-     For a ranked or subjective music question, research the requested criterion \
-     with `web_search` or `ask_online`. If the wearer only asks what the song is, \
+     For a ranked or subjective music question, use the one offered research tool \
+     for the requested criterion. If the wearer only asks what the song is, \
      answer from that research and do not touch their music provider. If they \
      explicitly ask to play it, call `music_discover` after research with the \
      exact title and artist; it verifies the track against the active provider \
@@ -1679,6 +1679,10 @@ fn exact_tickle_request(value: &str) -> bool {
 #[derive(Clone, Default)]
 pub struct ToolContext {
     pub principal: Option<String>,
+    /// Whether the deployment has a synthesized online answer backend. Ranked
+    /// music gives the model one research path per turn; this chooses the richer
+    /// answer engine over raw search snippets when both are connected.
+    pub answer_engine_available: bool,
     /// Where the wearer is, when the device told us.
     ///
     /// `SynapseUnderstandingRequest.location` (field 10) — populated on the
@@ -2697,6 +2701,7 @@ mod tests {
             .expect("store sealed note");
         let context = ToolContext {
             principal: Some(principal.to_owned()),
+            answer_engine_available: false,
             store: Some(store),
             key_directory: Some(directory.clone()),
             keys: None,
@@ -2822,6 +2827,7 @@ mod tests {
     async fn what_the_wearer_asks_to_remember_can_be_recalled() {
         let context = ToolContext {
             principal: Some("V:01:D:test-pin:U:wearer".to_owned()),
+            answer_engine_available: false,
             store: Some(crate::store::MemoryStore::shared()),
             key_directory: None,
             keys: Some(Default::default()),
@@ -3371,6 +3377,7 @@ mod tests {
 
         let context = ToolContext {
             principal: Some("wearer-a".to_owned()),
+            answer_engine_available: false,
             store: Some(store.clone()),
             key_directory: None,
             keys: Some(keys.clone()),
@@ -3413,6 +3420,7 @@ mod tests {
         let principal = "wearer-with-a-long-history";
         let context = ToolContext {
             principal: Some(principal.to_owned()),
+            answer_engine_available: false,
             store: Some(store.clone()),
             key_directory: None,
             keys: Some(Default::default()),
@@ -3494,6 +3502,7 @@ mod tests {
 
         let context = ToolContext {
             principal: Some(principal.to_owned()),
+            answer_engine_available: false,
             store: Some(store),
             key_directory: None,
             keys: Some(keys),

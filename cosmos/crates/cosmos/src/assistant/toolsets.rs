@@ -205,11 +205,11 @@ pub const SETS: &[ToolSet] = &[
         // deliberately not used: the tools below come from our own recovered
         // device-action interface and the wording is ours.
         guidance: "This turn handles music questions and playback. For an information-only \
-                   ranked or subjective question, research with web_search or ask_online and answer \
+                   ranked or subjective question, use the one offered research tool and answer \
                    without touching the active provider. For explicit playback with a research-based or subjective \
                    selection criterion — including most popular, top, best, viral, controversial, \
                    influential, trending, newest, underrated, similar-to, mood, or situation — first \
-                   research it with web_search or ask_online, then call music_discover once with the \
+                   use the one offered research tool, then call music_discover once with the \
                    exact title and artist; preserve an explicit release year and short additional \
                    constraints. That second tool verifies the choice against the active provider. Resolve ordinary \
                    requests to the narrowest thing that fits — a track, artist, album, or genre — and \

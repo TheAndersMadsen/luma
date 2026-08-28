@@ -449,12 +449,17 @@ impl Engine {
     ) {
         // Resolve the server-owned catalog for this request: our tool set minus
         // whatever the device excluded (`SYNAPSE_EXCLUDED_TOOLS`).
-        let tools = resolve_catalog(&req, self.entitlement.is_subscribed());
+        let mut tools = resolve_catalog(&req, self.entitlement.is_subscribed());
 
         // The wearer's own words, kept for required-slot backfill: the agent
         // entry points take the request verbatim, so when the model omits the
         // slot the utterance is the faithful value rather than an invention.
         let utterance = req.utterance.clone();
+        let bounded_music_research = prefer_one_music_research_tool(
+            &mut tools,
+            &utterance,
+            self.tools.answer_engine_available,
+        );
 
         // Root the transcript on the user-request turn the DEVICE replayed. With no
         // device context the first server turn self-roots (empty parent) rather
@@ -911,6 +916,7 @@ impl Engine {
                         .filter(|extra| {
                             !catalog::is_device_tool(&extra.name)
                                 && catalog::is_server_tool(&extra.name)
+                                && tools.iter().any(|tool| tool.name == extra.name)
                         })
                         .cloned()
                         .collect()
@@ -1002,6 +1008,11 @@ impl Engine {
                         last_obs_id = obs_id;
                     }
                     parent = last_obs_id;
+                    if bounded_music_research
+                        && all.iter().any(|call| is_music_research_tool(&call.name))
+                    {
+                        retire_music_research_tools(&mut tools);
+                    }
 
                     if step + 1 == ACTION_LIMIT || actions_in_run + 1 > ACTION_LIMIT {
                         too_many_actions_terminal(&tx, parent).await;
@@ -1066,6 +1077,9 @@ impl Engine {
                     &model_facing_observation(&observation),
                 ));
                 parent = obs_id;
+                if bounded_music_research && is_music_research_tool(&tc.name) {
+                    retire_music_research_tools(&mut tools);
+                }
 
                 // A grounded discovery already contains the exact provider-
                 // verified title and artist. When the wearer explicitly asked
@@ -1838,6 +1852,39 @@ pub(crate) fn explicit_playback_request(utterance: &str) -> bool {
         || intent.contains(" then play ")
         || intent.ends_with(" and play it")
         || intent.ends_with(" then play it")
+}
+
+fn is_music_research_tool(name: &str) -> bool {
+    matches!(name, "web_search" | "ask_online")
+}
+
+/// A playback turn has room for one research lookup, one model extraction step,
+/// and provider verification. The model still decides whether the request needs
+/// research; when it does, offering both research tools allowed it to run them
+/// serially and consume the whole Pin deadline before `music_discover`. Prefer
+/// the connected answer engine because it returns a synthesized title/artist;
+/// raw web search remains the no-answer-engine path.
+pub(crate) fn prefer_one_music_research_tool(
+    tools: &mut Vec<ToolDef>,
+    utterance: &str,
+    answer_engine_available: bool,
+) -> bool {
+    if !explicit_playback_request(utterance)
+        || !tools.iter().any(|tool| tool.name == "music_discover")
+    {
+        return false;
+    }
+    let preferred = if answer_engine_available {
+        "ask_online"
+    } else {
+        "web_search"
+    };
+    tools.retain(|tool| !is_music_research_tool(&tool.name) || tool.name == preferred);
+    true
+}
+
+pub(crate) fn retire_music_research_tools(tools: &mut Vec<ToolDef>) {
+    tools.retain(|tool| !is_music_research_tool(&tool.name));
 }
 
 fn unsafe_intent_text(value: &str) -> bool {
@@ -3093,6 +3140,26 @@ mod tests {
         );
     }
 
+    #[test]
+    fn arbitrary_playback_criteria_get_one_configured_research_tool_then_none() {
+        let mut tools = catalog::tool_catalog();
+        prefer_one_music_research_tool(
+            &mut tools,
+            "Play Drake's most culturally divisive track from 2013",
+            true,
+        );
+        assert!(tools.iter().any(|tool| tool.name == "ask_online"));
+        assert!(tools.iter().all(|tool| tool.name != "web_search"));
+
+        retire_music_research_tools(&mut tools);
+        assert!(
+            tools
+                .iter()
+                .all(|tool| !matches!(tool.name.as_str(), "web_search" | "ask_online"))
+        );
+        assert!(tools.iter().any(|tool| tool.name == "music_discover"));
+    }
+
     #[tokio::test]
     async fn answer_only_ranked_music_uses_research_without_provider_discovery() {
         let answer_model = Arc::new(CapturingModel::default());
@@ -3143,10 +3210,10 @@ mod tests {
                 _messages: &[ChatMessage],
                 tools: &[ToolDef],
             ) -> Result<ChatResponse, LlmError> {
-                assert!(tools.iter().any(|tool| tool.name == "web_search"));
                 assert!(tools.iter().any(|tool| tool.name == "music_discover"));
                 let call = self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 let (name, arguments, thought) = if call == 0 {
+                    assert!(tools.iter().any(|tool| tool.name == "web_search"));
                     (
                         "web_search",
                         serde_json::json!({"query": "Drake most popular song"}).to_string(),
@@ -3154,6 +3221,11 @@ mod tests {
                     )
                 } else {
                     assert_eq!(call, 1, "provider verification should settle playback");
+                    assert!(
+                        tools
+                            .iter()
+                            .all(|tool| !matches!(tool.name.as_str(), "web_search" | "ask_online"))
+                    );
                     (
                         "music_discover",
                         serde_json::json!({
@@ -3397,6 +3469,15 @@ mod tests {
             assert!(tools.iter().any(|tool| tool.name == "music_discover"));
             let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             if call == 0 {
+                assert_eq!(
+                    tools
+                        .iter()
+                        .filter(|tool| matches!(tool.name.as_str(), "web_search" | "ask_online"))
+                        .map(|tool| tool.name.as_str())
+                        .collect::<Vec<_>>(),
+                    vec!["web_search"],
+                    "a ranked playback turn gets one configured research path"
+                );
                 return Ok(ChatResponse {
                     content: None,
                     thought: "I should research the historical criterion first".to_owned(),
@@ -3411,6 +3492,12 @@ mod tests {
                 });
             }
             assert_eq!(call, 1, "provider verification should settle playback");
+            assert!(
+                tools
+                    .iter()
+                    .all(|tool| !matches!(tool.name.as_str(), "web_search" | "ask_online")),
+                "one completed research lookup must retire both research tools"
+            );
             Ok(ChatResponse {
                 content: None,
                 thought: "I should verify the researched historical track".to_owned(),

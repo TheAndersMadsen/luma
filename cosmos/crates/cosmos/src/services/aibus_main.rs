@@ -622,6 +622,7 @@ impl AiBusMain {
         crate::assistant::catalog::ToolContext {
             principal: crate::auth::principal(request)
                 .map(|p| p.expose_for_authorization().to_owned()),
+            answer_engine_available: crate::integrations::value("COSMOS_PPLX_API_KEY").is_some(),
             store: Some(self.store.clone()),
             keys: Some(self.keys.clone()),
             key_directory: self.directory.clone(),
@@ -3402,6 +3403,7 @@ mod tests {
             Entitlement::Active,
             catalog::ToolContext {
                 principal: Some("device-test-pin-01".to_owned()),
+                answer_engine_available: false,
                 store: Some(store),
                 key_directory: None,
                 keys: Some(Default::default()),

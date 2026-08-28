@@ -236,9 +236,10 @@ that confirmation. Reversible playback and volume controls do not gain that
 extra confirmation step.
 
 Music discovery is one specialist A1/A2 tool. For a ranked, subjective, or
-time-bound request, the foreground agent first uses the configured web-search
-or answer-engine tool to identify an exact title and artist. An information-only
-question ends there without contacting the wearer's provider. An explicit
+time-bound request, the foreground agent uses one research call: the configured
+answer engine when available, otherwise web search, to identify an exact title
+and artist. An information-only question ends there without contacting the
+wearer's provider. An explicit
 playback request then verifies that exact candidate against the active provider;
 only the grounded provider result becomes a stock `PlayMusic` action. The model
 chooses this path for requests such as “play the most popular song by Drake”;

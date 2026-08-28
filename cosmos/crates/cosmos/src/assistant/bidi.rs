@@ -406,12 +406,17 @@ impl BidiSession {
         S: Stream<Item = Result<pb::StreamingUnderstandRequest, Status>> + Unpin,
     {
         // Server-owned catalog for this run: our tool set minus `excluded_tools`.
-        let tools = resolve_catalog(&req, &self.entitlement);
+        let mut tools = resolve_catalog(&req, &self.entitlement);
 
         // The wearer's own words, kept for required-slot backfill (see the device
         // branch below): the agent entry points take the request verbatim, so the
         // utterance is the faithful fill rather than an invention.
         let utterance = req.utterance.clone();
+        let bounded_music_research = super::engine::prefer_one_music_research_tool(
+            &mut tools,
+            &utterance,
+            self.tools.answer_engine_available,
+        );
 
         // Root the run on the user-request turn the device replayed; with no device
         // context the first server turn self-roots rather than pointing at an id we
@@ -845,6 +850,7 @@ impl BidiSession {
                         .filter(|extra| {
                             !catalog::is_device_tool(&extra.name)
                                 && catalog::is_server_tool(&extra.name)
+                                && tools.iter().any(|tool| tool.name == extra.name)
                         })
                         .cloned(),
                 );
@@ -924,6 +930,13 @@ impl BidiSession {
                 }
                 messages.push(tool_result(call, &observation));
                 parent = obs_id;
+            }
+            if bounded_music_research
+                && batch
+                    .iter()
+                    .any(|call| matches!(call.name.as_str(), "web_search" | "ask_online"))
+            {
+                super::engine::retire_music_research_tools(&mut tools);
             }
 
             if terminal_music {
@@ -1623,10 +1636,22 @@ mod tests {
             async fn complete(
                 &self,
                 _messages: &[ChatMessage],
-                _tools: &[ToolDef],
+                tools: &[ToolDef],
             ) -> Result<ChatResponse, LlmError> {
                 let call = self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 let (name, arguments) = if call == 0 {
+                    assert_eq!(
+                        tools
+                            .iter()
+                            .filter(|tool| matches!(
+                                tool.name.as_str(),
+                                "web_search" | "ask_online"
+                            ))
+                            .map(|tool| tool.name.as_str())
+                            .collect::<Vec<_>>(),
+                        vec!["web_search"],
+                        "a ranked playback turn gets one configured research path"
+                    );
                     (
                         "web_search",
                         serde_json::json!({
@@ -1638,6 +1663,12 @@ mod tests {
                     assert_eq!(
                         call, 1,
                         "provider-grounded playback must not require a settlement model step"
+                    );
+                    assert!(
+                        tools
+                            .iter()
+                            .all(|tool| !matches!(tool.name.as_str(), "web_search" | "ask_online")),
+                        "one completed research lookup must retire both research tools"
                     );
                     (
                         "music_discover",
