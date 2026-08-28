@@ -1548,6 +1548,27 @@ test("readiness requires exact manifest identity and provider-aware music gates"
   assert.equal(ready.pass, true);
   assert.ok(Object.values(ready.checks).every(Boolean));
 
+  const consentOnly = readinessFixture();
+  consentOnly.settings.llm = { vision_consent_acknowledged: true };
+  const consentReady = evaluatePhysicalReadiness(
+    consentOnly,
+    identityFixture(),
+    EXPECTED,
+  );
+  assert.equal(consentReady.checks.cosmosAuthority, true);
+  assert.equal(consentReady.checks.weatherReady, true);
+
+  const localModel = readinessFixture();
+  localModel.settings.llm = {
+    provider: "echo",
+    vision_consent_acknowledged: true,
+  };
+  assert.equal(
+    evaluatePhysicalReadiness(localModel, identityFixture(), EXPECTED).checks
+      .cosmosAuthority,
+    false,
+  );
+
   const stale = readinessFixture();
   stale.spotify.engine_ready = false;
   stale.featureFlags.delivery.stock_cache_verified = false;
@@ -1756,6 +1777,9 @@ test("each local-weather prompt requires its correlated four-milestone proof", a
           async beginAgenticEvidence() {
             return marker;
           },
+          async beginHookEvidence() {
+            return "physical-simple-323e4567-e89b-42d3-a456-426614174000";
+          },
           async inject(caseId) {
             injected.push(caseId);
           },
@@ -1778,6 +1802,9 @@ test("each local-weather prompt requires its correlated four-milestone proof", a
               eventCount: 4,
               pass: true,
             };
+          },
+          async hookEvidenceSince() {
+            return [];
           },
           async deletePrompt(id) {
             deleted.push(id);
@@ -1850,6 +1877,9 @@ test("the remote capital-weather case requires exact trace and sanitized termina
           async beginAgenticEvidence() {
             return marker;
           },
+          async beginHookEvidence() {
+            return "physical-simple-323e4567-e89b-42d3-a456-426614174000";
+          },
           async inject(caseId) {
             injected.push(caseId);
           },
@@ -1873,6 +1903,9 @@ test("the remote capital-weather case requires exact trace and sanitized termina
               eventCount: 4,
               pass: true,
             };
+          },
+          async hookEvidenceSince() {
+            return [];
           },
           async deletePrompt(id) {
             deleted.push(id);
@@ -1900,6 +1933,168 @@ test("the remote capital-weather case requires exact trace and sanitized termina
     stdout.text(),
     /fixture-token|device-123|PRIVATE_|France|Paris|degrees|48\.8/,
   );
+});
+
+test("remote Cosmos weather accepts only boundary-scoped Pin action and narration evidence", async () => {
+  const stdout = memoryWriter();
+  const stderr = memoryWriter();
+  const traceMarker =
+    "physical-agentic-123e4567-e89b-42d3-a456-426614174000";
+  const hookMarker =
+    "physical-simple-223e4567-e89b-42d3-a456-426614174000";
+  const injected = [];
+  const exitCode = await main(
+    liveArgs(["--json"], "current_weather_today"),
+    {
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      dependencies: {
+        releaseManifestSource: RELEASE_MANIFEST_SOURCE,
+        releaseReceiptsSource: RELEASE_RECEIPTS_SOURCE,
+        token: "fixture-token-value-that-is-private",
+        verifyDevice: async () => {},
+        identity: identityFixture(),
+        snapshot: readinessFixture(),
+        device: {
+          ...GUARDED_MEDIA_VOLUME_DEVICE,
+          async promptRows() {
+            return [];
+          },
+          async beginAgenticEvidence() {
+            return traceMarker;
+          },
+          async beginHookEvidence() {
+            return hookMarker;
+          },
+          async inject(caseId) {
+            injected.push(caseId);
+          },
+          async localWeatherEvidenceSince() {
+            return {
+              correlationMatched: false,
+              ordinalsContiguous: true,
+              exactOrder: false,
+              freshLocationObserved: false,
+              reverseGeocodeObserved: false,
+              weatherProviderObserved: false,
+              terminalObserved: false,
+              eventCount: 0,
+              pass: false,
+            };
+          },
+          async hookEvidenceSince(boundaryMarker) {
+            assert.equal(boundaryMarker, hookMarker);
+            return [
+              "action:GetCurrentLocation",
+              "narration_start",
+              "narration_end",
+            ];
+          },
+          async deletePrompt() {
+            assert.fail("remote Cosmos creates no Pin-local prompt row");
+          },
+        },
+      },
+    },
+  );
+  assert.equal(exitCode, 0);
+  const report = JSON.parse(stdout.text());
+  assert.equal(report.status, "pass");
+  assert.deepEqual(injected, ["current_weather_today"]);
+  assert.deepEqual(report.cases[0], {
+    id: "current_weather_today",
+    status: "pass",
+    route_observed: true,
+    physical_effect_observed: null,
+    exact_tool_chain_observed: false,
+    correlation_observed: false,
+    fresh_location_observed: true,
+    reverse_geocode_observed: false,
+    weather_provider_observed: false,
+    trace_event_count: 0,
+    terminal_observed: true,
+    locality_observed: null,
+    duration_bucket: report.cases[0].duration_bucket,
+  });
+  assert.equal(stderr.text(), "");
+});
+
+test("remote Cosmos agentic answer accepts narration without inventing tool-chain proof", async () => {
+  const stdout = memoryWriter();
+  const stderr = memoryWriter();
+  const traceMarker =
+    "physical-agentic-123e4567-e89b-42d3-a456-426614174000";
+  const hookMarker =
+    "physical-simple-223e4567-e89b-42d3-a456-426614174000";
+  const injected = [];
+  const exitCode = await main(
+    liveArgs(["--json"], "capital_weather_remote"),
+    {
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      dependencies: {
+        releaseManifestSource: RELEASE_MANIFEST_SOURCE,
+        releaseReceiptsSource: RELEASE_RECEIPTS_SOURCE,
+        token: "fixture-token-value-that-is-private",
+        verifyDevice: async () => {},
+        identity: identityFixture(),
+        snapshot: readinessFixture(),
+        device: {
+          ...GUARDED_MEDIA_VOLUME_DEVICE,
+          async promptRows() {
+            return [];
+          },
+          async beginAgenticEvidence() {
+            return traceMarker;
+          },
+          async beginHookEvidence() {
+            return hookMarker;
+          },
+          async inject(caseId) {
+            injected.push(caseId);
+          },
+          async agenticEvidenceSince() {
+            return {
+              correlationMatched: false,
+              ordinalsContiguous: true,
+              exactOrder: false,
+              currentLocationObserved: false,
+              terminalObserved: false,
+              eventCount: 0,
+              pass: false,
+            };
+          },
+          async hookEvidenceSince(boundaryMarker) {
+            assert.equal(boundaryMarker, hookMarker);
+            return ["narration_start", "narration_end"];
+          },
+          async deletePrompt() {
+            assert.fail("remote Cosmos creates no Pin-local prompt row");
+          },
+        },
+      },
+    },
+  );
+  assert.equal(exitCode, 0);
+  const report = JSON.parse(stdout.text());
+  assert.equal(report.status, "pass");
+  assert.deepEqual(injected, ["capital_weather_remote"]);
+  assert.deepEqual(report.cases[0], {
+    id: "capital_weather_remote",
+    status: "pass",
+    route_observed: true,
+    physical_effect_observed: null,
+    exact_tool_chain_observed: false,
+    correlation_observed: false,
+    current_location_observed: false,
+    trace_event_count: 0,
+    terminal_observed: true,
+    locality_observed: null,
+    france_grounded: null,
+    wrong_country_observed: null,
+    duration_bucket: report.cases[0].duration_bucket,
+  });
+  assert.equal(stderr.text(), "");
 });
 
 test("a selected simple case uses exact hook evidence without requiring a Center row", async () => {

@@ -44,7 +44,9 @@
 //! resolve falls back to the default set and is reported through
 //! [`Resolution`] so the caller can log it; nothing here returns an error.
 
-use super::catalog::RESPOND_ACTION;
+use serde_json::json;
+
+use super::{catalog::RESPOND_ACTION, llm::ToolDef};
 
 /// Which tools a set exposes, always **within** the deployment catalog.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -183,18 +185,16 @@ pub const SETS: &[ToolSet] = &[
     ToolSet {
         name: "food",
         version: 4,
-        // Stock's `ManageNutrition` child logged and tracked what the wearer ate.
-        // This deployment has no nutrition store, so the set answers nutrition
-        // *questions* from real lookups and is told to say plainly that nothing
-        // is being recorded — the honest shape. Silently "logging" a meal into
-        // nothing would be a fabricated success.
-        guidance: "This turn handles food and nutrition questions. Answer from what the lookup \
-                   tools actually returned, keeping serving size and units attached to any \
-                   number, and say when a figure is an approximation. Do not give medical or \
-                   allergy advice. Nothing is being recorded: this deployment keeps no food \
-                   diary, so if the wearer asks for a meal to be logged or tracked, say that \
-                   plainly instead of confirming it.",
-        tools: SetTools::Only(&[RESPOND_ACTION, "ask_online", "wikipedia", "web_search"]),
+        guidance: "This turn handles food and nutrition only. Use RetrieveFoodInfo for nutrition \
+                   questions, TrackFoodConsumption when the wearer says what they ate or drank, \
+                   and GetFoodLog for food-diary summaries. Preserve the requested quantities. \
+                   Never claim that food was recorded or retrieved until the corresponding tool \
+                   result confirms it. Keep serving sizes and units attached to numbers, say when \
+                   a figure is approximate, and do not give medical or allergy advice.",
+        // The stock-only tools are supplied by `stock_child_tools`. Retain a
+        // terminal-only supervisor intersection for an unexpected Understand
+        // request that points directly at food@4.
+        tools: SetTools::Only(&[RESPOND_ACTION]),
     },
     ToolSet {
         name: "music",
@@ -229,6 +229,69 @@ pub const SETS: &[ToolSet] = &[
         ]),
     },
 ];
+
+/// Stock capability children execute these tool calls on the Pin. They are not
+/// supervisor tools and must therefore never be added to the global catalog.
+/// `food@4` is the one recovered set whose tool names are private to its stock
+/// experience: the app turns lookup calls into EncryptedGetFoodItem requests,
+/// tracking calls into Capture.CreateMemory food logs, and log reads into
+/// GetFoodLogSummary requests.
+pub fn stock_child_tools(set: &ToolSet) -> Option<Vec<ToolDef>> {
+    if set.name != "food" || set.version != 4 {
+        return None;
+    }
+
+    let food_items = json!({
+        "type": "object",
+        "properties": {
+            "FoodItemList": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 8,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "FoodItemName": { "type": "string" },
+                        "IsBranded": { "type": "boolean" },
+                        "Quantity": { "type": "number", "exclusiveMinimum": 0 }
+                    },
+                    "required": ["FoodItemName", "IsBranded", "Quantity"],
+                    "additionalProperties": false
+                }
+            }
+        },
+        "required": ["FoodItemList"],
+        "additionalProperties": false
+    });
+
+    Some(vec![
+        ToolDef {
+            name: "RetrieveFoodInfo".to_owned(),
+            description: "Look up nutrition facts for the named food items before answering."
+                .to_owned(),
+            parameters: food_items.clone(),
+        },
+        ToolDef {
+            name: "TrackFoodConsumption".to_owned(),
+            description: "Record the named food items and quantities in the wearer's food diary."
+                .to_owned(),
+            parameters: food_items,
+        },
+        ToolDef {
+            name: "GetFoodLog".to_owned(),
+            description: "Read the wearer's food diary for a bounded number of recent days."
+                .to_owned(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "DayCount": { "type": "integer", "minimum": 1, "maximum": 30 }
+                },
+                "required": ["DayCount"],
+                "additionalProperties": false
+            }),
+        },
+    ])
+}
 
 /// How the device's pointer was resolved. Reported so a degraded resolution is
 /// visible in the logs instead of silently changing what the wearer can do.

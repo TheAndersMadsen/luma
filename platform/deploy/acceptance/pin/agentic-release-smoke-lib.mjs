@@ -1474,6 +1474,39 @@ export function parseLoopbackGrpcPort(value) {
   return Number.isInteger(port) && port >= 1 && port <= 65_535 ? port : null;
 }
 
+export function cosmosOwnsProviderConfiguration(settings) {
+  if (
+    settings === null ||
+    typeof settings !== "object" ||
+    Array.isArray(settings) ||
+    Object.getPrototypeOf(settings) !== Object.prototype
+  ) {
+    return false;
+  }
+  if (
+    ["weather", "google_maps", "brave_search", "azure_speech", "openstreetmap"]
+      .some((key) => settings[key] !== undefined)
+  ) {
+    return false;
+  }
+  const llm = settings.llm;
+  if (llm === undefined) return true;
+  if (
+    llm === null ||
+    typeof llm !== "object" ||
+    Array.isArray(llm) ||
+    Object.getPrototypeOf(llm) !== Object.prototype
+  ) {
+    return false;
+  }
+  const keys = Object.keys(llm);
+  return (
+    keys.length === 1 &&
+    keys[0] === "vision_consent_acknowledged" &&
+    typeof llm.vision_consent_acknowledged === "boolean"
+  );
+}
+
 function isTaggedFeatureBoolean(value, expected) {
   if (
     value === null ||
@@ -1556,13 +1589,7 @@ export function evaluateReadiness(
   const provider = "cosmos";
   const toolsEnabled = true;
   const maxToolTurns = null;
-  const agenticConfigured =
-    settings.llm === undefined &&
-    settings.weather === undefined &&
-    settings.google_maps === undefined &&
-    settings.brave_search === undefined &&
-    settings.azure_speech === undefined &&
-    settings.openstreetmap === undefined;
+  const agenticConfigured = cosmosOwnsProviderConfiguration(settings);
   checks.push(
     check(
       "agentic_configuration",

@@ -457,7 +457,10 @@ impl AiBusMain {
             excluded: &[],
             subscribed: true,
         };
-        let tools = crate::assistant::catalog::tool_catalog_for_set(&context, resolved.set);
+        let tools =
+            crate::assistant::toolsets::stock_child_tools(resolved.set).unwrap_or_else(|| {
+                crate::assistant::catalog::tool_catalog_for_set(&context, resolved.set)
+            });
 
         // Lead with the resolved set's guidance unless the device already sent a
         // system message of its own; the device's own framing wins when present.
@@ -2441,6 +2444,61 @@ mod tests {
                 .map(|f| f.name.as_str()),
             Some("SetTimer"),
             "the sub-agent's tool call must reach the device",
+        );
+    }
+
+    #[tokio::test]
+    async fn food_sub_agent_receives_the_stock_lookup_storage_and_readback_tools() {
+        let model = Arc::new(CapturingModel {
+            seen: std::sync::Mutex::new(None),
+        });
+        let svc = AiBusMain {
+            engine: Arc::new(crate::assistant::engine::Engine::new(model.clone())),
+            keys: Default::default(),
+            directory: None,
+            store: crate::store::MemoryStore::shared(),
+            entitlements: Default::default(),
+        };
+        let chat = pb::ChatCompletionRequest {
+            messages: vec![pb::ChatCompletionMessage {
+                role: "user".to_owned(),
+                content: "I ate one banana.".to_owned(),
+                ..Default::default()
+            }],
+            tag: "agent".to_owned(),
+            tool_set_version: Some(pb::ToolSetVersion {
+                set_name: "food".to_owned(),
+                version: 4,
+            }),
+            ..Default::default()
+        };
+
+        svc.run_model_chat(&chat)
+            .await
+            .expect("food sub-agent completion succeeds");
+
+        let (messages, tools) = model
+            .seen
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("the model must have been called");
+        assert_eq!(
+            tools,
+            vec!["RetrieveFoodInfo", "TrackFoodConsumption", "GetFoodLog"],
+            "food@4 must expose the exact stock tools that perform provider lookup, Capture.CreateMemory, and food-log readback",
+        );
+        assert!(
+            messages
+                .first()
+                .is_some_and(|message| message.contains("TrackFoodConsumption")),
+            "food guidance must direct entry requests into the stock storage tool",
+        );
+        assert!(
+            messages
+                .first()
+                .is_some_and(|message| !message.contains("Nothing is being recorded")),
+            "food guidance must not claim the working stock food diary is unavailable",
         );
     }
 

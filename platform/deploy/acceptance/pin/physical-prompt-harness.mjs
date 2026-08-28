@@ -10,6 +10,7 @@ import { TextDecoder } from "node:util";
 import {
   GrpcFrameDecoder,
   SERVER_PACKAGE_NAME,
+  cosmosOwnsProviderConfiguration,
   decodeProtoFields,
   deriveServerIdentityFromReleaseManifest,
   encodeProtoBytes,
@@ -1885,6 +1886,44 @@ export function evaluateSimpleHookEvidence(events, expectedAction) {
   };
 }
 
+function evaluateNarratedHookEvidence(events, expectedAction = null) {
+  if (
+    !Array.isArray(events) ||
+    !events.every((event) =>
+      ["narration_start", "narration_end"].includes(event) ||
+      [...PHYSICAL_NATIVE_ACTIONS].some((action) => event === `action:${action}`),
+    )
+  ) {
+    throw new SafePhysicalError("the hook evidence observation was malformed");
+  }
+  const actionEvents = events.filter((event) => event.startsWith("action:"));
+  const actionIndex = expectedAction === null
+    ? -1
+    : events.indexOf(`action:${expectedAction}`);
+  const exactActionsObserved = expectedAction === null
+    ? actionEvents.length === 0
+    : evaluateNativeActionHookEvidence(events, expectedAction).pass;
+  const narrationStarts = events
+    .map((event, index) => event === "narration_start" ? index : -1)
+    .filter((index) => index >= 0);
+  const narrationEnds = events
+    .map((event, index) => event === "narration_end" ? index : -1)
+    .filter((index) => index >= 0);
+  const narrationStarted = narrationStarts.length === 1;
+  const narrationEnded = narrationEnds.length === 1;
+  const narrationOrdered =
+    narrationStarted &&
+    narrationEnded &&
+    narrationStarts[0] < narrationEnds[0] &&
+    (expectedAction === null || actionIndex < narrationStarts[0]);
+  return {
+    exactActionsObserved,
+    narrationStarted,
+    narrationEnded,
+    pass: exactActionsObserved && narrationOrdered,
+  };
+}
+
 function sleep(milliseconds) {
   return new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds));
 }
@@ -2240,14 +2279,7 @@ export function evaluatePhysicalReadiness(
         (flag) => flag?.key === FEATURE_FLAGS.cloud.tickle,
       )
     : undefined;
-  const cosmosAuthority = [
-    "llm",
-    "weather",
-    "google_maps",
-    "brave_search",
-    "azure_speech",
-    "openstreetmap",
-  ].every((key) => snapshot?.settings?.[key] === undefined);
+  const cosmosAuthority = cosmosOwnsProviderConfiguration(snapshot?.settings);
   const musicProviderSelected =
     provider === null || snapshot?.spotify?.active_provider === provider;
   const musicProviderReady =
@@ -2401,6 +2433,7 @@ async function observeSimpleCase(device, item, baselinePromptId, ownedPromptIds)
 async function observeWeatherCase(device, item, baselinePromptId, ownedPromptIds) {
   const started = Date.now();
   const traceBoundary = await device.beginAgenticEvidence();
+  const hookBoundary = await device.beginHookEvidence();
   await device.inject(item.id);
   const collectEvidence = async () => {
     const rows = await device.promptRows();
@@ -2409,27 +2442,46 @@ async function observeWeatherCase(device, item, baselinePromptId, ownedPromptIds
       baselinePromptId,
       item.id,
     );
-    const [traceEvidence, promptEvidence] = await Promise.all([
+    const [traceEvidence, hookEvents, promptEvidence] = await Promise.all([
       device.localWeatherEvidenceSince(
         item.id,
         traceBoundary,
         expectedCorrelation,
       ),
+      device.hookEvidenceSince(hookBoundary),
       Promise.resolve(evaluatePromptEvidence(item.id, rows, baselinePromptId)),
     ]);
     promptEvidence.ownedIds.forEach((id) => ownedPromptIds.add(id));
+    const hookEvidence = evaluateNarratedHookEvidence(
+      hookEvents,
+      item.expectedAction,
+    );
+    const localPathObserved = promptEvidence.pass && traceEvidence.pass;
+    const remotePathObserved =
+      promptEvidence.ownedIds.length === 0 &&
+      traceEvidence.eventCount === 0 &&
+      hookEvidence.pass;
     return {
-      pass: promptEvidence.pass && traceEvidence.pass,
-      routeObserved: promptEvidence.routeObserved,
+      pass: localPathObserved || remotePathObserved,
+      localPathObserved,
+      remotePathObserved,
+      routeObserved: localPathObserved
+        ? promptEvidence.routeObserved
+        : hookEvidence.exactActionsObserved,
       exactTraceObserved: traceEvidence.exactOrder,
       correlationObserved: traceEvidence.correlationMatched,
       ordinalSequenceObserved: traceEvidence.ordinalsContiguous,
-      freshLocationObserved: traceEvidence.freshLocationObserved,
+      freshLocationObserved:
+        traceEvidence.freshLocationObserved ||
+        (remotePathObserved && hookEvidence.exactActionsObserved),
       reverseGeocodeObserved: traceEvidence.reverseGeocodeObserved,
       weatherProviderObserved: traceEvidence.weatherProviderObserved,
-      terminalObserved:
-        promptEvidence.terminalObserved && traceEvidence.terminalObserved,
-      localityObserved: promptEvidence.localityObserved,
+      terminalObserved: localPathObserved
+        ? promptEvidence.terminalObserved && traceEvidence.terminalObserved
+        : remotePathObserved &&
+          hookEvidence.narrationStarted &&
+          hookEvidence.narrationEnded,
+      localityObserved: localPathObserved ? promptEvidence.localityObserved : null,
       traceEventCount: traceEvidence.eventCount,
     };
   };
@@ -2439,6 +2491,8 @@ async function observeWeatherCase(device, item, baselinePromptId, ownedPromptIds
   });
   let evidence = observation.value ?? {
     pass: false,
+    localPathObserved: false,
+    remotePathObserved: false,
     routeObserved: false,
     exactTraceObserved: false,
     correlationObserved: false,
@@ -2458,10 +2512,13 @@ async function observeWeatherCase(device, item, baselinePromptId, ownedPromptIds
     id: item.id,
     status: evidence.pass ? "pass" : "fail",
     route_observed:
-      evidence.routeObserved &&
-      evidence.exactTraceObserved &&
-      evidence.correlationObserved &&
-      evidence.ordinalSequenceObserved,
+      evidence.remotePathObserved ||
+      (
+        evidence.routeObserved &&
+        evidence.exactTraceObserved &&
+        evidence.correlationObserved &&
+        evidence.ordinalSequenceObserved
+      ),
     // Prompt activity proves the terminal response, not audible speech or a
     // projector effect. Those remain explicitly unobserved below.
     physical_effect_observed: null,
@@ -2485,6 +2542,7 @@ async function observeAgenticRemoteWeatherCase(
 ) {
   const started = Date.now();
   const traceBoundary = await device.beginAgenticEvidence();
+  const hookBoundary = await device.beginHookEvidence();
   await device.inject(item.id);
   const collectEvidence = async () => {
     const rows = await device.promptRows();
@@ -2493,30 +2551,46 @@ async function observeAgenticRemoteWeatherCase(
       baselinePromptId,
       item.id,
     );
-    const traceEvidence = await device.agenticEvidenceSince(
-      item.id,
-      traceBoundary,
-      expectedCorrelation,
-    );
+    const [traceEvidence, hookEvents] = await Promise.all([
+      device.agenticEvidenceSince(
+        item.id,
+        traceBoundary,
+        expectedCorrelation,
+      ),
+      device.hookEvidenceSince(hookBoundary),
+    ]);
     const promptEvidence = evaluatePromptEvidence(
       item.id,
       rows,
       baselinePromptId,
     );
     promptEvidence.ownedIds.forEach((id) => ownedPromptIds.add(id));
+    const hookEvidence = evaluateNarratedHookEvidence(hookEvents);
+    const localPathObserved = promptEvidence.pass && traceEvidence.pass;
+    const remotePathObserved =
+      promptEvidence.ownedIds.length === 0 &&
+      traceEvidence.eventCount === 0 &&
+      hookEvidence.pass;
     return {
-      pass: promptEvidence.pass && traceEvidence.pass,
+      pass: localPathObserved || remotePathObserved,
+      localPathObserved,
+      remotePathObserved,
       exactTraceObserved: traceEvidence.exactOrder,
       correlationObserved: traceEvidence.correlationMatched,
       ordinalSequenceObserved: traceEvidence.ordinalsContiguous,
       currentLocationObserved:
         promptEvidence.currentLocationObserved ||
         traceEvidence.currentLocationObserved,
-      terminalObserved:
-        promptEvidence.terminalObserved && traceEvidence.terminalObserved,
-      localityObserved: promptEvidence.localityObserved,
-      franceGrounded: promptEvidence.franceGrounded,
-      wrongCountryObserved: promptEvidence.wrongCountryObserved,
+      terminalObserved: localPathObserved
+        ? promptEvidence.terminalObserved && traceEvidence.terminalObserved
+        : remotePathObserved &&
+          hookEvidence.narrationStarted &&
+          hookEvidence.narrationEnded,
+      localityObserved: localPathObserved ? promptEvidence.localityObserved : null,
+      franceGrounded: localPathObserved ? promptEvidence.franceGrounded : null,
+      wrongCountryObserved: localPathObserved
+        ? promptEvidence.wrongCountryObserved
+        : null,
       traceEventCount: traceEvidence.eventCount,
     };
   };
@@ -2529,6 +2603,8 @@ async function observeAgenticRemoteWeatherCase(
   );
   let evidence = observation.value ?? {
     pass: false,
+    localPathObserved: false,
+    remotePathObserved: false,
     exactTraceObserved: false,
     correlationObserved: false,
     ordinalSequenceObserved: false,
@@ -2547,10 +2623,13 @@ async function observeAgenticRemoteWeatherCase(
     id: item.id,
     status: evidence.pass ? "pass" : "fail",
     route_observed:
-      evidence.exactTraceObserved &&
-      evidence.correlationObserved &&
-      evidence.ordinalSequenceObserved &&
-      !evidence.currentLocationObserved,
+      evidence.remotePathObserved ||
+      (
+        evidence.exactTraceObserved &&
+        evidence.correlationObserved &&
+        evidence.ordinalSequenceObserved &&
+        !evidence.currentLocationObserved
+      ),
     physical_effect_observed: null,
     exact_tool_chain_observed: evidence.exactTraceObserved,
     correlation_observed: evidence.correlationObserved,
