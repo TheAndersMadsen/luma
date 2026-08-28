@@ -61,6 +61,10 @@ const TURNS: &str = "cosmos_assistant_turns_total";
 const TOOL_CALLS: &str = "cosmos_assistant_tool_calls_total";
 /// Language-model round trips, labelled `model`.
 const MODEL_LATENCY: &str = "cosmos_model_latency_seconds";
+/// Grounded music discovery, with bounded semantic/provider outcome labels.
+const MUSIC_DISCOVERY: &str = "cosmos_music_discovery_total";
+/// End-to-end web discovery plus provider verification latency.
+const MUSIC_DISCOVERY_DURATION: &str = "cosmos_music_discovery_duration_seconds";
 /// Failures the server chose to report, labelled `kind` — the same `kind` the
 /// matching `tracing` event carries. See [`record_error`].
 const ERRORS: &str = "cosmos_errors_total";
@@ -79,6 +83,14 @@ const HELP: &[(&str, &str)] = &[
     (
         MODEL_LATENCY,
         "Language-model round-trip latency in seconds.",
+    ),
+    (
+        MUSIC_DISCOVERY,
+        "Grounded music discoveries, by criterion, provider, ranking provenance, and outcome.",
+    ),
+    (
+        MUSIC_DISCOVERY_DURATION,
+        "Grounded music discovery and provider verification latency in seconds.",
     ),
     (ERRORS, "Errors reported by the server, by kind."),
 ];
@@ -247,6 +259,31 @@ pub fn record_tool_call(tool: &str, outcome: &str) {
 /// One language-model round trip. `model` is the configured model id.
 pub fn record_model_latency(model: &str, elapsed: Duration) {
     observe(MODEL_LATENCY, &[("model", model)], elapsed.as_secs_f64());
+}
+
+/// Record semantic music discovery without wearer text or provider identifiers.
+///
+/// Every argument is selected from a bounded constant set by the caller; track,
+/// artist, principal, and raw model output must never be passed here.
+pub fn record_music_discovery(
+    criterion: &str,
+    provider: &str,
+    ranking: &str,
+    outcome: &str,
+    elapsed: Duration,
+) {
+    let labels = [
+        ("criterion", criterion),
+        ("provider", provider),
+        ("ranking", ranking),
+        ("outcome", outcome),
+    ];
+    increment(MUSIC_DISCOVERY, &labels);
+    observe(
+        MUSIC_DISCOVERY_DURATION,
+        &[("criterion", criterion), ("outcome", outcome)],
+        elapsed.as_secs_f64(),
+    );
 }
 
 /// One reported failure, by kind.

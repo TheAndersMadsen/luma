@@ -552,6 +552,7 @@ impl AiBusMain {
             // `SynapseUnderstandingRequest.location`. The Understand handlers
             // attach it once they have the typed request.
             location: None,
+            music_discovery: None,
         }
     }
 
@@ -3153,6 +3154,7 @@ mod tests {
                 key_directory: None,
                 keys: Some(Default::default()),
                 location: None,
+                music_discovery: None,
             },
         )
         .await;

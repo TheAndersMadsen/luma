@@ -44,6 +44,7 @@
 pub mod azure_speech;
 pub mod food;
 pub mod music;
+pub mod music_discovery;
 pub mod perplexity;
 pub mod places;
 pub mod search;

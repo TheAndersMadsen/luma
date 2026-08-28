@@ -4,12 +4,13 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 describe("public discovery middleware", () => {
   let middleware: typeof import("./middleware").middleware;
   let isProtectedPageRequest: typeof import("./middleware").isProtectedPageRequest;
+  let isInternalMusicQueryRequest: typeof import("./middleware").isInternalMusicQueryRequest;
 
   beforeAll(async () => {
     vi.stubEnv("KEYCLOAK_BASE_URL", "http://keycloak:8080");
     vi.stubEnv("AUTH_SESSION_SECRET", "test-session-secret-long-enough-for-tests");
     vi.resetModules();
-    ({ middleware, isProtectedPageRequest } = await import("./middleware"));
+    ({ middleware, isProtectedPageRequest, isInternalMusicQueryRequest } = await import("./middleware"));
   });
 
   it("rewrites an anonymous HTML homepage to the server-rendered public page", async () => {
@@ -70,5 +71,19 @@ describe("public discovery middleware", () => {
     expect(response.headers.get("x-middleware-next")).toBe("1");
     expect(response.headers.get("ratelimit-policy")).toBe('"public-read";q=120;w=60');
     expect(response.headers.get("ratelimit")).toMatch(/^"public-read";r=119;t=60$/);
+  });
+
+  it("lets only the exact Cosmos music POST reach its route-owned bearer check", async () => {
+    expect(isInternalMusicQueryRequest("/api/internal/music/query", "POST")).toBe(true);
+    expect(isInternalMusicQueryRequest("/api/internal/music/query", "GET")).toBe(false);
+    expect(isInternalMusicQueryRequest("/api/internal/music/query/extra", "POST")).toBe(false);
+
+    const allowed = await middleware(new NextRequest("https://center.example.test/api/internal/music/query", {
+      method: "POST",
+    }));
+    expect(allowed.headers.get("x-middleware-next")).toBe("1");
+
+    const denied = await middleware(new NextRequest("https://center.example.test/api/internal/music/query"));
+    expect(denied.status).toBe(401);
   });
 });

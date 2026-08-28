@@ -136,6 +136,11 @@ export function isDeviceMusicGatewayRequest(pathname: string, method: string): b
   ]).has(pathname);
 }
 
+/** Cosmos authenticates this one exact internal lookup with its admin bearer. */
+export function isInternalMusicQueryRequest(pathname: string, method: string): boolean {
+  return method.toUpperCase() === "POST" && pathname === "/api/internal/music/query";
+}
+
 /**
  * Gate every route behind the session cookie when auth is configured.
  *
@@ -231,6 +236,10 @@ export async function middleware(request: NextRequest) {
   }
 
   if (isDeviceMusicGatewayRequest(pathname, request.method)) {
+    return NextResponse.next();
+  }
+
+  if (isInternalMusicQueryRequest(pathname, request.method)) {
     return NextResponse.next();
   }
 

@@ -208,6 +208,32 @@ fn query_schema() -> Value {
     })
 }
 
+fn music_discovery_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "artist": {
+                "type": "string",
+                "description": "A named artist when the wearer supplied one."
+            },
+            "criterion": {
+                "type": "string",
+                "enum": ["viral", "trending", "newest", "underrated", "similar", "mood", "top"],
+                "description": "The semantic criterion the wearer asked for."
+            },
+            "timeframe": {
+                "type": "string",
+                "enum": ["current", "recent", "all_time"]
+            },
+            "context": {
+                "type": "string",
+                "description": "A short mood, situation, or reference track supplied by the wearer."
+            }
+        },
+        "required": ["criterion", "timeframe"]
+    })
+}
+
 const MAX_PROGRESS_SUBJECT_BYTES: usize = 48;
 const MAX_ACTION_CUE_JSON_BYTES: usize = 4 * 1024;
 
@@ -304,6 +330,12 @@ fn progress_cue_from_value(action: &str, arguments: &Value) -> Option<String> {
             cue_with_subject(arguments, "artist", "Finding songs by ", "Finding songs")
         }
         "music_catalog_search" => cue_with_subject(arguments, "query", "Finding ", "Finding music"),
+        "music_discover" => cue_with_subject(
+            arguments,
+            "artist",
+            "Finding a track by ",
+            "Finding the right track",
+        ),
         "current_music" => Some("Checking the current music".to_owned()),
 
         // Writes, device mutations, answers, and unknown actions never need a
@@ -430,6 +462,11 @@ const SERVER_TOOLS: &[ServerTool] = &[
                       ANY question about the wearer themself, before saying you \
                       do not know.",
         parameters: recall_schema,
+    },
+    ServerTool {
+        name: "music_discover",
+        description: "Discover one current or subjective music choice and verify that exact track against the wearer's active provider. Use this for viral, trending, newest, underrated, similar-to, and mood or situation requests. Exact named tracks and ordinary transport controls do not need this tool.",
+        parameters: music_discovery_schema,
     },
 ];
 
@@ -1545,6 +1582,10 @@ pub struct ToolContext {
     pub key_directory: Option<crate::keydirectory::SharedKeyDirectory>,
     /// Test-only/legacy memory topology used when no directory is configured.
     pub keys: Option<crate::keymaterial::SharedKeyMaterial>,
+    /// Semantic discovery varies at the external-provider seam. Tests inject a
+    /// deterministic adapter; production uses the web + Center adapter.
+    pub music_discovery:
+        Option<std::sync::Arc<dyn crate::backends::music_discovery::MusicDiscoveryBackend>>,
 }
 
 /// Counts one tool invocation when the call returns, however it returns.
@@ -1636,6 +1677,33 @@ pub async fn execute_tool_with(name: &str, arguments: &str, context: &ToolContex
             match crate::backends::food::lookup(q).await {
                 Ok(found) => describe_food(&found),
                 Err(e) => e.observation("food-lookup"),
+            }
+        }
+        "music_discover" => {
+            let request = serde_json::from_value::<
+                crate::backends::music_discovery::MusicDiscoveryRequest,
+            >(args.clone());
+            let Some(principal) = context.principal.as_deref() else {
+                return crate::backends::music_discovery::MusicDiscoveryError::InvalidRequest
+                    .observation()
+                    .to_owned();
+            };
+            let Ok(request) = request else {
+                return crate::backends::music_discovery::MusicDiscoveryError::InvalidRequest
+                    .observation()
+                    .to_owned();
+            };
+            let production = crate::backends::music_discovery::ProductionMusicDiscovery;
+            let result = match context.music_discovery.as_ref() {
+                Some(backend) => backend.discover(request, principal).await,
+                None => {
+                    use crate::backends::music_discovery::MusicDiscoveryBackend;
+                    production.discover(request, principal).await
+                }
+            };
+            match result {
+                Ok(track) => crate::backends::music_discovery::observation(&track),
+                Err(error) => error.observation().to_owned(),
             }
         }
         "recall_history" => {
@@ -2393,6 +2461,7 @@ mod tests {
             key_directory: Some(directory.clone()),
             keys: None,
             location: None,
+            music_discovery: None,
         };
         let request = json!({ "on_or_after": "2020-01-01" }).to_string();
 
@@ -2516,6 +2585,7 @@ mod tests {
             key_directory: None,
             keys: Some(Default::default()),
             location: None,
+            music_discovery: None,
         };
 
         let saved = execute_tool_with(
@@ -2552,7 +2622,13 @@ mod tests {
     #[test]
     fn the_configured_backends_are_offered_as_tools() {
         let offered: Vec<&str> = SERVER_TOOLS.iter().map(|t| t.name).collect();
-        for expected in ["weather", "nearby", "food_lookup", "remember"] {
+        for expected in [
+            "weather",
+            "nearby",
+            "food_lookup",
+            "remember",
+            "music_discover",
+        ] {
             assert!(
                 offered.contains(&expected),
                 "{expected} has a working backend but is not offered to the model: {offered:?}",
@@ -2997,6 +3073,7 @@ mod tests {
             key_directory: None,
             keys: Some(keys.clone()),
             location: None,
+            music_discovery: None,
         };
         let recalled =
             execute_tool_with("recall_memory", r#"{"query":"wifi password"}"#, &context).await;
@@ -3037,6 +3114,7 @@ mod tests {
             key_directory: None,
             keys: Some(Default::default()),
             location: None,
+            music_discovery: None,
         };
 
         // The oldest note, then more than a full scan window of newer ones.
@@ -3116,6 +3194,7 @@ mod tests {
             key_directory: None,
             keys: Some(keys),
             location: None,
+            music_discovery: None,
         };
         let recalled =
             execute_tool_with("recall_memory", r#"{"query":"gate code"}"#, &context).await;

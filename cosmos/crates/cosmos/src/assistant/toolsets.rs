@@ -204,13 +204,16 @@ pub const SETS: &[ToolSet] = &[
         // is a single-transform, low-to-moderate-confidence candidate and is
         // deliberately not used: the tools below come from our own recovered
         // device-action interface and the wording is ours.
-        guidance: "This turn handles music playback only. Resolve what was asked for to the \
-                   narrowest thing that fits — a track, an artist, an album, or a genre — and \
+        guidance: "This turn handles music playback only. For viral, trending, newest, \
+                   underrated, similar-to, mood, or situation requests, call music_discover \
+                   once; it verifies the choice against the active provider. Resolve ordinary \
+                   requests to the narrowest thing that fits — a track, artist, album, or genre — and \
                    ask which was meant when it genuinely matters. Do not say playback started \
                    unless the result says so; if the exact item is unavailable, name what is \
                    playing instead.",
         tools: SetTools::Only(&[
             RESPOND_ACTION,
+            "music_discover",
             "PlayMusic",
             "PauseMusic",
             "ResumeMusic",

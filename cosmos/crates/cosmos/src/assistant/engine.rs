@@ -995,6 +995,40 @@ impl Engine {
                 )));
                 parent = obs_id;
 
+                // A grounded discovery already contains the exact provider-
+                // verified title and artist. When the wearer explicitly asked
+                // to play it, a second model call can only add latency and is
+                // the step that used to overrun the Pin's turn deadline.
+                if tc.name == "music_discover"
+                    && explicit_playback_request(&utterance)
+                    && tools.iter().any(|tool| tool.name == "PlayMusic")
+                    && !current_run_contains_action(
+                        req.device_context
+                            .as_ref()
+                            .map(|context| context.turns.as_slice())
+                            .unwrap_or_default(),
+                        "PlayMusic",
+                    )
+                {
+                    if let Some(input) =
+                        crate::backends::music_discovery::play_music_arguments(&observation)
+                    {
+                        let id = new_id();
+                        finish(
+                            &tx,
+                            terminal_device_action(
+                                "PlayMusic",
+                                &input,
+                                "I found a provider-verified track to play",
+                                parent,
+                                id,
+                            ),
+                        )
+                        .await;
+                        return;
+                    }
+                }
+
                 // Budget guard: if this was the last permitted step, close the run
                 // the way Switchboard does — a TooManyActions observation converted
                 // into a terminal Respond (Respond is exempt from the limit).
@@ -1548,6 +1582,21 @@ fn local_weather_request(utterance: &str) -> bool {
                 | "is it raining outside"
         )
     )
+}
+
+fn explicit_playback_request(utterance: &str) -> bool {
+    let Some(intent) = normalized_intent(utterance) else {
+        return false;
+    };
+    intent == "play"
+        || intent.starts_with("play ")
+        || intent.starts_with("please play ")
+        || intent.starts_with("put on ")
+        || intent.starts_with("listen to ")
+        || intent.contains(" and play ")
+        || intent.contains(" then play ")
+        || intent.ends_with(" and play it")
+        || intent.ends_with(" then play it")
 }
 
 fn ranked_artist_request(utterance: &str) -> Option<&str> {
@@ -2757,6 +2806,165 @@ mod tests {
         assert_eq!(action.action, "PlayMusic");
         let input: serde_json::Value = serde_json::from_str(&action.input).unwrap();
         assert_eq!(input, serde_json::json!({"Artist": "Michael Jackson"}));
+    }
+
+    #[derive(Default)]
+    struct FixedMusicDiscovery {
+        requests: std::sync::Mutex<
+            Vec<(
+                crate::backends::music_discovery::MusicDiscoveryRequest,
+                String,
+            )>,
+        >,
+    }
+
+    #[tonic::async_trait]
+    impl crate::backends::music_discovery::MusicDiscoveryBackend for FixedMusicDiscovery {
+        async fn discover(
+            &self,
+            request: crate::backends::music_discovery::MusicDiscoveryRequest,
+            principal: &str,
+        ) -> Result<
+            crate::backends::music_discovery::GroundedMusicTrack,
+            crate::backends::music_discovery::MusicDiscoveryError,
+        > {
+            self.requests
+                .lock()
+                .unwrap()
+                .push((request, principal.to_owned()));
+            Ok(crate::backends::music_discovery::GroundedMusicTrack {
+                title: "Hotline Bling".to_owned(),
+                artist: "Drake".to_owned(),
+                provider: "youtube_music".to_owned(),
+                ranking_provenance: "not_ranked".to_owned(),
+                discovery_provenance: "perplexity".to_owned(),
+            })
+        }
+    }
+
+    struct ViralMusicModel {
+        calls: std::sync::atomic::AtomicUsize,
+        answer_after_lookup: bool,
+    }
+
+    #[tonic::async_trait]
+    impl ChatModel for ViralMusicModel {
+        async fn complete(
+            &self,
+            _messages: &[ChatMessage],
+            tools: &[ToolDef],
+        ) -> Result<ChatResponse, LlmError> {
+            assert!(tools.iter().any(|tool| tool.name == "music_discover"));
+            let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if call == 0 {
+                return Ok(ChatResponse {
+                    content: None,
+                    thought: "I should ground the current viral choice".to_owned(),
+                    tool_call: Some(ToolCall {
+                        name: "music_discover".to_owned(),
+                        arguments: serde_json::json!({
+                            "artist": "Drake",
+                            "criterion": "viral",
+                            "timeframe": "current"
+                        })
+                        .to_string(),
+                    }),
+                    extra_tool_calls: Vec::new(),
+                });
+            }
+            if self.answer_after_lookup && call == 1 {
+                return Ok(ChatResponse {
+                    content: Some("Hotline Bling by Drake is the grounded result.".to_owned()),
+                    thought: String::new(),
+                    tool_call: None,
+                    extra_tool_calls: Vec::new(),
+                });
+            }
+            panic!("grounded play must not require another model call");
+        }
+    }
+
+    #[tokio::test]
+    async fn viral_music_lookup_grounds_once_then_immediately_dispatches_playmusic() {
+        let backend = Arc::new(FixedMusicDiscovery::default());
+        let model = Arc::new(ViralMusicModel {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            answer_after_lookup: false,
+        });
+        let msgs = run_with_tools(
+            model.clone(),
+            pb::SynapseUnderstandingRequest {
+                utterance: "Look up the most viral Song by Drake and play it".to_owned(),
+                device_context: Some(pb::SynapseDeviceContext::default()),
+                ..Default::default()
+            },
+            catalog::ToolContext {
+                principal: Some("V:01:D:pin-01:U:wearer-01".to_owned()),
+                music_discovery: Some(backend.clone()),
+                ..Default::default()
+            },
+        )
+        .await;
+
+        assert_eq!(model.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let requests = backend.requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].0.artist.as_deref(), Some("Drake"));
+        assert_eq!(requests[0].0.criterion, "viral");
+        assert_eq!(requests[0].0.timeframe, "current");
+        assert_eq!(requests[0].1, "V:01:D:pin-01:U:wearer-01");
+        drop(requests);
+
+        let visible = device_visible(&msgs);
+        assert_eq!(
+            visible.len(),
+            3,
+            "server action, grounded observation, terminal device action"
+        );
+        let action = visible
+            .iter()
+            .rev()
+            .find_map(|message| as_action(message))
+            .expect("grounded lookup must dispatch playback");
+        assert_eq!(action.action, "PlayMusic");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&action.input).unwrap(),
+            serde_json::json!({"Artist": "Drake", "Track": "Hotline Bling"}),
+        );
+    }
+
+    #[tokio::test]
+    async fn discovery_question_does_not_autoplay() {
+        let backend = Arc::new(FixedMusicDiscovery::default());
+        let model = Arc::new(ViralMusicModel {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            answer_after_lookup: true,
+        });
+        let msgs = run_with_tools(
+            model.clone(),
+            pb::SynapseUnderstandingRequest {
+                utterance: "What is Drake's most viral song right now?".to_owned(),
+                device_context: Some(pb::SynapseDeviceContext::default()),
+                ..Default::default()
+            },
+            catalog::ToolContext {
+                principal: Some("V:01:D:pin-01:U:wearer-01".to_owned()),
+                music_discovery: Some(backend),
+                ..Default::default()
+            },
+        )
+        .await;
+
+        assert_eq!(model.calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+        let actions = device_visible(&msgs)
+            .into_iter()
+            .filter_map(as_action)
+            .collect::<Vec<_>>();
+        assert!(actions.iter().all(|action| action.action != "PlayMusic"));
+        assert_eq!(
+            actions.last().map(|action| action.action.as_str()),
+            Some(catalog::RESPOND_ACTION)
+        );
     }
 
     #[test]

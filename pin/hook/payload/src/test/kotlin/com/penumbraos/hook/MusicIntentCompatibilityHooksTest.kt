@@ -1,7 +1,10 @@
 package com.penumbraos.hook
 
+import java.io.File
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MusicIntentCompatibilityHooksTest {
@@ -72,6 +75,23 @@ class MusicIntentCompatibilityHooksTest {
     }
 
     @Test
+    fun `transport controls are selected locally without a Cosmos route`() {
+        val source = sourceFile(
+            "src/main/kotlin/com/penumbraos/hook/MusicIntentCompatibilityHooks.kt",
+        ).readText()
+        val ironman = sourceFile(
+            "src/main/kotlin/com/penumbraos/hook/IronmanHooks.kt",
+        ).readText()
+
+        assertTrue(source.contains("InterpreterOrchestrator"))
+        assertTrue(source.contains("override fun beforeHookedMethod"))
+        assertTrue(source.contains("param.result = events"))
+        assertFalse(source.contains("CosmosRemoteTransport"))
+        assertFalse(source.contains("ChannelFactory"))
+        assertTrue(ironman.contains("MusicIntentCompatibilityHooks.install(cl)"))
+    }
+
+    @Test
     fun `unrelated prompts are untouched`() {
         listOf(
             "take a picture",
@@ -81,5 +101,11 @@ class MusicIntentCompatibilityHooksTest {
         ).forEach { utterance ->
             assertNull(MusicIntentCompatibilityHooks.parse(utterance))
         }
+    }
+
+    private fun sourceFile(relativePath: String): File {
+        val candidates = listOf(File(relativePath), File("hook/payload", relativePath))
+        return candidates.firstOrNull(File::isFile)
+            ?: error("Could not find $relativePath")
     }
 }
