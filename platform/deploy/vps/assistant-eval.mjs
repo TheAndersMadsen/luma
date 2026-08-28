@@ -31,6 +31,50 @@ export const ASSISTANT_CASES = Object.freeze([
     terminal: "answered",
   }),
   Object.freeze({
+    id: "explicit-lookup",
+    prompt: "Look up the Eiffel Tower and tell me how tall it is.",
+    requiredActions: ["wikipedia", "Respond"],
+    forbiddenActions: [],
+    route: "a1",
+    terminal: "answered",
+  }),
+  Object.freeze({
+    id: "current-product-price",
+    prompt: "How much does a Humane AI Pin cost?",
+    requiredActions: ["ask_online", "Respond"],
+    forbiddenActions: [],
+    route: "a1",
+    terminal: "answered",
+    answerPattern:
+      /discontinued|no longer (?:sold|available)|not (?:currently )?(?:sold|available)/iu,
+  }),
+  Object.freeze({
+    id: "nutrition-oatmeal",
+    prompt: "What are the nutrition facts for oatmeal?",
+    requiredActions: ["food_lookup", "Respond"],
+    forbiddenActions: [],
+    exactActionCounts: { food_lookup: 1 },
+    route: "a1",
+    terminal: "answered",
+    answerPattern: /\b(?:calories|kcal|protein|fiber|fibre|carbohydrate|fat)\b/iu,
+  }),
+  Object.freeze({
+    id: "ambiguous-no-vision",
+    prompt: "Um, what was that thing?",
+    requiredActions: ["Respond"],
+    forbiddenActions: ["UnderstandScene"],
+    route: "a1",
+    terminal: "answered",
+  }),
+  Object.freeze({
+    id: "tickle-near-miss",
+    prompt: "Please tickle.",
+    requiredActions: ["Respond"],
+    forbiddenActions: ["Tickle"],
+    route: "a1",
+    terminal: "answered",
+  }),
+  Object.freeze({
     id: "consequential-confirmation",
     prompt: "Call Alex.",
     requiredActions: ["Respond"],
@@ -88,6 +132,20 @@ export function evaluateAssistantCase(spec, trace, beforeScrape, afterScrape) {
   }
   for (const forbidden of spec.forbiddenActions) {
     if (actions.includes(forbidden)) failures.push(`forbidden_action:${forbidden}`);
+  }
+  for (const [action, expected] of Object.entries(spec.exactActionCounts ?? {})) {
+    if (actions.filter((name) => name === action).length !== expected) {
+      failures.push(`action_count:${action}`);
+    }
+  }
+  if (spec.answerPattern) {
+    const answers = steps
+      .filter((step) => step?.kind === "answer" && step?.name === "Respond")
+      .map((step) => step.text)
+      .filter((text) => typeof text === "string");
+    if (!answers.some((answer) => spec.answerPattern.test(answer))) {
+      failures.push("answer_mismatch");
+    }
   }
   if (!Number.isFinite(trace?.total_ms) || !Number.isFinite(trace?.device_deadline_ms)) {
     failures.push("malformed_latency");

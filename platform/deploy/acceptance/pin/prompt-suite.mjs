@@ -401,6 +401,7 @@ execution is a misreading of the one-operation contract (Ghidra deep dive S6).",
       // control could NEVER trip and silently proved nothing about the camera.
       // A forbid naming a nonexistent action is a vacuous guard.
       NATIVE_ACTIONS.CAPTURE_PHOTOGRAPH,
+      NATIVE_ACTIONS.UNDERSTAND_SCENE,
     ],
     note:
       "NEGATIVE CONTROL: an incoherent utterance must not guess an action. Doing nothing is the correct behaviour; acting is the failure. The camera forbid was vacuous until 2026-07-28: it named `TakePhoto`, which is not a real action (the catalog name is " +

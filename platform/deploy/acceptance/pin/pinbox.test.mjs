@@ -35,6 +35,7 @@ import {
 import { assertAllowlistedPath, PROBE_API_PATHS } from "./pinbox/shared/admin-http.mjs";
 import { extractAnswer } from "./prompt-suite.mjs";
 import {
+  buildProbeDeviceOptions,
   parseProbeArgs,
   renderHumanSummary,
   optionalEvidence,
@@ -293,6 +294,25 @@ test("parseProbeArgs: a trailing --prompt with no value is refused, not run as u
   assert.match(error, /--prompt requires a value/);
   // A real value after other flags still parses.
   assert.deepEqual(parseProbeArgs(["--score", "--prompt", "hi"]).options.prompts, ["hi"]);
+});
+
+test("probe passes the operator-supplied expected serial to the device guard", () => {
+  const probeOpts = parseProbeArgs([
+    "--prompt", "What is 2 plus 2?",
+    "--expected-pin-serial", "device-123",
+  ]).options;
+  assert.deepEqual(
+    buildProbeDeviceOptions(
+      { serial: "device-123", adb: "/opt/adb" },
+      probeOpts,
+      {},
+    ),
+    {
+      serial: "device-123",
+      expectedPinSerial: "device-123",
+      adbPath: "/opt/adb",
+    },
+  );
 });
 
 test("renderHumanSummary: surfaces the core fields", () => {

@@ -33,7 +33,7 @@ const WEB_RESEARCH_MAX: Duration = Duration::from_millis(1_500);
 const CORROBORATION_MAX: Duration = Duration::from_millis(3_500);
 #[cfg(test)]
 const CORROBORATION_MIN: Duration = Duration::from_millis(1_500);
-const PROVIDER_MAX: Duration = Duration::from_millis(4_500);
+pub(crate) const PROVIDER_MAX: Duration = Duration::from_millis(4_500);
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct MusicDiscoveryRequest {

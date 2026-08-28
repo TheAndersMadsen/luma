@@ -72,10 +72,14 @@ pub fn system_prompt() -> &'static str {
      Answer straight away, with no lookup, when the question has a settled \
      answer you already know — who a well-known person is, what a word means, a \
      capital city, a landmark's height, how something works. A lookup the wearer \
-     did not need still costs them the seconds of silence. Look it up when the \
+     did not need still costs them the seconds of silence. If the wearer \
+     explicitly asks you to look something up, search, or browse, honor that \
+     request even when you already know the answer. Look it up when the \
      answer moves with time or place, when it is specific to this wearer, or \
      when being wrong would matter: news, weather, prices, scores, opening \
-     hours, anything dated, and anything you are not sure of. Pick the \
+     hours, anything dated, and anything you are not sure of. For a product or \
+     service price, verify whether it is still sold and distinguish present \
+     availability from an old launch price. Pick the \
      tool that fits — the answer engine for current events and questions needing \
      fresh facts, the encyclopedia for definitions and background, the calculator \
      for math, units, dates, distances, and measurements, and web search for \
@@ -1641,7 +1645,7 @@ pub fn device_action_input(
     }
 }
 
-fn exact_tickle_request(value: &str) -> bool {
+pub(crate) fn exact_tickle_request(value: &str) -> bool {
     let normalized = value
         .chars()
         .flat_map(char::to_lowercase)
@@ -1660,6 +1664,12 @@ fn exact_tickle_request(value: &str) -> bool {
         normalized.as_str(),
         "tickle" | "tickle my fancy" | "tickle tickle tickle"
     )
+}
+
+pub(crate) fn scope_tickle_to_exact_request(tools: &mut Vec<ToolDef>, wearer_request: &str) {
+    if !exact_tickle_request(wearer_request) {
+        tools.retain(|tool| tool.name != "Tickle");
+    }
 }
 
 /// Execute a **server-side** tool -> the observation text fed back to the model.
@@ -3585,6 +3595,10 @@ mod tests {
                 "the rule must still name {changing} as something to look up"
             );
         }
+        assert!(
+            prompt.contains("whether it is still sold") && prompt.contains("old launch price"),
+            "a current price must not collapse into historical launch pricing"
+        );
     }
 
     #[test]

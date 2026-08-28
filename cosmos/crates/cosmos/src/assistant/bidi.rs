@@ -412,6 +412,7 @@ impl BidiSession {
         // branch below): the agent entry points take the request verbatim, so the
         // utterance is the faithful fill rather than an invention.
         let utterance = req.utterance.clone();
+        catalog::scope_tickle_to_exact_request(&mut tools, &utterance);
         let bounded_music_research = super::engine::prefer_one_music_research_tool(
             &mut tools,
             &utterance,

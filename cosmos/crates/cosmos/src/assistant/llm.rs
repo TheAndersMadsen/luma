@@ -242,6 +242,20 @@ fn explicit_web_search_utterance(messages: &[ChatMessage]) -> Option<&str> {
     .then_some(utterance)
 }
 
+fn explicit_lookup_utterance(messages: &[ChatMessage]) -> Option<&str> {
+    let utterance = messages
+        .iter()
+        .rev()
+        .find(|message| message.role == Role::User)?
+        .content
+        .trim();
+    if utterance.is_empty() {
+        return None;
+    }
+    let normalized = utterance.to_lowercase();
+    (normalized.contains("look up ") || normalized.contains("lookup ")).then_some(utterance)
+}
+
 fn tools_after_completed_explicit_search(
     messages: &[ChatMessage],
     tools: &[ToolDef],
@@ -306,6 +320,90 @@ fn enforce_explicit_web_search(
         .filter(|call| !matches!(call.name.as_str(), "ask_online" | "Respond" | "web_search"))
         .collect();
     response
+}
+
+/// Honor an explicit generic lookup without overriding a retrieval route the
+/// model already selected.
+///
+/// "Look up" does not name a provider. Wikipedia is the cheapest appropriate
+/// default for ordinary background facts; deployments without it fall back to
+/// web search and then the configured answer engine. This is an intent-level
+/// rule and contains no entity, artist, or prompt-specific vocabulary.
+fn enforce_explicit_lookup(
+    messages: &[ChatMessage],
+    tools: &[ToolDef],
+    mut response: ChatResponse,
+) -> ChatResponse {
+    let Some(utterance) = explicit_lookup_utterance(messages) else {
+        return response;
+    };
+    if messages.iter().any(|message| {
+        ["wikipedia", "web_search", "ask_online"]
+            .iter()
+            .any(|tool| message.is_tool_result_for(tool))
+    }) {
+        return response;
+    }
+    if response
+        .tool_call
+        .iter()
+        .chain(response.extra_tool_calls.iter())
+        .any(|call| {
+            matches!(
+                call.name.as_str(),
+                "food_lookup"
+                    | "web_search"
+                    | "ask_online"
+                    | "wikipedia"
+                    | "wolfram"
+                    | "recall_memory"
+                    | "music_discover"
+            )
+        })
+    {
+        return response;
+    }
+
+    let Some(tool) = ["wikipedia", "web_search", "ask_online"]
+        .into_iter()
+        .find(|name| tools.iter().any(|tool| tool.name == *name))
+    else {
+        return response;
+    };
+
+    let mut calls = response.tool_call.take().into_iter().collect::<Vec<_>>();
+    calls.append(&mut response.extra_tool_calls);
+    response.content = None;
+    response.tool_call = Some(ToolCall {
+        name: tool.to_owned(),
+        arguments: serde_json::json!({ "query": utterance }).to_string(),
+    });
+    response.extra_tool_calls = calls
+        .into_iter()
+        .filter(|call| {
+            !matches!(
+                call.name.as_str(),
+                "Respond" | "wikipedia" | "web_search" | "ask_online"
+            )
+        })
+        .collect();
+    tracing::info!(
+        tool,
+        "explicit lookup request normalized to a retrieval capability"
+    );
+    response
+}
+
+fn enforce_explicit_retrieval(
+    messages: &[ChatMessage],
+    tools: &[ToolDef],
+    response: ChatResponse,
+) -> ChatResponse {
+    enforce_explicit_lookup(
+        messages,
+        tools,
+        enforce_explicit_web_search(messages, tools, response),
+    )
 }
 
 #[tonic::async_trait]
@@ -423,7 +521,7 @@ impl ChatModel for ConfiguredChatModel {
                     tool_call: calls.next(),
                     extra_tool_calls: calls.collect(),
                 };
-                Ok(enforce_explicit_web_search(messages, tools, result))
+                Ok(enforce_explicit_retrieval(messages, tools, result))
             }
             _ if self.demo_when_unconfigured => DemoChatModel.complete(messages, tools).await,
             _ => Err(LlmError::Transport(
@@ -885,7 +983,7 @@ impl ChatModel for OpenAiChatModel {
             arguments: normalize_arguments(&tc.function.arguments),
         });
         let tool_call = calls.next();
-        Ok(enforce_explicit_web_search(
+        Ok(enforce_explicit_retrieval(
             messages,
             tools,
             ChatResponse {
@@ -910,6 +1008,14 @@ mod tests {
         }
     }
 
+    fn wikipedia_tool() -> ToolDef {
+        ToolDef {
+            name: "wikipedia".to_owned(),
+            description: "Read Wikipedia".to_owned(),
+            parameters: serde_json::json!({"type": "object"}),
+        }
+    }
+
     fn direct_answer(text: &str) -> ChatResponse {
         ChatResponse {
             content: Some(text.to_owned()),
@@ -924,7 +1030,7 @@ mod tests {
         let messages = vec![ChatMessage::user(
             "Search the web for the PenumbraOS GitHub repository",
         )];
-        let response = enforce_explicit_web_search(
+        let response = enforce_explicit_retrieval(
             &messages,
             &[web_search_tool()],
             direct_answer("I cannot browse."),
@@ -936,6 +1042,70 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&call.arguments).unwrap()["query"],
             messages[0].content
+        );
+    }
+
+    #[test]
+    fn an_explicit_lookup_request_cannot_be_answered_without_a_lookup() {
+        let messages = vec![ChatMessage::user(
+            "Look up the Eiffel Tower and tell me how tall it is.",
+        )];
+        let response = enforce_explicit_retrieval(
+            &messages,
+            &[web_search_tool(), wikipedia_tool()],
+            direct_answer("The Eiffel Tower is 330 metres tall."),
+        );
+
+        assert_eq!(response.content, None);
+        let call = response
+            .tool_call
+            .expect("an explicit lookup is forced once");
+        assert_eq!(call.name, "wikipedia");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&call.arguments).unwrap()["query"],
+            messages[0].content
+        );
+    }
+
+    #[test]
+    fn an_explicit_lookup_preserves_the_models_retrieval_choice() {
+        let messages = vec![ChatMessage::user("Look up today's launch schedule.")];
+        let selected = ChatResponse {
+            content: None,
+            thought: String::new(),
+            tool_call: Some(ToolCall {
+                name: "ask_online".to_owned(),
+                arguments: r#"{"query":"today's launch schedule"}"#.to_owned(),
+            }),
+            extra_tool_calls: Vec::new(),
+        };
+
+        let response = enforce_explicit_retrieval(
+            &messages,
+            &[web_search_tool(), wikipedia_tool()],
+            selected.clone(),
+        );
+
+        assert_eq!(response.tool_call, selected.tool_call);
+        assert!(response.extra_tool_calls.is_empty());
+    }
+
+    #[test]
+    fn a_completed_explicit_lookup_is_not_forced_into_a_loop() {
+        let messages = vec![
+            ChatMessage::user("Look up the Eiffel Tower."),
+            ChatMessage::tool_result("wikipedia", r#"{"query":"Eiffel Tower"}"#, "found"),
+        ];
+        let response = enforce_explicit_retrieval(
+            &messages,
+            &[web_search_tool(), wikipedia_tool()],
+            direct_answer("The Eiffel Tower is in Paris."),
+        );
+
+        assert!(response.tool_call.is_none());
+        assert_eq!(
+            response.content.as_deref(),
+            Some("The Eiffel Tower is in Paris.")
         );
     }
 

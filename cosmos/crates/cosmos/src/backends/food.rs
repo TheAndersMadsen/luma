@@ -14,7 +14,7 @@
 //! reports everything in grams, so mineral/vitamin values are scaled up. Nothing
 //! is invented — a nutrient absent from the product is simply omitted.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use cosmos_protocol::common::food;
 use serde::Deserialize;
@@ -38,6 +38,14 @@ struct OffSearch {
 struct OffSearchHit {
     #[serde(default)]
     code: String,
+    #[serde(default)]
+    product_name: serde_json::Value,
+    #[serde(default)]
+    generic_name: serde_json::Value,
+    #[serde(default)]
+    brands: serde_json::Value,
+    #[serde(default)]
+    categories: serde_json::Value,
 }
 
 #[derive(Deserialize)]
@@ -165,9 +173,13 @@ async fn lookup_from_endpoints(
     search_endpoint: &str,
     product_endpoint: &str,
 ) -> Result<FoodLookup, BackendError> {
+    let search_terms = food_search_terms(query);
+    if search_terms.is_empty() {
+        return Err(BackendError::NoResult);
+    }
     let search_url = format!(
         "{search_endpoint}?q={}&page_size=5",
-        super::places::encode(query)
+        super::places::encode(&search_terms.join(" "))
     );
     let search: OffSearch = http()
         .get(search_url)
@@ -181,11 +193,12 @@ async fn lookup_from_endpoints(
         .await
         .map_err(|_| BackendError::Unavailable)?;
 
-    let code = search
-        .products
-        .into_iter()
+    let query_tokens = search_terms
+        .iter()
+        .map(|term| match_token(term))
+        .collect::<HashSet<_>>();
+    let code = best_search_hit(search.products, &query_tokens)
         .map(|product| product.code)
-        .find(|code| valid_product_code(code))
         .ok_or(BackendError::NoResult)?;
 
     let product_url = format!("{product_endpoint}/{code}?fields={PRODUCT_FIELDS}");
@@ -209,6 +222,147 @@ async fn lookup_from_endpoints(
         .ok_or(BackendError::NoResult)?;
 
     Ok(to_lookup(product))
+}
+
+const FOOD_QUERY_FILLER: &[&str] = &[
+    "a",
+    "an",
+    "are",
+    "calorie",
+    "calories",
+    "carb",
+    "carbs",
+    "contain",
+    "contains",
+    "do",
+    "does",
+    "fat",
+    "fats",
+    "fact",
+    "facts",
+    "fiber",
+    "fibre",
+    "find",
+    "for",
+    "give",
+    "have",
+    "has",
+    "how",
+    "in",
+    "is",
+    "look",
+    "many",
+    "me",
+    "much",
+    "nutrient",
+    "nutrients",
+    "nutrition",
+    "nutritional",
+    "of",
+    "one",
+    "please",
+    "protein",
+    "proteins",
+    "serving",
+    "servings",
+    "sugar",
+    "sugars",
+    "tell",
+    "the",
+    "there",
+    "three",
+    "to",
+    "two",
+    "up",
+    "what",
+];
+
+fn words(value: &str) -> Vec<String> {
+    value
+        .chars()
+        .flat_map(char::to_lowercase)
+        .map(|character| {
+            if character.is_alphanumeric() {
+                character
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .map(str::to_owned)
+        .collect()
+}
+
+fn match_token(value: &str) -> String {
+    if value.len() > 3 && value.ends_with('s') && !value.ends_with("ss") {
+        value[..value.len() - 1].to_owned()
+    } else {
+        value.to_owned()
+    }
+}
+
+fn food_search_terms(query: &str) -> Vec<String> {
+    let mut seen = HashSet::new();
+    words(query)
+        .into_iter()
+        .filter(|word| {
+            !word.bytes().all(|byte| byte.is_ascii_digit())
+                && !FOOD_QUERY_FILLER.contains(&word.as_str())
+        })
+        .filter(|word| seen.insert(match_token(word)))
+        .take(8)
+        .collect()
+}
+
+fn append_value_tokens(value: &serde_json::Value, tokens: &mut HashSet<String>) {
+    match value {
+        serde_json::Value::String(text) => {
+            tokens.extend(words(text).into_iter().map(|word| match_token(&word)));
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                append_value_tokens(value, tokens);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn overlap_score(
+    value: &serde_json::Value,
+    query_tokens: &HashSet<String>,
+    weight: usize,
+) -> usize {
+    let mut tokens = HashSet::new();
+    append_value_tokens(value, &mut tokens);
+    query_tokens.intersection(&tokens).count() * weight
+}
+
+fn search_hit_score(product: &OffSearchHit, query_tokens: &HashSet<String>) -> usize {
+    overlap_score(&product.product_name, query_tokens, 4)
+        + overlap_score(&product.generic_name, query_tokens, 3)
+        + overlap_score(&product.categories, query_tokens, 2)
+        + overlap_score(&product.brands, query_tokens, 1)
+}
+
+fn best_search_hit(
+    products: Vec<OffSearchHit>,
+    query_tokens: &HashSet<String>,
+) -> Option<OffSearchHit> {
+    let mut best = None;
+    let mut best_score = 0;
+    for product in products {
+        if !valid_product_code(&product.code) {
+            continue;
+        }
+        let score = search_hit_score(&product, query_tokens);
+        if score > best_score {
+            best = Some(product);
+            best_score = score;
+        }
+    }
+    best
 }
 
 fn valid_product_code(code: &str) -> bool {
@@ -321,9 +475,49 @@ mod tests {
         assert_eq!(response.products[0].code, "6052028799002");
     }
 
+    #[test]
+    fn food_terms_ignore_question_and_nutrient_filler() {
+        assert_eq!(
+            food_search_terms("What are the nutrition facts for oatmeal?"),
+            ["oatmeal"]
+        );
+        assert_eq!(
+            food_search_terms("How much protein is in two eggs?"),
+            ["eggs"]
+        );
+    }
+
+    #[test]
+    fn product_name_relevance_beats_a_brand_only_match() {
+        let search: OffSearch = serde_json::from_str(
+            r#"{"hits":[{"code":"11111111","product_name":"Cookies","brands":["Oatmeal"]},{"code":"22222222","product_name":"Original instant oatmeal","brands":["Oatmeal"]}]}"#,
+        )
+        .unwrap();
+        let query = ["oatmeal".to_owned()].into_iter().collect();
+
+        assert_eq!(
+            best_search_hit(search.products, &query)
+                .expect("one relevant hit")
+                .code,
+            "22222222"
+        );
+    }
+
+    #[test]
+    fn search_hits_without_relevant_metadata_are_rejected() {
+        let search: OffSearch = serde_json::from_str(
+            r#"{"hits":[{"code":"11111111","product_name":"Apricot jam"},{"code":"22222222"}]}"#,
+        )
+        .unwrap();
+        let query = ["oatmeal".to_owned()].into_iter().collect();
+
+        assert!(best_search_hit(search.products, &query).is_none());
+    }
+
     #[tokio::test]
     async fn lookup_uses_search_index_then_complete_product_record() {
-        let (search_base, search_request) = serve_once(r#"{"hits":[{"code":"12345678"}]}"#).await;
+        let (search_base, search_request) =
+            serve_once(r#"{"hits":[{"code":"12345678","product_name":"Oatmeal"}]}"#).await;
         let (product_base, product_request) = serve_once(
             r#"{"status":1,"product":{"product_name":"Oatmeal","brands":"Test","serving_size":"","code":"12345678","ingredients_text":"oats","nutriments":{"energy-kcal_100g":68.0,"proteins_100g":2.4}}}"#,
         )
@@ -348,6 +542,34 @@ mod tests {
         let product_request = product_request.await.unwrap();
         assert!(product_request.starts_with("GET /product/12345678?fields="));
         assert!(product_request.contains(&format!("user-agent: {USER_AGENT}")));
+    }
+
+    #[tokio::test]
+    async fn lookup_skips_unrelated_first_hit_for_a_nutrition_question() {
+        let (search_base, _search_request) = serve_once(
+            r#"{"hits":[{"code":"11111111","product_name":"Apricot jam"},{"code":"22222222","product_name":"Plain oatmeal"}]}"#,
+        )
+        .await;
+        let (product_base, product_request) = serve_once(
+            r#"{"status":1,"product":{"product_name":"Plain oatmeal","brands":"Test","serving_size":"","code":"22222222","ingredients_text":"oats","nutriments":{"energy-kcal_100g":68.0}}}"#,
+        )
+        .await;
+
+        let result = lookup_from_endpoints(
+            "What are the nutrition facts for oatmeal?",
+            &format!("{search_base}/search"),
+            &format!("{product_base}/product"),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.item_name, "Plain oatmeal");
+        assert!(
+            product_request
+                .await
+                .unwrap()
+                .starts_with("GET /product/22222222?fields=")
+        );
     }
 
     #[tokio::test]

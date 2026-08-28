@@ -156,6 +156,39 @@ fn run_budget() -> std::time::Duration {
 /// t=16.7s has ~2s left afterwards, which buys a timeout string and nothing else.
 const ANSWER_RESERVE: std::time::Duration = std::time::Duration::from_secs(7);
 
+/// Maximum time for the model step that extracts the exact title and artist
+/// from one completed ranked-music research result.
+///
+/// The live fast model normally takes about 4.4s for this step. Capping it at
+/// 5.5s leaves the provider lookup a real window instead of letting extraction
+/// consume everything up to the terminal streaming reserve.
+const MUSIC_EXTRACTION_STEP_LIMIT: std::time::Duration = std::time::Duration::from_millis(5_500);
+
+/// Time a ranked playback turn must retain after its one research lookup:
+/// 5.5s for title/artist extraction, 4.5s for active-provider verification,
+/// and 750ms to stream the terminal PlayMusic or spoken failure.
+const MUSIC_POST_RESEARCH_RESERVE: std::time::Duration = std::time::Duration::from_millis(10_750);
+
+fn music_extraction_step_timeout(remaining: std::time::Duration) -> std::time::Duration {
+    remaining
+        .saturating_sub(crate::backends::music_discovery::PROVIDER_MAX + TERMINAL_RESERVE)
+        .min(MUSIC_EXTRACTION_STEP_LIMIT)
+}
+
+fn tool_reserve_for(
+    name: &str,
+    terminal_music: bool,
+    bounded_music_research: bool,
+) -> std::time::Duration {
+    if terminal_music {
+        TERMINAL_RESERVE
+    } else if bounded_music_research && is_music_research_tool(name) {
+        MUSIC_POST_RESEARCH_RESERVE
+    } else {
+        ANSWER_RESERVE
+    }
+}
+
 /// The smallest window worth STARTING a server tool in.
 ///
 /// Reserving compose time is not enough on its own: the gate has to leave room
@@ -450,11 +483,15 @@ impl Engine {
         // Resolve the server-owned catalog for this request: our tool set minus
         // whatever the device excluded (`SYNAPSE_EXCLUDED_TOOLS`).
         let mut tools = resolve_catalog(&req, self.entitlement.is_subscribed());
+        let utterance = req.utterance.clone();
+        if !active_vision_request(&req) {
+            tools.retain(|tool| tool.name != VISION_ACTION);
+        }
+        catalog::scope_tickle_to_exact_request(&mut tools, &utterance);
 
         // The wearer's own words, kept for required-slot backfill: the agent
         // entry points take the request verbatim, so when the model omits the
         // slot the utterance is the faithful value rather than an invention.
-        let utterance = req.utterance.clone();
         let bounded_music_research = prefer_one_music_research_tool(
             &mut tools,
             &utterance,
@@ -558,6 +595,7 @@ impl Engine {
         let mut tool_context = self.tools.clone();
         tool_context.deadline = Some(run_deadline);
 
+        let mut music_research_completed = false;
         for step in 0..ACTION_LIMIT {
             // Out of turn budget: deliver a spoken terminal NOW, before the device's
             // deadline fires and throws away everything we streamed.
@@ -572,7 +610,11 @@ impl Engine {
             }
             // Never past the remaining budget, and never so short that the last
             // step of a turn is cut off with budget still unspent.
-            let step_timeout = step_timeout_for(remaining);
+            let step_timeout = if music_research_completed {
+                music_extraction_step_timeout(remaining)
+            } else {
+                step_timeout_for(remaining)
+            };
             // Every arm below speaks the same sentence — cosmos converts degraded
             // states into device actions that narrate, never a bare `Failure`
             // body the device would drop — but they are NOT the same event, and
@@ -872,11 +914,8 @@ impl Engine {
                 // then loop, so both are bounded by the run budget from here on:
                 // if there is not enough left to run one AND still speak, close
                 // the run now, before any action node goes out.
-                let tool_reserve = if terminal_music {
-                    TERMINAL_RESERVE
-                } else {
-                    ANSWER_RESERVE
-                };
+                let tool_reserve =
+                    tool_reserve_for(&tc.name, terminal_music, bounded_music_research);
                 if out_of_tool_budget_with(run_deadline, tool_reserve) {
                     // The run is out of time to start another tool — but the
                     // observations it already collected are sitting in
@@ -1012,6 +1051,7 @@ impl Engine {
                         && all.iter().any(|call| is_music_research_tool(&call.name))
                     {
                         retire_music_research_tools(&mut tools);
+                        music_research_completed = true;
                     }
 
                     if step + 1 == ACTION_LIMIT || actions_in_run + 1 > ACTION_LIMIT {
@@ -1079,6 +1119,7 @@ impl Engine {
                 parent = obs_id;
                 if bounded_music_research && is_music_research_tool(&tc.name) {
                     retire_music_research_tools(&mut tools);
+                    music_research_completed = true;
                 }
 
                 // A grounded discovery already contains the exact provider-
@@ -1292,6 +1333,20 @@ fn newest_user_request(
         })
 }
 
+fn active_vision_request(req: &pb::SynapseUnderstandingRequest) -> bool {
+    let Some(request) = newest_user_request(req) else {
+        return false;
+    };
+    let requested = request.vision_requested()
+        == pb::synapse_user_request_content::VisionRequested::Vision
+        || !request.image_data.is_empty();
+    requested
+        && !req
+            .device_context
+            .as_ref()
+            .is_some_and(|context| current_run_contains_action(&context.turns, VISION_ACTION))
+}
+
 /// The system line for a vision-gesture turn, or `None` when the wearer did not
 /// aim the pin at anything.
 ///
@@ -1300,28 +1355,10 @@ fn newest_user_request(
 /// action, `UnderstandScene` included, and telling that model to call it would
 /// buy a bounced `Unrecognized function name and/or arguments` and a wasted step.
 fn vision_line(req: &pb::SynapseUnderstandingRequest, tools: &[ToolDef]) -> Option<String> {
+    if !active_vision_request(req) {
+        return None;
+    }
     let request = newest_user_request(req)?;
-    let requested = request.vision_requested()
-        == pb::synapse_user_request_content::VisionRequested::Vision
-        || !request.image_data.is_empty();
-    if !requested {
-        return None;
-    }
-    // Legacy Understand is one RPC per device action. After `UnderstandScene`
-    // finishes, the Pin replays the original vision-marked user request plus the
-    // action and its observation into a fresh RPC. Re-applying "call
-    // UnderstandScene" on that hop makes the model look again, and repeats until
-    // Switchboard's action limit turns a successful image analysis into the
-    // generic failure response. Only the current parent chain matters here:
-    // device_context also carries completed older runs, and a previous look must
-    // not suppress a new vision gesture.
-    if req
-        .device_context
-        .as_ref()
-        .is_some_and(|context| current_run_contains_action(&context.turns, VISION_ACTION))
-    {
-        return None;
-    }
     let mut line = if tools.iter().any(|t| t.name == VISION_ACTION) {
         VISION_GESTURE_POLICY.to_owned()
     } else {
@@ -3084,6 +3121,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_tickle_near_miss_is_never_offered_to_the_model() {
+        let model = Arc::new(CapturingModel::default());
+        run_with(
+            model.clone(),
+            pb::SynapseUnderstandingRequest {
+                utterance: "Please tickle.".into(),
+                device_context: Some(pb::SynapseDeviceContext::default()),
+                ..Default::default()
+            },
+        )
+        .await;
+
+        assert!(
+            !model.tools().iter().any(|tool| tool == "Tickle"),
+            "a non-exact phrase must not give the model authority to emit Tickle"
+        );
+
+        let exact = Arc::new(CapturingModel::default());
+        run_with(
+            exact.clone(),
+            pb::SynapseUnderstandingRequest {
+                utterance: "Tickle my fancy.".into(),
+                device_context: Some(pb::SynapseDeviceContext::default()),
+                ..Default::default()
+            },
+        )
+        .await;
+        assert!(
+            exact.tools().iter().any(|tool| tool == "Tickle"),
+            "an exact supported phrase must retain the stock action"
+        );
+    }
+
+    #[tokio::test]
     async fn local_weather_preflights_location_before_a_model_can_answer_without_it() {
         let msgs = run_with_tools(
             Arc::new(CapturingModel::default()),
@@ -3158,6 +3229,33 @@ mod tests {
                 .all(|tool| !matches!(tool.name.as_str(), "web_search" | "ask_online"))
         );
         assert!(tools.iter().any(|tool| tool.name == "music_discover"));
+    }
+
+    #[test]
+    fn ranked_music_research_preserves_extraction_and_provider_time() {
+        let remaining = MUSIC_POST_RESEARCH_RESERVE + std::time::Duration::from_secs(2);
+        let extraction = music_extraction_step_timeout(remaining);
+
+        assert_eq!(extraction, MUSIC_EXTRACTION_STEP_LIMIT);
+        assert!(
+            remaining.saturating_sub(extraction)
+                >= crate::backends::music_discovery::PROVIDER_MAX + TERMINAL_RESERVE,
+            "the extraction model step must not consume the provider verification window"
+        );
+        assert!(
+            MUSIC_POST_RESEARCH_RESERVE > ANSWER_RESERVE,
+            "ranked playback needs more protected time than an ordinary final answer"
+        );
+        assert_eq!(
+            tool_reserve_for("ask_online", false, true),
+            MUSIC_POST_RESEARCH_RESERVE,
+            "the actual research-tool scheduler must apply the larger reserve"
+        );
+        assert_eq!(
+            tool_reserve_for("music_discover", true, true),
+            TERMINAL_RESERVE,
+            "provider verification must retain only its final streaming reserve"
+        );
     }
 
     #[tokio::test]
@@ -4436,6 +4534,10 @@ mod tests {
             "a non-vision turn must not be pushed at the camera, got: {}",
             plain.system()
         );
+        assert!(
+            !plain.tools().iter().any(|tool| tool == VISION_ACTION),
+            "a non-vision turn must not be able to select the camera action"
+        );
     }
 
     /// A successful look returns to legacy `Understand` as a new RPC with the
@@ -4484,6 +4586,10 @@ mod tests {
             !model.system().contains("aimed the pin"),
             "the post-capture hop must reason from the observation instead of asking the Pin to look again, got: {}",
             model.system()
+        );
+        assert!(
+            !model.tools().iter().any(|tool| tool == VISION_ACTION),
+            "a completed look must retire the one-shot camera action"
         );
     }
 

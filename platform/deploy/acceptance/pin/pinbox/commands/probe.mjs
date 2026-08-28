@@ -25,6 +25,10 @@ import { runUnderstand, readAdminToken, verifyExplicitDevice, collectReadiness }
 import { SUITE, evaluateCase } from "../../prompt-suite.mjs";
 import { captureStableMediaVolumeSnapshot, restoreMediaVolumeSnapshot } from "../../media-volume-state-guard.mjs";
 import { OPERATIONAL_MARKERS } from "../../tier-a-symbols.mjs";
+import {
+  EXPECTED_PIN_SERIAL_ENV,
+  resolveExpectedDeviceSerial,
+} from "../../../pin/device-target-guard.mjs";
 import { ProbeError, makeMediaVolumeDevice, runAdb } from "../shared/adb.mjs";
 import { deviceJsonGet, deviceTextGet, deviceJsonPost } from "../shared/admin-http.mjs";
 import {
@@ -76,6 +80,7 @@ export function parseProbeArgs(passthrough) {
     score: false,
     screencap: false,
     timeoutMs: DEFAULT_TIMEOUT_MS,
+    expectedPinSerial: null,
   };
   for (let i = 0; i < passthrough.length; i += 1) {
     const arg = passthrough[i];
@@ -91,6 +96,14 @@ export function parseProbeArgs(passthrough) {
     else if (arg === "--dispatch") opts.dispatch = true;
     else if (arg === "--score") opts.score = true;
     else if (arg === "--screencap") opts.screencap = true;
+    else if (arg === "--expected-pin-serial") {
+      if (opts.expectedPinSerial !== null) {
+        return { error: "--expected-pin-serial may be provided once" };
+      }
+      const value = passthrough[++i];
+      if (value === undefined) return { error: "--expected-pin-serial requires a value" };
+      opts.expectedPinSerial = value;
+    }
     else if (arg === "--timeout-ms") opts.timeoutMs = Number(passthrough[++i]);
     else return { error: `unknown argument: ${arg}` };
   }
@@ -104,6 +117,19 @@ export function parseProbeArgs(passthrough) {
     return { error: "--timeout-ms must be an integer between 5000 and 300000" };
   }
   return { options: opts };
+}
+
+export function buildProbeDeviceOptions(common, probeOpts, environment = process.env) {
+  return {
+    serial: common.serial,
+    expectedPinSerial: resolveExpectedDeviceSerial({
+      cliValue: probeOpts.expectedPinSerial,
+      environment,
+      environmentName: EXPECTED_PIN_SERIAL_ENV,
+      label: "AI Pin serial",
+    }),
+    adbPath: common.adb ?? "adb",
+  };
 }
 
 // ---- run-directory helpers ----
@@ -553,7 +579,7 @@ export async function run({ common, passthrough, ctx }) {
   const { options: probeOpts, error } = parseProbeArgs(passthrough);
   if (error) {
     err(`pinbox probe: ${error}\n`);
-    err("usage: pinbox probe --serial SERIAL (--prompt TEXT | --repl) [--dispatch] [--score] [--screencap] [--timeout-ms N] [--json]\n");
+    err("usage: pinbox probe --serial SERIAL --expected-pin-serial SERIAL (--prompt TEXT | --repl) [--dispatch] [--score] [--screencap] [--timeout-ms N] [--json]\n");
     return 2;
   }
   if (!common.serial) {
@@ -563,7 +589,13 @@ export async function run({ common, passthrough, ctx }) {
   if (common.tokenFile !== undefined) {
     process.env.PENUMBRA_PIN_ADMIN_TOKEN_FILE = common.tokenFile;
   }
-  const options = { serial: common.serial, adbPath: common.adb ?? "adb" };
+  let options;
+  try {
+    options = buildProbeDeviceOptions(common, probeOpts);
+  } catch (e) {
+    err(`pinbox probe: ${String(e?.message ?? e)}\n`);
+    return 2;
+  }
 
   let token;
   try {
