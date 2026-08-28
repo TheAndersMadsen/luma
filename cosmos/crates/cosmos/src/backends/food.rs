@@ -234,6 +234,8 @@ const FOOD_QUERY_FILLER: &[&str] = &[
     "carbs",
     "contain",
     "contains",
+    "cup",
+    "cups",
     "do",
     "does",
     "fat",
@@ -252,6 +254,7 @@ const FOOD_QUERY_FILLER: &[&str] = &[
     "is",
     "look",
     "many",
+    "made",
     "me",
     "much",
     "nutrient",
@@ -260,7 +263,9 @@ const FOOD_QUERY_FILLER: &[&str] = &[
     "nutritional",
     "of",
     "one",
+    "per",
     "please",
+    "prepared",
     "protein",
     "proteins",
     "serving",
@@ -275,6 +280,7 @@ const FOOD_QUERY_FILLER: &[&str] = &[
     "two",
     "up",
     "what",
+    "with",
 ];
 
 fn words(value: &str) -> Vec<String> {
@@ -303,12 +309,20 @@ fn match_token(value: &str) -> String {
 }
 
 fn food_search_terms(query: &str) -> Vec<String> {
+    let words = words(query);
+    let water_is_preparation = words
+        .windows(2)
+        .any(|pair| pair[0] == "with" && pair[1] == "water")
+        && words.iter().any(|word| {
+            word != "water" && word != "with" && !FOOD_QUERY_FILLER.contains(&word.as_str())
+        });
     let mut seen = HashSet::new();
-    words(query)
+    words
         .into_iter()
         .filter(|word| {
-            !word.bytes().all(|byte| byte.is_ascii_digit())
-                && !FOOD_QUERY_FILLER.contains(&word.as_str())
+            !(word.bytes().all(|byte| byte.is_ascii_digit())
+                || FOOD_QUERY_FILLER.contains(&word.as_str())
+                || water_is_preparation && word == "water")
         })
         .filter(|word| seen.insert(match_token(word)))
         .take(8)
@@ -501,6 +515,20 @@ mod tests {
     }
 
     #[test]
+    fn food_terms_remove_serving_and_preparation_noise_without_hiding_water() {
+        assert_eq!(
+            food_search_terms("plain cooked oatmeal nutrition facts per 1 cup"),
+            ["plain", "cooked", "oatmeal"]
+        );
+        assert_eq!(
+            food_search_terms("plain cooked oatmeal, 1 cup, prepared with water"),
+            ["plain", "cooked", "oatmeal"]
+        );
+        assert_eq!(food_search_terms("sparkling water"), ["sparkling", "water"]);
+        assert_eq!(food_search_terms("water"), ["water"]);
+    }
+
+    #[test]
     fn product_name_relevance_beats_a_brand_only_match() {
         let search: OffSearch = serde_json::from_str(
             r#"{"hits":[{"code":"11111111","product_name":"Cookies","brands":["Oatmeal"]},{"code":"22222222","product_name":"Original instant oatmeal","brands":["Oatmeal"]}]}"#,
@@ -593,6 +621,40 @@ mod tests {
         .unwrap();
 
         assert_eq!(result.item_name, "Plain oatmeal");
+        assert!(
+            product_request
+                .await
+                .unwrap()
+                .starts_with("GET /product/22222222?fields=")
+        );
+    }
+
+    #[tokio::test]
+    async fn lookup_removes_preparation_water_before_searching() {
+        let (search_base, search_request) = serve_once(
+            r#"{"hits":[{"code":"11111111","product_name":"Purified drinking water"},{"code":"22222222","product_name":"Plain cooked oatmeal"}]}"#,
+        )
+        .await;
+        let (product_base, product_request) = serve_once(
+            r#"{"status":1,"product":{"product_name":"Plain cooked oatmeal","brands":"Test","serving_size":"","code":"22222222","ingredients_text":"oats","nutriments":{"energy-kcal_100g":68.0,"proteins_100g":2.4}}}"#,
+        )
+        .await;
+
+        let result = lookup_from_endpoints(
+            "plain cooked oatmeal, 1 cup, prepared with water",
+            &format!("{search_base}/search"),
+            &format!("{product_base}/product"),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.item_name, "Plain cooked oatmeal");
+        assert!(
+            search_request
+                .await
+                .unwrap()
+                .starts_with("GET /search?q=plain+cooked+oatmeal&page_size=5 ")
+        );
         assert!(
             product_request
                 .await

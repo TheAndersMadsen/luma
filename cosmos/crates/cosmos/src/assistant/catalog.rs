@@ -78,8 +78,10 @@ pub fn system_prompt() -> &'static str {
      answer moves with time or place, when it is specific to this wearer, or \
      when being wrong would matter: news, weather, prices, scores, opening \
      hours, anything dated, and anything you are not sure of. For a product or \
-     service price, verify whether it is still sold and distinguish present \
-     availability from an old launch price. Pick the \
+     service price, use the answer engine directly when it is offered, verify \
+     whether it is still sold, and distinguish present availability from an \
+     old launch price; do not also call web search unless the answer engine \
+     explicitly says it lacks current evidence. Pick the \
      tool that fits — the answer engine for current events and questions needing \
      fresh facts, the encyclopedia for definitions and background, the calculator \
      for math, units, dates, distances, and measurements, and web search for \
@@ -477,13 +479,15 @@ const SERVER_TOOLS: &[ServerTool] = &[
     },
     ServerTool {
         name: "web_search",
-        description: "Search the web for current, factual information.",
+        description: "Search raw web results for current, factual information, especially latest headlines. For a current product or service price or availability question, use ask_online instead when it is offered.",
         parameters: query_schema,
     },
     ServerTool {
         name: "ask_online",
         description: "Ask a web-connected answer engine for a synthesized, cited \
-                      answer to a current-events or factual question.",
+                      answer to a current-events or factual question. Prefer this \
+                      directly for current prices and product or service \
+                      availability; do not precede it with web_search.",
         parameters: query_schema,
     },
     ServerTool {
@@ -2132,16 +2136,71 @@ fn describe_food(found: &crate::backends::food::FoodLookup) -> String {
     if !found.serving_size.trim().is_empty() {
         out.push_str(&format!(", per {}", found.serving_size.trim()));
     }
-    let facts: Vec<String> = found
+    let mut facts: Vec<(usize, String)> = found
         .nutrition
         .iter()
-        .take(6)
-        .map(|n| format!("{:?} {:.0}", n.nutrient_type, n.value))
+        .filter_map(|nutrient| {
+            describe_nutrient(nutrient)
+                .map(|description| (nutrient_priority(nutrient.nutrient_type), description))
+        })
         .collect();
+    facts.sort_by_key(|(priority, _)| *priority);
+    let facts = facts
+        .into_iter()
+        .take(6)
+        .map(|(_, description)| description)
+        .collect::<Vec<_>>();
     if !facts.is_empty() {
         out.push_str(&format!(": {}", facts.join(", ")));
     }
     out
+}
+
+fn describe_nutrient(nutrient: &cosmos_protocol::common::food::NutritionInfo) -> Option<String> {
+    use cosmos_protocol::common::food::NutrientType;
+
+    let nutrient_type = NutrientType::try_from(nutrient.nutrient_type).ok()?;
+    let (name, unit) = match nutrient_type {
+        NutrientType::Calories => ("calories", "kcal"),
+        NutrientType::TotalFat => ("fat", "g"),
+        NutrientType::SaturatedFat => ("saturated fat", "g"),
+        NutrientType::TransFat => ("trans fat", "g"),
+        NutrientType::MonounsaturatedFat => ("monounsaturated fat", "g"),
+        NutrientType::PolyunsaturatedFat => ("polyunsaturated fat", "g"),
+        NutrientType::TotalCarbs => ("carbohydrates", "g"),
+        NutrientType::DietaryFiber => ("fiber", "g"),
+        NutrientType::Sugars => ("sugars", "g"),
+        NutrientType::Protein => ("protein", "g"),
+        NutrientType::Sodium => ("sodium", "mg"),
+        NutrientType::Potassium => ("potassium", "mg"),
+        NutrientType::Cholesterol => ("cholesterol", "mg"),
+        NutrientType::Calcium => ("calcium", "mg"),
+        NutrientType::Iron => ("iron", "mg"),
+        NutrientType::VitaminC => ("vitamin C", "mg"),
+        NutrientType::VitaminA => ("vitamin A", "mcg"),
+        NutrientType::Undefined => return None,
+    };
+    let value = if nutrient.value.fract().abs() < 0.05 {
+        format!("{:.0}", nutrient.value)
+    } else {
+        format!("{:.1}", nutrient.value)
+    };
+    Some(format!("{name} {value} {unit}"))
+}
+
+fn nutrient_priority(nutrient_type: i32) -> usize {
+    use cosmos_protocol::common::food::NutrientType;
+
+    match NutrientType::try_from(nutrient_type).ok() {
+        Some(NutrientType::Calories) => 0,
+        Some(NutrientType::Protein) => 1,
+        Some(NutrientType::TotalCarbs) => 2,
+        Some(NutrientType::TotalFat) => 3,
+        Some(NutrientType::DietaryFiber) => 4,
+        Some(NutrientType::Sugars) => 5,
+        Some(NutrientType::Sodium) => 6,
+        _ => 7,
+    }
 }
 
 /// A short list of nearby places, names first.
@@ -2522,6 +2581,48 @@ const NOTE_SCAN_LIMIT: i32 = 200;
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn food_description_names_and_units_the_useful_nutrients() {
+        use cosmos_protocol::common::food::{NutrientType, NutritionInfo};
+
+        let found = crate::backends::food::FoodLookup {
+            item_name: "Plain oatmeal".to_owned(),
+            brand: "Test".to_owned(),
+            barcode: "12345678".to_owned(),
+            serving_size: "1 cup".to_owned(),
+            ingredients: vec!["oats".to_owned()],
+            nutrition: vec![
+                NutritionInfo {
+                    nutrient_type: NutrientType::Calories as i32,
+                    value: 100.0,
+                },
+                NutritionInfo {
+                    nutrient_type: NutrientType::TotalFat as i32,
+                    value: 2.0,
+                },
+                NutritionInfo {
+                    nutrient_type: NutrientType::Protein as i32,
+                    value: 5.0,
+                },
+                NutritionInfo {
+                    nutrient_type: NutrientType::TotalCarbs as i32,
+                    value: 20.0,
+                },
+                NutritionInfo {
+                    nutrient_type: NutrientType::DietaryFiber as i32,
+                    value: 3.0,
+                },
+            ],
+        };
+
+        let description = describe_food(&found);
+        assert!(description.contains("calories 100 kcal"));
+        assert!(description.contains("protein 5 g"));
+        assert!(description.contains("carbohydrates 20 g"));
+        assert!(description.contains("fiber 3 g"));
+        assert!(!description.contains(": 2 100"));
+    }
 
     #[test]
     fn progress_cues_describe_the_selected_work() {
@@ -3598,6 +3699,19 @@ mod tests {
         assert!(
             prompt.contains("whether it is still sold") && prompt.contains("old launch price"),
             "a current price must not collapse into historical launch pricing"
+        );
+    }
+
+    #[test]
+    fn the_prompt_uses_one_synthesized_lookup_for_current_prices() {
+        let prompt = system_prompt_for(super::super::toolsets::default_set());
+        assert!(
+            prompt.contains("use the answer engine directly"),
+            "current price and availability questions need the synthesized source first"
+        );
+        assert!(
+            prompt.contains("do not also call web search"),
+            "one current-price question must not spend the Pin deadline on both retrieval tools"
         );
     }
 
