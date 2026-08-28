@@ -233,9 +233,7 @@ fn enforce_explicit_web_search(
     tools: &[ToolDef],
     mut response: ChatResponse,
 ) -> ChatResponse {
-    if response.tool_call.is_some()
-        || !response.extra_tool_calls.is_empty()
-        || !tools.iter().any(|tool| tool.name == "web_search")
+    if !tools.iter().any(|tool| tool.name == "web_search")
         || messages
             .iter()
             .any(|message| message.is_tool_result_for("web_search"))
@@ -265,12 +263,26 @@ fn enforce_explicit_web_search(
         return response;
     }
 
-    tracing::info!("explicit web-search request corrected after direct model answer");
-    response.content = None;
-    response.tool_call = Some(ToolCall {
+    let mut calls = response.tool_call.take().into_iter().collect::<Vec<_>>();
+    calls.append(&mut response.extra_tool_calls);
+    let existing_search = calls
+        .iter()
+        .position(|call| call.name == "web_search")
+        .map(|index| calls.remove(index));
+    let search = existing_search.unwrap_or_else(|| ToolCall {
         name: "web_search".to_owned(),
         arguments: serde_json::json!({ "query": utterance }).to_string(),
     });
+    tracing::info!("explicit web-search request normalized to the requested capability");
+    response.content = None;
+    response.tool_call = Some(search);
+    // `ask_online` overlaps this explicit wearer-selected capability, while a
+    // terminal `Respond` would end the run before the lookup. Preserve only
+    // independent calls such as an explicitly requested Wikipedia lookup.
+    response.extra_tool_calls = calls
+        .into_iter()
+        .filter(|call| !matches!(call.name.as_str(), "ask_online" | "Respond" | "web_search"))
+        .collect();
     response
 }
 
@@ -904,6 +916,93 @@ mod tests {
     }
 
     #[test]
+    fn an_explicit_search_request_cannot_be_turned_into_a_respond_tool_call() {
+        let messages = vec![ChatMessage::user(
+            "Search the web for the latest news in Denmark and summarize one result.",
+        )];
+        let response = enforce_explicit_web_search(
+            &messages,
+            &[web_search_tool()],
+            ChatResponse {
+                content: None,
+                thought: "I can answer directly".to_owned(),
+                tool_call: Some(ToolCall {
+                    name: "Respond".to_owned(),
+                    arguments: r#"{"Response":"Here is some news."}"#.to_owned(),
+                }),
+                extra_tool_calls: Vec::new(),
+            },
+        );
+
+        assert_eq!(response.content, None);
+        assert_eq!(response.tool_call.as_ref().unwrap().name, "web_search");
+        assert!(response.extra_tool_calls.is_empty());
+    }
+
+    #[test]
+    fn explicit_web_search_does_not_duplicate_the_overlapping_answer_engine() {
+        let messages = vec![ChatMessage::user(
+            "Search the web for the latest news in Denmark and summarize one result.",
+        )];
+        let response = enforce_explicit_web_search(
+            &messages,
+            &[
+                web_search_tool(),
+                ToolDef {
+                    name: "ask_online".to_owned(),
+                    description: "Answer from current sources".to_owned(),
+                    parameters: serde_json::json!({"type": "object"}),
+                },
+            ],
+            ChatResponse {
+                content: None,
+                thought: "I should look this up".to_owned(),
+                tool_call: Some(ToolCall {
+                    name: "ask_online".to_owned(),
+                    arguments: r#"{"query":"latest news in Denmark"}"#.to_owned(),
+                }),
+                extra_tool_calls: Vec::new(),
+            },
+        );
+
+        assert_eq!(response.tool_call.as_ref().unwrap().name, "web_search");
+        assert!(response.extra_tool_calls.is_empty());
+    }
+
+    #[test]
+    fn explicit_web_search_removes_an_overlapping_answer_engine_from_a_batch() {
+        let messages = vec![ChatMessage::user(
+            "Search the web for the latest news in Denmark and summarize one result.",
+        )];
+        let response = enforce_explicit_web_search(
+            &messages,
+            &[
+                web_search_tool(),
+                ToolDef {
+                    name: "ask_online".to_owned(),
+                    description: "Answer from current sources".to_owned(),
+                    parameters: serde_json::json!({"type": "object"}),
+                },
+            ],
+            ChatResponse {
+                content: None,
+                thought: "I should use both current sources".to_owned(),
+                tool_call: Some(ToolCall {
+                    name: "web_search".to_owned(),
+                    arguments: r#"{"query":"latest news in Denmark"}"#.to_owned(),
+                }),
+                extra_tool_calls: vec![ToolCall {
+                    name: "ask_online".to_owned(),
+                    arguments: r#"{"query":"latest news in Denmark"}"#.to_owned(),
+                }],
+            },
+        );
+
+        assert_eq!(response.tool_call.as_ref().unwrap().name, "web_search");
+        assert!(response.extra_tool_calls.is_empty());
+    }
+
+    #[test]
     fn a_completed_search_is_not_forced_into_a_loop() {
         let messages = vec![
             ChatMessage::user("Use web search for PenumbraOS"),
@@ -961,7 +1060,7 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_answers_and_existing_tool_choices_are_left_to_the_model() {
+    fn ordinary_answers_are_left_to_the_model_and_explicit_search_is_added_to_other_tools() {
         let ordinary = enforce_explicit_web_search(
             &[ChatMessage::user("What is a compiler?")],
             &[web_search_tool()],
@@ -983,7 +1082,11 @@ mod tests {
             &[web_search_tool()],
             existing.clone(),
         );
-        assert_eq!(preserved.tool_call, existing.tool_call);
+        assert_eq!(preserved.tool_call.as_ref().unwrap().name, "web_search");
+        assert_eq!(
+            preserved.extra_tool_calls,
+            vec![existing.tool_call.unwrap()]
+        );
     }
 
     /// Every model step must contain a generation ceiling.

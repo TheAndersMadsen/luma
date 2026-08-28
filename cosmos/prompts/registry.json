@@ -70,7 +70,7 @@
       "id": "cosmos.orchestration.confirm_action",
       "version": "1.0.0",
       "path": "prompts/content/orchestration/confirm-action.prompt",
-      "sha256": "91be1bf466d4dc84879211f38b7ef5bec8b668f290db086c29ff3b6636972539",
+      "sha256": "289f9995252062ab51c42718bc8fcfffe0cef0bdd13565ff417b714c4504b272",
       "evidence_grade": "chosen",
       "lifecycle": "candidate",
       "intended_behavior": "Require scoped confirmation for consequential external mutations."

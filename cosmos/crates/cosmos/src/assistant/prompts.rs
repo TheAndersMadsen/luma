@@ -84,6 +84,7 @@ mod tests {
         );
         let orchestration = orchestration_block();
         assert!(orchestration.contains("typed capability"));
-        assert!(orchestration.contains("ask for confirmation"));
+        assert!(orchestration.contains("select the matching typed capability"));
+        assert!(orchestration.contains("Cosmos will ask for confirmation"));
     }
 }
