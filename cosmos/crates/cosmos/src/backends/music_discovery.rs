@@ -12,6 +12,8 @@ use super::{http, key};
 const PPLX_KEY_VAR: &str = "COSMOS_PPLX_API_KEY";
 const PPLX_MODEL_VAR: &str = "COSMOS_PPLX_MODEL";
 const DEFAULT_PPLX_MODEL: &str = "sonar";
+const PPLX_MAX_TOKENS: u16 = 384;
+const PPLX_TEMPERATURE: f64 = 0.1;
 const CENTER_URL_VAR: &str = "COSMOS_CENTER_MUSIC_QUERY_URL";
 const DEFAULT_CENTER_URL: &str = "http://center:4000/api/internal/music/query";
 const MAX_TEXT_CHARACTERS: usize = 200;
@@ -628,8 +630,16 @@ fn validate_request(request: &MusicDiscoveryRequest) -> Result<(), MusicDiscover
 #[derive(Serialize)]
 struct PerplexityRequest<'a> {
     model: &'a str,
+    max_tokens: u16,
+    temperature: f64,
+    web_search_options: WebSearchOptions,
     messages: [PerplexityRequestMessage<'a>; 2],
     response_format: ResponseFormat,
+}
+
+#[derive(Serialize)]
+struct WebSearchOptions {
+    search_context_size: &'static str,
 }
 
 #[derive(Serialize)]
@@ -677,6 +687,11 @@ async fn discover_candidates(
     };
     let body = PerplexityRequest {
         model,
+        max_tokens: PPLX_MAX_TOKENS,
+        temperature: PPLX_TEMPERATURE,
+        web_search_options: WebSearchOptions {
+            search_context_size: "low",
+        },
         messages: [
             PerplexityRequestMessage {
                 role: "system",
@@ -1075,6 +1090,39 @@ mod tests {
             "https://example.com/report".to_owned(),
             "https://example.com/music/report".to_owned(),
         ]
+    }
+
+    #[test]
+    fn perplexity_music_research_uses_the_bounded_low_latency_profile() {
+        let body = PerplexityRequest {
+            model: "sonar",
+            max_tokens: PPLX_MAX_TOKENS,
+            temperature: PPLX_TEMPERATURE,
+            web_search_options: WebSearchOptions {
+                search_context_size: "low",
+            },
+            messages: [
+                PerplexityRequestMessage {
+                    role: "system",
+                    content: "system",
+                },
+                PerplexityRequestMessage {
+                    role: "user",
+                    content: "input",
+                },
+            ],
+            response_format: ResponseFormat {
+                r#type: "json_schema",
+                json_schema: JsonSchema {
+                    schema: serde_json::json!({"type": "object"}),
+                },
+            },
+        };
+        let encoded = serde_json::to_value(body).expect("serializable request");
+
+        assert_eq!(encoded["max_tokens"], 384);
+        assert_eq!(encoded["temperature"], 0.1);
+        assert_eq!(encoded["web_search_options"]["search_context_size"], "low");
     }
 
     #[test]
