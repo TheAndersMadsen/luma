@@ -20,6 +20,8 @@ const DEFAULT_DISCOVERY_BUDGET: Duration = Duration::from_secs(16);
 const SETTLEMENT_RESERVE: Duration = Duration::from_millis(1_500);
 const INITIAL_RESEARCH_MAX: Duration = Duration::from_millis(7_500);
 const INITIAL_RESEARCH_MIN: Duration = Duration::from_millis(2_500);
+const RESEARCH_RETRY_MAX: Duration = Duration::from_millis(3_500);
+const RESEARCH_RETRY_MIN: Duration = Duration::from_millis(1_500);
 const WEB_RESEARCH_MAX: Duration = Duration::from_millis(1_500);
 const CORROBORATION_MAX: Duration = Duration::from_millis(3_500);
 const CORROBORATION_MIN: Duration = Duration::from_millis(1_500);
@@ -257,7 +259,41 @@ async fn discover_with_research(
         result_outcome(&initial),
         initial_started.elapsed(),
     );
-    let mut research = initial?;
+    let retry_without_web = web_evidence.is_some()
+        && match &initial {
+            Ok(research) => {
+                research.status == ResearchStatus::NoEvidence || research.candidates.is_empty()
+            }
+            Err(MusicDiscoveryError::NoEvidence) => true,
+            Err(_) => false,
+        };
+    let mut used_web_evidence = web_evidence.is_some();
+    let mut research = if retry_without_web {
+        let retry_budget = stage_budget(
+            deadline,
+            SETTLEMENT_RESERVE + PROVIDER_MAX,
+            RESEARCH_RETRY_MAX,
+        )?;
+        if retry_budget < RESEARCH_RETRY_MIN {
+            return Err(MusicDiscoveryError::NoEvidence);
+        }
+        let retry_started = Instant::now();
+        let retry = tokio::time::timeout(
+            retry_budget,
+            research_backend.candidates(&request, None, None),
+        )
+        .await
+        .unwrap_or(Err(MusicDiscoveryError::Deadline));
+        crate::metrics::record_music_discovery_stage(
+            "research_retry",
+            result_outcome(&retry),
+            retry_started.elapsed(),
+        );
+        used_web_evidence = false;
+        retry?
+    } else {
+        initial?
+    };
 
     if research.status == ResearchStatus::NoEvidence || research.candidates.is_empty() {
         crate::metrics::record_music_discovery_resolution(
@@ -298,6 +334,7 @@ async fn discover_with_research(
             corroboration_started.elapsed(),
         );
         corroborated = true;
+        used_web_evidence |= web_evidence.is_some();
         research = corroboration?;
         if !corroboration_is_decisive(&research) {
             crate::metrics::record_music_discovery_resolution(
@@ -321,7 +358,7 @@ async fn discover_with_research(
     let provider_budget = stage_budget(deadline, SETTLEMENT_RESERVE, PROVIDER_MAX)?;
     let provider_deadline = tokio::time::Instant::now() + provider_budget;
     let provider_started = Instant::now();
-    let discovery_provenance = if web_evidence.is_some() {
+    let discovery_provenance = if used_web_evidence {
         "web_search+perplexity"
     } else {
         "perplexity"
@@ -811,7 +848,7 @@ fn canonical_source_url(value: &str) -> Option<String> {
     Some(url.to_string())
 }
 
-fn needs_corroboration(request: &MusicDiscoveryRequest, research: &CandidateEnvelope) -> bool {
+fn needs_corroboration(_request: &MusicDiscoveryRequest, research: &CandidateEnvelope) -> bool {
     if research.status != ResearchStatus::Resolved {
         return true;
     }
@@ -822,22 +859,7 @@ fn needs_corroboration(request: &MusicDiscoveryRequest, research: &CandidateEnve
         .candidates
         .get(1)
         .is_some_and(|second| first.support.saturating_sub(second.support) <= 10);
-    let criterion = normalized(&request.criterion);
-    let superlative = criterion.split_whitespace().any(|word| {
-        matches!(
-            word,
-            "most"
-                | "best"
-                | "least"
-                | "biggest"
-                | "highest"
-                | "lowest"
-                | "top"
-                | "newest"
-                | "latest"
-        )
-    });
-    first.support < 75 || first.sources.len() < 2 || close_second || superlative
+    first.support < 75 || first.sources.len() < 2 || close_second
 }
 
 fn evidence_disagreement(research: &CandidateEnvelope) -> bool {
@@ -1168,6 +1190,10 @@ mod tests {
         web_error: Option<MusicDiscoveryError>,
     }
 
+    struct WeakLeadResearch {
+        candidate_evidence: std::sync::Mutex<Vec<Option<String>>>,
+    }
+
     #[tonic::async_trait]
     impl CandidateResearch for WebAwareResearch {
         async fn web_search(&self, query: &str) -> Result<String, MusicDiscoveryError> {
@@ -1188,6 +1214,35 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push(web_evidence.map(str::to_owned));
+            Ok(CandidateEnvelope {
+                status: ResearchStatus::Resolved,
+                candidates: vec![candidate("Started From the Bottom", 92)],
+            })
+        }
+    }
+
+    #[tonic::async_trait]
+    impl CandidateResearch for WeakLeadResearch {
+        async fn web_search(&self, _query: &str) -> Result<String, MusicDiscoveryError> {
+            Ok("Weak search leads that do not identify a track.".to_owned())
+        }
+
+        async fn candidates(
+            &self,
+            _request: &MusicDiscoveryRequest,
+            _prior: Option<&CandidateEnvelope>,
+            web_evidence: Option<&str>,
+        ) -> Result<CandidateEnvelope, MusicDiscoveryError> {
+            self.candidate_evidence
+                .lock()
+                .unwrap()
+                .push(web_evidence.map(str::to_owned));
+            if web_evidence.is_some() {
+                return Ok(CandidateEnvelope {
+                    status: ResearchStatus::NoEvidence,
+                    candidates: vec![],
+                });
+            }
             Ok(CandidateEnvelope {
                 status: ResearchStatus::Resolved,
                 candidates: vec![candidate("Started From the Bottom", 92)],
@@ -1297,7 +1352,11 @@ mod tests {
             ]
         );
         let evidence = research.candidate_evidence.lock().unwrap();
-        assert_eq!(evidence.len(), 2, "initial research plus corroboration");
+        assert_eq!(
+            evidence.len(),
+            1,
+            "clear evidence should settle in one research call"
+        );
         assert!(evidence.iter().all(|value| {
             value
                 .as_deref()
@@ -1349,13 +1408,59 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn weak_web_leads_retry_semantic_research_before_provider_verification() {
+        let research = WeakLeadResearch {
+            candidate_evidence: std::sync::Mutex::new(Vec::new()),
+        };
+        let catalog = FixedProviderCatalog {
+            responses: std::sync::Mutex::new(std::collections::VecDeque::from([
+                CenterCatalogResponse {
+                    provider: "youtube_music".to_owned(),
+                    ranking_provenance: "not_ranked".to_owned(),
+                    items: vec![CenterTrack {
+                        title: "Started From the Bottom".to_owned(),
+                        artists: vec!["Drake".to_owned()],
+                    }],
+                },
+            ])),
+            queries: std::sync::Mutex::new(Vec::new()),
+        };
+
+        let track = discover_with_research(
+            request(),
+            "wearer",
+            "admin-token",
+            Instant::now() + Duration::from_secs(20),
+            &research,
+            &catalog,
+        )
+        .await
+        .expect("semantic research should retry without weak retrieval leads");
+
+        assert_eq!(track.title, "Started From the Bottom");
+        assert_eq!(track.provider, "youtube_music");
+        assert_eq!(track.discovery_provenance, "perplexity");
+        assert_eq!(
+            *research.candidate_evidence.lock().unwrap(),
+            vec![
+                Some("Weak search leads that do not identify a track.".to_owned()),
+                None,
+            ]
+        );
+        assert_eq!(
+            *catalog.queries.lock().unwrap(),
+            vec!["Started From the Bottom".to_owned()]
+        );
+    }
+
     #[test]
-    fn subjective_superlatives_and_close_support_require_one_corroboration() {
+    fn only_weak_or_conflicting_subjective_evidence_requires_corroboration() {
         let strong = CandidateEnvelope {
             status: ResearchStatus::Resolved,
             candidates: vec![candidate("Started From the Bottom", 92)],
         };
-        assert!(needs_corroboration(&request(), &strong));
+        assert!(!needs_corroboration(&request(), &strong));
 
         let ordinary = MusicDiscoveryRequest {
             criterion: "suitable for a relaxed dinner".to_owned(),
