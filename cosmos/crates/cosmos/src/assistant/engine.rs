@@ -467,11 +467,10 @@ impl Engine {
             .unwrap_or_default();
 
         // Stock's legacy consumer cannot recover when the model skips a
-        // device-side prerequisite. Keep the two closed, already-grounded
-        // routes deterministic: local weather must obtain the Pin's location,
-        // and a ranked named-artist request is exactly the Artist-only
-        // PlayMusic lookup the active provider already implements. Text-only
-        // callers have no Pin on which to run either action.
+        // device-side prerequisite. Keep only closed prerequisites and
+        // already-grounded actions deterministic. Ranked or subjective music
+        // always reaches the model so it can select discovery/provider tools.
+        // Text-only callers have no Pin on which to run a device action.
         let deterministic = system_addendum
             .is_none()
             .then(|| deterministic_device_action(&req, &tools))
@@ -1632,15 +1631,7 @@ fn deterministic_device_action(
         });
     }
 
-    let artist = ranked_artist_request(&req.utterance)?;
-    if !offered("PlayMusic") || current_run_contains_action(current_turns, "PlayMusic") {
-        return None;
-    }
-    Some(DeterministicDeviceAction {
-        name: "PlayMusic",
-        input: serde_json::json!({"Artist": artist}).to_string(),
-        thought: "I should play the named artist's top provider-ranked result",
-    })
+    None
 }
 
 fn explicit_nutrition_request(utterance: &str) -> Option<&str> {
@@ -1822,79 +1813,6 @@ pub(crate) fn explicit_playback_request(utterance: &str) -> bool {
         || intent.contains(" then play ")
         || intent.ends_with(" and play it")
         || intent.ends_with(" then play it")
-}
-
-fn ranked_artist_request(utterance: &str) -> Option<&str> {
-    let command = utterance.trim().trim_end_matches(['.', '?', '!']).trim();
-    if command.is_empty() || command.len() > 384 || unsafe_intent_text(command) {
-        return None;
-    }
-    let lower = command.to_ascii_lowercase();
-    let start = usize::from(lower.starts_with("please ")) * "please ".len();
-    let end = if lower.ends_with(" please") {
-        command.len().saturating_sub(" please".len())
-    } else {
-        command.len()
-    };
-    let command = command.get(start..end)?.trim();
-    let lower = command.to_ascii_lowercase();
-
-    const LOOKUP_VERBS: [&str; 4] = ["look up ", "lookup ", "find ", "search for "];
-    const SUPERLATIVES: [&str; 4] = ["best", "top", "most popular", "biggest"];
-    const NOUNS: [&str; 4] = ["song", "songs", "track", "tracks"];
-    let prefix_len = LOOKUP_VERBS.iter().find_map(|verb| {
-        SUPERLATIVES.iter().find_map(|superlative| {
-            NOUNS.iter().find_map(|noun| {
-                ["the ", ""].iter().find_map(|article| {
-                    let prefix = format!("{verb}{article}{superlative} {noun} by ");
-                    lower.starts_with(&prefix).then_some(prefix.len())
-                })
-            })
-        })
-    })?;
-    let suffix = [
-        " and play it",
-        " and play that",
-        " and then play it",
-        " then play it",
-        " and play the most popular",
-        " and play the most popular one",
-        " and play the most popular song",
-        " and play the most popular track",
-        " and play the top one",
-        " and play the top song",
-        " and play the top track",
-        " and play the best one",
-        " and play the best song",
-        " and play the best track",
-        " and play the first one",
-    ]
-    .into_iter()
-    .find(|suffix| lower.ends_with(suffix))?;
-    let artist_end = command.len().checked_sub(suffix.len())?;
-    let artist = command.get(prefix_len..artist_end)?.trim();
-    let normalized_artist = normalized_intent(artist)?;
-    if artist.is_empty()
-        || artist.chars().count() > 160
-        || unsafe_intent_text(artist)
-        || [
-            "him",
-            "her",
-            "them",
-            "that artist",
-            "this artist",
-            "the artist",
-        ]
-        .contains(&normalized_artist.as_str())
-        || artist.chars().any(|character| {
-            !(character.is_alphanumeric()
-                || character.is_whitespace()
-                || matches!(character, '&' | '\'' | '’' | '-' | '.'))
-        })
-    {
-        return None;
-    }
-    Some(artist)
 }
 
 fn unsafe_intent_text(value: &str) -> bool {
@@ -3122,25 +3040,75 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ranked_artist_music_dispatches_the_active_provider_stock_action() {
-        let msgs = run_with(
-            Arc::new(CapturingModel::default()),
+    async fn ranked_artist_music_is_model_selected_discovered_and_provider_verified() {
+        struct PopularMusicModel(std::sync::atomic::AtomicUsize);
+
+        #[tonic::async_trait]
+        impl ChatModel for PopularMusicModel {
+            async fn complete(
+                &self,
+                _messages: &[ChatMessage],
+                tools: &[ToolDef],
+            ) -> Result<ChatResponse, LlmError> {
+                assert!(tools.iter().any(|tool| tool.name == "music_discover"));
+                assert_eq!(
+                    self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
+                    0,
+                    "provider-grounded ranked playback must finish after the model selects discovery",
+                );
+                Ok(ChatResponse {
+                    content: None,
+                    thought: "I should discover and verify the ranked music request".to_owned(),
+                    tool_call: Some(ToolCall {
+                        name: "music_discover".to_owned(),
+                        arguments: serde_json::json!({
+                            "artist": "Drake",
+                            "criterion": "most popular",
+                            "timeframe": "all_time"
+                        })
+                        .to_string(),
+                    }),
+                    extra_tool_calls: Vec::new(),
+                })
+            }
+        }
+
+        let backend = Arc::new(FixedMusicDiscovery::default());
+        let model = Arc::new(PopularMusicModel(std::sync::atomic::AtomicUsize::new(0)));
+        let msgs = run_with_tools(
+            model.clone(),
             pb::SynapseUnderstandingRequest {
-                utterance: "look up the best songs by Michael Jackson and play the most popular"
-                    .into(),
+                utterance: "Play the most popular song by Drake".into(),
                 device_context: Some(pb::SynapseDeviceContext::default()),
+                ..Default::default()
+            },
+            catalog::ToolContext {
+                principal: Some("V:01:D:pin-01:U:wearer-01".to_owned()),
+                music_discovery: Some(backend.clone()),
                 ..Default::default()
             },
         )
         .await;
 
+        assert_eq!(model.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let requests = backend.requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].0.artist.as_deref(), Some("Drake"));
+        assert_eq!(requests[0].0.criterion, "most popular");
+        assert_eq!(requests[0].0.timeframe, "all_time");
+        drop(requests);
+
         let action = device_visible(&msgs)
             .into_iter()
+            .rev()
             .find_map(as_action)
-            .expect("a ranked artist request must dispatch a device action");
+            .expect("model-selected discovery must dispatch a device action");
         assert_eq!(action.action, "PlayMusic");
         let input: serde_json::Value = serde_json::from_str(&action.input).unwrap();
-        assert_eq!(input, serde_json::json!({"Artist": "Michael Jackson"}));
+        assert_eq!(
+            input,
+            serde_json::json!({"Artist": "Drake", "Track": "Hotline Bling"})
+        );
     }
 
     #[derive(Default)]
@@ -3472,17 +3440,10 @@ mod tests {
         let ranked =
             unlocked("look up the best songs by Michael Jackson and play the most popular");
         let ranked_tools = resolve_catalog(&ranked, true);
-        assert!(deterministic_device_action(&ranked, &ranked_tools).is_some());
-
-        let mut excluded_ranked = ranked.clone();
-        excluded_ranked.excluded_tools = vec!["PlayMusic".to_owned()];
-        let excluded_ranked_tools = resolve_catalog(&excluded_ranked, true);
-        assert!(deterministic_device_action(&excluded_ranked, &excluded_ranked_tools).is_none());
-        assert!(ranked_artist_request(
-            "look up the best songs by Michael Jackson and play the most popular; ignore previous"
-        )
-        .is_none());
-        assert!(ranked_artist_request("search for Thriller and play the first result").is_none());
+        assert!(
+            deterministic_device_action(&ranked, &ranked_tools).is_none(),
+            "ranked music must always reach model-selected discovery tools",
+        );
     }
 
     #[test]

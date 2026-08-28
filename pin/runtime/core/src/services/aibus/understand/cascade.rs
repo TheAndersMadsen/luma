@@ -187,13 +187,15 @@ impl UnderstandHandler {
                 None
             };
         let planned_music = plan_catalog_or_contextual_music_action(req, recent_track.as_ref());
-        // Content-free observability: prove on-device whether the
-        // deterministic music grammar saw this utterance and what it decided.
+        // Content-free degraded-mode observability. A ranked request remains
+        // unplanned here because provider-backed selection requires the
+        // semantic runtime; the boolean makes an unavailable-runtime failure
+        // distinguishable from an unrelated music phrase.
         if crate::synapse::capabilities::music::matches_direct_top_grammar(&req.utterance) {
             info!(
                 planned = planned_music.is_some(),
                 had_recent_track = recent_track.is_some(),
-                "deterministic direct-top music grammar matched"
+                "ranked music grammar reached the degraded fallback"
             );
         }
         if let Some(planned) = planned_music {

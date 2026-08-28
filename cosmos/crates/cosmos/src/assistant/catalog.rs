@@ -234,7 +234,7 @@ fn music_discovery_schema() -> Value {
                 "type": "string",
                 "minLength": 1,
                 "maxLength": 80,
-                "description": "A short semantic criterion such as viral, controversial, influential, underrated, or suitable for a situation."
+                "description": "A short semantic criterion such as most popular, top, best, viral, controversial, influential, underrated, or suitable for a situation."
             },
             "timeframe": {
                 "type": "string",
@@ -493,7 +493,7 @@ const SERVER_TOOLS: &[ServerTool] = &[
     },
     ServerTool {
         name: "music_discover",
-        description: "Discover one research-based or subjective music choice and verify that exact track against the wearer's active provider. Use this for criteria such as viral, controversial, influential, trending, newest, underrated, similar-to, and mood or situation requests. Preserve an explicit release year. Exact named tracks and ordinary transport controls do not need this tool.",
+        description: "Discover one research-based, ranked, or subjective music choice and verify that exact track against the wearer's active provider. Use this for criteria such as most popular, top, best, viral, controversial, influential, trending, newest, underrated, similar-to, and mood or situation requests. Preserve an explicit release year. Exact named tracks and ordinary transport controls do not need this tool.",
         parameters: music_discovery_schema,
     },
 ];

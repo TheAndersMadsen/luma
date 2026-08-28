@@ -205,8 +205,9 @@ pub const SETS: &[ToolSet] = &[
         // deliberately not used: the tools below come from our own recovered
         // device-action interface and the wording is ours.
         guidance: "This turn handles music playback only. For any research-based or subjective \
-                   selection criterion — including viral, controversial, influential, trending, \
-                   newest, underrated, similar-to, mood, or situation requests — call \
+                   selection criterion — including most popular, top, best, viral, controversial, \
+                   influential, trending, newest, underrated, similar-to, mood, or situation \
+                   requests — call \
                    music_discover once; preserve an explicit release year and short additional \
                    constraints. It verifies the choice against the active provider. Resolve ordinary \
                    requests to the narrowest thing that fits — a track, artist, album, or genre — and \

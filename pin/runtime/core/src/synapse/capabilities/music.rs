@@ -298,7 +298,8 @@ pub fn prefers_text_music_over_image(request: &SynapseUnderstandingRequest) -> b
         }
         return !action_is_excluded(request, action.action_name());
     }
-    if named_artist_lookup_and_play_top_request(&command).is_some()
+    if explicit_top_artist_request(&command).is_some()
+        || named_artist_lookup_and_play_top_request(&command).is_some()
         || catalog_lookup_and_play_rank_one_request(&command).is_some()
     {
         return !action_is_excluded(request, PLAY_MUSIC);
@@ -603,30 +604,14 @@ fn plan_catalog_or_contextual_music_action_inner(
         return None;
     }
     let command = normalized_command(&request.utterance)?;
-    // A ranked artist request needs no semantic planner: stock PlayMusic
-    // resolves an Artist-only action through the active provider's artist
-    // query and starts that provider's top row. Keep the more general catalog
-    // rank-one form in the read-tool path because its query can name tracks,
-    // albums, playlists, or artists and therefore needs the returned row.
-    if let Some(artist) = named_artist_lookup_and_play_top_request(&command) {
-        if request
-            .device_context
-            .as_ref()
-            .is_none_or(|context| context.is_locked)
-            || !allow_provider_selection
-            || action_is_excluded(request, PLAY_MUSIC)
-            || !valid_catalog_value(artist)
-            || deictic_artist(artist)
-        {
-            return None;
-        }
-        return Some(PlannedMusicAction {
-            action_name: PLAY_MUSIC,
-            thought: "I should play the named artist's top provider-ranked result",
-            input_json: serde_json::json!({"Artist": artist}).to_string(),
-        });
-    }
-    if catalog_lookup_and_play_rank_one_request(&command).is_some() {
+    // Ranked and otherwise subjective selection belongs to the semantic tool
+    // loop. The model chooses the research/catalog tool, and only a returned
+    // provider row may ground PlayMusic. These parsers remain safety/finality
+    // classifiers; they must never decide the song or bypass that loop.
+    if explicit_top_artist_request(&command).is_some()
+        || named_artist_lookup_and_play_top_request(&command).is_some()
+        || catalog_lookup_and_play_rank_one_request(&command).is_some()
+    {
         return None;
     }
     if contains_compound_command(&command) {
@@ -738,27 +723,10 @@ fn plan_catalog_or_contextual_music_action_inner(
                 })
             }
             ContextualMusicIntent::PlayPrimaryArtistTopSong => {
-                if !allow_provider_selection {
-                    return None;
-                }
-                if action_is_excluded(request, PLAY_MUSIC) {
-                    return None;
-                }
-                let artist = track.artists.first()?.trim();
-                if !valid_catalog_value(artist) {
-                    return None;
-                }
-                // Artist-only is intentional. Decompiled stock
-                // MediaManagerPlayMediaResolver maps it to
-                // queryWithArtistName. Penumbra resolves an exact Spotify
-                // artist identity and uses Spotify's artist top-tracks
-                // endpoint, preserving the stock top-song behavior without
-                // inventing a title in the language layer.
-                Some(PlannedMusicAction {
-                    action_name: PLAY_MUSIC,
-                    thought: "I should play the primary current artist's top catalog result",
-                    input_json: serde_json::json!({"Artist": artist}).to_string(),
-                })
+                // The verified recent artist is context, not a decision about
+                // what "top" means. Leave ranked selection to the semantic
+                // tool loop just like an explicitly named artist.
+                return None;
             }
         };
     }
@@ -769,16 +737,6 @@ fn plan_catalog_or_contextual_music_action_inner(
 
     if action_is_excluded(request, PLAY_MUSIC) || looks_like_question(&command) {
         return None;
-    }
-    if let Some(artist) = explicit_top_artist_request(&command) {
-        if !valid_catalog_value(artist) || deictic_artist(artist) {
-            return None;
-        }
-        return Some(PlannedMusicAction {
-            action_name: PLAY_MUSIC,
-            thought: "I should play the named artist's top catalog result",
-            input_json: serde_json::json!({"Artist": artist}).to_string(),
-        });
     }
     let (track, artist) = direct_track_request(&command)?;
     if !valid_catalog_value(track) || artist.is_some_and(|value| !valid_catalog_value(value)) {
@@ -1440,8 +1398,8 @@ fn direct_track_request(command: &str) -> Option<(&str, Option<&str>)> {
     explicit_track_label.then_some((rest, None))
 }
 
-/// Content-free diagnostic: does the utterance match the deterministic
-/// direct ranked grammar? Booleans only; used for cascade observability.
+/// Content-free diagnostic: does the utterance match the ranked artist
+/// grammar reserved for semantic discovery? Used only for route observability.
 pub(crate) fn matches_direct_top_grammar(utterance: &str) -> bool {
     normalized_command(utterance)
         .as_deref()

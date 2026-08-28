@@ -911,7 +911,7 @@ fn ai_music_classifier_never_receives_private_context_without_confirmed_unlock()
 }
 
 #[tokio::test]
-async fn ranked_artist_lookup_reaches_stock_music_without_the_semantic_runtime() {
+async fn ranked_artist_lookup_fails_honestly_without_the_semantic_runtime() {
     let (_directory, _live_config, handler, _automation) = test_understand_handler(false).await;
     let utterance = "look up the best songs by Michael Jackson and play the most popular";
     let request = SynapseUnderstandingRequest {
@@ -924,18 +924,13 @@ async fn ranked_artist_lookup_reaches_stock_music_without_the_semantic_runtime()
         ..Default::default()
     };
 
-    // The test handler intentionally has no agentic external clients. This
-    // bounded ranked-artist grammar must still reach stock PlayMusic: the
-    // stock provider resolves an Artist-only action to its ranked top track,
-    // so this request does not need an LLM merely to select the first result.
+    // The test handler intentionally has no agentic external clients. Ranked
+    // selection must not fall back to an Artist-only provider shortcut.
     let action = full_handler_action(&handler, request.clone())
         .await
-        .expect("ranked artist lookup should return one stock action");
-    assert_eq!(action.action, native_actions::PLAY_MUSIC);
-    assert_eq!(
-        serde_json::from_str::<serde_json::Value>(&action.input).unwrap(),
-        serde_json::json!({"Artist": "Michael Jackson"})
-    );
+        .expect("ranked artist lookup should return an honest spoken failure");
+    assert_eq!(action.action, native_actions::RESPOND);
+    assert!(action.input.contains("assistant service"));
 
     let mut response_excluded = request;
     response_excluded.excluded_tools.push(native_actions::PLAY_MUSIC.into());
@@ -2504,7 +2499,7 @@ fn llm_content_is_redacted_from_understand_logs() {
 }
 
 #[tokio::test]
-async fn natural_ranked_phrasing_survives_harness_shaped_exclusions() {
+async fn natural_ranked_phrasing_reaches_agentic_path_with_harness_shaped_exclusions() {
     // Mirror the release-harness probe request exactly: same utterance,
     // same benign excluded tools, explicit unlocked context.
     let (_directory, _live_config, handler, _automation_store) =
@@ -2518,19 +2513,26 @@ async fn natural_ranked_phrasing_survives_harness_shaped_exclusions() {
         native_actions::DECREMENT_VOLUME.to_string(),
     ];
 
-    let action = cascade_action(&handler, &request, "music-user")
-        .await
-        .expect("harness-shaped exclusions must not push the request to the model");
-
-    assert_eq!(action.action, native_actions::PLAY_MUSIC);
+    assert!(
+        handler
+            .run_local_text_fast_path(
+                &request,
+                "music-user",
+                utterance,
+                "music-user",
+                false,
+            )
+            .await
+            .unwrap()
+            .is_none(),
+        "benign exclusions must not restore the ranked-music shortcut",
+    );
 }
 
 #[tokio::test]
-async fn natural_ranked_phrasing_is_handled_by_the_pre_agentic_fast_path() {
-    // Pins the ORDER contract: deterministic catalog music must resolve in
-    // run_local_text_fast_path, which runs before any agentic model call
-    // in understand_inner. The cascade-level tests alone cannot prove this
-    // (production only reaches the cascade when agentic declines).
+async fn natural_ranked_phrasing_bypasses_the_pre_agentic_fast_path() {
+    // Pins the ORDER contract: subjective catalog selection must survive the
+    // local fast path and reach the model/tool loop.
     let (_directory, _live_config, handler, _automation_store) =
         test_understand_handler(false).await;
     for utterance in [
@@ -2538,19 +2540,14 @@ async fn natural_ranked_phrasing_is_handled_by_the_pre_agentic_fast_path() {
         "play the top song by Michael Jackson",
     ] {
         let request = request_with_user_turns(vec![user_turn("music-user", utterance)]);
-        let mut stream = handler
-            .run_local_text_fast_path(&request, "fast-run", utterance, "fast-run", false)
-            .await
-            .unwrap()
-            .unwrap_or_else(|| panic!("{utterance} must resolve in the local fast path"));
-        let response = stream.next().await.unwrap().unwrap();
-        let synapse_understanding_response::Body::Turn(turn) = response.body.unwrap() else {
-            panic!("fast path must return a turn");
-        };
-        let Some(synapse_chat_turn::Content::Action(action)) = turn.content else {
-            panic!("fast path must return an action turn");
-        };
-        assert_eq!(action.action, native_actions::PLAY_MUSIC, "{utterance}");
+        assert!(
+            handler
+                .run_local_text_fast_path(&request, "fast-run", utterance, "fast-run", false)
+                .await
+                .unwrap()
+                .is_none(),
+            "{utterance} bypassed model-selected discovery",
+        );
     }
 }
 
@@ -2685,39 +2682,45 @@ async fn trusted_current_turn_keeps_direct_music_actions_local_first() {
 }
 
 #[tokio::test]
-async fn natural_most_popular_phrasing_reaches_stock_music_without_a_model() {
+async fn natural_most_popular_phrasing_requires_the_agentic_music_path() {
     let (_directory, _live_config, handler, _automation_store) =
         test_understand_handler(false).await;
     let utterance = "play the most popular song by drake";
     let request = request_with_user_turns(vec![user_turn("music-user", utterance)]);
 
-    let action = cascade_action(&handler, &request, "music-user")
+    if let Some(mut stream) = handler
+        .run_local_text_fast_path(&request, "music-user", utterance, "music-user", false)
         .await
-        .expect("the natural ranked phrasing must reach stock PlayMusic deterministically");
-
-    assert_eq!(action.action, native_actions::PLAY_MUSIC);
-    assert_eq!(action.source(), SynapseSource::Server);
+        .unwrap()
+    {
+        panic!(
+            "a subjective ranked request bypassed the LLM: {:?}",
+            stream.next().await
+        );
+    }
 }
 
 #[tokio::test]
-async fn named_artist_top_lookup_reaches_the_stock_music_action_without_a_model() {
+async fn named_artist_top_lookup_requires_the_agentic_music_path() {
     let (_directory, _live_config, handler, _automation_store) =
         test_understand_handler(false).await;
     let utterance = "play the top song by Michael Jackson";
     let request = request_with_user_turns(vec![user_turn("music-user", utterance)]);
 
-    let action = cascade_action(&handler, &request, "music-user")
-        .await
-        .expect("the deterministic artist request must reach stock PlayMusic");
-
-    assert_eq!(action.action, native_actions::PLAY_MUSIC);
-    assert_eq!(action.source(), SynapseSource::Server);
-    assert!(action.device_payload.is_empty());
-    assert_eq!(
-        serde_json::from_str::<serde_json::Value>(&action.input).unwrap(),
-        serde_json::json!({"Artist": "Michael Jackson"}),
+    assert!(
+        handler
+            .run_local_text_fast_path(
+                &request,
+                "music-user",
+                utterance,
+                "music-user",
+                false,
+            )
+            .await
+            .unwrap()
+            .is_none(),
+        "ranked playback must not bypass model-selected discovery tools",
     );
-    assert!(!action.input.contains("Track"));
 }
 
 #[tokio::test]

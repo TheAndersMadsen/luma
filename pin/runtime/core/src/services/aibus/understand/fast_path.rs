@@ -194,12 +194,11 @@ impl UnderstandHandler {
             return Ok(Some(Box::pin(tokio_stream::once(Ok(response)))));
         }
 
-        // Deterministic catalog/contextual music stays ahead of model
-        // planning (product contract: local-first). This is the same planner
-        // the cascade fallback uses; running it here means an exact "play the
-        // top song by <artist>"-style request never pays a model round trip.
+        // Already-grounded catalog/contextual music stays ahead of model
+        // planning. Ranked or subjective selection is deliberately excluded:
+        // the semantic loop must choose research and provider tools first.
         if crate::synapse::capabilities::music::matches_direct_top_grammar(&req.utterance) {
-            info!("deterministic direct-top music grammar matched in local fast path");
+            info!("ranked music request bypassed the local fast path");
         }
         if let Some(planned) = plan_catalog_or_contextual_music_action(req, recent_track.as_ref()) {
             info!(

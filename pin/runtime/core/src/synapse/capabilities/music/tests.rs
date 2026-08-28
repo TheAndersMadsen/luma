@@ -919,24 +919,27 @@ fn track_status_is_active_only_accepts_playing() {
 }
 
 #[test]
-fn popular_song_followup_uses_primary_artist_without_guessing_a_title() {
+fn popular_song_requests_are_reserved_for_agentic_discovery() {
     let mut context = recent_track();
     context.artists.push("De La Soul".into());
-    assert_eq!(
-        action_input(
+    assert!(
+        plan_catalog_or_contextual_music_action(
             &request("Play the most popular song by this artist"),
             Some(&context)
-        ),
-        (PLAY_MUSIC.into(), serde_json::json!({"Artist": "Gorillaz"}))
+        )
+        .is_none()
     );
-    assert_eq!(
-        action_input(&request("Play the most popular song by Gorillaz"), None),
-        (PLAY_MUSIC.into(), serde_json::json!({"Artist": "Gorillaz"}))
+    assert!(
+        plan_catalog_or_contextual_music_action(
+            &request("Play the most popular song by Gorillaz"),
+            None,
+        )
+        .is_none()
     );
 }
 
 #[test]
-fn named_artist_lookup_and_play_uses_the_active_provider_stock_action() {
+fn named_artist_lookup_and_play_is_reserved_for_agentic_discovery() {
     for (utterance, artist) in [
         (
             "look up the best songs by Michael Jackson and play the most popular",
@@ -960,23 +963,16 @@ fn named_artist_lookup_and_play_uses_the_active_provider_stock_action() {
             Some(artist),
             "{utterance}",
         );
-        assert_eq!(
-            action_input(&request(utterance), None),
-            (PLAY_MUSIC.into(), serde_json::json!({"Artist": artist}))
-        );
+        assert!(plan_catalog_or_contextual_music_action(&request(utterance), None).is_none());
         assert!(
             prefers_text_music_over_image(&request(utterance)),
             "incidental image context swallowed exact artist playback: {utterance}",
-        );
-        assert!(
-            !is_ai_music_fallback_candidate(&request(utterance)),
-            "the deterministic provider-grounded request reached the classifier: {utterance}",
         );
     }
 }
 
 #[test]
-fn singular_and_anaphoric_lookup_and_play_use_the_same_stock_action() {
+fn singular_and_anaphoric_lookup_and_play_use_the_same_agentic_path() {
     // The phrasing a person actually used on the device. It matched neither the
     // plural-only prefixes nor the explicit-only tails, so it fell through to
     // the model and paid 3522ms for a decision this grammar already contains.
@@ -998,16 +994,7 @@ fn singular_and_anaphoric_lookup_and_play_use_the_same_stock_action() {
             Some(artist),
             "{utterance}",
         );
-        // Same downstream contract the plural/explicit forms already hold: the
-        // deterministic stock action owns it and the classifier never sees it.
-        assert_eq!(
-            action_input(&request(utterance), None),
-            (PLAY_MUSIC.into(), serde_json::json!({"Artist": artist}))
-        );
-        assert!(
-            !is_ai_music_fallback_candidate(&request(utterance)),
-            "the deterministic provider-grounded request reached the classifier: {utterance}",
-        );
+        assert!(plan_catalog_or_contextual_music_action(&request(utterance), None).is_none());
     }
 }
 
