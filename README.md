@@ -231,11 +231,14 @@ exact, scoped confirmation, and changing the action or its arguments invalidates
 that confirmation. Reversible playback and volume controls do not gain that
 extra confirmation step.
 
-Music discovery is one specialist A1/A2 tool. It can research a subjective or
-time-bound request, corroborate ambiguous rankings once, and try up to three
-evidence-ordered candidates against the active provider. Only the grounded
-provider result becomes a stock `PlayMusic` action. Play, pause, stop, and skip
-execute on the Pin once recognized; speech recognition may still use Cosmos.
+Music discovery is one specialist A1/A2 tool. For a subjective or time-bound
+request, it combines bounded evidence from the configured web-search path with
+Perplexity's semantic research, corroborates an ambiguous ranking once, and
+tries up to three evidence-ordered candidates against the active provider. A
+failed web-search source does not disable Perplexity, and no unverified result
+can start playback. Only the grounded provider result becomes a stock
+`PlayMusic` action. Play, pause, stop, and skip execute on the Pin once
+recognized; speech recognition may still use Cosmos.
 
 Production exposes content-free Prometheus counters for route, transport, model
 use and provenance, terminal state, duration, tool outcomes, and the bounded
