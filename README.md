@@ -240,6 +240,12 @@ can start playback. Only the grounded provider result becomes a stock
 `PlayMusic` action. Play, pause, stop, and skip execute on the Pin once
 recognized; speech recognition may still use Cosmos.
 
+Navigation requests first obtain the Pin's current location, then use the
+configured places and directions backends to return bounded, spoken route
+guidance. The recovered stock System Navigation app has no dispatchable action
+for starting a continuous turn-by-turn session, so Cosmos reports directions
+without claiming that live navigation has started.
+
 Production exposes content-free Prometheus counters for route, transport, model
 use and provenance, terminal state, duration, tool outcomes, and the bounded
 music-resolution stages. Wearer text, tool arguments, identity, and provider

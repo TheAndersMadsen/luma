@@ -162,6 +162,7 @@ internal object ConfigSecurity {
         addRoutingDefaults: Boolean,
     ): TextMigration {
         validateManagedTableShapes(text)
+        val visionConsent = readOptionalBoolean(text, "llm.vision_consent_acknowledged")
         val providerSections = setOf(
             "google_maps",
             "brave_search",
@@ -203,14 +204,26 @@ internal object ConfigSecurity {
                 }
                 append("[llm]\n")
                 append("provider = \"echo\"\n")
-                append("model = \"cosmos-remote\"\n\n")
+                append("model = \"cosmos-remote\"\n")
+                if (visionConsent != null) {
+                    append("vision_consent_acknowledged = $visionConsent\n")
+                }
+                append("\n")
                 append("[llm.memory]\n")
                 append("enabled = false\n")
             }
-        } else if (preserved.isEmpty()) {
-            ""
         } else {
-            "$preserved\n"
+            buildString {
+                if (preserved.isNotEmpty()) {
+                    append(preserved)
+                    append("\n")
+                }
+                if (visionConsent != null) {
+                    if (isNotEmpty()) append("\n")
+                    append("[llm]\n")
+                    append("vision_consent_acknowledged = $visionConsent\n")
+                }
+            }
         }
         return TextMigration(result, result != text)
     }

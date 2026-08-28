@@ -201,6 +201,19 @@ fn nearby_schema() -> Value {
     })
 }
 
+fn route_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "destination": {
+                "type": "string",
+                "description": "The destination the wearer named or selected from a preceding place result."
+            }
+        },
+        "required": ["destination"]
+    })
+}
+
 fn query_schema() -> Value {
     json!({
         "type": "object",
@@ -433,6 +446,13 @@ const SERVER_TOOLS: &[ServerTool] = &[
                       landmarks. Use when the wearer asks what is around them, \
                       passing their own coordinates or reported place.",
         parameters: nearby_schema,
+    },
+    ServerTool {
+        name: "route",
+        description: "Get grounded route directions from the Pin's current position to a destination. \
+                      Use after nearby when the wearer asks for directions or navigation. This returns \
+                      route guidance; never claim that continuous turn-by-turn navigation was started.",
+        parameters: route_schema,
     },
     ServerTool {
         name: "food_lookup",
@@ -1729,6 +1749,23 @@ pub async fn execute_tool_with(name: &str, arguments: &str, context: &ToolContex
                 Err(e) => e.observation("nearby-search"),
             }
         }
+        "route" => {
+            let destination = args
+                .get("destination")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim();
+            if destination.is_empty() {
+                return "No route destination was supplied.".to_string();
+            }
+            let Some((lat, lon)) = context.location else {
+                return NO_LOCATION.to_string();
+            };
+            match crate::backends::places::directions(lat, lon, destination.to_owned()).await {
+                Ok(route) => describe_route(&route),
+                Err(e) => e.observation("directions"),
+            }
+        }
         "food_lookup" => {
             let q = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
             if q.trim().is_empty() {
@@ -2072,6 +2109,70 @@ fn describe_places(found: &[cosmos_protocol::aibus::NearbyPlace]) -> String {
         })
         .collect::<Vec<_>>()
         .join("; ")
+}
+
+fn describe_route(route: &cosmos_protocol::aibus::NavigationDirectionsResponse) -> String {
+    if route.steps.is_empty() {
+        return "No route was found to that destination.".to_string();
+    }
+
+    let mut overview = Vec::new();
+    if let Some(summary) = plain_route_instruction(&route.summary) {
+        overview.push(summary);
+    }
+    if let Some(distance) = route
+        .total_distance
+        .as_ref()
+        .and_then(|distance| plain_route_instruction(&distance.text))
+    {
+        overview.push(distance);
+    }
+    if let Some(duration) = route
+        .total_duration
+        .as_ref()
+        .and_then(|duration| plain_route_instruction(&duration.text))
+    {
+        overview.push(duration);
+    }
+
+    let steps = route
+        .steps
+        .iter()
+        .take(8)
+        .filter_map(|step| plain_route_instruction(&step.instruction))
+        .collect::<Vec<_>>();
+    let overview = if overview.is_empty() {
+        "Route found".to_owned()
+    } else {
+        overview.join(", ")
+    };
+    if steps.is_empty() {
+        overview
+    } else {
+        format!("{overview}. Directions: {}", steps.join("; "))
+    }
+}
+
+fn plain_route_instruction(value: &str) -> Option<String> {
+    let mut plain = String::with_capacity(value.len());
+    let mut inside_tag = false;
+    for character in value.chars().take(1_024) {
+        match character {
+            '<' => inside_tag = true,
+            '>' => inside_tag = false,
+            _ if !inside_tag && !character.is_control() => plain.push(character),
+            _ => {}
+        }
+    }
+    let plain = plain
+        .replace("&nbsp;", " ")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    (!plain.is_empty()).then_some(plain)
 }
 
 /// Recall what the wearer asked to remember.
@@ -2459,6 +2560,45 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn route_requires_the_pin_location_instead_of_guessing_an_origin() {
+        let answer = execute_tool_with(
+            "route",
+            &json!({"destination": "Central Station"}).to_string(),
+            &ToolContext::default(),
+        )
+        .await;
+        assert!(answer.contains("No location is available"));
+    }
+
+    #[test]
+    fn route_observation_is_bounded_plain_text() {
+        let route = cosmos_protocol::aibus::NavigationDirectionsResponse {
+            summary: "<b>Main</b> road".to_owned(),
+            total_distance: Some(cosmos_protocol::aibus::NavigationDistance {
+                text: "<span>2 km</span>".to_owned(),
+                value: 2_000,
+            }),
+            total_duration: Some(cosmos_protocol::aibus::NavigationDuration {
+                text: "20&nbsp;mins".to_owned(),
+                value: 1_200,
+            }),
+            steps: vec![
+                cosmos_protocol::aibus::NavigationStep {
+                    instruction: "Turn <b>left</b> onto Main&nbsp;Street".to_owned(),
+                    ..Default::default()
+                };
+                12
+            ],
+        };
+
+        let observation = describe_route(&route);
+        assert!(observation.starts_with("Main road, 2 km, 20 mins. Directions:"));
+        assert!(observation.contains("Turn left onto Main Street"));
+        assert!(!observation.contains('<'));
+        assert_eq!(observation.matches("Turn left").count(), 8);
+    }
+
     /// Pure-date recall must work: the schema invites it, so the handler must
     /// serve it. "What did I ask last week?" is the archive's own example.
     #[tokio::test]
@@ -2689,6 +2829,7 @@ mod tests {
         for expected in [
             "weather",
             "nearby",
+            "route",
             "food_lookup",
             "remember",
             "music_discover",

@@ -1597,6 +1597,30 @@ fn deterministic_device_action(
         .unwrap_or_default();
     let offered = |name: &str| tools.iter().any(|tool| tool.name == name);
 
+    if let Some(request) = explicit_nutrition_request(&req.utterance) {
+        if offered("ManageNutrition")
+            && !current_run_contains_action(current_turns, "ManageNutrition")
+        {
+            return Some(DeterministicDeviceAction {
+                name: "ManageNutrition",
+                input: serde_json::json!({"Request": request}).to_string(),
+                thought: "The wearer explicitly requested the stock nutrition agent",
+            });
+        }
+    }
+
+    if explicit_route_request(&req.utterance)
+        && req.location.is_none()
+        && offered("GetCurrentLocation")
+        && !current_run_contains_action(current_turns, "GetCurrentLocation")
+    {
+        return Some(DeterministicDeviceAction {
+            name: "GetCurrentLocation",
+            input: "{}".to_owned(),
+            thought: "I should get the Pin's current location before finding the route",
+        });
+    }
+
     if local_weather_request(&req.utterance)
         && offered("GetCurrentLocation")
         && !current_run_contains_action(current_turns, "GetCurrentLocation")
@@ -1617,6 +1641,104 @@ fn deterministic_device_action(
         input: serde_json::json!({"Artist": artist}).to_string(),
         thought: "I should play the named artist's top provider-ranked result",
     })
+}
+
+fn explicit_nutrition_request(utterance: &str) -> Option<&str> {
+    const MAX_NUTRITION_REQUEST_BYTES: usize = 512;
+
+    let utterance = utterance.trim();
+    if utterance.is_empty()
+        || utterance.len() > MAX_NUTRITION_REQUEST_BYTES
+        || utterance.chars().any(|character| {
+            character == '\0' || (character.is_control() && !character.is_whitespace())
+        })
+    {
+        return None;
+    }
+
+    let mut normalized = utterance
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || character.is_whitespace() {
+                character.to_ascii_lowercase()
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    for prefix in [
+        "can you please ",
+        "could you please ",
+        "would you please ",
+        "can you ",
+        "could you ",
+        "would you ",
+        "please ",
+    ] {
+        if let Some(rest) = normalized.strip_prefix(prefix) {
+            normalized = rest.to_owned();
+            break;
+        }
+    }
+
+    if normalized.starts_with("i ate at ") || normalized.starts_with("i just ate at ") {
+        return None;
+    }
+    let starts_with_any = |prefixes: &[&str]| {
+        prefixes
+            .iter()
+            .any(|prefix| normalized == prefix.trim_end() || normalized.starts_with(prefix))
+    };
+    let explicit = starts_with_any(&[
+        "i ate ",
+        "i just ate ",
+        "i drank ",
+        "log that i ate ",
+        "track that i ate ",
+        "track my meal ",
+        "track my food ",
+        "log my meal ",
+        "log my food ",
+        "add this meal to my food log",
+        "add this food to my food log",
+        "what are the nutrition facts for ",
+        "what is the nutrition information for ",
+        "nutrition information for ",
+        "nutrition facts for ",
+        "how many calories are in ",
+        "how many calories in ",
+        "how much protein is in ",
+        "how much protein in ",
+        "how much sugar is in ",
+        "how much sugar in ",
+    ]) || matches!(
+        normalized.as_str(),
+        "what have i eaten today"
+            | "what did i eat today"
+            | "what have i eaten"
+            | "show my food log"
+            | "show me my food log"
+            | "how many calories did i eat today"
+            | "how many calories have i eaten today"
+    ) || (normalized.starts_with("what have i eaten in the last ")
+        && normalized.ends_with(" days"))
+        || (normalized.starts_with("show my food log for the last ")
+            && normalized.ends_with(" days"));
+    explicit.then_some(utterance)
+}
+
+fn explicit_route_request(utterance: &str) -> bool {
+    let Some(normalized) = normalized_intent(utterance) else {
+        return false;
+    };
+    normalized.starts_with("navigate to ")
+        || normalized.starts_with("give me directions to ")
+        || normalized.starts_with("how do i get to ")
+        || (normalized.starts_with("find the nearest ")
+            && normalized.ends_with(" and navigate there"))
 }
 
 fn normalized_intent(value: &str) -> Option<String> {
@@ -3361,6 +3483,107 @@ mod tests {
         )
         .is_none());
         assert!(ranked_artist_request("search for Thriller and play the first result").is_none());
+    }
+
+    #[test]
+    fn explicit_food_requests_enter_the_stock_nutrition_agent() {
+        let unlocked = |utterance: &str| pb::SynapseUnderstandingRequest {
+            utterance: utterance.to_owned(),
+            device_context: Some(pb::SynapseDeviceContext::default()),
+            ..Default::default()
+        };
+
+        for utterance in [
+            "What are the nutrition facts for a banana?",
+            "Log that I ate a banana.",
+            "What have I eaten today?",
+            "Show my food log for the last 7 days.",
+        ] {
+            let request = unlocked(utterance);
+            let tools = resolve_catalog(&request, true);
+            let action = deterministic_device_action(&request, &tools).unwrap_or_else(|| {
+                panic!("food request did not enter ManageNutrition: {utterance}")
+            });
+            assert_eq!(action.name, "ManageNutrition");
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&action.input).unwrap(),
+                serde_json::json!({"Request": utterance}),
+            );
+        }
+
+        let mut locked = unlocked("Log that I ate a banana.");
+        locked.device_context.as_mut().unwrap().is_locked = true;
+        let locked_tools = resolve_catalog(&locked, true);
+        assert!(deterministic_device_action(&locked, &locked_tools).is_none());
+
+        let mut excluded = unlocked("Log that I ate a banana.");
+        excluded.excluded_tools = vec!["ManageNutrition".to_owned()];
+        let excluded_tools = resolve_catalog(&excluded, true);
+        assert!(deterministic_device_action(&excluded, &excluded_tools).is_none());
+
+        let mut replayed = unlocked("Log that I ate a banana.");
+        replayed.device_context.as_mut().unwrap().turns = vec![pb::SynapseChatTurn {
+            identifier: "nutrition-action".into(),
+            content: Some(pb::synapse_chat_turn::Content::Action(
+                pb::SynapseActionContent {
+                    action: "ManageNutrition".into(),
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        }];
+        let replayed_tools = resolve_catalog(&replayed, true);
+        assert!(deterministic_device_action(&replayed, &replayed_tools).is_none());
+
+        for unrelated in [
+            "I ate at Noma.",
+            "Show me restaurants nearby.",
+            "Tell me about nutrition policy.",
+        ] {
+            assert!(
+                explicit_nutrition_request(unrelated).is_none(),
+                "unrelated request was claimed as stock nutrition: {unrelated}",
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_navigation_starts_with_the_pin_location_preflight() {
+        let unlocked = || pb::SynapseUnderstandingRequest {
+            utterance: "Find the nearest coffee shop and navigate there.".to_owned(),
+            device_context: Some(pb::SynapseDeviceContext::default()),
+            ..Default::default()
+        };
+        let request = unlocked();
+        let tools = resolve_catalog(&request, true);
+        let action = deterministic_device_action(&request, &tools)
+            .expect("navigation did not request the Pin's current location");
+        assert_eq!(action.name, "GetCurrentLocation");
+        assert_eq!(action.input, "{}");
+
+        let mut locked = unlocked();
+        locked.device_context.as_mut().unwrap().is_locked = true;
+        let locked_tools = resolve_catalog(&locked, true);
+        assert!(deterministic_device_action(&locked, &locked_tools).is_none());
+
+        let mut excluded = unlocked();
+        excluded.excluded_tools = vec!["GetCurrentLocation".to_owned()];
+        let excluded_tools = resolve_catalog(&excluded, true);
+        assert!(deterministic_device_action(&excluded, &excluded_tools).is_none());
+
+        let mut replayed = unlocked();
+        replayed.device_context.as_mut().unwrap().turns = vec![pb::SynapseChatTurn {
+            identifier: "location-action".into(),
+            content: Some(pb::synapse_chat_turn::Content::Action(
+                pb::SynapseActionContent {
+                    action: "GetCurrentLocation".into(),
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        }];
+        let replayed_tools = resolve_catalog(&replayed, true);
+        assert!(deterministic_device_action(&replayed, &replayed_tools).is_none());
     }
 
     #[tokio::test]

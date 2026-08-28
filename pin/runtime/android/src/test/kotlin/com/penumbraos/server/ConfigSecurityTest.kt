@@ -17,6 +17,7 @@ class ConfigSecurityTest {
             [llm]
             provider = "openai-compatible"
             api_key = "secret"
+            vision_consent_acknowledged = true
 
             [weather]
             pirate_weather_api_key = "secret"
@@ -41,6 +42,7 @@ class ConfigSecurityTest {
         assertTrue(migrated.text.contains("trust_all_contacts = true"))
         assertTrue(migrated.text.contains("provider = \"echo\""))
         assertTrue(migrated.text.contains("model = \"cosmos-remote\""))
+        assertTrue(migrated.text.contains("vision_consent_acknowledged = true"))
         assertTrue(migrated.text.contains("enabled = false"))
         assertFalse(migrated.text.contains("api_key"))
         assertFalse(migrated.text.contains("[google_maps]"))
@@ -60,6 +62,16 @@ class ConfigSecurityTest {
         )
 
         assertEquals("[server]\ndisplay_name = \"Kept\"\n", migrated.text)
+    }
+
+    @Test
+    fun localOverlayKeepsOnlyPinLocalVisionConsentFromLlm() {
+        val migrated = ConfigSecurity.enforceCosmosProviderAuthority(
+            "[llm]\nprovider = \"openai\"\napi_key = \"secret\"\nvision_consent_acknowledged = true\n",
+            false,
+        )
+
+        assertEquals("[llm]\nvision_consent_acknowledged = true\n", migrated.text)
     }
 
     @Test
