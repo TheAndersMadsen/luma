@@ -499,15 +499,23 @@ async fn verify_candidates(
     provider_deadline: tokio::time::Instant,
     discovery_provenance: &str,
 ) -> Result<(GroundedMusicTrack, usize), MusicDiscoveryError> {
-    for (index, candidate) in candidates.iter().enumerate() {
-        let response = tokio::time::timeout_at(
-            provider_deadline,
-            catalog.query(candidate, principal, admin_token),
-        )
-        .await
-        .map_err(|_| MusicDiscoveryError::Deadline)??;
-        if let Ok(track) = grounded_candidate(candidate, response, discovery_provenance) {
-            return Ok((track, index));
+    // The Pin's provider-backed catalog is live search, not a stable database
+    // snapshot. A single exact candidate has occasionally been absent from one
+    // YouTube Music result page and present in the next response under a second
+    // later. Retry only that one already-researched candidate; multiple
+    // candidates already give the provider independent exact-match chances.
+    let passes = if candidates.len() == 1 { 2 } else { 1 };
+    for _ in 0..passes {
+        for (index, candidate) in candidates.iter().enumerate() {
+            let response = tokio::time::timeout_at(
+                provider_deadline,
+                catalog.query(candidate, principal, admin_token),
+            )
+            .await
+            .map_err(|_| MusicDiscoveryError::Deadline)??;
+            if let Ok(track) = grounded_candidate(candidate, response, discovery_provenance) {
+                return Ok((track, index));
+            }
         }
     }
     Err(MusicDiscoveryError::ProviderNoMatch)
@@ -1475,6 +1483,47 @@ mod tests {
         assert_eq!(
             *catalog.queries.lock().unwrap(),
             vec![first.title, second.title]
+        );
+    }
+
+    #[tokio::test]
+    async fn one_researched_candidate_retries_a_transient_provider_miss() {
+        let candidate = candidate("One Dance", 100);
+        let catalog = FixedProviderCatalog {
+            responses: std::sync::Mutex::new(std::collections::VecDeque::from([
+                CenterCatalogResponse {
+                    provider: "youtube_music".to_owned(),
+                    ranking_provenance: "not_ranked".to_owned(),
+                    items: vec![],
+                },
+                CenterCatalogResponse {
+                    provider: "youtube_music".to_owned(),
+                    ranking_provenance: "not_ranked".to_owned(),
+                    items: vec![CenterTrack {
+                        title: candidate.title.clone(),
+                        artists: vec![candidate.artist.clone()],
+                    }],
+                },
+            ])),
+            queries: std::sync::Mutex::new(Vec::new()),
+        };
+
+        let (track, index) = verify_candidates(
+            std::slice::from_ref(&candidate),
+            &catalog,
+            "wearer",
+            "admin-token",
+            tokio::time::Instant::now() + Duration::from_secs(1),
+            "foreground_agent_web",
+        )
+        .await
+        .expect("one transient provider miss should not discard an exact researched track");
+
+        assert_eq!(index, 0);
+        assert_eq!(track.title, candidate.title);
+        assert_eq!(
+            *catalog.queries.lock().unwrap(),
+            vec![candidate.title.clone(), candidate.title]
         );
     }
 
