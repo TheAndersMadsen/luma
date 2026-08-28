@@ -103,6 +103,8 @@ const MAX_FOOD_ITEM_REQUEST_UUID_BYTES: usize = 128;
 const MAX_FOOD_NUTRIENTS: usize = 64;
 const MAX_FOOD_NUMERIC_VALUE: f32 = 10_000_000.0;
 const FOOD_LOG_CAS_RETRIES: usize = 32;
+const FOOD_LOG_PLAINTEXT_KID: &str = "humane.common.food.FoodLog";
+const FOOD_LOG_SUMMARY_PLAINTEXT_KID: &str = "humane.common.food.FoodLogSummary";
 const SHARE_TTL_SECONDS: i64 = 7 * 24 * 60 * 60;
 
 /// How long a minted upload capability stays usable. The device PUTs
@@ -1193,6 +1195,11 @@ struct StoredFoodLogs {
     entries: Vec<StoredFoodLog>,
 }
 
+enum FoodLogSummaryProtection {
+    Encrypted(String),
+    Plaintext,
+}
+
 fn food_log_start_time(
     timestamp: Option<prost_types::Timestamp>,
 ) -> Result<crate::store::SyncTime, Status> {
@@ -2112,7 +2119,7 @@ impl CaptureService for Capture {
             .and_then(|bytes| StoredFoodLogs::decode(bytes).ok())
             .unwrap_or_default();
         let mut logs = Vec::new();
-        let mut response_kid = None;
+        let mut response_protection = None;
         let mut total_bytes = 0usize;
         for entry in stored.entries.into_iter().filter(|entry| {
             crate::store::SyncTime::from_parts(entry.created_seconds, entry.created_nanos) >= start
@@ -2123,27 +2130,39 @@ impl CaptureService for Capture {
                 .as_ref()
                 .map(|information| information.kid.clone())
                 .unwrap_or_default();
-            let opened = self
-                .capture_keys
-                .open(&cosmos_crypto::EncryptedData {
-                    kid: kid.clone(),
-                    data: sealed.data,
-                })
-                .await
-                .map_err(|error| crate::keydirectory::grpc_status(&error))?
-                .ok_or_else(|| {
-                    Status::failed_precondition("the food-log channel key is not established")
-                })?;
+            let (opened, protection) = if kid == FOOD_LOG_PLAINTEXT_KID {
+                (sealed.data, FoodLogSummaryProtection::Plaintext)
+            } else {
+                let opened = self
+                    .capture_keys
+                    .open(&cosmos_crypto::EncryptedData {
+                        kid: kid.clone(),
+                        data: sealed.data,
+                    })
+                    .await
+                    .map_err(|error| crate::keydirectory::grpc_status(&error))?
+                    .ok_or_else(|| {
+                        Status::failed_precondition("the food-log channel key is not established")
+                    })?;
+                (opened, FoodLogSummaryProtection::Encrypted(kid))
+            };
             total_bytes = total_bytes.saturating_add(opened.len());
             if total_bytes > MAX_FOOD_LOG_TOTAL_BYTES {
                 return Err(Status::resource_exhausted("food log summary is too large"));
             }
             if let Some(log) = decode_valid_food_log(&opened) {
-                response_kid.get_or_insert(kid);
+                match protection {
+                    FoodLogSummaryProtection::Plaintext => {
+                        response_protection = Some(FoodLogSummaryProtection::Plaintext);
+                    }
+                    FoodLogSummaryProtection::Encrypted(kid) => {
+                        response_protection.get_or_insert(FoodLogSummaryProtection::Encrypted(kid));
+                    }
+                }
                 logs.push(log);
             }
         }
-        let Some(kid) = response_kid else {
+        let Some(protection) = response_protection else {
             return Ok(Response::new(pb::GetFoodLogSummaryResponse {
                 food_log_summary: None,
             }));
@@ -2152,21 +2171,38 @@ impl CaptureService for Capture {
         if summary.len() > MAX_FOOD_LOG_SUMMARY_BYTES {
             return Err(Status::resource_exhausted("food log summary is too large"));
         }
-        let sealed = self
-            .capture_keys
-            .seal(&kid, &summary, b"")
-            .await
-            .map_err(|error| crate::keydirectory::grpc_status(&error))?
-            .ok_or_else(|| {
-                Status::failed_precondition("the food-log channel key is not established")
-            })?;
+        let sealed = match protection {
+            FoodLogSummaryProtection::Plaintext => {
+                cosmos_protocol::common::encryption::EncryptedData {
+                    encryption_information: Some(
+                        cosmos_protocol::common::encryption::EncryptionInformation {
+                            kid: FOOD_LOG_SUMMARY_PLAINTEXT_KID.to_owned(),
+                        },
+                    ),
+                    data: summary,
+                }
+            }
+            FoodLogSummaryProtection::Encrypted(kid) => {
+                let sealed = self
+                    .capture_keys
+                    .seal(&kid, &summary, b"")
+                    .await
+                    .map_err(|error| crate::keydirectory::grpc_status(&error))?
+                    .ok_or_else(|| {
+                        Status::failed_precondition("the food-log channel key is not established")
+                    })?;
+                cosmos_protocol::common::encryption::EncryptedData {
+                    encryption_information: Some(
+                        cosmos_protocol::common::encryption::EncryptionInformation {
+                            kid: sealed.kid,
+                        },
+                    ),
+                    data: sealed.data,
+                }
+            }
+        };
         Ok(Response::new(pb::GetFoodLogSummaryResponse {
-            food_log_summary: Some(cosmos_protocol::common::encryption::EncryptedData {
-                encryption_information: Some(
-                    cosmos_protocol::common::encryption::EncryptionInformation { kid: sealed.kid },
-                ),
-                data: sealed.data,
-            }),
+            food_log_summary: Some(sealed),
         }))
     }
 
@@ -4066,6 +4102,74 @@ mod tests {
             .expect("later window reads")
             .into_inner();
         assert!(excluded.food_log_summary.is_none());
+    }
+
+    #[tokio::test]
+    async fn food_plaintext_log_round_trips_as_a_stock_plaintext_summary() {
+        use cosmos_protocol::common::food::{FoodItem, NutritionInfo};
+
+        let capture = isolated_capture();
+        let log = FoodLog {
+            food_item: Some(FoodItem {
+                request_uuid: "food-request-plaintext".to_owned(),
+                item_name: "Banana".to_owned(),
+                typical_serving_size: "1 banana".to_owned(),
+                nutrition_info: vec![NutritionInfo {
+                    nutrient_type: NutrientType::Calories as i32,
+                    value: 105.0,
+                }],
+                brand: String::new(),
+            }),
+            servings_consumed: 1.0,
+        };
+        capture
+            .create_memory(Request::new(pb::CreateMemoryRequest {
+                request: Some(pb::create_memory_request::Request::FoodLogMemoryRequest(
+                    pb::FoodLogMemoryRequest {
+                        food_log: Some(cosmos_protocol::common::encryption::EncryptedData {
+                            encryption_information: Some(
+                                cosmos_protocol::common::encryption::EncryptionInformation {
+                                    kid: "humane.common.food.FoodLog".to_owned(),
+                                },
+                            ),
+                            data: log.encode_to_vec(),
+                        }),
+                        device_created_time: Some(prost_types::Timestamp {
+                            seconds: 200,
+                            nanos: 0,
+                        }),
+                        device_local_id: "food-local-plaintext".to_owned(),
+                    },
+                )),
+            }))
+            .await
+            .expect("the Food Hook plaintext log stores");
+
+        let summary = capture
+            .get_food_log_summary(Request::new(pb::GetFoodLogSummaryRequest {
+                start_time: Some(prost_types::Timestamp {
+                    seconds: 150,
+                    nanos: 0,
+                }),
+            }))
+            .await
+            .expect("the Food Hook plaintext log reads without a channel key")
+            .into_inner()
+            .food_log_summary
+            .expect("matching plaintext summary");
+        assert_eq!(
+            summary
+                .encryption_information
+                .as_ref()
+                .map(|information| information.kid.as_str()),
+            Some("humane.common.food.FoodLogSummary"),
+        );
+        assert_eq!(
+            FoodLogSummary::decode(summary.data.as_slice()).expect("plaintext summary decodes"),
+            FoodLogSummary {
+                food_logs: vec![log]
+            },
+        );
     }
 
     #[tokio::test]

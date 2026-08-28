@@ -62,6 +62,16 @@ const NO_CHANNEL_KEY: &str = "no ephemeral channel key established; call PublicP
 const CHANNEL_KEY_IMPORT_POLL_ATTEMPTS: usize = 20;
 const CHANNEL_KEY_IMPORT_POLL_DELAY: std::time::Duration = std::time::Duration::from_millis(5);
 
+const FOOD_CHAT_REQUEST_KID: &str = "humane.aibus.ChatCompletionRequest";
+const FOOD_CHAT_RESPONSE_KID: &str = "humane.aibus.ChatCompletionResponse";
+const FOOD_ITEM_REQUEST_KID: &str = "humane.aibus.GetFoodItemRequest";
+const FOOD_ITEM_RESPONSE_KID: &str = "humane.aibus.GetFoodItemResponse";
+const FOOD_IMAGE_REQUEST_KID: &str = "humane.aibus.AnalyzeFoodImageRequest";
+const FOOD_IMAGE_RESPONSE_KID: &str = "humane.aibus.AnalyzeFoodImageResponse";
+const MAX_FOOD_CHAT_REQUEST_BYTES: usize = 256 * 1024;
+const MAX_FOOD_ITEM_REQUEST_BYTES: usize = 4 * 1024;
+const MAX_FOOD_IMAGE_REQUEST_BYTES: usize = 8 * 1024 * 1024;
+
 /// The sealed request could not be opened under the established channel key.
 const ENVELOPE_OPEN_FAILED: &str = "could not open the request envelope";
 
@@ -89,6 +99,15 @@ pub struct AiBusMain {
     store: crate::store::SharedStore,
     /// Resolves each caller's account verdict. Fail-open by default (no store).
     entitlements: std::sync::Arc<crate::services::gates::FailOpenDirectory>,
+}
+
+#[derive(Debug)]
+enum ResponseEnvelope {
+    Encrypted {
+        kid: String,
+        response_kid: &'static str,
+    },
+    FoodPlaintext(&'static str),
 }
 
 impl Default for AiBusMain {
@@ -238,6 +257,61 @@ impl AiBusMain {
             Status::invalid_argument("envelope did not contain the expected request")
         })?;
         Ok((decoded, kid))
+    }
+
+    /// The recovered Food process intentionally replaces only its three retired
+    /// Krypton channels with exact plaintext proto envelopes inside the already
+    /// authenticated device transport. Keep that compatibility closed over the
+    /// request KID and a route-specific byte bound; every other KID continues
+    /// through the normal channel-key directory.
+    async fn open_food_request<T: prost::Message + Default>(
+        &self,
+        enc: Option<cosmos_protocol::common::encryption::EncryptedData>,
+        request_kid: &'static str,
+        response_kid: &'static str,
+        maximum_bytes: usize,
+    ) -> Result<(T, ResponseEnvelope), Status> {
+        let plaintext = enc
+            .as_ref()
+            .and_then(|envelope| envelope.encryption_information.as_ref())
+            .is_some_and(|information| information.kid == request_kid);
+        if !plaintext {
+            let (request, kid) = self.open_request(enc).await?;
+            return Ok((request, ResponseEnvelope::Encrypted { kid, response_kid }));
+        }
+
+        let envelope = enc.ok_or_else(|| Status::invalid_argument("missing encrypted request"))?;
+        if envelope.data.len() > maximum_bytes {
+            return Err(Status::invalid_argument(
+                "food request payload is too large",
+            ));
+        }
+        let request = T::decode(envelope.data.as_slice()).map_err(|_| {
+            Status::invalid_argument("food envelope did not contain the expected request")
+        })?;
+        Ok((request, ResponseEnvelope::FoodPlaintext(response_kid)))
+    }
+
+    async fn seal_food_response<T: prost::Message>(
+        &self,
+        protection: ResponseEnvelope,
+        message: &T,
+    ) -> Result<cosmos_protocol::common::encryption::EncryptedData, Status> {
+        match protection {
+            ResponseEnvelope::Encrypted { kid, response_kid } => {
+                self.seal_response(&kid, message, response_kid).await
+            }
+            ResponseEnvelope::FoodPlaintext(kid) => {
+                Ok(cosmos_protocol::common::encryption::EncryptedData {
+                    encryption_information: Some(
+                        cosmos_protocol::common::encryption::EncryptionInformation {
+                            kid: kid.to_owned(),
+                        },
+                    ),
+                    data: message.encode_to_vec(),
+                })
+            }
+        }
     }
 
     /// Open the location shape sent by stock location-bearing AIBus clients.
@@ -1509,8 +1583,14 @@ impl AiBusService for AiBusMain {
         request: Request<pb::EncryptedChatCompletionRequest>,
     ) -> Result<Response<pb::EncryptedChatCompletionResponse>, Status> {
         let request = request.into_inner();
-        let (chat, kid): (pb::ChatCompletionRequest, _) =
-            self.open_request(request.request).await?;
+        let (chat, protection): (pb::ChatCompletionRequest, _) = self
+            .open_food_request(
+                request.request,
+                FOOD_CHAT_REQUEST_KID,
+                FOOD_CHAT_RESPONSE_KID,
+                MAX_FOOD_CHAT_REQUEST_BYTES,
+            )
+            .await?;
         let response_message = self.run_model_chat(&chat).await?;
         let response = pb::ChatCompletionResponse {
             choices: vec![pb::Choice {
@@ -1525,10 +1605,7 @@ impl AiBusService for AiBusMain {
             error: None,
         };
         Ok(Response::new(pb::EncryptedChatCompletionResponse {
-            response: Some(
-                self.seal_response(&kid, &response, "humane.aibus.ChatCompletionResponse")
-                    .await?,
-            ),
+            response: Some(self.seal_food_response(protection, &response).await?),
         }))
     }
 
@@ -1562,14 +1639,17 @@ impl AiBusService for AiBusMain {
         &self,
         request: Request<pb::EncryptedAnalyzeFoodImageRequest>,
     ) -> Result<Response<pb::EncryptedAnalyzeFoodImageResponse>, Status> {
-        let (request, kid): (pb::AnalyzeFoodImageRequest, _) =
-            self.open_request(request.into_inner().request).await?;
+        let (request, protection): (pb::AnalyzeFoodImageRequest, _) = self
+            .open_food_request(
+                request.into_inner().request,
+                FOOD_IMAGE_REQUEST_KID,
+                FOOD_IMAGE_RESPONSE_KID,
+                MAX_FOOD_IMAGE_REQUEST_BYTES,
+            )
+            .await?;
         let response = Self::analyze_food_image_inner(request).await?;
         Ok(Response::new(pb::EncryptedAnalyzeFoodImageResponse {
-            response: Some(
-                self.seal_response(&kid, &response, "humane.aibus.AnalyzeFoodImageResponse")
-                    .await?,
-            ),
+            response: Some(self.seal_food_response(protection, &response).await?),
         }))
     }
 
@@ -1766,7 +1846,14 @@ impl AiBusService for AiBusMain {
         request: Request<pb::EncryptedGetFoodItemRequest>,
     ) -> Result<Response<pb::EncryptedGetFoodItemResponse>, Status> {
         let request = request.into_inner();
-        let (req, kid): (pb::GetFoodItemRequest, _) = self.open_request(request.request).await?;
+        let (req, protection): (pb::GetFoodItemRequest, _) = self
+            .open_food_request(
+                request.request,
+                FOOD_ITEM_REQUEST_KID,
+                FOOD_ITEM_RESPONSE_KID,
+                MAX_FOOD_ITEM_REQUEST_BYTES,
+            )
+            .await?;
         let text = req.text.trim().to_owned();
         if text.is_empty() {
             return Err(Status::invalid_argument("GetFoodItem requires text"));
@@ -1801,10 +1888,7 @@ impl AiBusService for AiBusMain {
             alternate_food_items: Vec::new(),
         };
         Ok(Response::new(pb::EncryptedGetFoodItemResponse {
-            response: Some(
-                self.seal_response(&kid, &response, "humane.aibus.GetFoodItemResponse")
-                    .await?,
-            ),
+            response: Some(self.seal_food_response(protection, &response).await?),
         }))
     }
 
@@ -2419,6 +2503,11 @@ mod tests {
             "the resolved set's guidance must lead the transcript",
         );
 
+        assert_eq!(
+            cosmos_crypto::envelope_aad(&response.data).expect("response envelope has valid AAD"),
+            b"humane.aibus.ChatCompletionResponse",
+            "encrypted Food-compatible responses retain the stock response type binding",
+        );
         // The device reads `tool_calls`; dropping them is the same as silence.
         let payload = keys
             .open(&cosmos_crypto::EncryptedData {
@@ -2500,6 +2589,110 @@ mod tests {
                 .is_some_and(|message| !message.contains("Nothing is being recorded")),
             "food guidance must not claim the working stock food diary is unavailable",
         );
+    }
+
+    #[tokio::test]
+    async fn food_plaintext_chat_envelope_reaches_the_model_and_returns_stock_plaintext() {
+        use prost::Message as _;
+
+        let model = Arc::new(CapturingModel {
+            seen: std::sync::Mutex::new(None),
+        });
+        let svc = AiBusMain {
+            engine: Arc::new(crate::assistant::engine::Engine::new(model.clone())),
+            keys: Default::default(),
+            directory: None,
+            store: crate::store::MemoryStore::shared(),
+            entitlements: Default::default(),
+        };
+        let chat = pb::ChatCompletionRequest {
+            messages: vec![pb::ChatCompletionMessage {
+                role: "user".to_owned(),
+                content: "I ate one banana.".to_owned(),
+                ..Default::default()
+            }],
+            tool_set_version: Some(pb::ToolSetVersion {
+                set_name: "food".to_owned(),
+                version: 4,
+            }),
+            ..Default::default()
+        };
+        let response = svc
+            .encrypted_chat_completion(Request::new(pb::EncryptedChatCompletionRequest {
+                request: Some(cosmos_protocol::common::encryption::EncryptedData {
+                    encryption_information: Some(
+                        cosmos_protocol::common::encryption::EncryptionInformation {
+                            kid: "humane.aibus.ChatCompletionRequest".to_owned(),
+                        },
+                    ),
+                    data: chat.encode_to_vec(),
+                }),
+            }))
+            .await
+            .expect("the Food Hook plaintext request must not require a channel key")
+            .into_inner()
+            .response
+            .expect("plaintext response present");
+
+        assert_eq!(
+            response
+                .encryption_information
+                .as_ref()
+                .map(|information| information.kid.as_str()),
+            Some("humane.aibus.ChatCompletionResponse"),
+        );
+        pb::ChatCompletionResponse::decode(response.data.as_slice())
+            .expect("the Food Hook receives a plaintext stock response");
+        assert!(model.seen.lock().unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn food_plaintext_compatibility_rejects_oversize_and_near_match_kids() {
+        use prost::Message as _;
+
+        let svc = AiBusMain::default();
+
+        for (kid, maximum_bytes) in [
+            (FOOD_CHAT_REQUEST_KID, MAX_FOOD_CHAT_REQUEST_BYTES),
+            (FOOD_ITEM_REQUEST_KID, MAX_FOOD_ITEM_REQUEST_BYTES),
+            (FOOD_IMAGE_REQUEST_KID, MAX_FOOD_IMAGE_REQUEST_BYTES),
+        ] {
+            let error = svc
+                .open_food_request::<pb::ChatCompletionRequest>(
+                    Some(cosmos_protocol::common::encryption::EncryptedData {
+                        encryption_information: Some(
+                            cosmos_protocol::common::encryption::EncryptionInformation {
+                                kid: kid.to_owned(),
+                            },
+                        ),
+                        data: vec![0; maximum_bytes + 1],
+                    }),
+                    kid,
+                    FOOD_CHAT_RESPONSE_KID,
+                    maximum_bytes,
+                )
+                .await
+                .expect_err("an oversized plaintext Food envelope must be rejected");
+            assert_eq!(error.code(), tonic::Code::InvalidArgument);
+        }
+
+        let error = svc
+            .open_food_request::<pb::ChatCompletionRequest>(
+                Some(cosmos_protocol::common::encryption::EncryptedData {
+                    encryption_information: Some(
+                        cosmos_protocol::common::encryption::EncryptionInformation {
+                            kid: format!("{FOOD_CHAT_REQUEST_KID}.near-match"),
+                        },
+                    ),
+                    data: pb::ChatCompletionRequest::default().encode_to_vec(),
+                }),
+                FOOD_CHAT_REQUEST_KID,
+                FOOD_CHAT_RESPONSE_KID,
+                MAX_FOOD_CHAT_REQUEST_BYTES,
+            )
+            .await
+            .expect_err("a near-match KID must stay on the encrypted path");
+        assert_eq!(error.code(), tonic::Code::Unavailable);
     }
 
     #[tokio::test]
