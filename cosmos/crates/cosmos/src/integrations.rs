@@ -88,6 +88,19 @@ pub struct SpeechConfig {
     pub azure_voice: String,
 }
 
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct FoodConfig {
+    pub open_food_facts_username: Option<String>,
+    pub open_food_facts_password: Option<String>,
+}
+
+impl FoodConfig {
+    pub fn configured(&self) -> bool {
+        self.open_food_facts_username.is_some() && self.open_food_facts_password.is_some()
+    }
+}
+
 impl Default for SpeechConfig {
     fn default() -> Self {
         Self {
@@ -106,6 +119,7 @@ pub struct IntegrationsConfig {
     pub search: SearchConfig,
     pub maps: MapsConfig,
     pub speech: SpeechConfig,
+    pub food: FoodConfig,
 }
 
 impl Default for IntegrationsConfig {
@@ -116,6 +130,7 @@ impl Default for IntegrationsConfig {
             search: SearchConfig::default(),
             maps: MapsConfig::default(),
             speech: SpeechConfig::default(),
+            food: FoodConfig::default(),
         }
     }
 }
@@ -155,6 +170,10 @@ impl IntegrationsConfig {
         config.speech.azure_region = value_from_environment("COSMOS_AZURE_SPEECH_REGION");
         config.speech.azure_voice = value_from_environment("COSMOS_AZURE_SPEECH_VOICE")
             .unwrap_or_else(|| DEFAULT_AZURE_VOICE.to_owned());
+        config.food.open_food_facts_username =
+            value_from_environment("COSMOS_OPEN_FOOD_FACTS_USERNAME");
+        config.food.open_food_facts_password =
+            value_from_environment("COSMOS_OPEN_FOOD_FACTS_PASSWORD");
         normalize(&mut config);
         config
     }
@@ -167,6 +186,7 @@ pub struct IntegrationsUpdate {
     pub search: Option<SearchUpdate>,
     pub maps: Option<MapsUpdate>,
     pub speech: Option<SpeechUpdate>,
+    pub food: Option<FoodUpdate>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -205,6 +225,15 @@ pub struct SpeechUpdate {
     pub azure_key: Option<String>,
     pub azure_region: Option<String>,
     pub azure_voice: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct FoodUpdate {
+    /// Missing preserves the existing credential; an empty value removes it.
+    pub open_food_facts_username: Option<String>,
+    /// Missing preserves the existing credential; an empty value removes it.
+    pub open_food_facts_password: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -317,6 +346,8 @@ impl IntegrationStore {
             "COSMOS_AZURE_SPEECH_KEY" => config.speech.azure_key.clone(),
             "COSMOS_AZURE_SPEECH_REGION" => config.speech.azure_region.clone(),
             "COSMOS_AZURE_SPEECH_VOICE" => optional(&config.speech.azure_voice),
+            "COSMOS_OPEN_FOOD_FACTS_USERNAME" => config.food.open_food_facts_username.clone(),
+            "COSMOS_OPEN_FOOD_FACTS_PASSWORD" => config.food.open_food_facts_password.clone(),
             _ => return value_from_environment(name),
         };
         value.filter(|value| !value.trim().is_empty())
@@ -415,6 +446,16 @@ fn apply_update(config: &mut IntegrationsConfig, update: IntegrationsUpdate) {
             config.speech.azure_voice = value;
         }
     }
+    if let Some(update) = update.food {
+        update_secret(
+            &mut config.food.open_food_facts_username,
+            update.open_food_facts_username,
+        );
+        update_secret(
+            &mut config.food.open_food_facts_password,
+            update.open_food_facts_password,
+        );
+    }
 }
 
 fn update_secret(target: &mut Option<String>, update: Option<String>) {
@@ -448,6 +489,8 @@ fn normalize(config: &mut IntegrationsConfig) {
         &mut config.maps.google_maps_key,
         &mut config.speech.azure_key,
         &mut config.speech.azure_region,
+        &mut config.food.open_food_facts_username,
+        &mut config.food.open_food_facts_password,
     ] {
         *value = value.take().and_then(|value| optional(&value));
     }
@@ -500,6 +543,8 @@ fn validate(config: &IntegrationsConfig) -> Result<(), IntegrationError> {
         config.search.weather_api_key.as_deref(),
         config.maps.google_maps_key.as_deref(),
         config.speech.azure_key.as_deref(),
+        config.food.open_food_facts_username.as_deref(),
+        config.food.open_food_facts_password.as_deref(),
     ]
     .into_iter()
     .flatten()

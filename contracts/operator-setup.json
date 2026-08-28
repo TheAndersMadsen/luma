@@ -1407,6 +1407,18 @@
       "group": "provider",
       "sensitivity": "operational",
       "home": "runtime.env"
+    },
+    {
+      "name": "COSMOS_OPEN_FOOD_FACTS_USERNAME",
+      "group": "provider",
+      "sensitivity": "secret",
+      "home": "runtime.env"
+    },
+    {
+      "name": "COSMOS_OPEN_FOOD_FACTS_PASSWORD",
+      "group": "provider",
+      "sensitivity": "secret",
+      "home": "runtime.env"
     }
   ]
 }

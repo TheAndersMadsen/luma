@@ -192,6 +192,10 @@ normal configuration path for every Pin-facing cloud capability:
 - **Search, maps & knowledge:** add SearXNG or SerpAPI for web results and any
   optional Perplexity, Google Maps, Pirate Weather, or Wolfram credentials.
 - **Speech:** add the Azure Speech key, region, and voice.
+- **Food & nutrition:** optionally connect and test an Open Food Facts account.
+  Cosmos keeps both credentials private and sends them only in the provider's
+  POST login body. Nutrition reads remain keyless, as required by the Open Food
+  Facts API, and use its dedicated search and product endpoints.
 
 Secret fields are never returned to the browser. A configured field says so;
 leave it blank to keep the stored value or choose **Remove** to clear it. Saving

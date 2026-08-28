@@ -650,6 +650,7 @@ struct IntegrationsView {
     search: SearchIntegrationView,
     maps: MapsIntegrationView,
     speech: SpeechIntegrationView,
+    food: FoodIntegrationView,
 }
 
 #[derive(Serialize)]
@@ -689,6 +690,13 @@ struct SpeechIntegrationView {
     azure_voice: String,
 }
 
+#[derive(Serialize)]
+struct FoodIntegrationView {
+    configured: bool,
+    username_configured: bool,
+    password_configured: bool,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
 enum IntegrationTestTarget {
@@ -700,6 +708,7 @@ enum IntegrationTestTarget {
     Weather,
     Wolfram,
     Speech,
+    OpenFoodFacts,
 }
 
 impl IntegrationTestTarget {
@@ -715,6 +724,7 @@ impl IntegrationTestTarget {
             Self::Speech => {
                 config.speech.azure_key.is_some() && config.speech.azure_region.is_some()
             }
+            Self::OpenFoodFacts => config.food.configured(),
         }
     }
 
@@ -728,6 +738,7 @@ impl IntegrationTestTarget {
             Self::Weather => "Pirate Weather returned current conditions.",
             Self::Wolfram => "Wolfram|Alpha answered successfully.",
             Self::Speech => "Azure Speech returned audio.",
+            Self::OpenFoodFacts => "Open Food Facts sign-in succeeded.",
         }
     }
 }
@@ -804,6 +815,11 @@ async fn integrations_view(config: crate::integrations::IntegrationsConfig) -> I
             azure_key_configured: config.speech.azure_key.is_some(),
             azure_region: config.speech.azure_region,
             azure_voice: config.speech.azure_voice,
+        },
+        food: FoodIntegrationView {
+            configured: config.food.configured(),
+            username_configured: config.food.open_food_facts_username.is_some(),
+            password_configured: config.food.open_food_facts_password.is_some(),
         },
     }
 }
@@ -897,6 +913,17 @@ async fn test_integration(
             };
             client
                 .synthesize("Cosmos is ready.", SpeechAudioFormat::Raw24Khz16BitMonoPcm)
+                .await
+                .is_ok()
+        }),
+        IntegrationTestTarget::OpenFoodFacts => Box::pin(async move {
+            let (Some(username), Some(password)) = (
+                config.food.open_food_facts_username,
+                config.food.open_food_facts_password,
+            ) else {
+                return false;
+            };
+            crate::backends::food::authenticate(&username, &password)
                 .await
                 .is_ok()
         }),
@@ -3972,18 +3999,23 @@ mod admin_gate_tests {
         config.maps.google_maps_key = Some("private-maps-key".to_owned());
         config.speech.azure_key = Some("private-speech-key".to_owned());
         config.speech.azure_region = Some("westeurope".to_owned());
+        config.food.open_food_facts_username = Some("private-food-user".to_owned());
+        config.food.open_food_facts_password = Some("private-food-password".to_owned());
 
         let value = serde_json::to_value(integrations_view(config).await).unwrap();
         assert_eq!(value["assistant"]["api_key_configured"], true);
         assert_eq!(value["search"]["serpapi_key_configured"], true);
         assert_eq!(value["maps"]["configured"], true);
         assert_eq!(value["speech"]["azure_key_configured"], true);
+        assert_eq!(value["food"]["configured"], true);
         let response = value.to_string();
         for secret in [
             "private-assistant-key",
             "private-search-key",
             "private-maps-key",
             "private-speech-key",
+            "private-food-user",
+            "private-food-password",
         ] {
             assert!(!response.contains(secret));
         }
@@ -4040,6 +4072,8 @@ mod admin_gate_tests {
         config.maps.google_maps_key = Some("private-maps-key".to_owned());
         config.speech.azure_key = Some("private-speech-key".to_owned());
         config.speech.azure_region = Some("westeurope".to_owned());
+        config.food.open_food_facts_username = Some("private-food-user".to_owned());
+        config.food.open_food_facts_password = Some("private-food-password".to_owned());
 
         for name in [
             "assistant",
@@ -4050,6 +4084,7 @@ mod admin_gate_tests {
             "weather",
             "wolfram",
             "speech",
+            "open_food_facts",
         ] {
             let request: IntegrationTestRequest =
                 serde_json::from_value(serde_json::json!({ "target": name })).unwrap();

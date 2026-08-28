@@ -21,10 +21,32 @@ use serde::Deserialize;
 
 use super::{BackendError, http};
 
+const SEARCH_ENDPOINT: &str = "https://search.openfoodfacts.org/search";
+const PRODUCT_ENDPOINT: &str = "https://world.openfoodfacts.org/api/v2/product";
+const AUTH_ENDPOINT: &str = "https://world.openfoodfacts.org/cgi/auth.pl";
+const USER_AGENT: &str =
+    "ai-pin-revival-cosmos/1.0 (https://github.com/TheAndersMadsen/ai-pin-revival)";
+const PRODUCT_FIELDS: &str = "product_name,brands,serving_size,code,ingredients_text,nutriments";
+
 #[derive(Deserialize)]
 struct OffSearch {
-    #[serde(default)]
+    #[serde(default, alias = "hits")]
     products: Vec<OffProduct>,
+}
+
+#[derive(Deserialize)]
+struct OffProductResponse {
+    #[serde(default)]
+    status: i32,
+    product: Option<OffProduct>,
+}
+
+#[derive(Deserialize)]
+struct OffAuthResponse {
+    #[serde(default)]
+    status: i32,
+    #[serde(default)]
+    user_id: String,
 }
 
 #[derive(Deserialize)]
@@ -99,16 +121,51 @@ pub struct FoodLookup {
 
 /// Look up the best-matching food by name and return its nutrition.
 pub async fn lookup(query: &str) -> Result<FoodLookup, BackendError> {
-    let url = format!(
-        "https://world.openfoodfacts.org/cgi/search.pl?search_terms={}&search_simple=1\
-         &action=process&json=1&page_size=1\
-         &fields=product_name,brands,serving_size,code,ingredients_text,nutriments",
+    lookup_from_endpoints(query, SEARCH_ENDPOINT, PRODUCT_ENDPOINT).await
+}
+
+/// Verify an Open Food Facts account without exposing credentials in a URL.
+/// Nutrition reads intentionally stay keyless per the provider's API contract.
+pub async fn authenticate(username: &str, password: &str) -> Result<(), BackendError> {
+    authenticate_at_endpoint(username, password, AUTH_ENDPOINT).await
+}
+
+async fn authenticate_at_endpoint(
+    username: &str,
+    password: &str,
+    endpoint: &str,
+) -> Result<(), BackendError> {
+    let response: OffAuthResponse = http()
+        .post(endpoint)
+        .header("User-Agent", USER_AGENT)
+        .form(&[("user_id", username), ("password", password), ("body", "1")])
+        .send()
+        .await
+        .map_err(|_| BackendError::Unavailable)?
+        .error_for_status()
+        .map_err(|_| BackendError::Unavailable)?
+        .json()
+        .await
+        .map_err(|_| BackendError::Unavailable)?;
+    if response.status == 1 && response.user_id == username {
+        Ok(())
+    } else {
+        Err(BackendError::Unavailable)
+    }
+}
+
+async fn lookup_from_endpoints(
+    query: &str,
+    search_endpoint: &str,
+    product_endpoint: &str,
+) -> Result<FoodLookup, BackendError> {
+    let search_url = format!(
+        "{search_endpoint}?q={}&page_size=5",
         super::places::encode(query)
     );
-    let resp: OffSearch = http()
-        .get(url)
-        // Open Food Facts requires an identifying User-Agent.
-        .header("User-Agent", "ai-pin-revival-cosmos/1.0 (nutrition lookup)")
+    let search: OffSearch = http()
+        .get(search_url)
+        .header("User-Agent", USER_AGENT)
         .send()
         .await
         .map_err(|_| BackendError::Unavailable)?
@@ -118,13 +175,38 @@ pub async fn lookup(query: &str) -> Result<FoodLookup, BackendError> {
         .await
         .map_err(|_| BackendError::Unavailable)?;
 
-    let product = resp
+    let code = search
         .products
         .into_iter()
-        .find(|p| !p.product_name.trim().is_empty())
+        .map(|product| product.code)
+        .find(|code| valid_product_code(code))
+        .ok_or(BackendError::NoResult)?;
+
+    let product_url = format!("{product_endpoint}/{code}?fields={PRODUCT_FIELDS}");
+    let response: OffProductResponse = http()
+        .get(product_url)
+        .header("User-Agent", USER_AGENT)
+        .send()
+        .await
+        .map_err(|_| BackendError::Unavailable)?
+        .error_for_status()
+        .map_err(|_| BackendError::Unavailable)?
+        .json()
+        .await
+        .map_err(|_| BackendError::Unavailable)?;
+    if response.status != 1 {
+        return Err(BackendError::NoResult);
+    }
+    let product = response
+        .product
+        .filter(|product| !product.product_name.trim().is_empty())
         .ok_or(BackendError::NoResult)?;
 
     Ok(to_lookup(product))
+}
+
+fn valid_product_code(code: &str) -> bool {
+    (4..=32).contains(&code.len()) && code.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 /// Map an Open Food Facts product onto cosmos's food record + nutrient units.
@@ -184,6 +266,97 @@ fn number(m: &HashMap<String, serde_json::Value>, key: &str) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+        sync::oneshot,
+    };
+
+    async fn serve_once(body: &'static str) -> (String, oneshot::Receiver<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (request_tx, request_rx) = oneshot::channel();
+        let body = Arc::new(body);
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = vec![0_u8; 8 * 1024];
+            let read = socket.read(&mut request).await.unwrap_or(0);
+            let _ = request_tx.send(String::from_utf8_lossy(&request[..read]).into_owned());
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body,
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+        });
+        (format!("http://{address}"), request_rx)
+    }
+
+    #[test]
+    fn dedicated_search_service_hits_are_accepted() {
+        let response: OffSearch =
+            serde_json::from_str(r#"{"hits":[{"code":"12345678","product_name":"Oatmeal"}]}"#)
+                .unwrap();
+
+        assert_eq!(response.products.len(), 1);
+        assert_eq!(response.products[0].code, "12345678");
+    }
+
+    #[tokio::test]
+    async fn lookup_uses_search_index_then_complete_product_record() {
+        let (search_base, search_request) = serve_once(r#"{"hits":[{"code":"12345678"}]}"#).await;
+        let (product_base, product_request) = serve_once(
+            r#"{"status":1,"product":{"product_name":"Oatmeal","brands":"Test","serving_size":"","code":"12345678","ingredients_text":"oats","nutriments":{"energy-kcal_100g":68.0,"proteins_100g":2.4}}}"#,
+        )
+        .await;
+
+        let result = lookup_from_endpoints(
+            "plain oatmeal",
+            &format!("{search_base}/search"),
+            &format!("{product_base}/product"),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.item_name, "Oatmeal");
+        assert_eq!(result.serving_size, "100 g");
+        assert_eq!(result.nutrition.len(), 2);
+
+        let search_request = search_request.await.unwrap();
+        assert!(search_request.starts_with("GET /search?q=plain+oatmeal&page_size=5 "));
+        assert!(search_request.contains(&format!("user-agent: {USER_AGENT}")));
+
+        let product_request = product_request.await.unwrap();
+        assert!(product_request.starts_with("GET /product/12345678?fields="));
+        assert!(product_request.contains(&format!("user-agent: {USER_AGENT}")));
+    }
+
+    #[tokio::test]
+    async fn authentication_posts_credentials_in_the_body() {
+        let (endpoint, request) =
+            serve_once(r#"{"status":1,"status_verbose":"user signed-in","user_id":"account"}"#)
+                .await;
+
+        authenticate_at_endpoint("account", "private value", &endpoint)
+            .await
+            .unwrap();
+
+        let request = request.await.unwrap();
+        assert!(request.starts_with("POST / HTTP/1.1"));
+        assert!(request.contains("content-type: application/x-www-form-urlencoded"));
+        assert!(request.contains("user_id=account&password=private+value&body=1"));
+        assert!(!request.starts_with("POST /?"));
+    }
+
+    #[test]
+    fn product_codes_are_path_safe_gtins() {
+        assert!(valid_product_code("12345678"));
+        for invalid in ["", "123", "123/456", "abc123", &"1".repeat(33)] {
+            assert!(!valid_product_code(invalid));
+        }
+    }
 
     fn product(nutriments: &[(&str, f64)]) -> OffProduct {
         OffProduct {

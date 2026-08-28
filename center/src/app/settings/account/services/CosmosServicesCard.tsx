@@ -47,6 +47,11 @@ type IntegrationsView = {
     azure_region: string | null;
     azure_voice: string;
   };
+  food: {
+    configured: boolean;
+    username_configured: boolean;
+    password_configured: boolean;
+  };
 };
 
 type IntegrationDraft = {
@@ -69,7 +74,9 @@ type SecretName =
   | "wolframAppId"
   | "weatherApiKey"
   | "googleMapsKey"
-  | "azureKey";
+  | "azureKey"
+  | "openFoodFactsUsername"
+  | "openFoodFactsPassword";
 
 type SecretDraft = Record<SecretName, string | null>;
 
@@ -81,7 +88,8 @@ type IntegrationTestTarget =
   | "maps"
   | "weather"
   | "wolfram"
-  | "speech";
+  | "speech"
+  | "open_food_facts";
 
 type IntegrationTestView = { ok: boolean; message: string };
 
@@ -141,6 +149,8 @@ const EMPTY_SECRETS: SecretDraft = {
   weatherApiKey: null,
   googleMapsKey: null,
   azureKey: null,
+  openFoodFactsUsername: null,
+  openFoodFactsPassword: null,
 };
 
 function chip(status: AssistantStatus | undefined, ready: boolean): {
@@ -332,6 +342,14 @@ export function CosmosServicesCard({ operator }: { operator: boolean }) {
         azure_voice: draft.azureVoice,
         ...(secrets.azureKey === null ? {} : { azure_key: secrets.azureKey }),
       },
+      food: {
+        ...(secrets.openFoodFactsUsername === null ? {} : {
+          open_food_facts_username: secrets.openFoodFactsUsername,
+        }),
+        ...(secrets.openFoodFactsPassword === null ? {} : {
+          open_food_facts_password: secrets.openFoodFactsPassword,
+        }),
+      },
     };
   }
 
@@ -509,6 +527,24 @@ export function CosmosServicesCard({ operator }: { operator: boolean }) {
         <div className={styles.integrationMessage} role="status">Loading Cosmos settings…</div>
       ) : (
         <div className={styles.integrationSettings}>
+          <section className={styles.integrationGroup}>
+            <div className={styles.integrationIntro}>
+              <span><strong>Food & nutrition</strong><small>Connect an Open Food Facts account for authenticated contributions.</small></span>
+              <span className={styles.integrationIntroActions}>
+                <StatusChip tone={view.food.configured ? "live" : "off"} label={view.food.configured ? "Connected" : "Optional"} />
+                {testControl(
+                  "open_food_facts",
+                  "Open Food Facts",
+                  !secretReady("openFoodFactsUsername", view.food.username_configured)
+                    || !secretReady("openFoodFactsPassword", view.food.password_configured),
+                )}
+              </span>
+            </div>
+            <SecretField label="Open Food Facts username" detail="Stored only in Cosmos and sent only in a POST body." configured={view.food.username_configured} value={secrets.openFoodFactsUsername} onChange={(value) => secret("openFoodFactsUsername", value)} />
+            <SecretField label="Open Food Facts password" detail="Stored only in Cosmos and never returned to Center." configured={view.food.password_configured} value={secrets.openFoodFactsPassword} onChange={(value) => secret("openFoodFactsPassword", value)} />
+            <p className={styles.providerNote}>Nutrition lookups remain keyless as required by Open Food Facts; this account is verified for authenticated contribution APIs.</p>
+          </section>
+
           <section className={styles.integrationGroup}>
             <div className={styles.integrationIntro}>
               <span><strong>Assistant</strong><small>Choose a model for answers and photo search.</small></span>
