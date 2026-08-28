@@ -103,6 +103,50 @@ class MusicIntentCompatibilityHooksTest {
         }
     }
 
+    @Test
+    fun `loose pause prediction cannot steal a food logging request`() {
+        assertTrue(
+            MusicIntentCompatibilityHooks.shouldSuppressLoosePause(
+                triggerIntent = "PauseMusic",
+                minDistance = 1.923199,
+                strictRadius = 1.837633,
+                utterance = "I ate one banana.",
+            ),
+        )
+    }
+
+    @Test
+    fun `explicit or strict pause predictions remain offline`() {
+        assertFalse(
+            MusicIntentCompatibilityHooks.shouldSuppressLoosePause(
+                triggerIntent = "PauseMusic",
+                minDistance = 1.923199,
+                strictRadius = 1.837633,
+                utterance = "Pause the music.",
+            ),
+        )
+        assertFalse(
+            MusicIntentCompatibilityHooks.shouldSuppressLoosePause(
+                triggerIntent = "PauseMusic",
+                minDistance = 1.7,
+                strictRadius = 1.837633,
+                utterance = "Hold this song.",
+            ),
+        )
+    }
+
+    @Test
+    fun `loose prediction guard is scoped to pause music`() {
+        assertFalse(
+            MusicIntentCompatibilityHooks.shouldSuppressLoosePause(
+                triggerIntent = "NextTrack",
+                minDistance = 2.0,
+                strictRadius = 1.0,
+                utterance = "I ate one banana.",
+            ),
+        )
+    }
+
     private fun sourceFile(relativePath: String): File {
         val candidates = listOf(File(relativePath), File("hook/payload", relativePath))
         return candidates.firstOrNull(File::isFile)

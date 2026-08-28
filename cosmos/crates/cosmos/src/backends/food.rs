@@ -31,7 +31,13 @@ const PRODUCT_FIELDS: &str = "product_name,brands,serving_size,code,ingredients_
 #[derive(Deserialize)]
 struct OffSearch {
     #[serde(default, alias = "hits")]
-    products: Vec<OffProduct>,
+    products: Vec<OffSearchHit>,
+}
+
+#[derive(Deserialize)]
+struct OffSearchHit {
+    #[serde(default)]
+    code: String,
 }
 
 #[derive(Deserialize)]
@@ -302,6 +308,17 @@ mod tests {
 
         assert_eq!(response.products.len(), 1);
         assert_eq!(response.products[0].code, "12345678");
+    }
+
+    #[test]
+    fn dedicated_search_service_lightweight_hits_are_accepted() {
+        let response: OffSearch = serde_json::from_str(
+            r#"{"hits":[{"code":"6052028799002","product_name":"Oatmeal","brands":[],"serving_size":null,"ingredients_text":null,"nutriments":{}}]}"#,
+        )
+        .unwrap();
+
+        assert_eq!(response.products.len(), 1);
+        assert_eq!(response.products[0].code, "6052028799002");
     }
 
     #[tokio::test]

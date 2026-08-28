@@ -135,6 +135,90 @@ object MusicIntentCompatibilityHooks {
                     "${error.javaClass.simpleName}: ${error.message}",
             )
         }
+        installLoosePauseGuard(classLoader)
+    }
+
+    /**
+     * Stock accepts the triggering model's wider autocomplete radius before it
+     * reaches remote Synapse. On the production model, "I ate one banana" lands
+     * inside that loose radius for PauseMusic but outside the strict radius, so
+     * the food request launches Music and never reaches Cosmos. Keep exact
+     * local aliases and strict model matches offline, but let an unrelated loose
+     * match fall through to the normal remote interpreter.
+     */
+    private fun installLoosePauseGuard(classLoader: ClassLoader) {
+        try {
+            val predictionClass = classLoader.loadClass(
+                "humaneinternal.system.intent.TriggeringPrediction",
+            )
+            val parsePrediction = predictionClass.getDeclaredMethod(
+                "parseTriggeringPrediction",
+                String::class.java,
+                String::class.java,
+            ).apply { isAccessible = true }
+            val getTriggerIntent = predictionClass.getMethod("getTriggerIntent")
+            val minDistanceField = predictionClass.getDeclaredField("minDistance")
+                .apply { isAccessible = true }
+            val strictRadiusField = predictionClass.getDeclaredField("strict_radius")
+                .apply { isAccessible = true }
+
+            XposedBridge.hookMethod(parsePrediction, object : XC_MethodHook() {
+                override fun afterHookedMethod(param: MethodHookParam) {
+                    try {
+                        val prediction = param.result ?: return
+                        val triggerIntent = getTriggerIntent.invoke(prediction) as? String ?: return
+                        val utterance = param.args.getOrNull(1) as? String ?: return
+                        val minDistance = (minDistanceField.get(prediction) as? Number)
+                            ?.toDouble() ?: return
+                        val strictRadius = (strictRadiusField.get(prediction) as? Number)
+                            ?.toDouble() ?: return
+                        if (
+                            shouldSuppressLoosePause(
+                                triggerIntent,
+                                minDistance,
+                                strictRadius,
+                                utterance,
+                            )
+                        ) {
+                            param.result = null
+                            Log.w(TAG, "Suppressed loose PauseMusic prediction outside strict radius")
+                        }
+                    } catch (error: Throwable) {
+                        Log.e(
+                            TAG,
+                            "Loose PauseMusic guard failed: ${error.javaClass.simpleName}",
+                        )
+                    }
+                }
+            })
+            Log.w(TAG, "  Loose PauseMusic prediction guard installed")
+        } catch (error: Throwable) {
+            Log.e(
+                TAG,
+                "Loose PauseMusic prediction guard install failed: " +
+                    "${error.javaClass.simpleName}: ${error.message}",
+            )
+        }
+    }
+
+    internal fun shouldSuppressLoosePause(
+        triggerIntent: String,
+        minDistance: Double,
+        strictRadius: Double,
+        utterance: String,
+    ): Boolean {
+        val pauseIntent = triggerIntent == TierASymbols.NativeActions.PAUSE_MUSIC ||
+            triggerIntent == "{\"${TierASymbols.NativeActions.PAUSE_MUSIC}\":{}}"
+        if (
+            !pauseIntent ||
+            !minDistance.isFinite() ||
+            !strictRadius.isFinite() ||
+            strictRadius < 0.0 ||
+            minDistance <= strictRadius
+        ) {
+            return false
+        }
+        return parse(utterance)?.name != TierASymbols.NativeActions.PAUSE_MUSIC
     }
 
     internal fun parse(rawUtterance: String): NativeMusicAction? {
