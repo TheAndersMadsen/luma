@@ -235,16 +235,16 @@ exact, scoped confirmation, and changing the action or its arguments invalidates
 that confirmation. Reversible playback and volume controls do not gain that
 extra confirmation step.
 
-Music discovery is one specialist A1/A2 tool. For a ranked, subjective, or time-bound
-request, it combines bounded evidence from the configured web-search path with
-Perplexity's semantic research, corroborates an ambiguous ranking once, and
-tries up to three evidence-ordered candidates against the active provider. A
-failed web-search source does not disable Perplexity, and no unverified result
-can start playback. Only the grounded provider result becomes a stock
-`PlayMusic` action. The model chooses this tool for requests such as “play the
-most popular song by Drake”; no artist-only shortcut selects the provider's
-first row. Play, pause, stop, and skip execute on the Pin once
-recognized; speech recognition may still use Cosmos.
+Music discovery is one specialist A1/A2 tool. For a ranked, subjective, or
+time-bound request, the foreground agent first uses the configured web-search
+or answer-engine tool to identify an exact title and artist. An information-only
+question ends there without contacting the wearer's provider. An explicit
+playback request then verifies that exact candidate against the active provider;
+only the grounded provider result becomes a stock `PlayMusic` action. The model
+chooses this path for requests such as “play the most popular song by Drake”;
+no artist-only shortcut selects the provider's first row, and provider
+verification never repeats the research step. Play, pause, stop, and skip
+execute on the Pin once recognized; speech recognition may still use Cosmos.
 
 Navigation requests first obtain the Pin's current location, then use the
 configured places and directions backends to return bounded, spoken route

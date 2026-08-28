@@ -438,11 +438,28 @@ impl BidiSession {
 
         // Both transports cross the same foreground-runtime seam for their
         // absolute clock and content-free production-plane provenance.
-        let mut run = ForegroundRun::with_budget(Transport::Bidi, RouteClass::A1, self.run_budget)
-            .with_model(self.model.provenance());
+        let future_weather = super::engine::future_weather_request(&utterance);
+        let mut run = ForegroundRun::with_budget(
+            Transport::Bidi,
+            if future_weather {
+                RouteClass::D1
+            } else {
+                RouteClass::A1
+            },
+            self.run_budget,
+        )
+        .with_model(self.model.provenance());
         let run_deadline = run.deadline();
         let mut tool_context = self.tools.clone();
         tool_context.deadline = Some(run_deadline);
+
+        if future_weather {
+            let flow = self
+                .finish(parent, super::engine::FUTURE_WEATHER_UNAVAILABLE)
+                .await;
+            run.finish("answered");
+            return flow;
+        }
 
         // Seed the transcript from `device_context.turns` (the server seeds its own
         // RunState this way on the first request of a stream, §3) and grow it in
@@ -1144,14 +1161,18 @@ fn resolve_catalog(
     // the two transports cannot silently diverge the moment the device sends
     // anything else.
     let set = super::engine::resolved_tool_set(req).set;
-    catalog::tool_catalog_for_set(
+    let mut tools = catalog::tool_catalog_for_set(
         &catalog::CatalogContext {
             is_locked: req.device_context.as_ref().is_some_and(|dc| dc.is_locked),
             excluded: &req.excluded_tools,
             subscribed: entitlement.is_subscribed(),
         },
         set,
-    )
+    );
+    if !super::engine::explicit_playback_request(&req.utterance) {
+        tools.retain(|tool| tool.name != "music_discover");
+    }
+    tools
 }
 
 /// Rebuild the chat transcript from the state the device replayed in the initial
@@ -1594,7 +1615,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn grounded_music_playback_settles_on_bidi_without_a_second_model_step() {
+    async fn researched_music_playback_settles_on_bidi_without_a_third_model_step() {
         struct MusicModel(std::sync::atomic::AtomicUsize);
 
         #[tonic::async_trait]
@@ -1604,21 +1625,36 @@ mod tests {
                 _messages: &[ChatMessage],
                 _tools: &[ToolDef],
             ) -> Result<ChatResponse, LlmError> {
-                assert_eq!(
-                    self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
-                    0,
-                    "provider-grounded playback must not require another model step"
-                );
-                Ok(ChatResponse {
-                    tool_call: Some(ToolCall {
-                        name: "music_discover".to_owned(),
-                        arguments: serde_json::json!({
+                let call = self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let (name, arguments) = if call == 0 {
+                    (
+                        "web_search",
+                        serde_json::json!({
+                            "query": "Drake most controversial song released in 2013"
+                        })
+                        .to_string(),
+                    )
+                } else {
+                    assert_eq!(
+                        call, 1,
+                        "provider-grounded playback must not require a settlement model step"
+                    );
+                    (
+                        "music_discover",
+                        serde_json::json!({
                             "artist": "Drake",
+                            "title": "Started From the Bottom",
                             "criterion": "most controversial",
                             "timeframe": "all_time",
                             "year": 2013
                         })
                         .to_string(),
+                    )
+                };
+                Ok(ChatResponse {
+                    tool_call: Some(ToolCall {
+                        name: name.to_owned(),
+                        arguments,
                     }),
                     ..Default::default()
                 })
@@ -1669,6 +1705,13 @@ mod tests {
         .unwrap();
         drop(tx);
 
+        let research_action = next(&mut out).await;
+        assert_eq!(action_of(&research_action).unwrap().action, "web_search");
+        let research_observation = next(&mut out).await;
+        assert_eq!(
+            observation_of(&research_observation).unwrap().action_name,
+            "web_search"
+        );
         let server_action = next(&mut out).await;
         assert_eq!(action_of(&server_action).unwrap().action, "music_discover");
         let server_observation = next(&mut out).await;
@@ -1683,7 +1726,35 @@ mod tests {
             serde_json::from_str::<serde_json::Value>(&action.input).unwrap(),
             serde_json::json!({"Artist": "Drake", "Track": "Started From the Bottom"})
         );
-        assert_eq!(model.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(model.0.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn future_weather_declines_on_bidi_without_model_or_location_work() {
+        struct ModelMustNotRun;
+
+        #[tonic::async_trait]
+        impl ChatModel for ModelMustNotRun {
+            async fn complete(
+                &self,
+                _messages: &[ChatMessage],
+                _tools: &[ToolDef],
+            ) -> Result<ChatResponse, LlmError> {
+                panic!("future weather is a closed product limitation")
+            }
+        }
+
+        let (tx, mut out) = session(Arc::new(ModelMustNotRun));
+        tx.send(Ok(understanding("What will the weather be tomorrow?")))
+            .await
+            .unwrap();
+        drop(tx);
+
+        let answer = next(&mut out).await;
+        assert_eq!(
+            spoken(&answer),
+            "Future weather forecasts are not available yet."
+        );
     }
 
     #[tokio::test]
@@ -2351,6 +2422,7 @@ mod tests {
                         name: "music_discover".to_owned(),
                         arguments: serde_json::json!({
                             "artist": "Drake",
+                            "title": "Started From the Bottom",
                             "criterion": "most controversial",
                             "timeframe": "all_time",
                             "year": 2013
@@ -2393,7 +2465,11 @@ mod tests {
             Duration::from_secs(2),
         );
 
-        tx.send(Ok(understanding("first question"))).await.unwrap();
+        tx.send(Ok(understanding(
+            "play Drake's most controversial song from 2013",
+        )))
+        .await
+        .unwrap();
         let selected_tool = next(&mut out).await;
         assert_eq!(action_of(&selected_tool).unwrap().action, "music_discover");
 
@@ -2613,6 +2689,7 @@ mod tests {
                 name: "music_discover".to_owned(),
                 arguments: serde_json::json!({
                     "artist": "Drake",
+                    "title": "Started From the Bottom",
                     "criterion": "most controversial",
                     "timeframe": "all_time",
                     "year": 2013
@@ -2634,7 +2711,7 @@ mod tests {
         );
 
         tx.send(Ok(understanding(
-            "find Drake's most controversial song from 2013",
+            "play Drake's most controversial song from 2013",
         )))
         .await
         .unwrap();

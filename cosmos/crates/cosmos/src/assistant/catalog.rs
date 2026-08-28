@@ -82,6 +82,13 @@ pub fn system_prompt() -> &'static str {
      anything else. Device actions (set a timer, play music, search contacts, \
      take a photo, and so on) run on the pin itself.\n\
      \n\
+     For a ranked or subjective music question, research the requested criterion \
+     with `web_search` or `ask_online`. If the wearer only asks what the song is, \
+     answer from that research and do not touch their music provider. If they \
+     explicitly ask to play it, call `music_discover` after research with the \
+     exact title and artist; it verifies the track against the active provider \
+     before playback.\n\
+     \n\
      A question about the pin's OWN state — the current time, the battery level, \
      the volume, whether Wi-Fi, Bluetooth, or airplane mode is on, whether the \
      pin is online, or where the wearer is right now — is answered by the pin, \
@@ -228,7 +235,11 @@ fn music_discovery_schema() -> Value {
         "properties": {
             "artist": {
                 "type": "string",
-                "description": "A named artist when the wearer supplied one."
+                "description": "The exact primary artist identified by the preceding web research."
+            },
+            "title": {
+                "type": "string",
+                "description": "The exact official track title identified by the preceding web research."
             },
             "criterion": {
                 "type": "string",
@@ -251,7 +262,7 @@ fn music_discovery_schema() -> Value {
                 "description": "Short additional constraints, mood, situation, or reference track supplied by the wearer."
             }
         },
-        "required": ["criterion", "timeframe"]
+        "required": ["artist", "title", "criterion", "timeframe"]
     })
 }
 
@@ -493,7 +504,7 @@ const SERVER_TOOLS: &[ServerTool] = &[
     },
     ServerTool {
         name: "music_discover",
-        description: "Discover one research-based, ranked, or subjective music choice and verify that exact track against the wearer's active provider. Use this for criteria such as most popular, top, best, viral, controversial, influential, trending, newest, underrated, similar-to, and mood or situation requests. Preserve an explicit release year. Exact named tracks and ordinary transport controls do not need this tool.",
+        description: "Verify one exact track against the wearer's active provider before explicit playback. For a ranked or subjective request, first use web_search or ask_online to identify the title and artist, then call this tool. Never use it for an information-only music question. Exact named tracks and ordinary transport controls do not need it.",
         parameters: music_discovery_schema,
     },
 ];
@@ -1582,6 +1593,12 @@ pub fn device_action_input(
     arguments: &str,
     wearer_request: &str,
 ) -> Result<String, String> {
+    if action == "Tickle" && !exact_tickle_request(wearer_request) {
+        return Err(
+            "Rejected \"Tickle\": the wearer did not use one of the three exact supported phrases."
+                .to_owned(),
+        );
+    }
     let repaired = with_device_defaults(action, arguments);
     let missing = missing_required_slots(action, &repaired);
     let filled = if missing.is_empty() {
@@ -1622,6 +1639,27 @@ pub fn device_action_input(
     } else {
         Err(invalid_argument_observation(action, &problems))
     }
+}
+
+fn exact_tickle_request(value: &str) -> bool {
+    let normalized = value
+        .chars()
+        .flat_map(char::to_lowercase)
+        .map(|character| {
+            if character.is_alphanumeric() {
+                character
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    matches!(
+        normalized.as_str(),
+        "tickle" | "tickle my fancy" | "tickle tickle tickle"
+    )
 }
 
 /// Execute a **server-side** tool -> the observation text fed back to the model.
@@ -3048,6 +3086,47 @@ mod tests {
 
         // Actions with no required slots are passed through untouched.
         assert!(device_action_input("PauseMusic", "{}", "").is_ok());
+    }
+
+    #[test]
+    fn tickle_requires_one_of_the_three_exact_wearer_phrases() {
+        for utterance in ["Tickle.", "Tickle my fancy.", "Tickle tickle tickle."] {
+            device_action_input("Tickle", "{}", utterance)
+                .unwrap_or_else(|error| panic!("{utterance:?} should be authoritative: {error}"));
+        }
+
+        for utterance in [
+            "Please tickle.",
+            "Could you tickle?",
+            "What happens if I say tickle?",
+            "Do not tickle.",
+        ] {
+            assert!(
+                device_action_input("Tickle", "{}", utterance).is_err(),
+                "{utterance:?} must not dispatch the exact stock action"
+            );
+        }
+    }
+
+    #[test]
+    fn music_provider_verification_requires_the_researched_exact_track() {
+        let tool = tool_catalog()
+            .into_iter()
+            .find(|tool| tool.name == "music_discover")
+            .expect("music_discover");
+        assert_eq!(
+            tool.parameters["required"],
+            json!(["artist", "title", "criterion", "timeframe"])
+        );
+        assert!(tool.description.contains("before explicit playback"));
+        assert!(
+            tool.description
+                .contains("first use web_search or ask_online")
+        );
+        assert!(
+            tool.description
+                .contains("Never use it for an information-only")
+        );
     }
 
     #[test]

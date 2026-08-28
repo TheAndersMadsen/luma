@@ -1252,7 +1252,11 @@ fn resolve_catalog(req: &pb::SynapseUnderstandingRequest, subscribed: bool) -> V
         excluded: &req.excluded_tools,
         subscribed,
     };
-    catalog::tool_catalog_for_set(&context, resolved_tool_set(req).set)
+    let mut tools = catalog::tool_catalog_for_set(&context, resolved_tool_set(req).set);
+    if !explicit_playback_request(&req.utterance) {
+        tools.retain(|tool| tool.name != "music_discover");
+    }
+    tools
 }
 
 /// The newest user-request turn the device replayed — the one this run is about.
@@ -1582,6 +1586,14 @@ fn deterministic_device_action(
     req: &pb::SynapseUnderstandingRequest,
     tools: &[ToolDef],
 ) -> Option<DeterministicDeviceAction> {
+    let offered = |name: &str| tools.iter().any(|tool| tool.name == name);
+    if future_weather_request(&req.utterance) && offered(catalog::RESPOND_ACTION) {
+        return Some(DeterministicDeviceAction {
+            name: catalog::RESPOND_ACTION,
+            input: catalog::respond_input(FUTURE_WEATHER_UNAVAILABLE),
+            thought: "The requested forecast is outside the current weather capability",
+        });
+    }
     let unlocked = req
         .device_context
         .as_ref()
@@ -1594,8 +1606,6 @@ fn deterministic_device_action(
         .as_ref()
         .map(|context| context.turns.as_slice())
         .unwrap_or_default();
-    let offered = |name: &str| tools.iter().any(|tool| tool.name == name);
-
     if let Some(request) = explicit_nutrition_request(&req.utterance) {
         if offered("ManageNutrition")
             && !current_run_contains_action(current_turns, "ManageNutrition")
@@ -1798,6 +1808,21 @@ fn local_weather_request(utterance: &str) -> bool {
                 | "is it raining outside"
         )
     )
+}
+
+pub(crate) const FUTURE_WEATHER_UNAVAILABLE: &str =
+    "Future weather forecasts are not available yet.";
+
+pub(crate) fn future_weather_request(utterance: &str) -> bool {
+    let Some(intent) = normalized_intent(utterance) else {
+        return false;
+    };
+    let asks_weather = intent.contains("weather") || intent.contains("forecast");
+    let asks_future = intent.contains("tomorrow")
+        || intent.contains("next week")
+        || intent.contains("next month")
+        || intent.contains("this weekend");
+    asks_weather && asks_future
 }
 
 pub(crate) fn explicit_playback_request(utterance: &str) -> bool {
@@ -2253,7 +2278,7 @@ mod tests {
         run_with(music.clone(), pointer("music", 1)).await;
         assert!(music.tools().iter().any(|t| t == "PlayMusic"));
         assert!(!music.tools().iter().any(|t| t == "SetTimer"));
-        assert!(music.system().contains("music playback only"));
+        assert!(music.system().contains("music questions and playback"));
     }
 
     /// An unrecognized or absent pointer must never cost the wearer their turn:
@@ -3040,6 +3065,74 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn future_weather_declines_without_location_or_model_work() {
+        let model = Arc::new(CapturingModel::default());
+        let msgs = run_with(
+            model.clone(),
+            pb::SynapseUnderstandingRequest {
+                utterance: "What will the weather be tomorrow?".into(),
+                device_context: Some(pb::SynapseDeviceContext::default()),
+                ..Default::default()
+            },
+        )
+        .await;
+
+        assert!(
+            model.seen.lock().unwrap().is_none(),
+            "a known product limitation must not spend a model round trip"
+        );
+        let action = device_visible(&msgs)
+            .into_iter()
+            .find_map(as_action)
+            .expect("the limitation must terminate with speech");
+        assert_eq!(action.action, catalog::RESPOND_ACTION);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&action.input).unwrap()
+                [catalog::RESPOND_FIELD],
+            "Future weather forecasts are not available yet."
+        );
+    }
+
+    #[tokio::test]
+    async fn answer_only_ranked_music_uses_research_without_provider_discovery() {
+        let answer_model = Arc::new(CapturingModel::default());
+        run_with(
+            answer_model.clone(),
+            pb::SynapseUnderstandingRequest {
+                utterance: "What is Michael Jackson's most popular song?".into(),
+                device_context: Some(pb::SynapseDeviceContext::default()),
+                ..Default::default()
+            },
+        )
+        .await;
+        let answer_tools = answer_model.tools();
+        assert!(answer_tools.iter().any(|tool| tool == "web_search"));
+        assert!(answer_tools.iter().any(|tool| tool == "ask_online"));
+        assert!(
+            answer_tools.iter().all(|tool| tool != "music_discover"),
+            "an information-only question must not require the active provider"
+        );
+
+        let playback_model = Arc::new(CapturingModel::default());
+        run_with(
+            playback_model.clone(),
+            pb::SynapseUnderstandingRequest {
+                utterance: "Play Michael Jackson's most popular song.".into(),
+                device_context: Some(pb::SynapseDeviceContext::default()),
+                ..Default::default()
+            },
+        )
+        .await;
+        assert!(
+            playback_model
+                .tools()
+                .iter()
+                .any(|tool| tool == "music_discover"),
+            "explicit playback still needs provider verification"
+        );
+    }
+
+    #[tokio::test]
     async fn ranked_artist_music_is_model_selected_discovered_and_provider_verified() {
         struct PopularMusicModel(std::sync::atomic::AtomicUsize);
 
@@ -3050,23 +3143,35 @@ mod tests {
                 _messages: &[ChatMessage],
                 tools: &[ToolDef],
             ) -> Result<ChatResponse, LlmError> {
+                assert!(tools.iter().any(|tool| tool.name == "web_search"));
                 assert!(tools.iter().any(|tool| tool.name == "music_discover"));
-                assert_eq!(
-                    self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
-                    0,
-                    "provider-grounded ranked playback must finish after the model selects discovery",
-                );
-                Ok(ChatResponse {
-                    content: None,
-                    thought: "I should discover and verify the ranked music request".to_owned(),
-                    tool_call: Some(ToolCall {
-                        name: "music_discover".to_owned(),
-                        arguments: serde_json::json!({
+                let call = self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let (name, arguments, thought) = if call == 0 {
+                    (
+                        "web_search",
+                        serde_json::json!({"query": "Drake most popular song"}).to_string(),
+                        "I should research the requested ranking",
+                    )
+                } else {
+                    assert_eq!(call, 1, "provider verification should settle playback");
+                    (
+                        "music_discover",
+                        serde_json::json!({
                             "artist": "Drake",
+                            "title": "Hotline Bling",
                             "criterion": "most popular",
                             "timeframe": "all_time"
                         })
                         .to_string(),
+                        "I should verify the researched track on the active provider",
+                    )
+                };
+                Ok(ChatResponse {
+                    content: None,
+                    thought: thought.to_owned(),
+                    tool_call: Some(ToolCall {
+                        name: name.to_owned(),
+                        arguments,
                     }),
                     extra_tool_calls: Vec::new(),
                 })
@@ -3090,10 +3195,11 @@ mod tests {
         )
         .await;
 
-        assert_eq!(model.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(model.0.load(std::sync::atomic::Ordering::SeqCst), 2);
         let requests = backend.requests.lock().unwrap();
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].0.artist.as_deref(), Some("Drake"));
+        assert_eq!(requests[0].0.title.as_deref(), Some("Hotline Bling"));
         assert_eq!(requests[0].0.criterion, "most popular");
         assert_eq!(requests[0].0.timeframe, "all_time");
         drop(requests);
@@ -3132,12 +3238,16 @@ mod tests {
             crate::backends::music_discovery::GroundedMusicTrack,
             crate::backends::music_discovery::MusicDiscoveryError,
         > {
+            let title = request
+                .title
+                .clone()
+                .unwrap_or_else(|| "Hotline Bling".to_owned());
             self.requests
                 .lock()
                 .unwrap()
                 .push((request, principal.to_owned()));
             Ok(crate::backends::music_discovery::GroundedMusicTrack {
-                title: "Hotline Bling".to_owned(),
+                title,
                 artist: "Drake".to_owned(),
                 provider: "youtube_music".to_owned(),
                 ranking_provenance: "not_ranked".to_owned(),
@@ -3172,23 +3282,23 @@ mod tests {
     impl ChatModel for ViralMusicModel {
         async fn complete(
             &self,
-            _messages: &[ChatMessage],
+            messages: &[ChatMessage],
             tools: &[ToolDef],
         ) -> Result<ChatResponse, LlmError> {
-            assert!(tools.iter().any(|tool| tool.name == "music_discover"));
+            if self.answer_after_lookup {
+                assert!(tools.iter().all(|tool| tool.name != "music_discover"));
+            } else {
+                assert!(tools.iter().any(|tool| tool.name == "music_discover"));
+            }
             let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             if call == 0 {
                 return Ok(ChatResponse {
                     content: None,
                     thought: "I should ground the current viral choice".to_owned(),
                     tool_call: Some(ToolCall {
-                        name: "music_discover".to_owned(),
-                        arguments: serde_json::json!({
-                            "artist": "Drake",
-                            "criterion": "viral",
-                            "timeframe": "current"
-                        })
-                        .to_string(),
+                        name: "web_search".to_owned(),
+                        arguments: serde_json::json!({"query": "Drake most viral song"})
+                            .to_string(),
                     }),
                     extra_tool_calls: Vec::new(),
                 });
@@ -3201,7 +3311,25 @@ mod tests {
                     extra_tool_calls: Vec::new(),
                 });
             }
-            panic!("grounded play must not require another model call");
+            assert_eq!(call, 1, "provider-grounded playback should settle next");
+            assert!(messages.iter().any(|message| {
+                message.role == Role::ToolResult && message.content.contains("web_search")
+            }));
+            Ok(ChatResponse {
+                content: None,
+                thought: "I should verify the researched result".to_owned(),
+                tool_call: Some(ToolCall {
+                    name: "music_discover".to_owned(),
+                    arguments: serde_json::json!({
+                        "artist": "Drake",
+                        "title": "Hotline Bling",
+                        "criterion": "viral",
+                        "timeframe": "current"
+                    })
+                    .to_string(),
+                }),
+                extra_tool_calls: Vec::new(),
+            })
         }
     }
 
@@ -3227,10 +3355,11 @@ mod tests {
         )
         .await;
 
-        assert_eq!(model.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(model.calls.load(std::sync::atomic::Ordering::SeqCst), 2);
         let requests = backend.requests.lock().unwrap();
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].0.artist.as_deref(), Some("Drake"));
+        assert_eq!(requests[0].0.title.as_deref(), Some("Hotline Bling"));
         assert_eq!(requests[0].0.criterion, "viral");
         assert_eq!(requests[0].0.timeframe, "current");
         assert_eq!(requests[0].1, "V:01:D:pin-01:U:wearer-01");
@@ -3239,8 +3368,8 @@ mod tests {
         let visible = device_visible(&msgs);
         assert_eq!(
             visible.len(),
-            3,
-            "server action, grounded observation, terminal device action"
+            5,
+            "web research, provider verification, and the terminal device action"
         );
         let action = visible
             .iter()
@@ -3266,18 +3395,30 @@ mod tests {
             tools: &[ToolDef],
         ) -> Result<ChatResponse, LlmError> {
             assert!(tools.iter().any(|tool| tool.name == "music_discover"));
-            assert_eq!(
-                self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
-                0,
-                "provider-grounded playback must terminate after one model turn"
-            );
+            let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if call == 0 {
+                return Ok(ChatResponse {
+                    content: None,
+                    thought: "I should research the historical criterion first".to_owned(),
+                    tool_call: Some(ToolCall {
+                        name: "web_search".to_owned(),
+                        arguments: serde_json::json!({
+                            "query": "Drake most controversial song released in 2013"
+                        })
+                        .to_string(),
+                    }),
+                    extra_tool_calls: Vec::new(),
+                });
+            }
+            assert_eq!(call, 1, "provider verification should settle playback");
             Ok(ChatResponse {
                 content: None,
-                thought: "I should research the historical criterion first".to_owned(),
+                thought: "I should verify the researched historical track".to_owned(),
                 tool_call: Some(ToolCall {
                     name: "music_discover".to_owned(),
                     arguments: serde_json::json!({
-                        "artist": "Drake",
+                            "artist": "Drake",
+                            "title": "Started From the Bottom",
                         "criterion": "most controversial",
                         "timeframe": "all_time",
                         "year": 2013,
@@ -3311,10 +3452,14 @@ mod tests {
         )
         .await;
 
-        assert_eq!(model.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(model.calls.load(std::sync::atomic::Ordering::SeqCst), 2);
         let requests = backend.requests.lock().unwrap();
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].0.artist.as_deref(), Some("Drake"));
+        assert_eq!(
+            requests[0].0.title.as_deref(),
+            Some("Started From the Bottom")
+        );
         assert_eq!(requests[0].0.criterion, "most controversial");
         assert_eq!(requests[0].0.timeframe, "all_time");
         assert_eq!(requests[0].0.year, Some(2013));
@@ -3329,7 +3474,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn failed_playback_discovery_speaks_the_precise_failure_without_a_second_model_call() {
+    async fn failed_playback_discovery_speaks_the_precise_failure_without_a_settlement_model_call()
+    {
         let model = Arc::new(HistoricalMusicModel {
             calls: std::sync::atomic::AtomicUsize::new(0),
         });
@@ -3350,7 +3496,7 @@ mod tests {
         )
         .await;
 
-        assert_eq!(model.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(model.calls.load(std::sync::atomic::Ordering::SeqCst), 2);
         let action = device_visible(&msgs)
             .into_iter()
             .rev()
@@ -4789,6 +4935,7 @@ mod tests {
                 name: "music_discover".to_owned(),
                 arguments: serde_json::json!({
                     "artist": "Drake",
+                    "title": "Started From the Bottom",
                     "criterion": "most controversial",
                     "timeframe": "all_time",
                     "year": 2013
@@ -4808,7 +4955,7 @@ mod tests {
             engine
                 .run(
                     pb::SynapseUnderstandingRequest {
-                        utterance: "find Drake's most controversial song from 2013".to_owned(),
+                        utterance: "play Drake's most controversial song from 2013".to_owned(),
                         ..Default::default()
                     },
                     tx,

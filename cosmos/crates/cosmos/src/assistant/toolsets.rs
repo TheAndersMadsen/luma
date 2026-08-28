@@ -204,18 +204,22 @@ pub const SETS: &[ToolSet] = &[
         // is a single-transform, low-to-moderate-confidence candidate and is
         // deliberately not used: the tools below come from our own recovered
         // device-action interface and the wording is ours.
-        guidance: "This turn handles music playback only. For any research-based or subjective \
+        guidance: "This turn handles music questions and playback. For an information-only \
+                   ranked or subjective question, research with web_search or ask_online and answer \
+                   without touching the active provider. For explicit playback with a research-based or subjective \
                    selection criterion — including most popular, top, best, viral, controversial, \
-                   influential, trending, newest, underrated, similar-to, mood, or situation \
-                   requests — call \
-                   music_discover once; preserve an explicit release year and short additional \
-                   constraints. It verifies the choice against the active provider. Resolve ordinary \
+                   influential, trending, newest, underrated, similar-to, mood, or situation — first \
+                   research it with web_search or ask_online, then call music_discover once with the \
+                   exact title and artist; preserve an explicit release year and short additional \
+                   constraints. That second tool verifies the choice against the active provider. Resolve ordinary \
                    requests to the narrowest thing that fits — a track, artist, album, or genre — and \
                    ask which was meant when it genuinely matters. Do not say playback started \
                    unless the result says so; if the exact item is unavailable, name what is \
                    playing instead.",
         tools: SetTools::Only(&[
             RESPOND_ACTION,
+            "web_search",
+            "ask_online",
             "music_discover",
             "PlayMusic",
             "PauseMusic",
@@ -514,6 +518,17 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn the_music_set_can_research_before_answering_or_verifying_playback() {
+        let music = SETS
+            .iter()
+            .find(|set| set.name == "music")
+            .expect("music@1");
+        assert!(music.offers("web_search"));
+        assert!(music.offers("ask_online"));
+        assert!(music.offers("music_discover"));
     }
 
     /// A capability child that can dispatch its own wrapper is a dispatch loop:

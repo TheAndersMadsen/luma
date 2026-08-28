@@ -9,10 +9,9 @@ use std::time::{Duration, Instant};
 
 use super::{http, key};
 
-const PPLX_KEY_VAR: &str = "COSMOS_PPLX_API_KEY";
-const PPLX_MODEL_VAR: &str = "COSMOS_PPLX_MODEL";
-const DEFAULT_PPLX_MODEL: &str = "sonar";
+#[cfg(test)]
 const PPLX_MAX_TOKENS: u16 = 384;
+#[cfg(test)]
 const PPLX_TEMPERATURE: f64 = 0.1;
 const CENTER_URL_VAR: &str = "COSMOS_CENTER_MUSIC_QUERY_URL";
 const DEFAULT_CENTER_URL: &str = "http://center:4000/api/internal/music/query";
@@ -20,12 +19,19 @@ const MAX_TEXT_CHARACTERS: usize = 200;
 const MAX_CENTER_RESPONSE_BYTES: usize = 64 * 1024;
 const DEFAULT_DISCOVERY_BUDGET: Duration = Duration::from_secs(16);
 const SETTLEMENT_RESERVE: Duration = Duration::from_millis(1_500);
+#[cfg(test)]
 const INITIAL_RESEARCH_MAX: Duration = Duration::from_millis(7_500);
+#[cfg(test)]
 const INITIAL_RESEARCH_MIN: Duration = Duration::from_millis(2_500);
+#[cfg(test)]
 const RESEARCH_RETRY_MAX: Duration = Duration::from_millis(3_500);
+#[cfg(test)]
 const RESEARCH_RETRY_MIN: Duration = Duration::from_millis(1_500);
+#[cfg(test)]
 const WEB_RESEARCH_MAX: Duration = Duration::from_millis(1_500);
+#[cfg(test)]
 const CORROBORATION_MAX: Duration = Duration::from_millis(3_500);
+#[cfg(test)]
 const CORROBORATION_MIN: Duration = Duration::from_millis(1_500);
 const PROVIDER_MAX: Duration = Duration::from_millis(4_500);
 
@@ -33,6 +39,8 @@ const PROVIDER_MAX: Duration = Duration::from_millis(4_500);
 pub struct MusicDiscoveryRequest {
     #[serde(default)]
     pub artist: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
     pub criterion: String,
     #[serde(default = "current_timeframe")]
     pub timeframe: String,
@@ -108,11 +116,7 @@ pub trait MusicDiscoveryBackend: Send + Sync {
 /// production web/provider path cross the same seam.
 pub struct ProductionMusicDiscovery;
 
-struct PerplexityResearch {
-    api_key: String,
-    model: String,
-}
-
+#[cfg(test)]
 #[tonic::async_trait]
 trait CandidateResearch: Send + Sync {
     async fn web_search(&self, query: &str) -> Result<String, MusicDiscoveryError>;
@@ -123,28 +127,6 @@ trait CandidateResearch: Send + Sync {
         prior: Option<&CandidateEnvelope>,
         web_evidence: Option<&str>,
     ) -> Result<CandidateEnvelope, MusicDiscoveryError>;
-}
-
-#[tonic::async_trait]
-impl CandidateResearch for PerplexityResearch {
-    async fn web_search(&self, query: &str) -> Result<String, MusicDiscoveryError> {
-        crate::backends::search::search(query)
-            .await
-            .map_err(|error| match error {
-                crate::backends::BackendError::NotConfigured
-                | crate::backends::BackendError::NoResult => MusicDiscoveryError::NoEvidence,
-                crate::backends::BackendError::Unavailable => MusicDiscoveryError::Unavailable,
-            })
-    }
-
-    async fn candidates(
-        &self,
-        request: &MusicDiscoveryRequest,
-        prior: Option<&CandidateEnvelope>,
-        web_evidence: Option<&str>,
-    ) -> Result<CandidateEnvelope, MusicDiscoveryError> {
-        discover_candidates(request, &self.api_key, &self.model, prior, web_evidence).await
-    }
 }
 
 #[tonic::async_trait]
@@ -187,28 +169,80 @@ async fn discover_production(
     principal: &str,
     deadline: Instant,
 ) -> Result<GroundedMusicTrack, MusicDiscoveryError> {
-    validate_request(&request)?;
+    validate_verification_request(&request)?;
     if principal.trim().is_empty()
         || principal.chars().count() > 512
         || principal.chars().any(char::is_control)
     {
         return Err(MusicDiscoveryError::InvalidRequest);
     }
-    let api_key = key(PPLX_KEY_VAR).ok_or(MusicDiscoveryError::NotConfigured)?;
     let admin_token = key("COSMOS_ADMIN_TOKEN").ok_or(MusicDiscoveryError::NotConfigured)?;
-    let model = key(PPLX_MODEL_VAR).unwrap_or_else(|| DEFAULT_PPLX_MODEL.to_owned());
-    let research = PerplexityResearch { api_key, model };
-    discover_with_research(
+    verify_researched_candidate(
         request,
         principal,
         &admin_token,
         deadline,
-        &research,
         &CenterProviderCatalog,
     )
     .await
 }
 
+async fn verify_researched_candidate(
+    request: MusicDiscoveryRequest,
+    principal: &str,
+    admin_token: &str,
+    deadline: Instant,
+    provider_catalog: &dyn ProviderCatalog,
+) -> Result<GroundedMusicTrack, MusicDiscoveryError> {
+    validate_verification_request(&request)?;
+    let title = request
+        .title
+        .as_deref()
+        .ok_or(MusicDiscoveryError::InvalidRequest)?
+        .trim();
+    let artist = request
+        .artist
+        .as_deref()
+        .ok_or(MusicDiscoveryError::InvalidRequest)?
+        .trim();
+    let candidate = Candidate {
+        title: title.to_owned(),
+        artist: artist.to_owned(),
+        release_year: request.year.unwrap_or(2000),
+        rationale: request.criterion.clone(),
+        support: 100,
+        sources: Vec::new(),
+    };
+    let provider_budget = stage_budget(deadline, SETTLEMENT_RESERVE, PROVIDER_MAX)?;
+    let provider_deadline = tokio::time::Instant::now() + provider_budget;
+    let provider_started = Instant::now();
+    let verified = verify_candidates(
+        &[candidate],
+        provider_catalog,
+        principal,
+        admin_token,
+        provider_deadline,
+        "foreground_agent_web",
+    )
+    .await;
+    crate::metrics::record_music_discovery_stage(
+        "provider",
+        result_outcome(&verified),
+        provider_started.elapsed(),
+    );
+    match verified {
+        Ok((track, index)) => {
+            crate::metrics::record_music_discovery_resolution(1, Some(index), false, false);
+            Ok(track)
+        }
+        Err(error) => {
+            crate::metrics::record_music_discovery_resolution(1, None, false, false);
+            Err(error)
+        }
+    }
+}
+
+#[cfg(test)]
 async fn discover_with_research(
     request: MusicDiscoveryRequest,
     principal: &str,
@@ -416,6 +450,7 @@ fn result_outcome<T>(result: &Result<T, MusicDiscoveryError>) -> &'static str {
         .unwrap_or_else(|error| error.label())
 }
 
+#[cfg(test)]
 fn music_research_query(request: &MusicDiscoveryRequest) -> String {
     let mut parts = Vec::new();
     if let Some(artist) = request.artist.as_deref() {
@@ -535,6 +570,7 @@ fn ranking_label(value: &str) -> &'static str {
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+#[cfg(test)]
 enum ResearchStatus {
     Resolved,
     Ambiguous,
@@ -560,6 +596,7 @@ struct EvidenceSource {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg(test)]
 struct CandidateEnvelope {
     status: ResearchStatus,
     #[serde(default)]
@@ -567,6 +604,8 @@ struct CandidateEnvelope {
 }
 
 #[derive(Deserialize)]
+#[cfg(test)]
+#[allow(dead_code)]
 struct PerplexityResponse {
     #[serde(default)]
     choices: Vec<PerplexityChoice>,
@@ -575,11 +614,15 @@ struct PerplexityResponse {
 }
 
 #[derive(Deserialize)]
+#[cfg(test)]
+#[allow(dead_code)]
 struct PerplexityChoice {
     message: PerplexityMessage,
 }
 
 #[derive(Deserialize)]
+#[cfg(test)]
+#[allow(dead_code)]
 struct PerplexityMessage {
     #[serde(default)]
     content: String,
@@ -627,7 +670,26 @@ fn validate_request(request: &MusicDiscoveryRequest) -> Result<(), MusicDiscover
     Ok(())
 }
 
+fn validate_verification_request(
+    request: &MusicDiscoveryRequest,
+) -> Result<(), MusicDiscoveryError> {
+    validate_request(request)?;
+    if request
+        .title
+        .as_deref()
+        .is_none_or(|value| !bounded_text(value, MAX_TEXT_CHARACTERS))
+        || request
+            .artist
+            .as_deref()
+            .is_none_or(|value| !bounded_text(value, MAX_TEXT_CHARACTERS))
+    {
+        return Err(MusicDiscoveryError::InvalidRequest);
+    }
+    Ok(())
+}
+
 #[derive(Serialize)]
+#[cfg(test)]
 struct PerplexityRequest<'a> {
     model: &'a str,
     max_tokens: u16,
@@ -638,27 +700,33 @@ struct PerplexityRequest<'a> {
 }
 
 #[derive(Serialize)]
+#[cfg(test)]
 struct WebSearchOptions {
     search_context_size: &'static str,
 }
 
 #[derive(Serialize)]
+#[cfg(test)]
 struct PerplexityRequestMessage<'a> {
     role: &'a str,
     content: &'a str,
 }
 
 #[derive(Serialize)]
+#[cfg(test)]
 struct ResponseFormat {
     r#type: &'static str,
     json_schema: JsonSchema,
 }
 
 #[derive(Serialize)]
+#[cfg(test)]
 struct JsonSchema {
     schema: serde_json::Value,
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 async fn discover_candidates(
     request: &MusicDiscoveryRequest,
     api_key: &str,
@@ -764,6 +832,7 @@ async fn discover_candidates(
     parse_candidates(content, request, &response.citations)
 }
 
+#[cfg(test)]
 fn parse_candidates(
     content: &str,
     request: &MusicDiscoveryRequest,
@@ -844,6 +913,7 @@ fn parse_candidates(
     })
 }
 
+#[cfg(test)]
 fn valid_source_url(value: &str) -> bool {
     if value.len() > 512 || value.chars().any(char::is_control) {
         return false;
@@ -857,6 +927,7 @@ fn valid_source_url(value: &str) -> bool {
         && url.password().is_none()
 }
 
+#[cfg(test)]
 fn canonical_source_url(value: &str) -> Option<String> {
     let mut url = reqwest::Url::parse(value).ok()?;
     if url.scheme() != "https" || url.host_str().is_none() {
@@ -871,6 +942,7 @@ fn canonical_source_url(value: &str) -> Option<String> {
     Some(url.to_string())
 }
 
+#[cfg(test)]
 fn needs_corroboration(_request: &MusicDiscoveryRequest, research: &CandidateEnvelope) -> bool {
     if research.status != ResearchStatus::Resolved {
         return true;
@@ -885,6 +957,7 @@ fn needs_corroboration(_request: &MusicDiscoveryRequest, research: &CandidateEnv
     first.support < 75 || first.sources.len() < 2 || close_second
 }
 
+#[cfg(test)]
 fn evidence_disagreement(research: &CandidateEnvelope) -> bool {
     research.status != ResearchStatus::Resolved
         || research.candidates.get(1).is_some_and(|second| {
@@ -895,6 +968,7 @@ fn evidence_disagreement(research: &CandidateEnvelope) -> bool {
         })
 }
 
+#[cfg(test)]
 fn corroboration_is_decisive(research: &CandidateEnvelope) -> bool {
     research.status == ResearchStatus::Resolved
         && research.candidates.first().is_some_and(|first| {
@@ -1058,6 +1132,7 @@ mod tests {
     fn request() -> MusicDiscoveryRequest {
         MusicDiscoveryRequest {
             artist: Some("Drake".to_owned()),
+            title: None,
             criterion: "most controversial".to_owned(),
             timeframe: "all_time".to_owned(),
             year: Some(2013),
@@ -1321,6 +1396,44 @@ mod tests {
                 .pop_front()
                 .ok_or(MusicDiscoveryError::Unavailable)
         }
+    }
+
+    #[tokio::test]
+    async fn foreground_research_candidate_goes_directly_to_provider_verification() {
+        let mut request = request();
+        request.title = Some("Started From the Bottom".to_owned());
+        let catalog = FixedProviderCatalog {
+            responses: std::sync::Mutex::new(std::collections::VecDeque::from([
+                CenterCatalogResponse {
+                    provider: "youtube_music".to_owned(),
+                    ranking_provenance: "not_ranked".to_owned(),
+                    items: vec![CenterTrack {
+                        title: "Started From the Bottom".to_owned(),
+                        artists: vec!["Drake".to_owned()],
+                    }],
+                },
+            ])),
+            queries: std::sync::Mutex::new(Vec::new()),
+        };
+
+        let track = verify_researched_candidate(
+            request,
+            "wearer",
+            "admin-token",
+            Instant::now() + Duration::from_secs(5),
+            &catalog,
+        )
+        .await
+        .expect("the researched exact track is available on the active provider");
+
+        assert_eq!(track.title, "Started From the Bottom");
+        assert_eq!(track.artist, "Drake");
+        assert_eq!(track.provider, "youtube_music");
+        assert_eq!(track.discovery_provenance, "foreground_agent_web");
+        assert_eq!(
+            *catalog.queries.lock().unwrap(),
+            vec!["Started From the Bottom".to_owned()]
+        );
     }
 
     #[tokio::test]
