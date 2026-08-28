@@ -329,21 +329,34 @@ fn append_value_tokens(value: &serde_json::Value, tokens: &mut HashSet<String>) 
     }
 }
 
-fn overlap_score(
-    value: &serde_json::Value,
-    query_tokens: &HashSet<String>,
-    weight: usize,
-) -> usize {
+fn value_tokens(value: &serde_json::Value) -> HashSet<String> {
     let mut tokens = HashSet::new();
     append_value_tokens(value, &mut tokens);
-    query_tokens.intersection(&tokens).count() * weight
+    tokens
 }
 
 fn search_hit_score(product: &OffSearchHit, query_tokens: &HashSet<String>) -> usize {
-    overlap_score(&product.product_name, query_tokens, 4)
-        + overlap_score(&product.generic_name, query_tokens, 3)
-        + overlap_score(&product.categories, query_tokens, 2)
-        + overlap_score(&product.brands, query_tokens, 1)
+    let product_name = value_tokens(&product.product_name);
+    let generic_name = value_tokens(&product.generic_name);
+    let categories = value_tokens(&product.categories);
+    let brands = value_tokens(&product.brands);
+
+    query_tokens
+        .iter()
+        .map(|token| {
+            if product_name.contains(token) {
+                4
+            } else if generic_name.contains(token) {
+                3
+            } else if categories.contains(token) {
+                2
+            } else if brands.contains(token) {
+                1
+            } else {
+                0
+            }
+        })
+        .sum()
 }
 
 fn best_search_hit(
@@ -500,6 +513,22 @@ mod tests {
                 .expect("one relevant hit")
                 .code,
             "22222222"
+        );
+    }
+
+    #[test]
+    fn repeated_metadata_cannot_outscore_an_earlier_product_name_match() {
+        let search: OffSearch = serde_json::from_str(
+            r#"{"hits":[{"code":"11111111","product_name":"Original instant oatmeal","brands":["Oatmeal"],"categories":"Cereals"},{"code":"22222222","product_name":"Oatmeal raisin cookie","generic_name":"Oatmeal cookie","categories":"Cookies, Oatmeal cookies"}]}"#,
+        )
+        .unwrap();
+        let query = ["oatmeal".to_owned()].into_iter().collect();
+
+        assert_eq!(
+            best_search_hit(search.products, &query)
+                .expect("one relevant hit")
+                .code,
+            "11111111"
         );
     }
 

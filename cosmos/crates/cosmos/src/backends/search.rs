@@ -369,13 +369,50 @@ fn summarize_serpapi(found: &SerpResponse, query: &str) -> Option<String> {
 }
 
 fn summarize_searxng(found: &SearxResponse, query: &str) -> Option<String> {
+    let query_terms = relevance_terms(query);
+    let mut ranked: Vec<_> = found.results.iter().collect();
+    ranked.sort_by_key(|result| std::cmp::Reverse(result_relevance(result, &query_terms)));
     summarize_results(
-        found
-            .results
+        ranked
             .iter()
             .map(|result| (&*result.title, &*result.content)),
         query,
     )
+}
+
+fn relevance_terms(text: &str) -> Vec<String> {
+    const STOP_WORDS: &[&str] = &[
+        "a", "about", "an", "and", "at", "for", "from", "how", "in", "is", "look", "me", "of",
+        "on", "search", "tell", "the", "to", "up", "web", "what", "when", "where", "who",
+    ];
+
+    let mut terms: Vec<_> = text
+        .split(|character: char| !character.is_alphanumeric())
+        .filter(|term| term.chars().count() >= 3)
+        .map(str::to_lowercase)
+        .filter(|term| !STOP_WORDS.contains(&term.as_str()))
+        .collect();
+    terms.sort();
+    terms.dedup();
+    terms
+}
+
+fn result_relevance(result: &SearxResult, query_terms: &[String]) -> usize {
+    let result_terms: std::collections::HashSet<_> = result
+        .title
+        .split(|character: char| !character.is_alphanumeric())
+        .chain(
+            result
+                .content
+                .split(|character: char| !character.is_alphanumeric()),
+        )
+        .filter(|term| term.chars().count() >= 3)
+        .map(str::to_lowercase)
+        .collect();
+    query_terms
+        .iter()
+        .filter(|term| result_terms.contains(term.as_str()))
+        .count()
 }
 
 fn summarize_results<'a>(
@@ -807,6 +844,35 @@ mod tests {
             text.len()
                 <= MAX_QUERY_BYTES + MAX_RESULTS * (MAX_TITLE_BYTES + MAX_SNIPPET_BYTES + 8) + 64
         );
+    }
+
+    #[test]
+    fn searxng_promotes_query_relevant_results_before_truncation() {
+        let response = SearxResponse {
+            results: [
+                ("Punch newspapers", "Breaking news from Nigeria", "bing"),
+                ("The Nation", "Latest Nigerian headlines", "bing"),
+                ("CNN", "World news", "bing"),
+                ("NDTV", "Latest news from India", "bing"),
+                (
+                    "Denmark | The Guardian",
+                    "Latest news and features from Denmark",
+                    "yandex",
+                ),
+            ]
+            .into_iter()
+            .map(|(title, content, engine)| SearxResult {
+                title: title.to_owned(),
+                content: content.to_owned(),
+                engine: engine.to_owned(),
+                engines: Vec::new(),
+            })
+            .collect(),
+        };
+
+        let text = summarize_searxng(&response, "latest news in Denmark").unwrap();
+        assert!(text.contains("Denmark | The Guardian"));
+        assert_eq!(text.lines().count(), MAX_RESULTS + 1);
     }
 
     #[test]

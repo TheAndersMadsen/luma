@@ -1668,6 +1668,15 @@ fn deterministic_device_action(
             });
         }
     }
+    if let Some((agent, request)) = explicit_clock_agent_request(&req.utterance) {
+        if offered(agent) && !current_run_contains_action(current_turns, agent) {
+            return Some(DeterministicDeviceAction {
+                name: agent,
+                input: serde_json::json!({"Request": request}).to_string(),
+                thought: "The wearer explicitly requested a stock clock control",
+            });
+        }
+    }
 
     if explicit_route_request(&req.utterance)
         && req.location.is_none()
@@ -1693,6 +1702,64 @@ fn deterministic_device_action(
     }
 
     None
+}
+
+fn explicit_clock_agent_request(utterance: &str) -> Option<(&'static str, &str)> {
+    const MAX_CLOCK_REQUEST_BYTES: usize = 512;
+    const COMMANDS: &[&str] = &[
+        "add", "cancel", "create", "delete", "display", "extend", "list", "pause", "remove",
+        "resume", "set", "show", "start",
+    ];
+
+    let utterance = utterance.trim();
+    if utterance.is_empty()
+        || utterance.len() > MAX_CLOCK_REQUEST_BYTES
+        || utterance.chars().any(|character| {
+            character == '\0' || (character.is_control() && !character.is_whitespace())
+        })
+    {
+        return None;
+    }
+    let mut normalized = utterance
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || character.is_whitespace() {
+                character.to_ascii_lowercase()
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    for prefix in [
+        "can you please ",
+        "could you please ",
+        "would you please ",
+        "can you ",
+        "could you ",
+        "would you ",
+        "please ",
+    ] {
+        if let Some(rest) = normalized.strip_prefix(prefix) {
+            normalized = rest.to_owned();
+            break;
+        }
+    }
+    let mut words = normalized.split_whitespace();
+    let command = words.next()?;
+    if !COMMANDS.contains(&command) {
+        return None;
+    }
+    let words: Vec<_> = std::iter::once(command).chain(words).collect();
+    if words.iter().any(|word| matches!(*word, "timer" | "timers")) {
+        Some(("Timer", utterance))
+    } else if words.iter().any(|word| matches!(*word, "alarm" | "alarms")) {
+        Some(("Alarm", utterance))
+    } else {
+        None
+    }
 }
 
 fn explicit_nutrition_request(utterance: &str) -> Option<&str> {
@@ -3837,6 +3904,75 @@ mod tests {
                 "unrelated request was claimed as stock nutrition: {unrelated}",
             );
         }
+    }
+
+    #[test]
+    fn explicit_clock_controls_enter_the_stock_timer_or_alarm_agent() {
+        let unlocked = |utterance: &str| pb::SynapseUnderstandingRequest {
+            utterance: utterance.to_owned(),
+            device_context: Some(pb::SynapseDeviceContext::default()),
+            ..Default::default()
+        };
+
+        for (utterance, expected) in [
+            ("Set a timer for five minutes.", "Timer"),
+            ("Show my timers.", "Timer"),
+            ("Pause my timer.", "Timer"),
+            ("Resume my timer.", "Timer"),
+            ("Add one minute to my timer.", "Timer"),
+            ("Delete my timer.", "Timer"),
+            ("Set an alarm for 7 AM.", "Alarm"),
+            ("Set a weekday alarm for 7:30 AM.", "Alarm"),
+            ("Show my alarms.", "Alarm"),
+            ("Cancel my 7 AM alarm.", "Alarm"),
+            ("Cancel my alarm.", "Alarm"),
+        ] {
+            let request = unlocked(utterance);
+            let tools = resolve_catalog(&request, true);
+            let action = deterministic_device_action(&request, &tools).unwrap_or_else(|| {
+                panic!("clock control did not enter its stock agent: {utterance}")
+            });
+            assert_eq!(action.name, expected, "{utterance}");
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&action.input).unwrap(),
+                serde_json::json!({"Request": utterance}),
+            );
+        }
+
+        for unrelated in [
+            "What is an alarm clock?",
+            "Tell me about timers.",
+            "What time is it in Tokyo?",
+        ] {
+            assert!(
+                explicit_clock_agent_request(unrelated).is_none(),
+                "unrelated request was claimed as a clock control: {unrelated}",
+            );
+        }
+
+        let mut locked = unlocked("Delete my timer.");
+        locked.device_context.as_mut().unwrap().is_locked = true;
+        let locked_tools = resolve_catalog(&locked, true);
+        assert!(deterministic_device_action(&locked, &locked_tools).is_none());
+
+        let mut excluded = unlocked("Cancel my alarm.");
+        excluded.excluded_tools = vec!["Alarm".to_owned()];
+        let excluded_tools = resolve_catalog(&excluded, true);
+        assert!(deterministic_device_action(&excluded, &excluded_tools).is_none());
+
+        let mut replayed = unlocked("Cancel my 7 AM alarm.");
+        replayed.device_context.as_mut().unwrap().turns = vec![pb::SynapseChatTurn {
+            identifier: "alarm-agent".into(),
+            content: Some(pb::synapse_chat_turn::Content::Action(
+                pb::SynapseActionContent {
+                    action: "Alarm".into(),
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        }];
+        let replayed_tools = resolve_catalog(&replayed, true);
+        assert!(deterministic_device_action(&replayed, &replayed_tools).is_none());
     }
 
     #[test]

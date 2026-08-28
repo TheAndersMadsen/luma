@@ -21,6 +21,9 @@ export const ASSISTANT_CASES = Object.freeze([
     forbiddenActions: [],
     route: "a1",
     terminal: "answered",
+    answerPattern: /\b(?:Denmark|Danish|Copenhagen|Greenland)\b/iu,
+    forbiddenAnswerPattern:
+      /(?:couldn['’]t|could not|unable to) find|no reliable (?:current )?(?:result|news)/iu,
   }),
   Object.freeze({
     id: "compound-research",
@@ -145,6 +148,12 @@ export function evaluateAssistantCase(spec, trace, beforeScrape, afterScrape) {
       .filter((text) => typeof text === "string");
     if (!answers.some((answer) => spec.answerPattern.test(answer))) {
       failures.push("answer_mismatch");
+    }
+    if (
+      spec.forbiddenAnswerPattern &&
+      answers.some((answer) => spec.forbiddenAnswerPattern.test(answer))
+    ) {
+      failures.push("answer_forbidden");
     }
   }
   if (!Number.isFinite(trace?.total_ms) || !Number.isFinite(trace?.device_deadline_ms)) {

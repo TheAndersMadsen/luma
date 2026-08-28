@@ -38,7 +38,11 @@ test("agent evaluation correlates the trace with an actual model run", () => {
       steps: [
         { kind: "action", name: "web_search" },
         { kind: "observation", name: "web_search" },
-        { kind: "answer", name: "Respond" },
+        {
+          kind: "answer",
+          name: "Respond",
+          text: "One current Denmark headline was returned.",
+        },
       ],
       total_ms: 4200,
       device_deadline_ms: 25000,
@@ -114,6 +118,29 @@ test("a current product price cannot pass with only its historical launch price"
 
   assert.equal(result.pass, false);
   assert.ok(result.failures.includes("answer_mismatch"), result.failures.join(","));
+});
+
+test("a web-search refusal cannot pass merely because the tool ran", () => {
+  const result = evaluateAssistantCase(
+    ASSISTANT_CASES.find(({ id }) => id === "fresh-web-search"),
+    {
+      steps: [
+        { kind: "action", name: "web_search" },
+        {
+          kind: "answer",
+          name: "Respond",
+          text: "I couldn’t find a reliable current Denmark news result.",
+        },
+      ],
+      total_ms: 4200,
+      device_deadline_ms: 25000,
+    },
+    sample({}, 4),
+    sample({}, 5),
+  );
+
+  assert.equal(result.pass, false);
+  assert.ok(result.failures.includes("answer_forbidden"), result.failures.join(","));
 });
 
 test("a bounded lookup case cannot silently repeat the same provider tool", () => {
