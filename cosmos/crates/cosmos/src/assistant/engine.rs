@@ -1335,15 +1335,62 @@ fn newest_user_request(
         })
 }
 
+/// The user-request root on the newest in-progress run's parent chain.
+///
+/// Completed historical runs can remain in `device_context.turns` for three
+/// minutes. A text-only follow-up may therefore have no replayed live root and
+/// must use the top-level utterance. Conversely, when the newest turn is not
+/// final, its parent chain is the live stock run and its user request is more
+/// faithful than the lossy top-level intent projection.
+fn current_run_user_request(
+    req: &pb::SynapseUnderstandingRequest,
+) -> Option<&pb::SynapseUserRequestContent> {
+    use std::collections::HashMap;
+
+    let turns = &req.device_context.as_ref()?.turns;
+    let mut cursor = turns.last()?;
+    if matches!(
+        cursor.content.as_ref(),
+        Some(pb::synapse_chat_turn::Content::Action(action))
+            if action.action == catalog::RESPOND_ACTION
+    ) || matches!(
+        cursor.content.as_ref(),
+        Some(pb::synapse_chat_turn::Content::End(_))
+    ) {
+        return None;
+    }
+    let by_id: HashMap<&str, &pb::SynapseChatTurn> = turns
+        .iter()
+        .map(|turn| (turn.identifier.as_str(), turn))
+        .collect();
+    for _ in 0..turns.len() {
+        if let Some(pb::synapse_chat_turn::Content::UserRequest(request)) = cursor.content.as_ref()
+        {
+            return Some(request);
+        }
+        if cursor.parent_identifier.is_empty() {
+            return None;
+        }
+        cursor = by_id.get(cursor.parent_identifier.as_str()).copied()?;
+    }
+    None
+}
+
 /// The current wearer text in the shape stock actually sends.
 ///
-/// Legacy and bidirectional clients replay the live user-request turn inside
-/// `device_context.turns`; the top-level `utterance` may therefore be empty.
-/// A nonempty top-level field may be a newer text-only follow-up, so it wins
-/// unless it names the same replayed turn and that turn carries a repaired
-/// form. When stock leaves the top-level field empty, use the repaired replayed
-/// request and then its original text.
+/// Legacy and bidirectional clients replay an in-progress live request inside
+/// `device_context.turns`; that parent-chain root wins over both an empty and a
+/// lossy top-level intent projection. When the replay window ends in a final
+/// historical run, a nonempty top-level field is the newer text-only follow-up.
+/// Repaired text wins only within whichever request is current.
 pub(super) fn current_utterance(req: &pb::SynapseUnderstandingRequest) -> &str {
+    if let Some(request) = current_run_user_request(req) {
+        return if request.repaired_request.is_empty() {
+            request.request.as_str()
+        } else {
+            request.repaired_request.as_str()
+        };
+    }
     let replayed = newest_user_request(req);
     if !req.utterance.is_empty() {
         if let Some(request) = replayed
@@ -3605,15 +3652,18 @@ mod tests {
         let msgs = run_with_tools(
             model.clone(),
             pb::SynapseUnderstandingRequest {
-                // Stock carries the live request in the replayed turn and may
-                // leave the top-level utterance empty. This is the exact wire
-                // shape that previously removed music_discover from the catalog.
+                // Stock can also send a lossy top-level projection of the
+                // same live turn. The replayed root remains authoritative.
+                utterance: "Look up the most viral song by Drake".into(),
+                // Stock carries the faithful live request in the replayed turn
+                // while its top-level projection can omit the playback clause.
+                // That shape previously removed music_discover from the catalog.
                 device_context: Some(pb::SynapseDeviceContext {
                     turns: vec![pb::SynapseChatTurn {
                         identifier: "current-request".into(),
                         content: Some(pb::synapse_chat_turn::Content::UserRequest(
                             pb::SynapseUserRequestContent {
-                                request: "Play the most popular song by Drake".into(),
+                                request: "Look up the most viral song by Drake and play it".into(),
                                 ..Default::default()
                             },
                         )),
