@@ -221,6 +221,11 @@ fn route_schema() -> Value {
             "destination": {
                 "type": "string",
                 "description": "The destination the wearer named or selected from a preceding place result."
+            },
+            "mode": {
+                "type": "string",
+                "enum": ["driving", "walking", "bicycling"],
+                "description": "The requested travel mode. Omit it when the wearer did not specify one."
             }
         },
         "required": ["destination"]
@@ -1812,7 +1817,15 @@ pub async fn execute_tool_with(name: &str, arguments: &str, context: &ToolContex
             let Some((lat, lon)) = context.location else {
                 return NO_LOCATION.to_string();
             };
-            match crate::backends::places::directions(lat, lon, destination.to_owned()).await {
+            let mode = match args.get("mode").and_then(Value::as_str) {
+                None => None,
+                Some(value) => match crate::backends::places::DirectionsMode::parse(value) {
+                    Some(mode) => Some(mode),
+                    None => return "The requested route travel mode is unsupported.".to_owned(),
+                },
+            };
+            match crate::backends::places::directions(lat, lon, destination.to_owned(), mode).await
+            {
                 Ok(route) => describe_route(&route),
                 Err(e) => e.observation("directions"),
             }

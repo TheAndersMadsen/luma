@@ -259,6 +259,9 @@ test("the production matrix covers reasoning, retrieval, ambiguity, compound wor
     "explicit-lookup",
     "current-product-price",
     "nutrition-oatmeal",
+    "route-walking-nyhavn",
+    "route-driving-nyhavn",
+    "route-cycling-nyhavn",
     "pin-current-time",
     "pin-battery-level",
     "pin-current-volume",
@@ -285,6 +288,11 @@ test("the production matrix covers reasoning, retrieval, ambiguity, compound wor
     ASSISTANT_CASES.some(({ forbiddenActions }) => forbiddenActions.includes("UnderstandScene")),
     true,
   );
+  const cycling = ASSISTANT_CASES.find(({ id }) => id === "route-cycling-nyhavn");
+  assert.deepEqual(cycling.expectedActionInputs, {
+    route: { destination: "Nyhavn", mode: "bicycling" },
+  });
+  assert.equal(cycling.simulateUnlockedPin, true);
 });
 
 test("evaluation arguments are bounded and default to repeated runs", () => {

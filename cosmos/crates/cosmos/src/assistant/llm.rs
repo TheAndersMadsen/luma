@@ -460,18 +460,56 @@ fn enforce_unstarted_music_playback(
     response
 }
 
+/// A direct named-destination route is one bounded lookup, not an open-ended
+/// place search. Normalize a wrong model choice (observed as `nearby` for the
+/// exact cycling checklist prompt) to `route`, retaining the requested travel
+/// mode. Once a route observation exists, the model is free to summarize it.
+fn enforce_explicit_route(
+    messages: &[ChatMessage],
+    tools: &[ToolDef],
+    mut response: ChatResponse,
+) -> ChatResponse {
+    if !tools.iter().any(|tool| tool.name == "route")
+        || messages
+            .iter()
+            .any(|message| message.is_tool_result_for("route"))
+    {
+        return response;
+    }
+    let Some(arguments) = messages
+        .iter()
+        .rev()
+        .find(|message| message.role == Role::User)
+        .and_then(|message| super::engine::explicit_route_tool_arguments(&message.content))
+    else {
+        return response;
+    };
+    response.content = None;
+    response.tool_call = Some(ToolCall {
+        name: "route".to_owned(),
+        arguments,
+    });
+    response.extra_tool_calls.clear();
+    tracing::info!("explicit route request normalized to the route capability");
+    response
+}
+
 fn enforce_explicit_retrieval(
     messages: &[ChatMessage],
     tools: &[ToolDef],
     response: ChatResponse,
 ) -> ChatResponse {
-    enforce_explicit_lookup(
+    enforce_explicit_route(
         messages,
         tools,
-        enforce_unstarted_music_playback(
+        enforce_explicit_lookup(
             messages,
             tools,
-            enforce_explicit_web_search(messages, tools, response),
+            enforce_unstarted_music_playback(
+                messages,
+                tools,
+                enforce_explicit_web_search(messages, tools, response),
+            ),
         ),
     )
 }
@@ -1099,6 +1137,14 @@ mod tests {
         }
     }
 
+    fn route_tool(name: &str) -> ToolDef {
+        ToolDef {
+            name: name.to_owned(),
+            description: "Navigation tool".to_owned(),
+            parameters: serde_json::json!({"type": "object"}),
+        }
+    }
+
     fn direct_answer(text: &str) -> ChatResponse {
         ChatResponse {
             content: Some(text.to_owned()),
@@ -1174,6 +1220,63 @@ mod tests {
             serde_json::from_str::<serde_json::Value>(&call.arguments).unwrap()["query"],
             messages[0].content
         );
+    }
+
+    #[test]
+    fn an_explicit_cycling_route_cannot_be_substituted_with_nearby_search() {
+        let messages = vec![ChatMessage::user("Give me cycling directions to Nyhavn.")];
+        for model_call in [
+            ToolCall {
+                name: "nearby".to_owned(),
+                arguments: r#"{"query":"cycling directions to Nyhavn"}"#.to_owned(),
+            },
+            ToolCall {
+                name: "route".to_owned(),
+                arguments: r#"{"destination":"Nyhavn"}"#.to_owned(),
+            },
+        ] {
+            let response = enforce_explicit_retrieval(
+                &messages,
+                &[route_tool("nearby"), route_tool("route")],
+                ChatResponse {
+                    content: None,
+                    thought: String::new(),
+                    tool_call: Some(model_call),
+                    extra_tool_calls: Vec::new(),
+                },
+            );
+
+            let call = response
+                .tool_call
+                .expect("the explicit route must use the route capability");
+            assert_eq!(call.name, "route");
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&call.arguments).unwrap(),
+                serde_json::json!({"destination": "Nyhavn", "mode": "bicycling"}),
+            );
+        }
+    }
+
+    #[test]
+    fn a_completed_explicit_route_can_be_summarized_without_repeating_it() {
+        let response = enforce_explicit_retrieval(
+            &[
+                ChatMessage::user("Give me cycling directions to Nyhavn."),
+                ChatMessage::tool_result(
+                    "route",
+                    r#"{"destination":"Nyhavn","mode":"bicycling"}"#,
+                    "A grounded cycling route was found.",
+                ),
+            ],
+            &[route_tool("route")],
+            direct_answer("Here are the cycling directions."),
+        );
+
+        assert_eq!(
+            response.content.as_deref(),
+            Some("Here are the cycling directions.")
+        );
+        assert!(response.tool_call.is_none());
     }
 
     #[test]

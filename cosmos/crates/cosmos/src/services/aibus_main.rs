@@ -1783,10 +1783,14 @@ impl AiBusService for AiBusMain {
         let origin = Self::stock_location_coordinates(&origin_envelope)?;
         let (nav, kid): (pb::NavigationDirectionsRequest, _) =
             self.open_request(request.request).await?;
-        let directions =
-            crate::backends::places::directions(origin.latitude, origin.longitude, nav.destination)
-                .await
-                .map_err(|e| Self::backend_status(e, "directions"))?;
+        let directions = crate::backends::places::directions(
+            origin.latitude,
+            origin.longitude,
+            nav.destination,
+            None,
+        )
+        .await
+        .map_err(|e| Self::backend_status(e, "directions"))?;
         Ok(Response::new(pb::EncryptedNavigationDirectionsResponse {
             response: Some(
                 self.seal_response(

@@ -456,21 +456,68 @@ pub async fn geolocate(req: &GeoLocateRequest) -> Result<pb::GeoLocateResponse, 
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DirectionsMode {
+    Driving,
+    Walking,
+    Bicycling,
+}
+
+impl DirectionsMode {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "driving" => Some(Self::Driving),
+            "walking" => Some(Self::Walking),
+            "bicycling" | "cycling" => Some(Self::Bicycling),
+            _ => None,
+        }
+    }
+
+    fn as_google_value(self) -> &'static str {
+        match self {
+            Self::Driving => "driving",
+            Self::Walking => "walking",
+            Self::Bicycling => "bicycling",
+        }
+    }
+}
+
+fn directions_url(
+    api_key: &str,
+    latitude: f64,
+    longitude: f64,
+    destination: &str,
+    mode: Option<DirectionsMode>,
+) -> String {
+    let origin = format!("{latitude},{longitude}");
+    let mode = mode.map_or_else(String::new, |mode| {
+        format!("&mode={}", mode.as_google_value())
+    });
+    format!(
+        "https://maps.googleapis.com/maps/api/directions/json?origin={origin}&destination={}{}&key={api_key}",
+        encode(destination),
+        mode,
+    )
+}
+
 /// Resolve an origin point + destination to route steps.
 pub async fn directions(
     latitude: f64,
     longitude: f64,
     destination: String,
+    mode: Option<DirectionsMode>,
 ) -> Result<pb::NavigationDirectionsResponse, BackendError> {
     let api_key = key(KEY_VAR).ok_or(BackendError::NotConfigured)?;
     if destination.trim().is_empty() {
         return Err(BackendError::NoResult);
     }
-    let origin = format!("{latitude},{longitude}");
     let response: DirectionsResponse = http()
-        .get(format!(
-            "https://maps.googleapis.com/maps/api/directions/json?origin={origin}&destination={}&key={api_key}",
-            encode(&destination),
+        .get(directions_url(
+            &api_key,
+            latitude,
+            longitude,
+            &destination,
+            mode,
         ))
         .send()
         .await
@@ -695,6 +742,20 @@ mod tests {
     fn query_encoding_is_safe_for_spaces_and_symbols() {
         assert_eq!(encode("sushi near me"), "sushi+near+me");
         assert_eq!(encode("caf&e"), "caf%26e");
+    }
+
+    #[test]
+    fn requested_route_mode_reaches_google_directions() {
+        assert_eq!(
+            directions_url(
+                "test-key",
+                55.6761,
+                12.5683,
+                "Nyhavn & Kongens Nytorv",
+                Some(DirectionsMode::Bicycling),
+            ),
+            "https://maps.googleapis.com/maps/api/directions/json?origin=55.6761,12.5683&destination=Nyhavn+%26+Kongens+Nytorv&mode=bicycling&key=test-key",
+        );
     }
 
     #[tokio::test]

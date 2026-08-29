@@ -62,6 +62,21 @@ export const ASSISTANT_CASES = Object.freeze([
     answerPattern: /\b(?:calories|kcal|protein|fiber|fibre|carbohydrate|fat)\b/iu,
   }),
   ...[
+    ["walking", "walking"],
+    ["driving", "driving"],
+    ["cycling", "bicycling"],
+  ].map(([wording, mode]) => Object.freeze({
+    id: `route-${wording}-nyhavn`,
+    prompt: `Give me ${wording} directions to Nyhavn.`,
+    requiredActions: ["route", "Respond"],
+    forbiddenActions: ["nearby", "GetCurrentLocation"],
+    exactActionCounts: { route: 1 },
+    expectedActionInputs: { route: { destination: "Nyhavn", mode } },
+    route: "a1",
+    terminal: "answered",
+    simulateUnlockedPin: true,
+  })),
+  ...[
     ["pin-current-time", "What time is it?", "GetCurrentTime", {}],
     ["pin-battery-level", "Battery level.", "GetBatteryLevel", {}],
     ["pin-current-volume", "What is the current volume?", "GetCurrentVolume", {}],

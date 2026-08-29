@@ -251,7 +251,8 @@ execute on the Pin once recognized; speech recognition may still use Cosmos.
 
 Navigation requests first obtain the Pin's current location, then use the
 configured places and directions backends to return bounded, spoken route
-guidance. The recovered stock System Navigation app has no dispatchable action
+guidance. Explicit walking, driving, and cycling requests retain that travel
+mode through provider resolution. The recovered stock System Navigation app has no dispatchable action
 for starting a continuous turn-by-turn session, so Cosmos reports directions
 without claiming that live navigation has started.
 

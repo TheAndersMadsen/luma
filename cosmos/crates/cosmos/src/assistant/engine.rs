@@ -2026,11 +2026,57 @@ fn explicit_route_request(utterance: &str) -> bool {
     let Some(normalized) = normalized_intent(utterance) else {
         return false;
     };
-    normalized.starts_with("navigate to ")
-        || normalized.starts_with("give me directions to ")
-        || normalized.starts_with("how do i get to ")
+    explicit_route_tool_arguments(utterance).is_some()
         || (normalized.starts_with("find the nearest ")
             && normalized.ends_with(" and navigate there"))
+}
+
+/// Extract the destination and optional Google-compatible travel mode from a
+/// direct route command. Nearest-place navigation stays model-led because the
+/// destination must first be resolved by `nearby`; named destinations can be
+/// normalized directly and must never be substituted with a place search.
+pub(crate) fn explicit_route_tool_arguments(utterance: &str) -> Option<String> {
+    let trimmed = utterance.trim();
+    if trimmed.is_empty() || trimmed.len() > 384 || trimmed.chars().any(char::is_control) {
+        return None;
+    }
+    let trimmed = trimmed.trim_end_matches(['.', '?', '!']).trim_end();
+    let lower = trimmed.to_ascii_lowercase();
+    let (prefix, mode) = [
+        ("give me walking directions to ", Some("walking")),
+        ("give me driving directions to ", Some("driving")),
+        ("give me cycling directions to ", Some("bicycling")),
+        ("give me bicycle directions to ", Some("bicycling")),
+        ("give me directions to ", None),
+        ("navigate to ", None),
+        ("how do i get to ", None),
+    ]
+    .into_iter()
+    .find(|(prefix, _)| lower.starts_with(prefix))?;
+    let destination = trimmed.get(prefix.len()..)?.trim();
+    if !valid_route_destination(destination) {
+        return None;
+    }
+    let destination_lower = destination.to_ascii_lowercase();
+    if [
+        " and call ",
+        " and message ",
+        " and play ",
+        " and send ",
+        " and set ",
+        " and take ",
+        " and text ",
+    ]
+    .iter()
+    .any(|separator| destination_lower.contains(separator))
+    {
+        return None;
+    }
+    let mut arguments = serde_json::json!({"destination": destination});
+    if let Some(mode) = mode {
+        arguments["mode"] = serde_json::Value::String(mode.to_owned());
+    }
+    Some(arguments.to_string())
 }
 
 fn normalized_intent(value: &str) -> Option<String> {
@@ -3688,6 +3734,45 @@ mod tests {
             "Give me transit directions to .",
         ] {
             assert!(!transit_route_request(request), "overmatched: {request}");
+        }
+    }
+
+    #[test]
+    fn explicit_named_routes_preserve_destination_and_requested_mode() {
+        for (request, expected) in [
+            (
+                "Give me walking directions to Nyhavn.",
+                serde_json::json!({"destination": "Nyhavn", "mode": "walking"}),
+            ),
+            (
+                "Give me driving directions to Nyhavn.",
+                serde_json::json!({"destination": "Nyhavn", "mode": "driving"}),
+            ),
+            (
+                "Give me cycling directions to Nyhavn.",
+                serde_json::json!({"destination": "Nyhavn", "mode": "bicycling"}),
+            ),
+            (
+                "Navigate to Copenhagen Central Station.",
+                serde_json::json!({"destination": "Copenhagen Central Station"}),
+            ),
+        ] {
+            let arguments = explicit_route_tool_arguments(request)
+                .unwrap_or_else(|| panic!("route was not parsed: {request}"));
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&arguments).unwrap(),
+                expected,
+            );
+        }
+
+        for compound in [
+            "Give me cycling directions to Nyhavn and call Alex.",
+            "Navigate to Nyhavn and send a message.",
+        ] {
+            assert!(
+                explicit_route_tool_arguments(compound).is_none(),
+                "compound request was claimed as one route: {compound}",
+            );
         }
     }
 
