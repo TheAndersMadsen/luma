@@ -256,6 +256,19 @@ fn explicit_lookup_utterance(messages: &[ChatMessage]) -> Option<&str> {
     (normalized.contains("look up ") || normalized.contains("lookup ")).then_some(utterance)
 }
 
+/// Explicit playback is an action request, so a plain model answer cannot
+/// complete it. Requiring one offered tool leaves the semantic choice with the
+/// model while preventing prose such as an invented provider timeout from
+/// being accepted as if work had run.
+fn explicit_playback_requires_tool(messages: &[ChatMessage], tools: &[ToolDef]) -> bool {
+    !tools.is_empty()
+        && messages
+            .iter()
+            .rev()
+            .find(|message| message.role == Role::User)
+            .is_some_and(|message| super::engine::explicit_playback_request(&message.content))
+}
+
 fn tools_after_completed_explicit_search(
     messages: &[ChatMessage],
     tools: &[ToolDef],
@@ -394,6 +407,59 @@ fn enforce_explicit_lookup(
     response
 }
 
+/// Do not accept a fabricated terminal answer for an explicit playback request
+/// before any music work has run.
+///
+/// The model remains the normal planner: any tool it selected is preserved.
+/// This is only the zero-tool recovery path. The engine has already narrowed a
+/// ranked playback turn to one configured research tool, so forwarding the
+/// wearer's complete request to that tool obtains evidence without hard-coding
+/// an artist, title, ranking criterion, or provider result here.
+fn enforce_unstarted_music_playback(
+    messages: &[ChatMessage],
+    tools: &[ToolDef],
+    mut response: ChatResponse,
+) -> ChatResponse {
+    if response.tool_call.is_some()
+        || !response.extra_tool_calls.is_empty()
+        || !tools.iter().any(|tool| tool.name == "music_discover")
+        || messages.iter().any(|message| {
+            ["web_search", "ask_online", "music_discover"]
+                .iter()
+                .any(|tool| message.is_tool_result_for(tool))
+        })
+    {
+        return response;
+    }
+
+    let Some(utterance) = messages
+        .iter()
+        .rev()
+        .find(|message| message.role == Role::User)
+        .map(|message| message.content.trim())
+        .filter(|utterance| super::engine::explicit_playback_request(utterance))
+    else {
+        return response;
+    };
+    let Some(tool) = ["ask_online", "web_search"]
+        .into_iter()
+        .find(|name| tools.iter().any(|tool| tool.name == *name))
+    else {
+        return response;
+    };
+
+    response.content = None;
+    response.tool_call = Some(ToolCall {
+        name: tool.to_owned(),
+        arguments: serde_json::json!({ "query": utterance }).to_string(),
+    });
+    tracing::info!(
+        tool,
+        "zero-tool playback response normalized to the available research capability"
+    );
+    response
+}
+
 fn enforce_explicit_retrieval(
     messages: &[ChatMessage],
     tools: &[ToolDef],
@@ -402,7 +468,11 @@ fn enforce_explicit_retrieval(
     enforce_explicit_lookup(
         messages,
         tools,
-        enforce_explicit_web_search(messages, tools, response),
+        enforce_unstarted_music_playback(
+            messages,
+            tools,
+            enforce_explicit_web_search(messages, tools, response),
+        ),
     )
 }
 
@@ -500,11 +570,13 @@ impl ChatModel for ConfiguredChatModel {
             }
             crate::integrations::AssistantProvider::CodexSubscription if config.configured() => {
                 let prompt = codex_prompt(messages, tools)?;
+                let require_tool = explicit_playback_requires_tool(messages, tools);
                 let response = super::codex_app_server::complete(
                     &config.model,
                     config.reasoning_effort.as_deref(),
                     config.fast_mode,
                     prompt,
+                    require_tool,
                 )
                 .await
                 .map_err(|error| LlmError::Transport(error.to_string()))?;
@@ -812,6 +884,8 @@ struct ChatReq<'a> {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     tools: Vec<WireTool<'a>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    tool_choice: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     max_tokens: Option<u32>,
     /// OpenRouter/OpenAI shape: `{"reasoning": {"effort": "low"}}`. Omitted
     /// entirely when unset — a provider that does not know the field rejects the
@@ -932,6 +1006,7 @@ impl ChatModel for OpenAiChatModel {
             model: &self.model,
             messages: msgs,
             tools: wire_tools,
+            tool_choice: explicit_playback_requires_tool(messages, tools).then_some("required"),
             max_tokens: self.max_tokens,
             reasoning: self
                 .reasoning_effort
@@ -1016,6 +1091,14 @@ mod tests {
         }
     }
 
+    fn music_tool(name: &str) -> ToolDef {
+        ToolDef {
+            name: name.to_owned(),
+            description: "Music tool".to_owned(),
+            parameters: serde_json::json!({"type": "object"}),
+        }
+    }
+
     fn direct_answer(text: &str) -> ChatResponse {
         ChatResponse {
             content: Some(text.to_owned()),
@@ -1065,6 +1148,70 @@ mod tests {
             serde_json::from_str::<serde_json::Value>(&call.arguments).unwrap()["query"],
             messages[0].content
         );
+    }
+
+    #[test]
+    fn ranked_playback_cannot_invent_a_timeout_without_starting_research() {
+        let messages = vec![ChatMessage::user(
+            "Play Drake's most controversial song from 2013.",
+        )];
+        let response = enforce_explicit_retrieval(
+            &messages,
+            &[
+                music_tool("ask_online"),
+                music_tool("music_discover"),
+                music_tool("PlayMusic"),
+            ],
+            direct_answer("Music lookup took too long. Please try again."),
+        );
+
+        assert_eq!(response.content, None);
+        let call = response
+            .tool_call
+            .expect("an unresolved playback request must start one real tool");
+        assert_eq!(call.name, "ask_online");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&call.arguments).unwrap()["query"],
+            messages[0].content
+        );
+    }
+
+    #[test]
+    fn explicit_playback_requires_provider_tool_choice_but_music_questions_do_not() {
+        let tools = [music_tool("PlayMusic")];
+        assert!(explicit_playback_requires_tool(
+            &[ChatMessage::user("Play One Dance by Drake.")],
+            &tools,
+        ));
+        assert!(explicit_playback_requires_tool(
+            &[ChatMessage::user(
+                "Play Drake's most controversial song from 2013."
+            )],
+            &tools,
+        ));
+        assert!(!explicit_playback_requires_tool(
+            &[ChatMessage::user(
+                "What is Drake's most controversial song from 2013?"
+            )],
+            &tools,
+        ));
+        assert!(!explicit_playback_requires_tool(
+            &[ChatMessage::user(
+                "What happens if I say play One Dance by Drake?"
+            )],
+            &tools,
+        ));
+
+        let body = ChatReq {
+            model: "m",
+            messages: Vec::new(),
+            tools: Vec::new(),
+            tool_choice: Some("required"),
+            max_tokens: None,
+            reasoning: None,
+        };
+        let wire = serde_json::to_value(body).expect("serializes");
+        assert_eq!(wire["tool_choice"], "required");
     }
 
     #[test]
@@ -1329,6 +1476,7 @@ mod tests {
             model: "m",
             messages: Vec::new(),
             tools: Vec::new(),
+            tool_choice: None,
             max_tokens: parse_max_tokens(None),
             reasoning: None,
         };
@@ -1365,6 +1513,7 @@ mod tests {
             model: "m",
             messages: Vec::new(),
             tools: Vec::new(),
+            tool_choice: None,
             max_tokens: None,
             reasoning: unset.as_deref().map(|effort| WireReasoning { effort }),
         };
@@ -1392,6 +1541,7 @@ mod tests {
             model: "m",
             messages: Vec::new(),
             tools: Vec::new(),
+            tool_choice: None,
             max_tokens: None,
             reasoning: low.as_deref().map(|effort| WireReasoning { effort }),
         };
@@ -1411,6 +1561,7 @@ mod tests {
             model: "m",
             messages: Vec::new(),
             tools: Vec::new(),
+            tool_choice: None,
             max_tokens: None,
             reasoning: None,
         };

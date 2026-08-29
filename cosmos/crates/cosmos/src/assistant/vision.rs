@@ -77,6 +77,7 @@ pub async fn complete(prompt: &str, image_urls: &[String]) -> Result<String, Vis
                 config.fast_mode,
                 prompt.to_owned(),
                 image_urls,
+                false,
             )
             .await
             .map_err(|_| VisionError::Transport)?;

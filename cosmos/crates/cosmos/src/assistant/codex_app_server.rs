@@ -361,16 +361,21 @@ fn thread_start_params(model: &str, fast_mode: bool, cwd: &str) -> Value {
     params
 }
 
+struct TurnInput<'a> {
+    prompt: String,
+    image_urls: &'a [String],
+    require_tool: bool,
+}
+
 fn turn_start_params(
     thread_id: &str,
     model: &str,
     effort: Option<&str>,
     fast_mode: bool,
-    prompt: String,
-    image_urls: &[String],
+    input: TurnInput<'_>,
     cwd: &str,
 ) -> Value {
-    let output_schema = json!({
+    let mut output_schema = json!({
         "type": "object",
         "properties": {
             "content": { "type": ["string", "null"] },
@@ -391,15 +396,19 @@ fn turn_start_params(
         "required": ["content", "thought", "tool_calls"],
         "additionalProperties": false
     });
-    let mut input = vec![json!({ "type": "text", "text": prompt, "text_elements": [] })];
-    input.extend(
-        image_urls
+    if input.require_tool {
+        output_schema["properties"]["tool_calls"]["minItems"] = Value::from(1);
+    }
+    let mut items = vec![json!({ "type": "text", "text": input.prompt, "text_elements": [] })];
+    items.extend(
+        input
+            .image_urls
             .iter()
             .map(|url| json!({ "type": "image", "url": url, "detail": "low" })),
     );
     let mut params = json!({
         "threadId": thread_id,
-        "input": input,
+        "input": items,
         "cwd": cwd,
         "approvalPolicy": "never",
         "sandboxPolicy": { "type": "externalSandbox", "networkAccess": "restricted" },
@@ -420,8 +429,9 @@ pub async fn complete(
     effort: Option<&str>,
     fast_mode: bool,
     prompt: String,
+    require_tool: bool,
 ) -> Result<CodexModelOutput, CodexError> {
-    complete_with_images(model, effort, fast_mode, prompt, &[]).await
+    complete_with_images(model, effort, fast_mode, prompt, &[], require_tool).await
 }
 
 pub async fn complete_with_images(
@@ -430,6 +440,7 @@ pub async fn complete_with_images(
     fast_mode: bool,
     prompt: String,
     image_urls: &[String],
+    require_tool: bool,
 ) -> Result<CodexModelOutput, CodexError> {
     if !account_status().await.connected {
         return Err(CodexError::NotConnected);
@@ -450,8 +461,11 @@ pub async fn complete_with_images(
         model,
         effort,
         fast_mode,
-        prompt,
-        image_urls,
+        TurnInput {
+            prompt,
+            image_urls,
+            require_tool,
+        },
         &cwd,
     );
     let turn = connection.request("turn/start", turn_params).await?;
@@ -553,8 +567,11 @@ mod tests {
             "gpt-test",
             Some("low"),
             true,
-            "wearer request".to_owned(),
-            &["data:image/jpeg;base64,aW1hZ2U=".to_owned()],
+            TurnInput {
+                prompt: "wearer request".to_owned(),
+                image_urls: &["data:image/jpeg;base64,aW1hZ2U=".to_owned()],
+                require_tool: true,
+            },
             "/var/lib/cosmos/codex-workspace",
         );
         assert_eq!(turn["input"][0]["text_elements"], json!([]));
@@ -565,11 +582,33 @@ mod tests {
         assert_eq!(turn["sandboxPolicy"]["networkAccess"], "restricted");
         assert_eq!(turn["outputSchema"]["additionalProperties"], false);
         assert_eq!(
+            turn["outputSchema"]["properties"]["tool_calls"]["minItems"],
+            1
+        );
+        assert_eq!(
             turn["outputSchema"]["properties"]["tool_calls"]["items"]["properties"]["arguments"]["type"],
             "string"
         );
         assert_eq!(turn["effort"], "low");
         assert_eq!(turn["serviceTier"], "fast");
+
+        let answer_turn = turn_start_params(
+            "thread-2",
+            "gpt-test",
+            None,
+            false,
+            TurnInput {
+                prompt: "wearer question".to_owned(),
+                image_urls: &[],
+                require_tool: false,
+            },
+            "/var/lib/cosmos/codex-workspace",
+        );
+        assert!(
+            answer_turn["outputSchema"]["properties"]["tool_calls"]
+                .get("minItems")
+                .is_none()
+        );
 
         let standard = thread_start_params("gpt-test", false, "/tmp");
         assert!(standard.get("serviceTier").is_none());
