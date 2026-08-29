@@ -61,6 +61,15 @@ export const ASSISTANT_CASES = Object.freeze([
     terminal: "answered",
     answerPattern: /\b(?:calories|kcal|protein|fiber|fibre|carbohydrate|fat)\b/iu,
   }),
+  Object.freeze({
+    id: "show-my-notes",
+    prompt: "Show my notes.",
+    requiredActions: ["recall_memory", "Respond"],
+    forbiddenActions: [],
+    exactActionCounts: { recall_memory: 1 },
+    route: "a1",
+    terminal: "answered",
+  }),
   ...[
     ["walking", "walking"],
     ["driving", "driving"],

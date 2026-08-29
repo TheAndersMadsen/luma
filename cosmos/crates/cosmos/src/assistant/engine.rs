@@ -2079,6 +2079,21 @@ pub(crate) fn explicit_route_tool_arguments(utterance: &str) -> Option<String> {
     Some(arguments.to_string())
 }
 
+/// Recognize a bounded request to list the wearer's notes. An empty memory
+/// query means "the most recent notes" at the tool boundary; ordinary memory
+/// questions remain model-led so their actual search terms are preserved.
+pub(crate) fn explicit_recent_notes_tool_arguments(utterance: &str) -> Option<String> {
+    let normalized = normalized_intent(utterance)?;
+    [
+        "show my notes",
+        "read my notes",
+        "list my notes",
+        "what notes do i have",
+    ]
+    .contains(&normalized.as_str())
+    .then(|| serde_json::json!({"query": ""}).to_string())
+}
+
 fn normalized_intent(value: &str) -> Option<String> {
     if value.is_empty() || value.len() > 384 || value.chars().any(char::is_control) {
         return None;
@@ -3772,6 +3787,36 @@ mod tests {
             assert!(
                 explicit_route_tool_arguments(compound).is_none(),
                 "compound request was claimed as one route: {compound}",
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_recent_note_list_requests_are_bounded() {
+        for request in [
+            "Show my notes.",
+            "Read my notes",
+            "List my notes!",
+            "What notes do I have?",
+        ] {
+            assert_eq!(
+                explicit_recent_notes_tool_arguments(request)
+                    .as_deref()
+                    .map(serde_json::from_str::<serde_json::Value>)
+                    .transpose()
+                    .unwrap(),
+                Some(serde_json::json!({"query": ""})),
+                "recent-note request was not recognized: {request}",
+            );
+        }
+        for request in [
+            "Show Alex's notes.",
+            "Show my notes and delete them.",
+            "What did I note about coffee?",
+        ] {
+            assert!(
+                explicit_recent_notes_tool_arguments(request).is_none(),
+                "a broader note request was claimed as a recent-note listing: {request}",
             );
         }
     }

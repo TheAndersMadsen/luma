@@ -237,6 +237,11 @@ exact, scoped confirmation, and changing the action or its arguments invalidates
 that confirmation. Reversible playback and volume controls do not gain that
 extra confirmation step.
 
+Notes created on the Pin and facts explicitly saved by the assistant remain
+wearer-scoped in Cosmos. “Show my notes” reads the authenticated wearer’s five
+most recent notes; it never substitutes activity history or a generic answer,
+and an unreadable encrypted note is reported as unreadable rather than absent.
+
 Music discovery is one specialist A1/A2 tool. For a ranked, subjective, or
 time-bound request, the foreground agent uses one research call: the configured
 answer engine when available, otherwise web search, to identify an exact title

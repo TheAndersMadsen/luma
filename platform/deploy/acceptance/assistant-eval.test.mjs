@@ -259,6 +259,7 @@ test("the production matrix covers reasoning, retrieval, ambiguity, compound wor
     "explicit-lookup",
     "current-product-price",
     "nutrition-oatmeal",
+    "show-my-notes",
     "route-walking-nyhavn",
     "route-driving-nyhavn",
     "route-cycling-nyhavn",

@@ -2377,18 +2377,17 @@ async fn recall_memory(
         return "No channel-key directory is connected in this deployment.".to_string();
     }
     let window_requested = window.0.is_some() || window.1.is_some();
-    if query.trim().is_empty() && !window_requested {
-        return "No search terms were supplied.".to_string();
-    }
+    let recent_listing_requested = query.trim().is_empty() && !window_requested;
 
-    // WINDOWED PATH. When a date range is given, page the window FIRST and match
-    // the query inside it. Searching first and filtering by date afterwards was
+    // LIST/WINDOW PATH. A blank query lists the newest notes. When a date range
+    // is given, page the window FIRST and match the query inside it. Searching
+    // first and filtering by date afterwards was
     // wrong twice over: `search_notes` truncates to RECALL_LIMIT by recency, so a
     // note inside the window could be ranked out before the window was ever
     // applied — reporting "nothing in that time range" while the note sat in the
     // store — and a pure-date question ("what did I note last Tuesday") had no
     // path at all, because the schema invited it and the handler refused it.
-    if window_requested {
+    if window_requested || recent_listing_requested {
         let Ok(notes) = store
             .recent_notes(principal, NOTE_SCAN_LIMIT, window.0, window.1)
             .await
@@ -2449,7 +2448,9 @@ async fn recall_memory(
             }
         }
         if lines.is_empty() {
-            return if needle.is_empty() {
+            return if recent_listing_requested {
+                "The wearer has no saved notes.".to_string()
+            } else if needle.is_empty() {
                 "The wearer saved nothing in that time range.".to_string()
             } else {
                 format!("Nothing the wearer saved matching \"{query}\" falls in that time range.")
@@ -3541,6 +3542,32 @@ mod tests {
         let nothing =
             execute_tool_with("recall_memory", r#"{"query":"submarine"}"#, &context).await;
         assert!(nothing.contains("Nothing the wearer saved"));
+    }
+
+    #[tokio::test]
+    async fn an_empty_recall_query_lists_the_wearers_recent_notes() {
+        let store = crate::store::MemoryStore::shared();
+        let principal = "wearer-listing-notes";
+        store
+            .create_indexed_note(principal, None, None, Some("Buy coffee beans"))
+            .await
+            .expect("the in-memory store cannot fail");
+        let context = ToolContext {
+            principal: Some(principal.to_owned()),
+            answer_engine_available: false,
+            store: Some(store),
+            key_directory: None,
+            keys: Some(Default::default()),
+            location: None,
+            music_discovery: None,
+            deadline: None,
+        };
+
+        let recalled = execute_tool_with("recall_memory", r#"{"query":""}"#, &context).await;
+        assert!(
+            recalled.to_ascii_lowercase().contains("buy coffee beans"),
+            "an explicit note listing must return recent notes: {recalled}",
+        );
     }
 
     /// REGRESSION: recall resolved matched uuids by fetching the wearer's

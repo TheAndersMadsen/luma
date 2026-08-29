@@ -494,21 +494,58 @@ fn enforce_explicit_route(
     response
 }
 
+/// Listing the wearer's notes always reads their authenticated memory store
+/// first. This prevents a plausible-sounding generic answer from replacing the
+/// only operation that can know whether notes exist or what they contain.
+fn enforce_explicit_recent_notes(
+    messages: &[ChatMessage],
+    tools: &[ToolDef],
+    mut response: ChatResponse,
+) -> ChatResponse {
+    if !tools.iter().any(|tool| tool.name == "recall_memory")
+        || messages
+            .iter()
+            .any(|message| message.is_tool_result_for("recall_memory"))
+    {
+        return response;
+    }
+    let Some(arguments) = messages
+        .iter()
+        .rev()
+        .find(|message| message.role == Role::User)
+        .and_then(|message| super::engine::explicit_recent_notes_tool_arguments(&message.content))
+    else {
+        return response;
+    };
+    response.content = None;
+    response.tool_call = Some(ToolCall {
+        name: "recall_memory".to_owned(),
+        arguments,
+    });
+    response.extra_tool_calls.clear();
+    tracing::info!("explicit note listing normalized to authenticated memory recall");
+    response
+}
+
 fn enforce_explicit_retrieval(
     messages: &[ChatMessage],
     tools: &[ToolDef],
     response: ChatResponse,
 ) -> ChatResponse {
-    enforce_explicit_route(
+    enforce_explicit_recent_notes(
         messages,
         tools,
-        enforce_explicit_lookup(
+        enforce_explicit_route(
             messages,
             tools,
-            enforce_unstarted_music_playback(
+            enforce_explicit_lookup(
                 messages,
                 tools,
-                enforce_explicit_web_search(messages, tools, response),
+                enforce_unstarted_music_playback(
+                    messages,
+                    tools,
+                    enforce_explicit_web_search(messages, tools, response),
+                ),
             ),
         ),
     )
@@ -1145,6 +1182,14 @@ mod tests {
         }
     }
 
+    fn memory_tool() -> ToolDef {
+        ToolDef {
+            name: "recall_memory".to_owned(),
+            description: "Read the wearer's saved notes".to_owned(),
+            parameters: serde_json::json!({"type": "object"}),
+        }
+    }
+
     fn direct_answer(text: &str) -> ChatResponse {
         ChatResponse {
             content: Some(text.to_owned()),
@@ -1193,6 +1238,26 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&call.arguments).unwrap()["query"],
             messages[0].content
+        );
+    }
+
+    #[test]
+    fn show_my_notes_cannot_skip_the_private_note_lookup() {
+        let messages = vec![ChatMessage::user("Show my notes.")];
+        let response = enforce_explicit_retrieval(
+            &messages,
+            &[memory_tool()],
+            direct_answer("Your notes are available from Quick Actions."),
+        );
+
+        assert_eq!(response.content, None);
+        let call = response
+            .tool_call
+            .expect("showing notes must first read the wearer's own note store");
+        assert_eq!(call.name, "recall_memory");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&call.arguments).unwrap(),
+            serde_json::json!({"query": ""}),
         );
     }
 
