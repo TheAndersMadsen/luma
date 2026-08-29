@@ -71,6 +71,35 @@ test("deterministic success cannot masquerade as broad model reasoning", () => {
   assert.deepEqual(result.failures, ["missing_model_run"]);
 });
 
+test("an explicitly deterministic safety case correlates without pretending the model ran", () => {
+  const spec = ASSISTANT_CASES.find(({ id }) => id === "tickle-near-miss");
+  const before = sample(
+    { route: "d1", model_invoked: "false", model_steps: "0", terminal: "device_action" },
+    4,
+  );
+  const after = sample(
+    { route: "d1", model_invoked: "false", model_steps: "0", terminal: "device_action" },
+    5,
+  );
+  const result = evaluateAssistantCase(
+    spec,
+    {
+      steps: [{
+        kind: "answer",
+        name: "Respond",
+        text: "Tickle only runs for the exact supported phrases.",
+      }],
+      total_ms: 0,
+      device_deadline_ms: 25000,
+    },
+    before,
+    after,
+  );
+
+  assert.equal(result.pass, true, result.failures.join(","));
+  assert.equal(result.run.modelInvoked, false);
+});
+
 test("evaluation names action, deadline, terminal, and provenance failures", () => {
   const result = evaluateAssistantCase(
     ASSISTANT_CASES[2],

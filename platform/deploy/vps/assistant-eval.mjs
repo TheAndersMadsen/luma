@@ -74,8 +74,9 @@ export const ASSISTANT_CASES = Object.freeze([
     prompt: "Please tickle.",
     requiredActions: ["Respond"],
     forbiddenActions: ["Tickle"],
-    route: "a1",
-    terminal: "answered",
+    route: "d1",
+    terminal: "device_action",
+    modelInvoked: false,
   }),
   Object.freeze({
     id: "consequential-confirmation",
@@ -162,18 +163,21 @@ export function evaluateAssistantCase(spec, trace, beforeScrape, afterScrape) {
     failures.push("device_deadline");
   }
 
+  const expectedModelInvoked = spec.modelInvoked ?? true;
   const candidates = changedAgentRuns(beforeScrape, afterScrape).filter(
-    ({ labels }) => labels.transport === "legacy" && labels.planner_plane === "cosmos_remote",
+    ({ labels }) =>
+      labels.transport === "legacy" &&
+      labels.planner_plane === "cosmos_remote" &&
+      labels.model_invoked === String(expectedModelInvoked),
   );
   const run = candidates.find(
     ({ labels }) =>
       labels.route === spec.route &&
-      labels.model_invoked === "true" &&
       labels.terminal === spec.terminal,
   );
   if (!run) {
     failures.push("missing_model_run");
-  } else {
+  } else if (expectedModelInvoked) {
     for (const label of ["model_provider", "model", "model_speed", "reasoning_effort"]) {
       if (!run.labels[label] || run.labels[label] === "unreported") {
         failures.push(`missing_provenance:${label}`);
@@ -196,6 +200,7 @@ export function evaluateAssistantCase(spec, trace, beforeScrape, afterScrape) {
           speed: run.labels.model_speed,
           effort: run.labels.reasoning_effort,
           modelSteps: run.labels.model_steps,
+          modelInvoked: run.labels.model_invoked === "true",
         }
       : null,
   };
