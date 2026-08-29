@@ -485,7 +485,7 @@ impl Engine {
         // Resolve the server-owned catalog for this request: our tool set minus
         // whatever the device excluded (`SYNAPSE_EXCLUDED_TOOLS`).
         let mut tools = resolve_catalog(&req, self.entitlement.is_subscribed());
-        let utterance = req.utterance.clone();
+        let utterance = current_utterance(&req).to_owned();
         if !active_vision_request(&req) {
             tools.retain(|tool| tool.name != VISION_ACTION);
         }
@@ -1310,7 +1310,7 @@ fn resolve_catalog(req: &pb::SynapseUnderstandingRequest, subscribed: bool) -> V
         subscribed,
     };
     let mut tools = catalog::tool_catalog_for_set(&context, resolved_tool_set(req).set);
-    if !explicit_playback_request(&req.utterance) {
+    if !explicit_playback_request(current_utterance(req)) {
         tools.retain(|tool| tool.name != "music_discover");
     }
     tools
@@ -1333,6 +1333,36 @@ fn newest_user_request(
             Some(pb::synapse_chat_turn::Content::UserRequest(u)) => Some(u),
             _ => None,
         })
+}
+
+/// The current wearer text in the shape stock actually sends.
+///
+/// Legacy and bidirectional clients replay the live user-request turn inside
+/// `device_context.turns`; the top-level `utterance` may therefore be empty.
+/// A nonempty top-level field may be a newer text-only follow-up, so it wins
+/// unless it names the same replayed turn and that turn carries a repaired
+/// form. When stock leaves the top-level field empty, use the repaired replayed
+/// request and then its original text.
+pub(super) fn current_utterance(req: &pb::SynapseUnderstandingRequest) -> &str {
+    let replayed = newest_user_request(req);
+    if !req.utterance.is_empty() {
+        if let Some(request) = replayed
+            && !request.repaired_request.is_empty()
+            && (req.utterance == request.request || req.utterance == request.repaired_request)
+        {
+            return request.repaired_request.as_str();
+        }
+        return req.utterance.as_str();
+    }
+    replayed
+        .map(|request| {
+            if request.repaired_request.is_empty() {
+                request.request.as_str()
+            } else {
+                request.repaired_request.as_str()
+            }
+        })
+        .unwrap_or("")
 }
 
 fn active_vision_request(req: &pb::SynapseUnderstandingRequest) -> bool {
@@ -1457,13 +1487,14 @@ fn build_history(req: &pb::SynapseUnderstandingRequest) -> Vec<ChatMessage> {
     // Push it only when the replayed transcript does not already end in it. The
     // device's `repaired_request` is the authoritative text where it differs, and
     // `replay` above already preferred it.
+    let utterance = current_utterance(req);
     let already_replayed = messages
         .iter()
         .rev()
         .find(|m| m.role == Role::User)
-        .is_some_and(|m| m.content == req.utterance);
-    if !already_replayed && !req.utterance.is_empty() {
-        messages.push(ChatMessage::user(req.utterance.clone()));
+        .is_some_and(|m| m.content == utterance);
+    if !already_replayed && !utterance.is_empty() {
+        messages.push(ChatMessage::user(utterance.to_owned()));
     }
     messages
 }
@@ -1640,14 +1671,15 @@ fn deterministic_device_action(
     tools: &[ToolDef],
 ) -> Option<DeterministicDeviceAction> {
     let offered = |name: &str| tools.iter().any(|tool| tool.name == name);
-    if tickle_near_miss_request(&req.utterance) && offered(catalog::RESPOND_ACTION) {
+    let utterance = current_utterance(req);
+    if tickle_near_miss_request(utterance) && offered(catalog::RESPOND_ACTION) {
         return Some(DeterministicDeviceAction {
             name: catalog::RESPOND_ACTION,
             input: catalog::respond_input(TICKLE_NEAR_MISS_RESPONSE),
             thought: "The wearer did not use one of the exact supported Tickle phrases",
         });
     }
-    if future_weather_request(&req.utterance) && offered(catalog::RESPOND_ACTION) {
+    if future_weather_request(utterance) && offered(catalog::RESPOND_ACTION) {
         return Some(DeterministicDeviceAction {
             name: catalog::RESPOND_ACTION,
             input: catalog::respond_input(FUTURE_WEATHER_UNAVAILABLE),
@@ -1657,20 +1689,9 @@ fn deterministic_device_action(
     let device_context = req.device_context.as_ref()?;
     let request_locked = device_context.is_locked;
     let current_turns = device_context.turns.as_slice();
-    if let Some(action) = local_device_status_action(&req.utterance) {
+    if let Some(action) = local_device_status_action(utterance) {
         let action_offered = offered(action.name);
         let action_replayed = current_run_contains_action(current_turns, action.name);
-        if action.name == "GetCurrentTime" {
-            let tool_set = resolved_tool_set(req);
-            tracing::info!(
-                request_locked,
-                action_offered,
-                action_replayed,
-                tool_set = %toolsets::pointer_label(tool_set.set.name, tool_set.set.version),
-                excluded_tool_count = req.excluded_tools.len(),
-                "[DEBUG-time-status] deterministic status gate"
-            );
-        }
         if action_offered && !action_replayed {
             return Some(action);
         }
@@ -1678,7 +1699,7 @@ fn deterministic_device_action(
     if request_locked {
         return None;
     }
-    if let Some(request) = explicit_nutrition_request(&req.utterance) {
+    if let Some(request) = explicit_nutrition_request(utterance) {
         if offered("ManageNutrition")
             && !current_run_contains_action(current_turns, "ManageNutrition")
         {
@@ -1689,7 +1710,7 @@ fn deterministic_device_action(
             });
         }
     }
-    if let Some((agent, request)) = explicit_clock_agent_request(&req.utterance) {
+    if let Some((agent, request)) = explicit_clock_agent_request(utterance) {
         if offered(agent) && !current_run_contains_action(current_turns, agent) {
             return Some(DeterministicDeviceAction {
                 name: agent,
@@ -1699,7 +1720,7 @@ fn deterministic_device_action(
         }
     }
 
-    if explicit_route_request(&req.utterance)
+    if explicit_route_request(utterance)
         && req.location.is_none()
         && offered("GetCurrentLocation")
         && !current_run_contains_action(current_turns, "GetCurrentLocation")
@@ -1711,7 +1732,7 @@ fn deterministic_device_action(
         });
     }
 
-    if local_weather_request(&req.utterance)
+    if local_weather_request(utterance)
         && offered("GetCurrentLocation")
         && !current_run_contains_action(current_turns, "GetCurrentLocation")
     {
@@ -3529,7 +3550,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ranked_artist_music_is_model_selected_discovered_and_provider_verified() {
+    async fn replayed_ranked_artist_music_is_model_selected_discovered_and_provider_verified() {
         struct PopularMusicModel(std::sync::atomic::AtomicUsize);
 
         #[tonic::async_trait]
@@ -3584,8 +3605,22 @@ mod tests {
         let msgs = run_with_tools(
             model.clone(),
             pb::SynapseUnderstandingRequest {
-                utterance: "Play the most popular song by Drake".into(),
-                device_context: Some(pb::SynapseDeviceContext::default()),
+                // Stock carries the live request in the replayed turn and may
+                // leave the top-level utterance empty. This is the exact wire
+                // shape that previously removed music_discover from the catalog.
+                device_context: Some(pb::SynapseDeviceContext {
+                    turns: vec![pb::SynapseChatTurn {
+                        identifier: "current-request".into(),
+                        content: Some(pb::synapse_chat_turn::Content::UserRequest(
+                            pb::SynapseUserRequestContent {
+                                request: "Play the most popular song by Drake".into(),
+                                ..Default::default()
+                            },
+                        )),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }),
                 ..Default::default()
             },
             catalog::ToolContext {
@@ -4163,6 +4198,49 @@ mod tests {
                 .unwrap_or_else(|| panic!("no device action was emitted for {utterance}"));
             assert_eq!(action.action, expected_action, "request: {utterance}");
         }
+    }
+
+    #[tokio::test]
+    async fn replayed_current_request_drives_the_device_status_fast_path() {
+        struct ModelMustNotRun;
+
+        #[tonic::async_trait]
+        impl ChatModel for ModelMustNotRun {
+            async fn complete(
+                &self,
+                _messages: &[ChatMessage],
+                _tools: &[ToolDef],
+            ) -> Result<ChatResponse, LlmError> {
+                panic!("the replayed current request must reach the deterministic fast path")
+            }
+        }
+
+        let messages = run_with(
+            Arc::new(ModelMustNotRun),
+            pb::SynapseUnderstandingRequest {
+                device_context: Some(pb::SynapseDeviceContext {
+                    turns: vec![pb::SynapseChatTurn {
+                        identifier: "current-request".into(),
+                        content: Some(pb::synapse_chat_turn::Content::UserRequest(
+                            pb::SynapseUserRequestContent {
+                                request: "What time is it?".into(),
+                                ..Default::default()
+                            },
+                        )),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        )
+        .await;
+
+        let action = device_visible(&messages)
+            .into_iter()
+            .find_map(as_action)
+            .expect("the replayed current request must dispatch a device action");
+        assert_eq!(action.action, "GetCurrentTime");
     }
 
     #[test]

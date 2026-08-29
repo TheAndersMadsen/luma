@@ -411,7 +411,7 @@ impl BidiSession {
         // The wearer's own words, kept for required-slot backfill (see the device
         // branch below): the agent entry points take the request verbatim, so the
         // utterance is the faithful fill rather than an invention.
-        let utterance = req.utterance.clone();
+        let utterance = super::engine::current_utterance(&req).to_owned();
         catalog::scope_tickle_to_exact_request(&mut tools, &utterance);
         let bounded_music_research = super::engine::prefer_one_music_research_tool(
             &mut tools,
@@ -1191,7 +1191,7 @@ fn resolve_catalog(
         },
         set,
     );
-    if !super::engine::explicit_playback_request(&req.utterance) {
+    if !super::engine::explicit_playback_request(super::engine::current_utterance(req)) {
         tools.retain(|tool| tool.name != "music_discover");
     }
     tools
@@ -1268,13 +1268,14 @@ fn build_history(req: &pb::SynapseUnderstandingRequest) -> Vec<ChatMessage> {
     // Push it only when the replayed transcript does not already end in it. The
     // device's `repaired_request` is the authoritative text where it differs, and
     // `replay` above already preferred it.
+    let utterance = super::engine::current_utterance(req);
     let already_replayed = messages
         .iter()
         .rev()
         .find(|m| m.role == Role::User)
-        .is_some_and(|m| m.content == req.utterance);
-    if !already_replayed && !req.utterance.is_empty() {
-        messages.push(ChatMessage::user(req.utterance.clone()));
+        .is_some_and(|m| m.content == utterance);
+    if !already_replayed && !utterance.is_empty() {
+        messages.push(ChatMessage::user(utterance.to_owned()));
     }
     messages
 }

@@ -29,7 +29,7 @@ pub fn confirmation_question(
     input: &str,
 ) -> Option<String> {
     let question = question_for(action, input)?;
-    if strict_assent(&request.utterance)
+    if strict_assent(super::engine::current_utterance(request))
         && latest_respond(request.device_context.as_ref()).as_deref() == Some(question.as_str())
     {
         None
