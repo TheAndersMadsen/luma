@@ -1326,6 +1326,7 @@ mod tests {
             ("Answer the call", ACCEPT_CALL),
             ("Hang up", END_CALL),
             ("Return to the call", RESUME_CALL),
+            ("Show current call.", RESUME_CALL),
         ] {
             assert_eq!(
                 plan_communications_action(&request(utterance))
@@ -1708,6 +1709,21 @@ mod tests {
     }
 
     #[test]
+    fn exact_checklist_ui_prompts_open_only_the_requested_private_surface() {
+        for (utterance, expected_action) in [
+            ("Open messages.", OPEN_MESSAGES_MAIN_MENU),
+            ("Open contacts.", OPEN_CONTACTS),
+            ("Open dialer.", OPEN_DIALER_HOME),
+            ("Open the dial pad.", OPEN_DIALPAD),
+            ("Open recent calls.", OPEN_RECENT_CALLS),
+        ] {
+            let planned = plan_communications_action(&request(utterance)).expect(utterance);
+            assert_eq!(planned.action_name, expected_action, "{utterance}");
+            assert_eq!(planned.input_json, "{}", "{utterance}");
+        }
+    }
+
+    #[test]
     fn create_contact_is_denied_because_stock_forces_trusted_state() {
         for utterance in [
             "Create a contact for Alice Smith with phone number +45 12 34 56 78",
@@ -1732,6 +1748,7 @@ mod tests {
             "call Alice",
             "open messages",
             "read messages",
+            "Read my messages.",
             "open contacts",
             "search contacts for Alice",
             "catch me up",
@@ -1790,6 +1807,7 @@ mod tests {
 
         for utterance in [
             "Tell me about my contacts",
+            "Tell me about text messages.",
             "What are recent calls?",
             "Are my messages private?",
             "What is new in phone technology?",

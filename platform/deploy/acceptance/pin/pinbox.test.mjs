@@ -40,6 +40,7 @@ import {
   renderHumanSummary,
   optionalEvidence,
   assessSilence,
+  isLocalEchoAnswer,
 } from "./pinbox/commands/probe.mjs";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../pin");
@@ -520,6 +521,17 @@ test("summarizeResponses: LAST Respond wins, not the longest", () => {
   assert.equal(s.answer, terminal);
   assert.ok(terminal.length < interim.length, "the terminal answer is the shorter string");
   assert.equal(s.unavailableAnswer, false);
+});
+
+test("a Pin-local echo is identified as the wrong Cosmos planning plane", () => {
+  const utterance = "What is 15 percent of 80?";
+  assert.equal(isLocalEchoAnswer(`Echo: ${utterance}`, utterance), true);
+  assert.equal(isLocalEchoAnswer("12", utterance), false);
+  assert.equal(
+    isLocalEchoAnswer("Echo: a different utterance", utterance),
+    false,
+    "ordinary answers beginning with Echo must not be rejected",
+  );
 });
 
 test("summarizeResponses: a device-action turn is 'no-respond-frame', not silence", () => {

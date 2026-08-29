@@ -232,6 +232,12 @@ export const PHYSICAL_PROMPT_CASES = Object.freeze([
     expectedAction: NATIVE_ACTIONS.GET_CURRENT_TIME,
   }),
   fixedCase({
+    id: "world_clock_tokyo",
+    prompt: "What time is it in Tokyo?",
+    kind: "simple_action",
+    expectedAction: NATIVE_ACTIONS.WORLD_CLOCK,
+  }),
+  fixedCase({
     id: "battery_level",
     prompt: "battery level",
     kind: "simple_action",
@@ -327,7 +333,7 @@ function usage() {
     `  - The expected Pin may use --expected-pin-serial or ${EXPECTED_PIN_SERIAL_ENV}.`,
     "  - --case selects exactly one allowlisted fixture, so each live invocation can have an independent timeout and cleanup boundary.",
     `  - Allowed --case ids: ${PHYSICAL_PROMPT_CASES.map((item) => item.id).join(", ")}.`,
-    `  - Only fixed time, battery, weather, ranked-music, pause-cleanup, and ${NATIVE_ACTIONS.TICKLE} fixtures can be injected.`,
+    `  - Only fixed time, world-clock, battery, weather, ranked-music, pause-cleanup, and ${NATIVE_ACTIONS.TICKLE} fixtures can be injected.`,
     "  - Fixed semantic and locked loading-message fixtures call the no-action stock EncryptedLoadingMessage RPC directly.",
     "  - Calls, messages, camera, privacy mode, settings changes, installs, reboots, and package-installer session commands are structurally absent.",
     "  - Raw prompts, responses, coordinates, music metadata, account data, network identifiers, dumpsys text, and ADB diagnostics are never printed.",

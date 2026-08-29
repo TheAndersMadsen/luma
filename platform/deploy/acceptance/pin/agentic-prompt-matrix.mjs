@@ -32,7 +32,7 @@ import { NATIVE_ACTIONS } from "./tier-a-symbols.mjs";
 
 const PROGRAM = "agentic-prompt-matrix";
 export const MATRIX_TIMEOUT_MS = 30_000;
-export const MAX_MATRIX_CASES = 24;
+export const MAX_MATRIX_CASES = 25;
 export const MAX_CONSECUTIVE_INFRASTRUCTURE_FAILURES = 2;
 export const GLOBAL_EXCLUDED_TOOLS = Object.freeze([
   NATIVE_ACTIONS.CREATE_MEMORY,
@@ -116,19 +116,20 @@ function fixedCase(value) {
 export const FIXED_PROMPT_MATRIX = Object.freeze([
   fixedCase({
     id: "agentic_ice_explanation",
-    prompt: "In one short sentence, explain why ice floats on water.",
+    prompt: "Explain why ice floats on water in one sentence.",
     allowedRoutes: [ROUTE_CLASS.AGENTIC_FINAL_ANSWER],
     expectedActions: [NATIVE_ACTIONS.RESPOND],
     allowedKeySets: [["Response"]],
     semanticCheck: "ice",
   }),
   fixedCase({
-    id: "agentic_sky_explanation",
-    prompt: "In one short sentence, explain why the sky looks blue.",
+    id: "agentic_named_city_weather",
+    prompt: "What is the weather in Copenhagen right now?",
     allowedRoutes: [ROUTE_CLASS.AGENTIC_FINAL_ANSWER],
     expectedActions: [NATIVE_ACTIONS.RESPOND],
     allowedKeySets: [["Response"]],
-    semanticCheck: "sky",
+    semanticCheck: "named_city_weather",
+    expectedPlace: "Copenhagen",
   }),
   fixedCase({
     id: "agentic_music_top_read",
@@ -141,6 +142,13 @@ export const FIXED_PROMPT_MATRIX = Object.freeze([
   fixedCase({
     id: "agentic_compound_navigation_preflight",
     prompt: "find the nearest coffee shop and navigate there",
+    allowedRoutes: [ROUTE_CLASS.AGENTIC_LOCATION_PREFLIGHT],
+    expectedActions: [NATIVE_ACTIONS.GET_CURRENT_LOCATION],
+    allowedKeySets: [[]],
+  }),
+  fixedCase({
+    id: "agentic_nearby_coffee_preflight",
+    prompt: "Find coffee shops nearby.",
     allowedRoutes: [ROUTE_CLASS.AGENTIC_LOCATION_PREFLIGHT],
     expectedActions: [NATIVE_ACTIONS.GET_CURRENT_LOCATION],
     allowedKeySets: [[]],
@@ -170,14 +178,14 @@ export const FIXED_PROMPT_MATRIX = Object.freeze([
   }),
   fixedCase({
     id: "agentic_quoted_pause_negative",
-    prompt: "What happens if I say \"pause the music\"?",
+    prompt: "What happens if I say 'pause the music'?",
     allowedRoutes: [ROUTE_CLASS.AGENTIC_FINAL_ANSWER],
     expectedActions: [NATIVE_ACTIONS.RESPOND],
     allowedKeySets: [["Response"]],
   }),
   fixedCase({
     id: "deterministic_weather_preflight",
-    prompt: "What's the weather like today?",
+    prompt: "What's the weather here?",
     allowedRoutes: [ROUTE_CLASS.DETERMINISTIC_WEATHER_PREFLIGHT],
     expectedActions: [NATIVE_ACTIONS.GET_CURRENT_LOCATION],
     allowedKeySets: [[]],
@@ -305,13 +313,11 @@ export const FIXED_PROMPT_MATRIX = Object.freeze([
       "The user explicitly asked the stock camera to take a photograph",
   }),
   fixedCase({
-    id: "deterministic_privacy_mode",
-    prompt: "enter privacy mode",
-    allowedRoutes: [ROUTE_CLASS.DETERMINISTIC_NATIVE_ACTION],
-    expectedActions: [NATIVE_ACTIONS.ENTER_PRIVACY_MODE],
+    id: "agentic_city_location_preflight",
+    prompt: "What city am I in?",
+    allowedRoutes: [ROUTE_CLASS.AGENTIC_LOCATION_PREFLIGHT],
+    expectedActions: [NATIVE_ACTIONS.GET_CURRENT_LOCATION],
     allowedKeySets: [[]],
-    expectedThought:
-      "The user explicitly asked the stock device to enter privacy mode",
   }),
   fixedCase({
     id: "agentic_dependent_capital_weather",
@@ -611,8 +617,12 @@ function responseContentValid(item, input) {
     if (item.semanticCheck === "ice") {
       return /(?:less dense|density)/i.test(response) && /water/i.test(response);
     }
-    if (item.semanticCheck === "sky") {
-      return /(?:scatter|scattering|rayleigh|wavelength)/i.test(response);
+    if (item.semanticCheck === "named_city_weather") {
+      return (
+        /(?:weather|temperature|rain|sun|cloud|humid|degree|celsius|fahrenheit|°)/i.test(
+          response,
+        ) && providerTextContains(response, item.expectedPlace)
+      );
     }
     if (item.semanticCheck === "dependent_capital_weather") {
       return (

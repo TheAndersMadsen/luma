@@ -60,9 +60,9 @@ static HTTP: OnceLock<reqwest::Client> = OnceLock::new();
 
 /// Shared HTTP client for all outbound vendor calls.
 ///
-/// Bounded so a wedged vendor cannot consume the wearer's turn: the device tears
-/// a turn down at ~25s, and the assistant already caps each model step at 10s, so
-/// a tool call must resolve well inside that.
+/// Bounded so a wedged vendor cannot consume the wearer's turn: Cosmos keeps the
+/// whole run inside 70 seconds and caps each model step at 20 seconds, so a tool
+/// call must still resolve well inside either bound.
 pub(crate) fn http() -> reqwest::Client {
     HTTP.get_or_init(|| {
         reqwest::Client::builder()

@@ -91,7 +91,7 @@ pub fn plan_translation_action(
     }
 
     let command = strip_polite_prefix(request.utterance.trim())
-        .trim_end_matches(['?', '!'])
+        .trim_end_matches(['.', '?', '!'])
         .trim();
     let (text, source, target) =
         parse_translate(command).or_else(|| parse_how_do_you_say(command))?;
@@ -288,7 +288,7 @@ mod tests {
     #[test]
     fn complete_supported_one_off_requests_use_exact_stock_fields() {
         let planned = plan_translation_action(&request(
-            "Please translate good morning from English to French",
+            "Translate good morning from English to French.",
         ))
         .unwrap();
         assert_eq!(planned.action_name, native_actions::TRANSLATE);
@@ -308,10 +308,10 @@ mod tests {
             serde_json::json!({"Text": "thank you", "Target": "German"})
         );
 
-        let planned = plan_translation_action(&request("translate hello! to Spanish")).unwrap();
+        let planned = plan_translation_action(&request("Translate hello to Spanish.")).unwrap();
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&planned.input_json).unwrap(),
-            serde_json::json!({"Text": "hello!", "Target": "Spanish"})
+            serde_json::json!({"Text": "hello", "Target": "Spanish"})
         );
     }
 
@@ -320,6 +320,7 @@ mod tests {
         for (utterance, target) in [
             ("translate to English", "English"),
             ("Please translate to French.", "French"),
+            ("Set translation language to French.", "French"),
             ("Set translation language to Italian", "Italian"),
             ("Set translate language to Spanish!", "Spanish"),
             ("translate to Portuguese", "Portuguese"),

@@ -352,7 +352,7 @@ fn food_v4_tracks_bounded_items_with_exact_stock_fields() {
             }),
         ),
         (
-            "Please track my food: one banana",
+            "Track my food: one banana.",
             serde_json::json!({
                 "FoodItemList": [{
                     "FoodItemName": "banana",
@@ -393,12 +393,32 @@ fn food_v4_tracks_bounded_items_with_exact_stock_fields() {
 fn food_v4_retrieves_information_without_inventing_nutrition_values() {
     let cases = [
         (
+            "How many calories are in an apple?",
+            serde_json::json!({
+                "FoodItemList": [{
+                    "FoodItemName": "apple",
+                    "IsBranded": false,
+                    "Quantity": 1
+                }]
+            }),
+        ),
+        (
             "What are the nutrition facts for oatmeal?",
             serde_json::json!({
                 "FoodItemList": [{
                     "FoodItemName": "oatmeal",
                     "IsBranded": false,
                     "Quantity": 1
+                }]
+            }),
+        ),
+        (
+            "How much protein is in two eggs?",
+            serde_json::json!({
+                "FoodItemList": [{
+                    "FoodItemName": "eggs",
+                    "IsBranded": false,
+                    "Quantity": 2
                 }]
             }),
         ),
@@ -435,8 +455,10 @@ fn food_v4_retrieves_information_without_inventing_nutrition_values() {
 fn food_v4_gets_only_explicit_bounded_log_windows() {
     for (prompt, expected_days) in [
         ("What have I eaten today?", 1),
+        ("How many calories have I eaten today?", 1),
         ("Show my food log", 1),
         ("Show my food log for the last 3 days", 3),
+        ("Show my food log for the last three days.", 3),
         ("What have I eaten in the last thirty days?", 30),
     ] {
         let (name, args) = planned(&food_request(prompt));

@@ -14,13 +14,10 @@ fn request(utterance: &str) -> SynapseUnderstandingRequest {
 #[test]
 fn explicit_camera_commands_map_to_exact_stock_actions() {
     for (utterance, action) in [
-        ("Take a picture!", native_actions::CAPTURE_PHOTOGRAPH),
-        ("Please record a video.", native_actions::CAPTURE_VIDEO),
-        ("Stop recording video", native_actions::STOP_VIDEO),
-        (
-            "Show me my recent photos",
-            native_actions::OPEN_RECENT_PHOTOS,
-        ),
+        ("Take a photo.", native_actions::CAPTURE_PHOTOGRAPH),
+        ("Record a video.", native_actions::CAPTURE_VIDEO),
+        ("Stop recording.", native_actions::STOP_VIDEO),
+        ("Show my recent photos.", native_actions::OPEN_RECENT_PHOTOS),
     ] {
         let planned = plan_native_device_action(&request(utterance)).expect(utterance);
         assert_eq!(planned.action_name, action);
@@ -970,6 +967,8 @@ fn quick_action_remapping_is_gated_canonical_and_keyguard_safe() {
     };
     for (utterance, target) in [
         ("change my quick action to notes", "notes"),
+        ("Change my quick action to messages.", "messages"),
+        ("Change my quick action to translation.", "interpreter"),
         ("set the two finger hold gesture to note", "notes"),
         ("swap touch action to messages", "messages"),
         ("make quick action gesture to messaging", "messages"),

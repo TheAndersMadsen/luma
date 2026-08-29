@@ -221,11 +221,13 @@ it:
 | A1 | One semantic task, direct answer, clarification, or one server lookup | Exact model provenance, step count, and terminal state are recorded |
 | A2 | A compound request with multiple tool operations | The bounded run upgrades from A1 only after more than one tool call |
 
-The run owns one 22-second absolute deadline across context loading, model
-steps, server tools, and the terminal response. Legacy and bidirectional stock
-transports share that budget and telemetry. A new utterance cancels the old
-foreground run; no detached background agent continues after the wearer moves
-on.
+The run owns one 70-second absolute deadline across context loading, model
+steps, server tools, and the terminal response. Individual model steps remain
+bounded at 20 seconds. The signed Hook raises the inspected stock Ai Bus ceiling
+from 25 to 90 seconds, so the agent keeps twenty seconds of delivery margin.
+Legacy and bidirectional stock transports share that budget and telemetry. A
+new utterance cancels the old foreground run; no detached background agent
+continues after the wearer moves on.
 
 Tool results, saved wearer facts, and authenticated device context enter the
 model as typed, untrusted data rather than system instructions. Required action

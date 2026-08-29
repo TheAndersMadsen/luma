@@ -115,6 +115,7 @@ mod tests {
     fn explicit_full_note_commands_preserve_the_dictated_body() {
         for (utterance, expected) in [
             ("Take a note: Buy coffee beans", "Buy coffee beans"),
+            ("Take a note saying test.", "test."),
             (
                 "Please make a note that the car is on level three",
                 "the car is on level three",
@@ -136,6 +137,7 @@ mod tests {
     fn incomplete_informational_or_ambiguous_phrases_do_not_write() {
         for utterance in [
             "Take a note",
+            "Show my notes.",
             "How do I take a note?",
             "Tell me about note taking",
             "That is an interesting note",
@@ -155,7 +157,7 @@ mod tests {
         };
         assert!(plan_note(&unknown).is_none());
 
-        let mut locked = request("Take a note buy coffee");
+        let mut locked = request("Take a note saying test.");
         locked.device_context = Some(SynapseDeviceContext {
             is_locked: true,
             ..Default::default()

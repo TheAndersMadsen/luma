@@ -789,14 +789,14 @@ fn ai_catalog_playback_preserves_stock_lock_parity_and_tool_exclusion() {
 fn current_track_artist_question_answers_only_from_valid_context() {
     let context = recent_track();
     assert_eq!(
-        action_input(&request("What song is this?"), Some(&context)),
+        action_input(&request("What song is playing?"), Some(&context)),
         (
             RESPOND.into(),
             serde_json::json!({"Response": "This is Feel Good Inc. by Gorillaz."})
         )
     );
     assert_eq!(
-        action_input(&request("Who made this song?"), Some(&context)),
+        action_input(&request("Who is this song by?"), Some(&context)),
         (
             RESPOND.into(),
             serde_json::json!({"Response": "Feel Good Inc. is by Gorillaz."})
@@ -1220,6 +1220,7 @@ fn exact_fieldless_stock_music_phrases_emit_public_actions_with_empty_inputs() {
         ("restart this song", RESTART_TRACK),
         ("start the current track over", RESTART_TRACK),
         ("show my music queue", GET_MUSIC_QUEUE),
+        ("What's in my music queue?", GET_MUSIC_QUEUE),
         ("What's in the music queue?", GET_MUSIC_QUEUE),
         ("What song is next in the queue?", GET_MUSIC_QUEUE),
         ("play my favorites", PLAY_FAVORITE_TRACKS),
@@ -1230,6 +1231,7 @@ fn exact_fieldless_stock_music_phrases_emit_public_actions_with_empty_inputs() {
             "add the current track to my favorites",
             SAVE_CURRENT_TRACK_TO_FAVORITES,
         ),
+        ("Save this song.", SAVE_CURRENT_TRACK_TO_FAVORITES),
         ("favorite this song", SAVE_CURRENT_TRACK_TO_FAVORITES),
         ("start a radio from this track", PLAY_CURRENT_TRACK_RADIO),
     ] {
@@ -1623,6 +1625,7 @@ fn visual_candidate_is_bounded_unambiguous_and_cannot_choose_an_action() {
     }
 
     for utterance in [
+        "Play the song in this image.",
         "play this record",
         "play the record you see",
         "play what's in the image",

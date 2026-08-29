@@ -44,10 +44,11 @@ const DEMO_CHAT_TIMEOUT: Duration = Duration::from_secs(25);
 const DEMO_SPEECH_TIMEOUT: Duration = Duration::from_secs(35);
 
 /// The engine's own run budget: it delivers a spoken terminal by here.
-const RUN_BUDGET_MS: u64 = 22_000;
-/// `AIMIC_TIMEOUT_MS` — the device's hard gRPC deadline. Past it a real Pin
-/// fires DEADLINE_EXCEEDED and discards every turn already streamed.
-const DEVICE_DEADLINE_MS: u64 = 25_000;
+const RUN_BUDGET_MS: u64 = crate::assistant::runtime::FOREGROUND_BUDGET.as_millis() as u64;
+/// The signed Hook raises the inspected Ironman `AIMIC_TIMEOUT_MS` from 25s to
+/// this hard gRPC deadline. Past it a real Pin fires DEADLINE_EXCEEDED and
+/// discards every turn already streamed.
+const DEVICE_DEADLINE_MS: u64 = crate::assistant::runtime::PIN_SESSION_LIMIT.as_millis() as u64;
 
 #[derive(Clone, Default)]
 pub struct Readiness(Arc<AtomicBool>);
@@ -2830,8 +2831,8 @@ struct DemoTraceStep {
     ///
     /// Latency is the dominant thing a wearer feels on this device, and it is
     /// almost entirely model-step time — so showing WHERE the turn went is more
-    /// informative than a single total. It also makes the 25s device deadline
-    /// visible: past it, a real Pin discards the whole turn.
+    /// informative than a single total. It also makes the Hooked 90s device
+    /// deadline visible: past it, a real Pin discards the whole turn.
     elapsed_ms: u64,
 }
 

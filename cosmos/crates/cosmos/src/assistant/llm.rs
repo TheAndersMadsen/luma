@@ -783,7 +783,7 @@ pub struct OpenAiChatModel {
     /// Stock bounds every model step: the device's own agent loop sends
     /// `setMaxTokens(200)` on each `ChatCompletionRequest`
     /// (`TaoAgentV2.java:195`, `TaoAgent.java:103`). Sending no bound at all lets
-    /// a verbose model spend the wearer's whole 25s turn deadline generating
+    /// a verbose model spend the wearer's whole model-step allowance generating
     /// prose that will be cut off mid-sentence when spoken — model steps are the
     /// dominant cost in a turn, so this is a latency control as much as a style
     /// one. Configurable via `COSMOS_LLM_MAX_TOKENS`; `0` disables the bound.
@@ -809,7 +809,7 @@ pub struct OpenAiChatModel {
 /// supervisor tier must also emit tool-call arguments (a contact list, a playlist,
 /// a search query) inside the same budget, and truncating those produces an action
 /// the device rejects rather than a merely shorter answer. Still small enough that
-/// a runaway generation cannot eat the 25s turn deadline.
+/// a runaway generation cannot eat the model-step allowance.
 const DEFAULT_MAX_TOKENS: u32 = 512;
 
 impl OpenAiChatModel {
@@ -1467,7 +1467,7 @@ mod tests {
     /// Every model step must contain a generation ceiling.
     ///
     /// Stock bounds each step at 200 tokens (`TaoAgentV2.java:195`). Sending no
-    /// bound lets a verbose model spend the wearer's whole 25s turn deadline
+    /// bound lets a verbose model spend the wearer's whole model-step allowance
     /// generating text that is then cut off mid-sentence when spoken — model
     /// steps are the dominant cost in a turn.
     #[test]

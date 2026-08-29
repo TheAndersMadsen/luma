@@ -90,12 +90,12 @@ use crate::services::gates::{self, Entitlement};
 /// legacy engine enforces).
 const MAX_STEPS: usize = 8;
 
-/// Per-model-step ceiling, shared with the legacy engine: the device abandons the
-/// turn at its own ~25s deadline, so a step must resolve well inside that.
+/// Per-model-step ceiling, shared with the legacy engine. It bounds one
+/// provider round trip independently of the Hooked 90-second device session.
 const MODEL_STEP_TIMEOUT: std::time::Duration = super::runtime::MODEL_STEP_LIMIT;
 
-/// Total wall-clock budget for one run, the same 22s the legacy engine bounds a
-/// turn with.
+/// Total wall-clock budget for one run, the same 70s the legacy engine bounds a
+/// turn with and the same inner-loop budget as the Pin runtime.
 ///
 /// gRPC does not impose it here — `AIBusService.bidirectionalStreamingUnderstand`
 /// sets no `withDeadlineAfter`, unlike `understand`/`encryptedUnderstand` — and
@@ -103,7 +103,7 @@ const MODEL_STEP_TIMEOUT: std::time::Duration = super::runtime::MODEL_STEP_LIMIT
 /// eight steps at the per-step ceiling plus unbounded tool time while
 /// `SynapseInterpreter.getNextDeviceActionResponse` sits in an UNBOUNDED
 /// `responseFuture.get()`: the wearer's turn simply never comes back. Bounding
-/// the run at the same 22s the other transports use keeps the two transports
+/// the run at the same 70s the other transports use keeps the two transports
 /// answering on the same clock, and always leaves room to speak a terminal
 /// before giving up.
 const RUN_BUDGET: Duration = super::runtime::FOREGROUND_BUDGET;
@@ -241,7 +241,7 @@ impl BidiSession {
     }
 
     /// The same session machine with its two clocks passed in, so the deadline
-    /// guards can be exercised without spending the real 22 seconds. Production
+    /// guards can be exercised without spending the real 70 seconds. Production
     /// always goes through `spawn_with`, which supplies the real values.
     fn spawn_tuned<S>(
         model: Arc<dyn ChatModel>,
@@ -418,6 +418,8 @@ impl BidiSession {
             &utterance,
             self.tools.answer_engine_available,
         );
+        let mut deterministic_world_clock =
+            super::engine::deterministic_world_clock_action(&req, &tools);
 
         // Root the run on the user-request turn the device replayed; with no device
         // context the first server turn self-roots rather than pointing at an id we
@@ -446,9 +448,14 @@ impl BidiSession {
         // absolute clock and content-free production-plane provenance.
         let future_weather = super::engine::future_weather_request(&utterance);
         let tickle_near_miss = super::engine::tickle_near_miss_request(&utterance);
+        let transit_route = super::engine::transit_route_request(&utterance);
         let mut run = ForegroundRun::with_budget(
             Transport::Bidi,
-            if future_weather || tickle_near_miss {
+            if future_weather
+                || tickle_near_miss
+                || transit_route
+                || deterministic_world_clock.is_some()
+            {
                 RouteClass::D1
             } else {
                 RouteClass::A1
@@ -470,6 +477,13 @@ impl BidiSession {
         if tickle_near_miss {
             let flow = self
                 .finish(parent, super::engine::TICKLE_NEAR_MISS_RESPONSE)
+                .await;
+            run.finish("answered");
+            return flow;
+        }
+        if transit_route {
+            let flow = self
+                .finish(parent, super::engine::TRANSIT_ROUTING_UNAVAILABLE)
                 .await;
             run.finish("answered");
             return flow;
@@ -510,39 +524,51 @@ impl BidiSession {
             //    full action budget and then speaking an answer to a question
             //    that was superseded.
             //  * DEADLINE — an unbounded upstream call burns the wearer's whole
-            //    turn; the device tears it down at its own ~25s AIMIC deadline and
+            //    turn; the device tears it down at its Hooked 90s AIMIC deadline and
             //    they hear nothing. A bounded step leaves room to speak an apology.
             //
             // The step ceiling is the SMALLER of the per-step ceiling and what is
-            // left of the run: a 10s step started with 3s of budget left is 7s
-            // the wearer waits for a turn that can no longer be spoken.
-            run.note_model_step();
-            let resp = match self
-                .step(
-                    &messages,
-                    &tools,
-                    // Same rule as the server-stream engine: a step gets the
-                    // budget it has (minus streaming reserve), bounded by the
-                    // anti-hang ceiling — not a fixed cap that fires with budget
-                    // to spare.
-                    budget_left
-                        .saturating_sub(Duration::from_millis(750))
-                        .min(MODEL_STEP_TIMEOUT),
-                    inbound,
-                )
-                .await
-            {
-                Step::Superseded(req) => {
-                    run.supersede();
-                    return Flow::Supersede(req);
+            // left of the run: letting a 20s step start with only 3s left would
+            // overrun the budget by 17s and leave no time to speak the result.
+            let resp = if let Some(action) = deterministic_world_clock.take() {
+                ChatResponse {
+                    content: None,
+                    thought: action.thought.to_owned(),
+                    tool_call: Some(ToolCall {
+                        name: action.name.to_owned(),
+                        arguments: action.input,
+                    }),
+                    extra_tool_calls: Vec::new(),
                 }
-                Step::Answer(r) => r,
-                Step::Failed(outcome) => {
-                    // Even a degraded state is spoken through a terminal `Respond`
-                    // device action, never a bare error the device would drop.
-                    let flow = self.finish(parent, ERROR_TIMEOUT).await;
-                    run.finish(outcome);
-                    return flow;
+            } else {
+                run.note_model_step();
+                match self
+                    .step(
+                        &messages,
+                        &tools,
+                        // Same rule as the server-stream engine: a step gets the
+                        // budget it has (minus streaming reserve), bounded by the
+                        // anti-hang ceiling — not a fixed cap that fires with budget
+                        // to spare.
+                        budget_left
+                            .saturating_sub(Duration::from_millis(750))
+                            .min(MODEL_STEP_TIMEOUT),
+                        inbound,
+                    )
+                    .await
+                {
+                    Step::Superseded(req) => {
+                        run.supersede();
+                        return Flow::Supersede(req);
+                    }
+                    Step::Answer(r) => r,
+                    Step::Failed(outcome) => {
+                        // Even a degraded state is spoken through a terminal `Respond`
+                        // device action, never a bare error the device would drop.
+                        let flow = self.finish(parent, ERROR_TIMEOUT).await;
+                        run.finish(outcome);
+                        return flow;
+                    }
                 }
             };
 
@@ -1104,7 +1130,7 @@ where
             // UNBOUNDED `responseFuture.get()`, which only completes on an event
             // flagged `requires_response` or when the session closes. Silently
             // ignoring the observation therefore parks the wearer's pin for its
-            // full 25s AIMIC deadline after the answer has already been spoken.
+            // full 90s AIMIC deadline after the answer has already been spoken.
             //
             // Returning `None` drops `tx`, and the half-close makes the client's
             // `SynapseBidirectionalStreamingSession.close()` complete that future
@@ -1488,6 +1514,59 @@ mod tests {
         assert!(tail.is_none(), "expected half-close, got another event");
     }
 
+    #[tokio::test]
+    async fn world_clock_read_skips_the_model_and_keeps_the_device_handshake() {
+        struct ModelMustNotRun;
+
+        #[tonic::async_trait]
+        impl ChatModel for ModelMustNotRun {
+            async fn complete(
+                &self,
+                _messages: &[ChatMessage],
+                _tools: &[ToolDef],
+            ) -> Result<ChatResponse, LlmError> {
+                panic!("an exact world-clock read must not spend a model step")
+            }
+        }
+
+        let (tx, mut out) = session(Arc::new(ModelMustNotRun));
+        tx.send(Ok(pb::StreamingUnderstandRequest {
+            content: Some(
+                pb::streaming_understand_request::Content::UnderstandingRequest(
+                    pb::SynapseUnderstandingRequest {
+                        utterance: "What time is it in Tokyo?".to_owned(),
+                        device_context: Some(pb::SynapseDeviceContext::default()),
+                        ..Default::default()
+                    },
+                ),
+            ),
+        }))
+        .await
+        .unwrap();
+
+        let response = next(&mut out).await;
+        let action = action_of(&response).expect("world clock action");
+        assert_eq!(action.action, "WorldClock");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&action.input).unwrap(),
+            serde_json::json!({"Location": "Tokyo"}),
+        );
+        assert!(event(&response).requires_response);
+
+        let action_id = turn(&response).identifier.clone();
+        assert_idle(&mut out).await;
+        tx.send(Ok(observation_with_finality(
+            &action_id,
+            "world-clock-observation",
+            "WorldClock",
+            "Tokyo time displayed",
+            true,
+        )))
+        .await
+        .unwrap();
+        assert_closed(&mut out).await;
+    }
+
     // (a) A SERVER tool must not pause the loop.
     /// PARITY: batched server tools must execute on THIS transport too.
     ///
@@ -1795,6 +1874,34 @@ mod tests {
         assert_eq!(
             spoken(&answer),
             "Future weather forecasts are not available yet."
+        );
+    }
+
+    #[tokio::test]
+    async fn transit_routes_decline_on_bidi_without_model_or_location_work() {
+        struct ModelMustNotRun;
+
+        #[tonic::async_trait]
+        impl ChatModel for ModelMustNotRun {
+            async fn complete(
+                &self,
+                _messages: &[ChatMessage],
+                _tools: &[ToolDef],
+            ) -> Result<ChatResponse, LlmError> {
+                panic!("an explicit unsupported transit route must not spend a model step")
+            }
+        }
+
+        let (tx, mut out) = session(Arc::new(ModelMustNotRun));
+        tx.send(Ok(understanding("Give me transit directions to Nyhavn.")))
+            .await
+            .unwrap();
+        drop(tx);
+
+        let answer = next(&mut out).await;
+        assert_eq!(
+            spoken(&answer),
+            crate::assistant::engine::TRANSIT_ROUTING_UNAVAILABLE,
         );
     }
 
@@ -2621,7 +2728,7 @@ mod tests {
     /// `withDeadlineAfter`, and `getNextDeviceActionResponse` blocks in an
     /// unbounded `responseFuture.get()`), so the wearer just stands there.
     ///
-    /// The budget is scaled down (1.5s instead of 22s) so the test costs
+    /// The budget is scaled down (1.5s instead of 70s) so the test costs
     /// milliseconds; the machinery under it is the production path.
     #[tokio::test]
     async fn a_slow_run_is_bounded_by_the_run_budget_and_still_speaks() {
@@ -2679,7 +2786,7 @@ mod tests {
             extra_tool_calls: Vec::new(),
         }]);
         // Budget shorter than the per-wait AIMIC ceiling, as in production
-        // (22s vs 25s): the run's own clock is what ends the park.
+        // (70s vs the Hooked 90s): the run's own clock is what ends the park.
         let (tx, mut out) = session_with_clocks(
             Arc::new(model),
             Duration::from_millis(900),
@@ -2971,7 +3078,7 @@ mod tests {
     /// REGRESSION: an observation arriving with no run in flight is the device
     /// closing out the run we just terminated — its `Respond` handler completed
     /// with a FINAL observation and the pin is now blocked on an unbounded
-    /// `responseFuture.get()`. Ignoring it parks the wearer for the full 25s
+    /// `responseFuture.get()`. Ignoring it parks the wearer for the full 90s
     /// AIMIC deadline AFTER the answer was already spoken. Half-closing lets the
     /// client's `close()` complete that future immediately.
     #[tokio::test]

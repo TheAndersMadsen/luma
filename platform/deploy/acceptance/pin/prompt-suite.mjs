@@ -121,6 +121,20 @@ export const SUITE = [
     note: `Returns a ${NATIVE_ACTIONS.GET_CURRENT_LOCATION} preflight in ~200ms and waits for the stock client. Scored as a failure for hours before that was understood.`,
   },
   {
+    id: "future-weather-limit",
+    prompt: "what will the weather be tomorrow",
+    expectAnswerAll: ["future weather forecasts", "not available"],
+    forbid: [NATIVE_ACTIONS.GET_CURRENT_LOCATION, "current_weather"],
+    note: "A known product limitation must be truthful, immediate, and tool-less. It must not request the current location or silently substitute current conditions for a forecast.",
+  },
+  {
+    id: "transit-routing-limit",
+    prompt: "give me transit directions to Nyhavn",
+    expectAnswerAll: ["transit routing", "not supported"],
+    forbid: [NATIVE_ACTIONS.GET_CURRENT_LOCATION, "route"],
+    note: "Transit is not implemented by the recovered navigation surface. An explicit transit request must explain that limitation without requesting location or inventing a route in another travel mode.",
+  },
+  {
     id: "compound-request",
     requiresDeviceRoundTrip: true,
     prompt: "what's the weather here and what's nearby",
@@ -254,6 +268,13 @@ execution is a misreading of the one-operation contract (Ghidra deep dive S6).",
     forbid: [NATIVE_ACTIONS.INCREMENT_VOLUME, NATIVE_ACTIONS.SET_VOLUME],
     note: "NEGATIVE CONTROL: a complaint is not a command. Must not raise volume.",
   },
+  {
+    id: "tickle-near-miss",
+    prompt: "please tickle",
+    expectAnswerAll: ["tickle", "exact phrases"],
+    forbid: [NATIVE_ACTIONS.TICKLE],
+    note: "NEGATIVE CONTROL: the optional Tickle action accepts only its three exact phrases. Polite decoration must explain the boundary without triggering it.",
+  },
 
   // ---- Everyday coverage (added 2026-07-28 as a BASELINE, not as regressions)
   //
@@ -280,6 +301,22 @@ execution is a misreading of the one-operation contract (Ghidra deep dive S6).",
   // harness bug #1 alone (the answer was read from keys that do not exist) and
   // contain NO assistant-behaviour signal — do not read that baseline as a
   // regression, and do not "fix" these by adding an expect.
+  {
+    id: "assistant-capabilities",
+    prompt: "what can you do?",
+    expectAnswerAll: [
+      "play music",
+      "set timers and alarms",
+      "answer questions",
+      "take photos",
+      "send messages",
+      "make calls",
+      "look up contacts",
+      "translate",
+    ],
+    forbid: ["web_search", "ask_online", "music_catalog_search"],
+    note: "The capability answer is derived from the dispatchable stock catalog. Every wearer-facing category must be named; matching one generic capability is not enough, and answering must not spend a remote lookup.",
+  },
   {
     id: "answer-arithmetic",
     prompt: "what is 15 percent of 80",
@@ -310,6 +347,90 @@ execution is a misreading of the one-operation contract (Ghidra deep dive S6).",
       `${NATIVE_ACTIONS.GET_CURRENT_TIME} (catalog.rs:1438), reached WITHOUT the model by the deterministic alias table (native_device_actions.rs:155-164), whose first entry is this exact prompt. Device-verified twice on disk (test-runs/session-20260724-160445-cce3f0a8 and session-20260727-215734-43500081): a single ${NATIVE_ACTIONS.GET_CURRENT_TIME} frame, ~2.0s, zero tool calls. Expect the PascalCase ACTION, never the model-facing tool \`get_current_time\` (tools/catalog.rs:492) — that is a mutation, and mutations log \`${OPERATIONAL_MARKERS.mutation.value}\`, not \`${OPERATIONAL_MARKERS.tool_executed.value}\`, so their snake_case name can never enter this harness's action pool.`,
   },
   {
+    id: "battery-level-read",
+    prompt: "battery level",
+    expect: [NATIVE_ACTIONS.GET_BATTERY_LEVEL],
+    forbid: [NATIVE_ACTIONS.SETTINGS, NATIVE_ACTIONS.RESPOND],
+    note: "The exact status prompt is a device-local native read. It must not spend a model response or open the broader Settings experience.",
+  },
+  {
+    id: "current-volume-read",
+    prompt: "what is the current volume",
+    expect: [NATIVE_ACTIONS.GET_CURRENT_VOLUME],
+    forbid: [NATIVE_ACTIONS.SET_VOLUME, NATIVE_ACTIONS.INCREMENT_VOLUME],
+    note: "A volume question is read-only. It must not be confused with an absolute or relative volume mutation.",
+  },
+  {
+    id: "online-status-read",
+    prompt: "am I online",
+    expect: [NATIVE_ACTIONS.AM_I_ONLINE],
+    forbid: [NATIVE_ACTIONS.SETTINGS, "web_search"],
+    note: "Connectivity status comes from the Pin itself; a successful web request is not a substitute for reading the active device transport.",
+  },
+  {
+    id: "device-status-read",
+    prompt: "device status",
+    expect: [NATIVE_ACTIONS.SETTINGS],
+    forbid: [NATIVE_ACTIONS.RESPOND],
+    note: "The broad status summary belongs to the stock Settings agent and requires an unlocked physical Pin when dispatched.",
+  },
+  {
+    id: "bluetooth-status-read",
+    prompt: "is Bluetooth on",
+    expect: [NATIVE_ACTIONS.GET_BLUETOOTH_STATUS],
+    forbid: [NATIVE_ACTIONS.TURN_ON_BLUETOOTH, NATIVE_ACTIONS.TURN_OFF_BLUETOOTH],
+    note: "A Bluetooth-state question must remain a read and never toggle the radio.",
+  },
+  {
+    id: "airplane-mode-status-read",
+    prompt: "airplane mode status",
+    expect: [NATIVE_ACTIONS.GET_AIRPLANE_MODE_STATUS],
+    forbid: [NATIVE_ACTIONS.TURN_ON_AIRPLANE_MODE, NATIVE_ACTIONS.TURN_OFF_AIRPLANE_MODE],
+    note: "This is deliberately read-only because changing airplane mode can sever the Cosmos connection.",
+  },
+  {
+    id: "phone-number-read",
+    prompt: "what is my phone number",
+    expect: [NATIVE_ACTIONS.GET_PHONE_NUMBER],
+    forbid: [NATIVE_ACTIONS.OPEN_DIALER_HOME, NATIVE_ACTIONS.CALL_PERSON],
+    note: "The carrier-provided number is read from the Pin. Asking for it must not open the dialer or initiate a call.",
+  },
+  {
+    id: "serial-number-read",
+    prompt: "what is my serial number",
+    expect: [NATIVE_ACTIONS.GET_SERIAL_NUMBER],
+    forbid: [NATIVE_ACTIONS.SETTINGS, NATIVE_ACTIONS.RESPOND],
+    note: "The hardware serial is an unlocked device-local read, not a model-generated answer.",
+  },
+  {
+    id: "current-location-read",
+    prompt: "where am I",
+    expect: [NATIVE_ACTIONS.GET_CURRENT_LOCATION],
+    forbid: ["nearby_search", "current_weather"],
+    note: "A bare location question requests the Pin's current position only; it must not silently turn into nearby search or weather.",
+  },
+  {
+    id: "world-clock-tokyo",
+    prompt: "what time is it in Tokyo",
+    expect: [NATIVE_ACTIONS.WORLD_CLOCK],
+    forbid: [NATIVE_ACTIONS.GET_CURRENT_TIME, NATIVE_ACTIONS.RESPOND],
+    note: "A named-location time question must dispatch WorldClock with the location instead of returning the Pin's local time or model prose.",
+  },
+  {
+    id: "show-timers",
+    prompt: "show my timers.",
+    expect: [NATIVE_ACTIONS.TIMER],
+    forbid: [NATIVE_ACTIONS.ALARM, NATIVE_ACTIONS.RESPOND],
+    note: "The read-only timer display request enters the stock Timer child agent; its child-planner contract requires DisplayTimer.",
+  },
+  {
+    id: "show-alarms",
+    prompt: "show my alarms.",
+    expect: [NATIVE_ACTIONS.ALARM],
+    forbid: [NATIVE_ACTIONS.TIMER, NATIVE_ACTIONS.RESPOND],
+    note: "The read-only alarm display request enters the stock Alarm child agent; its child-planner contract requires DisplayAlarm.",
+  },
+  {
     id: "translation",
     prompt: "how do you say thank you in Japanese",
     expectAnswer: ["arigato", "arigatou", "ありがと"],
@@ -322,6 +443,62 @@ execution is a misreading of the one-operation contract (Ghidra deep dive S6).",
       "` action here — it is DELIBERATELY_NOT_EXPOSED to the planner ('stock translation surface', tools/catalog/tests.rs:1804). Its 2026-07-28 FAIL? was environmental (" +
       OPERATIONAL_MARKERS.backend_unavailable.value +
       ").",
+  },
+  {
+    id: "food-calories-apple",
+    prompt: "how many calories are in an apple?",
+    expect: [NATIVE_ACTIONS.MANAGE_NUTRITION],
+    forbid: [NATIVE_ACTIONS.PLAY_MUSIC, "music_catalog_search"],
+    note: "The top-level planner must enter the stock nutrition agent; the Pin child-planner regression separately verifies RetrieveFoodInfo and its exact FoodItemList.",
+  },
+  {
+    id: "food-facts-oatmeal",
+    prompt: "what are the nutrition facts for oatmeal?",
+    expect: [NATIVE_ACTIONS.MANAGE_NUTRITION],
+    forbid: [NATIVE_ACTIONS.PLAY_MUSIC, "music_catalog_search"],
+    note: "Read-only nutrition lookup enters the stock nutrition agent without being mistaken for music catalog search.",
+  },
+  {
+    id: "food-protein-eggs",
+    prompt: "how much protein is in two eggs?",
+    expect: [NATIVE_ACTIONS.MANAGE_NUTRITION],
+    forbid: [NATIVE_ACTIONS.PLAY_MUSIC, "music_catalog_search"],
+    note: "Quantity must survive the top-level nutrition handoff; the Pin child-planner regression requires Quantity=2.",
+  },
+  {
+    id: "food-track-eggs",
+    prompt: "I ate two eggs.",
+    expect: [NATIVE_ACTIONS.MANAGE_NUTRITION],
+    forbid: [NATIVE_ACTIONS.PAUSE_MUSIC, NATIVE_ACTIONS.PLAY_MUSIC],
+    note: "Food logging must enter nutrition and must not reproduce the stock loose PauseMusic false positive.",
+  },
+  {
+    id: "food-track-banana",
+    prompt: "track my food: one banana.",
+    expect: [NATIVE_ACTIONS.MANAGE_NUTRITION],
+    forbid: [NATIVE_ACTIONS.PAUSE_MUSIC, NATIVE_ACTIONS.PLAY_MUSIC],
+    note: "Explicit food tracking enters the stock nutrition agent; the child-planner regression verifies TrackFoodConsumption with Quantity=1.",
+  },
+  {
+    id: "food-log-today",
+    prompt: "what have I eaten today?",
+    expect: [NATIVE_ACTIONS.MANAGE_NUTRITION],
+    forbid: [NATIVE_ACTIONS.PLAY_MUSIC],
+    note: "Today's diary read enters nutrition; the child-planner regression verifies GetFoodLog with DayCount=1.",
+  },
+  {
+    id: "food-calories-today",
+    prompt: "how many calories have I eaten today?",
+    expect: [NATIVE_ACTIONS.MANAGE_NUTRITION],
+    forbid: [NATIVE_ACTIONS.PLAY_MUSIC],
+    note: "The daily calorie summary is a food-log read, not a general nutrition lookup; the child planner requires DayCount=1.",
+  },
+  {
+    id: "food-log-three-days",
+    prompt: "show my food log for the last three days.",
+    expect: [NATIVE_ACTIONS.MANAGE_NUTRITION],
+    forbid: [NATIVE_ACTIONS.PLAY_MUSIC],
+    note: "The exact checklist wording enters nutrition; the Pin child-planner regression requires spelled-out three to become GetFoodLog DayCount=3.",
   },
   {
     id: "definition",
@@ -599,6 +776,8 @@ export function evaluateAnswer(testCase, answerText) {
   const raw = isExtraction ? answerText.text : answerText;
   const text = typeof raw === "string" ? raw.trim() : "";
   const expected = testCase.expectAnswer ?? [];
+  const expectedAll = testCase.expectAnswerAll ?? [];
+  const expectsSpokenAnswer = expected.length > 0 || expectedAll.length > 0;
 
   // These three are failures for EVERY case, answer-anchored or not. Under the
   // old code a silent or malformed turn returned `checked:false` for any case
@@ -638,7 +817,7 @@ export function evaluateAnswer(testCase, answerText) {
   // demands spoken words may fail here, otherwise this re-creates the same
   // false-red the original bug produced, in a new place.
   if (status === "no-respond-frame") {
-    if (expected.length === 0) {
+    if (!expectsSpokenAnswer) {
       return {
         checked: false,
         pass: null,
@@ -649,18 +828,26 @@ export function evaluateAnswer(testCase, answerText) {
     return { checked: true, pass: false, reason: "expected a spoken answer, got none", text };
   }
 
-  if (expected.length === 0) {
+  if (!expectsSpokenAnswer) {
     return { checked: false, pass: null, reason: "no answer expectation", text };
   }
   if (text.length === 0) {
     return { checked: true, pass: false, reason: "empty answer", text };
   }
   const haystack = text.toLowerCase();
-  const matched = expected.some((needle) => haystack.includes(String(needle).toLowerCase()));
+  const matchedAny = expected.length === 0
+    || expected.some((needle) => haystack.includes(String(needle).toLowerCase()));
+  const missingAll = expectedAll.filter(
+    (needle) => !haystack.includes(String(needle).toLowerCase()),
+  );
+  const matched = matchedAny && missingAll.length === 0;
+  const failure = !matchedAny
+    ? `none of ${JSON.stringify(expected)} in answer`
+    : `missing required content ${JSON.stringify(missingAll)}`;
   return {
     checked: true,
     pass: matched,
-    reason: matched ? "expected content present" : `none of ${JSON.stringify(expected)} in answer`,
+    reason: matched ? "expected content present" : failure,
     text,
   };
 }

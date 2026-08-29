@@ -138,7 +138,7 @@ static_resources:
                         - match: { prefix: "/humane.featureflags." }
                           route: { cluster: cosmos_feature_flags, timeout: 30s }
                         - match: { prefix: "/humane.aibus." }
-                          route: { cluster: cosmos_ai_bus, timeout: 30s }
+                          route: { cluster: cosmos_ai_bus, timeout: 85s }
                         - match: { prefix: "/humane.privacy.grpc.pub." }
                           route: { cluster: cosmos_ai_bus, timeout: 30s }
                         - match: { prefix: "/humane.capture." }

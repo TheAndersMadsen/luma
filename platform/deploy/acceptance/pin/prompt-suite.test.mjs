@@ -237,6 +237,22 @@ test("evaluateAnswer: matching is case-insensitive", () => {
   assert.equal(evaluateAnswer({ expectAnswer: ["austen"] }, "Jane AUSTEN wrote it.").pass, true);
 });
 
+test("evaluateAnswer: every expectAnswerAll phrase is required", () => {
+  const expectation = { expectAnswerAll: ["play music", "take photos", "translate"] };
+  assert.equal(
+    evaluateAnswer(expectation, "I can play music, take photos, and translate.").pass,
+    true,
+  );
+  const incomplete = evaluateAnswer(expectation, "I can play music and translate.");
+  assert.equal(incomplete.pass, false);
+  assert.match(incomplete.reason, /take photos/);
+});
+
+test("evaluateAnswer: expectAnswer remains an alternatives list", () => {
+  assert.equal(evaluateAnswer({ expectAnswer: ["seven", "7"] }, "There are 7.").pass, true);
+  assert.equal(evaluateAnswer({ expectAnswer: ["seven", "7"] }, "There are six.").pass, false);
+});
+
 test("evaluateAnswer: no expectation is checked:false and never a pass", () => {
   const score = evaluateAnswer({ id: "definition" }, "Ubiquitous means everywhere.");
   assert.equal(score.checked, false);
@@ -389,9 +405,9 @@ test("LOAD-BEARING suite: corrected names are generated and referenced by the ca
   }
 });
 
-test("suite: expectAnswer and expect are non-empty arrays when present", () => {
+test("suite: expectation and forbid fields are non-empty arrays when present", () => {
   for (const testCase of SUITE) {
-    for (const key of ["expect", "forbid", "expectAnswer"]) {
+    for (const key of ["expect", "forbid", "expectAnswer", "expectAnswerAll"]) {
       if (testCase[key] === undefined) continue;
       assert.ok(Array.isArray(testCase[key]), `${testCase.id}.${key} is not an array`);
       assert.ok(testCase[key].length > 0, `${testCase.id}.${key} is an empty array`);
@@ -399,12 +415,13 @@ test("suite: expectAnswer and expect are non-empty arrays when present", () => {
   }
 });
 
-test("suite: every case is scoreable — it has an expect, a forbid, or an expectAnswer", () => {
+test("suite: every case is scoreable", () => {
   for (const testCase of SUITE) {
     const scoreable =
       (testCase.expect?.length ?? 0) +
       (testCase.forbid?.length ?? 0) +
-      (testCase.expectAnswer?.length ?? 0);
+      (testCase.expectAnswer?.length ?? 0) +
+      (testCase.expectAnswerAll?.length ?? 0);
     assert.ok(scoreable > 0, `${testCase.id} asserts nothing at all`);
   }
 });

@@ -56,7 +56,12 @@ const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const FORK_ROOT = resolve(SCRIPT_DIR, "../../../../../../pin");
 const TEST_RUNS_DIR = join(FORK_ROOT, "test-runs");
 
-const DEVICE_PORT = 9_090; // Hook redirects api.prod.humane.cloud -> 127.0.0.1:9090
+// This is the Pin-local server. Stock apps do not use this address for remote
+// Cosmos in an activated release: ChannelFactoryBypass routes them to the
+// operator-owned mTLS edge. The local server deliberately retains an echo LLM,
+// so a probe that receives its exact echo response has measured the wrong
+// planning plane and must fail rather than report plausible-looking evidence.
+const DEVICE_PORT = 9_090;
 const DEFAULT_TIMEOUT_MS = 90_000;
 const SETTLE_MS = 1_500;
 
@@ -220,6 +225,13 @@ export function assessSilence({ probeError, evidenceText, plannedActions, execut
   };
 }
 
+/** Exact response emitted by the Pin-local credential-free EchoProvider. */
+export function isLocalEchoAnswer(answer, utterance) {
+  return typeof answer === "string" &&
+    typeof utterance === "string" &&
+    answer === `Echo: ${utterance}`;
+}
+
 // ---- optional screencap (adb pull; NOT exec-out, which drops stdin on Pin) ----
 async function captureScreencap(options, destPath, spawn) {
   const devicePath = `/sdcard/PenumbraOS/${PROGRAM}-${randomUUID()}.png`;
@@ -344,6 +356,9 @@ async function runPrompt(options, token, utterance, { common, probeOpts, session
     () => summarizeResponses(responses),
     UNAVAILABLE_SUMMARY,
   );
+  const measurementError = isLocalEchoAnswer(summary.answer, utterance)
+    ? "the Pin-local echo backend answered; remote Cosmos planning was not exercised"
+    : null;
 
   await sleep(SETTLE_MS);
 
@@ -448,6 +463,7 @@ async function runPrompt(options, token, utterance, { common, probeOpts, session
     endedAt: new Date(endedAt).toISOString(),
     latencyMs: endedAt - startedAt,
     probeError,
+    measurementError,
     responses: {
       frames: summary.frames,
       plannedActions: summary.actions,
@@ -525,6 +541,7 @@ export function renderHumanSummary(b) {
   lines.push(`  latency   : ${Number.isFinite(bundle.latencyMs) ? bundle.latencyMs : "unknown"}ms`);
   lines.push(`  run dir   : ${bundle.runDir ?? "(none)"}`);
   if (bundle.probeError) lines.push(`  PROBE ERR : ${bundle.probeError}`);
+  if (bundle.measurementError) lines.push(`  WRONG PLANE: ${bundle.measurementError}`);
   lines.push(`  planned   : ${list(responses.plannedActions).join(", ") || "(none)"}`);
   lines.push(`  tools ok  : ${list(bundle.okTools).join(", ") || "(none)"}`);
   if (list(bundle.failedTools).length) lines.push(`  tools fail: ${list(bundle.failedTools).join(", ")}`);
@@ -619,7 +636,7 @@ export async function run({ common, passthrough, ctx }) {
       const bundle = await runPrompt(options, token, utterance, { common, probeOpts, sessionDir: session.sessionDir, runIndex, ctx });
       if (common.json) out(`${JSON.stringify(bundle)}\n`);
       else out(renderHumanSummary(bundle));
-      return 0;
+      return bundle.probeError || bundle.measurementError ? 1 : 0;
     } catch (e) {
       // A fatal is now genuinely exceptional — every optional evidence step is
       // guarded, so reaching here means the run could not be set up at all.

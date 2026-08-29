@@ -322,6 +322,7 @@ test("the physical matrix is fixed, bounded, immutable, and side-effect scoped",
       "loading_semantic_weather",
       "loading_locked_neutral",
       "current_time",
+      "world_clock_tokyo",
       "battery_level",
       "current_weather",
       "current_weather_today",
@@ -1660,7 +1661,7 @@ test("self-check emits a bounded report without fixture response content", async
   assert.equal(exitCode, 0);
   const report = JSON.parse(stdout.text());
   assert.equal(report.status, "pass");
-  assert.equal(report.fixed_case_count, 14);
+  assert.equal(report.fixed_case_count, PHYSICAL_PROMPT_CASES.length);
   assert.equal(report.safety.one_fixed_case_required_for_live_run, true);
   assert.equal(stderr.text(), "");
   assert.doesNotMatch(stdout.text(), /PRIVATE_|Hvidovre|degrees|transcription/);

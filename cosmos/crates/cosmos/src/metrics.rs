@@ -119,12 +119,12 @@ const HELP: &[(&str, &str)] = &[
     (ERRORS, "Errors reported by the server, by kind."),
 ];
 
-/// Upper bounds, in seconds. The top of the range is set by the device's own
-/// deadline: `AIMIC_TIMEOUT_MS` is 25s (see `http.rs`), past which a real Pin
-/// gives up, so a bucket beyond 30s would describe nothing a wearer ever waits
-/// for.
+/// Upper bounds, in seconds. The top of the range matches the signed Hook's
+/// 90-second `AIMIC_TIMEOUT_MS`; Cosmos normally settles inside its 70-second
+/// foreground budget, but the outer bucket preserves visibility through the
+/// final delivery margin.
 const BUCKETS: &[f64] = &[
-    0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0,
+    0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 90.0,
 ];
 
 /// Per-family series ceiling. Label values are derived from request paths, which

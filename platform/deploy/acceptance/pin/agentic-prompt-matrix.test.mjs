@@ -97,12 +97,12 @@ function expectedResponses(item, userTurnId, rankOne = RANK_ONE) {
       Response:
         "Ice floats because its crystal structure makes it less dense than liquid water.",
     });
-  } else if (item.id === "agentic_sky_explanation") {
+  } else if (item.id === "agentic_named_city_weather") {
     thought =
       "I should return the final answer from bounded read-only planning";
     input = JSON.stringify({
       Response:
-        "The sky looks blue because shorter wavelengths scatter more strongly in the atmosphere.",
+        "The weather in Copenhagen is currently 16°C with mostly cloudy skies.",
     });
   } else if (item.id === "agentic_music_top_read") {
     thought =
@@ -110,7 +110,11 @@ function expectedResponses(item, userTurnId, rankOne = RANK_ONE) {
     input = JSON.stringify({
       Response: `The top result for Michael Jackson is ${rankOne.title} by Michael Jackson.`,
     });
-  } else if (item.id === "agentic_compound_navigation_preflight") {
+  } else if (
+    item.id === "agentic_compound_navigation_preflight" ||
+    item.id === "agentic_nearby_coffee_preflight" ||
+    item.id === "agentic_city_location_preflight"
+  ) {
     thought =
       "I should obtain the one authenticated device observation required by the read-only plan";
   } else if (
@@ -240,6 +244,41 @@ test("the matrix is fixed, bounded, immutable, and the CLI accepts no prompt inp
     () => parseMatrixCliArgs(["--serial", "device", "--prompt", "hello"]),
     /unknown command option/,
   );
+});
+
+test("safe checklist wording is represented by exact prompt-shaped contracts", () => {
+  const expected = new Map([
+    [
+      "agentic_ice_explanation",
+      ["Explain why ice floats on water in one sentence.", "Respond"],
+    ],
+    [
+      "agentic_named_city_weather",
+      ["What is the weather in Copenhagen right now?", "Respond"],
+    ],
+    [
+      "agentic_city_location_preflight",
+      ["What city am I in?", "GetCurrentLocation"],
+    ],
+    [
+      "agentic_nearby_coffee_preflight",
+      ["Find coffee shops nearby.", "GetCurrentLocation"],
+    ],
+    [
+      "agentic_quoted_pause_negative",
+      ["What happens if I say 'pause the music'?", "Respond"],
+    ],
+    [
+      "deterministic_weather_preflight",
+      ["What's the weather here?", "GetCurrentLocation"],
+    ],
+  ]);
+
+  for (const [id, [prompt, action]] of expected) {
+    const item = matrixCase(id);
+    assert.equal(item.prompt, prompt, id);
+    assert.deepEqual(item.expectedActions, [action], id);
+  }
 });
 
 test("generic final-answer classification validates semantics without exposing private content", () => {

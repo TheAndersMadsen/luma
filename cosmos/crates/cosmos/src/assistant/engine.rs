@@ -99,8 +99,9 @@ pub(super) const WEARER_FACING_FAILURE_STRINGS: &[&str] =
 /// day and killed legitimate steps: a first step that took >10s to decide on a
 /// tool, and an answer step that needed just over 10s to summarise a long search
 /// result. Both surfaced to the wearer as "Something went wrong" at exactly
-/// 10.0s. 15s clears realistic slow calls while a call past it is genuinely
-/// stuck; the whole run stays bounded by [`RUN_BUDGET`] regardless.
+/// 10.0s. The signed Pin runtime uses the same 20s per-step ceiling: it clears
+/// the observed 15.002s GPT-5.6-sol planner response while the whole run remains
+/// bounded by [`RUN_BUDGET`] regardless.
 const MODEL_STEP_TIMEOUT: std::time::Duration = super::runtime::MODEL_STEP_LIMIT;
 
 /// How long this model step may run, given the budget left.
@@ -115,12 +116,10 @@ fn step_timeout_for(remaining: std::time::Duration) -> std::time::Duration {
         .min(MODEL_STEP_TIMEOUT)
 }
 
-/// Total wall-clock budget for the whole turn. The device issues `understand` /
-/// `encryptedUnderstand` with `withDeadlineAfter(AIMIC_TIMEOUT_MS = 25000)` over
-/// the ENTIRE server-stream (`AIBusService.java`); if the stream doesn't complete
-/// in time gRPC fires `DEADLINE_EXCEEDED`, the device discards every turn already
-/// streamed, and speaks `ERROR_TIMEOUT`. So bound the run well under 25s and always
-/// deliver a terminal `Respond` first. (Bidi carries no such deadline.)
+/// Total wall-clock budget for the whole turn. The signed Hook raises the exact
+/// inspected Ironman `AIMIC_TIMEOUT_MS` from 25s to 90s before `AIBusService`
+/// initializes. Keep this run below that outer deadline so gRPC never discards
+/// already-streamed turns, and always deliver a terminal `Respond` first.
 const RUN_BUDGET: std::time::Duration = super::runtime::FOREGROUND_BUDGET;
 
 /// Headroom held back from the run budget so that a tool which overruns still
@@ -135,7 +134,7 @@ const TOOL_TIMED_OUT: &str = "The tool did not return in time and produced no re
 /// Total wall-clock budget for this run.
 ///
 /// Production always uses [`RUN_BUDGET`]; tests may shorten it so the budget
-/// paths are exercised in milliseconds instead of 22 real seconds. The override
+/// paths are exercised in milliseconds instead of 70 real seconds. The override
 /// is thread-local (each test runs on its own thread, and `Engine::run` is
 /// awaited on the caller's thread), so shortening it in one test cannot leak
 /// into another running concurrently.
@@ -592,7 +591,7 @@ impl Engine {
             .map(|dc| actions_in_current_run(&dc.turns))
             .unwrap_or(0);
 
-        // Bound the whole turn under the device's 25s deadline (see RUN_BUDGET).
+        // Bound the whole turn under the Hooked device's 90s deadline (see RUN_BUDGET).
         let run_deadline = run.deadline();
         let mut tool_context = self.tools.clone();
         tool_context.deadline = Some(run_deadline);
@@ -1707,10 +1706,10 @@ pub(crate) fn current_run_contains_action(
     false
 }
 
-struct DeterministicDeviceAction {
-    name: &'static str,
-    input: String,
-    thought: &'static str,
+pub(super) struct DeterministicDeviceAction {
+    pub(super) name: &'static str,
+    pub(super) input: String,
+    pub(super) thought: &'static str,
 }
 
 fn deterministic_device_action(
@@ -1733,6 +1732,13 @@ fn deterministic_device_action(
             thought: "The requested forecast is outside the current weather capability",
         });
     }
+    if transit_route_request(utterance) && offered(catalog::RESPOND_ACTION) {
+        return Some(DeterministicDeviceAction {
+            name: catalog::RESPOND_ACTION,
+            input: catalog::respond_input(TRANSIT_ROUTING_UNAVAILABLE),
+            thought: "The requested travel mode is outside the current routing capability",
+        });
+    }
     let device_context = req.device_context.as_ref()?;
     let request_locked = device_context.is_locked;
     let current_turns = device_context.turns.as_slice();
@@ -1745,6 +1751,9 @@ fn deterministic_device_action(
     }
     if request_locked {
         return None;
+    }
+    if let Some(action) = deterministic_world_clock_action(req, tools) {
+        return Some(action);
     }
     if let Some(request) = explicit_nutrition_request(utterance) {
         if offered("ManageNutrition")
@@ -1791,6 +1800,81 @@ fn deterministic_device_action(
     }
 
     None
+}
+
+pub(super) fn deterministic_world_clock_action(
+    req: &pb::SynapseUnderstandingRequest,
+    tools: &[ToolDef],
+) -> Option<DeterministicDeviceAction> {
+    let device_context = req.device_context.as_ref()?;
+    if device_context.is_locked
+        || !tools.iter().any(|tool| tool.name == "WorldClock")
+        || current_run_contains_action(&device_context.turns, "WorldClock")
+    {
+        return None;
+    }
+    let location = explicit_world_clock_location(current_utterance(req))?;
+    Some(DeterministicDeviceAction {
+        name: "WorldClock",
+        input: serde_json::json!({"Location": location}).to_string(),
+        thought: "The wearer asked the Pin to show the current time in a named location",
+    })
+}
+
+fn explicit_world_clock_location(raw: &str) -> Option<String> {
+    const MAX_CLOCK_REQUEST_BYTES: usize = 512;
+
+    let trimmed = raw.trim();
+    if trimmed.is_empty()
+        || trimmed.len() > MAX_CLOCK_REQUEST_BYTES
+        || trimmed.chars().any(|character| {
+            character == '\0' || (character.is_control() && !character.is_whitespace())
+        })
+    {
+        return None;
+    }
+    let body = trimmed
+        .strip_suffix('?')
+        .or_else(|| trimmed.strip_suffix('.'))
+        .or_else(|| trimmed.strip_suffix('!'))
+        .unwrap_or(trimmed);
+    if body.contains(['?', '.', '!', ',', '"', '-']) {
+        return None;
+    }
+
+    let words = body.split_whitespace().collect::<Vec<_>>();
+    let normalized = words
+        .iter()
+        .map(|word| word.to_ascii_lowercase())
+        .collect::<Vec<_>>();
+    let location_start = [
+        &["what's", "the", "current", "time", "in"][..],
+        &["what", "s", "the", "current", "time", "in"][..],
+        &["what", "time", "is", "it", "in"][..],
+        &["current", "time", "in"][..],
+    ]
+    .into_iter()
+    .find_map(|prefix| {
+        (normalized.len() >= prefix.len()
+            && normalized
+                .iter()
+                .zip(prefix)
+                .all(|(word, expected)| word == expected))
+        .then_some(prefix.len())
+    })?;
+    let location = &words[location_start..];
+    if !(1..=3).contains(&location.len())
+        || location.iter().any(|word| {
+            !word.bytes().all(|byte| byte.is_ascii_alphabetic())
+                || matches!(
+                    word.to_ascii_lowercase().as_str(),
+                    "also" | "and" | "or" | "please" | "then"
+                )
+        })
+    {
+        return None;
+    }
+    Some(location.join(" "))
 }
 
 fn explicit_clock_agent_request(utterance: &str) -> Option<(&'static str, &str)> {
@@ -2117,6 +2201,8 @@ fn local_weather_request(utterance: &str) -> bool {
 pub(crate) const FUTURE_WEATHER_UNAVAILABLE: &str =
     "Future weather forecasts are not available yet.";
 
+pub(crate) const TRANSIT_ROUTING_UNAVAILABLE: &str = "Transit routing is not supported yet.";
+
 pub(crate) const TICKLE_NEAR_MISS_RESPONSE: &str =
     "Tickle only runs for the exact phrases Tickle, Tickle my fancy, or Tickle tickle tickle.";
 
@@ -2136,6 +2222,55 @@ pub(crate) fn future_weather_request(utterance: &str) -> bool {
         || intent.contains("next month")
         || intent.contains("this weekend");
     asks_weather && asks_future
+}
+
+pub(crate) fn transit_route_request(utterance: &str) -> bool {
+    let Some(intent) = normalized_intent(utterance) else {
+        return false;
+    };
+    if intent.contains(" and ") || intent.contains(" then ") {
+        return false;
+    }
+
+    let direct_prefixes = [
+        "give me transit directions to ",
+        "give me public transport directions to ",
+        "give me public transportation directions to ",
+        "find a transit route to ",
+        "find a public transport route to ",
+    ];
+    if direct_prefixes.iter().any(|prefix| {
+        intent
+            .strip_prefix(prefix)
+            .is_some_and(valid_route_destination)
+    }) {
+        return true;
+    }
+
+    let command_prefixes = ["navigate to ", "give me directions to ", "how do i get to "];
+    let transit_suffixes = [
+        " by transit",
+        " using transit",
+        " by public transport",
+        " using public transport",
+        " by public transportation",
+        " using public transportation",
+    ];
+    command_prefixes.iter().any(|prefix| {
+        let Some(destination_and_mode) = intent.strip_prefix(prefix) else {
+            return false;
+        };
+        transit_suffixes.iter().any(|suffix| {
+            destination_and_mode
+                .strip_suffix(suffix)
+                .is_some_and(valid_route_destination)
+        })
+    })
+}
+
+fn valid_route_destination(destination: &str) -> bool {
+    let destination = destination.trim();
+    !destination.is_empty() && destination.chars().count() <= 160
 }
 
 pub(crate) fn explicit_playback_request(utterance: &str) -> bool {
@@ -3494,6 +3629,68 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn transit_routes_decline_without_location_or_model_work() {
+        struct ModelMustNotRun;
+
+        #[tonic::async_trait]
+        impl ChatModel for ModelMustNotRun {
+            async fn complete(
+                &self,
+                _messages: &[ChatMessage],
+                _tools: &[ToolDef],
+            ) -> Result<ChatResponse, LlmError> {
+                panic!("an explicit unsupported transit route must not spend a model step")
+            }
+        }
+
+        let msgs = run_with(
+            Arc::new(ModelMustNotRun),
+            pb::SynapseUnderstandingRequest {
+                utterance: "Give me transit directions to Nyhavn.".into(),
+                device_context: Some(pb::SynapseDeviceContext::default()),
+                ..Default::default()
+            },
+        )
+        .await;
+
+        let action = device_visible(&msgs)
+            .into_iter()
+            .find_map(as_action)
+            .expect("the limitation must terminate with speech");
+        assert_eq!(action.action, catalog::RESPOND_ACTION);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&action.input).unwrap()
+                [catalog::RESPOND_FIELD],
+            TRANSIT_ROUTING_UNAVAILABLE,
+        );
+    }
+
+    #[test]
+    fn transit_route_limit_matches_commands_without_swallowing_other_requests() {
+        for request in [
+            "Give me transit directions to Nyhavn.",
+            "Give me public transport directions to the airport.",
+            "Navigate to Nyhavn by transit.",
+            "How do I get to Nyhavn using public transportation?",
+            "Find a transit route to Copenhagen Central Station.",
+        ] {
+            assert!(transit_route_request(request), "not matched: {request}");
+        }
+
+        for request in [
+            "Give me walking directions to Nyhavn.",
+            "Give me driving directions to Nyhavn.",
+            "Give me cycling directions to Nyhavn.",
+            "What is transit routing?",
+            "Tell me about public transport in Copenhagen.",
+            "Give me transit directions to Nyhavn and call Alex.",
+            "Give me transit directions to .",
+        ] {
+            assert!(!transit_route_request(request), "overmatched: {request}");
+        }
+    }
+
     #[test]
     fn arbitrary_playback_criteria_get_one_configured_research_tool_then_none() {
         let mut tools = catalog::tool_catalog();
@@ -4115,17 +4312,13 @@ mod tests {
             assert_eq!(action.input, "{}");
         }
 
-        for utterance in [
-            "what time is it in Tokyo",
-            "what happens if I ask what time it is",
-        ] {
-            let request = unlocked(utterance);
-            let tools = resolve_catalog(&request, true);
-            assert!(
-                deterministic_device_action(&request, &tools).is_none(),
-                "non-local time request was claimed: {utterance}",
-            );
-        }
+        let utterance = "what happens if I ask what time it is";
+        let request = unlocked(utterance);
+        let tools = resolve_catalog(&request, true);
+        assert!(
+            deterministic_device_action(&request, &tools).is_none(),
+            "non-local time request was claimed: {utterance}",
+        );
 
         let mut locked = unlocked("what time is it");
         locked.device_context.as_mut().unwrap().is_locked = true;
@@ -4153,6 +4346,104 @@ mod tests {
         }];
         let replayed_tools = resolve_catalog(&replayed, true);
         assert!(deterministic_device_action(&replayed, &replayed_tools).is_none());
+    }
+
+    #[tokio::test]
+    async fn world_clock_reads_skip_the_model_and_dispatch_on_the_pin() {
+        struct ModelMustNotRun;
+
+        #[tonic::async_trait]
+        impl ChatModel for ModelMustNotRun {
+            async fn complete(
+                &self,
+                _messages: &[ChatMessage],
+                _tools: &[ToolDef],
+            ) -> Result<ChatResponse, LlmError> {
+                panic!("an exact world-clock read must not spend a model step")
+            }
+        }
+
+        let messages = run_with(
+            Arc::new(ModelMustNotRun),
+            pb::SynapseUnderstandingRequest {
+                utterance: "What time is it in Tokyo?".to_owned(),
+                device_context: Some(pb::SynapseDeviceContext::default()),
+                ..Default::default()
+            },
+        )
+        .await;
+        let action = device_visible(&messages)
+            .into_iter()
+            .find_map(as_action)
+            .expect("the world-clock request must dispatch a device action");
+        assert_eq!(action.action, "WorldClock");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&action.input).unwrap(),
+            serde_json::json!({"Location": "Tokyo"}),
+        );
+    }
+
+    #[test]
+    fn world_clock_route_preserves_grammar_lock_exclusion_and_replay_guards() {
+        let unlocked = |utterance: &str| pb::SynapseUnderstandingRequest {
+            utterance: utterance.to_owned(),
+            device_context: Some(pb::SynapseDeviceContext::default()),
+            ..Default::default()
+        };
+
+        for (utterance, location) in [
+            ("What time is it in Tokyo?", "Tokyo"),
+            ("What's the current time in New York?", "New York"),
+            ("Current time in Copenhagen.", "Copenhagen"),
+        ] {
+            let request = unlocked(utterance);
+            let tools = resolve_catalog(&request, true);
+            let action = deterministic_world_clock_action(&request, &tools)
+                .unwrap_or_else(|| panic!("world-clock request was not claimed: {utterance}"));
+            assert_eq!(action.name, "WorldClock");
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&action.input).unwrap(),
+                serde_json::json!({"Location": location}),
+            );
+        }
+
+        for unrelated in [
+            "What time is it in Tokyo and London?",
+            "What time is it in St. Louis?",
+            "What time is it in Tokyo, then set a timer.",
+            "What happens if I ask what time it is in Tokyo?",
+        ] {
+            let request = unlocked(unrelated);
+            let tools = resolve_catalog(&request, true);
+            assert!(
+                deterministic_world_clock_action(&request, &tools).is_none(),
+                "unsafe world-clock grammar was claimed: {unrelated}",
+            );
+        }
+
+        let mut locked = unlocked("What time is it in Tokyo?");
+        locked.device_context.as_mut().unwrap().is_locked = true;
+        let locked_tools = resolve_catalog(&locked, true);
+        assert!(deterministic_world_clock_action(&locked, &locked_tools).is_none());
+
+        let mut excluded = unlocked("What time is it in Tokyo?");
+        excluded.excluded_tools = vec!["WorldClock".to_owned()];
+        let excluded_tools = resolve_catalog(&excluded, true);
+        assert!(deterministic_world_clock_action(&excluded, &excluded_tools).is_none());
+
+        let mut replayed = unlocked("What time is it in Tokyo?");
+        replayed.device_context.as_mut().unwrap().turns = vec![pb::SynapseChatTurn {
+            identifier: "world-clock-action".into(),
+            content: Some(pb::synapse_chat_turn::Content::Action(
+                pb::SynapseActionContent {
+                    action: "WorldClock".into(),
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        }];
+        let replayed_tools = resolve_catalog(&replayed, true);
+        assert!(deterministic_world_clock_action(&replayed, &replayed_tools).is_none());
     }
 
     #[test]
@@ -4303,8 +4594,15 @@ mod tests {
 
         for utterance in [
             "What are the nutrition facts for a banana?",
+            "How many calories are in an apple?",
+            "What are the nutrition facts for oatmeal?",
+            "How much protein is in two eggs?",
             "Log that I ate a banana.",
+            "I ate two eggs.",
+            "Track my food: one banana.",
             "What have I eaten today?",
+            "How many calories have I eaten today?",
+            "Show my food log for the last three days.",
             "Show my food log for the last 7 days.",
         ] {
             let request = unlocked(utterance);
@@ -4905,6 +5203,46 @@ mod tests {
         }));
         assert!(!seen.iter().any(|message| {
             message.role == Role::System && message.content.contains("i like noodles")
+        }));
+    }
+
+    #[tokio::test]
+    async fn exact_favorite_color_question_receives_the_saved_wearer_fact() {
+        let store: crate::store::SharedStore =
+            std::sync::Arc::new(crate::store::MemoryStore::default());
+        let principal = "V:01:D:test:U:favorite-color";
+        let note = store
+            .create_note(principal, None, None)
+            .await
+            .expect("note is stored");
+        store
+            .index_note(principal, &note.uuid, "my favorite color is teal")
+            .await;
+
+        let model = Arc::new(CapturingModel::default());
+        let engine = Engine::new(model.clone()).with_tools(catalog::ToolContext {
+            principal: Some(principal.to_owned()),
+            store: Some(store),
+            ..Default::default()
+        });
+        let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+        engine
+            .run(
+                pb::SynapseUnderstandingRequest {
+                    utterance: "What is my favorite color?".into(),
+                    ..Default::default()
+                },
+                tx,
+            )
+            .await;
+        while rx.recv().await.is_some() {}
+
+        let seen = model.messages();
+        assert!(seen.iter().any(|message| {
+            message.role == Role::User && message.content == "What is my favorite color?"
+        }));
+        assert!(seen.iter().any(|message| {
+            message.role == Role::Memory && message.content.contains("my favorite color is teal")
         }));
     }
 
@@ -5839,7 +6177,7 @@ mod step_budget_tests {
         );
     }
 
-    /// A stuck step still cannot outlive the anti-hang ceiling, even with the
+    /// A stuck step still cannot outlive the 20-second anti-hang ceiling, even with the
     /// whole budget in front of it.
     #[test]
     fn a_step_never_outlives_the_anti_hang_ceiling() {
@@ -5850,11 +6188,16 @@ mod step_budget_tests {
         );
     }
 
-    /// A legitimately slow step — the 10-14s calls that used to die at the old
-    /// 10s cap — now completes.
+    /// A legitimately slow step must clear the exact 15.002s production
+    /// failure observed before the model selected any music tool. Ironman's
+    /// deadline is extended to 90s by the signed Hook, so retaining the old
+    /// 15s server ceiling only discards a live GPT-5.6-sol response early.
     #[test]
-    fn a_slow_but_real_step_is_no_longer_cut_at_ten_seconds() {
-        assert!(step_timeout_for(RUN_BUDGET) > Duration::from_secs(10));
+    fn a_slow_but_real_step_is_no_longer_cut_at_fifteen_seconds() {
+        assert!(
+            step_timeout_for(RUN_BUDGET) > Duration::from_millis(15_002),
+            "the observed first planner step must finish before the server ceiling",
+        );
         assert!(step_timeout_for(Duration::from_millis(14_600)) > Duration::from_secs(10));
     }
 

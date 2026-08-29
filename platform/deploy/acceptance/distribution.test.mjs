@@ -133,6 +133,35 @@ test("music playback deadlines preserve the cross-language nested budget", () =>
   }
 });
 
+test("agentic deadlines preserve the signed Pin to Cosmos delivery margin", () => {
+  const hookDeadline = integerConstant(
+    "pin/hook/payload/src/main/kotlin/com/penumbraos/hook/AgenticSessionDeadlineHooks.kt",
+    "AGENTIC_SESSION_TIMEOUT_MS",
+  );
+  const cosmosRunBudget = rustDurationConstant(
+    "cosmos/crates/cosmos/src/assistant/runtime.rs",
+    "FOREGROUND_BUDGET",
+  );
+  const cosmosModelStep = rustDurationConstant(
+    "cosmos/crates/cosmos/src/assistant/runtime.rs",
+    "MODEL_STEP_LIMIT",
+  );
+  const envoy = source("platform/edge/envoy/envoy.yaml.tpl");
+  const route = envoy.match(
+    /match: \{ prefix: "\/humane\.aibus\." \}\s+route: \{ cluster: cosmos_ai_bus, timeout: ([0-9]+)s \}/u,
+  );
+  assert.ok(route, "Envoy must have one explicit Ai Bus route timeout");
+  const edgeDeadline = Number(route[1]) * 1_000;
+
+  assert.equal(cosmosModelStep, 20_000);
+  assert.equal(cosmosRunBudget, 70_000);
+  assert.equal(edgeDeadline, 85_000);
+  assert.equal(hookDeadline, 90_000);
+  assert.ok(cosmosModelStep < cosmosRunBudget);
+  assert.ok(cosmosRunBudget < edgeDeadline);
+  assert.ok(edgeDeadline < hookDeadline);
+});
+
 test("operator docs keep the general control timeout separate from playback", () => {
   const example = source("center/.env.example");
   assert.match(example, /^# General Spotify control-route timeout\./mu);

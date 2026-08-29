@@ -8,11 +8,16 @@ use std::time::{Duration, Instant};
 
 use super::llm::ModelProvenance;
 
-/// Normal foreground budget. Stock currently gives the server more headroom,
-/// but 22 seconds is the product target and preserves time to settle on-device.
-pub const FOREGROUND_BUDGET: Duration = Duration::from_secs(22);
+/// Exact upper bound installed by `AgenticSessionDeadlineHooks` on the signed
+/// Pin release. Cosmos must always finish before the stock client reaches it.
+pub const PIN_SESSION_LIMIT: Duration = Duration::from_secs(90);
+/// Whole foreground-agent budget. The signed Hook raises Ironman's exact
+/// 25-second Ai Bus deadline to 90 seconds before the stock client initializes;
+/// 70 seconds matches the Pin runtime's inner loop and leaves twenty seconds
+/// for the terminal response to cross gRPC and settle on-device.
+pub const FOREGROUND_BUDGET: Duration = Duration::from_secs(70);
 /// Ceiling for one model round trip inside the whole-run budget.
-pub const MODEL_STEP_LIMIT: Duration = Duration::from_secs(15);
+pub const MODEL_STEP_LIMIT: Duration = Duration::from_secs(20);
 /// Do not start work when there is not enough time to emit a terminal frame.
 pub const TERMINAL_RESERVE: Duration = Duration::from_millis(750);
 /// A remaining interval below this is useful only for a terminal response.
@@ -203,6 +208,15 @@ mod tests {
         run.note_tool_calls(1);
         assert_eq!(run.route, RouteClass::A2);
         run.finish("answered");
+    }
+
+    #[test]
+    fn production_deadlines_fit_inside_the_signed_pin_session() {
+        assert_eq!(MODEL_STEP_LIMIT, Duration::from_secs(20));
+        assert_eq!(FOREGROUND_BUDGET, Duration::from_secs(70));
+        assert_eq!(PIN_SESSION_LIMIT, Duration::from_secs(90));
+        assert!(MODEL_STEP_LIMIT < FOREGROUND_BUDGET);
+        assert!(FOREGROUND_BUDGET < PIN_SESSION_LIMIT);
     }
 
     #[test]
