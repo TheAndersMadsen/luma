@@ -268,11 +268,13 @@ operator release:
 ```
 
 It exercises direct reasoning, fresh web search, compound multi-tool work, and
-consequential-action confirmation through the real production Engine. Every
-case must correlate its returned actions with a model-invoked run, valid model
-provenance, the expected terminal state, and the Pin deadline. This is a server
-acceptance check; final release acceptance still includes representative spoken
-turns and device actions on a physical Pin.
+consequential-action confirmation through the real production Engine. It also
+simulates an unlocked Pin request for read-only status, location, nutrition, and
+world-clock routing; returned device actions are inspected but never
+dispatched. Every case must correlate its returned actions with the expected
+model or deterministic run, exact stock arguments, terminal state, and Pin
+deadline. This is a server acceptance check; final release acceptance still
+includes representative spoken turns and device actions on a physical Pin.
 
 ### Public verification and agent discovery
 

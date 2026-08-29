@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   ASSISTANT_CASES,
   agentRunSamples,
+  assistantTracePayload,
   changedAgentRuns,
   evaluateAssistantCase,
   parseArguments,
@@ -98,6 +99,57 @@ test("an explicitly deterministic safety case correlates without pretending the 
 
   assert.equal(result.pass, true, result.failures.join(","));
   assert.equal(result.run.modelInvoked, false);
+});
+
+test("simulated Pin cases request device context and verify exact stock action input", () => {
+  const apple = ASSISTANT_CASES.find(({ id }) => id === "pin-nutrition-apple");
+  assert.deepEqual(assistantTracePayload(apple), {
+    text: "How many calories are in an apple?",
+    simulate_unlocked_pin: true,
+  });
+  assert.deepEqual(assistantTracePayload(ASSISTANT_CASES[0]), {
+    text: "Explain in one sentence why the daytime sky appears blue.",
+  });
+
+  const before = sample(
+    { route: "d1", model_invoked: "false", model_steps: "0", terminal: "device_action" },
+    4,
+  );
+  const after = sample(
+    { route: "d1", model_invoked: "false", model_steps: "0", terminal: "device_action" },
+    5,
+  );
+  const passing = evaluateAssistantCase(
+    apple,
+    {
+      steps: [{
+        kind: "action",
+        name: "ManageNutrition",
+        input: JSON.stringify({ Request: apple.prompt }),
+      }],
+      total_ms: 1,
+      device_deadline_ms: 90_000,
+    },
+    before,
+    after,
+  );
+  assert.equal(passing.pass, true, passing.failures.join(","));
+
+  const wrongInput = evaluateAssistantCase(
+    apple,
+    {
+      steps: [{
+        kind: "action",
+        name: "ManageNutrition",
+        input: JSON.stringify({ Request: "a banana" }),
+      }],
+      total_ms: 1,
+      device_deadline_ms: 90_000,
+    },
+    before,
+    after,
+  );
+  assert.ok(wrongInput.failures.includes("action_input:ManageNutrition"));
 });
 
 test("evaluation names action, deadline, terminal, and provenance failures", () => {
@@ -207,6 +259,19 @@ test("the production matrix covers reasoning, retrieval, ambiguity, compound wor
     "explicit-lookup",
     "current-product-price",
     "nutrition-oatmeal",
+    "pin-current-time",
+    "pin-battery-level",
+    "pin-current-volume",
+    "pin-online-status",
+    "pin-device-status",
+    "pin-bluetooth-status",
+    "pin-airplane-status",
+    "pin-phone-number",
+    "pin-serial-number",
+    "pin-current-location",
+    "pin-nutrition-apple",
+    "pin-nutrition-eggs",
+    "pin-world-clock-tokyo",
     "ambiguous-no-vision",
     "tickle-near-miss",
     "consequential-confirmation",

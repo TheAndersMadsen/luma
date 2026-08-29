@@ -61,6 +61,65 @@ export const ASSISTANT_CASES = Object.freeze([
     terminal: "answered",
     answerPattern: /\b(?:calories|kcal|protein|fiber|fibre|carbohydrate|fat)\b/iu,
   }),
+  ...[
+    ["pin-current-time", "What time is it?", "GetCurrentTime", {}],
+    ["pin-battery-level", "Battery level.", "GetBatteryLevel", {}],
+    ["pin-current-volume", "What is the current volume?", "GetCurrentVolume", {}],
+    ["pin-online-status", "Am I online?", "AmIOnline", {}],
+    ["pin-device-status", "Device status.", "Settings", { Request: "Device status." }],
+    ["pin-bluetooth-status", "Is Bluetooth on?", "GetBluetoothStatus", {}],
+    ["pin-airplane-status", "Airplane mode status.", "GetAirplaneModeStatus", {}],
+    ["pin-phone-number", "What is my phone number?", "GetPhoneNumber", {}],
+    ["pin-serial-number", "What is my serial number?", "GetSerialNumber", {}],
+    ["pin-current-location", "Where am I?", "GetCurrentLocation", {}],
+  ].map(([id, prompt, action, input]) => Object.freeze({
+    id,
+    prompt,
+    requiredActions: [action],
+    forbiddenActions: ["Respond"],
+    expectedActionInputs: { [action]: input },
+    route: "d1",
+    terminal: "device_action",
+    modelInvoked: false,
+    simulateUnlockedPin: true,
+  })),
+  Object.freeze({
+    id: "pin-nutrition-apple",
+    prompt: "How many calories are in an apple?",
+    requiredActions: ["ManageNutrition"],
+    forbiddenActions: ["Respond"],
+    expectedActionInputs: {
+      ManageNutrition: { Request: "How many calories are in an apple?" },
+    },
+    route: "d1",
+    terminal: "device_action",
+    modelInvoked: false,
+    simulateUnlockedPin: true,
+  }),
+  Object.freeze({
+    id: "pin-nutrition-eggs",
+    prompt: "How much protein is in two eggs?",
+    requiredActions: ["ManageNutrition"],
+    forbiddenActions: ["Respond"],
+    expectedActionInputs: {
+      ManageNutrition: { Request: "How much protein is in two eggs?" },
+    },
+    route: "d1",
+    terminal: "device_action",
+    modelInvoked: false,
+    simulateUnlockedPin: true,
+  }),
+  Object.freeze({
+    id: "pin-world-clock-tokyo",
+    prompt: "What time is it in Tokyo?",
+    requiredActions: ["WorldClock"],
+    forbiddenActions: ["Respond", "GetCurrentTime"],
+    expectedActionInputs: { WorldClock: { Location: "Tokyo" } },
+    route: "d1",
+    terminal: "device_action",
+    modelInvoked: false,
+    simulateUnlockedPin: true,
+  }),
   Object.freeze({
     id: "ambiguous-no-vision",
     prompt: "Um, what was that thing?",
@@ -141,6 +200,18 @@ export function evaluateAssistantCase(spec, trace, beforeScrape, afterScrape) {
     if (actions.filter((name) => name === action).length !== expected) {
       failures.push(`action_count:${action}`);
     }
+  }
+  for (const [action, expected] of Object.entries(spec.expectedActionInputs ?? {})) {
+    const matching = steps
+      .filter((step) => step?.kind === "action" && step?.name === action)
+      .some((step) => {
+        try {
+          return JSON.stringify(JSON.parse(step.input)) === JSON.stringify(expected);
+        } catch {
+          return false;
+        }
+      });
+    if (!matching) failures.push(`action_input:${action}`);
   }
   if (spec.answerPattern) {
     const answers = steps
@@ -288,7 +359,14 @@ function metrics(options) {
   return inAiBus(options, ["--fail", "--silent", "--show-error", "--max-time", "5", "http://127.0.0.1:8080/metrics"]);
 }
 
-function trace(options, prompt) {
+export function assistantTracePayload(spec) {
+  return {
+    text: spec.prompt,
+    ...(spec.simulateUnlockedPin ? { simulate_unlocked_pin: true } : {}),
+  };
+}
+
+function trace(options, spec) {
   const raw = inAiBus(
     options,
     [
@@ -303,7 +381,7 @@ function trace(options, prompt) {
       "@-",
       "http://127.0.0.1:8080/demo-api/trace",
     ],
-    JSON.stringify({ text: prompt }),
+    JSON.stringify(assistantTracePayload(spec)),
   );
   try {
     return JSON.parse(raw);
@@ -334,7 +412,7 @@ async function main() {
   for (let round = 0; round < options.repeat; round += 1) {
     for (const spec of ASSISTANT_CASES) {
       const before = metrics(options);
-      const response = trace(options, spec.prompt);
+      const response = trace(options, spec);
       const after = metrics(options);
       results.push(evaluateAssistantCase(spec, response, before, after));
     }

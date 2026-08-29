@@ -2672,6 +2672,11 @@ async fn demo_status(State(state): State<HttpState>) -> Json<DemoStatus> {
 #[derive(Deserialize)]
 struct DemoTextRequest {
     text: String,
+    /// Evaluate the stock request shape an unlocked Pin sends without
+    /// dispatching any returned device action. The trace endpoints use this
+    /// for release acceptance; chat and speech keep their normal demo shape.
+    #[serde(default)]
+    simulate_unlocked_pin: bool,
 }
 
 #[derive(Serialize)]
@@ -2874,6 +2879,9 @@ async fn demo_trace(
 
     let mut request = Request::new(SynapseUnderstandingRequest {
         utterance: text,
+        device_context: payload
+            .simulate_unlocked_pin
+            .then(cosmos_protocol::aibus::SynapseDeviceContext::default),
         ..Default::default()
     });
     request.extensions_mut().insert(turn_principal(&headers)?);
@@ -2984,6 +2992,9 @@ async fn demo_trace_stream(
 
     let mut request = Request::new(SynapseUnderstandingRequest {
         utterance: text,
+        device_context: payload
+            .simulate_unlocked_pin
+            .then(cosmos_protocol::aibus::SynapseDeviceContext::default),
         ..Default::default()
     });
     request.extensions_mut().insert(turn_principal(&headers)?);
@@ -3329,6 +3340,38 @@ mod tests {
             !payload["reply"].as_str().unwrap_or_default().is_empty(),
             "trace should contain a spoken reply"
         );
+    }
+
+    #[tokio::test]
+    async fn demo_trace_can_simulate_the_unlocked_pin_routing_context() {
+        let response = demo_app(Readiness::default())
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .header("content-type", "application/json")
+                    .uri("/demo-api/trace")
+                    .body(Body::from(
+                        r#"{"text":"How many calories are in an apple?","simulate_unlocked_pin":true}"#,
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .expect("body bytes");
+        let payload: serde_json::Value = serde_json::from_slice(&bytes).expect("json body");
+        let steps = payload["steps"].as_array().expect("steps array");
+        assert_eq!(
+            steps.len(),
+            1,
+            "the simulated Pin route must be deterministic: {steps:?}"
+        );
+        assert_eq!(steps[0]["kind"], "action");
+        assert_eq!(steps[0]["name"], "ManageNutrition");
+        assert_eq!(steps[0]["source"], "device");
     }
 
     #[tokio::test]
