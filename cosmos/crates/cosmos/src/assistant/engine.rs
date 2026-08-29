@@ -1666,6 +1666,11 @@ fn deterministic_device_action(
         .as_ref()
         .map(|context| context.turns.as_slice())
         .unwrap_or_default();
+    if let Some(action) = local_device_status_action(&req.utterance) {
+        if offered(action.name) && !current_run_contains_action(current_turns, action.name) {
+            return Some(action);
+        }
+    }
     if let Some(request) = explicit_nutrition_request(&req.utterance) {
         if offered("ManageNutrition")
             && !current_run_contains_action(current_turns, "ManageNutrition")
@@ -1888,6 +1893,103 @@ fn normalized_intent(value: &str) -> Option<String> {
         .collect::<Vec<_>>()
         .join(" ");
     (!normalized.is_empty()).then_some(normalized)
+}
+
+fn local_device_status_action(utterance: &str) -> Option<DeterministicDeviceAction> {
+    let normalized = normalized_intent(utterance)?;
+    let (name, thought) = match normalized.as_str() {
+        "what time is it"
+        | "what s the time"
+        | "tell me the time"
+        | "tell me the current time"
+        | "current time" => (
+            "GetCurrentTime",
+            "The wearer asked the Pin for its current local time",
+        ),
+        "battery level"
+        | "battery status"
+        | "what is my battery level"
+        | "what s my battery level"
+        | "how much battery do i have"
+        | "how much battery is left"
+        | "how much charge do i have left" => (
+            "GetBatteryLevel",
+            "The wearer asked the Pin for its current battery level",
+        ),
+        "what is the current volume"
+        | "what is my current volume"
+        | "what is the volume"
+        | "what s the current volume"
+        | "what s my current volume"
+        | "what s the volume"
+        | "tell me the current volume"
+        | "volume status" => (
+            "GetCurrentVolume",
+            "The wearer asked the Pin for its current media volume",
+        ),
+        "am i online"
+        | "am i connected"
+        | "am i connected to the internet"
+        | "do i have internet"
+        | "do i have an internet connection" => (
+            "AmIOnline",
+            "The wearer asked the Pin for its current connectivity state",
+        ),
+        "bluetooth status" | "is bluetooth on" | "is bluetooth enabled" => (
+            "GetBluetoothStatus",
+            "The wearer asked the Pin for its current Bluetooth state",
+        ),
+        "airplane mode status" | "is airplane mode on" | "is airplane mode enabled" => (
+            "GetAirplaneModeStatus",
+            "The wearer asked the Pin for its current airplane-mode state",
+        ),
+        "what is my phone number"
+        | "tell me my phone number"
+        | "what is my number"
+        | "what s my phone number"
+        | "what s my number" => (
+            "GetPhoneNumber",
+            "The wearer asked the Pin for its carrier-provided phone number",
+        ),
+        "what is my serial number"
+        | "what is my pin s serial number"
+        | "what is my pin serial number"
+        | "what s my serial number"
+        | "what s my pin s serial number"
+        | "what s my pin serial number"
+        | "tell me my serial number" => (
+            "GetSerialNumber",
+            "The wearer asked the Pin for its serial number",
+        ),
+        "where am i"
+        | "where am i right now"
+        | "what is my current location"
+        | "tell me my current location"
+        | "tell me where i am" => (
+            "GetCurrentLocation",
+            "The wearer asked the Pin for its current location",
+        ),
+        "device status"
+        | "get device status"
+        | "show device status"
+        | "show me device status"
+        | "give me a device status"
+        | "give me a device status report"
+        | "device status report" => (
+            "Settings",
+            "The wearer asked the stock Settings agent for a device status summary",
+        ),
+        _ => return None,
+    };
+    Some(DeterministicDeviceAction {
+        name,
+        input: if name == "Settings" {
+            serde_json::json!({"Request": utterance.trim()}).to_string()
+        } else {
+            "{}".to_owned()
+        },
+        thought,
+    })
 }
 
 fn local_weather_request(utterance: &str) -> bool {
@@ -3897,6 +3999,160 @@ mod tests {
             deterministic_device_action(&ranked, &ranked_tools).is_none(),
             "ranked music must always reach model-selected discovery tools",
         );
+    }
+
+    #[test]
+    fn current_device_time_bypasses_model_reasoning() {
+        let unlocked = |utterance: &str| pb::SynapseUnderstandingRequest {
+            utterance: utterance.to_owned(),
+            device_context: Some(pb::SynapseDeviceContext::default()),
+            ..Default::default()
+        };
+
+        for utterance in [
+            "what time is it",
+            "what's the time",
+            "tell me the current time",
+            "current time",
+        ] {
+            let request = unlocked(utterance);
+            let tools = resolve_catalog(&request, true);
+            let action = deterministic_device_action(&request, &tools)
+                .unwrap_or_else(|| panic!("current-time request reached the model: {utterance}"));
+            assert_eq!(action.name, "GetCurrentTime");
+            assert_eq!(action.input, "{}");
+        }
+
+        for utterance in [
+            "what time is it in Tokyo",
+            "what happens if I ask what time it is",
+        ] {
+            let request = unlocked(utterance);
+            let tools = resolve_catalog(&request, true);
+            assert!(
+                deterministic_device_action(&request, &tools).is_none(),
+                "non-local time request was claimed: {utterance}",
+            );
+        }
+
+        let mut locked = unlocked("what time is it");
+        locked.device_context.as_mut().unwrap().is_locked = true;
+        let locked_tools = resolve_catalog(&locked, true);
+        assert!(deterministic_device_action(&locked, &locked_tools).is_none());
+
+        let mut excluded = unlocked("what time is it");
+        excluded.excluded_tools = vec!["GetCurrentTime".to_owned()];
+        let excluded_tools = resolve_catalog(&excluded, true);
+        assert!(deterministic_device_action(&excluded, &excluded_tools).is_none());
+
+        let mut replayed = unlocked("what time is it");
+        replayed.device_context.as_mut().unwrap().turns = vec![pb::SynapseChatTurn {
+            identifier: "current-time-action".into(),
+            content: Some(pb::synapse_chat_turn::Content::Action(
+                pb::SynapseActionContent {
+                    action: "GetCurrentTime".into(),
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        }];
+        let replayed_tools = resolve_catalog(&replayed, true);
+        assert!(deterministic_device_action(&replayed, &replayed_tools).is_none());
+    }
+
+    #[test]
+    fn device_status_reads_bypass_model_reasoning() {
+        let unlocked = |utterance: &str| pb::SynapseUnderstandingRequest {
+            utterance: utterance.to_owned(),
+            device_context: Some(pb::SynapseDeviceContext::default()),
+            ..Default::default()
+        };
+
+        for (utterance, expected_action, expected_input) in [
+            ("battery level", "GetBatteryLevel", "{}"),
+            ("what is the current volume", "GetCurrentVolume", "{}"),
+            ("am i online", "AmIOnline", "{}"),
+            ("is bluetooth on", "GetBluetoothStatus", "{}"),
+            ("airplane mode status", "GetAirplaneModeStatus", "{}"),
+            ("what is my phone number", "GetPhoneNumber", "{}"),
+            ("what is my serial number", "GetSerialNumber", "{}"),
+            ("where am i", "GetCurrentLocation", "{}"),
+            (
+                "device status",
+                "Settings",
+                r#"{"Request":"device status"}"#,
+            ),
+        ] {
+            let request = unlocked(utterance);
+            let tools = resolve_catalog(&request, true);
+            let action = deterministic_device_action(&request, &tools)
+                .unwrap_or_else(|| panic!("device-status request reached the model: {utterance}"));
+            assert_eq!(action.name, expected_action);
+            assert_eq!(action.input, expected_input);
+        }
+
+        let mut excluded = unlocked("what is the current volume");
+        excluded.excluded_tools = vec!["GetCurrentVolume".to_owned()];
+        let excluded_tools = resolve_catalog(&excluded, true);
+        assert!(deterministic_device_action(&excluded, &excluded_tools).is_none());
+
+        let mut replayed = unlocked("what is the current volume");
+        replayed.device_context.as_mut().unwrap().turns = vec![pb::SynapseChatTurn {
+            identifier: "current-volume-action".into(),
+            content: Some(pb::synapse_chat_turn::Content::Action(
+                pb::SynapseActionContent {
+                    action: "GetCurrentVolume".into(),
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        }];
+        let replayed_tools = resolve_catalog(&replayed, true);
+        assert!(deterministic_device_action(&replayed, &replayed_tools).is_none());
+    }
+
+    #[tokio::test]
+    async fn device_status_reads_skip_the_model_and_dispatch_on_the_pin() {
+        struct ModelMustNotRun;
+
+        #[tonic::async_trait]
+        impl ChatModel for ModelMustNotRun {
+            async fn complete(
+                &self,
+                _messages: &[ChatMessage],
+                _tools: &[ToolDef],
+            ) -> Result<ChatResponse, LlmError> {
+                panic!("an exact device-status read must not spend a model step")
+            }
+        }
+
+        for (utterance, expected_action) in [
+            ("what time is it", "GetCurrentTime"),
+            ("battery level", "GetBatteryLevel"),
+            ("what is the current volume", "GetCurrentVolume"),
+            ("am i online", "AmIOnline"),
+            ("is bluetooth on", "GetBluetoothStatus"),
+            ("airplane mode status", "GetAirplaneModeStatus"),
+            ("what is my phone number", "GetPhoneNumber"),
+            ("what is my serial number", "GetSerialNumber"),
+            ("where am i", "GetCurrentLocation"),
+            ("device status", "Settings"),
+        ] {
+            let messages = run_with(
+                Arc::new(ModelMustNotRun),
+                pb::SynapseUnderstandingRequest {
+                    utterance: utterance.to_owned(),
+                    device_context: Some(pb::SynapseDeviceContext::default()),
+                    ..Default::default()
+                },
+            )
+            .await;
+            let action = device_visible(&messages)
+                .into_iter()
+                .find_map(as_action)
+                .unwrap_or_else(|| panic!("no device action was emitted for {utterance}"));
+            assert_eq!(action.action, expected_action, "request: {utterance}");
+        }
     }
 
     #[test]
