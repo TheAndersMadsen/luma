@@ -527,6 +527,67 @@ fn enforce_explicit_recent_notes(
     response
 }
 
+/// A local place/weather request has already completed the stock location
+/// preflight before the model runs. Keep the model as the planner for the
+/// response, but do not let it skip or substitute the one read tool that can
+/// ground the answer in that device-provided location.
+fn enforce_grounded_location_read(
+    messages: &[ChatMessage],
+    tools: &[ToolDef],
+    mut response: ChatResponse,
+) -> ChatResponse {
+    let Some(utterance) = messages
+        .iter()
+        .rev()
+        .find(|message| message.role == Role::User)
+        .map(|message| message.content.as_str())
+    else {
+        return response;
+    };
+    let has_result = |name: &str| {
+        messages
+            .iter()
+            .any(|message| message.is_tool_result_for(name))
+    };
+    let offered = |name: &str| tools.iter().any(|tool| tool.name == name);
+
+    let call = if super::engine::current_city_request(utterance)
+        && offered("reverse_geocode")
+        && !has_result("reverse_geocode")
+    {
+        Some(ToolCall {
+            name: "reverse_geocode".to_owned(),
+            arguments: "{}".to_owned(),
+        })
+    } else if super::engine::local_weather_request(utterance)
+        && offered("weather")
+        && !has_result("weather")
+    {
+        Some(ToolCall {
+            name: "weather".to_owned(),
+            arguments: "{}".to_owned(),
+        })
+    } else if let Some(query) = super::engine::explicit_nearby_query(utterance)
+        && offered("nearby")
+        && !has_result("nearby")
+    {
+        Some(ToolCall {
+            name: "nearby".to_owned(),
+            arguments: serde_json::json!({"query": query}).to_string(),
+        })
+    } else {
+        None
+    };
+
+    if let Some(call) = call {
+        response.content = None;
+        response.tool_call = Some(call);
+        response.extra_tool_calls.clear();
+        tracing::info!("grounded location request normalized to its local read capability");
+    }
+    response
+}
+
 fn enforce_explicit_retrieval(
     messages: &[ChatMessage],
     tools: &[ToolDef],
@@ -535,16 +596,20 @@ fn enforce_explicit_retrieval(
     enforce_explicit_recent_notes(
         messages,
         tools,
-        enforce_explicit_route(
+        enforce_grounded_location_read(
             messages,
             tools,
-            enforce_explicit_lookup(
+            enforce_explicit_route(
                 messages,
                 tools,
-                enforce_unstarted_music_playback(
+                enforce_explicit_lookup(
                     messages,
                     tools,
-                    enforce_explicit_web_search(messages, tools, response),
+                    enforce_unstarted_music_playback(
+                        messages,
+                        tools,
+                        enforce_explicit_web_search(messages, tools, response),
+                    ),
                 ),
             ),
         ),
@@ -822,27 +887,35 @@ impl ChatModel for DemoChatModel {
         let can_search = !query.is_empty() && tools.iter().any(|t| t.name == "web_search");
 
         if !searched && can_search {
-            return Ok(ChatResponse {
-                content: None,
-                thought: String::new(),
-                tool_call: Some(ToolCall {
-                    name: "web_search".to_owned(),
-                    arguments: serde_json::json!({ "query": query }).to_string(),
-                }),
-                extra_tool_calls: Vec::new(),
-            });
+            return Ok(enforce_explicit_retrieval(
+                messages,
+                tools,
+                ChatResponse {
+                    content: None,
+                    thought: String::new(),
+                    tool_call: Some(ToolCall {
+                        name: "web_search".to_owned(),
+                        arguments: serde_json::json!({ "query": query }).to_string(),
+                    }),
+                    extra_tool_calls: Vec::new(),
+                },
+            ));
         }
 
         // Terminal. Keep operational detail out of the spoken answer. Tool
         // availability, provider choice, and deployment state belong in operator
         // health surfaces, not in the assistant persona heard by the wearer.
         let answer = "This request can't be completed right now.";
-        Ok(ChatResponse {
-            content: Some(answer.to_owned()),
-            thought: String::new(),
-            tool_call: None,
-            extra_tool_calls: Vec::new(),
-        })
+        Ok(enforce_explicit_retrieval(
+            messages,
+            tools,
+            ChatResponse {
+                content: Some(answer.to_owned()),
+                thought: String::new(),
+                tool_call: None,
+                extra_tool_calls: Vec::new(),
+            },
+        ))
     }
 }
 
@@ -1342,6 +1415,72 @@ mod tests {
             Some("Here are the cycling directions.")
         );
         assert!(response.tool_call.is_none());
+    }
+
+    #[test]
+    fn grounded_city_and_nearby_requests_cannot_skip_their_local_reads() {
+        let city = enforce_explicit_retrieval(
+            &[ChatMessage::user("What city am I in?")],
+            &[route_tool("reverse_geocode")],
+            direct_answer("You are in Copenhagen."),
+        );
+        let city_call = city.tool_call.expect("city lookup must reverse geocode");
+        assert_eq!(city_call.name, "reverse_geocode");
+        assert_eq!(city_call.arguments, "{}");
+
+        let nearby = enforce_explicit_retrieval(
+            &[ChatMessage::user("What's nearby?")],
+            &[route_tool("nearby")],
+            direct_answer("There are several places nearby."),
+        );
+        let nearby_call = nearby.tool_call.expect("bare nearby must query places");
+        assert_eq!(nearby_call.name, "nearby");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&nearby_call.arguments).unwrap(),
+            serde_json::json!({"query": ""}),
+        );
+    }
+
+    #[test]
+    fn compound_local_weather_and_nearby_runs_one_grounded_read_at_a_time() {
+        let prompt = "What's the weather here and what's nearby?";
+        let tools = [route_tool("weather"), route_tool("nearby")];
+
+        let first = enforce_explicit_retrieval(
+            &[ChatMessage::user(prompt)],
+            &tools,
+            direct_answer("It is sunny and there are cafes nearby."),
+        );
+        assert_eq!(first.tool_call.expect("weather first").name, "weather");
+
+        let second = enforce_explicit_retrieval(
+            &[
+                ChatMessage::user(prompt),
+                ChatMessage::tool_result("weather", "{}", "Sunny, 20 C"),
+            ],
+            &tools,
+            direct_answer("It is sunny and there are cafes nearby."),
+        );
+        let nearby = second.tool_call.expect("nearby second");
+        assert_eq!(nearby.name, "nearby");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&nearby.arguments).unwrap(),
+            serde_json::json!({"query": ""}),
+        );
+
+        let final_response = direct_answer("It is sunny; nearby places include a cafe.");
+        let complete = enforce_explicit_retrieval(
+            &[
+                ChatMessage::user(prompt),
+                ChatMessage::tool_result("weather", "{}", "Sunny, 20 C"),
+                ChatMessage::tool_result("nearby", r#"{"query":""}"#, "Cafe One"),
+            ],
+            &tools,
+            final_response.clone(),
+        );
+        assert_eq!(complete.content, final_response.content);
+        assert!(complete.tool_call.is_none());
+        assert!(complete.extra_tool_calls.is_empty());
     }
 
     #[test]

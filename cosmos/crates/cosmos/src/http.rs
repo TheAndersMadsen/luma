@@ -2677,6 +2677,11 @@ struct DemoTextRequest {
     /// for release acceptance; chat and speech keep their normal demo shape.
     #[serde(default)]
     simulate_unlocked_pin: bool,
+    /// Complete the stock current-location action/observation hop with a fixed
+    /// valid coordinate. This is acceptance-only: no device action is dispatched
+    /// and the production evaluator can inspect the grounded follow-up turn.
+    #[serde(default)]
+    simulate_location: bool,
 }
 
 #[derive(Serialize)]
@@ -2855,6 +2860,107 @@ struct DemoTraceResponse {
     device_deadline_ms: u64,
 }
 
+async fn collect_demo_trace<S>(
+    stream: &mut S,
+    started: std::time::Instant,
+    steps: &mut Vec<DemoTraceStep>,
+    reply: &mut String,
+    replayed_turns: &mut Vec<cosmos_protocol::aibus::SynapseChatTurn>,
+) where
+    S: Stream<Item = Result<cosmos_protocol::aibus::SynapseUnderstandingResponse, tonic::Status>>
+        + Unpin,
+{
+    use cosmos_protocol::aibus::{
+        synapse_chat_turn::Content, synapse_understanding_response::Body,
+    };
+    use tokio_stream::StreamExt as _;
+
+    while let Some(message) = stream.next().await {
+        let Ok(message) = message else { break };
+        let Some(Body::Turn(turn)) = message.body else {
+            continue;
+        };
+        let replayed = turn.clone();
+        match turn.content {
+            Some(Content::Action(action)) if action.action == RESPOND_ACTION => {
+                let spoken = spoken_answer(&action.input);
+                *reply = spoken.clone();
+                steps.push(DemoTraceStep {
+                    kind: "answer",
+                    name: RESPOND_ACTION.to_owned(),
+                    source: source_label_for(action.source),
+                    thought: action.thought,
+                    input: String::new(),
+                    text: spoken,
+                    elapsed_ms: started.elapsed().as_millis() as u64,
+                });
+            }
+            Some(Content::Action(action)) => steps.push(DemoTraceStep {
+                kind: "action",
+                name: action.action,
+                source: source_label_for(action.source),
+                thought: action.thought,
+                input: action.input,
+                text: String::new(),
+                elapsed_ms: started.elapsed().as_millis() as u64,
+            }),
+            Some(Content::Observation(obs)) => steps.push(DemoTraceStep {
+                kind: "observation",
+                name: obs.action_name,
+                source: source_label_for(obs.source),
+                thought: String::new(),
+                input: String::new(),
+                text: obs.observation,
+                elapsed_ms: started.elapsed().as_millis() as u64,
+            }),
+            _ => {}
+        }
+        replayed_turns.push(replayed);
+    }
+}
+
+fn simulated_user_turn(text: &str) -> cosmos_protocol::aibus::SynapseChatTurn {
+    cosmos_protocol::aibus::SynapseChatTurn {
+        user: cosmos_protocol::aibus::SynapseUser::User as i32,
+        identifier: uuid::Uuid::new_v4().to_string(),
+        content: Some(
+            cosmos_protocol::aibus::synapse_chat_turn::Content::UserRequest(
+                cosmos_protocol::aibus::SynapseUserRequestContent {
+                    request: text.to_owned(),
+                    ..Default::default()
+                },
+            ),
+        ),
+        ..Default::default()
+    }
+}
+
+fn simulated_location_observation(
+    action: &cosmos_protocol::aibus::SynapseChatTurn,
+) -> cosmos_protocol::aibus::SynapseChatTurn {
+    cosmos_protocol::aibus::SynapseChatTurn {
+        user: cosmos_protocol::aibus::SynapseUser::Assistant as i32,
+        identifier: uuid::Uuid::new_v4().to_string(),
+        parent_identifier: action.identifier.clone(),
+        content: Some(
+            cosmos_protocol::aibus::synapse_chat_turn::Content::Observation(
+                cosmos_protocol::aibus::SynapseObservationContent {
+                    observation: serde_json::json!({
+                        "latitude": 55.6761,
+                        "longitude": 12.5683,
+                        "isStale": false,
+                    })
+                    .to_string(),
+                    is_final: false,
+                    action_name: "GetCurrentLocation".to_owned(),
+                    source: SynapseSource::Device as i32,
+                },
+            ),
+        ),
+        ..Default::default()
+    }
+}
+
 /// Run the wearer's prompt through the *real* `Understand` ReAct engine and
 /// return the full turn transcript. Where [`demo_chat`] surfaces only the final
 /// sentence, this exposes every action + observation so the demo can visualise
@@ -2864,11 +2970,6 @@ async fn demo_trace(
     headers: HeaderMap,
     Json(payload): Json<DemoTextRequest>,
 ) -> Result<Json<DemoTraceResponse>, DemoError> {
-    use cosmos_protocol::aibus::{
-        synapse_chat_turn::Content, synapse_understanding_response::Body,
-    };
-    use tokio_stream::StreamExt as _;
-
     let text = validate_demo_text(payload.text)?;
     let demo = state.demo.ok_or_else(|| {
         demo_error(
@@ -2877,11 +2978,19 @@ async fn demo_trace(
         )
     })?;
 
+    let mut replayed_turns = if payload.simulate_location {
+        vec![simulated_user_turn(&text)]
+    } else {
+        Vec::new()
+    };
     let mut request = Request::new(SynapseUnderstandingRequest {
-        utterance: text,
-        device_context: payload
-            .simulate_unlocked_pin
-            .then(cosmos_protocol::aibus::SynapseDeviceContext::default),
+        utterance: text.clone(),
+        device_context: payload.simulate_unlocked_pin.then(|| {
+            cosmos_protocol::aibus::SynapseDeviceContext {
+                turns: replayed_turns.clone(),
+                ..Default::default()
+            }
+        }),
         ..Default::default()
     });
     request.extensions_mut().insert(turn_principal(&headers)?);
@@ -2893,62 +3002,84 @@ async fn demo_trace(
         .map_err(|_| demo_error(StatusCode::BAD_GATEWAY, "The assistant could not answer."))?
         .into_inner();
 
-    let source_label = |source: i32| {
-        if source == SynapseSource::Device as i32 {
-            "device"
-        } else {
-            "server"
-        }
-    };
-
     let started = std::time::Instant::now();
     let mut steps = Vec::new();
     let mut reply = String::new();
-    let collect = async {
-        while let Some(message) = stream.next().await {
-            let Ok(message) = message else { break };
-            let Some(Body::Turn(turn)) = message.body else {
-                continue;
-            };
-            match turn.content {
-                Some(Content::Action(action)) if action.action == RESPOND_ACTION => {
-                    let spoken = spoken_answer(&action.input);
-                    reply = spoken.clone();
-                    steps.push(DemoTraceStep {
-                        kind: "answer",
-                        name: RESPOND_ACTION.to_owned(),
-                        source: source_label(action.source),
-                        thought: action.thought,
-                        input: String::new(),
-                        text: spoken,
-                        elapsed_ms: started.elapsed().as_millis() as u64,
-                    });
+    tokio::time::timeout(
+        DEMO_CHAT_TIMEOUT,
+        collect_demo_trace(
+            &mut stream,
+            started,
+            &mut steps,
+            &mut reply,
+            &mut replayed_turns,
+        ),
+    )
+    .await
+    .map_err(|_| demo_error(StatusCode::GATEWAY_TIMEOUT, "The assistant took too long."))?;
+
+    if payload.simulate_location {
+        let location_action = replayed_turns.iter().rev().find(|turn| {
+            matches!(
+                turn.content.as_ref(),
+                Some(cosmos_protocol::aibus::synapse_chat_turn::Content::Action(action))
+                    if action.action == "GetCurrentLocation"
+            )
+        });
+        if let Some(location_action) = location_action.cloned() {
+            let observation = simulated_location_observation(&location_action);
+            let observation_text = match observation.content.as_ref() {
+                Some(cosmos_protocol::aibus::synapse_chat_turn::Content::Observation(value)) => {
+                    value.observation.clone()
                 }
-                Some(Content::Action(action)) => steps.push(DemoTraceStep {
-                    kind: "action",
-                    name: action.action,
-                    source: source_label(action.source),
-                    thought: action.thought,
-                    input: action.input,
-                    text: String::new(),
-                    elapsed_ms: started.elapsed().as_millis() as u64,
+                _ => String::new(),
+            };
+            steps.push(DemoTraceStep {
+                kind: "observation",
+                name: "GetCurrentLocation".to_owned(),
+                source: "device",
+                thought: String::new(),
+                input: String::new(),
+                text: observation_text,
+                elapsed_ms: started.elapsed().as_millis() as u64,
+            });
+            replayed_turns.push(observation);
+
+            let mut follow_up = Request::new(SynapseUnderstandingRequest {
+                utterance: text,
+                device_context: Some(cosmos_protocol::aibus::SynapseDeviceContext {
+                    turns: replayed_turns.clone(),
+                    ..Default::default()
                 }),
-                Some(Content::Observation(obs)) => steps.push(DemoTraceStep {
-                    kind: "observation",
-                    name: obs.action_name,
-                    source: source_label(obs.source),
-                    thought: String::new(),
-                    input: String::new(),
-                    text: obs.observation,
-                    elapsed_ms: started.elapsed().as_millis() as u64,
+                location: Some(cosmos_protocol::aibus::Location {
+                    latitude: 55.6761,
+                    longitude: 12.5683,
                 }),
-                _ => {}
-            }
+                ..Default::default()
+            });
+            follow_up.extensions_mut().insert(turn_principal(&headers)?);
+            let mut follow_up_stream = demo
+                .assistant
+                .understand(follow_up)
+                .await
+                .map_err(|_| {
+                    demo_error(StatusCode::BAD_GATEWAY, "The assistant could not answer.")
+                })?
+                .into_inner();
+            tokio::time::timeout(
+                DEMO_CHAT_TIMEOUT,
+                collect_demo_trace(
+                    &mut follow_up_stream,
+                    started,
+                    &mut steps,
+                    &mut reply,
+                    &mut replayed_turns,
+                ),
+            )
+            .await
+            .map_err(|_| demo_error(StatusCode::GATEWAY_TIMEOUT, "The assistant took too long."))?;
         }
-    };
-    tokio::time::timeout(DEMO_CHAT_TIMEOUT, collect)
-        .await
-        .map_err(|_| demo_error(StatusCode::GATEWAY_TIMEOUT, "The assistant took too long."))?;
+    }
 
     Ok(Json(DemoTraceResponse {
         steps,
@@ -3372,6 +3503,103 @@ mod tests {
         assert_eq!(steps[0]["kind"], "action");
         assert_eq!(steps[0]["name"], "ManageNutrition");
         assert_eq!(steps[0]["source"], "device");
+    }
+
+    #[tokio::test]
+    async fn demo_trace_can_replay_a_grounded_location_hop_for_routes() {
+        let response = demo_app(Readiness::default())
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .header("content-type", "application/json")
+                    .uri("/demo-api/trace")
+                    .body(Body::from(
+                        r#"{"text":"Give me cycling directions to Nyhavn.","simulate_unlocked_pin":true,"simulate_location":true}"#,
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .expect("body bytes");
+        let payload: serde_json::Value = serde_json::from_slice(&bytes).expect("json body");
+        let steps = payload["steps"].as_array().expect("steps array");
+        let action_names = steps
+            .iter()
+            .filter(|step| step["kind"] == "action" || step["kind"] == "answer")
+            .map(|step| step["name"].as_str().unwrap_or_default())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            action_names,
+            ["GetCurrentLocation", "route", "Respond"],
+            "the trace must exercise the complete stock location round trip: {steps:?}",
+        );
+        assert!(
+            steps.iter().any(|step| {
+                step["kind"] == "observation" && step["name"] == "GetCurrentLocation"
+            })
+        );
+        let route = steps
+            .iter()
+            .find(|step| step["kind"] == "action" && step["name"] == "route")
+            .expect("grounded route action");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(route["input"].as_str().unwrap()).unwrap(),
+            serde_json::json!({"destination": "Nyhavn", "mode": "bicycling"}),
+        );
+    }
+
+    #[tokio::test]
+    async fn demo_trace_replays_location_for_safe_place_and_weather_reads() {
+        for (text, expected_actions) in [
+            (
+                "What city am I in?",
+                vec!["GetCurrentLocation", "reverse_geocode", "Respond"],
+            ),
+            (
+                "What's nearby?",
+                vec!["GetCurrentLocation", "nearby", "Respond"],
+            ),
+            (
+                "What's the weather here and what's nearby?",
+                vec!["GetCurrentLocation", "weather", "nearby", "Respond"],
+            ),
+        ] {
+            let response = demo_app(Readiness::default())
+                .oneshot(
+                    Request::builder()
+                        .method(Method::POST)
+                        .header("content-type", "application/json")
+                        .uri("/demo-api/trace")
+                        .body(Body::from(
+                            serde_json::json!({
+                                "text": text,
+                                "simulate_unlocked_pin": true,
+                                "simulate_location": true,
+                            })
+                            .to_string(),
+                        ))
+                        .expect("request"),
+                )
+                .await
+                .expect("response");
+
+            assert_eq!(response.status(), StatusCode::OK, "{text}");
+            let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+                .await
+                .expect("body bytes");
+            let payload: serde_json::Value = serde_json::from_slice(&bytes).expect("json body");
+            let steps = payload["steps"].as_array().expect("steps array");
+            let action_names = steps
+                .iter()
+                .filter(|step| step["kind"] == "action" || step["kind"] == "answer")
+                .map(|step| step["name"].as_str().unwrap_or_default())
+                .collect::<Vec<_>>();
+            assert_eq!(action_names, expected_actions, "{text}: {steps:?}");
+        }
     }
 
     #[tokio::test]

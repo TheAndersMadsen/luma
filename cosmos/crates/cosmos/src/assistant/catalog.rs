@@ -207,10 +207,10 @@ fn nearby_schema() -> Value {
             "place": { "type": "string", "description": PLACE_DESCRIPTION },
             "query": {
                 "type": "string",
-                "description": "What to look for, e.g. \"coffee\" or \"pharmacy\"."
+                "description": "What to look for, e.g. \"coffee\" or \"pharmacy\". Omit or leave empty for a general nearby request."
             }
         },
-        "required": ["query"]
+        "required": []
     })
 }
 
@@ -463,6 +463,11 @@ const SERVER_TOOLS: &[ServerTool] = &[
         parameters: coordinate_schema,
     },
     ServerTool {
+        name: "reverse_geocode",
+        description: "Resolve the wearer's current coordinates into a city and address. Use only when the wearer asks where they are and the Pin supplied a location.",
+        parameters: coordinate_schema,
+    },
+    ServerTool {
         name: "nearby",
         description: "Find places near a location — restaurants, shops, \
                       landmarks. Use when the wearer asks what is around them, \
@@ -622,6 +627,10 @@ const DEVICE_TOOL_SET: &[(&str, &str)] = &[
     // has no key with which to mint a readable note of its own, and the honest
     // home for the write side is the capture path, not a model tool. Recall
     // stays available server-side via `recall_memory`.
+    (
+        "ClearUnderstandingContext",
+        "Clear only the current short-term conversation context.",
+    ),
     ("CatchMeUp", "Summarize what the wearer missed."),
     // --- device status + benign settings -----------------------------------
     ("GetBatteryLevel", "Report the battery level."),
@@ -1792,11 +1801,17 @@ pub async fn execute_tool_with(name: &str, arguments: &str, context: &ToolContex
                 Err(e) => e.observation("weather"),
             }
         }
+        "reverse_geocode" => {
+            let Some((lat, lon)) = resolve_point(&args, context).await else {
+                return NO_LOCATION.to_string();
+            };
+            match crate::backends::places::reverse_geocode(lat, lon).await {
+                Ok(address) => describe_address(&address),
+                Err(e) => e.observation("reverse-geocode"),
+            }
+        }
         "nearby" => {
             let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
-            if query.trim().is_empty() {
-                return "Nothing to look for was named.".to_string();
-            }
             let Some((lat, lon)) = resolve_point(&args, context).await else {
                 return NO_LOCATION.to_string();
             };
@@ -2228,6 +2243,34 @@ fn describe_places(found: &[cosmos_protocol::aibus::NearbyPlace]) -> String {
         })
         .collect::<Vec<_>>()
         .join("; ")
+}
+
+fn describe_address(address: &cosmos_protocol::aibus::ReverseGeocodeResponse) -> String {
+    let mut parts = [
+        address.municipality.trim(),
+        address.country_subdivision.trim(),
+        address.country.trim(),
+    ]
+    .into_iter()
+    .filter(|part| !part.is_empty())
+    .fold(Vec::<&str>::new(), |mut parts, part| {
+        if !parts.iter().any(|existing| existing == &part) {
+            parts.push(part);
+        }
+        parts
+    });
+    if parts.is_empty() {
+        parts.extend(
+            [address.street_name.trim(), address.postal_code.trim()]
+                .into_iter()
+                .filter(|part| !part.is_empty()),
+        );
+    }
+    if parts.is_empty() {
+        "No location name was found.".to_owned()
+    } else {
+        parts.join(", ")
+    }
 }
 
 fn describe_route(route: &cosmos_protocol::aibus::NavigationDirectionsResponse) -> String {
@@ -2992,6 +3035,7 @@ mod tests {
         let offered: Vec<&str> = SERVER_TOOLS.iter().map(|t| t.name).collect();
         for expected in [
             "weather",
+            "reverse_geocode",
             "nearby",
             "route",
             "food_lookup",
@@ -3405,7 +3449,11 @@ mod tests {
              model to make one up"
         );
         assert!(nearby_schema()["properties"].get("place").is_some());
-        assert_eq!(nearby_schema()["required"], json!(["query"]));
+        assert_eq!(
+            nearby_schema()["required"],
+            json!([]),
+            "a general nearby request legitimately has no category query",
+        );
 
         // Coordinates the device sent are used as-is.
         assert_eq!(
@@ -3448,6 +3496,33 @@ mod tests {
                 .to_lowercase()
                 .contains("location")
         );
+
+        let general_nearby = execute_tool_with(
+            "nearby",
+            "{}",
+            &ToolContext {
+                location: Some((55.6761, 12.5683)),
+                ..Default::default()
+            },
+        )
+        .await;
+        assert!(
+            !general_nearby.contains("Nothing to look for was named"),
+            "a bare Nearby request must reach the provider: {general_nearby}",
+        );
+    }
+
+    #[test]
+    fn reverse_geocode_observation_leads_with_city_and_stays_bounded() {
+        let spoken = describe_address(&cosmos_protocol::aibus::ReverseGeocodeResponse {
+            street_number: "1".to_owned(),
+            street_name: "Rådhuspladsen".to_owned(),
+            municipality: "Copenhagen".to_owned(),
+            country_subdivision: "Capital Region".to_owned(),
+            country: "Denmark".to_owned(),
+            postal_code: "1550".to_owned(),
+        });
+        assert_eq!(spoken, "Copenhagen, Capital Region, Denmark");
     }
 
     #[test]

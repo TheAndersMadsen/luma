@@ -260,9 +260,41 @@ test("the production matrix covers reasoning, retrieval, ambiguity, compound wor
     "current-product-price",
     "nutrition-oatmeal",
     "show-my-notes",
+    "future-weather-limit",
+    "transit-routing-limit",
+    "show-timers",
+    "show-alarms",
+    "food-log-today",
+    "food-calories-today",
+    "food-log-three-days",
+    "reset-session",
+    "messages-recent-read",
+    "messages-search-read",
+    "messages-open-ui",
+    "notifications-catch-up-read",
+    "contacts-open-ui",
+    "contacts-search-read",
+    "contacts-phone-read",
+    "contacts-quick-read",
+    "dialer-open-ui",
+    "dialpad-open-ui",
+    "recent-calls-open-ui",
+    "translation-good-morning-french",
+    "translation-hello-spanish",
+    "translation-thank-you-japanese",
+    "recent-photos-open-ui",
+    "music-queue-read",
+    "vision-action-count-read",
     "route-walking-nyhavn",
     "route-driving-nyhavn",
     "route-cycling-nyhavn",
+    "current-city-read",
+    "weather-here",
+    "weather-umbrella-local",
+    "nearby-bare",
+    "nearby-coffee",
+    "nearest-coffee",
+    "weather-and-nearby",
     "pin-current-time",
     "pin-battery-level",
     "pin-current-volume",
@@ -293,7 +325,15 @@ test("the production matrix covers reasoning, retrieval, ambiguity, compound wor
   assert.deepEqual(cycling.expectedActionInputs, {
     route: { destination: "Nyhavn", mode: "bicycling" },
   });
+  assert.deepEqual(cycling.requiredActions, ["GetCurrentLocation", "route", "Respond"]);
+  assert.deepEqual(cycling.exactActionCounts, { GetCurrentLocation: 1, route: 1 });
   assert.equal(cycling.simulateUnlockedPin, true);
+  assert.equal(cycling.simulateLocation, true);
+  assert.deepEqual(assistantTracePayload(cycling), {
+    text: "Give me cycling directions to Nyhavn.",
+    simulate_unlocked_pin: true,
+    simulate_location: true,
+  });
 });
 
 test("evaluation arguments are bounded and default to repeated runs", () => {

@@ -1749,6 +1749,14 @@ fn deterministic_device_action(
             return Some(action);
         }
     }
+    if let Some(action) = explicit_safe_stock_action(utterance) {
+        let action_offered = offered(action.name);
+        let action_replayed = current_run_contains_action(current_turns, action.name);
+        let privacy_allowed = !request_locked || action.name != "Contacts";
+        if action_offered && !action_replayed && privacy_allowed {
+            return Some(action);
+        }
+    }
     if request_locked {
         return None;
     }
@@ -1796,6 +1804,16 @@ fn deterministic_device_action(
             name: "GetCurrentLocation",
             input: "{}".to_owned(),
             thought: "I should get the Pin's current location before checking local weather",
+        });
+    }
+    if (current_city_request(utterance) || explicit_nearby_query(utterance).is_some())
+        && offered("GetCurrentLocation")
+        && !current_run_contains_action(current_turns, "GetCurrentLocation")
+    {
+        return Some(DeterministicDeviceAction {
+            name: "GetCurrentLocation",
+            input: "{}".to_owned(),
+            thought: "I should get the Pin's current location before resolving nearby places",
         });
     }
 
@@ -2115,6 +2133,165 @@ fn normalized_intent(value: &str) -> Option<String> {
     (!normalized.is_empty()).then_some(normalized)
 }
 
+/// Resolve exact, bounded stock reads and UI openings without spending a model
+/// step. These actions either expose current local state or open an existing
+/// stock surface; none sends, calls, captures, plays, or changes radio state.
+/// Catalog filtering remains authoritative for keyguard and per-request
+/// exclusions, and the caller prevents replaying an action already in the
+/// current stock turn chain.
+fn explicit_safe_stock_action(utterance: &str) -> Option<DeterministicDeviceAction> {
+    let normalized = normalized_intent(utterance)?;
+    let empty = |name, thought| DeterministicDeviceAction {
+        name,
+        input: "{}".to_owned(),
+        thought,
+    };
+
+    let action = match normalized.as_str() {
+        "reset session" | "clear session" | "start a new session" => empty(
+            "ClearUnderstandingContext",
+            "The wearer asked to clear the Pin's short-term conversation context",
+        ),
+        "read my recent messages" | "show my recent messages" => DeterministicDeviceAction {
+            name: "DisplayMessages",
+            input: serde_json::json!({
+                "IDs": [],
+                "Person": [],
+                "MessageCount": 10,
+            })
+            .to_string(),
+            thought: "The wearer asked to display recent local messages",
+        },
+        "open messages" | "open my messages" => empty(
+            "OpenMessagesMainMenu",
+            "The wearer asked to open the stock messages experience",
+        ),
+        "catch me up" | "what did i miss" => empty(
+            "CatchMeUp",
+            "The wearer asked for the stock notification summary",
+        ),
+        "open contacts" | "open my contacts" => empty(
+            "OpenContacts",
+            "The wearer asked to open the stock contacts experience",
+        ),
+        "open dialer" | "open the phone" => empty(
+            "OpenDialerHome",
+            "The wearer asked to open the stock dialer experience",
+        ),
+        "open the dial pad" | "open dial pad" | "open dialpad" => {
+            empty("OpenDialpad", "The wearer asked to open the stock dial pad")
+        }
+        "open recent calls" | "open my recent calls" => empty(
+            "OpenRecentCalls",
+            "The wearer asked to open the stock recent-calls experience",
+        ),
+        "show my recent photos" | "open my recent photos" => DeterministicDeviceAction {
+            name: "OpenRecentPhotos",
+            input: serde_json::json!({"TriggeredFromTouchpad": false}).to_string(),
+            thought: "The wearer asked to open the stock recent-photos experience",
+        },
+        "what is in my music queue"
+        | "what s in my music queue"
+        | "show my music queue"
+        | "show the music queue" => empty(
+            "GetMusicQueue",
+            "The wearer asked to display the current music queue",
+        ),
+        "tell me the number of vision actions"
+        | "how many vision actions are there"
+        | "how many vision actions do i have" => empty(
+            "GetIfThenMapSize",
+            "The wearer asked for the number of configured vision actions",
+        ),
+        _ if normalized.starts_with("search my messages for ") => {
+            let query = normalized.strip_prefix("search my messages for ")?.trim();
+            if !bounded_read_subject(query) {
+                return None;
+            }
+            DeterministicDeviceAction {
+                name: "MessageSearch",
+                input: serde_json::json!({"Person": [], "Query": query}).to_string(),
+                thought: "The wearer asked to search local messages for a bounded query",
+            }
+        }
+        _ if normalized.starts_with("search contacts for ")
+            || normalized.starts_with("what is the phone number for ")
+            || normalized == "who are my quick messaging contacts" =>
+        {
+            if [" and ", " then ", " also "]
+                .iter()
+                .any(|marker| normalized.contains(marker))
+            {
+                return None;
+            }
+            DeterministicDeviceAction {
+                name: "Contacts",
+                input: serde_json::json!({
+                    "Request": utterance.trim().trim_end_matches(['.', '?', '!']).trim_end(),
+                })
+                .to_string(),
+                thought: "The wearer asked the stock contacts agent for existing contact data",
+            }
+        }
+        _ => return explicit_one_off_translation(&normalized),
+    };
+    Some(action)
+}
+
+fn bounded_read_subject(value: &str) -> bool {
+    let words = value.split_whitespace().collect::<Vec<_>>();
+    !value.is_empty()
+        && value.len() <= 256
+        && words.len() <= 32
+        && value
+            .chars()
+            .all(|character| character.is_alphanumeric() || character.is_whitespace())
+        && !words
+            .iter()
+            .any(|word| matches!(*word, "and" | "then" | "also"))
+}
+
+fn explicit_one_off_translation(normalized: &str) -> Option<DeterministicDeviceAction> {
+    let language = |value: &str| match value.trim() {
+        "english" => Some("English"),
+        "french" => Some("French"),
+        "german" => Some("German"),
+        "italian" => Some("Italian"),
+        "japanese" => Some("Japanese"),
+        "portuguese" => Some("Portuguese"),
+        "spanish" => Some("Spanish"),
+        _ => None,
+    };
+
+    let (text, source, target) = if let Some(body) = normalized.strip_prefix("translate ") {
+        let (before_target, target) = body.rsplit_once(" to ")?;
+        let target = language(target)?;
+        if let Some((text, source)) = before_target.rsplit_once(" from ") {
+            (text, Some(language(source)?), target)
+        } else {
+            (before_target, None, target)
+        }
+    } else if let Some(body) = normalized.strip_prefix("how do you say ") {
+        let (text, target) = body.rsplit_once(" in ")?;
+        (text, None, language(target)?)
+    } else {
+        return None;
+    };
+    if !bounded_read_subject(text) || source == Some(target) {
+        return None;
+    }
+
+    let mut input = serde_json::json!({"Text": text, "Target": target});
+    if let Some(source) = source {
+        input["Source"] = serde_json::Value::String(source.to_owned());
+    }
+    Some(DeterministicDeviceAction {
+        name: "Translate",
+        input: input.to_string(),
+        thought: "The wearer explicitly requested a bounded one-off translation",
+    })
+}
+
 fn local_device_status_action(utterance: &str) -> Option<DeterministicDeviceAction> {
     let normalized = normalized_intent(utterance)?;
     let (name, thought) = match normalized.as_str() {
@@ -2212,7 +2389,7 @@ fn local_device_status_action(utterance: &str) -> Option<DeterministicDeviceActi
     })
 }
 
-fn local_weather_request(utterance: &str) -> bool {
+pub(crate) fn local_weather_request(utterance: &str) -> bool {
     matches!(
         normalized_intent(utterance).as_deref(),
         Some(
@@ -2255,8 +2432,44 @@ fn local_weather_request(utterance: &str) -> bool {
                 | "how cold is it outside"
                 | "is it raining"
                 | "is it raining outside"
+                | "should i bring an umbrella here today"
+                | "what s the weather here and what s nearby"
         )
     )
+}
+
+pub(crate) fn current_city_request(utterance: &str) -> bool {
+    matches!(
+        normalized_intent(utterance).as_deref(),
+        Some(
+            "what city am i in" | "which city am i in" | "what town am i in" | "what is this city"
+        )
+    )
+}
+
+pub(crate) fn explicit_nearby_query(utterance: &str) -> Option<String> {
+    let normalized = normalized_intent(utterance)?;
+    if matches!(
+        normalized.as_str(),
+        "what s nearby"
+            | "what is nearby"
+            | "what s around me"
+            | "what is around me"
+            | "what s the weather here and what s nearby"
+    ) {
+        return Some(String::new());
+    }
+
+    let query = if let Some(value) = normalized.strip_prefix("find ") {
+        value
+            .strip_suffix(" nearby")
+            .or_else(|| value.strip_suffix(" and navigate there"))
+            .or_else(|| value.strip_prefix("the nearest "))?
+    } else {
+        return None;
+    };
+    let query = query.strip_prefix("the nearest ").unwrap_or(query).trim();
+    bounded_read_subject(query).then(|| query.to_owned())
 }
 
 pub(crate) const FUTURE_WEATHER_UNAVAILABLE: &str =
@@ -4853,6 +5066,133 @@ mod tests {
     }
 
     #[test]
+    fn exact_safe_stock_reads_have_deterministic_actions_and_arguments() {
+        let unlocked = |utterance: &str| pb::SynapseUnderstandingRequest {
+            utterance: utterance.to_owned(),
+            device_context: Some(pb::SynapseDeviceContext::default()),
+            ..Default::default()
+        };
+
+        for (utterance, expected_name, expected_input) in [
+            (
+                "Reset session.",
+                "ClearUnderstandingContext",
+                serde_json::json!({}),
+            ),
+            (
+                "Read my recent messages.",
+                "DisplayMessages",
+                serde_json::json!({"IDs": [], "Person": [], "MessageCount": 10}),
+            ),
+            (
+                "Search my messages for dinner.",
+                "MessageSearch",
+                serde_json::json!({"Person": [], "Query": "dinner"}),
+            ),
+            (
+                "Open messages.",
+                "OpenMessagesMainMenu",
+                serde_json::json!({}),
+            ),
+            ("Catch me up.", "CatchMeUp", serde_json::json!({})),
+            ("Open contacts.", "OpenContacts", serde_json::json!({})),
+            (
+                "Search contacts for Alex.",
+                "Contacts",
+                serde_json::json!({"Request": "Search contacts for Alex"}),
+            ),
+            (
+                "What is the phone number for Alex?",
+                "Contacts",
+                serde_json::json!({"Request": "What is the phone number for Alex"}),
+            ),
+            (
+                "Who are my quick messaging contacts?",
+                "Contacts",
+                serde_json::json!({"Request": "Who are my quick messaging contacts"}),
+            ),
+            ("Open dialer.", "OpenDialerHome", serde_json::json!({})),
+            ("Open the dial pad.", "OpenDialpad", serde_json::json!({})),
+            (
+                "Open recent calls.",
+                "OpenRecentCalls",
+                serde_json::json!({}),
+            ),
+            (
+                "Translate good morning from English to French.",
+                "Translate",
+                serde_json::json!({
+                    "Text": "good morning",
+                    "Source": "English",
+                    "Target": "French",
+                }),
+            ),
+            (
+                "Translate hello to Spanish.",
+                "Translate",
+                serde_json::json!({"Text": "hello", "Target": "Spanish"}),
+            ),
+            (
+                "How do you say thank you in Japanese?",
+                "Translate",
+                serde_json::json!({"Text": "thank you", "Target": "Japanese"}),
+            ),
+            (
+                "Show my recent photos.",
+                "OpenRecentPhotos",
+                serde_json::json!({"TriggeredFromTouchpad": false}),
+            ),
+            (
+                "What's in my music queue?",
+                "GetMusicQueue",
+                serde_json::json!({}),
+            ),
+            (
+                "Tell me the number of vision actions.",
+                "GetIfThenMapSize",
+                serde_json::json!({}),
+            ),
+        ] {
+            let request = unlocked(utterance);
+            let tools = resolve_catalog(&request, true);
+            let action = deterministic_device_action(&request, &tools)
+                .unwrap_or_else(|| panic!("safe stock read was not deterministic: {utterance}"));
+            assert_eq!(action.name, expected_name, "{utterance}");
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&action.input).unwrap(),
+                expected_input,
+                "{utterance}",
+            );
+        }
+
+        let locked_contacts = pb::SynapseUnderstandingRequest {
+            utterance: "What is the phone number for Alex?".to_owned(),
+            device_context: Some(pb::SynapseDeviceContext {
+                is_locked: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let locked_tools = resolve_catalog(&locked_contacts, true);
+        assert!(
+            deterministic_device_action(&locked_contacts, &locked_tools).is_none(),
+            "private contact data must not be routed while the Pin is locked",
+        );
+
+        for compound in [
+            "Open messages and call Alex.",
+            "Search my messages for dinner and call Alex.",
+            "Search contacts for Alex and call Bob.",
+            "Translate hello to Spanish and take a photo.",
+        ] {
+            assert!(
+                explicit_safe_stock_action(compound).is_none(),
+                "compound request escaped the bounded safe-read parser: {compound}",
+            );
+        }
+    }
+
+    #[test]
     fn explicit_navigation_starts_with_the_pin_location_preflight() {
         let unlocked = || pb::SynapseUnderstandingRequest {
             utterance: "Find the nearest coffee shop and navigate there.".to_owned(),
@@ -4889,6 +5229,48 @@ mod tests {
         }];
         let replayed_tools = resolve_catalog(&replayed, true);
         assert!(deterministic_device_action(&replayed, &replayed_tools).is_none());
+    }
+
+    #[test]
+    fn safe_location_reads_refresh_location_and_preserve_nearby_queries() {
+        for (utterance, expected_query) in [
+            ("What's nearby?", Some("")),
+            ("Find coffee shops nearby.", Some("coffee shops")),
+            ("Find the nearest coffee shop.", Some("coffee shop")),
+            (
+                "Find the nearest coffee shop and navigate there.",
+                Some("coffee shop"),
+            ),
+            ("What city am I in?", None),
+            ("Should I bring an umbrella here today?", None),
+            ("What's the weather here and what's nearby?", Some("")),
+        ] {
+            let request = pb::SynapseUnderstandingRequest {
+                utterance: utterance.to_owned(),
+                device_context: Some(pb::SynapseDeviceContext::default()),
+                ..Default::default()
+            };
+            let tools = resolve_catalog(&request, true);
+            let action = deterministic_device_action(&request, &tools)
+                .unwrap_or_else(|| panic!("location preflight missing: {utterance}"));
+            assert_eq!(action.name, "GetCurrentLocation", "{utterance}");
+            assert_eq!(
+                explicit_nearby_query(utterance).as_deref(),
+                expected_query,
+                "{utterance}",
+            );
+        }
+
+        for unrelated in [
+            "What is nearby technology?",
+            "Find coffee shops in Paris.",
+            "Tell me about umbrellas.",
+            "What is a city?",
+        ] {
+            assert_eq!(explicit_nearby_query(unrelated), None, "{unrelated}");
+            assert!(!current_city_request(unrelated), "{unrelated}");
+            assert!(!local_weather_request(unrelated), "{unrelated}");
+        }
     }
 
     #[tokio::test]
