@@ -1654,22 +1654,29 @@ fn deterministic_device_action(
             thought: "The requested forecast is outside the current weather capability",
         });
     }
-    let unlocked = req
-        .device_context
-        .as_ref()
-        .is_some_and(|context| !context.is_locked);
-    if !unlocked {
-        return None;
-    }
-    let current_turns = req
-        .device_context
-        .as_ref()
-        .map(|context| context.turns.as_slice())
-        .unwrap_or_default();
+    let device_context = req.device_context.as_ref()?;
+    let request_locked = device_context.is_locked;
+    let current_turns = device_context.turns.as_slice();
     if let Some(action) = local_device_status_action(&req.utterance) {
-        if offered(action.name) && !current_run_contains_action(current_turns, action.name) {
+        let action_offered = offered(action.name);
+        let action_replayed = current_run_contains_action(current_turns, action.name);
+        if action.name == "GetCurrentTime" {
+            let tool_set = resolved_tool_set(req);
+            tracing::info!(
+                request_locked,
+                action_offered,
+                action_replayed,
+                tool_set = %toolsets::pointer_label(tool_set.set.name, tool_set.set.version),
+                excluded_tool_count = req.excluded_tools.len(),
+                "[DEBUG-time-status] deterministic status gate"
+            );
+        }
+        if action_offered && !action_replayed {
             return Some(action);
         }
+    }
+    if request_locked {
+        return None;
     }
     if let Some(request) = explicit_nutrition_request(&req.utterance) {
         if offered("ManageNutrition")
@@ -4038,7 +4045,10 @@ mod tests {
         let mut locked = unlocked("what time is it");
         locked.device_context.as_mut().unwrap().is_locked = true;
         let locked_tools = resolve_catalog(&locked, true);
-        assert!(deterministic_device_action(&locked, &locked_tools).is_none());
+        let locked_action = deterministic_device_action(&locked, &locked_tools)
+            .expect("GetCurrentTime is stock keyguard-safe");
+        assert_eq!(locked_action.name, "GetCurrentTime");
+        assert_eq!(locked_action.input, "{}");
 
         let mut excluded = unlocked("what time is it");
         excluded.excluded_tools = vec!["GetCurrentTime".to_owned()];
