@@ -1054,6 +1054,18 @@ fn normalized(value: &str) -> String {
         .join(" ")
 }
 
+fn normalized_title(value: &str) -> String {
+    let value = normalized(value);
+    [" feat ", " featuring "]
+        .into_iter()
+        .find_map(|marker| {
+            value
+                .split_once(marker)
+                .map(|(title, _)| title.trim().to_owned())
+        })
+        .unwrap_or(value)
+}
+
 fn grounded_candidate(
     candidate: &Candidate,
     response: CenterCatalogResponse,
@@ -1066,10 +1078,10 @@ fn grounded_candidate(
     {
         return Err(MusicDiscoveryError::ProviderNoMatch);
     }
-    let expected_title = normalized(&candidate.title);
+    let expected_title = normalized_title(&candidate.title);
     let expected_artist = normalized(&candidate.artist);
     let track = response.items.into_iter().find(|track| {
-        normalized(&track.title) == expected_title
+        normalized_title(&track.title) == expected_title
             && track
                 .artists
                 .iter()
@@ -1316,6 +1328,63 @@ mod tests {
             grounded_candidate(&candidate, wrong_title, "perplexity"),
             Err(MusicDiscoveryError::ProviderNoMatch)
         );
+    }
+
+    #[test]
+    fn provider_verification_accepts_feature_credits_without_accepting_another_version() {
+        let still_dre = Candidate {
+            title: "Still D.R.E.".to_owned(),
+            artist: "Dr. Dre".to_owned(),
+            release_year: 1999,
+            rationale: "most popular".to_owned(),
+            support: 95,
+            sources: vec![],
+        };
+        let credited = CenterCatalogResponse {
+            provider: "youtube_music".to_owned(),
+            ranking_provenance: "not_ranked".to_owned(),
+            items: vec![CenterTrack {
+                title: "Still D.R.E. (feat. Snoop Dogg)".to_owned(),
+                artists: vec!["Dr. Dre".to_owned()],
+            }],
+        };
+        assert_eq!(
+            grounded_candidate(&still_dre, credited, "foreground_agent_web")
+                .expect("a provider feature credit is the researched track")
+                .title,
+            "Still D.R.E. (feat. Snoop Dogg)"
+        );
+
+        let remix = CenterCatalogResponse {
+            provider: "youtube_music".to_owned(),
+            ranking_provenance: "not_ranked".to_owned(),
+            items: vec![CenterTrack {
+                title: "Still D.R.E. (1950's Soul Version)".to_owned(),
+                artists: vec!["Dr. Dre".to_owned()],
+            }],
+        };
+        assert_eq!(
+            grounded_candidate(&still_dre, remix, "foreground_agent_web"),
+            Err(MusicDiscoveryError::ProviderNoMatch)
+        );
+
+        let versace_remix = Candidate {
+            title: "Versace (Remix)".to_owned(),
+            artist: "Migos".to_owned(),
+            release_year: 2013,
+            rationale: "most controversial".to_owned(),
+            support: 90,
+            sources: vec![],
+        };
+        let credited_remix = CenterCatalogResponse {
+            provider: "youtube_music".to_owned(),
+            ranking_provenance: "not_ranked".to_owned(),
+            items: vec![CenterTrack {
+                title: "Versace (Remix) (feat. Drake)".to_owned(),
+                artists: vec!["Migos".to_owned()],
+            }],
+        };
+        assert!(grounded_candidate(&versace_remix, credited_remix, "foreground_agent_web").is_ok());
     }
 
     struct FixedProviderCatalog {
