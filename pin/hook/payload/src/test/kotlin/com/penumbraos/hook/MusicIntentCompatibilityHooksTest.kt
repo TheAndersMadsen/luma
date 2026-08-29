@@ -106,7 +106,7 @@ class MusicIntentCompatibilityHooksTest {
     @Test
     fun `loose pause prediction cannot steal a food logging request`() {
         assertTrue(
-            MusicIntentCompatibilityHooks.shouldSuppressLoosePause(
+            MusicIntentCompatibilityHooks.shouldSuppressStockPrediction(
                 triggerIntent = "PauseMusic",
                 minDistance = 1.923199,
                 strictRadius = 1.837633,
@@ -118,7 +118,7 @@ class MusicIntentCompatibilityHooksTest {
     @Test
     fun `explicit or strict pause predictions remain offline`() {
         assertFalse(
-            MusicIntentCompatibilityHooks.shouldSuppressLoosePause(
+            MusicIntentCompatibilityHooks.shouldSuppressStockPrediction(
                 triggerIntent = "PauseMusic",
                 minDistance = 1.923199,
                 strictRadius = 1.837633,
@@ -126,7 +126,7 @@ class MusicIntentCompatibilityHooksTest {
             ),
         )
         assertFalse(
-            MusicIntentCompatibilityHooks.shouldSuppressLoosePause(
+            MusicIntentCompatibilityHooks.shouldSuppressStockPrediction(
                 triggerIntent = "PauseMusic",
                 minDistance = 1.7,
                 strictRadius = 1.837633,
@@ -138,11 +138,69 @@ class MusicIntentCompatibilityHooksTest {
     @Test
     fun `loose prediction guard is scoped to pause music`() {
         assertFalse(
-            MusicIntentCompatibilityHooks.shouldSuppressLoosePause(
+            MusicIntentCompatibilityHooks.shouldSuppressStockPrediction(
                 triggerIntent = "NextTrack",
                 minDistance = 2.0,
                 strictRadius = 1.0,
                 utterance = "I ate one banana.",
+            ),
+        )
+    }
+
+    @Test
+    fun `stock play prediction cannot collapse ranked music to an artist`() {
+        listOf(
+            "Play the most popular song by Drake.",
+            "Play Drake's most controversial song from 2013.",
+            "Look up the most viral song by Drake and play it.",
+            "Look up the best songs by Michael Jackson and play the most popular.",
+            "What is Dr. Dre's most popular song?",
+        ).forEach { utterance ->
+            assertTrue(
+                utterance,
+                MusicIntentCompatibilityHooks.shouldSuppressStockPrediction(
+                    triggerIntent = "PlayMusic",
+                    minDistance = 1.804670,
+                    strictRadius = 1.511992,
+                    utterance = utterance,
+                ),
+            )
+        }
+        assertTrue(
+            MusicIntentCompatibilityHooks.shouldSuppressStockPrediction(
+                triggerIntent = "{\"PlayMusic\":{\"Artist\":\"Drake\"}}",
+                minDistance = 1.804670,
+                strictRadius = 1.511992,
+                utterance = "Play Drake's most controversial song from 2013.",
+            ),
+        )
+    }
+
+    @Test
+    fun `direct catalog and transport music remain stock owned`() {
+        listOf(
+            "Play One Dance by Drake.",
+            "Play the album Thriller by Michael Jackson.",
+            "Play my workout playlist.",
+            "Play music.",
+            "Play Best Song Ever by One Direction.",
+        ).forEach { utterance ->
+            assertFalse(
+                utterance,
+                MusicIntentCompatibilityHooks.shouldSuppressStockPrediction(
+                    triggerIntent = "PlayMusic",
+                    minDistance = 1.0,
+                    strictRadius = 1.5,
+                    utterance = utterance,
+                ),
+            )
+        }
+        assertFalse(
+            MusicIntentCompatibilityHooks.shouldSuppressStockPrediction(
+                triggerIntent = "PauseMusic",
+                minDistance = 1.0,
+                strictRadius = 1.5,
+                utterance = "Pause the music.",
             ),
         )
     }

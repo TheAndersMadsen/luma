@@ -161,6 +161,61 @@ struct CodexClient {
     workspace: PathBuf,
 }
 
+/// Owns one live app-server turn until its result has been consumed.
+///
+/// Cosmos may abandon a model future when the Pin's foreground deadline wins.
+/// Dropping an ordinary future does not cancel work already started inside the
+/// app server, so the old turn used to keep consuming the shared subscription
+/// while the next wearer request began. Interrupt it explicitly and remove its
+/// ephemeral thread whenever the caller drops us early.
+struct ActiveTurn {
+    connection: Arc<Connection>,
+    thread_id: Option<String>,
+    turn_id: String,
+}
+
+fn turn_interrupt_params(thread_id: &str, turn_id: &str) -> Value {
+    json!({ "threadId": thread_id, "turnId": turn_id })
+}
+
+impl ActiveTurn {
+    fn new(connection: Arc<Connection>, thread_id: String, turn_id: String) -> Self {
+        Self {
+            connection,
+            thread_id: Some(thread_id),
+            turn_id,
+        }
+    }
+
+    fn disarm(&mut self) -> Option<String> {
+        self.thread_id.take()
+    }
+}
+
+impl Drop for ActiveTurn {
+    fn drop(&mut self) {
+        let Some(thread_id) = self.thread_id.take() else {
+            return;
+        };
+        let turn_id = self.turn_id.clone();
+        let connection = self.connection.clone();
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        runtime.spawn(async move {
+            let _ = connection
+                .request(
+                    "turn/interrupt",
+                    turn_interrupt_params(&thread_id, &turn_id),
+                )
+                .await;
+            let _ = connection
+                .request("thread/delete", json!({ "threadId": thread_id }))
+                .await;
+        });
+    }
+}
+
 impl CodexClient {
     fn configured() -> Self {
         let state = std::env::var("COSMOS_STATE_DIR")
@@ -474,6 +529,7 @@ pub async fn complete_with_images(
         .and_then(Value::as_str)
         .ok_or(CodexError::Protocol)?
         .to_owned();
+    let mut active_turn = ActiveTurn::new(connection.clone(), thread_id.clone(), turn_id.clone());
 
     let result = tokio::time::timeout(TURN_TIMEOUT, async {
         let mut final_text = None;
@@ -508,9 +564,11 @@ pub async fn complete_with_images(
 
     // Each LLM step carries its complete transcript, so its Codex thread has no
     // durable product value. Delete it after extracting the final message.
-    let _ = connection
-        .request("thread/delete", json!({ "threadId": thread_id }))
-        .await;
+    if let Some(thread_id) = active_turn.disarm() {
+        let _ = connection
+            .request("thread/delete", json!({ "threadId": thread_id }))
+            .await;
+    }
     result
 }
 
@@ -612,5 +670,13 @@ mod tests {
 
         let standard = thread_start_params("gpt-test", false, "/tmp");
         assert!(standard.get("serviceTier").is_none());
+    }
+
+    #[test]
+    fn interrupted_model_steps_target_the_exact_ephemeral_turn() {
+        assert_eq!(
+            turn_interrupt_params("thread-7", "turn-3"),
+            json!({ "threadId": "thread-7", "turnId": "turn-3" }),
+        );
     }
 }

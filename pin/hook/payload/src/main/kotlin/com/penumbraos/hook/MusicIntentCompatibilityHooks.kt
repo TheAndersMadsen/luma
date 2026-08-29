@@ -65,6 +65,30 @@ object MusicIntentCompatibilityHooks {
         "top song",
         "top track",
     )
+    private val rankedMusicSelection = Regex(
+        "\\b(?:most\\s+(?:popular|viral|controversial|streamed|played|famous|successful|" +
+            "influential|underrated)|best|top|biggest|greatest|hottest|viral|controversial|" +
+            "trending)\\s+(?:song|songs|track|tracks|music|album|albums|playlist|playlists|" +
+            "hit|hits)\\b",
+        RegexOption.IGNORE_CASE,
+    )
+    private val timeBoundMusicSelection = Regex(
+        "\\b(?:from|in|of|released\\s+in)\\s+(?:19|20)\\d{2}\\b",
+        RegexOption.IGNORE_CASE,
+    )
+    private val currentMusicSelection = Regex(
+        "\\b(?:latest|current|newest|trending|right\\s+now)\\b",
+        RegexOption.IGNORE_CASE,
+    )
+    private val musicNoun = Regex(
+        "\\b(?:song|songs|track|tracks|music|album|albums|playlist|playlists|hit|hits)\\b",
+        RegexOption.IGNORE_CASE,
+    )
+    private val researchThenPlay = Regex(
+        "^(?:please\\s+)?(?:look\\s+up|lookup|research|search(?:\\s+for)?|find(?:\\s+out)?)\\b.*" +
+            "\\b(?:play|put\\s+on|listen\\s+to)\\b",
+        RegexOption.IGNORE_CASE,
+    )
 
     private val pause = Regex(
         "^$politePrefix(?:pause|stop)(?:\\s+(?:the\\s+)?(?:music|song|track|playback))?$",
@@ -135,18 +159,17 @@ object MusicIntentCompatibilityHooks {
                     "${error.javaClass.simpleName}: ${error.message}",
             )
         }
-        installLoosePauseGuard(classLoader)
+        installStockPredictionGuards(classLoader)
     }
 
     /**
-     * Stock accepts the triggering model's wider autocomplete radius before it
-     * reaches remote Synapse. On the production model, "I ate one banana" lands
-     * inside that loose radius for PauseMusic but outside the strict radius, so
-     * the food request launches Music and never reaches Cosmos. Keep exact
-     * local aliases and strict model matches offline, but let an unrelated loose
-     * match fall through to the normal remote interpreter.
+     * Stock accepts the triggering model before remote Synapse. Its PlayMusic
+     * NER keeps only an artist and discards ranking/year qualifiers, while the
+     * wider autocomplete radius can also turn unrelated speech into PauseMusic.
+     * Keep exact catalog requests and transport controls local, but let those
+     * lossy predictions fall through to the normal Cosmos interpreter.
      */
-    private fun installLoosePauseGuard(classLoader: ClassLoader) {
+    private fun installStockPredictionGuards(classLoader: ClassLoader) {
         try {
             val predictionClass = classLoader.loadClass(
                 "humaneinternal.system.intent.TriggeringPrediction",
@@ -173,7 +196,7 @@ object MusicIntentCompatibilityHooks {
                         val strictRadius = (strictRadiusField.get(prediction) as? Number)
                             ?.toDouble() ?: return
                         if (
-                            shouldSuppressLoosePause(
+                            shouldSuppressStockPrediction(
                                 triggerIntent,
                                 minDistance,
                                 strictRadius,
@@ -181,7 +204,7 @@ object MusicIntentCompatibilityHooks {
                             )
                         ) {
                             param.result = null
-                            Log.w(TAG, "Suppressed loose PauseMusic prediction outside strict radius")
+                            Log.w(TAG, "Suppressed stock music prediction that requires Cosmos")
                         }
                     } catch (error: Throwable) {
                         Log.e(
@@ -191,24 +214,29 @@ object MusicIntentCompatibilityHooks {
                     }
                 }
             })
-            Log.w(TAG, "  Loose PauseMusic prediction guard installed")
+            Log.w(TAG, "  Stock music prediction guards installed")
         } catch (error: Throwable) {
             Log.e(
                 TAG,
-                "Loose PauseMusic prediction guard install failed: " +
+                "Stock music prediction guards install failed: " +
                     "${error.javaClass.simpleName}: ${error.message}",
             )
         }
     }
 
-    internal fun shouldSuppressLoosePause(
+    internal fun shouldSuppressStockPrediction(
         triggerIntent: String,
         minDistance: Double,
         strictRadius: Double,
         utterance: String,
     ): Boolean {
-        val pauseIntent = triggerIntent == TierASymbols.NativeActions.PAUSE_MUSIC ||
-            triggerIntent == "{\"${TierASymbols.NativeActions.PAUSE_MUSIC}\":{}}"
+        val playIntent = triggerIntent == "Play" ||
+            isNativeIntent(triggerIntent, TierASymbols.NativeActions.PLAY_MUSIC)
+        if (playIntent && requiresCosmosMusicPlanning(utterance)) {
+            return true
+        }
+
+        val pauseIntent = isNativeIntent(triggerIntent, TierASymbols.NativeActions.PAUSE_MUSIC)
         if (
             !pauseIntent ||
             !minDistance.isFinite() ||
@@ -220,6 +248,25 @@ object MusicIntentCompatibilityHooks {
         }
         return parse(utterance)?.name != TierASymbols.NativeActions.PAUSE_MUSIC
     }
+
+    private fun requiresCosmosMusicPlanning(rawUtterance: String): Boolean {
+        if (parse(rawUtterance)?.name == TierASymbols.NativeActions.PLAY_MUSIC) {
+            return false
+        }
+        val utterance = rawUtterance
+            .trim()
+            .trimEnd('.', '?', '!')
+            .replace(Regex("\\s+"), " ")
+        if (!musicNoun.containsMatchIn(utterance)) return false
+
+        return rankedMusicSelection.containsMatchIn(utterance) ||
+            timeBoundMusicSelection.containsMatchIn(utterance) ||
+            currentMusicSelection.containsMatchIn(utterance) ||
+            researchThenPlay.containsMatchIn(utterance)
+    }
+
+    private fun isNativeIntent(value: String, action: String): Boolean =
+        value == action || value.startsWith("{\"$action\":")
 
     internal fun parse(rawUtterance: String): NativeMusicAction? {
         val utterance = rawUtterance
