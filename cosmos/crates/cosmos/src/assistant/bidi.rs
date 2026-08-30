@@ -467,6 +467,9 @@ impl BidiSession {
         let mut tool_context = self.tools.clone();
         tool_context.deadline = Some(run_deadline);
         let mut initial_model_retry_available = true;
+        let mut music_research_completed = false;
+        let mut music_provider_retry_available = true;
+        let mut music_provider_retry_pending = false;
         let mut completed_server_calls = std::collections::HashMap::<String, String>::new();
 
         if future_weather {
@@ -544,6 +547,13 @@ impl BidiSession {
                 }
             } else {
                 run.note_model_step();
+                let model_step_budget = if music_provider_retry_pending {
+                    super::engine::music_extraction_step_timeout(budget_left)
+                } else {
+                    budget_left
+                        .saturating_sub(Duration::from_millis(750))
+                        .min(MODEL_STEP_TIMEOUT)
+                };
                 match self
                     .step(
                         &messages,
@@ -552,9 +562,7 @@ impl BidiSession {
                         // budget it has (minus streaming reserve), bounded by the
                         // anti-hang ceiling — not a fixed cap that fires with budget
                         // to spare.
-                        budget_left
-                            .saturating_sub(Duration::from_millis(750))
-                            .min(MODEL_STEP_TIMEOUT),
+                        model_step_budget,
                         inbound,
                     )
                     .await
@@ -563,7 +571,10 @@ impl BidiSession {
                         run.supersede();
                         return Flow::Supersede(req);
                     }
-                    Step::Answer(r) => r,
+                    Step::Answer(r) => {
+                        music_provider_retry_pending = false;
+                        r
+                    }
                     Step::Failed(outcome) => {
                         if initial_model_retry_available
                             && outcome == "model_unreachable"
@@ -1047,6 +1058,7 @@ impl BidiSession {
                     .any(|call| matches!(call.name.as_str(), "web_search" | "ask_online"))
             {
                 super::engine::retire_music_research_tools(&mut tools);
+                music_research_completed = true;
             }
 
             if terminal_music {
@@ -1067,6 +1079,17 @@ impl BidiSession {
                         Ok(()) => Flow::Done,
                         Err(()) => Flow::Closed,
                     };
+                }
+                if music_research_completed
+                    && super::engine::can_retry_music_provider_miss(
+                        music_provider_retry_available,
+                        observation,
+                        run_deadline.saturating_duration_since(std::time::Instant::now()),
+                    )
+                {
+                    music_provider_retry_available = false;
+                    music_provider_retry_pending = true;
+                    continue;
                 }
                 let spoken = if observation == TOOL_TIMED_OUT {
                     crate::backends::music_discovery::MusicDiscoveryError::Deadline.observation()
@@ -2233,6 +2256,125 @@ mod tests {
             serde_json::json!({"Artist": "Drake", "Track": "Started From the Bottom"})
         );
         assert_eq!(model.0.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn provider_miss_retries_one_different_researched_candidate_on_bidi() {
+        #[derive(Default)]
+        struct FirstCandidateMisses {
+            requests:
+                std::sync::Mutex<Vec<crate::backends::music_discovery::MusicDiscoveryRequest>>,
+        }
+
+        #[tonic::async_trait]
+        impl crate::backends::music_discovery::MusicDiscoveryBackend for FirstCandidateMisses {
+            async fn discover(
+                &self,
+                request: crate::backends::music_discovery::MusicDiscoveryRequest,
+                _principal: &str,
+                _deadline: Option<std::time::Instant>,
+            ) -> Result<
+                crate::backends::music_discovery::GroundedMusicTrack,
+                crate::backends::music_discovery::MusicDiscoveryError,
+            > {
+                let title = request.title.clone().unwrap_or_default();
+                self.requests.lock().unwrap().push(request);
+                if title == "Versace (Drake Remix)" {
+                    return Err(
+                        crate::backends::music_discovery::MusicDiscoveryError::ProviderNoMatch,
+                    );
+                }
+                Ok(crate::backends::music_discovery::GroundedMusicTrack {
+                    title,
+                    artist: "Drake".to_owned(),
+                    provider: "youtube_music".to_owned(),
+                    ranking_provenance: "not_ranked".to_owned(),
+                    discovery_provenance: "foreground_agent_web".to_owned(),
+                })
+            }
+        }
+
+        let model = Arc::new(MockChatModel::new(vec![
+            ChatResponse {
+                tool_call: Some(ToolCall {
+                    name: "ask_online".to_owned(),
+                    arguments: serde_json::json!({
+                        "query": "Drake's most controversial song released in 2013"
+                    })
+                    .to_string(),
+                }),
+                ..Default::default()
+            },
+            ChatResponse {
+                tool_call: Some(ToolCall {
+                    name: "music_discover".to_owned(),
+                    arguments: serde_json::json!({
+                        "artist": "Drake",
+                        "title": "Versace (Drake Remix)",
+                        "criterion": "most controversial",
+                        "timeframe": "all_time",
+                        "year": 2013
+                    })
+                    .to_string(),
+                }),
+                ..Default::default()
+            },
+            ChatResponse {
+                tool_call: Some(ToolCall {
+                    name: "music_discover".to_owned(),
+                    arguments: serde_json::json!({
+                        "artist": "Drake",
+                        "title": "Worst Behavior",
+                        "criterion": "most controversial",
+                        "timeframe": "all_time",
+                        "year": 2013
+                    })
+                    .to_string(),
+                }),
+                ..Default::default()
+            },
+        ]));
+        let backend = Arc::new(FirstCandidateMisses::default());
+        let (tx, rx) = mpsc::channel(16);
+        let mut out = BidiSession::spawn_tuned(
+            model,
+            Entitlement::Active,
+            catalog::ToolContext {
+                principal: Some("V:01:D:pin-01:U:wearer-01".to_owned()),
+                music_discovery: Some(backend.clone()),
+                answer_engine_available: true,
+                ..Default::default()
+            },
+            ReceiverStream::new(rx),
+            Duration::from_secs(20),
+            Duration::from_secs(20),
+        );
+        tx.send(Ok(understanding(
+            "Play Drake's most controversial song from 2013",
+        )))
+        .await
+        .unwrap();
+        drop(tx);
+
+        let mut messages = Vec::new();
+        while let Some(message) = out.next().await {
+            messages.push(message.unwrap());
+        }
+        let requests = backend.requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].title.as_deref(), Some("Versace (Drake Remix)"));
+        assert_eq!(requests[1].title.as_deref(), Some("Worst Behavior"));
+        drop(requests);
+        let terminal = messages
+            .iter()
+            .rev()
+            .find_map(action_of)
+            .expect("the fallback candidate must produce a terminal action");
+        assert_eq!(terminal.action, "PlayMusic");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&terminal.input).unwrap(),
+            serde_json::json!({"Artist": "Drake", "Track": "Worst Behavior"})
+        );
     }
 
     #[tokio::test]

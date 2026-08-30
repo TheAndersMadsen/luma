@@ -159,7 +159,8 @@ export const ASSISTANT_CASES = Object.freeze([
     requiredActions: ["music_discover", "PlayMusic"],
     requiredActionGroups: [["ask_online", "web_search"]],
     forbiddenActions: ["Respond"],
-    exactActionCounts: { music_discover: 1, PlayMusic: 1 },
+    exactActionCounts: { PlayMusic: 1 },
+    allowedActionCounts: { music_discover: [1, 2] },
     exactActionGroupCounts: [{ actions: ["ask_online", "web_search"], count: 1 }],
     providerGroundedMusic: true,
     route: "a2",
@@ -819,6 +820,11 @@ export function evaluateAssistantCase(spec, trace, beforeScrape, afterScrape) {
       failures.push(`action_count:${action}`);
     }
   }
+  for (const [action, allowed] of Object.entries(spec.allowedActionCounts ?? {})) {
+    if (!allowed.includes(actions.filter((name) => name === action).length)) {
+      failures.push(`action_count:${action}`);
+    }
+  }
   for (const group of spec.exactActionGroupCounts ?? []) {
     const count = actions.filter((name) => group.actions.includes(name)).length;
     if (count !== group.count) failures.push(`action_group_count:${group.actions.join("|")}`);
@@ -884,7 +890,7 @@ export function evaluateAssistantCase(spec, trace, beforeScrape, afterScrape) {
     }
   }
   if (spec.providerGroundedMusic) {
-    const observation = steps.find(
+    const observation = steps.findLast(
       (step) => step?.kind === "observation" && step?.name === "music_discover",
     );
     const playback = steps.find(

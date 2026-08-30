@@ -251,7 +251,10 @@ playback request then verifies that exact candidate against the active provider;
 only the grounded provider result becomes a stock `PlayMusic` action. The model
 chooses this path for requests such as “play the most popular song by Drake”;
 no artist-only shortcut selects the provider's first row, and provider
-verification never repeats the research step. Play, pause, stop, and skip
+verification never repeats the research step. If the first researched candidate
+is absent from the active provider but the same research named a different exact
+candidate, the agent may verify that second candidate once; title and artist
+guards remain unchanged. Play, pause, stop, and skip
 execute on the Pin once recognized; speech recognition may still use Cosmos.
 
 Navigation requests first obtain the Pin's current location, then use the

@@ -232,7 +232,8 @@ test("ranked playback evaluates as the configured wearer without exposing that i
     assert.equal(spec.simulateUnlockedPin, true);
     assert.deepEqual(spec.requiredActions, ["music_discover", "PlayMusic"]);
     assert.deepEqual(spec.requiredActionGroups, [["ask_online", "web_search"]]);
-    assert.deepEqual(spec.exactActionCounts, { music_discover: 1, PlayMusic: 1 });
+    assert.deepEqual(spec.exactActionCounts, { PlayMusic: 1 });
+    assert.deepEqual(spec.allowedActionCounts, { music_discover: [1, 2] });
     assert.deepEqual(spec.exactActionGroupCounts, [{ actions: ["ask_online", "web_search"], count: 1 }]);
     assert.equal(spec.providerGroundedMusic, true);
     assert.equal(spec.route, "a2");
@@ -284,6 +285,39 @@ test("ranked playback requires one research tool and provider-grounded action da
   };
 
   assert.equal(evaluateAssistantCase(spec, trace, before, after).pass, true);
+
+  const recoveredProviderMiss = structuredClone(trace);
+  recoveredProviderMiss.steps.splice(
+    2,
+    0,
+    {
+      kind: "action",
+      name: "music_discover",
+      input: JSON.stringify({
+        artist: "Drake",
+        title: "Versace (Drake Remix)",
+        criterion: "viral",
+        timeframe: "all_time",
+      }),
+    },
+    {
+      kind: "observation",
+      name: "music_discover",
+      text: "A likely track was found, but it is not available on the active music provider.",
+    },
+  );
+  assert.equal(
+    evaluateAssistantCase(spec, recoveredProviderMiss, before, after).pass,
+    true,
+  );
+
+  const tooManyCandidates = structuredClone(recoveredProviderMiss);
+  tooManyCandidates.steps.splice(4, 0, ...recoveredProviderMiss.steps.slice(2, 4));
+  assert.ok(
+    evaluateAssistantCase(spec, tooManyCandidates, before, after).failures.includes(
+      "action_count:music_discover",
+    ),
+  );
 
   const noResearch = structuredClone(trace);
   noResearch.steps.splice(0, 2);

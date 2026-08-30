@@ -227,10 +227,28 @@ const MUSIC_EXTRACTION_STEP_LIMIT: std::time::Duration = std::time::Duration::fr
 /// maximally slow initial model step.
 const MUSIC_POST_RESEARCH_RESERVE: std::time::Duration = std::time::Duration::from_millis(18_750);
 
-fn music_extraction_step_timeout(remaining: std::time::Duration) -> std::time::Duration {
+pub(super) fn music_extraction_step_timeout(remaining: std::time::Duration) -> std::time::Duration {
     remaining
         .saturating_sub(crate::backends::music_discovery::PROVIDER_MAX + TERMINAL_RESERVE)
         .min(MUSIC_EXTRACTION_STEP_LIMIT)
+}
+
+/// A provider miss can reflect an imprecise public-web credit rather than an
+/// absent catalog item. Give the foreground agent one chance to verify a
+/// different candidate already present in the completed research result. The
+/// retry stays closed for every other failure and starts only when enough of
+/// the shared Pin deadline remains for another extraction step, provider
+/// lookup, and terminal action.
+pub(super) fn can_retry_music_provider_miss(
+    retry_available: bool,
+    observation: &str,
+    remaining: std::time::Duration,
+) -> bool {
+    retry_available
+        && observation
+            == crate::backends::music_discovery::MusicDiscoveryError::ProviderNoMatch.observation()
+        && remaining
+            > crate::backends::music_discovery::PROVIDER_MAX + TERMINAL_RESERVE + MIN_TOOL_WINDOW
 }
 
 fn tool_reserve_for(
@@ -655,6 +673,7 @@ impl Engine {
         tool_context.deadline = Some(run_deadline);
 
         let mut music_research_completed = false;
+        let mut music_provider_retry_available = true;
         let mut initial_model_retry_available = true;
         let mut completed_server_calls = std::collections::HashMap::<String, String>::new();
         for step in 0..ACTION_LIMIT {
@@ -1295,6 +1314,16 @@ impl Engine {
                             settlement_started.elapsed(),
                         );
                         return;
+                    }
+                    if music_research_completed
+                        && can_retry_music_provider_miss(
+                            music_provider_retry_available,
+                            &observation,
+                            run_deadline.saturating_duration_since(std::time::Instant::now()),
+                        )
+                    {
+                        music_provider_retry_available = false;
+                        continue;
                     }
                     let spoken = if observation == TOOL_TIMED_OUT {
                         crate::backends::music_discovery::MusicDiscoveryError::Deadline
@@ -5087,6 +5116,116 @@ mod tests {
         assert_eq!(
             input["Response"],
             crate::backends::music_discovery::MusicDiscoveryError::Ambiguous.observation()
+        );
+    }
+
+    #[tokio::test]
+    async fn provider_miss_retries_one_different_researched_candidate_before_playback() {
+        #[derive(Default)]
+        struct FirstCandidateMisses {
+            requests:
+                std::sync::Mutex<Vec<crate::backends::music_discovery::MusicDiscoveryRequest>>,
+        }
+
+        #[tonic::async_trait]
+        impl crate::backends::music_discovery::MusicDiscoveryBackend for FirstCandidateMisses {
+            async fn discover(
+                &self,
+                request: crate::backends::music_discovery::MusicDiscoveryRequest,
+                _principal: &str,
+                _deadline: Option<std::time::Instant>,
+            ) -> Result<
+                crate::backends::music_discovery::GroundedMusicTrack,
+                crate::backends::music_discovery::MusicDiscoveryError,
+            > {
+                let title = request.title.clone().unwrap_or_default();
+                self.requests.lock().unwrap().push(request);
+                if title == "Versace (Drake Remix)" {
+                    return Err(
+                        crate::backends::music_discovery::MusicDiscoveryError::ProviderNoMatch,
+                    );
+                }
+                Ok(crate::backends::music_discovery::GroundedMusicTrack {
+                    title,
+                    artist: "Drake".to_owned(),
+                    provider: "youtube_music".to_owned(),
+                    ranking_provenance: "not_ranked".to_owned(),
+                    discovery_provenance: "foreground_agent_web".to_owned(),
+                })
+            }
+        }
+
+        let model = Arc::new(MockChatModel::new(vec![
+            ChatResponse {
+                tool_call: Some(ToolCall {
+                    name: "ask_online".to_owned(),
+                    arguments: serde_json::json!({
+                        "query": "Drake's most controversial song released in 2013"
+                    })
+                    .to_string(),
+                }),
+                ..Default::default()
+            },
+            ChatResponse {
+                tool_call: Some(ToolCall {
+                    name: "music_discover".to_owned(),
+                    arguments: serde_json::json!({
+                        "artist": "Drake",
+                        "title": "Versace (Drake Remix)",
+                        "criterion": "most controversial",
+                        "timeframe": "all_time",
+                        "year": 2013
+                    })
+                    .to_string(),
+                }),
+                ..Default::default()
+            },
+            ChatResponse {
+                tool_call: Some(ToolCall {
+                    name: "music_discover".to_owned(),
+                    arguments: serde_json::json!({
+                        "artist": "Drake",
+                        "title": "Worst Behavior",
+                        "criterion": "most controversial",
+                        "timeframe": "all_time",
+                        "year": 2013
+                    })
+                    .to_string(),
+                }),
+                ..Default::default()
+            },
+        ]));
+        let backend = Arc::new(FirstCandidateMisses::default());
+        let msgs = run_with_tools(
+            model,
+            pb::SynapseUnderstandingRequest {
+                utterance: "Play Drake's most controversial song from 2013".to_owned(),
+                device_context: Some(pb::SynapseDeviceContext::default()),
+                ..Default::default()
+            },
+            catalog::ToolContext {
+                principal: Some("V:01:D:pin-01:U:wearer-01".to_owned()),
+                music_discovery: Some(backend.clone()),
+                answer_engine_available: true,
+                ..Default::default()
+            },
+        )
+        .await;
+
+        let requests = backend.requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].title.as_deref(), Some("Versace (Drake Remix)"));
+        assert_eq!(requests[1].title.as_deref(), Some("Worst Behavior"));
+        drop(requests);
+        let terminal = device_visible(&msgs)
+            .into_iter()
+            .rev()
+            .find_map(as_action)
+            .expect("the fallback candidate must produce a terminal action");
+        assert_eq!(terminal.action, "PlayMusic");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&terminal.input).unwrap(),
+            serde_json::json!({"Artist": "Drake", "Track": "Worst Behavior"})
         );
     }
 

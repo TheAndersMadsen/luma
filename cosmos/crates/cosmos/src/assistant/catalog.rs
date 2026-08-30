@@ -93,7 +93,10 @@ pub fn system_prompt() -> &'static str {
      answer from that research and do not touch their music provider. If they \
      explicitly ask to play it, call `music_discover` after research with the \
      exact title and artist; it verifies the track against the active provider \
-     before playback.\n\
+     before playback. If the provider rejects that candidate and the completed \
+     research named a different exact candidate, call `music_discover` once more \
+     with that different title and artist. Do not repeat the research or retry \
+     the same candidate.\n\
      \n\
      A question about the pin's OWN state — the current time, the battery level, \
      the volume, whether Wi-Fi, Bluetooth, or airplane mode is on, whether the \
