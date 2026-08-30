@@ -199,9 +199,11 @@ test("YouTube Music keeps connected OAuth credentials out of public catalog sear
   t.after(() => {
     Innertube.create = originalCreate;
   });
+  let createCount = 0;
   let createOptions;
   let searchCall;
   Innertube.create = async (options) => {
+    createCount += 1;
     createOptions = options;
     return {
       session: {
@@ -239,6 +241,8 @@ test("YouTube Music keeps connected OAuth credentials out of public catalog sear
       explicit: false,
     }],
   );
+  await youtube.queryYoutubeMusic(subject, { kind: "track", primary: "Drake", limit: 10 });
+  assert.equal(createCount, 1, "repeat catalog queries must reuse the initialized client");
   assert.equal(createOptions.retrieve_player, false);
   assert.deepEqual(searchCall, { query: "Drake", filters: { type: "song" } });
 });

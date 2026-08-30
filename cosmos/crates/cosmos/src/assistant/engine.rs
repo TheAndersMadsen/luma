@@ -116,6 +116,14 @@ fn step_timeout_for(remaining: std::time::Duration) -> std::time::Duration {
         .min(MODEL_STEP_TIMEOUT)
 }
 
+fn can_retry_initial_model(
+    retry_available: bool,
+    has_tool_result: bool,
+    remaining: std::time::Duration,
+) -> bool {
+    retry_available && !has_tool_result && remaining > TERMINAL_RESERVE + MIN_TOOL_WINDOW
+}
+
 /// Total wall-clock budget for the whole turn. The signed Hook raises the exact
 /// inspected Ironman `AIMIC_TIMEOUT_MS` from 25s to 90s before `AIBusService`
 /// initializes. Keep this run below that outer deadline so gRPC never discards
@@ -213,10 +221,11 @@ const ANSWER_RESERVE: std::time::Duration = std::time::Duration::from_secs(7);
 const MUSIC_EXTRACTION_STEP_LIMIT: std::time::Duration = std::time::Duration::from_secs(8);
 
 /// Minimum time a ranked playback turn must retain after its one research
-/// lookup: 5.5s for title/artist extraction, 4.5s for active-provider
+/// lookup: 8s for title/artist extraction, 10s for two bounded active-provider
 /// verification, and 750ms to stream the terminal PlayMusic or spoken failure.
-/// Earlier research completion can extend extraction toward its 8s ceiling.
-const MUSIC_POST_RESEARCH_RESERVE: std::time::Duration = std::time::Duration::from_millis(10_750);
+/// The 70s foreground budget still leaves more than 28s for research after a
+/// maximally slow initial model step.
+const MUSIC_POST_RESEARCH_RESERVE: std::time::Duration = std::time::Duration::from_millis(18_750);
 
 fn music_extraction_step_timeout(remaining: std::time::Duration) -> std::time::Duration {
     remaining
@@ -687,13 +696,14 @@ impl Engine {
             let resp = match resolved {
                 Ok(Ok(response)) => response,
                 Ok(Err(error)) => {
-                    if initial_model_retry_available
-                        && matches!(error, super::llm::LlmError::Transport(_))
-                        && !messages
-                            .iter()
-                            .any(|message| message.role == Role::ToolResult)
-                        && run_deadline.saturating_duration_since(std::time::Instant::now())
-                            > TERMINAL_RESERVE
+                    if matches!(error, super::llm::LlmError::Transport(_))
+                        && can_retry_initial_model(
+                            initial_model_retry_available,
+                            messages
+                                .iter()
+                                .any(|message| message.role == Role::ToolResult),
+                            run_deadline.saturating_duration_since(std::time::Instant::now()),
+                        )
                     {
                         initial_model_retry_available = false;
                         continue;
@@ -725,6 +735,16 @@ impl Engine {
                 // The step outran its slice of the turn budget. This one really
                 // is a deadline.
                 Err(_elapsed) => {
+                    if can_retry_initial_model(
+                        initial_model_retry_available,
+                        messages
+                            .iter()
+                            .any(|message| message.role == Role::ToolResult),
+                        run_deadline.saturating_duration_since(std::time::Instant::now()),
+                    ) {
+                        initial_model_retry_available = false;
+                        continue;
+                    }
                     if messages
                         .iter()
                         .any(|message| message.role == Role::ToolResult)
@@ -4588,8 +4608,8 @@ mod tests {
     }
 
     #[test]
-    fn early_music_research_completion_uses_slack_for_observed_extraction_latency() {
-        let remaining = std::time::Duration::from_millis(13_800);
+    fn ranked_music_reserve_covers_observed_extraction_latency() {
+        let remaining = MUSIC_POST_RESEARCH_RESERVE;
         let extraction = music_extraction_step_timeout(remaining);
 
         assert!(
@@ -4600,6 +4620,11 @@ mod tests {
             remaining.saturating_sub(extraction)
                 >= crate::backends::music_discovery::PROVIDER_MAX + TERMINAL_RESERVE,
             "using research slack must still preserve provider verification and terminal streaming"
+        );
+        assert!(
+            RUN_BUDGET.saturating_sub(MODEL_STEP_TIMEOUT)
+                > MUSIC_POST_RESEARCH_RESERVE + MIN_TOOL_WINDOW,
+            "a maximally slow initial model step must still leave room to admit the ranked-music research tool"
         );
     }
 
@@ -7249,6 +7274,30 @@ mod step_budget_tests {
             "the observed first planner step must finish before the server ceiling",
         );
         assert!(step_timeout_for(Duration::from_millis(14_600)) > Duration::from_secs(10));
+    }
+
+    #[test]
+    fn an_initial_step_timeout_gets_one_retry_while_the_run_has_room() {
+        assert!(can_retry_initial_model(
+            true,
+            false,
+            RUN_BUDGET - MODEL_STEP_TIMEOUT,
+        ));
+        assert!(!can_retry_initial_model(
+            false,
+            false,
+            RUN_BUDGET - MODEL_STEP_TIMEOUT,
+        ));
+        assert!(!can_retry_initial_model(
+            true,
+            true,
+            RUN_BUDGET - MODEL_STEP_TIMEOUT,
+        ));
+        assert!(!can_retry_initial_model(
+            true,
+            false,
+            TERMINAL_RESERVE + MIN_TOOL_WINDOW,
+        ));
     }
 
     /// Never longer than what is left, and never negative.

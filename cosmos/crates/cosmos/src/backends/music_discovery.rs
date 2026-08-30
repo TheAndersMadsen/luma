@@ -33,7 +33,8 @@ const WEB_RESEARCH_MAX: Duration = Duration::from_millis(1_500);
 const CORROBORATION_MAX: Duration = Duration::from_millis(3_500);
 #[cfg(test)]
 const CORROBORATION_MIN: Duration = Duration::from_millis(1_500);
-pub(crate) const PROVIDER_MAX: Duration = Duration::from_millis(4_500);
+const PROVIDER_ATTEMPT_MAX: Duration = Duration::from_millis(4_500);
+pub(crate) const PROVIDER_MAX: Duration = Duration::from_secs(10);
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct MusicDiscoveryRequest {
@@ -505,20 +506,46 @@ async fn verify_candidates(
     // later. Retry only that one already-researched candidate; multiple
     // candidates already give the provider independent exact-match chances.
     let passes = if candidates.len() == 1 { 2 } else { 1 };
-    for _ in 0..passes {
+    let mut last_error = MusicDiscoveryError::ProviderNoMatch;
+    for pass in 0..passes {
         for (index, candidate) in candidates.iter().enumerate() {
-            let response = tokio::time::timeout_at(
-                provider_deadline,
+            let attempt_deadline =
+                provider_deadline.min(tokio::time::Instant::now() + PROVIDER_ATTEMPT_MAX);
+            let response = match tokio::time::timeout_at(
+                attempt_deadline,
                 catalog.query(candidate, principal, admin_token),
             )
             .await
-            .map_err(|_| MusicDiscoveryError::Deadline)??;
+            {
+                Ok(Ok(response)) => response,
+                Ok(Err(error)) => {
+                    last_error = error;
+                    if candidates.len() == 1
+                        && pass + 1 < passes
+                        && matches!(
+                            error,
+                            MusicDiscoveryError::Deadline | MusicDiscoveryError::Unavailable
+                        )
+                    {
+                        continue;
+                    }
+                    return Err(error);
+                }
+                Err(_) => {
+                    last_error = MusicDiscoveryError::Deadline;
+                    if candidates.len() == 1 && pass + 1 < passes {
+                        continue;
+                    }
+                    return Err(MusicDiscoveryError::Deadline);
+                }
+            };
             if let Ok(track) = grounded_candidate(candidate, response, discovery_provenance) {
                 return Ok((track, index));
             }
+            last_error = MusicDiscoveryError::ProviderNoMatch;
         }
     }
-    Err(MusicDiscoveryError::ProviderNoMatch)
+    Err(last_error)
 }
 
 fn stage_budget(
@@ -1392,6 +1419,13 @@ mod tests {
         queries: std::sync::Mutex<Vec<String>>,
     }
 
+    struct TransientProviderCatalog {
+        responses: std::sync::Mutex<
+            std::collections::VecDeque<Result<CenterCatalogResponse, MusicDiscoveryError>>,
+        >,
+        queries: std::sync::Mutex<Vec<String>>,
+    }
+
     struct WebAwareResearch {
         web_queries: std::sync::Mutex<Vec<String>>,
         candidate_evidence: std::sync::Mutex<Vec<Option<String>>>,
@@ -1472,6 +1506,23 @@ mod tests {
                 .unwrap()
                 .pop_front()
                 .ok_or(MusicDiscoveryError::Unavailable)
+        }
+    }
+
+    #[tonic::async_trait]
+    impl ProviderCatalog for TransientProviderCatalog {
+        async fn query(
+            &self,
+            candidate: &Candidate,
+            _principal: &str,
+            _admin_token: &str,
+        ) -> Result<CenterCatalogResponse, MusicDiscoveryError> {
+            self.queries.lock().unwrap().push(candidate.title.clone());
+            self.responses
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or(Err(MusicDiscoveryError::Unavailable))
         }
     }
 
@@ -1587,6 +1638,43 @@ mod tests {
         )
         .await
         .expect("one transient provider miss should not discard an exact researched track");
+
+        assert_eq!(index, 0);
+        assert_eq!(track.title, candidate.title);
+        assert_eq!(
+            *catalog.queries.lock().unwrap(),
+            vec![candidate.title.clone(), candidate.title]
+        );
+    }
+
+    #[tokio::test]
+    async fn one_researched_candidate_retries_a_transient_provider_deadline() {
+        let candidate = candidate("One Dance", 100);
+        let catalog = TransientProviderCatalog {
+            responses: std::sync::Mutex::new(std::collections::VecDeque::from([
+                Err(MusicDiscoveryError::Deadline),
+                Ok(CenterCatalogResponse {
+                    provider: "youtube_music".to_owned(),
+                    ranking_provenance: "not_ranked".to_owned(),
+                    items: vec![CenterTrack {
+                        title: candidate.title.clone(),
+                        artists: vec![candidate.artist.clone()],
+                    }],
+                }),
+            ])),
+            queries: std::sync::Mutex::new(Vec::new()),
+        };
+
+        let (track, index) = verify_candidates(
+            std::slice::from_ref(&candidate),
+            &catalog,
+            "wearer",
+            "admin-token",
+            tokio::time::Instant::now() + Duration::from_secs(1),
+            "foreground_agent_web",
+        )
+        .await
+        .expect("one transient provider deadline should retry the exact researched track");
 
         assert_eq!(index, 0);
         assert_eq!(track.title, candidate.title);

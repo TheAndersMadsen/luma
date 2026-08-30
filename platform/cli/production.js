@@ -12,7 +12,7 @@ const { validateProductionArtifacts } = require('./production-setup');
 const DOCTOR_USAGE = './revival doctor production [--env-file FILE] [--project-name NAME]';
 const DEPLOY_USAGE = './revival deploy production (--dry-run | --confirm) [--env-file FILE] [--project-name NAME] [--wait-timeout SECONDS]';
 const VERIFY_USAGE = './revival verify production [--env-file FILE] [--project-name NAME]';
-const EVAL_USAGE = './revival eval assistant production [--repeat N] [--json] [--env-file FILE] [--project-name NAME]';
+const EVAL_USAGE = './revival eval assistant production [--repeat N] [--case ID] [--json] [--env-file FILE] [--project-name NAME]';
 
 function parseProductionOptions(args, { deploy = false } = {}) {
   const values = new Set(['--env-file', '--project-name', ...(deploy ? ['--wait-timeout'] : [])]);
@@ -114,7 +114,10 @@ function evaluateAssistant(args) {
   const seen = new Set();
   for (let index = 0; index < options.length; index += 1) {
     const option = options[index];
-    if (seen.has(option) || !['--repeat', '--json', '--env-file', '--project-name'].includes(option)) {
+    if (
+      seen.has(option) ||
+      !['--repeat', '--case', '--json', '--env-file', '--project-name'].includes(option)
+    ) {
       fail(`usage: ${EVAL_USAGE}`, 64);
     }
     seen.add(option);

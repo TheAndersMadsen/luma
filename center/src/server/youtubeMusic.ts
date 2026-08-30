@@ -39,6 +39,7 @@ type PendingYoutubeLogin = {
 
 const pendingLogins = new Map<string, PendingYoutubeLogin>();
 const authenticatedClients = new Map<string, Promise<YoutubeClient>>();
+const catalogClients = new Map<string, Promise<YoutubeClient>>();
 const sessionEpochs = new Map<string, number>();
 const STOCK_MIN_TRACK_DURATION_MS = 1_000;
 const STOCK_MAX_TRACK_DURATION_MS = 30 * 60 * 1_000;
@@ -381,6 +382,7 @@ export async function disconnectYoutube(subject: string): Promise<void> {
   invalidateSession(subject);
   pendingLogins.delete(subject);
   authenticatedClients.delete(subject);
+  catalogClients.delete(subject);
   if (active) {
     void active.then((client) => client.session.signOut()).catch(() => undefined);
   }
@@ -434,17 +436,28 @@ async function connectedYoutubeCatalogClient(subject: string): Promise<YoutubeCl
     if (!record.youtube_music?.credentials) {
       throw new YoutubeMusicError("Connect YouTube Music in Center.", 401);
     }
+    const existing = catalogClients.get(subject);
+    if (existing) return await existing;
     // Google currently rejects OAuth bearer tokens on the WEB_REMIX catalog
     // endpoints used by youtubei.js. The catalog itself is public, so keep the
     // saved connection as the account authority without attaching its token to
-    // search and browse requests. Account-only actions still use the signed-in
-    // client above.
-    return await Innertube.create({
+    // search and browse requests. Reuse this anonymous catalog session: creating
+    // a fresh Innertube client performs its own bootstrap request, which was the
+    // 4.5-second transient deadline seen between completed research and provider
+    // verification. Account-only actions still use the signed-in client above.
+    const loading = Innertube.create({
       fetch: adBlockingYoutubeFetch,
       retrieve_player: false,
       generate_session_locally: true,
       enable_session_cache: false,
     });
+    catalogClients.set(subject, loading);
+    try {
+      return await loading;
+    } catch (error) {
+      if (catalogClients.get(subject) === loading) catalogClients.delete(subject);
+      throw error;
+    }
   } catch (error) {
     if (error instanceof YoutubeMusicError || error instanceof MusicSessionStoreError) throw error;
     throw new YoutubeMusicError("YouTube Music catalog could not be reached.");

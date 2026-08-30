@@ -52,6 +52,32 @@ export const ASSISTANT_CASES = Object.freeze([
     route: "a1",
     terminal: "answered",
   }),
+  ...[
+    ["music-ranked-dr-dre-popular", "Play Dr. Dre’s most popular song."],
+    ["music-ranked-drake-popular", "Play the most popular song by Drake."],
+    ["music-ranked-drake-viral", "Look up the most viral song by Drake and play it."],
+    [
+      "music-ranked-drake-controversial-2013",
+      "Play Drake’s most controversial song from 2013.",
+    ],
+    [
+      "music-ranked-michael-jackson-best",
+      "Look up the best songs by Michael Jackson and play the most popular.",
+    ],
+  ].map(([id, prompt]) => Object.freeze({
+    id,
+    prompt,
+    requiredActions: ["music_discover", "PlayMusic"],
+    requiredActionGroups: [["ask_online", "web_search"]],
+    forbiddenActions: ["Respond"],
+    exactActionCounts: { music_discover: 1, PlayMusic: 1 },
+    exactActionGroupCounts: [{ actions: ["ask_online", "web_search"], count: 1 }],
+    providerGroundedMusic: true,
+    route: "a2",
+    terminal: "device_action",
+    simulateUnlockedPin: true,
+    authenticatedWearer: true,
+  })),
   Object.freeze({
     id: "fresh-web-search",
     prompt: "Search the web for the latest news in Denmark and summarize one result.",
@@ -465,6 +491,11 @@ export function evaluateAssistantCase(spec, trace, beforeScrape, afterScrape) {
   for (const required of spec.requiredActions) {
     if (!actions.includes(required)) failures.push(`missing_action:${required}`);
   }
+  for (const group of spec.requiredActionGroups ?? []) {
+    if (!group.some((action) => actions.includes(action))) {
+      failures.push(`missing_action_group:${group.join("|")}`);
+    }
+  }
   for (const forbidden of spec.forbiddenActions) {
     if (actions.includes(forbidden)) failures.push(`forbidden_action:${forbidden}`);
   }
@@ -472,6 +503,10 @@ export function evaluateAssistantCase(spec, trace, beforeScrape, afterScrape) {
     if (actions.filter((name) => name === action).length !== expected) {
       failures.push(`action_count:${action}`);
     }
+  }
+  for (const group of spec.exactActionGroupCounts ?? []) {
+    const count = actions.filter((name) => group.actions.includes(name)).length;
+    if (count !== group.count) failures.push(`action_group_count:${group.actions.join("|")}`);
   }
   for (const [action, expected] of Object.entries(spec.expectedActionInputs ?? {})) {
     const matching = steps
@@ -498,6 +533,41 @@ export function evaluateAssistantCase(spec, trace, beforeScrape, afterScrape) {
       answers.some((answer) => spec.forbiddenAnswerPattern.test(answer))
     ) {
       failures.push("answer_forbidden");
+    }
+  }
+  if (spec.providerGroundedMusic) {
+    const observation = steps.find(
+      (step) => step?.kind === "observation" && step?.name === "music_discover",
+    );
+    const playback = steps.find(
+      (step) => step?.kind === "action" && step?.name === "PlayMusic",
+    );
+    let grounded = null;
+    let actionInput = null;
+    try {
+      grounded = JSON.parse(observation?.text ?? "");
+      actionInput = JSON.parse(playback?.input ?? "");
+    } catch {
+      // The single closed failure below covers malformed or absent evidence
+      // without including provider, catalog, or wearer data in the report.
+    }
+    const title = grounded?.track?.title;
+    const artist = grounded?.track?.artist;
+    const provider = grounded?.provider;
+    if (
+      grounded?.status !== "grounded" ||
+      !["spotify", "youtube_music", "tidal"].includes(provider) ||
+      grounded?.ranking_provenance !== "not_ranked" ||
+      typeof grounded?.discovery_provenance !== "string" ||
+      grounded.discovery_provenance.length === 0 ||
+      typeof title !== "string" ||
+      title.length === 0 ||
+      typeof artist !== "string" ||
+      artist.length === 0 ||
+      actionInput?.Track !== title ||
+      actionInput?.Artist !== artist
+    ) {
+      failures.push("music_not_provider_grounded");
     }
   }
   if (!Number.isFinite(trace?.total_ms) || !Number.isFinite(trace?.device_deadline_ms)) {
@@ -549,12 +619,13 @@ export function evaluateAssistantCase(spec, trace, beforeScrape, afterScrape) {
 }
 
 function usage() {
-  return "usage: revival eval assistant production [--repeat N] [--json] [--env-file FILE] [--project-name NAME]";
+  return "usage: revival eval assistant production [--repeat N] [--case ID] [--json] [--env-file FILE] [--project-name NAME]";
 }
 
 export function parseArguments(argv, environment = process.env) {
   const options = {
     repeat: 2,
+    caseId: null,
     json: false,
     envFile: environment.REVIVAL_ENV_FILE,
     projectName: environment.COMPOSE_PROJECT_NAME || "ai-pin-revival",
@@ -562,7 +633,10 @@ export function parseArguments(argv, environment = process.env) {
   const seen = new Set();
   for (let index = 0; index < argv.length; index += 1) {
     const name = argv[index];
-    if (seen.has(name) || !["--repeat", "--json", "--env-file", "--project-name"].includes(name)) {
+    if (
+      seen.has(name) ||
+      !["--repeat", "--case", "--json", "--env-file", "--project-name"].includes(name)
+    ) {
       throw new Error(usage());
     }
     seen.add(name);
@@ -577,6 +651,11 @@ export function parseArguments(argv, environment = process.env) {
       if (!Number.isSafeInteger(options.repeat) || options.repeat < 1 || options.repeat > 5) {
         throw new Error("--repeat must be an integer from 1 through 5");
       }
+    } else if (name === "--case") {
+      if (!ASSISTANT_CASES.some(({ id }) => id === value)) {
+        throw new Error(`unknown assistant evaluation case: ${value}`);
+      }
+      options.caseId = value;
     } else if (name === "--env-file") {
       options.envFile = path.resolve(ROOT, value);
     } else {
@@ -613,10 +692,31 @@ function composeArguments(options) {
   ];
 }
 
-function inAiBus(options, curlArguments, input) {
+const AUTHENTICATED_WEARER_CURL = [
+  'wearer="${COSMOS_ENROLLMENT_USER_ID:-}"',
+  'case "$wearer" in',
+  '  ""|*[!A-Za-z0-9_-]*)',
+  '    echo "configured wearer identity is unavailable" >&2',
+  "    exit 78",
+  "    ;;",
+  "esac",
+  'if [ "${#wearer}" -gt 125 ]; then',
+  '  echo "configured wearer identity is unavailable" >&2',
+  "  exit 78",
+  "fi",
+  'exec curl --header "x-forwarded-client-cert: V:01:D:assistant-eval:U:$wearer" "$@"',
+].join("\n");
+
+export function assistantCurlCommand(curlArguments, spec = {}) {
+  if (!spec.authenticatedWearer) return ["curl", ...curlArguments];
+  return ["sh", "-eu", "-c", AUTHENTICATED_WEARER_CURL, "assistant-eval", ...curlArguments];
+}
+
+function inAiBus(options, curlArguments, input, spec) {
+  const command = assistantCurlCommand(curlArguments, spec);
   const result = spawnSync(
     "docker",
-    [...composeArguments(options), "exec", "-T", "ai-bus", "curl", ...curlArguments],
+    [...composeArguments(options), "exec", "-T", "ai-bus", ...command],
     { encoding: "utf8", input, maxBuffer: 4 * 1024 * 1024 },
   );
   if (result.error) throw result.error;
@@ -654,6 +754,7 @@ function trace(options, spec) {
       "http://127.0.0.1:8080/demo-api/trace",
     ],
     JSON.stringify(assistantTracePayload(spec)),
+    spec,
   );
   try {
     return JSON.parse(raw);
@@ -681,8 +782,11 @@ export function renderReport(report) {
 async function main() {
   const options = parseArguments(process.argv.slice(2));
   const results = [];
+  const cases = options.caseId
+    ? ASSISTANT_CASES.filter(({ id }) => id === options.caseId)
+    : ASSISTANT_CASES;
   for (let round = 0; round < options.repeat; round += 1) {
-    for (const spec of ASSISTANT_CASES) {
+    for (const spec of cases) {
       const before = metrics(options);
       const response = trace(options, spec);
       const after = metrics(options);

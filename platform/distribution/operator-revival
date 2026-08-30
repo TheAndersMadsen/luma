@@ -18,7 +18,7 @@ Usage:
   ./revival doctor production [options]
   ./revival deploy production (--dry-run | --confirm) [options]
   ./revival verify production [options]
-  ./revival eval assistant production [--repeat N] [--json] [options]
+  ./revival eval assistant production [--repeat N] [--case ID] [--json] [options]
   ./revival pin release import ARCHIVE [--json]
   ./revival pin activate --serial SERIAL --credential-file FILE --edge-ipv4 A.B.C.D [--confirm]
   ./revival pin activate status --serial SERIAL

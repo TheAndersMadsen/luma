@@ -281,6 +281,8 @@ dispatched. Every case must correlate its returned actions with the expected
 model or deterministic run, exact stock arguments, terminal state, and Pin
 deadline. This is a server acceptance check; final release acceptance still
 includes representative spoken turns and device actions on a physical Pin.
+To rerun one failed case without repeating the whole matrix, pass its reported
+ID with `--case ID`.
 
 ### Public verification and agent discovery
 

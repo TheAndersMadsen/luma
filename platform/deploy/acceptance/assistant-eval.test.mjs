@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   ASSISTANT_CASES,
   agentRunSamples,
+  assistantCurlCommand,
   assistantTracePayload,
   changedAgentRuns,
   evaluateAssistantCase,
@@ -150,6 +151,89 @@ test("simulated Pin cases request device context and verify exact stock action i
     after,
   );
   assert.ok(wrongInput.failures.includes("action_input:ManageNutrition"));
+});
+
+test("ranked playback evaluates as the configured wearer without exposing that identity", () => {
+  const ranked = ASSISTANT_CASES.filter(({ authenticatedWearer }) => authenticatedWearer);
+  assert.deepEqual(ranked.map(({ id }) => id), [
+    "music-ranked-dr-dre-popular",
+    "music-ranked-drake-popular",
+    "music-ranked-drake-viral",
+    "music-ranked-drake-controversial-2013",
+    "music-ranked-michael-jackson-best",
+  ]);
+  for (const spec of ranked) {
+    assert.equal(spec.simulateUnlockedPin, true);
+    assert.deepEqual(spec.requiredActions, ["music_discover", "PlayMusic"]);
+    assert.deepEqual(spec.requiredActionGroups, [["ask_online", "web_search"]]);
+    assert.deepEqual(spec.exactActionCounts, { music_discover: 1, PlayMusic: 1 });
+    assert.deepEqual(spec.exactActionGroupCounts, [{ actions: ["ask_online", "web_search"], count: 1 }]);
+    assert.equal(spec.providerGroundedMusic, true);
+    assert.equal(spec.route, "a2");
+    assert.equal(spec.terminal, "device_action");
+    assert.deepEqual(assistantTracePayload(spec), {
+      text: spec.prompt,
+      simulate_unlocked_pin: true,
+    });
+  }
+
+  const invocation = assistantCurlCommand(
+    ["--data-binary", "@-", "http://127.0.0.1:8080/demo-api/trace"],
+    ranked[0],
+  );
+  assert.equal(invocation[0], "sh");
+  assert.ok(invocation.includes("assistant-eval"));
+  assert.match(invocation.join(" "), /COSMOS_ENROLLMENT_USER_ID/u);
+  assert.doesNotMatch(invocation.join(" "), /owner-subject|local-wearer/u);
+});
+
+test("ranked playback requires one research tool and provider-grounded action data", () => {
+  const spec = ASSISTANT_CASES.find(({ id }) => id === "music-ranked-drake-viral");
+  const before = sample({ route: "a2", terminal: "device_action", model_steps: "3" }, 4);
+  const after = sample({ route: "a2", terminal: "device_action", model_steps: "3" }, 5);
+  const trace = {
+    steps: [
+      { kind: "action", name: "ask_online" },
+      { kind: "observation", name: "ask_online", text: "One Dance by Drake." },
+      { kind: "action", name: "music_discover" },
+      {
+        kind: "observation",
+        name: "music_discover",
+        text: JSON.stringify({
+          status: "grounded",
+          provider: "youtube_music",
+          ranking_provenance: "not_ranked",
+          discovery_provenance: "foreground_agent_web",
+          track: { title: "One Dance", artist: "Drake" },
+        }),
+      },
+      {
+        kind: "action",
+        name: "PlayMusic",
+        input: JSON.stringify({ Track: "One Dance", Artist: "Drake" }),
+      },
+    ],
+    total_ms: 14_000,
+    device_deadline_ms: 90_000,
+  };
+
+  assert.equal(evaluateAssistantCase(spec, trace, before, after).pass, true);
+
+  const noResearch = structuredClone(trace);
+  noResearch.steps.splice(0, 2);
+  assert.ok(
+    evaluateAssistantCase(spec, noResearch, before, after).failures.includes(
+      "missing_action_group:ask_online|web_search",
+    ),
+  );
+
+  const ungrounded = structuredClone(trace);
+  ungrounded.steps[3].text = JSON.stringify({ status: "unavailable" });
+  assert.ok(
+    evaluateAssistantCase(spec, ungrounded, before, after).failures.includes(
+      "music_not_provider_grounded",
+    ),
+  );
 });
 
 test("evaluation names action, deadline, terminal, and provenance failures", () => {
@@ -305,6 +389,11 @@ test("the production matrix covers reasoning, retrieval, ambiguity, compound wor
     "definition-ubiquitous",
     "knowledge-pride-austen",
     "music-ranked-information",
+    "music-ranked-dr-dre-popular",
+    "music-ranked-drake-popular",
+    "music-ranked-drake-viral",
+    "music-ranked-drake-controversial-2013",
+    "music-ranked-michael-jackson-best",
     "fresh-web-search",
     "compound-research",
     "explicit-lookup",
@@ -401,10 +490,22 @@ test("the production matrix covers reasoning, retrieval, ambiguity, compound wor
 test("evaluation arguments are bounded and default to repeated runs", () => {
   const defaults = parseArguments([], { REVIVAL_ENV_FILE: "/tmp/runtime.env" });
   assert.equal(defaults.repeat, 2);
+  assert.equal(defaults.caseId, null);
   assert.equal(defaults.projectName, "ai-pin-revival");
   assert.equal(parseArguments(["--repeat", "5"], { REVIVAL_ENV_FILE: "/tmp/e" }).repeat, 5);
+  assert.equal(
+    parseArguments(
+      ["--case", "music-ranked-drake-viral"],
+      { REVIVAL_ENV_FILE: "/tmp/e" },
+    ).caseId,
+    "music-ranked-drake-viral",
+  );
   assert.throws(
     () => parseArguments(["--repeat", "6"], { REVIVAL_ENV_FILE: "/tmp/e" }),
     /1 through 5/u,
+  );
+  assert.throws(
+    () => parseArguments(["--case", "not-a-case"], { REVIVAL_ENV_FILE: "/tmp/e" }),
+    /unknown assistant evaluation case/u,
   );
 });
