@@ -15,7 +15,7 @@ export const ASSISTANT_CASES = Object.freeze([
     terminal: "answered",
   }),
   ...[
-    ["arithmetic", "What is 15 percent of 80?", /\b12\b/u],
+    ["arithmetic", "What is 15 percent of 80?", /\b(?:12|twelve)\b/iu],
     [
       "unit-conversion",
       "How many kilometers is 5 miles?",
@@ -291,6 +291,7 @@ export const ASSISTANT_CASES = Object.freeze([
       "weather",
       {},
       "a1",
+      ["a1", "a2"],
     ],
     ["nearby-bare", "What's nearby?", "nearby", { query: "" }, "a1"],
     [
@@ -307,7 +308,7 @@ export const ASSISTANT_CASES = Object.freeze([
       { query: "coffee shop" },
       "a1",
     ],
-  ].map(([id, prompt, action, input, route]) => Object.freeze({
+  ].map(([id, prompt, action, input, route, routes]) => Object.freeze({
     id,
     prompt,
     requiredActions: ["GetCurrentLocation", action, "Respond"],
@@ -315,6 +316,7 @@ export const ASSISTANT_CASES = Object.freeze([
     exactActionCounts: { GetCurrentLocation: 1, [action]: 1 },
     expectedActionInputs: { [action]: input },
     route,
+    ...(routes ? { routes } : {}),
     terminal: "answered",
     simulateUnlockedPin: true,
     simulateLocation: true,
@@ -511,10 +513,9 @@ export function evaluateAssistantCase(spec, trace, beforeScrape, afterScrape) {
       labels.planner_plane === "cosmos_remote" &&
       labels.model_invoked === String(expectedModelInvoked),
   );
+  const routes = Array.isArray(spec.routes) ? spec.routes : [spec.route];
   const run = candidates.find(
-    ({ labels }) =>
-      labels.route === spec.route &&
-      labels.terminal === spec.terminal,
+    ({ labels }) => routes.includes(labels.route) && labels.terminal === spec.terminal,
   );
   if (!run) {
     failures.push("missing_model_run");

@@ -133,9 +133,41 @@ const TOOL_TIMED_OUT: &str = "The tool did not return in time and produced no re
 const REPEATED_SERVER_TOOL_CALL: &str =
     "This exact tool call already returned earlier in this turn. Use that result and answer now.";
 
-pub(crate) fn server_tool_call_key(call: &ToolCall) -> String {
+pub(crate) fn server_tool_call_key(call: &ToolCall, context: &catalog::ToolContext) -> String {
     let arguments = serde_json::from_str::<serde_json::Value>(&call.arguments)
-        .map(|value| value.to_string())
+        .map(|mut value| {
+            if matches!(call.name.as_str(), "weather" | "reverse_geocode" | "nearby") {
+                if let Some(object) = value.as_object_mut() {
+                    let place_is_empty = object
+                        .get("place")
+                        .and_then(serde_json::Value::as_str)
+                        .is_none_or(|place| place.trim().is_empty());
+                    if place_is_empty {
+                        object.remove("place");
+                        let explicit = object
+                            .get("latitude")
+                            .and_then(serde_json::Value::as_f64)
+                            .zip(object.get("longitude").and_then(serde_json::Value::as_f64))
+                            .filter(|(latitude, longitude)| *latitude != 0.0 || *longitude != 0.0);
+                        let effective = explicit.or(context.location);
+                        if effective.zip(context.location).is_some_and(
+                            |((latitude, longitude), (current_latitude, current_longitude))| {
+                                (latitude - current_latitude).abs() <= 1e-6
+                                    && (longitude - current_longitude).abs() <= 1e-6
+                            },
+                        ) {
+                            object.remove("latitude");
+                            object.remove("longitude");
+                            object.insert(
+                                "__resolved_location".to_owned(),
+                                serde_json::Value::String("current".to_owned()),
+                            );
+                        }
+                    }
+                }
+            }
+            value.to_string()
+        })
         .unwrap_or_else(|_| call.arguments.trim().to_owned());
     format!("{}\n{arguments}", call.name)
 }
@@ -614,6 +646,7 @@ impl Engine {
         tool_context.deadline = Some(run_deadline);
 
         let mut music_research_completed = false;
+        let mut initial_model_retry_available = true;
         let mut completed_server_calls = std::collections::HashMap::<String, String>::new();
         for step in 0..ACTION_LIMIT {
             // Out of turn budget: deliver a spoken terminal NOW, before the device's
@@ -654,6 +687,17 @@ impl Engine {
             let resp = match resolved {
                 Ok(Ok(response)) => response,
                 Ok(Err(error)) => {
+                    if initial_model_retry_available
+                        && matches!(error, super::llm::LlmError::Transport(_))
+                        && !messages
+                            .iter()
+                            .any(|message| message.role == Role::ToolResult)
+                        && run_deadline.saturating_duration_since(std::time::Instant::now())
+                            > TERMINAL_RESERVE
+                    {
+                        initial_model_retry_available = false;
+                        continue;
+                    }
                     if messages
                         .iter()
                         .any(|message| message.role == Role::ToolResult)
@@ -961,7 +1005,7 @@ impl Engine {
                 // then loop, so both are bounded by the run budget from here on:
                 // if there is not enough left to run one AND still speak, close
                 // the run now, before any action node goes out.
-                let server_call_key = server_tool_call_key(&tc);
+                let server_call_key = server_tool_call_key(&tc, &tool_context);
                 if let Some(previous) = completed_server_calls.get(&server_call_key) {
                     let observation = repeated_server_tool_observation(previous);
                     messages.push(ChatMessage::tool_result(
@@ -1014,7 +1058,7 @@ impl Engine {
                         {
                             continue;
                         }
-                        let key = server_tool_call_key(extra);
+                        let key = server_tool_call_key(extra, &tool_context);
                         if let Some(previous) = completed_server_calls.get(&key) {
                             messages.push(ChatMessage::tool_result(
                                 &extra.name,
@@ -1112,8 +1156,10 @@ impl Engine {
                             &call.arguments,
                             &model_facing_observation(observation),
                         ));
-                        completed_server_calls
-                            .insert(server_tool_call_key(call), observation.to_owned());
+                        completed_server_calls.insert(
+                            server_tool_call_key(call, &tool_context),
+                            observation.to_owned(),
+                        );
                         last_obs_id = obs_id;
                     }
                     parent = last_obs_id;
@@ -3498,6 +3544,66 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn equivalent_current_location_weather_calls_execute_only_once_per_turn() {
+        struct ImplicitThenExplicitLocation(std::sync::atomic::AtomicUsize);
+        #[tonic::async_trait]
+        impl ChatModel for ImplicitThenExplicitLocation {
+            async fn complete(
+                &self,
+                _messages: &[ChatMessage],
+                _tools: &[ToolDef],
+            ) -> Result<ChatResponse, LlmError> {
+                let arguments = match self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst) {
+                    0 => "{}".to_owned(),
+                    1 => serde_json::json!({
+                        "latitude": 55.6761,
+                        "longitude": 12.5683,
+                    })
+                    .to_string(),
+                    _ => {
+                        return Ok(ChatResponse {
+                            content: Some("Bring an umbrella if you want to be safe.".into()),
+                            ..Default::default()
+                        });
+                    }
+                };
+                Ok(ChatResponse {
+                    tool_call: Some(ToolCall {
+                        name: "weather".into(),
+                        arguments,
+                    }),
+                    ..Default::default()
+                })
+            }
+        }
+
+        let messages = run_with_tools(
+            Arc::new(ImplicitThenExplicitLocation(
+                std::sync::atomic::AtomicUsize::new(0),
+            )),
+            pb::SynapseUnderstandingRequest {
+                utterance: "Should I bring an umbrella here today?".into(),
+                ..Default::default()
+            },
+            catalog::ToolContext {
+                location: Some((55.6761, 12.5683)),
+                ..Default::default()
+            },
+        )
+        .await;
+
+        assert_eq!(
+            messages
+                .iter()
+                .filter_map(as_action)
+                .filter(|action| action.action == "weather")
+                .count(),
+            1,
+            "implicit and explicit current coordinates must identify one weather lookup",
+        );
+    }
+
+    #[tokio::test]
     async fn a_repeated_call_does_not_disable_a_later_distinct_call_to_the_same_tool() {
         struct RepeatThenDistinctThenAnswer(std::sync::atomic::AtomicUsize);
         #[tonic::async_trait]
@@ -3652,6 +3758,49 @@ mod tests {
         assert!(
             terminal.input.contains("grounded route"),
             "a transient final model failure must retry from the completed lookup, got {}",
+            terminal.input,
+        );
+    }
+
+    #[tokio::test]
+    async fn a_transient_initial_model_failure_retries_inside_the_turn_budget() {
+        struct UnreachableThenAnswer(std::sync::atomic::AtomicUsize);
+        #[tonic::async_trait]
+        impl ChatModel for UnreachableThenAnswer {
+            async fn complete(
+                &self,
+                _messages: &[ChatMessage],
+                _tools: &[ToolDef],
+            ) -> Result<ChatResponse, LlmError> {
+                if self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                    return Err(LlmError::Transport("transient app-server failure".into()));
+                }
+                Ok(ChatResponse {
+                    content: Some("The model recovered on the same turn.".into()),
+                    ..Default::default()
+                })
+            }
+        }
+
+        let messages = run_with(
+            Arc::new(UnreachableThenAnswer(std::sync::atomic::AtomicUsize::new(
+                0,
+            ))),
+            pb::SynapseUnderstandingRequest {
+                utterance: "Explain why the sky is blue.".into(),
+                ..Default::default()
+            },
+        )
+        .await;
+        let terminal = messages
+            .iter()
+            .filter_map(as_action)
+            .next_back()
+            .expect("a spoken terminal action");
+        assert_eq!(terminal.action, catalog::RESPOND_ACTION);
+        assert!(
+            terminal.input.contains("recovered on the same turn"),
+            "the initial transient failure must be retried, got {}",
             terminal.input,
         );
     }

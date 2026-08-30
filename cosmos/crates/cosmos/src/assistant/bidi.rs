@@ -466,6 +466,7 @@ impl BidiSession {
         let run_deadline = run.deadline();
         let mut tool_context = self.tools.clone();
         tool_context.deadline = Some(run_deadline);
+        let mut initial_model_retry_available = true;
         let mut completed_server_calls = std::collections::HashMap::<String, String>::new();
 
         if future_weather {
@@ -564,6 +565,17 @@ impl BidiSession {
                     }
                     Step::Answer(r) => r,
                     Step::Failed(outcome) => {
+                        if initial_model_retry_available
+                            && outcome == "model_unreachable"
+                            && !messages
+                                .iter()
+                                .any(|message| message.role == Role::ToolResult)
+                            && run_deadline.saturating_duration_since(std::time::Instant::now())
+                                > TERMINAL_RESERVE
+                        {
+                            initial_model_retry_available = false;
+                            continue;
+                        }
                         if messages
                             .iter()
                             .any(|message| message.role == Role::ToolResult)
@@ -632,7 +644,7 @@ impl BidiSession {
                 return flow;
             };
             if catalog::is_server_tool(&tc.name) && tools.iter().any(|tool| tool.name == tc.name) {
-                let key = super::engine::server_tool_call_key(&tc);
+                let key = super::engine::server_tool_call_key(&tc, &tool_context);
                 if let Some(previous) = completed_server_calls.get(&key) {
                     messages.push(tool_result(
                         &tc,
@@ -924,7 +936,10 @@ impl BidiSession {
                 && tools.iter().any(|tool| tool.name == "PlayMusic");
             let mut batch = vec![tc.clone()];
             let mut batch_keys =
-                std::collections::HashSet::from([super::engine::server_tool_call_key(&tc)]);
+                std::collections::HashSet::from([super::engine::server_tool_call_key(
+                    &tc,
+                    &tool_context,
+                )]);
             if !terminal_music {
                 for extra in &resp.extra_tool_calls {
                     if catalog::is_device_tool(&extra.name)
@@ -933,7 +948,7 @@ impl BidiSession {
                     {
                         continue;
                     }
-                    let key = super::engine::server_tool_call_key(extra);
+                    let key = super::engine::server_tool_call_key(extra, &tool_context);
                     if let Some(previous) = completed_server_calls.get(&key) {
                         messages.push(tool_result(
                             extra,
@@ -1021,7 +1036,7 @@ impl BidiSession {
                 }
                 messages.push(tool_result(call, &observation));
                 completed_server_calls.insert(
-                    super::engine::server_tool_call_key(call),
+                    super::engine::server_tool_call_key(call, &tool_context),
                     observation.clone(),
                 );
                 parent = obs_id;
@@ -1739,6 +1754,72 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn equivalent_current_location_weather_calls_execute_only_once_per_bidi_turn() {
+        struct ImplicitThenExplicitLocation(std::sync::atomic::AtomicUsize);
+        #[tonic::async_trait]
+        impl ChatModel for ImplicitThenExplicitLocation {
+            async fn complete(
+                &self,
+                _messages: &[ChatMessage],
+                _tools: &[ToolDef],
+            ) -> Result<ChatResponse, LlmError> {
+                let arguments = match self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst) {
+                    0 => "{}".to_owned(),
+                    1 => serde_json::json!({
+                        "latitude": 55.6761,
+                        "longitude": 12.5683,
+                    })
+                    .to_string(),
+                    _ => {
+                        return Ok(ChatResponse {
+                            content: Some("Bring an umbrella if you want to be safe.".into()),
+                            ..Default::default()
+                        });
+                    }
+                };
+                Ok(ChatResponse {
+                    tool_call: Some(ToolCall {
+                        name: "weather".into(),
+                        arguments,
+                    }),
+                    ..Default::default()
+                })
+            }
+        }
+
+        let (tx, rx) = mpsc::channel(16);
+        let mut out = BidiSession::spawn_with(
+            Arc::new(ImplicitThenExplicitLocation(
+                std::sync::atomic::AtomicUsize::new(0),
+            )),
+            Entitlement::Active,
+            catalog::ToolContext {
+                location: Some((55.6761, 12.5683)),
+                ..Default::default()
+            },
+            ReceiverStream::new(rx),
+        );
+        tx.send(Ok(understanding("Should I bring an umbrella here today?")))
+            .await
+            .unwrap();
+        drop(tx);
+
+        let mut messages = Vec::new();
+        while let Some(message) = out.next().await {
+            messages.push(message.unwrap());
+        }
+        assert_eq!(
+            messages
+                .iter()
+                .filter_map(action_of)
+                .filter(|action| action.action == "weather")
+                .count(),
+            1,
+            "implicit and explicit current coordinates must identify one bidi weather lookup",
+        );
+    }
+
+    #[tokio::test]
     async fn a_repeated_bidi_call_does_not_disable_a_later_distinct_call_to_the_same_tool() {
         struct RepeatThenDistinctThenAnswer(std::sync::atomic::AtomicUsize);
         #[tonic::async_trait]
@@ -1900,6 +1981,38 @@ mod tests {
             "a transient final model failure must retry from the completed lookup, got {}",
             spoken(terminal),
         );
+    }
+
+    #[tokio::test]
+    async fn a_transient_initial_model_failure_retries_inside_the_bidi_turn_budget() {
+        struct UnreachableThenAnswer(std::sync::atomic::AtomicUsize);
+        #[tonic::async_trait]
+        impl ChatModel for UnreachableThenAnswer {
+            async fn complete(
+                &self,
+                _messages: &[ChatMessage],
+                _tools: &[ToolDef],
+            ) -> Result<ChatResponse, LlmError> {
+                if self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                    return Err(LlmError::Transport("transient app-server failure".into()));
+                }
+                Ok(ChatResponse {
+                    content: Some("The model recovered on the same turn.".into()),
+                    ..Default::default()
+                })
+            }
+        }
+
+        let (tx, mut out) = session(Arc::new(UnreachableThenAnswer(
+            std::sync::atomic::AtomicUsize::new(0),
+        )));
+        tx.send(Ok(understanding("Explain why the sky is blue.")))
+            .await
+            .unwrap();
+        drop(tx);
+
+        let response = next(&mut out).await;
+        assert_eq!(spoken(&response), "The model recovered on the same turn.");
     }
 
     #[tokio::test]

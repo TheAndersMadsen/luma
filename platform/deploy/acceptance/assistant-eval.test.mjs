@@ -224,6 +224,22 @@ test("a web-search refusal cannot pass merely because the tool ran", () => {
   assert.ok(result.failures.includes("answer_forbidden"), result.failures.join(","));
 });
 
+test("the arithmetic acceptance accepts an equivalent spoken-number answer", () => {
+  const spec = ASSISTANT_CASES.find(({ id }) => id === "arithmetic");
+  const result = evaluateAssistantCase(
+    spec,
+    {
+      steps: [{ kind: "answer", name: "Respond", text: "Twelve." }],
+      total_ms: 4_000,
+      device_deadline_ms: 90_000,
+    },
+    sample({}, 4),
+    sample({}, 5),
+  );
+
+  assert.equal(result.pass, true, result.failures.join(","));
+});
+
 test("a bounded lookup case cannot silently repeat the same provider tool", () => {
   const result = evaluateAssistantCase(
     {
@@ -249,6 +265,35 @@ test("a bounded lookup case cannot silently repeat the same provider tool", () =
 
   assert.equal(result.pass, false);
   assert.ok(result.failures.includes("action_count:food_lookup"), result.failures.join(","));
+});
+
+test("a prompt may explicitly accept either valid agent route without losing correlation", () => {
+  const spec = {
+    id: "weather-umbrella-local",
+    requiredActions: ["GetCurrentLocation", "weather", "Respond"],
+    forbiddenActions: [],
+    exactActionCounts: { GetCurrentLocation: 1, weather: 1 },
+    routes: ["a1", "a2"],
+    terminal: "answered",
+  };
+  const result = evaluateAssistantCase(
+    spec,
+    {
+      steps: [
+        { kind: "action", name: "GetCurrentLocation" },
+        { kind: "action", name: "weather" },
+        { kind: "action", name: "ask_online" },
+        { kind: "answer", name: "Respond", text: "Bring an umbrella just in case." },
+      ],
+      total_ms: 18_000,
+      device_deadline_ms: 90_000,
+    },
+    sample({ route: "a2" }, 4),
+    sample({ route: "a2" }, 5),
+  );
+
+  assert.equal(result.pass, true, result.failures.join(","));
+  assert.equal(result.run.route, "a2");
 });
 
 test("the production matrix covers reasoning, retrieval, ambiguity, compound work, and confirmation", () => {
