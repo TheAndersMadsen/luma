@@ -1093,6 +1093,83 @@ fn normalized_title(value: &str) -> String {
         .unwrap_or(value)
 }
 
+fn artist_credit_parts(value: &str) -> Vec<String> {
+    let separators = [
+        " feat. ",
+        " feat ",
+        " featuring ",
+        " ft. ",
+        " ft ",
+        " with ",
+        " and ",
+        " & ",
+        " x ",
+    ];
+    let mut remaining = value;
+    let mut parts = Vec::new();
+    loop {
+        let lowered = remaining.to_ascii_lowercase();
+        let split = separators
+            .into_iter()
+            .filter_map(|separator| {
+                lowered
+                    .find(separator)
+                    .map(|index| (index, separator.len()))
+            })
+            .min_by_key(|(index, _)| *index);
+        let Some((index, separator_len)) = split else {
+            let part = normalized(remaining);
+            if !part.is_empty() {
+                parts.push(part);
+            }
+            return parts;
+        };
+        let part = normalized(&remaining[..index]);
+        if !part.is_empty() {
+            parts.push(part);
+        }
+        remaining = &remaining[index + separator_len..];
+    }
+}
+
+fn contains_normalized_phrase(text: &str, phrase: &str) -> bool {
+    format!(" {text} ").contains(&format!(" {phrase} "))
+}
+
+fn grounded_provider_artist(
+    expected: &str,
+    provider_title: &str,
+    provider_artists: &[String],
+) -> Option<String> {
+    let expected_normalized = normalized(expected);
+    if let Some(artist) = provider_artists
+        .iter()
+        .find(|artist| normalized(artist) == expected_normalized)
+    {
+        return Some(artist.clone());
+    }
+    let credits = artist_credit_parts(expected);
+    if credits.len() < 2
+        || provider_artists
+            .first()
+            .is_none_or(|artist| normalized(artist) != credits[0])
+    {
+        return None;
+    }
+    let title = normalized(provider_title);
+    let artists = provider_artists
+        .iter()
+        .map(|artist| normalized(artist))
+        .collect::<Vec<_>>();
+    credits[1..]
+        .iter()
+        .all(|credit| {
+            artists.iter().any(|artist| artist == credit)
+                || contains_normalized_phrase(&title, credit)
+        })
+        .then(|| provider_artists[0].clone())
+}
+
 fn grounded_candidate(
     candidate: &Candidate,
     response: CenterCatalogResponse,
@@ -1106,15 +1183,14 @@ fn grounded_candidate(
         return Err(MusicDiscoveryError::ProviderNoMatch);
     }
     let expected_title = normalized_title(&candidate.title);
-    let expected_artist = normalized(&candidate.artist);
-    let track = response.items.into_iter().find(|track| {
-        normalized_title(&track.title) == expected_title
-            && track
-                .artists
-                .iter()
-                .any(|artist| normalized(artist) == expected_artist)
+    let track = response.items.into_iter().find_map(|track| {
+        if normalized_title(&track.title) != expected_title {
+            return None;
+        }
+        let artist = grounded_provider_artist(&candidate.artist, &track.title, &track.artists)?;
+        Some((track, artist))
     });
-    let Some(track) = track else {
+    let Some((track, artist)) = track else {
         return Err(MusicDiscoveryError::ProviderNoMatch);
     };
     if !bounded_text(&track.title, MAX_TEXT_CHARACTERS) {
@@ -1122,7 +1198,7 @@ fn grounded_candidate(
     }
     Ok(GroundedMusicTrack {
         title: track.title,
-        artist: candidate.artist.clone(),
+        artist,
         provider: response.provider,
         ranking_provenance: response.ranking_provenance,
         discovery_provenance: discovery_provenance.to_owned(),
@@ -1412,6 +1488,73 @@ mod tests {
             }],
         };
         assert!(grounded_candidate(&versace_remix, credited_remix, "foreground_agent_web").is_ok());
+
+        let jodeci_freestyle = Candidate {
+            title: "Jodeci Freestyle".to_owned(),
+            artist: "Drake and J. Cole".to_owned(),
+            release_year: 2013,
+            rationale: "most controversial".to_owned(),
+            support: 90,
+            sources: vec![],
+        };
+        let primary_artist_credit = CenterCatalogResponse {
+            provider: "youtube_music".to_owned(),
+            ranking_provenance: "not_ranked".to_owned(),
+            items: vec![CenterTrack {
+                title: "Jodeci Freestyle (feat. J. Cole)".to_owned(),
+                artists: vec!["Drake".to_owned()],
+            }],
+        };
+        assert_eq!(
+            grounded_candidate(
+                &jodeci_freestyle,
+                primary_artist_credit,
+                "foreground_agent_web",
+            )
+            .expect("a provider's canonical primary artist must ground a combined research credit")
+            .artist,
+            "Drake",
+        );
+
+        let secondary_artist_only = CenterCatalogResponse {
+            provider: "youtube_music".to_owned(),
+            ranking_provenance: "not_ranked".to_owned(),
+            items: vec![CenterTrack {
+                title: "Jodeci Freestyle (feat. J. Cole)".to_owned(),
+                artists: vec!["J. Cole".to_owned()],
+            }],
+        };
+        assert_eq!(
+            grounded_candidate(
+                &jodeci_freestyle,
+                secondary_artist_only,
+                "foreground_agent_web",
+            ),
+            Err(MusicDiscoveryError::ProviderNoMatch),
+            "a compound credit must not ground against only its secondary artist",
+        );
+
+        let band_name = Candidate {
+            title: "Dog Days Are Over".to_owned(),
+            artist: "Florence and the Machine".to_owned(),
+            release_year: 2009,
+            rationale: "requested track".to_owned(),
+            support: 90,
+            sources: vec![],
+        };
+        let truncated_band = CenterCatalogResponse {
+            provider: "youtube_music".to_owned(),
+            ranking_provenance: "not_ranked".to_owned(),
+            items: vec![CenterTrack {
+                title: "Dog Days Are Over".to_owned(),
+                artists: vec!["Florence".to_owned()],
+            }],
+        };
+        assert_eq!(
+            grounded_candidate(&band_name, truncated_band, "foreground_agent_web"),
+            Err(MusicDiscoveryError::ProviderNoMatch),
+            "an artist name containing a conjunction is not itself proof of a collaboration",
+        );
     }
 
     struct FixedProviderCatalog {
