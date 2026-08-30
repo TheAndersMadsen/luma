@@ -30,7 +30,7 @@ function sample(overrides = {}, value = 1) {
 }
 
 test("agent evaluation correlates the trace with an actual model run", () => {
-  const spec = ASSISTANT_CASES[1];
+  const spec = ASSISTANT_CASES.find(({ id }) => id === "fresh-web-search");
   const before = sample({}, 4);
   const after = sample({}, 5);
   const result = evaluateAssistantCase(
@@ -154,7 +154,7 @@ test("simulated Pin cases request device context and verify exact stock action i
 
 test("evaluation names action, deadline, terminal, and provenance failures", () => {
   const result = evaluateAssistantCase(
-    ASSISTANT_CASES[2],
+    ASSISTANT_CASES.find(({ id }) => id === "compound-research"),
     {
       steps: [{ kind: "action", name: "web_search" }],
       total_ms: 26000,
@@ -254,6 +254,12 @@ test("a bounded lookup case cannot silently repeat the same provider tool", () =
 test("the production matrix covers reasoning, retrieval, ambiguity, compound work, and confirmation", () => {
   assert.deepEqual(ASSISTANT_CASES.map(({ id }) => id), [
     "reasoning",
+    "arithmetic",
+    "unit-conversion",
+    "ice-floats",
+    "definition-ubiquitous",
+    "knowledge-pride-austen",
+    "music-ranked-information",
     "fresh-web-search",
     "compound-research",
     "explicit-lookup",
@@ -269,7 +275,9 @@ test("the production matrix covers reasoning, retrieval, ambiguity, compound wor
     "food-log-three-days",
     "reset-session",
     "messages-recent-read",
+    "messages-contact-read",
     "messages-search-read",
+    "messages-contact-topic-read",
     "messages-open-ui",
     "notifications-catch-up-read",
     "contacts-open-ui",
@@ -313,6 +321,15 @@ test("the production matrix covers reasoning, retrieval, ambiguity, compound wor
     "consequential-confirmation",
   ]);
   assert.equal(ASSISTANT_CASES.some(({ route }) => route === "a2"), true);
+  assert.deepEqual(
+    ASSISTANT_CASES.find(({ id }) => id === "messages-contact-read").expectedActionInputs,
+    { DisplayMessages: { IDs: [], MessageCount: 10, Person: ["Alex"] } },
+  );
+  assert.deepEqual(
+    ASSISTANT_CASES.find(({ id }) => id === "messages-contact-topic-read")
+      .expectedActionInputs,
+    { MessageSearch: { Person: ["Alex"], Query: "dinner" } },
+  );
   assert.equal(
     ASSISTANT_CASES.some(({ forbiddenActions }) => forbiddenActions.includes("CallPerson")),
     true,

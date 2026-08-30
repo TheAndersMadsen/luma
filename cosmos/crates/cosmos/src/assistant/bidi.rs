@@ -466,6 +466,7 @@ impl BidiSession {
         let run_deadline = run.deadline();
         let mut tool_context = self.tools.clone();
         tool_context.deadline = Some(run_deadline);
+        let mut completed_server_calls = std::collections::HashMap::<String, String>::new();
 
         if future_weather {
             let flow = self
@@ -563,6 +564,40 @@ impl BidiSession {
                     }
                     Step::Answer(r) => r,
                     Step::Failed(outcome) => {
+                        if messages
+                            .iter()
+                            .any(|message| message.role == Role::ToolResult)
+                        {
+                            let retry_budget = run_deadline
+                                .saturating_duration_since(std::time::Instant::now())
+                                .saturating_sub(TERMINAL_RESERVE)
+                                .min(MODEL_STEP_TIMEOUT);
+                            if !retry_budget.is_zero() {
+                                let mut final_messages = messages.clone();
+                                final_messages
+                                    .push(ChatMessage::user(super::engine::FINAL_ANSWER_DIRECTIVE));
+                                run.note_model_step();
+                                match self.step(&final_messages, &[], retry_budget, inbound).await {
+                                    Step::Superseded(request) => {
+                                        run.supersede();
+                                        return Flow::Supersede(request);
+                                    }
+                                    Step::Answer(recovered) => {
+                                        if let Some(answer) = recovered
+                                            .content
+                                            .as_deref()
+                                            .map(str::trim)
+                                            .filter(|answer| !answer.is_empty())
+                                        {
+                                            let flow = self.finish(parent, answer).await;
+                                            run.finish("answered");
+                                            return flow;
+                                        }
+                                    }
+                                    Step::Failed(_) => {}
+                                }
+                            }
+                        }
                         // Even a degraded state is spoken through a terminal `Respond`
                         // device action, never a bare error the device would drop.
                         let flow = self.finish(parent, ERROR_TIMEOUT).await;
@@ -596,6 +631,16 @@ impl BidiSession {
                 });
                 return flow;
             };
+            if catalog::is_server_tool(&tc.name) && tools.iter().any(|tool| tool.name == tc.name) {
+                let key = super::engine::server_tool_call_key(&tc);
+                if let Some(previous) = completed_server_calls.get(&key) {
+                    messages.push(tool_result(
+                        &tc,
+                        &super::engine::repeated_server_tool_observation(previous),
+                    ));
+                    continue;
+                }
+            }
             run.note_tool_call(&tc.name);
 
             if actions_in_run >= MAX_STEPS {
@@ -878,17 +923,28 @@ impl BidiSession {
                 && super::engine::explicit_playback_request(&utterance)
                 && tools.iter().any(|tool| tool.name == "PlayMusic");
             let mut batch = vec![tc.clone()];
+            let mut batch_keys =
+                std::collections::HashSet::from([super::engine::server_tool_call_key(&tc)]);
             if !terminal_music {
-                batch.extend(
-                    resp.extra_tool_calls
-                        .iter()
-                        .filter(|extra| {
-                            !catalog::is_device_tool(&extra.name)
-                                && catalog::is_server_tool(&extra.name)
-                                && tools.iter().any(|tool| tool.name == extra.name)
-                        })
-                        .cloned(),
-                );
+                for extra in &resp.extra_tool_calls {
+                    if catalog::is_device_tool(&extra.name)
+                        || !catalog::is_server_tool(&extra.name)
+                        || !tools.iter().any(|tool| tool.name == extra.name)
+                    {
+                        continue;
+                    }
+                    let key = super::engine::server_tool_call_key(extra);
+                    if let Some(previous) = completed_server_calls.get(&key) {
+                        messages.push(tool_result(
+                            extra,
+                            &super::engine::repeated_server_tool_observation(previous),
+                        ));
+                        continue;
+                    }
+                    if batch_keys.insert(key) {
+                        batch.push(extra.clone());
+                    }
+                }
             }
             if actions_in_run.saturating_add(batch.len()) > MAX_STEPS {
                 let flow = self.too_many_actions(parent).await;
@@ -964,6 +1020,10 @@ impl BidiSession {
                     primary_observation = Some(observation.clone());
                 }
                 messages.push(tool_result(call, &observation));
+                completed_server_calls.insert(
+                    super::engine::server_tool_call_key(call),
+                    observation.clone(),
+                );
                 parent = obs_id;
             }
             if bounded_music_research
@@ -1630,6 +1690,219 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_identical_server_tool_call_is_executed_only_once_per_bidi_turn() {
+        struct RepeatThenAnswer(std::sync::atomic::AtomicUsize);
+        #[tonic::async_trait]
+        impl ChatModel for RepeatThenAnswer {
+            async fn complete(
+                &self,
+                _messages: &[ChatMessage],
+                _tools: &[ToolDef],
+            ) -> Result<ChatResponse, LlmError> {
+                if self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst) < 2 {
+                    return Ok(ChatResponse {
+                        tool_call: Some(ToolCall {
+                            name: "web_search".into(),
+                            arguments: r#"{"query":"weather in Copenhagen"}"#.into(),
+                        }),
+                        ..Default::default()
+                    });
+                }
+                Ok(ChatResponse {
+                    content: Some("Use the result already returned.".into()),
+                    ..Default::default()
+                })
+            }
+        }
+
+        let (tx, mut out) = session(Arc::new(RepeatThenAnswer(
+            std::sync::atomic::AtomicUsize::new(0),
+        )));
+        tx.send(Ok(understanding("search once, then answer")))
+            .await
+            .unwrap();
+        drop(tx);
+
+        let mut messages = Vec::new();
+        while let Some(message) = out.next().await {
+            messages.push(message.unwrap());
+        }
+        assert_eq!(
+            messages
+                .iter()
+                .filter_map(action_of)
+                .filter(|action| action.action == "web_search")
+                .count(),
+            1,
+            "an identical server call must not be emitted or executed twice on bidi",
+        );
+    }
+
+    #[tokio::test]
+    async fn a_repeated_bidi_call_does_not_disable_a_later_distinct_call_to_the_same_tool() {
+        struct RepeatThenDistinctThenAnswer(std::sync::atomic::AtomicUsize);
+        #[tonic::async_trait]
+        impl ChatModel for RepeatThenDistinctThenAnswer {
+            async fn complete(
+                &self,
+                _messages: &[ChatMessage],
+                _tools: &[ToolDef],
+            ) -> Result<ChatResponse, LlmError> {
+                let query = match self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst) {
+                    0 | 1 => "weather in Copenhagen",
+                    2 => "weather in Aarhus",
+                    _ => {
+                        return Ok(ChatResponse {
+                            content: Some("Used both distinct results.".into()),
+                            ..Default::default()
+                        });
+                    }
+                };
+                Ok(ChatResponse {
+                    tool_call: Some(ToolCall {
+                        name: "web_search".into(),
+                        arguments: serde_json::json!({"query": query}).to_string(),
+                    }),
+                    ..Default::default()
+                })
+            }
+        }
+
+        let (tx, mut out) = session(Arc::new(RepeatThenDistinctThenAnswer(
+            std::sync::atomic::AtomicUsize::new(0),
+        )));
+        tx.send(Ok(understanding(
+            "compare the weather in Copenhagen and Aarhus",
+        )))
+        .await
+        .unwrap();
+        drop(tx);
+
+        let mut messages = Vec::new();
+        while let Some(message) = out.next().await {
+            messages.push(message.unwrap());
+        }
+        let search_observations = messages
+            .iter()
+            .filter_map(observation_of)
+            .filter(|observation| observation.action_name == "web_search")
+            .collect::<Vec<_>>();
+        assert_eq!(search_observations.len(), 2);
+        assert!(
+            search_observations
+                .iter()
+                .all(|observation| observation.observation != UNRECOGNIZED_FUNCTION)
+        );
+    }
+
+    #[tokio::test]
+    async fn identical_server_calls_in_one_bidi_batch_execute_only_once() {
+        struct DuplicateBatchThenAnswer;
+        #[tonic::async_trait]
+        impl ChatModel for DuplicateBatchThenAnswer {
+            async fn complete(
+                &self,
+                messages: &[ChatMessage],
+                _tools: &[ToolDef],
+            ) -> Result<ChatResponse, LlmError> {
+                if messages
+                    .iter()
+                    .any(|message| message.role == Role::ToolResult)
+                {
+                    return Ok(ChatResponse {
+                        content: Some("Used the one lookup result.".into()),
+                        ..Default::default()
+                    });
+                }
+                Ok(ChatResponse {
+                    tool_call: Some(ToolCall {
+                        name: "web_search".into(),
+                        arguments: r#"{"query":"weather in Copenhagen"}"#.into(),
+                    }),
+                    extra_tool_calls: vec![
+                        ToolCall {
+                            name: "web_search".into(),
+                            arguments: " { \"query\" : \"weather in Copenhagen\" } ".into(),
+                        },
+                        ToolCall {
+                            name: "web_search".into(),
+                            arguments: r#"{"query":"weather in Aarhus"}"#.into(),
+                        },
+                    ],
+                    ..Default::default()
+                })
+            }
+        }
+
+        let (tx, mut out) = session(Arc::new(DuplicateBatchThenAnswer));
+        tx.send(Ok(understanding("look up Copenhagen weather once")))
+            .await
+            .unwrap();
+        drop(tx);
+
+        let mut messages = Vec::new();
+        while let Some(message) = out.next().await {
+            messages.push(message.unwrap());
+        }
+        assert_eq!(
+            messages
+                .iter()
+                .filter_map(action_of)
+                .filter(|action| action.action == "web_search")
+                .count(),
+            2,
+            "one duplicate and one distinct same-tool bidi call must produce two executions",
+        );
+    }
+
+    #[tokio::test]
+    async fn a_transient_final_model_failure_retries_from_the_bidi_server_observation() {
+        struct ToolFailThenAnswer(std::sync::atomic::AtomicUsize);
+        #[tonic::async_trait]
+        impl ChatModel for ToolFailThenAnswer {
+            async fn complete(
+                &self,
+                _messages: &[ChatMessage],
+                _tools: &[ToolDef],
+            ) -> Result<ChatResponse, LlmError> {
+                match self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst) {
+                    0 => Ok(ChatResponse {
+                        tool_call: Some(ToolCall {
+                            name: "web_search".into(),
+                            arguments: r#"{"query":"cycling directions to Nyhavn"}"#.into(),
+                        }),
+                        ..Default::default()
+                    }),
+                    1 => Err(LlmError::Transport("transient app-server failure".into())),
+                    _ => Ok(ChatResponse {
+                        content: Some("I found the grounded route.".into()),
+                        ..Default::default()
+                    }),
+                }
+            }
+        }
+
+        let (tx, mut out) = session(Arc::new(ToolFailThenAnswer(
+            std::sync::atomic::AtomicUsize::new(0),
+        )));
+        tx.send(Ok(understanding("give me cycling directions to Nyhavn")))
+            .await
+            .unwrap();
+        drop(tx);
+
+        let mut messages = Vec::new();
+        while let Some(message) = out.next().await {
+            messages.push(message.unwrap());
+        }
+        let terminal = messages.last().expect("a spoken terminal action");
+        assert!(
+            spoken(terminal).contains("grounded route"),
+            "a transient final model failure must retry from the completed lookup, got {}",
+            spoken(terminal),
+        );
+    }
+
+    #[tokio::test]
     async fn a_batched_model_step_cannot_overrun_the_replayed_device_action_budget() {
         struct OversizedBatch;
 
@@ -2147,7 +2420,7 @@ mod tests {
     /// seeded from the replayed transcript; bidi did not.
     #[tokio::test]
     async fn a_replayed_run_consumes_the_bidi_action_budget() {
-        struct AlwaysSearch;
+        struct AlwaysSearch(std::sync::atomic::AtomicUsize);
         #[tonic::async_trait]
         impl ChatModel for AlwaysSearch {
             async fn complete(
@@ -2155,12 +2428,14 @@ mod tests {
                 _m: &[ChatMessage],
                 _t: &[ToolDef],
             ) -> Result<ChatResponse, LlmError> {
+                let index = self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 Ok(ChatResponse {
                     content: None,
                     thought: String::new(),
                     tool_call: Some(ToolCall {
                         name: "web_search".into(),
-                        arguments: r#"{"query":"loop"}"#.into(),
+                        arguments: serde_json::json!({"query": format!("loop {index}")})
+                            .to_string(),
                     }),
                     extra_tool_calls: Vec::new(),
                 })
@@ -2192,7 +2467,9 @@ mod tests {
             });
         }
 
-        let (tx, mut out) = session(Arc::new(AlwaysSearch));
+        let (tx, mut out) = session(Arc::new(AlwaysSearch(std::sync::atomic::AtomicUsize::new(
+            0,
+        ))));
         tx.send(Ok(pb::StreamingUnderstandRequest {
             content: Some(
                 pb::streaming_understand_request::Content::UnderstandingRequest(
@@ -2281,7 +2558,7 @@ mod tests {
     #[tokio::test]
     async fn action_budget_exhaustion_yields_too_many_actions_then_respond() {
         // A model that only ever calls a server tool: it can never finish.
-        struct AlwaysSearch;
+        struct AlwaysSearch(std::sync::atomic::AtomicUsize);
         #[tonic::async_trait]
         impl ChatModel for AlwaysSearch {
             async fn complete(
@@ -2289,18 +2566,22 @@ mod tests {
                 _m: &[ChatMessage],
                 _t: &[ToolDef],
             ) -> Result<ChatResponse, LlmError> {
+                let index = self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 Ok(ChatResponse {
                     content: None,
                     thought: String::new(),
                     tool_call: Some(ToolCall {
                         name: "web_search".into(),
-                        arguments: r#"{"query":"loop"}"#.into(),
+                        arguments: serde_json::json!({"query": format!("loop {index}")})
+                            .to_string(),
                     }),
                     extra_tool_calls: Vec::new(),
                 })
             }
         }
-        let (tx, mut out) = session(Arc::new(AlwaysSearch));
+        let (tx, mut out) = session(Arc::new(AlwaysSearch(std::sync::atomic::AtomicUsize::new(
+            0,
+        ))));
         tx.send(Ok(understanding("loop forever"))).await.unwrap();
         drop(tx);
 

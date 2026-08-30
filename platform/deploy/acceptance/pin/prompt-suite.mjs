@@ -105,6 +105,18 @@ export const SUITE = [
     note: "NEGATIVE CONTROL: a question must never start playback.",
   },
   {
+    id: "music-ranked-information",
+    prompt: "what is Michael Jackson's most popular song?",
+    expectAnswer: ["Billie Jean"],
+    forbid: [
+      NATIVE_ACTIONS.PLAY_MUSIC,
+      NATIVE_ACTIONS.PLAY_FAVORITE_TRACKS,
+      NATIVE_ACTIONS.PLAY_FEATURED_MUSIC,
+      "music_discover",
+    ],
+    note: "A ranked information question must answer from research without touching the active provider or starting playback.",
+  },
+  {
     id: "music-queue-read",
     prompt: "what's in my music queue?",
     expect: [NATIVE_ACTIONS.GET_MUSIC_QUEUE],
@@ -266,6 +278,13 @@ execution is a misreading of the one-operation contract (Ghidra deep dive S6).",
     measurement: true,
     note: "UNVERIFIED on this build: added 2026-07-28 to preserve the .137 token-gate coverage that `knowledge` lost, using EXPLICIT lookup phrasing because that is what measurably drives tool use. No run of this exact prompt exists yet, so it is reported as a MEASURE rather than counted pass/fail. Promote it to a contract (drop `measurement`) once a baseline run shows knowledge_lookup firing reliably; delete it if explicit phrasing turns out not to help either.",
   },
+  {
+    id: "ice-floats",
+    prompt: "explain why ice floats on water in one sentence",
+    expectAnswer: ["less dense", "lower density", "expands", "hydrogen bonds", "crystalline"],
+    forbid: ["web_search", "ask_online", NATIVE_ACTIONS.PLAY_MUSIC],
+    note: "The exact checklist explanation is stable knowledge and must be correct without external search or a device action.",
+  },
 
   // ---- Open-web search: the .115 Brave path ------------------------------
   // `web_search` uses a TOKEN gate (require_grounded_query_tokens), not the
@@ -351,6 +370,13 @@ execution is a misreading of the one-operation contract (Ghidra deep dive S6).",
     prompt: "the music is too loud",
     forbid: [NATIVE_ACTIONS.INCREMENT_VOLUME, NATIVE_ACTIONS.SET_VOLUME],
     note: "NEGATIVE CONTROL: a complaint is not a command. Must not raise volume.",
+  },
+  {
+    id: "music-control-hypothetical",
+    prompt: "what happens if I say 'pause the music'?",
+    expect: [NATIVE_ACTIONS.RESPOND],
+    forbid: [NATIVE_ACTIONS.PAUSE_MUSIC, NATIVE_ACTIONS.PLAY_MUSIC],
+    note: "NEGATIVE CONTROL: quoting a playback command asks for an explanation and must not execute it.",
   },
   {
     id: "tickle-near-miss",
@@ -529,11 +555,25 @@ execution is a misreading of the one-operation contract (Ghidra deep dive S6).",
     note: "Reading recent messages must not compose, send, or call.",
   },
   {
+    id: "messages-contact-read",
+    prompt: "read my messages from Alex",
+    expect: [NATIVE_ACTIONS.DISPLAY_MESSAGES],
+    forbid: [NATIVE_ACTIONS.COMPOSE_MESSAGE, NATIVE_ACTIONS.CALL_PERSON],
+    note: "A contact-scoped read must preserve the contact and must not compose or call.",
+  },
+  {
     id: "messages-search-read",
     prompt: "search my messages for dinner",
     expect: [NATIVE_ACTIONS.MESSAGE_SEARCH],
     forbid: [NATIVE_ACTIONS.COMPOSE_MESSAGE, NATIVE_ACTIONS.CALL_PERSON],
     note: "A local message search remains a read-only messages action.",
+  },
+  {
+    id: "messages-contact-topic-read",
+    prompt: "what did Alex say about dinner?",
+    expect: [NATIVE_ACTIONS.MESSAGE_SEARCH],
+    forbid: [NATIVE_ACTIONS.COMPOSE_MESSAGE, NATIVE_ACTIONS.CALL_PERSON],
+    note: "A contact-and-topic read must preserve both constraints and remain read-only.",
   },
   {
     id: "messages-open-ui",
@@ -692,12 +732,13 @@ execution is a misreading of the one-operation contract (Ghidra deep dive S6).",
   {
     id: "definition",
     prompt: "what does ubiquitous mean",
+    expectAnswer: ["everywhere", "widespread", "omnipresent", "commonplace"],
     forbid: [
       NATIVE_ACTIONS.PLAY_MUSIC,
       "music_catalog_search",
       "web_search",
     ],
-    note: "A dictionary answer is stable knowledge; it must not leave the device. Action-forbid only — phrasing of a definition is too free to pin.",
+    note: "A dictionary answer must be correct and must not invoke external search.",
   },
   {
     id: "memory-write",

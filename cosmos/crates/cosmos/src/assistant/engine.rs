@@ -130,6 +130,22 @@ const TERMINAL_RESERVE: std::time::Duration = super::runtime::TERMINAL_RESERVE;
 /// remaining budget. The tool produced nothing, so the model is told exactly
 /// that: an invented stand-in result here would be spoken to the wearer as fact.
 const TOOL_TIMED_OUT: &str = "The tool did not return in time and produced no result.";
+const REPEATED_SERVER_TOOL_CALL: &str =
+    "This exact tool call already returned earlier in this turn. Use that result and answer now.";
+
+pub(crate) fn server_tool_call_key(call: &ToolCall) -> String {
+    let arguments = serde_json::from_str::<serde_json::Value>(&call.arguments)
+        .map(|value| value.to_string())
+        .unwrap_or_else(|_| call.arguments.trim().to_owned());
+    format!("{}\n{arguments}", call.name)
+}
+
+pub(crate) fn repeated_server_tool_observation(previous: &str) -> String {
+    format!(
+        "{REPEATED_SERVER_TOOL_CALL}\nPrevious result: {}",
+        model_facing_observation(previous)
+    )
+}
 
 /// Total wall-clock budget for this run.
 ///
@@ -207,7 +223,7 @@ const MIN_TOOL_WINDOW: std::time::Duration = std::time::Duration::from_secs(3);
 /// Deliberately not an apology and not first-person: whatever comes back is
 /// spoken to the wearer, so it is bound by the same no-persona contract as every
 /// other wearer-facing string here (`wearer_facing_strings_have_no_persona`).
-const FINAL_ANSWER_DIRECTIVE: &str = concat!(
+pub(crate) const FINAL_ANSWER_DIRECTIVE: &str = concat!(
     "Time for this turn is up. No further tools will run. ",
     "Answer now using only what the observations above already established. ",
     "If they are incomplete, say plainly what is known and what could not be ",
@@ -405,7 +421,8 @@ impl Engine {
     ) -> Option<String> {
         let budget = deadline
             .saturating_duration_since(std::time::Instant::now())
-            .checked_sub(TERMINAL_RESERVE)?;
+            .checked_sub(TERMINAL_RESERVE)?
+            .min(super::runtime::MODEL_STEP_LIMIT);
         if budget.is_zero() {
             return None;
         }
@@ -597,6 +614,7 @@ impl Engine {
         tool_context.deadline = Some(run_deadline);
 
         let mut music_research_completed = false;
+        let mut completed_server_calls = std::collections::HashMap::<String, String>::new();
         for step in 0..ACTION_LIMIT {
             // Out of turn budget: deliver a spoken terminal NOW, before the device's
             // deadline fires and throws away everything we streamed.
@@ -636,6 +654,20 @@ impl Engine {
             let resp = match resolved {
                 Ok(Ok(response)) => response,
                 Ok(Err(error)) => {
+                    if messages
+                        .iter()
+                        .any(|message| message.role == Role::ToolResult)
+                    {
+                        run.note_model_step();
+                        if let Some(spoken) =
+                            self.compose_final_answer(&messages, run_deadline).await
+                        {
+                            let id = new_id();
+                            finish(&tx, respond(&spoken, parent, id)).await;
+                            run.finish("answered");
+                            return;
+                        }
+                    }
                     let id = new_id();
                     finish_as(
                         &tx,
@@ -649,6 +681,20 @@ impl Engine {
                 // The step outran its slice of the turn budget. This one really
                 // is a deadline.
                 Err(_elapsed) => {
+                    if messages
+                        .iter()
+                        .any(|message| message.role == Role::ToolResult)
+                    {
+                        run.note_model_step();
+                        if let Some(spoken) =
+                            self.compose_final_answer(&messages, run_deadline).await
+                        {
+                            let id = new_id();
+                            finish(&tx, respond(&spoken, parent, id)).await;
+                            run.finish("answered");
+                            return;
+                        }
+                    }
                     let id = new_id();
                     finish_as(&tx, respond(ERROR_TIMEOUT, parent, id), Some("deadline")).await;
                     run.finish("deadline");
@@ -915,6 +961,16 @@ impl Engine {
                 // then loop, so both are bounded by the run budget from here on:
                 // if there is not enough left to run one AND still speak, close
                 // the run now, before any action node goes out.
+                let server_call_key = server_tool_call_key(&tc);
+                if let Some(previous) = completed_server_calls.get(&server_call_key) {
+                    let observation = repeated_server_tool_observation(previous);
+                    messages.push(ChatMessage::tool_result(
+                        &tc.name,
+                        &tc.arguments,
+                        &observation,
+                    ));
+                    continue;
+                }
                 let tool_reserve =
                     tool_reserve_for(&tc.name, terminal_music, bounded_music_research);
                 if out_of_tool_budget_with(run_deadline, tool_reserve) {
@@ -948,19 +1004,30 @@ impl Engine {
                 // transport (the pin dispatches the final action and returns one
                 // observation), so anything device-side falls through to the
                 // single-action path below.
-                let batched: Vec<ToolCall> = if terminal_music {
-                    Vec::new()
-                } else {
-                    resp.extra_tool_calls
-                        .iter()
-                        .filter(|extra| {
-                            !catalog::is_device_tool(&extra.name)
-                                && catalog::is_server_tool(&extra.name)
-                                && tools.iter().any(|tool| tool.name == extra.name)
-                        })
-                        .cloned()
-                        .collect()
-                };
+                let mut batch_keys = std::collections::HashSet::from([server_call_key.clone()]);
+                let mut batched = Vec::new();
+                if !terminal_music {
+                    for extra in &resp.extra_tool_calls {
+                        if catalog::is_device_tool(&extra.name)
+                            || !catalog::is_server_tool(&extra.name)
+                            || !tools.iter().any(|tool| tool.name == extra.name)
+                        {
+                            continue;
+                        }
+                        let key = server_tool_call_key(extra);
+                        if let Some(previous) = completed_server_calls.get(&key) {
+                            messages.push(ChatMessage::tool_result(
+                                &extra.name,
+                                &extra.arguments,
+                                &repeated_server_tool_observation(previous),
+                            ));
+                            continue;
+                        }
+                        if batch_keys.insert(key) {
+                            batched.push(extra.clone());
+                        }
+                    }
+                }
                 // Never exceed the run's action ceiling: the device counts every
                 // dispatched action, so a batch that overruns it would be cut
                 // short on the pin instead of here.
@@ -1045,6 +1112,8 @@ impl Engine {
                             &call.arguments,
                             &model_facing_observation(observation),
                         ));
+                        completed_server_calls
+                            .insert(server_tool_call_key(call), observation.to_owned());
                         last_obs_id = obs_id;
                     }
                     parent = last_obs_id;
@@ -1117,6 +1186,7 @@ impl Engine {
                     &tc.arguments,
                     &model_facing_observation(&observation),
                 ));
+                completed_server_calls.insert(server_call_key, observation.clone());
                 parent = obs_id;
                 if bounded_music_research && is_music_research_tool(&tc.name) {
                     retire_music_research_tools(&mut tools);
@@ -2147,6 +2217,10 @@ fn explicit_safe_stock_action(utterance: &str) -> Option<DeterministicDeviceActi
         thought,
     };
 
+    if let Some(action) = explicit_message_read_action(utterance) {
+        return Some(action);
+    }
+
     let action = match normalized.as_str() {
         "reset session" | "clear session" | "start a new session" => empty(
             "ClearUnderstandingContext",
@@ -2236,6 +2310,81 @@ fn explicit_safe_stock_action(utterance: &str) -> Option<DeterministicDeviceActi
         _ => return explicit_one_off_translation(&normalized),
     };
     Some(action)
+}
+
+fn explicit_message_read_action(utterance: &str) -> Option<DeterministicDeviceAction> {
+    let command = utterance
+        .trim()
+        .trim_end_matches(['.', '?', '!'])
+        .trim_end();
+    let lower = command.to_ascii_lowercase();
+
+    if let Some(person) = lower
+        .strip_prefix("read my messages from ")
+        .and_then(|_| command.get("read my messages from ".len()..))
+        .map(str::trim)
+    {
+        if !bounded_contact_name(person) {
+            return None;
+        }
+        return Some(DeterministicDeviceAction {
+            name: "DisplayMessages",
+            input: serde_json::json!({
+                "IDs": [],
+                "Person": [person],
+                "MessageCount": 10,
+            })
+            .to_string(),
+            thought: "The wearer asked to display recent local messages from one contact",
+        });
+    }
+
+    let remainder = lower.strip_prefix("what did ")?;
+    let separator = " say about ";
+    let separator_index = remainder.find(separator)?;
+    let person_start = "what did ".len();
+    let person_end = person_start + separator_index;
+    let query_start = person_end + separator.len();
+    let person = command.get(person_start..person_end)?.trim();
+    let query = command.get(query_start..)?.trim();
+    if !bounded_contact_name(person) || !bounded_read_subject(query) {
+        return None;
+    }
+    Some(DeterministicDeviceAction {
+        name: "MessageSearch",
+        input: serde_json::json!({"Person": [person], "Query": query}).to_string(),
+        thought: "The wearer asked to search one contact's local messages for a bounded topic",
+    })
+}
+
+fn bounded_contact_name(value: &str) -> bool {
+    let normalized = normalized_intent(value);
+    let Some(normalized) = normalized else {
+        return false;
+    };
+    value.len() <= 128
+        && value.split_whitespace().count() <= 8
+        && value.chars().any(char::is_alphabetic)
+        && value.chars().all(|character| {
+            character.is_alphabetic()
+                || character.is_whitespace()
+                || matches!(character, '-' | '\'' | '’' | '.')
+        })
+        && ![
+            " and ", " or ", " then ", " while ", " before ", " after ", " also ",
+        ]
+        .iter()
+        .any(|separator| normalized.contains(separator))
+        && !matches!(
+            normalized.as_str(),
+            "a contact"
+                | "any contact"
+                | "anyone"
+                | "contacts"
+                | "everyone"
+                | "my contact"
+                | "someone"
+        )
 }
 
 fn bounded_read_subject(value: &str) -> bool {
@@ -3296,6 +3445,214 @@ mod tests {
         assert_eq!(
             as_action(last).map(|a| a.action.as_str()),
             Some(catalog::RESPOND_ACTION),
+        );
+    }
+
+    #[tokio::test]
+    async fn an_identical_server_tool_call_is_executed_only_once_per_turn() {
+        struct RepeatThenAnswer(std::sync::atomic::AtomicUsize);
+        #[tonic::async_trait]
+        impl ChatModel for RepeatThenAnswer {
+            async fn complete(
+                &self,
+                _messages: &[ChatMessage],
+                _tools: &[ToolDef],
+            ) -> Result<ChatResponse, LlmError> {
+                if self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst) < 2 {
+                    return Ok(ChatResponse {
+                        tool_call: Some(ToolCall {
+                            name: "web_search".into(),
+                            arguments: r#"{"query":"weather in Copenhagen"}"#.into(),
+                        }),
+                        ..Default::default()
+                    });
+                }
+                Ok(ChatResponse {
+                    content: Some("Use the result already returned.".into()),
+                    ..Default::default()
+                })
+            }
+        }
+
+        let messages = run_with(
+            Arc::new(RepeatThenAnswer(std::sync::atomic::AtomicUsize::new(0))),
+            pb::SynapseUnderstandingRequest {
+                utterance: "Search once, then answer.".into(),
+                ..Default::default()
+            },
+        )
+        .await;
+        let actions = messages.iter().filter_map(as_action).collect::<Vec<_>>();
+        assert_eq!(
+            actions
+                .iter()
+                .filter(|action| action.action == "web_search")
+                .count(),
+            1,
+            "an identical server call must not be emitted or executed twice",
+        );
+        assert_eq!(
+            actions.last().map(|action| action.action.as_str()),
+            Some("Respond")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_repeated_call_does_not_disable_a_later_distinct_call_to_the_same_tool() {
+        struct RepeatThenDistinctThenAnswer(std::sync::atomic::AtomicUsize);
+        #[tonic::async_trait]
+        impl ChatModel for RepeatThenDistinctThenAnswer {
+            async fn complete(
+                &self,
+                _messages: &[ChatMessage],
+                _tools: &[ToolDef],
+            ) -> Result<ChatResponse, LlmError> {
+                let query = match self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst) {
+                    0 | 1 => "weather in Copenhagen",
+                    2 => "weather in Aarhus",
+                    _ => {
+                        return Ok(ChatResponse {
+                            content: Some("Used both distinct results.".into()),
+                            ..Default::default()
+                        });
+                    }
+                };
+                Ok(ChatResponse {
+                    tool_call: Some(ToolCall {
+                        name: "web_search".into(),
+                        arguments: serde_json::json!({"query": query}).to_string(),
+                    }),
+                    ..Default::default()
+                })
+            }
+        }
+
+        let messages = run_with(
+            Arc::new(RepeatThenDistinctThenAnswer(
+                std::sync::atomic::AtomicUsize::new(0),
+            )),
+            pb::SynapseUnderstandingRequest {
+                utterance: "Compare the weather in Copenhagen and Aarhus.".into(),
+                ..Default::default()
+            },
+        )
+        .await;
+        let search_observations = messages
+            .iter()
+            .filter_map(as_observation)
+            .filter(|observation| observation.action_name == "web_search")
+            .collect::<Vec<_>>();
+        assert_eq!(search_observations.len(), 2);
+        assert!(
+            search_observations
+                .iter()
+                .all(|observation| observation.observation != UNRECOGNIZED_FUNCTION)
+        );
+    }
+
+    #[tokio::test]
+    async fn identical_server_calls_in_one_model_batch_execute_only_once() {
+        struct DuplicateBatchThenAnswer;
+        #[tonic::async_trait]
+        impl ChatModel for DuplicateBatchThenAnswer {
+            async fn complete(
+                &self,
+                messages: &[ChatMessage],
+                _tools: &[ToolDef],
+            ) -> Result<ChatResponse, LlmError> {
+                if messages
+                    .iter()
+                    .any(|message| message.role == Role::ToolResult)
+                {
+                    return Ok(ChatResponse {
+                        content: Some("Used the one lookup result.".into()),
+                        ..Default::default()
+                    });
+                }
+                Ok(ChatResponse {
+                    tool_call: Some(ToolCall {
+                        name: "web_search".into(),
+                        arguments: r#"{"query":"weather in Copenhagen"}"#.into(),
+                    }),
+                    extra_tool_calls: vec![
+                        ToolCall {
+                            name: "web_search".into(),
+                            arguments: " { \"query\" : \"weather in Copenhagen\" } ".into(),
+                        },
+                        ToolCall {
+                            name: "web_search".into(),
+                            arguments: r#"{"query":"weather in Aarhus"}"#.into(),
+                        },
+                    ],
+                    ..Default::default()
+                })
+            }
+        }
+
+        let messages = run_with(
+            Arc::new(DuplicateBatchThenAnswer),
+            pb::SynapseUnderstandingRequest {
+                utterance: "Look up Copenhagen weather once.".into(),
+                ..Default::default()
+            },
+        )
+        .await;
+        assert_eq!(
+            messages
+                .iter()
+                .filter_map(as_action)
+                .filter(|action| action.action == "web_search")
+                .count(),
+            2,
+            "one duplicate and one distinct same-tool call must produce two executions",
+        );
+    }
+
+    #[tokio::test]
+    async fn a_transient_final_model_failure_retries_from_the_server_observation() {
+        struct ToolFailThenAnswer(std::sync::atomic::AtomicUsize);
+        #[tonic::async_trait]
+        impl ChatModel for ToolFailThenAnswer {
+            async fn complete(
+                &self,
+                _messages: &[ChatMessage],
+                _tools: &[ToolDef],
+            ) -> Result<ChatResponse, LlmError> {
+                match self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst) {
+                    0 => Ok(ChatResponse {
+                        tool_call: Some(ToolCall {
+                            name: "web_search".into(),
+                            arguments: r#"{"query":"cycling directions to Nyhavn"}"#.into(),
+                        }),
+                        ..Default::default()
+                    }),
+                    1 => Err(LlmError::Transport("transient app-server failure".into())),
+                    _ => Ok(ChatResponse {
+                        content: Some("I found the grounded route.".into()),
+                        ..Default::default()
+                    }),
+                }
+            }
+        }
+
+        let messages = run_with(
+            Arc::new(ToolFailThenAnswer(std::sync::atomic::AtomicUsize::new(0))),
+            pb::SynapseUnderstandingRequest {
+                utterance: "Give me cycling directions to Nyhavn.".into(),
+                ..Default::default()
+            },
+        )
+        .await;
+        let terminal = messages
+            .iter()
+            .filter_map(as_action)
+            .next_back()
+            .expect("a spoken terminal action");
+        assert_eq!(terminal.action, catalog::RESPOND_ACTION);
+        assert!(
+            terminal.input.contains("grounded route"),
+            "a transient final model failure must retry from the completed lookup, got {}",
+            terminal.input,
         );
     }
 
@@ -5085,9 +5442,19 @@ mod tests {
                 serde_json::json!({"IDs": [], "Person": [], "MessageCount": 10}),
             ),
             (
+                "Read my messages from Alex.",
+                "DisplayMessages",
+                serde_json::json!({"IDs": [], "Person": ["Alex"], "MessageCount": 10}),
+            ),
+            (
                 "Search my messages for dinner.",
                 "MessageSearch",
                 serde_json::json!({"Person": [], "Query": "dinner"}),
+            ),
+            (
+                "What did Alex say about dinner?",
+                "MessageSearch",
+                serde_json::json!({"Person": ["Alex"], "Query": "dinner"}),
             ),
             (
                 "Open messages.",
@@ -5178,10 +5545,32 @@ mod tests {
             deterministic_device_action(&locked_contacts, &locked_tools).is_none(),
             "private contact data must not be routed while the Pin is locked",
         );
+        for utterance in [
+            "Read my recent messages.",
+            "Read my messages from Alex.",
+            "Search my messages for dinner.",
+            "What did Alex say about dinner?",
+        ] {
+            let locked_messages = pb::SynapseUnderstandingRequest {
+                utterance: utterance.to_owned(),
+                device_context: Some(pb::SynapseDeviceContext {
+                    is_locked: true,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            let locked_tools = resolve_catalog(&locked_messages, true);
+            assert!(
+                deterministic_device_action(&locked_messages, &locked_tools).is_none(),
+                "private message data must not be routed while the Pin is locked: {utterance}",
+            );
+        }
 
         for compound in [
             "Open messages and call Alex.",
             "Search my messages for dinner and call Alex.",
+            "Read my messages from Alex and call Bob.",
+            "What did Alex say about dinner and send a message?",
             "Search contacts for Alex and call Bob.",
             "Translate hello to Spanish and take a photo.",
         ] {
