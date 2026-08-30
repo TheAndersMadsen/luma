@@ -67,6 +67,59 @@ export const ASSISTANT_CASES = Object.freeze([
     terminal: "answered",
   }),
   Object.freeze({
+    id: "music-direct-track",
+    prompt: "Play One Dance by Drake.",
+    requiredActions: ["PlayMusic"],
+    forbiddenActions: ["music_discover", "ask_online", "web_search", "Respond"],
+    exactActionCounts: { PlayMusic: 1 },
+    expectedActionInputFields: { PlayMusic: { Artist: "Drake", Track: "One Dance" } },
+    route: "a1",
+    terminal: "device_action",
+    authenticatedWearer: true,
+    simulateUnlockedPin: true,
+  }),
+  Object.freeze({
+    id: "music-direct-album",
+    prompt: "Play the album Thriller by Michael Jackson.",
+    requiredActions: ["PlayMusic"],
+    forbiddenActions: ["music_discover", "ask_online", "web_search", "Respond"],
+    exactActionCounts: { PlayMusic: 1 },
+    expectedActionInputFields: {
+      PlayMusic: { Album: "Thriller", Artist: "Michael Jackson" },
+    },
+    route: "a1",
+    terminal: "device_action",
+    authenticatedWearer: true,
+    simulateUnlockedPin: true,
+  }),
+  ...[
+    [
+      "music-workout-playlist",
+      "Play my workout playlist.",
+      "PlayMusic",
+      { PlayMusic: { Option: /\bworkout\b/iu } },
+    ],
+    ["music-featured", "Play music.", "PlayFeaturedMusic"],
+    ["music-favourites", "Play my favourites.", "PlayFavoriteTracks"],
+    [
+      "music-generate-running",
+      "Make me a playlist for running.",
+      "GenerateMusicPlaylist",
+      { GenerateMusicPlaylist: { Playlist: /\brunn(?:er|ing)\b/iu } },
+    ],
+  ].map(([id, prompt, action, expectedActionInputPatterns]) => Object.freeze({
+    id,
+    prompt,
+    requiredActions: [action],
+    forbiddenActions: ["music_discover", "ask_online", "web_search", "Respond"],
+    exactActionCounts: { [action]: 1 },
+    ...(expectedActionInputPatterns ? { expectedActionInputPatterns } : {}),
+    route: "a1",
+    terminal: "device_action",
+    authenticatedWearer: true,
+    simulateUnlockedPin: true,
+  })),
+  Object.freeze({
     id: "music-ranked-information",
     prompt: "What is Michael Jackson's most popular song?",
     requiredActions: ["ask_online", "Respond"],
@@ -655,8 +708,39 @@ export const ASSISTANT_CASES = Object.freeze([
     expectedActionInputs: { [action]: {} },
     route,
     terminal: "device_action",
-    ...(modelInvoked ? {} : { modelInvoked: false }),
+    ...(modelInvoked ? {} : { modelInvoked: false, simulateUnlockedPin: true }),
   })),
+  ...[
+    ["cellular-data-on", "Turn on cellular data.", "TurnOnCellularData", "TurnOffCellularData"],
+    ["cellular-data-off", "Turn off cellular data.", "TurnOffCellularData", "TurnOnCellularData"],
+    [
+      "cellular-roaming-off",
+      "Turn off cellular roaming.",
+      "TurnOffCellularRoaming",
+      "TurnOnCellularRoaming",
+    ],
+  ].map(([id, prompt, action, oppositeAction]) => Object.freeze({
+    id,
+    prompt,
+    requiredActions: [action],
+    forbiddenActions: ["Respond", oppositeAction],
+    exactActionCounts: { [action]: 1 },
+    expectedActionInputs: { [action]: {} },
+    route: "a1",
+    terminal: "device_action",
+    simulateUnlockedPin: true,
+  })),
+  Object.freeze({
+    id: "cellular-roaming-on-confirmation",
+    prompt: "Turn on cellular roaming.",
+    requiredActions: ["Respond"],
+    forbiddenActions: ["TurnOnCellularRoaming"],
+    exactActionCounts: { Respond: 1 },
+    answerPattern: /\b(?:roaming|charge)\w*\b/iu,
+    route: "a1",
+    terminal: "confirmation_required",
+    simulateUnlockedPin: true,
+  }),
   Object.freeze({
     id: "tickle-near-miss",
     prompt: "Please tickle.",
@@ -750,6 +834,39 @@ export function evaluateAssistantCase(spec, trace, beforeScrape, afterScrape) {
         }
       });
     if (!matching) failures.push(`action_input:${action}`);
+  }
+  for (const [action, expected] of Object.entries(spec.expectedActionInputFields ?? {})) {
+    const matching = steps
+      .filter((step) => step?.kind === "action" && step?.name === action)
+      .some((step) => {
+        try {
+          const actual = JSON.parse(step.input);
+          return actual !== null && typeof actual === "object" && !Array.isArray(actual) &&
+            Object.entries(expected).every(([field, value]) => actual[field] === value);
+        } catch {
+          return false;
+        }
+      });
+    if (!matching) failures.push(`action_input_fields:${action}`);
+  }
+  for (const [action, expected] of Object.entries(spec.expectedActionInputPatterns ?? {})) {
+    const matching = steps
+      .filter((step) => step?.kind === "action" && step?.name === action)
+      .some((step) => {
+        try {
+          const actual = JSON.parse(step.input);
+          return actual !== null && typeof actual === "object" && !Array.isArray(actual) &&
+            Object.entries(expected).every(([field, pattern]) => {
+              const value = actual[field];
+              if (typeof value !== "string" || !(pattern instanceof RegExp)) return false;
+              pattern.lastIndex = 0;
+              return pattern.test(value);
+            });
+        } catch {
+          return false;
+        }
+      });
+    if (!matching) failures.push(`action_input_patterns:${action}`);
   }
   if (spec.answerPattern) {
     const answers = steps

@@ -153,8 +153,74 @@ test("simulated Pin cases request device context and verify exact stock action i
   assert.ok(wrongInput.failures.includes("action_input:ManageNutrition"));
 });
 
+test("safe stock network setup cases carry unlocked Pin context", () => {
+  for (const id of [
+    "wifi-connect",
+    "wifi-qr-scan",
+    "cellular-data-on",
+    "cellular-data-off",
+    "cellular-roaming-off",
+    "cellular-roaming-on-confirmation",
+  ]) {
+    const spec = ASSISTANT_CASES.find((candidate) => candidate.id === id);
+    assert.deepEqual(assistantTracePayload(spec), {
+      text: spec.prompt,
+      simulate_unlocked_pin: true,
+    });
+  }
+
+  const roaming = ASSISTANT_CASES.find(({ id }) => id === "cellular-roaming-on-confirmation");
+  assert.deepEqual(roaming.requiredActions, ["Respond"]);
+  assert.ok(roaming.forbiddenActions.includes("TurnOnCellularRoaming"));
+  assert.equal(roaming.terminal, "confirmation_required");
+});
+
+test("direct music selection requires grounded catalog fields without rejecting safe extras", () => {
+  const spec = ASSISTANT_CASES.find(({ id }) => id === "music-direct-track");
+  const before = sample({ terminal: "device_action" }, 4);
+  const after = sample({ terminal: "device_action" }, 5);
+  const trace = {
+    steps: [{
+      kind: "action",
+      name: "PlayMusic",
+      input: JSON.stringify({ Artist: "Drake", Track: "One Dance", Option: "track" }),
+    }],
+    total_ms: 4_000,
+    device_deadline_ms: 90_000,
+  };
+
+  const passing = evaluateAssistantCase(spec, trace, before, after);
+  assert.equal(passing.pass, true, passing.failures.join(","));
+
+  trace.steps[0].input = JSON.stringify({ Artist: "Drake", Track: "Hotline Bling" });
+  const wrongTrack = evaluateAssistantCase(spec, trace, before, after);
+  assert.ok(wrongTrack.failures.includes("action_input_fields:PlayMusic"));
+});
+
+test("playlist selection verifies the requested topic inside model-authored fields", () => {
+  const base = ASSISTANT_CASES.find(({ id }) => id === "music-workout-playlist");
+  const spec = {
+    ...base,
+    expectedActionInputPatterns: { PlayMusic: { Option: /\bworkout\b/iu } },
+  };
+  const before = sample({ terminal: "device_action" }, 4);
+  const after = sample({ terminal: "device_action" }, 5);
+  const trace = {
+    steps: [{ kind: "action", name: "PlayMusic", input: '{"Option":"sleep playlist"}' }],
+    total_ms: 4_000,
+    device_deadline_ms: 90_000,
+  };
+
+  const wrongTopic = evaluateAssistantCase(spec, trace, before, after);
+  assert.ok(wrongTopic.failures.includes("action_input_patterns:PlayMusic"));
+
+  trace.steps[0].input = '{"Option":"my workout playlist"}';
+  const passing = evaluateAssistantCase(spec, trace, before, after);
+  assert.equal(passing.pass, true, passing.failures.join(","));
+});
+
 test("ranked playback evaluates as the configured wearer without exposing that identity", () => {
-  const ranked = ASSISTANT_CASES.filter(({ authenticatedWearer }) => authenticatedWearer);
+  const ranked = ASSISTANT_CASES.filter(({ providerGroundedMusic }) => providerGroundedMusic);
   assert.deepEqual(ranked.map(({ id }) => id), [
     "music-ranked-dr-dre-popular",
     "music-ranked-drake-popular",
@@ -408,6 +474,12 @@ test("the production matrix covers reasoning, retrieval, ambiguity, compound wor
     "knowledge-eiffel-height",
     "assistant-capabilities",
     "chitchat-joke",
+    "music-direct-track",
+    "music-direct-album",
+    "music-workout-playlist",
+    "music-featured",
+    "music-favourites",
+    "music-generate-running",
     "music-ranked-information",
     "music-ranked-dr-dre-information",
     "music-ranked-dr-dre-popular",
@@ -513,6 +585,10 @@ test("the production matrix covers reasoning, retrieval, ambiguity, compound wor
     "wifi-disconnect",
     "bluetooth-on",
     "bluetooth-off",
+    "cellular-data-on",
+    "cellular-data-off",
+    "cellular-roaming-off",
+    "cellular-roaming-on-confirmation",
     "tickle-near-miss",
     "consequential-confirmation",
   ]);
