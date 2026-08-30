@@ -44,6 +44,7 @@ import {
 } from "../shared/logcat.mjs";
 import {
   summarizeResponses,
+  isLocalEchoAnswer,
   assessAgenticGate,
   diffActivity,
   stockActionPayload,
@@ -74,6 +75,7 @@ export {
   detectProviderDecline,
   parseMusicRankingDegraded,
   sliceLogcatSince,
+  isLocalEchoAnswer,
 };
 
 // ---- probe-specific arg parsing (flags pinbox does not consume) ----
@@ -223,13 +225,6 @@ export function assessSilence({ probeError, evidenceText, plannedActions, execut
       (executedTools?.length ?? 0) === 0,
     silentUnknown,
   };
-}
-
-/** Exact response emitted by the Pin-local credential-free EchoProvider. */
-export function isLocalEchoAnswer(answer, utterance) {
-  return typeof answer === "string" &&
-    typeof utterance === "string" &&
-    answer === `Echo: ${utterance}`;
 }
 
 // ---- optional screencap (adb pull; NOT exec-out, which drops stdin on Pin) ----

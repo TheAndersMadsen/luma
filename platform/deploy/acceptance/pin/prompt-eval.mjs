@@ -31,6 +31,7 @@ import {
   isUnavailableAnswer,
 } from "./prompt-suite.mjs";
 import { OPERATIONAL_MARKERS } from "./tier-a-symbols.mjs";
+import { isLocalEchoAnswer } from "./pinbox/shared/evidence.mjs";
 
 const DEFAULT_REPEAT = 5;
 const DEFAULT_TIMEOUT_MS = 90_000;
@@ -243,6 +244,7 @@ async function probeOnce(options, utterance) {
       authToken: options.authToken,
     });
     const summary = summarizeResponses(responses);
+    const localEcho = isLocalEchoAnswer(summary.answerText, utterance);
     const { executed, mutations, mutationsRejected, declined, logcatError } = executedTools(
       options,
       sinceLogTime,
@@ -279,6 +281,7 @@ async function probeOnce(options, utterance) {
       // Distinguishes "answered directly, no tool" from "a tool failed to fire".
       // Both previously looked like an empty action list.
       answeredWithoutTool: executed.length === 0 && summary.answerStatus === "ok",
+      localEcho,
       silent,
     };
   } catch (error) {
@@ -315,6 +318,7 @@ function summarizeArm(prompt, runs) {
   const proposedMutations = [...new Set(ok.flatMap((run) => run.mutations ?? []))];
   const logcatErrors = [...new Set(ok.map((run) => run.logcatError).filter(Boolean))];
   const answeredWithoutToolRuns = ok.filter((run) => run.answeredWithoutTool).length;
+  const localEchoRuns = ok.filter((run) => run.localEcho).length;
   return {
     prompt,
     failedTools: [...failedTools],
@@ -325,6 +329,7 @@ function summarizeArm(prompt, runs) {
     proposedMutations,
     logcatErrors,
     answeredWithoutToolRuns,
+    localEchoRuns,
     toolLines: ok.reduce((total, run) => total + (run.toolLines ?? 0), 0),
     answers,
     answerTexts,
@@ -396,6 +401,7 @@ async function main() {
       "Raw Understand probes bypass stock speech recognition and the stock client. Planner evidence only; not physical acceptance.",
     repeat: options.repeat,
     arms,
+    wrongPlanningPlane: arms.some((arm) => arm.localEchoRuns > 0),
     comparison: arms.length === 2 ? compare(arms[0], arms[1]) : undefined,
   };
 
@@ -415,6 +421,7 @@ async function main() {
           })),
         };
     console.log(JSON.stringify(emitted, null, 2));
+    if (report.wrongPlanningPlane) process.exitCode = 3;
     return;
   }
 
@@ -431,6 +438,15 @@ async function main() {
       `    actions: ${actions.length ? actions.map(([name, n]) => `${name}×${n}`).join(", ") : "(none returned)"}`,
     );
     console.log("");
+  }
+  if (report.wrongPlanningPlane) {
+    console.log(
+      "  WRONG PLANNING PLANE: the Pin-local echo backend answered at least one run.\n" +
+        "  Remote Cosmos planning was not exercised, so no behavioural verdict is valid.\n\n" +
+        `  ${report.caveat}`,
+    );
+    process.exitCode = 3;
+    return;
   }
   if (options.suite) {
     let passed = 0;

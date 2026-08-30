@@ -70,6 +70,13 @@ export function summarizeResponses(responses) {
   };
 }
 
+/** Exact response emitted by the Pin-local credential-free EchoProvider. */
+export function isLocalEchoAnswer(answer, utterance) {
+  return typeof answer === "string" &&
+    typeof utterance === "string" &&
+    answer === `Echo: ${utterance}`;
+}
+
 export function assessAgenticGate(readiness) {
   const settings = readiness?.settings;
   if (!settings) return { known: false, warn: "settings unavailable" };
