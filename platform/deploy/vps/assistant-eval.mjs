@@ -645,7 +645,7 @@ function trace(options, spec) {
       "--silent",
       "--show-error",
       "--max-time",
-      "30",
+      "95",
       "--header",
       "content-type: application/json",
       "--data-binary",

@@ -162,6 +162,28 @@ test("agentic deadlines preserve the signed Pin to Cosmos delivery margin", () =
   assert.ok(edgeDeadline < hookDeadline);
 });
 
+test("the operator trace waits through the complete signed Pin session", () => {
+  const hookDeadline = integerConstant(
+    "pin/hook/payload/src/main/kotlin/com/penumbraos/hook/AgenticSessionDeadlineHooks.kt",
+    "AGENTIC_SESSION_TIMEOUT_MS",
+  );
+  const http = source("cosmos/crates/cosmos/src/http.rs");
+  assert.match(
+    http,
+    /const DEMO_CHAT_TIMEOUT: Duration = crate::assistant::runtime::PIN_SESSION_LIMIT;/u,
+  );
+
+  const evaluator = source("platform/deploy/vps/assistant-eval.mjs");
+  const traceTimeout = evaluator.match(
+    /"--max-time",\s*"([0-9]+)",\s*"--header",\s*"content-type: application\/json"/u,
+  );
+  assert.ok(traceTimeout, "the operator evaluator must declare one trace timeout");
+  assert.ok(
+    Number(traceTimeout[1]) * 1_000 > hookDeadline,
+    "the evaluator client must outlive the Pin session deadline",
+  );
+});
+
 test("operator docs keep the general control timeout separate from playback", () => {
   const example = source("center/.env.example");
   assert.match(example, /^# General Spotify control-route timeout\./mu);

@@ -40,7 +40,10 @@ const UPLOAD_SLOT_HEADER: &str = "file";
 
 const MAX_DEMO_TEXT_BYTES: usize = 4 * 1024;
 const MAX_ADMIN_BODY_BYTES: usize = 128 * 1024;
-const DEMO_CHAT_TIMEOUT: Duration = Duration::from_secs(25);
+// The operator trace drives the same foreground engine as the signed Pin. It
+// must observe the whole Pin session rather than cutting a valid 25-70 second
+// agent run off at the stock pre-Hook 25-second deadline.
+const DEMO_CHAT_TIMEOUT: Duration = crate::assistant::runtime::PIN_SESSION_LIMIT;
 const DEMO_SPEECH_TIMEOUT: Duration = Duration::from_secs(35);
 
 /// The engine's own run budget: it delivers a spoken terminal by here.
