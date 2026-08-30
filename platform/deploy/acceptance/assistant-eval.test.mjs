@@ -380,6 +380,23 @@ test("a prompt may explicitly accept either valid agent route without losing cor
   assert.equal(result.run.route, "a2");
 });
 
+test("a safety case may accept either a spoken answer or a harmless device action", () => {
+  const spec = ASSISTANT_CASES.find(({ id }) => id === "negative-volume-complaint");
+  const result = evaluateAssistantCase(
+    spec,
+    {
+      steps: [{ kind: "action", name: "DecrementVolume", input: "{}" }],
+      total_ms: 4_000,
+      device_deadline_ms: 90_000,
+    },
+    sample({ terminal: "device_action" }, 4),
+    sample({ terminal: "device_action" }, 5),
+  );
+
+  assert.equal(result.pass, true, result.failures.join(","));
+  assert.equal(result.run.terminal, "device_action");
+});
+
 test("the production matrix covers reasoning, retrieval, ambiguity, compound work, and confirmation", () => {
   assert.deepEqual(ASSISTANT_CASES.map(({ id }) => id), [
     "reasoning",
@@ -388,13 +405,18 @@ test("the production matrix covers reasoning, retrieval, ambiguity, compound wor
     "ice-floats",
     "definition-ubiquitous",
     "knowledge-pride-austen",
+    "knowledge-eiffel-height",
+    "assistant-capabilities",
+    "chitchat-joke",
     "music-ranked-information",
+    "music-ranked-dr-dre-information",
     "music-ranked-dr-dre-popular",
     "music-ranked-drake-popular",
     "music-ranked-drake-viral",
     "music-ranked-drake-controversial-2013",
     "music-ranked-michael-jackson-best",
     "fresh-web-search",
+    "tour-de-france-current",
     "compound-research",
     "explicit-lookup",
     "current-product-price",
@@ -404,9 +426,20 @@ test("the production matrix covers reasoning, retrieval, ambiguity, compound wor
     "transit-routing-limit",
     "show-timers",
     "show-alarms",
+    "timer-set-five-minutes",
+    "timer-pause",
+    "timer-resume",
+    "timer-add-one-minute",
+    "timer-delete",
+    "alarm-set-seven",
+    "alarm-set-weekday",
+    "alarm-cancel-seven",
+    "alarm-cancel",
     "food-log-today",
     "food-calories-today",
     "food-log-three-days",
+    "food-track-eggs",
+    "food-track-banana",
     "reset-session",
     "messages-recent-read",
     "messages-contact-read",
@@ -436,7 +469,22 @@ test("the production matrix covers reasoning, retrieval, ambiguity, compound wor
     "nearby-bare",
     "nearby-coffee",
     "nearest-coffee",
+    "weather-copenhagen",
+    "weather-capital-australia",
+    "nearest-coffee-route",
     "weather-and-nearby",
+    "volume-up-relative",
+    "volume-up-plain",
+    "volume-down-relative",
+    "volume-set-30",
+    "music-pause",
+    "music-resume",
+    "music-next",
+    "music-previous",
+    "music-restart",
+    "music-save-current",
+    "music-current-radio",
+    "music-pause-semantic",
     "pin-current-time",
     "pin-battery-level",
     "pin-current-volume",
@@ -451,6 +499,20 @@ test("the production matrix covers reasoning, retrieval, ambiguity, compound wor
     "pin-nutrition-eggs",
     "pin-world-clock-tokyo",
     "ambiguous-no-vision",
+    "music-control-hypothetical",
+    "photo-how-to-negative",
+    "messages-information-negative",
+    "negative-volume-complaint",
+    "tickle",
+    "tickle-fancy",
+    "tickle-triple",
+    "wifi-off",
+    "wifi-on",
+    "wifi-connect",
+    "wifi-qr-scan",
+    "wifi-disconnect",
+    "bluetooth-on",
+    "bluetooth-off",
     "tickle-near-miss",
     "consequential-confirmation",
   ]);

@@ -2325,6 +2325,14 @@ fn explicit_safe_stock_action(utterance: &str) -> Option<DeterministicDeviceActi
             "OpenRecentCalls",
             "The wearer asked to open the stock recent-calls experience",
         ),
+        "connect to wi fi" => empty(
+            "ConnectToWifi",
+            "The wearer asked to open the stock Wi-Fi selection flow",
+        ),
+        "scan wi fi qr code" => empty(
+            "WifiQrScan",
+            "The wearer asked to open the stock Wi-Fi QR scanner",
+        ),
         "show my recent photos" | "open my recent photos" => DeterministicDeviceAction {
             name: "OpenRecentPhotos",
             input: serde_json::json!({"TriggeredFromTouchpad": false}).to_string(),
@@ -5693,6 +5701,8 @@ mod tests {
                 "GetIfThenMapSize",
                 serde_json::json!({}),
             ),
+            ("Connect to Wi-Fi.", "ConnectToWifi", serde_json::json!({})),
+            ("Scan Wi-Fi QR code.", "WifiQrScan", serde_json::json!({})),
         ] {
             let request = unlocked(utterance);
             let tools = resolve_catalog(&request, true);
