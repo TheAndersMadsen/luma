@@ -185,6 +185,34 @@ export interface DeviceInfo {
   versions?: DeviceVersionSnapshot;
 }
 
+export interface SetupAcceptanceIdentity {
+  device_serial: string;
+  release_version: string;
+  edge_ipv4: string;
+}
+
+export interface SetupAcceptanceConfirmation extends SetupAcceptanceIdentity {
+  schema_version: 1;
+  release_id: string;
+  confirmed_at_epoch_ms: number;
+}
+
+export interface SetupAcceptanceResponse {
+  schema_version: 1;
+  current: SetupAcceptanceIdentity;
+  confirmation: SetupAcceptanceConfirmation | null;
+}
+
+export interface ConfirmSetupAcceptanceRequest extends SetupAcceptanceIdentity {
+  schema_version: 1;
+  release_id: string;
+  checks: {
+    microphone: true;
+    speaker: true;
+    gesture: true;
+  };
+}
+
 export interface Settings {
   /** True while a persisted listener or Pin-local provider awaits restart. */
   restart_required?: boolean;

@@ -37,6 +37,21 @@ impl OsVersionInfo {
     }
 }
 
+impl DeviceVersionSnapshot {
+    pub(crate) fn exact_runtime_release(&self) -> Option<&str> {
+        const RUNTIME_ROLES: [&str; 3] = ["hook", "server", "injector"];
+        let version = self.runtime_server_version;
+        RUNTIME_ROLES.iter().all(|role| {
+            self.components.iter().filter(|component| component.role == *role).count() == 1
+                && self.components.iter().any(|component| {
+                    component.role == *role
+                        && component.error.is_none()
+                        && component.version_name.as_deref() == Some(version)
+                })
+        }).then_some(version)
+    }
+}
+
 #[derive(Clone, Serialize)]
 pub struct DeviceVersionSnapshot {
     captured_at_ms: u128,
@@ -199,7 +214,7 @@ fn parse_dumpsys_field(output: &str, field: &str) -> Option<String> {
 }
 
 #[allow(unused_variables)]
-async fn getprop(name: &str) -> Option<String> {
+pub(crate) async fn getprop(name: &str) -> Option<String> {
     #[cfg(not(target_os = "android"))]
     {
         return None;
@@ -216,7 +231,7 @@ async fn getprop(name: &str) -> Option<String> {
 }
 
 #[allow(unused_variables)]
-async fn get_global_setting(name: &str) -> Option<String> {
+pub(crate) async fn get_global_setting(name: &str) -> Option<String> {
     #[cfg(not(target_os = "android"))]
     {
         return None;
@@ -259,4 +274,61 @@ async fn run_command(command: &str, args: &[&str]) -> Result<String, String> {
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn snapshot(versions: &[(&'static str, Option<&str>)]) -> DeviceVersionSnapshot {
+        DeviceVersionSnapshot {
+            captured_at_ms: 1,
+            runtime_server_version: "2026-08-31.6",
+            components: versions
+                .iter()
+                .map(|(role, version)| ComponentVersion {
+                    role: *role,
+                    label: *role,
+                    package_name: *role,
+                    version_name: version.map(str::to_owned),
+                    error: version.is_none().then(|| "unreadable".to_owned()),
+                })
+                .collect(),
+            os: OsVersionInfo {
+                humane_display_version: None,
+                android_release: None,
+                android_sdk: None,
+                security_patch: None,
+            },
+        }
+    }
+
+    #[test]
+    fn exact_runtime_release_requires_one_matching_copy_of_every_runtime_role() {
+        let exact = snapshot(&[
+            ("installer", Some("2026-08-27.1")),
+            ("hook", Some("2026-08-31.6")),
+            ("server", Some("2026-08-31.6")),
+            ("injector", Some("2026-08-31.6")),
+        ]);
+        assert_eq!(exact.exact_runtime_release(), Some("2026-08-31.6"));
+
+        assert_eq!(
+            snapshot(&[
+                ("hook", Some("2026-08-31.6")),
+                ("server", Some("2026-08-31.6")),
+            ])
+            .exact_runtime_release(),
+            None,
+        );
+        assert_eq!(
+            snapshot(&[
+                ("hook", Some("2026-08-31.6")),
+                ("server", Some("2026-08-31.5")),
+                ("injector", Some("2026-08-31.6")),
+            ])
+            .exact_runtime_release(),
+            None,
+        );
+    }
 }

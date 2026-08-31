@@ -1,50 +1,103 @@
-const STORAGE_KEY = "ai-pin-revival.setup-acceptance.v1";
-const MAX_REMEMBERED_PINS = 16;
+import type {
+  ConfirmSetupAcceptanceRequest,
+} from "@/lib/pin-device";
 
-export interface SetupAcceptanceStorage {
-  getItem(key: string): string | null;
-  setItem(key: string, value: string): void;
+const RELEASE_ID = /^[0-9a-f]{64}$/u;
+
+function canonicalIpv4(value: string): string | null {
+  const parts = value.split(".");
+  if (parts.length !== 4) return null;
+  const octets = parts.map((part) => Number(part));
+  if (
+    octets.some(
+      (octet, index) =>
+        !Number.isInteger(octet) ||
+        octet < 0 ||
+        octet > 255 ||
+        String(octet) !== parts[index],
+    )
+  ) {
+    return null;
+  }
+  return octets.join(".");
 }
 
-export function setupAcceptanceIdentity(
+function object(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object"
+    ? value as Record<string, unknown>
+    : null;
+}
+
+export interface SetupAcceptanceTarget {
+  readonly deviceSerial: string;
+  readonly releaseId: string;
+  readonly releaseVersion: string;
+  readonly edgeIpv4: string;
+}
+
+export function setupAcceptanceTarget(
   serial: string | null,
+  releaseId: string | null,
   releaseVersion: string | null,
   edgeIpv4: string | null,
-): string | null {
-  const values = [serial?.trim().toUpperCase(), releaseVersion?.trim(), edgeIpv4?.trim()];
-  if (values.some((value) => !value || value.length > 128)) return null;
-  return JSON.stringify(values);
-}
-
-function rememberedIdentities(storage: SetupAcceptanceStorage): string[] {
-  const value = JSON.parse(storage.getItem(STORAGE_KEY) ?? "[]");
-  if (!Array.isArray(value)) return [];
-  return value.filter(
-    (entry): entry is string => typeof entry === "string" && entry.length <= 512,
-  );
-}
-
-export function loadSetupAcceptance(
-  storage: SetupAcceptanceStorage,
-  identity: string,
-): boolean {
-  try {
-    return rememberedIdentities(storage).includes(identity);
-  } catch {
-    return false;
+): SetupAcceptanceTarget | null {
+  const deviceSerial = serial?.trim().toUpperCase() ?? "";
+  const version = releaseVersion?.trim() ?? "";
+  const edge = edgeIpv4?.trim() ?? "";
+  if (
+    !deviceSerial ||
+    deviceSerial.length > 128 ||
+    !/^[A-Z0-9_-]+$/u.test(deviceSerial) ||
+    !releaseId ||
+    !RELEASE_ID.test(releaseId) ||
+    !version ||
+    version.length > 64 ||
+    canonicalIpv4(edge) !== edge
+  ) {
+    return null;
   }
+  return {
+    deviceSerial,
+    releaseId,
+    releaseVersion: version,
+    edgeIpv4: edge,
+  };
 }
 
-export function saveSetupAcceptance(
-  storage: SetupAcceptanceStorage,
-  identity: string,
+export function setupAcceptanceRequest(
+  target: SetupAcceptanceTarget,
+): ConfirmSetupAcceptanceRequest {
+  return {
+    schema_version: 1,
+    device_serial: target.deviceSerial,
+    release_id: target.releaseId,
+    release_version: target.releaseVersion,
+    edge_ipv4: target.edgeIpv4,
+    checks: {
+      microphone: true,
+      speaker: true,
+      gesture: true,
+    },
+  };
+}
+
+export function setupAcceptanceConfirmed(
+  response: unknown,
+  target: SetupAcceptanceTarget | null,
 ): boolean {
-  try {
-    const remembered = rememberedIdentities(storage).filter((entry) => entry !== identity);
-    remembered.push(identity);
-    storage.setItem(STORAGE_KEY, JSON.stringify(remembered.slice(-MAX_REMEMBERED_PINS)));
-    return true;
-  } catch {
-    return false;
-  }
+  if (!target) return false;
+  const body = object(response);
+  const current = object(body?.current);
+  const confirmation = object(body?.confirmation);
+  return body?.schema_version === 1 &&
+    current?.device_serial === target.deviceSerial &&
+    current.release_version === target.releaseVersion &&
+    current.edge_ipv4 === target.edgeIpv4 &&
+    confirmation?.schema_version === 1 &&
+    confirmation.device_serial === target.deviceSerial &&
+    confirmation.release_id === target.releaseId &&
+    confirmation.release_version === target.releaseVersion &&
+    confirmation.edge_ipv4 === target.edgeIpv4 &&
+    Number.isSafeInteger(confirmation.confirmed_at_epoch_ms) &&
+    Number(confirmation.confirmed_at_epoch_ms) > 0;
 }

@@ -560,7 +560,14 @@ before package changes begin and tells you to wait and retry.
    the Cosmos address and trust roots, and verifies the complete activation on
    that exact device.
 3. Return to **Guided setup** and choose **Check again**. When this Pin reports
-   online, make one real voice request and confirm that it worked.
+   online, make one real voice request, verify its microphone, speaker, and
+   gesture response, then choose **Confirm microphone, speaker & gesture**.
+
+That final human observation is stored on the Pin, not in browser storage. It
+is bound to the Pin's hardware serial, the authenticated release ID, the
+locally installed runtime version, and the active Cosmos edge. Guided setup
+reads it back from the Pin; changing any of those identities requires a fresh
+physical confirmation.
 
 The **Create an activation file instead** section is a fallback for recovery or
 headless activation. Normal stock-Pin setup stays in Center and does not require

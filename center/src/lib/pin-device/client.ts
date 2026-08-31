@@ -6,6 +6,7 @@ import type {
   CellularSetEnabledResponse,
   ContactClientResetResponse,
   ContactRecord,
+  ConfirmSetupAcceptanceRequest,
   ConversationDetail,
   DeviceInfo,
   EsimEidResult,
@@ -21,6 +22,7 @@ import type {
   MemoryRecord,
   PaginatedConversations,
   Settings,
+  SetupAcceptanceResponse,
   SpotifySearchKind,
   SpotifySearchResponse,
   SpotifySettingsRequest,
@@ -740,6 +742,29 @@ export class PinClient {
 
   getDevice(signal?: AbortSignal) {
     return this.request<DeviceInfo>("/api/device", undefined, signal);
+  }
+
+  getSetupAcceptance(signal?: AbortSignal) {
+    return this.request<SetupAcceptanceResponse>(
+      "/api/setup/acceptance",
+      undefined,
+      signal,
+    );
+  }
+
+  confirmSetupAcceptance(
+    request: ConfirmSetupAcceptanceRequest,
+    signal?: AbortSignal,
+  ) {
+    return this.request<SetupAcceptanceResponse>(
+      "/api/setup/acceptance",
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(request),
+      },
+      signal,
+    );
   }
 
   thumbnailPath(uuid: string, index: number) {

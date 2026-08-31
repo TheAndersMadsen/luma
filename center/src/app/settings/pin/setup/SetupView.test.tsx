@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import SetupView from "./SetupView";
 
 const refresh = vi.fn();
+const confirmAcceptance = vi.fn();
 const setupTestState = vi.hoisted(() => ({
   capabilityOverrides: {} as Partial<
     Record<
@@ -17,6 +18,7 @@ const setupTestState = vi.hoisted(() => ({
       boolean | null
     >
   >,
+  cloudReady: false,
 }));
 
 vi.mock("next/link", () => ({
@@ -81,11 +83,11 @@ vi.mock("./usePinSetupFacts", () => ({
       cloud: {
         state: "live",
         pairedCount: 1,
-        reportingCount: 0,
-        lastReportAtEpoch: null,
-        connectedPinReporting: false,
-        connectedPinLastReportAtEpoch: null,
-        connectedPinPaired: false,
+        reportingCount: setupTestState.cloudReady ? 1 : 0,
+        lastReportAtEpoch: setupTestState.cloudReady ? 1_788_000_000 : null,
+        connectedPinReporting: setupTestState.cloudReady,
+        connectedPinLastReportAtEpoch: setupTestState.cloudReady ? 1_788_000_000 : null,
+        connectedPinPaired: setupTestState.cloudReady,
       },
       physicalAcceptanceConfirmed: false,
       operator: true,
@@ -94,6 +96,7 @@ vi.mock("./usePinSetupFacts", () => ({
     inspection: null,
     lastReportAtEpoch: null,
     refresh,
+    confirmAcceptance,
     refreshing: false,
   }),
 }));
@@ -101,8 +104,9 @@ vi.mock("./usePinSetupFacts", () => ({
 afterEach(() => {
   vi.unstubAllGlobals();
   refresh.mockReset();
+  confirmAcceptance.mockReset();
   setupTestState.capabilityOverrides = {};
-  window.localStorage.clear();
+  setupTestState.cloudReady = false;
 });
 
 describe("SetupView", () => {
@@ -162,5 +166,18 @@ describe("SetupView", () => {
     expect(init).toMatchObject({ method: "POST" });
     expect(JSON.parse(String(init.body))).toEqual({ device_id: "00aa11bb" });
     expect(refresh).toHaveBeenCalledOnce();
+  });
+
+  it("persists physical acceptance through the exact connected Pin", async () => {
+    setupTestState.cloudReady = true;
+    confirmAcceptance.mockResolvedValue(undefined);
+    const user = userEvent.setup();
+
+    render(<SetupView operator provisioningHref="/settings/pin/provision" />);
+    await user.click(
+      screen.getByRole("button", { name: "Confirm microphone, speaker & gesture" }),
+    );
+
+    await waitFor(() => expect(confirmAcceptance).toHaveBeenCalledOnce());
   });
 });

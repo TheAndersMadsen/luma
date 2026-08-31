@@ -3,7 +3,7 @@
 /** Four wearer-facing stages backed by the canonical setup checks. */
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import settings from "../../settings.module.css";
 import pin from "../pin.module.css";
 import styles from "./setup.module.css";
@@ -15,11 +15,6 @@ import {
   type PinSetupPlan,
   type PinSetupStep,
 } from "@/lib/pin-setup";
-import {
-  loadSetupAcceptance,
-  saveSetupAcceptance,
-  setupAcceptanceIdentity,
-} from "@/lib/pin-setup/acceptance";
 import { usePinDevice } from "../PinDeviceProvider";
 import { usePinSetupFacts } from "./usePinSetupFacts";
 
@@ -135,29 +130,7 @@ export default function SetupView({
 }) {
   const { connect, clearError, error, support } = usePinDevice();
   const readings = usePinSetupFacts({ operator });
-  const acceptanceIdentity = setupAcceptanceIdentity(
-    readings.facts.usb.serial,
-    readings.facts.release.version,
-    readings.facts.activation.edgeIpv4,
-  );
-  const [confirmedAcceptance, setConfirmedAcceptance] = useState<string | null>(null);
-  useEffect(() => {
-    if (!acceptanceIdentity) {
-      setConfirmedAcceptance(null);
-      return;
-    }
-    setConfirmedAcceptance(
-      loadSetupAcceptance(window.localStorage, acceptanceIdentity)
-        ? acceptanceIdentity
-        : null,
-    );
-  }, [acceptanceIdentity]);
-  const setupFacts: PinSetupFacts = {
-    ...readings.facts,
-    physicalAcceptanceConfirmed:
-      acceptanceIdentity !== null && acceptanceIdentity === confirmedAcceptance,
-  };
-  const plan = derivePinSetupPlan(setupFacts);
+  const plan = derivePinSetupPlan(readings.facts);
   const stages = setupStages(plan);
   const completeStages = stages.filter((stage) => stage.state === "done").length;
   const focusedStage = stages.find((stage) => stage.state === "focus" || stage.state === "attention");
@@ -165,6 +138,8 @@ export default function SetupView({
   const [connecting, setConnecting] = useState(false);
   const [pairing, setPairing] = useState(false);
   const [pairError, setPairError] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState(false);
+  const [acceptanceError, setAcceptanceError] = useState<string | null>(null);
 
   async function onConnect() {
     setConnecting(true);
@@ -207,6 +182,23 @@ export default function SetupView({
       );
     } finally {
       setPairing(false);
+    }
+  }
+
+  async function onConfirm() {
+    if (confirming) return;
+    setConfirming(true);
+    setAcceptanceError(null);
+    try {
+      await readings.confirmAcceptance();
+    } catch (confirmationError) {
+      setAcceptanceError(
+        confirmationError instanceof Error
+          ? confirmationError.message
+          : "The Pin could not retain the physical acceptance confirmation.",
+      );
+    } finally {
+      setConfirming(false);
     }
   }
 
@@ -269,6 +261,12 @@ export default function SetupView({
           </div>
         ) : null}
 
+        {acceptanceError ? (
+          <div className={pin.stateRow}>
+            <StatusMessage tone="warning">{acceptanceError}</StatusMessage>
+          </div>
+        ) : null}
+
         {support && !support.supported ? (
           <div className={pin.stateRow}>
             <StatusMessage tone="warning">
@@ -303,11 +301,8 @@ export default function SetupView({
               onConnect: () => void onConnect(),
               onPair: () => void onPair(),
               pairing,
-              onConfirm: () => {
-                if (!acceptanceIdentity) return;
-                saveSetupAcceptance(window.localStorage, acceptanceIdentity);
-                setConfirmedAcceptance(acceptanceIdentity);
-              },
+              onConfirm: () => void onConfirm(),
+              confirming,
             })}
           />
         ))}
@@ -476,6 +471,7 @@ function renderStageAction({
   onPair,
   pairing,
   onConfirm,
+  confirming,
 }: {
   stage: SetupStage;
   provisioningHref: string | null;
@@ -486,6 +482,7 @@ function renderStageAction({
   onPair: () => void;
   pairing: boolean;
   onConfirm: () => void;
+  confirming: boolean;
 }): React.ReactNode {
   const step = stage.focusedStep;
   if (!step) return null;
@@ -586,9 +583,10 @@ function renderStageAction({
           type="button"
           className={pin.button}
           onClick={onConfirm}
+          disabled={confirming}
           data-testid="pin-setup-confirm"
         >
-          I tried it — it works
+          {confirming ? "Saving on this Pin…" : "Confirm microphone, speaker & gesture"}
         </button>
       );
 

@@ -37,6 +37,11 @@ import { logInfo } from "@/lib/pin-device";
 import { useAssistantStatus } from "@/components/AiMicChat";
 import { musicPlaybackReadiness } from "@/lib/pin-setup";
 import {
+  setupAcceptanceConfirmed,
+  setupAcceptanceRequest,
+  setupAcceptanceTarget,
+} from "@/lib/pin-setup/acceptance";
+import {
   isPinReleaseError,
   type InstallInspectionResult,
   type ResolvedInstallTarget,
@@ -144,13 +149,23 @@ export interface PinSetupReadings {
   readonly lastReportAtEpoch: number | null;
   /** Re-read everything this page shows. */
   readonly refresh: () => void;
+  /** Persist and read back this wearer's observation on the exact USB-attached Pin. */
+  readonly confirmAcceptance: () => Promise<void>;
   readonly refreshing: boolean;
 }
 
 export function usePinSetupFacts(options: { operator: boolean }): PinSetupReadings {
   const queryClient = useQueryClient();
-  const { status, serviceStatus, connectionInfo, identity, support, client, borrowSession } =
-    usePinDevice();
+  const {
+    status,
+    connectionMode,
+    serviceStatus,
+    connectionInfo,
+    identity,
+    support,
+    client,
+    borrowSession,
+  } = usePinDevice();
   const assistantStatus = useAssistantStatus();
 
   const connected = status === "connected";
@@ -240,6 +255,49 @@ export function usePinSetupFacts(options: { operator: boolean }): PinSetupReadin
         edgeIpv4: readSettingsValue(edge.stdout),
         deviceId,
       };
+    },
+  });
+
+  const acceptanceTarget = useMemo(
+    () => setupAcceptanceTarget(
+      serial,
+      releaseQuery.data?.releaseId ?? null,
+      releaseQuery.data?.version ?? null,
+      activationQuery.data?.edgeIpv4 ?? null,
+    ),
+    [
+      activationQuery.data?.edgeIpv4,
+      releaseQuery.data?.releaseId,
+      releaseQuery.data?.version,
+      serial,
+    ],
+  );
+  const acceptanceQueryKey = useMemo(
+    () => [
+      SETUP_QUERY_KEY,
+      "acceptance",
+      acceptanceTarget?.deviceSerial ?? null,
+      acceptanceTarget?.releaseId ?? null,
+      acceptanceTarget?.releaseVersion ?? null,
+      acceptanceTarget?.edgeIpv4 ?? null,
+    ] as const,
+    [acceptanceTarget],
+  );
+  const acceptanceQuery = useQuery({
+    queryKey: acceptanceQueryKey,
+    enabled:
+      connected &&
+      connectionMode === "usb" &&
+      serviceStatus === "online" &&
+      client !== null &&
+      activationQuery.data?.remoteMode === "1" &&
+      acceptanceTarget !== null,
+    staleTime: 10_000,
+    retry: false,
+    refetchOnWindowFocus: false,
+    queryFn: async () => {
+      if (!client) throw new Error("The Pin acceptance service is unavailable.");
+      return client.getSetupAcceptance();
     },
   });
 
@@ -570,12 +628,17 @@ export function usePinSetupFacts(options: { operator: boolean }): PinSetupReadin
       server,
       activation,
       cloud,
-      physicalAcceptanceConfirmed: false,
+      physicalAcceptanceConfirmed: setupAcceptanceConfirmed(
+        acceptanceQuery.data,
+        acceptanceTarget,
+      ),
       operator: options.operator,
     }),
     [
       activation,
       activationQuery.data?.deviceId,
+      acceptanceQuery.data,
+      acceptanceTarget,
       cloud,
       connected,
       identity,
@@ -588,6 +651,21 @@ export function usePinSetupFacts(options: { operator: boolean }): PinSetupReadin
       support,
     ],
   );
+
+  const confirmAcceptance = useCallback(async () => {
+    if (!client || connectionMode !== "usb" || !acceptanceTarget) {
+      throw new Error(
+        "Connect this exact Pin over USB and finish installation and activation first.",
+      );
+    }
+    const response = await client.confirmSetupAcceptance(
+      setupAcceptanceRequest(acceptanceTarget),
+    );
+    if (!setupAcceptanceConfirmed(response, acceptanceTarget)) {
+      throw new Error("The Pin did not retain the physical acceptance confirmation.");
+    }
+    queryClient.setQueryData(acceptanceQueryKey, response);
+  }, [acceptanceQueryKey, acceptanceTarget, client, connectionMode, queryClient]);
 
   const refresh = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: [SETUP_QUERY_KEY] });
@@ -603,6 +681,7 @@ export function usePinSetupFacts(options: { operator: boolean }): PinSetupReadin
     inspection: inspectionQuery.data?.inspection ?? null,
     lastReportAtEpoch,
     refresh,
+    confirmAcceptance,
     refreshing:
       releaseQuery.isFetching ||
       inspectionQuery.isFetching ||
@@ -611,6 +690,7 @@ export function usePinSetupFacts(options: { operator: boolean }): PinSetupReadin
       statusQuery.isFetching ||
       assistantStatus.isFetching ||
       pinMusicQuery.isFetching ||
-      musicProvidersQuery.isFetching,
+      musicProvidersQuery.isFetching ||
+      acceptanceQuery.isFetching,
   };
 }

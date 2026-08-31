@@ -306,6 +306,21 @@ test("the owner can explicitly complete physical acceptance after trying the Pin
   assert.equal(plan.focusStepId, null);
 });
 
+test("physical acceptance is persisted by the Pin and never by browser storage", async () => {
+  const setupView = await readFile(
+    new URL("../src/app/settings/pin/setup/SetupView.tsx", import.meta.url),
+    "utf8",
+  );
+  const readings = await readFile(
+    new URL("../src/app/settings/pin/setup/usePinSetupFacts.ts", import.meta.url),
+    "utf8",
+  );
+  assert.doesNotMatch(setupView, /localStorage|sessionStorage|document\.cookie/u);
+  assert.match(readings, /client\.getSetupAcceptance\(\)/u);
+  assert.match(readings, /client\.confirmSetupAcceptance/u);
+  assert.match(readings, /setupAcceptanceConfirmed\(response, acceptanceTarget\)/u);
+});
+
 test("an unpublished release points directly to descriptor-bound acquisition", () => {
   const plan = derivePinSetupPlan(
     facts({

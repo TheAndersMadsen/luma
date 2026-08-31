@@ -5,6 +5,7 @@
 //! public HTTPS portal can reach this HTTP server on the LAN.
 
 mod activity;
+mod acceptance;
 mod auth;
 mod contacts;
 mod conversations;
@@ -33,7 +34,7 @@ use std::sync::Arc;
 #[cfg(target_os = "android")]
 use std::time::Duration;
 
-use axum::extract::{Path, State};
+use axum::extract::{DefaultBodyLimit, Path, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, delete, get, put};
@@ -161,6 +162,12 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/memories/{uuid}/files/{filename}", get(get_file))
         .nest("/api", contacts::router())
         .route("/api/device", get(DeviceApi::get_device))
+        .route(
+            "/api/setup/acceptance",
+            get(acceptance::get_acceptance)
+                .put(acceptance::confirm_acceptance)
+                .layer(DefaultBodyLimit::max(acceptance::MAX_REQUEST_BYTES)),
+        )
         .route("/api/settings", get(get_settings))
         .route("/api/settings", put(update_settings))
         .nest("/api/activity", activity::router())
@@ -1238,7 +1245,10 @@ fn persist_config_inner(
     Ok(digest)
 }
 
-fn write_private_atomic(path: &std::path::Path, contents: &str) -> std::io::Result<()> {
+pub(super) fn write_private_atomic(
+    path: &std::path::Path,
+    contents: &str,
+) -> std::io::Result<()> {
     use std::io::Write as _;
 
     let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));

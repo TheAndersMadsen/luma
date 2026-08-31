@@ -1,49 +1,93 @@
 import { describe, expect, it } from "vitest";
 import {
-  loadSetupAcceptance,
-  saveSetupAcceptance,
-  setupAcceptanceIdentity,
+  setupAcceptanceConfirmed,
+  setupAcceptanceRequest,
+  setupAcceptanceTarget,
 } from "./acceptance";
+
+const releaseId = "a".repeat(64);
 
 describe("setup physical acceptance", () => {
   it("binds the acknowledgment to the exact Pin, release, and Cosmos edge", () => {
-    expect(setupAcceptanceIdentity(" pin-1 ", " 2026-08-27.1 ", "203.0.113.9")).toBe(
-      '["PIN-1","2026-08-27.1","203.0.113.9"]',
-    );
-    expect(setupAcceptanceIdentity(null, "2026-08-27.1", "203.0.113.9")).toBeNull();
-    expect(setupAcceptanceIdentity("PIN-1", null, "203.0.113.9")).toBeNull();
-    expect(setupAcceptanceIdentity("PIN-1", "2026-08-27.1", null)).toBeNull();
+    expect(
+      setupAcceptanceTarget(
+        " pin-1 ",
+        releaseId,
+        " 2026-08-27.1 ",
+        "203.0.113.9",
+      ),
+    ).toEqual({
+      deviceSerial: "PIN-1",
+      releaseId,
+      releaseVersion: "2026-08-27.1",
+      edgeIpv4: "203.0.113.9",
+    });
+    expect(setupAcceptanceTarget(null, releaseId, "2026-08-27.1", "203.0.113.9")).toBeNull();
+    expect(setupAcceptanceTarget("PIN-1", "bad", "2026-08-27.1", "203.0.113.9")).toBeNull();
+    expect(setupAcceptanceTarget("PIN-1", releaseId, null, "203.0.113.9")).toBeNull();
+    expect(setupAcceptanceTarget("PIN-1", releaseId, "2026-08-27.1", null)).toBeNull();
+    expect(
+      setupAcceptanceTarget("PIN-1", releaseId, "2026-08-27.1", "203.0.113.009"),
+    ).toBeNull();
   });
 
-  it("survives a page reload but not a software or target change", () => {
-    const values = new Map<string, string>();
-    const storage = {
-      getItem: (key: string) => values.get(key) ?? null,
-      setItem: (key: string, value: string) => void values.set(key, value),
+  it("requires Pin readback for the exact current identity", () => {
+    const target = setupAcceptanceTarget(
+      "PIN-1",
+      releaseId,
+      "2026-08-27.1",
+      "203.0.113.9",
+    )!;
+    const confirmation = {
+      schema_version: 1 as const,
+      device_serial: target.deviceSerial,
+      release_id: target.releaseId,
+      release_version: target.releaseVersion,
+      edge_ipv4: target.edgeIpv4,
+      confirmed_at_epoch_ms: 1_788_000_000_000,
     };
-    const identity = setupAcceptanceIdentity("PIN-1", "2026-08-27.1", "203.0.113.9")!;
+    const response = {
+      schema_version: 1 as const,
+      current: {
+        device_serial: target.deviceSerial,
+        release_version: target.releaseVersion,
+        edge_ipv4: target.edgeIpv4,
+      },
+      confirmation,
+    };
 
-    expect(loadSetupAcceptance(storage, identity)).toBe(false);
-    expect(saveSetupAcceptance(storage, identity)).toBe(true);
-    expect(loadSetupAcceptance(storage, identity)).toBe(true);
+    expect(setupAcceptanceConfirmed(response, target)).toBe(true);
+    expect(setupAcceptanceConfirmed({ ...response, confirmation: null }, target)).toBe(false);
     expect(
-      loadSetupAcceptance(
-        storage,
-        setupAcceptanceIdentity("PIN-1", "2026-08-28.1", "203.0.113.9")!,
+      setupAcceptanceConfirmed(
+        { ...response, current: { ...response.current, edge_ipv4: "203.0.113.10" } },
+        target,
       ),
     ).toBe(false);
+    expect(
+      setupAcceptanceConfirmed(
+        { ...response, confirmation: { ...confirmation, release_id: "b".repeat(64) } },
+        target,
+      ),
+    ).toBe(false);
+    expect(() => setupAcceptanceConfirmed({ schema_version: 1, current: null }, target)).not.toThrow();
+    expect(setupAcceptanceConfirmed({ schema_version: 1, current: null }, target)).toBe(false);
   });
 
-  it("fails closed when browser storage is unavailable", () => {
-    const storage = {
-      getItem(): string | null {
-        throw new Error("blocked");
-      },
-      setItem(): void {
-        throw new Error("blocked");
-      },
-    };
-    expect(loadSetupAcceptance(storage, "identity")).toBe(false);
-    expect(saveSetupAcceptance(storage, "identity")).toBe(false);
+  it("sends only an explicit all-three wearer observation", () => {
+    const target = setupAcceptanceTarget(
+      "PIN-1",
+      releaseId,
+      "2026-08-27.1",
+      "203.0.113.9",
+    )!;
+    expect(setupAcceptanceRequest(target)).toEqual({
+      schema_version: 1,
+      device_serial: "PIN-1",
+      release_id: releaseId,
+      release_version: "2026-08-27.1",
+      edge_ipv4: "203.0.113.9",
+      checks: { microphone: true, speaker: true, gesture: true },
+    });
   });
 });
