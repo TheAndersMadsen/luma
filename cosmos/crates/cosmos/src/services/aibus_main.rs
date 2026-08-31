@@ -105,6 +105,35 @@ const AUDIO_TRANSCRIPTION_UNAVAILABLE: &str = "Audio could not be transcribed.";
 const LOADING_MUSIC_CUE: &str = "Finding music";
 const LOADING_WEATHER_CUE: &str = "Checking the weather";
 
+fn food_item_response(
+    result: Result<crate::backends::food::FoodLookup, crate::backends::BackendError>,
+    fallback_text: &str,
+) -> Result<pb::GetFoodItemResponse, Status> {
+    let best = match result {
+        Ok(item) => cosmos_protocol::common::food::FoodItem {
+            request_uuid: uuid::Uuid::new_v4().to_string(),
+            item_name: item.item_name,
+            typical_serving_size: item.serving_size,
+            nutrition_info: item.nutrition,
+            brand: item.brand,
+        },
+        Err(crate::backends::BackendError::NoResult) => cosmos_protocol::common::food::FoodItem {
+            request_uuid: uuid::Uuid::new_v4().to_string(),
+            item_name: fallback_text.to_owned(),
+            typical_serving_size: String::new(),
+            nutrition_info: Vec::new(),
+            brand: String::new(),
+        },
+        Err(_) => {
+            return Err(Status::unavailable("the nutrition backend is unavailable"));
+        }
+    };
+    Ok(pb::GetFoodItemResponse {
+        best_food_item: Some(best),
+        alternate_food_items: Vec::new(),
+    })
+}
+
 fn strip_prefix_ascii_case<'a>(value: &'a str, prefix: &str) -> Option<&'a str> {
     value
         .get(..prefix.len())
@@ -2373,31 +2402,7 @@ impl AiBusService for AiBusMain {
         // cosmos's Nutritionix backend). A no-match returns the query with empty
         // nutrition — the device narrates "couldn't get that info" — rather than a
         // fabricated figure; an unreachable provider is an honest gRPC error.
-        let best = match crate::backends::food::lookup(&text).await {
-            Ok(item) => cosmos_protocol::common::food::FoodItem {
-                request_uuid: String::new(),
-                item_name: item.item_name,
-                typical_serving_size: item.serving_size,
-                nutrition_info: item.nutrition,
-                brand: item.brand,
-            },
-            Err(crate::backends::BackendError::NoResult) => {
-                cosmos_protocol::common::food::FoodItem {
-                    request_uuid: String::new(),
-                    item_name: text.clone(),
-                    typical_serving_size: String::new(),
-                    nutrition_info: Vec::new(),
-                    brand: String::new(),
-                }
-            }
-            Err(_) => {
-                return Err(Status::unavailable("the nutrition backend is unavailable"));
-            }
-        };
-        let response = pb::GetFoodItemResponse {
-            best_food_item: Some(best),
-            alternate_food_items: Vec::new(),
-        };
+        let response = food_item_response(crate::backends::food::lookup(&text).await, &text)?;
         Ok(Response::new(pb::EncryptedGetFoodItemResponse {
             response: Some(self.seal_food_response(protection, &response).await?),
         }))
@@ -3382,6 +3387,38 @@ mod tests {
         pb::ChatCompletionResponse::decode(response.data.as_slice())
             .expect("the Food Hook receives a plaintext stock response");
         assert!(model.seen.lock().unwrap().is_some());
+    }
+
+    #[test]
+    fn food_item_responses_assign_fresh_stock_request_uuids() {
+        let matched = food_item_response(
+            Ok(crate::backends::food::FoodLookup {
+                item_name: "apple".to_owned(),
+                brand: String::new(),
+                barcode: String::new(),
+                serving_size: "one apple".to_owned(),
+                ingredients: Vec::new(),
+                nutrition: Vec::new(),
+            }),
+            "apple",
+        )
+        .expect("a matched food response succeeds")
+        .best_food_item
+        .expect("a matched response has a best item");
+        let fallback = food_item_response(
+            Err(crate::backends::BackendError::NoResult),
+            "unknown fruit",
+        )
+        .expect("a no-match food response keeps the stock fallback")
+        .best_food_item
+        .expect("a no-match response has a fallback item");
+
+        for request_uuid in [&matched.request_uuid, &fallback.request_uuid] {
+            let parsed = uuid::Uuid::parse_str(request_uuid)
+                .expect("Food request_uuid must be a stock-compatible UUID");
+            assert_eq!(parsed.get_version_num(), 4);
+        }
+        assert_ne!(matched.request_uuid, fallback.request_uuid);
     }
 
     #[tokio::test]
