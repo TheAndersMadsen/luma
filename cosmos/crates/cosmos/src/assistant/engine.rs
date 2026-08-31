@@ -2198,6 +2198,15 @@ fn explicit_nutrition_request(utterance: &str) -> Option<&str> {
             .iter()
             .any(|prefix| normalized == prefix.trim_end() || normalized.starts_with(prefix))
     };
+    let explicit_food_log_addition = normalized.strip_prefix("add ").is_some_and(|remainder| {
+        [" to my food log", " to the food log"]
+            .iter()
+            .any(|suffix| {
+                remainder
+                    .strip_suffix(suffix)
+                    .is_some_and(|items| !items.trim().is_empty())
+            })
+    });
     let explicit = starts_with_any(&[
         "i ate ",
         "i just ate ",
@@ -2220,17 +2229,19 @@ fn explicit_nutrition_request(utterance: &str) -> Option<&str> {
         "how much protein in ",
         "how much sugar is in ",
         "how much sugar in ",
-    ]) || matches!(
-        normalized.as_str(),
-        "what have i eaten today"
-            | "what did i eat today"
-            | "what have i eaten"
-            | "show my food log"
-            | "show me my food log"
-            | "how many calories did i eat today"
-            | "how many calories have i eaten today"
-    ) || (normalized.starts_with("what have i eaten in the last ")
-        && normalized.ends_with(" days"))
+    ]) || explicit_food_log_addition
+        || matches!(
+            normalized.as_str(),
+            "what have i eaten today"
+                | "what did i eat today"
+                | "what have i eaten"
+                | "show my food log"
+                | "show me my food log"
+                | "how many calories did i eat today"
+                | "how many calories have i eaten today"
+        )
+        || (normalized.starts_with("what have i eaten in the last ")
+            && normalized.ends_with(" days"))
         || (normalized.starts_with("show my food log for the last ")
             && normalized.ends_with(" days"));
     explicit.then_some(utterance)
@@ -5770,6 +5781,7 @@ mod tests {
             "What are the nutrition facts for oatmeal?",
             "How much protein is in two eggs?",
             "Log that I ate a banana.",
+            "Add one apple to my food log.",
             "I ate two eggs.",
             "Track my food: one banana.",
             "What have I eaten today?",
@@ -5814,6 +5826,7 @@ mod tests {
         assert!(deterministic_device_action(&replayed, &replayed_tools).is_none());
 
         for unrelated in [
+            "Add to my food log.",
             "I ate at Noma.",
             "Show me restaurants nearby.",
             "Tell me about nutrition policy.",
