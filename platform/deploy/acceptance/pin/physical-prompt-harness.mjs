@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn as spawnProcess } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { connect as connectHttp2, constants as http2Constants } from "node:http2";
 import { pathToFileURL } from "node:url";
@@ -64,6 +64,7 @@ const MAX_HTTP_BODY_BYTES = 1024 * 1024;
 const HTTP_STATUS_MARKER = "\n__PENUMBRA_PHYSICAL_HTTP_STATUS__:";
 const PROMPT_ACTIVITY_PATH = "/api/activity/prompts?limit=100";
 const MUSIC_ACTIVITY_PATH = "/api/activity/music?limit=100";
+const MEMORY_PATH = "/api/memories";
 const MUSIC_PROVIDER_STATUS_PATH = "/api/spotify/status";
 export const MUSIC_PLAYBACK_SAMPLE_OFFSETS_MS = Object.freeze([
   0,
@@ -102,6 +103,10 @@ const PHYSICAL_NATIVE_ACTION_MARKER =
 const HOOK_BOUNDARY_PATTERN = /^physical-simple-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const PROGRESS_BOUNDARY_PATTERN = /^physical-loading-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const AGENTIC_BOUNDARY_PATTERN = /^physical-agentic-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const FOOD_BOUNDARY_PATTERN = /^physical-food-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const FOOD_EVIDENCE_PROPERTY = "debug.penumbra.food_nonce";
+const FOOD_ARM_PATTERN = /^([0-9a-f]{32}):([0-9]{10})$/;
+const FOOD_ARM_WINDOW_SECONDS = 180;
 const AGENTIC_CORRELATION_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const AGENTIC_TRACE_MESSAGE =
   OPERATIONAL_MARKERS.agentic_physical_trace.value;
@@ -186,6 +191,8 @@ export const PHYSICAL_TIMEOUT_MS = Object.freeze({
   // timeout is recorded instead of becoming a harness-side false negative.
   agenticRemoteWeather: 95_000,
   music: 180_000,
+  foodAggregate: 65_000,
+  foodFollowUp: 65_000,
   ticklePositive: 25_000,
   tickleNegative: 25_000,
   cleanup: 20_000,
@@ -278,6 +285,12 @@ export const PHYSICAL_PROMPT_CASES = Object.freeze([
     expectedAction: NATIVE_ACTIONS.PLAY_MUSIC,
   }),
   fixedCase({
+    id: "food_log_roundtrip",
+    prompt: "Add one apple to my food log.",
+    kind: "food_roundtrip",
+    explicitMutationConsent: true,
+  }),
+  fixedCase({
     id: "tickle_single",
     prompt: "tickle",
     kind: "tickle_positive",
@@ -310,8 +323,16 @@ const PAUSE_CLEANUP_CASE = fixedCase({
   expectedAction: NATIVE_ACTIONS.PAUSE_MUSIC,
 });
 
+const FOOD_READ_CASE = fixedCase({
+  id: "food_log_roundtrip_read",
+  prompt: "What have I eaten today?",
+  kind: "food_follow_up_read",
+});
+
 const CASE_BY_ID = new Map(
-  [...PHYSICAL_PROMPT_CASES, PAUSE_CLEANUP_CASE].map((item) => [item.id, item]),
+  [...PHYSICAL_PROMPT_CASES, PAUSE_CLEANUP_CASE, FOOD_READ_CASE].map(
+    (item) => [item.id, item],
+  ),
 );
 const PUBLIC_CASE_IDS = new Set(PHYSICAL_PROMPT_CASES.map((item) => item.id));
 
@@ -344,12 +365,13 @@ function usage() {
     `  - The expected Pin may use --expected-pin-serial or ${EXPECTED_PIN_SERIAL_ENV}.`,
     "  - --case selects exactly one allowlisted fixture, so each live invocation can have an independent timeout and cleanup boundary.",
     `  - Allowed --case ids: ${PHYSICAL_PROMPT_CASES.map((item) => item.id).join(", ")}.`,
-    `  - Only fixed time, world-clock, battery, weather, ranked-music, pause-cleanup, and ${NATIVE_ACTIONS.TICKLE} fixtures can be injected.`,
+    `  - Only fixed time, world-clock, battery, weather, ranked-music, food round-trip, pause-cleanup, and ${NATIVE_ACTIONS.TICKLE} fixtures can be injected.`,
     "  - Fixed semantic and locked loading-message fixtures call the no-action stock EncryptedLoadingMessage RPC directly.",
     "  - Calls, messages, camera, privacy mode, settings changes, installs, reboots, and package-installer session commands are structurally absent.",
     "  - Raw prompts, responses, coordinates, music metadata, account data, network identifiers, dumpsys text, and ADB diagnostics are never printed.",
     `  - Music and ${NATIVE_ACTIONS.TICKLE} are skipped if their stock experience was already active. Music started by the harness is paused and its process is stopped; ${NATIVE_ACTIONS.TICKLE} processes started by the harness are stopped.`,
     "  - Only activity rows attributable to these fixed test prompts are deleted during cleanup.",
+    "  - The Food fixture explicitly consents to one fixed food-log write and proves it by a follow-up diary read. It retains that entry because temporal evidence cannot authorize deletion.",
     "  - Transcript injection proves the post-ASR stock path. Microphone recognition, audible speech, and projector appearance require human confirmation.",
   ].join("\n");
 }
@@ -910,6 +932,7 @@ function curlConfig(path, method, token) {
   const validGet =
     path === PROMPT_ACTIVITY_PATH ||
     path === MUSIC_ACTIVITY_PATH ||
+    path === MEMORY_PATH ||
     path === MUSIC_PROVIDER_STATUS_PATH;
   const validDelete = /^\/api\/activity\/(?:prompts|music)\/[1-9][0-9]*$/.test(path);
   if (!((method === "GET" && validGet) || (method === "DELETE" && validDelete))) {
@@ -1028,6 +1051,62 @@ export function parseMusicActivityPage(value) {
     }
     return item;
   });
+}
+
+export function parseMemoryRecords(value) {
+  if (!Array.isArray(value) || value.length > 10_000) {
+    throw new SafePhysicalError("the memory list was malformed");
+  }
+  return value.map((item) => {
+    if (
+      !plainObject(item) ||
+      typeof item.uuid !== "string" ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(item.uuid) ||
+      !["photo", "video", "food_log", "note"].includes(item.memory_type) ||
+      typeof item.device_local_id !== "string" ||
+      typeof item.created_at !== "string" ||
+      !["pending", "uploading", "complete", "failed"].includes(item.status) ||
+      !Array.isArray(item.files) ||
+      !item.files.every((file) => typeof file === "string") ||
+      !Number.isSafeInteger(item.thumbnail_count) ||
+      item.thumbnail_count < 0
+    ) {
+      throw new SafePhysicalError("the memory list was malformed");
+    }
+    return item;
+  });
+}
+
+export function foodMemoryToken(arm, uuid) {
+  const match = FOOD_ARM_PATTERN.exec(arm);
+  if (
+    match === null ||
+    typeof uuid !== "string" ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(uuid)
+  ) {
+    throw new SafePhysicalError("the Food evidence token input was malformed");
+  }
+  return createHmac("sha256", match[1]).update(uuid).digest("hex");
+}
+
+export function refreshedFoodEvidenceArm(existingArm, deviceEpoch, freshUuid = null) {
+  const existingMatch = existingArm === null
+    ? null
+    : FOOD_ARM_PATTERN.exec(existingArm);
+  if (
+    (existingArm !== null && existingMatch === null) ||
+    !/^[0-9]{10}$/.test(deviceEpoch)
+  ) {
+    throw new SafePhysicalError("the Food evidence arm input was malformed");
+  }
+  let nonce = existingMatch?.[1];
+  if (nonce === undefined) {
+    if (typeof freshUuid !== "string" || !AGENTIC_CORRELATION_PATTERN.test(freshUuid)) {
+      throw new SafePhysicalError("the Food evidence arm input was malformed");
+    }
+    nonce = freshUuid.replaceAll("-", "");
+  }
+  return `${nonce}:${Number(deviceEpoch) + FOOD_ARM_WINDOW_SECONDS}`;
 }
 
 function maximumId(items) {
@@ -1550,6 +1629,199 @@ export function parsePenumbraHookEvidence(value, boundaryMarker) {
   return events;
 }
 
+/**
+ * Reduces stock Food and Cosmos logs to content-free round-trip counters. Raw
+ * prompts, model responses, food names, nutrients, and memory identifiers are
+ * never returned from this parser.
+ */
+export function evaluateFoodLogEvidence(value, boundaryMarker, phase) {
+  if (!FOOD_BOUNDARY_PATTERN.test(boundaryMarker)) {
+    throw new SafePhysicalError("the Food evidence boundary was malformed");
+  }
+  if (phase !== "baseline" && phase !== "write" && phase !== "read") {
+    throw new SafePhysicalError("the Food evidence phase was invalid");
+  }
+  const text = Buffer.isBuffer(value) ? value.toString("utf8") : String(value);
+  if (Buffer.byteLength(text) > MAX_CHILD_STDOUT_BYTES) {
+    throw new SafePhysicalError("the Food evidence observation was too large");
+  }
+  let boundaryObserved = false;
+  let timeoutCount = 0;
+  let taoResponseCount = 0;
+  let chatCompletionCount = 0;
+  let foodLookupCount = 0;
+  let successfulFoodLookupCount = 0;
+  let createMemoryCount = 0;
+  let successfulCreateMemoryCount = 0;
+  let foodLogReadCount = 0;
+  let successfulFoodLogReadCount = 0;
+  let deadlineRewriteCount = 0;
+  let baselineMarkerCount = 0;
+  let lookupMarkers = [];
+  let createMarkers = [];
+  let readbackMarkers = [];
+  for (const line of text.split(/\r?\n/)) {
+    const parsed = parseEpochLogcatLine(line);
+    if (parsed === null) continue;
+    if (parsed.tag === HOOK_BOUNDARY_TAG && FOOD_BOUNDARY_PATTERN.test(parsed.message)) {
+      if (boundaryObserved) break;
+      if (parsed.message !== boundaryMarker) continue;
+      boundaryObserved = true;
+      timeoutCount = 0;
+      taoResponseCount = 0;
+      chatCompletionCount = 0;
+      foodLookupCount = 0;
+      successfulFoodLookupCount = 0;
+      createMemoryCount = 0;
+      successfulCreateMemoryCount = 0;
+      foodLogReadCount = 0;
+      successfulFoodLogReadCount = 0;
+      deadlineRewriteCount = 0;
+      baselineMarkerCount = 0;
+      lookupMarkers = [];
+      createMarkers = [];
+      readbackMarkers = [];
+      continue;
+    }
+    if (!boundaryObserved) continue;
+    if (parsed.tag === "TaoAgent") {
+      if (parsed.message.includes("java.util.concurrent.TimeoutException")) {
+        timeoutCount += 1;
+      } else if (parsed.message.startsWith("Received response:")) {
+        taoResponseCount += 1;
+      }
+      continue;
+    }
+    if (parsed.tag === HOOK_LOG_TAG) {
+      if (parsed.message === "FoodTao deadline_rewrite=10_to_60") {
+        deadlineRewriteCount += 1;
+        continue;
+      }
+      if (parsed.message === "FoodRoundTrip baseline status=success") {
+        baselineMarkerCount += 1;
+        continue;
+      }
+      const lookup = /^FoodRoundTrip lookup item_token=([0-9a-f]{64})$/.exec(
+        parsed.message,
+      );
+      if (lookup !== null) {
+        lookupMarkers.push({ itemToken: lookup[1] });
+        continue;
+      }
+      const create = /^FoodRoundTrip create status=success item_token=([0-9a-f]{64}) memory_token=([0-9a-f]{64})$/.exec(
+        parsed.message,
+      );
+      if (create !== null) {
+        createMarkers.push({ itemToken: create[1], memoryToken: create[2] });
+        continue;
+      }
+      const read = /^FoodRoundTrip read item_token=([0-9a-f]{64}) memory_token=([0-9a-f]{64}) readback_match=(true|false)$/.exec(
+        parsed.message,
+      );
+      if (read !== null) {
+        readbackMarkers.push({
+          itemToken: read[1],
+          memoryToken: read[2],
+          matched: read[3] === "true",
+        });
+      }
+      continue;
+    }
+    if (parsed.tag !== SERVER_LOG_TAG) continue;
+    if (parsed.message.includes(">>> EncryptedChatCompletion")) {
+      chatCompletionCount += 1;
+    }
+    if (parsed.message.includes(">>> EncryptedGetFoodItem")) {
+      foodLookupCount += 1;
+    }
+    if (
+      parsed.message.includes("<<< EncryptedGetFoodItem") &&
+      /(?:^|\s)matched=true(?:\s|$)/.test(parsed.message)
+    ) {
+      successfulFoodLookupCount += 1;
+    }
+    if (parsed.message.includes(">>> Capture.CreateMemory")) {
+      createMemoryCount += 1;
+    }
+    if (
+      parsed.message.includes("<<< Capture.CreateMemory") &&
+      /(?:^|\s)memory_type=food_log(?:\s|$)/.test(parsed.message) &&
+      /(?:^|\s)status=success(?:\s|$)/.test(parsed.message)
+    ) {
+      successfulCreateMemoryCount += 1;
+    }
+    if (parsed.message.includes(">>> Capture.GetFoodLogSummary")) {
+      foodLogReadCount += 1;
+    }
+    if (parsed.message.includes("<<< Capture.GetFoodLogSummary")) {
+      successfulFoodLogReadCount += 1;
+    }
+  }
+  if (!boundaryObserved) {
+    throw new SafePhysicalError("the Food evidence boundary was unavailable");
+  }
+  const exactWrite =
+    phase === "write" &&
+    timeoutCount === 0 &&
+    taoResponseCount === 2 &&
+    chatCompletionCount === 2 &&
+    foodLookupCount === 1 &&
+    successfulFoodLookupCount === 1 &&
+    createMemoryCount === 1 &&
+    successfulCreateMemoryCount === 1 &&
+    deadlineRewriteCount === 1 &&
+    lookupMarkers.length === 1 &&
+    createMarkers.length === 1 &&
+    createMarkers[0].itemToken === lookupMarkers[0].itemToken &&
+    foodLogReadCount === 0;
+  const exactBaseline =
+    phase === "baseline" &&
+    timeoutCount === 0 &&
+    taoResponseCount === 2 &&
+    chatCompletionCount === 2 &&
+    foodLookupCount === 0 &&
+    createMemoryCount === 0 &&
+    foodLogReadCount === 1 &&
+    successfulFoodLogReadCount === 1 &&
+    deadlineRewriteCount === 1 &&
+    baselineMarkerCount === 1 &&
+    lookupMarkers.length === 0 &&
+    createMarkers.length === 0 &&
+    readbackMarkers.length === 0;
+  const exactRead =
+    phase === "read" &&
+    timeoutCount === 0 &&
+    taoResponseCount === 2 &&
+    chatCompletionCount === 2 &&
+    foodLookupCount === 0 &&
+    successfulFoodLookupCount === 0 &&
+    createMemoryCount === 0 &&
+    foodLogReadCount === 1 &&
+    successfulFoodLogReadCount === 1 &&
+    deadlineRewriteCount === 1 &&
+    lookupMarkers.length === 0 &&
+    readbackMarkers.length === 1 &&
+    readbackMarkers[0].matched;
+  return {
+    pass: exactBaseline || exactWrite || exactRead,
+    boundaryObserved,
+    timeoutObserved: timeoutCount !== 0,
+    terminalObserved: taoResponseCount === 2,
+    chatCompletionCount,
+    foodLookupCount,
+    successfulFoodLookupCount,
+    createMemoryCount,
+    successfulCreateMemoryCount,
+    foodLogReadCount,
+    successfulFoodLogReadCount,
+    deadlineRewriteCount,
+    baselineMarkerCount,
+    lookupMarkers,
+    createMarkers,
+    readbackMarkers,
+  };
+}
+
 function progressDecisionField(message, field) {
   const match = new RegExp(
     `(?:^|\\s)${field}=\"?([a-z_]+)\"?(?=\\s|$)`,
@@ -1965,6 +2237,19 @@ async function pollUntil(timeoutMs, observe, intervalMs = 500) {
   return latest ?? { done: false, value: null };
 }
 
+async function pollFoodUntil(timing, timeoutMs, observe, intervalMs = 500) {
+  const deadline = timing.now() + timeoutMs;
+  let latest;
+  do {
+    latest = await observe();
+    if (latest.done) return latest;
+    await timing.sleep(
+      Math.min(intervalMs, Math.max(1, deadline - timing.now())),
+    );
+  } while (timing.now() < deadline);
+  return latest ?? { done: false, value: null };
+}
+
 function durationBucket(milliseconds) {
   if (milliseconds < 5_000) return "under_5s";
   if (milliseconds < 15_000) return "under_15s";
@@ -2047,6 +2332,12 @@ class PhysicalDevice {
   async musicRows() {
     return parseMusicActivityPage(
       await deviceActivityRequest(this.options, this.token, MUSIC_ACTIVITY_PATH),
+    );
+  }
+
+  async memories() {
+    return parseMemoryRecords(
+      await deviceActivityRequest(this.options, this.token, MEMORY_PATH),
     );
   }
 
@@ -2225,6 +2516,77 @@ class PhysicalDevice {
     return marker;
   }
 
+  async beginFoodEvidence(existingArm = null) {
+    const deviceEpoch = String(
+      await runAdb(
+        this.options,
+        ["shell", "date", "+%s"],
+        { timeoutMs: 10_000, maxStdoutBytes: 64 },
+        "the Food evidence clock was unavailable",
+      ),
+    ).trim();
+    if (!/^[0-9]{10}$/.test(deviceEpoch)) {
+      throw new SafePhysicalError("the Food evidence clock was malformed");
+    }
+    const arm = refreshedFoodEvidenceArm(
+      existingArm,
+      deviceEpoch,
+      existingArm === null ? randomUUID() : null,
+    );
+    await runAdb(
+      this.options,
+      ["shell", "setprop", FOOD_EVIDENCE_PROPERTY, arm],
+      { timeoutMs: 10_000, maxStdoutBytes: 64 },
+      "the Food evidence arm could not be set",
+    );
+    const marker = `physical-food-${randomUUID()}`;
+    await runAdb(
+      this.options,
+      ["shell", "log", "-p", "i", "-t", HOOK_BOUNDARY_TAG, marker],
+      { timeoutMs: 10_000, maxStdoutBytes: 1_024 },
+      "the Food evidence boundary could not be created",
+    );
+    return { marker, arm };
+  }
+
+  async endFoodEvidence() {
+    await runAdb(
+      this.options,
+      ["shell", "setprop", FOOD_EVIDENCE_PROPERTY, ""],
+      { timeoutMs: 10_000, maxStdoutBytes: 64 },
+      "the Food evidence arm could not be cleared",
+    );
+  }
+
+  async foodEvidenceSince(boundaryMarker, phase) {
+    if (!FOOD_BOUNDARY_PATTERN.test(boundaryMarker)) {
+      throw new SafePhysicalError("the Food evidence boundary was malformed");
+    }
+    return evaluateFoodLogEvidence(
+      await runAdb(
+        this.options,
+        [
+          "shell",
+          "logcat",
+          "-b",
+          "main",
+          "-v",
+          "epoch",
+          "-d",
+          `${SERVER_LOG_TAG}:V`,
+          "TaoAgent:V",
+          `${HOOK_LOG_TAG}:V`,
+          `${HOOK_BOUNDARY_TAG}:I`,
+          "*:S",
+        ],
+        { timeoutMs: 15_000, maxStdoutBytes: MAX_CHILD_STDOUT_BYTES },
+        "the Food evidence observation failed",
+      ),
+      boundaryMarker,
+      phase,
+    );
+  }
+
   async agenticEvidenceSince(caseId, boundaryMarker, expectedCorrelation) {
     if (!AGENTIC_BOUNDARY_PATTERN.test(boundaryMarker)) {
       throw new SafePhysicalError("the agentic evidence boundary was malformed");
@@ -2299,6 +2661,7 @@ export function evaluatePhysicalReadiness(
     provider = null,
     expectedTransport = null,
     observedTransport = null,
+    requireFood = false,
   } = {},
 ) {
   const tickle = Array.isArray(snapshot?.featureFlags?.flags)
@@ -2337,6 +2700,13 @@ export function evaluatePhysicalReadiness(
     weatherLocalityReady: cosmosAuthority,
     musicProviderReady,
     networkTransportReady,
+    foodReady:
+      !requireFood ||
+      (
+        cosmosAuthority &&
+        snapshot?.settings?.open_food_facts?.enabled === true &&
+        snapshot?.settings?.open_food_facts?.attribution_acknowledged === true
+      ),
     tickleReady:
       taggedBoolean(tickle?.desired_value, true) &&
       taggedBoolean(tickle?.assignment_value, true) &&
@@ -2819,6 +3189,236 @@ async function observeTickleNegative(device, item, baselinePromptId, ownedPrompt
   };
 }
 
+async function observeFoodRoundTrip(
+  device,
+  item,
+  baselinePromptId,
+  baselineMemoryIds,
+  cleanupState,
+  timing,
+) {
+  if (item.explicitMutationConsent !== true) {
+    throw new SafePhysicalError("the Food write fixture lacks explicit consent");
+  }
+  const observationStarted = timing.now();
+  const baselineArm = await device.beginFoodEvidence();
+  const baselineBoundary = baselineArm.marker;
+  await device.inject(FOOD_READ_CASE.id);
+  const baselineObservation = await pollFoodUntil(
+    timing,
+    PHYSICAL_TIMEOUT_MS.foodFollowUp,
+    async () => {
+      const evidence = await device.foodEvidenceSince(
+        baselineBoundary,
+        "baseline",
+      );
+      return { done: evidence.pass, value: evidence };
+    },
+  );
+  if (!baselineObservation.done) {
+    return {
+      id: item.id,
+      status: "fail",
+      route_observed: false,
+      physical_effect_observed: null,
+      food_lookup_observed: false,
+      create_memory_observed: false,
+      tao_timeout_observed:
+        baselineObservation.value?.timeoutObserved === true,
+      write_terminal_observed: false,
+      write_within_extended_bound: false,
+      follow_up_read_observed: false,
+      terminal_observed: false,
+      locality_observed: null,
+      duration_bucket: durationBucket(timing.now() - observationStarted),
+    };
+  }
+  const writeArm = await device.beginFoodEvidence(baselineArm.arm);
+  const writeBoundary = writeArm.marker;
+  await device.inject(item.id);
+  const writeStarted = timing.now();
+  const writeBudget = PHYSICAL_TIMEOUT_MS.foodAggregate;
+  const writeObservation = await pollFoodUntil(timing, writeBudget, async () => {
+    const [evidence, memories] = await Promise.all([
+      device.foodEvidenceSince(writeBoundary, "write"),
+      device.memories(),
+    ]);
+    const correlatedFoodMemories = memories.filter(
+      (memory) =>
+        memory.memory_type === "food_log" &&
+        !baselineMemoryIds.has(memory.uuid) &&
+        evidence.createMarkers.some(
+          (marker) =>
+            marker.memoryToken === foodMemoryToken(writeArm.arm, memory.uuid),
+        ),
+    );
+    const exactCorrelatedMemory =
+      evidence.createMarkers.length === 1 && correlatedFoodMemories.length === 1;
+    return {
+      done: evidence.pass && exactCorrelatedMemory,
+      value: { evidence, exactCorrelatedMemory },
+    };
+  });
+  const writeCompletedWithinBound =
+    writeObservation.done &&
+    timing.now() - writeStarted <= PHYSICAL_TIMEOUT_MS.foodAggregate;
+  const writeEvidence = writeObservation.value?.evidence ?? {
+    timeoutObserved: false,
+    terminalObserved: false,
+    successfulFoodLookupCount: 0,
+    createMemoryCount: 0,
+  };
+
+  let readEvidence = {
+    pass: false,
+    timeoutObserved: false,
+    terminalObserved: false,
+    foodLogReadCount: 0,
+    successfulFoodLogReadCount: 0,
+    deadlineRewriteCount: 0,
+    createMarkers: [],
+    readbackMarkers: [],
+  };
+  let entryPresentAfterRead = false;
+  if (
+    writeCompletedWithinBound &&
+    writeEvidence.pass === true &&
+    writeObservation.value?.exactCorrelatedMemory === true
+  ) {
+    const readArm = await device.beginFoodEvidence(writeArm.arm);
+    const readBoundary = readArm.marker;
+    await device.inject(FOOD_READ_CASE.id);
+    const readObservation = await pollFoodUntil(
+      timing,
+      PHYSICAL_TIMEOUT_MS.foodFollowUp,
+      async () => {
+        const [evidence, memories] = await Promise.all([
+          device.foodEvidenceSince(readBoundary, "read"),
+          device.memories(),
+        ]);
+        const expectedCreateMarker = writeEvidence.createMarkers[0];
+        const expectedMemoryToken = expectedCreateMarker?.memoryToken;
+        const attributed = memories.filter(
+          (memory) =>
+            memory.memory_type === "food_log" &&
+            !baselineMemoryIds.has(memory.uuid) &&
+            typeof expectedMemoryToken === "string" &&
+            foodMemoryToken(writeArm.arm, memory.uuid) === expectedMemoryToken,
+        );
+        const entryStillPresent =
+          attributed.length === 1 && attributed[0].memory_type === "food_log";
+        const exactReadback =
+          typeof expectedMemoryToken === "string" &&
+          evidence.readbackMarkers.some(
+            (marker) =>
+              marker.itemToken === expectedCreateMarker.itemToken &&
+              marker.memoryToken === expectedMemoryToken &&
+              marker.matched,
+          );
+        return {
+          done: evidence.pass && exactReadback && entryStillPresent,
+          value: { evidence, exactReadback, entryStillPresent },
+        };
+      },
+    );
+    readEvidence = readObservation.value?.evidence ?? readEvidence;
+    entryPresentAfterRead = readObservation.value?.entryStillPresent === true;
+  }
+
+  await timing.sleep(
+    Math.max(0, writeStarted + PHYSICAL_TIMEOUT_MS.foodAggregate - timing.now()),
+  );
+
+  const [finalWriteEvidence, finalMemories, finalPromptRows] = await Promise.all([
+    device.foodEvidenceSince(writeBoundary, "write"),
+    device.memories(),
+    device.promptRows(),
+  ]);
+  const newPromptRows = finalPromptRows.filter((row) => row.id > baselinePromptId);
+  const exactPromptWindow =
+    attributedPromptRows(finalPromptRows, baselinePromptId, item.id).length === 1 &&
+    attributedPromptRows(
+      finalPromptRows,
+      baselinePromptId,
+      FOOD_READ_CASE.id,
+    ).length === 2 &&
+    newPromptRows.length === 3;
+  const finalNewFoodMemories = finalMemories.filter(
+    (memory) =>
+      memory.memory_type === "food_log" &&
+      !baselineMemoryIds.has(memory.uuid),
+  );
+  const finalCorrelatedMemories = finalNewFoodMemories.filter(
+    (memory) =>
+      finalWriteEvidence.createMarkers.some(
+        (marker) =>
+          marker.memoryToken === foodMemoryToken(writeArm.arm, memory.uuid),
+      ),
+  );
+  const exactFinalCreate =
+    exactPromptWindow &&
+    finalWriteEvidence.createMarkers.length === 1 &&
+    finalNewFoodMemories.length === 1 &&
+    finalCorrelatedMemories.length === 1;
+  // The arm and HMAC prove which Food coroutine produced a memory, but they
+  // are not an end-to-end identity for the injected assistant request. Keep
+  // the bounded consented fixture entry rather than risk deleting a wearer
+  // entry that completed concurrently.
+  if (!exactFinalCreate && (
+    finalWriteEvidence.createMarkers.length > 0 ||
+    finalNewFoodMemories.length > 0
+  )) {
+    cleanupState.ownershipBlocked = true;
+  }
+  const expectedMemoryToken = finalWriteEvidence.createMarkers[0]?.memoryToken;
+  const exactReadback =
+    typeof expectedMemoryToken === "string" &&
+    readEvidence.readbackMarkers.some(
+      (marker) => marker.memoryToken === expectedMemoryToken && marker.matched,
+    );
+
+  const noTimeout =
+    finalWriteEvidence.timeoutObserved === false &&
+    readEvidence.timeoutObserved === false;
+  const pass =
+    writeCompletedWithinBound &&
+    finalWriteEvidence.pass === true &&
+    finalWriteEvidence.successfulFoodLookupCount === 1 &&
+    finalWriteEvidence.createMemoryCount === 1 &&
+    finalWriteEvidence.successfulCreateMemoryCount === 1 &&
+    finalWriteEvidence.deadlineRewriteCount === 1 &&
+    finalWriteEvidence.terminalObserved === true &&
+    readEvidence.pass === true &&
+    readEvidence.foodLogReadCount === 1 &&
+    readEvidence.successfulFoodLogReadCount === 1 &&
+    readEvidence.deadlineRewriteCount === 1 &&
+    readEvidence.terminalObserved === true &&
+    entryPresentAfterRead &&
+    exactFinalCreate &&
+    exactReadback &&
+    noTimeout;
+  return {
+    id: item.id,
+    status: pass ? "pass" : "fail",
+    route_observed:
+      finalWriteEvidence.successfulFoodLookupCount === 1 &&
+      readEvidence.foodLogReadCount === 1,
+    physical_effect_observed: null,
+    food_lookup_observed: finalWriteEvidence.successfulFoodLookupCount === 1,
+    create_memory_observed: finalWriteEvidence.createMemoryCount === 1,
+    tao_timeout_observed: !noTimeout,
+    write_terminal_observed: finalWriteEvidence.terminalObserved === true,
+    write_within_extended_bound: writeCompletedWithinBound,
+    follow_up_read_observed:
+      readEvidence.foodLogReadCount === 1 && entryPresentAfterRead,
+    terminal_observed:
+      finalWriteEvidence.terminalObserved === true &&
+      readEvidence.terminalObserved === true,
+    locality_observed: null,
+    duration_bucket: durationBucket(timing.now() - observationStarted),
+  };
+}
+
 function normalizedMusicText(value) {
   return value.normalize("NFKC").trim().replace(/\s+/gu, " ").toLocaleLowerCase("en-US");
 }
@@ -3135,6 +3735,9 @@ export async function executePhysicalSuite(options, dependencies = {}) {
     (item) => item.kind !== "loading_message",
   );
   const needsMusicState = selectedCases.some((item) => item.kind === "music");
+  const needsFoodState = selectedCases.some(
+    (item) => item.kind === "food_roundtrip",
+  );
   if (
     needsMusicState &&
     (!MUSIC_PROVIDERS.has(options.provider) ||
@@ -3159,6 +3762,7 @@ export async function executePhysicalSuite(options, dependencies = {}) {
   let readiness = evaluatePhysicalReadiness(snapshot, identity, expected, {
     provider: needsMusicState ? options.provider : null,
     expectedTransport: needsMusicState ? options.expectedTransport : null,
+    requireFood: needsFoodState,
   });
   if (!readiness.globalPass) {
     return {
@@ -3171,6 +3775,8 @@ export async function executePhysicalSuite(options, dependencies = {}) {
       cleanup: {
         prompt_activity_removed: null,
         music_activity_removed: null,
+        food_memory_removed: null,
+        food_evidence_disarmed: null,
         music_not_playing: null,
         tickle_not_running: null,
         media_volume_snapshot_captured: null,
@@ -3189,6 +3795,7 @@ export async function executePhysicalSuite(options, dependencies = {}) {
       provider: options.provider,
       expectedTransport: options.expectedTransport,
       observedTransport,
+      requireFood: needsFoodState,
     });
   }
   const grpcPort = parseLoopbackGrpcPort(snapshot.settings.server.grpc_bind_addr);
@@ -3202,6 +3809,7 @@ export async function executePhysicalSuite(options, dependencies = {}) {
     initialTicklePids,
     initialTickleForeground,
     initialMedia,
+    baselineMemories,
   ] = await Promise.all([
     needsPromptActivity ? device.promptRows() : Promise.resolve([]),
     needsSpotifyActivity ? device.musicRows() : Promise.resolve([]),
@@ -3210,6 +3818,7 @@ export async function executePhysicalSuite(options, dependencies = {}) {
     needsMusicState
       ? device.media()
       : Promise.resolve({ sessionCount: 0, playing: false }),
+    needsFoodState ? device.memories() : Promise.resolve([]),
   ]);
   const baselinePromptId = maximumId(baselinePromptRows);
   const baselineMusicId = maximumId(baselineMusicRows);
@@ -3222,27 +3831,33 @@ export async function executePhysicalSuite(options, dependencies = {}) {
     initialMedia.sessionCount === 0;
   const ownedPromptIds = new Set();
   const ownedMusicIds = new Set();
+  const foodCleanupState = { ownershipBlocked: false };
+  const baselineMemoryIds = new Set(baselineMemories.map((memory) => memory.uuid));
   const cases = [];
   let rankOne = null;
 
   let tickleTouched = false;
   let musicTouched = false;
   let pendingFailure = null;
-  let cleanupRows = { promptsRemoved: true, musicRemoved: true };
+  let cleanupRows = {
+    promptsRemoved: true,
+    musicRemoved: true,
+  };
   const timing = dependencies.timing ?? {
     now: () => Date.now(),
     sleep,
   };
   if (
-    needsMusicState &&
+    (needsMusicState || needsFoodState) &&
     (typeof timing.now !== "function" || typeof timing.sleep !== "function")
   ) {
-    throw new SafePhysicalError("the music observation clock was invalid");
+    throw new SafePhysicalError("the physical observation clock was invalid");
   }
   const mediaVolumeSnapshot = needsPromptActivity
     ? await captureStableMediaVolumeSnapshot(device)
     : null;
   let mediaVolumeRestored = needsPromptActivity ? false : null;
+  let foodEvidenceDisarmed = needsFoodState ? false : null;
   try {
     for (const item of selectedCases) {
       if (item.kind === "loading_message") {
@@ -3311,6 +3926,23 @@ export async function executePhysicalSuite(options, dependencies = {}) {
             );
           }
         }
+      } else if (item.kind === "food_roundtrip") {
+        if (!readiness.checks.cosmosAuthority) {
+          cases.push(blockedCase(item, "cosmos_provider_authority_unavailable"));
+        } else if (!readiness.checks.foodReady) {
+          cases.push(blockedCase(item, "food_provider_unavailable"));
+        } else {
+          cases.push(
+            await observeFoodRoundTrip(
+              device,
+              item,
+              baselinePromptId,
+              baselineMemoryIds,
+              foodCleanupState,
+              timing,
+            ),
+          );
+        }
       } else if (item.kind === "tickle_positive") {
         if (!readiness.checks.tickleReady) {
           cases.push(blockedCase(item, "tickle_gate_unavailable"));
@@ -3338,6 +3970,15 @@ export async function executePhysicalSuite(options, dependencies = {}) {
   } catch (error) {
     pendingFailure = error;
   } finally {
+    if (needsFoodState) {
+      try {
+        await device.endFoodEvidence();
+        foodEvidenceDisarmed = true;
+      } catch {
+        foodEvidenceDisarmed = false;
+        foodCleanupState.ownershipBlocked = true;
+      }
+    }
     if (tickleWasIdle && tickleTouched) {
       try {
         await stopAndConfirm(device, TICKLE_PACKAGE);
@@ -3351,9 +3992,11 @@ export async function executePhysicalSuite(options, dependencies = {}) {
     if (needsPromptActivity) {
       try {
         const rows = await device.promptRows();
-        const cleanupCases = needsMusicState
-          ? [...selectedCases, PAUSE_CLEANUP_CASE]
-          : selectedCases;
+        const cleanupCases = [
+          ...selectedCases,
+          ...(needsMusicState ? [PAUSE_CLEANUP_CASE] : []),
+          ...(needsFoodState ? [FOOD_READ_CASE] : []),
+        ];
         for (const item of cleanupCases) {
           for (const row of attributedPromptRows(rows, baselinePromptId, item.id)) {
             ownedPromptIds.add(row.id);
@@ -3396,6 +4039,9 @@ export async function executePhysicalSuite(options, dependencies = {}) {
       ? cleanupRows.promptsRemoved
       : null,
     music_activity_removed: needsSpotifyActivity ? cleanupRows.musicRemoved : null,
+    food_memory_removed:
+      needsFoodState && foodCleanupState.ownershipBlocked ? false : null,
+    food_evidence_disarmed: foodEvidenceDisarmed,
     music_not_playing:
       needsMusicState && musicWasIdle
         ? finalMusicPids.length === 0 && !finalMedia.playing

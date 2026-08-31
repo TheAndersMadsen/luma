@@ -47,6 +47,40 @@ class HookModuleRegistryTest {
     }
 
     @Test
+    fun foodDeadlineModuleIsBoundToOnlyTheStockFoodMainProcess() {
+        val food = HookComponentFactory.HOOK_MODULES.single {
+            it.id == "food-provider-compatibility"
+        }
+        val available = { name: String -> name == "humane.experience.food.FoodExperience" }
+
+        assertEquals("humane.experience.food", food.targetPackage)
+        assertEquals("humane.experience.food", food.targetProcess)
+        assertTrue(food.matches("humane.experience.food", "humane.experience.food", available))
+        assertFalse(food.matches("hu.ma.ne.ironman", "hu.ma.ne.ironman", available))
+        assertFalse(
+            food.matches(
+                "humane.experience.food",
+                "humane.experience.food:worker",
+                available,
+            ),
+        )
+
+        val foodHooks = sourceFile(
+            "src/main/kotlin/com/penumbraos/hook/FoodHooks.kt",
+        ).readText()
+        assertTrue(
+            foodHooks.contains(
+                "FoodTaoDeadlineHooks.verifyAuditedFoodApk(sourceApk)",
+            ),
+        )
+        assertTrue(foodHooks.contains("FoodTaoDeadlineHooks.installAudited("))
+        assertTrue(foodHooks.contains("FoodRoundTripEvidenceHooks.installAudited("))
+        assertFalse(foodHooks.contains("Thread("))
+        assertTrue(foodHooks.contains("installContained(\"Food channel factory\")"))
+        assertTrue(foodHooks.contains("installContained(\"Food data protection\")"))
+    }
+
+    @Test
     fun injectorTargetMetadataExactlyMatchesRegisteredPackages() {
         val manifest = parseXml(sourceFile("src/main/AndroidManifest.xml"))
         val metadata = manifest.getElementsByTagName("meta-data")

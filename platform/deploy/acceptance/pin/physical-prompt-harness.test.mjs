@@ -27,6 +27,7 @@ import {
   decodeLoadingMessageRpcResponse,
   encodeLoadingMessageCaseRequest,
   evaluateAgenticTraceEvidence,
+  evaluateFoodLogEvidence,
   evaluateLoadingCueEvidence,
   evaluateLocalWeatherTraceEvidence,
   evaluateNativeActionHookEvidence,
@@ -38,11 +39,14 @@ import {
   evaluateStableMusicPause,
   executePhysicalSuite,
   findAttributedMusic,
+  foodMemoryToken,
+  refreshedFoodEvidenceArm,
   loadingCueWithinDeadline,
   main,
   mediaPositionAdvanced,
   parseActiveMusicProviderStatus,
   parseMediaSessionSummary,
+  parseMemoryRecords,
   parseActiveNetworkTransport,
   parsePenumbraHookEvidence,
   parsePhysicalCliArgs,
@@ -55,6 +59,8 @@ test("physical observer outlives every in-device agentic deadline", () => {
   const hookedClientDeadlineMs = 90_000;
   assert.ok(PHYSICAL_TIMEOUT_MS.agenticRemoteWeather > hookedClientDeadlineMs);
   assert.ok(PHYSICAL_TIMEOUT_MS.music > hookedClientDeadlineMs);
+  assert.ok(PHYSICAL_TIMEOUT_MS.foodAggregate > 60_000);
+  assert.ok(PHYSICAL_TIMEOUT_MS.foodFollowUp > 60_000);
 });
 
 function verifiedManifestFixture({
@@ -115,6 +121,500 @@ const GUARDED_MEDIA_VOLUME_DEVICE = Object.freeze({
   async setMediaVolumeIndex(index) {
     assert.equal(index, GUARDED_MEDIA_VOLUME_STATE.index);
   },
+});
+
+test("Food log evidence requires one successful lookup, one write, terminal completion, and no Tao timeout", () => {
+  const boundary = "physical-food-123e4567-e89b-42d3-a456-426614174000";
+  const itemToken = "a".repeat(64);
+  const memoryToken = "b".repeat(64);
+  const line = (tag, message, index) =>
+    `1710000000.00${index}  100  101 W ${tag}: ${message}`;
+  const writeLog = [
+    line("PenumbraPhysicalHarness", boundary, 1),
+    line("PenumbraServer", ">>> EncryptedChatCompletion stock tool call tool=RetrieveFoodInfo", 2),
+    line("TaoAgent", "Received response: <redacted>", 3),
+    line("PenumbraServer", ">>> EncryptedGetFoodItem", 4),
+    line("PenumbraServer", "<<< EncryptedGetFoodItem matched=true", 5),
+    line("PenumbraHook", `FoodRoundTrip lookup item_token=${itemToken}`, 6),
+    line("PenumbraServer", ">>> Capture.CreateMemory", 6),
+    line("PenumbraServer", "<<< Capture.CreateMemory memory_type=food_log status=success", 7),
+    line("PenumbraHook", `FoodRoundTrip create status=success item_token=${itemToken} memory_token=${memoryToken}`, 8),
+    line("PenumbraHook", "FoodTao deadline_rewrite=10_to_60", 9),
+    line("PenumbraServer", ">>> EncryptedChatCompletion messages=4", 10),
+    line("TaoAgent", "Received response: <redacted>", 11),
+  ].join("\n");
+  const evidence = evaluateFoodLogEvidence(writeLog, boundary, "write");
+
+  assert.equal(evidence.pass, true);
+  assert.equal(evidence.timeoutObserved, false);
+  assert.equal(evidence.successfulFoodLookupCount, 1);
+  assert.equal(evidence.createMemoryCount, 1);
+  assert.equal(evidence.successfulCreateMemoryCount, 1);
+  assert.equal(evidence.deadlineRewriteCount, 1);
+  assert.deepEqual(evidence.lookupMarkers, [{ itemToken }]);
+  assert.equal(evidence.createMarkers.length, 1);
+  assert.equal(evidence.terminalObserved, true);
+
+  const timedOut = `${writeLog}\n${line("TaoAgent", "java.util.concurrent.TimeoutException", 9)}`;
+  assert.equal(evaluateFoodLogEvidence(timedOut, boundary, "write").pass, false);
+  const duplicateWrite = `${writeLog}\n${line("PenumbraServer", ">>> Capture.CreateMemory", 12)}`;
+  assert.equal(evaluateFoodLogEvidence(duplicateWrite, boundary, "write").pass, false);
+  const noRewrite = writeLog
+    .split("\n")
+    .filter((entry) => !entry.includes("deadline_rewrite"))
+    .join("\n");
+  assert.equal(evaluateFoodLogEvidence(noRewrite, boundary, "write").pass, false);
+
+  const nextBoundary = "physical-food-423e4567-e89b-42d3-a456-426614174000";
+  const laterReadCannotContaminate = [
+    writeLog,
+    line("PenumbraPhysicalHarness", nextBoundary, 12),
+    line("TaoAgent", "java.util.concurrent.TimeoutException", 13),
+    line("PenumbraServer", ">>> Capture.GetFoodLogSummary", 14),
+  ].join("\n");
+  assert.equal(
+    evaluateFoodLogEvidence(laterReadCannotContaminate, boundary, "write").pass,
+    true,
+  );
+
+  const markerOnlyAfterNextBoundary = [
+    writeLog.split("\n").filter((entry) => !entry.includes("FoodRoundTrip create")).join("\n"),
+    line("PenumbraPhysicalHarness", nextBoundary, 12),
+    line("PenumbraHook", `FoodRoundTrip create status=success item_token=${itemToken} memory_token=${memoryToken}`, 13),
+  ].join("\n");
+  assert.equal(
+    evaluateFoodLogEvidence(markerOnlyAfterNextBoundary, boundary, "write").pass,
+    false,
+  );
+
+  const splicedCreate = writeLog.replace(
+    `FoodRoundTrip create status=success item_token=${itemToken}`,
+    `FoodRoundTrip create status=success item_token=${"c".repeat(64)}`,
+  );
+  assert.equal(evaluateFoodLogEvidence(splicedCreate, boundary, "write").pass, false);
+});
+
+test("Food follow-up evidence requires the stock diary read and its terminal response", () => {
+  const boundary = "physical-food-223e4567-e89b-42d3-a456-426614174000";
+  const itemToken = "a".repeat(64);
+  const memoryToken = "b".repeat(64);
+  const log = [
+    `1710000000.001  100  101 I PenumbraPhysicalHarness: ${boundary}`,
+    "1710000000.002  100  101 W PenumbraServer: >>> EncryptedChatCompletion stock tool call tool=GetFoodLog",
+    "1710000000.003  100  101 W TaoAgent: Received response: <redacted>",
+    "1710000000.004  100  101 W PenumbraServer: >>> Capture.GetFoodLogSummary",
+    "1710000000.005  100  101 W PenumbraServer: included_count=1 <<< Capture.GetFoodLogSummary",
+    `1710000000.006  100  101 I PenumbraHook: FoodRoundTrip read item_token=${itemToken} memory_token=${memoryToken} readback_match=true`,
+    "1710000000.007  100  101 I PenumbraHook: FoodTao deadline_rewrite=10_to_60",
+    "1710000000.008  100  101 W PenumbraServer: >>> EncryptedChatCompletion messages=4",
+    "1710000000.009  100  101 W TaoAgent: Received response: <redacted>",
+  ].join("\n");
+
+  const evidence = evaluateFoodLogEvidence(log, boundary, "read");
+  assert.equal(evidence.pass, true);
+  assert.equal(evidence.foodLogReadCount, 1);
+  assert.equal(evidence.successfulFoodLogReadCount, 1);
+  assert.equal(evidence.terminalObserved, true);
+  assert.equal(evidence.timeoutObserved, false);
+});
+
+test("Food baseline evidence requires one completed stock diary snapshot", () => {
+  const boundary = "physical-food-323e4567-e89b-42d3-a456-426614174000";
+  const log = [
+    `1710000000.001  100  101 I PenumbraPhysicalHarness: ${boundary}`,
+    "1710000000.002  100  101 W PenumbraServer: >>> EncryptedChatCompletion stock tool call tool=GetFoodLog",
+    "1710000000.003  100  101 W TaoAgent: Received response: <redacted>",
+    "1710000000.004  100  101 W PenumbraServer: >>> Capture.GetFoodLogSummary",
+    "1710000000.005  100  101 W PenumbraServer: included_count=1 <<< Capture.GetFoodLogSummary",
+    "1710000000.006  100  101 I PenumbraHook: FoodRoundTrip baseline status=success",
+    "1710000000.007  100  101 I PenumbraHook: FoodTao deadline_rewrite=10_to_60",
+    "1710000000.008  100  101 W PenumbraServer: >>> EncryptedChatCompletion messages=4",
+    "1710000000.009  100  101 W TaoAgent: Received response: <redacted>",
+  ].join("\n");
+
+  const evidence = evaluateFoodLogEvidence(log, boundary, "baseline");
+  assert.equal(evidence.pass, true);
+  assert.equal(evidence.baselineMarkerCount, 1);
+  assert.equal(evidence.successfulFoodLogReadCount, 1);
+});
+
+test("Food memory observations accept only bounded stock memory records", () => {
+  const record = {
+    uuid: "123e4567-e89b-42d3-a456-426614174000",
+    memory_type: "food_log",
+    device_local_id: "opaque-device-local-id",
+    created_at: "2026-08-31T10:00:00Z",
+    status: "pending",
+    files: [],
+    thumbnail_count: 0,
+  };
+  assert.deepEqual(parseMemoryRecords([record]), [record]);
+  assert.throws(
+    () => parseMemoryRecords([{ ...record, memory_type: "secret" }]),
+    /memory list was malformed/,
+  );
+  assert.throws(
+    () => parseMemoryRecords([{ ...record, uuid: "../escape" }]),
+    /memory list was malformed/,
+  );
+});
+
+test("Food memory correlation uses a nonce-keyed token", () => {
+  const arm = "0123456789abcdef0123456789abcdef:1710000180";
+  assert.equal(
+    foodMemoryToken(arm, "323e4567-e89b-42d3-a456-426614174000"),
+    "83fc340cbf22ea819c545838c81d20c2eaea20d4ad56bb2f89ea2ef6e72704f7",
+  );
+  assert.throws(() => foodMemoryToken("bad", "not-a-uuid"), /token input was malformed/);
+});
+
+test("each Food phase refreshes one nonce to a fresh 180 second arm", () => {
+  const uuid = "123e4567-e89b-42d3-a456-426614174000";
+  const initial = refreshedFoodEvidenceArm(null, "1710000000", uuid);
+  assert.equal(
+    initial,
+    "123e4567e89b42d3a456426614174000:1710000180",
+  );
+  assert.equal(
+    refreshedFoodEvidenceArm(initial, "1710000120"),
+    "123e4567e89b42d3a456426614174000:1710000300",
+  );
+  assert.throws(
+    () => refreshedFoodEvidenceArm("bad", "1710000120"),
+    /arm input was malformed/,
+  );
+});
+
+test("the physical Food case waits through terminal-before-markers log skew, proves the diary read, and retains the bounded fixture safely", async () => {
+  const memory = {
+    uuid: "323e4567-e89b-42d3-a456-426614174000",
+    memory_type: "food_log",
+    device_local_id: "opaque-device-local-id",
+    created_at: "2026-08-31T10:00:00Z",
+    status: "pending",
+    files: [],
+    thumbnail_count: 0,
+  };
+  const unrelatedMemory = {
+    ...memory,
+    uuid: "423e4567-e89b-42d3-a456-426614174000",
+  };
+  const arm = "0123456789abcdef0123456789abcdef:1710000180";
+  const memoryToken = foodMemoryToken(arm, memory.uuid);
+  const itemToken = "a".repeat(64);
+  let phase = "baseline";
+  let boundaryCount = 0;
+  let now = 1_000;
+  let deleted = false;
+  let disarmed = false;
+  let writeEvidenceCalls = 0;
+  const injected = [];
+  const deletedIds = [];
+  const deletedPromptIds = new Set();
+  const snapshot = readinessFixture();
+  snapshot.settings.open_food_facts = {
+    enabled: true,
+    attribution_acknowledged: true,
+  };
+  const device = {
+    ...GUARDED_MEDIA_VOLUME_DEVICE,
+    async promptRows() {
+      return injected.map((caseId, index) => ({
+        id: index + 1,
+        prompt: caseId === "food_log_roundtrip"
+          ? "Add one apple to my food log."
+          : "What have I eaten today?",
+        response: "fixture response",
+        run_id: null,
+      })).filter((row) => !deletedPromptIds.has(row.id));
+    },
+    async memories() {
+      if (phase === "baseline") return [unrelatedMemory];
+      return deleted ? [unrelatedMemory] : [unrelatedMemory, memory];
+    },
+    async beginFoodEvidence(existingArm = null) {
+      boundaryCount += 1;
+      return {
+        marker: boundaryCount === 1
+          ? "physical-food-423e4567-e89b-42d3-a456-426614174000"
+          : "physical-food-523e4567-e89b-42d3-a456-426614174000",
+        arm: existingArm ?? arm,
+      };
+    },
+    async endFoodEvidence() {
+      disarmed = true;
+    },
+    async inject(caseId) {
+      injected.push(caseId);
+      phase = caseId === "food_log_roundtrip" ? "write" : "read";
+    },
+    async foodEvidenceSince(_boundary, evidencePhase) {
+      if (evidencePhase === "baseline") {
+        return {
+          pass: true,
+          timeoutObserved: false,
+          terminalObserved: true,
+          successfulFoodLookupCount: 0,
+          createMemoryCount: 0,
+          successfulCreateMemoryCount: 0,
+          foodLogReadCount: 1,
+          successfulFoodLogReadCount: 1,
+          deadlineRewriteCount: 1,
+          baselineMarkerCount: 1,
+          createMarkers: [],
+          readbackMarkers: [],
+        };
+      }
+      if (evidencePhase === "write") {
+        writeEvidenceCalls += 1;
+        if (writeEvidenceCalls === 1) {
+          return {
+            pass: false,
+            timeoutObserved: false,
+            terminalObserved: true,
+            successfulFoodLookupCount: 1,
+            createMemoryCount: 0,
+            successfulCreateMemoryCount: 0,
+            foodLogReadCount: 0,
+            successfulFoodLogReadCount: 0,
+            deadlineRewriteCount: 1,
+            createMarkers: [],
+            readbackMarkers: [],
+          };
+        }
+        return {
+          pass: true,
+          timeoutObserved: false,
+          terminalObserved: true,
+          successfulFoodLookupCount: 1,
+          createMemoryCount: 1,
+          successfulCreateMemoryCount: 1,
+          foodLogReadCount: 0,
+          successfulFoodLogReadCount: 0,
+          deadlineRewriteCount: 1,
+          createMarkers: [{ itemToken, memoryToken }],
+          readbackMarkers: [],
+        };
+      }
+      return {
+        pass: true,
+        timeoutObserved: false,
+        terminalObserved: true,
+        successfulFoodLookupCount: 0,
+        createMemoryCount: 0,
+        foodLogReadCount: 1,
+        successfulFoodLogReadCount: 1,
+        deadlineRewriteCount: 1,
+        createMarkers: [],
+        readbackMarkers: [{ itemToken, memoryToken, matched: true }],
+      };
+    },
+    async deleteMemory(uuid) {
+      deletedIds.push(uuid);
+      deleted = true;
+    },
+    async deletePrompt(id) {
+      deletedPromptIds.add(id);
+    },
+  };
+
+  const report = await executePhysicalSuite(
+    {
+      serial: "device-123._:usb",
+      expectedPinSerial: "device-123._:usb",
+      releaseManifestPath: RELEASE_MANIFEST_PATH,
+      releaseReceiptsPath: RELEASE_RECEIPTS_PATH,
+      caseId: "food_log_roundtrip",
+      provider: null,
+      expectedTransport: null,
+    },
+    {
+      device,
+      token: "fixture-token",
+      identity: identityFixture(),
+      snapshot,
+      releaseManifestSource: RELEASE_MANIFEST_SOURCE,
+      releaseReceiptsSource: RELEASE_RECEIPTS_SOURCE,
+      timing: {
+        now: () => now,
+        async sleep(ms) { now += ms; },
+      },
+    },
+  );
+
+  assert.equal(report.status, "pass", JSON.stringify(report));
+  assert.equal(writeEvidenceCalls, 3);
+  assert.deepEqual(injected, [
+    "food_log_roundtrip_read",
+    "food_log_roundtrip",
+    "food_log_roundtrip_read",
+  ]);
+  assert.deepEqual(deletedIds, []);
+  assert.equal(disarmed, true);
+  assert.equal(report.cases[0].food_lookup_observed, true);
+  assert.equal(report.cases[0].create_memory_observed, true);
+  assert.equal(report.cases[0].tao_timeout_observed, false);
+  assert.equal(report.cases[0].write_within_extended_bound, true);
+  assert.equal(report.cases[0].follow_up_read_observed, true);
+  assert.equal(report.cleanup.food_memory_removed, null);
+  assert.equal(report.cleanup.food_evidence_disarmed, true);
+});
+
+test("marked duplicates and unmarked new Food memories delete nothing after the full window", async () => {
+  const memories = [
+    "623e4567-e89b-42d3-a456-426614174000",
+    "723e4567-e89b-42d3-a456-426614174000",
+  ].map((uuid) => ({
+    uuid,
+    memory_type: "food_log",
+    device_local_id: "",
+    created_at: "2026-08-31T10:00:00Z",
+    status: "pending",
+    files: [],
+    thumbnail_count: 0,
+  }));
+  const arm = "fedcba9876543210fedcba9876543210:1710000180";
+  const itemToken = "a".repeat(64);
+  const markers = memories.map((memory) => ({
+    itemToken,
+    memoryToken: foodMemoryToken(arm, memory.uuid),
+  }));
+  for (const scenario of [
+    { markers, createCount: 2 },
+    { markers: markers.slice(0, 1), createCount: 1 },
+  ]) {
+    let phase = "baseline";
+    let now = 5_000;
+    const deleted = [];
+    const snapshot = readinessFixture();
+    snapshot.settings.open_food_facts = {
+      enabled: true,
+      attribution_acknowledged: true,
+    };
+    const device = {
+      ...GUARDED_MEDIA_VOLUME_DEVICE,
+      async promptRows() {
+        if (phase === "baseline") return [];
+        return [
+          { id: 1, prompt: "What have I eaten today?", response: "fixture", run_id: null },
+          { id: 2, prompt: "Add one apple to my food log.", response: "fixture", run_id: null },
+        ];
+      },
+      async memories() { return phase === "baseline" ? [] : memories; },
+      async beginFoodEvidence() {
+        now += 1_000;
+        return {
+          marker: "physical-food-823e4567-e89b-42d3-a456-426614174000",
+          arm,
+        };
+      },
+      async endFoodEvidence() {},
+      async inject() {
+        now += 2_000;
+        phase = "write";
+      },
+      async foodEvidenceSince(_boundary, evidencePhase) {
+        if (evidencePhase === "baseline") {
+          return {
+            pass: true,
+            timeoutObserved: false,
+            terminalObserved: true,
+            successfulFoodLookupCount: 0,
+            createMemoryCount: 0,
+            successfulCreateMemoryCount: 0,
+            foodLogReadCount: 1,
+            successfulFoodLogReadCount: 1,
+            deadlineRewriteCount: 1,
+            baselineMarkerCount: 1,
+            createMarkers: [],
+            readbackMarkers: [],
+          };
+        }
+        return {
+          pass: false,
+          timeoutObserved: false,
+          terminalObserved: true,
+          successfulFoodLookupCount: 1,
+          createMemoryCount: scenario.createCount,
+          successfulCreateMemoryCount: scenario.createCount,
+          foodLogReadCount: 0,
+          successfulFoodLogReadCount: 0,
+          deadlineRewriteCount: 1,
+          createMarkers: scenario.markers,
+          readbackMarkers: [],
+        };
+      },
+      async deleteMemory(uuid) { deleted.push(uuid); },
+    };
+
+    const report = await executePhysicalSuite(
+      {
+        serial: "device-123._:usb",
+        expectedPinSerial: "device-123._:usb",
+        releaseManifestPath: RELEASE_MANIFEST_PATH,
+        releaseReceiptsPath: RELEASE_RECEIPTS_PATH,
+        caseId: "food_log_roundtrip",
+        provider: null,
+        expectedTransport: null,
+      },
+      {
+        device,
+        token: "fixture-token",
+        identity: identityFixture(),
+        snapshot,
+        releaseManifestSource: RELEASE_MANIFEST_SOURCE,
+        releaseReceiptsSource: RELEASE_RECEIPTS_SOURCE,
+        timing: {
+          now: () => now,
+          async sleep(ms) { now += ms; },
+        },
+      },
+    );
+
+    assert.equal(now, 11_000 + PHYSICAL_TIMEOUT_MS.foodAggregate);
+    assert.deepEqual(deleted, []);
+    assert.equal(report.cases[0].status, "fail");
+    assert.equal(report.cleanup.food_memory_removed, false);
+    assert.equal(report.status, "incomplete");
+  }
+});
+
+test("the Food observer rejects an invalid injected clock before arming evidence", async () => {
+  const snapshot = readinessFixture();
+  snapshot.settings.open_food_facts = {
+    enabled: true,
+    attribution_acknowledged: true,
+  };
+  await assert.rejects(
+    executePhysicalSuite(
+      {
+        serial: "device-123._:usb",
+        expectedPinSerial: "device-123._:usb",
+        releaseManifestPath: RELEASE_MANIFEST_PATH,
+        releaseReceiptsPath: RELEASE_RECEIPTS_PATH,
+        caseId: "food_log_roundtrip",
+        provider: null,
+        expectedTransport: null,
+      },
+      {
+        device: {
+          ...GUARDED_MEDIA_VOLUME_DEVICE,
+          async promptRows() { return []; },
+          async memories() { return []; },
+          async beginFoodEvidence() {
+            assert.fail("invalid timing must fail before Food evidence is armed");
+          },
+        },
+        token: "fixture-token",
+        identity: identityFixture(),
+        snapshot,
+        releaseManifestSource: RELEASE_MANIFEST_SOURCE,
+        releaseReceiptsSource: RELEASE_RECEIPTS_SOURCE,
+        timing: { now: null, sleep: async () => {} },
+      },
+    ),
+    /physical observation clock was invalid/,
+  );
 });
 
 function liveArgs(
@@ -329,6 +829,7 @@ test("the physical matrix is fixed, bounded, immutable, and side-effect scoped",
       "current_weather_today",
       "capital_weather_remote",
       "ranked_music",
+      "food_log_roundtrip",
       "tickle_single",
       "tickle_fancy",
       "tickle_triple",
@@ -1765,7 +2266,9 @@ test("a selected loading case touches no unrelated activity or package surface",
   assert.deepEqual(report.cleanup, {
     prompt_activity_removed: null,
     music_activity_removed: null,
-    music_not_playing: null,
+      food_memory_removed: null,
+      food_evidence_disarmed: null,
+      music_not_playing: null,
     tickle_not_running: null,
     media_volume_snapshot_captured: null,
     media_volume_restored: null,

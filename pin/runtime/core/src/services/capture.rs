@@ -409,6 +409,8 @@ impl CaptureService for CaptureServiceImpl {
                     memory: record.clone(),
                 });
 
+                info!("<<< Capture.CreateMemory memory_type=food_log status=success");
+
                 Ok(Response::new(CreateMemoryResponse {
                     status: CreateMemoryResultStatus::Success as i32,
                     memory: Some(Memory {

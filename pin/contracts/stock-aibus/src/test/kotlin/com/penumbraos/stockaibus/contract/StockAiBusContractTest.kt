@@ -8,6 +8,14 @@ import org.junit.Test
 
 class StockAiBusContractTest {
     @Test
+    fun auditedStockArtifactDigestsAreCanonicalSha256Values() {
+        assertEquals(64, StockAiBusContract.IRONMAN_SHA256.length)
+        assertEquals(64, StockAiBusContract.FOOD_SHA256.length)
+        assertTrue(StockAiBusContract.IRONMAN_SHA256.matches(Regex("[0-9a-f]{64}")))
+        assertTrue(StockAiBusContract.FOOD_SHA256.matches(Regex("[0-9a-f]{64}")))
+    }
+
+    @Test
     fun transactionNumbersAndNamesMatchTheStockBinderSurface() {
         val transactions = StockAiBusContract.transactions
         val expected = listOf(

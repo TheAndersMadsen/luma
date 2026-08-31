@@ -1662,7 +1662,10 @@ fn valid_food_image_bytes(image: &[u8]) -> bool {
 
 fn food_item(product: FoodProduct) -> FoodItem {
     FoodItem {
-        request_uuid: String::new(),
+        // This stock field survives TrackFoodConsumption into the stored
+        // FoodLog. A fresh value keeps two otherwise identical foods distinct
+        // for bounded round-trip verification without exposing their content.
+        request_uuid: uuid::Uuid::new_v4().to_string(),
         item_name: product.item_name,
         typical_serving_size: product.typical_serving_size,
         nutrition_info: product
@@ -2685,6 +2688,22 @@ mod tests {
         assert_eq!(item.nutrition_info.len(), 1);
         assert_eq!(item.nutrition_info[0].nutrient_type, 2);
         assert_eq!(item.nutrition_info[0].value, 89.0);
+    }
+
+    #[test]
+    fn resolved_food_items_receive_distinct_stock_request_uuids() {
+        let product = || FoodProduct {
+            item_name: "Apple".into(),
+            typical_serving_size: "1 apple".into(),
+            brand: String::new(),
+            nutrients: Vec::new(),
+        };
+        let first = food_item(product());
+        let second = food_item(product());
+
+        assert!(uuid::Uuid::parse_str(&first.request_uuid).is_ok());
+        assert!(uuid::Uuid::parse_str(&second.request_uuid).is_ok());
+        assert_ne!(first.request_uuid, second.request_uuid);
     }
 
     #[test]

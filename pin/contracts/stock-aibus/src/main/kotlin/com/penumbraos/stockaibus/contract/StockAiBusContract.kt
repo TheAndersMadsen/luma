@@ -13,6 +13,7 @@ object StockAiBusContract {
     const val STREAM_OBSERVER_DESCRIPTOR = TierASymbols.Binder.StreamObserver.DESCRIPTOR
     const val STOCK_VERSION = "rc/release1.3-47-g17e3fb9551"
     const val IRONMAN_SHA256 = "44bc22bfb666a2e4e679072e6d26b007391627df75174b50406a2e2fdb768c8e"
+    const val FOOD_SHA256 = "acc2e0d726d35cc123869ad0fff36d38124ea04da0f24df7125deb8352ddd06d"
 
     // Named codes for the transactions Penumbra intercepts or inspects. Callers
     // must use these instead of re-deriving `IBinder.FIRST_CALL_TRANSACTION + n`

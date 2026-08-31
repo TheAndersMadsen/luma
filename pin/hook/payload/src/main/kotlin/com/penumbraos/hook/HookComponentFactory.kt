@@ -2,6 +2,7 @@ package com.penumbraos.hook
 
 import android.app.AppComponentFactory
 import android.app.Application
+import android.content.Context
 import android.util.Log
 import com.penumbraos.stockaibus.contract.StockSymbols
 import com.penumbraos.stockaibus.contract.TierASymbols
@@ -19,9 +20,10 @@ internal enum class HookClassification {
 internal class HookModuleDescriptor(
     val id: String,
     val targetPackage: String,
+    val targetProcess: String? = null,
     val probeClasses: Set<String>,
     val classification: HookClassification,
-    val install: (ClassLoader) -> Unit,
+    val install: (ClassLoader, String, String, File?) -> Unit,
 ) {
     init {
         require(id.isNotBlank())
@@ -29,8 +31,17 @@ internal class HookModuleDescriptor(
         require(probeClasses.isNotEmpty() && probeClasses.none(String::isBlank))
     }
 
+    fun matches(
+        packageName: String,
+        processName: String,
+        classAvailable: (String) -> Boolean,
+    ): Boolean =
+        packageName == targetPackage &&
+            (targetProcess == null || processName == targetProcess) &&
+            probeClasses.any(classAvailable)
+
     fun matches(packageName: String, classAvailable: (String) -> Boolean): Boolean =
-        packageName == targetPackage && probeClasses.any(classAvailable)
+        matches(packageName, packageName, classAvailable)
 }
 
 internal object HookNativeLibraryLocator {
@@ -234,7 +245,8 @@ class HookComponentFactory : AppComponentFactory() {
                 StockSymbols.Food.PACKAGE,
                 "humane.experience.food.FoodExperience",
                 HookClassification.CONDITIONAL_COMPATIBILITY,
-                FoodHooks::install,
+                targetProcess = StockSymbols.Food.PACKAGE,
+                installWithIdentity = FoodHooks::install,
             ),
             // `humane.experience.ExperienceApplication` exists in many stock
             // APKs. Exact package matching is therefore the load-bearing gate.
@@ -260,7 +272,23 @@ class HookComponentFactory : AppComponentFactory() {
             targetPackage = targetPackage,
             probeClasses = setOf(probeClass),
             classification = classification,
-            install = install,
+            install = { classLoader, _, _, _ -> install(classLoader) },
+        )
+
+        private fun module(
+            id: String,
+            targetPackage: String,
+            probeClass: String,
+            classification: HookClassification,
+            targetProcess: String,
+            installWithIdentity: (ClassLoader, String, String, File?) -> Unit,
+        ) = HookModuleDescriptor(
+            id = id,
+            targetPackage = targetPackage,
+            targetProcess = targetProcess,
+            probeClasses = setOf(probeClass),
+            classification = classification,
+            install = installWithIdentity,
         )
     }
 
@@ -279,7 +307,7 @@ class HookComponentFactory : AppComponentFactory() {
             } else if (HOOK_MODULES.none { it.targetPackage == packageName }) {
                 Log.w(TAG, "No registered hook module targets package $packageName")
             } else if (loadNativeLibs(cl)) {
-                installMatchingModules(cl, packageName)
+                installMatchingModules(cl, packageName, processName)
             } else {
                 Log.e(TAG, "Required native hooks unavailable; skipping all hook modules")
             }
@@ -293,12 +321,16 @@ class HookComponentFactory : AppComponentFactory() {
     /**
      * Probe the target classloader and install every matching hook module.
      */
-    private fun installMatchingModules(cl: ClassLoader, packageName: String) {
+    private fun installMatchingModules(
+        cl: ClassLoader,
+        packageName: String,
+        processName: String,
+    ) {
         var installed = 0
         val packageModules = HOOK_MODULES.filter { it.targetPackage == packageName }
         Log.w(TAG, "Checking ${packageModules.size} hook modules for package $packageName")
         for (module in packageModules) {
-            val matched = module.matches(packageName) { probeClass ->
+            val matched = module.matches(packageName, processName) { probeClass ->
                 Log.w(TAG, "  Checking ${module.id} probe: $probeClass")
                 try {
                     cl.loadClass(probeClass)
@@ -313,7 +345,16 @@ class HookComponentFactory : AppComponentFactory() {
             }
             Log.w(TAG, "  Module matched: ${module.id} (${module.classification})")
             try {
-                module.install(cl)
+                module.install(
+                    cl,
+                    packageName,
+                    processName,
+                    if (packageName == StockSymbols.Food.PACKAGE) {
+                        currentApplicationSourceApk(packageName)
+                    } else {
+                        null
+                    },
+                )
                 installed++
             } catch (t: Throwable) {
                 Log.e(TAG, "  Module install failed for ${module.id}", t)
@@ -330,6 +371,27 @@ class HookComponentFactory : AppComponentFactory() {
         val activityThread = Class.forName("android.app.ActivityThread")
         activityThread.getDeclaredMethod("currentPackageName").invoke(null) as? String
     }.getOrNull()?.takeIf(String::isNotBlank)
+
+    /**
+     * Resolve the target APK before the target Application exists. At this
+     * point `ActivityThread.currentApplication()` is still null, but the
+     * process ActivityThread already exposes its system context and package
+     * manager. The Food deadline hook independently validates this file's
+     * canonical path, size, and digest before changing stock behavior.
+     */
+    private fun currentApplicationSourceApk(packageName: String): File? = runCatching {
+        val activityThreadClass = Class.forName("android.app.ActivityThread")
+        val activityThread = activityThreadClass
+            .getDeclaredMethod("currentActivityThread")
+            .invoke(null) ?: return@runCatching null
+        val systemContext = activityThreadClass
+            .getDeclaredMethod("getSystemContext")
+            .invoke(activityThread) as? Context ?: return@runCatching null
+        val applicationInfo = systemContext.packageManager.getApplicationInfo(packageName, 0)
+        File(applicationInfo.sourceDir)
+    }.onFailure { error ->
+        Log.e(TAG, "  Target APK source path unavailable; audited hooks will fail closed", error)
+    }.getOrNull()
 
     /**
      * Load native libraries by absolute path.

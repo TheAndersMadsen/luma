@@ -1,6 +1,7 @@
 package com.penumbraos.hook
 
 import android.util.Log
+import java.io.File
 
 /**
  * Restores the stock food experience's original local boundaries.
@@ -15,11 +16,63 @@ import android.util.Log
 object FoodHooks {
     private const val TAG = "PenumbraHook"
 
-    fun install(classLoader: ClassLoader) {
+    fun install(
+        classLoader: ClassLoader,
+        packageName: String,
+        processName: String,
+        sourceApk: File?,
+    ) {
         Log.w(TAG, "Installing food hooks...")
-        ChannelFactoryBypass.install(classLoader)
-        EphemeralProtectionBypass.installFoodOnly(classLoader)
-        DataProtectorBypass.installFoodOnly(classLoader)
+        installContained("Food channel factory") { ChannelFactoryBypass.install(classLoader) }
+        installContained("Food ephemeral protection") {
+            EphemeralProtectionBypass.installFoodOnly(classLoader)
+        }
+        installContained("Food data protection") {
+            DataProtectorBypass.installFoodOnly(classLoader)
+        }
+        installAuditedHooks(classLoader, packageName, processName, sourceApk)
         Log.w(TAG, "Food hooks installed")
+    }
+
+    private fun installAuditedHooks(
+        classLoader: ClassLoader,
+        packageName: String,
+        processName: String,
+        sourceApk: File?,
+    ) {
+        val auditedApk = try {
+            FoodTaoDeadlineHooks.verifyAuditedFoodApk(sourceApk)
+        } catch (error: Throwable) {
+            Log.e(TAG, "  Food APK verification failed; keeping stock deadlines", error)
+            null
+        }
+        if (auditedApk == null) {
+            Log.e(TAG, "  Food audited hooks refused: stock APK identity did not match")
+            return
+        }
+        installContained("Food Tao deadline") {
+            FoodTaoDeadlineHooks.installAudited(
+                classLoader,
+                packageName,
+                processName,
+                auditedApk,
+            )
+        }
+        installContained("Food round-trip evidence") {
+            FoodRoundTripEvidenceHooks.installAudited(
+                classLoader,
+                packageName,
+                processName,
+                auditedApk,
+            )
+        }
+    }
+
+    private inline fun installContained(name: String, install: () -> Unit) {
+        try {
+            install()
+        } catch (error: Throwable) {
+            Log.e(TAG, "  $name hook failed; continuing with remaining Food hooks", error)
+        }
     }
 }
