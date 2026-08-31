@@ -288,8 +288,8 @@ test("tag release workflow publishes the exact hardened image and Compose bounda
   ));
   assert.deepEqual(pinCoordinates, {
     schemaVersion: 2,
-    version: "2026-08-31.2",
-    versionCode: 202608312,
+    version: "2026-08-31.6",
+    versionCode: 202608316,
     privateAssetSource: {
       repository: "TheAndersMadsen/ai-pin-revival",
       tag: "v0.1.82",
