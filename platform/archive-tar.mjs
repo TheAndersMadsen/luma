@@ -56,7 +56,10 @@ export async function createReproducibleTar({ parent, directory, archive }) {
   const entries = await normalizeTree(parent, directory);
   const tar = resolveTar();
   const ownership = tar.flavor === "gnu"
-    ? ["--sort=name", "--mtime=@0", "--owner=0", "--group=0", "--numeric-owner", "--format=posix"]
+    ? [
+      "--sort=name", "--mtime=@0", "--owner=0", "--group=0", "--numeric-owner",
+      "--format=posix", "--pax-option=delete=atime,delete=ctime",
+    ]
     : [
       "--uid", "0", "--gid", "0", "--numeric-owner", "--format=ustar",
       "--options", "gzip:!timestamp", "--no-acls", "--no-fflags", "--no-xattrs",
