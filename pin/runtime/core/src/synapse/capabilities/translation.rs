@@ -287,10 +287,9 @@ mod tests {
 
     #[test]
     fn complete_supported_one_off_requests_use_exact_stock_fields() {
-        let planned = plan_translation_action(&request(
-            "Translate good morning from English to French.",
-        ))
-        .unwrap();
+        let planned =
+            plan_translation_action(&request("Translate good morning from English to French."))
+                .unwrap();
         assert_eq!(planned.action_name, native_actions::TRANSLATE);
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&planned.input_json).unwrap(),

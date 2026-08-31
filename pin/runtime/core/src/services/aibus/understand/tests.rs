@@ -933,8 +933,12 @@ async fn ranked_artist_lookup_fails_honestly_without_the_semantic_runtime() {
     assert!(action.input.contains("assistant service"));
 
     let mut response_excluded = request;
-    response_excluded.excluded_tools.push(native_actions::PLAY_MUSIC.into());
-    response_excluded.excluded_tools.push(native_actions::RESPOND.into());
+    response_excluded
+        .excluded_tools
+        .push(native_actions::PLAY_MUSIC.into());
+    response_excluded
+        .excluded_tools
+        .push(native_actions::RESPOND.into());
     let mut stream = handler
         .understand_inner(MetadataMap::new(), response_excluded, "TestUnderstand")
         .await
@@ -2643,13 +2647,7 @@ async fn natural_ranked_phrasing_reaches_agentic_path_with_harness_shaped_exclus
 
     assert!(
         handler
-            .run_local_text_fast_path(
-                &request,
-                "music-user",
-                utterance,
-                "music-user",
-                false,
-            )
+            .run_local_text_fast_path(&request, "music-user", utterance, "music-user", false,)
             .await
             .unwrap()
             .is_none(),
@@ -2837,13 +2835,7 @@ async fn named_artist_top_lookup_requires_the_agentic_music_path() {
 
     assert!(
         handler
-            .run_local_text_fast_path(
-                &request,
-                "music-user",
-                utterance,
-                "music-user",
-                false,
-            )
+            .run_local_text_fast_path(&request, "music-user", utterance, "music-user", false,)
             .await
             .unwrap()
             .is_none(),

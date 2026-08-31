@@ -88,9 +88,10 @@ impl IntoResponse for AcceptanceError {
             Self::IdentityUnavailable => {
                 (StatusCode::SERVICE_UNAVAILABLE, "pin_identity_unavailable")
             }
-            Self::Persistence => {
-                (StatusCode::INTERNAL_SERVER_ERROR, "acceptance_persistence_failed")
-            }
+            Self::Persistence => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "acceptance_persistence_failed",
+            ),
         };
         (status, Json(ErrorBody { error })).into_response()
     }
@@ -163,10 +164,7 @@ async fn current_identity() -> Result<CurrentIdentity, AcceptanceError> {
     })
 }
 
-fn response(
-    current: CurrentIdentity,
-    record: Option<AcceptanceRecord>,
-) -> AcceptanceResponse {
+fn response(current: CurrentIdentity, record: Option<AcceptanceRecord>) -> AcceptanceResponse {
     let confirmation = record.filter(|record| {
         record.device_serial == current.device_serial
             && record.release_version == current.release_version
@@ -218,7 +216,11 @@ fn valid_release_version(value: &str) -> bool {
 }
 
 fn canonical_ipv4(value: &str) -> Option<String> {
-    value.trim().parse::<Ipv4Addr>().ok().map(|value| value.to_string())
+    value
+        .trim()
+        .parse::<Ipv4Addr>()
+        .ok()
+        .map(|value| value.to_string())
 }
 
 fn record_path(config_path: &Path) -> PathBuf {
@@ -234,7 +236,8 @@ fn read_record(path: &Path) -> Result<Option<AcceptanceRecord>, AcceptanceError>
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(_) => return Err(AcceptanceError::Persistence),
     };
-    if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > MAX_RECORD_BYTES {
+    if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > MAX_RECORD_BYTES
+    {
         return Err(AcceptanceError::Persistence);
     }
     let bytes = std::fs::read(path).map_err(|_| AcceptanceError::Persistence)?;
@@ -337,7 +340,10 @@ mod tests {
         {
             std::fs::remove_file(&path).unwrap();
             std::os::unix::fs::symlink(directory.path().join("elsewhere"), &path).unwrap();
-            assert!(matches!(read_record(&path), Err(AcceptanceError::Persistence)));
+            assert!(matches!(
+                read_record(&path),
+                Err(AcceptanceError::Persistence)
+            ));
         }
     }
 
@@ -359,12 +365,21 @@ mod tests {
 
         let mut invalid = valid.clone();
         invalid.checks.speaker = false;
-        assert!(matches!(validate_request(&invalid), Err(AcceptanceError::Invalid)));
+        assert!(matches!(
+            validate_request(&invalid),
+            Err(AcceptanceError::Invalid)
+        ));
         let mut invalid = valid.clone();
         invalid.release_id = "A".repeat(64);
-        assert!(matches!(validate_request(&invalid), Err(AcceptanceError::Invalid)));
+        assert!(matches!(
+            validate_request(&invalid),
+            Err(AcceptanceError::Invalid)
+        ));
         let mut invalid = valid;
         invalid.device_serial = " pin ".into();
-        assert!(matches!(validate_request(&invalid), Err(AcceptanceError::Invalid)));
+        assert!(matches!(
+            validate_request(&invalid),
+            Err(AcceptanceError::Invalid)
+        ));
     }
 }

@@ -1025,8 +1025,8 @@ fn parse_food_intent(raw: &str) -> Option<StockIntent> {
     }
     if let Some(remainder) = strip_prefix_ascii_case(command, "add ") {
         for suffix in [" to my food log", " to the food log"] {
-            if let Some(items) = strip_suffix_ascii_case(remainder, suffix)
-                .and_then(parse_food_items)
+            if let Some(items) =
+                strip_suffix_ascii_case(remainder, suffix).and_then(parse_food_items)
             {
                 return Some(StockIntent::TrackFoodConsumption(items));
             }

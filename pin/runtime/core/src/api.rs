@@ -4,8 +4,8 @@
 //! Network Access (LNA) API.  All responses include CORS headers so the
 //! public HTTPS portal can reach this HTTP server on the LAN.
 
-mod activity;
 mod acceptance;
+mod activity;
 mod auth;
 mod contacts;
 mod conversations;
@@ -682,11 +682,7 @@ async fn update_settings(
     }
 
     info!("Pin-local settings updated");
-    Json(settings_response_with_restart(
-        &config,
-        restart_required,
-    ))
-    .into_response()
+    Json(settings_response_with_restart(&config, restart_required)).into_response()
 }
 
 fn contains_cosmos_owned_settings(body: &UpdateSettingsRequest) -> bool {
@@ -1245,10 +1241,7 @@ fn persist_config_inner(
     Ok(digest)
 }
 
-pub(super) fn write_private_atomic(
-    path: &std::path::Path,
-    contents: &str,
-) -> std::io::Result<()> {
+pub(super) fn write_private_atomic(path: &std::path::Path, contents: &str) -> std::io::Result<()> {
     use std::io::Write as _;
 
     let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));
@@ -1681,14 +1674,8 @@ mod tests {
             assert!(!object.contains_key(provider), "{provider}");
         }
         assert_eq!(object["open_food_facts"]["enabled"], false);
-        assert_eq!(
-            object["open_food_facts"]["attribution_acknowledged"],
-            false,
-        );
-        assert_eq!(
-            object["llm"]["vision_consent_acknowledged"],
-            false,
-        );
+        assert_eq!(object["open_food_facts"]["attribution_acknowledged"], false,);
+        assert_eq!(object["llm"]["vision_consent_acknowledged"], false,);
         assert_eq!(object["server"]["admin_token_auth"], true);
     }
 
@@ -1705,15 +1692,10 @@ mod tests {
             assert!(contains_cosmos_owned_settings(&body), "{json}");
         }
 
-        let consent: UpdateSettingsRequest = serde_json::from_str(
-            r#"{"llm":{"vision_consent_acknowledged":true}}"#,
-        )
-        .unwrap();
+        let consent: UpdateSettingsRequest =
+            serde_json::from_str(r#"{"llm":{"vision_consent_acknowledged":true}}"#).unwrap();
         assert!(!contains_cosmos_owned_settings(&consent));
-        assert_eq!(
-            consent.llm.unwrap().vision_consent_acknowledged,
-            Some(true),
-        );
+        assert_eq!(consent.llm.unwrap().vision_consent_acknowledged, Some(true),);
         assert!(serde_json::from_str::<UpdateSettingsRequest>(
             r#"{"llm":{"model":"not-pin-local"}}"#,
         )

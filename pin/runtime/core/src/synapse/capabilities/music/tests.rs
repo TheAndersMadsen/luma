@@ -922,20 +922,16 @@ fn track_status_is_active_only_accepts_playing() {
 fn popular_song_requests_are_reserved_for_agentic_discovery() {
     let mut context = recent_track();
     context.artists.push("De La Soul".into());
-    assert!(
-        plan_catalog_or_contextual_music_action(
-            &request("Play the most popular song by this artist"),
-            Some(&context)
-        )
-        .is_none()
-    );
-    assert!(
-        plan_catalog_or_contextual_music_action(
-            &request("Play the most popular song by Gorillaz"),
-            None,
-        )
-        .is_none()
-    );
+    assert!(plan_catalog_or_contextual_music_action(
+        &request("Play the most popular song by this artist"),
+        Some(&context)
+    )
+    .is_none());
+    assert!(plan_catalog_or_contextual_music_action(
+        &request("Play the most popular song by Gorillaz"),
+        None,
+    )
+    .is_none());
 }
 
 #[test]

@@ -41,14 +41,21 @@ impl DeviceVersionSnapshot {
     pub(crate) fn exact_runtime_release(&self) -> Option<&str> {
         const RUNTIME_ROLES: [&str; 3] = ["hook", "server", "injector"];
         let version = self.runtime_server_version;
-        RUNTIME_ROLES.iter().all(|role| {
-            self.components.iter().filter(|component| component.role == *role).count() == 1
-                && self.components.iter().any(|component| {
-                    component.role == *role
-                        && component.error.is_none()
-                        && component.version_name.as_deref() == Some(version)
-                })
-        }).then_some(version)
+        RUNTIME_ROLES
+            .iter()
+            .all(|role| {
+                self.components
+                    .iter()
+                    .filter(|component| component.role == *role)
+                    .count()
+                    == 1
+                    && self.components.iter().any(|component| {
+                        component.role == *role
+                            && component.error.is_none()
+                            && component.version_name.as_deref() == Some(version)
+                    })
+            })
+            .then_some(version)
     }
 }
 
