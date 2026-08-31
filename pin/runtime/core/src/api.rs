@@ -420,6 +420,10 @@ fn settings_restart_required(
 ) -> bool {
     listener_restart_required(config, active_lan_dashboard_enabled)
         || config.open_food_facts != original_config.open_food_facts
+        || config.server.iroh_remote_center_enabled
+            != original_config.server.iroh_remote_center_enabled
+        || config.server.iroh_remote_center_allowed_peers
+            != original_config.server.iroh_remote_center_allowed_peers
 }
 
 #[derive(Deserialize)]
@@ -1790,6 +1794,9 @@ mod tests {
         let mut config = Config::load(&dir.path().join("missing.toml")).unwrap();
         config.server.iroh_remote_center_enabled = true;
         config.server.iroh_remote_center_allowed_peers = vec![peer.into()];
+
+        let original = Config::load(&dir.path().join("missing-original.toml")).unwrap();
+        assert!(settings_restart_required(&config, &original, false));
 
         let response = serde_json::to_value(settings_response(&config)).unwrap();
         for field in [

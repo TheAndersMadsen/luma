@@ -1,18 +1,11 @@
 //! Setup iroh bridge — exposes a Pin's remote Center API over local HTTP.
 //!
-//! Connects to a Pin's iroh endpoint using an EndpointTicket and exposes the
-//! Setup dashboard on a local HTTP port. It defaults to loopback for direct
-//! use; the container deployment explicitly binds its private Compose network.
-//! iroh handles NAT traversal automatically via the n0 relay and DNS discovery.
-//!
-//! Usage:
-//! 1. On the Pin: enable `[server] iroh_remote_center_enabled = true`.
-//! 2. Fetch the ticket once (over LAN or `adb forward`) from
-//!    `GET /api/iroh/ticket`; it returns
-//!    `{ "ticket": "<EndpointTicket>", "node_id": "..." }`.
-//! 3. Save the ticket in a protected file, then run
-//!    `cargo run -- --ticket-file /path/to/iroh-ticket`.
-//! 4. Open `http://localhost:18080/setup/` in your browser.
+//! It starts safely without a Pin assignment. Authenticated Center setup then
+//! gives it one Pin EndpointTicket over the private control route; the bridge
+//! persists that assignment beside its stable endpoint identity and reconnects
+//! transparently after either side restarts. The container deployment binds
+//! only its private Compose network. Iroh handles NAT traversal through the n0
+//! relay and DNS discovery.
 //!
 //! The ticket is the sole Pin dial credential; the iroh connection is
 //! end-to-end encrypted to the Pin's key, and the Pin applies its route policy.
@@ -29,14 +22,16 @@ use axum::body::{Body, Bytes};
 use axum::extract::State;
 use axum::http::{header, HeaderMap, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
-use axum::Router;
+use axum::routing::{get, put};
+use axum::{Json, Router};
 use base64::Engine as _;
 use clap::Parser;
 use iroh::{Endpoint, EndpointAddr};
 use iroh_tickets::endpoint::EndpointTicket;
 use serde::{Deserialize, Serialize};
+use subtle::ConstantTimeEq as _;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 use tokio::time::Instant;
 use tracing::{error, info, warn};
 use uuid::Uuid;
@@ -51,6 +46,10 @@ const MAX_SPOTIFY_SETTINGS_BODY_BYTES: usize = 512;
 const MAX_SPOTIFY_SEARCH_QUERY_BYTES: usize = 256;
 const MAX_MUSIC_EGRESS_BODY_BYTES: usize = 1024 * 1024;
 const MAX_TICKET_BYTES: usize = 16 * 1024;
+const MAX_CONTROL_BODY_BYTES: usize = 20 * 1024;
+const MIN_CONTROL_TOKEN_BYTES: usize = 32;
+const MAX_CONTROL_TOKEN_BYTES: usize = 512;
+const ASSIGNMENT_SCHEMA_VERSION: u8 = 1;
 
 /// Wire protocol request to the Pin. Mirrors `RemoteRequest` in
 /// `runtime/core/src/remote_center/iroh_connector.rs`.
@@ -133,19 +132,47 @@ struct BridgeState {
     /// calls cannot consume one another's deadline while waiting in a queue.
     connection: Mutex<Option<iroh::endpoint::Connection>>,
     endpoint: Endpoint,
-    node_addr: EndpointAddr,
+    target: RwLock<Option<BridgeTarget>>,
+    assignment_file: PathBuf,
+    control_token: Vec<u8>,
     generation: u64,
+}
+
+#[derive(Clone)]
+struct BridgeTarget {
+    device_id: String,
+    node_addr: EndpointAddr,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct PersistedAssignment {
+    schema_version: u8,
+    device_id: String,
+    ticket: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PairRequest {
+    device_id: String,
+    ticket: String,
 }
 
 impl BridgeState {
     async fn shared_connection(&self) -> Result<iroh::endpoint::Connection, BridgeError> {
+        let target = self.target.read().await;
+        let node_addr = target
+            .as_ref()
+            .map(|target| target.node_addr.clone())
+            .ok_or("the bridge has not been paired with a Pin")?;
         let mut cached = self.connection.lock().await;
         if let Some(connection) = cached.as_ref() {
             return Ok(connection.clone());
         }
 
         info!("connecting to Pin via iroh...");
-        let connection = self.endpoint.connect(self.node_addr.clone(), ALPN).await?;
+        let connection = self.endpoint.connect(node_addr, ALPN).await?;
         info!(
             "connected to Pin (remote endpoint: {})",
             connection.remote_id()
@@ -179,6 +206,187 @@ impl BridgeState {
         }
         result
     }
+}
+
+fn valid_device_id(value: &str) -> bool {
+    (8..=64).contains(&value.len())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+}
+
+fn parse_ticket_value(value: &str) -> Result<EndpointTicket, String> {
+    if value.is_empty()
+        || value.len() > MAX_TICKET_BYTES
+        || value.bytes().any(|byte| !(0x21..=0x7e).contains(&byte))
+    {
+        return Err("endpoint ticket must contain one bounded visible ASCII value".into());
+    }
+    EndpointTicket::from_str(value).map_err(|_| "invalid EndpointTicket".into())
+}
+
+fn assignment_target(assignment: &PersistedAssignment) -> Result<BridgeTarget, String> {
+    if assignment.schema_version != ASSIGNMENT_SCHEMA_VERSION
+        || !valid_device_id(&assignment.device_id)
+    {
+        return Err("invalid persisted bridge assignment".into());
+    }
+    let ticket = parse_ticket_value(&assignment.ticket)?;
+    Ok(BridgeTarget {
+        device_id: assignment.device_id.clone(),
+        node_addr: ticket.endpoint_addr().clone(),
+    })
+}
+
+fn read_assignment(path: &Path) -> Result<Option<(PersistedAssignment, BridgeTarget)>, String> {
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("cannot read persisted bridge assignment: {error}")),
+    };
+    if bytes.is_empty() || bytes.len() > MAX_CONTROL_BODY_BYTES {
+        return Err("persisted bridge assignment is empty or too large".into());
+    }
+    let assignment: PersistedAssignment = serde_json::from_slice(&bytes)
+        .map_err(|_| "persisted bridge assignment is invalid JSON")?;
+    let target = assignment_target(&assignment)?;
+    Ok(Some((assignment, target)))
+}
+
+fn persist_assignment(path: &Path, assignment: &PersistedAssignment) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or("bridge assignment path has no parent")?;
+    std::fs::create_dir_all(parent)
+        .map_err(|error| format!("cannot create bridge state directory: {error}"))?;
+    let bytes = serde_json::to_vec(assignment)
+        .map_err(|error| format!("cannot encode bridge assignment: {error}"))?;
+    let temporary = parent.join(format!(".assignment-{}.tmp", Uuid::new_v4()));
+    let result = (|| -> std::io::Result<()> {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&temporary)?;
+        file.write_all(&bytes)?;
+        file.write_all(b"\n")?;
+        file.sync_all()?;
+        std::fs::rename(&temporary, path)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result.map_err(|error| format!("cannot persist bridge assignment: {error}"))
+}
+
+fn read_control_token(path: &Path) -> Result<Vec<u8>, String> {
+    let mut bytes = std::fs::read(path)
+        .map_err(|error| format!("cannot read bridge control token file: {error}"))?;
+    if bytes.last() == Some(&b'\n') {
+        bytes.pop();
+        if bytes.last() == Some(&b'\r') {
+            bytes.pop();
+        }
+    }
+    if !(MIN_CONTROL_TOKEN_BYTES..=MAX_CONTROL_TOKEN_BYTES).contains(&bytes.len())
+        || bytes.iter().any(|byte| !(0x21..=0x7e).contains(byte))
+    {
+        return Err(format!(
+            "bridge control token must be {MIN_CONTROL_TOKEN_BYTES}-{MAX_CONTROL_TOKEN_BYTES} visible ASCII bytes"
+        ));
+    }
+    Ok(bytes)
+}
+
+fn authorized_control(headers: &HeaderMap, expected: &[u8]) -> bool {
+    let Some(value) = headers
+        .get(header::AUTHORIZATION)
+        .map(|value| value.as_bytes())
+    else {
+        return false;
+    };
+    let Some(presented) = value.strip_prefix(b"Bearer ") else {
+        return false;
+    };
+    presented.len() == expected.len() && bool::from(presented.ct_eq(expected))
+}
+
+async fn health() -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "ok": true }))
+}
+
+async fn control_status(State(state): State<Arc<BridgeState>>, headers: HeaderMap) -> Response {
+    if !authorized_control(&headers, &state.control_token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let target = state.target.read().await;
+    let connected = state
+        .connection
+        .try_lock()
+        .map(|connection| connection.is_some())
+        .unwrap_or(false);
+    Json(serde_json::json!({
+        "schema_version": ASSIGNMENT_SCHEMA_VERSION,
+        "local_endpoint_id": state.endpoint.id().to_string(),
+        "configured": target.is_some(),
+        "device_id": target.as_ref().map(|target| target.device_id.as_str()),
+        "remote_endpoint_id": target.as_ref().map(|target| target.node_addr.id.to_string()),
+        "connected": connected,
+        "generation": state.generation,
+        "protocol": PROTOCOL_VERSION,
+    }))
+    .into_response()
+}
+
+async fn pair_target(
+    State(state): State<Arc<BridgeState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if !authorized_control(&headers, &state.control_token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    if body.is_empty() || body.len() > MAX_CONTROL_BODY_BYTES {
+        return (StatusCode::PAYLOAD_TOO_LARGE, "invalid bridge assignment\n").into_response();
+    }
+    let request: PairRequest = match serde_json::from_slice(&body) {
+        Ok(request) => request,
+        Err(_) => return (StatusCode::BAD_REQUEST, "invalid bridge assignment\n").into_response(),
+    };
+    let device_id = request.device_id.trim().to_ascii_lowercase();
+    if request.device_id != device_id || !valid_device_id(&device_id) {
+        return (StatusCode::BAD_REQUEST, "invalid bridge assignment\n").into_response();
+    }
+    let ticket = match parse_ticket_value(&request.ticket) {
+        Ok(ticket) => ticket,
+        Err(_) => return (StatusCode::BAD_REQUEST, "invalid bridge assignment\n").into_response(),
+    };
+    let assignment = PersistedAssignment {
+        schema_version: ASSIGNMENT_SCHEMA_VERSION,
+        device_id: device_id.clone(),
+        ticket: request.ticket,
+    };
+    if persist_assignment(&state.assignment_file, &assignment).is_err() {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "bridge assignment was not saved\n",
+        )
+            .into_response();
+    }
+    {
+        let mut target = state.target.write().await;
+        *target = Some(BridgeTarget {
+            device_id: device_id.clone(),
+            node_addr: ticket.endpoint_addr().clone(),
+        });
+    }
+    *state.connection.lock().await = None;
+    info!(device_id = %device_id, remote_endpoint = %ticket.endpoint_addr().id, "paired bridge with Pin");
+    control_status(State(state), headers).await
 }
 
 /// Run the initial exchange and one transparent reconnect under one deadline.
@@ -470,34 +678,17 @@ fn guess_content_type(path: &str) -> &'static str {
     }
 }
 
-/// Status endpoint showing connection info (served locally, not proxied).
-async fn status(State(state): State<Arc<BridgeState>>) -> impl IntoResponse {
-    // Liveness describes this bridge process, not whether the physical Pin is
-    // online. `try_lock` also keeps the probe responsive while a request is
-    // establishing or replacing the shared connection.
-    let connected = state
-        .connection
-        .try_lock()
-        .map(|connection| connection.is_some())
-        .unwrap_or(false);
-
-    axum::Json(serde_json::json!({
-        "local_endpoint_id": state.endpoint.id().to_string(),
-        "remote_endpoint_id": state.node_addr.id.to_string(),
-        "connected": connected,
-        "generation": state.generation,
-        "protocol": PROTOCOL_VERSION,
-    }))
-}
-
 #[derive(Parser, Debug)]
 #[command(name = "center-iroh-bridge")]
 #[command(about = "Exposes Ai Pin Setup over an authenticated iroh connection")]
 struct Args {
-    /// File containing the EndpointTicket from the Pin (GET /api/iroh/ticket).
-    /// The credential itself is never accepted through argv or the environment.
-    #[arg(long, default_value = "/run/secrets/iroh_ticket")]
-    ticket_file: PathBuf,
+    /// Persisted assignment written only through the authenticated control route.
+    #[arg(long, default_value = "/var/lib/center-iroh-bridge/assignment.json")]
+    assignment_file: PathBuf,
+
+    /// File containing the private control-route bearer token.
+    #[arg(long, default_value = "/run/secrets/pin_bridge_control_token")]
+    control_token_file: PathBuf,
 
     /// IP address on which the local HTTP server listens.
     #[arg(long, default_value = "127.0.0.1")]
@@ -517,34 +708,6 @@ struct Args {
     /// cannot authorize it. With it, this bridge has a stable EndpointId.
     #[arg(long, default_value = "/var/lib/center-iroh-bridge/endpoint.key")]
     secret_key_file: PathBuf,
-}
-
-/// Read the Pin credential from a file without ever placing it in argv or env.
-fn read_ticket_file(path: &Path) -> std::io::Result<String> {
-    let bytes = std::fs::read(path)?;
-    if bytes.is_empty() || bytes.len() > MAX_TICKET_BYTES {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "endpoint ticket file is empty or too large",
-        ));
-    }
-    let source = std::str::from_utf8(&bytes).map_err(|_| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "endpoint ticket file is not UTF-8",
-        )
-    })?;
-    let ticket = source
-        .strip_suffix("\r\n")
-        .or_else(|| source.strip_suffix('\n'))
-        .unwrap_or(source);
-    if ticket.is_empty() || ticket.bytes().any(|byte| !(0x21..=0x7e).contains(&byte)) {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "endpoint ticket file must contain one visible ASCII value",
-        ));
-    }
-    Ok(ticket.to_owned())
 }
 
 /// Load a 32-byte iroh secret key, creating it `0600` on first run.
@@ -595,22 +758,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let args = Args::parse();
 
-    // Parse the EndpointTicket and extract the Pin's dialable address.
-    let ticket_value = read_ticket_file(&args.ticket_file)
-        .map_err(|error| format!("cannot read endpoint ticket file: {error}"))?;
-    let ticket = EndpointTicket::from_str(&ticket_value)
-        .map_err(|e| format!("invalid EndpointTicket: {e}"))?;
-    let node_addr = ticket.endpoint_addr().clone();
-
-    info!("Pin EndpointId: {}", node_addr.id);
-    info!(
-        "Pin relays: {:?}",
-        node_addr.relay_urls().collect::<Vec<_>>()
-    );
-    info!(
-        "Pin direct addrs: {:?}",
-        node_addr.ip_addrs().collect::<Vec<_>>()
-    );
+    let control_token = read_control_token(&args.control_token_file)?;
+    let target = read_assignment(&args.assignment_file)?.map(|(_, target)| target);
 
     // Create our own iroh endpoint using the n0 relay + DNS discovery preset,
     // matching the Pin so relay-assisted NAT traversal works out of the box.
@@ -631,14 +780,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let state = Arc::new(BridgeState {
         connection: Mutex::new(None),
         endpoint,
-        node_addr,
+        target: RwLock::new(target),
+        assignment_file: args.assignment_file,
+        control_token,
         generation: args.generation,
     });
 
     // Every request proxies to the Pin except the local status route. Using a
     // fallback (rather than a wildcard route) also catches the bare `/` path.
     let app = Router::new()
-        .route("/__status", axum::routing::get(status))
+        .route("/__health", get(health))
+        .route("/__control/status", get(control_status))
+        .route("/__control/pair", put(pair_target))
         .fallback(proxy_request)
         .with_state(state);
 
@@ -667,6 +820,9 @@ async fn shutdown_signal() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::body::to_bytes;
+    use axum::http::Request;
+    use tower::ServiceExt as _;
 
     const B64: base64::engine::general_purpose::GeneralPurpose =
         base64::engine::general_purpose::STANDARD;
@@ -682,7 +838,14 @@ mod tests {
         let args = Args::try_parse_from(["center-iroh-bridge"]).unwrap();
         assert_eq!(args.listen_ip, IpAddr::from([127, 0, 0, 1]));
         assert_eq!(args.port, 18_080);
-        assert_eq!(args.ticket_file, Path::new("/run/secrets/iroh_ticket"));
+        assert_eq!(
+            args.assignment_file,
+            Path::new("/var/lib/center-iroh-bridge/assignment.json")
+        );
+        assert_eq!(
+            args.control_token_file,
+            Path::new("/run/secrets/pin_bridge_control_token")
+        );
         assert_eq!(
             args.secret_key_file,
             Path::new("/var/lib/center-iroh-bridge/endpoint.key")
@@ -690,17 +853,171 @@ mod tests {
         assert!(Args::try_parse_from(["center-iroh-bridge", "--ticket", "secret"]).is_err());
     }
 
-    #[test]
-    fn ticket_is_read_only_from_one_bounded_secret_file() {
-        let directory = temporary_directory();
-        let ticket = directory.join("ticket");
-        std::fs::write(&ticket, b"endpoint-ticket-value\n").unwrap();
-        assert_eq!(read_ticket_file(&ticket).unwrap(), "endpoint-ticket-value");
+    async fn control_test_state(directory: &Path) -> (Arc<BridgeState>, Endpoint) {
+        let endpoint = Endpoint::builder(iroh::endpoint::presets::Minimal)
+            .bind()
+            .await
+            .unwrap();
+        let remote = Endpoint::builder(iroh::endpoint::presets::Minimal)
+            .alpns(vec![ALPN.to_vec()])
+            .bind()
+            .await
+            .unwrap();
+        (
+            Arc::new(BridgeState {
+                connection: Mutex::new(None),
+                endpoint,
+                target: RwLock::new(None),
+                assignment_file: directory.join("assignment.json"),
+                control_token: vec![b'x'; MIN_CONTROL_TOKEN_BYTES],
+                generation: 1,
+            }),
+            remote,
+        )
+    }
 
-        std::fs::write(&ticket, b"two\nlines\n").unwrap();
-        assert!(read_ticket_file(&ticket).is_err());
-        std::fs::write(&ticket, vec![b'x'; MAX_TICKET_BYTES + 1]).unwrap();
-        assert!(read_ticket_file(&ticket).is_err());
+    fn control_router(state: Arc<BridgeState>) -> Router {
+        Router::new()
+            .route("/__control/status", get(control_status))
+            .route("/__control/pair", put(pair_target))
+            .with_state(state)
+    }
+
+    fn control_request(
+        method: Method,
+        path: &str,
+        body: String,
+        token: Option<&str>,
+    ) -> Request<Body> {
+        let mut request = Request::builder().method(method).uri(path);
+        if let Some(token) = token {
+            request = request.header(header::AUTHORIZATION, format!("Bearer {token}"));
+        }
+        request.body(Body::from(body)).unwrap()
+    }
+
+    #[tokio::test]
+    async fn control_routes_are_authenticated_strict_persistent_and_replace_connections() {
+        let directory = temporary_directory();
+        let (state, first_remote) = control_test_state(&directory).await;
+        let app = control_router(Arc::clone(&state));
+        let token = "x".repeat(MIN_CONTROL_TOKEN_BYTES);
+
+        for presented in [None, Some("wrong-token-that-is-long-enough")] {
+            let response = app
+                .clone()
+                .oneshot(control_request(
+                    Method::GET,
+                    "/__control/status",
+                    String::new(),
+                    presented,
+                ))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        }
+
+        for body in [
+            "not-json".to_string(),
+            serde_json::json!({"device_id":"2c2a00010000abcd","ticket":"bad","extra":true})
+                .to_string(),
+            serde_json::json!({"device_id":"DEVICE-1","ticket":"bad"}).to_string(),
+            serde_json::json!({"device_id":"2c2a00010000abcd","ticket":"bad"}).to_string(),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(control_request(
+                    Method::PUT,
+                    "/__control/pair",
+                    body,
+                    Some(&token),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        }
+
+        let first_ticket = EndpointTicket::new(first_remote.addr()).to_string();
+        let pair_body = serde_json::json!({
+            "device_id": "2c2a00010000abcd",
+            "ticket": first_ticket,
+        })
+        .to_string();
+        let response = app
+            .clone()
+            .oneshot(control_request(
+                Method::PUT,
+                "/__control/pair",
+                pair_body,
+                Some(&token),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let response_body = to_bytes(response.into_body(), MAX_CONTROL_BODY_BYTES)
+            .await
+            .unwrap();
+        let response_json: serde_json::Value = serde_json::from_slice(&response_body).unwrap();
+        assert_eq!(response_json["configured"], true);
+        assert_eq!(response_json["device_id"], "2c2a00010000abcd");
+        assert!(!String::from_utf8_lossy(&response_body).contains(&first_ticket));
+
+        let (persisted, target) = read_assignment(&state.assignment_file)
+            .unwrap()
+            .expect("the assignment must survive process restart");
+        assert_eq!(persisted.device_id, "2c2a00010000abcd");
+        assert_eq!(target.node_addr.id, first_remote.id());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            assert_eq!(
+                std::fs::metadata(&state.assignment_file)
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+        }
+
+        let (client_connection, server_connection) =
+            tokio::join!(state.endpoint.connect(first_remote.addr(), ALPN), async {
+                first_remote.accept().await.unwrap().await
+            },);
+        *state.connection.lock().await = Some(client_connection.unwrap());
+        let server_connection = server_connection.unwrap();
+
+        let second_remote = Endpoint::builder(iroh::endpoint::presets::Minimal)
+            .alpns(vec![ALPN.to_vec()])
+            .bind()
+            .await
+            .unwrap();
+        let second_ticket = EndpointTicket::new(second_remote.addr()).to_string();
+        let replacement = serde_json::json!({
+            "device_id": "2c2a00010000beef",
+            "ticket": second_ticket,
+        })
+        .to_string();
+        let response = app
+            .oneshot(control_request(
+                Method::PUT,
+                "/__control/pair",
+                replacement,
+                Some(&token),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(state.connection.lock().await.is_none());
+        assert_eq!(
+            state.target.read().await.as_ref().unwrap().node_addr.id,
+            second_remote.id()
+        );
+
+        server_connection.close(0u32.into(), b"test complete");
+        state.endpoint.close().await;
+        first_remote.close().await;
+        second_remote.close().await;
         std::fs::remove_dir_all(directory).unwrap();
     }
 
@@ -943,7 +1260,12 @@ mod tests {
         let state = BridgeState {
             connection: Mutex::new(None),
             endpoint: client.clone(),
-            node_addr: server.addr(),
+            target: RwLock::new(Some(BridgeTarget {
+                device_id: "2c2a00010000abcd".into(),
+                node_addr: server.addr(),
+            })),
+            assignment_file: temporary_directory().join("assignment.json"),
+            control_token: vec![b'x'; MIN_CONTROL_TOKEN_BYTES],
             generation: 7,
         };
         let (release_server, server_released) = tokio::sync::oneshot::channel();

@@ -2,9 +2,9 @@ import { isSameOriginRequest } from "@/server/auth";
 import { requireWearerRequest } from "@/server/operator";
 import {
   SpotifyBridgeError,
-  adapterToken,
   requireOwnedPairedPin,
 } from "@/server/spotifyBridge";
+import { pinBridgeRequest } from "@/server/pinBridge";
 
 const PRIVATE_HEADERS = {
   "cache-control": "private, no-store",
@@ -13,7 +13,6 @@ const PRIVATE_HEADERS = {
 } as const;
 const MAX_REQUEST_BODY_BYTES = 1024 * 1024;
 const MAX_QUERY_BYTES = 2 * 1024;
-const ADAPTER_PATH_PREFIX = "/api/pin-remote";
 const USB_ONLY_NAMESPACES = [
   "/api/esim",
   "/api/cellular",
@@ -88,23 +87,6 @@ async function boundedBody(request: Request): Promise<Uint8Array | undefined> {
   return body;
 }
 
-function adapterBaseUrl(): string {
-  const configured = process.env.REVIVAL_SPOTIFY_ADAPTER_URL?.trim() ?? "";
-  let parsed: URL;
-  try {
-    parsed = new URL(configured);
-  } catch {
-    throw new SpotifyBridgeError("bridge_not_configured", 503, "Remote Pin access is not configured.");
-  }
-  if (!new Set(["http:", "https:"]).has(parsed.protocol) || parsed.username || parsed.password) {
-    throw new SpotifyBridgeError("bridge_not_configured", 503, "Remote Pin access is not configured.");
-  }
-  parsed.pathname = parsed.pathname.replace(/\/+$/u, "");
-  parsed.search = "";
-  parsed.hash = "";
-  return parsed.toString().replace(/\/$/u, "");
-}
-
 async function handle(request: Request, context: RouteContext): Promise<Response> {
   const session = await requireWearerRequest();
   if (session instanceof Response) return session;
@@ -131,7 +113,6 @@ async function handle(request: Request, context: RouteContext): Promise<Response
 
   try {
     await requireOwnedPairedPin(session);
-    const token = await adapterToken();
     const body = await boundedBody(request);
     const upstreamBody = body
       ? (body.buffer.slice(
@@ -141,19 +122,16 @@ async function handle(request: Request, context: RouteContext): Promise<Response
       : undefined;
     const headers = new Headers({
       accept: request.headers.get("accept") ?? "*/*",
-      authorization: `Bearer ${token}`,
     });
     const contentType = request.headers.get("content-type");
     if (contentType && body) headers.set("content-type", contentType);
 
-    const upstream = await fetch(
-      `${adapterBaseUrl()}${ADAPTER_PATH_PREFIX}${pathname}${incomingUrl.search}`,
+    const upstream = await pinBridgeRequest(
+      `${pathname}${incomingUrl.search}`,
       {
         method: request.method,
         headers,
         body: upstreamBody,
-        cache: "no-store",
-        redirect: "error",
         signal: AbortSignal.timeout(20_000),
       },
     );

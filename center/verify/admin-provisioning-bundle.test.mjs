@@ -12,6 +12,19 @@ import {
   provisionConnectedPin,
 } from "../src/app/settings/pin/provision/browserActivation.ts";
 
+const BRIDGE_ENDPOINT_ID = "a".repeat(64);
+const PIN_ENDPOINT_ID = "b".repeat(64);
+
+function unassignedBridgeStatus() {
+  return {
+    configured: false,
+    connected: false,
+    local_endpoint_id: BRIDGE_ENDPOINT_ID,
+    device_id: null,
+    remote_endpoint_id: null,
+  };
+}
+
 test("provisioning downloads one activation document with the complete certificate chain", () => {
   const parsed = JSON.parse(createActivationBundleJson({
     device_id: "00aa11bb",
@@ -146,12 +159,22 @@ test("direct activation does not mint a one-time key before device preflight", a
     provisionConnectedPin(
       lockedSession,
       {
+        async updateSettings() { throw new Error("settings must not run before device preflight"); },
+        async getIrohTicket() { throw new Error("ticket must not run before device preflight"); },
+      },
+      {
         async pairDevice() {
           throw new Error("pairing must not run before device preflight");
         },
         async issueBundle() {
           issued += 1;
           throw new Error("one-time key must not be minted");
+        },
+        async getBridgeStatus() {
+          throw new Error("bridge status must not run before device preflight");
+        },
+        async pairBridge() {
+          throw new Error("bridge pairing must not run before device preflight");
         },
       },
       "203.0.113.42",
@@ -187,6 +210,10 @@ test("direct activation pairs the account before minting a one-time key", async 
     provisionConnectedPin(
       readySession,
       {
+        async updateSettings() { throw new Error("settings must not run before account pairing"); },
+        async getIrohTicket() { throw new Error("ticket must not run before account pairing"); },
+      },
+      {
         async pairDevice(id) {
           calls.push(`pair:${id}`);
           throw new Error("pairing failed");
@@ -195,13 +222,20 @@ test("direct activation pairs the account before minting a one-time key", async 
           calls.push(`issue:${id}`);
           throw new Error("one-time key must not be minted");
         },
+        async getBridgeStatus() {
+          calls.push("bridge-status");
+          return unassignedBridgeStatus();
+        },
+        async pairBridge() {
+          throw new Error("bridge pairing must not run before account pairing");
+        },
       },
       "203.0.113.42",
       "https://center.example/device-status/v1/report",
     ),
     /pairing failed/,
   );
-  assert.deepEqual(calls, ["pair:00aa11bb"]);
+  assert.deepEqual(calls, ["bridge-status", "pair:00aa11bb"]);
 });
 
 test("direct activation completes one exact preflight, pairing, issuance, install, and verification transaction", async () => {
@@ -223,6 +257,14 @@ test("direct activation completes one exact preflight, pairing, issuance, instal
         calls.push("activate");
         return {
           stdout: "Result: Bundle[{ok=true, state=activated}]\n",
+          stderr: "",
+          exitCode: 0,
+        };
+      }
+      if (command.includes("RESTART_RUNTIME")) {
+        calls.push("restart-runtime");
+        return {
+          stdout: "Result: Bundle[{status=200, ok=true}]\n",
           stderr: "",
           exitCode: 0,
         };
@@ -263,6 +305,22 @@ test("direct activation completes one exact preflight, pairing, issuance, instal
   const status = await provisionConnectedPin(
     session,
     {
+      async updateSettings(settings) {
+        calls.push("iroh-settings");
+        assert.deepEqual(settings, {
+          server: {
+            iroh_remote_center_enabled: true,
+            iroh_remote_center_allowed_peers: [BRIDGE_ENDPOINT_ID],
+          },
+        });
+        return { server: {} };
+      },
+      async getIrohTicket() {
+        calls.push("iroh-ticket");
+        return { ticket: "endpoint-ticket", node_id: PIN_ENDPOINT_ID };
+      },
+    },
+    {
       async pairDevice(id) {
         calls.push(`pair:${id}`);
       },
@@ -282,6 +340,25 @@ test("direct activation completes one exact preflight, pairing, issuance, instal
           },
         };
       },
+      async getBridgeStatus() {
+        calls.push("bridge-status");
+        return unassignedBridgeStatus();
+      },
+      async pairBridge(input) {
+        calls.push("pair-bridge");
+        assert.deepEqual(input, {
+          device_id: "00aa11bb",
+          ticket: "endpoint-ticket",
+          node_id: PIN_ENDPOINT_ID,
+        });
+        return {
+          configured: true,
+          connected: true,
+          local_endpoint_id: BRIDGE_ENDPOINT_ID,
+          device_id: "00aa11bb",
+          remote_endpoint_id: PIN_ENDPOINT_ID,
+        };
+      },
     },
     "203.0.113.42",
     "https://center.example/device-status/v1/report",
@@ -292,10 +369,103 @@ test("direct activation completes one exact preflight, pairing, issuance, instal
     "device-id",
     "unlocked",
     "status:preflight",
+    "bridge-status",
     "pair:00aa11bb",
     "issue:00aa11bb",
     "stage",
     "activate",
     "status:verify",
+    "iroh-settings",
+    "restart-runtime",
+    "iroh-ticket",
+    "pair-bridge",
+  ]);
+});
+
+test("retry after identity activation resumes remote pairing without minting another key", async () => {
+  const calls = [];
+  const fingerprint = "c".repeat(64);
+  const session = {
+    async shell(command) {
+      if (command.includes("ro.boot.deviceid")) {
+        calls.push("device-id");
+        return { stdout: "00aa11bb\n", stderr: "", exitCode: 0 };
+      }
+      if (command.includes("sys.user.0.ce_available")) {
+        calls.push("unlocked");
+        return { stdout: "1\n", stderr: "", exitCode: 0 };
+      }
+      if (command.includes("ACTIVATION_STATUS")) {
+        calls.push("status:active");
+        return {
+          stdout: `Result: Bundle[{ok=true, state=active, consistent=true, managed=true, remote_gate_enabled=true, target_matches=true, present=true, identity_usable=true, edge_ipv4=203.0.113.42, fingerprint_sha256=${fingerprint}, root_certificate_sha256=${fingerprint}, api_endpoint=https://api.cosmos.humane.cloud, onboarding_endpoint=https://onboarding.cosmos.humane.cloud, device_status_endpoint=https://center.example/device-status/v1/report}]\n`,
+          stderr: "",
+          exitCode: 0,
+        };
+      }
+      if (command.includes("RESTART_RUNTIME")) {
+        calls.push("restart-runtime");
+        return {
+          stdout: "Result: Bundle[{status=200, ok=true}]\n",
+          stderr: "",
+          exitCode: 0,
+        };
+      }
+      throw new Error(`unexpected command ${command.join(" ")}`);
+    },
+    async shellWithInput() {
+      throw new Error("an active identity must not be replaced");
+    },
+  };
+
+  const status = await provisionConnectedPin(
+    session,
+    {
+      async updateSettings() {
+        calls.push("iroh-settings");
+        return { server: {} };
+      },
+      async getIrohTicket() {
+        calls.push("iroh-ticket");
+        return { ticket: "endpoint-ticket", node_id: PIN_ENDPOINT_ID };
+      },
+    },
+    {
+      async pairDevice(id) {
+        calls.push(`pair:${id}`);
+      },
+      async issueBundle() {
+        throw new Error("retry must not mint another one-time key");
+      },
+      async getBridgeStatus() {
+        calls.push("bridge-status");
+        return unassignedBridgeStatus();
+      },
+      async pairBridge() {
+        calls.push("pair-bridge");
+        return {
+          configured: true,
+          connected: true,
+          local_endpoint_id: BRIDGE_ENDPOINT_ID,
+          device_id: "00aa11bb",
+          remote_endpoint_id: PIN_ENDPOINT_ID,
+        };
+      },
+    },
+    "203.0.113.42",
+    "https://center.example/device-status/v1/report",
+  );
+
+  assert.equal(status.state, "active");
+  assert.deepEqual(calls, [
+    "device-id",
+    "unlocked",
+    "status:active",
+    "bridge-status",
+    "pair:00aa11bb",
+    "iroh-settings",
+    "restart-runtime",
+    "iroh-ticket",
+    "pair-bridge",
   ]);
 });

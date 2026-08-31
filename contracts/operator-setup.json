@@ -597,7 +597,7 @@
       "confirmationRequired": false,
       "exactSerialRequired": false,
       "summary": "Generate a complete portable production configuration.",
-      "usage": "revival setup production --domain HOST --acme-email EMAIL --operator-email EMAIL [--public-ip IPV4] [--pin-release-archive FILE] [--iroh-ticket-file FILE] [options]",
+      "usage": "revival setup production --domain HOST --acme-email EMAIL --operator-email EMAIL [--public-ip IPV4] [--pin-release-archive FILE] [options]",
       "documentationAnchor": "README.md#deploy-cosmos"
     },
     {
@@ -1318,18 +1318,6 @@
       "name": "COSMOS_AZURE_SPEECH_VOICE",
       "group": "provider",
       "sensitivity": "operational",
-      "home": "runtime.env"
-    },
-    {
-      "name": "REVIVAL_PIN_BRIDGE_OWNER_SUB",
-      "group": "pin",
-      "sensitivity": "identity",
-      "home": "runtime.env"
-    },
-    {
-      "name": "REVIVAL_PIN_BRIDGE_DEVICE_ID",
-      "group": "pin",
-      "sensitivity": "identity",
       "home": "runtime.env"
     },
     {

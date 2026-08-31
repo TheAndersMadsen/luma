@@ -2,7 +2,7 @@ import { AppleMusicError, appleConnectionStatus } from "./appleMusic";
 import { MusicSessionStoreError } from "./musicProviderStore";
 
 import {
-  deviceMusicGatewayToken,
+  deviceMusicGatewayIdentity,
   SpotifyBridgeError,
   type MusicProvider,
 } from "./spotifyBridge";
@@ -36,21 +36,16 @@ export class MusicGatewayError extends Error {
   }
 }
 
-function ownerSubject(): string {
-  const owner = process.env.REVIVAL_PIN_BRIDGE_OWNER_SUB?.trim() ?? "";
-  if (!owner || owner.length > 512 || /\p{Cc}/u.test(owner)) throw new MusicGatewayError("Music gateway is not configured.");
-  return owner;
-}
-
 export async function authenticateMusicGateway(
   request: Request,
   signal?: AbortSignal,
+  fetchImpl: typeof fetch = fetch,
 ): Promise<string> {
   const authorization = request.headers.get("authorization") ?? "";
   const match = /^Bearer ([!-~]{32,512})$/u.exec(authorization);
-  const expected = await deviceMusicGatewayToken(signal);
-  if (!match || !equalGatewayToken(expected, match[1])) throw new MusicGatewayError("Unauthorized.", 401);
-  return ownerSubject();
+  const identity = await deviceMusicGatewayIdentity(signal, fetchImpl);
+  if (!match || !equalGatewayToken(identity.token, match[1])) throw new MusicGatewayError("Unauthorized.", 401);
+  return identity.ownerSub;
 }
 
 export async function musicProviderStatus(subject: string) {

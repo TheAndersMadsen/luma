@@ -346,6 +346,7 @@ dependencies = [
  "iroh-tickets",
  "serde",
  "serde_json",
+ "subtle",
  "tokio",
  "tower",
  "tracing",

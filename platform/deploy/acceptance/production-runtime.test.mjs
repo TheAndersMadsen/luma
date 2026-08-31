@@ -205,7 +205,7 @@ test("the containerized iroh bridge is nonroot, persistent, and Pin-independent 
   );
   assert.match(dockerfile, /^USER 65532:65532$/mu);
   assert.match(dockerfile, /^VOLUME \["\/var\/lib\/center-iroh-bridge"\]$/mu);
-  assert.match(dockerfile, /HEALTHCHECK[^\n]*[\s\S]*http:\/\/127\.0\.0\.1:18080\/__status/u);
+  assert.match(dockerfile, /HEALTHCHECK[^\n]*[\s\S]*http:\/\/127\.0\.0\.1:18080\/__health/u);
 
   const bridge = fs.readFileSync(path.join(root, "pin/bridge/src/main.rs"), "utf8");
   assert.match(

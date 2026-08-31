@@ -285,44 +285,6 @@ test("every Compose volume-deletion flag form is blocked before runtime access",
   }
 });
 
-test("Spotify pairing is all-or-none and uses the Cosmos device-id grammar", () => {
-  const { temporary, env } = isolatedOperator();
-  try {
-    const initialized = invoke(env, "init");
-    assert.equal(initialized.status, 0, initialized.stderr);
-    const runtimeFile = path.join(env.REVIVAL_SECRETS_DIR, "runtime.env");
-    let contents = fs.readFileSync(runtimeFile, "utf8");
-    contents = setValue(contents, "REVIVAL_PIN_BRIDGE_OWNER_SUB", '"   "');
-    contents = setValue(contents, "REVIVAL_PIN_BRIDGE_DEVICE_ID", "2c2a00010000abcd");
-    fs.writeFileSync(runtimeFile, contents, { mode: 0o600 });
-
-    const partial = invoke(env, "doctor", "--json");
-    assert.notEqual(partial.status, 0);
-    assert.match(
-      `${partial.stdout}\n${partial.stderr}`,
-      /REVIVAL_PIN_BRIDGE_OWNER_SUB and REVIVAL_PIN_BRIDGE_DEVICE_ID must be configured together/,
-    );
-
-    contents = setValue(contents, "REVIVAL_PIN_BRIDGE_OWNER_SUB", '" owner-subject "');
-    contents = setValue(contents, "REVIVAL_PIN_BRIDGE_DEVICE_ID", "2C2A00010000ABCD");
-    fs.writeFileSync(runtimeFile, contents, { mode: 0o600 });
-    const boundary = JSON.parse(invoke(env, "doctor", "--json").stdout);
-    assert.equal(boundary.checks.find((check) => check.id === "configuration")?.status, "PASS");
-    assert.equal(boundary.checks.find((check) => check.id === "spotify")?.status, "PASS");
-
-    contents = setValue(contents, "REVIVAL_PIN_BRIDGE_DEVICE_ID", "device-1");
-    fs.writeFileSync(runtimeFile, contents, { mode: 0o600 });
-    const malformed = invoke(env, "doctor", "--json");
-    assert.notEqual(malformed.status, 0);
-    assert.match(
-      `${malformed.stdout}\n${malformed.stderr}`,
-      /REVIVAL_PIN_BRIDGE_DEVICE_ID must be the detected Pin device id in hexadecimal/,
-    );
-  } finally {
-    fs.rmSync(temporary, { recursive: true, force: true });
-  }
-});
-
 test("Docker build frontends are digest-bound release inputs", () => {
   const expected =
     "# syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e";
@@ -478,7 +440,7 @@ test("production Compose is an image-only portable appliance with opt-in service
   }
   assert.equal(full.services.edge.networks["cosmos-internal"] !== undefined, true);
   assert.equal(full.services.searxng.ports, undefined);
-  assert.deepEqual(Object.keys(full.services["spotify-adapter"].networks), ["spotify-control"]);
+  assert.deepEqual(Object.keys(full.services["spotify-adapter"].networks), ["pin-control"]);
   assert.equal(full.services.center.environment.REVIVAL_SPOTIFY_ADAPTER_URL, undefined);
   assert.equal(full.services.grafana.ports[0].host_ip, "127.0.0.1");
   assert.equal(full.services.grafana.networks["loopback-publish"] !== undefined, true);

@@ -2,6 +2,12 @@ import { readFile } from "node:fs/promises";
 import { createHmac } from "node:crypto";
 
 import type { Session } from "./auth";
+import {
+  activePinBridgeAssignment,
+  PinBridgeError,
+  requireOwnedPairedPin as requirePinBridgeAssignment,
+  type PinBridgeAssignment,
+} from "./pinBridge";
 
 /*
  * Every request Center will make of the Pin's Spotify service.
@@ -42,7 +48,6 @@ const MAX_SEARCH_RESPONSE_BYTES = 32 * 1024;
 
 const STATUS_STATES = new Set(["disabled", "not_configured", "pairing", "ready", "error"]);
 const MAX_ADAPTER_RESPONSE_BYTES = 64 * 1024;
-const MAX_ROSTER_RESPONSE_BYTES = 256 * 1024;
 const MAX_DEVICE_FETCH_REQUEST_BYTES = 512 * 1024;
 const MAX_DEVICE_FETCH_BODY_BYTES = 5 * 1024 * 1024;
 const MAX_DEVICE_FETCH_RESPONSE_BYTES = 8 * 1024 * 1024;
@@ -176,12 +181,6 @@ function cleanBoundedString(value: unknown, maximum: number): string | undefined
   const trimmed = value.trim();
   if (!trimmed || [...trimmed].length > maximum || /\p{Cc}/u.test(trimmed)) return undefined;
   return trimmed;
-}
-
-function canonicalDeviceId(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  const trimmed = value.trim();
-  return /^[0-9a-f]+$/iu.test(trimmed) ? trimmed.toLowerCase() : undefined;
 }
 
 function timeoutMs(): number {
@@ -600,14 +599,34 @@ export function musicGatewayOrigin(): string {
   }
 }
 
-export async function deviceMusicGatewayToken(signal?: AbortSignal): Promise<string> {
-  const deviceId = canonicalDeviceId(process.env.REVIVAL_PIN_BRIDGE_DEVICE_ID);
-  if (!deviceId) {
-    throw new SpotifyBridgeError("bridge_not_configured", 503, "Music gateway is unavailable.");
-  }
+async function musicGatewayTokenForDevice(deviceId: string, signal?: AbortSignal): Promise<string> {
   return createHmac("sha256", await adapterToken(signal))
     .update(`${MUSIC_GATEWAY_TOKEN_CONTEXT}\0${deviceId}`, "utf8")
     .digest("base64url");
+}
+
+export async function deviceMusicGatewayToken(
+  signal?: AbortSignal,
+  fetchImpl: typeof fetch = fetch,
+): Promise<string> {
+  return (await deviceMusicGatewayIdentity(signal, fetchImpl)).token;
+}
+
+export async function deviceMusicGatewayIdentity(
+  signal?: AbortSignal,
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ token: string; ownerSub: string; deviceId: string }> {
+  try {
+    const assignment = await activePinBridgeAssignment(fetchImpl, signal);
+    return {
+      token: await musicGatewayTokenForDevice(assignment.deviceId, signal),
+      ownerSub: assignment.ownerSub,
+      deviceId: assignment.deviceId,
+    };
+  } catch (error) {
+    if (signal?.aborted) throw signal.reason;
+    throw spotifyBridgeError(error, "Music gateway is unavailable.");
+  }
 }
 
 function deviceYoutubeRequestUrl(value: string): boolean {
@@ -738,66 +757,32 @@ export async function deviceMusicProviderFetch(
  * invariant and the durable Cosmos pairing roster must independently confirm a
  * Pin claim for the signed session subject.
  */
+function spotifyBridgeError(error: unknown, fallback: string): SpotifyBridgeError {
+  if (error instanceof SpotifyBridgeError) return error;
+  if (error instanceof PinBridgeError) {
+    const code: SpotifyBridgeErrorCode = error.code === "bridge_unavailable"
+      ? "adapter_unavailable"
+      : error.code;
+    return new SpotifyBridgeError(code, error.status, error.message);
+  }
+  return new SpotifyBridgeError("adapter_unavailable", 503, fallback);
+}
+
 export async function requireOwnedPairedPin(
   session: Session,
   fetchImpl: typeof fetch = fetch,
-): Promise<void> {
-  const owner = process.env.REVIVAL_PIN_BRIDGE_OWNER_SUB?.trim() ?? "";
-  const expectedDeviceId = canonicalDeviceId(process.env.REVIVAL_PIN_BRIDGE_DEVICE_ID);
-  if (!owner || !expectedDeviceId) {
-    throw new SpotifyBridgeError("bridge_not_configured", 503, "Spotify setup is unavailable.");
-  }
-  if (session.sub !== owner) {
-    throw new SpotifyBridgeError("wrong_owner", 403, "This Spotify bridge is not assigned to your account.");
-  }
-
-  const rosterBase = normalizedBaseUrl(process.env.COSMOS_WEBAPI_BASE_URL, "The Pin roster");
-  const rosterToken = process.env.COSMOS_ADMIN_TOKEN?.trim() ?? "";
-  if (!rosterToken) {
-    throw new SpotifyBridgeError("bridge_not_configured", 503, "Spotify setup is unavailable.");
-  }
-
-  const response = await fetchImpl(`${rosterBase}/demo-api/admin/devices`, {
-    headers: { authorization: `Bearer ${rosterToken}` },
-    cache: "no-store",
-    redirect: "error",
-    signal: AbortSignal.timeout(timeoutMs()),
-  }).catch(() => null);
-  if (!response?.ok) {
-    throw new SpotifyBridgeError("roster_unavailable", 503, "Your paired Pin could not be confirmed.");
-  }
-  let decoded: unknown;
+): Promise<PinBridgeAssignment> {
   try {
-    decoded = await readJsonBounded(response, MAX_ROSTER_RESPONSE_BYTES);
-  } catch {
-    throw new SpotifyBridgeError("roster_unavailable", 503, "Your paired Pin could not be confirmed.");
-  }
-  const body = objectRecord(decoded);
-  const pairings = Array.isArray(body?.pairings) ? body.pairings : [];
-  const ownedDeviceIds = pairings.flatMap((value) => {
-    const pairing = objectRecord(value);
-    const deviceId = canonicalDeviceId(pairing?.device_id);
-    return pairing?.account_sub === session.sub && deviceId ? [deviceId] : [];
-  });
-  if (ownedDeviceIds.length === 0) {
-    throw new SpotifyBridgeError(
-      "pin_not_paired",
-      409,
-      "Pair your Ai Pin before choosing a default music provider.",
-    );
-  }
-  if (ownedDeviceIds.length !== 1 || ownedDeviceIds[0] !== expectedDeviceId) {
-    throw new SpotifyBridgeError(
-      "pin_binding_invalid",
-      409,
-      "The Spotify bridge does not match your paired Ai Pin.",
-    );
+    return await requirePinBridgeAssignment(session, fetchImpl);
+  } catch (error) {
+    throw spotifyBridgeError(error, "Your paired Pin could not be confirmed.");
   }
 }
 
 async function callAdapter(
   action: SpotifyBridgeAction,
   settings: SpotifySettingsDto | undefined,
+  deviceId: string,
   fetchImpl: typeof fetch,
 ): Promise<SpotifyStatus> {
   const target = PIN_SPOTIFY_PATHS[action];
@@ -808,7 +793,7 @@ async function callAdapter(
     adapterSettings = {
       ...settings,
       music_gateway_url: musicGatewayOrigin(),
-      music_gateway_token: await deviceMusicGatewayToken(),
+      music_gateway_token: await musicGatewayTokenForDevice(deviceId),
     };
   }
   const response = await fetchImpl(`${baseUrl}${target.path}`, {
@@ -841,7 +826,7 @@ async function callAdapter(
     if (action === "status") {
       throw new SpotifyBridgeError("invalid_response", 502, "The Pin returned an invalid response.");
     }
-    return callAdapter("status", undefined, fetchImpl);
+    return callAdapter("status", undefined, deviceId, fetchImpl);
   }
   try {
     return normalizeSpotifyStatus(await readJsonBounded(response, MAX_ADAPTER_RESPONSE_BYTES));
@@ -857,14 +842,14 @@ export async function runSpotifyBridgeAction(
   settings?: SpotifySettingsDto,
   fetchImpl: typeof fetch = fetch,
 ): Promise<SpotifyStatus> {
-  await requireOwnedPairedPin(session, fetchImpl);
+  const assignment = await requireOwnedPairedPin(session, fetchImpl);
   if (action === "settings" && !settings) {
     throw new SpotifyBridgeError("invalid_response", 400, "Expected Spotify settings.");
   }
   if (action !== "settings" && settings) {
     throw new SpotifyBridgeError("invalid_response", 400, "This Spotify action does not accept settings.");
   }
-  return callAdapter(action, settings, fetchImpl);
+  return callAdapter(action, settings, assignment.deviceId, fetchImpl);
 }
 
 export function isSpotifyUnavailableError(error: unknown): boolean {

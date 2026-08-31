@@ -1,4 +1,5 @@
 import type { AdbSessionTransport } from "@/lib/pin-device/adb/transport";
+import type { PinClient } from "@/lib/pin-device/client";
 import type { ActivationBundle } from "./types";
 
 const PROVIDER_URI = "content://com.penumbraos.server.cosmosidentity";
@@ -6,6 +7,50 @@ const STAGING_URI = "content://com.penumbraos.server.cosmosidentity/attestation.
 const API_ENDPOINT = "https://api.cosmos.humane.cloud";
 const ONBOARDING_ENDPOINT = "https://onboarding.cosmos.humane.cloud";
 const DEVICE_ID = /^[0-9a-f]+$/u;
+const ENDPOINT_ID = /^[0-9a-f]{64}$/u;
+const MAINTENANCE_URI = "content://com.penumbraos.server.maintenance";
+
+type BrowserBridgeStatus = {
+  configured: boolean;
+  connected: boolean;
+  local_endpoint_id: string;
+  device_id: string | null;
+  remote_endpoint_id: string | null;
+};
+
+function bridgeStatus(value: unknown): BrowserBridgeStatus {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Center returned an invalid remote Pin status.");
+  }
+  const status = value as Record<string, unknown>;
+  const localEndpointId = typeof status.local_endpoint_id === "string" ? status.local_endpoint_id : "";
+  const deviceId = typeof status.device_id === "string" ? status.device_id : null;
+  const remoteEndpointId = typeof status.remote_endpoint_id === "string" ? status.remote_endpoint_id : null;
+  if (
+    Object.keys(status).some((key) => !new Set([
+      "configured",
+      "connected",
+      "local_endpoint_id",
+      "device_id",
+      "remote_endpoint_id",
+    ]).has(key)) ||
+    typeof status.configured !== "boolean" ||
+    typeof status.connected !== "boolean" ||
+    !ENDPOINT_ID.test(localEndpointId) ||
+    (status.configured
+      ? !deviceId || !DEVICE_ID.test(deviceId) || !remoteEndpointId || !ENDPOINT_ID.test(remoteEndpointId)
+      : deviceId !== null || remoteEndpointId !== null || status.connected !== false)
+  ) {
+    throw new Error("Center returned an invalid remote Pin status.");
+  }
+  return {
+    configured: status.configured,
+    connected: status.connected,
+    local_endpoint_id: localEndpointId,
+    device_id: deviceId,
+    remote_endpoint_id: remoteEndpointId,
+  };
+}
 
 type ActivationEnvelope = {
   api_endpoint: typeof API_ENDPOINT;
@@ -155,7 +200,7 @@ export async function connectedDeviceId(session: AdbSessionTransport): Promise<s
 
 async function preflightConnectedPinActivation(
   session: AdbSessionTransport,
-): Promise<string> {
+): Promise<{ deviceId: string; status: ActivationStatus }> {
   const deviceId = await connectedDeviceId(session);
   const unlocked = (await shell(
     session,
@@ -174,7 +219,32 @@ async function preflightConnectedPinActivation(
   if (!status.ok) {
     throw new Error("Install the current Revival release on this Pin, then try again.");
   }
-  return deviceId;
+  return { deviceId, status };
+}
+
+function verifyExistingActivation(
+  status: ActivationStatus,
+  edgeIpv4: string | null,
+  deviceStatusEndpoint: string | null,
+): ActivationStatus {
+  if (
+    status.state !== "active" ||
+    !status.consistent ||
+    !status.managed ||
+    !status.remoteGateEnabled ||
+    !status.targetMatches ||
+    !status.identityPresent ||
+    !status.identityUsable ||
+    status.edgeIpv4 !== canonicalIpv4(edgeIpv4) ||
+    !status.fingerprintSha256 ||
+    !status.rootCertificateSha256 ||
+    status.apiEndpoint !== API_ENDPOINT ||
+    status.onboardingEndpoint !== ONBOARDING_ENDPOINT ||
+    status.deviceStatusEndpoint !== canonicalStatusEndpoint(deviceStatusEndpoint)
+  ) {
+    throw new Error("This Pin is active with a different or incomplete Cosmos identity.");
+  }
+  return status;
 }
 
 async function activatePreflightedPin(
@@ -232,23 +302,70 @@ async function activatePreflightedPin(
 /** Readiness is proven before Cosmos mints the private key it never stores. */
 export async function provisionConnectedPin(
   session: AdbSessionTransport,
+  client: Pick<PinClient, "updateSettings" | "getIrohTicket">,
   operations: {
     pairDevice: (deviceId: string) => Promise<void>;
     issueBundle: (deviceId: string) => Promise<ActivationBundle>;
+    getBridgeStatus: () => Promise<unknown>;
+    pairBridge: (input: { device_id: string; ticket: string; node_id: string }) => Promise<unknown>;
   },
   edgeIpv4: string | null,
   deviceStatusEndpoint: string | null,
 ): Promise<ActivationStatus> {
-  const deviceId = await preflightConnectedPinActivation(session);
+  const preflight = await preflightConnectedPinActivation(session);
+  const { deviceId } = preflight;
+  const bridge = bridgeStatus(await operations.getBridgeStatus());
   await operations.pairDevice(deviceId);
-  const bundle = await operations.issueBundle(deviceId);
-  return activatePreflightedPin(
-    session,
-    bundle,
-    deviceId,
-    edgeIpv4,
-    deviceStatusEndpoint,
-  );
+  const status = preflight.status.state === "active"
+    ? verifyExistingActivation(preflight.status, edgeIpv4, deviceStatusEndpoint)
+    : await activatePreflightedPin(
+        session,
+        await operations.issueBundle(deviceId),
+        deviceId,
+        edgeIpv4,
+        deviceStatusEndpoint,
+      );
+  await client.updateSettings({
+    server: {
+      iroh_remote_center_enabled: true,
+      iroh_remote_center_allowed_peers: [bridge.local_endpoint_id],
+    },
+  });
+  const restart = await session.shell([
+    "content",
+    "call",
+    "--uri",
+    MAINTENANCE_URI,
+    "--method",
+    "RESTART_RUNTIME",
+  ]);
+  const restartStatus = /(?:\{|,\s*)status=([0-9]{3})(?=,\s*|\}\])/u
+    .exec(restart.stdout)?.[1];
+  const restartOk = /(?:\{|,\s*)ok=true(?=,\s*|\}\])/u.test(restart.stdout);
+  if (
+    restart.exitCode !== 0 ||
+    !restartOk ||
+    !restartStatus ||
+    Number(restartStatus) < 200 ||
+    Number(restartStatus) > 299
+  ) {
+    throw new Error("The Pin saved its remote connection but could not restart it safely.");
+  }
+  const ticket = await client.getIrohTicket();
+  const paired = bridgeStatus(await operations.pairBridge({
+    device_id: deviceId,
+    ticket: ticket.ticket,
+    node_id: ticket.node_id,
+  }));
+  if (
+    !paired.configured ||
+    !paired.connected ||
+    paired.device_id !== deviceId ||
+    paired.remote_endpoint_id !== ticket.node_id
+  ) {
+    throw new Error("Center saved this Pin but could not verify its remote connection.");
+  }
+  return status;
 }
 
 export async function activateConnectedPin(
@@ -257,6 +374,6 @@ export async function activateConnectedPin(
   edgeIpv4: string | null,
   deviceStatusEndpoint: string | null,
 ): Promise<ActivationStatus> {
-  const deviceId = await preflightConnectedPinActivation(session);
+  const { deviceId } = await preflightConnectedPinActivation(session);
   return activatePreflightedPin(session, bundle, deviceId, edgeIpv4, deviceStatusEndpoint);
 }

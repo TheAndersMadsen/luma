@@ -57,6 +57,7 @@ async function boundedDeviceJson(
   let total = 0;
   let timedOut = false;
   let aborted = false;
+  let readError: unknown;
   const cancelForAbort = () => {
     aborted = true;
     void reader.cancel().catch(() => undefined);
@@ -78,12 +79,15 @@ async function boundedDeviceJson(
       }
       chunks.push(value);
     }
+  } catch (error) {
+    readError = error;
   } finally {
     clearTimeout(deadline);
     signal.removeEventListener("abort", cancelForAbort);
     reader.releaseLock();
   }
   if (timedOut || aborted) fail("Music request timed out.", 408);
+  if (readError) throw readError;
 
   const bytes = new Uint8Array(total);
   let offset = 0;
@@ -104,11 +108,12 @@ async function boundedDeviceJson(
 export async function deviceMusicRequest(
   request: Request,
   signal: AbortSignal = request.signal,
+  fetchImpl: typeof fetch = fetch,
 ): Promise<{
   subject: string;
   body: Record<string, unknown>;
 }> {
-  const subject = await authenticateMusicGateway(request, signal);
+  const subject = await authenticateMusicGateway(request, signal, fetchImpl);
   return { subject, body: await boundedDeviceJson(request, signal) };
 }
 

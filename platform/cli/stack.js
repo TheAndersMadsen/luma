@@ -126,11 +126,6 @@ function localDoctorReport() {
   try {
     values = validateRuntime();
     add('configuration', 'PASS', `${ENV_FILE} is mode 0600 and internally coherent.`);
-    const spotifyPaired = Boolean(
-      values.REVIVAL_PIN_BRIDGE_OWNER_SUB?.trim() && values.REVIVAL_PIN_BRIDGE_DEVICE_ID?.trim()
-    );
-    add('spotify', spotifyPaired ? 'PASS' : 'WARN',
-      `Pin-native Spotify pairing is ${spotifyPaired ? 'configured' : 'not configured'}; no token contents were read.`);
   } catch (error) {
     add('configuration', 'FAIL', error.message, './revival init, then update only the settings named by the failure.');
   }

@@ -231,8 +231,10 @@ to a mode-0600 first-login file containing a direct Guided Setup sign-in URL.
 Use that file once, sign in, then remove it. Rerunning setup preserves existing
 nonblank values.
 
-Optional profiles are `pin`, `search`, `spotify`, and `observability`. Spotify
-also needs the Iroh ticket file named by `./revival setup production --help`.
+Optional profiles are `pin`, `search`, `spotify`, and `observability`. Center
+creates the private Pin bridge identity during server setup and pairs it from
+the existing “Connect this Pin to Cosmos” action; no ticket file or device ID
+has to be copied by hand.
 When the host cannot download the Pin asset directly, download the archive
 named by the authenticated descriptor and pass it once with
 `--pin-release-archive FILE`; setup applies the same size, digest, identity,

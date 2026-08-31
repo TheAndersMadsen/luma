@@ -161,7 +161,7 @@ const DETAILS = Object.freeze({
   'verify.production': 'Validates healthy services, the configured Center release, OIDC, capture routing, and the configured Pin certificate chain when enabled.',
   'setup.local': 'Creates the external local configuration and generated secrets. It does not start containers.',
   'setup.contributor': 'Creates the external contributor configuration and caches. It does not run gates.',
-  'setup.production': 'Requires --domain, --acme-email and --operator-email initially. Optional profiles: pin, search, spotify, observability; the spotify profile also requires --iroh-ticket-file FILE the first time. --no-profiles clears active profiles. Production releases use prebuilt images and a digest-pinned OCI Compose application.',
+  'setup.production': 'Requires --domain, --acme-email and --operator-email initially. Optional profiles: pin, search, spotify, observability. --no-profiles clears active profiles. Production releases use prebuilt images and a digest-pinned OCI Compose application.',
   'setup.pin': 'Creates host-side Pin prerequisites. It never reads from or writes to a device.',
   'setup.status': 'Options: --json. Recomputes readiness from current artifacts; no progress state is stored.',
   'config.path': 'Options: --json. Prints the active external runtime configuration path.',

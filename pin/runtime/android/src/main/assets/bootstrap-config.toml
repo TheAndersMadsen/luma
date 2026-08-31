@@ -11,9 +11,9 @@ http_bind_addr = "127.0.0.1:8080"
 grpc_bind_addr = "127.0.0.1:9090"
 public_addr = "127.0.0.1:8080"
 lan_dashboard_enabled = false
-# On by default so the remote-Center iroh endpoint (ALPN penumbra-center) comes
-# up at boot; it powers the VPS bridge behind https://aipin.example.com.
-iroh_remote_center_enabled = true
+# Center enables the remote tunnel only after it has installed this deployment's
+# exact bridge EndpointId. An unpaired Pin must always be able to boot safely.
+iroh_remote_center_enabled = false
 admin_token = "__APP_ADMIN_TOKEN__"
 
 [storage]

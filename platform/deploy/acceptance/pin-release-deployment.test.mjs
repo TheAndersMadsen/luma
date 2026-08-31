@@ -116,8 +116,6 @@ test("production Center mounts only the operator-local Pin release tree", (conte
       pin,
     })}\n`,
   );
-  const irohTicket = path.join(temporary, "iroh-ticket");
-  fs.writeFileSync(irohTicket, "test-endpoint-ticket\n", { mode: 0o600 });
   const pinSetup = spawnSync(process.execPath, [
     operatorCli,
     "setup", "production",
@@ -125,7 +123,6 @@ test("production Center mounts only the operator-local Pin release tree", (conte
     "--profile", "search",
     "--profile", "spotify",
     "--profile", "observability",
-    "--iroh-ticket-file", irohTicket,
     "--public-ip", "203.0.113.42",
   ], { cwd: operatorRoot, env: environment, encoding: "utf8" });
   assert.equal(pinSetup.status, 0, pinSetup.stderr);
@@ -170,7 +167,7 @@ test("production Center mounts only the operator-local Pin release tree", (conte
     JSON.parse(result.stdout).services["spotify-adapter"].environment.REVIVAL_SPOTIFY_ADAPTER_BIND_ADDRESS,
     "0.0.0.0",
   );
-  assert.deepEqual(Object.keys(JSON.parse(result.stdout).services["spotify-adapter"].networks), ["spotify-control"]);
+  assert.deepEqual(Object.keys(JSON.parse(result.stdout).services["spotify-adapter"].networks), ["pin-control"]);
 
   const runtimeBeforeRejectedUpgrade = fs.readFileSync(environment.REVIVAL_ENV_FILE, "utf8");
   const olderPin = {

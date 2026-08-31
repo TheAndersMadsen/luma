@@ -257,6 +257,10 @@ export interface UpdateSettingsRequest {
     admin_token?: string;
     /** Takes effect after the server process restarts. */
     lan_dashboard_enabled?: boolean;
+    /** Write-only. Enables the authenticated Iroh listener after restart. */
+    iroh_remote_center_enabled?: boolean;
+    /** Write-only bridge EndpointIds accepted by the Iroh listener after restart. */
+    iroh_remote_center_allowed_peers?: string[];
   };
   contacts?: {
     trust_all_contacts?: boolean;
@@ -265,6 +269,11 @@ export interface UpdateSettingsRequest {
   dev?: {
     apk_install_enabled?: boolean;
   };
+}
+
+export interface IrohTicketResponse {
+  ticket: string;
+  node_id: string;
 }
 
 export type SpotifyStatusState =

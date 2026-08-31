@@ -84,9 +84,9 @@ USER 65532:65532
 EXPOSE 18080
 VOLUME ["/var/lib/center-iroh-bridge"]
 
-# `/__status` reports the bridge process and its current connection state, but
-# intentionally remains 200 while the physical Pin is offline.
+# `/__health` reports bridge-process liveness and remains 200 while the
+# physical Pin is unassigned or offline.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD ["curl", "--fail", "--silent", "--show-error", "--max-time", "4", "http://127.0.0.1:18080/__status"]
+  CMD ["curl", "--fail", "--silent", "--show-error", "--max-time", "4", "http://127.0.0.1:18080/__health"]
 
 ENTRYPOINT ["/usr/local/bin/center-iroh-bridge"]

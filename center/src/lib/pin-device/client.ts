@@ -19,6 +19,7 @@ import type {
   FitnessSessionFile,
   FitnessSessionsResponse,
   HealthInfo,
+  IrohTicketResponse,
   MemoryRecord,
   PaginatedConversations,
   Settings,
@@ -286,6 +287,26 @@ export class PinClient {
     const text = await res.text();
     if (!res.ok) throw new PinApiError(res.status, text);
     return JSON.parse(text) as HealthInfo;
+  }
+
+  async getIrohTicket(signal?: AbortSignal): Promise<IrohTicketResponse> {
+    const response = await this.request<unknown>("/api/iroh/ticket", undefined, signal);
+    if (!response || typeof response !== "object" || Array.isArray(response)) {
+      throw new Error("The Pin returned an invalid remote-connection ticket.");
+    }
+    const value = response as Record<string, unknown>;
+    const ticket = typeof value.ticket === "string" ? value.ticket : "";
+    const nodeId = typeof value.node_id === "string" ? value.node_id.toLowerCase() : "";
+    if (
+      Object.keys(value).some((key) => !new Set(["ticket", "node_id"]).has(key)) ||
+      !ticket ||
+      ticket.length > 16 * 1024 ||
+      !/^[!-~]+$/u.test(ticket) ||
+      !/^[0-9a-f]{64}$/u.test(nodeId)
+    ) {
+      throw new Error("The Pin returned an invalid remote-connection ticket.");
+    }
+    return { ticket, node_id: nodeId };
   }
 
   listMemories(signal?: AbortSignal) {

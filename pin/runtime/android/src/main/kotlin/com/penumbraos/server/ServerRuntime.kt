@@ -78,6 +78,16 @@ object ServerRuntime {
         notifyState(false)
     }
 
+    /** Restart only the native runtime, retaining the Android service and USB maintenance path. */
+    fun restart(): Boolean {
+        val context = appContext ?: return false
+        val configPath = currentConfigPath ?: return false
+        val esimBridgeToken = currentEsimBridgeToken ?: return false
+        stop()
+        start(context, configPath, esimBridgeToken)
+        return true
+    }
+
     private fun startProcessIfNeeded() {
         val context = appContext ?: error("Application context unavailable")
         val configPath = currentConfigPath ?: error("Config path unavailable")

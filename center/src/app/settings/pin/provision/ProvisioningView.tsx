@@ -133,7 +133,7 @@ export default function ProvisioningView() {
   }
 
   async function activatePin() {
-    if (activationBusy || pin.status !== "connected") return;
+    if (activationBusy || pin.status !== "connected" || !pin.client) return;
     setActivationBusy(true);
     setActivationMessage(null);
     setProvisionError(null);
@@ -141,6 +141,7 @@ export default function ProvisioningView() {
       const session = pin.borrowSession();
       await provisionConnectedPin(
         session,
+        pin.client,
         {
           async pairDevice(id) {
             const response = await fetch("/api/devices/pair", {
@@ -160,6 +161,32 @@ export default function ProvisioningView() {
           async issueBundle(id) {
             setDeviceId(id);
             return issueBundle(id);
+          },
+          async getBridgeStatus() {
+            const response = await fetch("/api/pin/bridge", { cache: "no-store" });
+            const body: unknown = await response.json().catch(() => null);
+            if (!response.ok) {
+              const error = body && typeof body === "object" && "error" in body
+                ? (body as { error?: unknown }).error
+                : undefined;
+              throw new Error(typeof error === "string" ? error : "Center could not prepare remote Pin access.");
+            }
+            return body;
+          },
+          async pairBridge(input) {
+            const response = await fetch("/api/pin/bridge", {
+              method: "PUT",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify(input),
+            });
+            const body: unknown = await response.json().catch(() => null);
+            if (!response.ok) {
+              const error = body && typeof body === "object" && "error" in body
+                ? (body as { error?: unknown }).error
+                : undefined;
+              throw new Error(typeof error === "string" ? error : "Center could not finish remote Pin access.");
+            }
+            return body;
           },
         },
         overview?.device_edge_ipv4 ?? null,

@@ -321,13 +321,14 @@ test("ordinary Pin settings prefer USB and otherwise connect through the paired 
   assert.match(remoteRoute, /requireWearerRequest\(\)/);
   assert.match(remoteRoute, /requireOwnedPairedPin\(session\)/);
   assert.match(remoteRoute, /request\.method !== "GET" && !isSameOriginRequest\(request\)/);
-  assert.match(remoteRoute, /authorization: `Bearer \$\{token\}`/);
+  assert.match(remoteRoute, /pinBridgeRequest\(/);
+  assert.doesNotMatch(remoteRoute, /authorization|adapterToken/);
   assert.match(remoteRoute, /USB_ONLY_NAMESPACES/);
   assert.doesNotMatch(remoteRoute, /request\.headers\.get\("authorization"\)/);
 
   assert.match(adapter, /PIN_REMOTE_PREFIX = "\/api\/pin-remote"/);
   assert.match(adapter, /\/api\/settings", new Set\(\["GET", "PUT"\]\)/);
   assert.doesNotMatch(adapter, /\["\/api\/events"/);
-  assert.match(bridge, /export async function adapterToken/);
-  assert.match(bridge, /ownedDeviceIds\.length !== 1/);
+  assert.match(bridge, /activePinBridgeAssignment/);
+  assert.doesNotMatch(bridge, /REVIVAL_PIN_BRIDGE_OWNER_SUB|REVIVAL_PIN_BRIDGE_DEVICE_ID/);
 });

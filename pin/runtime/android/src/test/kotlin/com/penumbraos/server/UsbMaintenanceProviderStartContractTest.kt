@@ -10,6 +10,7 @@ class UsbMaintenanceProviderStartContractTest {
     @Test
     fun startMethodIsFixedAndAcceptsNoArgumentOrExtras() {
         assertEquals("START", UsbMaintenanceProvider.METHOD_START)
+        assertEquals("RESTART_RUNTIME", UsbMaintenanceProvider.METHOD_RESTART_RUNTIME)
         assertTrue(isValidUsbMaintenanceStartRequest(arg = null, hasExtras = false))
         assertFalse(isValidUsbMaintenanceStartRequest(arg = "", hasExtras = false))
         assertFalse(isValidUsbMaintenanceStartRequest(arg = "/api/settings", hasExtras = false))
@@ -46,6 +47,18 @@ class UsbMaintenanceProviderStartContractTest {
         assertTrue(bodyFreeResult.contains("putBoolean(\"ok\", outcome.ok)"))
         assertFalse(bodyFreeResult.contains("putString"))
         assertFalse(bodyFreeResult.contains("\"body\""))
+    }
+
+    @Test
+    fun runtimeRestartIsFixedArgumentFreeAndWaitsForSettings() {
+        val source = providerSource()
+        val restartPath = source
+            .substringAfter("private fun restartRuntime(")
+            .substringBefore("private fun enforceMaintenanceCaller()")
+        assertTrue(restartPath.contains("ServerRuntime.restart()"))
+        assertTrue(restartPath.contains("repeat(SERVER_START_RETRY_COUNT)"))
+        assertTrue(restartPath.contains("proxySettings(\"GET\", null, port, adminToken)"))
+        assertFalse(restartPath.contains("ServerService.start(appContext)"))
     }
 
     private fun providerSource(): String =

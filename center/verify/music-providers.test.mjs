@@ -45,6 +45,34 @@ async function encryptedStore(t) {
   return directory;
 }
 
+async function configuredPinBridge(t, owner = "owner-subject") {
+  const directory = await mkdtemp(path.join(tmpdir(), "revival-music-bridge-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const tokenFile = path.join(directory, "bridge-token");
+  fs.writeFileSync(tokenFile, `${"p".repeat(40)}\n`, { mode: 0o600 });
+  environment(t, "REVIVAL_PIN_BRIDGE_URL", "http://pin-bridge.test:18080");
+  environment(t, "REVIVAL_PIN_BRIDGE_TOKEN_FILE", tokenFile);
+  environment(t, "COSMOS_WEBAPI_BASE_URL", "http://cosmos.test:8081");
+  environment(t, "COSMOS_ADMIN_TOKEN", "c".repeat(40));
+  return async (url) => {
+    if (String(url).endsWith("/__control/status")) {
+      return Response.json({
+        schema_version: 1,
+        local_endpoint_id: "a".repeat(64),
+        configured: true,
+        device_id: "2c2a00010000abcd",
+        remote_endpoint_id: "b".repeat(64),
+        connected: true,
+        generation: 1,
+        protocol: "penumbra-remote-center-v1",
+      });
+    }
+    return Response.json({
+      pairings: [{ account_sub: owner, device_id: "2c2a00010000abcd" }],
+    });
+  };
+}
+
 function waitWithSignal(milliseconds, signal) {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {
@@ -1329,24 +1357,23 @@ test("Apple MusicKit user-token handoff stays encrypted and remains playback-gat
 test("the Pin gateway bearer is derived, constant-time checked, and errors retain provider status", async (t) => {
   environment(t, "REVIVAL_SPOTIFY_ADAPTER_TOKEN_FILE", undefined);
   environment(t, "REVIVAL_SPOTIFY_ADAPTER_TOKEN", "adapter-root-token-".repeat(3));
-  environment(t, "REVIVAL_PIN_BRIDGE_DEVICE_ID", "2c2a00010000abcd");
-  environment(t, "REVIVAL_PIN_BRIDGE_OWNER_SUB", "owner-subject");
+  const bridgeFetch = await configuredPinBridge(t);
   environment(t, "REVIVAL_MUSIC_GATEWAY_ORIGIN", "https://center.example.test");
-  const bearer = await spotifyBridge.deviceMusicGatewayToken();
+  const bearer = await spotifyBridge.deviceMusicGatewayToken(undefined, bridgeFetch);
 
   assert.notEqual(bearer, process.env.REVIVAL_SPOTIFY_ADAPTER_TOKEN);
   assert.equal(
     await gateway.authenticateMusicGateway(new Request("https://center.example.test/api/music-gateway/query", {
       method: "POST",
       headers: { authorization: `Bearer ${bearer}` },
-    })),
+    }), undefined, bridgeFetch),
     "owner-subject",
   );
   await assert.rejects(
     () => gateway.authenticateMusicGateway(new Request("https://center.example.test/api/music-gateway/query", {
       method: "POST",
       headers: { authorization: `Bearer ${"x".repeat(43)}` },
-    })),
+    }), undefined, bridgeFetch),
     (error) => error instanceof gateway.MusicGatewayError && error.status === 401,
   );
 
@@ -1357,9 +1384,8 @@ test("the Pin gateway bearer is derived, constant-time checked, and errors retai
 test("device music authentication honors the playback deadline", async (t) => {
   environment(t, "REVIVAL_SPOTIFY_ADAPTER_TOKEN_FILE", undefined);
   environment(t, "REVIVAL_SPOTIFY_ADAPTER_TOKEN", "adapter-root-token-".repeat(3));
-  environment(t, "REVIVAL_PIN_BRIDGE_DEVICE_ID", "2c2a00010000abcd");
-  environment(t, "REVIVAL_PIN_BRIDGE_OWNER_SUB", "owner-subject");
-  const bearer = await spotifyBridge.deviceMusicGatewayToken();
+  const bridgeFetch = await configuredPinBridge(t);
+  const bearer = await spotifyBridge.deviceMusicGatewayToken(undefined, bridgeFetch);
   const request = new Request("https://center.example.test/api/music-gateway/playback", {
     method: "POST",
     headers: {
@@ -1372,7 +1398,7 @@ test("device music authentication honors the playback deadline", async (t) => {
   const deadline = AbortSignal.abort(timeoutError);
 
   await assert.rejects(
-    () => routeSupport.deviceMusicRequest(request, deadline),
+    () => routeSupport.deviceMusicRequest(request, deadline, bridgeFetch),
     (error) => error === timeoutError,
   );
 });
@@ -1380,9 +1406,13 @@ test("device music authentication honors the playback deadline", async (t) => {
 test("the playback deadline includes authentication and request-body parsing", async (t) => {
   environment(t, "REVIVAL_SPOTIFY_ADAPTER_TOKEN_FILE", undefined);
   environment(t, "REVIVAL_SPOTIFY_ADAPTER_TOKEN", "adapter-root-token-".repeat(3));
-  environment(t, "REVIVAL_PIN_BRIDGE_DEVICE_ID", "2c2a00010000abcd");
-  environment(t, "REVIVAL_PIN_BRIDGE_OWNER_SUB", "owner-subject");
-  const bearer = await spotifyBridge.deviceMusicGatewayToken();
+  const bridgeFetch = await configuredPinBridge(t);
+  const bearer = await spotifyBridge.deviceMusicGatewayToken(undefined, bridgeFetch);
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = bridgeFetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
 
   const originalTimeout = AbortSignal.timeout;
   const playbackDeadline = new AbortController();

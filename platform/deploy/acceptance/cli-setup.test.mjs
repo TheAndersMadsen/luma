@@ -275,7 +275,7 @@ test("source checkout validates every pin option before rejecting unbound produc
 });
 
 test("core setup omits optional state and --no-profiles clears active profiles", (t) => {
-  const { env, temporary } = fixture(t);
+  const { env } = fixture(t);
   const common = [
     "setup", "production",
     "--domain", "pin.example.test",
@@ -304,33 +304,9 @@ test("core setup omits optional state and --no-profiles clears active profiles",
   assert.equal(runtime.COSMOS_SEARXNG_BASE_URL, "");
   assert.doesNotMatch(fs.readFileSync(path.join(production, "operator.compose.yaml"), "utf8"), /searxng/u);
 
-  const missingTicket = invoke(env, "setup", "production", "--profile", "spotify");
-  assert.equal(missingTicket.status, 1);
-  assert.match(missingTicket.stderr, /requires --iroh-ticket-file on first setup/u);
-
-  const ticketSource = path.join(temporary, "pin-iroh-ticket");
-  fs.writeFileSync(ticketSource, "test-endpoint-ticket\n", { mode: 0o600 });
-  const spotify = invoke(
-    env,
-    "setup", "production",
-    "--profile", "spotify",
-    "--iroh-ticket-file", ticketSource,
-  );
-  assert.equal(spotify.status, 0, spotify.stderr);
-  const spotifyOverlay = fs.readFileSync(path.join(production, "operator.compose.yaml"), "utf8");
-  assert.match(spotifyOverlay, /http:\/\/spotify-adapter:18081/u);
-  assert.match(spotifyOverlay, /center-iroh-bridge:/u);
-  assert.match(spotifyOverlay, /production\/iroh-ticket/u);
-  const protectedTicket = path.join(production, "iroh-ticket");
-  assert.equal(fs.statSync(protectedTicket).mode & 0o777, 0o444);
-  const spotifyCompose = renderProductionCompose(env);
-  if (spotifyCompose) assert.equal(spotifyCompose.status, 0, spotifyCompose.stderr);
-
-  fs.writeFileSync(ticketSource, "replacement-ticket\n", { mode: 0o600 });
-  const preservedTicket = fs.readFileSync(protectedTicket, "utf8");
-  const spotifyRerun = invoke(env, "setup", "production");
-  assert.equal(spotifyRerun.status, 0, spotifyRerun.stderr);
-  assert.equal(fs.readFileSync(protectedTicket, "utf8"), preservedTicket);
+  const spotifyWithoutPin = invoke(env, "setup", "production", "--profile", "spotify");
+  assert.equal(spotifyWithoutPin.status, 1);
+  assert.match(spotifyWithoutPin.stderr, /spotify profile requires the pin profile/u);
 });
 
 test("production setup resumes from a first-login handoff written before the realm", (t) => {

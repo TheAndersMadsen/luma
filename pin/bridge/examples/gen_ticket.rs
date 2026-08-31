@@ -3,7 +3,7 @@
 //!
 //! Useful for smoke-testing the bridge and its systemd service without a live
 //! Pin: the bridge parses the ticket, binds its loopback HTTP port, and serves
-//! `/__status`, but any actual proxy request fails to dial (the endpoint id was
+//! `/__control/status`, but any actual proxy request fails to dial (the endpoint id was
 //! never published). Do NOT use this as a real credential.
 //!
 //!   cargo run --release --example gen_ticket

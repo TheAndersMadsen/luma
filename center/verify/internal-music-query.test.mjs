@@ -6,6 +6,7 @@ import "./tsResolve.mjs";
 const { internalMusicQuery } = await import(
   "../src/app/api/internal/music/query/routeSupport.ts"
 );
+const { SpotifyBridgeError } = await import("../src/server/spotifyBridge.ts");
 
 function environment(t, name, value) {
   const previous = process.env[name];
@@ -37,7 +38,6 @@ const baseBody = {
 
 test("Cosmos music lookup rejects missing and incorrect internal credentials", async (t) => {
   environment(t, "COSMOS_ADMIN_TOKEN", token);
-  environment(t, "REVIVAL_PIN_BRIDGE_OWNER_SUB", owner);
   const dependencies = {
     status: async () => assert.fail("authorization must precede provider access"),
     spotifySearch: async () => assert.fail("authorization must precede provider access"),
@@ -51,13 +51,15 @@ test("Cosmos music lookup rejects missing and incorrect internal credentials", a
   }
 });
 
-test("Cosmos music lookup rejects a principal that is not the configured wearer", async (t) => {
+test("Cosmos music lookup passes the principal through the dynamic bridge ownership gate", async (t) => {
   environment(t, "COSMOS_ADMIN_TOKEN", token);
-  environment(t, "REVIVAL_PIN_BRIDGE_OWNER_SUB", owner);
   const response = await internalMusicQuery(
     request(token, { ...baseBody, principal: "V:01:D:pin-01:U:someone-else" }),
     {
-      status: async () => assert.fail("wearer validation must precede provider access"),
+      status: async (session) => {
+        assert.equal(session.sub, "someone-else");
+        throw new SpotifyBridgeError("wrong_owner", 403, "This music bridge is not assigned to that wearer.");
+      },
       spotifySearch: async () => assert.fail("wearer validation must precede provider access"),
       gatewayQuery: async () => assert.fail("wearer validation must precede provider access"),
     },
@@ -69,7 +71,6 @@ test("Cosmos music lookup rejects a principal that is not the configured wearer"
 
 test("Cosmos music lookup selects Spotify and projects only bounded track fields", async (t) => {
   environment(t, "COSMOS_ADMIN_TOKEN", token);
-  environment(t, "REVIVAL_PIN_BRIDGE_OWNER_SUB", owner);
   let searched = "";
   const response = await internalMusicQuery(request(token, baseBody), {
     status: async (session) => {
@@ -111,7 +112,6 @@ test("Cosmos music lookup selects Spotify and projects only bounded track fields
 
 test("Cosmos music lookup uses the active account provider and preserves not-ranked provenance", async (t) => {
   environment(t, "COSMOS_ADMIN_TOKEN", token);
-  environment(t, "REVIVAL_PIN_BRIDGE_OWNER_SUB", owner);
   const response = await internalMusicQuery(request(token, baseBody), {
     status: async () => ({ active_provider: "youtube_music" }),
     spotifySearch: async () => assert.fail("Spotify is inactive"),

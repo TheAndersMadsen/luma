@@ -229,7 +229,6 @@ test("config check delegates conditional TTS and Spotify pairing validation to t
     assert.equal(invoke(env, ["init"]).status, 0);
     let runtime = fs.readFileSync(env.REVIVAL_ENV_FILE, "utf8");
     runtime = setValue(runtime, "COSMOS_REMOTE_TTS_ENABLED", "true");
-    runtime = setValue(runtime, "REVIVAL_PIN_BRIDGE_OWNER_SUB", "owner-test");
     fs.writeFileSync(env.REVIVAL_ENV_FILE, runtime);
 
     const result = invoke(env, ["config", "check", "--json"]);
@@ -239,7 +238,6 @@ test("config check delegates conditional TTS and Spotify pairing validation to t
     assert.equal(failures.length, 1);
     assert.equal(failures[0].id, "runtime-contract");
     assert.match(failures[0].message, /COSMOS_AZURE_SPEECH_KEY/);
-    assert.match(failures[0].message, /REVIVAL_PIN_BRIDGE_OWNER_SUB and REVIVAL_PIN_BRIDGE_DEVICE_ID/);
   } finally {
     fs.rmSync(temporary, { recursive: true, force: true });
   }

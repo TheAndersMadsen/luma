@@ -900,16 +900,6 @@ function validateRuntime({ production = false, envFile = ENV_FILE } = {}) {
     problems.push('REVIVAL_CENTER_PORT must be an integer from 1 to 65535');
   }
 
-  const spotifyOwner = (values.REVIVAL_PIN_BRIDGE_OWNER_SUB || '').trim();
-  const spotifyDeviceId = (values.REVIVAL_PIN_BRIDGE_DEVICE_ID || '').trim();
-  const spotifyPairing = [spotifyOwner, spotifyDeviceId];
-  if (spotifyPairing.some(Boolean) && !spotifyPairing.every(Boolean)) {
-    problems.push('REVIVAL_PIN_BRIDGE_OWNER_SUB and REVIVAL_PIN_BRIDGE_DEVICE_ID must be configured together');
-  }
-  if (spotifyDeviceId && !/^[0-9a-f]+$/iu.test(spotifyDeviceId)) {
-    problems.push('REVIVAL_PIN_BRIDGE_DEVICE_ID must be the detected Pin device id in hexadecimal (0-9a-f)');
-  }
-
   const uniqueProblems = [...new Set(problems)];
   if (uniqueProblems.length) {
     throw new Error(`configuration is not ready:\n- ${uniqueProblems.join('\n- ')}`);
@@ -1029,9 +1019,6 @@ function operatorEnvironment(values) {
   const identityRealm = 'humane';
   env.KEYCLOAK_BASE_URL = localIdentity ? 'http://keycloak:8080' : '';
   env.KEYCLOAK_REALM = identityRealm;
-  if (env.REVIVAL_PIN_BRIDGE_DEVICE_ID) {
-    env.REVIVAL_PIN_BRIDGE_DEVICE_ID = env.REVIVAL_PIN_BRIDGE_DEVICE_ID.trim().toLowerCase();
-  }
   env.REVIVAL_LOCAL_OIDC_ISSUER = localIdentity
     ? `http://localhost:${identityPort}/realms/${identityRealm}`
     : '';

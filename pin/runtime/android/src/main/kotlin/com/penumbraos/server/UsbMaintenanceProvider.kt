@@ -44,13 +44,14 @@ internal fun isValidUsbMaintenanceStartRequest(arg: String?, hasExtras: Boolean)
 /**
  * A deliberately narrow ADB maintenance surface for firmware where SELinux
  * prevents forwarding the localabstract HTTP bridge. It supports only the
- * settings GET/PUT operations plus a fixed body-free START readiness probe,
- * and never accepts a destination or credential.
+ * settings GET/PUT operations plus fixed body-free START and RESTART_RUNTIME
+ * operations, and never accepts a destination or credential.
  */
 class UsbMaintenanceProvider : ContentProvider() {
     companion object {
         const val AUTHORITY = "com.penumbraos.server.maintenance"
         const val METHOD_START = "START"
+        const val METHOD_RESTART_RUNTIME = "RESTART_RUNTIME"
 
         private const val SETTINGS_PATH = "/api/settings"
         private const val LOOPBACK_HOST = "127.0.0.1"
@@ -74,6 +75,7 @@ class UsbMaintenanceProvider : ContentProvider() {
     override fun call(method: String, arg: String?, extras: Bundle?): Bundle {
         enforceMaintenanceCaller()
         if (method == METHOD_START) return startServer(arg, extras)
+        if (method == METHOD_RESTART_RUNTIME) return restartRuntime(arg, extras)
         if (extras != null && !extras.isEmpty) return result(400, errorBody("invalid request"))
 
         val requestBody = when (method) {
@@ -164,6 +166,48 @@ class UsbMaintenanceProvider : ContentProvider() {
         } catch (_: Exception) {
             return statusOnlyResult(503)
         }
+
+        var status = 502
+        repeat(SERVER_START_RETRY_COUNT) { attempt ->
+            val response = proxySettings("GET", null, port, adminToken)
+            status = response.getInt("status")
+            val waitingForStartup =
+                status == 502 &&
+                    response.getString("body") == errorBody("upstream unavailable")
+            if (!waitingForStartup) return statusOnlyResult(status)
+            if (attempt + 1 < SERVER_START_RETRY_COUNT) {
+                try {
+                    Thread.sleep(SERVER_START_RETRY_DELAY_MS)
+                } catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    return statusOnlyResult(503)
+                }
+            }
+        }
+        return statusOnlyResult(status)
+    }
+
+    private fun restartRuntime(arg: String?, extras: Bundle?): Bundle {
+        if (!isValidUsbMaintenanceStartRequest(arg, extras != null && !extras.isEmpty)) {
+            return statusOnlyResult(400)
+        }
+        val appContext = context?.applicationContext ?: return statusOnlyResult(503)
+        val configPath = try {
+            BootstrapConfig.ensureCanonicalConfig(appContext)
+        } catch (_: Exception) {
+            return statusOnlyResult(503)
+        }
+        val adminToken = try {
+            BootstrapConfig.readEffectiveAdminToken(configPath)
+        } catch (_: Exception) {
+            return statusOnlyResult(503)
+        }
+        val port = try {
+            BootstrapConfig.readEffectiveHttpPort(configPath)
+        } catch (_: Exception) {
+            return statusOnlyResult(503)
+        }
+        if (!ServerRuntime.restart()) return statusOnlyResult(503)
 
         var status = 502
         repeat(SERVER_START_RETRY_COUNT) { attempt ->

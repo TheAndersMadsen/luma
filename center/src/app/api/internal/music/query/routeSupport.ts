@@ -147,10 +147,6 @@ export async function internalMusicQuery(
       fail("Music request contains an unknown field.", 400);
     }
     const subject = wearerSubject(body.principal);
-    const owner = process.env.REVIVAL_PIN_BRIDGE_OWNER_SUB?.trim() ?? "";
-    if (!owner || !constantTimeEqual(owner, subject)) {
-      fail("This music bridge is not assigned to that wearer.", 403);
-    }
     const query = boundedText(body.query, "query", MAX_QUERY_CHARACTERS);
     const session = sessionFor(subject);
     const { active_provider: provider } = await dependencies.status(session);

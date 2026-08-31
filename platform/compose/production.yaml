@@ -136,14 +136,12 @@ services:
       TIDAL_SCOPES: ${TIDAL_SCOPES:-}
       TIDAL_COUNTRY_CODE: ${TIDAL_COUNTRY_CODE:-}
       APPLE_MUSIC_DEVELOPER_TOKEN: ${APPLE_MUSIC_DEVELOPER_TOKEN:-}
-      REVIVAL_PIN_BRIDGE_OWNER_SUB: ${REVIVAL_PIN_BRIDGE_OWNER_SUB:-}
-      REVIVAL_PIN_BRIDGE_DEVICE_ID: ${REVIVAL_PIN_BRIDGE_DEVICE_ID:-}
       REVIVAL_SPOTIFY_ADAPTER_TIMEOUT_MS: ${REVIVAL_SPOTIFY_ADAPTER_TIMEOUT_MS:-10000}
     volumes: !override
       - center-data:/data
     networks: !override
       cosmos-internal: {}
-      spotify-control: {}
+      pin-control: {}
       provider-egress:
         gw_priority: 1
     depends_on:
@@ -295,15 +293,17 @@ services:
       retries: 3
 
   center-iroh-bridge:
-    profiles: [spotify]
+    profiles: [pin]
     image: ${REVIVAL_CENTER_IROH_BRIDGE_IMAGE:-ghcr.io/theandersmadsen/ai-pin-revival/center-iroh-bridge:${REVIVAL_RELEASE_ID:?set REVIVAL_RELEASE_ID}}
     command:
       - --listen-ip
       - 0.0.0.0
       - --port
       - "18080"
-      - --ticket-file
-      - /run/secrets/iroh_ticket
+      - --assignment-file
+      - /var/lib/center-iroh-bridge/assignment.json
+      - --control-token-file
+      - /run/secrets/pin_bridge_control_token
       - --secret-key-file
       - /var/lib/center-iroh-bridge/endpoint.key
     restart: unless-stopped
@@ -311,7 +311,7 @@ services:
     volumes:
       - iroh-bridge-data:/var/lib/center-iroh-bridge
     networks:
-      spotify-control: {}
+      pin-control: {}
       provider-egress: { gw_priority: 1 }
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
@@ -320,6 +320,12 @@ services:
     labels:
       <<: *production-labels
       dk.andersmadsen.ai-pin-revival.component: center-iroh-bridge
+    healthcheck:
+      test: [CMD, wget, --quiet, --tries=1, --spider, http://127.0.0.1:18080/__health]
+      interval: 10s
+      timeout: 5s
+      start_period: 10s
+      retries: 5
 
   spotify-adapter:
     profiles: [spotify]
@@ -332,7 +338,7 @@ services:
       REVIVAL_SPOTIFY_ADAPTER_TIMEOUT_MS: ${REVIVAL_SPOTIFY_ADAPTER_TIMEOUT_MS:-10000}
       REVIVAL_SPOTIFY_ADAPTER_TOKEN_FILE: /run/secrets/spotify_adapter_token
       REVIVAL_SPOTIFY_ADAPTER_UPSTREAM_ORIGIN: http://center-iroh-bridge:18080
-    networks: [spotify-control]
+    networks: [pin-control]
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     mem_limit: 128m
@@ -406,7 +412,7 @@ networks: !override
   search-service:
     internal: true
   search-egress: {}
-  spotify-control:
+  pin-control:
     internal: true
   loopback-publish:
     driver_opts:

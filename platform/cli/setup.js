@@ -17,7 +17,7 @@ const {
 } = require('./production-setup');
 const { operatorContract, releaseCompatibility, versionInfo } = require('./command-spec');
 
-const PRODUCTION_USAGE = './revival setup production --domain HOST --acme-email EMAIL --operator-email EMAIL [--public-ip IPV4] [--pin-release-archive FILE] [--iroh-ticket-file FILE] [--profile pin|search|spotify|observability ... | --no-profiles]';
+const PRODUCTION_USAGE = './revival setup production --domain HOST --acme-email EMAIL --operator-email EMAIL [--public-ip IPV4] [--pin-release-archive FILE] [--profile pin|search|spotify|observability ... | --no-profiles]';
 
 function protectedFile(file, requireContent = true) {
   if (!fs.existsSync(file)) return false;

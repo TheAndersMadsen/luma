@@ -1,18 +1,7 @@
 {
-  "schemaVersion": 3,
-  "version": "2026-08-31.6",
-  "versionCode": 202608316,
-  "signedReleaseSource": {
-    "repository": "TheAndersMadsen/ai-pin-revival",
-    "tag": "v0.1.88",
-    "archive": "ai-pin-revival-pin-2026-08-31.6.tar.gz",
-    "size": 123901059,
-    "sha256": "286a755016ea78461082cc3fb4e1178486b12b89f35d59096d358db3fe1a86e7",
-    "releaseId": "1cb5ed627f5151360d280c6679e88a091a6f5e2ad3080376ffe3d9546beaced1",
-    "manifestSha256": "a6a2302d07bcde5faf4589e066f5e7dcd1e3c9a58b1b6c2f5f339b7af3bc82a3",
-    "receiptsSha256": "713675337e0ec249e511f7e760a18a5634a3cb8fc59245adc4a41e449c684431",
-    "signerSha256": "d8a64e1c3a1afdc340c4b86feaacb88e2d81d66972afbd58e743b7c5b8d1cbdb"
-  },
+  "schemaVersion": 2,
+  "version": "2026-09-01.1",
+  "versionCode": 202609011,
   "privateAssetSource": {
     "repository": "TheAndersMadsen/ai-pin-revival",
     "tag": "v0.1.82",
