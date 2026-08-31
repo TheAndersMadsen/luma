@@ -63,6 +63,20 @@ jobs:
         with:
           node-version: 22.14.0
           package-manager-cache: false
+      - name: Reclaim the unused host Android SDK
+        if: runner.environment == 'github-hosted'
+        run: |
+          set -euo pipefail
+          android_root=/usr/local/lib/android
+          test -d "$android_root"
+          test ! -L "$android_root"
+          test "$(realpath "$android_root")" = "$android_root"
+          before="$(df --output=avail -B1 / | tail -1)"
+          sudo rm --recursive --force --one-file-system "$android_root"
+          after="$(df --output=avail -B1 / | tail -1)"
+          reclaimed="$((after - before))"
+          printf 'Reclaimed %s bytes from the unused host Android SDK.\n' "$reclaimed"
+          test "$reclaimed" -gt 0
       - name: Materialize protected signing inputs
         env:
           PIN_COMPATIBILITY_KEYSTORE_BASE64: ${{ secrets.PIN_COMPATIBILITY_KEYSTORE_BASE64 }}

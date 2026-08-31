@@ -242,6 +242,24 @@ test("release workflow creates and publishes the identity-verified Sigstore bund
   assert.doesNotMatch(workflow, /--insecure-ignore-(?:sct|tlog)/u);
 });
 
+test("signed Pin release reclaims only the unused hosted-runner Android SDK", async () => {
+  const workflow = await readFile(
+    new URL("../../../.github/workflows/release-cli.yml", import.meta.url),
+    "utf8",
+  );
+  const pinJob = workflow.match(/^  pin-release:\n[\s\S]*?^  images:/mu)?.[0];
+  assert.ok(pinJob, "release workflow must contain the bounded Pin release job");
+  assert.match(pinJob, /^        if: runner\.environment == 'github-hosted'$/mu);
+  assert.match(pinJob, /^          android_root=\/usr\/local\/lib\/android$/mu);
+  assert.match(pinJob, /^          test ! -L "\$android_root"$/mu);
+  assert.match(
+    pinJob,
+    /^          sudo rm --recursive --force --one-file-system "\$android_root"$/mu,
+  );
+  assert.match(pinJob, /^          test "\$reclaimed" -gt 0$/mu);
+  assert.doesNotMatch(pinJob, /\/(?:opt\/hostedtoolcache|usr\/share\/dotnet|opt\/ghc)/u);
+});
+
 test("release proof rejects a certificate from the wrong OIDC issuer", async (t) => {
   const fixture = await proofFixture(t, { issuer: "https://issuer.invalid" });
   await assert.rejects(
