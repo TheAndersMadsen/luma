@@ -71,6 +71,9 @@ const FOOD_IMAGE_RESPONSE_KID: &str = "humane.aibus.AnalyzeFoodImageResponse";
 const MAX_FOOD_CHAT_REQUEST_BYTES: usize = 256 * 1024;
 const MAX_FOOD_ITEM_REQUEST_BYTES: usize = 4 * 1024;
 const MAX_FOOD_IMAGE_REQUEST_BYTES: usize = 8 * 1024 * 1024;
+const FOOD_TRACK_TOOL: &str = "TrackFoodConsumption";
+const FOOD_TRACK_SUCCESS_PREFIX: &str = "Successfully recorded consumption of ";
+const FOOD_TRACK_CONFIRMATION: &str = "Added to your food log.";
 
 /// The sealed request could not be opened under the established channel key.
 const ENVELOPE_OPEN_FAILED: &str = "could not open the request envelope";
@@ -167,6 +170,46 @@ fn deterministic_food_child_message(
     if pointer.set_name != "food" || pointer.version != 4 {
         return None;
     }
+
+    // Stock Food sends the successful tool observation back through
+    // ChatCompletion only so the model can phrase a confirmation. That extra
+    // model round trip can outlive the parent action's response budget even
+    // though CreateMemory already succeeded. Correlate the terminal observation
+    // to exactly one prior TrackFoodConsumption call and finish immediately.
+    let last = chat.messages.last()?;
+    let latest_user = chat
+        .messages
+        .iter()
+        .rfind(|message| message.role == "user")?;
+    if last.role == "tool"
+        && last.name == FOOD_TRACK_TOOL
+        && !last.tool_call_id.is_empty()
+        && last
+            .content
+            .strip_prefix(FOOD_TRACK_SUCCESS_PREFIX)
+            .is_some_and(|recorded| !recorded.trim().is_empty())
+        && simple_food_log_addition(&latest_user.content).is_some()
+    {
+        let mut matching_calls = chat.messages.iter().flat_map(|message| {
+            message.tool_calls.iter().filter(|call| {
+                call.id == last.tool_call_id
+                    && call
+                        .function
+                        .as_ref()
+                        .is_some_and(|function| function.name == FOOD_TRACK_TOOL)
+            })
+        });
+        if matching_calls.next().is_some() && matching_calls.next().is_none() {
+            return Some(pb::ChatCompletionMessage {
+                role: "assistant".to_owned(),
+                content: FOOD_TRACK_CONFIRMATION.to_owned(),
+                tool_calls: Vec::new(),
+                name: String::new(),
+                tool_call_id: String::new(),
+            });
+        }
+    }
+
     let utterance = chat
         .messages
         .last()
@@ -181,7 +224,7 @@ fn deterministic_food_child_message(
             id: uuid::Uuid::new_v4().to_string(),
             r#type: "function".to_owned(),
             function: Some(pb::FunctionCall {
-                name: "TrackFoodConsumption".to_owned(),
+                name: FOOD_TRACK_TOOL.to_owned(),
                 arguments: arguments.to_string(),
                 ..Default::default()
             }),
@@ -2840,7 +2883,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn completed_food_tool_call_does_not_repeat_the_deterministic_mutation() {
+    async fn completed_food_tool_call_returns_an_immediate_terminal_confirmation() {
         let chat = pb::ChatCompletionRequest {
             messages: vec![
                 pb::ChatCompletionMessage {
@@ -2863,7 +2906,7 @@ mod tests {
                 },
                 pb::ChatCompletionMessage {
                     role: "tool".to_owned(),
-                    content: "success".to_owned(),
+                    content: "Successfully recorded consumption of apple".to_owned(),
                     name: "TrackFoodConsumption".to_owned(),
                     tool_call_id: "food-call-1".to_owned(),
                     ..Default::default()
@@ -2876,9 +2919,17 @@ mod tests {
             ..Default::default()
         };
 
+        let terminal = deterministic_food_child_message(&chat)
+            .expect("a successful stock Food write should not spend another model step");
+        assert_eq!(terminal.role, "assistant");
+        assert_eq!(terminal.content, "Added to your food log.");
+        assert!(terminal.tool_calls.is_empty());
+
+        let mut failed = chat;
+        failed.messages.last_mut().unwrap().content = "An unknown error occurred.".to_owned();
         assert!(
-            deterministic_food_child_message(&chat).is_none(),
-            "the deterministic mutation must run only on the initial user turn",
+            deterministic_food_child_message(&failed).is_none(),
+            "an ambiguous or failed write must never receive a success confirmation",
         );
     }
 
