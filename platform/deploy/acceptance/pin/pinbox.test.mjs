@@ -42,6 +42,7 @@ import {
   assessSilence,
   isLocalEchoAnswer,
 } from "./pinbox/commands/probe.mjs";
+import { buildReadinessDeviceOptions } from "./pinbox/commands/readiness.mjs";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../pin");
 
@@ -266,6 +267,20 @@ test("readiness: --serial FOO (no device/token) → in-process path runs, exits 
   // prefixed error and exit non-zero — proving the in-process path executed.
   assert.equal(code, 1);
   assert.match(s.getErr(), /^pinbox readiness:/);
+});
+
+test("readiness passes the independently supplied expected serial to the device guard", () => {
+  assert.deepEqual(
+    buildReadinessDeviceOptions(
+      { serial: "device-123", adb: "/opt/adb" },
+      { PENUMBRA_EXPECTED_PIN_SERIAL: "device-123" },
+    ),
+    {
+      serial: "device-123",
+      expectedPinSerial: "device-123",
+      adbPath: "/opt/adb",
+    },
+  );
 });
 
 // ─── in-process probe arg parsing ──────────────────────────────────────────
@@ -576,6 +591,11 @@ test("assessAgenticGate: warns when provider settings remain on the Pin", () => 
   const ok = assessAgenticGate({ settings: {} });
   assert.equal(ok.toolsEnabled, true);
   assert.equal(ok.warn, null);
+  const consentOnly = assessAgenticGate({
+    settings: { llm: { vision_consent_acknowledged: true } },
+  });
+  assert.equal(consentOnly.toolsEnabled, true);
+  assert.equal(consentOnly.warn, null);
 });
 
 test("diffActivity: reports only new records; null-safe", () => {

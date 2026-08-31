@@ -96,7 +96,9 @@ pub fn system_prompt() -> &'static str {
      before playback. If the provider rejects that candidate and the completed \
      research named a different exact candidate, call `music_discover` once more \
      with that different title and artist. Do not repeat the research or retry \
-     the same candidate.\n\
+     the same candidate. For open-ended playback that names no track, artist, \
+     album, genre, or existing playlist, call `PlayFeaturedMusic`; `PlayMusic` \
+     is only for a named selection and must not be sent with empty fields.\n\
      \n\
      A question about the pin's OWN state — the current time, the battery level, \
      the volume, whether Wi-Fi, Bluetooth, or airplane mode is on, whether the \
@@ -588,7 +590,7 @@ const DEVICE_TOOL_SET: &[(&str, &str)] = &[
     // --- music -------------------------------------------------------------
     (
         "PlayMusic",
-        "Play music by artist, album, track, genre, or an existing playlist.",
+        "Play a named artist, album, track, genre, or existing playlist. Never use for an open-ended request with no named selection; use PlayFeaturedMusic instead.",
     ),
     ("PauseMusic", "Pause playback."),
     ("ResumeMusic", "Resume playback."),
@@ -718,7 +720,10 @@ const DEVICE_TOOL_SET: &[(&str, &str)] = &[
         "Report how many if-then automations are set.",
     ),
     // --- music --------------------------------------------------------------
-    ("PlayFeaturedMusic", "Play featured or recommended music."),
+    (
+        "PlayFeaturedMusic",
+        "Play featured or recommended music. Use for an open-ended request such as playing music or something to listen to when no artist, album, track, genre, or playlist is named.",
+    ),
     (
         "PlayCurrentTrackRadio",
         "Start a radio station based on the current track.",
@@ -3877,6 +3882,27 @@ mod tests {
             prompt.contains("do not also call web search"),
             "one current-price question must not spend the Pin deadline on both retrieval tools"
         );
+    }
+
+    #[test]
+    fn open_ended_music_is_distinct_from_named_playback() {
+        let prompt = system_prompt_for(super::super::toolsets::default_set());
+        assert!(prompt.contains("open-ended playback"));
+        assert!(prompt.contains("PlayFeaturedMusic"));
+        assert!(prompt.contains("PlayMusic"));
+
+        let tools = tool_catalog();
+        let named = tools
+            .iter()
+            .find(|tool| tool.name == "PlayMusic")
+            .expect("named playback is offered");
+        let featured = tools
+            .iter()
+            .find(|tool| tool.name == "PlayFeaturedMusic")
+            .expect("featured playback is offered");
+        assert!(named.description.contains("named selection"));
+        assert!(named.description.contains("PlayFeaturedMusic"));
+        assert!(featured.description.contains("open-ended request"));
     }
 
     #[test]

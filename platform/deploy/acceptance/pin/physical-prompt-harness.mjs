@@ -57,8 +57,10 @@ const SERVER_PACKAGE = SERVER_PACKAGE_NAME;
 const IRONMAN_PACKAGE = PACKAGES.ironman;
 const MUSIC_PACKAGE = PACKAGES.music;
 const TICKLE_PACKAGE = PACKAGES.tickle;
+const EXPERIENCE_ACTIVITY = "humaneinternal.system.ipc.HumaneExperienceActivity";
+const MUSIC_ACTIVITY = `${MUSIC_PACKAGE}/${EXPERIENCE_ACTIVITY}`;
 const TICKLE_ACTIVITY =
-  `${PACKAGES.tickle}/humaneinternal.system.ipc.HumaneExperienceActivity`;
+  `${PACKAGES.tickle}/${EXPERIENCE_ACTIVITY}`;
 const MAX_CHILD_STDOUT_BYTES = 2 * 1024 * 1024;
 const MAX_HTTP_BODY_BYTES = 1024 * 1024;
 const HTTP_STATUS_MARKER = "\n__PENUMBRA_PHYSICAL_HTTP_STATUS__:";
@@ -66,11 +68,14 @@ const PROMPT_ACTIVITY_PATH = "/api/activity/prompts?limit=100";
 const MUSIC_ACTIVITY_PATH = "/api/activity/music?limit=100";
 const MUSIC_PROVIDER_STATUS_PATH = "/api/spotify/status";
 export const MUSIC_PLAYBACK_SAMPLE_OFFSETS_MS = Object.freeze([
-  0,
-  16_000,
-  32_000,
-  48_000,
-  64_000,
+  // Stock narration briefly owns audio focus while the music experience is
+  // starting. Begin the continuity proof after that hand-off has settled, then
+  // retain the same greater-than-sixty-second observation span.
+  10_000,
+  26_000,
+  42_000,
+  58_000,
+  74_000,
 ]);
 export const MUSIC_PAUSE_SAMPLE_OFFSETS_MS = Object.freeze([0, 2_500, 5_000]);
 const MUSIC_PROVIDERS = new Set(["spotify", "youtube_music", "tidal"]);
@@ -368,7 +373,7 @@ function usage() {
     "  - Fixed semantic and locked loading-message fixtures call the no-action stock EncryptedLoadingMessage RPC directly.",
     "  - Calls, messages, camera, privacy mode, settings changes, installs, reboots, and package-installer session commands are structurally absent.",
     "  - Raw prompts, responses, coordinates, music metadata, account data, network identifiers, dumpsys text, and ADB diagnostics are never printed.",
-    `  - Music and ${NATIVE_ACTIONS.TICKLE} are skipped if their stock experience was already active. Music started by the harness is paused and its process is stopped; ${NATIVE_ACTIONS.TICKLE} processes started by the harness are stopped.`,
+    `  - Music and ${NATIVE_ACTIONS.TICKLE} are skipped if their stock experience was already active. Harness-owned processes are returned to a launchable idle state.`,
     "  - Only activity rows attributable to these fixed test prompts are deleted during cleanup.",
     "  - The Food fixture explicitly consents to one fixed food-log write and proves it by a follow-up diary read. It retains that entry because temporal evidence cannot authorize deletion.",
     "  - Transcript injection proves the post-ASR stock path. Microphone recognition, audible speech, and projector appearance require human confirmation.",
@@ -1213,6 +1218,18 @@ export function parsePidSet(value) {
   return [...new Set(trimmed.split(/\s+/).map(Number))].sort((a, b) => a - b);
 }
 
+export function parsePackageStopped(value) {
+  const text = Buffer.isBuffer(value) ? value.toString("utf8") : String(value);
+  if (Buffer.byteLength(text) > MAX_CHILD_STDOUT_BYTES) {
+    throw new SafePhysicalError("the package-state observation was too large");
+  }
+  const matches = [...text.matchAll(/^\s*User 0:.*\bstopped=(true|false)\b.*$/gm)];
+  if (matches.length !== 1) {
+    throw new SafePhysicalError("the package-state observation was malformed");
+  }
+  return matches[0][1] === "true";
+}
+
 export function parseActiveNetworkTransport(value) {
   const text = Buffer.isBuffer(value) ? value.toString("utf8") : String(value);
   if (Buffer.byteLength(text) > MAX_CHILD_STDOUT_BYTES) {
@@ -1472,13 +1489,17 @@ export function evaluateStableMusicPause(
         sample.media.pausedSessionCount === 1 &&
         Number.isSafeInteger(sample.media.maximumPausedPosition),
     );
-  const firstPosition = stablePaused
-    ? samples[0].media.maximumPausedPosition
+  // Android can publish PAUSED before its first position snapshot has caught
+  // up with the player. The final two snapshots are 2.5 seconds apart and must
+  // be identical; the initial sample still has to remain the same paused
+  // session for the entire five-second window.
+  const settledPosition = stablePaused
+    ? samples.at(-1).media.maximumPausedPosition
     : null;
   const positionStable =
     stablePaused &&
-    samples.every(
-      (sample) => sample.media.maximumPausedPosition === firstPosition,
+    samples.slice(1).every(
+      (sample) => sample.media.maximumPausedPosition === settledPosition,
     );
   const transportStable =
     expectedShape &&
@@ -2370,6 +2391,51 @@ class PhysicalDevice {
     );
   }
 
+  async restoreLaunchability(packageName) {
+    const activity = packageName === MUSIC_PACKAGE
+      ? MUSIC_ACTIVITY
+      : packageName === TICKLE_PACKAGE
+        ? TICKLE_ACTIVITY
+        : null;
+    if (activity === null) {
+      throw new SafePhysicalError("refusing an unapproved package-state restoration");
+    }
+    await runAdb(
+      this.options,
+      ["shell", "am", "start", "-W", "-n", activity],
+      { timeoutMs: 20_000, maxStdoutBytes: 4_096 },
+      "a stock experience launchability restoration failed",
+    );
+    await runAdb(
+      this.options,
+      ["shell", "input", "keyevent", "KEYCODE_HOME"],
+      { timeoutMs: 10_000, maxStdoutBytes: 1_024 },
+      "the stock home restoration failed",
+    );
+    if (packageName === TICKLE_PACKAGE) {
+      await runAdb(
+        this.options,
+        ["shell", "am", "kill", packageName],
+        { timeoutMs: 10_000, maxStdoutBytes: 1_024 },
+        "a stock experience idle cleanup failed",
+      );
+    }
+  }
+
+  async packageStopped(packageName) {
+    if (packageName !== MUSIC_PACKAGE && packageName !== TICKLE_PACKAGE) {
+      throw new SafePhysicalError("refusing an unapproved package-state observation");
+    }
+    return parsePackageStopped(
+      await runAdb(
+        this.options,
+        ["shell", "dumpsys", "package", packageName],
+        { timeoutMs: 15_000, maxStdoutBytes: MAX_CHILD_STDOUT_BYTES },
+        "the package-state observation failed",
+      ),
+    );
+  }
+
   async media() {
     return parseMediaSessionSummary(
       await runAdb(
@@ -3027,7 +3093,24 @@ async function stopAndConfirm(device, packageName) {
     const pids = await device.pids(packageName);
     return { done: pids.length === 0, value: pids.length === 0 };
   });
-  return stopped.value === true;
+  if (stopped.value !== true) return false;
+  await device.restoreLaunchability(packageName);
+  const launchableIdle = await pollUntil(PHYSICAL_TIMEOUT_MS.cleanup, async () => {
+    const [pids, packageStopped, media] = await Promise.all([
+      device.pids(packageName),
+      device.packageStopped(packageName),
+      packageName === MUSIC_PACKAGE ? device.media() : Promise.resolve(null),
+    ]);
+    const pass = packageName === MUSIC_PACKAGE
+      ? pids.length === 1 &&
+        packageStopped === false &&
+        media?.sessionCount === 1 &&
+        media.playing === false &&
+        media.paused === false
+      : pids.length === 0 && packageStopped === false;
+    return { done: pass, value: pass };
+  });
+  return launchableIdle.value === true;
 }
 
 async function observeTicklePositive(device, item, baselinePromptId, ownedPromptIds) {
@@ -3598,6 +3681,12 @@ async function observeMusicCase(
     network_transport_observed: playbackProof?.transportStable === true,
     pause_route_observed: pauseRouteObserved,
     pause_stable_observed: pauseProof?.pass === true,
+    pause_sample_count: pauseProof?.sampleCount ?? 0,
+    pause_state_stable: pauseProof?.stablePaused === true,
+    pause_position_stable: pauseProof?.positionStable === true,
+    pause_transport_stable: pauseProof?.transportStable === true,
+    pause_session_stable: pauseProof?.sessionStable === true,
+    pause_provider_stable: pauseProof?.providerStable === true,
     cleanup_restored_idle: cleanupIdle,
     terminal_observed: null,
     locality_observed: null,
@@ -3741,7 +3830,7 @@ export async function executePhysicalSuite(options, dependencies = {}) {
     baselineMusicRows,
     initialTicklePids,
     initialTickleForeground,
-    initialMedia,
+    observedInitialMedia,
   ] = await Promise.all([
     needsPromptActivity ? device.promptRows() : Promise.resolve([]),
     needsSpotifyActivity ? device.musicRows() : Promise.resolve([]),
@@ -3757,9 +3846,18 @@ export async function executePhysicalSuite(options, dependencies = {}) {
     needsTickleState &&
     initialTicklePids.length === 0 &&
     !initialTickleForeground;
+  let initialMedia = observedInitialMedia;
+  if (needsMusicState && initialMedia.sessionCount === 0) {
+    await device.restoreLaunchability(MUSIC_PACKAGE);
+    initialMedia = await device.media();
+  }
   const musicWasIdle =
     needsMusicState &&
-    initialMedia.sessionCount === 0;
+    initialMedia.sessionCount <= 1 &&
+    initialMedia.playingSessionCount === 0 &&
+    initialMedia.pausedSessionCount === 0 &&
+    initialMedia.playing === false &&
+    initialMedia.paused === false;
   const ownedPromptIds = new Set();
   const ownedMusicIds = new Set();
   const foodCleanupState = { ownershipBlocked: false };
@@ -3973,7 +4071,10 @@ export async function executePhysicalSuite(options, dependencies = {}) {
     food_evidence_disarmed: foodEvidenceDisarmed,
     music_not_playing:
       needsMusicState && musicWasIdle
-        ? finalMusicPids.length === 0 && !finalMedia.playing
+        ? finalMusicPids.length === 1 &&
+          finalMedia.sessionCount === 1 &&
+          !finalMedia.playing &&
+          !finalMedia.paused
         : null,
     tickle_not_running:
       needsTickleState && tickleWasIdle

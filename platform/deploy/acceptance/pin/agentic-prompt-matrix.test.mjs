@@ -883,6 +883,42 @@ test("the fixed runner is sequential, uses exact safety options, and emits no ra
   assert.equal(report.safety.nativeActionsDispatched, false);
   assert.equal(report.safety.volumeMutationsExcluded, true);
   assert.equal(report.safety.concurrency, 1);
+  assert.equal(report.servingPlane, "pin_local_echo_compatibility");
+  assert.equal(report.releaseGate, false);
+  assert.equal(report.authoritativeEvaluator, "revival eval assistant production");
+});
+
+test("an unavailable optional Tickle feature is reported without blocking the other matrix cases", async () => {
+  const calls = [];
+  const report = await executeFixedPromptMatrix({
+    options: { serial: "device-123", adbPath: "adb" },
+    grpcPort: 9_090,
+    rankOne: RANK_ONE,
+    tickleEnabled: false,
+    runtime: {
+      makeUserTurnId: (_id, index) => `matrix-optional-${index}`,
+      now: () => 1_000,
+      runUnderstand: async (_options, _port, prompt, probeOptions) => {
+        calls.push(prompt);
+        const item = FIXED_PROMPT_MATRIX.find(
+          (candidate) => candidate.prompt === prompt,
+        );
+        return expectedResponses(item, probeOptions.userTurnId, RANK_ONE);
+      },
+    },
+  });
+  const optional = report.cases.filter((item) =>
+    item.id.startsWith("deterministic_tickle_"),
+  );
+  assert.equal(calls.length, FIXED_PROMPT_MATRIX.length - optional.length);
+  assert.equal(optional.length, 4);
+  assert.ok(optional.every((item) => item.status === "not_applicable"));
+  assert.deepEqual(report.summary, {
+    pass: FIXED_PROMPT_MATRIX.length - 4,
+    fail: 0,
+    notApplicable: 4,
+    total: FIXED_PROMPT_MATRIX.length,
+  });
 });
 
 test("two consecutive infrastructure failures stop all further probes", async () => {
@@ -967,7 +1003,7 @@ test("matrix main preserves the exact readiness gate before any probe", async ()
     },
     collectReadiness: async () => {
       order.push("readiness");
-      return { fixture: true };
+      return { fixture: true, spotify: { active_provider: "spotify" } };
     },
     evaluateReadiness: (snapshot, options) => {
       order.push("evaluate");
@@ -975,7 +1011,12 @@ test("matrix main preserves the exact readiness gate before any probe", async ()
       assert.equal(options.expectedIdentity, EXPECTED_IDENTITY);
       return {
         checks: [{ status: CHECK_STATUS.PASS }],
-        context: { grpcPort: 9_090 },
+        context: {
+          grpcPort: 9_090,
+          spotifyReady: true,
+          tickleEnabled: true,
+          stockCacheVerified: true,
+        },
       };
     },
     collectFixedMusicRankOne: async () => {
@@ -1008,6 +1049,45 @@ test("matrix main preserves the exact readiness gate before any probe", async ()
   ]);
   assert.equal(printed.value, report);
   assert.deepEqual(printed.options.knownSecrets, ["PRIVATE_ADMIN_TOKEN"]);
+});
+
+test("matrix main accepts the selected YouTube Music provider without requiring Spotify or Tickle", async () => {
+  let executed = null;
+  const exitCode = await main([...LIVE_ARGS, "--json"], {
+    loadExpectedServerIdentity: async () => EXPECTED_IDENTITY,
+    verifyExplicitDevice: async () => {},
+    collectInstalledServerIdentity: async () => ({ packageName: "fixture" }),
+    readAdminToken: async () => "PRIVATE_ADMIN_TOKEN",
+    collectReadiness: async () => ({
+      spotify: { active_provider: "youtube_music" },
+    }),
+    evaluateReadiness: () => ({
+      checks: [
+        { id: "server_release_identity", status: CHECK_STATUS.PASS },
+        { id: "settings_secret_safety", status: CHECK_STATUS.PASS },
+        { id: "aibus_loopback_listener", status: CHECK_STATUS.PASS },
+        { id: "agentic_configuration", status: CHECK_STATUS.PASS },
+        { id: "weather_provider_ready", status: CHECK_STATUS.PASS },
+        { id: "public_place_resolver_ready", status: CHECK_STATUS.PASS },
+        { id: "spotify_provider_precondition", status: CHECK_STATUS.FAIL },
+        { id: "tickle_feature_delivery", status: CHECK_STATUS.FAIL },
+      ],
+      context: { grpcPort: 9_090, tickleEnabled: true, stockCacheVerified: false },
+    }),
+    collectFixedMusicRankOne: async () => RANK_ONE,
+    executeFixedPromptMatrix: async (options) => {
+      executed = options;
+      return {
+        mode: "raw_aibus_prompt_matrix",
+        cases: [],
+        summary: { pass: 0, fail: 0, notApplicable: 0, total: 0 },
+      };
+    },
+    printReport: () => {},
+  });
+  assert.equal(exitCode, 0);
+  assert.equal(executed.grpcPort, 9_090);
+  assert.equal(executed.tickleEnabled, false);
 });
 
 test("holdout registry has exactly 6 required IDs with stable hash", () => {

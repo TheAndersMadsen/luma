@@ -36,7 +36,7 @@ export const COMMANDS = [
     name: "matrix",
     category: "Prompt / Agentic",
     file: "agentic-prompt-matrix.mjs",
-    summary: "Holdout-scenario gate driver over the behavioural suite.",
+    summary: "Pin-local echo compatibility matrix; not a Cosmos or release gate.",
     serial: "--serial", adb: "--adb", json: "--json", tokenFile: null,
   },
   {

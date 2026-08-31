@@ -8,6 +8,7 @@
 // extractor is already pinned against every artifact on disk
 // (platform/deploy/acceptance/pin/prompt-suite.test.mjs, "LOAD-BEARING extractAnswer: exact tally").
 import { extractAnswer, isUnavailableAnswer } from "../../prompt-suite.mjs";
+import { cosmosOwnsProviderConfiguration } from "../../agentic-release-smoke-lib.mjs";
 import { NATIVE_ACTIONS } from "../../tier-a-symbols.mjs";
 
 export const MAX_ANSWER_CHARS_STDOUT = 200;
@@ -80,14 +81,7 @@ export function isLocalEchoAnswer(answer, utterance) {
 export function assessAgenticGate(readiness) {
   const settings = readiness?.settings;
   if (!settings) return { known: false, warn: "settings unavailable" };
-  const cosmosOwned = [
-    "llm",
-    "weather",
-    "google_maps",
-    "brave_search",
-    "azure_speech",
-    "openstreetmap",
-  ].every((key) => settings[key] === undefined);
+  const cosmosOwned = cosmosOwnsProviderConfiguration(settings);
   return {
     known: true,
     toolsEnabled: cosmosOwned,

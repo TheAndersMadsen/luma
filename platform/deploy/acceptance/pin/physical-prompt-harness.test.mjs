@@ -49,6 +49,7 @@ import {
   parseActiveNetworkTransport,
   parsePenumbraHookEvidence,
   parsePhysicalCliArgs,
+  parsePackageStopped,
   parsePidSet,
   parsePromptActivityPage,
   tickleActivityIsForeground,
@@ -1676,7 +1677,10 @@ function pausedMedia(
 }
 
 test("continuous stock playback requires repeated advancement over more than sixty seconds", () => {
-  assert.deepEqual(MUSIC_PLAYBACK_SAMPLE_OFFSETS_MS, [0, 16_000, 32_000, 48_000, 64_000]);
+  assert.deepEqual(
+    MUSIC_PLAYBACK_SAMPLE_OFFSETS_MS,
+    [10_000, 26_000, 42_000, 58_000, 74_000],
+  );
   const advancing = MUSIC_PLAYBACK_SAMPLE_OFFSETS_MS.map((elapsedMs) => ({
     elapsedMs,
     transport: "wifi",
@@ -1802,6 +1806,18 @@ test("PauseMusic acceptance requires one stable PAUSED stock session", () => {
     false,
   );
 
+  const firstSnapshotSettles = structuredClone(stable);
+  firstSnapshotSettles[0].media = pausedMedia(64_000);
+  assert.equal(
+    evaluateStableMusicPause(
+      firstSnapshotSettles,
+      "cellular",
+      "tidal",
+      stockSessionIdentity(),
+    ).pass,
+    true,
+  );
+
   const replacementSession = stable.map((sample) => ({
     ...sample,
     media: pausedMedia(64_100, {
@@ -1866,6 +1882,19 @@ test("process and foreground parsers are strict and privacy-minimal", () => {
   assert.deepEqual(parsePidSet("321 123\n"), [123, 321]);
   assert.deepEqual(parsePidSet("\n"), []);
   assert.throws(() => parsePidSet("123; reboot"), /malformed/);
+  assert.equal(
+    parsePackageStopped(
+      "  User 0: ceDataInode=12 installed=true stopped=false notLaunched=false enabled=0\n",
+    ),
+    false,
+  );
+  assert.equal(
+    parsePackageStopped(
+      "  User 0: ceDataInode=12 installed=true stopped=true notLaunched=false enabled=0\n",
+    ),
+    true,
+  );
+  assert.throws(() => parsePackageStopped("User 10: stopped=false\n"), /malformed/);
   assert.equal(
     tickleActivityIsForeground(
       "mResumedActivity: ActivityRecord{x u0 humane.experience.tickle/humaneinternal.system.ipc.HumaneExperienceActivity t7}",
@@ -2679,6 +2708,7 @@ test("a Tickle positive requires its exact hook action and stable stock launcher
   const marker = "physical-simple-123e4567-e89b-42d3-a456-426614174000";
   let launched = false;
   let stopped = false;
+  let launchabilityRestored = false;
   const injected = [];
   const exitCode = await main(liveArgs(["--json"], "tickle_single"), {
     stdout: stdout.stream,
@@ -2715,6 +2745,12 @@ test("a Tickle positive requires its exact hook action and stable stock launcher
         async forceStop() {
           stopped = true;
         },
+        async restoreLaunchability() {
+          launchabilityRestored = true;
+        },
+        async packageStopped() {
+          return false;
+        },
         async deletePrompt() {
           assert.fail("no Center row should be owned");
         },
@@ -2730,6 +2766,7 @@ test("a Tickle positive requires its exact hook action and stable stock launcher
   assert.equal(report.cases[0].physical_effect_observed, null);
   assert.equal(report.cases[0].terminal_observed, null);
   assert.equal(report.cleanup.tickle_not_running, true);
+  assert.equal(launchabilityRestored, true);
   assert.equal(stderr.text(), "");
   assert.doesNotMatch(stdout.text(), /fixture-token|device-123|PRIVATE_/);
 });
@@ -2776,6 +2813,10 @@ test("the Tickle negative fails on an exact hook escape even without launcher st
           return ["action:Tickle"];
         },
         async forceStop() {},
+        async restoreLaunchability() {},
+        async packageStopped() {
+          return false;
+        },
         async deletePrompt() {},
       },
     },
@@ -2802,6 +2843,10 @@ test("ranked YouTube Music proves long stock playback and stable PauseMusic with
   assert.equal(report.status, "pass");
   assert.deepEqual(result.injected, ["ranked_music", "music_pause_cleanup"]);
   assert.deepEqual(result.deletedPrompts, [81]);
+  assert.ok(
+    result.cleanupOrder.lastIndexOf("music_launchability_restored") >
+      result.cleanupOrder.lastIndexOf("music_stop"),
+  );
   assert.equal(result.cleanupOrder.at(-1), "volume_restore");
   assert.equal(report.cleanup.media_volume_snapshot_captured, true);
   assert.equal(report.cleanup.media_volume_restored, true);
@@ -2816,6 +2861,12 @@ test("ranked YouTube Music proves long stock playback and stable PauseMusic with
   assert.equal(report.cases[0].playback_sample_count, 5);
   assert.equal(report.cases[0].pause_route_observed, true);
   assert.equal(report.cases[0].pause_stable_observed, true);
+  assert.equal(report.cases[0].pause_sample_count, 3);
+  assert.equal(report.cases[0].pause_state_stable, true);
+  assert.equal(report.cases[0].pause_position_stable, true);
+  assert.equal(report.cases[0].pause_transport_stable, true);
+  assert.equal(report.cases[0].pause_session_stable, true);
+  assert.equal(report.cases[0].pause_provider_stable, true);
   assert.equal(report.cases[0].cleanup_restored_idle, true);
   assert.equal(result.musicRowsObserved, 0);
   assert.equal(result.stderr, "");
@@ -2910,6 +2961,20 @@ async function runRankedProviderMainFixture({
           async media() {
             if (phase === "playing") return playingMedia(100 + fakeNow);
             if (phase === "paused") return pausedMedia(64_100);
+            if (phase === "registered_idle") {
+              return {
+                sessionCount: 1,
+                playingSessionCount: 0,
+                pausedSessionCount: 0,
+                playing: false,
+                paused: false,
+                playbackClockRunning: false,
+                playingSessionIdentity: null,
+                pausedSessionIdentity: null,
+                maximumPlayingPosition: null,
+                maximumPausedPosition: null,
+              };
+            }
             return {
               sessionCount: 0,
               playingSessionCount: 0,
@@ -2947,6 +3012,13 @@ async function runRankedProviderMainFixture({
           async forceStop() {
             cleanupOrder.push("music_stop");
             phase = "stopped";
+          },
+          async restoreLaunchability() {
+            cleanupOrder.push("music_launchability_restored");
+            phase = "registered_idle";
+          },
+          async packageStopped() {
+            return false;
           },
           async deletePrompt(id) {
             cleanupOrder.push("prompt_cleanup");

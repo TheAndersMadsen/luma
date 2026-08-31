@@ -3,6 +3,22 @@
 // assessAgenticGate from shared/evidence.mjs. No separate script of its own.
 
 import { assessAgenticGate } from "../shared/evidence.mjs";
+import {
+  EXPECTED_PIN_SERIAL_ENV,
+  resolveExpectedDeviceSerial,
+} from "../../../pin/device-target-guard.mjs";
+
+export function buildReadinessDeviceOptions(common, environment = process.env) {
+  return {
+    serial: common.serial,
+    expectedPinSerial: resolveExpectedDeviceSerial({
+      environment,
+      environmentName: EXPECTED_PIN_SERIAL_ENV,
+      label: "AI Pin serial",
+    }),
+    adbPath: common.adb ?? "adb",
+  };
+}
 
 export async function run({ common, passthrough, ctx }) {
   const { out, err } = ctx;
@@ -20,7 +36,13 @@ export async function run({ common, passthrough, ctx }) {
   if (common.tokenFile !== undefined) {
     process.env.PENUMBRA_PIN_ADMIN_TOKEN_FILE = common.tokenFile;
   }
-  const options = { serial: common.serial, adbPath: common.adb ?? "adb" };
+  let options;
+  try {
+    options = buildReadinessDeviceOptions(common);
+  } catch (e) {
+    err(`pinbox readiness: ${String(e?.message ?? e)}\n`);
+    return 1;
+  }
   let token;
   try {
     token = await readAdminToken();

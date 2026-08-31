@@ -100,7 +100,44 @@ export const ROUTE_CLASS = Object.freeze({
   UNKNOWN: "unknown",
   INFRASTRUCTURE_FAILURE: "infrastructure_failure",
   NOT_RUN: "not_run_after_infrastructure_failures",
+  NOT_APPLICABLE: "not_applicable",
 });
+
+const MATRIX_MUSIC_PROVIDERS = new Set(["spotify", "youtube_music", "tidal"]);
+const OPTIONAL_READINESS_CHECK_IDS = new Set([
+  "spotify_provider_precondition",
+  "tickle_feature_delivery",
+]);
+
+export function evaluateMatrixReadiness(readiness, snapshot) {
+  if (!Array.isArray(readiness?.checks)) {
+    return { pass: false, grpcPort: null, activeProvider: null, tickleEnabled: false };
+  }
+  const activeProvider = snapshot?.spotify?.active_provider;
+  const baseChecksPass = readiness.checks
+    .filter((check) => !OPTIONAL_READINESS_CHECK_IDS.has(check?.id))
+    .every((check) => check?.status === CHECK_STATUS.PASS);
+  const spotifyCheck = readiness.checks.find(
+    (check) => check?.id === "spotify_provider_precondition",
+  );
+  const musicProviderReady =
+    MATRIX_MUSIC_PROVIDERS.has(activeProvider) &&
+    (activeProvider !== "spotify" ||
+      readiness?.context?.spotifyReady === true ||
+      spotifyCheck?.status === CHECK_STATUS.PASS);
+  const tickleEnabled =
+    readiness?.context?.tickleEnabled === true &&
+    readiness?.context?.stockCacheVerified === true;
+  const grpcPort = readiness?.context?.grpcPort;
+  return {
+    pass: baseChecksPass && musicProviderReady && Number.isInteger(grpcPort),
+    grpcPort: Number.isInteger(grpcPort) ? grpcPort : null,
+    activeProvider: MATRIX_MUSIC_PROVIDERS.has(activeProvider)
+      ? activeProvider
+      : null,
+    tickleEnabled,
+  };
+}
 
 function fixedCase(value) {
   return Object.freeze({
@@ -409,7 +446,9 @@ function usage() {
     "Usage:",
     "  node platform/deploy/acceptance/pin/agentic-prompt-matrix.mjs --serial SERIAL --expected-pin-serial SERIAL --release-manifest PATH --release-receipts PATH [--json]",
     "",
-    "Runs a compiled fixed public prompt matrix against raw AIBus on the exact accepted release.",
+    "Runs a Pin-local AIBus compatibility matrix on the exact accepted release.",
+    "This path uses the shipped local echo backend; it is not a Cosmos, model-quality, or release gate.",
+    "Use `./revival eval assistant production` for the authoritative Cosmos evaluation.",
     "Returned native actions are classified but never dispatched.",
   ].join("\n");
 }
@@ -837,11 +876,29 @@ function notRun(item) {
   });
 }
 
+function notApplicable(item) {
+  return publicCaseResult({
+    item,
+    status: "not_applicable",
+    routeClass: ROUTE_CLASS.NOT_APPLICABLE,
+    actionName: null,
+    structural: structure(false),
+    elapsedMs: Number.NaN,
+    providerMatch: item.providerCheck === undefined ? undefined : false,
+  });
+}
+
 function buildReport(cases) {
   const pass = cases.filter((item) => item.status === "pass").length;
-  const fail = cases.length - pass;
+  const fail = cases.filter((item) => item.status === "fail").length;
+  const notApplicable = cases.filter(
+    (item) => item.status === "not_applicable",
+  ).length;
   return {
     mode: "raw_aibus_prompt_matrix",
+    servingPlane: "pin_local_echo_compatibility",
+    releaseGate: false,
+    authoritativeEvaluator: "revival eval assistant production",
     tier: OFFLINE_TIER_NAME,
     releaseSequence: RELEASE_SEQUENCE,
     safety: {
@@ -857,7 +914,7 @@ function buildReport(cases) {
       hash: HOLDOUT_SET_HASH,
     },
     cases,
-    summary: { pass, fail, total: cases.length },
+    summary: { pass, fail, notApplicable, total: cases.length },
   };
 }
 
@@ -865,6 +922,7 @@ export async function executeFixedPromptMatrix({
   options,
   grpcPort,
   rankOne = null,
+  tickleEnabled = true,
   runtime = {},
 }) {
   const run = runtime.runUnderstand ?? runUnderstand;
@@ -877,6 +935,10 @@ export async function executeFixedPromptMatrix({
 
   for (let index = 0; index < FIXED_PROMPT_MATRIX.length; index += 1) {
     const item = FIXED_PROMPT_MATRIX[index];
+    if (!tickleEnabled && item.id.startsWith("deterministic_tickle_")) {
+      cases.push(notApplicable(item));
+      continue;
+    }
     if (
       consecutiveInfrastructureFailures >=
       MAX_CONSECUTIVE_INFRASTRUCTURE_FAILURES
@@ -917,11 +979,16 @@ export async function executeFixedPromptMatrix({
 
 function renderHumanReport(report) {
   const lines = [
-    "Agentic raw AIBus prompt matrix",
+    "Pin-local AIBus compatibility matrix (echo backend; not a Cosmos release gate)",
+    "Authoritative Cosmos evaluator: revival eval assistant production",
     "Safety: returned actions were classified and never dispatched",
     "",
   ];
   for (const item of report.cases) {
+    if (item.status === "not_applicable") {
+      lines.push(`[N/A] ${item.id} optional feature unavailable`);
+      continue;
+    }
     const structureValid = Object.values(item.structure).every(Boolean);
     lines.push(
       `[${item.status.toUpperCase()}] ${item.id} route=${item.routeClass} action=${item.actionName ?? "none"} structure=${structureValid ? "pass" : "fail"} latency=${item.latencyBucket}${item.providerMatch === undefined ? "" : ` provider_match=${item.providerMatch}`}`,
@@ -929,7 +996,7 @@ function renderHumanReport(report) {
   }
   lines.push(
     "",
-    `Summary: ${report.summary.pass} passed, ${report.summary.fail} failed, ${report.summary.total} total.`,
+    `Summary: ${report.summary.pass} passed, ${report.summary.fail} failed, ${report.summary.notApplicable} not applicable, ${report.summary.total} total.`,
   );
   return lines.join("\n");
 }
@@ -948,6 +1015,7 @@ const DEFAULT_RUNTIME = Object.freeze({
   readAdminToken,
   collectReadiness,
   evaluateReadiness,
+  evaluateMatrixReadiness,
   collectFixedMusicRankOne,
   executeFixedPromptMatrix,
   printReport,
@@ -979,11 +1047,8 @@ export async function main(
       },
       { expectedIdentity },
     );
-    if (
-      !Array.isArray(readiness?.checks) ||
-      !readiness.checks.every((check) => check.status === CHECK_STATUS.PASS) ||
-      !Number.isInteger(readiness?.context?.grpcPort)
-    ) {
+    const matrixReadiness = runtime.evaluateMatrixReadiness(readiness, snapshot);
+    if (!matrixReadiness.pass) {
       throw new Error("release readiness prerequisites failed");
     }
 
@@ -993,8 +1058,9 @@ export async function main(
     } catch {}
     const report = await runtime.executeFixedPromptMatrix({
       options,
-      grpcPort: readiness.context.grpcPort,
+      grpcPort: matrixReadiness.grpcPort,
       rankOne,
+      tickleEnabled: matrixReadiness.tickleEnabled,
       runtime,
     });
     runtime.printReport(report, {
