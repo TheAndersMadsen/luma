@@ -169,8 +169,8 @@ fn deterministic_food_child_message(
     }
     let utterance = chat
         .messages
-        .iter()
-        .rfind(|message| message.role == "user")?
+        .last()
+        .filter(|message| message.role == "user")?
         .content
         .as_str();
     let arguments = simple_food_log_addition(utterance)?;
@@ -2837,6 +2837,49 @@ mod tests {
                 "the bounded child planner claimed: {unrelated_or_ambiguous}",
             );
         }
+    }
+
+    #[tokio::test]
+    async fn completed_food_tool_call_does_not_repeat_the_deterministic_mutation() {
+        let chat = pb::ChatCompletionRequest {
+            messages: vec![
+                pb::ChatCompletionMessage {
+                    role: "user".to_owned(),
+                    content: "Add one apple to my food log.".to_owned(),
+                    ..Default::default()
+                },
+                pb::ChatCompletionMessage {
+                    role: "assistant".to_owned(),
+                    tool_calls: vec![pb::ToolCall {
+                        id: "food-call-1".to_owned(),
+                        r#type: "function".to_owned(),
+                        function: Some(pb::FunctionCall {
+                            name: "TrackFoodConsumption".to_owned(),
+                            arguments: "{}".to_owned(),
+                            ..Default::default()
+                        }),
+                    }],
+                    ..Default::default()
+                },
+                pb::ChatCompletionMessage {
+                    role: "tool".to_owned(),
+                    content: "success".to_owned(),
+                    name: "TrackFoodConsumption".to_owned(),
+                    tool_call_id: "food-call-1".to_owned(),
+                    ..Default::default()
+                },
+            ],
+            tool_set_version: Some(pb::ToolSetVersion {
+                set_name: "food".to_owned(),
+                version: 4,
+            }),
+            ..Default::default()
+        };
+
+        assert!(
+            deterministic_food_child_message(&chat).is_none(),
+            "the deterministic mutation must run only on the initial user turn",
+        );
     }
 
     #[tokio::test]
