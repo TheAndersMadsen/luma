@@ -175,15 +175,16 @@ test("Cosmos convenience targets delegate to the root Revival CLI", () => {
   assert.doesNotMatch(makefile, /cd \.\.\/\.\. && \.\/revival/);
 });
 
-test("Pin release exposes build, export, and verified import without a ship mode", () => {
+test("Pin release exposes one exact acquisition path without a ship mode", () => {
   const { temporary, env } = isolatedOperator();
   try {
     const releaseHelp = invoke(env, "pin", "release", "--help");
     assert.equal(releaseHelp.status, 0, releaseHelp.stderr);
-    assert.match(releaseHelp.stdout, /import publishes a verified archive to Center/);
+    assert.match(releaseHelp.stdout, /Acquire publishes only this operator release.*exact signed archive/);
+    assert.match(releaseHelp.stdout, /acquire/);
     assert.match(releaseHelp.stdout, /build/);
     assert.match(releaseHelp.stdout, /export/);
-    assert.match(releaseHelp.stdout, /import/);
+    assert.doesNotMatch(releaseHelp.stdout, /\bimport\b/);
     assert.doesNotMatch(releaseHelp.stdout, /ship/);
     assert.doesNotMatch(releaseHelp.stdout, /\n  (?:inspect|verify|plan)\s/);
 
@@ -205,7 +206,7 @@ test("Pin release exposes build, export, and verified import without a ship mode
     const help = invoke(env, "--help");
     assert.equal(help.status, 0, help.stderr);
     assert.match(help.stdout, /Pin host operations \(no device mutation\)/);
-    assert.match(help.stdout, /pin release import ARCHIVE/);
+    assert.match(help.stdout, /pin release acquire/);
     assert.doesNotMatch(help.stdout, /pin (?:install|flash|reset|provision)/);
   } finally {
     fs.rmSync(temporary, { recursive: true, force: true });

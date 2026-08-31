@@ -60,8 +60,17 @@ while IFS= read -r container; do
   fi
 done < <(docker compose "${compose[@]}" ps --quiet)
 
-node - "$REVIVAL_PUBLIC_ORIGIN" "$COSMOS_OIDC_ISSUER" "$REVIVAL_RELEASE_ID" production <<'NODE'
-const [origin, issuer, expectedRelease, expectedEnvironment] = process.argv.slice(2);
+expected_pin_release_id=""
+expected_pin_manifest_sha256=""
+if [[ ",${COMPOSE_PROFILES:-}," == *,pin,* ]]; then
+  expected_pin_release_id="$(node -p "require('$ROOT/platform/distribution/version.json').pin.releaseId")"
+  expected_pin_manifest_sha256="$(node -p "require('$ROOT/platform/distribution/version.json').pin.manifestSha256")"
+fi
+
+node - "$REVIVAL_PUBLIC_ORIGIN" "$COSMOS_OIDC_ISSUER" "$REVIVAL_RELEASE_ID" production \
+  "$expected_pin_release_id" "$expected_pin_manifest_sha256" <<'NODE'
+const { createHash } = require('node:crypto');
+const [origin, issuer, expectedRelease, expectedEnvironment, expectedPinRelease, expectedPinManifest] = process.argv.slice(2);
 async function check() {
   const version = await fetch(`${origin}/api/version`, { redirect: 'error', signal: AbortSignal.timeout(10_000) });
   if (!version.ok) throw new Error(`Center version endpoint returned ${version.status}`);
@@ -124,11 +133,18 @@ async function check() {
   const pinRelease = await fetch(`${origin}/api/pin/releases/current`, {
     redirect: 'error', signal: AbortSignal.timeout(10_000),
   });
-  if (pinRelease.status !== 200 && pinRelease.status !== 404) {
-    throw new Error(`current Pin release endpoint returned ${pinRelease.status}`);
-  }
-  if (pinRelease.status === 200 && (await pinRelease.json()).artifacts?.length !== 5) {
-    throw new Error('current Pin release endpoint did not return the exact five artifacts');
+  if (expectedPinRelease) {
+    if (pinRelease.status !== 200) {
+      throw new Error(`current Pin release endpoint returned ${pinRelease.status}, expected 200`);
+    }
+    const bytes = Buffer.from(await pinRelease.arrayBuffer());
+    const manifest = JSON.parse(bytes.toString('utf8'));
+    if (manifest.releaseId !== expectedPinRelease || manifest.artifacts?.length !== 5 ||
+        createHash('sha256').update(bytes).digest('hex') !== expectedPinManifest) {
+      throw new Error('current Pin release does not match the operator release identity and manifest digest');
+    }
+  } else if (pinRelease.status !== 404) {
+    throw new Error(`current Pin release endpoint returned ${pinRelease.status}, expected 404 without the pin profile`);
   }
 
   const missing = await fetch(`${origin}/.ai-pin-revival-verification-missing`, {

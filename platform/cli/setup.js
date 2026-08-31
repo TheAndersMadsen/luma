@@ -7,6 +7,7 @@ const {
   fail,
   info,
   initialize,
+  parseEnvFile,
   validateRuntime,
 } = require('./context');
 const {
@@ -14,8 +15,9 @@ const {
   setupProduction,
   validateProductionArtifacts,
 } = require('./production-setup');
+const { operatorContract, releaseCompatibility, versionInfo } = require('./command-spec');
 
-const PRODUCTION_USAGE = './revival setup production --domain HOST --acme-email EMAIL --operator-email EMAIL [--public-ip IPV4] [--iroh-ticket-file FILE] [--profile pin|search|spotify|observability ... | --no-profiles]';
+const PRODUCTION_USAGE = './revival setup production --domain HOST --acme-email EMAIL --operator-email EMAIL [--public-ip IPV4] [--pin-release-archive FILE] [--iroh-ticket-file FILE] [--profile pin|search|spotify|observability ... | --no-profiles]';
 
 function protectedFile(file, requireContent = true) {
   if (!fs.existsSync(file)) return false;
@@ -24,32 +26,73 @@ function protectedFile(file, requireContent = true) {
     (!requireContent || stat.size > 0);
 }
 
+function selectedFields(value, fields) {
+  return Object.freeze(Object.fromEntries(fields.map((field) => [field, value[field]])));
+}
+
+function statusEnvelope(stateId, fields = {}) {
+  const { pinRelease = null, pinRequired = false, ...publicFields } = fields;
+  const contract = operatorContract();
+  const state = contract.status.states.find((candidate) => candidate.id === stateId);
+  if (!state) throw new Error(`operator setup contract does not define status state ${stateId}`);
+  const journey = contract.journeys.find((candidate) => candidate.id === state.journeyId);
+  if (!journey) throw new Error(`operator setup contract is missing ${state.journeyId} journey`);
+  const release = versionInfo();
+  const compatibility = releaseCompatibility();
+  const pinDisabled = compatibility.profileDisabled;
+  return Object.freeze({
+    schemaVersion: contract.status.schemaVersion,
+    contract: Object.freeze({
+      id: contract.contractId,
+      version: contract.contractVersion,
+      journey: journey.id,
+    }),
+    state: state.id,
+    mode: state.mode,
+    ok: state.ok,
+    ...publicFields,
+    nextCommandId: state.nextCommandId,
+    next: state.next,
+    release: Object.freeze({
+      operator: selectedFields(release, compatibility.operatorFields),
+      pin: release.pin ? Object.freeze({
+        enabled: pinRequired,
+        expected: selectedFields(release.pin, compatibility.pinIdentityFields),
+        observed: pinRequired && pinRelease
+          ? selectedFields(pinRelease, compatibility.observedPinFields)
+          : pinDisabled.observed,
+        compatible: pinRequired
+          ? (pinRelease?.compatible ?? compatibility.profileEnabledMissingCompatible)
+          : pinDisabled.compatible,
+      }) : null,
+    }),
+  });
+}
+
 function setupStatus() {
   const production = hasProductionSetupMarker();
   if (!protectedFile(ENV_FILE) && !production) {
-    return Object.freeze({
-      schemaVersion: 3,
-      mode: 'uninitialized',
-      ok: false,
-      next: './revival setup local or ./revival setup production --help',
-    });
+    return statusEnvelope('uninitialized');
   }
   try {
     validateRuntime({ production });
-    if (production) validateProductionArtifacts();
-    return Object.freeze({
-      schemaVersion: 3,
-      mode: production ? 'production' : 'local',
-      ok: true,
-      next: production ? './revival deploy production --dry-run' : './revival doctor',
+    const artifacts = production ? validateProductionArtifacts() : null;
+    return statusEnvelope(production ? 'production-ready' : 'local-ready', {
+      pinRequired: artifacts?.pinRequired ?? false,
+      ...(artifacts?.pinRelease ? { pinRelease: artifacts.pinRelease } : {}),
     });
   } catch (error) {
-    return Object.freeze({
-      schemaVersion: 3,
-      mode: production ? 'production' : 'local',
-      ok: false,
+    let pinRequired = false;
+    if (production && protectedFile(ENV_FILE)) {
+      try {
+        pinRequired = new Set((parseEnvFile(ENV_FILE).COMPOSE_PROFILES || '').split(',')).has('pin');
+      } catch {
+        // The original validation error remains the actionable setup boundary.
+      }
+    }
+    return statusEnvelope(production ? 'production-invalid' : 'local-invalid', {
       problem: error.message,
-      next: production ? './revival setup production' : './revival init',
+      pinRequired,
     });
   }
 }

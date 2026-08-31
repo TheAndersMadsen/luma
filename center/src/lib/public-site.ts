@@ -61,7 +61,7 @@ export const PUBLIC_PAGES: Readonly<Record<PublicPageDefinition["path"], PublicP
           {
             href: `${PUBLIC_REPOSITORY_URL}/releases`,
             label: "Get a verified release",
-            description: "Download the matching operator and signed Pin archives.",
+            description: "Download the verified operator release; setup acquires its exact signed Pin archive.",
           },
         ],
       },
@@ -182,7 +182,7 @@ export const PUBLIC_PAGES: Readonly<Record<PublicPageDefinition["path"], PublicP
       {
         heading: "Deploy the release.",
         paragraphs: [
-          "Production uses the revival CLI inside a checksum-verified operator archive. It writes external configuration, checks prerequisites, shows a dry run, deploys digest-pinned images, verifies the live release, and imports the matching signed five-application Pin archive. A production server never compiles this repository or deploys a mutable checkout.",
+          "Production uses the revival CLI inside a checksum-verified operator archive. It writes external configuration, acquires and verifies the exact descriptor-bound signed five-application Pin archive, checks prerequisites, shows a dry run, deploys digest-pinned images, and verifies the live release. A production server never compiles this repository or deploys a mutable checkout.",
           "Contributors clone the repository and use the same root command for focused checks. Run the owning component while you iterate, then run its broad gate once before handoff. Tool versions and setup contracts are machine-owned, so a coding agent should read command help and the canonical contracts instead of inferring behavior from old prose.",
         ],
         links: [

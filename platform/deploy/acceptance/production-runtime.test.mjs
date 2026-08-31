@@ -111,7 +111,8 @@ exit 0
   assert.match(source, /missing\.status !== 404/u);
   assert.match(source, /'next-router-state-tree': notFoundTree/u);
   assert.match(source, /public RSC navigation/u);
-  assert.match(source, /pinRelease\.status !== 200 && pinRelease\.status !== 404/u);
+  assert.match(source, /manifest\.releaseId !== expectedPinRelease/u);
+  assert.match(source, /createHash\('sha256'\)\.update\(bytes\)\.digest\('hex'\) !== expectedPinManifest/u);
   assert.doesNotMatch(source, /Object\.hasOwn\(identity, 'environment'\)/u);
   assert.match(source, /REVIVAL_DEVICE_EDGE_IPV4/u);
   assert.match(source, /-connect 127\.0\.0\.1:443 -servername api\.cosmos\.humane\.cloud/u);
@@ -142,9 +143,14 @@ exit 0
 test("confirmed deployment runs public verification before reporting success", () => {
   const source = fs.readFileSync(deploy, "utf8");
   const up = source.indexOf('docker compose "${compose[@]}" "${up[@]}"');
+  const pinActivation = source.indexOf('acquire-release.mjs" --activate --json');
   const verification = source.indexOf('"$SCRIPT_DIR/verify.sh"');
   const success = source.indexOf("passed production verification");
-  assert.ok(up >= 0 && verification > up && success > verification);
+  assert.ok(
+    up >= 0 && pinActivation > up && verification > pinActivation && success > verification,
+    "new services must become ready before activation and one combined verification",
+  );
+  assert.equal(source.lastIndexOf('"$SCRIPT_DIR/verify.sh"'), verification);
   assert.doesNotMatch(source, /deployment .* is healthy/u);
   assert.match(source, /-f "\$application"[\s\S]*-f "\$operator_compose"/u);
   assert.doesNotMatch(source, /ROOT\/compose\.yaml|platform\/compose\/production\.yaml/u);

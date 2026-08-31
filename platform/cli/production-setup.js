@@ -15,10 +15,13 @@ const {
   atomicWrite,
   initialize,
   parseEnvFile,
+  PIN_RELEASE_ACQUIRE_TOOL,
+  prepareManagedRoots,
   resolveTool,
   secureDirectory,
   validateRuntime,
 } = require('./context');
+const { pinReleaseIdentityMatches, versionInfo } = require('./command-spec');
 
 const PRODUCTION_DIR = path.join(CONFIG_DIR, 'production');
 const OPERATOR_COMPOSE = path.join(PRODUCTION_DIR, 'operator.compose.yaml');
@@ -35,7 +38,6 @@ const DEVICE_USER_ROOT = Object.freeze({
   key: path.join(DEVICE_USER_ROOT_DIR, 'duc-ca.key'),
 });
 const PROFILES = new Set(['pin', 'search', 'spotify', 'observability']);
-const PIN_RELEASE_VALIDATOR = path.join(ROOT, 'platform', 'deploy', 'pin', 'validate-release-store.mjs');
 const PIN_SERVER_NAMES = Object.freeze([
   'api.cosmos.humane.cloud',
   'api.clone.invalid',
@@ -107,6 +109,7 @@ function parseOptions(args, current = {}) {
     operatorEmail: current.REVIVAL_FIRST_OPERATOR_EMAIL || '',
     publicIpv4: current.REVIVAL_DEVICE_EDGE_IPV4 || '',
     irohTicketFile: '',
+    pinReleaseArchive: '',
   };
   const selectedProfiles = new Set();
   const seen = new Set();
@@ -134,6 +137,7 @@ function parseOptions(args, current = {}) {
       ['--operator-email', 'operatorEmail'],
       ['--public-ip', 'publicIpv4'],
       ['--iroh-ticket-file', 'irohTicketFile'],
+      ['--pin-release-archive', 'pinReleaseArchive'],
     ]);
     if (!fields.has(option) || seen.has(option)) throw new Error('usage');
     const value = args.shift();
@@ -147,6 +151,7 @@ function parseOptions(args, current = {}) {
   options.operatorEmail = options.operatorEmail.trim().toLowerCase();
   options.publicIpv4 = options.publicIpv4.trim();
   options.irohTicketFile = options.irohTicketFile.trim();
+  options.pinReleaseArchive = options.pinReleaseArchive.trim();
   options.profiles = clearProfiles
     ? []
     : profilesSpecified
@@ -172,7 +177,22 @@ function parseOptions(args, current = {}) {
   if (options.irohTicketFile && !options.profiles.includes('spotify')) {
     throw new Error('--iroh-ticket-file requires the spotify profile');
   }
+  if (options.pinReleaseArchive && !options.profiles.includes('pin')) {
+    throw new Error('--pin-release-archive requires the pin profile');
+  }
   return options;
+}
+
+function validatePinReleaseArchiveInput(file) {
+  if (!file) return null;
+  const selected = path.resolve(file);
+  if (!fs.existsSync(selected)) throw new Error(`Pin release archive does not exist: ${selected}`);
+  const metadata = fs.lstatSync(selected);
+  if (metadata.isSymbolicLink() || !metadata.isFile() || metadata.size < 1 ||
+      metadata.size > 3 * 1024 * 1024 * 1024) {
+    throw new Error(`Pin release archive must be a nonempty regular file no larger than 3 GiB: ${selected}`);
+  }
+  return selected;
 }
 
 function readIrohTicket(file) {
@@ -569,7 +589,7 @@ function readableTree(directory) {
   fs.chmodSync(directory, 0o755);
 }
 
-function renderOperatorCompose(profiles) {
+function renderOperatorCompose(profiles, expectedPinRelease = null) {
   const enabled = new Set(profiles);
   const pinReleases = path.join(DATA_DIR, 'pin-releases');
   const services = [
@@ -598,6 +618,7 @@ function renderOperatorCompose(profiles) {
   const centerVolumes = [];
 
   if (enabled.has('pin')) {
+    if (!expectedPinRelease) throw new Error('the pin profile requires an expected release binding');
     services.push(
       `  ai-bus:
     environment:
@@ -636,6 +657,8 @@ function renderOperatorCompose(profiles) {
       '      REVIVAL_PIN_RELEASE_DIR: /var/lib/ai-pin-revival/pin-releases',
       '      REVIVAL_PIN_SETUP_ORIGIN: ${REVIVAL_PUBLIC_ORIGIN:?run revival setup production}',
       '      REVIVAL_DEVICE_EDGE_IPV4: ${REVIVAL_DEVICE_EDGE_IPV4:?run revival setup production}',
+      `      REVIVAL_PIN_RELEASE_EXPECTED_ID: ${JSON.stringify(expectedPinRelease.releaseId)}`,
+      `      REVIVAL_PIN_RELEASE_EXPECTED_MANIFEST_SHA256: ${JSON.stringify(expectedPinRelease.manifestSha256)}`,
     );
     centerVolumes.push(`      - type: bind
         source: ${safeYaml(pinReleases)}
@@ -715,17 +738,62 @@ function validateReadableTree(directory, problems) {
   }
 }
 
-function validatePinReleases(root, problems) {
-  const result = child.spawnSync(process.execPath, [PIN_RELEASE_VALIDATOR, root], {
+function acquireBundledPinRelease(archive = null) {
+  const release = versionInfo();
+  if (!release.pin) {
+    throw new Error('the pin production profile is not bound to an exact Pin release');
+  }
+  const existing = child.spawnSync(process.execPath, [PIN_RELEASE_ACQUIRE_TOOL, '--check', '--json'], {
     cwd: ROOT,
     encoding: 'utf8',
-    env: { PATH: path.dirname(process.execPath), LANG: 'C', LC_ALL: 'C', TZ: 'UTC' },
+    env: process.env,
     maxBuffer: 1024 * 1024,
+    timeout: 180_000,
+  });
+  if (!existing.error && existing.status === 0) return JSON.parse(existing.stdout);
+  const existingProblem = existing.stderr?.trim() || existing.error?.message || '';
+  if (!/matching Pin release is neither active nor staged/u.test(existingProblem)) {
+    throw new Error(`matching Pin release validation failed before production setup: ${existingProblem}`);
+  }
+  const result = child.spawnSync(
+    process.execPath,
+    [PIN_RELEASE_ACQUIRE_TOOL, ...(archive ? ['--archive', archive] : []), '--json'],
+    {
+      cwd: ROOT,
+      encoding: 'utf8',
+      env: process.env,
+      maxBuffer: 1024 * 1024,
+      timeout: 180_000,
+    },
+  );
+  if (result.error || result.status !== 0) {
+    const detail = result.stderr?.trim() || result.error?.message || 'unknown acquisition error';
+    throw new Error(`matching Pin release acquisition failed before production setup: ${detail}`);
+  }
+  return JSON.parse(result.stdout);
+}
+
+function checkBundledPinRelease() {
+  const release = versionInfo();
+  if (!release.pin) {
+    throw new Error('the pin production profile is not bound to an exact Pin release');
+  }
+  const result = child.spawnSync(process.execPath, [PIN_RELEASE_ACQUIRE_TOOL, '--check', '--json'], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    env: process.env,
+    maxBuffer: 1024 * 1024,
+    timeout: 180_000,
   });
   if (result.error || result.status !== 0) {
     const detail = result.stderr?.trim() || result.error?.message || 'unknown validation error';
-    problems.push(`${path.join(root, 'current.json')} must identify a canonical, digest-matched five-APK Pin release: ${detail}`);
+    throw new Error(`matching Pin release is not ready: ${detail}`);
   }
+  const observed = JSON.parse(result.stdout);
+  if (observed.compatible !== true || !pinReleaseIdentityMatches(release.pin, observed)) {
+    throw new Error('matching Pin release check returned an incompatible identity');
+  }
+  return Object.freeze(observed);
 }
 
 function activeArtifactFiles(values) {
@@ -773,6 +841,7 @@ function validateProductionArtifacts(values = parseEnvFile(ENV_FILE)) {
     problems.push(`${firstLogin} must be a nonempty regular file with mode 0600, or be deleted after first login`);
   }
   const profiles = new Set((values.COMPOSE_PROFILES || '').split(',').filter(Boolean));
+  let pinRelease = null;
   if (profiles.has('spotify')) {
     if (regularFile(IROH_TICKET_FILE, { mode: 0o444 })) {
       try { readIrohTicket(IROH_TICKET_FILE); } catch (error) { problems.push(error.message); }
@@ -781,20 +850,27 @@ function validateProductionArtifacts(values = parseEnvFile(ENV_FILE)) {
   if (profiles.has('pin') && !problems.some((problem) => /(?:\.crt|\.key|envoy\.yaml)/u.test(problem))) {
     try { validatePki(); } catch (error) { problems.push(error.message); }
     const releases = path.join(DATA_DIR, 'pin-releases');
-    validatePinReleases(releases, problems);
-    validateReadableTree(releases, problems);
+    try { pinRelease = checkBundledPinRelease(); } catch (error) { problems.push(error.message); }
+    if (fs.existsSync(releases)) validateReadableTree(releases, problems);
   }
   if (profiles.has('observability')) {
     validateReadableTree(path.join(PRODUCTION_DIR, 'grafana', 'provisioning'), problems);
     validateReadableTree(path.join(PRODUCTION_DIR, 'grafana', 'dashboards'), problems);
   }
   if (problems.length) throw new Error(`production artifacts are not ready:\n- ${problems.join('\n- ')}`);
-  return Object.freeze({ operatorCompose: OPERATOR_COMPOSE, files: productionArtifacts(values) });
+  return Object.freeze({
+    operatorCompose: OPERATOR_COMPOSE,
+    files: productionArtifacts(values),
+    pinRequired: profiles.has('pin'),
+    pinRelease,
+  });
 }
 
 function setupProduction(args) {
   const before = regularFile(ENV_FILE, { mode: 0o600 }) ? parseEnvFile(ENV_FILE) : {};
   const options = parseOptions([...args], before);
+  const operatorRelease = versionInfo();
+  const pinReleaseArchive = validatePinReleaseArchiveInput(options.pinReleaseArchive);
   let irohTicket = null;
   if (options.profiles.includes('spotify')) {
     if (options.irohTicketFile) {
@@ -805,6 +881,21 @@ function setupProduction(args) {
       }
       irohTicket = readIrohTicket(IROH_TICKET_FILE);
     }
+  }
+  if (options.profiles.includes('pin') &&
+      (!operatorRelease.pin || !operatorRelease.source || !operatorRelease.application ||
+       operatorRelease.revision === 'source')) {
+    throw new Error(
+      'the pin production profile requires a published schema-v2 operator release bound to one exact Pin archive',
+    );
+  }
+  // Acquisition is allowed to populate only the managed release staging root.
+  // It must finish before initialize advances the persisted operator revision
+  // and application, so a rejected mixed or unavailable release cannot leave
+  // production configuration claiming an update that never closed.
+  if (options.profiles.includes('pin')) {
+    prepareManagedRoots();
+    acquireBundledPinRelease(pinReleaseArchive);
   }
   initialize({ suppressDeviceCaWarning: true, quiet: true, profiles: options.profiles, localIdentity: false });
   const initialized = parseEnvFile(ENV_FILE);
@@ -888,7 +979,7 @@ function setupProduction(args) {
         throw new Error(`Pin release store must be a real generated directory with mode 0700 or 0755: ${releases}`);
       }
     }
-    if (fs.readdirSync(releases).length > 0) readableTree(releases);
+    readableTree(releases);
   }
   if (options.profiles.includes('spotify')) {
     const token = path.join(PRODUCTION_DIR, 'spotify-token');
@@ -910,7 +1001,7 @@ function setupProduction(args) {
     fs.cpSync(path.join(ROOT, 'platform', 'containers', 'observability', 'grafana'), grafana, { recursive: true });
     readableTree(grafana);
   }
-  renderOperatorCompose(options.profiles);
+  renderOperatorCompose(options.profiles, operatorRelease.pin);
   validateProductionArtifacts(values);
   validateRuntime({ production: true });
   return Object.freeze({

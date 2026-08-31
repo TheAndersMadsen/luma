@@ -7,11 +7,18 @@ import path from "node:path";
 import test from "node:test";
 
 import { createReproducibleTar } from "../../archive-tar.mjs";
+import { createV2SignedApkFixture } from "./fixtures/signed-apk.mjs";
+import { buildOperatorBundle } from "../../distribution/build.mjs";
 import { IMAGE_NAMES, IMAGE_PLATFORMS } from "../../distribution/release-descriptor.mjs";
+import {
+  canonicalPinReleaseManifestJson,
+  createPinReleaseManifest,
+  PIN_RELEASE_ARTIFACT_ROLES,
+  PIN_RELEASE_PACKAGE_BY_ROLE,
+} from "../pin/release.mjs";
 
 const root = path.resolve(import.meta.dirname, "../../..");
 const workflow = path.join(root, ".github/workflows/release-cli.yml");
-const builder = path.join(root, "platform/distribution/build.mjs");
 
 function source(relativePath) {
   return fs.readFileSync(path.join(root, relativePath), "utf8");
@@ -66,7 +73,42 @@ function fixture(t) {
     reference: `oci://ghcr.io/theandersmadsen/ai-pin-revival/application@${applicationDigest}`,
     digest: applicationDigest,
   })}\n`);
-  return { temporary, receipts, output, applicationDigest };
+  const pinVersion = "2026-08-31.2";
+  const pinVersionCode = 202_608_312;
+  const pinDirectoryName = `ai-pin-revival-pin-${pinVersion}`;
+  const pinDirectory = path.join(temporary, pinDirectoryName);
+  fs.mkdirSync(pinDirectory);
+  const signed = createV2SignedApkFixture({ directory: path.join(temporary, "pin-signing") });
+  const pinReceipts = {
+    schemaVersion: 1,
+    artifacts: PIN_RELEASE_ARTIFACT_ROLES.map((role) => {
+      const bytes = signed.bytes;
+      fs.writeFileSync(path.join(pinDirectory, `${role}.apk`), bytes);
+      return {
+        role,
+        path: `${role}.apk`,
+        name: `${role}.apk`,
+        package: PIN_RELEASE_PACKAGE_BY_ROLE[role],
+        versionName: pinVersion,
+        versionCode: pinVersionCode,
+        size: bytes.length,
+        sha256: createHash("sha256").update(bytes).digest("hex"),
+        signerSha256: signed.signerSha256,
+      };
+    }),
+  };
+  const pinManifest = createPinReleaseManifest({ version: pinVersion, receipts: pinReceipts });
+  fs.writeFileSync(path.join(pinDirectory, "manifest.json"), canonicalPinReleaseManifestJson(pinManifest));
+  fs.writeFileSync(path.join(pinDirectory, "receipts.json"), `${JSON.stringify(pinReceipts)}\n`);
+  const pinArchive = path.join(temporary, `${pinDirectoryName}.tar.gz`);
+  const packed = spawnSync("/usr/bin/tar", ["-czf", pinArchive, "-C", temporary, pinDirectoryName], {
+    encoding: "utf8",
+  });
+  assert.equal(packed.status, 0, packed.stderr);
+  return {
+    temporary, receipts, output, applicationDigest, pinArchive, pinManifest,
+    pinVersion, pinVersionCode, signerSha256: signed.signerSha256,
+  };
 }
 
 test("release archives are byte-reproducible with the supported host tar", async (t) => {
@@ -226,6 +268,39 @@ test("tag release workflow publishes the exact hardened image and Compose bounda
   assert.match(source, /REVIVAL_RELEASE_ID=/u);
   assert.match(source, /platform\/containers\/keycloak\/Dockerfile/u);
   assert.match(source, /platform\/containers\/center-iroh-bridge\/Dockerfile/u);
+  assert.match(source, /^  pin-release:\n/mu);
+  assert.match(source, /name: build exact signed Pin release/u);
+  assert.match(source, /PIN_COMPATIBILITY_KEYSTORE_BASE64: \$\{\{ secrets\.PIN_COMPATIBILITY_KEYSTORE_BASE64 \}\}/u);
+  assert.doesNotMatch(source, /PIN_EMBEDDED_PATCH_KEYSTORE_BASE64/u);
+  assert.doesNotMatch(source, /PIN_TFLITE_LIBRARY_BASE64/u);
+  assert.match(source, /gh release download "\$source_tag"\s+\\\n\s+--repo "\$source_repository"\s+\\\n\s+--pattern "\$source_archive"/u);
+  assert.doesNotMatch(source, /github\.com\/\$source_repository\/releases\/download/u);
+  assert.match(source, /tar --extract --gzip --to-stdout --file "\$archive" "\$server_member"/u);
+  assert.match(source, /unzip -p "\$installer_apk" 'assets\/abxdroppedapk-private-key\.pk8'/u);
+  assert.match(source, /openssl pkcs12 -export/u);
+  assert.match(source, /needs: \[coordinates, application, pin-release\]/u);
+  assert.match(source, /--pin-archive "\$RUNNER_TEMP\/release-receipts\/ai-pin-revival-pin-\$pin_version\.tar\.gz"/u);
+  assert.match(source, /"\$output\/ai-pin-revival-pin-\$pin_version\.tar\.gz"/u);
+
+  const pinCoordinates = JSON.parse(fs.readFileSync(
+    path.join(root, "platform/distribution/pin-release-coordinates.json"),
+    "utf8",
+  ));
+  assert.deepEqual(pinCoordinates, {
+    schemaVersion: 2,
+    version: "2026-08-31.2",
+    versionCode: 202608312,
+    privateAssetSource: {
+      repository: "TheAndersMadsen/ai-pin-revival",
+      tag: "v0.1.82",
+      archive: "ai-pin-revival-pin-2026-08-31.2.tar.gz",
+      size: 123908066,
+      sha256: "d6a2146da47ff0308df1cca10f23f52755ce735ba50065a84743999d2696e666",
+      installerMember: "ai-pin-revival-pin-2026-08-31.2/installer.apk",
+      serverMember: "ai-pin-revival-pin-2026-08-31.2/server.apk",
+      libraryMember: "lib/arm64-v8a/libtensorflowlite_jni.so",
+    },
+  });
 
   const keycloakDockerfile = fs.readFileSync(
     path.join(root, "platform/containers/keycloak/Dockerfile"),
@@ -269,38 +344,50 @@ test("tag release workflow publishes the exact hardened image and Compose bounda
   }
 });
 
-test("operator release is lean, versioned, and bound to exact OCI digests", (t) => {
-  const { temporary, receipts, output, applicationDigest } = fixture(t);
+test("operator release is lean, versioned, and bound to exact OCI digests", async (t) => {
+  const {
+    temporary, receipts, output, applicationDigest, pinArchive, pinManifest, pinVersion, pinVersionCode,
+    signerSha256,
+  } = fixture(t);
   const version = "1.2.3";
   const revision = "b".repeat(40);
-  const result = spawnSync(process.execPath, [
-    builder,
-    "--version", version,
-    "--revision", revision,
-    "--repository", "theandersmadsen/Ai-Pin-Revival",
-    "--tag", `v${version}`,
-    "--receipts", receipts,
-    "--output", output,
-  ], { cwd: root, encoding: "utf8" });
-  assert.equal(result.status, 0, result.stderr);
+  await buildOperatorBundle({
+    version,
+    revision,
+    repository: "TheAndersMadsen/ai-pin-revival",
+    tag: `v${version}`,
+    receipts,
+    pinArchive,
+    output,
+    root,
+    expectedPinSigner: signerSha256,
+  });
 
   const archiveName = `ai-pin-revival-operator-${version}-linux.tar.gz`;
   const archive = path.join(output, archiveName);
   const descriptorName = `ai-pin-revival-${version}.release.json`;
   const descriptor = JSON.parse(fs.readFileSync(path.join(output, descriptorName), "utf8"));
   assert.deepEqual(Object.keys(descriptor).sort(), [
-    "application", "images", "operator", "platforms", "product", "revision", "schemaVersion", "source", "version",
+    "application", "images", "operator", "pin", "platforms", "product", "revision", "schemaVersion", "source", "version",
   ]);
-  assert.equal(descriptor.schemaVersion, 2);
+  assert.equal(descriptor.schemaVersion, 3);
   assert.deepEqual(descriptor.platforms, IMAGE_PLATFORMS);
   assert.equal(descriptor.revision, revision);
   assert.equal(descriptor.application.digest, applicationDigest);
   assert.deepEqual(Object.keys(descriptor.images), IMAGE_NAMES);
   assert.equal(descriptor.operator.archive, archiveName);
+  assert.equal(descriptor.operator.size, fs.statSync(archive).size);
   assert.equal(
     descriptor.operator.sha256,
     createHash("sha256").update(fs.readFileSync(archive)).digest("hex"),
   );
+  assert.equal(descriptor.pin.archive, `ai-pin-revival-pin-${pinVersion}.tar.gz`);
+  assert.equal(descriptor.pin.releaseId, pinManifest.releaseId);
+  assert.equal(descriptor.pin.version, pinVersion);
+  assert.equal(descriptor.pin.versionCode, pinVersionCode);
+  assert.equal(descriptor.pin.signerSha256, signerSha256);
+  assert.equal(descriptor.pin.size, fs.statSync(pinArchive).size);
+  assert.equal(descriptor.pin.sha256, createHash("sha256").update(fs.readFileSync(pinArchive)).digest("hex"));
 
   const listed = spawnSync("/usr/bin/tar", ["-tzf", archive], { encoding: "utf8" });
   assert.equal(listed.status, 0, listed.stderr);
@@ -310,6 +397,8 @@ test("operator release is lean, versioned, and bound to exact OCI digests", (t) 
   assert.match(listed.stdout, /platform\/deploy\/pin\/activate\.mjs/u);
   assert.match(listed.stdout, /platform\/deploy\/pin\/device-target-guard\.mjs/u);
   assert.match(listed.stdout, /platform\/deploy\/pin\/import-release\.mjs/u);
+  assert.match(listed.stdout, /platform\/deploy\/pin\/acquire-release\.mjs/u);
+  assert.match(listed.stdout, /platform\/distribution\/release-proof\.mjs/u);
   assert.doesNotMatch(listed.stdout, /center\/src|cosmos\/crates|pin\/runtime|compose\.yaml/u);
   assert.ok(fs.statSync(archive).size < 2 * 1024 * 1024, "operator bundle should remain under 2 MiB");
 
@@ -318,10 +407,12 @@ test("operator release is lean, versioned, and bound to exact OCI digests", (t) 
   ], { encoding: "utf8" });
   assert.equal(stamped.status, 0, stamped.stderr);
   assert.deepEqual(JSON.parse(stamped.stdout), {
-    schemaVersion: 1,
+    schemaVersion: 2,
     version,
     revision,
     application: `oci://ghcr.io/theandersmadsen/ai-pin-revival/application@${applicationDigest}`,
+    source: { repository: "TheAndersMadsen/ai-pin-revival", tag: `v${version}` },
+    pin: descriptor.pin,
   });
 
   const extracted = path.join(temporary, "extracted");
@@ -337,21 +428,93 @@ test("operator release is lean, versioned, and bound to exact OCI digests", (t) 
     REVIVAL_DATA_DIR: path.join(temporary, "data"),
     REVIVAL_BUILD_DIR: path.join(temporary, "data/build"),
   };
+  const invalidPinSetup = spawnSync(process.execPath, [
+    path.join(bundle, "revival"),
+    "setup", "production",
+    "--domain", "pin.example.test",
+    "--acme-email", "acme@example.test",
+    "--operator-email", "owner@example.test",
+    "--profile", "pin",
+  ], { cwd: bundle, env: operatorEnv, encoding: "utf8", timeout: 30_000 });
+  assert.equal(invalidPinSetup.status, 1);
+  assert.match(invalidPinSetup.stderr, /pin profile requires --public-ip/u);
+  assert.equal(fs.existsSync(operatorEnv.REVIVAL_CONFIG_DIR), false);
+  assert.equal(fs.existsSync(operatorEnv.REVIVAL_DATA_DIR), false);
+
+  const invalidArchiveSetup = spawnSync(process.execPath, [
+    path.join(bundle, "revival"),
+    "setup", "production",
+    "--domain", "pin.example.test",
+    "--acme-email", "acme@example.test",
+    "--operator-email", "owner@example.test",
+    "--profile", "pin",
+    "--public-ip", "203.0.113.42",
+    "--pin-release-archive", path.join(temporary, "missing-pin-release.tar.gz"),
+  ], { cwd: bundle, env: operatorEnv, encoding: "utf8", timeout: 30_000 });
+  assert.equal(invalidArchiveSetup.status, 1);
+  assert.match(invalidArchiveSetup.stderr, /Pin release archive does not exist/u);
+  assert.equal(fs.existsSync(operatorEnv.REVIVAL_CONFIG_DIR), false);
+  assert.equal(fs.existsSync(operatorEnv.REVIVAL_DATA_DIR), false);
+
   const setup = spawnSync(process.execPath, [
     path.join(bundle, "revival"),
     "setup", "production",
     "--domain", "pin.example.test",
     "--acme-email", "acme@example.test",
     "--operator-email", "owner@example.test",
+    "--profile", "pin",
+    "--public-ip", "203.0.113.42",
+    "--pin-release-archive", pinArchive,
   ], { cwd: bundle, env: operatorEnv, encoding: "utf8", timeout: 30_000 });
   assert.equal(setup.status, 0, setup.stderr);
+  for (const directory of [
+    operatorEnv.REVIVAL_CONFIG_DIR,
+    operatorEnv.REVIVAL_SECRETS_DIR,
+    operatorEnv.REVIVAL_DATA_DIR,
+  ]) {
+    assert.equal(fs.statSync(directory).mode & 0o777, 0o700);
+    assert.equal(fs.statSync(path.join(directory, ".ai-pin-revival-managed")).mode & 0o777, 0o600);
+  }
+  assert.equal(fs.existsSync(path.join(operatorEnv.REVIVAL_DATA_DIR, "pin-releases", "current.json")), false);
+  assert.equal(
+    fs.existsSync(path.join(
+      operatorEnv.REVIVAL_DATA_DIR,
+      "pin-release-staging", "releases", descriptor.pin.releaseId, descriptor.pin.archive,
+    )),
+    true,
+  );
 
-  const importUsage = spawnSync(process.execPath, [
-    path.join(bundle, "revival"), "pin", "release", "import",
+  const bundledVersion = spawnSync(process.execPath, [path.join(bundle, "revival"), "version", "--json"], {
+    cwd: bundle,
+    env: operatorEnv,
+    encoding: "utf8",
+  });
+  assert.equal(bundledVersion.status, 0, bundledVersion.stderr);
+  const bundledIdentity = JSON.parse(bundledVersion.stdout);
+  assert.equal(bundledIdentity.pin.releaseId, descriptor.pin.releaseId);
+  assert.deepEqual(bundledIdentity.source, descriptor.source);
+
+  const setupStatus = spawnSync(process.execPath, [path.join(bundle, "revival"), "setup", "status", "--json"], {
+    cwd: bundle,
+    env: operatorEnv,
+    encoding: "utf8",
+  });
+  assert.equal(setupStatus.status, 0, setupStatus.stderr);
+  const setupReport = JSON.parse(setupStatus.stdout);
+  assert.equal(setupReport.schemaVersion, 4);
+  assert.deepEqual(setupReport.contract, { id: "operator-setup", version: "2.2.0", journey: "production" });
+  assert.equal(setupReport.state, "production-ready");
+  assert.equal(setupReport.release.pin.enabled, true);
+  assert.equal(setupReport.release.pin.observed.releaseId, descriptor.pin.releaseId);
+  assert.equal(setupReport.release.pin.compatible, true);
+  assert.equal(setupReport.release.pin.expected.releaseId, descriptor.pin.releaseId);
+  assert.equal(setupReport.release.pin.expected.manifestSha256, descriptor.pin.manifestSha256);
+
+  const acquiredRelease = spawnSync(process.execPath, [
+    path.join(bundle, "revival"), "pin", "release", "acquire", "--check", "--json",
   ], { cwd: bundle, env: operatorEnv, encoding: "utf8" });
-  assert.equal(importUsage.status, 1);
-  assert.match(importUsage.stderr, /pin release import ARCHIVE/u);
-  assert.doesNotMatch(importUsage.stderr, /ERR_MODULE_NOT_FOUND|Cannot find module/u);
+  assert.equal(acquiredRelease.status, 0, acquiredRelease.stderr);
+  assert.equal(JSON.parse(acquiredRelease.stdout).releaseId, descriptor.pin.releaseId);
 
   const activateUsage = spawnSync(process.execPath, [
     path.join(bundle, "revival"), "pin", "activate",
@@ -371,10 +534,12 @@ test("operator release is lean, versioned, and bound to exact OCI digests", (t) 
   fs.writeFileSync(
     path.join(bundle, "platform/distribution/version.json"),
     `${JSON.stringify({
-      schemaVersion: 1,
+      schemaVersion: 2,
       version: "1.2.4",
       revision: nextRevision,
       application: `oci://ghcr.io/theandersmadsen/ai-pin-revival/application@${nextApplicationDigest}`,
+      source: { repository: "TheAndersMadsen/ai-pin-revival", tag: "v1.2.4" },
+      pin: descriptor.pin,
     })}\n`,
   );
   const upgrade = spawnSync(process.execPath, [path.join(bundle, "revival"), "setup", "production"], {
@@ -393,24 +558,28 @@ test("operator release is lean, versioned, and bound to exact OCI digests", (t) 
   const checksums = fs.readFileSync(path.join(output, "SHA256SUMS"), "utf8");
   assert.match(checksums, new RegExp(`  ${archiveName}$`, "mu"));
   assert.match(checksums, new RegExp(`  ${descriptorName}$`, "mu"));
+  assert.match(checksums, new RegExp(`  ${descriptor.pin.archive}$`, "mu"));
 });
 
-test("release input validation rejects a mutable image reference", (t) => {
-  const { receipts, output } = fixture(t);
+test("release input validation rejects a mutable image reference", async (t) => {
+  const { receipts, output, pinArchive, signerSha256 } = fixture(t);
   const center = JSON.parse(fs.readFileSync(path.join(receipts, "center.json"), "utf8"));
   center.reference = "ghcr.io/theandersmadsen/ai-pin-revival/center:v1.2.3";
   fs.writeFileSync(path.join(receipts, "center.json"), `${JSON.stringify(center)}\n`);
-  const result = spawnSync(process.execPath, [
-    builder,
-    "--version", "1.2.3",
-    "--revision", "b".repeat(40),
-    "--repository", "theandersmadsen/Ai-Pin-Revival",
-    "--tag", "v1.2.3",
-    "--receipts", receipts,
-    "--output", output,
-  ], { cwd: root, encoding: "utf8" });
-  assert.equal(result.status, 1);
-  assert.match(result.stderr, /digest-pinned GHCR reference/u);
+  await assert.rejects(
+    buildOperatorBundle({
+      version: "1.2.3",
+      revision: "b".repeat(40),
+      repository: "theandersmadsen/Ai-Pin-Revival",
+      tag: "v1.2.3",
+      receipts,
+      pinArchive,
+      output,
+      root,
+      expectedPinSigner: signerSha256,
+    }),
+    /digest-pinned GHCR reference/u,
+  );
 });
 
 test("release publication model contains only digest images and portable storage", (t) => {

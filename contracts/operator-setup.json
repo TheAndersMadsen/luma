@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "contractId": "operator-setup",
-  "contractVersion": "2.1.0",
+  "contractVersion": "2.2.0",
   "mutationPolicies": {
     "read-only": {
       "confirmationRequired": false,
@@ -18,6 +18,110 @@
     "device-mutation": {
       "confirmationRequired": true,
       "exactSerialRequired": true
+    }
+  },
+  "status": {
+    "schemaVersion": 4,
+    "envelope": {
+      "requiredFields": [
+        "schemaVersion",
+        "contract",
+        "state",
+        "mode",
+        "ok",
+        "nextCommandId",
+        "next",
+        "release"
+      ],
+      "optionalFields": [
+        "problem"
+      ],
+      "contractFields": [
+        "id",
+        "version",
+        "journey"
+      ],
+      "releaseFields": [
+        "operator",
+        "pin"
+      ],
+      "pinFields": [
+        "enabled",
+        "expected",
+        "observed",
+        "compatible"
+      ]
+    },
+    "states": [
+      {
+        "id": "uninitialized",
+        "mode": "uninitialized",
+        "journeyId": "production",
+        "ok": false,
+        "nextCommandId": null,
+        "next": "./revival setup local or ./revival setup production --help"
+      },
+      {
+        "id": "local-ready",
+        "mode": "local",
+        "journeyId": "local",
+        "ok": true,
+        "nextCommandId": "doctor.local",
+        "next": "./revival doctor"
+      },
+      {
+        "id": "local-invalid",
+        "mode": "local",
+        "journeyId": "local",
+        "ok": false,
+        "nextCommandId": "init",
+        "next": "./revival init"
+      },
+      {
+        "id": "production-ready",
+        "mode": "production",
+        "journeyId": "production",
+        "ok": true,
+        "nextCommandId": "deploy.production",
+        "next": "./revival deploy production --dry-run"
+      },
+      {
+        "id": "production-invalid",
+        "mode": "production",
+        "journeyId": "production",
+        "ok": false,
+        "nextCommandId": "setup.production",
+        "next": "./revival setup production"
+      }
+    ],
+    "releaseCompatibility": {
+      "operatorFields": [
+        "version",
+        "revision"
+      ],
+      "pinIdentityFields": [
+        "version",
+        "versionCode",
+        "releaseId",
+        "manifestSha256"
+      ],
+      "observedPinFields": [
+        "schemaVersion",
+        "compatible",
+        "acquired",
+        "activated",
+        "active",
+        "staged",
+        "version",
+        "versionCode",
+        "releaseId",
+        "manifestSha256"
+      ],
+      "profileDisabled": {
+        "observed": null,
+        "compatible": null
+      },
+      "profileEnabledMissingCompatible": false
     }
   },
   "commands": [
@@ -375,19 +479,19 @@
       "documentationAnchor": "README.md#connect-a-pin"
     },
     {
-      "id": "pin.release.import",
+      "id": "pin.release.acquire",
       "tokens": [
         "pin",
         "release",
-        "import"
+        "acquire"
       ],
       "aliases": [],
       "lifecycle": "current",
       "effect": "local-mutation",
       "confirmationRequired": false,
       "exactSerialRequired": false,
-      "summary": "Verify and import a published five-APK Pin release archive.",
-      "usage": "revival pin release import ARCHIVE [--json]",
+      "summary": "Acquire and stage the exact signed Pin archive named by this operator release.",
+      "usage": "revival pin release acquire [--archive FILE | --check] [--json]",
       "documentationAnchor": "README.md#connect-a-pin"
     },
     {
@@ -493,7 +597,7 @@
       "confirmationRequired": false,
       "exactSerialRequired": false,
       "summary": "Generate a complete portable production configuration.",
-      "usage": "revival setup production --domain HOST --acme-email EMAIL --operator-email EMAIL [--public-ip IPV4] [--iroh-ticket-file FILE] [options]",
+      "usage": "revival setup production --domain HOST --acme-email EMAIL --operator-email EMAIL [--public-ip IPV4] [--pin-release-archive FILE] [--iroh-ticket-file FILE] [options]",
       "documentationAnchor": "README.md#deploy-cosmos"
     },
     {
@@ -919,7 +1023,7 @@
         "pki.init",
         "pin.doctor",
         "pin.release.build",
-        "pin.release.import",
+        "pin.release.acquire",
         "pin.release.export",
         "pin.install",
         "config.check",
@@ -941,8 +1045,8 @@
         },
         {
           "id": "release",
-          "title": "Import and verify the published Pin release",
-          "commandId": "pin.release.import",
+          "title": "Verify the matching published Pin release",
+          "commandId": "pin.release.acquire",
           "centerRoute": null,
           "surface": "cli",
           "verification": "cli",

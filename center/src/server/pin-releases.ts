@@ -59,6 +59,8 @@ export interface PinReleaseIdentityInput {
 export interface PinReleaseEnvironment {
   readonly REVIVAL_PIN_RELEASE_DIR?: string;
   readonly REVIVAL_PIN_SETUP_ORIGIN?: string;
+  readonly REVIVAL_PIN_RELEASE_EXPECTED_ID?: string;
+  readonly REVIVAL_PIN_RELEASE_EXPECTED_MANIFEST_SHA256?: string;
 }
 
 export interface PinReleaseResponseOptions {
@@ -77,6 +79,11 @@ interface LoadedManifest {
 
 interface VerifiedRelease extends LoadedManifest {
   readonly paths: ReadonlyMap<PinReleaseRole, string>;
+}
+
+interface ExpectedPinRelease {
+  readonly releaseId: string;
+  readonly manifestSha256: string;
 }
 
 class PinReleaseServingError extends Error {
@@ -108,6 +115,9 @@ function runtimeEnvironment(): PinReleaseEnvironment {
   return {
     REVIVAL_PIN_RELEASE_DIR: process.env.REVIVAL_PIN_RELEASE_DIR,
     REVIVAL_PIN_SETUP_ORIGIN: process.env.REVIVAL_PIN_SETUP_ORIGIN,
+    REVIVAL_PIN_RELEASE_EXPECTED_ID: process.env.REVIVAL_PIN_RELEASE_EXPECTED_ID,
+    REVIVAL_PIN_RELEASE_EXPECTED_MANIFEST_SHA256:
+      process.env.REVIVAL_PIN_RELEASE_EXPECTED_MANIFEST_SHA256,
   };
 }
 
@@ -408,6 +418,28 @@ async function verifyRelease(
   }
 }
 
+function expectedPinRelease(environment: PinReleaseEnvironment): ExpectedPinRelease {
+  const releaseId = environment.REVIVAL_PIN_RELEASE_EXPECTED_ID?.trim() ?? "";
+  const manifestSha256 = environment.REVIVAL_PIN_RELEASE_EXPECTED_MANIFEST_SHA256?.trim() ?? "";
+  if (!RELEASE_ID_RE.test(releaseId) || !SHA256_RE.test(manifestSha256)) {
+    throw unavailable("expected_release_invalid");
+  }
+  return Object.freeze({ releaseId, manifestSha256 });
+}
+
+async function verifyActiveRelease(
+  store: ReleaseStore,
+  environment: PinReleaseEnvironment,
+): Promise<VerifiedRelease> {
+  const expected = expectedPinRelease(environment);
+  const current = await loadManifest(store, [PIN_RELEASE_CURRENT_MANIFEST], "not-found");
+  const manifestSha256 = createHash("sha256").update(current.canonical).digest("hex");
+  if (current.manifest.releaseId !== expected.releaseId || manifestSha256 !== expected.manifestSha256) {
+    throw unavailable("active_release_mismatch");
+  }
+  return verifyRelease(store, current.manifest.releaseId, current.canonical);
+}
+
 function configuredSetupOrigin(environment: PinReleaseEnvironment): string | null {
   const configured = environment.REVIVAL_PIN_SETUP_ORIGIN?.trim();
   if (!configured) return null;
@@ -501,8 +533,7 @@ export async function serveCurrentPinRelease(
   try {
     cors = corsHeaders(request, environment);
     const store = await getReleaseStore(environment);
-    const current = await loadManifest(store, [PIN_RELEASE_CURRENT_MANIFEST], "not-found");
-    await verifyRelease(store, current.manifest.releaseId, current.canonical);
+    const current = await verifyActiveRelease(store, environment);
     const headers = hardenedHeaders(cors);
     headers.set("content-type", "application/json; charset=utf-8");
     headers.set("content-length", String(Buffer.byteLength(current.canonical)));
@@ -526,6 +557,7 @@ export async function servePinReleaseArtifact(
     const role = routeRole(assetName);
     if (!RELEASE_ID_RE.test(releaseId) || role === null) throw notFound("artifact_route_unknown");
     const store = await getReleaseStore(environment);
+    await verifyActiveRelease(store, environment);
     const release = await verifyRelease(store, releaseId);
     const artifact = release.manifest.artifacts.find((candidate) => candidate.role === role)!;
     const range = requestedRange(request, artifact.size);

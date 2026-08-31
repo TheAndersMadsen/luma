@@ -14,7 +14,6 @@ import {
 } from "../pin/release.mjs";
 
 const root = path.resolve(import.meta.dirname, "../../..");
-const cli = path.join(root, "revival");
 const releaseTarget = "/var/lib/ai-pin-revival/pin-releases";
 
 function seedPinRelease(environment) {
@@ -47,6 +46,31 @@ function seedPinRelease(environment) {
   }
   fs.writeFileSync(path.join(release, "manifest.json"), document, { mode: 0o600 });
   fs.writeFileSync(path.join(root, "current.json"), document, { mode: 0o600 });
+  return {
+    schemaVersion: 1,
+    archive: `ai-pin-revival-pin-${version}.tar.gz`,
+    sha256: "a".repeat(64),
+    size: 1,
+    releaseId: manifest.releaseId,
+    version,
+    versionCode,
+    signerSha256,
+    manifestSha256: createHash("sha256").update(document).digest("hex"),
+    receiptsSha256: "b".repeat(64),
+  };
+}
+
+function copyOperatorFixture(temporary) {
+  const operatorRoot = path.join(temporary, "operator");
+  fs.mkdirSync(operatorRoot);
+  for (const selected of ["revival", ".env.example", "contracts", "platform"]) {
+    fs.cpSync(path.join(root, selected), path.join(operatorRoot, selected), { recursive: true });
+  }
+  fs.mkdirSync(path.join(operatorRoot, "cosmos"));
+  fs.cpSync(path.join(root, "cosmos", "search"), path.join(operatorRoot, "cosmos", "search"), {
+    recursive: true,
+  });
+  return operatorRoot;
 }
 
 test("production Center mounts only the operator-local Pin release tree", (context) => {
@@ -62,6 +86,8 @@ test("production Center mounts only the operator-local Pin release tree", (conte
 
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "revival-pin-release-deployment-"));
   context.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
+  const operatorRoot = copyOperatorFixture(temporary);
+  const operatorCli = path.join(operatorRoot, "revival");
   const environment = {
     ...process.env,
     REVIVAL_CONFIG_DIR: path.join(temporary, "config"),
@@ -71,18 +97,29 @@ test("production Center mounts only the operator-local Pin release tree", (conte
     REVIVAL_BUILD_DIR: path.join(temporary, "data", "build"),
   };
   const setup = spawnSync(process.execPath, [
-    cli,
+    operatorCli,
     "setup", "production",
     "--domain", "pin.example.test",
     "--acme-email", "acme@example.test",
     "--operator-email", "owner@example.test",
-  ], { cwd: root, env: environment, encoding: "utf8" });
+  ], { cwd: operatorRoot, env: environment, encoding: "utf8" });
   assert.equal(setup.status, 0, setup.stderr);
-  seedPinRelease(environment);
+  const pin = seedPinRelease(environment);
+  fs.writeFileSync(
+    path.join(operatorRoot, "platform", "distribution", "version.json"),
+    `${JSON.stringify({
+      schemaVersion: 2,
+      version: "1.2.3",
+      revision: "c".repeat(40),
+      application: `oci://ghcr.io/example/project/application@sha256:${"d".repeat(64)}`,
+      source: { repository: "example/project", tag: "v1.2.3" },
+      pin,
+    })}\n`,
+  );
   const irohTicket = path.join(temporary, "iroh-ticket");
   fs.writeFileSync(irohTicket, "test-endpoint-ticket\n", { mode: 0o600 });
   const pinSetup = spawnSync(process.execPath, [
-    cli,
+    operatorCli,
     "setup", "production",
     "--profile", "pin",
     "--profile", "search",
@@ -90,7 +127,7 @@ test("production Center mounts only the operator-local Pin release tree", (conte
     "--profile", "observability",
     "--iroh-ticket-file", irohTicket,
     "--public-ip", "203.0.113.42",
-  ], { cwd: root, env: environment, encoding: "utf8" });
+  ], { cwd: operatorRoot, env: environment, encoding: "utf8" });
   assert.equal(pinSetup.status, 0, pinSetup.stderr);
   const operatorCompose = path.join(environment.REVIVAL_CONFIG_DIR, "production", "operator.compose.yaml");
   assert.match(
@@ -116,6 +153,8 @@ test("production Center mounts only the operator-local Pin release tree", (conte
   const center = JSON.parse(result.stdout).services.center;
   assert.equal(center.environment.REVIVAL_PIN_RELEASE_DIR, releaseTarget);
   assert.equal(center.environment.REVIVAL_PIN_SETUP_ORIGIN, "https://pin.example.test");
+  assert.equal(center.environment.REVIVAL_PIN_RELEASE_EXPECTED_ID, pin.releaseId);
+  assert.equal(center.environment.REVIVAL_PIN_RELEASE_EXPECTED_MANIFEST_SHA256, pin.manifestSha256);
   const mounts = center.volumes.filter((mount) => mount.target === releaseTarget);
   assert.equal(mounts.length, 1);
   const { bind, ...mount } = mounts[0];
@@ -132,4 +171,33 @@ test("production Center mounts only the operator-local Pin release tree", (conte
     "0.0.0.0",
   );
   assert.deepEqual(Object.keys(JSON.parse(result.stdout).services["spotify-adapter"].networks), ["spotify-control"]);
+
+  const runtimeBeforeRejectedUpgrade = fs.readFileSync(environment.REVIVAL_ENV_FILE, "utf8");
+  const olderPin = {
+    ...pin,
+    archive: "ai-pin-revival-pin-2026-08-23.1.tar.gz",
+    releaseId: "e".repeat(64),
+    version: "2026-08-23.1",
+    versionCode: 202_608_231,
+    manifestSha256: "f".repeat(64),
+  };
+  fs.writeFileSync(
+    path.join(operatorRoot, "platform", "distribution", "version.json"),
+    `${JSON.stringify({
+      schemaVersion: 2,
+      version: "1.2.4",
+      revision: "e".repeat(40),
+      application: `oci://ghcr.io/example/project/application@sha256:${"f".repeat(64)}`,
+      source: { repository: "example/project", tag: "v1.2.4" },
+      pin: olderPin,
+    })}\n`,
+  );
+  const rejectedUpgrade = spawnSync(process.execPath, [operatorCli, "setup", "production"], {
+    cwd: operatorRoot,
+    env: environment,
+    encoding: "utf8",
+  });
+  assert.equal(rejectedUpgrade.status, 1);
+  assert.match(rejectedUpgrade.stderr, /does not match operator release Pin/u);
+  assert.equal(fs.readFileSync(environment.REVIVAL_ENV_FILE, "utf8"), runtimeBeforeRejectedUpgrade);
 });

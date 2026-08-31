@@ -89,9 +89,9 @@ test("the committed Center journey is an in-sync projection of the root contract
   );
 });
 
-test("Center exposes the canonical release import, PKI, activation, and network commands", () => {
+test("Center exposes the canonical release acquisition, PKI, activation, and network commands", () => {
   const steps = new Map(derivePinSetupPlan(facts()).steps.map((step) => [step.id, step]));
-  assert.equal(steps.get("release").command, "./revival pin release import");
+  assert.equal(steps.get("release").command, "./revival pin release acquire");
   assert.equal(steps.has("ship"), false);
   assert.equal(steps.get("identity").command, "./revival pki import");
   assert.equal(steps.get("activate").command, "./revival pin activate");
@@ -166,7 +166,7 @@ test("a healthy retained installer completes setup when every runtime package is
   assert.match(install.summary, /installer.*retained/i);
 });
 
-test("a Pin newer than Center focuses release import instead of offering a downgrade", () => {
+test("a Pin newer than Center requires a matching operator release instead of offering a downgrade", () => {
   const plan = derivePinSetupPlan(
     facts({
       release: { availability: "published", version: "2026-08-27.3", detail: null },
@@ -190,11 +190,8 @@ test("a Pin newer than Center focuses release import instead of offering a downg
   assert.equal(plan.focusStepId, "release");
   assert.equal(release.status, "manual");
   assert.match(release.summary, /Pin runs newer runtime software/i);
-  assert.match(release.next, /computer that installed.*export/i);
-  assert.deepEqual(release.commands, [
-    "./revival pin release export --output ai-pin-revival-pin-current.tar.gz",
-    "./revival pin release import ai-pin-revival-pin-current.tar.gz",
-  ]);
+  assert.match(release.next, /operator release whose descriptor names this Pin release/i);
+  assert.deepEqual(release.commands, ["./revival pin release acquire --check"]);
   assert.equal(install.status, "blocked");
   assert.doesNotMatch(install.next ?? "", /update|downgrade|installer/i);
 });
@@ -300,7 +297,7 @@ test("the owner can explicitly complete physical acceptance after trying the Pin
   assert.equal(plan.focusStepId, null);
 });
 
-test("an unpublished release points directly to the verified archive import", () => {
+test("an unpublished release points directly to descriptor-bound acquisition", () => {
   const plan = derivePinSetupPlan(
     facts({
       release: { availability: "not-published", version: null, detail: null },
@@ -308,10 +305,10 @@ test("an unpublished release points directly to the verified archive import", ()
   );
   const release = plan.steps.find((step) => step.id === "release");
   assert.equal(release.status, "manual");
-  assert.deepEqual(release.commands, ["./revival pin release import ARCHIVE"]);
+  assert.deepEqual(release.commands, ["./revival pin release acquire"]);
   assert.match(release.summary, /No signed Pin release/);
-  assert.match(release.next, /Download the signed archive/);
-  assert.match(release.manualNote, /verifies every APK/);
+  assert.match(release.next, /exact archive named by this release/);
+  assert.match(release.manualNote, /verifies the descriptor/);
   assert.equal(plan.steps.some((step) => step.id === "ship"), false);
 });
 

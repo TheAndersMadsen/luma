@@ -30,7 +30,7 @@
 | I want to… | Start here | What happens |
 | --- | --- | --- |
 | **Run Cosmos** | [Deploy Cosmos](#deploy-cosmos) | Download one verified operator bundle; the server does not clone or compile this repository. |
-| **Connect my Pin** | [Connect a Pin](#connect-a-pin) | Import the signed five-app release, install through Center, then activate one exact serial. |
+| **Connect my Pin** | [Connect a Pin](#connect-a-pin) | Acquire the matching signed five-app release, install through Center, then activate one exact serial. |
 | **Change the project** | [Development](#development) | Clone the repository and use the root `revival` CLI with external build caches. |
 | **Let an agent help** | [AI-assisted setup](#ai-assisted-setup) | Give Claude, Codex, or another agent the outcome-based prompt and required inputs. |
 
@@ -99,25 +99,119 @@ docker compose version
 ### 1. Download a verified release
 
 Choose a version from
-[GitHub Releases](https://github.com/TheAndersMadsen/ai-pin-revival/releases),
-then download all three operator files from that tag:
+[GitHub Releases](https://github.com/TheAndersMadsen/ai-pin-revival/releases).
+Authenticate its descriptor before trusting any download coordinate. The
+following bootstrap pins Cosign itself by size and SHA-256, then binds the
+proof to this repository, release workflow, and exact tag:
 
 ```sh
+read -r -s -p 'GitHub token with read access: ' GH_TOKEN
+export GH_TOKEN
+printf '\n'
 RELEASE_VERSION=0.0.0
 RELEASE_TAG="v${RELEASE_VERSION}"
-RELEASE_BASE="https://github.com/TheAndersMadsen/ai-pin-revival/releases/download/${RELEASE_TAG}"
+RELEASE_REPOSITORY="TheAndersMadsen/ai-pin-revival"
+DESCRIPTOR="ai-pin-revival-${RELEASE_VERSION}.release.json"
+PROOF="ai-pin-revival-${RELEASE_VERSION}.release.sigstore.json"
 
-curl --fail --location --remote-name \
-  "${RELEASE_BASE}/ai-pin-revival-operator-${RELEASE_VERSION}-linux.tar.gz"
-curl --fail --location --remote-name \
-  "${RELEASE_BASE}/ai-pin-revival-${RELEASE_VERSION}.release.json"
-curl --fail --location --remote-name "${RELEASE_BASE}/SHA256SUMS"
-sha256sum --check SHA256SUMS
-tar -xzf "ai-pin-revival-operator-${RELEASE_VERSION}-linux.tar.gz"
+RELEASE_METADATA="$(mktemp)"
+trap 'rm -f "$RELEASE_METADATA"' EXIT
+curl --fail --proto '=https' --tlsv1.2 --max-filesize 2097152 \
+  --header "Authorization: Bearer $GH_TOKEN" \
+  --header 'Accept: application/vnd.github+json' \
+  --header 'X-GitHub-Api-Version: 2022-11-28' \
+  --output "$RELEASE_METADATA" \
+  "https://api.github.com/repos/${RELEASE_REPOSITORY}/releases/tags/${RELEASE_TAG}"
+
+download_release_asset() {
+  asset_name="$1"
+  maximum_size="$2"
+  IFS="$(printf '\t')" read -r asset_url asset_size <<EOF
+$(node --input-type=module - "$RELEASE_METADATA" "$RELEASE_REPOSITORY" "$RELEASE_TAG" "$asset_name" "$maximum_size" <<'NODE'
+import { readFileSync } from 'node:fs';
+const [file, repository, tag, name, maximumText] = process.argv.slice(2);
+const release = JSON.parse(readFileSync(file, 'utf8'));
+const maximum = Number(maximumText);
+const matches = Array.isArray(release.assets)
+  ? release.assets.filter((asset) => asset?.name === name)
+  : [];
+if (release.tag_name !== tag || release.draft !== false || matches.length !== 1) throw new Error('release metadata does not name one expected published asset');
+const asset = matches[0];
+const api = `https://api.github.com/repos/${repository}/releases/assets/${asset.id}`;
+const browser = `https://github.com/${repository}/releases/download/${tag}/${name}`;
+if (!Number.isSafeInteger(asset.id) || asset.id < 1 || !Number.isSafeInteger(asset.size) || asset.size < 1 || asset.size > maximum || asset.url !== api || asset.browser_download_url !== browser) throw new Error('release asset metadata is invalid');
+console.log(`${api}\t${asset.size}`);
+NODE
+)
+EOF
+  curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 \
+    --header "Authorization: Bearer $GH_TOKEN" \
+    --header 'Accept: application/octet-stream' \
+    --header 'X-GitHub-Api-Version: 2022-11-28' \
+    --max-filesize "$asset_size" --output "$asset_name" "$asset_url"
+  test "$(stat --format='%s' "$asset_name")" = "$asset_size"
+}
+
+download_release_asset "$DESCRIPTOR" 2097152
+download_release_asset "$PROOF" 8388608
+
+case "$(uname -m)" in
+  x86_64) COSIGN_ASSET=cosign-linux-amd64; COSIGN_SIZE=141178250; COSIGN_SHA256=4629c757b7618056f8ddd7e2625ae9fdd94c0372a65049520bc7d9df9efc7f71 ;;
+  aarch64|arm64) COSIGN_ASSET=cosign-linux-arm64; COSIGN_SIZE=132747403; COSIGN_SHA256=c5d324e091826b0d7a78eb16fef316450b4eb9aaec045611c08ba06f5e73220a ;;
+  *) echo "unsupported host architecture" >&2; exit 1 ;;
+esac
+curl --fail --location --max-filesize "$COSIGN_SIZE" --output cosign \
+  "https://github.com/sigstore/cosign/releases/download/v3.1.3/${COSIGN_ASSET}"
+test "$(stat --format='%s' cosign)" = "$COSIGN_SIZE"
+printf '%s  %s\n' "$COSIGN_SHA256" cosign | sha256sum --check --status
+chmod 0700 cosign
+
+./cosign verify-blob \
+  --bundle "$PROOF" \
+  --certificate-identity "https://github.com/TheAndersMadsen/ai-pin-revival/.github/workflows/release-cli.yml@refs/tags/${RELEASE_TAG}" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-github-workflow-repository TheAndersMadsen/ai-pin-revival \
+  --certificate-github-workflow-name "immutable release" \
+  --certificate-github-workflow-ref "refs/tags/${RELEASE_TAG}" \
+  --certificate-github-workflow-trigger push \
+  "$DESCRIPTOR"
+
+OPERATOR_ARCHIVE="$(node --input-type=module - "$DESCRIPTOR" "$RELEASE_TAG" <<'NODE'
+import { readFileSync } from 'node:fs';
+const [file, tag] = process.argv.slice(2);
+const descriptor = JSON.parse(readFileSync(file, 'utf8'));
+if (descriptor.schemaVersion !== 3 || descriptor.source?.repository !== 'TheAndersMadsen/ai-pin-revival' || descriptor.source?.tag !== tag) throw new Error('verified descriptor coordinates are invalid');
+const value = descriptor.operator?.archive;
+if (typeof value !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(value)) throw new Error('operator archive is invalid');
+console.log(value);
+NODE
+)"
+OPERATOR_SIZE="$(node --input-type=module - "$DESCRIPTOR" <<'NODE'
+import { readFileSync } from 'node:fs';
+const descriptor = JSON.parse(readFileSync(process.argv[2], 'utf8'));
+if (!Number.isSafeInteger(descriptor.operator?.size) || descriptor.operator.size < 1) throw new Error('operator archive size is invalid');
+console.log(descriptor.operator.size);
+NODE
+)"
+download_release_asset "$OPERATOR_ARCHIVE" "$OPERATOR_SIZE"
+test "$(stat --format='%s' "$OPERATOR_ARCHIVE")" = "$OPERATOR_SIZE"
+
+node --input-type=module - "$DESCRIPTOR" "$OPERATOR_ARCHIVE" <<'NODE'
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+const [descriptorFile, operatorFile] = process.argv.slice(2);
+const descriptor = JSON.parse(readFileSync(descriptorFile, 'utf8'));
+const bytes = readFileSync(operatorFile);
+if (descriptor.operator?.archive !== operatorFile || bytes.length !== descriptor.operator?.size || createHash('sha256').update(bytes).digest('hex') !== descriptor.operator?.sha256) throw new Error(`${operatorFile} does not match the authenticated descriptor`);
+NODE
+
+tar -xzf "$OPERATOR_ARCHIVE"
 cd "ai-pin-revival-operator-${RELEASE_VERSION}"
 ```
 
-Replace `0.0.0` with the chosen release version. Do not skip the checksum.
+Replace `0.0.0` with the chosen release version. Do not skip the proof or the
+descriptor-bound archive check. Setup acquires only that exact Pin
+archive when the `pin` profile is selected.
 
 ### 2. Create the production configuration
 
@@ -138,6 +232,10 @@ Rerunning setup preserves existing nonblank values.
 
 Optional profiles are `pin`, `search`, `spotify`, and `observability`. Spotify
 also needs the Iroh ticket file named by `./revival setup production --help`.
+When the host cannot download the Pin asset directly, download the archive
+named by the authenticated descriptor and pass it once with
+`--pin-release-archive FILE`; setup applies the same size, digest, identity,
+signer, and APK checks without a network fallback.
 The `spotify` profile owns the complete music bridge: Spotify plays natively on
 the Pin, while Center keeps YouTube Music and TIDAL account state and catalog
 logic. YouTube player requests and both providers' audio bytes leave through
@@ -302,7 +400,7 @@ wearer data and is useful for release checks, search engines, and setup agents:
 | URL | Purpose |
 | --- | --- |
 | `/api/version` | Product, immutable release ID, and runtime environment |
-| `/api/pin/releases/current` | Current verified five-APK release manifest, when imported |
+| `/api/pin/releases/current` | Current verified five-APK release manifest, when active |
 | `/developers` or `/developers.md` | Deployment, CLI, API, and agent guidance |
 | `/openapi.json` | Typed OpenAPI 3.1 contract for public read operations |
 | `/llms.txt` | Concise when-to-use instructions and canonical links |
@@ -329,7 +427,8 @@ the device.
 Have these ready:
 
 - A deployed Cosmos release for which `./revival verify production` passes.
-- The matching signed Pin archive imported into Center.
+- A production setup with the `pin` profile; it acquires and stages the exact
+  signed Pin archive named by the operator release.
 - Current desktop Chrome, Chromium, or Edge. The page checks both HTTPS and
   WebUSB before enabling installation.
 - A known-good USB-C **data** cable connected directly to the computer when
@@ -345,19 +444,23 @@ WebUSB is available only in a [secure context](https://developer.mozilla.org/en-
 which is why production installation uses Center over HTTPS. The Linux setup
 below follows Android's [official Ubuntu device guidance](https://developer.android.com/studio/run/device.html).
 
-### 1. Import the signed Pin release
+### 1. Verify the matching signed Pin release
 
-The GitHub release publishes the signed five-APK Pin set as a separate archive.
-Download it from the same release as the operator bundle, then import it on the
-server:
+`./revival setup production --profile pin ...` downloads the exact signed
+five-APK archive named by the verified operator release. It checks the
+descriptor-bound byte size and SHA-256, internal release ID and version,
+manifest digest, signer receipts, package roles, and every APK digest before
+publishing it to Center. Confirm the release remains compatible with:
 
 ```sh
-./revival pin release import ai-pin-revival-pin-YYYY-MM-DD.N.tar.gz
+./revival pin release acquire --check
 ```
 
-The importer validates the archive, manifest, signer receipt, package roles,
-sizes, and every APK digest before making the complete release available to
-Center. A partial set is never published.
+It never searches a release page or chooses the first matching filename. A
+different valid Pin release blocks setup and deployment before either can mix
+server and device releases. For an offline host, pass the exact archive once
+with `./revival pin release acquire --archive FILE`; the same binding and
+verification rules apply. A partial set is never published.
 
 ### 2. Prepare Linux USB permissions
 
@@ -549,8 +652,8 @@ Continue until all success evidence is green or report one exact blocker and
 the command/output that proves it.
 ```
 
-For a new Pin, follow with: “Download the signed Pin archive from the same
-release, import it, guide me through Center's USB installer, and activate the
+For a new Pin, follow with: “Verify the descriptor-bound Pin release acquired
+by production setup, guide me through Center's USB installer, and activate the
 exact connected Pin directly in Center. Use an activation file only as a
 recovery fallback.”
 

@@ -273,12 +273,9 @@ function deriveRelease(facts: PinSetupFacts): DraftStep {
         return {
           status: "manual",
           summary: `This Pin runs newer runtime software than Center's published release${release.version ? ` ${release.version}` : ""}.`,
-          next: "On the computer that installed this Pin, export its current release; copy that archive to the Center operator host and import it.",
-          commands: [
-            "./revival pin release export --output ai-pin-revival-pin-current.tar.gz",
-            "./revival pin release import ai-pin-revival-pin-current.tar.gz",
-          ],
-          manualNote: "The installer will not silently downgrade a newer Pin; Center must publish the same signed release first.",
+          next: "Use the operator release whose descriptor names this Pin release, or explicitly choose a supported device downgrade recovery.",
+          commands: ["./revival pin release acquire --check"],
+          manualNote: "The installer will not silently downgrade a newer Pin or mix it with another operator release.",
         };
       }
       return {
@@ -298,9 +295,9 @@ function deriveRelease(facts: PinSetupFacts): DraftStep {
       return {
         status: "manual",
         summary: "No signed Pin release is available.",
-        next: "Download the signed archive from GitHub Releases, then import it.",
-        commands: ["./revival pin release import ARCHIVE"],
-        manualNote: "Import verifies every APK before publishing the release.",
+        next: "On the operator host, acquire the exact archive named by this release.",
+        commands: ["./revival pin release acquire"],
+        manualNote: "Acquisition verifies the descriptor, archive, signer receipts, and every APK before publishing.",
       };
     case "unreadable":
       return {
@@ -308,7 +305,8 @@ function deriveRelease(facts: PinSetupFacts): DraftStep {
         summary: release.detail
           ? `Center could not verify the imported release: ${release.detail}`
           : "Center could not verify the imported release.",
-        next: "Download the signed archive again and re-import it.",
+        next: "Run the descriptor-bound release check on the operator host before changing anything.",
+        commands: ["./revival pin release acquire --check"],
       };
     default:
       return {

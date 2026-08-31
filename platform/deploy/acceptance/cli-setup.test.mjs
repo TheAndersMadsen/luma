@@ -132,20 +132,28 @@ test("local setup creates real external configuration and status derives from it
   const status = invoke(env, "setup", "status", "--json");
   assert.equal(status.status, 0, status.stderr);
   assert.deepEqual(JSON.parse(status.stdout), {
-    schemaVersion: 3,
+    schemaVersion: 4,
+    contract: { id: "operator-setup", version: "2.2.0", journey: "local" },
+    state: "local-ready",
     mode: "local",
     ok: true,
+    nextCommandId: "doctor.local",
     next: "./revival doctor",
+    release: { operator: { version: "0.1.0-dev", revision: "source" }, pin: null },
   });
 
   fs.unlinkSync(env.REVIVAL_ENV_FILE);
   const changed = invoke(env, "setup", "status", "--json");
   assert.equal(changed.status, 1);
   assert.deepEqual(JSON.parse(changed.stdout), {
-    schemaVersion: 3,
+    schemaVersion: 4,
+    contract: { id: "operator-setup", version: "2.2.0", journey: "production" },
+    state: "uninitialized",
     mode: "uninitialized",
     ok: false,
+    nextCommandId: null,
     next: "./revival setup local or ./revival setup production --help",
+    release: { operator: { version: "0.1.0-dev", revision: "source" }, pin: null },
   });
 });
 
@@ -227,14 +235,18 @@ test("production setup creates a complete portable operator installation and is 
   const status = invoke(env, "setup", "status", "--json");
   assert.equal(status.status, 0, status.stderr);
   assert.deepEqual(JSON.parse(status.stdout), {
-    schemaVersion: 3,
+    schemaVersion: 4,
+    contract: { id: "operator-setup", version: "2.2.0", journey: "production" },
+    state: "production-ready",
     mode: "production",
     ok: true,
+    nextCommandId: "deploy.production",
     next: "./revival deploy production --dry-run",
+    release: { operator: { version: "0.1.0-dev", revision: "source" }, pin: null },
   });
 });
 
-test("pin profile creates enrollment inputs and requires a public IPv4 address", (t) => {
+test("source checkout validates every pin option before rejecting unbound production setup", (t) => {
   const { env } = fixture(t);
   const common = [
     "setup", "production",
@@ -248,84 +260,10 @@ test("pin profile creates enrollment inputs and requires a public IPv4 address",
   assert.match(missing.stderr, /pin profile requires --public-ip/u);
   assert.equal(fs.existsSync(env.REVIVAL_CONFIG_DIR), false, "invalid setup must not create partial state");
 
-  const core = invoke(
-    env,
-    "setup", "production",
-    "--domain", "pin.example.test",
-    "--acme-email", "acme@example.test",
-    "--operator-email", "owner@example.test",
-  );
-  assert.equal(core.status, 0, core.stderr);
-  seedPinRelease(env);
   const setup = invoke(env, ...common, "--public-ip", "203.0.113.42");
-  assert.equal(setup.status, 0, setup.stderr);
-  const runtime = parseEnv(env.REVIVAL_ENV_FILE);
-  assert.equal(runtime.COMPOSE_PROFILES, "pin");
-  assert.match(runtime.COSMOS_ENROLLMENT_PINCODE, /^\d{4}$/u);
-  assert.equal(runtime.COSMOS_ENROLLMENT_USER_ID, runtime.REVIVAL_FIRST_OPERATOR_ID);
-  assert.equal(runtime.REVIVAL_DEVICE_EDGE_IPV4, "203.0.113.42");
-  const pinOverlay = fs.readFileSync(
-    path.join(env.REVIVAL_CONFIG_DIR, "production", "operator.compose.yaml"),
-    "utf8",
-  );
-  assert.match(pinOverlay, /COSMOS_ATTEST_ROOT_CERT: \/etc\/cosmos-attest\/root\.crt/u);
-  assert.match(pinOverlay, /edge_ca_cert, target: \/etc\/cosmos-attest\/root\.crt/u);
-  const pinCompose = renderProductionCompose(env);
-  if (pinCompose) assert.equal(pinCompose.status, 0, pinCompose.stderr);
-
-  const production = path.join(env.REVIVAL_CONFIG_DIR, "production");
-  const edgeRoot = path.join(production, "edge-root");
-  const deviceUserRoot = path.join(production, "device-user-root");
-  const edgeCertificate = path.join(edgeRoot, "edge-ca.crt");
-  const edgeKey = path.join(edgeRoot, "edge-ca.key");
-  const deviceUserCertificate = path.join(deviceUserRoot, "duc-ca.crt");
-  const deviceUserKey = path.join(deviceUserRoot, "duc-ca.key");
-  assert.equal(fs.existsSync(path.join(production, "edge-ca.crt")), false);
-  assert.equal(fs.existsSync(path.join(production, "duc-ca.crt")), false);
-  assert.equal(fs.statSync(edgeRoot).mode & 0o777, 0o700);
-  assert.equal(fs.statSync(deviceUserRoot).mode & 0o777, 0o700);
-  assert.equal(fs.statSync(path.join(production, "pin-trust.json")).mode & 0o777, 0o444);
-  const originalEdgeKey = fs.readFileSync(edgeKey);
-  const originalDeviceUserKey = fs.readFileSync(deviceUserKey);
-  const originalEdgeCertificate = fs.readFileSync(edgeCertificate);
-  const originalDeviceUserCertificate = fs.readFileSync(deviceUserCertificate);
-  fs.unlinkSync(edgeKey);
-  const missingRoot = invoke(env, "setup", "production");
-  assert.equal(missingRoot.status, 1);
-  assert.match(missingRoot.stderr, /edge root CA is established but incomplete/u);
-  assert.equal(fs.existsSync(edgeKey), false, "setup must not rotate a missing established root");
-
-  fs.writeFileSync(edgeKey, originalEdgeKey, { mode: 0o444 });
-  fs.chmodSync(deviceUserKey, 0o600);
-  fs.writeFileSync(deviceUserKey, originalEdgeKey);
-  fs.chmodSync(deviceUserKey, 0o444);
-  const mismatchedRoot = invoke(env, "setup", "production");
-  assert.equal(mismatchedRoot.status, 1);
-  assert.match(mismatchedRoot.stderr, /DeviceUser root CA is established but does not contain its original matching root pair/u);
-
-  fs.chmodSync(deviceUserKey, 0o600);
-  fs.writeFileSync(deviceUserKey, originalDeviceUserKey);
-  fs.chmodSync(deviceUserKey, 0o444);
-  fs.unlinkSync(path.join(production, "edge-server.key"));
-  const recoveredDerivedCertificate = invoke(env, "setup", "production");
-  assert.equal(recoveredDerivedCertificate.status, 0, recoveredDerivedCertificate.stderr);
-  assert.deepEqual(fs.readFileSync(edgeCertificate), originalEdgeCertificate, "derived repair must retain the edge root");
-
-  fs.chmodSync(edgeCertificate, 0o600);
-  fs.chmodSync(edgeKey, 0o600);
-  fs.writeFileSync(edgeCertificate, originalDeviceUserCertificate);
-  fs.writeFileSync(edgeKey, originalDeviceUserKey);
-  fs.chmodSync(edgeCertificate, 0o444);
-  fs.chmodSync(edgeKey, 0o444);
-  const rotatedRoot = invoke(env, "setup", "production");
-  assert.equal(rotatedRoot.status, 1);
-  assert.match(rotatedRoot.stderr, /does not match the established Pin trust record/u);
-
-  fs.rmSync(edgeRoot, { recursive: true });
-  const deletedRoot = invoke(env, "setup", "production");
-  assert.equal(deletedRoot.status, 1);
-  assert.match(deletedRoot.stderr, /Pin trust is established but a root directory is missing/u);
-  assert.equal(fs.existsSync(edgeRoot), false, "setup must not replace a deleted established root");
+  assert.equal(setup.status, 1);
+  assert.match(setup.stderr, /requires a published schema-v2 operator release bound to one exact Pin archive/u);
+  assert.equal(fs.existsSync(env.REVIVAL_CONFIG_DIR), false, "unbound release rejection must be read-only");
 });
 
 test("core setup omits optional state and --no-profiles clears active profiles", (t) => {
@@ -424,7 +362,7 @@ test("production identity bootstrap refuses changed immutable inputs", (t) => {
   assert.equal(fs.readFileSync(env.REVIVAL_ENV_FILE, "utf8"), before);
 });
 
-test("pin profile is not ready with an empty release directory", (t) => {
+test("source checkout cannot substitute an empty store for descriptor-bound release closure", (t) => {
   const { env } = fixture(t);
   const setup = invoke(
     env,
@@ -436,10 +374,11 @@ test("pin profile is not ready with an empty release directory", (t) => {
     "--public-ip", "203.0.113.42",
   );
   assert.equal(setup.status, 1);
-  assert.match(setup.stderr, /current\.json must identify a canonical, digest-matched five-APK Pin release/u);
+  assert.match(setup.stderr, /requires a published schema-v2 operator release/u);
+  assert.equal(fs.existsSync(env.REVIVAL_CONFIG_DIR), false);
 });
 
-test("pin profile rejects a text file substituted for a canonical APK", (t) => {
+test("source checkout cannot substitute a seeded local release for authenticated release closure", (t) => {
   const { env } = fixture(t);
   const core = invoke(
     env,
@@ -454,7 +393,7 @@ test("pin profile rejects a text file substituted for a canonical APK", (t) => {
   fs.writeFileSync(path.join(release, "server.apk"), Buffer.alloc(server.size, 0x78), { mode: 0o600 });
   const setup = invoke(env, "setup", "production", "--profile", "pin", "--public-ip", "203.0.113.42");
   assert.equal(setup.status, 1);
-  assert.match(setup.stderr, /server artifact sha256/u);
+  assert.match(setup.stderr, /requires a published schema-v2 operator release/u);
 });
 
 test("production readiness fails when a required generated artifact is missing", (t) => {
@@ -473,6 +412,7 @@ test("production readiness fails when a required generated artifact is missing",
   assert.equal(status.status, 1);
   const report = JSON.parse(status.stdout);
   assert.equal(report.mode, "production");
+  assert.equal(report.state, "production-invalid");
   assert.equal(report.ok, false);
   assert.match(report.problem, /traefik-dynamic\.yaml must be a nonempty regular file/u);
 
@@ -490,6 +430,7 @@ test("setup status keeps incomplete production setup on its resumable path", (t)
   assert.equal(status.status, 1);
   let report = JSON.parse(status.stdout);
   assert.equal(report.mode, "production");
+  assert.equal(report.state, "production-invalid");
   assert.equal(report.ok, false);
   assert.equal(report.next, "./revival setup production");
 

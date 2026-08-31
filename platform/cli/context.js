@@ -21,7 +21,7 @@ const ENV_EXAMPLE = path.join(ROOT, '.env.example');
 const COMPOSE_BASE = path.join(ROOT, 'compose.yaml');
 const COMPOSE_DEVELOPMENT = path.join(ROOT, 'platform', 'compose', 'development.yaml');
 const PIN_RELEASE_BUILD_TOOL = path.join(ROOT, 'platform', 'deploy', 'pin', 'build.mjs');
-const PIN_RELEASE_IMPORT_TOOL = path.join(ROOT, 'platform', 'deploy', 'pin', 'import-release.mjs');
+const PIN_RELEASE_ACQUIRE_TOOL = path.join(ROOT, 'platform', 'deploy', 'pin', 'acquire-release.mjs');
 const PIN_RELEASE_EXPORT_TOOL = path.join(ROOT, 'platform', 'deploy', 'pin', 'export-release.mjs');
 const PIN_INSTALL_TOOL = path.join(ROOT, 'platform', 'deploy', 'pin', 'install.mjs');
 const PIN_DOCTOR_TOOL = path.join(ROOT, 'platform', 'containers', 'pin-builder', 'doctor.mjs');
@@ -273,7 +273,7 @@ function fillBlankInitializerDefaults(contents, profiles = null) {
   let bundled = null;
   try {
     const candidate = JSON.parse(fs.readFileSync(DISTRIBUTION_VERSION, 'utf8'));
-    if (candidate.schemaVersion === 1 && /^[0-9a-f]{40}$/u.test(candidate.revision) &&
+    if (candidate.schemaVersion === 2 && /^[0-9a-f]{40}$/u.test(candidate.revision) &&
         /^oci:\/\/ghcr\.io\/[a-z0-9][a-z0-9._/-]*@sha256:[0-9a-f]{64}$/u.test(candidate.application)) {
       bundled = candidate;
     }
@@ -382,8 +382,7 @@ function ensureLocalIdentityRealm(values) {
   return true;
 }
 
-function initialize({ suppressDeviceCaWarning = false, quiet = false, profiles = null, localIdentity = true } = {}) {
-  let createdRuntime = false;
+function prepareManagedRoots() {
   for (const [directory, label] of [
     [CONFIG_DIR, 'REVIVAL_CONFIG_DIR'],
     [SECRETS_DIR, 'REVIVAL_SECRETS_DIR'],
@@ -405,6 +404,11 @@ function initialize({ suppressDeviceCaWarning = false, quiet = false, profiles =
     [DATA_DIR, 'REVIVAL_DATA_DIR']
   ]) ensureManagedRoot(directory, label);
   secureDirectory(BUILD_DIR);
+}
+
+function initialize({ suppressDeviceCaWarning = false, quiet = false, profiles = null, localIdentity = true } = {}) {
+  let createdRuntime = false;
+  prepareManagedRoots();
   for (const directory of [
     ...(localIdentity ? [path.join(SECRETS_DIR, 'identity')] : []),
     ...(profiles === null
@@ -1012,7 +1016,6 @@ function operatorEnvironment(values) {
     ['NO_COLOR', (value) => value.length <= 32],
     ['TERM', (value) => /^[A-Za-z0-9._+-]{1,64}$/u.test(value)],
     ['REVIVAL_PIN_ENABLE_TEST_FIXTURES', (value) => value === '1'],
-    ['REVIVAL_PIN_RELEASE_OUTPUT_DIR', path.isAbsolute],
   ]) {
     const value = safeOptionalEnvironment(name, predicate);
     if (value !== undefined) env[name] = value;
@@ -1199,7 +1202,7 @@ module.exports = {
   COMPOSE_BASE,
   COMPOSE_DEVELOPMENT,
   PIN_RELEASE_BUILD_TOOL,
-  PIN_RELEASE_IMPORT_TOOL,
+  PIN_RELEASE_ACQUIRE_TOOL,
   PIN_RELEASE_EXPORT_TOOL,
   PIN_INSTALL_TOOL,
   PIN_DOCTOR_TOOL,
@@ -1222,6 +1225,7 @@ module.exports = {
   run,
   secureDirectory,
   atomicWrite,
+  prepareManagedRoots,
   initialize,
   parseEnvFile,
   validateRuntime,

@@ -10,7 +10,6 @@ import {
   rm,
   writeFile,
 } from "node:fs/promises";
-import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -21,18 +20,11 @@ import {
   parsePinReleaseReceiptBundle,
 } from "./release.mjs";
 import { validateReleaseStore } from "./validate-release-store.mjs";
+import { canonicalPinReleaseRoot } from "./release-store-path.mjs";
 
 const SELF_PATH = fileURLToPath(import.meta.url);
 
-function defaultReleaseRoot(environment = process.env) {
-  const data = resolve(
-    environment.REVIVAL_DATA_DIR ??
-      join(environment.XDG_DATA_HOME ?? join(homedir(), ".local", "share"), "ai-pin-revival"),
-  );
-  return resolve(environment.REVIVAL_PIN_RELEASE_OUTPUT_DIR ?? join(data, "pin-releases"));
-}
-
-export async function exportPinRelease({ output, releaseRoot = defaultReleaseRoot() }) {
+export async function exportPinRelease({ output, releaseRoot = canonicalPinReleaseRoot() }) {
   const target = resolve(output);
   const existing = await lstat(target).catch((error) => {
     if (error?.code === "ENOENT") return null;

@@ -45,6 +45,7 @@ import {
   parseCanonicalPinReleaseManifestDocument,
   parsePinReleaseJson,
 } from "./release.mjs";
+import { canonicalPinReleaseRoot } from "./release-store-path.mjs";
 
 const SELF_PATH = fileURLToPath(import.meta.url);
 const SOURCE_ROOT = resolve(dirname(SELF_PATH), "../../..");
@@ -228,11 +229,7 @@ const {
  * config file.
  */
 export function resolveReleaseStore(environment = process.env) {
-  const dataDir = resolve(
-    environment.REVIVAL_DATA_DIR ??
-      join(environment.XDG_DATA_HOME ?? join(homedir(), ".local", "share"), "ai-pin-revival"),
-  );
-  return resolve(environment.REVIVAL_PIN_RELEASE_OUTPUT_DIR ?? join(dataDir, "pin-releases"));
+  return canonicalPinReleaseRoot(environment);
 }
 
 async function sha256File(path) {

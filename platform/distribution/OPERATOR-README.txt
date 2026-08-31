@@ -27,9 +27,20 @@ If GHCR packages are private, first run:
 
   ./revival registry login --username GITHUB_USER
 
-Pin release archives are separate GitHub release assets. Import one with:
+When the pin profile is selected, production setup authenticates, acquires,
+verifies, and stages the exact signed Pin archive bound into this operator
+release. An explicit offline copy can be supplied with
+`--pin-release-archive FILE`. Verify the staged or active release with:
 
-  ./revival pin release import ai-pin-revival-pin-YYYY-MM-DD.N.tar.gz
+  ./revival pin release acquire --check
+
+For a private GitHub release, keep the read-only `GH_TOKEN` exported in this
+shell until `setup production` finishes. The token is sent only to GitHub's
+release API and is not written to the operator configuration.
+
+For an offline host, pass that exact archive through the same command:
+
+  ./revival pin release acquire --archive FILE
 
 Center then serves the verified five-APK set to its browser installer. Download
 the activation document from Center and run the exact `pin activate` plan and

@@ -27,6 +27,7 @@ import {
   parsePinReleaseReceiptBundle,
   verifyPinReleaseMetadata,
 } from "./release.mjs";
+import { canonicalPinReleaseRoot } from "./release-store-path.mjs";
 
 const SELF_PATH = fileURLToPath(import.meta.url);
 export const SOURCE_ROOT = resolve(dirname(SELF_PATH), "../../..");
@@ -163,7 +164,7 @@ export function defaultOperatorPaths(environment = process.env) {
     buildDir: resolve(environment.REVIVAL_BUILD_DIR ?? join(dataDir, "build")),
     signingEnvironment: join(secretsDir, "pin", "signing.env"),
     privateAssets: resolve(environment.REVIVAL_PIN_PRIVATE_ASSETS_DIR ?? join(configDir, "pin-assets")),
-    releaseRoot: resolve(environment.REVIVAL_PIN_RELEASE_OUTPUT_DIR ?? join(dataDir, "pin-releases")),
+    releaseRoot: canonicalPinReleaseRoot(environment),
   });
 }
 

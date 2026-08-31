@@ -19,16 +19,35 @@ function loadJson(file, label) {
 function operatorContract() {
   const contract = loadJson(CONTRACT_FILE, 'operator setup contract');
   if (contract.schemaVersion !== 1 || !Array.isArray(contract.commands) ||
-      !Array.isArray(contract.journeys) || !Array.isArray(contract.settings)) {
+      !Array.isArray(contract.journeys) || !Array.isArray(contract.settings) ||
+      contract.status?.schemaVersion !== 4 || !Array.isArray(contract.status.states) ||
+      !Array.isArray(contract.status.releaseCompatibility?.operatorFields) ||
+      !Array.isArray(contract.status.releaseCompatibility?.pinIdentityFields) ||
+      !Array.isArray(contract.status.releaseCompatibility?.observedPinFields)) {
     throw new Error(`${CONTRACT_FILE} is not a supported schema-version 1 contract`);
   }
   return contract;
 }
 
+function releaseCompatibility() {
+  return operatorContract().status.releaseCompatibility;
+}
+
+function pinReleaseIdentityMatches(left, right) {
+  if (!left || !right) return false;
+  return releaseCompatibility().pinIdentityFields.every((field) => left[field] === right[field]);
+}
+
 function versionInfo() {
   const version = loadJson(VERSION_FILE, 'version descriptor');
-  if (version.schemaVersion !== 1 || typeof version.version !== 'string' || !version.version) {
-    throw new Error(`${VERSION_FILE} is not a supported schema-version 1 descriptor`);
+  const sourceCheckout = version?.kind === 'source-checkout';
+  const fields = version && typeof version === 'object' && !Array.isArray(version)
+    ? Object.keys(version).sort().join('\0') : '';
+  if (typeof version.version !== 'string' || !version.version ||
+      (sourceCheckout
+        ? fields !== 'application\0kind\0revision\0version' || version.revision !== 'source' || version.application !== null
+        : version.schemaVersion !== 2)) {
+    throw new Error(`${VERSION_FILE} is not a supported version descriptor`);
   }
   const revision = version.revision ?? 'source';
   const application = version.application ?? null;
@@ -40,11 +59,41 @@ function versionInfo() {
     throw new Error(`${VERSION_FILE} has an invalid OCI application reference`);
   }
   const contract = operatorContract();
+  let source = null;
+  let pin = null;
+  if (!sourceCheckout) {
+    if (fields !== 'application\0pin\0revision\0schemaVersion\0source\0version') {
+      throw new Error(`${VERSION_FILE} contains missing or unexpected published release fields`);
+    }
+    source = version.source;
+    pin = version.pin;
+    const sourceFields = source && typeof source === 'object' && !Array.isArray(source)
+      ? Object.keys(source).sort() : [];
+    const pinFields = pin && typeof pin === 'object' && !Array.isArray(pin)
+      ? Object.keys(pin).sort() : [];
+    if (sourceFields.join('\0') !== 'repository\0tag' ||
+        !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(source.repository) ||
+        source.tag !== `v${version.version}` ||
+        pinFields.join('\0') !== [
+          'archive', 'manifestSha256', 'receiptsSha256', 'releaseId', 'schemaVersion',
+          'sha256', 'signerSha256', 'size', 'version', 'versionCode',
+        ].sort().join('\0') || pin.schemaVersion !== 1 ||
+        pin.archive !== `ai-pin-revival-pin-${pin.version}.tar.gz` ||
+        !/^\d{4}-\d{2}-\d{2}\.\d+$/u.test(pin.version) ||
+        !Number.isSafeInteger(pin.size) || pin.size < 1 ||
+        !Number.isSafeInteger(pin.versionCode) || pin.versionCode < 1 ||
+        ['sha256', 'releaseId', 'signerSha256', 'manifestSha256', 'receiptsSha256']
+          .some((field) => !/^[0-9a-f]{64}$/u.test(pin[field]))) {
+      throw new Error(`${VERSION_FILE} has invalid matching Pin release metadata`);
+    }
+  }
   return Object.freeze({
     product: 'Ai Pin Revival',
     version: version.version,
     revision,
     application,
+    source,
+    pin,
     contractVersion: contract.contractVersion,
   });
 }
@@ -132,7 +181,7 @@ const DETAILS = Object.freeze({
   'pin.install': 'Without --confirm this resolves the exact serial and release, prints a plan, and leaves the device untouched.',
   'pin.build-debug': 'Credential-free and non-installable. Select roles with repeated --role, or use --changed [--base REF]. Reuses the pinned linux/amd64 builder and external build caches; every role refuses release signing inputs.',
   'pin.release.build': 'Usage: revival pin release build --version YYYY-MM-DD.N --version-code INTEGER. Builds the signed five-APK release into the external store mounted by Center. It never runs ADB or mutates a device.',
-  'pin.release.import': 'Usage: revival pin release import ARCHIVE [--json]. Verifies the archive layout, signer receipt, manifest, and all five APK digests before atomically publishing it to Center.',
+  'pin.release.acquire': 'Usage: revival pin release acquire [--archive FILE | --check] [--json]. Authenticates and downloads only this operator release’s exact archive, or verifies an explicit offline copy; both paths verify size, SHA-256, internal identity, signer, and APKs before staging outside Center.',
   'pin.release.export': 'Usage: revival pin release export --output ARCHIVE [--json]. Exports the current verified five-APK release for publication.',
 });
 
@@ -184,7 +233,7 @@ function renderRootHelp(contract) {
     '',
     'Short local aliases: build, up, down, status, logs, config.',
     'Pin host operations (no device mutation) are under `revival pin`; device actions plan unless explicitly confirmed.',
-    '  revival pin release import ARCHIVE',
+    '  revival pin release acquire',
     '',
     'Safety: help is read-only and side-effect-free. Each command help names whether it reads state or mutates local, remote, or device state.',
     '',
@@ -198,7 +247,7 @@ function renderGroupHelp(tokens, contract) {
   const heading = tokens.join(' ');
   const defaultCommand = findCommand(tokens, contract)?.command || null;
   const notes = [];
-  if (heading === 'pin release') notes.push('Build creates a signed release; import publishes a verified archive to Center.');
+  if (heading === 'pin release') notes.push('Acquire publishes only this operator release’s exact signed archive.');
   if (heading === 'config') notes.push('Bare `revival config` renders the Compose model.');
   if (heading === 'pin') notes.push('Device mutation requires an exact serial and explicit confirmation in the delegated tool.');
   return [
@@ -251,6 +300,8 @@ module.exports = {
   CONTRACT_FILE,
   VERSION_FILE,
   operatorContract,
+  releaseCompatibility,
+  pinReleaseIdentityMatches,
   versionInfo,
   findCommand,
   isGroup,

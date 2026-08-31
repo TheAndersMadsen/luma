@@ -49,6 +49,128 @@ jobs:
       - name: Validate release and platform policies
         run: ./revival check platform --full
 
+  pin-release:
+    name: build exact signed Pin release
+    needs: coordinates
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22.14.0
+          package-manager-cache: false
+      - name: Materialize protected signing inputs
+        env:
+          PIN_COMPATIBILITY_KEYSTORE_BASE64: ${{ secrets.PIN_COMPATIBILITY_KEYSTORE_BASE64 }}
+          PIN_SIGNING_STORE_PASSWORD: ${{ secrets.PIN_SIGNING_STORE_PASSWORD }}
+          PIN_SIGNING_KEY_ALIAS: ${{ secrets.PIN_SIGNING_KEY_ALIAS }}
+          PIN_SIGNING_KEY_PASSWORD: ${{ secrets.PIN_SIGNING_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { mkdirSync, writeFileSync } from "node:fs";
+          import { join } from "node:path";
+          const required = [
+            "PIN_COMPATIBILITY_KEYSTORE_BASE64",
+            "PIN_SIGNING_STORE_PASSWORD",
+            "PIN_SIGNING_KEY_ALIAS",
+            "PIN_SIGNING_KEY_PASSWORD",
+          ];
+          for (const name of required) {
+            if (!process.env[name]) throw new Error(`protected release input ${name} is not configured`);
+          }
+          const root = join(process.env.RUNNER_TEMP, "pin-release-inputs");
+          const privateRoot = join(root, "pin-assets", "tflite-2.11.0");
+          mkdirSync(privateRoot, { recursive: true, mode: 0o700 });
+          const compatibility = join(root, "compatibility.keystore");
+          writeFileSync(compatibility, Buffer.from(process.env.PIN_COMPATIBILITY_KEYSTORE_BASE64, "base64"), { mode: 0o600 });
+          const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
+          writeFileSync(join(root, "signing.env"), [
+            `export PIN_SIGNING_STORE_FILE=${quote(compatibility)}`,
+            `export PIN_SIGNING_STORE_PASSWORD=${quote(process.env.PIN_SIGNING_STORE_PASSWORD)}`,
+            `export PIN_SIGNING_KEY_ALIAS=${quote(process.env.PIN_SIGNING_KEY_ALIAS)}`,
+            `export PIN_SIGNING_KEY_PASSWORD=${quote(process.env.PIN_SIGNING_KEY_PASSWORD)}`,
+            "",
+          ].join("\n"), { mode: 0o600 });
+          NODE
+      - name: Recover the pinned private native build input
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          coordinates="platform/distribution/pin-release-coordinates.json"
+          source_repository="$(node -p "require('./$coordinates').privateAssetSource.repository")"
+          source_tag="$(node -p "require('./$coordinates').privateAssetSource.tag")"
+          source_archive="$(node -p "require('./$coordinates').privateAssetSource.archive")"
+          source_size="$(node -p "require('./$coordinates').privateAssetSource.size")"
+          source_sha256="$(node -p "require('./$coordinates').privateAssetSource.sha256")"
+          installer_member="$(node -p "require('./$coordinates').privateAssetSource.installerMember")"
+          server_member="$(node -p "require('./$coordinates').privateAssetSource.serverMember")"
+          library_member="$(node -p "require('./$coordinates').privateAssetSource.libraryMember")"
+          archive="$RUNNER_TEMP/pin-release-inputs/$source_archive"
+          installer_apk="$RUNNER_TEMP/pin-release-inputs/installer.apk"
+          server_apk="$RUNNER_TEMP/pin-release-inputs/server.apk"
+          embedded_keystore="$RUNNER_TEMP/pin-release-inputs/embedded-patch.keystore"
+          asset="$RUNNER_TEMP/pin-release-inputs/pin-assets/tflite-2.11.0/libtensorflowlite_jni.so"
+          gh release download "$source_tag" \
+            --repo "$source_repository" \
+            --pattern "$source_archive" \
+            --dir "$RUNNER_TEMP/pin-release-inputs"
+          test "$(stat --format='%s' "$archive")" = "$source_size"
+          printf '%s  %s\n' "$source_sha256" "$archive" | sha256sum --check --status
+          tar --extract --gzip --to-stdout --file "$archive" "$installer_member" > "$installer_apk"
+          tar --extract --gzip --to-stdout --file "$archive" "$server_member" > "$server_apk"
+          unzip -p "$installer_apk" 'assets/abxdroppedapk-private-key.pk8' > "$RUNNER_TEMP/pin-release-inputs/embedded-key.der"
+          unzip -p "$installer_apk" 'assets/abxdroppedapk-certificate.der' > "$RUNNER_TEMP/pin-release-inputs/embedded-cert.der"
+          openssl pkey -inform DER -in "$RUNNER_TEMP/pin-release-inputs/embedded-key.der" \
+            -out "$RUNNER_TEMP/pin-release-inputs/embedded-key.pem"
+          openssl x509 -inform DER -in "$RUNNER_TEMP/pin-release-inputs/embedded-cert.der" \
+            -out "$RUNNER_TEMP/pin-release-inputs/embedded-cert.pem"
+          openssl pkcs12 -export \
+            -in "$RUNNER_TEMP/pin-release-inputs/embedded-cert.pem" \
+            -inkey "$RUNNER_TEMP/pin-release-inputs/embedded-key.pem" \
+            -out "$embedded_keystore" -name abxdroppedapk -passout pass:abxdroppedapk
+          unzip -p "$server_apk" "$library_member" > "$asset"
+          printf '%s  %s\n' \
+            '8e2acc968c1a2c6b92a641fe016a2f75de0bfde87548cba9972bcc36905f57ea' \
+            "$asset" | sha256sum --check --status
+          chmod 0600 "$installer_apk" "$server_apk" "$embedded_keystore" "$asset"
+      - name: Build, verify, and export the signed Pin archive
+        env:
+          REVIVAL_CONFIG_DIR: ${{ runner.temp }}/pin-release-config
+          REVIVAL_SECRETS_DIR: ${{ runner.temp }}/pin-release-secrets
+          REVIVAL_DATA_DIR: ${{ runner.temp }}/pin-release-data
+          REVIVAL_BUILD_DIR: ${{ runner.temp }}/pin-release-build
+          REVIVAL_PIN_SIGNING_STORE_FILE: ${{ runner.temp }}/pin-release-inputs/compatibility.keystore
+          REVIVAL_PIN_EMBEDDED_PATCH_SIGNING_STORE_FILE: ${{ runner.temp }}/pin-release-inputs/embedded-patch.keystore
+          REVIVAL_PIN_PRIVATE_ASSETS_DIR: ${{ runner.temp }}/pin-release-inputs/pin-assets
+        run: |
+          set -euo pipefail
+          coordinates="platform/distribution/pin-release-coordinates.json"
+          pin_version="$(node -p "require('./$coordinates').version")"
+          pin_version_code="$(node -p "require('./$coordinates').versionCode")"
+          mkdir -p "$REVIVAL_SECRETS_DIR/pin" "$REVIVAL_DATA_DIR" "$REVIVAL_BUILD_DIR"
+          install -m 0600 "$RUNNER_TEMP/pin-release-inputs/signing.env" "$REVIVAL_SECRETS_DIR/pin/signing.env"
+          node platform/deploy/pin/build.mjs build \
+            --version "$pin_version" --version-code "$pin_version_code" --json
+          mkdir -p "$RUNNER_TEMP/release-pin"
+          archive="$RUNNER_TEMP/release-pin/ai-pin-revival-pin-$pin_version.tar.gz"
+          node platform/deploy/pin/export-release.mjs --output "$archive" --json
+          PIN_ARCHIVE="$archive" node --input-type=module <<'NODE'
+          import { describePinReleaseArchive } from "./platform/deploy/pin/import-release.mjs";
+          await describePinReleaseArchive({ archive: process.env.PIN_ARCHIVE });
+          NODE
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: release-pin
+          path: ${{ runner.temp }}/release-pin/
+          if-no-files-found: error
+          retention-days: 2
+
   images:
     name: publish ${{ matrix.name }} linux/amd64 + linux/arm64
     needs: coordinates
@@ -236,10 +358,11 @@ jobs:
 
   operator-release:
     name: publish lean operator release asset
-    needs: [coordinates, application]
+    needs: [coordinates, application, pin-release]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+      id-token: write
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -248,6 +371,9 @@ jobs:
         with:
           node-version: 22.14.0
           package-manager-cache: false
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.3
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           pattern: release-*
@@ -262,21 +388,69 @@ jobs:
         run: |
           set -euo pipefail
           output="$RUNNER_TEMP/operator-release"
+          pin_version="$(node -p "require('./platform/distribution/pin-release-coordinates.json').version")"
           node platform/distribution/build.mjs \
             --version "$RELEASE_VERSION" \
             --revision "$RELEASE_REVISION" \
             --repository "$SOURCE_REPOSITORY" \
             --tag "$RELEASE_TAG" \
             --receipts "$RUNNER_TEMP/release-receipts" \
+            --pin-archive "$RUNNER_TEMP/release-receipts/ai-pin-revival-pin-$pin_version.tar.gz" \
             --output "$output"
           (cd "$output" && sha256sum --check SHA256SUMS)
+      - name: Sign and verify the canonical release descriptor
+        env:
+          RELEASE_VERSION: ${{ needs.coordinates.outputs.version }}
+        run: |
+          set -euo pipefail
+          output="$RUNNER_TEMP/operator-release"
+          descriptor="$output/ai-pin-revival-$RELEASE_VERSION.release.json"
+          bundle="$output/ai-pin-revival-$RELEASE_VERSION.release.sigstore.json"
+          identity="https://github.com/$GITHUB_REPOSITORY/.github/workflows/release-cli.yml@$GITHUB_REF"
+          cosign sign-blob --yes --bundle "$bundle" "$descriptor"
+          cosign verify-blob \
+            --bundle "$bundle" \
+            --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+            --certificate-identity "$identity" \
+            --certificate-github-workflow-repository "$GITHUB_REPOSITORY" \
+            --certificate-github-workflow-name 'immutable release' \
+            --certificate-github-workflow-ref "$GITHUB_REF" \
+            --certificate-github-workflow-trigger push \
+            "$descriptor"
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: ai-pin-revival-operator-${{ needs.coordinates.outputs.version }}
           path: ${{ runner.temp }}/operator-release/
           if-no-files-found: error
           retention-days: 14
-      - name: Create the immutable GitHub release
+      - name: Create or reset the draft GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_VERSION: ${{ needs.coordinates.outputs.version }}
+        run: |
+          set -euo pipefail
+          if release_state="$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft 2>/dev/null)"; then
+            test "$release_state" = true || {
+              echo "release $RELEASE_TAG is already published and cannot be replaced" >&2
+              exit 1
+            }
+            gh release edit "$RELEASE_TAG" \
+              --verify-tag \
+              --draft \
+              --title "Ai Pin Revival $RELEASE_VERSION"
+          else
+            gh release create "$RELEASE_TAG" \
+              --verify-tag \
+              --draft \
+              --title "Ai Pin Revival $RELEASE_VERSION" \
+              --generate-notes
+          fi
+          gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft' | grep -Fx true
+          gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' | while IFS= read -r asset; do
+            gh release delete-asset "$RELEASE_TAG" "$asset" --yes
+          done
+      - name: Upload every release asset to the draft
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
@@ -284,10 +458,37 @@ jobs:
         run: |
           set -euo pipefail
           output="$RUNNER_TEMP/operator-release"
-          gh release create "$RELEASE_TAG" \
-            --verify-tag \
-            --title "Ai Pin Revival $RELEASE_VERSION" \
-            --generate-notes \
+          pin_version="$(node -p "require('./platform/distribution/pin-release-coordinates.json').version")"
+          gh release upload "$RELEASE_TAG" \
             "$output/ai-pin-revival-operator-$RELEASE_VERSION-linux.tar.gz" \
+            "$output/ai-pin-revival-pin-$pin_version.tar.gz" \
             "$output/ai-pin-revival-$RELEASE_VERSION.release.json" \
+            "$output/ai-pin-revival-$RELEASE_VERSION.release.sigstore.json" \
             "$output/SHA256SUMS"
+      - name: Verify the exact remote assets and publish atomically
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_VERSION: ${{ needs.coordinates.outputs.version }}
+        run: |
+          set -euo pipefail
+          output="$RUNNER_TEMP/operator-release"
+          verification="$RUNNER_TEMP/release-verification"
+          pin_version="$(node -p "require('./platform/distribution/pin-release-coordinates.json').version")"
+          asset_names=(
+            "ai-pin-revival-operator-$RELEASE_VERSION-linux.tar.gz"
+            "ai-pin-revival-pin-$pin_version.tar.gz"
+            "ai-pin-revival-$RELEASE_VERSION.release.json"
+            "ai-pin-revival-$RELEASE_VERSION.release.sigstore.json"
+            "SHA256SUMS"
+          )
+          mkdir "$verification"
+          gh release download "$RELEASE_TAG" --dir "$verification"
+          diff --unified=0 \
+            <(printf '%s\n' "${asset_names[@]}" | LC_ALL=C sort) \
+            <(find "$verification" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
+          (cd "$output" && sha256sum "${asset_names[@]}") > "$RUNNER_TEMP/release-expected.sha256"
+          (cd "$verification" && sha256sum --check "$RUNNER_TEMP/release-expected.sha256")
+          gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft' | grep -Fx true
+          gh release edit "$RELEASE_TAG" --draft=false
+          gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft' | grep -Fx false

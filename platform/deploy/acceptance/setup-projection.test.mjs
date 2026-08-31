@@ -64,7 +64,33 @@ test("Center's committed setup projection matches the root contract", async () =
     model,
     /(?:from|import\()\s*["'][^"']*contracts\/operator-setup\.json/,
   );
-  assert.match(generated, /\.\/revival pin release import/);
+  assert.match(generated, /\.\/revival pin release acquire/);
+  assert.doesNotMatch(generated, /\.\/revival pin release import/);
   assert.doesNotMatch(generated, /pin release (?:build|ship)/);
   assert.match(generated, /"centerRoute": "\/wifi"/);
+});
+
+test("the setup status envelope and every state are canonical contract data", async () => {
+  const contract = JSON.parse(await readFile(
+    new URL("../../../contracts/operator-setup.json", import.meta.url),
+    "utf8",
+  ));
+  assert.deepEqual(contract.status.envelope.requiredFields, [
+    "schemaVersion", "contract", "state", "mode", "ok", "nextCommandId", "next", "release",
+  ]);
+  assert.deepEqual(contract.status.envelope.optionalFields, ["problem"]);
+  assert.deepEqual(contract.status.states.map((state) => state.id), [
+    "uninitialized", "local-ready", "local-invalid", "production-ready", "production-invalid",
+  ]);
+  assert.deepEqual(contract.status.releaseCompatibility.pinIdentityFields, [
+    "version", "versionCode", "releaseId", "manifestSha256",
+  ]);
+  assert.deepEqual(contract.status.releaseCompatibility.observedPinFields, [
+    "schemaVersion", "compatible", "acquired", "activated", "active", "staged",
+    "version", "versionCode", "releaseId", "manifestSha256",
+  ]);
+  assert.deepEqual(contract.status.releaseCompatibility.profileDisabled, {
+    observed: null,
+    compatible: null,
+  });
 });

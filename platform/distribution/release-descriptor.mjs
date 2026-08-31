@@ -15,6 +15,8 @@ const VERSION = /^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$/u;
 const REVISION = /^[0-9a-f]{40}$/u;
 const REPOSITORY = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u;
 const REGISTRY_PATH = /^ghcr\.io\/[a-z0-9](?:[a-z0-9._/-]*[a-z0-9])?$/u;
+const SHA256 = /^[0-9a-f]{64}$/u;
+const PIN_VERSION = /^\d{4}-\d{2}-\d{2}\.\d+$/u;
 
 function exactFields(value, expected, label) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -94,6 +96,36 @@ export async function loadReleaseInputs(directory) {
   return Object.freeze({ application, images });
 }
 
+export function validatePinPayload(value) {
+  exactFields(value, [
+    "schemaVersion",
+    "archive",
+    "sha256",
+    "size",
+    "releaseId",
+    "version",
+    "versionCode",
+    "signerSha256",
+    "manifestSha256",
+    "receiptsSha256",
+  ], "Pin payload");
+  if (value.schemaVersion !== 1) throw new Error("Pin payload schemaVersion must be 1");
+  required(value.version, PIN_VERSION, "Pin release version");
+  if (value.archive !== `ai-pin-revival-pin-${value.version}.tar.gz`) {
+    throw new Error("Pin archive name does not match its internal release version");
+  }
+  for (const field of ["sha256", "releaseId", "signerSha256", "manifestSha256", "receiptsSha256"]) {
+    required(value[field], SHA256, `Pin ${field}`);
+  }
+  if (!Number.isSafeInteger(value.size) || value.size < 1 || value.size > 3 * 1024 * 1024 * 1024) {
+    throw new Error("Pin archive size is invalid");
+  }
+  if (!Number.isSafeInteger(value.versionCode) || value.versionCode < 1 || value.versionCode > 2_147_483_647) {
+    throw new Error("Pin versionCode is invalid");
+  }
+  return Object.freeze({ ...value });
+}
+
 export function createReleaseDescriptor({
   version,
   revision,
@@ -102,6 +134,7 @@ export function createReleaseDescriptor({
   application,
   images,
   operator,
+  pin,
 }) {
   required(version, VERSION, "release version");
   required(revision, REVISION, "release revision");
@@ -111,13 +144,17 @@ export function createReleaseDescriptor({
   const normalizedImages = {};
   exactFields(images, IMAGE_NAMES, "release images");
   for (const name of IMAGE_NAMES) normalizedImages[name] = validateImageReceipt(images[name], name);
-  exactFields(operator, ["archive", "sha256"], "operator payload");
+  exactFields(operator, ["archive", "sha256", "size"], "operator payload");
   if (operator.archive !== `ai-pin-revival-operator-${version}-linux.tar.gz`) {
     throw new Error("operator archive name does not match the release version");
   }
   required(operator.sha256, /^[0-9a-f]{64}$/u, "operator archive sha256");
+  if (!Number.isSafeInteger(operator.size) || operator.size < 1 || operator.size > 2 * 1024 * 1024 * 1024) {
+    throw new Error("operator archive size is invalid");
+  }
+  const normalizedPin = validatePinPayload(pin);
   return Object.freeze({
-    schemaVersion: 2,
+    schemaVersion: 3,
     product: "Ai Pin Revival",
     version,
     revision,
@@ -126,6 +163,40 @@ export function createReleaseDescriptor({
     application,
     images: Object.freeze(normalizedImages),
     operator: Object.freeze({ ...operator }),
+    pin: normalizedPin,
+  });
+}
+
+export function validateReleaseDescriptor(value) {
+  exactFields(value, [
+    "schemaVersion",
+    "product",
+    "version",
+    "revision",
+    "source",
+    "platforms",
+    "application",
+    "images",
+    "operator",
+    "pin",
+  ], "release descriptor");
+  if (value.schemaVersion !== 3) throw new Error("release descriptor schemaVersion must be 3");
+  if (value.product !== "Ai Pin Revival") throw new Error("release descriptor product is invalid");
+  exactFields(value.source, ["repository", "tag"], "release source");
+  if (!Array.isArray(value.platforms) ||
+      value.platforms.length !== IMAGE_PLATFORMS.length ||
+      value.platforms.some((platform, index) => platform !== IMAGE_PLATFORMS[index])) {
+    throw new Error("release descriptor platforms must be linux/amd64 and linux/arm64");
+  }
+  return createReleaseDescriptor({
+    version: value.version,
+    revision: value.revision,
+    repository: value.source.repository,
+    tag: value.source.tag,
+    application: value.application,
+    images: value.images,
+    operator: value.operator,
+    pin: value.pin,
   });
 }
 

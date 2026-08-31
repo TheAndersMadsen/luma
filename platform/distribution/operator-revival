@@ -12,14 +12,14 @@ if (nodeMajor !== 22 || nodeMinor < 14) {
 const HELP = `Ai Pin Revival operator CLI
 
 Usage:
-  ./revival setup production --domain HOST --acme-email EMAIL --operator-email EMAIL [--profile NAME ...]
+  ./revival setup production --domain HOST --acme-email EMAIL --operator-email EMAIL [--pin-release-archive FILE] [--profile NAME ...]
   ./revival setup status [--json]
   ./revival registry login --username GITHUB_USER
   ./revival doctor production [options]
   ./revival deploy production (--dry-run | --confirm) [options]
   ./revival verify production [options]
   ./revival eval assistant production [--repeat N] [--case ID] [--json] [options]
-  ./revival pin release import ARCHIVE [--json]
+  ./revival pin release acquire [--archive FILE | --check] [--json]
   ./revival pin activate --serial SERIAL --credential-file FILE --edge-ipv4 A.B.C.D [--confirm]
   ./revival pin activate status --serial SERIAL
   ./revival config path|get|set|check|list|template [options]
@@ -58,7 +58,7 @@ if (rawArgs[0] === '--version' || rawArgs[0] === 'version') {
 
 const {
   PIN_ACTIVATION_TOOL,
-  PIN_RELEASE_IMPORT_TOOL,
+  PIN_RELEASE_ACQUIRE_TOOL,
   fail,
   resolveTool,
   run,
@@ -81,8 +81,8 @@ runTimedBoundary(() => {
   else if (command === 'eval') evaluateAssistant(args);
   else if (command === 'config') configCommand(args);
   else if (command === 'support-bundle') supportBundleCommand(args);
-  else if (command === 'pin' && args[0] === 'release' && args[1] === 'import') {
-    run(resolveTool('node'), [PIN_RELEASE_IMPORT_TOOL, ...args.slice(2)]);
+  else if (command === 'pin' && args[0] === 'release' && args[1] === 'acquire') {
+    run(resolveTool('node'), [PIN_RELEASE_ACQUIRE_TOOL, ...args.slice(2)]);
   } else if (command === 'pin' && args[0] === 'activate') {
     run(resolveTool('node'), [PIN_ACTIVATION_TOOL, ...args.slice(1)]);
   } else fail(`unsupported operator command: ${rawArgs.join(' ')}`, 64);

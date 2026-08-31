@@ -61,5 +61,12 @@ fi
 # preflight, so there is no second prompt that could print interpolated secrets.
 docker compose "${compose[@]}" "${up[@]}"
 docker compose "${compose[@]}" ps
+if [[ ",${COMPOSE_PROFILES:-}," == *,pin,* ]]; then
+  # Setup leaves the descriptor-bound Pin bundle in an owner-only staging
+  # namespace. The new Center fails closed while the old pointer is active;
+  # switch it only after Compose reports the exact new services ready, then run
+  # one complete verification over the combined server-and-Pin release.
+  node "$ROOT/platform/deploy/pin/acquire-release.mjs" --activate --json
+fi
 "$SCRIPT_DIR/verify.sh" --env-file "$env_file" --project-name "$project_name"
 printf 'Cosmos deployment %s passed production verification.\n' "$REVIVAL_RELEASE_ID"

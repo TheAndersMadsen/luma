@@ -24,6 +24,7 @@ import {
   createReleaseDescriptor,
   loadReleaseInputs,
 } from "./release-descriptor.mjs";
+import { describePinReleaseArchive } from "../deploy/pin/import-release.mjs";
 
 const SCRIPT = fileURLToPath(import.meta.url);
 const DEFAULT_ROOT = resolve(dirname(SCRIPT), "../..");
@@ -42,10 +43,14 @@ const FILES = Object.freeze([
   ["platform/cli/support-bundle.js", "platform/cli/support-bundle.js", 0o644],
   ["platform/cli/timing.js", "platform/cli/timing.js", 0o644],
   ["platform/deploy/pin/release.mjs", "platform/deploy/pin/release.mjs", 0o644],
+  ["platform/deploy/pin/release-store-path.mjs", "platform/deploy/pin/release-store-path.mjs", 0o644],
   ["platform/deploy/pin/device-target-guard.mjs", "platform/deploy/pin/device-target-guard.mjs", 0o644],
   ["platform/deploy/pin/activate.mjs", "platform/deploy/pin/activate.mjs", 0o755],
-  ["platform/deploy/pin/import-release.mjs", "platform/deploy/pin/import-release.mjs", 0o755],
+  ["platform/deploy/pin/acquire-release.mjs", "platform/deploy/pin/acquire-release.mjs", 0o755],
+  ["platform/deploy/pin/import-release.mjs", "platform/deploy/pin/import-release.mjs", 0o644],
   ["platform/deploy/pin/validate-release-store.mjs", "platform/deploy/pin/validate-release-store.mjs", 0o755],
+  ["platform/distribution/release-descriptor.mjs", "platform/distribution/release-descriptor.mjs", 0o644],
+  ["platform/distribution/release-proof.mjs", "platform/distribution/release-proof.mjs", 0o755],
   ["platform/deploy/vps/deploy.sh", "platform/deploy/vps/deploy.sh", 0o755],
   ["platform/deploy/vps/assistant-eval.mjs", "platform/deploy/vps/assistant-eval.mjs", 0o755],
   ["platform/deploy/vps/preflight.sh", "platform/deploy/vps/preflight.sh", 0o755],
@@ -112,6 +117,7 @@ function parseArguments(argv) {
     ["--repository", "repository"],
     ["--tag", "tag"],
     ["--receipts", "receipts"],
+    ["--pin-archive", "pinArchive"],
     ["--output", "output"],
     ["--root", "root"],
   ]);
@@ -124,7 +130,7 @@ function parseArguments(argv) {
     result[name] = value;
     index += 1;
   }
-  for (const required of ["version", "revision", "repository", "tag", "receipts", "output"]) {
+  for (const required of ["version", "revision", "repository", "tag", "receipts", "pinArchive", "output"]) {
     if (!result[required]) throw new Error(`--${required} is required`);
   }
   return result;
@@ -144,7 +150,12 @@ export async function buildOperatorBundle(options) {
   const descriptorName = `ai-pin-revival-${options.version}.release.json`;
   const descriptorPath = join(output, descriptorName);
   const checksumsPath = join(output, "SHA256SUMS");
-  for (const target of [archive, descriptorPath, checksumsPath]) {
+  const pin = await describePinReleaseArchive({
+    archive: resolve(options.pinArchive),
+    expectedSigner: options.expectedPinSigner,
+  });
+  const pinArchive = join(output, pin.archive);
+  for (const target of [archive, descriptorPath, checksumsPath, pinArchive]) {
     try {
       await lstat(target);
       throw new Error(`refusing to replace release output: ${target}`);
@@ -163,10 +174,12 @@ export async function buildOperatorBundle(options) {
     }
     const release = await loadReleaseInputs(resolve(options.receipts));
     const version = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       version: options.version,
       revision: options.revision,
       application: release.application.reference,
+      source: { repository: options.repository, tag: options.tag },
+      pin,
     };
     const versionPath = join(stage, "platform/distribution/version.json");
     await mkdir(dirname(versionPath), { recursive: true });
@@ -178,19 +191,23 @@ export async function buildOperatorBundle(options) {
       archive: archiveTemporary,
     });
     await rename(archiveTemporary, archive);
-    const archiveSha256 = sha256(await readFile(archive));
+    const archiveBytes = await readFile(archive);
+    const archiveSha256 = sha256(archiveBytes);
     const descriptor = createReleaseDescriptor({
       version: options.version,
       revision: options.revision,
       repository: options.repository,
       tag: options.tag,
       ...release,
-      operator: { archive: archiveName, sha256: archiveSha256 },
+      operator: { archive: archiveName, sha256: archiveSha256, size: archiveBytes.length },
+      pin,
     });
     const descriptorBytes = `${canonicalJson(descriptor)}\n`;
     await writeFile(descriptorPath, descriptorBytes, { mode: 0o644, flag: "wx" });
+    await copyRegular(resolve(options.pinArchive), pinArchive, 0o644);
     const rows = [
       `${archiveSha256}  ${archiveName}`,
+      `${pin.sha256}  ${pin.archive}`,
       `${sha256(descriptorBytes)}  ${descriptorName}`,
     ].sort();
     await writeFile(checksumsPath, `${rows.join("\n")}\n`, { mode: 0o644, flag: "wx" });

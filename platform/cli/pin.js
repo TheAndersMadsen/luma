@@ -6,7 +6,7 @@
 const fs = require('node:fs');
 
 const {
-  PIN_RELEASE_BUILD_TOOL, PIN_RELEASE_IMPORT_TOOL, PIN_RELEASE_EXPORT_TOOL,
+  PIN_RELEASE_BUILD_TOOL, PIN_RELEASE_ACQUIRE_TOOL, PIN_RELEASE_EXPORT_TOOL,
   PIN_INSTALL_TOOL, PIN_DOCTOR_TOOL,
   PIN_ACTIVATION_TOOL, PIN_NETWORK_TOOL, ENV_FILE, fail, operatorEnvironment, parseEnvFile, resolveTool, run,
 } = require('./context');
@@ -32,11 +32,11 @@ function pinCommand(args) {
     const operation = args[0];
     const tools = {
       build: PIN_RELEASE_BUILD_TOOL,
-      import: PIN_RELEASE_IMPORT_TOOL,
+      acquire: PIN_RELEASE_ACQUIRE_TOOL,
       export: PIN_RELEASE_EXPORT_TOOL,
     };
     if (!tools[operation]) {
-      fail('usage: ./revival pin release build ... | import ARCHIVE [--json] | export --output ARCHIVE [--json]', 64);
+      fail('usage: ./revival pin release build ... | acquire [--archive FILE | --check] [--json] | export --output ARCHIVE [--json]', 64);
     }
     run(resolveTool('node'), [tools[operation], ...(operation === 'build' ? args : args.slice(1))]);
     return null;
@@ -64,7 +64,7 @@ function pinCommand(args) {
     return null;
   }
   fail(
-    'usage: ./revival pin doctor | check | build-debug --role ROLE [--role ROLE] | build-debug --changed [--base REF] | release build|import|export ... |\n' +
+    'usage: ./revival pin doctor | check | build-debug --role ROLE [--role ROLE] | build-debug --changed [--base REF] | release build|acquire|export ... |\n' +
     '              install [--confirm] [--serial SERIAL] | activate ... | network ...\n' +
     '       `install` without --confirm only plans and leaves the device untouched;\n' +
     '       `install --confirm` modifies the connected Pin. See `./revival pin install --help`.',

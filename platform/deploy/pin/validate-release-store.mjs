@@ -6,7 +6,10 @@ import { open, readFile, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { pipeline } from "node:stream/promises";
 
-import { parseCanonicalPinReleaseManifestDocument } from "./release.mjs";
+import {
+  canonicalPinReleaseManifestJson,
+  parseCanonicalPinReleaseManifestDocument,
+} from "./release.mjs";
 
 const APK_HEADER = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
 
@@ -64,12 +67,14 @@ export async function validateReleaseStore(storeRoot) {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === resolve(import.meta.filename)) {
-  if (process.argv.length !== 3) {
-    process.stderr.write("usage: validate-release-store.mjs STORE_ROOT\n");
+  const json = process.argv[3] === "--json";
+  if (process.argv.length !== (json ? 4 : 3)) {
+    process.stderr.write("usage: validate-release-store.mjs STORE_ROOT [--json]\n");
     process.exitCode = 64;
   } else {
     try {
-      await validateReleaseStore(process.argv[2]);
+      const manifest = await validateReleaseStore(process.argv[2]);
+      if (json) process.stdout.write(canonicalPinReleaseManifestJson(manifest));
     } catch (error) {
       process.stderr.write(`${error.message}\n`);
       process.exitCode = 1;

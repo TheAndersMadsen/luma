@@ -26,6 +26,7 @@ setLogSinkForTests(() => undefined);
 
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 let storeSequence = 0;
+const expectedReleaseByRoot = new Map();
 
 async function createStore(context, {
   seed = `current-${storeSequence += 1}`,
@@ -72,13 +73,24 @@ async function createStore(context, {
   ));
   await writeFile(path.join(releaseDirectory, "manifest.json"), document);
   await writeFile(path.join(root, "current.json"), document);
+  expectedReleaseByRoot.set(root, {
+    releaseId,
+    manifestSha256: sha256(document),
+  });
   return { root, releaseDirectory, releaseId, manifest, document, bytesByRole };
 }
 
-const environment = (root, setupOrigin) => ({
-  REVIVAL_PIN_RELEASE_DIR: root,
-  ...(setupOrigin ? { REVIVAL_PIN_SETUP_ORIGIN: setupOrigin } : {}),
-});
+const environment = (root, setupOrigin) => {
+  const expected = expectedReleaseByRoot.get(root);
+  return {
+    REVIVAL_PIN_RELEASE_DIR: root,
+    ...(setupOrigin ? { REVIVAL_PIN_SETUP_ORIGIN: setupOrigin } : {}),
+    ...(expected ? {
+      REVIVAL_PIN_RELEASE_EXPECTED_ID: expected.releaseId,
+      REVIVAL_PIN_RELEASE_EXPECTED_MANIFEST_SHA256: expected.manifestSha256,
+    } : {}),
+  };
+};
 
 test("schema v1 binds the exact five APK identities", async (t) => {
   const release = await createStore(t);
@@ -134,6 +146,21 @@ test("current manifest supports GET and HEAD", async (t) => {
   assert.equal(head.status, 200);
   assert.equal(await head.text(), "");
   assert.equal(Number(head.headers.get("content-length")), Buffer.byteLength(release.document));
+});
+
+test("Center fails closed when the active manifest differs from the operator release", async (t) => {
+  const release = await createStore(t);
+  const request = new Request("https://center.example.test/api/pin/releases/current");
+  for (const override of [
+    { REVIVAL_PIN_RELEASE_EXPECTED_ID: "f".repeat(64) },
+    { REVIVAL_PIN_RELEASE_EXPECTED_MANIFEST_SHA256: "e".repeat(64) },
+  ]) {
+    const response = await serveCurrentPinRelease(request, {
+      environment: { ...environment(release.root), ...override },
+    });
+    assert.equal(response.status, 503);
+    assert.equal(await response.text(), '{"error":"Pin release unavailable."}');
+  }
 });
 
 test("artifact endpoint serves complete, head, and byte-range responses", async (t) => {
