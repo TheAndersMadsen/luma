@@ -296,7 +296,7 @@ export const COVERAGE_CASES = [
     actions: [],
     successSignal: "tool-ok",
     unlockRequired: true,
-    prompt: "please remember that my favorite color is teal",
+    prompt: "remember that my favorite color is teal",
     note: "the only WRITE spec (tools/catalog.rs:313); emits an executed line at tools/catalog.rs:2237-2243",
   },
   {
@@ -713,7 +713,7 @@ export const COVERAGE_CASES = [
     actions: [NATIVE_ACTIONS.START_ACTIVITY_TRACKER],
     successSignal: "action-planned",
     gate: GATES.fitnessTracker,
-    prompt: "start tracking my workout",
+    prompt: "start tracking my walk",
     note: "strict fitness grammar in native_device_actions.rs:184-196; start is withheld unless the live fitness_tracker_enabled flag is true",
   },
   {
@@ -722,7 +722,7 @@ export const COVERAGE_CASES = [
     tool: null,
     actions: [NATIVE_ACTIONS.STOP_ACTIVITY_TRACKER],
     successSignal: "action-planned",
-    prompt: "stop tracking my workout",
+    prompt: "stop tracking my walk",
     note: "strict fitness grammar in native_device_actions.rs:197-209; cleanup deliberately remains reachable when the start gate is off",
   },
   {
@@ -790,7 +790,7 @@ export const COVERAGE_CASES = [
     actions: [NATIVE_ACTIONS.ADD_IF_THEN_ENTRY],
     successSignal: "action-planned",
     gate: GATES.visionActions,
-    prompt: "if you see a red bicycle then take a picture",
+    prompt: "if you see a dog then take a picture",
     note: "bounded visual rule grammar in native_device_actions.rs:414-423,502-532; emits exact If and Then fields only while the live vision gate and consent are true",
   },
   {

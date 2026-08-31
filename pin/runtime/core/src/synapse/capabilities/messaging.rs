@@ -473,7 +473,10 @@ fn parse_recipients(value: &str) -> Option<Vec<String>> {
 
     let recipients = parts
         .into_iter()
-        .map(|part| trim_wrapping_quotes(part.trim()).trim().to_string())
+        .map(|part| {
+            let part = part.trim().trim_end_matches(['.', '!']).trim_end();
+            trim_wrapping_quotes(part).trim().to_string()
+        })
         .collect::<Vec<_>>();
 
     if recipients.iter().any(|recipient| {
@@ -1036,6 +1039,51 @@ mod tests {
         let empty = plan_message_action(&request("send a message")).expect("empty draft");
         assert_eq!(empty.input_json, r#"{"To":[],"Message":""}"#);
         assert!(!empty.input_json.contains("EnableAutoSend"));
+    }
+
+    #[test]
+    fn exact_checklist_draft_body_confirm_and_cancel_flow_is_preserved() {
+        let recipient_only =
+            plan_message_action(&request("Text Alex.")).expect("recipient-only checklist draft");
+        assert_eq!(recipient_only.action_name, COMPOSE_MESSAGE);
+        assert_eq!(recipient_only.input_json, r#"{"To":["Alex"],"Message":""}"#);
+
+        let body_request = request_with_compose_state(
+            "This is the second Pin test.",
+            &recipient_only.input_json,
+            "Draft has been created, next request will probably contain the message contents",
+            true,
+        );
+        let with_body = plan_message_action(&body_request).expect("checklist body follow-up");
+        assert_eq!(with_body.action_name, COMPOSE_MESSAGE);
+        assert_eq!(
+            with_body.input_json,
+            r#"{"To":["Alex"],"Message":"This is the second Pin test."}"#
+        );
+
+        let confirm_request = request_with_compose_state(
+            "Send it.",
+            &with_body.input_json,
+            "Draft has been created. It must be confirmed before it can be sent",
+            true,
+        );
+        let confirm = plan_message_action(&confirm_request).expect("checklist confirmation");
+        assert_eq!(confirm.action_name, CONFIRM_SEND_MESSAGE);
+        assert_eq!(confirm.input_json, "{}");
+
+        let full_draft = plan_message_action(&request(
+            "Send a message to Alex saying this is a Pin test.",
+        ))
+        .expect("full checklist draft");
+        let cancel_request = request_with_compose_state(
+            "Cancel.",
+            &full_draft.input_json,
+            "Draft has been created. It must be confirmed before it can be sent",
+            true,
+        );
+        let cancel = plan_message_action(&cancel_request).expect("checklist cancellation");
+        assert_eq!(cancel.action_name, CANCEL_SEND_MESSAGE);
+        assert_eq!(cancel.input_json, "{}");
     }
 
     #[test]

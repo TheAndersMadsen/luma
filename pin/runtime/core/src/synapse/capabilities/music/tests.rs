@@ -1634,6 +1634,14 @@ fn visual_candidate_is_bounded_unambiguous_and_cannot_choose_an_action() {
         "could you play what's on this album cover please",
     ] {
         assert!(is_visual_music_request(&request(utterance)), "{utterance}");
+        assert!(
+            plan_local_music_action(&request(utterance), None).is_none(),
+            "visual request escaped into the local music planner: {utterance}"
+        );
+        assert!(
+            plan_catalog_or_contextual_music_action(&request(utterance), None).is_none(),
+            "visual request escaped into literal catalog lookup: {utterance}"
+        );
     }
 
     assert!(prefers_text_music_over_image(&request(

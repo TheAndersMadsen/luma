@@ -741,6 +741,19 @@ test("protobuf request uses the real Understand field numbers", () => {
   );
 });
 
+test("vision-requested Understand fixtures encode the stock user-request field", () => {
+  const encoded = encodeUnderstandingRequest({
+    utterance: "What do you see?",
+    visionRequested: true,
+  });
+  const outer = decodeProtoFields(encoded);
+  const context = decodeProtoFields(outer.get(3)[0].value);
+  const turn = decodeProtoFields(context.get(3)[0].value);
+  const userRequest = decodeProtoFields(turn.get(2)[0].value);
+
+  assert.equal(userRequest.get(5)[0].value, 1n);
+});
+
 test("gRPC decoder handles fragmented frames and rejects unsafe framing", () => {
   const framed = wrapGrpcFrame(
     buildActionResponseFixture({ action: "Tickle", input: "{}" }),

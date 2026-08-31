@@ -192,6 +192,18 @@ impl UnderstandHandler {
         } else {
             None
         };
+        // Stock marks a point-and-ask turn as vision-requested before the
+        // camera frame exists. Let the ordinary vision branch emit
+        // UnderstandScene; the parent-linked continuation will return here
+        // with the captured image and may then identify a catalog entity.
+        if linked_image.is_none()
+            && req
+                .device_context
+                .as_ref()
+                .is_some_and(crate::synapse::vision::is_vision_request)
+        {
+            return Ok(None);
+        }
         let planned = if let Some(image) = linked_image {
             let prompt = serde_json::json!({
                 "request": utterance,

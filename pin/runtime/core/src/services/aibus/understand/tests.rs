@@ -2012,6 +2012,134 @@ async fn full_handler_classifies_the_selected_authoritative_current_text() {
     assert_eq!(input["Message"], "hello!");
 }
 
+#[tokio::test]
+async fn exact_checklist_local_actions_reach_the_full_understand_handler() {
+    let (directory, _live_config, mut handler, _automation_store) =
+        test_understand_handler(false).await;
+    let note_store = Arc::new(tokio::sync::Mutex::new(
+        crate::storage::MediaStore::open(
+            directory.path().join("checklist-notes"),
+            Database::open(directory.path().join("checklist-notes.sqlite3")).unwrap(),
+        )
+        .await
+        .unwrap(),
+    ));
+    let (events_tx, _events_rx) = tokio::sync::broadcast::channel(8);
+    Arc::get_mut(&mut handler)
+        .expect("fresh test handler has one owner")
+        .set_function_execution(FunctionExecutionHandler::new(note_store.clone(), events_tx));
+
+    for (index, (utterance, expected_action)) in [
+        ("Text Alex.", native_actions::COMPOSE_MESSAGE),
+        (
+            "Send a message to Alex saying this is a Pin test.",
+            native_actions::COMPOSE_MESSAGE,
+        ),
+        (
+            "Set my quick messaging contact to Alex.",
+            native_actions::CONTACTS,
+        ),
+        ("Answer the call.", native_actions::ACCEPT_CALL),
+        ("Show current call.", native_actions::RESUME_CALL),
+        ("Hang up.", native_actions::END_CALL),
+        ("Call +45 12 34 56 78.", native_actions::CALL_PERSON),
+        (
+            "Create a contact Test Person with phone number +45 12 34 56 78.",
+            native_actions::CREATE_CONTACT,
+        ),
+        (
+            "Set translation language to French.",
+            native_actions::TRANSLATE,
+        ),
+        ("Take a note: Buy coffee beans.", native_actions::RESPOND),
+        ("Record a video.", native_actions::CAPTURE_VIDEO),
+        ("Stop recording.", native_actions::STOP_VIDEO),
+        (
+            "Connect to Bluetooth Acme Nova X1.",
+            native_actions::SETTINGS,
+        ),
+        (
+            "Disconnect Bluetooth Acme Nova X1.",
+            native_actions::SETTINGS,
+        ),
+        ("Factory reset my Pin.", native_actions::FACTORY_RESET),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let request = request_with_user_turns(vec![user_turn(
+            &format!("checklist-local-user-{index}"),
+            utterance,
+        )]);
+        let action = full_handler_action(&handler, request)
+            .await
+            .unwrap_or_else(|| panic!("{utterance:?} produced no local action"));
+        assert_eq!(action.action, expected_action, "{utterance}");
+        if utterance == "Take a note: Buy coffee beans." {
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&action.input).unwrap(),
+                serde_json::json!({"Response": "Saved your note."}),
+                "the temporary note must be saved before the handler reports success"
+            );
+        }
+    }
+
+    let note_json = {
+        let store = note_store.lock().await;
+        let memories = store.list_memories().await;
+        assert_eq!(memories.len(), 1, "the checklist created exactly one note");
+        let opened = store
+            .open_media_file(&memories[0].uuid, "note.json")
+            .await
+            .expect("the completed checklist note has its body");
+        let mut bytes = Vec::with_capacity(opened.len as usize);
+        use tokio::io::AsyncReadExt as _;
+        tokio::fs::File::from_std(opened.file)
+            .read_to_end(&mut bytes)
+            .await
+            .unwrap();
+        serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()
+    };
+    assert_eq!(note_json["text"], "Buy coffee beans.");
+}
+
+#[tokio::test]
+async fn exact_checklist_vision_prompts_reach_the_stock_capture_preflight() {
+    let (_directory, _live_config, handler, _automation_store) =
+        test_understand_handler(false).await;
+
+    for (index, utterance) in [
+        "What do you see?",
+        "Read this.",
+        "Play the song in this image.",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut current = user_turn(&format!("checklist-vision-user-{index}"), utterance);
+        let Some(synapse_chat_turn::Content::UserRequest(user_request)) = current.content.as_mut()
+        else {
+            panic!("expected checklist vision user request");
+        };
+        user_request.vision_requested =
+            synapse_user_request_content::VisionRequested::Vision as i32;
+
+        let action = full_handler_action(&handler, request_with_user_turns(vec![current]))
+            .await
+            .unwrap_or_else(|| panic!("{utterance:?} produced no vision preflight"));
+        assert_eq!(
+            action.action,
+            native_actions::UNDERSTAND_SCENE,
+            "{utterance}"
+        );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&action.input).unwrap(),
+            serde_json::json!({"Question": utterance}),
+            "{utterance}"
+        );
+    }
+}
+
 #[test]
 fn visual_state_ids_bind_to_the_canonical_repaired_current_turn() {
     let mut trusted =

@@ -236,12 +236,16 @@ function logcatStamp() {
 async function probeOnce(options, utterance) {
   const sinceLogTime = logcatStamp();
   const startedAt = Date.now();
+  const suiteCase = options.suite
+    ? SUITE.find((testCase) => testCase.prompt === utterance)
+    : undefined;
   try {
     const responses = await runUnderstand(options, DEVICE_PORT, utterance, {
       timeoutMs: options.timeoutMs,
       userTurnId: `prompt-eval-${startedAt}`,
       excludedTools: [],
       authToken: options.authToken,
+      visionRequested: suiteCase?.visionRequested === true,
     });
     const summary = summarizeResponses(responses);
     const localEcho = isLocalEchoAnswer(summary.answerText, utterance);

@@ -618,6 +618,7 @@ export function encodeUnderstandingRequest({
   singleShot = false,
   sendActionsAndObservationsSeparately = false,
   userTurnId = SMOKE_USER_TURN_ID,
+  visionRequested = false,
 }) {
   if (
     typeof utterance !== "string" ||
@@ -630,9 +631,15 @@ export function encodeUnderstandingRequest({
   if (!Array.isArray(excludedTools) || excludedTools.length > 64) {
     throw new Error("invalid excluded tool list");
   }
+  if (typeof visionRequested !== "boolean") {
+    throw new Error("visionRequested must be boolean");
+  }
   validateUserTurnId(userTurnId);
 
-  const userRequest = encodeProtoString(1, utterance);
+  const userRequest = Buffer.concat([
+    encodeProtoString(1, utterance),
+    ...(visionRequested ? [encodeProtoVarint(5, 1)] : []),
+  ]);
   const userTurn = Buffer.concat([
     encodeProtoVarint(1, USER_USER),
     encodeProtoBytes(2, userRequest),

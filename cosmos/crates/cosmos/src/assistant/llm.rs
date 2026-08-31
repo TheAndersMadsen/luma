@@ -460,6 +460,93 @@ fn enforce_unstarted_music_playback(
     response
 }
 
+/// Keep playback of an existing playlist distinct from generating a new one.
+///
+/// The model still chooses the music tool. This guard only repairs the one
+/// contradictory choice where an explicit playback request names a playlist
+/// that already exists (for example, "my workout playlist") but the model
+/// emits `GenerateMusicPlaylist`. The model-authored playlist value remains
+/// the provider query; no title or use case is hard-coded here.
+fn enforce_existing_playlist_playback(
+    messages: &[ChatMessage],
+    tools: &[ToolDef],
+    mut response: ChatResponse,
+) -> ChatResponse {
+    if !tools.iter().any(|tool| tool.name == "PlayMusic")
+        || !explicit_existing_playlist_request(messages)
+    {
+        return response;
+    }
+
+    let generate = response
+        .tool_call
+        .iter()
+        .chain(response.extra_tool_calls.iter())
+        .find(|call| call.name == "GenerateMusicPlaylist");
+    let Some(playlist) = generate
+        .and_then(|call| serde_json::from_str::<serde_json::Value>(&call.arguments).ok())
+        .and_then(|arguments| {
+            arguments
+                .get("Playlist")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|playlist| !playlist.is_empty())
+                .map(str::to_owned)
+        })
+    else {
+        return response;
+    };
+
+    response.content = None;
+    response.tool_call = Some(ToolCall {
+        name: "PlayMusic".to_owned(),
+        arguments: serde_json::json!({"Option": playlist}).to_string(),
+    });
+    response.extra_tool_calls.clear();
+    tracing::info!("existing-playlist generation normalized to catalog playback");
+    response
+}
+
+fn explicit_existing_playlist_request(messages: &[ChatMessage]) -> bool {
+    let Some(utterance) = messages
+        .iter()
+        .rev()
+        .find(|message| message.role == Role::User)
+        .map(|message| message.content.trim())
+        .filter(|utterance| super::engine::explicit_playback_request(utterance))
+    else {
+        return false;
+    };
+
+    let normalized = utterance.to_lowercase();
+    let words = normalized
+        .split(|character: char| !character.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>();
+    if !words
+        .iter()
+        .any(|word| matches!(*word, "playlist" | "playlists"))
+    {
+        return false;
+    }
+
+    let mut command = normalized.trim();
+    if let Some(rest) = command.strip_prefix("please ") {
+        command = rest;
+    }
+    for prefix in ["can you ", "could you ", "would you ", "will you "] {
+        if let Some(rest) = command.strip_prefix(prefix) {
+            command = rest;
+            break;
+        }
+    }
+
+    !["make ", "create ", "generate ", "build ", "curate "]
+        .iter()
+        .any(|prefix| command.starts_with(prefix))
+        && !command.starts_with("play a playlist for ")
+}
+
 /// A direct named-destination route is one bounded lookup, not an open-ended
 /// place search. Normalize a wrong model choice (observed as `nearby` for the
 /// exact cycling checklist prompt) to `route`, retaining the requested travel
@@ -608,7 +695,11 @@ fn enforce_explicit_retrieval(
                     enforce_unstarted_music_playback(
                         messages,
                         tools,
-                        enforce_explicit_web_search(messages, tools, response),
+                        enforce_existing_playlist_playback(
+                            messages,
+                            tools,
+                            enforce_explicit_web_search(messages, tools, response),
+                        ),
                     ),
                 ),
             ),
@@ -1372,6 +1463,56 @@ mod tests {
             serde_json::from_str::<serde_json::Value>(&call.arguments).unwrap()["query"],
             messages[0].content
         );
+    }
+
+    #[test]
+    fn existing_playlist_playback_cannot_be_changed_into_playlist_generation() {
+        let messages = vec![ChatMessage::user("Play my rainy day playlist.")];
+        let response = enforce_explicit_retrieval(
+            &messages,
+            &[music_tool("PlayMusic"), music_tool("GenerateMusicPlaylist")],
+            ChatResponse {
+                content: None,
+                thought: String::new(),
+                tool_call: Some(ToolCall {
+                    name: "GenerateMusicPlaylist".to_owned(),
+                    arguments: r#"{"Playlist":"rainy day"}"#.to_owned(),
+                }),
+                extra_tool_calls: Vec::new(),
+            },
+        );
+
+        let call = response
+            .tool_call
+            .expect("an existing playlist request must remain catalog playback");
+        assert_eq!(call.name, "PlayMusic");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&call.arguments).unwrap(),
+            serde_json::json!({"Option": "rainy day"}),
+        );
+    }
+
+    #[test]
+    fn explicit_new_playlist_generation_remains_generation() {
+        let messages = vec![ChatMessage::user("Make me a playlist for running.")];
+        let selected = ChatResponse {
+            content: None,
+            thought: String::new(),
+            tool_call: Some(ToolCall {
+                name: "GenerateMusicPlaylist".to_owned(),
+                arguments: r#"{"Playlist":"running"}"#.to_owned(),
+            }),
+            extra_tool_calls: Vec::new(),
+        };
+
+        let response = enforce_explicit_retrieval(
+            &messages,
+            &[music_tool("PlayMusic"), music_tool("GenerateMusicPlaylist")],
+            selected.clone(),
+        );
+
+        assert_eq!(response.tool_call, selected.tool_call);
+        assert!(response.extra_tool_calls.is_empty());
     }
 
     #[test]

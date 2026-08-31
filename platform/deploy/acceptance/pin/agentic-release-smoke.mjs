@@ -607,6 +607,7 @@ export function runUnderstand(
     userTurnId,
     excludedTools = [],
     authToken,
+    visionRequested = false,
   },
 ) {
   return new Promise((resolvePromise, rejectPromise) => {
@@ -703,6 +704,7 @@ export function runUnderstand(
       const request = encodeUnderstandingRequest({
         utterance,
         excludedTools,
+        visionRequested,
         ...(userTurnId === undefined ? {} : { userTurnId }),
       });
       stream.end(wrapGrpcFrame(request));

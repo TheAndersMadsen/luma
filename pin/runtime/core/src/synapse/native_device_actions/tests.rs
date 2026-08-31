@@ -697,7 +697,15 @@ fn fitness_start_requires_the_authoritative_gate_and_actions_honor_exclusions() 
             native_actions::START_ACTIVITY_TRACKER,
         ),
         (
+            "Start tracking my walk.",
+            native_actions::START_ACTIVITY_TRACKER,
+        ),
+        (
             "Please stop tracking my workout",
+            native_actions::STOP_ACTIVITY_TRACKER,
+        ),
+        (
+            "Stop tracking my walk.",
             native_actions::STOP_ACTIVITY_TRACKER,
         ),
     ] {

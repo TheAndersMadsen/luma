@@ -413,6 +413,7 @@ impl BidiSession {
         // utterance is the faithful fill rather than an invention.
         let utterance = super::engine::current_utterance(&req).to_owned();
         catalog::scope_tickle_to_exact_request(&mut tools, &utterance);
+        catalog::scope_explanation_to_non_device_tools(&mut tools, &utterance);
         let bounded_music_research = super::engine::prefer_one_music_research_tool(
             &mut tools,
             &utterance,

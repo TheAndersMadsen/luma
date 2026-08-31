@@ -481,10 +481,13 @@ async fn remember_fact_persists_for_a_trusted_unlocked_user() {
     let tools = AibusToolCatalog::new(
         &broker,
         unlocked_authorization(),
-        "remember that I take my coffee black",
+        "Remember that my favorite color is teal.",
     );
     let outcome = tools
-        .execute(&call("remember_fact", json!({"content": "coffee black"})))
+        .execute(&call(
+            "remember_fact",
+            json!({"content": "my favorite color is teal"}),
+        ))
         .await;
     assert!(
         matches!(outcome, ToolExecutionOutcome::Observation { ok: true, .. }),

@@ -356,6 +356,20 @@ test("suite: every case has an id, a prompt and a note", () => {
   }
 });
 
+test("visual point-and-ask checklist cases declare the stock vision request", () => {
+  const expected = new Set([
+    "vision-scene",
+    "vision-read-text",
+    "vision-image-music",
+  ]);
+  const declared = new Set(
+    SUITE.filter((testCase) => testCase.visionRequested === true).map(
+      (testCase) => testCase.id,
+    ),
+  );
+  assert.deepEqual(declared, expected);
+});
+
 test("LOAD-BEARING suite: no case names an action that does not exist in the product", () => {
   // `current_time` and `TakePhoto` were asserted for weeks. Both exist nowhere
   // in the canonical product catalogs, so the expects could never pass and the forbid

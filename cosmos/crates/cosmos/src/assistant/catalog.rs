@@ -586,7 +586,10 @@ const DEVICE_TOOL_SET: &[(&str, &str)] = &[
     ("DisplayMessages", "Show the wearer's messages."),
     ("MessageSearch", "Search the wearer's messages."),
     // --- music -------------------------------------------------------------
-    ("PlayMusic", "Play music by artist, album, track, or genre."),
+    (
+        "PlayMusic",
+        "Play music by artist, album, track, genre, or an existing playlist.",
+    ),
     ("PauseMusic", "Pause playback."),
     ("ResumeMusic", "Resume playback."),
     ("NextTrack", "Skip to the next track."),
@@ -600,7 +603,7 @@ const DEVICE_TOOL_SET: &[(&str, &str)] = &[
     ("PlayFavoriteTracks", "Play the wearer's favorite tracks."),
     (
         "GenerateMusicPlaylist",
-        "Build a playlist matching a description.",
+        "Build a new playlist matching a description; never use for an existing playlist.",
     ),
     // --- capture -----------------------------------------------------------
     ("CapturePhotograph", "Take a photo."),
@@ -1685,6 +1688,36 @@ pub(crate) fn exact_tickle_request(value: &str) -> bool {
 pub(crate) fn scope_tickle_to_exact_request(tools: &mut Vec<ToolDef>, wearer_request: &str) {
     if !exact_tickle_request(wearer_request) {
         tools.retain(|tool| tool.name != "Tickle");
+    }
+}
+
+/// Explanations mention capabilities without authorizing them.
+///
+/// A request such as "tell me about text messages" needs an answer, not the
+/// messages UI. Keep server knowledge tools and the one spoken terminal, but do
+/// not offer any device action for a broad explanation request. This is based
+/// on the request form rather than the named capability, so it protects every
+/// device action consistently.
+pub(crate) fn scope_explanation_to_non_device_tools(
+    tools: &mut Vec<ToolDef>,
+    wearer_request: &str,
+) {
+    let normalized = wearer_request
+        .chars()
+        .flat_map(char::to_lowercase)
+        .map(|character| {
+            if character.is_alphanumeric() {
+                character
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if normalized.starts_with("tell me about ") {
+        tools.retain(|tool| tool.name == RESPOND_ACTION || !is_device_tool(&tool.name));
     }
 }
 

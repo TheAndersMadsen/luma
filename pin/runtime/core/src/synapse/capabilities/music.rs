@@ -600,7 +600,7 @@ fn plan_catalog_or_contextual_music_action_inner(
     recent_track: Option<&MusicActivityRecord>,
     allow_provider_selection: bool,
 ) -> Option<PlannedMusicAction> {
-    if !valid_request_envelope(request) {
+    if !valid_request_envelope(request) || is_visual_music_request(request) {
         return None;
     }
     let command = normalized_command(&request.utterance)?;

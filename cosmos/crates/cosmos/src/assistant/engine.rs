@@ -565,6 +565,7 @@ impl Engine {
             tools.retain(|tool| tool.name != VISION_ACTION);
         }
         catalog::scope_tickle_to_exact_request(&mut tools, &utterance);
+        catalog::scope_explanation_to_non_device_tools(&mut tools, &utterance);
 
         // The wearer's own words, kept for required-slot backfill: the agent
         // entry points take the request verbatim, so when the model omits the
@@ -4490,6 +4491,36 @@ mod tests {
             exact.tools().iter().any(|tool| tool == "Tickle"),
             "an exact supported phrase must retain the stock action"
         );
+    }
+
+    #[tokio::test]
+    async fn informational_capability_question_cannot_be_offered_message_actions() {
+        let model = Arc::new(CapturingModel::default());
+        let messages = run_with(
+            model.clone(),
+            pb::SynapseUnderstandingRequest {
+                utterance: "Tell me about text messages.".into(),
+                device_context: Some(pb::SynapseDeviceContext::default()),
+                ..Default::default()
+            },
+        )
+        .await;
+
+        let tools = model.tools();
+        for action in [
+            "OpenMessagesMainMenu",
+            "ComposeMessage",
+            "DisplayMessages",
+            "MessageSearch",
+        ] {
+            assert!(
+                !tools.iter().any(|tool| tool == action),
+                "an explanation request must not be offered {action}: {tools:?}"
+            );
+        }
+        let actions = messages.iter().filter_map(as_action).collect::<Vec<_>>();
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].action, catalog::RESPOND_ACTION);
     }
 
     #[tokio::test]
