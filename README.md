@@ -227,8 +227,9 @@ archive when the `pin` profile is selected.
 
 The command writes configuration, secrets, certificates, and runtime data to
 owner-controlled directories outside the extracted release. It prints the path
-to a mode-0600 first-login file. Use that file once, sign in, then remove it.
-Rerunning setup preserves existing nonblank values.
+to a mode-0600 first-login file containing a direct Guided Setup sign-in URL.
+Use that file once, sign in, then remove it. Rerunning setup preserves existing
+nonblank values.
 
 Optional profiles are `pin`, `search`, `spotify`, and `observability`. Spotify
 also needs the Iroh ticket file named by `./revival setup production --help`.

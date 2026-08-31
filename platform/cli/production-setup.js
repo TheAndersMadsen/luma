@@ -528,8 +528,10 @@ function productionRealm(values, firstPassword) {
 }
 
 function firstLoginContents(values, firstPassword) {
+  const guidedSetup = `${values.REVIVAL_PUBLIC_ORIGIN}/login?next=%2Fsettings%2Fpin%2Fsetup`;
   return [
     `Center: ${values.REVIVAL_PUBLIC_ORIGIN}`,
+    `Guided setup: ${guidedSetup}`,
     `Operator: ${values.REVIVAL_FIRST_OPERATOR_EMAIL}`,
     `Initial password: ${firstPassword}`,
     ...(values.COSMOS_ENROLLMENT_PINCODE ? [`Pin enrollment code: ${values.COSMOS_ENROLLMENT_PINCODE}`] : []),

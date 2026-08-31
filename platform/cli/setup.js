@@ -122,6 +122,7 @@ function setupCommand(args) {
       if (result.pinTrustRoot) info(`Generated Pin trust root: ${result.pinTrustRoot}`);
       info(`Enabled optional profiles: ${result.profiles.join(', ') || 'none'}.`);
       info('Production uses the digest-pinned OCI Compose application stamped into this operator release.');
+      info(`After deployment: ${result.origin}/login?next=%2Fsettings%2Fpin%2Fsetup`);
       info('NEXT ./revival doctor production');
       return;
     }

@@ -208,7 +208,15 @@ test("production setup creates a complete portable operator installation and is 
   assert.ok(realm.users[0].credentials[0].value.length >= 24);
   assert.deepEqual(realm.users[0].realmRoles, ["cosmos-operator"]);
   const loginHandoff = fs.readFileSync(path.join(production, "first-login.txt"), "utf8");
+  assert.match(
+    loginHandoff,
+    /^Guided setup: https:\/\/pin\.example\.test\/login\?next=%2Fsettings%2Fpin%2Fsetup$/m,
+  );
   assert.match(loginHandoff, new RegExp(`^Initial password: ${realm.users[0].credentials[0].value}$`, "m"));
+  assert.match(
+    first.stdout,
+    /After deployment: https:\/\/pin\.example\.test\/login\?next=%2Fsettings%2Fpin%2Fsetup/u,
+  );
   assert.match(fs.readFileSync(path.join(root, "center/src/server/auth.ts"), "utf8"), /grant_type: "password"/u);
   assert.match(fs.readFileSync(path.join(production, "traefik-dynamic.yaml"), "utf8"), /pin\.example\.test/u);
   const operatorModel = fs.readFileSync(operatorCompose, "utf8");
