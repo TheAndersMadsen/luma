@@ -238,6 +238,46 @@ test("Food baseline evidence requires one completed stock diary snapshot", () =>
   assert.equal(evidence.successfulFoodLogReadCount, 1);
 });
 
+test("Food evidence accepts correlated Hook proof when child process traces are unavailable", () => {
+  const boundary = "physical-food-523e4567-e89b-42d3-a456-426614174000";
+  const itemToken = "a".repeat(64);
+  const memoryToken = "b".repeat(64);
+  const line = (message, index) =>
+    `1710000000.00${index}  100  101 I PenumbraHook: ${message}`;
+
+  const baseline = [
+    `1710000000.001  100  101 I PenumbraPhysicalHarness: ${boundary}`,
+    line("FoodTao deadline_rewrite=10_to_60", 2),
+    line("FoodRoundTrip baseline status=success", 3),
+  ].join("\n");
+  const baselineEvidence = evaluateFoodLogEvidence(baseline, boundary, "baseline");
+  assert.equal(baselineEvidence.pass, true);
+  assert.equal(baselineEvidence.terminalObserved, true);
+  assert.equal(baselineEvidence.successfulFoodLogReadCount, 1);
+
+  const write = [
+    `1710000000.001  100  101 I PenumbraPhysicalHarness: ${boundary}`,
+    line("FoodTao deadline_rewrite=10_to_60", 2),
+    line(`FoodRoundTrip lookup item_token=${itemToken}`, 3),
+    line(`FoodRoundTrip create status=success item_token=${itemToken} memory_token=${memoryToken}`, 4),
+  ].join("\n");
+  const writeEvidence = evaluateFoodLogEvidence(write, boundary, "write");
+  assert.equal(writeEvidence.pass, true);
+  assert.equal(writeEvidence.terminalObserved, true);
+  assert.equal(writeEvidence.successfulFoodLookupCount, 1);
+  assert.equal(writeEvidence.successfulCreateMemoryCount, 1);
+
+  const read = [
+    `1710000000.001  100  101 I PenumbraPhysicalHarness: ${boundary}`,
+    line("FoodTao deadline_rewrite=10_to_60", 2),
+    line(`FoodRoundTrip read item_token=${itemToken} memory_token=${memoryToken} readback_match=true`, 3),
+  ].join("\n");
+  const readEvidence = evaluateFoodLogEvidence(read, boundary, "read");
+  assert.equal(readEvidence.pass, true);
+  assert.equal(readEvidence.terminalObserved, true);
+  assert.equal(readEvidence.successfulFoodLogReadCount, 1);
+});
+
 test("Food memory observations accept only bounded stock memory records", () => {
   const record = {
     uuid: "123e4567-e89b-42d3-a456-426614174000",

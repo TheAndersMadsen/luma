@@ -362,6 +362,16 @@ fn food_v4_tracks_bounded_items_with_exact_stock_fields() {
             }),
         ),
         (
+            "Add one apple to my food log.",
+            serde_json::json!({
+                "FoodItemList": [{
+                    "FoodItemName": "apple",
+                    "IsBranded": false,
+                    "Quantity": 1
+                }]
+            }),
+        ),
+        (
             "I ate two eggs and a banana",
             serde_json::json!({
                 "FoodItemList": [

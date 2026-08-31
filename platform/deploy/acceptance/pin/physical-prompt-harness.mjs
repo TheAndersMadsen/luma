@@ -1760,29 +1760,35 @@ export function evaluateFoodLogEvidence(value, boundaryMarker, phase) {
   if (!boundaryObserved) {
     throw new SafePhysicalError("the Food evidence boundary was unavailable");
   }
+  const exactOrUnavailable = (observed, expected) =>
+    observed === 0 || observed === expected;
+  const exactLookupMarker =
+    lookupMarkers.length === 1 &&
+    createMarkers.length === 1 &&
+    createMarkers[0].itemToken === lookupMarkers[0].itemToken;
+  const exactReadbackMarker =
+    readbackMarkers.length === 1 && readbackMarkers[0].matched;
   const exactWrite =
     phase === "write" &&
     timeoutCount === 0 &&
-    taoResponseCount === 2 &&
-    chatCompletionCount === 2 &&
-    foodLookupCount === 1 &&
-    successfulFoodLookupCount === 1 &&
-    createMemoryCount === 1 &&
-    successfulCreateMemoryCount === 1 &&
+    exactOrUnavailable(taoResponseCount, 2) &&
+    exactOrUnavailable(chatCompletionCount, 2) &&
+    exactOrUnavailable(foodLookupCount, 1) &&
+    exactOrUnavailable(successfulFoodLookupCount, 1) &&
+    exactOrUnavailable(createMemoryCount, 1) &&
+    exactOrUnavailable(successfulCreateMemoryCount, 1) &&
     deadlineRewriteCount === 1 &&
-    lookupMarkers.length === 1 &&
-    createMarkers.length === 1 &&
-    createMarkers[0].itemToken === lookupMarkers[0].itemToken &&
+    exactLookupMarker &&
     foodLogReadCount === 0;
   const exactBaseline =
     phase === "baseline" &&
     timeoutCount === 0 &&
-    taoResponseCount === 2 &&
-    chatCompletionCount === 2 &&
+    exactOrUnavailable(taoResponseCount, 2) &&
+    exactOrUnavailable(chatCompletionCount, 2) &&
     foodLookupCount === 0 &&
     createMemoryCount === 0 &&
-    foodLogReadCount === 1 &&
-    successfulFoodLogReadCount === 1 &&
+    exactOrUnavailable(foodLogReadCount, 1) &&
+    exactOrUnavailable(successfulFoodLogReadCount, 1) &&
     deadlineRewriteCount === 1 &&
     baselineMarkerCount === 1 &&
     lookupMarkers.length === 0 &&
@@ -1791,29 +1797,40 @@ export function evaluateFoodLogEvidence(value, boundaryMarker, phase) {
   const exactRead =
     phase === "read" &&
     timeoutCount === 0 &&
-    taoResponseCount === 2 &&
-    chatCompletionCount === 2 &&
+    exactOrUnavailable(taoResponseCount, 2) &&
+    exactOrUnavailable(chatCompletionCount, 2) &&
     foodLookupCount === 0 &&
     successfulFoodLookupCount === 0 &&
     createMemoryCount === 0 &&
-    foodLogReadCount === 1 &&
-    successfulFoodLogReadCount === 1 &&
+    exactOrUnavailable(foodLogReadCount, 1) &&
+    exactOrUnavailable(successfulFoodLogReadCount, 1) &&
     deadlineRewriteCount === 1 &&
     lookupMarkers.length === 0 &&
-    readbackMarkers.length === 1 &&
-    readbackMarkers[0].matched;
+    exactReadbackMarker;
+  const hookTerminalObserved =
+    (phase === "baseline" && baselineMarkerCount === 1) ||
+    (phase === "write" && exactLookupMarker) ||
+    (phase === "read" && exactReadbackMarker);
   return {
     pass: exactBaseline || exactWrite || exactRead,
     boundaryObserved,
     timeoutObserved: timeoutCount !== 0,
-    terminalObserved: taoResponseCount === 2,
+    terminalObserved: taoResponseCount === 2 || hookTerminalObserved,
     chatCompletionCount,
-    foodLookupCount,
-    successfulFoodLookupCount,
-    createMemoryCount,
-    successfulCreateMemoryCount,
-    foodLogReadCount,
-    successfulFoodLogReadCount,
+    foodLookupCount: Math.max(foodLookupCount, lookupMarkers.length),
+    successfulFoodLookupCount: Math.max(successfulFoodLookupCount, lookupMarkers.length),
+    createMemoryCount: Math.max(createMemoryCount, createMarkers.length),
+    successfulCreateMemoryCount: Math.max(successfulCreateMemoryCount, createMarkers.length),
+    foodLogReadCount: Math.max(
+      foodLogReadCount,
+      baselineMarkerCount,
+      readbackMarkers.length,
+    ),
+    successfulFoodLogReadCount: Math.max(
+      successfulFoodLogReadCount,
+      baselineMarkerCount,
+      readbackMarkers.filter((marker) => marker.matched).length,
+    ),
     deadlineRewriteCount,
     baselineMarkerCount,
     lookupMarkers,
