@@ -332,6 +332,8 @@ class ContextHistorySafetyHooksTest {
             "GetCurrentTime",
             "GetBatteryLevel",
             "GetCurrentLocation",
+            "WorldClock",
+            "PlayMusic",
             "Tickle",
         )) {
             assertEquals(
@@ -347,7 +349,6 @@ class ContextHistorySafetyHooksTest {
             null,
             "",
             "getcurrenttime",
-            "PlayMusic",
             "Tickle | prompt=private",
             "Tickle\nprivate",
         )) {

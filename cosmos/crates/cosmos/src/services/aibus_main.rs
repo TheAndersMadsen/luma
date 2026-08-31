@@ -83,7 +83,98 @@ const ENVELOPE_SEAL_FAILED: &str = "could not seal the response envelope";
 const NO_COMPLETION: &str = "No answer came back. Try again.";
 const VISION_UNAVAILABLE: &str = "Image analysis is unavailable. Try again.";
 const AUDIO_TRANSCRIPTION_UNAVAILABLE: &str = "Audio could not be transcribed.";
-const LOADING_MESSAGE: &str = "One moment.";
+const LOADING_MUSIC_CUE: &str = "Finding music";
+const LOADING_WEATHER_CUE: &str = "Checking the weather";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LoadingDecision {
+    cue: Option<&'static str>,
+    source: &'static str,
+    reason: &'static str,
+}
+
+fn loading_message_for(utterance: &str, is_unlocked: bool) -> pb::LoadingMessageResponse {
+    let decision = loading_decision(utterance, is_unlocked);
+    match decision.cue {
+        Some(cue) => pb::LoadingMessageResponse {
+            loading_message: format!("{cue}..."),
+            verbal_message: format!("{cue}."),
+        },
+        None => pb::LoadingMessageResponse::default(),
+    }
+}
+
+fn loading_decision(utterance: &str, is_unlocked: bool) -> LoadingDecision {
+    if !is_unlocked {
+        return LoadingDecision {
+            cue: None,
+            source: "policy",
+            reason: "locked",
+        };
+    }
+
+    let normalized = utterance.to_lowercase();
+    let words = normalized
+        .split(|character: char| !character.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>();
+    let has = |candidates: &[&str]| candidates.iter().any(|candidate| words.contains(candidate));
+    let media_subject = has(&[
+        "music",
+        "song",
+        "songs",
+        "track",
+        "tracks",
+        "album",
+        "albums",
+        "playlist",
+        "playlists",
+        "playback",
+    ]);
+    if media_subject
+        && has(&[
+            "pause", "paused", "hold", "resume", "stop", "skip", "next", "previous",
+        ])
+    {
+        return LoadingDecision {
+            cue: None,
+            source: "deterministic",
+            reason: "playback_control",
+        };
+    }
+    if has(&[
+        "weather",
+        "forecast",
+        "umbrella",
+        "rain",
+        "raining",
+        "snow",
+        "snowing",
+        "temperature",
+        "wind",
+        "windy",
+    ]) {
+        return LoadingDecision {
+            cue: Some(LOADING_WEATHER_CUE),
+            source: "deterministic",
+            reason: "weather",
+        };
+    }
+    if media_subject
+        || (has(&["queue"]) && has(&["hit", "hits", "pop", "dance", "artist", "band", "singer"]))
+    {
+        return LoadingDecision {
+            cue: Some(LOADING_MUSIC_CUE),
+            source: "deterministic",
+            reason: "music",
+        };
+    }
+    LoadingDecision {
+        cue: None,
+        source: "deterministic",
+        reason: "unclassified",
+    }
+}
 
 /// `humane.aibus.AIBusService` — the assistant + its per-turn cloud tools.
 #[derive(Clone)]
@@ -1685,12 +1776,15 @@ impl AiBusService for AiBusMain {
         request: Request<pb::EncryptedLoadingMessageRequest>,
     ) -> Result<Response<pb::EncryptedLoadingMessageResponse>, Status> {
         let request = request.into_inner();
-        let (_req, kid): (pb::LoadingMessageRequest, _) =
-            self.open_request(request.request).await?;
-        let response = pb::LoadingMessageResponse {
-            loading_message: LOADING_MESSAGE.to_owned(),
-            verbal_message: LOADING_MESSAGE.to_owned(),
-        };
+        let (req, kid): (pb::LoadingMessageRequest, _) = self.open_request(request.request).await?;
+        let decision = loading_decision(&req.utterance, req.is_unlocked);
+        let response = loading_message_for(&req.utterance, req.is_unlocked);
+        tracing::info!(
+            emitted = decision.cue.is_some(),
+            source = decision.source,
+            reason = decision.reason,
+            "returning bounded loading message"
+        );
         let response = pb::EncryptedLoadingMessageResponse {
             response: Some(
                 self.seal_response(&kid, &response, "humane.aibus.LoadingMessageResponse")
@@ -2328,12 +2422,38 @@ mod tests {
             NO_COMPLETION,
             VISION_UNAVAILABLE,
             AUDIO_TRANSCRIPTION_UNAVAILABLE,
-            LOADING_MESSAGE,
+            LOADING_MUSIC_CUE,
+            LOADING_WEATHER_CUE,
         ] {
             let lower = text.to_ascii_lowercase();
             assert!(
                 forbidden.iter().all(|term| !lower.contains(term)),
                 "wearer-facing fallback exposes persona or deployment jargon: {text:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn loading_cues_use_bounded_deterministic_categories() {
+        let music = loading_message_for(
+            "Queue the definitive dance-floor hit from the King of Pop.",
+            true,
+        );
+        assert_eq!(music.loading_message, "Finding music...");
+        assert_eq!(music.verbal_message, "Finding music.");
+
+        let weather = loading_message_for("Will I need an umbrella before dinner?", true);
+        assert_eq!(weather.loading_message, "Checking the weather...");
+        assert_eq!(weather.verbal_message, "Checking the weather.");
+
+        for (utterance, is_unlocked) in [
+            ("Put the current track on hold for a moment.", true),
+            ("Use what you remember about my commute.", false),
+            ("Tell me something interesting.", true),
+        ] {
+            assert_eq!(
+                loading_message_for(utterance, is_unlocked),
+                pb::LoadingMessageResponse::default(),
             );
         }
     }

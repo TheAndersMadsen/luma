@@ -14,11 +14,9 @@ const MAX_LOADING_REQUEST_BYTES: usize = 256 * 1024;
 const MAX_UTTERANCE_BYTES: usize = 16 * 1024;
 const PHYSICAL_LOADING_RUN_ID_PREFIX: &str = "physical-loading-";
 
-/// Validates the stock loading-message envelope without generating prose.
-///
-/// The handler intentionally owns no model, cache, referent, or generation
-/// state. Every valid request receives the expected encrypted stock response
-/// with both presentation fields empty.
+/// Validates the stock loading-message envelope and emits only a closed,
+/// deterministic category cue. The handler owns no model, cache, referent, or
+/// generation state, and it never repeats a subject from the utterance.
 #[derive(Default)]
 pub struct LoadingMessageHandler;
 
@@ -45,24 +43,115 @@ impl LoadingMessageHandler {
         // Do not log or forward utterance, turns, lock state, or response prose.
         // The optional marker is accepted only from the content-free physical
         // harness namespace below.
+        let (response, decision) = loading_message_for(&request.utterance, request.is_unlocked);
         info!(
-            emitted = false,
-            source = "fallback",
-            reason = "skipped",
+            emitted = decision.cue.is_some(),
+            source = decision.source,
+            reason = decision.reason,
             correlation = physical_correlation.as_deref().unwrap_or("none"),
             message = operational_markers::BOUNDED_LOADING_MESSAGE
         );
 
-        let response = LoadingMessageResponse {
-            loading_message: String::new(),
-            verbal_message: String::new(),
-        };
         Ok(Response::new(EncryptedLoadingMessageResponse {
             response: Some(EncryptedData::new(
                 proto_kids::LOADING_MESSAGE_RESPONSE,
                 response.encode_to_vec(),
             )),
         }))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LoadingDecision {
+    cue: Option<&'static str>,
+    source: &'static str,
+    reason: &'static str,
+}
+
+fn loading_message_for(
+    utterance: &str,
+    is_unlocked: bool,
+) -> (LoadingMessageResponse, LoadingDecision) {
+    let decision = loading_decision(utterance, is_unlocked);
+    let response = match decision.cue {
+        Some(cue) => LoadingMessageResponse {
+            loading_message: format!("{cue}..."),
+            verbal_message: format!("{cue}."),
+        },
+        None => LoadingMessageResponse::default(),
+    };
+    (response, decision)
+}
+
+fn loading_decision(utterance: &str, is_unlocked: bool) -> LoadingDecision {
+    if !is_unlocked {
+        return LoadingDecision {
+            cue: None,
+            source: "policy",
+            reason: "locked",
+        };
+    }
+
+    let normalized = utterance.to_lowercase();
+    let words = normalized
+        .split(|character: char| !character.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>();
+    let has = |candidates: &[&str]| candidates.iter().any(|candidate| words.contains(candidate));
+    let media_subject = has(&[
+        "music",
+        "song",
+        "songs",
+        "track",
+        "tracks",
+        "album",
+        "albums",
+        "playlist",
+        "playlists",
+        "playback",
+    ]);
+    if media_subject
+        && has(&[
+            "pause", "paused", "hold", "resume", "stop", "skip", "next", "previous",
+        ])
+    {
+        return LoadingDecision {
+            cue: None,
+            source: "deterministic",
+            reason: "playback_control",
+        };
+    }
+    if has(&[
+        "weather",
+        "forecast",
+        "umbrella",
+        "rain",
+        "raining",
+        "snow",
+        "snowing",
+        "temperature",
+        "wind",
+        "windy",
+    ]) {
+        return LoadingDecision {
+            cue: Some("Checking the weather"),
+            source: "deterministic",
+            reason: "weather",
+        };
+    }
+    if media_subject
+        || (has(&["queue"]) && has(&["hit", "hits", "pop", "dance", "artist", "band", "singer"]))
+    {
+        return LoadingDecision {
+            cue: Some("Finding music"),
+            source: "deterministic",
+            reason: "music",
+        };
+    }
+    LoadingDecision {
+        cue: None,
+        source: "deterministic",
+        reason: "unclassified",
     }
 }
 
@@ -159,12 +248,61 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn every_valid_loading_request_returns_a_decryptable_empty_response() {
-        for is_unlocked in [false, true] {
-            let response = response_for("synthetic request", is_unlocked).await;
+    async fn loading_cues_classify_music_and_weather_without_generic_filler() {
+        for (utterance, loading, verbal) in [
+            (
+                "Queue the definitive dance-floor hit from the King of Pop.",
+                "Finding music...",
+                "Finding music.",
+            ),
+            (
+                "Will I need an umbrella before dinner?",
+                "Checking the weather...",
+                "Checking the weather.",
+            ),
+        ] {
+            let response = response_for(utterance, true).await;
+            assert_eq!(response.loading_message, loading);
+            assert_eq!(response.verbal_message, verbal);
+        }
+
+        for (utterance, is_unlocked) in [
+            ("Put the current track on hold for a moment.", true),
+            ("Use what you remember about my commute.", false),
+            ("Tell me something interesting.", true),
+        ] {
+            let response = response_for(utterance, is_unlocked).await;
             assert!(response.loading_message.is_empty());
             assert!(response.verbal_message.is_empty());
         }
+    }
+
+    #[test]
+    fn loading_decisions_expose_only_closed_truthful_provenance() {
+        assert_eq!(
+            loading_decision("find a song", true),
+            LoadingDecision {
+                cue: Some("Finding music"),
+                source: "deterministic",
+                reason: "music",
+            }
+        );
+        assert_eq!(
+            loading_decision("pause the current track", true),
+            LoadingDecision {
+                cue: None,
+                source: "deterministic",
+                reason: "playback_control",
+            }
+        );
+        assert_eq!(
+            loading_decision("private wearer request", false),
+            LoadingDecision {
+                cue: None,
+                source: "policy",
+                reason: "locked",
+            }
+        );
     }
 
     #[tokio::test]

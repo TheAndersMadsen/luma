@@ -39,6 +39,8 @@ object ContextHistorySafetyHooks {
         TierASymbols.NativeActions.GET_CURRENT_TIME,
         TierASymbols.NativeActions.GET_BATTERY_LEVEL,
         TierASymbols.NativeActions.GET_CURRENT_LOCATION,
+        TierASymbols.NativeActions.WORLD_CLOCK,
+        TierASymbols.NativeActions.PLAY_MUSIC,
         TierASymbols.NativeActions.TICKLE,
     )
 

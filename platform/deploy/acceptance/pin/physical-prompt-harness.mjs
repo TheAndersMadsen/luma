@@ -22,6 +22,7 @@ import {
   wrapGrpcFrame,
 } from "./agentic-release-smoke-lib.mjs";
 import {
+  buildAibusRequestHeaders,
   collectFixedMusicRankOne,
   collectInstalledServerIdentity,
   collectReadiness,
@@ -91,6 +92,8 @@ const PHYSICAL_NATIVE_ACTIONS = new Set([
   NATIVE_ACTIONS.GET_CURRENT_TIME,
   NATIVE_ACTIONS.GET_BATTERY_LEVEL,
   NATIVE_ACTIONS.GET_CURRENT_LOCATION,
+  NATIVE_ACTIONS.WORLD_CLOCK,
+  NATIVE_ACTIONS.PLAY_MUSIC,
   NATIVE_ACTIONS.PAUSE_MUSIC,
   NATIVE_ACTIONS.TICKLE,
 ]);
@@ -147,13 +150,13 @@ const EXPECTED_LOCAL_WEATHER_TRACE = Object.freeze([
   Object.freeze({ tool: "terminal", status: "completed" }),
 ]);
 const MAX_LOADING_CUE_LATENCY_MS = 5_000;
-const PROGRESS_SOURCES = new Set(["spark", "fallback"]);
+const PROGRESS_SOURCES = new Set(["deterministic", "policy"]);
 const PROGRESS_REASONS = new Set([
-  "spark",
-  "timeout",
-  "error",
-  "invalid",
-  "skipped",
+  "music",
+  "playback_control",
+  "weather",
+  "locked",
+  "unclassified",
 ]);
 
 const SAFE_PROGRESS_STARTS = new Set([
@@ -200,6 +203,8 @@ export const PHYSICAL_PROMPT_CASES = Object.freeze([
     isUnlocked: true,
     expectedCueSubjects: Object.freeze(["songs", "music"]),
     expectedCueEmitted: true,
+    expectedDecisionSource: "deterministic",
+    expectedDecisionReason: "music",
   }),
   fixedCase({
     id: "loading_semantic_playback",
@@ -208,6 +213,8 @@ export const PHYSICAL_PROMPT_CASES = Object.freeze([
     isUnlocked: true,
     expectedCueSubjects: Object.freeze([]),
     expectedCueEmitted: false,
+    expectedDecisionSource: "deterministic",
+    expectedDecisionReason: "playback_control",
   }),
   fixedCase({
     id: "loading_semantic_weather",
@@ -216,6 +223,8 @@ export const PHYSICAL_PROMPT_CASES = Object.freeze([
     isUnlocked: true,
     expectedCueSubjects: Object.freeze(["weather", "forecast"]),
     expectedCueEmitted: true,
+    expectedDecisionSource: "deterministic",
+    expectedDecisionReason: "weather",
   }),
   fixedCase({
     id: "loading_locked_neutral",
@@ -224,6 +233,8 @@ export const PHYSICAL_PROMPT_CASES = Object.freeze([
     isUnlocked: false,
     expectedCueSubjects: Object.freeze([]),
     expectedCueEmitted: false,
+    expectedDecisionSource: "policy",
+    expectedDecisionReason: "locked",
   }),
   fixedCase({
     id: "current_time",
@@ -781,7 +792,23 @@ function grpcHeaderValue(headers, name) {
   return value?.toString();
 }
 
-function runLoadingMessageRpc(options, devicePort, caseId, correlationMarker) {
+export function buildLoadingMessageRequestHeaders(correlationMarker, authToken) {
+  if (!PROGRESS_BOUNDARY_PATTERN.test(correlationMarker)) {
+    throw new SafePhysicalError("the progress evidence boundary was malformed");
+  }
+  return {
+    ...buildAibusRequestHeaders(10_000, correlationMarker, authToken),
+    ":path": LOADING_RPC_PATH,
+  };
+}
+
+function runLoadingMessageRpc(
+  options,
+  devicePort,
+  caseId,
+  correlationMarker,
+  authToken,
+) {
   if (!PROGRESS_BOUNDARY_PATTERN.test(correlationMarker)) {
     throw new SafePhysicalError("the progress evidence boundary was malformed");
   }
@@ -832,14 +859,9 @@ function runLoadingMessageRpc(options, devicePort, caseId, correlationMarker) {
     timer.unref?.();
     session.on("error", fail);
     try {
-      stream = session.request({
-        ":method": "POST",
-        ":path": LOADING_RPC_PATH,
-        "content-type": "application/grpc+proto",
-        te: "trailers",
-        "grpc-timeout": "10S",
-        "x-ai-mic-run-id": correlationMarker,
-      });
+      stream = session.request(
+        buildLoadingMessageRequestHeaders(correlationMarker, authToken),
+      );
     } catch {
       fail();
       return;
@@ -1607,23 +1629,21 @@ export function evaluateProgressModelEvidence(caseId, value, boundaryMarker) {
     throw new SafePhysicalError("the progress evidence boundary was unavailable");
   }
   const emissionMatched = decision?.emitted === item.expectedCueEmitted;
-  const sparkObserved =
-    item.isUnlocked &&
-    emissionMatched &&
-    decision?.source === "spark" &&
-    decision?.reason === "spark";
-  const lockedFallbackObserved =
-    !item.isUnlocked &&
-    emissionMatched &&
-    decision?.source === "fallback" &&
-    decision?.reason === "skipped";
+  const provenanceMatched =
+    decision?.source === item.expectedDecisionSource &&
+    decision?.reason === item.expectedDecisionReason;
+  const deterministicProvenanceObserved =
+    item.isUnlocked && provenanceMatched;
+  const policyProvenanceObserved =
+    !item.isUnlocked && provenanceMatched;
   return {
     decisionObserved: decision !== null,
     correlationMatched: decision !== null,
     emissionMatched,
-    sparkObserved: item.isUnlocked ? sparkObserved : null,
-    lockedFallbackObserved: item.isUnlocked ? null : lockedFallbackObserved,
-    pass: item.isUnlocked ? sparkObserved : lockedFallbackObserved,
+    deterministicProvenanceObserved:
+      item.isUnlocked ? deterministicProvenanceObserved : null,
+    policyProvenanceObserved: item.isUnlocked ? null : policyProvenanceObserved,
+    pass: emissionMatched && provenanceMatched,
   };
 }
 
@@ -1909,19 +1929,19 @@ function evaluateNarratedHookEvidence(events, expectedAction = null) {
   const exactActionsObserved = expectedAction === null
     ? actionEvents.length === 0
     : evaluateNativeActionHookEvidence(events, expectedAction).pass;
-  const narrationStarts = events
-    .map((event, index) => event === "narration_start" ? index : -1)
-    .filter((index) => index >= 0);
-  const narrationEnds = events
-    .map((event, index) => event === "narration_end" ? index : -1)
-    .filter((index) => index >= 0);
-  const narrationStarted = narrationStarts.length === 1;
-  const narrationEnded = narrationEnds.length === 1;
+  const narrationEvents = events.filter((event) => !event.startsWith("action:"));
+  const narrationPairsComplete =
+    narrationEvents.length >= 2 &&
+    narrationEvents.length % 2 === 0 &&
+    narrationEvents.every(
+      (event, index) => event === (index % 2 === 0 ? "narration_start" : "narration_end"),
+    );
+  const finalNarrationStart = events.lastIndexOf("narration_start");
+  const narrationStarted = narrationPairsComplete;
+  const narrationEnded = narrationPairsComplete;
   const narrationOrdered =
-    narrationStarted &&
-    narrationEnded &&
-    narrationStarts[0] < narrationEnds[0] &&
-    (expectedAction === null || actionIndex < narrationStarts[0]);
+    narrationPairsComplete &&
+    (expectedAction === null || actionIndex < finalNarrationStart);
   return {
     exactActionsObserved,
     narrationStarted,
@@ -2014,6 +2034,7 @@ class PhysicalDevice {
       devicePort,
       caseId,
       correlationMarker,
+      this.token,
     );
   }
 
@@ -2363,8 +2384,8 @@ async function observeLoadingMessageCase(device, item, grpcPort) {
     pass: false,
     correlationMatched: false,
     emissionMatched: false,
-    sparkObserved: item.isUnlocked ? false : null,
-    lockedFallbackObserved: item.isUnlocked ? null : false,
+    deterministicProvenanceObserved: item.isUnlocked ? false : null,
+    policyProvenanceObserved: item.isUnlocked ? null : false,
   };
   const pass =
     cueEvidence.pass && cueDeadlineObserved && progressEvidence.pass;
@@ -2378,16 +2399,20 @@ async function observeLoadingMessageCase(device, item, grpcPort) {
     expected_cue_observed: cueEvidence.categoryAppropriate,
     cue_deadline_observed: cueDeadlineObserved,
     correlation_observed: progressEvidence.correlationMatched,
-    model_provenance_observed: progressEvidence.sparkObserved,
-    locked_fallback_provenance_observed:
-      progressEvidence.lockedFallbackObserved,
+    decision_provenance_observed:
+      item.isUnlocked
+        ? progressEvidence.deterministicProvenanceObserved
+        : progressEvidence.policyProvenanceObserved,
+    locked_policy_provenance_observed:
+      progressEvidence.policyProvenanceObserved,
     semantic_category_observed: item.isUnlocked
-      ? cueEvidence.categoryAppropriate && progressEvidence.sparkObserved
+      ? cueEvidence.categoryAppropriate &&
+        progressEvidence.deterministicProvenanceObserved
       : null,
     locked_neutral_observed: item.isUnlocked
       ? null
       : cueEvidence.lockedNeutralObserved &&
-        progressEvidence.lockedFallbackObserved,
+        progressEvidence.policyProvenanceObserved,
     terminal_observed: null,
     locality_observed: null,
     duration_bucket: durationBucket(Date.now() - started),
@@ -2882,15 +2907,17 @@ async function observeMusicCase(
   let pauseProof = null;
   let cleanupIdle = false;
   try {
+    const playHookBoundary = await device.beginHookEvidence();
     await device.inject(item.id);
     injected = true;
     const observation = await pollUntil(PHYSICAL_TIMEOUT_MS.music, async () => {
-      const [promptRows, media, transport, observedProvider, musicRows] = await Promise.all([
+      const [promptRows, media, transport, observedProvider, musicRows, hookEvents] = await Promise.all([
         device.promptRows(),
         device.media(),
         device.networkTransport(),
         device.musicProvider(),
         requiresSpotifyActivity ? device.musicRows() : Promise.resolve([]),
+        device.hookEvidenceSince(playHookBoundary),
       ]);
       const currentProviderMatches = recordProvider(observedProvider);
       const promptEvidence = evaluatePromptEvidence(item.id, promptRows, baselinePromptId);
@@ -2918,7 +2945,9 @@ async function observeMusicCase(
           media.playingSessionCount === 1 &&
           media.playbackClockRunning === true;
       }
-      routeObserved ||= promptEvidence.routeObserved;
+      routeObserved ||=
+        promptEvidence.routeObserved ||
+        evaluateNativeActionHookEvidence(hookEvents, NATIVE_ACTIONS.PLAY_MUSIC).pass;
       transportObserved ||= transport === expectedTransport;
       return {
         done:

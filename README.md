@@ -237,6 +237,13 @@ exact, scoped confirmation, and changing the action or its arguments invalidates
 that confirmation. Reversible playback and volume controls do not gain that
 extra confirmation step.
 
+Before an unlocked music lookup or weather request, the stock loading surface
+may show and speak one closed category cue such as “Finding music” or “Checking
+the weather.” This classification is deterministic and content-free; it does
+not claim a model call. Direct playback controls, unclassified requests, and
+locked requests stay silent, and physical verification records that
+deterministic or lock-policy provenance explicitly.
+
 Notes created on the Pin and facts explicitly saved by the assistant remain
 wearer-scoped in Cosmos. “Show my notes” reads the authenticated wearer’s five
 most recent notes; it never substitutes activity history or a generic answer,

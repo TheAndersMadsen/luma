@@ -50,7 +50,7 @@ class MusicInterstitialsParityContractTest {
     }
 
     @Test
-    fun `server cue RPCs stay default off bounded and stateless`() {
+    fun `server cue RPCs stay bounded and stateless`() {
         val actionService = repoFile(
             "runtime/core/src/services/aibus/cue/interstitial.rs",
         ).readText()
@@ -68,9 +68,12 @@ class MusicInterstitialsParityContractTest {
         assertTrue(actionService.contains("read_tool_spec(&action.name)?"))
         assertTrue(config.contains("pub const DEFAULT_SPOKEN_PROGRESS_CUES: bool = false;"))
         assertTrue(loadingService.contains("pub struct LoadingMessageHandler;"))
-        assertTrue(loadingService.contains("loading_message: String::new()"))
-        assertTrue(loadingService.contains("verbal_message: String::new()"))
-        assertTrue(loadingService.contains("emitted = false"))
+        assertTrue(loadingService.contains("loading_message_for(&request.utterance, request.is_unlocked)"))
+        assertTrue(loadingService.contains("source: \"deterministic\""))
+        assertTrue(loadingService.contains("reason: \"playback_control\""))
+        assertTrue(loadingService.contains("source: \"policy\""))
+        assertTrue(loadingService.contains("reason: \"locked\""))
+        assertTrue(loadingService.contains("emitted = decision.cue.is_some()"))
         assertFalse(actionService.contains("MUSIC_INTERSTITIALS_ENABLED"))
         assertFalse(actionService.contains("music_interstitials_enabled"))
     }

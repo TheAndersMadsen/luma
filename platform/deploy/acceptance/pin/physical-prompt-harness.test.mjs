@@ -22,6 +22,7 @@ import {
   MUSIC_PLAYBACK_SAMPLE_OFFSETS_MS,
   PHYSICAL_TIMEOUT_MS,
   PHYSICAL_PROMPT_CASES,
+  buildLoadingMessageRequestHeaders,
   buildTranscriptInjectionCommand,
   decodeLoadingMessageRpcResponse,
   encodeLoadingMessageCaseRequest,
@@ -431,6 +432,21 @@ test("loading-message fixtures use the stock plaintext envelope and report only 
   assert.equal(playback.pass, true);
   assert.equal(playback.semanticCategoryObserved, true);
   assert.doesNotMatch(JSON.stringify(playback), /playback|Checking/);
+});
+
+test("loading-message RPC authenticates to the protected Pin-local AIBus listener", () => {
+  const headers = buildLoadingMessageRequestHeaders(
+    "physical-loading-123e4567-e89b-42d3-a456-426614174000",
+    "fixture-token-value-that-is-private",
+  );
+  assert.equal(
+    headers[":path"],
+    "/humane.aibus.AIBusService/EncryptedLoadingMessage",
+  );
+  assert.equal(
+    headers.authorization,
+    "Bearer fixture-token-value-that-is-private",
+  );
 });
 
 test("local weather activity requires exactly one preflight and one grounded terminal", () => {
@@ -1443,6 +1459,31 @@ test("simple-action hook evidence is bounded by the harness marker and ordered",
   );
 });
 
+test("WorldClock is accepted as the exact native action for its fixed physical case", () => {
+  assert.deepEqual(
+    evaluateSimpleHookEvidence(
+      ["action:WorldClock", "narration_start", "narration_end"],
+      "WorldClock",
+    ),
+    {
+      localActionObserved: true,
+      narrationStarted: true,
+      narrationEnded: true,
+      pass: true,
+    },
+  );
+});
+
+test("PlayMusic is accepted as a content-free remote-route marker", () => {
+  const marker = "physical-simple-123e4567-e89b-42d3-a456-426614174000";
+  const events = parsePenumbraHookEvidence(`
+1710000000.001  100  101 I PenumbraPhysicalHarness: ${marker}
+1710000000.002  100  101 W PenumbraHook: Observed native action for physical verification | action=PlayMusic
+  `, marker);
+  assert.deepEqual(events, ["action:PlayMusic"]);
+  assert.equal(evaluateNativeActionHookEvidence(events, "PlayMusic").pass, true);
+});
+
 test("simple-action evidence accepts stock narration when hand tracking is disabled", () => {
   const marker = "physical-simple-123e4567-e89b-42d3-a456-426614174000";
   const events = parsePenumbraHookEvidence(`
@@ -1484,16 +1525,16 @@ test("pause cleanup accepts only the exact boundary-scoped compatibility dispatc
   assert.deepEqual(nearMiss, []);
 });
 
-test("progress evidence requires the content-free Spark decision after its boundary", () => {
+test("progress evidence requires truthful deterministic or policy provenance", () => {
   const marker = "physical-loading-123e4567-e89b-42d3-a456-426614174000";
   const privateLogText = "PRIVATE_PROGRESS_DETAIL_5c19";
   const observed = evaluateProgressModelEvidence(
     "loading_semantic_weather",
     `
-1710000000.001  100  101 W PenumbraServer: emitted=true source=spark reason=spark <<< Returning bounded stock loading message
+1710000000.001  100  101 W PenumbraServer: emitted=true source=deterministic reason=weather <<< Returning bounded stock loading message
 1710000000.002  100  101 I PenumbraPhysicalHarness: ${marker}
 1710000000.003  100  101 W PenumbraServer: ${privateLogText}
-1710000000.004  100  101 W PenumbraServer: INFO humane_server: <<< Returning bounded stock loading message emitted=true source=spark reason=spark correlation=${marker}
+1710000000.004  100  101 W PenumbraServer: INFO humane_server: <<< Returning bounded stock loading message emitted=true source=deterministic reason=weather correlation=${marker}
 `,
     marker,
   );
@@ -1501,8 +1542,8 @@ test("progress evidence requires the content-free Spark decision after its bound
     decisionObserved: true,
     correlationMatched: true,
     emissionMatched: true,
-    sparkObserved: true,
-    lockedFallbackObserved: null,
+    deterministicProvenanceObserved: true,
+    policyProvenanceObserved: null,
     pass: true,
   });
   assert.doesNotMatch(JSON.stringify(observed), /PRIVATE_PROGRESS/);
@@ -1510,25 +1551,25 @@ test("progress evidence requires the content-free Spark decision after its bound
   const fallback = evaluateProgressModelEvidence(
     "loading_semantic_weather",
     `1710000000.001  100  101 I PenumbraPhysicalHarness: ${marker}\n` +
-      `1710000000.002  100  101 W PenumbraServer: <<< Returning bounded stock loading message emitted=true source=fallback reason=timeout correlation=${marker}\n`,
+      `1710000000.002  100  101 W PenumbraServer: <<< Returning bounded stock loading message emitted=true source=deterministic reason=music correlation=${marker}\n`,
     marker,
   );
   assert.equal(fallback.pass, false);
-  assert.equal(fallback.sparkObserved, false);
+  assert.equal(fallback.deterministicProvenanceObserved, false);
 
   const locked = evaluateProgressModelEvidence(
     "loading_locked_neutral",
     `1710000000.001  100  101 I PenumbraPhysicalHarness: ${marker}\n` +
-      `1710000000.002  100  101 W PenumbraServer: <<< Returning bounded stock loading message emitted=false source=fallback reason=skipped correlation=${marker}\n`,
+      `1710000000.002  100  101 W PenumbraServer: <<< Returning bounded stock loading message emitted=false source=policy reason=locked correlation=${marker}\n`,
     marker,
   );
   assert.equal(locked.pass, true);
-  assert.equal(locked.lockedFallbackObserved, true);
+  assert.equal(locked.policyProvenanceObserved, true);
 
   const unrelated = evaluateProgressModelEvidence(
     "loading_semantic_weather",
     `1710000000.001  100  101 I PenumbraPhysicalHarness: ${marker}\n` +
-      "1710000000.002  100  101 W PenumbraServer: <<< Returning bounded stock loading message emitted=true source=spark reason=spark correlation=physical-loading-223e4567-e89b-42d3-a456-426614174000\n",
+    "1710000000.002  100  101 W PenumbraServer: <<< Returning bounded stock loading message emitted=true source=deterministic reason=music correlation=physical-loading-223e4567-e89b-42d3-a456-426614174000\n",
     marker,
   );
   assert.equal(unrelated.pass, false);
@@ -1704,8 +1745,8 @@ test("a selected loading case touches no unrelated activity or package surface",
               decisionObserved: true,
               correlationMatched: true,
               emissionMatched: true,
-              sparkObserved: true,
-              lockedFallbackObserved: null,
+              deterministicProvenanceObserved: true,
+              policyProvenanceObserved: null,
               pass: true,
             };
           },
@@ -2067,7 +2108,12 @@ test("remote Cosmos agentic answer accepts narration without inventing tool-chai
           },
           async hookEvidenceSince(boundaryMarker) {
             assert.equal(boundaryMarker, hookMarker);
-            return ["narration_start", "narration_end"];
+            return [
+              "narration_start",
+              "narration_end",
+              "narration_start",
+              "narration_end",
+            ];
           },
           async deletePrompt() {
             assert.fail("remote Cosmos creates no Pin-local prompt row");
@@ -2308,6 +2354,7 @@ async function runRankedProviderMainFixture({
   provider,
   expectedTransport,
   expectsSpotifyActivity,
+  remoteRouteViaHook = false,
   observedProviderForCall = () => provider,
 }) {
   const stdout = memoryWriter();
@@ -2371,7 +2418,7 @@ async function runRankedProviderMainFixture({
             cleanupOrder.push("volume_restore");
           },
           async promptRows() {
-            return phase === "idle" ? [] : [routeRow];
+            return phase === "idle" || remoteRouteViaHook ? [] : [routeRow];
           },
           async musicRows() {
             musicRowsObserved += 1;
@@ -2417,7 +2464,10 @@ async function runRankedProviderMainFixture({
           },
           async hookEvidenceSince(boundaryMarker) {
             assert.equal(boundaryMarker, marker);
-            return phase === "paused" ? ["action:PauseMusic"] : [];
+            if (phase === "paused") return ["action:PauseMusic"];
+            return phase === "playing" && remoteRouteViaHook
+              ? ["action:PlayMusic"]
+              : [];
           },
           async forceStop() {
             cleanupOrder.push("music_stop");
@@ -2449,6 +2499,19 @@ async function runRankedProviderMainFixture({
     musicProviderCalls,
   };
 }
+
+test("remote ranked playback attributes its route from the PlayMusic Hook marker", async () => {
+  const result = await runRankedProviderMainFixture({
+    provider: "youtube_music",
+    expectedTransport: "wifi",
+    expectsSpotifyActivity: false,
+    remoteRouteViaHook: true,
+  });
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.report.cases[0].route_observed, true);
+  assert.deepEqual(result.deletedPrompts, []);
+});
 
 test("ranked Spotify requires its activity row and removes only the attributed row", async () => {
   const result = await runRankedProviderMainFixture({
