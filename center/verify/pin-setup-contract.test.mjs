@@ -12,7 +12,9 @@ const contract = JSON.parse(
 const { PIN_SETUP_JOURNEY } = await import(
   "../src/lib/pin-setup/generated/journey.ts"
 );
-const { derivePinSetupPlan } = await import("../src/lib/pin-setup/steps.ts");
+const { derivePinSetupPlan, musicPlaybackReadiness } = await import(
+  "../src/lib/pin-setup/steps.ts"
+);
 
 function facts(overrides = {}) {
   return {
@@ -40,7 +42,14 @@ function facts(overrides = {}) {
     server: {
       answering: "online",
       assistantModel: "gpt-5",
-      assistantReady: true,
+      capabilities: {
+        assistant: true,
+        speech: true,
+        weather: true,
+        nearbyNavigation: true,
+        musicPlayback: true,
+        foodLogging: true,
+      },
     },
     activation: {
       state: "active",
@@ -356,7 +365,14 @@ test("a wearer is told to ask the operator when Cosmos services need configurati
       server: {
         answering: "online",
         assistantModel: null,
-        assistantReady: false,
+        capabilities: {
+          assistant: false,
+          speech: true,
+          weather: true,
+          nearbyNavigation: true,
+          musicPlayback: true,
+          foodLogging: true,
+        },
       },
       operator: false,
     }),
@@ -374,6 +390,117 @@ test("a wearer is told to ask the operator when Cosmos services need configurati
   const configureAction = /if \(step\.id === "configure"\) \{([\s\S]*?)(?=\n\s*\})/u.exec(setupView)?.[1];
   assert.ok(configureAction, "guided setup is missing the configuration action");
   assert.match(configureAction, /provisioningHref/u);
+});
+
+test("assistant readiness alone cannot complete capability setup", () => {
+  const plan = derivePinSetupPlan(
+    facts({
+      server: {
+        answering: "online",
+        assistantModel: "gpt-5.6-sol",
+        capabilities: {
+          assistant: true,
+          speech: false,
+          weather: false,
+          nearbyNavigation: false,
+          musicPlayback: false,
+          foodLogging: false,
+        },
+      },
+    }),
+  );
+  const configure = plan.steps.find((step) => step.id === "configure");
+
+  assert.equal(configure.status, "todo");
+  assert.match(configure.summary, /Speech/);
+  assert.match(configure.summary, /Weather/);
+  assert.match(configure.summary, /Nearby.*navigation/);
+  assert.match(configure.summary, /Music playback/);
+  assert.match(configure.summary, /Food logging/);
+  assert.match(configure.next, /Settings.*Services/);
+});
+
+test("an unread capability remains checking instead of becoming a false success", () => {
+  const plan = derivePinSetupPlan(
+    facts({
+      server: {
+        answering: "online",
+        assistantModel: "gpt-5.6-sol",
+        capabilities: {
+          assistant: true,
+          speech: true,
+          weather: true,
+          nearbyNavigation: true,
+          musicPlayback: null,
+          foodLogging: true,
+        },
+      },
+    }),
+  );
+  const configure = plan.steps.find((step) => step.id === "configure");
+
+  assert.equal(configure.status, "todo");
+  assert.match(configure.summary, /Checking.*Music playback/i);
+  assert.equal(configure.next, null);
+});
+
+test("every authoritative capability must be ready before configuration completes", () => {
+  const configure = derivePinSetupPlan(facts()).steps.find(
+    (step) => step.id === "configure",
+  );
+
+  assert.equal(configure.status, "done");
+  assert.match(configure.summary, /all.*capabilities.*ready/i);
+});
+
+test("catalog availability alone cannot prove playback on the selected Pin", () => {
+  const connectedYoutubeCatalog = {
+    youtube_music: { state: "connected" },
+  };
+
+  assert.equal(
+    musicPlaybackReadiness(null, connectedYoutubeCatalog),
+    null,
+    "provider state without a Pin runtime is unread, not ready",
+  );
+  assert.equal(
+    musicPlaybackReadiness(
+      {
+        active_provider: "spotify",
+        state: "not_configured",
+        engine_ready: false,
+      },
+      connectedYoutubeCatalog,
+    ),
+    false,
+    "a connected non-selected catalog cannot satisfy playback",
+  );
+  assert.equal(
+    musicPlaybackReadiness(
+      {
+        active_provider: "youtube_music",
+        state: "disabled",
+        engine_ready: false,
+      },
+      connectedYoutubeCatalog,
+    ),
+    true,
+    "the selected Pin runtime and authenticated provider connection together prove playback",
+  );
+});
+
+test("music readiness reads both the connected Pin and authenticated provider status", async () => {
+  const source = await readFile(
+    new URL("../src/app/settings/pin/setup/usePinSetupFacts.ts", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(source, /client\.getSpotifyStatus\(\)/u);
+  assert.match(source, /fetch\("\/api\/settings\/services\/music"/u);
+  assert.match(
+    source,
+    /musicPlaybackReadiness\(\s*pinMusicQuery\.data,\s*musicProvidersQuery\.data/u,
+  );
 });
 
 test("invalid deployment edge configuration cannot look absent or verified", () => {

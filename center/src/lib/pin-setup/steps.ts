@@ -96,12 +96,104 @@ export interface PinSetupInstallFacts {
   readonly detail: string | null;
 }
 
+export const PIN_SETUP_CAPABILITIES = [
+  {
+    id: "assistant",
+    label: "Assistant",
+    detail: "Language understanding and tool orchestration",
+  },
+  {
+    id: "speech",
+    label: "Speech",
+    detail: "Transcription and spoken responses",
+  },
+  {
+    id: "weather",
+    label: "Weather",
+    detail: "Current conditions in the stock experience",
+  },
+  {
+    id: "nearbyNavigation",
+    label: "Nearby & navigation",
+    detail: "Places, routes, and directions",
+  },
+  {
+    id: "musicPlayback",
+    label: "Music playback",
+    detail: "The selected provider can play on this Pin",
+  },
+  {
+    id: "foodLogging",
+    label: "Food logging",
+    detail: "Food lookup and durable log entries",
+  },
+] as const;
+
+export type PinSetupCapabilityId = (typeof PIN_SETUP_CAPABILITIES)[number]["id"];
+
+export type PinSetupCapabilityFacts = Readonly<
+  Record<PinSetupCapabilityId, boolean | null>
+>;
+
 /** The Revival server on the Pin, over the same USB session. */
 export interface PinSetupServerFacts {
   readonly answering: "unknown" | "checking" | "online" | "offline";
   readonly assistantModel: string | null;
-  /** Whether the Cosmos assistant is configured. `null` until Center reads it. */
-  readonly assistantReady: boolean | null;
+  /** `null` means the authoritative status path has not answered. */
+  readonly capabilities: PinSetupCapabilityFacts;
+}
+
+function objectRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+/**
+ * Prove music playback from both sides of the boundary.
+ *
+ * The Pin status proves which playback runtime is selected and answering. The
+ * authenticated provider status proves that the selected Center account is
+ * connected. Provider/catalog state alone is deliberately insufficient.
+ */
+export function musicPlaybackReadiness(
+  pinStatusValue: unknown,
+  providerStatusValue: unknown,
+): boolean | null {
+  const pinStatus = objectRecord(pinStatusValue);
+  if (!pinStatus) return null;
+
+  const activeProvider = pinStatus.active_provider;
+  const state = pinStatus.state;
+  const engineReady = pinStatus.engine_ready;
+  if (
+    !["spotify", "youtube_music", "apple_music", "tidal"].includes(
+      String(activeProvider),
+    ) ||
+    !["disabled", "not_configured", "pairing", "ready", "error"].includes(
+      String(state),
+    ) ||
+    typeof engineReady !== "boolean"
+  ) {
+    return null;
+  }
+
+  if (activeProvider === "spotify") {
+    return state === "ready" && engineReady;
+  }
+  if (activeProvider === "apple_music") return false;
+
+  const providers = objectRecord(providerStatusValue);
+  const selected = providers ? objectRecord(providers[String(activeProvider)]) : null;
+  if (!selected || typeof selected.state !== "string") return null;
+
+  const acceptedStates =
+    activeProvider === "youtube_music"
+      ? ["not_connected", "pairing", "connected", "error"]
+      : ["not_configured", "not_connected", "connecting", "connected", "error"];
+  return acceptedStates.includes(selected.state)
+    ? selected.state === "connected"
+    : null;
 }
 
 /**
@@ -429,6 +521,12 @@ function deriveInstall(facts: PinSetupFacts): DraftStep {
   };
 }
 
+function formatList(values: readonly string[]): string {
+  if (values.length < 2) return values[0] ?? "";
+  if (values.length === 2) return `${values[0]} and ${values[1]}`;
+  return `${values.slice(0, -1).join(", ")}, and ${values.at(-1)}`;
+}
+
 function deriveConfigure(facts: PinSetupFacts): DraftStep {
   const { usb, server, install, operator } = facts;
 
@@ -461,28 +559,38 @@ function deriveConfigure(facts: PinSetupFacts): DraftStep {
     };
   }
 
-  if (server.assistantReady === null) {
-    return { status: "todo", summary: "Checking Cosmos services…", next: null };
+  const unread = PIN_SETUP_CAPABILITIES.filter(
+    ({ id }) => server.capabilities[id] === null,
+  ).map(({ label }) => label);
+  if (unread.length > 0) {
+    return {
+      status: "todo",
+      summary: `Checking capability readiness: ${formatList(unread)}…`,
+      next: null,
+    };
   }
 
-  if (!server.assistantReady) {
+  const missing = PIN_SETUP_CAPABILITIES.filter(
+    ({ id }) => server.capabilities[id] === false,
+  ).map(({ label }) => label);
+  if (missing.length > 0) {
     return operator
       ? {
           status: "todo",
-          summary: "Cosmos Assistant needs setup.",
-          next: "Configure Assistant in Settings → Services.",
+          summary: `Services needing setup: ${formatList(missing)}.`,
+          next: "Configure them in Settings → Services.",
         }
       : {
           status: "manual",
-          summary: "Cosmos Assistant needs operator setup.",
-          next: "Ask this Center’s operator to configure Assistant.",
+          summary: `Operator setup is required for: ${formatList(missing)}.`,
+          next: `Ask this Center’s operator to configure ${formatList(missing)}.`,
           commands: [],
         };
   }
 
   return {
     status: "done",
-    summary: `Pin and Cosmos are ready${
+    summary: `All Pin and Cosmos capabilities are ready${
       server.assistantModel ? ` (${server.assistantModel})` : ""
     }.`,
     next: null,

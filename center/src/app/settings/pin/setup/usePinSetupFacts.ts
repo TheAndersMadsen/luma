@@ -12,7 +12,8 @@
  *                          here means the same thing it means there
  *   what is installed      `inspectInstallState()` over the borrowed session
  *   is the server up       the provider's own health probe over that session
- *   is Cosmos configured   `/api/assistant/status` on Center
+ *   are services ready     `/api/assistant/status`, the Pin's own playback
+ *                          status, and authenticated music-provider status
  *   is it pointed at us    `Settings.Global penumbra_cosmos_remote_mode`, read
  *                          over ADB and never written from here
  *   is it reporting        `/api/devices/pair` + `/api/devices/status`, the same
@@ -34,6 +35,7 @@ import { useCallback, useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { logInfo } from "@/lib/pin-device";
 import { useAssistantStatus } from "@/components/AiMicChat";
+import { musicPlaybackReadiness } from "@/lib/pin-setup";
 import {
   isPinReleaseError,
   type InstallInspectionResult,
@@ -147,7 +149,7 @@ export interface PinSetupReadings {
 
 export function usePinSetupFacts(options: { operator: boolean }): PinSetupReadings {
   const queryClient = useQueryClient();
-  const { status, serviceStatus, connectionInfo, identity, support, borrowSession } =
+  const { status, serviceStatus, connectionInfo, identity, support, client, borrowSession } =
     usePinDevice();
   const assistantStatus = useAssistantStatus();
 
@@ -264,6 +266,42 @@ export function usePinSetupFacts(options: { operator: boolean }): PinSetupReadin
     },
   });
 
+  /*
+   * Music is the one capability whose authority is split by design. The Pin
+   * reports its selected playback runtime over the same USB tunnel as every
+   * other local setting. Center separately reports the signed-in wearer's
+   * provider connection. Requiring both prevents a working catalog account
+   * from being presented as working playback on this Pin.
+   */
+  const pinMusicQuery = useQuery({
+    queryKey: [SETUP_QUERY_KEY, "pin-music", serial],
+    enabled: connected && serviceStatus === "online" && client !== null,
+    staleTime: 10_000,
+    retry: false,
+    refetchOnWindowFocus: false,
+    queryFn: async () => {
+      if (!client) throw new Error("The Pin music service is unavailable.");
+      return client.getSpotifyStatus();
+    },
+  });
+
+  const musicProvidersQuery = useQuery({
+    queryKey: [SETUP_QUERY_KEY, "music-providers"],
+    enabled: connected && serviceStatus === "online",
+    staleTime: 10_000,
+    retry: false,
+    refetchOnWindowFocus: false,
+    queryFn: async (): Promise<unknown> => {
+      const response = await fetch("/api/settings/services/music", {
+        cache: "no-store",
+      });
+      if (!response.ok) {
+        throw new Error(`/api/settings/services/music → ${response.status}`);
+      }
+      return response.json();
+    },
+  });
+
   const release = useMemo<PinSetupReleaseFacts>(() => {
     // Data first, deliberately: a background refetch must not flip a published
     // release back to "checking…" and make the page look like it forgot.
@@ -357,12 +395,38 @@ export function usePinSetupFacts(options: { operator: boolean }): PinSetupReadin
 
   const server = useMemo<PinSetupServerFacts>(() => {
     const assistant = assistantStatus.data;
+    const cosmos = assistant?.provider_authority === "cosmos";
+    const toolReady = (name: string): boolean | null => {
+      if (!cosmos || !assistant) return null;
+      const matches = assistant.tools.filter((tool) => tool.name === name);
+      return matches.length === 1 ? matches[0].live : null;
+    };
+    const foodLookup = toolReady("food_lookup");
+    const foodMemory = toolReady("remember");
     return {
       answering: serviceStatus,
-      assistantModel: assistant?.model ?? null,
-      assistantReady: assistant?.provider_authority === "cosmos" ? assistant.assistant : null,
+      assistantModel: cosmos ? assistant.model : null,
+      capabilities: {
+        assistant: cosmos ? assistant.assistant : null,
+        speech: cosmos ? assistant.speech : null,
+        weather: toolReady("weather"),
+        nearbyNavigation: toolReady("nearby"),
+        musicPlayback: musicPlaybackReadiness(
+          pinMusicQuery.data,
+          musicProvidersQuery.data,
+        ),
+        foodLogging:
+          foodLookup === null || foodMemory === null
+            ? null
+            : foodLookup && foodMemory,
+      },
     };
-  }, [assistantStatus.data, serviceStatus]);
+  }, [
+    assistantStatus.data,
+    musicProvidersQuery.data,
+    pinMusicQuery.data,
+    serviceStatus,
+  ]);
 
   const activation = useMemo<PinSetupActivationFacts>(() => {
     const expected = expectedEdgeQuery.data;
@@ -545,6 +609,8 @@ export function usePinSetupFacts(options: { operator: boolean }): PinSetupReadin
       activationQuery.isFetching ||
       pairingsQuery.isFetching ||
       statusQuery.isFetching ||
-      assistantStatus.isFetching,
+      assistantStatus.isFetching ||
+      pinMusicQuery.isFetching ||
+      musicProvidersQuery.isFetching,
   };
 }

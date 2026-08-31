@@ -10,6 +10,7 @@ import styles from "./setup.module.css";
 import { StatusChip, StatusMessage } from "@/components/Status";
 import {
   derivePinSetupPlan,
+  PIN_SETUP_CAPABILITIES,
   type PinSetupFacts,
   type PinSetupPlan,
   type PinSetupStep,
@@ -310,6 +311,35 @@ export default function SetupView({
             })}
           />
         ))}
+      </section>
+
+      <section className={settings.section} data-testid="pin-setup-capabilities">
+        <div className={settings.sectionHeader}>
+          <span className={settings.sectionTitle}>Capability readiness</span>
+        </div>
+        <div className={styles.capabilityGrid}>
+          {PIN_SETUP_CAPABILITIES.map(({ id, label, detail }) => {
+            const ready = readings.facts.server.capabilities[id];
+            return (
+              <div
+                className={styles.capability}
+                data-testid={`pin-setup-capability-${id}`}
+                key={id}
+              >
+                <span className={styles.capabilityText}>
+                  <span className={styles.capabilityTitle}>{label}</span>
+                  <span className={styles.capabilityDetail}>{detail}</span>
+                </span>
+                <StatusChip
+                  tone={ready === true ? "live" : ready === false ? "absent" : "off"}
+                  variant="tag"
+                  label={ready === true ? "Ready" : ready === false ? "Needs setup" : "Checking"}
+                  detail={detail}
+                />
+              </div>
+            );
+          })}
+        </div>
       </section>
 
       <section className={settings.section} data-testid="pin-setup-evidence">

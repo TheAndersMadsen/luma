@@ -166,6 +166,44 @@
   padding-top: 2px;
 }
 
+/* ------------------------------------------------ capability readiness -- */
+
+.capabilityGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1px;
+  background: var(--hu-divider);
+}
+
+.capability {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-width: 0;
+  padding: 14px 24px;
+  background: var(--hu-colors-black);
+}
+
+.capabilityText {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.capabilityTitle {
+  color: var(--hu-colors-white);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.capabilityDetail {
+  color: var(--hu-text-muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 .evidenceDetails > summary {
   cursor: pointer;
   list-style: none;
