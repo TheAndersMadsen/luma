@@ -207,6 +207,19 @@ test("the containerized iroh bridge is nonroot, persistent, and Pin-independent 
   assert.match(dockerfile, /^VOLUME \["\/var\/lib\/center-iroh-bridge"\]$/mu);
   assert.match(dockerfile, /HEALTHCHECK[^\n]*[\s\S]*http:\/\/127\.0\.0\.1:18080\/__health/u);
 
+  const compose = fs.readFileSync(
+    path.join(root, "platform/compose/production.yaml"),
+    "utf8",
+  );
+  assert.match(
+    compose,
+    /test: \[CMD, curl, [^\n]*http:\/\/127\.0\.0\.1:18080\/__health\]/u,
+  );
+  assert.doesNotMatch(
+    compose,
+    /wget[^\n]*http:\/\/127\.0\.0\.1:18080\/__health/u,
+  );
+
   const bridge = fs.readFileSync(path.join(root, "pin/bridge/src/main.rs"), "utf8");
   assert.match(
     bridge,

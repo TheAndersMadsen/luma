@@ -321,7 +321,7 @@ services:
       <<: *production-labels
       dk.andersmadsen.ai-pin-revival.component: center-iroh-bridge
     healthcheck:
-      test: [CMD, wget, --quiet, --tries=1, --spider, http://127.0.0.1:18080/__health]
+      test: [CMD, curl, --fail, --silent, --show-error, --max-time, "4", http://127.0.0.1:18080/__health]
       interval: 10s
       timeout: 5s
       start_period: 10s
