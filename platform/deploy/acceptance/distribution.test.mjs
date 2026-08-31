@@ -269,15 +269,14 @@ test("tag release workflow publishes the exact hardened image and Compose bounda
   assert.match(source, /platform\/containers\/keycloak\/Dockerfile/u);
   assert.match(source, /platform\/containers\/center-iroh-bridge\/Dockerfile/u);
   assert.match(source, /^  pin-release:\n/mu);
-  assert.match(source, /name: build exact signed Pin release/u);
-  assert.match(source, /PIN_COMPATIBILITY_KEYSTORE_BASE64: \$\{\{ secrets\.PIN_COMPATIBILITY_KEYSTORE_BASE64 \}\}/u);
-  assert.doesNotMatch(source, /PIN_EMBEDDED_PATCH_KEYSTORE_BASE64/u);
-  assert.doesNotMatch(source, /PIN_TFLITE_LIBRARY_BASE64/u);
+  assert.match(source, /name: acquire exact signed Pin release/u);
+  assert.doesNotMatch(source, /PIN_COMPATIBILITY_KEYSTORE_BASE64/u);
+  assert.doesNotMatch(source, /PIN_SIGNING_STORE_PASSWORD/u);
+  assert.match(source, /require\('\.\/\$coordinates'\)\.signedReleaseSource/u);
   assert.match(source, /gh release download "\$source_tag"\s+\\\n\s+--repo "\$source_repository"\s+\\\n\s+--pattern "\$source_archive"/u);
   assert.doesNotMatch(source, /github\.com\/\$source_repository\/releases\/download/u);
-  assert.match(source, /tar --extract --gzip --to-stdout --file "\$archive" "\$server_member"/u);
-  assert.match(source, /unzip -p "\$installer_apk" 'assets\/abxdroppedapk-private-key\.pk8'/u);
-  assert.match(source, /openssl pkcs12 -export/u);
+  assert.match(source, /describePinReleaseArchive/u);
+  assert.match(source, /expectedSigner: expected\.signerSha256/u);
   assert.match(source, /needs: \[coordinates, application, pin-release\]/u);
   assert.match(source, /--pin-archive "\$RUNNER_TEMP\/release-receipts\/ai-pin-revival-pin-\$pin_version\.tar\.gz"/u);
   assert.match(source, /"\$output\/ai-pin-revival-pin-\$pin_version\.tar\.gz"/u);
@@ -287,9 +286,20 @@ test("tag release workflow publishes the exact hardened image and Compose bounda
     "utf8",
   ));
   assert.deepEqual(pinCoordinates, {
-    schemaVersion: 2,
+    schemaVersion: 3,
     version: "2026-08-31.6",
     versionCode: 202608316,
+    signedReleaseSource: {
+      repository: "TheAndersMadsen/ai-pin-revival",
+      tag: "v0.1.88",
+      archive: "ai-pin-revival-pin-2026-08-31.6.tar.gz",
+      size: 123901059,
+      sha256: "286a755016ea78461082cc3fb4e1178486b12b89f35d59096d358db3fe1a86e7",
+      releaseId: "1cb5ed627f5151360d280c6679e88a091a6f5e2ad3080376ffe3d9546beaced1",
+      manifestSha256: "a6a2302d07bcde5faf4589e066f5e7dcd1e3c9a58b1b6c2f5f339b7af3bc82a3",
+      receiptsSha256: "713675337e0ec249e511f7e760a18a5634a3cb8fc59245adc4a41e449c684431",
+      signerSha256: "d8a64e1c3a1afdc340c4b86feaacb88e2d81d66972afbd58e743b7c5b8d1cbdb",
+    },
     privateAssetSource: {
       repository: "TheAndersMadsen/ai-pin-revival",
       tag: "v0.1.82",

@@ -242,22 +242,33 @@ test("release workflow creates and publishes the identity-verified Sigstore bund
   assert.doesNotMatch(workflow, /--insecure-ignore-(?:sct|tlog)/u);
 });
 
-test("signed Pin release reclaims only the unused hosted-runner Android SDK", async () => {
+test("server releases reuse one identity-pinned signed Pin archive", async () => {
   const workflow = await readFile(
     new URL("../../../.github/workflows/release-cli.yml", import.meta.url),
     "utf8",
   );
   const pinJob = workflow.match(/^  pin-release:\n[\s\S]*?^  images:/mu)?.[0];
   assert.ok(pinJob, "release workflow must contain the bounded Pin release job");
-  assert.match(pinJob, /^        if: runner\.environment == 'github-hosted'$/mu);
-  assert.match(pinJob, /^          android_root=\/usr\/local\/lib\/android$/mu);
-  assert.match(pinJob, /^          test ! -L "\$android_root"$/mu);
-  assert.match(
-    pinJob,
-    /^          sudo rm --recursive --force --one-file-system "\$android_root"$/mu,
-  );
-  assert.match(pinJob, /^          test "\$reclaimed" -gt 0$/mu);
-  assert.doesNotMatch(pinJob, /\/(?:opt\/hostedtoolcache|usr\/share\/dotnet|opt\/ghc)/u);
+  assert.match(pinJob, /name: acquire exact signed Pin release/u);
+  assert.match(pinJob, /signedReleaseSource\.repository/u);
+  assert.match(pinJob, /signedReleaseSource\.tag/u);
+  assert.match(pinJob, /signedReleaseSource\.sha256/u);
+  assert.match(pinJob, /describePinReleaseArchive/u);
+  for (const field of [
+    "archive",
+    "sha256",
+    "size",
+    "releaseId",
+    "version",
+    "versionCode",
+    "signerSha256",
+    "manifestSha256",
+    "receiptsSha256",
+  ]) {
+    assert.match(pinJob, new RegExp(`^            ${field}:`, "mu"));
+  }
+  assert.doesNotMatch(pinJob, /PIN_(?:COMPATIBILITY|SIGNING|EMBEDDED|TFLITE)/u);
+  assert.doesNotMatch(pinJob, /platform\/deploy\/pin\/(?:build|export-release)\.mjs/u);
 });
 
 test("release proof rejects a certificate from the wrong OIDC issuer", async (t) => {

@@ -601,6 +601,10 @@ Server, and injector as one release. The Server APK no longer embeds the old
 on-device Codex executable; only the TFLite native runtime remains an external
 private build input. Building never runs ADB.
 
+Operator releases republish the exact pinned signed Pin archive until the Pin
+version is deliberately advanced. A server-only release therefore does not
+replace an unchanged Pin build or require the wearer to reinstall it.
+
 ## AI-assisted setup
 
 The following prompt is intentionally outcome-based and gives Claude, Codex, or

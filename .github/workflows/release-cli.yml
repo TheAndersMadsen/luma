@@ -50,7 +50,7 @@ jobs:
         run: ./revival check platform --full
 
   pin-release:
-    name: build exact signed Pin release
+    name: acquire exact signed Pin release
     needs: coordinates
     runs-on: ubuntu-24.04
     permissions:
@@ -63,120 +63,48 @@ jobs:
         with:
           node-version: 22.14.0
           package-manager-cache: false
-      - name: Reclaim the unused host Android SDK
-        if: runner.environment == 'github-hosted'
-        run: |
-          set -euo pipefail
-          android_root=/usr/local/lib/android
-          test -d "$android_root"
-          test ! -L "$android_root"
-          test "$(realpath "$android_root")" = "$android_root"
-          before="$(df --output=avail -B1 / | tail -1)"
-          sudo rm --recursive --force --one-file-system "$android_root"
-          after="$(df --output=avail -B1 / | tail -1)"
-          reclaimed="$((after - before))"
-          printf 'Reclaimed %s bytes from the unused host Android SDK.\n' "$reclaimed"
-          test "$reclaimed" -gt 0
-      - name: Materialize protected signing inputs
-        env:
-          PIN_COMPATIBILITY_KEYSTORE_BASE64: ${{ secrets.PIN_COMPATIBILITY_KEYSTORE_BASE64 }}
-          PIN_SIGNING_STORE_PASSWORD: ${{ secrets.PIN_SIGNING_STORE_PASSWORD }}
-          PIN_SIGNING_KEY_ALIAS: ${{ secrets.PIN_SIGNING_KEY_ALIAS }}
-          PIN_SIGNING_KEY_PASSWORD: ${{ secrets.PIN_SIGNING_KEY_PASSWORD }}
-        run: |
-          set -euo pipefail
-          node --input-type=module <<'NODE'
-          import { mkdirSync, writeFileSync } from "node:fs";
-          import { join } from "node:path";
-          const required = [
-            "PIN_COMPATIBILITY_KEYSTORE_BASE64",
-            "PIN_SIGNING_STORE_PASSWORD",
-            "PIN_SIGNING_KEY_ALIAS",
-            "PIN_SIGNING_KEY_PASSWORD",
-          ];
-          for (const name of required) {
-            if (!process.env[name]) throw new Error(`protected release input ${name} is not configured`);
-          }
-          const root = join(process.env.RUNNER_TEMP, "pin-release-inputs");
-          const privateRoot = join(root, "pin-assets", "tflite-2.11.0");
-          mkdirSync(privateRoot, { recursive: true, mode: 0o700 });
-          const compatibility = join(root, "compatibility.keystore");
-          writeFileSync(compatibility, Buffer.from(process.env.PIN_COMPATIBILITY_KEYSTORE_BASE64, "base64"), { mode: 0o600 });
-          const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
-          writeFileSync(join(root, "signing.env"), [
-            `export PIN_SIGNING_STORE_FILE=${quote(compatibility)}`,
-            `export PIN_SIGNING_STORE_PASSWORD=${quote(process.env.PIN_SIGNING_STORE_PASSWORD)}`,
-            `export PIN_SIGNING_KEY_ALIAS=${quote(process.env.PIN_SIGNING_KEY_ALIAS)}`,
-            `export PIN_SIGNING_KEY_PASSWORD=${quote(process.env.PIN_SIGNING_KEY_PASSWORD)}`,
-            "",
-          ].join("\n"), { mode: 0o600 });
-          NODE
-      - name: Recover the pinned private native build input
+      - name: Download and verify the exact signed Pin archive
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           coordinates="platform/distribution/pin-release-coordinates.json"
-          source_repository="$(node -p "require('./$coordinates').privateAssetSource.repository")"
-          source_tag="$(node -p "require('./$coordinates').privateAssetSource.tag")"
-          source_archive="$(node -p "require('./$coordinates').privateAssetSource.archive")"
-          source_size="$(node -p "require('./$coordinates').privateAssetSource.size")"
-          source_sha256="$(node -p "require('./$coordinates').privateAssetSource.sha256")"
-          installer_member="$(node -p "require('./$coordinates').privateAssetSource.installerMember")"
-          server_member="$(node -p "require('./$coordinates').privateAssetSource.serverMember")"
-          library_member="$(node -p "require('./$coordinates').privateAssetSource.libraryMember")"
-          archive="$RUNNER_TEMP/pin-release-inputs/$source_archive"
-          installer_apk="$RUNNER_TEMP/pin-release-inputs/installer.apk"
-          server_apk="$RUNNER_TEMP/pin-release-inputs/server.apk"
-          embedded_keystore="$RUNNER_TEMP/pin-release-inputs/embedded-patch.keystore"
-          asset="$RUNNER_TEMP/pin-release-inputs/pin-assets/tflite-2.11.0/libtensorflowlite_jni.so"
+          source_repository="$(node -p "require('./$coordinates').signedReleaseSource.repository")"
+          source_tag="$(node -p "require('./$coordinates').signedReleaseSource.tag")"
+          source_archive="$(node -p "require('./$coordinates').signedReleaseSource.archive")"
+          source_size="$(node -p "require('./$coordinates').signedReleaseSource.size")"
+          source_sha256="$(node -p "require('./$coordinates').signedReleaseSource.sha256")"
+          mkdir -p "$RUNNER_TEMP/release-pin"
+          archive="$RUNNER_TEMP/release-pin/$source_archive"
           gh release download "$source_tag" \
             --repo "$source_repository" \
             --pattern "$source_archive" \
-            --dir "$RUNNER_TEMP/pin-release-inputs"
+            --dir "$RUNNER_TEMP/release-pin"
           test "$(stat --format='%s' "$archive")" = "$source_size"
           printf '%s  %s\n' "$source_sha256" "$archive" | sha256sum --check --status
-          tar --extract --gzip --to-stdout --file "$archive" "$installer_member" > "$installer_apk"
-          tar --extract --gzip --to-stdout --file "$archive" "$server_member" > "$server_apk"
-          unzip -p "$installer_apk" 'assets/abxdroppedapk-private-key.pk8' > "$RUNNER_TEMP/pin-release-inputs/embedded-key.der"
-          unzip -p "$installer_apk" 'assets/abxdroppedapk-certificate.der' > "$RUNNER_TEMP/pin-release-inputs/embedded-cert.der"
-          openssl pkey -inform DER -in "$RUNNER_TEMP/pin-release-inputs/embedded-key.der" \
-            -out "$RUNNER_TEMP/pin-release-inputs/embedded-key.pem"
-          openssl x509 -inform DER -in "$RUNNER_TEMP/pin-release-inputs/embedded-cert.der" \
-            -out "$RUNNER_TEMP/pin-release-inputs/embedded-cert.pem"
-          openssl pkcs12 -export \
-            -in "$RUNNER_TEMP/pin-release-inputs/embedded-cert.pem" \
-            -inkey "$RUNNER_TEMP/pin-release-inputs/embedded-key.pem" \
-            -out "$embedded_keystore" -name abxdroppedapk -passout pass:abxdroppedapk
-          unzip -p "$server_apk" "$library_member" > "$asset"
-          printf '%s  %s\n' \
-            '8e2acc968c1a2c6b92a641fe016a2f75de0bfde87548cba9972bcc36905f57ea' \
-            "$asset" | sha256sum --check --status
-          chmod 0600 "$installer_apk" "$server_apk" "$embedded_keystore" "$asset"
-      - name: Build, verify, and export the signed Pin archive
-        env:
-          REVIVAL_CONFIG_DIR: ${{ runner.temp }}/pin-release-config
-          REVIVAL_SECRETS_DIR: ${{ runner.temp }}/pin-release-secrets
-          REVIVAL_DATA_DIR: ${{ runner.temp }}/pin-release-data
-          REVIVAL_BUILD_DIR: ${{ runner.temp }}/pin-release-build
-          REVIVAL_PIN_SIGNING_STORE_FILE: ${{ runner.temp }}/pin-release-inputs/compatibility.keystore
-          REVIVAL_PIN_EMBEDDED_PATCH_SIGNING_STORE_FILE: ${{ runner.temp }}/pin-release-inputs/embedded-patch.keystore
-          REVIVAL_PIN_PRIVATE_ASSETS_DIR: ${{ runner.temp }}/pin-release-inputs/pin-assets
-        run: |
-          set -euo pipefail
-          coordinates="platform/distribution/pin-release-coordinates.json"
-          pin_version="$(node -p "require('./$coordinates').version")"
-          pin_version_code="$(node -p "require('./$coordinates').versionCode")"
-          mkdir -p "$REVIVAL_SECRETS_DIR/pin" "$REVIVAL_DATA_DIR" "$REVIVAL_BUILD_DIR"
-          install -m 0600 "$RUNNER_TEMP/pin-release-inputs/signing.env" "$REVIVAL_SECRETS_DIR/pin/signing.env"
-          node platform/deploy/pin/build.mjs build \
-            --version "$pin_version" --version-code "$pin_version_code" --json
-          mkdir -p "$RUNNER_TEMP/release-pin"
-          archive="$RUNNER_TEMP/release-pin/ai-pin-revival-pin-$pin_version.tar.gz"
-          node platform/deploy/pin/export-release.mjs --output "$archive" --json
           PIN_ARCHIVE="$archive" node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
           import { describePinReleaseArchive } from "./platform/deploy/pin/import-release.mjs";
-          await describePinReleaseArchive({ archive: process.env.PIN_ARCHIVE });
+          const coordinates = JSON.parse(readFileSync("platform/distribution/pin-release-coordinates.json", "utf8"));
+          const source = coordinates.signedReleaseSource;
+          const expected = {
+            archive: source.archive,
+            sha256: source.sha256,
+            size: source.size,
+            releaseId: source.releaseId,
+            version: coordinates.version,
+            versionCode: coordinates.versionCode,
+            signerSha256: source.signerSha256,
+            manifestSha256: source.manifestSha256,
+            receiptsSha256: source.receiptsSha256,
+          };
+          const actual = await describePinReleaseArchive({
+            archive: process.env.PIN_ARCHIVE,
+            expectedSigner: expected.signerSha256,
+          });
+          for (const [name, value] of Object.entries(expected)) {
+            if (actual[name] !== value) throw new Error(`signed Pin release ${name} is not pinned`);
+          }
           NODE
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
