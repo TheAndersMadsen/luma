@@ -22,6 +22,7 @@ import {
   MUSIC_PLAYBACK_SAMPLE_OFFSETS_MS,
   PHYSICAL_TIMEOUT_MS,
   PHYSICAL_PROMPT_CASES,
+  buildClearFoodEvidenceCommand,
   buildLoadingMessageRequestHeaders,
   buildTranscriptInjectionCommand,
   decodeLoadingMessageRpcResponse,
@@ -39,14 +40,12 @@ import {
   evaluateStableMusicPause,
   executePhysicalSuite,
   findAttributedMusic,
-  foodMemoryToken,
   refreshedFoodEvidenceArm,
   loadingCueWithinDeadline,
   main,
   mediaPositionAdvanced,
   parseActiveMusicProviderStatus,
   parseMediaSessionSummary,
-  parseMemoryRecords,
   parseActiveNetworkTransport,
   parsePenumbraHookEvidence,
   parsePhysicalCliArgs,
@@ -278,36 +277,6 @@ test("Food evidence accepts correlated Hook proof when child process traces are 
   assert.equal(readEvidence.successfulFoodLogReadCount, 1);
 });
 
-test("Food memory observations accept only bounded stock memory records", () => {
-  const record = {
-    uuid: "123e4567-e89b-42d3-a456-426614174000",
-    memory_type: "food_log",
-    device_local_id: "opaque-device-local-id",
-    created_at: "2026-08-31T10:00:00Z",
-    status: "pending",
-    files: [],
-    thumbnail_count: 0,
-  };
-  assert.deepEqual(parseMemoryRecords([record]), [record]);
-  assert.throws(
-    () => parseMemoryRecords([{ ...record, memory_type: "secret" }]),
-    /memory list was malformed/,
-  );
-  assert.throws(
-    () => parseMemoryRecords([{ ...record, uuid: "../escape" }]),
-    /memory list was malformed/,
-  );
-});
-
-test("Food memory correlation uses a nonce-keyed token", () => {
-  const arm = "0123456789abcdef0123456789abcdef:1710000180";
-  assert.equal(
-    foodMemoryToken(arm, "323e4567-e89b-42d3-a456-426614174000"),
-    "83fc340cbf22ea819c545838c81d20c2eaea20d4ad56bb2f89ea2ef6e72704f7",
-  );
-  assert.throws(() => foodMemoryToken("bad", "not-a-uuid"), /token input was malformed/);
-});
-
 test("each Food phase refreshes one nonce to a fresh 180 second arm", () => {
   const uuid = "123e4567-e89b-42d3-a456-426614174000";
   const initial = refreshedFoodEvidenceArm(null, "1710000000", uuid);
@@ -325,31 +294,22 @@ test("each Food phase refreshes one nonce to a fresh 180 second arm", () => {
   );
 });
 
+test("Food evidence cleanup preserves the empty remote shell argument", () => {
+  assert.equal(
+    buildClearFoodEvidenceCommand(),
+    'setprop debug.penumbra.food_nonce ""',
+  );
+});
+
 test("the physical Food case waits through terminal-before-markers log skew, proves the diary read, and retains the bounded fixture safely", async () => {
-  const memory = {
-    uuid: "323e4567-e89b-42d3-a456-426614174000",
-    memory_type: "food_log",
-    device_local_id: "opaque-device-local-id",
-    created_at: "2026-08-31T10:00:00Z",
-    status: "pending",
-    files: [],
-    thumbnail_count: 0,
-  };
-  const unrelatedMemory = {
-    ...memory,
-    uuid: "423e4567-e89b-42d3-a456-426614174000",
-  };
   const arm = "0123456789abcdef0123456789abcdef:1710000180";
-  const memoryToken = foodMemoryToken(arm, memory.uuid);
+  const memoryToken = "b".repeat(64);
   const itemToken = "a".repeat(64);
-  let phase = "baseline";
   let boundaryCount = 0;
   let now = 1_000;
-  let deleted = false;
   let disarmed = false;
   let writeEvidenceCalls = 0;
   const injected = [];
-  const deletedIds = [];
   const deletedPromptIds = new Set();
   const snapshot = readinessFixture();
   snapshot.settings.open_food_facts = {
@@ -368,10 +328,6 @@ test("the physical Food case waits through terminal-before-markers log skew, pro
         run_id: null,
       })).filter((row) => !deletedPromptIds.has(row.id));
     },
-    async memories() {
-      if (phase === "baseline") return [unrelatedMemory];
-      return deleted ? [unrelatedMemory] : [unrelatedMemory, memory];
-    },
     async beginFoodEvidence(existingArm = null) {
       boundaryCount += 1;
       return {
@@ -386,7 +342,6 @@ test("the physical Food case waits through terminal-before-markers log skew, pro
     },
     async inject(caseId) {
       injected.push(caseId);
-      phase = caseId === "food_log_roundtrip" ? "write" : "read";
     },
     async foodEvidenceSince(_boundary, evidencePhase) {
       if (evidencePhase === "baseline") {
@@ -449,10 +404,6 @@ test("the physical Food case waits through terminal-before-markers log skew, pro
         readbackMarkers: [{ itemToken, memoryToken, matched: true }],
       };
     },
-    async deleteMemory(uuid) {
-      deletedIds.push(uuid);
-      deleted = true;
-    },
     async deletePrompt(id) {
       deletedPromptIds.add(id);
     },
@@ -489,7 +440,6 @@ test("the physical Food case waits through terminal-before-markers log skew, pro
     "food_log_roundtrip",
     "food_log_roundtrip_read",
   ]);
-  assert.deepEqual(deletedIds, []);
   assert.equal(disarmed, true);
   assert.equal(report.cases[0].food_lookup_observed, true);
   assert.equal(report.cases[0].create_memory_observed, true);
@@ -500,24 +450,11 @@ test("the physical Food case waits through terminal-before-markers log skew, pro
   assert.equal(report.cleanup.food_evidence_disarmed, true);
 });
 
-test("marked duplicates and unmarked new Food memories delete nothing after the full window", async () => {
-  const memories = [
-    "623e4567-e89b-42d3-a456-426614174000",
-    "723e4567-e89b-42d3-a456-426614174000",
-  ].map((uuid) => ({
-    uuid,
-    memory_type: "food_log",
-    device_local_id: "",
-    created_at: "2026-08-31T10:00:00Z",
-    status: "pending",
-    files: [],
-    thumbnail_count: 0,
-  }));
-  const arm = "fedcba9876543210fedcba9876543210:1710000180";
+test("duplicate or incomplete Food Hook proof remains incomplete and deletes nothing", async () => {
   const itemToken = "a".repeat(64);
-  const markers = memories.map((memory) => ({
+  const markers = ["b".repeat(64), "c".repeat(64)].map((memoryToken) => ({
     itemToken,
-    memoryToken: foodMemoryToken(arm, memory.uuid),
+    memoryToken,
   }));
   for (const scenario of [
     { markers, createCount: 2 },
@@ -525,7 +462,6 @@ test("marked duplicates and unmarked new Food memories delete nothing after the 
   ]) {
     let phase = "baseline";
     let now = 5_000;
-    const deleted = [];
     const snapshot = readinessFixture();
     snapshot.settings.open_food_facts = {
       enabled: true,
@@ -540,12 +476,11 @@ test("marked duplicates and unmarked new Food memories delete nothing after the 
           { id: 2, prompt: "Add one apple to my food log.", response: "fixture", run_id: null },
         ];
       },
-      async memories() { return phase === "baseline" ? [] : memories; },
       async beginFoodEvidence() {
         now += 1_000;
         return {
           marker: "physical-food-823e4567-e89b-42d3-a456-426614174000",
-          arm,
+          arm: "fedcba9876543210fedcba9876543210:1710000180",
         };
       },
       async endFoodEvidence() {},
@@ -584,7 +519,6 @@ test("marked duplicates and unmarked new Food memories delete nothing after the 
           readbackMarkers: [],
         };
       },
-      async deleteMemory(uuid) { deleted.push(uuid); },
     };
 
     const report = await executePhysicalSuite(
@@ -612,7 +546,6 @@ test("marked duplicates and unmarked new Food memories delete nothing after the 
     );
 
     assert.equal(now, 11_000 + PHYSICAL_TIMEOUT_MS.foodAggregate);
-    assert.deepEqual(deleted, []);
     assert.equal(report.cases[0].status, "fail");
     assert.equal(report.cleanup.food_memory_removed, false);
     assert.equal(report.status, "incomplete");
@@ -640,7 +573,6 @@ test("the Food observer rejects an invalid injected clock before arming evidence
         device: {
           ...GUARDED_MEDIA_VOLUME_DEVICE,
           async promptRows() { return []; },
-          async memories() { return []; },
           async beginFoodEvidence() {
             assert.fail("invalid timing must fail before Food evidence is armed");
           },

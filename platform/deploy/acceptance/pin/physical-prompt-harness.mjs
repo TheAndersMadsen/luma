@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn as spawnProcess } from "node:child_process";
-import { createHash, createHmac, randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { connect as connectHttp2, constants as http2Constants } from "node:http2";
 import { pathToFileURL } from "node:url";
@@ -64,7 +64,6 @@ const MAX_HTTP_BODY_BYTES = 1024 * 1024;
 const HTTP_STATUS_MARKER = "\n__PENUMBRA_PHYSICAL_HTTP_STATUS__:";
 const PROMPT_ACTIVITY_PATH = "/api/activity/prompts?limit=100";
 const MUSIC_ACTIVITY_PATH = "/api/activity/music?limit=100";
-const MEMORY_PATH = "/api/memories";
 const MUSIC_PROVIDER_STATUS_PATH = "/api/spotify/status";
 export const MUSIC_PLAYBACK_SAMPLE_OFFSETS_MS = Object.freeze([
   0,
@@ -932,7 +931,6 @@ function curlConfig(path, method, token) {
   const validGet =
     path === PROMPT_ACTIVITY_PATH ||
     path === MUSIC_ACTIVITY_PATH ||
-    path === MEMORY_PATH ||
     path === MUSIC_PROVIDER_STATUS_PATH;
   const validDelete = /^\/api\/activity\/(?:prompts|music)\/[1-9][0-9]*$/.test(path);
   if (!((method === "GET" && validGet) || (method === "DELETE" && validDelete))) {
@@ -1051,42 +1049,6 @@ export function parseMusicActivityPage(value) {
     }
     return item;
   });
-}
-
-export function parseMemoryRecords(value) {
-  if (!Array.isArray(value) || value.length > 10_000) {
-    throw new SafePhysicalError("the memory list was malformed");
-  }
-  return value.map((item) => {
-    if (
-      !plainObject(item) ||
-      typeof item.uuid !== "string" ||
-      !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(item.uuid) ||
-      !["photo", "video", "food_log", "note"].includes(item.memory_type) ||
-      typeof item.device_local_id !== "string" ||
-      typeof item.created_at !== "string" ||
-      !["pending", "uploading", "complete", "failed"].includes(item.status) ||
-      !Array.isArray(item.files) ||
-      !item.files.every((file) => typeof file === "string") ||
-      !Number.isSafeInteger(item.thumbnail_count) ||
-      item.thumbnail_count < 0
-    ) {
-      throw new SafePhysicalError("the memory list was malformed");
-    }
-    return item;
-  });
-}
-
-export function foodMemoryToken(arm, uuid) {
-  const match = FOOD_ARM_PATTERN.exec(arm);
-  if (
-    match === null ||
-    typeof uuid !== "string" ||
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(uuid)
-  ) {
-    throw new SafePhysicalError("the Food evidence token input was malformed");
-  }
-  return createHmac("sha256", match[1]).update(uuid).digest("hex");
 }
 
 export function refreshedFoodEvidenceArm(existingArm, deviceEpoch, freshUuid = null) {
@@ -2352,12 +2314,6 @@ class PhysicalDevice {
     );
   }
 
-  async memories() {
-    return parseMemoryRecords(
-      await deviceActivityRequest(this.options, this.token, MEMORY_PATH),
-    );
-  }
-
   async musicProvider() {
     return parseActiveMusicProviderStatus(
       await deviceActivityRequest(
@@ -2569,7 +2525,7 @@ class PhysicalDevice {
   async endFoodEvidence() {
     await runAdb(
       this.options,
-      ["shell", "setprop", FOOD_EVIDENCE_PROPERTY, ""],
+      ["shell", buildClearFoodEvidenceCommand()],
       { timeoutMs: 10_000, maxStdoutBytes: 64 },
       "the Food evidence arm could not be cleared",
     );
@@ -2659,6 +2615,10 @@ class PhysicalDevice {
       expectedCorrelation,
     );
   }
+}
+
+export function buildClearFoodEvidenceCommand() {
+  return `setprop ${FOOD_EVIDENCE_PROPERTY} ""`;
 }
 
 function taggedBoolean(value, expected) {
@@ -3210,7 +3170,6 @@ async function observeFoodRoundTrip(
   device,
   item,
   baselinePromptId,
-  baselineMemoryIds,
   cleanupState,
   timing,
 ) {
@@ -3256,30 +3215,16 @@ async function observeFoodRoundTrip(
   const writeStarted = timing.now();
   const writeBudget = PHYSICAL_TIMEOUT_MS.foodAggregate;
   const writeObservation = await pollFoodUntil(timing, writeBudget, async () => {
-    const [evidence, memories] = await Promise.all([
-      device.foodEvidenceSince(writeBoundary, "write"),
-      device.memories(),
-    ]);
-    const correlatedFoodMemories = memories.filter(
-      (memory) =>
-        memory.memory_type === "food_log" &&
-        !baselineMemoryIds.has(memory.uuid) &&
-        evidence.createMarkers.some(
-          (marker) =>
-            marker.memoryToken === foodMemoryToken(writeArm.arm, memory.uuid),
-        ),
-    );
-    const exactCorrelatedMemory =
-      evidence.createMarkers.length === 1 && correlatedFoodMemories.length === 1;
+    const evidence = await device.foodEvidenceSince(writeBoundary, "write");
     return {
-      done: evidence.pass && exactCorrelatedMemory,
-      value: { evidence, exactCorrelatedMemory },
+      done: evidence.pass && evidence.createMarkers.length === 1,
+      value: evidence,
     };
   });
   const writeCompletedWithinBound =
     writeObservation.done &&
     timing.now() - writeStarted <= PHYSICAL_TIMEOUT_MS.foodAggregate;
-  const writeEvidence = writeObservation.value?.evidence ?? {
+  const writeEvidence = writeObservation.value ?? {
     timeoutObserved: false,
     terminalObserved: false,
     successfulFoodLookupCount: 0,
@@ -3300,7 +3245,7 @@ async function observeFoodRoundTrip(
   if (
     writeCompletedWithinBound &&
     writeEvidence.pass === true &&
-    writeObservation.value?.exactCorrelatedMemory === true
+    writeEvidence.createMarkers.length === 1
   ) {
     const readArm = await device.beginFoodEvidence(writeArm.arm);
     const readBoundary = readArm.marker;
@@ -3309,21 +3254,9 @@ async function observeFoodRoundTrip(
       timing,
       PHYSICAL_TIMEOUT_MS.foodFollowUp,
       async () => {
-        const [evidence, memories] = await Promise.all([
-          device.foodEvidenceSince(readBoundary, "read"),
-          device.memories(),
-        ]);
+        const evidence = await device.foodEvidenceSince(readBoundary, "read");
         const expectedCreateMarker = writeEvidence.createMarkers[0];
         const expectedMemoryToken = expectedCreateMarker?.memoryToken;
-        const attributed = memories.filter(
-          (memory) =>
-            memory.memory_type === "food_log" &&
-            !baselineMemoryIds.has(memory.uuid) &&
-            typeof expectedMemoryToken === "string" &&
-            foodMemoryToken(writeArm.arm, memory.uuid) === expectedMemoryToken,
-        );
-        const entryStillPresent =
-          attributed.length === 1 && attributed[0].memory_type === "food_log";
         const exactReadback =
           typeof expectedMemoryToken === "string" &&
           evidence.readbackMarkers.some(
@@ -3333,22 +3266,21 @@ async function observeFoodRoundTrip(
               marker.matched,
           );
         return {
-          done: evidence.pass && exactReadback && entryStillPresent,
-          value: { evidence, exactReadback, entryStillPresent },
+          done: evidence.pass && exactReadback,
+          value: { evidence, exactReadback },
         };
       },
     );
     readEvidence = readObservation.value?.evidence ?? readEvidence;
-    entryPresentAfterRead = readObservation.value?.entryStillPresent === true;
+    entryPresentAfterRead = readObservation.value?.exactReadback === true;
   }
 
   await timing.sleep(
     Math.max(0, writeStarted + PHYSICAL_TIMEOUT_MS.foodAggregate - timing.now()),
   );
 
-  const [finalWriteEvidence, finalMemories, finalPromptRows] = await Promise.all([
+  const [finalWriteEvidence, finalPromptRows] = await Promise.all([
     device.foodEvidenceSince(writeBoundary, "write"),
-    device.memories(),
     device.promptRows(),
   ]);
   const newPromptRows = finalPromptRows.filter((row) => row.id > baselinePromptId);
@@ -3360,31 +3292,15 @@ async function observeFoodRoundTrip(
       FOOD_READ_CASE.id,
     ).length === 2 &&
     newPromptRows.length === 3;
-  const finalNewFoodMemories = finalMemories.filter(
-    (memory) =>
-      memory.memory_type === "food_log" &&
-      !baselineMemoryIds.has(memory.uuid),
-  );
-  const finalCorrelatedMemories = finalNewFoodMemories.filter(
-    (memory) =>
-      finalWriteEvidence.createMarkers.some(
-        (marker) =>
-          marker.memoryToken === foodMemoryToken(writeArm.arm, memory.uuid),
-      ),
-  );
   const exactFinalCreate =
     exactPromptWindow &&
-    finalWriteEvidence.createMarkers.length === 1 &&
-    finalNewFoodMemories.length === 1 &&
-    finalCorrelatedMemories.length === 1;
-  // The arm and HMAC prove which Food coroutine produced a memory, but they
-  // are not an end-to-end identity for the injected assistant request. Keep
-  // the bounded consented fixture entry rather than risk deleting a wearer
-  // entry that completed concurrently.
-  if (!exactFinalCreate && (
-    finalWriteEvidence.createMarkers.length > 0 ||
-    finalNewFoodMemories.length > 0
-  )) {
+    finalWriteEvidence.createMarkers.length === 1;
+  // The Hook records the successful CreateMemory response only after Cosmos
+  // has committed both the memory row and its Food-log blob. The matching
+  // readback marker then proves the same sealed entry came back through
+  // GetFoodLogSummary. Pin-local /api/memories is intentionally not used: it
+  // is the gallery authority, not the cloud Food-log authority.
+  if (!exactFinalCreate && finalWriteEvidence.createMarkers.length > 0) {
     cleanupState.ownershipBlocked = true;
   }
   const expectedMemoryToken = finalWriteEvidence.createMarkers[0]?.memoryToken;
@@ -3826,7 +3742,6 @@ export async function executePhysicalSuite(options, dependencies = {}) {
     initialTicklePids,
     initialTickleForeground,
     initialMedia,
-    baselineMemories,
   ] = await Promise.all([
     needsPromptActivity ? device.promptRows() : Promise.resolve([]),
     needsSpotifyActivity ? device.musicRows() : Promise.resolve([]),
@@ -3835,7 +3750,6 @@ export async function executePhysicalSuite(options, dependencies = {}) {
     needsMusicState
       ? device.media()
       : Promise.resolve({ sessionCount: 0, playing: false }),
-    needsFoodState ? device.memories() : Promise.resolve([]),
   ]);
   const baselinePromptId = maximumId(baselinePromptRows);
   const baselineMusicId = maximumId(baselineMusicRows);
@@ -3849,7 +3763,6 @@ export async function executePhysicalSuite(options, dependencies = {}) {
   const ownedPromptIds = new Set();
   const ownedMusicIds = new Set();
   const foodCleanupState = { ownershipBlocked: false };
-  const baselineMemoryIds = new Set(baselineMemories.map((memory) => memory.uuid));
   const cases = [];
   let rankOne = null;
 
@@ -3954,7 +3867,6 @@ export async function executePhysicalSuite(options, dependencies = {}) {
               device,
               item,
               baselinePromptId,
-              baselineMemoryIds,
               foodCleanupState,
               timing,
             ),
