@@ -86,6 +86,111 @@ const AUDIO_TRANSCRIPTION_UNAVAILABLE: &str = "Audio could not be transcribed.";
 const LOADING_MUSIC_CUE: &str = "Finding music";
 const LOADING_WEATHER_CUE: &str = "Checking the weather";
 
+fn strip_prefix_ascii_case<'a>(value: &'a str, prefix: &str) -> Option<&'a str> {
+    value
+        .get(..prefix.len())
+        .filter(|head| head.eq_ignore_ascii_case(prefix))
+        .and_then(|_| value.get(prefix.len()..))
+}
+
+fn strip_suffix_ascii_case<'a>(value: &'a str, suffix: &str) -> Option<&'a str> {
+    let start = value.len().checked_sub(suffix.len())?;
+    value
+        .get(start..)
+        .filter(|tail| tail.eq_ignore_ascii_case(suffix))
+        .and_then(|_| value.get(..start))
+}
+
+fn simple_food_log_addition(utterance: &str) -> Option<serde_json::Value> {
+    if utterance.is_empty() || utterance.len() > 512 || utterance.chars().any(char::is_control) {
+        return None;
+    }
+    let mut command = utterance.trim().trim_end_matches(['.', '?', '!']).trim();
+    for prefix in [
+        "can you please ",
+        "could you please ",
+        "would you please ",
+        "please ",
+    ] {
+        if let Some(remainder) = strip_prefix_ascii_case(command, prefix) {
+            command = remainder;
+            break;
+        }
+    }
+    let remainder = strip_prefix_ascii_case(command, "add ")?;
+    let item = [" to my food log", " to the food log"]
+        .into_iter()
+        .find_map(|suffix| strip_suffix_ascii_case(remainder, suffix))?
+        .trim();
+    if item.is_empty() || item.len() > 96 || item.contains(',') {
+        return None;
+    }
+    let mut words = item.split_whitespace();
+    let quantity = match words.next()?.to_ascii_lowercase().as_str() {
+        "a" | "an" | "one" => 1,
+        "two" => 2,
+        "three" => 3,
+        "four" => 4,
+        "five" => 5,
+        "six" => 6,
+        "seven" => 7,
+        "eight" => 8,
+        "nine" => 9,
+        "ten" => 10,
+        value => value
+            .parse::<u64>()
+            .ok()
+            .filter(|value| (1..=100).contains(value))?,
+    };
+    let name = words.collect::<Vec<_>>().join(" ");
+    if name.is_empty()
+        || name.to_ascii_lowercase().contains(" and ")
+        || !name
+            .chars()
+            .all(|character| character.is_alphanumeric() || matches!(character, ' ' | '-' | '\''))
+    {
+        return None;
+    }
+    Some(serde_json::json!({
+        "FoodItemList": [{
+            "FoodItemName": name,
+            "IsBranded": false,
+            "Quantity": quantity
+        }]
+    }))
+}
+
+fn deterministic_food_child_message(
+    chat: &pb::ChatCompletionRequest,
+) -> Option<pb::ChatCompletionMessage> {
+    let pointer = chat.tool_set_version.as_ref()?;
+    if pointer.set_name != "food" || pointer.version != 4 {
+        return None;
+    }
+    let utterance = chat
+        .messages
+        .iter()
+        .rfind(|message| message.role == "user")?
+        .content
+        .as_str();
+    let arguments = simple_food_log_addition(utterance)?;
+    Some(pb::ChatCompletionMessage {
+        role: "assistant".to_owned(),
+        content: String::new(),
+        tool_calls: vec![pb::ToolCall {
+            id: uuid::Uuid::new_v4().to_string(),
+            r#type: "function".to_owned(),
+            function: Some(pb::FunctionCall {
+                name: "TrackFoodConsumption".to_owned(),
+                arguments: arguments.to_string(),
+                ..Default::default()
+            }),
+        }],
+        name: String::new(),
+        tool_call_id: String::new(),
+    })
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct LoadingDecision {
     cue: Option<&'static str>,
@@ -606,6 +711,10 @@ impl AiBusMain {
         chat: &pb::ChatCompletionRequest,
     ) -> Result<pb::ChatCompletionMessage, Status> {
         use crate::assistant::llm::{ChatMessage, Role};
+
+        if let Some(message) = deterministic_food_child_message(chat) {
+            return Ok(message);
+        }
 
         let pointer = chat
             .tool_set_version
@@ -2659,6 +2768,75 @@ mod tests {
             Some("SetTimer"),
             "the sub-agent's tool call must reach the device",
         );
+    }
+
+    #[tokio::test]
+    async fn simple_food_log_addition_reaches_the_stock_tracking_tool_without_model_guesswork() {
+        struct ModelMustNotRun;
+
+        #[tonic::async_trait]
+        impl crate::assistant::llm::ChatModel for ModelMustNotRun {
+            async fn complete(
+                &self,
+                _messages: &[crate::assistant::llm::ChatMessage],
+                _tools: &[crate::assistant::llm::ToolDef],
+            ) -> Result<crate::assistant::llm::ChatResponse, crate::assistant::llm::LlmError>
+            {
+                panic!("an explicit food-log addition must not depend on model tool selection")
+            }
+        }
+
+        let svc = AiBusMain {
+            engine: Arc::new(crate::assistant::engine::Engine::new(Arc::new(
+                ModelMustNotRun,
+            ))),
+            keys: Default::default(),
+            directory: None,
+            store: crate::store::MemoryStore::shared(),
+            entitlements: Default::default(),
+        };
+        let message = svc
+            .run_model_chat(&pb::ChatCompletionRequest {
+                messages: vec![pb::ChatCompletionMessage {
+                    role: "user".to_owned(),
+                    content: "Add one apple to my food log.".to_owned(),
+                    ..Default::default()
+                }],
+                tool_set_version: Some(pb::ToolSetVersion {
+                    set_name: "food".to_owned(),
+                    version: 4,
+                }),
+                ..Default::default()
+            })
+            .await
+            .expect("the deterministic food child plan succeeds");
+
+        let call = message
+            .tool_calls
+            .first()
+            .and_then(|call| call.function.as_ref())
+            .expect("the stock Food child receives a tool call");
+        assert_eq!(call.name, "TrackFoodConsumption");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&call.arguments).unwrap(),
+            serde_json::json!({
+                "FoodItemList": [{
+                    "FoodItemName": "apple",
+                    "IsBranded": false,
+                    "Quantity": 1
+                }]
+            }),
+        );
+        for unrelated_or_ambiguous in [
+            "Add apple to my food log.",
+            "Add one apple and one banana to my food log.",
+            "Add one apple to my shopping list.",
+        ] {
+            assert!(
+                simple_food_log_addition(unrelated_or_ambiguous).is_none(),
+                "the bounded child planner claimed: {unrelated_or_ambiguous}",
+            );
+        }
     }
 
     #[tokio::test]
