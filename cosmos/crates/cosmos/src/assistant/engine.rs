@@ -44,7 +44,7 @@ use tokio::sync::mpsc::Sender;
 use tonic::Status;
 
 use super::catalog;
-use super::llm::{ChatMessage, ChatModel, Role, ToolCall, ToolDef};
+use super::llm::{ChatMessage, ChatModel, ChatResponse, Role, ToolCall, ToolDef};
 use super::runtime::{ForegroundRun, RouteClass, Transport};
 use super::toolsets;
 use super::turn::context::{MEMORY_CONTEXT_POLICY, situation_line, wearer_memory};
@@ -727,29 +727,44 @@ impl Engine {
                         initial_model_retry_available = false;
                         continue;
                     }
-                    if messages
-                        .iter()
-                        .any(|message| message.role == Role::ToolResult)
+                    if let Some(tool_call) =
+                        super::llm::required_retrieval_after_model_failure(&messages, &tools)
                     {
-                        run.note_model_step();
-                        if let Some(spoken) =
-                            self.compose_final_answer(&messages, run_deadline).await
-                        {
-                            let id = new_id();
-                            finish(&tx, respond(&spoken, parent, id)).await;
-                            run.finish("answered");
-                            return;
+                        tracing::warn!(
+                            tool = %tool_call.name,
+                            "model step failed before a required retrieval; continuing with the guarded call"
+                        );
+                        ChatResponse {
+                            content: None,
+                            thought: String::new(),
+                            tool_call: Some(tool_call),
+                            extra_tool_calls: Vec::new(),
                         }
+                    } else {
+                        if messages
+                            .iter()
+                            .any(|message| message.role == Role::ToolResult)
+                        {
+                            run.note_model_step();
+                            if let Some(spoken) =
+                                self.compose_final_answer(&messages, run_deadline).await
+                            {
+                                let id = new_id();
+                                finish(&tx, respond(&spoken, parent, id)).await;
+                                run.finish("answered");
+                                return;
+                            }
+                        }
+                        let id = new_id();
+                        finish_as(
+                            &tx,
+                            respond(ERROR_TIMEOUT, parent, id),
+                            Some(model_failure_outcome(&error)),
+                        )
+                        .await;
+                        run.finish(model_failure_outcome(&error));
+                        return;
                     }
-                    let id = new_id();
-                    finish_as(
-                        &tx,
-                        respond(ERROR_TIMEOUT, parent, id),
-                        Some(model_failure_outcome(&error)),
-                    )
-                    .await;
-                    run.finish(model_failure_outcome(&error));
-                    return;
                 }
                 // The step outran its slice of the turn budget. This one really
                 // is a deadline.
@@ -764,24 +779,39 @@ impl Engine {
                         initial_model_retry_available = false;
                         continue;
                     }
-                    if messages
-                        .iter()
-                        .any(|message| message.role == Role::ToolResult)
+                    if let Some(tool_call) =
+                        super::llm::required_retrieval_after_model_failure(&messages, &tools)
                     {
-                        run.note_model_step();
-                        if let Some(spoken) =
-                            self.compose_final_answer(&messages, run_deadline).await
-                        {
-                            let id = new_id();
-                            finish(&tx, respond(&spoken, parent, id)).await;
-                            run.finish("answered");
-                            return;
+                        tracing::warn!(
+                            tool = %tool_call.name,
+                            "model step timed out before a required retrieval; continuing with the guarded call"
+                        );
+                        ChatResponse {
+                            content: None,
+                            thought: String::new(),
+                            tool_call: Some(tool_call),
+                            extra_tool_calls: Vec::new(),
                         }
+                    } else {
+                        if messages
+                            .iter()
+                            .any(|message| message.role == Role::ToolResult)
+                        {
+                            run.note_model_step();
+                            if let Some(spoken) =
+                                self.compose_final_answer(&messages, run_deadline).await
+                            {
+                                let id = new_id();
+                                finish(&tx, respond(&spoken, parent, id)).await;
+                                run.finish("answered");
+                                return;
+                            }
+                        }
+                        let id = new_id();
+                        finish_as(&tx, respond(ERROR_TIMEOUT, parent, id), Some("deadline")).await;
+                        run.finish("deadline");
+                        return;
                     }
-                    let id = new_id();
-                    finish_as(&tx, respond(ERROR_TIMEOUT, parent, id), Some("deadline")).await;
-                    run.finish("deadline");
-                    return;
                 }
             };
 
@@ -3859,6 +3889,96 @@ mod tests {
             terminal.input.contains("recovered on the same turn"),
             "the initial transient failure must be retried, got {}",
             terminal.input,
+        );
+    }
+
+    #[tokio::test]
+    async fn a_model_failure_after_location_cannot_skip_the_required_route() {
+        struct UnreachableThenAnswer(std::sync::atomic::AtomicUsize);
+        #[tonic::async_trait]
+        impl ChatModel for UnreachableThenAnswer {
+            async fn complete(
+                &self,
+                _messages: &[ChatMessage],
+                _tools: &[ToolDef],
+            ) -> Result<ChatResponse, LlmError> {
+                if self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                    return Err(LlmError::Transport("transient app-server failure".into()));
+                }
+                Ok(ChatResponse {
+                    content: Some("The route is ready.".into()),
+                    ..Default::default()
+                })
+            }
+        }
+
+        let request = "Give me walking directions to Nyhavn.";
+        let messages = run_with(
+            Arc::new(UnreachableThenAnswer(std::sync::atomic::AtomicUsize::new(
+                0,
+            ))),
+            pb::SynapseUnderstandingRequest {
+                utterance: request.into(),
+                device_context: Some(pb::SynapseDeviceContext {
+                    turns: vec![
+                        pb::SynapseChatTurn {
+                            identifier: "user".into(),
+                            content: Some(pb::synapse_chat_turn::Content::UserRequest(
+                                pb::SynapseUserRequestContent {
+                                    request: request.into(),
+                                    ..Default::default()
+                                },
+                            )),
+                            ..Default::default()
+                        },
+                        pb::SynapseChatTurn {
+                            identifier: "location-action".into(),
+                            parent_identifier: "user".into(),
+                            content: Some(pb::synapse_chat_turn::Content::Action(
+                                pb::SynapseActionContent {
+                                    action: "GetCurrentLocation".into(),
+                                    input: "{}".into(),
+                                    ..Default::default()
+                                },
+                            )),
+                            ..Default::default()
+                        },
+                        pb::SynapseChatTurn {
+                            identifier: "location-observation".into(),
+                            parent_identifier: "location-action".into(),
+                            content: Some(pb::synapse_chat_turn::Content::Observation(
+                                pb::SynapseObservationContent {
+                                    action_name: "GetCurrentLocation".into(),
+                                    observation: serde_json::json!({
+                                        "latitude": 55.6761,
+                                        "longitude": 12.5683,
+                                        "isStale": false,
+                                    })
+                                    .to_string(),
+                                    ..Default::default()
+                                },
+                            )),
+                            ..Default::default()
+                        },
+                    ],
+                    ..Default::default()
+                }),
+                location: Some(pb::Location {
+                    latitude: 55.6761,
+                    longitude: 12.5683,
+                }),
+                ..Default::default()
+            },
+        )
+        .await;
+
+        assert!(
+            messages
+                .iter()
+                .filter_map(as_action)
+                .any(|action| action.action == "route"),
+            "the location observation is only a prerequisite; a model failure must not turn it into a route answer: {:?}",
+            messages.iter().filter_map(as_action).collect::<Vec<_>>(),
         );
     }
 

@@ -587,45 +587,64 @@ impl BidiSession {
                             initial_model_retry_available = false;
                             continue;
                         }
-                        if messages
-                            .iter()
-                            .any(|message| message.role == Role::ToolResult)
+                        if let Some(tool_call) =
+                            super::llm::required_retrieval_after_model_failure(&messages, &tools)
                         {
-                            let retry_budget = run_deadline
-                                .saturating_duration_since(std::time::Instant::now())
-                                .saturating_sub(TERMINAL_RESERVE)
-                                .min(MODEL_STEP_TIMEOUT);
-                            if !retry_budget.is_zero() {
-                                let mut final_messages = messages.clone();
-                                final_messages
-                                    .push(ChatMessage::user(super::engine::FINAL_ANSWER_DIRECTIVE));
-                                run.note_model_step();
-                                match self.step(&final_messages, &[], retry_budget, inbound).await {
-                                    Step::Superseded(request) => {
-                                        run.supersede();
-                                        return Flow::Supersede(request);
-                                    }
-                                    Step::Answer(recovered) => {
-                                        if let Some(answer) = recovered
-                                            .content
-                                            .as_deref()
-                                            .map(str::trim)
-                                            .filter(|answer| !answer.is_empty())
-                                        {
-                                            let flow = self.finish(parent, answer).await;
-                                            run.finish("answered");
-                                            return flow;
+                            tracing::warn!(
+                                tool = %tool_call.name,
+                                "bidi model step failed before a required retrieval; continuing with the guarded call"
+                            );
+                            ChatResponse {
+                                content: None,
+                                thought: String::new(),
+                                tool_call: Some(tool_call),
+                                extra_tool_calls: Vec::new(),
+                            }
+                        } else {
+                            if messages
+                                .iter()
+                                .any(|message| message.role == Role::ToolResult)
+                            {
+                                let retry_budget = run_deadline
+                                    .saturating_duration_since(std::time::Instant::now())
+                                    .saturating_sub(TERMINAL_RESERVE)
+                                    .min(MODEL_STEP_TIMEOUT);
+                                if !retry_budget.is_zero() {
+                                    let mut final_messages = messages.clone();
+                                    final_messages.push(ChatMessage::user(
+                                        super::engine::FINAL_ANSWER_DIRECTIVE,
+                                    ));
+                                    run.note_model_step();
+                                    match self
+                                        .step(&final_messages, &[], retry_budget, inbound)
+                                        .await
+                                    {
+                                        Step::Superseded(request) => {
+                                            run.supersede();
+                                            return Flow::Supersede(request);
                                         }
+                                        Step::Answer(recovered) => {
+                                            if let Some(answer) = recovered
+                                                .content
+                                                .as_deref()
+                                                .map(str::trim)
+                                                .filter(|answer| !answer.is_empty())
+                                            {
+                                                let flow = self.finish(parent, answer).await;
+                                                run.finish("answered");
+                                                return flow;
+                                            }
+                                        }
+                                        Step::Failed(_) => {}
                                     }
-                                    Step::Failed(_) => {}
                                 }
                             }
+                            // Even a degraded state is spoken through a terminal `Respond`
+                            // device action, never a bare error the device would drop.
+                            let flow = self.finish(parent, ERROR_TIMEOUT).await;
+                            run.finish(outcome);
+                            return flow;
                         }
-                        // Even a degraded state is spoken through a terminal `Respond`
-                        // device action, never a bare error the device would drop.
-                        let flow = self.finish(parent, ERROR_TIMEOUT).await;
-                        run.finish(outcome);
-                        return flow;
                     }
                 }
             };
@@ -1353,18 +1372,16 @@ fn build_history(req: &pb::SynapseUnderstandingRequest) -> Vec<ChatMessage> {
                             messages.push(ChatMessage::assistant(text));
                         }
                     } else if !a.action.is_empty() {
-                        messages.push(ChatMessage::user(format!(
-                            "[Previously called {}({})]",
-                            a.action, a.input
-                        )));
+                        messages.push(ChatMessage::prior_tool_call(&a.action, &a.input));
                     }
                 }
                 Some(pb::synapse_chat_turn::Content::Observation(o)) => {
                     if !o.observation.is_empty() {
-                        messages.push(ChatMessage::user(format!(
-                            "[Result of {}: {}]",
-                            o.action_name, o.observation
-                        )));
+                        messages.push(ChatMessage::tool_result(
+                            &o.action_name,
+                            "{}",
+                            &model_facing_observation(&o.observation),
+                        ));
                     }
                 }
                 Some(pb::synapse_chat_turn::Content::Message(m)) => {
@@ -2036,6 +2053,106 @@ mod tests {
 
         let response = next(&mut out).await;
         assert_eq!(spoken(&response), "The model recovered on the same turn.");
+    }
+
+    #[tokio::test]
+    async fn a_bidi_model_failure_after_location_cannot_skip_the_required_route() {
+        struct UnreachableThenAnswer(std::sync::atomic::AtomicUsize);
+        #[tonic::async_trait]
+        impl ChatModel for UnreachableThenAnswer {
+            async fn complete(
+                &self,
+                _messages: &[ChatMessage],
+                _tools: &[ToolDef],
+            ) -> Result<ChatResponse, LlmError> {
+                if self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                    return Err(LlmError::Transport("transient app-server failure".into()));
+                }
+                Ok(ChatResponse {
+                    content: Some("The route is ready.".into()),
+                    ..Default::default()
+                })
+            }
+        }
+
+        let request = "Give me walking directions to Nyhavn.";
+        let (tx, mut out) = session(Arc::new(UnreachableThenAnswer(
+            std::sync::atomic::AtomicUsize::new(0),
+        )));
+        tx.send(Ok(pb::StreamingUnderstandRequest {
+            content: Some(
+                pb::streaming_understand_request::Content::UnderstandingRequest(
+                    pb::SynapseUnderstandingRequest {
+                        utterance: request.into(),
+                        device_context: Some(pb::SynapseDeviceContext {
+                            turns: vec![
+                                pb::SynapseChatTurn {
+                                    identifier: "user".into(),
+                                    content: Some(pb::synapse_chat_turn::Content::UserRequest(
+                                        pb::SynapseUserRequestContent {
+                                            request: request.into(),
+                                            ..Default::default()
+                                        },
+                                    )),
+                                    ..Default::default()
+                                },
+                                pb::SynapseChatTurn {
+                                    identifier: "location-action".into(),
+                                    parent_identifier: "user".into(),
+                                    content: Some(pb::synapse_chat_turn::Content::Action(
+                                        pb::SynapseActionContent {
+                                            action: "GetCurrentLocation".into(),
+                                            input: "{}".into(),
+                                            ..Default::default()
+                                        },
+                                    )),
+                                    ..Default::default()
+                                },
+                                pb::SynapseChatTurn {
+                                    identifier: "location-observation".into(),
+                                    parent_identifier: "location-action".into(),
+                                    content: Some(pb::synapse_chat_turn::Content::Observation(
+                                        pb::SynapseObservationContent {
+                                            action_name: "GetCurrentLocation".into(),
+                                            observation: serde_json::json!({
+                                                "latitude": 55.6761,
+                                                "longitude": 12.5683,
+                                                "isStale": false,
+                                            })
+                                            .to_string(),
+                                            ..Default::default()
+                                        },
+                                    )),
+                                    ..Default::default()
+                                },
+                            ],
+                            ..Default::default()
+                        }),
+                        location: Some(pb::Location {
+                            latitude: 55.6761,
+                            longitude: 12.5683,
+                        }),
+                        ..Default::default()
+                    },
+                ),
+            ),
+        }))
+        .await
+        .unwrap();
+        drop(tx);
+
+        let mut messages = Vec::new();
+        while let Some(message) = out.next().await {
+            messages.push(message.unwrap());
+        }
+        assert!(
+            messages
+                .iter()
+                .filter_map(action_of)
+                .any(|action| action.action == "route"),
+            "bidi must preserve the same required route after a model failure: {:?}",
+            messages.iter().filter_map(action_of).collect::<Vec<_>>(),
+        );
     }
 
     #[tokio::test]

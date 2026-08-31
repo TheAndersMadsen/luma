@@ -616,6 +616,20 @@ fn enforce_explicit_retrieval(
     )
 }
 
+/// Recover the one retrieval that must still happen when a model step fails.
+///
+/// This is deliberately narrower than choosing a useful tool: it reuses the
+/// same explicit-request guards that reject an ungrounded model answer. A
+/// location observation, for example, is only a prerequisite for an explicit
+/// route request; it is not evidence from which a tool-less fallback may claim
+/// to have produced directions.
+pub(crate) fn required_retrieval_after_model_failure(
+    messages: &[ChatMessage],
+    tools: &[ToolDef],
+) -> Option<ToolCall> {
+    enforce_explicit_retrieval(messages, tools, ChatResponse::default()).tool_call
+}
+
 #[tonic::async_trait]
 pub trait ChatModel: Send + Sync + 'static {
     fn provenance(&self) -> ModelProvenance {
