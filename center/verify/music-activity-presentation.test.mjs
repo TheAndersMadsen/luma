@@ -70,6 +70,19 @@ test("the dashboard renders the correlated provider instead of a fixed TIDAL lab
   assert.match(dashboard, /musicProviderLabel\(provider\)/u);
 });
 
+test("the music detail page renders correlated provider artwork and identity", async () => {
+  const detail = await readFile(
+    new URL("../src/app/my-data/DomainView.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(detail, /musicActivityPresentations/u);
+  assert.match(detail, /useRemoteMusicActivity\(100, domain === "MUSIC"\)/u);
+  assert.match(detail, /<MusicArtwork/u);
+  assert.match(detail, /MusicProviderIcon provider=\{provider\}/u);
+  assert.match(detail, /musicProviderLabel\(provider\)/u);
+  assert.doesNotMatch(detail, /album-art thumbnail \/ albumArtHexcode tint was an invention/u);
+});
+
 test("an unmatched legacy TIDAL event keeps its recovered cover and identity", () => {
   const legacy = event("legacy", "2026-09-01T20:50:00.000Z");
   legacy.data.eventData.albumArtUuid = "e8d1b6d7-abc1-4f8c-9df4-1ec984894abc";

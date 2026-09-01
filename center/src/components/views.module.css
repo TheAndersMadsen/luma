@@ -263,6 +263,37 @@
   color: var(--hu-colors-white);
 }
 
+.musicArtworkWrap {
+  position: relative;
+  display: block;
+  width: 40px;
+  height: 40px;
+}
+
+.rowAlbumArt {
+  display: block;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  object-fit: cover;
+  background: var(--hu-colors-lunar-grey-dark-200);
+}
+
+.musicProviderBadge {
+  position: absolute;
+  right: -5px;
+  bottom: -5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--hu-divider);
+  border-radius: 50%;
+  color: var(--hu-colors-white);
+  background: var(--hu-colors-penumbra-base);
+}
+
 .content {
   display: flex;
   gap: 24px;

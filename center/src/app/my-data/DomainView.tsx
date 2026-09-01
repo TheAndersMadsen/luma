@@ -2,11 +2,19 @@
 
 import { useQueryClient } from "@tanstack/react-query";
 import { DataRow, DetailView } from "@/components/DetailView";
+import { MusicArtwork } from "@/components/MusicArtwork";
+import { MusicProviderIcon } from "@/components/MusicProviderIcon";
 import { EmptyState, ErrorState, RowsSkeleton } from "@/components/States";
 import { StatusMessage } from "@/components/Status";
 import { AiMicIcon, MusicIcon, PhoneIcon, TranslationIcon } from "@/icons";
-import { useMyData } from "@/lib/queries";
-import { callDisplayName, formatTimestamp } from "@/lib/format";
+import { albumTint, callDisplayName, formatTimestamp } from "@/lib/format";
+import {
+  musicActivityPresentations,
+  musicProviderLabel,
+} from "@/lib/musicActivityPresentation";
+import { useMyData, useRemoteMusicActivity } from "@/lib/queries";
+import type { MusicRecord } from "@/lib/types";
+import styles from "@/components/views.module.css";
 
 type Domain = "AI_MIC" | "MUSIC" | "TRANSLATION" | "CALL";
 
@@ -38,6 +46,7 @@ const EMPTY_ICONS: Record<Domain, React.ReactNode> = {
  */
 export function DomainView({ domain }: { domain: Domain }) {
   const { data, isLoading, isError, error, refetch } = useMyData(domain);
+  const { data: remoteMusicActivity = [] } = useRemoteMusicActivity(100, domain === "MUSIC");
   const queryClient = useQueryClient();
   const title = TITLES[domain];
 
@@ -85,6 +94,9 @@ export function DomainView({ domain }: { domain: Domain }) {
   }
 
   const rows = data.data;
+  const presentedMusicRows = domain === "MUSIC"
+    ? musicActivityPresentations(rows as MusicRecord[], remoteMusicActivity)
+    : [];
 
   if (rows.length === 0) {
     return (
@@ -113,7 +125,7 @@ export function DomainView({ domain }: { domain: Domain }) {
 
   return (
     <DetailView title={title}>
-      {rows.map((record) => {
+      {rows.map((record, index) => {
         const timestamp = formatTimestamp(record.userCreatedAt);
         const icon = ICONS[domain];
 
@@ -135,27 +147,28 @@ export function DomainView({ domain }: { domain: Domain }) {
         }
 
         if (domain === "MUSIC") {
-          const e = (
-            record as {
-              data: {
-                eventData: {
-                  trackTitle?: string;
-                  artistName?: string;
-                  albumName?: string;
-                };
-              };
-            }
-          ).data.eventData;
+          const { record: musicRecord, provider, artwork } = presentedMusicRows[index];
+          const e = musicRecord.data.eventData;
           return (
             <DataRow
               key={record.uuid}
               uuid={record.uuid}
-              // The uniform Music-note glyph led every recovered row. The Tidal
-              // album-art thumbnail / albumArtHexcode tint was an invention —
-              // removed.
-              icon={icon}
-              // track-title, artist, and album as three separate stacked spans,
-              // not a single "{artist} · {album}" line.
+              icon={
+                <span className={styles.musicArtworkWrap}>
+                  <MusicArtwork
+                    className={styles.rowAlbumArt}
+                    src={artwork}
+                    tint={albumTint(e.albumArtHexcode)}
+                    alt={`${e.albumName || e.trackTitle || "Music"} cover`}
+                  />
+                  <span
+                    className={styles.musicProviderBadge}
+                    aria-label={musicProviderLabel(provider)}
+                  >
+                    <MusicProviderIcon provider={provider} size={12} />
+                  </span>
+                </span>
+              }
               primary={<span data-testid="track-title">{e.trackTitle ?? "—"}</span>}
               secondary={
                 <>
@@ -166,6 +179,8 @@ export function DomainView({ domain }: { domain: Domain }) {
                       <span>{e.albumName}</span>
                     </>
                   ) : null}
+                  <br />
+                  <span>{musicProviderLabel(provider)}</span>
                 </>
               }
               timestamp={timestamp}

@@ -175,11 +175,11 @@ export function useDashboard() {
  * provider-neutral activity ledger. Failure is intentionally independent of
  * the Cosmos dashboard: old events still render with a generic music identity.
  */
-export function useRemoteMusicActivity() {
+export function useRemoteMusicActivity(limit = 20, enabled = true) {
   return useQuery({
-    queryKey: ["remote-pin-music-activity"],
+    queryKey: ["remote-pin-music-activity", limit],
     queryFn: async () => {
-      const response = await fetch("/api/pin/remote/api/activity/music?limit=20", {
+      const response = await fetch(`/api/pin/remote/api/activity/music?limit=${limit}`, {
         cache: "no-store",
       });
       if (!response.ok) throw new Error("Could not read provider details from the paired Pin.");
@@ -188,6 +188,7 @@ export function useRemoteMusicActivity() {
     refetchInterval: 5000,
     staleTime: 1000,
     retry: false,
+    enabled,
   });
 }
 

@@ -5,6 +5,7 @@ import { useState } from "react";
 import { CaptureThumbnail, frameState } from "@/components/CaptureThumbnail";
 import { MemoriesTimeline } from "@/components/MemoriesTimeline";
 import { MusicArtwork } from "@/components/MusicArtwork";
+import { MusicProviderIcon } from "@/components/MusicProviderIcon";
 import { Shell } from "@/components/Shell";
 import { CardsSkeleton, EmptyState, ErrorState } from "@/components/States";
 import { StatusMessage } from "@/components/Status";
@@ -12,18 +13,13 @@ import styles from "@/components/memories.module.css";
 import viewStyles from "@/components/views.module.css";
 import {
   AiMicIcon,
-  GenericMusicIcon,
   HealthIcon,
-  MusicIcon,
   PhoneIcon,
-  SpotifyIcon,
-  YoutubeMusicIcon,
 } from "@/icons";
 import { albumTint, callDisplayName, formatTimestamp } from "@/lib/format";
 import {
   musicActivityPresentations,
   musicProviderLabel,
-  type PresentedMusicProvider,
 } from "@/lib/musicActivityPresentation";
 import {
   useDashboard,
@@ -336,11 +332,4 @@ export default function MemoriesPage() {
       </div>
     </Shell>
   );
-}
-
-function MusicProviderIcon({ provider }: { provider: PresentedMusicProvider | null }) {
-  if (provider === "youtube_music") return <YoutubeMusicIcon size={16} />;
-  if (provider === "spotify") return <SpotifyIcon size={16} />;
-  if (provider === "tidal") return <MusicIcon size={16} />;
-  return <GenericMusicIcon size={16} />;
 }
