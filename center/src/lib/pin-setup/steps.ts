@@ -354,7 +354,7 @@ function deriveConnect(usb: PinSetupUsbFacts): DraftStep {
   return {
     status: "todo",
     summary: "No Pin is connected.",
-    next: "Connect the Pin with USB-C, then choose it in the USB prompt.",
+    next: "Place the Pin on a USB interposer, then choose it in the USB prompt.",
   };
 }
 

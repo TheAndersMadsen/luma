@@ -134,6 +134,7 @@ describe("SetupView", () => {
 
     render(<SetupView operator provisioningHref="/settings/pin/provision" />);
 
+    expect(screen.getByText(/place the Pin on a USB interposer/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Connect over USB" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Connection help" }));
     expect(screen.getByRole("heading", { name: "Connecting to Ai Pin" })).toBeInTheDocument();

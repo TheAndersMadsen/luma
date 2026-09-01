@@ -41,7 +41,7 @@ const SETUP_STAGES: ReadonlyArray<{
   {
     id: "connect",
     title: "Connect your Pin",
-    summary: "Use USB-C and choose your Ai Pin in the browser.",
+    summary: "Place your Pin on a USB interposer, then choose it in the browser.",
     done: "Your Pin is connected.",
     steps: ["connect"],
   },
