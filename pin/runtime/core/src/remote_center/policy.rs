@@ -5,7 +5,7 @@
 //! operation which an integration layer must dispatch directly. With no
 //! capabilities it permits only exact Center asset-catalog entries over
 //! `GET`/`HEAD` and `GET /api/health`; reviewed device, feature-flag, and
-//! Spotify surfaces require separate explicit capabilities.
+//! Spotify and music-activity surfaces require separate explicit capabilities.
 
 use std::collections::VecDeque;
 use std::fmt;
@@ -114,6 +114,8 @@ pub enum Capability {
     SpotifyManage = 3,
     /// Execute one closed, validated YouTube player request from the Pin.
     MusicEgress = 4,
+    /// Read bounded, provider-neutral playback history for the wearer.
+    MusicActivityRead = 5,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -143,9 +145,9 @@ impl Default for Capabilities {
 
 /// Exact capability bundle issued to the persisted operator bridge.
 ///
-/// Assets and health need no capability. These four grants cover Center's
-/// device summary and the reviewed Spotify adapter surface; they do not turn
-/// on the legacy full-access proxy or grant any namespace by prefix.
+/// Assets and health need no capability. These grants cover Center's device
+/// summary, playback history, and reviewed music-adapter surfaces; they do not
+/// turn on the legacy full-access proxy or grant any namespace by prefix.
 pub const fn operator_bridge_capabilities() -> Capabilities {
     Capabilities::none()
         .with(Capability::DeviceMetadataRead)
@@ -153,6 +155,7 @@ pub const fn operator_bridge_capabilities() -> Capabilities {
         .with(Capability::SpotifyRead)
         .with(Capability::SpotifyManage)
         .with(Capability::MusicEgress)
+        .with(Capability::MusicActivityRead)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -182,6 +185,7 @@ pub enum ApiOperation {
     SpotifySessionDelete,
     SpotifySearch(SpotifySearchQuery),
     MusicEgress,
+    MusicActivity(MusicActivityQuery),
     #[cfg(test)]
     TestMutation,
 }
@@ -226,6 +230,23 @@ impl SpotifySearchQuery {
 impl fmt::Debug for SpotifySearchQuery {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("SpotifySearchQuery(<redacted>)")
+    }
+}
+
+/// A validated, bounded music-activity page request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MusicActivityQuery {
+    limit: u8,
+    before: Option<i64>,
+}
+
+impl MusicActivityQuery {
+    pub const fn limit(self) -> u8 {
+        self.limit
+    }
+
+    pub const fn before(self) -> Option<i64> {
+        self.before
     }
 }
 
@@ -605,6 +626,15 @@ fn classify(
             max_body_bytes: MAX_MUSIC_EGRESS_BODY_BYTES,
             content_type: ContentTypeRule::JsonRequired,
         },
+        (HttpMethod::Get, "/api/activity/music", Some(query)) => RouteRule {
+            operation: ApprovedOperation::Api(ApiOperation::MusicActivity(
+                parse_music_activity_query(query)?,
+            )),
+            scope: SENSITIVE_READ,
+            required_capability: Some(Capability::MusicActivityRead),
+            max_body_bytes: 0,
+            content_type: ContentTypeRule::Forbidden,
+        },
         (HttpMethod::Get, "/api/spotify/status", None) => RouteRule {
             operation: ApprovedOperation::Api(ApiOperation::SpotifyStatus),
             scope: SENSITIVE_READ,
@@ -745,6 +775,43 @@ fn parse_spotify_search_query(query: &str) -> Result<SpotifySearchQuery, PolicyE
         return Err(PolicyError::InvalidSpotifySearchQuery);
     }
     SpotifySearchQuery::new(&search)
+}
+
+fn parse_music_activity_query(query: &str) -> Result<MusicActivityQuery, PolicyError> {
+    let mut limit = None;
+    let mut before = None;
+    for pair in query.split('&') {
+        let (name, raw_value) = pair
+            .split_once('=')
+            .ok_or(PolicyError::InvalidMusicActivityQuery)?;
+        let value =
+            decode_form_value(raw_value).map_err(|_| PolicyError::InvalidMusicActivityQuery)?;
+        match name {
+            "limit" if limit.is_none() => {
+                let parsed = value
+                    .parse::<u8>()
+                    .map_err(|_| PolicyError::InvalidMusicActivityQuery)?;
+                if !(1..=100).contains(&parsed) {
+                    return Err(PolicyError::InvalidMusicActivityQuery);
+                }
+                limit = Some(parsed);
+            }
+            "before" if before.is_none() => {
+                let parsed = value
+                    .parse::<i64>()
+                    .map_err(|_| PolicyError::InvalidMusicActivityQuery)?;
+                if parsed <= 0 {
+                    return Err(PolicyError::InvalidMusicActivityQuery);
+                }
+                before = Some(parsed);
+            }
+            _ => return Err(PolicyError::InvalidMusicActivityQuery),
+        }
+    }
+    Ok(MusicActivityQuery {
+        limit: limit.ok_or(PolicyError::InvalidMusicActivityQuery)?,
+        before,
+    })
 }
 
 fn decode_form_value(value: &str) -> Result<String, PolicyError> {
@@ -1158,6 +1225,7 @@ pub enum PolicyError {
     BodyLengthMismatch,
     BodyTooLarge,
     InvalidSpotifySearchQuery,
+    InvalidMusicActivityQuery,
     InvalidGeneration,
     GenerationMismatch,
     InvalidFreshnessWindow,
@@ -1197,6 +1265,7 @@ impl fmt::Display for PolicyError {
             Self::BodyLengthMismatch => "request body length does not match its declaration",
             Self::BodyTooLarge => "request body is too large for the route",
             Self::InvalidSpotifySearchQuery => "Spotify search query is invalid",
+            Self::InvalidMusicActivityQuery => "music activity query is invalid",
             Self::InvalidGeneration => "request generation is invalid",
             Self::GenerationMismatch => "request generation is not current",
             Self::InvalidFreshnessWindow => "request freshness window is invalid",
@@ -1548,6 +1617,59 @@ mod tests {
     }
 
     #[test]
+    fn music_activity_is_one_bounded_read_capability() {
+        let assets = catalog();
+        let no_capability = context(&assets, Capabilities::none());
+        assert_eq!(
+            authorize(
+                &envelope("GET", "/api/activity/music?limit=100"),
+                &no_capability,
+            )
+            .unwrap_err(),
+            PolicyError::CapabilityRequired(Capability::MusicActivityRead)
+        );
+
+        let permitted = context(
+            &assets,
+            Capabilities::none().with(Capability::MusicActivityRead),
+        );
+        let approved = authorize(
+            &envelope("GET", "/api/activity/music?before=42&limit=20"),
+            &permitted,
+        )
+        .unwrap();
+        let ApprovedOperation::Api(ApiOperation::MusicActivity(query)) = approved.operation else {
+            panic!("expected a typed music activity operation");
+        };
+        assert_eq!(query.limit(), 20);
+        assert_eq!(query.before(), Some(42));
+        assert_eq!(approved.scope(), SENSITIVE_READ);
+
+        for target in [
+            "/api/activity/music",
+            "/api/activity/music?before=42",
+            "/api/activity/music?limit=0",
+            "/api/activity/music?limit=101",
+            "/api/activity/music?limit=20&limit=21",
+            "/api/activity/music?limit=20&before=0",
+            "/api/activity/music?limit=20&before=-1",
+            "/api/activity/music?limit=20&before=bad",
+            "/api/activity/music?limit=20&extra=1",
+            "/api/activity/music/1?limit=20",
+        ] {
+            assert!(
+                authorize(&envelope("GET", target), &permitted).is_err(),
+                "accepted {target}"
+            );
+        }
+        assert!(authorize(
+            &envelope("DELETE", "/api/activity/music?limit=20"),
+            &permitted,
+        )
+        .is_err());
+    }
+
+    #[test]
     fn operator_bridge_capabilities_enable_spotify_without_privileged_routes() {
         let assets = catalog();
         let policy = context(&assets, operator_bridge_capabilities());
@@ -1557,6 +1679,7 @@ mod tests {
             &policy,
         )
         .is_ok());
+        assert!(authorize(&envelope("GET", "/api/activity/music?limit=100"), &policy,).is_ok());
 
         let mut settings = envelope("PUT", "/api/spotify/settings");
         settings.content_type = Some("application/json");

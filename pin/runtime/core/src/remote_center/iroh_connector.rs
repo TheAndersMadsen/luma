@@ -554,6 +554,14 @@ fn typed_dispatch_request(
                         Some("application/json".to_owned()),
                     )
                 }
+                ApiOperation::MusicActivity(query) => {
+                    let mut target = format!("/api/activity/music?limit={}", query.limit());
+                    if let Some(before) = query.before() {
+                        target.push_str("&before=");
+                        target.push_str(&before.to_string());
+                    }
+                    (Method::GET, target, None)
+                }
                 ApiOperation::SpotifyStatus => {
                     (Method::GET, "/api/spotify/status".to_owned(), None)
                 }
@@ -843,6 +851,40 @@ mod tests {
         reservation.operation()
     }
 
+    fn music_activity_operation(target: &str) -> ApprovedOperation {
+        let catalog = CenterAssetCatalog::new(&["index.html"]).unwrap();
+        let generation = CenterGeneration::new(1).unwrap();
+        let request = RequestEnvelope {
+            method: "GET",
+            target,
+            content_type: None,
+            header_count: 0,
+            header_bytes: 0,
+            body_bytes: 0,
+            declared_body_bytes: None,
+            issued_at_ms: 1_000,
+            expires_at_ms: 31_000,
+            generation: 1,
+            request_id: "music-activity-request-0001",
+            idempotency_key: None,
+        };
+        let context = PolicyContext {
+            now_ms: 2_000,
+            expected_generation: generation,
+            capabilities: Capabilities::none().with(Capability::MusicActivityRead),
+            center_assets: &catalog,
+        };
+        let validated = authorize(&request, &context).unwrap();
+        let mut ledger = MetadataLedger::new(generation, 4).unwrap();
+        let ReservationDecision::ExecuteOnce(reservation) = ledger
+            .admit(&validated, request_fingerprint("GET", target, b""), 2_000)
+            .unwrap()
+        else {
+            panic!("request should receive an execution reservation");
+        };
+        reservation.operation()
+    }
+
     #[test]
     fn typed_spotify_dispatch_uses_fixed_routes_and_canonical_query() {
         let catalog = CenterAssetCatalog::new(&["index.html"]).unwrap();
@@ -871,6 +913,21 @@ mod tests {
             search.target,
             "/api/spotify/search?q=Bj%C3%B6rk+Live&kind=track"
         );
+    }
+
+    #[test]
+    fn typed_music_activity_dispatch_uses_one_canonical_bounded_query() {
+        let catalog = CenterAssetCatalog::new(&["index.html"]).unwrap();
+        let dispatch = typed_dispatch_request(
+            music_activity_operation("/api/activity/music?before=42&limit=20"),
+            &catalog,
+            Vec::new(),
+        )
+        .unwrap();
+        assert_eq!(dispatch.method, Method::GET);
+        assert_eq!(dispatch.target, "/api/activity/music?limit=20&before=42");
+        assert!(dispatch.content_type.is_none());
+        assert!(dispatch.body.is_empty());
     }
 
     #[test]
