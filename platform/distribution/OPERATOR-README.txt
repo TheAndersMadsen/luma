@@ -8,12 +8,21 @@ Node.js 22.14+ on Node 22, Docker Engine, and Docker Compose 2.34+.
 
 Fresh server:
 
+  ./revival setup production --guided
+  ./revival doctor production
+  ./revival deploy production --dry-run
+  ./revival deploy production --confirm
+  ./revival verify production
+  ./revival eval assistant production --repeat 2
+
+For automation, the equivalent noninteractive setup is:
+
   ./revival setup production \
     --domain center.example.com \
     --acme-email admin@example.com \
     --operator-email owner@example.com \
     --public-ip 203.0.113.10 \
-    --profile pin --profile search
+    --profile pin --profile search --profile spotify
   ./revival doctor production
   ./revival deploy production --dry-run
   ./revival deploy production --confirm
@@ -42,9 +51,11 @@ For an offline host, pass that exact archive through the same command:
 
   ./revival pin release acquire --archive FILE
 
-Center then serves the verified five-APK set to its browser installer. Download
-the activation document from Center and run the exact `pin activate` plan and
-confirmation commands it shows on the computer connected to the Pin.
+Center then serves the verified five-APK set to its browser installer. Sign in
+with the one-time Guided Setup URL printed by production setup, connect the Pin
+over USB, install the release, and choose `Connect this Pin to Cosmos`. Center
+activates the exact connected Pin, pairs it with the owner account, and pairs
+the remote bridge. Activation files and CLI activation remain recovery tools.
 
 Configuration, secrets, runtime data, and build caches live outside this
 archive. Rerunning setup preserves existing nonblank values. `deploy --confirm`

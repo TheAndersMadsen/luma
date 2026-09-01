@@ -289,6 +289,7 @@ export interface PinSetupStep {
   readonly commandId: GeneratedPinSetupStep["commandId"];
   readonly command: string;
   readonly centerRoute: string | null;
+  readonly surface: GeneratedPinSetupStep["surface"];
   readonly verification: GeneratedPinSetupStep["verification"];
   readonly status: PinSetupStepStatus;
   /** What is true right now, in one sentence. Never a prediction. */
@@ -830,6 +831,7 @@ export function derivePinSetupPlan(facts: PinSetupFacts): PinSetupPlan {
       commandId: definition.commandId,
       command: definition.command,
       centerRoute: definition.centerRoute,
+      surface: definition.surface,
       verification: definition.verification,
       status: draft.status,
       summary: draft.summary,

@@ -37,7 +37,8 @@ const DEVICE_USER_ROOT = Object.freeze({
   certificate: path.join(DEVICE_USER_ROOT_DIR, 'duc-ca.crt'),
   key: path.join(DEVICE_USER_ROOT_DIR, 'duc-ca.key'),
 });
-const PROFILES = new Set(['pin', 'search', 'spotify', 'observability']);
+const PRODUCTION_PROFILE_NAMES = Object.freeze(['pin', 'search', 'spotify', 'observability']);
+const PROFILES = new Set(PRODUCTION_PROFILE_NAMES);
 const PIN_SERVER_NAMES = Object.freeze([
   'api.cosmos.humane.cloud',
   'api.clone.invalid',
@@ -73,6 +74,16 @@ function hasProductionSetupMarker(values = null) {
     'REVIVAL_FIRST_OPERATOR_EMAIL',
     'REVIVAL_COMPOSE_APPLICATION',
   ].some((name) => Boolean(configured?.[name]?.trim()));
+}
+
+function validProductionDomain(value) {
+  return value.includes('.') && value.length <= 253 && net.isIP(value) === 0 &&
+    value.split('.').every((label) =>
+      /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(label));
+}
+
+function validProductionEmail(value) {
+  return /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/u.test(value);
 }
 
 function replaceEnvironmentValues(contents, updates) {
@@ -119,7 +130,7 @@ function parseOptions(args, current = {}) {
     if (option === '--profile') {
       const value = args.shift();
       if (!value || !PROFILES.has(value)) {
-        throw new Error(`--profile must be one of: ${[...PROFILES].join(', ')}`);
+        throw new Error(`--profile must be one of: ${PRODUCTION_PROFILE_NAMES.join(', ')}`);
       }
       profilesSpecified = true;
       selectedProfiles.add(value);
@@ -156,15 +167,11 @@ function parseOptions(args, current = {}) {
       : (current.COMPOSE_PROFILES || '').split(',')
         .map((value) => value.trim()).filter((value) => PROFILES.has(value)).sort();
 
-  const validDomain = options.domain.includes('.') && options.domain.length <= 253 &&
-    options.domain.split('.').every((label) =>
-      /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(label));
-  if (!validDomain || net.isIP(options.domain) !== 0) {
+  if (!validProductionDomain(options.domain)) {
     throw new Error('a public DNS name is required with --domain');
   }
-  const validEmail = /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/u;
-  if (!validEmail.test(options.acmeEmail)) throw new Error('a valid address is required with --acme-email');
-  if (!validEmail.test(options.operatorEmail)) throw new Error('a valid address is required with --operator-email');
+  if (!validProductionEmail(options.acmeEmail)) throw new Error('a valid address is required with --acme-email');
+  if (!validProductionEmail(options.operatorEmail)) throw new Error('a valid address is required with --operator-email');
   if (options.publicIpv4 && net.isIP(options.publicIpv4) !== 4) {
     throw new Error('--public-ip must be an IPv4 address');
   }
@@ -993,10 +1000,13 @@ module.exports = {
   hasProductionSetupMarker,
   OPERATOR_COMPOSE,
   PIN_SERVER_NAMES,
+  PRODUCTION_PROFILE_NAMES,
   PRODUCTION_DIR,
   parseOptions,
   productionArtifacts,
   productionRealm,
   setupProduction,
+  validProductionDomain,
+  validProductionEmail,
   validateProductionArtifacts,
 };

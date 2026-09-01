@@ -5,6 +5,7 @@ import { QRCodeSVG } from "qrcode.react";
 
 import { CaretDown } from "@/icons";
 import { PublicUtilityFrame } from "@/components/PublicUtilityFrame";
+import { GuidedSetupReturn } from "@/components/GuidedSetupReturn";
 import settings from "@/app/settings/settings.module.css";
 import styles from "./wifi.module.css";
 
@@ -179,6 +180,7 @@ export default function WifiPage() {
           </form>
         )}
       </section>
+      <GuidedSetupReturn />
     </PublicUtilityFrame>
   );
 }

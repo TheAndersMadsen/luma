@@ -500,7 +500,7 @@ test("operator release is lean, versioned, and bound to exact OCI digests", asyn
   assert.equal(setupStatus.status, 0, setupStatus.stderr);
   const setupReport = JSON.parse(setupStatus.stdout);
   assert.equal(setupReport.schemaVersion, 4);
-  assert.deepEqual(setupReport.contract, { id: "operator-setup", version: "2.2.0", journey: "production" });
+  assert.deepEqual(setupReport.contract, { id: "operator-setup", version: "2.3.0", journey: "production" });
   assert.equal(setupReport.state, "production-ready");
   assert.equal(setupReport.release.pin.enabled, true);
   assert.equal(setupReport.release.pin.observed.releaseId, descriptor.pin.releaseId);

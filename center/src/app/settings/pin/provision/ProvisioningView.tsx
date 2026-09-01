@@ -4,6 +4,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useState } from "react";
 
 import { ErrorState, SectionSkeleton } from "@/components/States";
+import { GuidedSetupReturn } from "@/components/GuidedSetupReturn";
 import { StatusChip, StatusMessage } from "@/components/Status";
 import { usePinDevice } from "../PinDeviceProvider";
 import settings from "../../settings.module.css";
@@ -399,6 +400,7 @@ export default function ProvisioningView() {
           </details>
         </div>
       </section>
+      <GuidedSetupReturn />
     </>
   );
 }

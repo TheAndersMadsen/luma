@@ -15,9 +15,10 @@ const {
   setupProduction,
   validateProductionArtifacts,
 } = require('./production-setup');
+const { guidedProductionArguments } = require('./guided-production-setup');
 const { operatorContract, releaseCompatibility, versionInfo } = require('./command-spec');
 
-const PRODUCTION_USAGE = './revival setup production --domain HOST --acme-email EMAIL --operator-email EMAIL [--public-ip IPV4] [--pin-release-archive FILE] [--profile pin|search|spotify|observability ... | --no-profiles]';
+const PRODUCTION_USAGE = './revival setup production --guided | ./revival setup production --domain HOST --acme-email EMAIL --operator-email EMAIL [--public-ip IPV4] [--pin-release-archive FILE] [--profile pin|search|spotify|observability ... | --no-profiles]';
 
 function protectedFile(file, requireContent = true) {
   if (!fs.existsSync(file)) return false;
@@ -111,6 +112,12 @@ function setupCommand(args) {
   const operation = args.shift();
   try {
     if (operation === 'production') {
+      if (args[0] === '--guided') {
+        if (args.length !== 1) throw new Error('usage');
+        let current = {};
+        if (protectedFile(ENV_FILE)) current = parseEnvFile(ENV_FILE);
+        args = guidedProductionArguments(current);
+      }
       const result = setupProduction(args);
       info(`Production configuration is ready for ${result.origin}.`);
       info(`Operator overlay: ${result.operatorCompose}`);

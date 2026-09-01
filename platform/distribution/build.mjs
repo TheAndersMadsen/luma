@@ -36,6 +36,7 @@ const FILES = Object.freeze([
   ["platform/cli/command-spec.js", "platform/cli/command-spec.js", 0o644],
   ["platform/cli/config.js", "platform/cli/config.js", 0o644],
   ["platform/cli/context.js", "platform/cli/context.js", 0o644],
+  ["platform/cli/guided-production-setup.js", "platform/cli/guided-production-setup.js", 0o644],
   ["platform/cli/production-setup.js", "platform/cli/production-setup.js", 0o644],
   ["platform/cli/production.js", "platform/cli/production.js", 0o644],
   ["platform/cli/registry.js", "platform/cli/registry.js", 0o644],

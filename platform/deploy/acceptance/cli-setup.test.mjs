@@ -18,6 +18,7 @@ const root = path.resolve(import.meta.dirname, "../../..");
 const cli = path.join(root, "revival");
 const require = createRequire(import.meta.url);
 const { productionRealm } = require("../../cli/production-setup.js");
+const { guidedProductionArguments } = require("../../cli/guided-production-setup.js");
 
 function fixture(t) {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "revival-setup-"));
@@ -71,6 +72,23 @@ function parseEnv(file) {
   );
 }
 
+function guidedIo(lines) {
+  const pending = [...lines];
+  let output = "";
+  return {
+    io: {
+      readLine() {
+        assert.ok(pending.length > 0, "guided setup requested an unexpected answer");
+        return pending.shift();
+      },
+      write(value) {
+        output += value;
+      },
+    },
+    output: () => output,
+  };
+}
+
 function seedPinRelease(env) {
   const root = path.join(env.REVIVAL_DATA_DIR, "pin-releases");
   const version = "2026-08-24.1";
@@ -121,6 +139,65 @@ test("generated production identity supports Center's direct password grant", ()
   assert.match(fs.readFileSync(path.join(root, "center/src/server/auth.ts"), "utf8"), /grant_type: "password"/u);
 });
 
+test("guided production setup collects one reviewed newcomer configuration", () => {
+  const scripted = guidedIo([
+    "center.example.test",
+    "acme@example.test",
+    "owner@example.test",
+    "",
+    "203.0.113.10",
+    "yes",
+  ]);
+  const args = guidedProductionArguments({}, scripted.io);
+  assert.deepEqual(args, [
+    "--domain", "center.example.test",
+    "--acme-email", "acme@example.test",
+    "--operator-email", "owner@example.test",
+    "--public-ip", "203.0.113.10",
+    "--profile", "pin",
+    "--profile", "search",
+    "--profile", "spotify",
+  ]);
+  assert.match(scripted.output(), /\[1\/5\] Public Center domain/u);
+  assert.match(scripted.output(), /\[5\/5\] Review/u);
+  assert.match(scripted.output(), /does not deploy or change a Pin/u);
+  assert.match(scripted.output(), /deployment remains a separate confirmed command/u);
+});
+
+test("guided production setup preserves current public values and requires confirmation", () => {
+  const current = {
+    REVIVAL_PUBLIC_DOMAIN: "center.current.test",
+    REVIVAL_ACME_EMAIL: "acme@current.test",
+    REVIVAL_FIRST_OPERATOR_EMAIL: "owner@current.test",
+    REVIVAL_DEVICE_EDGE_IPV4: "198.51.100.22",
+    COMPOSE_PROFILES: "pin,search,spotify",
+  };
+  const accepted = guidedIo(["", "", "", "", "", "y"]);
+  assert.deepEqual(guidedProductionArguments(current, accepted.io), [
+    "--domain", "center.current.test",
+    "--acme-email", "acme@current.test",
+    "--operator-email", "owner@current.test",
+    "--public-ip", "198.51.100.22",
+    "--profile", "pin",
+    "--profile", "search",
+    "--profile", "spotify",
+  ]);
+
+  const cancelled = guidedIo(["", "", "", "", "", "no"]);
+  assert.throws(
+    () => guidedProductionArguments(current, cancelled.io),
+    /cancelled; no configuration was written/u,
+  );
+});
+
+test("guided setup refuses a noninteractive invocation before creating state", (t) => {
+  const { env } = fixture(t);
+  const result = invoke(env, "setup", "production", "--guided");
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /requires an interactive terminal/u);
+  assert.equal(fs.existsSync(env.REVIVAL_CONFIG_DIR), false);
+});
+
 test("local setup creates real external configuration and status derives from it", (t) => {
   const { env } = fixture(t);
   const setup = invoke(env, "setup", "local");
@@ -133,7 +210,7 @@ test("local setup creates real external configuration and status derives from it
   assert.equal(status.status, 0, status.stderr);
   assert.deepEqual(JSON.parse(status.stdout), {
     schemaVersion: 4,
-    contract: { id: "operator-setup", version: "2.2.0", journey: "local" },
+    contract: { id: "operator-setup", version: "2.3.0", journey: "local" },
     state: "local-ready",
     mode: "local",
     ok: true,
@@ -147,12 +224,12 @@ test("local setup creates real external configuration and status derives from it
   assert.equal(changed.status, 1);
   assert.deepEqual(JSON.parse(changed.stdout), {
     schemaVersion: 4,
-    contract: { id: "operator-setup", version: "2.2.0", journey: "production" },
+    contract: { id: "operator-setup", version: "2.3.0", journey: "production" },
     state: "uninitialized",
     mode: "uninitialized",
     ok: false,
     nextCommandId: null,
-    next: "./revival setup local or ./revival setup production --help",
+    next: "./revival setup local or ./revival setup production --guided",
     release: { operator: { version: "0.1.0-dev", revision: "source" }, pin: null },
   });
 });
@@ -244,7 +321,7 @@ test("production setup creates a complete portable operator installation and is 
   assert.equal(status.status, 0, status.stderr);
   assert.deepEqual(JSON.parse(status.stdout), {
     schemaVersion: 4,
-    contract: { id: "operator-setup", version: "2.2.0", journey: "production" },
+    contract: { id: "operator-setup", version: "2.3.0", journey: "production" },
     state: "production-ready",
     mode: "production",
     ok: true,
@@ -416,7 +493,7 @@ test("setup status keeps incomplete production setup on its resumable path", (t)
   assert.equal(report.mode, "production");
   assert.equal(report.state, "production-invalid");
   assert.equal(report.ok, false);
-  assert.equal(report.next, "./revival setup production");
+  assert.equal(report.next, "./revival setup production --guided");
 
   fs.unlinkSync(env.REVIVAL_ENV_FILE);
   const production = path.join(env.REVIVAL_CONFIG_DIR, "production");
@@ -427,7 +504,7 @@ test("setup status keeps incomplete production setup on its resumable path", (t)
   assert.equal(status.status, 1);
   report = JSON.parse(status.stdout);
   assert.equal(report.mode, "production");
-  assert.equal(report.next, "./revival setup production");
+  assert.equal(report.next, "./revival setup production --guided");
 });
 
 test("unsupported setup commands fail without creating operator state", (t) => {

@@ -98,14 +98,20 @@ test("the committed Center journey is an in-sync projection of the root contract
   );
 });
 
-test("Center exposes the canonical release acquisition, PKI, activation, and network commands", () => {
+test("Center owns the primary Pin journey while preserving recovery commands", () => {
   const steps = new Map(derivePinSetupPlan(facts()).steps.map((step) => [step.id, step]));
   assert.equal(steps.get("release").command, "./revival pin release acquire");
   assert.equal(steps.has("ship"), false);
   assert.equal(steps.get("identity").command, "./revival pki import");
   assert.equal(steps.get("activate").command, "./revival pin activate");
   assert.equal(steps.get("network").command, "./revival pin network qr");
+  assert.deepEqual([...steps.values()].map((step) => step.surface), Array(8).fill("center"));
+  assert.equal(steps.get("connect").centerRoute, "/settings/pin/setup");
+  assert.equal(steps.get("configure").centerRoute, "/settings/account/services");
+  assert.equal(steps.get("identity").centerRoute, "/settings/pin/provision");
+  assert.equal(steps.get("activate").centerRoute, "/settings/pin/provision");
   assert.equal(steps.get("network").centerRoute, "/wifi");
+  assert.equal(steps.get("confirm").centerRoute, "/settings/pin/setup");
 });
 
 test("one step is focused and aggregate software health proves neither exact network nor physical acceptance", () => {
@@ -349,7 +355,11 @@ test("an unpublished release never sends the owner to an installer with nothing 
   assert.match(installAction, /exportCurrentRelease \? null/u);
   assert.equal(
     PIN_SETUP_JOURNEY.steps.find((step) => step.id === "release")?.centerRoute,
-    null,
+    "/settings/pin/setup",
+  );
+  assert.notEqual(
+    PIN_SETUP_JOURNEY.steps.find((step) => step.id === "release")?.centerRoute,
+    "/settings/pin/install",
   );
 });
 

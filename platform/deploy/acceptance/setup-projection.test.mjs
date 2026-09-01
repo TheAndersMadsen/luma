@@ -67,6 +67,10 @@ test("Center's committed setup projection matches the root contract", async () =
   assert.match(generated, /\.\/revival pin release acquire/);
   assert.doesNotMatch(generated, /\.\/revival pin release import/);
   assert.doesNotMatch(generated, /pin release (?:build|ship)/);
+  assert.doesNotMatch(generated, /"surface": "cli"/);
+  assert.match(generated, /"surface": "center"/);
+  assert.match(generated, /"centerRoute": "\/settings\/pin\/provision"/);
+  assert.match(generated, /"centerRoute": "\/settings\/account\/services"/);
   assert.match(generated, /"centerRoute": "\/wifi"/);
 });
 

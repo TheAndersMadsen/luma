@@ -214,6 +214,22 @@ test("the old admin dashboard is one Settings provisioning pane without duplicat
   ]) await assert.rejects(access(new URL(removed, root)), undefined, `${removed} still exists`);
 });
 
+test("every guided setup branch returns to the canonical checklist", async () => {
+  const [returnLink, install, provision, services, wifi] = await Promise.all([
+    source("src/components/GuidedSetupReturn.tsx"),
+    source("src/app/settings/pin/install/InstallView.tsx"),
+    source("src/app/settings/pin/provision/ProvisioningView.tsx"),
+    source("src/app/settings/account/services/page.tsx"),
+    source("src/app/wifi/page.tsx"),
+  ]);
+
+  assert.match(returnLink, /href="\/settings\/pin\/setup"/u);
+  assert.match(returnLink, /Continue guided setup/u);
+  for (const branch of [install, provision, services, wifi]) {
+    assert.match(branch, /<GuidedSetupReturn\s*\/>/u);
+  }
+});
+
 test("device page avoids unsupported placeholder rows", async () => {
   const devices = await source("src/app/settings/account/devices/page.tsx");
 

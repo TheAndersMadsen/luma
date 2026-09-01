@@ -26,6 +26,7 @@ import {
   getWearerPinAdbSession,
   usePinAdbSession,
 } from "@/lib/pin-session";
+import { GuidedSetupReturn } from "@/components/GuidedSetupReturn";
 import styles from "./install.module.css";
 import { ConfirmActionModal } from "./ConfirmActionModal";
 import { InstallDiagnosticsCard } from "./InstallDiagnosticsCard";
@@ -107,6 +108,8 @@ export default function InstallView({
       />
 
       <InstallDiagnosticsCard controller={controller} />
+
+      <GuidedSetupReturn />
 
       <ConfirmActionModal
         dialog={confirmation.dialog}

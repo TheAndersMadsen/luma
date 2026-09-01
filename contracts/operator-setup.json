@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "contractId": "operator-setup",
-  "contractVersion": "2.2.0",
+  "contractVersion": "2.3.0",
   "mutationPolicies": {
     "read-only": {
       "confirmationRequired": false,
@@ -59,7 +59,7 @@
         "journeyId": "production",
         "ok": false,
         "nextCommandId": null,
-        "next": "./revival setup local or ./revival setup production --help"
+        "next": "./revival setup local or ./revival setup production --guided"
       },
       {
         "id": "local-ready",
@@ -91,7 +91,7 @@
         "journeyId": "production",
         "ok": false,
         "nextCommandId": "setup.production",
-        "next": "./revival setup production"
+        "next": "./revival setup production --guided"
       }
     ],
     "releaseCompatibility": {
@@ -596,8 +596,8 @@
       "effect": "local-mutation",
       "confirmationRequired": false,
       "exactSerialRequired": false,
-      "summary": "Generate a complete portable production configuration.",
-      "usage": "revival setup production --domain HOST --acme-email EMAIL --operator-email EMAIL [--public-ip IPV4] [--pin-release-archive FILE] [options]",
+      "summary": "Guide a newcomer through, or noninteractively generate, a complete portable production configuration.",
+      "usage": "revival setup production --guided | revival setup production --domain HOST --acme-email EMAIL --operator-email EMAIL [--public-ip IPV4] [--pin-release-archive FILE] [options]",
       "documentationAnchor": "README.md#deploy-cosmos"
     },
     {
@@ -1038,18 +1038,18 @@
           "id": "connect",
           "title": "Connect and resolve the exact Pin",
           "commandId": "pin.doctor",
-          "centerRoute": "/settings/pin/install",
-          "surface": "cli",
-          "verification": "cli",
+          "centerRoute": "/settings/pin/setup",
+          "surface": "center",
+          "verification": "center",
           "documentationAnchor": "README.md#connect-a-pin"
         },
         {
           "id": "release",
           "title": "Verify the matching published Pin release",
           "commandId": "pin.release.acquire",
-          "centerRoute": null,
-          "surface": "cli",
-          "verification": "cli",
+          "centerRoute": "/settings/pin/setup",
+          "surface": "center",
+          "verification": "center",
           "documentationAnchor": "README.md#connect-a-pin"
         },
         {
@@ -1057,7 +1057,7 @@
           "title": "Confirm installation on the exact Pin",
           "commandId": "pin.install",
           "centerRoute": "/settings/pin/install",
-          "surface": "cli",
+          "surface": "center",
           "verification": "physical",
           "documentationAnchor": "README.md#connect-a-pin"
         },
@@ -1065,26 +1065,26 @@
           "id": "configure",
           "title": "Validate Pin configuration",
           "commandId": "config.check",
-          "centerRoute": "/settings/pin",
-          "surface": "cli",
-          "verification": "cli",
+          "centerRoute": "/settings/account/services",
+          "surface": "center",
+          "verification": "center",
           "documentationAnchor": "README.md#configuration"
         },
         {
           "id": "identity",
           "title": "Import or create device identity PKI",
           "commandId": "pki.import",
-          "centerRoute": "/settings/pin",
-          "surface": "cli",
-          "verification": "cli",
+          "centerRoute": "/settings/pin/provision",
+          "surface": "center",
+          "verification": "center",
           "documentationAnchor": "README.md#connect-a-pin"
         },
         {
           "id": "activate",
           "title": "Confirm activation on the exact Pin",
           "commandId": "pin.activate",
-          "centerRoute": "/settings/pin",
-          "surface": "cli",
+          "centerRoute": "/settings/pin/provision",
+          "surface": "center",
           "verification": "physical",
           "documentationAnchor": "README.md#connect-a-pin"
         },
@@ -1093,7 +1093,7 @@
           "title": "Prepare and verify network access",
           "commandId": "pin.network.qr",
           "centerRoute": "/wifi",
-          "surface": "cli",
+          "surface": "center",
           "verification": "physical",
           "documentationAnchor": "README.md#connect-a-pin"
         },
@@ -1101,8 +1101,8 @@
           "id": "confirm",
           "title": "Confirm physical acceptance",
           "commandId": "pin.activate.status",
-          "centerRoute": "/settings/pin",
-          "surface": "cli",
+          "centerRoute": "/settings/pin/setup",
+          "surface": "center",
           "verification": "physical",
           "documentationAnchor": "README.md#connect-a-pin"
         }

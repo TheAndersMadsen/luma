@@ -215,6 +215,17 @@ archive when the `pin` profile is selected.
 
 ### 2. Create the production configuration
 
+For a fresh server, use the guided setup. It asks for the public domain,
+certificate email, first owner, Pin address, and optional features, shows one
+review, then writes the same production configuration as the noninteractive
+command. It never deploys or changes a Pin.
+
+```sh
+./revival setup production --guided
+```
+
+For automation, pass those public values explicitly:
+
 ```sh
 ./revival setup production \
   --domain center.example.com \
@@ -222,7 +233,8 @@ archive when the `pin` profile is selected.
   --operator-email owner@example.com \
   --public-ip 203.0.113.10 \
   --profile pin \
-  --profile search
+  --profile search \
+  --profile spotify
 ```
 
 The command writes configuration, secrets, certificates, and runtime data to
