@@ -242,25 +242,23 @@ test("release workflow creates and publishes the identity-verified Sigstore bund
   assert.doesNotMatch(workflow, /--insecure-ignore-(?:sct|tlog)/u);
 });
 
-test("server releases build and publish one verified signed Pin archive", async () => {
+test("server releases republish one exact verified signed Pin archive", async () => {
   const workflow = await readFile(
     new URL("../../../.github/workflows/release-cli.yml", import.meta.url),
     "utf8",
   );
   const pinJob = workflow.match(/^  pin-release:\n[\s\S]*?^  images:/mu)?.[0];
   assert.ok(pinJob, "release workflow must contain the bounded Pin release job");
-  assert.match(pinJob, /name: build exact signed Pin release/u);
-  assert.match(pinJob, /PIN_COMPATIBILITY_KEYSTORE_BASE64: \$\{\{ secrets\.PIN_COMPATIBILITY_KEYSTORE_BASE64 \}\}/u);
-  assert.match(pinJob, /privateAssetSource\.repository/u);
-  assert.match(pinJob, /privateAssetSource\.tag/u);
-  assert.match(pinJob, /privateAssetSource\.sha256/u);
-  assert.match(pinJob, /platform\/deploy\/pin\/build\.mjs build/u);
-  assert.match(pinJob, /platform\/deploy\/pin\/export-release\.mjs/u);
+  assert.match(pinJob, /name: acquire exact signed Pin release/u);
+  assert.match(pinJob, /signedReleaseSource\.repository/u);
+  assert.match(pinJob, /signedReleaseSource\.tag/u);
+  assert.match(pinJob, /signedReleaseSource\.sha256/u);
+  assert.match(pinJob, /signedReleaseSource\.releaseId/u);
   assert.match(pinJob, /describePinReleaseArchive/u);
   assert.match(pinJob, /name: release-pin/u);
   assert.match(pinJob, /path: \$\{\{ runner\.temp \}\}\/release-pin\//u);
-  assert.doesNotMatch(pinJob, /signedReleaseSource/u);
-  assert.doesNotMatch(pinJob, /PIN_(?:EMBEDDED_PATCH_KEYSTORE|TFLITE_LIBRARY)_BASE64/u);
+  assert.doesNotMatch(pinJob, /privateAssetSource|platform\/deploy\/pin\/(?:build|export-release)\.mjs/u);
+  assert.doesNotMatch(pinJob, /PIN_(?:COMPATIBILITY_KEYSTORE|SIGNING|EMBEDDED_PATCH_KEYSTORE|TFLITE_LIBRARY)/u);
 });
 
 test("release proof rejects a certificate from the wrong OIDC issuer", async (t) => {

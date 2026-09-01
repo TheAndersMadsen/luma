@@ -269,15 +269,12 @@ test("tag release workflow publishes the exact hardened image and Compose bounda
   assert.match(source, /platform\/containers\/keycloak\/Dockerfile/u);
   assert.match(source, /platform\/containers\/center-iroh-bridge\/Dockerfile/u);
   assert.match(source, /^  pin-release:\n/mu);
-  assert.match(source, /name: build exact signed Pin release/u);
-  assert.match(source, /PIN_COMPATIBILITY_KEYSTORE_BASE64: \$\{\{ secrets\.PIN_COMPATIBILITY_KEYSTORE_BASE64 \}\}/u);
-  assert.doesNotMatch(source, /PIN_EMBEDDED_PATCH_KEYSTORE_BASE64/u);
-  assert.doesNotMatch(source, /PIN_TFLITE_LIBRARY_BASE64/u);
+  assert.match(source, /name: acquire exact signed Pin release/u);
+  assert.doesNotMatch(source, /PIN_(?:COMPATIBILITY_KEYSTORE|SIGNING|EMBEDDED_PATCH_KEYSTORE|TFLITE_LIBRARY)/u);
   assert.match(source, /gh release download "\$source_tag"\s+\\\n\s+--repo "\$source_repository"\s+\\\n\s+--pattern "\$source_archive"/u);
   assert.doesNotMatch(source, /github\.com\/\$source_repository\/releases\/download/u);
-  assert.match(source, /tar --extract --gzip --to-stdout --file "\$archive" "\$server_member"/u);
-  assert.match(source, /unzip -p "\$installer_apk" 'assets\/abxdroppedapk-private-key\.pk8'/u);
-  assert.match(source, /openssl pkcs12 -export/u);
+  assert.match(source, /pinned signed Pin archive does not match its exact release coordinates/u);
+  assert.doesNotMatch(source, /platform\/deploy\/pin\/(?:build|export-release)\.mjs/u);
   assert.match(source, /needs: \[coordinates, application, pin-release\]/u);
   assert.match(source, /--pin-archive "\$RUNNER_TEMP\/release-receipts\/ai-pin-revival-pin-\$pin_version\.tar\.gz"/u);
   assert.match(source, /"\$output\/ai-pin-revival-pin-\$pin_version\.tar\.gz"/u);
@@ -287,18 +284,19 @@ test("tag release workflow publishes the exact hardened image and Compose bounda
     "utf8",
   ));
   assert.deepEqual(pinCoordinates, {
-    schemaVersion: 2,
+    schemaVersion: 3,
     version: "2026-09-01.1",
     versionCode: 202609011,
-    privateAssetSource: {
+    signedReleaseSource: {
       repository: "TheAndersMadsen/ai-pin-revival",
-      tag: "v0.1.82",
-      archive: "ai-pin-revival-pin-2026-08-31.2.tar.gz",
-      size: 123908066,
-      sha256: "d6a2146da47ff0308df1cca10f23f52755ce735ba50065a84743999d2696e666",
-      installerMember: "ai-pin-revival-pin-2026-08-31.2/installer.apk",
-      serverMember: "ai-pin-revival-pin-2026-08-31.2/server.apk",
-      libraryMember: "lib/arm64-v8a/libtensorflowlite_jni.so",
+      tag: "v0.1.94",
+      archive: "ai-pin-revival-pin-2026-09-01.1.tar.gz",
+      size: 123901658,
+      sha256: "2a266cec5298d53228651af6ae1194d8e331e5ac2d274277efce73e02de76b8e",
+      releaseId: "c42bb54853366aeabf1352f195506b0508b913d22f06543237e61dd68f96eb49",
+      signerSha256: "d8a64e1c3a1afdc340c4b86feaacb88e2d81d66972afbd58e743b7c5b8d1cbdb",
+      manifestSha256: "b7596f74d4a59d46837424796b2111ffc83ba7ae9dbccf366de5f5ca8efdd33b",
+      receiptsSha256: "42d304451ae5599581efbffa1c940b17fef191bd5ce6d95e2e04af90a616f721",
     },
   });
 
