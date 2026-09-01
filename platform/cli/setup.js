@@ -112,7 +112,7 @@ function printStatus(report, json) {
   if (!report.ok) process.exitCode = 1;
 }
 
-function setupCommand(args) {
+function setupCommand(args, options = {}) {
   const operation = args.shift();
   try {
     if (operation === 'production') {
@@ -154,8 +154,9 @@ function setupCommand(args) {
     }
     fail(`usage: ./revival setup local|contributor|pin | ${PRODUCTION_USAGE} | ./revival setup status [--json]`, 64);
   } catch (error) {
-    if (error.message === 'usage') fail(`usage: ${PRODUCTION_USAGE}`, 64);
-    fail(error.message);
+    const message = error.message === 'usage' ? `usage: ${PRODUCTION_USAGE}` : error.message;
+    if (options.throwOnFailure) throw new Error(message);
+    fail(message, error.message === 'usage' ? 64 : 1);
   }
 }
 

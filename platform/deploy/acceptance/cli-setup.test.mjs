@@ -121,6 +121,83 @@ test("production onboarding stops after the dry-run when deployment is declined"
   assert.deepEqual(calls, ["setup", "doctor", "dry-run"]);
 });
 
+test("production onboarding reports a safe stage-specific recovery after every failure", () => {
+  const stages = [
+    {
+      operation: "setup",
+      expected: /stage 1\/5 \(configuration\)/u,
+      state: /production deployment was not started/iu,
+      recovery: /\.\/revival setup production --guided/u,
+    },
+    {
+      operation: "doctor",
+      expected: /stage 2\/5 \(preflight\)/u,
+      state: /production deployment was not started/iu,
+      recovery: /\.\/revival doctor production/u,
+    },
+    {
+      operation: "dryRun",
+      expected: /stage 3\/5 \(safe deployment preview\)/u,
+      state: /production deployment was not started/iu,
+      recovery: /\.\/revival deploy production --dry-run/u,
+    },
+    {
+      operation: "deploy",
+      expected: /stage 4\/5 \(deployment\)/u,
+      state: /server containers may have changed/iu,
+      recovery: /\.\/revival verify production/u,
+    },
+    {
+      operation: "verify",
+      expected: /stage 5\/5 \(verification\)/u,
+      state: /deployed server state was preserved/iu,
+      recovery: /\.\/revival verify production/u,
+    },
+  ];
+
+  for (const failed of stages) {
+    const runtime = {
+      setup: () => {},
+      doctor: () => {},
+      dryRun: () => {},
+      deploy: () => {},
+      verify: () => {},
+      values: () => ({ REVIVAL_PUBLIC_ORIGIN: "https://pin.example.test" }),
+      readLine: () => "yes",
+      write: () => {},
+    };
+    runtime[failed.operation] = () => {
+      throw new Error("provider password=never-print-this ghp_abcdefghijklmnopqrstuvwxyz");
+    };
+    assert.throws(() => runProductionOnboarding(runtime), (error) => {
+      assert.match(error.message, failed.expected);
+      assert.match(error.message, failed.state);
+      assert.match(error.message, failed.recovery);
+      assert.match(error.message, /safe retry: \.\/revival onboard production/iu);
+      assert.match(error.message, /No Pin was contacted or changed/u);
+      assert.doesNotMatch(error.message, /never-print-this|ghp_/u);
+      return true;
+    });
+  }
+});
+
+test("declining deployment explains exactly what the safe rerun preserves", () => {
+  assert.throws(() => runProductionOnboarding({
+    setup: () => {},
+    doctor: () => {},
+    dryRun: () => {},
+    deploy: () => assert.fail("deploy must not run"),
+    verify: () => assert.fail("verify must not run"),
+    readLine: () => "no",
+    write: () => {},
+  }), (error) => {
+    assert.match(error.message, /deployment was not started/u);
+    assert.match(error.message, /configuration was preserved/u);
+    assert.match(error.message, /safe retry: \.\/revival onboard production/iu);
+    return true;
+  });
+});
+
 function seedPinRelease(env) {
   const root = path.join(env.REVIVAL_DATA_DIR, "pin-releases");
   const version = "2026-08-24.1";

@@ -596,7 +596,7 @@
       "effect": "remote-mutation",
       "confirmationRequired": true,
       "exactSerialRequired": false,
-      "summary": "Guide one complete production setup, safe dry-run, confirmed deployment, verification, and Center handoff.",
+      "summary": "Guide one resumable production setup, safe dry-run, confirmed deployment, verification, and Center handoff with stage-specific recovery.",
       "usage": "revival onboard production",
       "documentationAnchor": "README.md#deploy-cosmos"
     },

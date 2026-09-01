@@ -60,6 +60,14 @@ compose=(
 
 docker compose "${compose[@]}" config --quiet
 
+public_host="${REVIVAL_PUBLIC_ORIGIN#https://}"
+public_host="${public_host%%/*}"
+if command -v getent >/dev/null 2>&1 && ! getent ahosts "$public_host" >/dev/null 2>&1; then
+  echo "public DNS name $public_host does not resolve from this server" >&2
+  echo "Create or correct its A or AAAA record, wait for DNS propagation, then rerun ./revival doctor production." >&2
+  exit 1
+fi
+
 # A running Traefik container in this project already owns the ports during a
 # normal update. Otherwise, fail before Compose reaches a vague bind error.
 if ! docker compose "${compose[@]}" ps --status running --services traefik 2>/dev/null |

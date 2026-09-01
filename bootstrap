@@ -196,13 +196,33 @@ COSIGN_X64_SIZE="141178250"
 COSIGN_X64_SHA256="4629c757b7618056f8ddd7e2625ae9fdd94c0372a65049520bc7d9df9efc7f71"
 COSIGN_ARM64_SIZE="132747403"
 COSIGN_ARM64_SHA256="c5d324e091826b0d7a78eb16fef316450b4eb9aaec045611c08ba06f5e73220a"
+MINIMUM_AVAILABLE_KIB="8388608"
+SAFE_RETRY="bash <(curl -fsSL https://center.andersmadsen.dk/install.sh)"
 
 BOOTSTRAP_TMP=""
 GH_TOKEN=""
+CURRENT_STAGE="Startup"
+CHANGE_STATE="Nothing was changed."
+
+report_failure() {
+  local message="$1"
+  trap - ERR
+  printf '\n%s%s  Setup stopped · %s%s\n' "$BOLD" "$RED" "$CURRENT_STAGE" "$RESET" >&2
+  printf '  What failed: %s\n' "$message" >&2
+  printf '  State: %s\n' "$CHANGE_STATE" >&2
+  printf '  Device state: No Pin was contacted or changed.\n' >&2
+  printf '  Safe retry: %s\n\n' "$SAFE_RETRY" >&2
+}
 
 die() {
-  printf '%s%serror:%s %s\n' "$BOLD" "$RED" "$RESET" "$1" >&2
+  report_failure "$1"
   exit 1
+}
+
+unexpected_failure() {
+  local status="$?"
+  report_failure "A required command stopped with exit status $status. Its diagnostic is immediately above."
+  exit "$status"
 }
 
 cleanup() {
@@ -213,6 +233,52 @@ cleanup() {
 
 as_root() {
   if (( EUID == 0 )); then "$@"; else sudo "$@"; fi
+}
+
+validate_supported_host() {
+  local release_file="$1" architecture="$2"
+  [[ -r "$release_file" ]] ||
+    die "Ubuntu release information is missing. Use a fresh 64-bit Ubuntu 24.04 server with /etc/os-release."
+  unset ID VERSION_ID
+  # /etc/os-release is the operating system's canonical release declaration.
+  source "$release_file"
+  [[ "${ID:-}" == "ubuntu" && "${VERSION_ID:-}" == "24.04" ]] ||
+    die "Production setup requires 64-bit Ubuntu 24.04. This server reports ${ID:-unknown} ${VERSION_ID:-unknown}."
+  case "$architecture" in
+    x86_64|aarch64|arm64) ;;
+    *) die "Production setup supports only amd64/x86_64 and arm64/aarch64; this server reports $architecture." ;;
+  esac
+}
+
+check_available_capacity() {
+  local directory="$1" available
+  available="$(df -Pk "$directory" 2>/dev/null | awk 'NR == 2 { print $4 }')"
+  [[ "$available" =~ ^[0-9]+$ ]] || die "Available disk space could not be measured for the operator data location."
+  (( available >= MINIMUM_AVAILABLE_KIB )) ||
+    die "At least 8 GiB of free disk space is required before downloading production images. Free space, resize the VPS disk, then rerun."
+}
+
+incompatible_docker_packages() {
+  local package status found=()
+  command -v dpkg-query >/dev/null 2>&1 || return 0
+  for package in docker.io docker-compose docker-compose-v2 podman-docker containerd runc; do
+    status="$(dpkg-query -W -f='${db:Status-Abbrev}' "$package" 2>/dev/null || true)"
+    [[ "$status" == "ii " ]] && found+=("$package")
+  done
+  ((${#found[@]})) && printf '%s' "${found[*]}"
+}
+
+github_api() {
+  local url="$1" destination="$2" access="$3" status
+  if ! status="$(curl --silent --show-error --proto '=https' --tlsv1.2 --max-filesize 2097152 \
+      --header "Authorization: Bearer $GH_TOKEN" \
+      --header 'Accept: application/vnd.github+json' \
+      --header 'X-GitHub-Api-Version: 2022-11-28' \
+      --output "$destination" --write-out '%{http_code}' "$url")"; then
+    die "GitHub could not be reached securely. Check DNS and outbound HTTPS access, then rerun."
+  fi
+  [[ "$status" == "200" ]] ||
+    die "GitHub could not confirm $access (HTTP $status). Check that the token is valid, authorized for this private repository, and then rerun."
 }
 
 node_is_supported() {
@@ -309,9 +375,11 @@ docker_mode() {
 docker_login() {
   local mode="$1" user="$2"
   if [[ "$mode" == "direct" ]]; then
-    printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$user" --password-stdin
+    printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$user" --password-stdin ||
+      die "GHCR login failed. The GitHub token needs package read access and authorization for this private repository."
   else
-    printf '%s' "$GH_TOKEN" | sg docker -c "docker login ghcr.io --username $user --password-stdin"
+    printf '%s' "$GH_TOKEN" | sg docker -c "docker login ghcr.io --username $user --password-stdin" ||
+      die "GHCR login failed. The GitHub token needs package read access and authorization for this private repository."
   fi
 }
 
@@ -350,15 +418,18 @@ console.log(`${api}\t${asset.size}`);
 NODE
 )
 EOF
-  curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 \
-    --header "Authorization: Bearer $GH_TOKEN" \
-    --header 'Accept: application/octet-stream' \
-    --header 'X-GitHub-Api-Version: 2022-11-28' \
-    --max-filesize "$asset_size" --output "$destination" "$asset_url"
+  if ! curl --fail --location --silent --show-error --proto '=https' --proto-redir '=https' --tlsv1.2 \
+      --header "Authorization: Bearer $GH_TOKEN" \
+      --header 'Accept: application/octet-stream' \
+      --header 'X-GitHub-Api-Version: 2022-11-28' \
+      --max-filesize "$asset_size" --output "$destination" "$asset_url"; then
+    die "GitHub could not download $name. Confirm repository read access and retry; partial bytes will be discarded."
+  fi
   [[ "$(stat --format='%s' "$destination")" == "$asset_size" ]] ||
     die "$name did not match its published size."
 }
 
+main() {
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   printf '%s\n' 'Usage: bash revival-bootstrap' '' \
     'Interactively installs supported host tools, authenticates and verifies the latest stable' \
@@ -374,19 +445,25 @@ fi
 BOOTSTRAP_TMP="$(mktemp -d)"
 ENV_FILE="$BOOTSTRAP_TMP/no-persisted-secrets"
 trap cleanup EXIT HUP INT TERM
+trap unexpected_failure ERR
 
 banner "Ai Pin Revival · stock Pin setup"
 
+CURRENT_STAGE="Host and prerequisites"
 stage "Host and prerequisites"
-source /etc/os-release
-[[ "${ID:-}" == "ubuntu" && "${VERSION_ID:-}" == "24.04" ]] ||
-  die "production bootstrap supports Ubuntu 24.04 only."
-case "$(uname -m)" in x86_64|aarch64|arm64) ;; *) die "this host architecture is unsupported." ;; esac
+validate_supported_host /etc/os-release "$(uname -m)"
+command -v apt-get >/dev/null 2>&1 ||
+  die "Ubuntu's apt-get command is missing. Restore the base Ubuntu package manager or start with a fresh Ubuntu 24.04 VPS."
 if (( EUID != 0 )) && ! command -v sudo >/dev/null 2>&1; then
-  die "sudo is required to install missing host tools."
+  die "This account needs sudo access to install host tools. Sign in as the normal sudo-capable VPS user and rerun."
 fi
+if (( EUID != 0 )) && ! sudo -v; then
+  die "Sudo access was not granted. Ask the VPS owner to grant this account sudo access, then rerun."
+fi
+check_available_capacity "$HOME"
+CHANGE_STATE="Ubuntu host packages may have changed. Operator configuration and production were not changed."
 as_root apt-get update
-as_root apt-get install -y ca-certificates curl xz-utils
+as_root apt-get install -y ca-certificates curl xz-utils gnupg
 if ! node_is_supported; then
   confirm "Install the pinned Node.js $NODE_VERSION runtime under /usr/local?" || die "Node.js installation declined."
   install_node
@@ -394,6 +471,9 @@ else
   say "Node.js 22.14+ is already available."
 fi
 if ! compose_is_supported; then
+  conflicts="$(incompatible_docker_packages || true)"
+  [[ -z "$conflicts" ]] ||
+    die "An incompatible Docker package is installed: $conflicts. Ai Pin Revival did not remove it because that could stop other containers. Use a fresh VPS, or remove the conflicting package after reviewing its workloads, then rerun."
   confirm "Install or upgrade Docker Engine and Compose from Docker's official repository?" ||
     die "Docker installation declined."
   install_docker
@@ -402,6 +482,7 @@ else
 fi
 DOCKER_MODE="$(docker_mode)"
 
+CURRENT_STAGE="Private release access"
 stage "Private release access"
 say "The repository is private, so setup needs a GitHub token with repository and package read access."
 if command -v gh >/dev/null 2>&1 && gh auth status --hostname github.com >/dev/null 2>&1; then
@@ -413,11 +494,7 @@ fi
 [[ -n "$GH_TOKEN" ]] || die "a GitHub token is required while the repository is private."
 export GH_TOKEN
 USER_METADATA="$BOOTSTRAP_TMP/user.json"
-curl --fail --proto '=https' --tlsv1.2 --max-filesize 1048576 \
-  --header "Authorization: Bearer $GH_TOKEN" \
-  --header 'Accept: application/vnd.github+json' \
-  --header 'X-GitHub-Api-Version: 2022-11-28' \
-  --output "$USER_METADATA" https://api.github.com/user
+github_api https://api.github.com/user "$USER_METADATA" "authenticated user access"
 GITHUB_USER="$(node - "$USER_METADATA" <<'NODE'
 const user = require(process.argv[2]);
 if (typeof user.login !== "string" || !/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/u.test(user.login)) process.exit(1);
@@ -425,13 +502,11 @@ process.stdout.write(user.login);
 NODE
 )" || die "GitHub did not return a valid authenticated user."
 
+CURRENT_STAGE="Authenticate the latest stable release"
 stage "Authenticate the latest stable release"
 RELEASE_METADATA="$BOOTSTRAP_TMP/release.json"
-curl --fail --proto '=https' --tlsv1.2 --max-filesize 2097152 \
-  --header "Authorization: Bearer $GH_TOKEN" \
-  --header 'Accept: application/vnd.github+json' \
-  --header 'X-GitHub-Api-Version: 2022-11-28' \
-  --output "$RELEASE_METADATA" "https://api.github.com/repos/$REPOSITORY/releases/latest"
+github_api "https://api.github.com/repos/$REPOSITORY/releases/latest" "$RELEASE_METADATA" \
+  "repository read access"
 IFS="$(printf '\t')" read -r RELEASE_TAG RELEASE_VERSION <<EOF
 $(node --input-type=module - "$RELEASE_METADATA" <<'NODE'
 import { readFileSync } from "node:fs";
@@ -504,15 +579,28 @@ else
   mv "$EXTRACTED" "$OPERATOR_DIR"
   rmdir "$INCOMING"
 fi
+CHANGE_STATE="Host tools and the authenticated operator release were preserved. Production configuration was not changed."
 say "Authenticated and installed Ai Pin Revival $RELEASE_VERSION."
 
+CURRENT_STAGE="Container registry access"
 stage "Container registry access"
 say "Logging Docker into GHCR with the same in-memory token. Docker stores it in its protected credential file."
+CHANGE_STATE="Host tools and the operator release were preserved. Docker may have updated its GHCR login; production configuration was not changed."
 docker_login "$DOCKER_MODE" "$GITHUB_USER"
+CHANGE_STATE="Host tools, the operator release, and Docker's GHCR login were preserved. Production configuration was not changed."
 
+CURRENT_STAGE="Configure and deploy production"
 stage "Configure, deploy, and open Guided Setup"
 say "The operator now asks only for the domain, certificate email, owner, public Pin IPv4, and optional features."
-run_operator "$DOCKER_MODE" "$OPERATOR_DIR"
+CHANGE_STATE="Host tools, operator access, and any completed production configuration or server deployment step were preserved."
+if ! run_operator "$DOCKER_MODE" "$OPERATOR_DIR"; then
+  die "Operator onboarding did not finish. Follow its stage-specific recovery check above, then safely rerun this bootstrap."
+fi
 note "Operator release: $OPERATOR_DIR"
 
 finish
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

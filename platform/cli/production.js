@@ -51,7 +51,17 @@ function parseProductionOptions(args, { deploy = false } = {}) {
   return { envFile };
 }
 
-function deploymentScript(name, args, envFile = ENV_FILE, { confirmed = false, interpreter = 'bash' } = {}) {
+function stop(message, options, code = 1) {
+  if (options.throwOnFailure) {
+    const error = new Error(message);
+    error.exitCode = code;
+    throw error;
+  }
+  fail(message, code);
+}
+
+function deploymentScript(name, args, envFile = ENV_FILE, options = {}) {
+  const { confirmed = false, interpreter = 'bash', throwOnFailure = false } = options;
   let values;
   try {
     values = validateRuntime({ production: true, envFile });
@@ -59,57 +69,64 @@ function deploymentScript(name, args, envFile = ENV_FILE, { confirmed = false, i
     const application = validateOperatorReleaseCoordinates(values);
     values = { ...values, REVIVAL_COMPOSE_APPLICATION: application };
   } catch (error) {
-    fail(error.message);
+    stop(error.message, options);
   }
   const script = path.join(DEPLOY_DIR, name);
-  if (!fs.existsSync(script)) fail(`deployment command is unavailable: ${script}`);
+  if (!fs.existsSync(script)) stop(`deployment command is unavailable: ${script}`, options);
   const environment = operatorEnvironment(values);
   if (confirmed) environment.REVIVAL_DEPLOY_CONFIRMED = '1';
-  return run(resolveTool(interpreter), [script, ...args], { env: environment });
-}
-
-function productionDoctor(args) {
-  let options;
-  try {
-    options = parseProductionOptions(args);
-  } catch {
-    fail(`usage: ${DOCTOR_USAGE}`, 64);
+  const result = run(resolveTool(interpreter), [script, ...args], {
+    env: environment,
+    allowFailure: throwOnFailure,
+  });
+  if (throwOnFailure && result.status !== 0) {
+    stop(`${name} exited with status ${result.status || 1}`, options, result.status || 1);
   }
-  deploymentScript('preflight.sh', args, options.envFile);
+  return result;
 }
 
-function deployProduction(args) {
+function productionDoctor(args, runtime = {}) {
+  let parsed;
+  try {
+    parsed = parseProductionOptions(args);
+  } catch {
+    stop(`usage: ${DOCTOR_USAGE}`, runtime, 64);
+  }
+  deploymentScript('preflight.sh', args, parsed.envFile, runtime);
+}
+
+function deployProduction(args, runtime = {}) {
   const [target, ...options] = args;
   if (target !== 'production') {
-    fail(`usage: ${DEPLOY_USAGE}`, 64);
+    stop(`usage: ${DEPLOY_USAGE}`, runtime, 64);
   }
   let parsed;
   try {
     parsed = parseProductionOptions(options, { deploy: true });
   } catch (error) {
     if (error.message === 'mode' && !options.includes('--dry-run') && !options.includes('--confirm')) {
-      fail('deploy production requires --dry-run or --confirm', 64);
+      stop('deploy production requires --dry-run or --confirm', runtime, 64);
     }
-    fail(`usage: ${DEPLOY_USAGE}`, 64);
+    stop(`usage: ${DEPLOY_USAGE}`, runtime, 64);
   }
   deploymentScript(
     'deploy.sh',
     options.filter((argument) => argument !== '--confirm'),
     parsed.envFile,
-    { confirmed: options.includes('--confirm') },
+    { confirmed: options.includes('--confirm'), ...runtime },
   );
 }
 
-function verifyProduction(args) {
+function verifyProduction(args, runtime = {}) {
   const [target, ...options] = args;
-  if (target !== 'production') fail(`usage: ${VERIFY_USAGE}`, 64);
+  if (target !== 'production') stop(`usage: ${VERIFY_USAGE}`, runtime, 64);
   let parsed;
   try {
     parsed = parseProductionOptions(options);
   } catch {
-    fail(`usage: ${VERIFY_USAGE}`, 64);
+    stop(`usage: ${VERIFY_USAGE}`, runtime, 64);
   }
-  deploymentScript('verify.sh', options, parsed.envFile);
+  deploymentScript('verify.sh', options, parsed.envFile, runtime);
 }
 
 function evaluateAssistant(args) {

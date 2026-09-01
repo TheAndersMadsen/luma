@@ -25,6 +25,7 @@ function fixture(t, dockerScript) {
     ["docker", dockerScript],
     ["ss", "#!/bin/sh\nprintf '%s\\n' 'LISTEN 0 511 0.0.0.0:80 0.0.0.0:* users:((nginx))'\n"],
     ["node", "#!/bin/sh\nexit 0\n"],
+    ["getent", "#!/bin/sh\nprintf '%s\\n' '203.0.113.10 STREAM pin.example.test'\n"],
   ]) {
     fs.writeFileSync(path.join(bin, name), contents, { mode: 0o700 });
   }
@@ -43,6 +44,22 @@ function fixture(t, dockerScript) {
     },
   };
 }
+
+test("production preflight explains unresolved public DNS before deployment", (t) => {
+  const { env } = fixture(t, `#!/bin/sh
+case "$*" in
+  *"compose version --short"*) printf '%s\n' 2.34.0; exit 0 ;;
+  *"config --quiet"*) exit 0 ;;
+esac
+exit 0
+`);
+  fs.writeFileSync(path.join(env.PATH.split(":")[0], "getent"), "#!/bin/sh\nexit 2\n", { mode: 0o700 });
+  const result = spawnSync("bash", [preflight], { cwd: root, env, encoding: "utf8" });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /public DNS name pin\.example\.test does not resolve/u);
+  assert.match(result.stderr, /A or AAAA record/u);
+  assert.match(result.stderr, /\.\/revival doctor production/u);
+});
 
 test("production preflight reports occupied public ports without stopping their owner", (t) => {
   const { env } = fixture(t, `#!/bin/sh

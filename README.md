@@ -81,8 +81,9 @@ variant.
 
 ### Newcomer setup
 
-Start with a fresh Ubuntu 24.04 VPS, point a domain at its public IP, then SSH
-into it as your normal sudo-capable user and run one command:
+Start with a fresh 64-bit Ubuntu 24.04 VPS with at least 8 GiB of free disk
+space, point a domain at its public IP, then SSH into it as your normal
+sudo-capable user and run one command:
 
 ```sh
 bash <(curl -fsSL https://center.andersmadsen.dk/install.sh)
@@ -103,6 +104,14 @@ walks through service accounts, the physical Pin connection, installation,
 Cosmos activation, Wi-Fi or LTE, and one real voice check. A normal newcomer
 does not need to copy the release-verification recipe, install Docker or Node
 manually, move an Iroh ticket or private key, or run ADB commands.
+
+The journey is safe to rerun after an interruption. A failure ends with the
+stage that stopped, what may have changed, what was preserved, one focused
+recovery check, and the exact safe retry command. Setup never deletes a working
+configuration, server deployment, or Pin state because a later check fails.
+The normal retry is the same one-line bootstrap; once the operator has been
+authenticated, `./revival onboard production` is also resumable and keeps
+existing nonblank configuration.
 
 The repository and packages are currently private, so the GitHub account used
 during bootstrap must have read access. That access requirement disappears if
@@ -798,6 +807,27 @@ Path overrides must be set before initialization:
 
 ## Troubleshooting
 
+- **Bootstrap rejects the host:** use 64-bit Ubuntu 24.04 on `amd64/x86_64` or
+  `arm64/aarch64`, a normal sudo-capable account, and at least 8 GiB of free
+  disk space. The bootstrap does not claim support for other distributions or
+  remove an existing incompatible Docker package because either could damage
+  unrelated workloads.
+- **GitHub returns 401, 403, or 404, or GHCR login fails:** authorize a token
+  for this private repository with repository read and package read access,
+  then rerun the same bootstrap command. Token entry stays hidden; failed
+  downloads are discarded.
+- **Production preflight reports ports 80 or 443 in use:** stop or reconfigure
+  the named Nginx, Apache, Caddy, or other Compose service, then run
+  `./revival doctor production`. Ai Pin Revival never stops an unrelated
+  listener automatically.
+- **Production preflight reports that the domain does not resolve:** create or
+  correct the domain's public A or AAAA record, wait for DNS propagation, and
+  rerun `./revival doctor production`. Keep public ports 80 and 443 open so
+  Traefik can obtain and renew the certificate.
+- **Deployment or verification stops:** first run
+  `./revival verify production`. If it still fails, keep the printed service
+  diagnostic and rerun `./revival onboard production`; existing configuration
+  and successfully started containers are preserved.
 - **The browser has no USB chooser:** use current desktop Chrome, Chromium, or
   Edge over HTTPS; unlock the Pin; try a known-good data cable and a direct USB
   port; then recheck Linux `plugdev` and udev access above.
