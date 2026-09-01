@@ -428,9 +428,12 @@ also includes `Retry-After`.
 
 ## Connect a Pin
 
-<p align="center">
-  <img src="assets/readme/connect-pin.png" alt="Illustration of a Pin connected directly to a laptop with a USB-C data cable" width="86%">
-</p>
+```mermaid
+flowchart LR
+    Pin["Stock Ai Pin<br/>service contacts"] --> Interposer["USB interposer"]
+    Interposer --> Cable["USB-C data cable"]
+    Cable --> Browser["Desktop Chrome or Edge<br/>Center over HTTPS"]
+```
 
 The installer runs in a desktop Chromium browser over HTTPS and talks directly
 to the Pin through WebUSB. The APKs travel from Center to the browser and then
