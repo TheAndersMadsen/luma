@@ -6,7 +6,15 @@ CLI and digest-pinned application descriptor, not application source.
 Requirements: 64-bit Ubuntu 24.04 on amd64/x86_64 or arm64/aarch64,
 Node.js 22.14+ on Node 22, Docker Engine, and Docker Compose 2.34+.
 
-Fresh server:
+One-command production onboarding:
+
+  ./revival onboard production
+
+This guides configuration, proves a dry-run, asks before changing production,
+deploys the immutable release, verifies it, and prints the direct Center Guided
+Setup link.
+
+Individual commands for automation or recovery:
 
   ./revival setup production --guided
   ./revival doctor production

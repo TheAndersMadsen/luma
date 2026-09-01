@@ -30,6 +30,7 @@ describe("public pages", () => {
     }).getAttribute("src")).toContain("revival-hero.webp");
     expect(screen.getAllByRole("link", { name: "Open Center" })[0]).toHaveAttribute("href", "/login");
     expect(screen.getByRole("link", { name: "Set up Cosmos" })).toHaveAttribute("href", "/developers");
+    expect(screen.getByRole("link", { name: /Download server setup/u })).toHaveAttribute("href", "/install.sh");
   });
 
   it("marks the current public section in navigation", () => {

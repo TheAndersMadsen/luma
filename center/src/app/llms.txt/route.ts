@@ -13,6 +13,8 @@ function llmsText(origin = publicOrigin()): string {
 
 Use this site when an owner or operator needs to deploy, verify, install, activate, configure, or develop Ai Pin Revival. Call only the documented public read operations without authentication. Wearer and operator data stays behind the deployment's own session and authorization boundaries.
 
+For a new Ubuntu 24.04 server, run bash with the script at ${origin}/install.sh, then follow the authenticated Center Guided Setup. The bootstrap prompts before host or production mutation, keeps its GitHub token out of output and arguments, and delegates registry credential storage to Docker.
+
 A production setup agent should use a checksum-verified GitHub release, preserve external configuration, pass secrets through standard input, avoid deploying a source checkout, and finish by verifying that /api/version returns the intended release with environment production.
 
 ## Product and trust

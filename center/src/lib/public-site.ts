@@ -54,9 +54,9 @@ export const PUBLIC_PAGES: Readonly<Record<PublicPageDefinition["path"], PublicP
         ],
         links: [
           {
-            href: "/developers",
-            label: "Set up Cosmos",
-            description: "Use the release CLI, understand the public API, and give a coding agent the right context.",
+            href: "/install.sh",
+            label: "Download server setup",
+            description: "Run one guided bootstrap on a fresh Ubuntu 24.04 server.",
           },
           {
             href: `${PUBLIC_REPOSITORY_URL}/releases`,

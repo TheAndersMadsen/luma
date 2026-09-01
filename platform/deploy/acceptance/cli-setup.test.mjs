@@ -19,6 +19,7 @@ const cli = path.join(root, "revival");
 const require = createRequire(import.meta.url);
 const { productionRealm } = require("../../cli/production-setup.js");
 const { guidedProductionArguments } = require("../../cli/guided-production-setup.js");
+const { runProductionOnboarding } = require("../../cli/onboard.js");
 
 function fixture(t) {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "revival-setup-"));
@@ -88,6 +89,37 @@ function guidedIo(lines) {
     output: () => output,
   };
 }
+
+test("production onboarding composes the canonical safe sequence", () => {
+  const calls = [];
+  const output = [];
+  runProductionOnboarding({
+    setup: () => calls.push("setup"),
+    doctor: () => calls.push("doctor"),
+    dryRun: () => calls.push("dry-run"),
+    deploy: () => calls.push("deploy"),
+    verify: () => calls.push("verify"),
+    values: () => ({ REVIVAL_PUBLIC_ORIGIN: "https://pin.example.test" }),
+    readLine: () => "yes",
+    write: (value) => output.push(value),
+  });
+  assert.deepEqual(calls, ["setup", "doctor", "dry-run", "deploy", "verify"]);
+  assert.match(output.at(-2), /https:\/\/pin\.example\.test\/login\?next=%2Fsettings%2Fpin%2Fsetup/u);
+});
+
+test("production onboarding stops after the dry-run when deployment is declined", () => {
+  const calls = [];
+  assert.throws(() => runProductionOnboarding({
+    setup: () => calls.push("setup"),
+    doctor: () => calls.push("doctor"),
+    dryRun: () => calls.push("dry-run"),
+    deploy: () => calls.push("deploy"),
+    verify: () => calls.push("verify"),
+    readLine: () => "no",
+    write: () => {},
+  }), /deployment cancelled/u);
+  assert.deepEqual(calls, ["setup", "doctor", "dry-run"]);
+});
 
 function seedPinRelease(env) {
   const root = path.join(env.REVIVAL_DATA_DIR, "pin-releases");
@@ -210,7 +242,7 @@ test("local setup creates real external configuration and status derives from it
   assert.equal(status.status, 0, status.stderr);
   assert.deepEqual(JSON.parse(status.stdout), {
     schemaVersion: 4,
-    contract: { id: "operator-setup", version: "2.3.0", journey: "local" },
+    contract: { id: "operator-setup", version: "2.4.0", journey: "local" },
     state: "local-ready",
     mode: "local",
     ok: true,
@@ -224,12 +256,12 @@ test("local setup creates real external configuration and status derives from it
   assert.equal(changed.status, 1);
   assert.deepEqual(JSON.parse(changed.stdout), {
     schemaVersion: 4,
-    contract: { id: "operator-setup", version: "2.3.0", journey: "production" },
+    contract: { id: "operator-setup", version: "2.4.0", journey: "production" },
     state: "uninitialized",
     mode: "uninitialized",
     ok: false,
     nextCommandId: null,
-    next: "./revival setup local or ./revival setup production --guided",
+    next: "./revival setup local or ./revival onboard production",
     release: { operator: { version: "0.1.0-dev", revision: "source" }, pin: null },
   });
 });
@@ -321,12 +353,12 @@ test("production setup creates a complete portable operator installation and is 
   assert.equal(status.status, 0, status.stderr);
   assert.deepEqual(JSON.parse(status.stdout), {
     schemaVersion: 4,
-    contract: { id: "operator-setup", version: "2.3.0", journey: "production" },
+    contract: { id: "operator-setup", version: "2.4.0", journey: "production" },
     state: "production-ready",
     mode: "production",
     ok: true,
-    nextCommandId: "deploy.production",
-    next: "./revival deploy production --dry-run",
+    nextCommandId: "onboard.production",
+    next: "./revival onboard production",
     release: { operator: { version: "0.1.0-dev", revision: "source" }, pin: null },
   });
 });
@@ -493,7 +525,7 @@ test("setup status keeps incomplete production setup on its resumable path", (t)
   assert.equal(report.mode, "production");
   assert.equal(report.state, "production-invalid");
   assert.equal(report.ok, false);
-  assert.equal(report.next, "./revival setup production --guided");
+  assert.equal(report.next, "./revival onboard production");
 
   fs.unlinkSync(env.REVIVAL_ENV_FILE);
   const production = path.join(env.REVIVAL_CONFIG_DIR, "production");
@@ -504,7 +536,7 @@ test("setup status keeps incomplete production setup on its resumable path", (t)
   assert.equal(status.status, 1);
   report = JSON.parse(status.stdout);
   assert.equal(report.mode, "production");
-  assert.equal(report.next, "./revival setup production --guided");
+  assert.equal(report.next, "./revival onboard production");
 });
 
 test("unsupported setup commands fail without creating operator state", (t) => {

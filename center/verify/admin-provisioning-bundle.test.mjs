@@ -133,7 +133,7 @@ test("successful direct activation refreshes every Guided Setup cache before rep
 
 test("the owner guide uses direct Center activation as the normal path", () => {
   const readme = readFileSync(new URL("../../README.md", import.meta.url), "utf8");
-  const section = /### 5\. Activate and prove the device\n([\s\S]*?)(?=\n## )/u.exec(readme)?.[1];
+  const section = /### 3\. Activate and prove the device\n([\s\S]*?)(?=\n## )/u.exec(readme)?.[1];
   assert.ok(section, "README is missing the Pin activation section");
   assert.match(section, /Connect this Pin to Cosmos/u);
   assert.match(section, /activation file.*fallback/iu);

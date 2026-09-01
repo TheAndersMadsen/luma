@@ -18,6 +18,7 @@ import {
 } from "@/lib/public-rate-limit";
 
 const PUBLIC_MACHINE_PATHS = new Set([
+  "/install.sh",
   "/llms.txt",
   "/openapi.json",
   "/robots.txt",

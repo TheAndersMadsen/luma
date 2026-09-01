@@ -13,6 +13,7 @@ const HELP = `Ai Pin Revival operator CLI
 
 Usage:
   ./revival setup production --guided
+  ./revival onboard production
   ./revival setup production --domain HOST --acme-email EMAIL --operator-email EMAIL [--pin-release-archive FILE] [--profile NAME ...]
   ./revival setup status [--json]
   ./revival registry login --username GITHUB_USER
@@ -66,6 +67,7 @@ const {
 } = require('./platform/cli/context');
 const { configCommand } = require('./platform/cli/config');
 const { registryCommand } = require('./platform/cli/registry');
+const { onboardCommand } = require('./platform/cli/onboard');
 const { deployProduction, evaluateAssistant, productionDoctor, verifyProduction } = require('./platform/cli/production');
 const { setupCommand } = require('./platform/cli/setup');
 const { supportBundleCommand } = require('./platform/cli/support-bundle');
@@ -75,6 +77,7 @@ runTimedBoundary(() => {
   const args = [...rawArgs];
   const command = args.shift();
   if (command === 'setup' && ['production', 'status'].includes(args[0])) setupCommand(args);
+  else if (command === 'onboard') onboardCommand(args);
   else if (command === 'doctor' && args.shift() === 'production') productionDoctor(args);
   else if (command === 'deploy') deployProduction(args);
   else if (command === 'registry') registryCommand(args);

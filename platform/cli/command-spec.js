@@ -156,6 +156,7 @@ const DETAILS = Object.freeze({
   'check.cosmos': 'A nonempty TEST_FILTER is verified with Cargo/libtest discovery before every match, including ignored tests, runs. Without a filter, clippy and the full ordinary workspace tests run.',
   'check.platform': 'Runs the fast contributor acceptance suite directly from the working tree. --full dynamically includes every top-level Node acceptance test; CI and release own shell policies.',
   'check.changed': 'Options: --base REF. Uses only origin/HEAD, origin/main, or origin/master automatically; without one it checks the full tracked tree. Safety-sensitive paths run platform --full.',
+  'onboard.production': 'Interactive only. Reuses the canonical production setup, doctor, dry-run, confirmed deploy, and verification commands; provider and Pin setup continue in Center.',
   'deploy.production': 'Runs the direct Cosmos deployment on this host. Use --dry-run to print the Compose command or --confirm to apply it.',
   'registry.login': 'Logs in to ghcr.io with Docker’s hidden interactive token prompt. Credentials are stored only in the managed Docker configuration used by production deploys.',
   'verify.production': 'Validates healthy services, the configured Center release, OIDC, capture routing, and the configured Pin certificate chain when enabled.',

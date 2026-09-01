@@ -1,11 +1,22 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { GET as llms } from "./llms.txt/route";
+import { GET as installer } from "./install.sh/route";
 import { GET as openApi } from "./openapi.json/route";
 import robots from "./robots";
 import sitemap from "./sitemap";
 
 describe("public machine routes", () => {
+  it("serves the canonical interactive bootstrap with an explicit shell content type", async () => {
+    const response = installer();
+    const body = await response.text();
+    expect(response.headers.get("content-type")).toBe("text/x-shellscript; charset=utf-8");
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(body).toMatch(/^#!\/usr\/bin\/env bash\n/u);
+    expect(body).toContain("./revival onboard production");
+    expect(body).not.toMatch(/gh[pousr]_[A-Za-z0-9]{20,}/u);
+  });
+
   it("publishes the agent index as Markdown with specific when-to-use guidance", async () => {
     vi.stubEnv("REVIVAL_PUBLIC_ORIGIN", "https://center.example.test");
     const response = llms();

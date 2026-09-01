@@ -52,6 +52,7 @@ const { pinCommand } = require('./platform/cli/pin');
 const { setupCommand } = require('./platform/cli/setup');
 const { configCommand } = require('./platform/cli/config');
 const { registryCommand } = require('./platform/cli/registry');
+const { onboardCommand } = require('./platform/cli/onboard');
 const { supportBundleCommand } = require('./platform/cli/support-bundle');
 const { runTimedBoundary } = require('./platform/cli/timing');
 
@@ -100,6 +101,8 @@ runTimedBoundary(() => {
     run(resolveTool('node'), [PKI_TOOL, ...args]);
   } else if (command === 'setup') {
     setupCommand(args);
+  } else if (command === 'onboard') {
+    onboardCommand(args);
   } else if (command === 'support-bundle') {
     supportBundleCommand(args);
   } else if (command === 'test') {

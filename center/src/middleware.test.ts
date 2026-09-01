@@ -35,6 +35,13 @@ describe("public discovery middleware", () => {
     }
   });
 
+  it("keeps the newcomer bootstrap public when deployment authentication is enabled", async () => {
+    const response = await middleware(new NextRequest("https://center.example.test/install.sh"));
+    expect(response.status).toBe(200);
+    expect(response.headers.get("x-middleware-next")).toBe("1");
+    expect(response.headers.get("cache-control")).toContain("public");
+  });
+
   it("returns a real Markdown 404 and lets Next render an HTML 404", async () => {
     const markdown = await middleware(new NextRequest("https://center.example.test/not-a-route", {
       headers: { accept: "text/markdown" },

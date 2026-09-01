@@ -79,6 +79,38 @@ variant.
 | Intel/AMD 64-bit | `x86_64` | Supported |
 | ARM 64-bit | `aarch64` or `arm64` | Supported |
 
+### Newcomer setup
+
+Start with a fresh Ubuntu 24.04 VPS, point a domain at its public IP, then SSH
+into it as your normal sudo-capable user and run one command:
+
+```sh
+bash <(curl -fsSL https://center.andersmadsen.dk/install.sh)
+```
+
+Do not run the whole command with `sudo`. The bootstrap asks before installing
+missing host tools, uses an existing authenticated GitHub CLI session or asks
+for a token with hidden input, authenticates the latest immutable release,
+logs into the private container registry, and runs the complete production
+journey. It asks only for the Center domain, certificate email, first owner,
+public Pin IPv4, optional features, and the two explicit confirmations that
+write configuration and deploy production. Tokens are not printed or placed in
+arguments. The bootstrap keeps the token only in memory while Docker stores the
+registry login in its standard protected credential file.
+
+When verification passes, open the printed **Guided setup** link. Center then
+walks through service accounts, the physical Pin connection, installation,
+Cosmos activation, Wi-Fi or LTE, and one real voice check. A normal newcomer
+does not need to copy the release-verification recipe, install Docker or Node
+manually, move an Iroh ticket or private key, or run ADB commands.
+
+The repository and packages are currently private, so the GitHub account used
+during bootstrap must have read access. That access requirement disappears if
+the project artifacts are made public; the setup flow itself does not change.
+
+<details>
+<summary><strong>Manual deployment and verification reference</strong></summary>
+
 The production host also needs:
 
 - Node.js 22.14 or newer on the Node 22 line.
@@ -289,7 +321,9 @@ If GHCR packages are private, first run:
 
 Enter a package-read token only at Docker's hidden prompt.
 
-### 4. Configure Cosmos in Center
+</details>
+
+### Configure services in Center
 
 Sign in as the operator, then open **Settings → Services → Cosmos**. This is the
 normal configuration path for every Pin-facing cloud capability:
@@ -440,13 +474,11 @@ to the Pin through WebUSB. The APKs travel from Center to the browser and then
 over the local USB cable; the production server never needs physical access to
 the device.
 
-### Before you connect
+### 1. Prepare and connect
 
-Have these ready:
+The normal path stays in **Center → Settings → My Ai Pin → Guided setup**. Have
+these ready:
 
-- A deployed Cosmos release for which `./revival verify production` passes.
-- A production setup with the `pin` profile; it acquires and stages the exact
-  signed Pin archive named by the operator release.
 - A compatible Ai Pin USB interposer. A stock Pin exposes its USB service
   contacts beneath the small moon sticker rather than through a USB-C socket;
   follow the maintained [interposer guide](https://github.com/PenumbraOS/interposer)
@@ -457,6 +489,15 @@ Have these ready:
 - A known-good USB-C **data** cable between the interposer and computer,
   connected directly when possible. Disconnect other Android devices while installing.
 - A powered-on, unlocked Pin that has finished booting.
+
+Follow the illustrated preparation, place the Pin on the interposer, open
+Guided setup in desktop Chrome or Edge, choose **Connection help** if needed,
+then choose **Connect over USB**. Center checks the browser, exact device,
+signed release, package service, installed applications, and activation state
+itself. Continue only against the serial Center displays.
+
+<details>
+<summary><strong>Troubleshooting only: Linux USB, release, and ADB checks</strong></summary>
 
 Only one program can own the Pin's USB ADB interface at a time. Close Android
 Studio, scrcpy, phone-management tools, and terminals streaming `adb` output
@@ -559,7 +600,9 @@ Finally release the USB interface for WebUSB:
 adb kill-server
 ```
 
-### 4. Install from Center
+</details>
+
+### 2. Install from Center
 
 1. Sign in to `https://center.example.com/settings/pin/install` in the Chromium
    browser on the computer physically connected to the Pin.
@@ -574,7 +617,7 @@ Center performs a bounded package-service readiness wait and rechecks it just
 before the first mutation. If Android becomes unavailable, installation stops
 before package changes begin and tells you to wait and retry.
 
-### 5. Activate and prove the device
+### 3. Activate and prove the device
 
 1. Keep the Pin connected over USB and open **Center → Settings → My Ai Pin →
    Provisioning**. If needed, choose **Connect over USB** and select the same Pin.
