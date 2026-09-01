@@ -444,10 +444,15 @@ Have these ready:
 - A deployed Cosmos release for which `./revival verify production` passes.
 - A production setup with the `pin` profile; it acquires and stages the exact
   signed Pin archive named by the operator release.
+- A compatible Ai Pin USB interposer. A stock Pin exposes its USB service
+  contacts beneath the small moon sticker rather than through a USB-C socket;
+  follow the maintained [interposer guide](https://github.com/PenumbraOS/interposer)
+  and its illustrated [stock-Pin preparation](https://github.com/PenumbraOS/interposer/blob/main/preparation.md)
+  before connecting it.
 - Current desktop Chrome, Chromium, or Edge. The page checks both HTTPS and
   WebUSB before enabling installation.
-- A known-good USB-C **data** cable connected directly to the computer when
-  possible. Disconnect other Android devices while installing.
+- A known-good USB-C **data** cable between the interposer and computer,
+  connected directly when possible. Disconnect other Android devices while installing.
 - A powered-on, unlocked Pin that has finished booting.
 
 Only one program can own the Pin's USB ADB interface at a time. Close Android

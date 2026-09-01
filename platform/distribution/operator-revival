@@ -12,6 +12,7 @@ if (nodeMajor !== 22 || nodeMinor < 14) {
 const HELP = `Ai Pin Revival operator CLI
 
 Usage:
+  ./revival setup production --guided
   ./revival setup production --domain HOST --acme-email EMAIL --operator-email EMAIL [--pin-release-archive FILE] [--profile NAME ...]
   ./revival setup status [--json]
   ./revival registry login --username GITHUB_USER

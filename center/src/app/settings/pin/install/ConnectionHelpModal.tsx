@@ -4,11 +4,9 @@
  * "Connection Help" — ported from the retired Setup SPA's
  * `install/components/ConnectionHelpModal.tsx`.
  *
- * The SPA's two links pointed at `/getting-started/*`, which are PenumbraOS
- * documentation paths that resolve to nothing on Center's origin. They are kept
- * as absolute PenumbraOS documentation URLs so the copy is not a dead end; the
- * SPA's own `TODO: replace placeholder hrefs with real documentation URLs`
- * therefore survives as a follow-up rather than as a broken same-origin link.
+ * The retired SPA linked to two removed documentation pages. These links point
+ * at the maintained upstream interposer repository instead, while the modal
+ * carries the minimum stock-Pin instructions itself.
  */
 
 import { useRef } from "react";
@@ -21,17 +19,21 @@ type HelpLink = {
   description?: string;
 };
 
-// TODO: replace with the project's own documentation URLs once they exist.
 const HELP_LINKS: readonly HelpLink[] = [
   {
-    label: "Setting up the interposer",
-    href: "https://penumbraos.github.io/getting-started/interposer/",
-    description: "Interposer setup and connection.",
+    label: "Get or build an interposer",
+    href: "https://github.com/PenumbraOS/interposer",
+    description: "Maintained hardware options and assembly references.",
   },
   {
-    label: "Sticker removal",
-    href: "https://penumbraos.github.io/getting-started/sticker-removal/",
-    description: "Remove the bottom sticker safely.",
+    label: "Prepare a stock Pin",
+    href: "https://github.com/PenumbraOS/interposer/blob/main/preparation.md",
+    description: "Illustrated instructions for exposing the service contacts safely.",
+  },
+  {
+    label: "Computer and browser setup",
+    href: "https://github.com/TheAndersMadsen/ai-pin-revival#connect-a-pin",
+    description: "USB permissions, supported browsers, installation, and troubleshooting.",
   },
 ];
 
@@ -82,13 +84,16 @@ export function ConnectionHelpModal({
 
       <div id="install-help-copy" className={styles.helpBody}>
         <p className={styles.dialogCopy}>
-          Remove the bottom sticker, align the Pin with the interposer, and connect USB.
+          A stock Ai Pin has no exposed USB-C socket. It needs a compatible USB
+          interposer connected to the service contacts beneath the small moon sticker.
         </p>
         <p className={styles.dialogCopy}>
-          Use desktop Chrome or Edge. If the Pin is not detected, check the guides below.
+          Prepare the contacts with the illustrated guide, align the Pin with the
+          interposer outline, and use a known-good USB data cable.
         </p>
         <p className={styles.dialogCopy}>
-          Close other tools that may be using the Pin.
+          Power on and unlock the Pin, then use desktop Chrome or Edge. Close ADB,
+          Android Studio, scrcpy, and other tools that may already own the USB interface.
         </p>
       </div>
 

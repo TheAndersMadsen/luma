@@ -492,6 +492,14 @@ test("operator release is lean, versioned, and bound to exact OCI digests", asyn
   assert.equal(bundledIdentity.pin.releaseId, descriptor.pin.releaseId);
   assert.deepEqual(bundledIdentity.source, descriptor.source);
 
+  const bundledHelp = spawnSync(process.execPath, [path.join(bundle, "revival"), "--help"], {
+    cwd: bundle,
+    env: operatorEnv,
+    encoding: "utf8",
+  });
+  assert.equal(bundledHelp.status, 0, bundledHelp.stderr);
+  assert.match(bundledHelp.stdout, /\.\/revival setup production --guided/u);
+
   const setupStatus = spawnSync(process.execPath, [path.join(bundle, "revival"), "setup", "status", "--json"], {
     cwd: bundle,
     env: operatorEnv,
@@ -540,6 +548,17 @@ test("operator release is lean, versioned, and bound to exact OCI digests", asyn
       pin: descriptor.pin,
     })}\n`,
   );
+  const staleStatus = spawnSync(process.execPath, [path.join(bundle, "revival"), "setup", "status", "--json"], {
+    cwd: bundle,
+    env: operatorEnv,
+    encoding: "utf8",
+  });
+  assert.equal(staleStatus.status, 1);
+  const staleReport = JSON.parse(staleStatus.stdout);
+  assert.equal(staleReport.state, "production-invalid");
+  assert.equal(staleReport.next, "./revival setup production --guided");
+  assert.match(staleReport.problem, /REVIVAL_COMPOSE_APPLICATION does not match this operator release/u);
+
   const upgrade = spawnSync(process.execPath, [path.join(bundle, "revival"), "setup", "production"], {
     cwd: bundle,
     env: operatorEnv,

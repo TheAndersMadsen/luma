@@ -16,6 +16,7 @@ import {
   type PinSetupStep,
 } from "@/lib/pin-setup";
 import { usePinDevice } from "../PinDeviceProvider";
+import { ConnectionHelpModal } from "../install/ConnectionHelpModal";
 import { usePinSetupFacts } from "./usePinSetupFacts";
 
 type SetupStageId = "connect" | "install" | "cosmos" | "finish";
@@ -140,6 +141,7 @@ export default function SetupView({
   const [pairError, setPairError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [acceptanceError, setAcceptanceError] = useState<string | null>(null);
+  const [connectionHelpOpen, setConnectionHelpOpen] = useState(false);
 
   async function onConnect() {
     setConnecting(true);
@@ -299,6 +301,7 @@ export default function SetupView({
                 readings.facts.cloud.state === "live" &&
                 readings.facts.cloud.connectedPinPaired === false,
               onConnect: () => void onConnect(),
+              onConnectionHelp: () => setConnectionHelpOpen(true),
               onPair: () => void onPair(),
               pairing,
               onConfirm: () => void onConfirm(),
@@ -417,6 +420,10 @@ export default function SetupView({
           />
         </details>
       </section>
+      <ConnectionHelpModal
+        open={connectionHelpOpen}
+        onClose={() => setConnectionHelpOpen(false)}
+      />
     </>
   );
 }
@@ -468,6 +475,7 @@ function renderStageAction({
   usbSupported,
   needsPairing,
   onConnect,
+  onConnectionHelp,
   onPair,
   pairing,
   onConfirm,
@@ -479,6 +487,7 @@ function renderStageAction({
   usbSupported: boolean;
   needsPairing: boolean;
   onConnect: () => void;
+  onConnectionHelp: () => void;
   onPair: () => void;
   pairing: boolean;
   onConfirm: () => void;
@@ -497,15 +506,20 @@ function renderStageAction({
         ) : null;
       }
       return (
-        <button
-          type="button"
-          className={pin.button}
-          disabled={connecting || !usbSupported}
-          onClick={onConnect}
-          data-testid="pin-setup-connect"
-        >
-          {connecting ? "Connecting…" : "Connect over USB"}
-        </button>
+        <>
+          <button
+            type="button"
+            className={pin.button}
+            disabled={connecting || !usbSupported}
+            onClick={onConnect}
+            data-testid="pin-setup-connect"
+          >
+            {connecting ? "Connecting…" : "Connect over USB"}
+          </button>
+          <button type="button" className={pin.buttonQuiet} onClick={onConnectionHelp}>
+            Connection help
+          </button>
+        </>
       );
 
     case "install":

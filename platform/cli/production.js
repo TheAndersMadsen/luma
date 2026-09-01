@@ -14,6 +14,22 @@ const DEPLOY_USAGE = './revival deploy production (--dry-run | --confirm) [--env
 const VERIFY_USAGE = './revival verify production [--env-file FILE] [--project-name NAME]';
 const EVAL_USAGE = './revival eval assistant production [--repeat N] [--case ID] [--json] [--env-file FILE] [--project-name NAME]';
 
+function validateOperatorReleaseCoordinates(values) {
+  const release = versionInfo();
+  const configured = values.REVIVAL_COMPOSE_APPLICATION || '';
+  const application = configured || release.application || '';
+  if (!/^oci:\/\/ghcr\.io\/[a-z0-9][a-z0-9._/-]*@sha256:[0-9a-f]{64}$/u.test(application)) {
+    throw new Error('production requires REVIVAL_COMPOSE_APPLICATION=oci://ghcr.io/...@sha256:<64 lowercase hex characters>');
+  }
+  if (release.application && configured && release.application !== configured) {
+    throw new Error('REVIVAL_COMPOSE_APPLICATION does not match this operator release');
+  }
+  if (release.revision !== 'source' && values.REVIVAL_RELEASE_ID !== release.revision) {
+    throw new Error('REVIVAL_RELEASE_ID does not match this operator release revision');
+  }
+  return application;
+}
+
 function parseProductionOptions(args, { deploy = false } = {}) {
   const values = new Set(['--env-file', '--project-name', ...(deploy ? ['--wait-timeout'] : [])]);
   const flags = new Set(deploy ? ['--dry-run', '--confirm'] : []);
@@ -40,18 +56,7 @@ function deploymentScript(name, args, envFile = ENV_FILE, { confirmed = false, i
   try {
     values = validateRuntime({ production: true, envFile });
     validateProductionArtifacts(values);
-    const release = versionInfo();
-    const configured = values.REVIVAL_COMPOSE_APPLICATION || '';
-    const application = configured || release.application || '';
-    if (!/^oci:\/\/ghcr\.io\/[a-z0-9][a-z0-9._/-]*@sha256:[0-9a-f]{64}$/u.test(application)) {
-      throw new Error('production requires REVIVAL_COMPOSE_APPLICATION=oci://ghcr.io/...@sha256:<64 lowercase hex characters>');
-    }
-    if (release.application && configured && release.application !== configured) {
-      throw new Error('REVIVAL_COMPOSE_APPLICATION does not match this operator release');
-    }
-    if (release.revision !== 'source' && values.REVIVAL_RELEASE_ID !== release.revision) {
-      throw new Error('REVIVAL_RELEASE_ID does not match this operator release revision');
-    }
+    const application = validateOperatorReleaseCoordinates(values);
     values = { ...values, REVIVAL_COMPOSE_APPLICATION: application };
   } catch (error) {
     fail(error.message);
@@ -130,4 +135,10 @@ function evaluateAssistant(args) {
   deploymentScript('assistant-eval.mjs', options, envFile, { interpreter: 'node' });
 }
 
-module.exports = { productionDoctor, deployProduction, evaluateAssistant, verifyProduction };
+module.exports = {
+  productionDoctor,
+  deployProduction,
+  evaluateAssistant,
+  validateOperatorReleaseCoordinates,
+  verifyProduction,
+};

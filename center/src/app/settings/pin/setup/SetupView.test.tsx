@@ -19,6 +19,7 @@ const setupTestState = vi.hoisted(() => ({
     >
   >,
   cloudReady: false,
+  usbConnected: true,
 }));
 
 vi.mock("next/link", () => ({
@@ -41,7 +42,7 @@ vi.mock("./usePinSetupFacts", () => ({
     facts: {
       usb: {
         browserSupported: true,
-        connected: true,
+        connected: setupTestState.usbConnected,
         connecting: false,
         recognizedAiPin: true,
         serial: "1H4MPA42230112",
@@ -107,6 +108,7 @@ afterEach(() => {
   confirmAcceptance.mockReset();
   setupTestState.capabilityOverrides = {};
   setupTestState.cloudReady = false;
+  setupTestState.usbConnected = true;
 });
 
 describe("SetupView", () => {
@@ -124,6 +126,22 @@ describe("SetupView", () => {
       expect(screen.getByText(label)).toBeInTheDocument();
     }
     expect(screen.getAllByText("Ready")).toHaveLength(6);
+  });
+
+  it("shows stock-Pin connection help before the first USB attempt", async () => {
+    setupTestState.usbConnected = false;
+    const user = userEvent.setup();
+
+    render(<SetupView operator provisioningHref="/settings/pin/provision" />);
+
+    expect(screen.getByRole("button", { name: "Connect over USB" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Connection help" }));
+    expect(screen.getByRole("heading", { name: "Connecting to Ai Pin" })).toBeInTheDocument();
+    expect(screen.getByText(/stock Ai Pin has no exposed USB-C socket/i)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Prepare a stock Pin" })).toHaveAttribute(
+      "href",
+      "https://github.com/PenumbraOS/interposer/blob/main/preparation.md",
+    );
   });
 
   it("renders an unread capability as checking instead of ready", () => {
