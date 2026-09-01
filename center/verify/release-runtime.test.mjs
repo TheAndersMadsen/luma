@@ -13,7 +13,9 @@ test("Center builds a minimal non-root standalone image with runtime assets", as
 
   assert.match(config, /output:\s*["']standalone["']/);
   assert.match(config, /img-src[^\n]+https:\/\/resources\.tidal\.com/);
-  assert.match(await source("src/app/page.tsx"), /referrerPolicy="no-referrer"/);
+  assert.match(config, /img-src[^\n]+https:\/\/i\.ytimg\.com/);
+  assert.match(config, /img-src[^\n]+https:\/\/\*\.spotifycdn\.com/);
+  assert.match(await source("src/components/MusicArtwork.tsx"), /referrerPolicy="no-referrer"/);
   assert.match(
     dockerfile,
     /FROM node:22\.14\.0-bookworm-slim@sha256:[0-9a-f]{64} AS runtime/,

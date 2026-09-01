@@ -4,14 +4,32 @@ import Link from "next/link";
 import { useState } from "react";
 import { CaptureThumbnail, frameState } from "@/components/CaptureThumbnail";
 import { MemoriesTimeline } from "@/components/MemoriesTimeline";
+import { MusicArtwork } from "@/components/MusicArtwork";
 import { Shell } from "@/components/Shell";
 import { CardsSkeleton, EmptyState, ErrorState } from "@/components/States";
 import { StatusMessage } from "@/components/Status";
 import styles from "@/components/memories.module.css";
 import viewStyles from "@/components/views.module.css";
-import { AiMicIcon, HealthIcon, MusicIcon, PhoneIcon } from "@/icons";
-import { useDashboard, type DashboardProvenance } from "@/lib/queries";
-import { albumTint, callDisplayName, formatTimestamp, tidalArtworkUrl } from "@/lib/format";
+import {
+  AiMicIcon,
+  GenericMusicIcon,
+  HealthIcon,
+  MusicIcon,
+  PhoneIcon,
+  SpotifyIcon,
+  YoutubeMusicIcon,
+} from "@/icons";
+import { albumTint, callDisplayName, formatTimestamp } from "@/lib/format";
+import {
+  musicActivityPresentations,
+  musicProviderLabel,
+  type PresentedMusicProvider,
+} from "@/lib/musicActivityPresentation";
+import {
+  useDashboard,
+  useRemoteMusicActivity,
+  type DashboardProvenance,
+} from "@/lib/queries";
 
 /**
  * Memories — the root route.
@@ -96,6 +114,7 @@ function MemoriesEmptyIcon({ size = 56 }: { size?: number }) {
 
 export default function MemoriesPage() {
   const { data, isLoading, isError, error, refetch } = useDashboard();
+  const { data: remoteMusicActivity = [] } = useRemoteMusicActivity();
   const [view, setView] = useState<"grid" | "timeline">("grid");
 
   if (isLoading) {
@@ -131,6 +150,7 @@ export default function MemoriesPage() {
   const photoData = photos?.[0] ?? null;
   const aiSessionsData = (aiSessions ?? []).slice(0, 1);
   const musicSlots = (playTrackEvents ?? []).slice(0, 2);
+  const presentedMusicSlots = musicActivityPresentations(musicSlots, remoteMusicActivity);
   const noteSlots = (notes ?? []).slice(0, 3);
   const phoneCallData = phoneCalls?.[0] ?? null;
   const healthData = health?.[0] ?? null;
@@ -258,30 +278,21 @@ export default function MemoriesPage() {
             </Link>
           ))}
 
-          {musicSlots.map((track) => {
+          {presentedMusicSlots.map(({ record: track, provider, artwork }) => {
             const e = track.data.eventData;
-            const art = e.albumArtUuid ? tidalArtworkUrl(e.albumArtUuid) : null;
             return (
               <Link key={track.uuid} href="/my-data/music" className={styles.card}>
                 <div className={styles.cardHead}>
-                  <MusicIcon size={16} />
+                  <MusicProviderIcon provider={provider} />
                   Music
                 </div>
                 <div className={styles.musicRow}>
-                  {art ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      className={styles.albumArt}
-                      src={art}
-                      alt=""
-                      referrerPolicy="no-referrer"
-                    />
-                  ) : (
-                    <span
-                      className={styles.albumArt}
-                      style={{ background: albumTint(e.albumArtHexcode) }}
-                    />
-                  )}
+                  <MusicArtwork
+                    className={styles.albumArt}
+                    src={artwork}
+                    tint={albumTint(e.albumArtHexcode)}
+                    alt={`${e.albumName || e.trackTitle || "Music"} cover`}
+                  />
                   <span>
                     <span className={styles.trackTitle}>{e.trackTitle}</span>
                     <br />
@@ -289,7 +300,7 @@ export default function MemoriesPage() {
                   </span>
                 </div>
                 <span className={styles.serviceTag}>
-                  {formatTimestamp(track.userCreatedAt)} · TIDAL
+                  {formatTimestamp(track.userCreatedAt)} · {musicProviderLabel(provider)}
                 </span>
               </Link>
             );
@@ -325,4 +336,11 @@ export default function MemoriesPage() {
       </div>
     </Shell>
   );
+}
+
+function MusicProviderIcon({ provider }: { provider: PresentedMusicProvider | null }) {
+  if (provider === "youtube_music") return <YoutubeMusicIcon size={16} />;
+  if (provider === "spotify") return <SpotifyIcon size={16} />;
+  if (provider === "tidal") return <MusicIcon size={16} />;
+  return <GenericMusicIcon size={16} />;
 }

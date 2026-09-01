@@ -2,6 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { mapCosmosNote, type CosmosNoteDto } from "./noteMapping";
+import { normalizeActivityResponse, type ActivityMusic } from "./pin-device";
 import type {
   AiMicRecord,
   CaptureRecord,
@@ -166,6 +167,27 @@ export function useDashboard() {
     refetchInterval: 5000,
     staleTime: 1000,
     refetchOnWindowFocus: false,
+  });
+}
+
+/**
+ * Provider identity for the stock notable-event cards lives in the Pin's
+ * provider-neutral activity ledger. Failure is intentionally independent of
+ * the Cosmos dashboard: old events still render with a generic music identity.
+ */
+export function useRemoteMusicActivity() {
+  return useQuery({
+    queryKey: ["remote-pin-music-activity"],
+    queryFn: async () => {
+      const response = await fetch("/api/pin/remote/api/activity/music?limit=20", {
+        cache: "no-store",
+      });
+      if (!response.ok) throw new Error("Could not read provider details from the paired Pin.");
+      return normalizeActivityResponse("music", await response.json()).items as ActivityMusic[];
+    },
+    refetchInterval: 5000,
+    staleTime: 1000,
+    retry: false,
   });
 }
 

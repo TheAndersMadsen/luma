@@ -6,7 +6,7 @@ const contentSecurityPolicy = [
   "form-action 'self'",
   "frame-ancestors 'none'",
   "frame-src https://music.apple.com https://*.music.apple.com https://authorize.music.apple.com https://idmsa.apple.com",
-  "img-src 'self' data: blob: https://*.humane.cloud https://resources.tidal.com",
+  "img-src 'self' data: blob: https://*.humane.cloud https://resources.tidal.com https://i.ytimg.com https://i.scdn.co https://*.spotifycdn.com",
   "manifest-src 'self'",
   "media-src 'self' blob:",
   "object-src 'none'",

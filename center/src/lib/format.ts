@@ -39,15 +39,6 @@ export function callDisplayName(peer?: { displayName: string; phoneNumber: strin
   return displayName;
 }
 
-/** Tidal artwork: the uuid's dashes become path separators. */
-export function tidalArtworkUrl(albumArtUuid: string, size = 160): string | null {
-  try {
-    return `https://resources.tidal.com/images/${albumArtUuid.replaceAll("-", "/")}/${size}x${size}.jpg`;
-  } catch {
-    return null;
-  }
-}
-
 /**
  * Album-art tint. The original checked contrast against white and darkened the
  * colour when it fell below 4.5, else fell back to transparent.

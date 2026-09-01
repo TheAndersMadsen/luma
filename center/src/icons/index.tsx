@@ -107,6 +107,35 @@ export function MusicIcon({ size = 22, className }: IconProps) {
   );
 }
 
+export function YoutubeMusicIcon({ size = 22, className }: IconProps) {
+  return (
+    <svg viewBox="0 0 22 22" width={size} height={size} className={className} aria-hidden="true" fill="none" style={block}>
+      <circle cx="11" cy="11" r="8.25" stroke="currentColor" strokeWidth="1.5" />
+      <circle cx="11" cy="11" r="5.4" stroke="currentColor" strokeWidth="1.1" opacity="0.7" />
+      <path d="M9.25 7.9L14.2 11L9.25 14.1V7.9Z" fill="currentColor" />
+    </svg>
+  );
+}
+
+export function SpotifyIcon({ size = 22, className }: IconProps) {
+  return (
+    <svg viewBox="0 0 22 22" width={size} height={size} className={className} aria-hidden="true" fill="none" style={block}>
+      <circle cx="11" cy="11" r="8.5" stroke="currentColor" strokeWidth="1.5" />
+      <path d="M6.9 8.4C9.9 7.55 13.2 7.8 15.7 9.2M7.5 11.15C10 10.5 12.95 10.7 15 11.85M8.1 13.75C10.2 13.25 12.5 13.4 14.25 14.35" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function GenericMusicIcon({ size = 22, className }: IconProps) {
+  return (
+    <svg viewBox="0 0 22 22" width={size} height={size} className={className} aria-hidden="true" fill="none" style={block}>
+      <path d="M9 5.5V15.2M9 7L16 5.3V13.3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx="6.8" cy="15.7" r="2.2" stroke="currentColor" strokeWidth="1.5" />
+      <circle cx="13.8" cy="13.8" r="2.2" stroke="currentColor" strokeWidth="1.5" />
+    </svg>
+  );
+}
+
 export function TranslationIcon({ size = 22, className }: IconProps) {
   return (
     <svg viewBox="0 0 22 22" width={size} height={size} className={className} aria-hidden="true" fill="currentColor" style={block}>
