@@ -285,18 +285,18 @@ test("tag release workflow publishes the exact hardened image and Compose bounda
   ));
   assert.deepEqual(pinCoordinates, {
     schemaVersion: 3,
-    version: "2026-09-01.1",
-    versionCode: 202609011,
+    version: "2026-09-01.2",
+    versionCode: 202609012,
     signedReleaseSource: {
       repository: "TheAndersMadsen/ai-pin-revival",
-      tag: "v0.1.94",
-      archive: "ai-pin-revival-pin-2026-09-01.1.tar.gz",
-      size: 123901658,
-      sha256: "2a266cec5298d53228651af6ae1194d8e331e5ac2d274277efce73e02de76b8e",
-      releaseId: "c42bb54853366aeabf1352f195506b0508b913d22f06543237e61dd68f96eb49",
+      tag: "v0.1.107",
+      archive: "ai-pin-revival-pin-2026-09-01.2.tar.gz",
+      size: 123901983,
+      sha256: "d4a61db934fcc9398a05e1fe3461aa28ead595912f572b7c24b0bb77ea5ab9be",
+      releaseId: "168a01a8198b7fc348f41700ebad1bb732618da33455d90c2c47f90f342f36ae",
       signerSha256: "d8a64e1c3a1afdc340c4b86feaacb88e2d81d66972afbd58e743b7c5b8d1cbdb",
-      manifestSha256: "b7596f74d4a59d46837424796b2111ffc83ba7ae9dbccf366de5f5ca8efdd33b",
-      receiptsSha256: "42d304451ae5599581efbffa1c940b17fef191bd5ce6d95e2e04af90a616f721",
+      manifestSha256: "e2b5e31191533680e515fb418b3a05e3bff192ac0b0ed063789c069c25342b5f",
+      receiptsSha256: "a1e409659fb3a8a4ae26d5be4a542c9061edf0edaa68b60f447cb0dbe9cd15d9",
     },
   });
 
