@@ -447,7 +447,7 @@ Have these ready:
 - A compatible Ai Pin USB interposer. A stock Pin exposes its USB service
   contacts beneath the small moon sticker rather than through a USB-C socket;
   follow the maintained [interposer guide](https://github.com/PenumbraOS/interposer)
-  and its illustrated [stock-Pin preparation](https://github.com/PenumbraOS/interposer/blob/main/preparation.md)
+  and its illustrated [stock-Pin preparation](https://github.com/PenumbraOS/interposer/blob/master/preparation.md)
   before connecting it.
 - Current desktop Chrome, Chromium, or Edge. The page checks both HTTPS and
   WebUSB before enabling installation.

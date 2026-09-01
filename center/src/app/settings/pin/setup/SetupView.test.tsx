@@ -140,7 +140,7 @@ describe("SetupView", () => {
     expect(screen.getByText(/stock Ai Pin has no exposed USB-C socket/i)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Prepare a stock Pin" })).toHaveAttribute(
       "href",
-      "https://github.com/PenumbraOS/interposer/blob/main/preparation.md",
+      "https://github.com/PenumbraOS/interposer/blob/master/preparation.md",
     );
   });
 

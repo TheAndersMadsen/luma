@@ -27,13 +27,8 @@ const HELP_LINKS: readonly HelpLink[] = [
   },
   {
     label: "Prepare a stock Pin",
-    href: "https://github.com/PenumbraOS/interposer/blob/main/preparation.md",
+    href: "https://github.com/PenumbraOS/interposer/blob/master/preparation.md",
     description: "Illustrated instructions for exposing the service contacts safely.",
-  },
-  {
-    label: "Computer and browser setup",
-    href: "https://github.com/TheAndersMadsen/ai-pin-revival#connect-a-pin",
-    description: "USB permissions, supported browsers, installation, and troubleshooting.",
   },
 ];
 
