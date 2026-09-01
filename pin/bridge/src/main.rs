@@ -582,6 +582,9 @@ fn reviewed_route_allowed(
         (&Method::GET, "/api/spotify/search", Some(query)) => {
             bodyless && no_content_type && valid_spotify_search_query(query)
         }
+        (&Method::GET, "/api/activity/music", Some(query)) => {
+            bodyless && no_content_type && valid_music_activity_query(query)
+        }
         (&Method::PUT, "/api/spotify/settings", None) => {
             body_bytes <= MAX_SPOTIFY_SETTINGS_BODY_BYTES
                 && headers
@@ -594,6 +597,35 @@ fn reviewed_route_allowed(
         | (&Method::DELETE, "/api/spotify/session", None) => bodyless && no_content_type,
         _ => false,
     }
+}
+
+fn valid_music_activity_query(query: &str) -> bool {
+    let mut limit = None;
+    let mut before = None;
+    for pair in query.split('&') {
+        let Some((name, value)) = pair.split_once('=') else {
+            return false;
+        };
+        let Some(value) = decode_form_value(value) else {
+            return false;
+        };
+        match name {
+            "limit" if limit.is_none() => {
+                let Ok(value) = value.parse::<usize>() else {
+                    return false;
+                };
+                limit = Some(value);
+            }
+            "before" if before.is_none() => {
+                let Ok(value) = value.parse::<i64>() else {
+                    return false;
+                };
+                before = Some(value);
+            }
+            _ => return false,
+        }
+    }
+    matches!(limit, Some(1..=100)) && before.is_none_or(|id| id > 0)
 }
 
 fn valid_spotify_search_query(query: &str) -> bool {
@@ -1525,6 +1557,43 @@ mod tests {
                 2,
             ));
         }
+    }
+
+    #[test]
+    fn reviewed_bridge_policy_allows_bounded_music_activity_reads() {
+        let headers = HeaderMap::new();
+        assert!(reviewed_route_allowed(
+            &Method::GET,
+            &Uri::from_static("/api/activity/music?limit=100"),
+            &headers,
+            0,
+        ));
+        assert!(reviewed_route_allowed(
+            &Method::GET,
+            &Uri::from_static("/api/activity/music?limit=20&before=42"),
+            &headers,
+            0,
+        ));
+        for uri in [
+            "/api/activity/music?limit=101",
+            "/api/activity/music?limit=bad&limit=20",
+            "/api/activity/music?limit=20&before=bad&before=42",
+            "/api/activity/music?limit=20&extra=1",
+            "/api/activity/music/1?limit=20",
+        ] {
+            assert!(!reviewed_route_allowed(
+                &Method::GET,
+                &uri.parse().unwrap(),
+                &headers,
+                0,
+            ));
+        }
+        assert!(!reviewed_route_allowed(
+            &Method::POST,
+            &Uri::from_static("/api/activity/music?limit=20"),
+            &headers,
+            0,
+        ));
     }
 
     #[test]
