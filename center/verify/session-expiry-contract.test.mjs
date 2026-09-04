@@ -128,6 +128,7 @@ const PROPAGATORS = [
   "webapiDelete",
   "webapiHeaders",
   "requestMetadata",
+  "surfaceOwnerHeaders",
   "ingestAnswerEvent",
   "channelKey",
   "getCapture",
@@ -275,7 +276,7 @@ test("no catch on a bearer-containing call discards an expired session", async (
     "server/domain/provenance.ts",
     "server/domain/settings.ts",
     "server/channel.ts",
-    "app/api/assistant/stream/route.ts",
+    "server/browserAssistant.ts",
     "app/api/capture/memory/[uuid]/route.ts",
   ]) {
     assert.ok(inspected.includes(owner), `the swallow sweep never inspected ${owner}`);

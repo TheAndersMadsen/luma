@@ -211,12 +211,15 @@ impl BidiSession {
     /// transports resolve (`AiBusMain::entitlement_for` / `AiBusMain::tool_context`)
     /// and are required, not defaulted: a caller that could omit them would
     /// silently reopen the ungated path this transport used to have.
-    pub fn spawn(
+    pub fn spawn<S>(
         model: Arc<dyn ChatModel>,
         entitlement: Entitlement,
         tools: catalog::ToolContext,
-        inbound: tonic::Streaming<pb::StreamingUnderstandRequest>,
-    ) -> ReceiverStream<Result<pb::StreamingUnderstandResponse, Status>> {
+        inbound: S,
+    ) -> ReceiverStream<Result<pb::StreamingUnderstandResponse, Status>>
+    where
+        S: Stream<Item = Result<pb::StreamingUnderstandRequest, Status>> + Send + 'static,
+    {
         Self::spawn_with(model, entitlement, tools, inbound)
     }
 

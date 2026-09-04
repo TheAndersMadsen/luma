@@ -2,34 +2,12 @@ import { currentSession } from "@/server/operator";
 import { AUTH_ENABLED, isSameOriginRequest } from "@/server/auth";
 import { COSMOS_WEBAPI, surfaceOwnerHeaders, SessionExpiredError } from "@/server/cosmos";
 import { integer, parseConnection, parseSurface, record, SURFACE_APPROVAL, SURFACE_TOKEN, UUID } from "@/lib/contracts/surfaces";
+import { boundedJson } from "@/server/boundedJson";
 
 type Operation = "list" | "approve" | "revoke" | "state" | "leave";
 const ERRORS: Record<number, string> = { 400: "invalid_request", 401: "unauthorized", 403: "invalid_connection", 404: "not_found", 409: "sequence_conflict", 429: "surface_limit", 503: "unavailable" };
 function json(value: unknown, status = 200) {
   return Response.json(value, { status, headers: { "cache-control": "no-store", "x-content-type-options": "nosniff" } });
-}
-async function boundedJson(body: ReadableStream<Uint8Array> | null, limit: number, signal: AbortSignal): Promise<unknown> {
-  if (!body) throw new Error("missing_body");
-  const reader = body.getReader();
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  const cancel = () => { void reader.cancel().catch(() => {}); };
-  signal.addEventListener("abort", cancel, { once: true });
-  try {
-    while (true) {
-      signal.throwIfAborted();
-      const { done, value } = await reader.read();
-      signal.throwIfAborted();
-      if (done) break;
-      size += value.length;
-      if (size > limit) throw new Error("body_too_large");
-      chunks.push(value);
-    }
-    const bytes = new Uint8Array(size);
-    let offset = 0;
-    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
-    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
-  } finally { signal.removeEventListener("abort", cancel); void reader.cancel().catch(() => {}); }
 }
 function fields(body: Record<string, unknown>, expected: string[]) {
   if (Object.keys(body).length !== expected.length || expected.some(key => !(key in body))) throw new Error("invalid_fields");

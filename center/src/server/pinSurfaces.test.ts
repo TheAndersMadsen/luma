@@ -1,0 +1,123 @@
+// @vitest-environment node
+import { beforeEach, afterEach, expect, it, vi } from "vitest";
+const mocks = vi.hoisted(() => ({ session: vi.fn(), headers: vi.fn(), origin: vi.fn(), authEnabled: true }));
+vi.mock("@/server/operator", () => ({ currentSession: mocks.session }));
+vi.mock("@/server/auth", () => ({ get AUTH_ENABLED() { return mocks.authEnabled; }, isSameOriginRequest: mocks.origin }));
+vi.mock("@/server/cosmos", () => ({ COSMOS_WEBAPI: "http://cosmos.test", surfaceOwnerHeaders: mocks.headers, SessionExpiredError: class extends Error {} }));
+import { GET, POST } from "@/app/api/devices/runtime/route";
+import { DELETE } from "@/app/api/devices/runtime/[surfaceId]/route";
+import { SessionExpiredError } from "@/server/cosmos";
+import { PIN_APPROVAL, PIN_SURFACE_POSTURE } from "@/lib/contracts/pinSurfaces";
+const id = "11111111-1111-1111-1111-111111111111";
+const pin = { ...PIN_SURFACE_POSTURE, surfaceId: id, deviceId: "aabb", revision: 1, revoked: false, currentPaired: true };
+const approval = { deviceId: "AABB", approval: PIN_APPROVAL };
+const context = { params: Promise.resolve({ surfaceId: id }) };
+function request(body: unknown = approval, extra = {}) {
+  return new Request("https://center.test/api/devices/runtime", { method: "POST", headers: { "content-type": "application/json", ...extra }, body: JSON.stringify(body) });
+}
+const list = () => GET(new Request("https://center.test/api/devices/runtime"));
+const revoke = () => DELETE(new Request("https://center.test/api/devices/runtime", { method: "DELETE" }), context);
+beforeEach(() => { mocks.authEnabled = true; mocks.session.mockResolvedValue({ sub: "owner" }); mocks.headers.mockResolvedValue({ authorization: "Bearer server-only" }); mocks.origin.mockReturnValue(true); vi.stubGlobal("fetch", vi.fn()); });
+afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+
+it("all actual Pin runtime routes require configured login, owner session and real bearer", async () => {
+  const handlers = [list, () => POST(request()), revoke];
+  mocks.authEnabled = false;
+  for (const handler of handlers) expect((await handler()).status).toBe(503);
+  mocks.authEnabled = true; mocks.session.mockResolvedValue(null);
+  for (const handler of handlers) expect((await handler()).status).toBe(401);
+  mocks.session.mockResolvedValue({ sub: "owner" }); mocks.headers.mockRejectedValue(new SessionExpiredError());
+  for (const handler of handlers) expect((await handler()).status).toBe(401);
+  expect(fetch).not.toHaveBeenCalled();
+});
+it("both mutations reject cross-origin before reading or forwarding authority", async () => {
+  mocks.origin.mockReturnValue(false);
+  expect((await POST(request())).status).toBe(403);
+  expect((await revoke()).status).toBe(403);
+  expect(fetch).not.toHaveBeenCalled();
+});
+it("rejects malformed, oversized, self-elevating and wrong-profile approval", async () => {
+  for (const body of [null, [], {}, { ...approval, accountId: "other" }, { ...approval, approval: "private" },
+    { ...approval, deviceId: "xyz" }, { ...approval, deviceId: "a".repeat(129) }, { ...approval, deviceId: "a".repeat(2048) }]) {
+    expect((await POST(request(body))).status).toBe(400);
+  }
+  expect((await POST(new Request("https://center.test/api/devices/runtime", { method: "POST", body: "{" , headers: { "content-type": "application/json" } }))).status).toBe(400);
+  expect((await POST(request(approval, { "content-type": "text/plain" }))).status).toBe(400);
+  expect((await DELETE(request(), { params: Promise.resolve({ surfaceId: "../other" }) })).status).toBe(400);
+  expect(fetch).not.toHaveBeenCalled();
+});
+it("uses exact canonical selection with server bearer only and strips upstream extras", async () => {
+  vi.mocked(fetch).mockResolvedValue(Response.json({ pin: { ...pin, token: "secret", ownerId: "not-browser-data" } }));
+  const result = await POST(request(approval, { authorization: "Bearer attacker", "x-forwarded-client-cert": "attacker", "x-cosmos-admin-token": "attacker" }));
+  expect(result.status).toBe(200); expect(await result.json()).toEqual({ pin });
+  expect(result.headers.get("cache-control")).toBe("no-store");
+  expect(result.headers.get("x-content-type-options")).toBe("nosniff");
+  const [url, options] = vi.mocked(fetch).mock.calls[0];
+  expect(url).toBe("http://cosmos.test/surface-api/v1/pins");
+  expect(options?.headers).toEqual({ authorization: "Bearer server-only", "content-type": "application/json" });
+  expect(options?.body).toBe(JSON.stringify({ deviceId: "aabb", approval: PIN_APPROVAL }));
+  expect(options?.cache).toBe("no-store"); expect(options?.redirect).toBe("error"); expect(options?.signal).toBeInstanceOf(AbortSignal);
+});
+it("verifies mutation target and committed revoked state, not merely HTTP 200", async () => {
+  for (const changed of [{ ...pin, deviceId: "ccdd" }, { ...pin, revoked: true }, { ...pin, currentPaired: false }, { ...pin, currentPaired: null }]) {
+    vi.mocked(fetch).mockResolvedValue(Response.json({ pin: changed }));
+    expect((await POST(request())).status).toBe(503);
+  }
+  vi.mocked(fetch).mockResolvedValue(Response.json({ pin }));
+  expect((await revoke()).status).toBe(503);
+  for (const currentPaired of [true, false, null]) {
+    const revoked = { ...pin, revoked: true, currentPaired };
+    vi.mocked(fetch).mockResolvedValue(Response.json({ pin: revoked }));
+    const result = await revoke();
+    expect(result.status).toBe(200); expect(await result.json()).toEqual({ pin: revoked });
+  }
+  expect(vi.mocked(fetch).mock.lastCall?.[0]).toBe(`http://cosmos.test/surface-api/v1/pins/${id}`);
+});
+it("owner list keeps multi-Pin association but rejects ambiguous or elevated projections", async () => {
+  const second = { ...pin, deviceId: "ccdd", surfaceId: "22222222-2222-2222-2222-222222222222", currentPaired: false };
+  vi.mocked(fetch).mockResolvedValue(Response.json({ pins: [pin, second] }));
+  expect(await (await list()).json()).toEqual({ pins: [pin, second] });
+  vi.mocked(fetch).mockResolvedValue(Response.json({ pins: [{ ...pin, currentPaired: null }] }));
+  expect(await (await list()).json()).toEqual({ pins: [{ ...pin, currentPaired: null }] });
+  for (const pins of [[pin, pin], Array(17).fill(pin), [{ ...pin, revoked: true }], [{ ...pin, trustLevel: 1 }],
+    [{ ...pin, occupancy: "empty" }], [{ ...pin, actorIdentity: "owner" }], [{ ...pin, playbackVerified: true }],
+    [{ ...pin, manifest: { ...pin.manifest, authority: { mayOriginate: ["action.execute"], reflexive: [] } } }]]) {
+    vi.mocked(fetch).mockResolvedValue(Response.json({ pins }));
+    expect((await list()).status).toBe(503);
+  }
+});
+it("sanitizes backend failures and malformed responses without caching", async () => {
+  for (const status of [401, 404, 429, 500, 503]) {
+    vi.mocked(fetch).mockResolvedValue(new Response("secret diagnostic", { status }));
+    const result = await POST(request());
+    expect(result.status).toBe(status === 500 ? 503 : status);
+    expect(await result.text()).not.toContain("secret"); expect(result.headers.get("cache-control")).toBe("no-store");
+  }
+  for (const response of [new Response("x".repeat(65537)), new Response("{"), Response.json({})]) {
+    vi.mocked(fetch).mockResolvedValue(response);
+    expect((await list()).status).toBe(503);
+  }
+  vi.mocked(fetch).mockRejectedValue(new Error("secret timeout"));
+  expect(await (await list()).json()).toEqual({ error: "unavailable" });
+});
+it("bounds stalled upstream reads with the same signal as the fetch", async () => {
+  const controller = new AbortController();
+  vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
+  const cancel = vi.fn();
+  vi.mocked(fetch).mockResolvedValue(new Response(new ReadableStream({ cancel })));
+  const result = list();
+  for (let i = 0; i < 12; i++) await Promise.resolve();
+  controller.abort();
+  expect((await result).status).toBe(503); expect(cancel).toHaveBeenCalled();
+  expect(vi.mocked(fetch).mock.lastCall?.[1]?.signal).toBe(controller.signal);
+});
+it("bounds stalled incoming approval bodies and never reaches Cosmos", async () => {
+  const controller = new AbortController();
+  vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
+  const cancel = vi.fn();
+  const incoming = new Request("https://center.test/api/devices/runtime", { method: "POST", headers: { "content-type": "application/json" }, body: new ReadableStream({ cancel }), duplex: "half" } as RequestInit);
+  const result = POST(incoming);
+  for (let i = 0; i < 12; i++) await Promise.resolve();
+  controller.abort();
+  expect((await result).status).toBe(400); expect(cancel).toHaveBeenCalled(); expect(fetch).not.toHaveBeenCalled();
+});

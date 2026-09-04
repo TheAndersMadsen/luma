@@ -115,7 +115,30 @@ responsible for local permissions, capture, rendering, and playback evidence:
    16 active approvals, not the paper's 50-surface evaluation. This registry hash
    chain has no independent anchors, retention or privacy-filtered audit views;
    it is not yet the complete routing and policy ledger.
-3. **Phase 2B: exercised Pin-to-Center presentation — next.** Join privacy
+3. **Phase 2B: exercised Pin-to-Center presentation — in progress.** The first
+   admission substep lets the owner explicitly approve a currently paired Pin
+   in **Settings → Account → Devices**. It uses the same registry and ledger as
+   browser enrollment, with a fixed shared-speech ceiling, class-zero trust,
+   unknown actor and occupancy, and no hints or reflexes. Rendering, playback
+   and stock boot epoch/sequence are not verified by this approval. The shared
+   limit is 16 active approvals across both browser and Pin profiles. Stale
+   approvals remain visible and revocable; they do not authenticate traffic.
+   Stock assistant admission requires the typed edge-authenticated device,
+   current pairing owner and active runtime binding before entering the old
+   assistant. Long-lived input streams recheck each admitted message. Pairing
+   outages deny admission and new approval but leave owner inventory and
+   revocation available, with current pairing explicitly reported as unknown.
+   This is not yet the authoritative replacement runtime: admitted requests
+   still reach legacy control/memory paths. The old browser-to-Pin assistant,
+   simulated-device traces and arbitrary speech path have been removed. Browser
+   chat and speech are temporarily unavailable on this branch: authenticated
+   requests receive a bounded HTTP 503, not fabricated Pin authority or an
+   alternative assistant. Provider readiness remains distinct from the explicit
+   unavailable browser-runtime status. Genuine browser ingress, in-flight
+   cancellation and dispatch-time policy remain to be implemented. The existing
+   trace-based production assistant evaluator must also be replaced before
+   release; this branch is not ready for deployment.
+   Join privacy
    provenance before inference or memory retrieval; connect runtime-owned
    intents to one authoritative runtime on which the stock handlers converge.
    Reuse provider adapters, not the old control path as a fallback. Filter
@@ -146,9 +169,9 @@ responsible for local permissions, capture, rendering, and playback evidence:
    paths, including performance, 50-surface and ablation evaluations, isolated
    database restart/failure tests, and explicit physical Pin observations.
    Deploy the authenticated signed release archive and verify the intended
-   release ID with `environment: "production"`. The requested
-   `cosmos.andersmadsen.dk` deployment still requires an explicit domain-identity
-   decision relative to the existing Center address and physical Pin access.
+   release ID with `environment: "production"` at the existing production
+   origin, `https://center.andersmadsen.dk/`. No new domain or identity migration
+   is requested. Physical Pin access and acceptance remain pending.
 
 Each phase has behavioral gates, not just inventory updates. Phase 2A tests deny
 another account, share tokens, unsupported capabilities, stale incarnations,

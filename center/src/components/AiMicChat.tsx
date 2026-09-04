@@ -35,6 +35,8 @@ export type AssistantToolStatus = { name: string; live: boolean; needs: string }
 export type AssistantStatus = {
   assistant: boolean;
   speech: boolean;
+  /** Provider readiness is separate from the browser runtime's availability. */
+  browser_runtime?: "unavailable";
   model: string;
   provider_authority: "cosmos" | "unknown";
   tools: AssistantToolStatus[];
@@ -73,6 +75,7 @@ export function useAssistantStatus() {
       return {
         assistant: Boolean(body.assistant),
         speech: Boolean(body.speech),
+        ...(body.browser_runtime === "unavailable" ? { browser_runtime: "unavailable" as const } : {}),
         model: typeof body.model === "string" ? body.model : "unknown",
         provider_authority: body.provider_authority === "cosmos" ? "cosmos" : "unknown",
         tools,
@@ -95,6 +98,11 @@ export function AssistantStatusChip({ className }: { className?: string }) {
   const { data } = useAssistantStatus();
   if (!data) return null;
 
+  if (data.browser_runtime === "unavailable") {
+    return <StatusChip tone="off" label="Browser runtime unavailable"
+      detail="Browser assistant runtime is unavailable. Provider configuration is unchanged."
+      className={className} />;
+  }
   if (data.assistant) {
     return (
       <StatusChip
@@ -222,7 +230,7 @@ export function AiMicChat({ autoListen = false, active = true }: { autoListen?: 
 
   const speak = useCallback(
     async (text: string): Promise<void> => {
-      if (!voice || !status?.speech || !text.trim() || !liveRef.current) return;
+      if (!voice || !status?.speech || status.browser_runtime === "unavailable" || !text.trim() || !liveRef.current) return;
       const res = await fetch("/api/assistant/speech", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -247,7 +255,7 @@ export function AiMicChat({ autoListen = false, active = true }: { autoListen?: 
         audio.play().catch(() => { done(); resolve(); });
       });
     },
-    [voice, status?.speech],
+    [voice, status?.speech, status?.browser_runtime],
   );
 
   const ask = useCallback(
@@ -272,7 +280,9 @@ export function AiMicChat({ autoListen = false, active = true }: { autoListen?: 
           body: JSON.stringify({ text }),
           signal: controller.signal,
         });
-        if (!res.ok || !res.body) throw new Error("The assistant could not answer.");
+        if (!res.ok || !res.body) throw new Error(res.status === 503
+          ? "Browser assistant runtime is unavailable."
+          : res.status === 401 ? "Your session expired — sign in again." : "The assistant could not answer.");
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buffered = "";
@@ -408,7 +418,7 @@ export function AiMicChat({ autoListen = false, active = true }: { autoListen?: 
           className={`${styles.voice} ${voice ? styles.voiceOn : ""}`}
           onClick={() => setVoice((v) => !v)}
           aria-pressed={voice}
-          title={status?.speech ? "Spoken replies" : "Spoken replies unavailable"}
+          title={status?.speech && status.browser_runtime !== "unavailable" ? "Spoken replies" : "Spoken replies unavailable"}
         >
           ◖ Voice {voice ? "on" : "off"}
         </button>

@@ -493,6 +493,22 @@ fn kind_filter(kinds: &[MemoryKind]) -> Option<Vec<i16>> {
 
 #[tonic::async_trait]
 impl Store for PostgresStore {
+    async fn surface(
+        &self,
+        principal: &str,
+        surface_id: uuid::Uuid,
+    ) -> Result<Option<crate::surface_registry::Surface>, crate::surface_registry::RegistryError>
+    {
+        use crate::surface_registry::{Record, RegistryError};
+        let row = sqlx::query("SELECT record::text AS record, (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint AS now_ms FROM cosmos_surface_registry WHERE principal = $1 AND surface_id = $2")
+            .bind(principal).bind(surface_id).fetch_optional(&self.pool).await.map_err(|_| RegistryError::Unavailable)?;
+        row.map(|row| {
+            let record: Record = serde_json::from_str(row.get::<&str, _>("record"))
+                .map_err(|_| RegistryError::Unavailable)?;
+            Ok(record.view(row.get("now_ms")))
+        })
+        .transpose()
+    }
     async fn surfaces(
         &self,
         principal: &str,
@@ -1913,6 +1929,83 @@ mod tests {
             }),
             ..Default::default()
         }
+    }
+
+    #[tokio::test]
+    async fn pin_admission_postgres_reopen_revoke_chain_and_rollback() {
+        use crate::surface_registry::{Binding, Event, Mutation, RegistryError, pin_surface_id};
+        let Some(first) = store().await else {
+            return;
+        };
+        let principal = format!("pin-admission-test-{}", uuid::Uuid::new_v4());
+        let device = "abba9988";
+        let id = pin_surface_id(&principal, device);
+        let browser_id = uuid::Uuid::new_v4();
+        first
+            .mutate_surface(
+                &principal,
+                browser_id,
+                Mutation::Approve {
+                    token_hash: crate::surface_registry::hash(b"test"),
+                    incarnation: uuid::Uuid::new_v4(),
+                },
+            )
+            .await
+            .unwrap();
+        let before = first
+            .mutate_surface(
+                &principal,
+                id,
+                Mutation::ApprovePin {
+                    device_id: device.into(),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(matches!(before.binding, Binding::Pin { .. }));
+        assert!(first.surface("other-owner", id).await.unwrap().is_none());
+        let rows = sqlx::query("SELECT hash, event::text AS event FROM cosmos_surface_event WHERE principal=$1 ORDER BY sequence").bind(&principal).fetch_all(&first.pool).await.unwrap();
+        assert_eq!(rows.len(), 2);
+        let mut previous = String::new();
+        for (index, row) in rows.iter().enumerate() {
+            let entry: Event = serde_json::from_str(row.get("event")).unwrap();
+            assert_eq!(entry.version, index as u8 + 1);
+            assert_eq!(entry.previous_hash, previous);
+            assert_eq!(entry.hash().unwrap(), row.get::<String, _>("hash"));
+            assert!(!serde_json::to_string(&entry).unwrap().contains(device));
+            previous = entry.hash().unwrap();
+        }
+        drop(first);
+        let reopened = store().await.unwrap();
+        assert_eq!(
+            reopened.surface(&principal, id).await.unwrap(),
+            Some(before.clone())
+        );
+        // Principal-scoped test obstruction: no production DB, DDL or trigger.
+        sqlx::query("INSERT INTO cosmos_surface_event (principal, sequence, hash, event) VALUES ($1, 3, 'test-obstruction', '{}'::jsonb)").bind(&principal).execute(&reopened.pool).await.unwrap();
+        assert_eq!(
+            reopened
+                .mutate_surface(&principal, id, Mutation::RevokePin)
+                .await,
+            Err(RegistryError::Unavailable)
+        );
+        assert_eq!(
+            reopened.surface(&principal, id).await.unwrap(),
+            Some(before)
+        );
+        sqlx::query("DELETE FROM cosmos_surface_event WHERE principal=$1 AND sequence=3 AND hash='test-obstruction'").bind(&principal).execute(&reopened.pool).await.unwrap();
+        let revoked = reopened
+            .mutate_surface(&principal, id, Mutation::RevokePin)
+            .await
+            .unwrap();
+        assert!(revoked.revoked);
+        drop(reopened);
+        let reopened = store().await.unwrap();
+        assert_eq!(
+            reopened.surface(&principal, id).await.unwrap(),
+            Some(revoked)
+        );
+        assert_eq!(reopened.surfaces(&principal).await.unwrap().len(), 1);
     }
 
     #[tokio::test]

@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "basePath": "/surface-api/v1/pins",
+  "approval": "pin-shared-speech-v1",
+  "authentication": "Real verified owner bearer; deviceId selects a currently paired Pin, never authenticates a request",
+  "routes": {
+    "GET /": {"response": {"pins": "PinSurface[]"}, "semantics": "All active owner approvals remain discoverable and revocable. Pairing is rechecked; unavailable lookup gives currentPaired:null, never admission authority. Not online or admission proof."},
+    "POST /": {"request": {"deviceId": "nonempty hex, at most 128 characters, canonicalized lowercase", "approval": "pin-shared-speech-v1"}, "response": {"pin": "PinSurface"}, "semantics": "Explicit approval after current pairing lookup. Same account/device retains surfaceId; reapproval advances revision. Atomic registry and ledger commit."},
+    "DELETE /:surfaceId": {"response": {"pin": "PinSurface"}, "semantics": "Idempotent owner revocation, same registry and ledger. Does not unpair or revoke PKI credentials."}
+  },
+  "PinSurface": {
+    "currentPaired": "true on POST; boolean or null on GET/DELETE (null means pairing lookup unavailable; owner inventory and revocation remain available). Not online or admission proof",
+    "surfaceId": "UUID",
+    "deviceId": "canonical lowercase hex; owner management only, never model context",
+    "name": "Ai Pin",
+    "approval": "pin-shared-speech-v1",
+    "revision": "positive integer",
+    "manifest": {
+      "class": "wearable",
+      "capabilities": {"input": ["user.request"], "output": {"audio.tts": {"maxClass": "shared_room", "shared": true}}},
+      "constraints": ["actor_unknown", "occupancy_unknown", "render_unverified", "playback_unverified", "no_verified_epoch_sequence"],
+      "expression": {},
+      "cognition": {"declaredClass": 0, "models": []},
+      "authority": {"mayOriginate": ["user.request"], "reflexive": []}
+    },
+    "trustLevel": 0,
+    "occupancy": "unknown",
+    "actorIdentity": "unknown",
+    "renderVerified": false,
+    "playbackVerified": false,
+    "revoked": "boolean"
+  },
+  "errors": {"400": "invalid_request", "401": "unauthorized", "404": "not_found", "429": "surface_limit", "503": "unavailable"},
+  "limits": {"bodyBytes": 1024, "activeSurfacesPerOwner": 16},
+  "limitations": ["Approval is neither physical privacy nor actor authentication", "Stock boot epoch/sequence, rendering and playback remain unverified", "Pin approvals accept no browser connection token/state", "Current pairing and active runtime binding are rechecked before each stock assistant admission", "This admission increment does not replace all legacy orchestration or memory authority"]
+}

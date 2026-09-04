@@ -16,6 +16,7 @@ pub mod integrations;
 pub mod keydirectory;
 pub mod keymaterial;
 pub mod metrics;
+pub mod pin_admission;
 pub mod provision;
 mod response_metadata;
 mod services;

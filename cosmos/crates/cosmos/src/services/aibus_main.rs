@@ -625,6 +625,7 @@ pub struct AiBusMain {
     directory: Option<crate::keydirectory::SharedKeyDirectory>,
     /// The wearer's saved data, for tools like `recall_memory`.
     store: crate::store::SharedStore,
+    pairing: Option<crate::enrollment::SharedEnrollmentStore>,
     /// Resolves each caller's account verdict. Fail-open by default (no store).
     entitlements: std::sync::Arc<crate::services::gates::FailOpenDirectory>,
 }
@@ -645,6 +646,7 @@ impl Default for AiBusMain {
             keys: Default::default(),
             directory: None,
             store: crate::store::MemoryStore::shared(),
+            pairing: crate::enrollment::pairing_store(),
             entitlements: Default::default(),
         }
     }
@@ -693,6 +695,19 @@ async fn run_device_function(
 }
 
 impl AiBusMain {
+    fn admit<T>(
+        &self,
+        request: &Request<T>,
+    ) -> impl std::future::Future<Output = Result<(), Status>> + Send + use<T> {
+        let store = self.store.clone();
+        let pairing = self.pairing.clone();
+        let authenticated = crate::auth::authenticated_request(request).cloned();
+        async move {
+            crate::pin_admission::admit(&store, pairing.as_ref(), authenticated.as_ref())
+                .await
+                .map(|_| ())
+        }
+    }
     fn locale_to_bcp47(locale: Option<&cosmos_protocol::common::Locale>) -> String {
         match locale {
             Some(l) if !l.language.is_empty() && !l.country.is_empty() => {
@@ -1135,13 +1150,6 @@ impl AiBusMain {
     pub fn with_store(mut self, store: crate::store::SharedStore) -> Self {
         self.store = store;
         self
-    }
-
-    /// The store this assistant reads and writes. The demo HTTP surface reads the
-    /// SAME instance through the capture API, so a "remember …" turn is visible in
-    /// the companion viewer.
-    pub fn store(&self) -> crate::store::SharedStore {
-        self.store.clone()
     }
 
     /// Wearer-scoped context for the server-side tools this turn may call.
@@ -1823,6 +1831,7 @@ impl AiBusService for AiBusMain {
         &self,
         request: Request<pb::SynapseUnderstandingRequest>,
     ) -> Result<Response<Self::UnderstandStream>, Status> {
+        self.admit(&request).await?;
         // Resolve the caller's account verdict before the turn: Cosmos gates every
         // dispatched action on it, and a degraded account rewrites the ReAct chain
         // into a canned local experience rather than going silent.
@@ -1857,6 +1866,7 @@ impl AiBusService for AiBusMain {
         &self,
         request: Request<pb::EncryptedSynapseUnderstandingRequest>,
     ) -> Result<Response<Self::EncryptedUnderstandStream>, Status> {
+        self.admit(&request).await?;
         use prost::Message as _;
 
         let entitlement = self.entitlement_for(&request);
@@ -2022,6 +2032,7 @@ impl AiBusService for AiBusMain {
         &self,
         request: Request<tonic::Streaming<pb::StreamingUnderstandRequest>>,
     ) -> Result<Response<Self::BidirectionalStreamingUnderstandStream>, Status> {
+        self.admit(&request).await?;
         // Same per-request state the other two transports resolve. Without it
         // this stream ran fully ungated: every caller was served as subscribed,
         // authorized and unlocked — including a request that reached the handler
@@ -2029,11 +2040,17 @@ impl AiBusService for AiBusMain {
         // for, so `recall_memory` could never work here.
         let entitlement = self.entitlement_for(&request);
         let tools = self.tool_context(&request);
+        let authenticated = crate::auth::authenticated_request(&request).cloned();
         let stream = crate::assistant::bidi::BidiSession::spawn(
             self.engine.model(),
             entitlement,
             tools,
-            request.into_inner(),
+            crate::pin_admission::gate_stream(
+                request.into_inner(),
+                self.store.clone(),
+                self.pairing.clone(),
+                authenticated,
+            ),
         );
         Ok(Response::new(Box::pin(stream)))
     }
@@ -2042,6 +2059,7 @@ impl AiBusService for AiBusMain {
         &self,
         request: Request<pb::ServerStatefulUnderstandRequest>,
     ) -> Result<Response<pb::ServerStatefulUnderstandResponse>, Status> {
+        self.admit(&request).await?;
         let entitlement = self.entitlement_for(&request);
         let tools = self.tool_context(&request);
         use pb::server_stateful_understand_request::Userrequest;
@@ -2082,6 +2100,7 @@ impl AiBusService for AiBusMain {
         &self,
         request: Request<pb::EncryptedCompletionRequest>,
     ) -> Result<Response<pb::EncryptedCompletionResponse>, Status> {
+        self.admit(&request).await?;
         let request = request.into_inner();
         let (completion, kid): (pb::CompletionRequest, _) =
             self.open_request(request.request).await?;
@@ -2116,6 +2135,7 @@ impl AiBusService for AiBusMain {
         &self,
         request: Request<pb::EncryptedChatCompletionRequest>,
     ) -> Result<Response<pb::EncryptedChatCompletionResponse>, Status> {
+        self.admit(&request).await?;
         let request = request.into_inner();
         let (chat, protection): (pb::ChatCompletionRequest, _) = self
             .open_food_request(
@@ -2149,6 +2169,7 @@ impl AiBusService for AiBusMain {
         &self,
         request: Request<pb::AnalyzeImageRequest>,
     ) -> Result<Response<pb::AnalyzeImageResponse>, Status> {
+        self.admit(&request).await?;
         Ok(Response::new(
             Self::analyze_image_inner(request.into_inner()).await?,
         ))
@@ -2158,6 +2179,7 @@ impl AiBusService for AiBusMain {
         &self,
         request: Request<pb::EncryptedAnalyzeImageRequest>,
     ) -> Result<Response<pb::EncryptedAnalyzeImageResponse>, Status> {
+        self.admit(&request).await?;
         let (request, kid): (pb::AnalyzeImageRequest, _) =
             self.open_request(request.into_inner().request).await?;
         let response = Self::analyze_image_inner(request).await?;
@@ -2173,6 +2195,7 @@ impl AiBusService for AiBusMain {
         &self,
         request: Request<pb::EncryptedAnalyzeFoodImageRequest>,
     ) -> Result<Response<pb::EncryptedAnalyzeFoodImageResponse>, Status> {
+        self.admit(&request).await?;
         let (request, protection): (pb::AnalyzeFoodImageRequest, _) = self
             .open_food_request(
                 request.into_inner().request,
@@ -2193,6 +2216,7 @@ impl AiBusService for AiBusMain {
         &self,
         request: Request<pb::EncryptedActionBasedInterstitialRequest>,
     ) -> Result<Response<pb::EncryptedActionBasedInterstitialResponse>, Status> {
+        self.admit(&request).await?;
         let request = request.into_inner();
         let (req, kid): (pb::ActionBasedInterstitialRequest, _) =
             self.open_request(request.request).await?;
@@ -2217,6 +2241,7 @@ impl AiBusService for AiBusMain {
         &self,
         request: Request<pb::EncryptedLoadingMessageRequest>,
     ) -> Result<Response<pb::EncryptedLoadingMessageResponse>, Status> {
+        self.admit(&request).await?;
         let request = request.into_inner();
         let (req, kid): (pb::LoadingMessageRequest, _) = self.open_request(request.request).await?;
         let decision = loading_decision(&req.utterance, req.is_unlocked);
@@ -2242,6 +2267,7 @@ impl AiBusService for AiBusMain {
         &self,
         request: Request<pb::FunctionCall>,
     ) -> Result<Response<pb::FunctionResponse>, Status> {
+        self.admit(&request).await?;
         // Server tools run against the wearer's own data, so resolve them first.
         let tools = self.tool_context(&request);
         let request = request.into_inner();
@@ -2253,6 +2279,7 @@ impl AiBusService for AiBusMain {
         &self,
         request: Request<pb::EncryptedFunctionCall>,
     ) -> Result<Response<pb::EncryptedFunctionResponse>, Status> {
+        self.admit(&request).await?;
         // Server tools run against the wearer's own data, so resolve them first.
         let tools = self.tool_context(&request);
         let (call, kid): (pb::FunctionCall, String) = self
@@ -2274,6 +2301,7 @@ impl AiBusService for AiBusMain {
         &self,
         request: Request<pb::EncryptedGeoLocateRequest>,
     ) -> Result<Response<pb::EncryptedGeoLocateResponse>, Status> {
+        self.admit(&request).await?;
         let request = request.into_inner();
         let (req, kid): (pb::GeoLocateRequest, _) = self.open_request(request.request).await?;
         let location = crate::backends::places::geolocate(&req)
@@ -2294,6 +2322,7 @@ impl AiBusService for AiBusMain {
         &self,
         request: Request<pb::EncryptedReverseGeocodeRequest>,
     ) -> Result<Response<pb::EncryptedReverseGeocodeResponse>, Status> {
+        self.admit(&request).await?;
         let (location_envelope, kid) = self
             .open_stock_location(request.into_inner().location)
             .await?;
@@ -2314,6 +2343,7 @@ impl AiBusService for AiBusMain {
         &self,
         request: Request<pb::EncryptedNavigationDirectionsRequest>,
     ) -> Result<Response<pb::EncryptedNavigationDirectionsResponse>, Status> {
+        self.admit(&request).await?;
         let request = request.into_inner();
         let (origin_envelope, _) = self.open_stock_location(request.location).await?;
         let origin = Self::stock_location_coordinates(&origin_envelope)?;
@@ -2345,6 +2375,7 @@ impl AiBusService for AiBusMain {
         &self,
         request: Request<pb::EncryptedNearbySearchRequest>,
     ) -> Result<Response<pb::EncryptedNearbySearchResponse>, Status> {
+        self.admit(&request).await?;
         let (search, kid): (pb::NearbySearchRequest, _) =
             self.open_request(request.into_inner().request).await?;
         let near = search.location.as_ref().map(|l| (l.latitude, l.longitude));
@@ -2365,6 +2396,7 @@ impl AiBusService for AiBusMain {
         &self,
         request: Request<pb::EncryptedWeatherRequest>,
     ) -> Result<Response<pb::EncryptedWeatherResponse>, Status> {
+        self.admit(&request).await?;
         let (location_envelope, kid) = self
             .open_stock_location(request.into_inner().location)
             .await?;
@@ -2386,6 +2418,7 @@ impl AiBusService for AiBusMain {
         &self,
         request: Request<pb::EncryptedGetFoodItemRequest>,
     ) -> Result<Response<pb::EncryptedGetFoodItemResponse>, Status> {
+        self.admit(&request).await?;
         let request = request.into_inner();
         let (req, protection): (pb::GetFoodItemRequest, _) = self
             .open_food_request(
@@ -2415,6 +2448,7 @@ impl AiBusService for AiBusMain {
         &self,
         request: Request<pb::EncryptedSmartPlaylistRequest>,
     ) -> Result<Response<pb::EncryptedSmartPlaylistResponse>, Status> {
+        self.admit(&request).await?;
         let request = request.into_inner();
         let (req, kid): (pb::SmartPlaylistRequest, _) = self.open_request(request.request).await?;
 
@@ -2449,6 +2483,7 @@ impl AiBusService for AiBusMain {
         &self,
         request: Request<pb::EncryptedTranslateRequest>,
     ) -> Result<Response<pb::EncryptedTranslateResponse>, Status> {
+        self.admit(&request).await?;
         let request = request.into_inner();
         let (req, kid): (pb::TranslateRequest, _) = self.open_request(request.request).await?;
         let from = Self::locale_to_bcp47(req.from.as_ref());
@@ -2483,6 +2518,8 @@ impl AiBusService for AiBusMain {
         &self,
         request: Request<tonic::Streaming<pb::EncryptedAiRequest>>,
     ) -> Result<Response<Self::EncryptedStreamAIBusStream>, Status> {
+        self.admit(&request).await?;
+        let authenticated = crate::auth::authenticated_request(&request).cloned();
         let mut inbound = request.into_inner();
         let service = self.clone();
         let (tx, rx) = tokio::sync::mpsc::channel(8);
@@ -2497,6 +2534,12 @@ impl AiBusService for AiBusMain {
                     }
                 };
                 let result = async {
+                    crate::pin_admission::admit(
+                        &service.store,
+                        service.pairing.as_ref(),
+                        authenticated.as_ref(),
+                    )
+                    .await?;
                     let (request, kid): (pb::AiRequest, _) =
                         service.open_request(encrypted.request).await?;
                     let response = service.process_ai_request(request).await?;
@@ -2538,6 +2581,55 @@ impl AiBusService for AiBusMain {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Test fixtures use the same required pairing and durable registry approval,
+    /// not an admission bypass. The returned extension is transport evidence;
+    /// end-to-end tests obtain it through the actual AuthLayer instead.
+    async fn approve_test_pin(
+        service: &mut AiBusMain,
+        subject: &str,
+        device_id: &str,
+    ) -> crate::auth::AuthenticatedRequest {
+        use crate::enrollment::EnrollmentStore;
+        let pairing = Arc::new(crate::enrollment::MemoryEnrollmentStore::default());
+        pairing
+            .put_device_account(device_id, subject)
+            .await
+            .unwrap();
+        service.pairing = Some(pairing);
+        let principal = cosmos_core::AuthenticatedPrincipal::for_user(subject).unwrap();
+        service
+            .store
+            .mutate_surface(
+                principal.expose_for_authorization(),
+                crate::surface_registry::pin_surface_id(
+                    principal.expose_for_authorization(),
+                    device_id,
+                ),
+                crate::surface_registry::Mutation::ApprovePin {
+                    device_id: device_id.to_owned(),
+                },
+            )
+            .await
+            .unwrap();
+        crate::auth::AuthenticatedRequest {
+            principal,
+            plane: crate::auth::AuthenticationPlane::Device,
+            device: Some(cosmos_core::AuthenticatedDeviceIdentity::from_edge(device_id).unwrap()),
+        }
+    }
+
+    fn admitted_request<T>(
+        body: T,
+        authenticated: &crate::auth::AuthenticatedRequest,
+    ) -> Request<T> {
+        let mut request = Request::new(body);
+        request
+            .extensions_mut()
+            .insert(authenticated.principal.clone());
+        request.extensions_mut().insert(authenticated.clone());
+        request
+    }
 
     struct TestKeyPath(std::path::PathBuf);
 
@@ -2621,19 +2713,23 @@ mod tests {
             b"humane.common.encryption.LocationEnvelope",
         )
         .expect("seal default stock location envelope");
-        let service = AiBusMain::with_key_material(keys);
+        let mut service = AiBusMain::with_key_material(keys);
+        let authenticated = approve_test_pin(&mut service, "wearer", "abcd1234").await;
 
         let error = service
-            .encrypted_weather(Request::new(pb::EncryptedWeatherRequest {
-                location: Some(cosmos_protocol::common::encryption::EncryptedData {
-                    encryption_information: Some(
-                        cosmos_protocol::common::encryption::EncryptionInformation {
-                            kid: kid.to_owned(),
-                        },
-                    ),
-                    data: sealed.data,
-                }),
-            }))
+            .encrypted_weather(admitted_request(
+                pb::EncryptedWeatherRequest {
+                    location: Some(cosmos_protocol::common::encryption::EncryptedData {
+                        encryption_information: Some(
+                            cosmos_protocol::common::encryption::EncryptionInformation {
+                                kid: kid.to_owned(),
+                            },
+                        ),
+                        data: sealed.data,
+                    }),
+                },
+                &authenticated,
+            ))
             .await
             .expect_err("default location must fail before a provider lookup");
 
@@ -2941,6 +3037,7 @@ mod tests {
         }
 
         let model = Arc::new(ProvenanceModel::default());
+        let observed_store = Arc::new(crate::store::MemoryStore::default());
         let keys: crate::keymaterial::SharedKeyMaterial = Default::default();
         keys.insert(
             "provenance-test-kid".to_owned(),
@@ -2951,19 +3048,42 @@ mod tests {
             engine: Arc::new(crate::assistant::engine::Engine::new(model.clone())),
             keys: keys.clone(),
             directory: None,
-            store: crate::store::MemoryStore::shared(),
+            store: observed_store.clone(),
+            pairing: Some(Arc::new(crate::enrollment::MemoryEnrollmentStore::default())),
             entitlements: Default::default(),
         };
+        let store = service.store.clone();
+        let pairing = service.pairing.clone().unwrap();
+        let subject = "provenance-wearer-fixture";
+        let device = "2c2a00010000abcd";
+        let principal = cosmos_core::AuthenticatedPrincipal::for_user(subject).unwrap();
+        let principal = principal.expose_for_authorization();
+        let surface_id = crate::surface_registry::pin_surface_id(principal, device);
+        pairing.put_device_account(device, subject).await.unwrap();
+        let (_, public) = crate::web_auth::test_jwt_keypair();
+        let web = crate::web_auth::JwtVerifier::with_keys(
+            crate::web_auth::OidcConfig {
+                issuer: "https://pin-admission.test".into(),
+                audience: None,
+                jwks_uri: "unused".into(),
+            },
+            [(
+                "pin-test".into(),
+                jsonwebtoken::DecodingKey::from_rsa_pem(public.as_bytes()).unwrap(),
+            )]
+            .into(),
+        );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
         let server = tokio::spawn(async move {
             tonic::transport::Server::builder()
-                .layer(AuthLayer::new(RequestAuthenticator::new(
-                    Authentication::EdgeAuthenticated(EdgeAuthentication::with_test_token(
-                        "provenance-model-test-edge",
-                    )),
-                )))
+                .layer(AuthLayer::new(
+                    RequestAuthenticator::new(Authentication::EdgeAuthenticated(
+                        EdgeAuthentication::with_test_token("provenance-model-test-edge"),
+                    ))
+                    .with_web(web),
+                ))
                 .add_service(pb::ai_bus_service_server::AiBusServiceServer::new(service))
                 .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async {
                     let _ = shutdown_rx.await;
@@ -2978,6 +3098,197 @@ mod tests {
         .await
         .expect("the loopback assistant client connects promptly")
         .unwrap();
+
+        tokio::time::timeout(Duration::from_secs(10), async {
+            for state in ["unapproved", "revoked", "transferred", "unpaired"] {
+                if state != "unapproved" {
+                    store
+                        .mutate_surface(
+                            principal,
+                            surface_id,
+                            crate::surface_registry::Mutation::ApprovePin {
+                                device_id: device.into(),
+                            },
+                        )
+                        .await
+                        .unwrap();
+                }
+                match state {
+                    "revoked" => {
+                        store
+                            .mutate_surface(
+                                principal,
+                                surface_id,
+                                crate::surface_registry::Mutation::RevokePin,
+                            )
+                            .await
+                            .unwrap();
+                    }
+                    "transferred" => {
+                        pairing
+                            .put_device_account(device, "other-owner")
+                            .await
+                            .unwrap();
+                    }
+                    "unpaired" => {
+                        pairing
+                            .delete_device_account(device, "other-owner")
+                            .await
+                            .unwrap();
+                    }
+                    _ => (),
+                }
+                assert_eq!(
+                    client
+                        .understand(authenticated(understanding()))
+                        .await
+                        .unwrap_err()
+                        .code(),
+                    tonic::Code::PermissionDenied,
+                    "{state}"
+                );
+                assert_eq!(
+                    client
+                        .encrypted_understand(authenticated(
+                            pb::EncryptedSynapseUnderstandingRequest::default()
+                        ))
+                        .await
+                        .unwrap_err()
+                        .code(),
+                    tonic::Code::PermissionDenied,
+                    "{state}"
+                );
+                assert_eq!(
+                    client
+                        .bidirectional_streaming_understand(authenticated(tokio_stream::empty::<
+                            pb::StreamingUnderstandRequest,
+                        >(
+                        )))
+                        .await
+                        .unwrap_err()
+                        .code(),
+                    tonic::Code::PermissionDenied,
+                    "{state}"
+                );
+                assert_eq!(
+                    client
+                        .encrypted_stream_ai_bus(authenticated(tokio_stream::empty::<
+                            pb::EncryptedAiRequest,
+                        >()))
+                        .await
+                        .unwrap_err()
+                        .code(),
+                    tonic::Code::PermissionDenied,
+                    "{state}"
+                );
+                assert_eq!(
+                    client
+                        .function_execution(authenticated(pb::FunctionCall {
+                            name: "CreateMemory".into(),
+                            utterance: "denied-canary".into(),
+                            ..Default::default()
+                        }))
+                        .await
+                        .unwrap_err()
+                        .code(),
+                    tonic::Code::PermissionDenied,
+                    "{state}"
+                );
+                assert!(model.0.lock().unwrap().is_empty());
+                macro_rules! denied {
+                    ($method:ident, $body:ty) => {
+                        assert_eq!(
+                            client
+                                .$method(authenticated(<$body>::default()))
+                                .await
+                                .unwrap_err()
+                                .code(),
+                            tonic::Code::PermissionDenied,
+                            "{}: {state}",
+                            stringify!($method)
+                        );
+                    };
+                }
+                denied!(
+                    server_stateful_understand,
+                    pb::ServerStatefulUnderstandRequest
+                );
+                denied!(encrypted_completion, pb::EncryptedCompletionRequest);
+                denied!(
+                    encrypted_chat_completion,
+                    pb::EncryptedChatCompletionRequest
+                );
+                denied!(analyze_image, pb::AnalyzeImageRequest);
+                denied!(encrypted_analyze_image, pb::EncryptedAnalyzeImageRequest);
+                denied!(
+                    encrypted_analyze_food_image,
+                    pb::EncryptedAnalyzeFoodImageRequest
+                );
+                denied!(
+                    encrypted_action_based_interstitial,
+                    pb::EncryptedActionBasedInterstitialRequest
+                );
+                denied!(
+                    encrypted_loading_message,
+                    pb::EncryptedLoadingMessageRequest
+                );
+                denied!(encrypted_function_execution, pb::EncryptedFunctionCall);
+                denied!(encrypted_geo_locate, pb::EncryptedGeoLocateRequest);
+                denied!(
+                    encrypted_reverse_geocode,
+                    pb::EncryptedReverseGeocodeRequest
+                );
+                denied!(
+                    encrypted_navigation_directions,
+                    pb::EncryptedNavigationDirectionsRequest
+                );
+                denied!(encrypted_nearby_search, pb::EncryptedNearbySearchRequest);
+                denied!(encrypted_weather, pb::EncryptedWeatherRequest);
+                denied!(encrypted_get_food_item, pb::EncryptedGetFoodItemRequest);
+                denied!(encrypted_smart_playlist, pb::EncryptedSmartPlaylistRequest);
+                denied!(translate, pb::EncryptedTranslateRequest);
+            }
+            pairing.put_device_account(device, subject).await.unwrap();
+            store
+                .mutate_surface(
+                    principal,
+                    surface_id,
+                    crate::surface_registry::Mutation::ApprovePin {
+                        device_id: device.into(),
+                    },
+                )
+                .await
+                .unwrap();
+            // An authenticated account without full DeviceUser provenance is
+            // not the approved Pin, even with the same claimed account.
+            let mut no_device = authenticated(understanding());
+            no_device.metadata_mut().insert(
+                EDGE_PRINCIPAL_HEADER,
+                "U:provenance-wearer-fixture".parse().unwrap(),
+            );
+            assert_eq!(
+                client.understand(no_device).await.unwrap_err().code(),
+                tonic::Code::PermissionDenied
+            );
+            let mut mixed = authenticated(understanding());
+            mixed
+                .metadata_mut()
+                .insert("authorization", "Bearer invalid".parse().unwrap());
+            assert_eq!(
+                client.understand(mixed).await.unwrap_err().code(),
+                tonic::Code::Unauthenticated
+            );
+            assert!(model.0.lock().unwrap().is_empty());
+        })
+        .await
+        .expect("denied transport requests terminate before models or tools");
+        assert_eq!(
+            observed_store
+                .assistant_private_accesses
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "denied requests cannot preload private notes, write notes, or read account context"
+        );
 
         tokio::time::timeout(Duration::from_secs(5), async {
             let mut plaintext = client
@@ -3053,6 +3364,13 @@ mod tests {
             .unwrap();
 
         let seen = model.0.lock().unwrap();
+        assert!(
+            observed_store
+                .assistant_private_accesses
+                .load(std::sync::atomic::Ordering::SeqCst)
+                > 0,
+            "the spy actually observes the old assistant memory preload when an approved request reaches it; privacy enforcement remains a subsequent replacement step"
+        );
         assert_eq!(
             seen.len(),
             3,
@@ -3133,7 +3451,7 @@ mod tests {
     #[tokio::test]
     async fn the_notes_quick_action_stores_what_the_wearer_said() {
         let store = crate::store::MemoryStore::shared();
-        let svc = AiBusMain {
+        let mut svc = AiBusMain {
             engine: Arc::new(crate::assistant::engine::Engine::new(Arc::new(
                 crate::assistant::llm::DemoChatModel,
             ))),
@@ -3141,20 +3459,21 @@ mod tests {
             directory: None,
             store: store.clone(),
             entitlements: Default::default(),
+            pairing: None,
         };
+        let authenticated = approve_test_pin(&mut svc, "wearer", "abcd1234").await;
 
         // AuthLayer inserts the principal in production; do the same here so the
         // wearer-scoped store path is exercised rather than the no-principal one.
-        let mut call = Request::new(pb::FunctionCall {
-            name: "CreateMemory".to_owned(),
-            // Exactly what the device sends: utterance set, arguments empty.
-            utterance: "the spare key is under the third pot".to_owned(),
-            arguments: String::new(),
-            ..Default::default()
-        });
-        call.extensions_mut().insert(
-            cosmos_core::AuthenticatedPrincipal::from_edge("V:01:D:test-pin:U:wearer")
-                .expect("principal"),
+        let call = admitted_request(
+            pb::FunctionCall {
+                name: "CreateMemory".to_owned(),
+                // Exactly what the device sends: utterance set, arguments empty.
+                utterance: "the spare key is under the third pot".to_owned(),
+                arguments: String::new(),
+                ..Default::default()
+            },
+            &authenticated,
         );
         let spoken = svc
             .function_execution(call)
@@ -3169,7 +3488,11 @@ mod tests {
 
         // The claim that matters: it is actually there afterwards.
         let found = store
-            .search_notes("V:01:D:test-pin:U:wearer", "spare key", 5)
+            .search_notes(
+                authenticated.principal.expose_for_authorization(),
+                "spare key",
+                5,
+            )
             .await
             .expect("search runs");
         assert!(
@@ -3201,13 +3524,15 @@ mod tests {
         let model = Arc::new(CapturingModel {
             seen: std::sync::Mutex::new(None),
         });
-        let svc = AiBusMain {
+        let mut svc = AiBusMain {
             engine: Arc::new(crate::assistant::engine::Engine::new(model.clone())),
             keys: keys.clone(),
             directory: None,
             store: crate::store::MemoryStore::shared(),
             entitlements: Default::default(),
+            pairing: None,
         };
+        let authenticated = approve_test_pin(&mut svc, "wearer", "abcd1234").await;
 
         let chat = pb::ChatCompletionRequest {
             messages: vec![pb::ChatCompletionMessage {
@@ -3225,16 +3550,19 @@ mod tests {
             .seal("kid-test", &chat.encode_to_vec(), b"")
             .expect("seal chat request");
         let response = svc
-            .encrypted_chat_completion(Request::new(pb::EncryptedChatCompletionRequest {
-                request: Some(cosmos_protocol::common::encryption::EncryptedData {
-                    encryption_information: Some(
-                        cosmos_protocol::common::encryption::EncryptionInformation {
-                            kid: sealed.kid,
-                        },
-                    ),
-                    data: sealed.data,
-                }),
-            }))
+            .encrypted_chat_completion(admitted_request(
+                pb::EncryptedChatCompletionRequest {
+                    request: Some(cosmos_protocol::common::encryption::EncryptedData {
+                        encryption_information: Some(
+                            cosmos_protocol::common::encryption::EncryptionInformation {
+                                kid: sealed.kid,
+                            },
+                        ),
+                        data: sealed.data,
+                    }),
+                },
+                &authenticated,
+            ))
             .await
             .expect("chat completion answers")
             .into_inner()
@@ -3320,6 +3648,7 @@ mod tests {
             keys: Default::default(),
             directory: None,
             store: crate::store::MemoryStore::shared(),
+            pairing: None,
             entitlements: Default::default(),
         };
         let message = svc
@@ -3509,6 +3838,7 @@ mod tests {
             directory: None,
             store: crate::store::MemoryStore::shared(),
             entitlements: Default::default(),
+            pairing: None,
         };
         let chat = pb::ChatCompletionRequest {
             messages: vec![pb::ChatCompletionMessage {
@@ -3560,13 +3890,15 @@ mod tests {
         let model = Arc::new(CapturingModel {
             seen: std::sync::Mutex::new(None),
         });
-        let svc = AiBusMain {
+        let mut svc = AiBusMain {
             engine: Arc::new(crate::assistant::engine::Engine::new(model.clone())),
             keys: Default::default(),
             directory: None,
             store: crate::store::MemoryStore::shared(),
             entitlements: Default::default(),
+            pairing: None,
         };
+        let authenticated = approve_test_pin(&mut svc, "wearer", "abcd1234").await;
         let chat = pb::ChatCompletionRequest {
             messages: vec![pb::ChatCompletionMessage {
                 role: "user".to_owned(),
@@ -3580,16 +3912,19 @@ mod tests {
             ..Default::default()
         };
         let response = svc
-            .encrypted_chat_completion(Request::new(pb::EncryptedChatCompletionRequest {
-                request: Some(cosmos_protocol::common::encryption::EncryptedData {
-                    encryption_information: Some(
-                        cosmos_protocol::common::encryption::EncryptionInformation {
-                            kid: "humane.aibus.ChatCompletionRequest".to_owned(),
-                        },
-                    ),
-                    data: chat.encode_to_vec(),
-                }),
-            }))
+            .encrypted_chat_completion(admitted_request(
+                pb::EncryptedChatCompletionRequest {
+                    request: Some(cosmos_protocol::common::encryption::EncryptedData {
+                        encryption_information: Some(
+                            cosmos_protocol::common::encryption::EncryptionInformation {
+                                kid: "humane.aibus.ChatCompletionRequest".to_owned(),
+                            },
+                        ),
+                        data: chat.encode_to_vec(),
+                    }),
+                },
+                &authenticated,
+            ))
             .await
             .expect("the Food Hook plaintext request must not require a channel key")
             .into_inner()
@@ -3719,24 +4054,29 @@ mod tests {
                 extra_tool_calls: Vec::new(),
             },
         ]));
-        let svc = AiBusMain {
+        let mut svc = AiBusMain {
             engine: Arc::new(Engine::new(model)),
             keys: Default::default(),
             directory: None,
             store: crate::store::MemoryStore::shared(),
             entitlements: Default::default(),
+            pairing: None,
         };
+        let authenticated = approve_test_pin(&mut svc, "wearer", "abcd1234").await;
 
         let response = svc
-            .server_stateful_understand(Request::new(pb::ServerStatefulUnderstandRequest {
-                response_format: pb::server_stateful_understand_request::ResponseFormat::Text
-                    as i32,
-                userrequest: Some(
-                    pb::server_stateful_understand_request::Userrequest::Transcription(
-                        "Set a timer for one minute.".to_owned(),
+            .server_stateful_understand(admitted_request(
+                pb::ServerStatefulUnderstandRequest {
+                    response_format: pb::server_stateful_understand_request::ResponseFormat::Text
+                        as i32,
+                    userrequest: Some(
+                        pb::server_stateful_understand_request::Userrequest::Transcription(
+                            "Set a timer for one minute.".to_owned(),
+                        ),
                     ),
-                ),
-            }))
+                },
+                &authenticated,
+            ))
             .await
             .expect("text transport should recover to Respond")
             .into_inner();
@@ -3768,21 +4108,22 @@ mod tests {
             }),
             extra_tool_calls: Vec::new(),
         }]));
-        let service = AiBusMain {
+        let mut service = AiBusMain {
             engine: Arc::new(Engine::new(model)),
             keys: Default::default(),
             directory: None,
             store: crate::store::MemoryStore::shared(),
             entitlements: Default::default(),
+            pairing: None,
         };
+        let authenticated = approve_test_pin(&mut service, "wearer", "abcd1234").await;
 
-        let mut request = Request::new(pb::SynapseUnderstandingRequest {
-            utterance: "what time is it".to_owned(),
-            ..Default::default()
-        });
-        request.extensions_mut().insert(
-            cosmos_core::AuthenticatedPrincipal::from_edge("V:01:D:test-pin:U:wearer")
-                .expect("trusted device principal"),
+        let request = admitted_request(
+            pb::SynapseUnderstandingRequest {
+                utterance: "what time is it".to_owned(),
+                ..Default::default()
+            },
+            &authenticated,
         );
         let messages = service
             .understand(request)
@@ -3821,7 +4162,8 @@ mod tests {
         let keys: crate::keymaterial::SharedKeyMaterial = Default::default();
         keys.insert("kid-test".to_owned(), [3u8; cosmos_crypto::AES_KEY_LEN])
             .expect("insert test channel key");
-        let svc = AiBusMain::with_key_material(keys.clone());
+        let mut svc = AiBusMain::with_key_material(keys.clone());
+        let authenticated = approve_test_pin(&mut svc, "wearer", "abcd1234").await;
 
         // Device side: seal a real request under the channel key.
         let inner = pb::SynapseUnderstandingRequest {
@@ -3833,17 +4175,20 @@ mod tests {
             .expect("seal request");
 
         let stream = svc
-            .encrypted_understand(Request::new(pb::EncryptedSynapseUnderstandingRequest {
-                request: Some(cosmos_protocol::common::encryption::EncryptedData {
-                    encryption_information: Some(
-                        cosmos_protocol::common::encryption::EncryptionInformation {
-                            kid: sealed.kid.clone(),
-                        },
-                    ),
-                    data: sealed.data,
-                }),
-                location: None,
-            }))
+            .encrypted_understand(admitted_request(
+                pb::EncryptedSynapseUnderstandingRequest {
+                    request: Some(cosmos_protocol::common::encryption::EncryptedData {
+                        encryption_information: Some(
+                            cosmos_protocol::common::encryption::EncryptionInformation {
+                                kid: sealed.kid.clone(),
+                            },
+                        ),
+                        data: sealed.data,
+                    }),
+                    location: None,
+                },
+                &authenticated,
+            ))
             .await
             .map_err(|e| format!("encrypted stream: {e}"))
             .unwrap()
@@ -3888,7 +4233,8 @@ mod tests {
         let directory = Arc::new(crate::keydirectory::KeyDirectory::in_memory());
         directory.put(kid, key).await.expect("seed authority");
         let local: crate::keymaterial::SharedKeyMaterial = Default::default();
-        let svc = AiBusMain::with_key_material(local.clone()).with_key_directory(directory);
+        let mut svc = AiBusMain::with_key_material(local.clone()).with_key_directory(directory);
+        let authenticated = approve_test_pin(&mut svc, "wearer", "abcd1234").await;
         let inner = pb::SynapseUnderstandingRequest {
             utterance: "hello".to_owned(),
             ..Default::default()
@@ -3897,17 +4243,20 @@ mod tests {
             .expect("seal directory-only request");
 
         let messages = svc
-            .encrypted_understand(Request::new(pb::EncryptedSynapseUnderstandingRequest {
-                request: Some(cosmos_protocol::common::encryption::EncryptedData {
-                    encryption_information: Some(
-                        cosmos_protocol::common::encryption::EncryptionInformation {
-                            kid: kid.to_owned(),
-                        },
-                    ),
-                    data: sealed.data,
-                }),
-                location: None,
-            }))
+            .encrypted_understand(admitted_request(
+                pb::EncryptedSynapseUnderstandingRequest {
+                    request: Some(cosmos_protocol::common::encryption::EncryptedData {
+                        encryption_information: Some(
+                            cosmos_protocol::common::encryption::EncryptionInformation {
+                                kid: kid.to_owned(),
+                            },
+                        ),
+                        data: sealed.data,
+                    }),
+                    location: None,
+                },
+                &authenticated,
+            ))
             .await
             .expect("directory row opens request")
             .into_inner()
@@ -3985,19 +4334,23 @@ mod tests {
 
         let directory = Arc::new(crate::keydirectory::KeyDirectory::in_memory());
         directory.fail_next(DirectoryFault::Get);
-        let svc = AiBusMain::default().with_key_directory(directory);
+        let mut svc = AiBusMain::default().with_key_directory(directory);
+        let authenticated = approve_test_pin(&mut svc, "wearer", "abcd1234").await;
         let result = svc
-            .encrypted_understand(Request::new(pb::EncryptedSynapseUnderstandingRequest {
-                request: Some(cosmos_protocol::common::encryption::EncryptedData {
-                    encryption_information: Some(
-                        cosmos_protocol::common::encryption::EncryptionInformation {
-                            kid: "unavailable-directory".to_owned(),
-                        },
-                    ),
-                    data: Vec::new(),
-                }),
-                location: None,
-            }))
+            .encrypted_understand(admitted_request(
+                pb::EncryptedSynapseUnderstandingRequest {
+                    request: Some(cosmos_protocol::common::encryption::EncryptedData {
+                        encryption_information: Some(
+                            cosmos_protocol::common::encryption::EncryptionInformation {
+                                kid: "unavailable-directory".to_owned(),
+                            },
+                        ),
+                        data: Vec::new(),
+                    }),
+                    location: None,
+                },
+                &authenticated,
+            ))
             .await;
         let error = match result {
             Err(error) => error,
@@ -4018,7 +4371,8 @@ mod tests {
         let keys: crate::keymaterial::SharedKeyMaterial = Default::default();
         keys.insert("kid-test".to_owned(), [5u8; cosmos_crypto::AES_KEY_LEN])
             .expect("insert test channel key");
-        let svc = AiBusMain::with_key_material(keys.clone());
+        let mut svc = AiBusMain::with_key_material(keys.clone());
+        let authenticated = approve_test_pin(&mut svc, "wearer", "abcd1234").await;
 
         let inner = pb::SynapseUnderstandingRequest {
             utterance: "hello".to_owned(),
@@ -4028,17 +4382,20 @@ mod tests {
             .seal("kid-test", &inner.encode_to_vec(), b"")
             .expect("seal request");
         let stream = svc
-            .encrypted_understand(Request::new(pb::EncryptedSynapseUnderstandingRequest {
-                request: Some(cosmos_protocol::common::encryption::EncryptedData {
-                    encryption_information: Some(
-                        cosmos_protocol::common::encryption::EncryptionInformation {
-                            kid: sealed.kid.clone(),
-                        },
-                    ),
-                    data: sealed.data,
-                }),
-                location: None,
-            }))
+            .encrypted_understand(admitted_request(
+                pb::EncryptedSynapseUnderstandingRequest {
+                    request: Some(cosmos_protocol::common::encryption::EncryptedData {
+                        encryption_information: Some(
+                            cosmos_protocol::common::encryption::EncryptionInformation {
+                                kid: sealed.kid.clone(),
+                            },
+                        ),
+                        data: sealed.data,
+                    }),
+                    location: None,
+                },
+                &authenticated,
+            ))
             .await
             .map_err(|e| format!("encrypted stream: {e}"))
             .unwrap()
@@ -4077,12 +4434,16 @@ mod tests {
     /// condition (`aibus/AIBusService.java:241`).
     #[tokio::test]
     async fn encrypted_understand_without_a_channel_key_is_a_channel_failure() {
-        let svc = AiBusMain::default();
+        let mut svc = AiBusMain::default();
+        let authenticated = approve_test_pin(&mut svc, "wearer", "abcd1234").await;
         let err = svc
-            .encrypted_understand(Request::new(pb::EncryptedSynapseUnderstandingRequest {
-                request: Some(cosmos_protocol::common::encryption::EncryptedData::default()),
-                location: None,
-            }))
+            .encrypted_understand(admitted_request(
+                pb::EncryptedSynapseUnderstandingRequest {
+                    request: Some(cosmos_protocol::common::encryption::EncryptedData::default()),
+                    location: None,
+                },
+                &authenticated,
+            ))
             .await;
         let err = match err {
             Err(e) => e,
@@ -4111,7 +4472,8 @@ mod tests {
         let keys: crate::keymaterial::SharedKeyMaterial = Default::default();
         keys.insert("kid-test".to_owned(), [7u8; cosmos_crypto::AES_KEY_LEN])
             .expect("insert test channel key");
-        let svc = AiBusMain::with_key_material(keys.clone());
+        let mut svc = AiBusMain::with_key_material(keys.clone());
+        let authenticated = approve_test_pin(&mut svc, "wearer", "abcd1234").await;
 
         // Every envelope/channel fault on this service, plus its no-key case.
         let mut faults: Vec<(&str, Status)> = Vec::new();
@@ -4127,10 +4489,13 @@ mod tests {
         };
         faults.push((
             "encrypted_understand / corrupt envelope",
-            svc.encrypted_understand(Request::new(pb::EncryptedSynapseUnderstandingRequest {
-                request: Some(corrupt.clone()),
-                location: None,
-            }))
+            svc.encrypted_understand(admitted_request(
+                pb::EncryptedSynapseUnderstandingRequest {
+                    request: Some(corrupt.clone()),
+                    location: None,
+                },
+                &authenticated,
+            ))
             .await
             .err()
             .expect("a corrupt envelope must not stream"),
@@ -4139,9 +4504,12 @@ mod tests {
         // The shared `open_request` path every other `Encrypted*` tool RPC uses.
         faults.push((
             "encrypted_completion / corrupt envelope",
-            svc.encrypted_completion(Request::new(pb::EncryptedCompletionRequest {
-                request: Some(corrupt),
-            }))
+            svc.encrypted_completion(admitted_request(
+                pb::EncryptedCompletionRequest {
+                    request: Some(corrupt),
+                },
+                &authenticated,
+            ))
             .await
             .expect_err("a corrupt envelope must not answer"),
         ));
@@ -4160,34 +4528,46 @@ mod tests {
             .expect("seal under the stranger's key");
         faults.push((
             "encrypted_understand / foreign key",
-            svc.encrypted_understand(Request::new(pb::EncryptedSynapseUnderstandingRequest {
-                request: Some(cosmos_protocol::common::encryption::EncryptedData {
-                    encryption_information: Some(
-                        cosmos_protocol::common::encryption::EncryptionInformation {
-                            kid: foreign.kid,
-                        },
-                    ),
-                    data: foreign.data,
-                }),
-                location: None,
-            }))
+            svc.encrypted_understand(admitted_request(
+                pb::EncryptedSynapseUnderstandingRequest {
+                    request: Some(cosmos_protocol::common::encryption::EncryptedData {
+                        encryption_information: Some(
+                            cosmos_protocol::common::encryption::EncryptionInformation {
+                                kid: foreign.kid,
+                            },
+                        ),
+                        data: foreign.data,
+                    }),
+                    location: None,
+                },
+                &authenticated,
+            ))
             .await
             .err()
             .expect("a foreign envelope must not stream"),
         ));
 
         // No key exchange at all.
-        faults.push((
-            "encrypted_understand / no channel key",
-            AiBusMain::default()
-                .encrypted_understand(Request::new(pb::EncryptedSynapseUnderstandingRequest {
-                    request: Some(cosmos_protocol::common::encryption::EncryptedData::default()),
-                    location: None,
-                }))
-                .await
-                .err()
-                .expect("no channel key must not stream"),
-        ));
+        let mut no_keys = AiBusMain::default();
+        let no_keys_authenticated = approve_test_pin(&mut no_keys, "wearer", "abcd1234").await;
+        faults.push(
+            (
+                "encrypted_understand / no channel key",
+                no_keys
+                    .encrypted_understand(admitted_request(
+                        pb::EncryptedSynapseUnderstandingRequest {
+                            request: Some(
+                                cosmos_protocol::common::encryption::EncryptedData::default(),
+                            ),
+                            location: None,
+                        },
+                        &no_keys_authenticated,
+                    ))
+                    .await
+                    .err()
+                    .expect("no channel key must not stream"),
+            ),
+        );
 
         for (what, status) in &faults {
             assert_ne!(
@@ -4418,20 +4798,24 @@ mod tests {
 
     #[tokio::test]
     async fn assistant_rpcs_are_stock_shaped_and_model_backed() {
-        let svc = AiBusMain::default();
+        let mut svc = AiBusMain::default();
+        let authenticated = approve_test_pin(&mut svc, "wearer", "abcd1234").await;
 
         // Stateful understand now returns a stock-shaped terminal response for
         // text mode and never emits a fake payload.
         let stateful = svc
-            .server_stateful_understand(Request::new(pb::ServerStatefulUnderstandRequest {
-                response_format: pb::server_stateful_understand_request::ResponseFormat::Text
-                    as i32,
-                userrequest: Some(
-                    pb::server_stateful_understand_request::Userrequest::Transcription(
-                        "hello".to_owned(),
+            .server_stateful_understand(admitted_request(
+                pb::ServerStatefulUnderstandRequest {
+                    response_format: pb::server_stateful_understand_request::ResponseFormat::Text
+                        as i32,
+                    userrequest: Some(
+                        pb::server_stateful_understand_request::Userrequest::Transcription(
+                            "hello".to_owned(),
+                        ),
                     ),
-                ),
-            }))
+                },
+                &authenticated,
+            ))
             .await
             .expect("server_stateful_understand works for text format")
             .into_inner();
@@ -4449,10 +4833,13 @@ mod tests {
         // consumer dispatches + speaks — NOT a bare Answer/Failure body it drops).
         use tokio_stream::StreamExt;
         let stream = svc
-            .understand(Request::new(pb::SynapseUnderstandingRequest {
-                utterance: "hello".to_owned(),
-                ..Default::default()
-            }))
+            .understand(admitted_request(
+                pb::SynapseUnderstandingRequest {
+                    utterance: "hello".to_owned(),
+                    ..Default::default()
+                },
+                &authenticated,
+            ))
             .await
             .expect("understand returns a stream")
             .into_inner();
@@ -4497,7 +4884,10 @@ mod tests {
 
         // The deterministic test RPCs return well-formed, stock-shaped Ok.
         let action = svc
-            .action_execution_test(Request::new(pb::ActionExecutionTestRequest::default()))
+            .action_execution_test(admitted_request(
+                pb::ActionExecutionTestRequest::default(),
+                &authenticated,
+            ))
             .await
             .expect("action_execution_test ok")
             .into_inner();
@@ -4505,10 +4895,13 @@ mod tests {
         assert!(!action.error_message.is_empty());
 
         let repaired = svc
-            .transcription_repair_test(Request::new(pb::TranscriptionRepairTestRequest {
-                transcription: "play the best song by miles davis".to_owned(),
-                immutable_tokens: Vec::new(),
-            }))
+            .transcription_repair_test(admitted_request(
+                pb::TranscriptionRepairTestRequest {
+                    transcription: "play the best song by miles davis".to_owned(),
+                    immutable_tokens: Vec::new(),
+                },
+                &authenticated,
+            ))
             .await
             .expect("transcription_repair_test ok")
             .into_inner();
@@ -4526,7 +4919,8 @@ mod tests {
         let keys: crate::keymaterial::SharedKeyMaterial = Default::default();
         keys.insert("kid-test".to_owned(), [3u8; cosmos_crypto::AES_KEY_LEN])
             .expect("insert test channel key");
-        let svc = AiBusMain::with_key_material(keys.clone());
+        let mut svc = AiBusMain::with_key_material(keys.clone());
+        let authenticated = approve_test_pin(&mut svc, "wearer", "abcd1234").await;
 
         let completion = pb::CompletionRequest {
             prompt: "Summarize this one-liner".to_owned(),
@@ -4536,16 +4930,19 @@ mod tests {
             .seal("kid-test", &completion.encode_to_vec(), b"")
             .expect("seal completion request");
         let completion = svc
-            .encrypted_completion(Request::new(pb::EncryptedCompletionRequest {
-                request: Some(cosmos_protocol::common::encryption::EncryptedData {
-                    encryption_information: Some(
-                        cosmos_protocol::common::encryption::EncryptionInformation {
-                            kid: completion_sealed.kid,
-                        },
-                    ),
-                    data: completion_sealed.data,
-                }),
-            }))
+            .encrypted_completion(admitted_request(
+                pb::EncryptedCompletionRequest {
+                    request: Some(cosmos_protocol::common::encryption::EncryptedData {
+                        encryption_information: Some(
+                            cosmos_protocol::common::encryption::EncryptionInformation {
+                                kid: completion_sealed.kid,
+                            },
+                        ),
+                        data: completion_sealed.data,
+                    }),
+                },
+                &authenticated,
+            ))
             .await
             .expect("encrypted_completion should return a typed response")
             .into_inner()
@@ -4580,16 +4977,19 @@ mod tests {
             .seal("kid-test", &chat.encode_to_vec(), b"")
             .expect("seal chat request");
         let chat = svc
-            .encrypted_chat_completion(Request::new(pb::EncryptedChatCompletionRequest {
-                request: Some(cosmos_protocol::common::encryption::EncryptedData {
-                    encryption_information: Some(
-                        cosmos_protocol::common::encryption::EncryptionInformation {
-                            kid: chat_sealed.kid,
-                        },
-                    ),
-                    data: chat_sealed.data,
-                }),
-            }))
+            .encrypted_chat_completion(admitted_request(
+                pb::EncryptedChatCompletionRequest {
+                    request: Some(cosmos_protocol::common::encryption::EncryptedData {
+                        encryption_information: Some(
+                            cosmos_protocol::common::encryption::EncryptionInformation {
+                                kid: chat_sealed.kid,
+                            },
+                        ),
+                        data: chat_sealed.data,
+                    }),
+                },
+                &authenticated,
+            ))
             .await
             .expect("encrypted_chat_completion should return a typed response")
             .into_inner()
@@ -4625,24 +5025,17 @@ mod tests {
 
     #[tokio::test]
     async fn function_execution_runs_server_tools_without_secret_keys() {
-        // The AuthLayer normally injects this; a unit test must supply it or the
-        // tool correctly refuses to touch anyone's data.
-        fn authenticated<T>(body: T) -> Request<T> {
-            let mut request = Request::new(body);
-            request.extensions_mut().insert(
-                cosmos_core::AuthenticatedPrincipal::from_edge("test-wearer")
-                    .expect("valid principal"),
-            );
-            request
-        }
-
-        let svc = AiBusMain::default();
+        let mut svc = AiBusMain::default();
+        let authenticated = approve_test_pin(&mut svc, "wearer", "abcd1234").await;
         let response = svc
-            .function_execution(authenticated(pb::FunctionCall {
-                name: "recall_memory".to_owned(),
-                arguments: r#"{"query":"anything"}"#.to_owned(),
-                ..Default::default()
-            }))
+            .function_execution(admitted_request(
+                pb::FunctionCall {
+                    name: "recall_memory".to_owned(),
+                    arguments: r#"{"query":"anything"}"#.to_owned(),
+                    ..Default::default()
+                },
+                &authenticated,
+            ))
             .await
             .expect("function_execution should run")
             .into_inner();
@@ -4654,21 +5047,13 @@ mod tests {
 
     #[tokio::test]
     async fn encrypted_function_execution_runs_server_tools() {
-        fn authenticated<T>(body: T) -> Request<T> {
-            let mut request = Request::new(body);
-            request.extensions_mut().insert(
-                cosmos_core::AuthenticatedPrincipal::from_edge("test-wearer")
-                    .expect("valid principal"),
-            );
-            request
-        }
-
         use prost::Message as _;
 
         let keys: crate::keymaterial::SharedKeyMaterial = Default::default();
         keys.insert("kid-test".to_owned(), [3u8; cosmos_crypto::AES_KEY_LEN])
             .expect("insert test channel key");
-        let svc = AiBusMain::with_key_material(keys.clone());
+        let mut svc = AiBusMain::with_key_material(keys.clone());
+        let authenticated = approve_test_pin(&mut svc, "wearer", "abcd1234").await;
 
         let call = pb::FunctionCall {
             name: "recall_memory".to_owned(),
@@ -4680,17 +5065,20 @@ mod tests {
             .expect("seal request");
 
         let response = svc
-            .encrypted_function_execution(authenticated(pb::EncryptedFunctionCall {
-                function_call: Some(cosmos_protocol::common::encryption::EncryptedData {
-                    encryption_information: Some(
-                        cosmos_protocol::common::encryption::EncryptionInformation {
-                            kid: sealed.kid.clone(),
-                        },
-                    ),
-                    data: sealed.data,
-                }),
-                location: None,
-            }))
+            .encrypted_function_execution(admitted_request(
+                pb::EncryptedFunctionCall {
+                    function_call: Some(cosmos_protocol::common::encryption::EncryptedData {
+                        encryption_information: Some(
+                            cosmos_protocol::common::encryption::EncryptionInformation {
+                                kid: sealed.kid.clone(),
+                            },
+                        ),
+                        data: sealed.data,
+                    }),
+                    location: None,
+                },
+                &authenticated,
+            ))
             .await
             .expect("encrypted_function_execution should run")
             .into_inner()
@@ -4792,8 +5180,13 @@ mod tests {
 
     #[tokio::test]
     async fn upload_requires_a_real_use_case_before_contacting_a_signer() {
-        let err = AiBusMain::default()
-            .upload_file(Request::new(pb::UploadFileRequest::default()))
+        let mut service = AiBusMain::default();
+        let authenticated = approve_test_pin(&mut service, "wearer", "abcd1234").await;
+        let err = service
+            .upload_file(admitted_request(
+                pb::UploadFileRequest::default(),
+                &authenticated,
+            ))
             .await
             .expect_err("unset upload must not mint a placeholder URL");
         assert_eq!(err.code(), tonic::Code::InvalidArgument);

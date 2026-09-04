@@ -35,6 +35,38 @@
   ],
   "evidence": [
     {
+      "id": "retired-browser-assistant-boundary-definition",
+      "kind": "implementation",
+      "path": "cosmos/crates/cosmos/src/http.rs",
+      "anchor": "async fn browser_assistant_unavailable(",
+      "scope": "Removes the legacy browser-to-Pin control, simulated device, raw trace and arbitrary speech paths; existing authenticated browser routes return bounded unavailable responses without model, tool or private-store access.",
+      "limitation": "An unavailable boundary is not a functioning browser assistant or presentation surface. Genuine browser runtime ingress and the replacement production evaluator remain required before deployment."
+    },
+    {
+      "id": "pin-runtime-admission-definition",
+      "kind": "implementation",
+      "path": "cosmos/crates/cosmos/src/pin_admission.rs",
+      "anchor": "pub async fn admit(",
+      "scope": "Requires typed authenticated device provenance, current pairing ownership and the active fixed-profile Pin binding in the shared registry before stock assistant admission; long-lived messages recheck the same boundary.",
+      "limitation": "Admission only, not full runtime policy. Approved callers still reach legacy orchestration/memory; no actor authentication, private-origin clearance, stock boot epoch/sequence, in-flight cancellation or dispatch-time guarantee."
+    },
+    {
+      "id": "pin-manifest-definition",
+      "kind": "implementation",
+      "path": "cosmos/crates/cosmos/src/surface_registry.rs",
+      "anchor": "pub fn pin_manifest()",
+      "scope": "Defines owner-approved shared speech, unknown actor/occupancy, class-zero cognition and no hints/reflexes within the existing registry; browser credentials cannot update a Pin binding.",
+      "limitation": "The stock Respond-to-TTS seam is known but rendering/playback, secure input, epoch/sequence, laser and haptic behavior are not established by this profile. The combined registry cap remains 16 approvals."
+    },
+    {
+      "id": "pin-registry-durability-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/store_postgres.rs",
+      "anchor": "async fn pin_admission_postgres_reopen_revoke_chain_and_rollback()",
+      "scope": "Defines actual PostgreSQL Pin record reopen/revoke and failed-append rollback with a mixed browser-v1/Pin-v2 event chain and unchanged v1 hashes.",
+      "limitation": "Test definition only, not an execution report. No checkpoint anchors, complete decision ledger, provider or physical Pin acceptance."
+    },
+    {
       "id": "authenticated-device-provenance-definition",
       "kind": "implementation",
       "path": "cosmos/crates/cosmos/src/config.rs",
@@ -127,7 +159,7 @@
       "requirement": "Routing and policy decisions retain rationale in a verifiable, tamper-evident durable history.",
       "acceptance": "Verify append-before-dispatch, ordering, reopen, tamper/removal detection, signed checkpoints and independently countersigned or protected checkpoint anchors.",
       "status": "partial",
-      "evidence": ["registry-atomic-append-test-definition"]
+      "evidence": ["registry-atomic-append-test-definition", "pin-registry-durability-test-definition"]
     },
     {
       "id": "invariant-06",
@@ -189,8 +221,8 @@
       "sourceSections": ["4.1", "9.2"],
       "requirement": "A newly present, unenrolled device gains neither private content nor hint admission from favorable self-declarations.",
       "acceptance": "Exercise admission, re-enrollment, manifest updates and revocation; default to shared-perceivable, class zero, no hints and no lead eligibility.",
-      "status": "pending",
-      "evidence": []
+      "status": "partial",
+      "evidence": ["pin-runtime-admission-definition", "stock-transport-provenance-test-definition"]
     },
     {
       "id": "surface-manifest",
@@ -199,7 +231,7 @@
       "requirement": "Declare capabilities, constraints, per-channel posture, expression, cognition and bounded authority; enrollment attests asserted posture and registry-owned trust is separate.",
       "acceptance": "Validate dynamic state and capabilities without product-name privileges; expression eligibility respects the user's perceptual profile and has one expression lead.",
       "status": "partial",
-      "evidence": ["browser-manifest-definition", "browser-enrollment-auth-test-definition"]
+      "evidence": ["browser-manifest-definition", "browser-enrollment-auth-test-definition", "pin-manifest-definition"]
     },
     {
       "id": "origin-provenance",
@@ -208,7 +240,7 @@
       "requirement": "Bind each request to authenticated principal, origin, modality, state, environment, device/channel/actor trust, server receipt time, epoch and sequence.",
       "acceptance": "Preserve Pin device identity before account normalization; do not trust device clocks or body-supplied identity, and test replay/freshness plus scoped self-echo rejection.",
       "status": "partial",
-      "evidence": ["authenticated-device-provenance-definition", "stock-transport-provenance-test-definition"]
+      "evidence": ["authenticated-device-provenance-definition", "stock-transport-provenance-test-definition", "pin-runtime-admission-definition"]
     },
     {
       "id": "cognition-authority",
@@ -307,7 +339,7 @@
       "requirement": "Center is a registered rendering surface separately from its read-only observer role, providing the first two-surface Pin-to-browser interaction.",
       "acceptance": "Render a routed card and correlate its acknowledgment; hidden, locked, disconnected and stale pages cannot report a successful current render.",
       "status": "partial",
-      "evidence": ["center-enrollment-lifecycle-definition"]
+      "evidence": ["center-enrollment-lifecycle-definition", "retired-browser-assistant-boundary-definition"]
     },
     {
       "id": "macos-surface",
@@ -332,7 +364,7 @@
       "basis": "cosmos-product",
       "sourceSections": ["9.2"],
       "requirement": "Deploy only the authenticated tagged operator release and matching verified five-APK set; retain stock wire/package identities and require physical acceptance for changed Pin behavior.",
-      "acceptance": "Run focused and broad checks, production doctor/dry-run/deploy/verify, then confirm the intended release and production environment at cosmos.andersmadsen.dk. Metadata tests or endpoint health alone cannot establish Ambiance conformance.",
+      "acceptance": "Run focused and broad checks, production doctor/dry-run/deploy/verify, then confirm the intended release and production environment at the existing https://center.andersmadsen.dk/ origin. No new domain or identity migration is requested. Metadata tests or endpoint health alone cannot establish Ambiance conformance.",
       "status": "pending",
       "evidence": []
     }

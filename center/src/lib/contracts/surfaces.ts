@@ -35,7 +35,7 @@ export function record(value: unknown): Record<string, unknown> {
 export function integer(value: unknown, minimum = 0): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= minimum;
 }
-function exact(value: unknown, expected: unknown): boolean {
+export function exact(value: unknown, expected: unknown): boolean {
   if (Array.isArray(expected)) return Array.isArray(value) && value.length === expected.length && expected.every((item, index) => exact(value[index], item));
   if (expected && typeof expected === "object") {
     if (!value || typeof value !== "object" || Array.isArray(value)) return false;

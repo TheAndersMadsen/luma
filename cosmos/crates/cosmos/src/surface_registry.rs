@@ -19,6 +19,10 @@ pub enum RegistryError {
 
 /// Credentials intentionally have no Debug implementation.
 pub enum Mutation {
+    ApprovePin {
+        device_id: String,
+    },
+    RevokePin,
     Approve {
         token_hash: String,
         incarnation: Uuid,
@@ -36,8 +40,29 @@ pub enum Mutation {
     Revoke,
 }
 
+/// Runtime binding, never inferred from a caller's claimed surface identifier.
+#[derive(Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "profile", rename_all = "snake_case")]
+pub enum Binding {
+    #[default]
+    Browser,
+    Pin {
+        device_id: String,
+    },
+}
+impl std::fmt::Debug for Binding {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Browser => "Browser",
+            Self::Pin { .. } => "Pin([REDACTED])",
+        })
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Record {
+    #[serde(default)]
+    pub binding: Binding,
     pub approved_manifest: serde_json::Value,
     pub surface_id: Uuid,
     pub revision: u64,
@@ -54,6 +79,8 @@ pub struct Record {
 #[derive(Clone, Debug, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Surface {
+    #[serde(skip)]
+    pub binding: Binding,
     pub surface_id: Uuid,
     pub name: &'static str,
     pub revision: u64,
@@ -77,8 +104,13 @@ impl Record {
             && now < self.connection_expires_at
             && now < self.lease_expires_at;
         Surface {
+            binding: self.binding.clone(),
             surface_id: self.surface_id,
-            name: "Browser display",
+            name: if matches!(self.binding, Binding::Pin { .. }) {
+                "Ai Pin"
+            } else {
+                "Browser display"
+            },
             revision: self.revision,
             manifest: self.approved_manifest.clone(),
             trust_level: 0,
@@ -92,6 +124,69 @@ impl Record {
             connection_expires_at: self.connection_expires_at,
             lease_expires_at: self.lease_expires_at,
         }
+    }
+}
+
+pub const PIN_APPROVAL: &str = "pin-shared-speech-v1";
+
+pub fn pin_manifest() -> serde_json::Value {
+    serde_json::json!({
+        "class": "wearable",
+        "capabilities": {"input": ["user.request"], "output": {"audio.tts": {"maxClass": "shared_room", "shared": true}}},
+        "constraints": ["actor_unknown", "occupancy_unknown", "render_unverified", "playback_unverified", "no_verified_epoch_sequence"],
+        "expression": {},
+        "cognition": {"declaredClass": 0, "models": []},
+        "authority": {"mayOriginate": ["user.request"], "reflexive": []}
+    })
+}
+
+/// The selection key is account-scoped, not a credential or device boot epoch.
+pub fn pin_surface_id(principal: &str, device_id: &str) -> Uuid {
+    let digest =
+        Sha256::digest(format!("cosmos-pin-surface-v1\0{principal}\0{device_id}").as_bytes());
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    Uuid::from_bytes(bytes)
+}
+
+/// Available only through verified owner management; never model context.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PinSurface {
+    pub current_paired: Option<bool>,
+    pub surface_id: Uuid,
+    pub device_id: String,
+    pub name: &'static str,
+    pub approval: &'static str,
+    pub revision: u64,
+    pub manifest: serde_json::Value,
+    pub trust_level: u8,
+    pub occupancy: &'static str,
+    pub actor_identity: &'static str,
+    pub render_verified: bool,
+    pub playback_verified: bool,
+    pub revoked: bool,
+}
+impl Surface {
+    pub fn pin_view(&self, current_paired: Option<bool>) -> Result<PinSurface, RegistryError> {
+        let Binding::Pin { device_id } = &self.binding else {
+            return Err(RegistryError::NotFound);
+        };
+        Ok(PinSurface {
+            current_paired,
+            surface_id: self.surface_id,
+            device_id: device_id.clone(),
+            name: "Ai Pin",
+            approval: PIN_APPROVAL,
+            revision: self.revision,
+            manifest: self.manifest.clone(),
+            trust_level: 0,
+            occupancy: "unknown",
+            actor_identity: "unknown",
+            render_verified: false,
+            playback_verified: false,
+            revoked: self.revoked,
+        })
     }
 }
 
@@ -126,6 +221,9 @@ pub struct Event {
     pub receipt_ms: i64,
     pub visible: bool,
     pub approved_manifest: serde_json::Value,
+    /// Absent on v1 events, preserving their exact canonical hash bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binding_digest: Option<String>,
 }
 
 pub fn hash(bytes: &[u8]) -> String {
@@ -147,11 +245,43 @@ pub fn transition(
     mutation: &Mutation,
     now: i64,
 ) -> Result<(Record, Option<&'static str>), RegistryError> {
+    if let Mutation::ApprovePin { device_id } = mutation {
+        if current.is_some_and(|r| !matches!(r.binding, Binding::Pin { .. })) {
+            return Err(RegistryError::NotFound);
+        }
+        if current.is_none_or(|r| r.revoked) && active_count >= 16 {
+            return Err(RegistryError::SurfaceLimit);
+        }
+        return Ok((
+            Record {
+                binding: Binding::Pin {
+                    device_id: device_id.clone(),
+                },
+                approved_manifest: pin_manifest(),
+                surface_id,
+                revision: current.map_or(Ok(1), |r| {
+                    r.revision.checked_add(1).ok_or(RegistryError::Unavailable)
+                })?,
+                revoked: false,
+                visible: false,
+                sequence: 0,
+                incarnation: Uuid::nil(),
+                token_hash: String::new(),
+                connection_expires_at: 0,
+                lease_expires_at: 0,
+                left: true,
+            },
+            Some("surface.approved"),
+        ));
+    }
     if let Mutation::Approve {
         token_hash,
         incarnation,
     } = mutation
     {
+        if current.is_some_and(|r| !matches!(r.binding, Binding::Browser)) {
+            return Err(RegistryError::NotFound);
+        }
         if current.is_none_or(|r| r.revoked) && active_count >= 16 {
             return Err(RegistryError::SurfaceLimit);
         }
@@ -160,6 +290,7 @@ pub fn transition(
         })?;
         return Ok((
             Record {
+                binding: Binding::Browser,
                 approved_manifest: browser_manifest(),
                 surface_id,
                 revision,
@@ -176,7 +307,11 @@ pub fn transition(
         ));
     }
     let mut record = current.cloned().ok_or(RegistryError::NotFound)?;
-    if matches!(mutation, Mutation::Revoke) {
+    if matches!(mutation, Mutation::Revoke | Mutation::RevokePin) {
+        if matches!(mutation, Mutation::RevokePin) != matches!(record.binding, Binding::Pin { .. })
+        {
+            return Err(RegistryError::NotFound);
+        }
         if record.revoked {
             return Ok((record, None));
         }
@@ -189,6 +324,9 @@ pub fn transition(
             .checked_add(1)
             .ok_or(RegistryError::Unavailable)?;
         return Ok((record, Some("surface.revoked")));
+    }
+    if !matches!(record.binding, Binding::Browser) {
+        return Err(RegistryError::InvalidConnection);
     }
     let (token_hash, incarnation) = match mutation {
         Mutation::State {
@@ -260,7 +398,11 @@ pub fn event(
     now: i64,
 ) -> Event {
     Event {
-        version: 1,
+        version: if matches!(record.binding, Binding::Pin { .. }) {
+            2
+        } else {
+            1
+        },
         principal: principal.to_owned(),
         sequence,
         previous_hash,
@@ -270,6 +412,12 @@ pub fn event(
         receipt_ms: now,
         visible: record.visible,
         approved_manifest: record.approved_manifest.clone(),
+        binding_digest: match &record.binding {
+            Binding::Browser => None,
+            Binding::Pin { device_id } => Some(hash(
+                format!("pin-device-v1\0{principal}\0{device_id}").as_bytes(),
+            )),
+        },
     }
 }
 
@@ -282,6 +430,55 @@ pub fn now_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pin_admission_manifest_binding_and_v1_chain_are_fixed() {
+        let contract: serde_json::Value =
+            serde_json::from_str(include_str!("../../../../contracts/pin-surface.json")).unwrap();
+        assert_eq!(contract["PinSurface"]["manifest"], pin_manifest());
+        let id = pin_surface_id("U:owner", "aabb");
+        let (pin, _) = transition(
+            None,
+            0,
+            id,
+            &Mutation::ApprovePin {
+                device_id: "aabb".into(),
+            },
+            100,
+        )
+        .unwrap();
+        assert_eq!(
+            pin.view(100).pin_view(Some(true)).unwrap().actor_identity,
+            "unknown"
+        );
+        assert!(!pin.view(100).available);
+        assert!(transition(Some(&pin), 1, id, &approval(), 101).is_err());
+        assert!(transition(Some(&pin), 1, id, &state(1, true), 101).is_err());
+        let entry = event("U:owner", 1, String::new(), "surface.approved", &pin, 100);
+        assert_eq!(entry.version, 2);
+        assert!(!serde_json::to_string(&entry).unwrap().contains("aabb"));
+        let other = event("U:other", 1, String::new(), "surface.approved", &pin, 100);
+        assert_ne!(entry.binding_digest, other.binding_digest);
+        let (browser, _) = transition(None, 0, Uuid::nil(), &approval(), 100).unwrap();
+        let v1 = event(
+            "U:owner",
+            1,
+            String::new(),
+            "surface.approved",
+            &browser,
+            100,
+        );
+        let encoded = serde_json::to_string(&v1).unwrap();
+        assert!(!encoded.contains("binding_digest"));
+        let legacy = format!(
+            "{{\"version\":1,\"principal\":\"U:owner\",\"sequence\":1,\"previous_hash\":\"\",\"kind\":\"surface.approved\",\"surface_id\":\"{}\",\"revision\":1,\"receipt_ms\":100,\"visible\":false,\"approved_manifest\":{}}}",
+            Uuid::nil(),
+            browser_manifest()
+        );
+        assert_eq!(v1.hash().unwrap(), hash(legacy.as_bytes()));
+        let recovered: Event = serde_json::from_str(&legacy).unwrap();
+        assert_eq!(recovered.hash().unwrap(), v1.hash().unwrap());
+    }
 
     fn approval() -> Mutation {
         Mutation::Approve {

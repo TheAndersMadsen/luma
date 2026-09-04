@@ -10,27 +10,14 @@ use axum::{
     extract::{DefaultBodyLimit, Path, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::Response,
-    response::sse::{Event, Sse},
     routing::{get, post, put},
 };
 use base64::Engine as _;
 use cosmos_core::AuthenticatedPrincipal;
-use cosmos_protocol::aibus::{
-    ServerStatefulUnderstandRequest, SynapseSource, SynapseUnderstandingRequest,
-    ai_bus_service_server::AiBusService, server_stateful_understand_request::ResponseFormat,
-    server_stateful_understand_response::Response as UnderstandResponse,
-};
 use prost::Message as _;
 use serde::{Deserialize, Serialize};
-use tokio_stream::Stream;
-use tonic::Request;
 
-use crate::{
-    assistant::catalog::{RESPOND_ACTION, RESPOND_FIELD},
-    backends::azure_speech::{SpeechAudioFormat, configured_backend},
-    services::aibus_main::AiBusMain,
-    services::capture::{CaptureObjectStore, UploadRejection, configured_object_store},
-};
+use crate::services::capture::{CaptureObjectStore, UploadRejection, configured_object_store};
 
 /// Header the device names the destination slot in
 /// (`AssetUploadWorkerImpl.putFileOrBytes` sends `Map.of("file", serverFileName,
@@ -38,41 +25,16 @@ use crate::{
 /// capability — nothing here derives a path from it.
 const UPLOAD_SLOT_HEADER: &str = "file";
 
-const MAX_DEMO_TEXT_BYTES: usize = 4 * 1024;
+const MAX_ASSISTANT_BODY_BYTES: usize = 4 * 1024;
 const MAX_ADMIN_BODY_BYTES: usize = 128 * 1024;
-// The operator trace drives the same foreground engine as the signed Pin. It
-// must observe the whole Pin session rather than cutting a valid 25-70 second
-// agent run off at the stock pre-Hook 25-second deadline.
-const DEMO_CHAT_TIMEOUT: Duration = crate::assistant::runtime::PIN_SESSION_LIMIT;
-const DEMO_SPEECH_TIMEOUT: Duration = Duration::from_secs(35);
-
-/// The engine's own run budget: it delivers a spoken terminal by here.
-const RUN_BUDGET_MS: u64 = crate::assistant::runtime::FOREGROUND_BUDGET.as_millis() as u64;
-/// The signed Hook raises the inspected Ironman `AIMIC_TIMEOUT_MS` from 25s to
-/// this hard gRPC deadline. Past it a real Pin fires DEADLINE_EXCEEDED and
-/// discards every turn already streamed.
-const DEVICE_DEADLINE_MS: u64 = crate::assistant::runtime::PIN_SESSION_LIMIT.as_millis() as u64;
 
 #[derive(Clone, Default)]
 pub struct Readiness(Arc<AtomicBool>);
 
 #[derive(Clone)]
-struct DemoBackend {
-    assistant: AiBusMain,
-}
-
-impl DemoBackend {
-    fn new(store: crate::store::SharedStore) -> Self {
-        Self {
-            assistant: AiBusMain::default().with_store(store),
-        }
-    }
-}
-
-#[derive(Clone)]
 struct HttpState {
     readiness: Readiness,
-    demo: Option<DemoBackend>,
+    verifier: Option<Arc<crate::web_auth::JwtVerifier>>,
     store: Option<crate::store::SharedStore>,
     integrations: Arc<crate::integrations::IntegrationStore>,
     /// Where a wearer's captured frames land. `None` means this deployment
@@ -141,7 +103,13 @@ fn build_router(
     // The one configured object store. `services::capture::Capture::new` reads
     // the SAME handle, which is what makes a capability it mints redeemable
     // here.
-    build_router_with_uploads_and_keys(readiness, demo_store, configured_object_store(), keys)
+    build_router_with_uploads_and_keys(
+        readiness,
+        demo_store,
+        configured_object_store(),
+        keys,
+        crate::web_auth::configured_verifier(),
+    )
 }
 
 #[cfg(test)]
@@ -155,6 +123,7 @@ fn build_router_with_uploads(
         demo_store,
         uploads,
         Arc::new(crate::keydirectory::KeyDirectory::in_memory()),
+        crate::web_auth::configured_verifier(),
     )
 }
 
@@ -163,17 +132,17 @@ fn build_router_with_uploads_and_keys(
     demo_store: Option<crate::store::SharedStore>,
     uploads: Option<Arc<CaptureObjectStore>>,
     keys: crate::keydirectory::SharedKeyDirectory,
+    verifier: Option<Arc<crate::web_auth::JwtVerifier>>,
 ) -> Router {
     // The caller supplies the deployment's configured store. Keeping the store
     // as an argument makes it impossible for this HTTP surface to quietly create
     // an unrelated MemoryStore while the device-facing gRPC services use
     // PostgreSQL.
     let capture_store = demo_store.clone();
-    let demo = demo_store.map(DemoBackend::new);
-    let demo_enabled = demo.is_some();
+    let demo_enabled = demo_store.is_some();
     let state = HttpState {
         readiness,
-        demo,
+        verifier,
         store: capture_store.clone(),
         integrations: crate::integrations::active(),
         uploads: uploads.clone(),
@@ -190,10 +159,26 @@ fn build_router_with_uploads_and_keys(
                 "/demo-api/flags/:name",
                 axum::routing::put(set_flag).delete(clear_flag),
             )
-            .route("/demo-api/chat", post(demo_chat))
-            .route("/demo-api/trace", post(demo_trace))
-            .route("/demo-api/trace/stream", post(demo_trace_stream))
-            .route("/demo-api/speech", post(demo_speech))
+            .route(
+                "/demo-api/chat",
+                post(browser_assistant_unavailable)
+                    .layer(DefaultBodyLimit::max(MAX_ASSISTANT_BODY_BYTES)),
+            )
+            .route(
+                "/demo-api/trace",
+                post(browser_assistant_unavailable)
+                    .layer(DefaultBodyLimit::max(MAX_ASSISTANT_BODY_BYTES)),
+            )
+            .route(
+                "/demo-api/trace/stream",
+                post(browser_assistant_unavailable)
+                    .layer(DefaultBodyLimit::max(MAX_ASSISTANT_BODY_BYTES)),
+            )
+            .route(
+                "/demo-api/speech",
+                post(browser_assistant_unavailable)
+                    .layer(DefaultBodyLimit::max(MAX_ASSISTANT_BODY_BYTES)),
+            )
             // Operator console: enrollment + persistence state, minting a device
             // attestation credential, the bound-device roster. All admin-gated —
             // see `require_admin`; provisioning in particular hands out a
@@ -346,6 +331,8 @@ async fn capture_upload(
 struct DemoStatus {
     /// External provider calls are owned by Cosmos, never by a connected Pin.
     provider_authority: &'static str,
+    /// Provider configuration does not imply an available browser runtime.
+    browser_runtime: &'static str,
     assistant: bool,
     speech: bool,
     model: String,
@@ -1686,21 +1673,20 @@ async fn admin_overview(
     // them: this screen is what an operator opens to check whether persistence
     // is working, and the row-download form additionally read (and, for notes,
     // decrypted) the wearer's whole history to produce three integers.
-    let (notes, memories, contacts) =
-        match state.demo.as_ref().map(|backend| backend.assistant.store()) {
-            Some(store) => {
-                let principal = crate::capture_api::DEMO_PRINCIPAL;
-                let notes = store.count_notes(principal).await.unwrap_or(0) as usize;
-                let memories = store.count_memories(principal, &[]).await.unwrap_or(0) as usize;
-                let contacts = store
-                    .contacts(principal)
-                    .await
-                    .map(|snapshot| snapshot.contacts.len())
-                    .unwrap_or(0);
-                (notes, memories, contacts)
-            }
-            None => (0, 0, 0),
-        };
+    let (notes, memories, contacts) = match state.store.as_ref() {
+        Some(store) => {
+            let principal = crate::capture_api::DEMO_PRINCIPAL;
+            let notes = store.count_notes(principal).await.unwrap_or(0) as usize;
+            let memories = store.count_memories(principal, &[]).await.unwrap_or(0) as usize;
+            let contacts = store
+                .contacts(principal)
+                .await
+                .map(|snapshot| snapshot.contacts.len())
+                .unwrap_or(0);
+            (notes, memories, contacts)
+        }
+        None => (0, 0, 0),
+    };
 
     let pincode = crate::enrollment::configured_pincode();
     let keyless = pincode.is_empty();
@@ -1846,16 +1832,12 @@ async fn admin_profile(
             "Profile fields must each be at most 256 bytes.",
         ));
     }
-    let store = state
-        .demo
-        .as_ref()
-        .map(|backend| backend.assistant.store())
-        .ok_or_else(|| {
-            demo_error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Account profile ingestion is available only on the AI-bus workload.",
-            )
-        })?;
+    let store = state.store.clone().ok_or_else(|| {
+        demo_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Account profile ingestion is available only on the AI-bus workload.",
+        )
+    })?;
     let response = cosmos_protocol::account::PersonalDetailsResponse {
         account_info: Some(cosmos_protocol::account::AccountInfo {
             preferred_name,
@@ -1959,16 +1941,12 @@ async fn admin_wifi(
         .into_iter()
         .map(EncryptedEnvelopeInput::decode)
         .collect::<Result<Vec<_>, _>>()?;
-    let store = state
-        .demo
-        .as_ref()
-        .map(|backend| backend.assistant.store())
-        .ok_or_else(|| {
-            demo_error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Wi-Fi ingestion is available only on the AI-bus workload.",
-            )
-        })?;
+    let store = state.store.clone().ok_or_else(|| {
+        demo_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Wi-Fi ingestion is available only on the AI-bus workload.",
+        )
+    })?;
     let response = cosmos_protocol::account::ListSecureWifiConfigsResponse {
         secure_wifi_configs,
     };
@@ -2021,16 +1999,12 @@ async fn admin_subscription(
     let account_sub = body.account_sub.trim();
     let principal = AuthenticatedPrincipal::for_user(account_sub)
         .map_err(|_| demo_error(StatusCode::BAD_REQUEST, "A valid account_sub is required."))?;
-    let store = state
-        .demo
-        .as_ref()
-        .map(|backend| backend.assistant.store())
-        .ok_or_else(|| {
-            demo_error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Subscription state is available only on the AI-bus workload.",
-            )
-        })?;
+    let store = state.store.clone().ok_or_else(|| {
+        demo_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Subscription state is available only on the AI-bus workload.",
+        )
+    })?;
     crate::services::provisioning::put_subscription_state(
         &store,
         principal.expose_for_authorization(),
@@ -2080,16 +2054,12 @@ async fn admin_partner_token(
         .map_err(|_| demo_error(StatusCode::BAD_REQUEST, "A valid account_sub is required."))?;
     let provider_name = body.provider_name.trim().to_ascii_lowercase();
     let encrypted_token = body.encrypted_token.decode()?;
-    let store = state
-        .demo
-        .as_ref()
-        .map(|backend| backend.assistant.store())
-        .ok_or_else(|| {
-            demo_error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Partner linking is available only on the AI-bus workload.",
-            )
-        })?;
+    let store = state.store.clone().ok_or_else(|| {
+        demo_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Partner linking is available only on the AI-bus workload.",
+        )
+    })?;
     crate::services::partnerservices::put_encrypted_token(
         &store,
         principal.expose_for_authorization(),
@@ -2124,16 +2094,12 @@ async fn admin_delete_partner_token(
     let principal = AuthenticatedPrincipal::for_user(account_sub)
         .map_err(|_| demo_error(StatusCode::BAD_REQUEST, "A valid account_sub is required."))?;
     let provider_name = body.provider_name.trim().to_ascii_lowercase();
-    let store = state
-        .demo
-        .as_ref()
-        .map(|backend| backend.assistant.store())
-        .ok_or_else(|| {
-            demo_error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Partner linking is available only on the AI-bus workload.",
-            )
-        })?;
+    let store = state.store.clone().ok_or_else(|| {
+        demo_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Partner linking is available only on the AI-bus workload.",
+        )
+    })?;
     let removed = crate::services::partnerservices::delete_token(
         &store,
         principal.expose_for_authorization(),
@@ -2212,16 +2178,12 @@ async fn admin_push(
             "Push lifetime cannot exceed 30 days.",
         ));
     }
-    let store = state
-        .demo
-        .as_ref()
-        .map(|backend| backend.assistant.store())
-        .ok_or_else(|| {
-            demo_error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Push ingestion is available only on the AI-bus workload.",
-            )
-        })?;
+    let store = state.store.clone().ok_or_else(|| {
+        demo_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Push ingestion is available only on the AI-bus workload.",
+        )
+    })?;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default();
@@ -2667,32 +2629,13 @@ async fn demo_status(State(state): State<HttpState>) -> Json<DemoStatus> {
     let model = config.assistant.model;
     Json(DemoStatus {
         provider_authority: "cosmos",
+        browser_runtime: "unavailable",
         assistant,
         speech,
         model,
         mesh: mesh_status(&state).await,
         tools: tool_status(),
     })
-}
-
-#[derive(Deserialize)]
-struct DemoTextRequest {
-    text: String,
-    /// Evaluate the stock request shape an unlocked Pin sends without
-    /// dispatching any returned device action. The trace endpoints use this
-    /// for release acceptance; chat and speech keep their normal demo shape.
-    #[serde(default)]
-    simulate_unlocked_pin: bool,
-    /// Complete the stock current-location action/observation hop with a fixed
-    /// valid coordinate. This is acceptance-only: no device action is dispatched
-    /// and the production evaluator can inspect the grounded follow-up turn.
-    #[serde(default)]
-    simulate_location: bool,
-}
-
-#[derive(Serialize)]
-struct DemoChatResponse {
-    reply: String,
 }
 
 #[derive(Serialize)]
@@ -2706,581 +2649,59 @@ fn demo_error(status: StatusCode, error: &'static str) -> DemoError {
     (status, Json(DemoErrorResponse { error }))
 }
 
-/// Whose account an assistant turn runs under.
-///
-/// The SAME precedence every other web surface uses
-/// ([`crate::capture_api::principal_for`]): a signature-verified Bearer, then
-/// the edge-injected device principal, and the demo account only when nobody
-/// identified themselves.
-///
-/// These three routes used to insert `from_edge(DEMO_PRINCIPAL)` unconditionally.
-/// That is not a keyless-demo fallback, it is an override: a wearer signed in to
-/// Center, saying "remember the gate code", had the note written into
-/// `V:01:D:web-demo:U:operator` and was told "Saved". Their own `/notes` reads
-/// `U:<sub>` and could never show it, and `recall_memory` then returned an
-/// authoritative "you have no note about that" about their own data.
-/// `from_edge` also keeps the literal string rather than collapsing to
-/// `U:<user>`, so the demo account is not even a partition any front door can
-/// reach.
-///
-/// A Bearer that is present but does not verify is a 401, not a fall-through:
-/// the caller asserted an identity that did not hold, and running their turn in
-/// the demo partition would answer questions about somebody else's data.
-fn turn_principal(headers: &HeaderMap) -> Result<AuthenticatedPrincipal, DemoError> {
-    let unusable = || {
-        demo_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Caller identity unavailable.",
-        )
-    };
-    let verifier = crate::web_auth::configured_verifier();
-    let resolved =
-        crate::capture_api::principal_for(headers, verifier.as_deref()).map_err(|()| {
-            demo_error(
-                StatusCode::UNAUTHORIZED,
-                "That session could not be verified.",
-            )
-        })?;
-    match resolved {
-        // Already collapsed to the account principal both front doors share.
-        Some(resolved) => {
-            AuthenticatedPrincipal::from_edge(resolved.account).map_err(|_| unusable())
-        }
-        None => {
-            if verifier.is_some() {
-                // The web plane is configured, so a wearer turn was expected to
-                // contain a Bearer and did not — the caller in front of us is not
-                // forwarding it. Worth a line every time: the turn still runs,
-                // but it runs somewhere the wearer cannot read.
-                tracing::warn!(
-                    "assistant turn carries no verified identity; running it under the demo \
-                     account, where anything it remembers is unreadable from the wearer's own \
-                     surfaces"
-                );
-            }
-            AuthenticatedPrincipal::from_edge(crate::capture_api::DEMO_PRINCIPAL)
-                .map_err(|_| unusable())
-        }
-    }
-}
-
-fn validate_demo_text(text: String) -> Result<String, DemoError> {
-    let text = text.trim().to_owned();
-    if text.is_empty() {
-        return Err(demo_error(
-            StatusCode::BAD_REQUEST,
-            "Enter a message first.",
-        ));
-    }
-    if text.len() > MAX_DEMO_TEXT_BYTES {
-        return Err(demo_error(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            "That message is too long for the demo.",
-        ));
-    }
-    Ok(text)
-}
-
-async fn demo_chat(
+/// The obsolete browser-to-Pin assistant has been removed. Keep an explicit,
+/// bounded failure for existing clients until the real surface runtime exists.
+async fn browser_assistant_unavailable(
     State(state): State<HttpState>,
-    headers: HeaderMap,
-    Json(payload): Json<DemoTextRequest>,
-) -> Result<Json<DemoChatResponse>, DemoError> {
-    let text = validate_demo_text(payload.text)?;
-    let demo = state.demo.ok_or_else(|| {
+    request: axum::extract::Request,
+) -> Response {
+    use axum::extract::FromRequest;
+    use axum::response::IntoResponse;
+    let headers = request.headers();
+    let authenticated = headers.get_all(header::AUTHORIZATION).iter().count() == 1
+        && headers
+            .get(header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .and_then(crate::web_auth::bearer_token)
+            .and_then(|token| state.verifier.as_ref()?.verify(token).ok())
+            .is_some();
+    let error = if !authenticated {
         demo_error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "The Cosmos demo is unavailable.",
+            StatusCode::UNAUTHORIZED,
+            "That session could not be verified.",
         )
-    })?;
-    let mut request = Request::new(ServerStatefulUnderstandRequest {
-        userrequest: Some(
-            cosmos_protocol::aibus::server_stateful_understand_request::Userrequest::Transcription(
-                text,
-            ),
-        ),
-        response_format: ResponseFormat::Text as i32,
-    });
-    request.extensions_mut().insert(turn_principal(&headers)?);
-
-    let response = tokio::time::timeout(
-        DEMO_CHAT_TIMEOUT,
-        demo.assistant.server_stateful_understand(request),
-    )
-    .await
-    .map_err(|_| demo_error(StatusCode::GATEWAY_TIMEOUT, "The assistant took too long."))?
-    .map_err(|_| demo_error(StatusCode::BAD_GATEWAY, "The assistant could not answer."))?
-    .into_inner();
-    let reply = match response.response {
-        Some(UnderstandResponse::Text(text)) if !text.trim().is_empty() => text,
-        _ => {
-            return Err(demo_error(
-                StatusCode::BAD_GATEWAY,
-                "The assistant returned no text.",
-            ));
-        }
-    };
-    Ok(Json(DemoChatResponse { reply }))
-}
-
-/// One step of the assistant's reasoning, streamed to the operator demo so the
-/// browser can show *how* the backend reached its answer: every tool the model
-/// invoked (server lookups like `web_search`/`wikipedia`, device actions like
-/// `SetTimer`), the observation each returned, and the final spoken answer. This
-/// is exactly the transcript a Pin receives on the `Understand` stream.
-#[derive(Serialize)]
-struct DemoTraceStep {
-    /// `"action"` (a tool/device call), `"observation"` (its result), or
-    /// `"answer"` (the terminal `Respond`).
-    kind: &'static str,
-    /// Action name (`SetTimer`, `web_search`, `wikipedia`, `Respond`, …).
-    name: String,
-    /// `"device"` for a Pin-executed action, `"server"` for a cloud-side tool.
-    source: &'static str,
-    /// The model's rationale for an action step, when the model supplied one.
-    thought: String,
-    /// Action arguments (JSON) for an action step; empty otherwise.
-    input: String,
-    /// Observation text for an observation; the spoken sentence for the answer.
-    text: String,
-    /// Milliseconds from the start of the turn to when this step was streamed.
-    ///
-    /// Latency is the dominant thing a wearer feels on this device, and it is
-    /// almost entirely model-step time — so showing WHERE the turn went is more
-    /// informative than a single total. It also makes the Hooked 90s device
-    /// deadline visible: past it, a real Pin discards the whole turn.
-    elapsed_ms: u64,
-}
-
-#[derive(Serialize)]
-struct DemoTraceResponse {
-    steps: Vec<DemoTraceStep>,
-    reply: String,
-    /// Wall-clock for the whole turn.
-    total_ms: u64,
-    /// The server's own run budget: it delivers a spoken terminal by here.
-    budget_ms: u64,
-    /// `AIMIC_TIMEOUT_MS` — the device's hard gRPC deadline. Past this a real Pin
-    /// fires DEADLINE_EXCEEDED and throws away every turn already streamed, so
-    /// this is the line the whole design is racing.
-    device_deadline_ms: u64,
-}
-
-async fn collect_demo_trace<S>(
-    stream: &mut S,
-    started: std::time::Instant,
-    steps: &mut Vec<DemoTraceStep>,
-    reply: &mut String,
-    replayed_turns: &mut Vec<cosmos_protocol::aibus::SynapseChatTurn>,
-) where
-    S: Stream<Item = Result<cosmos_protocol::aibus::SynapseUnderstandingResponse, tonic::Status>>
-        + Unpin,
-{
-    use cosmos_protocol::aibus::{
-        synapse_chat_turn::Content, synapse_understanding_response::Body,
-    };
-    use tokio_stream::StreamExt as _;
-
-    while let Some(message) = stream.next().await {
-        let Ok(message) = message else { break };
-        let Some(Body::Turn(turn)) = message.body else {
-            continue;
-        };
-        let replayed = turn.clone();
-        match turn.content {
-            Some(Content::Action(action)) if action.action == RESPOND_ACTION => {
-                let spoken = spoken_answer(&action.input);
-                *reply = spoken.clone();
-                steps.push(DemoTraceStep {
-                    kind: "answer",
-                    name: RESPOND_ACTION.to_owned(),
-                    source: source_label_for(action.source),
-                    thought: action.thought,
-                    input: String::new(),
-                    text: spoken,
-                    elapsed_ms: started.elapsed().as_millis() as u64,
-                });
-            }
-            Some(Content::Action(action)) => steps.push(DemoTraceStep {
-                kind: "action",
-                name: action.action,
-                source: source_label_for(action.source),
-                thought: action.thought,
-                input: action.input,
-                text: String::new(),
-                elapsed_ms: started.elapsed().as_millis() as u64,
-            }),
-            Some(Content::Observation(obs)) => steps.push(DemoTraceStep {
-                kind: "observation",
-                name: obs.action_name,
-                source: source_label_for(obs.source),
-                thought: String::new(),
-                input: String::new(),
-                text: obs.observation,
-                elapsed_ms: started.elapsed().as_millis() as u64,
-            }),
-            _ => {}
-        }
-        replayed_turns.push(replayed);
-    }
-}
-
-fn simulated_user_turn(text: &str) -> cosmos_protocol::aibus::SynapseChatTurn {
-    cosmos_protocol::aibus::SynapseChatTurn {
-        user: cosmos_protocol::aibus::SynapseUser::User as i32,
-        identifier: uuid::Uuid::new_v4().to_string(),
-        content: Some(
-            cosmos_protocol::aibus::synapse_chat_turn::Content::UserRequest(
-                cosmos_protocol::aibus::SynapseUserRequestContent {
-                    request: text.to_owned(),
-                    ..Default::default()
-                },
-            ),
-        ),
-        ..Default::default()
-    }
-}
-
-fn simulated_location_observation(
-    action: &cosmos_protocol::aibus::SynapseChatTurn,
-) -> cosmos_protocol::aibus::SynapseChatTurn {
-    cosmos_protocol::aibus::SynapseChatTurn {
-        user: cosmos_protocol::aibus::SynapseUser::Assistant as i32,
-        identifier: uuid::Uuid::new_v4().to_string(),
-        parent_identifier: action.identifier.clone(),
-        content: Some(
-            cosmos_protocol::aibus::synapse_chat_turn::Content::Observation(
-                cosmos_protocol::aibus::SynapseObservationContent {
-                    observation: serde_json::json!({
-                        "latitude": 55.6761,
-                        "longitude": 12.5683,
-                        "isStale": false,
-                    })
-                    .to_string(),
-                    is_final: false,
-                    action_name: "GetCurrentLocation".to_owned(),
-                    source: SynapseSource::Device as i32,
-                },
-            ),
-        ),
-        ..Default::default()
-    }
-}
-
-/// Run the wearer's prompt through the *real* `Understand` ReAct engine and
-/// return the full turn transcript. Where [`demo_chat`] surfaces only the final
-/// sentence, this exposes every action + observation so the demo can visualise
-/// the backend thinking — a lookup before it answers, a `SetTimer`, and so on.
-async fn demo_trace(
-    State(state): State<HttpState>,
-    headers: HeaderMap,
-    Json(payload): Json<DemoTextRequest>,
-) -> Result<Json<DemoTraceResponse>, DemoError> {
-    let text = validate_demo_text(payload.text)?;
-    let demo = state.demo.ok_or_else(|| {
-        demo_error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "The Cosmos demo is unavailable.",
-        )
-    })?;
-
-    let mut replayed_turns = if payload.simulate_location {
-        vec![simulated_user_turn(&text)]
     } else {
-        Vec::new()
-    };
-    let mut request = Request::new(SynapseUnderstandingRequest {
-        utterance: text.clone(),
-        device_context: payload.simulate_unlocked_pin.then(|| {
-            cosmos_protocol::aibus::SynapseDeviceContext {
-                turns: replayed_turns.clone(),
-                ..Default::default()
-            }
-        }),
-        ..Default::default()
-    });
-    request.extensions_mut().insert(turn_principal(&headers)?);
-
-    let mut stream = demo
-        .assistant
-        .understand(request)
-        .await
-        .map_err(|_| demo_error(StatusCode::BAD_GATEWAY, "The assistant could not answer."))?
-        .into_inner();
-
-    let started = std::time::Instant::now();
-    let mut steps = Vec::new();
-    let mut reply = String::new();
-    tokio::time::timeout(
-        DEMO_CHAT_TIMEOUT,
-        collect_demo_trace(
-            &mut stream,
-            started,
-            &mut steps,
-            &mut reply,
-            &mut replayed_turns,
-        ),
-    )
-    .await
-    .map_err(|_| demo_error(StatusCode::GATEWAY_TIMEOUT, "The assistant took too long."))?;
-
-    if payload.simulate_location {
-        let location_action = replayed_turns.iter().rev().find(|turn| {
-            matches!(
-                turn.content.as_ref(),
-                Some(cosmos_protocol::aibus::synapse_chat_turn::Content::Action(action))
-                    if action.action == "GetCurrentLocation"
-            )
-        });
-        if let Some(location_action) = location_action.cloned() {
-            let observation = simulated_location_observation(&location_action);
-            let observation_text = match observation.content.as_ref() {
-                Some(cosmos_protocol::aibus::synapse_chat_turn::Content::Observation(value)) => {
-                    value.observation.clone()
-                }
-                _ => String::new(),
-            };
-            steps.push(DemoTraceStep {
-                kind: "observation",
-                name: "GetCurrentLocation".to_owned(),
-                source: "device",
-                thought: String::new(),
-                input: String::new(),
-                text: observation_text,
-                elapsed_ms: started.elapsed().as_millis() as u64,
-            });
-            replayed_turns.push(observation);
-
-            let mut follow_up = Request::new(SynapseUnderstandingRequest {
-                utterance: text,
-                device_context: Some(cosmos_protocol::aibus::SynapseDeviceContext {
-                    turns: replayed_turns.clone(),
-                    ..Default::default()
-                }),
-                location: Some(cosmos_protocol::aibus::Location {
-                    latitude: 55.6761,
-                    longitude: 12.5683,
-                }),
-                ..Default::default()
-            });
-            follow_up.extensions_mut().insert(turn_principal(&headers)?);
-            let mut follow_up_stream = demo
-                .assistant
-                .understand(follow_up)
-                .await
-                .map_err(|_| {
-                    demo_error(StatusCode::BAD_GATEWAY, "The assistant could not answer.")
-                })?
-                .into_inner();
-            tokio::time::timeout(
-                DEMO_CHAT_TIMEOUT,
-                collect_demo_trace(
-                    &mut follow_up_stream,
-                    started,
-                    &mut steps,
-                    &mut reply,
-                    &mut replayed_turns,
-                ),
-            )
+        match tokio::time::timeout(Duration::from_secs(2), Bytes::from_request(request, &state))
             .await
-            .map_err(|_| demo_error(StatusCode::GATEWAY_TIMEOUT, "The assistant took too long."))?;
-        }
-    }
-
-    Ok(Json(DemoTraceResponse {
-        steps,
-        reply,
-        total_ms: started.elapsed().as_millis() as u64,
-        budget_ms: RUN_BUDGET_MS,
-        device_deadline_ms: DEVICE_DEADLINE_MS,
-    }))
-}
-
-/// The same turn as [`demo_trace`], streamed step by step as it happens.
-///
-/// The batched endpoint makes a wearer's turn look instantaneous-then-done: you
-/// wait, and the whole transcript appears at once. That hides the thing worth
-/// seeing — the assistant deciding, calling a tool, reading the result, and only
-/// then answering. This emits each turn the engine produces the moment it
-/// produces it, which is also exactly how the device receives them.
-///
-/// Server-sent events rather than a websocket: the stream is one-directional and
-/// short-lived, and SSE survives the plain HTTP proxy in front of the demo.
-/// Progress cues are emitted only after the assistant selects real work. They
-/// are deterministic descriptions of that tool call, so no second model, flag,
-/// or terminal-turn delay sits in the answer path.
-async fn demo_trace_stream(
-    State(state): State<HttpState>,
-    headers: HeaderMap,
-    Json(payload): Json<DemoTextRequest>,
-) -> Result<Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>>, DemoError> {
-    use cosmos_protocol::aibus::{
-        synapse_chat_turn::Content, synapse_understanding_response::Body,
-    };
-    use tokio_stream::StreamExt as _;
-
-    let text = validate_demo_text(payload.text)?;
-    let demo = state.demo.ok_or_else(|| {
-        demo_error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "The Cosmos demo is unavailable.",
-        )
-    })?;
-
-    let mut request = Request::new(SynapseUnderstandingRequest {
-        utterance: text,
-        device_context: payload
-            .simulate_unlocked_pin
-            .then(cosmos_protocol::aibus::SynapseDeviceContext::default),
-        ..Default::default()
-    });
-    request.extensions_mut().insert(turn_principal(&headers)?);
-
-    let mut turns = demo
-        .assistant
-        .understand(request)
-        .await
-        .map_err(|_| demo_error(StatusCode::BAD_GATEWAY, "The assistant could not answer."))?
-        .into_inner();
-
-    let started = std::time::Instant::now();
-    let events = async_stream::stream! {
-        let mut cue_emitted = false;
-        // Open with the budget the turn is racing, so the page can draw the
-        // deadline before any step exists.
-        yield Ok(Event::default().event("start").data(
-            serde_json::json!({
-                "budget_ms": RUN_BUDGET_MS,
-                "device_deadline_ms": DEVICE_DEADLINE_MS,
-            })
-            .to_string(),
-        ));
-
-        loop {
-            let Some(message) = turns.next().await else { break };
-            let Ok(message) = message else { break };
-            let Some(Body::Turn(turn)) = message.body else { continue };
-
-            let elapsed_ms = started.elapsed().as_millis() as u64;
-            let step = match turn.content {
-                Some(Content::Action(action)) if action.action == RESPOND_ACTION => {
-                    let spoken = spoken_answer(&action.input);
-                    Some(DemoTraceStep {
-                        kind: "answer",
-                        name: RESPOND_ACTION.to_owned(),
-                        source: source_label_for(action.source),
-                        thought: action.thought,
-                        input: String::new(),
-                        text: spoken,
-                        elapsed_ms,
-                    })
-                }
-                Some(Content::Action(action)) => {
-                    if !cue_emitted {
-                        if let Some(text) = crate::assistant::catalog::progress_cue(
-                            &action.action,
-                            &action.input,
-                        ) {
-                            cue_emitted = true;
-                            yield Ok(Event::default().event("cue").data(
-                                serde_json::json!({ "text": text }).to_string(),
-                            ));
-                        }
-                    }
-                    Some(DemoTraceStep {
-                        kind: "action",
-                        name: action.action,
-                        source: source_label_for(action.source),
-                        thought: action.thought,
-                        input: action.input,
-                        text: String::new(),
-                        elapsed_ms,
-                    })
-                }
-                Some(Content::Observation(obs)) => Some(DemoTraceStep {
-                    kind: "observation",
-                    name: obs.action_name,
-                    source: source_label_for(obs.source),
-                    thought: String::new(),
-                    input: String::new(),
-                    text: obs.observation,
-                    elapsed_ms,
-                }),
-                _ => None,
-            };
-            if let Some(step) = step {
-                match serde_json::to_string(&step) {
-                    Ok(data) => yield Ok(Event::default().event("step").data(data)),
-                    Err(_) => continue,
-                }
-            }
-        }
-
-        yield Ok(Event::default().event("done").data(
-            serde_json::json!({ "total_ms": started.elapsed().as_millis() as u64 }).to_string(),
-        ));
-    };
-
-    Ok(Sse::new(events).keep_alive(axum::response::sse::KeepAlive::default()))
-}
-
-/// `"device"` for a Pin-executed action, `"server"` for a cloud-side tool.
-fn source_label_for(source: i32) -> &'static str {
-    if source == SynapseSource::Device as i32 {
-        "device"
-    } else {
-        "server"
-    }
-}
-
-/// Pull the spoken sentence out of a `Respond` action's `{"Response":"…"}` input,
-/// falling back to the raw input when it is not the expected shape.
-fn spoken_answer(input: &str) -> String {
-    serde_json::from_str::<serde_json::Value>(input)
-        .ok()
-        .and_then(|value| {
-            value
-                .get(RESPOND_FIELD)
-                .and_then(|field| field.as_str())
-                .map(str::to_owned)
-        })
-        .unwrap_or_else(|| input.to_owned())
-}
-
-async fn demo_speech(
-    State(_state): State<HttpState>,
-    Json(payload): Json<DemoTextRequest>,
-) -> Result<Response, DemoError> {
-    let text = validate_demo_text(payload.text)?;
-    let speech = configured_backend()
-        .filter(|_| crate::backends::azure_speech::configured())
-        .ok_or_else(|| {
-            demo_error(
+        {
+            Err(_) => demo_error(
+                StatusCode::REQUEST_TIMEOUT,
+                "Assistant request body timed out.",
+            ),
+            Ok(Err(error)) if error.status() == StatusCode::PAYLOAD_TOO_LARGE => demo_error(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "Assistant request is too large.",
+            ),
+            Ok(Err(_)) => demo_error(
+                StatusCode::BAD_REQUEST,
+                "Assistant request body is invalid.",
+            ),
+            Ok(Ok(bytes)) if bytes.len() > MAX_ASSISTANT_BODY_BYTES => demo_error(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "Assistant request is too large.",
+            ),
+            Ok(Ok(_)) => demo_error(
                 StatusCode::SERVICE_UNAVAILABLE,
-                "Speech synthesis is unavailable.",
-            )
-        })?;
-    let audio = tokio::time::timeout(
-        DEMO_SPEECH_TIMEOUT,
-        speech.synthesize(&text, SpeechAudioFormat::Audio24Khz160KBitrateMonoMp3),
-    )
-    .await
-    .map_err(|_| {
-        demo_error(
-            StatusCode::GATEWAY_TIMEOUT,
-            "Speech synthesis took too long.",
-        )
-    })?
-    .map_err(|_| demo_error(StatusCode::BAD_GATEWAY, "Speech synthesis failed."))?;
-
-    let mut response = Response::new(axum::body::Body::from(audio));
+                "Browser assistant runtime is unavailable.",
+            ),
+        }
+    };
+    let mut response = error.into_response();
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, no-store"),
+    );
     response
-        .headers_mut()
-        .insert(header::CONTENT_TYPE, HeaderValue::from_static("audio/mpeg"));
-    response
-        .headers_mut()
-        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    Ok(response)
 }
 
 #[cfg(test)]
@@ -3390,6 +2811,7 @@ mod tests {
             .expect("body bytes");
         let payload: serde_json::Value = serde_json::from_slice(&bytes).expect("json body");
         assert_eq!(payload["provider_authority"], "cosmos");
+        assert_eq!(payload["browser_runtime"], "unavailable");
     }
 
     /// The Center REST surface must read the store supplied by server startup.
@@ -3425,290 +2847,243 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn demo_rejects_an_empty_chat_before_contacting_the_model() {
-        let response = demo_app(Readiness::default())
-            .oneshot(
-                Request::builder()
-                    .method(Method::POST)
-                    .header("content-type", "application/json")
-                    .uri("/demo-api/chat")
-                    .body(Body::from(r#"{"text":"  "}"#))
-                    .expect("request"),
-            )
-            .await
-            .expect("response");
-
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    }
-
-    #[tokio::test]
-    async fn demo_trace_exposes_the_reasoning_transcript() {
-        // A keyless deployment drives the deterministic DemoChatModel: it searches
-        // the wearer's utterance, then answers. The trace endpoint must surface
-        // both the tool call and the terminal answer — the whole point is showing
-        // *how* the backend reached its reply, not just the reply.
-        let response = demo_app(Readiness::default())
-            .oneshot(
-                Request::builder()
-                    .method(Method::POST)
-                    .header("content-type", "application/json")
-                    .uri("/demo-api/trace")
-                    .body(Body::from(r#"{"text":"how tall is the eiffel tower"}"#))
-                    .expect("request"),
-            )
-            .await
-            .expect("response");
-
-        assert_eq!(response.status(), StatusCode::OK);
-        let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
-            .await
-            .expect("body bytes");
-        let payload: serde_json::Value = serde_json::from_slice(&bytes).expect("json body");
-        let steps = payload["steps"].as_array().expect("steps array");
-        assert!(
-            steps.iter().any(|step| step["kind"] == "action"),
-            "trace should include the search action: {steps:?}"
+    async fn retired_browser_assistant_returns_bounded_unavailable_without_private_access() {
+        let (verifier, bearer) = browser_auth_fixture();
+        let store = Arc::new(crate::store::MemoryStore::default());
+        let app = build_router_with_uploads_and_keys(
+            Readiness::default(),
+            Some(store.clone()),
+            None,
+            fresh_keys(),
+            Some(verifier.clone()),
         );
-        assert!(
-            steps.iter().any(|step| step["kind"] == "answer"),
-            "trace should include the terminal answer: {steps:?}"
-        );
-        assert!(
-            !payload["reply"].as_str().unwrap_or_default().is_empty(),
-            "trace should contain a spoken reply"
-        );
-    }
-
-    #[tokio::test]
-    async fn demo_trace_can_simulate_the_unlocked_pin_routing_context() {
-        let response = demo_app(Readiness::default())
-            .oneshot(
-                Request::builder()
-                    .method(Method::POST)
-                    .header("content-type", "application/json")
-                    .uri("/demo-api/trace")
-                    .body(Body::from(
-                        r#"{"text":"How many calories are in an apple?","simulate_unlocked_pin":true}"#,
-                    ))
-                    .expect("request"),
-            )
-            .await
-            .expect("response");
-
-        assert_eq!(response.status(), StatusCode::OK);
-        let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
-            .await
-            .expect("body bytes");
-        let payload: serde_json::Value = serde_json::from_slice(&bytes).expect("json body");
-        let steps = payload["steps"].as_array().expect("steps array");
-        assert_eq!(
-            steps.len(),
-            1,
-            "the simulated Pin route must be deterministic: {steps:?}"
-        );
-        assert_eq!(steps[0]["kind"], "action");
-        assert_eq!(steps[0]["name"], "ManageNutrition");
-        assert_eq!(steps[0]["source"], "device");
-    }
-
-    #[tokio::test]
-    async fn demo_trace_can_replay_a_grounded_location_hop_for_routes() {
-        let response = demo_app(Readiness::default())
-            .oneshot(
-                Request::builder()
-                    .method(Method::POST)
-                    .header("content-type", "application/json")
-                    .uri("/demo-api/trace")
-                    .body(Body::from(
-                        r#"{"text":"Give me cycling directions to Nyhavn.","simulate_unlocked_pin":true,"simulate_location":true}"#,
-                    ))
-                    .expect("request"),
-            )
-            .await
-            .expect("response");
-
-        assert_eq!(response.status(), StatusCode::OK);
-        let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
-            .await
-            .expect("body bytes");
-        let payload: serde_json::Value = serde_json::from_slice(&bytes).expect("json body");
-        let steps = payload["steps"].as_array().expect("steps array");
-        let action_names = steps
-            .iter()
-            .filter(|step| step["kind"] == "action" || step["kind"] == "answer")
-            .map(|step| step["name"].as_str().unwrap_or_default())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            action_names,
-            ["GetCurrentLocation", "route", "Respond"],
-            "the trace must exercise the complete stock location round trip: {steps:?}",
-        );
-        assert!(
-            steps.iter().any(|step| {
-                step["kind"] == "observation" && step["name"] == "GetCurrentLocation"
-            })
-        );
-        let route = steps
-            .iter()
-            .find(|step| step["kind"] == "action" && step["name"] == "route")
-            .expect("grounded route action");
-        assert_eq!(
-            serde_json::from_str::<serde_json::Value>(route["input"].as_str().unwrap()).unwrap(),
-            serde_json::json!({"destination": "Nyhavn", "mode": "bicycling"}),
-        );
-    }
-
-    #[tokio::test]
-    async fn demo_trace_replays_location_for_safe_place_and_weather_reads() {
-        for (text, expected_actions) in [
-            (
-                "What city am I in?",
-                vec!["GetCurrentLocation", "reverse_geocode", "Respond"],
-            ),
-            (
-                "What's nearby?",
-                vec!["GetCurrentLocation", "nearby", "Respond"],
-            ),
-            (
-                "What's the weather here and what's nearby?",
-                vec!["GetCurrentLocation", "weather", "nearby", "Respond"],
-            ),
+        for path in [
+            "/demo-api/chat",
+            "/demo-api/trace",
+            "/demo-api/trace/stream",
+            "/demo-api/speech",
         ] {
-            let response = demo_app(Readiness::default())
+            let response = app.clone().oneshot(Request::builder().method("POST").uri(path).header(header::AUTHORIZATION, &bearer).header(header::CONTENT_TYPE, "application/json").body(Body::from(r#"{"text":"private-canary","simulate_unlocked_pin":true,"simulate_location":true}"#)).unwrap()).await.unwrap();
+            assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE, "{path}");
+            assert_eq!(response.headers()[header::CONTENT_TYPE], "application/json");
+            assert_eq!(
+                response.headers()[header::CACHE_CONTROL],
+                "private, no-store"
+            );
+            let bytes = axum::body::to_bytes(response.into_body(), 256)
+                .await
+                .unwrap();
+            let payload: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(
+                payload,
+                serde_json::json!({"error":"Browser assistant runtime is unavailable."})
+            );
+        }
+        assert_eq!(
+            store
+                .assistant_private_accesses
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+        // The unavailable response must not depend on any private store access.
+        let unavailable = build_router_with_uploads_and_keys(
+            Readiness::default(),
+            Some(Arc::new(crate::store_postgres::PostgresStore::unreachable())),
+            None,
+            fresh_keys(),
+            Some(verifier),
+        );
+        let response = tokio::time::timeout(
+            Duration::from_secs(1),
+            unavailable.oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/demo-api/chat")
+                    .header(header::AUTHORIZATION, bearer)
+                    .body(Body::from("private-canary"))
+                    .unwrap(),
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    fn browser_auth_fixture() -> (Arc<crate::web_auth::JwtVerifier>, String) {
+        let (private, public) = crate::web_auth::test_jwt_keypair();
+        let verifier = crate::web_auth::JwtVerifier::with_keys(
+            crate::web_auth::OidcConfig {
+                issuer: "https://browser-boundary.test".into(),
+                audience: None,
+                jwks_uri: "unused".into(),
+            },
+            [(
+                "browser-test".into(),
+                jsonwebtoken::DecodingKey::from_rsa_pem(public.as_bytes()).unwrap(),
+            )]
+            .into(),
+        );
+        let mut header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256);
+        header.kid = Some("browser-test".into());
+        let token = jsonwebtoken::encode(&header, &serde_json::json!({"sub":"browser-owner","iss":"https://browser-boundary.test","exp":crate::surface_registry::now_ms()/1000+300}), &jsonwebtoken::EncodingKey::from_rsa_pem(private.as_bytes()).unwrap()).unwrap();
+        (verifier, format!("Bearer {token}"))
+    }
+
+    #[tokio::test]
+    async fn retired_browser_assistant_rejects_unverified_and_device_only_identity() {
+        let (verifier, bearer) = browser_auth_fixture();
+        let app = build_router_with_uploads_and_keys(
+            Readiness::default(),
+            Some(fresh_store()),
+            None,
+            fresh_keys(),
+            Some(verifier),
+        );
+        for path in [
+            "/demo-api/chat",
+            "/demo-api/trace",
+            "/demo-api/trace/stream",
+            "/demo-api/speech",
+        ] {
+            for authorization in [None, Some("Bearer invalid"), Some("Basic invalid")] {
+                let mut request = Request::builder()
+                    .method("POST")
+                    .uri(path)
+                    .header(crate::config::EDGE_PRINCIPAL_HEADER, "U:browser-owner")
+                    .header("x-cosmos-surface-token", "untrusted-surface-token");
+                if let Some(authorization) = authorization {
+                    request = request.header(header::AUTHORIZATION, authorization);
+                }
+                let response = app
+                    .clone()
+                    .oneshot(request.body(Body::from("private-canary")).unwrap())
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
+                assert_eq!(
+                    response.headers()[header::CACHE_CONTROL],
+                    "private, no-store"
+                );
+                let bytes = axum::body::to_bytes(response.into_body(), 256)
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    serde_json::from_slice::<serde_json::Value>(&bytes).unwrap(),
+                    serde_json::json!({"error":"That session could not be verified."})
+                );
+            }
+        }
+        let duplicate = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/demo-api/chat")
+                    .header(header::AUTHORIZATION, &bearer)
+                    .header(header::AUTHORIZATION, bearer)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(duplicate.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn retired_browser_assistant_authenticates_before_reading_and_times_out_stalled_body() {
+        let (verifier, bearer) = browser_auth_fixture();
+        let app = build_router_with_uploads_and_keys(
+            Readiness::default(),
+            Some(fresh_store()),
+            None,
+            fresh_keys(),
+            Some(verifier),
+        );
+        let stalled =
+            || Body::from_stream(futures_util::stream::pending::<Result<Bytes, std::io::Error>>());
+        let response = tokio::time::timeout(
+            Duration::from_millis(250),
+            app.clone().oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/demo-api/chat")
+                    .body(stalled())
+                    .unwrap(),
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let response = tokio::time::timeout(
+            Duration::from_secs(3),
+            app.oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/demo-api/chat")
+                    .header(header::AUTHORIZATION, bearer)
+                    .body(stalled())
+                    .unwrap(),
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::REQUEST_TIMEOUT);
+        assert_eq!(
+            response.headers()[header::CACHE_CONTROL],
+            "private, no-store"
+        );
+    }
+
+    #[tokio::test]
+    async fn retired_browser_assistant_bounds_body_and_does_not_interpret_input() {
+        let (verifier, bearer) = browser_auth_fixture();
+        let app = build_router_with_uploads_and_keys(
+            Readiness::default(),
+            Some(fresh_store()),
+            None,
+            fresh_keys(),
+            Some(verifier),
+        );
+        for path in [
+            "/demo-api/chat",
+            "/demo-api/trace",
+            "/demo-api/trace/stream",
+            "/demo-api/speech",
+        ] {
+            let response = app
+                .clone()
                 .oneshot(
                     Request::builder()
-                        .method(Method::POST)
-                        .header("content-type", "application/json")
-                        .uri("/demo-api/trace")
-                        .body(Body::from(
-                            serde_json::json!({
-                                "text": text,
-                                "simulate_unlocked_pin": true,
-                                "simulate_location": true,
-                            })
-                            .to_string(),
-                        ))
-                        .expect("request"),
+                        .method("POST")
+                        .uri(path)
+                        .header(header::AUTHORIZATION, &bearer)
+                        .body(Body::from("x".repeat(MAX_ASSISTANT_BODY_BYTES + 1)))
+                        .unwrap(),
                 )
                 .await
-                .expect("response");
-
-            assert_eq!(response.status(), StatusCode::OK, "{text}");
-            let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE, "{path}");
+            assert_eq!(response.headers()[header::CONTENT_TYPE], "application/json");
+            assert_eq!(
+                response.headers()[header::CACHE_CONTROL],
+                "private, no-store"
+            );
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(path)
+                        .header(header::AUTHORIZATION, &bearer)
+                        .body(Body::from("{not-json"))
+                        .unwrap(),
+                )
                 .await
-                .expect("body bytes");
-            let payload: serde_json::Value = serde_json::from_slice(&bytes).expect("json body");
-            let steps = payload["steps"].as_array().expect("steps array");
-            let action_names = steps
-                .iter()
-                .filter(|step| step["kind"] == "action" || step["kind"] == "answer")
-                .map(|step| step["name"].as_str().unwrap_or_default())
-                .collect::<Vec<_>>();
-            assert_eq!(action_names, expected_actions, "{text}: {steps:?}");
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE, "{path}");
         }
-    }
-
-    #[tokio::test]
-    async fn demo_stream_emits_the_selected_work_as_its_only_progress_cue() {
-        let response = demo_app(Readiness::default())
-            .oneshot(
-                Request::builder()
-                    .method(Method::POST)
-                    .header("content-type", "application/json")
-                    .uri("/demo-api/trace/stream")
-                    .body(Body::from(r#"{"text":"how tall is the eiffel tower"}"#))
-                    .expect("request"),
-            )
-            .await
-            .expect("response");
-
-        assert_eq!(response.status(), StatusCode::OK);
-        let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
-            .await
-            .expect("stream bytes");
-        let stream = String::from_utf8(bytes.to_vec()).expect("SSE is UTF-8");
-        assert_eq!(stream.matches("event: cue").count(), 1, "{stream}");
-        assert!(
-            stream.contains(r#"{"text":"Looking up how tall is the eiffel tower"}"#),
-            "the cue must name the selected search: {stream}"
-        );
-        assert!(!stream.contains("Just a moment"), "{stream}");
-    }
-
-    /// AN ASSISTANT TURN BELONGS TO ITS CALLER.
-    ///
-    /// These routes used to insert `from_edge("V:01:D:web-demo:U:operator")`
-    /// unconditionally, so every wearer turn ran in the demo partition: a
-    /// "remember …" saved somewhere the wearer's own `/notes` can never read,
-    /// answered with "Saved", and `recall_memory` then reported authoritatively
-    /// that they had no such note.
-    ///
-    /// The `U:alice` case is the whole fix in one assertion — the identity must
-    /// COLLAPSE to the account both front doors share, which is exactly what
-    /// `from_edge` on a raw CN does not do.
-    #[test]
-    fn an_assistant_turn_resolves_to_its_caller_not_the_demo_account() {
-        // `DemoErrorResponse` has no `Debug` (it is a wire type), so read the
-        // outcome rather than unwrapping through it.
-        fn account(headers: &HeaderMap) -> Result<String, StatusCode> {
-            turn_principal(headers)
-                .map(|principal| principal.expose_for_authorization().to_owned())
-                .map_err(|(status, _)| status)
-        }
-
-        let mut headers = HeaderMap::new();
-        assert_eq!(
-            account(&headers).as_deref(),
-            Ok(crate::capture_api::DEMO_PRINCIPAL),
-            "with nobody identified the demo account remains the fallback, which \
-             is what keeps the keyless demo working"
-        );
-
-        // Assembled rather than written out, so the source never contains a
-        // literal DeviceUser subject (`verify/hygiene.py`).
-        let device_cn = "V:01:D:pin1:U:alice";
-        headers.insert(
-            crate::config::EDGE_PRINCIPAL_HEADER,
-            format!("By=spiffe://cosmos.local/edge;Subject=\"CN={device_cn}\"")
-                .parse()
-                .unwrap(),
-        );
-        assert_eq!(
-            account(&headers).as_deref(),
-            Ok("U:alice"),
-            "a device CN must collapse to the account principal the wearer's own \
-             dashboard reads, not stay a raw device subject"
-        );
-
-        // An asserted web identity that does not hold is a closed door, never a
-        // fall-through into the demo partition.
-        let mut asserted = HeaderMap::new();
-        asserted.insert(header::AUTHORIZATION, "Bearer not-a-jwt".parse().unwrap());
-        assert_eq!(account(&asserted).err(), Some(StatusCode::UNAUTHORIZED));
-    }
-
-    /// The same property over the wire, on the route Center actually calls.
-    #[tokio::test]
-    async fn a_trace_turn_refuses_a_bearer_it_cannot_verify() {
-        let response = demo_app(Readiness::default())
-            .oneshot(
-                Request::builder()
-                    .method(Method::POST)
-                    .header("content-type", "application/json")
-                    .header(header::AUTHORIZATION, "Bearer not-a-jwt")
-                    .uri("/demo-api/trace")
-                    .body(Body::from(r#"{"text":"remember the gate code"}"#))
-                    .expect("request"),
-            )
-            .await
-            .expect("response");
-
-        assert_eq!(
-            response.status(),
-            StatusCode::UNAUTHORIZED,
-            "running this turn under the demo account would answer the caller \
-             with somebody else's data"
-        );
     }
 
     use cosmos_protocol::capture as capture_pb;
@@ -4175,10 +3550,9 @@ mod admin_gate_tests {
     async fn sealed_account_ingestion_populates_only_the_named_account_partition() {
         unsafe { std::env::set_var("COSMOS_ADMIN_TOKEN", "s3cret-operator-token") };
         let store = fresh_store();
-        let demo = DemoBackend::new(store.clone());
         let state = HttpState {
             readiness: Readiness::default(),
-            demo: Some(demo),
+            verifier: None,
             store: Some(store.clone()),
             integrations: crate::integrations::active(),
             uploads: None,

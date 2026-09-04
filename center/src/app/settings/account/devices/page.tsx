@@ -8,6 +8,7 @@ import styles from "./devices.module.css";
 import { EmptyState, SectionSkeleton } from "@/components/States";
 import { StatusChip, StatusMessage } from "@/components/Status";
 import { ListRow } from "@/components/Page";
+import { PinRuntimeApproval } from "./PinRuntimeApproval";
 import {
   buildDeviceOverview,
   parseDeviceStatusResponse,
@@ -314,6 +315,7 @@ export default function Page() {
           void statusQuery.refetch();
         }}
       />
+      <PinRuntimeApproval />
     </>
   );
 }

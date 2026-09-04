@@ -21,6 +21,7 @@ use uuid::Uuid;
 struct ApiState {
     store: SharedStore,
     verifier: Option<Arc<JwtVerifier>>,
+    pairing: Option<crate::enrollment::SharedEnrollmentStore>,
 }
 
 pub fn router(store: SharedStore) -> Router {
@@ -28,14 +29,28 @@ pub fn router(store: SharedStore) -> Router {
 }
 
 fn with_verifier(store: SharedStore, verifier: Option<Arc<JwtVerifier>>) -> Router {
+    with_pairing(store, verifier, crate::enrollment::pairing_store())
+}
+
+fn with_pairing(
+    store: SharedStore,
+    verifier: Option<Arc<JwtVerifier>>,
+    pairing: Option<crate::enrollment::SharedEnrollmentStore>,
+) -> Router {
     Router::new()
         .route("/surface-api/v1/surfaces", get(list).post(approve))
         .route("/surface-api/v1/surfaces/:surface_id", delete(revoke))
         .route("/surface-api/v1/surfaces/:surface_id/state", post(state))
         .route("/surface-api/v1/surfaces/:surface_id/leave", post(leave))
+        .route("/surface-api/v1/pins", get(list_pins).post(approve_pin))
+        .route("/surface-api/v1/pins/:surface_id", delete(revoke_pin))
         .layer(DefaultBodyLimit::max(1024))
         .layer(axum::middleware::map_response(no_store))
-        .with_state(ApiState { store, verifier })
+        .with_state(ApiState {
+            store,
+            verifier,
+            pairing,
+        })
 }
 
 async fn no_store(mut response: Response) -> Response {
@@ -131,8 +146,88 @@ async fn list(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let principal = owner(&headers, &api)?;
     Ok(Json(
-        json!({"surfaces": api.store.surfaces(&principal).await?}),
+        json!({"surfaces": api.store.surfaces(&principal).await?.into_iter().filter(|surface| matches!(surface.binding, surface_registry::Binding::Browser)).collect::<Vec<_>>()}),
     ))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PinApproval {
+    device_id: String,
+    approval: String,
+}
+
+async fn list_pins(
+    State(api): State<ApiState>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let principal = owner(&headers, &api)?;
+    let mut pins = Vec::new();
+    for surface in api.store.surfaces(&principal).await? {
+        if let surface_registry::Binding::Pin { device_id } = &surface.binding {
+            match crate::pin_admission::paired_owner(api.pairing.as_ref(), &principal, device_id)
+                .await
+            {
+                Ok(()) => pins.push(surface.pin_view(Some(true))?),
+                Err(RegistryError::NotFound) => pins.push(surface.pin_view(Some(false))?),
+                Err(RegistryError::Unavailable) => pins.push(surface.pin_view(None)?),
+                Err(error) => return Err(error.into()),
+            }
+        }
+    }
+    Ok(Json(json!({"pins": pins})))
+}
+
+async fn approve_pin(
+    State(api): State<ApiState>,
+    headers: HeaderMap,
+    request: Result<Json<PinApproval>, JsonRejection>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let principal = owner(&headers, &api)?;
+    let request = body(request)?;
+    if request.approval != surface_registry::PIN_APPROVAL {
+        return Err(invalid());
+    }
+    let device = cosmos_core::AuthenticatedDeviceIdentity::from_edge(&request.device_id)
+        .map_err(|_| invalid())?;
+    let device_id = device.expose_for_authorization().to_owned();
+    crate::pin_admission::paired_owner(api.pairing.as_ref(), &principal, &device_id).await?;
+    let surface_id = surface_registry::pin_surface_id(&principal, &device_id);
+    let surface = api
+        .store
+        .mutate_surface(&principal, surface_id, Mutation::ApprovePin { device_id })
+        .await?;
+    Ok(Json(json!({"pin": surface.pin_view(Some(true))?})))
+}
+
+async fn revoke_pin(
+    State(api): State<ApiState>,
+    Path(surface_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let principal = owner(&headers, &api)?;
+    let surface_id = id(&surface_id)?;
+    let current = api
+        .store
+        .surface(&principal, surface_id)
+        .await?
+        .ok_or(RegistryError::NotFound)?;
+    let surface_registry::Binding::Pin { device_id } = &current.binding else {
+        return Err(RegistryError::NotFound.into());
+    };
+    let current_paired =
+        match crate::pin_admission::paired_owner(api.pairing.as_ref(), &principal, device_id).await
+        {
+            Ok(()) => Some(true),
+            Err(RegistryError::NotFound) => Some(false),
+            Err(RegistryError::Unavailable) => None,
+            Err(error) => return Err(error.into()),
+        };
+    let surface = api
+        .store
+        .mutate_surface(&principal, surface_id, Mutation::RevokePin)
+        .await?;
+    Ok(Json(json!({"pin": surface.pin_view(current_paired)?})))
 }
 async fn approve(
     State(api): State<ApiState>,
@@ -228,6 +323,182 @@ mod tests {
     use axum::{body::Body, http::Request};
     use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header};
     use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn pin_admission_owner_can_revoke_while_pairing_is_unavailable() {
+        let store: SharedStore = Arc::new(crate::store::MemoryStore::default());
+        let principal = cosmos_core::AuthenticatedPrincipal::for_user("owner").unwrap();
+        let principal = principal.expose_for_authorization();
+        let id = surface_registry::pin_surface_id(principal, "aabb");
+        store
+            .mutate_surface(
+                principal,
+                id,
+                Mutation::ApprovePin {
+                    device_id: "aabb".into(),
+                },
+            )
+            .await
+            .unwrap();
+        let app = with_pairing(store.clone(), Some(verifier()), None);
+        let root = "/surface-api/v1/pins";
+        let owner = bearer("owner");
+        let (status, listed) = call(&app, "GET", root, Some(&owner), None, json!(null)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(listed["pins"].as_array().unwrap().len(), 1);
+        assert!(listed["pins"][0]["currentPaired"].is_null());
+        assert_eq!(
+            call(
+                &app,
+                "POST",
+                root,
+                Some(&owner),
+                None,
+                json!({"deviceId":"aabb", "approval":surface_registry::PIN_APPROVAL})
+            )
+            .await
+            .0,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        let (status, revoked) = call(
+            &app,
+            "DELETE",
+            &format!("{root}/{id}"),
+            Some(&owner),
+            None,
+            json!(null),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(revoked["pin"]["revoked"], true);
+        assert!(revoked["pin"]["currentPaired"].is_null());
+        assert!(store.surface(principal, id).await.unwrap().unwrap().revoked);
+    }
+
+    #[tokio::test]
+    async fn pin_admission_owner_api_requires_pairing_and_prevents_profile_confusion() {
+        use crate::enrollment::EnrollmentStore;
+        let store = Arc::new(crate::store::MemoryStore::default());
+        let pairing = Arc::new(crate::enrollment::MemoryEnrollmentStore::default());
+        pairing.put_device_account("aabb", "owner").await.unwrap();
+        pairing.put_device_account("ccdd", "other").await.unwrap();
+        let app = with_pairing(store, Some(verifier()), Some(pairing.clone()));
+        let owner = bearer("owner");
+        let root = "/surface-api/v1/pins";
+        let request = json!({"deviceId": "AABB", "approval": surface_registry::PIN_APPROVAL});
+        for authorization in [None, Some("Bearer invalid"), Some("Basic invalid")] {
+            assert_eq!(
+                call(&app, "POST", root, authorization, None, request.clone())
+                    .await
+                    .0,
+                StatusCode::UNAUTHORIZED
+            );
+        }
+        for device in ["ccdd", "eeff"] {
+            assert_eq!(
+                call(
+                    &app,
+                    "POST",
+                    root,
+                    Some(&owner),
+                    None,
+                    json!({"deviceId": device, "approval": surface_registry::PIN_APPROVAL})
+                )
+                .await
+                .0,
+                StatusCode::NOT_FOUND
+            );
+        }
+        for field in [
+            "manifest",
+            "trustLevel",
+            "principal",
+            "occupancy",
+            "surfaceId",
+        ] {
+            let mut elevated = request.clone();
+            elevated[field] = "private".into();
+            assert_eq!(
+                call(&app, "POST", root, Some(&owner), None, elevated)
+                    .await
+                    .0,
+                StatusCode::BAD_REQUEST
+            );
+        }
+        let (status, approved) =
+            call(&app, "POST", root, Some(&owner), None, request.clone()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(approved["pin"]["deviceId"], "aabb");
+        assert_eq!(approved["pin"]["actorIdentity"], "unknown");
+        assert!(approved.get("connection").is_none());
+        let surface_id = approved["pin"]["surfaceId"].as_str().unwrap();
+        let (_, again) = call(&app, "POST", root, Some(&owner), None, request).await;
+        assert_eq!(again["pin"]["surfaceId"], surface_id);
+        assert_eq!(again["pin"]["revision"], 2);
+        let (_, browser_list) = call(
+            &app,
+            "GET",
+            "/surface-api/v1/surfaces",
+            Some(&owner),
+            None,
+            json!(null),
+        )
+        .await;
+        assert_eq!(browser_list["surfaces"], json!([]));
+        assert_eq!(
+            call(
+                &app,
+                "POST",
+                "/surface-api/v1/surfaces",
+                Some(&owner),
+                None,
+                json!({"surfaceId": surface_id, "approval":"browser-shared-display-v1"})
+            )
+            .await
+            .0,
+            StatusCode::NOT_FOUND
+        );
+        let (_, listed) = call(&app, "GET", root, Some(&owner), None, json!(null)).await;
+        assert_eq!(listed["pins"].as_array().unwrap().len(), 1);
+        pairing.put_device_account("aabb", "other").await.unwrap();
+        assert_eq!(
+            call(&app, "GET", root, Some(&owner), None, json!(null))
+                .await
+                .1["pins"][0]["currentPaired"],
+            json!(false)
+        );
+        let path = format!("{root}/{surface_id}");
+        assert_eq!(
+            call(
+                &app,
+                "DELETE",
+                &path,
+                Some(&bearer("other")),
+                None,
+                json!(null)
+            )
+            .await
+            .0,
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            call(&app, "DELETE", &path, Some(&owner), None, json!(null))
+                .await
+                .1["pin"]["revoked"],
+            true
+        );
+        let unavailable = with_pairing(
+            Arc::new(crate::store::MemoryStore::default()),
+            Some(verifier()),
+            None,
+        );
+        assert_eq!(
+            call(&unavailable, "GET", root, Some(&owner), None, json!(null))
+                .await
+                .0,
+            StatusCode::OK
+        );
+    }
 
     fn verifier() -> Arc<JwtVerifier> {
         let (_, public) = crate::web_auth::test_jwt_keypair();

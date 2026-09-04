@@ -660,6 +660,11 @@ pub const INGEST_CHUNK: usize = 256;
 
 #[tonic::async_trait]
 pub trait Store: Send + Sync + 'static {
+    async fn surface(
+        &self,
+        principal: &str,
+        surface_id: uuid::Uuid,
+    ) -> Result<Option<crate::surface_registry::Surface>, crate::surface_registry::RegistryError>;
     async fn surfaces(
         &self,
         principal: &str,
@@ -1095,6 +1100,10 @@ pub type SharedStore = Arc<dyn Store>;
 /// never-synced account.
 #[derive(Default)]
 pub struct MemoryStore {
+    /// Test-only observation of assistant memory preload/note writes/account
+    /// context. Never a runtime authorization switch or a production metric.
+    #[cfg(test)]
+    pub(crate) assistant_private_accesses: std::sync::atomic::AtomicUsize,
     surfaces: Mutex<HashMap<String, crate::surface_registry::Registry>>,
     books: Mutex<HashMap<String, ContactBook>>,
     captures: Mutex<HashMap<String, MemoryBook>>,
@@ -1410,6 +1419,25 @@ pub fn build_memory(new: NewMemory, numeric_id: i64) -> MemoryRecord {
 
 #[tonic::async_trait]
 impl Store for MemoryStore {
+    async fn surface(
+        &self,
+        principal: &str,
+        surface_id: uuid::Uuid,
+    ) -> Result<Option<crate::surface_registry::Surface>, crate::surface_registry::RegistryError>
+    {
+        use crate::surface_registry::{RegistryError, now_ms};
+        if self.state_path.is_some() {
+            return Err(RegistryError::Unavailable);
+        }
+        let guard = self
+            .surfaces
+            .lock()
+            .map_err(|_| RegistryError::Unavailable)?;
+        Ok(guard
+            .get(principal)
+            .and_then(|registry| registry.records.get(&surface_id))
+            .map(|record| record.view(now_ms())))
+    }
     async fn surfaces(
         &self,
         principal: &str,
@@ -1824,6 +1852,9 @@ impl Store for MemoryStore {
         encrypted_note: Option<EncryptedData>,
         encrypted_location: Option<EncryptedData>,
     ) -> Written<NoteRecord> {
+        #[cfg(test)]
+        self.assistant_private_accesses
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let mut guard = self.captures.lock().expect("capture store poisoned");
         let book = guard.entry(principal.to_owned()).or_default();
         let record = NoteRecord {
@@ -1868,6 +1899,9 @@ impl Store for MemoryStore {
         start: Option<SyncTime>,
         end: Option<SyncTime>,
     ) -> Written<Vec<NoteRecord>> {
+        #[cfg(test)]
+        self.assistant_private_accesses
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let guard = self.captures.lock().expect("capture store poisoned");
         let Some(book) = guard.get(principal) else {
             return Ok(Vec::new());
@@ -2163,6 +2197,9 @@ impl Store for MemoryStore {
         principal: &str,
         kind: AccountBlobKind,
     ) -> Written<Option<Vec<u8>>> {
+        #[cfg(test)]
+        self.assistant_private_accesses
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let guard = self.account.lock().expect("account store poisoned");
         Ok(guard
             .get(principal)
