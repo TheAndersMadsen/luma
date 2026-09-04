@@ -1,0 +1,7 @@
+.card { padding: 24px; }
+.card h2 { font-size: 18px; margin-bottom: 12px; }
+.card p { line-height: 1.5; margin: 12px 0; }
+.card button { padding: 10px 14px; margin: 4px 8px 4px 0; border: 1px solid currentColor; border-radius: 8px; cursor: pointer; }
+.card button:disabled { opacity: .5; cursor: wait; }
+.card ul { list-style: none; padding: 0; }
+.card li { border-top: 1px solid var(--hu-text-muted); padding: 18px 0; margin-top: 12px; }

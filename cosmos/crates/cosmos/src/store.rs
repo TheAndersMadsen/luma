@@ -660,6 +660,18 @@ pub const INGEST_CHUNK: usize = 256;
 
 #[tonic::async_trait]
 pub trait Store: Send + Sync + 'static {
+    async fn surfaces(
+        &self,
+        principal: &str,
+    ) -> Result<Vec<crate::surface_registry::Surface>, crate::surface_registry::RegistryError>;
+
+    async fn mutate_surface(
+        &self,
+        principal: &str,
+        surface_id: uuid::Uuid,
+        mutation: crate::surface_registry::Mutation,
+    ) -> Result<crate::surface_registry::Surface, crate::surface_registry::RegistryError>;
+
     /// Persist `list` under `principal`, returning the canonical stored form of
     /// its plaintext contacts in request order.
     ///
@@ -1083,6 +1095,7 @@ pub type SharedStore = Arc<dyn Store>;
 /// never-synced account.
 #[derive(Default)]
 pub struct MemoryStore {
+    surfaces: Mutex<HashMap<String, crate::surface_registry::Registry>>,
     books: Mutex<HashMap<String, ContactBook>>,
     captures: Mutex<HashMap<String, MemoryBook>>,
     /// `principal -> {payload kind -> opaque bytes}`. A `BTreeMap` so the
@@ -1397,6 +1410,72 @@ pub fn build_memory(new: NewMemory, numeric_id: i64) -> MemoryRecord {
 
 #[tonic::async_trait]
 impl Store for MemoryStore {
+    async fn surfaces(
+        &self,
+        principal: &str,
+    ) -> Result<Vec<crate::surface_registry::Surface>, crate::surface_registry::RegistryError> {
+        use crate::surface_registry::{RegistryError, now_ms};
+        if self.state_path.is_some() {
+            return Err(RegistryError::Unavailable);
+        }
+        let guard = self
+            .surfaces
+            .lock()
+            .map_err(|_| RegistryError::Unavailable)?;
+        Ok(guard
+            .get(principal)
+            .map(|registry| {
+                registry
+                    .records
+                    .values()
+                    .filter(|r| !r.revoked)
+                    .map(|r| r.view(now_ms()))
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
+    async fn mutate_surface(
+        &self,
+        principal: &str,
+        surface_id: uuid::Uuid,
+        mutation: crate::surface_registry::Mutation,
+    ) -> Result<crate::surface_registry::Surface, crate::surface_registry::RegistryError> {
+        use crate::surface_registry::{RegistryError, event, now_ms, transition};
+        // Existing snapshots are best-effort, not an atomic durable ledger.
+        // Never report a registry write as persisted through that backend.
+        if self.state_path.is_some() {
+            return Err(RegistryError::Unavailable);
+        }
+        let mut guard = self
+            .surfaces
+            .lock()
+            .map_err(|_| RegistryError::Unavailable)?;
+        let registry = guard.entry(principal.to_owned()).or_default();
+        let now = now_ms();
+        let (record, kind) = transition(
+            registry.records.get(&surface_id),
+            registry.records.values().filter(|r| !r.revoked).count(),
+            surface_id,
+            &mutation,
+            now,
+        )?;
+        if let Some(kind) = kind {
+            let sequence = registry.events.len() as u64 + 1;
+            let previous = registry
+                .events
+                .last()
+                .map(|e| e.hash())
+                .transpose()?
+                .unwrap_or_default();
+            let entry = event(principal, sequence, previous, kind, &record, now);
+            entry.hash()?;
+            registry.events.push(entry);
+            registry.records.insert(surface_id, record.clone());
+        }
+        Ok(record.view(now))
+    }
+
     async fn put_contacts(
         &self,
         principal: &str,
@@ -2117,6 +2196,69 @@ impl Store for MemoryStore {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn surface_registry_snapshot_backend_rejects_without_mutation() {
+        use crate::surface_registry::{Mutation, RegistryError, hash};
+        let store = MemoryStore {
+            state_path: Some(std::path::PathBuf::from("/unwritten-surface-test-snapshot")),
+            ..Default::default()
+        };
+        let result = store
+            .mutate_surface(
+                "U:surface-test",
+                uuid::Uuid::new_v4(),
+                Mutation::Approve {
+                    token_hash: hash(b"synthetic"),
+                    incarnation: uuid::Uuid::new_v4(),
+                },
+            )
+            .await;
+        assert_eq!(result, Err(RegistryError::Unavailable));
+        assert_eq!(
+            store.surfaces("U:surface-test").await,
+            Err(RegistryError::Unavailable)
+        );
+        assert!(store.surfaces.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn surface_registry_memory_bounds_active_enrollments_and_chains_atomic_changes() {
+        use crate::surface_registry::{Mutation, RegistryError, hash};
+        let store = MemoryStore::default();
+        let ids: Vec<_> = (0..17).map(|_| uuid::Uuid::new_v4()).collect();
+        let approve = || Mutation::Approve {
+            token_hash: hash(b"synthetic"),
+            incarnation: uuid::Uuid::new_v4(),
+        };
+        for id in &ids[..16] {
+            store
+                .mutate_surface("U:owner", *id, approve())
+                .await
+                .unwrap();
+        }
+        assert_eq!(
+            store.mutate_surface("U:owner", ids[16], approve()).await,
+            Err(RegistryError::SurfaceLimit)
+        );
+        store
+            .mutate_surface("U:owner", ids[0], Mutation::Revoke)
+            .await
+            .unwrap();
+        store
+            .mutate_surface("U:owner", ids[16], approve())
+            .await
+            .unwrap();
+        assert_eq!(store.surfaces("U:owner").await.unwrap().len(), 16);
+        assert!(store.surfaces("U:other").await.unwrap().is_empty());
+        let guard = store.surfaces.lock().unwrap();
+        let registry = &guard["U:owner"];
+        assert_eq!(registry.events.len(), 18);
+        for pair in registry.events.windows(2) {
+            assert_eq!(pair[1].previous_hash, pair[0].hash().unwrap());
+            assert_eq!(pair[1].sequence, pair[0].sequence + 1);
+        }
+    }
+
     /// A PARAPHRASED QUESTION MUST STILL FIND THE LITERAL NOTE.
     ///
     /// Reproduces a live failure: "What do I like?" made the model search

@@ -78,11 +78,88 @@ Its metadata tests validate the inventory and evidence references only; the
 paper's reference implementation and reported test results are unavailable for
 independent reproduction.
 
-Implementation proceeds through provenance; durable runtime policy, registry
-and outcomes; a two-surface render-and-acknowledgment interaction; a realtime
-worker with verified Pin media; scoped intelligence and native clients; then
-full physical and release verification. macOS and Android clients remain on
-the product roadmap without blocking the initial Pin/Center proof.
+Ambiance v2 is the target architecture, not an optional addition to the existing
+assistant. Existing Cosmos behavior is not a correctness requirement where it
+conflicts with that architecture. Preserve necessary stock wire/package
+compatibility and verified release infrastructure; replace conflicting
+orchestration, memory, permission, routing, and output paths. Temporary
+coexistence on the development branch is not the release architecture: remove
+bypasses and superseded control paths before deployment. Existing regression
+tests prove compatibility only; paper-derived behavioral tests define
+architectural acceptance.
+
+The implementation plan keeps Cosmos as the runtime authority and thin clients
+responsible for local permissions, capture, rendering, and playback evidence:
+
+1. **Provenance — implemented in `5ea98384`.** Authentication preserves device
+   evidence through the real plaintext, encrypted, and bidirectional Ai Bus
+   paths. Focused transport tests and broad source checks passed for that
+   increment. Actor identity and physical privacy remain unknown: preserving
+   provenance is not privacy enforcement.
+2. **Phase 2A: durable surface enrollment — implemented, enrollment only.** The owner explicitly
+   approves the current Center browser as a shared visual surface through a
+   verified bearer session, never a share token or forwarded certificate
+   header. Cosmos approves the six-dimensional manifest's capability ceiling,
+   owns its class-0 trust floor, and grants neither hints nor autonomy.
+   Occupancy remains unknown; account ownership does not establish privacy.
+   The PostgreSQL Store atomically commits each registry transition with its
+   per-principal hash-chain event. Connection credentials bind the account,
+   surface, and connection incarnation, with a fixed one-hour expiry separate
+   from 45-second liveness. Enrollment starts hidden; hiding, leaving, or
+   revoking makes the surface ineligible. Becoming visible restores only
+   availability under the approved ceiling, never private-room status.
+   Center exposes join, leave, revoke, and a surface list without stored
+   content. Enrollment alone does not prove that a channel can render.
+   PostgreSQL is the durable default; the snapshot-backed registry is unsupported
+   and fails closed, while default MemoryStore is ephemeral. The current cap is
+   16 active approvals, not the paper's 50-surface evaluation. This registry hash
+   chain has no independent anchors, retention or privacy-filtered audit views;
+   it is not yet the complete routing and policy ledger.
+3. **Phase 2B: exercised Pin-to-Center presentation — next.** Join privacy
+   provenance before inference or memory retrieval; connect runtime-owned
+   intents to one authoritative runtime on which the stock handlers converge.
+   Reuse provider adapters, not the old control path as a fallback. Filter
+   eligible channels before versioned
+   ranking and commit the decision durably before dispatch. Center receives
+   bounded typed render commands and acknowledges after the render commits,
+   binding the exact action, channel, incarnation, and content. Commit that
+   acknowledgment before a controlled terminal outcome. State changes cancel
+   or dismiss affected output; use a 2–5-second action timeout, not the
+   heartbeat deadline. This does not prove arbitrary model prose truthful.
+   Redacted logs, checkpoints, and independent anchors are required before
+   claiming the full audit-ledger invariant, not merely a local hash chain.
+4. **Phase 3: realtime Pin interaction.** Verify the actual stock PCM codec,
+   framing, correlation, cancellation, and playback lifecycle on hardware.
+   Add an explicit media contract only if the stock seam is insufficient;
+   preserve stock wire identities and all five APK roles. The realtime front
+   delegates bounded larger-model analysis without executor capability.
+   Measure interruption against audio actually played and reject late results
+   from superseded turns, rather than treating server enqueue as playback.
+5. **Phase 4: thin native clients and scoped intelligence.** macOS and Android
+   use the same authority protocol with native permission and lifecycle
+   handling. Scope memory to the requesting origin. Earned authority requires
+   calibration, counterfactual lift, coverage, and tenure evidence, not raw
+   acceptance rate. Offline operation permits only preapproved none-risk
+   reflexes. These clients remain part of the product goal, without blocking
+   the initial Pin/Center proof.
+6. **Phase 5: acceptance and release.** Exercise all twelve invariants on real
+   paths, including performance, 50-surface and ablation evaluations, isolated
+   database restart/failure tests, and explicit physical Pin observations.
+   Deploy the authenticated signed release archive and verify the intended
+   release ID with `environment: "production"`. The requested
+   `cosmos.andersmadsen.dk` deployment still requires an explicit domain-identity
+   decision relative to the existing Center address and physical Pin access.
+
+Each phase has behavioral gates, not just inventory updates. Phase 2A tests deny
+another account, share tokens, unsupported capabilities, stale incarnations,
+and self-elevation; failed durable commits do not acknowledge success.
+Actual isolated PostgreSQL tests exercised concurrent pools, reopen, and
+rollback; visibility does not establish privacy. Physical devices, a real
+browser session and database-server restart remain unverified. Phase 2B must reject private
+output into an unknown room and hints that override eligibility, leave dropped
+acknowledgments unresolved instead of guessing completion, and enforce memory
+scope from the origin rather than the chosen output. Do not run these failure
+tests against the production database.
 
 The occupied-room/private-headset conflict remains unresolved and new routing
 must fail closed pending an explicit policy decision. A private output never

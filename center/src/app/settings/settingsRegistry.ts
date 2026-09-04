@@ -30,6 +30,14 @@ export const SETTINGS_GROUPS: readonly SettingsGroup[] = [
     header: ACCOUNT_GROUP,
     routes: [
       {
+        title: "Surfaces",
+        label: "Surfaces",
+        href: "/settings/account/surfaces",
+        description: "Approve and disconnect shared browser displays.",
+        testid: "menu-surfaces-link",
+        keywords: ["browser", "display", "ambiance"],
+      },
+      {
         title: "Details",
         label: "Details",
         href: "/settings/account/details",

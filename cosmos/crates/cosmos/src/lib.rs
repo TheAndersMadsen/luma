@@ -21,6 +21,8 @@ mod response_metadata;
 mod services;
 pub mod store;
 pub mod store_postgres;
+mod surface_api;
+pub mod surface_registry;
 pub mod web_auth;
 
 use std::{future::Future, io, time::Duration};

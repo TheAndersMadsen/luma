@@ -103,6 +103,11 @@ pub(crate) const STORE_MIGRATIONS: &[EmbeddedMigration] = &[
         "0005_device_status_namespacing.sql",
         include_str!("../../../migrations/0005_device_status_namespacing.sql"),
     ),
+    EmbeddedMigration::new(
+        7,
+        "0007_surface_registry.sql",
+        include_str!("../../../migrations/0007_surface_registry.sql"),
+    ),
 ];
 
 /// Statements this history is allowed to remove data with, frozen verbatim.
@@ -488,6 +493,112 @@ fn kind_filter(kinds: &[MemoryKind]) -> Option<Vec<i16>> {
 
 #[tonic::async_trait]
 impl Store for PostgresStore {
+    async fn surfaces(
+        &self,
+        principal: &str,
+    ) -> Result<Vec<crate::surface_registry::Surface>, crate::surface_registry::RegistryError> {
+        use crate::surface_registry::{Record, RegistryError};
+        let rows = sqlx::query("SELECT record::text AS record, (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint AS now_ms FROM cosmos_surface_registry WHERE principal = $1 AND record->>'revoked' = 'false' ORDER BY surface_id LIMIT 17")
+            .bind(principal).fetch_all(&self.pool).await.map_err(|_| RegistryError::Unavailable)?;
+        if rows.len() > 16 {
+            return Err(RegistryError::Unavailable);
+        }
+        let mut surfaces = Vec::new();
+        for row in rows {
+            let record: Record = serde_json::from_str(row.get::<&str, _>("record"))
+                .map_err(|_| RegistryError::Unavailable)?;
+            if !record.revoked {
+                surfaces.push(record.view(row.get("now_ms")));
+            }
+        }
+        Ok(surfaces)
+    }
+
+    async fn mutate_surface(
+        &self,
+        principal: &str,
+        surface_id: uuid::Uuid,
+        mutation: crate::surface_registry::Mutation,
+    ) -> Result<crate::surface_registry::Surface, crate::surface_registry::RegistryError> {
+        use crate::surface_registry::{Record, RegistryError, event, transition};
+        let unavailable = |_| RegistryError::Unavailable;
+        let mut tx = self.pool.begin().await.map_err(unavailable)?;
+        sqlx::query("INSERT INTO cosmos_surface_head (principal) VALUES ($1) ON CONFLICT (principal) DO NOTHING")
+            .bind(principal).execute(&mut *tx).await.map_err(unavailable)?;
+        let head = sqlx::query(
+            "SELECT sequence, hash FROM cosmos_surface_head WHERE principal = $1 FOR UPDATE",
+        )
+        .bind(principal)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(unavailable)?;
+        // Receipt/expiry checks happen after acquiring the serialization lock;
+        // transaction-start time would admit expired credentials after waiting.
+        let now: i64 =
+            sqlx::query_scalar("SELECT (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint")
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(unavailable)?;
+        let row = sqlx::query(
+            "SELECT record::text AS record FROM cosmos_surface_registry WHERE principal = $1 AND surface_id = $2",
+        )
+        .bind(principal)
+        .bind(surface_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(unavailable)?;
+        let current = row
+            .as_ref()
+            .map(|row| {
+                serde_json::from_str::<Record>(row.get::<&str, _>("record"))
+                    .map_err(|_| RegistryError::Unavailable)
+            })
+            .transpose()?;
+        let active_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM cosmos_surface_registry WHERE principal = $1 AND record->>'revoked' = 'false'")
+            .bind(principal).fetch_one(&mut *tx).await.map_err(unavailable)?;
+        let (record, kind) = transition(
+            current.as_ref(),
+            usize::try_from(active_count).map_err(|_| RegistryError::Unavailable)?,
+            surface_id,
+            &mutation,
+            now,
+        )?;
+        if let Some(kind) = kind {
+            let sequence = head
+                .get::<i64, _>("sequence")
+                .checked_add(1)
+                .ok_or(RegistryError::Unavailable)?;
+            let entry = event(
+                principal,
+                sequence as u64,
+                head.get("hash"),
+                kind,
+                &record,
+                now,
+            );
+            let hash = entry.hash()?;
+            let encoded_record =
+                serde_json::to_string(&record).map_err(|_| RegistryError::Unavailable)?;
+            let encoded_event =
+                serde_json::to_string(&entry).map_err(|_| RegistryError::Unavailable)?;
+            sqlx::query("INSERT INTO cosmos_surface_registry (principal, surface_id, record) VALUES ($1, $2, $3::jsonb) ON CONFLICT (principal, surface_id) DO UPDATE SET record = EXCLUDED.record")
+                .bind(principal).bind(surface_id).bind(encoded_record).execute(&mut *tx).await.map_err(unavailable)?;
+            sqlx::query("INSERT INTO cosmos_surface_event (principal, sequence, hash, event) VALUES ($1, $2, $3, $4::jsonb)")
+                .bind(principal).bind(sequence).bind(&hash).bind(encoded_event).execute(&mut *tx).await.map_err(unavailable)?;
+            sqlx::query(
+                "UPDATE cosmos_surface_head SET sequence = $2, hash = $3 WHERE principal = $1",
+            )
+            .bind(principal)
+            .bind(sequence)
+            .bind(hash)
+            .execute(&mut *tx)
+            .await
+            .map_err(unavailable)?;
+        }
+        tx.commit().await.map_err(unavailable)?;
+        Ok(record.view(now))
+    }
+
     /// One transaction: the cursor is allocated on the same connection that
     /// carries the writes and becomes visible with them, so a device can never
     /// be handed a sync point that a not-yet-committed write already sits at or
@@ -1554,6 +1665,7 @@ mod tests {
                 (1, "0001_store.sql"),
                 (4, "0004_listing.sql"),
                 (5, "0005_device_status_namespacing.sql"),
+                (7, "0007_surface_registry.sql"),
                 (2, "0002_enrollment.sql"),
                 (3, "0003_key_directory.sql"),
                 (6, "0006_key_directory_bounds.sql"),
@@ -1606,6 +1718,7 @@ mod tests {
             ("0004_listing.sql", 4),
             ("0005_device_status_namespacing.sql", 1),
             ("0006_key_directory_bounds.sql", 1),
+            ("0007_surface_registry.sql", 4),
         ];
         for migration in all_migrations() {
             let statements = migration.statements().collect::<Vec<_>>();
@@ -1657,6 +1770,10 @@ mod tests {
                 "CREATE INDEX IF NOT EXISTS cosmos_memory_recent",
                 "CREATE INDEX IF NOT EXISTS cosmos_note_recent",
                 "DELETE FROM cosmos_account_blob",
+                "CREATE TABLE IF NOT EXISTS cosmos_surface_head (",
+                "CREATE TABLE IF NOT EXISTS cosmos_surface_registry (",
+                "CREATE TABLE IF NOT EXISTS cosmos_surface_event (",
+                "CREATE INDEX IF NOT EXISTS cosmos_surface_active",
             ]
         );
     }
@@ -1796,6 +1913,133 @@ mod tests {
             }),
             ..Default::default()
         }
+    }
+
+    #[tokio::test]
+    async fn surface_registry_postgres_serializes_independent_pools_and_reopens() {
+        use crate::surface_registry::{Event, Mutation, RegistryError, hash};
+        let Some(first) = store().await else {
+            return;
+        };
+        let second = store().await.unwrap();
+        let principal = format!("surface-test-{}", uuid::Uuid::new_v4());
+        let id = uuid::Uuid::new_v4();
+        let incarnation = uuid::Uuid::new_v4();
+        let token_hash = hash(b"synthetic-surface-capability");
+        first
+            .mutate_surface(
+                &principal,
+                id,
+                Mutation::Approve {
+                    token_hash: token_hash.clone(),
+                    incarnation,
+                },
+            )
+            .await
+            .unwrap();
+        let state = |sequence| Mutation::State {
+            token_hash: token_hash.clone(),
+            incarnation,
+            sequence,
+            visible: true,
+        };
+        let (a, b) = tokio::join!(
+            first.mutate_surface(&principal, id, state(1)),
+            second.mutate_surface(&principal, id, state(1))
+        );
+        assert_eq!(a.unwrap().revision, 2);
+        assert_eq!(b.unwrap().revision, 2);
+        let (a, b) = tokio::join!(
+            first.mutate_surface(&principal, id, state(2)),
+            second.mutate_surface(&principal, id, state(3))
+        );
+        assert!(a.is_ok() || a == Err(RegistryError::SequenceConflict));
+        assert!(b.is_ok());
+        assert_eq!(first.surfaces(&principal).await.unwrap()[0].sequence, 3);
+        assert_eq!(
+            first.mutate_surface(&principal, id, state(1)).await,
+            Err(RegistryError::SequenceConflict)
+        );
+        let rows = sqlx::query("SELECT sequence, hash, event::text AS event FROM cosmos_surface_event WHERE principal=$1 ORDER BY sequence").bind(&principal).fetch_all(&first.pool).await.unwrap();
+        let mut previous = String::new();
+        for (index, row) in rows.iter().enumerate() {
+            let event: Event = serde_json::from_str(row.get("event")).unwrap();
+            assert_eq!(event.sequence, index as u64 + 1);
+            assert_eq!(event.previous_hash, previous);
+            assert_eq!(event.principal, principal);
+            assert_eq!(event.hash().unwrap(), row.get::<String, _>("hash"));
+            previous = event.hash().unwrap();
+        }
+        let expected = first.surfaces(&principal).await.unwrap();
+        drop(first);
+        drop(second);
+        let reopened = store().await.unwrap();
+        assert_eq!(reopened.surfaces(&principal).await.unwrap(), expected);
+        let rotated = reopened
+            .mutate_surface(
+                &principal,
+                id,
+                Mutation::Approve {
+                    token_hash: hash(b"new-synthetic-capability"),
+                    incarnation: uuid::Uuid::new_v4(),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(rotated.sequence, 0);
+        assert_eq!(
+            reopened.mutate_surface(&principal, id, state(4)).await,
+            Err(RegistryError::InvalidConnection)
+        );
+    }
+
+    #[tokio::test]
+    async fn surface_registry_postgres_failed_append_rolls_back_state_and_head() {
+        use crate::surface_registry::{Mutation, RegistryError, hash};
+        let Some(store) = store().await else {
+            return;
+        };
+        let principal = format!("surface-rollback-test-{}", uuid::Uuid::new_v4());
+        let id = uuid::Uuid::new_v4();
+        let incarnation = uuid::Uuid::new_v4();
+        let token_hash = hash(b"synthetic-rollback-capability");
+        let before = store
+            .mutate_surface(
+                &principal,
+                id,
+                Mutation::Approve {
+                    token_hash: token_hash.clone(),
+                    incarnation,
+                },
+            )
+            .await
+            .unwrap();
+        // Test-only duplicate next sequence forces the append (after registry
+        // update) to fail. Scoped to this synthetic principal, no shared DDL.
+        sqlx::query("INSERT INTO cosmos_surface_event (principal, sequence, hash, event) VALUES ($1, 2, 'test-obstruction', '{}'::jsonb)").bind(&principal).execute(&store.pool).await.unwrap();
+        assert_eq!(
+            store
+                .mutate_surface(
+                    &principal,
+                    id,
+                    Mutation::State {
+                        token_hash,
+                        incarnation,
+                        sequence: 1,
+                        visible: true
+                    }
+                )
+                .await,
+            Err(RegistryError::Unavailable)
+        );
+        assert_eq!(store.surfaces(&principal).await.unwrap(), vec![before]);
+        let sequence: i64 =
+            sqlx::query_scalar("SELECT sequence FROM cosmos_surface_head WHERE principal=$1")
+                .bind(&principal)
+                .fetch_one(&store.pool)
+                .await
+                .unwrap();
+        assert_eq!(sequence, 1);
     }
 
     /// REGRESSION: writes used to be issued with `let _ = sqlx::query(..)`, so a

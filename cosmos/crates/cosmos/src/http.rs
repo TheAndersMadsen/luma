@@ -261,11 +261,14 @@ fn build_router_with_uploads_and_keys(
     // after the main router's state is applied, and only in the demo mode that
     // publishes a web frontend. Never mounted on a device-facing workload.
     match capture_store {
-        Some(store) => app.merge(crate::capture_api::router(
-            store,
-            keys,
-            crate::capture_api::DEMO_PRINCIPAL,
-        )),
+        Some(store) => {
+            app.merge(crate::surface_api::router(store.clone()))
+                .merge(crate::capture_api::router(
+                    store,
+                    keys,
+                    crate::capture_api::DEMO_PRINCIPAL,
+                ))
+        }
         None => app,
     }
 }

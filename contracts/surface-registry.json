@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "basePath": "/surface-api/v1/surfaces",
+  "authentication": "Verified owner Authorization Bearer required on every operation; state and leave additionally require X-Cosmos-Surface-Token",
+  "timeUnit": "Unix epoch milliseconds, server-owned",
+  "limits": {"bodyBytes": 1024, "activeSurfacesPerOwner": 16, "connectionLifetimeMs": 3600000, "livenessLeaseMs": 45000, "recommendedHeartbeatMs": 15000},
+  "approval": "browser-shared-display-v1",
+  "routes": {
+    "GET /": {"response": {"surfaces": "Surface[] (non-revoked only)"}},
+    "POST /": {"request": {"surfaceId": "UUID", "approval": "browser-shared-display-v1"}, "response": {"surface": "Surface", "connection": {"token": "64 lowercase hex characters; returned only here", "incarnation": "UUID", "expiresAt": "integer milliseconds"}}, "semantics": "Explicit approval or reapproval atomically rotates connection and records approval; initial visible=false, sequence=0"},
+    "DELETE /:surfaceId": {"response": {"surface": "Surface"}, "semantics": "Owner revokes approval and invalidates connection"},
+    "POST /:surfaceId/state": {"request": {"incarnation": "UUID", "sequence": "positive safe integer", "visible": "boolean"}, "response": {"surface": "Surface"}, "semantics": "Strictly increasing sequence; exact duplicate is idempotent without renewing lease; different payload at same sequence or stale sequence is conflict"},
+    "POST /:surfaceId/leave": {"request": {"incarnation": "UUID"}, "response": {"surface": "Surface"}, "semantics": "Invalidates connection, not approval; rejoin requires explicit approval"}
+  },
+  "Surface": {
+    "surfaceId": "UUID",
+    "name": "Browser display",
+    "revision": "positive safe integer",
+    "manifest": {
+      "class": "browser",
+      "capabilities": {"input": ["state.visibility"], "output": {"visual.card": {"maxClass": "shared_room", "shared": true}}},
+      "constraints": ["visible_page_only", "no_background_output"],
+      "expression": {"visual.card": ["acknowledged", "degraded"]},
+      "cognition": {"declaredClass": 0, "models": []},
+      "authority": {"mayOriginate": ["state.change"], "reflexive": []}
+    },
+    "trustLevel": 0,
+    "occupancy": "unknown",
+    "renderVerified": false,
+    "revoked": "boolean",
+    "visible": "boolean",
+    "connected": "boolean; server-derived from credential expiry, lease and leave/revoke",
+    "available": "boolean; connected && visible; does not assert render verification or lead eligibility",
+    "sequence": "nonnegative safe integer",
+    "connectionExpiresAt": "integer milliseconds",
+    "leaseExpiresAt": "integer milliseconds"
+  },
+  "errors": {"shape": {"error": "fixed code"}, "400": "invalid_request", "401": "unauthorized", "403": "invalid_connection", "404": "not_found", "409": "sequence_conflict", "429": "surface_limit", "503": "unavailable"},
+  "limitations": ["Enrollment and metadata only, no assistant dispatch or rendered-action acknowledgment", "Visibility never asserts occupancy, privacy or earned trust", "Hash chaining has no external checkpoint or device countersignature yet", "No audit-content read API"]
+}

@@ -25,6 +25,7 @@ test("settings navigation exposes only current consumer destinations", async () 
     "/settings/account/devices",
     "/settings/account/features",
     "/settings/account/services",
+    "/settings/account/surfaces",
     "/settings/contacts",
     "/settings/privacy",
     "/settings/pin/gallery",

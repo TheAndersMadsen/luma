@@ -125,6 +125,13 @@ export async function webapiHeaders(): Promise<Record<string, string>> {
   return {};
 }
 
+/** Owner surface authority never falls back to a certificate, demo or admin identity. */
+export async function surfaceOwnerHeaders(): Promise<Record<string, string>> {
+  const bearer = await requestBearer();
+  if (!bearer) throw new SessionExpiredError();
+  return { authorization: `Bearer ${bearer}` };
+}
+
 /**
  * The deadline every call to Cosmos is meant to contain.
  *

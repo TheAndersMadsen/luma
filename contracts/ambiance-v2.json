@@ -49,6 +49,38 @@
       "anchor": "async fn device_provenance_reaches_plaintext_encrypted_and_bidi_model_contexts()",
       "scope": "Defines an in-process test of authenticated device provenance reaching model context through plaintext, encrypted and bidirectional stock handlers.",
       "limitation": "Test definition only, not a passing execution report or physical Pin evidence. Does not establish enrollment, physical privacy, epochs, replay protection or complete invariant coverage."
+    },
+    {
+      "id": "browser-manifest-definition",
+      "kind": "implementation",
+      "path": "cosmos/crates/cosmos/src/surface_registry.rs",
+      "anchor": "pub fn browser_manifest()",
+      "scope": "Defines the fixed browser manifest persisted on owner approval, with a shared visual capability ceiling, visibility constraints and class-zero cognition; registry state retains a class-zero trust floor.",
+      "limitation": "Browser enrollment only. Does not establish Pin participation, rendering, private channel posture or earned authority."
+    },
+    {
+      "id": "browser-enrollment-auth-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/surface_api.rs",
+      "anchor": "async fn surface_registry_http_rejects_untrusted_auth_and_manifest_self_upgrade()",
+      "scope": "Defines rejection of untrusted enrollment authentication and caller-supplied manifest, trust, occupancy or principal upgrades.",
+      "limitation": "Test definition only, not an execution report. Covers the browser enrollment HTTP boundary, not all surface transports, runtime dispatch or complete invariant coverage."
+    },
+    {
+      "id": "registry-atomic-append-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/store_postgres.rs",
+      "anchor": "async fn surface_registry_postgres_failed_append_rolls_back_state_and_head()",
+      "scope": "Defines a PostgreSQL registry transition whose event-append failure must roll back surface state and its per-principal chain head together.",
+      "limitation": "Test definition only, not an execution report. Registry mutations only, not routing or all policy decisions; no independent anchors, retention, privacy-filtered audit views or database-server restart evidence."
+    },
+    {
+      "id": "center-enrollment-lifecycle-definition",
+      "kind": "implementation",
+      "path": "center/src/app/settings/account/surfaces/Surfaces.tsx",
+      "anchor": "export function Surfaces()",
+      "scope": "Provides owner approval, leave, revoke and listing controls for the current shared browser tab, with visibility and page lifecycle reporting.",
+      "limitation": "Enrollment lifecycle only; no routed content, render acknowledgment, physical privacy or Pin-to-Center presentation evidence."
     }
   ],
   "requirements": [
@@ -94,8 +126,8 @@
       "sourceSections": ["4.4", "5.4", "9.2"],
       "requirement": "Routing and policy decisions retain rationale in a verifiable, tamper-evident durable history.",
       "acceptance": "Verify append-before-dispatch, ordering, reopen, tamper/removal detection, signed checkpoints and independently countersigned or protected checkpoint anchors.",
-      "status": "pending",
-      "evidence": []
+      "status": "partial",
+      "evidence": ["registry-atomic-append-test-definition"]
     },
     {
       "id": "invariant-06",
@@ -166,8 +198,8 @@
       "sourceSections": ["4.1", "4.8", "6.1"],
       "requirement": "Declare capabilities, constraints, per-channel posture, expression, cognition and bounded authority; enrollment attests asserted posture and registry-owned trust is separate.",
       "acceptance": "Validate dynamic state and capabilities without product-name privileges; expression eligibility respects the user's perceptual profile and has one expression lead.",
-      "status": "pending",
-      "evidence": []
+      "status": "partial",
+      "evidence": ["browser-manifest-definition", "browser-enrollment-auth-test-definition"]
     },
     {
       "id": "origin-provenance",
@@ -274,8 +306,8 @@
       "sourceSections": ["5.1", "6.1", "7"],
       "requirement": "Center is a registered rendering surface separately from its read-only observer role, providing the first two-surface Pin-to-browser interaction.",
       "acceptance": "Render a routed card and correlate its acknowledgment; hidden, locked, disconnected and stale pages cannot report a successful current render.",
-      "status": "pending",
-      "evidence": []
+      "status": "partial",
+      "evidence": ["center-enrollment-lifecycle-definition"]
     },
     {
       "id": "macos-surface",
