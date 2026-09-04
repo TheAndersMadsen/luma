@@ -81,7 +81,9 @@ use super::catalog;
 use super::engine::{ERROR_TIMEOUT, NO_ANSWER, TOO_MANY_ACTIONS};
 use super::llm::{ChatMessage, ChatModel, ChatResponse, Role, ToolCall, ToolDef};
 use super::runtime::{ForegroundRun, RouteClass, TERMINAL_RESERVE, Transport};
-use super::turn::context::{MEMORY_CONTEXT_POLICY, situation_line, wearer_memory};
+use super::turn::context::{
+    MEMORY_CONTEXT_POLICY, request_provenance, situation_line, wearer_memory,
+};
 use super::turn::frames::{action_turn, now_ts, observation_turn};
 use super::turn::text::{model_facing_observation, spoken_text};
 use crate::services::gates::{self, Entitlement};
@@ -501,6 +503,7 @@ impl BidiSession {
         // this point. Optional memory loading is bounded inside the same absolute
         // foreground clock; personalization may degrade, the turn may not hang.
         let mut messages = build_history(&req);
+        messages.push(request_provenance(&self.tools));
         if let Ok(Some(memory)) =
             tokio::time::timeout(run.context_timeout(), wearer_memory(&self.tools)).await
         {

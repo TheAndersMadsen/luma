@@ -47,7 +47,9 @@ use super::catalog;
 use super::llm::{ChatMessage, ChatModel, ChatResponse, Role, ToolCall, ToolDef};
 use super::runtime::{ForegroundRun, RouteClass, Transport};
 use super::toolsets;
-use super::turn::context::{MEMORY_CONTEXT_POLICY, situation_line, wearer_memory};
+use super::turn::context::{
+    MEMORY_CONTEXT_POLICY, request_provenance, situation_line, wearer_memory,
+};
 use super::turn::frames::{action_turn, now_ts, observation_turn};
 use super::turn::text::{model_facing_observation, spoken_text};
 use crate::services::gates::{self, BlockingObservation, Entitlement};
@@ -619,6 +621,7 @@ impl Engine {
         // Reconstruct the conversation the model reasons over from the state the
         // device replayed (cosmos's legacy path is stateless per call).
         let mut messages = build_history(&req);
+        messages.push(request_provenance(&self.tools));
         // The vision gesture reaches the model as a policy line rather than as
         // pixels: `build_history` used to read only the text fields and drop
         // both `vision_requested` and `image_data`. Pushed here, not in

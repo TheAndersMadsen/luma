@@ -1154,6 +1154,7 @@ impl AiBusMain {
         crate::assistant::catalog::ToolContext {
             principal: crate::auth::principal(request)
                 .map(|p| p.expose_for_authorization().to_owned()),
+            authenticated_request: crate::auth::authenticated_request(request).cloned(),
             answer_engine_available: crate::integrations::value("COSMOS_PPLX_API_KEY").is_some(),
             store: Some(self.store.clone()),
             keys: Some(self.keys.clone()),
@@ -2880,6 +2881,224 @@ mod tests {
         seen: std::sync::Mutex<Option<(Vec<String>, Vec<String>)>>,
     }
 
+    /// The real router, AuthLayer, stock envelopes, and both model loops must
+    /// preserve the same provenance. Everything here is loopback/in-memory;
+    /// no configured model, deployment key, database, or physical Pin is used.
+    #[tokio::test]
+    async fn device_provenance_reaches_plaintext_encrypted_and_bidi_model_contexts() {
+        use crate::assistant::llm::{ChatResponse, LlmError, Role, ToolDef};
+        use crate::auth::{AuthLayer, RequestAuthenticator};
+        use crate::config::{
+            Authentication, EDGE_PRINCIPAL_HEADER, EDGE_TOKEN_HEADER, EdgeAuthentication,
+        };
+        use prost::Message as _;
+        use std::time::Duration;
+        use tokio_stream::wrappers::{ReceiverStream, TcpListenerStream};
+
+        #[derive(Default)]
+        struct ProvenanceModel(std::sync::Mutex<Vec<Vec<ChatMessage>>>);
+
+        #[tonic::async_trait]
+        impl ChatModel for ProvenanceModel {
+            async fn complete(
+                &self,
+                messages: &[ChatMessage],
+                _tools: &[ToolDef],
+            ) -> Result<ChatResponse, LlmError> {
+                self.0.lock().unwrap().push(messages.to_vec());
+                Ok(ChatResponse {
+                    content: Some("Hello.".to_owned()),
+                    ..Default::default()
+                })
+            }
+        }
+
+        fn authenticated<T>(body: T) -> Request<T> {
+            let mut request = Request::new(body);
+            request.metadata_mut().insert(
+                EDGE_PRINCIPAL_HEADER,
+                "Subject=\"CN=V:01:D:2c2a00010000abcd:U:provenance-wearer-fixture,O=Humane\""
+                    .parse()
+                    .unwrap(),
+            );
+            request.metadata_mut().insert(
+                EDGE_TOKEN_HEADER,
+                "provenance-model-test-edge".parse().unwrap(),
+            );
+            // Unrelated claims cannot upgrade transport evidence to a private
+            // channel or an authenticated actor.
+            request
+                .metadata_mut()
+                .insert("x-origin-privacy", "private".parse().unwrap());
+            request
+        }
+
+        fn understanding() -> pb::SynapseUnderstandingRequest {
+            pb::SynapseUnderstandingRequest {
+                utterance: "hello".to_owned(),
+                ..Default::default()
+            }
+        }
+
+        let model = Arc::new(ProvenanceModel::default());
+        let keys: crate::keymaterial::SharedKeyMaterial = Default::default();
+        keys.insert(
+            "provenance-test-kid".to_owned(),
+            [7; cosmos_crypto::AES_KEY_LEN],
+        )
+        .unwrap();
+        let service = AiBusMain {
+            engine: Arc::new(crate::assistant::engine::Engine::new(model.clone())),
+            keys: keys.clone(),
+            directory: None,
+            store: crate::store::MemoryStore::shared(),
+            entitlements: Default::default(),
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            tonic::transport::Server::builder()
+                .layer(AuthLayer::new(RequestAuthenticator::new(
+                    Authentication::EdgeAuthenticated(EdgeAuthentication::with_test_token(
+                        "provenance-model-test-edge",
+                    )),
+                )))
+                .add_service(pb::ai_bus_service_server::AiBusServiceServer::new(service))
+                .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async {
+                    let _ = shutdown_rx.await;
+                })
+                .await
+                .unwrap();
+        });
+        let mut client = tokio::time::timeout(
+            Duration::from_secs(5),
+            pb::ai_bus_service_client::AiBusServiceClient::connect(format!("http://{address}")),
+        )
+        .await
+        .expect("the loopback assistant client connects promptly")
+        .unwrap();
+
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let mut plaintext = client
+                .understand(authenticated(understanding()))
+                .await
+                .unwrap()
+                .into_inner();
+            let mut plaintext_count = 0;
+            while plaintext.message().await.unwrap().is_some() {
+                plaintext_count += 1;
+            }
+            assert!(plaintext_count > 0);
+
+            let sealed = keys
+                .seal("provenance-test-kid", &understanding().encode_to_vec(), b"")
+                .unwrap();
+            let mut encrypted = client
+                .encrypted_understand(authenticated(pb::EncryptedSynapseUnderstandingRequest {
+                    request: Some(cosmos_protocol::common::encryption::EncryptedData {
+                        encryption_information: Some(
+                            cosmos_protocol::common::encryption::EncryptionInformation {
+                                kid: sealed.kid,
+                            },
+                        ),
+                        data: sealed.data,
+                    }),
+                    location: None,
+                }))
+                .await
+                .unwrap()
+                .into_inner();
+            let mut encrypted_count = 0;
+            while let Some(response) = encrypted.message().await.unwrap() {
+                let envelope = response.response.unwrap();
+                let opened = keys
+                    .open(&cosmos_crypto::EncryptedData {
+                        data: envelope.data,
+                        kid: envelope.encryption_information.unwrap().kid,
+                    })
+                    .unwrap();
+                pb::SynapseUnderstandingResponse::decode(opened.as_slice()).unwrap();
+                encrypted_count += 1;
+            }
+            assert!(encrypted_count > 0);
+
+            let (input_tx, input_rx) = tokio::sync::mpsc::channel(2);
+            input_tx
+                .send(pb::StreamingUnderstandRequest {
+                    content: Some(
+                        pb::streaming_understand_request::Content::UnderstandingRequest(
+                            understanding(),
+                        ),
+                    ),
+                })
+                .await
+                .unwrap();
+            let mut bidi = client
+                .bidirectional_streaming_understand(authenticated(ReceiverStream::new(input_rx)))
+                .await
+                .unwrap()
+                .into_inner();
+            assert!(bidi.message().await.unwrap().is_some());
+            drop(input_tx);
+            while bidi.message().await.unwrap().is_some() {}
+        })
+        .await
+        .expect("all three in-memory assistant exchanges finish promptly");
+        drop(client);
+        shutdown_tx.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), server)
+            .await
+            .unwrap()
+            .unwrap();
+
+        let seen = model.0.lock().unwrap();
+        assert_eq!(
+            seen.len(),
+            3,
+            "both Engine transports and the real bidi handler must call the model"
+        );
+        let mut projections = Vec::new();
+        for messages in seen.iter() {
+            let provenance: Vec<_> = messages
+                .iter()
+                .filter(|message| message.content.contains("request_provenance"))
+                .collect();
+            assert_eq!(provenance.len(), 1);
+            assert_eq!(provenance[0].role, Role::DeviceContext);
+            let wrapper: serde_json::Value = serde_json::from_str(&provenance[0].content).unwrap();
+            let data: serde_json::Value =
+                serde_json::from_str(wrapper["content"].as_str().unwrap()).unwrap();
+            assert_eq!(
+                data["request_provenance"]["transport_identity"],
+                "edge_verified_device_user"
+            );
+            assert_eq!(data["request_provenance"]["actor_identity"], "unknown");
+            assert_eq!(data["request_provenance"]["origin_privacy"], "unknown");
+            for message in messages {
+                assert!(!message.content.contains("provenance-wearer-fixture"));
+                assert!(!message.content.contains("2c2a00010000abcd"));
+            }
+            projections.push(provenance[0].content.clone());
+        }
+        assert!(projections.windows(2).all(|pair| pair[0] == pair[1]));
+    }
+
+    #[test]
+    fn device_provenance_tool_context_does_not_infer_evidence_from_headers_or_principal() {
+        let mut request = Request::new(pb::SynapseUnderstandingRequest::default());
+        request
+            .extensions_mut()
+            .insert(cosmos_core::AuthenticatedPrincipal::from_edge("V:01:D:abcd:U:owner").unwrap());
+        request.metadata_mut().insert(
+            crate::config::EDGE_PRINCIPAL_HEADER,
+            "Subject=\"CN=V:01:D:abcd:U:owner\"".parse().unwrap(),
+        );
+        let tools = AiBusMain::default().tool_context(&request);
+        assert_eq!(tools.principal.as_deref(), Some("V:01:D:abcd:U:owner"));
+        assert!(tools.authenticated_request.is_none());
+    }
+
     #[tonic::async_trait]
     impl crate::assistant::llm::ChatModel for CapturingModel {
         async fn complete(
@@ -4177,6 +4396,7 @@ mod tests {
             Entitlement::Active,
             catalog::ToolContext {
                 principal: Some("device-test-pin-01".to_owned()),
+                authenticated_request: None,
                 answer_engine_available: false,
                 store: Some(store),
                 key_directory: None,

@@ -317,6 +317,38 @@ impl fmt::Debug for AuthenticatedPrincipal {
     }
 }
 
+/// A device identity established by a verified DeviceUser certificate.
+///
+/// This is separate from the account principal: two devices can share one
+/// account partition. It identifies the authenticated transport endpoint, not
+/// the person speaking, room occupancy, or permission to disclose content.
+#[derive(Clone, Eq, Hash, PartialEq)]
+pub struct AuthenticatedDeviceIdentity(Identifier);
+
+impl AuthenticatedDeviceIdentity {
+    /// Accept the hex device field only after the edge and full DeviceUser
+    /// subject have been verified. Shape validation is not authentication.
+    pub fn from_edge(device_id: &str) -> Result<Self, IdentityError> {
+        Identifier::with_charset(
+            "authenticated device identity",
+            device_id.to_ascii_lowercase(),
+            128,
+            |byte| byte.is_ascii_hexdigit(),
+        )
+        .map(Self)
+    }
+
+    pub fn expose_for_authorization(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
+impl fmt::Debug for AuthenticatedDeviceIdentity {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("AuthenticatedDeviceIdentity([REDACTED])")
+    }
+}
+
 /// Wrapper for data which must never be emitted by routine `Debug` logging.
 #[derive(Clone, Eq, PartialEq)]
 pub struct Sensitive<T>(T);
@@ -681,5 +713,21 @@ mod tests {
             format!("{principal:?}"),
             "AuthenticatedPrincipal([REDACTED])"
         );
+    }
+
+    #[test]
+    fn device_provenance_identity_is_bounded_canonical_and_redacted() {
+        let device = AuthenticatedDeviceIdentity::from_edge("2C2A0001ABCD")
+            .expect("verified hex device field");
+        assert_eq!(device.expose_for_authorization(), "2c2a0001abcd");
+        assert_eq!(
+            format!("{device:?}"),
+            "AuthenticatedDeviceIdentity([REDACTED])"
+        );
+        for invalid in ["", "not-hex", "abcd:U:owner", "abcd\n"] {
+            assert!(AuthenticatedDeviceIdentity::from_edge(invalid).is_err());
+        }
+        assert!(AuthenticatedDeviceIdentity::from_edge(&"a".repeat(128)).is_ok());
+        assert!(AuthenticatedDeviceIdentity::from_edge(&"a".repeat(129)).is_err());
     }
 }

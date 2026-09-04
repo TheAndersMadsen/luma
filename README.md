@@ -67,6 +67,30 @@ The repository retains required stock `humane.*` protocol names and Android
 package identities because the original software calls them byte-for-byte.
 Product, deployment, configuration, and operator-facing names use Cosmos.
 
+### Ambiance v2 work in progress
+
+The `codex/cosmos-ambiance-v2` branch starts from the live `v0.1.108` release.
+[The requirement inventory](contracts/ambiance-v2.json) pins the exact
+[Ambiance v2 research draft](https://gist.githubusercontent.com/ericlewis/12e8f7d381a5d93926f4858ae2d725dc/raw/6bac46cd8251af39c40263331d7269c5e418fe8f/ambi_v2.md)
+and separates its twelve invariants from Cosmos-specific product acceptance.
+It tracks incomplete coverage, not passing behavior or production conformance.
+Its metadata tests validate the inventory and evidence references only; the
+paper's reference implementation and reported test results are unavailable for
+independent reproduction.
+
+Implementation proceeds through provenance; durable runtime policy, registry
+and outcomes; a two-surface render-and-acknowledgment interaction; a realtime
+worker with verified Pin media; scoped intelligence and native clients; then
+full physical and release verification. macOS and Android clients remain on
+the product roadmap without blocking the initial Pin/Center proof.
+
+The occupied-room/private-headset conflict remains unresolved and new routing
+must fail closed pending an explicit policy decision. A private output never
+grants private-memory access to a shared-origin request. Arbitrary model prose
+is not proven universally truthful about outcomes. These gaps prevent a full
+conformance claim; this branch does not change the release/deployment or
+explicit physical-device confirmation requirements below.
+
 ## Deploy Cosmos
 
 Production supports 64-bit Ubuntu 24.04 on both `amd64` (`x86_64`) and `arm64`

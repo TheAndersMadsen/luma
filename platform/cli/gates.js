@@ -19,6 +19,7 @@ const SERIAL_POLICY_TESTS = Object.freeze([
   'fresh-install.test.mjs',
 ]);
 const CONTRIBUTOR_POLICY_TESTS = Object.freeze([
+  'ambiance-v2.test.mjs',
   'cli-config.test.mjs',
   'cli-setup.test.mjs',
   'fast-workflow.test.mjs',

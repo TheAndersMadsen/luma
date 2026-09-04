@@ -1,0 +1,308 @@
+{
+  "schemaVersion": 1,
+  "id": "cosmos-ambiance-v2",
+  "state": "work-in-progress",
+  "baselineRelease": "v0.1.108",
+  "source": {
+    "url": "https://gist.githubusercontent.com/ericlewis/12e8f7d381a5d93926f4858ae2d725dc/raw/6bac46cd8251af39c40263331d7269c5e418fe8f/ambi_v2.md",
+    "sha256": "d9e3aa98f0646dd18ed58ec73790be468754baea763551ee2d7c7576f579e04e",
+    "bytes": 153937,
+    "logicalLines": 872,
+    "referenceImplementation": "unavailable",
+    "limitation": "The paper names AMBIANCE-IMPLEMENTATION.md and reference tests but supplies no repository URL or commit. Those implementations and reported results have not been independently reproduced."
+  },
+  "scope": "Track the published single-principal, single-site semantics and separate Cosmos product acceptance. LiveKit and process boundaries are implementation choices, not conformance requirements. This is not a runtime schema or a passing conformance report.",
+  "verificationPolicy": "pending means no implementation evidence is recorded; partial means a cited implementation or test definition covers only part of the requirement. Evidence references and metadata checks never establish that behavior passed, physical acceptance occurred, or production is conformant. Runtime reports and secrets stay outside the checkout.",
+  "interpretations": [
+    {
+      "id": "occupied-room-private-channel",
+      "status": "unresolved",
+      "sourceSections": ["4.8", "6", "7"],
+      "decision": "The formal occupancy rule excludes higher-class content from every channel in occupied or unknown rooms, while headset scenarios suggest an exception. Pending an explicit policy decision, new routing must fail closed; a private headset is not an implicit exemption."
+    },
+    {
+      "id": "shared-origin-private-memory",
+      "status": "conservative-interpretation",
+      "sourceSections": ["4.6", "6", "9.2"],
+      "decision": "A private output does not authorize sensitive memory retrieval for a shared-origin request. Require a new authorized private-origin continuation rather than importing private memory to satisfy the shared-microphone example."
+    },
+    {
+      "id": "unrestricted-outcome-prose",
+      "status": "unresolved",
+      "sourceSections": ["4.4", "5.1", "9.2"],
+      "decision": "Exact runtime outcomes can gate controlled expressions and action templates. Arbitrary model prose is not proven universally outcome-truthful, in either native audio or generated-text TTS; invariant 10 remains unverified."
+    }
+  ],
+  "evidence": [
+    {
+      "id": "authenticated-device-provenance-definition",
+      "kind": "implementation",
+      "path": "cosmos/crates/cosmos/src/config.rs",
+      "anchor": "pub(crate) fn authenticate_with_device<T>(",
+      "scope": "Retains authenticated device provenance alongside the account identity at ingress before account normalization.",
+      "limitation": "Definition only, not executed acceptance. Does not establish enrollment, physical privacy, epochs, replay protection or complete invariant coverage."
+    },
+    {
+      "id": "stock-transport-provenance-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/services/aibus_main.rs",
+      "anchor": "async fn device_provenance_reaches_plaintext_encrypted_and_bidi_model_contexts()",
+      "scope": "Defines an in-process test of authenticated device provenance reaching model context through plaintext, encrypted and bidirectional stock handlers.",
+      "limitation": "Test definition only, not a passing execution report or physical Pin evidence. Does not establish enrollment, physical privacy, epochs, replay protection or complete invariant coverage."
+    }
+  ],
+  "requirements": [
+    {
+      "id": "invariant-01",
+      "basis": "paper",
+      "sourceSections": ["4.3", "9.2"],
+      "requirement": "Dispatch-time channel eligibility forbids above-shared_room content on bystander-perceivable outputs and cancels in-flight delivery after privacy degradation.",
+      "acceptance": "Exercise every render path with state changes before and during dispatch; include local playback stop and already-rendered-content limitations.",
+      "status": "pending",
+      "evidence": []
+    },
+    {
+      "id": "invariant-02",
+      "basis": "paper",
+      "sourceSections": ["4.2", "4.8", "9.2"],
+      "requirement": "Removing every hint leaves routing safe; hints affect eligible-candidate ranking only.",
+      "acceptance": "Run paired hint/no-hint cases, including untrusted hints, self-nomination, hint budgets and claimed privacy downgrades.",
+      "status": "pending",
+      "evidence": []
+    },
+    {
+      "id": "invariant-03",
+      "basis": "paper",
+      "sourceSections": ["4.4", "5.3", "5.4", "9.2"],
+      "requirement": "Always-confirm effects require a logged, unexpired, single-use grant for the exact action instance.",
+      "acceptance": "Bind deterministic ceremony content, arguments, target and epoch; reject changed actions, replay, expiry and restart. Existing conversational confirmation alone is not this grant protocol.",
+      "status": "pending",
+      "evidence": []
+    },
+    {
+      "id": "invariant-04",
+      "basis": "paper",
+      "sourceSections": ["4.6", "9.2"],
+      "requirement": "A shared-origin request cannot receive sensitive-scoped memory in model context.",
+      "acceptance": "Check retrieval before every inference and delegation; selecting a private rendering channel must not broaden origin authority.",
+      "status": "pending",
+      "evidence": []
+    },
+    {
+      "id": "invariant-05",
+      "basis": "paper",
+      "sourceSections": ["4.4", "5.4", "9.2"],
+      "requirement": "Routing and policy decisions retain rationale in a verifiable, tamper-evident durable history.",
+      "acceptance": "Verify append-before-dispatch, ordering, reopen, tamper/removal detection, signed checkpoints and independently countersigned or protected checkpoint anchors.",
+      "status": "pending",
+      "evidence": []
+    },
+    {
+      "id": "invariant-06",
+      "basis": "paper",
+      "sourceSections": ["4.3", "4.8", "9.2"],
+      "requirement": "Runtime classification retains the strongest provenance restriction; cognition may tighten it but cannot lower it.",
+      "acceptance": "Join origin, memory and service-data classes across async work, hints, retries and output; log any authorized deterministic reclassification.",
+      "status": "pending",
+      "evidence": []
+    },
+    {
+      "id": "invariant-07",
+      "basis": "paper",
+      "sourceSections": ["4.3", "8", "9.2"],
+      "requirement": "Shared expression does not reveal whether routing elsewhere was caused by privacy or ordinary eligibility/preference.",
+      "acceptance": "Compare observable expression traces, including direct expression requests; private-only status never leaks to a shared LED or loudspeaker.",
+      "status": "pending",
+      "evidence": []
+    },
+    {
+      "id": "invariant-08",
+      "basis": "paper",
+      "sourceSections": ["4.3", "9.1", "9.2"],
+      "requirement": "Unenrolled actors' biometric features remain turn-local and never enter durable storage or memory.",
+      "acceptance": "Test ingestion, logs, memory, providers and real sensor-buffer lifecycle. The paper's durable-path tests do not establish physical buffer ephemerality.",
+      "status": "pending",
+      "evidence": []
+    },
+    {
+      "id": "invariant-09",
+      "basis": "paper",
+      "sourceSections": ["5.1", "9.1", "9.2"],
+      "requirement": "Co-hosting a surface with Cosmos supplies no routing privilege over an equivalent remote surface.",
+      "acceptance": "Compare equivalent manifests, provenance and state through actual in-process and remote ingress, not only renamed fixture identities.",
+      "status": "pending",
+      "evidence": []
+    },
+    {
+      "id": "invariant-10",
+      "basis": "paper",
+      "sourceSections": ["4.4", "5.3", "9.2"],
+      "requirement": "Spoken and expressive outcome claims require the matching committed runtime outcome.",
+      "acceptance": "Require the exact action's acknowledgment, reject stale/unrelated acknowledgments, represent unknown outcomes honestly, and resolve unrestricted-outcome-prose before claiming universal coverage.",
+      "status": "pending",
+      "evidence": []
+    },
+    {
+      "id": "invariant-11",
+      "basis": "paper",
+      "sourceSections": ["4.4", "9.2"],
+      "requirement": "Other principals cannot read request content or intent transcripts without a recorded disclosure.",
+      "acceptance": "Verify principal-scoped observer projections, allowlisted operator telemetry, logged disclosure and authenticated redaction tombstones across storage and mirrors.",
+      "status": "pending",
+      "evidence": []
+    },
+    {
+      "id": "invariant-12",
+      "basis": "paper",
+      "sourceSections": ["4.1", "9.2"],
+      "requirement": "A newly present, unenrolled device gains neither private content nor hint admission from favorable self-declarations.",
+      "acceptance": "Exercise admission, re-enrollment, manifest updates and revocation; default to shared-perceivable, class zero, no hints and no lead eligibility.",
+      "status": "pending",
+      "evidence": []
+    },
+    {
+      "id": "surface-manifest",
+      "basis": "paper",
+      "sourceSections": ["4.1", "4.8", "6.1"],
+      "requirement": "Declare capabilities, constraints, per-channel posture, expression, cognition and bounded authority; enrollment attests asserted posture and registry-owned trust is separate.",
+      "acceptance": "Validate dynamic state and capabilities without product-name privileges; expression eligibility respects the user's perceptual profile and has one expression lead.",
+      "status": "pending",
+      "evidence": []
+    },
+    {
+      "id": "origin-provenance",
+      "basis": "paper",
+      "sourceSections": ["4.2", "4.8", "5.2"],
+      "requirement": "Bind each request to authenticated principal, origin, modality, state, environment, device/channel/actor trust, server receipt time, epoch and sequence.",
+      "acceptance": "Preserve Pin device identity before account normalization; do not trust device clocks or body-supplied identity, and test replay/freshness plus scoped self-echo rejection.",
+      "status": "partial",
+      "evidence": ["authenticated-device-provenance-definition", "stock-transport-provenance-test-definition"]
+    },
+    {
+      "id": "cognition-authority",
+      "basis": "paper",
+      "sourceSections": ["4.4", "5.1", "5.3"],
+      "requirement": "Cognition proposes runtime intents; only deterministic runtime policy binds targets, grants, memory scope and dispatch, including policy/registry changes.",
+      "acceptance": "Keep asynchronous analysis responsive to cancellation without granting analytical models direct device or service execution authority.",
+      "status": "pending",
+      "evidence": []
+    },
+    {
+      "id": "inference-ability",
+      "basis": "paper",
+      "sourceSections": ["4.7"],
+      "requirement": "Inference offers declare supported tasks and representations, provider location and privacy eligibility independently of device permission.",
+      "acceptance": "Select eligible local or remote analysis routes under availability/resource budgets; a better model declaration must not grant additional authority.",
+      "status": "pending",
+      "evidence": []
+    },
+    {
+      "id": "earned-authority",
+      "basis": "paper",
+      "sourceSections": ["4.7", "9.3", "10"],
+      "requirement": "Per-surface autonomy depends on calibration, counterfactual lift, coverage and tenure/volume, with per-intent promotion, demotion and a platform-trust ceiling.",
+      "acceptance": "Keep privacy and always-confirm policy nondelegable; restrict delegation to none/low risk, audit local outcomes and measure local-resolution rate. Software/prompt candidate promotion is a separate evaluation.",
+      "status": "pending",
+      "evidence": []
+    },
+    {
+      "id": "concurrency",
+      "basis": "paper",
+      "sourceSections": ["5.3", "9.1"],
+      "requirement": "Serialize authority per authenticated principal, corroborate duplicate capture within that principal and allow only authorized corrections to supersede remaining work.",
+      "acceptance": "Race distinct surfaces, guests, corrections and slow model results; stale work cannot dispatch or produce a terminal expression for a superseded turn.",
+      "status": "pending",
+      "evidence": []
+    },
+    {
+      "id": "recovery",
+      "basis": "paper",
+      "sourceSections": ["5.2", "5.3", "5.4"],
+      "requirement": "Durable recovery and receiver dedup preserve action identity; render repair uses revalidated logged fallbacks, while uncertain effects never retry automatically.",
+      "acceptance": "Exercise crashes around commit/dispatch/ack, partitions, reconnect and bounded offline queues; invalidate grants on restart and require fresh ceremony after outcome unknown.",
+      "status": "pending",
+      "evidence": []
+    },
+    {
+      "id": "memory-lifecycle",
+      "basis": "paper",
+      "sourceSections": ["4.4", "4.6", "10"],
+      "requirement": "Durable memory and learned preferences are scoped, policy-gated, attributable, visible and deletable; one correction cannot silently become standing policy.",
+      "acceptance": "Test sensitive-write confirmation, principal/device/class/room/workflow/session scope, retention/redaction and explicit or repeated preference learning.",
+      "status": "pending",
+      "evidence": []
+    },
+    {
+      "id": "content-references",
+      "basis": "paper",
+      "sourceSections": ["5.2"],
+      "requirement": "Large-content references authorize only the channels selected by the runtime, with authorization checked when dereferenced.",
+      "acceptance": "Suppressed, revoked or stale recipients cannot fetch content via shared transport, cache, observer or reference; possession alone is insufficient.",
+      "status": "pending",
+      "evidence": []
+    },
+    {
+      "id": "performance-and-evaluation",
+      "basis": "paper",
+      "sourceSections": ["9.1", "9.3", "9.4", "9.5"],
+      "requirement": "Measure expression under 200 ms, durable routing p50 under 50 ms and voice-to-first-action p50 under 2.5 s; dispatch timeouts, not heartbeat expiry, drive repair.",
+      "acceptance": "Publish stage/model/hardware context, 50-surface scale, baseline and hint/scorer ablations; evaluate longitudinal quality, accessibility and user/bystander hypotheses without treating them as established facts.",
+      "status": "pending",
+      "evidence": []
+    },
+    {
+      "id": "pin-realtime-media",
+      "basis": "cosmos-product",
+      "sourceSections": ["5.1", "5.2", "7"],
+      "requirement": "The Ai Pin participates in the live capture, cognition, playback and interruption loop through its stock-compatible runtime.",
+      "acceptance": "Prove actual capture/playback ownership, audio focus, barge-in, immediate stop, privacy change and reconnect on hardware; completed-text TTS is not proof of live dialogue.",
+      "status": "pending",
+      "evidence": []
+    },
+    {
+      "id": "pin-physical-acceptance",
+      "basis": "cosmos-product",
+      "sourceSections": ["7", "9.1"],
+      "requirement": "A physical Pin demonstrates the canonical interaction and counterfactuals against the exact installed runtime and server release.",
+      "acceptance": "With exact serial and explicit device confirmation, observe microphone, speaker, gestures, privacy suppression, render acknowledgment and interruption; synthetic traces cannot replace human/device evidence.",
+      "status": "pending",
+      "evidence": []
+    },
+    {
+      "id": "center-surface",
+      "basis": "cosmos-product",
+      "sourceSections": ["5.1", "6.1", "7"],
+      "requirement": "Center is a registered rendering surface separately from its read-only observer role, providing the first two-surface Pin-to-browser interaction.",
+      "acceptance": "Render a routed card and correlate its acknowledgment; hidden, locked, disconnected and stale pages cannot report a successful current render.",
+      "status": "pending",
+      "evidence": []
+    },
+    {
+      "id": "macos-surface",
+      "basis": "cosmos-product",
+      "sourceSections": ["4.1", "6.1"],
+      "requirement": "A native macOS client implements the common surface contract with truthful audio, rendering, permissions, lock/sleep and availability constraints.",
+      "acceptance": "Verify native lifecycle, playback stop and local confirmation; no competing assistant authority. This roadmap client is not a prerequisite for the initial narrow paper profile.",
+      "status": "pending",
+      "evidence": []
+    },
+    {
+      "id": "android-surface",
+      "basis": "cosmos-product",
+      "sourceSections": ["4.1", "6", "6.1"],
+      "requirement": "A native Android companion declares real foreground/background, audio, notification, permission and reconnect behavior through the common surface contract.",
+      "acceptance": "Verify on a physical phone; notification delivery is not render acknowledgment or microphone permission. This roadmap client is not a prerequisite for the initial narrow paper profile.",
+      "status": "pending",
+      "evidence": []
+    },
+    {
+      "id": "release-and-live-verification",
+      "basis": "cosmos-product",
+      "sourceSections": ["9.2"],
+      "requirement": "Deploy only the authenticated tagged operator release and matching verified five-APK set; retain stock wire/package identities and require physical acceptance for changed Pin behavior.",
+      "acceptance": "Run focused and broad checks, production doctor/dry-run/deploy/verify, then confirm the intended release and production environment at cosmos.andersmadsen.dk. Metadata tests or endpoint health alone cannot establish Ambiance conformance.",
+      "status": "pending",
+      "evidence": []
+    }
+  ]
+}

@@ -1,8 +1,8 @@
 use std::{collections::HashMap, net::SocketAddr, str::FromStr, time::Duration};
 
 use cosmos_core::{
-    AuthenticatedPrincipal, DeploymentEnvironment, IdentityError, ServicePath, ServicePathError,
-    WorkloadIdentity,
+    AuthenticatedDeviceIdentity, AuthenticatedPrincipal, DeploymentEnvironment, IdentityError,
+    ServicePath, ServicePathError, WorkloadIdentity,
 };
 use tonic::Request;
 
@@ -246,6 +246,17 @@ impl EdgeAuthentication {
         &self,
         request: &Request<T>,
     ) -> Result<AuthenticatedPrincipal, EdgeAuthenticationError> {
+        self.authenticate_with_device(request)
+            .map(|authenticated| authenticated.principal)
+    }
+
+    /// Retain device identity at the verified edge boundary, before the legacy
+    /// account projection discards it. Local/synthetic principal compatibility
+    /// remains available but can never establish authenticated device evidence.
+    pub(crate) fn authenticate_with_device<T>(
+        &self,
+        request: &Request<T>,
+    ) -> Result<crate::auth::AuthenticatedRequest, EdgeAuthenticationError> {
         // Prove the request came THROUGH the edge before believing the header it
         // carries. `x-forwarded-client-cert` is only meaningful because Envoy
         // sanitizes any client-supplied copy and rewrites it from the verified
@@ -281,12 +292,45 @@ impl EdgeAuthentication {
         let value = raw.to_str().map_err(|_| EdgeAuthenticationError::Invalid)?;
         // Derive the principal from the XFCC Subject CN (cosmos's convention);
         // fall back to the raw value for non-XFCC dev / synthetic harnesses.
-        let principal = principal_from_xfcc(value).unwrap_or(value);
+        let subject = principal_from_xfcc(value);
+        let cn = subject.unwrap_or(value);
         // A DeviceUser CN resolves to its *user* (`U:<user>`), the same principal
         // that user's web login resolves to, so Pin and browser share one
         // partition. Non-DeviceUser subjects pass through unchanged.
-        AuthenticatedPrincipal::from_device_cn(principal)
-            .map_err(|_| EdgeAuthenticationError::Invalid)
+        let principal = AuthenticatedPrincipal::from_device_cn(cn)
+            .map_err(|_| EdgeAuthenticationError::Invalid)?;
+        let device = if self
+            .edge_token
+            .as_deref()
+            .is_some_and(|token| !token.is_empty())
+            && self.principal_metadata_key == EDGE_PRINCIPAL_HEADER
+        {
+            subject.and_then(|cn| {
+                // The enrollment parser checks every field, version, and hex
+                // device shape. Only DeviceUser (U), never attestation (P), is
+                // evidence on this runtime boundary. Bound the entire subject
+                // too; the compatibility account parser intentionally does not.
+                AuthenticatedPrincipal::from_edge(cn).ok()?;
+                cn.rsplit_once(":U:")?;
+                let device_id = crate::enrollment::device_id_from_subject(cn)?;
+                AuthenticatedDeviceIdentity::from_edge(device_id).ok()
+            })
+        } else {
+            None
+        };
+        Ok(crate::auth::AuthenticatedRequest {
+            principal,
+            plane: crate::auth::AuthenticationPlane::Device,
+            device,
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_test_token(token: &str) -> Self {
+        Self {
+            principal_metadata_key: EDGE_PRINCIPAL_HEADER.to_owned(),
+            edge_token: Some(token.to_owned()),
+        }
     }
 }
 
@@ -822,6 +866,124 @@ mod tests {
         // no CN / not XFCC-shaped -> None (caller falls back to the raw value)
         assert_eq!(principal_from_xfcc("plain-principal"), None);
         assert_eq!(principal_from_xfcc("Subject=\"O=humane\""), None);
+    }
+
+    fn provenance_request(cn: &str) -> Request<()> {
+        let mut request = Request::new(());
+        request.metadata_mut().insert(
+            EDGE_PRINCIPAL_HEADER,
+            format!("Hash=test;Subject=\"CN={cn},O=Humane,OU=DeviceUser\";URI=")
+                .parse()
+                .unwrap(),
+        );
+        request
+            .metadata_mut()
+            .insert(EDGE_TOKEN_HEADER, "provenance-test-edge".parse().unwrap());
+        request
+    }
+
+    #[test]
+    fn device_provenance_preserves_one_account_partition_for_two_devices() {
+        let edge = EdgeAuthentication::with_test_token("provenance-test-edge");
+        let first = edge
+            .authenticate_with_device(&provenance_request("V:01:D:ABCD:U:alice-sub-01"))
+            .unwrap();
+        let second = edge
+            .authenticate_with_device(&provenance_request("V:01:D:dcba:U:alice-sub-01"))
+            .unwrap();
+        assert_eq!(first.principal, second.principal);
+        assert_eq!(
+            first.principal,
+            AuthenticatedPrincipal::for_user("alice-sub-01").unwrap()
+        );
+        assert_ne!(first.device, second.device);
+        assert_eq!(first.device.unwrap().expose_for_authorization(), "abcd");
+        assert_eq!(second.device.unwrap().expose_for_authorization(), "dcba");
+    }
+
+    #[test]
+    fn device_provenance_requires_a_complete_runtime_device_user_subject() {
+        let edge = EdgeAuthentication::with_test_token("provenance-test-edge");
+        for cn in [
+            "service-identity",
+            "synthetic:U:alice-sub-01",
+            "V:01:D:abcd:P:00000001",
+            "V:1:D:abcd:U:alice-sub-01",
+            "V:zz:D:abcd:U:alice-sub-01",
+            "V:01:other:abcd:U:alice-sub-01",
+            "V:01:D:nothex:U:alice-sub-01",
+            "V:01:D::U:alice-sub-01",
+            "V:01:D:abcd:U:",
+            "V:01:D:abcd:U:alice-sub-01:extra",
+            "V:01:D:abcd:U:alice-sub-01:U:bob",
+        ] {
+            let authenticated = edge
+                .authenticate_with_device(&provenance_request(cn))
+                .expect("legacy principal behavior remains available");
+            assert!(
+                authenticated.device.is_none(),
+                "malformed subject has no device"
+            );
+            assert_eq!(
+                authenticated.principal,
+                AuthenticatedPrincipal::from_device_cn(cn).unwrap(),
+                "new device evidence must not change legacy account partitions"
+            );
+        }
+        let oversized = format!("V:01:D:{}:U:alice-sub-01", "a".repeat(129));
+        let authenticated = edge
+            .authenticate_with_device(&provenance_request(&oversized))
+            .unwrap();
+        assert!(authenticated.device.is_none());
+        assert_eq!(
+            authenticated.principal,
+            AuthenticatedPrincipal::for_user("alice-sub-01").unwrap()
+        );
+    }
+
+    #[test]
+    fn device_provenance_does_not_upgrade_unenforced_or_synthetic_metadata() {
+        let cn = "V:01:D:abcd:U:alice-sub-01";
+        let mut edge = EdgeAuthentication::with_test_token("provenance-test-edge");
+        let mut raw = Request::new(());
+        raw.metadata_mut()
+            .insert(EDGE_PRINCIPAL_HEADER, cn.parse().unwrap());
+        raw.metadata_mut()
+            .insert(EDGE_TOKEN_HEADER, "provenance-test-edge".parse().unwrap());
+        let authenticated = edge.authenticate_with_device(&raw).unwrap();
+        assert!(
+            authenticated.device.is_none(),
+            "raw legacy CN is not XFCC evidence"
+        );
+
+        edge.edge_token = None;
+        let authenticated = edge
+            .authenticate_with_device(&provenance_request(cn))
+            .unwrap();
+        assert!(
+            authenticated.device.is_none(),
+            "unenforced edge has unknown provenance"
+        );
+        assert_eq!(
+            authenticated.principal,
+            AuthenticatedPrincipal::for_user("alice-sub-01").unwrap()
+        );
+
+        edge.edge_token = Some("provenance-test-edge".to_owned());
+        edge.principal_metadata_key = "x-test-principal".to_owned();
+        let mut custom = provenance_request(cn);
+        let value = custom
+            .metadata()
+            .get(EDGE_PRINCIPAL_HEADER)
+            .unwrap()
+            .clone();
+        custom.metadata_mut().insert("x-test-principal", value);
+        assert!(
+            edge.authenticate_with_device(&custom)
+                .unwrap()
+                .device
+                .is_none()
+        );
     }
 
     #[test]

@@ -1743,6 +1743,10 @@ pub(crate) fn scope_explanation_to_non_device_tools(
 #[derive(Clone, Default)]
 pub struct ToolContext {
     pub principal: Option<String>,
+    /// AuthLayer's complete evidence, retained separately from the legacy
+    /// account-only store key. Model context receives only bounded labels, not
+    /// either opaque identity. A principal-only caller has unknown provenance.
+    pub authenticated_request: Option<crate::auth::AuthenticatedRequest>,
     /// Whether the deployment has a synthesized online answer backend. Ranked
     /// music gives the model one research path per turn; this chooses the richer
     /// answer engine over raw search snippets when both are connected.
@@ -2905,6 +2909,7 @@ mod tests {
             .expect("store sealed note");
         let context = ToolContext {
             principal: Some(principal.to_owned()),
+            authenticated_request: None,
             answer_engine_available: false,
             store: Some(store),
             key_directory: Some(directory.clone()),
@@ -3031,6 +3036,7 @@ mod tests {
     async fn what_the_wearer_asks_to_remember_can_be_recalled() {
         let context = ToolContext {
             principal: Some("V:01:D:test-pin:U:wearer".to_owned()),
+            authenticated_request: None,
             answer_engine_available: false,
             store: Some(crate::store::MemoryStore::shared()),
             key_directory: None,
@@ -3631,6 +3637,7 @@ mod tests {
 
         let context = ToolContext {
             principal: Some("wearer-a".to_owned()),
+            authenticated_request: None,
             answer_engine_available: false,
             store: Some(store.clone()),
             key_directory: None,
@@ -3670,6 +3677,7 @@ mod tests {
             .expect("the in-memory store cannot fail");
         let context = ToolContext {
             principal: Some(principal.to_owned()),
+            authenticated_request: None,
             answer_engine_available: false,
             store: Some(store),
             key_directory: None,
@@ -3700,6 +3708,7 @@ mod tests {
         let principal = "wearer-with-a-long-history";
         let context = ToolContext {
             principal: Some(principal.to_owned()),
+            authenticated_request: None,
             answer_engine_available: false,
             store: Some(store.clone()),
             key_directory: None,
@@ -3782,6 +3791,7 @@ mod tests {
 
         let context = ToolContext {
             principal: Some(principal.to_owned()),
+            authenticated_request: None,
             answer_engine_available: false,
             store: Some(store),
             key_directory: None,
