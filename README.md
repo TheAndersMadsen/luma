@@ -114,7 +114,7 @@ responsible for local permissions, capture, rendering, and playback evidence:
    16 active approvals, not the paper's 50-surface evaluation. This registry hash
    chain has no independent anchors, retention or privacy-filtered audit views;
    it is not yet the complete routing and policy ledger.
-3. **Phase 2B: shared runtime and Pin-to-Center presentation — under verification.**
+3. **Phase 2B: shared runtime and Pin-to-Center presentation — implemented foundation; not realtime acceptance.**
    Plaintext, encrypted, bidirectional and stateful stock text converge on
    AmbianceRuntime and the Store's durable, per-principal transitions. The
    runtime admits the authenticated, currently paired and explicitly approved
@@ -161,9 +161,10 @@ responsible for local permissions, capture, rendering, and playback evidence:
    admitted origin, issue role-scoped permissions, prohibit unrestricted media
    subscriptions, and verify boot epochs, monotonic sequences and idempotency.
    Replace interim polling coordination rather than retaining parallel
-   authoritative buses. Verify stock PCM framing, correlation, interruption and
-   actual playback on hardware while preserving wire identities and all five
-   APK roles. The realtime front delegates bounded larger-model analysis with
+   authoritative buses. Implement and test stock PCM framing, correlation and
+   interruption while preserving wire identities and all five APK roles;
+   reserve actual hardware playback verification for final Pin acceptance.
+   The realtime front delegates bounded larger-model analysis with
    no executor capability.
    Implement typed runtime semantic services for completion, child-agent
    experiences, device actions, composition, translation, vision, food and
@@ -182,13 +183,19 @@ responsible for local permissions, capture, rendering, and playback evidence:
    audio and hardware acceptance remain outstanding. Measure the paper's
    expression-under-200-ms, median durable-routing-under-50-ms and median
    voice-first-dispatch-under-2.5-s gates; current polling proves none of them.
-6. **Phase 5: acceptance and release.** Exercise all twelve invariants on real
-   paths, including performance, 50-surface and ablation evaluations, isolated
-   database restart/failure tests, and explicit physical Pin observations.
-   Deploy the authenticated signed release archive and verify the intended
+6. **Phase 5: staged acceptance and release.** Implement and verify Cosmos, then
+   Center, and deploy the verified server release without waiting for physical
+   Pin access. Build and test macOS and Android clients against the same
+   contracts. Exercise all twelve invariants on real paths, including
+   performance, 50-surface and ablation evaluations and isolated database
+   restart/failure tests; physical Pin connection, installation and observations
+   come last and remain required for final end-to-end conformance.
+   Deploy the authenticated signed operator archive and verify the intended
    release ID with `environment: "production"` at the existing production
    origin, `https://center.andersmadsen.dk/`. No new domain or identity migration
-   is requested. Physical Pin access and acceptance remain pending.
+   is requested. An unchanged descriptor-bound five-APK set may remain in a
+   server-only release until the native Pin version deliberately advances;
+   server deployment does not require a new Pin archive or installation.
 
 Each phase has behavioral gates, not just inventory updates. Phase 2A tests deny
 another account, share tokens, unsupported capabilities, stale incarnations,
@@ -207,6 +214,92 @@ grants private-memory access to a shared-origin request. Arbitrary model prose
 is not proven universally truthful about outcomes. These gaps prevent a full
 conformance claim; this branch does not change the release/deployment or
 explicit physical-device confirmation requirements below.
+
+### Cosmos-first realtime implementation gates
+
+Foundation commit `7c4f9e0f` passed broad checks and is not deployed. The next
+implementation order is Cosmos backend, then Center, then their verified server
+deployment; native macOS and Android clients use the same contracts. Physical
+Pin connection, installation and hardware acceptance come last, not as a blocker
+to server deployment or native client builds. These gates refine the
+[requirement inventory](contracts/ambiance-v2.json), not its conformance status.
+SDK compositions below are researched candidates, not selected or implemented
+production behavior.
+Self-hosted LiveKit is our implementation direction under evaluation; the paper
+uses it as a research substrate, not a proposed production dependency, and its
+transport-agnostic semantics make LiveKit neither proof nor a universal
+requirement of conformance. The paper also permits cognition and runtime in one
+process with separate interfaces: management-secret isolation for separate jobs
+is our least-privilege deployment gate, not a claim that process separation is
+required or that the stock SDK alone violates the paper.
+
+1. **Cosmos transport feasibility.** Evaluate the direct Rust LiveKit SDK
+   0.8.4/API 0.6.4 at
+   [pinned revision `2d9f01ab`](https://github.com/livekit/rust-sdks/tree/2d9f01ab1e933a86a8a5c53805ee29ee58b9be1b).
+   Verify pinned libwebrtc assets, Clang 21/lld and both target builds before
+   adopting the production dependency; permit no unverified build-script
+   downloads. A token-only cognition process remains a candidate. Stock Node
+   Agents 1.8.0 at
+   [pinned revision `67fa5e03`](https://github.com/livekit/agents-js/tree/67fa5e031e324cef8fccaf4939960542c7ed6d5e)
+   forwards the SFU management signing secret to jobs; `workerToken` does not
+   replace it. Do not adopt that job boundary. An ordinary-participant RTC
+   connection with public `AgentSession` and explicit `RoomIO` needs original
+   source and typecheck proof, without shared admin credentials or a speculative
+   proxy.
+2. **Cosmos admission and coordination.** Keep Rust Store and its ledger as the
+   single authority. Bind roles, current enrollment and incarnation, device boot
+   epoch and monotonic sequence; explicitly authorize publication and
+   subscription. Never infer the origin from the first room participant. Prove
+   actual sender identity: SDK-attributed identities alone are insufficient with
+   AGENT publishers. Verify the transport identity design before freezing its
+   schema. Verify room permissions and ordinary delivery using an isolated
+   local SFU and synthetic accounts, never production credentials or media.
+3. **Cosmos realtime cognition.** Do not automatically forward
+   `RoomSessionTransport`, control events or history. Manual `RoomIO` with a
+   no-room `AgentSession.start` is a public-composition candidate requiring
+   proof. Models propose typed semantic intents only. Before any proposal,
+   require matching final `response.done` with completed status, exact IDs,
+   bounded payloads and the current generation. Cancelled, expired or replaced
+   turns cannot execute. Scope input audio and retention to the admitted origin;
+   choosing private output grants no private memory. Native audio enqueue proves
+   neither playback nor an action outcome. Verify recorded provider-protocol
+   fixtures offline first; actual provider access and billing are a separate
+   gate.
+4. **Cosmos services and policy.** Rebuild completion, child agents, composition,
+   translation, vision/food, music and native actions through typed services.
+   Require exact single-use action/epoch grants, provenance-scoped retrieval,
+   the full scorer and earned-authority evidence, durable repair, audit
+   anchoring and retention, and behavioral coverage of all twelve invariants.
+   Never restore old bypasses merely to pass compatibility tests.
+5. **Center after Cosmos.** Replace polling with the actual room client. Verify
+   visible-page lifecycle, exact render acknowledgment, and stopping on hide or
+   unmount. Keep owner approvals, provider configuration and redacted status;
+   place no policy authority in the client. Require real browser behavior tests.
+6. **Thin native clients and Pin preparation.** Deliver macOS and Android
+   clients using the shared contracts, with local permissions, capture,
+   rendering/playback, lifecycle handling, protected credential storage,
+   packaging and tests. Their builds do not require a connected Pin. Preserve
+   stock Pin identifiers and all five APK roles while implementing native
+   capture/framing, scoped room join, interruption, disconnect/reboot behavior
+   and offline none-risk reflex limits. Physical Pin connection and installation
+   happen last, require an exact serial and explicit confirmation, and must
+   verify observed playback; simulations are not hardware evidence.
+7. **Server/client release, then final hardware acceptance.** After Cosmos and
+   Center implementation and verification, produce both architecture server
+   images and the authenticated operator archive. Keep the exact signed,
+   descriptor-bound five-APK set unchanged for server-only releases until the
+   native Pin version deliberately advances; do not require a new Pin archive
+   or installation to deploy the server. Extend preflight and
+   verification for media routing, ICE and TURN without inventing a DNS migration
+   or a conflicting port-443 binding. Deploy only that archive, never a checkout,
+   to the existing `https://center.andersmadsen.dk/` origin. Require the intended
+   release ID and `environment: "production"` and real browser evidence for
+   server acceptance. Verify and package the thin native clients separately.
+   Physical Pin evidence comes last, together with remaining end-to-end and
+   measured paper latency, 50-surface and ablation gates for final conformance.
+   Hardware absence does not block an otherwise verified server deployment;
+   incomplete backend behavior still does. Unresolved paper conflicts and
+   missing physical evidence explicitly block a 100% conformance claim.
 
 ## Deploy Cosmos
 
