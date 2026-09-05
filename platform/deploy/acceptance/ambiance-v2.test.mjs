@@ -7,7 +7,7 @@ const root = path.resolve(import.meta.dirname, "../../..");
 const inventory = JSON.parse(fs.readFileSync(path.join(root, "contracts/ambiance-v2.json"), "utf8"));
 const invariantIds = Array.from({ length: 12 }, (_, index) => `invariant-${String(index + 1).padStart(2, "0")}`);
 const paperIds = ["surface-manifest", "origin-provenance", "cognition-authority", "inference-ability", "earned-authority", "concurrency", "recovery", "memory-lifecycle", "content-references", "performance-and-evaluation"];
-const productIds = ["pin-realtime-media", "pin-physical-acceptance", "center-surface", "macos-surface", "android-surface", "release-and-live-verification"];
+const productIds = ["pin-realtime-media", "pin-physical-acceptance", "center-surface", "macos-surface", "android-surface", "pixel-default-digital-assistant", "linux-surface", "shield-playback-context", "movie-list-and-trailer-handoff", "document-explanation-desktop-continuation", "restaurant-pixel-navigation", "private-message-personal-continuation", "release-and-live-verification"];
 
 function nonblank(value) {
   assert.equal(typeof value, "string");

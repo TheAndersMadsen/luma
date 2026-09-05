@@ -92,6 +92,53 @@ committed matching evidence. Device and model independence mean shared contracts
 with explicit capabilities, not a promise that every platform exposes every
 sensor, third-party app or effect.
 
+The owner's four cross-device scenarios are product acceptance gates:
+
+| Scenario | Required behavior | Evidence required for completion |
+| --- | --- | --- |
+| Film suggestions from Pin to Shield, then “play number two's trailer” | Keep a versioned recommendation list with stable item/content IDs; render it on the approved TV surface and resolve “number two” against that exact list. Authorize playback on the selected Shield through a supported player integration. | Matching TV render acknowledgment and observed playback of the selected trailer. A sent link or player launch alone is not playback. |
+| Explain the document on MacBook and continue on the Omarchy desktop | Capture the explicitly authorized current document/selection with its exact version; keep the explanation, task and permitted document reference together and deliver them to the approved desktop. | The destination opens the matching version and task; changed or unavailable source content, permissions and interrupted transfers are handled without substituting another document. |
+| Navigate on Pixel to the restaurant selected on the computer | Retain the selected place's stable identity, address and coordinates as scoped task context; resolve the Pin's reference and dispatch a maps action to Pixel. | The intended place is opened on the selected phone. Opening an app is distinct from starting navigation; ambiguous places require clarification. |
+| View a private message while guests are present | The shared-origin request can invite a personal continuation on Pixel. Retrieve the message only through a new linked request after fresh local authentication, with permission to access that source and a currently eligible private output. | No private content enters the original shared request, TV, audible Pin reply or notification preview. Lock, backgrounding, guests and revocation suppress disclosure; unlocking alone never upgrades the old turn. |
+
+Implement the common native conversation first, then immutable task/context
+references and follow-up resolution, then native rendering and typed media/maps
+actions with observed outcomes. Add authenticated personal continuation and
+scoped document/message services before private scenarios. These are pending
+product outcomes, not abilities inferred from the existing text renderer. Test
+them through native desktop/phone clients before final physical Pin acceptance.
+
+The private-message scenario also needs an explicit policy resolution: the
+paper's formal occupied/unknown-room rule blocks private content on every
+channel in that room, including an authenticated phone. Fresh authentication is
+necessary for a personal continuation but cannot satisfy that separate physical
+privacy gate. Keep the scenario pending until a permitted private context is
+established or an explicit specification change resolves the conflict.
+
+The desktop client direction is a shared Rust connection/state core with small
+platform shells: a macOS menu-bar app and assistant panel, and an Omarchy tray
+app and keyboard-invoked panel. Each installation has its own approved identity,
+local permissions and lifecycle. Capture is explicit and bounded; a screenshot
+is not the underlying document, and a Mac filesystem path is not a transferable
+document reference. Local files need authorized content transfer, cloud documents
+need recipient access, and unsaved changes need a supported application bridge.
+Begin with explicit file/selection sharing and a destination viewer that can
+verify the exact content version. Application-specific editing handoff follows
+only where that application can report its current document and location.
+
+Device coordination stays on the common Cosmos room protocol. Per the paper's
+section 3.4, agent protocols complement the surface contract. Use
+[MCP](https://modelcontextprotocol.io/docs/2026-07-28/learn/architecture) for
+approved tool/data adapters and
+[A2A](https://a2a-protocol.org/latest/specification/) for external specialist
+agents when needed. [Agent Client Protocol](https://agentclientprotocol.com/get-started/introduction)
+is an optional editor/coding-agent integration; the separately named
+[Agent Communication Protocol](https://agentcommunicationprotocol.dev/introduction)
+has joined A2A. These do not replace Cosmos's routing, context authorization,
+device sequencing or observed completion rules. Clients execute specific
+authorized actions through local APIs, hold no provider keys, and cannot gain
+unrestricted desktop access by joining the room.
+
 ### Ambiance v2 work in progress
 
 The `codex/ambiance-v2-production` branch continues the Cosmos-first work from
@@ -309,17 +356,25 @@ approve it, or revoke the exact current approval. A missing write response
 requires a fresh status read before another change. The native profile permits
 only a public-text capability ceiling; it grants no microphone, screen/media
 context, native output, private memory or device actions. Native applications
-and their text connections remain unfinished. The public challenge/open routes
-return enrollment connection metadata only; they do not join a room or submit a
-request. Their 45-second liveness lease has no public renewal endpoint in this
-increment. A native client must verify the configured HTTPS audience before
-signing and retain its pending attempt before sending it. Private keys and raw
-session secrets never pass through Center.
+remain unfinished. This branch connects authenticated native current text to the
+existing Center renderer through one shared principal room coordinator. After
+challenge/open, the native room endpoint authenticates the raw session secret
+and checks the current approval, connection and boot epoch. The stored digest
+and an owner browser token cannot substitute for that secret. Text, heartbeat
+and cancel use one durable room-RPC sequence; exact retries do not repeat
+cognition or renew liveness. Fresh heartbeats renew only the bounded liveness
+lease, never the connection's fixed expiry. Native peers cannot report browser
+visibility or render acknowledgments. Closing or revoking a native connection
+fences its work while preserving an independently valid browser connection.
+There are no native REST input, control, state or close routes. Focused native,
+built-Center and full repository checks passed for this increment; it is not part
+of the deployed server preview.
+A native client must verify the configured HTTPS audience before signing and
+retain its pending attempt before sending it. Private keys and raw session
+secrets never pass through Center.
 
-The next slice connects authenticated native text through Cosmos to the existing
-Center renderer using the same principal coordinator and durable input sequence.
 Immutable task/context handoff follows with revision fencing and observed
-completion, then real desktop/Pixel clients and Shield context integrations.
+completion, alongside real desktop/Pixel clients and Shield context integrations.
 The blueprint's controlled Shield player does not provide playback context from
 YouTube, Stremio, TV2 Play, Netflix or Spotify: each requires its own permitted,
 current context source and honest missing-data behavior. Physical Pin acceptance
@@ -616,10 +671,12 @@ evidence that those dependencies exist.
    native Cosmos, isolated PostgreSQL and a local SFU through a same-origin HTTPS
    gateway with `/livekit` WebSocket forwarding. In Chrome it approves and revokes
    a native installation and verifies that enrollment alone grants no room or
-   input authority. It also grants and revokes separate local voice and speech
-   permissions through the owner UI, approves a shared tab, renders a routed text
-   card, verifies the durable DOM acknowledgment, then leaves and requires the
-   stored payload to be cleared. Authentication and the one cognition response are
+   input authority. A signed native connection then joins the same room as the
+   approved browser. The fixture checks native heartbeat and text retries with
+   one total cognition call, the actual Center DOM acknowledgment, native
+   cancellation and DOM clearing, then revocation and a fresh browser heartbeat
+   after native shutdown. It also grants and revokes separate local voice and
+   speech permissions through the owner UI. Authentication and the cognition response are
    synthetic; no provider, real account, Pin, external-network or media acceptance
    is implied. Supply `COSMOS_TEST_DATABASE_URL` pointing to isolated loopback
    PostgreSQL, then run with Node 22 and Playwright available through `NODE_PATH`:
@@ -631,11 +688,14 @@ evidence that those dependencies exist.
    The SFU JSON supplies `url`, `key` and `secret` for an isolated loopback SFU.
    The driver creates disposable local authentication and TLS credentials, writes
    bounded status and screenshot artifacts outside the checkout, and removes its
-   container and transient credentials. The native enrollment increment passed
-   on the built Center image
+   container and transient credentials. Native shared-room acceptance passed on
+   the unchanged built Center image
    `sha256:309c0ceb752bf30aa01c016f0ec5aadb66f52a5eec757756b096371a87e5726d`,
    including independently observed native approval/revocation revisions 1/2,
-   both voice policy revisions 2, render acknowledgment and payload clearing.
+   both voice policy revisions 2, signed room access, exact retries, render
+   acknowledgment, cancellation clearing and continued browser heartbeat after
+   native shutdown. The focused 40-test native gate also passed against isolated
+   PostgreSQL and the local SFU, including both peer join orders and reconnect.
    Its ignored native test fails if those
    dependencies are absent; an ordinary unit-test pass does not run this gate.
    To exercise one actual OpenRouter request in the same browser flow, append

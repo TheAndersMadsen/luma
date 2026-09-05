@@ -9,17 +9,22 @@
     "token": "300-second join TTL; ordinary participant, coordination only. Token expiry is not live revocation. Management secret stays inside Cosmos.",
     "room": "One principal-scoped opaque room and one connected runtime identity. A replacement coordinator disconnects the previous one; there is no active-active room coordinator or automatic continuation across coordinator replacement."
   },
+  "nativeBootstrap": "contracts/ambiance-native.json room: current owner-approved native connection, raw-secret proof, approval revision and boot epoch. Browser and Native share the same room manager and runtime participant.",
   "method": "cosmos.coordinate.v1",
   "limits": {"payloadBytes": 12288, "textBytes": 4000, "admissionMs": 2000, "rpcMs": 3000, "participants": 16, "rooms": 64, "jobsPerRoom": 32, "sequenceMaximum": 9007199254740991, "receiptsPerSurface": 32, "receiptRetentionMs": 300000},
   "stamp": {"epoch": "UUID", "sequence": "positive safe integer", "instanceId": "UUID"},
   "clientMessages": {
     "input": {"kind": "input", "stamp": "stamp with turn instanceId", "text": "current text"},
-    "control": {"kind": "control", "stamp": "stamp", "control": "one BrowserControl"}
+    "control": {"kind": "control", "stamp": "stamp", "control": "one BrowserControl or NativeControl, selected by the authenticated participant role"}
   },
   "BrowserControl": {
     "state": {"kind": "state", "visible": "boolean"},
     "cancel": {"kind": "cancel", "turnId": "stamp.instanceId", "generation": "positive safe integer"},
     "acknowledge": {"kind": "acknowledge", "actionId": "stamp.instanceId", "turnId": "UUID", "generation": "positive safe integer", "channel": "visual.card", "contentDigest": "SHA256 lowercase hex"}
+  },
+  "NativeControl": {
+    "heartbeat": {"kind": "heartbeat"},
+    "cancel": {"kind": "cancel", "turnId": "stamp.instanceId", "generation": "positive safe integer"}
   },
   "admissionReplies": {
     "input": {"version": 1, "kind": "admitted", "turnId": "UUID", "generation": "positive safe integer", "duplicate": "boolean"},
@@ -34,13 +39,15 @@
     "Only server-attributed caller identity mapped by authenticated bootstrap can originate messages. Reject unknown fields and body-supplied principal or surface authority.",
     "Admission requires an observed peer session. LiveKit 1.13.6 batches non-media presence for up to three seconds; the bootstrap client must retry busy responses within a bounded join window using the same stamp.",
     "One durable high-water sequence spans input and all controls. Exact retries do not repeat cognition, cancellation or state mutation. Acknowledgment retries must still match a currently eligible render. Failed transactions consume no sequence.",
-    "Visibility and its admitted sequence commit atomically with registry/turn changes. Cancellation is scoped to the exact turn originating from this approved browser.",
+    "Browser visibility and its admitted sequence commit atomically with registry/turn changes. Native heartbeat commits lease renewal with its sequence, capped by absolute connection expiry; duplicates never renew. Cancellation is scoped to the exact turn originating from the authenticated current connection.",
+    "Native controls permit heartbeat and cancel only; native cannot set browser visibility or acknowledge rendering. Browser rejects the native heartbeat control. Native text/control retries share its existing cursor across same-boot reconnects. Native input uses its connection incarnation, not the installation approval's registry incarnation.",
     "Committed Store notifications wake delivery; notifications carry no content or authority. PostgreSQL notification loss closes the room. Every send revalidates its durable action and current connection.",
     "The browser validates runtime identity and runtimeEpoch from bootstrap, then deduplicates render stamps. Same-action repair retains its transport stamp. A new coordinator requires new bootstrap; old epochs never resume silently.",
     "RPC receipt is never render completion. The browser separately sends sequenced acknowledge after its DOM commits; exact Store acknowledgment gates the stock Pin outcome sentence.",
-    "Explicit peer loss invalidates that approval and cancels current work. Runtime reconnect is permanently fenced. Connection expiry and empty-room cleanup bound idle resources; dispatch deadlines drive render repair.",
+    "Explicit browser peer loss retires its connection approval and cancels its current work. Native peer loss closes only its exact connection and pending turn, preserving installation approval and its same-boot cursor. Late closure cannot close a replacement. Runtime reconnect is permanently fenced. Connection expiry and empty-room cleanup bound idle resources; dispatch deadlines drive render repair.",
+    "Only eligible Browser surfaces receive render/clear commands in this profile. Native enrollment, room membership and input acknowledgment confer no rendering, media, private-memory or autonomy authority.",
     "Center boots through its authenticated BFF, then uses one ordered room stream for all input and controls. SDK reconnect is fenced; hiding clears local output while keeping the room available for state and clear messages. HTTP poll/input/ack/state routes are absent. This contract is not a production or paper-conformance claim."
   ],
   "configuration": ["COSMOS_RTC_URL", "COSMOS_RTC_PUBLIC_URL", "COSMOS_RTC_API_KEY", "COSMOS_RTC_API_SECRET"],
-  "limitations": ["Coordination and informational cards only", "Native clients, media permissions, production deployment and physical acceptance are pending", "Actual browser/native SDK RPC and disconnect passed against the isolated local SFU; full authenticated UI, external WebRTC and relay acceptance remain pending; TCP-443-only networks are unsupported", "Shared-room approval does not establish physical privacy or actor identity"]
+  "limitations": ["Coordination and informational cards only", "Native applications, media permissions and physical acceptance are pending; README records the separately verified production release", "Isolated SDK and built-Center tests do not establish owner production conversation or relay acceptance; TCP-443-only networks are unsupported", "Shared-room approval does not establish physical privacy or actor identity"]
 }

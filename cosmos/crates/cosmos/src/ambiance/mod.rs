@@ -22,3 +22,5 @@ pub use state::*;
 
 #[cfg(test)]
 mod ingress_tests;
+#[cfg(test)]
+mod native_room_tests;

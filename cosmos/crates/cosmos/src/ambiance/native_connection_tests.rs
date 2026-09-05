@@ -1,5 +1,5 @@
 use super::*;
-use crate::ambiance::{RuntimeOperation, RuntimeResult};
+use crate::ambiance::{BrowserControl, InputStamp, RoomProof, RuntimeOperation, RuntimeResult};
 use p256::ecdsa::{SigningKey, signature::Signer};
 
 const AUDIENCE: &str = "https://native.example";
@@ -102,6 +102,122 @@ fn operation(surface_id: Uuid, request: OpenRequest, incarnation: u128) -> Runti
         request,
         incarnation: Uuid::from_u128(incarnation),
     }
+}
+
+#[test]
+fn native_room_heartbeats_never_renew_duplicates_or_cross_the_absolute_deadline() {
+    let (mut state, records, id) = fixture();
+    let challenge = challenge(&mut state, &records, id, 100);
+    let request = signed(&challenge, Uuid::from_u128(2), 6);
+    let (RuntimeResult::NativeOpened { connection, .. }, _) = state
+        .apply(PRINCIPAL, &records, operation(id, request.clone(), 20), 120)
+        .unwrap()
+    else {
+        panic!("native open")
+    };
+    let proof = NativeProof {
+        surface_id: id,
+        incarnation: connection.incarnation,
+        token_hash: request.session_token_hash,
+    };
+    let heartbeat = |sequence| RuntimeOperation::RoomControl {
+        connection: RoomProof::Native(proof.clone()),
+        stamp: InputStamp {
+            epoch: connection.epoch,
+            sequence,
+            instance_id: Uuid::from_u128(sequence as u128 + 100),
+        },
+        control: BrowserControl::Heartbeat,
+    };
+    let (RuntimeResult::ControlAccepted { duplicate: false }, events) =
+        state.apply(PRINCIPAL, &records, heartbeat(1), 200).unwrap()
+    else {
+        panic!("heartbeat")
+    };
+    assert_eq!(events.len(), 2);
+    let lease = state
+        .check_native(&records, &proof, 200)
+        .unwrap()
+        .lease_expires_at_ms;
+    assert_eq!(lease, 200 + surface_registry::LEASE_MS);
+    let (RuntimeResult::ControlAccepted { duplicate: true }, events) =
+        state.apply(PRINCIPAL, &records, heartbeat(1), 300).unwrap()
+    else {
+        panic!("heartbeat retry")
+    };
+    assert!(events.is_empty());
+    assert_eq!(
+        state
+            .check_native(&records, &proof, 300)
+            .unwrap()
+            .lease_expires_at_ms,
+        lease
+    );
+
+    let mut sequence = 2;
+    let mut now = 40_200;
+    while now < connection.expires_at_ms {
+        state
+            .apply(PRINCIPAL, &records, heartbeat(sequence), now)
+            .unwrap();
+        let current = state.check_native(&records, &proof, now).unwrap();
+        assert_eq!(current.expires_at_ms, connection.expires_at_ms);
+        assert_eq!(
+            current.lease_expires_at_ms,
+            (now + surface_registry::LEASE_MS).min(connection.expires_at_ms)
+        );
+        sequence += 1;
+        now += 40_000;
+    }
+    state
+        .apply(
+            PRINCIPAL,
+            &records,
+            heartbeat(sequence),
+            connection.expires_at_ms - 1,
+        )
+        .unwrap();
+    assert_eq!(
+        state
+            .check_native(&records, &proof, connection.expires_at_ms - 1)
+            .unwrap()
+            .lease_expires_at_ms,
+        connection.expires_at_ms
+    );
+    assert!(
+        state
+            .apply(
+                PRINCIPAL,
+                &records,
+                heartbeat(sequence),
+                connection.expires_at_ms
+            )
+            .is_err()
+    );
+    assert!(
+        state
+            .apply(
+                PRINCIPAL,
+                &records,
+                heartbeat(sequence + 1),
+                connection.expires_at_ms + 1
+            )
+            .is_err()
+    );
+    assert_eq!(state.ingress[&id].high_water, sequence);
+    assert_eq!(records[&id].revision, 1);
+    assert!(matches!(
+        state
+            .apply(
+                PRINCIPAL,
+                &records,
+                RuntimeOperation::CloseNative { connection: proof },
+                connection.expires_at_ms + 2
+            )
+            .unwrap()
+            .0,
+        RuntimeResult::NativeClosed
+    ));
 }
 
 #[test]

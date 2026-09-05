@@ -9,6 +9,19 @@ use p256::ecdsa::{Signature, SigningKey, signature::Signer};
 use tower::ServiceExt;
 
 const AUDIENCE: &str = "https://native.test";
+const SESSION_SECRET: [u8; 32] = [23; 32];
+
+fn test_rooms(
+    store: SharedStore,
+    config: Option<crate::browser_rooms::Config>,
+) -> Arc<crate::browser_rooms::Rooms> {
+    let runtime = Arc::new(crate::ambiance::runtime::AmbianceRuntime::new(
+        store,
+        Arc::new(crate::assistant::llm::MockChatModel::new(Vec::new())),
+        None,
+    ));
+    Arc::new(crate::browser_rooms::Rooms::new(runtime, config))
+}
 
 fn signing_key(scalar: u8) -> SigningKey {
     let mut bytes = [0u8; 32];
@@ -29,7 +42,11 @@ async fn fixture() -> (Router, SharedStore, Uuid, Uuid) {
         .await
         .unwrap();
     (
-        with_audience(store.clone(), Some(AUDIENCE.into())),
+        with_audience(
+            store.clone(),
+            Some(AUDIENCE.into()),
+            test_rooms(store.clone(), None),
+        ),
         store,
         enrollment,
         surface,
@@ -67,7 +84,7 @@ fn signed_open(challenge: &Challenge, key: &SigningKey) -> OpenRequest {
         challenge_id: challenge.challenge_id,
         epoch: Uuid::new_v4(),
         expected_incarnation: challenge.current_incarnation,
-        session_token_hash: surface_registry::hash(b"synthetic-native-session-token"),
+        session_token_hash: surface_registry::hash(&SESSION_SECRET),
         signature: String::new(),
     };
     let signature: Signature = key.sign(&signing_message(challenge, &request).unwrap());
@@ -216,7 +233,11 @@ async fn native_runtime_http_unknown_revoked_and_missing_configuration_fail_clos
         Some("https://native.test/path"),
         Some("not-an-origin"),
     ] {
-        let unavailable = with_audience(store.clone(), audience.map(str::to_owned));
+        let unavailable = with_audience(
+            store.clone(),
+            audience.map(str::to_owned),
+            test_rooms(store.clone(), None),
+        );
         for operation in ["challenge", "open"] {
             assert_eq!(
                 call(&unavailable, operation, json!({"enrollmentId":enrollment})).await,
@@ -257,9 +278,12 @@ async fn native_runtime_http_unknown_revoked_and_missing_configuration_fail_clos
         call(&app, "open", open_value(&valid)).await,
         (StatusCode::NOT_FOUND, json!({"error":"not_found"}))
     );
+    let unavailable_store: SharedStore =
+        Arc::new(crate::store_postgres::PostgresStore::unreachable());
     let unavailable = with_audience(
-        Arc::new(crate::store_postgres::PostgresStore::unreachable()),
+        unavailable_store.clone(),
         Some(AUDIENCE.into()),
+        test_rooms(unavailable_store, None),
     );
     assert_eq!(
         call(
@@ -401,6 +425,12 @@ async fn native_runtime_http_inflight_limit_bounds_slow_bodies_and_recovers() {
         call(&app, "open", json!({})).await.0,
         StatusCode::TOO_MANY_REQUESTS
     );
+    assert_eq!(
+        response(&app, room_request(&native_bearer(), &json!({})))
+            .await
+            .0,
+        StatusCode::TOO_MANY_REQUESTS
+    );
     for task in pending {
         task.abort();
         let _ = task.await;
@@ -414,7 +444,7 @@ async fn native_runtime_http_inflight_limit_bounds_slow_bodies_and_recovers() {
 }
 
 #[tokio::test]
-async fn native_runtime_http_slow_body_expires_and_runtime_channels_are_absent() {
+async fn native_runtime_http_slow_body_expires_and_rest_input_channels_are_absent() {
     let (app, _, enrollment, _) = fixture().await;
     let pending = Body::from_stream(futures_util::stream::pending::<
         Result<axum::body::Bytes, std::io::Error>,
@@ -435,7 +465,7 @@ async fn native_runtime_http_slow_body_expires_and_runtime_channels_are_absent()
             .0,
         StatusCode::OK
     );
-    for operation in ["room", "text", "control", "state", "close"] {
+    for operation in ["text", "control", "state", "close"] {
         let request = Request::builder()
             .method("POST")
             .uri(format!("/runtime-api/v1/native/{operation}"))
@@ -446,4 +476,246 @@ async fn native_runtime_http_slow_body_expires_and_runtime_channels_are_absent()
             StatusCode::NOT_FOUND
         );
     }
+}
+
+async fn open_connection(app: &Router, enrollment: Uuid) -> Value {
+    let (status, issued) = call(app, "challenge", json!({"enrollmentId":enrollment})).await;
+    assert_eq!(status, StatusCode::OK);
+    let challenge: Challenge = serde_json::from_value(issued["challenge"].clone()).unwrap();
+    let request = signed_open(&challenge, &signing_key(1));
+    let (status, opened) = call(app, "open", open_value(&request)).await;
+    assert_eq!(status, StatusCode::OK);
+    json!({
+        "enrollmentId": enrollment,
+        "approvalRevision": opened["connection"]["approvalRevision"],
+        "incarnation": opened["connection"]["incarnation"],
+        "epoch": opened["connection"]["epoch"],
+    })
+}
+
+fn room_request(bearer: &str, body: &Value) -> Request<Body> {
+    Request::builder()
+        .method("POST")
+        .uri("/runtime-api/v1/native/room")
+        .header("content-type", "application/json")
+        .header("authorization", bearer)
+        .body(Body::from(body.to_string()))
+        .unwrap()
+}
+
+fn native_bearer() -> String {
+    format!("Bearer {}", URL_SAFE_NO_PAD.encode(SESSION_SECRET))
+}
+
+#[tokio::test]
+async fn native_runtime_http_room_authenticates_raw_secret_not_digest_or_owner() {
+    let (app, store, enrollment, surface) = fixture().await;
+    let body = open_connection(&app, enrollment).await;
+    // Valid raw bytes reach the deliberately unconfigured room service.
+    assert_eq!(
+        response(&app, room_request(&native_bearer(), &body)).await,
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"error":"unavailable"})
+        )
+    );
+    let digest = surface_registry::hash(&SESSION_SECRET);
+    let digest_bytes: Vec<u8> = (0..digest.len())
+        .step_by(2)
+        .map(|at| u8::from_str_radix(&digest[at..at + 2], 16).unwrap())
+        .collect();
+    for bearer in [
+        verified_owner_bearer(),
+        format!("Bearer {digest}"),
+        format!("Bearer {}", URL_SAFE_NO_PAD.encode(&digest_bytes)),
+        format!("Bearer {}", URL_SAFE_NO_PAD.encode([24u8; 32])),
+        format!("{}=", native_bearer()),
+        URL_SAFE_NO_PAD.encode(SESSION_SECRET),
+    ] {
+        assert_eq!(
+            response(&app, room_request(&bearer, &body)).await.0,
+            StatusCode::NOT_FOUND
+        );
+    }
+    let mut duplicate = room_request(&native_bearer(), &body);
+    duplicate
+        .headers_mut()
+        .append("authorization", native_bearer().parse().unwrap());
+    assert_eq!(response(&app, duplicate).await.0, StatusCode::NOT_FOUND);
+    let mut missing = room_request(&native_bearer(), &body);
+    missing.headers_mut().remove("authorization");
+    assert_eq!(response(&app, missing).await.0, StatusCode::NOT_FOUND);
+    for (field, value, expected) in [
+        ("enrollmentId", json!(Uuid::new_v4()), StatusCode::NOT_FOUND),
+        ("incarnation", json!(Uuid::new_v4()), StatusCode::CONFLICT),
+        ("epoch", json!(Uuid::new_v4()), StatusCode::NOT_FOUND),
+        ("approvalRevision", json!(2), StatusCode::NOT_FOUND),
+    ] {
+        let mut changed = body.clone();
+        changed[field] = value;
+        assert_eq!(
+            response(&app, room_request(&native_bearer(), &changed))
+                .await
+                .0,
+            expected
+        );
+    }
+    store
+        .mutate_surface(
+            "U:owner",
+            surface,
+            Mutation::RevokeNative {
+                expected_revision: 1,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        response(&app, room_request(&native_bearer(), &body))
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
+async fn native_runtime_http_room_schema_bounds_and_configuration_precede_join() {
+    let (app, store, enrollment, _) = fixture().await;
+    let body = open_connection(&app, enrollment).await;
+    for (field, value) in [
+        ("enrollmentId", json!(Uuid::nil())),
+        ("incarnation", json!(Uuid::nil())),
+        ("epoch", json!(Uuid::nil())),
+        ("approvalRevision", json!(0)),
+        (
+            "approvalRevision",
+            json!(surface_registry::MAX_NATIVE_REVISION + 1),
+        ),
+        ("surfaceId", json!(Uuid::new_v4())),
+        ("principal", json!("U:owner")),
+        (
+            "sessionTokenHash",
+            json!(surface_registry::hash(&SESSION_SECRET)),
+        ),
+    ] {
+        let mut changed = body.clone();
+        changed[field] = value;
+        assert_eq!(
+            response(&app, room_request(&native_bearer(), &changed))
+                .await
+                .0,
+            StatusCode::BAD_REQUEST
+        );
+    }
+    for field in ["enrollmentId", "approvalRevision", "incarnation", "epoch"] {
+        let mut missing = body.clone();
+        missing.as_object_mut().unwrap().remove(field);
+        assert_eq!(
+            response(&app, room_request(&native_bearer(), &missing))
+                .await
+                .0,
+            StatusCode::BAD_REQUEST
+        );
+    }
+    let mut encoded = body.to_string();
+    encoded.push_str(&" ".repeat(MAX_BODY_BYTES + 1 - encoded.len()));
+    let mut oversized = room_request(&native_bearer(), &body);
+    *oversized.body_mut() = Body::from(encoded);
+    assert_eq!(response(&app, oversized).await.0, StatusCode::BAD_REQUEST);
+    let unavailable = with_audience(store.clone(), None, test_rooms(store, None));
+    assert_eq!(
+        response(&unavailable, room_request(&native_bearer(), &body))
+            .await
+            .0,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires COSMOS_RTC_BROWSER_TEST_INPUT with an isolated localhost SFU"]
+async fn native_runtime_http_live_room_uses_current_connection_without_renewal() {
+    let input: Value = serde_json::from_slice(
+        &std::fs::read(std::env::var("COSMOS_RTC_BROWSER_TEST_INPUT").unwrap()).unwrap(),
+    )
+    .unwrap();
+    let url = input["url"].as_str().unwrap();
+    assert!(url.starts_with("ws://127.0.0.1:"));
+    let (app, store, enrollment, surface) = fixture().await;
+    let body = open_connection(&app, enrollment).await;
+    let rooms = test_rooms(
+        store.clone(),
+        Some(
+            crate::browser_rooms::Config::new(
+                url.into(),
+                url.into(),
+                input["key"].as_str().unwrap().into(),
+                input["secret"].as_str().unwrap().into(),
+            )
+            .unwrap(),
+        ),
+    );
+    let app = with_audience(store.clone(), Some(AUDIENCE.into()), rooms);
+    let proof = NativeProof {
+        surface_id: surface,
+        incarnation: serde_json::from_value(body["incarnation"].clone()).unwrap(),
+        token_hash: surface_registry::hash(&SESSION_SECRET),
+    };
+    let RuntimeResult::NativeCurrent(before) = store
+        .runtime(
+            "U:owner",
+            RuntimeOperation::CheckNative {
+                connection: proof.clone(),
+            },
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("native connection must be current")
+    };
+    let (status, opened) = response(&app, room_request(&native_bearer(), &body)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(opened["epoch"], body["epoch"]);
+    assert_eq!(opened["version"], 1);
+    assert_eq!(opened["runtimeParticipant"], "runtime");
+    assert!(Uuid::parse_str(opened["participant"].as_str().unwrap()).is_ok());
+    assert!(
+        !opened
+            .to_string()
+            .contains(&URL_SAFE_NO_PAD.encode(SESSION_SECRET))
+    );
+    assert!(!opened.to_string().contains(&proof.token_hash));
+    let (status, repeated) = response(&app, room_request(&native_bearer(), &body)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(repeated["participant"], opened["participant"]);
+    assert_eq!(repeated["runtimeEpoch"], opened["runtimeEpoch"]);
+    let RuntimeResult::NativeCurrent(after) = store
+        .runtime(
+            "U:owner",
+            RuntimeOperation::CheckNative { connection: proof },
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("native connection must remain current")
+    };
+    assert_eq!(
+        serde_json::to_value(after).unwrap(),
+        serde_json::to_value(before).unwrap()
+    );
+    store
+        .mutate_surface(
+            "U:owner",
+            surface,
+            Mutation::RevokeNative {
+                expected_revision: 1,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        response(&app, room_request(&native_bearer(), &body))
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
 }

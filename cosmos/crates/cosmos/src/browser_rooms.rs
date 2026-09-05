@@ -1,8 +1,8 @@
-//! Room membership carries an already verified browser capability. Transport
+//! Room membership carries an already verified surface capability. Transport
 //! identity selects that proof; it never supplies principal or surface authority.
 use crate::{
     ambiance::{
-        BrowserControl, BrowserProof, InputStamp, RuntimeOperation, RuntimeResult, TurnFence,
+        BrowserControl, InputStamp, RoomProof, RuntimeOperation, RuntimeResult, TurnFence,
         runtime::AmbianceRuntime,
     },
     surface_registry::{Mutation, hash},
@@ -81,7 +81,7 @@ pub(crate) struct Connection {
     epoch: Uuid,
 }
 
-pub(crate) struct BrowserRooms {
+pub(crate) struct Rooms {
     runtime: Arc<AmbianceRuntime>,
     config: Option<Config>,
     rooms: Mutex<BTreeMap<String, Room>>,
@@ -113,14 +113,14 @@ impl Drop for Room {
 
 #[derive(Clone)]
 struct Participant {
-    proof: BrowserProof,
+    proof: RoomProof,
     epoch: Uuid,
     sid: Option<String>,
     join_deadline: tokio::time::Instant,
     connection_expires_at_ms: i64,
 }
 
-impl BrowserRooms {
+impl Rooms {
     pub(crate) fn new(runtime: Arc<AmbianceRuntime>, config: Option<Config>) -> Self {
         Self {
             runtime,
@@ -132,26 +132,14 @@ impl BrowserRooms {
     pub(crate) async fn open(
         &self,
         principal: &str,
-        proof: BrowserProof,
+        proof: RoomProof,
         epoch: Uuid,
     ) -> Result<Connection, Error> {
         let config = self.config.as_ref().ok_or(Error::Unavailable)?;
         if epoch.is_nil() {
             return Err(Error::Invalid);
         }
-        // OpenBrowser verifies owner capability, revocation and the fixed epoch
-        // under the same durable principal lock used by every input admission.
-        self.runtime
-            .store
-            .runtime(
-                principal,
-                RuntimeOperation::OpenBrowser {
-                    connection: proof.clone(),
-                    epoch,
-                },
-            )
-            .await
-            .map_err(runtime_error)?;
+        self.check_connection(principal, &proof, epoch).await?;
         let mut rooms = self.rooms.lock().await;
         rooms.retain(|_, room| !room.task.is_finished());
         if !rooms.contains_key(principal) {
@@ -204,31 +192,13 @@ impl BrowserRooms {
             return Err(Error::Unavailable);
         }
         // A token issued before a slow room connection must not outlive a revoke.
-        self.runtime
-            .store
-            .runtime(
-                principal,
-                RuntimeOperation::OpenBrowser {
-                    connection: proof.clone(),
-                    epoch,
-                },
-            )
-            .await
-            .map_err(runtime_error)?;
-        let expires = self
-            .runtime
-            .store
-            .surface(principal, proof.surface_id)
-            .await
-            .map_err(|_| Error::Unavailable)?
-            .ok_or(Error::Denied)?
-            .connection_expires_at;
+        let expires = self.check_connection(principal, &proof, epoch).await?;
         let mut participants = room.participants.lock().await;
         let identity = if let Some((identity, current)) = participants
             .iter()
-            .find(|(_, p)| p.proof.surface_id == proof.surface_id)
+            .find(|(_, p)| p.proof.surface_id() == proof.surface_id())
         {
-            if current.proof.incarnation != proof.incarnation || current.epoch != epoch {
+            if current.proof.incarnation() != proof.incarnation() || current.epoch != epoch {
                 let identity = identity.clone();
                 participants.remove(&identity);
                 Uuid::new_v4().to_string()
@@ -263,6 +233,68 @@ impl BrowserRooms {
             runtime_epoch: room.epoch,
             epoch,
         })
+    }
+
+    /// Both checks use the same durable principal authority as input admission.
+    /// A native room join verifies its existing boot epoch without renewing the
+    /// connection or its liveness lease.
+    async fn check_connection(
+        &self,
+        principal: &str,
+        proof: &RoomProof,
+        epoch: Uuid,
+    ) -> Result<i64, Error> {
+        tokio::time::timeout(ADMISSION_TIMEOUT, async {
+            match proof {
+                RoomProof::Browser(connection) => {
+                    let result = self
+                        .runtime
+                        .store
+                        .runtime(
+                            principal,
+                            RuntimeOperation::OpenBrowser {
+                                connection: connection.clone(),
+                                epoch,
+                            },
+                        )
+                        .await
+                        .map_err(runtime_error)?;
+                    if !matches!(result, RuntimeResult::ConnectionOpened) {
+                        return Err(Error::Unavailable);
+                    }
+                    Ok(self
+                        .runtime
+                        .store
+                        .surface(principal, connection.surface_id)
+                        .await
+                        .map_err(|_| Error::Unavailable)?
+                        .ok_or(Error::Denied)?
+                        .connection_expires_at)
+                }
+                RoomProof::Native(connection) => {
+                    let result = self
+                        .runtime
+                        .store
+                        .runtime(
+                            principal,
+                            RuntimeOperation::CheckNative {
+                                connection: connection.clone(),
+                            },
+                        )
+                        .await
+                        .map_err(runtime_error)?;
+                    match result {
+                        RuntimeResult::NativeCurrent(current) if current.epoch == epoch => {
+                            Ok(current.expires_at_ms)
+                        }
+                        RuntimeResult::NativeCurrent(_) => Err(Error::Denied),
+                        _ => Err(Error::Unavailable),
+                    }
+                }
+            }
+        })
+        .await
+        .map_err(|_| Error::Unavailable)?
     }
 }
 
@@ -390,12 +422,46 @@ async fn deliver(
         let members = participants.lock().await.clone();
         sent.retain(|(identity, _), _| members.contains_key(identity));
         'member: for (identity, member) in members.iter().filter(|(_, m)| m.sid.is_some()) {
+            // Native participants only originate text and connection controls.
+            // Recheck them on the shared Store change feed, without claiming a
+            // browser delivery or granting a native output capability.
+            let connection = match &member.proof {
+                RoomProof::Browser(connection) => connection,
+                RoomProof::Native(connection) => {
+                    let result = tokio::time::timeout(
+                        ADMISSION_TIMEOUT,
+                        runtime.store.runtime(
+                            principal,
+                            RuntimeOperation::CheckNative {
+                                connection: connection.clone(),
+                            },
+                        ),
+                    )
+                    .await
+                    .map_err(|_| Error::Unavailable)?;
+                    match result {
+                        Ok(RuntimeResult::NativeCurrent(current))
+                            if current.epoch == member.epoch => {}
+                        Ok(RuntimeResult::NativeCurrent(_))
+                        | Err(
+                            crate::ambiance::RuntimeError::InvalidOrigin
+                            | crate::ambiance::RuntimeError::Stale
+                            | crate::ambiance::RuntimeError::NotFound,
+                        ) => {
+                            participants.lock().await.remove(identity);
+                            leave(runtime, principal, &member.proof).await;
+                        }
+                        _ => return Err(Error::Unavailable),
+                    }
+                    continue;
+                }
+            };
             let result = tokio::time::timeout(
                 ADMISSION_TIMEOUT,
                 runtime.store.runtime(
                     principal,
                     RuntimeOperation::Poll {
-                        connection: member.proof.clone(),
+                        connection: connection.clone(),
                     },
                 ),
             )
@@ -457,7 +523,7 @@ async fn deliver(
                     runtime.store.runtime(
                         principal,
                         RuntimeOperation::CheckDelivery {
-                            connection: member.proof.clone(),
+                            connection: connection.clone(),
                             action_id: id,
                             generation: action.generation,
                         },
@@ -509,7 +575,7 @@ async fn deliver(
                         runtime.store.runtime(
                             principal,
                             RuntimeOperation::DeliveryFailed {
-                                connection: member.proof.clone(),
+                                connection: connection.clone(),
                                 action_id: id,
                                 generation: action.generation,
                             },
@@ -535,18 +601,35 @@ fn received(result: Result<String, Error>, stamp: &InputStamp) -> bool {
         })
 }
 
-async fn leave(runtime: &AmbianceRuntime, principal: &str, proof: &BrowserProof) {
-    let _ = tokio::time::timeout(
-        ADMISSION_TIMEOUT,
-        runtime.store.mutate_surface(
-            principal,
-            proof.surface_id,
-            Mutation::Leave {
-                token_hash: proof.token_hash.clone(),
-                incarnation: proof.incarnation,
-            },
-        ),
-    )
+async fn leave(runtime: &AmbianceRuntime, principal: &str, proof: &RoomProof) {
+    let _ = tokio::time::timeout(ADMISSION_TIMEOUT, async {
+        match proof {
+            RoomProof::Browser(connection) => {
+                let _ = runtime
+                    .store
+                    .mutate_surface(
+                        principal,
+                        connection.surface_id,
+                        Mutation::Leave {
+                            token_hash: connection.token_hash.clone(),
+                            incarnation: connection.incarnation,
+                        },
+                    )
+                    .await;
+            }
+            RoomProof::Native(connection) => {
+                let _ = runtime
+                    .store
+                    .runtime(
+                        principal,
+                        RuntimeOperation::CloseNative {
+                            connection: connection.clone(),
+                        },
+                    )
+                    .await;
+            }
+        }
+    })
     .await;
 }
 
@@ -575,7 +658,7 @@ async fn coordinate(
                 ADMISSION_TIMEOUT,
                 runtime.store.runtime(
                     &principal,
-                    RuntimeOperation::BrowserControl {
+                    RuntimeOperation::RoomControl {
                         connection: member.proof,
                         stamp,
                         control,
@@ -600,13 +683,8 @@ async fn coordinate(
         return;
     }
     let (started, mut admission) = oneshot::channel();
-    let work = runtime.sequenced_browser_text_started(
-        &principal,
-        member.proof,
-        stamp,
-        text,
-        Some(started),
-    );
+    let work =
+        runtime.sequenced_room_text_started(&principal, member.proof, stamp, text, Some(started));
     tokio::pin!(work);
     let admitted = tokio::time::timeout(ADMISSION_TIMEOUT, async {
         tokio::select! {

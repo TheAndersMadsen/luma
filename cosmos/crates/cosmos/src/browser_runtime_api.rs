@@ -6,7 +6,7 @@ mod center_acceptance;
 #[path = "browser_runtime_api_tests.rs"]
 mod tests;
 use crate::{
-    ambiance::{Action, BrowserProof, RuntimeError, runtime::AmbianceRuntime},
+    ambiance::{Action, BrowserProof, RoomProof, RuntimeError, runtime::AmbianceRuntime},
     web_auth::JwtVerifier,
 };
 use axum::{
@@ -25,27 +25,19 @@ use uuid::Uuid;
 struct ApiState {
     runtime: Arc<AmbianceRuntime>,
     verifier: Option<Arc<JwtVerifier>>,
-    rooms: Arc<crate::browser_rooms::BrowserRooms>,
+    rooms: Arc<crate::browser_rooms::Rooms>,
 }
-pub fn router(runtime: Arc<AmbianceRuntime>) -> Router {
-    with_verifier(runtime, crate::web_auth::configured_verifier())
-}
-fn with_verifier(runtime: Arc<AmbianceRuntime>, verifier: Option<Arc<JwtVerifier>>) -> Router {
-    with_rooms(
-        runtime,
-        verifier,
-        crate::browser_rooms::Config::configured(),
-    )
+pub(crate) fn router(
+    runtime: Arc<AmbianceRuntime>,
+    rooms: Arc<crate::browser_rooms::Rooms>,
+) -> Router {
+    with_rooms(runtime, crate::web_auth::configured_verifier(), rooms)
 }
 fn with_rooms(
     runtime: Arc<AmbianceRuntime>,
     verifier: Option<Arc<JwtVerifier>>,
-    config: Option<crate::browser_rooms::Config>,
+    rooms: Arc<crate::browser_rooms::Rooms>,
 ) -> Router {
-    let rooms = Arc::new(crate::browser_rooms::BrowserRooms::new(
-        runtime.clone(),
-        config,
-    ));
     Router::new()
         .route("/runtime-api/v1/browser/status", get(status))
         .route("/runtime-api/v1/browser/room", post(room))
@@ -174,7 +166,8 @@ async fn room(
     let connection = proof(&headers, request.surface_id, request.incarnation)?;
     let opened = tokio::time::timeout(
         std::time::Duration::from_secs(15),
-        api.rooms.open(&principal, connection, request.epoch),
+        api.rooms
+            .open(&principal, RoomProof::Browser(connection), request.epoch),
     )
     .await
     .map_err(|_| ApiError(StatusCode::SERVICE_UNAVAILABLE, "unavailable"))?

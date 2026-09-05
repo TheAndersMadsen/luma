@@ -34,6 +34,8 @@ process.stdout.write(`Acceptance fixture: ${directory}\n`);
 const container = `revival-center-acceptance-${crypto.randomUUID()}`;
 const bootstrapPath = path.join(directory, "bootstrap.json");
 const statusPath = path.join(directory, "status.json");
+const coordinationPath = path.join(directory, "coordination.json");
+const coordinationPendingPath = path.join(directory, "coordination.pending.json");
 const input = path.join(directory, "input.json");
 const logs = fs.openSync(path.join(directory, "native.log"), "w", 0o600);
 const certificate = path.join(directory, "loopback.pem");
@@ -97,10 +99,15 @@ async function until(read, timeout = 180000) {
   throw new Error("Acceptance stage timed out");
 }
 function readJson(file) { try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch { return null; } }
+function checkpoint(stage) {
+  assert(["browserReady", "renderObserved", "clearObserved"].includes(stage));
+  fs.writeFileSync(coordinationPendingPath, JSON.stringify({ stage }), { mode: 0o600 });
+  fs.renameSync(coordinationPendingPath, coordinationPath);
+}
 try {
   await new Promise(resolve => gateway.listen(0, "127.0.0.1", resolve));
   const origin = `https://127.0.0.1:${gateway.address().port}`;
-  fs.writeFileSync(input, JSON.stringify({ ...configured, publicUrl: origin.replace("https:", "wss:") + "/livekit", bootstrapPath, statusPath }), { mode: 0o600 });
+  fs.writeFileSync(input, JSON.stringify({ ...configured, publicUrl: origin.replace("https:", "wss:") + "/livekit", bootstrapPath, statusPath, coordinationPath }), { mode: 0o600 });
   // The native fixture links the same pinned, verified cancellation fix as the
   // normal Cosmos checks. Never compile against a registry/cache modification.
   const testEnvironment = cosmosTestEnvironment();
@@ -197,7 +204,7 @@ try {
   assert.deepEqual(approved.request().postDataJSON(), { ...descriptor, expectedRevision: 0 });
   assert.deepEqual(await approved.json(), { native: expectedNative });
   await page.getByText("Cosmos recorded this installation’s public-text approval. Native text connections are still in development.", { exact: true }).waitFor();
-  await until(() => { const status = readJson(statusPath); return status?.nativeApproved && status.noNativeRoomInputAuthority; }, 10000);
+  await until(() => { const status = readJson(statusPath); return status?.nativeApproved && status.enrollmentOnlyNoRoomAuthority; }, 10000);
   // An owner cookie and public descriptor do not provide a browser connection.
   // Both requests go through the real Center server in this isolated context.
   const nativeDenials = await page.evaluate(async surfaceId => {
@@ -212,6 +219,23 @@ try {
   assert.deepEqual(nativeDenials, { room: { status: 403, body: { error: "invalid_connection" } },
     input: { status: 404, body: { error: "not_found" } } });
   await page.screenshot({ path: path.join(directory, "native-approved.png"), fullPage: true });
+  stage = "shared browser display and signed native text";
+  // Keep both owner controls and the renderer on this visible page. Revoking a
+  // native installation must not be confused with navigation retiring a browser.
+  await page.getByRole("button", { name: "Approve this tab", exact: true }).click();
+  await page.getByRole("button", { name: "Confirm shared display", exact: true }).click();
+  await page.getByText("Ready for public text requests.", { exact: true }).waitFor();
+  checkpoint("browserReady");
+  // The real native SDK supplies the only model request and retries its exact
+  // input stamp. Center's actual DOM commit must acknowledge that routed reply.
+  await page.getByLabel("Cosmos display", { exact: true }).getByText("Center acceptance card", { exact: true }).waitFor();
+  await until(() => { const status = readJson(statusPath); return status?.acknowledged && status.nativeTextRetried; }, 10000);
+  await page.screenshot({ path: path.join(directory, "rendered-card.png"), fullPage: true });
+  checkpoint("renderObserved");
+  stage = "native cancellation and durable render clear";
+  await page.getByLabel("Cosmos display", { exact: true }).waitFor({ state: "detached" });
+  await until(() => { const status = readJson(statusPath); return status?.nativeCancelled && status.payloadCleared; }, 10000);
+  checkpoint("clearObserved");
   stage = "owner native installation revocation";
   await page.getByRole("button", { name: `Revoke installation ${descriptor.enrollmentId}`, exact: true }).click();
   const [revoked] = await Promise.all([
@@ -228,31 +252,36 @@ try {
   }, descriptor.enrollmentId);
   assert.deepEqual(afterRevocation, { list: { status: 200, body: { native: [] } },
     lookup: { status: 200, body: { native: { ...expectedNative, revision: 2, revoked: true } } } });
-  await until(() => readJson(statusPath)?.nativeRevoked, 10000);
+  // The fixture waits for this tab's next real 15-second state heartbeat after
+  // native shutdown, so preserved means the browser RPC still reaches Cosmos.
+  await until(() => { const status = readJson(statusPath); return status?.nativeRevoked && status.nativeDisconnected && status.browserPreservedAfterNative; }, 25000);
+  await page.getByText("Cosmos confirmed this shared tab visible. It can receive public text cards.", { exact: true }).waitFor();
   await page.screenshot({ path: path.join(directory, "native-revoked.png"), fullPage: true });
-  stage = "browser room admission and render";
-  await page.goto(`${origin}/?assistant=open`);
-  await page.getByRole("button", { name: "Approve this tab", exact: true }).click();
-  await page.getByRole("button", { name: "Confirm shared display", exact: true }).click();
-  await page.getByText("Ready for public text requests.", { exact: true }).waitFor();
-  await page.getByRole("textbox", { name: "Ask Cosmos", exact: true }).fill("Display a public text card containing exactly: Center acceptance card");
-  await page.getByRole("button", { name: "Send", exact: true }).click();
-  await page.getByLabel("Cosmos display", { exact: true }).getByText("Center acceptance card", { exact: true }).waitFor();
-  await until(() => readJson(statusPath)?.acknowledged, 10000);
-  await page.screenshot({ path: path.join(directory, "rendered-card.png"), fullPage: true });
-  stage = "durable render clear";
+  stage = "browser leave after native revocation";
   await page.getByRole("button", { name: "Leave this tab", exact: true }).click();
   await page.getByLabel("Cosmos display", { exact: true }).waitFor({ state: "detached" });
   const result = await until(() => { const status = readJson(statusPath); return status?.complete ? status : null; }, 10000);
+  assert.equal(result.acknowledged, true);
+  assert.equal(result.modelCalls, 1);
+  assert.equal(result.modelMode, providerMode ? "openrouter-text" : "synthetic");
+  assert.equal(result.speechPolicyRevision, 2);
+  assert.equal(result.localVoicePolicyRevision, 2);
   assert.equal(result.nativeApprovalRevision, 1);
   assert.equal(result.nativeRevocationRevision, 2);
-  assert.equal(result.noNativeRoomInputAuthority, true);
+  assert.equal(result.enrollmentOnlyNoRoomAuthority, true);
+  assert.equal(result.nativeRoomJoined, true);
+  assert.equal(result.nativeTextRetried, true);
+  assert.equal(result.nativeHeartbeatVerified, true);
+  assert.equal(result.nativeCancelled, true);
+  assert.equal(result.payloadCleared, true);
+  assert.equal(result.nativeDisconnected, true);
+  assert.equal(result.browserPreservedAfterNative, true);
   result.nativeCenterRoomStatus = nativeDenials.room.status;
   result.nativeCenterInputStatus = nativeDenials.input.status;
   assert.deepEqual(errors, [], "No browser runtime exceptions");
   const exit = await new Promise(resolve => child.exitCode !== null ? resolve(child.exitCode) : child.once("exit", resolve));
   assert.equal(exit, 0);
-  process.stdout.write(`PASS: actual Center owner controls, native approval/revocation without room/input authority, Cosmos routing, SFU, DOM acknowledgment and durable clear; one ${providerMode ? "live OpenRouter" : "synthetic"} model call.\nArtifacts: ${directory}\n`);
+  process.stdout.write(`PASS: actual Center owner controls, signed native room text and retry, shared Cosmos routing, DOM acknowledgment, native cancellation/revocation and durable clear; one ${providerMode ? "live OpenRouter" : "synthetic"} model call.\nArtifacts: ${directory}\n`);
   fs.writeFileSync(path.join(directory, "result.json"), JSON.stringify(result) + "\n", { mode: 0o600 });
 } catch (error) {
   if (page && !page.isClosed()) {
@@ -271,5 +300,5 @@ try {
   for (const socket of sockets) socket.destroy();
   await new Promise(resolve => gateway.close(resolve));
   fs.writeFileSync(path.join(directory, "transport-status.json"), JSON.stringify(diagnostics) + "\n", { mode: 0o600 });
-  for (const file of [input, bootstrapPath, path.join(directory, "center.env"), certificate, privateKey]) fs.rmSync(file, { force: true });
+  for (const file of [input, bootstrapPath, coordinationPath, coordinationPendingPath, path.join(directory, "center.env"), certificate, privateKey]) fs.rmSync(file, { force: true });
 }

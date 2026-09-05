@@ -154,6 +154,13 @@ where
             enrollment::pairing_store(),
         ))
     });
+    let ambiance_rooms = ambiance_runtime.as_ref().map(|runtime| {
+        // Browser and native surfaces share one coordinator and runtime identity.
+        std::sync::Arc::new(browser_rooms::Rooms::new(
+            runtime.clone(),
+            browser_rooms::Config::configured(),
+        ))
+    });
     // One directory for both halves of the AI-bus data-protection path:
     // PublicPrivacy imports the owned Pin's C1 key and the authenticated Center
     // REST projection reads that same handle. PostgreSQL makes it cross-workload;
@@ -196,11 +203,17 @@ where
             ambiance_runtime
                 .clone()
                 .expect("AI-bus workload configures runtime"),
+            ambiance_rooms
+                .clone()
+                .expect("AI-bus workload configures shared rooms"),
         ))
         .merge(native_runtime_api::router(
             ai_bus_store
                 .clone()
                 .expect("AI-bus workload configures its shared store"),
+            ambiance_rooms
+                .clone()
+                .expect("AI-bus workload configures shared rooms"),
         ))
     } else if config.identity.workload() == cosmos_core::Workload::Provisioning {
         // The pair route must run in the process that runs the OPAQUE ceremony

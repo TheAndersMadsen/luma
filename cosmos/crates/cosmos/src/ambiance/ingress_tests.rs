@@ -64,8 +64,8 @@ fn input(proof: &BrowserProof, stamp: &InputStamp, text: &str) -> RuntimeOperati
     RuntimeOperation::Begin {
         turn_id: stamp.instance_id,
         worker: Uuid::new_v4(),
-        origin: OriginProof::SequencedBrowser {
-            connection: proof.clone(),
+        origin: OriginProof::SequencedRoom {
+            connection: RoomProof::Browser(proof.clone()),
             stamp: stamp.clone(),
         },
         request_digest: hash(text.as_bytes()),
@@ -82,8 +82,8 @@ fn ambiance_ingress_control_replay_cannot_cancel_a_replacement_or_change_visibil
     else {
         panic!()
     };
-    let cancel = || RuntimeOperation::BrowserControl {
-        connection: proof.clone(),
+    let cancel = || RuntimeOperation::RoomControl {
+        connection: RoomProof::Browser(proof.clone()),
         stamp: InputStamp {
             sequence: 2,
             instance_id: first.turn_id,
@@ -116,8 +116,8 @@ fn ambiance_ingress_control_replay_cannot_cancel_a_replacement_or_change_visibil
         instance_id: Uuid::new_v4(),
         ..stamp.clone()
     };
-    let visibility = |stamp: InputStamp, visible| RuntimeOperation::BrowserControl {
-        connection: proof.clone(),
+    let visibility = |stamp: InputStamp, visible| RuntimeOperation::RoomControl {
+        connection: RoomProof::Browser(proof.clone()),
         stamp,
         control: BrowserControl::State { visible },
     };
@@ -241,8 +241,8 @@ fn ambiance_ingress_acknowledgment_is_exact_sequenced_and_rechecked_on_retry() {
             105,
         )
         .unwrap();
-    let acknowledgment = |digest| RuntimeOperation::BrowserControl {
-        connection: proof.clone(),
+    let acknowledgment = |digest| RuntimeOperation::RoomControl {
+        connection: RoomProof::Browser(proof.clone()),
         stamp: InputStamp {
             sequence: 2,
             instance_id: action.id,
@@ -533,9 +533,9 @@ async fn ambiance_ingress_retried_input_never_calls_cognition_twice() {
         .unwrap();
     assert!(matches!(
         runtime
-            .sequenced_browser_text(
+            .sequenced_room_text(
                 "U:fixture",
-                proof.clone(),
+                RoomProof::Browser(proof.clone()),
                 stamp.clone(),
                 "test request".into()
             )
@@ -545,9 +545,9 @@ async fn ambiance_ingress_retried_input_never_calls_cognition_twice() {
     ));
     assert!(matches!(
         runtime
-            .sequenced_browser_text(
+            .sequenced_room_text(
                 "U:fixture",
-                proof.clone(),
+                RoomProof::Browser(proof.clone()),
                 stamp.clone(),
                 "test request".into()
             )
@@ -558,7 +558,12 @@ async fn ambiance_ingress_retried_input_never_calls_cognition_twice() {
     assert_eq!(model.0.load(Ordering::SeqCst), 1);
     assert!(
         runtime
-            .sequenced_browser_text("U:fixture", proof, stamp, "changed text".into())
+            .sequenced_room_text(
+                "U:fixture",
+                RoomProof::Browser(proof),
+                stamp,
+                "changed text".into()
+            )
             .await
             .is_err()
     );

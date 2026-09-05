@@ -1,18 +1,20 @@
-//! Installation challenge and connection bootstrap. The Store verifies key
+//! Installation challenge, connection and shared-room bootstrap. The Store verifies key
 //! possession and commits authority; request headers supply neither owner nor audience.
 #[cfg(test)]
 #[path = "native_runtime_api_tests.rs"]
 mod tests;
 
 use crate::{
-    ambiance::{RuntimeError, RuntimeOperation, RuntimeResult, native_connection},
+    ambiance::{
+        NativeProof, RoomProof, RuntimeError, RuntimeOperation, RuntimeResult, native_connection,
+    },
     store::SharedStore,
     surface_registry::RegistryError,
 };
 use axum::{
     Json, Router,
     extract::{Request, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::post,
 };
@@ -30,21 +32,28 @@ const MAX_BODY_BYTES: usize = 2048;
 #[derive(Clone)]
 struct ApiState {
     store: SharedStore,
+    rooms: Arc<crate::browser_rooms::Rooms>,
     audience: Option<String>,
     inflight: Arc<Semaphore>,
 }
 
-pub fn router(store: SharedStore) -> Router {
-    with_audience(store, std::env::var("REVIVAL_PUBLIC_ORIGIN").ok())
+pub(crate) fn router(store: SharedStore, rooms: Arc<crate::browser_rooms::Rooms>) -> Router {
+    with_audience(store, std::env::var("REVIVAL_PUBLIC_ORIGIN").ok(), rooms)
 }
 
-pub(crate) fn with_audience(store: SharedStore, audience: Option<String>) -> Router {
+pub(crate) fn with_audience(
+    store: SharedStore,
+    audience: Option<String>,
+    rooms: Arc<crate::browser_rooms::Rooms>,
+) -> Router {
     Router::new()
         .route("/runtime-api/v1/native/challenge", post(challenge))
         .route("/runtime-api/v1/native/open", post(open))
+        .route("/runtime-api/v1/native/room", post(room))
         .layer(axum::middleware::map_response(response_headers))
         .with_state(ApiState {
             store,
+            rooms,
             audience: audience.and_then(|value| native_connection::canonical_audience(&value).ok()),
             inflight: Arc::new(Semaphore::new(MAX_INFLIGHT)),
         })
@@ -211,6 +220,98 @@ async fn open(State(api): State<ApiState>, request: Request) -> Result<Json<Valu
         Ok(Json(
             json!({"connection": connection, "duplicate": duplicate}),
         ))
+    })
+    .await
+    .map_err(|_| unavailable())?
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RoomRequest {
+    enrollment_id: Uuid,
+    approval_revision: u64,
+    incarnation: Uuid,
+    epoch: Uuid,
+}
+
+fn session_hash(headers: &HeaderMap) -> Result<String, ApiError> {
+    let denied = || ApiError(StatusCode::NOT_FOUND, "not_found");
+    if headers.get_all("authorization").iter().count() != 1 {
+        return Err(denied());
+    }
+    let token = headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        .and_then(crate::web_auth::bearer_token)
+        .filter(|value| value.len() == 43)
+        .ok_or_else(denied)?;
+    let bytes = URL_SAFE_NO_PAD.decode(token).map_err(|_| denied())?;
+    if bytes.len() != 32 || URL_SAFE_NO_PAD.encode(&bytes) != token {
+        return Err(denied());
+    }
+    // Open signs the digest of decoded secret bytes. Neither the stored digest
+    // nor a hash of its base64 spelling can authenticate a room connection.
+    Ok(crate::surface_registry::hash(&bytes))
+}
+
+async fn room(
+    State(api): State<ApiState>,
+    headers: HeaderMap,
+    request: Request,
+) -> Result<Json<crate::browser_rooms::Connection>, ApiError> {
+    api.audience.as_ref().ok_or_else(unavailable)?;
+    let _permit = api
+        .inflight
+        .try_acquire()
+        .map_err(|_| ApiError(StatusCode::TOO_MANY_REQUESTS, "busy"))?;
+    let token_hash = session_hash(&headers)?;
+    let request: RoomRequest = body(request).await?;
+    if request.enrollment_id.is_nil()
+        || request.incarnation.is_nil()
+        || request.epoch.is_nil()
+        || request.approval_revision == 0
+        || request.approval_revision > crate::surface_registry::MAX_NATIVE_REVISION
+    {
+        return Err(invalid());
+    }
+    tokio::time::timeout(std::time::Duration::from_secs(15), async {
+        let location = api
+            .store
+            .native_location(request.enrollment_id)
+            .await?
+            .ok_or(ApiError(StatusCode::NOT_FOUND, "not_found"))?;
+        let proof = NativeProof {
+            surface_id: location.surface_id,
+            incarnation: request.incarnation,
+            token_hash,
+        };
+        let RuntimeResult::NativeCurrent(current) = api
+            .store
+            .runtime(
+                &location.principal,
+                RuntimeOperation::CheckNative {
+                    connection: proof.clone(),
+                },
+            )
+            .await?
+        else {
+            return Err(unavailable());
+        };
+        if current.approval_revision != request.approval_revision || current.epoch != request.epoch
+        {
+            return Err(ApiError(StatusCode::NOT_FOUND, "not_found"));
+        }
+        let connection = api
+            .rooms
+            .open(&location.principal, RoomProof::Native(proof), request.epoch)
+            .await
+            .map_err(|error| match error {
+                cosmos_rtc::Error::Invalid => invalid(),
+                cosmos_rtc::Error::Denied => ApiError(StatusCode::NOT_FOUND, "not_found"),
+                cosmos_rtc::Error::Busy => ApiError(StatusCode::TOO_MANY_REQUESTS, "busy"),
+                cosmos_rtc::Error::Unavailable => unavailable(),
+            })?;
+        Ok(Json(connection))
     })
     .await
     .map_err(|_| unavailable())?

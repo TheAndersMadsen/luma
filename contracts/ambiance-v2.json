@@ -46,7 +46,7 @@
       "path": "cosmos/crates/cosmos/src/surface_registry.rs",
       "anchor": "pub fn native_manifest()",
       "scope": "Defines one owner-approved installation-key binding and fixed class-zero public-text ceiling for macOS, Linux, Android and Android TV hints; registry-owned approval revision is independent of connection liveness.",
-      "limitation": "Enrollment only. Platform is a display hint, actor and occupancy remain unknown, and there is no native input, render, capture, media, private-memory or autonomy authority. Native clients remain unfinished."
+      "limitation": "Manifest definition only. Platform is a display hint, actor and occupancy remain unknown, and there is no native render, capture, media, private-memory or autonomy authority. Active text requires separately verified current connection/room admission; native applications remain unfinished."
     },
     {
       "id": "native-installation-owner-test-definition",
@@ -70,7 +70,7 @@
       "path": "cosmos/crates/cosmos/src/native_runtime_api_tests.rs",
       "anchor": "async fn native_runtime_http_configured_audience_ignores_headers_and_signed_retry_is_stable()",
       "scope": "Defines configured HTTPS audience binding through the HTTP-to-Store path and an exact signed retry returning the existing connection. Companion tests reject owner-bearer substitution, invalid proof, revoked/unknown enrollment, malformed bodies and unsupported runtime routes.",
-      "limitation": "Isolated MemoryStore HTTP tests. Only challenge/open is exposed; there is no generic native room, input, liveness renewal, media or output implementation in this increment."
+      "limitation": "Isolated MemoryStore challenge/open tests. These signing tests do not establish shared-room delivery, installed clients, native media or native output."
     },
     {
       "id": "native-installation-postgres-test-definition",
@@ -86,7 +86,39 @@
       "path": "center/src/app/settings/account/surfaces/NativeSurfaces.test.tsx",
       "anchor": "requires review and a separate owner confirmation of the key and limited public-text permission",
       "scope": "Defines descriptor/fingerprint review, explicit owner approval, exact reapproval/revocation revisions, lifecycle fencing, ambiguous-write lockout and roster identity/size validation.",
-      "limitation": "Rendered DOM with mocked HTTP responses. The UI records approval only; native clients, room connections, actual native text requests and physical devices remain unfinished."
+      "limitation": "Rendered DOM with mocked HTTP responses. The UI records approval only; this is not evidence of active room delivery, installed native clients or physical devices."
+    },
+    {
+      "id": "native-room-http-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/native_runtime_api_tests.rs",
+      "anchor": "async fn native_runtime_http_room_authenticates_raw_secret_not_digest_or_owner()",
+      "scope": "Defines raw 32-byte session-secret authentication, rejection of stored-digest and owner-JWT substitution, exact current incarnation/revision/epoch checks, bounded request schema and revocation. A separate opt-in SFU test verifies actual room bootstrap and unchanged connection deadlines on retry.",
+      "limitation": "The positive room gate requires an isolated SFU; ordinary tests cannot prove native transport or device behavior. No installed client or hardware permission is established."
+    },
+    {
+      "id": "native-room-sequence-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/native_room_tests.rs",
+      "anchor": "async fn native_room_heartbeat_and_cancel_share_cursor_without_browser_authority()",
+      "scope": "Defines one native input/control cursor with exact retries, heartbeat lease bounds, cancellation ownership and rejection of browser state/render acknowledgment. Companion tests cover public current-text cognition, privacy denial, mid-model closure/revocation and immediate follow-up after exact browser completion or exhausted delivery deadlines.",
+      "limitation": "Runtime fixtures use synthetic connections and models. Native applications, physical identity/privacy and microphone/rendering permissions remain separate gates."
+    },
+    {
+      "id": "native-room-postgres-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/store_postgres.rs",
+      "anchor": "async fn native_room_postgres_input_race_and_failed_append_preserve_sequence_and_lease()",
+      "scope": "Defines native input races, failed-ledger-append rollback of input/heartbeat, cursor/receipt recovery after Store reopen, exact close versus replacement, and rejection after revocation or expiry under the existing PostgreSQL authority.",
+      "limitation": "Requires actual isolated PostgreSQL. Store reopen is not database-server restart, and passing this gate does not establish SFU, native application or production behavior."
+    },
+    {
+      "id": "native-room-sfu-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/browser_rooms_tests.rs",
+      "anchor": "async fn native_room_live_both_join_orders_share_coordinator_and_browser_delivery()",
+      "scope": "Defines browser-first and native-first membership under one runtime coordinator, native text to browser render/ack, exact retries and unchanged lease, no native rendering, and native cancellation/revocation isolation. A companion test covers native disconnect during cognition and retained same-boot reconnect cursor.",
+      "limitation": "Ignored unless explicitly run against an isolated localhost SFU; synthetic SDK peers are not installed owner devices or actual DOM rendering."
     },
     {
       "id": "local-voice-capture-test-definition",
@@ -165,7 +197,7 @@
       "kind": "test-definition",
       "path": "cosmos/crates/cosmos/src/browser_center_acceptance.rs",
       "anchor": "async fn browser_center_application_acceptance()",
-      "scope": "The Center image driver exercises native installation approval/revocation without input or room authority, separate local voice and cloud speech owner controls, native Cosmos, isolated PostgreSQL, same-origin HTTPS/WSS, the SFU, Chrome rendering, durable DOM acknowledgment and payload clearing on leave.",
+      "scope": "The Center image driver exercises owner approval, signed native challenge/open and raw-secret room bootstrap, then one native SDK text request and exact retry through the same coordinator as Center. It verifies separate voice policies, actual Chrome DOM acknowledgment, cancellation/payload clearing, native revocation and continued browser heartbeat before leave, using native Cosmos, PostgreSQL, HTTPS/WSS and the SFU.",
       "limitation": "Authentication is synthetic. The explicit local driver uses synthetic cognition by default; --openrouter-stdin selects one real provider request and labels the result. Ordinary tests ignore this gate. Does not establish production networking, physical Pin playback or full paper conformance."
     },
     {
@@ -622,7 +654,7 @@
       "requirement": "Bind each request to authenticated principal, origin, modality, state, environment, device/channel/actor trust, server receipt time, epoch and sequence.",
       "acceptance": "Preserve Pin device identity before account normalization; do not trust device clocks or body-supplied identity, and test replay/freshness plus scoped self-echo rejection.",
       "status": "partial",
-      "evidence": ["authenticated-device-provenance-definition", "stock-transport-provenance-test-definition", "pin-runtime-admission-definition", "rtc-attribution-test-definition", "sequenced-input-test-definition", "sequenced-input-postgres-test-definition", "sequenced-control-postgres-test-definition", "runtime-echo-test-definition", "runtime-echo-postgres-test-definition", "native-pcm-adapter-test-definition", "native-pcm-isolation-test-definition", "native-pin-epoch-test-definition", "native-pin-epoch-postgres-test-definition", "native-pin-media-admission-test-definition", "native-pin-media-store-failure-test-definition", "native-installation-signing-test-definition", "native-installation-postgres-test-definition"]
+      "evidence": ["authenticated-device-provenance-definition", "stock-transport-provenance-test-definition", "pin-runtime-admission-definition", "rtc-attribution-test-definition", "sequenced-input-test-definition", "sequenced-input-postgres-test-definition", "sequenced-control-postgres-test-definition", "runtime-echo-test-definition", "runtime-echo-postgres-test-definition", "native-pcm-adapter-test-definition", "native-pcm-isolation-test-definition", "native-pin-epoch-test-definition", "native-pin-epoch-postgres-test-definition", "native-pin-media-admission-test-definition", "native-pin-media-store-failure-test-definition", "native-installation-signing-test-definition", "native-installation-postgres-test-definition", "native-room-http-test-definition", "native-room-sequence-test-definition"]
     },
     {
       "id": "cognition-authority",
@@ -667,7 +699,7 @@
       "requirement": "Durable recovery and receiver dedup preserve action identity; render repair uses revalidated logged fallbacks, while uncertain effects never retry automatically.",
       "acceptance": "Exercise crashes around commit/dispatch/ack, partitions, reconnect and bounded offline queues; invalidate grants on restart and require fresh ceremony after outcome unknown.",
       "status": "partial",
-      "evidence": ["runtime-repair-test-definition", "runtime-postgres-atomicity-test-definition"]
+      "evidence": ["runtime-repair-test-definition", "runtime-postgres-atomicity-test-definition", "native-room-postgres-test-definition"]
     },
     {
       "id": "memory-lifecycle",
@@ -721,7 +753,7 @@
       "requirement": "Center is a registered rendering surface separately from its read-only observer role, providing the first two-surface Pin-to-browser interaction.",
       "acceptance": "Render a routed card and correlate its acknowledgment; hidden, locked, disconnected and stale pages cannot report a successful current render.",
       "status": "partial",
-      "evidence": ["center-enrollment-lifecycle-definition", "retired-browser-assistant-boundary-definition", "browser-dom-ack-test-definition", "runtime-display-outcome-test-definition", "center-application-acceptance-test-definition"]
+      "evidence": ["center-enrollment-lifecycle-definition", "retired-browser-assistant-boundary-definition", "browser-dom-ack-test-definition", "runtime-display-outcome-test-definition", "center-application-acceptance-test-definition", "native-room-sfu-test-definition"]
     },
     {
       "id": "macos-surface",
@@ -742,6 +774,15 @@
       "evidence": []
     },
     {
+      "id": "pixel-default-digital-assistant",
+      "basis": "cosmos-product",
+      "sourceSections": ["4.1", "4.2", "4.3", "4.4", "5.1"],
+      "requirement": "The Pixel client is selectable as Android's default digital assistant and presents a compact on-demand assistant panel over the current app, using the same Cosmos runtime as the other surfaces.",
+      "acceptance": "Verify supported Android assistant-role selection, actual system invocation, native session UI, microphone permission, cancellation, background/lock cleanup and protected credentials on the owner's Pixel. Current-screen context is user-invoked, source-attributed and permission-scoped; apps that withhold context remain unavailable. No always-on hotword, unrestricted screen/app access or private-memory authority is inferred from the default-assistant role. Responses and device actions pass through Cosmos with exact render/effect evidence; no direct provider-key path in the client.",
+      "status": "pending",
+      "evidence": []
+    },
+    {
       "id": "linux-surface",
       "basis": "cosmos-product",
       "sourceSections": ["4.1", "6.1"],
@@ -756,6 +797,42 @@
       "sourceSections": ["4.1", "4.2", "4.4", "5.2", "7"],
       "requirement": "A thin Android TV client on the owner's NVIDIA Shield 4K TV Pro provides permitted, origin-bound playback context for questions through the Ai Pin.",
       "acceptance": "Verify owner-enabled media access and actual YouTube, Stremio, TV2 Play, Netflix and Spotify behavior. Preserve absent, stale and ambiguous metadata; a title and position are not scene evidence. Respect secure capture and provider restrictions, including Spotify AI-ingestion and voice-assistant limits. Test session changes, ads/live streams, competing players, permissions, sleep and reconnect on hardware.",
+      "status": "pending",
+      "evidence": []
+    },
+    {
+      "id": "movie-list-and-trailer-handoff",
+      "basis": "cosmos-product",
+      "sourceSections": ["4.2", "4.4", "4.6", "5.3", "7"],
+      "requirement": "A Pin request for film recommendations renders a list on Shield, and a follow-up such as play number two's trailer targets that exact displayed item.",
+      "acceptance": "Keep stable content IDs and the exact recommendation-list revision; verify current permissions, target incarnation and supported player integration before dispatch. Observe the matching TV render and selected trailer playback. Changed lists, ambiguous references, unsupported apps, ads and missing playback evidence cannot become a successful-playback claim. Verify on the owner's Shield and finally the physical Pin.",
+      "status": "pending",
+      "evidence": []
+    },
+    {
+      "id": "document-explanation-desktop-continuation",
+      "basis": "cosmos-product",
+      "sourceSections": ["4.2", "4.3", "4.6", "5.2", "5.3"],
+      "requirement": "An explicitly authorized document on MacBook can be explained and continued on the owner's Omarchy desktop without losing task context or sending a separate manual copy.",
+      "acceptance": "Bind the source device, exact document version and selection, explanation and task revision. Transfer only a purpose/recipient-scoped content reference and verify matching destination open/render evidence. Test source changes, concurrent edits, revoked access, private documents in shared rooms, unavailable desktop and reconnect. Current-window access requires a supported local permission or application integration.",
+      "status": "pending",
+      "evidence": []
+    },
+    {
+      "id": "restaurant-pixel-navigation",
+      "basis": "cosmos-product",
+      "sourceSections": ["4.2", "4.4", "4.6", "5.3", "7"],
+      "requirement": "A Pin request opens maps on Pixel for the restaurant the owner just selected on a computer, using the existing scoped task context.",
+      "acceptance": "Resolve the exact selected place ID, address and coordinates from authorized current context, clarify ambiguity, then bind the maps action to the selected Pixel and its current permission/connection. Verify the intended destination opens; distinguish app launch from actual navigation start and keep unknown effects explicit. Test stale selections, two places with the same name, locked/unavailable phone and replay.",
+      "status": "pending",
+      "evidence": []
+    },
+    {
+      "id": "private-message-personal-continuation",
+      "basis": "cosmos-product",
+      "sourceSections": ["4.3", "4.4", "4.6", "9.2"],
+      "requirement": "With guests present, a request to view a private message continues on an authenticated eligible private Pixel surface without exposing the message on TV or through audible Pin output.",
+      "acceptance": "Keep the shared-origin request free of private retrieval. After fresh local user authentication, admit a new linked personal-origin request with independent source/purpose authorization; selecting or unlocking Pixel cannot elevate the original turn. Recheck output eligibility at dereference and dispatch, hide notification previews and suppress on lock/background/revocation. Verify on the actual phone and Pin that no private payload or privacy-specific shared expression leaks.",
       "status": "pending",
       "evidence": []
     },

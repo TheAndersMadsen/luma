@@ -637,7 +637,7 @@ impl Store for PostgresStore {
         principal: &str,
         operation: crate::ambiance::RuntimeOperation,
     ) -> Result<crate::ambiance::RuntimeResult, crate::ambiance::RuntimeError> {
-        use crate::ambiance::{RuntimeError, RuntimeOperation};
+        use crate::ambiance::{OriginProof, RoomProof, RuntimeError, RuntimeOperation};
         let unavailable = |_| RuntimeError::Unavailable;
         let mut tx = self.pool.begin().await.map_err(unavailable)?;
         if matches!(
@@ -645,6 +645,18 @@ impl Store for PostgresStore {
             RuntimeOperation::NativeChallenge { .. }
                 | RuntimeOperation::OpenNative { .. }
                 | RuntimeOperation::CheckNative { .. }
+                | RuntimeOperation::CloseNative { .. }
+                | RuntimeOperation::RoomControl {
+                    connection: RoomProof::Native(_),
+                    ..
+                }
+                | RuntimeOperation::Begin {
+                    origin: OriginProof::SequencedRoom {
+                        connection: RoomProof::Native(_),
+                        ..
+                    },
+                    ..
+                }
         ) {
             native_transaction_limits(&mut tx)
                 .await
@@ -2098,8 +2110,8 @@ mod tests {
                 .await
                 .unwrap();
         sqlx::query("INSERT INTO cosmos_surface_event(principal,sequence,hash,event) VALUES($1,$2,'state-obstruction','{}'::jsonb)").bind(&principal).bind(head+1).execute(&first.pool).await.unwrap();
-        let visible = || RuntimeOperation::BrowserControl {
-            connection: proof.clone(),
+        let visible = || RuntimeOperation::RoomControl {
+            connection: RoomProof::Browser(proof.clone()),
             stamp: stamp.clone(),
             control: BrowserControl::State { visible: true },
         };
@@ -2231,8 +2243,8 @@ mod tests {
         let begin = || RuntimeOperation::Begin {
             turn_id: stamp.instance_id,
             worker: uuid::Uuid::new_v4(),
-            origin: OriginProof::SequencedBrowser {
-                connection: proof.clone(),
+            origin: OriginProof::SequencedRoom {
+                connection: RoomProof::Browser(proof.clone()),
                 stamp: stamp.clone(),
             },
             request_digest: hash(b"synthetic request"),
@@ -3881,9 +3893,7 @@ mod tests {
         challenge: &crate::ambiance::native_connection::Challenge,
         token_marker: u8,
     ) -> crate::ambiance::native_connection::OpenRequest {
-        use crate::ambiance::native_connection::{OpenRequest, signing_message};
-        use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-        use p256::ecdsa::{Signature, SigningKey, signature::Signer};
+        use crate::ambiance::native_connection::OpenRequest;
         let mut request = OpenRequest {
             enrollment_id: challenge.enrollment_id,
             challenge_id: challenge.challenge_id,
@@ -3892,13 +3902,23 @@ mod tests {
             session_token_hash: crate::surface_registry::hash(&[token_marker; 32]),
             signature: String::new(),
         };
+        native_resign_open(challenge, &mut request);
+        request
+    }
+
+    fn native_resign_open(
+        challenge: &crate::ambiance::native_connection::Challenge,
+        request: &mut crate::ambiance::native_connection::OpenRequest,
+    ) {
+        use crate::ambiance::native_connection::signing_message;
+        use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+        use p256::ecdsa::{Signature, SigningKey, signature::Signer};
         // Scalar one matches native_test_approval's public generator point.
         let mut scalar = [0u8; 32];
         scalar[31] = 1;
         let key = SigningKey::from_bytes(&scalar).unwrap();
-        let signature: Signature = key.sign(&signing_message(challenge, &request).unwrap());
+        let signature: Signature = key.sign(&signing_message(challenge, request).unwrap());
         request.signature = URL_SAFE_NO_PAD.encode(signature.to_der().as_bytes());
-        request
     }
 
     fn native_open_operation(
@@ -3926,6 +3946,497 @@ mod tests {
             row.get("sequence"),
             row.get("hash"),
         )
+    }
+
+    async fn native_room_fixture(
+        store: &PostgresStore,
+        principal: &str,
+    ) -> (
+        uuid::Uuid,
+        crate::ambiance::NativeProof,
+        crate::ambiance::native_connection::ConnectionView,
+    ) {
+        use crate::ambiance::{NativeProof, RuntimeResult};
+        let enrollment_id = uuid::Uuid::new_v4();
+        let surface_id = uuid::Uuid::new_v4();
+        store
+            .mutate_surface(
+                principal,
+                surface_id,
+                crate::store::native_test_approval(enrollment_id, 0),
+            )
+            .await
+            .unwrap();
+        let challenge = native_test_challenge(store, principal, surface_id, enrollment_id).await;
+        let request = native_signed_open(&challenge, 31);
+        let RuntimeResult::NativeOpened {
+            connection,
+            duplicate: false,
+        } = store
+            .runtime(
+                principal,
+                native_open_operation(surface_id, &request, uuid::Uuid::new_v4()),
+            )
+            .await
+            .unwrap()
+        else {
+            panic!("signed native fixture must open once")
+        };
+        let proof = NativeProof {
+            surface_id,
+            incarnation: connection.incarnation,
+            token_hash: request.session_token_hash,
+        };
+        (enrollment_id, proof, connection)
+    }
+
+    fn native_room_input(
+        proof: &crate::ambiance::NativeProof,
+        epoch: uuid::Uuid,
+        sequence: u64,
+        instance_id: uuid::Uuid,
+    ) -> crate::ambiance::RuntimeOperation {
+        use crate::ambiance::*;
+        RuntimeOperation::Begin {
+            turn_id: instance_id,
+            worker: uuid::Uuid::new_v4(),
+            origin: OriginProof::SequencedRoom {
+                connection: RoomProof::Native(proof.clone()),
+                stamp: InputStamp {
+                    epoch,
+                    sequence,
+                    instance_id,
+                },
+            },
+            request_digest: crate::surface_registry::hash(b"synthetic native room text"),
+            privacy_floor: PrivacyClass::SharedRoom,
+        }
+    }
+
+    fn native_room_control(
+        proof: &crate::ambiance::NativeProof,
+        epoch: uuid::Uuid,
+        sequence: u64,
+        instance_id: uuid::Uuid,
+        control: crate::ambiance::BrowserControl,
+    ) -> crate::ambiance::RuntimeOperation {
+        use crate::ambiance::*;
+        RuntimeOperation::RoomControl {
+            connection: RoomProof::Native(proof.clone()),
+            stamp: InputStamp {
+                epoch,
+                sequence,
+                instance_id,
+            },
+            control,
+        }
+    }
+
+    async fn native_room_obstruct(store: &PostgresStore, principal: &str) {
+        sqlx::query("INSERT INTO cosmos_surface_event(principal,sequence,hash,event) SELECT principal,sequence+1,'native-room-obstruction','{}'::jsonb FROM cosmos_surface_head WHERE principal=$1")
+            .bind(principal).execute(&store.pool).await.unwrap();
+    }
+
+    async fn native_room_unblock(store: &PostgresStore, principal: &str) {
+        sqlx::query("DELETE FROM cosmos_surface_event WHERE principal=$1 AND hash='native-room-obstruction'")
+            .bind(principal).execute(&store.pool).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn native_room_postgres_text_heartbeat_cancel_share_cursor_across_reopen() {
+        use crate::ambiance::*;
+        let Some(first) = store().await else { return };
+        let principal = format!("native-room-cursor-{}", uuid::Uuid::new_v4());
+        let (_, proof, opened) = native_room_fixture(&first, &principal).await;
+        let turn_id = uuid::Uuid::new_v4();
+        let RuntimeResult::Begun(fence) = first
+            .runtime(
+                &principal,
+                native_room_input(&proof, opened.epoch, 1, turn_id),
+            )
+            .await
+            .unwrap()
+        else {
+            panic!("native text must enter the shared runtime")
+        };
+        let heartbeat_id = uuid::Uuid::new_v4();
+        let heartbeat = || {
+            native_room_control(
+                &proof,
+                opened.epoch,
+                2,
+                heartbeat_id,
+                BrowserControl::Heartbeat,
+            )
+        };
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        assert!(matches!(
+            first.runtime(&principal, heartbeat()).await.unwrap(),
+            RuntimeResult::ControlAccepted { duplicate: false }
+        ));
+        let renewed = native_runtime_snapshot(&first, &principal).await;
+        let state: RuntimeState = serde_json::from_str(&renewed.0).unwrap();
+        let connection = state.native_connections[&proof.surface_id]
+            .connection
+            .as_ref()
+            .unwrap();
+        assert!(connection.lease_expires_at_ms > opened.lease_expires_at_ms);
+        assert_eq!(connection.expires_at_ms, opened.expires_at_ms);
+        assert_eq!(connection.approval_revision, 1);
+        assert_eq!(state.ingress[&proof.surface_id].high_water, 2);
+        assert!(matches!(
+            first.runtime(&principal, heartbeat()).await.unwrap(),
+            RuntimeResult::ControlAccepted { duplicate: true }
+        ));
+        assert_eq!(
+            native_runtime_snapshot(&first, &principal).await,
+            renewed,
+            "duplicate heartbeat cannot renew a lease or append an event"
+        );
+        assert!(matches!(
+            first
+                .runtime(
+                    &principal,
+                    native_room_input(&proof, opened.epoch, 2, uuid::Uuid::new_v4()),
+                )
+                .await,
+            Err(RuntimeError::Stale)
+        ));
+        assert_eq!(native_runtime_snapshot(&first, &principal).await, renewed);
+        let cancel = || {
+            native_room_control(
+                &proof,
+                opened.epoch,
+                3,
+                turn_id,
+                BrowserControl::Cancel {
+                    turn_id,
+                    generation: fence.generation,
+                },
+            )
+        };
+        assert!(matches!(
+            first.runtime(&principal, cancel()).await.unwrap(),
+            RuntimeResult::ControlAccepted { duplicate: false }
+        ));
+        let cancelled = native_runtime_snapshot(&first, &principal).await;
+        let state: RuntimeState = serde_json::from_str(&cancelled.0).unwrap();
+        assert!(state.turn.as_ref().unwrap().cancelled);
+        assert_eq!(state.ingress[&proof.surface_id].high_water, 3);
+        assert_eq!(state.ingress[&proof.surface_id].receipts.len(), 1);
+        assert_eq!(state.ingress[&proof.surface_id].controls.len(), 2);
+        drop(first);
+        let reopened = store().await.unwrap();
+        assert!(matches!(
+            reopened.runtime(&principal, heartbeat()).await.unwrap(),
+            RuntimeResult::ControlAccepted { duplicate: true }
+        ));
+        assert!(matches!(
+            reopened.runtime(&principal, cancel()).await.unwrap(),
+            RuntimeResult::ControlAccepted { duplicate: true }
+        ));
+        assert_eq!(
+            native_runtime_snapshot(&reopened, &principal).await,
+            cancelled
+        );
+        assert_eq!(
+            reopened
+                .surface(&principal, proof.surface_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .revision,
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn native_room_postgres_input_race_and_failed_append_preserve_sequence_and_lease() {
+        use crate::ambiance::*;
+        let Some(first) = store().await else { return };
+        let principal = format!("native-room-atomic-{}", uuid::Uuid::new_v4());
+        let (_, proof, opened) = native_room_fixture(&first, &principal).await;
+        let turn_id = uuid::Uuid::new_v4();
+        let input = || native_room_input(&proof, opened.epoch, 1, turn_id);
+        let before = native_runtime_snapshot(&first, &principal).await;
+        native_room_obstruct(&first, &principal).await;
+        assert!(matches!(
+            first.runtime(&principal, input()).await,
+            Err(RuntimeError::Unavailable)
+        ));
+        assert_eq!(native_runtime_snapshot(&first, &principal).await, before);
+        native_room_unblock(&first, &principal).await;
+        let second = store().await.unwrap();
+        let (a, b) = tokio::join!(
+            first.runtime(&principal, input()),
+            second.runtime(&principal, input())
+        );
+        let (admitted, duplicate) = match (a.unwrap(), b.unwrap()) {
+            (RuntimeResult::Begun(a), RuntimeResult::Duplicate(b))
+            | (RuntimeResult::Duplicate(b), RuntimeResult::Begun(a)) => (a, b),
+            other => panic!("exactly one native input must be admitted: {other:?}"),
+        };
+        assert_eq!(admitted.turn_id, duplicate.turn_id);
+        assert_eq!(admitted.worker, duplicate.worker);
+        let heartbeat_id = uuid::Uuid::new_v4();
+        let heartbeat = || {
+            native_room_control(
+                &proof,
+                opened.epoch,
+                2,
+                heartbeat_id,
+                BrowserControl::Heartbeat,
+            )
+        };
+        let before_heartbeat = native_runtime_snapshot(&first, &principal).await;
+        native_room_obstruct(&first, &principal).await;
+        assert!(matches!(
+            second.runtime(&principal, heartbeat()).await,
+            Err(RuntimeError::Unavailable)
+        ));
+        assert_eq!(
+            native_runtime_snapshot(&first, &principal).await,
+            before_heartbeat,
+            "failed heartbeat append must consume neither its sequence nor lease renewal"
+        );
+        native_room_unblock(&first, &principal).await;
+        drop(first);
+        drop(second);
+        let reopened = store().await.unwrap();
+        assert_eq!(
+            native_runtime_snapshot(&reopened, &principal).await,
+            before_heartbeat
+        );
+        assert!(matches!(
+            reopened.runtime(&principal, heartbeat()).await.unwrap(),
+            RuntimeResult::ControlAccepted { duplicate: false }
+        ));
+        let committed = native_runtime_snapshot(&reopened, &principal).await;
+        assert_eq!(committed.2, before_heartbeat.2 + 2);
+        let RuntimeResult::Duplicate(replayed) =
+            reopened.runtime(&principal, input()).await.unwrap()
+        else {
+            panic!("reopened store must retain the admitted input")
+        };
+        assert_eq!(replayed.worker, admitted.worker);
+        assert!(matches!(
+            reopened.runtime(&principal, heartbeat()).await.unwrap(),
+            RuntimeResult::ControlAccepted { duplicate: true }
+        ));
+        assert_eq!(
+            native_runtime_snapshot(&reopened, &principal).await,
+            committed
+        );
+        let state: RuntimeState = serde_json::from_str(&committed.0).unwrap();
+        assert_eq!(state.ingress[&proof.surface_id].high_water, 2);
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM cosmos_surface_event WHERE principal=$1 AND event->'data'->>'kind'='input_admitted'")
+            .bind(&principal).fetch_one(&reopened.pool).await.unwrap();
+        assert_eq!(count, 1);
+        let rows = sqlx::query("SELECT event::text AS event,hash FROM cosmos_surface_event WHERE principal=$1 ORDER BY sequence")
+            .bind(&principal).fetch_all(&reopened.pool).await.unwrap();
+        let mut previous = String::new();
+        for (index, row) in rows.iter().enumerate() {
+            let event: ledger::LedgerEvent = serde_json::from_str(row.get("event")).unwrap();
+            assert_eq!(event.sequence(), index as u64 + 1);
+            assert_eq!(event.previous_hash(), previous);
+            previous = event.hash().unwrap();
+            assert_eq!(previous, row.get::<String, _>("hash"));
+        }
+    }
+
+    #[tokio::test]
+    async fn native_room_postgres_close_preserves_cursor_and_cannot_close_replacement() {
+        use crate::ambiance::*;
+        let Some(first) = store().await else { return };
+        let principal = format!("native-room-close-{}", uuid::Uuid::new_v4());
+        let (enrollment_id, proof, opened) = native_room_fixture(&first, &principal).await;
+        assert!(matches!(
+            first
+                .runtime(
+                    &principal,
+                    native_room_input(&proof, opened.epoch, 1, uuid::Uuid::new_v4()),
+                )
+                .await
+                .unwrap(),
+            RuntimeResult::Begun(_)
+        ));
+        assert!(matches!(
+            first
+                .runtime(
+                    &principal,
+                    RuntimeOperation::CloseNative {
+                        connection: proof.clone()
+                    }
+                )
+                .await
+                .unwrap(),
+            RuntimeResult::NativeClosed
+        ));
+        let closed = native_runtime_snapshot(&first, &principal).await;
+        let state: RuntimeState = serde_json::from_str(&closed.0).unwrap();
+        assert_eq!(state.ingress[&proof.surface_id].high_water, 1);
+        assert!(
+            state.native_connections[&proof.surface_id]
+                .connection
+                .as_ref()
+                .unwrap()
+                .closed
+        );
+        assert!(state.turn.as_ref().unwrap().cancelled);
+        let surface = first
+            .surface(&principal, proof.surface_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(surface.revision, 1);
+        assert!(!surface.revoked);
+        assert!(matches!(
+            first
+                .runtime(
+                    &principal,
+                    RuntimeOperation::CloseNative {
+                        connection: proof.clone()
+                    }
+                )
+                .await
+                .unwrap(),
+            RuntimeResult::NativeClosed
+        ));
+        assert_eq!(native_runtime_snapshot(&first, &principal).await, closed);
+        drop(first);
+        let reopened = store().await.unwrap();
+        let challenge =
+            native_test_challenge(&reopened, &principal, proof.surface_id, enrollment_id).await;
+        assert_eq!(challenge.current_incarnation, Some(proof.incarnation));
+        let mut request = native_signed_open(&challenge, 32);
+        request.epoch = opened.epoch;
+        native_resign_open(&challenge, &mut request);
+        let RuntimeResult::NativeOpened {
+            connection,
+            duplicate: false,
+        } = reopened
+            .runtime(
+                &principal,
+                native_open_operation(proof.surface_id, &request, uuid::Uuid::new_v4()),
+            )
+            .await
+            .unwrap()
+        else {
+            panic!("same boot must reconnect through a signed CAS open")
+        };
+        let replacement = NativeProof {
+            surface_id: proof.surface_id,
+            incarnation: connection.incarnation,
+            token_hash: request.session_token_hash,
+        };
+        let current = native_runtime_snapshot(&reopened, &principal).await;
+        let state: RuntimeState = serde_json::from_str(&current.0).unwrap();
+        assert_eq!(state.ingress[&proof.surface_id].high_water, 1);
+        assert_eq!(
+            state.ingress[&proof.surface_id].incarnation,
+            replacement.incarnation
+        );
+        assert!(matches!(
+            reopened
+                .runtime(
+                    &principal,
+                    RuntimeOperation::CloseNative { connection: proof }
+                )
+                .await,
+            Err(RuntimeError::Stale)
+        ));
+        assert_eq!(
+            native_runtime_snapshot(&reopened, &principal).await,
+            current
+        );
+        let RuntimeResult::NativeCurrent(checked) = reopened
+            .runtime(
+                &principal,
+                RuntimeOperation::CheckNative {
+                    connection: replacement.clone(),
+                },
+            )
+            .await
+            .unwrap()
+        else {
+            panic!("old close must not retire replacement")
+        };
+        assert_eq!(checked, connection);
+        assert!(matches!(
+            reopened
+                .runtime(
+                    &principal,
+                    native_room_input(&replacement, opened.epoch, 2, uuid::Uuid::new_v4()),
+                )
+                .await
+                .unwrap(),
+            RuntimeResult::Begun(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn native_room_postgres_revoked_or_expired_connection_cannot_admit_new_input() {
+        use crate::ambiance::*;
+        use crate::surface_registry::Mutation;
+        let Some(first) = store().await else { return };
+        for revoked in [false, true] {
+            let principal = format!("native-room-stale-{}", uuid::Uuid::new_v4());
+            let (_, proof, opened) = native_room_fixture(&first, &principal).await;
+            assert!(matches!(
+                first
+                    .runtime(
+                        &principal,
+                        native_room_input(&proof, opened.epoch, 1, uuid::Uuid::new_v4()),
+                    )
+                    .await
+                    .unwrap(),
+                RuntimeResult::Begun(_)
+            ));
+            if revoked {
+                first
+                    .mutate_surface(
+                        &principal,
+                        proof.surface_id,
+                        Mutation::RevokeNative {
+                            expected_revision: 1,
+                        },
+                    )
+                    .await
+                    .unwrap();
+            } else {
+                // Expire only this synthetic installation's stored lease;
+                // the real next operation must reconcile before admitting input.
+                sqlx::query("UPDATE cosmos_ambiance_runtime SET state=jsonb_set(state,$2::text[],'0'::jsonb) WHERE principal=$1")
+                    .bind(&principal)
+                    .bind(vec!["native_connections".to_owned(), proof.surface_id.to_string(), "connection".to_owned(), "lease_expires_at_ms".to_owned()])
+                    .execute(&first.pool).await.unwrap();
+            }
+            assert!(matches!(
+                first
+                    .runtime(
+                        &principal,
+                        native_room_input(&proof, opened.epoch, 2, uuid::Uuid::new_v4()),
+                    )
+                    .await,
+                Err(RuntimeError::Stale | RuntimeError::InvalidOrigin)
+            ));
+            let stored = native_runtime_snapshot(&first, &principal).await;
+            let state: RuntimeState = serde_json::from_str(&stored.0).unwrap();
+            assert!(
+                state
+                    .ingress
+                    .get(&proof.surface_id)
+                    .is_none_or(|cursor| cursor.high_water == 1)
+            );
+            assert!(state.turn.as_ref().unwrap().cancelled);
+            assert!(
+                state
+                    .native_connections
+                    .get(&proof.surface_id)
+                    .and_then(|state| state.connection.as_ref())
+                    .is_none_or(|connection| connection.closed)
+            );
+        }
     }
 
     #[tokio::test]
@@ -4001,9 +4512,15 @@ mod tests {
             "signature": request.signature,
         });
         let challenge_body = json!({"enrollmentId": enrollment_id});
+        let runtime = Arc::new(crate::ambiance::runtime::AmbianceRuntime::new(
+            first.clone(),
+            Arc::new(crate::assistant::llm::MockChatModel::new(Vec::new())),
+            None,
+        ));
         let app = crate::native_runtime_api::with_audience(
             first.clone(),
             Some(NATIVE_TEST_AUDIENCE.into()),
+            Arc::new(crate::browser_rooms::Rooms::new(runtime, None)),
         );
         let before = native_runtime_snapshot(&first, &principal).await;
         let mut lock = blocker.pool.begin().await.unwrap();

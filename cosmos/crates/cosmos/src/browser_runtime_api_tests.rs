@@ -178,8 +178,9 @@ async fn fixture() -> (Router, SharedStore, Uuid, Uuid, String) {
         .await
         .unwrap();
     let runtime = Arc::new(AmbianceRuntime::new(store.clone(), Arc::new(Model), None));
+    let rooms = Arc::new(crate::browser_rooms::Rooms::new(runtime.clone(), None));
     (
-        with_verifier(runtime, Some(verifier())),
+        with_rooms(runtime, Some(verifier()), rooms),
         store,
         id,
         incarnation,
@@ -216,9 +217,8 @@ async fn browser_runtime_api_live_bootstrap_binds_owner_capability_and_epoch() {
     assert!(url.starts_with("ws://127.0.0.1:"));
     let (_, store, id, incarnation, token) = fixture().await;
     let runtime = Arc::new(AmbianceRuntime::new(store, Arc::new(Model), None));
-    let app = with_rooms(
-        runtime,
-        Some(verifier()),
+    let rooms = Arc::new(crate::browser_rooms::Rooms::new(
+        runtime.clone(),
         Some(
             crate::browser_rooms::Config::new(
                 url.into(),
@@ -228,7 +228,8 @@ async fn browser_runtime_api_live_bootstrap_binds_owner_capability_and_epoch() {
             )
             .unwrap(),
         ),
-    );
+    ));
+    let app = with_rooms(runtime, Some(verifier()), rooms);
     let epoch = Uuid::new_v4();
     let body = json!({"surfaceId": id, "incarnation":incarnation, "epoch":epoch});
     for (owner, capability) in [("other", token.clone()), ("owner", "f".repeat(64))] {

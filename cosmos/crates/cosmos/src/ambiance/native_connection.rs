@@ -442,14 +442,35 @@ impl RuntimeState {
         proof: &NativeProof,
         now: i64,
     ) -> Result<ConnectionView, RuntimeError> {
+        let (record, connection) = self.bound_native(records, proof)?;
+        if !connection.current(record, now) {
+            return Err(RuntimeError::Stale);
+        }
+        Ok(connection.view(proof.surface_id))
+    }
+
+    /// Checks the exact capability and approval independently of liveness so
+    /// closing a retired incarnation is idempotent, without reviving it.
+    fn bound_native<'a>(
+        &'a self,
+        records: &'a BTreeMap<Uuid, Record>,
+        proof: &NativeProof,
+    ) -> Result<(&'a Record, &'a NativeConnection), RuntimeError> {
         let record = records
             .get(&proof.surface_id)
+            .filter(|record| {
+                !record.revoked
+                    && matches!(record.binding, Binding::Native { .. })
+                    && record.approved_manifest == surface_registry::native_manifest()
+            })
             .ok_or(RuntimeError::InvalidOrigin)?;
         let connection = self
             .native_connections
             .get(&proof.surface_id)
             .and_then(|s| s.connection.as_ref())
-            .filter(|c| c.current(record, now) && c.incarnation == proof.incarnation)
+            .filter(|c| {
+                c.approval_revision == record.revision && c.incarnation == proof.incarnation
+            })
             .ok_or(RuntimeError::Stale)?;
         let same = super::state::digest_valid(&proof.token_hash)
             && proof.token_hash.len() == connection.token_hash.len()
@@ -462,7 +483,44 @@ impl RuntimeState {
         if !same {
             return Err(RuntimeError::InvalidOrigin);
         }
-        Ok(connection.view(proof.surface_id))
+        Ok((record, connection))
+    }
+
+    pub(super) fn heartbeat_native(
+        &mut self,
+        records: &BTreeMap<Uuid, Record>,
+        proof: &NativeProof,
+        now: i64,
+    ) -> Result<i64, RuntimeError> {
+        self.check_native(records, proof, now)?;
+        let connection = self
+            .native_connections
+            .get_mut(&proof.surface_id)
+            .and_then(|state| state.connection.as_mut())
+            .ok_or(RuntimeError::Stale)?;
+        connection.lease_expires_at_ms = now
+            .checked_add(surface_registry::LEASE_MS)
+            .ok_or(RuntimeError::Unavailable)?
+            .min(connection.expires_at_ms);
+        Ok(connection.lease_expires_at_ms)
+    }
+
+    pub(super) fn close_native(
+        &mut self,
+        records: &BTreeMap<Uuid, Record>,
+        proof: &NativeProof,
+    ) -> Result<bool, RuntimeError> {
+        let (_, connection) = self.bound_native(records, proof)?;
+        if connection.closed {
+            return Ok(false);
+        }
+        let state = self
+            .native_connections
+            .get_mut(&proof.surface_id)
+            .ok_or(RuntimeError::Stale)?;
+        state.connection.as_mut().ok_or(RuntimeError::Stale)?.closed = true;
+        state.consumed = None;
+        Ok(true)
     }
 
     pub(super) fn native_maintenance_ms(&self) -> i64 {

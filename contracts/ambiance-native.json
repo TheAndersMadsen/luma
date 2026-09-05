@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "state": "enrollment-only",
-  "scope": "Owner-approved installation key and bounded connection metadata. Native room bootstrap, input transport, device clients, capture and playback remain unfinished.",
+  "state": "native-shared-text-acceptance-in-progress",
+  "scope": "Owner-approved installation key, signed connection and sequenced text in the shared Cosmos/Center room. Native applications, capture, rendering and playback remain unfinished.",
   "profile": "native-shared-text-v1",
   "descriptor": {
     "maximumBytes": 1024,
@@ -81,7 +81,21 @@
     },
     "commit": "Recheck approval and binding, verify exact pending challenge/signature, enforce incarnation CAS, consume challenge and commit connection plus ledger atomically. Invalid proof does not consume a pending challenge.",
     "retry": "Idempotency hashes signing-message bytes, not ECDSA signature bytes. An exact consumed retry returns only the same still-current approved connection, with unchanged expiry and lease. Replaced, expired, revoked or reapproved connections reject the old retry. Persist the pending attempt before sending; response loss is not proof of failure.",
-    "secrets": "Private key and raw session secret stay on the client. Owner views and open responses contain neither. Fresh connection requires a fresh challenge and fresh session secret."
+    "secrets": "The private key stays on the client. Room authentication sends the raw session secret only to Cosmos over HTTPS; durable state stores its digest. Owner views and open responses contain neither credential. Fresh connection requires a fresh challenge and fresh session secret."
+  },
+  "room": {
+    "route": "POST /runtime-api/v1/native/room",
+    "authentication": "Exactly one Authorization: Bearer header containing canonical unpadded base64url of the raw 32-byte session secret. Hash decoded bytes, never the base64 spelling. The stored digest, its base64 encoding and owner JWTs are not bearer capabilities.",
+    "request": {
+      "enrollmentId": "non-nil UUID",
+      "approvalRevision": "positive safe integer matching current connection",
+      "incarnation": "non-nil current connection UUID",
+      "epoch": "non-nil boot UUID matching current connection"
+    },
+    "response": "Same Connection object as contracts/ambiance-room.json: version, url, token, participant, runtimeParticipant, runtimeEpoch and epoch.",
+    "authority": "Resolve principal/surface through the durable enrollment locator. Check current proof, approval revision and epoch before room setup, then recheck in the shared coordinator before and after SFU setup. Room joins and exact retries do not open a replacement connection or renew any deadline.",
+    "coordination": "One shared room manager and runtime participant for Browser and Native. The existing cosmos.coordinate.v1 RPC carries sequenced text and native heartbeat/cancel controls. Native participants receive no render commands or media grants.",
+    "lifecycle": "A fresh heartbeat extends only the 45-second lease, capped by the one-hour absolute expiry. Input and controls share one durable high-water cursor. Exact retries do not renew or invoke cognition again. Expired connections cannot revive. Disconnect closes only the exact native connection and its pending turn, preserving owner approval and the same-boot cursor."
   },
   "signing": {
     "algorithm": "ECDSA P-256 with SHA-256 over the complete transcript bytes exactly once; strict DER signature, maximum 72 bytes.",
@@ -149,11 +163,11 @@
     "vectors": "contracts/fixtures/ambiance-native-open-v1.json"
   },
   "limits": {
-    "appliesTo": ["POST /runtime-api/v1/native/challenge", "POST /runtime-api/v1/native/open"],
+    "appliesTo": ["POST /runtime-api/v1/native/challenge", "POST /runtime-api/v1/native/open", "POST /runtime-api/v1/native/room"],
     "bodyBytes": 2048,
     "concurrentHttpRequests": 16,
     "bodyMs": 5000,
-    "storeOperationMs": 5000,
+    "operationMs": {"challenge": 5000, "open": 5000, "room": 15000},
     "challengeMs": 60000,
     "connectionMs": 3600000,
     "leaseMs": 45000,
@@ -161,7 +175,7 @@
     "audienceBytes": 255
   },
   "http": {
-    "appliesTo": ["POST /runtime-api/v1/native/challenge", "POST /runtime-api/v1/native/open"],
+    "appliesTo": ["POST /runtime-api/v1/native/challenge", "POST /runtime-api/v1/native/open", "POST /runtime-api/v1/native/room"],
     "contentType": "application/json",
     "unknownFields": "rejected",
     "cacheControl": "no-store",
@@ -174,7 +188,7 @@
     }
   },
   "postgresql": {
-    "scope": "Native enrollment locator reads, owner native approval/revocation, and NativeChallenge/OpenNative/CheckNative runtime operations only.",
+    "scope": "Native enrollment locator reads, owner native approval/revocation, native challenge/open/check/close, and native room input/control runtime operations.",
     "statementMs": 4000,
     "lockMs": 3000,
     "transactionLocal": true,
@@ -186,8 +200,8 @@
     "occupancy": "unknown",
     "renderVerified": false,
     "playbackVerified": false,
-    "roomBootstrap": false,
-    "inputTransport": false,
+    "roomBootstrap": true,
+    "inputTransport": true,
     "media": false,
     "privateMemory": false,
     "autonomy": false
@@ -195,8 +209,8 @@
   "limitations": [
     "Software key possession is not hardware attestation or speaker identity.",
     "Platform is an owner-reviewed display hint, not a permission or capability proof.",
-    "The declared text capability is a fixed approval ceiling. Enrollment alone cannot originate a request or render an answer.",
-    "There is no public native room/input/heartbeat endpoint in this increment. Its connection lease expires without renewal.",
+    "The declared text capability is a fixed approval ceiling. Enrollment alone cannot originate a request; current connection proof and room admission are required. Native output remains ineligible.",
+    "Native text and controls use the shared room RPC only. There is no parallel REST input/control/state/close interface, and native participants cannot acknowledge browser rendering.",
     "This wire contract and its vectors do not establish installed clients, production acceptance or paper conformance."
   ]
 }

@@ -1,6 +1,6 @@
 //! Process services around the durable runtime. No process-local turn authority.
 use super::{
-    BrowserProof, OriginProof, PrivacyClass, RuntimeOperation, RuntimeResult, SemanticIntent,
+    OriginProof, PrivacyClass, RoomProof, RuntimeOperation, RuntimeResult, SemanticIntent,
     TurnFence,
 };
 use crate::{
@@ -143,23 +143,23 @@ impl AmbianceRuntime {
         });
     }
 
-    pub async fn sequenced_browser_text(
+    pub async fn sequenced_room_text(
         &self,
         principal: &str,
-        proof: BrowserProof,
+        proof: RoomProof,
         stamp: super::InputStamp,
         text: String,
     ) -> Result<RuntimeResult, Status> {
-        self.sequenced_browser_text_started(principal, proof, stamp, text, None)
+        self.sequenced_room_text_started(principal, proof, stamp, text, None)
             .await
     }
 
     /// Signal durable admission independently of model completion. A retried
     /// envelope returns Duplicate and never takes ownership of the original task.
-    pub(crate) async fn sequenced_browser_text_started(
+    pub(crate) async fn sequenced_room_text_started(
         &self,
         principal: &str,
-        proof: BrowserProof,
+        proof: RoomProof,
         stamp: super::InputStamp,
         text: String,
         started: Option<tokio::sync::oneshot::Sender<TurnFence>>,
@@ -167,7 +167,7 @@ impl AmbianceRuntime {
         self.start_maintenance();
         self.text(
             principal,
-            OriginProof::SequencedBrowser {
+            OriginProof::SequencedRoom {
                 connection: proof,
                 stamp,
             },
@@ -343,7 +343,7 @@ impl AmbianceRuntime {
         }
         let privacy_floor = input_privacy(&text);
         let turn_id = match &origin {
-            OriginProof::SequencedBrowser { stamp, .. }
+            OriginProof::SequencedRoom { stamp, .. }
             | OriginProof::SequencedPin { stamp, .. }
             | OriginProof::VoicePin { stamp, .. } => stamp.instance_id,
             _ => Uuid::new_v4(),
@@ -834,6 +834,7 @@ pub(super) fn runtime_error(error: super::RuntimeError) -> Status {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ambiance::BrowserProof;
     use crate::assistant::llm::{ChatResponse, LlmError, ToolCall, ToolDef};
     use crate::store::Store;
     use std::sync::atomic::{AtomicUsize, Ordering};

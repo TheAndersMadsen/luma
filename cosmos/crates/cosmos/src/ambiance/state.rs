@@ -33,12 +33,36 @@ pub struct BrowserProof {
     pub incarnation: Uuid,
     pub token_hash: String,
 }
+
+/// The room manager retains the admitted capability. A peer identity selects
+/// this proof; neither the room payload nor a surface ID creates authority.
+#[derive(Clone)]
+pub enum RoomProof {
+    Browser(BrowserProof),
+    Native(super::NativeProof),
+}
+
+impl RoomProof {
+    pub fn surface_id(&self) -> Uuid {
+        match self {
+            Self::Browser(proof) => proof.surface_id,
+            Self::Native(proof) => proof.surface_id,
+        }
+    }
+
+    pub fn incarnation(&self) -> Uuid {
+        match self {
+            Self::Browser(proof) => proof.incarnation,
+            Self::Native(proof) => proof.incarnation,
+        }
+    }
+}
 /// Pin adapters must retain AuthLayer evidence and recheck current pairing.
 /// The device-ID parser alone does not authenticate this origin.
 pub enum OriginProof {
     Browser(BrowserProof),
-    SequencedBrowser {
-        connection: BrowserProof,
+    SequencedRoom {
+        connection: RoomProof,
         stamp: InputStamp,
     },
     Pin {
@@ -73,6 +97,9 @@ pub enum RuntimeOperation {
         incarnation: Uuid,
     },
     CheckNative {
+        connection: super::NativeProof,
+    },
+    CloseNative {
         connection: super::NativeProof,
     },
     VoicePolicy {
@@ -155,8 +182,8 @@ pub enum RuntimeOperation {
         connection: BrowserProof,
         epoch: Uuid,
     },
-    BrowserControl {
-        connection: BrowserProof,
+    RoomControl {
+        connection: RoomProof,
         stamp: InputStamp,
         control: BrowserControl,
     },
@@ -242,6 +269,7 @@ pub enum RuntimeResult {
         duplicate: bool,
     },
     NativeCurrent(super::native_connection::ConnectionView),
+    NativeClosed,
     VoicePolicy(Option<super::voice::Approval>),
     VoiceCurrent,
     VoiceFinalized {
@@ -415,6 +443,7 @@ pub struct ControlReceipt {
     deny_unknown_fields
 )]
 pub enum BrowserControl {
+    Heartbeat,
     Acknowledge {
         action_id: Uuid,
         turn_id: Uuid,
@@ -484,6 +513,11 @@ impl InputAdmission {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RuntimeData {
+    NativeLeaseRenewed {
+        surface_id: Uuid,
+        incarnation: Uuid,
+        lease_expires_at_ms: i64,
+    },
     NativeChallengeIssued {
         surface_id: Uuid,
         approval_revision: u64,
@@ -693,6 +727,29 @@ pub fn browser_record<'a>(
     Ok(record)
 }
 impl RuntimeState {
+    pub(super) fn room_record<'a>(
+        &self,
+        records: &'a BTreeMap<Uuid, Record>,
+        connection: &RoomProof,
+        now: i64,
+    ) -> Result<&'a Record, RuntimeError> {
+        match connection {
+            RoomProof::Browser(proof) => browser_record(records, proof, now),
+            RoomProof::Native(proof) => {
+                let current = self.check_native(records, proof, now)?;
+                self.ingress
+                    .get(&proof.surface_id)
+                    .filter(|cursor| {
+                        cursor.incarnation == current.incarnation && cursor.epoch == current.epoch
+                    })
+                    .ok_or(RuntimeError::Stale)?;
+                records
+                    .get(&proof.surface_id)
+                    .ok_or(RuntimeError::InvalidOrigin)
+            }
+        }
+    }
+
     /// Store transactions apply runtime admission and visibility together. A
     /// failed registry transition must discard this working copy as well.
     pub fn apply_with_registry(
@@ -703,8 +760,8 @@ impl RuntimeState {
         now: i64,
     ) -> Result<RuntimeTransition, RuntimeError> {
         let mutation = match &operation {
-            RuntimeOperation::BrowserControl {
-                connection,
+            RuntimeOperation::RoomControl {
+                connection: RoomProof::Browser(connection),
                 stamp,
                 control: BrowserControl::State { visible },
             } => Some((
@@ -856,8 +913,21 @@ impl RuntimeState {
                                 })
                             })
                     }
-                    // Enrollment alone grants no native input transport.
-                    Binding::Native { .. } => false,
+                    Binding::Native { .. } => {
+                        r.revision == turn.origin_revision
+                            && self
+                                .native_connections
+                                .get(&r.surface_id)
+                                .and_then(|state| state.connection.as_ref())
+                                .is_some_and(|connection| {
+                                    connection.incarnation == turn.origin_incarnation
+                                        && connection.current(r, now)
+                                        && self.ingress.get(&r.surface_id).is_some_and(|cursor| {
+                                            cursor.incarnation == connection.incarnation
+                                                && cursor.epoch == connection.epoch
+                                        })
+                                })
+                    }
                 }
         })
     }
@@ -1039,7 +1109,7 @@ impl RuntimeState {
                 && !self.actions.is_empty()
                 && records
                     .get(&turn.fence.origin_surface)
-                    .is_some_and(|r| matches!(r.binding, Binding::Browser))
+                    .is_some_and(|r| matches!(r.binding, Binding::Browser | Binding::Native { .. }))
                 && self
                     .actions
                     .values()
@@ -1193,6 +1263,16 @@ impl RuntimeState {
             }
             RuntimeOperation::CheckNative { connection } => {
                 RuntimeResult::NativeCurrent(self.check_native(records, &connection, now)?)
+            }
+            RuntimeOperation::CloseNative { connection } => {
+                if self.close_native(records, &connection)? {
+                    events.push(RuntimeData::NativeEpochClosed {
+                        surface_id: connection.surface_id,
+                        incarnation: connection.incarnation,
+                    });
+                    events.extend(self.reconcile(records, now));
+                }
+                RuntimeResult::NativeClosed
             }
             RuntimeOperation::VoicePolicy { surface_id } => {
                 RuntimeResult::VoicePolicy(self.voice_policy(records, surface_id)?)
@@ -1483,12 +1563,28 @@ impl RuntimeState {
                 }
                 RuntimeResult::ConnectionOpened
             }
-            RuntimeOperation::BrowserControl {
+            RuntimeOperation::RoomControl {
                 connection,
                 stamp,
                 control,
             } => {
-                browser_record(records, &connection, now)?;
+                self.room_record(records, &connection, now)?;
+                if !matches!(
+                    (&connection, &control),
+                    (
+                        RoomProof::Native(_),
+                        BrowserControl::Heartbeat | BrowserControl::Cancel { .. }
+                    ) | (
+                        RoomProof::Browser(_),
+                        BrowserControl::State { .. }
+                            | BrowserControl::Cancel { .. }
+                            | BrowserControl::Acknowledge { .. }
+                    )
+                ) {
+                    return Err(RuntimeError::InvalidOrigin);
+                }
+                let surface_id = connection.surface_id();
+                let incarnation = connection.incarnation();
                 if stamp.sequence == 0
                     || stamp.sequence > 9_007_199_254_740_991
                     || stamp.instance_id.is_nil()
@@ -1497,8 +1593,8 @@ impl RuntimeState {
                 }
                 let cursor = self
                     .ingress
-                    .get(&connection.surface_id)
-                    .filter(|c| c.incarnation == connection.incarnation && c.epoch == stamp.epoch)
+                    .get(&surface_id)
+                    .filter(|c| c.incarnation == incarnation && c.epoch == stamp.epoch)
                     .ok_or(RuntimeError::Stale)?;
                 let digest = crate::surface_registry::hash(
                     &serde_json::to_vec(&control).map_err(|_| RuntimeError::InvalidRequest)?,
@@ -1522,6 +1618,19 @@ impl RuntimeState {
                     false
                 };
                 match control {
+                    BrowserControl::Heartbeat => {
+                        let RoomProof::Native(proof) = &connection else {
+                            return Err(RuntimeError::InvalidOrigin);
+                        };
+                        if !duplicate {
+                            let lease_expires_at_ms = self.heartbeat_native(records, proof, now)?;
+                            events.push(RuntimeData::NativeLeaseRenewed {
+                                surface_id,
+                                incarnation,
+                                lease_expires_at_ms,
+                            });
+                        }
+                    }
                     BrowserControl::Acknowledge {
                         action_id,
                         turn_id,
@@ -1529,6 +1638,9 @@ impl RuntimeState {
                         channel,
                         content_digest,
                     } => {
+                        let RoomProof::Browser(proof) = &connection else {
+                            return Err(RuntimeError::InvalidOrigin);
+                        };
                         if stamp.instance_id != action_id
                             || generation == 0
                             || generation > 9_007_199_254_740_991
@@ -1545,7 +1657,7 @@ impl RuntimeState {
                                 action_id,
                                 turn_id,
                                 generation,
-                                connection: connection.clone(),
+                                connection: proof.clone(),
                                 channel,
                                 content_digest,
                             },
@@ -1570,8 +1682,8 @@ impl RuntimeState {
                                 .filter(|t| {
                                     t.fence.turn_id == turn_id
                                         && t.fence.generation == generation
-                                        && t.fence.origin_surface == connection.surface_id
-                                        && t.origin_incarnation == connection.incarnation
+                                        && t.fence.origin_surface == surface_id
+                                        && t.origin_incarnation == incarnation
                                 })
                                 .ok_or(RuntimeError::Stale)?;
                             let (_, appended) = self.apply(
@@ -1592,7 +1704,7 @@ impl RuntimeState {
                     BrowserControl::State { .. } => {}
                 }
                 if !duplicate {
-                    let cursor = self.ingress.get_mut(&connection.surface_id).unwrap();
+                    let cursor = self.ingress.get_mut(&surface_id).unwrap();
                     cursor.high_water = stamp.sequence;
                     cursor.controls.push(ControlReceipt {
                         sequence: stamp.sequence,
@@ -1602,7 +1714,7 @@ impl RuntimeState {
                     });
                     cursor.prune(now);
                     events.push(RuntimeData::ControlAdmitted {
-                        surface_id: connection.surface_id,
+                        surface_id,
                         epoch: stamp.epoch,
                         sequence: stamp.sequence,
                         instance_id: stamp.instance_id,
@@ -1622,12 +1734,20 @@ impl RuntimeState {
                     return Err(RuntimeError::InvalidRequest);
                 }
                 let record = match &origin {
-                    OriginProof::Browser(proof)
-                    | OriginProof::SequencedBrowser {
-                        connection: proof, ..
-                    } => {
+                    OriginProof::Browser(proof) => {
                         let r = browser_record(records, proof, now)?;
                         if !r.visible
+                            || !r.approved_manifest["authority"]["mayOriginate"]
+                                .as_array()
+                                .is_some_and(|a| a.iter().any(|v| v == "user.request"))
+                        {
+                            return Err(RuntimeError::InvalidOrigin);
+                        }
+                        r
+                    }
+                    OriginProof::SequencedRoom { connection, .. } => {
+                        let r = self.room_record(records, connection, now)?;
+                        if (matches!(connection, RoomProof::Browser(_)) && !r.visible)
                             || !r.approved_manifest["authority"]["mayOriginate"]
                                 .as_array()
                                 .is_some_and(|a| a.iter().any(|v| v == "user.request"))
@@ -1674,8 +1794,8 @@ impl RuntimeState {
                     }
                 };
                 let sequenced = match &origin {
-                    OriginProof::SequencedBrowser { connection, stamp } => {
-                        Some((connection.surface_id, connection.incarnation, stamp))
+                    OriginProof::SequencedRoom { connection, stamp } => {
+                        Some((connection.surface_id(), connection.incarnation(), stamp))
                     }
                     OriginProof::SequencedPin {
                         connection, stamp, ..
@@ -1787,7 +1907,10 @@ impl RuntimeState {
                     });
                 self.turn = Some(Turn {
                     fence: fence.clone(),
-                    origin_incarnation: record.incarnation,
+                    origin_incarnation: match &origin {
+                        OriginProof::SequencedRoom { connection, .. } => connection.incarnation(),
+                        _ => record.incarnation,
+                    },
                     origin_revision: record.revision,
                     pin_incarnation: match &origin {
                         OriginProof::SequencedPin { connection, .. }
@@ -2118,7 +2241,7 @@ impl RuntimeState {
                 let turn = self.turn.as_mut().unwrap();
                 if records
                     .get(&turn.fence.origin_surface)
-                    .is_some_and(|r| matches!(r.binding, Binding::Browser))
+                    .is_some_and(|r| matches!(r.binding, Binding::Browser | Binding::Native { .. }))
                     && !turn.finished
                     && self.actions.values().all(|a| {
                         !matches!(a.status, ActionStatus::Proposed | ActionStatus::Dispatched)

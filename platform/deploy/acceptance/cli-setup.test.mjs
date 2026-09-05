@@ -421,8 +421,8 @@ test("production setup creates a complete portable operator installation and is 
   const dynamicConfig = fs.readFileSync(path.join(production, "traefik-dynamic.yaml"), "utf8");
   assert.match(dynamicConfig, /pin\.example\.test/u);
   const nativeRoute = dynamicConfig.split("    native-runtime-bootstrap:\n")[1]?.split("    center:\n")[0];
-  assert.ok(nativeRoute, "production must expose native challenge proof over HTTPS");
-  assert.ok(nativeRoute.includes('rule: "Host(`pin.example.test`) && (Path(`/runtime-api/v1/native/challenge`) || Path(`/runtime-api/v1/native/open`))"'));
+  assert.ok(nativeRoute, "production must expose only native proof and room bootstrap over HTTPS");
+  assert.ok(nativeRoute.includes('rule: "Host(`pin.example.test`) && (Path(`/runtime-api/v1/native/challenge`) || Path(`/runtime-api/v1/native/open`) || Path(`/runtime-api/v1/native/room`))"'));
   assert.match(nativeRoute, /entryPoints: \[websecure\]/u);
   assert.match(nativeRoute, /service: ai-bus/u);
   assert.doesNotMatch(nativeRoute, /PathPrefix|surface-api|admin/u);
