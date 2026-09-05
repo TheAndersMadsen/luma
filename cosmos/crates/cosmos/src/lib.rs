@@ -19,6 +19,7 @@ pub mod integrations;
 pub mod keydirectory;
 pub mod keymaterial;
 pub mod metrics;
+mod native_runtime_api;
 pub mod pin_admission;
 pub mod provision;
 mod response_metadata;
@@ -195,6 +196,11 @@ where
             ambiance_runtime
                 .clone()
                 .expect("AI-bus workload configures runtime"),
+        ))
+        .merge(native_runtime_api::router(
+            ai_bus_store
+                .clone()
+                .expect("AI-bus workload configures its shared store"),
         ))
     } else if config.identity.workload() == cosmos_core::Workload::Provisioning {
         // The pair route must run in the process that runs the OPAQUE ceremony

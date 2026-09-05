@@ -97,6 +97,7 @@ pub fn candidate(
     let available = match record.binding {
         Binding::Browser => record.view(now).available,
         Binding::Pin { .. } => !record.revoked,
+        Binding::Native { .. } => false,
     };
     let blocker = if privacy > PrivacyClass::SharedRoom {
         Some(Blocker::Privacy)

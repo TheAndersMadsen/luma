@@ -59,6 +59,22 @@ pub enum OriginProof {
 }
 
 pub enum RuntimeOperation {
+    NativeChallenge {
+        surface_id: Uuid,
+        enrollment_id: Uuid,
+        audience: String,
+        challenge_id: Uuid,
+        nonce: String,
+    },
+    OpenNative {
+        surface_id: Uuid,
+        audience: String,
+        request: super::native_connection::OpenRequest,
+        incarnation: Uuid,
+    },
+    CheckNative {
+        connection: super::NativeProof,
+    },
     VoicePolicy {
         surface_id: Uuid,
     },
@@ -220,6 +236,12 @@ pub enum RuntimeOperation {
 }
 #[derive(Clone, Debug)]
 pub enum RuntimeResult {
+    NativeChallenge(super::native_connection::Challenge),
+    NativeOpened {
+        connection: super::native_connection::ConnectionView,
+        duplicate: bool,
+    },
+    NativeCurrent(super::native_connection::ConnectionView),
     VoicePolicy(Option<super::voice::Approval>),
     VoiceCurrent,
     VoiceFinalized {
@@ -349,6 +371,8 @@ pub struct RuntimeState {
     #[serde(default)]
     pub pin_connections: BTreeMap<Uuid, super::PinConnection>,
     #[serde(default)]
+    pub native_connections: BTreeMap<Uuid, super::native_connection::NativeState>,
+    #[serde(default)]
     pub disclosure_policies: BTreeMap<Uuid, super::disclosure::Approval>,
     #[serde(default)]
     pub voice_policies: BTreeMap<Uuid, super::voice::Approval>,
@@ -460,6 +484,23 @@ impl InputAdmission {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RuntimeData {
+    NativeChallengeIssued {
+        surface_id: Uuid,
+        approval_revision: u64,
+        challenge_id: Uuid,
+        expires_at_ms: i64,
+    },
+    NativeEpochOpened {
+        surface_id: Uuid,
+        approval_revision: u64,
+        incarnation: Uuid,
+        epoch: Uuid,
+        expires_at_ms: i64,
+    },
+    NativeEpochClosed {
+        surface_id: Uuid,
+        incarnation: Uuid,
+    },
     VoicePolicyChanged {
         surface_id: Uuid,
         approval: super::voice::Approval,
@@ -705,6 +746,7 @@ impl RuntimeState {
             .map(|e| e.expires_at_ms)
             .min()
             .unwrap_or(i64::MAX);
+        due = due.min(self.native_maintenance_ms());
         for connection in self.pin_connections.values().filter(|c| !c.closed) {
             due = due.min(connection.expires_at_ms);
         }
@@ -814,13 +856,15 @@ impl RuntimeState {
                                 })
                             })
                     }
+                    // Enrollment alone grants no native input transport.
+                    Binding::Native { .. } => false,
                 }
         })
     }
     /// Called inside both registry and runtime transactions. Ordinary visible
     /// heartbeats do not alter the origin incarnation or eligibility.
     pub fn reconcile(&mut self, records: &BTreeMap<Uuid, Record>, now: i64) -> Vec<RuntimeData> {
-        let mut events = Vec::new();
+        let mut events = self.reconcile_native(records, now);
         for (id, connection) in &mut self.pin_connections {
             if !connection.closed && !records.get(id).is_some_and(|r| connection.current(r, now)) {
                 connection.closed = true;
@@ -855,6 +899,11 @@ impl RuntimeState {
                         Binding::Pin { .. } => self
                             .pin_connections
                             .get(id)
+                            .is_some_and(|c| c.incarnation == cursor.incarnation),
+                        Binding::Native { .. } => self
+                            .native_connections
+                            .get(id)
+                            .and_then(|state| state.connection.as_ref())
                             .is_some_and(|c| c.incarnation == cursor.incarnation),
                     }
             })
@@ -1093,6 +1142,58 @@ impl RuntimeState {
     ) -> Result<(RuntimeResult, Vec<RuntimeData>), RuntimeError> {
         let mut events = self.reconcile(records, now);
         let result = match operation {
+            RuntimeOperation::NativeChallenge {
+                surface_id,
+                enrollment_id,
+                audience,
+                challenge_id,
+                nonce,
+            } => {
+                let (challenge, duplicate) = self.native_challenge(
+                    records,
+                    surface_id,
+                    enrollment_id,
+                    audience,
+                    challenge_id,
+                    nonce,
+                    now,
+                )?;
+                if !duplicate {
+                    events.push(RuntimeData::NativeChallengeIssued {
+                        surface_id,
+                        approval_revision: challenge.approval_revision,
+                        challenge_id: challenge.challenge_id,
+                        expires_at_ms: challenge.expires_at_ms,
+                    });
+                }
+                RuntimeResult::NativeChallenge(challenge)
+            }
+            RuntimeOperation::OpenNative {
+                surface_id,
+                audience,
+                request,
+                incarnation,
+            } => {
+                let (connection, duplicate) =
+                    self.open_native(records, surface_id, &audience, &request, incarnation, now)?;
+                if !duplicate {
+                    events.push(RuntimeData::NativeEpochOpened {
+                        surface_id,
+                        approval_revision: connection.approval_revision,
+                        incarnation: connection.incarnation,
+                        epoch: connection.epoch,
+                        expires_at_ms: connection.expires_at_ms,
+                    });
+                    events.extend(self.reconcile(records, now));
+                }
+                RuntimeResult::NativeOpened {
+                    connection,
+                    duplicate,
+                }
+            }
+            RuntimeOperation::CheckNative { connection } => {
+                RuntimeResult::NativeCurrent(self.check_native(records, &connection, now)?)
+            }
             RuntimeOperation::VoicePolicy { surface_id } => {
                 RuntimeResult::VoicePolicy(self.voice_policy(records, surface_id)?)
             }

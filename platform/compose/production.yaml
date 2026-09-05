@@ -37,6 +37,7 @@ services:
   ai-bus:
     environment:
       <<: *production-cosmos-environment
+      REVIVAL_PUBLIC_ORIGIN: ${REVIVAL_PUBLIC_ORIGIN:?run revival setup production}
       COSMOS_CAPTURE_STORAGE_DIR: /var/lib/cosmos/captures
       COSMOS_KID_SCOPE: ${COSMOS_KID_SCOPE:-enforce}
       COSMOS_ADMIN_TOKEN: ${COSMOS_ADMIN_TOKEN:?run revival setup production}

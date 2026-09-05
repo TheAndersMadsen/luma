@@ -680,6 +680,16 @@ pub trait Store: Send + Sync + 'static {
         principal: &str,
     ) -> Result<Vec<crate::surface_registry::Surface>, crate::surface_registry::RegistryError>;
 
+    /// Internal routing locator only. Runtime admission must recheck the
+    /// current approved binding and installation proof under its transaction.
+    async fn native_location(
+        &self,
+        enrollment_id: uuid::Uuid,
+    ) -> Result<
+        Option<crate::surface_registry::NativeLocation>,
+        crate::surface_registry::RegistryError,
+    >;
+
     async fn mutate_surface(
         &self,
         principal: &str,
@@ -1570,6 +1580,24 @@ impl Store for MemoryStore {
             .unwrap_or_default())
     }
 
+    async fn native_location(
+        &self,
+        enrollment_id: uuid::Uuid,
+    ) -> Result<
+        Option<crate::surface_registry::NativeLocation>,
+        crate::surface_registry::RegistryError,
+    > {
+        use crate::surface_registry::RegistryError;
+        if self.state_path.is_some() {
+            return Err(RegistryError::Unavailable);
+        }
+        let guard = self
+            .surfaces
+            .lock()
+            .map_err(|_| RegistryError::Unavailable)?;
+        Ok(guard.native_location(enrollment_id))
+    }
+
     async fn mutate_surface(
         &self,
         principal: &str,
@@ -1595,6 +1623,9 @@ impl Store for MemoryStore {
             &mutation,
             now,
         )?;
+        if let crate::surface_registry::Binding::Native { enrollment_id, .. } = &record.binding {
+            guard.validate_native_location(principal, *enrollment_id, surface_id)?;
+        }
         if let Some(kind) = kind {
             let sequence = registry.events.len() as u64 + 1;
             let previous = registry
@@ -2444,7 +2475,165 @@ pub(crate) async fn runtime_test_terminal(
 }
 
 #[cfg(test)]
+pub(crate) fn native_test_approval(
+    enrollment_id: uuid::Uuid,
+    expected_revision: u64,
+) -> crate::surface_registry::Mutation {
+    crate::surface_registry::Mutation::ApproveNative {
+        enrollment_id,
+        // SEC1 encoding of the public P-256 generator point, test fixture only.
+        public_key: "BGsX0fLhLEJH-Lzm5WOkQPJ3A32BLeszoPShOUXYmMKWT-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU".into(),
+        platform: "macos".into(),
+        expected_revision,
+    }
+}
+
+#[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn native_location_memory_retains_owner_and_surface_after_revocation() {
+        use crate::surface_registry::{Mutation, RegistryError};
+        let store = MemoryStore::default();
+        let enrollment_id = Uuid::new_v4();
+        let surface_id = Uuid::new_v4();
+        assert!(
+            store
+                .native_location(enrollment_id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        store
+            .mutate_surface(
+                "U:native-owner",
+                surface_id,
+                native_test_approval(enrollment_id, 0),
+            )
+            .await
+            .unwrap();
+        let location = store.native_location(enrollment_id).await.unwrap().unwrap();
+        assert_eq!(location.principal, "U:native-owner");
+        assert_eq!(location.surface_id, surface_id);
+        for expected_revision in [1, 2] {
+            for (principal, attempted_surface) in [
+                ("U:native-other", surface_id),
+                ("U:native-owner", Uuid::new_v4()),
+            ] {
+                assert_eq!(
+                    store
+                        .mutate_surface(
+                            principal,
+                            attempted_surface,
+                            native_test_approval(enrollment_id, 0)
+                        )
+                        .await,
+                    Err(RegistryError::SequenceConflict)
+                );
+                assert!(
+                    store
+                        .surface(principal, attempted_surface)
+                        .await
+                        .unwrap()
+                        .is_none()
+                );
+            }
+            {
+                let guard = store.surfaces.lock().unwrap();
+                assert!(!guard.contains_key("U:native-other"));
+                assert_eq!(guard["U:native-owner"].records.len(), 1);
+                assert_eq!(guard["U:native-owner"].events.len(), expected_revision);
+            }
+            if expected_revision == 1 {
+                store
+                    .mutate_surface(
+                        "U:native-owner",
+                        surface_id,
+                        Mutation::RevokeNative {
+                            expected_revision: 1,
+                        },
+                    )
+                    .await
+                    .unwrap();
+            }
+        }
+        assert!(store.surfaces("U:native-owner").await.unwrap().is_empty());
+        // Runtime maintenance republishes the registry without losing the
+        // revoked installation's locator or making it transferable.
+        store
+            .runtime("U:native-owner", crate::ambiance::RuntimeOperation::Sweep)
+            .await
+            .unwrap();
+        let location = store.native_location(enrollment_id).await.unwrap().unwrap();
+        assert_eq!(location.principal, "U:native-owner");
+        assert_eq!(location.surface_id, surface_id);
+        let approved = store
+            .mutate_surface(
+                "U:native-owner",
+                surface_id,
+                native_test_approval(enrollment_id, 2),
+            )
+            .await
+            .unwrap();
+        assert_eq!(approved.revision, 3);
+        assert!(!approved.revoked);
+    }
+
+    #[tokio::test]
+    async fn native_location_memory_failed_approval_and_snapshot_do_not_publish_locator() {
+        use crate::surface_registry::{Mutation, RegistryError, hash};
+        let store = MemoryStore::default();
+        for _ in 0..16 {
+            store
+                .mutate_surface(
+                    "U:native-full",
+                    Uuid::new_v4(),
+                    Mutation::Approve {
+                        token_hash: hash(b"synthetic"),
+                        incarnation: Uuid::new_v4(),
+                    },
+                )
+                .await
+                .unwrap();
+        }
+        let enrollment_id = Uuid::new_v4();
+        assert_eq!(
+            store
+                .mutate_surface(
+                    "U:native-full",
+                    Uuid::new_v4(),
+                    native_test_approval(enrollment_id, 0)
+                )
+                .await,
+            Err(RegistryError::SurfaceLimit)
+        );
+        assert!(
+            store
+                .native_location(enrollment_id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let snapshot = MemoryStore {
+            state_path: Some(std::path::PathBuf::from("/unwritten-native-test-snapshot")),
+            ..Default::default()
+        };
+        assert!(matches!(
+            snapshot.native_location(enrollment_id).await,
+            Err(RegistryError::Unavailable)
+        ));
+        assert_eq!(
+            snapshot
+                .mutate_surface(
+                    "U:native-owner",
+                    Uuid::new_v4(),
+                    native_test_approval(enrollment_id, 0)
+                )
+                .await,
+            Err(RegistryError::Unavailable)
+        );
+        assert!(snapshot.surfaces.lock().unwrap().is_empty());
+    }
+
     #[tokio::test]
     async fn ambiance_retention_bounded_sweep_and_startup_clean_existing_payloads() {
         use crate::ambiance::runtime::AmbianceRuntime;

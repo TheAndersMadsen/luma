@@ -418,7 +418,14 @@ test("production setup creates a complete portable operator installation and is 
     /After deployment: https:\/\/pin\.example\.test\/login\?next=%2Fsettings%2Fpin%2Fsetup/u,
   );
   assert.match(fs.readFileSync(path.join(root, "center/src/server/auth.ts"), "utf8"), /grant_type: "password"/u);
-  assert.match(fs.readFileSync(path.join(production, "traefik-dynamic.yaml"), "utf8"), /pin\.example\.test/u);
+  const dynamicConfig = fs.readFileSync(path.join(production, "traefik-dynamic.yaml"), "utf8");
+  assert.match(dynamicConfig, /pin\.example\.test/u);
+  const nativeRoute = dynamicConfig.split("    native-runtime-bootstrap:\n")[1]?.split("    center:\n")[0];
+  assert.ok(nativeRoute, "production must expose native challenge proof over HTTPS");
+  assert.ok(nativeRoute.includes('rule: "Host(`pin.example.test`) && (Path(`/runtime-api/v1/native/challenge`) || Path(`/runtime-api/v1/native/open`))"'));
+  assert.match(nativeRoute, /entryPoints: \[websecure\]/u);
+  assert.match(nativeRoute, /service: ai-bus/u);
+  assert.doesNotMatch(nativeRoute, /PathPrefix|surface-api|admin/u);
   const operatorModel = fs.readFileSync(operatorCompose, "utf8");
   assert.doesNotMatch(operatorModel, /container-inputs|spotify-token|edge-server|pin-releases/u);
   assert.match(operatorModel, /searxng-settings|prometheus/u);

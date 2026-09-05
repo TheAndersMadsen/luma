@@ -104,9 +104,9 @@ Its metadata tests validate the inventory and evidence references only; the
 paper's reference implementation and reported test results are unavailable for
 independent reproduction.
 
-The current server preview is published as `v0.2.0-ambiance.2` and deployed at
+The current server preview is published as `v0.2.0-ambiance.4` and deployed at
 `https://center.andersmadsen.dk/`, reporting release
-`f62cf04253512285c7fe8eefe6cddc5861fd2273` and environment `production`.
+`5d30ebb5f8670497b00e2f80dc3ad7d882012e20` and environment `production`.
 The signed operator, public discovery, OIDC and configured Pin certificate chain
 passed production verification. External browser RPC passed over direct TCP
 7881 with observed ICE selection and increasing byte counters. UDP 7882 and
@@ -294,10 +294,30 @@ PostgreSQL and LiveKit authority. The package's proposed Node/SQLite runtime,
 Omarchy hosting and separate WSS coordination bus do not replace the current
 VPS deployment or room protocol.
 
-The next native slice is generic installation-key challenge proof with explicit
-owner approval and revocation in Center, followed by authenticated public native
-input through Cosmos to the existing Center renderer. Enrollment and current
+The native enrollment slice uses installation-key challenge proof with explicit
+owner approval and revocation in Center. Its
+[wire contract and shared signature vectors](contracts/ambiance-native.json)
+bind the approved key, server audience, approval revision, challenge, boot epoch,
+previous connection and new session-secret digest. Cosmos consumes the challenge
+and opens the connection in one Store transaction; an exact retry recovers the
+same current connection without renewing its deadlines. Enrollment and current
 connection evidence remain separate from actor identity and physical privacy.
+
+On this branch, **Settings → Surfaces → Native installations** lets the owner
+import or paste a public installation descriptor, compare its key fingerprint,
+approve it, or revoke the exact current approval. A missing write response
+requires a fresh status read before another change. The native profile permits
+only a public-text capability ceiling; it grants no microphone, screen/media
+context, native output, private memory or device actions. Native applications
+and their text connections remain unfinished. The public challenge/open routes
+return enrollment connection metadata only; they do not join a room or submit a
+request. Their 45-second liveness lease has no public renewal endpoint in this
+increment. A native client must verify the configured HTTPS audience before
+signing and retain its pending attempt before sending it. Private keys and raw
+session secrets never pass through Center.
+
+The next slice connects authenticated native text through Cosmos to the existing
+Center renderer using the same principal coordinator and durable input sequence.
 Immutable task/context handoff follows with revision fencing and observed
 completion, then real desktop/Pixel clients and Shield context integrations.
 The blueprint's controlled Shield player does not provide playback context from
@@ -542,9 +562,12 @@ evidence that those dependencies exist.
    Native callbacks are cleared before their caller-owned state can expire.
    Cancellation remains cooperative: model-state creation, mel processing and
    the current native operation can still delay exit. The unchanged three-second
-   cancellation assertion and fresh recognition after abort passed on macOS
-   with the patch; native AMD64 CI and full patched-image acceptance remain
-   separate required gates. Runtime bootstrap and the paper's end-to-end voice
+   cancellation assertion passed for commit `5d30ebb` on macOS (20 ms), native
+   Linux AMD64 CI (130 ms) and native Linux ARM64 (59 ms). Fresh recognition after
+   abort also passed. The exact-source ARM64 image passed model/package checks,
+   read-only unprivileged startup without networking, readiness and clean
+   shutdown. These isolated checks do not establish production speech behavior.
+   Runtime bootstrap and the paper's end-to-end voice
    latency target also remain open; isolated adapter timings are not production
    latency.
 
@@ -591,11 +614,12 @@ evidence that those dependencies exist.
    transport check does not prove the full authenticated UI or media playback.
    `center/verify/center-runtime-live.mjs` additionally runs a built Center image,
    native Cosmos, isolated PostgreSQL and a local SFU through a same-origin HTTPS
-   gateway with `/livekit` WebSocket forwarding. In Chrome it grants and revokes
-   separate local voice and speech permissions through the owner UI, approves a shared tab, renders a
-   routed text card, verifies the durable DOM acknowledgment, then leaves and
-   requires the stored payload to be cleared. The application run passed on the
-   `e7f6313` Center image. Authentication and the one cognition response are
+   gateway with `/livekit` WebSocket forwarding. In Chrome it approves and revokes
+   a native installation and verifies that enrollment alone grants no room or
+   input authority. It also grants and revokes separate local voice and speech
+   permissions through the owner UI, approves a shared tab, renders a routed text
+   card, verifies the durable DOM acknowledgment, then leaves and requires the
+   stored payload to be cleared. Authentication and the one cognition response are
    synthetic; no provider, real account, Pin, external-network or media acceptance
    is implied. Supply `COSMOS_TEST_DATABASE_URL` pointing to isolated loopback
    PostgreSQL, then run with Node 22 and Playwright available through `NODE_PATH`:
@@ -607,11 +631,12 @@ evidence that those dependencies exist.
    The SFU JSON supplies `url`, `key` and `secret` for an isolated loopback SFU.
    The driver creates disposable local authentication and TLS credentials, writes
    bounded status and screenshot artifacts outside the checkout, and removes its
-   container and transient credentials. The local voice control increment passed
+   container and transient credentials. The native enrollment increment passed
    on the built Center image
-   `sha256:36576e92024ffeff7ece96a1c54fae66f06d1d4dd92297066c63365b157d4302`,
-   including independently observed policy revisions, render acknowledgment and
-   payload clearing. Its ignored native test fails if those
+   `sha256:309c0ceb752bf30aa01c016f0ec5aadb66f52a5eec757756b096371a87e5726d`,
+   including independently observed native approval/revocation revisions 1/2,
+   both voice policy revisions 2, render acknowledgment and payload clearing.
+   Its ignored native test fails if those
    dependencies are absent; an ordinary unit-test pass does not run this gate.
    To exercise one actual OpenRouter request in the same browser flow, append
    `--openrouter-stdin` and supply the explicitly selected `realtime` configuration

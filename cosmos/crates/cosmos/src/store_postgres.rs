@@ -113,6 +113,11 @@ pub(crate) const STORE_MIGRATIONS: &[EmbeddedMigration] = &[
         "0008_ambiance_runtime.sql",
         include_str!("../../../migrations/0008_ambiance_runtime.sql"),
     ),
+    EmbeddedMigration::new(
+        9,
+        "0009_native_enrollment.sql",
+        include_str!("../../../migrations/0009_native_enrollment.sql"),
+    ),
 ];
 
 /// Statements this history is allowed to remove data with, frozen verbatim.
@@ -575,6 +580,18 @@ async fn persist_runtime(
     Ok(())
 }
 
+/// HTTP future cancellation alone cannot release a connection still waiting
+/// for PostgreSQL. Bound native statements on the server before taking locks;
+/// transaction-local settings leave other Store operations unchanged.
+async fn native_transaction_limits(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("SELECT set_config('statement_timeout','4000ms',true), set_config('lock_timeout','3000ms',true)")
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
+}
+
 #[tonic::async_trait]
 impl Store for PostgresStore {
     async fn runtime_changes(
@@ -620,9 +637,19 @@ impl Store for PostgresStore {
         principal: &str,
         operation: crate::ambiance::RuntimeOperation,
     ) -> Result<crate::ambiance::RuntimeResult, crate::ambiance::RuntimeError> {
-        use crate::ambiance::RuntimeError;
+        use crate::ambiance::{RuntimeError, RuntimeOperation};
         let unavailable = |_| RuntimeError::Unavailable;
         let mut tx = self.pool.begin().await.map_err(unavailable)?;
+        if matches!(
+            &operation,
+            RuntimeOperation::NativeChallenge { .. }
+                | RuntimeOperation::OpenNative { .. }
+                | RuntimeOperation::CheckNative { .. }
+        ) {
+            native_transaction_limits(&mut tx)
+                .await
+                .map_err(unavailable)?;
+        }
         sqlx::query("INSERT INTO cosmos_surface_head (principal) VALUES ($1) ON CONFLICT (principal) DO NOTHING")
             .bind(principal).execute(&mut *tx).await.map_err(unavailable)?;
         let head = sqlx::query(
@@ -734,15 +761,50 @@ impl Store for PostgresStore {
         Ok(surfaces)
     }
 
+    async fn native_location(
+        &self,
+        enrollment_id: uuid::Uuid,
+    ) -> Result<
+        Option<crate::surface_registry::NativeLocation>,
+        crate::surface_registry::RegistryError,
+    > {
+        use crate::surface_registry::{NativeLocation, RegistryError};
+        let unavailable = |_| RegistryError::Unavailable;
+        let mut tx = self.pool.begin().await.map_err(unavailable)?;
+        native_transaction_limits(&mut tx)
+            .await
+            .map_err(unavailable)?;
+        // Match the partial unique index, including revoked approvals. This is
+        // a locator, never evidence of current native admission authority.
+        let row = sqlx::query("SELECT principal, surface_id FROM cosmos_surface_registry WHERE record #>> '{binding,profile}' = 'native' AND record #>> '{binding,enrollment_id}' = $1")
+            .bind(enrollment_id.to_string())
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(unavailable)?;
+        tx.commit().await.map_err(unavailable)?;
+        Ok(row.map(|row| NativeLocation {
+            principal: row.get("principal"),
+            surface_id: row.get("surface_id"),
+        }))
+    }
+
     async fn mutate_surface(
         &self,
         principal: &str,
         surface_id: uuid::Uuid,
         mutation: crate::surface_registry::Mutation,
     ) -> Result<crate::surface_registry::Surface, crate::surface_registry::RegistryError> {
-        use crate::surface_registry::{Record, RegistryError, event, transition};
+        use crate::surface_registry::{Mutation, Record, RegistryError, event, transition};
         let unavailable = |_| RegistryError::Unavailable;
         let mut tx = self.pool.begin().await.map_err(unavailable)?;
+        if matches!(
+            &mutation,
+            Mutation::ApproveNative { .. } | Mutation::RevokeNative { .. }
+        ) {
+            native_transaction_limits(&mut tx)
+                .await
+                .map_err(unavailable)?;
+        }
         sqlx::query("INSERT INTO cosmos_surface_head (principal) VALUES ($1) ON CONFLICT (principal) DO NOTHING")
             .bind(principal).execute(&mut *tx).await.map_err(unavailable)?;
         let head = sqlx::query(
@@ -802,7 +864,15 @@ impl Store for PostgresStore {
             let encoded_event =
                 serde_json::to_string(&entry).map_err(|_| RegistryError::Unavailable)?;
             sqlx::query("INSERT INTO cosmos_surface_registry (principal, surface_id, record) VALUES ($1, $2, $3::jsonb) ON CONFLICT (principal, surface_id) DO UPDATE SET record = EXCLUDED.record")
-                .bind(principal).bind(surface_id).bind(encoded_record).execute(&mut *tx).await.map_err(unavailable)?;
+                .bind(principal).bind(surface_id).bind(encoded_record).execute(&mut *tx).await.map_err(|error| {
+                    if matches!(&error, sqlx::Error::Database(error)
+                        if error.is_unique_violation()
+                            && error.constraint() == Some("cosmos_native_enrollment_unique")) {
+                        RegistryError::SequenceConflict
+                    } else {
+                        RegistryError::Unavailable
+                    }
+                })?;
             sqlx::query("INSERT INTO cosmos_surface_event (principal, sequence, hash, event) VALUES ($1, $2, $3, $4::jsonb)")
                 .bind(principal).bind(sequence).bind(&hash).bind(encoded_event).execute(&mut *tx).await.map_err(unavailable)?;
             sqlx::query(
@@ -3522,6 +3592,7 @@ mod tests {
                 (5, "0005_device_status_namespacing.sql"),
                 (7, "0007_surface_registry.sql"),
                 (8, "0008_ambiance_runtime.sql"),
+                (9, "0009_native_enrollment.sql"),
                 (2, "0002_enrollment.sql"),
                 (3, "0003_key_directory.sql"),
                 (6, "0006_key_directory_bounds.sql"),
@@ -3576,6 +3647,7 @@ mod tests {
             ("0006_key_directory_bounds.sql", 1),
             ("0007_surface_registry.sql", 4),
             ("0008_ambiance_runtime.sql", 3),
+            ("0009_native_enrollment.sql", 1),
         ];
         for migration in all_migrations() {
             let statements = migration.statements().collect::<Vec<_>>();
@@ -3634,6 +3706,7 @@ mod tests {
                 "CREATE TABLE IF NOT EXISTS cosmos_ambiance_runtime (",
                 "ALTER TABLE IF EXISTS cosmos_ambiance_runtime",
                 "CREATE INDEX IF NOT EXISTS cosmos_ambiance_due",
+                "CREATE UNIQUE INDEX IF NOT EXISTS cosmos_native_enrollment_unique",
             ]
         );
     }
@@ -3773,6 +3846,729 @@ mod tests {
             }),
             ..Default::default()
         }
+    }
+
+    const NATIVE_TEST_AUDIENCE: &str = "https://native-storage.example";
+
+    async fn native_test_challenge(
+        store: &PostgresStore,
+        principal: &str,
+        surface_id: uuid::Uuid,
+        enrollment_id: uuid::Uuid,
+    ) -> crate::ambiance::native_connection::Challenge {
+        use crate::ambiance::{RuntimeOperation, RuntimeResult};
+        use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+        let RuntimeResult::NativeChallenge(challenge) = store
+            .runtime(
+                principal,
+                RuntimeOperation::NativeChallenge {
+                    surface_id,
+                    enrollment_id,
+                    audience: NATIVE_TEST_AUDIENCE.into(),
+                    challenge_id: uuid::Uuid::new_v4(),
+                    nonce: URL_SAFE_NO_PAD.encode([23u8; 32]),
+                },
+            )
+            .await
+            .unwrap()
+        else {
+            panic!("native challenge expected")
+        };
+        challenge
+    }
+
+    fn native_signed_open(
+        challenge: &crate::ambiance::native_connection::Challenge,
+        token_marker: u8,
+    ) -> crate::ambiance::native_connection::OpenRequest {
+        use crate::ambiance::native_connection::{OpenRequest, signing_message};
+        use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+        use p256::ecdsa::{Signature, SigningKey, signature::Signer};
+        let mut request = OpenRequest {
+            enrollment_id: challenge.enrollment_id,
+            challenge_id: challenge.challenge_id,
+            epoch: uuid::Uuid::new_v4(),
+            expected_incarnation: challenge.current_incarnation,
+            session_token_hash: crate::surface_registry::hash(&[token_marker; 32]),
+            signature: String::new(),
+        };
+        // Scalar one matches native_test_approval's public generator point.
+        let mut scalar = [0u8; 32];
+        scalar[31] = 1;
+        let key = SigningKey::from_bytes(&scalar).unwrap();
+        let signature: Signature = key.sign(&signing_message(challenge, &request).unwrap());
+        request.signature = URL_SAFE_NO_PAD.encode(signature.to_der().as_bytes());
+        request
+    }
+
+    fn native_open_operation(
+        surface_id: uuid::Uuid,
+        request: &crate::ambiance::native_connection::OpenRequest,
+        incarnation: uuid::Uuid,
+    ) -> crate::ambiance::RuntimeOperation {
+        crate::ambiance::RuntimeOperation::OpenNative {
+            surface_id,
+            audience: NATIVE_TEST_AUDIENCE.into(),
+            request: request.clone(),
+            incarnation,
+        }
+    }
+
+    async fn native_runtime_snapshot(
+        store: &PostgresStore,
+        principal: &str,
+    ) -> (String, i64, i64, String) {
+        let row = sqlx::query("SELECT state::text AS state,next_maintenance_ms,sequence,hash FROM cosmos_ambiance_runtime JOIN cosmos_surface_head USING(principal) WHERE principal=$1")
+            .bind(principal).fetch_one(&store.pool).await.unwrap();
+        (
+            row.get("state"),
+            row.get("next_maintenance_ms"),
+            row.get("sequence"),
+            row.get("hash"),
+        )
+    }
+
+    #[tokio::test]
+    async fn native_http_postgres_locked_principal_recovers_pool_without_consuming_challenge() {
+        use axum::{
+            body::Body,
+            http::{Request, StatusCode},
+        };
+        use serde_json::{Value, json};
+        use std::{
+            sync::Arc,
+            time::{Duration, Instant},
+        };
+        use tower::ServiceExt;
+
+        async fn call(app: &axum::Router, operation: &str, body: &Value) -> (StatusCode, Value) {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(format!("/runtime-api/v1/native/{operation}"))
+                        .header("content-type", "application/json")
+                        .body(Body::from(body.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let status = response.status();
+            assert_eq!(response.headers()["content-type"], "application/json");
+            assert_eq!(response.headers()["cache-control"], "no-store");
+            let bytes = axum::body::to_bytes(response.into_body(), 8192)
+                .await
+                .unwrap();
+            (status, serde_json::from_slice(&bytes).unwrap())
+        }
+
+        let Some(blocker) = store().await else { return };
+        // Saturate every transactional slot while a separate pool holds the
+        // row lock. Spare connections must not hide a cancelled-query leak.
+        let first = Arc::new(PostgresStore {
+            pool: PgPoolOptions::new()
+                .max_connections(2)
+                .connect_with((*blocker.pool.connect_options()).clone())
+                .await
+                .unwrap(),
+        });
+        let original_limits: (String, String) = sqlx::query_as(
+            "SELECT current_setting('statement_timeout'), current_setting('lock_timeout')",
+        )
+        .fetch_one(&first.pool)
+        .await
+        .unwrap();
+        let principal = format!("native-http-lock-{}", uuid::Uuid::new_v4());
+        let enrollment_id = uuid::Uuid::new_v4();
+        let surface_id = uuid::Uuid::new_v4();
+        first
+            .mutate_surface(
+                &principal,
+                surface_id,
+                crate::store::native_test_approval(enrollment_id, 0),
+            )
+            .await
+            .unwrap();
+        let challenge = native_test_challenge(&first, &principal, surface_id, enrollment_id).await;
+        let request = native_signed_open(&challenge, 7);
+        let open_body = json!({
+            "enrollmentId": request.enrollment_id,
+            "challengeId": request.challenge_id,
+            "epoch": request.epoch,
+            "expectedIncarnation": request.expected_incarnation,
+            "sessionTokenHash": request.session_token_hash,
+            "signature": request.signature,
+        });
+        let challenge_body = json!({"enrollmentId": enrollment_id});
+        let app = crate::native_runtime_api::with_audience(
+            first.clone(),
+            Some(NATIVE_TEST_AUDIENCE.into()),
+        );
+        let before = native_runtime_snapshot(&first, &principal).await;
+        let mut lock = blocker.pool.begin().await.unwrap();
+        sqlx::query("SELECT principal FROM cosmos_surface_head WHERE principal=$1 FOR UPDATE")
+            .bind(&principal)
+            .fetch_one(&mut *lock)
+            .await
+            .unwrap();
+        // PostgreSQL must abort both blocked statements before HTTP's five
+        // second deadline, while the independent principal lock remains held.
+        let started = Instant::now();
+        let (open_timeout, challenge_timeout) =
+            tokio::time::timeout(Duration::from_secs(5), async {
+                tokio::join!(
+                    call(&app, "open", &open_body),
+                    call(&app, "challenge", &challenge_body)
+                )
+            })
+            .await
+            .expect("native HTTP operations must have a bounded database deadline");
+        assert!(started.elapsed() >= Duration::from_secs(2));
+        for response in [open_timeout, challenge_timeout] {
+            assert_eq!(
+                response,
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    json!({"error":"unavailable"})
+                )
+            );
+        }
+        let (mut recovered_a, mut recovered_b) =
+            tokio::time::timeout(Duration::from_secs(1), async {
+                let a = first.pool.acquire().await.unwrap();
+                let b = first.pool.acquire().await.unwrap();
+                (a, b)
+            })
+            .await
+            .expect("every pool slot must recover before the external lock is released");
+        for connection in [&mut recovered_a, &mut recovered_b] {
+            let recovered: (i32, String, String) = tokio::time::timeout(
+                Duration::from_secs(1),
+                sqlx::query_as("SELECT 1, current_setting('statement_timeout'), current_setting('lock_timeout')")
+                    .fetch_one(&mut **connection),
+            )
+            .await
+            .expect("a recovered connection must execute while the external lock remains held")
+            .unwrap();
+            assert_eq!(
+                recovered,
+                (1, original_limits.0.clone(), original_limits.1.clone()),
+                "native transaction limits must not leak to unrelated queries"
+            );
+        }
+        drop((recovered_a, recovered_b));
+        assert_eq!(native_runtime_snapshot(&first, &principal).await, before);
+        lock.rollback().await.unwrap();
+        assert_eq!(native_runtime_snapshot(&first, &principal).await, before);
+        let state: crate::ambiance::RuntimeState = serde_json::from_str(&before.0).unwrap();
+        assert!(state.native_connections[&surface_id].connection.is_none());
+        assert!(!state.ingress.contains_key(&surface_id));
+        // The same signed body still opens once after the timeout. Its exact
+        // retry returns that connection, including its original deadlines.
+        let (status, opened) = call(&app, "open", &open_body).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(opened["duplicate"], false);
+        let committed = native_runtime_snapshot(&first, &principal).await;
+        assert_eq!(committed.2, before.2 + 1);
+        let (status, replayed) = call(&app, "open", &open_body).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(replayed["duplicate"], true);
+        assert_eq!(replayed["connection"], opened["connection"]);
+        assert_eq!(native_runtime_snapshot(&first, &principal).await, committed);
+    }
+
+    #[tokio::test]
+    async fn native_open_postgres_competing_signatures_commit_once_and_replay_after_reopen() {
+        use crate::ambiance::{RuntimeError, RuntimeResult};
+        use crate::store::native_test_approval;
+        let Some(first) = store().await else { return };
+        let second = store().await.unwrap();
+        let principal = format!("native-open-race-{}", uuid::Uuid::new_v4());
+        let surface_id = uuid::Uuid::new_v4();
+        let enrollment_id = uuid::Uuid::new_v4();
+        first
+            .mutate_surface(
+                &principal,
+                surface_id,
+                native_test_approval(enrollment_id, 0),
+            )
+            .await
+            .unwrap();
+        let challenge = native_test_challenge(&first, &principal, surface_id, enrollment_id).await;
+        let request_a = native_signed_open(&challenge, 1);
+        let request_b = native_signed_open(&challenge, 2);
+        let incarnation_a = uuid::Uuid::new_v4();
+        let incarnation_b = uuid::Uuid::new_v4();
+        let (a, b) = tokio::join!(
+            first.runtime(
+                &principal,
+                native_open_operation(surface_id, &request_a, incarnation_a)
+            ),
+            second.runtime(
+                &principal,
+                native_open_operation(surface_id, &request_b, incarnation_b)
+            )
+        );
+        let (connection, request, incarnation) = match (a, b) {
+            (
+                Ok(RuntimeResult::NativeOpened {
+                    connection,
+                    duplicate: false,
+                }),
+                Err(RuntimeError::Stale),
+            ) => (connection, request_a, incarnation_a),
+            (
+                Err(RuntimeError::Stale),
+                Ok(RuntimeResult::NativeOpened {
+                    connection,
+                    duplicate: false,
+                }),
+            ) => (connection, request_b, incarnation_b),
+            _ => panic!("one valid proof must consume the challenge exactly once"),
+        };
+        assert_eq!(connection.incarnation, incarnation);
+        assert_eq!(connection.epoch, request.epoch);
+        let before = native_runtime_snapshot(&first, &principal).await;
+        let state: crate::ambiance::RuntimeState = serde_json::from_str(&before.0).unwrap();
+        assert_eq!(state.ingress[&surface_id].incarnation, incarnation);
+        assert_eq!(state.ingress[&surface_id].high_water, 0);
+        drop(first);
+        drop(second);
+        let reopened = store().await.unwrap();
+        let RuntimeResult::NativeOpened {
+            connection: replayed,
+            duplicate: true,
+        } = reopened
+            .runtime(
+                &principal,
+                native_open_operation(surface_id, &request, uuid::Uuid::new_v4()),
+            )
+            .await
+            .unwrap()
+        else {
+            panic!("exact accepted request must return the existing connection")
+        };
+        assert_eq!(
+            replayed, connection,
+            "a response replay must not renew either deadline"
+        );
+        assert_eq!(native_runtime_snapshot(&reopened, &principal).await, before);
+    }
+
+    #[tokio::test]
+    async fn native_open_postgres_failed_append_preserves_unconsumed_challenge_for_retry() {
+        use crate::ambiance::{RuntimeError, RuntimeResult};
+        use crate::store::native_test_approval;
+        let Some(first) = store().await else { return };
+        let principal = format!("native-open-rollback-{}", uuid::Uuid::new_v4());
+        let surface_id = uuid::Uuid::new_v4();
+        let enrollment_id = uuid::Uuid::new_v4();
+        first
+            .mutate_surface(
+                &principal,
+                surface_id,
+                native_test_approval(enrollment_id, 0),
+            )
+            .await
+            .unwrap();
+        let challenge = native_test_challenge(&first, &principal, surface_id, enrollment_id).await;
+        let request = native_signed_open(&challenge, 3);
+        let before = native_runtime_snapshot(&first, &principal).await;
+        sqlx::query("INSERT INTO cosmos_surface_event(principal,sequence,hash,event) SELECT principal,sequence+1,'native-open-obstruction','{}'::jsonb FROM cosmos_surface_head WHERE principal=$1")
+            .bind(&principal).execute(&first.pool).await.unwrap();
+        assert!(matches!(
+            first
+                .runtime(
+                    &principal,
+                    native_open_operation(surface_id, &request, uuid::Uuid::new_v4())
+                )
+                .await,
+            Err(RuntimeError::Unavailable)
+        ));
+        assert_eq!(native_runtime_snapshot(&first, &principal).await, before);
+        drop(first);
+        let reopened = store().await.unwrap();
+        assert_eq!(native_runtime_snapshot(&reopened, &principal).await, before);
+        assert_eq!(
+            native_test_challenge(&reopened, &principal, surface_id, enrollment_id).await,
+            challenge
+        );
+        sqlx::query("DELETE FROM cosmos_surface_event WHERE principal=$1 AND hash='native-open-obstruction'")
+            .bind(&principal).execute(&reopened.pool).await.unwrap();
+        let incarnation = uuid::Uuid::new_v4();
+        let RuntimeResult::NativeOpened {
+            connection,
+            duplicate: false,
+        } = reopened
+            .runtime(
+                &principal,
+                native_open_operation(surface_id, &request, incarnation),
+            )
+            .await
+            .unwrap()
+        else {
+            panic!("failed append must leave the signed challenge reusable")
+        };
+        assert_eq!(connection.incarnation, incarnation);
+        let after = native_runtime_snapshot(&reopened, &principal).await;
+        assert_eq!(
+            after.2,
+            before.2 + 1,
+            "only the successful open appends an event"
+        );
+        let state: crate::ambiance::RuntimeState = serde_json::from_str(&after.0).unwrap();
+        assert_eq!(state.ingress.len(), 1);
+        assert_eq!(state.ingress[&surface_id].incarnation, incarnation);
+    }
+
+    #[tokio::test]
+    async fn native_open_postgres_reapproval_invalidates_pending_and_consumed_challenges() {
+        use crate::ambiance::{RuntimeError, RuntimeResult};
+        use crate::store::native_test_approval;
+        use crate::surface_registry::Mutation;
+        let Some(first) = store().await else { return };
+        let principal = format!("native-open-reapprove-{}", uuid::Uuid::new_v4());
+        let surface_id = uuid::Uuid::new_v4();
+        let enrollment_id = uuid::Uuid::new_v4();
+        first
+            .mutate_surface(
+                &principal,
+                surface_id,
+                native_test_approval(enrollment_id, 0),
+            )
+            .await
+            .unwrap();
+        let challenge = native_test_challenge(&first, &principal, surface_id, enrollment_id).await;
+        let accepted = native_signed_open(&challenge, 4);
+        assert!(matches!(
+            first
+                .runtime(
+                    &principal,
+                    native_open_operation(surface_id, &accepted, uuid::Uuid::new_v4())
+                )
+                .await
+                .unwrap(),
+            RuntimeResult::NativeOpened {
+                duplicate: false,
+                ..
+            }
+        ));
+        let pending = native_test_challenge(&first, &principal, surface_id, enrollment_id).await;
+        let unconsumed = native_signed_open(&pending, 5);
+        first
+            .mutate_surface(
+                &principal,
+                surface_id,
+                Mutation::RevokeNative {
+                    expected_revision: 1,
+                },
+            )
+            .await
+            .unwrap();
+        first
+            .mutate_surface(
+                &principal,
+                surface_id,
+                native_test_approval(enrollment_id, 2),
+            )
+            .await
+            .unwrap();
+        drop(first);
+        let reopened = store().await.unwrap();
+        let before = native_runtime_snapshot(&reopened, &principal).await;
+        for request in [&accepted, &unconsumed] {
+            assert!(matches!(
+                reopened
+                    .runtime(
+                        &principal,
+                        native_open_operation(surface_id, request, uuid::Uuid::new_v4())
+                    )
+                    .await,
+                Err(RuntimeError::Stale)
+            ));
+        }
+        assert_eq!(native_runtime_snapshot(&reopened, &principal).await, before);
+        let current = native_test_challenge(&reopened, &principal, surface_id, enrollment_id).await;
+        assert_eq!(current.approval_revision, 3);
+        assert_eq!(current.current_incarnation, None);
+        let request = native_signed_open(&current, 6);
+        assert!(matches!(
+            reopened
+                .runtime(
+                    &principal,
+                    native_open_operation(surface_id, &request, uuid::Uuid::new_v4())
+                )
+                .await
+                .unwrap(),
+            RuntimeResult::NativeOpened {
+                duplicate: false,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn native_location_postgres_retains_revoked_owner_across_reopen() {
+        use crate::store::native_test_approval;
+        use crate::surface_registry::{Mutation, RegistryError};
+        let Some(first) = store().await else { return };
+        let principal = format!("native-location-reopen-{}", uuid::Uuid::new_v4());
+        let enrollment_id = uuid::Uuid::new_v4();
+        let surface_id = uuid::Uuid::new_v4();
+        assert!(
+            first
+                .native_location(enrollment_id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        first
+            .mutate_surface(
+                &principal,
+                surface_id,
+                native_test_approval(enrollment_id, 0),
+            )
+            .await
+            .unwrap();
+        first
+            .mutate_surface(
+                &principal,
+                surface_id,
+                Mutation::RevokeNative {
+                    expected_revision: 1,
+                },
+            )
+            .await
+            .unwrap();
+        drop(first);
+        let reopened = store().await.unwrap();
+        let location = reopened
+            .native_location(enrollment_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(location.principal, principal);
+        assert_eq!(location.surface_id, surface_id);
+        assert!(reopened.surfaces(&principal).await.unwrap().is_empty());
+        for (claimant, attempted_surface) in [
+            (format!("{principal}-other"), surface_id),
+            (principal.clone(), uuid::Uuid::new_v4()),
+        ] {
+            assert_eq!(
+                reopened
+                    .mutate_surface(
+                        &claimant,
+                        attempted_surface,
+                        native_test_approval(enrollment_id, 0)
+                    )
+                    .await,
+                Err(RegistryError::SequenceConflict)
+            );
+            assert!(
+                reopened
+                    .surface(&claimant, attempted_surface)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        let approved = reopened
+            .mutate_surface(
+                &principal,
+                surface_id,
+                native_test_approval(enrollment_id, 2),
+            )
+            .await
+            .unwrap();
+        assert_eq!(approved.revision, 3);
+        assert!(!approved.revoked);
+        // Prove the locator predicate can use the unique expression index,
+        // including the revoked records omitted by the active-surface index.
+        let mut tx = reopened.pool.begin().await.unwrap();
+        sqlx::query("SET LOCAL enable_seqscan = off")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        let rows = sqlx::query("EXPLAIN SELECT principal, surface_id FROM cosmos_surface_registry WHERE record #>> '{binding,profile}' = 'native' AND record #>> '{binding,enrollment_id}' = $1")
+            .bind(enrollment_id.to_string()).fetch_all(&mut *tx).await.unwrap();
+        assert!(rows.iter().any(|row| {
+            row.get::<&str, _>(0)
+                .contains("cosmos_native_enrollment_unique")
+        }));
+        tx.rollback().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn native_location_postgres_competing_owners_commit_exactly_one_claim() {
+        use crate::store::native_test_approval;
+        use crate::surface_registry::RegistryError;
+        let Some(first) = store().await else { return };
+        let second = store().await.unwrap();
+        let first_principal = format!("native-location-race-a-{}", uuid::Uuid::new_v4());
+        let second_principal = format!("native-location-race-b-{}", uuid::Uuid::new_v4());
+        let enrollment_id = uuid::Uuid::new_v4();
+        let first_surface = uuid::Uuid::new_v4();
+        let second_surface = uuid::Uuid::new_v4();
+        let (a, b) = tokio::join!(
+            first.mutate_surface(
+                &first_principal,
+                first_surface,
+                native_test_approval(enrollment_id, 0)
+            ),
+            second.mutate_surface(
+                &second_principal,
+                second_surface,
+                native_test_approval(enrollment_id, 0)
+            )
+        );
+        let (winner, winner_surface, loser, loser_surface) = match (a, b) {
+            (Ok(_), Err(RegistryError::SequenceConflict)) => (
+                &first_principal,
+                first_surface,
+                &second_principal,
+                second_surface,
+            ),
+            (Err(RegistryError::SequenceConflict), Ok(_)) => (
+                &second_principal,
+                second_surface,
+                &first_principal,
+                first_surface,
+            ),
+            _ => panic!("the enrollment locator must have exactly one committed owner"),
+        };
+        let location = first.native_location(enrollment_id).await.unwrap().unwrap();
+        assert_eq!(&location.principal, winner);
+        assert_eq!(location.surface_id, winner_surface);
+        assert!(
+            second
+                .surface(loser, loser_surface)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        // The losing registry INSERT must also roll back the new principal's
+        // head, event chain and runtime row in that transaction.
+        for table in [
+            "cosmos_surface_head",
+            "cosmos_surface_event",
+            "cosmos_ambiance_runtime",
+        ] {
+            let count: i64 = sqlx::query_scalar(&format!(
+                "SELECT COUNT(*) FROM {table} WHERE principal = $1"
+            ))
+            .bind(loser)
+            .fetch_one(&first.pool)
+            .await
+            .unwrap();
+            assert_eq!(count, 0);
+        }
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM cosmos_surface_event WHERE principal = $1")
+                .bind(winner)
+                .fetch_one(&first.pool)
+                .await
+                .unwrap();
+        assert_eq!(count, 1);
+        drop(first);
+        drop(second);
+        let reopened = store().await.unwrap();
+        let location = reopened
+            .native_location(enrollment_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(&location.principal, winner);
+        assert_eq!(location.surface_id, winner_surface);
+    }
+
+    #[tokio::test]
+    async fn native_location_postgres_failed_append_rolls_back_locator_and_registry() {
+        use crate::store::native_test_approval;
+        use crate::surface_registry::{Mutation, RegistryError, hash};
+        let Some(first) = store().await else { return };
+        let principal = format!("native-location-rollback-{}", uuid::Uuid::new_v4());
+        first
+            .mutate_surface(
+                &principal,
+                uuid::Uuid::new_v4(),
+                Mutation::Approve {
+                    token_hash: hash(b"synthetic-native-rollback"),
+                    incarnation: uuid::Uuid::new_v4(),
+                },
+            )
+            .await
+            .unwrap();
+        let enrollment_id = uuid::Uuid::new_v4();
+        let surface_id = uuid::Uuid::new_v4();
+        let before: String = sqlx::query_scalar(
+            "SELECT state::text FROM cosmos_ambiance_runtime WHERE principal=$1",
+        )
+        .bind(&principal)
+        .fetch_one(&first.pool)
+        .await
+        .unwrap();
+        // A principal-local duplicate next event fails after the registry write.
+        sqlx::query("INSERT INTO cosmos_surface_event(principal,sequence,hash,event) VALUES($1,2,'native-test-obstruction','{}'::jsonb)")
+            .bind(&principal).execute(&first.pool).await.unwrap();
+        assert_eq!(
+            first
+                .mutate_surface(
+                    &principal,
+                    surface_id,
+                    native_test_approval(enrollment_id, 0)
+                )
+                .await,
+            Err(RegistryError::Unavailable)
+        );
+        drop(first);
+        let reopened = store().await.unwrap();
+        assert!(
+            reopened
+                .native_location(enrollment_id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            reopened
+                .surface(&principal, surface_id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let sequence: i64 =
+            sqlx::query_scalar("SELECT sequence FROM cosmos_surface_head WHERE principal=$1")
+                .bind(&principal)
+                .fetch_one(&reopened.pool)
+                .await
+                .unwrap();
+        assert_eq!(sequence, 1);
+        let after: String = sqlx::query_scalar(
+            "SELECT state::text FROM cosmos_ambiance_runtime WHERE principal=$1",
+        )
+        .bind(&principal)
+        .fetch_one(&reopened.pool)
+        .await
+        .unwrap();
+        assert_eq!(before, after);
+        sqlx::query("DELETE FROM cosmos_surface_event WHERE principal=$1 AND sequence=2 AND hash='native-test-obstruction'")
+            .bind(&principal).execute(&reopened.pool).await.unwrap();
+        reopened
+            .mutate_surface(
+                &principal,
+                surface_id,
+                native_test_approval(enrollment_id, 0),
+            )
+            .await
+            .unwrap();
+        let location = reopened
+            .native_location(enrollment_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(location.principal, principal);
+        assert_eq!(location.surface_id, surface_id);
     }
 
     #[tokio::test]

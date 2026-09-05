@@ -13,7 +13,7 @@ import { createRequire } from "node:module";
 import { spawn, spawnSync } from "node:child_process";
 const require = createRequire(import.meta.url);
 const { chromium } = require("playwright");
-const { cosmosTestEnvironment } = require("../../platform/cli/context.js");
+const { BUILD_DIR, cosmosTestEnvironment } = require("../../platform/cli/context.js");
 const [image, inputPath, nativeDirectory, providerMode, ...extra] = process.argv.slice(2);
 if (!image || !inputPath || !nativeDirectory) throw new Error("Supply Center image, isolated SFU JSON and verified WebRTC directory");
 assert(extra.length === 0 && (providerMode === undefined || providerMode === "--openrouter-stdin"), "Optional provider mode is --openrouter-stdin");
@@ -47,10 +47,11 @@ let stage = "native fixture startup";
 const sockets = new Set();
 const sfu = new URL(configured.url);
 const diagnostics = [];
-function recordStatus(request, status) {
+function recordStatus(request, status, cacheControl) {
   const pathname = new URL(request.url, "https://127.0.0.1").pathname;
-  if (diagnostics.length < 128 && (pathname === "/api/runtime/room" || pathname.startsWith("/livekit/"))) {
-    diagnostics.push({ path: pathname, status });
+  if (diagnostics.length < 128 && (pathname === "/api/runtime/room" || pathname === "/api/runtime/input"
+    || pathname.startsWith("/api/surfaces/native") || pathname.startsWith("/livekit/"))) {
+    diagnostics.push({ path: pathname, status, ...(cacheControl ? { cacheControl } : {}) });
   }
 }
 const gateway = https.createServer({ key: fs.readFileSync(privateKey), cert: fs.readFileSync(certificate) }, (request, response) => {
@@ -61,7 +62,7 @@ const gateway = https.createServer({ key: fs.readFileSync(privateKey), cert: fs.
   const upstream = http.request({ host: "127.0.0.1", port, method: request.method,
     path: media ? request.url.slice("/livekit".length) || "/" : request.url,
     headers: { ...request.headers, "x-forwarded-host": request.headers.host, "x-forwarded-proto": "https" },
-  }, reply => { recordStatus(request, reply.statusCode); response.writeHead(reply.statusCode, reply.headers); reply.pipe(response); });
+  }, reply => { recordStatus(request, reply.statusCode, reply.headers["cache-control"]); response.writeHead(reply.statusCode, reply.headers); reply.pipe(response); });
   upstream.on("error", () => { if (!response.headersSent) response.writeHead(502); response.end(); });
   request.pipe(upstream);
 });
@@ -100,8 +101,18 @@ try {
   await new Promise(resolve => gateway.listen(0, "127.0.0.1", resolve));
   const origin = `https://127.0.0.1:${gateway.address().port}`;
   fs.writeFileSync(input, JSON.stringify({ ...configured, publicUrl: origin.replace("https:", "wss:") + "/livekit", bootstrapPath, statusPath }), { mode: 0o600 });
+  // The native fixture links the same pinned, verified cancellation fix as the
+  // normal Cosmos checks. Never compile against a registry/cache modification.
+  const testEnvironment = cosmosTestEnvironment();
+  const whisperCache = path.join(BUILD_DIR, "whisper");
+  const whisper = spawnSync("python3", [path.join(root, "cosmos/native/prepare_whisper.py"), "--cache", whisperCache], {
+    env: testEnvironment, encoding: "utf8", timeout: 180000, stdio: ["ignore", "pipe", logs],
+  });
+  assert.equal(whisper.status, 0, "Prepare verified native recognition source; inspect native.log");
+  const whisperDirectory = whisper.stdout.trim();
+  assert(whisperDirectory.startsWith(whisperCache + path.sep), "Recognition source must remain in its external cache");
   child = spawn("cargo", ["test", "--locked", "-p", "cosmos", "browser_center_application_acceptance", "--", "--ignored", "--nocapture", "--test-threads=1"], {
-    cwd: path.join(root, "cosmos"), detached: true, env: { ...cosmosTestEnvironment(), LK_CUSTOM_WEBRTC: path.resolve(nativeDirectory),
+    cwd: path.join(root, "cosmos"), detached: true, env: { ...testEnvironment, LK_CUSTOM_WEBRTC: path.resolve(nativeDirectory), WHISPER_CPP_SOURCE: whisperDirectory,
       COSMOS_TEST_DATABASE_URL: process.env.COSMOS_TEST_DATABASE_URL, COSMOS_CENTER_TEST_INPUT: input,
       ...(providerMode ? { COSMOS_CENTER_TEST_OPENROUTER_STDIN: "1" } : {}) }, stdio: ["pipe", logs, logs],
   });
@@ -148,6 +159,77 @@ try {
   await page.getByRole("button", { name: "Revoke local voice permission", exact: true }).click();
   await page.getByText("Cosmos confirmed local voice permission revoked.", { exact: true }).waitFor();
   await page.screenshot({ path: path.join(directory, "local-voice-permission.png"), fullPage: true });
+  stage = "owner native installation approval";
+  const descriptor = native.nativeDescriptor;
+  assert.deepEqual(Object.keys(descriptor).sort(), ["approval", "enrollmentId", "platform", "publicKey"]);
+  assert.equal(descriptor.approval, "native-shared-text-v1");
+  assert.equal(descriptor.platform, "macos");
+  const keyBytes = Buffer.from(descriptor.publicKey, "base64url");
+  assert.equal(keyBytes.length, 65);
+  assert.equal(keyBytes[0], 4);
+  assert.equal(keyBytes.toString("base64url"), descriptor.publicKey);
+  const fingerprint = crypto.createHash("sha256").update(keyBytes).digest("hex");
+  assert.equal(fingerprint, native.nativePublicKeyFingerprint);
+  const expectedNative = {
+    surfaceId: native.nativeId, enrollmentId: descriptor.enrollmentId, platform: "macos", name: "Native device",
+    approval: "native-shared-text-v1", revision: 1, publicKeyFingerprint: fingerprint,
+    manifest: { class: "native", capabilities: { input: ["text.public"], output: {} },
+      constraints: ["actor_unknown", "occupancy_unknown", "render_unverified", "playback_unverified"],
+      expression: {}, cognition: { declaredClass: 0, models: [] }, authority: { mayOriginate: ["user.request"], reflexive: [] } },
+    trustLevel: 0, occupancy: "unknown", actorIdentity: "unknown", renderVerified: false, playbackVerified: false, revoked: false,
+  };
+  await page.goto(`${origin}/settings/account/surfaces`);
+  await page.getByLabel("Public installation descriptor", { exact: true }).fill(JSON.stringify(descriptor));
+  await page.getByRole("button", { name: "Review installation", exact: true }).click();
+  await page.getByRole("group", { name: "Review native installation", exact: true }).getByText(fingerprint, { exact: true }).waitFor();
+  // Reading and reviewing an installation must not approve it implicitly.
+  const beforeApproval = await page.evaluate(async () => {
+    const response = await fetch("/api/surfaces/native", { cache: "no-store", signal: AbortSignal.timeout(10000) });
+    return { status: response.status, body: await response.json() };
+  });
+  assert.deepEqual(beforeApproval, { status: 200, body: { native: [] } });
+  const [approved] = await Promise.all([
+    page.waitForResponse(response => new URL(response.url()).pathname === "/api/surfaces/native" && response.request().method() === "POST"),
+    page.getByRole("button", { name: "Confirm public-text approval", exact: true }).click(),
+  ]);
+  assert.equal(approved.status(), 200);
+  assert.match(approved.headers()["cache-control"], /(?:^|,)\s*no-store\s*(?:,|$)/iu);
+  assert.deepEqual(approved.request().postDataJSON(), { ...descriptor, expectedRevision: 0 });
+  assert.deepEqual(await approved.json(), { native: expectedNative });
+  await page.getByText("Cosmos recorded this installation’s public-text approval. Native text connections are still in development.", { exact: true }).waitFor();
+  await until(() => { const status = readJson(statusPath); return status?.nativeApproved && status.noNativeRoomInputAuthority; }, 10000);
+  // An owner cookie and public descriptor do not provide a browser connection.
+  // Both requests go through the real Center server in this isolated context.
+  const nativeDenials = await page.evaluate(async surfaceId => {
+    const request = { surfaceId, incarnation: crypto.randomUUID(), epoch: crypto.randomUUID() };
+    const read = async (route, body) => {
+      const response = await fetch(route, { method: "POST", cache: "no-store", signal: AbortSignal.timeout(10000),
+        headers: { "content-type": "application/json", "x-cosmos-surface-token": "0".repeat(64) }, body: JSON.stringify(body) });
+      return { status: response.status, body: await response.json() };
+    };
+    return { room: await read("/api/runtime/room", request), input: await read("/api/runtime/input", { ...request, text: "Native enrollment must not originate input" }) };
+  }, native.nativeId);
+  assert.deepEqual(nativeDenials, { room: { status: 403, body: { error: "invalid_connection" } },
+    input: { status: 404, body: { error: "not_found" } } });
+  await page.screenshot({ path: path.join(directory, "native-approved.png"), fullPage: true });
+  stage = "owner native installation revocation";
+  await page.getByRole("button", { name: `Revoke installation ${descriptor.enrollmentId}`, exact: true }).click();
+  const [revoked] = await Promise.all([
+    page.waitForResponse(response => new URL(response.url()).pathname === `/api/surfaces/native/${native.nativeId}` && response.request().method() === "DELETE"),
+    page.getByRole("button", { name: "Confirm revoke installation", exact: true }).click(),
+  ]);
+  assert.equal(revoked.status(), 200);
+  assert.deepEqual(revoked.request().postDataJSON(), { expectedRevision: 1 });
+  assert.deepEqual(await revoked.json(), { native: { ...expectedNative, revision: 2, revoked: true } });
+  await page.getByText("Cosmos confirmed this installation’s approval revoked.", { exact: true }).waitFor();
+  const afterRevocation = await page.evaluate(async enrollmentId => {
+    const read = async route => { const response = await fetch(route, { cache: "no-store", signal: AbortSignal.timeout(10000) }); return { status: response.status, body: await response.json() }; };
+    return { list: await read("/api/surfaces/native"), lookup: await read(`/api/surfaces/native/enrollments/${enrollmentId}`) };
+  }, descriptor.enrollmentId);
+  assert.deepEqual(afterRevocation, { list: { status: 200, body: { native: [] } },
+    lookup: { status: 200, body: { native: { ...expectedNative, revision: 2, revoked: true } } } });
+  await until(() => readJson(statusPath)?.nativeRevoked, 10000);
+  await page.screenshot({ path: path.join(directory, "native-revoked.png"), fullPage: true });
   stage = "browser room admission and render";
   await page.goto(`${origin}/?assistant=open`);
   await page.getByRole("button", { name: "Approve this tab", exact: true }).click();
@@ -162,10 +244,15 @@ try {
   await page.getByRole("button", { name: "Leave this tab", exact: true }).click();
   await page.getByLabel("Cosmos display", { exact: true }).waitFor({ state: "detached" });
   const result = await until(() => { const status = readJson(statusPath); return status?.complete ? status : null; }, 10000);
+  assert.equal(result.nativeApprovalRevision, 1);
+  assert.equal(result.nativeRevocationRevision, 2);
+  assert.equal(result.noNativeRoomInputAuthority, true);
+  result.nativeCenterRoomStatus = nativeDenials.room.status;
+  result.nativeCenterInputStatus = nativeDenials.input.status;
   assert.deepEqual(errors, [], "No browser runtime exceptions");
   const exit = await new Promise(resolve => child.exitCode !== null ? resolve(child.exitCode) : child.once("exit", resolve));
   assert.equal(exit, 0);
-  process.stdout.write(`PASS: actual Center owner controls, Cosmos routing, SFU, DOM acknowledgment and durable clear; one ${providerMode ? "live OpenRouter" : "synthetic"} model call.\nArtifacts: ${directory}\n`);
+  process.stdout.write(`PASS: actual Center owner controls, native approval/revocation without room/input authority, Cosmos routing, SFU, DOM acknowledgment and durable clear; one ${providerMode ? "live OpenRouter" : "synthetic"} model call.\nArtifacts: ${directory}\n`);
   fs.writeFileSync(path.join(directory, "result.json"), JSON.stringify(result) + "\n", { mode: 0o600 });
 } catch (error) {
   if (page && !page.isClosed()) {

@@ -419,6 +419,7 @@ test("production Compose is an image-only portable appliance with opt-in service
   assert.equal(core.services["ai-bus"].depends_on.livekit.condition, "service_healthy");
   assert.equal(core.services["ai-bus"].environment.COSMOS_RTC_URL, "ws://livekit:7880");
   assert.equal(core.services["ai-bus"].environment.COSMOS_RTC_PUBLIC_URL, environment.COSMOS_RTC_PUBLIC_URL);
+  assert.equal(core.services["ai-bus"].environment.REVIVAL_PUBLIC_ORIGIN, environment.REVIVAL_PUBLIC_ORIGIN);
   assert.equal(core.services.center.environment.COSMOS_RTC_API_SECRET, undefined);
   assert.deepEqual(
     core.services.traefik.ports.map((port) => Number(port.published)).sort((left, right) => left - right),

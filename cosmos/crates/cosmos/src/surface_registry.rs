@@ -1,4 +1,4 @@
-//! Owner-approved browser surfaces. No dispatch authority is granted here.
+//! Owner-approved surfaces. No dispatch authority is granted here.
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -23,6 +23,15 @@ pub enum Mutation {
         device_id: String,
     },
     RevokePin,
+    ApproveNative {
+        enrollment_id: Uuid,
+        public_key: String,
+        platform: String,
+        expected_revision: u64,
+    },
+    RevokeNative {
+        expected_revision: u64,
+    },
     Approve {
         token_hash: String,
         incarnation: Uuid,
@@ -49,12 +58,18 @@ pub enum Binding {
     Pin {
         device_id: String,
     },
+    Native {
+        enrollment_id: Uuid,
+        public_key: String,
+        platform: String,
+    },
 }
 impl std::fmt::Debug for Binding {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Self::Browser => "Browser",
             Self::Pin { .. } => "Pin([REDACTED])",
+            Self::Native { .. } => "Native([REDACTED])",
         })
     }
 }
@@ -106,10 +121,10 @@ impl Record {
         Surface {
             binding: self.binding.clone(),
             surface_id: self.surface_id,
-            name: if matches!(self.binding, Binding::Pin { .. }) {
-                "Ai Pin"
-            } else {
-                "Browser display"
+            name: match self.binding {
+                Binding::Pin { .. } => "Ai Pin",
+                Binding::Browser => "Browser display",
+                Binding::Native { .. } => "Native device",
             },
             revision: self.revision,
             manifest: self.approved_manifest.clone(),
@@ -147,6 +162,92 @@ pub fn pin_surface_id(principal: &str, device_id: &str) -> Uuid {
     let mut bytes = [0u8; 16];
     bytes.copy_from_slice(&digest[..16]);
     Uuid::from_bytes(bytes)
+}
+
+pub const NATIVE_APPROVAL: &str = "native-shared-text-v1";
+pub const MAX_NATIVE_REVISION: u64 = MAX_SEQUENCE;
+
+pub fn native_manifest() -> serde_json::Value {
+    serde_json::json!({
+        "class": "native",
+        "capabilities": {"input": ["text.public"], "output": {}},
+        "constraints": ["actor_unknown", "occupancy_unknown", "render_unverified", "playback_unverified"],
+        "expression": {},
+        "cognition": {"declaredClass": 0, "models": []},
+        "authority": {"mayOriginate": ["user.request"], "reflexive": []}
+    })
+}
+
+pub fn native_platform(platform: &str) -> bool {
+    matches!(platform, "macos" | "linux" | "android" | "android_tv")
+}
+
+/// The descriptor locator selects a surface; it is never authentication.
+pub fn native_surface_id(principal: &str, enrollment_id: Uuid) -> Uuid {
+    let digest = Sha256::digest(
+        format!("cosmos-native-surface-v1\0{principal}\0{enrollment_id}").as_bytes(),
+    );
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    Uuid::from_bytes(bytes)
+}
+
+#[derive(Clone)]
+pub struct NativeLocation {
+    pub principal: String,
+    pub surface_id: Uuid,
+}
+
+/// Owner-only enrollment metadata grants no connection or actor authority.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeSurface {
+    pub surface_id: Uuid,
+    pub enrollment_id: Uuid,
+    pub platform: String,
+    pub name: &'static str,
+    pub approval: &'static str,
+    pub revision: u64,
+    pub public_key_fingerprint: String,
+    pub manifest: serde_json::Value,
+    pub trust_level: u8,
+    pub occupancy: &'static str,
+    pub actor_identity: &'static str,
+    pub render_verified: bool,
+    pub playback_verified: bool,
+    pub revoked: bool,
+}
+
+impl Surface {
+    pub fn native_view(&self) -> Result<NativeSurface, RegistryError> {
+        let Binding::Native {
+            enrollment_id,
+            public_key,
+            platform,
+        } = &self.binding
+        else {
+            return Err(RegistryError::NotFound);
+        };
+        let public_key_fingerprint =
+            crate::ambiance::native_connection::public_key_fingerprint(public_key)
+                .map_err(|_| RegistryError::Unavailable)?;
+        Ok(NativeSurface {
+            surface_id: self.surface_id,
+            enrollment_id: *enrollment_id,
+            platform: platform.clone(),
+            name: "Native device",
+            approval: NATIVE_APPROVAL,
+            revision: self.revision,
+            public_key_fingerprint,
+            manifest: self.manifest.clone(),
+            trust_level: 0,
+            occupancy: "unknown",
+            actor_identity: "unknown",
+            render_verified: false,
+            playback_verified: false,
+            revoked: self.revoked,
+        })
+    }
 }
 
 /// Available only through verified owner management; never model context.
@@ -227,10 +328,44 @@ pub struct Registry {
 #[derive(Default)]
 pub struct RegistryBook {
     records: std::collections::HashMap<String, Registry>,
+    native_locations: std::collections::HashMap<Uuid, NativeLocation>,
     pub due: std::collections::BTreeSet<(i64, String)>,
 }
 impl RegistryBook {
+    pub(crate) fn native_location(&self, enrollment_id: Uuid) -> Option<NativeLocation> {
+        self.native_locations.get(&enrollment_id).cloned()
+    }
+
+    pub(crate) fn validate_native_location(
+        &self,
+        principal: &str,
+        enrollment_id: Uuid,
+        surface_id: Uuid,
+    ) -> Result<(), RegistryError> {
+        if self
+            .native_locations
+            .get(&enrollment_id)
+            .is_some_and(|location| {
+                location.principal != principal || location.surface_id != surface_id
+            })
+        {
+            return Err(RegistryError::SequenceConflict);
+        }
+        Ok(())
+    }
+
     pub fn publish(&mut self, principal: String, registry: Registry) {
+        for record in registry.records.values() {
+            if let Binding::Native { enrollment_id, .. } = record.binding {
+                self.native_locations.insert(
+                    enrollment_id,
+                    NativeLocation {
+                        principal: principal.clone(),
+                        surface_id: record.surface_id,
+                    },
+                );
+            }
+        }
         if let Some(previous) = self.records.get(&principal) {
             self.due
                 .remove(&(previous.maintenance_ms, principal.clone()));
@@ -293,6 +428,75 @@ pub fn transition(
     mutation: &Mutation,
     now: i64,
 ) -> Result<(Record, Option<&'static str>), RegistryError> {
+    if let Mutation::ApproveNative {
+        enrollment_id,
+        public_key,
+        platform,
+        expected_revision,
+    } = mutation
+    {
+        if enrollment_id.is_nil()
+            || *expected_revision >= MAX_NATIVE_REVISION
+            || !native_platform(platform)
+            || crate::ambiance::native_connection::validate_public_key(public_key).is_err()
+        {
+            return Err(RegistryError::InvalidConnection);
+        }
+        if let Some(record) = current {
+            let Binding::Native {
+                enrollment_id: existing_id,
+                public_key: existing_key,
+                platform: existing_platform,
+            } = &record.binding
+            else {
+                return Err(RegistryError::NotFound);
+            };
+            if existing_id != enrollment_id
+                || existing_key != public_key
+                || existing_platform != platform
+            {
+                return Err(RegistryError::InvalidConnection);
+            }
+            if !record.revoked {
+                return if *expected_revision == record.revision
+                    || record.revision.checked_sub(1) == Some(*expected_revision)
+                {
+                    Ok((record.clone(), None))
+                } else {
+                    Err(RegistryError::SequenceConflict)
+                };
+            }
+        }
+        if *expected_revision != current.map_or(0, |record| record.revision) {
+            return Err(RegistryError::SequenceConflict);
+        }
+        if active_count >= 16 {
+            return Err(RegistryError::SurfaceLimit);
+        }
+        return Ok((
+            Record {
+                binding: Binding::Native {
+                    enrollment_id: *enrollment_id,
+                    public_key: public_key.clone(),
+                    platform: platform.clone(),
+                },
+                approved_manifest: native_manifest(),
+                surface_id,
+                revision: expected_revision
+                    .checked_add(1)
+                    .ok_or(RegistryError::Unavailable)?,
+                revoked: false,
+                visible: false,
+                sequence: 0,
+                incarnation: Uuid::nil(),
+                token_hash: String::new(),
+                connection_expires_at: 0,
+                lease_expires_at: 0,
+                left: true,
+            },
+            Some("surface.approved"),
+        ));
+    }
     if let Mutation::ApprovePin { device_id } = mutation {
         if current.is_some_and(|r| !matches!(r.binding, Binding::Pin { .. })) {
             return Err(RegistryError::NotFound);
@@ -355,10 +559,32 @@ pub fn transition(
         ));
     }
     let mut record = current.cloned().ok_or(RegistryError::NotFound)?;
-    if matches!(mutation, Mutation::Revoke | Mutation::RevokePin) {
-        if matches!(mutation, Mutation::RevokePin) != matches!(record.binding, Binding::Pin { .. })
-        {
+    if matches!(
+        mutation,
+        Mutation::Revoke | Mutation::RevokePin | Mutation::RevokeNative { .. }
+    ) {
+        if !matches!(
+            (mutation, &record.binding),
+            (Mutation::Revoke, Binding::Browser)
+                | (Mutation::RevokePin, Binding::Pin { .. })
+                | (Mutation::RevokeNative { .. }, Binding::Native { .. })
+        ) {
             return Err(RegistryError::NotFound);
+        }
+        if let Mutation::RevokeNative { expected_revision } = mutation {
+            if *expected_revision >= MAX_NATIVE_REVISION {
+                return Err(RegistryError::InvalidConnection);
+            }
+            if record.revoked {
+                return if record.revision.checked_sub(1) == Some(*expected_revision) {
+                    Ok((record, None))
+                } else {
+                    Err(RegistryError::SequenceConflict)
+                };
+            }
+            if *expected_revision != record.revision {
+                return Err(RegistryError::SequenceConflict);
+            }
         }
         if record.revoked {
             return Ok((record, None));
@@ -446,10 +672,9 @@ pub fn event(
     now: i64,
 ) -> Event {
     Event {
-        version: if matches!(record.binding, Binding::Pin { .. }) {
-            2
-        } else {
-            1
+        version: match record.binding {
+            Binding::Browser => 1,
+            Binding::Pin { .. } | Binding::Native { .. } => 2,
         },
         principal: principal.to_owned(),
         sequence,
@@ -465,6 +690,14 @@ pub fn event(
             Binding::Pin { device_id } => Some(hash(
                 format!("pin-device-v1\0{principal}\0{device_id}").as_bytes(),
             )),
+            Binding::Native {
+                enrollment_id,
+                public_key,
+                platform,
+            } => Some(hash(
+                format!("native-device-v1\0{principal}\0{enrollment_id}\0{public_key}\0{platform}")
+                    .as_bytes(),
+            )),
         },
     }
 }
@@ -478,6 +711,297 @@ pub fn now_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const NATIVE_KEY: &str =
+        "BGsX0fLhLEJH-Lzm5WOkQPJ3A32BLeszoPShOUXYmMKWT-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU";
+    const OTHER_NATIVE_KEY: &str =
+        "BGsX0fLhLEJH-Lzm5WOkQPJ3A32BLeszoPShOUXYmMKWsBy9HAHlgGVxGBS1g_Bh6dQxzKmUzqExNEm_l8hArgo";
+
+    fn native_approval(enrollment_id: Uuid, expected_revision: u64) -> Mutation {
+        Mutation::ApproveNative {
+            enrollment_id,
+            public_key: NATIVE_KEY.into(),
+            platform: "macos".into(),
+            expected_revision,
+        }
+    }
+
+    #[test]
+    fn native_registry_approval_retries_and_revocation_fence_delayed_requests() {
+        let enrollment = Uuid::new_v4();
+        let id = native_surface_id("U:owner", enrollment);
+        assert_ne!(id, native_surface_id("U:other", enrollment));
+        let (approved, kind) =
+            transition(None, 0, id, &native_approval(enrollment, 0), 100).unwrap();
+        assert_eq!(kind, Some("surface.approved"));
+        assert_eq!(approved.revision, 1);
+        assert_eq!(approved.approved_manifest, native_manifest());
+        for revision in [0, 1] {
+            let (retry, kind) = transition(
+                Some(&approved),
+                16,
+                id,
+                &native_approval(enrollment, revision),
+                200,
+            )
+            .unwrap();
+            assert!(kind.is_none());
+            assert_eq!(
+                serde_json::to_value(retry).unwrap(),
+                serde_json::to_value(&approved).unwrap()
+            );
+        }
+        assert!(matches!(
+            transition(
+                Some(&approved),
+                1,
+                id,
+                &Mutation::RevokeNative {
+                    expected_revision: 0
+                },
+                300
+            ),
+            Err(RegistryError::SequenceConflict)
+        ));
+        let revoke = Mutation::RevokeNative {
+            expected_revision: 1,
+        };
+        let (revoked, kind) = transition(Some(&approved), 1, id, &revoke, 300).unwrap();
+        assert_eq!(kind, Some("surface.revoked"));
+        assert_eq!(revoked.revision, 2);
+        assert!(revoked.revoked);
+        assert!(
+            transition(Some(&revoked), 0, id, &revoke, 400)
+                .unwrap()
+                .1
+                .is_none()
+        );
+        for revision in [0, 1] {
+            assert!(matches!(
+                transition(
+                    Some(&revoked),
+                    0,
+                    id,
+                    &native_approval(enrollment, revision),
+                    400
+                ),
+                Err(RegistryError::SequenceConflict)
+            ));
+        }
+        let (reapproved, _) =
+            transition(Some(&revoked), 0, id, &native_approval(enrollment, 2), 500).unwrap();
+        assert_eq!(reapproved.revision, 3);
+        assert!(!reapproved.revoked);
+        assert!(matches!(
+            transition(Some(&reapproved), 1, id, &revoke, 600),
+            Err(RegistryError::SequenceConflict)
+        ));
+        assert!(matches!(
+            transition(
+                Some(&reapproved),
+                1,
+                id,
+                &native_approval(enrollment, 0),
+                600
+            ),
+            Err(RegistryError::SequenceConflict)
+        ));
+        let projection = serde_json::to_value(reapproved.view(600).native_view().unwrap()).unwrap();
+        assert_eq!(projection["trustLevel"], 0);
+        assert_eq!(projection["occupancy"], "unknown");
+        assert_eq!(projection["actorIdentity"], "unknown");
+        assert_eq!(projection["renderVerified"], false);
+        assert_eq!(projection["playbackVerified"], false);
+        assert_eq!(
+            projection["manifest"]["capabilities"]["output"],
+            serde_json::json!({})
+        );
+        assert!(projection.get("publicKey").is_none());
+        assert!(!reapproved.view(600).available);
+    }
+
+    #[test]
+    fn native_registry_immutable_descriptor_profile_boundaries_and_cap() {
+        let enrollment = Uuid::new_v4();
+        let id = native_surface_id("U:owner", enrollment);
+        let approve = native_approval(enrollment, 0);
+        let (native, _) = transition(None, 0, id, &approve, 100).unwrap();
+        let (revoked, _) = transition(
+            Some(&native),
+            1,
+            id,
+            &Mutation::RevokeNative {
+                expected_revision: 1,
+            },
+            200,
+        )
+        .unwrap();
+        for current in [&native, &revoked] {
+            for (enrollment_id, public_key, platform) in [
+                (Uuid::new_v4(), NATIVE_KEY, "macos"),
+                (enrollment, OTHER_NATIVE_KEY, "macos"),
+                (enrollment, NATIVE_KEY, "linux"),
+            ] {
+                assert!(matches!(
+                    transition(
+                        Some(current),
+                        0,
+                        id,
+                        &Mutation::ApproveNative {
+                            enrollment_id,
+                            public_key: public_key.into(),
+                            platform: platform.into(),
+                            expected_revision: current.revision,
+                        },
+                        300
+                    ),
+                    Err(RegistryError::InvalidConnection)
+                ));
+            }
+            for mutation in [Mutation::Revoke, Mutation::RevokePin, approval()] {
+                assert!(matches!(
+                    transition(Some(current), 1, id, &mutation, 300),
+                    Err(RegistryError::NotFound)
+                ));
+            }
+            assert!(matches!(
+                transition(Some(current), 1, id, &state(1, true), 300),
+                Err(RegistryError::InvalidConnection)
+            ));
+        }
+        for platform in ["macos", "linux", "android", "android_tv"] {
+            assert!(
+                transition(
+                    None,
+                    0,
+                    id,
+                    &Mutation::ApproveNative {
+                        enrollment_id: enrollment,
+                        public_key: NATIVE_KEY.into(),
+                        platform: platform.into(),
+                        expected_revision: 0,
+                    },
+                    100
+                )
+                .is_ok()
+            );
+        }
+        assert!(matches!(
+            transition(None, 16, id, &approve, 100),
+            Err(RegistryError::SurfaceLimit)
+        ));
+        assert!(matches!(
+            transition(Some(&revoked), 16, id, &native_approval(enrollment, 2), 300),
+            Err(RegistryError::SurfaceLimit)
+        ));
+        assert!(matches!(
+            transition(None, 0, id, &native_approval(Uuid::nil(), 0), 100),
+            Err(RegistryError::InvalidConnection)
+        ));
+        assert!(matches!(
+            transition(
+                Some(&native),
+                1,
+                id,
+                &native_approval(enrollment, MAX_NATIVE_REVISION),
+                300
+            ),
+            Err(RegistryError::InvalidConnection)
+        ));
+        assert!(matches!(
+            transition(
+                Some(&native),
+                1,
+                id,
+                &Mutation::RevokeNative {
+                    expected_revision: MAX_NATIVE_REVISION
+                },
+                300
+            ),
+            Err(RegistryError::InvalidConnection)
+        ));
+        let (browser, _) = transition(None, 0, id, &approval(), 100).unwrap();
+        assert!(matches!(
+            transition(Some(&browser), 1, id, &approve, 200),
+            Err(RegistryError::NotFound)
+        ));
+        assert!(matches!(
+            transition(
+                Some(&browser),
+                1,
+                id,
+                &Mutation::RevokeNative {
+                    expected_revision: 1
+                },
+                200
+            ),
+            Err(RegistryError::NotFound)
+        ));
+        let entry = event(
+            "U:owner",
+            1,
+            String::new(),
+            "surface.approved",
+            &native,
+            100,
+        );
+        assert_eq!(entry.version, 2);
+        assert!(!serde_json::to_string(&entry).unwrap().contains(NATIVE_KEY));
+        assert_ne!(
+            entry.binding_digest,
+            event(
+                "U:other",
+                1,
+                String::new(),
+                "surface.approved",
+                &native,
+                100
+            )
+            .binding_digest
+        );
+    }
+
+    #[test]
+    fn native_registry_locator_claim_survives_revocation() {
+        let enrollment = Uuid::new_v4();
+        let id = native_surface_id("U:owner", enrollment);
+        let (native, _) = transition(None, 0, id, &native_approval(enrollment, 0), 100).unwrap();
+        let (revoked, _) = transition(
+            Some(&native),
+            1,
+            id,
+            &Mutation::RevokeNative {
+                expected_revision: 1,
+            },
+            200,
+        )
+        .unwrap();
+        let mut book = RegistryBook::default();
+        book.validate_native_location("U:owner", enrollment, id)
+            .unwrap();
+        book.publish(
+            "U:owner".into(),
+            Registry {
+                records: [(id, revoked)].into(),
+                ..Registry::default()
+            },
+        );
+        let located = book.native_location(enrollment).unwrap();
+        assert_eq!(located.principal, "U:owner");
+        assert_eq!(located.surface_id, id);
+        assert!(
+            book.validate_native_location("U:owner", enrollment, id)
+                .is_ok()
+        );
+        assert!(matches!(
+            book.validate_native_location("U:other", enrollment, id),
+            Err(RegistryError::SequenceConflict)
+        ));
+        assert!(matches!(
+            book.validate_native_location("U:owner", enrollment, Uuid::new_v4()),
+            Err(RegistryError::SequenceConflict)
+        ));
+    }
 
     #[test]
     fn pin_admission_manifest_binding_and_v1_chain_are_fixed() {

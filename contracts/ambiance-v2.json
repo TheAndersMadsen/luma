@@ -41,6 +41,54 @@
   ],
   "evidence": [
     {
+      "id": "native-installation-manifest-definition",
+      "kind": "implementation",
+      "path": "cosmos/crates/cosmos/src/surface_registry.rs",
+      "anchor": "pub fn native_manifest()",
+      "scope": "Defines one owner-approved installation-key binding and fixed class-zero public-text ceiling for macOS, Linux, Android and Android TV hints; registry-owned approval revision is independent of connection liveness.",
+      "limitation": "Enrollment only. Platform is a display hint, actor and occupancy remain unknown, and there is no native input, render, capture, media, private-memory or autonomy authority. Native clients remain unfinished."
+    },
+    {
+      "id": "native-installation-owner-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/surface_api.rs",
+      "anchor": "async fn native_registry_http_owner_isolation_retries_and_revoked_lookup()",
+      "scope": "Defines verified owner approval, fixed descriptor/revision checks, owner isolation, exact active retries and owner-scoped lookup of revoked installations for reapproval.",
+      "limitation": "MemoryStore HTTP fixture only. Owner approval does not attest hardware or open a room, and it cannot establish actor identity or physical privacy."
+    },
+    {
+      "id": "native-installation-signing-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/native_connection_tests.rs",
+      "anchor": "fn native_enrollment_independent_node_vectors_match_bytes_and_verify_signatures()",
+      "scope": "Defines Rust production-transcript equivalence and real signature verification against independently generated Node vectors for first connection and incarnation replacement. The shared contract fixes field order, length prefixes, hashes and one ECDSA/SHA-256 pass.",
+      "limitation": "Public fixture keys and signing bytes only. This is not protected client-key storage, a native installation, request admission, room delivery or physical-device acceptance."
+    },
+    {
+      "id": "native-installation-http-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/native_runtime_api_tests.rs",
+      "anchor": "async fn native_runtime_http_configured_audience_ignores_headers_and_signed_retry_is_stable()",
+      "scope": "Defines configured HTTPS audience binding through the HTTP-to-Store path and an exact signed retry returning the existing connection. Companion tests reject owner-bearer substitution, invalid proof, revoked/unknown enrollment, malformed bodies and unsupported runtime routes.",
+      "limitation": "Isolated MemoryStore HTTP tests. Only challenge/open is exposed; there is no generic native room, input, liveness renewal, media or output implementation in this increment."
+    },
+    {
+      "id": "native-installation-postgres-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/store_postgres.rs",
+      "anchor": "async fn native_open_postgres_competing_signatures_commit_once_and_replay_after_reopen()",
+      "scope": "Defines competing valid proofs with one committed open and exact retry after Store reopen. Companion tests cover failed-append rollback, reapproval fencing, globally unique enrollment ownership including revoked records, and reuse of all test pool connections while an external row lock remains held.",
+      "limitation": "Requires isolated PostgreSQL; an ordinary no-database test pass does not execute this gate. Store reopen is not database-server restart, and this does not establish production or physical-device behavior."
+    },
+    {
+      "id": "center-native-approval-test-definition",
+      "kind": "test-definition",
+      "path": "center/src/app/settings/account/surfaces/NativeSurfaces.test.tsx",
+      "anchor": "requires review and a separate owner confirmation of the key and limited public-text permission",
+      "scope": "Defines descriptor/fingerprint review, explicit owner approval, exact reapproval/revocation revisions, lifecycle fencing, ambiguous-write lockout and roster identity/size validation.",
+      "limitation": "Rendered DOM with mocked HTTP responses. The UI records approval only; native clients, room connections, actual native text requests and physical devices remain unfinished."
+    },
+    {
       "id": "local-voice-capture-test-definition",
       "kind": "test-definition",
       "path": "cosmos/crates/cosmos/src/ambiance/voice_capture_tests.rs",
@@ -117,7 +165,7 @@
       "kind": "test-definition",
       "path": "cosmos/crates/cosmos/src/browser_center_acceptance.rs",
       "anchor": "async fn browser_center_application_acceptance()",
-      "scope": "The Center image driver exercises separate local voice and cloud speech owner controls, native Cosmos, isolated PostgreSQL, same-origin HTTPS/WSS, the SFU, Chrome rendering, durable DOM acknowledgment and payload clearing on leave.",
+      "scope": "The Center image driver exercises native installation approval/revocation without input or room authority, separate local voice and cloud speech owner controls, native Cosmos, isolated PostgreSQL, same-origin HTTPS/WSS, the SFU, Chrome rendering, durable DOM acknowledgment and payload clearing on leave.",
       "limitation": "Authentication is synthetic. The explicit local driver uses synthetic cognition by default; --openrouter-stdin selects one real provider request and labels the result. Ordinary tests ignore this gate. Does not establish production networking, physical Pin playback or full paper conformance."
     },
     {
@@ -556,7 +604,7 @@
       "requirement": "A newly present, unenrolled device gains neither private content nor hint admission from favorable self-declarations.",
       "acceptance": "Exercise admission, re-enrollment, manifest updates and revocation; default to shared-perceivable, class zero, no hints and no lead eligibility.",
       "status": "partial",
-      "evidence": ["pin-runtime-admission-definition", "stock-transport-provenance-test-definition"]
+      "evidence": ["pin-runtime-admission-definition", "stock-transport-provenance-test-definition", "native-installation-owner-test-definition", "native-installation-http-test-definition"]
     },
     {
       "id": "surface-manifest",
@@ -565,7 +613,7 @@
       "requirement": "Declare capabilities, constraints, per-channel posture, expression, cognition and bounded authority; enrollment attests asserted posture and registry-owned trust is separate.",
       "acceptance": "Validate dynamic state and capabilities without product-name privileges; expression eligibility respects the user's perceptual profile and has one expression lead.",
       "status": "partial",
-      "evidence": ["browser-manifest-definition", "browser-enrollment-auth-test-definition", "pin-manifest-definition"]
+      "evidence": ["browser-manifest-definition", "browser-enrollment-auth-test-definition", "pin-manifest-definition", "native-installation-manifest-definition", "center-native-approval-test-definition"]
     },
     {
       "id": "origin-provenance",
@@ -574,7 +622,7 @@
       "requirement": "Bind each request to authenticated principal, origin, modality, state, environment, device/channel/actor trust, server receipt time, epoch and sequence.",
       "acceptance": "Preserve Pin device identity before account normalization; do not trust device clocks or body-supplied identity, and test replay/freshness plus scoped self-echo rejection.",
       "status": "partial",
-      "evidence": ["authenticated-device-provenance-definition", "stock-transport-provenance-test-definition", "pin-runtime-admission-definition", "rtc-attribution-test-definition", "sequenced-input-test-definition", "sequenced-input-postgres-test-definition", "sequenced-control-postgres-test-definition", "runtime-echo-test-definition", "runtime-echo-postgres-test-definition", "native-pcm-adapter-test-definition", "native-pcm-isolation-test-definition", "native-pin-epoch-test-definition", "native-pin-epoch-postgres-test-definition", "native-pin-media-admission-test-definition", "native-pin-media-store-failure-test-definition"]
+      "evidence": ["authenticated-device-provenance-definition", "stock-transport-provenance-test-definition", "pin-runtime-admission-definition", "rtc-attribution-test-definition", "sequenced-input-test-definition", "sequenced-input-postgres-test-definition", "sequenced-control-postgres-test-definition", "runtime-echo-test-definition", "runtime-echo-postgres-test-definition", "native-pcm-adapter-test-definition", "native-pcm-isolation-test-definition", "native-pin-epoch-test-definition", "native-pin-epoch-postgres-test-definition", "native-pin-media-admission-test-definition", "native-pin-media-store-failure-test-definition", "native-installation-signing-test-definition", "native-installation-postgres-test-definition"]
     },
     {
       "id": "cognition-authority",

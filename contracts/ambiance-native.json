@@ -1,0 +1,202 @@
+{
+  "schemaVersion": 1,
+  "state": "enrollment-only",
+  "scope": "Owner-approved installation key and bounded connection metadata. Native room bootstrap, input transport, device clients, capture and playback remain unfinished.",
+  "profile": "native-shared-text-v1",
+  "descriptor": {
+    "maximumBytes": 1024,
+    "fields": {
+      "enrollmentId": "non-nil UUID",
+      "publicKey": "canonical unpadded base64url of a valid 65-byte uncompressed SEC1 P-256 point",
+      "platform": "macos|linux|android|android_tv",
+      "approval": "native-shared-text-v1"
+    },
+    "additionalProperties": false
+  },
+  "owner": {
+    "bodyBytes": 1024,
+    "errors": {
+      "400": "invalid_request",
+      "401": "unauthorized",
+      "403": "invalid_connection",
+      "404": "not_found",
+      "409": "sequence_conflict",
+      "429": "surface_limit",
+      "503": "unavailable"
+    },
+    "errorScope": "Cosmos owner routes below. The Center BFF preserves status but sanitizes codes; its same-origin check can also return 403.",
+    "authentication": "Verified owner bearer; Center uses authenticated same-origin BFF. Native possession never substitutes for owner approval.",
+    "routes": {
+      "GET /surface-api/v1/native": "{native: active NativeSurface[], maximum 16}",
+      "POST /surface-api/v1/native": "descriptor plus required expectedRevision; response {native: NativeSurface}",
+      "GET /surface-api/v1/native/enrollments/:enrollmentId": "Owner-scoped lookup including revoked records; response {native: NativeSurface}",
+      "DELETE /surface-api/v1/native/:surfaceId": "{expectedRevision}; response {native: NativeSurface}"
+    },
+    "revision": "Create uses expectedRevision 0. Reapproval/revocation uses the current approval revision. Exact active approval retry preserves revision. Liveness does not change approval revision.",
+    "locator": "Enrollment locators are globally unique and cannot transfer owners, including after revocation. Descriptor/key/platform are immutable; a different key requires a new enrollment locator."
+  },
+  "challenge": {
+    "route": "POST /runtime-api/v1/native/challenge",
+    "request": {
+      "enrollmentId": "non-nil UUID"
+    },
+    "response": {
+      "challenge": {
+        "version": 1,
+        "audience": "canonical HTTPS origin",
+        "enrollmentId": "non-nil UUID",
+        "surfaceId": "non-nil UUID",
+        "approvalRevision": "positive safe integer",
+        "approval": "native-shared-text-v1",
+        "publicKeyFingerprint": "SHA256 lowercase hex of SEC1 public-key bytes",
+        "challengeId": "non-nil UUID",
+        "nonce": "canonical unpadded base64url of 32 random bytes",
+        "expiresAtMs": "positive server Unix milliseconds",
+        "currentIncarnation": "non-nil UUID or null"
+      }
+    },
+    "audience": "Cosmos uses REVIVAL_PUBLIC_ORIGIN, never Host or forwarded headers. Invalid/missing configuration returns 503. The native client must match the received canonical audience against its configured server before signing.",
+    "retry": "At most one pending challenge per approved installation. Anonymous repeats return the same unexpired challenge without replacing it or extending expiry. A new challenge does not erase the previous successful open retry result."
+  },
+  "open": {
+    "route": "POST /runtime-api/v1/native/open",
+    "request": {
+      "enrollmentId": "non-nil UUID matching challenge",
+      "challengeId": "non-nil UUID matching challenge",
+      "epoch": "non-nil boot UUID",
+      "expectedIncarnation": "required non-nil UUID or null, exactly challenge.currentIncarnation",
+      "sessionTokenHash": "SHA256 lowercase hex of fresh locally retained 32-byte session secret",
+      "signature": "canonical unpadded base64url of strict DER ECDSA P-256/SHA256 signature"
+    },
+    "response": {
+      "connection": {
+        "surfaceId": "non-nil UUID",
+        "approvalRevision": "positive safe integer",
+        "incarnation": "non-nil server UUID",
+        "epoch": "exact request epoch",
+        "expiresAtMs": "server Unix milliseconds",
+        "leaseExpiresAtMs": "server Unix milliseconds"
+      },
+      "duplicate": "boolean"
+    },
+    "commit": "Recheck approval and binding, verify exact pending challenge/signature, enforce incarnation CAS, consume challenge and commit connection plus ledger atomically. Invalid proof does not consume a pending challenge.",
+    "retry": "Idempotency hashes signing-message bytes, not ECDSA signature bytes. An exact consumed retry returns only the same still-current approved connection, with unchanged expiry and lease. Replaced, expired, revoked or reapproved connections reject the old retry. Persist the pending attempt before sending; response loss is not proof of failure.",
+    "secrets": "Private key and raw session secret stay on the client. Owner views and open responses contain neither. Fresh connection requires a fresh challenge and fresh session secret."
+  },
+  "signing": {
+    "algorithm": "ECDSA P-256 with SHA-256 over the complete transcript bytes exactly once; strict DER signature, maximum 72 bytes.",
+    "byteOrder": "big-endian; UUIDs are their 16 network-order bytes, never their textual spelling",
+    "fields": [
+      {
+        "literal": "cosmos.native.open.v1\u0000",
+        "encoding": "utf8"
+      },
+      {
+        "source": "challenge.audience",
+        "encoding": "utf8-u16be"
+      },
+      {
+        "source": "challenge.enrollmentId",
+        "encoding": "uuid"
+      },
+      {
+        "source": "challenge.surfaceId",
+        "encoding": "uuid"
+      },
+      {
+        "source": "challenge.approvalRevision",
+        "encoding": "u64be"
+      },
+      {
+        "source": "challenge.approval",
+        "encoding": "utf8-u16be"
+      },
+      {
+        "source": "challenge.publicKeyFingerprint",
+        "encoding": "sha256-hex"
+      },
+      {
+        "source": "challenge.challengeId",
+        "encoding": "uuid"
+      },
+      {
+        "source": "challenge.nonce",
+        "encoding": "base64url-32"
+      },
+      {
+        "source": "challenge.expiresAtMs",
+        "encoding": "i64be"
+      },
+      {
+        "source": "request.epoch",
+        "encoding": "uuid"
+      },
+      {
+        "source": "request.expectedIncarnation",
+        "encoding": "optional-uuid"
+      },
+      {
+        "source": "request.sessionTokenHash",
+        "encoding": "sha256-hex"
+      }
+    ],
+    "encodings": {
+      "utf8-u16be": "Unsigned 16-bit byte length followed by UTF-8 bytes, no terminator.",
+      "optional-uuid": "One byte 0 for null; otherwise one byte 1 followed by the 16 UUID bytes.",
+      "sha256-hex": "Decode exactly 64 lowercase hex characters to 32 bytes.",
+      "base64url-32": "Decode canonical unpadded base64url to exactly 32 bytes."
+    },
+    "vectors": "contracts/fixtures/ambiance-native-open-v1.json"
+  },
+  "limits": {
+    "appliesTo": ["POST /runtime-api/v1/native/challenge", "POST /runtime-api/v1/native/open"],
+    "bodyBytes": 2048,
+    "concurrentHttpRequests": 16,
+    "bodyMs": 5000,
+    "storeOperationMs": 5000,
+    "challengeMs": 60000,
+    "connectionMs": 3600000,
+    "leaseMs": 45000,
+    "approvalRevisionMaximum": 9007199254740991,
+    "audienceBytes": 255
+  },
+  "http": {
+    "appliesTo": ["POST /runtime-api/v1/native/challenge", "POST /runtime-api/v1/native/open"],
+    "contentType": "application/json",
+    "unknownFields": "rejected",
+    "cacheControl": "no-store",
+    "errors": {
+      "400": "invalid_request",
+      "404": "not_found",
+      "409": "stale_connection",
+      "429": "busy",
+      "503": "unavailable"
+    }
+  },
+  "postgresql": {
+    "scope": "Native enrollment locator reads, owner native approval/revocation, and NativeChallenge/OpenNative/CheckNative runtime operations only.",
+    "statementMs": 4000,
+    "lockMs": 3000,
+    "transactionLocal": true,
+    "semantics": "Set before table queries and reset at transaction end. These bound each server-side statement/lock wait, not the complete transaction. HTTP timeout can still leave a commit outcome uncertain; recover through the exact pending signed attempt."
+  },
+  "authority": {
+    "trustLevel": 0,
+    "actorIdentity": "unknown",
+    "occupancy": "unknown",
+    "renderVerified": false,
+    "playbackVerified": false,
+    "roomBootstrap": false,
+    "inputTransport": false,
+    "media": false,
+    "privateMemory": false,
+    "autonomy": false
+  },
+  "limitations": [
+    "Software key possession is not hardware attestation or speaker identity.",
+    "Platform is an owner-reviewed display hint, not a permission or capability proof.",
+    "The declared text capability is a fixed approval ceiling. Enrollment alone cannot originate a request or render an answer.",
+    "There is no public native room/input/heartbeat endpoint in this increment. Its connection lease expires without renewal.",
+    "This wire contract and its vectors do not establish installed clients, production acceptance or paper conformance."
+  ]
+}

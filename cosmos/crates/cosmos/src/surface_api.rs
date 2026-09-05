@@ -44,6 +44,15 @@ pub(crate) fn with_pairing(
         .route("/surface-api/v1/pins", get(list_pins).post(approve_pin))
         .route("/surface-api/v1/pins/:surface_id", delete(revoke_pin))
         .route(
+            "/surface-api/v1/native",
+            get(list_native).post(approve_native),
+        )
+        .route("/surface-api/v1/native/:surface_id", delete(revoke_native))
+        .route(
+            "/surface-api/v1/native/enrollments/:enrollment_id",
+            get(native_enrollment),
+        )
+        .route(
             "/surface-api/v1/pins/:surface_id/speech-disclosure",
             get(disclosure_policy).post(set_disclosure_policy),
         )
@@ -171,6 +180,120 @@ async fn list(
 struct PinApproval {
     device_id: String,
     approval: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct NativeApproval {
+    enrollment_id: Uuid,
+    public_key: String,
+    platform: String,
+    approval: String,
+    expected_revision: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct NativeRevocation {
+    expected_revision: u64,
+}
+
+async fn list_native(
+    State(api): State<ApiState>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let principal = owner(&headers, &api)?;
+    let native = api
+        .store
+        .surfaces(&principal)
+        .await?
+        .into_iter()
+        .filter(|surface| matches!(surface.binding, surface_registry::Binding::Native { .. }))
+        .map(|surface| surface.native_view())
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(Json(json!({"native": native})))
+}
+
+async fn approve_native(
+    State(api): State<ApiState>,
+    headers: HeaderMap,
+    request: Result<Json<NativeApproval>, JsonRejection>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let principal = owner(&headers, &api)?;
+    let request = body(request)?;
+    if request.approval != surface_registry::NATIVE_APPROVAL
+        || request.expected_revision >= surface_registry::MAX_NATIVE_REVISION
+        || request.enrollment_id.is_nil()
+        || !surface_registry::native_platform(&request.platform)
+    {
+        return Err(invalid());
+    }
+    crate::ambiance::native_connection::validate_public_key(&request.public_key)
+        .map_err(|_| invalid())?;
+    let surface_id = surface_registry::native_surface_id(&principal, request.enrollment_id);
+    let surface = api
+        .store
+        .mutate_surface(
+            &principal,
+            surface_id,
+            Mutation::ApproveNative {
+                enrollment_id: request.enrollment_id,
+                public_key: request.public_key,
+                platform: request.platform,
+                expected_revision: request.expected_revision,
+            },
+        )
+        .await?;
+    Ok(Json(json!({"native": surface.native_view()?})))
+}
+
+async fn native_enrollment(
+    State(api): State<ApiState>,
+    Path(enrollment_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let principal = owner(&headers, &api)?;
+    let enrollment_id = id(&enrollment_id)?;
+    let location = api
+        .store
+        .native_location(enrollment_id)
+        .await?
+        .filter(|location| location.principal == principal)
+        .ok_or(RegistryError::NotFound)?;
+    let surface = api
+        .store
+        .surface(&principal, location.surface_id)
+        .await?
+        .ok_or(RegistryError::NotFound)?;
+    let native = surface.native_view()?;
+    if native.enrollment_id != enrollment_id {
+        return Err(RegistryError::NotFound.into());
+    }
+    Ok(Json(json!({"native": native})))
+}
+
+async fn revoke_native(
+    State(api): State<ApiState>,
+    Path(surface_id): Path<String>,
+    headers: HeaderMap,
+    request: Result<Json<NativeRevocation>, JsonRejection>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let principal = owner(&headers, &api)?;
+    let request = body(request)?;
+    if request.expected_revision >= surface_registry::MAX_NATIVE_REVISION {
+        return Err(invalid());
+    }
+    let surface = api
+        .store
+        .mutate_surface(
+            &principal,
+            id(&surface_id)?,
+            Mutation::RevokeNative {
+                expected_revision: request.expected_revision,
+            },
+        )
+        .await?;
+    Ok(Json(json!({"native": surface.native_view()?})))
 }
 
 #[derive(Deserialize)]
@@ -483,6 +606,338 @@ mod tests {
     use axum::{body::Body, http::Request};
     use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header};
     use tower::ServiceExt;
+
+    fn native_approval(enrollment_id: Uuid) -> serde_json::Value {
+        json!({
+            "enrollmentId": enrollment_id,
+            "publicKey": "BGsX0fLhLEJH-Lzm5WOkQPJ3A32BLeszoPShOUXYmMKWT-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU",
+            "platform": "macos",
+            "approval": surface_registry::NATIVE_APPROVAL,
+            "expectedRevision": 0
+        })
+    }
+
+    #[tokio::test]
+    async fn native_registry_http_owner_isolation_retries_and_revoked_lookup() {
+        let store = Arc::new(crate::store::MemoryStore::default());
+        let app = with_pairing(store, Some(verifier()), None);
+        let owner = bearer("owner");
+        let other = bearer("other");
+        let root = "/surface-api/v1/native";
+        let enrollment = Uuid::new_v4();
+        let approval = native_approval(enrollment);
+        let lookup = format!("{root}/enrollments/{enrollment}");
+        let (status, approved) =
+            call(&app, "POST", root, Some(&owner), None, approval.clone()).await;
+        assert_eq!(status, StatusCode::OK);
+        let expected_id = surface_registry::native_surface_id("U:owner", enrollment);
+        assert_eq!(approved["native"]["surfaceId"], expected_id.to_string());
+        assert_eq!(approved["native"]["revision"], 1);
+        assert_eq!(approved["native"]["actorIdentity"], "unknown");
+        assert_eq!(approved["native"]["trustLevel"], 0);
+        assert_eq!(approved["native"]["renderVerified"], false);
+        assert_eq!(approved["native"]["playbackVerified"], false);
+        assert!(approved["native"].get("publicKey").is_none());
+        assert!(approved.get("connection").is_none());
+        assert_eq!(
+            call(&app, "POST", root, Some(&owner), None, approval.clone()).await,
+            (StatusCode::OK, approved.clone())
+        );
+        assert_eq!(
+            call(&app, "GET", &lookup, Some(&owner), None, json!(null)).await,
+            (StatusCode::OK, approved.clone())
+        );
+        let path = format!("{root}/{expected_id}");
+        for (method, path, body) in [
+            ("GET", lookup.as_str(), json!(null)),
+            ("DELETE", path.as_str(), json!({"expectedRevision":1})),
+        ] {
+            assert_eq!(
+                call(&app, method, path, Some(&other), None, body).await.0,
+                StatusCode::NOT_FOUND
+            );
+        }
+        assert_eq!(
+            call(&app, "GET", root, Some(&other), None, json!(null))
+                .await
+                .1,
+            json!({"native":[]})
+        );
+        assert_eq!(
+            call(&app, "POST", root, Some(&other), None, approval.clone())
+                .await
+                .0,
+            StatusCode::CONFLICT
+        );
+        for profile in ["surfaces", "pins"] {
+            let profile_root = format!("/surface-api/v1/{profile}");
+            assert_eq!(
+                call(&app, "GET", &profile_root, Some(&owner), None, json!(null))
+                    .await
+                    .1[profile],
+                json!([])
+            );
+            assert_eq!(
+                call(
+                    &app,
+                    "DELETE",
+                    &format!("{profile_root}/{expected_id}"),
+                    Some(&owner),
+                    None,
+                    json!(null)
+                )
+                .await
+                .0,
+                StatusCode::NOT_FOUND
+            );
+        }
+        assert_eq!(
+            call(
+                &app,
+                "DELETE",
+                &path,
+                Some(&owner),
+                None,
+                json!({"expectedRevision":0})
+            )
+            .await
+            .0,
+            StatusCode::CONFLICT
+        );
+        let (status, revoked) = call(
+            &app,
+            "DELETE",
+            &path,
+            Some(&owner),
+            None,
+            json!({"expectedRevision":1}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(revoked["native"]["revision"], 2);
+        assert_eq!(revoked["native"]["revoked"], true);
+        assert_eq!(
+            call(
+                &app,
+                "DELETE",
+                &path,
+                Some(&owner),
+                None,
+                json!({"expectedRevision":1})
+            )
+            .await,
+            (StatusCode::OK, revoked.clone())
+        );
+        assert_eq!(
+            call(&app, "GET", root, Some(&owner), None, json!(null))
+                .await
+                .1,
+            json!({"native":[]})
+        );
+        assert_eq!(
+            call(&app, "GET", &lookup, Some(&owner), None, json!(null)).await,
+            (StatusCode::OK, revoked)
+        );
+        assert_eq!(
+            call(&app, "GET", &lookup, Some(&other), None, json!(null))
+                .await
+                .0,
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            call(&app, "POST", root, Some(&owner), None, approval.clone())
+                .await
+                .0,
+            StatusCode::CONFLICT
+        );
+        let mut reapproval = approval.clone();
+        reapproval["expectedRevision"] = 2.into();
+        let (status, reapproved) =
+            call(&app, "POST", root, Some(&owner), None, reapproval.clone()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(reapproved["native"]["revision"], 3);
+        assert_eq!(reapproved["native"]["revoked"], false);
+        assert_eq!(
+            call(&app, "POST", root, Some(&owner), None, reapproval).await,
+            (StatusCode::OK, reapproved.clone())
+        );
+        assert_eq!(
+            call(&app, "POST", root, Some(&owner), None, approval)
+                .await
+                .0,
+            StatusCode::CONFLICT
+        );
+        assert_eq!(
+            call(
+                &app,
+                "DELETE",
+                &path,
+                Some(&owner),
+                None,
+                json!({"expectedRevision":1})
+            )
+            .await
+            .0,
+            StatusCode::CONFLICT
+        );
+        assert_eq!(
+            call(&app, "GET", &lookup, Some(&owner), None, json!(null))
+                .await
+                .1,
+            reapproved
+        );
+    }
+
+    #[tokio::test]
+    async fn native_registry_http_strict_descriptor_and_verified_owner_only() {
+        let app = with_pairing(
+            Arc::new(crate::store::MemoryStore::default()),
+            Some(verifier()),
+            None,
+        );
+        let owner = bearer("owner");
+        let root = "/surface-api/v1/native";
+        let enrollment = Uuid::new_v4();
+        let approval = native_approval(enrollment);
+        let path = format!(
+            "{root}/{}",
+            surface_registry::native_surface_id("U:owner", enrollment)
+        );
+        let lookup = format!("{root}/enrollments/{enrollment}");
+        for authorization in [None, Some("Bearer invalid"), Some("Basic invalid")] {
+            for (method, path, body) in [
+                ("POST", root, approval.clone()),
+                ("GET", root, json!(null)),
+                ("GET", lookup.as_str(), json!(null)),
+                ("DELETE", path.as_str(), json!({"expectedRevision":1})),
+            ] {
+                assert_eq!(
+                    call(&app, method, path, authorization, None, body).await.0,
+                    StatusCode::UNAUTHORIZED
+                );
+            }
+        }
+        let forged = Request::builder()
+            .method("GET")
+            .uri(root)
+            .header(
+                crate::config::EDGE_PRINCIPAL_HEADER,
+                "Subject=CN=V:01:D:aa:U:owner",
+            )
+            .header("x-cosmos-web-projection-token", "not-owner-bearer")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.clone().oneshot(forged).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+        for field in [
+            "enrollmentId",
+            "publicKey",
+            "platform",
+            "approval",
+            "expectedRevision",
+        ] {
+            let mut missing = approval.clone();
+            missing.as_object_mut().unwrap().remove(field);
+            assert_eq!(
+                call(&app, "POST", root, Some(&owner), None, missing)
+                    .await
+                    .0,
+                StatusCode::BAD_REQUEST
+            );
+        }
+        for (field, value) in [
+            ("enrollmentId", json!(Uuid::nil())),
+            ("publicKey", json!("not-a-key")),
+            (
+                "publicKey",
+                json!(format!("{}=", approval["publicKey"].as_str().unwrap())),
+            ),
+            ("platform", json!("ios")),
+            ("approval", json!(surface_registry::BROWSER_APPROVAL)),
+            ("expectedRevision", json!(-1)),
+            (
+                "expectedRevision",
+                json!(surface_registry::MAX_NATIVE_REVISION),
+            ),
+            ("manifest", json!({})),
+            ("principal", json!("U:other")),
+            ("surfaceId", json!(Uuid::new_v4())),
+            ("trustLevel", json!(5)),
+            ("occupancy", json!("private")),
+            ("actorIdentity", json!("owner")),
+        ] {
+            let mut invalid = approval.clone();
+            invalid[field] = value;
+            assert_eq!(
+                call(&app, "POST", root, Some(&owner), None, invalid)
+                    .await
+                    .0,
+                StatusCode::BAD_REQUEST
+            );
+        }
+        assert_eq!(
+            call(&app, "GET", root, Some(&owner), None, json!(null))
+                .await
+                .1,
+            json!({"native":[]})
+        );
+        assert_eq!(
+            call(&app, "POST", root, Some(&owner), None, approval.clone())
+                .await
+                .0,
+            StatusCode::OK
+        );
+        for body in [
+            json!({}),
+            json!({"expectedRevision":1, "principal":"U:other"}),
+            json!({"expectedRevision":-1}),
+        ] {
+            assert_eq!(
+                call(&app, "DELETE", &path, Some(&owner), None, body)
+                    .await
+                    .0,
+                StatusCode::BAD_REQUEST
+            );
+        }
+        let mut changed = approval;
+        changed["platform"] = "linux".into();
+        changed["expectedRevision"] = 1.into();
+        assert_eq!(
+            call(&app, "POST", root, Some(&owner), None, changed)
+                .await
+                .0,
+            StatusCode::FORBIDDEN
+        );
+        let browser = Uuid::new_v4();
+        assert_eq!(
+            call(
+                &app,
+                "POST",
+                "/surface-api/v1/surfaces",
+                Some(&owner),
+                None,
+                json!({"surfaceId": browser, "approval":surface_registry::BROWSER_APPROVAL})
+            )
+            .await
+            .0,
+            StatusCode::OK
+        );
+        assert_eq!(
+            call(
+                &app,
+                "DELETE",
+                &format!("{root}/{browser}"),
+                Some(&owner),
+                None,
+                json!({"expectedRevision":1})
+            )
+            .await
+            .0,
+            StatusCode::NOT_FOUND
+        );
+    }
 
     #[tokio::test]
     async fn pin_admission_owner_can_revoke_while_pairing_is_unavailable() {

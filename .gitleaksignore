@@ -1,0 +1,4 @@
+# Public native signing vectors: SHA-256 digests of synthetic session secrets.
+# These two fixture fields are not credentials; the test key uses public scalar 1.
+contracts/fixtures/ambiance-native-open-v1.json:generic-api-key:26
+contracts/fixtures/ambiance-native-open-v1.json:generic-api-key:52

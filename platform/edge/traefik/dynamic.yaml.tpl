@@ -53,6 +53,14 @@ http:
       priority: 130
       tls:
         certResolver: letsencrypt
+    native-runtime-bootstrap:
+      entryPoints: [websecure]
+      rule: "Host(`@@PUBLIC_DOMAIN@@`) && (Path(`/runtime-api/v1/native/challenge`) || Path(`/runtime-api/v1/native/open`))"
+      service: ai-bus
+      middlewares: [secure-headers]
+      priority: 130
+      tls:
+        certResolver: letsencrypt
     center:
       entryPoints: [websecure]
       rule: "Host(`@@PUBLIC_DOMAIN@@`)"
