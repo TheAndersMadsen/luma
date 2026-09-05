@@ -487,6 +487,24 @@ and reconnect fencing on the local SFU first. OS permission behavior, audio
 focus, echo control, device routing and observed playback remain per-device
 acceptance; no physical device or external provider was used for this audit.
 
+Reusing this Rust adapter on Android requires a separate integration step. The
+Pin launches its Rust runtime as a
+[standalone process without a JVM](pin/runtime/android/src/main/kotlin/com/penumbraos/server/NativeBridge.kt).
+Manual PCM avoids the platform audio device, but the pinned SDK still constructs
+[Android Java codec factories](https://github.com/livekit/rust-sdks/blob/2d9f01ab1e933a86a8a5c53805ee29ee58b9be1b/webrtc-sys/src/peer_connection_factory.cpp#L179).
+Its [mobile example](https://github.com/livekit/rust-sdks/tree/2d9f01ab1e933a86a8a5c53805ee29ee58b9be1b/examples/mobile)
+uses a JVM-loaded native library, JNI initialization, matching `libwebrtc.jar`
+and final-link JNI symbol retention. The Server APK can host that integration
+while preserving all five Pin APK roles; adding LiveKit to the current Rust
+executable alone is insufficient. The
+[pinned WebRTC release](https://github.com/livekit/rust-sdks/releases/tag/webrtc-89d790b)
+provides Android ARM64, ARM and x64 artifacts, but their verified acquisition
+and Pin packaging remain unwired. The container has NDK r28c and native build
+tools. Upstream
+[reports Java 21 bytecode](https://github.com/livekit/rust-sdks/blob/2d9f01ab1e933a86a8a5c53805ee29ee58b9be1b/webrtc-sys/libwebrtc/prefixed-jni/build.gradle#L3);
+compatibility with the current JDK 17/AGP 8.7.3 pipeline remains unverified.
+No Android build or device operation was performed for this source audit.
+
 ### LiveKit production topology — acceptance pending
 
 The canonical single-node design keeps Traefik on ports 80/443 and the existing
