@@ -232,6 +232,11 @@ impl AudioSession {
         self.alive.subscribe()
     }
 
+    /// Observed remote session, not an application admission or actor identity.
+    pub fn peer_session(&self) -> watch::Receiver<Option<String>> {
+        self.peer_session.clone()
+    }
+
     pub async fn publish(&self, epoch: Uuid, generation: u64) -> Result<AudioSender, Error> {
         if epoch.is_nil() || generation == 0 {
             return Err(Error::Invalid);

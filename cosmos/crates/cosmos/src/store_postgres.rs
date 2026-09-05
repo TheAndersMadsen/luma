@@ -2360,6 +2360,329 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ambiance_pin_postgres_epoch_admission_is_atomic_single_owner_and_survives_reopen() {
+        use crate::ambiance::*;
+        use crate::surface_registry::{Mutation, hash, pin_surface_id};
+        let Some(first) = store().await else {
+            eprintln!("SKIPPED: isolated COSMOS_TEST_DATABASE_URL required");
+            return;
+        };
+        let principal = format!("U:pin-epoch-pg-{}", uuid::Uuid::new_v4());
+        let surface_id = pin_surface_id(&principal, "aabb");
+        first
+            .mutate_surface(
+                &principal,
+                surface_id,
+                Mutation::ApprovePin {
+                    device_id: "aabb".into(),
+                },
+            )
+            .await
+            .unwrap();
+        let epoch = uuid::Uuid::new_v4();
+        let open = || RuntimeOperation::OpenPin {
+            device: cosmos_core::AuthenticatedDeviceIdentity::from_edge("aabb").unwrap(),
+            surface_id,
+            approval_revision: 1,
+            epoch,
+            expected_incarnation: None,
+            incarnation: uuid::Uuid::new_v4(),
+        };
+        // A failed ledger append must publish neither the epoch nor its cursor.
+        let sequence: i64 =
+            sqlx::query_scalar("SELECT sequence FROM cosmos_surface_head WHERE principal=$1")
+                .bind(&principal)
+                .fetch_one(&first.pool)
+                .await
+                .unwrap();
+        sqlx::query("INSERT INTO cosmos_surface_event(principal,sequence,hash,event) VALUES($1,$2,'pin-epoch-obstruction','{}'::jsonb)").bind(&principal).bind(sequence + 1).execute(&first.pool).await.unwrap();
+        assert!(matches!(
+            first.runtime(&principal, open()).await,
+            Err(RuntimeError::Unavailable)
+        ));
+        let encoded: Option<String> = sqlx::query_scalar(
+            "SELECT state::text FROM cosmos_ambiance_runtime WHERE principal=$1",
+        )
+        .bind(&principal)
+        .fetch_optional(&first.pool)
+        .await
+        .unwrap();
+        if let Some(encoded) = encoded {
+            let state: RuntimeState = serde_json::from_str(&encoded).unwrap();
+            assert!(state.pin_connections.is_empty() && state.ingress.is_empty());
+        }
+        sqlx::query(
+            "DELETE FROM cosmos_surface_event WHERE principal=$1 AND hash='pin-epoch-obstruction'",
+        )
+        .bind(&principal)
+        .execute(&first.pool)
+        .await
+        .unwrap();
+        let second = store().await.unwrap();
+        let (left, right) = tokio::join!(
+            first.runtime(&principal, open()),
+            second.runtime(&principal, open())
+        );
+        let (
+            RuntimeResult::PinOpened {
+                connection: a,
+                duplicate: ad,
+            },
+            RuntimeResult::PinOpened {
+                connection: b,
+                duplicate: bd,
+            },
+        ) = (left.unwrap(), right.unwrap())
+        else {
+            panic!()
+        };
+        assert_ne!(ad, bd);
+        assert_eq!(a.incarnation, b.incarnation);
+        let proof = PinProof {
+            device: cosmos_core::AuthenticatedDeviceIdentity::from_edge("aabb").unwrap(),
+            surface_id,
+            incarnation: a.incarnation,
+        };
+        let owner = uuid::Uuid::new_v4();
+        let claim = || RuntimeOperation::ClaimPinMedia {
+            connection: proof.clone(),
+            owner,
+        };
+        let sequence: i64 =
+            sqlx::query_scalar("SELECT sequence FROM cosmos_surface_head WHERE principal=$1")
+                .bind(&principal)
+                .fetch_one(&first.pool)
+                .await
+                .unwrap();
+        sqlx::query("INSERT INTO cosmos_surface_event(principal,sequence,hash,event) VALUES($1,$2,'pin-media-obstruction','{}'::jsonb)").bind(&principal).bind(sequence + 1).execute(&first.pool).await.unwrap();
+        assert!(matches!(
+            first.runtime(&principal, claim()).await,
+            Err(RuntimeError::Unavailable)
+        ));
+        let encoded: String = sqlx::query_scalar(
+            "SELECT state::text FROM cosmos_ambiance_runtime WHERE principal=$1",
+        )
+        .bind(&principal)
+        .fetch_one(&first.pool)
+        .await
+        .unwrap();
+        assert!(
+            serde_json::from_str::<RuntimeState>(&encoded)
+                .unwrap()
+                .pin_connections[&surface_id]
+                .media_owner
+                .is_none()
+        );
+        sqlx::query(
+            "DELETE FROM cosmos_surface_event WHERE principal=$1 AND hash='pin-media-obstruction'",
+        )
+        .bind(&principal)
+        .execute(&first.pool)
+        .await
+        .unwrap();
+        let competitor = uuid::Uuid::new_v4();
+        let (left, right) = tokio::join!(
+            first.runtime(&principal, claim()),
+            second.runtime(
+                &principal,
+                RuntimeOperation::ClaimPinMedia {
+                    connection: proof.clone(),
+                    owner: competitor
+                }
+            )
+        );
+        let loser = match (left, right) {
+            (Ok(RuntimeResult::PinMediaGranted(_)), Err(RuntimeError::Busy)) => competitor,
+            (Err(RuntimeError::Busy), Ok(RuntimeResult::PinMediaGranted(_))) => owner,
+            _ => panic!("only one media room may own an incarnation"),
+        };
+        assert!(matches!(
+            first
+                .runtime(
+                    &principal,
+                    RuntimeOperation::RetirePinMedia {
+                        connection: proof.clone(),
+                        owner: loser
+                    }
+                )
+                .await,
+            Err(RuntimeError::Stale)
+        ));
+        assert!(
+            first
+                .runtime(
+                    &principal,
+                    RuntimeOperation::CheckPin {
+                        connection: proof.clone()
+                    }
+                )
+                .await
+                .is_ok()
+        );
+        let stamp = InputStamp {
+            epoch,
+            sequence: 1,
+            instance_id: uuid::Uuid::new_v4(),
+        };
+        let input = || RuntimeOperation::Begin {
+            turn_id: stamp.instance_id,
+            worker: uuid::Uuid::new_v4(),
+            origin: OriginProof::SequencedPin {
+                connection: proof.clone(),
+                stamp: stamp.clone(),
+                echo_fingerprint: echo::fingerprint("hello"),
+            },
+            request_digest: hash(b"hello"),
+            privacy_floor: PrivacyClass::SharedRoom,
+        };
+        let sequence: i64 =
+            sqlx::query_scalar("SELECT sequence FROM cosmos_surface_head WHERE principal=$1")
+                .bind(&principal)
+                .fetch_one(&first.pool)
+                .await
+                .unwrap();
+        sqlx::query("INSERT INTO cosmos_surface_event(principal,sequence,hash,event) VALUES($1,$2,'pin-input-obstruction','{}'::jsonb)").bind(&principal).bind(sequence + 1).execute(&first.pool).await.unwrap();
+        assert!(matches!(
+            first.runtime(&principal, input()).await,
+            Err(RuntimeError::Unavailable)
+        ));
+        let encoded: String = sqlx::query_scalar(
+            "SELECT state::text FROM cosmos_ambiance_runtime WHERE principal=$1",
+        )
+        .bind(&principal)
+        .fetch_one(&first.pool)
+        .await
+        .unwrap();
+        let state: RuntimeState = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(state.ingress[&surface_id].high_water, 0);
+        assert!(state.turn.is_none());
+        sqlx::query(
+            "DELETE FROM cosmos_surface_event WHERE principal=$1 AND hash='pin-input-obstruction'",
+        )
+        .bind(&principal)
+        .execute(&first.pool)
+        .await
+        .unwrap();
+        let RuntimeResult::Begun(fence) = first.runtime(&principal, input()).await.unwrap() else {
+            panic!()
+        };
+        let reopened = store().await.unwrap();
+        let RuntimeResult::Duplicate(retried) =
+            reopened.runtime(&principal, input()).await.unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(retried.worker, fence.worker);
+        reopened
+            .runtime(&principal, RuntimeOperation::ClosePin { connection: proof })
+            .await
+            .unwrap();
+        assert!(matches!(
+            first
+                .runtime(&principal, RuntimeOperation::CheckCognition { fence })
+                .await,
+            Err(RuntimeError::Stale)
+        ));
+        let rows = sqlx::query("SELECT event::text AS event,hash FROM cosmos_surface_event WHERE principal=$1 ORDER BY sequence").bind(&principal).fetch_all(&first.pool).await.unwrap();
+        let mut previous = String::new();
+        for (index, row) in rows.iter().enumerate() {
+            let text: String = row.get("event");
+            assert!(!text.contains("hello") && !text.contains("aabb"));
+            let event: ledger::LedgerEvent = serde_json::from_str(&text).unwrap();
+            assert_eq!(event.sequence(), index as u64 + 1);
+            assert_eq!(event.previous_hash(), previous);
+            assert_eq!(event.hash().unwrap(), row.get::<String, _>("hash"));
+            previous = event.hash().unwrap();
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires isolated PostgreSQL and COSMOS_RTC_AUDIO_TEST_INPUT localhost SFU"]
+    async fn ambiance_pin_media_store_loss_retires_live_room_without_consumer_polling() {
+        use crate::ambiance::{RuntimeResult, pin_media::PinMedia, runtime::AmbianceRuntime};
+        use crate::enrollment::{MemoryEnrollmentStore, SharedEnrollmentStore};
+        use crate::surface_registry::{Mutation, pin_surface_id};
+        use std::{sync::Arc, time::Duration};
+        let store = Arc::new(store().await.expect("isolated database required"));
+        let fixture_path =
+            std::env::var("COSMOS_RTC_AUDIO_TEST_INPUT").expect("isolated SFU required");
+        let input: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(fixture_path).unwrap()).unwrap();
+        let url = input["url"].as_str().unwrap();
+        assert!(url.starts_with("ws://127.0.0.1:"));
+        let config = crate::browser_rooms::Config::new(
+            url.into(),
+            url.into(),
+            input["key"].as_str().unwrap().into(),
+            input["secret"].as_str().unwrap().into(),
+        )
+        .unwrap();
+        let subject = format!("pin-media-db-failure-{}", uuid::Uuid::new_v4());
+        let pairing: SharedEnrollmentStore = Arc::new(MemoryEnrollmentStore::default());
+        pairing.put_device_account("aabb", &subject).await.unwrap();
+        let auth = crate::auth::AuthenticatedRequest {
+            principal: cosmos_core::AuthenticatedPrincipal::for_user(&subject).unwrap(),
+            plane: crate::auth::AuthenticationPlane::Device,
+            device: Some(cosmos_core::AuthenticatedDeviceIdentity::from_edge("aabb").unwrap()),
+        };
+        store
+            .mutate_surface(
+                auth.principal.expose_for_authorization(),
+                pin_surface_id(auth.principal.expose_for_authorization(), "aabb"),
+                Mutation::ApprovePin {
+                    device_id: "aabb".into(),
+                },
+            )
+            .await
+            .unwrap();
+        let runtime = Arc::new(AmbianceRuntime::new(
+            store.clone(),
+            Arc::new(crate::ambiance::realtime::ConfiguredRealtimeModel::new()),
+            Some(pairing),
+        ));
+        let RuntimeResult::PinOpened {
+            connection,
+            duplicate: false,
+        } = runtime
+            .open_pin(&auth, 1, uuid::Uuid::new_v4(), None)
+            .await
+            .unwrap()
+        else {
+            panic!()
+        };
+        let (media, bootstrap) =
+            PinMedia::with_config(runtime.clone(), auth, connection.incarnation, config)
+                .await
+                .unwrap();
+        let surface = cosmos_rtc::audio::AudioSession::connect(
+            &bootstrap.url,
+            &bootstrap.token,
+            cosmos_rtc::audio::Role::Surface,
+        )
+        .await
+        .unwrap();
+        let mut connected = media.connected();
+        assert!(*connected.borrow());
+        let pool = store.pool.clone();
+        let closing = tokio::spawn(async move {
+            pool.close().await;
+        });
+        tokio::time::timeout(Duration::from_secs(4), async {
+            while *connected.borrow_and_update() {
+                connected.changed().await.unwrap();
+            }
+        })
+        .await
+        .expect("pool loss must close the active transport");
+        tokio::time::timeout(Duration::from_secs(4), closing)
+            .await
+            .unwrap()
+            .unwrap();
+        surface.close().await.unwrap();
+        media.close().await;
+    }
+
+    #[tokio::test]
     async fn ambiance_echo_postgres_claim_and_guard_commit_together_and_survive_reopen() {
         use crate::ambiance::{ledger::LedgerEvent, *};
         use crate::surface_registry::{Mutation, hash, pin_surface_id};

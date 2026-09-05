@@ -46,9 +46,36 @@ pub enum OriginProof {
         surface_id: Uuid,
         echo_fingerprint: String,
     },
+    SequencedPin {
+        connection: super::PinProof,
+        stamp: InputStamp,
+        echo_fingerprint: String,
+    },
 }
 
 pub enum RuntimeOperation {
+    OpenPin {
+        device: AuthenticatedDeviceIdentity,
+        surface_id: Uuid,
+        approval_revision: u64,
+        epoch: Uuid,
+        expected_incarnation: Option<Uuid>,
+        incarnation: Uuid,
+    },
+    CheckPin {
+        connection: super::PinProof,
+    },
+    ClaimPinMedia {
+        connection: super::PinProof,
+        owner: Uuid,
+    },
+    RetirePinMedia {
+        connection: super::PinProof,
+        owner: Uuid,
+    },
+    ClosePin {
+        connection: super::PinProof,
+    },
     OpenBrowser {
         connection: BrowserProof,
         epoch: Uuid,
@@ -134,8 +161,17 @@ pub enum RuntimeOperation {
 }
 #[derive(Clone, Debug)]
 pub enum RuntimeResult {
+    PinOpened {
+        connection: super::PinConnection,
+        duplicate: bool,
+    },
+    PinCurrent,
+    PinMediaGranted(super::PinConnection),
+    PinClosed,
     ConnectionOpened,
-    ControlAccepted { duplicate: bool },
+    ControlAccepted {
+        duplicate: bool,
+    },
     Duplicate(TurnFence),
     EchoRejected,
     Begun(TurnFence),
@@ -175,6 +211,8 @@ pub struct Turn {
     pub fence: TurnFence,
     pub origin_incarnation: Uuid,
     pub origin_revision: u64,
+    #[serde(default)]
+    pub pin_incarnation: Option<Uuid>,
     pub request_digest: String,
     pub privacy: PrivacyClass,
     pub lease_until_ms: i64,
@@ -229,6 +267,8 @@ pub struct RuntimeState {
     pub ingress: BTreeMap<Uuid, InputCursor>,
     #[serde(default)]
     pub echoes: Vec<super::echo::Window>,
+    #[serde(default)]
+    pub pin_connections: BTreeMap<Uuid, super::PinConnection>,
 }
 
 /// Client boot epochs and sequences are provenance; client clocks are not.
@@ -313,8 +353,23 @@ impl InputCursor {
 pub struct InputReceipt {
     pub sequence: u64,
     pub digest: String,
-    pub fence: TurnFence,
+    pub admission: InputAdmission,
     pub expires_at_ms: i64,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum InputAdmission {
+    Turn { fence: TurnFence },
+    EchoRejected { request_id: Uuid },
+}
+impl InputAdmission {
+    fn request_id(&self) -> Uuid {
+        match self {
+            Self::Turn { fence } => fence.turn_id,
+            Self::EchoRejected { request_id } => *request_id,
+        }
+    }
 }
 
 /// Content-free event bodies. Never include request text, capability hashes,
@@ -322,6 +377,21 @@ pub struct InputReceipt {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RuntimeData {
+    PinEpochOpened {
+        surface_id: Uuid,
+        approval_revision: u64,
+        incarnation: Uuid,
+        epoch: Uuid,
+        expires_at_ms: i64,
+    },
+    PinEpochClosed {
+        surface_id: Uuid,
+        incarnation: Uuid,
+    },
+    PinMediaClaimed {
+        surface_id: Uuid,
+        incarnation: Uuid,
+    },
     BrowserEpochOpened {
         surface_id: Uuid,
         incarnation: Uuid,
@@ -358,6 +428,8 @@ pub enum RuntimeData {
         origin: Uuid,
         action_id: Uuid,
         privacy: PrivacyClass,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        stamp: Option<InputStamp>,
     },
     EchoExpired {
         action_id: Uuid,
@@ -521,6 +593,9 @@ impl RuntimeState {
             .map(|e| e.expires_at_ms)
             .min()
             .unwrap_or(i64::MAX);
+        for connection in self.pin_connections.values().filter(|c| !c.closed) {
+            due = due.min(connection.expires_at_ms);
+        }
         if let Some(turn) = self.turn.as_ref().filter(|t| !t.cancelled) {
             due = due.min(turn.lease_until_ms);
             if let Some(origin) = records.get(&turn.fence.origin_surface) {
@@ -604,14 +679,21 @@ impl RuntimeState {
             })
             .ok_or(RuntimeError::Stale)
     }
-    fn origin_valid(turn: &Turn, records: &BTreeMap<Uuid, Record>, now: i64) -> bool {
+    fn origin_valid(&self, turn: &Turn, records: &BTreeMap<Uuid, Record>, now: i64) -> bool {
         records.get(&turn.fence.origin_surface).is_some_and(|r| {
             !r.revoked
                 && match r.binding {
                     Binding::Browser => {
                         r.incarnation == turn.origin_incarnation && r.view(now).available
                     }
-                    Binding::Pin { .. } => r.revision == turn.origin_revision,
+                    Binding::Pin { .. } => {
+                        r.revision == turn.origin_revision
+                            && turn.pin_incarnation.is_none_or(|incarnation| {
+                                self.pin_connections.get(&r.surface_id).is_some_and(|c| {
+                                    c.incarnation == incarnation && c.current(r, now)
+                                })
+                            })
+                    }
                 }
         })
     }
@@ -619,6 +701,34 @@ impl RuntimeState {
     /// heartbeats do not alter the origin incarnation or eligibility.
     pub fn reconcile(&mut self, records: &BTreeMap<Uuid, Record>, now: i64) -> Vec<RuntimeData> {
         let mut events = Vec::new();
+        for (id, connection) in &mut self.pin_connections {
+            if !connection.closed && !records.get(id).is_some_and(|r| connection.current(r, now)) {
+                connection.closed = true;
+                events.push(RuntimeData::PinEpochClosed {
+                    surface_id: *id,
+                    incarnation: connection.incarnation,
+                });
+            }
+        }
+        // Revoked approvals cannot accumulate retired connection state. An
+        // old open still fails its approval-revision check after reapproval.
+        self.pin_connections.retain(|id, connection| {
+            records
+                .get(id)
+                .is_some_and(|r| !r.revoked && r.revision == connection.approval_revision)
+        });
+        self.ingress.retain(|id, cursor| {
+            records.get(id).is_some_and(|r| {
+                !r.revoked
+                    && match r.binding {
+                        Binding::Browser => r.incarnation == cursor.incarnation,
+                        Binding::Pin { .. } => self
+                            .pin_connections
+                            .get(id)
+                            .is_some_and(|c| c.incarnation == cursor.incarnation),
+                    }
+            })
+        });
         self.echoes.retain(|echo| {
             if now < echo.expires_at_ms {
                 return true;
@@ -631,7 +741,7 @@ impl RuntimeState {
         });
         let mut repairs = Vec::new();
         let origin_valid = self.turn.as_ref().is_some_and(|t| {
-            !t.cancelled && now < t.lease_until_ms && Self::origin_valid(t, records, now)
+            !t.cancelled && now < t.lease_until_ms && self.origin_valid(t, records, now)
         });
         if !origin_valid {
             if let Some(turn) = self.turn.as_mut().filter(|t| !t.cancelled) {
@@ -777,7 +887,7 @@ impl RuntimeState {
             || action.generation != generation
             || action.worker != worker
             || action.status != ActionStatus::Proposed
-            || !Self::origin_valid(turn, records, now)
+            || !self.origin_valid(turn, records, now)
         {
             return Err(RuntimeError::Stale);
         }
@@ -837,6 +947,117 @@ impl RuntimeState {
     ) -> Result<(RuntimeResult, Vec<RuntimeData>), RuntimeError> {
         let mut events = self.reconcile(records, now);
         let result = match operation {
+            RuntimeOperation::OpenPin {
+                device,
+                surface_id,
+                approval_revision,
+                epoch,
+                expected_incarnation,
+                incarnation,
+            } => {
+                let record =
+                    super::pin_connection::record(principal, records, surface_id, &device)?;
+                let (connection, duplicate) = self.open_pin(
+                    record,
+                    approval_revision,
+                    epoch,
+                    expected_incarnation,
+                    incarnation,
+                    now,
+                )?;
+                if !duplicate {
+                    events.push(RuntimeData::PinEpochOpened {
+                        surface_id,
+                        approval_revision,
+                        epoch,
+                        incarnation: connection.incarnation,
+                        expires_at_ms: connection.expires_at_ms,
+                    });
+                    events.extend(self.reconcile(records, now));
+                }
+                RuntimeResult::PinOpened {
+                    connection,
+                    duplicate,
+                }
+            }
+            RuntimeOperation::CheckPin { connection } => {
+                self.pin_record(principal, records, &connection, now)?;
+                RuntimeResult::PinCurrent
+            }
+            RuntimeOperation::ClaimPinMedia { connection, owner } => {
+                if owner.is_nil() {
+                    return Err(RuntimeError::InvalidRequest);
+                }
+                self.pin_record(principal, records, &connection, now)?;
+                let current = self
+                    .pin_connections
+                    .get_mut(&connection.surface_id)
+                    .unwrap();
+                if current.media_owner.is_some() {
+                    return Err(RuntimeError::Busy);
+                }
+                current.media_owner = Some(owner);
+                events.push(RuntimeData::PinMediaClaimed {
+                    surface_id: connection.surface_id,
+                    incarnation: connection.incarnation,
+                });
+                RuntimeResult::PinMediaGranted(current.clone())
+            }
+            RuntimeOperation::RetirePinMedia { connection, owner } => {
+                let record = super::pin_connection::record(
+                    principal,
+                    records,
+                    connection.surface_id,
+                    &connection.device,
+                )?;
+                let current = self
+                    .pin_connections
+                    .get(&connection.surface_id)
+                    .filter(|c| {
+                        c.incarnation == connection.incarnation
+                            && c.media_owner == Some(owner)
+                            && c.approval_revision == record.revision
+                    })
+                    .ok_or(RuntimeError::Stale)?;
+                if current.closed {
+                    return Ok((RuntimeResult::PinClosed, events));
+                }
+                let (result, appended) = self.apply(
+                    principal,
+                    records,
+                    RuntimeOperation::ClosePin { connection },
+                    now,
+                )?;
+                events.extend(appended);
+                result
+            }
+            RuntimeOperation::ClosePin { connection } => {
+                // Closing an exact retired incarnation is idempotent. It can
+                // never close a replacement or alter that replacement's turn.
+                let record = super::pin_connection::record(
+                    principal,
+                    records,
+                    connection.surface_id,
+                    &connection.device,
+                )?;
+                let current = self
+                    .pin_connections
+                    .get_mut(&connection.surface_id)
+                    .filter(|c| {
+                        c.incarnation == connection.incarnation
+                            && c.approval_revision == record.revision
+                    })
+                    .ok_or(RuntimeError::Stale)?;
+                if !current.closed {
+                    current.closed = true;
+                    events.push(RuntimeData::PinEpochClosed {
+                        surface_id: connection.surface_id,
+                        incarnation: current.incarnation,
+                    });
+                    events.extend(self.reconcile(records, now));
+                }
+                RuntimeResult::PinClosed
+            }
             RuntimeOperation::OpenBrowser { connection, epoch } => {
                 browser_record(records, &connection, now)?;
                 if epoch.is_nil() {
@@ -851,11 +1072,6 @@ impl RuntimeState {
                         return Err(RuntimeError::Stale);
                     }
                 } else {
-                    self.ingress.retain(|surface, cursor| {
-                        records
-                            .get(surface)
-                            .is_some_and(|r| !r.revoked && r.incarnation == cursor.incarnation)
-                    });
                     self.ingress.insert(
                         connection.surface_id,
                         InputCursor {
@@ -1035,38 +1251,33 @@ impl RuntimeState {
                         if !digest_valid(echo_fingerprint) {
                             return Err(RuntimeError::InvalidRequest);
                         }
-                        let id = crate::surface_registry::pin_surface_id(
-                            principal,
-                            device.expose_for_authorization(),
-                        );
-                        records.get(surface_id).filter(|r| id == *surface_id && !r.revoked
-                            && matches!(&r.binding, Binding::Pin { device_id } if device_id == device.expose_for_authorization())
-                            && r.approved_manifest == crate::surface_registry::pin_manifest()).ok_or(RuntimeError::InvalidOrigin)?
+                        super::pin_connection::record(principal, records, *surface_id, device)?
+                    }
+                    OriginProof::SequencedPin {
+                        connection,
+                        echo_fingerprint,
+                        ..
+                    } => {
+                        if !digest_valid(echo_fingerprint) {
+                            return Err(RuntimeError::InvalidRequest);
+                        }
+                        self.pin_record(principal, records, connection, now)?
                     }
                 };
-                if let OriginProof::Pin {
-                    echo_fingerprint, ..
-                } = &origin
-                    && let Some(echo) = self
-                        .echoes
-                        .iter()
-                        .find(|e| now < e.expires_at_ms && e.fingerprint == *echo_fingerprint)
-                {
-                    events.push(RuntimeData::EchoRejected {
-                        request_id: turn_id,
-                        origin: record.surface_id,
-                        action_id: echo.action_id,
-                        privacy: privacy_floor.max(echo.privacy),
-                    });
-                    return Ok((RuntimeResult::EchoRejected, events));
-                }
-                if let OriginProof::SequencedBrowser { connection, stamp } = &origin {
+                let sequenced = match &origin {
+                    OriginProof::SequencedBrowser { connection, stamp } => {
+                        Some((connection.surface_id, connection.incarnation, stamp))
+                    }
+                    OriginProof::SequencedPin {
+                        connection, stamp, ..
+                    } => Some((connection.surface_id, connection.incarnation, stamp)),
+                    _ => None,
+                };
+                if let Some((surface_id, incarnation, stamp)) = sequenced {
                     let cursor = self
                         .ingress
-                        .get(&connection.surface_id)
-                        .filter(|c| {
-                            c.incarnation == connection.incarnation && c.epoch == stamp.epoch
-                        })
+                        .get(&surface_id)
+                        .filter(|c| c.incarnation == incarnation && c.epoch == stamp.epoch)
                         .ok_or(RuntimeError::Stale)?;
                     if stamp.sequence == 0
                         || stamp.sequence > 9_007_199_254_740_991
@@ -1079,19 +1290,63 @@ impl RuntimeState {
                         .iter()
                         .find(|r| r.sequence == stamp.sequence)
                     {
-                        if receipt.fence.turn_id != turn_id
+                        if receipt.admission.request_id() != turn_id
                             || receipt.digest != request_digest
                             || now >= receipt.expires_at_ms
                         {
                             return Err(RuntimeError::Stale);
                         }
-                        return Ok((RuntimeResult::Duplicate(receipt.fence.clone()), events));
+                        let result = match &receipt.admission {
+                            InputAdmission::Turn { fence } => {
+                                RuntimeResult::Duplicate(fence.clone())
+                            }
+                            InputAdmission::EchoRejected { .. } => RuntimeResult::EchoRejected,
+                        };
+                        return Ok((result, events));
                     }
                     if stamp.sequence <= cursor.high_water
-                        || cursor.receipts.iter().any(|r| r.fence.turn_id == turn_id)
+                        || cursor
+                            .receipts
+                            .iter()
+                            .any(|r| r.admission.request_id() == turn_id)
                     {
                         return Err(RuntimeError::Stale);
                     }
+                }
+                if let OriginProof::Pin {
+                    echo_fingerprint, ..
+                }
+                | OriginProof::SequencedPin {
+                    echo_fingerprint, ..
+                } = &origin
+                    && let Some(echo) = self
+                        .echoes
+                        .iter()
+                        .find(|e| now < e.expires_at_ms && e.fingerprint == *echo_fingerprint)
+                {
+                    if let Some((surface_id, _, stamp)) = sequenced {
+                        let cursor = self.ingress.get_mut(&surface_id).unwrap();
+                        cursor.high_water = stamp.sequence;
+                        cursor.receipts.push(InputReceipt {
+                            sequence: stamp.sequence,
+                            digest: request_digest,
+                            admission: InputAdmission::EchoRejected {
+                                request_id: turn_id,
+                            },
+                            expires_at_ms: now
+                                .checked_add(300_000)
+                                .ok_or(RuntimeError::Unavailable)?,
+                        });
+                        cursor.prune(now);
+                    }
+                    events.push(RuntimeData::EchoRejected {
+                        request_id: turn_id,
+                        origin: record.surface_id,
+                        action_id: echo.action_id,
+                        privacy: privacy_floor.max(echo.privacy),
+                        stamp: sequenced.map(|(_, _, stamp)| stamp.clone()),
+                    });
+                    return Ok((RuntimeResult::EchoRejected, events));
                 }
                 if self
                     .turn
@@ -1117,6 +1372,12 @@ impl RuntimeState {
                     fence: fence.clone(),
                     origin_incarnation: record.incarnation,
                     origin_revision: record.revision,
+                    pin_incarnation: match &origin {
+                        OriginProof::SequencedPin { connection, .. } => {
+                            Some(connection.incarnation)
+                        }
+                        _ => None,
+                    },
                     request_digest: request_digest.clone(),
                     privacy,
                     lease_until_ms: now
@@ -1126,18 +1387,20 @@ impl RuntimeState {
                     finished: false,
                     analysis: None,
                 });
-                if let OriginProof::SequencedBrowser { connection, stamp } = &origin {
-                    let cursor = self.ingress.get_mut(&connection.surface_id).unwrap();
+                if let Some((surface_id, _, stamp)) = sequenced {
+                    let cursor = self.ingress.get_mut(&surface_id).unwrap();
                     cursor.high_water = stamp.sequence;
                     cursor.receipts.push(InputReceipt {
                         sequence: stamp.sequence,
                         digest: request_digest.clone(),
-                        fence: fence.clone(),
+                        admission: InputAdmission::Turn {
+                            fence: fence.clone(),
+                        },
                         expires_at_ms: now.checked_add(300_000).ok_or(RuntimeError::Unavailable)?,
                     });
                     cursor.prune(now);
                     events.push(RuntimeData::InputAdmitted {
-                        surface_id: connection.surface_id,
+                        surface_id,
                         epoch: stamp.epoch,
                         sequence: stamp.sequence,
                         instance_id: stamp.instance_id,
@@ -1157,7 +1420,7 @@ impl RuntimeState {
                 let turn = self.fence(fence.turn_id, fence.generation, fence.worker, now)?;
                 if turn.finished
                     || turn.fence.origin_surface != fence.origin_surface
-                    || !Self::origin_valid(turn, records, now)
+                    || !self.origin_valid(turn, records, now)
                 {
                     return Err(RuntimeError::Stale);
                 }
@@ -1171,7 +1434,7 @@ impl RuntimeState {
                 let turn = self.fence(fence.turn_id, fence.generation, fence.worker, now)?;
                 if turn.finished
                     || turn.fence.origin_surface != fence.origin_surface
-                    || !Self::origin_valid(turn, records, now)
+                    || !self.origin_valid(turn, records, now)
                 {
                     return Err(RuntimeError::Stale);
                 }
@@ -1208,7 +1471,7 @@ impl RuntimeState {
                 let turn = self.fence(fence.turn_id, fence.generation, fence.worker, now)?;
                 if turn.finished
                     || turn.fence.origin_surface != fence.origin_surface
-                    || !Self::origin_valid(turn, records, now)
+                    || !self.origin_valid(turn, records, now)
                     || !turn.analysis.as_ref().is_some_and(|a| {
                         a.input_digest == input_digest && a.output_digest.is_none()
                     })
@@ -1237,7 +1500,7 @@ impl RuntimeState {
                 privacy,
             } => {
                 let turn = self.fence(turn_id, generation, worker, now)?;
-                if turn.finished || !Self::origin_valid(turn, records, now) {
+                if turn.finished || !self.origin_valid(turn, records, now) {
                     return Err(RuntimeError::Stale);
                 }
                 if turn

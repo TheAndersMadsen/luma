@@ -19,10 +19,10 @@ const MAX_PARTICIPANTS: usize = 16;
 
 /// Management credentials remain in Cosmos, never in cognition or browser state.
 pub(crate) struct Config {
-    url: String,
-    public_url: String,
-    key: String,
-    secret: String,
+    pub(crate) url: String,
+    pub(crate) public_url: String,
+    pub(crate) key: String,
+    pub(crate) secret: String,
 }
 
 impl Config {

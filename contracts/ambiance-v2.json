@@ -41,6 +41,38 @@
   ],
   "evidence": [
     {
+      "id": "native-pin-epoch-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/pin_connection.rs",
+      "anchor": "fn ambiance_pin_epoch_cas_retries_do_not_renew_or_own_a_new_connection()",
+      "scope": "Defines owner-approval and incarnation-bound boot epochs, single-owner opens, fixed expiry, reconnect cancellation and serialized state recovery.",
+      "limitation": "Runtime library only. Application endpoints, native clients, physical boot evidence, turn-authorized PCM and provider voice integration remain unfinished. Stock wire requests have no verified epoch."
+    },
+    {
+      "id": "native-pin-epoch-postgres-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/store_postgres.rs",
+      "anchor": "async fn ambiance_pin_postgres_epoch_admission_is_atomic_single_owner_and_survives_reopen()",
+      "scope": "Defines rollback of native epochs, media ownership and input sequence on failed ledger append, competing pool ownership, persisted deduplication and exact-incarnation retirement.",
+      "limitation": "Requires isolated PostgreSQL. Definition only; does not establish hardware, native-client or production acceptance."
+    },
+    {
+      "id": "native-pin-media-admission-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/pin_media_tests.rs",
+      "anchor": "async fn ambiance_pin_media_membership_is_once_per_incarnation_and_revocation_closes_it()",
+      "scope": "Defines one isolated media room per durable incarnation, a losing attach that cannot close the successful owner's room, active room retirement after approval revocation, and cached SFU-token rejoin without a renewed runtime grant.",
+      "limitation": "Requires a localhost SFU. This is a bounded membership and grant case inspired by supplemental plan T-018; it does not complete that scenario's data/effect or residual-window acceptance. No microphone subscription, turn-authorized PCM, speech provider, device playback or private-origin authority is established."
+    },
+    {
+      "id": "native-pin-media-store-failure-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/store_postgres.rs",
+      "anchor": "async fn ambiance_pin_media_store_loss_retires_live_room_without_consumer_polling()",
+      "scope": "Defines active isolated media-room retirement when its PostgreSQL pool is closed, without requiring an application media consumer to poll.",
+      "limitation": "Requires isolated PostgreSQL and SFU. This is a pool-loss case, not database-server restart, network-partition timing, PCM cancellation or production acceptance."
+    },
+    {
       "id": "native-pcm-adapter-test-definition",
       "kind": "test-definition",
       "path": "cosmos/crates/rtc/tests/audio.rs",
@@ -398,7 +430,7 @@
       "requirement": "Bind each request to authenticated principal, origin, modality, state, environment, device/channel/actor trust, server receipt time, epoch and sequence.",
       "acceptance": "Preserve Pin device identity before account normalization; do not trust device clocks or body-supplied identity, and test replay/freshness plus scoped self-echo rejection.",
       "status": "partial",
-      "evidence": ["authenticated-device-provenance-definition", "stock-transport-provenance-test-definition", "pin-runtime-admission-definition", "rtc-attribution-test-definition", "sequenced-input-test-definition", "sequenced-input-postgres-test-definition", "sequenced-control-postgres-test-definition", "runtime-echo-test-definition", "runtime-echo-postgres-test-definition", "native-pcm-adapter-test-definition", "native-pcm-isolation-test-definition"]
+      "evidence": ["authenticated-device-provenance-definition", "stock-transport-provenance-test-definition", "pin-runtime-admission-definition", "rtc-attribution-test-definition", "sequenced-input-test-definition", "sequenced-input-postgres-test-definition", "sequenced-control-postgres-test-definition", "runtime-echo-test-definition", "runtime-echo-postgres-test-definition", "native-pcm-adapter-test-definition", "native-pcm-isolation-test-definition", "native-pin-epoch-test-definition", "native-pin-epoch-postgres-test-definition", "native-pin-media-admission-test-definition", "native-pin-media-store-failure-test-definition"]
     },
     {
       "id": "cognition-authority",

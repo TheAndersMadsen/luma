@@ -121,6 +121,112 @@ impl AmbianceRuntime {
         self.stock_text_started(authenticated, text, None).await
     }
 
+    /// Native connections use a server-minted incarnation and a client boot
+    /// epoch. The caller persists the returned incarnation for its next open.
+    pub async fn open_pin(
+        &self,
+        authenticated: &AuthenticatedRequest,
+        approval_revision: u64,
+        epoch: Uuid,
+        expected_incarnation: Option<Uuid>,
+    ) -> Result<RuntimeResult, Status> {
+        self.start_maintenance();
+        let surface =
+            crate::pin_admission::admit(&self.store, self.pairing.as_ref(), Some(authenticated))
+                .await?;
+        let device = authenticated
+            .device
+            .clone()
+            .ok_or_else(|| Status::permission_denied("Pin approval required"))?;
+        self.store
+            .runtime(
+                authenticated.principal.expose_for_authorization(),
+                RuntimeOperation::OpenPin {
+                    device,
+                    surface_id: surface.surface_id,
+                    approval_revision,
+                    epoch,
+                    expected_incarnation,
+                    incarnation: Uuid::new_v4(),
+                },
+            )
+            .await
+            .map_err(runtime_error)
+    }
+
+    pub(crate) async fn pin_proof(
+        &self,
+        authenticated: &AuthenticatedRequest,
+        incarnation: Uuid,
+    ) -> Result<super::PinProof, Status> {
+        let surface =
+            crate::pin_admission::admit(&self.store, self.pairing.as_ref(), Some(authenticated))
+                .await?;
+        Ok(super::PinProof {
+            device: authenticated
+                .device
+                .clone()
+                .ok_or_else(|| Status::permission_denied("Pin approval required"))?,
+            surface_id: surface.surface_id,
+            incarnation,
+        })
+    }
+
+    pub async fn check_pin(
+        &self,
+        authenticated: &AuthenticatedRequest,
+        incarnation: Uuid,
+    ) -> Result<(), Status> {
+        let connection = self.pin_proof(authenticated, incarnation).await?;
+        self.store
+            .runtime(
+                authenticated.principal.expose_for_authorization(),
+                RuntimeOperation::CheckPin { connection },
+            )
+            .await
+            .map_err(runtime_error)?;
+        Ok(())
+    }
+
+    pub async fn close_pin(
+        &self,
+        authenticated: &AuthenticatedRequest,
+        incarnation: Uuid,
+    ) -> Result<(), Status> {
+        let connection = self.pin_proof(authenticated, incarnation).await?;
+        self.store
+            .runtime(
+                authenticated.principal.expose_for_authorization(),
+                RuntimeOperation::ClosePin { connection },
+            )
+            .await
+            .map_err(runtime_error)?;
+        Ok(())
+    }
+
+    pub async fn sequenced_pin_text(
+        &self,
+        authenticated: &AuthenticatedRequest,
+        incarnation: Uuid,
+        stamp: super::InputStamp,
+        text: String,
+    ) -> Result<RuntimeResult, Status> {
+        self.start_maintenance();
+        let connection = self.pin_proof(authenticated, incarnation).await?;
+        self.text(
+            authenticated.principal.expose_for_authorization(),
+            OriginProof::SequencedPin {
+                connection,
+                stamp,
+                echo_fingerprint: super::echo::fingerprint(&text),
+            },
+            text,
+            None,
+            Some(authenticated),
+        )
+        .await
+    }
+
     pub(crate) async fn check_stock(
         &self,
         authenticated: &AuthenticatedRequest,
@@ -172,7 +278,8 @@ impl AmbianceRuntime {
         }
         let privacy_floor = input_privacy(&text);
         let turn_id = match &origin {
-            OriginProof::SequencedBrowser { stamp, .. } => stamp.instance_id,
+            OriginProof::SequencedBrowser { stamp, .. }
+            | OriginProof::SequencedPin { stamp, .. } => stamp.instance_id,
             _ => Uuid::new_v4(),
         };
         let result = self
@@ -601,7 +708,7 @@ fn input_privacy(text: &str) -> PrivacyClass {
     }
 }
 
-fn runtime_error(error: super::RuntimeError) -> Status {
+pub(super) fn runtime_error(error: super::RuntimeError) -> Status {
     match error {
         super::RuntimeError::Unavailable => {
             Status::unavailable("runtime operation could not be committed")
@@ -690,6 +797,105 @@ mod tests {
             store,
             auth,
         )
+    }
+
+    #[tokio::test]
+    async fn ambiance_pin_runtime_rechecks_pairing_and_reconnect_drops_pending_cognition() {
+        let started = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let model = Arc::new(Model {
+            calls: AtomicUsize::new(0),
+            intent: "informational_speech",
+            pause: Some((started.clone(), release)),
+        });
+        let (runtime, _, auth) = fixture(model.clone()).await;
+        let epoch = Uuid::new_v4();
+        let RuntimeResult::PinOpened {
+            connection,
+            duplicate: false,
+        } = runtime.open_pin(&auth, 1, epoch, None).await.unwrap()
+        else {
+            panic!()
+        };
+        let stamp = super::super::InputStamp {
+            epoch,
+            sequence: 1,
+            instance_id: Uuid::new_v4(),
+        };
+        let task_runtime = runtime.clone();
+        let task_auth = auth.clone();
+        let task_stamp = stamp.clone();
+        let task = tokio::spawn(async move {
+            task_runtime
+                .sequenced_pin_text(
+                    &task_auth,
+                    connection.incarnation,
+                    task_stamp,
+                    "hello".into(),
+                )
+                .await
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(2), started.notified())
+            .await
+            .unwrap();
+        assert!(matches!(
+            runtime
+                .sequenced_pin_text(&auth, connection.incarnation, stamp.clone(), "hello".into())
+                .await
+                .unwrap(),
+            RuntimeResult::Duplicate(_)
+        ));
+        assert_eq!(model.calls.load(Ordering::SeqCst), 1);
+        let RuntimeResult::PinOpened {
+            connection: next,
+            duplicate: false,
+        } = runtime
+            .open_pin(&auth, 1, Uuid::new_v4(), Some(connection.incarnation))
+            .await
+            .unwrap()
+        else {
+            panic!()
+        };
+        let error = tokio::time::timeout(std::time::Duration::from_secs(2), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+        runtime
+            .pairing
+            .as_ref()
+            .unwrap()
+            .put_device_account("abcd", "another-owner")
+            .await
+            .unwrap();
+        assert_eq!(
+            runtime
+                .check_pin(&auth, next.incarnation)
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::PermissionDenied
+        );
+        assert_eq!(
+            runtime
+                .sequenced_pin_text(&auth, next.incarnation, stamp, "hello".into())
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::PermissionDenied
+        );
+        assert_eq!(model.calls.load(Ordering::SeqCst), 1);
+        let mut web = auth.clone();
+        web.plane = crate::auth::AuthenticationPlane::Web;
+        assert_eq!(
+            runtime
+                .open_pin(&web, 1, epoch, None)
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::PermissionDenied
+        );
     }
 
     #[tokio::test]

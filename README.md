@@ -307,6 +307,42 @@ required or that the stock SDK alone violates the paper.
    `COSMOS_RTC_PUBLIC_URL`, `COSMOS_RTC_API_KEY` and `COSMOS_RTC_API_SECRET`;
    the signing secret remains in Cosmos. Production Compose wiring is implemented;
    the new release has not been deployed.
+
+   The native Pin runtime API in the Rust library now binds one client boot epoch
+   to a server-issued connection incarnation and the exact owner-approval
+   revision. Native clients must retain that incarnation and name it when
+   reconnecting; a lost incarnation requires owner reapproval. A reconnect retires
+   the previous connection and cancels its turn. An exact open retry returns the
+   existing incarnation without renewing its one-hour expiry or taking ownership.
+   Sequenced Pin requests share the durable, bounded input cursor: input admission
+   and the turn commit together, changed retries fail, and echo rejections consume
+   their sequence without repeating cognition or the rejection event. Reconnecting
+   within the same boot preserves its sequence high-water mark and receipts. Approval
+   revision, transport authentication and current device pairing remain separate
+   mandatory checks. This does not retrofit epochs into the unchanged stock wire.
+
+   The library can claim an isolated media room once per native Pin incarnation.
+   Its token is released only after durable admission and a second pairing and
+   approval check after signaling. Notifications and a 250 ms check loop retire
+   rooms on revocation, reconnect or pairing loss; failed or one-second-timeout
+   Store checks also close the transport. A failed competing attach cannot close
+   the successful owner's room. Unjoined rooms close after 60 seconds, and at most
+   64 room owners exist in one process. Tests use an isolated SFU and PostgreSQL;
+   these bounds do not establish production timing. The media owner exposes no
+   raw session: turn-authorized PCM consumption, speech providers and application
+   bootstrap endpoints are still unfinished. Membership grants no microphone
+   subscription, private-memory access, playback evidence or physical privacy.
+
+   The supplied `Ambiance-Implementation-Plan.zip` is additional design inspiration;
+   its RFC and proposed tests are not the paper's reference implementation. Its
+   cached-token rejoin case (T-018) now has a bounded local test: an unexpired
+   revoked token can rejoin the self-hosted SFU, while the runtime refuses a new
+   media grant and keeps its old room closed. Full data/effect and residual-window
+   acceptance remain outstanding. ADR-006/T-032 also sharpens the freshness limit:
+   physical capture time remains unverified, and delayed-input authority needs
+   separate checks. For cloud speech, we adopt ADR-004/T-013's proposed
+   source/class/purpose/provider disclosure gate before uploading audio. This gate
+   remains unimplemented; post-transcription text classification cannot provide it.
 3. **Cosmos realtime cognition.** Do not automatically forward
    `RoomSessionTransport`, control events or history. Manual `RoomIO` with a
    no-room `AgentSession.start` is a public-composition candidate requiring
@@ -318,6 +354,18 @@ required or that the stock SDK alone violates the paper.
    neither playback nor an action outcome. Verify recorded provider-protocol
    fixtures offline first; actual provider access and billing are a separate
    gate.
+   The next bounded voice loop is capture, authorized transcription, the existing
+   structured proposal, runtime-authorized text, then synthesis. Azure's
+   [short-audio endpoint](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/rest-speech-to-text-short)
+   needs a duration limit of at most 60 seconds as well as a byte limit, stateful
+   48-to-16 kHz resampling and an explicit locale. Its
+   [raw 48 kHz synthesis format](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/rest-text-to-speech#supported-audio-formats)
+   can feed 480-sample transport frames without altering the stock wire formats.
+   The streaming HTTP producer still needs owned cancellation; arbitrary chunk
+   boundaries must preserve partial samples and respect the bounded send queue.
+   Normal completion also needs a drain path: the current transport stop discards
+   queued frames. These are implementation requirements, not verified provider or
+   playback behavior.
 4. **Cosmos services and policy.** Rebuild completion, child agents, composition,
    translation, vision/food, music and native actions through typed services.
    Require exact single-use action/epoch grants, provenance-scoped retrieval,
