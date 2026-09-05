@@ -21,7 +21,7 @@ use crate::{
     assistant::llm::{
         ChatMessage, ChatModel, ChatResponse, LlmError, ModelProvenance, Role, ToolCall, ToolDef,
     },
-    integrations::RealtimeConfig,
+    integrations::{RealtimeConfig, RealtimeProvider},
 };
 
 const MAX_EVENT: usize = 64 * 1024;
@@ -40,15 +40,25 @@ impl ConfiguredRealtimeModel {
     }
 }
 
-fn provenance(config: &RealtimeConfig) -> ModelProvenance {
+pub(super) fn provenance(config: &RealtimeConfig) -> ModelProvenance {
     ModelProvenance {
-        provider: "openai_realtime".into(),
+        provider: match config.provider {
+            RealtimeProvider::OpenAiRealtime => "openai_realtime".into(),
+            RealtimeProvider::OpenRouterText => format!(
+                "openrouter:{}",
+                config.upstream.as_deref().unwrap_or("unconfigured")
+            ),
+        },
         model: if config.configured() {
             config.model.clone()
         } else {
             "unconfigured".into()
         },
-        speed: "realtime".into(),
+        speed: match config.provider {
+            RealtimeProvider::OpenAiRealtime => "realtime",
+            RealtimeProvider::OpenRouterText => "text",
+        }
+        .into(),
         effort: "default".into(),
     }
 }
@@ -64,9 +74,19 @@ impl ChatModel for ConfiguredRealtimeModel {
         messages: &[ChatMessage],
         tools: &[ToolDef],
     ) -> Result<ChatResponse, LlmError> {
-        OpenAiRealtimeModel::new(crate::integrations::active().snapshot().realtime)?
-            .complete(messages, tools)
-            .await
+        let config = crate::integrations::active().snapshot().realtime;
+        match config.provider {
+            RealtimeProvider::OpenAiRealtime => {
+                OpenAiRealtimeModel::new(config)?
+                    .complete(messages, tools)
+                    .await
+            }
+            RealtimeProvider::OpenRouterText => {
+                super::openrouter::OpenRouterTextModel::new(config)?
+                    .complete(messages, tools)
+                    .await
+            }
+        }
     }
 }
 
@@ -77,7 +97,7 @@ pub struct OpenAiRealtimeModel {
 
 impl OpenAiRealtimeModel {
     pub fn new(config: RealtimeConfig) -> Result<Self, LlmError> {
-        if !config.configured() {
+        if !config.configured() || config.provider != RealtimeProvider::OpenAiRealtime {
             return Err(transport("realtime is not configured"));
         }
         Ok(Self { config })
@@ -148,7 +168,7 @@ fn transport(message: &'static str) -> LlmError {
     LlmError::Transport(message.into())
 }
 
-fn validate_input(messages: &[ChatMessage], tools: &[ToolDef]) -> Result<(), LlmError> {
+pub(super) fn validate_input(messages: &[ChatMessage], tools: &[ToolDef]) -> Result<(), LlmError> {
     if messages.len() != 2
         || messages[0].role != Role::System
         || messages[1].role != Role::User
@@ -433,6 +453,7 @@ mod tests {
             api_key: Some("synthetic-key".into()),
             model: "gpt-realtime".into(),
             max_output_tokens: 1024,
+            ..RealtimeConfig::default()
         })
         .unwrap()
     }

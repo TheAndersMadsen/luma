@@ -41,12 +41,20 @@
   ],
   "evidence": [
     {
+      "id": "openrouter-proposal-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/openrouter_tests.rs",
+      "anchor": "fn openrouter_proposal_requires_one_completed_exact_call_without_prose()",
+      "scope": "Defines completed single-choice/single-call parsing, exact typed proposals, refusal of mixed prose or action authority, bounded HTTP, fixed upstream, no fallback/redirect and owned cancellation. A separate ignored test makes one explicitly configured synthetic provider request.",
+      "limitation": "Shared-text provider adapter only. Live requests require explicit stdin configuration; default unit tests use local fixtures. Does not establish full disclosure, native voice, latency, hardware playback or paper conformance."
+    },
+    {
       "id": "center-application-acceptance-test-definition",
       "kind": "test-definition",
       "path": "cosmos/crates/cosmos/src/browser_center_acceptance.rs",
       "anchor": "async fn browser_center_application_acceptance()",
       "scope": "The Center image driver exercises real owner BFF controls, native Cosmos, isolated PostgreSQL, same-origin HTTPS/WSS, the SFU, Chrome rendering, durable DOM acknowledgment and payload clearing on leave.",
-      "limitation": "Authentication and cognition are synthetic. Requires the explicitly invoked local driver; ordinary tests ignore it. Does not establish actual provider responses, production networking, physical Pin playback or full paper conformance."
+      "limitation": "Authentication is synthetic. The explicit local driver uses synthetic cognition by default; --openrouter-stdin selects one real provider request and labels the result. Ordinary tests ignore this gate. Does not establish production networking, physical Pin playback or full paper conformance."
     },
     {
       "id": "native-speech-disclosure-test-definition",
@@ -511,7 +519,7 @@
       "requirement": "Cognition proposes runtime intents; only deterministic runtime policy binds targets, grants, memory scope and dispatch, including policy/registry changes.",
       "acceptance": "Keep asynchronous analysis responsive to cancellation without granting analytical models direct device or service execution authority.",
       "status": "partial",
-      "evidence": ["runtime-private-context-test-definition", "bounded-analysis-cancellation-test-definition"]
+      "evidence": ["runtime-private-context-test-definition", "bounded-analysis-cancellation-test-definition", "openrouter-proposal-test-definition"]
     },
     {
       "id": "inference-ability",

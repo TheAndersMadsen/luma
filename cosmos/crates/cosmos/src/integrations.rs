@@ -17,19 +17,33 @@ pub const DEFAULT_CODEX_MODEL: &str = "gpt-5.6-sol";
 pub const DEFAULT_AZURE_VOICE: &str = "en-US-AvaMultilingualNeural";
 const CONFIG_FILE: &str = "integrations.json";
 
+#[derive(Debug, Clone, Copy, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RealtimeProvider {
+    #[default]
+    #[serde(rename = "openai-realtime")]
+    OpenAiRealtime,
+    #[serde(rename = "openrouter-text")]
+    OpenRouterText,
+}
+
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct RealtimeConfig {
+    pub provider: RealtimeProvider,
     pub api_key: Option<String>,
     pub model: String,
+    pub upstream: Option<String>,
     pub max_output_tokens: u32,
 }
 
 impl Default for RealtimeConfig {
     fn default() -> Self {
         Self {
+            provider: RealtimeProvider::OpenAiRealtime,
             api_key: None,
             model: "gpt-realtime".to_owned(),
+            upstream: None,
             max_output_tokens: 1024,
         }
     }
@@ -50,12 +64,26 @@ impl RealtimeConfig {
     }
 
     fn valid(&self) -> bool {
-        !self.model.is_empty()
+        let coordinate = |s: &str| {
+            !s.is_empty()
+                && s.len() <= 128
+                && s.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+        };
+        let selected = match self.provider {
+            RealtimeProvider::OpenAiRealtime => coordinate(&self.model) && self.upstream.is_none(),
+            RealtimeProvider::OpenRouterText => {
+                self.model
+                    .split_once('/')
+                    .is_some_and(|(owner, model)| coordinate(owner) && coordinate(model))
+                    && self.upstream.as_ref().is_some_and(|s| {
+                        !s.is_empty() && s.len() <= 128 && s.split('/').all(coordinate)
+                    })
+            }
+        };
+        selected
+            && !self.model.is_empty()
             && self.model.len() <= 128
-            && self
-                .model
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
             && (64..=4096).contains(&self.max_output_tokens)
             && self.api_key.as_ref().is_none_or(|key| {
                 !key.is_empty() && key.len() <= 8192 && key.bytes().all(|b| b.is_ascii_graphic())
@@ -66,8 +94,10 @@ impl RealtimeConfig {
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct RealtimeUpdate {
+    pub provider: Option<RealtimeProvider>,
     pub api_key: Option<String>,
     pub model: Option<String>,
+    pub upstream: Option<String>,
     pub max_output_tokens: Option<u32>,
 }
 
@@ -463,12 +493,25 @@ pub fn persisted_speech_ready(state_dir: Option<&str>) -> Result<Option<bool>, I
 
 fn apply_update(config: &mut IntegrationsConfig, update: IntegrationsUpdate) {
     if let Some(update) = update.realtime {
+        if let Some(provider) = update.provider
+            && provider != config.realtime.provider
+        {
+            config.realtime.provider = provider;
+            // A provider switch must supply its own model and credential. Never
+            // transmit a retained key to a different provider.
+            config.realtime.api_key = None;
+            config.realtime.model.clear();
+            config.realtime.upstream = None;
+        }
         update_secret(&mut config.realtime.api_key, update.api_key);
         if let Some(model) = update.model {
             config.realtime.model = model;
         }
         if let Some(limit) = update.max_output_tokens {
             config.realtime.max_output_tokens = limit;
+        }
+        if let Some(upstream) = update.upstream {
+            config.realtime.upstream = optional(&upstream);
         }
     }
     if let Some(update) = update.assistant {
@@ -743,6 +786,43 @@ mod tests {
         config.realtime.api_key = None;
         config.realtime.model = "bad?model".to_owned();
         assert!(validate(&config).is_err());
+    }
+
+    #[test]
+    fn realtime_provider_switch_never_transfers_a_credential_or_upstream() {
+        let mut config = IntegrationsConfig::default();
+        config.realtime.api_key = Some("original-provider-secret".into());
+        let update = |value| serde_json::from_value::<IntegrationsUpdate>(value).unwrap();
+        apply_update(
+            &mut config,
+            update(
+                serde_json::json!({"realtime":{"provider":"openrouter-text","model":"openai/gpt-4.1-mini","upstream":"openai"}}),
+            ),
+        );
+        assert!(config.realtime.api_key.is_none());
+        assert!(!config.realtime.configured());
+        validate(&config).unwrap();
+        apply_update(
+            &mut config,
+            update(serde_json::json!({"realtime":{"api_key":"explicit-new-key"}})),
+        );
+        assert!(config.realtime.configured());
+        apply_update(
+            &mut config,
+            update(
+                serde_json::json!({"realtime":{"provider":"openai-realtime","model":"gpt-realtime"}}),
+            ),
+        );
+        assert!(config.realtime.api_key.is_none() && config.realtime.upstream.is_none());
+        validate(&config).unwrap();
+        apply_update(
+            &mut config,
+            update(serde_json::json!({"realtime":{"provider":"openrouter-text"}})),
+        );
+        assert!(
+            validate(&config).is_err(),
+            "a switch requires explicit valid coordinates"
+        );
     }
 
     #[test]

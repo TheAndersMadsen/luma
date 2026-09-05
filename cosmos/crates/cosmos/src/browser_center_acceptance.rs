@@ -16,11 +16,21 @@ use std::{
     time::Duration,
 };
 
-struct Model(AtomicUsize);
+struct Model {
+    calls: AtomicUsize,
+    provider: Option<crate::ambiance::openrouter::OpenRouterTextModel>,
+}
 #[tonic::async_trait]
 impl ChatModel for Model {
-    async fn complete(&self, _: &[ChatMessage], _: &[ToolDef]) -> Result<ChatResponse, LlmError> {
-        self.0.fetch_add(1, Ordering::SeqCst);
+    async fn complete(
+        &self,
+        messages: &[ChatMessage],
+        tools: &[ToolDef],
+    ) -> Result<ChatResponse, LlmError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        if let Some(provider) = &self.provider {
+            return provider.complete(messages, tools).await;
+        }
         Ok(ChatResponse { tool_call: Some(ToolCall { name: "propose_information".into(),
             arguments: json!({"intent":SemanticIntent::VisualTextCard { text: "Center acceptance card".into() },"privacy":"public"}).to_string(),
         }), ..Default::default() })
@@ -80,7 +90,33 @@ async fn browser_center_application_acceptance() {
         )
         .await
         .unwrap();
-    let model = Arc::new(Model(AtomicUsize::new(0)));
+    let provider = if std::env::var("COSMOS_CENTER_TEST_OPENROUTER_STDIN").as_deref() == Ok("1") {
+        use std::io::Read;
+        let mut bytes = Vec::new();
+        std::io::stdin()
+            .lock()
+            .take(16385)
+            .read_to_end(&mut bytes)
+            .unwrap();
+        assert!(bytes.len() <= 16384);
+        Some(
+            crate::ambiance::openrouter::OpenRouterTextModel::new(
+                serde_json::from_slice(&bytes).unwrap(),
+            )
+            .unwrap(),
+        )
+    } else {
+        None
+    };
+    let model_mode = if provider.is_some() {
+        "openrouter-text"
+    } else {
+        "synthetic"
+    };
+    let model = Arc::new(Model {
+        calls: AtomicUsize::new(0),
+        provider,
+    });
     let runtime = Arc::new(AmbianceRuntime::new(
         store.clone(),
         model.clone(),
@@ -133,9 +169,9 @@ async fn browser_center_application_acceptance() {
                 if acknowledged && speech_revoked && !state.actions.is_empty()
                     && state.actions.values().all(|a| a.status == ActionStatus::Cancelled && a.intent.text().is_empty())
                 {
-                    assert_eq!(model.0.load(Ordering::SeqCst), 1);
+                    assert_eq!(model.calls.load(Ordering::SeqCst), 1);
                     assert!(store.surfaces(&principal).await.unwrap().iter().filter(|s| s.surface_id != pin_id).all(|s| !s.connected));
-                    write_private(status_path, &json!({"acknowledged":true,"complete":true,"modelCalls":1,"speechPolicyRevision":2}), false);
+                    write_private(status_path, &json!({"acknowledged":true,"complete":true,"modelCalls":1,"modelMode":model_mode,"speechPolicyRevision":2}), false);
                     return;
                 }
             }

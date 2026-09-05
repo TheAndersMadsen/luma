@@ -13,8 +13,13 @@ type ServiceState = {
 };
 
 type AssistantProvider = "openai-compatible" | "codex-subscription";
+type CognitionProvider = "openai-realtime" | "openrouter-text";
 
 type IntegrationsView = {
+  realtime: {
+    provider: CognitionProvider; configured: boolean; api_key_configured: boolean;
+    model: string; upstream: string | null; max_output_tokens: number;
+  };
   assistant: {
     provider: AssistantProvider;
     configured: boolean;
@@ -55,6 +60,10 @@ type IntegrationsView = {
 };
 
 type IntegrationDraft = {
+  cognitionProvider: CognitionProvider;
+  cognitionModel: string;
+  cognitionUpstream: string;
+  cognitionMaxTokens: string;
   provider: AssistantProvider;
   baseUrl: string;
   model: string;
@@ -68,6 +77,7 @@ type IntegrationDraft = {
 };
 
 type SecretName =
+  | "cognitionApiKey"
   | "assistantApiKey"
   | "serpapiKey"
   | "perplexityKey"
@@ -142,6 +152,7 @@ const SERVICES: readonly ServiceState[] = [
 ];
 
 const EMPTY_SECRETS: SecretDraft = {
+  cognitionApiKey: null,
   assistantApiKey: null,
   serpapiKey: null,
   perplexityKey: null,
@@ -170,6 +181,10 @@ function chip(status: AssistantStatus | undefined, ready: boolean): {
 
 function draftFrom(view: IntegrationsView): IntegrationDraft {
   return {
+    cognitionProvider: view.realtime.provider,
+    cognitionModel: view.realtime.model,
+    cognitionUpstream: view.realtime.upstream ?? "",
+    cognitionMaxTokens: String(view.realtime.max_output_tokens),
     provider: view.assistant.provider,
     baseUrl: view.assistant.base_url,
     model: view.assistant.model,
@@ -218,6 +233,7 @@ function SecretField({
       <div className={styles.secretControl}>
         <input
           className={styles.integrationInput}
+          aria-label={label}
           type="password"
           value={value ?? ""}
           placeholder={configured && value === null ? "Configured — leave blank to keep" : "Paste secret"}
@@ -245,6 +261,7 @@ export function CosmosServicesCard({ operator }: { operator: boolean }) {
   const [secrets, setSecrets] = useState<SecretDraft>(EMPTY_SECRETS);
   const [loading, setLoading] = useState(operator);
   const [saving, setSaving] = useState(false);
+  const [needsRefresh, setNeedsRefresh] = useState(false);
   const [testing, setTesting] = useState<IntegrationTestTarget>();
   const [testResults, setTestResults] = useState<Partial<Record<IntegrationTestTarget, "Working" | "Failed">>>({});
   const [message, setMessage] = useState<{ tone: "ok" | "error"; text: string }>();
@@ -259,6 +276,7 @@ export function CosmosServicesCard({ operator }: { operator: boolean }) {
     if (replaceDraft) {
       setDraft(draftFrom(next));
       setSecrets(EMPTY_SECRETS);
+      setNeedsRefresh(false);
     }
     return next;
   }, []);
@@ -318,7 +336,16 @@ export function CosmosServicesCard({ operator }: { operator: boolean }) {
 
   function updatePayload() {
     if (!draft) return;
+    const outputLimit = Number(draft.cognitionMaxTokens);
+    if (!Number.isInteger(outputLimit) || outputLimit < 64 || outputLimit > 4096) throw new Error("Conversation response limit must be an integer from 64 to 4096.");
     return {
+      realtime: {
+        provider: draft.cognitionProvider,
+        model: draft.cognitionModel,
+        upstream: draft.cognitionUpstream,
+        max_output_tokens: outputLimit,
+        ...(secrets.cognitionApiKey === null ? {} : { api_key: secrets.cognitionApiKey }),
+      },
       assistant: {
         provider: draft.provider,
         base_url: draft.baseUrl,
@@ -354,16 +381,25 @@ export function CosmosServicesCard({ operator }: { operator: boolean }) {
   }
 
   async function persist() {
+    if (needsRefresh) throw new Error("Refresh Cosmos settings before another change.");
     const payload = updatePayload();
     if (!payload) throw new Error("Cosmos settings are still loading.");
+    setNeedsRefresh(true);
     const next = await responseJson<IntegrationsView>(await fetch("/api/admin/integrations", {
       method: "PUT",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(payload),
     }));
+    if (next.realtime?.provider !== payload.realtime.provider || next.realtime.model !== payload.realtime.model.trim()
+      || (next.realtime.upstream ?? "") !== payload.realtime.upstream.trim()
+      || next.realtime.max_output_tokens !== payload.realtime.max_output_tokens
+      || (payload.realtime.api_key !== undefined && next.realtime.api_key_configured !== !!payload.realtime.api_key.trim())) {
+      throw new Error("Cosmos did not confirm the requested conversation settings. Refresh settings before trying again.");
+    }
     setView(next);
     setDraft(draftFrom(next));
     setSecrets(EMPTY_SECRETS);
+    setNeedsRefresh(false);
     return next;
   }
 
@@ -469,7 +505,7 @@ export function CosmosServicesCard({ operator }: { operator: boolean }) {
           className={styles.inlineButton}
           type="button"
           aria-label={`Test ${label}`}
-          disabled={disabled || saving || testing !== undefined}
+          disabled={disabled || needsRefresh || saving || testing !== undefined}
           onClick={() => void testIntegration(target, label)}
         >
           {testing === target ? "Testing…" : "Test"}
@@ -527,6 +563,37 @@ export function CosmosServicesCard({ operator }: { operator: boolean }) {
         <div className={styles.integrationMessage} role="status">Loading Cosmos settings…</div>
       ) : (
         <div className={styles.integrationSettings}>
+          <section className={styles.integrationGroup}>
+            <div className={styles.integrationIntro}>
+              <span><strong>Ambiance conversation</strong><small>Choose the model that proposes replies to Cosmos for approved surfaces.</small></span>
+              <StatusChip tone={view.realtime.configured ? "live" : "off"} label={view.realtime.configured ? "Configured" : "Needs setup"} />
+            </div>
+            <div className={styles.integrationField}>
+              <label htmlFor="cognition-provider"><strong>Conversation provider</strong><small>Changing providers clears the retained conversation key.</small></label>
+              <select id="cognition-provider" className={styles.providerSelect} value={draft.cognitionProvider} onChange={event => {
+                const provider = event.target.value as CognitionProvider;
+                setDraft({ ...draft, cognitionProvider: provider, cognitionModel: provider === "openrouter-text" ? "openai/gpt-4.1-mini" : "gpt-realtime", cognitionUpstream: provider === "openrouter-text" ? "openai" : "" });
+                setSecrets(current => ({ ...current, cognitionApiKey: "" }));
+              }}>
+                <option value="openai-realtime">OpenAI Realtime</option>
+                <option value="openrouter-text">OpenRouter · text</option>
+              </select>
+            </div>
+            <div className={styles.integrationField}>
+              <label htmlFor="cognition-model"><strong>Conversation model</strong></label>
+              <input id="cognition-model" className={styles.integrationInput} maxLength={128} value={draft.cognitionModel} onChange={event => setDraft({ ...draft, cognitionModel: event.target.value })} />
+            </div>
+            {draft.cognitionProvider === "openrouter-text" && <div className={styles.integrationField}>
+              <label htmlFor="cognition-upstream"><strong>OpenRouter provider endpoint</strong><small>One provider slug, such as openai. Cosmos will not switch to another endpoint.</small></label>
+              <input id="cognition-upstream" className={styles.integrationInput} maxLength={128} value={draft.cognitionUpstream} onChange={event => setDraft({ ...draft, cognitionUpstream: event.target.value })} />
+            </div>}
+            <SecretField label="Conversation API key" detail="Enter the selected provider's key. Assistant and Codex credentials are never reused automatically." configured={draft.cognitionProvider === view.realtime.provider && view.realtime.api_key_configured} value={secrets.cognitionApiKey} onChange={value => secret("cognitionApiKey", value)} />
+            <div className={styles.integrationField}>
+              <label htmlFor="cognition-tokens"><strong>Conversation response limit</strong><small>Maximum output tokens, from 64 to 4096.</small></label>
+              <input id="cognition-tokens" className={styles.integrationInput} type="number" min={64} max={4096} value={draft.cognitionMaxTokens} onChange={event => setDraft({ ...draft, cognitionMaxTokens: event.target.value })} />
+            </div>
+            <p className={styles.providerNote}>Both options currently accept public text. Native microphone capture and playback are still being integrated. Configured credentials do not establish a successful provider response.</p>
+          </section>
           <section className={styles.integrationGroup}>
             <div className={styles.integrationIntro}>
               <span><strong>Food & nutrition</strong><small>Connect an Open Food Facts account for authenticated contributions.</small></span>
@@ -699,7 +766,8 @@ export function CosmosServicesCard({ operator }: { operator: boolean }) {
           {message ? <div className={styles.integrationMessage} data-tone={message.tone} role="status">{message.text}</div> : null}
           <div className={styles.integrationActions}>
             <span>Changes apply to the next request.</span>
-            <button className={styles.primaryButton} type="button" disabled={saving || testing !== undefined} onClick={() => void save()}>{saving ? "Saving…" : "Save Cosmos settings"}</button>
+            {needsRefresh && !saving && testing === undefined && <button className={styles.inlineButton} type="button" onClick={() => { void load(true).then(() => setMessage(undefined)).catch(() => setMessage({ tone: "error", text: "Cosmos settings could not be refreshed." })); }}>Refresh Cosmos settings</button>}
+            <button className={styles.primaryButton} type="button" disabled={needsRefresh || saving || testing !== undefined} onClick={() => void save()}>{saving ? "Saving…" : "Save Cosmos settings"}</button>
           </div>
         </div>
       )}

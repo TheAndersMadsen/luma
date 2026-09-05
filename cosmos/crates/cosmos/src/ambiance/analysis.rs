@@ -34,16 +34,18 @@ pub fn proposal_tool() -> ToolDef {
         json!({"type":"string","enum":["public","shared_room","near_user","private","sensitive"]});
     ToolDef {
         name: "propose_information".into(),
-        description: "Propose informational text, or request one bounded larger-model analysis of the current request. Neither option executes a device operation or proves an outcome.".into(),
-        parameters: json!({"type":"object","oneOf":[
-            {"type":"object","additionalProperties":false,"required":["intent","privacy"],"properties":{
-                "intent":{"oneOf":[
-                    {"type":"object","additionalProperties":false,"required":["kind","text"],"properties":{"kind":{"const":"informational_speech"},"text":{"type":"string","minLength":1,"maxLength":4000}}},
-                    {"type":"object","additionalProperties":false,"required":["kind","text"],"properties":{"kind":{"const":"visual_text_card"},"text":{"type":"string","minLength":1,"maxLength":4000}}}
-                ]},"privacy":privacy}},
-            {"type":"object","additionalProperties":false,"required":["analysis","privacy"],"properties":{
-                "analysis":{"type":"object","additionalProperties":false,"required":["question","channel"],"properties":{"question":{"type":"string","minLength":1,"maxLength":1000},"channel":{"type":"string","enum":["visual.card","audio.tts"]}}},"privacy":privacy}}
-        ]}),
+        description: "Propose informational text, or request one bounded larger-model analysis of the current request. Supply either intent or analysis, never both; omit the other field. Neither option executes a device operation or proves an outcome.".into(),
+        // Provider function schemas prohibit root unions. Optional branches
+        // describe the two shapes; Proposal's strict parser enforces XOR before
+        // any runtime work, including against a provider that ignores the schema.
+        parameters: json!({"type":"object","additionalProperties":false,"required":["privacy"],"properties":{
+            "intent":{"oneOf":[
+                {"type":"object","additionalProperties":false,"required":["kind","text"],"properties":{"kind":{"enum":["informational_speech"]},"text":{"type":"string","minLength":1,"maxLength":4000}}},
+                {"type":"object","additionalProperties":false,"required":["kind","text"],"properties":{"kind":{"enum":["visual_text_card"]},"text":{"type":"string","minLength":1,"maxLength":4000}}}
+            ]},
+            "analysis":{"type":"object","additionalProperties":false,"required":["question","channel"],"properties":{"question":{"type":"string","minLength":1,"maxLength":1000},"channel":{"type":"string","enum":["visual.card","audio.tts"]}}},
+            "privacy":privacy
+        }}),
     }
 }
 

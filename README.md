@@ -357,6 +357,46 @@ required or that the stock SDK alone violates the paper.
    neither playback nor an action outcome. Verify recorded provider-protocol
    fixtures offline first; actual provider access and billing are a separate
    gate.
+
+   [OpenRouter's API reference](https://openrouter.ai/docs/api_reference/overview)
+   and [audio guide](https://openrouter.ai/docs/guides/overview/multimodal/audio)
+   document HTTP Chat Completions, with
+   [SSE streaming](https://openrouter.ai/docs/api_reference/streaming); they do
+   not document OpenAI's Realtime WebSocket session protocol. OpenAI's
+   [`response.done` event](https://developers.openai.com/api/reference/resources/realtime/server-events#response.done)
+   also occurs for unsuccessful responses, so its completed-status gate stays
+   specific to that adapter. An explicitly selected Chat Completions front is
+   a viable shared-text implementation of the paper's
+   [cognition-without-authority boundary (§§4.4, 5.1, 11)](https://gist.githubusercontent.com/ericlewis/12e8f7d381a5d93926f4858ae2d725dc/raw/6bac46cd8251af39c40263331d7269c5e418fe8f/ambi_v2.md):
+   accept only one `propose_information` call with `finish_reason: "tool_calls"`, enforce input/output
+   byte limits and a deadline, and leave provenance, disclosure, generation,
+   routing and outcome checks with Cosmos. The dedicated text adapter owns an
+   18-second request with a 64 KiB response limit and refuses redirects. It forces the
+   [named client tool](https://openrouter.ai/docs/guides/features/tool-calling),
+   rejects multiple calls and exposes no executor, server tools or history.
+   [Provider routing](https://openrouter.ai/docs/guides/routing/provider-selection)
+   pins one selected upstream, requires supported parameters and disables fallback;
+   it never substitutes a different credential or Codex session. The selected
+   [OpenAI gpt-4.1-mini endpoint](https://openrouter.ai/api/v1/models/openai/gpt-4.1-mini/endpoints)
+   advertises `tools`, `tool_choice` and `max_tokens`, but not `parallel_tool_calls`.
+   That optional parameter and the undocumented `n` field are omitted; Cosmos
+   rejects the whole response unless exactly one choice and one call completed.
+   A real synthetic request through that endpoint passed. It also caught the
+   provider's rejection of root-level schema unions: the shared tool schema now
+   lists its optional branches, while the strict runtime parser still requires
+   exactly one of `intent` and `analysis`. This is provider compatibility evidence,
+   not a voice loop, latency result or full paper conformance.
+
+   In **Settings → Services → Cosmos → Ambiance conversation**, explicitly select
+   **OpenAI Realtime** or **OpenRouter · text**, supply that provider's key and model,
+   and, for OpenRouter, one upstream endpoint slug such as `openai`. Both currently
+   serve the admitted text path. Provider changes clear the retained key and require
+   explicit model coordinates; Assistant and Codex credentials are never inherited.
+   Center checks the saved coordinates and requires refresh after an uncertain save.
+   The selected Codex analysis provider remains unavailable to the bounded analysis
+   service; selecting an OpenRouter conversation front does not enable it. Provider
+   configuration also does not complete the paper's disclosure/retention invariant.
+
    The next bounded voice loop is capture, authorized transcription, the existing
    structured proposal, runtime-authorized text, then synthesis. Azure's
    [short-audio endpoint](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/rest-speech-to-text-short)
@@ -450,6 +490,12 @@ required or that the stock SDK alone violates the paper.
    bounded status and screenshot artifacts outside the checkout, and removes its
    container and transient credentials. Its ignored native test fails if those
    dependencies are absent; an ordinary unit-test pass does not run this gate.
+   To exercise one actual OpenRouter request in the same browser flow, append
+   `--openrouter-stdin` and supply the explicitly selected `realtime` configuration
+   JSON through stdin. Credentials are passed to the native fixture through stdin,
+   not written to its files. The result records `modelMode: "openrouter-text"`;
+   default runs record `synthetic`. Both use synthetic authentication and public
+   test content; no physical device is involved.
 6. **Thin native clients and Pin preparation.** Deliver macOS and Android
    clients using the shared contracts, with local permissions, capture,
    rendering/playback, lifecycle handling, protected credential storage,

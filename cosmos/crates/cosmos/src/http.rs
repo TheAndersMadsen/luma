@@ -648,9 +648,11 @@ struct IntegrationsView {
 
 #[derive(Serialize)]
 struct RealtimeIntegrationView {
+    provider: crate::integrations::RealtimeProvider,
     configured: bool,
     api_key_configured: bool,
     model: String,
+    upstream: Option<String>,
     max_output_tokens: u32,
 }
 
@@ -788,9 +790,11 @@ async fn integrations_view(config: crate::integrations::IntegrationsConfig) -> I
     };
     IntegrationsView {
         realtime: RealtimeIntegrationView {
+            provider: config.realtime.provider,
             configured: config.realtime.configured(),
             api_key_configured: config.realtime.api_key.is_some(),
             model: config.realtime.model,
+            upstream: config.realtime.upstream,
             max_output_tokens: config.realtime.max_output_tokens,
         },
         assistant: AssistantIntegrationView {

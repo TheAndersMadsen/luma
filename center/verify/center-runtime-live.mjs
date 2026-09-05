@@ -14,8 +14,17 @@ import { spawn, spawnSync } from "node:child_process";
 const require = createRequire(import.meta.url);
 const { chromium } = require("playwright");
 const { cosmosTestEnvironment } = require("../../platform/cli/context.js");
-const [image, inputPath, nativeDirectory] = process.argv.slice(2);
+const [image, inputPath, nativeDirectory, providerMode, ...extra] = process.argv.slice(2);
 if (!image || !inputPath || !nativeDirectory) throw new Error("Supply Center image, isolated SFU JSON and verified WebRTC directory");
+assert(extra.length === 0 && (providerMode === undefined || providerMode === "--openrouter-stdin"), "Optional provider mode is --openrouter-stdin");
+let providerConfiguration;
+if (providerMode) {
+  const bytes = Buffer.alloc(16385); let size = 0;
+  while (size < bytes.length) { const read = fs.readSync(0, bytes, size, bytes.length - size, null); if (!read) break; size += read; }
+  assert(size > 0 && size <= 16384, "Bounded explicit provider configuration required on stdin");
+  providerConfiguration = bytes.subarray(0, size);
+  assert.equal(JSON.parse(providerConfiguration).provider, "openrouter-text");
+}
 const configured = JSON.parse(fs.readFileSync(inputPath, "utf8"));
 assert.match(configured.url, /^ws:\/\/127\.0\.0\.1:[0-9]+(?:\/livekit)?$/u);
 assert.equal(new URL(process.env.COSMOS_TEST_DATABASE_URL).hostname, "127.0.0.1");
@@ -93,8 +102,11 @@ try {
   fs.writeFileSync(input, JSON.stringify({ ...configured, publicUrl: origin.replace("https:", "wss:") + "/livekit", bootstrapPath, statusPath }), { mode: 0o600 });
   child = spawn("cargo", ["test", "--locked", "-p", "cosmos", "browser_center_application_acceptance", "--", "--ignored", "--nocapture", "--test-threads=1"], {
     cwd: path.join(root, "cosmos"), detached: true, env: { ...cosmosTestEnvironment(), LK_CUSTOM_WEBRTC: path.resolve(nativeDirectory),
-      COSMOS_TEST_DATABASE_URL: process.env.COSMOS_TEST_DATABASE_URL, COSMOS_CENTER_TEST_INPUT: input }, stdio: ["ignore", logs, logs],
+      COSMOS_TEST_DATABASE_URL: process.env.COSMOS_TEST_DATABASE_URL, COSMOS_CENTER_TEST_INPUT: input,
+      ...(providerMode ? { COSMOS_CENTER_TEST_OPENROUTER_STDIN: "1" } : {}) }, stdio: ["pipe", logs, logs],
   });
+  child.stdin.on("error", () => {});
+  child.stdin.end(providerConfiguration);
   fs.closeSync(logs);
   const native = await until(() => readJson(bootstrapPath), 300000);
   process.env.KEYCLOAK_BASE_URL = `http://host.docker.internal:${native.port}`;
@@ -133,7 +145,7 @@ try {
   await page.getByRole("button", { name: "Approve this tab", exact: true }).click();
   await page.getByRole("button", { name: "Confirm shared display", exact: true }).click();
   await page.getByText("Ready for public text requests.", { exact: true }).waitFor();
-  await page.getByRole("textbox", { name: "Ask Cosmos", exact: true }).fill("Show an acceptance card");
+  await page.getByRole("textbox", { name: "Ask Cosmos", exact: true }).fill("Display a public text card containing exactly: Center acceptance card");
   await page.getByRole("button", { name: "Send", exact: true }).click();
   await page.getByLabel("Cosmos display", { exact: true }).getByText("Center acceptance card", { exact: true }).waitFor();
   await until(() => readJson(statusPath)?.acknowledged, 10000);
@@ -145,7 +157,7 @@ try {
   assert.deepEqual(errors, [], "No browser runtime exceptions");
   const exit = await new Promise(resolve => child.exitCode !== null ? resolve(child.exitCode) : child.once("exit", resolve));
   assert.equal(exit, 0);
-  process.stdout.write(`PASS: actual Center owner controls, Cosmos routing, SFU, DOM acknowledgment and durable clear; one synthetic model call.\nArtifacts: ${directory}\n`);
+  process.stdout.write(`PASS: actual Center owner controls, Cosmos routing, SFU, DOM acknowledgment and durable clear; one ${providerMode ? "live OpenRouter" : "synthetic"} model call.\nArtifacts: ${directory}\n`);
   fs.writeFileSync(path.join(directory, "result.json"), JSON.stringify(result) + "\n", { mode: 0o600 });
 } catch (error) {
   if (page && !page.isClosed()) {
