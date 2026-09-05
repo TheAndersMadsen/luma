@@ -78,17 +78,6 @@ impl AmbianceRuntime {
         });
     }
 
-    pub async fn browser_text(
-        &self,
-        principal: &str,
-        proof: BrowserProof,
-        text: String,
-    ) -> Result<RuntimeResult, Status> {
-        self.start_maintenance();
-        self.text(principal, OriginProof::Browser(proof), text, None, None)
-            .await
-    }
-
     pub async fn sequenced_browser_text(
         &self,
         principal: &str,

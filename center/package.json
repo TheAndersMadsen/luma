@@ -29,6 +29,7 @@
     "flatbuffers": "^25.9.23",
     "jose": "^5.9.6",
     "jsdom": "30.0.1",
+    "livekit-client": "2.22.2",
     "next": "^15.5.23",
     "qrcode.react": "^4.2.0",
     "react": "19.1.1",

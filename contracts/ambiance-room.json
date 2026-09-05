@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "state": "cosmos-implemented-center-pending",
+  "state": "cosmos-and-center-implemented-acceptance-in-progress",
   "bootstrap": {
     "route": "POST /runtime-api/v1/browser/room",
     "authentication": "Verified owner bearer and x-cosmos-surface-token for the exact surfaceId/incarnation. Approval is rechecked before and after connection; boot epoch cannot change without renewed approval.",
@@ -39,8 +39,8 @@
     "The browser validates runtime identity and runtimeEpoch from bootstrap, then deduplicates render stamps. Same-action repair retains its transport stamp. A new coordinator requires new bootstrap; old epochs never resume silently.",
     "RPC receipt is never render completion. The browser separately sends sequenced acknowledge after its DOM commits; exact Store acknowledgment gates the stock Pin outcome sentence.",
     "Explicit peer loss invalidates that approval and cancels current work. Runtime reconnect is permanently fenced. Connection expiry and empty-room cleanup bound idle resources; dispatch deadlines drive render repair.",
-    "Center HTTP polling remains an intermediate client path until the Center room implementation replaces it. This contract is not a production or paper-conformance claim."
+    "Center boots through its authenticated BFF, then uses one ordered room stream for all input and controls. SDK reconnect is fenced; hiding clears local output while keeping the room available for state and clear messages. HTTP poll/input/ack/state routes are absent. This contract is not a production or paper-conformance claim."
   ],
   "configuration": ["COSMOS_RTC_URL", "COSMOS_RTC_PUBLIC_URL", "COSMOS_RTC_API_KEY", "COSMOS_RTC_API_SECRET"],
-  "limitations": ["Coordination and informational cards only", "Center, native clients, media permissions, production deployment and physical acceptance are pending", "Self-hosted Compose and same-origin signaling are implemented; external WebRTC and relay acceptance remain pending; TCP-443-only networks are unsupported", "Shared-room approval does not establish physical privacy or actor identity"]
+  "limitations": ["Coordination and informational cards only", "Native clients, media permissions, production deployment and physical acceptance are pending", "Actual browser/native SDK RPC and disconnect passed against the isolated local SFU; full authenticated UI, external WebRTC and relay acceptance remain pending; TCP-443-only networks are unsupported", "Shared-room approval does not establish physical privacy or actor identity"]
 }

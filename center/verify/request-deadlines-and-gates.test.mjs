@@ -199,19 +199,14 @@ test("the burst ranking releases its own control after it succeeds", async () =>
 });
 
 test("the Ai Mic display aborts delivery and clears committed content when the wearer leaves", async () => {
-  const [chat, display, runtime, tab] = await Promise.all([
+  const [chat, display] = await Promise.all([
     source("components/AiMicChat.tsx"), source("components/BrowserDisplay.tsx"),
-    source("lib/browserRuntime.ts"), source("app/settings/account/surfaces/surfaceTab.ts"),
   ]);
   assert.match(chat, /<BrowserDisplay active=\{active\}/);
   assert.doesNotMatch(`${chat}\n${display}`, /new Audio|SpeechRecognition|\/api\/assistant\/(?:stream|speech)/);
   assert.match(display, /current\.dispose\(\)/);
   assert.match(display, /if \(!active\) \{ tab\.current\?\.leave\(\)/);
   assert.match(display, /command=\{active && status === "visible" \? command : null\}/);
-  assert.match(tab, /this\.runtime\?\.stop\(\)/);
-  assert.match(runtime, /this\.generation\+\+; this\.controller\?\.abort\(\)/);
-  assert.match(runtime, /this\.current = null/);
-  assert.match(runtime, /this\.render\(null\)/);
-  assert.match(runtime, /signal: AbortSignal\.any\(\[controller\.signal,/);
-  assert.match(runtime, /if \(generation !== this\.generation\) return;/);
+  // BrowserDisplay's rendered lifecycle tests prove clearing, cancellation
+  // and late-result fencing on the room transport. Keep only the Ai Mic seam here.
 });

@@ -40,7 +40,6 @@ fn with_pairing(
     Router::new()
         .route("/surface-api/v1/surfaces", get(list).post(approve))
         .route("/surface-api/v1/surfaces/:surface_id", delete(revoke))
-        .route("/surface-api/v1/surfaces/:surface_id/state", post(state))
         .route("/surface-api/v1/surfaces/:surface_id/leave", post(leave))
         .route("/surface-api/v1/pins", get(list_pins).post(approve_pin))
         .route("/surface-api/v1/pins/:surface_id", delete(revoke_pin))
@@ -126,13 +125,6 @@ fn body<T>(value: Result<Json<T>, JsonRejection>) -> Result<T, ApiError> {
 struct Approval {
     surface_id: Uuid,
     approval: String,
-}
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct SurfaceState {
-    incarnation: Uuid,
-    sequence: u64,
-    visible: bool,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -267,30 +259,6 @@ async fn revoke(
     let surface = api
         .store
         .mutate_surface(&principal, id(&surface_id)?, Mutation::Revoke)
-        .await?;
-    Ok(Json(json!({"surface": surface})))
-}
-async fn state(
-    State(api): State<ApiState>,
-    Path(surface_id): Path<String>,
-    headers: HeaderMap,
-    request: Result<Json<SurfaceState>, JsonRejection>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let principal = owner(&headers, &api)?;
-    let token_hash = connection_hash(&headers)?;
-    let request = body(request)?;
-    let surface = api
-        .store
-        .mutate_surface(
-            &principal,
-            id(&surface_id)?,
-            Mutation::State {
-                token_hash,
-                incarnation: request.incarnation,
-                sequence: request.sequence,
-                visible: request.visible,
-            },
-        )
         .await?;
     Ok(Json(json!({"surface": surface})))
 }
@@ -555,7 +523,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn surface_registry_http_approval_state_rotation_leave_revoke() {
+    async fn surface_registry_http_approval_rotation_leave_revoke() {
         let app = with_verifier(
             Arc::new(crate::store::MemoryStore::default()),
             Some(verifier()),
@@ -574,86 +542,18 @@ mod tests {
         let incarnation = &approved["connection"]["incarnation"];
         assert_eq!(approved["surface"]["available"], false);
         assert_eq!(approved["surface"]["renderVerified"], false);
-        let state = json!({"incarnation": incarnation, "sequence": 1, "visible": true});
-        assert_eq!(
-            call(
-                &app,
-                "POST",
-                &format!("{path}/state"),
-                Some(&other),
-                Some(token),
-                state.clone()
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("{path}/state"))
+                    .body(Body::empty())
+                    .unwrap(),
             )
             .await
-            .0,
-            StatusCode::NOT_FOUND
-        );
-        assert_eq!(
-            call(
-                &app,
-                "POST",
-                &format!("{path}/state"),
-                Some(&owner),
-                Some(&"f".repeat(64)),
-                state.clone()
-            )
-            .await
-            .0,
-            StatusCode::FORBIDDEN
-        );
-        let mut wrong = state.clone();
-        wrong["incarnation"] = Uuid::new_v4().to_string().into();
-        assert_eq!(
-            call(
-                &app,
-                "POST",
-                &format!("{path}/state"),
-                Some(&owner),
-                Some(token),
-                wrong
-            )
-            .await
-            .0,
-            StatusCode::FORBIDDEN
-        );
-        let (status, shown) = call(
-            &app,
-            "POST",
-            &format!("{path}/state"),
-            Some(&owner),
-            Some(token),
-            state.clone(),
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(shown["surface"]["available"], true);
-        assert_eq!(shown["surface"]["occupancy"], "unknown");
-        assert_eq!(shown["surface"]["trustLevel"], 0);
-        let (_, duplicate) = call(
-            &app,
-            "POST",
-            &format!("{path}/state"),
-            Some(&owner),
-            Some(token),
-            state.clone(),
-        )
-        .await;
-        assert_eq!(duplicate, shown);
-        let mut conflict = state.clone();
-        conflict["visible"] = false.into();
-        assert_eq!(
-            call(
-                &app,
-                "POST",
-                &format!("{path}/state"),
-                Some(&owner),
-                Some(token),
-                conflict
-            )
-            .await
-            .0,
-            StatusCode::CONFLICT
-        );
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
         let (_, listed) = call(&app, "GET", root, Some(&owner), None, json!(null)).await;
         assert_eq!(listed["surfaces"].as_array().unwrap().len(), 1);
         assert!(!listed.to_string().contains(token));
@@ -666,10 +566,23 @@ mod tests {
             call(
                 &app,
                 "POST",
-                &format!("{path}/state"),
+                &format!("{path}/leave"),
+                Some(&other),
+                Some(token),
+                json!({"incarnation":incarnation})
+            )
+            .await
+            .0,
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            call(
+                &app,
+                "POST",
+                &format!("{path}/leave"),
                 Some(&owner),
                 Some(token),
-                state
+                json!({"incarnation":incarnation})
             )
             .await
             .0,

@@ -11,7 +11,7 @@
     "referenceImplementation": "unavailable",
     "limitation": "The paper names AMBIANCE-IMPLEMENTATION.md and reference tests but supplies no repository URL or commit. Those implementations and reported results have not been independently reproduced."
   },
-  "scope": "Track published single-principal, single-site semantics and Cosmos product acceptance. This implementation targets the paper’s self-hosted LiveKit substrate; current polling is an intermediate proof, not the final transport. This inventory is not a passing conformance report.",
+  "scope": "Track published single-principal, single-site semantics and Cosmos product acceptance. Cosmos and Center use the paper's self-hosted LiveKit substrate for text coordination; native clients, media and full acceptance remain unfinished. This inventory is not a passing conformance report.",
   "verificationPolicy": "pending means no implementation evidence is recorded; partial means a cited implementation or test definition covers only part of the requirement. Evidence references and metadata checks never establish that behavior passed, physical acceptance occurred, or production is conformant. Runtime reports and secrets stay outside the checkout.",
   "interpretations": [
     {
@@ -230,9 +230,9 @@
       "id": "browser-dom-ack-test-definition",
       "kind": "test-definition",
       "path": "center/src/components/BrowserDisplay.test.tsx",
-      "anchor": "it(\"requires explicit approval, escapes text, and acknowledges only the committed exact DOM\"",
+      "anchor": "it(\"requires approval, escapes text and acknowledges only the committed exact DOM\"",
       "scope": "Defines explicit browser approval, escaped text and an exact-action acknowledgment after the React DOM commit; the file also defines no acknowledgment after render failure.",
-      "limitation": "Mocked fetch and DOM test definitions only. No live browser-to-server acceptance, physical privacy, native surface or latency proof."
+      "limitation": "Mocked room transport, bootstrap fetch and DOM test definitions only. No live browser-to-server acceptance, physical privacy, native surface or latency proof."
     }
   ],
   "requirements": [

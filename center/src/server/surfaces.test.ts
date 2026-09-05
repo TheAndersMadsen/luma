@@ -5,7 +5,6 @@ vi.mock("@/server/operator", () => ({ currentSession: mocks.session }));
 vi.mock("@/server/auth", () => ({ get AUTH_ENABLED() { return mocks.authEnabled; }, isSameOriginRequest: mocks.origin }));
 vi.mock("@/server/cosmos", () => ({ COSMOS_WEBAPI: "http://cosmos.test", surfaceOwnerHeaders: mocks.headers, SessionExpiredError: class extends Error {} }));
 import { GET, POST } from "@/app/api/surfaces/route";
-import { POST as STATE } from "@/app/api/surfaces/[surfaceId]/state/route";
 import { POST as LEAVE } from "@/app/api/surfaces/[surfaceId]/leave/route";
 import { DELETE } from "@/app/api/surfaces/[surfaceId]/route";
 import { SessionExpiredError } from "@/server/cosmos";
@@ -23,7 +22,6 @@ afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.useRealTimers(
 describe("surface BFF real route handlers", () => {
   it("denies every handler when login is disabled or the session lacks a bearer", async () => {
     const handlers = [() => GET(new Request("https://center.test/api/surfaces")), () => POST(request(approval)),
-      () => STATE(request({ incarnation, sequence: 1, visible: true }), { params: Promise.resolve({ surfaceId: id }) }),
       () => LEAVE(request({ incarnation }), { params: Promise.resolve({ surfaceId: id }) }),
       () => DELETE(new Request("https://center.test/api/surfaces", { method: "DELETE" }), { params: Promise.resolve({ surfaceId: id }) })];
     mocks.authEnabled = false;
@@ -63,7 +61,6 @@ describe("surface BFF real route handlers", () => {
     for (const body of [{ ...approval, trust: 9 }, { ...approval, surfaceId: "a".repeat(2000) }, { ...approval, approval: "private" }]) {
       expect((await POST(request(body))).status).toBe(400);
     }
-    expect((await STATE(request({ incarnation, sequence: 1, visible: true }), { params: Promise.resolve({ surfaceId: id }) })).status).toBe(403);
     expect(fetch).not.toHaveBeenCalled();
   });
   it("forwards only server bearer and returns only bounded approval projection", async () => {
@@ -81,11 +78,6 @@ describe("surface BFF real route handlers", () => {
     vi.mocked(fetch).mockImplementation(async () => Response.json({ surfaces: [{ ...surface, token }], surface, connection: { token, incarnation } }));
     expect(JSON.stringify(await (await GET(new Request("https://center.test/api/surfaces"))).json())).not.toContain(token);
     expect(JSON.stringify(await (await DELETE(new Request("https://center.test/api/surfaces", { method: "DELETE" }), { params: Promise.resolve({ surfaceId: id }) })).json())).not.toContain(token);
-  });
-  it("forwards state token without allowing browser owner selection", async () => {
-    vi.mocked(fetch).mockResolvedValue(Response.json({ surface }));
-    await STATE(request({ incarnation, sequence: 1, visible: true }, { "x-cosmos-surface-token": token }), { params: Promise.resolve({ surfaceId: id }) });
-    expect(vi.mocked(fetch).mock.calls[0][1]?.headers).toEqual({ authorization: "Bearer server-only", "content-type": "application/json", "x-cosmos-surface-token": token });
   });
   it("sanitizes upstream failures and malformed or oversized success", async () => {
     for (const response of [new Response("secret upstream detail", { status: 500 }), Response.json({ surfaces: Array(17).fill(surface) }), new Response("x".repeat(65537))]) {

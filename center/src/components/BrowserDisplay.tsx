@@ -45,6 +45,7 @@ export function BrowserDisplay({ active = true }: { active?: boolean }) {
     <form onSubmit={event => { event.preventDefault(); const text = draft.trim(); if (status === "visible" && text) { setDraft(""); void tab.current?.runtime?.input(text); } }}>
       <input aria-label="Ask Cosmos" placeholder="Ask Cosmos a public question…" maxLength={4000} value={draft} disabled={!active || status !== "visible"} onChange={event => setDraft(event.target.value)} />
       <button type="submit" aria-label="Send" disabled={!active || status !== "visible" || !draft.trim()}>Send</button>
+      <button type="button" disabled={!active || status !== "visible"} onClick={() => { void tab.current?.runtime.cancel(); }}>Cancel request</button>
     </form>
   </div>;
 }

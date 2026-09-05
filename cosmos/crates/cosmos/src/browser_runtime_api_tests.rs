@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    assistant::llm::{ChatMessage, ChatModel, ChatResponse, LlmError, ToolCall, ToolDef},
+    assistant::llm::{ChatMessage, ChatModel, ChatResponse, LlmError, ToolDef},
     store::SharedStore,
     surface_registry::{self, Mutation},
 };
@@ -33,7 +33,7 @@ async fn browser_runtime_api_auth_precedes_body_and_authorized_body_is_bounded()
     >());
     let request = Request::builder()
         .method("POST")
-        .uri("/runtime-api/v1/browser/input")
+        .uri("/runtime-api/v1/browser/room")
         .header("content-type", "application/json")
         .body(pending)
         .unwrap();
@@ -48,7 +48,7 @@ async fn browser_runtime_api_auth_precedes_body_and_authorized_body_is_bounded()
     assert_eq!(
         call(
             &app,
-            "input",
+            "room",
             Some(&bearer("owner")),
             Some(&token),
             json!({"text":"x".repeat(9000)})
@@ -91,12 +91,10 @@ struct Model;
 impl ChatModel for Model {
     async fn complete(
         &self,
-        messages: &[ChatMessage],
-        tools: &[ToolDef],
+        _messages: &[ChatMessage],
+        _tools: &[ToolDef],
     ) -> Result<ChatResponse, LlmError> {
-        assert_eq!(messages.len(), 2);
-        assert_eq!(tools.len(), 1);
-        Ok(ChatResponse { tool_call: Some(ToolCall { name: "propose_information".into(), arguments: json!({"intent":{"kind":"visual_text_card","text":"Public answer"},"privacy":"public"}).to_string() }), ..Default::default() })
+        panic!("room bootstrap must not invoke cognition")
     }
 }
 fn verifier() -> Arc<JwtVerifier> {
@@ -189,157 +187,94 @@ async fn fixture() -> (Router, SharedStore, Uuid, Uuid, String) {
     )
 }
 #[tokio::test]
-async fn browser_runtime_api_requires_owner_and_current_capability_before_cognition() {
-    let (app, _, id, incarnation, token) = fixture().await;
-    let request = json!({"surfaceId":id,"incarnation":incarnation,"text":"hello"});
-    assert_eq!(
-        call(&app, "input", None, Some(&token), request.clone())
+async fn browser_runtime_api_superseded_transports_are_absent() {
+    let (app, _, _, _, _) = fixture().await;
+    for operation in ["poll", "ack", "input"] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/runtime-api/v1/browser/{operation}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
-            .0,
-        StatusCode::UNAUTHORIZED
-    );
-    assert_eq!(
-        call(&app, "input", Some(&bearer("owner")), None, request.clone())
-            .await
-            .0,
-        StatusCode::FORBIDDEN
-    );
-    assert_eq!(
-        call(
-            &app,
-            "input",
-            Some(&bearer("other")),
-            Some(&token),
-            request.clone()
-        )
-        .await
-        .0,
-        StatusCode::FORBIDDEN
-    );
-    assert_eq!(
-        call(
-            &app,
-            "input",
-            Some(&bearer("owner")),
-            Some(&token),
-            json!({"surfaceId":id,"incarnation":Uuid::new_v4(),"text":"hello"})
-        )
-        .await
-        .0,
-        StatusCode::FORBIDDEN
-    );
-    assert_eq!(
-        call(
-            &app,
-            "input",
-            Some(&bearer("owner")),
-            Some(&token),
-            json!({"surfaceId":id,"incarnation":incarnation,"text":"hello","trust":9})
-        )
-        .await
-        .0,
-        StatusCode::BAD_REQUEST
-    );
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/runtime-api/v1/browser/poll")
-                .header("content-type", "application/json")
-                .header("x-forwarded-client-cert", "attacker")
-                .body(Body::from(
-                    json!({"surfaceId":id,"incarnation":incarnation}).to_string(),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-}
-#[tokio::test]
-async fn browser_runtime_api_committed_poll_exact_ack_and_hidden_dismissal() {
-    let (app, store, id, incarnation, token) = fixture().await;
-    let owner = bearer("owner");
-    assert_eq!(
-        call(
-            &app,
-            "input",
-            Some(&owner),
-            Some(&token),
-            json!({"surfaceId":id,"incarnation":incarnation,"text":"hello"})
-        )
-        .await,
-        (StatusCode::OK, json!({"accepted":true}))
-    );
-    let (_, result) = call(
-        &app,
-        "poll",
-        Some(&owner),
-        Some(&token),
-        json!({"surfaceId":id,"incarnation":incarnation}),
-    )
-    .await;
-    let command = &result["commands"][0];
-    assert_eq!(command["content"]["text"], "Public answer");
-    assert_eq!(
-        command["contentDigest"],
-        surface_registry::hash(b"Public answer")
-    );
-    let mut proof = command.clone();
-    for key in ["version", "content", "expiresAt"] {
-        proof.as_object_mut().unwrap().remove(key);
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
-    for (key, wrong) in [
-        ("generation", json!(999)),
-        ("turnId", json!(Uuid::new_v4())),
-        ("contentDigest", json!("b".repeat(64))),
-        ("incarnation", json!(Uuid::new_v4())),
-    ] {
-        let mut stale = proof.clone();
-        stale[key] = wrong;
-        assert_ne!(
-            call(&app, "ack", Some(&owner), Some(&token), stale).await.0,
-            StatusCode::OK
+}
+
+#[tokio::test]
+#[ignore = "requires COSMOS_RTC_BROWSER_TEST_INPUT with an isolated localhost SFU"]
+async fn browser_runtime_api_live_bootstrap_binds_owner_capability_and_epoch() {
+    let input: Value = serde_json::from_slice(
+        &std::fs::read(std::env::var("COSMOS_RTC_BROWSER_TEST_INPUT").unwrap()).unwrap(),
+    )
+    .unwrap();
+    let url = input["url"].as_str().unwrap();
+    assert!(url.starts_with("ws://127.0.0.1:"));
+    let (_, store, id, incarnation, token) = fixture().await;
+    let runtime = Arc::new(AmbianceRuntime::new(store, Arc::new(Model), None));
+    let app = with_rooms(
+        runtime,
+        Some(verifier()),
+        Some(
+            crate::browser_rooms::Config::new(
+                url.into(),
+                url.into(),
+                input["key"].as_str().unwrap().into(),
+                input["secret"].as_str().unwrap().into(),
+            )
+            .unwrap(),
+        ),
+    );
+    let epoch = Uuid::new_v4();
+    let body = json!({"surfaceId": id, "incarnation":incarnation, "epoch":epoch});
+    for (owner, capability) in [("other", token.clone()), ("owner", "f".repeat(64))] {
+        assert_eq!(
+            call(
+                &app,
+                "room",
+                Some(&bearer(owner)),
+                Some(&capability),
+                body.clone()
+            )
+            .await
+            .0,
+            StatusCode::FORBIDDEN
         );
     }
-    assert_eq!(
-        call(&app, "ack", Some(&owner), Some(&token), proof.clone()).await,
-        (StatusCode::OK, json!({"acknowledged":true}))
-    );
-    let (_, repeated) = call(
+    let (status, connected) = call(
         &app,
-        "poll",
-        Some(&owner),
+        "room",
+        Some(&bearer("owner")),
         Some(&token),
-        json!({"surfaceId":id,"incarnation":incarnation}),
+        body.clone(),
     )
     .await;
-    assert_eq!(repeated["commands"][0], *command);
-    store
-        .mutate_surface(
-            "U:owner",
-            id,
-            Mutation::State {
-                token_hash: surface_registry::hash(token.as_bytes()),
-                incarnation,
-                sequence: 2,
-                visible: false,
-            },
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(connected["epoch"], epoch.to_string());
+    assert_eq!(connected["runtimeParticipant"], "runtime");
+    assert!(Uuid::parse_str(connected["participant"].as_str().unwrap()).is_ok());
+    assert!(!connected.to_string().contains(&token));
+    assert!(
+        !connected
+            .to_string()
+            .contains(input["secret"].as_str().unwrap())
+    );
+    let mut replacement = body;
+    replacement["epoch"] = Uuid::new_v4().to_string().into();
+    assert_eq!(
+        call(
+            &app,
+            "room",
+            Some(&bearer("owner")),
+            Some(&token),
+            replacement
         )
         .await
-        .unwrap();
-    let (_, hidden) = call(
-        &app,
-        "poll",
-        Some(&owner),
-        Some(&token),
-        json!({"surfaceId":id,"incarnation":incarnation}),
-    )
-    .await;
-    assert_eq!(hidden["commands"], json!([]));
-    assert!(!hidden.to_string().contains("Public answer"));
-    assert_ne!(
-        call(&app, "ack", Some(&owner), Some(&token), proof).await.0,
-        StatusCode::OK
+        .0,
+        StatusCode::FORBIDDEN
     );
 }

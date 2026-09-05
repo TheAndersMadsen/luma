@@ -36,7 +36,12 @@ impl Config {
         .ok()
     }
 
-    fn new(url: String, public_url: String, key: String, secret: String) -> Result<Self, Error> {
+    pub(crate) fn new(
+        url: String,
+        public_url: String,
+        key: String,
+        secret: String,
+    ) -> Result<Self, Error> {
         for address in [&url, &public_url] {
             let parsed = reqwest::Url::parse(address).map_err(|_| Error::Invalid)?;
             if !matches!(parsed.scheme(), "ws" | "wss")

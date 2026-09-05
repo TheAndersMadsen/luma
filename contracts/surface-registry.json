@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "basePath": "/surface-api/v1/surfaces",
-  "authentication": "Verified owner Authorization Bearer required on every operation; state and leave additionally require X-Cosmos-Surface-Token",
+  "authentication": "Verified owner Authorization Bearer required on every operation; leave additionally requires X-Cosmos-Surface-Token. Visibility and liveness use the authenticated room's sequenced BrowserControl in ambiance-room.json.",
   "timeUnit": "Unix epoch milliseconds, server-owned",
   "limits": {"bodyBytes": 1024, "activeSurfacesPerOwner": 16, "connectionLifetimeMs": 3600000, "livenessLeaseMs": 45000, "recommendedHeartbeatMs": 15000},
   "approval": "browser-shared-display-v2",
@@ -9,7 +9,6 @@
     "GET /": {"response": {"surfaces": "Surface[] (non-revoked only)"}},
     "POST /": {"request": {"surfaceId": "UUID", "approval": "browser-shared-display-v2"}, "response": {"surface": "Surface", "connection": {"token": "64 lowercase hex characters; returned only here", "incarnation": "UUID", "expiresAt": "integer milliseconds"}}, "semantics": "Explicit approval or reapproval grants public text input, atomically rotates connection and records approval; initial visible=false, sequence=0. Persisted v1 records retain output-only permission until explicit reapproval."},
     "DELETE /:surfaceId": {"response": {"surface": "Surface"}, "semantics": "Owner revokes approval and invalidates connection"},
-    "POST /:surfaceId/state": {"request": {"incarnation": "UUID", "sequence": "positive safe integer", "visible": "boolean"}, "response": {"surface": "Surface"}, "semantics": "Strictly increasing sequence; exact duplicate is idempotent without renewing lease; different payload at same sequence or stale sequence is conflict"},
     "POST /:surfaceId/leave": {"request": {"incarnation": "UUID"}, "response": {"surface": "Surface"}, "semantics": "Invalidates connection, not approval; rejoin requires explicit approval"}
   },
   "Surface": {

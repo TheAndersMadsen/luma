@@ -54,3 +54,57 @@ async fn attributed_rpc_roundtrip_bounds_and_shutdown() {
     .unwrap();
     runtime.close().await.unwrap();
 }
+
+/// Driven by center/verify/browser-room-live.mjs and an actual browser. This
+/// proves the SDK/adapter transport boundary, not the Cosmos policy engine.
+#[cfg(unix)]
+#[tokio::test]
+#[ignore = "requires isolated SFU configuration and the real browser fixture"]
+async fn browser_adapter_native_roundtrip() {
+    use std::{io::Write, os::unix::fs::OpenOptionsExt, time::Duration};
+    let input: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(std::env::var("COSMOS_RTC_BROWSER_TEST_INPUT").unwrap()).unwrap(),
+    )
+    .unwrap();
+    let url = input["url"].as_str().unwrap();
+    assert!(url.starts_with("ws://127.0.0.1:"));
+    let key = input["key"].as_str().unwrap();
+    let secret = input["secret"].as_str().unwrap();
+    let name = format!(
+        "browser-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    );
+    let participant = "66666666-6666-6666-6666-666666666666";
+    let runtime_token = cosmos_rtc::coordination_token(key, secret, &name, "runtime").unwrap();
+    let surface_token = cosmos_rtc::coordination_token(key, secret, &name, participant).unwrap();
+    let (runtime, mut requests) = Session::connect(url, &runtime_token).await.unwrap();
+    let bootstrap = serde_json::json!({"version":1,"url":url,"token":surface_token,"participant":participant,
+        "runtimeParticipant":"runtime","runtimeEpoch":"55555555-5555-5555-5555-555555555555",
+        "epoch":"44444444-4444-4444-4444-444444444444"});
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(std::env::var("COSMOS_RTC_BROWSER_TEST_OUTPUT").unwrap())
+        .unwrap();
+    file.write_all(bootstrap.to_string().as_bytes()).unwrap();
+    file.sync_all().unwrap();
+    let call = tokio::time::timeout(Duration::from_secs(180), requests.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(call.caller, participant);
+    assert_eq!(call.payload, "synthetic browser input");
+    call.reply.send(Ok("native admission".into())).unwrap();
+    assert_eq!(
+        runtime
+            .invoke(participant, "synthetic native frame".into())
+            .await
+            .unwrap(),
+        "browser receipt"
+    );
+    runtime.close().await.unwrap();
+}

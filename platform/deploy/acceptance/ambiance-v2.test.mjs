@@ -35,7 +35,7 @@ function validate(value, readSource = (file) => {
   nonblank(value.verificationPolicy);
   assert.match(value.scope, /not a passing conformance report/u);
   assert.match(value.scope, /self-hosted LiveKit substrate/u);
-  assert.match(value.scope, /polling is an intermediate proof/u);
+  assert.match(value.scope, /native clients, media and full acceptance remain unfinished/u);
   assert.match(value.verificationPolicy, /never establish that behavior passed/u);
 
   assert.ok(Array.isArray(value.evidence));

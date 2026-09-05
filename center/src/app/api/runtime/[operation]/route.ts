@@ -5,6 +5,6 @@ export async function GET(_request: Request, context: { params: Promise<{ operat
 }
 export async function POST(request: Request, context: { params: Promise<{ operation: string }> }) {
   const { operation } = await context.params;
-  if (operation !== "poll" && operation !== "ack" && operation !== "input") return Response.json({ error: "not_found" }, { status: 404, headers: { "cache-control": "no-store" } });
-  return runtimeRequest(request, operation);
+  if (operation !== "room") return Response.json({ error: "not_found" }, { status: 404, headers: { "cache-control": "no-store" } });
+  return runtimeRequest(request);
 }

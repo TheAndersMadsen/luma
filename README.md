@@ -131,7 +131,7 @@ responsible for local permissions, capture, rendering, and playback evidence:
    raises, filters eligibility, and commits routing before dispatch. Conservative
    text checks can raise privacy but do not prove arbitrary text is correctly
    classified. Unknown rooms cannot carry content above shared_room.
-   Center polls bounded commands and acknowledges the exact action, generation,
+   Center receives bounded room commands and acknowledges the exact action, generation,
    channel, incarnation and content digest after render commit. A Pin display
    request waits for the committed acknowledgment, including a logged repair's
    exact lineage, before emitting the controlled display-confirmation sentence.
@@ -154,8 +154,8 @@ responsible for local permissions, capture, rendering, and playback evidence:
    Digests and outcome metadata remain in the ledger. This is logical payload
    cleanup, not secure erasure of database storage or complete audit retention.
    Passing evidence must come from the current focused and broad checks.
-   HTTP polling and the stock seam are an intermediate proof, not the final
-   realtime substrate; this branch is not ready for deployment.
+   Center now uses room RPC; the stock speech seam, media and native-client
+   paths still require work before deployment acceptance.
 4. **Phase 3: realtime Pin interaction and semantic services.** Integrate
    self-hosted LiveKit rooms, participant identity, media tracks, text streams
    and RPC as the paper's shared substrate. Bind cognition dispatch to the
@@ -189,7 +189,7 @@ responsible for local permissions, capture, rendering, and playback evidence:
    Offline operation permits only preapproved none-risk reflexes. Native clients,
    audio and hardware acceptance remain outstanding. Measure the paper's
    expression-under-200-ms, median durable-routing-under-50-ms and median
-   voice-first-dispatch-under-2.5-s gates; current polling proves none of them.
+   voice-first-dispatch-under-2.5-s gates; current coordination tests prove none of them.
 6. **Phase 5: staged acceptance and release.** Implement and verify Cosmos, then
    Center, and deploy the verified server release without waiting for physical
    Pin access. Build and test macOS and Android clients against the same
@@ -249,9 +249,9 @@ required or that the stock SDK alone violates the paper.
    delivery, payload bounds and disconnect state. The Cosmos application now
    exposes authenticated browser room bootstrap, sequenced input/control RPCs
    and targeted visual delivery through the
-   [room contract](contracts/ambiance-room.json). The Center room client,
-   deployment configuration and media routing remain separate gates; Center
-   still uses its interim HTTP path until that client is replaced.
+   [room contract](contracts/ambiance-room.json). Center now uses the room client,
+   and canonical Compose includes the self-hosted service. External-network and
+   media acceptance remain separate gates.
    `cosmos/native/webrtc.json` pins native bytes; acquisition verifies the
    archive and every extracted compiler input. The patched upstream build helper
    cannot download native code. Linux uses Clang 21/lld with target GLib headers
@@ -296,7 +296,8 @@ required or that the stock SDK alone violates the paper.
    is permanently fenced. There is one connected coordinator per principal,
    not an active-active room deployment. The new endpoint uses `COSMOS_RTC_URL`,
    `COSMOS_RTC_PUBLIC_URL`, `COSMOS_RTC_API_KEY` and `COSMOS_RTC_API_SECRET`;
-   the signing secret remains in Cosmos. Production Compose wiring is pending.
+   the signing secret remains in Cosmos. Production Compose wiring is implemented;
+   the new release has not been deployed.
 3. **Cosmos realtime cognition.** Do not automatically forward
    `RoomSessionTransport`, control events or history. Manual `RoomIO` with a
    no-room `AgentSession.start` is a public-composition candidate requiring
@@ -314,10 +315,23 @@ required or that the stock SDK alone violates the paper.
    the full scorer and earned-authority evidence, durable repair, audit
    anchoring and retention, and behavioral coverage of all twelve invariants.
    Never restore old bypasses merely to pass compatibility tests.
-5. **Center after Cosmos.** Replace polling with the actual room client. Verify
-   visible-page lifecycle, exact render acknowledgment, and stopping on hide or
-   unmount. Keep owner approvals, provider configuration and redacted status;
-   place no policy authority in the client. Require real browser behavior tests.
+5. **Center after Cosmos — room client implemented, full application acceptance pending.**
+   One SDK adapter owns LiveKit imports. Authenticated bootstrap binds runtime
+   identity and boot epoch; one bounded sequence covers input, visibility,
+   cancellation and acknowledgment, including exact retries after a lost reply.
+   Runtime stamps deduplicate frames; a clear or hidden page cannot revive a
+   retired card. React's actual text commit remains the acknowledgment boundary.
+   Hiding clears output immediately and sends state through the room; losing the
+   connection or unmounting fences further work and requires new approval.
+   HTTP poll/input/ack/state routes are removed. Owner approvals, provider
+   configuration and redacted status remain HTTP operations. Focused rendered
+   tests exercise these boundaries. The actual browser SDK and native Rust SDK
+   exchanged attributed RPC in both directions through the isolated local SFU;
+   native disconnect fenced the browser. The fixture waits for both replies
+   before shutdown, so closing a peer cannot race an outstanding response.
+   Run `center/verify/browser-room-live.mjs` with Node 22, an isolated SFU JSON
+   and the verified native WebRTC directory, then open its loopback URL. This
+   transport check does not prove the full authenticated UI or media playback.
 6. **Thin native clients and Pin preparation.** Deliver macOS and Android
    clients using the shared contracts, with local permissions, capture,
    rendering/playback, lifecycle handling, protected credential storage,
@@ -361,6 +375,15 @@ Traefik strips exactly `/livekit` before forwarding HTTP/WebSocket traffic;
 the [server registers both protocol versions](https://github.com/livekit/livekit/blob/v1.13.6/pkg/service/rtcservice.go).
 Rust preserves a trailing empty path segment, so `/livekit/` would produce a
 double slash. JavaScript normalizes that case; use the same unambiguous base URL.
+
+Center retains `connect-src 'self'`: [CSP3](https://w3c.github.io/webappsec-csp/#match-url-to-source-expression)
+and the checked [Chromium 153](https://github.com/chromium/chromium/blob/153.0.8010.12/third_party/blink/renderer/core/frame/csp/csp_source_test.cc#L377),
+[Firefox 155](https://hg.mozilla.org/releases/mozilla-release/file/FIREFOX_155_0_1_RELEASE/dom/security/nsCSPUtils.cpp#l555)
+and [WebKit](https://github.com/WebKit/WebKit/blob/WebKit-7622.2.11.14.6/Source/WebCore/page/csp/ContentSecurityPolicySource.cpp#L52)
+implementations permit HTTPS to same-host WSS on port 443. This is source and
+upstream-test evidence; full production-browser acceptance remains required.
+The browser client currently accepts text only; its microphone permission policy
+must be deliberately updated when browser audio capture is implemented.
 
 | Traffic | Canonical route |
 | --- | --- |

@@ -1,10 +1,10 @@
 import { currentSession } from "@/server/operator";
 import { AUTH_ENABLED, isSameOriginRequest } from "@/server/auth";
 import { COSMOS_WEBAPI, surfaceOwnerHeaders, SessionExpiredError } from "@/server/cosmos";
-import { integer, parseConnection, parseSurface, record, SURFACE_APPROVAL, SURFACE_TOKEN, UUID } from "@/lib/contracts/surfaces";
+import { parseConnection, parseSurface, record, SURFACE_APPROVAL, SURFACE_TOKEN, UUID } from "@/lib/contracts/surfaces";
 import { boundedJson } from "@/server/boundedJson";
 
-type Operation = "list" | "approve" | "revoke" | "state" | "leave";
+type Operation = "list" | "approve" | "revoke" | "leave";
 const ERRORS: Record<number, string> = { 400: "invalid_request", 401: "unauthorized", 403: "invalid_connection", 404: "not_found", 409: "sequence_conflict", 429: "surface_limit", 503: "unavailable" };
 function json(value: unknown, status = 200) {
   return Response.json(value, { status, headers: { "cache-control": "no-store", "x-content-type-options": "nosniff" } });
@@ -22,7 +22,7 @@ export async function surfaceRequest(request: Request, operation: Operation, sur
     if (surfaceId !== undefined && !UUID.test(surfaceId)) return json({ error: "invalid_request" }, 400);
     let body: Record<string, unknown> | undefined;
     const headers = await surfaceOwnerHeaders();
-    if (operation === "approve" || operation === "state" || operation === "leave") {
+    if (operation === "approve" || operation === "leave") {
       try {
         if (request.headers.get("content-type")?.split(";", 1)[0].trim() !== "application/json") throw new Error("content_type");
         body = record(await boundedJson(request.body, 1024, AbortSignal.timeout(5000)));
@@ -30,9 +30,8 @@ export async function surfaceRequest(request: Request, operation: Operation, sur
           fields(body, ["surfaceId", "approval"]);
           if (typeof body.surfaceId !== "string" || !UUID.test(body.surfaceId) || body.approval !== SURFACE_APPROVAL) throw new Error("approval");
         } else {
-          fields(body, operation === "state" ? ["incarnation", "sequence", "visible"] : ["incarnation"]);
+          fields(body, ["incarnation"]);
           if (typeof body.incarnation !== "string" || !UUID.test(body.incarnation)) throw new Error("incarnation");
-          if (operation === "state" && (!integer(body.sequence, 1) || typeof body.visible !== "boolean")) throw new Error("state");
           const token = request.headers.get("x-cosmos-surface-token");
           if (!token || !SURFACE_TOKEN.test(token)) return json({ error: "invalid_connection" }, 403);
           headers["x-cosmos-surface-token"] = token;
@@ -40,7 +39,7 @@ export async function surfaceRequest(request: Request, operation: Operation, sur
       } catch { return json({ error: "invalid_request" }, 400); }
     }
     if (!COSMOS_WEBAPI) return json({ error: "unavailable" }, 503);
-    const suffix = surfaceId ? `/${surfaceId}${operation === "state" || operation === "leave" ? `/${operation}` : ""}` : "";
+    const suffix = surfaceId ? `/${surfaceId}${operation === "leave" ? "/leave" : ""}` : "";
     const signal = AbortSignal.timeout(8000);
     const response = await fetch(`${COSMOS_WEBAPI}/surface-api/v1/surfaces${suffix}`, {
       method: operation === "list" ? "GET" : operation === "revoke" ? "DELETE" : "POST",

@@ -2,12 +2,11 @@ import { parseConnection, parseSurface, record, SURFACE_APPROVAL, type SurfaceCo
 import type { BrowserRuntime } from "@/lib/browserRuntime";
 
 export type TabStatus = "inactive" | "approving" | "pending" | "visible" | "hidden" | "lost" | "expired";
-type Connection = SurfaceConnection & { sequence: number; controller: AbortController };
 
 /** One mounted tab, one memory-only capability. Visibility is not occupancy. */
 export class SurfaceTab {
   readonly surfaceId: string;
-  private connection: Connection | null = null;
+  private connection: SurfaceConnection | null = null;
   private generation = 0;
   private desired: boolean | null = null;
   private sending = false;
@@ -16,9 +15,9 @@ export class SurfaceTab {
   private disposed = false;
   private visible = false;
 
-  constructor(private notify: (status: TabStatus) => void, private changed: () => void, readonly runtime?: BrowserRuntime) {
-    this.surfaceId = runtime?.surfaceId ?? crypto.randomUUID();
-    runtime?.onFailure(incarnation => {
+  constructor(private notify: (status: TabStatus) => void, private changed: () => void, readonly runtime: BrowserRuntime) {
+    this.surfaceId = runtime.surfaceId;
+    runtime.onFailure(incarnation => {
       if (this.disposed || this.connection?.incarnation !== incarnation) return;
       const connection = this.clear();
       this.notify("lost"); this.changed();
@@ -27,7 +26,7 @@ export class SurfaceTab {
   }
 
   private clear() {
-    this.visible = false; this.runtime?.stop();
+    this.visible = false; this.runtime.stop();
     const previous = this.connection;
     this.connection = null;
     this.generation++;
@@ -35,7 +34,6 @@ export class SurfaceTab {
     this.sending = false;
     clearInterval(this.interval);
     clearTimeout(this.expiry);
-    previous?.controller.abort();
     return previous;
   }
   private async release(connection: SurfaceConnection) {
@@ -65,8 +63,10 @@ export class SurfaceTab {
       if (generation !== this.generation || this.disposed) { void this.release(connection); return; }
       const surface = parseSurface(body.surface);
       if (surface.surfaceId !== this.surfaceId || connection.expiresAt <= Date.now()) throw new Error("expired_approval");
-      this.connection = { ...connection, sequence: 0, controller: new AbortController() };
+      this.connection = connection;
       this.expiry = setTimeout(() => { this.clear(); this.notify("expired"); this.changed(); }, Math.min(connection.expiresAt - Date.now(), 3600000));
+      await this.runtime.start(connection);
+      if (generation !== this.generation || this.disposed) return;
       this.interval = setInterval(() => this.visibility(document.visibilityState === "visible"), 15000);
       this.visibility(document.visibilityState === "visible");
       this.changed();
@@ -78,34 +78,23 @@ export class SurfaceTab {
     if (!this.connection || this.disposed) return;
     this.desired = visible;
     // A routine visible heartbeat does not dismiss healthy current output.
-    if (!visible) { this.visible = false; this.runtime?.stop(); }
+    if (!visible) { this.visible = false; this.runtime.hide(); }
     if (!this.visible) this.notify("pending");
     void this.flush();
   }
   private async flush() {
     if (this.sending || !this.connection) return;
-    const connection = this.connection;
     const generation = this.generation;
     this.sending = true;
     try {
       while (this.desired !== null && generation === this.generation) {
         const visible = this.desired;
         this.desired = null;
-        const sequence = ++connection.sequence;
-        const response = await fetch(`/api/surfaces/${this.surfaceId}/state`, {
-          method: "POST", headers: { "content-type": "application/json", "x-cosmos-surface-token": connection.token },
-          body: JSON.stringify({ incarnation: connection.incarnation, sequence, visible }),
-          signal: AbortSignal.any([connection.controller.signal, AbortSignal.timeout(10000)]), cache: "no-store",
-        });
-        if (!response.ok) throw new Error("state_failed");
-        const surface = parseSurface(record(await response.json()).surface);
+        await this.runtime.visibility(visible);
         if (generation !== this.generation) return;
-        if (surface.surfaceId !== this.surfaceId || surface.sequence !== sequence || surface.visible !== visible
-          || !surface.connected || surface.revoked || surface.connectionExpiresAt <= Date.now() || surface.leaseExpiresAt <= Date.now()) throw new Error("state_invalid");
         if (this.desired === null) {
           this.visible = visible;
           this.notify(visible ? "visible" : "hidden");
-          if (visible) this.runtime?.start(connection);
         }
       }
     } catch {
