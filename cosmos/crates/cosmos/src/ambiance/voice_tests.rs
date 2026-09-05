@@ -706,4 +706,66 @@ mod runtime {
             );
         }
     }
+
+    #[tokio::test]
+    async fn ambiance_voice_pending_work_is_dropped_on_source_policy_deadline_or_caller_loss() {
+        struct Dropped(Arc<AtomicBool>);
+        impl Drop for Dropped {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+        for cause in ["source", "policy", "deadline", "caller"] {
+            let app = App::new(PrivacyClass::SharedRoom, false).await;
+            let mut intake = app.start().await.unwrap();
+            let fence = intake.fence.clone();
+            if cause == "deadline" {
+                intake.deadline = std::time::Instant::now() + std::time::Duration::from_millis(150);
+            }
+            let dropped = Arc::new(AtomicBool::new(false));
+            let guard = Dropped(dropped.clone());
+            let (entered, started) = tokio::sync::oneshot::channel();
+            let task = tokio::spawn(async move {
+                intake
+                    .while_pending(async move {
+                        let _guard = guard;
+                        let _ = entered.send(());
+                        std::future::pending::<Result<(), Status>>().await
+                    })
+                    .await
+            });
+            started.await.unwrap();
+            match cause {
+                "source" => app.source_current.store(false, Ordering::SeqCst),
+                "policy" => {
+                    app.store
+                        .runtime(
+                            app.auth.principal.expose_for_authorization(),
+                            RuntimeOperation::SetVoicePolicy {
+                                surface_id: fence.origin_surface,
+                                approval_revision: 1,
+                                expected_revision: 1,
+                                policy: None,
+                            },
+                        )
+                        .await
+                        .unwrap();
+                }
+                "caller" => task.abort(),
+                "deadline" => {}
+                _ => unreachable!(),
+            }
+            let result = tokio::time::timeout(std::time::Duration::from_secs(2), task)
+                .await
+                .unwrap();
+            if cause == "caller" {
+                assert!(result.unwrap_err().is_cancelled());
+            } else {
+                assert!(result.unwrap().is_err());
+            }
+            assert!(dropped.load(Ordering::SeqCst), "{cause}");
+            app.retired(&fence).await;
+            assert_eq!(app.model.calls.load(Ordering::SeqCst), 0);
+        }
+    }
 }

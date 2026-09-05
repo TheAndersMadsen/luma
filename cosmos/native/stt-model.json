@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "id": "whisper.cpp-1.8.3/base-multilingual/60ed5bc3",
+  "file": "ggml-base.bin",
+  "bytes": 147951465,
+  "sha256": "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe",
+  "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-base.bin"
+}

@@ -1,6 +1,73 @@
 use super::*;
 use std::{fs::OpenOptions, sync::mpsc, time::SystemTime};
 
+fn quantization_residue() -> Vec<f32> {
+    // Bounds the two measured zero-source SFU regressions (123 one-count and
+    // 176 at-most-two-count samples). No recorded audio is retained here.
+    let mut samples = vec![0.0; 24_000];
+    for index in 0..176 {
+        samples[index * 131] = if index % 2 == 0 { 2.0 } else { -2.0 } / 32768.0;
+    }
+    samples
+}
+
+#[test]
+fn local_stt_input_quality_floor_has_explicit_rms_and_short_input_boundaries() {
+    assert!(
+        Pcm16Mono::new(quantization_residue())
+            .unwrap()
+            .below_recognition_floor()
+    );
+    for width in [
+        1,
+        RECOGNITION_WINDOW_SAMPLES - 1,
+        RECOGNITION_WINDOW_SAMPLES,
+        MAX_SAMPLES,
+    ] {
+        for sign in [-1.0, 1.0] {
+            // -60dBFS lies between constant 32-count and 33-count signed16
+            // signals. Check both sides and the nearest f32 amplitudes too.
+            for amplitude in [32.0 / 32768.0, 0.001_f32.next_down()] {
+                assert!(
+                    Pcm16Mono::new(vec![sign * amplitude; width])
+                        .unwrap()
+                        .below_recognition_floor()
+                );
+            }
+            for amplitude in [33.0 / 32768.0, 0.001_f32] {
+                assert!(
+                    !Pcm16Mono::new(vec![sign * amplitude; width])
+                        .unwrap()
+                        .below_recognition_floor()
+                );
+            }
+        }
+    }
+    // A high peak alone does not satisfy an RMS input-quality requirement.
+    let mut impulse = vec![0.0; RECOGNITION_WINDOW_SAMPLES];
+    impulse[0] = 0.01;
+    assert!(Pcm16Mono::new(impulse).unwrap().below_recognition_floor());
+}
+
+#[test]
+fn local_stt_input_quality_floor_preserves_brief_boundary_and_tail_signals() {
+    // A 10ms burst at this level reaches -60dBFS over a 20ms window. It must
+    // survive a 15s recording and every offset, including disjoint-window
+    // boundaries and the capture tail. This tests energy, not speech detection.
+    let burst_length = RECOGNITION_WINDOW_SAMPLES / 2;
+    for start in [
+        0,
+        RECOGNITION_WINDOW_SAMPLES * 3 / 4,
+        MAX_SAMPLES - burst_length,
+    ] {
+        let mut samples = vec![0.0; MAX_SAMPLES];
+        for (index, sample) in samples[start..start + burst_length].iter_mut().enumerate() {
+            *sample = if index % 2 == 0 { 0.0015 } else { -0.0015 };
+        }
+        assert!(!Pcm16Mono::new(samples).unwrap().below_recognition_floor());
+    }
+}
+
 #[test]
 fn local_stt_input_and_result_bounds_are_fail_closed() {
     for samples in [
@@ -220,9 +287,9 @@ async fn pinned_model_acceptance_english_danish_silence_and_native_abort() {
             started.elapsed().as_millis()
         );
     }
-    // The exact-zero adapter gate must produce no match. The pinned native
-    // model hallucinated on this fixture before that gate; this is neither VAD
-    // coverage nor evidence about natural silence, background media or noise.
+    // The input-quality gate must produce no match. The pinned native
+    // model hallucinated on zero and variable Opus residue before that gate; this
+    // is neither VAD coverage nor evidence about natural silence or media.
     assert!(matches!(
         recognizer
             .transcribe(
@@ -236,6 +303,50 @@ async fn pinned_model_acceptance_english_danish_silence_and_native_abort() {
         Recognition::NoMatch
     ));
 
+    assert_native_abort(&recognizer).await;
+    // A fresh decoder after cancellation must still recognize the same fixture.
+    let result = recognizer
+        .transcribe(
+            fixture_pcm("REVIVAL_STT_TEST_EN_PCM"),
+            Language::English,
+            Instant::now() + MAX_WORK_TIME,
+            Cancellation::default(),
+        )
+        .await
+        .unwrap();
+    let Recognition::Transcript(text) = result else {
+        panic!("fresh decoder produced no match")
+    };
+    let normalized = text.to_lowercase();
+    assert!(
+        normalized.contains("planet") && normalized.contains("solar"),
+        "fresh decoder missed fixture content after abort"
+    );
+}
+
+/// Runs on the native Linux CI runner with only the externally provisioned,
+/// pinned model. Nonzero PCM is generated in memory, never captured or stored.
+#[tokio::test]
+#[ignore = "requires the verified external model on a native CPU runner"]
+async fn pinned_model_native_cancellation() {
+    let model = std::env::var("REVIVAL_STT_TEST_MODEL").expect("external pinned model is required");
+    let recognizer = LocalRecognizer::load(Path::new(&model)).unwrap();
+    assert!(matches!(
+        recognizer
+            .transcribe(
+                Pcm16Mono::new(quantization_residue()).unwrap(),
+                Language::English,
+                Instant::now() + MAX_WORK_TIME,
+                Cancellation::default(),
+            )
+            .await
+            .unwrap(),
+        Recognition::NoMatch
+    ));
+    assert_native_abort(&recognizer).await;
+}
+
+async fn assert_native_abort(recognizer: &LocalRecognizer) {
     // Cancel a real 15s inference after it owns the permit. The callback must
     // actually report an abort, and capacity must return only after native exit.
     let cancellation = Cancellation::default();
@@ -271,23 +382,5 @@ async fn pinned_model_acceptance_english_danish_silence_and_native_abort() {
     eprintln!(
         "pinned model cooperative abort and worker exit: {}ms",
         cancelled_at.elapsed().as_millis()
-    );
-    // A fresh decoder after cancellation must still recognize the same fixture.
-    let result = recognizer
-        .transcribe(
-            fixture_pcm("REVIVAL_STT_TEST_EN_PCM"),
-            Language::English,
-            Instant::now() + MAX_WORK_TIME,
-            Cancellation::default(),
-        )
-        .await
-        .unwrap();
-    let Recognition::Transcript(text) = result else {
-        panic!("fresh decoder produced no match")
-    };
-    let normalized = text.to_lowercase();
-    assert!(
-        normalized.contains("planet") && normalized.contains("solar"),
-        "fresh decoder missed fixture content after abort"
     );
 }

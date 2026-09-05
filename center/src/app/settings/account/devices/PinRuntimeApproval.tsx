@@ -6,6 +6,7 @@ import { record } from "@/lib/contracts/surfaces";
 import settings from "../../settings.module.css";
 import styles from "./devices.module.css";
 import { SpeechDisclosure } from "./SpeechDisclosure";
+import { LocalVoicePermission } from "./LocalVoicePermission";
 
 type Selection = { deviceId: string; surfaceId?: string };
 
@@ -133,7 +134,10 @@ export function PinRuntimeApproval() {
         </div> : <button type="button" className={styles.pairOpenButton} disabled={busy || !DEVICE_ID.test(deviceId)} onClick={() => { setError(""); setMessage(""); setSelection({ deviceId, surfaceId: pin?.surfaceId }); }}>
           {pin ? "Revoke runtime approval" : "Approve shared speech"}
         </button>}
-      </div>{pin ? <SpeechDisclosure key={`${pin.surfaceId}:${pin.revision}`} pin={pin} /> : null}</Fragment>;
+      </div>{pin ? <>
+        <LocalVoicePermission key={`voice:${pin.surfaceId}:${pin.revision}`} pin={pin} />
+        <SpeechDisclosure key={`speech:${pin.surfaceId}:${pin.revision}`} pin={pin} />
+      </> : null}</Fragment>;
     })}
     {message ? <div className={settings.stateRow} role="status">{message}</div> : null}
     {error ? <div className={settings.stateRow} role="alert">{error}</div> : null}

@@ -1,5 +1,6 @@
 //! Runtime-owned lifetime for an isolated Pin audio room. This grants transport
-//! membership only: no microphone subscription, provider access or playback.
+//! membership only. Bounded, separately approved capture is owned by this
+//! module; no raw media transport or playback authority is exported.
 use super::{PinProof, RuntimeOperation, RuntimeResult, runtime::AmbianceRuntime};
 use crate::{auth::AuthenticatedRequest, browser_rooms::Config};
 use cosmos_rtc::audio::{AudioSession, Role};
@@ -14,6 +15,9 @@ use std::{
 use tokio::sync::{Semaphore, SemaphorePermit, watch};
 use tonic::Status;
 use uuid::Uuid;
+
+#[path = "voice_capture.rs"]
+mod capture;
 
 const CHECK_TIMEOUT: Duration = Duration::from_secs(1);
 const CHECK_INTERVAL: Duration = Duration::from_millis(250);

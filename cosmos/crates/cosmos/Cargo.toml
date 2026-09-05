@@ -15,6 +15,7 @@ cosmos-core.workspace = true
 cosmos-crypto = { path = "../crypto" }
 cosmos-protocol.workspace = true
 cosmos-rtc = { path = "../rtc" }
+cosmos-stt = { path = "../stt" }
 reqwest = { version = "0.12.9", default-features = false, features = ["json", "rustls-tls", "stream"] }
 jsonwebtoken = { workspace = true }
 libc = "0.2"

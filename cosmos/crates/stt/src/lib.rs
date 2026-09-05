@@ -16,15 +16,17 @@ use std::{
 use tokio::sync::{Notify, Semaphore};
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
-pub const MODEL_ID: &str = "whisper.cpp-1.8.3/base-multilingual/60ed5bc3";
-pub const MODEL_BYTES: u64 = 147_951_465;
-pub const MODEL_SHA256: &str = "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe";
-pub const MODEL_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-base.bin";
+// Projected by build.rs from the same manifest used during image acquisition.
+include!(concat!(env!("OUT_DIR"), "/model.rs"));
 pub const SAMPLE_RATE: usize = 16_000;
 pub const MAX_SAMPLES: usize = 15 * SAMPLE_RATE;
 pub const MAX_TEXT_BYTES: usize = 2_048;
 const MAX_SEGMENTS: usize = 32;
 const MAX_WORK_TIME: Duration = Duration::from_secs(30);
+// Product input-quality limit: -60 dBFS RMS, where normalized amplitude 1 is
+// full scale. This is not a speech detector or a guarantee about perception.
+const MIN_RECOGNITION_MEAN_SQUARE: f64 = 0.001 * 0.001;
+const RECOGNITION_WINDOW_SAMPLES: usize = SAMPLE_RATE / 50; // 20 ms
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
@@ -67,10 +69,29 @@ impl Pcm16Mono {
         }
         Ok(Self(samples.into_boxed_slice()))
     }
+
+    fn below_recognition_floor(&self) -> bool {
+        let width = self.0.len().min(RECOGNITION_WINDOW_SAMPLES);
+        let required_energy = MIN_RECOGNITION_MEAN_SQUARE * width as f64;
+        let square = |sample: f32| f64::from(sample).powi(2);
+        let mut energy: f64 = self.0[..width].iter().copied().map(square).sum();
+        if energy >= required_energy {
+            return false;
+        }
+        // Examine every window in linear time. Whole-capture RMS can bury a
+        // brief utterance; disjoint windows can split it across a boundary.
+        for (leaving, entering) in self.0.iter().zip(&self.0[width..]) {
+            energy += square(*entering) - square(*leaving);
+            if energy >= required_energy {
+                return false;
+            }
+        }
+        true
+    }
 }
 
-/// Untrusted recognition text. Empty decoding is NoMatch, never a claim that
-/// the microphone captured silence. No Debug/Display or serialization.
+/// Untrusted recognition text. NoMatch covers empty decoding and unsupported
+/// input level, never proven microphone silence. No Debug/Display or serialization.
 pub enum Recognition {
     NoMatch,
     Transcript(String),
@@ -162,10 +183,11 @@ impl LocalRecognizer {
     ) -> Result<Recognition, Error> {
         let context = Arc::clone(&self.0);
         bounded_work(deadline, cancellation, move |abort| {
-            // An exactly zero digital buffer carries no recorded signal. The
-            // pinned decoder can hallucinate on it. This exact check is not VAD
-            // and makes no claim about quiet speech, noise or background media.
-            if pcm.0.iter().all(|sample| *sample == 0.0) {
+            // Very low-level decoder input, including measured Opus residue,
+            // can produce invented text. NoMatch here means no window reached
+            // our supported RMS level, not proven silence or permission to
+            // lower source classification. Above-floor noise can still decode.
+            if pcm.below_recognition_floor() {
                 return Ok(Recognition::NoMatch);
             }
             let mut state = context.create_state().map_err(|_| Error::Inference)?;

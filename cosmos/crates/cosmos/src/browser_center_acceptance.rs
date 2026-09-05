@@ -162,16 +162,17 @@ async fn browser_center_application_acceptance() {
             if let Some(encoded) = encoded {
                 let state: RuntimeState = serde_json::from_str(&encoded).unwrap();
                 let speech_revoked = state.disclosure_policies.get(&pin_id).is_some_and(|a| a.revision == 2 && a.policy.is_none());
+                let voice_revoked = state.voice_policies.get(&pin_id).is_some_and(|a| a.revision == 2 && a.policy.is_none());
                 if state.actions.values().any(|a| a.status == ActionStatus::Acknowledged && a.intent.text() == "Center acceptance card") {
                     acknowledged = true;
                     write_private(status_path, &json!({"acknowledged":true,"complete":false}), false);
                 }
-                if acknowledged && speech_revoked && !state.actions.is_empty()
+                if acknowledged && speech_revoked && voice_revoked && !state.actions.is_empty()
                     && state.actions.values().all(|a| a.status == ActionStatus::Cancelled && a.intent.text().is_empty())
                 {
                     assert_eq!(model.calls.load(Ordering::SeqCst), 1);
                     assert!(store.surfaces(&principal).await.unwrap().iter().filter(|s| s.surface_id != pin_id).all(|s| !s.connected));
-                    write_private(status_path, &json!({"acknowledged":true,"complete":true,"modelCalls":1,"modelMode":model_mode,"speechPolicyRevision":2}), false);
+                    write_private(status_path, &json!({"acknowledged":true,"complete":true,"modelCalls":1,"modelMode":model_mode,"speechPolicyRevision":2,"localVoicePolicyRevision":2}), false);
                     return;
                 }
             }
@@ -181,5 +182,5 @@ async fn browser_center_application_acceptance() {
     server.abort();
     let _ = server.await;
     audit.close().await;
-    accepted.expect("Center must commit speech permission/revocation, render a routed card, acknowledge it, and clear the durable payload on leave");
+    accepted.expect("Center must commit separate speech and local voice permissions/revocations, render a routed card, acknowledge it, and clear the durable payload on leave");
 }

@@ -47,6 +47,10 @@ pub(crate) fn with_pairing(
             "/surface-api/v1/pins/:surface_id/speech-disclosure",
             get(disclosure_policy).post(set_disclosure_policy),
         )
+        .route(
+            "/surface-api/v1/pins/:surface_id/local-voice",
+            get(voice_policy).post(set_voice_policy),
+        )
         .layer(DefaultBodyLimit::max(1024))
         .layer(axum::middleware::map_response(no_store))
         .with_state(ApiState {
@@ -186,6 +190,91 @@ where
     D: serde::Deserializer<'de>,
 {
     Option::deserialize(deserializer)
+}
+
+const LOCAL_VOICE_APPROVAL: &str = "approve-local-voice-intake-v1";
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VoiceApproval {
+    approval: String,
+    approval_revision: u64,
+    expected_revision: u64,
+    #[serde(deserialize_with = "required_voice_policy")]
+    policy: Option<crate::ambiance::voice::Policy>,
+}
+
+fn required_voice_policy<'de, D>(
+    deserializer: D,
+) -> Result<Option<crate::ambiance::voice::Policy>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::deserialize(deserializer)
+}
+
+async fn voice_policy(
+    State(api): State<ApiState>,
+    Path(surface_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let principal = owner(&headers, &api)?;
+    let result = api
+        .store
+        .runtime(
+            &principal,
+            crate::ambiance::RuntimeOperation::VoicePolicy {
+                surface_id: id(&surface_id)?,
+            },
+        )
+        .await?;
+    let crate::ambiance::RuntimeResult::VoicePolicy(approval) = result else {
+        return Err(ApiError(StatusCode::SERVICE_UNAVAILABLE, "unavailable"));
+    };
+    Ok(Json(json!({"approval": approval})))
+}
+
+async fn set_voice_policy(
+    State(api): State<ApiState>,
+    Path(surface_id): Path<String>,
+    headers: HeaderMap,
+    request: Result<Json<VoiceApproval>, JsonRejection>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let principal = owner(&headers, &api)?;
+    let surface_id = id(&surface_id)?;
+    let request = body(request)?;
+    if request.approval != LOCAL_VOICE_APPROVAL {
+        return Err(invalid());
+    }
+    // Only the currently paired owner can grant local capture. Revocation
+    // stays available after pairing loss, independent of provider permission.
+    if request.policy.is_some() {
+        let current = api
+            .store
+            .surface(&principal, surface_id)
+            .await?
+            .ok_or(RegistryError::NotFound)?;
+        let surface_registry::Binding::Pin { device_id } = current.binding else {
+            return Err(RegistryError::NotFound.into());
+        };
+        crate::pin_admission::paired_owner(api.pairing.as_ref(), &principal, &device_id).await?;
+    }
+    let result = api
+        .store
+        .runtime(
+            &principal,
+            crate::ambiance::RuntimeOperation::SetVoicePolicy {
+                surface_id,
+                approval_revision: request.approval_revision,
+                expected_revision: request.expected_revision,
+                policy: request.policy,
+            },
+        )
+        .await?;
+    let crate::ambiance::RuntimeResult::VoicePolicy(approval) = result else {
+        return Err(ApiError(StatusCode::SERVICE_UNAVAILABLE, "unavailable"));
+    };
+    Ok(Json(json!({"approval": approval})))
 }
 
 async fn disclosure_policy(
@@ -672,6 +761,154 @@ mod tests {
         assert!(revoked["approval"]["policy"].is_null());
         pairing.put_device_account("aabb", "owner").await.unwrap();
         // Reapproval is a new authority revision; the old policy cannot survive.
+        assert_eq!(
+            call(&app, "POST", root, Some(&owner), None, pin).await.0,
+            StatusCode::OK
+        );
+        assert_eq!(
+            call(&app, "GET", &path, Some(&owner), None, json!(null))
+                .await
+                .1,
+            json!({"approval":null})
+        );
+        assert_eq!(
+            call(&app, "POST", &path, Some(&owner), None, grant.clone())
+                .await
+                .0,
+            StatusCode::CONFLICT
+        );
+        let mut new_grant = grant;
+        new_grant["approvalRevision"] = 2.into();
+        assert_eq!(
+            call(&app, "POST", &path, Some(&owner), None, new_grant)
+                .await
+                .0,
+            StatusCode::OK
+        );
+    }
+
+    #[tokio::test]
+    async fn ambiance_voice_http_separate_owner_permission_schema_cas_and_revocation() {
+        use crate::enrollment::EnrollmentStore;
+        let store = Arc::new(crate::store::MemoryStore::default());
+        let pairing = Arc::new(crate::enrollment::MemoryEnrollmentStore::default());
+        pairing.put_device_account("aabb", "owner").await.unwrap();
+        let app = with_pairing(store, Some(verifier()), Some(pairing.clone()));
+        let owner = bearer("owner");
+        let other = bearer("other");
+        let root = "/surface-api/v1/pins";
+        let pin = json!({"deviceId":"aabb", "approval":surface_registry::PIN_APPROVAL});
+        let (status, approved) = call(&app, "POST", root, Some(&owner), None, pin.clone()).await;
+        assert_eq!(status, StatusCode::OK);
+        let surface = approved["pin"]["surfaceId"].as_str().unwrap();
+        let path = format!("{root}/{surface}/local-voice");
+        let speech_path = format!("{root}/{surface}/speech-disclosure");
+        let grant = json!({
+            "approval":LOCAL_VOICE_APPROVAL,
+            "approvalRevision":1,"expectedRevision":0,
+            "policy":{"sourceFloor":"shared_room"}
+        });
+        for authorization in [None, Some("Bearer invalid")] {
+            for method in ["GET", "POST"] {
+                assert_eq!(
+                    call(
+                        &app,
+                        method,
+                        &path,
+                        authorization,
+                        Some(&"a".repeat(64)),
+                        grant.clone()
+                    )
+                    .await
+                    .0,
+                    StatusCode::UNAUTHORIZED
+                );
+            }
+        }
+        for method in ["GET", "POST"] {
+            assert_eq!(
+                call(&app, method, &path, Some(&other), None, grant.clone())
+                    .await
+                    .0,
+                StatusCode::NOT_FOUND
+            );
+        }
+        assert_eq!(
+            call(&app, "GET", &path, Some(&owner), None, json!(null))
+                .await
+                .1,
+            json!({"approval":null})
+        );
+        let mut missing = grant.clone();
+        missing.as_object_mut().unwrap().remove("policy");
+        let mut extra = grant.clone();
+        extra["principal"] = "other".into();
+        let mut floor = grant.clone();
+        floor["policy"]["sourceFloor"] = "public".into();
+        let mut unknown_floor = grant.clone();
+        unknown_floor["policy"]["sourceFloor"] = "trusted".into();
+        let mut nested = grant.clone();
+        nested["policy"]["cloudUpload"] = true.into();
+        let mut wrong = grant.clone();
+        wrong["approval"] = crate::ambiance::disclosure::OWNER_APPROVAL.into();
+        let mut oversized = grant.clone();
+        oversized["approval"] = "x".repeat(2048).into();
+        for invalid in [
+            missing,
+            extra,
+            floor,
+            unknown_floor,
+            nested,
+            wrong,
+            oversized,
+        ] {
+            assert_eq!(
+                call(&app, "POST", &path, Some(&owner), None, invalid)
+                    .await
+                    .0,
+                StatusCode::BAD_REQUEST
+            );
+        }
+        let (status, saved) = call(&app, "POST", &path, Some(&owner), None, grant.clone()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            saved,
+            json!({"approval":{"approvalRevision":1,"revision":1,"policy":grant["policy"]}})
+        );
+        assert_eq!(
+            call(&app, "POST", &path, Some(&owner), None, grant.clone())
+                .await
+                .0,
+            StatusCode::CONFLICT
+        );
+        assert_eq!(
+            call(&app, "GET", &path, Some(&owner), None, json!(null))
+                .await
+                .1,
+            saved
+        );
+        // Local intake approval must never create a cloud speech grant.
+        assert_eq!(
+            call(&app, "GET", &speech_path, Some(&owner), None, json!(null))
+                .await
+                .1,
+            json!({"approval":null})
+        );
+        pairing.put_device_account("aabb", "other").await.unwrap();
+        let mut update = grant.clone();
+        update["expectedRevision"] = 1.into();
+        assert_eq!(
+            call(&app, "POST", &path, Some(&owner), None, update.clone())
+                .await
+                .0,
+            StatusCode::NOT_FOUND
+        );
+        update["policy"] = serde_json::Value::Null;
+        let (status, revoked) = call(&app, "POST", &path, Some(&owner), None, update).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(revoked["approval"]["revision"], 2);
+        assert!(revoked["approval"]["policy"].is_null());
+        pairing.put_device_account("aabb", "owner").await.unwrap();
         assert_eq!(
             call(&app, "POST", root, Some(&owner), None, pin).await.0,
             StatusCode::OK

@@ -140,6 +140,14 @@ try {
   await page.getByRole("button", { name: "Revoke speech permission", exact: true }).click();
   await page.getByText("Cosmos confirmed speech provider permission revoked.", { exact: true }).waitFor();
   await page.screenshot({ path: path.join(directory, "speech-permission.png"), fullPage: true });
+  stage = "owner local voice permission";
+  await page.getByRole("button", { name: "Local voice permission", exact: true }).click();
+  await page.getByRole("button", { name: "Allow shared local voice requests", exact: true }).click();
+  await page.getByText("Cosmos confirmed local voice permission for shared requests. Microphone integration remains in preview.", { exact: true }).waitFor();
+  await page.getByText("Current voice privacy: Shared room.", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "Revoke local voice permission", exact: true }).click();
+  await page.getByText("Cosmos confirmed local voice permission revoked.", { exact: true }).waitFor();
+  await page.screenshot({ path: path.join(directory, "local-voice-permission.png"), fullPage: true });
   stage = "browser room admission and render";
   await page.goto(`${origin}/?assistant=open`);
   await page.getByRole("button", { name: "Approve this tab", exact: true }).click();

@@ -10,6 +10,8 @@ WORKDIR /workspace/cosmos
 # currently crashes when an ARM64 host builds the AMD64 release image.
 COPY native ./native
 RUN bash native/linux-toolchain.sh "${BUILDARCH}" "${TARGETARCH}"
+# Acquire data while building the authenticated image, never at service startup.
+RUN python3 native/prepare_stt.py --directory /opt/cosmos/models
 ENV CXX=clang++-21
 ENV LIBCLANG_PATH=/usr/lib/llvm-21/lib
 
@@ -111,6 +113,7 @@ RUN rm -f /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /cosmos /usr/local/bin/cosmos
+COPY --from=build /opt/cosmos/models/ggml-base.bin /opt/cosmos/models/ggml-base.bin
 COPY --from=codex --chown=65532:65532 /opt/codex /opt/codex
 
 # Durable-state mountpoint (`COSMOS_STATE_DIR`). It must exist in the image AND be

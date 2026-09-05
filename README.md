@@ -244,9 +244,8 @@ explicit physical-device confirmation requirements below.
 
 ### Cosmos-first realtime implementation gates
 
-Foundation commit `7c4f9e0f` passed broad checks and is not deployed. The next
-implementation order is Cosmos backend, then Center, then their verified server
-deployment; native macOS and Android clients use the same contracts. Physical
+Implementation proceeds through Cosmos backend, Center, and their verified
+server deployment; native macOS and Android clients use the same contracts. Physical
 Pin connection, installation and hardware acceptance come last, not as a blocker
 to server deployment or native client builds. These gates refine the
 [requirement inventory](contracts/ambiance-v2.json), not its conformance status.
@@ -340,8 +339,8 @@ required or that the stock SDK alone violates the paper.
    the successful owner's room. Unjoined rooms close after 60 seconds, and at most
    64 room owners exist in one process. Tests use an isolated SFU and PostgreSQL;
    these bounds do not establish production timing. The media owner exposes no
-   raw session: turn-authorized PCM consumption and application voice/bootstrap
-   wiring are still unfinished. Membership grants no microphone
+   raw session. Turn-authorized local PCM consumption is described below;
+   application bootstrap and playback wiring remain unfinished. Membership grants no microphone
    subscription, private-memory access, playback evidence or physical privacy.
 
    The supplied `Ambiance-Implementation-Plan.zip` is additional design inspiration;
@@ -450,24 +449,58 @@ required or that the stock SDK alone violates the paper.
    turn without another admission or sequence increment. Runtime classification
    joins the source floor and content raises; local STT cannot lower an existing
    class, and capture approval does not certify the content as shared.
-   Raw PCM and transcript text are not persisted by this intake. There is no
-   owner HTTP/UI policy control or native capture subscription yet. Bounded
-   48-to-16 kHz resampling and arbitrary-chunk PCM framing are implemented in
-   the transport crate; local STT integration, application capture/playback
-   and physical Pin evidence remain unfinished. Keyword-based content raises
-   do not establish arbitrary Danish or English transcript classification.
+   Raw PCM and transcript text are not persisted by this intake. The media
+   owner now subscribes to that exact publication and resamples its bounded
+   48 kHz PCM into the local decoder's 16 kHz input. The caller primes with
+   synthetic zeros before enabling the microphone after readiness, then sends
+   an end signal belonging to that invocation. Capture allows at most 15 seconds
+   including a 300 ms receive tail; recognition uses at most the remaining
+   35-second intake budget, capped at 20 seconds. Missing end, overflow, source
+   loss, revocation and cancelled work retire the intake. A receive interval
+   does not prove complete delivery: RPC does not order RTP, and decoder jitter
+   adaptation and concealment prevent sample counts from proving completeness.
+   Native application bootstrap/playback and physical Pin evidence remain
+   unfinished. Keyword-based content raises do not establish arbitrary Danish
+   or English transcript classification.
 
    The isolated `cosmos-stt` adapter pins `whisper-rs` 0.16.0 and the multilingual
    Whisper base model by immutable URL, exact size and SHA256. It initializes
    from the same verified bytes and accepts at most 15 seconds of normalized
    16 kHz mono PCM, with explicit Danish or English decoding and no history.
    One process-wide worker bounds native inference; cancellation retains its
-   capacity until native exit and discards late results. Exact-zero digital
-   audio returns no match before decoding; this is not voice activity detection,
-   and natural silence, noise and television hallucinations remain unverified.
+   capacity until native exit and discards late results. Recognition requires
+   at least one sliding 20 ms window at or above -60 dBFS RMS (normalized 0.001);
+   shorter buffers use their actual length. This is the product's minimum
+   supported input level, not a standardized recognition threshold. Lower-level
+   buffers return no match. Transport fixtures exposed sparse one- and two-count
+   decoder residue on zero-input streams and resulting hallucinated transcripts.
+   The input-quality guard is not voice activity detection; natural silence,
+   noise, quiet speech and television hallucinations remain unverified.
    The adapter's synthetic language and cancellation fixtures passed on macOS.
-   Runtime capture integration, production model provisioning, Linux execution
-   and the paper's end-to-end voice latency target remain separate open gates.
+   The real localhost SFU capture test also passed its combined failure/positive
+   cases and three repeated English, Danish and zero-input runs with this floor.
+   These synthetic fixtures establish bounded source-to-turn integration,
+   not general recognition accuracy or microphone hardware behavior.
+   `cosmos/native/stt-model.json` owns the pinned model coordinates used by Rust
+   and image acquisition. The build verifies the model and copies it read-only
+   into the authenticated Cosmos image; service startup never downloads it.
+   The decoder rechecks the exact size and checksum before loading. Runtime
+   bootstrap, complete server-image acceptance and the paper's end-to-end voice
+   latency target remain separate gates; isolated adapter timings are not
+   production latency. ARM64 actual-model acceptance passed in a restricted
+   Linux container. Both Linux architectures compiled, but AMD64 emulation
+   exceeded the fixture's three-second native-worker cancellation assertion.
+   The unchanged cancellation assertion now has a native AMD64 CI gate; its
+   result remains separate from cross-compilation and emulated execution.
+
+   In **Settings → My Ai Pin → Ambiance runtime approval**, open **Local voice
+   permission** to allow shared local voice requests or revoke the permission.
+   This is separate from cloud speech permission, pairing and provider settings.
+   Center verifies the committed approval and policy revision; an uncertain
+   write requires a fresh read. Revocation remains possible after pairing loss,
+   and reapproving the Pin invalidates the old grant. This prepares permission
+   for native intake; it does not activate a disconnected microphone or establish
+   speaker identity, physical privacy, cloud disclosure authority or playback.
 
    In **Settings → My Ai Pin → Ambiance runtime approval**, open **Speech provider
    permission** for an approved Pin, enter the configured Azure Speech region,
@@ -504,7 +537,7 @@ required or that the stock SDK alone violates the paper.
    `center/verify/center-runtime-live.mjs` additionally runs a built Center image,
    native Cosmos, isolated PostgreSQL and a local SFU through a same-origin HTTPS
    gateway with `/livekit` WebSocket forwarding. In Chrome it grants and revokes
-   speech permission through the owner UI, approves a shared tab, renders a
+   separate local voice and speech permissions through the owner UI, approves a shared tab, renders a
    routed text card, verifies the durable DOM acknowledgment, then leaves and
    requires the stored payload to be cleared. The application run passed on the
    `e7f6313` Center image. Authentication and the one cognition response are
@@ -519,7 +552,11 @@ required or that the stock SDK alone violates the paper.
    The SFU JSON supplies `url`, `key` and `secret` for an isolated loopback SFU.
    The driver creates disposable local authentication and TLS credentials, writes
    bounded status and screenshot artifacts outside the checkout, and removes its
-   container and transient credentials. Its ignored native test fails if those
+   container and transient credentials. The local voice control increment passed
+   on the built Center image
+   `sha256:36576e92024ffeff7ece96a1c54fae66f06d1d4dd92297066c63365b157d4302`,
+   including independently observed policy revisions, render acknowledgment and
+   payload clearing. Its ignored native test fails if those
    dependencies are absent; an ordinary unit-test pass does not run this gate.
    To exercise one actual OpenRouter request in the same browser flow, append
    `--openrouter-stdin` and supply the explicitly selected `realtime` configuration

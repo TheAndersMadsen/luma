@@ -41,12 +41,44 @@
   ],
   "evidence": [
     {
+      "id": "local-voice-capture-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/voice_capture_tests.rs",
+      "anchor": "async fn ambiance_voice_capture_real_sfu_local_recognition_uses_the_admitted_turn()",
+      "scope": "Defines exact-source subscription, zero priming/readiness, a bounded explicit-end capture interval, local resampling and pinned-model recognition continuing the original turn. Companion tests exercise end loss, revocation, source loss, cancellation and deadline retirement without cognition.",
+      "limitation": "Opt-in localhost SFU and synthetic speech/model fixtures. Runtime-consumed sample counts and a receive tail do not prove full source delivery. Native application bootstrap, natural audio, playback and physical devices remain separate gates."
+    },
+    {
+      "id": "center-local-voice-permission-test-definition",
+      "kind": "test-definition",
+      "path": "center/src/app/settings/account/devices/LocalVoicePermission.test.tsx",
+      "anchor": "an uncertain write disables all writes until a fresh read supplies the committed revision",
+      "scope": "Defines explicit owner permission, strict commit validation, same-Pin revision binding, revocation after pairing loss and invalidation of late replies after uncertainty or lifecycle changes.",
+      "limitation": "DOM and mocked upstream fixtures only. Approval does not activate hardware, certify physical privacy, authorize cloud speech or establish application voice-loop acceptance."
+    },
+    {
+      "id": "local-voice-owner-api-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/surface_api.rs",
+      "anchor": "async fn ambiance_voice_http_separate_owner_permission_schema_cas_and_revocation()",
+      "scope": "Defines separately authenticated owner permission for local voice intake, strict required-nullable policy, source-floor bounds, exact approval/revision compare-and-swap, account isolation and revocation after pairing loss. Reapproval invalidates the old grant and local intake never creates a cloud speech grant.",
+      "limitation": "MemoryStore HTTP fixture only. Permission controls do not establish native microphone availability, physical privacy, transcription quality, provider disclosure or playback."
+    },
+    {
+      "id": "local-stt-model-acquisition-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/native/prepare_test.py",
+      "anchor": "def test_verified_model_is_read_only_and_reused_without_network(self):",
+      "scope": "Defines exact-size/checksum model acquisition, atomic read-only publication, reuse without network, corrupt-input rejection and temporary-file cleanup. One pinned manifest supplies both the image build and Rust model constants.",
+      "limitation": "Synthetic acquisition fixtures. The production image and local decoder independently verify the actual model; compiling the adapter does not establish an application voice loop or hardware acceptance."
+    },
+    {
       "id": "local-stt-adapter-test-definition",
       "kind": "test-definition",
       "path": "cosmos/crates/stt/src/tests.rs",
       "anchor": "async fn local_stt_cancellation_deadline_dropped_future_and_busy_keep_worker_bounded()",
       "scope": "Defines bounded local recognition, one native worker, cancellation through worker exit, input/output limits and exact model checksum validation. A separate opt-in fixture exercises the pinned model with synthetic Danish/English audio and native abort.",
-      "limitation": "Isolated adapter only. Exact-zero no-match is not VAD; natural silence, noise and television hallucinations remain unverified. Model provisioning, runtime capture wiring, Linux execution, end-to-end latency and physical devices require separate acceptance."
+      "limitation": "Isolated adapter only. Recognition requires at least one sliding 20 ms window at or above -60 dBFS RMS (shorter buffers use their actual length). This product input-quality floor is not VAD or a standardized recognition threshold. Natural silence, noise, quiet speech and television hallucinations remain unverified. Actual model, Linux execution, full application integration, end-to-end latency and physical devices require separate acceptance."
     },
     {
       "id": "local-voice-intake-test-definition",
@@ -85,7 +117,7 @@
       "kind": "test-definition",
       "path": "cosmos/crates/cosmos/src/browser_center_acceptance.rs",
       "anchor": "async fn browser_center_application_acceptance()",
-      "scope": "The Center image driver exercises real owner BFF controls, native Cosmos, isolated PostgreSQL, same-origin HTTPS/WSS, the SFU, Chrome rendering, durable DOM acknowledgment and payload clearing on leave.",
+      "scope": "The Center image driver exercises separate local voice and cloud speech owner controls, native Cosmos, isolated PostgreSQL, same-origin HTTPS/WSS, the SFU, Chrome rendering, durable DOM acknowledgment and payload clearing on leave.",
       "limitation": "Authentication is synthetic. The explicit local driver uses synthetic cognition by default; --openrouter-stdin selects one real provider request and labels the result. Ordinary tests ignore this gate. Does not establish production networking, physical Pin playback or full paper conformance."
     },
     {
@@ -623,7 +655,7 @@
       "requirement": "The Ai Pin participates in the live capture, cognition, playback and interruption loop through its stock-compatible runtime.",
       "acceptance": "Prove actual capture/playback ownership, audio focus, barge-in, immediate stop, privacy change and reconnect on hardware; completed-text TTS is not proof of live dialogue.",
       "status": "partial",
-      "evidence": ["local-stt-adapter-test-definition", "local-voice-intake-test-definition", "native-pcm-adapter-test-definition", "native-pcm-framing-test-definition", "native-pcm-completion-test-definition", "speech-cancellation-test-definition", "speech-recognition-bounds-test-definition", "native-speech-disclosure-test-definition", "native-speech-revocation-test-definition", "native-speech-postgres-test-definition", "speech-disclosure-owner-api-test-definition", "center-speech-disclosure-test-definition"]
+      "evidence": ["local-voice-capture-test-definition", "center-local-voice-permission-test-definition", "local-voice-owner-api-test-definition", "local-stt-model-acquisition-test-definition", "local-stt-adapter-test-definition", "local-voice-intake-test-definition", "native-pcm-adapter-test-definition", "native-pcm-framing-test-definition", "native-pcm-completion-test-definition", "speech-cancellation-test-definition", "speech-recognition-bounds-test-definition", "native-speech-disclosure-test-definition", "native-speech-revocation-test-definition", "native-speech-postgres-test-definition", "speech-disclosure-owner-api-test-definition", "center-speech-disclosure-test-definition"]
     },
     {
       "id": "pin-physical-acceptance",

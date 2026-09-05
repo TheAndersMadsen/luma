@@ -560,6 +560,7 @@ dependencies = [
  "cosmos-crypto",
  "cosmos-protocol",
  "cosmos-rtc",
+ "cosmos-stt",
  "futures-util",
  "h2",
  "image",
@@ -640,6 +641,7 @@ dependencies = [
 name = "cosmos-stt"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "sha2",
  "thiserror 2.0.19",
  "tokio",

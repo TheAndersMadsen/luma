@@ -293,7 +293,10 @@ function runCosmosCheck(filter = null, dependencies = {}) {
     const discovery = runner('cosmos test discovery', 'cargo', [
       'test', '--workspace', '--locked', filter, '--', '--list',
     ], { cwd: cosmos, env: environment, capture: true, allowFailure: true });
-    if (discovery.signal || discovery.status !== 0) throwLikeChild(discovery);
+    if (discovery.signal || discovery.status !== 0) {
+      if (discovery.stderr) process.stderr.write(discovery.stderr);
+      throwLikeChild(discovery);
+    }
     const matches = listedRustTests(discovery.stdout);
     if (matches.length === 0) fail(`Cosmos test filter matched zero tests: ${filter}`);
     info(`[observed] Cosmos test filter matched ${matches.length} test${matches.length === 1 ? '' : 's'}.`);

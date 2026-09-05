@@ -55,6 +55,8 @@ it("pairing alone never approves; selection and separate confirmation bind the e
 it("fresh multi-Pin approval list maps revoke to the correct Pin and exact surface", async () => {
   const mock = upstream([first, second]); show();
   await screen.findAllByRole("button", { name: "Revoke runtime approval" });
+  expect(screen.getAllByRole("button", { name: "Local voice permission" })).toHaveLength(2);
+  expect(screen.getAllByRole("button", { name: "Speech provider permission" })).toHaveLength(2);
   const row = within(screen.getByLabelText("Runtime approval for Pin ccdd"));
   fireEvent.click(row.getByRole("button", { name: "Revoke runtime approval" }));
   fireEvent.click(row.getByRole("button", { name: "Confirm revoke" }));

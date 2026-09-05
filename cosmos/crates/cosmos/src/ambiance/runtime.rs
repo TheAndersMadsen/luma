@@ -42,6 +42,8 @@ impl AmbianceRuntime {
         source_current: Arc<dyn Fn() -> bool + Send + Sync>,
     ) -> Result<Option<super::voice::LocalVoice>, Status> {
         self.start_maintenance();
+        let deadline = std::time::Instant::now()
+            + std::time::Duration::from_millis(super::voice::INTAKE_MS as u64);
         if !source_current() {
             return Err(Status::failed_precondition("voice source is not current"));
         }
@@ -83,6 +85,7 @@ impl AmbianceRuntime {
                 fence,
                 binding,
                 source_current,
+                deadline,
                 cancel,
             })),
             RuntimeResult::Duplicate(_) => {
@@ -749,6 +752,8 @@ impl Drop for CancelOnDrop {
 /// Conservative policy-side floor. Environmental provenance is shared/unknown;
 /// explicit private sources raise it before any provider call. No origin has
 /// private-memory clearance in this increment, regardless of output channel.
+pub(super) const INPUT_CLASSIFIER_VERSION: u8 = 2;
+
 pub(super) fn input_privacy(text: &str) -> PrivacyClass {
     let text = text.to_lowercase();
     if [
@@ -758,6 +763,15 @@ pub(super) fn input_privacy(text: &str) -> PrivacyClass {
         "access token",
         "social security",
         "credit card",
+        "adgangskode",
+        "hemmelig nøgle",
+        "hemmelige nøgle",
+        "api-nøgle",
+        "api nøgle",
+        "adgangstoken",
+        "cpr-nummer",
+        "cpr nummer",
+        "kreditkort",
     ]
     .iter()
     .any(|term| text.contains(term))
@@ -775,6 +789,21 @@ pub(super) fn input_privacy(text: &str) -> PrivacyClass {
         "my contacts",
         "medical record",
         "bank account",
+        "mine noter",
+        "min hukommelse",
+        "mine minder",
+        "mine beskeder",
+        "mine mails",
+        "mine e-mails",
+        "mine emails",
+        "min e-mail",
+        "min email",
+        "min placering",
+        "mine fotos",
+        "mine billeder",
+        "mine kontakter",
+        "min journal",
+        "bankkonto",
     ]
     .iter()
     .any(|term| text.contains(term))
@@ -1263,13 +1292,25 @@ mod tests {
             pause: None,
         });
         let (runtime, store, auth) = fixture(model.clone()).await;
-        assert!(
-            runtime
-                .stock_text(&auth, "Read my notes".into())
-                .await
-                .is_err()
-        );
-        assert_eq!(model.calls.load(Ordering::SeqCst), 0);
+        for request in [
+            "Read my notes",
+            "Læs mine beskeder",
+            "Find mine billeder",
+            "Vis min bankkonto",
+            "Hvad er min adgangskode?",
+            "Læs mit CPR-nummer",
+            "Find min hemmelige nøgle",
+        ] {
+            assert!(
+                runtime.stock_text(&auth, request.into()).await.is_err(),
+                "private reference admitted: {request}"
+            );
+            assert_eq!(
+                model.calls.load(Ordering::SeqCst),
+                0,
+                "private reference reached cognition: {request}"
+            );
+        }
         assert!(
             runtime
                 .stock_text(&auth, "An ordinary question".into())

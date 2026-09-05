@@ -81,6 +81,7 @@ pub struct LocalVoice {
     pub(super) fence: TurnFence,
     pub(super) binding: Binding,
     pub(super) source_current: Arc<dyn Fn() -> bool + Send + Sync>,
+    pub(super) deadline: std::time::Instant,
     pub(super) cancel: CancelVoice,
 }
 
@@ -151,7 +152,7 @@ impl LocalVoice {
     /// Publication presence is required through finalization. Cognition then
     /// uses the committed origin/privacy floor and current turn, pairing,
     /// approval and media-room checks; it does not require an open microphone.
-    pub async fn complete(mut self, transcript: String) -> Result<RuntimeResult, Status> {
+    pub(super) async fn complete(mut self, transcript: String) -> Result<RuntimeResult, Status> {
         self.check().await?;
         let principal = self.authenticated.principal.expose_for_authorization();
         let result = tokio::time::timeout(
@@ -187,6 +188,46 @@ impl LocalVoice {
             .await?;
         self.cancel.armed = false;
         Ok(result)
+    }
+
+    /// Pending work is polled only after a current authority check. The total
+    /// deadline includes those checks, so a stalled Store cannot retain audio
+    /// or an inference future beyond this intake's local deadline.
+    pub(super) async fn while_pending<T>(
+        &self,
+        work: impl std::future::Future<Output = Result<T, Status>>,
+    ) -> Result<T, Status> {
+        tokio::time::timeout_at(self.deadline.into(), async {
+            self.check().await?;
+            let mut changes = tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                self.runtime
+                    .store
+                    .runtime_changes(self.authenticated.principal.expose_for_authorization()),
+            )
+            .await
+            .map_err(|_| Status::unavailable("voice intake unavailable"))?
+            .map_err(super::runtime::runtime_error)?;
+            let mut interval = tokio::time::interval(std::time::Duration::from_millis(250));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            tokio::pin!(work);
+            loop {
+                tokio::select! {
+                    biased;
+                    changed = changes.changed() => {
+                        changed.map_err(|_| Status::unavailable("voice intake unavailable"))?;
+                        self.check().await?;
+                    }
+                    _ = interval.tick() => self.check().await?,
+                    result = &mut work => {
+                        self.check().await?;
+                        return result;
+                    }
+                }
+            }
+        })
+        .await
+        .map_err(|_| Status::deadline_exceeded("voice intake deadline exceeded"))?
     }
 }
 
@@ -445,7 +486,7 @@ impl RuntimeState {
             vec![RuntimeData::VoiceFinalized {
                 fence,
                 transcript_digest,
-                classifier_version: 1,
+                classifier_version: super::runtime::INPUT_CLASSIFIER_VERSION,
                 privacy,
             }],
         ))

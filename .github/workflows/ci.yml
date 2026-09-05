@@ -148,11 +148,21 @@ jobs:
             cosmos-rust-v2-${{ runner.os }}-${{ runner.arch }}-1.91.1-${{ hashFiles('cosmos/Cargo.lock', 'rust-toolchain.toml') }}-
             cosmos-rust-v2-${{ runner.os }}-${{ runner.arch }}-1.91.1-
       - name: formatting
-        run: cargo fmt --all --check --manifest-path cosmos/Cargo.toml
+        working-directory: cosmos
+        run: cargo fmt --all --check
       - name: warnings-as-errors lint
-        run: cargo clippy --workspace --all-targets --locked --manifest-path cosmos/Cargo.toml -- -D warnings
+        working-directory: cosmos
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: focused component checks
-        run: cargo test --workspace --locked --manifest-path cosmos/Cargo.toml
+        working-directory: cosmos
+        run: cargo test --workspace --locked
+      - name: verified local recognition model
+        run: python3 cosmos/native/prepare_stt.py --directory "${RUNNER_TEMP}/local-stt-model"
+      - name: real native local recognition cancellation
+        working-directory: cosmos
+        env:
+          REVIVAL_STT_TEST_MODEL: ${{ runner.temp }}/local-stt-model/ggml-base.bin
+        run: cargo test -p cosmos-stt --locked tests::pinned_model_native_cancellation -- --ignored --exact --nocapture --test-threads=1
       - name: release-only 4096-bit RSA compatibility
         working-directory: cosmos
         run: |

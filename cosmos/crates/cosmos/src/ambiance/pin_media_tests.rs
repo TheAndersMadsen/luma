@@ -14,7 +14,7 @@ impl ChatModel for NoCognition {
         panic!("media membership must never invoke cognition")
     }
 }
-fn config() -> Config {
+pub(super) fn config() -> Config {
     let path = std::env::var("COSMOS_RTC_AUDIO_TEST_INPUT").expect("isolated SFU fixture required");
     let input: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
     let url = input["url"].as_str().unwrap();
@@ -28,6 +28,17 @@ fn config() -> Config {
     .unwrap()
 }
 async fn fixture() -> (
+    Arc<AmbianceRuntime>,
+    Arc<MemoryStore>,
+    SharedEnrollmentStore,
+    AuthenticatedRequest,
+    Uuid,
+) {
+    fixture_model(Arc::new(NoCognition)).await
+}
+pub(super) async fn fixture_model(
+    model: Arc<dyn ChatModel>,
+) -> (
     Arc<AmbianceRuntime>,
     Arc<MemoryStore>,
     SharedEnrollmentStore,
@@ -56,7 +67,7 @@ async fn fixture() -> (
         .unwrap();
     let runtime = Arc::new(AmbianceRuntime::new(
         store.clone(),
-        Arc::new(NoCognition),
+        model,
         Some(pairing.clone()),
     ));
     let RuntimeResult::PinOpened {

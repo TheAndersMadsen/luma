@@ -5,8 +5,9 @@ import { boundedJson } from "@/server/boundedJson";
 import { exact, record, UUID } from "@/lib/contracts/surfaces";
 import { DEVICE_ID, PIN_APPROVAL, parsePinSurface, parsePinSurfaces } from "@/lib/contracts/pinSurfaces";
 import { parseSpeechApproval, parseSpeechDisclosureInput } from "@/lib/contracts/speechDisclosure";
+import { parseLocalVoiceApproval, parseLocalVoiceInput } from "@/lib/contracts/localVoice";
 
-type Operation = "list" | "approve" | "revoke" | "speech-read" | "speech-write";
+type Operation = "list" | "approve" | "revoke" | "speech-read" | "speech-write" | "voice-read" | "voice-write";
 const ERRORS: Record<number, string> = { 400: "invalid_request", 401: "unauthorized", 403: "forbidden", 404: "not_found", 409: "conflict", 429: "surface_limit", 503: "unavailable" };
 function json(value: unknown, status = 200) {
   return Response.json(value, { status, headers: { "cache-control": "no-store", "x-content-type-options": "nosniff" } });
@@ -17,18 +18,21 @@ export async function pinSurfaceRequest(request: Request, operation: Operation, 
   try {
     if (!AUTH_ENABLED) return json({ error: "unavailable" }, 503);
     if (!await currentSession()) return json({ error: "unauthorized" }, 401);
-    const read = operation === "list" || operation === "speech-read";
+    const read = operation === "list" || operation === "speech-read" || operation === "voice-read";
     const speech = operation === "speech-read" || operation === "speech-write";
+    const voice = operation === "voice-read" || operation === "voice-write";
     if (!read && !isSameOriginRequest(request)) return json({ error: "same_origin_required" }, 403);
-    if ((operation === "revoke" || speech) && (!surfaceId || !UUID.test(surfaceId))) return json({ error: "invalid_request" }, 400);
+    if ((operation === "revoke" || speech || voice) && (!surfaceId || !UUID.test(surfaceId))) return json({ error: "invalid_request" }, 400);
     // No admin-pairing token, XFCC, share token or development principal fallback.
     const headers = await surfaceOwnerHeaders();
     let body: Record<string, unknown> | undefined;
-    if (operation === "approve" || operation === "speech-write") {
+    if (operation === "approve" || operation === "speech-write" || operation === "voice-write") {
       try {
         if (request.headers.get("content-type")?.split(";", 1)[0].trim() !== "application/json") throw new Error("content_type");
-        const input = record(await boundedJson(request.body, 1024, AbortSignal.timeout(5000)));
+        const input = record(await boundedJson(request.body, 1024, voice
+          ? AbortSignal.any([request.signal, AbortSignal.timeout(5000)]) : AbortSignal.timeout(5000)));
         if (operation === "speech-write") body = { ...parseSpeechDisclosureInput(input) };
+        else if (operation === "voice-write") body = { ...parseLocalVoiceInput(input) };
         else {
           if (Object.keys(input).length !== 2 || typeof input.deviceId !== "string" || !DEVICE_ID.test(input.deviceId)
             || input.approval !== PIN_APPROVAL) throw new Error("invalid_approval");
@@ -37,8 +41,8 @@ export async function pinSurfaceRequest(request: Request, operation: Operation, 
       } catch { return json({ error: "invalid_request" }, 400); }
     }
     if (!COSMOS_WEBAPI) return json({ error: "unavailable" }, 503);
-    const signal = AbortSignal.timeout(8000);
-    const response = await fetch(`${COSMOS_WEBAPI}/surface-api/v1/pins${surfaceId ? `/${surfaceId}` : ""}${speech ? "/speech-disclosure" : ""}`, {
+    const signal = voice ? AbortSignal.any([request.signal, AbortSignal.timeout(8000)]) : AbortSignal.timeout(8000);
+    const response = await fetch(`${COSMOS_WEBAPI}/surface-api/v1/pins${surfaceId ? `/${surfaceId}` : ""}${speech ? "/speech-disclosure" : voice ? "/local-voice" : ""}`, {
       method: read ? "GET" : operation === "revoke" ? "DELETE" : "POST",
       headers: { ...headers, "content-type": "application/json" },
       body: body ? JSON.stringify(body) : undefined,
@@ -49,7 +53,17 @@ export async function pinSurfaceRequest(request: Request, operation: Operation, 
       const status = ERRORS[response.status] ? response.status : 503;
       return json({ error: ERRORS[status] }, status);
     }
-    const result = await boundedJson(response.body, speech ? 2048 : 65536, signal);
+    if (voice && response.headers.get("content-type")?.split(";", 1)[0].trim() !== "application/json") {
+      void response.body?.cancel().catch(() => {});
+      throw new Error("invalid_content_type");
+    }
+    const result = await boundedJson(response.body, speech || voice ? 2048 : 65536, signal);
+    if (voice) {
+      const approval = parseLocalVoiceApproval(result);
+      if (operation === "voice-write" && (!approval || approval.approvalRevision !== body?.approvalRevision
+        || approval.revision !== Number(body?.expectedRevision) + 1 || !exact(approval.policy, body?.policy))) throw new Error("approval_mismatch");
+      return json({ approval });
+    }
     if (speech) {
       const approval = parseSpeechApproval(result);
       if (operation === "speech-write" && (!approval || approval.approvalRevision !== body?.approvalRevision
