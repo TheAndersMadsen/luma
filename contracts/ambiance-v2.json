@@ -402,7 +402,7 @@
       "basis": "cosmos-product",
       "sourceSections": ["4.1", "6.1"],
       "requirement": "A native macOS client implements the common surface contract with truthful audio, rendering, permissions, lock/sleep and availability constraints.",
-      "acceptance": "Verify native lifecycle, playback stop and local confirmation; no competing assistant authority. This roadmap client is not a prerequisite for the initial narrow paper profile.",
+      "acceptance": "Required product deliverable: verify native lifecycle, playback stop, local confirmation, protected credential storage and installable packaging; no competing assistant authority. Completion is separate from the first verified Cosmos/Center server rollout.",
       "status": "pending",
       "evidence": []
     },
@@ -411,7 +411,7 @@
       "basis": "cosmos-product",
       "sourceSections": ["4.1", "6", "6.1"],
       "requirement": "A native Android companion declares real foreground/background, audio, notification, permission and reconnect behavior through the common surface contract.",
-      "acceptance": "Verify on a physical phone; notification delivery is not render acknowledgment or microphone permission. This roadmap client is not a prerequisite for the initial narrow paper profile.",
+      "acceptance": "Required product deliverable: verify foreground/background permissions, reconnect, protected credential storage and installable packaging on a physical phone; notification delivery is not render acknowledgment or microphone permission. Completion is separate from the first verified Cosmos/Center server rollout.",
       "status": "pending",
       "evidence": []
     },

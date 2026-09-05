@@ -174,18 +174,10 @@ async fn status(State(api): State<ApiState>, headers: HeaderMap) -> Result<Json<
         .await
         .map_err(|_| ApiError(StatusCode::SERVICE_UNAVAILABLE, "unavailable"))?;
     let config = crate::integrations::active().snapshot();
-    let configured = config.assistant.configured()
-        && match config.assistant.provider {
-            crate::integrations::AssistantProvider::OpenAiCompatible => true,
-            crate::integrations::AssistantProvider::CodexSubscription => {
-                crate::assistant::codex_app_server::account_status()
-                    .await
-                    .connected
-            }
-        };
-    Ok(Json(
-        json!({"version":1,"textInputConfigured":configured,"approvedSurfaceRequired":true}),
-    ))
+    Ok(Json(readiness_view(&config)))
+}
+fn readiness_view(config: &crate::integrations::IntegrationsConfig) -> Value {
+    json!({"version":1,"textInputConfigured":config.realtime.configured(),"approvedSurfaceRequired":true})
 }
 async fn poll(
     State(api): State<ApiState>,

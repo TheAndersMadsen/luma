@@ -148,7 +148,7 @@ where
     let ambiance_runtime = ai_bus_store.as_ref().map(|store| {
         std::sync::Arc::new(ambiance::runtime::AmbianceRuntime::new(
             store.clone(),
-            std::sync::Arc::new(assistant::llm::ConfiguredChatModel::external_only()),
+            std::sync::Arc::new(ambiance::realtime::ConfiguredRealtimeModel::new()),
             enrollment::pairing_store(),
         ))
     });
@@ -753,10 +753,19 @@ async fn await_task_until<T>(
     }
 }
 
+fn logging_filter(level: LogLevel) -> tracing_subscriber::EnvFilter {
+    // WebSocket dependencies log handshake headers and frame payloads. Those
+    // targets must never expose provider credentials or wearer content, even
+    // when ordinary Cosmos diagnostics are enabled at a verbose level.
+    tracing_subscriber::EnvFilter::new(format!(
+        "{},tungstenite=off,tokio_tungstenite=off",
+        level.as_str()
+    ))
+}
+
 pub fn init_logging(level: LogLevel) {
-    let filter = tracing_subscriber::EnvFilter::new(level.as_str());
     let _ = tracing_subscriber::fmt()
-        .with_env_filter(filter)
+        .with_env_filter(logging_filter(level))
         .with_target(false)
         .compact()
         .try_init();
@@ -804,6 +813,44 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn realtime_logging_suppresses_websocket_targets_even_with_trace_diagnostics() {
+        #[derive(Clone)]
+        struct Capture(Arc<std::sync::Mutex<Vec<u8>>>);
+        impl std::io::Write for Capture {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let output = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let capture = Capture(output.clone());
+        // Production's typed level stops at Debug. Also prove the fixed target
+        // exclusions survive a hypothetical broader default without adding a
+        // production Trace setting or emitting real provider traffic.
+        let filter = logging_filter(LogLevel::Debug).add_directive("trace".parse().unwrap());
+        let subscriber = tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_ansi(false)
+            .without_time()
+            .with_writer(move || capture.clone())
+            .finish();
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::trace!(target: "tungstenite::handshake::client", "synthetic-handshake-marker");
+            tracing::trace!(target: "tungstenite::protocol", "synthetic-frame-marker");
+            tracing::trace!(target: "tokio_tungstenite", "synthetic-async-marker");
+            tracing::error!(target: "tokio_tungstenite::stream", "synthetic-error-marker");
+            tracing::trace!(target: "cosmos::diagnostic", "retained-cosmos-diagnostic");
+        });
+        let bytes = output.lock().unwrap();
+        let text = std::str::from_utf8(&bytes).unwrap();
+        assert!(text.contains("retained-cosmos-diagnostic"));
+        assert!(!text.contains("synthetic-"));
+    }
 
     async fn unused_loopback_address() -> SocketAddr {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")

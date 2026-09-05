@@ -7,6 +7,24 @@ use crate::{
 use axum::{body::Body, http::Request};
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header};
 use tower::ServiceExt;
+
+#[test]
+fn realtime_readiness_never_uses_assistant_or_codex_credentials() {
+    let mut config = crate::integrations::IntegrationsConfig::default();
+    config.assistant.api_key = Some("synthetic-assistant-key".to_owned());
+    config.assistant.base_url = "https://example.test".to_owned();
+    assert_eq!(readiness_view(&config)["textInputConfigured"], false);
+    config.assistant.provider = crate::integrations::AssistantProvider::CodexSubscription;
+    assert_eq!(readiness_view(&config)["textInputConfigured"], false);
+    config.realtime.api_key = Some("synthetic-realtime-key".to_owned());
+    assert_eq!(
+        readiness_view(&config),
+        json!({"version":1,"textInputConfigured":true,"approvedSurfaceRequired":true})
+    );
+    assert!(!readiness_view(&config).to_string().contains("synthetic"));
+    config.realtime.api_key = None;
+    assert_eq!(readiness_view(&config)["textInputConfigured"], false);
+}
 #[tokio::test]
 async fn browser_runtime_api_auth_precedes_body_and_authorized_body_is_bounded() {
     let (app, _, _, _, token) = fixture().await;

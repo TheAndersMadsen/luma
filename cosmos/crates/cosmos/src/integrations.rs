@@ -17,6 +17,66 @@ pub const DEFAULT_CODEX_MODEL: &str = "gpt-5.6-sol";
 pub const DEFAULT_AZURE_VOICE: &str = "en-US-AvaMultilingualNeural";
 const CONFIG_FILE: &str = "integrations.json";
 
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RealtimeConfig {
+    pub api_key: Option<String>,
+    pub model: String,
+    pub max_output_tokens: u32,
+}
+
+impl Default for RealtimeConfig {
+    fn default() -> Self {
+        Self {
+            api_key: None,
+            model: "gpt-realtime".to_owned(),
+            max_output_tokens: 1024,
+        }
+    }
+}
+
+impl std::fmt::Debug for RealtimeConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RealtimeConfig")
+            .field("api_key_configured", &self.api_key.is_some())
+            .field("max_output_tokens", &self.max_output_tokens)
+            .finish_non_exhaustive()
+    }
+}
+
+impl RealtimeConfig {
+    pub fn configured(&self) -> bool {
+        self.valid() && self.api_key.is_some()
+    }
+
+    fn valid(&self) -> bool {
+        !self.model.is_empty()
+            && self.model.len() <= 128
+            && self
+                .model
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+            && (64..=4096).contains(&self.max_output_tokens)
+            && self.api_key.as_ref().is_none_or(|key| {
+                !key.is_empty() && key.len() <= 8192 && key.bytes().all(|b| b.is_ascii_graphic())
+            })
+    }
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RealtimeUpdate {
+    pub api_key: Option<String>,
+    pub model: Option<String>,
+    pub max_output_tokens: Option<u32>,
+}
+
+impl std::fmt::Debug for RealtimeUpdate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RealtimeUpdate").finish_non_exhaustive()
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AssistantProvider {
@@ -115,6 +175,7 @@ impl Default for SpeechConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct IntegrationsConfig {
     pub schema_version: u8,
+    pub realtime: RealtimeConfig,
     pub assistant: AssistantConfig,
     pub search: SearchConfig,
     pub maps: MapsConfig,
@@ -126,6 +187,7 @@ impl Default for IntegrationsConfig {
     fn default() -> Self {
         Self {
             schema_version: 1,
+            realtime: RealtimeConfig::default(),
             assistant: AssistantConfig::default(),
             search: SearchConfig::default(),
             maps: MapsConfig::default(),
@@ -182,6 +244,7 @@ impl IntegrationsConfig {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct IntegrationsUpdate {
+    pub realtime: Option<RealtimeUpdate>,
     pub assistant: Option<AssistantUpdate>,
     pub search: Option<SearchUpdate>,
     pub maps: Option<MapsUpdate>,
@@ -399,6 +462,15 @@ pub fn persisted_speech_ready(state_dir: Option<&str>) -> Result<Option<bool>, I
 }
 
 fn apply_update(config: &mut IntegrationsConfig, update: IntegrationsUpdate) {
+    if let Some(update) = update.realtime {
+        update_secret(&mut config.realtime.api_key, update.api_key);
+        if let Some(model) = update.model {
+            config.realtime.model = model;
+        }
+        if let Some(limit) = update.max_output_tokens {
+            config.realtime.max_output_tokens = limit;
+        }
+    }
     if let Some(update) = update.assistant {
         if let Some(value) = update.provider {
             config.assistant.provider = value;
@@ -465,6 +537,7 @@ fn update_secret(target: &mut Option<String>, update: Option<String>) {
 }
 
 fn normalize(config: &mut IntegrationsConfig) {
+    config.realtime.model = config.realtime.model.trim().to_owned();
     config.assistant.base_url = config
         .assistant
         .base_url
@@ -480,6 +553,7 @@ fn normalize(config: &mut IntegrationsConfig) {
     config.speech.azure_voice = config.speech.azure_voice.trim().to_owned();
     for value in [
         &mut config.assistant.api_key,
+        &mut config.realtime.api_key,
         &mut config.search.searxng_base_url,
         &mut config.search.serpapi_key,
         &mut config.search.perplexity_api_key,
@@ -500,6 +574,11 @@ fn normalize(config: &mut IntegrationsConfig) {
 }
 
 fn validate(config: &IntegrationsConfig) -> Result<(), IntegrationError> {
+    if !config.realtime.valid() {
+        return Err(IntegrationError::Invalid(
+            "realtime configuration is invalid",
+        ));
+    }
     if config.schema_version != 1 {
         return Err(IntegrationError::Invalid("unsupported schema version"));
     }
@@ -603,6 +682,70 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     #[test]
+    fn realtime_old_configuration_never_inherits_assistant_credentials() {
+        let config: IntegrationsConfig = serde_json::from_value(serde_json::json!({
+            "assistant": {"api_key":"old-assistant-secret", "base_url":"https://example.test"}
+        }))
+        .unwrap();
+        assert_eq!(
+            config.assistant.api_key.as_deref(),
+            Some("old-assistant-secret")
+        );
+        assert!(config.realtime.api_key.is_none());
+        assert!(!config.realtime.configured());
+        assert_eq!(config.realtime.model, "gpt-realtime");
+        assert_eq!(config.realtime.max_output_tokens, 1024);
+        validate(&config).unwrap();
+    }
+
+    #[test]
+    fn realtime_updates_preserve_remove_validate_and_redact_credentials() {
+        let mut config = IntegrationsConfig::default();
+        let update: IntegrationsUpdate = serde_json::from_value(serde_json::json!({
+            "realtime":{"api_key":"synthetic-realtime-secret"}
+        }))
+        .unwrap();
+        assert!(!format!("{update:?}").contains("synthetic-realtime-secret"));
+        apply_update(&mut config, update);
+        assert!(config.realtime.configured());
+        assert!(!format!("{config:?}").contains("synthetic-realtime-secret"));
+        apply_update(
+            &mut config,
+            serde_json::from_value(serde_json::json!({
+                "realtime":{"max_output_tokens":2048}
+            }))
+            .unwrap(),
+        );
+        assert_eq!(
+            config.realtime.api_key.as_deref(),
+            Some("synthetic-realtime-secret")
+        );
+        assert_eq!(config.realtime.max_output_tokens, 2048);
+        apply_update(
+            &mut config,
+            serde_json::from_value(serde_json::json!({
+                "realtime":{"api_key":""}
+            }))
+            .unwrap(),
+        );
+        assert!(!config.realtime.configured());
+        assert!(config.realtime.api_key.is_none());
+        for limit in [0, 63, 4097, u32::MAX] {
+            config.realtime.max_output_tokens = limit;
+            assert!(validate(&config).is_err());
+        }
+        config.realtime.max_output_tokens = 1024;
+        for key in ["", "bad\r\nkey", "bad key", "bad\0key"] {
+            config.realtime.api_key = Some(key.to_owned());
+            assert!(!config.realtime.configured());
+            assert!(validate(&config).is_err());
+        }
+        config.realtime.api_key = None;
+        config.realtime.model = "bad?model".to_owned();
+        assert!(validate(&config).is_err());
+    }
+
+    #[test]
     fn update_preserves_omitted_secrets_and_clears_explicit_empty_secrets() {
         let mut config = IntegrationsConfig::default();
         config.assistant.api_key = Some("existing".to_owned());
@@ -671,6 +814,10 @@ mod tests {
         let store = IntegrationStore::load(directory.to_str()).unwrap();
         store
             .update(IntegrationsUpdate {
+                realtime: Some(RealtimeUpdate {
+                    api_key: Some("synthetic-realtime-persisted".to_owned()),
+                    ..RealtimeUpdate::default()
+                }),
                 assistant: Some(AssistantUpdate {
                     base_url: Some("https://openrouter.ai/api/v1/".to_owned()),
                     api_key: Some("private-provider-key".to_owned()),
@@ -701,6 +848,25 @@ mod tests {
             Some("private-provider-key")
         );
         assert!(reloaded.assistant.fast_mode);
+        assert_eq!(
+            reloaded.realtime.api_key.as_deref(),
+            Some("synthetic-realtime-persisted")
+        );
+        assert!(reloaded.realtime.configured());
+        let before = fs::read(&path).unwrap();
+        assert!(
+            store
+                .update(IntegrationsUpdate {
+                    realtime: Some(RealtimeUpdate {
+                        max_output_tokens: Some(4097),
+                        ..RealtimeUpdate::default()
+                    }),
+                    ..IntegrationsUpdate::default()
+                })
+                .is_err()
+        );
+        assert_eq!(fs::read(&path).unwrap(), before);
+        assert_eq!(store.snapshot().realtime.max_output_tokens, 1024);
         assert_eq!(reloaded.speech.azure_region.as_deref(), Some("westeurope"));
         assert_eq!(
             persisted_speech_ready(directory.to_str()).unwrap(),

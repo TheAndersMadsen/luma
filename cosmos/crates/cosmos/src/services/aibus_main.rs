@@ -9,8 +9,8 @@ use base64::Engine as _;
 use pb::ai_bus_service_server::AiBusService;
 use tonic::{Request, Response, Status};
 
+use crate::ambiance::realtime::ConfiguredRealtimeModel;
 use crate::assistant::catalog;
-use crate::assistant::llm::ConfiguredChatModel;
 #[cfg(test)]
 use crate::assistant::llm::{ChatMessage, ChatModel};
 #[cfg(test)]
@@ -207,7 +207,7 @@ impl Default for AiBusMain {
         Self {
             runtime: std::sync::Arc::new(crate::ambiance::runtime::AmbianceRuntime::new(
                 crate::store::MemoryStore::shared(),
-                std::sync::Arc::new(ConfiguredChatModel::external_only()),
+                std::sync::Arc::new(ConfiguredRealtimeModel::new()),
                 crate::enrollment::pairing_store(),
             )),
             keys: Default::default(),
@@ -574,7 +574,7 @@ impl AiBusMain {
     pub fn with_store(mut self, store: crate::store::SharedStore) -> Self {
         self.runtime = std::sync::Arc::new(crate::ambiance::runtime::AmbianceRuntime::new(
             store.clone(),
-            std::sync::Arc::new(ConfiguredChatModel::external_only()),
+            std::sync::Arc::new(ConfiguredRealtimeModel::new()),
             self.pairing.clone(),
         ));
         self.store = store;

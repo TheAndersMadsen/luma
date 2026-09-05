@@ -601,6 +601,24 @@ automation, but they are not part of normal Pin setup.
 
 ## Cosmos assistant runtime
 
+The current Cosmos-first increment wires an OpenAI Realtime WebSocket text
+front into the shared runtime, with one fresh provider session per admitted
+turn. It is not LiveKit, microphone streaming or native audio playback; those
+transport and hardware gates remain outstanding. Offline protocol fixtures and
+configuration checks do not prove actual provider access or entitlement.
+
+Realtime credentials are separate persisted Cosmos settings, configured through
+the authenticated operator integrations API's `realtime` object (`api_key`,
+`model`, `max_output_tokens`). The model defaults to `gpt-realtime`, with a
+64–4096 output-token range and default 1024. Omitted secrets are preserved and
+an explicit empty secret removes the key; reads expose only configured status.
+Center's dedicated configuration controls follow in the Center phase. Existing
+assistant/OpenRouter/Codex settings remain unchanged for future bounded
+larger-model delegation: they grant no Realtime entitlement, are never copied
+into Realtime settings, and are not an automatic fallback. An unconfigured
+Realtime front is unavailable. This increment is not deployed or full Ambiance
+acceptance.
+
 The Ambiance development branch replaces the old Engine/Bidi control path with
 one durable runtime. Its current text foundation supports informational speech
 on the live origin Pin and bounded visual text cards on an eligible approved

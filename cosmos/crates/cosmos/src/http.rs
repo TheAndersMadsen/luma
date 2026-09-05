@@ -638,11 +638,20 @@ fn tool_status() -> Vec<ToolStatus> {
 
 #[derive(Serialize)]
 struct IntegrationsView {
+    realtime: RealtimeIntegrationView,
     assistant: AssistantIntegrationView,
     search: SearchIntegrationView,
     maps: MapsIntegrationView,
     speech: SpeechIntegrationView,
     food: FoodIntegrationView,
+}
+
+#[derive(Serialize)]
+struct RealtimeIntegrationView {
+    configured: bool,
+    api_key_configured: bool,
+    model: String,
+    max_output_tokens: u32,
 }
 
 #[derive(Serialize)]
@@ -778,6 +787,12 @@ async fn integrations_view(config: crate::integrations::IntegrationsConfig) -> I
         }
     };
     IntegrationsView {
+        realtime: RealtimeIntegrationView {
+            configured: config.realtime.configured(),
+            api_key_configured: config.realtime.api_key.is_some(),
+            model: config.realtime.model,
+            max_output_tokens: config.realtime.max_output_tokens,
+        },
         assistant: AssistantIntegrationView {
             provider: config.assistant.provider,
             configured: assistant_configured,
@@ -3644,6 +3659,7 @@ mod admin_gate_tests {
         let mut config = crate::integrations::IntegrationsConfig::default();
         config.assistant.base_url = "https://openrouter.ai/api/v1".to_owned();
         config.assistant.api_key = Some("private-assistant-key".to_owned());
+        config.realtime.api_key = Some("private-realtime-key".to_owned());
         config.search.serpapi_key = Some("private-search-key".to_owned());
         config.maps.google_maps_key = Some("private-maps-key".to_owned());
         config.speech.azure_key = Some("private-speech-key".to_owned());
@@ -3653,6 +3669,8 @@ mod admin_gate_tests {
 
         let value = serde_json::to_value(integrations_view(config).await).unwrap();
         assert_eq!(value["assistant"]["api_key_configured"], true);
+        assert_eq!(value["realtime"]["configured"], true);
+        assert_eq!(value["realtime"]["api_key_configured"], true);
         assert_eq!(value["search"]["serpapi_key_configured"], true);
         assert_eq!(value["maps"]["configured"], true);
         assert_eq!(value["speech"]["azure_key_configured"], true);
@@ -3660,6 +3678,7 @@ mod admin_gate_tests {
         let response = value.to_string();
         for secret in [
             "private-assistant-key",
+            "private-realtime-key",
             "private-search-key",
             "private-maps-key",
             "private-speech-key",
