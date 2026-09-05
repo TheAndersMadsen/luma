@@ -13,6 +13,7 @@ pub mod runtime;
 pub mod speech;
 pub mod state;
 pub mod stock;
+pub mod voice;
 pub use pin_connection::{PinConnection, PinProof};
 pub use policy::{Channel, PrivacyClass, SemanticIntent};
 pub use state::*;

@@ -1,5 +1,7 @@
 //! Manual PCM in a two-party transport room. Enrollment, privacy, turn grants
 //! and playback evidence belong to the runtime and device, not this adapter.
+pub mod pcm;
+
 use crate::Error;
 use futures_util::StreamExt;
 use livekit::{
@@ -239,6 +241,16 @@ impl AudioSession {
     /// Observed remote session, not an application admission or actor identity.
     pub fn peer_session(&self) -> watch::Receiver<Option<String>> {
         self.peer_session.clone()
+    }
+
+    /// Current server-observed publication, without subscribing or decoding.
+    /// This snapshot grants no runtime permission or actor identity; callers
+    /// must revalidate it before consuming media and across asynchronous work.
+    pub fn publication_current(&self, track: &TrackId) -> bool {
+        *self.alive.borrow()
+            && track.participant == self.peer
+            && self.peer_session.borrow().as_deref() == Some(track.participant_sid.as_str())
+            && contains(&self.publications, track)
     }
 
     pub async fn publish(&self, epoch: Uuid, generation: u64) -> Result<AudioSender, Error> {

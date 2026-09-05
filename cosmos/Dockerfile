@@ -11,6 +11,7 @@ WORKDIR /workspace/cosmos
 COPY native ./native
 RUN bash native/linux-toolchain.sh "${BUILDARCH}" "${TARGETARCH}"
 ENV CXX=clang++-21
+ENV LIBCLANG_PATH=/usr/lib/llvm-21/lib
 
 COPY Cargo.toml Cargo.lock ./
 COPY .cargo ./.cargo
@@ -104,6 +105,7 @@ RUN rm -f /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources \
     && apt-get update \
     && apt-get install --no-install-recommends --yes \
         ca-certificates \
+        libstdc++6 \
         curl \
         socat \
     && rm -rf /var/lib/apt/lists/*

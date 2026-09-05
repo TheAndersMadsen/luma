@@ -280,6 +280,61 @@ async fn audio_pcm_roundtrip_attribution_interruption_and_new_publication() {
 
 #[tokio::test]
 #[ignore = "requires COSMOS_RTC_AUDIO_TEST_INPUT with an isolated localhost SFU"]
+async fn audio_publication_presence_is_exact_without_subscription_and_retires_on_stop() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let (runtime, surface) = sessions().await;
+        let mut sender = surface.publish(Uuid::new_v4(), 1).await.unwrap();
+        let original = sender.binding().track.clone();
+        // No subscription or PCM push: observing a publication must not require
+        // microphone content to have reached any decoder first.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !runtime.publication_current(&original) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(!surface.publication_current(&original));
+        for field in ["participant", "participant_sid", "track_sid"] {
+            let mut changed = original.clone();
+            match field {
+                "participant" => changed.participant = "runtime".into(),
+                "participant_sid" => changed.participant_sid = "PA_other".into(),
+                "track_sid" => changed.track_sid = "TR_other".into(),
+                _ => unreachable!(),
+            }
+            assert!(!runtime.publication_current(&changed), "{field}");
+        }
+        sender.stop().await.unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while runtime.publication_current(&original) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let mut replacement = surface.publish(Uuid::new_v4(), 2).await.unwrap();
+        let current = replacement.binding().track.clone();
+        assert_ne!(current.track_sid, original.track_sid);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !runtime.publication_current(&current) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(!runtime.publication_current(&original));
+        runtime.close().await.unwrap();
+        assert!(!runtime.publication_current(&current));
+        let _ = replacement.stop().await;
+        surface.close().await.unwrap();
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires COSMOS_RTC_AUDIO_TEST_INPUT with an isolated localhost SFU"]
 async fn audio_queues_are_bounded_and_receive_overflow_retires_generation() {
     tokio::time::timeout(Duration::from_secs(30), async {
         let (runtime, surface) = sessions().await;

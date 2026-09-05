@@ -78,6 +78,16 @@ Its metadata tests validate the inventory and evidence references only; the
 paper's reference implementation and reported test results are unavailable for
 independent reproduction.
 
+The current server preview is published as `v0.2.0-ambiance.2` and deployed at
+`https://center.andersmadsen.dk/`, reporting release
+`f62cf04253512285c7fe8eefe6cddc5861fd2273` and environment `production`.
+The signed operator, public discovery, OIDC and configured Pin certificate chain
+passed production verification. External browser RPC passed over direct TCP
+7881 with observed ICE selection and increasing byte counters. UDP 7882 and
+TURN/UDP 3478 remain blocked before packets reach the VPS network interface;
+their acceptance remains open. Full owner conversation acceptance, native
+clients, the voice loop and physical Pin acceptance remain incomplete.
+
 Ambiance v2 is the target architecture, not an optional addition to the existing
 assistant. Existing Cosmos behavior is not a correctness requirement where it
 conflicts with that architecture. Preserve necessary stock wire/package
@@ -306,8 +316,8 @@ required or that the stock SDK alone violates the paper.
    is permanently fenced. There is one connected coordinator per principal,
    not an active-active room deployment. The new endpoint uses `COSMOS_RTC_URL`,
    `COSMOS_RTC_PUBLIC_URL`, `COSMOS_RTC_API_KEY` and `COSMOS_RTC_API_SECRET`;
-   the signing secret remains in Cosmos. Production Compose wiring is implemented;
-   the new release has not been deployed.
+   the signing secret remains in Cosmos. Production Compose wiring is deployed in
+   the server preview; the remaining acceptance boundaries are listed above.
 
    The native Pin runtime API in the Rust library now binds one client boot epoch
    to a server-issued connection incarnation and the exact owner-approval
@@ -429,15 +439,36 @@ required or that the stock SDK alone violates the paper.
    rule; the paper assigns classes from provenance, not microphone modality
    (§§4.2–4.3). That label currently raises the turn's class, while cognition and
    output allow at most `shared_room`, so this is not a working voice loop.
-   The recommended next slice is bounded, source-bound local transcription
-   admission: pending capture stays unavailable to planners and external
-   providers, and runtime classification preserves the environmental/source floor
-   and the origin's memory restrictions. Local STT alone cannot lower an assigned
-   class, and owner capture approval does not certify the captured content as
-   shared. This admission path and any reviewed declassification transform remain
-   unimplemented, as do 48-to-16 kHz capture resampling, arbitrary-chunk PCM framing
-   and the complete voice loop. There is no application capture/playback
-   integration or physical Pin evidence.
+   The native library now has a separate pending local-transcription intake.
+   It requires a revision-bound owner intake policy and the runtime's observed
+   current Pin media publication, then consumes one input sequence and commits
+   its turn before accepting a transcript. Pending intake grants no cognition,
+   analysis, proposal or provider-disclosure authority. Exact source checks,
+   pairing, policy, incarnation and a 35-second capture/transform deadline fence
+   completion; dropping the media owner retires source authority synchronously.
+   A one-use server capability finalizes the transcript and resumes that same
+   turn without another admission or sequence increment. Runtime classification
+   joins the source floor and content raises; local STT cannot lower an existing
+   class, and capture approval does not certify the content as shared.
+   Raw PCM and transcript text are not persisted by this intake. There is no
+   owner HTTP/UI policy control or native capture subscription yet. Bounded
+   48-to-16 kHz resampling and arbitrary-chunk PCM framing are implemented in
+   the transport crate; local STT integration, application capture/playback
+   and physical Pin evidence remain unfinished. Keyword-based content raises
+   do not establish arbitrary Danish or English transcript classification.
+
+   The isolated `cosmos-stt` adapter pins `whisper-rs` 0.16.0 and the multilingual
+   Whisper base model by immutable URL, exact size and SHA256. It initializes
+   from the same verified bytes and accepts at most 15 seconds of normalized
+   16 kHz mono PCM, with explicit Danish or English decoding and no history.
+   One process-wide worker bounds native inference; cancellation retains its
+   capacity until native exit and discards late results. Exact-zero digital
+   audio returns no match before decoding; this is not voice activity detection,
+   and natural silence, noise and television hallucinations remain unverified.
+   The adapter's synthetic language and cancellation fixtures passed on macOS.
+   Runtime capture integration, production model provisioning, Linux execution
+   and the paper's end-to-end voice latency target remain separate open gates.
+
    In **Settings → My Ai Pin → Ambiance runtime approval**, open **Speech provider
    permission** for an approved Pin, enter the configured Azure Speech region,
    and explicitly allow shared reply text or revoke permission. Center verifies
@@ -555,6 +586,17 @@ stream. The upstream native queue can drop oldest frames and Opus is lossy;
 these bounds do not establish lossless audio. Device permission, capture, audio
 focus and speaker queues remain each client's responsibility. Device playback
 must still be stopped/flushed when a generation is retired.
+
+`cosmos-rtc::audio::pcm` frames signed little-endian PCM bytes with at most
+959 pending bytes, emits one 480-sample frame per call, and requires an explicit
+choice to reject or silence-pad a final partial frame. An unmatched final byte
+always fails. Its streaming 48-to-16 kHz mono converter filters before
+decimation, holds 127 samples and preserves the delayed tail on normal EOF.
+The profile adds 1.3125 ms of lookahead and produces `ceil(N/3)` samples; an
+aborted capture discards the converter instead of flushing into another turn.
+Seven deterministic tests cover byte and chunk boundaries, duration/alignment,
+speech-band gain and sampled alias rejection. Conversion grants no capture,
+transcription, disclosure or playback authority.
 
 `AudioSender::finish_input()` closes input and drains its accepted frames on the
 sample clock, then supplies 200 ms of paced silence. This bounded padding is a
@@ -680,13 +722,14 @@ tools. Upstream
 compatibility with the current JDK 17/AGP 8.7.3 pipeline remains unverified.
 No Android build or device operation was performed for this source audit.
 
-### LiveKit production topology — acceptance pending
+### LiveKit production topology — TCP verified, UDP acceptance pending
 
 The canonical single-node design keeps Traefik on ports 80/443 and the existing
 `center.andersmadsen.dk` origin. LiveKit 1.13.6 uses the pinned multiarch image
 `livekit/livekit-server@sha256:e37d68f172556d02aa77968b9fc55ef481468c0315fa38e4fa6c56ce72e3a815`;
-its image index includes Linux amd64 and arm64. This is deployment design and
-local evidence, not a claim that the new server release is live.
+its image index includes Linux amd64 and arm64. The server preview runs the
+ARM64 image. External browser data RPC has passed over direct TCP; this does
+not establish native media or physical playback.
 
 Cosmos connects internally to `ws://livekit:7880`; clients receive
 `wss://center.andersmadsen.dk/livekit`, without a trailing slash or `/rtc` suffix.
@@ -712,6 +755,12 @@ must be deliberately updated when browser audio capture is implemented.
 | Signaling | HTTPS/WSS 443 through Traefik to internal LiveKit TCP 7880 |
 | Direct WebRTC | Host TCP 7881 and UDP 7882 mapped to the same container ports |
 | Embedded TURN | Host UDP 3478 mapped to container UDP 3478 |
+
+Both the provider network and the host's forwarding firewall must permit these
+ports. Docker publication alone does not establish reachability: a hardened
+`DOCKER-USER` chain can drop forwarded traffic even while HTTPS and service
+health checks pass. Scope host exceptions to the realtime bridge network and
+the three published destination ports; preserve unrelated firewall policy.
 
 [UDP mux configuration](https://github.com/livekit/livekit/blob/v1.13.6/config-sample.yaml)
 uses `rtc.udp_port: 7882` with no ICE port range. `use_external_ip: true` discovers
@@ -767,6 +816,10 @@ must authorize only that room, expire within five minutes, and permit neither
 media nor administration. Playwright must be available through `NODE_PATH`.
 The probe verifies attributed RPC in both directions, the actual selected ICE
 path and increasing byte counters; its output omits credentials and raw stats.
+The probe waits for committed ICE statistics after RPC because a successful
+reply can precede Chrome reporting the candidate pair as succeeded. Failure
+diagnostics expose only allowlisted states, protocols, candidate types, ports
+and whether the selected address matches; they omit addresses and credentials.
 TCP forcing uses the SDK's participant-scoped test reconnect; product clients
 retain their permanent reconnect fence. TURN credentials come from authenticated
 signaling. The operator must delete the exact synthetic room afterward and check
@@ -1145,23 +1198,19 @@ automation, but they are not part of normal Pin setup.
 
 ## Cosmos assistant runtime
 
-The current Cosmos-first increment wires an OpenAI Realtime WebSocket text
-front into the shared runtime, with one fresh provider session per admitted
-turn. It is not LiveKit, microphone streaming or native audio playback; those
-transport and hardware gates remain outstanding. Offline protocol fixtures and
-configuration checks do not prove actual provider access or entitlement.
+Cosmos admits browser text through the shared LiveKit coordination room and
+uses the explicitly selected OpenAI Realtime or OpenRouter text adapter for
+bounded semantic proposals. The server preview selects OpenRouter text,
+`openai/gpt-4.1-mini`, with the `openai` upstream. This configuration is separate
+from the legacy Assistant/Codex selection and supplies no native microphone or
+playback capability.
 
-Realtime credentials are separate persisted Cosmos settings, configured through
-the authenticated operator integrations API's `realtime` object (`api_key`,
-`model`, `max_output_tokens`). The model defaults to `gpt-realtime`, with a
-64–4096 output-token range and default 1024. Omitted secrets are preserved and
+Conversation credentials are separate persisted Cosmos settings. Configure
+them through **Settings → Services → Cosmos → Ambiance conversation**. Provider
+changes require explicit model coordinates and a provider key; no Assistant or
+Codex credential is inherited automatically. Omitted secrets are preserved and
 an explicit empty secret removes the key; reads expose only configured status.
-Center's dedicated configuration controls follow in the Center phase. Existing
-assistant/OpenRouter/Codex settings remain unchanged for future bounded
-larger-model delegation: they grant no Realtime entitlement, are never copied
-into Realtime settings, and are not an automatic fallback. An unconfigured
-Realtime front is unavailable. This increment is not deployed or full Ambiance
-acceptance.
+An unconfigured conversation front is unavailable.
 
 The realtime front may request a single larger-model analysis for deeper
 reasoning, summarization, composition or translation of the current text. The

@@ -62,10 +62,32 @@ export function selectedTransport(records, mode, serverIp, ports = { udp: 7882, 
     sent: transport.bytesSent, received: transport.bytesReceived };
 }
 
-async function browserProbe({ configuration, mode, selectSource }) {
+// Keep failure diagnostics useful without exporting SDP, ICE credentials or IPs.
+export function transportDiagnostic(records, serverIp) {
+  const transport = records.find(record => record.type === "transport" && record.selectedCandidatePairId);
+  const pair = records.find(record => record.id === transport?.selectedCandidatePairId);
+  const local = records.find(record => record.id === pair?.localCandidateId);
+  const remote = records.find(record => record.id === pair?.remoteCandidateId);
+  const known = (value, choices) => choices.includes(value) ? value : "unknown";
+  return {
+    dtls: known(transport?.dtlsState, ["new", "connecting", "connected", "closed", "failed"]),
+    pair: known(pair?.state, ["frozen", "waiting", "in-progress", "failed", "succeeded"]),
+    nominated: pair?.nominated === true,
+    localProtocol: known(local?.protocol, ["tcp", "udp"]),
+    remoteProtocol: known(remote?.protocol, ["tcp", "udp"]),
+    localType: known(local?.candidateType, ["host", "srflx", "prflx", "relay"]),
+    remoteType: known(remote?.candidateType, ["host", "srflx", "prflx", "relay"]),
+    remotePort: Number.isInteger(remote?.port) && remote.port > 0 && remote.port <= 65535 ? remote.port : null,
+    expectedServer: remote?.address === serverIp,
+  };
+}
+
+async function browserProbe({ configuration, mode, selectSource, diagnosticSource }) {
   const { Room, RoomEvent, setLogLevel } = await import("/sdk.mjs");
   setLogLevel("silent");
   const select = (0, eval)(`(${selectSource})`);
+  const diagnostic = (0, eval)(`(${diagnosticSource})`);
+  const evidence = [];
   const rooms = configuration.participants.map(() => new Room());
   const method = "revival.acceptance.echo.v1";
   const expected = "synthetic transport probe";
@@ -89,7 +111,10 @@ async function browserProbe({ configuration, mode, selectSource }) {
       for (const name of ["publisher", "subscriber"]) {
         const stats = await manager?.[name]?.getStats();
         if (!stats) continue;
-        result.push({ participant: index, connection: name, ...select([...stats.values()], mode, configuration.serverIp, configuration.ports) });
+        const records = [...stats.values()];
+        evidence.push({ participant: index, connection: name, ...diagnostic(records, configuration.serverIp) });
+        if (evidence.length > 4) evidence.shift();
+        result.push({ participant: index, connection: name, ...select(records, mode, configuration.serverIp, configuration.ports) });
       }
     }
     if (result.length < 2 || !result.some(item => item.participant === 0) || !result.some(item => item.participant === 1)) throw new Error("Missing peer connection evidence");
@@ -135,7 +160,11 @@ async function browserProbe({ configuration, mode, selectSource }) {
     stage = "first-rpc";
     await roundtrip();
     stage = "selected-candidate-evidence";
-    const before = await snapshot();
+    // RPC can complete before Chrome's stats snapshot reports ICE succeeded.
+    // Wait for that evidence; a different selected path still fails this gate.
+    const before = await until(async () => {
+      try { return await snapshot(); } catch { return null; }
+    }, 5000);
     stage = "fresh-rpc";
     await roundtrip();
     stage = "increasing-byte-counters";
@@ -148,7 +177,7 @@ async function browserProbe({ configuration, mode, selectSource }) {
     }, 5000);
     return { ok: true, scope: "browser-data-transport", mode, bidirectionalRpc: true, transports: after.map(({ pairId, ...item }) => item) };
   } catch {
-    return { ok: false, mode, stage };
+    return { ok: false, mode, stage, transports: evidence.slice(-4) };
   } finally {
     const disconnected = await Promise.allSettled(rooms.map(room => room.disconnect()));
     if (disconnected.some(result => result.status !== "fulfilled")) throw new Error("Participant disconnect failed");
@@ -183,7 +212,7 @@ async function main() {
     const page = await browser.newPage();
     await page.goto(`http://127.0.0.1:${server.address().port}`);
     const result = await Promise.race([
-      page.evaluate(browserProbe, { configuration, mode, selectSource: selectedTransport.toString() }),
+      page.evaluate(browserProbe, { configuration, mode, selectSource: selectedTransport.toString(), diagnosticSource: transportDiagnostic.toString() }),
       new Promise((_, reject) => { const timer = setTimeout(() => reject(new Error("Network acceptance deadline")), 120000); timer.unref(); }),
     ]);
     process.stdout.write(`${JSON.stringify({ sdk: "2.22.2", ...result })}\n`);

@@ -41,6 +41,38 @@
   ],
   "evidence": [
     {
+      "id": "local-stt-adapter-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/stt/src/tests.rs",
+      "anchor": "async fn local_stt_cancellation_deadline_dropped_future_and_busy_keep_worker_bounded()",
+      "scope": "Defines bounded local recognition, one native worker, cancellation through worker exit, input/output limits and exact model checksum validation. A separate opt-in fixture exercises the pinned model with synthetic Danish/English audio and native abort.",
+      "limitation": "Isolated adapter only. Exact-zero no-match is not VAD; natural silence, noise and television hallucinations remain unverified. Model provisioning, runtime capture wiring, Linux execution, end-to-end latency and physical devices require separate acceptance."
+    },
+    {
+      "id": "local-voice-intake-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/voice_tests.rs",
+      "anchor": "fn ambiance_voice_pending_has_no_cognition_analysis_proposal_or_disclosure_authority()",
+      "scope": "Defines a pending, separately approved local voice intake with no planner/provider authority, one consumed sequence, exact same-turn finalization, source-floor retention, revocation/deadline/echo rejection and no persisted transcript payload.",
+      "limitation": "Admission foundation only. Its local provider and source callbacks are synthetic; native capture, owner UI/API, actual local STT, complete content classification and physical playback remain separate acceptance gates."
+    },
+    {
+      "id": "external-network-probe-definition",
+      "kind": "test-definition",
+      "path": "center/verify/rtc-network-live.mjs",
+      "anchor": "export function selectedTransport(records, mode, serverIp",
+      "scope": "The opt-in pinned browser SDK probe requires attributed RPC in both directions, the requested actual ICE path, expected server identity and increasing byte counters. Credentials are supplied through stdin; failure diagnostics contain bounded transport facts.",
+      "limitation": "This is an explicit external acceptance tool, not a result. Direct UDP, forced TCP and TURN UDP must each pass separately. It grants neither Cosmos application admission nor media permission and establishes no native or physical playback."
+    },
+    {
+      "id": "native-pcm-framing-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/rtc/src/audio/pcm.rs",
+      "anchor": "fn pcm_framing_preserves_signed_endianness_at_every_byte_boundary()",
+      "scope": "Defines bounded arbitrary-chunk PCM framing, explicit truncated-sample and final-frame handling, plus stateful anti-alias 48-to-16 kHz conversion with chunk, duration, alignment, speech-band and stopband tests.",
+      "limitation": "Deterministic PCM conversion only. It grants no capture or disclosure authority and does not establish real transcription quality, native application integration or physical playback."
+    },
+    {
       "id": "openrouter-proposal-test-definition",
       "kind": "test-definition",
       "path": "cosmos/crates/cosmos/src/ambiance/openrouter_tests.rs",
@@ -438,7 +470,7 @@
       "requirement": "Runtime classification retains the strongest provenance restriction; cognition may tighten it but cannot lower it.",
       "acceptance": "Join origin, memory and service-data classes across async work, hints, retries and output; log any authorized deterministic reclassification.",
       "status": "partial",
-      "evidence": ["runtime-policy-revalidation-test-definition", "bounded-analysis-origin-test-definition"]
+      "evidence": ["runtime-policy-revalidation-test-definition", "bounded-analysis-origin-test-definition", "local-voice-intake-test-definition"]
     },
     {
       "id": "invariant-07",
@@ -591,7 +623,7 @@
       "requirement": "The Ai Pin participates in the live capture, cognition, playback and interruption loop through its stock-compatible runtime.",
       "acceptance": "Prove actual capture/playback ownership, audio focus, barge-in, immediate stop, privacy change and reconnect on hardware; completed-text TTS is not proof of live dialogue.",
       "status": "partial",
-      "evidence": ["native-pcm-adapter-test-definition", "native-pcm-completion-test-definition", "speech-cancellation-test-definition", "speech-recognition-bounds-test-definition", "native-speech-disclosure-test-definition", "native-speech-revocation-test-definition", "native-speech-postgres-test-definition", "speech-disclosure-owner-api-test-definition", "center-speech-disclosure-test-definition"]
+      "evidence": ["local-stt-adapter-test-definition", "local-voice-intake-test-definition", "native-pcm-adapter-test-definition", "native-pcm-framing-test-definition", "native-pcm-completion-test-definition", "speech-cancellation-test-definition", "speech-recognition-bounds-test-definition", "native-speech-disclosure-test-definition", "native-speech-revocation-test-definition", "native-speech-postgres-test-definition", "speech-disclosure-owner-api-test-definition", "center-speech-disclosure-test-definition"]
     },
     {
       "id": "pin-physical-acceptance",
@@ -653,8 +685,8 @@
       "sourceSections": ["9.2"],
       "requirement": "Deploy only the authenticated tagged operator release and matching verified five-APK set; retain stock wire/package identities and require physical acceptance for changed Pin behavior.",
       "acceptance": "Run focused and broad checks, production doctor/dry-run/deploy/verify, then confirm the intended release and production environment at the existing https://center.andersmadsen.dk/ origin. No new domain or identity migration is requested. Metadata tests or endpoint health alone cannot establish Ambiance conformance.",
-      "status": "pending",
-      "evidence": []
+      "status": "partial",
+      "evidence": ["external-network-probe-definition"]
     }
   ]
 }

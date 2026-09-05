@@ -144,6 +144,7 @@ impl RuntimeState {
     ) -> Result<(u64, PrivacyClass), RuntimeError> {
         let turn = self.fence(fence.turn_id, fence.generation, fence.worker, now)?;
         if turn.finished
+            || turn.voice_pending()
             || turn.fence.origin_surface != fence.origin_surface
             || turn.pin_incarnation.is_none()
             || !self.origin_valid(turn, records, now)

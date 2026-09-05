@@ -51,9 +51,46 @@ pub enum OriginProof {
         stamp: InputStamp,
         echo_fingerprint: String,
     },
+    VoicePin {
+        connection: super::PinProof,
+        stamp: InputStamp,
+        intake: super::voice::Intake,
+    },
 }
 
 pub enum RuntimeOperation {
+    VoicePolicy {
+        surface_id: Uuid,
+    },
+    SetVoicePolicy {
+        surface_id: Uuid,
+        approval_revision: u64,
+        expected_revision: u64,
+        policy: Option<super::voice::Policy>,
+    },
+    BeginVoice {
+        connection: super::PinProof,
+        stamp: InputStamp,
+        worker: Uuid,
+        intake_id: Uuid,
+        binding: super::voice::Binding,
+    },
+    RetireVoice {
+        turn_id: Uuid,
+        worker: Uuid,
+        intake_id: Uuid,
+    },
+    CheckVoice {
+        connection: super::PinProof,
+        fence: TurnFence,
+        binding: super::voice::Binding,
+    },
+    FinalizeVoice {
+        connection: super::PinProof,
+        fence: TurnFence,
+        binding: super::voice::Binding,
+        transcript: String,
+    },
     DisclosurePolicy {
         surface_id: Uuid,
     },
@@ -183,6 +220,11 @@ pub enum RuntimeOperation {
 }
 #[derive(Clone, Debug)]
 pub enum RuntimeResult {
+    VoicePolicy(Option<super::voice::Approval>),
+    VoiceCurrent,
+    VoiceFinalized {
+        privacy: PrivacyClass,
+    },
     DisclosurePolicy(Option<super::disclosure::Approval>),
     DisclosureStarted(super::disclosure::Disclosure),
     DisclosureCurrent,
@@ -247,6 +289,16 @@ pub struct Turn {
     pub analysis: Option<AnalysisState>,
     #[serde(default)]
     pub disclosures: Vec<super::disclosure::Disclosure>,
+    #[serde(default)]
+    pub voice: Option<super::voice::Intake>,
+}
+
+impl Turn {
+    pub(super) fn voice_pending(&self) -> bool {
+        self.voice
+            .as_ref()
+            .is_some_and(|v| v.transcript_digest.is_none())
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -298,6 +350,8 @@ pub struct RuntimeState {
     pub pin_connections: BTreeMap<Uuid, super::PinConnection>,
     #[serde(default)]
     pub disclosure_policies: BTreeMap<Uuid, super::disclosure::Approval>,
+    #[serde(default)]
+    pub voice_policies: BTreeMap<Uuid, super::voice::Approval>,
 }
 
 /// Client boot epochs and sequences are provenance; client clocks are not.
@@ -406,6 +460,23 @@ impl InputAdmission {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RuntimeData {
+    VoicePolicyChanged {
+        surface_id: Uuid,
+        approval: super::voice::Approval,
+    },
+    VoiceStarted {
+        fence: TurnFence,
+        policy_revision: u64,
+        source_digest: String,
+        source_floor: PrivacyClass,
+        expires_at_ms: i64,
+    },
+    VoiceFinalized {
+        fence: TurnFence,
+        transcript_digest: String,
+        classifier_version: u8,
+        privacy: PrivacyClass,
+    },
     DisclosurePolicyChanged {
         surface_id: Uuid,
         approval: super::disclosure::Approval,
@@ -639,6 +710,9 @@ impl RuntimeState {
         }
         if let Some(turn) = self.turn.as_ref().filter(|t| !t.cancelled) {
             due = due.min(turn.lease_until_ms);
+            if let Some(voice) = turn.voice.as_ref().filter(|_| turn.voice_pending()) {
+                due = due.min(voice.expires_at_ms);
+            }
             if let Some(origin) = records.get(&turn.fence.origin_surface) {
                 if matches!(origin.binding, Binding::Browser) {
                     due = due
@@ -768,6 +842,11 @@ impl RuntimeState {
                 .get(id)
                 .is_some_and(|r| !r.revoked && r.revision == approval.approval_revision)
         });
+        self.voice_policies.retain(|id, approval| {
+            records
+                .get(id)
+                .is_some_and(|r| !r.revoked && r.revision == approval.approval_revision)
+        });
         self.ingress.retain(|id, cursor| {
             records.get(id).is_some_and(|r| {
                 !r.revoked
@@ -792,7 +871,10 @@ impl RuntimeState {
         });
         let mut repairs = Vec::new();
         let origin_valid = self.turn.as_ref().is_some_and(|t| {
-            !t.cancelled && now < t.lease_until_ms && self.origin_valid(t, records, now)
+            !t.cancelled
+                && now < t.lease_until_ms
+                && self.origin_valid(t, records, now)
+                && self.voice_valid(t, now)
         });
         if !origin_valid {
             if let Some(turn) = self.turn.as_mut().filter(|t| !t.cancelled) {
@@ -936,6 +1018,7 @@ impl RuntimeState {
         let action = self.actions.get(&id).ok_or(RuntimeError::NotFound)?;
         let turn = self.fence(action.turn_id, generation, worker, now)?;
         if turn.finished
+            || turn.voice_pending()
             || action.generation != generation
             || action.worker != worker
             || action.status != ActionStatus::Proposed
@@ -1010,6 +1093,96 @@ impl RuntimeState {
     ) -> Result<(RuntimeResult, Vec<RuntimeData>), RuntimeError> {
         let mut events = self.reconcile(records, now);
         let result = match operation {
+            RuntimeOperation::VoicePolicy { surface_id } => {
+                RuntimeResult::VoicePolicy(self.voice_policy(records, surface_id)?)
+            }
+            RuntimeOperation::SetVoicePolicy {
+                surface_id,
+                approval_revision,
+                expected_revision,
+                policy,
+            } => {
+                let approval = self.set_voice_policy(
+                    records,
+                    surface_id,
+                    approval_revision,
+                    expected_revision,
+                    policy,
+                )?;
+                events.push(RuntimeData::VoicePolicyChanged {
+                    surface_id,
+                    approval: approval.clone(),
+                });
+                events.extend(self.reconcile(records, now));
+                RuntimeResult::VoicePolicy(Some(approval))
+            }
+            RuntimeOperation::BeginVoice {
+                connection,
+                stamp,
+                worker,
+                intake_id,
+                binding,
+            } => {
+                let (result, appended) = self.begin_voice(
+                    principal, records, connection, stamp, worker, intake_id, binding, now,
+                )?;
+                events.extend(appended);
+                result
+            }
+            RuntimeOperation::RetireVoice {
+                turn_id,
+                worker,
+                intake_id,
+            } => {
+                let turn = self
+                    .turn
+                    .as_ref()
+                    .filter(|t| {
+                        t.fence.turn_id == turn_id
+                            && t.fence.worker == worker
+                            && t.voice.as_ref().is_some_and(|v| v.id == intake_id)
+                    })
+                    .ok_or(RuntimeError::Stale)?;
+                let generation = turn.fence.generation;
+                let (result, appended) = self.apply(
+                    principal,
+                    records,
+                    RuntimeOperation::Cancel {
+                        turn_id,
+                        generation,
+                        worker,
+                    },
+                    now,
+                )?;
+                events.extend(appended);
+                result
+            }
+            RuntimeOperation::CheckVoice {
+                connection,
+                fence,
+                binding,
+            } => {
+                self.check_voice(principal, records, &connection, &fence, &binding, now)?;
+                RuntimeResult::VoiceCurrent
+            }
+            RuntimeOperation::FinalizeVoice {
+                connection,
+                fence,
+                binding,
+                transcript,
+            } => {
+                let (result, appended) = self.finalize_voice(
+                    principal,
+                    records,
+                    &connection,
+                    fence,
+                    &binding,
+                    transcript,
+                    now,
+                )?;
+                events.extend(appended);
+                result
+            }
             RuntimeOperation::DisclosurePolicy { surface_id } => {
                 RuntimeResult::DisclosurePolicy(self.disclosure_policy(records, surface_id)?)
             }
@@ -1382,12 +1555,31 @@ impl RuntimeState {
                         }
                         self.pin_record(principal, records, connection, now)?
                     }
+                    OriginProof::VoicePin {
+                        connection,
+                        stamp,
+                        intake,
+                    } => {
+                        let r = self.pin_record(principal, records, connection, now)?;
+                        self.validate_voice_source(connection, intake, now)?;
+                        if stamp.epoch != intake.stamp.epoch
+                            || stamp.sequence != intake.stamp.sequence
+                            || stamp.instance_id != intake.stamp.instance_id
+                            || request_digest != intake.source_digest()?
+                        {
+                            return Err(RuntimeError::InvalidRequest);
+                        }
+                        r
+                    }
                 };
                 let sequenced = match &origin {
                     OriginProof::SequencedBrowser { connection, stamp } => {
                         Some((connection.surface_id, connection.incarnation, stamp))
                     }
                     OriginProof::SequencedPin {
+                        connection, stamp, ..
+                    }
+                    | OriginProof::VoicePin {
                         connection, stamp, ..
                     } => Some((connection.surface_id, connection.incarnation, stamp)),
                     _ => None,
@@ -1486,15 +1678,19 @@ impl RuntimeState {
                     worker,
                     origin_surface: record.surface_id,
                 };
-                let privacy = privacy_floor.max(PrivacyClass::SharedRoom);
+                let privacy = privacy_floor
+                    .max(PrivacyClass::SharedRoom)
+                    .max(match &origin {
+                        OriginProof::VoicePin { intake, .. } => intake.source_floor,
+                        _ => PrivacyClass::Public,
+                    });
                 self.turn = Some(Turn {
                     fence: fence.clone(),
                     origin_incarnation: record.incarnation,
                     origin_revision: record.revision,
                     pin_incarnation: match &origin {
-                        OriginProof::SequencedPin { connection, .. } => {
-                            Some(connection.incarnation)
-                        }
+                        OriginProof::SequencedPin { connection, .. }
+                        | OriginProof::VoicePin { connection, .. } => Some(connection.incarnation),
                         _ => None,
                     },
                     request_digest: request_digest.clone(),
@@ -1506,6 +1702,10 @@ impl RuntimeState {
                     finished: false,
                     analysis: None,
                     disclosures: Vec::new(),
+                    voice: match &origin {
+                        OriginProof::VoicePin { intake, .. } => Some(intake.clone()),
+                        _ => None,
+                    },
                 });
                 if let Some((surface_id, _, stamp)) = sequenced {
                     let cursor = self.ingress.get_mut(&surface_id).unwrap();
@@ -1539,10 +1739,14 @@ impl RuntimeState {
             RuntimeOperation::CheckCognition { fence } => {
                 let turn = self.fence(fence.turn_id, fence.generation, fence.worker, now)?;
                 if turn.finished
+                    || turn.voice_pending()
                     || turn.fence.origin_surface != fence.origin_surface
                     || !self.origin_valid(turn, records, now)
                 {
                     return Err(RuntimeError::Stale);
+                }
+                if turn.privacy > PrivacyClass::SharedRoom {
+                    return Err(RuntimeError::PolicyBlocked);
                 }
                 RuntimeResult::CognitionCurrent
             }
@@ -1553,6 +1757,7 @@ impl RuntimeState {
             } => {
                 let turn = self.fence(fence.turn_id, fence.generation, fence.worker, now)?;
                 if turn.finished
+                    || turn.voice_pending()
                     || turn.fence.origin_surface != fence.origin_surface
                     || !self.origin_valid(turn, records, now)
                 {
@@ -1590,6 +1795,7 @@ impl RuntimeState {
             } => {
                 let turn = self.fence(fence.turn_id, fence.generation, fence.worker, now)?;
                 if turn.finished
+                    || turn.voice_pending()
                     || turn.fence.origin_surface != fence.origin_surface
                     || !self.origin_valid(turn, records, now)
                     || !turn.analysis.as_ref().is_some_and(|a| {
@@ -1620,7 +1826,7 @@ impl RuntimeState {
                 privacy,
             } => {
                 let turn = self.fence(turn_id, generation, worker, now)?;
-                if turn.finished || !self.origin_valid(turn, records, now) {
+                if turn.finished || turn.voice_pending() || !self.origin_valid(turn, records, now) {
                     return Err(RuntimeError::Stale);
                 }
                 if turn

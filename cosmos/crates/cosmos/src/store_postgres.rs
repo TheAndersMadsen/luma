@@ -2870,6 +2870,222 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ambiance_voice_postgres_append_rollback_finalize_race_and_reopen() {
+        use crate::ambiance::{voice, *};
+        use crate::surface_registry::{Mutation, hash, pin_surface_id};
+        async fn snapshot(store: &PostgresStore, principal: &str) -> String {
+            sqlx::query_scalar("SELECT state::text FROM cosmos_ambiance_runtime WHERE principal=$1")
+                .bind(principal)
+                .fetch_one(&store.pool)
+                .await
+                .unwrap()
+        }
+        async fn obstruct(store: &PostgresStore, principal: &str) {
+            sqlx::query("INSERT INTO cosmos_surface_event(principal,sequence,hash,event) SELECT principal,sequence+1,'voice-obstruction','{}'::jsonb FROM cosmos_surface_head WHERE principal=$1")
+                .bind(principal).execute(&store.pool).await.unwrap();
+        }
+        async fn unblock(store: &PostgresStore, principal: &str) {
+            sqlx::query(
+                "DELETE FROM cosmos_surface_event WHERE principal=$1 AND hash='voice-obstruction'",
+            )
+            .bind(principal)
+            .execute(&store.pool)
+            .await
+            .unwrap();
+        }
+        let Some(first) = store().await else {
+            eprintln!("SKIPPED: isolated COSMOS_TEST_DATABASE_URL required");
+            return;
+        };
+        let principal = format!("U:voice-pg-{}", uuid::Uuid::new_v4());
+        let surface_id = pin_surface_id(&principal, "aabb");
+        first
+            .mutate_surface(
+                &principal,
+                surface_id,
+                Mutation::ApprovePin {
+                    device_id: "aabb".into(),
+                },
+            )
+            .await
+            .unwrap();
+        let proof = PinProof {
+            device: cosmos_core::AuthenticatedDeviceIdentity::from_edge("aabb").unwrap(),
+            surface_id,
+            incarnation: uuid::Uuid::new_v4(),
+        };
+        let stamp = InputStamp {
+            epoch: uuid::Uuid::new_v4(),
+            sequence: 1,
+            instance_id: uuid::Uuid::new_v4(),
+        };
+        let media_owner = uuid::Uuid::new_v4();
+        let binding: voice::Binding = serde_json::from_value(serde_json::json!({
+            "media_owner": media_owner,
+            "participant_sid": "PA_voice_fixture",
+            "track_sid": "TR_voice_fixture",
+        }))
+        .unwrap();
+        for operation in [
+            RuntimeOperation::OpenPin {
+                device: proof.device.clone(),
+                surface_id,
+                approval_revision: 1,
+                epoch: stamp.epoch,
+                expected_incarnation: None,
+                incarnation: proof.incarnation,
+            },
+            RuntimeOperation::ClaimPinMedia {
+                connection: proof.clone(),
+                owner: media_owner,
+            },
+            RuntimeOperation::SetVoicePolicy {
+                surface_id,
+                approval_revision: 1,
+                expected_revision: 0,
+                policy: Some(voice::Policy {
+                    source_floor: PrivacyClass::SharedRoom,
+                }),
+            },
+        ] {
+            first.runtime(&principal, operation).await.unwrap();
+        }
+        let worker = uuid::Uuid::new_v4();
+        let intake_id = uuid::Uuid::new_v4();
+        let begin = || RuntimeOperation::BeginVoice {
+            connection: proof.clone(),
+            stamp: stamp.clone(),
+            worker,
+            intake_id,
+            binding: binding.clone(),
+        };
+        let before_start = snapshot(&first, &principal).await;
+        obstruct(&first, &principal).await;
+        assert!(matches!(
+            first.runtime(&principal, begin()).await,
+            Err(RuntimeError::Unavailable)
+        ));
+        assert_eq!(snapshot(&first, &principal).await, before_start);
+        let state: RuntimeState = serde_json::from_str(&before_start).unwrap();
+        assert!(state.turn.is_none());
+        assert_eq!(state.ingress[&surface_id].high_water, 0);
+        unblock(&first, &principal).await;
+
+        let RuntimeResult::Begun(fence) = first.runtime(&principal, begin()).await.unwrap() else {
+            panic!("voice start must own its one intake")
+        };
+        let second = store().await.unwrap();
+        let check = || RuntimeOperation::CheckVoice {
+            connection: proof.clone(),
+            fence: fence.clone(),
+            binding: binding.clone(),
+        };
+        assert!(matches!(
+            second.runtime(&principal, check()).await.unwrap(),
+            RuntimeResult::VoiceCurrent
+        ));
+        assert!(matches!(
+            second
+                .runtime(
+                    &principal,
+                    RuntimeOperation::CheckCognition {
+                        fence: fence.clone()
+                    }
+                )
+                .await,
+            Err(RuntimeError::Stale)
+        ));
+        let transcript = "Read my messages";
+        let finalize = || RuntimeOperation::FinalizeVoice {
+            connection: proof.clone(),
+            fence: fence.clone(),
+            binding: binding.clone(),
+            transcript: transcript.into(),
+        };
+        let before_finalize = snapshot(&first, &principal).await;
+        obstruct(&first, &principal).await;
+        assert!(matches!(
+            second.runtime(&principal, finalize()).await,
+            Err(RuntimeError::Unavailable)
+        ));
+        assert_eq!(snapshot(&first, &principal).await, before_finalize);
+        assert!(matches!(
+            first.runtime(&principal, check()).await.unwrap(),
+            RuntimeResult::VoiceCurrent
+        ));
+        unblock(&first, &principal).await;
+
+        let (left, right) = tokio::join!(
+            first.runtime(&principal, finalize()),
+            second.runtime(&principal, finalize())
+        );
+        assert!(matches!(
+            (left, right),
+            (
+                Ok(RuntimeResult::VoiceFinalized {
+                    privacy: PrivacyClass::Private
+                }),
+                Err(RuntimeError::Stale)
+            ) | (
+                Err(RuntimeError::Stale),
+                Ok(RuntimeResult::VoiceFinalized {
+                    privacy: PrivacyClass::Private
+                })
+            )
+        ));
+        let reopened = store().await.unwrap();
+        assert!(matches!(
+            reopened.runtime(&principal, finalize()).await,
+            Err(RuntimeError::Stale)
+        ));
+        assert!(matches!(
+            reopened.runtime(&principal, begin()).await.unwrap(),
+            RuntimeResult::Duplicate(ref duplicate) if duplicate.worker == fence.worker
+        ));
+        assert!(matches!(
+            reopened
+                .runtime(
+                    &principal,
+                    RuntimeOperation::CheckCognition {
+                        fence: fence.clone(),
+                    },
+                )
+                .await,
+            Err(RuntimeError::PolicyBlocked)
+        ));
+        let encoded = snapshot(&reopened, &principal).await;
+        assert!(!encoded.contains(transcript));
+        let state: RuntimeState = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(state.ingress[&surface_id].high_water, 1);
+        assert_eq!(state.turn.as_ref().unwrap().privacy, PrivacyClass::Private);
+        let voice =
+            serde_json::to_value(state.turn.as_ref().unwrap().voice.as_ref().unwrap()).unwrap();
+        assert_eq!(voice["transcript_digest"], hash(transcript.as_bytes()));
+        let rows = sqlx::query("SELECT event::text AS event,hash FROM cosmos_surface_event WHERE principal=$1 ORDER BY sequence")
+            .bind(&principal).fetch_all(&first.pool).await.unwrap();
+        let mut previous = String::new();
+        let mut starts = 0;
+        let mut finalizations = 0;
+        for (index, row) in rows.iter().enumerate() {
+            let text: String = row.get("event");
+            assert!(!text.contains(transcript));
+            let event: ledger::LedgerEvent = serde_json::from_str(&text).unwrap();
+            assert_eq!(event.sequence(), index as u64 + 1);
+            assert_eq!(event.previous_hash(), previous);
+            assert_eq!(event.hash().unwrap(), row.get::<String, _>("hash"));
+            previous = event.hash().unwrap();
+            if let ledger::LedgerEvent::Runtime(event) = event {
+                match event.data {
+                    RuntimeData::VoiceStarted { .. } => starts += 1,
+                    RuntimeData::VoiceFinalized { .. } => finalizations += 1,
+                    _ => {}
+                }
+            }
+        }
+        assert_eq!((starts, finalizations), (1, 1));
+    }
+
+    #[tokio::test]
     #[ignore = "requires isolated PostgreSQL and COSMOS_RTC_AUDIO_TEST_INPUT localhost SFU"]
     async fn ambiance_pin_media_store_loss_retires_live_room_without_consumer_polling() {
         use crate::ambiance::{RuntimeResult, pin_media::PinMedia, runtime::AmbianceRuntime};

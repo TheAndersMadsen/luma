@@ -193,3 +193,158 @@ async fn ambiance_pin_media_failed_signaling_retires_the_committed_grant() {
     .await
     .unwrap();
 }
+
+#[tokio::test]
+#[ignore = "requires COSMOS_RTC_AUDIO_TEST_INPUT with an isolated localhost SFU"]
+async fn ambiance_pin_media_voice_admission_requires_observed_source_and_separate_policy() {
+    let (runtime, store, _, auth, incarnation) = fixture().await;
+    let (media, bootstrap) =
+        PinMedia::with_config(runtime.clone(), auth.clone(), incarnation, config())
+            .await
+            .unwrap();
+    let surface = AudioSession::connect(&bootstrap.url, &bootstrap.token, Role::Surface)
+        .await
+        .unwrap();
+    let mut publisher = surface.publish(bootstrap.epoch, 1).await.unwrap();
+    let track = publisher.binding().track.clone();
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while !media.session.publication_current(&track) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let stamp = crate::ambiance::InputStamp {
+        epoch: bootstrap.epoch,
+        sequence: 1,
+        instance_id: Uuid::new_v4(),
+    };
+    assert!(
+        media
+            .begin_local_voice(stamp.clone(), track.clone())
+            .await
+            .is_err()
+    );
+    let principal = auth.principal.expose_for_authorization();
+    store
+        .runtime(
+            principal,
+            RuntimeOperation::SetVoicePolicy {
+                surface_id: pin_surface_id(principal, "aabb"),
+                approval_revision: 1,
+                expected_revision: 0,
+                policy: Some(super::super::voice::Policy {
+                    source_floor: crate::ambiance::PrivacyClass::SharedRoom,
+                }),
+            },
+        )
+        .await
+        .unwrap();
+    for field in ["participant", "session", "track"] {
+        let mut forged = track.clone();
+        match field {
+            "participant" => forged.participant = "runtime".into(),
+            "session" => forged.participant_sid = "PA_other".into(),
+            "track" => forged.track_sid = "TR_other".into(),
+            _ => unreachable!(),
+        }
+        assert!(
+            media
+                .begin_local_voice(stamp.clone(), forged)
+                .await
+                .is_err()
+        );
+    }
+    let intake = media
+        .begin_local_voice(stamp.clone(), track.clone())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        media
+            .begin_local_voice(stamp.clone(), track.clone())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    intake.check().await.unwrap();
+    publisher.stop().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while media.session.publication_current(&track) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(intake.check().await.is_err());
+    assert!(
+        intake
+            .complete("A stale source transcript".into())
+            .await
+            .is_err()
+    );
+    assert!(media.begin_local_voice(stamp, track).await.is_err());
+    media.close().await;
+    surface.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires COSMOS_RTC_AUDIO_TEST_INPUT with an isolated localhost SFU"]
+async fn ambiance_pin_media_drop_synchronously_retires_retained_voice_intake() {
+    let (runtime, store, _, auth, incarnation) = fixture().await;
+    let (media, bootstrap) = PinMedia::with_config(runtime, auth.clone(), incarnation, config())
+        .await
+        .unwrap();
+    let surface = AudioSession::connect(&bootstrap.url, &bootstrap.token, Role::Surface)
+        .await
+        .unwrap();
+    let mut publisher = surface.publish(bootstrap.epoch, 1).await.unwrap();
+    let track = publisher.binding().track.clone();
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while !media.session.publication_current(&track) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let principal = auth.principal.expose_for_authorization();
+    store
+        .runtime(
+            principal,
+            RuntimeOperation::SetVoicePolicy {
+                surface_id: pin_surface_id(principal, "aabb"),
+                approval_revision: 1,
+                expected_revision: 0,
+                policy: Some(super::super::voice::Policy {
+                    source_floor: crate::ambiance::PrivacyClass::SharedRoom,
+                }),
+            },
+        )
+        .await
+        .unwrap();
+    let intake = media
+        .begin_local_voice(
+            crate::ambiance::InputStamp {
+                epoch: bootstrap.epoch,
+                sequence: 1,
+                instance_id: Uuid::new_v4(),
+            },
+            track,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    intake.check().await.unwrap();
+    drop(media);
+    // No task yield or completed asynchronous cleanup is required for denial.
+    assert!(!(intake.source_current)());
+    assert!(intake.check().await.is_err());
+    assert!(
+        intake
+            .complete("A dropped media transcript".into())
+            .await
+            .is_err()
+    );
+    publisher.stop().await.unwrap();
+    surface.close().await.unwrap();
+}

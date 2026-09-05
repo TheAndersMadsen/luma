@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { selectedTransport, validateNetworkProbe } from "./rtc-network-live.mjs";
+import { selectedTransport, transportDiagnostic, validateNetworkProbe } from "./rtc-network-live.mjs";
 
 const room = "revival-acceptance-2c633d06-c424-41c5-9f43-83c29e59a8b7";
 const url = "wss://center.example.test/livekit";
@@ -61,4 +61,18 @@ test("TCP and relay paths require their actual candidate evidence", () => {
   assert.equal(selectedTransport(relay, "turn-udp", serverIp).relay, true);
   relay[2].relayProtocol = "tcp";
   assert.throws(() => selectedTransport(relay, "turn-udp", serverIp));
+});
+
+test("failed network diagnostics expose only bounded transport facts", () => {
+  const value = stats();
+  value[3].address = "private-address-must-not-appear";
+  value[2].protocol = "credential-must-not-appear";
+  value[3].port = 70000;
+  const diagnostic = transportDiagnostic(value, serverIp);
+  assert.equal(diagnostic.expectedServer, false);
+  assert.equal(diagnostic.localProtocol, "unknown");
+  assert.equal(diagnostic.remotePort, null);
+  assert.equal(diagnostic.dtls, "connected");
+  assert.doesNotMatch(JSON.stringify(diagnostic), /must-not-appear|203\.0\.113/u);
+  assert.equal(transportDiagnostic([], serverIp).pair, "unknown");
 });

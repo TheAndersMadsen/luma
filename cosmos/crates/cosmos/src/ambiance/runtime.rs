@@ -31,6 +31,68 @@ impl Drop for AmbianceRuntime {
 }
 
 impl AmbianceRuntime {
+    /// Internal native-media seam. The binding must come from the owned media
+    /// session, never a request body's claimed identity or privacy label.
+    pub(super) async fn begin_local_voice(
+        self: &Arc<Self>,
+        authenticated: AuthenticatedRequest,
+        incarnation: Uuid,
+        stamp: super::InputStamp,
+        binding: super::voice::Binding,
+        source_current: Arc<dyn Fn() -> bool + Send + Sync>,
+    ) -> Result<Option<super::voice::LocalVoice>, Status> {
+        self.start_maintenance();
+        if !source_current() {
+            return Err(Status::failed_precondition("voice source is not current"));
+        }
+        let connection = self.pin_proof(&authenticated, incarnation).await?;
+        let principal = authenticated
+            .principal
+            .expose_for_authorization()
+            .to_owned();
+        let intake_id = Uuid::new_v4();
+        let mut cancel = super::voice::CancelVoice {
+            store: self.store.clone(),
+            principal: principal.clone(),
+            turn_id: stamp.instance_id,
+            worker: self.worker,
+            intake_id,
+            armed: true,
+        };
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            self.store.runtime(
+                &principal,
+                RuntimeOperation::BeginVoice {
+                    connection: connection.clone(),
+                    stamp,
+                    worker: self.worker,
+                    intake_id,
+                    binding: binding.clone(),
+                },
+            ),
+        )
+        .await
+        .map_err(|_| Status::unavailable("voice intake unavailable"))?
+        .map_err(runtime_error)?;
+        match result {
+            RuntimeResult::Begun(fence) => Ok(Some(super::voice::LocalVoice {
+                runtime: self.clone(),
+                authenticated,
+                connection,
+                fence,
+                binding,
+                source_current,
+                cancel,
+            })),
+            RuntimeResult::Duplicate(_) => {
+                cancel.armed = false;
+                Ok(None)
+            }
+            _ => Err(Status::unavailable("voice intake unavailable")),
+        }
+    }
+
     pub fn new(
         store: SharedStore,
         cognition: Arc<dyn ChatModel>,
@@ -279,7 +341,8 @@ impl AmbianceRuntime {
         let privacy_floor = input_privacy(&text);
         let turn_id = match &origin {
             OriginProof::SequencedBrowser { stamp, .. }
-            | OriginProof::SequencedPin { stamp, .. } => stamp.instance_id,
+            | OriginProof::SequencedPin { stamp, .. }
+            | OriginProof::VoicePin { stamp, .. } => stamp.instance_id,
             _ => Uuid::new_v4(),
         };
         let result = self
@@ -307,14 +370,28 @@ impl AmbianceRuntime {
         let RuntimeResult::Begun(fence) = result else {
             return Err(Status::internal("runtime admission failed"));
         };
+        if let Some(started) = started {
+            let _ = started.send(fence.clone());
+        }
+        self.cognize(principal, fence, text, privacy_floor, authenticated)
+            .await
+    }
+
+    /// A finalized local transcript continues its original admitted fence;
+    /// it never re-enters text admission or consumes the native sequence twice.
+    pub(super) async fn cognize(
+        &self,
+        principal: &str,
+        fence: TurnFence,
+        text: String,
+        privacy_floor: PrivacyClass,
+        authenticated: Option<&AuthenticatedRequest>,
+    ) -> Result<RuntimeResult, Status> {
         let mut cancellation = CancelOnDrop {
             store: self.store.clone(),
             principal: principal.to_owned(),
             fence: Some(fence.clone()),
         };
-        if let Some(started) = started {
-            let _ = started.send(fence.clone());
-        }
         if privacy_floor > PrivacyClass::SharedRoom {
             self.cancel(principal, &fence).await?;
             return Err(Status::failed_precondition(
@@ -672,7 +749,7 @@ impl Drop for CancelOnDrop {
 /// Conservative policy-side floor. Environmental provenance is shared/unknown;
 /// explicit private sources raise it before any provider call. No origin has
 /// private-memory clearance in this increment, regardless of output channel.
-fn input_privacy(text: &str) -> PrivacyClass {
+pub(super) fn input_privacy(text: &str) -> PrivacyClass {
     let text = text.to_lowercase();
     if [
         "password",

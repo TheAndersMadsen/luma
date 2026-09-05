@@ -18,7 +18,7 @@ printf '%s\n' \
   'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20260803T000000Z trixie-backports main' \
   > /etc/apt/sources.list
 apt-get update
-packages=(clang-21 lld-21 python3 "libglib2.0-dev:${target_arch}")
+packages=(clang-21 libclang-21-dev lld-21 cmake python3 "libglib2.0-dev:${target_arch}")
 if [ "$build_arch" != "$target_arch" ]; then packages+=("$cross_package"); fi
 apt-get install --no-install-recommends --yes "${packages[@]}"
 rm -rf /var/lib/apt/lists/*

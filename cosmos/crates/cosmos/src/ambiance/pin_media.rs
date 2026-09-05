@@ -4,7 +4,13 @@ use super::{PinProof, RuntimeOperation, RuntimeResult, runtime::AmbianceRuntime}
 use crate::{auth::AuthenticatedRequest, browser_rooms::Config};
 use cosmos_rtc::audio::{AudioSession, Role};
 use serde::Serialize;
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 use tokio::sync::{Semaphore, SemaphorePermit, watch};
 use tonic::Status;
 use uuid::Uuid;
@@ -32,6 +38,8 @@ pub struct PinMedia {
     session: Arc<AudioSession>,
     task: tokio::task::JoinHandle<()>,
     cleanup: Cleanup,
+    authenticated: AuthenticatedRequest,
+    retired: Arc<AtomicBool>,
     _slot: SemaphorePermit<'static>,
 }
 
@@ -159,6 +167,7 @@ impl PinMedia {
         let mut peer = session.peer_session();
         let join_deadline = tokio::time::Instant::now() + Duration::from_secs(60);
         let task_session = session.clone();
+        let media_authenticated = authenticated.clone();
         let task_proof = cleanup.proof.clone();
         let owner = cleanup.owner;
         let task = tokio::spawn(async move {
@@ -209,6 +218,8 @@ impl PinMedia {
                 session,
                 task,
                 cleanup,
+                authenticated: media_authenticated,
+                retired: Arc::new(AtomicBool::new(false)),
                 _slot: slot,
             },
             Bootstrap {
@@ -226,7 +237,50 @@ impl PinMedia {
         self.session.connected()
     }
 
+    /// Admit one local-transcription turn against an actually observed native
+    /// publication. Admission does not subscribe or expose PCM. The capture
+    /// adapter must still use bounded, generation-bound transport consumption.
+    pub async fn begin_local_voice(
+        &self,
+        stamp: super::InputStamp,
+        track: cosmos_rtc::audio::TrackId,
+    ) -> Result<Option<super::voice::LocalVoice>, Status> {
+        if !self.session.publication_current(&track) {
+            return Err(Status::failed_precondition("voice source is not current"));
+        }
+        let session = Arc::downgrade(&self.session);
+        let source_track = track.clone();
+        let retired = self.retired.clone();
+        let source_current = Arc::new(move || {
+            !retired.load(Ordering::SeqCst)
+                && session
+                    .upgrade()
+                    .is_some_and(|s| s.publication_current(&source_track))
+        });
+        let intake = self
+            .cleanup
+            .runtime
+            .begin_local_voice(
+                self.authenticated.clone(),
+                self.cleanup.proof.incarnation,
+                stamp,
+                super::voice::Binding {
+                    media_owner: self.cleanup.owner,
+                    participant_sid: track.participant_sid.clone(),
+                    track_sid: track.track_sid.clone(),
+                },
+                source_current,
+            )
+            .await?;
+        // Source loss during the durable commit wins before any capture work.
+        if !self.session.publication_current(&track) {
+            return Err(Status::failed_precondition("voice source is not current"));
+        }
+        Ok(intake)
+    }
+
     pub async fn close(&self) {
+        self.retired.store(true, Ordering::SeqCst);
         self.task.abort();
         let _ = tokio::time::timeout(CHECK_TIMEOUT, self.session.close()).await;
         self.cleanup.close().await;
@@ -234,6 +288,7 @@ impl PinMedia {
 }
 impl Drop for PinMedia {
     fn drop(&mut self) {
+        self.retired.store(true, Ordering::SeqCst);
         self.task.abort();
         // AudioSession::drop closes transport when the task's Arc is released.
         // Cleanup retires only this durable incarnation.

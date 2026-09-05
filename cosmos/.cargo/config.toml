@@ -11,3 +11,14 @@ rustflags = ["-C", "link-arg=-fuse-ld=lld"]
 
 [target.x86_64-unknown-linux-gnu]
 rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+[env]
+# Portable CPU-only Whisper/GGML builds, including native hosted runners.
+# GGML_NATIVE=OFF alone retains some x86 instruction-set defaults.
+GGML_NATIVE = { value = "OFF", force = true }
+GGML_SSE42 = { value = "OFF", force = true }
+GGML_AVX = { value = "OFF", force = true }
+GGML_AVX2 = { value = "OFF", force = true }
+GGML_BMI2 = { value = "OFF", force = true }
+GGML_FMA = { value = "OFF", force = true }
+GGML_F16C = { value = "OFF", force = true }
+GGML_CPU_ARM_ARCH = { value = "armv8-a", force = true }
