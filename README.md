@@ -757,6 +757,23 @@ Cosmos peers, external direct UDP/TCP and forced TURN/UDP, token expiry and
 disconnects, and absence of synthetic credentials from logs. Production still
 consumes the authenticated operator archive and verifies its exact release ID.
 
+The opt-in `center/verify/rtc-network-live.mjs` probes the public data transport
+using the pinned browser SDK and two synthetic, data-only participants. Pass the
+exact SFU URL and `udp`, `tcp` or `turn-udp` as arguments, and a bounded JSON
+object containing `url`, the expected public `serverIp`, a fresh
+`revival-acceptance-<UUID>` room, and two
+`participants` (`identity: <room>-0` / `<room>-1`, `token`) through stdin. Tokens
+must authorize only that room, expire within five minutes, and permit neither
+media nor administration. Playwright must be available through `NODE_PATH`.
+The probe verifies attributed RPC in both directions, the actual selected ICE
+path and increasing byte counters; its output omits credentials and raw stats.
+TCP forcing uses the SDK's participant-scoped test reconnect; product clients
+retain their permanent reconnect fence. TURN credentials come from authenticated
+signaling. The operator must delete the exact synthetic room afterward and check
+that its join credentials did not enter server logs. This developer probe is
+separate from Cosmos application acceptance and proves no native media or Pin
+playback behavior.
+
 ### Companion device targets — planned
 
 The owner's target devices are a MacBook Pro M5 Pro, an Omarchy Linux PC, a
