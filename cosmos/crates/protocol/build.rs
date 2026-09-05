@@ -17,7 +17,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // and the Pin. Keep protocol generation pointed at that one canonical copy;
     // the Cosmos image mirrors the same root layout through its named BuildKit
     // `wire_contracts` context.
-    let contract_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../contracts/wire");
+    // Build-script binaries can be reused by the external Cargo cache across
+    // checkouts. Resolve the current package at execution time, not the path
+    // embedded when this binary was first compiled.
+    let contract_root =
+        PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").ok_or("missing package directory")?)
+            .join("../../../contracts/wire");
     let proto_names: &[&str] = &[
         "humane/common.proto",
         "humane/common/auth.proto",

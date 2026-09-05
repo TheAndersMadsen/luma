@@ -68,7 +68,8 @@ Product, deployment, configuration, and operator-facing names use Cosmos.
 
 ### Ambiance v2 work in progress
 
-The `codex/cosmos-ambiance-v2` branch starts from the live `v0.1.108` release.
+The `codex/ambiance-v2-production` branch continues the Cosmos-first work from
+`codex/cosmos-ambiance-v2`, whose release baseline is `v0.1.108`.
 [The requirement inventory](contracts/ambiance-v2.json) pins the exact
 [Ambiance v2 research draft](https://gist.githubusercontent.com/ericlewis/12e8f7d381a5d93926f4858ae2d725dc/raw/6bac46cd8251af39c40263331d7269c5e418fe8f/ambi_v2.md)
 and separates its twelve invariants from Cosmos-specific product acceptance.
@@ -164,8 +165,14 @@ responsible for local permissions, capture, rendering, and playback evidence:
    authoritative buses. Implement and test stock PCM framing, correlation and
    interruption while preserving wire identities and all five APK roles;
    reserve actual hardware playback verification for final Pin acceptance.
-   The realtime front delegates bounded larger-model analysis with
-   no executor capability.
+   The realtime text front can request one bounded larger-model analysis with
+   no executor capability. Cosmos commits the analysis start before provider
+   input, retains the original current request, checks the current turn and
+   origin while awaiting inference, and commits the result's privacy join before
+   routing. The tool-free HTTP analysis adapter uses the selected
+   OpenAI-compatible assistant provider; Codex analysis remains unavailable
+   until its app-server tool boundary is established. Service completion does
+   not establish rendering or playback.
    Implement typed runtime semantic services for completion, child-agent
    experiences, device actions, composition, translation, vision, food and
    music work; the current unsupported responses are temporary safeguards,
@@ -618,6 +625,21 @@ larger-model delegation: they grant no Realtime entitlement, are never copied
 into Realtime settings, and are not an automatic fallback. An unconfigured
 Realtime front is unavailable. This increment is not deployed or full Ambiance
 acceptance.
+
+The realtime front may request a single larger-model analysis for deeper
+reasoning, summarization, composition or translation of the current text. The
+service receives the original current request plus at most 1000 bytes of model
+suggestion, within an 8 KiB input limit. It receives no tools, saved data,
+device identities or execution capability. The response must be one completed,
+tool-free result, at most 64 KiB on the wire and 4000 bytes of answer text.
+Redirects, extra calls, incomplete generations and unknown result fields fail
+closed. Each inference has a 20-second bound; origin approval and the durable
+turn are checked before and after inference and every 250 ms while pending.
+Cancellation drops the HTTP future; that does not prove a provider stopped
+processing or billing. Ledger events retain only digests and privacy metadata.
+The current analysis adapter supports the selected OpenAI-compatible assistant
+provider. It does not fall back to Codex's existing app-server adapter, whose
+tool-free execution boundary remains a separate implementation gate.
 
 The Ambiance development branch replaces the old Engine/Bidi control path with
 one durable runtime. Its current text foundation supports informational speech

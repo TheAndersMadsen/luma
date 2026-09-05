@@ -1910,6 +1910,143 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ambiance_analysis_postgres_append_failure_reopen_and_result_join() {
+        use crate::ambiance::{ledger::LedgerEvent, *};
+        use crate::surface_registry::{Mutation, hash, pin_surface_id};
+        let Some(first) = store().await else {
+            eprintln!("SKIPPED: isolated COSMOS_TEST_DATABASE_URL required");
+            return;
+        };
+        let principal = format!("U:analysis-pg-{}", uuid::Uuid::new_v4());
+        let surface_id = pin_surface_id(&principal, "aabb");
+        first
+            .mutate_surface(
+                &principal,
+                surface_id,
+                Mutation::ApprovePin {
+                    device_id: "aabb".into(),
+                },
+            )
+            .await
+            .unwrap();
+        let RuntimeResult::Begun(fence) = first
+            .runtime(
+                &principal,
+                RuntimeOperation::Begin {
+                    turn_id: uuid::Uuid::new_v4(),
+                    worker: uuid::Uuid::new_v4(),
+                    origin: OriginProof::Pin {
+                        device: cosmos_core::AuthenticatedDeviceIdentity::from_edge("aabb")
+                            .unwrap(),
+                        surface_id,
+                    },
+                    request_digest: hash(b"current input"),
+                    privacy_floor: PrivacyClass::SharedRoom,
+                },
+            )
+            .await
+            .unwrap()
+        else {
+            panic!("turn not admitted")
+        };
+        let sequence: i64 =
+            sqlx::query_scalar("SELECT sequence FROM cosmos_surface_head WHERE principal=$1")
+                .bind(&principal)
+                .fetch_one(&first.pool)
+                .await
+                .unwrap();
+        sqlx::query("INSERT INTO cosmos_surface_event(principal,sequence,hash,event) VALUES($1,$2,'analysis-obstruction','{}'::jsonb)").bind(&principal).bind(sequence+1).execute(&first.pool).await.unwrap();
+        let start = || RuntimeOperation::AnalysisStart {
+            fence: fence.clone(),
+            input_digest: hash(b"analysis input"),
+            privacy: PrivacyClass::Public,
+        };
+        assert!(matches!(
+            first.runtime(&principal, start()).await,
+            Err(RuntimeError::Unavailable)
+        ));
+        let state: String = sqlx::query_scalar(
+            "SELECT state::text FROM cosmos_ambiance_runtime WHERE principal=$1",
+        )
+        .bind(&principal)
+        .fetch_one(&first.pool)
+        .await
+        .unwrap();
+        assert!(
+            serde_json::from_str::<RuntimeState>(&state)
+                .unwrap()
+                .turn
+                .unwrap()
+                .analysis
+                .is_none()
+        );
+        sqlx::query("DELETE FROM cosmos_surface_event WHERE principal=$1 AND sequence=$2 AND hash='analysis-obstruction'").bind(&principal).bind(sequence+1).execute(&first.pool).await.unwrap();
+        assert!(matches!(
+            first.runtime(&principal, start()).await.unwrap(),
+            RuntimeResult::AnalysisStarted
+        ));
+        let reopened = store().await.unwrap();
+        assert!(matches!(
+            reopened.runtime(&principal, start()).await,
+            Err(RuntimeError::Busy)
+        ));
+        assert!(matches!(
+            reopened
+                .runtime(
+                    &principal,
+                    RuntimeOperation::AnalysisComplete {
+                        fence: fence.clone(),
+                        input_digest: hash(b"analysis input"),
+                        output_digest: hash(b"analysis output"),
+                        privacy: PrivacyClass::Private,
+                    }
+                )
+                .await
+                .unwrap(),
+            RuntimeResult::AnalysisCompleted
+        ));
+        assert!(matches!(
+            reopened
+                .runtime(
+                    &principal,
+                    RuntimeOperation::Propose {
+                        turn_id: fence.turn_id,
+                        generation: fence.generation,
+                        worker: fence.worker,
+                        intent: SemanticIntent::InformationalSpeech {
+                            text: "analysis output".into()
+                        },
+                        privacy: PrivacyClass::Public,
+                    }
+                )
+                .await
+                .unwrap(),
+            RuntimeResult::Blocked
+        ));
+        let rows = sqlx::query("SELECT event::text AS event,hash FROM cosmos_surface_event WHERE principal=$1 ORDER BY sequence").bind(&principal).fetch_all(&first.pool).await.unwrap();
+        let mut previous = String::new();
+        let mut kinds = Vec::new();
+        for (index, row) in rows.iter().enumerate() {
+            let text: String = row.get("event");
+            assert!(!text.contains("analysis input") && !text.contains("analysis output"));
+            let event: LedgerEvent = serde_json::from_str(&text).unwrap();
+            assert_eq!(event.sequence(), index as u64 + 1);
+            assert_eq!(event.previous_hash(), previous);
+            assert_eq!(event.hash().unwrap(), row.get::<String, _>("hash"));
+            previous = event.hash().unwrap();
+            if let LedgerEvent::Runtime(event) = event {
+                kinds.push(match event.data {
+                    RuntimeData::AnalysisStarted { .. } => "started",
+                    RuntimeData::AnalysisCompleted { .. } => "completed",
+                    RuntimeData::Decision { .. } => "decision",
+                    _ => "other",
+                });
+            }
+        }
+        assert_eq!(kinds, ["other", "started", "completed", "decision"]);
+    }
+
+    #[tokio::test]
     async fn ambiance_postgres_independent_workers_rollback_reopen_and_registry_fence() {
         use crate::ambiance::{ledger::LedgerEvent, *};
         use crate::surface_registry::{Mutation, hash, pin_surface_id};

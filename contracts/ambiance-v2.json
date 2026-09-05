@@ -35,6 +35,30 @@
   ],
   "evidence": [
     {
+      "id": "bounded-analysis-origin-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/runtime.rs",
+      "anchor": "async fn ambiance_analysis_denies_private_egress_and_never_lowers_result_privacy()",
+      "scope": "Defines one typed larger-model analysis of the admitted current request, rejecting private egress, tool execution, malformed output and service privacy downgrades without saved-data access.",
+      "limitation": "Test definition only. Tool-free HTTP analysis supports the selected OpenAI-compatible provider; Codex analysis, authorized memory retrieval and other semantic services remain outstanding. Conservative text checks are not universal classification."
+    },
+    {
+      "id": "bounded-analysis-cancellation-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/runtime.rs",
+      "anchor": "async fn ambiance_analysis_revocation_drops_pending_provider_without_waiting_for_result()",
+      "scope": "Defines current-origin revalidation dropping a pending analysis future on Pin revocation before its result arrives; the analyzer receives no tools or Store.",
+      "limitation": "In-memory test definition, not live provider cancellation or billing evidence; physical audio interruption and the realtime media substrate remain outstanding."
+    },
+    {
+      "id": "bounded-analysis-durability-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/store_postgres.rs",
+      "anchor": "async fn ambiance_analysis_postgres_append_failure_reopen_and_result_join()",
+      "scope": "Defines an isolated PostgreSQL service-start append failure rolling back authorization, one-use admission across reopen, ordered content-free service events and result privacy gating before dispatch.",
+      "limitation": "Requires an isolated database; definition only, not a passing execution report. Does not prove independent anchors, complete audit views or database-server restart behavior."
+    },
+    {
       "id": "retired-browser-assistant-boundary-definition",
       "kind": "implementation",
       "path": "cosmos/crates/cosmos/src/http.rs",
@@ -206,7 +230,7 @@
       "requirement": "A shared-origin request cannot receive sensitive-scoped memory in model context.",
       "acceptance": "Check retrieval before every inference and delegation; selecting a private rendering channel must not broaden origin authority.",
       "status": "partial",
-      "evidence": ["runtime-private-context-test-definition", "stock-transport-provenance-test-definition"]
+      "evidence": ["runtime-private-context-test-definition", "stock-transport-provenance-test-definition", "bounded-analysis-origin-test-definition"]
     },
     {
       "id": "invariant-05",
@@ -215,7 +239,7 @@
       "requirement": "Routing and policy decisions retain rationale in a verifiable, tamper-evident durable history.",
       "acceptance": "Verify append-before-dispatch, ordering, reopen, tamper/removal detection, signed checkpoints and independently countersigned or protected checkpoint anchors.",
       "status": "partial",
-      "evidence": ["registry-atomic-append-test-definition", "pin-registry-durability-test-definition", "runtime-postgres-atomicity-test-definition"]
+      "evidence": ["registry-atomic-append-test-definition", "pin-registry-durability-test-definition", "runtime-postgres-atomicity-test-definition", "bounded-analysis-durability-test-definition"]
     },
     {
       "id": "invariant-06",
@@ -224,7 +248,7 @@
       "requirement": "Runtime classification retains the strongest provenance restriction; cognition may tighten it but cannot lower it.",
       "acceptance": "Join origin, memory and service-data classes across async work, hints, retries and output; log any authorized deterministic reclassification.",
       "status": "partial",
-      "evidence": ["runtime-policy-revalidation-test-definition"]
+      "evidence": ["runtime-policy-revalidation-test-definition", "bounded-analysis-origin-test-definition"]
     },
     {
       "id": "invariant-07",
@@ -305,7 +329,7 @@
       "requirement": "Cognition proposes runtime intents; only deterministic runtime policy binds targets, grants, memory scope and dispatch, including policy/registry changes.",
       "acceptance": "Keep asynchronous analysis responsive to cancellation without granting analytical models direct device or service execution authority.",
       "status": "partial",
-      "evidence": ["runtime-private-context-test-definition"]
+      "evidence": ["runtime-private-context-test-definition", "bounded-analysis-cancellation-test-definition"]
     },
     {
       "id": "inference-ability",

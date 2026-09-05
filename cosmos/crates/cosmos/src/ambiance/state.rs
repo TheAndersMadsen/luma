@@ -57,6 +57,20 @@ pub enum RuntimeOperation {
         intent: SemanticIntent,
         privacy: PrivacyClass,
     },
+    CheckCognition {
+        fence: TurnFence,
+    },
+    AnalysisStart {
+        fence: TurnFence,
+        input_digest: String,
+        privacy: PrivacyClass,
+    },
+    AnalysisComplete {
+        fence: TurnFence,
+        input_digest: String,
+        output_digest: String,
+        privacy: PrivacyClass,
+    },
     Claim {
         action_id: Uuid,
         generation: u64,
@@ -106,6 +120,9 @@ pub enum RuntimeResult {
     Recovered,
     Pending(Vec<Action>),
     Observed(Vec<Action>),
+    CognitionCurrent,
+    AnalysisStarted,
+    AnalysisCompleted,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -127,6 +144,15 @@ pub struct Turn {
     pub lease_until_ms: i64,
     pub cancelled: bool,
     pub finished: bool,
+    #[serde(default)]
+    pub analysis: Option<AnalysisState>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AnalysisState {
+    pub input_digest: String,
+    pub output_digest: Option<String>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -175,6 +201,18 @@ pub enum RuntimeData {
         generation: u64,
         origin: Uuid,
         request_digest: String,
+        privacy: PrivacyClass,
+    },
+    AnalysisStarted {
+        turn_id: Uuid,
+        generation: u64,
+        input_digest: String,
+        privacy: PrivacyClass,
+    },
+    AnalysisCompleted {
+        turn_id: Uuid,
+        generation: u64,
+        output_digest: String,
         privacy: PrivacyClass,
     },
     Decision {
@@ -618,6 +656,7 @@ impl RuntimeState {
                         .ok_or(RuntimeError::Unavailable)?,
                     cancelled: false,
                     finished: false,
+                    analysis: None,
                 });
                 events.push(RuntimeData::TurnBegan {
                     turn_id,
@@ -627,6 +666,82 @@ impl RuntimeState {
                     privacy,
                 });
                 RuntimeResult::Begun(fence)
+            }
+            RuntimeOperation::CheckCognition { fence } => {
+                let turn = self.fence(fence.turn_id, fence.generation, fence.worker, now)?;
+                if turn.finished
+                    || turn.fence.origin_surface != fence.origin_surface
+                    || !Self::origin_valid(turn, records, now)
+                {
+                    return Err(RuntimeError::Stale);
+                }
+                RuntimeResult::CognitionCurrent
+            }
+            RuntimeOperation::AnalysisStart {
+                fence,
+                input_digest,
+                privacy,
+            } => {
+                let turn = self.fence(fence.turn_id, fence.generation, fence.worker, now)?;
+                if turn.finished
+                    || turn.fence.origin_surface != fence.origin_surface
+                    || !Self::origin_valid(turn, records, now)
+                {
+                    return Err(RuntimeError::Stale);
+                }
+                if turn.analysis.is_some() || !self.actions.is_empty() {
+                    return Err(RuntimeError::Busy);
+                }
+                if !digest_valid(&input_digest) {
+                    return Err(RuntimeError::InvalidRequest);
+                }
+                let privacy = turn.privacy.max(privacy);
+                if privacy > PrivacyClass::SharedRoom {
+                    return Err(RuntimeError::PolicyBlocked);
+                }
+                let turn = self.turn.as_mut().unwrap();
+                turn.privacy = privacy;
+                turn.analysis = Some(AnalysisState {
+                    input_digest: input_digest.clone(),
+                    output_digest: None,
+                });
+                events.push(RuntimeData::AnalysisStarted {
+                    turn_id: fence.turn_id,
+                    generation: fence.generation,
+                    input_digest,
+                    privacy,
+                });
+                RuntimeResult::AnalysisStarted
+            }
+            RuntimeOperation::AnalysisComplete {
+                fence,
+                input_digest,
+                output_digest,
+                privacy,
+            } => {
+                let turn = self.fence(fence.turn_id, fence.generation, fence.worker, now)?;
+                if turn.finished
+                    || turn.fence.origin_surface != fence.origin_surface
+                    || !Self::origin_valid(turn, records, now)
+                    || !turn.analysis.as_ref().is_some_and(|a| {
+                        a.input_digest == input_digest && a.output_digest.is_none()
+                    })
+                {
+                    return Err(RuntimeError::Stale);
+                }
+                if !digest_valid(&output_digest) {
+                    return Err(RuntimeError::InvalidRequest);
+                }
+                let turn = self.turn.as_mut().unwrap();
+                turn.privacy = turn.privacy.max(privacy);
+                turn.analysis.as_mut().unwrap().output_digest = Some(output_digest.clone());
+                events.push(RuntimeData::AnalysisCompleted {
+                    turn_id: fence.turn_id,
+                    generation: fence.generation,
+                    output_digest,
+                    privacy: turn.privacy,
+                });
+                RuntimeResult::AnalysisCompleted
             }
             RuntimeOperation::Propose {
                 turn_id,
@@ -638,6 +753,13 @@ impl RuntimeState {
                 let turn = self.fence(turn_id, generation, worker, now)?;
                 if turn.finished || !Self::origin_valid(turn, records, now) {
                     return Err(RuntimeError::Stale);
+                }
+                if turn
+                    .analysis
+                    .as_ref()
+                    .is_some_and(|a| a.output_digest.is_none())
+                {
+                    return Err(RuntimeError::Busy);
                 }
                 if !intent.valid() || self.actions.len() >= MAX_ACTIONS {
                     return Err(RuntimeError::InvalidRequest);
@@ -989,6 +1111,121 @@ mod tests {
             channel: action.channel,
             content_digest: action.content_digest.clone(),
         }
+    }
+
+    #[test]
+    fn ambiance_analysis_is_once_per_turn_durable_and_fenced_before_dispatch() {
+        let id = Uuid::new_v4();
+        let records = BTreeMap::from([(id, browser(id))]);
+        let mut state = RuntimeState::default();
+        let fence = begin(&mut state, &records, id);
+        let start = || RuntimeOperation::AnalysisStart {
+            fence: fence.clone(),
+            input_digest: hash(b"admitted input"),
+            privacy: PrivacyClass::Public,
+        };
+        let (result, events) = state.apply("U:owner", &records, start(), 102).unwrap();
+        assert!(matches!(result, RuntimeResult::AnalysisStarted));
+        assert!(matches!(
+            events.as_slice(),
+            [RuntimeData::AnalysisStarted {
+                privacy: PrivacyClass::SharedRoom,
+                ..
+            }]
+        ));
+        assert!(state.apply("U:owner", &records, start(), 103).is_err());
+        // Reopen the durable projection: neither a crash nor a second worker
+        // can start the same analysis or dispatch before its result commits.
+        let mut state: RuntimeState =
+            serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
+        assert!(
+            state
+                .apply(
+                    "U:owner",
+                    &records,
+                    RuntimeOperation::Propose {
+                        turn_id: fence.turn_id,
+                        generation: fence.generation,
+                        worker: fence.worker,
+                        intent: SemanticIntent::VisualTextCard {
+                            text: "Premature".into()
+                        },
+                        privacy: PrivacyClass::Public,
+                    },
+                    104
+                )
+                .is_err()
+        );
+        let complete = |input: &str, fence: TurnFence| RuntimeOperation::AnalysisComplete {
+            fence,
+            input_digest: hash(input.as_bytes()),
+            output_digest: hash(b"analysis result"),
+            privacy: PrivacyClass::Private,
+        };
+        assert!(
+            state
+                .apply(
+                    "U:owner",
+                    &records,
+                    complete("wrong input", fence.clone()),
+                    104
+                )
+                .is_err()
+        );
+        let mut stale = fence.clone();
+        stale.worker = Uuid::new_v4();
+        assert!(
+            state
+                .apply("U:owner", &records, complete("admitted input", stale), 104)
+                .is_err()
+        );
+        let (result, events) = state
+            .apply(
+                "U:owner",
+                &records,
+                complete("admitted input", fence.clone()),
+                104,
+            )
+            .unwrap();
+        assert!(matches!(result, RuntimeResult::AnalysisCompleted));
+        assert!(matches!(
+            events.as_slice(),
+            [RuntimeData::AnalysisCompleted {
+                privacy: PrivacyClass::Private,
+                ..
+            }]
+        ));
+        assert!(
+            state
+                .apply(
+                    "U:owner",
+                    &records,
+                    complete("admitted input", fence.clone()),
+                    105
+                )
+                .is_err()
+        );
+        let (result, _) = state
+            .apply(
+                "U:owner",
+                &records,
+                RuntimeOperation::Propose {
+                    turn_id: fence.turn_id,
+                    generation: fence.generation,
+                    worker: fence.worker,
+                    intent: SemanticIntent::VisualTextCard {
+                        text: "analysis result".into(),
+                    },
+                    privacy: PrivacyClass::Public,
+                },
+                105,
+            )
+            .unwrap();
+        assert!(
+            matches!(result, RuntimeResult::Blocked),
+            "service provenance cannot be lowered by output selection"
+        );
+        assert!(state.actions.is_empty());
     }
 
     #[test]
