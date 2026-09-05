@@ -1062,7 +1062,9 @@ impl AiBusMain {
                     )
                 })?;
             let text = backend
-                .transcribe(&audio)
+                // This stock request has no locale field. Keep its established
+                // locale explicit; native voice ingress must supply its own.
+                .transcribe(&audio, "en-US")
                 .await
                 .map_err(|_| Status::unavailable("the speech-to-text backend is unavailable"))?;
             return Ok(pb::AudioProcessingResponse {

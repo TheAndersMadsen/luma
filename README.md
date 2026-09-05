@@ -357,15 +357,21 @@ required or that the stock SDK alone violates the paper.
    The next bounded voice loop is capture, authorized transcription, the existing
    structured proposal, runtime-authorized text, then synthesis. Azure's
    [short-audio endpoint](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/rest-speech-to-text-short)
-   needs a duration limit of at most 60 seconds as well as a byte limit, stateful
-   48-to-16 kHz resampling and an explicit locale. Its
+   adapter now validates the actual PCM payload's 60-second limit, RIFF lengths,
+   16 kHz mono encoding, complete samples and a single data chunk before HTTP.
+   Recognition takes an explicit locale, bounds its response and transcript,
+   and preserves an empty no-match result without claiming silence. Stock
+   conversation translation supplies its device locale; the unchanged stock
+   transcription message has no locale and retains explicit `en-US`. Its
    [raw 48 kHz synthesis format](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/rest-text-to-speech#supported-audio-formats)
-   can feed 480-sample transport frames without altering the stock wire formats.
-   The streaming HTTP producer still needs owned cancellation; arbitrary chunk
-   boundaries must preserve partial samples and respect the bounded send queue.
-   Normal completion also needs a drain path: the current transport stop discards
-   queued frames. These are implementation requirements, not verified provider or
-   playback behavior.
+   remains the planned native output profile; all four stock format mappings
+   stay unchanged. Synthesis streaming now owns its pending HTTP response, with
+   bounded chunks and no detached producer. A local HTTP test proves dropping a
+   stalled stream closes that response; this cannot prove provider-side compute
+   or billing stops. Native output can drain accepted frames without unpublishing
+   (see below). Stateful 48-to-16 kHz capture resampling, arbitrary-chunk PCM
+   framing, the pre-upload disclosure gate and the turn-bound voice loop remain
+   unfinished. Adapter checks do not grant provider access or prove playback.
 4. **Cosmos services and policy.** Rebuild completion, child agents, composition,
    translation, vision/food, music and native actions through typed services.
    Require exact single-use action/epoch grants, provenance-scoped retrieval,
@@ -419,10 +425,11 @@ required or that the stock SDK alone violates the paper.
 
 `cosmos-rtc::audio` now owns a separate two-party media connection with manual
 PCM publication, exact publisher/track binding, explicit subscription and
-generation cancellation. The four isolated-SFU tests in
+generation cancellation. The tests in
 `cosmos/crates/rtc/tests/audio.rs` cover decoded synthetic audio, replacement
 publication IDs, stopping, queue bounds, receive overflow, peer disconnect and
-cross-room isolation. Coordination tokens still carry no media permission.
+cross-room isolation, plus normal input completion with a distinctive queued
+terminal tone using odd/even frame counts. Coordination tokens still carry no media permission.
 This adapter is not yet exposed by Cosmos application admission or native
 clients; transport tests do not establish policy-granted audio, microphone
 capture, provider voice dialogue or physical playback.
@@ -447,6 +454,25 @@ stream. The upstream native queue can drop oldest frames and Opus is lossy;
 these bounds do not establish lossless audio. Device permission, capture, audio
 focus and speaker queues remain each client's responsibility. Device playback
 must still be stopped/flushed when a generation is retired.
+
+`AudioSender::finish_input()` closes input and drains its accepted frames on the
+sample clock, then supplies 200 ms of paced silence. This bounded padding is a
+tested transport profile, not a codec-flush or delivery guarantee. Finishing
+retains the source, publication and exclusive send slot; it never calls stop at
+provider EOF. The application must observe recipient completion or reach its
+own bounded deadline before calling `stop()`, which discards queued content and
+unpublishes. A cancelled finish wait retains ownership and can be resumed or
+interrupted. Local SFU tests distinguish a received terminal tone from discarded
+queued content and reject completion after disconnect or interruption. No
+application completion protocol or physical speaker evidence is established yet.
+
+The pinned [zero-buffer source](https://github.com/livekit/rust-sdks/blob/2d9f01ab1e933a86a8a5c53805ee29ee58b9be1b/webrtc-sys/src/audio_track.cpp#L194-L228)
+offers samples synchronously to attached sinks but can succeed with none.
+[WebRTC encoding](https://github.com/webrtc-sdk/webrtc/blob/89d790b40447c3c5c54c3edd58aa53d285e35fa7/audio/channel_send.cc#L859-L940)
+continues asynchronously; [stopping](https://github.com/webrtc-sdk/webrtc/blob/89d790b40447c3c5c54c3edd58aa53d285e35fa7/audio/channel_send.cc#L601-L628)
+discards encoder and pacer work. LiveKit exposes no complete codec/network drain
+primitive. These source facts are why input consumption, remote decoded receipt
+and physical playback remain separate evidence.
 
 | Operation | Exact API at revision `2d9f01ab` |
 | --- | --- |

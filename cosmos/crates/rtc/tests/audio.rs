@@ -66,6 +66,135 @@ fn tone(index: usize) -> [i16; FRAME_SAMPLES] {
     })
 }
 
+fn marker() -> [i16; FRAME_SAMPLES] {
+    std::array::from_fn(|n| {
+        (10_000.0 * (n as f64 * 3_000.0 / audio::SAMPLE_RATE as f64 * std::f64::consts::TAU).sin())
+            as i16
+    })
+}
+
+fn marker_amplitude(frame: &[i16; FRAME_SAMPLES]) -> f64 {
+    let (mut real, mut imaginary) = (0.0, 0.0);
+    for (n, sample) in frame.iter().enumerate() {
+        let angle = n as f64 * 3_000.0 / audio::SAMPLE_RATE as f64 * std::f64::consts::TAU;
+        real += f64::from(*sample) * angle.cos();
+        imaginary += f64::from(*sample) * angle.sin();
+    }
+    2.0 * real.hypot(imaginary) / FRAME_SAMPLES as f64
+}
+
+#[tokio::test]
+#[ignore = "requires COSMOS_RTC_AUDIO_TEST_INPUT with an isolated localhost SFU"]
+async fn audio_finish_drains_queued_tail_without_unpublishing_or_releasing_slot() {
+    for terminal_frames in [1, 2] {
+        tokio::time::timeout(Duration::from_secs(30), async {
+        let (runtime, surface) = sessions().await;
+        let epoch = Uuid::new_v4();
+        let mut sender = runtime.publish(epoch, 1).await.unwrap();
+        let mut receiver = attach(&surface, &sender).await;
+        let (done, mut finished) = tokio::sync::oneshot::channel();
+        tokio::join!(
+            async {
+                // This task fills the FIFO without yielding, then immediately
+                // starts finishing. The final 10/20ms has a unique frequency
+                // that no earlier packet (or its concealment) can supply. The
+                // odd/even frame counts exercise partial encoder packets.
+                for _ in 0..(QUEUE_FRAMES - 2) { sender.push(&[0; FRAME_SAMPLES]).unwrap(); }
+                for _ in 0..terminal_frames { sender.push(&marker()).unwrap(); }
+                sender.finish_input().await.unwrap();
+                assert_eq!(sender.push(&marker()), Err(Error::Unavailable));
+                sender.finish_input().await.unwrap();
+                assert!(matches!(runtime.publish(epoch, 2).await, Err(Error::Busy)));
+                done.send(()).unwrap();
+            },
+            async {
+                let mut seen = false;
+                loop {
+                    tokio::select! { biased;
+                        frame = receiver.recv() => { seen |= marker_amplitude(&frame.unwrap()) > 1_000.0; },
+                        _ = &mut finished => break,
+                    }
+                }
+                // Source consumption does not imply receipt; leave the track
+                // published and allow a separately bounded receive deadline.
+                if !seen {
+                    tokio::time::timeout(Duration::from_secs(2), async {
+                        while marker_amplitude(&receiver.recv().await.unwrap()) <= 1_000.0 {}
+                    }).await.unwrap();
+                }
+            }
+        );
+        receiver.stop().await;
+        sender.stop().await.unwrap();
+        assert_eq!(sender.finish_input().await, Err(Error::Unavailable));
+        let mut next = runtime.publish(epoch, 2).await.unwrap();
+        next.stop().await.unwrap();
+        surface.close().await.unwrap();
+        runtime.close().await.unwrap();
+      }).await.unwrap();
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires COSMOS_RTC_AUDIO_TEST_INPUT with an isolated localhost SFU"]
+async fn audio_stop_discards_queued_tail_instead_of_draining_it() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let (runtime, surface) = sessions().await;
+        let mut sender = runtime.publish(Uuid::new_v4(), 1).await.unwrap();
+        let mut receiver = attach(&surface, &sender).await;
+        for _ in 0..QUEUE_FRAMES {
+            sender.push(&marker()).unwrap();
+        }
+        // stop sets cancellation before yielding. None of these still-queued
+        // frames is eligible to reach the receiver, even during cleanup.
+        tokio::join!(
+            async {
+                sender.stop().await.unwrap();
+            },
+            async {
+                while let Ok(frame) = receiver.recv().await {
+                    assert!(marker_amplitude(&frame) < 1_000.0);
+                }
+            }
+        );
+        assert_eq!(sender.finish_input().await, Err(Error::Unavailable));
+        receiver.stop().await;
+        surface.close().await.unwrap();
+        runtime.close().await.unwrap();
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires COSMOS_RTC_AUDIO_TEST_INPUT with an isolated localhost SFU"]
+async fn audio_cancelled_drain_remains_owned_and_peer_loss_cannot_finish() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let (runtime, surface) = sessions().await;
+        let mut sender = runtime.publish(Uuid::new_v4(), 1).await.unwrap();
+        for n in 0..QUEUE_FRAMES {
+            sender.push(&tone(n)).unwrap();
+        }
+        assert!(
+            tokio::time::timeout(Duration::from_millis(1), sender.finish_input())
+                .await
+                .is_err()
+        );
+        assert_eq!(sender.push(&tone(0)), Err(Error::Unavailable));
+        // The cancelled wait kept ownership; stop interrupts instead of waiting
+        // for all content and padding to drain.
+        sender.stop().await.unwrap();
+        assert_eq!(sender.finish_input().await, Err(Error::Unavailable));
+        let mut next = runtime.publish(Uuid::new_v4(), 2).await.unwrap();
+        runtime.close().await.unwrap();
+        assert_eq!(next.finish_input().await, Err(Error::Unavailable));
+        let _ = next.stop().await;
+        surface.close().await.unwrap();
+    })
+    .await
+    .unwrap();
+}
+
 // WebRTC attaches a decoded track after its first RTP packets. Prime the
 // admitted stream with silence; content starts only after receiver attachment.
 async fn attach(surface: &AudioSession, sender: &audio::AudioSender) -> audio::AudioReceiver {

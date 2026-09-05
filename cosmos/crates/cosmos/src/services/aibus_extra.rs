@@ -1216,11 +1216,11 @@ impl SpeechService for Speech {
                     Err(Status::invalid_argument("translate conversation requires a target locale"))?;
                 }
                 let wav = recognition_wav(audio)?;
+                let source = config.device_locale.clone();
                 let transcript = recognition
-                    .transcribe(&wav)
+                    .transcribe(&wav, &locale_name(source.as_ref()))
                     .await
                     .map_err(speech_status)?;
-                let source = config.device_locale.clone();
                 let translation = if transcript.is_empty()
                     || same_locale(source.as_ref(), Some(&target))
                 {

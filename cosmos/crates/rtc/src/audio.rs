@@ -32,6 +32,10 @@ pub const FRAME_SAMPLES: usize = 480;
 pub const QUEUE_FRAMES: usize = 10;
 const FRAME_TIME: Duration = Duration::from_millis(10);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+// Bounded silence advances the encoder beyond the final content frame. This is
+// not a transport flush or delivery deadline; keep the publication until the
+// application has observed receipt or its own bounded completion deadline.
+const END_PADDING_FRAMES: usize = 20;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Role {
@@ -303,25 +307,31 @@ impl AudioSession {
         let (stop, mut stopping) = watch::channel(false);
         let mut alive = self.alive.subscribe();
         let task_track = track.clone();
+        let task_source = source.clone();
         let producer = tokio::spawn(async move {
-            let _slot = slot;
+            let source = task_source;
             let mut next = tokio::time::Instant::now();
-            loop {
+            let mut padding = 0;
+            let result = loop {
                 if *stopping.borrow() || !*alive.borrow() {
-                    break;
+                    break Err(Error::Unavailable);
                 }
                 let frame = tokio::select! { biased;
-                    _ = stopping.changed() => break,
-                    _ = alive.changed() => break,
-                    frame = incoming.recv() => match frame { Some(frame) => frame, None => break },
+                    _ = stopping.changed() => break Err(Error::Unavailable),
+                    _ = alive.changed() => break Err(Error::Unavailable),
+                    frame = incoming.recv() => match frame {
+                        Some(frame) => frame,
+                        None if padding < END_PADDING_FRAMES => { padding += 1; [0; FRAME_SAMPLES] },
+                        None => break Ok(()),
+                    },
                 };
                 tokio::select! { biased;
-                    _ = stopping.changed() => break,
-                    _ = alive.changed() => break,
+                    _ = stopping.changed() => break Err(Error::Unavailable),
+                    _ = alive.changed() => break Err(Error::Unavailable),
                     _ = tokio::time::sleep_until(next) => {}
                 }
                 if *stopping.borrow() || !*alive.borrow() {
-                    break;
+                    break Err(Error::Unavailable);
                 }
                 if source
                     .capture_frame(&AudioFrame {
@@ -333,7 +343,7 @@ impl AudioSession {
                     .await
                     .is_err()
                 {
-                    break;
+                    break Err(Error::Unavailable);
                 }
                 // Keep the sample clock on its 10 ms grid rather than adding
                 // scheduling/capture overhead to every frame. Skip missed
@@ -343,34 +353,41 @@ impl AudioSession {
                 if next <= now {
                     next = now + FRAME_TIME;
                 }
-            }
+            };
             incoming.close();
             while incoming.try_recv().is_ok() {}
-            source.clear_buffer();
-            task_track.mute();
+            if result.is_err() {
+                source.clear_buffer();
+                task_track.mute();
+            }
+            result
         });
-        self.room
+        let mut sender = AudioSender {
+            binding,
+            frames: Some(frames),
+            stop,
+            alive: self.alive.subscribe(),
+            producer: Some(producer),
+            source,
+            slot: Some(slot),
+            finished: false,
+            room: self.room.clone(),
+            publication,
+            published: true,
+        };
+        sender
+            .room
             .local_participant()
             .set_track_subscription_permissions(
                 false,
                 vec![ParticipantTrackPermission {
                     participant_identity: self.peer.into(),
                     allow_all: false,
-                    allowed_track_sids: vec![publication.sid()],
+                    allowed_track_sids: vec![sender.publication.sid()],
                 }],
             )
             .await
             .map_err(|_| Error::Unavailable)?;
-        let mut sender = AudioSender {
-            binding,
-            frames,
-            stop,
-            alive: self.alive.subscribe(),
-            producer: Some(producer),
-            room: self.room.clone(),
-            publication,
-            published: true,
-        };
         if !*self.alive.borrow() {
             sender.stop().await?;
             return Err(Error::Unavailable);
@@ -576,10 +593,13 @@ impl Drop for Subscription {
 /// success is neither network delivery nor playback. Dropping stops publication.
 pub struct AudioSender {
     binding: Binding,
-    frames: mpsc::Sender<[i16; FRAME_SAMPLES]>,
+    frames: Option<mpsc::Sender<[i16; FRAME_SAMPLES]>>,
     stop: watch::Sender<bool>,
     alive: watch::Receiver<bool>,
-    producer: Option<tokio::task::JoinHandle<()>>,
+    producer: Option<tokio::task::JoinHandle<Result<(), Error>>>,
+    source: NativeAudioSource,
+    slot: Option<Slot>,
+    finished: bool,
     room: Arc<Room>,
     publication: LocalTrackPublication,
     published: bool,
@@ -593,18 +613,48 @@ impl AudioSender {
         if *self.stop.borrow() || !*self.alive.borrow() {
             return Err(Error::Unavailable);
         }
-        self.frames.try_send(pcm).map_err(|e| match e {
-            mpsc::error::TrySendError::Full(_) => Error::Busy,
-            _ => Error::Unavailable,
-        })
+        self.frames
+            .as_ref()
+            .ok_or(Error::Unavailable)?
+            .try_send(pcm)
+            .map_err(|e| match e {
+                mpsc::error::TrySendError::Full(_) => Error::Busy,
+                _ => Error::Unavailable,
+            })
     }
+
+    /// End input and pace every accepted frame, followed by bounded silence.
+    /// This proves source consumption only. The publication and exclusive slot
+    /// remain held: the application must observe recipient completion (or reach
+    /// its bounded deadline) before calling stop. Dropping/interruption aborts
+    /// immediately; a cancelled wait can be resumed on this same sender.
+    pub async fn finish_input(&mut self) -> Result<(), Error> {
+        self.frames.take();
+        if *self.stop.borrow() || !*self.alive.borrow() {
+            return Err(Error::Unavailable);
+        }
+        if let Some(producer) = self.producer.as_mut() {
+            let result = producer.await.map_err(|_| Error::Unavailable);
+            self.producer.take();
+            result??;
+            self.finished = true;
+        }
+        if self.finished && !*self.stop.borrow() && *self.alive.borrow() {
+            Ok(())
+        } else {
+            Err(Error::Unavailable)
+        }
+    }
+
     pub async fn stop(&mut self) -> Result<(), Error> {
         self.stop.send_replace(true);
+        self.frames.take();
         self.publication.mute();
         if let Some(producer) = self.producer.as_mut() {
             let _ = producer.await;
             self.producer.take();
         }
+        self.source.clear_buffer();
         if self.published {
             tokio::time::timeout(
                 CONNECT_TIMEOUT,
@@ -616,6 +666,7 @@ impl AudioSender {
             .map_err(|_| Error::Unavailable)?
             .map_err(|_| Error::Unavailable)?;
             self.published = false;
+            self.slot.take();
         }
         Ok(())
     }
@@ -623,13 +674,17 @@ impl AudioSender {
 impl Drop for AudioSender {
     fn drop(&mut self) {
         self.stop.send_replace(true);
+        self.frames.take();
         self.publication.mute();
+        self.source.clear_buffer();
         if self.published {
             let producer = self.producer.take();
+            let slot = self.slot.take();
             let room = self.room.clone();
             let sid = self.publication.sid();
             if let Ok(runtime) = tokio::runtime::Handle::try_current() {
                 runtime.spawn(async move {
+                    let _slot = slot;
                     if let Some(producer) = producer {
                         let _ = producer.await;
                     }

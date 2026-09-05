@@ -81,6 +81,30 @@
       "limitation": "Requires a local SFU. Transport only: application admission, media grants, provider voice loop, native clients and hardware playback remain unfinished."
     },
     {
+      "id": "native-pcm-completion-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/rtc/tests/audio.rs",
+      "anchor": "async fn audio_finish_drains_queued_tail_without_unpublishing_or_releasing_slot()",
+      "scope": "Defines source drain with odd/even terminal frames, actual decoded terminal-tone receipt, closed-input rejection and retained exclusive publication until explicit stop.",
+      "limitation": "Requires a localhost SFU. Finite padding and source completion are not codec-flush, guaranteed network delivery, runtime-authorized output or physical playback evidence. The application completion protocol remains unfinished."
+    },
+    {
+      "id": "speech-cancellation-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/backends/azure_speech.rs",
+      "anchor": "async fn streaming_drop_closes_a_stalled_http_response()",
+      "scope": "Defines disposal of an actual pending local HTTP response when the synthesis stream is dropped, without waiting for another provider chunk.",
+      "limitation": "Synthetic provider fixture only. This does not establish Azure-side compute or billing cancellation, native turn authorization or the pre-provider disclosure gate."
+    },
+    {
+      "id": "speech-recognition-bounds-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/backends/azure_speech.rs",
+      "anchor": "async fn recognition_rejects_invalid_input_before_http_and_sends_explicit_locale()",
+      "scope": "Defines rejection of invalid WAV, over-60-second PCM and malformed locale before a local provider request, and explicit Danish locale and WAV preservation on a valid request.",
+      "limitation": "Adapter format/duration checks only. No real provider, microphone capture, resampling, origin/class disclosure authorization or end-to-end voice loop is established."
+    },
+    {
       "id": "native-pcm-isolation-test-definition",
       "kind": "test-definition",
       "path": "cosmos/crates/rtc/tests/audio.rs",
@@ -510,8 +534,8 @@
       "sourceSections": ["5.1", "5.2", "7"],
       "requirement": "The Ai Pin participates in the live capture, cognition, playback and interruption loop through its stock-compatible runtime.",
       "acceptance": "Prove actual capture/playback ownership, audio focus, barge-in, immediate stop, privacy change and reconnect on hardware; completed-text TTS is not proof of live dialogue.",
-      "status": "pending",
-      "evidence": []
+      "status": "partial",
+      "evidence": ["native-pcm-adapter-test-definition", "native-pcm-completion-test-definition", "speech-cancellation-test-definition", "speech-recognition-bounds-test-definition"]
     },
     {
       "id": "pin-physical-acceptance",
