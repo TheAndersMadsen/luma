@@ -66,6 +66,32 @@ The repository retains required stock `humane.*` protocol names and Android
 package identities because the original software calls them byte-for-byte.
 Product, deployment, configuration, and operator-facing names use Cosmos.
 
+### Product direction
+
+The target is one context-aware assistant across the wearer's devices. The
+original CosmOS demonstration supplies product scenarios: understand a reference
+to what is currently on the TV, recall an authorized earlier recipe, and combine
+an explicitly selected email with calendar availability and a confirmed RSVP.
+These are acceptance targets, not capabilities established by the demonstration
+or by this repository's current server preview.
+
+Cosmos coordinates models, semantic services and device capabilities through one
+runtime. Clients supply explicitly authorized context and local evidence;
+Center exposes tasks, connections, permissions and outcomes. Context must retain
+its source, capture time, exact content version and relevant playback position.
+Resolving “he” on TV needs evidence identifying the relevant person or moment;
+a programme title alone is insufficient. When that context is unavailable or
+ambiguous, the assistant must say so or ask for clarification.
+
+Cross-session memory and preferences remain scoped to the admitted origin and
+purpose. A selected personal output does not grant a shared-origin request
+private memory. Multi-service work must preserve these boundaries between steps;
+models propose intents while Cosmos authorizes effects. Consequential actions
+require the appropriate exact confirmation, and completion claims require
+committed matching evidence. Device and model independence mean shared contracts
+with explicit capabilities, not a promise that every platform exposes every
+sensor, third-party app or effect.
+
 ### Ambiance v2 work in progress
 
 The `codex/ambiance-v2-production` branch continues the Cosmos-first work from
@@ -258,6 +284,28 @@ requirement of conformance. The paper also permits cognition and runtime in one
 process with separate interfaces: management-secret isolation for separate jobs
 is our least-privilege deployment gate, not a claim that process separation is
 required or that the stock SDK alone violates the paper.
+
+The supplied `ambiance-blueprint` package is additional design inspiration.
+Its independently reproduced 30-test model suite checks simulated state, not
+this product or the paper's reference implementation. Adopt explicit immutable
+task context, exact action-bound confirmation, endpoint-specific completion and
+read-only reconciliation of unknown outcomes within the existing Rust,
+PostgreSQL and LiveKit authority. The package's proposed Node/SQLite runtime,
+Omarchy hosting and separate WSS coordination bus do not replace the current
+VPS deployment or room protocol.
+
+The next native slice is generic installation-key challenge proof with explicit
+owner approval and revocation in Center, followed by authenticated public native
+input through Cosmos to the existing Center renderer. Enrollment and current
+connection evidence remain separate from actor identity and physical privacy.
+Immutable task/context handoff follows with revision fencing and observed
+completion, then real desktop/Pixel clients and Shield context integrations.
+The blueprint's controlled Shield player does not provide playback context from
+YouTube, Stremio, TV2 Play, Netflix or Spotify: each requires its own permitted,
+current context source and honest missing-data behavior. Physical Pin acceptance
+remains last. General confirmation/effect/recovery support must precede any
+consequential connector; the blueprint's milestone ordering is not sufficient
+evidence that those dependencies exist.
 
 1. **Cosmos transport.** The `cosmos-rtc` crate owns the direct Rust LiveKit SDK
    0.8.4/API 0.6.4 at
