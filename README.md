@@ -532,14 +532,21 @@ evidence that those dependencies exist.
    `cosmos/native/stt-model.json` owns the pinned model coordinates used by Rust
    and image acquisition. The build verifies the model and copies it read-only
    into the authenticated Cosmos image; service startup never downloads it.
-   The decoder rechecks the exact size and checksum before loading. Runtime
-   bootstrap, complete server-image acceptance and the paper's end-to-end voice
-   latency target remain separate gates; isolated adapter timings are not
-   production latency. ARM64 actual-model acceptance passed in a restricted
-   Linux container. Both Linux architectures compiled, but AMD64 emulation
-   exceeded the fixture's three-second native-worker cancellation assertion.
-   The unchanged cancellation assertion now has a native AMD64 CI gate; its
-   result remains separate from cross-compilation and emulated execution.
+   The decoder rechecks the exact size and checksum before loading.
+   `cosmos/native/whisper-source.json` pins the published native source archive
+   and a checked-in patch that forwards cancellation through the encoder and
+   decoder compute graphs. Verified acquisition applies that exact patch outside
+   the checkout and checks every compiler input again on cache reuse. The small
+   vendored Rust build wrapper compiles a private copy and generates bindings
+   from those verified headers; it never changes the Cargo registry cache.
+   Native callbacks are cleared before their caller-owned state can expire.
+   Cancellation remains cooperative: model-state creation, mel processing and
+   the current native operation can still delay exit. The unchanged three-second
+   cancellation assertion and fresh recognition after abort passed on macOS
+   with the patch; native AMD64 CI and full patched-image acceptance remain
+   separate required gates. Runtime bootstrap and the paper's end-to-end voice
+   latency target also remain open; isolated adapter timings are not production
+   latency.
 
    In **Settings → My Ai Pin → Ambiance runtime approval**, open **Local voice
    permission** to allow shared local voice requests or revoke the permission.

@@ -1,0 +1,68 @@
+--- a/src/whisper.cpp
++++ b/src/whisper.cpp
+@@ -34,0 +35 @@
++#include <utility>
+@@ -194,13 +195,38 @@
+-                      bool   sched_reset = true) {
+-    for (int i = 0; i < ggml_backend_sched_get_n_backends(sched); ++i) {
+-        ggml_backend_t backend = ggml_backend_sched_get_backend(sched, i);
+-        ggml_backend_dev_t dev = ggml_backend_get_device(backend);
+-        ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
+-
+-        auto * fn_set_n_threads = (ggml_backend_set_n_threads_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads");
+-        if (fn_set_n_threads) {
+-            fn_set_n_threads(backend, n_threads);
+-        }
+-    }
+-
+-    const bool t = (ggml_backend_sched_graph_compute(sched, graph) == GGML_STATUS_SUCCESS);
++                      bool   sched_reset = true,
++       ggml_abort_callback   abort_callback = nullptr,
++                      void * abort_callback_data = nullptr) {
++    if (abort_callback && abort_callback(abort_callback_data)) {
++        ggml_backend_sched_reset(sched);
++        return false;
++    }
++
++    bool t;
++    {
++        // Scheduler computation is synchronous. Clear the caller-owned
++        // callback/data before reset or return, including an aborted graph.
++        struct scoped_abort_callbacks {
++            std::vector<std::pair<ggml_backend_t, ggml_backend_set_abort_callback_t>> backends;
++            ~scoped_abort_callbacks() {
++                for (const auto & entry : backends) {
++                    entry.second(entry.first, nullptr, nullptr);
++                }
++            }
++        } callbacks;
++        for (int i = 0; i < ggml_backend_sched_get_n_backends(sched); ++i) {
++            ggml_backend_t backend = ggml_backend_sched_get_backend(sched, i);
++            ggml_backend_dev_t dev = ggml_backend_get_device(backend);
++            ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
++
++            auto * fn_set_n_threads = (ggml_backend_set_n_threads_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads");
++            if (fn_set_n_threads) {
++                fn_set_n_threads(backend, n_threads);
++            }
++            auto * fn_set_abort = (ggml_backend_set_abort_callback_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_abort_callback");
++            if (fn_set_abort) {
++                callbacks.backends.emplace_back(backend, fn_set_abort);
++                fn_set_abort(backend, abort_callback, abort_callback_data);
++            }
++        }
++
++        t = (ggml_backend_sched_graph_compute(sched, graph) == GGML_STATUS_SUCCESS);
++    }
+@@ -2406 +2432 @@
+-            if (!ggml_graph_compute_helper(sched, gf, n_threads)) {
++            if (!ggml_graph_compute_helper(sched, gf, n_threads, true, abort_callback, abort_callback_data)) {
+@@ -2431 +2457 @@
+-        if (!ggml_graph_compute_helper(sched, gf, n_threads)) {
++        if (!ggml_graph_compute_helper(sched, gf, n_threads, true, abort_callback, abort_callback_data)) {
+@@ -2447 +2473 @@
+-        if (!ggml_graph_compute_helper(sched, gf, n_threads)) {
++        if (!ggml_graph_compute_helper(sched, gf, n_threads, true, abort_callback, abort_callback_data)) {
+@@ -2944 +2970 @@
+-        if (!ggml_graph_compute_helper(sched, gf, n_threads)) {
++        if (!ggml_graph_compute_helper(sched, gf, n_threads, true, abort_callback, abort_callback_data)) {

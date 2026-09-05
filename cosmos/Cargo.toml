@@ -49,3 +49,7 @@ voprf = { path = "vendor/voprf" }
 # The upstream build helper downloads unverified native binaries when no path
 # is configured. This narrow patch requires our separately verified archive.
 webrtc-sys-build = { path = "vendor/webrtc-sys-build" }
+
+# Preserve the published Rust ABI while applying the pinned native abort fix.
+# Native sources are separately verified and remain outside the checkout.
+whisper-rs-sys = { path = "vendor/whisper-rs-sys" }

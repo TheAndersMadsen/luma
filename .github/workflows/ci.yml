@@ -133,6 +133,10 @@ jobs:
         run: |
           native_dir="$(python3 cosmos/native/prepare.py --cache "${RUNNER_TEMP}/webrtc")"
           printf 'LK_CUSTOM_WEBRTC=%s\n' "$native_dir" >> "$GITHUB_ENV"
+      - name: verified local recognition source
+        run: |
+          whisper_dir="$(python3 cosmos/native/prepare_whisper.py --cache "${RUNNER_TEMP}/whisper")"
+          printf 'WHISPER_CPP_SOURCE=%s\n' "$whisper_dir" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@38ae5351029910ad7674ccfad89c37cbd636f3c4 # 1.91.1
         with:
           components: clippy, rustfmt

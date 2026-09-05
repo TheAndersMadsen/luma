@@ -14,3 +14,11 @@ test('native compiler and local STT model inputs require pinned bytes', () => {
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stderr, /Ran 8 tests/u);
 });
+
+test('patched recognition source is acquired and reused only with verified bytes', () => {
+  const result = spawnSync('python3', [path.join(ROOT, 'cosmos/native/prepare_whisper_test.py')], {
+    env: testProcessEnvironment(), encoding: 'utf8', timeout: 30_000,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /Ran [1-9][0-9]* tests/u);
+});

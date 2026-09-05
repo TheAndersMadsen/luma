@@ -1,0 +1,10 @@
+Rust wrapper derived from whisper-rs-sys 0.15.0, published under the Unlicense.
+Upstream: https://codeberg.org/tazz4843/whisper-rs
+Published crate SHA-256:
+6986c0fe081241d391f09b9a071fbcbb59720c3563628c3c829057cf69f2a56f
+
+Ai Pin Revival changes require separately verified native compiler inputs,
+copy those inputs into OUT_DIR, refresh the CMake cache on source changes,
+and generate bindings from the verified headers without a stale fallback.
+The native sources and their MIT license are acquired by
+cosmos/native/prepare_whisper.py; they are not part of this wrapper directory.

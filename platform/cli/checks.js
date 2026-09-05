@@ -277,9 +277,15 @@ function runCosmosCheck(filter = null, dependencies = {}) {
   ], { env: baseEnvironment, capture: true });
   const nativeDirectory = native.stdout.trim();
   if (!nativeDirectory.startsWith(path.join(BUILD_DIR, 'webrtc') + path.sep)) fail('invalid native build directory');
+  const whisper = runner('cosmos verified recognition source', 'python3', [
+    path.join(cosmos, 'native/prepare_whisper.py'), '--cache', path.join(BUILD_DIR, 'whisper'),
+  ], { env: baseEnvironment, capture: true });
+  const whisperDirectory = whisper.stdout.trim();
+  if (!whisperDirectory.startsWith(path.join(BUILD_DIR, 'whisper') + path.sep)) fail('invalid recognition source directory');
   const environment = {
     ...baseEnvironment,
     LK_CUSTOM_WEBRTC: nativeDirectory,
+    WHISPER_CPP_SOURCE: whisperDirectory,
     ...(process.platform === 'linux' ? {
       CC: 'clang-21', CXX: 'clang++-21',
       CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: 'clang-21',

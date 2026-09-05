@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "crate": "whisper-rs-sys-0.15.0",
+  "bytes": 1757612,
+  "sha256": "6986c0fe081241d391f09b9a071fbcbb59720c3563628c3c829057cf69f2a56f",
+  "url": "https://static.crates.io/crates/whisper-rs-sys/whisper-rs-sys-0.15.0.crate",
+  "nativePrefix": "whisper-rs-sys-0.15.0/whisper.cpp/",
+  "patch": "whisper-abort.patch",
+  "patchSha256": "3ea8cc5aa9433c46229e61b7172d5f5fa36d06bb24309107abdb8d0a3c6f7951",
+  "originalSourceSha256": "d1e041704c12e20b8eb9596632db3b3b31046348dbb0e493f8a5ab8edd5f4376",
+  "patchedSourceSha256": "60ba46c8d1118d86e2bbc7225139702b17838d04f79918e11e0a1664d0fb761b"
+}

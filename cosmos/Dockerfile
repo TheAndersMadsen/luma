@@ -36,11 +36,13 @@ COPY prompts ./prompts
 
 RUN --mount=type=cache,id=cosmos-cargo-registry-${TARGETARCH},target=/usr/local/cargo/registry \
     --mount=type=cache,id=cosmos-webrtc-${TARGETARCH},target=/opt/webrtc \
+    --mount=type=cache,id=cosmos-whisper-source-${TARGETARCH},target=/opt/whisper \
     --mount=type=cache,id=cosmos-target-${TARGETARCH},target=/workspace/cosmos/target \
     set -eux; \
     case "${TARGETARCH}" in amd64) webrtc_arch=x64 ;; arm64) webrtc_arch=arm64 ;; esac; \
     LK_CUSTOM_WEBRTC="$(python3 native/prepare.py --cache /opt/webrtc --target "linux-${webrtc_arch}")"; \
-    export LK_CUSTOM_WEBRTC; \
+    WHISPER_CPP_SOURCE="$(python3 native/prepare_whisper.py --cache /opt/whisper)"; \
+    export LK_CUSTOM_WEBRTC WHISPER_CPP_SOURCE; \
     if [ "${BUILDARCH}" = "${TARGETARCH}" ]; then \
       cargo build --locked --release --bin cosmos; \
       artifact=/workspace/cosmos/target/release/cosmos; \
