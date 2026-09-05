@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "state": "cosmos-implemented-center-pending",
+  "bootstrap": {
+    "route": "POST /runtime-api/v1/browser/room",
+    "authentication": "Verified owner bearer and x-cosmos-surface-token for the exact surfaceId/incarnation. Approval is rechecked before and after connection; boot epoch cannot change without renewed approval.",
+    "request": ["surfaceId", "incarnation", "epoch"],
+    "response": ["version", "url", "token", "participant", "runtimeParticipant", "runtimeEpoch", "epoch"],
+    "token": "300-second join TTL; ordinary participant, coordination only. Token expiry is not live revocation. Management secret stays inside Cosmos.",
+    "room": "One principal-scoped opaque room and one connected runtime identity. A replacement coordinator disconnects the previous one; there is no active-active room coordinator or automatic continuation across coordinator replacement."
+  },
+  "method": "cosmos.coordinate.v1",
+  "limits": {"payloadBytes": 12288, "textBytes": 4000, "admissionMs": 2000, "rpcMs": 3000, "participants": 16, "rooms": 64, "jobsPerRoom": 32, "sequenceMaximum": 9007199254740991, "receiptsPerSurface": 32, "receiptRetentionMs": 300000},
+  "stamp": {"epoch": "UUID", "sequence": "positive safe integer", "instanceId": "UUID"},
+  "clientMessages": {
+    "input": {"kind": "input", "stamp": "stamp with turn instanceId", "text": "current text"},
+    "control": {"kind": "control", "stamp": "stamp", "control": "one BrowserControl"}
+  },
+  "BrowserControl": {
+    "state": {"kind": "state", "visible": "boolean"},
+    "cancel": {"kind": "cancel", "turnId": "stamp.instanceId", "generation": "positive safe integer"},
+    "acknowledge": {"kind": "acknowledge", "actionId": "stamp.instanceId", "turnId": "UUID", "generation": "positive safe integer", "channel": "visual.card", "contentDigest": "SHA256 lowercase hex"}
+  },
+  "admissionReplies": {
+    "input": {"version": 1, "kind": "admitted", "turnId": "UUID", "generation": "positive safe integer", "duplicate": "boolean"},
+    "control": {"version": 1, "kind": "accepted", "duplicate": "boolean"}
+  },
+  "runtimeMessages": {
+    "render": {"version": 1, "kind": "render", "stamp": "runtime stamp with action instanceId", "command": "ambiance-runtime.json RenderCommand"},
+    "clear": {"version": 1, "kind": "clear", "stamp": "runtime stamp with fresh instanceId", "actionId": "UUID"}
+  },
+  "runtimeReceipt": {"version": 1, "kind": "received", "stamp": "exact runtime stamp"},
+  "semantics": [
+    "Only server-attributed caller identity mapped by authenticated bootstrap can originate messages. Reject unknown fields and body-supplied principal or surface authority.",
+    "Admission requires an observed peer session. LiveKit 1.13.6 batches non-media presence for up to three seconds; the bootstrap client must retry busy responses within a bounded join window using the same stamp.",
+    "One durable high-water sequence spans input and all controls. Exact retries do not repeat cognition, cancellation or state mutation. Acknowledgment retries must still match a currently eligible render. Failed transactions consume no sequence.",
+    "Visibility and its admitted sequence commit atomically with registry/turn changes. Cancellation is scoped to the exact turn originating from this approved browser.",
+    "Committed Store notifications wake delivery; notifications carry no content or authority. PostgreSQL notification loss closes the room. Every send revalidates its durable action and current connection.",
+    "The browser validates runtime identity and runtimeEpoch from bootstrap, then deduplicates render stamps. Same-action repair retains its transport stamp. A new coordinator requires new bootstrap; old epochs never resume silently.",
+    "RPC receipt is never render completion. The browser separately sends sequenced acknowledge after its DOM commits; exact Store acknowledgment gates the stock Pin outcome sentence.",
+    "Explicit peer loss invalidates that approval and cancels current work. Runtime reconnect is permanently fenced. Connection expiry and empty-room cleanup bound idle resources; dispatch deadlines drive render repair.",
+    "Center HTTP polling remains an intermediate client path until the Center room implementation replaces it. This contract is not a production or paper-conformance claim."
+  ],
+  "configuration": ["COSMOS_RTC_URL", "COSMOS_RTC_PUBLIC_URL", "COSMOS_RTC_API_KEY", "COSMOS_RTC_API_SECRET"],
+  "limitations": ["Coordination and informational cards only", "Center, native clients, media permissions, self-hosted Compose deployment and physical acceptance are pending", "Shared-room approval does not establish physical privacy or actor identity"]
+}

@@ -246,9 +246,12 @@ required or that the stock SDK alone violates the paper.
    The published crates match this revision's source. The adapter uses ordinary
    participants, bounded attributed RPCs, no automatic media subscriptions and
    coordination-only tokens. It has a localhost integration test for real RPC
-   delivery, payload bounds and disconnect state. Application room admission,
-   the Center room client and media routing remain separate implementation
-   gates; this adapter alone does not replace the current HTTP browser path.
+   delivery, payload bounds and disconnect state. The Cosmos application now
+   exposes authenticated browser room bootstrap, sequenced input/control RPCs
+   and targeted visual delivery through the
+   [room contract](contracts/ambiance-room.json). The Center room client,
+   deployment configuration and media routing remain separate gates; Center
+   still uses its interim HTTP path until that client is replaced.
    `cosmos/native/webrtc.json` pins native bytes; acquisition verifies the
    archive and every extracted compiler input. The patched upstream build helper
    cannot download native code. Linux uses Clang 21/lld with target GLib headers
@@ -276,8 +279,24 @@ required or that the stock SDK alone violates the paper.
    changed retries and old sequences fail. At most 32 digested admission records
    remain for five minutes, and expiry never resets the sequence high-water
    mark. Rebooting into a new epoch requires renewed owner connection approval.
-   This is input admission only; the application room adapter must also bind
-   acknowledgments, cancellation and state messages to their current session.
+   The same durable cursor now covers acknowledgments, cancellation and state
+   messages. Visibility and its sequence commit with the registry transition;
+   an old cancellation cannot affect a replacement turn. Exact acknowledgment
+   retries still require a current eligible render. PostgreSQL notifications
+   wake dispatch after commit, including changes from another Store instance;
+   notification loss closes the room. Runtime RPC receipt remains separate from
+   the committed DOM acknowledgment. Actual localhost tests cover admission
+   during a paused model, replay, caller attribution, disconnect cancellation,
+   render receipt versus acknowledgment and hide-to-clear delivery. Isolated
+   PostgreSQL tests cover rollback, competing workers, reopen and notification
+   delivery; these are backend tests, not real Center or Pin acceptance.
+   LiveKit 1.13.6 batches non-media participant updates for up to three seconds
+   ([server source](https://github.com/livekit/livekit/blob/v1.13.6/pkg/rtc/room.go)).
+   Admission therefore waits for the actual peer session; a runtime reconnect
+   is permanently fenced. There is one connected coordinator per principal,
+   not an active-active room deployment. The new endpoint uses `COSMOS_RTC_URL`,
+   `COSMOS_RTC_PUBLIC_URL`, `COSMOS_RTC_API_KEY` and `COSMOS_RTC_API_SECRET`;
+   the signing secret remains in Cosmos. Production Compose wiring is pending.
 3. **Cosmos realtime cognition.** Do not automatically forward
    `RoomSessionTransport`, control events or history. Manual `RoomIO` with a
    no-room `AgentSession.start` is a public-composition candidate requiring
@@ -324,6 +343,77 @@ required or that the stock SDK alone violates the paper.
    Hardware absence does not block an otherwise verified server deployment;
    incomplete backend behavior still does. Unresolved paper conflicts and
    missing physical evidence explicitly block a 100% conformance claim.
+
+### Companion device targets — planned
+
+The owner's target devices are a MacBook Pro M5 Pro, an Omarchy Linux PC, a
+Pixel 10 Pro and an NVIDIA Shield 4K TV Pro, alongside the Ai Pin. Build thin
+macOS, Linux, Android and Android TV clients against the same runtime contract.
+Each device needs separate owner approval and honest local permission,
+availability and playback reporting. Installable packages and actual device
+checks remain deliverables; the browser and synthetic clients do not establish
+native support. For Omarchy, verify the installed compositor and its microphone
+and screen-sharing permission paths before selecting the native capture APIs.
+
+### Shield playback context — planned
+
+The NVIDIA Shield 4K TV Pro is a planned Android thin client, not a verified
+release artifact. [NVIDIA lists Android TV 11](https://www.nvidia.com/en-us/shield/shield-tv-pro/)
+for Shield TV Pro; the installed firmware and all five app versions still need
+device verification. The intended flow is owner approval in Center, explicit
+local media access on Shield, then questions through the Ai Pin using eligible,
+fresh playback context in Cosmos. The Shield holds no model credentials.
+
+Start with read-only [Android media sessions](https://developer.android.com/reference/android/media/session/MediaSessionManager#getActiveSessions(android.content.ComponentName)).
+Cross-app access requires an enabled notification listener; the alternative
+`MEDIA_CONTENT_CONTROL` permission is [signature/privileged](https://android.googlesource.com/platform/frameworks/base/+/refs/heads/android11-release/core/res/AndroidManifest.xml).
+Verify an owner-mediated permission flow on NVIDIA's firmware: the upstream
+[Android 11 TV settings manifest](https://android.googlesource.com/platform/packages/apps/TvSettings/+/refs/heads/android11-release/Settings/AndroidManifest.xml)
+does not declare the notification-listener settings action. If access cannot be
+granted, report unavailable; do not assume a phone's settings screen exists or
+silently require root. Notification access must not export unrelated notifications.
+
+Use allowlisted app packages and [MediaController callbacks](https://developer.android.com/reference/android/media/session/MediaController)
+to report only published title, media ID, artist, duration and playback state.
+Episode/season fields require actual app evidence; absent metadata stays unknown.
+[Position, speed and last-update time](https://developer.android.com/reference/android/media/session/PlaybackState)
+permit a labelled playback estimate, not proof of the current video frame.
+Bind observations to the approved device, incarnation, boot epoch, sequence and
+media session, with bounded age and payloads. Clear current context on session
+loss, permission revocation or disconnect; preserve missing, stale and ambiguous
+states. A priority-ordered session list does not prove which app is on screen.
+
+| App | Evidence and implementation boundary |
+| --- | --- |
+| YouTube | Probe the installed TV app's media-session fields. The [IFrame API](https://developers.google.com/youtube/iframe_api_reference) observes its own embedded player, not the separate TV app. Official [caption download](https://developers.google.com/youtube/v3/docs/captions/download) requires permission to edit the video; arbitrary transcripts are not assumed available. |
+| Stremio | Probe the built-in player and each selected external player separately. Its [add-on protocol](https://github.com/Stremio/stremio-addon-sdk/blob/master/docs/protocol.md) supplies catalog, metadata, streams and subtitles, not a live playback-state subscription. [Season/episode metadata](https://github.com/Stremio/stremio-addon-sdk/blob/master/docs/api/responses/meta.md) alone does not establish what is playing. |
+| TV2 Play | No supported cross-app playback contract has been verified. Test published channel/title, episode, live/on-demand state and position; expose only observed fields. |
+| Netflix | No supported cross-app playback contract has been verified. Test published title/episode, state and position; do not infer access to video frames or dialogue. |
+| Spotify | Its OAuth [playback-state API](https://developer.spotify.com/documentation/web-api/reference/get-information-about-the-users-current-playback) exposes track/episode, progress and active device. Account playback is not proof of Shield playback; device binding, app access and applicable terms must be verified. |
+
+[Spotify's policy](https://developer.spotify.com/policy) prohibits ingesting Spotify
+Content into AI models and voice-assistant control integrations; its
+[terms include metadata in Spotify Content](https://developer.spotify.com/terms).
+Keep Spotify-derived data outside model input, retrieval and analysis. A
+deterministic status display with attribution/link-back is a candidate requiring
+implementation review, not an established permission for Ai Pin voice integration.
+Android metadata is not an alternative route around the same restrictions.
+
+Title-based questions can use verified, permitted context and identified sources;
+"who is in this scene?" requires separately available scene evidence.
+[Screen capture requires user consent](https://developer.android.com/media/grow/media-projection),
+[secure windows restrict capture](https://developer.android.com/security/fraud-prevention/activities),
+and [audio capture depends on the playing app's policy](https://developer.android.com/media/platform/av-capture).
+Do not bypass protected output or assume a transcript from a title and timestamp.
+Cosmos joins this shared-room context with the request's provenance; an approved
+Shield does not establish occupancy, speaker identity or private-memory access.
+
+Acceptance requires real Shield checks of all five apps: grant/revoke access,
+pause/seek, ads, live streams, episode changes, competing sessions, external
+players, sleep/reboot and network loss. Any later playback controls need the
+runtime's action authorization and observed state changes; sending a command
+does not prove success. Client build tests and mock metadata cannot replace
+these checks or final Ai Pin microphone/playback acceptance.
 
 ## Deploy Cosmos
 

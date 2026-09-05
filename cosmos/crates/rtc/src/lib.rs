@@ -5,7 +5,7 @@ use livekit::{
     rpc::{PerformRpcData, RpcError},
 };
 use livekit_token::{AccessToken, VideoGrants};
-use std::{sync::Arc, time::Duration};
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use tokio::sync::{mpsc, oneshot, watch};
 
 pub const MAX_PAYLOAD: usize = 12 * 1024;
@@ -38,6 +38,7 @@ pub struct Session {
     room: Arc<Room>,
     events: tokio::task::JoinHandle<()>,
     connected: watch::Sender<bool>,
+    peers: watch::Receiver<BTreeMap<String, String>>,
 }
 
 impl Session {
@@ -56,6 +57,12 @@ impl Session {
                 .map_err(|_| Error::Unavailable)?
                 .map_err(|_| Error::Unavailable)?;
         let room = Arc::new(room);
+        let initial_peers = room
+            .remote_participants()
+            .iter()
+            .map(|(identity, participant)| (identity.to_string(), participant.sid().to_string()))
+            .collect::<BTreeMap<_, _>>();
+        let (peers, peer_state) = watch::channel(initial_peers);
         let (inbox, receiver) = mpsc::channel::<Invocation>(32);
         let (state, connected) = watch::channel(true);
         let alive = connected.clone();
@@ -95,8 +102,28 @@ impl Session {
         let connection_state = state.clone();
         let events = tokio::spawn(async move {
             while let Some(event) = events.recv().await {
-                if let RoomEvent::ConnectionStateChanged(connection) = event {
-                    state.send_replace(connection == ConnectionState::Connected);
+                match event {
+                    RoomEvent::ConnectionStateChanged(connection) => {
+                        // A disconnected session is fenced permanently. An SDK
+                        // reconnect must not silently revive application work.
+                        if connection != ConnectionState::Connected {
+                            state.send_replace(false);
+                        }
+                    }
+                    RoomEvent::ParticipantConnected(participant) => {
+                        peers.send_modify(|current| {
+                            current.insert(
+                                participant.identity().to_string(),
+                                participant.sid().to_string(),
+                            );
+                        });
+                    }
+                    RoomEvent::ParticipantDisconnected(participant) => {
+                        peers.send_modify(|current| {
+                            current.remove(&participant.identity().to_string());
+                        });
+                    }
+                    _ => {}
                 }
             }
             state.send_replace(false);
@@ -106,6 +133,7 @@ impl Session {
                 room,
                 events,
                 connected: connection_state,
+                peers: peer_state,
             },
             receiver,
         ))
@@ -113,6 +141,12 @@ impl Session {
 
     pub fn connected(&self) -> watch::Receiver<bool> {
         self.connected.subscribe()
+    }
+
+    /// Server-observed presence only, never enrollment or routing authority.
+    /// Session IDs distinguish a replacement connection even when updates coalesce.
+    pub fn peers(&self) -> watch::Receiver<BTreeMap<String, String>> {
+        self.peers.clone()
     }
 
     /// A transport response is not a committed render outcome. The runtime
@@ -144,6 +178,10 @@ impl Session {
     }
 
     pub async fn close(self) -> Result<(), Error> {
+        self.shutdown().await
+    }
+
+    pub async fn shutdown(&self) -> Result<(), Error> {
         self.connected.send_replace(false);
         self.room.close().await.map_err(|_| Error::Unavailable)
     }

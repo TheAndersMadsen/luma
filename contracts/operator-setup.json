@@ -1306,6 +1306,30 @@
       "home": "runtime.env"
     },
     {
+      "name": "COSMOS_RTC_URL",
+      "group": "production",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
+      "name": "COSMOS_RTC_PUBLIC_URL",
+      "group": "production",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
+      "name": "COSMOS_RTC_API_KEY",
+      "group": "production",
+      "sensitivity": "identity",
+      "home": "runtime.env"
+    },
+    {
+      "name": "COSMOS_RTC_API_SECRET",
+      "group": "production",
+      "sensitivity": "secret",
+      "home": "runtime.env"
+    },
+    {
       "name": "COSMOS_ADMIN_TOKEN",
       "group": "production",
       "sensitivity": "secret",

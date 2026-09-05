@@ -546,6 +546,7 @@ async fn persist_runtime(
 ) -> Result<(), crate::ambiance::RuntimeError> {
     use crate::ambiance::{RuntimeError, ledger::LedgerEvent};
     let (mut sequence, mut previous) = head;
+    let changed = !events.is_empty();
     let encoded = serde_json::to_string(state).map_err(|_| RuntimeError::Unavailable)?;
     sqlx::query("INSERT INTO cosmos_ambiance_runtime (principal,state,next_maintenance_ms) VALUES ($1,$2::jsonb,$3) ON CONFLICT(principal) DO UPDATE SET state=EXCLUDED.state,next_maintenance_ms=EXCLUDED.next_maintenance_ms")
         .bind(principal).bind(encoded).bind(due).execute(&mut **tx).await.map_err(|_| RuntimeError::Unavailable)?;
@@ -564,11 +565,39 @@ async fn persist_runtime(
         .execute(&mut **tx)
         .await
         .map_err(|_| RuntimeError::Unavailable)?;
+    if changed {
+        sqlx::query("SELECT pg_notify($1,'')")
+            .bind(crate::ambiance::changes::channel(principal))
+            .execute(&mut **tx)
+            .await
+            .map_err(|_| RuntimeError::Unavailable)?;
+    }
     Ok(())
 }
 
 #[tonic::async_trait]
 impl Store for PostgresStore {
+    async fn runtime_changes(
+        &self,
+        principal: &str,
+    ) -> Result<crate::ambiance::changes::Changes, crate::ambiance::RuntimeError> {
+        // A dedicated listener pool does not occupy the eight transactional
+        // connections; one listener belongs to each bounded active room.
+        let mut listener = sqlx::postgres::PgListener::connect_with(
+            &sqlx::postgres::PgPoolOptions::new()
+                .max_connections(1)
+                .connect_lazy_with((*self.pool.connect_options()).clone()),
+        )
+        .await
+        .map_err(|_| crate::ambiance::RuntimeError::Unavailable)?;
+        listener
+            .listen(&crate::ambiance::changes::channel(principal))
+            .await
+            .map_err(|_| crate::ambiance::RuntimeError::Unavailable)?;
+        Ok(crate::ambiance::changes::Changes::Postgres(Box::new(
+            listener,
+        )))
+    }
     async fn runtime_sweep(&self, limit: usize) -> Result<usize, crate::ambiance::RuntimeError> {
         use crate::ambiance::{RuntimeError, RuntimeOperation};
         // A bounded indexed query discovers due rows from earlier processes.
@@ -608,13 +637,48 @@ impl Store for PostgresStore {
                 .fetch_one(&mut *tx)
                 .await
                 .map_err(unavailable)?;
-        let records = runtime_records(&mut tx, principal).await?;
+        let mut records = runtime_records(&mut tx, principal).await?;
         let mut state = runtime_state(&mut tx, principal).await?;
         let mut events = state.reconcile(&records, now);
         let mut working = state.clone();
-        let result = match working.apply(principal, &records, operation, now) {
-            Ok((result, appended)) => {
+        let mut working_records = records.clone();
+        let mut ledger_head: (i64, String) = (head.get("sequence"), head.get("hash"));
+        let result = match working.apply_with_registry(
+            principal,
+            &mut working_records,
+            operation,
+            now,
+        ) {
+            Ok(crate::ambiance::RuntimeTransition {
+                result,
+                events: appended,
+                surface: changed,
+            }) => {
                 state = working;
+                records = working_records;
+                if let Some((record, kind)) = changed {
+                    ledger_head.0 = ledger_head
+                        .0
+                        .checked_add(1)
+                        .ok_or(RuntimeError::Unavailable)?;
+                    let entry = crate::surface_registry::event(
+                        principal,
+                        ledger_head.0 as u64,
+                        ledger_head.1,
+                        kind,
+                        &record,
+                        now,
+                    );
+                    ledger_head.1 = entry.hash()?;
+                    let encoded_record =
+                        serde_json::to_string(&record).map_err(|_| RuntimeError::Unavailable)?;
+                    let encoded_event =
+                        serde_json::to_string(&entry).map_err(|_| RuntimeError::Unavailable)?;
+                    sqlx::query("UPDATE cosmos_surface_registry SET record=$3::jsonb WHERE principal=$1 AND surface_id=$2")
+                        .bind(principal).bind(record.surface_id).bind(encoded_record).execute(&mut *tx).await.map_err(unavailable)?;
+                    sqlx::query("INSERT INTO cosmos_surface_event(principal,sequence,hash,event) VALUES($1,$2,$3,$4::jsonb)")
+                        .bind(principal).bind(ledger_head.0).bind(&ledger_head.1).bind(encoded_event).execute(&mut *tx).await.map_err(unavailable)?;
+                }
                 events.extend(appended);
                 Ok(result)
             }
@@ -625,7 +689,7 @@ impl Store for PostgresStore {
             principal,
             &state,
             events,
-            (head.get("sequence"), head.get("hash")),
+            ledger_head,
             now,
             state.next_maintenance_ms(&records),
         )
@@ -777,6 +841,13 @@ impl Store for PostgresStore {
         )
         .await
         .map_err(|_| RegistryError::Unavailable)?;
+        if kind.is_some() {
+            sqlx::query("SELECT pg_notify($1,'')")
+                .bind(crate::ambiance::changes::channel(principal))
+                .execute(&mut *tx)
+                .await
+                .map_err(unavailable)?;
+        }
         tx.commit().await.map_err(unavailable)?;
         Ok(record.view(now))
     }
@@ -1907,6 +1978,124 @@ mod tests {
         .await
         .unwrap();
         assert!(due > 0);
+    }
+
+    #[tokio::test]
+    async fn ambiance_postgres_browser_state_and_sequence_commit_or_rollback_together() {
+        use crate::ambiance::*;
+        use crate::surface_registry::{Mutation, hash};
+        let Some(first) = store().await else {
+            eprintln!("SKIPPED: isolated COSMOS_TEST_DATABASE_URL required");
+            return;
+        };
+        let principal = format!("U:rtc-state-pg-{}", uuid::Uuid::new_v4());
+        let proof = BrowserProof {
+            surface_id: uuid::Uuid::new_v4(),
+            incarnation: uuid::Uuid::new_v4(),
+            token_hash: hash(b"synthetic capability"),
+        };
+        first
+            .mutate_surface(
+                &principal,
+                proof.surface_id,
+                Mutation::Approve {
+                    token_hash: proof.token_hash.clone(),
+                    incarnation: proof.incarnation,
+                },
+            )
+            .await
+            .unwrap();
+        let stamp = InputStamp {
+            epoch: uuid::Uuid::new_v4(),
+            sequence: 1,
+            instance_id: uuid::Uuid::new_v4(),
+        };
+        first
+            .runtime(
+                &principal,
+                RuntimeOperation::OpenBrowser {
+                    connection: proof.clone(),
+                    epoch: stamp.epoch,
+                },
+            )
+            .await
+            .unwrap();
+        let mut changes = first.runtime_changes(&principal).await.unwrap();
+        let head: i64 =
+            sqlx::query_scalar("SELECT sequence FROM cosmos_surface_head WHERE principal=$1")
+                .bind(&principal)
+                .fetch_one(&first.pool)
+                .await
+                .unwrap();
+        sqlx::query("INSERT INTO cosmos_surface_event(principal,sequence,hash,event) VALUES($1,$2,'state-obstruction','{}'::jsonb)").bind(&principal).bind(head+1).execute(&first.pool).await.unwrap();
+        let visible = || RuntimeOperation::BrowserControl {
+            connection: proof.clone(),
+            stamp: stamp.clone(),
+            control: BrowserControl::State { visible: true },
+        };
+        assert!(matches!(
+            first.runtime(&principal, visible()).await,
+            Err(RuntimeError::Unavailable)
+        ));
+        let surface = first
+            .surface(&principal, proof.surface_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!surface.visible);
+        assert_eq!(surface.sequence, 0);
+        let encoded: String = sqlx::query_scalar(
+            "SELECT state::text FROM cosmos_ambiance_runtime WHERE principal=$1",
+        )
+        .bind(&principal)
+        .fetch_one(&first.pool)
+        .await
+        .unwrap();
+        let state: RuntimeState = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(state.ingress[&proof.surface_id].high_water, 0);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(50), changes.changed())
+                .await
+                .is_err(),
+            "rollback cannot publish a committed change"
+        );
+        sqlx::query("DELETE FROM cosmos_surface_event WHERE principal=$1 AND sequence=$2 AND hash='state-obstruction'").bind(&principal).bind(head+1).execute(&first.pool).await.unwrap();
+        let second = store().await.unwrap();
+        let (a, b) = tokio::join!(
+            first.runtime(&principal, visible()),
+            second.runtime(&principal, visible())
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(1), changes.changed())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            (a.unwrap(), b.unwrap()),
+            (
+                RuntimeResult::ControlAccepted { duplicate: false },
+                RuntimeResult::ControlAccepted { duplicate: true }
+            ) | (
+                RuntimeResult::ControlAccepted { duplicate: true },
+                RuntimeResult::ControlAccepted { duplicate: false }
+            )
+        ));
+        let reopened = store().await.unwrap();
+        assert!(matches!(
+            reopened.runtime(&principal, visible()).await.unwrap(),
+            RuntimeResult::ControlAccepted { duplicate: true }
+        ));
+        let surface = reopened
+            .surface(&principal, proof.surface_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(surface.visible);
+        assert_eq!(surface.sequence, 1);
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM cosmos_surface_event WHERE principal=$1 AND event->'data'->>'kind'='control_admitted'").bind(&principal).fetch_one(&first.pool).await.unwrap();
+        assert_eq!(
+            count, 1,
+            "the actual database must contain one durable control admission"
+        );
     }
 
     #[tokio::test]

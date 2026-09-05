@@ -7,6 +7,7 @@ pub mod ambiance;
 mod assistant;
 mod auth;
 mod backends;
+mod browser_rooms;
 mod browser_runtime_api;
 mod capture_api;
 mod capture_ranking;

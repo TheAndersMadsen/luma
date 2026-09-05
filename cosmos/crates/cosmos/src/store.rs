@@ -660,6 +660,10 @@ pub const INGEST_CHUNK: usize = 256;
 
 #[tonic::async_trait]
 pub trait Store: Send + Sync + 'static {
+    async fn runtime_changes(
+        &self,
+        principal: &str,
+    ) -> Result<crate::ambiance::changes::Changes, crate::ambiance::RuntimeError>;
     async fn runtime_sweep(&self, limit: usize) -> Result<usize, crate::ambiance::RuntimeError>;
     async fn runtime(
         &self,
@@ -1111,6 +1115,7 @@ pub struct MemoryStore {
     #[cfg(test)]
     pub(crate) assistant_private_accesses: std::sync::atomic::AtomicUsize,
     surfaces: Mutex<crate::surface_registry::RegistryBook>,
+    runtime_signals: crate::ambiance::changes::Signals,
     books: Mutex<HashMap<String, ContactBook>>,
     captures: Mutex<HashMap<String, MemoryBook>>,
     /// `principal -> {payload kind -> opaque bytes}`. A `BTreeMap` so the
@@ -1425,6 +1430,15 @@ pub fn build_memory(new: NewMemory, numeric_id: i64) -> MemoryRecord {
 
 #[tonic::async_trait]
 impl Store for MemoryStore {
+    async fn runtime_changes(
+        &self,
+        principal: &str,
+    ) -> Result<crate::ambiance::changes::Changes, crate::ambiance::RuntimeError> {
+        if self.state_path.is_some() {
+            return Err(crate::ambiance::RuntimeError::Unavailable);
+        }
+        Ok(self.runtime_signals.subscribe(principal))
+    }
     async fn runtime_sweep(&self, limit: usize) -> Result<usize, crate::ambiance::RuntimeError> {
         use crate::ambiance::{RuntimeError, RuntimeOperation};
         if self.state_path.is_some() {
@@ -1461,11 +1475,32 @@ impl Store for MemoryStore {
             .map_err(|_| RuntimeError::Unavailable)?;
         let mut registry = guard.get(principal).cloned().unwrap_or_default();
         let now = crate::surface_registry::now_ms();
+        let previous_sequence = registry.events.len();
         let mut events = registry.runtime.reconcile(&registry.records, now);
         let mut working = registry.runtime.clone();
-        let result = match working.apply(principal, &registry.records, operation, now) {
-            Ok((result, appended)) => {
+        let mut records = registry.records.clone();
+        let result = match working.apply_with_registry(principal, &mut records, operation, now) {
+            Ok(crate::ambiance::RuntimeTransition {
+                result,
+                events: appended,
+                surface: changed,
+            }) => {
                 registry.runtime = working;
+                registry.records = records;
+                if let Some((record, kind)) = changed {
+                    let sequence = registry.events.len() as u64 + 1;
+                    let previous = registry
+                        .events
+                        .last()
+                        .map(|e| e.hash())
+                        .transpose()?
+                        .unwrap_or_default();
+                    let entry = crate::surface_registry::event(
+                        principal, sequence, previous, kind, &record, now,
+                    );
+                    entry.hash()?;
+                    registry.events.push(LedgerEvent::Enrollment(entry));
+                }
                 events.extend(appended);
                 Ok(result)
             }
@@ -1484,7 +1519,11 @@ impl Store for MemoryStore {
             registry.events.push(entry);
         }
         registry.maintenance_ms = registry.runtime.next_maintenance_ms(&registry.records);
+        let changed = registry.events.len() != previous_sequence;
         guard.publish(principal.to_owned(), registry);
+        if changed {
+            self.runtime_signals.notify(principal);
+        }
         result
     }
     async fn surface(
@@ -1587,6 +1626,9 @@ impl Store for MemoryStore {
         }
         registry.maintenance_ms = registry.runtime.next_maintenance_ms(&registry.records);
         guard.publish(principal.to_owned(), registry);
+        if kind.is_some() {
+            self.runtime_signals.notify(principal);
+        }
         Ok(record.view(now))
     }
 

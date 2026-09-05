@@ -74,6 +74,237 @@ fn input(proof: &BrowserProof, stamp: &InputStamp, text: &str) -> RuntimeOperati
 }
 
 #[test]
+fn ambiance_ingress_control_replay_cannot_cancel_a_replacement_or_change_visibility() {
+    let (mut state, mut records, proof, stamp) = fixture();
+    let (RuntimeResult::Begun(first), _) = state
+        .apply("U:fixture", &records, input(&proof, &stamp, "first"), 103)
+        .unwrap()
+    else {
+        panic!()
+    };
+    let cancel = || RuntimeOperation::BrowserControl {
+        connection: proof.clone(),
+        stamp: InputStamp {
+            sequence: 2,
+            instance_id: first.turn_id,
+            ..stamp.clone()
+        },
+        control: BrowserControl::Cancel {
+            turn_id: first.turn_id,
+            generation: first.generation,
+        },
+    };
+    assert!(matches!(
+        state.apply("U:fixture", &records, cancel(), 104).unwrap().0,
+        RuntimeResult::ControlAccepted { duplicate: false }
+    ));
+    let next = InputStamp {
+        sequence: 3,
+        instance_id: Uuid::new_v4(),
+        ..stamp.clone()
+    };
+    state
+        .apply("U:fixture", &records, input(&proof, &next, "second"), 105)
+        .unwrap();
+    assert!(matches!(
+        state.apply("U:fixture", &records, cancel(), 106).unwrap().0,
+        RuntimeResult::ControlAccepted { duplicate: true }
+    ));
+    assert!(!state.turn.as_ref().unwrap().cancelled);
+    let hide_stamp = InputStamp {
+        sequence: 4,
+        instance_id: Uuid::new_v4(),
+        ..stamp.clone()
+    };
+    let visibility = |stamp: InputStamp, visible| RuntimeOperation::BrowserControl {
+        connection: proof.clone(),
+        stamp,
+        control: BrowserControl::State { visible },
+    };
+    let RuntimeTransition {
+        events,
+        surface: changed,
+        ..
+    } = state
+        .apply_with_registry(
+            "U:fixture",
+            &mut records,
+            visibility(hide_stamp.clone(), false),
+            107,
+        )
+        .unwrap();
+    assert!(changed.is_some());
+    assert!(!records[&proof.surface_id].visible);
+    assert!(state.turn.as_ref().unwrap().cancelled);
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, state::RuntimeData::TurnCancelled { .. }))
+    );
+    assert!(
+        state
+            .apply_with_registry(
+                "U:fixture",
+                &mut records,
+                visibility(hide_stamp.clone(), true),
+                108
+            )
+            .is_err()
+    );
+    let visible_stamp = InputStamp {
+        sequence: 5,
+        instance_id: Uuid::new_v4(),
+        ..stamp.clone()
+    };
+    state
+        .apply_with_registry(
+            "U:fixture",
+            &mut records,
+            visibility(visible_stamp, true),
+            109,
+        )
+        .unwrap();
+    let RuntimeTransition {
+        result,
+        events,
+        surface: changed,
+    } = state
+        .apply_with_registry(
+            "U:fixture",
+            &mut records,
+            visibility(hide_stamp, false),
+            110,
+        )
+        .unwrap();
+    assert!(matches!(
+        result,
+        RuntimeResult::ControlAccepted { duplicate: true }
+    ));
+    assert!(events.is_empty() && changed.is_none());
+    assert!(records[&proof.surface_id].visible);
+    assert_eq!(state.ingress[&proof.surface_id].high_water, 5);
+    assert!(
+        state
+            .apply(
+                "U:fixture",
+                &records,
+                input(
+                    &proof,
+                    &InputStamp {
+                        sequence: 4,
+                        instance_id: Uuid::new_v4(),
+                        ..stamp
+                    },
+                    "reused sequence"
+                ),
+                111
+            )
+            .is_err()
+    );
+}
+
+#[test]
+fn ambiance_ingress_acknowledgment_is_exact_sequenced_and_rechecked_on_retry() {
+    let (mut state, mut records, proof, stamp) = fixture();
+    let (RuntimeResult::Begun(fence), _) = state
+        .apply("U:fixture", &records, input(&proof, &stamp, "display"), 103)
+        .unwrap()
+    else {
+        panic!()
+    };
+    let (RuntimeResult::Proposed(action), _) = state
+        .apply(
+            "U:fixture",
+            &records,
+            RuntimeOperation::Propose {
+                turn_id: fence.turn_id,
+                generation: fence.generation,
+                worker: fence.worker,
+                intent: SemanticIntent::VisualTextCard {
+                    text: "Synthetic card".into(),
+                },
+                privacy: PrivacyClass::Public,
+            },
+            104,
+        )
+        .unwrap()
+    else {
+        panic!()
+    };
+    state
+        .apply(
+            "U:fixture",
+            &records,
+            RuntimeOperation::Poll {
+                connection: proof.clone(),
+            },
+            105,
+        )
+        .unwrap();
+    let acknowledgment = |digest| RuntimeOperation::BrowserControl {
+        connection: proof.clone(),
+        stamp: InputStamp {
+            sequence: 2,
+            instance_id: action.id,
+            ..stamp.clone()
+        },
+        control: BrowserControl::Acknowledge {
+            action_id: action.id,
+            turn_id: action.turn_id,
+            generation: action.generation,
+            channel: action.channel,
+            content_digest: digest,
+        },
+    };
+    assert!(
+        state
+            .apply(
+                "U:fixture",
+                &records,
+                acknowledgment(hash(b"different content")),
+                106
+            )
+            .is_err()
+    );
+    assert_eq!(state.ingress[&proof.surface_id].high_water, 1);
+    assert!(matches!(
+        state
+            .apply(
+                "U:fixture",
+                &records,
+                acknowledgment(action.content_digest.clone()),
+                107
+            )
+            .unwrap()
+            .0,
+        RuntimeResult::ControlAccepted { duplicate: false }
+    ));
+    assert!(matches!(
+        state
+            .apply(
+                "U:fixture",
+                &records,
+                acknowledgment(action.content_digest.clone()),
+                108
+            )
+            .unwrap()
+            .0,
+        RuntimeResult::ControlAccepted { duplicate: true }
+    ));
+    records.get_mut(&proof.surface_id).unwrap().visible = false;
+    assert!(
+        state
+            .apply(
+                "U:fixture",
+                &records,
+                acknowledgment(action.content_digest.clone()),
+                109
+            )
+            .is_err()
+    );
+}
+
+#[test]
 fn ambiance_ingress_reopen_and_late_duplicate_never_replace_the_current_turn() {
     let (mut state, records, proof, stamp) = fixture();
     let (RuntimeResult::Begun(first), events) = state

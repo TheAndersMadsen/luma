@@ -35,6 +35,22 @@
   ],
   "evidence": [
     {
+      "id": "application-room-delivery-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/browser_rooms_tests.rs",
+      "anchor": "async fn browser_room_live_delivery_receipt_is_not_render_ack_and_hide_clears()",
+      "scope": "Defines real local SFU delivery through authenticated room membership and the durable runtime; network receipt stays separate from sequenced render acknowledgment and hide-to-clear behavior.",
+      "limitation": "Synthetic Rust surface and localhost SFU only. Center DOM, deployment, media and physical clients remain outstanding."
+    },
+    {
+      "id": "sequenced-control-postgres-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/store_postgres.rs",
+      "anchor": "async fn ambiance_postgres_browser_state_and_sequence_commit_or_rollback_together()",
+      "scope": "Defines atomic state and sequence admission, transaction rollback, competing pools, reopen and committed delivery notification.",
+      "limitation": "Requires isolated PostgreSQL; does not establish physical visibility, media state or live deployment."
+    },
+    {
       "id": "rtc-attribution-test-definition",
       "kind": "test-definition",
       "path": "cosmos/crates/rtc/tests/room.rs",
@@ -308,7 +324,7 @@
       "requirement": "Spoken and expressive outcome claims require the matching committed runtime outcome.",
       "acceptance": "Require the exact action's acknowledgment, reject stale/unrelated acknowledgments, represent unknown outcomes honestly, and resolve unrestricted-outcome-prose before claiming universal coverage.",
       "status": "partial",
-      "evidence": ["runtime-display-outcome-test-definition", "browser-dom-ack-test-definition"]
+      "evidence": ["runtime-display-outcome-test-definition", "browser-dom-ack-test-definition", "application-room-delivery-test-definition"]
     },
     {
       "id": "invariant-11",
@@ -344,7 +360,7 @@
       "requirement": "Bind each request to authenticated principal, origin, modality, state, environment, device/channel/actor trust, server receipt time, epoch and sequence.",
       "acceptance": "Preserve Pin device identity before account normalization; do not trust device clocks or body-supplied identity, and test replay/freshness plus scoped self-echo rejection.",
       "status": "partial",
-      "evidence": ["authenticated-device-provenance-definition", "stock-transport-provenance-test-definition", "pin-runtime-admission-definition", "rtc-attribution-test-definition", "sequenced-input-test-definition", "sequenced-input-postgres-test-definition"]
+      "evidence": ["authenticated-device-provenance-definition", "stock-transport-provenance-test-definition", "pin-runtime-admission-definition", "rtc-attribution-test-definition", "sequenced-input-test-definition", "sequenced-input-postgres-test-definition", "sequenced-control-postgres-test-definition"]
     },
     {
       "id": "cognition-authority",
@@ -460,6 +476,24 @@
       "sourceSections": ["4.1", "6", "6.1"],
       "requirement": "A native Android companion declares real foreground/background, audio, notification, permission and reconnect behavior through the common surface contract.",
       "acceptance": "Required product deliverable: verify foreground/background permissions, reconnect, protected credential storage and installable packaging on a physical phone; notification delivery is not render acknowledgment or microphone permission. Completion is separate from the first verified Cosmos/Center server rollout.",
+      "status": "pending",
+      "evidence": []
+    },
+    {
+      "id": "linux-surface",
+      "basis": "cosmos-product",
+      "sourceSections": ["4.1", "6.1"],
+      "requirement": "A thin Linux client supports the owner's Omarchy PC through the same approved surface and room contract.",
+      "acceptance": "Verify the installed desktop/compositor, local microphone and screen-sharing permission flow, lock/sleep, playback stop, protected credential storage, reconnect and installable packaging. Browser access does not establish native Linux support.",
+      "status": "pending",
+      "evidence": []
+    },
+    {
+      "id": "shield-playback-context",
+      "basis": "cosmos-product",
+      "sourceSections": ["4.1", "4.2", "4.4", "5.2", "7"],
+      "requirement": "A thin Android TV client on the owner's NVIDIA Shield 4K TV Pro provides permitted, origin-bound playback context for questions through the Ai Pin.",
+      "acceptance": "Verify owner-enabled media access and actual YouTube, Stremio, TV2 Play, Netflix and Spotify behavior. Preserve absent, stale and ambiguous metadata; a title and position are not scene evidence. Respect secure capture and provider restrictions, including Spotify AI-ingestion and voice-assistant limits. Test session changes, ads/live streams, competing players, permissions, sleep and reconnect on hardware.",
       "status": "pending",
       "evidence": []
     },

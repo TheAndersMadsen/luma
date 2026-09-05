@@ -96,6 +96,20 @@ impl AmbianceRuntime {
         stamp: super::InputStamp,
         text: String,
     ) -> Result<RuntimeResult, Status> {
+        self.sequenced_browser_text_started(principal, proof, stamp, text, None)
+            .await
+    }
+
+    /// Signal durable admission independently of model completion. A retried
+    /// envelope returns Duplicate and never takes ownership of the original task.
+    pub(crate) async fn sequenced_browser_text_started(
+        &self,
+        principal: &str,
+        proof: BrowserProof,
+        stamp: super::InputStamp,
+        text: String,
+        started: Option<tokio::sync::oneshot::Sender<TurnFence>>,
+    ) -> Result<RuntimeResult, Status> {
         self.start_maintenance();
         self.text(
             principal,
@@ -104,7 +118,7 @@ impl AmbianceRuntime {
                 stamp,
             },
             text,
-            None,
+            started,
             None,
         )
         .await

@@ -52,6 +52,11 @@ pub enum RuntimeOperation {
         connection: BrowserProof,
         epoch: Uuid,
     },
+    BrowserControl {
+        connection: BrowserProof,
+        stamp: InputStamp,
+        control: BrowserControl,
+    },
     Begin {
         turn_id: Uuid,
         worker: Uuid,
@@ -84,6 +89,16 @@ pub enum RuntimeOperation {
         action_id: Uuid,
         generation: u64,
         worker: Uuid,
+    },
+    DeliveryFailed {
+        connection: BrowserProof,
+        action_id: Uuid,
+        generation: u64,
+    },
+    CheckDelivery {
+        connection: BrowserProof,
+        action_id: Uuid,
+        generation: u64,
     },
     Ack {
         action_id: Uuid,
@@ -119,10 +134,12 @@ pub enum RuntimeOperation {
 #[derive(Clone, Debug)]
 pub enum RuntimeResult {
     ConnectionOpened,
+    ControlAccepted { duplicate: bool },
     Duplicate(TurnFence),
     Begun(TurnFence),
     Proposed(Action),
     Dispatch(Action),
+    DeliveryFailureRecorded,
     Acknowledged(Action),
     Blocked,
     Cancelled,
@@ -134,6 +151,12 @@ pub enum RuntimeResult {
     CognitionCurrent,
     AnalysisStarted,
     AnalysisCompleted,
+}
+
+pub struct RuntimeTransition {
+    pub result: RuntimeResult,
+    pub events: Vec<RuntimeData>,
+    pub surface: Option<(Record, &'static str)>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -220,6 +243,65 @@ pub struct InputCursor {
     pub epoch: Uuid,
     pub high_water: u64,
     pub receipts: Vec<InputReceipt>,
+    #[serde(default)]
+    pub controls: Vec<ControlReceipt>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ControlReceipt {
+    pub sequence: u64,
+    pub instance_id: Uuid,
+    pub digest: String,
+    pub expires_at_ms: i64,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum BrowserControl {
+    Acknowledge {
+        action_id: Uuid,
+        turn_id: Uuid,
+        generation: u64,
+        channel: Channel,
+        content_digest: String,
+    },
+    Cancel {
+        turn_id: Uuid,
+        generation: u64,
+    },
+    State {
+        visible: bool,
+    },
+}
+
+impl InputCursor {
+    fn prune(&mut self, now: i64) {
+        self.receipts.retain(|r| now < r.expires_at_ms);
+        self.controls.retain(|r| now < r.expires_at_ms);
+        while self.receipts.len() + self.controls.len() > 32 {
+            let input = self
+                .receipts
+                .first()
+                .map(|r| r.sequence)
+                .unwrap_or(u64::MAX);
+            let control = self
+                .controls
+                .first()
+                .map(|r| r.sequence)
+                .unwrap_or(u64::MAX);
+            if input < control {
+                self.receipts.remove(0);
+            } else {
+                self.controls.remove(0);
+            }
+        }
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -247,6 +329,13 @@ pub enum RuntimeData {
         sequence: u64,
         instance_id: Uuid,
         request_digest: String,
+    },
+    ControlAdmitted {
+        surface_id: Uuid,
+        epoch: Uuid,
+        sequence: u64,
+        instance_id: Uuid,
+        control_digest: String,
     },
     TurnBegan {
         turn_id: Uuid,
@@ -285,6 +374,10 @@ pub enum RuntimeData {
         content_digest: String,
         deadline_ms: i64,
         attempt: u8,
+    },
+    DeliveryFailed {
+        action_id: Uuid,
+        generation: u64,
     },
     TurnCancelled {
         turn_id: Uuid,
@@ -356,6 +449,50 @@ pub fn browser_record<'a>(
     Ok(record)
 }
 impl RuntimeState {
+    /// Store transactions apply runtime admission and visibility together. A
+    /// failed registry transition must discard this working copy as well.
+    pub fn apply_with_registry(
+        &mut self,
+        principal: &str,
+        records: &mut BTreeMap<Uuid, Record>,
+        operation: RuntimeOperation,
+        now: i64,
+    ) -> Result<RuntimeTransition, RuntimeError> {
+        let mutation = match &operation {
+            RuntimeOperation::BrowserControl {
+                connection,
+                stamp,
+                control: BrowserControl::State { visible },
+            } => Some((
+                connection.surface_id,
+                crate::surface_registry::Mutation::State {
+                    token_hash: connection.token_hash.clone(),
+                    incarnation: connection.incarnation,
+                    sequence: stamp.sequence,
+                    visible: *visible,
+                },
+            )),
+            _ => None,
+        };
+        let (result, mut events) = self.apply(principal, records, operation, now)?;
+        let mut changed = None;
+        if matches!(result, RuntimeResult::ControlAccepted { duplicate: false })
+            && let Some((id, mutation)) = mutation
+        {
+            let (record, kind) =
+                crate::surface_registry::transition(records.get(&id), 0, id, &mutation, now)
+                    .map_err(|_| RuntimeError::Stale)?;
+            records.insert(id, record.clone());
+            changed = kind.map(|kind| (record, kind));
+            events.extend(self.reconcile(records, now));
+        }
+        Ok(RuntimeTransition {
+            result,
+            events,
+            surface: changed,
+        })
+    }
+
     /// Due-time projection for the indexed maintenance queue. Policy remains
     /// in reconcile; this only schedules the next authoritative recheck.
     pub fn next_maintenance_ms(&self, records: &BTreeMap<Uuid, Record>) -> i64 {
@@ -671,6 +808,7 @@ impl RuntimeState {
                             epoch,
                             high_water: 0,
                             receipts: Vec::new(),
+                            controls: Vec::new(),
                         },
                     );
                     events.push(RuntimeData::BrowserEpochOpened {
@@ -680,6 +818,134 @@ impl RuntimeState {
                     });
                 }
                 RuntimeResult::ConnectionOpened
+            }
+            RuntimeOperation::BrowserControl {
+                connection,
+                stamp,
+                control,
+            } => {
+                browser_record(records, &connection, now)?;
+                if stamp.sequence == 0
+                    || stamp.sequence > 9_007_199_254_740_991
+                    || stamp.instance_id.is_nil()
+                {
+                    return Err(RuntimeError::InvalidRequest);
+                }
+                let cursor = self
+                    .ingress
+                    .get(&connection.surface_id)
+                    .filter(|c| c.incarnation == connection.incarnation && c.epoch == stamp.epoch)
+                    .ok_or(RuntimeError::Stale)?;
+                let digest = crate::surface_registry::hash(
+                    &serde_json::to_vec(&control).map_err(|_| RuntimeError::InvalidRequest)?,
+                );
+                let duplicate = if let Some(receipt) = cursor
+                    .controls
+                    .iter()
+                    .find(|r| r.sequence == stamp.sequence)
+                {
+                    if receipt.instance_id != stamp.instance_id
+                        || receipt.digest != digest
+                        || now >= receipt.expires_at_ms
+                    {
+                        return Err(RuntimeError::Stale);
+                    }
+                    true
+                } else {
+                    if stamp.sequence <= cursor.high_water {
+                        return Err(RuntimeError::Stale);
+                    }
+                    false
+                };
+                match control {
+                    BrowserControl::Acknowledge {
+                        action_id,
+                        turn_id,
+                        generation,
+                        channel,
+                        content_digest,
+                    } => {
+                        if stamp.instance_id != action_id
+                            || generation == 0
+                            || generation > 9_007_199_254_740_991
+                            || !digest_valid(&content_digest)
+                        {
+                            return Err(RuntimeError::InvalidRequest);
+                        }
+                        // Even an exact acknowledgment retry must refer to a
+                        // currently eligible render, never a hidden old card.
+                        let (_, appended) = self.apply(
+                            principal,
+                            records,
+                            RuntimeOperation::Ack {
+                                action_id,
+                                turn_id,
+                                generation,
+                                connection: connection.clone(),
+                                channel,
+                                content_digest,
+                            },
+                            now,
+                        )?;
+                        events.extend(appended);
+                    }
+                    BrowserControl::Cancel {
+                        turn_id,
+                        generation,
+                    } => {
+                        if stamp.instance_id != turn_id
+                            || generation == 0
+                            || generation > 9_007_199_254_740_991
+                        {
+                            return Err(RuntimeError::InvalidRequest);
+                        }
+                        if !duplicate {
+                            let turn = self
+                                .turn
+                                .as_ref()
+                                .filter(|t| {
+                                    t.fence.turn_id == turn_id
+                                        && t.fence.generation == generation
+                                        && t.fence.origin_surface == connection.surface_id
+                                        && t.origin_incarnation == connection.incarnation
+                                })
+                                .ok_or(RuntimeError::Stale)?;
+                            let (_, appended) = self.apply(
+                                principal,
+                                records,
+                                RuntimeOperation::Cancel {
+                                    turn_id,
+                                    generation,
+                                    worker: turn.fence.worker,
+                                },
+                                now,
+                            )?;
+                            events.extend(appended);
+                        }
+                    }
+                    // apply_with_registry applies the checked mutation in the
+                    // same Store transaction after this sequence is admitted.
+                    BrowserControl::State { .. } => {}
+                }
+                if !duplicate {
+                    let cursor = self.ingress.get_mut(&connection.surface_id).unwrap();
+                    cursor.high_water = stamp.sequence;
+                    cursor.controls.push(ControlReceipt {
+                        sequence: stamp.sequence,
+                        instance_id: stamp.instance_id,
+                        digest: digest.clone(),
+                        expires_at_ms: now.checked_add(300_000).ok_or(RuntimeError::Unavailable)?,
+                    });
+                    cursor.prune(now);
+                    events.push(RuntimeData::ControlAdmitted {
+                        surface_id: connection.surface_id,
+                        epoch: stamp.epoch,
+                        sequence: stamp.sequence,
+                        instance_id: stamp.instance_id,
+                        control_digest: digest,
+                    });
+                }
+                RuntimeResult::ControlAccepted { duplicate }
             }
             RuntimeOperation::Begin {
                 turn_id,
@@ -785,16 +1051,13 @@ impl RuntimeState {
                 if let OriginProof::SequencedBrowser { connection, stamp } = &origin {
                     let cursor = self.ingress.get_mut(&connection.surface_id).unwrap();
                     cursor.high_water = stamp.sequence;
-                    cursor.receipts.retain(|r| now < r.expires_at_ms);
-                    if cursor.receipts.len() >= 32 {
-                        cursor.receipts.remove(0);
-                    }
                     cursor.receipts.push(InputReceipt {
                         sequence: stamp.sequence,
                         digest: request_digest.clone(),
                         fence: fence.clone(),
                         expires_at_ms: now.checked_add(300_000).ok_or(RuntimeError::Unavailable)?,
                     });
+                    cursor.prune(now);
                     events.push(RuntimeData::InputAdmitted {
                         surface_id: connection.surface_id,
                         epoch: stamp.epoch,
@@ -1002,6 +1265,53 @@ impl RuntimeState {
                 let (action, event) = self.claim(records, action_id, generation, worker, now)?;
                 events.push(event);
                 RuntimeResult::Dispatch(action)
+            }
+            RuntimeOperation::CheckDelivery {
+                connection,
+                action_id,
+                generation,
+            } => {
+                let record = browser_record(records, &connection, now)?;
+                let action = self.actions.get(&action_id).ok_or(RuntimeError::NotFound)?;
+                if action.surface_id != connection.surface_id
+                    || action.incarnation != connection.incarnation
+                    || action.generation != generation
+                    || !record.visible
+                    || !matches!(
+                        action.status,
+                        ActionStatus::Dispatched | ActionStatus::Acknowledged
+                    )
+                {
+                    return Err(RuntimeError::Stale);
+                }
+                RuntimeResult::Dispatch(action.clone())
+            }
+            RuntimeOperation::DeliveryFailed {
+                connection,
+                action_id,
+                generation,
+            } => {
+                browser_record(records, &connection, now)?;
+                let action = self
+                    .actions
+                    .get_mut(&action_id)
+                    .ok_or(RuntimeError::NotFound)?;
+                if action.surface_id != connection.surface_id
+                    || action.incarnation != connection.incarnation
+                    || action.generation != generation
+                {
+                    return Err(RuntimeError::Stale);
+                }
+                // A late failed RPC cannot undo a separately committed DOM ack.
+                if action.status == ActionStatus::Dispatched {
+                    action.deadline_ms = now;
+                    events.push(RuntimeData::DeliveryFailed {
+                        action_id,
+                        generation,
+                    });
+                    events.extend(self.reconcile(records, now));
+                }
+                RuntimeResult::DeliveryFailureRecorded
             }
             RuntimeOperation::Ack {
                 action_id,

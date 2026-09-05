@@ -510,6 +510,7 @@ dependencies = [
  "cosmos-core",
  "cosmos-crypto",
  "cosmos-protocol",
+ "cosmos-rtc",
  "futures-util",
  "h2",
  "image",

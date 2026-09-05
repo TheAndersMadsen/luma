@@ -58,6 +58,34 @@ async fn browser_runtime_api_auth_precedes_body_and_authorized_body_is_bounded()
         StatusCode::PAYLOAD_TOO_LARGE
     );
 }
+
+#[tokio::test]
+async fn browser_runtime_api_room_rejects_unauthenticated_and_unbounded_bootstrap() {
+    let (app, _, id, incarnation, token) = fixture().await;
+    let body = json!({"surfaceId":id,"incarnation":incarnation,"epoch":Uuid::new_v4()});
+    assert_eq!(
+        call(&app, "room", None, Some(&token), body.clone()).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        call(&app, "room", Some(&bearer("owner")), None, body)
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        call(
+            &app,
+            "room",
+            Some(&bearer("owner")),
+            Some(&token),
+            json!({"extra":"x".repeat(9000)})
+        )
+        .await
+        .0,
+        StatusCode::PAYLOAD_TOO_LARGE
+    );
+}
 struct Model;
 #[tonic::async_trait]
 impl ChatModel for Model {

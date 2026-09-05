@@ -25,18 +25,39 @@ use uuid::Uuid;
 struct ApiState {
     runtime: Arc<AmbianceRuntime>,
     verifier: Option<Arc<JwtVerifier>>,
+    rooms: Arc<crate::browser_rooms::BrowserRooms>,
 }
 pub fn router(runtime: Arc<AmbianceRuntime>) -> Router {
     with_verifier(runtime, crate::web_auth::configured_verifier())
 }
 fn with_verifier(runtime: Arc<AmbianceRuntime>, verifier: Option<Arc<JwtVerifier>>) -> Router {
+    with_rooms(
+        runtime,
+        verifier,
+        crate::browser_rooms::Config::configured(),
+    )
+}
+fn with_rooms(
+    runtime: Arc<AmbianceRuntime>,
+    verifier: Option<Arc<JwtVerifier>>,
+    config: Option<crate::browser_rooms::Config>,
+) -> Router {
+    let rooms = Arc::new(crate::browser_rooms::BrowserRooms::new(
+        runtime.clone(),
+        config,
+    ));
     Router::new()
         .route("/runtime-api/v1/browser/status", get(status))
         .route("/runtime-api/v1/browser/poll", post(poll))
         .route("/runtime-api/v1/browser/ack", post(ack))
         .route("/runtime-api/v1/browser/input", post(input))
+        .route("/runtime-api/v1/browser/room", post(room))
         .layer(axum::middleware::map_response(no_store))
-        .with_state(ApiState { runtime, verifier })
+        .with_state(ApiState {
+            runtime,
+            verifier,
+            rooms,
+        })
 }
 async fn no_store(mut response: Response) -> Response {
     response.headers_mut().insert(
@@ -147,6 +168,35 @@ struct Connection {
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct OpenRoom {
+    surface_id: Uuid,
+    incarnation: Uuid,
+    epoch: Uuid,
+}
+async fn room(
+    State(api): State<ApiState>,
+    headers: HeaderMap,
+    request: Request,
+) -> Result<Json<crate::browser_rooms::Connection>, ApiError> {
+    let principal = owner(&headers, &api)?;
+    let request: OpenRoom = body(request).await?;
+    let connection = proof(&headers, request.surface_id, request.incarnation)?;
+    let opened = tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        api.rooms.open(&principal, connection, request.epoch),
+    )
+    .await
+    .map_err(|_| ApiError(StatusCode::SERVICE_UNAVAILABLE, "unavailable"))?
+    .map_err(|error| match error {
+        cosmos_rtc::Error::Invalid => invalid(),
+        cosmos_rtc::Error::Denied => ApiError(StatusCode::FORBIDDEN, "invalid_connection"),
+        cosmos_rtc::Error::Busy => ApiError(StatusCode::TOO_MANY_REQUESTS, "busy"),
+        cosmos_rtc::Error::Unavailable => ApiError(StatusCode::SERVICE_UNAVAILABLE, "unavailable"),
+    })?;
+    Ok(Json(opened))
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Input {
     surface_id: Uuid,
     incarnation: Uuid,
@@ -163,7 +213,7 @@ struct Ack {
     channel: Channel,
     content_digest: String,
 }
-fn command(action: &Action) -> Value {
+pub(crate) fn command(action: &Action) -> Value {
     json!({"version":1,"actionId":action.id,"turnId":action.turn_id,"generation":action.generation,"surfaceId":action.surface_id,"incarnation":action.incarnation,"channel":"visual.card","contentDigest":action.content_digest,"content":{"kind":"text","text":action.intent.text()},"expiresAt":action.display_expires_at_ms})
 }
 async fn status(State(api): State<ApiState>, headers: HeaderMap) -> Result<Json<Value>, ApiError> {
