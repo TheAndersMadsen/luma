@@ -32,7 +32,7 @@ fn with_verifier(store: SharedStore, verifier: Option<Arc<JwtVerifier>>) -> Rout
     with_pairing(store, verifier, crate::enrollment::pairing_store())
 }
 
-fn with_pairing(
+pub(crate) fn with_pairing(
     store: SharedStore,
     verifier: Option<Arc<JwtVerifier>>,
     pairing: Option<crate::enrollment::SharedEnrollmentStore>,

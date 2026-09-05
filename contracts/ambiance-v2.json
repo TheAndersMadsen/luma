@@ -41,6 +41,14 @@
   ],
   "evidence": [
     {
+      "id": "center-application-acceptance-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/browser_center_acceptance.rs",
+      "anchor": "async fn browser_center_application_acceptance()",
+      "scope": "The Center image driver exercises real owner BFF controls, native Cosmos, isolated PostgreSQL, same-origin HTTPS/WSS, the SFU, Chrome rendering, durable DOM acknowledgment and payload clearing on leave.",
+      "limitation": "Authentication and cognition are synthetic. Requires the explicitly invoked local driver; ordinary tests ignore it. Does not establish actual provider responses, production networking, physical Pin playback or full paper conformance."
+    },
+    {
       "id": "native-speech-disclosure-test-definition",
       "kind": "test-definition",
       "path": "cosmos/crates/cosmos/src/ambiance/speech_tests.rs",
@@ -593,7 +601,7 @@
       "requirement": "Center is a registered rendering surface separately from its read-only observer role, providing the first two-surface Pin-to-browser interaction.",
       "acceptance": "Render a routed card and correlate its acknowledgment; hidden, locked, disconnected and stale pages cannot report a successful current render.",
       "status": "partial",
-      "evidence": ["center-enrollment-lifecycle-definition", "retired-browser-assistant-boundary-definition", "browser-dom-ack-test-definition", "runtime-display-outcome-test-definition"]
+      "evidence": ["center-enrollment-lifecycle-definition", "retired-browser-assistant-boundary-definition", "browser-dom-ack-test-definition", "runtime-display-outcome-test-definition", "center-application-acceptance-test-definition"]
     },
     {
       "id": "macos-surface",

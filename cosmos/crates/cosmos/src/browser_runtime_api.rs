@@ -1,4 +1,7 @@
 //! Thin authenticated browser adapter. The Store owns all delivery authority.
+#[cfg(all(test, unix))]
+#[path = "browser_center_acceptance.rs"]
+mod center_acceptance;
 #[cfg(test)]
 #[path = "browser_runtime_api_tests.rs"]
 mod tests;

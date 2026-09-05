@@ -97,7 +97,7 @@ impl ChatModel for Model {
         panic!("room bootstrap must not invoke cognition")
     }
 }
-fn verifier() -> Arc<JwtVerifier> {
+pub(super) fn verifier() -> Arc<JwtVerifier> {
     let (_, public) = crate::web_auth::test_jwt_keypair();
     JwtVerifier::with_keys(
         crate::web_auth::OidcConfig {
@@ -112,7 +112,7 @@ fn verifier() -> Arc<JwtVerifier> {
         .into(),
     )
 }
-fn bearer(subject: &str) -> String {
+pub(super) fn bearer(subject: &str) -> String {
     let (private, _) = crate::web_auth::test_jwt_keypair();
     let mut header = Header::new(Algorithm::RS256);
     header.kid = Some("runtime-test".into());

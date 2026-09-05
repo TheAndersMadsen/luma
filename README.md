@@ -217,8 +217,9 @@ Each phase has behavioral gates, not just inventory updates. Phase 2A tests deny
 another account, share tokens, unsupported capabilities, stale incarnations,
 and self-elevation; failed durable commits do not acknowledge success.
 Actual isolated PostgreSQL tests exercised concurrent pools, reopen, and
-rollback; visibility does not establish privacy. Physical devices, a real
-browser session and database-server restart remain unverified. Phase 2B must reject private
+rollback; visibility does not establish privacy. Physical devices and database-server
+restart remain unverified. The isolated Center application test below now covers
+a real browser session. Phase 2B must reject private
 output into an unknown room and hints that override eligibility, leave dropped
 acknowledgments unresolved instead of guessing completion, and enforce memory
 scope from the origin rather than the chosen output. Do not run these failure
@@ -412,7 +413,7 @@ required or that the stock SDK alone violates the paper.
    the full scorer and earned-authority evidence, durable repair, audit
    anchoring and retention, and behavioral coverage of all twelve invariants.
    Never restore old bypasses merely to pass compatibility tests.
-5. **Center after Cosmos — room client implemented, full application acceptance pending.**
+5. **Center after Cosmos — room client and isolated application acceptance implemented.**
    One SDK adapter owns LiveKit imports. Authenticated bootstrap binds runtime
    identity and boot epoch; one bounded sequence covers input, visibility,
    cancellation and acknowledgment, including exact retries after a lost reply.
@@ -429,6 +430,26 @@ required or that the stock SDK alone violates the paper.
    Run `center/verify/browser-room-live.mjs` with Node 22, an isolated SFU JSON
    and the verified native WebRTC directory, then open its loopback URL. This
    transport check does not prove the full authenticated UI or media playback.
+   `center/verify/center-runtime-live.mjs` additionally runs a built Center image,
+   native Cosmos, isolated PostgreSQL and a local SFU through a same-origin HTTPS
+   gateway with `/livekit` WebSocket forwarding. In Chrome it grants and revokes
+   speech permission through the owner UI, approves a shared tab, renders a
+   routed text card, verifies the durable DOM acknowledgment, then leaves and
+   requires the stored payload to be cleared. The application run passed on the
+   `e7f6313` Center image. Authentication and the one cognition response are
+   synthetic; no provider, real account, Pin, external-network or media acceptance
+   is implied. Supply `COSMOS_TEST_DATABASE_URL` pointing to isolated loopback
+   PostgreSQL, then run with Node 22 and Playwright available through `NODE_PATH`:
+
+   ```sh
+   node --experimental-strip-types center/verify/center-runtime-live.mjs CENTER_IMAGE SFU_JSON VERIFIED_WEBRTC_DIR
+   ```
+
+   The SFU JSON supplies `url`, `key` and `secret` for an isolated loopback SFU.
+   The driver creates disposable local authentication and TLS credentials, writes
+   bounded status and screenshot artifacts outside the checkout, and removes its
+   container and transient credentials. Its ignored native test fails if those
+   dependencies are absent; an ordinary unit-test pass does not run this gate.
 6. **Thin native clients and Pin preparation.** Deliver macOS and Android
    clients using the shared contracts, with local permissions, capture,
    rendering/playback, lifecycle handling, protected credential storage,
