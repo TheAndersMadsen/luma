@@ -190,7 +190,10 @@ impl Surface {
     }
 }
 
-pub fn browser_manifest() -> serde_json::Value {
+pub const BROWSER_APPROVAL: &str = "browser-shared-display-v2";
+
+/// Persisted v1 approvals remain output-only until explicit reapproval.
+pub fn legacy_browser_manifest() -> serde_json::Value {
     serde_json::json!({
                 "class": "browser",
                 "capabilities": {"input": ["state.visibility"], "output": {"visual.card": {"maxClass": "shared_room", "shared": true}}},
@@ -201,10 +204,55 @@ pub fn browser_manifest() -> serde_json::Value {
     })
 }
 
+pub fn browser_manifest() -> serde_json::Value {
+    let mut manifest = legacy_browser_manifest();
+    manifest["capabilities"]["input"] = serde_json::json!(["state.visibility", "text.public"]);
+    manifest["authority"]["mayOriginate"] = serde_json::json!(["state.change", "user.request"]);
+    manifest
+}
+
+pub fn known_browser_manifest(manifest: &serde_json::Value) -> bool {
+    *manifest == browser_manifest() || *manifest == legacy_browser_manifest()
+}
+
 #[derive(Clone, Default)]
 pub struct Registry {
     pub records: BTreeMap<Uuid, Record>,
-    pub events: Vec<Event>,
+    pub events: Vec<crate::ambiance::ledger::LedgerEvent>,
+    pub runtime: crate::ambiance::RuntimeState,
+    pub maintenance_ms: i64,
+}
+
+/// Registry and due-time index share the same in-memory commit lock.
+#[derive(Default)]
+pub struct RegistryBook {
+    records: std::collections::HashMap<String, Registry>,
+    pub due: std::collections::BTreeSet<(i64, String)>,
+}
+impl RegistryBook {
+    pub fn publish(&mut self, principal: String, registry: Registry) {
+        if let Some(previous) = self.records.get(&principal) {
+            self.due
+                .remove(&(previous.maintenance_ms, principal.clone()));
+        }
+        if registry.maintenance_ms != i64::MAX {
+            self.due
+                .insert((registry.maintenance_ms, principal.clone()));
+        }
+        self.records.insert(principal, registry);
+    }
+}
+impl std::ops::Deref for RegistryBook {
+    type Target = std::collections::HashMap<String, Registry>;
+    fn deref(&self) -> &Self::Target {
+        &self.records
+    }
+}
+#[cfg(test)]
+impl std::ops::DerefMut for RegistryBook {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.records
+    }
 }
 
 /// Fixed-order versioned serialization is the canonical hash input. Contains

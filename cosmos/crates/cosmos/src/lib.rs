@@ -3,9 +3,11 @@
 // idiomatic constructor for the stateless handlers. Both lints are noise here.
 #![allow(clippy::result_large_err, clippy::default_constructed_unit_structs)]
 
+pub mod ambiance;
 mod assistant;
 mod auth;
 mod backends;
+mod browser_runtime_api;
 mod capture_api;
 mod capture_ranking;
 pub mod config;
@@ -143,6 +145,13 @@ where
     } else {
         None
     };
+    let ambiance_runtime = ai_bus_store.as_ref().map(|store| {
+        std::sync::Arc::new(ambiance::runtime::AmbianceRuntime::new(
+            store.clone(),
+            std::sync::Arc::new(assistant::llm::ConfiguredChatModel::external_only()),
+            enrollment::pairing_store(),
+        ))
+    });
     // One directory for both halves of the AI-bus data-protection path:
     // PublicPrivacy imports the owned Pin's C1 key and the authenticated Center
     // REST projection reads that same handle. PostgreSQL makes it cross-workload;
@@ -181,6 +190,11 @@ where
                 .clone()
                 .expect("AI-bus workload configures its shared key directory"),
         )
+        .merge(browser_runtime_api::router(
+            ambiance_runtime
+                .clone()
+                .expect("AI-bus workload configures runtime"),
+        ))
     } else if config.identity.workload() == cosmos_core::Workload::Provisioning {
         // The pair route must run in the process that runs the OPAQUE ceremony
         // (this workload): the pairing it records is read back from that same
@@ -395,7 +409,12 @@ where
                 AiBusServiceServer::new(
                     services::aibus_main::AiBusMain::with_key_material(key_material.clone())
                         .with_key_directory(channel_authority.clone())
-                        .with_store(capture_store.clone()),
+                        .with_store(capture_store.clone())
+                        .with_runtime(
+                            ambiance_runtime
+                                .clone()
+                                .expect("AI-bus workload configures runtime"),
+                        ),
                 )
                 .max_decoding_message_size(d)
                 .max_encoding_message_size(e),

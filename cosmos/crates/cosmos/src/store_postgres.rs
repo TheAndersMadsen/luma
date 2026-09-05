@@ -108,6 +108,11 @@ pub(crate) const STORE_MIGRATIONS: &[EmbeddedMigration] = &[
         "0007_surface_registry.sql",
         include_str!("../../../migrations/0007_surface_registry.sql"),
     ),
+    EmbeddedMigration::new(
+        8,
+        "0008_ambiance_runtime.sql",
+        include_str!("../../../migrations/0008_ambiance_runtime.sql"),
+    ),
 ];
 
 /// Statements this history is allowed to remove data with, frozen verbatim.
@@ -491,8 +496,143 @@ fn kind_filter(kinds: &[MemoryKind]) -> Option<Vec<i16>> {
     (!kinds.is_empty()).then(|| kinds.iter().copied().map(kind_to_i16).collect())
 }
 
+async fn runtime_records(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    principal: &str,
+) -> Result<
+    std::collections::BTreeMap<uuid::Uuid, crate::surface_registry::Record>,
+    crate::ambiance::RuntimeError,
+> {
+    use crate::ambiance::RuntimeError;
+    let rows = sqlx::query("SELECT record::text AS record FROM cosmos_surface_registry WHERE principal=$1 AND record->>'revoked'='false' ORDER BY surface_id LIMIT 17")
+        .bind(principal).fetch_all(&mut **tx).await.map_err(|_| RuntimeError::Unavailable)?;
+    if rows.len() > 16 {
+        return Err(RuntimeError::Unavailable);
+    }
+    rows.into_iter()
+        .map(|row| {
+            let record: crate::surface_registry::Record =
+                serde_json::from_str(row.get("record")).map_err(|_| RuntimeError::Unavailable)?;
+            Ok((record.surface_id, record))
+        })
+        .collect()
+}
+
+async fn runtime_state(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    principal: &str,
+) -> Result<crate::ambiance::RuntimeState, crate::ambiance::RuntimeError> {
+    use crate::ambiance::RuntimeError;
+    let encoded: Option<String> =
+        sqlx::query_scalar("SELECT state::text FROM cosmos_ambiance_runtime WHERE principal=$1")
+            .bind(principal)
+            .fetch_optional(&mut **tx)
+            .await
+            .map_err(|_| RuntimeError::Unavailable)?;
+    encoded
+        .map(|v| serde_json::from_str(&v).map_err(|_| RuntimeError::Unavailable))
+        .transpose()
+        .map(|s| s.unwrap_or_default())
+}
+
+async fn persist_runtime(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    principal: &str,
+    state: &crate::ambiance::RuntimeState,
+    events: Vec<crate::ambiance::state::RuntimeData>,
+    head: (i64, String),
+    now: i64,
+    due: i64,
+) -> Result<(), crate::ambiance::RuntimeError> {
+    use crate::ambiance::{RuntimeError, ledger::LedgerEvent};
+    let (mut sequence, mut previous) = head;
+    let encoded = serde_json::to_string(state).map_err(|_| RuntimeError::Unavailable)?;
+    sqlx::query("INSERT INTO cosmos_ambiance_runtime (principal,state,next_maintenance_ms) VALUES ($1,$2::jsonb,$3) ON CONFLICT(principal) DO UPDATE SET state=EXCLUDED.state,next_maintenance_ms=EXCLUDED.next_maintenance_ms")
+        .bind(principal).bind(encoded).bind(due).execute(&mut **tx).await.map_err(|_| RuntimeError::Unavailable)?;
+    for data in events {
+        sequence = sequence.checked_add(1).ok_or(RuntimeError::Unavailable)?;
+        let event = LedgerEvent::runtime(principal, sequence as u64, previous, now, data);
+        previous = event.hash()?;
+        let encoded = serde_json::to_string(&event).map_err(|_| RuntimeError::Unavailable)?;
+        sqlx::query("INSERT INTO cosmos_surface_event(principal,sequence,hash,event) VALUES($1,$2,$3,$4::jsonb)")
+            .bind(principal).bind(sequence).bind(&previous).bind(encoded).execute(&mut **tx).await.map_err(|_| RuntimeError::Unavailable)?;
+    }
+    sqlx::query("UPDATE cosmos_surface_head SET sequence=$2,hash=$3 WHERE principal=$1")
+        .bind(principal)
+        .bind(sequence)
+        .bind(previous)
+        .execute(&mut **tx)
+        .await
+        .map_err(|_| RuntimeError::Unavailable)?;
+    Ok(())
+}
+
 #[tonic::async_trait]
 impl Store for PostgresStore {
+    async fn runtime_sweep(&self, limit: usize) -> Result<usize, crate::ambiance::RuntimeError> {
+        use crate::ambiance::{RuntimeError, RuntimeOperation};
+        // A bounded indexed query discovers due rows from earlier processes.
+        // Every selected principal still acquires its own authoritative head.
+        let principals: Vec<String> = sqlx::query_scalar("SELECT principal FROM cosmos_ambiance_runtime WHERE next_maintenance_ms <= (EXTRACT(EPOCH FROM statement_timestamp()) * 1000)::bigint ORDER BY next_maintenance_ms,principal LIMIT $1")
+            .bind(limit.min(32) as i64).fetch_all(&self.pool).await.map_err(|_| RuntimeError::Unavailable)?;
+        let mut failure = None;
+        for principal in &principals {
+            if let Err(error) = self.runtime(principal, RuntimeOperation::Sweep).await {
+                failure = Some(error);
+            }
+        }
+        if let Some(error) = failure {
+            return Err(error);
+        }
+        Ok(principals.len())
+    }
+    async fn runtime(
+        &self,
+        principal: &str,
+        operation: crate::ambiance::RuntimeOperation,
+    ) -> Result<crate::ambiance::RuntimeResult, crate::ambiance::RuntimeError> {
+        use crate::ambiance::RuntimeError;
+        let unavailable = |_| RuntimeError::Unavailable;
+        let mut tx = self.pool.begin().await.map_err(unavailable)?;
+        sqlx::query("INSERT INTO cosmos_surface_head (principal) VALUES ($1) ON CONFLICT (principal) DO NOTHING")
+            .bind(principal).execute(&mut *tx).await.map_err(unavailable)?;
+        let head = sqlx::query(
+            "SELECT sequence, hash FROM cosmos_surface_head WHERE principal=$1 FOR UPDATE",
+        )
+        .bind(principal)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(unavailable)?;
+        let now: i64 =
+            sqlx::query_scalar("SELECT (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint")
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(unavailable)?;
+        let records = runtime_records(&mut tx, principal).await?;
+        let mut state = runtime_state(&mut tx, principal).await?;
+        let mut events = state.reconcile(&records, now);
+        let mut working = state.clone();
+        let result = match working.apply(principal, &records, operation, now) {
+            Ok((result, appended)) => {
+                state = working;
+                events.extend(appended);
+                Ok(result)
+            }
+            Err(error) => Err(error),
+        };
+        persist_runtime(
+            &mut tx,
+            principal,
+            &state,
+            events,
+            (head.get("sequence"), head.get("hash")),
+            now,
+            state.next_maintenance_ms(&records),
+        )
+        .await?;
+        tx.commit().await.map_err(unavailable)?;
+        result
+    }
     async fn surface(
         &self,
         principal: &str,
@@ -611,6 +751,32 @@ impl Store for PostgresStore {
             .await
             .map_err(unavailable)?;
         }
+        // Registry changes invalidate affected turns/actions before releasing
+        // this same principal lock. No post-commit cancellation race.
+        let records = runtime_records(&mut tx, principal)
+            .await
+            .map_err(|_| RegistryError::Unavailable)?;
+        let mut runtime = runtime_state(&mut tx, principal)
+            .await
+            .map_err(|_| RegistryError::Unavailable)?;
+        let events = runtime.reconcile(&records, now);
+        let updated_head =
+            sqlx::query("SELECT sequence, hash FROM cosmos_surface_head WHERE principal=$1")
+                .bind(principal)
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(unavailable)?;
+        persist_runtime(
+            &mut tx,
+            principal,
+            &runtime,
+            events,
+            (updated_head.get("sequence"), updated_head.get("hash")),
+            now,
+            runtime.next_maintenance_ms(&records),
+        )
+        .await
+        .map_err(|_| RegistryError::Unavailable)?;
         tx.commit().await.map_err(unavailable)?;
         Ok(record.view(now))
     }
@@ -1629,6 +1795,269 @@ impl Store for PostgresStore {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn ambiance_postgres_retention_restart_sweep_rollback_and_duplicate_workers() {
+        use crate::ambiance::{RuntimeError, RuntimeState, ledger::LedgerEvent};
+        let Some(first) = store().await else {
+            eprintln!("SKIPPED: isolated COSMOS_TEST_DATABASE_URL required");
+            return;
+        };
+        let principal = format!("U:retention-pg-{}", uuid::Uuid::new_v4());
+        let action = crate::store::runtime_test_terminal(&first, &principal).await;
+        let encoded: String = sqlx::query_scalar(
+            "SELECT state::text FROM cosmos_ambiance_runtime WHERE principal=$1",
+        )
+        .bind(&principal)
+        .fetch_one(&first.pool)
+        .await
+        .unwrap();
+        let mut state: RuntimeState = serde_json::from_str(&encoded).unwrap();
+        assert!(state.actions[&action.id].intent.text().is_empty());
+        // Reproduce a pre-cleanup terminal projection. The migration's default
+        // zero makes such preexisting rows discoverable after a restart.
+        state.actions.get_mut(&action.id).unwrap().intent = action.intent.clone();
+        sqlx::query("UPDATE cosmos_ambiance_runtime SET state=$2::jsonb,next_maintenance_ms=$3 WHERE principal=$1").bind(&principal).bind(serde_json::to_string(&state).unwrap()).bind(i64::MIN+1).execute(&first.pool).await.unwrap();
+        let head: i64 =
+            sqlx::query_scalar("SELECT sequence FROM cosmos_surface_head WHERE principal=$1")
+                .bind(&principal)
+                .fetch_one(&first.pool)
+                .await
+                .unwrap();
+        sqlx::query("INSERT INTO cosmos_surface_event(principal,sequence,hash,event) VALUES($1,$2,'retention-test-obstruction','{}'::jsonb)").bind(&principal).bind(head+1).execute(&first.pool).await.unwrap();
+        assert!(matches!(
+            first.runtime_sweep(1).await,
+            Err(RuntimeError::Unavailable)
+        ));
+        let unchanged: String = sqlx::query_scalar(
+            "SELECT state::text FROM cosmos_ambiance_runtime WHERE principal=$1",
+        )
+        .bind(&principal)
+        .fetch_one(&first.pool)
+        .await
+        .unwrap();
+        assert!(
+            !serde_json::from_str::<RuntimeState>(&unchanged)
+                .unwrap()
+                .actions[&action.id]
+                .intent
+                .text()
+                .is_empty()
+        );
+        let due: i64 = sqlx::query_scalar(
+            "SELECT next_maintenance_ms FROM cosmos_ambiance_runtime WHERE principal=$1",
+        )
+        .bind(&principal)
+        .fetch_one(&first.pool)
+        .await
+        .unwrap();
+        assert_eq!(due, i64::MIN + 1);
+        sqlx::query("DELETE FROM cosmos_surface_event WHERE principal=$1 AND sequence=$2 AND hash='retention-test-obstruction'").bind(&principal).bind(head+1).execute(&first.pool).await.unwrap();
+        let second = store().await.unwrap();
+        drop(first);
+        let reopened = store().await.unwrap();
+        let (a, b) = tokio::join!(second.runtime_sweep(1), reopened.runtime_sweep(1));
+        a.unwrap();
+        b.unwrap();
+        let cleared: String = sqlx::query_scalar(
+            "SELECT state::text FROM cosmos_ambiance_runtime WHERE principal=$1",
+        )
+        .bind(&principal)
+        .fetch_one(&reopened.pool)
+        .await
+        .unwrap();
+        assert!(
+            serde_json::from_str::<RuntimeState>(&cleared)
+                .unwrap()
+                .actions[&action.id]
+                .intent
+                .text()
+                .is_empty()
+        );
+        let after: i64 =
+            sqlx::query_scalar("SELECT sequence FROM cosmos_surface_head WHERE principal=$1")
+                .bind(&principal)
+                .fetch_one(&reopened.pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            after,
+            head + 1,
+            "duplicate worker must not append another clear"
+        );
+        let event: String = sqlx::query_scalar(
+            "SELECT event::text FROM cosmos_surface_event WHERE principal=$1 AND sequence=$2",
+        )
+        .bind(&principal)
+        .bind(after)
+        .fetch_one(&reopened.pool)
+        .await
+        .unwrap();
+        assert!(matches!(
+            serde_json::from_str::<LedgerEvent>(&event).unwrap(),
+            LedgerEvent::Runtime(crate::ambiance::ledger::RuntimeEvent {
+                data: crate::ambiance::state::RuntimeData::PayloadCleared { .. },
+                ..
+            })
+        ));
+        let due: i64 = sqlx::query_scalar(
+            "SELECT next_maintenance_ms FROM cosmos_ambiance_runtime WHERE principal=$1",
+        )
+        .bind(&principal)
+        .fetch_one(&reopened.pool)
+        .await
+        .unwrap();
+        assert!(due > 0);
+    }
+
+    #[tokio::test]
+    async fn ambiance_postgres_independent_workers_rollback_reopen_and_registry_fence() {
+        use crate::ambiance::{ledger::LedgerEvent, *};
+        use crate::surface_registry::{Mutation, hash, pin_surface_id};
+        let Some(first) = store().await else {
+            eprintln!("SKIPPED: isolated COSMOS_TEST_DATABASE_URL required");
+            return;
+        };
+        let second = store().await.unwrap();
+        let principal = format!("U:ambiance-pg-{}", uuid::Uuid::new_v4());
+        let surface_id = pin_surface_id(&principal, "aabb");
+        first
+            .mutate_surface(
+                &principal,
+                surface_id,
+                Mutation::ApprovePin {
+                    device_id: "aabb".into(),
+                },
+            )
+            .await
+            .unwrap();
+        let begin = || RuntimeOperation::Begin {
+            turn_id: uuid::Uuid::new_v4(),
+            worker: uuid::Uuid::new_v4(),
+            origin: OriginProof::Pin {
+                device: cosmos_core::AuthenticatedDeviceIdentity::from_edge("aabb").unwrap(),
+                surface_id,
+            },
+            request_digest: hash(b"test request"),
+            privacy_floor: PrivacyClass::SharedRoom,
+        };
+        let (a, b) = tokio::join!(
+            first.runtime(&principal, begin()),
+            second.runtime(&principal, begin())
+        );
+        let fence = match (a, b) {
+            (Ok(RuntimeResult::Begun(f)), Err(RuntimeError::Busy))
+            | (Err(RuntimeError::Busy), Ok(RuntimeResult::Begun(f))) => f,
+            other => panic!("unexpected competing begin {other:?}"),
+        };
+        let RuntimeResult::Proposed(action) = first
+            .runtime(
+                &principal,
+                RuntimeOperation::Propose {
+                    turn_id: fence.turn_id,
+                    generation: fence.generation,
+                    worker: fence.worker,
+                    intent: SemanticIntent::InformationalSpeech {
+                        text: "test result".into(),
+                    },
+                    privacy: PrivacyClass::Public,
+                },
+            )
+            .await
+            .unwrap()
+        else {
+            panic!()
+        };
+        let before: String = sqlx::query_scalar(
+            "SELECT state::text FROM cosmos_ambiance_runtime WHERE principal=$1",
+        )
+        .bind(&principal)
+        .fetch_one(&first.pool)
+        .await
+        .unwrap();
+        let sequence: i64 =
+            sqlx::query_scalar("SELECT sequence FROM cosmos_surface_head WHERE principal=$1")
+                .bind(&principal)
+                .fetch_one(&first.pool)
+                .await
+                .unwrap();
+        sqlx::query("INSERT INTO cosmos_surface_event(principal,sequence,hash,event) VALUES($1,$2,'test-obstruction','{}'::jsonb)").bind(&principal).bind(sequence+1).execute(&first.pool).await.unwrap();
+        let claim = || RuntimeOperation::Claim {
+            action_id: action.id,
+            generation: fence.generation,
+            worker: fence.worker,
+        };
+        assert!(matches!(
+            second.runtime(&principal, claim()).await,
+            Err(RuntimeError::Unavailable)
+        ));
+        let after: String = sqlx::query_scalar(
+            "SELECT state::text FROM cosmos_ambiance_runtime WHERE principal=$1",
+        )
+        .bind(&principal)
+        .fetch_one(&first.pool)
+        .await
+        .unwrap();
+        assert_eq!(before, after);
+        let after_sequence: i64 =
+            sqlx::query_scalar("SELECT sequence FROM cosmos_surface_head WHERE principal=$1")
+                .bind(&principal)
+                .fetch_one(&first.pool)
+                .await
+                .unwrap();
+        assert_eq!(sequence, after_sequence);
+        sqlx::query("DELETE FROM cosmos_surface_event WHERE principal=$1 AND sequence=$2 AND hash='test-obstruction'").bind(&principal).bind(sequence+1).execute(&first.pool).await.unwrap();
+        drop(second);
+        let reopened = store().await.unwrap();
+        let RuntimeResult::Observed(actions) = reopened
+            .runtime(
+                &principal,
+                RuntimeOperation::Inspect {
+                    turn_id: fence.turn_id,
+                    generation: fence.generation,
+                    worker: fence.worker,
+                },
+            )
+            .await
+            .unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(actions[0].status, ActionStatus::Proposed);
+        // Competing claim/revoke serialize under the same head. Either the
+        // emission was committed first (unknown) or claim is refused.
+        let (claim_result, revoke_result) = tokio::join!(
+            reopened.runtime(&principal, claim()),
+            first.mutate_surface(&principal, surface_id, Mutation::RevokePin)
+        );
+        revoke_result.unwrap();
+        assert!(matches!(
+            claim_result,
+            Ok(RuntimeResult::Dispatch(_)) | Err(RuntimeError::Stale)
+        ));
+        let encoded: String = sqlx::query_scalar(
+            "SELECT state::text FROM cosmos_ambiance_runtime WHERE principal=$1",
+        )
+        .bind(&principal)
+        .fetch_one(&first.pool)
+        .await
+        .unwrap();
+        let state: RuntimeState = serde_json::from_str(&encoded).unwrap();
+        assert!(state.turn.unwrap().cancelled);
+        assert!(matches!(
+            state.actions[&action.id].status,
+            ActionStatus::Cancelled | ActionStatus::OutcomeUnknown
+        ));
+        let rows=sqlx::query("SELECT event::text AS event,hash FROM cosmos_surface_event WHERE principal=$1 ORDER BY sequence").bind(&principal).fetch_all(&first.pool).await.unwrap();
+        let mut previous = String::new();
+        for (index, row) in rows.iter().enumerate() {
+            let event: LedgerEvent = serde_json::from_str(row.get("event")).unwrap();
+            assert_eq!(event.sequence(), index as u64 + 1);
+            assert_eq!(event.previous_hash(), previous);
+            assert_eq!(event.hash().unwrap(), row.get::<String, _>("hash"));
+            previous = event.hash().unwrap();
+        }
+    }
+
     fn all_migrations() -> Vec<&'static EmbeddedMigration> {
         STORE_MIGRATIONS
             .iter()
@@ -1682,6 +2111,7 @@ mod tests {
                 (4, "0004_listing.sql"),
                 (5, "0005_device_status_namespacing.sql"),
                 (7, "0007_surface_registry.sql"),
+                (8, "0008_ambiance_runtime.sql"),
                 (2, "0002_enrollment.sql"),
                 (3, "0003_key_directory.sql"),
                 (6, "0006_key_directory_bounds.sql"),
@@ -1735,6 +2165,7 @@ mod tests {
             ("0005_device_status_namespacing.sql", 1),
             ("0006_key_directory_bounds.sql", 1),
             ("0007_surface_registry.sql", 4),
+            ("0008_ambiance_runtime.sql", 3),
         ];
         for migration in all_migrations() {
             let statements = migration.statements().collect::<Vec<_>>();
@@ -1790,6 +2221,9 @@ mod tests {
                 "CREATE TABLE IF NOT EXISTS cosmos_surface_registry (",
                 "CREATE TABLE IF NOT EXISTS cosmos_surface_event (",
                 "CREATE INDEX IF NOT EXISTS cosmos_surface_active",
+                "CREATE TABLE IF NOT EXISTS cosmos_ambiance_runtime (",
+                "ALTER TABLE IF EXISTS cosmos_ambiance_runtime",
+                "CREATE INDEX IF NOT EXISTS cosmos_ambiance_due",
             ]
         );
     }

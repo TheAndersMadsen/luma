@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "basePath": "/runtime-api/v1/browser",
+  "browserPath": "/api/runtime",
+  "authentication": "Every operation requires a verified owner bearer plus the memory-only x-cosmos-surface-token and exact surfaceId/incarnation. Store checks connection and registry in the same transaction as runtime transitions. Owner login alone is not a surface identity or privacy clearance.",
+  "limits": {"requestBytes": 8192, "textBytes": 4000, "actions": 32, "activeCommands": 1, "responseBytes": 196608, "pollIntervalMs": 500, "ackDeadlineMs": 3000, "displayLifetimeMs": 60000, "heartbeatLeaseMs": 45000},
+  "routes": {
+    "GET /status": {"response": {"version": 1, "textInputConfigured": "boolean", "approvedSurfaceRequired": true}, "semantics": "Owner authenticated; mounted runtime, readable Store and current configured provider capability. No surface identity, privacy clearance or delivery assertion."},
+    "POST /poll": {"request": ["surfaceId", "incarnation"], "response": {"commands": "RenderCommand[] (at most one active frame)", "clear": "UUID[]"}, "semantics": "Durable claim before delivering content. Snapshot contains only current commands for this exact connection. Runtime serializes active visual delivery; replacement cancels the previous frame transactionally. Cancelled/unknown actions yield IDs only. Acknowledged commands remain until expiry/cancellation. Absent commands dismiss prior display."},
+    "POST /ack": {"request": ["surfaceId", "incarnation", "actionId", "turnId", "generation", "channel", "contentDigest"], "response": {"acknowledged": true}, "semantics": "Exact immutable action proof after actual React DOM commit. Durable acknowledgment required before response. Dispatch deadline is server-owned, independently 3000ms from each committed claim; display expiresAt does not extend it."},
+    "POST /input": {"request": ["surfaceId", "incarnation", "text"], "response": {"accepted": true}, "semantics": "Current approved public-text input capability required; shared-room origin never reads private memory. Runs through the single AmbianceRuntime. Accepted means a durable proposal or blocked decision, never completion."}
+  },
+  "RenderCommand": {"version": 1, "actionId": "UUID", "turnId": "UUID", "generation": "positive safe integer", "surfaceId": "UUID", "incarnation": "UUID", "channel": "visual.card", "contentDigest": "SHA256 lowercase hex of exact UTF8 text bytes", "content": {"kind": "text", "text": "nonempty string <=4000 UTF8 bytes"}, "expiresAt": "server Unix milliseconds; display expiry, not acknowledgment deadline"},
+  "client": "Plain escaped text only. Memory-only capability and frame. Abort/generation fence on hide, leave, revoke, rotation, expiry or unmount; immediately dismiss local content. No arbitrary HTML, active links, model traces, speech, native actions or owner-inventory content. Same action/key/digest deduplicates. Healthy visible heartbeat preserves current frame.",
+  "delivery": "At most one retry to same surface and idempotency key after 3s acknowledgment timeout; no success from network receipt. Unknown outcomes are not fabricated completion. Polling observes remote revocation within one bounded poll cycle; local hide/leave clears immediately.",
+  "errors": {"400": "invalid_request", "401": "unauthorized", "403": "invalid_connection", "408": "request_timeout", "409": "stale_action", "413": "request_too_large", "429": "busy", "503": "unavailable"},
+  "limitations": ["Browser text surface only; realtime media, native clients and physical Pin playback remain unverified", "Owner approval and visibility do not establish private occupancy or actor identity", "Arbitrary informational model text is not universally proven truthful"]
+}

@@ -198,23 +198,20 @@ test("the burst ranking releases its own control after it succeeds", async () =>
   );
 });
 
-test("the Ai Mic chat stops talking when the wearer leaves it", async () => {
-  const chat = await source("components/AiMicChat.tsx");
-  /*
-   * `speak()` builds a DETACHED Audio element, which React unmounting cannot
-   * touch and which is not collected while it is playing. A wearer who asked the
-   * Pin something on /talk and then tapped Memories had the answer keep playing
-   * over an unrelated page, with nothing on screen to stop it — reloading the tab
-   * was the only way out. `audioRef` had been written and never read.
-   */
-  assert.match(chat, /const audio = audioRef\.current;/);
-  assert.match(chat, /audio\.pause\(\);/);
-  assert.match(chat, /URL\.revokeObjectURL\(audioUrlRef\.current\)/);
-  // Nothing may START speaking after the unmount either — the reply arrives long
-  // after the request that asked for it.
-  assert.match(chat, /if \(!liveRef\.current\) return;/);
-  // And the SSE reader has to be released, the way PinDeviceProvider says.
-  assert.match(chat, /signal: controller\.signal/);
-  assert.match(chat, /await reader\.cancel\(\)\.catch\(\(\) => undefined\);/);
-  assert.match(chat, /streamAbortRef\.current\?\.abort\(\)/);
+test("the Ai Mic display aborts delivery and clears committed content when the wearer leaves", async () => {
+  const [chat, display, runtime, tab] = await Promise.all([
+    source("components/AiMicChat.tsx"), source("components/BrowserDisplay.tsx"),
+    source("lib/browserRuntime.ts"), source("app/settings/account/surfaces/surfaceTab.ts"),
+  ]);
+  assert.match(chat, /<BrowserDisplay active=\{active\}/);
+  assert.doesNotMatch(`${chat}\n${display}`, /new Audio|SpeechRecognition|\/api\/assistant\/(?:stream|speech)/);
+  assert.match(display, /current\.dispose\(\)/);
+  assert.match(display, /if \(!active\) \{ tab\.current\?\.leave\(\)/);
+  assert.match(display, /command=\{active && status === "visible" \? command : null\}/);
+  assert.match(tab, /this\.runtime\?\.stop\(\)/);
+  assert.match(runtime, /this\.generation\+\+; this\.controller\?\.abort\(\)/);
+  assert.match(runtime, /this\.current = null/);
+  assert.match(runtime, /this\.render\(null\)/);
+  assert.match(runtime, /signal: AbortSignal\.any\(\[controller\.signal,/);
+  assert.match(runtime, /if \(generation !== this\.generation\) return;/);
 });

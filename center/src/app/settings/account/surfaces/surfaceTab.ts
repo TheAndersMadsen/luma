@@ -1,11 +1,12 @@
 import { parseConnection, parseSurface, record, SURFACE_APPROVAL, type SurfaceConnection } from "@/lib/contracts/surfaces";
+import type { BrowserRuntime } from "@/lib/browserRuntime";
 
 export type TabStatus = "inactive" | "approving" | "pending" | "visible" | "hidden" | "lost" | "expired";
 type Connection = SurfaceConnection & { sequence: number; controller: AbortController };
 
 /** One mounted tab, one memory-only capability. Visibility is not occupancy. */
 export class SurfaceTab {
-  readonly surfaceId = crypto.randomUUID();
+  readonly surfaceId: string;
   private connection: Connection | null = null;
   private generation = 0;
   private desired: boolean | null = null;
@@ -13,10 +14,20 @@ export class SurfaceTab {
   private interval: ReturnType<typeof setInterval> | undefined;
   private expiry: ReturnType<typeof setTimeout> | undefined;
   private disposed = false;
+  private visible = false;
 
-  constructor(private notify: (status: TabStatus) => void, private changed: () => void) {}
+  constructor(private notify: (status: TabStatus) => void, private changed: () => void, readonly runtime?: BrowserRuntime) {
+    this.surfaceId = runtime?.surfaceId ?? crypto.randomUUID();
+    runtime?.onFailure(incarnation => {
+      if (this.disposed || this.connection?.incarnation !== incarnation) return;
+      const connection = this.clear();
+      this.notify("lost"); this.changed();
+      if (connection) void this.release(connection);
+    });
+  }
 
   private clear() {
+    this.visible = false; this.runtime?.stop();
     const previous = this.connection;
     this.connection = null;
     this.generation++;
@@ -66,8 +77,9 @@ export class SurfaceTab {
   visibility(visible: boolean) {
     if (!this.connection || this.disposed) return;
     this.desired = visible;
-    // Never leave a stale visible claim while a downgrade is waiting on network.
-    this.notify("pending");
+    // A routine visible heartbeat does not dismiss healthy current output.
+    if (!visible) { this.visible = false; this.runtime?.stop(); }
+    if (!this.visible) this.notify("pending");
     void this.flush();
   }
   private async flush() {
@@ -90,7 +102,11 @@ export class SurfaceTab {
         if (generation !== this.generation) return;
         if (surface.surfaceId !== this.surfaceId || surface.sequence !== sequence || surface.visible !== visible
           || !surface.connected || surface.revoked || surface.connectionExpiresAt <= Date.now() || surface.leaseExpiresAt <= Date.now()) throw new Error("state_invalid");
-        if (this.desired === null) this.notify(visible ? "visible" : "hidden");
+        if (this.desired === null) {
+          this.visible = visible;
+          this.notify(visible ? "visible" : "hidden");
+          if (visible) this.runtime?.start(connection);
+        }
       }
     } catch {
       if (generation === this.generation && !this.disposed) {

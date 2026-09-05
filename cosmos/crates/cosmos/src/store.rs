@@ -660,6 +660,12 @@ pub const INGEST_CHUNK: usize = 256;
 
 #[tonic::async_trait]
 pub trait Store: Send + Sync + 'static {
+    async fn runtime_sweep(&self, limit: usize) -> Result<usize, crate::ambiance::RuntimeError>;
+    async fn runtime(
+        &self,
+        principal: &str,
+        operation: crate::ambiance::RuntimeOperation,
+    ) -> Result<crate::ambiance::RuntimeResult, crate::ambiance::RuntimeError>;
     async fn surface(
         &self,
         principal: &str,
@@ -1104,7 +1110,7 @@ pub struct MemoryStore {
     /// context. Never a runtime authorization switch or a production metric.
     #[cfg(test)]
     pub(crate) assistant_private_accesses: std::sync::atomic::AtomicUsize,
-    surfaces: Mutex<HashMap<String, crate::surface_registry::Registry>>,
+    surfaces: Mutex<crate::surface_registry::RegistryBook>,
     books: Mutex<HashMap<String, ContactBook>>,
     captures: Mutex<HashMap<String, MemoryBook>>,
     /// `principal -> {payload kind -> opaque bytes}`. A `BTreeMap` so the
@@ -1419,6 +1425,68 @@ pub fn build_memory(new: NewMemory, numeric_id: i64) -> MemoryRecord {
 
 #[tonic::async_trait]
 impl Store for MemoryStore {
+    async fn runtime_sweep(&self, limit: usize) -> Result<usize, crate::ambiance::RuntimeError> {
+        use crate::ambiance::{RuntimeError, RuntimeOperation};
+        if self.state_path.is_some() {
+            return Err(RuntimeError::Unavailable);
+        }
+        let now = crate::surface_registry::now_ms();
+        let principals: Vec<_> = self
+            .surfaces
+            .lock()
+            .map_err(|_| RuntimeError::Unavailable)?
+            .due
+            .iter()
+            .take_while(|(at, _)| *at <= now)
+            .take(limit.min(32))
+            .map(|(_, p)| p.clone())
+            .collect();
+        for principal in &principals {
+            self.runtime(principal, RuntimeOperation::Sweep).await?;
+        }
+        Ok(principals.len())
+    }
+    async fn runtime(
+        &self,
+        principal: &str,
+        operation: crate::ambiance::RuntimeOperation,
+    ) -> Result<crate::ambiance::RuntimeResult, crate::ambiance::RuntimeError> {
+        use crate::ambiance::{RuntimeError, ledger::LedgerEvent};
+        if self.state_path.is_some() {
+            return Err(RuntimeError::Unavailable);
+        }
+        let mut guard = self
+            .surfaces
+            .lock()
+            .map_err(|_| RuntimeError::Unavailable)?;
+        let mut registry = guard.get(principal).cloned().unwrap_or_default();
+        let now = crate::surface_registry::now_ms();
+        let mut events = registry.runtime.reconcile(&registry.records, now);
+        let mut working = registry.runtime.clone();
+        let result = match working.apply(principal, &registry.records, operation, now) {
+            Ok((result, appended)) => {
+                registry.runtime = working;
+                events.extend(appended);
+                Ok(result)
+            }
+            Err(error) => Err(error),
+        };
+        for data in events {
+            let sequence = registry.events.len() as u64 + 1;
+            let previous = registry
+                .events
+                .last()
+                .map(|e| e.hash())
+                .transpose()?
+                .unwrap_or_default();
+            let entry = LedgerEvent::runtime(principal, sequence, previous, now, data);
+            entry.hash()?;
+            registry.events.push(entry);
+        }
+        registry.maintenance_ms = registry.runtime.next_maintenance_ms(&registry.records);
+        guard.publish(principal.to_owned(), registry);
+        result
+    }
     async fn surface(
         &self,
         principal: &str,
@@ -1479,7 +1547,7 @@ impl Store for MemoryStore {
             .surfaces
             .lock()
             .map_err(|_| RegistryError::Unavailable)?;
-        let registry = guard.entry(principal.to_owned()).or_default();
+        let mut registry = guard.get(principal).cloned().unwrap_or_default();
         let now = now_ms();
         let (record, kind) = transition(
             registry.records.get(&surface_id),
@@ -1498,9 +1566,27 @@ impl Store for MemoryStore {
                 .unwrap_or_default();
             let entry = event(principal, sequence, previous, kind, &record, now);
             entry.hash()?;
-            registry.events.push(entry);
+            registry
+                .events
+                .push(crate::ambiance::ledger::LedgerEvent::Enrollment(entry));
             registry.records.insert(surface_id, record.clone());
+            for data in registry.runtime.reconcile(&registry.records, now) {
+                let sequence = registry.events.len() as u64 + 1;
+                let previous = registry
+                    .events
+                    .last()
+                    .map(|e| e.hash())
+                    .transpose()?
+                    .unwrap_or_default();
+                let entry = crate::ambiance::ledger::LedgerEvent::runtime(
+                    principal, sequence, previous, now, data,
+                );
+                entry.hash()?;
+                registry.events.push(entry);
+            }
         }
+        registry.maintenance_ms = registry.runtime.next_maintenance_ms(&registry.records);
+        guard.publish(principal.to_owned(), registry);
         Ok(record.view(now))
     }
 
@@ -2232,7 +2318,373 @@ impl Store for MemoryStore {
 }
 
 #[cfg(test)]
+pub(crate) async fn runtime_test_terminal(
+    store: &dyn Store,
+    principal: &str,
+) -> crate::ambiance::Action {
+    use crate::ambiance::*;
+    use crate::surface_registry::{Mutation, hash, pin_surface_id};
+    let surface_id = pin_surface_id(principal, "aabb");
+    store
+        .mutate_surface(
+            principal,
+            surface_id,
+            Mutation::ApprovePin {
+                device_id: "aabb".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let RuntimeResult::Begun(fence) = store
+        .runtime(
+            principal,
+            RuntimeOperation::Begin {
+                turn_id: uuid::Uuid::new_v4(),
+                worker: uuid::Uuid::new_v4(),
+                origin: OriginProof::Pin {
+                    device: cosmos_core::AuthenticatedDeviceIdentity::from_edge("aabb").unwrap(),
+                    surface_id,
+                },
+                request_digest: hash(b"retention request"),
+                privacy_floor: PrivacyClass::SharedRoom,
+            },
+        )
+        .await
+        .unwrap()
+    else {
+        panic!()
+    };
+    let RuntimeResult::Proposed(action) = store
+        .runtime(
+            principal,
+            RuntimeOperation::Propose {
+                turn_id: fence.turn_id,
+                generation: fence.generation,
+                worker: fence.worker,
+                intent: SemanticIntent::InformationalSpeech {
+                    text: "retention fixture answer".into(),
+                },
+                privacy: PrivacyClass::SharedRoom,
+            },
+        )
+        .await
+        .unwrap()
+    else {
+        panic!()
+    };
+    let RuntimeResult::Dispatch(action) = store
+        .runtime(
+            principal,
+            RuntimeOperation::Claim {
+                action_id: action.id,
+                generation: fence.generation,
+                worker: fence.worker,
+            },
+        )
+        .await
+        .unwrap()
+    else {
+        panic!()
+    };
+    store
+        .runtime(
+            principal,
+            RuntimeOperation::Finish {
+                turn_id: fence.turn_id,
+                generation: fence.generation,
+                worker: fence.worker,
+            },
+        )
+        .await
+        .unwrap();
+    action
+}
+
+#[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn ambiance_retention_bounded_sweep_and_startup_clean_existing_payloads() {
+        use crate::ambiance::runtime::AmbianceRuntime;
+        let store = std::sync::Arc::new(MemoryStore::default());
+        let mut fixtures = Vec::new();
+        for principal in ["U:retention-a", "U:retention-b", "U:retention-c"] {
+            let action = runtime_test_terminal(store.as_ref(), principal).await;
+            assert!(
+                !action.intent.text().is_empty(),
+                "one-use dispatch retains its owned clone"
+            );
+            {
+                let guard = store.surfaces.lock().unwrap();
+                assert!(
+                    guard[principal].runtime.actions[&action.id]
+                        .intent
+                        .text()
+                        .is_empty()
+                );
+            }
+            fixtures.push((principal.to_owned(), action));
+        }
+        let restore_old_payloads = || {
+            let mut guard = store.surfaces.lock().unwrap();
+            for (principal, action) in &fixtures {
+                let mut registry = guard[principal].clone();
+                registry.runtime.actions.get_mut(&action.id).unwrap().intent =
+                    action.intent.clone();
+                registry.maintenance_ms = 0;
+                guard.publish(principal.clone(), registry);
+            }
+        };
+        restore_old_payloads();
+        assert_eq!(store.runtime_sweep(1).await.unwrap(), 1);
+        {
+            let guard = store.surfaces.lock().unwrap();
+            assert_eq!(
+                fixtures
+                    .iter()
+                    .filter(|(p, a)| guard[p].runtime.actions[&a.id].intent.text().is_empty())
+                    .count(),
+                1
+            );
+        }
+        assert_eq!(store.runtime_sweep(32).await.unwrap(), 2);
+        assert_eq!(store.runtime_sweep(32).await.unwrap(), 0);
+        restore_old_payloads();
+        // A fresh runtime discovers already-persisted due entries without any
+        // principal visiting an ingress or browser polling endpoint.
+        let runtime = AmbianceRuntime::new(
+            store.clone(),
+            std::sync::Arc::new(crate::assistant::llm::MockChatModel::new(vec![])),
+            None,
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                let done = {
+                    let guard = store.surfaces.lock().unwrap();
+                    fixtures
+                        .iter()
+                        .all(|(p, a)| guard[p].runtime.actions[&a.id].intent.text().is_empty())
+                };
+                if done {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        drop(runtime);
+    }
+
+    #[tokio::test]
+    async fn ambiance_memory_registry_change_and_cancellation_share_one_chain() {
+        use crate::ambiance::*;
+        use crate::surface_registry::{Mutation, hash};
+        let store = MemoryStore::default();
+        let principal = "U:runtime-memory";
+        let surface_id = uuid::Uuid::new_v4();
+        let incarnation = uuid::Uuid::new_v4();
+        let token_hash = hash(b"runtime test capability");
+        store
+            .mutate_surface(
+                principal,
+                surface_id,
+                Mutation::Approve {
+                    token_hash: token_hash.clone(),
+                    incarnation,
+                },
+            )
+            .await
+            .unwrap();
+        store
+            .mutate_surface(
+                principal,
+                surface_id,
+                Mutation::State {
+                    token_hash: token_hash.clone(),
+                    incarnation,
+                    sequence: 1,
+                    visible: true,
+                },
+            )
+            .await
+            .unwrap();
+        let proof = || BrowserProof {
+            surface_id,
+            incarnation,
+            token_hash: token_hash.clone(),
+        };
+        let RuntimeResult::Begun(fence) = store
+            .runtime(
+                principal,
+                RuntimeOperation::Begin {
+                    turn_id: uuid::Uuid::new_v4(),
+                    worker: uuid::Uuid::new_v4(),
+                    origin: OriginProof::Browser(proof()),
+                    request_digest: hash(b"request"),
+                    privacy_floor: PrivacyClass::Public,
+                },
+            )
+            .await
+            .unwrap()
+        else {
+            panic!()
+        };
+        let RuntimeResult::Proposed(action) = store
+            .runtime(
+                principal,
+                RuntimeOperation::Propose {
+                    turn_id: fence.turn_id,
+                    generation: fence.generation,
+                    worker: fence.worker,
+                    intent: SemanticIntent::VisualTextCard {
+                        text: "bounded answer".into(),
+                    },
+                    privacy: PrivacyClass::Public,
+                },
+            )
+            .await
+            .unwrap()
+        else {
+            panic!()
+        };
+        store
+            .runtime(
+                principal,
+                RuntimeOperation::Poll {
+                    connection: proof(),
+                },
+            )
+            .await
+            .unwrap();
+        store
+            .mutate_surface(
+                principal,
+                surface_id,
+                Mutation::State {
+                    token_hash: token_hash.clone(),
+                    incarnation,
+                    sequence: 2,
+                    visible: true,
+                },
+            )
+            .await
+            .unwrap();
+        {
+            let guard = store.surfaces.lock().unwrap();
+            assert_eq!(
+                guard[principal].runtime.actions[&action.id].status,
+                ActionStatus::Dispatched
+            );
+        }
+        store
+            .mutate_surface(
+                principal,
+                surface_id,
+                Mutation::State {
+                    token_hash,
+                    incarnation,
+                    sequence: 3,
+                    visible: false,
+                },
+            )
+            .await
+            .unwrap();
+        let guard = store.surfaces.lock().unwrap();
+        let registry = &guard[principal];
+        assert_eq!(
+            registry.runtime.actions[&action.id].status,
+            ActionStatus::Cancelled
+        );
+        assert!(registry.runtime.turn.as_ref().unwrap().cancelled);
+        for pair in registry.events.windows(2) {
+            assert_eq!(pair[1].previous_hash(), pair[0].hash().unwrap());
+            assert_eq!(pair[1].sequence(), pair[0].sequence() + 1);
+        }
+        assert!(matches!(
+            registry.events.last().unwrap(),
+            crate::ambiance::ledger::LedgerEvent::Runtime(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn ambiance_failed_operation_commits_only_logged_expiry_and_snapshot_fails_closed() {
+        use crate::ambiance::*;
+        use crate::surface_registry::{Mutation, hash};
+        let store = MemoryStore::default();
+        let principal = "U:runtime-expiry";
+        let device = cosmos_core::AuthenticatedDeviceIdentity::from_edge("aabb").unwrap();
+        let surface_id = crate::surface_registry::pin_surface_id(principal, "aabb");
+        store
+            .mutate_surface(
+                principal,
+                surface_id,
+                Mutation::ApprovePin {
+                    device_id: "aabb".into(),
+                },
+            )
+            .await
+            .unwrap();
+        let RuntimeResult::Begun(fence) = store
+            .runtime(
+                principal,
+                RuntimeOperation::Begin {
+                    turn_id: uuid::Uuid::new_v4(),
+                    worker: uuid::Uuid::new_v4(),
+                    origin: OriginProof::Pin { device, surface_id },
+                    request_digest: hash(b"request"),
+                    privacy_floor: PrivacyClass::SharedRoom,
+                },
+            )
+            .await
+            .unwrap()
+        else {
+            panic!()
+        };
+        // Synthetic time state only; production leases are runtime/DB stamped.
+        {
+            let mut guard = store.surfaces.lock().unwrap();
+            guard
+                .get_mut(principal)
+                .unwrap()
+                .runtime
+                .turn
+                .as_mut()
+                .unwrap()
+                .lease_until_ms = 0;
+        }
+        let result = store
+            .runtime(
+                principal,
+                RuntimeOperation::Propose {
+                    turn_id: fence.turn_id,
+                    generation: fence.generation,
+                    worker: fence.worker,
+                    intent: SemanticIntent::InformationalSpeech {
+                        text: "late output".into(),
+                    },
+                    privacy: PrivacyClass::Public,
+                },
+            )
+            .await;
+        assert!(matches!(result, Err(RuntimeError::Stale)));
+        {
+            let guard = store.surfaces.lock().unwrap();
+            let registry = &guard[principal];
+            assert!(registry.runtime.turn.as_ref().unwrap().cancelled);
+            assert!(registry.runtime.actions.is_empty());
+            assert_eq!(registry.events.len(), 3);
+        }
+        let snapshot = MemoryStore {
+            state_path: Some(std::path::PathBuf::from("/unwritten-runtime-test")),
+            ..Default::default()
+        };
+        assert!(matches!(
+            snapshot.runtime(principal, RuntimeOperation::Sweep).await,
+            Err(RuntimeError::Unavailable)
+        ));
+        assert!(snapshot.surfaces.lock().unwrap().is_empty());
+    }
+
     #[tokio::test]
     async fn surface_registry_snapshot_backend_rejects_without_mutation() {
         use crate::surface_registry::{Mutation, RegistryError, hash};
@@ -2291,8 +2743,8 @@ mod tests {
         let registry = &guard["U:owner"];
         assert_eq!(registry.events.len(), 18);
         for pair in registry.events.windows(2) {
-            assert_eq!(pair[1].previous_hash, pair[0].hash().unwrap());
-            assert_eq!(pair[1].sequence, pair[0].sequence + 1);
+            assert_eq!(pair[1].previous_hash(), pair[0].hash().unwrap());
+            assert_eq!(pair[1].sequence(), pair[0].sequence() + 1);
         }
     }
 

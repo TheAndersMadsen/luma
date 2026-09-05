@@ -3566,16 +3566,15 @@ mod tests {
         assert!(after.note_responses.is_empty(), "notes must stay deleted");
     }
 
-    /// End to end: a note the wearer took is findable afterwards, and the search
-    /// answers with UUIDS ONLY — the body never rides back over the wire.
+    /// Saving a note preserves its encrypted body; it does not grant an
+    /// unscoped stock search permission to retrieve private memory.
     #[tokio::test]
-    async fn a_stored_note_becomes_findable_by_search() {
+    async fn ambiance_stored_note_is_preserved_but_unscoped_stock_search_is_denied() {
         use crate::services::aibus_extra::WebSearch;
         use cosmos_protocol::aibus::web_search_service_server::WebSearchService;
 
         // One store + one key store, shared the way the workload wires them.
-        let store: crate::store::SharedStore =
-            std::sync::Arc::new(crate::store::MemoryStore::default());
+        let store = std::sync::Arc::new(crate::store::MemoryStore::default());
         let keys: crate::keymaterial::SharedKeyMaterial = Default::default();
         let key = [9u8; cosmos_crypto::AES_KEY_LEN];
         keys.insert("wearer-kid".to_owned(), key)
@@ -3600,7 +3599,7 @@ mod tests {
                             kid: sealed.kid.clone(),
                         },
                     ),
-                    data: sealed.data,
+                    data: sealed.data.clone(),
                 }),
                 encrypted_location: None,
             }))
@@ -3608,25 +3607,44 @@ mod tests {
             .unwrap()
             .into_inner();
 
-        let hits = search
-            .search(Request::new(cosmos_protocol::aibus::SearchRequest {
-                text_query: "oat milk".to_owned(),
-            }))
-            .await
-            .expect("search succeeds")
-            .into_inner();
-        assert_eq!(hits.memories.len(), 1, "the note must be findable");
-        assert_eq!(hits.memories[0].uuid, created.memory_uuid);
-
-        // A query matching nothing returns empty rather than everything.
-        let miss = search
-            .search(Request::new(cosmos_protocol::aibus::SearchRequest {
-                text_query: "bicycle repair".to_owned(),
+        let private_reads = store
+            .assistant_private_accesses
+            .load(std::sync::atomic::Ordering::SeqCst);
+        for query in ["oat milk", "bicycle repair"] {
+            let denied = search
+                .search(Request::new(cosmos_protocol::aibus::SearchRequest {
+                    text_query: query.to_owned(),
+                }))
+                .await
+                .expect_err("unscoped stock search cannot retrieve private memory");
+            assert_eq!(denied.code(), tonic::Code::Unimplemented);
+            assert_eq!(
+                store
+                    .assistant_private_accesses
+                    .load(std::sync::atomic::Ordering::SeqCst),
+                private_reads,
+                "denial happens before private retrieval"
+            );
+        }
+        let preserved = notes
+            .get_recent_notes(Request::new(pb::DeviceGetRecentNotesRequest {
+                max_items: 0,
+                start_time: None,
+                end_time: None,
             }))
             .await
             .unwrap()
             .into_inner();
-        assert!(miss.memories.is_empty());
+        assert_eq!(preserved.note_responses.len(), 1);
+        assert_eq!(preserved.note_responses[0].memory_uuid, created.memory_uuid);
+        assert_eq!(
+            preserved.note_responses[0]
+                .encrypted_note
+                .as_ref()
+                .unwrap()
+                .data,
+            sealed.data
+        );
     }
 
     /// A note sealed the way the DEVICE seals it must be searchable by its

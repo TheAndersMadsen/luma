@@ -331,8 +331,6 @@ async fn capture_upload(
 struct DemoStatus {
     /// External provider calls are owned by Cosmos, never by a connected Pin.
     provider_authority: &'static str,
-    /// Provider configuration does not imply an available browser runtime.
-    browser_runtime: &'static str,
     assistant: bool,
     speech: bool,
     model: String,
@@ -2629,7 +2627,6 @@ async fn demo_status(State(state): State<HttpState>) -> Json<DemoStatus> {
     let model = config.assistant.model;
     Json(DemoStatus {
         provider_authority: "cosmos",
-        browser_runtime: "unavailable",
         assistant,
         speech,
         model,
@@ -2811,7 +2808,7 @@ mod tests {
             .expect("body bytes");
         let payload: serde_json::Value = serde_json::from_slice(&bytes).expect("json body");
         assert_eq!(payload["provider_authority"], "cosmos");
-        assert_eq!(payload["browser_runtime"], "unavailable");
+        assert!(payload.get("browser_runtime").is_none());
     }
 
     /// The Center REST surface must read the store supplied by server startup.

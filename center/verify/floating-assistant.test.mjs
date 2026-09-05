@@ -22,35 +22,28 @@ test("the global Shell opens one route-persistent floating assistant", async () 
 });
 
 test("assistant answers stay primary and implementation traces stay out of the UI", async () => {
-  const chat = await source("src/components/AiMicChat.tsx");
-  assert.match(chat, /t\.text \? <p className=\{styles\.say\}>/);
-  assert.doesNotMatch(chat, /<details className=\{styles\.trace\}/);
-  assert.doesNotMatch(chat, /reasoningOf|Used \{.*tool|suggestion/i);
-  assert.doesNotMatch(chat, /Done on your Pin|No spoken reply/);
-  assert.match(chat, /text: t\.text \|\| assistantCompletionMessage\(t\.steps\)/);
-  assert.match(chat, /step\.kind === "action" && step\.source === "device"/);
-  assert.match(chat, /This action is only available on your Ai Pin\./);
-  assert.match(chat, /Cosmos did not return a reply\. Try again\./);
+  const display = await source("src/components/BrowserDisplay.tsx");
+  assert.match(display, /<p ref=\{node\}>\{command\.content\.text\}<\/p>/);
+  assert.match(display, /runtime\?\.committed\(command\)/);
+  assert.doesNotMatch(display, /dangerouslySetInnerHTML|<audio|<details|trace\/stream/);
 });
 
 test("Center identifies Cosmos as the assistant authority", async () => {
   const [shell, assistant, chat] = await Promise.all([
     source("src/components/Shell.tsx"),
     source("src/components/FloatingAssistant.tsx"),
-    source("src/components/AiMicChat.tsx"),
+    source("src/components/BrowserDisplay.tsx"),
   ]);
 
   for (const component of [shell, assistant, chat]) assert.match(component, /Ask Cosmos/);
   assert.doesNotMatch(`${shell}\n${assistant}\n${chat}`, /Ask (?:your )?(?:Ai )?Pin/);
-  assert.match(chat, /t\.role === "you" \? "You" : "Cosmos"/);
+  assert.match(chat, /Cosmos display/);
 });
 
-test("a task-specific cue replaces the generic working indicator", async () => {
+test("the assistant uses the actual thin display without a legacy trace or speech path", async () => {
   const chat = await source("src/components/AiMicChat.tsx");
-  assert.match(chat, /t\.cue && <p className=\{styles\.cue\} role="status">\{t\.cue\}<\/p>/);
-  assert.match(chat, /t\.streaming && !t\.cue \? \(/);
-  assert.match(chat, /<StatusChip tone="live" label="Working" \/>/);
-  assert.doesNotMatch(chat, /styles\.dots|<i \/>/);
+  assert.match(chat, /<BrowserDisplay active=\{active\}/);
+  assert.doesNotMatch(chat, /\/api\/assistant\/(stream|speech)|new Audio|SpeechRecognition/);
 });
 
 test("legacy full-page Ai Mic links open the floating assistant", async () => {

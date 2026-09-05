@@ -737,21 +737,15 @@ pub trait ChatModel: Send + Sync + 'static {
 /// The live model selector backed by Cosmos's persisted integration settings.
 /// A dashboard save takes effect on the next model step; no container or Pin
 /// restart is required.
-pub struct ConfiguredChatModel {
-    demo_when_unconfigured: bool,
-}
+pub struct ConfiguredChatModel;
 
 impl ConfiguredChatModel {
     pub fn assistant() -> Self {
-        Self {
-            demo_when_unconfigured: true,
-        }
+        Self
     }
 
     pub fn external_only() -> Self {
-        Self {
-            demo_when_unconfigured: false,
-        }
+        Self
     }
 }
 
@@ -767,15 +761,12 @@ impl ChatModel for ConfiguredChatModel {
             crate::integrations::AssistantProvider::CodexSubscription if configured => {
                 "codex_subscription"
             }
-            _ if self.demo_when_unconfigured => "demo",
             _ => "unconfigured",
         };
         ModelProvenance {
             provider: provider.to_owned(),
             model: if configured {
                 config.model
-            } else if self.demo_when_unconfigured {
-                "demo".to_owned()
             } else {
                 "none".to_owned()
             },
@@ -840,7 +831,6 @@ impl ChatModel for ConfiguredChatModel {
                 };
                 Ok(enforce_explicit_retrieval(messages, tools, result))
             }
-            _ if self.demo_when_unconfigured => DemoChatModel.complete(messages, tools).await,
             _ => Err(LlmError::Transport(
                 "assistant provider is not configured".to_owned(),
             )),

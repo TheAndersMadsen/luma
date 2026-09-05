@@ -58,10 +58,9 @@ Activation copies only the Cosmos endpoint, operator trust root, and that Pin's
 device identity. It never copies an assistant, search, maps, or speech
 credential to the device.
 
-Cosmos sends uploaded photo thumbnails to the assistant provider you select so
-Center can find visible subjects such as “cat” across the full capture library.
-The resulting captions and tags stay inside Cosmos and are never returned by
-the capture API; older photos are indexed in the background on first search.
+On the Ambiance development branch, photo selection uses local image-quality
+scoring. Provider-based captions and visual indexing are disabled until an
+origin-scoped runtime semantic service can mediate access.
 
 The repository retains required stock `humane.*` protocol names and Android
 package identities because the original software calls them byte-for-byte.
@@ -115,56 +114,74 @@ responsible for local permissions, capture, rendering, and playback evidence:
    16 active approvals, not the paper's 50-surface evaluation. This registry hash
    chain has no independent anchors, retention or privacy-filtered audit views;
    it is not yet the complete routing and policy ledger.
-3. **Phase 2B: exercised Pin-to-Center presentation — in progress.** The first
-   admission substep lets the owner explicitly approve a currently paired Pin
-   in **Settings → Account → Devices**. It uses the same registry and ledger as
-   browser enrollment, with a fixed shared-speech ceiling, class-zero trust,
-   unknown actor and occupancy, and no hints or reflexes. Rendering, playback
-   and stock boot epoch/sequence are not verified by this approval. The shared
-   limit is 16 active approvals across both browser and Pin profiles. Stale
-   approvals remain visible and revocable; they do not authenticate traffic.
-   Stock assistant admission requires the typed edge-authenticated device,
-   current pairing owner and active runtime binding before entering the old
-   assistant. Long-lived input streams recheck each admitted message. Pairing
-   outages deny admission and new approval but leave owner inventory and
-   revocation available, with current pairing explicitly reported as unknown.
-   This is not yet the authoritative replacement runtime: admitted requests
-   still reach legacy control/memory paths. The old browser-to-Pin assistant,
-   simulated-device traces and arbitrary speech path have been removed. Browser
-   chat and speech are temporarily unavailable on this branch: authenticated
-   requests receive a bounded HTTP 503, not fabricated Pin authority or an
-   alternative assistant. Provider readiness remains distinct from the explicit
-   unavailable browser-runtime status. Genuine browser ingress, in-flight
-   cancellation and dispatch-time policy remain to be implemented. The existing
-   trace-based production assistant evaluator must also be replaced before
-   release; this branch is not ready for deployment.
-   Join privacy
-   provenance before inference or memory retrieval; connect runtime-owned
-   intents to one authoritative runtime on which the stock handlers converge.
-   Reuse provider adapters, not the old control path as a fallback. Filter
-   eligible channels before versioned
-   ranking and commit the decision durably before dispatch. Center receives
-   bounded typed render commands and acknowledges after the render commits,
-   binding the exact action, channel, incarnation, and content. Commit that
-   acknowledgment before a controlled terminal outcome. State changes cancel
-   or dismiss affected output; use a 2–5-second action timeout, not the
-   heartbeat deadline. This does not prove arbitrary model prose truthful.
-   Redacted logs, checkpoints, and independent anchors are required before
-   claiming the full audit-ledger invariant, not merely a local hash chain.
-4. **Phase 3: realtime Pin interaction.** Verify the actual stock PCM codec,
-   framing, correlation, cancellation, and playback lifecycle on hardware.
-   Add an explicit media contract only if the stock seam is insufficient;
-   preserve stock wire identities and all five APK roles. The realtime front
-   delegates bounded larger-model analysis without executor capability.
-   Measure interruption against audio actually played and reject late results
-   from superseded turns, rather than treating server enqueue as playback.
+3. **Phase 2B: shared runtime and Pin-to-Center presentation — under verification.**
+   Plaintext, encrypted, bidirectional and stateful stock text converge on
+   AmbianceRuntime and the Store's durable, per-principal transitions. The
+   runtime admits the authenticated, currently paired and explicitly approved
+   Pin before cognition. Browser text requires the verified owner and that
+   approved browser's current connection capability. Actor identity and physical
+   occupancy remain unknown. Cognition receives only current text and a bounded
+   informational-intent schema; client history, prompts, observations, location,
+   saved notes and photos are not loaded into its context. There is no
+   unconfigured demo model fallback.
+   Informational speech and visual text cards are the initial none-risk intents.
+   The model proposes shape and content; policy joins provenance over
+   public/shared_room/near_user/private/sensitive, permits only monotone model
+   raises, filters eligibility, and commits routing before dispatch. Conservative
+   text checks can raise privacy but do not prove arbitrary text is correctly
+   classified. Unknown rooms cannot carry content above shared_room.
+   Center polls bounded commands and acknowledges the exact action, generation,
+   channel, incarnation and content digest after render commit. A Pin display
+   request waits for the committed acknowledgment, including a logged repair's
+   exact lineage, before emitting the controlled display-confirmation sentence.
+   Direct stock speech is recorded with playback unknown; enqueue is not played
+   audio. Each dispatch has a three-second deadline, distinct from liveness;
+   the stock display wait has a thirty-second overall bound.
+   Worker/generation fencing rejects stale results. A replacement text request
+   on the same admitted stream cancels only that stream's pending fence; it is
+   not inferred speaker identity or a learned preference. Unsupported stock
+   observations grant no playback evidence or authority.
+   Regression coverage exercises the real AuthLayer and all three stock
+   transport encoders, zero private-store reads before inference, invalid typed
+   intents, late-model revocation and exact browser acknowledgment gating.
+   Terminal action payloads are cleared from runtime projections in the same
+   transaction as cancellation or unknown outcome; an acknowledged browser card
+   remains only while its display is valid, for at most 60 seconds. An indexed
+   cleanup queue runs on startup and once per second, processing at most 128
+   due principals per tick. Expired content is cleared on the next successful
+   bounded sweep; backlogs, database outages, or a stopped runtime delay cleanup.
+   Digests and outcome metadata remain in the ledger. This is logical payload
+   cleanup, not secure erasure of database storage or complete audit retention.
+   Passing evidence must come from the current focused and broad checks.
+   HTTP polling and the stock seam are an intermediate proof, not the final
+   realtime substrate; this branch is not ready for deployment.
+4. **Phase 3: realtime Pin interaction and semantic services.** Integrate
+   self-hosted LiveKit rooms, participant identity, media tracks, text streams
+   and RPC as the paper's shared substrate. Bind cognition dispatch to the
+   admitted origin, issue role-scoped permissions, prohibit unrestricted media
+   subscriptions, and verify boot epochs, monotonic sequences and idempotency.
+   Replace interim polling coordination rather than retaining parallel
+   authoritative buses. Verify stock PCM framing, correlation, interruption and
+   actual playback on hardware while preserving wire identities and all five
+   APK roles. The realtime front delegates bounded larger-model analysis with
+   no executor capability.
+   Implement typed runtime semantic services for completion, child-agent
+   experiences, device actions, composition, translation, vision, food and
+   music work; the current unsupported responses are temporary safeguards,
+   not completed product behavior. Consequential actions require exact
+   action-instance/epoch-bound, single-use expiring confirmation grants that
+   restart invalidates. Add origin-scoped retrieval with the memory/service
+   provenance join before inference; selecting a private output must never
+   grant a shared-origin request private-memory clearance.
 5. **Phase 4: thin native clients and scoped intelligence.** macOS and Android
-   use the same authority protocol with native permission and lifecycle
-   handling. Scope memory to the requesting origin. Earned authority requires
-   calibration, counterfactual lift, coverage, and tenure evidence, not raw
-   acceptance rate. Offline operation permits only preapproved none-risk
-   reflexes. These clients remain part of the product goal, without blocking
-   the initial Pin/Center proof.
+   use the same runtime with native permission and lifecycle handling. Complete
+   the versioned scorer and per-term ablations, calibration, counterfactual
+   lift, coverage and tenure evidence for earned authority. Add privacy-filtered
+   audit views, redaction/retention, signed checkpoints and independent anchors.
+   Offline operation permits only preapproved none-risk reflexes. Native clients,
+   audio and hardware acceptance remain outstanding. Measure the paper's
+   expression-under-200-ms, median durable-routing-under-50-ms and median
+   voice-first-dispatch-under-2.5-s gates; current polling proves none of them.
 6. **Phase 5: acceptance and release.** Exercise all twelve invariants on real
    paths, including performance, 50-surface and ablation evaluations, isolated
    database restart/failure tests, and explicit physical Pin observations.
@@ -491,88 +508,27 @@ automation, but they are not part of normal Pin setup.
 
 ## Cosmos assistant runtime
 
-Cosmos uses one bounded foreground agent for the whole Pin, not a separate
-general agent for music. Each request follows the smallest lane that can finish
-it:
+The Ambiance development branch replaces the old Engine/Bidi control path with
+one durable runtime. Its current text foundation supports informational speech
+on the live origin Pin and bounded visual text cards on an eligible approved
+Center browser. Model proposals cannot name device operations or read saved
+wearer data. Provider configuration remains in Center; an unconfigured provider
+returns unavailable rather than a demo answer.
 
-| Lane | Used for | Model evidence |
-| --- | --- | --- |
-| D1 | Closed device prerequisites and already-grounded actions, such as asking the Pin for its location before local weather | No model call is credited |
-| A1 | One semantic task, direct answer, clarification, or one server lookup | Exact model provenance, step count, and terminal state are recorded |
-| A2 | A compound request with multiple tool operations | The bounded run upgrades from A1 only after more than one tool call |
+Legacy completion, child-chat execution, raw function execution, composition,
+translation, vision and semantic memory-search paths currently return
+unsupported before cognition or private-store reads. Local photo quality
+selection remains available, but automatic provider-based visual indexing is
+disabled. These experiences must be rebuilt as typed, origin-scoped runtime
+semantic services; their removal is not final Ambiance acceptance.
 
-The run owns one 70-second absolute deadline across context loading, model
-steps, server tools, and the terminal response. Individual model steps remain
-bounded at 20 seconds. The signed Hook raises the inspected stock Ai Bus ceiling
-from 25 to 90 seconds, so the agent keeps twenty seconds of delivery margin.
-Legacy and bidirectional stock transports share that budget and telemetry. A
-new utterance cancels the old foreground run; no detached background agent
-continues after the wearer moves on.
-
-Tool results, saved wearer facts, and authenticated device context enter the
-model as typed, untrusted data rather than system instructions. Required action
-fields are enforced after the model responds. Missing data produces one short
-clarifying question. Consequential actions such as placing a call require an
-exact, scoped confirmation, and changing the action or its arguments invalidates
-that confirmation. Reversible playback and volume controls do not gain that
-extra confirmation step.
-
-Before an unlocked music lookup or weather request, the stock loading surface
-may show and speak one closed category cue such as “Finding music” or “Checking
-the weather.” This classification is deterministic and content-free; it does
-not claim a model call. Direct playback controls, unclassified requests, and
-locked requests stay silent, and physical verification records that
-deterministic or lock-policy provenance explicitly.
-
-Notes created on the Pin and facts explicitly saved by the assistant remain
-wearer-scoped in Cosmos. “Show my notes” reads the authenticated wearer’s five
-most recent notes; it never substitutes activity history or a generic answer,
-and an unreadable encrypted note is reported as unreadable rather than absent.
-
-Music discovery is one specialist A1/A2 tool. For a ranked, subjective, or
-time-bound request, the foreground agent uses one research call: the configured
-answer engine when available, otherwise web search, to identify an exact title
-and artist. An information-only question ends there without contacting the
-wearer's provider. An explicit
-playback request then verifies that exact candidate against the active provider;
-only the grounded provider result becomes a stock `PlayMusic` action. The model
-chooses this path for requests such as “play the most popular song by Drake”;
-no artist-only shortcut selects the provider's first row, and provider
-verification never repeats the research step. If the first researched candidate
-is absent from the active provider but the same research named a different exact
-candidate, the agent may verify that second candidate once; title and artist
-guards remain unchanged. Play, pause, stop, and skip
-execute on the Pin once recognized; speech recognition may still use Cosmos.
-
-Navigation requests first obtain the Pin's current location, then use the
-configured places and directions backends to return bounded, spoken route
-guidance. Explicit walking, driving, and cycling requests retain that travel
-mode through provider resolution. The recovered stock System Navigation app has no dispatchable action
-for starting a continuous turn-by-turn session, so Cosmos reports directions
-without claiming that live navigation has started.
-
-Production exposes content-free Prometheus counters for route, transport, model
-use and provenance, terminal state, duration, tool outcomes, and the bounded
-music-resolution stages. Wearer text, tool arguments, identity, and provider
-results are never metric labels.
-
-After deployment, run the fixed production evaluation from the extracted
-operator release:
-
-```sh
-./revival eval assistant production --repeat 2
-```
-
-It exercises direct reasoning, fresh web search, compound multi-tool work, and
-consequential-action confirmation through the real production Engine. It also
-simulates an unlocked Pin request for read-only status, location, nutrition, and
-world-clock routing; returned device actions are inspected but never
-dispatched. Every case must correlate its returned actions with the expected
-model or deterministic run, exact stock arguments, terminal state, and Pin
-deadline. This is a server acceptance check; final release acceptance still
-includes representative spoken turns and device actions on a physical Pin.
-To rerun one failed case without repeating the whole matrix, pass its reported
-ID with `--case ID`.
+A display-completion statement requires the exact committed render
+acknowledgment. Direct stock speech has unknown playback status. Arbitrary
+informational model prose is not proven universally truthful about outcomes.
+See the phased requirements above for the LiveKit substrate, realtime audio,
+native clients, scoped memory, confirmation ceremonies and release gates still
+required. The legacy trace-based assistant evaluator must be replaced before
+release; it does not certify the new architecture.
 
 ### Public verification and agent discovery
 

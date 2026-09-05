@@ -17,7 +17,7 @@ const surface = { ...BROWSER_SURFACE_POSTURE, surfaceId: id, revision: 1, sequen
 function request(body: unknown, extra = {}) {
   return new Request("https://center.test/api/surfaces", { method: "POST", headers: { "content-type": "application/json", ...extra }, body: JSON.stringify(body) });
 }
-const approval = { surfaceId: id, approval: "browser-shared-display-v1" };
+const approval = { surfaceId: id, approval: "browser-shared-display-v2" };
 beforeEach(() => { mocks.authEnabled = true; mocks.session.mockResolvedValue({ sub: "owner" }); mocks.headers.mockResolvedValue({ authorization: "Bearer server-only" }); mocks.origin.mockReturnValue(true); vi.stubGlobal("fetch", vi.fn()); });
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.useRealTimers(); });
 describe("surface BFF real route handlers", () => {

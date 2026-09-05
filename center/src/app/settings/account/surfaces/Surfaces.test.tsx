@@ -14,5 +14,5 @@ it("requires explicit shared approval and keeps enrollment claims honest", async
   fireEvent.click(screen.getByRole("button", { name: "Approve this tab" }));
   fireEvent.click(screen.getByRole("button", { name: "Confirm shared display" }));
   await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([, options]) => options?.method === "POST")).toBe(true));
-  expect(screen.getByText(/Rendering and Pin-to-display delivery are not yet verified/)).toBeVisible();
+  expect(screen.getByText(/Private memories, speech and device actions are unavailable/)).toBeVisible();
 });

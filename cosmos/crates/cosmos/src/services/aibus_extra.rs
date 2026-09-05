@@ -1,33 +1,11 @@
-//! `humane.aibus.*` supporting services — the non-assistant RPCs that surround
-//! the `AIBusService` ReAct loop.
-//!
-//! This module implements seven `humane.aibus` services. They split cleanly into
-//! two faithfulness classes:
-//!
-//! * **Storage / ack RPCs** (`DeviceMessagesService` backup+query,
-//!   `FoodService.Feedback`, `TestAutomationService` calendar harness) hold no
-//!   state in this deployment, so reads return a well-formed *empty* response and
-//!   writes are acked by echoing the client's own payload or a default receipt.
-//!   None of these need an LLM, vision, crypto, or external state, so none is
-//!   `UNIMPLEMENTED`.
-//!
-//! * **Model / vision / crypto / external-fetch RPCs** use the clone's configured
-//!   OpenAI-compatible model for composition, summarization, and text translation.
-//!   Capabilities without a real backing service use deterministic, well-formed
-//!   defaults where those are meaningful, and explicit failure statuses where a
-//!   fabricated result, signed URL, transcript, or credential would mislead the
-//!   device.
-//!
-//! Authentication is enforced at the mTLS edge (the DeviceUser client-cert
-//! Subject-CN principal, RUNTIME-CONTRACTS §2); these handlers hold no per-user
-//! state and trust the already-authenticated channel, matching the `account` and
-//! `provisioning` handler idiom. Encrypted handlers share the ephemeral key store
-//! established by `PublicPrivacyService`.
+//! Stock supporting services. Storage and speech wire adapters remain here.
+//! Cognitive provider calls and private semantic search are unsupported until
+//! origin-scoped runtime services mediate them. Encrypted responses retain
+//! the established PublicPrivacyService channel and stock payload identities.
 
 use std::collections::BTreeMap;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::time::Duration;
 
 use base64::Engine as _;
 use prost::Message;
@@ -45,13 +23,12 @@ use pb::speech_service_server::SpeechService;
 use pb::test_automation_service_server::TestAutomationService;
 use pb::web_search_service_server::WebSearchService;
 
-use crate::assistant::llm::{ChatMessage, ChatModel, ConfiguredChatModel};
+use crate::assistant::llm::{ChatModel, ConfiguredChatModel};
 use crate::backends::azure_speech::{
     AzureSpeechError, SpeechAudioFormat, SpeechRecognitionBackend, SpeechSynthesisBackend,
     configured_backend, configured_recognition_backend,
 };
 
-const MODEL_TIMEOUT: Duration = Duration::from_secs(10);
 const STATE_CAS_RETRIES: usize = 32;
 const MAX_STORED_MESSAGES: usize = 10_000;
 const MAX_CALENDAR_EVENTS: usize = 2_000;
@@ -66,19 +43,10 @@ async fn model_text(
     system: impl Into<String>,
     prompt: impl Into<String>,
 ) -> Result<String, Status> {
-    let messages = [ChatMessage::system(system), ChatMessage::user(prompt)];
-    let reply = tokio::time::timeout(MODEL_TIMEOUT, model.complete(&messages, &[]))
-        .await
-        .map_err(|_| Status::deadline_exceeded(format!("{capability} model timed out")))?
-        .map_err(|e| Status::unavailable(format!("{capability} model failed: {e}")))?;
-    let content = reply.content.unwrap_or_default();
-    let content = content.trim();
-    if content.is_empty() {
-        return Err(Status::unavailable(format!(
-            "{capability} model returned no usable text"
-        )));
-    }
-    Ok(content.to_owned())
+    let _ = (model, capability, system, prompt);
+    Err(Status::unimplemented(
+        "this capability requires a runtime semantic service",
+    ))
 }
 
 fn locale_name(locale: Option<&cosmos_protocol::common::Locale>) -> String {
@@ -379,18 +347,6 @@ impl Composition {
     ) -> Self {
         self.directory = Some(directory);
         self
-    }
-
-    #[cfg(test)]
-    fn with_dependencies(
-        keys: crate::keymaterial::SharedKeyMaterial,
-        model: Arc<dyn ChatModel>,
-    ) -> Self {
-        Self {
-            keys,
-            directory: None,
-            model: Some(model),
-        }
     }
 
     async fn summarize_or_fallback(
@@ -1031,20 +987,6 @@ impl Speech {
     ) -> Self {
         self.directory = Some(directory);
         self
-    }
-
-    #[cfg(test)]
-    fn with_dependencies(
-        keys: crate::keymaterial::SharedKeyMaterial,
-        model: Arc<dyn ChatModel>,
-    ) -> Self {
-        Self {
-            keys,
-            directory: None,
-            model: Some(model),
-            speech: None,
-            recognition: None,
-        }
     }
 
     #[cfg(test)]
@@ -1697,67 +1639,23 @@ impl TestAutomationService for TestAutomation {
 #[derive(Clone)]
 pub struct WebSearch {
     authenticator: crate::auth::RequestAuthenticator,
-    store: crate::store::SharedStore,
-    model: Option<Arc<dyn ChatModel>>,
 }
 
 impl WebSearch {
     pub fn new(
         authenticator: crate::auth::RequestAuthenticator,
-        store: crate::store::SharedStore,
+        _store: crate::store::SharedStore,
     ) -> Self {
-        Self {
-            authenticator,
-            store,
-            model: configured_model(),
-        }
+        Self { authenticator }
     }
 
     #[cfg(test)]
-    fn with_model(store: crate::store::SharedStore, model: Arc<dyn ChatModel>) -> Self {
+    fn with_model(_store: crate::store::SharedStore, _model: Arc<dyn ChatModel>) -> Self {
         Self {
             authenticator: crate::auth::RequestAuthenticator::new(
                 crate::config::Authentication::DevelopmentInsecure,
             ),
-            store,
-            model: Some(model),
         }
-    }
-
-    async fn semantic_matches(&self, principal: &str, query: &str) -> Option<Vec<String>> {
-        let model = self.model.as_ref()?;
-        let candidates = self.store.searchable_notes(principal, 128).await.ok()?;
-        if candidates.is_empty() {
-            return Some(Vec::new());
-        }
-        let allowed = candidates
-            .iter()
-            .map(|note| note.uuid.clone())
-            .collect::<std::collections::BTreeSet<_>>();
-        let corpus = serde_json::to_string(
-            &candidates
-                .iter()
-                .map(|note| serde_json::json!({ "uuid": note.uuid, "text": note.text }))
-                .collect::<Vec<_>>(),
-        )
-        .ok()?;
-        let reply = model_text(
-            model,
-            "memory search",
-            "Rank saved notes by meaning. Return only a JSON array of matching UUID strings, most relevant first. Exclude notes that do not answer the query.",
-            format!("Query: {query}\nNotes: {corpus}"),
-        )
-        .await
-        .ok()?;
-        let ranked = serde_json::from_str::<Vec<String>>(reply.trim()).ok()?;
-        let mut seen = std::collections::BTreeSet::new();
-        Some(
-            ranked
-                .into_iter()
-                .filter(|uuid| allowed.contains(uuid) && seen.insert(uuid.clone()))
-                .take(64)
-                .collect(),
-        )
     }
 }
 
@@ -1774,44 +1672,64 @@ impl Default for WebSearch {
 
 #[tonic::async_trait]
 impl WebSearchService for WebSearch {
-    /// Search the wearer's own memories.
-    ///
-    /// Despite the service name this is **not** web search: it answers with
-    /// `SearchMemoryItem{uuid}` — memory identifiers, never content — which is
-    /// cosmos's `MODE_SEMANTIC_SEARCH` surface. The device resolves the uuids
-    /// against its local store, so the wearer's note bodies never ride back over
-    /// the wire.
-    ///
-    /// A configured model ranks the bounded set of opened note indexes by
-    /// meaning and returns UUIDs only. If that provider is unavailable, the
-    /// deterministic lexical index remains the retry-safe fallback.
+    /// Private semantic memory search remains unsupported until runtime
+    /// admission establishes origin-scoped retrieval clearance.
     async fn search(
         &self,
         request: Request<pb::SearchRequest>,
     ) -> Result<Response<pb::SearchResponse>, Status> {
-        let principal = self.authenticator.authenticate(&request)?;
-        let query = request.into_inner().text_query;
-        if query.trim().is_empty() {
-            return Err(Status::invalid_argument("search requires text_query"));
-        }
-        let owner = principal.expose_for_authorization();
-        let uuids = match self.semantic_matches(owner, &query).await {
-            Some(matches) => matches,
-            None => self.store.search_notes(owner, &query, 0).await?,
-        };
-        Ok(Response::new(pb::SearchResponse {
-            memories: uuids
-                .into_iter()
-                .map(|uuid| pb::SearchMemoryItem { uuid })
-                .collect(),
-        }))
+        self.authenticator.authenticate(&request)?;
+        Err(Status::unimplemented(
+            "private memory search requires origin-scoped runtime admission",
+        ))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assistant::llm::{ChatResponse, MockChatModel};
+
+    #[tokio::test]
+    async fn ambiance_extra_semantic_capabilities_fail_before_cognition_or_private_reads() {
+        struct Never;
+        #[tonic::async_trait]
+        impl ChatModel for Never {
+            async fn complete(
+                &self,
+                _: &[crate::assistant::llm::ChatMessage],
+                _: &[crate::assistant::llm::ToolDef],
+            ) -> Result<crate::assistant::llm::ChatResponse, crate::assistant::llm::LlmError>
+            {
+                panic!("unsupported service reached cognition")
+            }
+        }
+        let model: Arc<dyn ChatModel> = Arc::new(Never);
+        assert_eq!(
+            model_text(&model, "composition", "client system", "PRIVATE_CANARY")
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::Unimplemented
+        );
+        let observed = Arc::new(crate::store::MemoryStore::default());
+        let search = WebSearch::with_model(observed.clone(), model);
+        assert_eq!(
+            search
+                .search(Request::new(pb::SearchRequest {
+                    text_query: "PRIVATE_CANARY".into(),
+                }))
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::Unimplemented
+        );
+        assert_eq!(
+            observed
+                .assistant_private_accesses
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+    }
     use crate::backends::azure_speech::SpeechAudioStream;
 
     const TEST_KID: &str = "aibus-extra-test";
@@ -1832,174 +1750,6 @@ mod tests {
                 cosmos_protocol::common::encryption::EncryptionInformation { kid: sealed.kid },
             ),
             data: sealed.data,
-        }
-    }
-
-    fn open<T: Message + Default>(
-        keys: &crate::keymaterial::SharedKeyMaterial,
-        value: EncryptedData,
-    ) -> T {
-        let kid = value
-            .encryption_information
-            .map(|information| information.kid)
-            .unwrap_or_default();
-        let plaintext = keys
-            .open(&cosmos_crypto::EncryptedData {
-                kid,
-                data: value.data,
-            })
-            .expect("open test response");
-        T::decode(plaintext.as_slice()).expect("decode test response")
-    }
-
-    fn text_response(content: &str) -> ChatResponse {
-        ChatResponse {
-            content: Some(content.to_owned()),
-            thought: String::new(),
-            tool_call: None,
-            extra_tool_calls: Vec::new(),
-        }
-    }
-
-    /// The AAD an envelope was sealed with, read without opening it.
-    fn aad(value: &EncryptedData) -> String {
-        let aad = cosmos_crypto::envelope_aad(&value.data).expect("readable envelope");
-        assert!(
-            !aad.is_empty(),
-            "an empty AAD is unopenable on device: decryptProto throws \
-             \"Cannot reconstruct protobuf with null/empty AAD\" \
-             (CoreSecureChannel.java:167)"
-        );
-        String::from_utf8(aad).expect("AAD is the UTF-8 class name")
-    }
-
-    /// Every encrypted response this module emits must name its payload's
-    /// fully-qualified Java class in the envelope AAD. The device resolves the
-    /// parser by `Class.forName(aad)` (CoreSecureChannel.java:172) after
-    /// rejecting an empty AAD outright (:167), and
-    /// `EphemeralProtectionManager.decrypt` (:130) returns an unconstrained
-    /// generic — so this string is the only thing telling the Pin how to read the
-    /// body. Empty means the response cannot be opened at all.
-    #[tokio::test]
-    async fn sealed_responses_name_their_payload_class_in_the_aad() {
-        let keys = shared_keys();
-
-        // CompositionService.EncryptedComposeMessage
-        let model: Arc<dyn ChatModel> = Arc::new(MockChatModel::new(vec![
-            text_response("Are you free tomorrow?"),
-            text_response("Free tomorrow?"),
-        ]));
-        let composed = Composition::with_dependencies(keys.clone(), model)
-            .encrypted_compose_message(Request::new(pb::EncryptedMessageCompositionRequest {
-                request: Some(seal(
-                    &keys,
-                    &pb::MessageCompositionRequest {
-                        r#type: pb::MessageSourceType::Message as i32,
-                        text: "free tomorrow?".to_owned(),
-                        ..Default::default()
-                    },
-                )),
-            }))
-            .await
-            .expect("compose response")
-            .into_inner()
-            .response
-            .expect("encrypted compose payload");
-        assert_eq!(aad(&composed), MESSAGE_COMPOSITION_RESPONSE);
-        assert_eq!(aad(&composed), "humane.aibus.MessageCompositionResponse");
-
-        // CompositionService.EncryptedSummarizeMessages
-        let summarized = Composition::with_key_material(keys.clone())
-            .encrypted_summarize_messages(Request::new(pb::EncryptedSummarizationNetworkRequest {
-                request: Some(seal(&keys, &pb::SummarizationNetworkRequest::default())),
-            }))
-            .await
-            .expect("summarize response")
-            .into_inner()
-            .response
-            .expect("encrypted summarization payload");
-        assert_eq!(aad(&summarized), SUMMARIZATION_NETWORK_RESPONSE);
-        assert_eq!(
-            aad(&summarized),
-            "humane.aibus.SummarizationNetworkResponse"
-        );
-
-        // SpeechService.CanTranslate
-        let capability = Speech::with_key_material(keys.clone())
-            .can_translate(Request::new(pb::EncryptedCanTranslateRequest {
-                data: Some(seal(&keys, &pb::CanTranslateRequest::default())),
-            }))
-            .await
-            .expect("can-translate response")
-            .into_inner()
-            .data
-            .expect("encrypted capability payload");
-        assert_eq!(aad(&capability), CAN_TRANSLATE_RESPONSE);
-        assert_eq!(aad(&capability), "humane.aibus.CanTranslateResponse");
-
-        // SpeechService.TranslateText
-        let model: Arc<dyn ChatModel> =
-            Arc::new(MockChatModel::new(vec![text_response("Vi ses i morgen.")]));
-        let translated = Speech::with_dependencies(keys.clone(), model)
-            .translate_text(Request::new(pb::EncryptedTranslateTextRequest {
-                data: Some(seal(
-                    &keys,
-                    &pb::TranslateTextRequest {
-                        text: "See you tomorrow.".to_owned(),
-                        from: Some(cosmos_protocol::common::Locale {
-                            language: "en".to_owned(),
-                            country: "US".to_owned(),
-                        }),
-                        to: Some(cosmos_protocol::common::Locale {
-                            language: "da".to_owned(),
-                            country: "DK".to_owned(),
-                        }),
-                        ..Default::default()
-                    },
-                )),
-            }))
-            .await
-            .expect("translate-text response")
-            .into_inner()
-            .data
-            .expect("encrypted translation payload");
-        assert_eq!(aad(&translated), TRANSLATE_TEXT_RESPONSE);
-        assert_eq!(aad(&translated), "humane.aibus.TranslateTextResponse");
-
-        // FoodService.EncryptedIdentifyFood seals through the same helper, but
-        // reaching its seal requires a live Open Food Facts lookup, so the RPC
-        // itself is not driven here. Exercise the exact constant its call site
-        // passes over the exact message type it seals.
-        let identified = seal_response(
-            &keys,
-            None,
-            TEST_KID,
-            &pb::FoodIdentifyResponse {
-                item_name: "oat milk".to_owned(),
-                ..Default::default()
-            },
-            "FoodIdentify",
-            FOOD_IDENTIFY_RESPONSE,
-        )
-        .await
-        .expect("seal food response");
-        assert_eq!(aad(&identified), "humane.aibus.FoodIdentifyResponse");
-
-        // The binding is authenticated, not cosmetic: the body still opens under
-        // its channel key with the AAD in place.
-        for sealed in [composed, summarized, capability, translated, identified] {
-            let kid = sealed
-                .encryption_information
-                .map(|information| information.kid)
-                .unwrap_or_default();
-            assert!(
-                keys.open(&cosmos_crypto::EncryptedData {
-                    kid,
-                    data: sealed.data,
-                })
-                .is_ok(),
-                "a type-bound envelope still opens under its channel key"
-            );
         }
     }
 
@@ -2107,140 +1857,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn compose_message_uses_the_configured_model_for_both_styles() {
-        let keys = shared_keys();
-        let model: Arc<dyn ChatModel> = Arc::new(MockChatModel::new(vec![
-            text_response("Would you be available to meet tomorrow?"),
-            text_response("Want to meet tomorrow?"),
-        ]));
-        let service = Composition::with_dependencies(keys.clone(), model);
-        let request = pb::MessageCompositionRequest {
-            r#type: pb::MessageSourceType::Message as i32,
-            text: "meet tomorrow?".to_owned(),
-            ..Default::default()
-        };
-
-        let response = service
-            .encrypted_compose_message(Request::new(pb::EncryptedMessageCompositionRequest {
-                request: Some(seal(&keys, &request)),
-            }))
-            .await
-            .expect("compose response")
-            .into_inner()
-            .response
-            .expect("encrypted compose payload");
-        let response: pb::MessageCompositionResponse = open(&keys, response);
-
-        assert_eq!(response.r#type, pb::MessageSourceType::Message as i32);
-        assert_eq!(response.formal, "Would you be available to meet tomorrow?");
-        assert_eq!(response.casual, "Want to meet tomorrow?");
-    }
-
-    #[tokio::test]
-    async fn translate_text_uses_the_model_and_capability_reflects_configuration() {
-        let keys = shared_keys();
-        let request = pb::CanTranslateRequest {
-            from: Some(cosmos_protocol::common::Locale {
-                language: "en".to_owned(),
-                country: "US".to_owned(),
-            }),
-            to: Some(cosmos_protocol::common::Locale {
-                language: "da".to_owned(),
-                country: "DK".to_owned(),
-            }),
-        };
-        let unavailable = Speech {
-            keys: keys.clone(),
-            directory: None,
-            model: None,
-            speech: None,
-            recognition: None,
-        }
-        .can_translate(Request::new(pb::EncryptedCanTranslateRequest {
-            data: Some(seal(&keys, &request)),
-        }))
-        .await
-        .expect("can-translate response")
-        .into_inner()
-        .data
-        .expect("encrypted capability payload");
-        let unavailable: pb::CanTranslateResponse = open(&keys, unavailable);
-        assert!(!unavailable.is_supported);
-
-        let model: Arc<dyn ChatModel> =
-            Arc::new(MockChatModel::new(vec![text_response("Vi ses i morgen.")]));
-        let service = Speech::with_dependencies(keys.clone(), model);
-        let response = service
-            .translate_text(Request::new(pb::EncryptedTranslateTextRequest {
-                data: Some(seal(
-                    &keys,
-                    &pb::TranslateTextRequest {
-                        text: "See you tomorrow.".to_owned(),
-                        from: request.from,
-                        to: request.to.clone(),
-                        ..Default::default()
-                    },
-                )),
-            }))
-            .await
-            .expect("translate-text response")
-            .into_inner()
-            .data
-            .expect("encrypted translation payload");
-        let response: pb::TranslateTextResponse = open(&keys, response);
-
-        assert_eq!(response.translation, "Vi ses i morgen.");
-        assert_eq!(response.locale, request.to);
-        assert!(response.speech.is_none());
-    }
-
-    #[tokio::test]
-    async fn translate_text_includes_real_speech_when_requested_and_configured() {
-        let keys = shared_keys();
-        let service = Speech {
-            keys: keys.clone(),
-            directory: None,
-            model: Some(Arc::new(MockChatModel::new(vec![text_response(
-                "Velkommen tilbage.",
-            )]))),
-            speech: Some(Arc::new(MockSpeechBackend)),
-            recognition: None,
-        };
-        let response = service
-            .translate_text(Request::new(pb::EncryptedTranslateTextRequest {
-                data: Some(seal(
-                    &keys,
-                    &pb::TranslateTextRequest {
-                        text: "Welcome back.".to_owned(),
-                        from: Some(cosmos_protocol::common::Locale {
-                            language: "en".to_owned(),
-                            country: "US".to_owned(),
-                        }),
-                        to: Some(cosmos_protocol::common::Locale {
-                            language: "da".to_owned(),
-                            country: "DK".to_owned(),
-                        }),
-                        speech_config: Some(pb::SpeechConfig {
-                            audio_format: pb::AudioFormat::Raw24khz16bitMonoPcm as i32,
-                            ..Default::default()
-                        }),
-                        ..Default::default()
-                    },
-                )),
-            }))
-            .await
-            .expect("translated speech response")
-            .into_inner()
-            .data
-            .expect("encrypted translated speech");
-        let response: pb::TranslateTextResponse = open(&keys, response);
-        assert_eq!(response.translation, "Velkommen tilbage.");
-        let speech = response.speech.expect("translated audio");
-        assert_eq!(speech.audio, [0x10, 0x20, 0x30, 0x40]);
-        assert_eq!(speech.format, pb::AudioFormat::Raw24khz16bitMonoPcm as i32);
-    }
-
-    #[tokio::test]
     async fn storage_acks_ok_and_fallback_rpcs_succeed() {
         let store: crate::store::SharedStore = Arc::new(crate::store::MemoryStore::default());
         let messages = DeviceMessages::new(
@@ -2333,17 +1949,15 @@ mod tests {
                 .code(),
             tonic::Code::FailedPrecondition,
         );
-        // A wearer with no indexed memories gets an empty result, not an error.
-        assert!(
+        assert_eq!(
             WebSearch::default()
                 .search(Request::new(pb::SearchRequest {
-                    text_query: "anything".to_owned(),
+                    text_query: "anything".into()
                 }))
                 .await
-                .expect("memory search returns a shape")
-                .into_inner()
-                .memories
-                .is_empty(),
+                .unwrap_err()
+                .code(),
+            tonic::Code::Unimplemented
         );
         assert_eq!(
             Speech::default()
@@ -2548,48 +2162,5 @@ mod tests {
             objects.accept(token, None, b"replacement").await.is_err(),
             "the same attachment capability must not be reusable"
         );
-    }
-
-    #[tokio::test]
-    async fn semantic_memory_search_returns_only_model_ranked_owned_notes() {
-        let store: crate::store::SharedStore = Arc::new(crate::store::MemoryStore::default());
-        let principal = "development-insecure-principal";
-        let wanted = store
-            .create_note(principal, None, None)
-            .await
-            .expect("note created");
-        store
-            .index_note(
-                principal,
-                &wanted.uuid,
-                "Our accommodation in France was Le Bristol",
-            )
-            .await;
-        let unrelated = store
-            .create_note(principal, None, None)
-            .await
-            .expect("note created");
-        store
-            .index_note(
-                principal,
-                &unrelated.uuid,
-                "The car service is due on Friday",
-            )
-            .await;
-
-        let response = format!("[\"unknown-note\",\"{}\",\"{}\"]", wanted.uuid, wanted.uuid);
-        let search = WebSearch::with_model(
-            store,
-            Arc::new(MockChatModel::new(vec![text_response(&response)])),
-        );
-        let found = search
-            .search(Request::new(pb::SearchRequest {
-                text_query: "Where did we sleep in Paris?".to_owned(),
-            }))
-            .await
-            .expect("semantic search succeeds")
-            .into_inner();
-        assert_eq!(found.memories.len(), 1);
-        assert_eq!(found.memories[0].uuid, wanted.uuid);
     }
 }

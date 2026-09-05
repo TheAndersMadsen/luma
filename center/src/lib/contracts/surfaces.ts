@@ -1,22 +1,28 @@
 // Browser-facing projection of contracts/surface-registry.json. No owner/device IDs.
-export const SURFACE_APPROVAL = "browser-shared-display-v1";
+export const SURFACE_APPROVAL = "browser-shared-display-v2";
 export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const SURFACE_TOKEN = /^[0-9a-f]{64}$/;
 export const BROWSER_SURFACE_POSTURE = {
   name: "Browser display",
   manifest: {
     class: "browser",
-    capabilities: { input: ["state.visibility"], output: { "visual.card": { maxClass: "shared_room", shared: true } } },
+    capabilities: { input: ["state.visibility", "text.public"], output: { "visual.card": { maxClass: "shared_room", shared: true } } },
     constraints: ["visible_page_only", "no_background_output"],
     expression: { "visual.card": ["acknowledged", "degraded"] },
     cognition: { declaredClass: 0, models: [] },
-    authority: { mayOriginate: ["state.change"], reflexive: [] },
+    authority: { mayOriginate: ["state.change", "user.request"], reflexive: [] },
   },
   trustLevel: 0,
   occupancy: "unknown",
   renderVerified: false,
 } as const;
-export interface Surface extends Readonly<typeof BROWSER_SURFACE_POSTURE> {
+export const OUTPUT_ONLY_BROWSER_POSTURE = { ...BROWSER_SURFACE_POSTURE, manifest: {
+  ...BROWSER_SURFACE_POSTURE.manifest,
+  capabilities: { ...BROWSER_SURFACE_POSTURE.manifest.capabilities, input: ["state.visibility"] },
+  authority: { mayOriginate: ["state.change"], reflexive: [] },
+} } as const;
+export interface Surface extends Omit<Readonly<typeof BROWSER_SURFACE_POSTURE>, "manifest"> {
+  manifest: typeof BROWSER_SURFACE_POSTURE.manifest | typeof OUTPUT_ONLY_BROWSER_POSTURE.manifest;
   surfaceId: string;
   revision: number;
   revoked: boolean;
@@ -47,11 +53,12 @@ export function exact(value: unknown, expected: unknown): boolean {
 export function parseSurface(value: unknown): Surface {
   const s = record(value);
   // UI claims depend on the fixed approved posture, not merely well-shaped IDs.
-  if (!Object.entries(BROWSER_SURFACE_POSTURE).every(([key, expected]) => exact(s[key], expected))) throw new Error("unsupported_surface_posture");
+  const posture = [BROWSER_SURFACE_POSTURE, OUTPUT_ONLY_BROWSER_POSTURE].find(p => Object.entries(p).every(([key, expected]) => exact(s[key], expected)));
+  if (!posture) throw new Error("unsupported_surface_posture");
   if (typeof s.surfaceId !== "string" || !UUID.test(s.surfaceId) || !integer(s.revision, 1)
     || !integer(s.sequence) || !integer(s.connectionExpiresAt) || !integer(s.leaseExpiresAt)
     || [s.revoked, s.visible, s.connected, s.available].some(v => typeof v !== "boolean")) throw new Error("invalid_surface");
-  return { ...BROWSER_SURFACE_POSTURE, surfaceId: s.surfaceId, revision: s.revision, sequence: s.sequence,
+  return { ...posture, surfaceId: s.surfaceId, revision: s.revision, sequence: s.sequence,
     connectionExpiresAt: s.connectionExpiresAt, leaseExpiresAt: s.leaseExpiresAt,
     revoked: s.revoked as boolean, visible: s.visible as boolean,
     connected: s.connected as boolean, available: s.available as boolean };

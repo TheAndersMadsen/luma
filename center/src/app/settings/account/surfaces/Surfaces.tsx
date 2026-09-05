@@ -5,12 +5,15 @@ import { parseSurface, record, type Surface } from "@/lib/contracts/surfaces";
 import { SurfaceTab, type TabStatus } from "./surfaceTab";
 import settings from "../../settings.module.css";
 import styles from "./surfaces.module.css";
+import { BrowserRuntime } from "@/lib/browserRuntime";
+import { CommittedCard } from "@/components/BrowserDisplay";
+import type { RenderCommand } from "@/lib/contracts/ambianceRuntime";
 
 const STATUS: Record<TabStatus, string> = {
   inactive: "This tab is not connected. If a leave request cannot reach Cosmos, availability expires 45 seconds after the last state update Cosmos accepts.",
   approving: "Waiting for Cosmos to commit approval…",
   pending: "Waiting for Cosmos to confirm this tab’s availability…",
-  visible: "Cosmos confirmed this tab visible. Rendering is not verified.",
+  visible: "Cosmos confirmed this shared tab visible. It can receive public text cards.",
   hidden: "Cosmos confirmed this tab hidden and unavailable.",
   lost: "Connection could not be confirmed. This tab stopped reporting; availability expires 45 seconds after the last state update Cosmos accepts. Approve again to reconnect.",
   expired: "The one-hour connection expired. Approve again to reconnect.",
@@ -24,6 +27,8 @@ export function Surfaces() {
   const [revoking, setRevoking] = useState<string | null>(null);
   const [mutationError, setMutationError] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [command, setCommand] = useState<RenderCommand | null>(null);
+  const [runtimeStatus, setRuntimeStatus] = useState("");
   const tab = useRef<SurfaceTab | null>(null);
   const listGeneration = useRef(0);
   const refresh = useCallback(async () => {
@@ -38,7 +43,8 @@ export function Surfaces() {
     } catch { if (generation === listGeneration.current) setListError(true); }
   }, []);
   useEffect(() => {
-    const current = new SurfaceTab(setStatus, () => { void refresh(); });
+    const runtime = new BrowserRuntime(crypto.randomUUID(), setCommand, setRuntimeStatus);
+    const current = new SurfaceTab(setStatus, () => { void refresh(); }, runtime);
     tab.current = current;
     const visibility = () => current.visibility(document.visibilityState === "visible");
     const pagehide = () => current.leave();
@@ -66,14 +72,16 @@ export function Surfaces() {
     <section className={`${settings.section} ${styles.card}`}>
       <h2>Use this tab as a shared display</h2>
       <p>Approve a visible browser page, not a private screen. Cosmos cannot tell who is in the room. Trust stays at level 0; this approval grants no autonomous actions.</p>
-      <p>No assistant content is delivered in this enrollment step. Rendering and Pin-to-display delivery are not yet verified.</p>
+      <p>Approval enables public text requests and public text cards. Private memories, speech and device actions are unavailable in this tab.</p>
       <p role="status">{STATUS[status]}</p>
       {confirming ? <div role="group" aria-label="Approve shared display">
-        <p>This display may be seen by other people. The connection lasts one hour and stops reporting when you leave this page. Approve it as shared?</p>
+        <p>This display may be seen by other people. Approve public text input and public replies for one hour? Leaving this page clears the display.</p>
         <button onClick={() => { setConfirming(false); void tab.current?.approve(); }}>Confirm shared display</button>
         <button onClick={() => setConfirming(false)}>Cancel</button>
       </div> : <button disabled={status === "approving"} onClick={() => setConfirming(true)}>Approve this tab</button>}
       <button onClick={() => { setConfirming(false); tab.current?.leave(); }}>Leave this tab</button>
+      {(status === "visible" || status === "lost") && <p role="status">{runtimeStatus}</p>}
+      <CommittedCard command={status === "visible" ? command : null} runtime={tab.current?.runtime} />
     </section>
     <section className={`${settings.section} ${styles.card}`}>
       <h2>Approved browser displays</h2>
@@ -83,6 +91,7 @@ export function Surfaces() {
         {rows.map((surface, index) => <li key={surface.surfaceId}>
           <strong>{surface.surfaceId === tab.current?.surfaceId ? "This tab" : `Browser display ${index + 1}`}</strong>
           <p>Shared display · room unknown · rendering not verified</p>
+          {!surface.manifest.authority.mayOriginate.some(value => value === "user.request") && <p>Output-only approval. Explicit reapproval is required for public text input.</p>}
           <p>{surface.connected && surface.leaseExpiresAt > Date.now() && surface.connectionExpiresAt > Date.now() ? "Connection reported at last refresh" : "Disconnected at last refresh"}</p>
           {revoking === surface.surfaceId ? <div>
             <p>Revoke this display’s approval and connection?</p>

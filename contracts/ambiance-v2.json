@@ -11,7 +11,7 @@
     "referenceImplementation": "unavailable",
     "limitation": "The paper names AMBIANCE-IMPLEMENTATION.md and reference tests but supplies no repository URL or commit. Those implementations and reported results have not been independently reproduced."
   },
-  "scope": "Track the published single-principal, single-site semantics and separate Cosmos product acceptance. LiveKit and process boundaries are implementation choices, not conformance requirements. This is not a runtime schema or a passing conformance report.",
+  "scope": "Track published single-principal, single-site semantics and Cosmos product acceptance. This implementation targets the paper’s self-hosted LiveKit substrate; current polling is an intermediate proof, not the final transport. This inventory is not a passing conformance report.",
   "verificationPolicy": "pending means no implementation evidence is recorded; partial means a cited implementation or test definition covers only part of the requirement. Evidence references and metadata checks never establish that behavior passed, physical acceptance occurred, or production is conformant. Runtime reports and secrets stay outside the checkout.",
   "interpretations": [
     {
@@ -40,7 +40,7 @@
       "path": "cosmos/crates/cosmos/src/http.rs",
       "anchor": "async fn browser_assistant_unavailable(",
       "scope": "Removes the legacy browser-to-Pin control, simulated device, raw trace and arbitrary speech paths; existing authenticated browser routes return bounded unavailable responses without model, tool or private-store access.",
-      "limitation": "An unavailable boundary is not a functioning browser assistant or presentation surface. Genuine browser runtime ingress and the replacement production evaluator remain required before deployment."
+      "limitation": "Legacy browser routes remain unavailable; the separate approved-browser runtime ingress has bounded text and render support. Realtime substrate and replacement production evaluator remain required before deployment."
     },
     {
       "id": "pin-runtime-admission-definition",
@@ -48,7 +48,7 @@
       "path": "cosmos/crates/cosmos/src/pin_admission.rs",
       "anchor": "pub async fn admit(",
       "scope": "Requires typed authenticated device provenance, current pairing ownership and the active fixed-profile Pin binding in the shared registry before stock assistant admission; long-lived messages recheck the same boundary.",
-      "limitation": "Admission only, not full runtime policy. Approved callers still reach legacy orchestration/memory; no actor authentication, private-origin clearance, stock boot epoch/sequence, in-flight cancellation or dispatch-time guarantee."
+      "limitation": "Admission establishes transport and approval only. Current stock text now converges on the durable runtime; actor authentication, private-origin clearance and hardware boot epoch/sequence remain unimplemented. Separate runtime tests define the cancellation and dispatch-time slices."
     },
     {
       "id": "pin-manifest-definition",
@@ -79,8 +79,8 @@
       "kind": "test-definition",
       "path": "cosmos/crates/cosmos/src/services/aibus_main.rs",
       "anchor": "async fn device_provenance_reaches_plaintext_encrypted_and_bidi_model_contexts()",
-      "scope": "Defines an in-process test of authenticated device provenance reaching model context through plaintext, encrypted and bidirectional stock handlers.",
-      "limitation": "Test definition only, not a passing execution report or physical Pin evidence. Does not establish enrollment, physical privacy, epochs, replay protection or complete invariant coverage."
+      "scope": "Defines the actual AuthLayer and plaintext, encrypted and bidirectional stock handlers admitting typed device provenance into the runtime while cognition sees only current text plus fixed runtime instructions. Asserts zero private-store access and no device/account identifiers in model context.",
+      "limitation": "Test definition only, not a passing execution report or physical Pin evidence. Does not establish physical privacy, hardware epochs, replay protection, realtime audio or complete invariant coverage."
     },
     {
       "id": "browser-manifest-definition",
@@ -88,7 +88,7 @@
       "path": "cosmos/crates/cosmos/src/surface_registry.rs",
       "anchor": "pub fn browser_manifest()",
       "scope": "Defines the fixed browser manifest persisted on owner approval, with a shared visual capability ceiling, visibility constraints and class-zero cognition; registry state retains a class-zero trust floor.",
-      "limitation": "Browser enrollment only. Does not establish Pin participation, rendering, private channel posture or earned authority."
+      "limitation": "A fixed shared visual profile with bounded text input/render support does not establish private physical posture, earned authority or realtime/native participation."
     },
     {
       "id": "browser-enrollment-auth-test-definition",
@@ -112,7 +112,63 @@
       "path": "center/src/app/settings/account/surfaces/Surfaces.tsx",
       "anchor": "export function Surfaces()",
       "scope": "Provides owner approval, leave, revoke and listing controls for the current shared browser tab, with visibility and page lifecycle reporting.",
-      "limitation": "Enrollment lifecycle only; no routed content, render acknowledgment, physical privacy or Pin-to-Center presentation evidence."
+      "limitation": "This definition covers approval lifecycle only; the separate browser-render test defines the DOM acknowledgment slice. Physical privacy and hardware acceptance remain unverified."
+    },
+    {
+      "id": "runtime-private-context-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/runtime.rs",
+      "anchor": "async fn ambiance_runtime_private_reference_and_raw_intent_never_access_private_store()",
+      "scope": "Defines rejection of explicit private-reference requests before cognition and raw device-operation proposals without private-store access.",
+      "limitation": "Current two informational intents only. Conservative text checks are not a complete semantic privacy classifier; origin-scoped authorized retrieval and additional semantic services remain required."
+    },
+    {
+      "id": "runtime-policy-revalidation-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/state.rs",
+      "anchor": "fn ambiance_heartbeat_does_not_cancel_but_hide_rotation_and_privacy_raise_do()",
+      "scope": "Defines current shared-channel policy revalidation, monotone privacy raises, cancellation on hiding/rotation and stable visible heartbeats.",
+      "limitation": "State-machine test definition only. No physical occupancy sensing, private-channel exception, full scoring ablations or universal privacy classification."
+    },
+    {
+      "id": "runtime-display-outcome-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/runtime.rs",
+      "anchor": "async fn ambiance_runtime_pin_display_success_requires_exact_committed_ack()",
+      "scope": "Defines wrong-digest rejection and the controlled stock display-confirmation sentence only after the browser acknowledgment commits.",
+      "limitation": "In-memory store/stock encoder test definition only. Does not prove hardware rendering or audio playback, arbitrary model prose truthfulness, or the LiveKit substrate."
+    },
+    {
+      "id": "runtime-repair-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/runtime.rs",
+      "anchor": "async fn ambiance_runtime_repaired_display_requires_its_own_ack()",
+      "scope": "Defines a same-key retry and logged fallback lineage whose exact replacement acknowledgment permits controlled confirmation; the original unknown outcome alone does not.",
+      "limitation": "Definition only; no consequential side effects, real network partitions, independent anchors or hardware playback."
+    },
+    {
+      "id": "runtime-disconnect-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/services/aibus_main.rs",
+      "anchor": "async fn ambiance_encrypted_disconnect_cancels_blocked_cognition_and_display_wait()",
+      "scope": "Defines encrypted output disconnection cancelling blocked cognition and pending display wait, releasing only the pending durable turn.",
+      "limitation": "Definition only, not a passing report. Transport replacement is not authenticated speaker correction; audio interruption and hardware cancellation remain unverified."
+    },
+    {
+      "id": "runtime-postgres-atomicity-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/store_postgres.rs",
+      "anchor": "async fn ambiance_postgres_independent_workers_rollback_reopen_and_registry_fence()",
+      "scope": "Defines isolated PostgreSQL competing workers, failed append rollback, durable reopen and registry-revocation fencing for runtime decisions.",
+      "limitation": "Requires an isolated test database and is not an execution report. No production database effects, database-server restart proof, signed checkpoints or independent anchors."
+    },
+    {
+      "id": "browser-dom-ack-test-definition",
+      "kind": "test-definition",
+      "path": "center/src/components/BrowserDisplay.test.tsx",
+      "anchor": "it(\"requires explicit approval, escapes text, and acknowledges only the committed exact DOM\"",
+      "scope": "Defines explicit browser approval, escaped text and an exact-action acknowledgment after the React DOM commit; the file also defines no acknowledgment after render failure.",
+      "limitation": "Mocked fetch and DOM test definitions only. No live browser-to-server acceptance, physical privacy, native surface or latency proof."
     }
   ],
   "requirements": [
@@ -122,8 +178,8 @@
       "sourceSections": ["4.3", "9.2"],
       "requirement": "Dispatch-time channel eligibility forbids above-shared_room content on bystander-perceivable outputs and cancels in-flight delivery after privacy degradation.",
       "acceptance": "Exercise every render path with state changes before and during dispatch; include local playback stop and already-rendered-content limitations.",
-      "status": "pending",
-      "evidence": []
+      "status": "partial",
+      "evidence": ["runtime-policy-revalidation-test-definition"]
     },
     {
       "id": "invariant-02",
@@ -149,8 +205,8 @@
       "sourceSections": ["4.6", "9.2"],
       "requirement": "A shared-origin request cannot receive sensitive-scoped memory in model context.",
       "acceptance": "Check retrieval before every inference and delegation; selecting a private rendering channel must not broaden origin authority.",
-      "status": "pending",
-      "evidence": []
+      "status": "partial",
+      "evidence": ["runtime-private-context-test-definition", "stock-transport-provenance-test-definition"]
     },
     {
       "id": "invariant-05",
@@ -159,7 +215,7 @@
       "requirement": "Routing and policy decisions retain rationale in a verifiable, tamper-evident durable history.",
       "acceptance": "Verify append-before-dispatch, ordering, reopen, tamper/removal detection, signed checkpoints and independently countersigned or protected checkpoint anchors.",
       "status": "partial",
-      "evidence": ["registry-atomic-append-test-definition", "pin-registry-durability-test-definition"]
+      "evidence": ["registry-atomic-append-test-definition", "pin-registry-durability-test-definition", "runtime-postgres-atomicity-test-definition"]
     },
     {
       "id": "invariant-06",
@@ -167,8 +223,8 @@
       "sourceSections": ["4.3", "4.8", "9.2"],
       "requirement": "Runtime classification retains the strongest provenance restriction; cognition may tighten it but cannot lower it.",
       "acceptance": "Join origin, memory and service-data classes across async work, hints, retries and output; log any authorized deterministic reclassification.",
-      "status": "pending",
-      "evidence": []
+      "status": "partial",
+      "evidence": ["runtime-policy-revalidation-test-definition"]
     },
     {
       "id": "invariant-07",
@@ -203,8 +259,8 @@
       "sourceSections": ["4.4", "5.3", "9.2"],
       "requirement": "Spoken and expressive outcome claims require the matching committed runtime outcome.",
       "acceptance": "Require the exact action's acknowledgment, reject stale/unrelated acknowledgments, represent unknown outcomes honestly, and resolve unrestricted-outcome-prose before claiming universal coverage.",
-      "status": "pending",
-      "evidence": []
+      "status": "partial",
+      "evidence": ["runtime-display-outcome-test-definition", "browser-dom-ack-test-definition"]
     },
     {
       "id": "invariant-11",
@@ -248,8 +304,8 @@
       "sourceSections": ["4.4", "5.1", "5.3"],
       "requirement": "Cognition proposes runtime intents; only deterministic runtime policy binds targets, grants, memory scope and dispatch, including policy/registry changes.",
       "acceptance": "Keep asynchronous analysis responsive to cancellation without granting analytical models direct device or service execution authority.",
-      "status": "pending",
-      "evidence": []
+      "status": "partial",
+      "evidence": ["runtime-private-context-test-definition"]
     },
     {
       "id": "inference-ability",
@@ -275,8 +331,8 @@
       "sourceSections": ["5.3", "9.1"],
       "requirement": "Serialize authority per authenticated principal, corroborate duplicate capture within that principal and allow only authorized corrections to supersede remaining work.",
       "acceptance": "Race distinct surfaces, guests, corrections and slow model results; stale work cannot dispatch or produce a terminal expression for a superseded turn.",
-      "status": "pending",
-      "evidence": []
+      "status": "partial",
+      "evidence": ["runtime-postgres-atomicity-test-definition", "runtime-disconnect-test-definition"]
     },
     {
       "id": "recovery",
@@ -284,8 +340,8 @@
       "sourceSections": ["5.2", "5.3", "5.4"],
       "requirement": "Durable recovery and receiver dedup preserve action identity; render repair uses revalidated logged fallbacks, while uncertain effects never retry automatically.",
       "acceptance": "Exercise crashes around commit/dispatch/ack, partitions, reconnect and bounded offline queues; invalidate grants on restart and require fresh ceremony after outcome unknown.",
-      "status": "pending",
-      "evidence": []
+      "status": "partial",
+      "evidence": ["runtime-repair-test-definition", "runtime-postgres-atomicity-test-definition"]
     },
     {
       "id": "memory-lifecycle",
@@ -339,7 +395,7 @@
       "requirement": "Center is a registered rendering surface separately from its read-only observer role, providing the first two-surface Pin-to-browser interaction.",
       "acceptance": "Render a routed card and correlate its acknowledgment; hidden, locked, disconnected and stale pages cannot report a successful current render.",
       "status": "partial",
-      "evidence": ["center-enrollment-lifecycle-definition", "retired-browser-assistant-boundary-definition"]
+      "evidence": ["center-enrollment-lifecycle-definition", "retired-browser-assistant-boundary-definition", "browser-dom-ack-test-definition", "runtime-display-outcome-test-definition"]
     },
     {
       "id": "macos-surface",

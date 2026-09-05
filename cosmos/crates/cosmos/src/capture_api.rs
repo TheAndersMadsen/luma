@@ -44,10 +44,7 @@
 //! error: it is an ordinary, truthful answer, and the caller learns nothing
 //! about whether the identifier exists under some *other* account.
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::Arc;
 
 use axum::{
     Router,
@@ -661,54 +658,6 @@ impl ApiState {
 /// 8): a page must not be able to starve the pool it shares with the device
 /// plane.
 const PAGE_SIDE_READ_CONCURRENCY: usize = 8;
-const VISUAL_INDEX_CONCURRENCY: usize = 2;
-static VISUAL_INDEX_RUNNING: AtomicBool = AtomicBool::new(false);
-
-struct VisualIndexRun;
-
-impl Drop for VisualIndexRun {
-    fn drop(&mut self) {
-        VISUAL_INDEX_RUNNING.store(false, Ordering::Release);
-    }
-}
-
-fn schedule_visual_index(state: &ApiState, account: &str, uuids: Vec<String>) {
-    if uuids.is_empty()
-        || !crate::assistant::vision::configured()
-        || VISUAL_INDEX_RUNNING
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
-    {
-        return;
-    }
-    let Some(objects) = state.objects.clone() else {
-        VISUAL_INDEX_RUNNING.store(false, Ordering::Release);
-        return;
-    };
-    let store = state.store.clone();
-    let keys = state.keys.clone();
-    let account = account.to_owned();
-    tokio::spawn(async move {
-        use futures_util::StreamExt as _;
-        let _run = VisualIndexRun;
-        futures_util::stream::iter(uuids)
-            .for_each_concurrent(VISUAL_INDEX_CONCURRENCY, |uuid| {
-                let store = store.clone();
-                let keys = keys.clone();
-                let objects = objects.clone();
-                let account = account.clone();
-                async move {
-                    if let Ok(Some(record)) = store.memory(&account, &uuid).await {
-                        let _ = objects
-                            .rank_photo_best_frame(&keys, &account, &record, false)
-                            .await;
-                    }
-                }
-            })
-            .await;
-    });
-}
-
 /// The DTOs for one page of captures, with their best-frame reads overlapped.
 ///
 /// `buffered`, not `buffer_unordered`: the store returned these newest-first and
@@ -923,13 +872,10 @@ async fn search_captures(
         .collect();
     let visual_index_state = if pending_visual_index.is_empty() {
         "ready"
-    } else if crate::assistant::vision::configured() && state.objects.is_some() {
-        "building"
     } else {
         "unavailable"
     };
     let pending = pending_visual_index.len();
-    schedule_visual_index(&state, &resolved.account, pending_visual_index);
     let mut response = axum::Json(page_of(content, total, page, size)).into_response();
     response.headers_mut().insert(
         "x-cosmos-visual-index",
@@ -1929,6 +1875,53 @@ mod tests {
         .await;
         assert_eq!(bob["totalElements"], 1);
         assert_eq!(bob["content"][0]["uuid"], bobs_cat.uuid);
+    }
+
+    #[tokio::test]
+    async fn ambiance_missing_visual_index_stays_unavailable_without_background_reranking() {
+        let store = fresh();
+        let record = store
+            .create_memory(
+                "U:alice",
+                NewMemory {
+                    thumbnails: vec![cosmos_protocol::common::encryption::EncryptedData::default()],
+                    ..photo("unindexed")
+                },
+            )
+            .await
+            .unwrap();
+        let objects = crate::services::capture::CaptureObjectStore::for_tests();
+        let app = router_with_objects(
+            store,
+            fresh_keys(),
+            DEMO_PRINCIPAL,
+            Some(test_verifier()),
+            Some(objects.clone()),
+        );
+        for _ in 0..3 {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/capture/search?query=cat")
+                        .header("authorization", format!("Bearer {}", bearer_for("alice")))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(response.headers()["x-cosmos-visual-index"], "unavailable");
+            assert_eq!(response.headers()["x-cosmos-visual-pending"], "1");
+            tokio::task::yield_now().await;
+            assert!(
+                objects
+                    .read_best_frame("U:alice", &record.uuid)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+        }
     }
 
     /// A sealed frame whose key we do not hold is an OUTAGE, not a missing frame.

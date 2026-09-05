@@ -33,7 +33,9 @@ function validate(value, readSource = (file) => {
   nonblank(value.source.limitation);
   nonblank(value.scope);
   nonblank(value.verificationPolicy);
-  assert.match(value.scope, /not a runtime schema or a passing conformance report/u);
+  assert.match(value.scope, /not a passing conformance report/u);
+  assert.match(value.scope, /self-hosted LiveKit substrate/u);
+  assert.match(value.scope, /polling is an intermediate proof/u);
   assert.match(value.verificationPolicy, /never establish that behavior passed/u);
 
   assert.ok(Array.isArray(value.evidence));

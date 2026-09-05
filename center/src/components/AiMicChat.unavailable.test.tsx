@@ -8,7 +8,7 @@ afterEach(() => {
   if (originalScrollTo) Object.defineProperty(Element.prototype, "scrollTo", originalScrollTo);
   else Reflect.deleteProperty(Element.prototype, "scrollTo");
 });
-it("shows runtime unavailability without a spoken answer or automatic retry", async () => {
+it("does not send browser input before explicit shared-display approval", async () => {
   vi.stubGlobal("matchMedia", () => ({ matches: true }));
   Object.defineProperty(Element.prototype, "scrollTo", { configurable: true, value: vi.fn() });
   const fetch = vi.fn(async (url: RequestInfo | URL) => String(url) === "/api/assistant/status"
@@ -17,13 +17,20 @@ it("shows runtime unavailability without a spoken answer or automatic retry", as
   vi.stubGlobal("fetch", fetch);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(<QueryClientProvider client={client}><AiMicChat /></QueryClientProvider>);
-  fireEvent.change(screen.getByRole("textbox", { name: "Ask Cosmos" }), { target: { value: "hello" } });
-  fireEvent.click(screen.getByRole("button", { name: "Send" }));
-  await screen.findByText("Browser assistant runtime is unavailable.");
-  await waitFor(() => expect(screen.getByRole("textbox", { name: "Ask Cosmos" })).not.toBeDisabled());
-  expect(fetch.mock.calls.filter(([url]) => url === "/api/assistant/stream")).toHaveLength(1);
+  expect(screen.getByRole("textbox", { name: "Ask Cosmos" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+  expect(fetch).not.toHaveBeenCalled();
   expect(fetch.mock.calls.some(([url]) => url === "/api/assistant/speech")).toBe(false);
   client.clear();
+});
+it("reports browser text readiness only from the actual runtime capability endpoint", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (url) => String(url) === "/api/runtime/status"
+    ? Response.json({ version: 1, textInputConfigured: true, approvedSurfaceRequired: true })
+    : Response.json({ assistant: true, speech: true, model: "configured-model", provider_authority: "cosmos", tools: [] })));
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(<QueryClientProvider client={client}><AssistantStatusChip /></QueryClientProvider>);
+  await screen.findByText("Public text available");
+  expect(screen.queryByText("Assistant ready")).not.toBeInTheDocument(); client.clear();
 });
 it("does not mistake configured providers for an available browser runtime", async () => {
   vi.stubGlobal("fetch", vi.fn(async () => Response.json({ assistant: true, speech: true, browser_runtime: "unavailable", model: "configured-model", provider_authority: "cosmos", tools: [] })));

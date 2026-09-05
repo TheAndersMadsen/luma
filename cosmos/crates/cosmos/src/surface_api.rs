@@ -236,7 +236,7 @@ async fn approve(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let principal = owner(&headers, &api)?;
     let request = body(request)?;
-    if request.approval != "browser-shared-display-v1" {
+    if request.approval != surface_registry::BROWSER_APPROVAL {
         return Err(invalid());
     }
     let mut random = [0u8; 32];
@@ -452,7 +452,7 @@ mod tests {
                 "/surface-api/v1/surfaces",
                 Some(&owner),
                 None,
-                json!({"surfaceId": surface_id, "approval":"browser-shared-display-v1"})
+                json!({"surfaceId": surface_id, "approval":surface_registry::BROWSER_APPROVAL})
             )
             .await
             .0,
@@ -565,7 +565,7 @@ mod tests {
         let root = "/surface-api/v1/surfaces";
         let id = Uuid::new_v4();
         let path = format!("{root}/{id}");
-        let approval = json!({"surfaceId": id, "approval": "browser-shared-display-v1"});
+        let approval = json!({"surfaceId": id, "approval": surface_registry::BROWSER_APPROVAL});
         let (status, approved) =
             call(&app, "POST", root, Some(&owner), None, approval.clone()).await;
         assert_eq!(status, StatusCode::OK);
@@ -707,7 +707,8 @@ mod tests {
         );
         let root = "/surface-api/v1/surfaces";
         let owner = bearer("owner");
-        let request = json!({"surfaceId": Uuid::new_v4(), "approval": "browser-shared-display-v1"});
+        let request =
+            json!({"surfaceId": Uuid::new_v4(), "approval": surface_registry::BROWSER_APPROVAL});
         for authorization in [None, Some("Bearer invalid"), Some("Basic invalid")] {
             assert_eq!(
                 call(&app, "POST", root, authorization, None, request.clone())

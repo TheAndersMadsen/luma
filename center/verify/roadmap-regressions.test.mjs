@@ -88,10 +88,12 @@ test("Pin setup instructions stay direct", async () => {
 });
 
 test("Ai Mic shows answers without suggestions, tool traces, or reasoning labels", async () => {
-  const chat = withoutComments(await source("src/components/AiMicChat.tsx"));
-  assert.match(chat, /<p className=\{styles\.say\}>\{t\.text\}<\/p>/);
+  const chat = withoutComments(await source("src/components/BrowserDisplay.tsx"));
+  assert.match(chat, /<article aria-label="Cosmos display"><p ref=\{node\}>\{command\.content\.text\}<\/p><\/article>/);
+  assert.match(chat, /aria-label="Ask Cosmos"/);
+  assert.match(chat, /role="status"/);
   assert.doesNotMatch(chat, /Try asking|suggestion|reasoningOf|Used \{.*tool|styles\.trace/i);
-  assert.doesNotMatch(chat, /t\.steps\.map|step\.input|step\.elapsed_ms/);
+  assert.doesNotMatch(chat, /t\.steps\.map|step\.input|step\.elapsed_ms|dangerouslySetInnerHTML/);
 });
 
 test("Assistant status never renders a saved model response", async () => {
@@ -186,9 +188,11 @@ test("muted text uses the accessible token and reduced motion is global", async 
     );
   }
 
-  const chat = await source("src/components/AiMicChat.tsx");
-  assert.match(chat, /prefers-reduced-motion: reduce/);
-  assert.match(chat, /\? "auto" : "smooth"/);
+  // The bounded display replaces the old scrolling transcript. It performs no
+  // imperative animation; the global reduced-motion rule still covers CSS.
+  const display = withoutComments(await source("src/components/BrowserDisplay.tsx"));
+  assert.doesNotMatch(display, /scrollTo\(|scrollIntoView\(|\.animate\(|behavior:\s*["']smooth["']/);
+  assert.match(display, /command=\{active && status === "visible" \? command : null\}/);
 });
 
 test("My Data and capture overlays have symmetric, reduced-motion-aware exits", async () => {
