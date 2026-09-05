@@ -344,6 +344,74 @@ required or that the stock SDK alone violates the paper.
    incomplete backend behavior still does. Unresolved paper conflicts and
    missing physical evidence explicitly block a 100% conformance claim.
 
+### LiveKit production topology — acceptance pending
+
+The canonical single-node design keeps Traefik on ports 80/443 and the existing
+`center.andersmadsen.dk` origin. LiveKit 1.13.6 uses the pinned multiarch image
+`livekit/livekit-server@sha256:e37d68f172556d02aa77968b9fc55ef481468c0315fa38e4fa6c56ce72e3a815`;
+its image index includes Linux amd64 and arm64. This is deployment design and
+local evidence, not a claim that the new server release is live.
+
+Cosmos connects internally to `ws://livekit:7880`; clients receive
+`wss://center.andersmadsen.dk/livekit`, without a trailing slash or `/rtc` suffix.
+The [pinned Rust SDK](https://github.com/livekit/rust-sdks/blob/2d9f01ab1e933a86a8a5c53805ee29ee58b9be1b/livekit-api/src/signal_client/mod.rs)
+and [JavaScript 2.22.2](https://github.com/livekit/client-sdk-js/blob/v2.22.2/src/api/utils.ts)
+append `/rtc` or `/rtc/v1`, followed by `/validate` for connection diagnostics.
+Traefik strips exactly `/livekit` before forwarding HTTP/WebSocket traffic;
+the [server registers both protocol versions](https://github.com/livekit/livekit/blob/v1.13.6/pkg/service/rtcservice.go).
+Rust preserves a trailing empty path segment, so `/livekit/` would produce a
+double slash. JavaScript normalizes that case; use the same unambiguous base URL.
+
+| Traffic | Canonical route |
+| --- | --- |
+| Signaling | HTTPS/WSS 443 through Traefik to internal LiveKit TCP 7880 |
+| Direct WebRTC | Host TCP 7881 and UDP 7882 mapped to the same container ports |
+| Embedded TURN | Host UDP 3478 mapped to container UDP 3478 |
+
+[UDP mux configuration](https://github.com/livekit/livekit/blob/v1.13.6/config-sample.yaml)
+uses `rtc.udp_port: 7882` with no ICE port range. `use_external_ip: true` discovers
+the public address through STUN at startup; it requires working outbound UDP.
+`advertise_internal_ip: true` retains private candidates for Cosmos on the
+shared Docker network, as implemented by the [pinned transport library](https://github.com/livekit/mediatransportutil/blob/f234b534b095/pkg/rtcconfig/webrtc_config.go).
+`enable_loopback_candidate` concerns loopback addresses, not adjacent containers.
+STUN discovery does not prove inbound reachability, NAT hairpin behavior or
+recovery after a public-IP change. Actual WebRTC bridge and external-network tests remain.
+
+Embedded TURN uses `tls_port: 0` for this increment. Despite the sample config's
+wording, [1.13.6 advertises TURN/TLS on port 443](https://github.com/livekit/livekit/blob/v1.13.6/pkg/service/roommanager.go#L1068)
+regardless of its listening port; placing TLS termination on 5349 is insufficient.
+Networks that permit only TCP 443 remain unsupported until a working TURN/TLS
+route is implemented and tested. A `stun.turn` ALPN match has not been established
+for both stock browser and native clients; do not infer TURN from absent ALPN.
+
+The operator generates configuration outside the archive/checkout in its
+mode-0700 directory and mounts only the required file read-only into LiveKit.
+`--config /etc/livekit/config.yaml` puts a path, not signing credentials, in argv;
+[the server accepts YAML with a `keys` map](https://github.com/livekit/livekit/blob/v1.13.6/pkg/config/config.go).
+The mounted file's readability must match the unprivileged container UID.
+Traefik access logs explicitly drop query parameters using
+`accessLog.fields.queryParameters.defaultMode: drop`: [its logger](https://github.com/traefik/traefik/blob/v3.6.25/pkg/middlewares/accesslog/logger.go#L223)
+otherwise includes query-carried credentials in `RequestPath` by default.
+
+[LiveKit's readiness check](https://github.com/livekit/livekit/blob/v1.13.6/pkg/service/server.go#L406)
+is `GET /` on port 7880: 200 with `OK`, or 406 when node statistics are stale.
+The pinned ARM64 image was locally checked for `/livekit-server` version 1.13.6
+and `/bin/busybox wget`; its local root endpoint returned `OK`. This does not
+establish RPC delivery, media connectivity or TURN operation. The opt-in
+`platform/deploy/acceptance/rtc-deployment.test.mjs` separately starts the
+canonical unprivileged service with generated configuration and the actual
+Traefik image. It verifies root health through `/livekit/`, authenticated
+WebSocket signaling, rejected invalid credentials, and absence of synthetic
+join credentials from proxy logs. Its proxy uses loopback HTTP in place of
+public TLS/ACME; it does not establish WebRTC connectivity.
+Run it with `REVIVAL_TEST_RTC_DEPLOYMENT=1 node --test
+platform/deploy/acceptance/rtc-deployment.test.mjs` using Node 22 and the local
+Docker context (`REVIVAL_TEST_DOCKER_CONTEXT` defaults to `desktop-linux`).
+Before server acceptance, verify both SDKs through the real prefix, internal
+Cosmos peers, external direct UDP/TCP and forced TURN/UDP, token expiry and
+disconnects, and absence of synthetic credentials from logs. Production still
+consumes the authenticated operator archive and verifies its exact release ID.
+
 ### Companion device targets — planned
 
 The owner's target devices are a MacBook Pro M5 Pro, an Omarchy Linux PC, a

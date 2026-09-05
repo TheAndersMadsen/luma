@@ -42,5 +42,5 @@
     "Center HTTP polling remains an intermediate client path until the Center room implementation replaces it. This contract is not a production or paper-conformance claim."
   ],
   "configuration": ["COSMOS_RTC_URL", "COSMOS_RTC_PUBLIC_URL", "COSMOS_RTC_API_KEY", "COSMOS_RTC_API_SECRET"],
-  "limitations": ["Coordination and informational cards only", "Center, native clients, media permissions, self-hosted Compose deployment and physical acceptance are pending", "Shared-room approval does not establish physical privacy or actor identity"]
+  "limitations": ["Coordination and informational cards only", "Center, native clients, media permissions, production deployment and physical acceptance are pending", "Self-hosted Compose and same-origin signaling are implemented; external WebRTC and relay acceptance remain pending; TCP-443-only networks are unsupported", "Shared-room approval does not establish physical privacy or actor identity"]
 }

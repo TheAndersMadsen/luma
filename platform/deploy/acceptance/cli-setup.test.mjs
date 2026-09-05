@@ -360,6 +360,11 @@ test("production setup creates a complete portable operator installation and is 
   const runtime = parseEnv(env.REVIVAL_ENV_FILE);
   assert.equal(runtime.REVIVAL_PUBLIC_ORIGIN, "https://pin.example.test");
   assert.equal(runtime.COSMOS_OIDC_ISSUER, "https://pin.example.test/realms/humane");
+  assert.equal(runtime.COSMOS_RTC_URL, "ws://livekit:7880");
+  assert.equal(runtime.COSMOS_RTC_PUBLIC_URL, "wss://pin.example.test/livekit");
+  assert.ok(runtime.COSMOS_RTC_API_KEY.length >= 16);
+  assert.ok(runtime.COSMOS_RTC_API_SECRET.length >= 32);
+  assert.ok(!first.stdout.includes(runtime.COSMOS_RTC_API_SECRET));
   assert.equal(runtime.COMPOSE_PROFILES, "observability,search");
   assert.equal(runtime.COSMOS_ENROLLMENT_PINCODE, "");
   assert.equal(runtime.REVIVAL_FIRST_OPERATOR_EMAIL, "owner@example.test");
@@ -372,6 +377,7 @@ test("production setup creates a complete portable operator installation and is 
   const containerFiles = [
     path.join(production, "traefik.yaml"),
     path.join(production, "traefik-dynamic.yaml"),
+    path.join(production, "livekit.json"),
     path.join(production, "postgres-init.sql"),
     realmFile,
     path.join(production, "searxng-settings.yml"),
@@ -385,6 +391,14 @@ test("production setup creates a complete portable operator installation and is 
   assert.equal(fs.statSync(production).mode & 0o777, 0o700);
 
   const realm = JSON.parse(fs.readFileSync(realmFile, "utf8"));
+  const roomConfig = JSON.parse(fs.readFileSync(path.join(production, "livekit.json"), "utf8"));
+  assert.ok(roomConfig.keys[runtime.COSMOS_RTC_API_KEY] === runtime.COSMOS_RTC_API_SECRET);
+  assert.equal(Object.keys(roomConfig.keys).length, 1);
+  assert.equal(roomConfig.rtc.use_external_ip, true);
+  assert.equal(roomConfig.rtc.advertise_internal_ip, true);
+  assert.equal(roomConfig.rtc.require_ipv4, true);
+  assert.equal(roomConfig.turn.tls_port, 0);
+  assert.equal(roomConfig.room.max_participants, 17);
   assert.equal(realm.realm, "humane");
   assert.equal(realm.loginTheme, "revival");
   assert.equal(realm.users[0].id, runtime.REVIVAL_FIRST_OPERATOR_ID);
@@ -422,6 +436,8 @@ test("production setup creates a complete portable operator installation and is 
   const rerun = invoke(env, "setup", "production");
   assert.equal(rerun.status, 0, rerun.stderr);
   const after = parseEnv(env.REVIVAL_ENV_FILE);
+  assert.ok(after.COSMOS_RTC_API_KEY === runtime.COSMOS_RTC_API_KEY);
+  assert.ok(after.COSMOS_RTC_API_SECRET === runtime.COSMOS_RTC_API_SECRET);
   assert.equal(Object.hasOwn(after, "REVIVAL_FIRST_OPERATOR_PASSWORD"), false);
   assert.equal(fs.readFileSync(realmFile, "utf8"), preserved.realm);
   assert.equal(fs.existsSync(path.join(production, "first-login.txt")), false);

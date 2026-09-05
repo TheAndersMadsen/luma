@@ -21,6 +21,28 @@ x-development-identity-dependency: &development-identity-dependency
     required: false
 
 services:
+  livekit:
+    restart: "no"
+    command: []
+    environment:
+      LIVEKIT_CONFIG: |
+        port: 7880
+        bind_addresses: [0.0.0.0]
+        rtc:
+          tcp_port: 7881
+          udp_port: 7882
+          use_external_ip: false
+          enable_loopback_candidate: true
+        keys:
+          ${COSMOS_RTC_API_KEY:?run revival init}: ${COSMOS_RTC_API_SECRET:?run revival init}
+        room:
+          empty_timeout: 30
+          max_participants: 17
+    ports:
+      - "127.0.0.1:7880:7880/tcp"
+      - "127.0.0.1:7881:7881/tcp"
+      - "127.0.0.1:7882:7882/udp"
+
   connectivity:
     <<: *development-cosmos-build
     depends_on: *development-identity-dependency
@@ -38,7 +60,9 @@ services:
 
   ai-bus:
     <<: *development-cosmos-build
-    depends_on: *development-identity-dependency
+    depends_on:
+      <<: *development-identity-dependency
+      livekit: { condition: service_healthy }
     labels:
       <<: *development-labels
     restart: "no"

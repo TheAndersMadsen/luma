@@ -124,6 +124,10 @@ services:
       COSMOS_KID_SCOPE: ${COSMOS_KID_SCOPE:-enforce}
       COSMOS_ADMIN_TOKEN: ${COSMOS_ADMIN_TOKEN:-}
       COSMOS_CENTER_PROJECTION_TOKEN: ${COSMOS_CENTER_PROJECTION_TOKEN:-}
+      COSMOS_RTC_URL: ${COSMOS_RTC_URL:-ws://livekit:7880}
+      COSMOS_RTC_PUBLIC_URL: ${COSMOS_RTC_PUBLIC_URL:-ws://127.0.0.1:7880}
+      COSMOS_RTC_API_KEY: ${COSMOS_RTC_API_KEY:-}
+      COSMOS_RTC_API_SECRET: ${COSMOS_RTC_API_SECRET:-}
       COSMOS_DEMO_ENABLED: ${COSMOS_DEMO_ENABLED:-false}
       COSMOS_REMOTE_TTS_ENABLED: ${COSMOS_REMOTE_TTS_ENABLED:-false}
       COSMOS_CAPTURE_SHARE_BASE_URL: ${COSMOS_CAPTURE_SHARE_BASE_URL:-}
@@ -289,6 +293,36 @@ services:
         - fetch('http://127.0.0.1:4000/api/version').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
       interval: 10s
       timeout: 5s
+      start_period: 20s
+      retries: 5
+
+  livekit:
+    # Upstream 1.13.6, multiarch index verified for linux/amd64 and linux/arm64.
+    image: livekit/livekit-server@sha256:e37d68f172556d02aa77968b9fc55ef481468c0315fa38e4fa6c56ce72e3a815
+    command: [--config, /etc/livekit/config.yaml]
+    user: "65532:65532"
+    restart: unless-stopped
+    init: true
+    read_only: true
+    tmpfs: ["/tmp:size=16m,mode=1777"]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 256
+    mem_limit: 1g
+    stop_grace_period: 10s
+    networks: [cosmos-internal]
+    labels:
+      <<: *revival-labels
+      dk.andersmadsen.ai-pin-revival.component: realtime
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    healthcheck:
+      test: [CMD, /bin/busybox, wget, -q, -T, "3", -O, /dev/null, "http://127.0.0.1:7880/"]
+      interval: 10s
+      timeout: 4s
       start_period: 20s
       retries: 5
 

@@ -84,6 +84,12 @@ async function check() {
   if (!version.headers.has('ratelimit-policy') || !version.headers.has('ratelimit')) {
     throw new Error('Center version endpoint omitted RateLimit fields');
   }
+  const rooms = await fetch(`${origin}/livekit/`, {
+    redirect: 'error', signal: AbortSignal.timeout(10_000),
+  });
+  if (rooms.status !== 200 || (await rooms.text()).trim() !== 'OK') {
+    throw new Error('room signaling health did not pass through the public TLS route');
+  }
 
   const publicPages = ['/', '/about', '/contact', '/privacy', '/developers'];
   for (const path of publicPages) {

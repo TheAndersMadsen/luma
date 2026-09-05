@@ -594,11 +594,15 @@ function renderOperatorCompose(profiles, expectedPinRelease = null) {
     secrets:
       - { source: traefik_static, target: /etc/traefik/traefik.yml, mode: 0444 }
       - { source: traefik_dynamic, target: /etc/traefik/dynamic.yaml, mode: 0444 }`,
+    `  livekit:
+    secrets:
+      - { source: livekit_config, target: /etc/livekit/config.yaml, mode: 0444 }`,
   ];
   const secrets = [
     `  identity_realm: { file: ${safeYaml(path.join(PRODUCTION_DIR, 'realm.json'))} }`,
     `  traefik_static: { file: ${safeYaml(path.join(PRODUCTION_DIR, 'traefik.yaml'))} }`,
     `  traefik_dynamic: { file: ${safeYaml(path.join(PRODUCTION_DIR, 'traefik-dynamic.yaml'))} }`,
+    `  livekit_config: { file: ${safeYaml(path.join(PRODUCTION_DIR, 'livekit.json'))} }`,
   ];
   const centerEnvironment = [];
   const centerSecrets = [];
@@ -792,6 +796,25 @@ function checkBundledPinRelease() {
   return Object.freeze(observed);
 }
 
+function livekitConfig(values) {
+  return {
+    port: 7880,
+    bind_addresses: ['0.0.0.0'],
+    rtc: {
+      tcp_port: 7881,
+      udp_port: 7882,
+      use_external_ip: true,
+      advertise_internal_ip: true,
+      require_ipv4: true,
+    },
+    keys: { [values.COSMOS_RTC_API_KEY]: values.COSMOS_RTC_API_SECRET },
+    room: { empty_timeout: 30, max_participants: 17 },
+    // 1.13.6 advertises TURN/TLS on 443 regardless of tls_port. Do not
+    // advertise TLS without a verified route on that port.
+    turn: { enabled: true, udp_port: 3478, tls_port: 0 },
+  };
+}
+
 function activeArtifactFiles(values) {
   const profiles = new Set((values.COMPOSE_PROFILES || '').split(',').filter(Boolean));
   return [
@@ -799,6 +822,7 @@ function activeArtifactFiles(values) {
     path.join(PRODUCTION_DIR, 'realm.json'),
     path.join(PRODUCTION_DIR, 'traefik.yaml'),
     path.join(PRODUCTION_DIR, 'traefik-dynamic.yaml'),
+    path.join(PRODUCTION_DIR, 'livekit.json'),
     path.join(PRODUCTION_DIR, 'postgres-init.sql'),
     ...(profiles.has('pin') ? [
       PIN_TRUST_FILE,
@@ -835,6 +859,12 @@ function validateProductionArtifacts(values = parseEnvFile(ENV_FILE)) {
     }
   }
   const firstLogin = path.join(PRODUCTION_DIR, 'first-login.txt');
+  try {
+    const configured = JSON.parse(fs.readFileSync(path.join(PRODUCTION_DIR, 'livekit.json'), 'utf8'));
+    if (JSON.stringify(configured) !== JSON.stringify(livekitConfig(values))) throw new Error('mismatch');
+  } catch {
+    problems.push('LiveKit configuration does not match runtime.env; rerun revival setup production');
+  }
   if (fs.existsSync(firstLogin) && !regularFile(firstLogin, { mode: 0o600 })) {
     problems.push(`${firstLogin} must be a nonempty regular file with mode 0600, or be deleted after first login`);
   }
@@ -890,6 +920,8 @@ function setupProduction(args) {
     REVIVAL_PUBLIC_ORIGIN: origin,
     REVIVAL_ACME_EMAIL: options.acmeEmail,
     COSMOS_OIDC_ISSUER: `${origin}/realms/humane`,
+    COSMOS_RTC_URL: 'ws://livekit:7880',
+    COSMOS_RTC_PUBLIC_URL: `wss://${options.domain}/livekit`,
     COSMOS_CAPTURE_SHARE_BASE_URL: origin,
     COSMOS_CAPTURE_UPLOAD_BASE_URL: origin,
     REVIVAL_MUSIC_GATEWAY_ORIGIN: origin,
@@ -942,6 +974,7 @@ function setupProduction(args) {
     { '@@PUBLIC_DOMAIN@@': options.domain }, path.join(PRODUCTION_DIR, 'traefik-dynamic.yaml'),
   );
   atomicWrite(path.join(PRODUCTION_DIR, 'postgres-init.sql'), 'CREATE DATABASE keycloak OWNER cosmos;\n', 0o444);
+  atomicWrite(path.join(PRODUCTION_DIR, 'livekit.json'), `${JSON.stringify(livekitConfig(values), null, 2)}\n`, 0o444);
 
   if (pin) {
     if (!regularFile(PIN_BRIDGE_TOKEN_FILE)) {

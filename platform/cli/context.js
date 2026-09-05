@@ -241,6 +241,8 @@ function fillBlankGeneratedSecrets(contents, profiles = null) {
     ['AUTH_SESSION_SECRET', () => crypto.randomBytes(32).toString('hex')],
     ['COSMOS_SHARE_TOKEN_SECRET', () => crypto.randomBytes(32).toString('hex')],
     ['COSMOS_CENTER_PROJECTION_TOKEN', () => crypto.randomBytes(32).toString('hex')],
+    ['COSMOS_RTC_API_KEY', () => crypto.randomBytes(16).toString('hex')],
+    ['COSMOS_RTC_API_SECRET', () => crypto.randomBytes(32).toString('hex')],
     ['COSMOS_EDGE_TOKEN', () => crypto.randomBytes(32).toString('hex')],
     ['COSMOS_ADMIN_TOKEN', () => crypto.randomBytes(32).toString('hex')],
     ['KEYCLOAK_CLIENT_SECRET', () => crypto.randomBytes(32).toString('hex')],
@@ -801,6 +803,10 @@ function validateRuntime({ production = false, envFile = ENV_FILE } = {}) {
         origin?.hostname !== values.REVIVAL_PUBLIC_DOMAIN) {
       problems.push('REVIVAL_PUBLIC_DOMAIN must exactly match the host in REVIVAL_PUBLIC_ORIGIN');
     }
+    if (values.COSMOS_RTC_URL !== 'ws://livekit:7880' ||
+        values.COSMOS_RTC_PUBLIC_URL !== `wss://${values.REVIVAL_PUBLIC_DOMAIN}/livekit`) {
+      problems.push('room signaling must use the generated internal URL and same-origin /livekit URL; rerun revival setup production');
+    }
     if (!/^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/u
       .test(values.REVIVAL_ACME_EMAIL || '')) {
       problems.push('REVIVAL_ACME_EMAIL must be a valid email address');
@@ -810,6 +816,11 @@ function validateRuntime({ production = false, envFile = ENV_FILE } = {}) {
   requireValue(values, 'AUTH_SESSION_SECRET', problems, 32);
   requireValue(values, 'COSMOS_SHARE_TOKEN_SECRET', problems, 32);
   requireValue(values, 'COSMOS_CENTER_PROJECTION_TOKEN', problems, 32);
+  for (const [name, minimum] of [['COSMOS_RTC_API_KEY', 16], ['COSMOS_RTC_API_SECRET', 32]]) {
+    if (!new RegExp(`^[A-Za-z0-9_-]{${minimum},128}$`, 'u').test(values[name] || '')) {
+      problems.push(`${name} must contain ${minimum} to 128 letters, digits, underscores or hyphens`);
+    }
+  }
   requireValue(values, 'COSMOS_EDGE_TOKEN', problems, 32);
   requireValue(values, 'COSMOS_ADMIN_TOKEN', problems, 32);
   requireValue(values, 'KEYCLOAK_CLIENT_SECRET', problems, 32);

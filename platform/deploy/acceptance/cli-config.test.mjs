@@ -302,6 +302,24 @@ test("init derives the database URL from a dotenv-decoded safe quoted password",
   }
 });
 
+test("room credentials cannot drift from the mounted server configuration", () => {
+  const { temporary, env } = fixture();
+  try {
+    const setup = invoke(env, ["setup", "production", "--domain", "pin.example.test",
+      "--acme-email", "acme@example.test", "--operator-email", "owner@example.test"]);
+    assert.equal(setup.status, 0, setup.stderr);
+    const changed = invoke(env, ["config", "set", "COSMOS_RTC_API_SECRET", "--stdin"], "rotated-room-secret-0123456789abcdef");
+    assert.equal(changed.status, 0, changed.stderr);
+    const check = invoke(env, ["config", "check", "--json"]);
+    assert.notEqual(check.status, 0);
+    assert.match(check.stdout + check.stderr, /LiveKit configuration does not match runtime.env/u);
+    assert.doesNotMatch(check.stdout + check.stderr, /rotated-room-secret/u);
+    const repaired = invoke(env, ["setup", "production"]);
+    assert.equal(repaired.status, 0, repaired.stderr);
+    assert.equal(invoke(env, ["config", "check", "--json"]).status, 0);
+  } finally { fs.rmSync(temporary, { recursive: true, force: true }); }
+});
+
 test("a fresh root config can satisfy production Compose through the CLI", (context) => {
   const compose = spawnSync("docker", ["compose", "version"], { encoding: "utf8" });
   if (compose.error?.code === "ENOENT") {

@@ -332,6 +332,9 @@ test("production Compose is an image-only portable appliance with opt-in service
     COSMOS_EDGE_TOKEN: "placeholder-edge",
     COSMOS_ADMIN_TOKEN: "placeholder-admin",
     COSMOS_CENTER_PROJECTION_TOKEN: "placeholder-projection",
+    COSMOS_RTC_PUBLIC_URL: "wss://pin.example.test/livekit",
+    COSMOS_RTC_API_KEY: "placeholder-rtc-key",
+    COSMOS_RTC_API_SECRET: "placeholder-rtc-secret",
     COSMOS_CAPTURE_UPLOAD_BASE_URL: "https://pin.example.test",
     COSMOS_CAPTURE_SHARE_BASE_URL: "https://pin.example.test",
     COSMOS_ONBOARDING_ENDPOINT: "https://onboarding.cosmos.humane.cloud",
@@ -379,6 +382,7 @@ test("production Compose is an image-only portable appliance with opt-in service
     "contacts",
     "feature-flags",
     "keycloak",
+    "livekit",
     "notable-events",
     "postgres",
     "traefik",
@@ -408,7 +412,14 @@ test("production Compose is an image-only portable appliance with opt-in service
   const published = Object.entries(core.services)
     .filter(([, service]) => service.ports?.length)
     .map(([name]) => name);
-  assert.deepEqual(published, ["traefik"]);
+  assert.deepEqual(published, ["livekit", "traefik"]);
+  assert.deepEqual(core.services.livekit.ports.map((port) => `${port.published}/${port.protocol}`).sort(),
+    ["3478/udp", "7881/tcp", "7882/udp"]);
+  assert.equal(core.services.livekit.user, "65532:65532");
+  assert.equal(core.services["ai-bus"].depends_on.livekit.condition, "service_healthy");
+  assert.equal(core.services["ai-bus"].environment.COSMOS_RTC_URL, "ws://livekit:7880");
+  assert.equal(core.services["ai-bus"].environment.COSMOS_RTC_PUBLIC_URL, environment.COSMOS_RTC_PUBLIC_URL);
+  assert.equal(core.services.center.environment.COSMOS_RTC_API_SECRET, undefined);
   assert.deepEqual(
     core.services.traefik.ports.map((port) => Number(port.published)).sort((left, right) => left - right),
     [80, 443],
@@ -464,6 +475,8 @@ test("development identity profile controls Keycloak and OIDC wiring", (context)
     REVIVAL_DATA_DIR: path.join(os.tmpdir(), "ai-pin-revival-identity-data"),
     REVIVAL_SECRETS_DIR: path.join(os.tmpdir(), "ai-pin-revival-identity-secrets"),
     REVIVAL_DEPLOYMENT_ENVIRONMENT: "development",
+    COSMOS_RTC_API_KEY: "placeholder-rtc-key",
+    COSMOS_RTC_API_SECRET: "placeholder-rtc-secret",
     COSMOS_AZURE_SPEECH_KEY: "development-cosmos-speech-key",
     COSMOS_AZURE_SPEECH_REGION: "northeurope",
     COSMOS_AZURE_SPEECH_VOICE: "en-GB-SoniaNeural",
@@ -497,7 +510,7 @@ test("development identity profile controls Keycloak and OIDC wiring", (context)
     KEYCLOAK_BASE_URL: "https://ignored.invalid",
     KEYCLOAK_REALM: "ignored",
   });
-  assert.equal(Object.keys(disabled.services).length, 8);
+  assert.equal(Object.keys(disabled.services).length, 9);
   assert.equal(disabled.services.keycloak, undefined);
   assert.equal(disabled.services.center.environment.KEYCLOAK_BASE_URL, "");
   assert.equal(disabled.services.center.environment.KEYCLOAK_REALM, "humane");
@@ -527,7 +540,7 @@ test("development identity profile controls Keycloak and OIDC wiring", (context)
     KEYCLOAK_BASE_URL: "https://ignored.invalid",
     KEYCLOAK_REALM: "ignored",
   });
-  assert.equal(Object.keys(enabled.services).length, 9);
+  assert.equal(Object.keys(enabled.services).length, 10);
   assert.deepEqual(enabled.services.keycloak.profiles, ["identity"]);
   assert.equal(enabled.services.keycloak.ports[0].host_ip, "127.0.0.1");
   assert.equal(enabled.services.center.environment.KEYCLOAK_BASE_URL, "http://keycloak:8080");

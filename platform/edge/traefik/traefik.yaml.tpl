@@ -20,6 +20,11 @@ certificatesResolvers:
       httpChallenge:
         entryPoint: web
 
-accessLog: {}
+accessLog:
+  fields:
+    # Room join URLs contain bearer credentials. Keep route/status evidence,
+    # but never persist query values (including v1's encoded join request).
+    queryParameters:
+      defaultMode: drop
 log:
   level: INFO

@@ -102,6 +102,27 @@ exit 0
   assert.match(result.stderr, /Compose 2\.34\.0 or newer is required; observed 2\.33\.9/u);
 });
 
+test("production preflight checks TCP and UDP room ports without changing their owner", (t) => {
+  const { env } = fixture(t, `#!/bin/sh
+case "$*" in
+  *"compose version --short"*) printf '%s\\n' 2.34.0 ;;
+  *"ps --status running --services traefik"*) printf '%s\\n' traefik ;;
+esac
+exit 0
+`);
+  for (const [port, flags] of [[7881, "-ltnp"], [7882, "-lunp"], [3478, "-lunp"]]) {
+    fs.writeFileSync(path.join(env.PATH.split(":")[0], "ss"), `#!/bin/sh
+case "$*" in
+  *"${flags}"*) printf '%s\\n' 'UNCONN 0 0 0.0.0.0:${port} 0.0.0.0:*' ;;
+esac
+`, { mode: 0o700 });
+    const result = spawnSync("bash", [preflight], { cwd: root, env, encoding: "utf8" });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /room transport ports TCP 7881 or UDP 7882\/3478 are already in use/u);
+    assert.match(result.stderr, /will not be stopped automatically/u);
+  }
+});
+
 test("production verification rejects an unhealthy configured container", (t) => {
   const { env } = fixture(t, `#!/bin/sh
 case "$*" in

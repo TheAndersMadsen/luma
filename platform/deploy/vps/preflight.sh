@@ -90,4 +90,29 @@ if ! docker compose "${compose[@]}" ps --status running --services traefik 2>/de
     exit 1
   fi
 fi
+
+# The SFU owns direct ICE and UDP relay ports; HTTPS availability alone cannot
+# establish a usable room. Never stop another service to acquire these ports.
+if ! docker compose "${compose[@]}" ps --status running --services livekit 2>/dev/null |
+    grep -qx livekit; then
+  rtc_listeners=""
+  if command -v ss >/dev/null; then
+    rtc_listeners="$(ss -H -ltnp 2>/dev/null | awk '$4 ~ /:7881$/')
+$(ss -H -lunp 2>/dev/null | awk '$4 ~ /:(3478|7882)$/')"
+  else
+    rtc_listeners="$(awk '
+      FNR > 1 {
+        split($2, address, ":")
+        if ((FILENAME ~ /tcp/ && $4 == "0A" && address[2] == "1EC9") ||
+            (FILENAME ~ /udp/ && (address[2] == "0D96" || address[2] == "1ECA"))) print FILENAME ":" $0
+      }
+    ' /proc/net/tcp /proc/net/tcp6 /proc/net/udp /proc/net/udp6 2>/dev/null || true)"
+  fi
+  if [[ "$rtc_listeners" =~ [^[:space:]] ]]; then
+    echo "room transport ports TCP 7881 or UDP 7882/3478 are already in use:" >&2
+    echo "$rtc_listeners" >&2
+    echo "Reconfigure the owning service before deployment; it will not be stopped automatically." >&2
+    exit 1
+  fi
+fi
 printf 'Production configuration is complete for %s (%s).\n' "$project_name" "$REVIVAL_RELEASE_ID"

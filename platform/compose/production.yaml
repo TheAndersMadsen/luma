@@ -41,6 +41,10 @@ services:
       COSMOS_KID_SCOPE: ${COSMOS_KID_SCOPE:-enforce}
       COSMOS_ADMIN_TOKEN: ${COSMOS_ADMIN_TOKEN:?run revival setup production}
       COSMOS_CENTER_PROJECTION_TOKEN: ${COSMOS_CENTER_PROJECTION_TOKEN:?run revival setup production}
+      COSMOS_RTC_URL: ws://livekit:7880
+      COSMOS_RTC_PUBLIC_URL: ${COSMOS_RTC_PUBLIC_URL:?run revival setup production}
+      COSMOS_RTC_API_KEY: ${COSMOS_RTC_API_KEY:?run revival setup production}
+      COSMOS_RTC_API_SECRET: ${COSMOS_RTC_API_SECRET:?run revival setup production}
       COSMOS_DEMO_ENABLED: ${COSMOS_DEMO_ENABLED:-true}
       COSMOS_LLM_BASE_URL: ${COSMOS_LLM_BASE_URL:-https://openrouter.ai/api/v1}
       COSMOS_LLM_API_KEY: ${COSMOS_LLM_API_KEY:-}
@@ -80,7 +84,9 @@ services:
       search-service: {}
       provider-egress:
         gw_priority: 1
-    depends_on: *production-cosmos-dependencies
+    depends_on:
+      <<: *production-cosmos-dependencies
+      livekit: { condition: service_healthy }
 
   account:
     environment:
@@ -198,6 +204,18 @@ services:
       - cosmos-internal
     depends_on:
       postgres: { condition: service_healthy }
+
+  livekit:
+    # Signaling stays internal and is exposed only through Traefik's /livekit.
+    # ICE and embedded TURN need direct, unchanged host ports.
+    ports:
+      - "7881:7881/tcp"
+      - "7882:7882/udp"
+      - "3478:3478/udp"
+    networks: !override
+      cosmos-internal: {}
+      rtc-edge:
+        gw_priority: 1
 
   traefik:
     image: ${REVIVAL_TRAEFIK_IMAGE:-traefik:v3.6.25@sha256:31267173a15b4944e797a76ffd9c419707c8d8b32fe5b610f80cd0cfa05f372d}
@@ -405,6 +423,7 @@ services:
       prometheus: { condition: service_healthy }
 
 networks: !override
+  rtc-edge: {}
   cosmos-internal:
     internal: true
   public-edge: {}

@@ -61,7 +61,18 @@ http:
       priority: 10
       tls:
         certResolver: letsencrypt
+    livekit:
+      entryPoints: [websecure]
+      rule: "Host(`@@PUBLIC_DOMAIN@@`) && PathPrefix(`/livekit/`)"
+      service: livekit
+      middlewares: [livekit-prefix, secure-headers]
+      priority: 140
+      tls:
+        certResolver: letsencrypt
   middlewares:
+    livekit-prefix:
+      stripPrefix:
+        prefixes: [/livekit]
     redirect-https:
       redirectScheme:
         scheme: https
@@ -73,6 +84,10 @@ http:
         referrerPolicy: same-origin
         stsSeconds: 31536000
   services:
+    livekit:
+      loadBalancer:
+        servers:
+          - url: http://livekit:7880
     connectivity:
       loadBalancer:
         servers:
