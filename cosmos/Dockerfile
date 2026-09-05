@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
 
-FROM --platform=$BUILDPLATFORM rust:1.91.1-bookworm@sha256:c1e5f19e773b7878c3f7a805dd00a495e747acbdc76fb2337a4ebf0418896b33 AS build
+FROM --platform=$BUILDPLATFORM rust:1.91.1-trixie@sha256:867f1d1162913c401378a8504fb17fe2032c760dc316448766f150a130204aad AS build
 ARG BUILDARCH
 ARG TARGETARCH
 
@@ -8,30 +8,12 @@ WORKDIR /workspace/cosmos
 
 # Compile on the build host instead of running rustc through QEMU. The latter
 # currently crashes when an ARM64 host builds the AMD64 release image.
-RUN set -eux; \
-    case "${BUILDARCH}" in amd64|arm64) ;; *) echo "unsupported build architecture: ${BUILDARCH}" >&2; exit 1 ;; esac; \
-    case "${TARGETARCH}" in \
-      amd64) rust_target=x86_64-unknown-linux-gnu; cross_packages='gcc-x86-64-linux-gnu libc6-dev-amd64-cross' ;; \
-      arm64) rust_target=aarch64-unknown-linux-gnu; cross_packages='gcc-aarch64-linux-gnu libc6-dev-arm64-cross' ;; \
-      *) echo "unsupported Cosmos architecture: ${TARGETARCH}" >&2; exit 1 ;; \
-    esac; \
-    rustup target add "${rust_target}" --toolchain 1.91.1; \
-    if [ "${BUILDARCH}" != "${TARGETARCH}" ]; then \
-      rm -f /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources; \
-      printf '%s\n' \
-        'Types: deb' \
-        'URIs: http://snapshot.debian.org/archive/debian/20260803T000000Z' \
-        'Suites: bookworm bookworm-updates' \
-        'Components: main' \
-        'Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg' \
-        'Check-Valid-Until: no' \
-        > /etc/apt/sources.list.d/debian.sources; \
-      apt-get update; \
-      apt-get install --no-install-recommends --yes ${cross_packages}; \
-      rm -rf /var/lib/apt/lists/*; \
-    fi
+COPY native ./native
+RUN bash native/linux-toolchain.sh "${BUILDARCH}" "${TARGETARCH}"
+ENV CXX=clang++-21
 
 COPY Cargo.toml Cargo.lock ./
+COPY .cargo ./.cargo
 # `[patch.crates-io]` redirects voprf to a vendored copy (opaque-ke 2.0.0 pins a
 # prerelease that no longer compiles), so the build stage needs it too.
 COPY vendor ./vendor
@@ -50,23 +32,30 @@ COPY migrations ./migrations
 COPY prompts ./prompts
 
 RUN --mount=type=cache,id=cosmos-cargo-registry-${TARGETARCH},target=/usr/local/cargo/registry \
+    --mount=type=cache,id=cosmos-webrtc-${TARGETARCH},target=/opt/webrtc \
     --mount=type=cache,id=cosmos-target-${TARGETARCH},target=/workspace/cosmos/target \
     set -eux; \
+    case "${TARGETARCH}" in amd64) webrtc_arch=x64 ;; arm64) webrtc_arch=arm64 ;; esac; \
+    LK_CUSTOM_WEBRTC="$(python3 native/prepare.py --cache /opt/webrtc --target "linux-${webrtc_arch}")"; \
+    export LK_CUSTOM_WEBRTC; \
     if [ "${BUILDARCH}" = "${TARGETARCH}" ]; then \
       cargo build --locked --release --bin cosmos; \
       artifact=/workspace/cosmos/target/release/cosmos; \
     else \
+      export PKG_CONFIG_ALLOW_CROSS=1; \
       case "${TARGETARCH}" in \
         amd64) \
           rust_target=x86_64-unknown-linux-gnu; \
           export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-linux-gnu-gcc; \
           export CC_x86_64_unknown_linux_gnu=x86_64-linux-gnu-gcc; \
+          export PKG_CONFIG_LIBDIR=/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig; \
           export AR_x86_64_unknown_linux_gnu=x86_64-linux-gnu-ar \
           ;; \
         arm64) \
           rust_target=aarch64-unknown-linux-gnu; \
           export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc; \
           export CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc; \
+          export PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig; \
           export AR_aarch64_unknown_linux_gnu=aarch64-linux-gnu-ar \
           ;; \
       esac; \
@@ -90,24 +79,24 @@ RUN npm install --global --ignore-scripts --no-audit --no-fund @openai/codex@0.1
     && install -d /opt/codex \
     && cp -a "/usr/local/lib/node_modules/@openai/codex/node_modules/@openai/$package/vendor/$target/." /opt/codex/
 
-FROM debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241 AS runtime
+FROM debian:trixie-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132 AS runtime
 
-# Match the immutable 2026-08-03 base-image snapshot. Both dated archives expose
+# Match the immutable 2026-08-24 base-image snapshot. Both dated archives expose
 # signed Release files at this timestamp; HTTP avoids needing CA roots before
 # the image installs ca-certificates, while apt still verifies Debian signatures.
 # A digest-pinned base with mutable suites would resolve different package bytes.
 RUN rm -f /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources \
     && printf '%s\n' \
         'Types: deb' \
-        'URIs: http://snapshot.debian.org/archive/debian/20260803T000000Z' \
-        'Suites: bookworm bookworm-updates' \
+        'URIs: http://snapshot.debian.org/archive/debian/20260824T000000Z' \
+        'Suites: trixie trixie-updates' \
         'Components: main' \
         'Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg' \
         'Check-Valid-Until: no' \
         '' \
         'Types: deb' \
-        'URIs: http://snapshot.debian.org/archive/debian-security/20260803T000000Z' \
-        'Suites: bookworm-security' \
+        'URIs: http://snapshot.debian.org/archive/debian-security/20260824T000000Z' \
+        'Suites: trixie-security' \
         'Components: main' \
         'Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg' \
         'Check-Valid-Until: no' \

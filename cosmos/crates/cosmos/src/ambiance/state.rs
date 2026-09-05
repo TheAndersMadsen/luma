@@ -27,6 +27,7 @@ impl From<crate::surface_registry::RegistryError> for RuntimeError {
 
 /// Only verified owner HTTP adapters may construct this credential proof.
 /// It is never serialized, returned, or logged.
+#[derive(Clone)]
 pub struct BrowserProof {
     pub surface_id: Uuid,
     pub incarnation: Uuid,
@@ -36,6 +37,10 @@ pub struct BrowserProof {
 /// The device-ID parser alone does not authenticate this origin.
 pub enum OriginProof {
     Browser(BrowserProof),
+    SequencedBrowser {
+        connection: BrowserProof,
+        stamp: InputStamp,
+    },
     Pin {
         device: AuthenticatedDeviceIdentity,
         surface_id: Uuid,
@@ -43,6 +48,10 @@ pub enum OriginProof {
 }
 
 pub enum RuntimeOperation {
+    OpenBrowser {
+        connection: BrowserProof,
+        epoch: Uuid,
+    },
     Begin {
         turn_id: Uuid,
         worker: Uuid,
@@ -109,6 +118,8 @@ pub enum RuntimeOperation {
 }
 #[derive(Clone, Debug)]
 pub enum RuntimeResult {
+    ConnectionOpened,
+    Duplicate(TurnFence),
     Begun(TurnFence),
     Proposed(Action),
     Dispatch(Action),
@@ -189,6 +200,35 @@ pub struct RuntimeState {
     pub generation: u64,
     pub turn: Option<Turn>,
     pub actions: BTreeMap<Uuid, Action>,
+    #[serde(default)]
+    pub ingress: BTreeMap<Uuid, InputCursor>,
+}
+
+/// Client boot epochs and sequences are provenance; client clocks are not.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct InputStamp {
+    pub epoch: Uuid,
+    pub sequence: u64,
+    pub instance_id: Uuid,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InputCursor {
+    pub incarnation: Uuid,
+    pub epoch: Uuid,
+    pub high_water: u64,
+    pub receipts: Vec<InputReceipt>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InputReceipt {
+    pub sequence: u64,
+    pub digest: String,
+    pub fence: TurnFence,
+    pub expires_at_ms: i64,
 }
 
 /// Content-free event bodies. Never include request text, capability hashes,
@@ -196,6 +236,18 @@ pub struct RuntimeState {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RuntimeData {
+    BrowserEpochOpened {
+        surface_id: Uuid,
+        incarnation: Uuid,
+        epoch: Uuid,
+    },
+    InputAdmitted {
+        surface_id: Uuid,
+        epoch: Uuid,
+        sequence: u64,
+        instance_id: Uuid,
+        request_digest: String,
+    },
     TurnBegan {
         turn_id: Uuid,
         generation: u64,
@@ -593,6 +645,42 @@ impl RuntimeState {
     ) -> Result<(RuntimeResult, Vec<RuntimeData>), RuntimeError> {
         let mut events = self.reconcile(records, now);
         let result = match operation {
+            RuntimeOperation::OpenBrowser { connection, epoch } => {
+                browser_record(records, &connection, now)?;
+                if epoch.is_nil() {
+                    return Err(RuntimeError::InvalidRequest);
+                }
+                if let Some(cursor) = self
+                    .ingress
+                    .get(&connection.surface_id)
+                    .filter(|c| c.incarnation == connection.incarnation)
+                {
+                    if cursor.epoch != epoch {
+                        return Err(RuntimeError::Stale);
+                    }
+                } else {
+                    self.ingress.retain(|surface, cursor| {
+                        records
+                            .get(surface)
+                            .is_some_and(|r| !r.revoked && r.incarnation == cursor.incarnation)
+                    });
+                    self.ingress.insert(
+                        connection.surface_id,
+                        InputCursor {
+                            incarnation: connection.incarnation,
+                            epoch,
+                            high_water: 0,
+                            receipts: Vec::new(),
+                        },
+                    );
+                    events.push(RuntimeData::BrowserEpochOpened {
+                        surface_id: connection.surface_id,
+                        incarnation: connection.incarnation,
+                        epoch,
+                    });
+                }
+                RuntimeResult::ConnectionOpened
+            }
             RuntimeOperation::Begin {
                 turn_id,
                 worker,
@@ -604,7 +692,10 @@ impl RuntimeState {
                     return Err(RuntimeError::InvalidRequest);
                 }
                 let record = match &origin {
-                    OriginProof::Browser(proof) => {
+                    OriginProof::Browser(proof)
+                    | OriginProof::SequencedBrowser {
+                        connection: proof, ..
+                    } => {
                         let r = browser_record(records, proof, now)?;
                         if !r.visible
                             || !r.approved_manifest["authority"]["mayOriginate"]
@@ -625,6 +716,39 @@ impl RuntimeState {
                             && r.approved_manifest == crate::surface_registry::pin_manifest()).ok_or(RuntimeError::InvalidOrigin)?
                     }
                 };
+                if let OriginProof::SequencedBrowser { connection, stamp } = &origin {
+                    let cursor = self
+                        .ingress
+                        .get(&connection.surface_id)
+                        .filter(|c| {
+                            c.incarnation == connection.incarnation && c.epoch == stamp.epoch
+                        })
+                        .ok_or(RuntimeError::Stale)?;
+                    if stamp.sequence == 0
+                        || stamp.sequence > 9_007_199_254_740_991
+                        || stamp.instance_id != turn_id
+                    {
+                        return Err(RuntimeError::InvalidRequest);
+                    }
+                    if let Some(receipt) = cursor
+                        .receipts
+                        .iter()
+                        .find(|r| r.sequence == stamp.sequence)
+                    {
+                        if receipt.fence.turn_id != turn_id
+                            || receipt.digest != request_digest
+                            || now >= receipt.expires_at_ms
+                        {
+                            return Err(RuntimeError::Stale);
+                        }
+                        return Ok((RuntimeResult::Duplicate(receipt.fence.clone()), events));
+                    }
+                    if stamp.sequence <= cursor.high_water
+                        || cursor.receipts.iter().any(|r| r.fence.turn_id == turn_id)
+                    {
+                        return Err(RuntimeError::Stale);
+                    }
+                }
                 if self
                     .turn
                     .as_ref()
@@ -658,6 +782,27 @@ impl RuntimeState {
                     finished: false,
                     analysis: None,
                 });
+                if let OriginProof::SequencedBrowser { connection, stamp } = &origin {
+                    let cursor = self.ingress.get_mut(&connection.surface_id).unwrap();
+                    cursor.high_water = stamp.sequence;
+                    cursor.receipts.retain(|r| now < r.expires_at_ms);
+                    if cursor.receipts.len() >= 32 {
+                        cursor.receipts.remove(0);
+                    }
+                    cursor.receipts.push(InputReceipt {
+                        sequence: stamp.sequence,
+                        digest: request_digest.clone(),
+                        fence: fence.clone(),
+                        expires_at_ms: now.checked_add(300_000).ok_or(RuntimeError::Unavailable)?,
+                    });
+                    events.push(RuntimeData::InputAdmitted {
+                        surface_id: connection.surface_id,
+                        epoch: stamp.epoch,
+                        sequence: stamp.sequence,
+                        instance_id: stamp.instance_id,
+                        request_digest: request_digest.clone(),
+                    });
+                }
                 events.push(RuntimeData::TurnBegan {
                     turn_id,
                     generation: self.generation,

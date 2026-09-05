@@ -89,6 +89,27 @@ impl AmbianceRuntime {
             .await
     }
 
+    pub async fn sequenced_browser_text(
+        &self,
+        principal: &str,
+        proof: BrowserProof,
+        stamp: super::InputStamp,
+        text: String,
+    ) -> Result<RuntimeResult, Status> {
+        self.start_maintenance();
+        self.text(
+            principal,
+            OriginProof::SequencedBrowser {
+                connection: proof,
+                stamp,
+            },
+            text,
+            None,
+            None,
+        )
+        .await
+    }
+
     pub async fn stock_text(
         &self,
         authenticated: &AuthenticatedRequest,
@@ -146,12 +167,16 @@ impl AmbianceRuntime {
             return Err(Status::invalid_argument("bounded current text is required"));
         }
         let privacy_floor = input_privacy(&text);
+        let turn_id = match &origin {
+            OriginProof::SequencedBrowser { stamp, .. } => stamp.instance_id,
+            _ => Uuid::new_v4(),
+        };
         let result = self
             .store
             .runtime(
                 principal,
                 RuntimeOperation::Begin {
-                    turn_id: Uuid::new_v4(),
+                    turn_id,
                     worker: self.worker,
                     origin,
                     request_digest: crate::surface_registry::hash(text.as_bytes()),
@@ -160,6 +185,9 @@ impl AmbianceRuntime {
             )
             .await
             .map_err(runtime_error)?;
+        if matches!(result, RuntimeResult::Duplicate(_)) {
+            return Ok(result);
+        }
         let RuntimeResult::Begun(fence) = result else {
             return Err(Status::internal("runtime admission failed"));
         };

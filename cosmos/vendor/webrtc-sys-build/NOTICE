@@ -1,0 +1,4 @@
+Source: https://github.com/livekit/rust-sdks/tree/2d9f01ab1e933a86a8a5c53805ee29ee58b9be1b/webrtc-sys/build
+Copyright 2025 LiveKit, Inc. Apache-2.0.
+Local modification: remove native network acquisition and require LK_CUSTOM_WEBRTC.
+Verified native archives are acquired by cosmos/native/prepare.py.

@@ -1,0 +1,16 @@
+[package]
+name = "cosmos-rtc"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+# Published source matches revision 2d9f01ab1e933a86a8a5c53805ee29ee58b9be1b.
+livekit = { version = "=0.8.4", features = ["rustls-tls-webpki-roots"] }
+livekit-token = "=0.1.1"
+tokio.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json = "1"

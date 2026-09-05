@@ -8,3 +8,6 @@ pub mod state;
 pub mod stock;
 pub use policy::{Channel, PrivacyClass, SemanticIntent};
 pub use state::*;
+
+#[cfg(test)]
+mod ingress_tests;

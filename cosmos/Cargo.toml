@@ -3,6 +3,7 @@ members = [
     "crates/core",
     "crates/crypto",
     "crates/protocol",
+    "crates/rtc",
     "crates/cosmos",
 ]
 resolver = "2"
@@ -43,3 +44,7 @@ strip = "symbols"
 # with a real Pin.
 [patch.crates-io]
 voprf = { path = "vendor/voprf" }
+
+# The upstream build helper downloads unverified native binaries when no path
+# is configured. This narrow patch requires our separately verified archive.
+webrtc-sys-build = { path = "vendor/webrtc-sys-build" }

@@ -1,0 +1,10 @@
+{
+  "sdkRevision": "2d9f01ab1e933a86a8a5c53805ee29ee58b9be1b",
+  "tag": "webrtc-89d790b",
+  "assets": {
+    "mac-arm64": { "bytes": 277148750, "sha256": "9f25fea48588deac18d68e120d18b33af7ef10f921f74b7c57f66b642262c348" },
+    "mac-x64": { "bytes": 234319930, "sha256": "04eea79951eaefc1054099464f949f6dcfab9bc7460c16004811abc4f9ec15d4" },
+    "linux-arm64": { "bytes": 172277980, "sha256": "f716b10eade18dd11b03b9f93b50cee2ca2eec73b975a63f2ae9ea2a35706420" },
+    "linux-x64": { "bytes": 156139058, "sha256": "b167adad5291cea0e4d66a0454d9d52d2ad714e6b0ed70f4410317d3ebde70c5" }
+  }
+}

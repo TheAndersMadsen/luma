@@ -230,9 +230,9 @@ deployment; native macOS and Android clients use the same contracts. Physical
 Pin connection, installation and hardware acceptance come last, not as a blocker
 to server deployment or native client builds. These gates refine the
 [requirement inventory](contracts/ambiance-v2.json), not its conformance status.
-SDK compositions below are researched candidates, not selected or implemented
-production behavior.
-Self-hosted LiveKit is our implementation direction under evaluation; the paper
+The direct Rust LiveKit SDK is selected for the isolated transport adapter;
+cognition framework compositions below remain research candidates.
+Self-hosted LiveKit is our implementation direction; the paper
 uses it as a research substrate, not a proposed production dependency, and its
 transport-agnostic semantics make LiveKit neither proof nor a universal
 requirement of conformance. The paper also permits cognition and runtime in one
@@ -240,12 +240,21 @@ process with separate interfaces: management-secret isolation for separate jobs
 is our least-privilege deployment gate, not a claim that process separation is
 required or that the stock SDK alone violates the paper.
 
-1. **Cosmos transport feasibility.** Evaluate the direct Rust LiveKit SDK
+1. **Cosmos transport.** The `cosmos-rtc` crate owns the direct Rust LiveKit SDK
    0.8.4/API 0.6.4 at
    [pinned revision `2d9f01ab`](https://github.com/livekit/rust-sdks/tree/2d9f01ab1e933a86a8a5c53805ee29ee58b9be1b).
-   Verify pinned libwebrtc assets, Clang 21/lld and both target builds before
-   adopting the production dependency; permit no unverified build-script
-   downloads. A token-only cognition process remains a candidate. Stock Node
+   The published crates match this revision's source. The adapter uses ordinary
+   participants, bounded attributed RPCs, no automatic media subscriptions and
+   coordination-only tokens. It has a localhost integration test for real RPC
+   delivery, payload bounds and disconnect state. Application room admission,
+   the Center room client and media routing remain separate implementation
+   gates; this adapter alone does not replace the current HTTP browser path.
+   `cosmos/native/webrtc.json` pins native bytes; acquisition verifies the
+   archive and every extracted compiler input. The patched upstream build helper
+   cannot download native code. Linux uses Clang 21/lld with target GLib headers
+   in the pinned Trixie builder. macOS links Objective-C categories for both
+   ordinary binaries and doctests. A token-only cognition process remains a
+   candidate. Stock Node
    Agents 1.8.0 at
    [pinned revision `67fa5e03`](https://github.com/livekit/agents-js/tree/67fa5e031e324cef8fccaf4939960542c7ed6d5e)
    forwards the SFU management signing secret to jobs; `workerToken` does not
@@ -261,6 +270,14 @@ required or that the stock SDK alone violates the paper.
    AGENT publishers. Verify the transport identity design before freezing its
    schema. Verify room permissions and ordinary delivery using an isolated
    local SFU and synthetic accounts, never production credentials or media.
+   The durable browser ingress foundation now binds one boot epoch to an
+   approved incarnation. Input sequence advancement and turn admission commit
+   together. Exact retries return a prior admission without resuming cognition;
+   changed retries and old sequences fail. At most 32 digested admission records
+   remain for five minutes, and expiry never resets the sequence high-water
+   mark. Rebooting into a new epoch requires renewed owner connection approval.
+   This is input admission only; the application room adapter must also bind
+   acknowledgments, cancellation and state messages to their current session.
 3. **Cosmos realtime cognition.** Do not automatically forward
    `RoomSessionTransport`, control events or history. Manual `RoomIO` with a
    no-room `AgentSession.start` is a public-composition candidate requiring

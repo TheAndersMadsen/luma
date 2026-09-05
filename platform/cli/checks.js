@@ -266,12 +266,28 @@ function focusedRustTestArguments(filter) {
 }
 
 function runCosmosCheck(filter = null, dependencies = {}) {
-  const environment = dependencies.environment ?? cosmosTestEnvironment();
+  const baseEnvironment = dependencies.environment ?? cosmosTestEnvironment();
   const runner = dependencies.runner ?? timedRun;
-  requiredCommands(['rustc', 'cargo'], 'Cosmos check', environment);
-  try { validateHostToolchains({ env: environment }); } catch (error) { fail(error.message); }
+  requiredCommands(['rustc', 'cargo', 'python3'], 'Cosmos check', baseEnvironment);
+  try { validateHostToolchains({ env: baseEnvironment }); } catch (error) { fail(error.message); }
   const cosmos = path.join(ROOT, 'cosmos');
-  runner('cosmos format', 'cargo', ['fmt', '--all', '--check'], { cwd: cosmos, env: environment });
+  runner('cosmos format', 'cargo', ['fmt', '--all', '--check'], { cwd: cosmos, env: baseEnvironment });
+  const native = runner('cosmos verified native inputs', 'python3', [
+    path.join(cosmos, 'native/prepare.py'), '--cache', path.join(BUILD_DIR, 'webrtc'),
+  ], { env: baseEnvironment, capture: true });
+  const nativeDirectory = native.stdout.trim();
+  if (!nativeDirectory.startsWith(path.join(BUILD_DIR, 'webrtc') + path.sep)) fail('invalid native build directory');
+  const environment = {
+    ...baseEnvironment,
+    LK_CUSTOM_WEBRTC: nativeDirectory,
+    ...(process.platform === 'linux' ? {
+      CC: 'clang-21', CXX: 'clang++-21',
+      CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: 'clang-21',
+      CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: 'clang-21',
+      CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS: '-C link-arg=-fuse-ld=lld-21',
+      CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: '-C link-arg=-fuse-ld=lld-21',
+    } : {}),
+  };
   if (filter !== null) {
     info(`[focused] Cosmos test filter: ${filter}`);
     const discovery = runner('cosmos test discovery', 'cargo', [

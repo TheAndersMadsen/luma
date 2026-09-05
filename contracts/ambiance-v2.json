@@ -35,6 +35,30 @@
   ],
   "evidence": [
     {
+      "id": "rtc-attribution-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/rtc/tests/room.rs",
+      "anchor": "async fn attributed_rpc_roundtrip_bounds_and_shutdown()",
+      "scope": "Defines a localhost LiveKit RPC exchange through the actual Rust adapter, requiring server-attributed caller identity, bounded payloads and explicit disconnect state.",
+      "limitation": "Requires synthetic room tokens and an isolated server. Adapter test definition only; application enrollment, role-specific media access, Center integration and physical Pin behavior remain outstanding."
+    },
+    {
+      "id": "sequenced-input-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/ingress_tests.rs",
+      "anchor": "async fn ambiance_ingress_retried_input_never_calls_cognition_twice()",
+      "scope": "Defines epoch/incarnation-bound browser input whose exact replay cannot start cognition again and whose changed text is rejected before cognition.",
+      "limitation": "Runtime entry-point definition only. Existing HTTP ingress has not yet been replaced by the application room adapter; cancellation, acknowledgment and state sequence bindings remain required."
+    },
+    {
+      "id": "sequenced-input-postgres-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/store_postgres.rs",
+      "anchor": "async fn ambiance_postgres_ingress_commit_failure_and_worker_race_preserve_one_admission()",
+      "scope": "Defines failed event append rolling back the input cursor and turn together, competing PostgreSQL workers producing one admission, durable reopen returning the prior admission, and revocation denying replay.",
+      "limitation": "Requires isolated PostgreSQL; definition only. Does not establish database-server restart, all coordination messages, countersigned audit anchors or device boot attestation."
+    },
+    {
       "id": "bounded-analysis-origin-test-definition",
       "kind": "test-definition",
       "path": "cosmos/crates/cosmos/src/ambiance/runtime.rs",
@@ -320,7 +344,7 @@
       "requirement": "Bind each request to authenticated principal, origin, modality, state, environment, device/channel/actor trust, server receipt time, epoch and sequence.",
       "acceptance": "Preserve Pin device identity before account normalization; do not trust device clocks or body-supplied identity, and test replay/freshness plus scoped self-echo rejection.",
       "status": "partial",
-      "evidence": ["authenticated-device-provenance-definition", "stock-transport-provenance-test-definition", "pin-runtime-admission-definition"]
+      "evidence": ["authenticated-device-provenance-definition", "stock-transport-provenance-test-definition", "pin-runtime-admission-definition", "rtc-attribution-test-definition", "sequenced-input-test-definition", "sequenced-input-postgres-test-definition"]
     },
     {
       "id": "cognition-authority",

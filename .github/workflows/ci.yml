@@ -93,6 +93,12 @@ jobs:
   cosmos:
     name: cosmos formatting and tests
     runs-on: ubuntu-24.04
+    container:
+      image: rust:1.91.1-trixie@sha256:867f1d1162913c401378a8504fb17fe2032c760dc316448766f150a130204aad
+    env:
+      CC: clang-21
+      CXX: clang++-21
+      RUSTFLAGS: -C link-arg=-fuse-ld=lld-21
     services:
       postgres:
         image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
@@ -120,6 +126,12 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
+      - name: pinned Cosmos native compiler
+        run: bash cosmos/native/linux-toolchain.sh amd64 amd64
+      - name: verified libwebrtc inputs
+        run: |
+          native_dir="$(python3 cosmos/native/prepare.py --cache "${RUNNER_TEMP}/webrtc")"
+          printf 'LK_CUSTOM_WEBRTC=%s\n' "$native_dir" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@38ae5351029910ad7674ccfad89c37cbd636f3c4 # 1.91.1
         with:
           components: clippy, rustfmt
@@ -150,10 +162,11 @@ jobs:
       - name: real Postgres lifecycle and atomic migration contention
         working-directory: cosmos
         env:
-          COSMOS_TEST_DATABASE_URL: postgresql://cosmos_test:cosmos_test_ci_only@127.0.0.1:5432/cosmos_test
+          COSMOS_TEST_DATABASE_URL: postgresql://cosmos_test:cosmos_test_ci_only@postgres:5432/cosmos_test
         run: |
           env -u COSMOS_STATE_DIR -u COSMOS_WORKLOAD COSMOS_TEST_DATABASE_URL="$COSMOS_TEST_DATABASE_URL" cargo test -p cosmos keydirectory::tests::a_second_workload_observes_import_replacement_revocation_and_reimport -- --exact --nocapture
           env -u COSMOS_STATE_DIR -u COSMOS_WORKLOAD COSMOS_TEST_DATABASE_URL="$COSMOS_TEST_DATABASE_URL" cargo test -p cosmos store_postgres::tests::many_concurrent_key_directories_migrate_one_fresh_postgres_schema_atomically -- --exact --nocapture
+          env -u COSMOS_STATE_DIR -u COSMOS_WORKLOAD COSMOS_TEST_DATABASE_URL="$COSMOS_TEST_DATABASE_URL" cargo test -p cosmos ambiance_postgres -- --test-threads=1
       - name: save Cosmos Cargo downloads and target state
         if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.cosmos-rust-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6

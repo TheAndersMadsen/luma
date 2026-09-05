@@ -1910,6 +1910,129 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ambiance_postgres_ingress_commit_failure_and_worker_race_preserve_one_admission() {
+        use crate::ambiance::*;
+        use crate::surface_registry::{Mutation, hash};
+        let Some(first) = store().await else {
+            eprintln!("SKIPPED: isolated COSMOS_TEST_DATABASE_URL required");
+            return;
+        };
+        let principal = format!("U:rtc-pg-{}", uuid::Uuid::new_v4());
+        let proof = BrowserProof {
+            surface_id: uuid::Uuid::new_v4(),
+            incarnation: uuid::Uuid::new_v4(),
+            token_hash: hash(b"synthetic capability"),
+        };
+        first
+            .mutate_surface(
+                &principal,
+                proof.surface_id,
+                Mutation::Approve {
+                    token_hash: proof.token_hash.clone(),
+                    incarnation: proof.incarnation,
+                },
+            )
+            .await
+            .unwrap();
+        first
+            .mutate_surface(
+                &principal,
+                proof.surface_id,
+                Mutation::State {
+                    token_hash: proof.token_hash.clone(),
+                    incarnation: proof.incarnation,
+                    sequence: 1,
+                    visible: true,
+                },
+            )
+            .await
+            .unwrap();
+        let stamp = InputStamp {
+            epoch: uuid::Uuid::new_v4(),
+            sequence: 1,
+            instance_id: uuid::Uuid::new_v4(),
+        };
+        first
+            .runtime(
+                &principal,
+                RuntimeOperation::OpenBrowser {
+                    connection: proof.clone(),
+                    epoch: stamp.epoch,
+                },
+            )
+            .await
+            .unwrap();
+        let sequence: i64 =
+            sqlx::query_scalar("SELECT sequence FROM cosmos_surface_head WHERE principal=$1")
+                .bind(&principal)
+                .fetch_one(&first.pool)
+                .await
+                .unwrap();
+        sqlx::query("INSERT INTO cosmos_surface_event(principal,sequence,hash,event) VALUES($1,$2,'ingress-obstruction','{}'::jsonb)").bind(&principal).bind(sequence+1).execute(&first.pool).await.unwrap();
+        let begin = || RuntimeOperation::Begin {
+            turn_id: stamp.instance_id,
+            worker: uuid::Uuid::new_v4(),
+            origin: OriginProof::SequencedBrowser {
+                connection: proof.clone(),
+                stamp: stamp.clone(),
+            },
+            request_digest: hash(b"synthetic request"),
+            privacy_floor: PrivacyClass::Public,
+        };
+        assert!(matches!(
+            first.runtime(&principal, begin()).await,
+            Err(RuntimeError::Unavailable)
+        ));
+        let state: String = sqlx::query_scalar(
+            "SELECT state::text FROM cosmos_ambiance_runtime WHERE principal=$1",
+        )
+        .bind(&principal)
+        .fetch_one(&first.pool)
+        .await
+        .unwrap();
+        let state: RuntimeState = serde_json::from_str(&state).unwrap();
+        assert_eq!(state.ingress[&proof.surface_id].high_water, 0);
+        assert!(state.turn.is_none());
+        sqlx::query("DELETE FROM cosmos_surface_event WHERE principal=$1 AND sequence=$2 AND hash='ingress-obstruction'").bind(&principal).bind(sequence+1).execute(&first.pool).await.unwrap();
+        let second = store().await.unwrap();
+        let (a, b) = tokio::join!(
+            first.runtime(&principal, begin()),
+            second.runtime(&principal, begin())
+        );
+        let (admitted, duplicate) = match (a.unwrap(), b.unwrap()) {
+            (RuntimeResult::Begun(a), RuntimeResult::Duplicate(b))
+            | (RuntimeResult::Duplicate(b), RuntimeResult::Begun(a)) => (a, b),
+            other => panic!("expected exactly one admission, got {other:?}"),
+        };
+        assert_eq!(admitted.turn_id, duplicate.turn_id);
+        assert_eq!(admitted.worker, duplicate.worker);
+        let reopened = store().await.unwrap();
+        assert!(matches!(
+            reopened.runtime(&principal, begin()).await.unwrap(),
+            RuntimeResult::Duplicate(_)
+        ));
+        let after: i64 =
+            sqlx::query_scalar("SELECT sequence FROM cosmos_surface_head WHERE principal=$1")
+                .bind(&principal)
+                .fetch_one(&reopened.pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            after,
+            sequence + 2,
+            "one input admission and one turn, with no duplicate event"
+        );
+        first
+            .mutate_surface(&principal, proof.surface_id, Mutation::Revoke)
+            .await
+            .unwrap();
+        assert!(matches!(
+            reopened.runtime(&principal, begin()).await,
+            Err(RuntimeError::InvalidOrigin)
+        ));
+    }
+
+    #[tokio::test]
     async fn ambiance_analysis_postgres_append_failure_reopen_and_result_join() {
         use crate::ambiance::{ledger::LedgerEvent, *};
         use crate::surface_registry::{Mutation, hash, pin_surface_id};
