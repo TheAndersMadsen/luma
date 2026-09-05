@@ -1,4 +1,4 @@
-import { AUTH_ENABLED, isSameOriginRequest } from "@/server/auth";
+import { AUTH_ENABLED, isSameOriginRequest, originFromHeaders } from "@/server/auth";
 import { currentSession } from "@/server/operator";
 import { COSMOS_WEBAPI, SessionExpiredError, surfaceOwnerHeaders } from "@/server/cosmos";
 import { boundedJson } from "@/server/boundedJson";
@@ -45,7 +45,8 @@ export async function runtimeRequest(request: Request): Promise<Response> {
       const status = errors[response.status] ? response.status : 503;
       return json({ error: errors[status] }, status);
     }
-    const connection = parseRoomConnection(await boundedJson(response.body, 8192, signal), new URL(request.url).origin);
+    const origin = originFromHeaders(request.headers) ?? new URL(request.url).origin;
+    const connection = parseRoomConnection(await boundedJson(response.body, 8192, signal), origin);
     if (connection.epoch !== body.epoch) throw new Error("wrong_epoch");
     return json(connection);
   } catch (error) {

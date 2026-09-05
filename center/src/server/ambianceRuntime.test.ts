@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({ session: vi.fn(), headers: vi.fn(), origin: vi.fn(), enabled: true }));
 vi.mock("@/server/operator", () => ({ currentSession: mocks.session }));
-vi.mock("@/server/auth", () => ({ get AUTH_ENABLED() { return mocks.enabled; }, isSameOriginRequest: mocks.origin }));
+vi.mock("@/server/auth", async importOriginal => ({ ...await importOriginal<typeof import("@/server/auth")>(), get AUTH_ENABLED() { return mocks.enabled; }, isSameOriginRequest: mocks.origin }));
 vi.mock("@/server/cosmos", () => ({ COSMOS_WEBAPI: "http://cosmos.test", surfaceOwnerHeaders: mocks.headers, SessionExpiredError: class extends Error {} }));
 import { POST, GET } from "@/app/api/runtime/[operation]/route";
 import { incarnation, roomConnection, runtimeEpoch } from "@/lib/browserRoom.test-support";
@@ -27,6 +27,18 @@ it("forwards only the verified owner bearer and exact memory capability", async 
   expect(vi.mocked(fetch).mock.calls[0][0]).toBe("http://cosmos.test/runtime-api/v1/browser/room");
   expect(vi.mocked(fetch).mock.calls[0][1]?.headers).toEqual({ authorization: "Bearer actual-owner", "x-cosmos-surface-token": token, "content-type": "application/json" });
   expect(JSON.parse(vi.mocked(fetch).mock.calls[0][1]?.body as string)).toEqual(proof);
+});
+it("validates signaling against the public proxy origin when Next sees an internal URL", async () => {
+  const auth = await vi.importActual<typeof import("@/server/auth")>("@/server/auth");
+  mocks.origin.mockImplementation(auth.isSameOriginRequest);
+  const request = new Request("http://localhost:4000/api/runtime/room", {
+    method: "POST", headers: { "content-type": "application/json", "x-cosmos-surface-token": token,
+      origin: "https://center.test", host: "localhost:4000", "x-forwarded-host": "center.test", "x-forwarded-proto": "https" },
+    body: JSON.stringify(proof),
+  });
+  const result = await POST(request, { params: Promise.resolve({ operation: "room" }) });
+  expect(result.status).toBe(200);
+  expect(await result.json()).toEqual(roomConnection(runtimeEpoch));
 });
 it("rejects self-elevation, missing epochs and oversized requests", async () => {
   for (const body of [{ ...proof, owner: "other" }, { ...proof, trust: 9 }, { surfaceId, incarnation },
