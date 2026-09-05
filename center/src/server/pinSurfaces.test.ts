@@ -6,6 +6,8 @@ vi.mock("@/server/auth", () => ({ get AUTH_ENABLED() { return mocks.authEnabled;
 vi.mock("@/server/cosmos", () => ({ COSMOS_WEBAPI: "http://cosmos.test", surfaceOwnerHeaders: mocks.headers, SessionExpiredError: class extends Error {} }));
 import { GET, POST } from "@/app/api/devices/runtime/route";
 import { DELETE } from "@/app/api/devices/runtime/[surfaceId]/route";
+import { GET as SPEECH_GET, POST as SPEECH_POST } from "@/app/api/devices/runtime/[surfaceId]/speech-disclosure/route";
+import { SPEECH_DISCLOSURE_APPROVAL } from "@/lib/contracts/speechDisclosure";
 import { SessionExpiredError } from "@/server/cosmos";
 import { PIN_APPROVAL, PIN_SURFACE_POSTURE } from "@/lib/contracts/pinSurfaces";
 const id = "11111111-1111-1111-1111-111111111111";
@@ -17,11 +19,14 @@ function request(body: unknown = approval, extra = {}) {
 }
 const list = () => GET(new Request("https://center.test/api/devices/runtime"));
 const revoke = () => DELETE(new Request("https://center.test/api/devices/runtime", { method: "DELETE" }), context);
+const speechRead = () => SPEECH_GET(new Request(`https://center.test/api/devices/runtime/${id}/speech-disclosure`), context);
+const policy = { provider: { provider: "azure_speech", region: "westeurope" }, maximumClass: "shared_room", transcription: false, synthesis: true };
+const speechInput = { approval: SPEECH_DISCLOSURE_APPROVAL, approvalRevision: 1, expectedRevision: 0, policy };
 beforeEach(() => { mocks.authEnabled = true; mocks.session.mockResolvedValue({ sub: "owner" }); mocks.headers.mockResolvedValue({ authorization: "Bearer server-only" }); mocks.origin.mockReturnValue(true); vi.stubGlobal("fetch", vi.fn()); });
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 it("all actual Pin runtime routes require configured login, owner session and real bearer", async () => {
-  const handlers = [list, () => POST(request()), revoke];
+  const handlers = [list, () => POST(request()), revoke, speechRead, () => SPEECH_POST(request(speechInput), context)];
   mocks.authEnabled = false;
   for (const handler of handlers) expect((await handler()).status).toBe(503);
   mocks.authEnabled = true; mocks.session.mockResolvedValue(null);
@@ -34,6 +39,7 @@ it("both mutations reject cross-origin before reading or forwarding authority", 
   mocks.origin.mockReturnValue(false);
   expect((await POST(request())).status).toBe(403);
   expect((await revoke()).status).toBe(403);
+  expect((await SPEECH_POST(request(speechInput), context)).status).toBe(403);
   expect(fetch).not.toHaveBeenCalled();
 });
 it("rejects malformed, oversized, self-elevating and wrong-profile approval", async () => {
@@ -120,4 +126,52 @@ it("bounds stalled incoming approval bodies and never reaches Cosmos", async () 
   for (let i = 0; i < 12; i++) await Promise.resolve();
   controller.abort();
   expect((await result).status).toBe(400); expect(cancel).toHaveBeenCalled(); expect(fetch).not.toHaveBeenCalled();
+});
+
+it("speech disclosure requires an explicit nullable policy and exact bounded authority fields", async () => {
+  const { policy: _policy, ...missing } = speechInput;
+  for (const body of [missing, { ...speechInput, principal: "other" }, { ...speechInput, expectedRevision: -1 },
+    { ...speechInput, expectedRevision: Number.MAX_SAFE_INTEGER }, { ...speechInput, approvalRevision: 0 },
+    { ...speechInput, policy: { ...policy, provider: { ...policy.provider, endpoint: "https://invalid.test" } } },
+    { ...speechInput, policy: { ...policy, provider: { ...policy.provider, region: "a".repeat(33) } } },
+    { ...speechInput, policy: { ...policy, synthesis: false } }, { ...speechInput, policy: { ...policy, maximumClass: "secret" } }]) {
+    expect((await SPEECH_POST(request(body), context)).status).toBe(400);
+  }
+  expect((await SPEECH_GET(request(), { params: Promise.resolve({ surfaceId: "../other" }) })).status).toBe(400);
+  expect(fetch).not.toHaveBeenCalled();
+});
+
+it("speech grant and revoke forward only owner bearer and verify exact committed policy/revisions", async () => {
+  for (const nextPolicy of [policy, null]) {
+    const input = { ...speechInput, policy: nextPolicy };
+    const saved = { approvalRevision: 1, revision: 1, policy: nextPolicy };
+    vi.mocked(fetch).mockResolvedValue(Response.json({ approval: saved }));
+    const response = await SPEECH_POST(request(input, { authorization: "Bearer attacker", "x-cosmos-admin-token": "attacker" }), context);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ approval: saved });
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    const [url, options] = vi.mocked(fetch).mock.lastCall!;
+    expect(url).toBe(`http://cosmos.test/surface-api/v1/pins/${id}/speech-disclosure`);
+    expect(options?.headers).toEqual({ authorization: "Bearer server-only", "content-type": "application/json" });
+    expect(options?.redirect).toBe("error");
+    expect(options?.body).toBe(JSON.stringify(input));
+  }
+  for (const approval of [null, { approvalRevision: 2, revision: 1, policy }, { approvalRevision: 1, revision: 2, policy },
+    { approvalRevision: 1, revision: 1, policy: { ...policy, transcription: true } }]) {
+    vi.mocked(fetch).mockResolvedValue(Response.json({ approval }));
+    expect((await SPEECH_POST(request(speechInput), context)).status).toBe(503);
+  }
+});
+
+it("speech reads distinguish no policy from malformed state and sanitize conflicts", async () => {
+  vi.mocked(fetch).mockResolvedValue(Response.json({ approval: null }));
+  expect(await (await speechRead()).json()).toEqual({ approval: null });
+  for (const response of [Response.json({}), Response.json({ approval: { approvalRevision: 1, revision: 1 } }),
+    Response.json({ approval: { approvalRevision: 1, revision: 1, policy }, secret: "not-browser-data" }), new Response("x".repeat(2049))]) {
+    vi.mocked(fetch).mockResolvedValue(response);
+    expect((await speechRead()).status).toBe(503);
+  }
+  vi.mocked(fetch).mockResolvedValue(new Response("private diagnostic", { status: 409 }));
+  const response = await SPEECH_POST(request(speechInput), context);
+  expect(response.status).toBe(409); expect(await response.json()).toEqual({ error: "conflict" });
 });

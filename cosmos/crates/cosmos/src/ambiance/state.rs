@@ -54,6 +54,28 @@ pub enum OriginProof {
 }
 
 pub enum RuntimeOperation {
+    DisclosurePolicy {
+        surface_id: Uuid,
+    },
+    SetDisclosurePolicy {
+        surface_id: Uuid,
+        approval_revision: u64,
+        expected_revision: u64,
+        policy: Option<super::disclosure::Policy>,
+    },
+    StartDisclosure {
+        fence: TurnFence,
+        request: super::disclosure::Request,
+        id: Uuid,
+    },
+    CheckDisclosure {
+        fence: TurnFence,
+        disclosure: super::disclosure::Disclosure,
+    },
+    RetireDisclosure {
+        fence: TurnFence,
+        id: Uuid,
+    },
     OpenPin {
         device: AuthenticatedDeviceIdentity,
         surface_id: Uuid,
@@ -161,6 +183,9 @@ pub enum RuntimeOperation {
 }
 #[derive(Clone, Debug)]
 pub enum RuntimeResult {
+    DisclosurePolicy(Option<super::disclosure::Approval>),
+    DisclosureStarted(super::disclosure::Disclosure),
+    DisclosureCurrent,
     PinOpened {
         connection: super::PinConnection,
         duplicate: bool,
@@ -220,6 +245,8 @@ pub struct Turn {
     pub finished: bool,
     #[serde(default)]
     pub analysis: Option<AnalysisState>,
+    #[serde(default)]
+    pub disclosures: Vec<super::disclosure::Disclosure>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -269,6 +296,8 @@ pub struct RuntimeState {
     pub echoes: Vec<super::echo::Window>,
     #[serde(default)]
     pub pin_connections: BTreeMap<Uuid, super::PinConnection>,
+    #[serde(default)]
+    pub disclosure_policies: BTreeMap<Uuid, super::disclosure::Approval>,
 }
 
 /// Client boot epochs and sequences are provenance; client clocks are not.
@@ -377,6 +406,18 @@ impl InputAdmission {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RuntimeData {
+    DisclosurePolicyChanged {
+        surface_id: Uuid,
+        approval: super::disclosure::Approval,
+    },
+    ProviderDisclosureStarted {
+        fence: TurnFence,
+        disclosure: super::disclosure::Disclosure,
+    },
+    ProviderDisclosureDenied {
+        fence: TurnFence,
+        request: super::disclosure::Request,
+    },
     PinEpochOpened {
         surface_id: Uuid,
         approval_revision: u64,
@@ -503,7 +544,7 @@ fn action_event(action: &Action) -> RuntimeData {
         attempt: action.attempts,
     }
 }
-fn digest_valid(value: &str) -> bool {
+pub(super) fn digest_valid(value: &str) -> bool {
     value.len() == 64
         && value
             .bytes()
@@ -660,7 +701,7 @@ impl RuntimeState {
         }
         events
     }
-    fn fence(
+    pub(super) fn fence(
         &self,
         turn_id: Uuid,
         generation: u64,
@@ -679,7 +720,12 @@ impl RuntimeState {
             })
             .ok_or(RuntimeError::Stale)
     }
-    fn origin_valid(&self, turn: &Turn, records: &BTreeMap<Uuid, Record>, now: i64) -> bool {
+    pub(super) fn origin_valid(
+        &self,
+        turn: &Turn,
+        records: &BTreeMap<Uuid, Record>,
+        now: i64,
+    ) -> bool {
         records.get(&turn.fence.origin_surface).is_some_and(|r| {
             !r.revoked
                 && match r.binding {
@@ -716,6 +762,11 @@ impl RuntimeState {
             records
                 .get(id)
                 .is_some_and(|r| !r.revoked && r.revision == connection.approval_revision)
+        });
+        self.disclosure_policies.retain(|id, approval| {
+            records
+                .get(id)
+                .is_some_and(|r| !r.revoked && r.revision == approval.approval_revision)
         });
         self.ingress.retain(|id, cursor| {
             records.get(id).is_some_and(|r| {
@@ -873,13 +924,14 @@ impl RuntimeState {
         events.extend(self.clear_terminal_payloads());
         events
     }
-    fn claim(
+    pub(super) fn claim(
         &mut self,
         records: &BTreeMap<Uuid, Record>,
         id: Uuid,
         generation: u64,
         worker: Uuid,
         now: i64,
+        native_speech: bool,
     ) -> Result<(Action, Vec<RuntimeData>), RuntimeError> {
         let action = self.actions.get(&id).ok_or(RuntimeError::NotFound)?;
         let turn = self.fence(action.turn_id, generation, worker, now)?;
@@ -890,6 +942,13 @@ impl RuntimeState {
             || !self.origin_valid(turn, records, now)
         {
             return Err(RuntimeError::Stale);
+        }
+        if native_speech
+            && (turn.pin_incarnation.is_none()
+                || action.channel != Channel::AudioTts
+                || action.surface_id != turn.fence.origin_surface)
+        {
+            return Err(RuntimeError::PolicyBlocked);
         }
         let record = records
             .get(&action.surface_id)
@@ -929,8 +988,12 @@ impl RuntimeState {
         }
         let action = self.actions.get_mut(&id).unwrap();
         action.attempts += 1;
-        action.deadline_ms = now.checked_add(ACK_MS).ok_or(RuntimeError::Unavailable)?;
-        action.status = if action.channel == Channel::AudioTts {
+        action.deadline_ms = if native_speech {
+            action.display_expires_at_ms
+        } else {
+            now.checked_add(ACK_MS).ok_or(RuntimeError::Unavailable)?
+        };
+        action.status = if action.channel == Channel::AudioTts && !native_speech {
             ActionStatus::OutcomeUnknown
         } else {
             ActionStatus::Dispatched
@@ -947,6 +1010,62 @@ impl RuntimeState {
     ) -> Result<(RuntimeResult, Vec<RuntimeData>), RuntimeError> {
         let mut events = self.reconcile(records, now);
         let result = match operation {
+            RuntimeOperation::DisclosurePolicy { surface_id } => {
+                RuntimeResult::DisclosurePolicy(self.disclosure_policy(records, surface_id)?)
+            }
+            RuntimeOperation::SetDisclosurePolicy {
+                surface_id,
+                approval_revision,
+                expected_revision,
+                policy,
+            } => {
+                let (approval, appended) = self.set_disclosure_policy(
+                    records,
+                    surface_id,
+                    approval_revision,
+                    expected_revision,
+                    policy,
+                )?;
+                events.extend(appended);
+                RuntimeResult::DisclosurePolicy(Some(approval))
+            }
+            RuntimeOperation::StartDisclosure { fence, request, id } => {
+                match self.start_disclosure(records, fence.clone(), request.clone(), id, now) {
+                    Ok((disclosure, appended)) => {
+                        events.extend(appended);
+                        RuntimeResult::DisclosureStarted(disclosure)
+                    }
+                    Err(RuntimeError::PolicyBlocked) => {
+                        events.push(RuntimeData::ProviderDisclosureDenied { fence, request });
+                        RuntimeResult::Blocked
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            RuntimeOperation::CheckDisclosure { fence, disclosure } => {
+                self.check_disclosure(records, &fence, &disclosure, now)?;
+                RuntimeResult::DisclosureCurrent
+            }
+            RuntimeOperation::RetireDisclosure { fence, id } => {
+                let turn = self.fence(fence.turn_id, fence.generation, fence.worker, now)?;
+                if turn.fence.origin_surface != fence.origin_surface
+                    || !turn.disclosures.iter().any(|d| d.id == id)
+                {
+                    return Err(RuntimeError::Stale);
+                }
+                let (result, appended) = self.apply(
+                    principal,
+                    records,
+                    RuntimeOperation::Cancel {
+                        turn_id: fence.turn_id,
+                        generation: fence.generation,
+                        worker: fence.worker,
+                    },
+                    now,
+                )?;
+                events.extend(appended);
+                result
+            }
             RuntimeOperation::OpenPin {
                 device,
                 surface_id,
@@ -1386,6 +1505,7 @@ impl RuntimeState {
                     cancelled: false,
                     finished: false,
                     analysis: None,
+                    disclosures: Vec::new(),
                 });
                 if let Some((surface_id, _, stamp)) = sequenced {
                     let cursor = self.ingress.get_mut(&surface_id).unwrap();
@@ -1603,7 +1723,8 @@ impl RuntimeState {
                 generation,
                 worker,
             } => {
-                let (action, appended) = self.claim(records, action_id, generation, worker, now)?;
+                let (action, appended) =
+                    self.claim(records, action_id, generation, worker, now, false)?;
                 events.extend(appended);
                 RuntimeResult::Dispatch(action)
             }
@@ -1731,7 +1852,7 @@ impl RuntimeState {
                     .map(|a| (a.id, a.generation, a.worker))
                     .collect();
                 for (id, generation, worker) in pending {
-                    let (_, appended) = self.claim(records, id, generation, worker, now)?;
+                    let (_, appended) = self.claim(records, id, generation, worker, now, false)?;
                     events.extend(appended);
                 }
                 RuntimeResult::Pending(

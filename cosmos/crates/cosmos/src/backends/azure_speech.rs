@@ -34,6 +34,8 @@ pub enum SpeechAudioFormat {
     Riff16Khz16BitMonoPcm,
     Raw16Khz16BitMonoPcm,
     Raw24Khz16BitMonoPcm,
+    /// Native transport profile; never a stock protobuf enum value.
+    Raw48Khz16BitMonoPcm,
     Audio24Khz160KBitrateMonoMp3,
 }
 
@@ -43,6 +45,7 @@ impl SpeechAudioFormat {
             Self::Riff16Khz16BitMonoPcm => "riff-16khz-16bit-mono-pcm",
             Self::Raw16Khz16BitMonoPcm => "raw-16khz-16bit-mono-pcm",
             Self::Raw24Khz16BitMonoPcm => "raw-24khz-16bit-mono-pcm",
+            Self::Raw48Khz16BitMonoPcm => "raw-48khz-16bit-mono-pcm",
             Self::Audio24Khz160KBitrateMonoMp3 => "audio-24khz-160kbitrate-mono-mp3",
         }
     }
@@ -83,6 +86,7 @@ pub struct AzureSpeechClient {
     endpoint: String,
     subscription_key: Arc<str>,
     voice: Arc<str>,
+    region: Arc<str>,
 }
 
 impl AzureSpeechClient {
@@ -119,7 +123,13 @@ impl AzureSpeechClient {
             "https://{}.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1",
             region.trim()
         );
-        Self::with_endpoint(subscription_key, voice, endpoint, stt_endpoint)
+        Self::with_endpoint(
+            subscription_key,
+            voice,
+            endpoint,
+            stt_endpoint,
+            region.trim().to_owned(),
+        )
     }
 
     fn with_endpoint(
@@ -127,6 +137,7 @@ impl AzureSpeechClient {
         voice: String,
         endpoint: String,
         stt_endpoint: String,
+        region: String,
     ) -> Result<Self, AzureSpeechError> {
         let http = HTTP
             .get_or_init(|| {
@@ -144,6 +155,7 @@ impl AzureSpeechClient {
             stt_endpoint,
             subscription_key: Arc::from(subscription_key),
             voice: Arc::from(voice),
+            region: Arc::from(region),
         })
     }
 
@@ -155,8 +167,22 @@ impl AzureSpeechClient {
             "en-US-TestNeural".to_owned(),
             endpoint,
             stt_endpoint,
+            "westeurope".to_owned(),
         )
         .expect("valid test Azure Speech client")
+    }
+
+    pub(crate) fn region(&self) -> &str {
+        &self.region
+    }
+
+    pub(crate) fn synthesis_digest(&self, text: &str, format: SpeechAudioFormat) -> String {
+        // Covers the actual text, voice and format in this immutable client.
+        // Region/provider are separately included in the disclosure request.
+        crate::surface_registry::hash(
+            &serde_json::to_vec(&(text, self.voice.as_ref(), format.azure_name()))
+                .expect("strings serialize"),
+        )
     }
 
     async fn start_request(

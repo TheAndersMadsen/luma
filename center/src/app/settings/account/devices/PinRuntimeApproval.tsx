@@ -1,10 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { DEVICE_ID, PIN_APPROVAL, parsePinSurface, parsePinSurfaces, type PinSurface } from "@/lib/contracts/pinSurfaces";
 import { record } from "@/lib/contracts/surfaces";
 import settings from "../../settings.module.css";
 import styles from "./devices.module.css";
+import { SpeechDisclosure } from "./SpeechDisclosure";
 
 type Selection = { deviceId: string; surfaceId?: string };
 
@@ -118,7 +119,7 @@ export function PinRuntimeApproval() {
     </div> : rows.length === 0 ? !failed ? <div className={settings.stateRow}>Pair a Pin through guided setup before approving its runtime participation.</div> : null : rows.map(deviceId => {
       const pin = byDevice.get(deviceId);
       const selected = selection?.deviceId === deviceId;
-      return <div className={styles.deviceClaimRow} key={deviceId} aria-label={`Runtime approval for Pin ${deviceId}`}>
+      return <Fragment key={deviceId}><div className={styles.deviceClaimRow} aria-label={`Runtime approval for Pin ${deviceId}`}>
         <span className={settings.additionRowText}>
           <span className={settings.additionRowTitle}>Pin {deviceId}</span>
           <span className={settings.additionRowDesc}>{pin ? pin.currentPaired === null ? "Approval remains; current pairing status is unknown. Runtime admission is unavailable, but this approval can be revoked." : pin.currentPaired ? "Shared-speech approval recorded; not proof of online status or runtime admission." : "Approval remains, but this Pin is no longer paired to this account. Not admitted; revoke this stale approval." : revoked.includes(deviceId) ? "Runtime approval revoked." : "No active runtime approval."}</span>
@@ -132,7 +133,7 @@ export function PinRuntimeApproval() {
         </div> : <button type="button" className={styles.pairOpenButton} disabled={busy || !DEVICE_ID.test(deviceId)} onClick={() => { setError(""); setMessage(""); setSelection({ deviceId, surfaceId: pin?.surfaceId }); }}>
           {pin ? "Revoke runtime approval" : "Approve shared speech"}
         </button>}
-      </div>;
+      </div>{pin ? <SpeechDisclosure key={`${pin.surfaceId}:${pin.revision}`} pin={pin} /> : null}</Fragment>;
     })}
     {message ? <div className={settings.stateRow} role="status">{message}</div> : null}
     {error ? <div className={settings.stateRow} role="alert">{error}</div> : null}

@@ -41,6 +41,46 @@
   ],
   "evidence": [
     {
+      "id": "native-speech-disclosure-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/speech_tests.rs",
+      "anchor": "async fn ambiance_disclosure_synthesis_requires_exact_policy_action_and_one_owner()",
+      "scope": "Defines zero HTTP requests for absent or mismatched provider/class policy and changed action text, one atomic native action/disclosure owner and duplicate-attempt isolation.",
+      "limitation": "Synthetic local provider and native runtime helper only. No raw microphone admission, media publication, Azure receipt, physical playback or complete voice loop is established. Stock speech is a separate unfinished integration seam."
+    },
+    {
+      "id": "native-speech-revocation-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/speech_tests.rs",
+      "anchor": "async fn ambiance_disclosure_provider_eof_does_not_release_queued_bytes_from_policy()",
+      "scope": "Defines fresh authority validation before consuming queued speech, including after provider EOF and immediate consumption following committed revocation. A companion fixture requires stalled HTTP closure without consumer polling.",
+      "limitation": "Local stream boundary only. Idle provider work is cancelled after notification or periodic revalidation; consumed bytes and remote compute cannot be recalled. Durable retirement is best effort during Store failure."
+    },
+    {
+      "id": "native-speech-postgres-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/store_postgres.rs",
+      "anchor": "async fn ambiance_disclosure_postgres_policy_claim_rollback_race_reopen_and_revoke()",
+      "scope": "Defines atomic rollback of owner policy, native action claim, echo stamp and disclosure after failed ledger append; competing pool ownership, reopen, exact-owner retirement, revocation and hash-chain integrity.",
+      "limitation": "Requires isolated PostgreSQL. This does not establish database-server restart, independent ledger anchors, physical devices or production acceptance."
+    },
+    {
+      "id": "speech-disclosure-owner-api-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/surface_api.rs",
+      "anchor": "async fn ambiance_disclosure_http_owner_isolation_schema_cas_and_revocation()",
+      "scope": "Defines verified owner authentication, account isolation, strict required-nullable policy, bounded request schema, approval/revision compare-and-swap and revocation after pairing loss. Pin reapproval invalidates the old grant.",
+      "limitation": "MemoryStore HTTP fixture only; owner configuration is not proof of provider disclosure or a working native microphone path."
+    },
+    {
+      "id": "center-speech-disclosure-test-definition",
+      "kind": "test-definition",
+      "path": "center/src/app/settings/account/devices/SpeechDisclosure.test.tsx",
+      "anchor": "lost replies block another write until a fresh read and never claim success",
+      "scope": "Defines explicit per-Pin shared-text permission, exact committed response validation, uncertainty after failed writes, pairing-loss revocation and aborting/clearing a closed or unmounted view.",
+      "limitation": "DOM and mocked upstream fixtures only. No physical Pin or complete application voice-loop acceptance is established; the control grants synthesis, not native microphone capture."
+    },
+    {
       "id": "native-pin-epoch-test-definition",
       "kind": "test-definition",
       "path": "cosmos/crates/cosmos/src/ambiance/pin_connection.rs",
@@ -337,7 +377,7 @@
       "requirement": "Dispatch-time channel eligibility forbids above-shared_room content on bystander-perceivable outputs and cancels in-flight delivery after privacy degradation.",
       "acceptance": "Exercise every render path with state changes before and during dispatch; include local playback stop and already-rendered-content limitations.",
       "status": "partial",
-      "evidence": ["runtime-policy-revalidation-test-definition"]
+      "evidence": ["runtime-policy-revalidation-test-definition", "native-speech-revocation-test-definition"]
     },
     {
       "id": "invariant-02",
@@ -535,7 +575,7 @@
       "requirement": "The Ai Pin participates in the live capture, cognition, playback and interruption loop through its stock-compatible runtime.",
       "acceptance": "Prove actual capture/playback ownership, audio focus, barge-in, immediate stop, privacy change and reconnect on hardware; completed-text TTS is not proof of live dialogue.",
       "status": "partial",
-      "evidence": ["native-pcm-adapter-test-definition", "native-pcm-completion-test-definition", "speech-cancellation-test-definition", "speech-recognition-bounds-test-definition"]
+      "evidence": ["native-pcm-adapter-test-definition", "native-pcm-completion-test-definition", "speech-cancellation-test-definition", "speech-recognition-bounds-test-definition", "native-speech-disclosure-test-definition", "native-speech-revocation-test-definition", "native-speech-postgres-test-definition", "speech-disclosure-owner-api-test-definition", "center-speech-disclosure-test-definition"]
     },
     {
       "id": "pin-physical-acceptance",

@@ -2360,6 +2360,279 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ambiance_disclosure_postgres_policy_claim_rollback_race_reopen_and_revoke() {
+        use crate::ambiance::{
+            disclosure::{Policy, Provider, Purpose, Request},
+            *,
+        };
+        use crate::surface_registry::{Mutation, hash, pin_surface_id};
+        async fn snapshot(store: &PostgresStore, principal: &str) -> Option<String> {
+            sqlx::query_scalar("SELECT state::text FROM cosmos_ambiance_runtime WHERE principal=$1")
+                .bind(principal)
+                .fetch_optional(&store.pool)
+                .await
+                .unwrap()
+        }
+        async fn obstruct(store: &PostgresStore, principal: &str) {
+            sqlx::query("INSERT INTO cosmos_surface_event(principal,sequence,hash,event) SELECT principal,sequence+1,'disclosure-obstruction','{}'::jsonb FROM cosmos_surface_head WHERE principal=$1")
+                .bind(principal).execute(&store.pool).await.unwrap();
+        }
+        async fn unblock(store: &PostgresStore, principal: &str) {
+            sqlx::query("DELETE FROM cosmos_surface_event WHERE principal=$1 AND hash='disclosure-obstruction'")
+                .bind(principal).execute(&store.pool).await.unwrap();
+        }
+        let Some(first) = store().await else {
+            eprintln!("SKIPPED: isolated COSMOS_TEST_DATABASE_URL required");
+            return;
+        };
+        let second = store().await.unwrap();
+        let principal = format!("U:disclosure-pg-{}", uuid::Uuid::new_v4());
+        let surface_id = pin_surface_id(&principal, "aabb");
+        first
+            .mutate_surface(
+                &principal,
+                surface_id,
+                Mutation::ApprovePin {
+                    device_id: "aabb".into(),
+                },
+            )
+            .await
+            .unwrap();
+        let policy = Policy {
+            provider: Provider::AzureSpeech {
+                region: "westeurope".into(),
+            },
+            maximum_class: PrivacyClass::SharedRoom,
+            transcription: false,
+            synthesis: true,
+        };
+        let grant = || RuntimeOperation::SetDisclosurePolicy {
+            surface_id,
+            approval_revision: 1,
+            expected_revision: 0,
+            policy: Some(policy.clone()),
+        };
+        let before = snapshot(&first, &principal).await;
+        obstruct(&first, &principal).await;
+        assert!(matches!(
+            first.runtime(&principal, grant()).await,
+            Err(RuntimeError::Unavailable)
+        ));
+        assert_eq!(snapshot(&first, &principal).await, before);
+        unblock(&first, &principal).await;
+        let (left, right) = tokio::join!(
+            first.runtime(&principal, grant()),
+            second.runtime(&principal, grant())
+        );
+        assert!(matches!(
+            (left, right),
+            (
+                Ok(RuntimeResult::DisclosurePolicy(Some(_))),
+                Err(RuntimeError::Stale)
+            ) | (
+                Err(RuntimeError::Stale),
+                Ok(RuntimeResult::DisclosurePolicy(Some(_)))
+            )
+        ));
+        let epoch = uuid::Uuid::new_v4();
+        let device = cosmos_core::AuthenticatedDeviceIdentity::from_edge("aabb").unwrap();
+        let RuntimeResult::PinOpened { connection, .. } = first
+            .runtime(
+                &principal,
+                RuntimeOperation::OpenPin {
+                    device: device.clone(),
+                    surface_id,
+                    approval_revision: 1,
+                    epoch,
+                    expected_incarnation: None,
+                    incarnation: uuid::Uuid::new_v4(),
+                },
+            )
+            .await
+            .unwrap()
+        else {
+            panic!()
+        };
+        let instance_id = uuid::Uuid::new_v4();
+        let RuntimeResult::Begun(fence) = first
+            .runtime(
+                &principal,
+                RuntimeOperation::Begin {
+                    turn_id: instance_id,
+                    worker: uuid::Uuid::new_v4(),
+                    origin: OriginProof::SequencedPin {
+                        connection: PinProof {
+                            device,
+                            surface_id,
+                            incarnation: connection.incarnation,
+                        },
+                        stamp: InputStamp {
+                            epoch,
+                            sequence: 1,
+                            instance_id,
+                        },
+                        echo_fingerprint: echo::fingerprint("A public question"),
+                    },
+                    request_digest: hash(b"A public question"),
+                    privacy_floor: PrivacyClass::SharedRoom,
+                },
+            )
+            .await
+            .unwrap()
+        else {
+            panic!()
+        };
+        let RuntimeResult::Proposed(action) = first
+            .runtime(
+                &principal,
+                RuntimeOperation::Propose {
+                    turn_id: fence.turn_id,
+                    generation: fence.generation,
+                    worker: fence.worker,
+                    intent: SemanticIntent::InformationalSpeech {
+                        text: "A public answer".into(),
+                    },
+                    privacy: PrivacyClass::Public,
+                },
+            )
+            .await
+            .unwrap()
+        else {
+            panic!()
+        };
+        let request = Request {
+            provider: policy.provider.clone(),
+            purpose: Purpose::Synthesis,
+            payload_digest: hash(b"exact fixture provider payload"),
+            content_digest: action.content_digest.clone(),
+            action_id: Some(action.id),
+            privacy: PrivacyClass::Public,
+        };
+        let start = |id| RuntimeOperation::StartDisclosure {
+            fence: fence.clone(),
+            request: request.clone(),
+            id,
+        };
+        let before = snapshot(&first, &principal).await;
+        obstruct(&first, &principal).await;
+        assert!(matches!(
+            first.runtime(&principal, start(uuid::Uuid::new_v4())).await,
+            Err(RuntimeError::Unavailable)
+        ));
+        assert_eq!(
+            snapshot(&first, &principal).await,
+            before,
+            "failed disclosure must not claim the action or append an echo stamp"
+        );
+        unblock(&first, &principal).await;
+        let a = uuid::Uuid::new_v4();
+        let b = uuid::Uuid::new_v4();
+        let (left, right) = tokio::join!(
+            first.runtime(&principal, start(a)),
+            second.runtime(&principal, start(b))
+        );
+        let (disclosure, loser) = match (left, right) {
+            (Ok(RuntimeResult::DisclosureStarted(disclosure)), Err(RuntimeError::Stale)) => {
+                (disclosure, b)
+            }
+            (Err(RuntimeError::Stale), Ok(RuntimeResult::DisclosureStarted(disclosure))) => {
+                (disclosure, a)
+            }
+            result => panic!("only one provider owner may claim: {result:?}"),
+        };
+        assert_eq!(disclosure.request.privacy, PrivacyClass::SharedRoom);
+        let reopened = store().await.unwrap();
+        let check = || RuntimeOperation::CheckDisclosure {
+            fence: fence.clone(),
+            disclosure: disclosure.clone(),
+        };
+        assert!(matches!(
+            reopened.runtime(&principal, check()).await.unwrap(),
+            RuntimeResult::DisclosureCurrent
+        ));
+        assert!(matches!(
+            second
+                .runtime(
+                    &principal,
+                    RuntimeOperation::RetireDisclosure {
+                        fence: fence.clone(),
+                        id: loser
+                    }
+                )
+                .await,
+            Err(RuntimeError::Stale)
+        ));
+        let state: RuntimeState =
+            serde_json::from_str(&snapshot(&first, &principal).await.unwrap()).unwrap();
+        assert_eq!(state.actions[&action.id].status, ActionStatus::Dispatched);
+        assert_eq!(state.actions[&action.id].attempts, 1);
+        assert_eq!(state.turn.as_ref().unwrap().disclosures.len(), 1);
+        assert!(!state.turn.as_ref().unwrap().cancelled);
+        let revoke = || RuntimeOperation::SetDisclosurePolicy {
+            surface_id,
+            approval_revision: 1,
+            expected_revision: 1,
+            policy: None,
+        };
+        let before = snapshot(&first, &principal).await;
+        obstruct(&first, &principal).await;
+        assert!(matches!(
+            reopened.runtime(&principal, revoke()).await,
+            Err(RuntimeError::Unavailable)
+        ));
+        assert_eq!(snapshot(&first, &principal).await, before);
+        unblock(&first, &principal).await;
+        assert!(matches!(
+            reopened.runtime(&principal, check()).await.unwrap(),
+            RuntimeResult::DisclosureCurrent
+        ));
+        first.runtime(&principal, revoke()).await.unwrap();
+        assert!(matches!(
+            reopened.runtime(&principal, check()).await,
+            Err(RuntimeError::PolicyBlocked)
+        ));
+        first
+            .mutate_surface(
+                &principal,
+                surface_id,
+                Mutation::ApprovePin {
+                    device_id: "aabb".into(),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            reopened
+                .runtime(
+                    &principal,
+                    RuntimeOperation::DisclosurePolicy { surface_id }
+                )
+                .await
+                .unwrap(),
+            RuntimeResult::DisclosurePolicy(None)
+        ));
+        assert!(matches!(
+            reopened.runtime(&principal, check()).await,
+            Err(RuntimeError::Stale)
+        ));
+        let rows = sqlx::query("SELECT event::text AS event,hash FROM cosmos_surface_event WHERE principal=$1 ORDER BY sequence")
+            .bind(&principal).fetch_all(&first.pool).await.unwrap();
+        let mut previous = String::new();
+        for (index, row) in rows.iter().enumerate() {
+            let text: String = row.get("event");
+            assert!(
+                !text.contains("A public answer")
+                    && !text.contains("exact fixture provider payload")
+            );
+            let event: ledger::LedgerEvent = serde_json::from_str(&text).unwrap();
+            assert_eq!(event.sequence(), index as u64 + 1);
+            assert_eq!(event.previous_hash(), previous);
+            assert_eq!(event.hash().unwrap(), row.get::<String, _>("hash"));
+            previous = event.hash().unwrap();
+        }
+    }
+
+    #[tokio::test]
     async fn ambiance_pin_postgres_epoch_admission_is_atomic_single_owner_and_survives_reopen() {
         use crate::ambiance::*;
         use crate::surface_registry::{Mutation, hash, pin_surface_id};

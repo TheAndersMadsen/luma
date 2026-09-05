@@ -329,8 +329,8 @@ required or that the stock SDK alone violates the paper.
    the successful owner's room. Unjoined rooms close after 60 seconds, and at most
    64 room owners exist in one process. Tests use an isolated SFU and PostgreSQL;
    these bounds do not establish production timing. The media owner exposes no
-   raw session: turn-authorized PCM consumption, speech providers and application
-   bootstrap endpoints are still unfinished. Membership grants no microphone
+   raw session: turn-authorized PCM consumption and application voice/bootstrap
+   wiring are still unfinished. Membership grants no microphone
    subscription, private-memory access, playback evidence or physical privacy.
 
    The supplied `Ambiance-Implementation-Plan.zip` is additional design inspiration;
@@ -341,8 +341,10 @@ required or that the stock SDK alone violates the paper.
    acceptance remain outstanding. ADR-006/T-032 also sharpens the freshness limit:
    physical capture time remains unverified, and delayed-input authority needs
    separate checks. For cloud speech, we adopt ADR-004/T-013's proposed
-   source/class/purpose/provider disclosure gate before uploading audio. This gate
-   remains unimplemented; post-transcription text classification cannot provide it.
+   source/class/purpose/provider disclosure gate before provider work. The native
+   synthesis helper now enforces this gate; raw-audio capture and transcription
+   admission remain unwired. Classifying a transcript cannot authorize its earlier
+   audio upload.
 3. **Cosmos realtime cognition.** Do not automatically forward
    `RoomSessionTransport`, control events or history. Manual `RoomIO` with a
    no-room `AgentSession.start` is a public-composition candidate requiring
@@ -369,9 +371,41 @@ required or that the stock SDK alone violates the paper.
    bounded chunks and no detached producer. A local HTTP test proves dropping a
    stalled stream closes that response; this cannot prove provider-side compute
    or billing stops. Native output can drain accepted frames without unpublishing
-   (see below). Stateful 48-to-16 kHz capture resampling, arbitrary-chunk PCM
-   framing, the pre-upload disclosure gate and the turn-bound voice loop remain
-   unfinished. Adapter checks do not grant provider access or prove playback.
+   (see below).
+
+   Following [Ambiance's privacy, memory and disclosure invariants (§§4.3, 4.6, 9.2)](https://gist.githubusercontent.com/ericlewis/12e8f7d381a5d93926f4858ae2d725dc/raw/6bac46cd8251af39c40263331d7269c5e418fe8f/ambi_v2.md),
+   the native synthesis helper requires a separate owner policy for the Pin's
+   approval revision, Azure region, maximum class and speech purpose. It durably
+   claims the exact proposed speech action and payload once per turn before HTTP.
+   Notifications and 250 ms checks revalidate pairing, origin, generation and
+   policy, with a one-second check timeout. Each chunk also requires a fresh
+   authority check when consumed; a policy revoked before that check cannot
+   release previously queued bytes. The background watcher closes idle provider
+   work after observing invalidation. Already-consumed bytes cannot be recalled.
+   Dropping the stream also requests durable turn retirement, which is best effort
+   during Store failure. Neither speech approval nor private output grants memory
+   access. Labeling all unclassified audio `sensitive` is our conservative interim
+   rule; the paper assigns classes from provenance, not microphone modality
+   (§§4.2–4.3). That label currently raises the turn's class, while cognition and
+   output allow at most `shared_room`, so this is not a working voice loop.
+   The recommended next slice is bounded, source-bound local transcription
+   admission: pending capture stays unavailable to planners and external
+   providers, and runtime classification preserves the environmental/source floor
+   and the origin's memory restrictions. Local STT alone cannot lower an assigned
+   class, and owner capture approval does not certify the captured content as
+   shared. This admission path and any reviewed declassification transform remain
+   unimplemented, as do 48-to-16 kHz capture resampling, arbitrary-chunk PCM framing
+   and the complete voice loop. There is no application capture/playback
+   integration or physical Pin evidence.
+   In **Settings → My Ai Pin → Ambiance runtime approval**, open **Speech provider
+   permission** for an approved Pin, enter the configured Azure Speech region,
+   and explicitly allow shared reply text or revoke permission. Center verifies
+   the exact committed approval and policy revision; an uncertain write requires
+   a fresh read. Revocation remains available after pairing loss, and reapproving
+   the Pin invalidates its old speech policy. This control grants synthesis only;
+   it does not authorize microphone upload, enable native voice capture or change
+   the existing stock speech service. Cosmos's bounded owner API keeps those
+   permissions separate from provider configuration and device pairing.
 4. **Cosmos services and policy.** Rebuild completion, child agents, composition,
    translation, vision/food, music and native actions through typed services.
    Require exact single-use action/epoch grants, provenance-scoped retrieval,
