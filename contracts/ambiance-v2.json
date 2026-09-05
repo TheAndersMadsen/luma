@@ -15,6 +15,12 @@
   "verificationPolicy": "pending means no implementation evidence is recorded; partial means a cited implementation or test definition covers only part of the requirement. Evidence references and metadata checks never establish that behavior passed, physical acceptance occurred, or production is conformant. Runtime reports and secrets stay outside the checkout.",
   "interpretations": [
     {
+      "id": "isolated-media-transport-rooms",
+      "status": "conservative-interpretation",
+      "sourceSections": ["4.3", "5.1", "5.2"],
+      "decision": "Keep one logical session and one policy authority, but use a separate two-party media room per client incarnation alongside media-disabled shared coordination. The pinned SFU has no durable receiver track allowlist and client-owned publisher permissions are cooperative. Room isolation preserves the intended privacy boundary; it is a transport adaptation rather than the paper's literal single-room topology."
+    },
+    {
       "id": "occupied-room-private-channel",
       "status": "unresolved",
       "sourceSections": ["4.8", "6", "7"],
@@ -34,6 +40,22 @@
     }
   ],
   "evidence": [
+    {
+      "id": "native-pcm-adapter-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/rtc/tests/audio.rs",
+      "anchor": "async fn audio_pcm_roundtrip_attribution_interruption_and_new_publication()",
+      "scope": "Defines actual decoded synthetic PCM delivery with immutable epoch/generation and participant/track identity, stopped-handle rejection, fresh replacement publication and peer-loss fencing in an isolated two-party room.",
+      "limitation": "Requires a local SFU. Transport only: application admission, media grants, provider voice loop, native clients and hardware playback remain unfinished."
+    },
+    {
+      "id": "native-pcm-isolation-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/rtc/tests/audio.rs",
+      "anchor": "async fn audio_separate_rooms_have_no_other_client_publications()",
+      "scope": "Defines isolation of an existing publication from a subscription-enabled ordinary participant in another media room.",
+      "limitation": "Requires a local SFU. Room-scoped transport evidence does not establish application enrollment or universal signaling-path authorization."
+    },
     {
       "id": "runtime-echo-test-definition",
       "kind": "test-definition",
@@ -376,7 +398,7 @@
       "requirement": "Bind each request to authenticated principal, origin, modality, state, environment, device/channel/actor trust, server receipt time, epoch and sequence.",
       "acceptance": "Preserve Pin device identity before account normalization; do not trust device clocks or body-supplied identity, and test replay/freshness plus scoped self-echo rejection.",
       "status": "partial",
-      "evidence": ["authenticated-device-provenance-definition", "stock-transport-provenance-test-definition", "pin-runtime-admission-definition", "rtc-attribution-test-definition", "sequenced-input-test-definition", "sequenced-input-postgres-test-definition", "sequenced-control-postgres-test-definition", "runtime-echo-test-definition", "runtime-echo-postgres-test-definition"]
+      "evidence": ["authenticated-device-provenance-definition", "stock-transport-provenance-test-definition", "pin-runtime-admission-definition", "rtc-attribution-test-definition", "sequenced-input-test-definition", "sequenced-input-postgres-test-definition", "sequenced-control-postgres-test-definition", "runtime-echo-test-definition", "runtime-echo-postgres-test-definition", "native-pcm-adapter-test-definition", "native-pcm-isolation-test-definition"]
     },
     {
       "id": "cognition-authority",

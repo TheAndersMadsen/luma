@@ -367,14 +367,38 @@ required or that the stock SDK alone violates the paper.
    incomplete backend behavior still does. Unresolved paper conflicts and
    missing physical evidence explicitly block a 100% conformance claim.
 
-### Native audio transport — implementation gate
+### Native audio transport — adapter implemented
 
-The pinned Rust SDK supports a small manual-PCM extension to `cosmos-rtc`:
-publish an authorized source, push bounded frames, subscribe to one authorized
-track, and interrupt its generation. Keep SDK objects inside the adapter and
-device permission, capture, audio focus and speaker queues inside each client.
-The current adapter carries coordination only and discards media events; this
-source audit does not establish implemented audio transport or hardware playback.
+`cosmos-rtc::audio` now owns a separate two-party media connection with manual
+PCM publication, exact publisher/track binding, explicit subscription and
+generation cancellation. The four isolated-SFU tests in
+`cosmos/crates/rtc/tests/audio.rs` cover decoded synthetic audio, replacement
+publication IDs, stopping, queue bounds, receive overflow, peer disconnect and
+cross-room isolation. Coordination tokens still carry no media permission.
+This adapter is not yet exposed by Cosmos application admission or native
+clients; transport tests do not establish policy-granted audio, microphone
+capture, provider voice dialogue or physical playback.
+
+Mint one fresh token pair per approved connection incarnation. The caller must
+authorize the runtime epoch/generation before publication or subscription and
+check the immutable binding when consuming PCM. The adapter permits one sender
+and receiver per connection, requires the exact peer's observed session before
+publishing, and permanently fences peer loss or SDK reconnect. Waiting for
+observed presence matters: a non-publishing peer can otherwise join and leave
+inside one SFU presence batch without a disconnect event reaching the publisher.
+The native decoder attaches after the first RTP packets; prime an authorized
+output with silence and establish receiver attachment before sending content.
+Attachment is transport readiness, never playback evidence.
+
+The sender has at most ten queued frames plus one paced frame, uses no native
+source buffer, and never catches up with a burst after a scheduling delay. The
+native receive queue holds at most ten frames; the application receive queue
+holds ten more and retires the generation on overflow. Cancellation clears the
+application queue even when its consumer is not polling, then closes the native
+stream. The upstream native queue can drop oldest frames and Opus is lossy;
+these bounds do not establish lossless audio. Device permission, capture, audio
+focus and speaker queues remain each client's responsibility. Device playback
+must still be stopped/flushed when a generation is retired.
 
 | Operation | Exact API at revision `2d9f01ab` |
 | --- | --- |
@@ -390,9 +414,13 @@ See the pinned [publication and recipient APIs](https://github.com/livekit/rust-
 and [PCM stream API](https://github.com/livekit/rust-sdks/blob/2d9f01ab1e933a86a8a5c53805ee29ee58b9be1b/libwebrtc/src/audio_stream.rs#L33).
 
 Keep coordination tokens media-disabled. A separate admitted audio role needs
-explicit [`can_subscribe` and `can_publish_sources` grants](https://github.com/livekit/rust-sdks/blob/2d9f01ab1e933a86a8a5c53805ee29ee58b9be1b/livekit-token/src/access_token.rs#L64); the latter supersedes
-`can_publish`, and source labels describe publication classes rather than prove
-physical microphone origin. The SDK initially permits every subscriber: set
+explicit [`can_subscribe` and `can_publish_sources` grants](https://github.com/livekit/rust-sdks/blob/2d9f01ab1e933a86a8a5c53805ee29ee58b9be1b/livekit-token/src/access_token.rs#L64).
+LiveKit 1.13.6 requires both `can_publish=true` and the matching source in its
+[source permission check](https://github.com/livekit/protocol/blob/17c16cf496fd/auth/grants.go#L326),
+despite the Rust token comment claiming the source list supersedes the flag.
+The local SFU rejected publication with the flag false. Keep data publication
+explicitly disabled and validate both audio track kind and microphone source;
+source labels do not prove physical microphone origin. The SDK initially permits every subscriber: set
 deny-all before publishing, then allow the granted recipient and returned track
 SID. Permission/subscription methods send signaling requests; their return is
 not an SFU enforcement acknowledgment. Verify initial denial and revocation in

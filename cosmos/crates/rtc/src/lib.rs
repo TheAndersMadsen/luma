@@ -1,5 +1,7 @@
 //! LiveKit is transport, never policy. Only this crate imports its SDKs.
 //! The caller binds identities to current enrollment before admitting work.
+pub mod audio;
+
 use livekit::{
     ConnectionState, Room, RoomEvent, RoomOptions,
     rpc::{PerformRpcData, RpcError},

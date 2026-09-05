@@ -578,11 +578,13 @@ dependencies = [
 name = "cosmos-rtc"
 version = "0.1.0"
 dependencies = [
+ "futures-util",
  "livekit",
  "livekit-token",
  "serde_json",
  "thiserror 2.0.19",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
