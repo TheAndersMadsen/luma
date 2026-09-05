@@ -2386,6 +2386,7 @@ pub(crate) async fn runtime_test_terminal(
                 origin: OriginProof::Pin {
                     device: cosmos_core::AuthenticatedDeviceIdentity::from_edge("aabb").unwrap(),
                     surface_id,
+                    echo_fingerprint: crate::ambiance::echo::fingerprint("retention request"),
                 },
                 request_digest: hash(b"retention request"),
                 privacy_floor: PrivacyClass::SharedRoom,
@@ -2672,7 +2673,11 @@ mod tests {
                 RuntimeOperation::Begin {
                     turn_id: uuid::Uuid::new_v4(),
                     worker: uuid::Uuid::new_v4(),
-                    origin: OriginProof::Pin { device, surface_id },
+                    origin: OriginProof::Pin {
+                        device,
+                        surface_id,
+                        echo_fingerprint: crate::ambiance::echo::fingerprint("request"),
+                    },
                     request_digest: hash(b"request"),
                     privacy_floor: PrivacyClass::SharedRoom,
                 },

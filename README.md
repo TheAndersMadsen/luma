@@ -156,6 +156,15 @@ responsible for local permissions, capture, rendering, and playback evidence:
    Passing evidence must come from the current focused and broad checks.
    Center now uses room RPC; the stock speech seam, media and native-client
    paths still require work before deployment acceptance.
+   Runtime dispatch also records a bounded fingerprint of each outgoing speech
+   action. During the next 30 seconds, a matching normalized Pin utterance from
+   the same principal is rejected and logged before cognition. Case, punctuation
+   and whitespace are ignored; partial or fuzzy matches are not inferred. The
+   guard survives turn replacement and database reopen, holds at most 32 entries,
+   and expires through the existing cleanup queue. Typed browser requests remain
+   eligible. This bounds one stock self-echo path; it does not attest a live
+   microphone, actual playback duration, acoustic echo cancellation or actor
+   identity. Speech outcome remains unknown.
 4. **Phase 3: realtime Pin interaction and semantic services.** Integrate
    self-hosted LiveKit rooms, participant identity, media tracks, text streams
    and RPC as the paper's shared substrate. Bind cognition dispatch to the
@@ -357,6 +366,98 @@ required or that the stock SDK alone violates the paper.
    Hardware absence does not block an otherwise verified server deployment;
    incomplete backend behavior still does. Unresolved paper conflicts and
    missing physical evidence explicitly block a 100% conformance claim.
+
+### Native audio transport — implementation gate
+
+The pinned Rust SDK supports a small manual-PCM extension to `cosmos-rtc`:
+publish an authorized source, push bounded frames, subscribe to one authorized
+track, and interrupt its generation. Keep SDK objects inside the adapter and
+device permission, capture, audio focus and speaker queues inside each client.
+The current adapter carries coordination only and discards media events; this
+source audit does not establish implemented audio transport or hardware playback.
+
+| Operation | Exact API at revision `2d9f01ab` |
+| --- | --- |
+| Publish | `NativeAudioSource::new(options, rate, channels, queue_ms)`, `LocalAudioTrack::create_audio_track(name, RtcAudioSource::Native(source))`, then `LocalParticipant::publish_track(LocalTrack::Audio(track), TrackPublishOptions { source: TrackSource::Microphone, ..Default::default() })` |
+| Push PCM | `NativeAudioSource::capture_frame(&AudioFrame).await`; `clear_buffer()` clears its sender buffer |
+| Limit recipients | `LocalParticipant::set_track_subscription_permissions(false, Vec<ParticipantTrackPermission>)`; each permission has `participant_identity`, `allow_all: false`, and exact `allowed_track_sids` |
+| Select reception | Keep `RoomOptions::auto_subscribe = false`; call `RemoteTrackPublication::set_subscribed(true)` for the admitted publication and verify `RoomEvent::TrackSubscribed { participant, publication, track }` |
+| Receive PCM | `NativeAudioStream::with_options(track.rtc_track(), rate, channels, NativeAudioStreamOptions { queue_size_frames: Some(positive_bound) })` yields owned `AudioFrame<'static>` values |
+| End transport | `set_subscribed(false)`, `NativeAudioStream::close()`, and `LocalParticipant::unpublish_track(&track_sid).await`; unpublish takes one argument in this revision |
+
+See the pinned [publication and recipient APIs](https://github.com/livekit/rust-sdks/blob/2d9f01ab1e933a86a8a5c53805ee29ee58b9be1b/livekit/src/room/participant/local_participant.rs#L358),
+[subscription implementation](https://github.com/livekit/rust-sdks/blob/2d9f01ab1e933a86a8a5c53805ee29ee58b9be1b/livekit/src/room/publication/remote.rs#L236),
+and [PCM stream API](https://github.com/livekit/rust-sdks/blob/2d9f01ab1e933a86a8a5c53805ee29ee58b9be1b/libwebrtc/src/audio_stream.rs#L33).
+
+Keep coordination tokens media-disabled. A separate admitted audio role needs
+explicit [`can_subscribe` and `can_publish_sources` grants](https://github.com/livekit/rust-sdks/blob/2d9f01ab1e933a86a8a5c53805ee29ee58b9be1b/livekit-token/src/access_token.rs#L64); the latter supersedes
+`can_publish`, and source labels describe publication classes rather than prove
+physical microphone origin. The SDK initially permits every subscriber: set
+deny-all before publishing, then allow the granted recipient and returned track
+SID. Permission/subscription methods send signaling requests; their return is
+not an SFU enforcement acknowledgment. Verify initial denial and revocation in
+the isolated room. [Server permission checks](https://github.com/livekit/livekit/blob/v1.13.6/pkg/rtc/uptrackmanager.go#L359)
+apply to ordinary participants; [egress/recorder participants bypass them](https://github.com/livekit/livekit/blob/v1.13.6/pkg/rtc/room.go#L2205).
+Keep `recorder`, room administration and management credentials out of clients.
+The server-side API 0.6.4 exposes
+[`RoomClient::update_participant(room, identity, UpdateParticipantOptions)`](https://github.com/livekit/rust-sdks/blob/2d9f01ab1e933a86a8a5c53805ee29ee58b9be1b/livekit-api/src/services/room.rs#L376)
+for live permission changes and `update_subscriptions(room, identity,
+track_sids, subscribe)` for explicit server control. These require room-admin
+authority held by Cosmos; token expiry alone is not live media revocation.
+
+`update_subscriptions` changes requested state, not authorization: the normal
+[subscription path still checks `CanSubscribe`](https://github.com/livekit/livekit/blob/v1.13.6/pkg/rtc/subscriptionmanager.go#L751).
+The receiver grant has no exact-track allowlist, and an ordinary publisher can
+replace its own [recipient policy through signaling](https://github.com/livekit/livekit/blob/v1.13.6/pkg/rtc/signalling/signalhandler.go#L101).
+Cosmos therefore cannot make a client-owned microphone's recipient list a
+runtime-enforced boundary inside a multiparty media room. Keep the shared
+coordination room media-disabled and isolate media in one two-party room per
+client incarnation: that client and trusted Cosmos, with room-scoped tokens.
+Cosmos publishes only currently granted output there, using a fresh track per
+generation and retiring it on cancellation. These transport rooms belong to
+the same logical Ambiance session; they do not create separate policy or memory
+authorities. This is our transport adaptation to the paper's privacy invariants,
+not its literal single-room topology. Server API success does not establish
+media delivery or a durable receiver allowlist.
+
+Use a fixed initial speech profile of 48 kHz, mono, signed 16-bit interleaved
+PCM in 10 ms frames: 480 samples, 960 bytes. Convert device formats explicitly;
+validate frame lengths before the FFI boundary. [`AudioFrame`](https://github.com/livekit/rust-sdks/blob/2d9f01ab1e933a86a8a5c53805ee29ee58b9be1b/libwebrtc/src/audio_frame.rs#L18)
+holds `Cow<[i16]>`; borrowed input must remain valid until capture completes,
+while received frames copy the native callback into owned storage. A zero
+source queue requires exactly 10 ms frames and caller pacing. A positive queue
+must be a multiple of 10 ms; the [native implementation](https://github.com/livekit/rust-sdks/blob/2d9f01ab1e933a86a8a5c53805ee29ee58b9be1b/webrtc-sys/src/audio_track.cpp#L147)
+can buffer twice that configured duration. Capture completion signals buffer
+capacity, not complete transmission. The receive queue defaults to ten roughly
+10 ms frames and drops oldest frames on overflow; `Some(0)` means unbounded.
+
+Media attribution comes from the [authenticated publishing connection](https://github.com/livekit/livekit/blob/v1.13.6/pkg/rtc/participant.go#L3503)
+and the SDK's [participant/track association](https://github.com/livekit/rust-sdks/blob/2d9f01ab1e933a86a8a5c53805ee29ee58b9be1b/livekit/src/room/mod.rs#L1312).
+Carry publisher identity, participant SID and track SID alongside the authorized
+origin, boot epoch and generation. PCM itself contains no identity, timestamp or
+generation. Bind each output generation to a fresh publication SID before
+accepting its frames; delayed frames from a retired SID remain retired. This
+attributes the transport publisher, not the person whose voice is present.
+
+Interruption first fences the generation and stops its producer, then clears
+the sender buffer, unsubscribes/closes the receiver, and stops/flushes the device
+output queue. Serialize producer cancellation with clearing: a pending
+multi-chunk capture can otherwise refill a cleared buffer. Closing the
+[native stream](https://github.com/livekit/rust-sdks/blob/2d9f01ab1e933a86a8a5c53805ee29ee58b9be1b/libwebrtc/src/native/audio_stream.rs#L64)
+removes its sink and clears queued frames; it cannot retract samples already
+sent to a speaker. Mute/unpublish also does not stop an independently owned
+microphone. Preserve the adapter's permanent disconnect fence because the SDK
+can automatically republish tracks with new SIDs during reconnect.
+
+The SDK's [PlatformAudio](https://github.com/livekit/rust-sdks/blob/2d9f01ab1e933a86a8a5c53805ee29ee58b9be1b/livekit/src/platform_audio/mod.rs#L432)
+enables shared process-wide recording and playout. Manual PCM keeps those
+lifecycles explicit for macOS, Linux, Android/Shield and the Pin. Android still
+needs JVM initialization; the platform-audio option additionally needs the
+application context and OS-controlled routing. Prove bounded synthetic PCM
+delivery, denied subscriptions, recipient revocation, interruption, overflow
+and reconnect fencing on the local SFU first. OS permission behavior, audio
+focus, echo control, device routing and observed playback remain per-device
+acceptance; no physical device or external provider was used for this audit.
 
 ### LiveKit production topology — acceptance pending
 

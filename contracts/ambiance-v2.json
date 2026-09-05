@@ -35,6 +35,22 @@
   ],
   "evidence": [
     {
+      "id": "runtime-echo-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/runtime.rs",
+      "anchor": "async fn ambiance_echo_rejects_stock_reentry_without_another_model_call()",
+      "scope": "Defines same-principal normalized stock utterance rejection before another cognition call, while permitting other accounts and different input.",
+      "limitation": "Thirty-second dispatch-based fingerprint window only. Stock text cannot attest actual microphone capture, playback duration, acoustic echo or speaker identity."
+    },
+    {
+      "id": "runtime-echo-postgres-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/store_postgres.rs",
+      "anchor": "async fn ambiance_echo_postgres_claim_and_guard_commit_together_and_survive_reopen()",
+      "scope": "Defines speech claim and echo guard rollback on failed event append, persistent fingerprints across pool reopen, and ordered rejection without raw output retention.",
+      "limitation": "Requires isolated PostgreSQL. Definition only; does not prove physical playback, acoustic suppression or full audit conformance."
+    },
+    {
       "id": "application-room-delivery-test-definition",
       "kind": "test-definition",
       "path": "cosmos/crates/cosmos/src/browser_rooms_tests.rs",
@@ -360,7 +376,7 @@
       "requirement": "Bind each request to authenticated principal, origin, modality, state, environment, device/channel/actor trust, server receipt time, epoch and sequence.",
       "acceptance": "Preserve Pin device identity before account normalization; do not trust device clocks or body-supplied identity, and test replay/freshness plus scoped self-echo rejection.",
       "status": "partial",
-      "evidence": ["authenticated-device-provenance-definition", "stock-transport-provenance-test-definition", "pin-runtime-admission-definition", "rtc-attribution-test-definition", "sequenced-input-test-definition", "sequenced-input-postgres-test-definition", "sequenced-control-postgres-test-definition"]
+      "evidence": ["authenticated-device-provenance-definition", "stock-transport-provenance-test-definition", "pin-runtime-admission-definition", "rtc-attribution-test-definition", "sequenced-input-test-definition", "sequenced-input-postgres-test-definition", "sequenced-control-postgres-test-definition", "runtime-echo-test-definition", "runtime-echo-postgres-test-definition"]
     },
     {
       "id": "cognition-authority",

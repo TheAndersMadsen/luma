@@ -1994,6 +1994,9 @@ mod tests {
                                 worker: uuid::Uuid::new_v4(),
                                 origin: OriginProof::Pin {
                                     device: auth.device.clone().unwrap(),
+                                    echo_fingerprint: crate::ambiance::echo::fingerprint(
+                                        "next request",
+                                    ),
                                     surface_id: crate::surface_registry::pin_surface_id(
                                         principal, "abcd1234",
                                     ),
@@ -2552,7 +2555,10 @@ mod tests {
                 assert_eq!(tools[0].name, "propose_information");
                 self.0.lock().unwrap().push(messages.to_vec());
                 Ok(ChatResponse {
-                    tool_call: Some(crate::assistant::llm::ToolCall { name: "propose_information".into(), arguments: serde_json::json!({"intent":{"kind":"informational_speech","text":"Hello."},"privacy":"public"}).to_string() }),
+                    // Each transport sends "hello". Keep the synthetic answer
+                    // distinct so this provenance test does not exercise the
+                    // separate self-echo rejection path on the next request.
+                    tool_call: Some(crate::assistant::llm::ToolCall { name: "propose_information".into(), arguments: serde_json::json!({"intent":{"kind":"informational_speech","text":"Welcome back."},"privacy":"public"}).to_string() }),
                     ..Default::default()
                 })
             }

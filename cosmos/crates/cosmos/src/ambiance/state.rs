@@ -44,6 +44,7 @@ pub enum OriginProof {
     Pin {
         device: AuthenticatedDeviceIdentity,
         surface_id: Uuid,
+        echo_fingerprint: String,
     },
 }
 
@@ -136,6 +137,7 @@ pub enum RuntimeResult {
     ConnectionOpened,
     ControlAccepted { duplicate: bool },
     Duplicate(TurnFence),
+    EchoRejected,
     Begun(TurnFence),
     Proposed(Action),
     Dispatch(Action),
@@ -225,6 +227,8 @@ pub struct RuntimeState {
     pub actions: BTreeMap<Uuid, Action>,
     #[serde(default)]
     pub ingress: BTreeMap<Uuid, InputCursor>,
+    #[serde(default)]
+    pub echoes: Vec<super::echo::Window>,
 }
 
 /// Client boot epochs and sequences are provenance; client clocks are not.
@@ -342,6 +346,21 @@ pub enum RuntimeData {
         generation: u64,
         origin: Uuid,
         request_digest: String,
+        privacy: PrivacyClass,
+    },
+    EchoGuarded {
+        action_id: Uuid,
+        expires_at_ms: i64,
+        privacy: PrivacyClass,
+    },
+    EchoRejected {
+        request_id: Uuid,
+        origin: Uuid,
+        action_id: Uuid,
+        privacy: PrivacyClass,
+    },
+    EchoExpired {
+        action_id: Uuid,
         privacy: PrivacyClass,
     },
     AnalysisStarted {
@@ -496,7 +515,12 @@ impl RuntimeState {
     /// Due-time projection for the indexed maintenance queue. Policy remains
     /// in reconcile; this only schedules the next authoritative recheck.
     pub fn next_maintenance_ms(&self, records: &BTreeMap<Uuid, Record>) -> i64 {
-        let mut due = i64::MAX;
+        let mut due = self
+            .echoes
+            .iter()
+            .map(|e| e.expires_at_ms)
+            .min()
+            .unwrap_or(i64::MAX);
         if let Some(turn) = self.turn.as_ref().filter(|t| !t.cancelled) {
             due = due.min(turn.lease_until_ms);
             if let Some(origin) = records.get(&turn.fence.origin_surface) {
@@ -595,6 +619,16 @@ impl RuntimeState {
     /// heartbeats do not alter the origin incarnation or eligibility.
     pub fn reconcile(&mut self, records: &BTreeMap<Uuid, Record>, now: i64) -> Vec<RuntimeData> {
         let mut events = Vec::new();
+        self.echoes.retain(|echo| {
+            if now < echo.expires_at_ms {
+                return true;
+            }
+            events.push(RuntimeData::EchoExpired {
+                action_id: echo.action_id,
+                privacy: echo.privacy,
+            });
+            false
+        });
         let mut repairs = Vec::new();
         let origin_valid = self.turn.as_ref().is_some_and(|t| {
             !t.cancelled && now < t.lease_until_ms && Self::origin_valid(t, records, now)
@@ -736,7 +770,7 @@ impl RuntimeState {
         generation: u64,
         worker: Uuid,
         now: i64,
-    ) -> Result<(Action, RuntimeData), RuntimeError> {
+    ) -> Result<(Action, Vec<RuntimeData>), RuntimeError> {
         let action = self.actions.get(&id).ok_or(RuntimeError::NotFound)?;
         let turn = self.fence(action.turn_id, generation, worker, now)?;
         if turn.finished
@@ -763,6 +797,26 @@ impl RuntimeState {
         {
             return Err(RuntimeError::PolicyBlocked);
         }
+        let mut events = Vec::new();
+        if action.channel == Channel::AudioTts {
+            if self.echoes.len() >= super::echo::MAX_WINDOWS {
+                return Err(RuntimeError::Busy);
+            }
+            let expires_at_ms = now
+                .checked_add(super::echo::WINDOW_MS)
+                .ok_or(RuntimeError::Unavailable)?;
+            self.echoes.push(super::echo::Window {
+                action_id: action.id,
+                fingerprint: super::echo::fingerprint(action.intent.text()),
+                expires_at_ms,
+                privacy: action.privacy,
+            });
+            events.push(RuntimeData::EchoGuarded {
+                action_id: action.id,
+                expires_at_ms,
+                privacy: action.privacy,
+            });
+        }
         let action = self.actions.get_mut(&id).unwrap();
         action.attempts += 1;
         action.deadline_ms = now.checked_add(ACK_MS).ok_or(RuntimeError::Unavailable)?;
@@ -771,7 +825,8 @@ impl RuntimeState {
         } else {
             ActionStatus::Dispatched
         };
-        Ok((action.clone(), action_event(action)))
+        events.push(action_event(action));
+        Ok((action.clone(), events))
     }
     pub fn apply(
         &mut self,
@@ -972,7 +1027,14 @@ impl RuntimeState {
                         }
                         r
                     }
-                    OriginProof::Pin { device, surface_id } => {
+                    OriginProof::Pin {
+                        device,
+                        surface_id,
+                        echo_fingerprint,
+                    } => {
+                        if !digest_valid(echo_fingerprint) {
+                            return Err(RuntimeError::InvalidRequest);
+                        }
                         let id = crate::surface_registry::pin_surface_id(
                             principal,
                             device.expose_for_authorization(),
@@ -982,6 +1044,22 @@ impl RuntimeState {
                             && r.approved_manifest == crate::surface_registry::pin_manifest()).ok_or(RuntimeError::InvalidOrigin)?
                     }
                 };
+                if let OriginProof::Pin {
+                    echo_fingerprint, ..
+                } = &origin
+                    && let Some(echo) = self
+                        .echoes
+                        .iter()
+                        .find(|e| now < e.expires_at_ms && e.fingerprint == *echo_fingerprint)
+                {
+                    events.push(RuntimeData::EchoRejected {
+                        request_id: turn_id,
+                        origin: record.surface_id,
+                        action_id: echo.action_id,
+                        privacy: privacy_floor.max(echo.privacy),
+                    });
+                    return Ok((RuntimeResult::EchoRejected, events));
+                }
                 if let OriginProof::SequencedBrowser { connection, stamp } = &origin {
                     let cursor = self
                         .ingress
@@ -1262,8 +1340,8 @@ impl RuntimeState {
                 generation,
                 worker,
             } => {
-                let (action, event) = self.claim(records, action_id, generation, worker, now)?;
-                events.push(event);
+                let (action, appended) = self.claim(records, action_id, generation, worker, now)?;
+                events.extend(appended);
                 RuntimeResult::Dispatch(action)
             }
             RuntimeOperation::CheckDelivery {
@@ -1390,8 +1468,8 @@ impl RuntimeState {
                     .map(|a| (a.id, a.generation, a.worker))
                     .collect();
                 for (id, generation, worker) in pending {
-                    let (_, event) = self.claim(records, id, generation, worker, now)?;
-                    events.push(event);
+                    let (_, appended) = self.claim(records, id, generation, worker, now)?;
+                    events.extend(appended);
                 }
                 RuntimeResult::Pending(
                     self.actions
@@ -1510,6 +1588,185 @@ mod tests {
         };
         fence
     }
+    #[test]
+    fn ambiance_echo_is_logged_before_cognition_survives_turnover_and_expires() {
+        let pin = crate::surface_registry::pin_surface_id("U:owner", "aabb");
+        let record = transition(
+            None,
+            0,
+            pin,
+            &Mutation::ApprovePin {
+                device_id: "aabb".into(),
+            },
+            100,
+        )
+        .unwrap()
+        .0;
+        let browser_id = Uuid::new_v4();
+        let records = BTreeMap::from([(pin, record), (browser_id, browser(browser_id))]);
+        let mut state = RuntimeState::default();
+        let stock_input = |text: &str| RuntimeOperation::Begin {
+            turn_id: Uuid::new_v4(),
+            worker: Uuid::new_v4(),
+            origin: OriginProof::Pin {
+                device: AuthenticatedDeviceIdentity::from_edge("aabb").unwrap(),
+                surface_id: pin,
+                echo_fingerprint: super::super::echo::fingerprint(text),
+            },
+            request_digest: hash(text.as_bytes()),
+            privacy_floor: PrivacyClass::SharedRoom,
+        };
+        let (RuntimeResult::Begun(fence), _) = state
+            .apply("U:owner", &records, stock_input("Tell me something"), 101)
+            .unwrap()
+        else {
+            panic!()
+        };
+        let (RuntimeResult::Proposed(action), _) = state
+            .apply(
+                "U:owner",
+                &records,
+                RuntimeOperation::Propose {
+                    turn_id: fence.turn_id,
+                    generation: fence.generation,
+                    worker: fence.worker,
+                    intent: SemanticIntent::InformationalSpeech {
+                        text: "A useful answer.".into(),
+                    },
+                    privacy: PrivacyClass::Public,
+                },
+                102,
+            )
+            .unwrap()
+        else {
+            panic!()
+        };
+        assert!(state.echoes.is_empty(), "a proposal is not a dispatch");
+        let mut saturated = state.clone();
+        saturated.echoes = (0..super::super::echo::MAX_WINDOWS)
+            .map(|_| super::super::echo::Window {
+                action_id: Uuid::new_v4(),
+                fingerprint: hash(b"prior speech"),
+                expires_at_ms: 30_103,
+                privacy: PrivacyClass::SharedRoom,
+            })
+            .collect();
+        assert!(matches!(
+            saturated.apply(
+                "U:owner",
+                &records,
+                RuntimeOperation::Claim {
+                    action_id: action.id,
+                    generation: fence.generation,
+                    worker: fence.worker,
+                },
+                103
+            ),
+            Err(RuntimeError::Busy)
+        ));
+        assert_eq!(saturated.actions[&action.id].status, ActionStatus::Proposed);
+        let (_, events) = state
+            .apply(
+                "U:owner",
+                &records,
+                RuntimeOperation::Claim {
+                    action_id: action.id,
+                    generation: fence.generation,
+                    worker: fence.worker,
+                },
+                103,
+            )
+            .unwrap();
+        assert!(events.iter().any(
+            |e| matches!(e, RuntimeData::EchoGuarded { action_id, .. } if *action_id == action.id)
+        ));
+        assert_eq!(
+            state.actions[&action.id].status,
+            ActionStatus::OutcomeUnknown
+        );
+        assert!(state.actions[&action.id].intent.text().is_empty());
+        state
+            .apply(
+                "U:owner",
+                &records,
+                RuntimeOperation::Finish {
+                    turn_id: fence.turn_id,
+                    generation: fence.generation,
+                    worker: fence.worker,
+                },
+                104,
+            )
+            .unwrap();
+        // Reopen exercises the same serialized projection that PostgreSQL loads.
+        let bytes = serde_json::to_vec(&state).unwrap();
+        assert!(!String::from_utf8_lossy(&bytes).contains("A useful answer"));
+        let mut state: RuntimeState = serde_json::from_slice(&bytes).unwrap();
+        let (result, events) = state
+            .apply("U:owner", &records, stock_input("A USEFUL answer!"), 105)
+            .unwrap();
+        assert!(matches!(result, RuntimeResult::EchoRejected));
+        assert!(
+            matches!(&events[..], [RuntimeData::EchoRejected { action_id, .. }] if *action_id == action.id)
+        );
+        assert_eq!(
+            state.generation, fence.generation,
+            "echo cannot supersede a turn"
+        );
+        let (RuntimeResult::Begun(browser_fence), _) = state
+            .apply(
+                "U:owner",
+                &records,
+                RuntimeOperation::Begin {
+                    turn_id: Uuid::new_v4(),
+                    worker: Uuid::new_v4(),
+                    origin: OriginProof::Browser(proof(&records[&browser_id])),
+                    request_digest: hash(b"A useful answer"),
+                    privacy_floor: PrivacyClass::SharedRoom,
+                },
+                106,
+            )
+            .unwrap()
+        else {
+            panic!("typed input must not be treated as microphone echo")
+        };
+        state
+            .apply(
+                "U:owner",
+                &records,
+                RuntimeOperation::Finish {
+                    turn_id: browser_fence.turn_id,
+                    generation: browser_fence.generation,
+                    worker: browser_fence.worker,
+                },
+                106,
+            )
+            .unwrap();
+        assert!(
+            state.actions.is_empty(),
+            "the original action is no longer projected"
+        );
+        assert!(matches!(
+            state
+                .apply("U:owner", &records, stock_input("A useful answer"), 107)
+                .unwrap()
+                .0,
+            RuntimeResult::EchoRejected
+        ));
+        let (result, events) = state
+            .apply(
+                "U:owner",
+                &records,
+                stock_input("A useful answer"),
+                103 + super::super::echo::WINDOW_MS,
+            )
+            .unwrap();
+        assert!(matches!(result, RuntimeResult::Begun(_)));
+        assert!(events.iter().any(
+            |e| matches!(e, RuntimeData::EchoExpired { action_id, .. } if *action_id == action.id)
+        ));
+        assert!(state.echoes.is_empty());
+    }
+
     fn propose(
         state: &mut RuntimeState,
         records: &BTreeMap<Uuid, Record>,
@@ -1905,6 +2162,7 @@ mod tests {
                         origin: OriginProof::Pin {
                             device: AuthenticatedDeviceIdentity::from_edge("aabb").unwrap(),
                             surface_id: pin,
+                            echo_fingerprint: super::super::echo::fingerprint("request"),
                         },
                         request_digest: hash(b"request"),
                         privacy_floor: PrivacyClass::SharedRoom,

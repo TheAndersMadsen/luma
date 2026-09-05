@@ -150,6 +150,7 @@ impl AmbianceRuntime {
             OriginProof::Pin {
                 device,
                 surface_id: surface.surface_id,
+                echo_fingerprint: super::echo::fingerprint(&text),
             },
             text,
             started,
@@ -190,6 +191,11 @@ impl AmbianceRuntime {
             .map_err(runtime_error)?;
         if matches!(result, RuntimeResult::Duplicate(_)) {
             return Ok(result);
+        }
+        if matches!(result, RuntimeResult::EchoRejected) {
+            return Err(Status::failed_precondition(
+                "input matched recent system speech",
+            ));
         }
         let RuntimeResult::Begun(fence) = result else {
             return Err(Status::internal("runtime admission failed"));
@@ -684,6 +690,65 @@ mod tests {
             store,
             auth,
         )
+    }
+
+    #[tokio::test]
+    async fn ambiance_echo_rejects_stock_reentry_without_another_model_call() {
+        let model = Arc::new(Model {
+            calls: AtomicUsize::new(0),
+            intent: "informational_speech",
+            pause: None,
+        });
+        let (runtime, store, auth) = fixture(model.clone()).await;
+        let request = |text: &str| cosmos_protocol::aibus::SynapseUnderstandingRequest {
+            utterance: text.into(),
+            ..Default::default()
+        };
+        super::super::stock::response(&runtime, &auth, request("Tell me something"))
+            .await
+            .unwrap();
+        let error =
+            super::super::stock::response(&runtime, &auth, request("AN informational answer!"))
+                .await
+                .unwrap_err();
+        assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+        assert_eq!(model.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(store.assistant_private_accesses.load(Ordering::SeqCst), 0);
+        super::super::stock::response(&runtime, &auth, request("Tell me something else"))
+            .await
+            .unwrap();
+        assert_eq!(model.calls.load(Ordering::SeqCst), 2);
+        // One account's recent speech cannot suppress another account's input.
+        runtime
+            .pairing
+            .as_ref()
+            .unwrap()
+            .put_device_account("cdef", "other-runtime-owner")
+            .await
+            .unwrap();
+        let other = AuthenticatedRequest {
+            principal: cosmos_core::AuthenticatedPrincipal::for_user("other-runtime-owner")
+                .unwrap(),
+            plane: crate::auth::AuthenticationPlane::Device,
+            device: Some(cosmos_core::AuthenticatedDeviceIdentity::from_edge("cdef").unwrap()),
+        };
+        store
+            .mutate_surface(
+                other.principal.expose_for_authorization(),
+                crate::surface_registry::pin_surface_id(
+                    other.principal.expose_for_authorization(),
+                    "cdef",
+                ),
+                crate::surface_registry::Mutation::ApprovePin {
+                    device_id: "cdef".into(),
+                },
+            )
+            .await
+            .unwrap();
+        super::super::stock::response(&runtime, &other, request("An informational answer."))
+            .await
+            .unwrap();
+        assert_eq!(model.calls.load(Ordering::SeqCst), 3);
     }
 
     #[tokio::test]

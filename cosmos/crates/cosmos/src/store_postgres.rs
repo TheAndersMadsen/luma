@@ -2251,6 +2251,7 @@ mod tests {
                         device: cosmos_core::AuthenticatedDeviceIdentity::from_edge("aabb")
                             .unwrap(),
                         surface_id,
+                        echo_fingerprint: crate::ambiance::echo::fingerprint("current input"),
                     },
                     request_digest: hash(b"current input"),
                     privacy_floor: PrivacyClass::SharedRoom,
@@ -2359,6 +2360,153 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ambiance_echo_postgres_claim_and_guard_commit_together_and_survive_reopen() {
+        use crate::ambiance::{ledger::LedgerEvent, *};
+        use crate::surface_registry::{Mutation, hash, pin_surface_id};
+        let Some(first) = store().await else {
+            eprintln!("SKIPPED: isolated COSMOS_TEST_DATABASE_URL required");
+            return;
+        };
+        let principal = format!("U:echo-pg-{}", uuid::Uuid::new_v4());
+        let surface_id = pin_surface_id(&principal, "aabb");
+        first
+            .mutate_surface(
+                &principal,
+                surface_id,
+                Mutation::ApprovePin {
+                    device_id: "aabb".into(),
+                },
+            )
+            .await
+            .unwrap();
+        let input = |text: &str| RuntimeOperation::Begin {
+            turn_id: uuid::Uuid::new_v4(),
+            worker: uuid::Uuid::new_v4(),
+            origin: OriginProof::Pin {
+                device: cosmos_core::AuthenticatedDeviceIdentity::from_edge("aabb").unwrap(),
+                surface_id,
+                echo_fingerprint: echo::fingerprint(text),
+            },
+            request_digest: hash(text.as_bytes()),
+            privacy_floor: PrivacyClass::SharedRoom,
+        };
+        let RuntimeResult::Begun(fence) = first
+            .runtime(&principal, input("Tell me something"))
+            .await
+            .unwrap()
+        else {
+            panic!()
+        };
+        let RuntimeResult::Proposed(action) = first
+            .runtime(
+                &principal,
+                RuntimeOperation::Propose {
+                    turn_id: fence.turn_id,
+                    generation: fence.generation,
+                    worker: fence.worker,
+                    intent: SemanticIntent::InformationalSpeech {
+                        text: "Synthetic public answer.".into(),
+                    },
+                    privacy: PrivacyClass::Public,
+                },
+            )
+            .await
+            .unwrap()
+        else {
+            panic!()
+        };
+        let sequence: i64 =
+            sqlx::query_scalar("SELECT sequence FROM cosmos_surface_head WHERE principal=$1")
+                .bind(&principal)
+                .fetch_one(&first.pool)
+                .await
+                .unwrap();
+        sqlx::query("INSERT INTO cosmos_surface_event(principal,sequence,hash,event) VALUES($1,$2,'echo-obstruction','{}'::jsonb)").bind(&principal).bind(sequence+1).execute(&first.pool).await.unwrap();
+        let claim = || RuntimeOperation::Claim {
+            action_id: action.id,
+            generation: fence.generation,
+            worker: fence.worker,
+        };
+        assert!(matches!(
+            first.runtime(&principal, claim()).await,
+            Err(RuntimeError::Unavailable)
+        ));
+        let encoded: String = sqlx::query_scalar(
+            "SELECT state::text FROM cosmos_ambiance_runtime WHERE principal=$1",
+        )
+        .bind(&principal)
+        .fetch_one(&first.pool)
+        .await
+        .unwrap();
+        let state: RuntimeState = serde_json::from_str(&encoded).unwrap();
+        assert!(state.echoes.is_empty());
+        assert_eq!(state.actions[&action.id].status, ActionStatus::Proposed);
+        sqlx::query("DELETE FROM cosmos_surface_event WHERE principal=$1 AND sequence=$2 AND hash='echo-obstruction'").bind(&principal).bind(sequence+1).execute(&first.pool).await.unwrap();
+        assert!(matches!(
+            first.runtime(&principal, claim()).await.unwrap(),
+            RuntimeResult::Dispatch(_)
+        ));
+        first
+            .runtime(
+                &principal,
+                RuntimeOperation::Finish {
+                    turn_id: fence.turn_id,
+                    generation: fence.generation,
+                    worker: fence.worker,
+                },
+            )
+            .await
+            .unwrap();
+        drop(first);
+        let reopened = store().await.unwrap();
+        assert!(matches!(
+            reopened
+                .runtime(&principal, input("SYNTHETIC public answer!"))
+                .await
+                .unwrap(),
+            RuntimeResult::EchoRejected
+        ));
+        let encoded: String = sqlx::query_scalar(
+            "SELECT state::text FROM cosmos_ambiance_runtime WHERE principal=$1",
+        )
+        .bind(&principal)
+        .fetch_one(&reopened.pool)
+        .await
+        .unwrap();
+        assert!(!encoded.contains("Synthetic public answer"));
+        let state: RuntimeState = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(state.generation, fence.generation);
+        assert_eq!(state.echoes.len(), 1);
+        let rows: Vec<String> = sqlx::query_scalar(
+            "SELECT event::text FROM cosmos_surface_event WHERE principal=$1 ORDER BY sequence",
+        )
+        .bind(&principal)
+        .fetch_all(&reopened.pool)
+        .await
+        .unwrap();
+        let mut guarded = false;
+        let mut rejected = false;
+        for row in rows {
+            let event: LedgerEvent = serde_json::from_str(&row).unwrap();
+            if let LedgerEvent::Runtime(event) = event {
+                match event.data {
+                    RuntimeData::EchoGuarded { action_id, .. } => {
+                        assert_eq!(action_id, action.id);
+                        guarded = true;
+                    }
+                    RuntimeData::EchoRejected { action_id, .. } => {
+                        assert!(guarded);
+                        assert_eq!(action_id, action.id);
+                        rejected = true;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        assert!(guarded && rejected);
+    }
+
+    #[tokio::test]
     async fn ambiance_postgres_independent_workers_rollback_reopen_and_registry_fence() {
         use crate::ambiance::{ledger::LedgerEvent, *};
         use crate::surface_registry::{Mutation, hash, pin_surface_id};
@@ -2385,6 +2533,7 @@ mod tests {
             origin: OriginProof::Pin {
                 device: cosmos_core::AuthenticatedDeviceIdentity::from_edge("aabb").unwrap(),
                 surface_id,
+                echo_fingerprint: crate::ambiance::echo::fingerprint("test request"),
             },
             request_digest: hash(b"test request"),
             privacy_floor: PrivacyClass::SharedRoom,
