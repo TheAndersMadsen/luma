@@ -98,6 +98,7 @@ jobs:
     env:
       CC: clang-21
       CXX: clang++-21
+      CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: clang-21
       RUSTFLAGS: -C link-arg=-fuse-ld=lld-21
     services:
       postgres:
