@@ -104,8 +104,9 @@ fn openrouter_proposal_requires_one_completed_exact_call_without_prose() {
 }
 
 /// gpt-4.1-mini regularly nests a lookup inside `intent` or answers and asks
-/// for a lookup at once; both become one valid branch, while a shape that is
-/// wrong in any other way still fails.
+/// for a lookup at once; both become one valid branch (the lookup wins over
+/// the unsourced answer), while a shape that is wrong in any other way still
+/// fails.
 #[test]
 fn openrouter_proposal_normalizes_nested_and_combined_lookups() {
     let with = |arguments: &str| {
@@ -130,7 +131,7 @@ fn openrouter_proposal_normalizes_nested_and_combined_lookups() {
     let combined: Value = serde_json::from_str(&combined).unwrap();
     assert_eq!(
         combined,
-        json!({"intent":{"kind":"informational_speech","text":"About 36 metres."},"privacy":"public","target":"macos"})
+        json!({"web_lookup":{"query":"Round Tower height"},"privacy":"public","target":"macos"})
     );
     assert!(with(r#"{"intent":{"kind":"bogus","text":"x"},"privacy":"public"}"#).is_err());
     assert!(with(r#"{"intent":{"kind":"place_lookup"},"privacy":"public"}"#).is_err());

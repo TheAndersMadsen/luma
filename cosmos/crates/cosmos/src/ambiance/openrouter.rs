@@ -114,8 +114,10 @@ impl ChatModel for OpenRouterTextModel {
 /// inside `intent`, or an answer together with a lookup. Both are made
 /// unambiguous before the strict proposal parse: a nested lookup is lifted to
 /// its own branch, and when the model both answered and asked to look
-/// something up, its answer stands and the lookup is dropped. Every kept
-/// field is the model's own; nothing is invented.
+/// something up, the lookup stands and the unsourced answer is dropped, so
+/// "find cafés" becomes a place card and a fact request a sourced card under
+/// the origin's own permission. Every kept field is the model's own; nothing
+/// is invented.
 fn normalize_arguments(arguments: &str) -> Option<String> {
     let mut value: Value = serde_json::from_str(arguments).ok()?;
     let object = value.as_object_mut()?;
@@ -134,12 +136,12 @@ fn normalize_arguments(arguments: &str) -> Option<String> {
         }
         normalized = true;
     }
-    if object.contains_key("intent") {
-        for branch in ["analysis", "web_lookup", "place_lookup"] {
-            if object.remove(branch).is_some() {
-                normalized = true;
-            }
-        }
+    if ["analysis", "web_lookup", "place_lookup"]
+        .iter()
+        .any(|branch| object.contains_key(*branch))
+        && object.remove("intent").is_some()
+    {
+        normalized = true;
     }
     if normalized {
         tracing::info!("cognition proposal normalized to one branch");

@@ -558,6 +558,14 @@ async fn ambiance_lookup_missing_disabled_changed_provider_and_private_queries_m
             } else {
                 "permission is off"
             }));
+        } else if case == "private_query" {
+            // A query classed above the permission's ceiling is explained at
+            // that class; with no personal surface nothing can render it.
+            assert!(
+                matches!(result, Ok(RuntimeResult::Blocked)),
+                "{case} must be explained above the ceiling, not sent"
+            );
+            assert!(f.poll().await.is_empty());
         } else {
             assert!(result.is_err(), "{case} must be denied");
             assert!(f.poll().await.is_empty());
