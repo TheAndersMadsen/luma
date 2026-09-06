@@ -154,7 +154,19 @@ impl Journal {
         if bytes.is_empty() || bytes.len() > MAX_JOURNAL_BYTES {
             return Err(Error::InvalidJournal);
         }
-        let journal: Self = serde_json::from_slice(bytes).map_err(|_| Error::InvalidJournal)?;
+        let mut journal: Self = serde_json::from_slice(bytes).map_err(|_| Error::InvalidJournal)?;
+        // A connection signed under a superseded approval profile cannot be
+        // resumed or retried: the owner must reapprove at the current profile,
+        // which drops that connection anyway. Keep the enrollment identity and
+        // record any unresolved request as unknown rather than blocking.
+        if journal
+            .open
+            .as_ref()
+            .is_some_and(|open| open.challenge.approval != wire::PROFILE)
+        {
+            journal.open = None;
+            journal.abandon_pending();
+        }
         journal
             .validate(config, key)
             .map_err(|_| Error::InvalidJournal)?;

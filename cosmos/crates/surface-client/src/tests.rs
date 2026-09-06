@@ -213,6 +213,29 @@ fn secure_journal_rejects_wrong_binding_corruption_and_omitted_pending_fields() 
 }
 
 #[test]
+fn superseded_profile_connections_are_dropped_without_losing_the_installation() {
+    let key = TestSigner::new().public_key_sec1().unwrap();
+    let bytes = open_journal().bytes().unwrap();
+    let mut value: Value = serde_json::from_slice(&bytes).unwrap();
+    value["open"]["challenge"]["approval"] = json!("native-shared-display-v2");
+    let restored = Journal::load(&serde_json::to_vec(&value).unwrap(), &config(), &key).unwrap();
+    assert!(restored.open.is_none());
+    assert!(restored.pending.is_none());
+    assert_eq!(restored.surface_id, open_journal().surface_id);
+    assert_eq!(
+        serde_json::to_value(&restored).unwrap()["binding"],
+        serde_json::to_value(open_journal()).unwrap()["binding"]
+    );
+    // The current profile still resumes exactly.
+    assert!(
+        Journal::load(&bytes, &config(), &key)
+            .unwrap()
+            .open
+            .is_some()
+    );
+}
+
+#[test]
 fn pending_signed_open_roundtrips_exactly_and_rejects_secret_or_signature_changes() {
     let journal = open_journal();
     let key = TestSigner::new().public_key_sec1().unwrap();
