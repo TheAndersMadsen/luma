@@ -53,11 +53,22 @@ export function Devices() {
     const controller = new AbortController(); active.current = controller;
     const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(10000)]);
     try {
-      const response = await fetch(PATH, { cache: "no-store", signal });
-      if (!response.ok) throw new Error("native_list_unavailable");
-      const saved = parseNativeSurfaces(await response.json());
+      // One transient failure (a busy runtime, a dropped connection) gets a
+      // single retry before the page asks the owner to refresh by hand.
+      let saved: NativeSurface[] | undefined;
+      for (let attempt = 0; attempt < 2 && saved === undefined; attempt++) {
+        try {
+          const response = await fetch(PATH, { cache: "no-store", signal });
+          if (!response.ok) throw new Error("native_list_unavailable");
+          saved = parseNativeSurfaces(await response.json());
+        } catch (failure) {
+          signal.throwIfAborted();
+          if (attempt === 1) throw failure;
+          await new Promise(resolve => setTimeout(resolve, 400));
+        }
+      }
       signal.throwIfAborted();
-      if (generation.current === current) setRows(saved);
+      if (generation.current === current && saved) setRows(saved);
     } catch {
       if (generation.current === current) setError("Device status is unavailable. Refresh before making changes.");
     } finally { if (generation.current === current) { active.current = null; setBusy(false); } }
