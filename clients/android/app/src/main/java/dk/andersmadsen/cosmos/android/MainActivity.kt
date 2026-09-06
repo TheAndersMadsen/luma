@@ -70,7 +70,7 @@ class MainActivity : ComponentActivity() {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Button(onClick = { controller.prepare(server) }, enabled = state.canPrepare) { Text("Prepare") }
                             Button(onClick = { controller.connect() }, enabled = state.canConnect) {
-                                Text(if (state.needsReconnect || state.pendingOpen) "Reconnect" else "Connect")
+                                Text(if (state.pendingOpen) "Reconnect" else "Connect")
                             }
                             OutlinedButton(onClick = { controller.disconnect() }, enabled = state.canDisconnect) { Text("Disconnect") }
                         }

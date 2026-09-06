@@ -1162,8 +1162,10 @@ playback behavior.
 The owner's target devices are a MacBook Pro M5 Pro, an Omarchy Linux PC, a
 Pixel 10 Pro and an NVIDIA Shield 4K TV Pro, alongside the Ai Pin. Build thin
 macOS, Linux, Android and Android TV clients against the same runtime contract.
-The macOS preview already enrolls, sends public text and renders shared cards;
-the other three need their own apps on top of the shared native client.
+The macOS preview and the Android client already enroll, send public text and
+render shared cards on the shared native client; the Android APK installs on
+the Pixel 10 Pro and offers the default-assistant role for its compact panel.
+Android TV and Linux still need their own shells.
 Each device needs separate owner approval and honest local permission,
 availability and playback reporting. Installable packages and actual device
 checks remain deliverables; the browser and synthetic clients do not establish

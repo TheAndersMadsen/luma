@@ -41,6 +41,22 @@
   ],
   "evidence": [
     {
+      "id": "android-client-jni-definition",
+      "kind": "implementation",
+      "path": "cosmos/crates/surface-client-ffi/src/android.rs",
+      "anchor": "struct JavaPlatform",
+      "scope": "The Android app binds the same shared native client worker as macOS through JNI: Kotlin supplies the Keystore key, encrypted journal and foreground state; the Rust worker owns admission, exact retries, frame verification and RTC fencing. Handles are opaque under Android pointer tagging.",
+      "limitation": "Source definition only. Physical Pixel behavior, background limits, notification delivery and reconnect under Doze are not covered by any recorded test."
+    },
+    {
+      "id": "android-client-snapshot-test-definition",
+      "kind": "test-definition",
+      "path": "clients/android/app/src/test/java/dk/andersmadsen/cosmos/android/NativeEventTest.kt",
+      "anchor": "fun decodesPlaceCardsWithInertCredits",
+      "scope": "The Kotlin shell decodes redacted native snapshots strictly: place cards with inert credit tokens, foreign descriptors, markup credits and inconsistent outcomes are rejected, and a disconnected snapshot carries no card.",
+      "limitation": "JVM unit test of decoding only; it does not exercise the Keystore, the JNI worker or rendering on a device."
+    },
+    {
       "id": "routing-hint-policy-test-definition",
       "kind": "test-definition",
       "path": "cosmos/crates/cosmos/src/ambiance/policy.rs",
@@ -826,8 +842,8 @@
       "sourceSections": ["4.1", "6", "6.1"],
       "requirement": "A native Android companion declares real foreground/background, audio, notification, permission and reconnect behavior through the common surface contract.",
       "acceptance": "Required product deliverable: verify foreground/background permissions, reconnect, protected credential storage and installable packaging on a physical phone; notification delivery is not render acknowledgment or microphone permission. Completion is separate from the first verified Cosmos/Center server rollout.",
-      "status": "pending",
-      "evidence": []
+      "status": "partial",
+      "evidence": ["android-client-jni-definition", "android-client-snapshot-test-definition", "native-client-display-test-definition"]
     },
     {
       "id": "thin-client-azure-tts",
