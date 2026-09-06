@@ -9,7 +9,9 @@ let package = Package(
         .executable(name: "CosmosDesktop", targets: ["CosmosDesktop"]),
     ],
     targets: [
-        .target(name: "CosmosMac"),
+        // The kit's nebula texture and monochrome menu-bar template ship in the
+        // SwiftPM resource bundle; the CLI copies that bundle into Cosmos.app.
+        .target(name: "CosmosMac", resources: [.process("Resources")]),
         .systemLibrary(name: "CCosmosSurface"),
         .executableTarget(name: "CosmosDesktop", dependencies: ["CosmosMac", "CCosmosSurface"]),
         .testTarget(name: "CosmosMacTests", dependencies: ["CosmosMac"]),

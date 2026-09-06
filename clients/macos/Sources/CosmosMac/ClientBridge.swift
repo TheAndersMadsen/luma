@@ -95,9 +95,12 @@ public struct DisplayCard: Equatable, Sendable {
     public let contentDigest: String
     public let expiresAtMs: Int64
     public let content: DisplayContent
+    /// The class Cosmos routed this card at; above shared_room it is private to this screen.
+    public let privacy: String
+    public var isPrivate: Bool { privacy == "near_user" || privacy == "private" }
 
     public init(actionID: UUID, turnID: UUID, generation: UInt64, contentDigest: String,
-                expiresAtMs: Int64, content: DisplayContent) throws {
+                expiresAtMs: Int64, content: DisplayContent, privacy: String = "shared_room") throws {
         guard actionID != DisplayCard.nilUUID, turnID != DisplayCard.nilUUID,
               generation > 0, generation <= 9_007_199_254_740_991, expiresAtMs > 0,
               contentDigest.count == 64, contentDigest.allSatisfy({ $0.isHexDigit && !$0.isUppercase }) else {
@@ -109,6 +112,7 @@ public struct DisplayCard: Equatable, Sendable {
         self.contentDigest = contentDigest
         self.expiresAtMs = expiresAtMs
         self.content = content
+        self.privacy = privacy
     }
 
     static let nilUUID = UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))
@@ -146,6 +150,21 @@ public struct SpeechReply: Equatable, Sendable {
     }
 }
 
+/// A private card is waiting for this installation. Cosmos delivers it through the
+/// normal card path once the app reports its unlocked foreground visible.
+public struct WaitingReply: Equatable, Sendable {
+    public let id: UUID
+    public let origin: String
+    public let privacy: String
+    public let expiresAtMs: Int64
+    public init(id: UUID, origin: String, privacy: String, expiresAtMs: Int64) {
+        self.id = id
+        self.origin = origin
+        self.privacy = privacy
+        self.expiresAtMs = expiresAtMs
+    }
+}
+
 /// Contains presentation-safe state only. Credentials and journal data never enter the UI.
 public struct ClientSnapshot: Equatable, Sendable {
     public var phase: ClientPhase
@@ -162,12 +181,15 @@ public struct ClientSnapshot: Equatable, Sendable {
     public var display: DisplayCard?
     /// The delivered spoken reply, if still current. Presence is not playback.
     public var speech: SpeechReply?
+    /// A private card waiting for this installation's unlocked foreground; it carries no content.
+    public var waiting: WaitingReply?
 
     public init(phase: ClientPhase = .disconnected, hasPending: Bool = false,
                 admission: TextAdmission? = nil, failure: ClientFailure? = nil,
                 pendingOpen: Bool = false, needsReconnect: Bool = false,
                 canRetry: Bool = false, hasUnknownOutcome: Bool = false,
-                visible: Bool = false, display: DisplayCard? = nil, speech: SpeechReply? = nil) {
+                visible: Bool = false, display: DisplayCard? = nil, speech: SpeechReply? = nil,
+                waiting: WaitingReply? = nil) {
         self.phase = phase
         self.hasPending = hasPending
         self.pendingOpen = pendingOpen
@@ -179,6 +201,7 @@ public struct ClientSnapshot: Equatable, Sendable {
         self.visible = visible
         self.display = display
         self.speech = speech
+        self.waiting = waiting
     }
 }
 

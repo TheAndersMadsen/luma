@@ -93,8 +93,13 @@ struct NativeEvent: Decodable, Sendable {
         let expiresAtMs: Int64
         let content: Content
         let credits: [[Credit]]
+        let privacy: String?
 
         func verified() throws -> DisplayCard {
+            let privacy = self.privacy ?? "shared_room"
+            guard ["public", "shared_room", "near_user", "private"].contains(privacy) else {
+                throw ClientFailure.invalidResponse
+            }
             let body: DisplayContent
             switch content.kind {
             case "text":
@@ -116,7 +121,26 @@ struct NativeEvent: Decodable, Sendable {
                 throw ClientFailure.invalidResponse
             }
             return try DisplayCard(actionID: actionId, turnID: turnId, generation: generation,
-                                   contentDigest: contentDigest, expiresAtMs: expiresAtMs, content: body)
+                                   contentDigest: contentDigest, expiresAtMs: expiresAtMs, content: body,
+                                   privacy: privacy)
+        }
+    }
+
+    /// A private card waiting for this installation: no content, only the class,
+    /// the kind of surface that asked and the expiry.
+    struct Invitation: Decodable, Sendable {
+        let id: UUID
+        let origin: String
+        let privacy: String
+        let expiresAtMs: Int64
+
+        func verified() throws -> WaitingReply {
+            guard id != UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)), !origin.isEmpty, origin.utf8.count <= 32,
+                  origin.allSatisfy({ ($0.isLowercase && $0.isLetter) || $0 == "_" }),
+                  ["near_user", "private"].contains(privacy), expiresAtMs > 0 else {
+                throw ClientFailure.invalidResponse
+            }
+            return WaitingReply(id: id, origin: origin, privacy: privacy, expiresAtMs: expiresAtMs)
         }
     }
 
@@ -151,6 +175,7 @@ struct NativeEvent: Decodable, Sendable {
     let visible: Bool
     let display: Display?
     let speech: Speech?
+    let invitation: Invitation?
     let eventsSkipped: UInt64
 
     static func decode(_ bytes: Data) throws -> NativeEvent {
@@ -158,7 +183,7 @@ struct NativeEvent: Decodable, Sendable {
             let event = try JSONDecoder().decode(Self.self, from: bytes)
             guard event.version == 1, event.kind == "state",
                   ["prepare", "connect", "send_text", "retry_pending", "cancel", "set_visible", "acknowledge",
-                   "acknowledge_speech", "display", "speech", "disconnect", "heartbeat"].contains(event.operation),
+                   "acknowledge_speech", "display", "speech", "invitation", "disconnect", "heartbeat"].contains(event.operation),
                   ["ok", "error"].contains(event.outcome),
                   (event.outcome == "ok") == (event.error == nil),
                   event.error.map({ $0.utf8.count <= 64 }) ?? true else {
@@ -170,6 +195,7 @@ struct NativeEvent: Decodable, Sendable {
             _ = try event.descriptor?.verified()
             _ = try event.display?.verified()
             _ = try event.speech?.verified()
+            _ = try event.invitation?.verified()
             return event
         } catch {
             throw ClientFailure.invalidResponse

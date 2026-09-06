@@ -18,8 +18,10 @@ public final class ClientModel: ObservableObject {
         // signed connection, a failed rejoin) is the moment to schedule the next attempt.
         didSet { if !busy { scheduleReconnect() } }
     }
-    @Published public private(set) var message = "Prepare this installation, then approve its public descriptor in Center."
+    @Published public private(set) var message = ClientModel.initialMessage
     @Published public private(set) var shortcutMessage = ""
+    /// Whether the panel itself is on screen; the waveform only moves while it is.
+    @Published public private(set) var panelVisible = false
     @Published private var disconnectInFlight = false
 
     private let client: any ClientBridge
@@ -77,6 +79,24 @@ public final class ClientModel: ObservableObject {
         !busy && !snapshot.hasPending && !snapshot.pendingOpen && !snapshot.needsReconnect && !canDisconnect
     }
 
+    /// A retained signed connection that this model is rejoining on its own: after a
+    /// relaunch or a dropped room, without a pending request or a blocked journal.
+    public var rejoining: Bool {
+        wantsConnection && descriptor != nil && !snapshot.hasPending
+            && ![.connected, .blocked].contains(snapshot.phase)
+            && (snapshot.needsReconnect || snapshot.pendingOpen)
+    }
+    public var stage: PanelStage {
+        PanelState.stage(hasDescriptor: descriptor != nil, phase: snapshot.phase, rejoining: rejoining)
+    }
+    public var connectionStatus: ConnectionStatus {
+        if disconnectInFlight { return .disconnecting }
+        return PanelState.status(phase: snapshot.phase, rejoining: rejoining)
+    }
+    public var waveformPhase: CosmosPhase {
+        PanelState.waveform(speaking: speaking, busy: busy, rejoining: rejoining, failed: snapshot.failure != nil)
+    }
+
     public var statusText: String {
         if disconnectInFlight { return "Disconnecting…" }
         if let failure = snapshot.failure { return failure.message }
@@ -122,7 +142,7 @@ public final class ClientModel: ObservableObject {
                 wantsConnection = true
                 message = "Rejoining the retained Cosmos connection…"
             } else {
-                message = "Approve this public descriptor in Center, then connect."
+                message = Self.approveMessage
             }
         }
     }
@@ -140,7 +160,9 @@ public final class ClientModel: ObservableObject {
         }
     }
 
-    static let connectedMessage = "Cosmos confirmed the connection. Responses appear on an approved display; this panel is one while it is visible."
+    nonisolated static let connectedMessage = "Cosmos confirmed the connection. Responses appear on an approved display; this panel is one while it is visible."
+    nonisolated static let initialMessage = "Prepare this installation, then approve its public descriptor in Center."
+    nonisolated static let approveMessage = "Approve this public descriptor in Center, then connect."
 
     /// A dropped room (network change, server restart) is rejoined without a
     /// click: bounded backoff, only after an explicit Connect and never over a
@@ -290,6 +312,7 @@ public final class ClientModel: ObservableObject {
     /// Report the panel's own visibility. Cosmos routes a shared card here only while
     /// this is true; it never treats the report as occupancy or identity.
     public func setVisible(_ visible: Bool) {
+        if panelVisible != visible { panelVisible = visible }
         guard wantedVisible != visible else { return }
         wantedVisible = visible
         if !visible { acknowledging?.cancel(); acknowledging = nil }

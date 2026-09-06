@@ -263,7 +263,8 @@ final class RustSurfaceBridge: ClientBridge {
             hasUnknownOutcome: event.lastUnknown != nil,
             visible: event.visible,
             display: event.connected ? try event.display?.verified() : nil,
-            speech: event.connected ? try event.speech?.verified() : nil
+            speech: event.connected ? try event.speech?.verified() : nil,
+            waiting: event.connected ? try event.invitation?.verified() : nil
         )
         if event.operation == expectedOperation { completion = event }
     }

@@ -102,8 +102,8 @@ int32_t cosmos_surface_disconnect(CosmosSurface *surface);
 
 /* Nonblocking safe JSON snapshot, UTF-8 bytes without a trailing NUL:
  * {version:1,kind:"state",operation:"prepare|connect|send_text|retry_pending|
- * cancel|set_visible|acknowledge|acknowledge_speech|display|speech|disconnect|
- * heartbeat",
+ * cancel|set_visible|acknowledge|acknowledge_speech|display|speech|invitation|
+ * disconnect|heartbeat",
  * outcome:"ok|error",error:null|STATIC_CODE,
  * connected:bool,pendingOpen:bool,needsReconnect:bool,
  * descriptor:null|PUBLIC_DESCRIPTOR,
@@ -116,10 +116,20 @@ int32_t cosmos_surface_disconnect(CosmosSurface *surface);
  * contentDigest:HEX64,expiresAtMs:integer,
  * content:{kind:"text",text:STRING}|{kind:"places",query:STRING,
  * items:[{placeId,name,address,sourceUrl:null|HTTPS}],attributions:[STRING]},
- * credits:[[{kind:"text",text}|{kind:"link",text,href:HTTPS}]]},
+ * credits:[[{kind:"text",text}|{kind:"link",text,href:HTTPS}]],
+ * privacy:"public|shared_room|near_user|private"},
  * speech:null|{actionId:UUID,turnId:UUID,generation:integer,contentDigest:HEX64,
  * expiresAtMs:integer,text:STRING,format:"audio/mpeg",byteLength:integer},
+ * invitation:null|{id:UUID,origin:"pin|browser|macos|linux|android|android_tv",
+ * privacy:"near_user|private",expiresAtMs:integer},
  * eventsSkipped:N}
+ * An "invitation" operation reports that a private card is waiting for this
+ * installation, or that the offer was withdrawn. It carries no content: show
+ * a generic prompt (a notification may say only that something is ready) and
+ * report visible from an unlocked foreground to receive the card. A "display"
+ * card whose privacy is above shared_room is private: show it here only, never
+ * in a notification or preview, and report not visible when the app leaves the
+ * foreground; Cosmos retires it.
  * A "speech" operation reports a complete or retired spoken reply; fetch its
  * bytes with cosmos_surface_speech_audio and acknowledge after full playback.
  * credits holds one inert token list per attribution string, in order; render
