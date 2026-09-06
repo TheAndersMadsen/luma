@@ -455,8 +455,15 @@ public final class KeychainVault: @unchecked Sendable {
         }
         // Explicit file-Keychain queries return legacy key refs; Apple's public
         // item-access API accepts that same legacy object as SecKeychainItem.
-        try verifyAccess(unsafeBitCast(key, to: SecKeychainItem.self), storage: storage,
-                         authorization: kSecACLAuthorizationSign)
+        // An identity created by another application (a rebuilt ad-hoc signed
+        // app at a new path) is this installation's identity, not a storage
+        // fault: report it as unusable rather than as a locked Keychain.
+        do {
+            try verifyAccess(unsafeBitCast(key, to: SecKeychainItem.self), storage: storage,
+                             authorization: kSecACLAuthorizationSign)
+        } catch {
+            throw ClientFailure.identityUnavailable
+        }
         let parts = label.components(separatedBy: "|")
         guard parts.count == 3, parts[0] == "Cosmos installation v1",
               let enrollmentID = UUID(uuidString: parts[1]) else {

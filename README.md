@@ -1955,17 +1955,22 @@ and acknowledges each delivered card once it is composed. It offers to become
 the default digital assistant so the panel opens over the current app.
 
 The check compiles and tests the Rust core, C bridge and Swift shell. The build
-prints an external `Cosmos.app` path and verifies its local ad-hoc signature;
-neither command launches or installs the app. Distribution signing, notarization
-and physical permission/lifecycle acceptance remain separate. This first client
-accepts explicitly submitted public text and uses an approved Center tab for
-responses. Native response display, audio, document capture and handoff are
-later capability increments; installation approval does not grant them.
+replaces `Cosmos.app` at one stable path under the external build directory and
+verifies its signature; neither command launches or installs the app.
+Distribution signing, notarization and physical permission/lifecycle acceptance
+remain separate. The client accepts explicitly submitted public text, renders
+shared cards and plays Cosmos-synthesized spoken replies once the installation
+is approved at the speech profile; document capture and handoff are later
+capability increments, and installation approval does not grant them.
 
-Move the development app to a stable location before using Prepare. Its Keychain
-access binds to the app's executable path and signing identity; preparing from a
-temporary build directory can require repairing trust when a later build moves.
-The app never substitutes plaintext storage when Keychain access is unavailable.
+Keychain binds the installation identity to the application that created it:
+its executable path and its code identity. The stable path keeps the first
+constant, and `REVIVAL_MACOS_CODESIGN_IDENTITY` (a Keychain code-signing
+identity name or SHA-1, for example an Apple Development certificate) keeps the
+second constant across rebuilds. An ad-hoc signed rebuild is a new application
+to Keychain, so the app then reports the stored identity as unusable rather than
+as a locked Keychain; reset the installation and enroll again. The app never
+substitutes plaintext storage when Keychain access is unavailable.
 
 For a broad change:
 

@@ -66,6 +66,14 @@ function clientCommand(args) {
 
   const base = ownDirectory(path.join(BUILD_DIR, 'macos-client'));
   const scratch = ownDirectory(path.join(BUILD_DIR, 'macos-client-swift'));
+  // Keychain binds the installation identity to the application that created
+  // it, so the app must keep one stable path and, across rebuilds, one stable
+  // code identity. Ad-hoc signatures change with every build; an operator
+  // supplies a Keychain code-signing identity to keep the identity readable.
+  const signingIdentity = process.env.REVIVAL_MACOS_CODESIGN_IDENTITY?.trim() || '-';
+  if (signingIdentity !== '-' && !/^[A-Za-z0-9 :().,+_-]{1,120}$/u.test(signingIdentity)) {
+    fail('REVIVAL_MACOS_CODESIGN_IDENTITY must name a Keychain code-signing identity.');
+  }
   const staging = fs.mkdtempSync(path.join(base, 'build-'));
   const libraryDirectory = path.join(staging, 'lib');
   fs.mkdirSync(libraryDirectory, { mode: 0o700 });
@@ -122,14 +130,30 @@ function clientCommand(args) {
 <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
 `);
+  // The isolated test home hides the login Keychain; a named identity is
+  // resolved from the operator's real home. Ad-hoc signing needs no Keychain.
+  const signingEnvironment = signingIdentity === '-'
+    ? environment
+    : { ...environment, HOME: require('node:os').homedir() };
   timedRun('native development app signing', 'codesign', [
-    '--force', '--sign', '-', application,
-  ], { env: environment });
+    '--force', '--sign', signingIdentity, '--identifier', 'dk.andersmadsen.cosmos.desktop', application,
+  ], { env: signingEnvironment });
   timedRun('native development app verification', 'codesign', [
     '--verify', '--strict', '--deep', application,
   ], { env: environment });
-  info(`[implemented] development app: ${application}`);
-  info('[observed] Ad-hoc signed local development build; distribution signing, notarization and device acceptance remain separate.');
+  // Replace the previous build at the same path so Keychain access control
+  // lists that name this application keep matching.
+  const installed = path.join(base, 'Cosmos.app');
+  fs.rmSync(installed, { recursive: true, force: true });
+  fs.renameSync(application, installed);
+  fs.rmSync(staging, { recursive: true, force: true });
+  for (const entry of fs.readdirSync(base)) {
+    if (entry.startsWith('build-')) fs.rmSync(path.join(base, entry), { recursive: true, force: true });
+  }
+  info(`[implemented] development app: ${installed}`);
+  info(signingIdentity === '-'
+    ? '[observed] Ad-hoc signed local development build: every rebuild is a new application to Keychain, so a stored installation identity must be reset after rebuilding. Set REVIVAL_MACOS_CODESIGN_IDENTITY to a Keychain code-signing identity to keep it across rebuilds. Distribution signing, notarization and device acceptance remain separate.'
+    : `[observed] Signed the local development build with "${signingIdentity}"; distribution signing, notarization and device acceptance remain separate.`);
 }
 
 function pinnedNdkVersion() {

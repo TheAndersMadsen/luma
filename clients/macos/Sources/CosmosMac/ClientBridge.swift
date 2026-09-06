@@ -180,7 +180,7 @@ public enum ClientFailure: Error, Equatable, Sendable {
         case .invalidServer: "Enter an HTTPS server address with no path, credentials, or query."
         case .invalidText: "Enter public text of at most 4,000 UTF-8 bytes."
         case .invalidResponse: "Cosmos returned a response this client could not verify."
-        case .identityUnavailable: "The installation identity could not be opened in Keychain."
+        case .identityUnavailable: "The installation identity could not be opened in Keychain. A rebuilt or moved app is not the application that created it; reset the installation to enroll again."
         case .storageUnavailable: "Protected storage is unavailable. Unlock Keychain and try again."
         case .storageBlocked: "A protected journal update failed. Retry the pending request before connecting or sending."
         case .approvalRequired: "Approve this installation in Center before connecting."
