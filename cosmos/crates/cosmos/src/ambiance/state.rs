@@ -174,6 +174,33 @@ pub enum RuntimeOperation {
     RecentContext {
         fence: TurnFence,
     },
+    PrivatePolicy {
+        surface_id: Uuid,
+    },
+    /// Owner-visible liveness of one native installation: whether a current
+    /// signed connection exists and whether its app reports a foreground.
+    NativePresence {
+        surface_id: Uuid,
+    },
+    SetPrivatePolicy {
+        surface_id: Uuid,
+        approval_revision: u64,
+        expected_revision: u64,
+        policy: Option<super::personal::Policy>,
+    },
+    /// How many personal surfaces the owner declared for this class.
+    PersonalSurfaces {
+        privacy: PrivacyClass,
+    },
+    /// The private card waiting for a connected surface, if any.
+    Invitation {
+        connection: RoomProof,
+    },
+    /// The runtime offered the owner's private memory to this turn's cognition.
+    OfferPrivateContext {
+        fence: TurnFence,
+        count: u32,
+    },
     SetDisclosurePolicy {
         surface_id: Uuid,
         approval_revision: u64,
@@ -329,6 +356,15 @@ pub enum RuntimeResult {
     LookupCurrent,
     LookupCompleted(super::lookup::Receipt),
     RecentContext(Option<RecentContext>),
+    PrivatePolicy(Option<super::personal::Approval>),
+    NativePresence {
+        connected: bool,
+        visible: bool,
+        private_display: bool,
+    },
+    PersonalSurfaces(usize),
+    Invitation(Option<super::personal::Invitation>),
+    PrivateContextOffered,
     PinOpened {
         connection: super::PinConnection,
         duplicate: bool,
@@ -456,6 +492,10 @@ pub struct Action {
     /// The turn's origin, so a transport owner can rebuild the exact fence.
     #[serde(default)]
     pub origin_surface: Uuid,
+    /// The runtime's own shared-safe expression: fixed text at the shared
+    /// class that a later raise of the turn's class does not retire.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub expression: bool,
 }
 
 impl Action {
@@ -480,6 +520,9 @@ struct OutputProposal {
     privacy: PrivacyClass,
     confirmation: Option<DisplayConfirmation>,
     hint: Option<policy::RoutingTarget>,
+    /// The runtime's own shared-safe expression, identical for every
+    /// elsewhere-routed request; routed at the shared class.
+    expression: bool,
 }
 /// Bounded owner memory of the last completed place lookup: the user's own
 /// query text, never provider content. It is scoped to the owner, classed by
@@ -529,6 +572,8 @@ pub struct RuntimeState {
     pub place_lookup_policies: BTreeMap<Uuid, super::lookup::BoundApproval>,
     #[serde(default)]
     pub recent_context: Option<RecentContext>,
+    #[serde(default)]
+    pub private_policies: BTreeMap<Uuid, super::personal::Approval>,
 }
 
 /// Client boot epochs and sequences are provenance; client clocks are not.
@@ -715,6 +760,15 @@ pub enum RuntimeData {
         source_surface: Uuid,
         privacy: PrivacyClass,
     },
+    PrivateDisplayPolicyChanged {
+        surface_id: Uuid,
+        approval: super::personal::Approval,
+    },
+    PrivateContextOffered {
+        fence: TurnFence,
+        source: String,
+        count: u32,
+    },
     ProviderDisclosureStarted {
         fence: TurnFence,
         disclosure: super::disclosure::Disclosure,
@@ -800,6 +854,10 @@ pub enum RuntimeData {
         privacy: PrivacyClass,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         hint: Option<policy::RoutingTarget>,
+        /// The runtime's own shared-safe expression, routed at the shared
+        /// class while the turn itself stays above it.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        expression: bool,
         candidates: Vec<Candidate>,
     },
     NativeVisibility {
@@ -972,7 +1030,22 @@ impl RuntimeState {
                     .and_then(|approval| approval.policy)
                     .is_some_and(|policy| policy.synthesis && privacy <= policy.maximum_class);
         }
-        policy::candidate(record, presence, origin, channel, privacy, hint)
+        // Above the shared-room ceiling only a personal surface may render,
+        // within the ceiling its owner declared. It holds the card while its
+        // signed connection is current; rendering waits for its foreground.
+        let personal = privacy > PrivacyClass::SharedRoom
+            && channel == Channel::VisualCard
+            && self
+                .personal_ceiling(records, record.surface_id)
+                .is_some_and(|ceiling| privacy <= ceiling);
+        if personal {
+            presence.available = self
+                .native_connections
+                .get(&record.surface_id)
+                .and_then(|state| state.connection.as_ref())
+                .is_some_and(|connection| connection.current(record, now));
+        }
+        policy::candidate(record, presence, origin, channel, privacy, hint, personal)
     }
 
     /// Store transactions apply runtime admission and visibility together. A
@@ -1208,6 +1281,12 @@ impl RuntimeState {
                 .get(id)
                 .is_some_and(|r| !r.revoked && r.revision == approval.approval_revision)
         });
+        self.private_policies.retain(|id, approval| {
+            records
+                .get(id)
+                .is_some_and(|r| !r.revoked && r.revision == approval.approval_revision)
+        });
+
         self.reconcile_lookup_policies(records);
         self.ingress.retain(|id, cursor| {
             records.get(id).is_some_and(|r| {
@@ -1259,20 +1338,36 @@ impl RuntimeState {
             .filter(|root| self.acknowledged_visual(records, *root, now).is_some())
             .collect();
         // Dispatch-time revalidation reads current presence before any
-        // action mutates; a target that lost its foreground is repaired.
+        // action mutates; a target that lost its foreground is repaired. A
+        // raised turn class retires shared outputs proposed below it, except
+        // the runtime's own shared-safe expression.
+        let turn_privacy = self
+            .turn
+            .as_ref()
+            .map_or(PrivacyClass::Public, |t| t.privacy);
         let validity: BTreeMap<Uuid, bool> = self
             .actions
             .values()
             .map(|action| {
+                let class = if action.expression {
+                    action.privacy
+                } else {
+                    action.privacy.max(turn_privacy)
+                };
                 let valid = origin_valid
                     && action
                         .confirmation_root
                         .is_none_or(|root| confirmed_roots.contains(&root))
                     && now < action.display_expires_at_ms
-                    && self.turn.as_ref().is_some_and(|t| {
-                        t.fence.generation == action.generation
-                            && t.privacy <= PrivacyClass::SharedRoom
-                    })
+                    && self
+                        .turn
+                        .as_ref()
+                        .is_some_and(|t| t.fence.generation == action.generation)
+                    // A private card exists on a screen only while that
+                    // screen's own foreground is reported; leaving it masks.
+                    && (action.privacy <= PrivacyClass::SharedRoom
+                        || action.status == ActionStatus::Proposed
+                        || self.surface_visible(records, action.surface_id, now))
                     && records.get(&action.surface_id).is_some_and(|r| {
                         self.presence(r, now).incarnation == action.incarnation
                             && self
@@ -1281,7 +1376,7 @@ impl RuntimeState {
                                     r,
                                     self.turn.as_ref().unwrap().fence.origin_surface,
                                     action.channel,
-                                    action.privacy,
+                                    class,
                                     None,
                                     now,
                                 )
@@ -1302,10 +1397,7 @@ impl RuntimeState {
             if !valid {
                 let repair = origin_valid
                     && now < action.display_expires_at_ms
-                    && self
-                        .turn
-                        .as_ref()
-                        .is_some_and(|t| t.privacy <= PrivacyClass::SharedRoom)
+                    && action.privacy <= PrivacyClass::SharedRoom
                     && action.channel == Channel::VisualCard
                     && matches!(
                         action.status,
@@ -1507,7 +1599,6 @@ impl RuntimeState {
         if turn.cancelled
             || now >= turn.lease_until_ms
             || !self.origin_valid(turn, records, now)
-            || turn.privacy > PrivacyClass::SharedRoom
             || root.id != root.root_id
             || root.channel != Channel::VisualCard
             || root.turn_id != turn.fence.turn_id
@@ -1560,6 +1651,7 @@ impl RuntimeState {
             privacy,
             confirmation,
             hint,
+            expression,
         } = output;
         let mut events = Vec::new();
         let turn = self.fence(turn_id, generation, worker, now)?;
@@ -1597,7 +1689,13 @@ impl RuntimeState {
             }
             _ => {}
         }
-        let privacy = turn.privacy.max(privacy);
+        // A shared-safe expression is the runtime's own fixed text; the turn
+        // keeps its higher class and the expression never names it.
+        let privacy = if expression {
+            PrivacyClass::SharedRoom
+        } else {
+            turn.privacy.max(privacy)
+        };
         if intent.channel() == Channel::VisualCard
             && privacy <= PrivacyClass::SharedRoom
             && self.actions.values().any(|a| {
@@ -1639,9 +1737,12 @@ impl RuntimeState {
             action_id: id,
             privacy,
             hint,
+            expression,
             candidates,
         });
-        self.turn.as_mut().unwrap().privacy = privacy;
+        if !expression {
+            self.turn.as_mut().unwrap().privacy = privacy;
+        }
         events.extend(self.reconcile(records, now));
         let result = if let (Some(surface_id), Some(id)) = (selected, id) {
             if intent.channel() == Channel::VisualCard {
@@ -1655,9 +1756,16 @@ impl RuntimeState {
             let record = &records[&surface_id];
             let incarnation = self.presence(record, now).incarnation;
             let content_digest = intent.content_digest();
+            // A private card waits for its personal surface's unlocked
+            // foreground; a shared card is renewed or repaired within a minute.
+            let window = if privacy > PrivacyClass::SharedRoom {
+                super::personal::PRIVATE_DISPLAY_MS
+            } else {
+                60_000
+            };
             let display_expires_at_ms = match &intent {
                 SemanticIntent::PlaceAddressCard { content } => content.expires_at_ms,
-                _ => now.checked_add(60_000).ok_or(RuntimeError::Unavailable)?,
+                _ => now.checked_add(window).ok_or(RuntimeError::Unavailable)?,
             };
             let display_expires_at_ms = confirmation
                 .as_ref()
@@ -1677,10 +1785,13 @@ impl RuntimeState {
                 intent,
                 privacy,
                 status: ActionStatus::Proposed,
-                deadline_ms: now
-                    .checked_add(ACK_MS)
-                    .ok_or(RuntimeError::Unavailable)?
-                    .min(display_expires_at_ms),
+                deadline_ms: if privacy > PrivacyClass::SharedRoom {
+                    display_expires_at_ms
+                } else {
+                    now.checked_add(ACK_MS)
+                        .ok_or(RuntimeError::Unavailable)?
+                        .min(display_expires_at_ms)
+                },
                 display_expires_at_ms,
                 attempts: 0,
                 fallbacks,
@@ -1688,6 +1799,7 @@ impl RuntimeState {
                     .as_ref()
                     .map(|confirmation| confirmation.root_id),
                 origin_surface,
+                expression,
             };
             self.actions.insert(id, action.clone());
             if let Some(confirmation) = confirmation {
@@ -1962,6 +2074,67 @@ impl RuntimeState {
                     });
                 }
                 RuntimeResult::RecentContext(offered)
+            }
+            RuntimeOperation::PrivatePolicy { surface_id } => {
+                RuntimeResult::PrivatePolicy(self.private_policy(records, surface_id)?)
+            }
+            RuntimeOperation::NativePresence { surface_id } => {
+                let record = records
+                    .get(&surface_id)
+                    .filter(|r| matches!(r.binding, Binding::Native { .. }))
+                    .ok_or(RuntimeError::NotFound)?;
+                let connection = self
+                    .native_connections
+                    .get(&surface_id)
+                    .and_then(|state| state.connection.as_ref())
+                    .filter(|connection| connection.current(record, now));
+                RuntimeResult::NativePresence {
+                    connected: connection.is_some(),
+                    visible: connection.is_some_and(|connection| connection.visible),
+                    private_display: self.personal_ceiling(records, surface_id).is_some(),
+                }
+            }
+            RuntimeOperation::SetPrivatePolicy {
+                surface_id,
+                approval_revision,
+                expected_revision,
+                policy,
+            } => {
+                let (approval, appended) = self.set_private_policy(
+                    records,
+                    surface_id,
+                    approval_revision,
+                    expected_revision,
+                    policy,
+                )?;
+                events.extend(appended);
+                events.extend(self.reconcile(records, now));
+                RuntimeResult::PrivatePolicy(Some(approval))
+            }
+            RuntimeOperation::PersonalSurfaces { privacy } => {
+                RuntimeResult::PersonalSurfaces(self.personal_surfaces(records, privacy))
+            }
+            RuntimeOperation::Invitation { connection } => {
+                let record = self.room_record(records, &connection, now)?;
+                RuntimeResult::Invitation(self.invitation_for(record.surface_id, now))
+            }
+            RuntimeOperation::OfferPrivateContext { fence, count } => {
+                let turn = self.fence(fence.turn_id, fence.generation, fence.worker, now)?;
+                // Private memory is offered only to a turn already above the
+                // shared-room ceiling with a personal surface to render on.
+                if turn.finished
+                    || turn.fence.origin_surface != fence.origin_surface
+                    || turn.privacy <= PrivacyClass::SharedRoom
+                    || self.personal_surfaces(records, turn.privacy) == 0
+                {
+                    return Err(RuntimeError::Stale);
+                }
+                events.push(RuntimeData::PrivateContextOffered {
+                    fence,
+                    source: "notes".to_owned(),
+                    count,
+                });
+                RuntimeResult::PrivateContextOffered
             }
             RuntimeOperation::SetDisclosurePolicy {
                 surface_id,
@@ -2660,6 +2833,7 @@ impl RuntimeState {
                     records,
                     &fence,
                     OutputProposal {
+                        expression: false,
                         intent,
                         privacy,
                         confirmation: None,
@@ -2694,11 +2868,14 @@ impl RuntimeState {
                 let acknowledged = self
                     .acknowledged_visual(records, action.root_id, now)
                     .ok_or(RuntimeError::PolicyBlocked)?;
+                // The same sentence for every elsewhere-routed card, whatever
+                // its class: a bystander learns nothing from the expression.
                 let output = OutputProposal {
+                    expression: true,
                     intent: SemanticIntent::InformationalSpeech {
                         text: "Displayed on your approved screen.".into(),
                     },
-                    privacy: turn.privacy.max(acknowledged.privacy),
+                    privacy: PrivacyClass::SharedRoom,
                     confirmation: Some(DisplayConfirmation {
                         root_id: acknowledged.root_id,
                         acknowledged_action: acknowledged.id,
@@ -2837,6 +3014,7 @@ impl RuntimeState {
                 self.room_record(records, &connection, now)?;
                 // Speech is claimed only through its disclosure; a room poll
                 // never stock-dispatches audio and never marks it unknown.
+                let visible = self.surface_visible(records, connection.surface_id(), now);
                 let pending: Vec<_> = self
                     .actions
                     .values()
@@ -2845,6 +3023,9 @@ impl RuntimeState {
                             && a.incarnation == connection.incarnation()
                             && a.status == ActionStatus::Proposed
                             && a.channel == Channel::VisualCard
+                            // Dispatch-time revalidation: a private card is
+                            // claimed only by an unlocked, visible foreground.
+                            && (a.privacy <= PrivacyClass::SharedRoom || visible)
                     })
                     .map(|a| (a.id, a.generation, a.worker))
                     .collect();

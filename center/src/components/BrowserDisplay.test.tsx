@@ -98,7 +98,7 @@ beforeEach(() => {
     const body = options?.body ? JSON.parse(options.body as string) : {};
     if (url === "/api/surfaces") {
       command = { version: 1, actionId, turnId, generation: 1, surfaceId: body.surfaceId, incarnation,
-        channel: "visual.card", contentDigest: digest, content: { kind: "text", text }, expiresAt: Date.now() + 60000 };
+        channel: "visual.card", contentDigest: digest, content: { kind: "text", text }, privacy: "shared_room", expiresAt: Date.now() + 60000 };
       return Response.json({ surface: { ...BROWSER_SURFACE_POSTURE, surfaceId: body.surfaceId, revision: 1, sequence: 0,
         revoked: false, visible: false, connected: true, available: false, connectionExpiresAt: Date.now() + 3600000, leaseExpiresAt: Date.now() + 45000 },
       connection: { token: "a".repeat(64), incarnation, expiresAt: Date.now() + 3600000 } });
@@ -285,7 +285,7 @@ it("a React render that fails before commit sends no acknowledgment", () => {
   function Failure(): ReactNode { throw new Error("render failed"); }
   const log = vi.spyOn(console, "error").mockImplementation(() => {});
   const frame: RenderCommand = { version: 1, actionId, turnId, generation: 1, surfaceId: turnId, incarnation,
-    channel: "visual.card", contentDigest: digest, content: { kind: "text", text }, expiresAt: Date.now() + 60000 };
+    channel: "visual.card", contentDigest: digest, content: { kind: "text", text }, privacy: "shared_room", expiresAt: Date.now() + 60000 };
   render(<Boundary><CommittedCard command={frame} runtime={runtime} /><Failure /></Boundary>);
   expect(committed).not.toHaveBeenCalled(); expect(fetch).not.toHaveBeenCalled(); log.mockRestore();
 });
@@ -299,7 +299,7 @@ it.each([
   const runtime = new BrowserRuntime(turnId, vi.fn(), vi.fn());
   const committed = vi.spyOn(runtime, "committed").mockResolvedValue(undefined);
   const frame: RenderCommand = { ...placeCommand(), version: 1, actionId, turnId, generation: 1, surfaceId: turnId,
-    incarnation, channel: "visual.card", expiresAt: Date.now() + 60000 };
+    incarnation, channel: "visual.card", privacy: "shared_room", expiresAt: Date.now() + 60000 };
   let visited = false;
   render(<div><span aria-hidden="true" ref={node => {
     if (!node) return;

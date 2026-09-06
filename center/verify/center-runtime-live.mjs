@@ -203,26 +203,36 @@ try {
       expression: { "visual.card": ["acknowledged", "degraded"], "audio.tts": ["acknowledged", "degraded"] },
       cognition: { declaredClass: 0, models: [] }, authority: { mayOriginate: ["state.change", "user.request"], reflexive: [] } },
     trustLevel: 0, occupancy: "unknown", actorIdentity: "unknown", renderVerified: false, playbackVerified: false, revoked: false,
+    connected: false, visible: false, privateDisplay: false,
   };
   await page.goto(`${origin}/settings/account/surfaces`);
+  await page.getByRole("button", { name: "Add a device", exact: true }).click();
+  await page.getByRole("button", { name: "Enter a descriptor manually", exact: true }).click();
   await page.getByLabel("Public installation descriptor", { exact: true }).fill(JSON.stringify(descriptor));
-  await page.getByRole("button", { name: "Review installation", exact: true }).click();
-  await page.getByRole("group", { name: "Review native installation", exact: true }).getByText(fingerprint, { exact: true }).waitFor();
+  await page.getByRole("button", { name: "Review", exact: true }).click();
+  // The review shows the fingerprint the way the device does: four lines of four groups.
+  const deviceReview = page.getByRole("group", { name: "Review device", exact: true });
+  for (const line of fingerprint.match(/.{16}/g).map(part => part.match(/.{4}/g).join(" "))) await deviceReview.getByText(line, { exact: true }).waitFor();
   // Reading and reviewing an installation must not approve it implicitly.
   const beforeApproval = await page.evaluate(async () => {
     const response = await fetch("/api/surfaces/native", { cache: "no-store", signal: AbortSignal.timeout(10000) });
     return { status: response.status, body: await response.json() };
   });
   assert.deepEqual(beforeApproval, { status: 200, body: { native: [] } });
-  const [approved] = await Promise.all([
+  // The new card reads its permissions as soon as it appears; that read is the lookup snapshot checked below.
+  const lookupPath = `/api/surfaces/${native.nativeId}/web-lookup`;
+  const [approved, lookupRead] = await Promise.all([
     page.waitForResponse(response => new URL(response.url()).pathname === "/api/surfaces/native" && response.request().method() === "POST"),
-    page.getByRole("button", { name: "Confirm shared display and speech approval", exact: true }).click(),
+    page.waitForResponse(response => new URL(response.url()).pathname === lookupPath && response.request().method() === "GET"),
+    page.getByRole("button", { name: "Approve this device", exact: true }).click(),
   ]);
   assert.equal(approved.status(), 200);
   assert.match(approved.headers()["cache-control"], /(?:^|,)\s*no-store\s*(?:,|$)/iu);
   assert.deepEqual(approved.request().postDataJSON(), { ...descriptor, expectedRevision: 0 });
   assert.deepEqual(await approved.json(), { native: expectedNative });
-  await page.getByText("Cosmos recorded this installation’s shared display and speech approval. Cards and spoken replies route to it only while its connected app reports a visible foreground.", { exact: true }).waitFor();
+  await page.getByText("Approved. Cosmos shows replies on this device while its app is in front.", { exact: true }).waitFor();
+  const deviceCard = page.getByRole("region", { name: `Mac ${descriptor.enrollmentId.slice(0, 8)}`, exact: true });
+  await deviceCard.getByText("Not connected", { exact: true }).waitFor();
   await until(() => { const status = readJson(statusPath); return status?.nativeApproved && status.enrollmentOnlyNoRoomAuthority; }, 10000);
   // An owner cookie and public descriptor do not provide a browser connection.
   // Both requests go through the real Center server in this isolated context.
@@ -241,8 +251,8 @@ try {
   stage = "shared browser display and signed native text";
   // Keep both owner controls and the renderer on this visible page. Revoking a
   // native installation must not be confused with navigation retiring a browser.
-  await page.getByRole("button", { name: "Approve this tab", exact: true }).click();
-  await page.getByRole("button", { name: "Confirm shared display", exact: true }).click();
+  await page.getByRole("switch", { name: "Use this browser as a display", exact: true }).click();
+  await page.getByRole("button", { name: "Turn on", exact: true }).click();
   await page.getByText("Ready for public text requests.", { exact: true }).waitFor();
   checkpoint("browserReady");
   // The production native client supplies this model request and recovers
@@ -256,12 +266,6 @@ try {
   await until(() => { const status = readJson(statusPath); return status?.nativeCancelled && status.payloadCleared && status.nativeCrashPendingRecovered; }, 45000);
   checkpoint("clearObserved");
   stage = "owner native web lookup permission";
-  const lookupPath = `/api/surfaces/${native.nativeId}/web-lookup`;
-  const webPermission = page.getByRole("group", { name: `Web lookup permission for macOS installation ${descriptor.enrollmentId}`, exact: true });
-  const [lookupRead] = await Promise.all([
-    page.waitForResponse(response => new URL(response.url()).pathname === lookupPath && response.request().method() === "GET"),
-    webPermission.getByRole("button", { name: "Web lookup permission", exact: true }).click(),
-  ]);
   assert.equal(lookupRead.status(), 200);
   assert.match(lookupRead.headers()["cache-control"], /(?:^|,)\s*no-store\s*(?:,|$)/iu);
   const lookupSnapshot = await lookupRead.json();
@@ -273,17 +277,24 @@ try {
   const lookupEndpoint = new URL(native.lookupProvider.endpoint);
   assert.equal(lookupEndpoint.hostname, "127.0.0.1");
   assert.equal(lookupEndpoint.pathname, "/search");
-  await webPermission.locator("select").selectOption(`${native.lookupProvider.provider}:${native.lookupProvider.configurationDigest}`);
-  await webPermission.getByRole("button", { name: "Review web lookup permission", exact: true }).click();
+  // Manage opened itself after approval; a single configured provider needs no choice.
+  const manage = deviceCard.getByRole("button", { name: "Manage", exact: true });
+  if (await manage.count()) await manage.click();
+  const webPermission = deviceCard.getByRole("group", { name: "Look things up on the web", exact: true });
+  const webSwitch = webPermission.getByRole("switch", { name: "Look things up on the web", exact: true });
+  await webSwitch.waitFor();
+  assert.equal(await webSwitch.getAttribute("aria-checked"), "false");
   const lookupPolicy = { provider: native.lookupProvider, maximumClass: "shared_room" };
   const [lookupGranted] = await Promise.all([
     page.waitForResponse(response => new URL(response.url()).pathname === lookupPath && response.request().method() === "POST"),
-    webPermission.getByRole("button", { name: "Allow shared-room web lookup", exact: true }).click(),
+    webSwitch.click(),
   ]);
   assert.equal(lookupGranted.status(), 200);
   assert.deepEqual(lookupGranted.request().postDataJSON(), { approval: "approve-web-lookup-disclosure-v1", approvalRevision: lookupBinding.approvalRevision, approvalIncarnation: lookupBinding.incarnation, expectedRevision: 0, policy: lookupPolicy });
   assert.deepEqual(await lookupGranted.json(), { approval: { approvalRevision: lookupBinding.approvalRevision, revision: 1, policy: lookupPolicy }, binding: lookupBinding, providers: [native.lookupProvider] });
-  await webPermission.getByText("Cosmos confirmed web lookup permission for this device.", { exact: true }).waitFor();
+  await webPermission.getByText("Cosmos confirmed web lookup for this device.", { exact: true }).waitFor();
+  assert.equal(await webSwitch.getAttribute("aria-checked"), "true");
+  await deviceCard.getByText("Shows shared replies · Looks things up", { exact: true }).waitFor();
   stage = "native lookup through selected local provider and sourced DOM acknowledgment";
   const lookupSource = "https://www.dbu.dk/landshold/herrelandshold/";
   const lookupCard = `Web results for "Denmark national football team"\n\n[1] Denmark national football team\nOfficial team information from the Danish Football Association.\n${lookupSource}`;
@@ -300,26 +311,27 @@ try {
   await until(() => { const status = readJson(statusPath); return status?.webLookupCancelled && status.webLookupPayloadCleared; }, 10000);
   checkpoint("lookupClearObserved");
   stage = "owner native web lookup revocation";
-  await webPermission.getByRole("button", { name: "Revoke web lookup permission", exact: true }).click();
   const [lookupRevoked] = await Promise.all([
     page.waitForResponse(response => new URL(response.url()).pathname === lookupPath && response.request().method() === "POST"),
-    webPermission.getByRole("button", { name: "Confirm revoke web lookup", exact: true }).click(),
+    webSwitch.click(),
   ]);
   assert.equal(lookupRevoked.status(), 200);
   assert.deepEqual(lookupRevoked.request().postDataJSON(), { approval: "approve-web-lookup-disclosure-v1", approvalRevision: lookupBinding.approvalRevision, approvalIncarnation: lookupBinding.incarnation, expectedRevision: 1, policy: null });
   assert.deepEqual(await lookupRevoked.json(), { approval: { approvalRevision: lookupBinding.approvalRevision, revision: 2, policy: null }, binding: lookupBinding, providers: [native.lookupProvider] });
-  await webPermission.getByText("Cosmos confirmed web lookup permission revoked.", { exact: true }).waitFor();
+  await webPermission.getByText("Cosmos confirmed web lookup off.", { exact: true }).waitFor();
   await until(() => readJson(statusPath)?.webLookupRevoked, 10000);
   stage = "owner native installation revocation";
-  await page.getByRole("button", { name: `Revoke installation ${descriptor.enrollmentId}`, exact: true }).click();
+  await deviceCard.getByRole("button", { name: "Details", exact: true }).click();
+  await deviceCard.getByText(descriptor.enrollmentId, { exact: true }).waitFor();
+  await deviceCard.getByRole("button", { name: "Remove this device", exact: true }).click();
   const [revoked] = await Promise.all([
     page.waitForResponse(response => new URL(response.url()).pathname === `/api/surfaces/native/${native.nativeId}` && response.request().method() === "DELETE"),
-    page.getByRole("button", { name: "Confirm revoke installation", exact: true }).click(),
+    deviceCard.getByRole("button", { name: "Remove", exact: true }).click(),
   ]);
   assert.equal(revoked.status(), 200);
   assert.deepEqual(revoked.request().postDataJSON(), { expectedRevision: 1 });
   assert.deepEqual(await revoked.json(), { native: { ...expectedNative, revision: 2, revoked: true } });
-  await page.getByText("Cosmos confirmed this installation’s approval revoked.", { exact: true }).waitFor();
+  await page.getByText("Removed. This device no longer shows replies.", { exact: true }).waitFor();
   const afterRevocation = await page.evaluate(async enrollmentId => {
     const read = async route => { const response = await fetch(route, { cache: "no-store", signal: AbortSignal.timeout(10000) }); return { status: response.status, body: await response.json() }; };
     return { list: await read("/api/surfaces/native"), lookup: await read(`/api/surfaces/native/enrollments/${enrollmentId}`) };
@@ -329,10 +341,10 @@ try {
   // The fixture waits for this tab's next real 15-second state heartbeat after
   // native shutdown, so preserved means the browser RPC still reaches Cosmos.
   await until(() => { const status = readJson(statusPath); return status?.nativeRevoked && status.nativeDisconnected && status.browserPreservedAfterNative; }, 25000);
-  await page.getByText("Cosmos confirmed this shared tab visible. It can receive public text cards.", { exact: true }).waitFor();
+  await page.getByText("On. Cosmos can show shared reply cards here. It cannot tell who is looking at this screen.", { exact: true }).waitFor();
   await page.screenshot({ path: path.join(directory, "native-revoked.png"), fullPage: true });
   stage = "browser leave after native revocation";
-  await page.getByRole("button", { name: "Leave this tab", exact: true }).click();
+  await page.getByRole("switch", { name: "Use this browser as a display", exact: true }).click();
   await page.getByLabel("Cosmos display", { exact: true }).waitFor({ state: "detached" });
   const result = await until(() => { const status = readJson(statusPath); return status?.complete ? status : null; }, 10000);
   assert.equal(result.acknowledged, true);

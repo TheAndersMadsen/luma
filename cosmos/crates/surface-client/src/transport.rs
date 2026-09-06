@@ -3,7 +3,7 @@
 //! received frame is never evidence that it rendered.
 use crate::{
     Error,
-    display::{self, Display, Expected, Incoming},
+    display::{self, Display, Expected, Incoming, Invitation},
     speech::{Assembler, Speech},
     wire::RoomResponse,
 };
@@ -167,12 +167,14 @@ pub(crate) struct Connection {
 pub(crate) struct Outputs {
     pub(crate) display: watch::Sender<Option<Display>>,
     pub(crate) speech: watch::Sender<Option<Speech>>,
+    pub(crate) invitation: watch::Sender<Option<Invitation>>,
 }
 
 impl Outputs {
     fn retire(&self) {
         self.display.send_replace(None);
         self.speech.send_replace(None);
+        self.invitation.send_replace(None);
     }
 }
 
@@ -201,6 +203,10 @@ fn answer(
                 Ok(None) => Ok(reply),
                 Err(_) => Err(cosmos_rtc::Error::Invalid),
             },
+            Ok((Incoming::Invite(invitation), reply)) => {
+                outputs.invitation.send_replace(invitation);
+                Ok(reply)
+            }
             Ok((Incoming::Clear(action_id), reply)) => {
                 assembler.clear(action_id);
                 outputs.display.send_if_modified(|current| {

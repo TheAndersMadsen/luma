@@ -398,6 +398,20 @@ fn display(value: Option<&Display>) -> Value {
             "expiresAtMs": card.expires_at_ms,
             "content": card.content,
             "credits": credits,
+            "privacy": card.privacy,
+        })
+    })
+}
+
+/// A private card waiting for this installation: the class, the kind of
+/// surface that asked and the expiry; never content.
+fn invitation(value: Option<&cosmos_surface_client::Invitation>) -> Value {
+    value.map_or(Value::Null, |invitation| {
+        json!({
+            "id": invitation.id.to_string(),
+            "origin": invitation.origin,
+            "privacy": invitation.privacy,
+            "expiresAtMs": invitation.expires_at_ms,
         })
     })
 }
@@ -444,6 +458,7 @@ fn snapshot(
         "visible": status.as_ref().is_some_and(|s| s.visible),
         "display": status.as_ref().map_or(Value::Null, |s| display(s.display.as_ref())),
         "speech": status.as_ref().map_or(Value::Null, |s| speech(s.speech.as_ref())),
+        "invitation": status.as_ref().map_or(Value::Null, |s| invitation(s.invitation.as_ref())),
     })
 }
 
@@ -495,6 +510,7 @@ async fn run(
     heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut displays = client.display_changes();
     let mut speeches = client.speech_changes();
+    let mut invitations = client.invitation_changes();
     // The platform's last requested foreground state. It is re-reported after
     // every new connection because visibility lives on the connection.
     let mut wanted_visible = false;
@@ -503,6 +519,7 @@ async fn run(
         Heartbeat,
         Display,
         Speech,
+        Invitation,
     }
     let publish_speech = |client: &Client| {
         *speech_audio.lock().unwrap_or_else(|e| e.into_inner()) = client
@@ -518,6 +535,7 @@ async fn run(
             _ = shutdown.changed() => break,
             changed = displays.changed() => { if changed.is_err() { break; } Wake::Display }
             changed = speeches.changed() => { if changed.is_err() { break; } Wake::Speech }
+            changed = invitations.changed() => { if changed.is_err() { break; } Wake::Invitation }
             _ = heartbeat.tick() => Wake::Heartbeat,
             command = commands.recv() => match command { Some(command) => Wake::Command(command), None => break },
         };
@@ -536,6 +554,13 @@ async fn run(
                 push(
                     &events,
                     snapshot(Some(&client), &descriptor, "speech", None),
+                );
+                continue;
+            }
+            Wake::Invitation => {
+                push(
+                    &events,
+                    snapshot(Some(&client), &descriptor, "invitation", None),
                 );
                 continue;
             }

@@ -118,27 +118,38 @@ fn parse(bytes: &[u8]) -> Result<ChatResponse, LlmError> {
         .ok_or(LlmError::Malformed)?;
     let choice = &choices[0];
     let message = &choice["message"];
+    let extra = [
+        "refusal",
+        "function_call",
+        "reasoning",
+        "reasoning_details",
+        "audio",
+        "images",
+    ]
+    .iter()
+    .find(|k| {
+        message
+            .get(**k)
+            .is_some_and(|v| !v.is_null() && v != "" && v != &json!([]))
+    });
+    let spoke = message
+        .get("content")
+        .is_some_and(|v| !v.is_null() && v != "");
     if value.get("error").is_some_and(|v| !v.is_null())
         || choice["finish_reason"] != "tool_calls"
         || message["role"] != "assistant"
-        || message
-            .get("content")
-            .is_some_and(|v| !v.is_null() && v != "")
-        || [
-            "refusal",
-            "function_call",
-            "reasoning",
-            "reasoning_details",
-            "audio",
-            "images",
-        ]
-        .iter()
-        .any(|k| {
-            message
-                .get(k)
-                .is_some_and(|v| !v.is_null() && v != "" && v != &json!([]))
-        })
+        || spoke
+        || extra.is_some()
     {
+        // Content-free shape diagnostics: which rule the reply broke, never
+        // what it said. A truncated tool call shows up as finish_reason=length.
+        tracing::warn!(
+            error = value.get("error").is_some_and(|v| !v.is_null()),
+            finish_reason = choice["finish_reason"].as_str().unwrap_or("absent"),
+            spoke,
+            extra = extra.copied().unwrap_or("none"),
+            "cognition reply did not carry exactly one proposal tool call"
+        );
         return Err(LlmError::Malformed);
     }
     let calls = message["tool_calls"]

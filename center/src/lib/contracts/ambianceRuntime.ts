@@ -19,7 +19,11 @@ export interface RenderCommand {
   version: 1; actionId: string; turnId: string; generation: number;
   surfaceId: string; incarnation: string; channel: "visual.card";
   contentDigest: string; content: RenderContent; expiresAt: number;
+  /** The class the runtime routed this card at; a browser only ever receives shared-room cards. */
+  privacy: PrivacyClass;
 }
+export const PRIVACY_CLASSES = ["public", "shared_room", "near_user", "private", "sensitive"] as const;
+export type PrivacyClass = typeof PRIVACY_CLASSES[number];
 export type RuntimeFrame = { version: 1; kind: "render"; stamp: Stamp; command: RenderCommand }
   | { version: 1; kind: "clear"; stamp: Stamp; actionId: string };
 export type BrowserControl = { kind: "state"; visible: boolean }
@@ -98,9 +102,10 @@ export function renderContentPayload(content: RenderContent): string {
 }
 export function parseCommand(value: unknown): RenderCommand {
   const c = record(value);
-  fields(c, ["version", "actionId", "turnId", "generation", "surfaceId", "incarnation", "channel", "contentDigest", "content", "expiresAt"]);
+  fields(c, ["version", "actionId", "turnId", "generation", "surfaceId", "incarnation", "channel", "contentDigest", "content", "expiresAt", "privacy"]);
   if (c.version !== 1 || ![c.actionId, c.turnId, c.surfaceId, c.incarnation].every(id)
     || !integer(c.generation, 1) || !integer(c.expiresAt, 1) || c.channel !== "visual.card"
+    || !PRIVACY_CLASSES.some(name => name === c.privacy) || c.privacy === "near_user" || c.privacy === "private" || c.privacy === "sensitive"
     || typeof c.contentDigest !== "string" || !/^[a-f0-9]{64}$/.test(c.contentDigest)) throw new Error("invalid_proof");
   parseContent(c.content);
   return c as unknown as RenderCommand;

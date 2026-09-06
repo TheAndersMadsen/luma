@@ -408,6 +408,7 @@ mod tests {
             display_expires_at_ms: reference.expires_at_ms,
             confirmation_root: None,
             origin_surface: Uuid::nil(),
+            expression: false,
             attempts: 1,
             fallbacks: Vec::new(),
         }

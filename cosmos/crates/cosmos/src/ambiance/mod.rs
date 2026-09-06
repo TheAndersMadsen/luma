@@ -7,6 +7,7 @@ pub mod ledger;
 pub mod lookup;
 pub mod native_connection;
 pub mod openrouter;
+pub mod personal;
 pub mod pin_connection;
 pub mod pin_media;
 pub mod policy;

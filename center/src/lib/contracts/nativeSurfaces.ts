@@ -57,10 +57,21 @@ export interface NativeSurface extends Readonly<Omit<typeof NATIVE_SURFACE_POSTU
   revision: number;
   publicKeyFingerprint: string;
   revoked: boolean;
+  /** Liveness at the time of the read, from the runtime's own connection state; never a claim by the installation. */
+  connected: boolean;
+  visible: boolean;
+  /** The runtime currently holds a private display permission for this surface. */
+  privateDisplay: boolean;
 }
 const nonnilUuid = (value: unknown): value is string => typeof value === "string" && UUID.test(value)
   && value !== "00000000-0000-0000-0000-000000000000";
 const platform = (value: unknown): value is NativePlatform => typeof value === "string" && Object.hasOwn(NATIVE_PLATFORMS, value);
+/** Presence flags are optional on the wire; a missing flag is false, anything but a boolean is rejected. */
+function presence(value: unknown): boolean {
+  if (value === undefined) return false;
+  if (typeof value !== "boolean") throw new Error("invalid_native_surface");
+  return value;
+}
 function fields(input: Record<string, unknown>, names: string[]) {
   if (Object.keys(input).length !== names.length || names.some(name => !Object.hasOwn(input, name))) throw new Error("invalid_native_fields");
 }
@@ -114,7 +125,8 @@ export function parseNativeSurface(value: unknown): NativeSurface {
     || typeof native.publicKeyFingerprint !== "string" || !/^[0-9a-f]{64}$/.test(native.publicKeyFingerprint)) throw new Error("invalid_native_surface");
   // Owner metadata only. Never pass through private keys, session tokens or account fields.
   return { ...posture, display: true, speech: posture === NATIVE_SURFACE_POSTURE, surfaceId: native.surfaceId.toLowerCase(), enrollmentId: native.enrollmentId.toLowerCase(),
-    platform: native.platform, revision: native.revision, publicKeyFingerprint: native.publicKeyFingerprint, revoked: native.revoked };
+    platform: native.platform, revision: native.revision, publicKeyFingerprint: native.publicKeyFingerprint, revoked: native.revoked,
+    connected: presence(native.connected), visible: presence(native.visible), privateDisplay: presence(native.privateDisplay) };
 }
 export function parseNativeSurfaces(value: unknown): NativeSurface[] {
   const { native } = record(value);

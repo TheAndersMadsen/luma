@@ -30,12 +30,12 @@ export const SETTINGS_GROUPS: readonly SettingsGroup[] = [
     header: ACCOUNT_GROUP,
     routes: [
       {
-        title: "Surfaces",
-        label: "Surfaces",
+        title: "Devices",
+        label: "Devices",
         href: "/settings/account/surfaces",
-        description: "Approve and disconnect shared browser displays.",
+        description: "Phones, TVs and computers that show Cosmos replies.",
         testid: "menu-surfaces-link",
-        keywords: ["browser", "display", "ambiance"],
+        keywords: ["browser", "display", "ambiance", "surfaces", "phone", "tv", "mac", "linux"],
       },
       {
         title: "Details",

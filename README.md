@@ -159,7 +159,7 @@ installation approved at `native-shared-speech-v3` declares one shared-room
 `audio.tts` output next to its visual card. Speech is routed to it only while
 its signed connection is current, it reports a visible foreground and the
 origin surface's owner has granted the Azure Speech disclosure (Center:
-Devices for the Pin, Native installations for a client). The room coordinator
+My Ai Pin for the Pin, Devices for a client). The room coordinator
 claims the exact proposed speech action through that disclosure, streams
 Cosmos-synthesized `audio/mpeg` frames bound to the connection and the text
 digest, and the client plays the assembled bytes once and acknowledges only
@@ -232,12 +232,13 @@ The integration inventory for the new conversation is:
 | Composition, translation and notification triage | Explicit current text can use bounded analysis. Stock transformation services and selected personal content still need scoped admission. |
 | Azure speech | Cosmos-mediated spoken replies now reach approved macOS and Android installations under the origin's disclosure; Pin, Linux and TV playback acceptance remains open. |
 
-Web lookup is the first conversational integration being restored. In Devices,
-open Web lookup permission for the requesting browser, native installation or
-Pin. Review the configured provider and endpoint, then explicitly allow shared
-query text. A SearXNG grant names its Bing request profile; a SerpApi grant names
-Google search. Cosmos does not switch providers when a lookup fails. Saving a
-provider key alone leaves every device's lookup permission off.
+Web lookup is the first conversational integration being restored. Under My Ai
+Pin, open Web lookup permission for the Pin; under Devices, turn on **Look
+things up on the web** for a phone, TV or computer. Each grant names one
+configured provider and endpoint and allows shared query text only. A SearXNG
+grant names its Bing request profile; a SerpApi grant names Google search.
+Cosmos does not switch providers when a lookup fails. Saving a provider key
+alone leaves every device's lookup permission off.
 
 The next development increment adds conversational named-place lookup with an
 independent Google Maps permission while preserving Web grants. It accepts one
@@ -321,6 +322,25 @@ computer" therefore becomes a new place lookup under the asking origin's own
 lookup permission, routed by the usual policy and an explicit target such as
 the phone. Owner listing and deletion of this memory beyond expiry, and other
 context kinds, are later increments.
+
+Private replies follow the paper's routing rather than a separate flow. A
+request above the shared-room ceiling ("read my private notes", "min private
+besked") is answered in the same turn: Cosmos retrieves the owner's saved notes
+itself, logs that offer against the turn, and proposes the reply at the
+request's class. Policy admits only a personal installation the owner declared
+for that class in Center ("Show private replies here", a statement about the
+device that Cosmos cannot verify and never grants to a TV), on its visual card
+channel and never as speech; every shared surface is suppressed with a privacy
+blocker. The personal phone holds the card while its signed connection is
+current: it is told only that something is waiting (a notification may say
+that much and nothing else), receives the card once its unlocked foreground
+reports visible, and loses it as soon as that foreground goes away. Sensitive
+content has no display ceiling, a request with no personal surface for its
+class is refused before cognition, and the shared origin expresses nothing that
+names privacy: a Pin hears the same outcome-gated "Displayed on your approved
+screen" it hears for any card acknowledged elsewhere. Owner listing and
+deletion of what was offered, and private sources beyond notes, are later
+increments.
 
 Cognition may propose `target` (`browser`, `macos`, `linux`, `android` or
 `android_tv`) only from explicit request text such as "show this on the TV".
@@ -528,13 +548,25 @@ and opens the connection in one Store transaction; an exact retry recovers the
 same current connection without renewing its deadlines. Enrollment and current
 connection evidence remain separate from actor identity and physical privacy.
 
-On this branch, **Settings → Surfaces → Native installations** lets the owner
-import or paste a public installation descriptor, compare its key fingerprint,
-approve it, or revoke the exact current approval. A missing write response
-requires a fresh status read before another change. The native profile permits
-only a public-text capability ceiling; it grants no microphone, screen/media
-context, native output, private memory or device actions. Native applications
-remain unfinished. This branch connects authenticated native current text to the
+On this branch, **Settings → Devices** is the owner's everyday view: one card
+per approved phone, TV or computer plus this browser. Each card shows a plain
+status read from the runtime's own connection state (Connected, Connected · app
+in background, Not connected), one line naming what the device may do, and a
+**Manage** panel with plain switches: Speak replies, Look things up on the web,
+Find places and Show private replies here (a TV is a shared screen and never
+offers the last). **Add a device** expects the QR code or “Approve in Center”
+link the device shows during its own set-up; the link's `#descriptor=` fragment
+is consumed once in the browser and never sent to the server. The review step
+names the kind of device and shows the key fingerprint in 4-character groups to
+compare with the device before **Approve this device**; one further click can
+record the usual permissions in sequence, each confirmed by Cosmos separately
+and reported honestly when a step did not commit. Manual descriptor entry, the
+enrollment ID, fingerprint, approval revision and **Remove this device** sit
+behind disclosures. Every switch reads its saved state before writing, and a
+missing write response requires a fresh read before another change. Approval
+is never proof of a connection or of delivery, and the native profile still
+grants no microphone, screen/media context, private memory or device actions.
+Native applications remain unfinished. This branch connects authenticated native current text to the
 existing Center renderer through one shared principal room coordinator. After
 challenge/open, the native room endpoint authenticates the raw session secret
 and checks the current approval, connection and boot epoch. The stored digest
@@ -1196,8 +1228,10 @@ The macOS preview and the Android client already enroll, send public text and
 render shared cards on the shared native client; the Android APK installs on
 the Pixel 10 Pro and offers the default-assistant role for its compact panel.
 The same APK carries a leanback launcher entry and enrolls as `android_tv` on
-the Shield, so "show it on the TV" can target it; its D-pad layout, Shield
-verification and playback context remain open. Linux still needs its shell.
+the Shield, so "show it on the TV" can target it; its D-pad layout is built
+from the owner's TV kit, while Shield verification and playback context remain
+open. The Linux client has its Qt Quick shell and installer (see Development);
+its Omarchy acceptance is open.
 Each device needs separate owner approval and honest local permission,
 availability and playback reporting. Installable packages and actual device
 checks remain deliverables; the browser and synthetic clients do not establish
@@ -1968,6 +2002,34 @@ encrypted in app-private storage, reports the foreground activity as visible
 and acknowledges each delivered card once it is composed. It offers to become
 the default digital assistant so the panel opens over the current app.
 
+The phone shows one calm screen per state, drawn with the owner's Android kit
+(bottom nebula, crescent wordmark, NinePatch response panel, seven-bar
+waveform): **Set up this phone** names the server and prepares the
+installation; **Approve in Center** shows the public-key fingerprint in
+4-character groups (SHA-256 over the raw SEC1 point, the same digest Center
+and the Mac show), opens the approval link, renders it as a QR code for
+approval from another device, keeps Copy/Share under Advanced, and tries to
+connect once when the owner returns from Center; **Connected** carries the
+status pill (Connected, Reconnecting…, Disconnected), the delivered card or
+spoken reply with the waveform, the ask field and an overflow menu with
+Disconnect, the default-assistant role and the descriptor. Pending, retry,
+unknown-outcome and failure messages stay visible as a quiet notice. From
+Connect until Disconnect a `specialUse` foreground service posts one quiet
+"Cosmos · Connected" notification with a Disconnect action so the joined room
+survives the screen turning off; Android 13+ asks for the notification
+permission when it starts.
+
+On a leanback device the same activity renders the TV layout from the owner's
+TV kit: header with status, one large response panel (24sp body, waveform and
+phase label as a polite live region), and a row of real D-pad buttons inside
+5% safe insets. Approval shows a large QR code beside the fingerprint for the
+phone to scan; delivered cards keep their type size and page with Previous and
+Next; Ask opens a field for the remote's keyboard; Back leaves the field first
+and the activity second. Debug builds also honour
+`adb shell am start -n dk.andersmadsen.cosmos.android/.MainActivity --es cosmos.layout tv`
+so the TV layout can be checked on a phone in landscape; release builds ignore
+the extra. The Shield itself has not been exercised yet.
+
 The check compiles and tests the Rust core, C bridge and Swift shell. The build
 replaces `Cosmos.app` at one stable path under the external build directory and
 verifies its signature; neither command launches or installs the app.
@@ -1995,6 +2057,68 @@ SHA-1, for example an Apple Development certificate) selects that signing, and
 the vault verifies that the partition list names exactly its own team. The
 stable app path keeps the path binding constant in both cases. The app never
 substitutes plaintext storage when Keychain access is unavailable.
+
+The Linux client for the owner's Omarchy PC is a Python 3.11+ package
+(`clients/linux/cosmos_linux`: PySide6 and Qt Quick over the kit's panel,
+waveform and button components) that loads the same shared Rust client as a
+`cdylib` through ctypes. Build it from any host with Docker:
+
+```sh
+./revival client check linux
+./revival client build linux
+```
+
+The check runs the Python unit tests and compiles every module with a host
+Python 3.11 or newer; its ctypes smoke test uses the library that
+`client check macos` leaves in the external Cargo target when one exists. The
+build compiles `libcosmos_surface_client_ffi.so` for x86_64 Linux inside the
+digest-pinned Trixie builder image (the host's own architecture cross-compiles
+with `cosmos/native/linux-toolchain.sh`, the checkout is mounted read-only and
+Cargo state stays external). The builder acquires the digest-verified
+`linux-x64` libwebrtc archive into the `ai-pin-revival-linux-client-webrtc`
+Docker volume, because that archive's i386 sysroot carries case-colliding
+header names a macOS filesystem cannot hold, and writes
+`~/.local/share/ai-pin-revival/build/linux-client/cosmos-linux-x86_64.tar.gz`
+containing the app package, the library, `requirements.txt`, `install-user.sh`
+and the optional Hyprland/Waybar examples. On the Omarchy PC:
+
+```sh
+tar xzf cosmos-linux-x86_64.tar.gz
+bash cosmos-linux/install-user.sh
+cosmos
+```
+
+The installer is user-local only: it creates a venv under
+`~/.local/share/cosmos-linux`, installs the pinned Python dependencies there,
+adds a `~/.local/bin/cosmos` launcher, a `dk.andersmadsen.cosmos.linux`
+desktop entry and the Cosmos icons, refuses to overwrite an existing
+installation and never touches Hyprland, Waybar, themes, autostart or the
+default assistant. `integration/` holds the optional floating-window rule and
+Waybar launcher module; check `hyprctl binds` before adding the candidate
+shortcut.
+
+On first run, "Set up this computer" prepares the installation against
+`center.andersmadsen.dk` (Change selects another HTTPS origin). "Approve in
+Center" then shows the public-key fingerprint in four-character groups and a
+QR code of the approval link rendered locally; "Open in browser" uses
+`xdg-open`, and Advanced copies the descriptor or the link. The window
+connects by itself once the owner approves in Center and rejoins a dropped
+room with the same 1.5/3/6/12/30 s backoff as the other clients. Connected,
+it sends public text, renders one shared card verbatim, plays
+Cosmos-synthesized spoken replies through QtMultimedia, acknowledges each
+card after it is painted and each reply only after playback ends, and reports
+itself visible only while the window is shown and active. Ctrl+L focuses the
+ask field, Enter sends, Escape hides the window (running `cosmos` again brings
+it back), Ctrl+Q quits, and "Reduce motion" or `--reduced-motion` stops the
+waveform.
+
+The installation key is a software P-256 key: it lives in the Secret Service
+keyring when one is reachable and otherwise in a 0600 file under
+`$XDG_DATA_HOME/cosmos`, next to the atomically replaced journal. The app says
+which storage it uses and never claims hardware attestation. The client has
+been exercised offscreen on macOS up to the approval screen against the
+production Center; enrollment, speech playback, Hyprland behaviour and keyring
+storage on the actual Omarchy PC remain to be verified there.
 
 For a broad change:
 

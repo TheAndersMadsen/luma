@@ -1,11 +1,278 @@
-.card { padding: 24px; }
-.card h2 { font-size: 18px; margin-bottom: 12px; }
-.card p { line-height: 1.5; margin: 12px 0; }
-.card button { padding: 10px 14px; margin: 4px 8px 4px 0; border: 1px solid currentColor; border-radius: 8px; cursor: pointer; }
-.card button:disabled { opacity: .5; cursor: wait; }
-.card ul { list-style: none; padding: 0; }
-.card li { border-top: 1px solid var(--hu-text-muted); padding: 18px 0; margin-top: 12px; }
-.descriptorLabel { display: block; margin: 16px 0 8px; }
-.descriptorLabel input { display: block; max-width: 100%; margin-top: 8px; }
-.descriptor { box-sizing: border-box; width: 100%; padding: 12px; border: 1px solid var(--hu-text-muted); border-radius: 8px; background: transparent; color: inherit; font: inherit; }
-.fingerprint { overflow-wrap: anywhere; }
+/*
+ * Devices — one card per device, one add flow, plain switches. Panel chrome
+ * comes from settings.module.css (.section) and the buttons from
+ * controls.module.css; only the card's own rhythm lives here.
+ */
+
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-size);
+}
+
+.lead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.leadText {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.45;
+  color: var(--hu-colors-crater-base);
+}
+
+.primary {
+  composes: buttonPrimary from "../../../../components/controls.module.css";
+  flex: none;
+}
+
+.secondary {
+  composes: buttonSecondary from "../../../../components/controls.module.css";
+}
+
+.quiet {
+  composes: buttonQuiet from "../../../../components/controls.module.css";
+}
+
+.danger {
+  composes: buttonDanger from "../../../../components/controls.module.css";
+}
+
+.linkButton {
+  padding: 0;
+  min-height: 44px;
+  color: var(--hu-colors-beam-base);
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.linkButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* A card is a .section; it keeps the panel's radius and background and adds padding. */
+.card {
+  gap: 12px;
+  padding: 20px 24px;
+  margin-bottom: 0;
+}
+
+.cards {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-size);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cardHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.cardTitle {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 500;
+  line-height: 1.2;
+}
+
+.line {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--hu-colors-crater-base);
+  overflow-wrap: anywhere;
+}
+
+.status {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--hu-colors-crater-base);
+}
+
+.alert {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--hu-status-warning);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.manage {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* One switch row: label and one line on the left, the switch on the right. */
+.switchRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 16px 0;
+  border-top: 1px solid var(--hu-divider);
+}
+
+.switchText {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.switchTitle {
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--hu-colors-white);
+}
+
+.switchDescription,
+.switchState {
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--hu-colors-crater-base);
+  overflow-wrap: anywhere;
+}
+
+.endpoint {
+  overflow-wrap: anywhere;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+  font-size: 13px;
+  color: var(--hu-colors-crater-base);
+}
+
+.field input,
+.field select,
+.descriptor {
+  width: 100%;
+  max-width: 360px;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: var(--hu-radius-control);
+  background: var(--hu-colors-penumbra-200);
+  color: var(--hu-colors-white);
+  font: inherit;
+  box-shadow: var(--outline-shadow);
+}
+
+.field input:disabled,
+.field select:disabled,
+.descriptor:disabled {
+  opacity: 0.5;
+}
+
+.descriptor {
+  display: block;
+  max-width: 100%;
+  min-height: 120px;
+  resize: vertical;
+}
+
+.manual {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--hu-divider);
+}
+
+.review,
+.setup,
+.confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border-radius: var(--hu-radius-control);
+  background: var(--hu-colors-penumbra-200);
+}
+
+.reviewTitle {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 500;
+}
+
+/* The fingerprint as the device shows it: four lines of four groups. */
+.fingerprint {
+  display: grid;
+  gap: 2px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 15px;
+  letter-spacing: 0.04em;
+  color: var(--hu-colors-white);
+}
+
+.steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--hu-colors-crater-base);
+}
+
+.details {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--hu-divider);
+}
+
+.details dl {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 6px 16px;
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.details dt {
+  color: var(--hu-text-muted);
+}
+
+.details dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 560px) {
+  .lead {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .card {
+    padding: 18px 18px;
+  }
+  .details dl {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

@@ -95,6 +95,10 @@ fn routes(api: ApiState) -> Router {
             get(disclosure_policy).post(set_disclosure_policy),
         )
         .route(
+            "/surface-api/v1/surfaces/:surface_id/private-display",
+            get(private_policy).post(set_private_policy),
+        )
+        .route(
             "/surface-api/v1/pins/:surface_id/local-voice",
             get(voice_policy).post(set_voice_policy),
         )
@@ -263,19 +267,49 @@ struct NativeRevocation {
     expected_revision: u64,
 }
 
+/// Liveness for the owner's device list. It is read from the runtime's own
+/// connection state, never from a claim by the installation.
+async fn native_presence(api: &ApiState, principal: &str, surface_id: Uuid) -> (bool, bool, bool) {
+    match api
+        .store
+        .runtime(
+            principal,
+            crate::ambiance::RuntimeOperation::NativePresence { surface_id },
+        )
+        .await
+    {
+        Ok(crate::ambiance::RuntimeResult::NativePresence {
+            connected,
+            visible,
+            private_display,
+        }) => (connected, visible, private_display),
+        _ => (false, false, false),
+    }
+}
+
 async fn list_native(
     State(api): State<ApiState>,
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let principal = owner(&headers, &api)?;
-    let native = api
+    let mut native = Vec::new();
+    for surface in api
         .store
         .surfaces(&principal)
         .await?
         .into_iter()
         .filter(|surface| matches!(surface.binding, surface_registry::Binding::Native { .. }))
-        .map(|surface| surface.native_view())
-        .collect::<Result<Vec<_>, _>>()?;
+    {
+        let view = surface.native_view()?;
+        let (connected, visible, private_display) =
+            native_presence(&api, &principal, view.surface_id).await;
+        let mut row = serde_json::to_value(view)
+            .map_err(|_| ApiError(StatusCode::SERVICE_UNAVAILABLE, "unavailable"))?;
+        row["connected"] = json!(connected);
+        row["visible"] = json!(visible);
+        row["privateDisplay"] = json!(private_display);
+        native.push(row);
+    }
     Ok(Json(json!({"native": native})))
 }
 
@@ -374,6 +408,25 @@ struct DisclosureApproval {
 fn required_policy<'de, D>(
     deserializer: D,
 ) -> Result<Option<crate::ambiance::disclosure::Policy>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::deserialize(deserializer)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PrivateDisplayApproval {
+    approval: String,
+    approval_revision: u64,
+    expected_revision: u64,
+    #[serde(deserialize_with = "required_private_policy")]
+    policy: Option<crate::ambiance::personal::Policy>,
+}
+
+fn required_private_policy<'de, D>(
+    deserializer: D,
+) -> Result<Option<crate::ambiance::personal::Policy>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -637,6 +690,60 @@ async fn set_disclosure_policy(
         )
         .await?;
     let crate::ambiance::RuntimeResult::DisclosurePolicy(approval) = result else {
+        return Err(ApiError(StatusCode::SERVICE_UNAVAILABLE, "unavailable"));
+    };
+    Ok(Json(json!({"approval": approval})))
+}
+
+async fn private_policy(
+    State(api): State<ApiState>,
+    Path(surface_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let principal = owner(&headers, &api)?;
+    let result = api
+        .store
+        .runtime(
+            &principal,
+            crate::ambiance::RuntimeOperation::PrivatePolicy {
+                surface_id: id(&surface_id)?,
+            },
+        )
+        .await?;
+    let crate::ambiance::RuntimeResult::PrivatePolicy(approval) = result else {
+        return Err(ApiError(StatusCode::SERVICE_UNAVAILABLE, "unavailable"));
+    };
+    Ok(Json(json!({"approval": approval})))
+}
+
+/// The owner's statement that one native installation may show private
+/// replies while the owner is present and it is unlocked. It binds to the
+/// installation's current approval revision; a TV is never eligible.
+async fn set_private_policy(
+    State(api): State<ApiState>,
+    Path(surface_id): Path<String>,
+    headers: HeaderMap,
+    request: Result<Json<PrivateDisplayApproval>, JsonRejection>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let principal = owner(&headers, &api)?;
+    let surface_id = id(&surface_id)?;
+    let request = body(request)?;
+    if request.approval != crate::ambiance::personal::OWNER_APPROVAL {
+        return Err(invalid());
+    }
+    let result = api
+        .store
+        .runtime(
+            &principal,
+            crate::ambiance::RuntimeOperation::SetPrivatePolicy {
+                surface_id,
+                approval_revision: request.approval_revision,
+                expected_revision: request.expected_revision,
+                policy: request.policy,
+            },
+        )
+        .await?;
+    let crate::ambiance::RuntimeResult::PrivatePolicy(approval) = result else {
         return Err(ApiError(StatusCode::SERVICE_UNAVAILABLE, "unavailable"));
     };
     Ok(Json(json!({"approval": approval})))

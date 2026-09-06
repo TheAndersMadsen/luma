@@ -134,6 +134,9 @@ impl Candidate {
 
 pub const HINT_WEIGHT: i32 = 100;
 
+/// `personal` is the runtime's finding that this record is a personal
+/// surface whose owner declared it may show the requested class; it is the
+/// only way past the shared-room ceiling, and it never applies to speech.
 pub fn candidate(
     record: &Record,
     presence: Presence,
@@ -141,6 +144,7 @@ pub fn candidate(
     channel: Channel,
     privacy: PrivacyClass,
     hint: Option<RoutingTarget>,
+    personal: bool,
 ) -> Candidate {
     let capability = match (&record.binding, channel) {
         (Binding::Browser, Channel::VisualCard) => {
@@ -158,7 +162,8 @@ pub fn candidate(
         }
         _ => false,
     };
-    let blocker = if privacy > PrivacyClass::SharedRoom {
+    let personal = personal && channel == Channel::VisualCard;
+    let blocker = if privacy > PrivacyClass::SharedRoom && !personal {
         Some(Blocker::Privacy)
     } else if !capability {
         Some(Blocker::Capability)
@@ -272,6 +277,7 @@ mod tests {
                     Channel::VisualCard,
                     PrivacyClass::SharedRoom,
                     hint,
+                    false,
                 ),
                 candidate(
                     &phone,
@@ -280,6 +286,7 @@ mod tests {
                     Channel::VisualCard,
                     PrivacyClass::SharedRoom,
                     hint,
+                    false,
                 ),
                 candidate(
                     &display,
@@ -288,6 +295,7 @@ mod tests {
                     Channel::VisualCard,
                     PrivacyClass::SharedRoom,
                     hint,
+                    false,
                 ),
             ];
             rank(&mut candidates);
@@ -324,11 +332,44 @@ mod tests {
             Channel::VisualCard,
             PrivacyClass::Private,
             Some(RoutingTarget::AndroidTv),
+            false,
         );
         assert_eq!(
             (private.blocker, private.score()),
             (Some(Blocker::Privacy), 0)
         );
+        // The runtime's personal finding lifts the ceiling for a personal
+        // surface's card only: never for a surface without it, never for speech.
+        let own = candidate(
+            &phone,
+            present(Uuid::new_v4()),
+            tv.surface_id,
+            Channel::VisualCard,
+            PrivacyClass::Private,
+            None,
+            true,
+        );
+        assert_eq!((own.blocker, own.score()), (None, 1000));
+        let elsewhere = candidate(
+            &tv,
+            present(Uuid::new_v4()),
+            origin,
+            Channel::VisualCard,
+            PrivacyClass::Private,
+            Some(RoutingTarget::AndroidTv),
+            false,
+        );
+        assert_eq!(elsewhere.blocker, Some(Blocker::Privacy));
+        let spoken = candidate(
+            &phone,
+            present(Uuid::new_v4()),
+            origin,
+            Channel::AudioTts,
+            PrivacyClass::Private,
+            None,
+            true,
+        );
+        assert_eq!(spoken.blocker, Some(Blocker::Privacy));
     }
 
     #[test]
@@ -342,6 +383,7 @@ mod tests {
             Channel::VisualCard,
             PrivacyClass::Public,
             Some(RoutingTarget::Macos),
+            false,
         );
         assert_eq!(card.blocker, None);
         let candidate = candidate(
@@ -351,6 +393,7 @@ mod tests {
             Channel::AudioTts,
             PrivacyClass::Public,
             Some(RoutingTarget::Macos),
+            false,
         );
         assert_eq!(candidate.blocker, Some(Blocker::Capability));
         assert_eq!(candidate.hint, 0);
@@ -361,6 +404,7 @@ mod tests {
             Channel::AudioTts,
             PrivacyClass::SharedRoom,
             None,
+            false,
         );
         assert_eq!(current.blocker, None);
         assert!(!RoutingTarget::Linux.matches(&legacy));

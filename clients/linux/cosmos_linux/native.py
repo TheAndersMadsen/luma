@@ -1,0 +1,324 @@
+"""ctypes binding to the shared Rust surface client (``cosmos_surface.h``).
+
+The C worker owns the connection; this module sees public configuration,
+bounded commands and redacted snapshots. Key material and the journal stay
+behind the platform callbacks, which run on the worker thread.
+"""
+from __future__ import annotations
+
+import ctypes
+import os
+import sys
+import threading
+from pathlib import Path
+from typing import Callable, Optional, Protocol
+
+OK = 0
+EMPTY = 1
+BUFFER_TOO_SMALL = 2
+INVALID_ARGUMENT = -1
+QUEUE_FULL = -2
+CLOSED = -3
+PANIC = -4
+UNAVAILABLE = -5
+CALLBACK_NOT_FOUND = 1
+MAX_CONFIG_BYTES = 2048
+MAX_TEXT_BYTES = 4000
+MAX_JOURNAL_BYTES = 32768
+MAX_EVENT_BYTES = 16384
+MAX_SPEECH_BYTES = 1_048_576
+# Bounded like the macOS bridge: the client never signs more than one transcript.
+MAX_SIGN_MESSAGE_BYTES = 2048
+
+LIBRARY_NAMES = {
+    "linux": "libcosmos_surface_client_ffi.so",
+    "darwin": "libcosmos_surface_client_ffi.dylib",
+}
+ENVIRONMENT_VARIABLE = "COSMOS_SURFACE_LIBRARY"
+
+
+class NativeError(Exception):
+    """A status code the shared client returned instead of OK."""
+
+    def __init__(self, code: int, operation: str) -> None:
+        super().__init__(f"{operation} returned native status {code}")
+        self.code = code
+        self.operation = operation
+
+
+class PlatformBindings(Protocol):
+    """The platform-owned key and protected journal. Called on the worker thread."""
+
+    def public_key_sec1(self) -> bytes: ...
+
+    def sign_sha256(self, message: bytes) -> bytes: ...
+
+    def read_journal(self) -> Optional[bytes]: ...
+
+    def write_journal_atomically(self, journal: bytes) -> None: ...
+
+
+def library_name() -> str:
+    return LIBRARY_NAMES.get(sys.platform, LIBRARY_NAMES["linux"])
+
+
+def library_candidates() -> list[Path]:
+    """Where the shared library may live: an explicit override, then beside the app."""
+    candidates: list[Path] = []
+    override = os.environ.get(ENVIRONMENT_VARIABLE)
+    if override:
+        candidates.append(Path(override))
+    package = Path(__file__).resolve().parent
+    for directory in (package.parent, package):
+        for name in dict.fromkeys([library_name(), *LIBRARY_NAMES.values()]):
+            candidates.append(directory / name)
+    return candidates
+
+
+def find_library() -> Optional[Path]:
+    for candidate in library_candidates():
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+ReadCallback = ctypes.CFUNCTYPE(
+    ctypes.c_int32, ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint8), ctypes.c_size_t,
+    ctypes.POINTER(ctypes.c_size_t),
+)
+SignCallback = ctypes.CFUNCTYPE(
+    ctypes.c_int32, ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint8), ctypes.c_size_t,
+    ctypes.POINTER(ctypes.c_uint8), ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
+)
+WriteCallback = ctypes.CFUNCTYPE(
+    ctypes.c_int32, ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint8), ctypes.c_size_t,
+)
+
+
+class CosmosSurfaceCallbacks(ctypes.Structure):
+    _fields_ = [
+        ("context", ctypes.c_void_p),
+        ("public_key", ReadCallback),
+        ("sign_sha256", SignCallback),
+        ("read_journal", ReadCallback),
+        ("write_journal_atomically", WriteCallback),
+    ]
+
+
+class Library:
+    """One loaded copy of the shared client. Keep it loaded for the process lifetime."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = Path(path)
+        handle = ctypes.CDLL(str(self.path))
+        surface = ctypes.c_void_p
+        signatures = {
+            "cosmos_surface_create": [ctypes.POINTER(ctypes.c_uint8), ctypes.c_size_t,
+                                      ctypes.POINTER(CosmosSurfaceCallbacks), ctypes.POINTER(surface)],
+            "cosmos_surface_connect": [surface],
+            "cosmos_surface_send_text": [surface, ctypes.POINTER(ctypes.c_uint8), ctypes.c_size_t],
+            "cosmos_surface_retry_pending": [surface],
+            "cosmos_surface_cancel": [surface],
+            "cosmos_surface_set_visible": [surface, ctypes.c_int32],
+            "cosmos_surface_acknowledge": [surface],
+            "cosmos_surface_acknowledge_speech": [surface],
+            "cosmos_surface_speech_audio": [surface, ctypes.POINTER(ctypes.c_uint8), ctypes.c_size_t,
+                                            ctypes.POINTER(ctypes.c_size_t)],
+            "cosmos_surface_disconnect": [surface],
+            "cosmos_surface_poll": [surface, ctypes.POINTER(ctypes.c_uint8), ctypes.c_size_t,
+                                    ctypes.POINTER(ctypes.c_size_t)],
+            "cosmos_surface_destroy": [surface],
+        }
+        for name, argtypes in signatures.items():
+            function = getattr(handle, name)
+            function.argtypes = argtypes
+            function.restype = ctypes.c_int32
+        self._handle = handle
+
+    def __getattr__(self, name: str):
+        return getattr(self._handle, name)
+
+
+def load_library(explicit: Optional[Path] = None) -> Library:
+    path = Path(explicit) if explicit else find_library()
+    if path is None or not path.is_file():
+        searched = ", ".join(str(candidate) for candidate in library_candidates())
+        raise FileNotFoundError(
+            f"The shared Cosmos client library was not found. Set {ENVIRONMENT_VARIABLE} or place "
+            f"{library_name()} beside the app package (searched {searched}).")
+    return Library(path)
+
+
+def _copy_out(data: bytes, output, capacity: int, written) -> int:
+    if not written:
+        return INVALID_ARGUMENT
+    written[0] = 0
+    if not output or capacity < len(data):
+        return INVALID_ARGUMENT
+    ctypes.memmove(output, data, len(data))
+    written[0] = len(data)
+    return OK
+
+
+class Surface:
+    """One native handle. All methods are called from the application thread;
+    the platform bindings are called from the worker thread."""
+
+    def __init__(self, library: Library, config: bytes, platform: PlatformBindings) -> None:
+        if not isinstance(config, (bytes, bytearray)) or not config or len(config) > MAX_CONFIG_BYTES:
+            raise NativeError(INVALID_ARGUMENT, "create")
+        self._library = library
+        self._platform = platform
+        self._failure_lock = threading.Lock()
+        self._failure: Optional[str] = None
+        self._handle: Optional[int] = None
+        # The C contract copies the callback table but not the trampolines; they
+        # must outlive the handle, so they are retained on this object.
+        self._callbacks = CosmosSurfaceCallbacks(
+            None,
+            ReadCallback(self._public_key),
+            SignCallback(self._sign),
+            ReadCallback(self._read_journal),
+            WriteCallback(self._write_journal),
+        )
+        buffer = (ctypes.c_uint8 * len(config)).from_buffer_copy(bytes(config))
+        created = ctypes.c_void_p()
+        code = library.cosmos_surface_create(buffer, len(config), ctypes.byref(self._callbacks),
+                                             ctypes.byref(created))
+        if code != OK or not created.value:
+            raise NativeError(code if code != OK else UNAVAILABLE, "create")
+        self._handle = created.value
+
+    # -- platform callbacks (worker thread) ---------------------------------
+
+    def _record(self, kind: str) -> None:
+        with self._failure_lock:
+            self._failure = kind
+
+    def take_callback_failure(self) -> Optional[str]:
+        """The last callback failure ("identity" or "storage"), consumed."""
+        with self._failure_lock:
+            failure, self._failure = self._failure, None
+            return failure
+
+    def _public_key(self, _context, output, capacity, written) -> int:
+        try:
+            key = bytes(self._platform.public_key_sec1())
+            if len(key) != 65 or key[0] != 4:
+                raise ValueError("public key is not an uncompressed SEC1 point")
+            return _copy_out(key, output, capacity, written)
+        except Exception:
+            self._record("identity")
+            return UNAVAILABLE
+
+    def _sign(self, _context, message, length, output, capacity, written) -> int:
+        try:
+            if written:
+                written[0] = 0
+            if not message or length <= 0 or length > MAX_SIGN_MESSAGE_BYTES:
+                return INVALID_ARGUMENT
+            signature = bytes(self._platform.sign_sha256(ctypes.string_at(message, length)))
+            if not signature or len(signature) > 72:
+                raise ValueError("signature is not bounded DER")
+            return _copy_out(signature, output, capacity, written)
+        except Exception:
+            self._record("identity")
+            return UNAVAILABLE
+
+    def _read_journal(self, _context, output, capacity, written) -> int:
+        try:
+            if written:
+                written[0] = 0
+            journal = self._platform.read_journal()
+            if journal is None:
+                return CALLBACK_NOT_FOUND
+            journal = bytes(journal)
+            if not journal or len(journal) > MAX_JOURNAL_BYTES:
+                raise ValueError("journal is empty or oversized")
+            return _copy_out(journal, output, capacity, written)
+        except Exception:
+            self._record("storage")
+            return UNAVAILABLE
+
+    def _write_journal(self, _context, journal, length) -> int:
+        try:
+            if not journal or length <= 0 or length > MAX_JOURNAL_BYTES:
+                return INVALID_ARGUMENT
+            self._platform.write_journal_atomically(ctypes.string_at(journal, length))
+            return OK
+        except Exception:
+            self._record("storage")
+            return UNAVAILABLE
+
+    # -- commands (application thread) --------------------------------------
+
+    @property
+    def live(self) -> bool:
+        return self._handle is not None
+
+    def _require(self) -> int:
+        if self._handle is None:
+            raise NativeError(CLOSED, "command")
+        return self._handle
+
+    def connect(self) -> int:
+        return self._library.cosmos_surface_connect(self._require())
+
+    def send_text(self, text: str) -> int:
+        encoded = text.encode("utf-8")
+        if not encoded or len(encoded) > MAX_TEXT_BYTES or "\0" in text or not text.strip():
+            return INVALID_ARGUMENT
+        buffer = (ctypes.c_uint8 * len(encoded)).from_buffer_copy(encoded)
+        return self._library.cosmos_surface_send_text(self._require(), buffer, len(encoded))
+
+    def retry_pending(self) -> int:
+        return self._library.cosmos_surface_retry_pending(self._require())
+
+    def cancel(self) -> int:
+        return self._library.cosmos_surface_cancel(self._require())
+
+    def set_visible(self, visible: bool) -> int:
+        return self._library.cosmos_surface_set_visible(self._require(), 1 if visible else 0)
+
+    def acknowledge(self) -> int:
+        return self._library.cosmos_surface_acknowledge(self._require())
+
+    def acknowledge_speech(self) -> int:
+        return self._library.cosmos_surface_acknowledge_speech(self._require())
+
+    def disconnect(self) -> int:
+        return self._library.cosmos_surface_disconnect(self._require())
+
+    def poll(self) -> Optional[bytes]:
+        """The oldest snapshot, or None when the queue is empty."""
+        handle = self._require()
+        buffer = (ctypes.c_uint8 * MAX_EVENT_BYTES)()
+        written = ctypes.c_size_t(0)
+        code = self._library.cosmos_surface_poll(handle, buffer, MAX_EVENT_BYTES, ctypes.byref(written))
+        if code == EMPTY:
+            return None
+        if code != OK or written.value == 0 or written.value > MAX_EVENT_BYTES:
+            raise NativeError(code, "poll")
+        return ctypes.string_at(buffer, written.value)
+
+    def speech_audio(self, expected_length: int) -> bytes:
+        """The current spoken reply's exact bytes; the snapshot's byteLength bounds the copy."""
+        handle = self._require()
+        if expected_length <= 0 or expected_length > MAX_SPEECH_BYTES:
+            raise NativeError(INVALID_ARGUMENT, "speech_audio")
+        buffer = (ctypes.c_uint8 * expected_length)()
+        written = ctypes.c_size_t(0)
+        code = self._library.cosmos_surface_speech_audio(handle, buffer, expected_length, ctypes.byref(written))
+        if code != OK or written.value != expected_length:
+            raise NativeError(code if code != OK else BUFFER_TOO_SMALL, "speech_audio")
+        return ctypes.string_at(buffer, expected_length)
+
+    def destroy(self) -> int:
+        """Exclusively destroy the handle once; waits for every callback to finish."""
+        handle, self._handle = self._handle, None
+        if handle is None:
+            return OK
+        return self._library.cosmos_surface_destroy(handle)
+
+
+SurfaceFactory = Callable[[bytes, PlatformBindings], Surface]

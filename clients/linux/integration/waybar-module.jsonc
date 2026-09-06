@@ -1,0 +1,9 @@
+// Merge this module into your current Waybar config, then add
+// "custom/cosmos" to your desired modules array. It is a launcher, NOT live status.
+{
+  "custom/cosmos": {
+    "format": "◒",
+    "tooltip-format": "Open Cosmos · public text, shared card, spoken reply",
+    "on-click": "$HOME/.local/bin/cosmos"
+  }
+}

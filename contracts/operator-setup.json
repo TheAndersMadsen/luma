@@ -186,6 +186,30 @@
       "documentationAnchor": "README.md#development"
     },
     {
+      "id": "client.build.linux",
+      "tokens": ["client", "build", "linux"],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Cross-compile the shared client library in Docker and package the Linux (Omarchy) client archive outside the source checkout.",
+      "usage": "revival client build linux",
+      "documentationAnchor": "README.md#development"
+    },
+    {
+      "id": "client.check.linux",
+      "tokens": ["client", "check", "linux"],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Run the Linux client's Python unit tests and module compilation without Docker.",
+      "usage": "revival client check linux",
+      "documentationAnchor": "README.md#development"
+    },
+    {
       "id": "init",
       "tokens": [
         "init"

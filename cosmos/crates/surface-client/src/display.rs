@@ -33,6 +33,23 @@ pub enum DisplayContent {
     },
 }
 
+/// The class the runtime routed content at. A platform treats anything above
+/// `shared_room` as private: shown only while it is the foreground of an
+/// unlocked personal device, never previewed, never spoken.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Privacy {
+    Public,
+    SharedRoom,
+    NearUser,
+    Private,
+    Sensitive,
+}
+
+fn shared_room() -> Privacy {
+    Privacy::SharedRoom
+}
+
 /// One bounded card the runtime dispatched to this installation. It carries
 /// no authority: acknowledging it reports what was actually rendered.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -44,6 +61,33 @@ pub struct Display {
     pub content_digest: String,
     pub content: DisplayContent,
     pub expires_at_ms: i64,
+    #[serde(default = "shared_room")]
+    pub privacy: Privacy,
+}
+
+/// A private card is waiting for this installation. It names the kind of
+/// surface that asked, the class and the expiry; it never carries content.
+/// The card itself arrives as a render once the unlocked foreground reports
+/// visible.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Invitation {
+    pub id: Uuid,
+    pub origin: String,
+    pub privacy: Privacy,
+    pub expires_at_ms: i64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct InvitationFrame {
+    version: u8,
+    id: Uuid,
+    surface_id: Uuid,
+    incarnation: Uuid,
+    origin: String,
+    privacy: Privacy,
+    expires_at: i64,
 }
 
 /// Inert credit token. Platforms render text and one HTTPS link per part.
@@ -67,6 +111,8 @@ struct Command {
     content_digest: String,
     content: DisplayContent,
     expires_at: i64,
+    #[serde(default)]
+    privacy: Option<Privacy>,
 }
 
 #[derive(Deserialize)]
@@ -88,12 +134,18 @@ enum Frame {
         stamp: Stamp,
         speech: crate::speech::SpeechFrame,
     },
+    Invite {
+        version: u8,
+        stamp: Stamp,
+        invitation: Option<InvitationFrame>,
+    },
 }
 
 pub(crate) enum Incoming {
     Render(Display),
     Clear(Uuid),
     Speak(crate::speech::SpeechFrame),
+    Invite(Option<Invitation>),
 }
 
 /// The exact bound connection this frame must name.
@@ -410,6 +462,7 @@ pub(crate) fn parse_frame(
                 || command.expires_at <= now_ms
                 || !valid_content(&command.content)
                 || command.content_digest != content_digest(&command.content)
+                || command.privacy == Some(Privacy::Sensitive)
             {
                 return Err(Error::InvalidResponse);
             }
@@ -421,9 +474,46 @@ pub(crate) fn parse_frame(
                     content_digest: command.content_digest,
                     content: command.content,
                     expires_at_ms: command.expires_at,
+                    privacy: command.privacy.unwrap_or(Privacy::SharedRoom),
                 }),
                 stamp,
             )
+        }
+        Frame::Invite {
+            version,
+            stamp,
+            invitation,
+        } => {
+            if version != 1 || !valid_stamp(&stamp) {
+                return Err(Error::InvalidResponse);
+            }
+            let invitation = match invitation {
+                None => None,
+                Some(frame) => {
+                    if frame.version != 1
+                        || frame.id.is_nil()
+                        || frame.surface_id != expected.surface_id
+                        || frame.incarnation != expected.incarnation
+                        || frame.origin.is_empty()
+                        || frame.origin.len() > 32
+                        || !frame
+                            .origin
+                            .bytes()
+                            .all(|b| b.is_ascii_lowercase() || b == b'_')
+                        || !matches!(frame.privacy, Privacy::NearUser | Privacy::Private)
+                        || frame.expires_at <= now_ms
+                    {
+                        return Err(Error::InvalidResponse);
+                    }
+                    Some(Invitation {
+                        id: frame.id,
+                        origin: frame.origin,
+                        privacy: frame.privacy,
+                        expires_at_ms: frame.expires_at,
+                    })
+                }
+            };
+            (Incoming::Invite(invitation), stamp)
         }
         Frame::Clear {
             version,

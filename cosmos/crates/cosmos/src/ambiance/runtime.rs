@@ -479,11 +479,55 @@ impl AmbianceRuntime {
             principal: principal.to_owned(),
             fence: Some(fence.clone()),
         };
+        // Above the shared-room ceiling private memory never leaves the
+        // runtime: the reply is built here from the owner's notes, without
+        // cognition or any provider, and routed like any private card, which
+        // only a personal surface declared for the class can render. Sensitive
+        // content has no display ceiling, and without a personal surface for
+        // the class there is nowhere the reply could appear.
         if privacy_floor > PrivacyClass::SharedRoom {
-            self.cancel(principal, &fence).await?;
-            return Err(Status::failed_precondition(
-                "request cannot be handled on this surface",
-            ));
+            let personal = privacy_floor <= PrivacyClass::Private
+                && self.personal_surfaces(principal, privacy_floor).await > 0;
+            if !personal {
+                self.cancel(principal, &fence).await?;
+                return Err(Status::failed_precondition(
+                    "request cannot be handled on this surface",
+                ));
+            }
+            let card = self.private_notes_card(principal, &fence, &text).await?;
+            let privacy = privacy_floor.max(input_privacy(&card));
+            let mut result = self
+                .store
+                .runtime(
+                    principal,
+                    RuntimeOperation::Propose {
+                        turn_id: fence.turn_id,
+                        generation: fence.generation,
+                        worker: fence.worker,
+                        intent: SemanticIntent::VisualTextCard { text: card },
+                        privacy,
+                        hint: None,
+                    },
+                )
+                .await
+                .map_err(runtime_error)?;
+            if matches!(result, RuntimeResult::Blocked) {
+                tracing::info!(turn = %fence.turn_id, "ambiance private reply had no personal surface");
+                self.store
+                    .runtime(
+                        principal,
+                        RuntimeOperation::Finish {
+                            turn_id: fence.turn_id,
+                            generation: fence.generation,
+                            worker: fence.worker,
+                        },
+                    )
+                    .await
+                    .map_err(runtime_error)?;
+                result = RuntimeResult::Blocked;
+            }
+            cancellation.fence = None;
+            return Ok(result);
         }
         let surface_note = if screen_only {
             " The requesting surface shows visual cards and cannot play speech; prefer visual_text_card over informational_speech."
@@ -699,6 +743,111 @@ impl AmbianceRuntime {
         }
         cancellation.fence = None;
         Ok(result)
+    }
+
+    async fn personal_surfaces(&self, principal: &str, privacy: PrivacyClass) -> usize {
+        match self
+            .store
+            .runtime(principal, RuntimeOperation::PersonalSurfaces { privacy })
+            .await
+        {
+            Ok(RuntimeResult::PersonalSurfaces(count)) => count,
+            _ => 0,
+        }
+    }
+
+    /// The owner's saved notes are the only private memory this increment
+    /// offers, and they never leave the runtime: the private card is composed
+    /// here, newest first, only from entries the server could index, with
+    /// entries matching the request's own words listed first. The offer is
+    /// logged under the turn and refused by the ledger unless the turn is
+    /// above the shared-room ceiling with a personal surface to render on.
+    async fn private_notes_card(
+        &self,
+        principal: &str,
+        fence: &TurnFence,
+        request: &str,
+    ) -> Result<String, Status> {
+        let notes = self
+            .store
+            .recent_notes(principal, 12, None, None)
+            .await
+            .map_err(|_| Status::unavailable("private memory is unavailable"))?;
+        let total = notes.len();
+        let words: Vec<String> = request
+            .to_lowercase()
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|word| word.chars().count() >= 4)
+            .filter(|word| {
+                !matches!(
+                    *word,
+                    "private"
+                        | "privat"
+                        | "notes"
+                        | "note"
+                        | "noter"
+                        | "read"
+                        | "show"
+                        | "what"
+                        | "mine"
+                        | "latest"
+                        | "seneste"
+                        | "besked"
+                        | "beskeder"
+                        | "message"
+                        | "messages"
+                        | "vis"
+                        | "please"
+                )
+            })
+            .map(str::to_owned)
+            .collect();
+        let mut readable: Vec<String> = notes
+            .iter()
+            .filter_map(|note| note.indexed_text.as_deref())
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(|text| {
+                text.chars()
+                    .take(400)
+                    .collect::<String>()
+                    .replace(['\n', '\r'], " ")
+            })
+            .collect();
+        if !words.is_empty() {
+            readable.sort_by_key(|text| {
+                let lowered = text.to_lowercase();
+                !words.iter().any(|word| lowered.contains(word.as_str()))
+            });
+        }
+        let mut card = String::from("Your notes, newest first");
+        let mut count = 0u32;
+        for text in &readable {
+            let line = format!("\n\n{}. {text}", count + 1);
+            if card.len() + line.len() > 3800 {
+                break;
+            }
+            card.push_str(&line);
+            count += 1;
+        }
+        let unopened = total.saturating_sub(readable.len());
+        if count == 0 {
+            card = "You have no readable saved notes.".to_owned();
+        }
+        if unopened > 0 {
+            card.push_str(&format!("\n\n{unopened} more could not be opened."));
+        }
+        self.store
+            .runtime(
+                principal,
+                RuntimeOperation::OfferPrivateContext {
+                    fence: fence.clone(),
+                    count,
+                },
+            )
+            .await
+            .map_err(runtime_error)?;
+        Ok(card)
     }
 
     /// The owner's bounded recent context, offered as one sentence of system
@@ -1367,6 +1516,11 @@ pub(crate) fn input_privacy(text: &str) -> PrivacyClass {
         PrivacyClass::Sensitive
     } else if [
         "my notes",
+        "my private",
+        "private message",
+        "private messages",
+        "private note",
+        "private notes",
         "my memory",
         "my memories",
         "my messages",
@@ -1378,6 +1532,12 @@ pub(crate) fn input_privacy(text: &str) -> PrivacyClass {
         "medical record",
         "bank account",
         "mine noter",
+        "mine private",
+        "min private",
+        "privat besked",
+        "private beskeder",
+        "privat note",
+        "private noter",
         "min hukommelse",
         "mine minder",
         "mine beskeder",
@@ -1413,8 +1573,11 @@ pub(super) fn runtime_error(error: super::RuntimeError) -> Status {
         super::RuntimeError::Busy => Status::resource_exhausted("another turn is active"),
         super::RuntimeError::InvalidRequest => Status::invalid_argument("invalid runtime request"),
         super::RuntimeError::NotFound => Status::not_found("runtime action not found"),
-        super::RuntimeError::Stale | super::RuntimeError::PolicyBlocked => {
-            Status::failed_precondition("runtime operation is no longer eligible")
+        super::RuntimeError::Stale => {
+            Status::failed_precondition("runtime operation is no longer current")
+        }
+        super::RuntimeError::PolicyBlocked => {
+            Status::failed_precondition("runtime operation is blocked by policy")
         }
     }
 }

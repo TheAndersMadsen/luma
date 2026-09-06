@@ -11,7 +11,7 @@ it("browser runtime wire bounds match the canonical contract", () => {
   expect(publicText("é".repeat(2001))).toBe(false);
   expect(() => parseRoomRequest({ ...proof, epoch: runtimeEpoch })).not.toThrow();
   expect(() => parseRoomRequest({ ...proof, epoch: runtimeEpoch, trust: 2 })).toThrow();
-  expect(() => parseCommand({ ...proof, version: 1, actionId: proof.surfaceId, turnId: proof.incarnation, generation: 1, channel: "visual.card", contentDigest: "a".repeat(64), expiresAt: 1, content: { kind: "html", text: "<script/>" } })).toThrow();
+  expect(() => parseCommand({ ...proof, version: 1, actionId: proof.surfaceId, turnId: proof.incarnation, generation: 1, channel: "visual.card", contentDigest: "a".repeat(64), privacy: "shared_room", expiresAt: 1, content: { kind: "html", text: "<script/>" } })).toThrow();
 });
 it("accepts only exact room fields and the configured same-origin signal path", () => {
   const valid = roomConnection(runtimeEpoch);
@@ -38,7 +38,7 @@ function commandWithContent(content: unknown) {
   return {
     version: 1, actionId: runtimeEpoch, turnId: runtimeEpoch, generation: 1,
     surfaceId: runtimeEpoch, incarnation: runtimeEpoch, channel: "visual.card",
-    contentDigest: "a".repeat(64), expiresAt: 1, content,
+    contentDigest: "a".repeat(64), privacy: "shared_room", expiresAt: 1, content,
   };
 }
 function withoutField(value: object, omitted: string) {

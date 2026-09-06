@@ -15,7 +15,7 @@ beforeEach(() => {
 });
 afterEach(() => { runtime.stop(); vi.unstubAllGlobals(); vi.useRealTimers(); });
 const command = (): RenderCommand => ({ version: 1, surfaceId, incarnation, actionId: crypto.randomUUID(),
-  turnId: crypto.randomUUID(), generation: 1, channel: "visual.card", expiresAt: Date.now() + 60000,
+  turnId: crypto.randomUUID(), generation: 1, channel: "visual.card", privacy: "shared_room", expiresAt: Date.now() + 60000,
   content: { kind: "text", text: "Synthetic public text" }, contentDigest: createHash("sha256").update("Synthetic public text").digest("hex") });
 const placesCommand = (): RenderCommand & { content: PlacesContent } => ({ ...command(),
   content: { kind: "places", query: "Central Library", items: [{ placeId: "place-library", name: "Central Library",

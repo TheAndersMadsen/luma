@@ -57,6 +57,7 @@ fn delivery_action(intent: crate::ambiance::SemanticIntent) -> crate::ambiance::
         root_id: Uuid::new_v4(),
         confirmation_root: None,
         origin_surface: Uuid::nil(),
+        expression: false,
         turn_id: Uuid::new_v4(),
         generation: 1,
         worker: Uuid::new_v4(),

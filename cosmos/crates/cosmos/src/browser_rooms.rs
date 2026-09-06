@@ -429,9 +429,12 @@ async fn deliver(
     // One synthesis job per (member, action). A job owns the disclosure lease;
     // aborting it retires the exact turn instead of leaving audio unowned.
     let mut speaking: BTreeMap<(String, Uuid), tokio::task::JoinHandle<()>> = BTreeMap::new();
+    // The invitation each personal member last received (None = withdrawn).
+    let mut invited: BTreeMap<String, Option<Uuid>> = BTreeMap::new();
     loop {
         let members = participants.lock().await.clone();
         sent.retain(|(identity, _), _| members.contains_key(identity));
+        invited.retain(|identity, _| members.contains_key(identity));
         speaking.retain(|(identity, _), job| {
             if !members.contains_key(identity) {
                 job.abort();
@@ -490,6 +493,46 @@ async fn deliver(
                 _ => return Err(Error::Unavailable),
             };
             if let RoomProof::Native(proof) = &member.proof {
+                let invitation = match tokio::time::timeout(
+                    ADMISSION_TIMEOUT,
+                    runtime.store.runtime(
+                        principal,
+                        RuntimeOperation::Invitation {
+                            connection: connection.clone(),
+                        },
+                    ),
+                )
+                .await
+                .map_err(|_| Error::Unavailable)?
+                {
+                    Ok(RuntimeResult::Invitation(invitation)) => invitation,
+                    Err(crate::ambiance::RuntimeError::InvalidOrigin) => {
+                        participants.lock().await.remove(identity);
+                        continue;
+                    }
+                    _ => return Err(Error::Unavailable),
+                };
+                let current = invitation.as_ref().map(|i| i.id);
+                if invited.get(identity).copied().unwrap_or(None) != current {
+                    sequence = sequence
+                        .checked_add(1)
+                        .filter(|n| *n <= 9_007_199_254_740_991)
+                        .ok_or(Error::Unavailable)?;
+                    let stamp = InputStamp {
+                        epoch,
+                        sequence,
+                        instance_id: Uuid::new_v4(),
+                    };
+                    let payload =
+                        invite_payload(runtime, principal, proof, invitation.as_ref(), &stamp)
+                            .await;
+                    if !received(session.invoke(identity, payload).await, &stamp) {
+                        leave(runtime, principal, &member.proof).await;
+                        participants.lock().await.remove(identity);
+                        continue 'member;
+                    }
+                    invited.insert(identity.clone(), current);
+                }
                 for action in actions.iter().filter(|a| {
                     a.channel == Channel::AudioTts && a.status == ActionStatus::Proposed
                 }) {
@@ -782,6 +825,48 @@ async fn speak_frames(
             }
         }
     }
+}
+
+/// The invite frame tells a personal member that a private card is waiting for
+/// its unlocked foreground: the member's own bound connection, the class, the
+/// expiry and which kind of surface asked. It never carries content; `null`
+/// withdraws it.
+async fn invite_payload(
+    runtime: &AmbianceRuntime,
+    principal: &str,
+    proof: &crate::ambiance::NativeProof,
+    invitation: Option<&crate::ambiance::personal::Invitation>,
+    stamp: &InputStamp,
+) -> String {
+    let invitation = match invitation {
+        None => serde_json::Value::Null,
+        Some(invitation) => {
+            let origin = match runtime
+                .store
+                .surface(principal, invitation.origin_surface)
+                .await
+                .ok()
+                .flatten()
+                .map(|surface| surface.binding)
+            {
+                Some(crate::surface_registry::Binding::Native { platform, .. }) => platform,
+                Some(crate::surface_registry::Binding::Pin { .. }) => "pin".to_owned(),
+                Some(crate::surface_registry::Binding::Browser) => "browser".to_owned(),
+                None => "unknown".to_owned(),
+            };
+            serde_json::json!({
+                "version": 1,
+                "id": invitation.id,
+                "surfaceId": proof.surface_id,
+                "incarnation": proof.incarnation,
+                "origin": origin,
+                "privacy": invitation.privacy,
+                "expiresAt": invitation.expires_at_ms,
+            })
+        }
+    };
+    serde_json::json!({"version":1,"kind":"invite","stamp":stamp,"invitation":invitation})
+        .to_string()
 }
 
 fn render_payload(

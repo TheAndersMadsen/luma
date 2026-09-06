@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Cosmos
+Comment=Ask Cosmos from this computer
+Exec=REPLACE_WITH_ABSOLUTE_PATH_TO_COSMOS_LAUNCHER
+Icon=dk.andersmadsen.cosmos.linux
+Terminal=false
+Categories=Utility;
+StartupNotify=true
+StartupWMClass=dk.andersmadsen.cosmos.linux

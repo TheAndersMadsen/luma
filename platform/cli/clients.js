@@ -1,7 +1,11 @@
 'use strict';
 
+const child = require('node:child_process');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
+const { candidatesFor, isExecutableFile } = require('./authority');
 const { ROOT, BUILD_DIR, cosmosTestEnvironment, secureDirectory, isInsideSource, fail, info } = require('./context');
 const { timedRun } = require('./timing');
 const { validateHostToolchains } = require('./toolchain');
@@ -15,12 +19,16 @@ function ownDirectory(directory) {
   return directory;
 }
 
-const USAGE = 'usage: ./revival client (build | check) (macos | android) | ./revival client install android --serial SERIAL [--confirm]';
+const USAGE = 'usage: ./revival client (build | check) (macos | android | linux) | ./revival client install android --serial SERIAL [--confirm]';
 
 function clientCommand(args) {
   const [operation, platform, ...extra] = args;
   if (platform === 'android') {
     androidClient(operation, extra);
+    return;
+  }
+  if (platform === 'linux') {
+    linuxClient(operation, extra);
     return;
   }
   if (!['build', 'check'].includes(operation) || platform !== 'macos' || extra.length) {
@@ -111,11 +119,21 @@ function clientCommand(args) {
   }
   const application = path.join(staging, 'Cosmos.app');
   const contents = path.join(application, 'Contents');
+  const resources = path.join(contents, 'Resources');
   fs.mkdirSync(path.join(contents, 'MacOS'), { recursive: true });
   fs.mkdirSync(path.join(contents, 'Frameworks'));
+  fs.mkdirSync(resources);
   fs.copyFileSync(path.join(binaryDirectory, 'CosmosDesktop'), path.join(contents, 'MacOS', 'Cosmos'));
   fs.chmodSync(path.join(contents, 'MacOS', 'Cosmos'), 0o755);
   fs.copyFileSync(library, path.join(contents, 'Frameworks', libraryName));
+  // The app icon and the SwiftPM resource bundle (nebula texture, menu-bar
+  // template) are ordinary bundle resources; the app looks the bundle up there.
+  fs.copyFileSync(path.join(packagePath, 'Resources', 'Cosmos.icns'), path.join(resources, 'Cosmos.icns'));
+  const resourceBundle = path.join(binaryDirectory, 'CosmosMac_CosmosMac.bundle');
+  if (!fs.statSync(resourceBundle).isDirectory()) {
+    throw new Error('The Swift build did not produce the CosmosMac resource bundle');
+  }
+  fs.cpSync(resourceBundle, path.join(resources, 'CosmosMac_CosmosMac.bundle'), { recursive: true });
   fs.writeFileSync(path.join(contents, 'Info.plist'), `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
@@ -125,6 +143,7 @@ function clientCommand(args) {
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>0.2.0</string>
 <key>CFBundleVersion</key><string>0.2.0</string>
+<key>CFBundleIconFile</key><string>Cosmos</string>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>LSUIElement</key><true/>
 <key>NSHighResolutionCapable</key><true/>
@@ -276,4 +295,217 @@ function androidClient(operation, extra) {
   info('[observed] Debug-signed local build; distribution signing, Play or device acceptance remain separate. Install with ./revival client install android --serial SERIAL --confirm.');
 }
 
-module.exports = { clientCommand };
+
+const LINUX_BUILDER_IMAGE = 'ai-pin-revival/linux-client-builder:dev';
+const LINUX_BUILDER_INPUTS = Object.freeze([
+  'platform/containers/linux-client/Dockerfile',
+  'cosmos/native/linux-toolchain.sh',
+]);
+const LINUX_LIBRARY = 'libcosmos_surface_client_ffi.so';
+const LINUX_ARCHIVE = 'cosmos-linux-x86_64.tar.gz';
+const LINUX_ARCHIVE_ROOT = 'cosmos-linux';
+// The verified linux-x64 libwebrtc tree cannot live on a case-insensitive host
+// filesystem (its i386 sysroot has case-colliding names), so the builder keeps
+// it in a Docker volume and verifies it there on every build.
+const LINUX_WEBRTC_VOLUME = 'ai-pin-revival-linux-client-webrtc';
+
+function linuxDirectories(base = path.join(BUILD_DIR, 'linux-client')) {
+  return Object.freeze({
+    base,
+    state: path.join(base, 'state'),
+    cache: path.join(base, 'cache'),
+    output: path.join(base, 'out'),
+    imageStamp: path.join(base, 'cache', 'image.sha256'),
+    archive: path.join(base, LINUX_ARCHIVE),
+  });
+}
+
+function nativeDockerPlatform(architecture = process.arch) {
+  if (architecture === 'x64') return 'linux/amd64';
+  if (architecture === 'arm64') return 'linux/arm64';
+  throw new Error(`Linux client builds do not support host architecture ${architecture}`);
+}
+
+function mount(source, target, readOnly = false) {
+  return `type=bind,src=${source},dst=${target}${readOnly ? ',readonly' : ''}`;
+}
+
+/// The builder image runs on the host's own architecture and cross-compiles
+/// for the owner's x86_64 PC; rustc is never emulated. Its only input is the
+/// pinned native toolchain script, so the build context is cosmos/native.
+function linuxBuilderBuildInvocation(image = LINUX_BUILDER_IMAGE, architecture = process.arch) {
+  return Object.freeze({
+    command: 'docker',
+    args: Object.freeze([
+      'build',
+      '--platform', nativeDockerPlatform(architecture),
+      '--build-arg', 'CLIENT_ARCH=amd64',
+      '--file', path.join(ROOT, 'platform/containers/linux-client/Dockerfile'),
+      '--tag', image,
+      path.join(ROOT, 'cosmos', 'native'),
+    ]),
+  });
+}
+
+/// Source read-only, Cargo state and caches external, the verified libwebrtc
+/// tree in its own volume, one output directory. The container runs as the
+/// operator's uid and needs network for crates and the libwebrtc archive.
+function linuxBuilderRunInvocation(directories, image = LINUX_BUILDER_IMAGE, architecture = process.arch,
+                                   uid = typeof process.getuid === 'function' ? process.getuid() : os.userInfo().uid,
+                                   gid = typeof process.getgid === 'function' ? process.getgid() : os.userInfo().gid,
+                                   volume = LINUX_WEBRTC_VOLUME) {
+  return Object.freeze({
+    command: 'docker',
+    args: Object.freeze([
+      'run', '--rm', '--init',
+      '--platform', nativeDockerPlatform(architecture),
+      '--user', `${uid}:${gid}`,
+      '--read-only',
+      '--tmpfs', '/tmp:rw,nosuid,nodev,mode=1777,size=2g',
+      '--mount', mount(ROOT, '/workspace', true),
+      '--mount', mount(directories.state, '/state'),
+      '--mount', mount(directories.cache, '/cache'),
+      '--mount', `type=volume,src=${volume},dst=/opt/webrtc`,
+      '--mount', mount(directories.output, '/out'),
+      image,
+    ]),
+  });
+}
+
+function linuxBuilderFingerprint(architecture = process.arch) {
+  const digest = crypto.createHash('sha256');
+  digest.update(nativeDockerPlatform(architecture));
+  digest.update('\0');
+  for (const relative of LINUX_BUILDER_INPUTS) {
+    digest.update(relative);
+    digest.update('\0');
+    digest.update(fs.readFileSync(path.join(ROOT, relative)));
+    digest.update('\0');
+  }
+  return digest.digest('hex');
+}
+
+function ensureLinuxBuilderImage(directories, environment, image = LINUX_BUILDER_IMAGE) {
+  const fingerprint = linuxBuilderFingerprint();
+  const current = fs.existsSync(directories.imageStamp) ? fs.readFileSync(directories.imageStamp, 'utf8').trim() : '';
+  if (current === fingerprint) {
+    const inspected = timedRun('Linux client builder image cache', 'docker', ['image', 'inspect', image], {
+      env: environment, allowFailure: true, capture: true,
+    });
+    if (!inspected.signal && inspected.status === 0) return false;
+  }
+  const invocation = linuxBuilderBuildInvocation(image);
+  timedRun('Linux client builder image', invocation.command, [...invocation.args], { env: environment });
+  fs.writeFileSync(directories.imageStamp, `${fingerprint}\n`, { mode: 0o600 });
+  return true;
+}
+
+function linuxClientPython(environment) {
+  const probe = 'import sys; print("%d.%d" % sys.version_info[:2])';
+  for (const candidate of candidatesFor('python3')) {
+    if (!isExecutableFile(candidate)) continue;
+    const result = child.spawnSync(candidate, ['-c', probe], { env: environment, encoding: 'utf8' });
+    const [major, minor] = String(result.stdout || '').trim().split('.').map(Number);
+    if (result.status === 0 && (major > 3 || (major === 3 && minor >= 11))) return candidate;
+  }
+  fail('The Linux client needs Python 3.11 or newer at a supported fixed path (/usr/bin/python3, /opt/homebrew/bin/python3 or /usr/local/bin/python3).');
+  return null;
+}
+
+/// Everything the archive ships, copied from the checkout and the built
+/// library into one staging root. Bytecode caches and editor residue stay out.
+function stageLinuxArchive(clientPath, library, staging) {
+  const root = path.join(staging, LINUX_ARCHIVE_ROOT);
+  fs.mkdirSync(root, { mode: 0o755 });
+  const excluded = (source) => {
+    const name = path.basename(source);
+    return name === '__pycache__' || name.endsWith('.pyc') || name === '.DS_Store';
+  };
+  for (const entry of ['cosmos_linux', 'integration', 'icons']) {
+    fs.cpSync(path.join(clientPath, entry), path.join(root, entry), { recursive: true, filter: (source) => !excluded(source) });
+  }
+  fs.copyFileSync(path.join(clientPath, 'requirements.txt'), path.join(root, 'requirements.txt'));
+  fs.copyFileSync(path.join(clientPath, 'install-user.sh'), path.join(root, 'install-user.sh'));
+  fs.chmodSync(path.join(root, 'install-user.sh'), 0o755);
+  fs.copyFileSync(library, path.join(root, LINUX_LIBRARY));
+  fs.chmodSync(path.join(root, LINUX_LIBRARY), 0o644);
+  const entries = [];
+  const walk = (directory, prefix) => {
+    for (const name of fs.readdirSync(directory).sort()) {
+      const full = path.join(directory, name);
+      const relative = prefix ? `${prefix}/${name}` : name;
+      if (fs.statSync(full).isDirectory()) walk(full, relative);
+      else entries.push(relative);
+    }
+  };
+  walk(root, '');
+  return Object.freeze(entries);
+}
+
+/// The Omarchy client: Python and Qt Quick over the same shared Rust client,
+/// cross-compiled for x86_64 Linux inside the pinned builder container.
+function linuxClient(operation, extra) {
+  if (!['build', 'check'].includes(operation) || extra.length) fail(USAGE, 64);
+  const clientPath = path.join(ROOT, 'clients', 'linux');
+  if (!fs.existsSync(path.join(clientPath, 'cosmos_linux', '__main__.py'))) {
+    fail('Native client builds require the source checkout.');
+  }
+  if (isInsideSource(BUILD_DIR)) {
+    fail('Native client build output must remain outside the source checkout.');
+  }
+  const environment = cosmosTestEnvironment();
+  if (operation === 'check') {
+    const python = linuxClientPython(environment);
+    const libraries = ['libcosmos_surface_client_ffi.dylib', LINUX_LIBRARY]
+      .map((name) => path.join(environment.CARGO_TARGET_DIR, 'debug', name))
+      .filter((candidate) => fs.existsSync(candidate));
+    const testEnvironment = {
+      ...environment,
+      PYTHONDONTWRITEBYTECODE: '1',
+      ...(libraries.length > 0 ? { COSMOS_SURFACE_LIBRARY: libraries[0] } : {}),
+    };
+    info(`[observed] Linux client Python: ${python}`);
+    timedRun('Linux client unit tests', python, ['-B', '-m', 'unittest', 'discover', '-s', 'tests', '-t', '.'], {
+      cwd: clientPath, env: testEnvironment,
+    });
+    info(libraries.length > 0
+      ? `[observed] ctypes smoke test used the shared client library at ${libraries[0]}.`
+      : '[observed] no shared client library under the external Cargo target, so the ctypes smoke test was skipped; run ./revival client check macos first to build one.');
+    info('[implemented] Linux client unit tests and module compilation passed; nothing was built, launched or installed.');
+    return;
+  }
+  const directories = linuxDirectories();
+  for (const directory of [directories.base, directories.state, directories.cache, directories.output]) {
+    ownDirectory(directory);
+  }
+  ensureLinuxBuilderImage(directories, environment);
+  const library = path.join(directories.output, LINUX_LIBRARY);
+  fs.rmSync(library, { force: true });
+  const run = linuxBuilderRunInvocation(directories);
+  timedRun('Linux shared client library', run.command, [...run.args], { env: environment });
+  if (!fs.existsSync(library)) throw new Error(`The builder did not produce ${library}`);
+  const staging = fs.mkdtempSync(path.join(directories.base, 'stage-'));
+  try {
+    const entries = stageLinuxArchive(clientPath, library, staging);
+    fs.rmSync(directories.archive, { force: true });
+    timedRun('Linux client archive', 'tar', [
+      '--create', '--gzip', '--file', directories.archive, '-C', staging, LINUX_ARCHIVE_ROOT,
+    ], { env: { ...environment, COPYFILE_DISABLE: '1' } });
+    info(`[implemented] Linux client archive (${entries.length} files): ${directories.archive}`);
+  } finally {
+    fs.rmSync(staging, { recursive: true, force: true });
+  }
+  info(`[observed] Cross-compiled x86_64 development build; the verified libwebrtc inputs stay in the ${LINUX_WEBRTC_VOLUME} Docker volume. Unpack the archive on the Omarchy PC and run cosmos-linux/install-user.sh there; enrollment, Center approval and desktop acceptance remain explicit steps on that machine.`);
+}
+
+module.exports = {
+  clientCommand,
+  linuxDirectories,
+  linuxBuilderBuildInvocation,
+  linuxBuilderRunInvocation,
+  linuxBuilderFingerprint,
+  stageLinuxArchive,
+  LINUX_BUILDER_IMAGE,
+  LINUX_ARCHIVE_ROOT,
+  LINUX_WEBRTC_VOLUME,
+};

@@ -155,8 +155,8 @@
     {
       "id": "center-native-approval-test-definition",
       "kind": "test-definition",
-      "path": "center/src/app/settings/account/surfaces/NativeSurfaces.test.tsx",
-      "anchor": "requires review and a separate owner confirmation of the key and limited shared-display permission",
+      "path": "center/src/app/settings/account/surfaces/Devices.test.tsx",
+      "anchor": "shows this browser and a calm empty state, then requires review and a separate owner confirmation of the key",
       "scope": "Defines descriptor/fingerprint review, explicit owner approval, exact reapproval/revocation revisions, lifecycle fencing, ambiguous-write lockout and roster identity/size validation.",
       "limitation": "Rendered DOM with mocked HTTP responses. The UI records approval only; this is not evidence of active room delivery, installed native clients or physical devices."
     },
@@ -327,6 +327,38 @@
       "anchor": "fn frames_bind_the_connection_and_assemble_in_order",
       "scope": "Defines that the shared native client accepts speak frames only for its bound surface and incarnation with the exact text digest, assembles ordered bounded chunks into one reply, and discards partial replies on out-of-order, oversized, header-less or cleared frames.",
       "limitation": "Frame assembly only. Playback and acknowledgment belong to platform code; no audio decoding, device output or physical acceptance is established."
+    },
+    {
+      "id": "private-routing-definition",
+      "kind": "implementation",
+      "path": "cosmos/crates/cosmos/src/ambiance/personal.rs",
+      "anchor": "pub(super) fn invitation_for",
+      "scope": "A request above shared_room is answered in the same turn: the runtime retrieves the owner's saved notes itself, proposes the reply at the request's class, and policy admits only a personal installation the owner declared for that class (visual card, never speech) while every shared surface is suppressed with a privacy blocker. The personal installation holds the card while connected, is told only that something waits, receives it once its unlocked foreground reports visible, and loses it when that foreground goes away. A TV can never hold the permission; without a personal surface the request is refused before cognition, and the origin's expression is the same shared-safe sentence used for any elsewhere-routed card.",
+      "limitation": "Unlock is enforced by the personal client before it reports visible, not proven to Cosmos; the permission is the owner's statement about the device. Notes are the only private source; unopenable notes are counted, not read."
+    },
+    {
+      "id": "private-routing-room-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/native_room_tests.rs",
+      "anchor": "native_room_private_request_routes_only_to_the_owners_personal_surface",
+      "scope": "Without a personal surface a Mac's private request is refused before cognition. With the phone declared, the same request builds the private card from the notes inside the runtime with no cognition call, proposes it for the phone alone with the Mac and a TV blocked by privacy, the Mac polls nothing, the phone is told only that something waits and its poll does not dispatch until it reports visible, the card is then dispatched and acknowledged, and it is cancelled when the phone reports not visible. A TV is refused the permission.",
+      "limitation": "Store-level test with a synthetic model; no real phone unlock, LiveKit transport or Pin audio."
+    },
+    {
+      "id": "private-display-policy-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/policy.rs",
+      "anchor": "hints_rank_only_eligible_candidates_and_never_the_origin",
+      "scope": "The runtime's personal finding lifts the shared-room ceiling for a personal surface's visual card only: never for a surface without it, never for speech.",
+      "limitation": "Pure policy test."
+    },
+    {
+      "id": "center-private-display-test-definition",
+      "kind": "test-definition",
+      "path": "center/src/app/settings/account/surfaces/DeviceCard.test.tsx",
+      "anchor": "private replies post the private ceiling and revoke with null, while a TV never reads or offers them",
+      "scope": "The Devices page records the owner's private-display statement per device as one switch with read-before-write and exact confirmation, never offers it for a TV, and never claims success on a lost reply.",
+      "limitation": "Component test with a mocked fetch."
     },
     {
       "id": "recent-context-definition",
@@ -595,8 +627,8 @@
     {
       "id": "center-enrollment-lifecycle-definition",
       "kind": "implementation",
-      "path": "center/src/app/settings/account/surfaces/Surfaces.tsx",
-      "anchor": "export function Surfaces()",
+      "path": "center/src/app/settings/account/surfaces/Devices.tsx",
+      "anchor": "export function Devices()",
       "scope": "Provides owner approval, leave, revoke and listing controls for the current shared browser tab, with visibility and page lifecycle reporting.",
       "limitation": "This definition covers approval lifecycle only; the separate browser-render test defines the DOM acknowledgment slice. Physical privacy and hardware acceptance remain unverified."
     },
@@ -979,8 +1011,8 @@
       "sourceSections": ["4.3", "4.4", "4.6", "9.2"],
       "requirement": "With guests present, a request to view a private message continues on an authenticated eligible private Pixel surface without exposing the message on TV or through audible Pin output.",
       "acceptance": "Keep the shared-origin request free of private retrieval. After fresh local user authentication, admit a new linked personal-origin request with independent source/purpose authorization; selecting or unlocking Pixel cannot elevate the original turn. Recheck output eligibility at dereference and dispatch, hide notification previews and suppress on lock/background/revocation. Verify on the actual phone and Pin that no private payload or privacy-specific shared expression leaks.",
-      "status": "pending",
-      "evidence": []
+      "status": "partial",
+      "evidence": ["private-routing-definition", "private-routing-room-test-definition", "private-display-policy-test-definition", "center-private-display-test-definition"]
     },
     {
       "id": "release-and-live-verification",

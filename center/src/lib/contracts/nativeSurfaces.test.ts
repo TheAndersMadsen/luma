@@ -71,6 +71,9 @@ const SURFACE = {
   revision: 1,
   publicKeyFingerprint: FINGERPRINT,
   revoked: false,
+  connected: false,
+  visible: false,
+  privateDisplay: false,
 };
 
 it("accepts the four explicit native platforms and normalizes enrollment UUID case", () => {
@@ -205,6 +208,21 @@ it("keeps the fixed posture at shared text input, one shared visual card and one
     { renderVerified: true }, { playbackVerified: true }, { approval: "native-private-v1" }]) {
     expect(() => parseNativeSurface({ ...SURFACE, ...changed })).toThrow("unsupported_native_posture");
   }
+});
+
+it("reads the runtime's presence flags and treats a missing flag as false, never as a claim", () => {
+  const { connected: _connected, visible: _visible, privateDisplay: _privateDisplay, ...bare } = SURFACE;
+  expect(parseNativeSurface(bare)).toEqual(SURFACE);
+  expect(parseNativeSurface({ ...bare, connected: true, visible: true, privateDisplay: true }))
+    .toEqual({ ...SURFACE, connected: true, visible: true, privateDisplay: true });
+  expect(parseNativeSurface({ ...bare, connected: true })).toEqual({ ...SURFACE, connected: true });
+  for (const key of ["connected", "visible", "privateDisplay"]) {
+    for (const value of [null, 1, "true", "false", {}]) {
+      expect(() => parseNativeSurface({ ...bare, [key]: value })).toThrow("invalid_native_surface");
+    }
+  }
+  expect(parseNativeSurfaces({ native: [{ ...bare, connected: true, visible: false, privateDisplay: true }] }))
+    .toEqual([{ ...SURFACE, connected: true, privateDisplay: true }]);
 });
 
 it("validates response identities and safe revisions while allowing a terminal safe revision", () => {

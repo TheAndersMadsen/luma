@@ -11,7 +11,7 @@ mod transport;
 mod wire;
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-pub use display::{AttributionPart, Display, DisplayContent, PlaceItem};
+pub use display::{AttributionPart, Display, DisplayContent, Invitation, PlaceItem, Privacy};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 pub use speech::Speech;
@@ -156,6 +156,8 @@ pub struct Status {
     pub display: Option<Display>,
     /// The spoken reply the runtime delivered to this connection, if current.
     pub speech: Option<Speech>,
+    /// A current private continuation invitation, if any.
+    pub invitation: Option<Invitation>,
     /// The foreground visibility Cosmos last accepted for this connection.
     pub visible: bool,
 }
@@ -190,6 +192,7 @@ pub struct Client {
     cleanup: transport::CleanupScope,
     display: tokio::sync::watch::Sender<Option<Display>>,
     speech: tokio::sync::watch::Sender<Option<Speech>>,
+    invitation: tokio::sync::watch::Sender<Option<Invitation>>,
     visible: bool,
 }
 
@@ -255,8 +258,20 @@ impl Client {
             cleanup: transport::CleanupScope::default(),
             display: tokio::sync::watch::channel(None).0,
             speech: tokio::sync::watch::channel(None).0,
+            invitation: tokio::sync::watch::channel(None).0,
             visible: false,
         })
+    }
+
+    /// Wakes when a private card starts or stops waiting for this
+    /// installation. The platform shows a generic prompt (no content) and
+    /// reports its unlocked foreground visible to receive the card.
+    pub fn invitation_changes(&self) -> tokio::sync::watch::Receiver<Option<Invitation>> {
+        self.invitation.subscribe()
+    }
+
+    pub fn invitation(&self) -> Option<Invitation> {
+        self.status().invitation
     }
 
     /// Wakes when the runtime delivers or retires a card. Platforms render the
@@ -300,6 +315,7 @@ impl Client {
         drop(self.session.take());
         self.display.send_replace(None);
         self.speech.send_replace(None);
+        self.invitation.send_replace(None);
         self.visible = false;
         tokio::time::timeout(Duration::from_secs(2), self.cleanup.finish())
             .await
@@ -343,6 +359,11 @@ impl Client {
                 .borrow()
                 .clone()
                 .filter(|speech| connected && now < speech.expires_at_ms),
+            invitation: self
+                .invitation
+                .borrow()
+                .clone()
+                .filter(|invitation| connected && now < invitation.expires_at_ms),
             visible: connected && self.visible,
         }
     }
@@ -467,6 +488,7 @@ impl Client {
         self.persist(next)?;
         self.display.send_replace(None);
         self.speech.send_replace(None);
+        self.invitation.send_replace(None);
         self.visible = false;
         self.session = Some(
             transport::Connection::connect(
@@ -476,6 +498,7 @@ impl Client {
                 transport::Outputs {
                     display: self.display.clone(),
                     speech: self.speech.clone(),
+                    invitation: self.invitation.clone(),
                 },
             )
             .await?,

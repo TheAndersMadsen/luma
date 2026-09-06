@@ -24,6 +24,7 @@ const CONTRIBUTOR_POLICY_TESTS = Object.freeze([
   'cli-setup.test.mjs',
   'fast-workflow.test.mjs',
   'fresh-install.test.mjs',
+  'linux-client.test.mjs',
   'revival.test.mjs',
   'setup-projection.test.mjs',
   'wire-divergence.test.mjs',

@@ -14,6 +14,7 @@ fn render_action(intent: SemanticIntent) -> Action {
         root_id: Uuid::new_v4(),
         confirmation_root: None,
         origin_surface: Uuid::nil(),
+        expression: false,
         turn_id: Uuid::new_v4(),
         generation: 3,
         worker: Uuid::new_v4(),
@@ -61,7 +62,7 @@ fn browser_runtime_command_preserves_text_wire_and_requires_matching_transient_p
     assert_eq!(
         command(&text, None),
         Some(
-            json!({"version":1,"actionId":text.id,"turnId":text.turn_id,"generation":text.generation,"surfaceId":text.surface_id,"incarnation":text.incarnation,"channel":"visual.card","contentDigest":text.content_digest,"content":{"kind":"text","text":text.intent.text()},"expiresAt":text.display_expires_at_ms})
+            json!({"version":1,"actionId":text.id,"turnId":text.turn_id,"generation":text.generation,"surfaceId":text.surface_id,"incarnation":text.incarnation,"channel":"visual.card","contentDigest":text.content_digest,"content":{"kind":"text","text":text.intent.text()},"expiresAt":text.display_expires_at_ms,"privacy":text.privacy})
         )
     );
     let card = place_card("cafes in Copenhagen");
