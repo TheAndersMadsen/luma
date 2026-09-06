@@ -4,6 +4,7 @@
 use crate::{
     Error,
     display::{self, Display, Expected, Incoming},
+    speech::{Assembler, Speech},
     wire::RoomResponse,
 };
 use cosmos_rtc::{Invocation, Session};
@@ -163,11 +164,24 @@ pub(crate) struct Connection {
 
 /// Only the attributed runtime participant may deliver frames, and only for
 /// the exact bound connection. Anything else receives no transport receipt.
+pub(crate) struct Outputs {
+    pub(crate) display: watch::Sender<Option<Display>>,
+    pub(crate) speech: watch::Sender<Option<Speech>>,
+}
+
+impl Outputs {
+    fn retire(&self) {
+        self.display.send_replace(None);
+        self.speech.send_replace(None);
+    }
+}
+
 fn answer(
     invocation: Invocation,
     runtime: &str,
     expected: Expected,
-    display: &watch::Sender<Option<Display>>,
+    outputs: &Outputs,
+    assembler: &mut Assembler,
 ) {
     let reply = if invocation.caller != runtime {
         Err(cosmos_rtc::Error::Denied)
@@ -176,11 +190,27 @@ fn answer(
             .and_then(|now| display::parse_frame(&invocation.payload, expected, now))
         {
             Ok((Incoming::Render(card), reply)) => {
-                display.send_replace(Some(card));
+                outputs.display.send_replace(Some(card));
                 Ok(reply)
             }
+            Ok((Incoming::Speak(frame), reply)) => match assembler.accept(frame) {
+                Ok(Some(speech)) => {
+                    outputs.speech.send_replace(Some(speech));
+                    Ok(reply)
+                }
+                Ok(None) => Ok(reply),
+                Err(_) => Err(cosmos_rtc::Error::Invalid),
+            },
             Ok((Incoming::Clear(action_id), reply)) => {
-                display.send_if_modified(|current| {
+                assembler.clear(action_id);
+                outputs.display.send_if_modified(|current| {
+                    let matched = current.as_ref().is_some_and(|c| c.action_id == action_id);
+                    if matched {
+                        *current = None;
+                    }
+                    matched
+                });
+                outputs.speech.send_if_modified(|current| {
                     let matched = current.as_ref().is_some_and(|c| c.action_id == action_id);
                     if matched {
                         *current = None;
@@ -227,7 +257,7 @@ impl Connection {
         room: &RoomResponse,
         cleanup: &CleanupScope,
         expected: Expected,
-        display: watch::Sender<Option<Display>>,
+        outputs: Outputs,
     ) -> Result<Self, Error> {
         // Register before the first await, including the SDK connection work.
         // The local Drop signal covers canceled handoff and coordinator waits.
@@ -251,6 +281,7 @@ impl Connection {
         let guarded_shutdown = shutdown.shutdown.clone();
         let runtime = room.runtime_participant.clone();
         let guard = tokio::spawn(async move {
+            let mut assembler = Assembler::default();
             loop {
                 if !guarded_fence
                     .observe(*connected.borrow_and_update(), &peers.borrow_and_update())
@@ -266,12 +297,12 @@ impl Connection {
                     }
                     invocation = inbox.recv() => {
                         let Some(invocation) = invocation else { break; };
-                        answer(invocation, &runtime, expected, &display);
+                        answer(invocation, &runtime, expected, &outputs, &mut assembler);
                     }
                 }
             }
-            // A lost coordinator retires any card it dispatched.
-            display.send_replace(None);
+            // A lost coordinator retires any card or speech it dispatched.
+            outputs.retire();
             guarded_fence.stop();
             guarded_shutdown.send_replace(true);
         });

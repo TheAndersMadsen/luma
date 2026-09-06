@@ -107,6 +107,7 @@ fn queued_handle() -> (Box<CosmosSurface>, mpsc::Receiver<Command>) {
             commands,
             shutdown,
             events: Arc::new(Mutex::new(Events::default())),
+            speech_audio: Arc::new(Mutex::new(None)),
             closed: Arc::new(AtomicBool::new(false)),
             callbacks_finished: Mutex::new(None),
             worker: None,

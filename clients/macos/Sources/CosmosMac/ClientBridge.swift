@@ -102,6 +102,38 @@ public struct DisplayCard: Equatable, Sendable {
     static let nilUUID = UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))
 }
 
+/// One complete spoken reply Cosmos delivered. The native client verified its binding and
+/// digest; the app fetches the exact bytes, plays them to the end, then acknowledges.
+public struct SpeechReply: Equatable, Sendable {
+    public let actionID: UUID
+    public let turnID: UUID
+    public let generation: UInt64
+    public let contentDigest: String
+    public let expiresAtMs: Int64
+    public let text: String
+    public let format: String
+    public let byteLength: Int
+
+    public init(actionID: UUID, turnID: UUID, generation: UInt64, contentDigest: String,
+                expiresAtMs: Int64, text: String, format: String, byteLength: Int) throws {
+        guard actionID != DisplayCard.nilUUID, turnID != DisplayCard.nilUUID,
+              generation > 0, generation <= 9_007_199_254_740_991, expiresAtMs > 0,
+              contentDigest.count == 64, contentDigest.allSatisfy({ $0.isHexDigit && !$0.isUppercase }),
+              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, text.utf8.count <= 4000,
+              !text.contains("\0"), format == "audio/mpeg", byteLength > 0, byteLength <= 1_048_576 else {
+            throw ClientFailure.invalidResponse
+        }
+        self.actionID = actionID
+        self.turnID = turnID
+        self.generation = generation
+        self.contentDigest = contentDigest
+        self.expiresAtMs = expiresAtMs
+        self.text = text
+        self.format = format
+        self.byteLength = byteLength
+    }
+}
+
 /// Contains presentation-safe state only. Credentials and journal data never enter the UI.
 public struct ClientSnapshot: Equatable, Sendable {
     public var phase: ClientPhase
@@ -116,12 +148,14 @@ public struct ClientSnapshot: Equatable, Sendable {
     public var visible: Bool
     /// The delivered card, if still current. Presence is not acknowledgment.
     public var display: DisplayCard?
+    /// The delivered spoken reply, if still current. Presence is not playback.
+    public var speech: SpeechReply?
 
     public init(phase: ClientPhase = .disconnected, hasPending: Bool = false,
                 admission: TextAdmission? = nil, failure: ClientFailure? = nil,
                 pendingOpen: Bool = false, needsReconnect: Bool = false,
                 canRetry: Bool = false, hasUnknownOutcome: Bool = false,
-                visible: Bool = false, display: DisplayCard? = nil) {
+                visible: Bool = false, display: DisplayCard? = nil, speech: SpeechReply? = nil) {
         self.phase = phase
         self.hasPending = hasPending
         self.pendingOpen = pendingOpen
@@ -132,6 +166,7 @@ public struct ClientSnapshot: Equatable, Sendable {
         self.failure = failure
         self.visible = visible
         self.display = display
+        self.speech = speech
     }
 }
 
@@ -169,5 +204,9 @@ public protocol ClientBridge: AnyObject {
     func setVisible(_ visible: Bool) async throws
     /// Acknowledge the exact card after its complete render, credits included.
     func acknowledge(display: DisplayCard) async throws
+    /// The exact audio bytes of the current spoken reply.
+    func speechAudio(for reply: SpeechReply) async throws -> Data
+    /// Acknowledge the exact reply only after its audio played to the end.
+    func acknowledgeSpeech(_ reply: SpeechReply) async throws
     func disconnect() async
 }

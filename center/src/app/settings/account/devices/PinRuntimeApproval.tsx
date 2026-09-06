@@ -5,7 +5,7 @@ import { DEVICE_ID, PIN_APPROVAL, parsePinSurface, parsePinSurfaces, type PinSur
 import { record } from "@/lib/contracts/surfaces";
 import settings from "../../settings.module.css";
 import styles from "./devices.module.css";
-import { SpeechDisclosure } from "./SpeechDisclosure";
+import { SpeechPermission } from "../surfaces/SpeechPermission";
 import { LocalVoicePermission } from "./LocalVoicePermission";
 import { LookupPermission } from "../surfaces/LookupPermission";
 
@@ -137,7 +137,8 @@ export function PinRuntimeApproval() {
         </button>}
       </div>{pin ? <>
         <LocalVoicePermission key={`voice:${pin.surfaceId}:${pin.revision}`} pin={pin} />
-        <SpeechDisclosure key={`speech:${pin.surfaceId}:${pin.revision}`} pin={pin} />
+        <SpeechPermission key={`speech:${pin.surfaceId}:${pin.revision}`} surfaceId={pin.surfaceId} approvalRevision={pin.revision}
+          label={`Pin ${pin.deviceId}`} canApprove={!pin.revoked && pin.currentPaired === true} />
         {(["web", "places"] as const).map(service => <LookupPermission key={`lookup:${service}:${pin.surfaceId}:${pin.revision}`} service={service} surfaceId={pin.surfaceId}
           approvalRevision={pin.revision} label={`Pin ${pin.deviceId}`} canApprove={!pin.revoked && pin.currentPaired === true}
           onRefreshApprovals={refresh} />)}

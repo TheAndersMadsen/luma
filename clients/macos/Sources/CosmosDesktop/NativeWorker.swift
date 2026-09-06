@@ -118,7 +118,7 @@ private let writeJournal: CosmosSurfaceWrite = { pointer, bytes, length in
 
 enum NativeCommand: String, Sendable {
     case connect, sendText = "send_text", retryPending = "retry_pending", cancel
-    case setVisible = "set_visible", acknowledge, disconnect
+    case setVisible = "set_visible", acknowledge, acknowledgeSpeech = "acknowledge_speech", disconnect
 }
 
 /// All handle operations, including destruction, are serialized away from AppKit.
@@ -181,6 +181,7 @@ actor NativeWorker {
             guard let visible else { throw ClientFailure.invalidResponse }
             status = cosmos_surface_set_visible(handle, visible ? 1 : 0)
         case .acknowledge: status = cosmos_surface_acknowledge(handle)
+        case .acknowledgeSpeech: status = cosmos_surface_acknowledge_speech(handle)
         case .sendText:
             guard let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                   !text.contains("\0"),
@@ -214,6 +215,21 @@ actor NativeWorker {
             events.append(try NativeEvent.decode(Data(bytes.prefix(written))))
         }
         return events
+    }
+
+    /// The current spoken reply's exact bytes; the snapshot's byteLength bounds the copy.
+    func speechAudio(expectedLength: Int) throws -> Data {
+        guard let handle else { throw ClientFailure.connectionUnavailable }
+        guard expectedLength > 0, expectedLength <= Int(COSMOS_SURFACE_MAX_SPEECH_BYTES) else {
+            throw ClientFailure.invalidResponse
+        }
+        var bytes = [UInt8](repeating: 0, count: expectedLength)
+        var written = 0
+        let status = cosmos_surface_speech_audio(handle, &bytes, bytes.count, &written)
+        guard status == COSMOS_SURFACE_OK, written == expectedLength else {
+            throw status == COSMOS_SURFACE_EMPTY ? ClientFailure.connectionUnavailable : .invalidResponse
+        }
+        return Data(bytes)
     }
 
     func takeCallbackFailure() -> ClientFailure? { context?.takeFailure() }

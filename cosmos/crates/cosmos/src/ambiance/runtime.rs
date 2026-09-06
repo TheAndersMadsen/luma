@@ -435,8 +435,22 @@ impl AmbianceRuntime {
         if let Some(started) = started {
             let _ = started.send(fence.clone());
         }
-        // Browser and native origins render cards and cannot play speech.
-        let screen_only = matches!(origin_kind, OriginKind::Browser | OriginKind::Native);
+        // Browsers render cards only. A native origin can receive disclosed
+        // speech once the owner approved its speech profile; the proposal
+        // still falls back to a card when no speech surface is eligible.
+        let screen_only = match origin_kind {
+            OriginKind::Browser => true,
+            OriginKind::Pin => false,
+            OriginKind::Native => !self
+                .store
+                .surface(principal, fence.origin_surface)
+                .await
+                .ok()
+                .flatten()
+                .is_some_and(|surface| {
+                    surface.manifest == crate::surface_registry::native_manifest()
+                }),
+        };
         self.cognize(
             principal,
             fence,
@@ -474,7 +488,7 @@ impl AmbianceRuntime {
         let surface_note = if screen_only {
             " The requesting surface shows visual cards and cannot play speech; prefer visual_text_card over informational_speech."
         } else {
-            ""
+            " The requesting surface can play a short spoken reply and show visual cards; prefer informational_speech for brief conversational answers and visual_text_card for content the user will read or keep."
         };
         let messages = [
             ChatMessage::system(format!(
@@ -637,9 +651,8 @@ impl AmbianceRuntime {
             }
             other => other,
         };
-        let result = self
-            .store
-            .runtime(
+        let propose = |intent: SemanticIntent| {
+            self.store.runtime(
                 principal,
                 RuntimeOperation::Propose {
                     turn_id: fence.turn_id,
@@ -650,8 +663,20 @@ impl AmbianceRuntime {
                     hint,
                 },
             )
-            .await
-            .map_err(runtime_error)?;
+        };
+        let spoken = match &intent {
+            SemanticIntent::InformationalSpeech { text } => Some(text.clone()),
+            _ => None,
+        };
+        let mut result = propose(intent).await.map_err(runtime_error)?;
+        // Speech that no approved, visible, disclosure-permitted surface can
+        // play is shown as the same text instead of silently ending the turn.
+        if let (RuntimeResult::Blocked, Some(text)) = (&result, spoken) {
+            tracing::info!(turn = %fence.turn_id, "ambiance speech had no eligible surface; proposing a card");
+            result = propose(SemanticIntent::VisualTextCard { text })
+                .await
+                .map_err(runtime_error)?;
+        }
         if matches!(result, RuntimeResult::Proposed(_)) {
             if let Some(pending) = pending_visual.take() {
                 pending.commit();
@@ -954,7 +979,11 @@ impl AmbianceRuntime {
                     _ = interval.tick() => check().await?,
                     result = &mut work => {
                         check().await?;
-                        return result.map_err(|_| Status::unavailable("cognition unavailable"));
+                        return result.map_err(|error| {
+                            // Content-free: the provider failure class only.
+                            tracing::warn!(turn = %fence.turn_id, error = %error, "cognition provider failed");
+                            Status::unavailable("cognition unavailable")
+                        });
                     }
                 }
             }

@@ -11,7 +11,7 @@ struct NativeEvent: Decodable, Sendable {
         let approval: String
 
         func verified() throws -> PublicDescriptor {
-            guard platform == "macos", approval == "native-shared-display-v2" else {
+            guard platform == "macos", approval == "native-shared-speech-v3" else {
                 throw ClientFailure.invalidResponse
             }
             return try PublicDescriptor(enrollmentID: enrollmentId, publicKey: publicKey)
@@ -120,6 +120,22 @@ struct NativeEvent: Decodable, Sendable {
         }
     }
 
+    struct Speech: Decodable, Sendable {
+        let actionId: UUID
+        let turnId: UUID
+        let generation: UInt64
+        let contentDigest: String
+        let expiresAtMs: Int64
+        let text: String
+        let format: String
+        let byteLength: Int
+
+        func verified() throws -> SpeechReply {
+            try SpeechReply(actionID: actionId, turnID: turnId, generation: generation, contentDigest: contentDigest,
+                            expiresAtMs: expiresAtMs, text: text, format: format, byteLength: byteLength)
+        }
+    }
+
     let version: Int
     let kind: String
     let operation: String
@@ -134,6 +150,7 @@ struct NativeEvent: Decodable, Sendable {
     let admission: Admission?
     let visible: Bool
     let display: Display?
+    let speech: Speech?
     let eventsSkipped: UInt64
 
     static func decode(_ bytes: Data) throws -> NativeEvent {
@@ -141,7 +158,7 @@ struct NativeEvent: Decodable, Sendable {
             let event = try JSONDecoder().decode(Self.self, from: bytes)
             guard event.version == 1, event.kind == "state",
                   ["prepare", "connect", "send_text", "retry_pending", "cancel", "set_visible", "acknowledge",
-                   "display", "disconnect", "heartbeat"].contains(event.operation),
+                   "acknowledge_speech", "display", "speech", "disconnect", "heartbeat"].contains(event.operation),
                   ["ok", "error"].contains(event.outcome),
                   (event.outcome == "ok") == (event.error == nil),
                   event.error.map({ $0.utf8.count <= 64 }) ?? true else {
@@ -152,6 +169,7 @@ struct NativeEvent: Decodable, Sendable {
             _ = try event.admission?.verified()
             _ = try event.descriptor?.verified()
             _ = try event.display?.verified()
+            _ = try event.speech?.verified()
             return event
         } catch {
             throw ClientFailure.invalidResponse
@@ -169,7 +187,7 @@ struct NativeEvent: Decodable, Sendable {
         case "invalid_response", "invalid_journal", "panic": return .invalidResponse
         case "denied": return .approvalRequired
         case "busy": return .busy
-        case "no_pending_operation", "disconnected", "expired", "stale", "unavailable", "no_admission", "no_display":
+        case "no_pending_operation", "disconnected", "expired", "stale", "unavailable", "no_admission", "no_display", "no_speech":
             return .connectionUnavailable
         default: return .invalidResponse
         }

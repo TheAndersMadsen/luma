@@ -31,6 +31,8 @@ struct SpyModel {
     gate: Option<Arc<Gate>>,
     /// An explicit screen the synthetic request named, proposed as a target.
     target: Mutex<Option<&'static str>>,
+    /// Propose a spoken reply instead of a card.
+    speak: std::sync::atomic::AtomicBool,
 }
 
 #[tonic::async_trait]
@@ -59,8 +61,13 @@ impl ChatModel for SpyModel {
             gate.entered.notify_one();
             gate.release.notified().await;
         }
+        let kind = if self.speak.load(Ordering::SeqCst) {
+            "informational_speech"
+        } else {
+            "visual_text_card"
+        };
         let mut arguments = serde_json::json!({
-            "intent":{"kind":"visual_text_card","text":"A bounded public fact."},
+            "intent":{"kind":kind,"text":"A bounded public fact."},
             "privacy":"public"
         });
         if let Some(target) = *self.target.lock().unwrap() {
@@ -1239,4 +1246,244 @@ async fn native_room_visible_installation_renders_hinted_cards_and_hidden_ones_n
             .load(Ordering::SeqCst),
         0
     );
+}
+
+/// Speech reaches a native installation only through the origin owner's
+/// provider disclosure: without it the same text becomes a card, a room poll
+/// never stock-claims audio, the disclosure claims the exact action, and only
+/// the native member's audio.tts acknowledgment completes the turn.
+#[tokio::test]
+async fn native_room_speech_routes_only_with_disclosure_and_is_acknowledged_after_playback() {
+    let model = Arc::new(SpyModel::default());
+    model.speak.store(true, Ordering::SeqCst);
+    let fixture = fixture(model.clone()).await;
+    let native_stamp = |sequence: u64, instance_id: Uuid| InputStamp {
+        sequence,
+        instance_id,
+        ..fixture.stamp.clone()
+    };
+    let control =
+        |sequence: u64, instance_id: Uuid, control: BrowserControl| RuntimeOperation::RoomControl {
+            connection: RoomProof::Native(fixture.native.clone()),
+            stamp: native_stamp(sequence, instance_id),
+            control,
+        };
+    fixture
+        .store
+        .runtime(
+            PRINCIPAL,
+            control(1, Uuid::new_v4(), BrowserControl::State { visible: true }),
+        )
+        .await
+        .unwrap();
+    // No disclosure policy: the spoken proposal has no eligible surface and is
+    // shown as the same text on the visible installation instead.
+    let RuntimeResult::Proposed(card) = fixture
+        .runtime
+        .sequenced_room_text(
+            PRINCIPAL,
+            RoomProof::Native(fixture.native.clone()),
+            native_stamp(2, Uuid::new_v4()),
+            CURRENT_TEXT.into(),
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("card fallback required")
+    };
+    assert_eq!(card.channel, Channel::VisualCard);
+    assert_eq!(card.surface_id, fixture.native.surface_id);
+    assert_eq!(card.intent.text(), "A bounded public fact.");
+    fixture
+        .store
+        .runtime(
+            PRINCIPAL,
+            control(
+                3,
+                card.turn_id,
+                BrowserControl::Cancel {
+                    turn_id: card.turn_id,
+                    generation: card.generation,
+                },
+            ),
+        )
+        .await
+        .unwrap();
+    // The owner grants the origin's Azure Speech disclosure through the
+    // common surface policy; the native surface is now a speech candidate.
+    fixture
+        .store
+        .runtime(
+            PRINCIPAL,
+            RuntimeOperation::SetDisclosurePolicy {
+                surface_id: fixture.native.surface_id,
+                approval_revision: 1,
+                expected_revision: 0,
+                policy: Some(disclosure::Policy {
+                    provider: disclosure::Provider::AzureSpeech {
+                        region: "westeurope".into(),
+                    },
+                    maximum_class: PrivacyClass::SharedRoom,
+                    transcription: false,
+                    synthesis: true,
+                }),
+            },
+        )
+        .await
+        .unwrap();
+    let RuntimeResult::Proposed(speech) = fixture
+        .runtime
+        .sequenced_room_text(
+            PRINCIPAL,
+            RoomProof::Native(fixture.native.clone()),
+            native_stamp(4, Uuid::new_v4()),
+            CURRENT_TEXT.into(),
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("spoken output required")
+    };
+    assert_eq!(speech.channel, Channel::AudioTts);
+    assert_eq!(speech.surface_id, fixture.native.surface_id);
+    assert_eq!(speech.origin_surface, fixture.native.surface_id);
+    // A room poll reports the audio action but never stock-claims it.
+    let RuntimeResult::Pending(pending) = fixture
+        .store
+        .runtime(
+            PRINCIPAL,
+            RuntimeOperation::Poll {
+                connection: RoomProof::Native(fixture.native.clone()),
+            },
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("native poll required")
+    };
+    assert_eq!(
+        pending.iter().map(|a| (a.id, a.status)).collect::<Vec<_>>(),
+        vec![(speech.id, ActionStatus::Proposed)]
+    );
+    // Playback cannot be acknowledged before the disclosure claims the action.
+    let acknowledge = |sequence: u64| {
+        control(
+            sequence,
+            speech.id,
+            BrowserControl::Acknowledge {
+                action_id: speech.id,
+                turn_id: speech.turn_id,
+                generation: speech.generation,
+                channel: Channel::AudioTts,
+                content_digest: speech.content_digest.clone(),
+            },
+        )
+    };
+    assert!(
+        fixture
+            .store
+            .runtime(PRINCIPAL, acknowledge(5))
+            .await
+            .is_err()
+    );
+    let RuntimeResult::DisclosureStarted(_) = fixture
+        .store
+        .runtime(
+            PRINCIPAL,
+            RuntimeOperation::StartDisclosure {
+                fence: speech.fence(),
+                request: disclosure::Request {
+                    provider: disclosure::Provider::AzureSpeech {
+                        region: "westeurope".into(),
+                    },
+                    purpose: disclosure::Purpose::Synthesis,
+                    payload_digest: hash(b"synthetic synthesis payload"),
+                    content_digest: speech.content_digest.clone(),
+                    action_id: Some(speech.id),
+                    privacy: speech.privacy,
+                },
+                id: Uuid::new_v4(),
+            },
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("disclosure must claim the exact speech action")
+    };
+    let RuntimeResult::Pending(claimed) = fixture
+        .store
+        .runtime(
+            PRINCIPAL,
+            RuntimeOperation::Poll {
+                connection: RoomProof::Native(fixture.native.clone()),
+            },
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("native poll required")
+    };
+    assert_eq!(claimed[0].status, ActionStatus::Dispatched);
+    assert_eq!(claimed[0].attempts, 1);
+    // Only the exact native member acknowledges complete playback; the
+    // browser is not this action's surface and the ledger finishes the turn.
+    assert!(
+        fixture
+            .store
+            .runtime(
+                PRINCIPAL,
+                RuntimeOperation::RoomControl {
+                    connection: RoomProof::Browser(fixture.browser.clone()),
+                    stamp: InputStamp {
+                        epoch: Uuid::new_v4(),
+                        sequence: 1,
+                        instance_id: speech.id,
+                    },
+                    control: BrowserControl::Acknowledge {
+                        action_id: speech.id,
+                        turn_id: speech.turn_id,
+                        generation: speech.generation,
+                        channel: Channel::AudioTts,
+                        content_digest: speech.content_digest.clone(),
+                    },
+                },
+            )
+            .await
+            .is_err()
+    );
+    assert!(matches!(
+        fixture
+            .store
+            .runtime(PRINCIPAL, acknowledge(6))
+            .await
+            .unwrap(),
+        RuntimeResult::ControlAccepted { duplicate: false }
+    ));
+    let RuntimeResult::Pending(acknowledged) = fixture
+        .store
+        .runtime(
+            PRINCIPAL,
+            RuntimeOperation::Poll {
+                connection: RoomProof::Native(fixture.native.clone()),
+            },
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("native poll required")
+    };
+    assert_eq!(acknowledged[0].status, ActionStatus::Acknowledged);
+    assert!(
+        fixture
+            .store
+            .ambiance_ledger_events(PRINCIPAL)
+            .await
+            .into_iter()
+            .any(|event| matches!(
+                event,
+                ledger::LedgerEvent::Runtime(event)
+                    if matches!(event.data, RuntimeData::TurnFinished { turn_id, .. } if turn_id == speech.turn_id)
+            ))
+    );
+    assert_eq!(model.calls.load(Ordering::SeqCst), 2);
 }

@@ -186,7 +186,7 @@ try {
   stage = "owner native installation approval";
   const descriptor = native.nativeDescriptor;
   assert.deepEqual(Object.keys(descriptor).sort(), ["approval", "enrollmentId", "platform", "publicKey"]);
-  assert.equal(descriptor.approval, "native-shared-display-v2");
+  assert.equal(descriptor.approval, "native-shared-speech-v3");
   assert.equal(descriptor.platform, "macos");
   const keyBytes = Buffer.from(descriptor.publicKey, "base64url");
   assert.equal(keyBytes.length, 65);
@@ -196,10 +196,12 @@ try {
   assert.equal(fingerprint, native.nativePublicKeyFingerprint);
   const expectedNative = {
     surfaceId: native.nativeId, enrollmentId: descriptor.enrollmentId, platform: "macos", name: "Native device",
-    approval: "native-shared-display-v2", revision: 1, publicKeyFingerprint: fingerprint,
-    manifest: { class: "native", capabilities: { input: ["text.public"], output: {} },
-      constraints: ["actor_unknown", "occupancy_unknown", "render_unverified", "playback_unverified"],
-      expression: {}, cognition: { declaredClass: 0, models: [] }, authority: { mayOriginate: ["user.request"], reflexive: [] } },
+    approval: "native-shared-speech-v3", revision: 1, publicKeyFingerprint: fingerprint,
+    manifest: { class: "native",
+      capabilities: { input: ["text.public", "state.visibility"], output: { "visual.card": { maxClass: "shared_room", shared: true }, "audio.tts": { maxClass: "shared_room", shared: true } } },
+      constraints: ["actor_unknown", "occupancy_unknown", "render_unverified", "playback_unverified", "visible_foreground_only", "no_background_output"],
+      expression: { "visual.card": ["acknowledged", "degraded"], "audio.tts": ["acknowledged", "degraded"] },
+      cognition: { declaredClass: 0, models: [] }, authority: { mayOriginate: ["state.change", "user.request"], reflexive: [] } },
     trustLevel: 0, occupancy: "unknown", actorIdentity: "unknown", renderVerified: false, playbackVerified: false, revoked: false,
   };
   await page.goto(`${origin}/settings/account/surfaces`);
@@ -214,13 +216,13 @@ try {
   assert.deepEqual(beforeApproval, { status: 200, body: { native: [] } });
   const [approved] = await Promise.all([
     page.waitForResponse(response => new URL(response.url()).pathname === "/api/surfaces/native" && response.request().method() === "POST"),
-    page.getByRole("button", { name: "Confirm public-text approval", exact: true }).click(),
+    page.getByRole("button", { name: "Confirm shared display and speech approval", exact: true }).click(),
   ]);
   assert.equal(approved.status(), 200);
   assert.match(approved.headers()["cache-control"], /(?:^|,)\s*no-store\s*(?:,|$)/iu);
   assert.deepEqual(approved.request().postDataJSON(), { ...descriptor, expectedRevision: 0 });
   assert.deepEqual(await approved.json(), { native: expectedNative });
-  await page.getByText("Cosmos recorded this installation’s public-text approval. Native text connections are still in development.", { exact: true }).waitFor();
+  await page.getByText("Cosmos recorded this installation’s shared display and speech approval. Cards and spoken replies route to it only while its connected app reports a visible foreground.", { exact: true }).waitFor();
   await until(() => { const status = readJson(statusPath); return status?.nativeApproved && status.enrollmentOnlyNoRoomAuthority; }, 10000);
   // An owner cookie and public descriptor do not provide a browser connection.
   // Both requests go through the real Center server in this isolated context.

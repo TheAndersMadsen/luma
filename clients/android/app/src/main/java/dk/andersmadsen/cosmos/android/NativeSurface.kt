@@ -24,6 +24,7 @@ object NativeSurface {
     const val PANIC = -4
     const val UNAVAILABLE = -5
     const val MAX_TEXT_BYTES = 4000
+    const val MAX_SPEECH_BYTES = 1_048_576
 
     /** create() returns an opaque nonzero handle or a status in -16..-1; handles may be negative. */
     fun isStatus(value: Long): Boolean = value in -16L..0L
@@ -40,7 +41,11 @@ object NativeSurface {
     @JvmStatic external fun cancel(handle: Long): Int
     @JvmStatic external fun setVisible(handle: Long, visible: Boolean): Int
     @JvmStatic external fun acknowledge(handle: Long): Int
+    /** Only after the current spoken reply played to its end. */
+    @JvmStatic external fun acknowledgeSpeech(handle: Long): Int
     @JvmStatic external fun disconnect(handle: Long): Int
     @JvmStatic external fun poll(handle: Long): ByteArray?
+    /** The current spoken reply's complete audio/mpeg bytes, or null when none is current. */
+    @JvmStatic external fun speechAudio(handle: Long): ByteArray?
     @JvmStatic external fun destroy(handle: Long): Int
 }

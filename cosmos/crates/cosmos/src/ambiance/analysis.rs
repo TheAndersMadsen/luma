@@ -62,28 +62,39 @@ pub enum Proposal {
     Information {
         #[serde(deserialize_with = "text_intent")]
         intent: SemanticIntent,
+        #[serde(default = "conservative_privacy")]
         privacy: PrivacyClass,
         #[serde(default)]
         target: Option<RoutingTarget>,
     },
     Analysis {
         analysis: AnalysisRequest,
+        #[serde(default = "conservative_privacy")]
         privacy: PrivacyClass,
         #[serde(default)]
         target: Option<RoutingTarget>,
     },
     Lookup {
         web_lookup: LookupRequest,
+        #[serde(default = "conservative_privacy")]
         privacy: PrivacyClass,
         #[serde(default)]
         target: Option<RoutingTarget>,
     },
     Places {
         place_lookup: LookupRequest,
+        #[serde(default = "conservative_privacy")]
         privacy: PrivacyClass,
         #[serde(default)]
         target: Option<RoutingTarget>,
     },
+}
+
+/// A model that omits its privacy estimate proposes nothing lower than the
+/// shared-room floor every turn already starts from; the runtime's own input
+/// classification can still raise it and never lowers it.
+fn conservative_privacy() -> PrivacyClass {
+    PrivacyClass::SharedRoom
 }
 
 impl Proposal {
@@ -443,6 +454,15 @@ mod tests {
             ("place_lookup", json!({"query":"Named Museum, Copenhagen"})),
         ];
         assert!(serde_json::from_value::<Proposal>(json!({"privacy":"public"})).is_err());
+        // A proposal that omits its privacy estimate is accepted at the
+        // shared-room floor rather than failing the whole turn.
+        let Proposal::Information { privacy, .. } = serde_json::from_value(json!({
+            "intent": {"kind": "visual_text_card", "text": "12"},
+        }))
+        .unwrap() else {
+            panic!("information proposal without privacy")
+        };
+        assert_eq!(privacy, PrivacyClass::SharedRoom);
         for (index, (key, value)) in branches.iter().enumerate() {
             let mut single = json!({"privacy":"public"});
             single[*key] = value.clone();

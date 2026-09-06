@@ -30,16 +30,16 @@ const DESCRIPTOR = {
   enrollmentId: ENROLLMENT_ID,
   publicKey: PUBLIC_KEY,
   platform: "macos",
-  approval: "native-shared-display-v2",
+  approval: "native-shared-speech-v3",
 };
 const APPROVED_POSTURE = {
   name: "Native device",
-  approval: "native-shared-display-v2",
+  approval: "native-shared-speech-v3",
   manifest: {
     class: "native",
-    capabilities: { input: ["text.public", "state.visibility"], output: { "visual.card": { maxClass: "shared_room", shared: true } } },
+    capabilities: { input: ["text.public", "state.visibility"], output: { "visual.card": { maxClass: "shared_room", shared: true }, "audio.tts": { maxClass: "shared_room", shared: true } } },
     constraints: ["actor_unknown", "occupancy_unknown", "render_unverified", "playback_unverified", "visible_foreground_only", "no_background_output"],
-    expression: { "visual.card": ["acknowledged", "degraded"] },
+    expression: { "visual.card": ["acknowledged", "degraded"], "audio.tts": ["acknowledged", "degraded"] },
     cognition: { declaredClass: 0, models: [] },
     authority: { mayOriginate: ["state.change", "user.request"], reflexive: [] },
   },
@@ -51,19 +51,20 @@ const APPROVED_POSTURE = {
 };
 const LEGACY_POSTURE = {
   ...APPROVED_POSTURE,
-  approval: "native-shared-text-v1",
+  approval: "native-shared-display-v2",
   manifest: {
     class: "native",
-    capabilities: { input: ["text.public"], output: {} },
-    constraints: ["actor_unknown", "occupancy_unknown", "render_unverified", "playback_unverified"],
-    expression: {},
+    capabilities: { input: ["text.public", "state.visibility"], output: { "visual.card": { maxClass: "shared_room", shared: true } } },
+    constraints: ["actor_unknown", "occupancy_unknown", "render_unverified", "playback_unverified", "visible_foreground_only", "no_background_output"],
+    expression: { "visual.card": ["acknowledged", "degraded"] },
     cognition: { declaredClass: 0, models: [] },
-    authority: { mayOriginate: ["user.request"], reflexive: [] },
+    authority: { mayOriginate: ["state.change", "user.request"], reflexive: [] },
   },
 };
 const SURFACE = {
   ...APPROVED_POSTURE,
   display: true,
+  speech: true,
   surfaceId: SURFACE_ID,
   enrollmentId: ENROLLMENT_ID,
   platform: "macos",
@@ -73,7 +74,7 @@ const SURFACE = {
 };
 
 it("accepts the four explicit native platforms and normalizes enrollment UUID case", () => {
-  expect(NATIVE_APPROVAL).toBe("native-shared-display-v2");
+  expect(NATIVE_APPROVAL).toBe("native-shared-speech-v3");
   for (const platform of ["macos", "linux", "android", "android_tv"]) {
     expect(parseNativeDescriptor({ ...DESCRIPTOR, enrollmentId: ENROLLMENT_ID.toUpperCase(), platform }))
       .toEqual({ ...DESCRIPTOR, platform });
@@ -170,13 +171,13 @@ it("requires exact revision-bound mutation inputs and preserves room for the nex
   }
 });
 
-it("keeps the fixed posture at shared text input and one shared visual card with no inferred actor or autonomy", () => {
+it("keeps the fixed posture at shared text input, one shared visual card and one spoken reply with no inferred actor or autonomy", () => {
   expect(NATIVE_SURFACE_POSTURE).toEqual(APPROVED_POSTURE);
   expect(parseNativeSurface(SURFACE)).toEqual(SURFACE);
-  // An earlier text-only approval is still owner metadata, but it cannot render until reapproved.
-  const { display: _display, ...withoutDisplay } = SURFACE;
-  const legacy = { ...withoutDisplay, ...LEGACY_POSTURE };
-  expect(parseNativeSurface(legacy)).toEqual({ ...legacy, display: false });
+  // An earlier display-only approval still renders cards, but it plays no speech until reapproved.
+  const { display: _display, speech: _speech, ...withoutOutputs } = SURFACE;
+  const legacy = { ...withoutOutputs, ...LEGACY_POSTURE };
+  expect(parseNativeSurface(legacy)).toEqual({ ...legacy, display: true, speech: false });
   expect(() => parseNativeSurface({ ...legacy, manifest: APPROVED_POSTURE.manifest })).toThrow("unsupported_native_posture");
   expect(() => parseNativeSurface({ ...SURFACE, approval: LEGACY_POSTURE.approval })).toThrow("unsupported_native_posture");
   for (const key of Object.keys(APPROVED_POSTURE)) {

@@ -153,8 +153,22 @@ Omarchy, Pixel, Shield and the Pin. Clients hold no Azure credentials and do not
 substitute operating-system voices or another TTS provider. The existing
 provider-disclosure and output-privacy gates still apply; unavailable or denied
 speech remains unavailable. Audio delivery alone is not evidence of playback.
-The native voice loop and remaining legacy Pin speech paths still require
-migration and device acceptance before this requirement is established everywhere.
+
+The native speech increment wires this for macOS and Android. A native
+installation approved at `native-shared-speech-v3` declares one shared-room
+`audio.tts` output next to its visual card. Speech is routed to it only while
+its signed connection is current, it reports a visible foreground and the
+origin surface's owner has granted the Azure Speech disclosure (Center:
+Devices for the Pin, Native installations for a client). The room coordinator
+claims the exact proposed speech action through that disclosure, streams
+Cosmos-synthesized `audio/mpeg` frames bound to the connection and the text
+digest, and the client plays the assembled bytes once and acknowledges only
+complete playback; a retired or replaced reply stops and is never
+acknowledged. Speech with no eligible surface is re-proposed as the same text
+on a card. A model proposal that omits its privacy estimate is accepted at the
+shared-room floor instead of failing the turn. The native voice loop and
+remaining legacy Pin speech paths still require migration and device
+acceptance before this requirement is established everywhere.
 
 ### Ambiance v2 work in progress
 
@@ -213,7 +227,7 @@ The integration inventory for the new conversation is:
 | Notes, memory, captures, contacts and messages | Pending source- and purpose-scoped retrieval and separately authorized writes/actions. Stored backups do not establish email integration. |
 | Calendar and device actions | A real calendar provider is still required. Timers, settings, calls, sending and navigation need typed actions with appropriate confirmation and observed outcomes. |
 | Composition, translation and notification triage | Explicit current text can use bounded analysis. Stock transformation services and selected personal content still need scoped admission. |
-| Azure speech | Existing guarded Pin speech paths are being extended to every thin client; native playback acceptance remains open. |
+| Azure speech | Cosmos-mediated spoken replies now reach approved macOS and Android installations under the origin's disclosure; Pin, Linux and TV playback acceptance remains open. |
 
 Web lookup is the first conversational integration being restored. In Devices,
 open Web lookup permission for the requesting browser, native installation or
@@ -280,11 +294,13 @@ physical device behavior still need their separate acceptance.
 
 The shared-display increment makes an approved native installation a visual
 surface and gives requests a bounded routing hint. The native approval profile
-is now `native-shared-display-v2`: it adds one shared-room `visual.card`
-output, a `state.visibility` input and the `visible_foreground_only` and
-`no_background_output` constraints. Persisted `native-shared-text-v1`
-approvals stay input-only until the owner reapproves at the current revision,
-which bumps the revision and drops the current connection. A native surface is
+is now `native-shared-speech-v3`: it declares one shared-room `visual.card`
+output, one shared-room `audio.tts` output, a `state.visibility` input and the
+`visible_foreground_only` and `no_background_output` constraints. Persisted
+`native-shared-display-v2` approvals keep rendering cards but play no speech
+until the owner reapproves at the current revision, which bumps the revision
+and drops the current connection; older text-only approvals are no longer
+recognized. A native surface is
 an eligible card target only while its signed connection is current and the
 app has reported a visible foreground on that connection; visibility lives on
 the connection, not on the owner's registry record, and it is availability

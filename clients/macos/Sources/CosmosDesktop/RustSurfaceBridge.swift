@@ -136,6 +136,20 @@ final class RustSurfaceBridge: ClientBridge {
         _ = try await perform(.acknowledge)
     }
 
+    func speechAudio(for reply: SpeechReply) async throws -> Data {
+        guard snapshot.phase == .connected, snapshot.speech == reply else { throw ClientFailure.connectionUnavailable }
+        return try await worker.speechAudio(expectedLength: reply.byteLength)
+    }
+
+    func acknowledgeSpeech(_ reply: SpeechReply) async throws {
+        guard snapshot.phase == .connected, !snapshot.needsReconnect else {
+            throw ClientFailure.connectionUnavailable
+        }
+        guard !snapshot.hasPending, !snapshot.pendingOpen else { throw ClientFailure.uncertainRequest }
+        guard snapshot.speech == reply else { throw ClientFailure.connectionUnavailable }
+        _ = try await perform(.acknowledgeSpeech)
+    }
+
     func disconnect() async {
         guard !closing, !disconnecting else { return }
         disconnecting = true
@@ -248,7 +262,8 @@ final class RustSurfaceBridge: ClientBridge {
             canRetry: storageBlocked || ((event.pending?.canRetry ?? false) && !event.needsReconnect),
             hasUnknownOutcome: event.lastUnknown != nil,
             visible: event.visible,
-            display: event.connected ? try event.display?.verified() : nil
+            display: event.connected ? try event.display?.verified() : nil,
+            speech: event.connected ? try event.speech?.verified() : nil
         )
         if event.operation == expectedOperation { completion = event }
     }

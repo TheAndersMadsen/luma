@@ -66,6 +66,19 @@ public struct AssistantPanel: View {
                         .onAppear { model.displayCommitted(card) }
                         .id(card.actionID)
                 }
+                if let speech = model.speech {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Label(model.speaking ? "Speaking" : "Spoken reply", systemImage: model.speaking ? "speaker.wave.2.fill" : "speaker.wave.2")
+                            .font(.caption.weight(.semibold)).foregroundStyle(CosmosPanelPalette.secondary)
+                        Text(speech.text).font(.body).textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("cosmos-speech-text")
+                    }
+                    .padding(14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(CosmosPanelPalette.surface, in: RoundedRectangle(cornerRadius: 12))
+                    .id(speech.actionID)
+                }
 
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Ask Cosmos").font(.headline).foregroundStyle(CosmosPanelPalette.accent)
@@ -115,7 +128,7 @@ public struct AssistantPanel: View {
                 .background(CosmosPanelPalette.panel, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous)
                     .stroke(CosmosPanelPalette.accent.opacity(0.7), lineWidth: 1))
-                Text("This preview has no microphone, screen capture or private retrieval. Cards shown here are shared-room content only.")
+                Text("This preview has no microphone, screen capture or private retrieval. Cards and spoken replies here are shared-room content only.")
                     .font(.caption).foregroundStyle(CosmosPanelPalette.secondary)
                 if !model.shortcutMessage.isEmpty {
                     Text(model.shortcutMessage).font(.caption).foregroundStyle(.secondary)

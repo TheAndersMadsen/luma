@@ -21,7 +21,7 @@ const keyBytes = Buffer.from("046b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0
 const publicKey = keyBytes.toString("base64url");
 const publicKeyFingerprint = createHash("sha256").update(keyBytes).digest("hex");
 const approval = { enrollmentId, publicKey, platform: "macos", approval: NATIVE_APPROVAL, expectedRevision: 0 };
-const native = { ...NATIVE_SURFACE_POSTURE, surfaceId, enrollmentId, platform: "macos", revision: 1, publicKeyFingerprint, revoked: false };
+const native = { ...NATIVE_SURFACE_POSTURE, surfaceId, enrollmentId, platform: "macos", revision: 1, publicKeyFingerprint, revoked: false, display: true, speech: true };
 const surfaceContext = { params: Promise.resolve({ surfaceId }) };
 const enrollmentContext = { params: Promise.resolve({ enrollmentId }) };
 

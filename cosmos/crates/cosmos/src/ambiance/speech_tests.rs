@@ -115,9 +115,11 @@ impl Fixture {
     }
     async fn speak(&self, url: &str, action: Action) -> Result<SpeechStream, Status> {
         self.runtime
-            .synthesize_pin_with_client(
-                self.auth.clone(),
-                self.incarnation,
+            .synthesize_with_client(
+                SpeechTarget::Pin {
+                    authenticated: self.auth.clone(),
+                    incarnation: self.incarnation,
+                },
                 self.fence.clone(),
                 action,
                 AzureSpeechClient::for_test(url.into()),

@@ -66,9 +66,12 @@ class AssistActivity : ComponentActivity() {
                         verticalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
                         val card = state.display
+                        val speech = state.speech
                         if (card != null) {
                             DisplayCardView(card, onCommitted = controller::displayCommitted,
                                 Modifier.fillMaxWidth().heightIn(max = maxCardHeight))
+                        } else if (speech != null) {
+                            CosmosPanel(Modifier.fillMaxWidth()) { CosmosMessage(speech.text) }
                         } else if (state.phase != Phase.CONNECTED) {
                             CosmosPanel(Modifier.fillMaxWidth()) { CosmosMessage("Open Cosmos and connect this installation first.") }
                         } else {
@@ -82,7 +85,7 @@ class AssistActivity : ComponentActivity() {
                             }
                         }
                         Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                            CosmosWaveformButton(if (state.busy) AssistantState.THINKING else AssistantState.IDLE,
+                            CosmosWaveformButton(when { state.speaking -> AssistantState.SPEAKING; state.busy -> AssistantState.THINKING; else -> AssistantState.IDLE },
                                 onDismiss = { finish() }, animationsEnabled = true)
                         }
                     }

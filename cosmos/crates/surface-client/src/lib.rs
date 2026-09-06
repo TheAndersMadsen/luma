@@ -3,6 +3,7 @@
 //! this crate owns admission, exact retries, frame checks and RTC fencing.
 pub mod display;
 mod http;
+pub mod speech;
 mod state;
 #[cfg(test)]
 mod tests;
@@ -13,6 +14,7 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 pub use display::{AttributionPart, Display, DisplayContent, PlaceItem};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
+pub use speech::Speech;
 use state::{Journal, PendingOpen, RpcMessage};
 use std::{
     sync::Arc,
@@ -152,6 +154,8 @@ pub struct Status {
     pub last_admission: Option<Admission>,
     /// The card the runtime delivered to this connection, if still current.
     pub display: Option<Display>,
+    /// The spoken reply the runtime delivered to this connection, if current.
+    pub speech: Option<Speech>,
     /// The foreground visibility Cosmos last accepted for this connection.
     pub visible: bool,
 }
@@ -185,6 +189,7 @@ pub struct Client {
     session: Option<transport::Connection>,
     cleanup: transport::CleanupScope,
     display: tokio::sync::watch::Sender<Option<Display>>,
+    speech: tokio::sync::watch::Sender<Option<Speech>>,
     visible: bool,
 }
 
@@ -249,6 +254,7 @@ impl Client {
             session: None,
             cleanup: transport::CleanupScope::default(),
             display: tokio::sync::watch::channel(None).0,
+            speech: tokio::sync::watch::channel(None).0,
             visible: false,
         })
     }
@@ -263,12 +269,22 @@ impl Client {
         self.status().display
     }
 
+    /// Wakes when the runtime completes or retires a spoken reply. Platforms
+    /// play the exact bytes, then call `acknowledge_speech`.
+    pub fn speech_changes(&self) -> tokio::sync::watch::Receiver<Option<Speech>> {
+        self.speech.subscribe()
+    }
+
+    pub fn speech(&self) -> Option<Speech> {
+        self.status().speech
+    }
+
     pub fn descriptor(&self) -> Descriptor {
         Descriptor {
             enrollment_id: self.config.enrollment_id,
             public_key: URL_SAFE_NO_PAD.encode(self.public_key),
             platform: self.config.platform,
-            approval: "native-shared-display-v2",
+            approval: "native-shared-speech-v3",
         }
     }
 
@@ -283,6 +299,7 @@ impl Client {
         // Timing out this wait must never cancel the SDK's one-shot close.
         drop(self.session.take());
         self.display.send_replace(None);
+        self.speech.send_replace(None);
         self.visible = false;
         tokio::time::timeout(Duration::from_secs(2), self.cleanup.finish())
             .await
@@ -321,6 +338,11 @@ impl Client {
                 .borrow()
                 .clone()
                 .filter(|card| connected && now < card.expires_at_ms),
+            speech: self
+                .speech
+                .borrow()
+                .clone()
+                .filter(|speech| connected && now < speech.expires_at_ms),
             visible: connected && self.visible,
         }
     }
@@ -444,10 +466,19 @@ impl Client {
         // or canceled join must require an explicit new connection next time.
         self.persist(next)?;
         self.display.send_replace(None);
+        self.speech.send_replace(None);
         self.visible = false;
         self.session = Some(
-            transport::Connection::connect(&room, &self.cleanup, expected, self.display.clone())
-                .await?,
+            transport::Connection::connect(
+                &room,
+                &self.cleanup,
+                expected,
+                transport::Outputs {
+                    display: self.display.clone(),
+                    speech: self.speech.clone(),
+                },
+            )
+            .await?,
         );
         if self.journal.pending.is_none() {
             // Nonmedia participant presence may be batched briefly by the SFU.
@@ -708,6 +739,32 @@ impl Client {
                     generation: card.generation,
                     channel: "visual.card".into(),
                     content_digest: card.content_digest.clone(),
+                },
+            })
+            .await?
+        {
+            OperationResult::Acknowledge => Ok(()),
+            _ => Err(Error::InvalidResponse),
+        }
+    }
+
+    /// Acknowledge the exact current spoken reply after the platform played
+    /// its complete audio. Never call it speculatively or on partial playback.
+    pub async fn acknowledge_speech(&mut self, speech: &Speech) -> Result<(), Error> {
+        self.flush()?;
+        if self.speech().as_ref() != Some(speech) {
+            return Err(Error::NoPending);
+        }
+        let stamp = self.stamp(speech.action_id)?;
+        match self
+            .submit(RpcMessage::Control {
+                stamp,
+                control: state::Control::Acknowledge {
+                    action_id: speech.action_id,
+                    turn_id: speech.turn_id,
+                    generation: speech.generation,
+                    channel: "audio.tts".into(),
+                    content_digest: speech.content_digest.clone(),
                 },
             })
             .await?

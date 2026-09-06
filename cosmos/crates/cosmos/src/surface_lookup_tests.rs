@@ -706,17 +706,13 @@ async fn ambiance_lookup_http_common_route_supports_browser_native_and_pin_witho
         }
         // The common authority endpoint does not create cloud speech/local microphone
         // permission for the Pin, or expose a second per-profile lookup API.
-        for kind in ["speech-disclosure", "local-voice"] {
+        for path in [
+            format!("/surface-api/v1/surfaces/{pin}/speech-disclosure"),
+            format!("/surface-api/v1/surfaces/{native}/speech-disclosure"),
+            format!("/surface-api/v1/pins/{pin}/local-voice"),
+        ] {
             assert_eq!(
-                call(
-                    &app,
-                    "GET",
-                    &format!("/surface-api/v1/pins/{pin}/{kind}"),
-                    Some(&owner),
-                    None,
-                    json!(null)
-                )
-                .await,
+                call(&app, "GET", &path, Some(&owner), None, json!(null)).await,
                 (StatusCode::OK, json!({"approval":null}))
             );
         }

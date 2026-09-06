@@ -4,7 +4,7 @@
 mod android;
 use cosmos_surface_client::{
     Client, Config, Display, Error, OperationKind, Pending, Platform, PlatformError, SecureStore,
-    Signer, TransportShutdown,
+    Signer, Speech, TransportShutdown,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -229,8 +229,13 @@ enum Command {
     Cancel,
     SetVisible(bool),
     Acknowledge,
+    AcknowledgeSpeech,
     Disconnect,
 }
+
+/// The current spoken reply's audio, shared with the platform's own buffer
+/// copy. Snapshots carry its identity and length, never the bytes.
+type SpeechAudio = Arc<Mutex<Option<(Uuid, Vec<u8>)>>>;
 
 #[derive(Default)]
 struct Events {
@@ -257,6 +262,7 @@ pub struct CosmosSurface {
     commands: mpsc::Sender<Command>,
     shutdown: watch::Sender<bool>,
     events: Arc<Mutex<Events>>,
+    speech_audio: SpeechAudio,
     closed: Arc<AtomicBool>,
     callbacks_finished: Mutex<Option<sync_mpsc::Receiver<i32>>>,
     worker: Option<thread::JoinHandle<()>>,
@@ -272,6 +278,16 @@ impl CosmosSurface {
             Err(mpsc::error::TrySendError::Full(_)) => QUEUE_FULL,
             Err(mpsc::error::TrySendError::Closed(_)) => CLOSED,
         }
+    }
+
+    /// A copy of the current spoken reply's audio bytes, if one is current.
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    fn speech_audio(&self) -> Option<Vec<u8>> {
+        self.speech_audio
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .map(|(_, audio)| audio.clone())
     }
 
     /// The oldest retained snapshot, consumed. Bindings without a caller
@@ -386,6 +402,21 @@ fn display(value: Option<&Display>) -> Value {
     })
 }
 
+fn speech(value: Option<&Speech>) -> Value {
+    value.map_or(Value::Null, |speech| {
+        json!({
+            "actionId": speech.action_id.to_string(),
+            "turnId": speech.turn_id.to_string(),
+            "generation": speech.generation,
+            "contentDigest": speech.content_digest,
+            "expiresAtMs": speech.expires_at_ms,
+            "text": speech.text,
+            "format": speech.format,
+            "byteLength": speech.audio.len(),
+        })
+    })
+}
+
 fn snapshot(
     client: Option<&Client>,
     descriptor: &Value,
@@ -412,6 +443,7 @@ fn snapshot(
         })),
         "visible": status.as_ref().is_some_and(|s| s.visible),
         "display": status.as_ref().map_or(Value::Null, |s| display(s.display.as_ref())),
+        "speech": status.as_ref().map_or(Value::Null, |s| speech(s.speech.as_ref())),
     })
 }
 
@@ -421,6 +453,7 @@ async fn run(
     mut commands: mpsc::Receiver<Command>,
     mut shutdown: watch::Receiver<bool>,
     events: Arc<Mutex<Events>>,
+    speech_audio: SpeechAudio,
     shutdown_scope: &mut Option<TransportShutdown>,
 ) {
     let signer: Arc<dyn Signer> = callbacks.clone();
@@ -461,6 +494,7 @@ async fn run(
     );
     heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut displays = client.display_changes();
+    let mut speeches = client.speech_changes();
     // The platform's last requested foreground state. It is re-reported after
     // every new connection because visibility lives on the connection.
     let mut wanted_visible = false;
@@ -468,7 +502,13 @@ async fn run(
         Command(Command),
         Heartbeat,
         Display,
+        Speech,
     }
+    let publish_speech = |client: &Client| {
+        *speech_audio.lock().unwrap_or_else(|e| e.into_inner()) = client
+            .speech()
+            .map(|speech| (speech.action_id, speech.audio));
+    };
     loop {
         if *shutdown.borrow() {
             break;
@@ -477,6 +517,7 @@ async fn run(
             biased;
             _ = shutdown.changed() => break,
             changed = displays.changed() => { if changed.is_err() { break; } Wake::Display }
+            changed = speeches.changed() => { if changed.is_err() { break; } Wake::Speech }
             _ = heartbeat.tick() => Wake::Heartbeat,
             command = commands.recv() => match command { Some(command) => Wake::Command(command), None => break },
         };
@@ -485,6 +526,16 @@ async fn run(
                 push(
                     &events,
                     snapshot(Some(&client), &descriptor, "display", None),
+                );
+                continue;
+            }
+            Wake::Speech => {
+                // Audio is published before the snapshot names it, so a
+                // platform that reads the snapshot can always fetch the bytes.
+                publish_speech(&client);
+                push(
+                    &events,
+                    snapshot(Some(&client), &descriptor, "speech", None),
                 );
                 continue;
             }
@@ -498,6 +549,7 @@ async fn run(
             Some(Command::Cancel) => "cancel",
             Some(Command::SetVisible(_)) => "set_visible",
             Some(Command::Acknowledge) => "acknowledge",
+            Some(Command::AcknowledgeSpeech) => "acknowledge_speech",
             Some(Command::Disconnect) => "disconnect",
             None => "heartbeat",
         };
@@ -552,6 +604,13 @@ async fn run(
                             return None;
                         }
                     },
+                    Some(Command::AcknowledgeSpeech) => match client.speech() {
+                        Some(speech) => client.acknowledge_speech(&speech).await,
+                        None => {
+                            push(&events, snapshot(Some(&client), &descriptor, operation, Some("no_speech")));
+                            return None;
+                        }
+                    },
                     Some(Command::Disconnect) => {
                         client.disconnect().await
                     }
@@ -560,6 +619,7 @@ async fn run(
             } => result,
         };
         if let Some(result) = result {
+            publish_speech(&client);
             push(
                 &events,
                 snapshot(
@@ -571,6 +631,7 @@ async fn run(
             );
         }
     }
+    *speech_audio.lock().unwrap_or_else(|e| e.into_inner()) = None;
     // The client journals before side effects; dropping an in-flight future
     // leaves recoverable uncertainty. Shutdown never retries the saved input.
     let _ = tokio::time::timeout(Duration::from_secs(5), client.disconnect()).await;
@@ -638,11 +699,13 @@ fn spawn(config: Config, callbacks: Arc<dyn Bindings>) -> Result<Box<CosmosSurfa
         let (shutdown, stop) = watch::channel(false);
         let (finished, callbacks_finished) = sync_mpsc::channel();
         let events = Arc::new(Mutex::new(Events::default()));
+        let speech_audio: SpeechAudio = Arc::new(Mutex::new(None));
         let closed = Arc::new(AtomicBool::new(false));
         let mut handle = Box::new(CosmosSurface {
             commands,
             shutdown,
             events: events.clone(),
+            speech_audio: speech_audio.clone(),
             closed: closed.clone(),
             callbacks_finished: Mutex::new(Some(callbacks_finished)),
             worker: None,
@@ -679,6 +742,7 @@ fn spawn(config: Config, callbacks: Arc<dyn Bindings>) -> Result<Box<CosmosSurfa
                         receiver,
                         stop,
                         events.clone(),
+                        speech_audio,
                         &mut shutdown_scope,
                     ))
                 }));
@@ -743,7 +807,55 @@ command!(cosmos_surface_connect, Command::Connect);
 command!(cosmos_surface_retry_pending, Command::Retry);
 command!(cosmos_surface_cancel, Command::Cancel);
 command!(cosmos_surface_acknowledge, Command::Acknowledge);
+command!(
+    cosmos_surface_acknowledge_speech,
+    Command::AcknowledgeSpeech
+);
 command!(cosmos_surface_disconnect, Command::Disconnect);
+
+/// # Safety
+/// The handle must be live, written must be writable, and output must be writable
+/// for capacity bytes. Output may be null only when capacity is zero.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cosmos_surface_speech_audio(
+    surface: *mut CosmosSurface,
+    output: *mut u8,
+    capacity: usize,
+    written: *mut usize,
+) -> i32 {
+    boundary(|| {
+        if written.is_null() {
+            return INVALID_ARGUMENT;
+        }
+        unsafe {
+            *written = 0;
+        }
+        if output.is_null() && capacity != 0 {
+            return INVALID_ARGUMENT;
+        }
+        let Some(surface) = (unsafe { surface.as_ref() }) else {
+            return INVALID_ARGUMENT;
+        };
+        let audio = surface
+            .speech_audio
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let Some((_, bytes)) = audio.as_ref() else {
+            return EMPTY;
+        };
+        unsafe {
+            *written = bytes.len();
+        }
+        if capacity < bytes.len() {
+            return BUFFER_TOO_SMALL;
+        }
+        // SAFETY: Caller owns enough writable bytes, disjoint from Rust storage.
+        unsafe {
+            ptr::copy_nonoverlapping(bytes.as_ptr(), output, bytes.len());
+        }
+        OK
+    })
+}
 
 /// # Safety
 /// The handle must be live and cannot be concurrently destroyed.

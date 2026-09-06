@@ -61,7 +61,7 @@
       "kind": "test-definition",
       "path": "cosmos/crates/cosmos/src/ambiance/policy.rs",
       "anchor": "fn hints_rank_only_eligible_candidates_and_never_the_origin",
-      "scope": "Paired hint/no-hint ranking over the same state: an explicit request target ranks only eligible non-origin surfaces of that kind, self-nomination earns nothing, unavailable and privacy-blocked surfaces stay blocked with zero score, and legacy native approvals have no display capability.",
+      "scope": "Paired hint/no-hint ranking over the same state: an explicit request target ranks only eligible non-origin surfaces of that kind, self-nomination earns nothing, unavailable and privacy-blocked surfaces stay blocked with zero score, and legacy display-only native approvals still render cards but have no speech capability.",
       "limitation": "Class-zero surfaces still supply no hints of their own; there is no trust gate, hint budget, calibration or learned preference term. This is a unit definition, not routing over live devices."
     },
     {
@@ -117,8 +117,8 @@
       "kind": "implementation",
       "path": "cosmos/crates/cosmos/src/surface_registry.rs",
       "anchor": "pub fn native_manifest()",
-      "scope": "Defines one owner-approved installation-key binding and fixed class-zero public-text ceiling for macOS, Linux, Android and Android TV hints; registry-owned approval revision is independent of connection liveness.",
-      "limitation": "Manifest definition only. Platform is a display hint, actor and occupancy remain unknown, and there is no native render, capture, media, private-memory or autonomy authority. Active text requires separately verified current connection/room admission; native applications remain unfinished."
+      "scope": "Defines one owner-approved installation-key binding and a fixed class-zero ceiling of public text input, one shared-room visual card and one shared-room spoken reply for macOS, Linux, Android and Android TV hints; registry-owned approval revision is independent of connection liveness, and display-only approvals stay a known legacy profile without speech.",
+      "limitation": "Manifest definition only. Platform is a display hint, actor and occupancy remain unknown, and there is no native capture, media, private-memory or autonomy authority. Active output requires separately verified current connection/room admission, reported visibility and the origin's speech-provider permission; physical device acceptance remains unfinished."
     },
     {
       "id": "native-installation-owner-test-definition",
@@ -297,6 +297,38 @@
       "limitation": "Requires isolated PostgreSQL. This does not establish database-server restart, independent ledger anchors, physical devices or production acceptance."
     },
     {
+      "id": "native-speech-target-definition",
+      "kind": "implementation",
+      "path": "cosmos/crates/cosmos/src/ambiance/speech.rs",
+      "anchor": "pub enum SpeechTarget",
+      "scope": "Defines the disclosed synthesis lease over either an authenticated Pin device connection or a signed native connection proof: the target's surface must be the claimed action's surface, the origin's owner policy governs the disclosure, the lease revalidates before every provider chunk, and a native target receives a bounded compressed stream while the Pin keeps raw PCM.",
+      "limitation": "Lease definition only. It proves neither playback nor which surface a bystander heard; provider bytes already consumed cannot be recalled and retirement is best effort during Store failure."
+    },
+    {
+      "id": "native-speech-delivery-definition",
+      "kind": "implementation",
+      "path": "cosmos/crates/cosmos/src/browser_rooms.rs",
+      "anchor": "async fn speak(",
+      "scope": "Defines one synthesis job per native room member and proposed audio action: room polls never stock-claim audio, the job claims the exact action through its disclosure, streams bound speak frames with transport receipts, records delivery failure after a lost frame, and the member's later sequenced audio.tts acknowledgment is the only playback claim.",
+      "limitation": "Delivery definition only. A transport receipt is not playback, retired jobs are aborted with the member, and no live SFU, Azure or physical device acceptance is established here."
+    },
+    {
+      "id": "native-speech-candidate-policy-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/policy.rs",
+      "anchor": "fn legacy_native_approvals_render_cards_but_have_no_speech_capability",
+      "scope": "Defines that a display-only legacy native approval remains a card candidate but is capability-blocked for audio.tts, while the current speech profile is an eligible shared-room speech candidate.",
+      "limitation": "Pure policy unit definition. Availability, visibility and the origin's disclosure policy are folded in by the runtime state, not exercised here."
+    },
+    {
+      "id": "native-client-speech-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/surface-client/src/speech.rs",
+      "anchor": "fn frames_bind_the_connection_and_assemble_in_order",
+      "scope": "Defines that the shared native client accepts speak frames only for its bound surface and incarnation with the exact text digest, assembles ordered bounded chunks into one reply, and discards partial replies on out-of-order, oversized, header-less or cleared frames.",
+      "limitation": "Frame assembly only. Playback and acknowledgment belong to platform code; no audio decoding, device output or physical acceptance is established."
+    },
+    {
       "id": "speech-disclosure-owner-api-test-definition",
       "kind": "test-definition",
       "path": "cosmos/crates/cosmos/src/surface_api.rs",
@@ -307,9 +339,9 @@
     {
       "id": "center-speech-disclosure-test-definition",
       "kind": "test-definition",
-      "path": "center/src/app/settings/account/devices/SpeechDisclosure.test.tsx",
+      "path": "center/src/app/settings/account/surfaces/SpeechPermission.test.tsx",
       "anchor": "lost replies block another write until a fresh read and never claim success",
-      "scope": "Defines explicit per-Pin shared-text permission, exact committed response validation, uncertainty after failed writes, pairing-loss revocation and aborting/clearing a closed or unmounted view.",
+      "scope": "Defines explicit per-surface shared-text permission for Pin and native installations, exact committed response validation, uncertainty after failed writes, revocation while approval is unavailable and aborting/clearing a closed or unmounted view.",
       "limitation": "DOM and mocked upstream fixtures only. No physical Pin or complete application voice-loop acceptance is established; the control grants synthesis, not native microphone capture."
     },
     {
@@ -851,8 +883,8 @@
       "sourceSections": ["4.3", "4.4", "5.1", "5.2"],
       "requirement": "All thin clients use Cosmos-mediated Azure TTS whenever synthesized speech is used, including macOS, Omarchy, Pixel, Shield and the Ai Pin. Provider credentials remain in Cosmos.",
       "acceptance": "Verify authorized Azure audio through each actual client, selected output and local playback evidence. Denied disclosure, unavailable Azure, privacy changes, revocation, interruption and lock must suppress or stop speech without falling back to OS voices or another TTS provider. Listening, processing and speaking indicators reflect their distinct observed states. A current input-only client does not establish speech acceptance.",
-      "status": "pending",
-      "evidence": []
+      "status": "partial",
+      "evidence": ["native-speech-target-definition", "native-speech-delivery-definition", "native-speech-candidate-policy-test-definition", "native-client-speech-test-definition", "center-speech-disclosure-test-definition", "native-speech-disclosure-test-definition"]
     },
     {
       "id": "integration-continuity",

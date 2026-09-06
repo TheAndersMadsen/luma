@@ -1,6 +1,10 @@
 package dk.andersmadsen.cosmos.android
 
 import android.content.Context
+import android.media.AudioAttributes
+import android.media.MediaPlayer
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -32,6 +36,9 @@ data class SurfaceState(
     val admission: Admission? = null,
     val visible: Boolean = false,
     val display: DisplayCard? = null,
+    /** The current spoken reply, if any; [speaking] is true only while its audio plays. */
+    val speech: SpeechReply? = null,
+    val speaking: Boolean = false,
     val message: String = "Prepare this installation, then approve its public descriptor in Center.",
     val busy: Boolean = false,
 ) {
@@ -60,6 +67,10 @@ class SurfaceController(context: Context) {
     private var handle = 0L
     private var wantedVisible = false
     private var acknowledged: UUID? = null
+    private val main = Handler(Looper.getMainLooper())
+    private var player: MediaPlayer? = null
+    private var playing: UUID? = null
+    private var played: UUID? = null
 
     private val callbacks = object : NativeCallbacks {
         override fun publicKey(): ByteArray = identity.publicKeySec1()
@@ -102,7 +113,7 @@ class SurfaceController(context: Context) {
 
     private fun fold(event: NativeEvent) {
         // Snapshots are redacted by the native client: no journal, token or request text.
-        Log.d(TAG, "snapshot ${event.operation} ${if (event.ok) "ok" else event.error} connected=${event.connected} visible=${event.visible} card=${event.display?.actionId}")
+        Log.d(TAG, "snapshot ${event.operation} ${if (event.ok) "ok" else event.error} connected=${event.connected} visible=${event.visible} card=${event.display?.actionId} speech=${event.speech?.actionId}")
         _state.update { previous ->
             val failure = event.error?.let(::message)
             val phase = when {
@@ -123,9 +134,12 @@ class SurfaceController(context: Context) {
                 admission = event.admission,
                 visible = event.visible,
                 display = event.display,
+                speech = event.speech,
+                speaking = event.speech != null && playing == event.speech.actionId,
                 message = failure ?: when (event.operation) {
                     "prepare" -> "Approve this public descriptor in Center, then connect."
-                    "connect" -> "Cosmos confirmed the connection. Cards may appear here while this screen is visible."
+                    "connect" -> "Cosmos confirmed the connection. Cards and spoken replies may arrive here while this screen is visible."
+                    "speech" -> if (event.speech != null) "Cosmos is speaking the reply on this device." else previous.message
                     "send_text" -> "Request admitted by Cosmos. The response appears on the approved display it selects."
                     "cancel" -> "Cancellation admitted by Cosmos."
                     "disconnect" -> "Session disconnected. Owner approval remains in Center."
@@ -136,6 +150,51 @@ class SurfaceController(context: Context) {
         }
         // Published after the state so a waiting command observes both together.
         lastOperation = event.operation
+        main.post { syncPlayback(event.speech) }
+    }
+
+    /**
+     * Plays the exact delivered bytes once, then acknowledges. A retired or replaced
+     * reply stops immediately and is never acknowledged. Runs on the main thread.
+     */
+    private fun syncPlayback(speech: SpeechReply?) {
+        val current = playing
+        if (current != null && speech?.actionId != current) stopPlayback()
+        if (speech == null || speech.actionId == playing || speech.actionId == played) return
+        val bytes = NativeSurface.speechAudio(handle) ?: return
+        if (bytes.size != speech.byteLength) { Log.w(TAG, "speech bytes did not match the snapshot"); return }
+        val file = File(application.cacheDir, "speech-${speech.actionId}.mp3")
+        val started = runCatching {
+            file.writeBytes(bytes)
+            MediaPlayer().apply {
+                setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANT)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
+                setDataSource(file.path)
+                setOnCompletionListener {
+                    if (playing == speech.actionId) {
+                        played = speech.actionId
+                        stopPlayback()
+                        _state.update { it.copy(speaking = false) }
+                        scope.launch { command("acknowledge_speech") { NativeSurface.acknowledgeSpeech(handle) } }
+                    }
+                }
+                setOnErrorListener { _, _, _ -> stopPlayback(); _state.update { it.copy(speaking = false) }; true }
+                prepare()
+                start()
+            }
+        }.getOrElse { error -> Log.w(TAG, "speech playback failed", error); file.delete(); return }
+        player = started
+        playing = speech.actionId
+        _state.update { it.copy(speaking = true) }
+    }
+
+    private fun stopPlayback() {
+        val id = playing ?: return
+        playing = null
+        runCatching { player?.stop() }
+        runCatching { player?.release() }
+        player = null
+        File(application.cacheDir, "speech-$id.mp3").delete()
     }
 
     private fun message(code: String): String = when (code) {
@@ -147,6 +206,7 @@ class SurfaceController(context: Context) {
         "denied" -> "Approve this installation in Center before connecting."
         "busy" -> "Wait for the current operation to finish."
         "no_display" -> "No card is currently shown."
+        "no_speech" -> "No spoken reply is current."
         else -> "The Cosmos connection could not be confirmed."
     }
 

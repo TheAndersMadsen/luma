@@ -83,11 +83,17 @@ enum Frame {
         #[serde(rename = "actionId")]
         action_id: Uuid,
     },
+    Speak {
+        version: u8,
+        stamp: Stamp,
+        speech: crate::speech::SpeechFrame,
+    },
 }
 
 pub(crate) enum Incoming {
     Render(Display),
     Clear(Uuid),
+    Speak(crate::speech::SpeechFrame),
 }
 
 /// The exact bound connection this frame must name.
@@ -428,6 +434,24 @@ pub(crate) fn parse_frame(
                 return Err(Error::InvalidResponse);
             }
             (Incoming::Clear(action_id), stamp)
+        }
+        Frame::Speak {
+            version,
+            stamp,
+            speech,
+        } => {
+            if version != 1 || !valid_stamp(&stamp) || speech.sequence_action() != stamp.instance_id
+            {
+                return Err(Error::InvalidResponse);
+            }
+            speech.validate(
+                crate::speech::Expected {
+                    surface_id: expected.surface_id,
+                    incarnation: expected.incarnation,
+                },
+                now_ms,
+            )?;
+            (Incoming::Speak(speech), stamp)
         }
     };
     let reply = serde_json::json!({"version": 1, "kind": "received", "stamp": stamp}).to_string();

@@ -6,7 +6,7 @@ vi.mock("@/server/auth", () => ({ get AUTH_ENABLED() { return mocks.authEnabled;
 vi.mock("@/server/cosmos", () => ({ COSMOS_WEBAPI: "http://cosmos.test", surfaceOwnerHeaders: mocks.headers, SessionExpiredError: class extends Error {} }));
 import { GET, POST } from "@/app/api/devices/runtime/route";
 import { DELETE } from "@/app/api/devices/runtime/[surfaceId]/route";
-import { GET as SPEECH_GET, POST as SPEECH_POST } from "@/app/api/devices/runtime/[surfaceId]/speech-disclosure/route";
+import { GET as SPEECH_GET, POST as SPEECH_POST } from "@/app/api/surfaces/[surfaceId]/speech-disclosure/route";
 import { GET as VOICE_GET, POST as VOICE_POST } from "@/app/api/devices/runtime/[surfaceId]/local-voice/route";
 import { SPEECH_DISCLOSURE_APPROVAL } from "@/lib/contracts/speechDisclosure";
 import { LOCAL_VOICE_APPROVAL } from "@/lib/contracts/localVoice";
@@ -21,7 +21,7 @@ function request(body: unknown = approval, extra = {}) {
 }
 const list = () => GET(new Request("https://center.test/api/devices/runtime"));
 const revoke = () => DELETE(new Request("https://center.test/api/devices/runtime", { method: "DELETE" }), context);
-const speechRead = () => SPEECH_GET(new Request(`https://center.test/api/devices/runtime/${id}/speech-disclosure`), context);
+const speechRead = () => SPEECH_GET(new Request(`https://center.test/api/surfaces/${id}/speech-disclosure`), context);
 const policy = { provider: { provider: "azure_speech", region: "westeurope" }, maximumClass: "shared_room", transcription: false, synthesis: true };
 const speechInput = { approval: SPEECH_DISCLOSURE_APPROVAL, approvalRevision: 1, expectedRevision: 0, policy };
 const voiceInput = { approval: LOCAL_VOICE_APPROVAL, approvalRevision: 1, expectedRevision: 0, policy: { sourceFloor: "shared_room" } };
@@ -156,7 +156,7 @@ it("speech grant and revoke forward only owner bearer and verify exact committed
     expect(await response.json()).toEqual({ approval: saved });
     expect(response.headers.get("cache-control")).toBe("no-store");
     const [url, options] = vi.mocked(fetch).mock.lastCall!;
-    expect(url).toBe(`http://cosmos.test/surface-api/v1/pins/${id}/speech-disclosure`);
+    expect(url).toBe(`http://cosmos.test/surface-api/v1/surfaces/${id}/speech-disclosure`);
     expect(options?.headers).toEqual({ authorization: "Bearer server-only", "content-type": "application/json" });
     expect(options?.redirect).toBe("error");
     expect(options?.body).toBe(JSON.stringify(input));

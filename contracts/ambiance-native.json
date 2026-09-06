@@ -1,15 +1,16 @@
 {
   "schemaVersion": 1,
-  "state": "native-shared-display-acceptance-in-progress",
-  "scope": "Owner-approved installation key, signed connection, sequenced text and foreground visibility in the shared Cosmos/Center room, with one shared-room visual card acknowledged after the installation's exact render. Native audio, capture, playback and physical device acceptance remain unfinished.",
-  "profile": "native-shared-display-v2",
+  "state": "native-shared-speech-acceptance-in-progress",
+  "scope": "Owner-approved installation key, signed connection, sequenced text and foreground visibility in the shared Cosmos/Center room, with one shared-room visual card acknowledged after the installation's exact render and one shared-room spoken reply synthesized by Cosmos under the origin's speech-provider disclosure, streamed as bounded frames and acknowledged after the installation's complete playback. Native capture and physical device acceptance remain unfinished.",
+  "profile": "native-shared-speech-v3",
+  "legacyProfile": "native-shared-display-v2 approvals keep rendering cards and connecting but play no speech until the owner reapproves at the current revision.",
   "descriptor": {
     "maximumBytes": 1024,
     "fields": {
       "enrollmentId": "non-nil UUID",
       "publicKey": "canonical unpadded base64url of a valid 65-byte uncompressed SEC1 P-256 point",
       "platform": "macos|linux|android|android_tv",
-      "approval": "native-shared-display-v2"
+      "approval": "native-shared-speech-v3"
     },
     "additionalProperties": false
   },
@@ -47,7 +48,7 @@
         "enrollmentId": "non-nil UUID",
         "surfaceId": "non-nil UUID",
         "approvalRevision": "positive safe integer",
-        "approval": "native-shared-display-v2",
+        "approval": "native-shared-speech-v3",
         "publicKeyFingerprint": "SHA256 lowercase hex of SEC1 public-key bytes",
         "challengeId": "non-nil UUID",
         "nonce": "canonical unpadded base64url of 32 random bytes",
@@ -94,8 +95,22 @@
     },
     "response": "Same Connection object as contracts/ambiance-room.json: version, url, token, participant, runtimeParticipant, runtimeEpoch and epoch.",
     "authority": "Resolve principal/surface through the durable enrollment locator. Check current proof, approval revision and epoch before room setup, then recheck in the shared coordinator before and after SFU setup. Room joins and exact retries do not open a replacement connection or renew any deadline.",
-    "coordination": "One shared room manager and runtime participant for Browser and Native. The existing cosmos.coordinate.v1 RPC carries sequenced text and native heartbeat/cancel controls. Native participants receive no render commands or media grants.",
+    "coordination": "One shared room manager and runtime participant for Browser and Native. The existing cosmos.coordinate.v1 RPC carries sequenced text and native heartbeat/cancel/state/acknowledge controls. Native participants receive render and clear frames for one shared card and speak frames for one spoken reply; they receive no media grants.",
     "lifecycle": "A fresh heartbeat extends only the 45-second lease, capped by the one-hour absolute expiry. Input and controls share one durable high-water cursor. Exact retries do not renew or invoke cognition again. Expired connections cannot revive. Disconnect closes only the exact native connection and its pending turn, preserving owner approval and the same-boot cursor."
+  },
+  "speech": {
+    "disclosure": "Owner policy at GET/POST /surface-api/v1/surfaces/:surfaceId/speech-disclosure (approve-speech-provider-disclosure-v1) permits synthesis of the origin surface's shared reply text through Azure Speech. The policy is keyed by the turn's origin (Pin or native); a native surface is an eligible audio.tts target only with the current speech profile, a visible current connection and a permitting origin policy. Speech with no eligible surface is re-proposed as the same text on a visual card.",
+    "dispatch": "Poll never stock-claims audio for a room member. The room coordinator starts one synthesis job per member and proposed audio action; StartDisclosure atomically claims the exact action under the origin policy, and the disclosure is rechecked before every provider chunk and on every state change. Failure before any frame leaves the action to expire; failure after a frame records DeliveryFailed; drop retires the exact turn.",
+    "frames": {
+      "kind": "speak",
+      "header": "{version:1,kind:\"speak\",stamp,speech:{version:1,actionId,turnId,generation,surfaceId,incarnation,channel:\"audio.tts\",contentDigest,format:\"audio/mpeg\",expiresAt,sequence:1,final:false,text}}",
+      "chunk": "Same bound fields with sequence n+1, chunk (standard base64 of at most 8192 audio bytes) and final on the last frame; no text.",
+      "receipt": "{version:1,kind:\"received\",stamp} exactly as for render frames; a receipt is transport evidence only.",
+      "format": "Azure audio-24khz-48kbitrate-mono-mp3, whole reply at most 1048576 bytes; contentDigest is SHA-256 of the spoken text, byte-for-byte the disclosed synthesis input.",
+      "clear": "A clear frame naming the action retires the delivered or partial reply; the client stops playback and never acknowledges it."
+    },
+    "acknowledgment": "The installation plays the exact assembled bytes once and then sends the sequenced acknowledge control with channel audio.tts, the action's turn/generation and contentDigest. Only a current native member may acknowledge audio; an interrupted, replaced or retired reply is never acknowledged.",
+    "clients": "The shared Rust client assembles frames and exposes the reply with its audio; the C/JNI bindings report speech in snapshots without the bytes and copy the bytes on request. macOS plays through AVAudioPlayer and Android through MediaPlayer; both hold no provider credentials and substitute no operating-system voice."
   },
   "signing": {
     "algorithm": "ECDSA P-256 with SHA-256 over the complete transcript bytes exactly once; strict DER signature, maximum 72 bytes.",

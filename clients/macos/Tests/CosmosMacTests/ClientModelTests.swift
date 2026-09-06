@@ -53,6 +53,9 @@ private final class MockClientBridge: ClientBridge {
     var cancelledAdmissions: [TextAdmission] = []
     var visibilityReports: [Bool] = []
     var acknowledgedCards: [DisplayCard] = []
+    var audioRequests: [SpeechReply] = []
+    var acknowledgedSpeech: [SpeechReply] = []
+    var speechAudioHandler: ((SpeechReply) async throws -> Data)?
     var disconnectCalls = 0
     var prepareHandler: ((ServerEndpoint) async throws -> PublicDescriptor)?
     var connectHandler: (() async throws -> Void)?
@@ -104,6 +107,15 @@ private final class MockClientBridge: ClientBridge {
     func acknowledge(display: DisplayCard) async throws {
         guard snapshot.display == display else { throw ClientFailure.connectionUnavailable }
         acknowledgedCards.append(display)
+    }
+    func speechAudio(for reply: SpeechReply) async throws -> Data {
+        audioRequests.append(reply)
+        if let speechAudioHandler { return try await speechAudioHandler(reply) }
+        throw ClientFailure.connectionUnavailable
+    }
+    func acknowledgeSpeech(_ reply: SpeechReply) async throws {
+        guard snapshot.speech == reply else { throw ClientFailure.connectionUnavailable }
+        acknowledgedSpeech.append(reply)
     }
     func disconnect() async {
         disconnectCalls += 1

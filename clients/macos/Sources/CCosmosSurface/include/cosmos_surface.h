@@ -23,7 +23,8 @@ enum {
     COSMOS_SURFACE_MAX_CONFIG_BYTES = 2048,
     COSMOS_SURFACE_MAX_TEXT_BYTES = 4000,
     COSMOS_SURFACE_MAX_JOURNAL_BYTES = 32768,
-    COSMOS_SURFACE_MAX_EVENT_BYTES = 16384
+    COSMOS_SURFACE_MAX_EVENT_BYTES = 16384,
+    COSMOS_SURFACE_MAX_SPEECH_BYTES = 1048576
 };
 
 /* All callback buffers belong to Rust and are borrowed only for the call.
@@ -88,11 +89,21 @@ int32_t cosmos_surface_set_visible(CosmosSurface *surface, int32_t visible);
  * its complete, exact render including every credit line. Acknowledging a
  * card that was not fully shown is a false outcome claim. */
 int32_t cosmos_surface_acknowledge(CosmosSurface *surface);
+/* Acknowledge the current "speech" reply only after the platform played its
+ * complete audio to the end. Acknowledging interrupted or unplayed audio is a
+ * false outcome claim. */
+int32_t cosmos_surface_acknowledge_speech(CosmosSurface *surface);
+/* Copy the current spoken reply's complete audio bytes (the snapshot's
+ * speech.byteLength). EMPTY when no reply is current; BUFFER_TOO_SMALL sets
+ * *written to the required size. Bytes are audio/mpeg. */
+int32_t cosmos_surface_speech_audio(CosmosSurface *surface, uint8_t *output,
+                                   size_t capacity, size_t *written);
 int32_t cosmos_surface_disconnect(CosmosSurface *surface);
 
 /* Nonblocking safe JSON snapshot, UTF-8 bytes without a trailing NUL:
  * {version:1,kind:"state",operation:"prepare|connect|send_text|retry_pending|
- * cancel|set_visible|acknowledge|display|disconnect|heartbeat",
+ * cancel|set_visible|acknowledge|acknowledge_speech|display|speech|disconnect|
+ * heartbeat",
  * outcome:"ok|error",error:null|STATIC_CODE,
  * connected:bool,pendingOpen:bool,needsReconnect:bool,
  * descriptor:null|PUBLIC_DESCRIPTOR,
@@ -106,7 +117,11 @@ int32_t cosmos_surface_disconnect(CosmosSurface *surface);
  * content:{kind:"text",text:STRING}|{kind:"places",query:STRING,
  * items:[{placeId,name,address,sourceUrl:null|HTTPS}],attributions:[STRING]},
  * credits:[[{kind:"text",text}|{kind:"link",text,href:HTTPS}]]},
+ * speech:null|{actionId:UUID,turnId:UUID,generation:integer,contentDigest:HEX64,
+ * expiresAtMs:integer,text:STRING,format:"audio/mpeg",byteLength:integer},
  * eventsSkipped:N}
+ * A "speech" operation reports a complete or retired spoken reply; fetch its
+ * bytes with cosmos_surface_speech_audio and acknowledge after full playback.
  * credits holds one inert token list per attribution string, in order; render
  * every token verbatim as text or one HTTPS link, never as markup.
  * A "display" operation reports a delivered or retired card; the client has

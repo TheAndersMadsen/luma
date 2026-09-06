@@ -100,6 +100,7 @@ public final class MenuBarController: NSObject {
         for observer in windowObservers { NotificationCenter.default.removeObserver(observer) }
         windowObservers = []
         model.setVisible(false)
+        model.stopPlayback()
         panel?.close()
         panel = nil
         if let statusItem { NSStatusBar.system.removeStatusItem(statusItem) }

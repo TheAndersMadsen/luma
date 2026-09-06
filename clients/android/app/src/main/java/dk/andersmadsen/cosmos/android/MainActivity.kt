@@ -65,6 +65,10 @@ class MainActivity : ComponentActivity() {
                             DisplayCardView(card, onCommitted = controller::displayCommitted,
                                 Modifier.fillMaxWidth().heightIn(max = 360.dp))
                         }
+                        state.speech?.let { speech ->
+                            Text(if (state.speaking) "Speaking" else "Spoken reply", color = CosmosPalette.secondary, fontSize = 12.sp)
+                            Text(speech.text, color = CosmosPalette.text)
+                        }
                         OutlinedTextField(server, { server = it }, label = { Text("HTTPS server address") },
                             singleLine = true, modifier = Modifier.fillMaxWidth(), enabled = state.canPrepare)
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -94,9 +98,10 @@ class MainActivity : ComponentActivity() {
                         Text(state.message, color = CosmosPalette.text)
                         Spacer(Modifier.width(1.dp))
                         OutlinedButton(onClick = { selectAssistant() }, modifier = Modifier.fillMaxWidth()) { Text("Choose Cosmos as default assistant") }
-                        Text("This surface is public text and one shared card while the app is in the foreground. No microphone, no private memories, no device actions.",
+                        Text("This surface is public text, one shared card and one spoken reply while the app is in the foreground. No microphone, no private memories, no device actions.",
                             color = CosmosPalette.secondary, fontSize = 12.sp)
-                        CosmosWaveform(if (state.busy) AssistantState.THINKING else AssistantState.IDLE, Modifier.fillMaxWidth().heightIn(48.dp))
+                        CosmosWaveform(when { state.speaking -> AssistantState.SPEAKING; state.busy -> AssistantState.THINKING; else -> AssistantState.IDLE },
+                            Modifier.fillMaxWidth().heightIn(48.dp))
                     }
                 }
             }

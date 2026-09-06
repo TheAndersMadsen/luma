@@ -407,6 +407,7 @@ mod tests {
             deadline_ms: 3100,
             display_expires_at_ms: reference.expires_at_ms,
             confirmation_root: None,
+            origin_surface: Uuid::nil(),
             attempts: 1,
             fallbacks: Vec::new(),
         }

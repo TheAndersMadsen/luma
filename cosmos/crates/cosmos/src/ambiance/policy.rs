@@ -147,6 +147,9 @@ pub fn candidate(
             crate::surface_registry::known_browser_manifest(&record.approved_manifest)
         }
         (Binding::Native { .. }, Channel::VisualCard) => {
+            crate::surface_registry::known_native_manifest(&record.approved_manifest)
+        }
+        (Binding::Native { .. }, Channel::AudioTts) => {
             record.approved_manifest == crate::surface_registry::native_manifest()
         }
         (Binding::Pin { .. }, Channel::AudioTts) => {
@@ -329,10 +332,10 @@ mod tests {
     }
 
     #[test]
-    fn legacy_native_approvals_have_no_display_capability() {
+    fn legacy_native_approvals_render_cards_but_have_no_speech_capability() {
         let mut legacy = native("macos");
         legacy.approved_manifest = crate::surface_registry::legacy_native_manifest();
-        let candidate = candidate(
+        let card = candidate(
             &legacy,
             present(Uuid::new_v4()),
             Uuid::new_v4(),
@@ -340,8 +343,26 @@ mod tests {
             PrivacyClass::Public,
             Some(RoutingTarget::Macos),
         );
+        assert_eq!(card.blocker, None);
+        let candidate = candidate(
+            &legacy,
+            present(Uuid::new_v4()),
+            Uuid::new_v4(),
+            Channel::AudioTts,
+            PrivacyClass::Public,
+            Some(RoutingTarget::Macos),
+        );
         assert_eq!(candidate.blocker, Some(Blocker::Capability));
         assert_eq!(candidate.hint, 0);
+        let current = super::candidate(
+            &native("android_tv"),
+            present(Uuid::new_v4()),
+            Uuid::new_v4(),
+            Channel::AudioTts,
+            PrivacyClass::SharedRoom,
+            None,
+        );
+        assert_eq!(current.blocker, None);
         assert!(!RoutingTarget::Linux.matches(&legacy));
         assert!(RoutingTarget::Macos.matches(&legacy));
     }

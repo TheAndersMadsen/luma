@@ -465,7 +465,7 @@ impl RuntimeState {
             .filter(|record| {
                 !record.revoked
                     && matches!(record.binding, Binding::Native { .. })
-                    && record.approved_manifest == surface_registry::native_manifest()
+                    && surface_registry::known_native_manifest(&record.approved_manifest)
             })
             .ok_or(RuntimeError::InvalidOrigin)?;
         let connection = self

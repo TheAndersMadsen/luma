@@ -164,40 +164,33 @@ pub fn pin_surface_id(principal: &str, device_id: &str) -> Uuid {
     Uuid::from_bytes(bytes)
 }
 
-pub const NATIVE_APPROVAL: &str = "native-shared-display-v2";
-pub const LEGACY_NATIVE_APPROVAL: &str = "native-shared-text-v1";
+pub const NATIVE_APPROVAL: &str = "native-shared-speech-v3";
+pub const LEGACY_NATIVE_APPROVAL: &str = "native-shared-display-v2";
 pub const MAX_NATIVE_REVISION: u64 = MAX_SEQUENCE;
 
-/// Persisted v1 approvals remain input-only until explicit reapproval.
+/// Persisted display-only approvals keep rendering shared cards until the
+/// owner reapproves them for speech. Older text-only records are unknown.
 pub fn legacy_native_manifest() -> serde_json::Value {
     serde_json::json!({
         "class": "native",
-        "capabilities": {"input": ["text.public"], "output": {}},
-        "constraints": ["actor_unknown", "occupancy_unknown", "render_unverified", "playback_unverified"],
-        "expression": {},
+        "capabilities": {"input": ["text.public", "state.visibility"], "output": {"visual.card": {"maxClass": "shared_room", "shared": true}}},
+        "constraints": ["actor_unknown", "occupancy_unknown", "render_unverified", "playback_unverified", "visible_foreground_only", "no_background_output"],
+        "expression": {"visual.card": ["acknowledged", "degraded"]},
         "cognition": {"declaredClass": 0, "models": []},
-        "authority": {"mayOriginate": ["user.request"], "reflexive": []}
+        "authority": {"mayOriginate": ["state.change", "user.request"], "reflexive": []}
     })
 }
 
-/// A native installation may render one shared-room visual card while its
-/// signed connection is current and it reports a visible foreground. It
-/// declares no private channel: occupancy and actor identity stay unknown.
+/// A native installation may render one shared-room visual card and play one
+/// shared-room spoken reply while its signed connection is current and it
+/// reports a visible foreground. Speech bytes come only from the runtime's
+/// own disclosed synthesis; the manifest declares no private channel and
+/// occupancy and actor identity stay unknown.
 pub fn native_manifest() -> serde_json::Value {
     let mut manifest = legacy_native_manifest();
-    manifest["capabilities"]["input"] = serde_json::json!(["text.public", "state.visibility"]);
-    manifest["capabilities"]["output"] =
-        serde_json::json!({"visual.card": {"maxClass": "shared_room", "shared": true}});
-    manifest["constraints"] = serde_json::json!([
-        "actor_unknown",
-        "occupancy_unknown",
-        "render_unverified",
-        "playback_unverified",
-        "visible_foreground_only",
-        "no_background_output"
-    ]);
-    manifest["expression"] = serde_json::json!({"visual.card": ["acknowledged", "degraded"]});
-    manifest["authority"]["mayOriginate"] = serde_json::json!(["state.change", "user.request"]);
+    manifest["capabilities"]["output"]["audio.tts"] =
+        serde_json::json!({"maxClass": "shared_room", "shared": true});
+    manifest["expression"]["audio.tts"] = serde_json::json!(["acknowledged", "degraded"]);
     manifest
 }
 
@@ -847,7 +840,10 @@ mod tests {
         assert_eq!(projection["playbackVerified"], false);
         assert_eq!(
             projection["manifest"]["capabilities"]["output"],
-            serde_json::json!({"visual.card": {"maxClass": "shared_room", "shared": true}})
+            serde_json::json!({
+                "visual.card": {"maxClass": "shared_room", "shared": true},
+                "audio.tts": {"maxClass": "shared_room", "shared": true}
+            })
         );
         assert!(projection.get("publicKey").is_none());
         assert!(!reapproved.view(600).available);

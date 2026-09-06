@@ -14,11 +14,11 @@ const descriptor: NativeDescriptor = {
 };
 const serialized = JSON.stringify(descriptor);
 const first: NativeSurface = { ...NATIVE_SURFACE_POSTURE, surfaceId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-  enrollmentId: descriptor.enrollmentId, platform: descriptor.platform, revision: 1, publicKeyFingerprint: fingerprint, revoked: false, display: true };
+  enrollmentId: descriptor.enrollmentId, platform: descriptor.platform, revision: 1, publicKeyFingerprint: fingerprint, revoked: false, display: true, speech: true };
 const second: NativeSurface = { ...first, surfaceId: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
   enrollmentId: "22222222-2222-2222-2222-222222222222", platform: "linux", revision: 7 };
 const path = "/api/surfaces/native";
-const success = "Cosmos recorded this installation’s shared-display approval. Cards route to it only while its connected app reports a visible foreground.";
+const success = "Cosmos recorded this installation’s shared display and speech approval. Cards and spoken replies route to it only while its connected app reports a visible foreground.";
 const revoked = "Cosmos confirmed this installation’s approval revoked.";
 
 beforeEach(() => {
@@ -50,12 +50,12 @@ async function review(text = serialized) {
   fireEvent.click(screen.getByRole("button", { name: "Review installation" }));
   return screen.findByRole("group", { name: "Review native installation" });
 }
-function confirm() { fireEvent.click(screen.getByRole("button", { name: "Confirm shared-display approval" })); }
+function confirm() { fireEvent.click(screen.getByRole("button", { name: "Confirm shared display and speech approval" })); }
 function expectLocked() {
   expect(screen.getByLabelText("Public installation descriptor")).toBeDisabled();
   expect(screen.getByLabelText("Import installation descriptor")).toBeDisabled();
   expect(screen.getByRole("button", { name: "Review installation" })).toBeDisabled();
-  expect(screen.queryByRole("button", { name: "Confirm shared-display approval" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Confirm shared display and speech approval" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: /^Revoke installation / })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Confirm revoke installation" })).not.toBeInTheDocument();
   expect(screen.queryByText(success)).not.toBeInTheDocument();
@@ -85,7 +85,7 @@ it("requires review and a separate owner confirmation of the key and limited sha
   expect(screen.getByText(/Approval alone does not install or connect a client/)).toBeVisible();
   paste();
   expect(mock).toHaveBeenCalledTimes(1);
-  expect(screen.queryByRole("button", { name: "Confirm shared-display approval" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Confirm shared display and speech approval" })).not.toBeInTheDocument();
   const inspected = within(await review());
   expect(inspected.getByText("Android TV")).toBeVisible();
   expect(inspected.getByText(descriptor.enrollmentId)).toBeVisible();
@@ -103,7 +103,7 @@ it("requires review and a separate owner confirmation of the key and limited sha
   expect(options?.cache).toBe("no-store");
   expect(options?.headers).toEqual({ "content-type": "application/json" });
   expect(JSON.parse(String(options?.body))).toEqual({ ...descriptor, expectedRevision: 0 });
-  expect(screen.getByText("Shared-display approval recorded · connection unverified · room and actor unknown.")).toBeVisible();
+  expect(screen.getByText("Shared display and speech approval recorded · connection unverified · room and actor unknown.")).toBeVisible();
   expect(screen.getByRole("group", { name: `Web lookup permission for Android TV installation ${descriptor.enrollmentId}` })).toBeVisible();
   expect(screen.getByRole("button", { name: "Web lookup permission" })).toBeVisible();
   expect(screen.getByRole("group", { name: `Place lookup permission for Android TV installation ${descriptor.enrollmentId}` })).toBeVisible();
@@ -115,7 +115,7 @@ it("editing a reviewed descriptor removes its approval gesture until the new des
   const mock = upstream(); render(<NativeSurfaces />); await ready(); await review();
   paste(JSON.stringify({ ...descriptor, platform: "macos" }));
   expect(screen.queryByRole("group", { name: "Review native installation" })).not.toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "Confirm shared-display approval" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Confirm shared display and speech approval" })).not.toBeInTheDocument();
   expect(mock.mock.calls.every(([, options]) => !options?.method)).toBe(true);
 });
 
@@ -142,9 +142,9 @@ it("imports a descriptor of exactly 1 KB locally, then requires lookup and expli
   await waitFor(() => expect(screen.getByLabelText("Public installation descriptor")).toHaveValue(text));
   expect(read).toHaveBeenCalledTimes(1);
   expect(mock).toHaveBeenCalledTimes(1);
-  expect(screen.queryByRole("button", { name: "Confirm shared-display approval" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Confirm shared display and speech approval" })).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Review installation" }));
-  await screen.findByRole("button", { name: "Confirm shared-display approval" });
+  await screen.findByRole("button", { name: "Confirm shared display and speech approval" });
   expect(mock.mock.calls.every(([, options]) => !options?.method)).toBe(true);
 });
 
@@ -167,8 +167,8 @@ it("reapproval uses the fresh revoked lookup revision, while an active matching 
   await screen.findByText(success);
   expect(JSON.parse(String(mock.mock.lastCall?.[1]?.body)).expectedRevision).toBe(8);
   mock.mockResolvedValueOnce(Response.json({ native: { ...first, revision: 9 } })); await review();
-  expect(screen.getByText("This installation already has shared-display approval.")).toBeVisible();
-  expect(screen.queryByRole("button", { name: "Confirm shared-display approval" })).not.toBeInTheDocument();
+  expect(screen.getByText("This installation already has shared display and speech approval.")).toBeVisible();
+  expect(screen.queryByRole("button", { name: "Confirm shared display and speech approval" })).not.toBeInTheDocument();
   expect(mock.mock.calls.filter(([, options]) => options?.method === "POST")).toHaveLength(1);
 });
 
@@ -230,7 +230,7 @@ it("does not accept revocation committed for another surface or at a stale revis
 it("fences double confirmation while the mutation is pending without claiming optimistic approval", async () => {
   const mock = upstream(); render(<NativeSurfaces />); await ready(); await review();
   const pending = deferred<Response>(); mock.mockReturnValueOnce(pending.promise);
-  const approve = screen.getByRole("button", { name: "Confirm shared-display approval" });
+  const approve = screen.getByRole("button", { name: "Confirm shared display and speech approval" });
   fireEvent.click(approve); fireEvent.click(approve);
   expect(approve).toBeDisabled();
   expect(mock.mock.calls.filter(([, options]) => options?.method === "POST")).toHaveLength(1);

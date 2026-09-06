@@ -31,17 +31,25 @@ data class DisplayCard(
     val contentDigest: String, val expiresAtMs: Long, val content: DisplayContent,
 )
 
+/** One complete spoken reply. The bytes are fetched separately; this names and bounds them. */
+data class SpeechReply(
+    val actionId: UUID, val turnId: UUID, val generation: Long,
+    val contentDigest: String, val expiresAtMs: Long, val text: String, val format: String, val byteLength: Int,
+)
+
 data class NativeEvent(
     val operation: String, val error: String?, val connected: Boolean,
     val pendingOpen: Boolean, val needsReconnect: Boolean,
     val descriptor: Descriptor?, val pending: PendingOperation?, val lastUnknown: PendingOperation?,
-    val admission: Admission?, val visible: Boolean, val display: DisplayCard?, val eventsSkipped: Long,
+    val admission: Admission?, val visible: Boolean, val display: DisplayCard?, val speech: SpeechReply?,
+    val eventsSkipped: Long,
 ) {
     val ok: Boolean get() = error == null
 
     companion object {
+        const val APPROVAL = "native-shared-speech-v3"
         private val OPERATIONS = setOf("prepare", "connect", "send_text", "retry_pending", "cancel",
-            "set_visible", "acknowledge", "display", "disconnect", "heartbeat")
+            "set_visible", "acknowledge", "acknowledge_speech", "display", "speech", "disconnect", "heartbeat")
         private val PENDING_KINDS = setOf("text", "heartbeat", "cancel", "state", "acknowledge")
         private val NIL = UUID(0, 0)
         private val HEX64 = Regex("^[0-9a-f]{64}$")
@@ -111,6 +119,19 @@ data class NativeEvent(
                 digest, value.getLong("expiresAtMs"), body)
         }
 
+        private fun speech(value: JSONObject?): SpeechReply? {
+            value ?: return null
+            val text = value.getString("text")
+            val generation = value.getLong("generation")
+            val digest = value.getString("contentDigest")
+            val length = value.getInt("byteLength")
+            require(text.isNotBlank() && text.toByteArray().size <= NativeSurface.MAX_TEXT_BYTES
+                && value.getString("format") == "audio/mpeg" && length in 1..NativeSurface.MAX_SPEECH_BYTES
+                && generation in 1..MAX_SAFE && HEX64.matches(digest) && value.getLong("expiresAtMs") > 0) { "invalid speech reply" }
+            return SpeechReply(uuid(value.getString("actionId")), uuid(value.getString("turnId")), generation,
+                digest, value.getLong("expiresAtMs"), text, "audio/mpeg", length)
+        }
+
         /** Strict decode; any unsupported shape is a client-side invalid response. */
         fun decode(bytes: ByteArray): NativeEvent {
             val value = JSONObject(String(bytes, Charsets.UTF_8))
@@ -123,7 +144,7 @@ data class NativeEvent(
             val descriptor = value.optJSONObject("descriptor")?.let {
                 Descriptor(it.getString("enrollmentId"), it.getString("publicKey"), it.getString("platform"), it.getString("approval"))
             }
-            if (descriptor != null) require(descriptor.platform in setOf("android", "android_tv") && descriptor.approval == "native-shared-display-v2") { "foreign descriptor" }
+            if (descriptor != null) require(descriptor.platform in setOf("android", "android_tv") && descriptor.approval == APPROVAL) { "foreign descriptor" }
             val connected = value.getBoolean("connected")
             return NativeEvent(
                 operation = operation, error = error, connected = connected,
@@ -131,6 +152,7 @@ data class NativeEvent(
                 descriptor = descriptor, pending = pending(value.optJSONObject("pending")),
                 lastUnknown = pending(value.optJSONObject("lastUnknown")), admission = admission(value.optJSONObject("admission")),
                 visible = value.getBoolean("visible"), display = if (connected) display(value.optJSONObject("display")) else null,
+                speech = if (connected) speech(value.optJSONObject("speech")) else null,
                 eventsSkipped = value.getLong("eventsSkipped"),
             )
         }

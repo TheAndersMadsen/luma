@@ -1,7 +1,8 @@
-//! Provider work belongs to a durable native turn and an exact disclosure.
-//! No media session or device playback authority is granted by these methods.
+//! Provider work belongs to a durable turn and an exact disclosure. No media
+//! session or device playback authority is granted by these methods; the
+//! target only proves the surface that will receive the disclosed bytes.
 use super::{
-    Action, RuntimeOperation, RuntimeResult, TurnFence,
+    Action, NativeProof, RuntimeOperation, RuntimeResult, TurnFence,
     disclosure::{self, Disclosure},
     runtime::{AmbianceRuntime, runtime_error},
 };
@@ -26,14 +27,88 @@ use uuid::Uuid;
 const CHECK_TIMEOUT: Duration = Duration::from_secs(1);
 const PROVIDER_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// The surface that plays the disclosed synthesis. A Pin binds through its
+/// authenticated device request; a native installation binds through its
+/// signed connection proof. Neither is provider authority on its own.
+#[derive(Clone)]
+pub enum SpeechTarget {
+    Pin {
+        authenticated: AuthenticatedRequest,
+        incarnation: Uuid,
+    },
+    Native {
+        principal: String,
+        connection: NativeProof,
+    },
+}
+
+impl SpeechTarget {
+    fn principal(&self) -> String {
+        match self {
+            Self::Pin { authenticated, .. } => authenticated
+                .principal
+                .expose_for_authorization()
+                .to_owned(),
+            Self::Native { principal, .. } => principal.clone(),
+        }
+    }
+
+    /// The Pin plays raw 48 kHz PCM through its own audio path; a native
+    /// installation receives a bounded compressed stream over its data room.
+    pub fn format(&self) -> SpeechAudioFormat {
+        match self {
+            Self::Pin { .. } => SpeechAudioFormat::Raw48Khz16BitMonoPcm,
+            Self::Native { .. } => SpeechAudioFormat::Audio24Khz48KBitrateMonoMp3,
+        }
+    }
+
+    /// The currently bound surface, revalidated against the Store each time.
+    async fn surface(&self, runtime: &AmbianceRuntime) -> Result<Uuid, Status> {
+        match self {
+            Self::Pin {
+                authenticated,
+                incarnation,
+            } => {
+                let connection = runtime.pin_proof(authenticated, *incarnation).await?;
+                runtime
+                    .store
+                    .runtime(
+                        authenticated.principal.expose_for_authorization(),
+                        RuntimeOperation::CheckPin {
+                            connection: connection.clone(),
+                        },
+                    )
+                    .await
+                    .map_err(runtime_error)?;
+                Ok(connection.surface_id)
+            }
+            Self::Native {
+                principal,
+                connection,
+            } => {
+                runtime
+                    .store
+                    .runtime(
+                        principal,
+                        RuntimeOperation::CheckNative {
+                            connection: connection.clone(),
+                        },
+                    )
+                    .await
+                    .map_err(runtime_error)?;
+                Ok(connection.surface_id)
+            }
+        }
+    }
+}
+
 struct Lease {
     authority: Arc<DisclosureAuthority>,
     cancel: CancelDisclosure,
 }
 struct DisclosureAuthority {
     runtime: Arc<AmbianceRuntime>,
-    authenticated: AuthenticatedRequest,
-    incarnation: Uuid,
+    target: SpeechTarget,
     fence: TurnFence,
     disclosure: Disclosure,
 }
@@ -65,24 +140,18 @@ impl Drop for CancelDisclosure {
 impl Lease {
     async fn start(
         runtime: Arc<AmbianceRuntime>,
-        authenticated: AuthenticatedRequest,
-        incarnation: Uuid,
+        target: SpeechTarget,
         fence: TurnFence,
+        surface_id: Uuid,
         request: disclosure::Request,
     ) -> Result<Self, Status> {
-        let proof = tokio::time::timeout(
-            CHECK_TIMEOUT,
-            runtime.pin_proof(&authenticated, incarnation),
-        )
-        .await
-        .map_err(|_| unavailable())??;
-        if proof.surface_id != fence.origin_surface {
-            return Err(Status::permission_denied("origin mismatch"));
+        let bound = tokio::time::timeout(CHECK_TIMEOUT, target.surface(&runtime))
+            .await
+            .map_err(|_| unavailable())??;
+        if bound != surface_id {
+            return Err(Status::permission_denied("target mismatch"));
         }
-        let principal = authenticated
-            .principal
-            .expose_for_authorization()
-            .to_owned();
+        let principal = target.principal();
         // Arm before the commit. Interrupted or ambiguous commits must not leave
         // a live turn available for a second upload.
         let id = Uuid::new_v4();
@@ -115,8 +184,7 @@ impl Lease {
         Ok(Self {
             authority: Arc::new(DisclosureAuthority {
                 runtime,
-                authenticated,
-                incarnation,
+                target,
                 fence,
                 disclosure,
             }),
@@ -127,13 +195,11 @@ impl Lease {
 impl DisclosureAuthority {
     async fn check(&self) -> Result<(), Status> {
         tokio::time::timeout(CHECK_TIMEOUT, async {
-            self.runtime
-                .check_pin(&self.authenticated, self.incarnation)
-                .await?;
+            self.target.surface(&self.runtime).await?;
             self.runtime
                 .store
                 .runtime(
-                    self.authenticated.principal.expose_for_authorization(),
+                    &self.target.principal(),
                     RuntimeOperation::CheckDisclosure {
                         fence: self.fence.clone(),
                         disclosure: self.disclosure.clone(),
@@ -155,7 +221,7 @@ impl Lease {
         let result = tokio::time::timeout(PROVIDER_TIMEOUT, async {
             // Even an immediately ready future cannot run before revalidation.
             self.authority.check().await?;
-            let mut changes = tokio::time::timeout(CHECK_TIMEOUT, self.authority.runtime.store.runtime_changes(self.authority.authenticated.principal.expose_for_authorization())).await.map_err(|_| unavailable())?.map_err(runtime_error)?;
+            let mut changes = tokio::time::timeout(CHECK_TIMEOUT, self.authority.runtime.store.runtime_changes(&self.authority.target.principal())).await.map_err(|_| unavailable())?.map_err(runtime_error)?;
             let mut interval = tokio::time::interval(Duration::from_millis(250));
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             tokio::pin!(work);
@@ -256,31 +322,29 @@ impl Drop for SpeechStream {
 
 impl AmbianceRuntime {
     /// Atomically claim and authorize the exact proposed speech action before
-    /// synthesis. The native room owner
-    /// must separately authorize publication/consumption and completion.
-    pub async fn synthesize_pin(
+    /// synthesis. The caller that owns the target's transport must separately
+    /// deliver the bytes and record delivery failure or acknowledgment.
+    pub async fn synthesize(
         self: &Arc<Self>,
-        authenticated: AuthenticatedRequest,
-        incarnation: Uuid,
+        target: SpeechTarget,
         fence: TurnFence,
         action: Action,
     ) -> Result<SpeechStream, Status> {
         let client = AzureSpeechClient::from_configuration()
             .map_err(|_| unavailable())?
             .ok_or_else(unavailable)?;
-        self.synthesize_pin_with_client(authenticated, incarnation, fence, action, client)
+        self.synthesize_with_client(target, fence, action, client)
             .await
     }
 
-    pub(crate) async fn synthesize_pin_with_client(
+    pub(crate) async fn synthesize_with_client(
         self: &Arc<Self>,
-        authenticated: AuthenticatedRequest,
-        incarnation: Uuid,
+        target: SpeechTarget,
         fence: TurnFence,
         action: Action,
         client: AzureSpeechClient,
     ) -> Result<SpeechStream, Status> {
-        let format = SpeechAudioFormat::Raw48Khz16BitMonoPcm;
+        let format = target.format();
         let request = disclosure::Request {
             provider: disclosure::Provider::AzureSpeech {
                 region: client.region().to_owned(),
@@ -292,7 +356,7 @@ impl AmbianceRuntime {
             privacy: action.privacy,
         };
         let mut lease =
-            Lease::start(self.clone(), authenticated, incarnation, fence, request).await?;
+            Lease::start(self.clone(), target, fence, action.surface_id, request).await?;
         let authority = lease.authority.clone();
         let (send, chunks) = mpsc::channel(1);
         let current = Arc::new(AtomicBool::new(true));

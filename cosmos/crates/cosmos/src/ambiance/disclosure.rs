@@ -81,6 +81,34 @@ pub struct Disclosure {
 }
 
 impl RuntimeState {
+    /// Only a Pin bound to its authenticated device connection or a native
+    /// installation bound to its signed connection can originate a turn whose
+    /// reply text is disclosed to the speech provider. Browsers cannot.
+    pub(super) fn disclosed_speech_origin(
+        records: &BTreeMap<Uuid, Record>,
+        turn: &super::state::Turn,
+    ) -> bool {
+        turn.pin_incarnation.is_some()
+            || records
+                .get(&turn.fence.origin_surface)
+                .is_some_and(|r| matches!(r.binding, Binding::Native { .. }))
+    }
+
+    /// Disclosed synthesis plays on the origin itself or on a native surface
+    /// approved for speech; the origin's policy still governs the disclosure.
+    pub(super) fn disclosed_speech_target(
+        records: &BTreeMap<Uuid, Record>,
+        origin: Uuid,
+        surface_id: Uuid,
+    ) -> bool {
+        surface_id == origin
+            || records.get(&surface_id).is_some_and(|r| {
+                !r.revoked
+                    && matches!(r.binding, Binding::Native { .. })
+                    && r.approved_manifest == crate::surface_registry::native_manifest()
+            })
+    }
+
     pub(super) fn disclosure_policy(
         &self,
         records: &BTreeMap<Uuid, Record>,
@@ -88,7 +116,9 @@ impl RuntimeState {
     ) -> Result<Option<Approval>, RuntimeError> {
         let record = records
             .get(&surface)
-            .filter(|r| !r.revoked && matches!(r.binding, Binding::Pin { .. }))
+            .filter(|r| {
+                !r.revoked && matches!(r.binding, Binding::Pin { .. } | Binding::Native { .. })
+            })
             .ok_or(RuntimeError::InvalidOrigin)?;
         Ok(self
             .disclosure_policies
@@ -146,7 +176,7 @@ impl RuntimeState {
         if turn.finished
             || turn.voice_pending()
             || turn.fence.origin_surface != fence.origin_surface
-            || turn.pin_incarnation.is_none()
+            || !Self::disclosed_speech_origin(records, turn)
             || !self.origin_valid(turn, records, now)
         {
             return Err(RuntimeError::Stale);
@@ -166,7 +196,11 @@ impl RuntimeState {
                 if action.turn_id != fence.turn_id
                     || action.generation != fence.generation
                     || action.worker != fence.worker
-                    || action.surface_id != fence.origin_surface
+                    || !Self::disclosed_speech_target(
+                        records,
+                        fence.origin_surface,
+                        action.surface_id,
+                    )
                     || action.channel != super::Channel::AudioTts
                     || action.status
                         != if starting {
@@ -181,7 +215,8 @@ impl RuntimeState {
                 }
             }
             Purpose::Transcription => {
-                if request.action_id.is_some()
+                if turn.pin_incarnation.is_none()
+                    || request.action_id.is_some()
                     || request.privacy != PrivacyClass::Sensitive
                     || !self.actions.is_empty()
                     || turn.analysis.is_some()

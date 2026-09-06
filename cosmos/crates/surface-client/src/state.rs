@@ -405,7 +405,7 @@ impl RpcMessage {
                 || turn_id.is_nil()
                 || *generation == 0
                 || *generation > MAX_SEQUENCE
-                || channel != "visual.card"
+                || !matches!(channel.as_str(), "visual.card" | "audio.tts")
                 || content_digest.len() != 64
                 || !content_digest
                     .bytes()

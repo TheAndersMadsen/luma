@@ -446,6 +446,20 @@ pub struct Action {
     pub fallbacks: Vec<Uuid>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub confirmation_root: Option<Uuid>,
+    /// The turn's origin, so a transport owner can rebuild the exact fence.
+    #[serde(default)]
+    pub origin_surface: Uuid,
+}
+
+impl Action {
+    pub fn fence(&self) -> TurnFence {
+        TurnFence {
+            turn_id: self.turn_id,
+            generation: self.generation,
+            worker: self.worker,
+            origin_surface: self.origin_surface,
+        }
+    }
 }
 
 struct DisplayConfirmation {
@@ -889,8 +903,10 @@ impl RuntimeState {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn candidate(
         &self,
+        records: &BTreeMap<Uuid, Record>,
         record: &Record,
         origin: Uuid,
         channel: Channel,
@@ -898,14 +914,20 @@ impl RuntimeState {
         hint: Option<policy::RoutingTarget>,
         now: i64,
     ) -> Candidate {
-        policy::candidate(
-            record,
-            self.presence(record, now),
-            origin,
-            channel,
-            privacy,
-            hint,
-        )
+        let mut presence = self.presence(record, now);
+        // Native speech exists only as the runtime's own disclosed synthesis.
+        // Without the origin owner's current provider permission there is no
+        // speech to route, so the surface is unavailable for that channel.
+        if channel == Channel::AudioTts && matches!(record.binding, Binding::Native { .. }) {
+            presence.available = presence.available
+                && self
+                    .disclosure_policy(records, origin)
+                    .ok()
+                    .flatten()
+                    .and_then(|approval| approval.policy)
+                    .is_some_and(|policy| policy.synthesis && privacy <= policy.maximum_class);
+        }
+        policy::candidate(record, presence, origin, channel, privacy, hint)
     }
 
     /// Store transactions apply runtime admission and visibility together. A
@@ -1203,6 +1225,7 @@ impl RuntimeState {
                         self.presence(r, now).incarnation == action.incarnation
                             && self
                                 .candidate(
+                                    records,
                                     r,
                                     self.turn.as_ref().unwrap().fence.origin_surface,
                                     action.channel,
@@ -1280,7 +1303,17 @@ impl RuntimeState {
                 .fallbacks
                 .iter()
                 .filter_map(|id| records.get(id))
-                .map(|r| self.candidate(r, origin, previous.channel, previous.privacy, None, now))
+                .map(|r| {
+                    self.candidate(
+                        records,
+                        r,
+                        origin,
+                        previous.channel,
+                        previous.privacy,
+                        None,
+                        now,
+                    )
+                })
                 .collect();
             if let Some(selected) = candidates.iter().find(|c| c.blocker.is_none()) {
                 let mut action = previous.clone();
@@ -1345,9 +1378,13 @@ impl RuntimeState {
             return Err(RuntimeError::Stale);
         }
         if native_speech
-            && (turn.pin_incarnation.is_none()
+            && (!Self::disclosed_speech_origin(records, turn)
                 || action.channel != Channel::AudioTts
-                || action.surface_id != turn.fence.origin_surface)
+                || !Self::disclosed_speech_target(
+                    records,
+                    turn.fence.origin_surface,
+                    action.surface_id,
+                ))
         {
             return Err(RuntimeError::PolicyBlocked);
         }
@@ -1357,6 +1394,7 @@ impl RuntimeState {
         if self.presence(record, now).incarnation != action.incarnation
             || self
                 .candidate(
+                    records,
                     record,
                     turn.fence.origin_surface,
                     action.channel,
@@ -1441,6 +1479,7 @@ impl RuntimeState {
                     self.presence(record, now).incarnation == action.incarnation
                         && self
                             .candidate(
+                                records,
                                 record,
                                 turn.fence.origin_surface,
                                 action.channel,
@@ -1472,6 +1511,7 @@ impl RuntimeState {
         } = output;
         let mut events = Vec::new();
         let turn = self.fence(turn_id, generation, worker, now)?;
+        let origin_surface = turn.fence.origin_surface;
         if turn.finished || turn.voice_pending() || !self.origin_valid(turn, records, now) {
             return Err(RuntimeError::Stale);
         }
@@ -1520,6 +1560,7 @@ impl RuntimeState {
             .filter(|r| !r.revoked)
             .map(|r| {
                 self.candidate(
+                    records,
                     r,
                     turn.fence.origin_surface,
                     intent.channel(),
@@ -1594,6 +1635,7 @@ impl RuntimeState {
                 confirmation_root: confirmation
                     .as_ref()
                     .map(|confirmation| confirmation.root_id),
+                origin_surface,
             };
             self.actions.insert(id, action.clone());
             if let Some(confirmation) = confirmation {
@@ -2666,7 +2708,9 @@ impl RuntimeState {
                     || action.surface_id != record.surface_id
                     || action.incarnation != connection.incarnation()
                     || action.channel != channel
-                    || channel != Channel::VisualCard
+                    || !(channel == Channel::VisualCard
+                        || (channel == Channel::AudioTts
+                            && matches!(record.binding, Binding::Native { .. })))
                     || action.content_digest != content_digest
                     || (action.status != ActionStatus::Acknowledged && now >= action.deadline_ms)
                     || !self.presence(record, now).available
@@ -2716,6 +2760,8 @@ impl RuntimeState {
             }
             RuntimeOperation::Poll { connection } => {
                 self.room_record(records, &connection, now)?;
+                // Speech is claimed only through its disclosure; a room poll
+                // never stock-dispatches audio and never marks it unknown.
                 let pending: Vec<_> = self
                     .actions
                     .values()
@@ -2723,6 +2769,7 @@ impl RuntimeState {
                         a.surface_id == connection.surface_id()
                             && a.incarnation == connection.incarnation()
                             && a.status == ActionStatus::Proposed
+                            && a.channel == Channel::VisualCard
                     })
                     .map(|a| (a.id, a.generation, a.worker))
                     .collect();
@@ -3489,8 +3536,15 @@ mod tests {
             PrivacyClass::Private,
             PrivacyClass::Sensitive,
         ] {
-            let candidate =
-                state.candidate(&records[&id], id, Channel::VisualCard, class, None, 103);
+            let candidate = state.candidate(
+                &records,
+                &records[&id],
+                id,
+                Channel::VisualCard,
+                class,
+                None,
+                103,
+            );
             assert_eq!(candidate.blocker, Some(policy::Blocker::Privacy));
             assert_eq!(candidate.score(), 0);
         }

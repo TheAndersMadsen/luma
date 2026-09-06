@@ -13,6 +13,7 @@ fn render_action(intent: SemanticIntent) -> Action {
         id: Uuid::new_v4(),
         root_id: Uuid::new_v4(),
         confirmation_root: None,
+        origin_surface: Uuid::nil(),
         turn_id: Uuid::new_v4(),
         generation: 3,
         worker: Uuid::new_v4(),

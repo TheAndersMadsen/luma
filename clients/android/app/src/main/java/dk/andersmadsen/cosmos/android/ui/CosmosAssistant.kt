@@ -42,8 +42,8 @@ import dk.andersmadsen.cosmos.android.R
 import kotlin.math.PI
 import kotlin.math.sin
 
-/** UI states only. Changing state starts no microphone or speech engine. */
-enum class AssistantState { IDLE, THINKING, ERROR }
+/** UI states only. Changing state starts no microphone or speech engine; SPEAKING mirrors delivered playback. */
+enum class AssistantState { IDLE, THINKING, SPEAKING, ERROR }
 
 object CosmosPalette {
     val text = Color(0xFF58F4F1)
@@ -104,7 +104,7 @@ fun CosmosWaveformButton(state: AssistantState, onDismiss: () -> Unit, animation
 
 @Composable
 fun CosmosWaveform(state: AssistantState, modifier: Modifier = Modifier, animationsEnabled: Boolean = true) {
-    val active = animationsEnabled && state == AssistantState.THINKING
+    val active = animationsEnabled && state in setOf(AssistantState.THINKING, AssistantState.SPEAKING)
     val phase = if (active) {
         val transition = rememberInfiniteTransition(label = "cosmos-waveform")
         val value by transition.animateFloat(
@@ -115,7 +115,7 @@ fun CosmosWaveform(state: AssistantState, modifier: Modifier = Modifier, animati
         value
     } else 0f
     val profile = remember { floatArrayOf(.22f, .56f, .83f, 1f, .83f, .56f, .22f) }
-    val color = if (state == AssistantState.THINKING) CosmosPalette.text else Color.White
+    val color = if (state in setOf(AssistantState.THINKING, AssistantState.SPEAKING)) CosmosPalette.text else Color.White
     Canvas(modifier) {
         val width = size.width * .066f
         val step = size.width * .11f

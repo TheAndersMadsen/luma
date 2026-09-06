@@ -91,7 +91,7 @@ fn routes(api: ApiState) -> Router {
             get(native_enrollment),
         )
         .route(
-            "/surface-api/v1/pins/:surface_id/speech-disclosure",
+            "/surface-api/v1/surfaces/:surface_id/speech-disclosure",
             get(disclosure_policy).post(set_disclosure_policy),
         )
         .route(
@@ -606,18 +606,23 @@ async fn set_disclosure_policy(
     if request.approval != crate::ambiance::disclosure::OWNER_APPROVAL {
         return Err(invalid());
     }
-    // Revoke remains possible after pairing loss. Creating or changing a grant
-    // requires the currently paired owner as well as this verified bearer.
+    // Revoke remains possible after pairing loss. Creating or changing a Pin
+    // grant requires the currently paired owner as well as this verified
+    // bearer; a native installation's grant binds to its owner approval.
     if request.policy.is_some() {
         let current = api
             .store
             .surface(&principal, surface_id)
             .await?
             .ok_or(RegistryError::NotFound)?;
-        let surface_registry::Binding::Pin { device_id } = current.binding else {
-            return Err(RegistryError::NotFound.into());
-        };
-        crate::pin_admission::paired_owner(api.pairing.as_ref(), &principal, &device_id).await?;
+        match current.binding {
+            surface_registry::Binding::Pin { device_id } => {
+                crate::pin_admission::paired_owner(api.pairing.as_ref(), &principal, &device_id)
+                    .await?;
+            }
+            surface_registry::Binding::Native { .. } => {}
+            surface_registry::Binding::Browser => return Err(RegistryError::NotFound.into()),
+        }
     }
     let result = api
         .store
@@ -1305,7 +1310,7 @@ mod tests {
         let (status, approved) = call(&app, "POST", root, Some(&owner), None, pin.clone()).await;
         assert_eq!(status, StatusCode::OK);
         let surface = approved["pin"]["surfaceId"].as_str().unwrap();
-        let path = format!("{root}/{surface}/speech-disclosure");
+        let path = format!("/surface-api/v1/surfaces/{surface}/speech-disclosure");
         let grant = json!({
             "approval":crate::ambiance::disclosure::OWNER_APPROVAL,
             "approvalRevision":1,"expectedRevision":0,
@@ -1433,7 +1438,7 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         let surface = approved["pin"]["surfaceId"].as_str().unwrap();
         let path = format!("{root}/{surface}/local-voice");
-        let speech_path = format!("{root}/{surface}/speech-disclosure");
+        let speech_path = format!("/surface-api/v1/surfaces/{surface}/speech-disclosure");
         let grant = json!({
             "approval":LOCAL_VOICE_APPROVAL,
             "approvalRevision":1,"expectedRevision":0,

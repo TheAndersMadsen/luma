@@ -37,6 +37,8 @@ pub enum SpeechAudioFormat {
     /// Native transport profile; never a stock protobuf enum value.
     Raw48Khz16BitMonoPcm,
     Audio24Khz160KBitrateMonoMp3,
+    /// Native shared-room speech profile; never a stock protobuf enum value.
+    Audio24Khz48KBitrateMonoMp3,
 }
 
 impl SpeechAudioFormat {
@@ -47,6 +49,7 @@ impl SpeechAudioFormat {
             Self::Raw24Khz16BitMonoPcm => "raw-24khz-16bit-mono-pcm",
             Self::Raw48Khz16BitMonoPcm => "raw-48khz-16bit-mono-pcm",
             Self::Audio24Khz160KBitrateMonoMp3 => "audio-24khz-160kbitrate-mono-mp3",
+            Self::Audio24Khz48KBitrateMonoMp3 => "audio-24khz-48kbitrate-mono-mp3",
         }
     }
 }

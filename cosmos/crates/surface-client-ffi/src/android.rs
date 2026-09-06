@@ -211,6 +211,10 @@ command!(
     Command::Acknowledge
 );
 command!(
+    Java_dk_andersmadsen_cosmos_android_NativeSurface_acknowledgeSpeech,
+    Command::AcknowledgeSpeech
+);
+command!(
     Java_dk_andersmadsen_cosmos_android_NativeSurface_disconnect,
     Command::Disconnect
 );
@@ -265,6 +269,24 @@ pub extern "system" fn Java_dk_andersmadsen_cosmos_android_NativeSurface_poll(
         return std::ptr::null_mut();
     };
     env.byte_array_from_slice(&event)
+        .map_or(std::ptr::null_mut(), |array| array.into_raw())
+}
+
+/// The current spoken reply's complete audio bytes, or null when none is
+/// current. The snapshot names the reply; these are its exact bytes.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dk_andersmadsen_cosmos_android_NativeSurface_speechAudio(
+    env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+) -> jbyteArray {
+    let Some(surface) = surface(handle) else {
+        return std::ptr::null_mut();
+    };
+    let Some(audio) = surface.speech_audio() else {
+        return std::ptr::null_mut();
+    };
+    env.byte_array_from_slice(&audio)
         .map_or(std::ptr::null_mut(), |array| array.into_raw())
 }
 

@@ -2,12 +2,14 @@
 //! identity selects that proof; it never supplies principal or surface authority.
 use crate::{
     ambiance::{
-        BrowserControl, InputStamp, RoomProof, RuntimeOperation, RuntimeResult, TurnFence,
-        runtime::AmbianceRuntime,
+        BrowserControl, InputStamp, NativeProof, RoomProof, RuntimeOperation, RuntimeResult,
+        TurnFence, runtime::AmbianceRuntime, speech::SpeechTarget,
     },
     surface_registry::{Mutation, hash},
 };
+use base64::{Engine, engine::general_purpose::STANDARD};
 use cosmos_rtc::{Error, Invocation, Session};
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use tokio::sync::{Mutex, oneshot};
@@ -406,10 +408,16 @@ struct Sent {
     attempts: u8,
 }
 
+/// Raw audio per speech frame; base64 plus the bound header stays inside the
+/// transport envelope. The whole reply is bounded so a runaway provider stream
+/// cannot fill a client.
+const SPEECH_CHUNK: usize = 7_500;
+pub(crate) const MAX_SPEECH_BYTES: usize = 1_048_576;
+
 async fn deliver(
-    runtime: &AmbianceRuntime,
+    runtime: &Arc<AmbianceRuntime>,
     principal: &str,
-    session: &Session,
+    session: &Arc<Session>,
     participants: &Mutex<BTreeMap<String, Participant>>,
     mut changes: crate::ambiance::changes::Changes,
     epoch: Uuid,
@@ -418,9 +426,19 @@ async fn deliver(
     use crate::ambiance::{ActionStatus, Channel};
     let mut sequence = 0u64;
     let mut sent: BTreeMap<(String, Uuid), Sent> = BTreeMap::new();
+    // One synthesis job per (member, action). A job owns the disclosure lease;
+    // aborting it retires the exact turn instead of leaving audio unowned.
+    let mut speaking: BTreeMap<(String, Uuid), tokio::task::JoinHandle<()>> = BTreeMap::new();
     loop {
         let members = participants.lock().await.clone();
         sent.retain(|(identity, _), _| members.contains_key(identity));
+        speaking.retain(|(identity, _), job| {
+            if !members.contains_key(identity) {
+                job.abort();
+                return false;
+            }
+            !job.is_finished()
+        });
         'member: for (identity, member) in members.iter().filter(|(_, m)| m.sid.is_some()) {
             // A native member must still belong to the boot epoch it joined
             // with; a reopened installation joins again as a new member.
@@ -471,14 +489,54 @@ async fn deliver(
                 }
                 _ => return Err(Error::Unavailable),
             };
+            if let RoomProof::Native(proof) = &member.proof {
+                for action in actions.iter().filter(|a| {
+                    a.channel == Channel::AudioTts && a.status == ActionStatus::Proposed
+                }) {
+                    let key = (identity.clone(), action.id);
+                    if speaking.contains_key(&key) || sent.contains_key(&key) {
+                        continue;
+                    }
+                    let stamp = InputStamp {
+                        epoch,
+                        sequence: 1,
+                        instance_id: action.id,
+                    };
+                    sent.insert(
+                        key.clone(),
+                        Sent {
+                            stamp,
+                            attempts: action.attempts.saturating_add(1),
+                        },
+                    );
+                    speaking.insert(
+                        key,
+                        tokio::spawn(speak(
+                            runtime.clone(),
+                            principal.to_owned(),
+                            session.clone(),
+                            identity.clone(),
+                            proof.clone(),
+                            action.clone(),
+                            epoch,
+                        )),
+                    );
+                }
+            }
             let active: BTreeMap<_, _> = actions
                 .iter()
-                .filter(|a| {
-                    a.channel == Channel::VisualCard
-                        && matches!(
+                .filter(|a| match a.channel {
+                    Channel::VisualCard => matches!(
+                        a.status,
+                        ActionStatus::Dispatched | ActionStatus::Acknowledged
+                    ),
+                    Channel::AudioTts => {
+                        matches!(
                             a.status,
                             ActionStatus::Dispatched | ActionStatus::Acknowledged
-                        )
+                        ) || (a.status == ActionStatus::Proposed
+                            && speaking.contains_key(&(identity.clone(), a.id)))
+                    }
                 })
                 .map(|a| (a.id, a))
                 .collect();
@@ -508,9 +566,10 @@ async fn deliver(
             }
             for (id, action) in active {
                 let key = (identity.clone(), id);
-                if sent
-                    .get(&key)
-                    .is_some_and(|last| last.attempts == action.attempts)
+                if action.channel == Channel::AudioTts
+                    || sent
+                        .get(&key)
+                        .is_some_and(|last| last.attempts == action.attempts)
                 {
                     continue;
                 }
@@ -585,6 +644,142 @@ async fn deliver(
         tokio::select! {
             changed = changes.changed() => changed.map_err(runtime_error)?,
             _ = wake.notified() => {}
+        }
+    }
+}
+
+/// Disclosed synthesis for one native member. The lease claims the exact
+/// proposed action, streams provider audio under continuous revalidation and
+/// hands bounded frames to the member; the member acknowledges playback
+/// separately through its sequenced control channel.
+async fn speak(
+    runtime: Arc<AmbianceRuntime>,
+    principal: String,
+    session: Arc<Session>,
+    identity: String,
+    proof: NativeProof,
+    action: crate::ambiance::Action,
+    epoch: Uuid,
+) {
+    let connection = RoomProof::Native(proof.clone());
+    let target = SpeechTarget::Native {
+        principal: principal.clone(),
+        connection: proof,
+    };
+    let stream = match runtime
+        .synthesize(target, action.fence(), action.clone())
+        .await
+    {
+        Ok(stream) => stream,
+        Err(status) => {
+            tracing::warn!(
+                turn = %action.turn_id,
+                code = ?status.code(),
+                "native speech synthesis was not authorized"
+            );
+            // Audio has no fallback surface. Ending the turn now records the
+            // outcome instead of re-proposing the same denied claim on every
+            // state change until the action expires.
+            let _ = tokio::time::timeout(
+                ADMISSION_TIMEOUT,
+                runtime.store.runtime(
+                    &principal,
+                    RuntimeOperation::Cancel {
+                        turn_id: action.turn_id,
+                        generation: action.generation,
+                        worker: action.worker,
+                    },
+                ),
+            )
+            .await;
+            return;
+        }
+    };
+    let delivered = speak_frames(&session, &identity, &action, epoch, stream).await;
+    if !delivered {
+        let _ = tokio::time::timeout(
+            ADMISSION_TIMEOUT,
+            runtime.store.runtime(
+                &principal,
+                RuntimeOperation::DeliveryFailed {
+                    connection,
+                    action_id: action.id,
+                    generation: action.generation,
+                },
+            ),
+        )
+        .await;
+    }
+}
+
+async fn speak_frames(
+    session: &Session,
+    identity: &str,
+    action: &crate::ambiance::Action,
+    epoch: Uuid,
+    stream: crate::ambiance::speech::SpeechStream,
+) -> bool {
+    let mut sequence = 0u64;
+    let mut frame = |chunk: Option<&[u8]>, last: bool| {
+        sequence += 1;
+        let stamp = InputStamp {
+            epoch,
+            sequence,
+            instance_id: action.id,
+        };
+        let mut speech = serde_json::json!({
+            "version": 1,
+            "actionId": action.id,
+            "turnId": action.turn_id,
+            "generation": action.generation,
+            "surfaceId": action.surface_id,
+            "incarnation": action.incarnation,
+            "channel": "audio.tts",
+            "contentDigest": action.content_digest,
+            "format": "audio/mpeg",
+            "expiresAt": action.display_expires_at_ms,
+            "sequence": sequence,
+            "final": last,
+        });
+        match chunk {
+            Some(chunk) => speech["chunk"] = serde_json::json!(STANDARD.encode(chunk)),
+            None => speech["text"] = serde_json::json!(action.intent.text()),
+        }
+        let payload = serde_json::json!({"version":1,"kind":"speak","stamp":stamp,"speech":speech})
+            .to_string();
+        (payload, stamp)
+    };
+    let (header, stamp) = frame(None, false);
+    if !received(session.invoke(identity, header).await, &stamp) {
+        return false;
+    }
+    let mut buffer = Vec::new();
+    let mut total = 0usize;
+    tokio::pin!(stream);
+    loop {
+        match stream.next().await {
+            Some(Ok(chunk)) => {
+                total += chunk.len();
+                if total > MAX_SPEECH_BYTES {
+                    return false;
+                }
+                buffer.extend_from_slice(&chunk);
+                while buffer.len() >= SPEECH_CHUNK {
+                    let piece: Vec<u8> = buffer.drain(..SPEECH_CHUNK).collect();
+                    let (payload, stamp) = frame(Some(&piece), false);
+                    if !received(session.invoke(identity, payload).await, &stamp) {
+                        return false;
+                    }
+                }
+            }
+            Some(Err(_)) => return false,
+            None => {
+                if total == 0 {
+                    return false;
+                }
+                let (payload, stamp) = frame(Some(&buffer), true);
+                return received(session.invoke(identity, payload).await, &stamp);
+            }
         }
     }
 }

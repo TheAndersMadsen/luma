@@ -1,3 +1,4 @@
+import AVFoundation
 import Combine
 import Foundation
 
@@ -5,7 +6,11 @@ import Foundation
 public final class ClientModel: ObservableObject {
     @Published public var serverInput: String
     @Published public var draft = ""
-    @Published public private(set) var snapshot: ClientSnapshot
+    @Published public private(set) var snapshot: ClientSnapshot {
+        didSet { syncPlayback() }
+    }
+    /// True only while the current reply's exact audio is playing.
+    @Published public private(set) var speaking = false
     @Published public private(set) var descriptor: PublicDescriptor?
     @Published public private(set) var selectedServer: ServerEndpoint?
     @Published public private(set) var busy = false
@@ -22,6 +27,9 @@ public final class ClientModel: ObservableObject {
     private var wantedVisible = false
     private var acknowledged: UUID?
     private var acknowledging: Task<Void, Never>?
+    private var playback: SpeechPlayback?
+    private var loadingSpeech: Task<Void, Never>?
+    private var spoken: UUID?
 
     public init(client: any ClientBridge, initialServerOrigin: String) {
         self.client = client
@@ -67,7 +75,9 @@ public final class ClientModel: ObservableObject {
         case .preparing: return "Opening installation identity…"
         case .prepared: return "Installation prepared. Center approval is required."
         case .connecting: return "Connecting to Cosmos…"
-        case .connected: return snapshot.visible ? "Connected · visible shared display" : "Connected for public text"
+        case .connected:
+            if speaking { return "Connected · speaking" }
+            return snapshot.visible ? "Connected · visible shared display" : "Connected for public text"
         case .disconnecting: return "Disconnecting…"
         case .blocked: return "Connection stopped. Resolve the reported error before continuing."
         }
@@ -180,6 +190,50 @@ public final class ClientModel: ObservableObject {
     /// The current card as delivered; nil once Cosmos retires it or the link drops.
     public var display: DisplayCard? { snapshot.display }
 
+    /// The current spoken reply as delivered; nil once Cosmos retires it or the link drops.
+    public var speech: SpeechReply? { snapshot.speech }
+
+    /// Plays each delivered reply exactly once and acknowledges only complete playback.
+    /// A retired or replaced reply stops immediately and is never acknowledged.
+    private func syncPlayback() {
+        let current = snapshot.speech
+        if let playback, playback.reply != current {
+            playback.stop()
+            self.playback = nil
+            speaking = false
+        }
+        if current == nil { loadingSpeech?.cancel(); loadingSpeech = nil }
+        guard let reply = current, playback == nil, loadingSpeech == nil, spoken != reply.actionID else { return }
+        loadingSpeech = Task { [weak self] in
+            guard let self else { return }
+            defer { loadingSpeech = nil }
+            guard let audio = try? await client.speechAudio(for: reply), !Task.isCancelled,
+                  snapshot.speech == reply, audio.count == reply.byteLength else { return }
+            guard let playback = SpeechPlayback(reply: reply, audio: audio, onFinish: { [weak self] finished in
+                Task { @MainActor [weak self] in self?.playbackFinished(reply, completed: finished) }
+            }) else { return }
+            self.playback = playback
+            speaking = true
+        }
+    }
+
+    private func playbackFinished(_ reply: SpeechReply, completed: Bool) {
+        guard playback?.reply == reply else { return }
+        playback = nil
+        speaking = false
+        guard completed, snapshot.speech == reply else { return }
+        spoken = reply.actionID
+        acknowledging?.cancel()
+        acknowledging = Task { [weak self] in
+            guard let self else { return }
+            defer { acknowledging = nil }
+            while busy, !Task.isCancelled { try? await Task.sleep(for: .milliseconds(50)) }
+            guard !Task.isCancelled, snapshot.speech == reply else { return }
+            do { try await client.acknowledgeSpeech(reply) }
+            catch { snapshot = client.snapshot }
+        }
+    }
+
     /// Report the panel's own visibility. Cosmos routes a shared card here only while
     /// this is true; it never treats the report as occupancy or identity.
     public func setVisible(_ visible: Bool) {
@@ -210,6 +264,13 @@ public final class ClientModel: ObservableObject {
     }
 
     public func publicDescriptorData() -> Data? { descriptorData }
+
+    /// Stop any playback before the panel or controller goes away.
+    public func stopPlayback() {
+        loadingSpeech?.cancel(); loadingSpeech = nil
+        playback?.stop(); playback = nil
+        speaking = false
+    }
     public func setShortcutMessage(_ text: String) { shortcutMessage = text }
     public func exportFailed() { message = "The public descriptor could not be saved. Choose another location and retry." }
 
@@ -229,6 +290,45 @@ public final class ClientModel: ObservableObject {
             guard generation == operationGeneration else { return }
             snapshot = client.snapshot
             busy = false
+        }
+    }
+}
+
+/// Owns one AVAudioPlayer for one reply. Finishing naturally reports completion; stop does not.
+@MainActor
+private final class SpeechPlayback: NSObject, AVAudioPlayerDelegate {
+    let reply: SpeechReply
+    private let player: AVAudioPlayer
+    private var onFinish: ((Bool) -> Void)?
+
+    init?(reply: SpeechReply, audio: Data, onFinish: @escaping (Bool) -> Void) {
+        guard let player = try? AVAudioPlayer(data: audio, fileTypeHint: AVFileType.mp3.rawValue) else { return nil }
+        self.reply = reply
+        self.player = player
+        self.onFinish = onFinish
+        super.init()
+        player.delegate = self
+        guard player.prepareToPlay(), player.play() else { return nil }
+    }
+
+    func stop() {
+        onFinish = nil
+        player.stop()
+    }
+
+    nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        Task { @MainActor in
+            let finish = self.onFinish
+            self.onFinish = nil
+            finish?(flag)
+        }
+    }
+
+    nonisolated func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
+        Task { @MainActor in
+            let finish = self.onFinish
+            self.onFinish = nil
+            finish?(false)
         }
     }
 }

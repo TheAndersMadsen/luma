@@ -1,13 +1,20 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { PinSurface } from "@/lib/contracts/pinSurfaces";
 import { exact } from "@/lib/contracts/surfaces";
 import { SPEECH_DISCLOSURE_APPROVAL, SPEECH_REGION, parseSpeechApproval, type SpeechApproval, type SpeechPolicy } from "@/lib/contracts/speechDisclosure";
-import settings from "../../settings.module.css";
-import styles from "./devices.module.css";
+import styles from "./lookupPermission.module.css";
 
-export function SpeechDisclosure({ pin }: { pin: PinSurface }) {
+type Props = {
+  surfaceId: string;
+  approvalRevision: number;
+  label: string;
+  /** False while the surface's current approval cannot be confirmed; revocation stays possible. */
+  canApprove: boolean;
+};
+
+/** A separate owner gesture lets Cosmos disclose one surface's shared reply text to Azure Speech. */
+export function SpeechPermission({ surfaceId, approvalRevision, label, canApprove }: Props) {
   const [open, setOpen] = useState(false);
   const [approval, setApproval] = useState<SpeechApproval | null | undefined>();
   const [region, setRegion] = useState("");
@@ -16,7 +23,7 @@ export function SpeechDisclosure({ pin }: { pin: PinSurface }) {
   const [message, setMessage] = useState("");
   const generation = useRef(0);
   const active = useRef<AbortController | null>(null);
-  const path = `/api/devices/runtime/${pin.surfaceId}/speech-disclosure`;
+  const path = `/api/surfaces/${surfaceId}/speech-disclosure`;
   useEffect(() => () => { generation.current++; active.current?.abort(); }, []);
 
   function reset() {
@@ -31,7 +38,7 @@ export function SpeechDisclosure({ pin }: { pin: PinSurface }) {
       const response = await fetch(path, { cache: "no-store", signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10000)]) });
       if (!response.ok) throw new Error("unavailable");
       const saved = parseSpeechApproval(await response.json());
-      if (saved && saved.approvalRevision !== pin.revision) throw new Error("approval_changed");
+      if (saved && saved.approvalRevision !== approvalRevision) throw new Error("approval_changed");
       if (current !== generation.current) return;
       setApproval(saved); setRegion(saved?.policy?.provider.region ?? "");
     } catch {
@@ -39,7 +46,7 @@ export function SpeechDisclosure({ pin }: { pin: PinSurface }) {
     } finally { if (current === generation.current) { active.current = null; setBusy(false); } }
   }
   async function save(policy: SpeechPolicy | null) {
-    if (active.current || approval === undefined || policy && pin.currentPaired !== true) return;
+    if (active.current || approval === undefined || policy && !canApprove) return;
     const expectedRevision = approval?.revision ?? 0;
     const current = generation.current;
     const controller = new AbortController(); active.current = controller;
@@ -47,10 +54,10 @@ export function SpeechDisclosure({ pin }: { pin: PinSurface }) {
     try {
       const response = await fetch(path, { method: "POST", headers: { "content-type": "application/json" }, cache: "no-store",
         signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10000)]),
-        body: JSON.stringify({ approval: SPEECH_DISCLOSURE_APPROVAL, approvalRevision: pin.revision, expectedRevision, policy }) });
+        body: JSON.stringify({ approval: SPEECH_DISCLOSURE_APPROVAL, approvalRevision, expectedRevision, policy }) });
       if (!response.ok) throw new Error("unconfirmed");
       const saved = parseSpeechApproval(await response.json());
-      if (!saved || saved.approvalRevision !== pin.revision || saved.revision !== expectedRevision + 1 || !exact(saved.policy, policy)) throw new Error("approval_mismatch");
+      if (!saved || saved.approvalRevision !== approvalRevision || saved.revision !== expectedRevision + 1 || !exact(saved.policy, policy)) throw new Error("approval_mismatch");
       if (current !== generation.current) return;
       setApproval(saved);
       setMessage(policy ? "Cosmos confirmed permission to send shared reply text to Azure Speech." : "Cosmos confirmed speech provider permission revoked.");
@@ -61,31 +68,31 @@ export function SpeechDisclosure({ pin }: { pin: PinSurface }) {
       setError("Cosmos did not confirm the change. Refresh permission status before retrying.");
     } finally { if (current === generation.current) { active.current = null; setBusy(false); } }
   }
-  return <div className={settings.stateRow} aria-label={`Speech provider permission for Pin ${pin.deviceId}`}>
-    <button type="button" className={styles.pairCancel} aria-expanded={open} onClick={() => {
+  return <div className={styles.permission} role="group" aria-label={`Speech provider permission for ${label}`}>
+    <button type="button" aria-expanded={open} onClick={() => {
       if (open) reset(); else void load();
       setOpen(!open);
     }}>{open ? "Close speech permission" : "Speech provider permission"}</button>
-    {open ? <div className={styles.speechPermission}>
-      <p>Allow Cosmos to send this Pin’s shared reply text to Azure Speech for spoken audio. Pairing and saved provider credentials do not grant this permission.</p>
-      <p>Native microphone capture is not connected yet. This control approves reply text only; it does not enable voice capture or confirm playback.</p>
+    {open ? <>
+      <p>Allow Cosmos to send shared reply text from {label} to Azure Speech for spoken audio. Device approval and saved provider credentials do not grant this permission.</p>
+      <p>This control approves reply text only. Spoken audio is played by an approved surface and counted only after that surface acknowledges complete playback; it does not enable microphone capture.</p>
       {approval !== undefined ? <p>{approval?.policy
         ? `Recorded permission: Azure Speech, ${approval.policy.provider.region}. Reply text: ${approval.policy.synthesis ? "allowed" : "off"}. Microphone transcription: ${approval.policy.transcription ? "allowed" : "off"}.`
         : "No active speech provider permission."}</p> : busy ? <p role="status">Checking speech permission…</p> : null}
-      <label>Azure Speech region
-        <input value={region} maxLength={32} autoComplete="off" spellCheck={false} disabled={busy || approval === undefined || pin.currentPaired !== true}
+      <label className={styles.field}>Azure Speech region
+        <input value={region} maxLength={32} autoComplete="off" spellCheck={false} disabled={busy || approval === undefined || !canApprove}
           onChange={event => setRegion(event.target.value.trim().toLowerCase())} placeholder="Region from Services" />
       </label>
       <p>The region must match your Speech service in Center. Allowing reply text replaces the current speech permission and leaves microphone transcription off.</p>
-      {pin.currentPaired !== true ? <p>Current pairing is unavailable. Existing speech permission can still be revoked.</p> : null}
-      <div className={styles.unpairActions}>
-        <button type="button" className={styles.pairOpenButton} disabled={busy || approval === undefined || pin.currentPaired !== true || !SPEECH_REGION.test(region)}
+      {!canApprove ? <p>This device’s current approval is unavailable. Existing speech permission can still be revoked.</p> : null}
+      <div className={styles.actions}>
+        <button type="button" disabled={busy || approval === undefined || !canApprove || !SPEECH_REGION.test(region)}
           onClick={() => void save({ provider: { provider: "azure_speech", region }, maximumClass: "shared_room", transcription: false, synthesis: true })}>Allow shared reply text</button>
-        <button type="button" className={styles.pairCancel} disabled={busy || !approval?.policy} onClick={() => void save(null)}>Revoke speech permission</button>
+        <button type="button" disabled={busy || !approval?.policy} onClick={() => void save(null)}>Revoke speech permission</button>
       </div>
-      <button type="button" className={styles.pairCancel} disabled={busy} onClick={() => void load()}>Refresh speech permission</button>
+      <button type="button" disabled={busy} onClick={() => void load()}>Refresh speech permission</button>
       {message ? <p role="status">{message}</p> : null}
       {error ? <p role="alert">{error}</p> : null}
-    </div> : null}
+    </> : null}
   </div>;
 }
