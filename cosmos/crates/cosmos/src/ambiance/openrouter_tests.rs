@@ -103,6 +103,39 @@ fn openrouter_proposal_requires_one_completed_exact_call_without_prose() {
     }
 }
 
+/// gpt-4.1-mini regularly nests a lookup inside `intent` or answers and asks
+/// for a lookup at once; both become one valid branch, while a shape that is
+/// wrong in any other way still fails.
+#[test]
+fn openrouter_proposal_normalizes_nested_and_combined_lookups() {
+    let with = |arguments: &str| {
+        let mut changed = response();
+        changed["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"] =
+            arguments.into();
+        parse(&serde_json::to_vec(&changed).unwrap()).map(|r| r.tool_call.unwrap().arguments)
+    };
+    let nested = with(
+        r#"{"intent":{"kind":"place_lookup","query":"cafe"},"privacy":"near_user","target":"macos"}"#,
+    )
+    .unwrap();
+    let nested: Value = serde_json::from_str(&nested).unwrap();
+    assert_eq!(
+        nested,
+        json!({"place_lookup":{"query":"cafe"},"privacy":"near_user","target":"macos"})
+    );
+    let combined = with(
+        r#"{"intent":{"kind":"informational_speech","text":"About 36 metres."},"web_lookup":{"query":"Round Tower height"},"privacy":"public","target":"macos"}"#,
+    )
+    .unwrap();
+    let combined: Value = serde_json::from_str(&combined).unwrap();
+    assert_eq!(
+        combined,
+        json!({"intent":{"kind":"informational_speech","text":"About 36 metres."},"privacy":"public","target":"macos"})
+    );
+    assert!(with(r#"{"intent":{"kind":"bogus","text":"x"},"privacy":"public"}"#).is_err());
+    assert!(with(r#"{"intent":{"kind":"place_lookup"},"privacy":"public"}"#).is_err());
+}
+
 #[tokio::test]
 async fn openrouter_http_uses_only_selected_upstream_bounds_and_no_redirects() {
     use axum::{
@@ -268,6 +301,34 @@ async fn openrouter_live_public_proposal() {
     assert!(bytes.len() <= 16384);
     let config: RealtimeConfig = serde_json::from_slice(&bytes).unwrap();
     let selected = OpenRouterTextModel::new(config).unwrap();
+    // COSMOS_OPENROUTER_TEST_TEXT reproduces a production request with the
+    // runtime's exact system prompt; the parsed proposal shape is written to
+    // COSMOS_OPENROUTER_TEST_OUT (content-free apart from the public text).
+    if let Ok(text) = std::env::var("COSMOS_OPENROUTER_TEST_TEXT") {
+        let messages = [
+            ChatMessage::system(super::super::runtime::proposal_system_prompt(
+                " The requesting surface can play a short spoken reply and show visual cards; prefer informational_speech for brief conversational answers and visual_text_card for content the user will read or keep.",
+                "",
+            )),
+            ChatMessage::user(text),
+        ];
+        let outcome = selected.complete(&messages, &[proposal_tool()]).await;
+        let report = match &outcome {
+            Ok(result) => format!(
+                "ok target={:?} arguments={}",
+                serde_json::from_str::<Proposal>(&result.tool_call.as_ref().unwrap().arguments)
+                    .map(|p| p.target())
+                    .unwrap_or(None),
+                result.tool_call.as_ref().unwrap().arguments
+            ),
+            Err(error) => format!("error {error}"),
+        };
+        if let Ok(path) = std::env::var("COSMOS_OPENROUTER_TEST_OUT") {
+            std::fs::write(path, &report).unwrap();
+        }
+        assert!(outcome.is_ok(), "{report}");
+        return;
+    }
     let messages = [
         ChatMessage::system(
             "Use propose_information exactly once. Answer directly with a public visual_text_card. You have no memory or device actions.",

@@ -110,6 +110,43 @@ impl ChatModel for OpenRouterTextModel {
     }
 }
 
+/// Providers regularly return two shapes the schema forbids: a lookup nested
+/// inside `intent`, or an answer together with a lookup. Both are made
+/// unambiguous before the strict proposal parse: a nested lookup is lifted to
+/// its own branch, and when the model both answered and asked to look
+/// something up, its answer stands and the lookup is dropped. Every kept
+/// field is the model's own; nothing is invented.
+fn normalize_arguments(arguments: &str) -> Option<String> {
+    let mut value: Value = serde_json::from_str(arguments).ok()?;
+    let object = value.as_object_mut()?;
+    let nested = object.get("intent").and_then(|intent| {
+        let kind = intent.get("kind")?.as_str()?;
+        if !matches!(kind, "web_lookup" | "place_lookup") {
+            return None;
+        }
+        Some((kind.to_owned(), intent.get("query")?.clone()))
+    });
+    let mut normalized = false;
+    if let Some((kind, query)) = nested {
+        object.remove("intent");
+        if !object.contains_key(&kind) {
+            object.insert(kind, json!({"query": query}));
+        }
+        normalized = true;
+    }
+    if object.contains_key("intent") {
+        for branch in ["analysis", "web_lookup", "place_lookup"] {
+            if object.remove(branch).is_some() {
+                normalized = true;
+            }
+        }
+    }
+    if normalized {
+        tracing::info!("cognition proposal normalized to one branch");
+    }
+    Some(value.to_string())
+}
+
 fn parse(bytes: &[u8]) -> Result<ChatResponse, LlmError> {
     let value: Value = serde_json::from_slice(bytes).map_err(|_| LlmError::Malformed)?;
     let choices = value["choices"]
@@ -155,7 +192,13 @@ fn parse(bytes: &[u8]) -> Result<ChatResponse, LlmError> {
     let calls = message["tool_calls"]
         .as_array()
         .filter(|c| c.len() == 1)
-        .ok_or(LlmError::Malformed)?;
+        .ok_or_else(|| {
+            tracing::warn!(
+                calls = message["tool_calls"].as_array().map_or(0, Vec::len),
+                "cognition reply did not carry exactly one tool call"
+            );
+            LlmError::Malformed
+        })?;
     let call = &calls[0];
     let identifier = call["id"].as_str().ok_or(LlmError::Malformed)?;
     if identifier.is_empty()
@@ -172,10 +215,19 @@ fn parse(bytes: &[u8]) -> Result<ChatResponse, LlmError> {
         .as_str()
         .filter(|s| !s.is_empty() && s.len() <= 16 * 1024)
         .ok_or(LlmError::Malformed)?;
-    // Keep the original arguments. The runtime still validates the semantic
+    let arguments = normalize_arguments(arguments).ok_or(LlmError::Malformed)?;
+    let arguments = arguments.as_str();
+    // Keep the model's own arguments. The runtime still validates the semantic
     // intent and privacy join, then durably decides whether it can dispatch.
-    let _: super::analysis::Proposal =
-        serde_json::from_str(arguments).map_err(|_| LlmError::Malformed)?;
+    let _: super::analysis::Proposal = serde_json::from_str(arguments).map_err(|error| {
+        // The serde message names fields and variants, never the text itself.
+        tracing::warn!(
+            bytes = arguments.len(),
+            reason = %error,
+            "cognition proposal did not match the schema"
+        );
+        LlmError::Malformed
+    })?;
     Ok(ChatResponse {
         tool_call: Some(ToolCall {
             name: "propose_information".into(),

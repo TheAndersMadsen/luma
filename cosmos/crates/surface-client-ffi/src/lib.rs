@@ -567,6 +567,30 @@ async fn run(
             Wake::Heartbeat => None,
             Wake::Command(command) => Some(command),
         };
+        // Automatic heartbeats never create, retry or replace an uncertain
+        // request, with one exception: an uncertain heartbeat of this same
+        // connection is retried exactly on the next tick. It renews only the
+        // lease, an exact retry cannot duplicate anything, and leaving it to
+        // the platform would silently let the lease lapse.
+        let command = match command {
+            None => {
+                let state = client.status();
+                if !state.connected || state.pending_open {
+                    continue;
+                }
+                match state.pending {
+                    Some(pending)
+                        if pending.kind == cosmos_surface_client::OperationKind::Heartbeat
+                            && pending.can_retry =>
+                    {
+                        Some(Command::Retry)
+                    }
+                    Some(_) => continue,
+                    None => None,
+                }
+            }
+            other => other,
+        };
         let operation = match &command {
             Some(Command::Connect) => "connect",
             Some(Command::Text(_)) => "send_text",
@@ -578,14 +602,6 @@ async fn run(
             Some(Command::Disconnect) => "disconnect",
             None => "heartbeat",
         };
-        // An uncertain RPC remains reserved until explicit retry/reconnect.
-        // Automatic heartbeats must not create, retry, or replace that request.
-        if command.is_none() {
-            let state = client.status();
-            if !state.connected || state.pending.is_some() || state.pending_open {
-                continue;
-            }
-        }
         if let Some(Command::SetVisible(visible)) = &command {
             wanted_visible = *visible;
         }
