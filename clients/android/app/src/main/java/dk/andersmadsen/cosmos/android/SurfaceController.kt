@@ -71,6 +71,10 @@ class SurfaceController(context: Context) {
     private var player: MediaPlayer? = null
     private var playing: UUID? = null
     private var played: UUID? = null
+    /** True after an explicit Disconnect until the next explicit Connect; automatic reconnection stays off. */
+    @Volatile private var wantsConnection = false
+    @Volatile private var reconnectAttempt = 0
+    @Volatile private var reconnectDueAt = 0L
 
     private val callbacks = object : NativeCallbacks {
         override fun publicKey(): ByteArray = identity.publicKeySec1()
@@ -83,10 +87,36 @@ class SurfaceController(context: Context) {
         scope.launch {
             while (true) {
                 drain()
+                reconnectIfDue()
                 delay(200)
             }
         }
     }
+
+    /**
+     * A dropped room (network change, server restart) is rejoined without the
+     * owner pressing Connect: bounded backoff, only while the installation was
+     * connected on purpose, never over a pending or blocked operation.
+     */
+    private suspend fun reconnectIfDue() {
+        val state = _state.value
+        val eligible = wantsConnection && !state.busy && state.descriptor != null && state.phase != Phase.BLOCKED
+            && state.phase != Phase.CONNECTED && !state.hasPending && (state.needsReconnect || state.pendingOpen || state.phase == Phase.DISCONNECTED || state.phase == Phase.PREPARED)
+        if (!eligible) return
+        val now = System.currentTimeMillis()
+        if (reconnectDueAt == 0L) { reconnectDueAt = now + backoffMs(reconnectAttempt); return }
+        if (now < reconnectDueAt) return
+        reconnectDueAt = 0L
+        reconnectAttempt = (reconnectAttempt + 1).coerceAtMost(6)
+        Log.d(TAG, "automatic reconnect attempt $reconnectAttempt")
+        command("connect") { NativeSurface.connect(handle) }
+        if (_state.value.phase == Phase.CONNECTED) {
+            reconnectAttempt = 0
+            if (wantedVisible) command("set_visible") { NativeSurface.setVisible(handle, true) }
+        }
+    }
+
+    private fun backoffMs(attempt: Int): Long = when (attempt) { 0 -> 1_500L; 1 -> 3_000L; 2 -> 6_000L; 3 -> 12_000L; else -> 30_000L }
 
     /** Leanback devices such as the Shield enroll as android_tv so hints can name the TV. */
     val platform: String = if (application.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_LEANBACK)) "android_tv" else "android"
@@ -123,6 +153,9 @@ class SurfaceController(context: Context) {
                 previous.descriptor != null -> Phase.PREPARED
                 else -> Phase.DISCONNECTED
             }
+            // A retained signed connection means the owner connected on purpose;
+            // rejoin it after a relaunch or a dropped room without another tap.
+            if (event.operation == "prepare" && event.ok && (event.pendingOpen || event.needsReconnect)) wantsConnection = true
             previous.copy(
                 phase = phase,
                 descriptor = event.descriptor ?: previous.descriptor,
@@ -143,6 +176,7 @@ class SurfaceController(context: Context) {
                     "send_text" -> "Request admitted by Cosmos. The response appears on the approved display it selects."
                     "cancel" -> "Cancellation admitted by Cosmos."
                     "disconnect" -> "Session disconnected. Owner approval remains in Center."
+                    "display", "speech", "heartbeat" -> if (!event.connected && previous.phase == Phase.CONNECTED && wantsConnection) "The Cosmos connection dropped. Reconnecting…" else previous.message
                     "retry_pending" -> "Cosmos confirmed the pending operation with its exact request."
                     else -> previous.message
                 },
@@ -280,6 +314,9 @@ class SurfaceController(context: Context) {
     companion object { private const val TAG = "Cosmos" }
 
     fun connect() = scope.launch {
+        wantsConnection = true
+        reconnectAttempt = 0
+        reconnectDueAt = 0L
         command("connect") { NativeSurface.connect(handle) }
         // Visibility lives on the connection: re-report the retained foreground
         // state after every successful connect, even if a snapshot lagged.
@@ -290,7 +327,11 @@ class SurfaceController(context: Context) {
     fun send(text: String) = scope.launch { command("send_text") { NativeSurface.sendText(handle, text.toByteArray()) } }
     fun retryPending() = scope.launch { command("retry_pending") { NativeSurface.retryPending(handle) } }
     fun cancel() = scope.launch { command("cancel") { NativeSurface.cancel(handle) } }
-    fun disconnect() = scope.launch { command("disconnect") { NativeSurface.disconnect(handle) } }
+    fun disconnect() = scope.launch {
+        wantsConnection = false
+        reconnectDueAt = 0L
+        command("disconnect") { NativeSurface.disconnect(handle) }
+    }
 
     /** The app's own foreground report. Availability only; never occupancy or identity. */
     fun setVisible(visible: Boolean) {

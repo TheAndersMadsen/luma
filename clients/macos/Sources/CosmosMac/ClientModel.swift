@@ -7,7 +7,7 @@ public final class ClientModel: ObservableObject {
     @Published public var serverInput: String
     @Published public var draft = ""
     @Published public private(set) var snapshot: ClientSnapshot {
-        didSet { syncPlayback() }
+        didSet { syncPlayback(); scheduleReconnect() }
     }
     /// True only while the current reply's exact audio is playing.
     @Published public private(set) var speaking = false
@@ -30,6 +30,11 @@ public final class ClientModel: ObservableObject {
     private var playback: SpeechPlayback?
     private var loadingSpeech: Task<Void, Never>?
     private var spoken: UUID?
+    /// Set by an explicit Connect, cleared by an explicit Disconnect: the
+    /// window in which a dropped room is rejoined automatically.
+    private var wantsConnection = false
+    private var reconnectAttempt = 0
+    private var reconnect: Task<Void, Never>?
 
     public init(client: any ClientBridge, initialServerOrigin: String) {
         self.client = client
@@ -104,17 +109,52 @@ public final class ClientModel: ObservableObject {
             descriptorData = data
             selectedServer = server
             serverInput = server.origin
-            message = "Approve this public descriptor in Center, then connect."
+            // A retained signed connection means the owner connected on purpose;
+            // rejoin it after a relaunch without another click.
+            if snapshot.pendingOpen || snapshot.needsReconnect {
+                wantsConnection = true
+                message = "Rejoining the retained Cosmos connection…"
+            } else {
+                message = "Approve this public descriptor in Center, then connect."
+            }
         }
     }
 
     public func connect() {
         guard canConnect else { return }
+        wantsConnection = true
+        reconnectAttempt = 0
+        reconnect?.cancel(); reconnect = nil
         run { [self] in
             try await client.connect()
             guard !Task.isCancelled else { return }
             if wantedVisible { try? await client.setVisible(true) }
             message = "Cosmos confirmed the connection. Responses appear on an approved display; this panel is one while it is visible."
+        }
+    }
+
+    /// A dropped room (network change, server restart) is rejoined without a
+    /// click: bounded backoff, only after an explicit Connect and never over a
+    /// pending or blocked operation.
+    private func scheduleReconnect() {
+        guard wantsConnection, reconnect == nil, !busy, descriptor != nil,
+              snapshot.phase != .connected, snapshot.phase != .connecting, snapshot.phase != .blocked,
+              !snapshot.hasPending, snapshot.needsReconnect || snapshot.pendingOpen else { return }
+        let delay: Duration = [.seconds(1.5), .seconds(3), .seconds(6), .seconds(12)].dropFirst(min(reconnectAttempt, 3)).first ?? .seconds(30)
+        reconnectAttempt = min(reconnectAttempt + 1, 6)
+        message = "The Cosmos connection dropped. Reconnecting…"
+        reconnect = Task { [weak self] in
+            try? await Task.sleep(for: delay)
+            guard let self, !Task.isCancelled else { return }
+            reconnect = nil
+            guard wantsConnection, canConnect else { return }
+            run { [self] in
+                try await client.connect()
+                guard !Task.isCancelled else { return }
+                reconnectAttempt = 0
+                if wantedVisible { try? await client.setVisible(true) }
+                message = "Cosmos confirmed the connection again."
+            }
         }
     }
 
@@ -164,6 +204,8 @@ public final class ClientModel: ObservableObject {
     /// Disconnect may interrupt a UI operation. The bridge owns exact request recovery.
     public func disconnect() {
         guard canDisconnect else { return }
+        wantsConnection = false
+        reconnect?.cancel(); reconnect = nil
         operationGeneration &+= 1
         let generation = operationGeneration
         operation?.cancel()

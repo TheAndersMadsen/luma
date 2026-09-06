@@ -397,6 +397,7 @@ test("production setup creates a complete portable operator installation and is 
   assert.equal(roomConfig.rtc.use_external_ip, true);
   assert.equal(roomConfig.rtc.advertise_internal_ip, true);
   assert.equal(roomConfig.rtc.require_ipv4, true);
+  assert.equal(roomConfig.rtc.node_ip, runtime.REVIVAL_DEVICE_EDGE_IPV4 || undefined);
   assert.equal(roomConfig.turn.tls_port, 0);
   assert.equal(roomConfig.room.max_participants, 17);
   assert.equal(realm.realm, "humane");

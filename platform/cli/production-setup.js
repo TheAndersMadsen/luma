@@ -797,6 +797,12 @@ function checkBundledPinRelease() {
 }
 
 function livekitConfig(values) {
+  // Behind NAT the SFU cannot validate its public address through STUN and
+  // then advertises candidates mobile clients cannot keep alive. The Pin edge
+  // IPv4 is that public address, so hand it over instead of guessing.
+  const nodeIp = typeof values.REVIVAL_DEVICE_EDGE_IPV4 === 'string'
+    && /^(?:\d{1,3}\.){3}\d{1,3}$/u.test(values.REVIVAL_DEVICE_EDGE_IPV4)
+    ? { node_ip: values.REVIVAL_DEVICE_EDGE_IPV4 } : {};
   return {
     port: 7880,
     bind_addresses: ['0.0.0.0'],
@@ -806,6 +812,7 @@ function livekitConfig(values) {
       use_external_ip: true,
       advertise_internal_ip: true,
       require_ipv4: true,
+      ...nodeIp,
     },
     keys: { [values.COSMOS_RTC_API_KEY]: values.COSMOS_RTC_API_SECRET },
     room: { empty_timeout: 30, max_participants: 17 },
