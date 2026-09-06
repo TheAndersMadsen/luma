@@ -136,6 +136,16 @@ final class ClientModelTests: XCTestCase {
     }
 
     @MainActor
+    private func connected(_ model: ClientModel, file: StaticString = #filePath, line: UInt = #line) async {
+        if model.snapshot.phase == .connected, !model.busy { return }
+        let done = expectation(description: "The model rejoins the room")
+        let subscription = model.$busy.dropFirst().first(where: { !$0 }).sink { _ in done.fulfill() }
+        defer { subscription.cancel() }
+        await fulfillment(of: [done], timeout: 2)
+        XCTAssertEqual(model.snapshot.phase, .connected, file: file, line: line)
+    }
+
+    @MainActor
     private func prepared(_ client: MockClientBridge) async -> ClientModel {
         let model = ClientModel(client: client, initialServerOrigin: "https://center.example.invalid")
         model.prepare()
@@ -286,6 +296,50 @@ final class ClientModelTests: XCTestCase {
             XCTAssertEqual(client.prepareServers.count, 1)
             XCTAssertTrue(model.canSend)
         }
+    }
+
+    @MainActor
+    func testRetainedConnectionIsRejoinedAfterRelaunchWithoutAClick() async throws {
+        let client = try MockClientBridge()
+        client.prepareHandler = { [client] _ in
+            client.publish(ClientSnapshot(phase: .prepared, needsReconnect: true))
+            return client.descriptor
+        }
+        let model = ClientModel(client: client, initialServerOrigin: "https://center.example.invalid",
+                                reconnectDelays: [.milliseconds(20)])
+        model.prepare()
+        await finished(model)
+        XCTAssertEqual(client.connectCalls, 0)
+        XCTAssertEqual(model.message, "Rejoining the retained Cosmos connection…")
+        await connected(model)
+        XCTAssertEqual(client.connectCalls, 1)
+        XCTAssertEqual(client.prepareServers.count, 1)
+        XCTAssertEqual(model.message, ClientModel.connectedMessage)
+        model.draft = "Hello"
+        XCTAssertTrue(model.canSend)
+    }
+
+    @MainActor
+    func testDroppedRoomIsRejoinedUntilAnExplicitDisconnect() async throws {
+        let client = try MockClientBridge()
+        let model = ClientModel(client: client, initialServerOrigin: "https://center.example.invalid",
+                                reconnectDelays: [.milliseconds(20)])
+        model.prepare()
+        await finished(model)
+        model.connect()
+        await finished(model)
+        XCTAssertEqual(client.connectCalls, 1)
+
+        client.publish(ClientSnapshot(phase: .disconnected, needsReconnect: true))
+        XCTAssertEqual(model.message, "The Cosmos connection dropped. Reconnecting…")
+        await connected(model)
+        XCTAssertEqual(client.connectCalls, 2)
+
+        model.disconnect()
+        await finished(model)
+        client.publish(ClientSnapshot(phase: .disconnected, needsReconnect: true))
+        try await Task.sleep(for: .milliseconds(80))
+        XCTAssertEqual(client.connectCalls, 2, "an explicit Disconnect ends automatic rejoining")
     }
 
     @MainActor

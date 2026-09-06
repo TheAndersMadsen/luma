@@ -13,7 +13,11 @@ public final class ClientModel: ObservableObject {
     @Published public private(set) var speaking = false
     @Published public private(set) var descriptor: PublicDescriptor?
     @Published public private(set) var selectedServer: ServerEndpoint?
-    @Published public private(set) var busy = false
+    @Published public private(set) var busy = false {
+        // An operation that ends without a room (a relaunch that retained a
+        // signed connection, a failed rejoin) is the moment to schedule the next attempt.
+        didSet { if !busy { scheduleReconnect() } }
+    }
     @Published public private(set) var message = "Prepare this installation, then approve its public descriptor in Center."
     @Published public private(set) var shortcutMessage = ""
     @Published private var disconnectInFlight = false
@@ -35,9 +39,12 @@ public final class ClientModel: ObservableObject {
     private var wantsConnection = false
     private var reconnectAttempt = 0
     private var reconnect: Task<Void, Never>?
+    private let reconnectDelays: [Duration]
 
-    public init(client: any ClientBridge, initialServerOrigin: String) {
+    public init(client: any ClientBridge, initialServerOrigin: String,
+                reconnectDelays: [Duration] = [.seconds(1.5), .seconds(3), .seconds(6), .seconds(12), .seconds(30)]) {
         self.client = client
+        self.reconnectDelays = reconnectDelays
         serverInput = initialServerOrigin
         snapshot = client.snapshot
         client.onChange = { [weak self] value in self?.snapshot = value }
@@ -129,9 +136,11 @@ public final class ClientModel: ObservableObject {
             try await client.connect()
             guard !Task.isCancelled else { return }
             if wantedVisible { try? await client.setVisible(true) }
-            message = "Cosmos confirmed the connection. Responses appear on an approved display; this panel is one while it is visible."
+            message = Self.connectedMessage
         }
     }
+
+    static let connectedMessage = "Cosmos confirmed the connection. Responses appear on an approved display; this panel is one while it is visible."
 
     /// A dropped room (network change, server restart) is rejoined without a
     /// click: bounded backoff, only after an explicit Connect and never over a
@@ -140,20 +149,22 @@ public final class ClientModel: ObservableObject {
         guard wantsConnection, reconnect == nil, !busy, descriptor != nil,
               snapshot.phase != .connected, snapshot.phase != .connecting, snapshot.phase != .blocked,
               !snapshot.hasPending, snapshot.needsReconnect || snapshot.pendingOpen else { return }
-        let delay: Duration = [.seconds(1.5), .seconds(3), .seconds(6), .seconds(12)].dropFirst(min(reconnectAttempt, 3)).first ?? .seconds(30)
-        reconnectAttempt = min(reconnectAttempt + 1, 6)
-        message = "The Cosmos connection dropped. Reconnecting…"
+        let delay = reconnectDelays[min(reconnectAttempt, reconnectDelays.count - 1)]
+        reconnectAttempt = min(reconnectAttempt + 1, reconnectDelays.count)
+        message = snapshot.phase == .prepared
+            ? "Rejoining the retained Cosmos connection…"
+            : "The Cosmos connection dropped. Reconnecting…"
         reconnect = Task { [weak self] in
             try? await Task.sleep(for: delay)
             guard let self, !Task.isCancelled else { return }
             reconnect = nil
             guard wantsConnection, canConnect else { return }
-            run { [self] in
-                try await client.connect()
+            run {
+                try await self.client.connect()
                 guard !Task.isCancelled else { return }
-                reconnectAttempt = 0
-                if wantedVisible { try? await client.setVisible(true) }
-                message = "Cosmos confirmed the connection again."
+                self.reconnectAttempt = 0
+                if self.wantedVisible { try? await self.client.setVisible(true) }
+                self.message = Self.connectedMessage
             }
         }
     }
