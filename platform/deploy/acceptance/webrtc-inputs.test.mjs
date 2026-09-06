@@ -12,7 +12,7 @@ test('native compiler and local STT model inputs require pinned bytes', () => {
     env: testProcessEnvironment(), encoding: 'utf8', timeout: 30_000,
   });
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stderr, /Ran 8 tests/u);
+  assert.match(result.stderr, /Ran 9 tests/u);
 });
 
 test('patched recognition source is acquired and reused only with verified bytes', () => {
