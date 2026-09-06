@@ -1,5 +1,6 @@
 package dk.andersmadsen.cosmos.android
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -18,11 +19,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.material3.Button
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
-import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -30,15 +30,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import dk.andersmadsen.cosmos.android.ui.AssistantState
-import dk.andersmadsen.cosmos.android.ui.CosmosNebula
-import dk.andersmadsen.cosmos.android.ui.CosmosPalette
-import dk.andersmadsen.cosmos.android.ui.CosmosPanel
+import dk.andersmadsen.cosmos.android.ui.AskBar
 import dk.andersmadsen.cosmos.android.ui.CosmosMessage
+import dk.andersmadsen.cosmos.android.ui.CosmosNebula
+import dk.andersmadsen.cosmos.android.ui.CosmosPanel
+import dk.andersmadsen.cosmos.android.ui.CosmosTheme
 import dk.andersmadsen.cosmos.android.ui.CosmosWaveformButton
 import dk.andersmadsen.cosmos.android.ui.DisplayCardView
+import dk.andersmadsen.cosmos.android.ui.StatusPill
 
 /**
  * The compact on-demand panel over the current app (ACTION_ASSIST). It is a
@@ -52,12 +52,13 @@ class AssistActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            MaterialTheme(colorScheme = darkColorScheme(primary = CosmosPalette.text)) {
+            CosmosTheme {
                 val state by controller.state.collectAsStateWithLifecycle()
                 var draft by rememberSaveable { mutableStateOf("") }
                 BackHandler { finish() }
                 BoxWithConstraints(Modifier.fillMaxSize()) {
-                    val maxCardHeight = (maxHeight - 200.dp).coerceAtLeast(96.dp)
+                    // Long cards scroll inside the panel; the pill, ask row and waveform keep their room.
+                    val maxCardHeight = (maxHeight - 236.dp).coerceAtLeast(96.dp)
                     CosmosNebula(Modifier.align(Alignment.BottomCenter))
                     Column(
                         modifier = Modifier.align(Alignment.BottomCenter).windowInsetsPadding(WindowInsets.safeDrawing)
@@ -65,28 +66,31 @@ class AssistActivity : ComponentActivity() {
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) { StatusPill(state.sessionStatus()) }
                         val card = state.display
                         val speech = state.speech
-                        if (card != null) {
-                            DisplayCardView(card, onCommitted = controller::displayCommitted,
+                        val status = state.sessionStatus()
+                        when {
+                            card != null -> DisplayCardView(card, onCommitted = controller::displayCommitted,
                                 Modifier.fillMaxWidth().heightIn(max = maxCardHeight))
-                        } else if (speech != null) {
-                            CosmosPanel(Modifier.fillMaxWidth()) { CosmosMessage(speech.text) }
-                        } else if (state.phase != Phase.CONNECTED) {
-                            CosmosPanel(Modifier.fillMaxWidth()) { CosmosMessage("Open Cosmos and connect this installation first.") }
-                        } else {
-                            CosmosPanel(Modifier.fillMaxWidth()) { CosmosMessage(state.message) }
-                        }
-                        if (state.phase == Phase.CONNECTED) {
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                                OutlinedTextField(draft, { draft = it.take(4000) }, placeholder = { Text("Ask Cosmos", fontSize = 14.sp) },
-                                    singleLine = true, modifier = Modifier.weight(1f), enabled = state.canSend)
-                                Button(onClick = { controller.send(draft); draft = "" }, enabled = state.canSend && draft.isNotBlank()) { Text("Send") }
+                            speech != null -> CosmosPanel(Modifier.fillMaxWidth().heightIn(max = maxCardHeight)) {
+                                Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) { CosmosMessage(speech.text) }
+                            }
+                            status == SessionStatus.RECONNECTING -> CosmosPanel(Modifier.fillMaxWidth()) { CosmosMessage("Rejoining the Cosmos room…") }
+                            state.phase != Phase.CONNECTED -> CosmosPanel(Modifier.fillMaxWidth()) { CosmosMessage("Open Cosmos and connect this phone first.") }
+                            else -> CosmosPanel(Modifier.fillMaxWidth().heightIn(max = maxCardHeight)) {
+                                Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
+                                    CosmosMessage(state.notice() ?: "Shared answers and spoken replies for this phone appear here.")
+                                }
                             }
                         }
+                        if (state.phase == Phase.CONNECTED) {
+                            AskBar(draft, { draft = it }, enabled = state.canSend, onSend = { controller.send(draft); draft = "" })
+                        } else if (status == SessionStatus.DISCONNECTED) {
+                            TextButton({ startActivity(Intent(this@AssistActivity, MainActivity::class.java)); finish() }) { Text("Open Cosmos") }
+                        }
                         Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                            CosmosWaveformButton(when { state.speaking -> AssistantState.SPEAKING; state.busy -> AssistantState.THINKING; else -> AssistantState.IDLE },
-                                onDismiss = { finish() }, animationsEnabled = true)
+                            CosmosWaveformButton(state.assistantState(), onDismiss = { finish() }, animationsEnabled = true)
                         }
                     }
                 }

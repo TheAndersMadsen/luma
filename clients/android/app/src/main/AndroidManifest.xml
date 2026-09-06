@@ -1,7 +1,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- Network for the owner's Cosmos only. No microphone, overlay, accessibility
+    <!-- Network for the owner's Cosmos only, plus a foreground service that keeps the
+         approved session joined while the screen is off. No microphone, overlay, accessibility
          or notification-listener permission: this surface is text and one shared card. -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <!-- One APK serves the Pixel and the Shield; the runtime platform is reported as
          android_tv on leanback devices so routing hints can name the TV. -->
     <uses-feature android:name="android.software.leanback" android:required="false"/>
@@ -12,7 +16,8 @@
         android:banner="@drawable/cosmos_tv_banner"
         android:theme="@style/Theme.Cosmos" android:allowBackup="false" android:supportsRtl="true"
         android:extractNativeLibs="false">
-        <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTask">
+        <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize">
             <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
             <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LEANBACK_LAUNCHER"/></intent-filter>
         </activity>
@@ -20,5 +25,12 @@
             android:theme="@style/Theme.Cosmos.Overlay" android:excludeFromRecents="true" android:launchMode="singleInstance">
             <intent-filter><action android:name="android.intent.action.ASSIST"/><category android:name="android.intent.category.DEFAULT"/></intent-filter>
         </activity>
+        <!-- Runs from Connect until Disconnect so the joined room survives the screen turning off.
+             It owns nothing but the quiet notification; the connection lives in the application. -->
+        <service android:name=".SessionService" android:exported="false" android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps the owner's approved Cosmos surface connected"/>
+        </service>
+        <receiver android:name=".SessionService$DisconnectReceiver" android:exported="false"/>
     </application>
 </manifest>

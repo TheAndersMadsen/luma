@@ -1,0 +1,122 @@
+package dk.andersmadsen.cosmos.android
+
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.Service
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.pm.ServiceInfo
+import android.os.Build
+import android.os.IBinder
+import android.util.Log
+import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
+import androidx.core.content.ContextCompat
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
+
+/**
+ * Keeps the process in the foreground tier while the owner wants the room
+ * joined, so the connection survives the screen turning off. The service owns
+ * only its quiet notification; the connection itself lives in the application.
+ */
+class SessionService : Service() {
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var watching: Job? = null
+    private val manager get() = getSystemService(NotificationManager::class.java)
+    private val controller get() = (application as CosmosApplication).controller
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onCreate() {
+        super.onCreate()
+        manager.createNotificationChannel(NotificationChannel(CHANNEL, getString(R.string.session_channel), NotificationManager.IMPORTANCE_LOW).apply {
+            description = "Shows while this device stays connected to Cosmos."
+            setShowBadge(false)
+        })
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // Android 14+ requires the declared special-use type; earlier releases take the manifest's.
+        val type = if (Build.VERSION.SDK_INT >= 34) ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE else 0
+        ServiceCompat.startForeground(this, NOTIFICATION_ID, notification(controller.state.value.sessionStatus(), false), type)
+        if (!controller.state.value.connectionWanted) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        if (watching == null) watching = scope.launch {
+            controller.state.map { it.sessionStatus() to (it.invitation != null && !it.visible) }.distinctUntilChanged()
+                .collect { (status, waiting) -> manager.notify(NOTIFICATION_ID, notification(status, waiting)) }
+        }
+        return START_NOT_STICKY
+    }
+
+    override fun onDestroy() {
+        scope.cancel()
+        ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+        super.onDestroy()
+    }
+
+    /**
+     * [waiting] means a private card is held for this device: the text says only
+     * that something is ready (never what), and opening the app receives it.
+     */
+    private fun notification(status: SessionStatus, waiting: Boolean): Notification {
+        val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
+        val disconnect = PendingIntent.getBroadcast(this, 1,
+            Intent(this, DisconnectReceiver::class.java).setAction(ACTION_DISCONNECT), PendingIntent.FLAG_IMMUTABLE)
+        return NotificationCompat.Builder(this, CHANNEL)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setColor(0xFF27E6DF.toInt())
+            .setContentTitle(if (waiting) "Cosmos · A reply is waiting" else "Cosmos · ${status.label}")
+            .setContentText(if (waiting) "Open Cosmos to see it." else "Shared answers can reach this device while it stays connected.")
+            .setContentIntent(open)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setSilent(true)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
+            .addAction(0, getString(R.string.session_disconnect), disconnect)
+            .build()
+    }
+
+    /** The notification's Disconnect action; a receiver needs no foreground-start allowance. */
+    class DisconnectReceiver : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action == ACTION_DISCONNECT) (context.applicationContext as CosmosApplication).controller.disconnect()
+        }
+    }
+
+    companion object {
+        private const val TAG = "Cosmos"
+        private const val CHANNEL = "session"
+        private const val NOTIFICATION_ID = 1
+        const val ACTION_DISCONNECT = "dk.andersmadsen.cosmos.android.DISCONNECT"
+
+        /** Starts the service when a connection becomes wanted and stops it when it no longer is. */
+        fun setWanted(context: Context, wanted: Boolean) {
+            val intent = Intent(context, SessionService::class.java)
+            if (!wanted) {
+                context.stopService(intent)
+                return
+            }
+            try {
+                ContextCompat.startForegroundService(context, intent)
+            } catch (error: IllegalStateException) {
+                // Only a background start is refused; the connection still runs while the app is open.
+                Log.w(TAG, "session service could not start", error)
+            } catch (error: SecurityException) {
+                Log.w(TAG, "session service could not start", error)
+            }
+        }
+    }
+}

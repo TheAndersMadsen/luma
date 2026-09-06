@@ -35,7 +35,18 @@ sealed interface DisplayContent {
 data class DisplayCard(
     val actionId: UUID, val turnId: UUID, val generation: Long,
     val contentDigest: String, val expiresAtMs: Long, val content: DisplayContent,
-)
+    /** The class Cosmos routed this card at; anything above shared_room is private to this screen. */
+    val privacy: String = "shared_room",
+) {
+    val private: Boolean get() = privacy == "near_user" || privacy == "private"
+}
+
+/**
+ * A private card is waiting for this installation. It names the kind of
+ * surface that asked, the class and the expiry, never any content; the card
+ * arrives as a display once this app reports its unlocked foreground.
+ */
+data class Invitation(val id: UUID, val origin: String, val privacy: String, val expiresAtMs: Long)
 
 /** One complete spoken reply. The bytes are fetched separately; this names and bounds them. */
 data class SpeechReply(
@@ -48,14 +59,16 @@ data class NativeEvent(
     val pendingOpen: Boolean, val needsReconnect: Boolean,
     val descriptor: Descriptor?, val pending: PendingOperation?, val lastUnknown: PendingOperation?,
     val admission: Admission?, val visible: Boolean, val display: DisplayCard?, val speech: SpeechReply?,
-    val eventsSkipped: Long,
+    val invitation: Invitation?, val eventsSkipped: Long,
 ) {
     val ok: Boolean get() = error == null
 
     companion object {
         const val APPROVAL = "native-shared-speech-v3"
         private val OPERATIONS = setOf("prepare", "connect", "send_text", "retry_pending", "cancel",
-            "set_visible", "acknowledge", "acknowledge_speech", "display", "speech", "disconnect", "heartbeat")
+            "set_visible", "acknowledge", "acknowledge_speech", "display", "speech", "invitation", "disconnect", "heartbeat")
+        private val DISPLAY_CLASSES = setOf("public", "shared_room", "near_user", "private")
+        private val PRIVATE_CLASSES = setOf("near_user", "private")
         private val PENDING_KINDS = setOf("text", "heartbeat", "cancel", "state", "acknowledge")
         private val NIL = UUID(0, 0)
         private val HEX64 = Regex("^[0-9a-f]{64}$")
@@ -120,9 +133,20 @@ data class NativeEvent(
             }
             val generation = value.getLong("generation")
             val digest = value.getString("contentDigest")
-            require(generation in 1..MAX_SAFE && HEX64.matches(digest) && value.getLong("expiresAtMs") > 0) { "invalid card identity" }
+            val privacy = value.optString("privacy", "shared_room")
+            require(generation in 1..MAX_SAFE && HEX64.matches(digest) && value.getLong("expiresAtMs") > 0
+                && privacy in DISPLAY_CLASSES) { "invalid card identity" }
             return DisplayCard(uuid(value.getString("actionId")), uuid(value.getString("turnId")), generation,
-                digest, value.getLong("expiresAtMs"), body)
+                digest, value.getLong("expiresAtMs"), body, privacy)
+        }
+
+        private fun invitation(value: JSONObject?): Invitation? {
+            value ?: return null
+            val origin = value.getString("origin")
+            val privacy = value.getString("privacy")
+            require(origin.isNotEmpty() && origin.length <= 32 && origin.all { it in 'a'..'z' || it == '_' }
+                && privacy in PRIVATE_CLASSES && value.getLong("expiresAtMs") > 0) { "invalid invitation" }
+            return Invitation(uuid(value.getString("id")), origin, privacy, value.getLong("expiresAtMs"))
         }
 
         private fun speech(value: JSONObject?): SpeechReply? {
@@ -159,6 +183,7 @@ data class NativeEvent(
                 lastUnknown = pending(value.optJSONObject("lastUnknown")), admission = admission(value.optJSONObject("admission")),
                 visible = value.getBoolean("visible"), display = if (connected) display(value.optJSONObject("display")) else null,
                 speech = if (connected) speech(value.optJSONObject("speech")) else null,
+                invitation = if (connected) invitation(value.optJSONObject("invitation")) else null,
                 eventsSkipped = value.getLong("eventsSkipped"),
             )
         }

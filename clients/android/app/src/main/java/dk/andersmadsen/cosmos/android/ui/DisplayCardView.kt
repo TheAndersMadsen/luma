@@ -32,6 +32,11 @@ import dk.andersmadsen.cosmos.android.DisplayContent
 fun DisplayCardView(card: DisplayCard, onCommitted: (DisplayCard) -> Unit, modifier: Modifier = Modifier) {
     CosmosPanel(modifier) {
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
+            if (card.private) {
+                // States the class Cosmos routed at; it is not a claim that nobody else can see the screen.
+                Text("Private reply", color = CosmosPalette.secondary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(6.dp))
+            }
             when (val content = card.content) {
                 is DisplayContent.Text -> CosmosMessage(content.text)
                 is DisplayContent.Places -> {

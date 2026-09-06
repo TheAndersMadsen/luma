@@ -2019,13 +2019,17 @@ Connect until Disconnect a `specialUse` foreground service posts one quiet
 survives the screen turning off; Android 13+ asks for the notification
 permission when it starts.
 
-On a leanback device the same activity renders the TV layout from the owner's
-TV kit: header with status, one large response panel (24sp body, waveform and
-phase label as a polite live region), and a row of real D-pad buttons inside
-5% safe insets. Approval shows a large QR code beside the fingerprint for the
-phone to scan; delivered cards keep their type size and page with Previous and
-Next; Ask opens a field for the remote's keyboard; Back leaves the field first
-and the activity second. Debug builds also honour
+On a leanback device the same activity renders the TV stage: the graphite
+ready screen (or a supplied content slot) fills the screen with one faint
+focusable crescent in the corner. Asking from it, or a request in flight,
+shrinks the content into a rounded inset above a black nebula band that
+carries the white waveform while the request is sent and the typed question
+while Cosmos works; the reply returns the content to full screen as a bottom
+subtitle, two lines at most, with More opening a paged full-size view. Cosmos
+retires the reply; Back closes the paged view, then the ask field, then the
+reply. Cards above shared_room never appear on the TV. Set-up and approval keep
+their status line, QR code and one D-pad button on the same graphite stage.
+Debug builds also honour
 `adb shell am start -n dk.andersmadsen.cosmos.android/.MainActivity --es cosmos.layout tv`
 so the TV layout can be checked on a phone in landscape; release builds ignore
 the extra. The Shield itself has not been exercised yet.

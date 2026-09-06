@@ -1,129 +1,102 @@
 package dk.andersmadsen.cosmos.android
 
+import android.Manifest
 import android.app.role.RoleManager
 import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawingPadding
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import dk.andersmadsen.cosmos.android.ui.AssistantState
-import dk.andersmadsen.cosmos.android.ui.CosmosPalette
-import dk.andersmadsen.cosmos.android.ui.CosmosWaveform
-import dk.andersmadsen.cosmos.android.ui.DisplayCardView
+import dk.andersmadsen.cosmos.android.ui.CosmosTheme
+import dk.andersmadsen.cosmos.android.ui.CosmosTvTheme
+import dk.andersmadsen.cosmos.android.ui.PhoneScreen
+import dk.andersmadsen.cosmos.android.ui.SurfaceActions
+import dk.andersmadsen.cosmos.android.ui.TvScreen
 
+/**
+ * One activity for the Pixel and the Shield. Leanback devices get the TV layout;
+ * a debug build also honours the `cosmos.layout=tv` extra so the TV layout can be
+ * checked on a phone. Intents, the clipboard, roles and permissions live here;
+ * the screens themselves only see [SurfaceState] and [SurfaceActions].
+ */
 class MainActivity : ComponentActivity() {
     private val controller get() = (application as CosmosApplication).controller
     private val roleRequest = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { }
+    private val notificationRequest = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    /** Set by Approve in Center: the next resume tries to connect once and the screen offers Try again. */
+    private val approvalRequested = mutableStateOf(false)
+    private var connectOnResume = false
+    private var notificationsAsked = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        val actions = SurfaceActions(
+            prepare = controller::prepare, connect = { controller.connect() }, disconnect = { controller.disconnect() },
+            send = { controller.send(it) }, cancel = { controller.cancel() }, retry = { controller.retryPending() },
+            approve = ::approve, copy = ::copy, share = ::share, chooseAssistant = ::selectAssistant,
+            committed = controller::displayCommitted,
+        )
+        val tv = tvLayout()
         setContent {
-            MaterialTheme(colorScheme = darkColorScheme(primary = CosmosPalette.text)) {
-                val state by controller.state.collectAsStateWithLifecycle()
-                var server by rememberSaveable { mutableStateOf(state.serverOrigin) }
-                var draft by rememberSaveable { mutableStateOf("") }
-                Surface(Modifier.fillMaxSize(), color = CosmosPalette.background) {
-                    Column(Modifier.safeDrawingPadding().fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Text("Cosmos", fontSize = 26.sp, color = CosmosPalette.text)
-                        Text(statusText(state), color = CosmosPalette.secondary)
-                        state.display?.let { card ->
-                            DisplayCardView(card, onCommitted = controller::displayCommitted,
-                                Modifier.fillMaxWidth().heightIn(max = 360.dp))
-                        }
-                        state.speech?.let { speech ->
-                            Text(if (state.speaking) "Speaking" else "Spoken reply", color = CosmosPalette.secondary, fontSize = 12.sp)
-                            Text(speech.text, color = CosmosPalette.text)
-                        }
-                        OutlinedTextField(server, { server = it }, label = { Text("HTTPS server address") },
-                            singleLine = true, modifier = Modifier.fillMaxWidth(), enabled = state.canPrepare)
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(onClick = { controller.prepare(server) }, enabled = state.canPrepare) { Text("Prepare") }
-                            Button(onClick = { controller.connect() }, enabled = state.canConnect) {
-                                Text(if (state.pendingOpen) "Reconnect" else "Connect")
-                            }
-                            OutlinedButton(onClick = { controller.disconnect() }, enabled = state.canDisconnect) { Text("Disconnect") }
-                        }
-                        state.descriptor?.let { descriptor ->
-                            Text("Public installation descriptor", color = CosmosPalette.secondary, fontSize = 12.sp)
-                            Text(descriptor.json(), color = CosmosPalette.text, fontSize = 12.sp)
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Button(onClick = { approve(descriptor.approvalUrl(state.serverOrigin)) }) { Text("Approve in Center") }
-                                OutlinedButton(onClick = { copy(descriptor.json()) }) { Text("Copy descriptor") }
-                                OutlinedButton(onClick = { share(descriptor.json()) }) { Text("Share…") }
-                            }
-                            Text("Approve in Center opens the review with this descriptor filled in. Compare the fingerprint before confirming.",
-                                color = CosmosPalette.secondary, fontSize = 12.sp)
-                        }
-                        OutlinedTextField(draft, { draft = it.take(4000) }, label = { Text("Ask Cosmos (public text)") },
-                            minLines = 2, modifier = Modifier.fillMaxWidth(), enabled = state.canSend)
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(onClick = { controller.send(draft); draft = "" }, enabled = state.canSend && draft.isNotBlank()) { Text("Send") }
-                            OutlinedButton(onClick = { controller.cancel() }, enabled = state.canCancel) { Text("Cancel request") }
-                            if (state.canRetry) OutlinedButton(onClick = { controller.retryPending() }) { Text("Retry pending") }
-                        }
-                        Text(state.message, color = CosmosPalette.text)
-                        Spacer(Modifier.width(1.dp))
-                        OutlinedButton(onClick = { selectAssistant() }, modifier = Modifier.fillMaxWidth()) { Text("Choose Cosmos as default assistant") }
-                        Text("This surface is public text, one shared card and one spoken reply while the app is in the foreground. No microphone, no private memories, no device actions.",
-                            color = CosmosPalette.secondary, fontSize = 12.sp)
-                        CosmosWaveform(when { state.speaking -> AssistantState.SPEAKING; state.busy -> AssistantState.THINKING; else -> AssistantState.IDLE },
-                            Modifier.fillMaxWidth().heightIn(48.dp))
-                    }
-                }
-            }
+            val state by controller.state.collectAsStateWithLifecycle()
+            LaunchedEffect(state.connectionWanted) { if (state.connectionWanted) requestNotifications() }
+            LaunchedEffect(state.screen()) { if (state.screen() != Screen.APPROVE) approvalRequested.value = false }
+            if (tv) CosmosTvTheme { TvScreen(state, approvalRequested.value, actions) }
+            else CosmosTheme { PhoneScreen(state, approvalRequested.value, actions) }
         }
     }
 
-    override fun onResume() { super.onResume(); controller.setVisible(true) }
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        if (BuildConfig.DEBUG && intent.hasExtra(LAYOUT_EXTRA)) {
+            setIntent(intent)
+            recreate()
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        controller.setVisible(true)
+        if (connectOnResume) {
+            connectOnResume = false
+            if (controller.state.value.canConnect) controller.connect()
+        }
+    }
+
     override fun onPause() { controller.setVisible(false); super.onPause() }
 
-    private fun statusText(state: SurfaceState): String = when (state.phase) {
-        Phase.DISCONNECTED -> "Disconnected"
-        Phase.PREPARING -> "Opening installation identity…"
-        Phase.PREPARED -> "Installation prepared. Center approval is required."
-        Phase.CONNECTING -> "Connecting to Cosmos…"
-        Phase.CONNECTED -> if (state.visible) "Connected · visible shared display" else "Connected for public text"
-        Phase.BLOCKED -> "Connection stopped. Resolve the reported error before continuing."
+    private fun tvLayout(): Boolean =
+        controller.platform == "android_tv" || (BuildConfig.DEBUG && intent.getStringExtra(LAYOUT_EXTRA) == "tv")
+
+    /** The session notification needs the runtime permission on Android 13+; asked once per process. */
+    private fun requestNotifications() {
+        if (Build.VERSION.SDK_INT < 33 || notificationsAsked) return
+        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return
+        notificationsAsked = true
+        notificationRequest.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
 
     private fun approve(url: String) {
-        try { startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url))) }
-        catch (_: ActivityNotFoundException) { copy(url) }
+        approvalRequested.value = true
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+            connectOnResume = true
+        } catch (_: ActivityNotFoundException) {
+            copy(url)
+        }
     }
 
     private fun copy(text: String) {
@@ -142,5 +115,10 @@ class MainActivity : ComponentActivity() {
         }
         try { startActivity(Intent(Settings.ACTION_VOICE_INPUT_SETTINGS)) }
         catch (_: ActivityNotFoundException) { startActivity(Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS)) }
+    }
+
+    companion object {
+        /** Debug builds only: `--es cosmos.layout tv` renders the Shield layout on a phone. */
+        const val LAYOUT_EXTRA = "cosmos.layout"
     }
 }

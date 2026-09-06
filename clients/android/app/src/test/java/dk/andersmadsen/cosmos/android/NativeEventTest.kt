@@ -59,4 +59,27 @@ class NativeEventTest {
         assertEquals("https://center.example/settings/account/surfaces#descriptor=", url.substringBefore(fragment))
         assertEquals(descriptor.json(), String(java.util.Base64.getUrlDecoder().decode(fragment)))
     }
+
+    @Test
+    fun decodesPrivateCardsAndWaitingInvitationsOnlyWhileConnected() {
+        val private = places.replace("\"expiresAtMs\":1000,", "\"expiresAtMs\":1000,\"privacy\":\"private\",")
+        val event = NativeEvent.decode(base.format(private).toByteArray())
+        assertEquals("private", event.display!!.privacy)
+        assertEquals(true, event.display!!.private)
+        assertEquals("shared_room", NativeEvent.decode(base.format(places).toByteArray()).display!!.privacy)
+        assertThrows(IllegalArgumentException::class.java) {
+            NativeEvent.decode(base.format(places.replace("\"expiresAtMs\":1000,", "\"expiresAtMs\":1000,\"privacy\":\"sensitive\",")).toByteArray())
+        }
+        val invitation = """{"id":"66666666-6666-4666-8666-666666666666","origin":"pin","privacy":"private","expiresAtMs":2000}"""
+        val waiting = NativeEvent.decode(base.format("null").replace("\"speech\":null", "\"speech\":null,\"invitation\":$invitation")
+            .replace("\"operation\":\"display\"", "\"operation\":\"invitation\"").toByteArray())
+        assertEquals("pin", waiting.invitation!!.origin)
+        assertEquals(2000L, waiting.invitation!!.expiresAtMs)
+        val disconnected = NativeEvent.decode(base.format("null").replace("\"speech\":null", "\"speech\":null,\"invitation\":$invitation")
+            .replace("\"connected\":true", "\"connected\":false").toByteArray())
+        assertNull(disconnected.invitation)
+        assertThrows(IllegalArgumentException::class.java) {
+            NativeEvent.decode(base.format("null").replace("\"speech\":null", "\"speech\":null,\"invitation\":${invitation.replace("\"private\"", "\"shared_room\"")}").toByteArray())
+        }
+    }
 }

@@ -24,7 +24,11 @@ android {
         ndk { abiFilters += listOf("arm64-v8a") }
     }
     sourceSets["main"].jniLibs.srcDirs(cosmosJniLibs)
-    buildFeatures { compose = true }
+    buildFeatures {
+        compose = true
+        // BuildConfig.DEBUG gates the TV-layout debug extra; release builds ignore it.
+        buildConfig = true
+    }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -43,6 +47,10 @@ dependencies {
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.animation:animation-core")
+    // Compose for TV controls for the Shield layout; 1.0.1 builds on Compose 1.6.8 and runs on the BOM above.
+    implementation("androidx.tv:tv-material:1.0.1")
+    // Pure-Java QR encoder for the approval link; no camera, no scanning.
+    implementation("com.google.zxing:core:3.5.3")
     implementation("androidx.activity:activity-compose:1.9.3")
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")

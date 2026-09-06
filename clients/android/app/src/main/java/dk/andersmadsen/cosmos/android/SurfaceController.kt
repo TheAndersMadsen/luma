@@ -38,9 +38,19 @@ data class SurfaceState(
     val display: DisplayCard? = null,
     /** The current spoken reply, if any; [speaking] is true only while its audio plays. */
     val speech: SpeechReply? = null,
+    /** A private card is waiting for this device's unlocked foreground; it carries no content. */
+    val invitation: Invitation? = null,
     val speaking: Boolean = false,
     val message: String = "Prepare this installation, then approve its public descriptor in Center.",
     val busy: Boolean = false,
+    /** Center admitted this installation at least once; a denial clears it. Persisted beside the server origin. */
+    val approved: Boolean = false,
+    /** True from Connect (explicit or retained) until Disconnect; the session service runs while it is set. */
+    val connectionWanted: Boolean = false,
+    /** The last native call or snapshot failed and [message] explains it. */
+    val alert: Boolean = false,
+    /** The operation of the last folded snapshot, so the UI can tell fresh feedback from steady state. */
+    val operation: String = "",
 ) {
     val canPrepare get() = !busy && phase in setOf(Phase.DISCONNECTED, Phase.PREPARED, Phase.BLOCKED) && !hasPending
     val canConnect get() = !busy && descriptor != null && phase in setOf(Phase.PREPARED, Phase.DISCONNECTED) || (!busy && (needsReconnect || pendingOpen))
@@ -60,9 +70,11 @@ class SurfaceController(context: Context) {
     private val journal = JournalStore.open(application)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val commands = Mutex()
-    private val _state = MutableStateFlow(SurfaceState(serverOrigin = application
-        .getSharedPreferences("cosmos-installation", Context.MODE_PRIVATE)
-        .getString("serverOrigin", null) ?: "https://center.andersmadsen.dk"))
+    private val preferences = application.getSharedPreferences("cosmos-installation", Context.MODE_PRIVATE)
+    private val _state = MutableStateFlow(SurfaceState(
+        serverOrigin = preferences.getString("serverOrigin", null) ?: "https://center.andersmadsen.dk",
+        approved = preferences.getBoolean("approved", false),
+    ))
     val state: StateFlow<SurfaceState> = _state
     private var handle = 0L
     private var wantedVisible = false
@@ -73,6 +85,14 @@ class SurfaceController(context: Context) {
     private var played: UUID? = null
     /** True after an explicit Disconnect until the next explicit Connect; automatic reconnection stays off. */
     @Volatile private var wantsConnection = false
+        set(value) {
+            if (field == value) return
+            field = value
+            // The session service runs exactly while a connection is wanted, so the joined
+            // room survives the screen turning off; the UI mirrors the same flag.
+            _state.update { it.copy(connectionWanted = value) }
+            SessionService.setWanted(application, value)
+        }
     @Volatile private var reconnectAttempt = 0
     @Volatile private var reconnectDueAt = 0L
 
@@ -157,7 +177,7 @@ class SurfaceController(context: Context) {
 
     private fun fold(event: NativeEvent) {
         // Snapshots are redacted by the native client: no journal, token or request text.
-        Log.d(TAG, "snapshot ${event.operation} ${if (event.ok) "ok" else event.error} connected=${event.connected} visible=${event.visible} card=${event.display?.actionId} speech=${event.speech?.actionId}")
+        Log.d(TAG, "snapshot ${event.operation} ${if (event.ok) "ok" else event.error} connected=${event.connected} visible=${event.visible} card=${event.display?.actionId} speech=${event.speech?.actionId} waiting=${event.invitation?.id}")
         _state.update { previous ->
             val failure = event.error?.let(::message)
             val phase = when {
@@ -170,7 +190,12 @@ class SurfaceController(context: Context) {
             // A retained signed connection means the owner connected on purpose;
             // rejoin it after a relaunch or a dropped room without another tap.
             if (event.operation == "prepare" && event.ok && (event.pendingOpen || event.needsReconnect)) wantsConnection = true
+            val approved = when { event.connected -> true; event.error == "denied" -> false; else -> previous.approved }
+            if (approved != previous.approved) preferences.edit().putBoolean("approved", approved).apply()
             previous.copy(
+                approved = approved,
+                alert = failure != null,
+                operation = event.operation,
                 phase = phase,
                 descriptor = event.descriptor ?: previous.descriptor,
                 hasPending = event.pending != null || event.pendingOpen,
@@ -182,6 +207,7 @@ class SurfaceController(context: Context) {
                 visible = event.visible,
                 display = event.display,
                 speech = event.speech,
+                invitation = event.invitation,
                 speaking = event.speech != null && playing == event.speech.actionId,
                 message = failure ?: when (event.operation) {
                     "prepare" -> "Approve this public descriptor in Center, then connect."
@@ -196,8 +222,10 @@ class SurfaceController(context: Context) {
                 },
             )
         }
-        // Published after the state so a waiting command observes both together.
-        lastOperation = event.operation
+        // Published after the state so a waiting command observes both together. Only the
+        // awaited operation is recorded: a display or speech snapshot folded in the same poll
+        // batch must not hide the connect snapshot the command is waiting for.
+        if (event.operation == awaiting) lastOperation = event.operation
         main.post { syncPlayback(event.speech) }
     }
 
@@ -260,15 +288,16 @@ class SurfaceController(context: Context) {
 
     private suspend fun command(name: String, block: () -> Int) = commands.withLock {
         if (handle == 0L) {
-            _state.update { it.copy(message = "Prepare this installation first.") }
+            _state.update { it.copy(alert = true, message = "Prepare this installation first.") }
             return@withLock
         }
         _state.update { it.copy(busy = true) }
         lastOperation = null
+        awaiting = name
         val code = withContext(Dispatchers.IO) { block() }
         if (code != NativeSurface.OK) {
             Log.w(TAG, "native $name refused with code $code")
-            _state.update { it.copy(busy = false, message = if (code == NativeSurface.QUEUE_FULL) message("busy") else message("unavailable")) }
+            _state.update { it.copy(busy = false, alert = true, message = if (code == NativeSurface.QUEUE_FULL) message("busy") else message("unavailable")) }
             return@withLock
         }
         // Wait for the operation's own snapshot; the poll loop folds it.
@@ -283,6 +312,7 @@ class SurfaceController(context: Context) {
     }
 
     @Volatile private var lastOperation: String? = null
+    @Volatile private var awaiting: String? = null
 
     fun prepare(serverOrigin: String) {
         val origin = serverOrigin.trim().trimEnd('/')
@@ -306,14 +336,13 @@ class SurfaceController(context: Context) {
                         Log.d(TAG, "native create returned $created after $attempts retries")
                         if (!NativeSurface.isStatus(created)) {
                             handle = created
-                            application.getSharedPreferences("cosmos-installation", Context.MODE_PRIVATE)
-                                .edit().putString("serverOrigin", origin).apply()
+                            preferences.edit().putString("serverOrigin", origin).apply()
                         } else {
-                            _state.update { it.copy(phase = Phase.DISCONNECTED, message = message(if (created == NativeSurface.QUEUE_FULL.toLong()) "busy" else "invalid_config") + " (native $created)") }
+                            _state.update { it.copy(phase = Phase.DISCONNECTED, alert = true, message = message(if (created == NativeSurface.QUEUE_FULL.toLong()) "busy" else "invalid_config") + " (native $created)") }
                         }
                     }.onFailure { error ->
                         Log.w(TAG, "prepare failed", error)
-                        _state.update { it.copy(phase = Phase.BLOCKED, message = "The installation identity or protected storage could not be opened.") }
+                        _state.update { it.copy(phase = Phase.BLOCKED, alert = true, message = "The installation identity or protected storage could not be opened.") }
                     }
                 }
                 if (handle != 0L) {
