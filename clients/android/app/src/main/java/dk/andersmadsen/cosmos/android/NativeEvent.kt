@@ -123,7 +123,7 @@ data class NativeEvent(
             val descriptor = value.optJSONObject("descriptor")?.let {
                 Descriptor(it.getString("enrollmentId"), it.getString("publicKey"), it.getString("platform"), it.getString("approval"))
             }
-            if (descriptor != null) require(descriptor.platform == "android" && descriptor.approval == "native-shared-display-v2") { "foreign descriptor" }
+            if (descriptor != null) require(descriptor.platform in setOf("android", "android_tv") && descriptor.approval == "native-shared-display-v2") { "foreign descriptor" }
             val connected = value.getBoolean("connected")
             return NativeEvent(
                 operation = operation, error = error, connected = connected,

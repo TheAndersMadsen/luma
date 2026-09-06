@@ -25,6 +25,8 @@ class NativeEventTest {
         assertEquals("Café & Bakery", content.query)
         assertEquals(listOf(CreditPart.Text("Credit: "), CreditPart.Link("Map", "https://credits.example")), content.credits.single())
         assertEquals("android", event.descriptor!!.platform)
+        val tv = NativeEvent.decode(base.format(places).replace("\"platform\":\"android\"", "\"platform\":\"android_tv\"").toByteArray())
+        assertEquals("android_tv", tv.descriptor!!.platform)
     }
 
     @Test

@@ -77,6 +77,9 @@ class SurfaceController(context: Context) {
         }
     }
 
+    /** Leanback devices such as the Shield enroll as android_tv so hints can name the TV. */
+    val platform: String = if (application.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_LEANBACK)) "android_tv" else "android"
+
     private fun bootEpoch(): String {
         val id = File("/proc/sys/kernel/random/boot_id").readText().trim()
         return UUID.fromString(id).toString()
@@ -180,7 +183,7 @@ class SurfaceController(context: Context) {
                     runCatching {
                         if (handle != 0L) { NativeSurface.destroy(handle); handle = 0 }
                         val config = JSONObject().put("version", 1).put("serverOrigin", origin)
-                            .put("enrollmentId", identity.enrollmentId.toString()).put("platform", "android")
+                            .put("enrollmentId", identity.enrollmentId.toString()).put("platform", platform)
                             .put("bootEpoch", bootEpoch()).toString().toByteArray()
                         // The native process slot is released shortly after destroy; retry that window.
                         var created = NativeSurface.create(config, callbacks)

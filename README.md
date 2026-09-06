@@ -1165,7 +1165,9 @@ macOS, Linux, Android and Android TV clients against the same runtime contract.
 The macOS preview and the Android client already enroll, send public text and
 render shared cards on the shared native client; the Android APK installs on
 the Pixel 10 Pro and offers the default-assistant role for its compact panel.
-Android TV and Linux still need their own shells.
+The same APK carries a leanback launcher entry and enrolls as `android_tv` on
+the Shield, so "show it on the TV" can target it; its D-pad layout, Shield
+verification and playback context remain open. Linux still needs its shell.
 Each device needs separate owner approval and honest local permission,
 availability and playback reporting. Installable packages and actual device
 checks remain deliverables; the browser and synthetic clients do not establish
