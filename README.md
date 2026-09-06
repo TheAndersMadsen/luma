@@ -182,9 +182,9 @@ Its metadata tests validate the inventory and evidence references only; the
 paper's reference implementation and reported test results are unavailable for
 independent reproduction.
 
-The current server preview is published as `v0.2.0-ambiance.7` and deployed at
+The current server preview is published as `v0.2.0-ambiance.10` and deployed at
 `https://center.andersmadsen.dk/`, reporting release
-`ed547d8ab1d1eccc3d30a26d511633d3f34b3392` and environment `production`.
+`6eb1b1c1c20f8fd6fc4bba78ae76ad81842d8206` and environment `production`.
 The signed operator, public discovery, OIDC and configured Pin certificate chain
 passed production verification. The upgrade preserved the configured profiles,
 connections and nonblank credentials. Web lookup's exact-commit CI and built
