@@ -168,11 +168,15 @@ Its metadata tests validate the inventory and evidence references only; the
 paper's reference implementation and reported test results are unavailable for
 independent reproduction.
 
-The current server preview is published as `v0.2.0-ambiance.5` and deployed at
+The current server preview is published as `v0.2.0-ambiance.6` and deployed at
 `https://center.andersmadsen.dk/`, reporting release
-`a9e0e114feba6e0d15f0c8e77273c61293034ba1` and environment `production`.
+`0bf93c0435cd8e094e625d852dad7a45d731ae88` and environment `production`.
 The signed operator, public discovery, OIDC and configured Pin certificate chain
-passed production verification. External browser RPC passed over direct TCP
+passed production verification. The upgrade preserved the configured profiles,
+connections and nonblank credentials. Web lookup's exact-commit CI and built
+Center/native-client acceptance passed with a controlled search fixture;
+conversation acceptance against a real search provider remains open.
+External browser RPC passed over direct TCP
 7881 with observed ICE selection and increasing byte counters. UDP 7882 and
 TURN/UDP 3478 remain blocked before packets reach the VPS network interface;
 their acceptance remains open. Full owner conversation acceptance, native
