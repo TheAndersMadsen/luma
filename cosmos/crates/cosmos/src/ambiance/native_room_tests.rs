@@ -29,6 +29,8 @@ struct SpyModel {
     calls: AtomicUsize,
     current_texts: Mutex<Vec<String>>,
     gate: Option<Arc<Gate>>,
+    /// An explicit screen the synthetic request named, proposed as a target.
+    target: Mutex<Option<&'static str>>,
 }
 
 #[tonic::async_trait]
@@ -57,14 +59,17 @@ impl ChatModel for SpyModel {
             gate.entered.notify_one();
             gate.release.notified().await;
         }
+        let mut arguments = serde_json::json!({
+            "intent":{"kind":"visual_text_card","text":"A bounded public fact."},
+            "privacy":"public"
+        });
+        if let Some(target) = *self.target.lock().unwrap() {
+            arguments["target"] = serde_json::json!(target);
+        }
         Ok(ChatResponse {
             tool_call: Some(ToolCall {
                 name: "propose_information".into(),
-                arguments: serde_json::json!({
-                    "intent":{"kind":"visual_text_card","text":"A bounded public fact."},
-                    "privacy":"public"
-                })
-                .to_string(),
+                arguments: arguments.to_string(),
             }),
             ..Default::default()
         })
@@ -235,7 +240,7 @@ async fn native_room_browser_ack_allows_the_next_input_immediately() {
         .runtime(
             PRINCIPAL,
             RuntimeOperation::Poll {
-                connection: fixture.browser.clone(),
+                connection: RoomProof::Browser(fixture.browser.clone()),
             },
         )
         .await
@@ -422,6 +427,7 @@ fn native_room_terminal_delivery_timeout_releases_the_turn_before_its_lease() {
                     text: "A bounded public fact.".into(),
                 },
                 privacy: PrivacyClass::SharedRoom,
+                hint: None,
             },
             103,
         )
@@ -430,7 +436,7 @@ fn native_room_terminal_delivery_timeout_releases_the_turn_before_its_lease() {
         panic!("browser output required")
     };
     let poll = || RuntimeOperation::Poll {
-        connection: browser.clone(),
+        connection: RoomProof::Browser(browser.clone()),
     };
     state.apply(PRINCIPAL, &records, poll(), 104).unwrap();
     let retry_at = state.actions[&action.id].deadline_ms;
@@ -740,7 +746,7 @@ async fn native_room_close_or_revocation_while_cognition_waits_fences_late_outpu
             .runtime(
                 PRINCIPAL,
                 RuntimeOperation::Poll {
-                    connection: fixture.browser.clone(),
+                    connection: RoomProof::Browser(fixture.browser.clone()),
                 },
             )
             .await
@@ -782,7 +788,7 @@ async fn native_room_heartbeat_and_cancel_share_cursor_without_browser_authority
         .runtime(
             PRINCIPAL,
             RuntimeOperation::Poll {
-                connection: fixture.browser.clone(),
+                connection: RoomProof::Browser(fixture.browser.clone()),
             },
         )
         .await
@@ -800,38 +806,31 @@ async fn native_room_heartbeat_and_cancel_share_cursor_without_browser_authority
         instance_id: Uuid::new_v4(),
         ..fixture.stamp.clone()
     };
-    for control in [
-        BrowserControl::State { visible: true },
-        BrowserControl::Acknowledge {
-            action_id: first.id,
-            turn_id: first.turn_id,
-            generation: first.generation,
-            channel: first.channel,
-            content_digest: first.content_digest.clone(),
-        },
-    ] {
-        let instance_id = match &control {
-            BrowserControl::Acknowledge { action_id, .. } => *action_id,
-            _ => heartbeat_stamp.instance_id,
-        };
-        assert!(matches!(
-            fixture
-                .store
-                .runtime(
-                    PRINCIPAL,
-                    RuntimeOperation::RoomControl {
-                        connection: RoomProof::Native(fixture.native.clone()),
-                        stamp: InputStamp {
-                            instance_id,
-                            ..heartbeat_stamp.clone()
-                        },
-                        control,
-                    }
-                )
-                .await,
-            Err(RuntimeError::InvalidOrigin)
-        ));
-    }
+    // A native installation cannot acknowledge a card dispatched to another
+    // surface; its own visibility report is not authority over that card.
+    assert!(matches!(
+        fixture
+            .store
+            .runtime(
+                PRINCIPAL,
+                RuntimeOperation::RoomControl {
+                    connection: RoomProof::Native(fixture.native.clone()),
+                    stamp: InputStamp {
+                        instance_id: first.id,
+                        ..heartbeat_stamp.clone()
+                    },
+                    control: BrowserControl::Acknowledge {
+                        action_id: first.id,
+                        turn_id: first.turn_id,
+                        generation: first.generation,
+                        channel: first.channel,
+                        content_digest: first.content_digest.clone(),
+                    },
+                }
+            )
+            .await,
+        Err(RuntimeError::Stale)
+    ));
     let heartbeat = || RuntimeOperation::RoomControl {
         connection: RoomProof::Native(fixture.native.clone()),
         stamp: heartbeat_stamp.clone(),
@@ -907,7 +906,7 @@ async fn native_room_heartbeat_and_cancel_share_cursor_without_browser_authority
         .runtime(
             PRINCIPAL,
             RuntimeOperation::Poll {
-                connection: fixture.browser.clone(),
+                connection: RoomProof::Browser(fixture.browser.clone()),
             },
         )
         .await
@@ -948,7 +947,7 @@ async fn native_room_heartbeat_and_cancel_share_cursor_without_browser_authority
         .runtime(
             PRINCIPAL,
             RuntimeOperation::Poll {
-                connection: fixture.browser,
+                connection: RoomProof::Browser(fixture.browser),
             },
         )
         .await
@@ -957,6 +956,281 @@ async fn native_room_heartbeat_and_cancel_share_cursor_without_browser_authority
         panic!("browser projection required")
     };
     assert!(actions.iter().any(|action| action.id == second.id));
+    assert_eq!(model.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        fixture
+            .store
+            .assistant_private_accesses
+            .load(Ordering::SeqCst),
+        0
+    );
+    // A native visibility report is admitted on the same cursor and stays on
+    // the signed connection, never on the owner's registry record.
+    assert!(matches!(
+        fixture
+            .store
+            .runtime(
+                PRINCIPAL,
+                RuntimeOperation::RoomControl {
+                    connection: RoomProof::Native(fixture.native.clone()),
+                    stamp: InputStamp {
+                        sequence: 5,
+                        instance_id: Uuid::new_v4(),
+                        ..fixture.stamp.clone()
+                    },
+                    control: BrowserControl::State { visible: true },
+                }
+            )
+            .await,
+        Ok(RuntimeResult::ControlAccepted { duplicate: false })
+    ));
+    assert!(
+        fixture
+            .store
+            .surfaces(PRINCIPAL)
+            .await
+            .unwrap()
+            .iter()
+            .all(|surface| surface.surface_id != fixture.native.surface_id || !surface.visible),
+        "native visibility lives on the connection, not the registry record"
+    );
+}
+
+/// A visible native installation is a shared visual candidate. The request's
+/// explicit target is weighed among eligible surfaces only: it routes a
+/// browser request to the Mac, never revives a hidden installation, and the
+/// installation acknowledges only the exact card dispatched to itself.
+#[tokio::test]
+async fn native_room_visible_installation_renders_hinted_cards_and_hidden_ones_never_do() {
+    let model = Arc::new(SpyModel::default());
+    let fixture = fixture(model.clone()).await;
+    let browser_epoch = Uuid::new_v4();
+    fixture
+        .store
+        .runtime(
+            PRINCIPAL,
+            RuntimeOperation::OpenBrowser {
+                connection: fixture.browser.clone(),
+                epoch: browser_epoch,
+            },
+        )
+        .await
+        .unwrap();
+    let browser_stamp = |sequence: u64, instance_id: Uuid| InputStamp {
+        epoch: browser_epoch,
+        sequence,
+        instance_id,
+    };
+    // Hidden installation: the hint names it, but it is not an eligible candidate.
+    *model.target.lock().unwrap() = Some("macos");
+    let RuntimeResult::Proposed(first) = fixture
+        .runtime
+        .sequenced_room_text(
+            PRINCIPAL,
+            RoomProof::Browser(fixture.browser.clone()),
+            browser_stamp(1, Uuid::new_v4()),
+            "Show this on the Mac".into(),
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("first output required")
+    };
+    assert_eq!(first.surface_id, fixture.browser.surface_id);
+    let RuntimeResult::Pending(native_pending) = fixture
+        .store
+        .runtime(
+            PRINCIPAL,
+            RuntimeOperation::Poll {
+                connection: RoomProof::Native(fixture.native.clone()),
+            },
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("native poll required")
+    };
+    assert!(native_pending.is_empty());
+    fixture
+        .store
+        .runtime(
+            PRINCIPAL,
+            RuntimeOperation::RoomControl {
+                connection: RoomProof::Browser(fixture.browser.clone()),
+                stamp: browser_stamp(2, first.turn_id),
+                control: BrowserControl::Cancel {
+                    turn_id: first.turn_id,
+                    generation: first.generation,
+                },
+            },
+        )
+        .await
+        .unwrap();
+    // Visible installation: the same hint now leads over the origin browser.
+    assert!(matches!(
+        fixture
+            .store
+            .runtime(
+                PRINCIPAL,
+                RuntimeOperation::RoomControl {
+                    connection: RoomProof::Native(fixture.native.clone()),
+                    stamp: InputStamp {
+                        sequence: 2,
+                        instance_id: Uuid::new_v4(),
+                        ..fixture.stamp.clone()
+                    },
+                    control: BrowserControl::State { visible: true },
+                }
+            )
+            .await
+            .unwrap(),
+        RuntimeResult::ControlAccepted { duplicate: false }
+    ));
+    let RuntimeResult::Proposed(second) = fixture
+        .runtime
+        .sequenced_room_text(
+            PRINCIPAL,
+            RoomProof::Browser(fixture.browser.clone()),
+            browser_stamp(3, Uuid::new_v4()),
+            "Show this on the Mac".into(),
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("second output required")
+    };
+    assert_eq!(second.surface_id, fixture.native.surface_id);
+    assert_eq!(second.incarnation, fixture.native.incarnation);
+    assert_eq!(second.fallbacks, vec![fixture.browser.surface_id]);
+    let decision = fixture
+        .store
+        .ambiance_ledger_events(PRINCIPAL)
+        .await
+        .into_iter()
+        .filter_map(|event| match event {
+            ledger::LedgerEvent::Runtime(event) => match event.data {
+                RuntimeData::Decision {
+                    turn_id,
+                    hint,
+                    candidates,
+                    ..
+                } if turn_id == second.turn_id => Some((hint, candidates)),
+                _ => None,
+            },
+            _ => None,
+        })
+        .next_back()
+        .expect("routing decision recorded");
+    assert_eq!(decision.0, Some(policy::RoutingTarget::Macos));
+    let hinted = decision
+        .1
+        .iter()
+        .find(|candidate| candidate.surface_id == fixture.native.surface_id)
+        .unwrap();
+    assert_eq!((hinted.blocker, hinted.hint), (None, policy::HINT_WEIGHT));
+    // The browser must not receive or acknowledge the Mac's card.
+    let RuntimeResult::Pending(browser_pending) = fixture
+        .store
+        .runtime(
+            PRINCIPAL,
+            RuntimeOperation::Poll {
+                connection: RoomProof::Browser(fixture.browser.clone()),
+            },
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("browser poll required")
+    };
+    assert!(!browser_pending.iter().any(|action| action.id == second.id));
+    let RuntimeResult::Pending(dispatched) = fixture
+        .store
+        .runtime(
+            PRINCIPAL,
+            RuntimeOperation::Poll {
+                connection: RoomProof::Native(fixture.native.clone()),
+            },
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("native dispatch required")
+    };
+    assert!(
+        dispatched
+            .iter()
+            .any(|action| { action.id == second.id && action.status == ActionStatus::Dispatched })
+    );
+    let acknowledge = |sequence: u64| RuntimeOperation::RoomControl {
+        connection: RoomProof::Native(fixture.native.clone()),
+        stamp: InputStamp {
+            sequence,
+            instance_id: second.id,
+            ..fixture.stamp.clone()
+        },
+        control: BrowserControl::Acknowledge {
+            action_id: second.id,
+            turn_id: second.turn_id,
+            generation: second.generation,
+            channel: second.channel,
+            content_digest: second.content_digest.clone(),
+        },
+    };
+    assert!(matches!(
+        fixture
+            .store
+            .runtime(PRINCIPAL, acknowledge(3))
+            .await
+            .unwrap(),
+        RuntimeResult::ControlAccepted { duplicate: false }
+    ));
+    assert!(matches!(
+        fixture
+            .store
+            .runtime(PRINCIPAL, acknowledge(3))
+            .await
+            .unwrap(),
+        RuntimeResult::ControlAccepted { duplicate: true }
+    ));
+    // Losing the foreground revalidates the dispatched target: the shown card
+    // is retired and the browser fallback receives its own new action.
+    assert!(matches!(
+        fixture
+            .store
+            .runtime(
+                PRINCIPAL,
+                RuntimeOperation::RoomControl {
+                    connection: RoomProof::Native(fixture.native.clone()),
+                    stamp: InputStamp {
+                        sequence: 4,
+                        instance_id: Uuid::new_v4(),
+                        ..fixture.stamp.clone()
+                    },
+                    control: BrowserControl::State { visible: false },
+                }
+            )
+            .await
+            .unwrap(),
+        RuntimeResult::ControlAccepted { duplicate: false }
+    ));
+    let RuntimeResult::Pending(after) = fixture
+        .store
+        .runtime(
+            PRINCIPAL,
+            RuntimeOperation::Poll {
+                connection: RoomProof::Native(fixture.native.clone()),
+            },
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("native poll required")
+    };
+    assert!(
+        after
+            .iter()
+            .all(|action| action.status == ActionStatus::Cancelled)
+    );
     assert_eq!(model.calls.load(Ordering::SeqCst), 2);
     assert_eq!(
         fixture

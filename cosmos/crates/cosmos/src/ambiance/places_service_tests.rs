@@ -284,7 +284,7 @@ impl PlacesFixture {
             .runtime(
                 self.principal(),
                 RuntimeOperation::Poll {
-                    connection: self.browser.clone(),
+                    connection: RoomProof::Browser(self.browser.clone()),
                 },
             )
             .await
@@ -797,7 +797,7 @@ async fn ambiance_places_conversation_zero_results_preserves_attribution_in_stru
             .runtime(
                 f.principal(),
                 RuntimeOperation::CheckDelivery {
-                    connection: f.browser.clone(),
+                    connection: RoomProof::Browser(f.browser.clone()),
                     action_id: action.id,
                     generation: action.generation,
                 }

@@ -1,15 +1,15 @@
 {
   "schemaVersion": 1,
-  "state": "native-shared-text-acceptance-in-progress",
-  "scope": "Owner-approved installation key, signed connection and sequenced text in the shared Cosmos/Center room. Native applications, capture, rendering and playback remain unfinished.",
-  "profile": "native-shared-text-v1",
+  "state": "native-shared-display-acceptance-in-progress",
+  "scope": "Owner-approved installation key, signed connection, sequenced text and foreground visibility in the shared Cosmos/Center room, with one shared-room visual card acknowledged after the installation's exact render. Native audio, capture, playback and physical device acceptance remain unfinished.",
+  "profile": "native-shared-display-v2",
   "descriptor": {
     "maximumBytes": 1024,
     "fields": {
       "enrollmentId": "non-nil UUID",
       "publicKey": "canonical unpadded base64url of a valid 65-byte uncompressed SEC1 P-256 point",
       "platform": "macos|linux|android|android_tv",
-      "approval": "native-shared-text-v1"
+      "approval": "native-shared-display-v2"
     },
     "additionalProperties": false
   },
@@ -47,7 +47,7 @@
         "enrollmentId": "non-nil UUID",
         "surfaceId": "non-nil UUID",
         "approvalRevision": "positive safe integer",
-        "approval": "native-shared-text-v1",
+        "approval": "native-shared-display-v2",
         "publicKeyFingerprint": "SHA256 lowercase hex of SEC1 public-key bytes",
         "challengeId": "non-nil UUID",
         "nonce": "canonical unpadded base64url of 32 random bytes",
@@ -163,11 +163,19 @@
     "vectors": "contracts/fixtures/ambiance-native-open-v1.json"
   },
   "limits": {
-    "appliesTo": ["POST /runtime-api/v1/native/challenge", "POST /runtime-api/v1/native/open", "POST /runtime-api/v1/native/room"],
+    "appliesTo": [
+      "POST /runtime-api/v1/native/challenge",
+      "POST /runtime-api/v1/native/open",
+      "POST /runtime-api/v1/native/room"
+    ],
     "bodyBytes": 2048,
     "concurrentHttpRequests": 16,
     "bodyMs": 5000,
-    "operationMs": {"challenge": 5000, "open": 5000, "room": 15000},
+    "operationMs": {
+      "challenge": 5000,
+      "open": 5000,
+      "room": 15000
+    },
     "challengeMs": 60000,
     "connectionMs": 3600000,
     "leaseMs": 45000,
@@ -175,7 +183,11 @@
     "audienceBytes": 255
   },
   "http": {
-    "appliesTo": ["POST /runtime-api/v1/native/challenge", "POST /runtime-api/v1/native/open", "POST /runtime-api/v1/native/room"],
+    "appliesTo": [
+      "POST /runtime-api/v1/native/challenge",
+      "POST /runtime-api/v1/native/open",
+      "POST /runtime-api/v1/native/room"
+    ],
     "contentType": "application/json",
     "unknownFields": "rejected",
     "cacheControl": "no-store",
@@ -212,5 +224,15 @@
     "The declared text capability is a fixed approval ceiling. Enrollment alone cannot originate a request; current connection proof and room admission are required. Native output remains ineligible.",
     "Native text and controls use the shared room RPC only. There is no parallel REST input/control/state/close interface, and native participants cannot acknowledge browser rendering.",
     "This wire contract and its vectors do not establish installed clients, production acceptance or paper conformance."
-  ]
+  ],
+  "legacyProfile": {
+    "profile": "native-shared-text-v1",
+    "status": "Persisted approvals stay input-only until the owner reapproves at the current revision; reapproval bumps the revision and drops the current connection."
+  },
+  "display": {
+    "eligibility": "A native surface is a visual.card candidate only with the current display manifest, a current signed connection and a state control reporting visible=true on that connection. Visibility is availability, never occupancy, privacy or actor evidence.",
+    "frames": "Runtime render/clear frames use the browser room wire shape; the client replies {version:1,kind:\"received\",stamp} only for a frame naming its exact surface/incarnation with a matching content digest and supported credit grammar.",
+    "controls": "{kind:\"state\",visible} and {kind:\"acknowledge\",actionId,turnId,generation,channel:\"visual.card\",contentDigest} share the native input cursor; acknowledge instance IDs equal the action ID and are accepted only for actions dispatched to that connection.",
+    "hint": "Cognition may propose target browser|macos|linux|android|android_tv from explicit request text. Policy adds a bounded rank component for eligible non-origin surfaces of that kind only; blocked or hidden surfaces and self-nomination gain nothing."
+  }
 }

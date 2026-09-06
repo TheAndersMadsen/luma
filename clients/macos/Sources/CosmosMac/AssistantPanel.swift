@@ -61,9 +61,17 @@ public struct AssistantPanel: View {
                     }.frame(maxWidth: .infinity, alignment: .leading).padding(.top, 6)
                 }
 
+                if let card = model.display {
+                    DisplayCardView(card: card)
+                        .onAppear { model.displayCommitted(card) }
+                        .id(card.actionID)
+                }
+
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Ask Cosmos").font(.headline).foregroundStyle(CosmosPanelPalette.accent)
-                    Text("Responses currently appear on your approved Center display.")
+                    Text(model.snapshot.visible
+                        ? "Responses may appear here or on another approved display."
+                        : "Responses appear on your approved displays; this panel joins them while visible.")
                         .font(.callout).foregroundStyle(CosmosPanelPalette.secondary)
                     TextEditor(text: $model.draft)
                         .font(.body).frame(minHeight: 88, maxHeight: 160)
@@ -107,7 +115,7 @@ public struct AssistantPanel: View {
                 .background(CosmosPanelPalette.panel, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous)
                     .stroke(CosmosPanelPalette.accent.opacity(0.7), lineWidth: 1))
-                Text("This shared-text preview has no microphone, screen capture, private retrieval, or native response display.")
+                Text("This preview has no microphone, screen capture or private retrieval. Cards shown here are shared-room content only.")
                     .font(.caption).foregroundStyle(CosmosPanelPalette.secondary)
                 if !model.shortcutMessage.isEmpty {
                     Text(model.shortcutMessage).font(.caption).foregroundStyle(.secondary)
@@ -140,6 +148,60 @@ public struct AssistantPanel: View {
             do { try data.write(to: url, options: .atomic) }
             catch { Task { @MainActor in model.exportFailed() } }
         }
+    }
+}
+
+/// Renders the delivered card verbatim. Credits are inert tokens: text or one HTTPS link.
+struct DisplayCardView: View {
+    let card: DisplayCard
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            switch card.content {
+            case .text(let text):
+                Text(text).font(.body).textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("cosmos-display-text")
+            case .places(let query, let items, let credits):
+                Text(query).font(.headline)
+                if items.isEmpty {
+                    Text("No matching places found.").font(.body)
+                } else {
+                    ForEach(items, id: \.placeID) { item in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(item.name).font(.body.weight(.semibold))
+                            Text(item.address).font(.body)
+                            if let source = item.sourceURL, let url = URL(string: source) {
+                                Link("View on Google Maps", destination: url).font(.callout)
+                            }
+                        }
+                    }
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Google Maps").font(.caption.weight(.semibold))
+                    ForEach(Array(credits.enumerated()), id: \.offset) { credit in
+                        creditLine(credit.element)
+                    }
+                }.foregroundStyle(CosmosPanelPalette.secondary)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(CosmosPanelPalette.surface, in: RoundedRectangle(cornerRadius: 12))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Cosmos display")
+    }
+
+    private func creditLine(_ parts: [CreditPart]) -> Text {
+        parts.reduce(Text("")) { line, part in
+            switch part {
+            case .text(let text): return line + Text(text)
+            case .link(let text, let href):
+                var link = AttributedString(text)
+                link.link = URL(string: href)
+                return line + Text(link)
+            }
+        }.font(.caption)
     }
 }
 

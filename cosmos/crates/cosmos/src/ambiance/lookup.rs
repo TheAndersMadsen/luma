@@ -945,6 +945,7 @@ mod tests {
                 worker: self.fence.worker,
                 intent,
                 privacy: PrivacyClass::Public,
+                hint: None,
             }
         }
 
@@ -970,7 +971,7 @@ mod tests {
                         action_id: action.id,
                         turn_id: self.fence.turn_id,
                         generation: self.fence.generation,
-                        connection,
+                        connection: RoomProof::Browser(connection),
                         channel: crate::ambiance::Channel::VisualCard,
                         content_digest: action.content_digest.clone(),
                     },
@@ -2478,6 +2479,7 @@ mod tests {
                             worker: f.fence.worker,
                             intent,
                             privacy: PrivacyClass::SharedRoom,
+                            hint: None,
                         },
                         122
                     ),
@@ -2555,6 +2557,7 @@ mod tests {
                                 content: visual_reference(135)
                             },
                             privacy: PrivacyClass::SharedRoom,
+                            hint: None,
                         },
                         122
                     ),
@@ -2656,11 +2659,11 @@ mod tests {
                 action_id: replacement.id,
                 turn_id: f.fence.turn_id,
                 generation: f.fence.generation,
-                connection: BrowserProof {
+                connection: RoomProof::Browser(BrowserProof {
                     surface_id: renderer.surface_id,
                     incarnation: renderer.incarnation,
                     token_hash: renderer.token_hash.clone(),
-                },
+                }),
                 channel: crate::ambiance::Channel::VisualCard,
                 content_digest: visual.digest.clone(),
             },
@@ -2843,6 +2846,7 @@ mod tests {
                                 text: "Displayed on your approved screen.".into()
                             },
                             privacy: PrivacyClass::Public,
+                            hint: None,
                         },
                         128
                     ),
@@ -2918,7 +2922,7 @@ mod tests {
                 action_id: visual.id,
                 turn_id: f.fence.turn_id,
                 generation: f.fence.generation,
-                connection,
+                connection: RoomProof::Browser(connection),
                 channel: crate::ambiance::Channel::VisualCard,
                 content_digest: visual.content_digest.clone(),
             },

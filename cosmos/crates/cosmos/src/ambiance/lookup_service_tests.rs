@@ -221,7 +221,7 @@ impl LookupFixture {
             .runtime(
                 self.principal(),
                 RuntimeOperation::Poll {
-                    connection: self.browser.clone(),
+                    connection: RoomProof::Browser(self.browser.clone()),
                 },
             )
             .await
@@ -468,7 +468,7 @@ async fn ambiance_lookup_pin_commits_before_http_deduplicates_and_requires_exact
                     action_id: action.id,
                     turn_id: action.turn_id,
                     generation: action.generation,
-                    connection: f.browser.clone(),
+                    connection: RoomProof::Browser(f.browser.clone()),
                     channel: Channel::VisualCard,
                     content_digest: hash(b"a fabricated source card"),
                 }
@@ -484,7 +484,7 @@ async fn ambiance_lookup_pin_commits_before_http_deduplicates_and_requires_exact
                 action_id: action.id,
                 turn_id: action.turn_id,
                 generation: action.generation,
-                connection: f.browser.clone(),
+                connection: RoomProof::Browser(f.browser.clone()),
                 channel: Channel::VisualCard,
                 content_digest: action.content_digest,
             },

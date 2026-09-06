@@ -23,7 +23,7 @@ enum {
     COSMOS_SURFACE_MAX_CONFIG_BYTES = 2048,
     COSMOS_SURFACE_MAX_TEXT_BYTES = 4000,
     COSMOS_SURFACE_MAX_JOURNAL_BYTES = 32768,
-    COSMOS_SURFACE_MAX_EVENT_BYTES = 4096
+    COSMOS_SURFACE_MAX_EVENT_BYTES = 16384
 };
 
 /* All callback buffers belong to Rust and are borrowed only for the call.
@@ -79,17 +79,38 @@ int32_t cosmos_surface_send_text(CosmosSurface *surface, const uint8_t *text,
                                 size_t text_length);
 int32_t cosmos_surface_retry_pending(CosmosSurface *surface);
 int32_t cosmos_surface_cancel(CosmosSurface *surface);
+/* Report the platform's own foreground visibility (0 or 1). Cosmos treats a
+ * visible installation as available for one shared-room visual card; it is
+ * never occupancy, privacy or actor evidence. The last value is re-reported
+ * after every new connection. */
+int32_t cosmos_surface_set_visible(CosmosSurface *surface, int32_t visible);
+/* Acknowledge the current "display" card only after the platform committed
+ * its complete, exact render including every credit line. Acknowledging a
+ * card that was not fully shown is a false outcome claim. */
+int32_t cosmos_surface_acknowledge(CosmosSurface *surface);
 int32_t cosmos_surface_disconnect(CosmosSurface *surface);
 
 /* Nonblocking safe JSON snapshot, UTF-8 bytes without a trailing NUL:
  * {version:1,kind:"state",operation:"prepare|connect|send_text|retry_pending|
- * cancel|disconnect|heartbeat",outcome:"ok|error",error:null|STATIC_CODE,
+ * cancel|set_visible|acknowledge|display|disconnect|heartbeat",
+ * outcome:"ok|error",error:null|STATIC_CODE,
  * connected:bool,pendingOpen:bool,needsReconnect:bool,
  * descriptor:null|PUBLIC_DESCRIPTOR,
- * pending:null|{kind:"text|heartbeat|cancel",instanceId:UUID,sequence:integer,
- * canRetry:bool},
+ * pending:null|{kind:"text|heartbeat|cancel|state|acknowledge",instanceId:UUID,
+ * sequence:integer,canRetry:bool},
  * lastUnknown:null|SAME_PENDING_SHAPE,
- * admission:null|{turnId:UUID,generation:integer,duplicate:bool},eventsSkipped:N}
+ * admission:null|{turnId:UUID,generation:integer,duplicate:bool},
+ * visible:bool,
+ * display:null|{actionId:UUID,turnId:UUID,generation:integer,
+ * contentDigest:HEX64,expiresAtMs:integer,
+ * content:{kind:"text",text:STRING}|{kind:"places",query:STRING,
+ * items:[{placeId,name,address,sourceUrl:null|HTTPS}],attributions:[STRING]},
+ * credits:[[{kind:"text",text}|{kind:"link",text,href:HTTPS}]]},
+ * eventsSkipped:N}
+ * credits holds one inert token list per attribution string, in order; render
+ * every token verbatim as text or one HTTPS link, never as markup.
+ * A "display" operation reports a delivered or retired card; the client has
+ * already verified its digest, connection binding and credit grammar.
  * pendingOpen requires explicit connect to recover the saved signed open.
  * RPC retry requires pending.canRetry; needsReconnect requires connect first.
  * Snapshots contain no journal, session token, signature, request text, or remote

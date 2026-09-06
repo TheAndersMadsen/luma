@@ -1,6 +1,8 @@
 import { exact, integer, record, UUID } from "./surfaces";
 
-export const NATIVE_APPROVAL = "native-shared-text-v1";
+export const NATIVE_APPROVAL = "native-shared-display-v2";
+/** Persisted approvals from the text-only release stay input-only until reapproved. */
+export const LEGACY_NATIVE_APPROVAL = "native-shared-text-v1";
 export const NATIVE_DESCRIPTOR_BYTES = 1024;
 export const NATIVE_PLATFORMS = { macos: "macOS", linux: "Linux", android: "Android", android_tv: "Android TV" } as const;
 export type NativePlatform = keyof typeof NATIVE_PLATFORMS;
@@ -9,17 +11,29 @@ export const NATIVE_SURFACE_POSTURE = {
   approval: NATIVE_APPROVAL,
   manifest: {
     class: "native",
-    capabilities: { input: ["text.public"], output: {} },
-    constraints: ["actor_unknown", "occupancy_unknown", "render_unverified", "playback_unverified"],
-    expression: {},
+    capabilities: { input: ["text.public", "state.visibility"], output: { "visual.card": { maxClass: "shared_room", shared: true } } },
+    constraints: ["actor_unknown", "occupancy_unknown", "render_unverified", "playback_unverified", "visible_foreground_only", "no_background_output"],
+    expression: { "visual.card": ["acknowledged", "degraded"] },
     cognition: { declaredClass: 0, models: [] },
-    authority: { mayOriginate: ["user.request"], reflexive: [] },
+    authority: { mayOriginate: ["state.change", "user.request"], reflexive: [] },
   },
   trustLevel: 0,
   occupancy: "unknown",
   actorIdentity: "unknown",
   renderVerified: false,
   playbackVerified: false,
+} as const;
+export const LEGACY_NATIVE_SURFACE_POSTURE = {
+  ...NATIVE_SURFACE_POSTURE,
+  approval: LEGACY_NATIVE_APPROVAL,
+  manifest: {
+    class: "native",
+    capabilities: { input: ["text.public"], output: {} },
+    constraints: ["actor_unknown", "occupancy_unknown", "render_unverified", "playback_unverified"],
+    expression: {},
+    cognition: { declaredClass: 0, models: [] },
+    authority: { mayOriginate: ["user.request"], reflexive: [] },
+  },
 } as const;
 
 export interface NativeDescriptor {
@@ -29,7 +43,11 @@ export interface NativeDescriptor {
   approval: typeof NATIVE_APPROVAL;
 }
 export interface NativeApprovalInput extends NativeDescriptor { expectedRevision: number }
-export interface NativeSurface extends Readonly<typeof NATIVE_SURFACE_POSTURE> {
+export interface NativeSurface extends Readonly<Omit<typeof NATIVE_SURFACE_POSTURE, "approval" | "manifest">> {
+  approval: typeof NATIVE_APPROVAL | typeof LEGACY_NATIVE_APPROVAL;
+  manifest: typeof NATIVE_SURFACE_POSTURE.manifest | typeof LEGACY_NATIVE_SURFACE_POSTURE.manifest;
+  /** False for a text-only approval that must be reapproved before it can render. */
+  display: boolean;
   surfaceId: string;
   enrollmentId: string;
   platform: NativePlatform;
@@ -85,12 +103,14 @@ export async function nativePublicKeyFingerprint(publicKey: string): Promise<str
 }
 export function parseNativeSurface(value: unknown): NativeSurface {
   const native = record(value);
-  if (!Object.entries(NATIVE_SURFACE_POSTURE).every(([key, expected]) => exact(native[key], expected))) throw new Error("unsupported_native_posture");
+  const posture = [NATIVE_SURFACE_POSTURE, LEGACY_NATIVE_SURFACE_POSTURE]
+    .find(candidate => Object.entries(candidate).every(([key, expected]) => exact(native[key], expected)));
+  if (!posture) throw new Error("unsupported_native_posture");
   if (!nonnilUuid(native.surfaceId) || !nonnilUuid(native.enrollmentId) || !platform(native.platform)
     || !integer(native.revision, 1) || typeof native.revoked !== "boolean"
     || typeof native.publicKeyFingerprint !== "string" || !/^[0-9a-f]{64}$/.test(native.publicKeyFingerprint)) throw new Error("invalid_native_surface");
   // Owner metadata only. Never pass through private keys, session tokens or account fields.
-  return { ...NATIVE_SURFACE_POSTURE, surfaceId: native.surfaceId.toLowerCase(), enrollmentId: native.enrollmentId.toLowerCase(),
+  return { ...posture, display: posture === NATIVE_SURFACE_POSTURE, surfaceId: native.surfaceId.toLowerCase(), enrollmentId: native.enrollmentId.toLowerCase(),
     platform: native.platform, revision: native.revision, publicKeyFingerprint: native.publicKeyFingerprint, revoked: native.revoked };
 }
 export function parseNativeSurfaces(value: unknown): NativeSurface[] {

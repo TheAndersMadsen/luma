@@ -164,10 +164,12 @@ pub fn pin_surface_id(principal: &str, device_id: &str) -> Uuid {
     Uuid::from_bytes(bytes)
 }
 
-pub const NATIVE_APPROVAL: &str = "native-shared-text-v1";
+pub const NATIVE_APPROVAL: &str = "native-shared-display-v2";
+pub const LEGACY_NATIVE_APPROVAL: &str = "native-shared-text-v1";
 pub const MAX_NATIVE_REVISION: u64 = MAX_SEQUENCE;
 
-pub fn native_manifest() -> serde_json::Value {
+/// Persisted v1 approvals remain input-only until explicit reapproval.
+pub fn legacy_native_manifest() -> serde_json::Value {
     serde_json::json!({
         "class": "native",
         "capabilities": {"input": ["text.public"], "output": {}},
@@ -176,6 +178,31 @@ pub fn native_manifest() -> serde_json::Value {
         "cognition": {"declaredClass": 0, "models": []},
         "authority": {"mayOriginate": ["user.request"], "reflexive": []}
     })
+}
+
+/// A native installation may render one shared-room visual card while its
+/// signed connection is current and it reports a visible foreground. It
+/// declares no private channel: occupancy and actor identity stay unknown.
+pub fn native_manifest() -> serde_json::Value {
+    let mut manifest = legacy_native_manifest();
+    manifest["capabilities"]["input"] = serde_json::json!(["text.public", "state.visibility"]);
+    manifest["capabilities"]["output"] =
+        serde_json::json!({"visual.card": {"maxClass": "shared_room", "shared": true}});
+    manifest["constraints"] = serde_json::json!([
+        "actor_unknown",
+        "occupancy_unknown",
+        "render_unverified",
+        "playback_unverified",
+        "visible_foreground_only",
+        "no_background_output"
+    ]);
+    manifest["expression"] = serde_json::json!({"visual.card": ["acknowledged", "degraded"]});
+    manifest["authority"]["mayOriginate"] = serde_json::json!(["state.change", "user.request"]);
+    manifest
+}
+
+pub fn known_native_manifest(manifest: &serde_json::Value) -> bool {
+    *manifest == native_manifest() || *manifest == legacy_native_manifest()
 }
 
 pub fn native_platform(platform: &str) -> bool {
@@ -236,7 +263,11 @@ impl Surface {
             enrollment_id: *enrollment_id,
             platform: platform.clone(),
             name: "Native device",
-            approval: NATIVE_APPROVAL,
+            approval: if self.manifest == native_manifest() {
+                NATIVE_APPROVAL
+            } else {
+                LEGACY_NATIVE_APPROVAL
+            },
             revision: self.revision,
             public_key_fingerprint,
             manifest: self.manifest.clone(),
@@ -457,7 +488,9 @@ pub fn transition(
             {
                 return Err(RegistryError::InvalidConnection);
             }
-            if !record.revoked {
+            // Reapproving a persisted input-only profile is a real transition
+            // to the current display profile; a current profile is idempotent.
+            if !record.revoked && record.approved_manifest == native_manifest() {
                 return if *expected_revision == record.revision
                     || record.revision.checked_sub(1) == Some(*expected_revision)
                 {
@@ -470,7 +503,7 @@ pub fn transition(
         if *expected_revision != current.map_or(0, |record| record.revision) {
             return Err(RegistryError::SequenceConflict);
         }
-        if active_count >= 16 {
+        if current.is_none_or(|record| record.revoked) && active_count >= 16 {
             return Err(RegistryError::SurfaceLimit);
         }
         return Ok((
@@ -814,7 +847,7 @@ mod tests {
         assert_eq!(projection["playbackVerified"], false);
         assert_eq!(
             projection["manifest"]["capabilities"]["output"],
-            serde_json::json!({})
+            serde_json::json!({"visual.card": {"maxClass": "shared_room", "shared": true}})
         );
         assert!(projection.get("publicKey").is_none());
         assert!(!reapproved.view(600).available);

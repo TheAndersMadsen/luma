@@ -119,6 +119,23 @@ final class RustSurfaceBridge: ClientBridge {
         _ = try await perform(.cancel)
     }
 
+    func setVisible(_ visible: Bool) async throws {
+        guard prepared else { throw ClientFailure.approvalRequired }
+        // Visibility is retained by the native worker while disconnected; a pending
+        // request still blocks a new sequenced control on a live connection.
+        if snapshot.phase == .connected, snapshot.hasPending || snapshot.pendingOpen { throw ClientFailure.uncertainRequest }
+        _ = try await perform(.setVisible, visible: visible)
+    }
+
+    func acknowledge(display: DisplayCard) async throws {
+        guard snapshot.phase == .connected, !snapshot.needsReconnect else {
+            throw ClientFailure.connectionUnavailable
+        }
+        guard !snapshot.hasPending, !snapshot.pendingOpen else { throw ClientFailure.uncertainRequest }
+        guard snapshot.display == display else { throw ClientFailure.connectionUnavailable }
+        _ = try await perform(.acknowledge)
+    }
+
     func disconnect() async {
         guard !closing, !disconnecting else { return }
         disconnecting = true
@@ -150,7 +167,7 @@ final class RustSurfaceBridge: ClientBridge {
         onChange = nil
     }
 
-    private func perform(_ command: NativeCommand, text: String? = nil,
+    private func perform(_ command: NativeCommand, text: String? = nil, visible: Bool? = nil,
                          allowDisconnect: Bool = false) async throws -> NativeEvent {
         guard !busy, !closing, !disconnecting || allowDisconnect else { throw ClientFailure.busy }
         busy = true
@@ -160,7 +177,7 @@ final class RustSurfaceBridge: ClientBridge {
         snapshot.failure = nil
         defer { finishOperation() }
         do {
-            try await worker.enqueue(command, text: text)
+            try await worker.enqueue(command, text: text, visible: visible)
             return try await awaitOutcome()
         } catch {
             record(error)
@@ -229,7 +246,9 @@ final class RustSurfaceBridge: ClientBridge {
             pendingOpen: event.pendingOpen,
             needsReconnect: event.needsReconnect,
             canRetry: storageBlocked || ((event.pending?.canRetry ?? false) && !event.needsReconnect),
-            hasUnknownOutcome: event.lastUnknown != nil
+            hasUnknownOutcome: event.lastUnknown != nil,
+            visible: event.visible,
+            display: event.connected ? try event.display?.verified() : nil
         )
         if event.operation == expectedOperation { completion = event }
     }

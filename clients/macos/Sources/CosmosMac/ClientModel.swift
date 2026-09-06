@@ -19,6 +19,9 @@ public final class ClientModel: ObservableObject {
     private var pendingDraft: String?
     private var admissionBeforeSend: UUID?
     private var descriptorData: Data?
+    private var wantedVisible = false
+    private var acknowledged: UUID?
+    private var acknowledging: Task<Void, Never>?
 
     public init(client: any ClientBridge, initialServerOrigin: String) {
         self.client = client
@@ -64,7 +67,7 @@ public final class ClientModel: ObservableObject {
         case .preparing: return "Opening installation identity…"
         case .prepared: return "Installation prepared. Center approval is required."
         case .connecting: return "Connecting to Cosmos…"
-        case .connected: return "Connected for public text"
+        case .connected: return snapshot.visible ? "Connected · visible shared display" : "Connected for public text"
         case .disconnecting: return "Disconnecting…"
         case .blocked: return "Connection stopped. Resolve the reported error before continuing."
         }
@@ -100,7 +103,8 @@ public final class ClientModel: ObservableObject {
         run { [self] in
             try await client.connect()
             guard !Task.isCancelled else { return }
-            message = "Cosmos confirmed the connection. Responses appear on an approved Center display."
+            if wantedVisible { try? await client.setVisible(true) }
+            message = "Cosmos confirmed the connection. Responses appear on an approved display; this panel is one while it is visible."
         }
     }
 
@@ -114,7 +118,7 @@ public final class ClientModel: ObservableObject {
             guard !Task.isCancelled else { return }
             if draft == text { draft = "" }
             pendingDraft = nil
-            message = "Request admitted by Cosmos. Check the approved Center display for its response."
+            message = "Request admitted by Cosmos. The response appears on the approved display it selects."
         }
     }
 
@@ -170,6 +174,38 @@ public final class ClientModel: ObservableObject {
             else if [.disconnected, .prepared].contains(snapshot.phase) {
                 message = "Session disconnected. Owner approval remains in Center."
             } else { message = "Disconnection could not be confirmed. Check the connection status before continuing." }
+        }
+    }
+
+    /// The current card as delivered; nil once Cosmos retires it or the link drops.
+    public var display: DisplayCard? { snapshot.display }
+
+    /// Report the panel's own visibility. Cosmos routes a shared card here only while
+    /// this is true; it never treats the report as occupancy or identity.
+    public func setVisible(_ visible: Bool) {
+        guard wantedVisible != visible else { return }
+        wantedVisible = visible
+        if !visible { acknowledging?.cancel(); acknowledging = nil }
+        guard descriptor != nil, !busy else { return }
+        Task { [client] in try? await client.setVisible(visible) }
+    }
+
+    /// Call only after the card's complete content, including every credit line, has
+    /// been committed to the window. Each card is acknowledged at most once.
+    public func displayCommitted(_ card: DisplayCard) {
+        guard snapshot.display == card, acknowledged != card.actionID, acknowledging == nil else { return }
+        acknowledging = Task { [weak self] in
+            guard let self else { return }
+            defer { acknowledging = nil }
+            // Wait for any UI-initiated operation; acknowledgment never interrupts it.
+            while busy, !Task.isCancelled { try? await Task.sleep(for: .milliseconds(50)) }
+            guard !Task.isCancelled, snapshot.display == card else { return }
+            do {
+                try await client.acknowledge(display: card)
+                acknowledged = card.actionID
+            } catch {
+                snapshot = client.snapshot
+            }
         }
     }
 

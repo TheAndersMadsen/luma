@@ -30,10 +30,27 @@ const DESCRIPTOR = {
   enrollmentId: ENROLLMENT_ID,
   publicKey: PUBLIC_KEY,
   platform: "macos",
-  approval: "native-shared-text-v1",
+  approval: "native-shared-display-v2",
 };
 const APPROVED_POSTURE = {
   name: "Native device",
+  approval: "native-shared-display-v2",
+  manifest: {
+    class: "native",
+    capabilities: { input: ["text.public", "state.visibility"], output: { "visual.card": { maxClass: "shared_room", shared: true } } },
+    constraints: ["actor_unknown", "occupancy_unknown", "render_unverified", "playback_unverified", "visible_foreground_only", "no_background_output"],
+    expression: { "visual.card": ["acknowledged", "degraded"] },
+    cognition: { declaredClass: 0, models: [] },
+    authority: { mayOriginate: ["state.change", "user.request"], reflexive: [] },
+  },
+  trustLevel: 0,
+  occupancy: "unknown",
+  actorIdentity: "unknown",
+  renderVerified: false,
+  playbackVerified: false,
+};
+const LEGACY_POSTURE = {
+  ...APPROVED_POSTURE,
   approval: "native-shared-text-v1",
   manifest: {
     class: "native",
@@ -43,14 +60,10 @@ const APPROVED_POSTURE = {
     cognition: { declaredClass: 0, models: [] },
     authority: { mayOriginate: ["user.request"], reflexive: [] },
   },
-  trustLevel: 0,
-  occupancy: "unknown",
-  actorIdentity: "unknown",
-  renderVerified: false,
-  playbackVerified: false,
 };
 const SURFACE = {
   ...APPROVED_POSTURE,
+  display: true,
   surfaceId: SURFACE_ID,
   enrollmentId: ENROLLMENT_ID,
   platform: "macos",
@@ -60,7 +73,7 @@ const SURFACE = {
 };
 
 it("accepts the four explicit native platforms and normalizes enrollment UUID case", () => {
-  expect(NATIVE_APPROVAL).toBe("native-shared-text-v1");
+  expect(NATIVE_APPROVAL).toBe("native-shared-display-v2");
   for (const platform of ["macos", "linux", "android", "android_tv"]) {
     expect(parseNativeDescriptor({ ...DESCRIPTOR, enrollmentId: ENROLLMENT_ID.toUpperCase(), platform }))
       .toEqual({ ...DESCRIPTOR, platform });
@@ -157,9 +170,15 @@ it("requires exact revision-bound mutation inputs and preserves room for the nex
   }
 });
 
-it("keeps the fixed posture at shared text input with no inferred actor, output, or autonomy", () => {
+it("keeps the fixed posture at shared text input and one shared visual card with no inferred actor or autonomy", () => {
   expect(NATIVE_SURFACE_POSTURE).toEqual(APPROVED_POSTURE);
   expect(parseNativeSurface(SURFACE)).toEqual(SURFACE);
+  // An earlier text-only approval is still owner metadata, but it cannot render until reapproved.
+  const { display: _display, ...withoutDisplay } = SURFACE;
+  const legacy = { ...withoutDisplay, ...LEGACY_POSTURE };
+  expect(parseNativeSurface(legacy)).toEqual({ ...legacy, display: false });
+  expect(() => parseNativeSurface({ ...legacy, manifest: APPROVED_POSTURE.manifest })).toThrow("unsupported_native_posture");
+  expect(() => parseNativeSurface({ ...SURFACE, approval: LEGACY_POSTURE.approval })).toThrow("unsupported_native_posture");
   for (const key of Object.keys(APPROVED_POSTURE)) {
     const incomplete: Record<string, unknown> = { ...SURFACE };
     delete incomplete[key];
@@ -168,10 +187,11 @@ it("keeps the fixed posture at shared text input with no inferred actor, output,
   const manifest = APPROVED_POSTURE.manifest;
   for (const changed of [
     { ...manifest, hiddenAuthority: true },
-    { ...manifest, capabilities: { ...manifest.capabilities, input: ["text.public", "audio.capture"] } },
-    { ...manifest, capabilities: { ...manifest.capabilities, output: { "audio.tts": { maxClass: "private" } } } },
+    { ...manifest, capabilities: { ...manifest.capabilities, input: [...manifest.capabilities.input, "audio.capture"] } },
+    { ...manifest, capabilities: { ...manifest.capabilities, output: { ...manifest.capabilities.output, "audio.tts": { maxClass: "private" } } } },
+    { ...manifest, capabilities: { ...manifest.capabilities, output: { "visual.card": { maxClass: "private", shared: false } } } },
     { ...manifest, constraints: manifest.constraints.slice(1) },
-    { ...manifest, expression: { success: true } },
+    { ...manifest, expression: { ...manifest.expression, success: true } },
     { ...manifest, cognition: { declaredClass: 1, models: [] } },
     { ...manifest, cognition: { declaredClass: 0, models: ["local-model"] } },
     { ...manifest, authority: { ...manifest.authority, mayOriginate: ["user.request", "action.completed"] } },

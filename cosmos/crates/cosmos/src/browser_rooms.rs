@@ -422,40 +422,36 @@ async fn deliver(
         let members = participants.lock().await.clone();
         sent.retain(|(identity, _), _| members.contains_key(identity));
         'member: for (identity, member) in members.iter().filter(|(_, m)| m.sid.is_some()) {
-            // Native participants only originate text and connection controls.
-            // Recheck them on the shared Store change feed, without claiming a
-            // browser delivery or granting a native output capability.
-            let connection = match &member.proof {
-                RoomProof::Browser(connection) => connection,
-                RoomProof::Native(connection) => {
-                    let result = tokio::time::timeout(
-                        ADMISSION_TIMEOUT,
-                        runtime.store.runtime(
-                            principal,
-                            RuntimeOperation::CheckNative {
-                                connection: connection.clone(),
-                            },
-                        ),
-                    )
-                    .await
-                    .map_err(|_| Error::Unavailable)?;
-                    match result {
-                        Ok(RuntimeResult::NativeCurrent(current))
-                            if current.epoch == member.epoch => {}
-                        Ok(RuntimeResult::NativeCurrent(_))
-                        | Err(
-                            crate::ambiance::RuntimeError::InvalidOrigin
-                            | crate::ambiance::RuntimeError::Stale
-                            | crate::ambiance::RuntimeError::NotFound,
-                        ) => {
-                            participants.lock().await.remove(identity);
-                            leave(runtime, principal, &member.proof).await;
-                        }
-                        _ => return Err(Error::Unavailable),
+            // A native member must still belong to the boot epoch it joined
+            // with; a reopened installation joins again as a new member.
+            if let RoomProof::Native(connection) = &member.proof {
+                let result = tokio::time::timeout(
+                    ADMISSION_TIMEOUT,
+                    runtime.store.runtime(
+                        principal,
+                        RuntimeOperation::CheckNative {
+                            connection: connection.clone(),
+                        },
+                    ),
+                )
+                .await
+                .map_err(|_| Error::Unavailable)?;
+                match result {
+                    Ok(RuntimeResult::NativeCurrent(current)) if current.epoch == member.epoch => {}
+                    Ok(RuntimeResult::NativeCurrent(_))
+                    | Err(
+                        crate::ambiance::RuntimeError::InvalidOrigin
+                        | crate::ambiance::RuntimeError::Stale
+                        | crate::ambiance::RuntimeError::NotFound,
+                    ) => {
+                        participants.lock().await.remove(identity);
+                        leave(runtime, principal, &member.proof).await;
+                        continue;
                     }
-                    continue;
+                    _ => return Err(Error::Unavailable),
                 }
-            };
+            }
+            let connection = &member.proof;
             let result = tokio::time::timeout(
                 ADMISSION_TIMEOUT,
                 runtime.store.runtime(

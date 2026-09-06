@@ -94,7 +94,7 @@ export function NativeSurfaces() {
   async function change(chosen: Review | NativeSurface) {
     if (active.current || rows === undefined) return;
     const approving = "descriptor" in chosen;
-    if (approving ? chosen !== review || chosen.existing && !chosen.existing.revoked
+    if (approving ? chosen !== review || chosen.existing && !chosen.existing.revoked && chosen.existing.display
       : !rows.some(row => row.surfaceId === chosen.surfaceId && row.revision === chosen.revision)) return;
     descriptorRead.current++;
     const expectedRevision = approving ? chosen.existing?.revision ?? 0 : chosen.revision;
@@ -120,7 +120,7 @@ export function NativeSurfaces() {
       setRows(nextRows);
       setReview(null); setRevoking(null); setSource("");
       setMessage(saved.revoked ? "Cosmos confirmed this installation’s approval revoked."
-        : "Cosmos recorded this installation’s public-text approval. Native text connections are still in development.");
+        : "Cosmos recorded this installation’s shared-display approval. Cards route to it only while its connected app reports a visible foreground.");
     } catch {
       if (generation.current !== current) return;
       // A lost response may follow a committed write. A fresh owner read is
@@ -132,8 +132,8 @@ export function NativeSurfaces() {
   return <section className={`${settings.section} ${styles.card}`} aria-label="Native installations">
     <h2>Native installations</h2>
     <p>Approve the public key for a native installation on macOS, Linux, Android or Android TV.</p>
-    <p>Approvals are limited to public text. They do not allow voice, media context, private memories, device actions or output on the device.</p>
-    <p>Native clients and their text connections are still being built. Approval alone does not install or connect a client.</p>
+    <p>Approvals cover public text input and one shared-room visual card shown while the app is in the foreground. They do not allow voice, media context, private memories, device actions or private output.</p>
+    <p>Approval alone does not install or connect a client, and a delivered card counts only after the app acknowledges its exact render.</p>
     <label className={styles.descriptorLabel} htmlFor="native-descriptor">Public installation descriptor</label>
     <textarea id="native-descriptor" className={styles.descriptor} value={source} maxLength={NATIVE_DESCRIPTOR_BYTES} rows={5}
       disabled={busy || rows === undefined} spellCheck={false} autoComplete="off" onChange={event => { descriptorRead.current++; setSource(event.target.value); setReview(null); setError(""); setMessage(""); }} />
@@ -147,10 +147,11 @@ export function NativeSurfaces() {
     {review ? <div role="group" aria-label="Review native installation">
       <p><strong>{NATIVE_PLATFORMS[review.descriptor.platform]}</strong> · Installation <code>{review.descriptor.enrollmentId}</code></p>
       <p>Public-key fingerprint (SHA-256): <code className={styles.fingerprint}>{review.fingerprint}</code></p>
-      <p>Compare this fingerprint with the installation before approving public text requests.</p>
-      {review.existing && !review.existing.revoked ? <p>This installation already has public-text approval.</p> : <>
-        {review.existing ? <p>Its earlier approval was revoked. Approving again restores only the public-text permission described above.</p> : null}
-        <button type="button" disabled={busy || rows === undefined} onClick={() => void change(review)}>Confirm public-text approval</button>
+      <p>Compare this fingerprint with the installation before approving shared text and display.</p>
+      {review.existing && !review.existing.revoked && review.existing.display ? <p>This installation already has shared-display approval.</p> : <>
+        {review.existing?.revoked ? <p>Its earlier approval was revoked. Approving again restores only the shared-display permission described above.</p> : null}
+        {review.existing && !review.existing.revoked ? <p>Its approval is from the text-only release. Approving again adds the shared-display permission described above and requires the app to reconnect.</p> : null}
+        <button type="button" disabled={busy || rows === undefined} onClick={() => void change(review)}>Confirm shared-display approval</button>
       </>}
       <button type="button" disabled={busy} onClick={() => setReview(null)}>Cancel review</button>
     </div> : null}
@@ -159,7 +160,7 @@ export function NativeSurfaces() {
       : rows.length === 0 ? <p>No approved native installations.</p> : <ul>{rows.map(row => <li key={row.surfaceId}>
         <strong>{NATIVE_PLATFORMS[row.platform]}</strong> · Installation <code>{row.enrollmentId}</code>
         <p>Public-key fingerprint (SHA-256): <code className={styles.fingerprint}>{row.publicKeyFingerprint}</code></p>
-        <p>Public-text approval recorded · connection unverified · room and actor unknown.</p>
+        <p>{row.display ? "Shared-display approval recorded" : "Text-only approval from an earlier release; reapprove to allow shared display"} · connection unverified · room and actor unknown.</p>
         {revoking?.surfaceId === row.surfaceId ? <div role="group" aria-label={`Revoke installation ${row.enrollmentId}`}>
           <p>Revoke this installation’s approval and current connection?</p>
           <button type="button" disabled={busy} onClick={() => void change(row)}>Confirm revoke installation</button>

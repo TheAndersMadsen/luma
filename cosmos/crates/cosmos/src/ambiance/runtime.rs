@@ -483,11 +483,15 @@ impl AmbianceRuntime {
             ));
         };
         let mut pending_visual = None;
+        let hint = proposal.target();
         let (intent, privacy) = match proposal {
-            super::analysis::Proposal::Information { intent, privacy } => (intent, privacy),
+            super::analysis::Proposal::Information {
+                intent, privacy, ..
+            } => (intent, privacy),
             super::analysis::Proposal::Lookup {
                 web_lookup,
                 privacy,
+                ..
             } => {
                 let output = self
                     .lookup(
@@ -507,6 +511,7 @@ impl AmbianceRuntime {
             super::analysis::Proposal::Places {
                 place_lookup,
                 privacy,
+                ..
             } => {
                 let output = self
                     .lookup(
@@ -523,7 +528,9 @@ impl AmbianceRuntime {
                 pending_visual = output.pending;
                 (output.intent, output.privacy)
             }
-            super::analysis::Proposal::Analysis { analysis, privacy } => {
+            super::analysis::Proposal::Analysis {
+                analysis, privacy, ..
+            } => {
                 let messages = super::analysis::messages(&text, &analysis.question)
                     .map_err(|_| Status::failed_precondition("invalid analysis request"))?;
                 let privacy = privacy_floor
@@ -591,6 +598,7 @@ impl AmbianceRuntime {
                     worker: fence.worker,
                     intent,
                     privacy,
+                    hint,
                 },
             )
             .await
@@ -1881,7 +1889,7 @@ mod tests {
                     .runtime(
                         principal,
                         RuntimeOperation::Poll {
-                            connection: proof(),
+                            connection: RoomProof::Browser(proof()),
                         },
                     )
                     .await
@@ -1906,7 +1914,7 @@ mod tests {
                         action_id: action.id,
                         turn_id: action.turn_id,
                         generation: action.generation,
-                        connection: proof(),
+                        connection: RoomProof::Browser(proof()),
                         channel: super::super::Channel::VisualCard,
                         content_digest: crate::surface_registry::hash(b"wrong-content")
                     }
@@ -1922,7 +1930,7 @@ mod tests {
                     action_id: action.id,
                     turn_id: action.turn_id,
                     generation: action.generation,
-                    connection: proof(),
+                    connection: RoomProof::Browser(proof()),
                     channel: super::super::Channel::VisualCard,
                     content_digest: action.content_digest,
                 },
@@ -2004,7 +2012,7 @@ mod tests {
             .runtime(
                 principal,
                 RuntimeOperation::Poll {
-                    connection: proof(first),
+                    connection: RoomProof::Browser(proof(first)),
                 },
             )
             .await
@@ -2021,7 +2029,7 @@ mod tests {
                     .runtime(
                         principal,
                         RuntimeOperation::Poll {
-                            connection: proof(second),
+                            connection: RoomProof::Browser(proof(second)),
                         },
                     )
                     .await
@@ -2040,7 +2048,7 @@ mod tests {
                     .runtime(
                         principal,
                         RuntimeOperation::Poll {
-                            connection: proof(first),
+                            connection: RoomProof::Browser(proof(first)),
                         },
                     )
                     .await
@@ -2062,7 +2070,7 @@ mod tests {
                     action_id: replacement.id,
                     turn_id: replacement.turn_id,
                     generation: replacement.generation,
-                    connection: proof(second),
+                    connection: RoomProof::Browser(proof(second)),
                     channel: super::super::Channel::VisualCard,
                     content_digest: replacement.content_digest,
                 },

@@ -41,6 +41,30 @@
   ],
   "evidence": [
     {
+      "id": "routing-hint-policy-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/policy.rs",
+      "anchor": "fn hints_rank_only_eligible_candidates_and_never_the_origin",
+      "scope": "Paired hint/no-hint ranking over the same state: an explicit request target ranks only eligible non-origin surfaces of that kind, self-nomination earns nothing, unavailable and privacy-blocked surfaces stay blocked with zero score, and legacy native approvals have no display capability.",
+      "limitation": "Class-zero surfaces still supply no hints of their own; there is no trust gate, hint budget, calibration or learned preference term. This is a unit definition, not routing over live devices."
+    },
+    {
+      "id": "native-visual-routing-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/native_room_tests.rs",
+      "anchor": "async fn native_room_visible_installation_renders_hinted_cards_and_hidden_ones_never_do",
+      "scope": "A hidden native installation is never selected even when named; after it reports visible on its signed connection the same request routes to it with the browser as fallback, the durable decision records the hint and score vector, the installation alone polls and acknowledges the exact card, and losing the foreground cancels the shown card at dispatch-time revalidation.",
+      "limitation": "MemoryStore, synthetic cognition and no SFU. It proves runtime authority and receiver identity, not a physical screen, occupancy or the macOS app's actual render."
+    },
+    {
+      "id": "native-client-display-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/surface-client/src/display.rs",
+      "anchor": "fn place_frames_match_the_center_fixture_digest_and_reject_unsupported_credit",
+      "scope": "The shared native client accepts render frames only for its bound surface and incarnation, recomputes text and place-card digests byte-for-byte with Center's fixture, rejects unsupported or malformed credit before display, and answers with the exact transport receipt.",
+      "limitation": "Transport receipt is not render evidence; acknowledgment is a separate sequenced control issued by platform code after its own commit. No native audio path."
+    },
+    {
       "id": "places-transient-output-definition",
       "kind": "implementation",
       "path": "cosmos/crates/cosmos/src/ambiance/visual.rs",
@@ -116,7 +140,7 @@
       "id": "center-native-approval-test-definition",
       "kind": "test-definition",
       "path": "center/src/app/settings/account/surfaces/NativeSurfaces.test.tsx",
-      "anchor": "requires review and a separate owner confirmation of the key and limited public-text permission",
+      "anchor": "requires review and a separate owner confirmation of the key and limited shared-display permission",
       "scope": "Defines descriptor/fingerprint review, explicit owner approval, exact reapproval/revocation revisions, lifecycle fencing, ambiguous-write lockout and roster identity/size validation.",
       "limitation": "Rendered DOM with mocked HTTP responses. The UI records approval only; this is not evidence of active room delivery, installed native clients or physical devices."
     },
@@ -569,7 +593,7 @@
       "requirement": "Dispatch-time channel eligibility forbids above-shared_room content on bystander-perceivable outputs and cancels in-flight delivery after privacy degradation.",
       "acceptance": "Exercise every render path with state changes before and during dispatch; include local playback stop and already-rendered-content limitations.",
       "status": "partial",
-      "evidence": ["runtime-policy-revalidation-test-definition", "native-speech-revocation-test-definition"]
+      "evidence": ["runtime-policy-revalidation-test-definition", "native-speech-revocation-test-definition", "native-visual-routing-test-definition"]
     },
     {
       "id": "invariant-02",
@@ -577,8 +601,8 @@
       "sourceSections": ["4.2", "4.8", "9.2"],
       "requirement": "Removing every hint leaves routing safe; hints affect eligible-candidate ranking only.",
       "acceptance": "Run paired hint/no-hint cases, including untrusted hints, self-nomination, hint budgets and claimed privacy downgrades.",
-      "status": "pending",
-      "evidence": []
+      "status": "partial",
+      "evidence": ["routing-hint-policy-test-definition", "native-visual-routing-test-definition"]
     },
     {
       "id": "invariant-03",
@@ -640,8 +664,8 @@
       "sourceSections": ["5.1", "9.1", "9.2"],
       "requirement": "Co-hosting a surface with Cosmos supplies no routing privilege over an equivalent remote surface.",
       "acceptance": "Compare equivalent manifests, provenance and state through actual in-process and remote ingress, not only renamed fixture identities.",
-      "status": "pending",
-      "evidence": []
+      "status": "partial",
+      "evidence": ["routing-hint-policy-test-definition", "native-visual-routing-test-definition"]
     },
     {
       "id": "invariant-10",
@@ -668,7 +692,7 @@
       "requirement": "A newly present, unenrolled device gains neither private content nor hint admission from favorable self-declarations.",
       "acceptance": "Exercise admission, re-enrollment, manifest updates and revocation; default to shared-perceivable, class zero, no hints and no lead eligibility.",
       "status": "partial",
-      "evidence": ["pin-runtime-admission-definition", "stock-transport-provenance-test-definition", "native-installation-owner-test-definition", "native-installation-http-test-definition"]
+      "evidence": ["pin-runtime-admission-definition", "stock-transport-provenance-test-definition", "native-installation-owner-test-definition", "native-installation-http-test-definition", "routing-hint-policy-test-definition"]
     },
     {
       "id": "surface-manifest",
@@ -677,7 +701,7 @@
       "requirement": "Declare capabilities, constraints, per-channel posture, expression, cognition and bounded authority; enrollment attests asserted posture and registry-owned trust is separate.",
       "acceptance": "Validate dynamic state and capabilities without product-name privileges; expression eligibility respects the user's perceptual profile and has one expression lead.",
       "status": "partial",
-      "evidence": ["browser-manifest-definition", "browser-enrollment-auth-test-definition", "pin-manifest-definition", "native-installation-manifest-definition", "center-native-approval-test-definition"]
+      "evidence": ["browser-manifest-definition", "browser-enrollment-auth-test-definition", "pin-manifest-definition", "native-installation-manifest-definition", "center-native-approval-test-definition", "native-visual-routing-test-definition"]
     },
     {
       "id": "origin-provenance",
@@ -794,7 +818,7 @@
       "requirement": "A native macOS client implements the common surface contract with truthful audio, rendering, permissions, lock/sleep and availability constraints.",
       "acceptance": "Required product deliverable: verify native lifecycle, playback stop, local confirmation, protected credential storage and installable packaging; no competing assistant authority. Completion is separate from the first verified Cosmos/Center server rollout.",
       "status": "partial",
-      "evidence": ["native-client-core-definition", "macos-client-model-test-definition"]
+      "evidence": ["native-client-core-definition", "macos-client-model-test-definition", "native-client-display-test-definition", "native-visual-routing-test-definition"]
     },
     {
       "id": "android-surface",

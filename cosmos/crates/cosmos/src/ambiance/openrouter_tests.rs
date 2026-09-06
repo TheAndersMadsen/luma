@@ -282,6 +282,7 @@ async fn openrouter_live_public_proposal() {
     let Proposal::Information {
         intent: SemanticIntent::VisualTextCard { text },
         privacy,
+        ..
     } = proposal
     else {
         panic!("expected one direct visual proposal")

@@ -1,5 +1,7 @@
-//! An owner-approved input surface. Platform code owns the installation key
-//! and secure journal; this crate owns admission, exact retries and RTC fencing.
+//! An owner-approved input and shared-display surface. Platform code owns the
+//! installation key, secure journal, foreground state and actual rendering;
+//! this crate owns admission, exact retries, frame checks and RTC fencing.
+pub mod display;
 mod http;
 mod state;
 #[cfg(test)]
@@ -8,6 +10,7 @@ mod transport;
 mod wire;
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+pub use display::{AttributionPart, Display, DisplayContent, PlaceItem};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use state::{Journal, PendingOpen, RpcMessage};
@@ -116,6 +119,8 @@ pub enum OperationKind {
     Text,
     Heartbeat,
     Cancel,
+    State,
+    Acknowledge,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -132,6 +137,8 @@ pub enum OperationResult {
     Text(Admission),
     Heartbeat,
     Cancel,
+    State(bool),
+    Acknowledge,
 }
 
 #[derive(Clone, Debug)]
@@ -143,6 +150,10 @@ pub struct Status {
     pub needs_reconnect: bool,
     /// A committed admission retained even when saving its reply needed retry.
     pub last_admission: Option<Admission>,
+    /// The card the runtime delivered to this connection, if still current.
+    pub display: Option<Display>,
+    /// The foreground visibility Cosmos last accepted for this connection.
+    pub visible: bool,
 }
 
 /// Callback-free transport completion. Retain this scope outside an owned
@@ -173,6 +184,8 @@ pub struct Client {
     failed_save: Option<Journal>,
     session: Option<transport::Connection>,
     cleanup: transport::CleanupScope,
+    display: tokio::sync::watch::Sender<Option<Display>>,
+    visible: bool,
 }
 
 impl Client {
@@ -235,7 +248,19 @@ impl Client {
             failed_save: None,
             session: None,
             cleanup: transport::CleanupScope::default(),
+            display: tokio::sync::watch::channel(None).0,
+            visible: false,
         })
+    }
+
+    /// Wakes when the runtime delivers or retires a card. Platforms render the
+    /// exact content, then call `acknowledge`; nothing here proves rendering.
+    pub fn display_changes(&self) -> tokio::sync::watch::Receiver<Option<Display>> {
+        self.display.subscribe()
+    }
+
+    pub fn display(&self) -> Option<Display> {
+        self.status().display
     }
 
     pub fn descriptor(&self) -> Descriptor {
@@ -243,7 +268,7 @@ impl Client {
             enrollment_id: self.config.enrollment_id,
             public_key: URL_SAFE_NO_PAD.encode(self.public_key),
             platform: self.config.platform,
-            approval: "native-shared-text-v1",
+            approval: "native-shared-display-v2",
         }
     }
 
@@ -257,6 +282,8 @@ impl Client {
         // Dropping the connection only signals its dedicated cleanup task.
         // Timing out this wait must never cancel the SDK's one-shot close.
         drop(self.session.take());
+        self.display.send_replace(None);
+        self.visible = false;
         tokio::time::timeout(Duration::from_secs(2), self.cleanup.finish())
             .await
             .map_err(|_| Error::Unavailable)?
@@ -289,6 +316,12 @@ impl Client {
                 .is_some_and(|open| open.connection.is_none()),
             needs_reconnect: !connected,
             last_admission: visible.last_admission,
+            display: self
+                .display
+                .borrow()
+                .clone()
+                .filter(|card| connected && now < card.expires_at_ms),
+            visible: connected && self.visible,
         }
     }
 
@@ -383,6 +416,10 @@ impl Client {
                 Some(&open.secret),
             )
             .await;
+        let expected = display::Expected {
+            surface_id: connection.surface_id,
+            incarnation: connection.incarnation,
+        };
         let room = match response {
             Ok(value) => value,
             Err(error) => {
@@ -406,7 +443,12 @@ impl Client {
         // Persist this conservative marker BEFORE touching the SFU. A crash
         // or canceled join must require an explicit new connection next time.
         self.persist(next)?;
-        self.session = Some(transport::Connection::connect(&room, &self.cleanup).await?);
+        self.display.send_replace(None);
+        self.visible = false;
+        self.session = Some(
+            transport::Connection::connect(&room, &self.cleanup, expected, self.display.clone())
+                .await?,
+        );
         if self.journal.pending.is_none() {
             // Nonmedia participant presence may be batched briefly by the SFU.
             // Only the newly allocated heartbeat is retried here, never text.
@@ -632,6 +674,49 @@ impl Client {
         }
     }
 
+    /// Report the platform's own foreground visibility. Cosmos treats it as
+    /// availability for shared cards, never as occupancy or actor identity.
+    pub async fn set_visible(&mut self, visible: bool) -> Result<(), Error> {
+        self.flush()?;
+        let stamp = self.stamp(Uuid::new_v4())?;
+        match self
+            .submit(RpcMessage::Control {
+                stamp,
+                control: state::Control::State { visible },
+            })
+            .await?
+        {
+            OperationResult::State(reported) if reported == visible => Ok(()),
+            _ => Err(Error::InvalidResponse),
+        }
+    }
+
+    /// Acknowledge the exact current card after the platform committed its
+    /// complete render, including every credit. Never call it speculatively.
+    pub async fn acknowledge(&mut self, card: &Display) -> Result<(), Error> {
+        self.flush()?;
+        if self.display().as_ref() != Some(card) {
+            return Err(Error::NoPending);
+        }
+        let stamp = self.stamp(card.action_id)?;
+        match self
+            .submit(RpcMessage::Control {
+                stamp,
+                control: state::Control::Acknowledge {
+                    action_id: card.action_id,
+                    turn_id: card.turn_id,
+                    generation: card.generation,
+                    channel: "visual.card".into(),
+                    content_digest: card.content_digest.clone(),
+                },
+            })
+            .await?
+        {
+            OperationResult::Acknowledge => Ok(()),
+            _ => Err(Error::InvalidResponse),
+        }
+    }
+
     pub async fn cancel(&mut self, admission: Admission) -> Result<(), Error> {
         self.flush()?;
         if !state::valid_admission(admission)
@@ -698,6 +783,9 @@ impl Client {
         }
         next.complete(result);
         self.persist(next)?;
+        if let OperationResult::State(visible) = result {
+            self.visible = visible;
+        }
         Ok(result)
     }
 

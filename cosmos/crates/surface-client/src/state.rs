@@ -89,6 +89,19 @@ pub(crate) enum Control {
         turn_id: Uuid,
         generation: u64,
     },
+    State {
+        visible: bool,
+    },
+    Acknowledge {
+        #[serde(rename = "actionId")]
+        action_id: Uuid,
+        #[serde(rename = "turnId")]
+        turn_id: Uuid,
+        generation: u64,
+        channel: String,
+        #[serde(rename = "contentDigest")]
+        content_digest: String,
+    },
 }
 
 #[derive(Deserialize)]
@@ -312,7 +325,9 @@ impl Journal {
                 self.last_admission = current_origin.then_some(admission);
             }
             OperationResult::Cancel => self.last_admission = None,
-            OperationResult::Heartbeat => {}
+            OperationResult::Heartbeat
+            | OperationResult::State(_)
+            | OperationResult::Acknowledge => {}
         }
     }
 }
@@ -339,6 +354,14 @@ impl RpcMessage {
                 control: Control::Cancel { .. },
                 ..
             } => OperationKind::Cancel,
+            Self::Control {
+                control: Control::State { .. },
+                ..
+            } => OperationKind::State,
+            Self::Control {
+                control: Control::Acknowledge { .. },
+                ..
+            } => OperationKind::Acknowledge,
         }
     }
 
@@ -365,6 +388,28 @@ impl RpcMessage {
             } if *turn_id != stamp.instance_id
                 || *generation == 0
                 || *generation > MAX_SEQUENCE =>
+            {
+                Err(Error::InvalidInput)
+            }
+            Self::Control {
+                control:
+                    Control::Acknowledge {
+                        action_id,
+                        turn_id,
+                        generation,
+                        channel,
+                        content_digest,
+                    },
+                ..
+            } if *action_id != stamp.instance_id
+                || turn_id.is_nil()
+                || *generation == 0
+                || *generation > MAX_SEQUENCE
+                || channel != "visual.card"
+                || content_digest.len() != 64
+                || !content_digest
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) =>
             {
                 Err(Error::InvalidInput)
             }
@@ -441,6 +486,29 @@ impl PendingRpc {
                     duplicate,
                 },
             ) => Ok((OperationResult::Cancel, duplicate)),
+            (
+                OperationKind::State,
+                Reply::Accepted {
+                    version: 1,
+                    duplicate,
+                },
+            ) => {
+                let RpcMessage::Control {
+                    control: Control::State { visible },
+                    ..
+                } = &self.message
+                else {
+                    return Err(Error::InvalidResponse);
+                };
+                Ok((OperationResult::State(*visible), duplicate))
+            }
+            (
+                OperationKind::Acknowledge,
+                Reply::Accepted {
+                    version: 1,
+                    duplicate,
+                },
+            ) => Ok((OperationResult::Acknowledge, duplicate)),
             _ => Err(Error::InvalidResponse),
         }
     }

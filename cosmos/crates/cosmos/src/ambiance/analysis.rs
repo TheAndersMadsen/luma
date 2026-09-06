@@ -1,5 +1,5 @@
 //! Bounded cognition service. It has no Store, device client, or tool executor.
-use super::{Channel, PrivacyClass, SemanticIntent};
+use super::{Channel, PrivacyClass, SemanticIntent, policy::RoutingTarget};
 use crate::assistant::llm::{ChatMessage, ChatModel, ChatResponse, LlmError, Role, ToolDef};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -53,6 +53,9 @@ fn text_intent<'de, D: serde::Deserializer<'de>>(
     })
 }
 
+/// A target names the kind of approved screen the current text explicitly
+/// asked for. Cosmos weighs it among eligible surfaces only; it never selects
+/// a surface, grants a capability or reveals which surfaces exist.
 #[derive(Deserialize)]
 #[serde(untagged, deny_unknown_fields)]
 pub enum Proposal {
@@ -60,19 +63,38 @@ pub enum Proposal {
         #[serde(deserialize_with = "text_intent")]
         intent: SemanticIntent,
         privacy: PrivacyClass,
+        #[serde(default)]
+        target: Option<RoutingTarget>,
     },
     Analysis {
         analysis: AnalysisRequest,
         privacy: PrivacyClass,
+        #[serde(default)]
+        target: Option<RoutingTarget>,
     },
     Lookup {
         web_lookup: LookupRequest,
         privacy: PrivacyClass,
+        #[serde(default)]
+        target: Option<RoutingTarget>,
     },
     Places {
         place_lookup: LookupRequest,
         privacy: PrivacyClass,
+        #[serde(default)]
+        target: Option<RoutingTarget>,
     },
+}
+
+impl Proposal {
+    pub fn target(&self) -> Option<RoutingTarget> {
+        match self {
+            Self::Information { target, .. }
+            | Self::Analysis { target, .. }
+            | Self::Lookup { target, .. }
+            | Self::Places { target, .. } => *target,
+        }
+    }
 }
 
 pub fn proposal_tool() -> ToolDef {
@@ -81,7 +103,7 @@ pub fn proposal_tool() -> ToolDef {
     let lookup_request = json!({"type":"object","additionalProperties":false,"required":["query"],"properties":{"query":{"type":"string","minLength":1,"maxLength":512}}});
     ToolDef {
         name: "propose_information".into(),
-        description: "Propose informational text, one bounded larger-model analysis, one web lookup, or one named-place address lookup of the current request. Supply exactly one of intent, analysis, web_lookup or place_lookup; omit the others. Each lookup requires the origin's separate provider permission. Web lookup returns a sourced visual card; named-place lookup returns a transient name/address card with attribution. Propose only the query, never a provider, location permission, content reference or claimed result. No option grants device authority or proves an outcome.".into(),
+        description: "Propose informational text, one bounded larger-model analysis, one web lookup, or one named-place address lookup of the current request. Supply exactly one of intent, analysis, web_lookup or place_lookup; omit the others. Each lookup requires the origin's separate provider permission. Web lookup returns a sourced visual card; named-place lookup returns a transient name/address card with attribution. Propose only the query, never a provider, location permission, content reference or claimed result. Add target only when the current text explicitly names the kind of screen to use (the TV, the phone, the Mac, the Linux desktop or the browser); Cosmos weighs it among approved eligible screens and may still choose another. No option grants device authority or proves an outcome.".into(),
         // Provider function schemas prohibit root unions. Optional branches
         // describe the shapes; Proposal's strict parser enforces XOR before
         // any runtime work, including against a provider that ignores the schema.
@@ -93,7 +115,8 @@ pub fn proposal_tool() -> ToolDef {
             "analysis":{"type":"object","additionalProperties":false,"required":["question","channel"],"properties":{"question":{"type":"string","minLength":1,"maxLength":1000},"channel":{"type":"string","enum":["visual.card","audio.tts"]}}},
             "web_lookup":lookup_request.clone(),
             "place_lookup":lookup_request,
-            "privacy":privacy
+            "privacy":privacy,
+            "target":{"type":"string","enum":["browser","macos","linux","android","android_tv"]}
         }}),
     }
 }
@@ -359,21 +382,27 @@ mod tests {
                 },
             ),
         ] {
-            let Proposal::Information { intent, privacy } = serde_json::from_value(json!({
+            let Proposal::Information {
+                intent, privacy, ..
+            } = serde_json::from_value(json!({
                 "intent": {"kind": kind, "text": "Exact informational text."},
                 "privacy": "shared_room",
             }))
-            .unwrap() else {
+            .unwrap()
+            else {
                 panic!("original information proposal")
             };
             assert_eq!(intent, expected);
             assert_eq!(privacy, PrivacyClass::SharedRoom);
         }
-        let Proposal::Analysis { analysis, privacy } = serde_json::from_value(json!({
+        let Proposal::Analysis {
+            analysis, privacy, ..
+        } = serde_json::from_value(json!({
             "analysis": {"question": "Compare these ideas", "channel": "visual.card"},
             "privacy": "public",
         }))
-        .unwrap() else {
+        .unwrap()
+        else {
             panic!("original analysis proposal")
         };
         assert_eq!(analysis.question, "Compare these ideas");
@@ -382,6 +411,7 @@ mod tests {
         let Proposal::Lookup {
             web_lookup,
             privacy,
+            ..
         } = serde_json::from_value(json!({
             "web_lookup": {"query": "  public\tsearch query  "}, "privacy": "public",
         }))
@@ -391,7 +421,7 @@ mod tests {
         };
         assert_eq!(web_lookup.query, "  public\tsearch query  ");
         assert_eq!(privacy, PrivacyClass::Public);
-        let Proposal::Places { place_lookup, privacy } = serde_json::from_value(json!({
+        let Proposal::Places { place_lookup, privacy, .. } = serde_json::from_value(json!({
             "place_lookup": {"query": "Statens Museum for Kunst, København"}, "privacy": "shared_room",
         })).unwrap() else { panic!("one named-address proposal") };
         assert_eq!(place_lookup.query, "Statens Museum for Kunst, København");

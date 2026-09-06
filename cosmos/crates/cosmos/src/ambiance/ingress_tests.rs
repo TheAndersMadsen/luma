@@ -224,6 +224,7 @@ fn ambiance_ingress_acknowledgment_is_exact_sequenced_and_rechecked_on_retry() {
                     text: "Synthetic card".into(),
                 },
                 privacy: PrivacyClass::Public,
+                hint: None,
             },
             104,
         )
@@ -236,7 +237,7 @@ fn ambiance_ingress_acknowledgment_is_exact_sequenced_and_rechecked_on_retry() {
             "U:fixture",
             &records,
             RuntimeOperation::Poll {
-                connection: proof.clone(),
+                connection: RoomProof::Browser(proof.clone()),
             },
             105,
         )

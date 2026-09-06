@@ -2412,6 +2412,7 @@ mod tests {
                             text: "analysis output".into()
                         },
                         privacy: PrivacyClass::Public,
+                        hint: None,
                     }
                 )
                 .await
@@ -2575,6 +2576,7 @@ mod tests {
                         text: "A public answer".into(),
                     },
                     privacy: PrivacyClass::Public,
+                    hint: None,
                 },
             )
             .await
@@ -3302,6 +3304,7 @@ mod tests {
                         text: "Synthetic public answer.".into(),
                     },
                     privacy: PrivacyClass::Public,
+                    hint: None,
                 },
             )
             .await
@@ -3452,6 +3455,7 @@ mod tests {
                         text: "test result".into(),
                     },
                     privacy: PrivacyClass::Public,
+                    hint: None,
                 },
             )
             .await

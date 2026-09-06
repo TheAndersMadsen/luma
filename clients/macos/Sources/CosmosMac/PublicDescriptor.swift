@@ -7,7 +7,7 @@ public struct PublicDescriptor: Equatable, Sendable {
     public let publicKey: String
     public let fingerprint: String
     public let platform = "macos"
-    public let approval = "native-shared-text-v1"
+    public let approval = "native-shared-display-v2"
 
     public init(enrollmentID: UUID, publicKeyBytes: Data) throws {
         guard enrollmentID != UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)),

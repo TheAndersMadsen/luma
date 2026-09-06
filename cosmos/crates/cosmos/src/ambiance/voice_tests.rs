@@ -153,6 +153,7 @@ fn ambiance_voice_pending_has_no_cognition_analysis_proposal_or_disclosure_autho
                 text: "a claimed answer".into(),
             },
             privacy: PrivacyClass::Public,
+            hint: None,
         },
         RuntimeOperation::StartDisclosure {
             fence: fence.clone(),
@@ -310,6 +311,7 @@ fn ambiance_voice_transcript_joins_source_floor_and_runtime_raises_without_downg
                         text: "A public model answer".into(),
                     },
                     privacy: PrivacyClass::Public,
+                    hint: None,
                 },
                 107,
             )

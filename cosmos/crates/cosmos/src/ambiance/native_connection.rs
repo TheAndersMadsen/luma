@@ -122,6 +122,9 @@ pub struct NativeConnection {
     pub expires_at_ms: i64,
     pub lease_expires_at_ms: i64,
     pub closed: bool,
+    /// Reported foreground visibility; a state input, never render proof.
+    #[serde(default)]
+    pub visible: bool,
     token_hash: String,
 }
 
@@ -141,7 +144,7 @@ impl NativeConnection {
         !self.closed
             && !record.revoked
             && matches!(record.binding, Binding::Native { .. })
-            && record.approved_manifest == surface_registry::native_manifest()
+            && surface_registry::known_native_manifest(&record.approved_manifest)
             && self.approval_revision == record.revision
             && now < self.expires_at_ms
             && now < self.lease_expires_at_ms
@@ -184,7 +187,7 @@ fn record(
         .get(&surface_id)
         .filter(|record| {
             !record.revoked
-                && record.approved_manifest == surface_registry::native_manifest()
+                && surface_registry::known_native_manifest(&record.approved_manifest)
                 && matches!(record.binding, Binding::Native { enrollment_id: id, .. } if id == enrollment_id)
         })
         .ok_or(RuntimeError::InvalidOrigin)
@@ -407,6 +410,7 @@ impl RuntimeState {
                 .ok_or(RuntimeError::Unavailable)?
                 .min(expires_at_ms),
             closed: false,
+            visible: false,
             token_hash: request.session_token_hash.clone(),
         };
         let mut cursor = self
@@ -505,6 +509,26 @@ impl RuntimeState {
         Ok(connection.lease_expires_at_ms)
     }
 
+    /// Visibility is the installation's own report. It cannot make a legacy
+    /// input-only approval renderable or outlive the current connection.
+    pub(super) fn set_native_visible(
+        &mut self,
+        records: &BTreeMap<Uuid, Record>,
+        proof: &NativeProof,
+        visible: bool,
+        now: i64,
+    ) -> Result<bool, RuntimeError> {
+        self.check_native(records, proof, now)?;
+        let connection = self
+            .native_connections
+            .get_mut(&proof.surface_id)
+            .and_then(|state| state.connection.as_mut())
+            .ok_or(RuntimeError::Stale)?;
+        let changed = connection.visible != visible;
+        connection.visible = visible;
+        Ok(changed)
+    }
+
     pub(super) fn close_native(
         &mut self,
         records: &BTreeMap<Uuid, Record>,
@@ -550,7 +574,7 @@ impl RuntimeState {
                 !r.revoked
                     && r.revision == state.approval_revision
                     && matches!(r.binding, Binding::Native { .. })
-                    && r.approved_manifest == surface_registry::native_manifest()
+                    && surface_registry::known_native_manifest(&r.approved_manifest)
             });
             if let Some(connection) = state.connection.as_mut().filter(|c| !c.closed)
                 && (!approved

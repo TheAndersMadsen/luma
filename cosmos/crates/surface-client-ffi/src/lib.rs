@@ -1,8 +1,8 @@
 //! A single worker owns the native client. C sees public configuration,
 //! bounded commands, and redacted snapshots; protected bytes stay in callbacks.
 use cosmos_surface_client::{
-    Client, Config, Error, OperationKind, Pending, Platform, PlatformError, SecureStore, Signer,
-    TransportShutdown,
+    Client, Config, Display, Error, OperationKind, Pending, Platform, PlatformError, SecureStore,
+    Signer, TransportShutdown,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -36,7 +36,7 @@ const UNAVAILABLE: i32 = -5;
 const MAX_CONFIG: usize = 2048;
 const MAX_TEXT: usize = 4000;
 const MAX_JOURNAL: usize = 32768;
-const MAX_EVENT: usize = 4096;
+const MAX_EVENT: usize = 16384;
 const COMMAND_CAPACITY: usize = 16;
 const EVENT_CAPACITY: usize = 64;
 static CLIENT_OCCUPIED: AtomicBool = AtomicBool::new(false);
@@ -220,6 +220,8 @@ enum Command {
     Text(String),
     Retry,
     Cancel,
+    SetVisible(bool),
+    Acknowledge,
     Disconnect,
 }
 
@@ -308,6 +310,8 @@ fn pending(value: Option<Pending>) -> Value {
                 OperationKind::Text => "text",
                 OperationKind::Heartbeat => "heartbeat",
                 OperationKind::Cancel => "cancel",
+                OperationKind::State => "state",
+                OperationKind::Acknowledge => "acknowledge",
             },
             "instanceId": value.instance_id.to_string(),
             "sequence": value.sequence,
@@ -335,6 +339,35 @@ fn error_code(error: &Error) -> &'static str {
     }
 }
 
+/// The exact delivered card. Content is bounded by the client's frame checks;
+/// the platform renders it verbatim and acknowledges only after commit.
+fn display(value: Option<&Display>) -> Value {
+    value.map_or(Value::Null, |card| {
+        // Credits were validated with the frame; parts are inert text/link
+        // tokens so platforms never interpret markup themselves.
+        let credits = match &card.content {
+            cosmos_surface_client::DisplayContent::Places { attributions, .. } => attributions
+                .iter()
+                .map(|credit| cosmos_surface_client::display::parse_attribution(credit))
+                .collect::<Result<Vec<_>, _>>()
+                .ok(),
+            cosmos_surface_client::DisplayContent::Text { .. } => Some(Vec::new()),
+        };
+        let Some(credits) = credits else {
+            return Value::Null;
+        };
+        json!({
+            "actionId": card.action_id.to_string(),
+            "turnId": card.turn_id.to_string(),
+            "generation": card.generation,
+            "contentDigest": card.content_digest,
+            "expiresAtMs": card.expires_at_ms,
+            "content": card.content,
+            "credits": credits,
+        })
+    })
+}
+
 fn snapshot(
     client: Option<&Client>,
     descriptor: &Value,
@@ -359,6 +392,8 @@ fn snapshot(
             "turnId": a.turn_id.to_string(), "generation": a.generation,
             "duplicate": a.duplicate,
         })),
+        "visible": status.as_ref().is_some_and(|s| s.visible),
+        "display": status.as_ref().map_or(Value::Null, |s| display(s.display.as_ref())),
     })
 }
 
@@ -405,21 +440,44 @@ async fn run(
         Duration::from_secs(15),
     );
     heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut displays = client.display_changes();
+    // The platform's last requested foreground state. It is re-reported after
+    // every new connection because visibility lives on the connection.
+    let mut wanted_visible = false;
+    enum Wake {
+        Command(Command),
+        Heartbeat,
+        Display,
+    }
     loop {
         if *shutdown.borrow() {
             break;
         }
-        let command = tokio::select! {
+        let wake = tokio::select! {
             biased;
             _ = shutdown.changed() => break,
-            _ = heartbeat.tick() => None,
-            command = commands.recv() => match command { Some(command) => Some(command), None => break },
+            changed = displays.changed() => { if changed.is_err() { break; } Wake::Display }
+            _ = heartbeat.tick() => Wake::Heartbeat,
+            command = commands.recv() => match command { Some(command) => Wake::Command(command), None => break },
+        };
+        let command = match wake {
+            Wake::Display => {
+                push(
+                    &events,
+                    snapshot(Some(&client), &descriptor, "display", None),
+                );
+                continue;
+            }
+            Wake::Heartbeat => None,
+            Wake::Command(command) => Some(command),
         };
         let operation = match &command {
             Some(Command::Connect) => "connect",
             Some(Command::Text(_)) => "send_text",
             Some(Command::Retry) => "retry_pending",
             Some(Command::Cancel) => "cancel",
+            Some(Command::SetVisible(_)) => "set_visible",
+            Some(Command::Acknowledge) => "acknowledge",
             Some(Command::Disconnect) => "disconnect",
             None => "heartbeat",
         };
@@ -431,13 +489,24 @@ async fn run(
                 continue;
             }
         }
+        if let Some(Command::SetVisible(visible)) = &command {
+            wanted_visible = *visible;
+        }
         let result = tokio::select! {
             biased;
             _ = shutdown.changed() => break,
             result = async {
                 match command {
                     Some(Command::Connect) => {
-                        client.connect().await
+                        let connected = client.connect().await;
+                        if connected.is_ok() && wanted_visible && !client.status().visible {
+                            // Report the retained foreground state on the new
+                            // connection; a failure surfaces as its own event.
+                            if let Err(error) = client.set_visible(true).await {
+                                push(&events, snapshot(Some(&client), &descriptor, "set_visible", Some(error_code(&error))));
+                            }
+                        }
+                        connected
                     }
                     Some(Command::Text(text)) => client.send_text(&text).await.map(|_| ()),
                     Some(Command::Retry) => client.retry_pending().await.map(|_| ()),
@@ -445,6 +514,21 @@ async fn run(
                         Some(value) => client.cancel(value).await,
                         None => {
                             push(&events, snapshot(Some(&client), &descriptor, operation, Some("no_admission")));
+                            return None;
+                        }
+                    },
+                    Some(Command::SetVisible(visible)) => {
+                        if !client.status().connected {
+                            // Retained for the next connection; nothing to send.
+                            push(&events, snapshot(Some(&client), &descriptor, operation, None));
+                            return None;
+                        }
+                        client.set_visible(visible).await
+                    }
+                    Some(Command::Acknowledge) => match client.display() {
+                        Some(card) => client.acknowledge(&card).await,
+                        None => {
+                            push(&events, snapshot(Some(&client), &descriptor, operation, Some("no_display")));
                             return None;
                         }
                     },
@@ -626,7 +710,23 @@ macro_rules! command {
 command!(cosmos_surface_connect, Command::Connect);
 command!(cosmos_surface_retry_pending, Command::Retry);
 command!(cosmos_surface_cancel, Command::Cancel);
+command!(cosmos_surface_acknowledge, Command::Acknowledge);
 command!(cosmos_surface_disconnect, Command::Disconnect);
+
+/// # Safety
+/// The handle must be live and cannot be concurrently destroyed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cosmos_surface_set_visible(
+    surface: *mut CosmosSurface,
+    visible: i32,
+) -> i32 {
+    boundary(|| {
+        if !matches!(visible, 0 | 1) {
+            return INVALID_ARGUMENT;
+        }
+        unsafe { enqueue(surface, Command::SetVisible(visible == 1)) }
+    })
+}
 
 /// # Safety
 /// The handle must be live; text must be readable for length bytes until return.

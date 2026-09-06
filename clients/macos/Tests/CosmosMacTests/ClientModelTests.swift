@@ -51,6 +51,8 @@ private final class MockClientBridge: ClientBridge {
     var sentTexts: [String] = []
     var retryCalls = 0
     var cancelledAdmissions: [TextAdmission] = []
+    var visibilityReports: [Bool] = []
+    var acknowledgedCards: [DisplayCard] = []
     var disconnectCalls = 0
     var prepareHandler: ((ServerEndpoint) async throws -> PublicDescriptor)?
     var connectHandler: (() async throws -> Void)?
@@ -92,6 +94,16 @@ private final class MockClientBridge: ClientBridge {
     func cancel(admission: TextAdmission) async throws {
         cancelledAdmissions.append(admission)
         publish(ClientSnapshot(phase: .connected))
+    }
+    func setVisible(_ visible: Bool) async throws {
+        visibilityReports.append(visible)
+        var next = snapshot
+        next.visible = visible
+        publish(next)
+    }
+    func acknowledge(display: DisplayCard) async throws {
+        guard snapshot.display == display else { throw ClientFailure.connectionUnavailable }
+        acknowledgedCards.append(display)
     }
     func disconnect() async {
         disconnectCalls += 1
@@ -305,7 +317,7 @@ final class ClientModelTests: XCTestCase {
         XCTAssertEqual(client.sentTexts, ["  Public request with its exact whitespace\n"])
         XCTAssertEqual(model.draft, "")
         XCTAssertEqual(model.snapshot.admission, try fixtureAdmission())
-        XCTAssertEqual(model.message, "Request admitted by Cosmos. Check the approved Center display for its response.")
+        XCTAssertEqual(model.message, "Request admitted by Cosmos. The response appears on the approved display it selects.")
         model.cancel()
         await finished(model)
         XCTAssertEqual(client.cancelledAdmissions, [try fixtureAdmission()])
@@ -503,5 +515,52 @@ final class ClientModelTests: XCTestCase {
         XCTAssertEqual(model.statusText, ClientFailure.storageUnavailable.message)
         model.exportFailed()
         XCTAssertEqual(model.message, "The public descriptor could not be saved. Choose another location and retry.")
+    }
+
+    @MainActor
+    func testDeliveredCardIsAcknowledgedOnceAndClearedWhenRetired() async throws {
+        let client = try MockClientBridge(snapshot: ClientSnapshot(phase: .connected, visible: true))
+        let model = ClientModel(client: client, initialServerOrigin: "https://center.example.invalid")
+        let card = try DisplayCard(
+            actionID: UUID(uuidString: "33333333-3333-3333-3333-333333333333")!,
+            turnID: UUID(uuidString: "44444444-4444-4444-4444-444444444444")!,
+            generation: 2, contentDigest: String(repeating: "a", count: 64), expiresAtMs: 1_000,
+            content: .places(query: "Café & Bakery", items: [
+                PlaceItem(placeID: "place-one", name: "Café", address: "1 Main Street",
+                          sourceURL: "https://www.google.com/maps/place/?q=cafe"),
+            ], credits: [[.text("Credit: "), .link(text: "Map & Data", href: "https://credits.example/source")]])
+        )
+        client.publish(ClientSnapshot(phase: .connected, visible: true, display: card))
+        XCTAssertEqual(model.display, card)
+        // The view acknowledges after commit; a repeated appear never acknowledges twice.
+        model.displayCommitted(card)
+        model.displayCommitted(card)
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(client.acknowledgedCards, [card])
+        client.publish(ClientSnapshot(phase: .connected, visible: true))
+        XCTAssertNil(model.display)
+        // A card that is no longer current cannot be acknowledged late.
+        model.displayCommitted(card)
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(client.acknowledgedCards, [card])
+        XCTAssertThrowsError(try DisplayCard(actionID: DisplayCard.nilUUID, turnID: card.turnID, generation: 1,
+                                             contentDigest: card.contentDigest, expiresAtMs: 1, content: .text("x")))
+    }
+
+    @MainActor
+    func testVisibilityReportsOnlyChangesAndFollowsReconnect() async throws {
+        let client = try MockClientBridge()
+        let model = await prepared(client)
+        model.setVisible(true)
+        model.setVisible(true)
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(client.visibilityReports, [true])
+        model.connect()
+        await finished(model)
+        XCTAssertEqual(client.visibilityReports, [true, true])
+        XCTAssertTrue(model.statusText.contains("visible"))
+        model.setVisible(false)
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(client.visibilityReports, [true, true, false])
     }
 }

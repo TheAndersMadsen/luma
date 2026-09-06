@@ -186,7 +186,7 @@ try {
   stage = "owner native installation approval";
   const descriptor = native.nativeDescriptor;
   assert.deepEqual(Object.keys(descriptor).sort(), ["approval", "enrollmentId", "platform", "publicKey"]);
-  assert.equal(descriptor.approval, "native-shared-text-v1");
+  assert.equal(descriptor.approval, "native-shared-display-v2");
   assert.equal(descriptor.platform, "macos");
   const keyBytes = Buffer.from(descriptor.publicKey, "base64url");
   assert.equal(keyBytes.length, 65);
@@ -196,7 +196,7 @@ try {
   assert.equal(fingerprint, native.nativePublicKeyFingerprint);
   const expectedNative = {
     surfaceId: native.nativeId, enrollmentId: descriptor.enrollmentId, platform: "macos", name: "Native device",
-    approval: "native-shared-text-v1", revision: 1, publicKeyFingerprint: fingerprint,
+    approval: "native-shared-display-v2", revision: 1, publicKeyFingerprint: fingerprint,
     manifest: { class: "native", capabilities: { input: ["text.public"], output: {} },
       constraints: ["actor_unknown", "occupancy_unknown", "render_unverified", "playback_unverified"],
       expression: {}, cognition: { declaredClass: 0, models: [] }, authority: { mayOriginate: ["user.request"], reflexive: [] } },

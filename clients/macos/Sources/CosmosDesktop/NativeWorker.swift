@@ -117,7 +117,8 @@ private let writeJournal: CosmosSurfaceWrite = { pointer, bytes, length in
 }
 
 enum NativeCommand: String, Sendable {
-    case connect, sendText = "send_text", retryPending = "retry_pending", cancel, disconnect
+    case connect, sendText = "send_text", retryPending = "retry_pending", cancel
+    case setVisible = "set_visible", acknowledge, disconnect
 }
 
 /// All handle operations, including destruction, are serialized away from AppKit.
@@ -171,11 +172,15 @@ actor NativeWorker {
         return descriptor
     }
 
-    func enqueue(_ command: NativeCommand, text: String? = nil) throws {
+    func enqueue(_ command: NativeCommand, text: String? = nil, visible: Bool? = nil) throws {
         guard let handle else { throw ClientFailure.connectionUnavailable }
         let status: Int32
         switch command {
         case .connect: status = cosmos_surface_connect(handle)
+        case .setVisible:
+            guard let visible else { throw ClientFailure.invalidResponse }
+            status = cosmos_surface_set_visible(handle, visible ? 1 : 0)
+        case .acknowledge: status = cosmos_surface_acknowledge(handle)
         case .sendText:
             guard let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                   !text.contains("\0"),

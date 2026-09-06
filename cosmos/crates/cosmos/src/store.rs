@@ -2464,6 +2464,7 @@ pub(crate) async fn runtime_test_terminal(
                     text: "retention fixture answer".into(),
                 },
                 privacy: PrivacyClass::SharedRoom,
+                hint: None,
             },
         )
         .await
@@ -2797,6 +2798,7 @@ mod tests {
                         text: "bounded answer".into(),
                     },
                     privacy: PrivacyClass::Public,
+                    hint: None,
                 },
             )
             .await
@@ -2808,7 +2810,7 @@ mod tests {
             .runtime(
                 principal,
                 RuntimeOperation::Poll {
-                    connection: proof(),
+                    connection: RoomProof::Browser(proof()),
                 },
             )
             .await
@@ -2924,6 +2926,7 @@ mod tests {
                         text: "late output".into(),
                     },
                     privacy: PrivacyClass::Public,
+                    hint: None,
                 },
             )
             .await;

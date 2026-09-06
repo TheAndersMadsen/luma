@@ -231,6 +231,7 @@ pub enum RuntimeOperation {
         worker: Uuid,
         intent: SemanticIntent,
         privacy: PrivacyClass,
+        hint: Option<policy::RoutingTarget>,
     },
     ConfirmDisplay {
         action_id: Uuid,
@@ -257,12 +258,12 @@ pub enum RuntimeOperation {
         worker: Uuid,
     },
     DeliveryFailed {
-        connection: BrowserProof,
+        connection: RoomProof,
         action_id: Uuid,
         generation: u64,
     },
     CheckDelivery {
-        connection: BrowserProof,
+        connection: RoomProof,
         action_id: Uuid,
         generation: u64,
     },
@@ -270,7 +271,7 @@ pub enum RuntimeOperation {
         action_id: Uuid,
         turn_id: Uuid,
         generation: u64,
-        connection: BrowserProof,
+        connection: RoomProof,
         channel: Channel,
         content_digest: String,
     },
@@ -285,7 +286,7 @@ pub enum RuntimeOperation {
         worker: Uuid,
     },
     Poll {
-        connection: BrowserProof,
+        connection: RoomProof,
     },
     Inspect {
         turn_id: Uuid,
@@ -457,6 +458,7 @@ struct OutputProposal {
     intent: SemanticIntent,
     privacy: PrivacyClass,
     confirmation: Option<DisplayConfirmation>,
+    hint: Option<policy::RoutingTarget>,
 }
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -737,7 +739,14 @@ pub enum RuntimeData {
         generation: u64,
         action_id: Option<Uuid>,
         privacy: PrivacyClass,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        hint: Option<policy::RoutingTarget>,
         candidates: Vec<Candidate>,
+    },
+    NativeVisibility {
+        surface_id: Uuid,
+        incarnation: Uuid,
+        visible: bool,
     },
     ActionChanged {
         action_id: Uuid,
@@ -851,6 +860,52 @@ impl RuntimeState {
                     .ok_or(RuntimeError::InvalidOrigin)
             }
         }
+    }
+
+    /// Current availability and the incarnation an action must bind to. A
+    /// native binds to its signed connection; the registry record stays nil.
+    pub(super) fn presence(&self, record: &Record, now: i64) -> policy::Presence {
+        match record.binding {
+            Binding::Browser => policy::Presence {
+                available: record.view(now).available,
+                incarnation: record.incarnation,
+            },
+            Binding::Pin { .. } => policy::Presence {
+                available: !record.revoked,
+                incarnation: record.incarnation,
+            },
+            Binding::Native { .. } => {
+                let connection = self
+                    .native_connections
+                    .get(&record.surface_id)
+                    .and_then(|state| state.connection.as_ref())
+                    .filter(|connection| connection.current(record, now));
+                policy::Presence {
+                    available: connection.is_some_and(|connection| connection.visible),
+                    incarnation: connection
+                        .map_or(Uuid::nil(), |connection| connection.incarnation),
+                }
+            }
+        }
+    }
+
+    pub(super) fn candidate(
+        &self,
+        record: &Record,
+        origin: Uuid,
+        channel: Channel,
+        privacy: PrivacyClass,
+        hint: Option<policy::RoutingTarget>,
+        now: i64,
+    ) -> Candidate {
+        policy::candidate(
+            record,
+            self.presence(record, now),
+            origin,
+            channel,
+            privacy,
+            hint,
+        )
     }
 
     /// Store transactions apply runtime admission and visibility together. A
@@ -1129,6 +1184,38 @@ impl RuntimeState {
             .filter_map(|action| action.confirmation_root)
             .filter(|root| self.acknowledged_visual(records, *root, now).is_some())
             .collect();
+        // Dispatch-time revalidation reads current presence before any
+        // action mutates; a target that lost its foreground is repaired.
+        let validity: BTreeMap<Uuid, bool> = self
+            .actions
+            .values()
+            .map(|action| {
+                let valid = origin_valid
+                    && action
+                        .confirmation_root
+                        .is_none_or(|root| confirmed_roots.contains(&root))
+                    && now < action.display_expires_at_ms
+                    && self.turn.as_ref().is_some_and(|t| {
+                        t.fence.generation == action.generation
+                            && t.privacy <= PrivacyClass::SharedRoom
+                    })
+                    && records.get(&action.surface_id).is_some_and(|r| {
+                        self.presence(r, now).incarnation == action.incarnation
+                            && self
+                                .candidate(
+                                    r,
+                                    self.turn.as_ref().unwrap().fence.origin_surface,
+                                    action.channel,
+                                    action.privacy,
+                                    None,
+                                    now,
+                                )
+                                .blocker
+                                .is_none()
+                    });
+                (action.id, valid)
+            })
+            .collect();
         for action in self.actions.values_mut() {
             if matches!(
                 action.status,
@@ -1136,26 +1223,7 @@ impl RuntimeState {
             ) {
                 continue;
             }
-            let valid = origin_valid
-                && action
-                    .confirmation_root
-                    .is_none_or(|root| confirmed_roots.contains(&root))
-                && now < action.display_expires_at_ms
-                && self.turn.as_ref().is_some_and(|t| {
-                    t.fence.generation == action.generation && t.privacy <= PrivacyClass::SharedRoom
-                })
-                && records.get(&action.surface_id).is_some_and(|r| {
-                    r.incarnation == action.incarnation
-                        && policy::candidate(
-                            r,
-                            self.turn.as_ref().unwrap().fence.origin_surface,
-                            action.channel,
-                            action.privacy,
-                            now,
-                        )
-                        .blocker
-                        .is_none()
-                });
+            let valid = validity[&action.id];
             if !valid {
                 let repair = origin_valid
                     && now < action.display_expires_at_ms
@@ -1212,13 +1280,15 @@ impl RuntimeState {
                 .fallbacks
                 .iter()
                 .filter_map(|id| records.get(id))
-                .map(|r| policy::candidate(r, origin, previous.channel, previous.privacy, now))
+                .map(|r| self.candidate(r, origin, previous.channel, previous.privacy, None, now))
                 .collect();
             if let Some(selected) = candidates.iter().find(|c| c.blocker.is_none()) {
                 let mut action = previous.clone();
                 action.id = Uuid::new_v4();
                 action.surface_id = selected.surface_id;
-                action.incarnation = records[&selected.surface_id].incarnation;
+                action.incarnation = self
+                    .presence(&records[&selected.surface_id], now)
+                    .incarnation;
                 action.status = ActionStatus::Proposed;
                 action.attempts = 0;
                 action.deadline_ms = now.saturating_add(ACK_MS).min(action.display_expires_at_ms);
@@ -1284,16 +1354,18 @@ impl RuntimeState {
         let record = records
             .get(&action.surface_id)
             .ok_or(RuntimeError::PolicyBlocked)?;
-        if record.incarnation != action.incarnation
-            || policy::candidate(
-                record,
-                turn.fence.origin_surface,
-                action.channel,
-                action.privacy,
-                now,
-            )
-            .blocker
-            .is_some()
+        if self.presence(record, now).incarnation != action.incarnation
+            || self
+                .candidate(
+                    record,
+                    turn.fence.origin_surface,
+                    action.channel,
+                    action.privacy,
+                    None,
+                    now,
+                )
+                .blocker
+                .is_some()
         {
             return Err(RuntimeError::PolicyBlocked);
         }
@@ -1366,16 +1438,18 @@ impl RuntimeState {
                 && action.worker == root.worker
                 && now < action.display_expires_at_ms
                 && records.get(&action.surface_id).is_some_and(|record| {
-                    record.incarnation == action.incarnation
-                        && policy::candidate(
-                            record,
-                            turn.fence.origin_surface,
-                            action.channel,
-                            action.privacy,
-                            now,
-                        )
-                        .blocker
-                        .is_none()
+                    self.presence(record, now).incarnation == action.incarnation
+                        && self
+                            .candidate(
+                                record,
+                                turn.fence.origin_surface,
+                                action.channel,
+                                action.privacy,
+                                None,
+                                now,
+                            )
+                            .blocker
+                            .is_none()
                 })
         })
     }
@@ -1394,6 +1468,7 @@ impl RuntimeState {
             intent,
             privacy,
             confirmation,
+            hint,
         } = output;
         let mut events = Vec::new();
         let turn = self.fence(turn_id, generation, worker, now)?;
@@ -1444,14 +1519,17 @@ impl RuntimeState {
             .values()
             .filter(|r| !r.revoked)
             .map(|r| {
-                policy::candidate(r, turn.fence.origin_surface, intent.channel(), privacy, now)
+                self.candidate(
+                    r,
+                    turn.fence.origin_surface,
+                    intent.channel(),
+                    privacy,
+                    hint,
+                    now,
+                )
             })
             .collect();
-        candidates.sort_by(|a, b| {
-            b.score()
-                .cmp(&a.score())
-                .then(a.surface_id.cmp(&b.surface_id))
-        });
+        policy::rank(&mut candidates);
         let selected = candidates
             .iter()
             .find(|c| c.blocker.is_none())
@@ -1467,6 +1545,7 @@ impl RuntimeState {
             generation,
             action_id: id,
             privacy,
+            hint,
             candidates,
         });
         self.turn.as_mut().unwrap().privacy = privacy;
@@ -1481,6 +1560,7 @@ impl RuntimeState {
                 }
             }
             let record = &records[&surface_id];
+            let incarnation = self.presence(record, now).incarnation;
             let content_digest = intent.content_digest();
             let display_expires_at_ms = match &intent {
                 SemanticIntent::PlaceAddressCard { content } => content.expires_at_ms,
@@ -1499,7 +1579,7 @@ impl RuntimeState {
                 worker,
                 surface_id,
                 channel: intent.channel(),
-                incarnation: record.incarnation,
+                incarnation,
                 content_digest,
                 intent,
                 privacy,
@@ -1968,17 +2048,9 @@ impl RuntimeState {
                 control,
             } => {
                 self.room_record(records, &connection, now)?;
-                if !matches!(
+                if matches!(
                     (&connection, &control),
-                    (
-                        RoomProof::Native(_),
-                        BrowserControl::Heartbeat | BrowserControl::Cancel { .. }
-                    ) | (
-                        RoomProof::Browser(_),
-                        BrowserControl::State { .. }
-                            | BrowserControl::Cancel { .. }
-                            | BrowserControl::Acknowledge { .. }
-                    )
+                    (RoomProof::Browser(_), BrowserControl::Heartbeat)
                 ) {
                     return Err(RuntimeError::InvalidOrigin);
                 }
@@ -2037,9 +2109,6 @@ impl RuntimeState {
                         channel,
                         content_digest,
                     } => {
-                        let RoomProof::Browser(proof) = &connection else {
-                            return Err(RuntimeError::InvalidOrigin);
-                        };
                         if stamp.instance_id != action_id
                             || generation == 0
                             || generation > 9_007_199_254_740_991
@@ -2056,7 +2125,7 @@ impl RuntimeState {
                                 action_id,
                                 turn_id,
                                 generation,
-                                connection: proof.clone(),
+                                connection: connection.clone(),
                                 channel,
                                 content_digest,
                             },
@@ -2098,9 +2167,22 @@ impl RuntimeState {
                             events.extend(appended);
                         }
                     }
-                    // apply_with_registry applies the checked mutation in the
-                    // same Store transaction after this sequence is admitted.
-                    BrowserControl::State { .. } => {}
+                    // apply_with_registry applies the checked browser mutation
+                    // in the same Store transaction after this sequence is
+                    // admitted. Native visibility lives on the connection.
+                    BrowserControl::State { visible } => {
+                        if let RoomProof::Native(proof) = &connection
+                            && !duplicate
+                            && self.set_native_visible(records, proof, visible, now)?
+                        {
+                            events.push(RuntimeData::NativeVisibility {
+                                surface_id,
+                                incarnation,
+                                visible,
+                            });
+                            events.extend(self.reconcile(records, now));
+                        }
+                    }
                 }
                 if !duplicate {
                     let cursor = self.ingress.get_mut(&surface_id).unwrap();
@@ -2454,6 +2536,7 @@ impl RuntimeState {
                 worker,
                 intent,
                 privacy,
+                hint,
             } => {
                 let fence = self.fence(turn_id, generation, worker, now)?.fence.clone();
                 let (result, appended) = self.propose_output(
@@ -2463,6 +2546,7 @@ impl RuntimeState {
                         intent,
                         privacy,
                         confirmation: None,
+                        hint,
                     },
                     now,
                 )?;
@@ -2503,6 +2587,7 @@ impl RuntimeState {
                         acknowledged_action: acknowledged.id,
                         expires_at_ms: acknowledged.display_expires_at_ms,
                     }),
+                    hint: None,
                 };
                 let (result, appended) = self.propose_output(records, &fence, output, now)?;
                 events.extend(appended);
@@ -2523,12 +2608,12 @@ impl RuntimeState {
                 action_id,
                 generation,
             } => {
-                let record = browser_record(records, &connection, now)?;
+                let record = self.room_record(records, &connection, now)?;
                 let action = self.actions.get(&action_id).ok_or(RuntimeError::NotFound)?;
-                if action.surface_id != connection.surface_id
-                    || action.incarnation != connection.incarnation
+                if action.surface_id != connection.surface_id()
+                    || action.incarnation != connection.incarnation()
                     || action.generation != generation
-                    || !record.visible
+                    || !self.presence(record, now).available
                     || !matches!(
                         action.status,
                         ActionStatus::Dispatched | ActionStatus::Acknowledged
@@ -2543,13 +2628,13 @@ impl RuntimeState {
                 action_id,
                 generation,
             } => {
-                browser_record(records, &connection, now)?;
+                self.room_record(records, &connection, now)?;
                 let action = self
                     .actions
                     .get_mut(&action_id)
                     .ok_or(RuntimeError::NotFound)?;
-                if action.surface_id != connection.surface_id
-                    || action.incarnation != connection.incarnation
+                if action.surface_id != connection.surface_id()
+                    || action.incarnation != connection.incarnation()
                     || action.generation != generation
                 {
                     return Err(RuntimeError::Stale);
@@ -2573,18 +2658,18 @@ impl RuntimeState {
                 channel,
                 content_digest,
             } => {
-                let record = browser_record(records, &connection, now)?;
+                let record = self.room_record(records, &connection, now)?;
                 let action = self.actions.get(&action_id).ok_or(RuntimeError::NotFound)?;
                 self.fence(turn_id, generation, action.worker, now)?;
                 if action.turn_id != turn_id
                     || action.generation != generation
                     || action.surface_id != record.surface_id
-                    || action.incarnation != connection.incarnation
+                    || action.incarnation != connection.incarnation()
                     || action.channel != channel
                     || channel != Channel::VisualCard
                     || action.content_digest != content_digest
                     || (action.status != ActionStatus::Acknowledged && now >= action.deadline_ms)
-                    || !record.visible
+                    || !self.presence(record, now).available
                     || !matches!(
                         action.status,
                         ActionStatus::Dispatched | ActionStatus::Acknowledged
@@ -2630,13 +2715,13 @@ impl RuntimeState {
                 RuntimeResult::Cancelled
             }
             RuntimeOperation::Poll { connection } => {
-                browser_record(records, &connection, now)?;
+                self.room_record(records, &connection, now)?;
                 let pending: Vec<_> = self
                     .actions
                     .values()
                     .filter(|a| {
-                        a.surface_id == connection.surface_id
-                            && a.incarnation == connection.incarnation
+                        a.surface_id == connection.surface_id()
+                            && a.incarnation == connection.incarnation()
                             && a.status == ActionStatus::Proposed
                     })
                     .map(|a| (a.id, a.generation, a.worker))
@@ -2649,8 +2734,8 @@ impl RuntimeState {
                     self.actions
                         .values()
                         .filter(|a| {
-                            a.surface_id == connection.surface_id
-                                && a.incarnation == connection.incarnation
+                            a.surface_id == connection.surface_id()
+                                && a.incarnation == connection.incarnation()
                         })
                         .cloned()
                         .collect(),
@@ -2808,6 +2893,7 @@ mod tests {
                         text: "A useful answer.".into(),
                     },
                     privacy: PrivacyClass::Public,
+                    hint: None,
                 },
                 102,
             )
@@ -2958,6 +3044,7 @@ mod tests {
                         text: "A useful answer".into(),
                     },
                     privacy: PrivacyClass::Public,
+                    hint: None,
                 },
                 102,
             )
@@ -2978,7 +3065,7 @@ mod tests {
                 "U:owner",
                 records,
                 RuntimeOperation::Poll {
-                    connection: proof(&records[&id]),
+                    connection: RoomProof::Browser(proof(&records[&id])),
                 },
                 now,
             )
@@ -2993,7 +3080,7 @@ mod tests {
             action_id: action.id,
             turn_id: action.turn_id,
             generation: action.generation,
-            connection: proof(record),
+            connection: RoomProof::Browser(proof(record)),
             channel: action.channel,
             content_digest: action.content_digest.clone(),
         }
@@ -3037,6 +3124,7 @@ mod tests {
                             text: "Premature".into()
                         },
                         privacy: PrivacyClass::Public,
+                        hint: None,
                     },
                     104
                 )
@@ -3103,6 +3191,7 @@ mod tests {
                         text: "analysis result".into(),
                     },
                     privacy: PrivacyClass::Public,
+                    hint: None,
                 },
                 105,
             )
@@ -3168,7 +3257,8 @@ mod tests {
                         intent: SemanticIntent::VisualTextCard {
                             text: "late".into()
                         },
-                        privacy: PrivacyClass::Public
+                        privacy: PrivacyClass::Public,
+                        hint: None,
                     },
                     105
                 )
@@ -3213,6 +3303,7 @@ mod tests {
                         text: "private service data".into(),
                     },
                     privacy: PrivacyClass::Private,
+                    hint: None,
                 },
                 105,
             )
@@ -3387,6 +3478,7 @@ mod tests {
                 text: "another".into(),
             },
             privacy: PrivacyClass::Public,
+            hint: None,
         };
         assert!(matches!(
             state.apply("U:owner", &records, extra, 103),
@@ -3397,7 +3489,8 @@ mod tests {
             PrivacyClass::Private,
             PrivacyClass::Sensitive,
         ] {
-            let candidate = policy::candidate(&records[&id], id, Channel::VisualCard, class, 103);
+            let candidate =
+                state.candidate(&records[&id], id, Channel::VisualCard, class, None, 103);
             assert_eq!(candidate.blocker, Some(policy::Blocker::Privacy));
             assert_eq!(candidate.score(), 0);
         }

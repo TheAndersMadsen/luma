@@ -10,6 +10,7 @@ public final class MenuBarController: NSObject {
     private var panel: NSPanel?
     private var shortcut: GlobalHotKey?
     private var subscription: AnyCancellable?
+    private var windowObservers: [NSObjectProtocol] = []
     private let statusMenuItem = NSMenuItem(title: "Disconnected", action: nil, keyEquivalent: "")
     private let disconnectMenuItem = NSMenuItem(title: "Disconnect", action: nil, keyEquivalent: "")
 
@@ -67,9 +68,28 @@ public final class MenuBarController: NSObject {
             value.contentView = NSHostingView(rootView: AssistantPanel(model: model))
             value.center()
             panel = value
+            let center = NotificationCenter.default
+            for name in [NSWindow.didChangeOcclusionStateNotification, NSWindow.willCloseNotification,
+                         NSWindow.didBecomeKeyNotification, NSWindow.didMiniaturizeNotification,
+                         NSWindow.didDeminiaturizeNotification] {
+                windowObservers.append(center.addObserver(forName: name, object: value, queue: .main) { [weak self] note in
+                    let closing = note.name == NSWindow.willCloseNotification
+                    Task { @MainActor [weak self] in self?.reportVisibility(closing: closing) }
+                })
+            }
         }
         NSApp.activate()
         panel?.makeKeyAndOrderFront(nil)
+        reportVisibility(closing: false)
+    }
+
+    /// The panel counts as a visible display only while it is on screen and not
+    /// occluded or miniaturized. Reporting this is availability, never privacy evidence.
+    private func reportVisibility(closing: Bool) {
+        guard let panel else { model.setVisible(false); return }
+        let visible = !closing && panel.isVisible && !panel.isMiniaturized
+            && panel.occlusionState.contains(.visible)
+        model.setVisible(visible)
     }
 
     /// Call on the main actor before releasing the controller during termination.
@@ -77,6 +97,9 @@ public final class MenuBarController: NSObject {
         shortcut?.stop()
         shortcut = nil
         subscription = nil
+        for observer in windowObservers { NotificationCenter.default.removeObserver(observer) }
+        windowObservers = []
+        model.setVisible(false)
         panel?.close()
         panel = nil
         if let statusItem { NSStatusBar.system.removeStatusItem(statusItem) }

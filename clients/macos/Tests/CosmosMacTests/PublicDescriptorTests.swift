@@ -15,13 +15,13 @@ final class PublicDescriptorTests: XCTestCase {
         XCTAssertEqual(descriptor.publicKey, publicKey)
         XCTAssertEqual(descriptor.fingerprint, fingerprint)
         XCTAssertEqual(descriptor.platform, "macos")
-        XCTAssertEqual(descriptor.approval, "native-shared-text-v1")
+        XCTAssertEqual(descriptor.approval, "native-shared-display-v2")
         let encoded = try descriptor.encoded()
         XCTAssertLessThanOrEqual(encoded.count, 1024)
         let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: String])
         XCTAssertEqual(fields, [
             "enrollmentId": "11111111-1111-4111-8111-111111111111",
-            "publicKey": publicKey, "platform": "macos", "approval": "native-shared-text-v1",
+            "publicKey": publicKey, "platform": "macos", "approval": "native-shared-display-v2",
         ])
         XCTAssertEqual(encoded, try descriptor.encoded())
     }

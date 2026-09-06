@@ -234,7 +234,7 @@ async fn browser_room_live_delivery_receipt_is_not_render_ack_and_hide_clears() 
         .runtime(
             &principal,
             RuntimeOperation::Poll {
-                connection: proof.clone(),
+                connection: RoomProof::Browser(proof.clone()),
             },
         )
         .await
@@ -256,7 +256,7 @@ async fn browser_room_live_delivery_receipt_is_not_render_ack_and_hide_clears() 
         .runtime(
             &principal,
             RuntimeOperation::Poll {
-                connection: proof.clone(),
+                connection: RoomProof::Browser(proof.clone()),
             },
         )
         .await
@@ -793,7 +793,7 @@ async fn native_room_live_both_join_orders_share_coordinator_and_browser_deliver
             .runtime(
                 &principal,
                 RuntimeOperation::Poll {
-                    connection: browser_proof.clone(),
+                    connection: RoomProof::Browser(browser_proof.clone()),
                 },
             )
             .await
@@ -837,7 +837,7 @@ async fn native_room_live_both_join_orders_share_coordinator_and_browser_deliver
             .runtime(
                 &principal,
                 RuntimeOperation::Poll {
-                    connection: browser_proof.clone(),
+                    connection: RoomProof::Browser(browser_proof.clone()),
                 },
             )
             .await

@@ -148,7 +148,7 @@ fn descriptor_is_public_bounded_and_does_not_contain_connection_credentials() {
     let (client, store) = client();
     let value = serde_json::to_value(client.descriptor()).unwrap();
     assert_eq!(value.as_object().unwrap().len(), 4);
-    assert_eq!(value["approval"], "native-shared-text-v1");
+    assert_eq!(value["approval"], "native-shared-display-v2");
     assert_eq!(value["platform"], "macos");
     assert!(serde_json::to_vec(&value).unwrap().len() < 1024);
     assert_eq!(store.writes.lock().unwrap().len(), 1);

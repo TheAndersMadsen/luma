@@ -49,6 +49,59 @@ public enum ClientPhase: String, Sendable {
     case disconnected, preparing, prepared, connecting, connected, disconnecting, blocked
 }
 
+/// One inert credit token. Text is shown verbatim; a link is exactly one HTTPS anchor.
+public enum CreditPart: Equatable, Sendable {
+    case text(String)
+    case link(text: String, href: String)
+}
+
+public struct PlaceItem: Equatable, Sendable {
+    public let placeID: String
+    public let name: String
+    public let address: String
+    public let sourceURL: String?
+
+    public init(placeID: String, name: String, address: String, sourceURL: String?) {
+        self.placeID = placeID
+        self.name = name
+        self.address = address
+        self.sourceURL = sourceURL
+    }
+}
+
+public enum DisplayContent: Equatable, Sendable {
+    case text(String)
+    case places(query: String, items: [PlaceItem], credits: [[CreditPart]])
+}
+
+/// The exact card Cosmos delivered. The native client already verified its digest and
+/// connection binding; the app renders it verbatim and acknowledges only after commit.
+public struct DisplayCard: Equatable, Sendable {
+    public let actionID: UUID
+    public let turnID: UUID
+    public let generation: UInt64
+    public let contentDigest: String
+    public let expiresAtMs: Int64
+    public let content: DisplayContent
+
+    public init(actionID: UUID, turnID: UUID, generation: UInt64, contentDigest: String,
+                expiresAtMs: Int64, content: DisplayContent) throws {
+        guard actionID != DisplayCard.nilUUID, turnID != DisplayCard.nilUUID,
+              generation > 0, generation <= 9_007_199_254_740_991, expiresAtMs > 0,
+              contentDigest.count == 64, contentDigest.allSatisfy({ $0.isHexDigit && !$0.isUppercase }) else {
+            throw ClientFailure.invalidResponse
+        }
+        self.actionID = actionID
+        self.turnID = turnID
+        self.generation = generation
+        self.contentDigest = contentDigest
+        self.expiresAtMs = expiresAtMs
+        self.content = content
+    }
+
+    static let nilUUID = UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))
+}
+
 /// Contains presentation-safe state only. Credentials and journal data never enter the UI.
 public struct ClientSnapshot: Equatable, Sendable {
     public var phase: ClientPhase
@@ -59,11 +112,16 @@ public struct ClientSnapshot: Equatable, Sendable {
     public var hasUnknownOutcome: Bool
     public var admission: TextAdmission?
     public var failure: ClientFailure?
+    /// The foreground visibility Cosmos last accepted for this connection.
+    public var visible: Bool
+    /// The delivered card, if still current. Presence is not acknowledgment.
+    public var display: DisplayCard?
 
     public init(phase: ClientPhase = .disconnected, hasPending: Bool = false,
                 admission: TextAdmission? = nil, failure: ClientFailure? = nil,
                 pendingOpen: Bool = false, needsReconnect: Bool = false,
-                canRetry: Bool = false, hasUnknownOutcome: Bool = false) {
+                canRetry: Bool = false, hasUnknownOutcome: Bool = false,
+                visible: Bool = false, display: DisplayCard? = nil) {
         self.phase = phase
         self.hasPending = hasPending
         self.pendingOpen = pendingOpen
@@ -72,6 +130,8 @@ public struct ClientSnapshot: Equatable, Sendable {
         self.hasUnknownOutcome = hasUnknownOutcome
         self.admission = admission
         self.failure = failure
+        self.visible = visible
+        self.display = display
     }
 }
 
@@ -105,5 +165,9 @@ public protocol ClientBridge: AnyObject {
     func send(text: String) async throws -> TextAdmission
     func retryPending() async throws
     func cancel(admission: TextAdmission) async throws
+    /// Report this app's own foreground visibility; retained across reconnects.
+    func setVisible(_ visible: Bool) async throws
+    /// Acknowledge the exact card after its complete render, credits included.
+    func acknowledge(display: DisplayCard) async throws
     func disconnect() async
 }

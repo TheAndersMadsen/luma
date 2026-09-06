@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-const PROFILE: &str = "native-shared-text-v1";
+const PROFILE: &str = "native-shared-display-v2";
 const MAX_REVISION: u64 = 9_007_199_254_740_991;
 const CLOCK_ALLOWANCE_MS: i64 = 5_000;
 const CHALLENGE_MS: i64 = 60_000;

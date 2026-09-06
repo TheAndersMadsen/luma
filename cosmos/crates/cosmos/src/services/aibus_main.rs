@@ -1967,7 +1967,7 @@ mod tests {
                             .runtime(
                                 principal,
                                 RuntimeOperation::Poll {
-                                    connection: proof(),
+                                    connection: crate::ambiance::RoomProof::Browser(proof()),
                                 },
                             )
                             .await

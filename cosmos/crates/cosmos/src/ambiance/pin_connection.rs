@@ -432,6 +432,7 @@ mod tests {
                         text: "Welcome back.".into(),
                     },
                     privacy: PrivacyClass::Public,
+                    hint: None,
                 },
                 104,
             )

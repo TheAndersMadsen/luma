@@ -264,8 +264,9 @@ Pin input cannot issue another provider call; unsequenced stock Understand RPCs
 have no stable input identity and each admission creates a separate turn.
 Privacy classification covers the full bounded provider response before source
 filtering, truncation or card-size limits, including empty result sets.
-The first output is the existing approved Center display. Native rendering,
-spoken search summaries, weather/music services and personal-data integrations remain separate
+The first output is the existing approved Center display; native rendering of
+the same cards is the shared-display increment below. Spoken search summaries,
+weather/music services and personal-data integrations remain separate
 increments. This source path does not establish a live provider conversation.
 
 Validation for this increment passed 43 focused Cosmos tests and the built
@@ -276,6 +277,47 @@ and evidence digests, permission changes, cancellation and recovery from a
 failed client-journal save without repeating the provider request. This is
 application-path evidence; actual provider availability, owner login and
 physical device behavior still need their separate acceptance.
+
+The shared-display increment makes an approved native installation a visual
+surface and gives requests a bounded routing hint. The native approval profile
+is now `native-shared-display-v2`: it adds one shared-room `visual.card`
+output, a `state.visibility` input and the `visible_foreground_only` and
+`no_background_output` constraints. Persisted `native-shared-text-v1`
+approvals stay input-only until the owner reapproves at the current revision,
+which bumps the revision and drops the current connection. A native surface is
+an eligible card target only while its signed connection is current and the
+app has reported a visible foreground on that connection; visibility lives on
+the connection, not on the owner's registry record, and it is availability
+only, never occupancy, privacy or actor evidence. Losing the foreground fails
+dispatch-time revalidation, so a shown card is cancelled and the logged
+fallback receives its own new action.
+
+Cognition may propose `target` (`browser`, `macos`, `linux`, `android` or
+`android_tv`) only from explicit request text such as "show this on the TV".
+Policy treats it as the paper's hint: it adds a bounded rank component to
+eligible non-origin surfaces of that kind and nothing else. It cannot make a
+hidden, blocked or unapproved surface eligible, nominating the origin earns
+nothing, and every decision records the hint with the per-candidate score
+vector so a hint-free replay over the same state selects a surface that is
+also eligible. Class-zero surfaces still contribute no hints of their own;
+trust-gated device hints, hint budgets and learned preference remain open.
+
+Delivery reuses the browser room wire shape. The shared native client accepts
+a render frame only for its exact surface and incarnation, recomputes the text
+or place-card digest byte-for-byte, rejects unsupported credit before display
+and answers with the transport receipt; the platform then renders verbatim
+and submits the sequenced acknowledgment after its own commit. The macOS panel
+renders text and place cards with their credit, reports visibility from its
+window occlusion state and acknowledges each card once. Native surfaces cannot
+acknowledge cards dispatched elsewhere. Android, Android TV and Linux clients
+still need their own apps; the runtime already treats them as the same kind
+of surface.
+
+Validation for this increment passed the focused policy, native-room, native
+client and Center native-surface tests plus the full Cosmos and Center checks.
+It proves runtime authority, receiver identity and exact digests with a
+MemoryStore and synthetic cognition, not a physical screen, real occupancy or
+the macOS app's actual render on a device.
 
 The implementation plan keeps Cosmos as the runtime authority and thin clients
 responsible for local permissions, capture, rendering, and playback evidence:
@@ -1120,6 +1162,8 @@ playback behavior.
 The owner's target devices are a MacBook Pro M5 Pro, an Omarchy Linux PC, a
 Pixel 10 Pro and an NVIDIA Shield 4K TV Pro, alongside the Ai Pin. Build thin
 macOS, Linux, Android and Android TV clients against the same runtime contract.
+The macOS preview already enrolls, sends public text and renders shared cards;
+the other three need their own apps on top of the shared native client.
 Each device needs separate owner approval and honest local permission,
 availability and playback reporting. Installable packages and actual device
 checks remain deliverables; the browser and synthetic clients do not establish

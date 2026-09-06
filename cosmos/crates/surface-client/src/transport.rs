@@ -1,6 +1,11 @@
-//! Input-only room transport. A coordinator replacement requires a fresh HTTP
-//! bootstrap; a transport response is never evidence that an effect completed.
-use crate::{Error, wire::RoomResponse};
+//! Room transport. A coordinator replacement requires a fresh HTTP bootstrap;
+//! a transport response is never evidence that an effect completed, and a
+//! received frame is never evidence that it rendered.
+use crate::{
+    Error,
+    display::{self, Display, Expected, Incoming},
+    wire::RoomResponse,
+};
 use cosmos_rtc::{Invocation, Session};
 use std::{
     collections::BTreeMap,
@@ -156,6 +161,40 @@ pub(crate) struct Connection {
     shutdown: ShutdownSignal,
 }
 
+/// Only the attributed runtime participant may deliver frames, and only for
+/// the exact bound connection. Anything else receives no transport receipt.
+fn answer(
+    invocation: Invocation,
+    runtime: &str,
+    expected: Expected,
+    display: &watch::Sender<Option<Display>>,
+) {
+    let reply = if invocation.caller != runtime {
+        Err(cosmos_rtc::Error::Denied)
+    } else {
+        match crate::now_ms()
+            .and_then(|now| display::parse_frame(&invocation.payload, expected, now))
+        {
+            Ok((Incoming::Render(card), reply)) => {
+                display.send_replace(Some(card));
+                Ok(reply)
+            }
+            Ok((Incoming::Clear(action_id), reply)) => {
+                display.send_if_modified(|current| {
+                    let matched = current.as_ref().is_some_and(|c| c.action_id == action_id);
+                    if matched {
+                        *current = None;
+                    }
+                    matched
+                });
+                Ok(reply)
+            }
+            Err(_) => Err(cosmos_rtc::Error::Invalid),
+        }
+    };
+    let _ = invocation.reply.send(reply);
+}
+
 struct SidFence {
     runtime: String,
     sid: String,
@@ -187,6 +226,8 @@ impl Connection {
     pub(crate) async fn connect(
         room: &RoomResponse,
         cleanup: &CleanupScope,
+        expected: Expected,
+        display: watch::Sender<Option<Display>>,
     ) -> Result<Self, Error> {
         // Register before the first await, including the SDK connection work.
         // The local Drop signal covers canceled handoff and coordinator waits.
@@ -208,6 +249,7 @@ impl Connection {
         let fence = Arc::new(SidFence::new(room.runtime_participant.clone(), sid));
         let guarded_fence = fence.clone();
         let guarded_shutdown = shutdown.shutdown.clone();
+        let runtime = room.runtime_participant.clone();
         let guard = tokio::spawn(async move {
             loop {
                 if !guarded_fence
@@ -224,10 +266,12 @@ impl Connection {
                     }
                     invocation = inbox.recv() => {
                         let Some(invocation) = invocation else { break; };
-                        let _ = invocation.reply.send(Err(cosmos_rtc::Error::Denied));
+                        answer(invocation, &runtime, expected, &display);
                     }
                 }
             }
+            // A lost coordinator retires any card it dispatched.
+            display.send_replace(None);
             guarded_fence.stop();
             guarded_shutdown.send_replace(true);
         });
